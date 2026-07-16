@@ -1,0 +1,6 @@
+.DS_Store
+.herdr-workflow/
+agent-dash/node_modules/
+agent-dash/dist/
+agent-dash/*.bun-build/
+pi/bin/__pycache__/
