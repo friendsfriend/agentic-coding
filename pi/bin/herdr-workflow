@@ -101,7 +101,7 @@ def role_prompt(role, change, verification_round=None):
     if not role.endswith("-verifier"):
         return shared
     report = f".herdr-workflow/{change}/reviews/round-{verification_round}-{role}.findings.jsonl"
-    return shared + f" Round {verification_round}. Read your round context. Write required JSONL ending PASS or FAIL, then run verification-result for role {role}."
+    return shared + f" Round {verification_round}. Read your round context. JSONL only: max 30 findings; detail/fix <=1000 chars, evidence <=2000; end PASS or FAIL. Run verification-result for role {role}."
 
 
 def pi_command(role, model, thinking, change, verification_round=None):
@@ -419,10 +419,27 @@ def report_path(state, role):
     return workflow_dir(state) / "reviews" / f"round-{state['verificationRound']}-{role}.findings.jsonl"
 
 
+def validate_report_events(events, path):
+    if len(events) > 31:
+        raise SystemExit(f"report exceeds 30 findings plus verdict: {path}")
+    for event in events:
+        if event.get("type") == "verdict":
+            continue
+        if event.get("type") != "finding":
+            raise SystemExit(f"report contains unsupported record type: {path}")
+        if event.get("severity") not in {"critical", "warning", "info"} or not isinstance(event.get("path"), str) or not isinstance(event.get("line"), int) or not isinstance(event.get("detail"), str):
+            raise SystemExit(f"invalid finding schema: {path}")
+        for field, limit in (("detail", 1000), ("evidence", 2000), ("fix", 1000)):
+            if field in event and (not isinstance(event[field], str) or len(event[field]) > limit):
+                raise SystemExit(f"finding {field} exceeds {limit} characters: {path}")
+
+
 def report_events(state, role):
     path = report_path(state, role)
     if not path.exists():
         raise SystemExit(f"missing JSONL report: {path}")
+    if path.stat().st_size > 48000:
+        raise SystemExit(f"report exceeds 48KB: {path}")
     events = []
     for number, line in enumerate(path.read_text().splitlines(), 1):
         if not line.strip():
@@ -431,6 +448,7 @@ def report_events(state, role):
             events.append(json.loads(line))
         except json.JSONDecodeError as error:
             raise SystemExit(f"invalid JSONL report {path}:{number}: {error.msg}")
+    validate_report_events(events, path)
     return path, events
 
 
