@@ -2,7 +2,7 @@
 import { TextAttributes, type KeyEvent, type ScrollBoxRenderable } from '@opentui/core';
 import type { Keymap } from '@opentui/keymap';
 import { useRenderer, useTerminalDimensions } from '@opentui/solid';
-import { Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { approvalFor, focusAgent, focusWorkspace, loadDashboard, loadVerifierFindings, loadVerifierReport, openFindingInEditor, openSpecArtifact, openSpecArtifacts, runWorkflow, testDashboard, type DashboardData } from './data';
 import { Badge } from './ui/Badge';
 import { HighlightedText } from './ui/Highlight';
@@ -64,6 +64,7 @@ export function App(props: { repo: string; change: string; profile?: 'test'; key
   const [help, setHelp] = createSignal(false);
   const [themePicker, setThemePicker] = createSignal(false);
   const [recovery, setRecovery] = createSignal(false);
+  const [recoveryRequested, setRecoveryRequested] = createSignal(false);
   const [recoverySelection, setRecoverySelection] = createSignal(0);
   const [themeIndex, setThemeIndex] = createSignal(Math.max(0, themeNames.indexOf(loadThemeName())));
   const [themeQuery, setThemeQuery] = createSignal('');
@@ -133,10 +134,10 @@ export function App(props: { repo: string; change: string; profile?: 'test'; key
       return;
     }
     if (name === 'r' && key.shift) {
-      if (!gate()) { setMessage('No recovery action available for this phase.'); return; }
-      setRecoverySelection(0);
-      setRecovery(true);
-      props.keymap.setData('modal.active', 'recovery');
+      setRecoveryRequested(true);
+      setBusy(true);
+      setMessage('Starting recovery analysis…');
+      void runWorkflow('recover', props.repo, props.change).then(setMessage).catch(error => setMessage(error instanceof Error ? error.message : String(error))).finally(() => { setBusy(false); refresh(); });
       return;
     }
     if (name === 'r') {
@@ -198,7 +199,7 @@ export function App(props: { repo: string; change: string; profile?: 'test'; key
     props.keymap.setData('app.view', 'detail');
     props.keymap.setData('modal.active', 'none');
     const disposeTheme = props.keymap.registerLayer({ name: 'theme', priority: 1100, activeModal: 'theme', commands: [{ name: 'theme.handle', run: ({ event }) => { const key = event.name.toLowerCase(); const items = filteredThemes(); if (key === 'escape') { if (themeFiltering()) { setThemeFiltering(false); setThemeQuery(''); setThemeIndex(0); } else { setThemePicker(false); props.keymap.setData('modal.active', 'none'); } } else if (key === '/') { setThemeFiltering(true); setThemeQuery(''); setThemeIndex(0); } else if (themeFiltering() && key === 'backspace') { setThemeQuery(query => query.slice(0, -1)); setThemeIndex(0); } else if (themeFiltering() && key.length === 1) { setThemeQuery(query => query + key); setThemeIndex(0); } else if (key === 'j' || key === 'down') { const next = Math.min(items.length - 1, themeIndex() + 1); setThemeIndex(next); applyTheme(items[next]!); } else if (key === 'k' || key === 'up') { const next = Math.max(0, themeIndex() - 1); setThemeIndex(next); applyTheme(items[next]!); } else if (key === 'enter' || key === 'return') { if (themeFiltering()) setThemeFiltering(false); else { saveThemeName(items[themeIndex()]!); setThemePicker(false); props.keymap.setData('modal.active', 'none'); } } return true; } }], bindings: ['escape', 'enter', 'return', '/', 'backspace', ...'abcdefghijklmnopqrstuvwxyz'.split(''), 'j', 'k', 'up', 'down'].map(key => ({ key, cmd: 'theme.handle' })) });
-    const disposeRecovery = props.keymap.registerLayer({ name: 'recovery', priority: 1000, activeModal: 'recovery', commands: [{ name: 'recovery.handle', run: ({ event }) => { const key = event.name.toLowerCase(); if (key === 'escape') { setRecovery(false); props.keymap.setData('modal.active', 'none'); } else if (key === 'j' || key === 'down') setRecoverySelection(1); else if (key === 'k' || key === 'up') setRecoverySelection(0); else if (key === 'enter' || key === 'return') { if (recoverySelection() === 1) { setRecovery(false); props.keymap.setData('modal.active', 'none'); return true; } const approval = gate(); if (!approval) return true; setRecovery(false); props.keymap.setData('modal.active', 'none'); setBusy(true); void (async () => { try { if (props.profile === 'test') setDemoIndex(index => (index + 1) % demoPhases.length); else setMessage(await runWorkflow(approval.action, props.repo, props.change)); refresh(); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); } finally { setBusy(false); } })(); } return true; } }], bindings: ['escape', 'enter', 'return', 'j', 'k', 'up', 'down'].map(key => ({ key, cmd: 'recovery.handle' })) });
+    const disposeRecovery = props.keymap.registerLayer({ name: 'recovery', priority: 1000, activeModal: 'recovery', commands: [{ name: 'recovery.handle', run: ({ event }) => { const key = event.name.toLowerCase(); if (key === 'escape') { setRecovery(false); props.keymap.setData('modal.active', 'none'); } else if (key === 'j' || key === 'down') setRecoverySelection(1); else if (key === 'k' || key === 'up') setRecoverySelection(0); else if (key === 'enter' || key === 'return') { if (recoverySelection() === 1) { setRecovery(false); props.keymap.setData('modal.active', 'none'); return true; } if (!data().recoveryPlan) return true; setRecovery(false); props.keymap.setData('modal.active', 'none'); setBusy(true); void runWorkflow('apply-recovery', props.repo, props.change).then(setMessage).catch(error => setMessage(error instanceof Error ? error.message : String(error))).finally(() => { setBusy(false); refresh(); }); } return true; } }], bindings: ['escape', 'enter', 'return', 'j', 'k', 'up', 'down'].map(key => ({ key, cmd: 'recovery.handle' })) });
     const disposeHelp = props.keymap.registerLayer({ name: 'help', priority: 1000, activeModal: 'help', commands: [{ name: 'help.handle', run: ({ event }) => { const key = event.name.toLowerCase(); if (key === 'escape') { setHelp(false); props.keymap.setData('modal.active', 'none'); } else if (key === 'j' || key === 'down') setHelpOffset(value => Math.min(helpMaxOffset(), value + 1)); else if (key === 'k' || key === 'up') setHelpOffset(value => Math.max(0, value - 1)); return true; } }], bindings: ['escape', 'j', 'k', 'up', 'down'].map(key => ({ key, cmd: 'help.handle' })) });
     const disposeVerification = props.keymap.registerLayer({ name: 'verification-detail', priority: 1000, activeModal: 'verification-detail', commands: [{ name: 'verification.handle', run: ({ event }) => { const key = event.name.toLowerCase(); const entries = data().verifierTimeline; if (key === 'escape') { setVerificationDetail(false); props.keymap.setData('modal.active', 'none'); } else if (key === 'j' || key === 'down') setSelectedVerification(value => Math.min(entries.length - 1, value + 1)); else if (key === 'k' || key === 'up') setSelectedVerification(value => Math.max(0, value - 1)); else if (key === 'enter' || key === 'return') { const entry = entries[selectedVerification()]; if (!entry) return true; try { setVerificationDetail(false); openVerifierResult(entry.role, true); } catch (error) { setVerdict({ title: `${entry.role} · result pending`, content: error instanceof Error ? error.message : String(error) }); setVerdictOffset(0); props.keymap.setData('modal.active', 'verdict'); } } return true; } }], bindings: ['escape', 'enter', 'return', 'j', 'k', 'up', 'down'].map(key => ({ key, cmd: 'verification.handle' })) });
     const disposeEvents = props.keymap.registerLayer({ name: 'events', priority: 1000, activeModal: 'events', commands: [{ name: 'events.handle', run: ({ event }) => { const key = event.name.toLowerCase(); if (key === 'escape') { setEventsDetail(false); props.keymap.setData('modal.active', 'none'); } else if (key === 'j' || key === 'down') setSelectedEvent(value => Math.min(data().events.length - 1, value + 1)); else if (key === 'k' || key === 'up') setSelectedEvent(value => Math.max(0, value - 1)); return true; } }], bindings: ['escape', 'j', 'k', 'up', 'down'].map(key => ({ key, cmd: 'events.handle' })) });
@@ -223,13 +224,15 @@ export function App(props: { repo: string; change: string; profile?: 'test'; key
     onCleanup(() => { disposeTheme(); disposeRecovery(); disposeHelp(); disposeVerification(); disposeEvents(); disposeFindings(); disposeVerdict(); dispose(); });
   });
 
+  createEffect(() => { if (recoveryRequested() && data().recoveryPlan) { setRecoveryRequested(false); setRecoverySelection(0); setRecovery(true); props.keymap.setData('modal.active', 'recovery'); } });
   const doneTasks = createMemo(() => data().tasks.filter(task => task.done).length);
   const currentTask = createMemo(() => data().tasks.find(task => !task.done)?.text ?? 'All tasks complete');
   const verificationSummary = createMemo(() => {
     const rows = data().verifierTimeline;
     const count = (status: string) => rows.filter(row => row.status.toLowerCase() === status).length;
     const cost = data().telemetrySummary.reduce((sum, row) => sum + row.cost, 0);
-    return `run ${count('run')} · pass ${count('pass')} · fail ${count('fail')} · skip ${count('skipped')} · $${cost.toFixed(2)}`;
+    const reused = Object.keys(data().state.verificationReusedResults ?? {}).length;
+    return `run ${count('run')} · pass ${count('pass')} · fail ${count('fail')} · skip ${count('skipped')}${reused ? ` · reused:${reused}` : ''} · $${cost.toFixed(2)}`;
   });
   const prompt = createMemo(() => data().state.phase === 'paused'
     ? 'Verification paused · developer intervention required'
@@ -238,7 +241,7 @@ export function App(props: { repo: string; change: string; profile?: 'test'; key
     const phase = data().state.phase;
     if (phase === 'paused') return 'Workflow paused';
     if (!['explore', 'apply', 'fix', 'triage', 'verify', 'archive'].includes(phase) || data().agents.some(agent => agent.status === 'working')) return undefined;
-    const since = data().state.verificationStartedAt ?? data().state.createdAt;
+    const since = data().state.phaseStartedAt ?? data().state.verificationStartedAt ?? data().state.createdAt;
     const minutes = since ? Math.floor((Date.now() - Date.parse(since)) / 60000) : 0;
     return minutes >= 10 ? `${phase} idle for ${minutes}m` : undefined;
   });
@@ -296,7 +299,7 @@ export function App(props: { repo: string; change: string; profile?: 'test'; key
       }
       footer={<StatusBar prompt={activePanel() === 1 ? 'Selected agent' : activePanel() === 3 ? 'Verification timeline' : prompt()} approval={activePanel() !== 1 && !!gate() && !busy()} keybinds={[...(activePanel() === 2 ? [{ key: 'Enter', action: 'view tasks' }] : activePanel() === 3 ? [{ key: 'Enter', action: 'view timeline' }] : activePanel() === 4 ? [{ key: 'Enter', action: 'open lazygit' }] : activePanel() === 5 ? [{ key: 'Enter', action: 'view traces' }] : activePanel() === 6 ? [{ key: 'Enter', action: 'open artifact' }] : activePanel() !== 1 && !!gate() && !busy() ? [{ key: 'Enter', action: 'approve' }] : activePanel() === 1 ? [{ key: 'Enter', action: 'focus agent' }, { key: 'v', action: 'view verdict' }] : []), ...(gate() ? [{ key: 'Shift+R', action: 'recover' }] : []), { key: 'r', action: 'refresh' }, { key: 'Esc', action: 'dashboard' }, { key: 'q', action: 'quit' }]} />}
     />
-    <Show when={recovery()}><ListViewModal title="Recovery" fieldLabel="Choose action" items={[`Continue: ${gate()?.action ?? 'unavailable'}`, 'Cancel']} selectedIndex={recoverySelection()} help={[{ key: 'j/k', action: 'Navigate' }, { key: 'Enter', action: 'Confirm' }, { key: 'Esc', action: 'Cancel' }]} renderItem={(item, selected) => <text fg={selected ? uiColors.primary : uiColors.textSecondary}>{item}</text>} /></Show>
+    <Show when={recovery()}><ListViewModal title="Recovery" fieldLabel="Choose action" items={[`Apply: ${data().recoveryPlan?.action ?? 'unavailable'}${data().recoveryPlan?.role ? ` · ${data().recoveryPlan?.role}` : ''}`, 'Cancel']} selectedIndex={recoverySelection()} help={[{ key: 'j/k', action: 'Navigate' }, { key: 'Enter', action: 'Confirm' }, { key: 'Esc', action: 'Cancel' }]} renderItem={(item, selected) => <text fg={selected ? uiColors.primary : uiColors.textSecondary}>{item}</text>} /></Show>
     <Show when={help()}><HelpModal title="Dashboard keybindings" sections={helpSections} offset={helpOffset()} lines={Math.max(5, Math.floor(dimensions().height * .78) - 5)} /></Show>
     <NotificationOverlay />
     <Show when={themePicker()}><ThemePickerModal selected={themeIndex()} active={getActiveThemeName()} themes={filteredThemes()} query={themeQuery()} filtering={themeFiltering()} /></Show>

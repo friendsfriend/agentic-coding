@@ -1,6 +1,7 @@
 [models]
 manager = "opencode/deepseek-v4-flash-free"
 triage = "opencode/deepseek-v4-flash-free"
+recovery = "openai-codex/gpt-5.6-luna"
 planner = "openai-codex/gpt-5.6-sol"
 worker_default = "github-copilot/kimi-k2.7-code"
 worker_alternative = "openai-codex/gpt-5.6-luna"
@@ -17,6 +18,7 @@ archive = "github-copilot/kimi-k2.7-code"
 [thinking]
 manager = "low"
 triage = "low"
+recovery = "low"
 verifier_lite = "low"
 planner = "high"
 worker_default = "low"

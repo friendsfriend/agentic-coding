@@ -5,7 +5,7 @@ import { SelectableList } from './Selectable';
 import { uiColors } from './colors';
 
 export type TraceEvent = { at: string; event: string; role?: string; model?: string; cost?: number; status?: number; tier?: string; roles?: string[]; reports?: string[]; fallback?: string };
-const label = (event: TraceEvent) => ({ pi_agent_start: 'Agent started', pi_agent_end: 'Agent completed', pi_agent_settled: 'Agent waiting', model_usage: 'Model usage', provider_response: 'Provider response', verification_started: 'Verification started', verification_failed: 'Verification failed', provider_launch_fallback: 'Model fallback' }[event.event] ?? event.event.replaceAll('_', ' '));
+const label = (event: TraceEvent) => ({ pi_agent_start: 'Agent started', pi_agent_end: 'Agent completed', pi_agent_settled: 'Agent waiting', model_usage: 'Model usage', provider_response: 'Provider response', verification_started: 'Verification started', verification_failed: 'Verification failed', provider_launch_fallback: 'Model fallback', recovery_started: 'Recovery analysis started', recovery_applied: 'Recovery action applied' }[event.event] ?? event.event.replaceAll('_', ' '));
 export function EventsModal(props: { events: TraceEvent[]; selected: number }) {
   return <GenericModal title={`Traces · ${props.events.length}`} widthPercent={0.72} heightPercent={0.78} help={[{ key: 'j/k', action: 'Scroll' }, { key: 'Esc', action: 'Close' }]}>
     <SelectableList items={props.events} selectedIndex={props.selected} backgroundColor={event => event.event === 'verification_failed' ? uiColors.bgSurface1 : undefined} renderItem={event => <box width="100%" flexDirection="column" paddingLeft={1} paddingRight={1}>
