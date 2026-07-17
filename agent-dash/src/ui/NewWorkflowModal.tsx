@@ -15,8 +15,9 @@ export function NewWorkflowModal(props: { projects: Project[]; models: string[];
   const [filter, setFilter] = createSignal('');
   const [filtering, setFiltering] = createSignal(false);
   const [values, setValues] = createSignal<NewWorkflowInput>({ repo: '', ticket: '', change: '', task: '', mode: '', worker: '' });
+  const [showCustomRepo, setShowCustomRepo] = createSignal(false);
   const projects = () => props.projects.filter(project => project.name.toLowerCase().includes(filter().toLowerCase()));
-  const choices = (): string[] => step() === 0 ? projects().map(project => `${project.openspec ? '●' : '○'} ${project.name}`) : step() === 4 ? ['worktree', 'checkout'].filter(item => item.includes(filter().toLowerCase())) : props.models.filter(item => item.toLowerCase().includes(filter().toLowerCase()));
+  const choices = (): string[] => step() === 0 ? [...projects().map(project => `${project.openspec ? '●' : '○'} ${project.name}`), 'Custom path…'] : step() === 4 ? ['worktree', 'checkout'].filter(item => item.includes(filter().toLowerCase())) : props.models.filter(item => item.toLowerCase().includes(filter().toLowerCase()));
   const listStep = () => [0, 4, 5].includes(step());
   const confirmStep = () => step() === fields.length;
   const totalSteps = fields.length + 1;
@@ -27,6 +28,13 @@ export function NewWorkflowModal(props: { projects: Project[]; models: string[];
   const next = (value: string) => { const key = field(); setValues(current => ({ ...current, [key]: value })); setStep(index => index + 1); setSelected(0); setFilter(''); setFiltering(false); };
   const handler = (key: KeyEvent) => {
     const name = key.name.toLowerCase();
+    if (showCustomRepo()) {
+      if (name === 'escape') { setShowCustomRepo(false); return true; }
+      if (name === 'backspace') { setValues(v => ({ ...v, repo: v.repo.slice(0, -1) })); return true; }
+      if (name === 'return' || name === 'enter') { setShowCustomRepo(false); setStep(1); setSelected(0); setFilter(''); setFiltering(false); return true; }
+      if (key.sequence.length === 1 && key.sequence >= ' ') { setValues(v => ({ ...v, repo: v.repo + key.sequence })); return true; }
+      return true;
+    }
     if (name === 'escape') { back(); return true; }
     if (confirmStep()) {
       if (name === 'return' || name === 'enter') props.onComplete(values());
@@ -52,6 +60,8 @@ export function NewWorkflowModal(props: { projects: Project[]; models: string[];
     if (name === 'u') { setSelected(index => Math.max(index - 8, 0)); return true; }
     if (name === 'return' || name === 'enter') {
       const choice = items[selected()];
+      if (!choice) return true;
+      if (step() === 0 && selected() === projects().length) { setShowCustomRepo(true); return true; }
       if (choice) next(step() === 0 ? projects()[selected()]?.path ?? '' : choice);
       return true;
     }
@@ -59,15 +69,22 @@ export function NewWorkflowModal(props: { projects: Project[]; models: string[];
   };
   onMount(() => props.onKeyReady(handler));
   onCleanup(() => props.onKeyReady(() => true));
-  return <Show when={confirmStep()} fallback={
-    <Show when={listStep()} fallback={
-      <GenericModal title="New workflow" fieldLabel={labels[step()]} summary={summary()} step={step()} total={totalSteps} help={[{ key: 'Enter', action: 'Next' }, { key: 'Esc', action: 'Back' }]}>
-        <input focused value={values()[field()]} placeholder={step() === 1 ? 'optional' : ''} onInput={updateCurrent} onSubmit={() => next(values()[field()])} onKeyDown={(event: KeyEvent) => { if (event.name.toLowerCase() === 'escape') back(); }} focusedBackgroundColor={uiColors.bgBase} focusedTextColor={uiColors.textPrimary} />
+  return <>
+    <Show when={showCustomRepo()}>
+      <GenericModal title="New workflow" fieldLabel="Custom repository path" summary={summary()} step={0} total={totalSteps} help={[{ key: 'Enter', action: 'Next' }, { key: 'Esc', action: 'Back' }]}>
+        <input focused value={values().repo} placeholder="/absolute/path/to/repo" onInput={(v: string) => setValues(current => ({ ...current, repo: v }))} onSubmit={() => { setShowCustomRepo(false); setStep(1); setSelected(0); setFilter(''); setFiltering(false); }} onKeyDown={(event: KeyEvent) => { if (event.name.toLowerCase() === 'escape') setShowCustomRepo(false); }} focusedBackgroundColor={uiColors.bgBase} focusedTextColor={uiColors.textPrimary} />
       </GenericModal>
-    }>
-      <ListViewModal title="New workflow" fieldLabel={labels[step()]} summary={summary()} items={choices()} selectedIndex={selected()} step={step()} total={totalSteps} filterActive={filtering()} filterQuery={filter()} help={[{ key: 'j/k', action: 'Navigate' }, { key: '/', action: 'Filter' }, { key: 'Enter', action: 'Select' }, { key: 'Esc', action: 'Back' }]} renderItem={(item, active) => <text fg={active ? uiColors.primary : uiColors.textSecondary}>{item}</text>} />
     </Show>
-  }>
-    <GenericModal title="Confirm workflow" summary={summary()} summaryOnly step={step()} total={totalSteps} help={[{ key: 'Enter', action: 'Create workflow' }, { key: 'Esc', action: 'Back' }]}><box /></GenericModal>
-  </Show>;
+    <Show when={confirmStep()} fallback={
+      <Show when={listStep()} fallback={
+        <GenericModal title="New workflow" fieldLabel={labels[step()]} summary={summary()} step={step()} total={totalSteps} help={[{ key: 'Enter', action: 'Next' }, { key: 'Esc', action: 'Back' }]}>
+          <input focused value={values()[field()]} placeholder={step() === 1 ? 'optional' : ''} onInput={updateCurrent} onSubmit={() => next(values()[field()])} onKeyDown={(event: KeyEvent) => { if (event.name.toLowerCase() === 'escape') back(); }} focusedBackgroundColor={uiColors.bgBase} focusedTextColor={uiColors.textPrimary} />
+        </GenericModal>
+      }>
+        <ListViewModal title="New workflow" fieldLabel={labels[step()]} summary={summary()} items={choices()} selectedIndex={selected()} step={step()} total={totalSteps} filterActive={filtering()} filterQuery={filter()} help={[{ key: 'j/k', action: 'Navigate' }, { key: '/', action: 'Filter' }, { key: 'Enter', action: 'Select' }, { key: 'Esc', action: 'Back' }]} renderItem={(item, active) => <text fg={active ? uiColors.primary : uiColors.textSecondary}>{item}</text>} />
+      </Show>
+    }>
+      <GenericModal title="Confirm workflow" summary={summary()} summaryOnly step={step()} total={totalSteps} help={[{ key: 'Enter', action: 'Create workflow' }, { key: 'Esc', action: 'Back' }]}><box /></GenericModal>
+    </Show>
+  </>;
 }

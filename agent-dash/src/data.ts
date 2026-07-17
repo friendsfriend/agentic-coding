@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 export interface WorkflowState {
   changeId: string;
@@ -351,7 +351,8 @@ export function startWorkflowWizard() {
 }
 
 export async function startWorkflow(input: { repo: string; ticket: string; change: string; task: string; mode: string; worker: string }) {
-  const args = ['herdr-workflow', 'start', '--repo', input.repo, '--change', input.change, '--task', input.task, '--mode', input.mode, '--worker', input.worker];
+  const repo = input.repo.startsWith('~') ? resolve(input.repo.replace('~', homedir())) : resolve(input.repo);
+  const args = ['herdr-workflow', 'start', '--repo', repo, '--change', input.change, '--task', input.task, '--mode', input.mode, '--worker', input.worker];
   if (input.ticket) args.push('--ticket', input.ticket);
   const process = Bun.spawn(args, { stdout: 'pipe', stderr: 'pipe' });
   const [stdout, stderr, exitCode] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);

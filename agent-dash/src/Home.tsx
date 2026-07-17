@@ -34,6 +34,7 @@ export function Home(props: { keymap: Keymap<any, KeyEvent> }) {
   const [error, setError] = createSignal<{ title: string; message: string }>();
   const [help, setHelp] = createSignal(false);
   const [helpOffset, setHelpOffset] = createSignal(0);
+  let errorScroll: { scrollBy(dy: number): void } | undefined;
   const [themePicker, setThemePicker] = createSignal(false);
   const [themeIndex, setThemeIndex] = createSignal(Math.max(0, themeNames.indexOf(loadThemeName())));
   const helpSections: HelpSection[] = [{ title: 'Navigation', items: [{ key: 'j/k or ↑/↓', description: 'Select workspace' }] }, { title: 'Actions', items: [{ key: 'Enter', description: 'Switch active workspace' }, { key: 'n', description: 'New workflow' }, { key: 's', description: 'Active/archived filter' }, { key: 'r', description: 'Refresh' }, { key: 'q', description: 'Quit' }, { key: '?', description: 'Open help' }] }];
@@ -73,8 +74,14 @@ export function Home(props: { keymap: Keymap<any, KeyEvent> }) {
     const disposeTheme = props.keymap.registerLayer({ name: 'theme-home', priority: 1100, activeModal: 'theme', commands: [{ name: 'theme.handle', run: ({ event }) => { const key = event.name.toLowerCase(); if (key === 'escape') { setThemePicker(false); props.keymap.setData('modal.active', 'none'); } else if (key === 'j' || key === 'down') { const next = Math.min(themeNames.length - 1, themeIndex() + 1); setThemeIndex(next); applyTheme(themeNames[next]!); } else if (key === 'k' || key === 'up') { const next = Math.max(0, themeIndex() - 1); setThemeIndex(next); applyTheme(themeNames[next]!); } else if (key === 'enter' || key === 'return') { saveThemeName(themeNames[themeIndex()]!); setThemePicker(false); props.keymap.setData('modal.active', 'none'); } return true; } }], bindings: ['escape', 'enter', 'return', 'j', 'k', 'up', 'down'].map(key => ({ key, cmd: 'theme.handle' })) });
     const disposeHelp = props.keymap.registerLayer({ name: 'help', priority: 1100, activeModal: 'help', commands: [{ name: 'help.close', run: ({ event }) => { const key = event.name.toLowerCase(); if (key === 'escape') { setHelp(false); props.keymap.setData('modal.active', 'none'); } else if (key === 'j' || key === 'down') setHelpOffset(value => Math.min(helpMaxOffset(), value + 1)); else if (key === 'k' || key === 'up') setHelpOffset(value => Math.max(0, value - 1)); return true; } }], bindings: ['escape', 'j', 'k', 'up', 'down'].map(key => ({ key, cmd: 'help.close' })) });
     const disposeError = props.keymap.registerLayer({ name: 'error', priority: 1100, activeModal: 'error',
-      commands: [{ name: 'error.close', run: () => { closeError(); return true; } }],
-      bindings: ['escape', 'enter', 'return'].map(key => ({ key, cmd: 'error.close' })),
+      commands: [{ name: 'error.handle', run: ({ event }) => {
+        const key = event.name.toLowerCase();
+        if (key === 'escape' || key === 'enter' || key === 'return') { closeError(); return true; }
+        if ((key === 'j' || key === 'down') && errorScroll) { errorScroll.scrollBy(1); return true; }
+        if ((key === 'k' || key === 'up') && errorScroll) { errorScroll.scrollBy(-1); return true; }
+        return true;
+      } }],
+      bindings: ['escape', 'enter', 'return', 'j', 'k', 'up', 'down'].map(key => ({ key, cmd: 'error.handle' })),
     });
     const disposeHome = props.keymap.registerLayer({ name: 'home', priority: 100, appView: 'home', activeModal: 'none',
       commands: [{ name: 'home.handle', run: ({ event }) => { handleKey(event); return true; } }],
@@ -108,10 +115,10 @@ export function Home(props: { keymap: Keymap<any, KeyEvent> }) {
       <Show when={themePicker()}><ThemePickerModal selected={themeIndex()} active={getActiveThemeName()} themes={themeNames} query="" filtering={false} /></Show>
       <Show when={modal()}><NewWorkflowModal projects={projects()} models={models()} onKeyReady={handler => setModalHandler(() => handler)} onCancel={() => { setModal(false); props.keymap.setData('modal.active', 'none'); setModalHandler(undefined); }} onComplete={async (input) => { setModal(false); props.keymap.setData('modal.active', 'none'); setModalHandler(undefined); if (!herdrAvailable()) { showHerdrUnavailable(); return; } setMessage('Starting workflow…'); try { setMessage(await startWorkflow(input)); refresh(); } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (!notifyHerdrError(message)) showError(herdrAvailable() ? 'Workflow execution failed' : 'Herdr unavailable', message);
+        showError('Workflow execution failed', message);
       } }} /></Show>
       <Show when={help()}><HelpModal title="Workspace overview keybindings" sections={helpSections} offset={helpOffset()} lines={Math.max(5, Math.floor(dimensions().height * .78) - 5)} /></Show>
-      <Show when={error()}>{current => <ErrorDialog title={current().title} message={current().message} onClose={closeError} />}</Show>
+      <Show when={error()}>{current => <ErrorDialog title={current().title} message={current().message} onClose={closeError} onScrollBoxReady={ref => { errorScroll = ref; }} />}</Show>
     </box>
   );
 }
