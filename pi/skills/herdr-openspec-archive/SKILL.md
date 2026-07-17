@@ -9,7 +9,7 @@ Developer approval already exists when this role starts. Stop on any failed chec
 
 ## Archive
 
-1. Read workflow state and confirm current branch matches its `branch` value (`feature/<ticket>-<change>` when ticket exists, otherwise `feature/<change>`).
+1. Read `.herdr-workflow/$HERDR_CHANGE_ID/reviews/archive-context.md` for change, branch, ticket, and verdict. Confirm current branch matches its `branch` value (`feature/<ticket>-<change>` when ticket exists, otherwise `feature/<change>`). Do not read review history or telemetry.
 2. Confirm all OpenSpec tasks complete and workflow phase is `archive`.
 3. Run standard OpenSpec archive with immediate spec sync.
 4. Validate archived artifacts and relevant tests.

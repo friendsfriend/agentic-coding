@@ -9,7 +9,7 @@ Read-only. Started only after security, AGENTS.md, quality, performance, and Ope
 
 1. Find repository’s standard full test command from root config, CI, and instructions.
 2. Run full configured suite, including required integration/e2e tests. Never use file/test-name filters.
-3. Review changed behavior for missing meaningful regression coverage.
+3. Read only `round-N-test-verifier-context.md` for changed behavior and regression coverage. Do not expand review scope beyond its changed files/diff.
 4. Write `.herdr-workflow/$HERDR_CHANGE_ID/reviews/round-N-test-verifier.findings.jsonl`:
 
 ```jsonl
