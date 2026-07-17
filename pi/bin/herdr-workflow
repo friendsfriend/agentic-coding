@@ -345,6 +345,34 @@ def triage_plan_path(state):
     return workflow_dir(state) / "reviews" / f"round-{state['verificationRound']}-triage.json"
 
 
+def eligible_verifier_roles(files):
+    paths = "\n".join(files)
+    eligible = set()
+    if any(not path.endswith(".md") for path in files):
+        eligible.add("quality-verifier")
+    if re.search(r"(^|/)(auth|security|crypto|secret|permission|migration)(/|$)", paths, re.I):
+        eligible.add("security-verifier")
+    if any(Path(path).name in {"AGENTS.md", "CLAUDE.md"} for path in files):
+        eligible.add("agents-verifier")
+    if any(path.startswith("openspec/") or path.endswith(("openapi.yaml", "openapi.yml")) for path in files):
+        eligible.add("openspec-verifier")
+    if re.search(r"(performance|benchmark|cache|stream|batch|query|algorithm)", paths, re.I):
+        eligible.add("performance-verifier")
+    return sorted(eligible)
+
+
+def file_manifest(root, files):
+    stats = {row.split("\t", 2)[2]: {"added": row.split("\t", 2)[0], "removed": row.split("\t", 2)[1]} for row in run("git", "diff", "--numstat", "HEAD", cwd=root).splitlines() if row and "\t" in row}
+    diff = run("git", "diff", "--no-color", "--unified=0", "HEAD", "--", *files, cwd=root) if files else ""
+    hunks, current = {}, None
+    for line in diff.splitlines():
+        if line.startswith("+++ b/"):
+            current = line[6:]
+        elif current and line.startswith("@@"):
+            hunks.setdefault(current, []).append(line)
+    return [{"path": path, **stats.get(path, {"added": "?", "removed": "?"}), "hunks": hunks.get(path, [])[:8]} for path in files]
+
+
 def write_triage_input(state, tier):
     root = Path(state["worktree"])
     files = run("git", "diff", "--name-only", "HEAD", cwd=root).splitlines()
@@ -352,15 +380,20 @@ def write_triage_input(state, tier):
     hashes = {path: hashlib.sha256((root / path).read_bytes()).hexdigest() if (root / path).is_file() else "deleted" for path in files}
     changed = [path for path in files if hashes.get(path) != previous.get(path)]
     state.setdefault("verificationSnapshots", {})[str(state["verificationRound"])] = hashes
-    triage_input_path(state).write_text(json.dumps({"round": state["verificationRound"], "tier": tier, "changedFiles": changed, "allChangedFiles": files}, indent=2) + "\n")
+    prior = state.get("previousVerificationResults", {})
+    reusable = {role: result for role, result in prior.items() if role in VERIFIER_ROLES and result.get("verdict") == "PASS" and role not in eligible_verifier_roles(changed)}
+    triage_input_path(state).write_text(json.dumps({"round": state["verificationRound"], "tier": tier, "fileManifest": file_manifest(root, changed), "allChangedFiles": files, "eligibleRoles": eligible_verifier_roles(changed), "reusablePasses": reusable}, indent=2) + "\n")
 
 
 def write_review_context(state, tier, plan):
     root = Path(state["worktree"])
     for role, entry in plan.items():
         files = entry["files"]
+        diff = run("git", "diff", "--no-color", "--unified=3", "HEAD", "--", *files, cwd=root)
+        limit = 12000
+        diff = diff[:limit] + ("\n… diff capped; inspect only scoped files if needed.\n" if len(diff) > limit else "")
         path = workflow_dir(state) / "reviews" / f"round-{state['verificationRound']}-{role}-context.md"
-        path.write_text(f"# Review context\n\nTier: {tier}\nRole: {role}\nReason: {entry['reason']}\nRepository: {root}\n\n## Files in scope\n" + "\n".join(files) + "\n\nReview only these files. Do not inspect unrelated changes.\n")
+        path.write_text(f"# Review context\n\nTier: {tier}\nRole: {role}\nReason: {entry['reason']}\n\n## Files in scope\n" + "\n".join(files) + f"\n\n## Scoped diff (max {limit} chars)\n```diff\n{diff}\n```\nReview only this context.\n")
 
 
 def report_path(state, role):
@@ -472,6 +505,7 @@ def cmd_verify(args):
     state["verificationRound"] += 1
     state["phase"] = "verify"
     state["testVerifierStarted"] = False
+    state["previousVerificationResults"] = state.get("verificationResults", {})
     state["verificationResults"] = {}
     state["verificationRoleStartedAt"] = {}
     state.pop("verificationTimeoutRoles", None)
@@ -496,13 +530,16 @@ def cmd_dispatch_verifiers(args):
     if not plan_path.exists():
         raise SystemExit(f"missing triage plan: {plan_path}")
     plan = json.loads(plan_path.read_text()).get("roles", {})
-    changed = set(json.loads(triage_input_path(state).read_text())["allChangedFiles"])
-    if not isinstance(plan, dict) or not plan:
-        raise SystemExit("triage plan needs at least one verifier role")
+    triage_input = json.loads(triage_input_path(state).read_text())
+    changed = set(triage_input["allChangedFiles"])
+    eligible = set(triage_input["eligibleRoles"])
+    if not isinstance(plan, dict) or set(plan) != eligible:
+        raise SystemExit(f"triage plan must cover exactly eligible roles: {', '.join(sorted(eligible))}")
     for role, entry in plan.items():
-        if role not in VERIFIER_ROLES or not isinstance(entry, dict) or not isinstance(entry.get("reason"), str) or not isinstance(entry.get("files"), list) or not entry["files"] or not set(entry["files"]).issubset(changed):
+        if role not in eligible or not isinstance(entry, dict) or not isinstance(entry.get("reason"), str) or not isinstance(entry.get("files"), list) or not entry["files"] or not set(entry["files"]).issubset(changed):
             raise SystemExit(f"invalid triage plan entry: {role}")
     state["verificationRoles"] = list(plan)
+    state["verificationReusedResults"] = triage_input["reusablePasses"]
     state["verificationStartedAt"] = datetime.now(timezone.utc).isoformat()
     state["phase"] = "verify"
     save_state(state)

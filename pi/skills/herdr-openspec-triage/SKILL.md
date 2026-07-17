@@ -7,8 +7,8 @@ You are persistent verification triage. Stay available between rounds.
 
 When asked to triage a round:
 
-1. Read `round-N-triage-input.json` and prior `round-*-triage.json` plans.
-2. Select minimum verifier roles needed for changed files. Include `quality-verifier` for code changes. Select security only for security/auth/permission/secrets/external-boundary changes; agents only when applicable instructions changed; OpenSpec only for OpenSpec artifacts; performance only for performance-sensitive paths.
+1. Read `round-N-triage-input.json` file manifest and prior `round-*-triage.json` plans. Never read full repository diff.
+2. Select every role in `eligibleRoles`, no others. It is deterministic policy: quality for code, security for security/auth/permission/secrets/external boundary, agents for AGENTS/CLAUDE, OpenSpec for OpenSpec/API artifacts, performance for performance-sensitive paths. `reusablePasses` documents unchanged prior PASS results.
 3. Write exact JSON:
 
 ```json
