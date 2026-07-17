@@ -373,6 +373,21 @@ def file_manifest(root, files):
     return [{"path": path, **stats.get(path, {"added": "?", "removed": "?"}), "hunks": hunks.get(path, [])[:8]} for path in files]
 
 
+def applicable_instructions(root, files):
+    found = set()
+    for file in files:
+        directory = (root / file).parent
+        while directory >= root:
+            for name in ("AGENTS.md", "CLAUDE.md"):
+                candidate = directory / name
+                if candidate.is_file():
+                    found.add(str(candidate.relative_to(root)))
+            if directory == root:
+                break
+            directory = directory.parent
+    return sorted(found)
+
+
 def write_triage_input(state, tier):
     root = Path(state["worktree"])
     files = run("git", "diff", "--name-only", "HEAD", cwd=root).splitlines()
@@ -380,9 +395,13 @@ def write_triage_input(state, tier):
     hashes = {path: hashlib.sha256((root / path).read_bytes()).hexdigest() if (root / path).is_file() else "deleted" for path in files}
     changed = [path for path in files if hashes.get(path) != previous.get(path)]
     state.setdefault("verificationSnapshots", {})[str(state["verificationRound"])] = hashes
+    checks = {"openSpec": plan_quality(state), "applicableInstructions": applicable_instructions(root, changed), "triagePlanSchema": "validated by dispatch-verifiers"}
+    eligible = eligible_verifier_roles(changed)
+    if checks["openSpec"]["passed"]:
+        eligible = [role for role in eligible if role != "openspec-verifier"]
     prior = state.get("previousVerificationResults", {})
-    reusable = {role: result for role, result in prior.items() if role in VERIFIER_ROLES and result.get("verdict") == "PASS" and role not in eligible_verifier_roles(changed)}
-    triage_input_path(state).write_text(json.dumps({"round": state["verificationRound"], "tier": tier, "fileManifest": file_manifest(root, changed), "allChangedFiles": files, "eligibleRoles": eligible_verifier_roles(changed), "reusablePasses": reusable}, indent=2) + "\n")
+    reusable = {role: result for role, result in prior.items() if role in VERIFIER_ROLES and result.get("verdict") == "PASS" and role not in eligible}
+    triage_input_path(state).write_text(json.dumps({"round": state["verificationRound"], "tier": tier, "fileManifest": file_manifest(root, changed), "allChangedFiles": files, "deterministicChecks": checks, "eligibleRoles": eligible, "reusablePasses": reusable}, indent=2) + "\n")
 
 
 def write_review_context(state, tier, plan):
