@@ -44,20 +44,27 @@ function openWorkspaceIds(): Set<string> | undefined {
   } catch { return undefined; }
 }
 
-export function listWorkflows(root = join(homedir(), 'development')): WorkflowOverview[] {
+export function listWorkflows(...roots: string[]): WorkflowOverview[] {
   const found: WorkflowOverview[] = [];
+  const seen = new Set<string>();
   const openWorkspaces = openWorkspaceIds();
   const statuses = agentStatuses();
   const walk = (directory: string, depth: number) => {
     if (depth > 4 || !existsSync(directory)) return;
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    let entries;
+    try { entries = readdirSync(directory, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
       const path = join(directory, entry.name);
       if (entry.isDirectory() && entry.name === '.herdr-workflow') {
-        for (const change of readdirSync(path, { withFileTypes: true })) {
+        let changes;
+        try { changes = readdirSync(path, { withFileTypes: true }); } catch { continue; }
+        for (const change of changes) {
           const statePath = join(path, change.name, 'state.json');
           if (!change.isDirectory() || !existsSync(statePath)) continue;
           try {
             const state = JSON.parse(read(statePath)) as WorkflowState;
+            if (seen.has(state.workspace)) continue;
+            seen.add(state.workspace);
             const tasksFile = join(state.worktree, 'openspec', 'changes', state.changeId, 'tasks.md');
             const items = tasks(tasksFile);
             const workspaceOpen = openWorkspaces ? openWorkspaces.has(state.workspace) : state.phase !== 'closed';
@@ -70,7 +77,8 @@ export function listWorkflows(root = join(homedir(), 'development')): WorkflowOv
       if (entry.isDirectory()) walk(path, depth + 1);
     }
   };
-  walk(root, 0);
+  if (roots.length === 0) roots = [join(homedir(), 'development'), process.cwd()];
+  for (const root of roots) walk(root, 0);
   return found.sort((a, b) => a.state.changeId.localeCompare(b.state.changeId));
 }
 

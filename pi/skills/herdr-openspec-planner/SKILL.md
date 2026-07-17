@@ -23,6 +23,8 @@ description: Explores and proposes one OpenSpec change, discusses requirements w
 herdr notification show "Proposal ready" --body "$HERDR_CHANGE_ID: approve apply in dashboard" --sound request
 ```
 
+6. **Close your response.** Do not continue with any summary sections. Output ends after a short artifacts table and the notification line. No "Core Approach", "Tasks", "Next Step", or any prose beyond the artifacts table and the one-line dashboard instruction.
+
 Wait. Dashboard owns apply approval and worker startup.
 
 ## Worker questions
