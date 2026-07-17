@@ -2,7 +2,7 @@
 import { TextAttributes, type KeyEvent, type ScrollBoxRenderable } from '@opentui/core';
 import type { Keymap } from '@opentui/keymap';
 import { useRenderer, useTerminalDimensions } from '@opentui/solid';
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { approvalFor, focusAgent, focusWorkspace, loadDashboard, loadVerifierFindings, loadVerifierReport, openFindingInEditor, openSpecArtifact, openSpecArtifacts, runWorkflow, testDashboard, type DashboardData } from './data';
 import { Badge } from './ui/Badge';
 import { HighlightedText } from './ui/Highlight';
@@ -23,6 +23,7 @@ import { copyToClipboard } from './clipboard';
 import { applyTheme, saveThemeName, loadThemeName } from './theme-settings';
 import { getActiveThemeName, themeNames } from './ui/theme';
 import { ThemePickerModal } from './ui/ThemePickerModal';
+import { SelectableList } from './ui/Selectable';
 
 const statusColor = (status: string) => status === 'working' ? uiColors.primary : status === 'done' || status === 'idle' ? uiColors.success : status === 'blocked' ? uiColors.warning : status === 'closed' ? uiColors.textMuted : uiColors.error;
 
@@ -37,11 +38,6 @@ export function App(props: { repo: string; change: string; profile?: 'test'; key
   let lastQuitAt = 0;
   const [busy, setBusy] = createSignal(false);
   let changeScroll: ScrollBoxRenderable | undefined;
-  let agentScroll: ScrollBoxRenderable | undefined;
-  const [changeOffset, setChangeOffset] = createSignal(0);
-  const [agentOffset, setAgentOffset] = createSignal(0);
-  const [taskOffset, setTaskOffset] = createSignal(0);
-  const [telemetryOffset, setTelemetryOffset] = createSignal(0);
   const [activePanel, setActivePanel] = createSignal(0);
   const [selectedAgent, setSelectedAgent] = createSignal(0);
   const [selectedArtifact, setSelectedArtifact] = createSignal(0);
@@ -78,15 +74,6 @@ export function App(props: { repo: string; change: string; profile?: 'test'; key
   const gate = createMemo(() => props.profile === 'test'
     ? { prompt: 'Press Enter to advance demo phase', action: 'next demo phase' }
     : approvalFor(data().state.phase));
-  const verificationRows = createMemo(() => {
-    const state = data().state;
-    if (!state.verificationTier && !state.verificationTimeoutRoles) return [];
-    const roles = state.verificationRoles ?? [];
-    const completed = Object.keys(state.verificationResults ?? {}).filter(role => role !== 'coordinator').length;
-    const elapsed = state.verificationStartedAt ? Math.floor((Date.now() - Date.parse(state.verificationStartedAt)) / 60000) : 0;
-    return [`Verification  ${state.verificationTier ?? 'timed out'} · ${completed}/${roles.length} reviews · ${elapsed}m`, ...(state.verificationTimeoutRoles?.length ? [`Timed out: ${state.verificationTimeoutRoles.join(', ')}`] : [])];
-  });
-  const planRows = createMemo(() => { const plan = data().state.planQuality; return plan ? [`Plan gate  ${plan.passed ? 'PASS' : 'FAIL'} · ${plan.specFiles} specs · ${plan.taskCount} tasks`, ...plan.issues.map(issue => `Plan issue: ${issue}`)] : []; });
   const workflowStatus = createMemo(() => {
     const phase = data().state.phase;
     const working = data().agents.some(agent => agent.status === 'working');
@@ -94,28 +81,11 @@ export function App(props: { repo: string; change: string; profile?: 'test'; key
     const lower = phase.toLowerCase();
     return { text: lower.includes('plan') ? 'Planning' : lower.includes('verif') || lower.includes('review') ? 'Verifying' : lower.includes('archiv') ? 'Archiving' : 'Applying', working: true };
   });
-  const changeRows = createMemo(() => [...planRows(), ...(data().state.ticketNumber ? [`Ticket  ${data().state.ticketNumber}`] : []), `Age  ${data().age}`, ...verificationRows(), 'Current activity', data().currentTask, 'Request', data().request, 'Proposal', data().proposal, `Review  ${data().review}`, ...(data().state.phase === 'developer-review' ? ['Review history', ...data().reviewHistory] : [])]);
-  const visibleChangeCount = 8;
-  const visibleAgentCount = 7;
-  const visibleChanges = createMemo(() => changeRows().slice(changeOffset(), changeOffset() + visibleChangeCount));
-  const visibleAgents = createMemo(() => data().agents.slice(agentOffset(), agentOffset() + visibleAgentCount));
-  const visibleTaskCount = createMemo(() => Math.max(3, dimensions().height - 22));
-  const visibleTasks = createMemo(() => data().tasks.slice(taskOffset(), taskOffset() + visibleTaskCount()));
-  const telemetryRows = createMemo(() => [
-    ...data().verifierTimeline.map(item => `${item.role.replace('-verifier', '')}  ${item.status}  ${item.durationSeconds ?? 0}s  ${item.model ?? 'unknown'}${item.providerErrors ? `  errors:${item.providerErrors}` : ''}${item.fallback ? '  fallback' : ''}`),
-    ...data().telemetrySummary.map(item => `model ${item.model}  ${item.durationSeconds}s  in:${item.inputTokens} out:${item.outputTokens}  $${item.cost.toFixed(3)}  errors:${item.errors} fallback:${item.fallbacks}`),
-  ]);
-  const visibleTelemetryCount = createMemo(() => Math.max(3, dimensions().height - 22));
-  const visibleTelemetry = createMemo(() => telemetryRows().slice(telemetryOffset(), telemetryOffset() + visibleTelemetryCount()));
 
   const refresh = () => {
     try {
       setData(load());
-      setChangeOffset(offset => Math.min(offset, Math.max(0, changeRows().length - visibleChangeCount)));
-      setAgentOffset(offset => Math.min(offset, Math.max(0, data().agents.length - visibleAgentCount)));
       setSelectedAgent(index => Math.min(index, Math.max(0, data().agents.length - 1)));
-      setTaskOffset(offset => Math.min(offset, Math.max(0, data().tasks.length - visibleTaskCount())));
-      setTelemetryOffset(offset => Math.min(offset, Math.max(0, telemetryRows().length - visibleTelemetryCount())));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     }
@@ -166,18 +136,14 @@ export function App(props: { repo: string; change: string; profile?: 'test'; key
     }
     if (name === 'down' || name === 'j') {
       if (activePanel() === 0) changeScroll?.scrollBy(1);
-      else if (activePanel() === 1) setSelectedAgent(index => { const next = Math.min(data().agents.length - 1, index + 1); agentScroll?.scrollBy(1); return next; });
-      else if (activePanel() === 2) setTaskOffset(offset => Math.min(Math.max(0, data().tasks.length - visibleTaskCount()), offset + 1));
+      else if (activePanel() === 1) setSelectedAgent(index => Math.min(data().agents.length - 1, index + 1));
       else if (activePanel() === 6) setSelectedArtifact(index => Math.min(Math.max(0, artifacts().length - 1), index + 1));
-      else if (activePanel() === 3) setTelemetryOffset(offset => Math.min(Math.max(0, telemetryRows().length - visibleTelemetryCount()), offset + 1));
       return;
     }
     if (name === 'up' || name === 'k') {
       if (activePanel() === 0) changeScroll?.scrollBy(-1);
-      else if (activePanel() === 1) setSelectedAgent(index => { const next = Math.max(0, index - 1); agentScroll?.scrollBy(-1); return next; });
-      else if (activePanel() === 2) setTaskOffset(offset => Math.max(0, offset - 1));
+      else if (activePanel() === 1) setSelectedAgent(index => Math.max(0, index - 1));
       else if (activePanel() === 6) setSelectedArtifact(index => Math.max(0, index - 1));
-      else if (activePanel() === 3) setTelemetryOffset(offset => Math.max(0, offset - 1));
       return;
     }
     if (name === 'enter' || name === 'return') {
@@ -259,57 +225,48 @@ export function App(props: { repo: string; change: string; profile?: 'test'; key
     <Layout
       header={<Header change={data().state.changeId} phase={data().state.phase} branch={data().state.branch} updated={data().updated} />}
       content={
-        <box backgroundColor={uiColors.bgBase} style={{ width: '100%', height: '100%', flexDirection: 'column', padding: 1, gap: 1 }}>
+        <box backgroundColor={uiColors.bgBase} style={{ width: '100%', height: '100%', flexDirection: 'column', paddingTop: 1, paddingRight: 1, paddingBottom: 1, gap: 1 }}>
           <box style={{ width: '100%', flexGrow: 1, minHeight: 0, flexDirection: 'row', gap: 1 }}> 
             <box width="50%" height="100%" flexDirection="column" gap={1} flexShrink={0}>
             <Panel title={`Change (${data().age} ago)`} accent={uiColors.primary} active={activePanel() === 0} style={{ width: '100%', flexGrow: 1, minHeight: 0 }}>  
               <ScrollableContent onScrollBoxReady={box => { changeScroll = box; }}>
-                <box flexDirection="row"><box width={7}><text fg={uiColors.textMuted}>STATUS</text></box><Badge text={workflowStatus().text} appearance="badge" highlight={workflowStatus().working ? 'highlight2' : 'secondary'} animatedHighlights={workflowStatus().working ? ['highlight1', 'highlight2', 'highlight3'] : undefined} /></box>
+                <box flexDirection="row"><box width={7}><text fg={uiColors.textMuted}>STATUS</text></box><Badge text={workflowStatus().text} appearance="badge" highlight={workflowStatus().working ? 'highlight2' : 'secondary'} animation={workflowStatus().working ? 'aurora' : 'static'} /></box>
                 <Show when={data().state.ticketNumber}><box flexDirection="row"><box width={7}><text fg={uiColors.textMuted}>TICKET</text></box><HighlightedText text={data().state.ticketNumber!} highlight="highlight" /></box></Show>
                 <Show when={data().state.planQuality}>{plan => <box flexDirection="row"><box width={7}><text fg={uiColors.textMuted}>PLAN</text></box><Badge text={plan().passed ? 'PASS' : 'FAIL'} highlight={plan().passed ? 'positive' : 'negative'} /><text fg={uiColors.textSecondary}>  {plan().specFiles} specs · {plan().taskCount} tasks</text></box>}</Show>
                 <Show when={data().state.verificationTier}>{tier => { const roles = () => data().state.verificationRoles ?? []; const completed = () => roles().filter(role => data().state.verificationResults?.[role]).length; return <box flexDirection="row"><box width={7}><text fg={uiColors.textMuted}>VERIFY</text></box><Badge text={tier().toUpperCase()} highlight="highlight2" /><text fg={uiColors.textSecondary}>  {completed()}/{roles().length} reviews · round {data().state.verificationRound}</text></box>; }}</Show>
                 <text fg={uiColors.textMuted}>REQUEST</text><box paddingLeft={1}><text fg={uiColors.textPrimary}>{data().request}</text></box>
               </ScrollableContent>
             </Panel>
-            <Show when={artifacts().length > 0}><Panel title="OpenSpec" accent={uiColors.accent} active={activePanel() === 6} style={{ width: '100%', height: artifacts().length + 2, flexShrink: 0 }}><For each={artifacts()}>{(artifact, index) => <box width="100%" height={1} flexShrink={0} flexDirection="row" backgroundColor={activePanel() === 6 && selectedArtifact() === index() ? uiColors.bgSurface1 : uiColors.bgMantle}><box width={1} backgroundColor={activePanel() === 6 && selectedArtifact() === index() ? uiColors.accent : uiColors.bgMantle} flexShrink={0} /><text fg={activePanel() === 6 && selectedArtifact() === index() ? uiColors.textPrimary : uiColors.textSecondary} attributes={activePanel() === 6 && selectedArtifact() === index() ? TextAttributes.BOLD : 0}>{activePanel() === 6 && selectedArtifact() === index() ? '→ ' : '  '}{artifact}</text></box>}</For></Panel></Show>
+            <Show when={artifacts().length > 0}><Panel title="OpenSpec" accent={uiColors.accent} active={activePanel() === 6} style={{ width: '100%', height: artifacts().length + 2, flexShrink: 0 }}><SelectableList items={artifacts()} selectedIndex={activePanel() === 6 ? selectedArtifact() : -1} renderItem={(artifact, selected) => <box height={1} paddingLeft={1}><text fg={selected ? uiColors.textPrimary : uiColors.textSecondary} attributes={selected ? TextAttributes.BOLD : 0}>{artifact}</text></box>} /></Panel></Show>
             </box>
             <Panel title="Agents" accent={uiColors.accent} active={activePanel() === 1} style={{ width: '50%', height: '100%', flexShrink: 0 }}>   
-              <ScrollableContent onScrollBoxReady={box => { agentScroll = box; }}>
-                <For each={data().agents}>{(agent, index) => {
-                  const selected = () => activePanel() === 1 && selectedAgent() === index();
-                  const timeline = () => data().verifierTimeline.find(item => item.role === agent.role);
-                  const highlight = () => agent.status === 'working' ? 'highlight2' : agent.status === 'done' || agent.status === 'idle' ? 'positive' : agent.status === 'blocked' ? 'warning' : 'secondary';
-                  return <box backgroundColor={selected() ? uiColors.bgSurface1 : uiColors.bgMantle} style={{ width: '100%', height: 2, flexDirection: 'row', flexShrink: 0 }}>
-                    <box width={1} backgroundColor={selected() ? uiColors.accent : uiColors.bgMantle} flexShrink={0} />
-                    <box style={{ flexGrow: 1, minWidth: 0, flexDirection: 'column', paddingLeft: 1, paddingRight: 1 }}>
-                      <box style={{ width: '100%', height: 1, flexDirection: 'row' }}>
-                        <text fg={selected() ? uiColors.accent : uiColors.textMuted}>{selected() ? '›' : ' '}</text>
-                        <box style={{ flexGrow: 1, minWidth: 0, overflow: 'hidden' }}><text fg={uiColors.textPrimary} attributes={TextAttributes.BOLD}>{agent.role}</text></box>
-                        <Badge text={agent.status} appearance="text" highlight={highlight()} animatedHighlights={agent.status === 'working' || agent.status === 'blocked' ? ['highlight1', 'highlight2', 'highlight3'] : undefined} attributes={TextAttributes.BOLD} transitionKey={agent.role} />
-                      </box>
-                      <box style={{ width: '100%', height: 1, flexDirection: 'row' }}>
-                        <box flexGrow={1} minWidth={0} overflow="hidden"><text fg={uiColors.textMuted}>{timeline() ? (timeline()!.model ?? agent.model ?? 'default') : agent.model ?? (agent.role.endsWith('verifier') ? 'Awaiting verification run' : 'Interactive workflow agent')}</text></box>
-                        <Show when={timeline()}>{entry => <text fg={entry().status === 'PASS' ? uiColors.success : entry().status === 'FAIL' ? uiColors.error : uiColors.warning}>{entry().status}{entry().durationSeconds !== undefined ? ` · ${entry().durationSeconds}s` : ''}{entry().cost ? ` · $${(entry().cost ?? 0).toFixed(2)}` : ''}{entry().fallback ? ' · fallback' : ''}</text>}</Show>
-                      </box>
-                    </box>
-                  </box>;
-                }}</For>
-              </ScrollableContent>
+              <SelectableList items={data().agents} selectedIndex={activePanel() === 1 ? selectedAgent() : -1} renderItem={(agent, selected) => {
+                const timeline = () => data().verifierTimeline.find(item => item.role === agent.role);
+                const highlight = () => agent.status === 'working' ? 'highlight2' : agent.status === 'done' || agent.status === 'idle' ? 'positive' : agent.status === 'blocked' ? 'warning' : 'secondary';
+                return <box width="100%" height={2} flexDirection="column" paddingLeft={1} paddingRight={1}>
+                  <box width="100%" height={1} flexDirection="row"><box flexGrow={1} minWidth={0} overflow="hidden"><text fg={uiColors.textPrimary} attributes={TextAttributes.BOLD}>{agent.role}</text></box><Badge text={agent.status} appearance="text" highlight={highlight()} animation={agent.status === 'working' ? 'aurora' : 'static'} attributes={TextAttributes.BOLD} transitionKey={agent.role} /></box>
+                  <box width="100%" height={1} flexDirection="row"><box flexGrow={1} minWidth={0} overflow="hidden"><text fg={uiColors.textMuted}>{timeline() ? (timeline()!.model ?? agent.model ?? 'default') : agent.model ?? (agent.role.endsWith('verifier') ? 'Awaiting verification run' : 'Interactive workflow agent')}</text></box><Show when={timeline()}>{entry => <text fg={entry().status === 'PASS' ? uiColors.success : entry().status === 'FAIL' ? uiColors.error : uiColors.warning}>{entry().status}{entry().durationSeconds !== undefined ? ` · ${entry().durationSeconds}s` : ''}{entry().cost ? ` · $${(entry().cost ?? 0).toFixed(2)}` : ''}{entry().fallback ? ' · fallback' : ''}</text>}</Show></box>
+                </box>;
+              }} />
             </Panel>
           </box>
-          <box style={{ width: '100%', height: 2, flexShrink: 0, flexDirection: 'row', gap: 1 }}> 
-            <Panel title={`Current task · ${doneTasks()}/${data().tasks.length}`} accent={uiColors.success} active={activePanel() === 2} style={{ flexGrow: 1, flexBasis: 0, minWidth: 0, height: '100%' }}>  
-              <text fg={doneTasks() === data().tasks.length ? uiColors.success : uiColors.textPrimary}>{doneTasks() === data().tasks.length ? '✓' : '○'} {currentTask()}</text>
-            </Panel>
-            <Panel title="Verification" accent={uiColors.info} active={activePanel() === 3} style={{ flexGrow: 1, flexBasis: 0, minWidth: 0, height: '100%' }}> 
-              <text fg={uiColors.textSecondary}>{verificationSummary()}</text>
-            </Panel>
-            <Panel title="Git status" accent={uiColors.warning} active={activePanel() === 4} style={{ flexGrow: 1, flexBasis: 0, minWidth: 0, height: '100%' }}>
-              <text fg={data().health.dirty ? uiColors.warning : uiColors.success}>{data().health.dirty ? `changed · ↑${data().health.ahead} ↓${data().health.behind}` : `clean · ↑${data().health.ahead} ↓${data().health.behind}`}</text>
-            </Panel>
-            <Panel title={`Traces · ${data().events.length}`} accent={uiColors.primary} active={activePanel() === 5} style={{ flexGrow: 1, flexBasis: 0, minWidth: 0, height: '100%' }}>
-              <text fg={uiColors.textSecondary}>{data().events.at(-1) ? `${data().events.at(-1)!.at}  ${data().events.at(-1)!.event}` : 'No events yet'}</text>
-            </Panel>
+          <box style={{ width: '100%', height: 5, flexShrink: 0, flexDirection: 'column', gap: 1 }}>
+            <box style={{ width: '100%', height: 2, flexDirection: 'row', gap: 1 }}>
+              <Panel title={`Current task · ${doneTasks()}/${data().tasks.length}`} accent={uiColors.success} active={activePanel() === 2} style={{ flexGrow: 1, flexBasis: 0, minWidth: 0, height: '100%' }}>
+                <text fg={doneTasks() === data().tasks.length ? uiColors.success : uiColors.textPrimary}>{doneTasks() === data().tasks.length ? '✓' : '○'} {currentTask()}</text>
+              </Panel>
+              <Panel title="Verification" accent={uiColors.info} active={activePanel() === 3} style={{ flexGrow: 1, flexBasis: 0, minWidth: 0, height: '100%' }}>
+                <text fg={uiColors.textSecondary}>{verificationSummary()}</text>
+              </Panel>
+            </box>
+            <box style={{ width: '100%', height: 2, flexDirection: 'row', gap: 1 }}>
+              <Panel title="Git status" accent={uiColors.warning} active={activePanel() === 4} style={{ flexGrow: 1, flexBasis: 0, minWidth: 0, height: '100%' }}>
+                <text fg={data().health.dirty ? uiColors.warning : uiColors.success}>{data().health.dirty ? `changed · ↑${data().health.ahead} ↓${data().health.behind}` : `clean · ↑${data().health.ahead} ↓${data().health.behind}`}</text>
+              </Panel>
+              <Panel title={`Traces · ${data().events.length}`} accent={uiColors.primary} active={activePanel() === 5} style={{ flexGrow: 1, flexBasis: 0, minWidth: 0, height: '100%' }}>
+                <text fg={uiColors.textSecondary}>{data().events.at(-1) ? `${data().events.at(-1)!.at}  ${data().events.at(-1)!.event}` : 'No events yet'}</text>
+              </Panel>
+            </box>
           </box>
         </box>
       }

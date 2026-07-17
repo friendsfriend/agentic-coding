@@ -4,7 +4,7 @@ import { useTimeline } from '@opentui/solid';
 import { createEffect, createMemo, createSignal, on, onCleanup, onMount } from 'solid-js';
 import { uiColors } from './colors';
 import { highlightColor, type Highlight } from './Highlight';
-import { auroraColor, createAuroraPalette, createTonePalette, type AnimationHighlights } from './animationColors';
+import { auroraColor, createAuroraPalette, type AnimationHighlights } from './animationColors';
 
 export interface BadgeProps {
   text: string | number;
@@ -12,8 +12,8 @@ export interface BadgeProps {
   color?: string;
   textColor?: string;
   appearance?: 'text' | 'badge';
-  animatedHighlights?: AnimationHighlights;
-  animatedTone?: Highlight;
+  animation?: 'static' | 'aurora';
+  auroraHighlights?: AnimationHighlights;
   attributes?: number;
   transitionKey?: string;
   transitionDuration?: number;
@@ -26,7 +26,7 @@ const same = (left: BadgeSnapshot, right: BadgeSnapshot) => left.text === right.
 const clamp = (value: number) => Math.max(0, Math.min(1, value));
 const mix = (from: RGBA, to: RGBA, amount: number) => RGBA.fromValues(from.r + (to.r - from.r) * amount, from.g + (to.g - from.g) * amount, from.b + (to.b - from.b) * amount, 1);
 
-/** DevEnv-compatible animated Powerline badge. */
+/** Static Powerline badge; opt into Aurora only for active work. */
 export function Badge(props: BadgeProps) {
   let root: BoxRenderable | undefined;
   const snapshot = (): BadgeSnapshot => ({ text: String(props.text), color: parseColor(props.color ?? highlightColor(props.highlight ?? 'highlight')), textColor: parseColor(props.textColor ?? uiColors.bgBase), appearance: props.appearance ?? 'badge', attributes: props.attributes ?? TextAttributes.BOLD });
@@ -41,17 +41,18 @@ export function Badge(props: BadgeProps) {
     wipeTimeline.once(wipe, { progress: 1, duration: props.transitionDuration ?? 450, ease: 'inOutSine', onComplete: () => { setPrevious(current()); wipeTimeline.pause(); root?.requestRender(); } });
     wipeTimeline.play(); root?.requestRender();
   };
-  createEffect(on(() => `${String(props.text)}\0${props.color ?? highlightColor(props.highlight ?? 'highlight')}\0${props.textColor ?? uiColors.bgBase}\0${props.appearance ?? 'badge'}\0${props.attributes ?? TextAttributes.BOLD}`, () => {
-    const next = snapshot(); setPrevious(current()); setCurrent(next); if (props.transitionKey) remember(props.transitionKey, next); startWipe();
+  const auroraEnabled = () => props.animation === 'aurora';
+  createEffect(on(() => `${String(props.text)}\0${props.color ?? highlightColor(props.highlight ?? 'highlight')}\0${props.textColor ?? uiColors.bgBase}\0${props.appearance ?? 'badge'}\0${props.attributes ?? TextAttributes.BOLD}\0${props.animation ?? 'static'}`, () => {
+    const next = snapshot(); setPrevious(current()); setCurrent(next); if (props.transitionKey) remember(props.transitionKey, next); if (auroraEnabled()) startWipe(); else { wipe.progress = 1; root?.requestRender(); }
   }, { defer: true }));
-  onMount(() => { if (props.transitionKey) remember(props.transitionKey, current()); if (cached && !same(cached, current())) startWipe(); });
+  onMount(() => { if (props.transitionKey) remember(props.transitionKey, current()); if (auroraEnabled() && cached && !same(cached, current())) startWipe(); });
   onCleanup(() => { if (props.transitionKey) remember(props.transitionKey, current()); });
 
   const aurora = { progress: 0 };
   const auroraTimeline = useTimeline({ autoplay: false, duration: 1600, loop: true });
   auroraTimeline.add(aurora, { progress: 1, duration: 1600, ease: 'linear' });
-  const palette = createMemo(() => props.animatedTone ? createTonePalette(props.animatedTone) : props.animatedHighlights ? createAuroraPalette(props.animatedHighlights) : undefined);
-  createEffect(() => { if (props.animatedTone || props.animatedHighlights) auroraTimeline.play(); else { auroraTimeline.pause(); aurora.progress = 0; root?.requestRender(); } });
+  const palette = createMemo(() => auroraEnabled() ? createAuroraPalette(props.auroraHighlights ?? ['highlight1', 'highlight2', 'highlight3']) : undefined);
+  createEffect(() => { if (auroraEnabled()) auroraTimeline.play(); else { auroraTimeline.pause(); aurora.progress = 0; root?.requestRender(); } });
   const badgeWidth = (badge: BadgeSnapshot) => badge.text.length + (badge.appearance === 'badge' ? 4 : 0);
   const width = () => Math.max(badgeWidth(previous()), badgeWidth(current()));
   const renderAfter = function (this: BoxRenderable, buffer: OptimizedBuffer) {

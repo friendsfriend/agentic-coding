@@ -1,9 +1,9 @@
 /** @jsxImportSource @opentui/solid */
-import { TextAttributes } from '@opentui/core';
+
 import { useRenderer, useTerminalDimensions } from '@opentui/solid';
-import type { KeyEvent } from '@opentui/core';
+import { TextAttributes, type KeyEvent } from '@opentui/core';
 import type { Keymap } from '@opentui/keymap';
-import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { availableModels, discoverProjects, focusWorkflow, herdrAvailable, listWorkflows, notifyHerdrError, startWorkflow, type WorkflowOverview } from './data';
 import { ErrorDialog } from './ui/ErrorDialog';
 import { HelpModal, type HelpSection } from './ui/HelpModal';
@@ -16,6 +16,7 @@ import { applyTheme, saveThemeName, loadThemeName } from './theme-settings';
 import { getActiveThemeName, themeNames } from './ui/theme';
 import { invokeGlobalSelectionMouseUpHandler } from './selectionCopy';
 import { NotificationOverlay } from './ui/Notification';
+import { SelectableList } from './ui/Selectable';
 
 export function Home(props: { keymap: Keymap<any, KeyEvent> }) {
   const renderer = useRenderer();
@@ -27,9 +28,6 @@ export function Home(props: { keymap: Keymap<any, KeyEvent> }) {
   const [filter, setFilter] = createSignal<'active' | 'archived'>('active');
   const visibleItems = createMemo(() => items().filter(item => filter() === 'active' ? item.workspaceOpen && item.state.phase !== 'closed' : !item.workspaceOpen || item.state.phase === 'closed'));
   const [selected, setSelected] = createSignal(0);
-  const [workspaceOffset, setWorkspaceOffset] = createSignal(0);
-  const visibleWorkspaceCount = createMemo(() => Math.max(1, Math.floor((dimensions().height - 8) / 2)));
-  const visibleWorkspaces = createMemo(() => visibleItems().slice(workspaceOffset(), workspaceOffset() + visibleWorkspaceCount()));
   const [modal, setModal] = createSignal(false);
   const [modalHandler, setModalHandler] = createSignal<(event: KeyEvent) => boolean>();
   const [message, setMessage] = createSignal('');
@@ -43,8 +41,8 @@ export function Home(props: { keymap: Keymap<any, KeyEvent> }) {
   const closeError = () => { setError(undefined); props.keymap.setData('modal.active', 'none'); };
   const showError = (title: string, message: string) => { setError({ title, message }); props.keymap.setData('modal.active', 'error'); };
   const showHerdrUnavailable = (message = 'Herdr executable was not found. Install Herdr or add it to PATH.') => showError('Herdr unavailable', message);
-  const refresh = () => { setItems(listWorkflows()); setSelected(index => Math.min(index, Math.max(0, visibleItems().length - 1))); setWorkspaceOffset(offset => Math.min(offset, Math.max(0, visibleItems().length - visibleWorkspaceCount()))); };
-  const cycleFilter = () => { setFilter(current => current === 'active' ? 'archived' : 'active'); setSelected(0); setWorkspaceOffset(0); };
+  const refresh = () => { setItems(listWorkflows()); setSelected(index => Math.min(index, Math.max(0, visibleItems().length - 1))); };
+  const cycleFilter = () => { setFilter(current => current === 'active' ? 'archived' : 'active'); setSelected(0); };
   onMount(() => {
     const loadStartup = () => { setItems(listWorkflows()); setModels(availableModels()); setProjects(discoverProjects()); setLoading(false); };
     const startup = setTimeout(loadStartup, 0);
@@ -60,8 +58,8 @@ export function Home(props: { keymap: Keymap<any, KeyEvent> }) {
     else if (name === 'n') { setModal(true); props.keymap.setData('modal.active', 'new-workflow'); }
     else if (name === 'r') refresh();
     else if (name === 's') cycleFilter();
-    else if (name === 'j' || name === 'down') setSelected(index => { const next = Math.min(index + 1, visibleItems().length - 1); setWorkspaceOffset(offset => next >= offset + visibleWorkspaceCount() ? next - visibleWorkspaceCount() + 1 : offset); return next; });
-    else if (name === 'k' || name === 'up') setSelected(index => { const next = Math.max(index - 1, 0); setWorkspaceOffset(offset => next < offset ? next : offset); return next; });
+    else if (name === 'j' || name === 'down') setSelected(index => Math.min(index + 1, visibleItems().length - 1));
+    else if (name === 'k' || name === 'up') setSelected(index => Math.max(index - 1, 0));
     else if (name === 'enter' || name === 'return') { const item = visibleItems()[selected()]; if (item?.workspaceOpen && item.state.phase !== 'closed') { try { focusWorkflow(item); } catch (error) { const message = error instanceof Error ? error.message : String(error); if (!notifyHerdrError(message)) showError(herdrAvailable() ? 'Workspace switch failed' : 'Herdr unavailable', message); } } }
   };
   onMount(() => {
@@ -97,13 +95,10 @@ export function Home(props: { keymap: Keymap<any, KeyEvent> }) {
       </box>
       <Panel title="Workspaces" active style={{ flexGrow: 1, minHeight: 0 }}>
         <Show when={loading()} fallback={<Show when={visibleItems().length > 0} fallback={<text fg={uiColors.textMuted}>No {filter()} workflows found in ~/development</text>}>
-          <For each={visibleWorkspaces()}>{(item, index) => (
-            <box backgroundColor={workspaceOffset() + index() === selected() ? uiColors.bgSurface1 : undefined} style={{ height: 2, flexDirection: 'column', paddingLeft: 1 }}>
-              <text fg={workspaceOffset() + index() === selected() ? uiColors.textPrimary : uiColors.textSecondary} attributes={workspaceOffset() + index() === selected() ? TextAttributes.BOLD : 0}>{workspaceOffset() + index() === selected() ? '→ ' : '  '}{item.state.changeId}  <span style={{ fg: uiColors.primary }}>{item.state.phase}</span></text>
-              <text fg={uiColors.textMuted}>  {item.tasks[0]}/{item.tasks[1]} tasks · planner:{item.agents.find(agent => agent.role === 'planner')?.status ?? 'not started'} · {item.agents.filter(agent => agent.status === 'working' || agent.status === 'done' || agent.status === 'idle').length}/{item.agents.length} agents active</text>
-            </box>
-          )}</For>
-          <Show when={visibleItems().length > visibleWorkspaceCount()}><text fg={uiColors.textMuted}>j/k scroll · {workspaceOffset() + 1}-{Math.min(visibleItems().length, workspaceOffset() + visibleWorkspaceCount())}/{visibleItems().length}</text></Show>
+          <SelectableList items={visibleItems()} selectedIndex={selected()} renderItem={(item, active) => <box height={2} flexDirection="column" paddingLeft={1}>
+            <text fg={active ? uiColors.textPrimary : uiColors.textSecondary}>{item.state.changeId}  <span style={{ fg: uiColors.primary }}>{item.state.phase}</span></text>
+            <text fg={uiColors.textMuted}>{item.tasks[0]}/{item.tasks[1]} tasks · planner:{item.agents.find(agent => agent.role === 'planner')?.status ?? 'not started'} · {item.agents.filter(agent => agent.status === 'working' || agent.status === 'done' || agent.status === 'idle').length}/{item.agents.length} agents active</text>
+          </box>} />
         </Show>}>
           <text fg={uiColors.textMuted}>Loading workspaces…</text>
         </Show>
