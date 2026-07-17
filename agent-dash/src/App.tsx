@@ -71,15 +71,19 @@ export function App(props: { repo: string; change: string; profile?: 'test'; key
   const helpMaxOffset = () => Math.max(0, helpSections.reduce((count, section) => count + section.items.length + 1, 0) - Math.max(5, Math.floor(dimensions().height * .78) - 5));
   const verdictLines = createMemo(() => Math.max(4, Math.floor(dimensions().height * 0.75) - 5));
   const closeVerdict = () => { const restore = verdictReturnToFindings(); setVerdict(undefined); setVerdictReturnToFindings(false); if (restore) props.keymap.setData('modal.active', 'findings'); else props.keymap.setData('modal.active', 'none'); }; 
-  const gate = createMemo(() => props.profile === 'test'
-    ? { prompt: 'Press Enter to advance demo phase', action: 'next demo phase' }
-    : approvalFor(data().state.phase));
+  const gate = createMemo(() => {
+    if (props.profile === 'test') return { prompt: 'Press Enter to advance demo phase', action: 'next demo phase' };
+    if (data().state.phase === 'fix' && data().agents.find(agent => agent.role === 'worker')?.status !== 'idle') return undefined;
+    return approvalFor(data().state.phase);
+  });
   const workflowStatus = createMemo(() => {
     const phase = data().state.phase;
-    const working = data().agents.some(agent => agent.status === 'working');
-    if (!working) return { text: phase, working: false };
-    const lower = phase.toLowerCase();
-    return { text: lower.includes('plan') ? 'Planning' : lower.includes('verif') || lower.includes('review') ? 'Verifying' : lower.includes('archiv') ? 'Archiving' : 'Applying', working: true };
+    const active = data().agents.find(agent => agent.status === 'working');
+    if (!active) return { text: phase, working: false };
+    if (active.role === 'planner') return { text: 'Planning', working: true };
+    if (active.role.endsWith('verifier')) return { text: 'Verifying', working: true };
+    if (active.role === 'archive') return { text: 'Archiving', working: true };
+    return { text: 'Applying', working: true };
   });
 
   const refresh = () => {
@@ -125,7 +129,23 @@ export function App(props: { repo: string; change: string; profile?: 'test'; key
       } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
       return;
     }
-    if (key.name === 'r') {
+    if (name === 'r' && key.shift) {
+      const approval = gate();
+      if (!approval) { setMessage('No recovery action available for this phase.'); return; }
+      setBusy(true);
+      setMessage(`Running ${approval.action}…`);
+      try {
+        if (props.profile === 'test') setDemoIndex(index => (index + 1) % demoPhases.length);
+        else setMessage(await runWorkflow(approval.action, props.repo, props.change));
+        refresh();
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : String(error));
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+    if (name === 'r') {
       refresh();
       setMessage('Refreshed');
       return;
@@ -203,7 +223,7 @@ export function App(props: { repo: string; change: string; profile?: 'test'; key
     });
     const dispose = props.keymap.registerLayer({ name: 'detail', priority: 100, appView: 'detail', activeModal: 'none',
       commands: [{ name: 'detail.handle', run: ({ event }) => { void handleKey(event); return true; } }],
-      bindings: ['q', 'ctrl+c', 'meta+c', 'shift+t', 'r', 'v', '?', 'j', 'k', 'J', 'K', 'tab', 'shift+tab', 'up', 'down', 'enter', 'return', 'escape'].map(key => ({ key, cmd: 'detail.handle' })),
+      bindings: ['q', 'ctrl+c', 'meta+c', 'shift+t', 'shift+r', 'r', 'v', '?', 'j', 'k', 'J', 'K', 'tab', 'shift+tab', 'up', 'down', 'enter', 'return', 'escape'].map(key => ({ key, cmd: 'detail.handle' })),
     });
     onCleanup(() => { disposeTheme(); disposeHelp(); disposeVerification(); disposeEvents(); disposeFindings(); disposeVerdict(); dispose(); });
   });
@@ -270,7 +290,7 @@ export function App(props: { repo: string; change: string; profile?: 'test'; key
           </box>
         </box>
       }
-      footer={<StatusBar prompt={activePanel() === 1 ? 'Selected agent' : activePanel() === 3 ? 'Verification timeline' : prompt()} approval={activePanel() !== 1 && !!gate() && !busy()} keybinds={[...(activePanel() === 2 ? [{ key: 'Enter', action: 'view tasks' }] : activePanel() === 3 ? [{ key: 'Enter', action: 'view timeline' }] : activePanel() === 4 ? [{ key: 'Enter', action: 'open lazygit' }] : activePanel() === 5 ? [{ key: 'Enter', action: 'view traces' }] : activePanel() === 6 ? [{ key: 'Enter', action: 'open artifact' }] : activePanel() !== 1 && !!gate() && !busy() ? [{ key: 'Enter', action: 'approve' }] : activePanel() === 1 ? [{ key: 'Enter', action: 'focus agent' }, { key: 'v', action: 'view verdict' }] : []), { key: 'r', action: 'refresh' }, { key: 'Esc', action: 'dashboard' }, { key: 'q', action: 'quit' }]} />}
+      footer={<StatusBar prompt={activePanel() === 1 ? 'Selected agent' : activePanel() === 3 ? 'Verification timeline' : prompt()} approval={activePanel() !== 1 && !!gate() && !busy()} keybinds={[...(activePanel() === 2 ? [{ key: 'Enter', action: 'view tasks' }] : activePanel() === 3 ? [{ key: 'Enter', action: 'view timeline' }] : activePanel() === 4 ? [{ key: 'Enter', action: 'open lazygit' }] : activePanel() === 5 ? [{ key: 'Enter', action: 'view traces' }] : activePanel() === 6 ? [{ key: 'Enter', action: 'open artifact' }] : activePanel() !== 1 && !!gate() && !busy() ? [{ key: 'Enter', action: 'approve' }] : activePanel() === 1 ? [{ key: 'Enter', action: 'focus agent' }, { key: 'v', action: 'view verdict' }] : []), ...(gate() ? [{ key: 'Shift+R', action: 'recover' }] : []), { key: 'r', action: 'refresh' }, { key: 'Esc', action: 'dashboard' }, { key: 'q', action: 'quit' }]} />}
     />
     <Show when={help()}><HelpModal title="Dashboard keybindings" sections={helpSections} offset={helpOffset()} lines={Math.max(5, Math.floor(dimensions().height * .78) - 5)} /></Show>
     <NotificationOverlay />

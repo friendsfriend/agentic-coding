@@ -27,7 +27,7 @@ Do not commit, push, archive, or spawn agents.
 
 ## Fix
 
-Read only consolidated report path from handoff. Its stable critical/warning finding IDs are the fix checklist; do not reopen raw verifier reports unless consolidated evidence links them. Fix every listed ID, rerun focused tests covering each fix plus relevant non-test checks. Do not run project-wide test suite; verifier runs it. Then start next round with the same `herdr-workflow verify` command. Do not restate report or implementation in handoff. Third failed round pauses for developer instruction.
+Read only consolidated report path from handoff. Its stable critical/warning finding IDs are the fix checklist; do not reopen raw verifier reports unless consolidated evidence links them. Fix every listed ID, rerun focused tests covering each fix plus relevant non-test checks. Do not run project-wide test suite; verifier runs it. Then start next round with the same `herdr-workflow verify` command. Do not restate report or implementation in handoff. A failed final round, as configured by `workflow.max_verification_rounds`, pauses for developer instruction.
 
 ## Common mistakes
 

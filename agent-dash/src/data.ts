@@ -246,6 +246,8 @@ export function testDashboard(phase = 'proposed'): DashboardData {
 export function approvalFor(phase: string) {
   return ({
     proposed: { prompt: 'Press Enter to approve apply', action: 'apply' },
+    fix: { prompt: 'Press Enter to retry verification', action: 'verify' },
+    paused: { prompt: 'Press Enter to resume verification', action: 'verify' },
     'developer-review': { prompt: 'Press Enter to approve archive', action: 'archive' },
     completed: { prompt: 'Press Enter to close Herdr workspace', action: 'close' },
   } as Record<string, { prompt: string; action: string }>)[phase];

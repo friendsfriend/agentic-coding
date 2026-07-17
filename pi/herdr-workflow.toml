@@ -1,5 +1,6 @@
 [models]
 manager = "opencode/deepseek-v4-flash-free"
+triage = "opencode/deepseek-v4-flash-free"
 planner = "openai-codex/gpt-5.6-sol"
 worker_default = "github-copilot/kimi-k2.7-code"
 worker_alternative = "openai-codex/gpt-5.6-luna"
@@ -15,13 +16,15 @@ archive = "github-copilot/kimi-k2.7-code"
 
 [thinking]
 manager = "low"
+triage = "low"
+verifier_lite = "low"
 planner = "high"
 worker_default = "low"
 verifier = "high"
 archive = "low"
 
 [workflow]
-max_verification_rounds = 3
+max_verification_rounds = 6
 verification_timeout_seconds = 600
 remote = "origin"
 branch_prefix = "feature/"

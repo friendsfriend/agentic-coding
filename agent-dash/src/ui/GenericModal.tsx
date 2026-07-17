@@ -58,7 +58,7 @@ export function GenericModal(props: { title: string; titleColor?: string; fieldL
       <Show when={props.summaryOnly} fallback={
         <box width="100%" flexDirection="row" flexGrow={1} flexShrink={1} minHeight={0} overflow="hidden">
           <box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
-            <Show when={props.fieldLabel}><text fg={uiColors.textPrimary} attributes={TextAttributes.BOLD}>{props.fieldLabel}</text></Show>
+            <Show when={props.fieldLabel}><box width="100%" height={1} flexShrink={0}><text fg={uiColors.textPrimary} attributes={TextAttributes.BOLD}>{props.fieldLabel}</text></box></Show>
             <box style={{ width: '100%', flexDirection: 'column', flexGrow: 1, flexShrink: 1, minHeight: 0, overflow: 'hidden' }}>{props.children}</box>
           </box>
           <Show when={props.summary?.length}><SummaryTable entries={props.summary!} /></Show>
