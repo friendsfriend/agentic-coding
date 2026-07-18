@@ -9,6 +9,8 @@ directory = "~/.herdr/worktrees"
 
 [keys]
 prefix = "ctrl+g"
+goto = "prefix+shift+g"
+edit_scrollback = "prefix+shift+e"
 
 [ui]
 confirm_close = true
@@ -29,3 +31,17 @@ pane_history = false
 
 [ui.sound]
 enabled = false
+
+[[keys.command]]
+key = "prefix+g"
+type = "popup"
+command = "lazygit"
+width = "80%"
+height = "80%"
+
+[[keys.command]]
+key = "prefix+e"
+type = "popup"
+command = "nvim"
+width = "80%"
+height = "80%"
