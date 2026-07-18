@@ -5,7 +5,7 @@ Pi agent assets, Herdr workflow configuration, OpenCode assets, OpenSpec history
 ## Dependencies
 
 - [Pi](https://github.com/badlogic/pi-mono) and `pi install npm:@ogulcancelik/pi-herdr`
-- [Herdr](https://github.com/ogulcan/Herdr)
+- [Herdr](https://github.com/ogulcancelik/herdr) HEAD with `agent start`/`agent prompt` support
 - [Bun](https://bun.sh/) for `agent-dash`
 - `opencode` only when using OpenCode assets
 
