@@ -45,15 +45,17 @@ printf '# Design\n' > "$change/design.md"
 printf '%s\n' '- [ ] Implement test change' > "$change/tasks.md"
 printf '# Requirements\n## Scenario: works\n' > "$change/specs/core/spec.md"
 env "${env[@]}" pi/bin/herdr-workflow apply --repo "$repo" --change test-change >/dev/null
-env "${env[@]}" pi/bin/herdr-workflow verify --repo "$repo" --change test-change >/dev/null
-env "${env[@]}" pi/bin/herdr-workflow verify --repo "$repo" --change test-change | grep -qx 'verification already running: round 1'
+env "${env[@]}" pi/bin/herdr-workflow override-phase --repo "$repo" --change test-change paused | grep -qx paused
+if env "${env[@]}" pi/bin/herdr-workflow override-phase --repo "$repo" --change test-change closed >/dev/null 2>&1; then exit 1; fi
+if env "${env[@]}" pi/bin/herdr-workflow override-phase --repo "$repo" --change test-change unknown >/dev/null 2>&1; then exit 1; fi
 
 python3 - "$repo" <<'PY'
 import json, sys
 from pathlib import Path
-state = json.loads((Path(sys.argv[1]) / '.herdr-workflow/test-change/state.json').read_text())
-assert state['phase'] == 'verify'
-assert state['verificationRound'] == 1
+root = Path(sys.argv[1])
+state = json.loads((root / '.herdr-workflow/test-change/state.json').read_text())
+assert state['phase'] == 'paused'
+assert state['verificationRound'] == 0
 assert state['branch'] == 'feature/DDS_DHP-123-test-change'
 assert state['ticketNumber'] == 'DDS_DHP-123'
 assert state['returnWorkspace'] == 'w-home'
@@ -62,24 +64,74 @@ assert state['panes']['planner'] == 'p-explore'
 assert state['panes']['security-verifier'] == 'p-verify'
 assert state['panes']['agents-verifier'] == 'p-p-verify-right'
 assert state['panes']['test-verifier'] == 'p-p-verify-down'
-assert (Path(sys.argv[1]) / '.herdr-workflow/test-change/request.md').read_text() == '# test-change\n\n**Ticket:** DDS_DHP-123\n\ntest\n'
+assert any(json.loads(line)['event'] == 'workflow_phase_overridden' and json.loads(line)['source'] == 'apply' and json.loads(line)['target'] == 'paused' for line in (root / '.herdr-workflow/test-change/telemetry.jsonl').read_text().splitlines())
+assert (root / '.herdr-workflow/test-change/request.md').read_text() == '# test-change\n\n**Ticket:** DDS_DHP-123\n\ntest\n'
 PY
+
+sync="$root/worktree"
+python3 - "$repo" "$sync" <<'PY'
+import json, sys
+from pathlib import Path
+repo, worktree = map(Path, sys.argv[1:])
+state = json.loads((repo / '.herdr-workflow/test-change/state.json').read_text())
+state.update(changeId='sync-change', repository=str(repo), worktree=str(worktree), phase='apply')
+for root in (repo, worktree):
+    path = root / '.herdr-workflow/sync-change/state.json'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state))
+PY
+env "${env[@]}" pi/bin/herdr-workflow override-phase --repo "$sync" --change sync-change paused >/dev/null
+python3 - "$repo" "$sync" <<'PY'
+import json, sys
+from pathlib import Path
+source, worktree = map(Path, sys.argv[1:])
+states = [json.loads((root / '.herdr-workflow/sync-change/state.json').read_text()) for root in (source, worktree)]
+assert states[0] == states[1]
+assert states[0]['phase'] == 'paused'
+assert states[0]['panes']['worker'] == 'p-apply'
+for root in (source, worktree):
+    path = root / '.herdr-workflow/sync-change/state.json'
+    state = json.loads(path.read_text())
+    state['phase'] = 'closed'
+    path.write_text(json.dumps(state))
+PY
+if env "${env[@]}" pi/bin/herdr-workflow override-phase --repo "$sync" --change sync-change apply >/dev/null 2>&1; then exit 1; fi
 
 reviews="$repo/.herdr-workflow/test-change/reviews"
 mkdir -p "$reviews"
-for role in security-verifier agents-verifier quality-verifier openspec-verifier; do
-  printf '%s\n' '{"type":"verdict","verdict":"PASS"}' > "$reviews/round-1-$role.findings.jsonl"
-  env "${env[@]}" pi/bin/herdr-workflow verification-result --repo "$repo" --change test-change --role "$role" >/dev/null
-done
+printf '%s\n' '{"recoveryId":"stale","action":"retry-verification"}' > "$reviews/recovery-plan.json"
+env "${env[@]}" pi/bin/herdr-workflow recover --repo "$repo" --change test-change >/dev/null
+recovery_id=$(python3 - "$repo" <<'PY'
+import json, sys
+from pathlib import Path
+root = Path(sys.argv[1]) / '.herdr-workflow/test-change/reviews'
+context = json.loads((root / 'recovery-context.json').read_text())
+assert context['recoveryId']
+assert context['phase'] == 'paused'
+assert context['allowedActions'] == ['retry-verification']
+assert not (root / 'recovery-plan.json').exists()
+print(context['recoveryId'])
+PY
+)
+printf '%s\n' '[]' > "$reviews/recovery-plan.json"
+if env "${env[@]}" pi/bin/herdr-workflow apply-recovery --repo "$repo" --change test-change >/dev/null 2>&1; then exit 1; fi
+printf '%s\n' '{"recoveryId":"stale","action":"retry-verification"}' > "$reviews/recovery-plan.json"
+if env "${env[@]}" pi/bin/herdr-workflow apply-recovery --repo "$repo" --change test-change >/dev/null 2>&1; then exit 1; fi
+printf '{"recoveryId":"%s","action":"dispatch-triage"}\n' "$recovery_id" > "$reviews/recovery-plan.json"
+if env "${env[@]}" pi/bin/herdr-workflow apply-recovery --repo "$repo" --change test-change >/dev/null 2>&1; then exit 1; fi
+
+env "${env[@]}" pi/bin/herdr-workflow verify --repo "$repo" --change test-change >/dev/null
+printf '%s\n' '{"roles":{}}' > "$reviews/round-1-triage.json"
+env "${env[@]}" pi/bin/herdr-workflow dispatch-verifiers --repo "$repo" --change test-change >/dev/null
+
 python3 - "$repo" <<'PY'
 import json, sys
 from pathlib import Path
 state = json.loads((Path(sys.argv[1]) / '.herdr-workflow/test-change/state.json').read_text())
-assert state['phase'] == 'verify'
-assert state['testVerifierStarted'] is True
+assert state['phase'] == 'developer-review'
+assert state['verificationRound'] == 1
+assert state['verificationRoles'] == []
 PY
-printf '%s\n' '{"type":"verdict","verdict":"PASS"}' > "$reviews/round-1-test-verifier.findings.jsonl"
-env "${env[@]}" pi/bin/herdr-workflow verification-result --repo "$repo" --change test-change --role test-verifier >/dev/null
 
 env "${env[@]}" agent-dash --repo "$repo" --change test-change --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["state"]["phase"] == "developer-review"; assert len(d["tasks"]) == 1'
 agent-dash --profile test --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["state"]["phase"] == "proposed"; assert len(d["tasks"]) == 5'

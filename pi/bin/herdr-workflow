@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 import tomllib
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -23,6 +24,8 @@ SKILLS = AGENT_DIR / "skills"
 # Standard pi extension discovery locations
 PI_EXTENSION_DIRS = [AGENT_DIR / "extensions", Path.home() / ".config" / "pi" / "extensions"]
 UNRESTRICTED_ROLES = {"planner", "worker"}
+OPERATIONAL_PHASES = ("explore", "proposed", "apply", "fix", "triage", "verify", "paused", "developer-review", "archive", "completed")
+RECOVERY_ACTION_PHASES = {"retry-verification": {"apply", "fix", "paused"}, "dispatch-triage": {"triage"}, "record-verifier-result": {"verify"}}
 
 
 def run(*args, cwd=None, capture=True):
@@ -131,7 +134,7 @@ def role_prompt(role, change, verification_round=None):
     if role == "archive":
         return shared + f" Read .herdr-workflow/{change}/reviews/archive-context.md only; do not read review history or telemetry. Run preflight, report pass/fail. No chat output."
     if role == "recovery":
-        return f"You are recovery agent for {change}. Read .herdr-workflow/{change}/reviews/recovery-context.json. Write recovery-plan.json with one allowlisted action: retry-verification, dispatch-triage, or record-verifier-result (include role). Do not execute it, mutate state, commit, push, or archive. Output plan only. No chat output."
+        return f"You are recovery agent for {change}. Read .herdr-workflow/{change}/reviews/recovery-context.json. Use write tool to create .herdr-workflow/{change}/reviews/recovery-plan.json before ending. Its recoveryId must match context and contain exactly one allowlisted action: retry-verification, dispatch-triage, or record-verifier-result (include role). Do not put plan JSON in chat. Do not execute it, mutate state, commit, push, or archive. No chat output."
     if role == "worker":
         return f"Silent worker for {change}. Follow loaded skill. Apply plan silently. No chat output."
     if role.endswith("-verifier"):
@@ -512,7 +515,9 @@ def write_triage_input(state, tier):
         eligible = [role for role in eligible if role != "openspec-verifier"]
     prior = state.get("previousVerificationResults", {})
     reusable = {role: result for role, result in prior.items() if role in VERIFIER_ROLES and result.get("verdict") == "PASS" and role not in eligible}
-    triage_input_path(state).write_text(json.dumps({"round": state["verificationRound"], "tier": tier, "fileManifest": file_manifest(root, changed), "allChangedFiles": files, "deterministicChecks": checks, "eligibleRoles": eligible, "reusablePasses": reusable}, indent=2) + "\n")
+    path = triage_input_path(state)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"round": state["verificationRound"], "tier": tier, "fileManifest": file_manifest(root, changed), "allChangedFiles": files, "deterministicChecks": checks, "eligibleRoles": eligible, "reusablePasses": reusable}, indent=2) + "\n")
 
 
 def scoped_diff(root, files, hunks=None, limit=12000):
@@ -671,16 +676,39 @@ def ensure_recovery(state):
 
 def write_recovery_context(state):
     root = workflow_dir(state) / "reviews"
-    context = {"phase": state["phase"], "phaseStartedAt": state.get("phaseStartedAt"), "verificationRound": state["verificationRound"], "roles": state.get("verificationRoles", []), "results": state.get("verificationResults", {}), "timeouts": state.get("verificationTimeoutRoles", []), "panes": state["panes"]}
+    root.mkdir(parents=True, exist_ok=True)
+    context = {"recoveryId": state.get("recoveryRunId"), "phase": state["phase"], "phaseStartedAt": state.get("phaseStartedAt"), "verificationRound": state["verificationRound"], "roles": state.get("verificationRoles", []), "results": state.get("verificationResults", {}), "timeouts": state.get("verificationTimeoutRoles", []), "allowedActions": [action for action, phases in RECOVERY_ACTION_PHASES.items() if state["phase"] in phases], "panes": state["panes"]}
     (root / "recovery-context.json").write_text(json.dumps(context, indent=2) + "\n")
     return root / "recovery-context.json"
+
+
+def recovery_plan_error(state, plan):
+    if not isinstance(plan, dict):
+        return "invalid recovery plan schema"
+    if plan.get("recoveryId") != state.get("recoveryRunId"):
+        return "invalid recovery plan identifier"
+    action = plan.get("action")
+    if "action" not in plan:
+        return "invalid recovery plan schema"
+    if action == "record-verifier-result" and "role" not in plan:
+        return "invalid recovery plan schema"
+    if action not in RECOVERY_ACTION_PHASES or state["phase"] not in RECOVERY_ACTION_PHASES[action]:
+        return "invalid recovery action for current phase"
+    if action == "record-verifier-result" and plan["role"] not in (*state.get("verificationRoles", VERIFIER_ROLES), TEST_VERIFIER):
+        return "invalid recovery verifier role"
+    return None
 
 
 def cmd_recover(args):
     state = load_state(args.repo, args.change)
     ensure_recovery(state)
+    root = workflow_dir(state) / "reviews"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "recovery-plan.json").unlink(missing_ok=True)
+    state["recoveryRunId"] = uuid.uuid4().hex
+    save_state(state)
     write_recovery_context(state)
-    telemetry(state, "recovery_started", phase=state["phase"], round=state["verificationRound"])
+    telemetry(state, "recovery_started", phase=state["phase"], round=state["verificationRound"], recovery_id=state["recoveryRunId"])
     start_role(state, "recovery")
     print("recovery analysis started")
 
@@ -690,18 +718,21 @@ def cmd_apply_recovery(args):
     plan_path = workflow_dir(state) / "reviews" / "recovery-plan.json"
     if not plan_path.exists():
         raise SystemExit("missing recovery plan")
-    plan = json.loads(plan_path.read_text())
-    action = plan.get("action")
+    try:
+        plan = json.loads(plan_path.read_text())
+    except json.JSONDecodeError:
+        raise SystemExit("invalid recovery plan schema")
+    if error := recovery_plan_error(state, plan):
+        raise SystemExit(error)
+    action = plan["action"]
     if action == "retry-verification":
         cmd_verify(args)
     elif action == "dispatch-triage":
         cmd_dispatch_verifiers(args)
-    elif action == "record-verifier-result" and plan.get("role") in (*VERIFIER_ROLES, TEST_VERIFIER):
+    else:
         args.role = plan["role"]
         cmd_verification_result(args)
-    else:
-        raise SystemExit("invalid recovery action")
-    telemetry(state, "recovery_applied", action=action, role=plan.get("role"))
+    telemetry(state, "recovery_applied", action=action, role=plan.get("role"), recovery_id=state["recoveryRunId"])
 
 
 def ensure_triage(state):
@@ -882,6 +913,19 @@ def cmd_preflight_archive(args):
         raise SystemExit(f"archive preflight requires archive phase, found {state['phase']}")
     ensure_workflow_branch(state)
     print(f"archive preflight passed: {state['branch']}")
+
+
+def cmd_override_phase(args):
+    if args.phase not in OPERATIONAL_PHASES:
+        raise SystemExit(f"invalid override phase: {args.phase}")
+    state = load_state(args.repo, args.change)
+    if state["phase"] == "closed":
+        raise SystemExit("cannot override closed workflow")
+    source = state["phase"]
+    set_phase(state, args.phase)
+    save_state(state)
+    telemetry(state, "workflow_phase_overridden", source=source, target=args.phase)
+    print(args.phase)
 
 
 def cmd_phase(args):
@@ -1112,6 +1156,7 @@ def parser():
     for name in ("planner", "apply", "verify", "recover", "apply-recovery", "dispatch-verifiers", "archive", "close", "status", "check-timeout"):
         sub = commands.add_parser(name); sub.add_argument("--repo", required=True); sub.add_argument("--change", required=True)
     phase = commands.add_parser("phase"); phase.add_argument("--repo", required=True); phase.add_argument("--change", required=True); phase.add_argument("phase")
+    override = commands.add_parser("override-phase"); override.add_argument("--repo", required=True); override.add_argument("--change", required=True); override.add_argument("phase")
     preflight = commands.add_parser("preflight-archive"); preflight.add_argument("--repo", required=True); preflight.add_argument("--change", required=True)
     set_return = commands.add_parser("set-return"); set_return.add_argument("--repo", required=True); set_return.add_argument("--change", required=True); set_return.add_argument("--workspace", required=True)
     result = commands.add_parser("verification-result"); result.add_argument("--repo", required=True); result.add_argument("--change", required=True); result.add_argument("--role", required=True)
