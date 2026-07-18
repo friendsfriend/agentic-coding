@@ -396,7 +396,20 @@ def launch_role(state, role):
 
 
 def prompt_role(state, role, text=None):
-    herdr("agent", "prompt", role_agent_name(state, role), text or role_prompt(role, state["changeId"], state.get("verificationRound")))
+    name = role_agent_name(state, role)
+    prompt = text or role_prompt(role, state["changeId"], state.get("verificationRound"))
+    for attempt in range(2):
+        result = herdr("agent", "prompt", name, prompt)
+        baseline = result.get("baseline_state_change_seq", 0)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            agent = herdr("agent", "get", name)["agent"]
+            sequence = agent.get("state_change_seq")
+            if sequence is None or sequence > baseline or agent.get("agent_status") == "working":
+                return
+            time.sleep(0.2)
+        if attempt:
+            raise SystemExit(f"agent prompt was not acknowledged: {name}")
 
 
 def start_role(state, role):
