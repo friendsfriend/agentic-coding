@@ -25,6 +25,7 @@ import { getActiveThemeName, themeNames } from './ui/theme';
 import { ThemePickerModal } from './ui/ThemePickerModal';
 import { SelectableList } from './ui/Selectable';
 import { ListViewModal } from './ui/ListViewModal';
+import { TraceBrowser } from './ui/TraceBrowser';
 
 const statusColor = (status: string) => status === 'working' ? uiColors.primary : status === 'done' || status === 'idle' ? uiColors.success : status === 'blocked' ? uiColors.warning : status === 'closed' ? uiColors.textMuted : uiColors.error;
 
@@ -59,6 +60,7 @@ export function App(props: { repo: string; change: string; profile?: 'test'; key
   const [verdictOffset, setVerdictOffset] = createSignal(0);
   const [verificationDetail, setVerificationDetail] = createSignal(false);
   const [eventsDetail, setEventsDetail] = createSignal(false);
+  const [traceDetail, setTraceDetail] = createSignal(false);
   const [selectedEvent, setSelectedEvent] = createSignal(0);
   const [selectedVerification, setSelectedVerification] = createSignal(0);
   const [help, setHelp] = createSignal(false);
@@ -168,7 +170,7 @@ export function App(props: { repo: string; change: string; profile?: 'test'; key
     }
     if (name === 'enter' || name === 'return') {
       if (activePanel() === 6) { const artifact = artifacts()[selectedArtifact()]; if (artifact) { setVerdict({ title: `OpenSpec · ${artifact}`, content: openSpecArtifact(data().state, artifact) }); setVerdictOffset(0); props.keymap.setData('modal.active', 'verdict'); } return; }
-      if (activePanel() === 5) { setEventsDetail(true); setSelectedEvent(0); props.keymap.setData('modal.active', 'events'); return;}
+      if (activePanel() === 5) { setTraceDetail(true); props.keymap.setData('modal.active', 'traces'); return;}
       if (activePanel() === 4) { try { focusAgent(data().state, data().state.panes.git!); } catch (error) { setVerdictReturnToFindings(false); setVerdict({ title: 'Lazygit launch failed', content: error instanceof Error ? error.message : String(error) }); setVerdictOffset(0); props.keymap.setData('modal.active', 'verdict'); } return; }
       if (activePanel() === 2) {
         setVerdict({ title: `Tasks · ${doneTasks()}/${data().tasks.length}`, content: data().tasks.map((task, index) => `${task.done ? '✓' : '○'} ${index + 1}. ${task.text}`).join('\n') || 'No tasks yet.' });
@@ -210,6 +212,7 @@ export function App(props: { repo: string; change: string; profile?: 'test'; key
     const disposeHelp = props.keymap.registerLayer({ name: 'help', priority: 1000, activeModal: 'help', commands: [{ name: 'help.handle', run: ({ event }) => { const key = event.name.toLowerCase(); if (key === 'escape') { setHelp(false); props.keymap.setData('modal.active', 'none'); } else if (key === 'j' || key === 'down') setHelpOffset(value => Math.min(helpMaxOffset(), value + 1)); else if (key === 'k' || key === 'up') setHelpOffset(value => Math.max(0, value - 1)); return true; } }], bindings: ['escape', 'j', 'k', 'up', 'down'].map(key => ({ key, cmd: 'help.handle' })) });
     const disposeVerification = props.keymap.registerLayer({ name: 'verification-detail', priority: 1000, activeModal: 'verification-detail', commands: [{ name: 'verification.handle', run: ({ event }) => { const key = event.name.toLowerCase(); const entries = data().verifierTimeline; if (key === 'escape') { setVerificationDetail(false); props.keymap.setData('modal.active', 'none'); } else if (key === 'j' || key === 'down') setSelectedVerification(value => Math.min(entries.length - 1, value + 1)); else if (key === 'k' || key === 'up') setSelectedVerification(value => Math.max(0, value - 1)); else if (key === 'enter' || key === 'return') { const entry = entries[selectedVerification()]; if (!entry) return true; try { setVerificationDetail(false); openVerifierResult(entry.role, true); } catch (error) { setVerdict({ title: `${entry.role} · result pending`, content: error instanceof Error ? error.message : String(error) }); setVerdictOffset(0); props.keymap.setData('modal.active', 'verdict'); } } return true; } }], bindings: ['escape', 'enter', 'return', 'j', 'k', 'up', 'down'].map(key => ({ key, cmd: 'verification.handle' })) });
     const disposeEvents = props.keymap.registerLayer({ name: 'events', priority: 1000, activeModal: 'events', commands: [{ name: 'events.handle', run: ({ event }) => { const key = event.name.toLowerCase(); if (key === 'escape') { setEventsDetail(false); props.keymap.setData('modal.active', 'none'); } else if (key === 'j' || key === 'down') setSelectedEvent(value => Math.min(data().events.length - 1, value + 1)); else if (key === 'k' || key === 'up') setSelectedEvent(value => Math.max(0, value - 1)); return true; } }], bindings: ['escape', 'j', 'k', 'up', 'down'].map(key => ({ key, cmd: 'events.handle' })) });
+    const disposeTraces = props.keymap.registerLayer({ name: 'traces', priority: 1000, activeModal: 'traces', commands: [{ name: 'traces.close', run: () => { setTraceDetail(false); props.keymap.setData('modal.active', 'none'); return true; } }], bindings: [{ key: 'escape', cmd: 'traces.close' }] });
     const disposeFindings = props.keymap.registerLayer({ name: 'findings', priority: 1000, activeModal: 'findings', commands: [{ name: 'findings.handle', run: ({ event }) => { const key = event.name.toLowerCase(); const items = (findings()?.events ?? []).filter(item => item.type !== 'verdict'); if (key === 'escape') { const restore = findingsReturnToVerification(); setFindings(undefined); setFindingsReturnToVerification(false); if (restore) { setVerificationDetail(true); props.keymap.setData('modal.active', 'verification-detail'); } else props.keymap.setData('modal.active', 'none'); } else if (key === 'j' || key === 'down') setSelectedFinding(value => Math.min(items.length - 1, value + 1)); else if (key === 'k' || key === 'up') setSelectedFinding(value => Math.max(0, value - 1)); else if (key === 'enter' || key === 'return') { const finding = items[selectedFinding()]; if (finding?.type === 'finding') { try { openFindingInEditor(data().state, finding); } catch (error) { setVerdictReturnToFindings(true); setVerdict({ title: 'Editor launch failed', content: error instanceof Error ? error.message : String(error) }); setVerdictOffset(0); props.keymap.setData('modal.active', 'verdict'); } } } return true; } }], bindings: ['escape', 'enter', 'return', 'j', 'k', 'up', 'down'].map(key => ({ key, cmd: 'findings.handle' })) });
     const disposeVerdict = props.keymap.registerLayer({ name: 'verdict', priority: 1000, activeModal: 'verdict',
       commands: [{ name: 'verdict.handle', run: ({ event }) => {
@@ -228,7 +231,7 @@ export function App(props: { repo: string; change: string; profile?: 'test'; key
       commands: [{ name: 'detail.handle', run: ({ event }) => { void handleKey(event); return true; } }],
       bindings: ['q', 'ctrl+c', 'meta+c', 'shift+t', 'shift+r', 'shift+o', 'r', 'v', '?', 'j', 'k', 'J', 'K', 'tab', 'shift+tab', 'up', 'down', 'enter', 'return', 'escape'].map(key => ({ key, cmd: 'detail.handle' })),
     });
-    onCleanup(() => { disposeTheme(); disposeRecovery(); disposeOverridePicker(); disposeOverrideConfirm(); disposeHelp(); disposeVerification(); disposeEvents(); disposeFindings(); disposeVerdict(); dispose(); });
+    onCleanup(() => { disposeTheme(); disposeRecovery(); disposeOverridePicker(); disposeOverrideConfirm(); disposeHelp(); disposeVerification(); disposeEvents(); disposeTraces(); disposeFindings(); disposeVerdict(); dispose(); });
   });
 
   createEffect(() => { if (recoveryRequested() && data().recoveryPlan) { setRecoveryRequested(false); setRecoverySelection(0); setRecovery(true); props.keymap.setData('modal.active', 'recovery'); } });
@@ -297,8 +300,8 @@ export function App(props: { repo: string; change: string; profile?: 'test'; key
               <Panel title="Git status" accent={uiColors.warning} active={activePanel() === 4} style={{ flexGrow: 1, flexBasis: 0, minWidth: 0, height: '100%' }}>
                 <text fg={data().health.dirty ? uiColors.warning : uiColors.success}>{data().health.dirty ? `changed · ↑${data().health.ahead} ↓${data().health.behind}` : `clean · ↑${data().health.ahead} ↓${data().health.behind}`}</text>
               </Panel>
-              <Panel title={`Traces · ${data().events.length}`} accent={uiColors.primary} active={activePanel() === 5} style={{ flexGrow: 1, flexBasis: 0, minWidth: 0, height: '100%' }}>
-                <text fg={uiColors.textSecondary}>{data().events.at(-1) ? `${data().events.at(-1)!.at}  ${data().events.at(-1)!.event}` : 'No events yet'}</text>
+              <Panel title={`Traces · ${data().traceSpans.length}`} accent={uiColors.primary} active={activePanel() === 5} style={{ flexGrow: 1, flexBasis: 0, minWidth: 0, height: '100%' }}>
+                <text fg={uiColors.textSecondary}>{data().traceSpans.at(-1)?.name ?? 'No spans yet'}</text>
               </Panel>
             </box>
           </box>
@@ -313,6 +316,7 @@ export function App(props: { repo: string; change: string; profile?: 'test'; key
     <NotificationOverlay />
     <Show when={themePicker()}><ThemePickerModal selected={themeIndex()} active={getActiveThemeName()} themes={filteredThemes()} query={themeQuery()} filtering={themeFiltering()} /></Show>
     <Show when={eventsDetail()}><EventsModal events={[...data().events].reverse()} selected={selectedEvent()} /></Show>
+    <Show when={traceDetail()}><box position="absolute" top={2} left={2} right={2} bottom={2} backgroundColor={uiColors.bgBase} border borderColor={uiColors.primary} padding={1}><TraceBrowser spans={data().traceSpans} change={data().state.changeId} /></box></Show>
     <Show when={findings()}>{result => <FindingsModal title={result().title} events={result().events} selected={selectedFinding()} />}</Show>
     <Show when={verificationDetail()}><VerificationTimelineModal startedAt={data().state.verificationStartedAt} entries={data().verifierTimeline} selected={selectedVerification()} /></Show>
     <Show when={verdict()}>{report => <VerdictModal title={report().title} content={report().content} offset={verdictOffset()} lines={verdictLines()} />}</Show>

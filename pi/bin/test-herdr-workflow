@@ -45,8 +45,9 @@ printf '# Design\n' > "$change/design.md"
 printf '%s\n' '- [ ] Implement test change' > "$change/tasks.md"
 printf '# Requirements\n## Scenario: works\n' > "$change/specs/core/spec.md"
 env "${env[@]}" pi/bin/herdr-workflow phase --repo "$repo" --change test-change proposed >/dev/null
-env "${env[@]}" pi/bin/herdr-workflow apply --repo "$repo" --change test-change >/dev/null
-env "${env[@]}" pi/bin/herdr-workflow override-phase --repo "$repo" --change test-change paused | grep -qx paused
+traceparent=00-0123456789abcdef0123456789abcdef-0123456789abcdef-01
+env "${env[@]}" TRACEPARENT="$traceparent" pi/bin/herdr-workflow apply --repo "$repo" --change test-change >/dev/null
+env "${env[@]}" TRACEPARENT="$traceparent" pi/bin/herdr-workflow override-phase --repo "$repo" --change test-change paused | grep -qx paused
 if env "${env[@]}" pi/bin/herdr-workflow override-phase --repo "$repo" --change test-change closed >/dev/null 2>&1; then exit 1; fi
 if env "${env[@]}" pi/bin/herdr-workflow override-phase --repo "$repo" --change test-change unknown >/dev/null 2>&1; then exit 1; fi
 
@@ -67,6 +68,11 @@ assert state['panes']['agents-verifier'] == 'p-p-verify-right'
 assert state['panes']['test-verifier'] == 'p-p-verify-down'
 assert any(json.loads(line)['event'] == 'workflow_phase_overridden' and json.loads(line)['source'] == 'apply' and json.loads(line)['target'] == 'paused' for line in (root / '.herdr-workflow/test-change/telemetry.jsonl').read_text().splitlines())
 assert (root / '.herdr-workflow/test-change/request.md').read_text() == '# test-change\n\n**Ticket:** DDS_DHP-123\n\ntest\n'
+handoff = json.loads((root / '.herdr-workflow/test-change/trace-context/worker.json').read_text())
+assert handoff['traceparent'].startswith('00-0123456789abcdef0123456789abcdef-')
+assert handoff['expiresAt'] > 0 and handoff['attributes']['herdr.role'] == 'worker'
+traces = [json.loads(line) for line in (root / '.herdr-workflow/test-change/traces.jsonl').read_text().splitlines()]
+assert any(item['name'] == 'workflow.workflow_phase_overridden' and item['parentSpanId'] == '0123456789abcdef' for item in traces)
 PY
 
 sync="$root/worktree"

@@ -14,6 +14,8 @@ import sys
 import time
 import tomllib
 import uuid
+import threading
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -416,6 +418,7 @@ def prompt_role(state, role, text=None):
             continue
         # Herdr agent prompt uses bracketed paste; Pi escapes a pasted leading slash
         # as `//`. Send skill commands as literal pane input instead.
+        write_trace_handoff(state, role)
         herdr("pane", "send-text", state["panes"][role], prompt)
         herdr("pane", "send-keys", state["panes"][role], "enter")
         deadline = time.monotonic() + 5
@@ -429,6 +432,7 @@ def prompt_role(state, role, text=None):
                 return
             time.sleep(0.2)
         if attempt:
+            (workflow_dir(state) / "trace-context" / f"{role}.json").unlink(missing_ok=True)
             raise SystemExit(f"agent prompt was not acknowledged: {name}")
 
 
@@ -488,11 +492,70 @@ def workflow_dir(state):
     return Path(state["worktree"]) / ".herdr-workflow" / state["changeId"]
 
 
+def parse_traceparent(value):
+    match = re.fullmatch(r"00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})", value or "", re.I)
+    if not match or set(match.group(1)) == {"0"} or set(match.group(2)) == {"0"}:
+        return None
+    return {"traceId": match.group(1).lower(), "spanId": match.group(2).lower(), "flags": match.group(3).lower()}
+
+
+def traceparent(context):
+    return f"00-{context['traceId']}-{context['spanId']}-{context.get('flags', '01')}"
+
+
+def child_context(parent=None):
+    return {"traceId": parent["traceId"] if parent else uuid.uuid4().hex, "spanId": uuid.uuid4().hex[:16], "flags": parent.get("flags", "01") if parent else "01"}
+
+
+def trace_endpoint():
+    return os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") or (os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"].rstrip("/") + "/v1/traces" if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT") else "http://127.0.0.1:4318/v1/traces")
+
+
+def export_trace(record):
+    def send():
+        try:
+            attributes = [{"key": key, "value": {"stringValue": str(value)}} for key, value in record["attributes"].items()]
+            payload = {"resourceSpans": [{"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "herdr-workflow"}}]}, "scopeSpans": [{"scope": {"name": "herdr-workflow"}, "spans": [{"traceId": record["traceId"], "spanId": record["spanId"], "parentSpanId": record.get("parentSpanId"), "name": record["name"], "startTimeUnixNano": record["startTimeUnixNano"], "endTimeUnixNano": record["endTimeUnixNano"], "attributes": attributes, "status": {"code": 1}}]}]}]}
+            request = urllib.request.Request(trace_endpoint(), data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST")
+            urllib.request.urlopen(request, timeout=0.75).read()
+        except Exception:
+            pass
+    threading.Thread(target=send, daemon=True).start()
+
+
 def telemetry(state, event, **fields):
-    path = workflow_dir(state) / "telemetry.jsonl"
+    root = workflow_dir(state)
+    path = root / "telemetry.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
+    at = datetime.now(timezone.utc)
     with path.open("a") as file:
-        file.write(json.dumps({"at": datetime.now(timezone.utc).isoformat(), "event": event, "change": state["changeId"], **fields}) + "\n")
+        file.write(json.dumps({"at": at.isoformat(), "event": event, "change": state["changeId"], **fields}) + "\n")
+    parent = parse_traceparent(os.environ.get("TRACEPARENT"))
+    context = child_context(parent)
+    nanos = str(int(at.timestamp() * 1_000_000_000))
+    record = {"traceId": context["traceId"], "spanId": context["spanId"], "parentSpanId": parent["spanId"] if parent else None, "name": f"workflow.{event}", "startTimeUnixNano": nanos, "endTimeUnixNano": nanos, "status": "OK", "attributes": {"service.name": "herdr-workflow", "herdr.change.id": state["changeId"], "herdr.phase": state.get("phase", "unknown"), "herdr.verification.round": state.get("verificationRound", 0), **{f"herdr.{key}": value for key, value in fields.items() if isinstance(value, (str, int, float, bool))}}}
+    with (root / "traces.jsonl").open("a") as file:
+        file.write(json.dumps(record) + "\n")
+    export_trace(record)
+    return context
+
+
+def write_trace_handoff(state, role):
+    root = workflow_dir(state) / "trace-context"
+    root.mkdir(parents=True, exist_ok=True)
+    parent = parse_traceparent(os.environ.get("TRACEPARENT"))
+    action = child_context(parent)
+    nanos = str(int(datetime.now(timezone.utc).timestamp() * 1_000_000_000))
+    record = {"traceId": action["traceId"], "spanId": action["spanId"], "parentSpanId": parent["spanId"] if parent else None, "name": f"workflow.prompt.{role}", "startTimeUnixNano": nanos, "endTimeUnixNano": nanos, "status": "OK", "attributes": {"service.name": "herdr-workflow", "herdr.change.id": state["changeId"], "herdr.role": role, "herdr.phase": state.get("phase", "unknown"), "herdr.verification.round": state.get("verificationRound", 0)}}
+    with (workflow_dir(state) / "traces.jsonl").open("a") as file:
+        file.write(json.dumps(record) + "\n")
+    export_trace(record)
+    context = child_context(action)
+    payload = {"traceparent": traceparent(context), "expiresAt": int(time.time() * 1000) + 120_000, "messageId": uuid.uuid4().hex, "operation": f"workflow.prompt.{role}", "attributes": {"herdr.change.id": state["changeId"], "herdr.role": role, "herdr.phase": state.get("phase", "unknown"), "herdr.verification.round": state.get("verificationRound", 0)}}
+    path = root / f"{role}.json"
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(payload))
+    temporary.replace(path)
 
 
 def review_tier(state):

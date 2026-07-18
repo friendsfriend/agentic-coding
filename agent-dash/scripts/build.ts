@@ -37,6 +37,8 @@ const targets: Array<{ os: 'linux' | 'darwin' | 'win32'; arch: 'arm64' | 'x64'; 
 ];
 
 const single = process.argv.includes('--single');
+const only = process.argv.includes('--only') ? process.argv[process.argv.indexOf('--only') + 1] : undefined;
+if (only && !['agent-dash', 'otel-tui'].includes(only)) throw new Error(`Unknown TUI: ${only}`);
 const selected = single ? targets.filter(target => target.os === process.platform && target.arch === process.arch && target.avx2 !== false && !target.abi) : targets;
 if (!selected.length) throw new Error(`Unsupported current platform: ${process.platform}-${process.arch}`);
 
@@ -56,25 +58,23 @@ for (const target of selected) {
   const name = ['agent-dash', target.os === 'win32' ? 'windows' : target.os, target.arch, target.avx2 === false ? 'baseline' : undefined, target.abi].filter(Boolean).join('-');
   const bunTarget = name.replace('agent-dash', 'bun');
   const output = `dist/${name}/bin/agent-dash`;
+  const otelOutput = `dist/${name}/bin/otel-tui`;
   const bunfsRoot = target.os === 'win32' ? 'B:/~BUN/root/' : '/$bunfs/root/';
   console.log(`building ${name}`);
   await $`mkdir -p dist/${name}/bin`;
-  await Bun.build({
-    tsconfig: './tsconfig.json',
-    plugins: [solidPlugin],
-    sourcemap: 'external',
-    compile: {
-      autoloadBunfig: false,
-      autoloadDotenv: false,
-      // @ts-expect-error Bun target types omit supported cross-compile names.
-      target: bunTarget,
-      outfile: output,
-    },
+  if (only !== 'otel-tui') await Bun.build({
+    tsconfig: './tsconfig.json', plugins: [solidPlugin], sourcemap: 'external',
+    compile: { autoloadBunfig: false, autoloadDotenv: false, // @ts-expect-error Bun target types omit supported cross-compile names.
+      target: bunTarget, outfile: output },
     entrypoints: ['./src/index.tsx', parserWorker],
-    define: {
-      OTUI_TREE_SITTER_WORKER_PATH: JSON.stringify(bunfsRoot + workerRelativePath),
-      ...(target.os === 'linux' ? { 'process.env.OPENTUI_LIBC': JSON.stringify(target.abi === 'musl' ? 'musl' : 'glibc') } : {}),
-    },
+    define: { OTUI_TREE_SITTER_WORKER_PATH: JSON.stringify(bunfsRoot + workerRelativePath), ...(target.os === 'linux' ? { 'process.env.OPENTUI_LIBC': JSON.stringify(target.abi === 'musl' ? 'musl' : 'glibc') } : {}) },
+  });
+  if (only !== 'agent-dash') await Bun.build({
+    tsconfig: './tsconfig.json', plugins: [solidPlugin], sourcemap: 'external',
+    compile: { autoloadBunfig: false, autoloadDotenv: false, // @ts-expect-error Bun target types omit supported cross-compile names.
+      target: bunTarget, outfile: otelOutput },
+    entrypoints: ['./src/otel-tui.tsx', parserWorker],
+    define: { OTUI_TREE_SITTER_WORKER_PATH: JSON.stringify(bunfsRoot + workerRelativePath), ...(target.os === 'linux' ? { 'process.env.OPENTUI_LIBC': JSON.stringify(target.abi === 'musl' ? 'musl' : 'glibc') } : {}) },
   });
   await Bun.write(`dist/${name}/package.json`, JSON.stringify({ name, version: '0.1.0', os: [target.os], cpu: [target.arch] }, null, 2));
 }

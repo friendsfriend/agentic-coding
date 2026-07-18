@@ -13,7 +13,9 @@ Pi agent assets, Herdr workflow configuration, OpenCode assets, OpenSpec history
 
 ```bash
 ./scripts/stow.sh
-./scripts/install-agent-dash.sh
+./scripts/install-tui.sh           # agent-dash + otel-tui
+./scripts/install-agent-dash.sh    # agent-dash only
+./scripts/install-otel-tui.sh      # otel-tui only
 ```
 
 `stow.sh` creates file-level links for:
@@ -24,7 +26,7 @@ Pi agent assets, Herdr workflow configuration, OpenCode assets, OpenSpec history
 
 Local files in these target directories remain real files and are never overwritten.
 
-`install-agent-dash.sh` installs locked Bun dependencies, builds current platform binary, then installs `agent-dash` into `~/.local/bin`.
+`install-tui.sh` builds and installs both binaries. Specialized scripts build and install only their named TUI into `~/.local/bin`.
 
 ## TUI development
 
@@ -35,10 +37,12 @@ bun run dev           # run TUI from source
 bun run type-check
 bun test
 bun run build:single  # build current OS/architecture
-bun run install:bin   # build current target and copy to ~/.local/bin
+bun run install:bin   # build current target and copy both binaries to ~/.local/bin
+
+otel-tui --file /path/to/.herdr-workflow/change/traces.jsonl
 ```
 
-`bun run build` builds all supported platform variants. Build output is under `agent-dash/dist/`; it is ignored by Git. Re-run `bun run install:bin` after TUI changes before using `herdr-manager`.
+`bun run build` builds all supported platform variants. Build output is under `agent-dash/dist/`; it is ignored by Git. `otel-tui` accepts OTLP HTTP JSON at loopback `127.0.0.1:4318/v1/traces`; use only protected networks for `--host` non-loopback because receiver has no authentication. Herdr keeps local `traces.jsonl` history and sends best-effort exports to standard `OTEL_EXPORTER_OTLP_*` trace endpoints. Re-run `bun run install:bin` after TUI changes before using `herdr-manager`.
 
 Start managed workflow inside Herdr:
 

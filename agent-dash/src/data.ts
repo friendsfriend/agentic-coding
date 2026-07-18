@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { decodeJsonl, type TraceSpan } from './traces';
 
 export interface WorkflowState {
   changeId: string;
@@ -98,6 +99,7 @@ export interface DashboardData {
   events: Array<{ at: string; event: string; role?: string; model?: string; cost?: number; status?: number; tier?: string; roles?: string[]; reports?: string[]; fallback?: string }>;
   verifierTimeline: Array<{ role: string; status: string; durationSeconds?: number; model?: string; cost?: number; providerErrors: number; fallback: boolean }>;
   telemetrySummary: Array<{ model: string; durationSeconds: number; errors: number; fallbacks: number; inputTokens: number; outputTokens: number; cost: number }>;
+  traceSpans: TraceSpan[];
   recoveryPlan?: { recoveryId: string; action: string; role?: string };
 }
 
@@ -224,6 +226,7 @@ export function loadDashboard(repo: string, change: string): DashboardData {
     events: telemetry.slice(-20).map(event => ({ at: new Date(event.at).toLocaleTimeString(), event: String(event.event), role: event.role as string | undefined, model: event.model as string | undefined, cost: Number(event.cost ?? 0) || undefined, status: Number(event.status ?? 0) || undefined, tier: event.tier as string | undefined, roles: event.roles as string[] | undefined, reports: event.reports as string[] | undefined, fallback: event.fallback as string | undefined })), 
     verifierTimeline,
     telemetrySummary: [...summaryByModel.values()],
+    traceSpans: decodeJsonl(read(join(workflowRoot, 'traces.jsonl'))),
     recoveryPlan: (() => { try { const plan: unknown = JSON.parse(read(join(workflowRoot, 'reviews', 'recovery-plan.json'))); return validRecoveryPlan(state, plan) ? plan : undefined; } catch { return undefined; } })(),
   };
 }
@@ -269,6 +272,7 @@ export function testDashboard(phase = 'proposed'): DashboardData {
     events: [{ at: '10:42', event: 'verification_started', tier: 'standard', roles: ['security-verifier', 'quality-verifier'] }, { at: '10:40', event: 'pi_agent_start', role: 'worker', model: 'claude-sonnet' }],
     verifierTimeline: phase === 'verify' ? [{ role: 'security-verifier', status: 'PASS', durationSeconds: 42, model: 'claude-sonnet', providerErrors: 0, fallback: false }, { role: 'quality-verifier', status: 'PASS', durationSeconds: 78, model: 'claude-sonnet', providerErrors: 0, fallback: false }, { role: 'test-verifier', status: 'RUN', durationSeconds: 184, model: 'claude-sonnet', providerErrors: 0, fallback: false }] : [],
     telemetrySummary: [{ model: 'claude-sonnet', durationSeconds: 304, errors: 0, fallbacks: 0, inputTokens: 12300, outputTokens: 3400, cost: 0.12 }],
+    traceSpans: [],
   };
 }
 
