@@ -116,7 +116,10 @@ function tasks(path: string) {
 
 function reviewHistory(root: string) {
   if (!existsSync(root)) return [];
-  return readdirSync(root).filter(file => /^round-\d+-consolidated\.md$/.test(file)).sort().map(file => `${file}: ${read(join(root, file)).includes('[critical]') || read(join(root, file)).includes('[warning]') ? 'BLOCKING' : 'CLEAR'}`);
+  return readdirSync(root).filter(file => /^round-\d+-consolidated\.md$/.test(file)).sort().map(file => {
+    const verdict = read(join(root, file)).match(/^Overall verdict: (PASS|FAIL|PENDING)$/m)?.[1] ?? 'UNKNOWN';
+    return `${file}: ${verdict}`;
+  });
 }
 
 function latestReview(root: string) {
