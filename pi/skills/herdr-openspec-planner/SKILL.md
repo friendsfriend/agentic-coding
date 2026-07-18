@@ -14,9 +14,9 @@ description: Explores and proposes one OpenSpec change, discusses requirements w
 ## Propose
 
 1. Use supplied change ID.
-2. Run standard OpenSpec explore/propose workflow.
-3. Validate proposal, design, specs, and tasks.
-4. Run `herdr-workflow phase --repo "$PWD" --change "$HERDR_CHANGE_ID" proposed`.
+2. Run standard OpenSpec explore/propose workflow, including delta spec scenarios under `openspec/changes/$HERDR_CHANGE_ID/specs/`.
+3. Validate proposal, design, specs, and tasks. Never mark proposed without at least one spec scenario.
+4. Run `herdr-workflow phase --repo "$PWD" --change "$HERDR_CHANGE_ID" proposed`. `PLAN_REJECTED` is feedback to this planner turn: fix every reported artifact issue and retry immediately. Never end proposal work while transition remains rejected.
 5. Notify developer that dashboard approval is ready:
 
 ```bash

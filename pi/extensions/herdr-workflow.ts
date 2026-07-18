@@ -1,6 +1,7 @@
 import { DynamicBorder, type ExtensionAPI, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { Container, Key, matchesKey, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
+import { existsSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
@@ -75,10 +76,13 @@ export default function (pi: ExtensionAPI) {
           ctx.ui.notify("No Git projects found in configured discovery path.", "warning");
           return;
         }
-        const labels = projects.map(project => `${project.openspec ? "●" : "○"} ${project.name}`);
+        const cwdLabel = `○ Current Directory (${path.basename(process.cwd())})`;
+        const labels = [...projects.map(project => `${project.openspec ? "●" : "○"} ${project.name}`), cwdLabel];
         const selected = await pagedSelect(ctx, "Select project", labels, height);
         if (!selected) return;
-        const project = projects[labels.indexOf(selected)];
+        const project = selected === cwdLabel
+          ? { name: path.basename(process.cwd()), path: process.cwd(), openspec: existsSync(path.join(process.cwd(), 'openspec', 'config.yaml')) }
+          : projects[labels.indexOf(selected)];
         if (!project.openspec) {
           ctx.ui.notify(`${project.path} has no openspec/config.yaml`, "warning");
           return;

@@ -17,7 +17,7 @@ export function NewWorkflowModal(props: { projects: Project[]; models: string[];
   const [values, setValues] = createSignal<NewWorkflowInput>({ repo: '', ticket: '', change: '', task: '', mode: '', worker: '' });
   const [showCustomRepo, setShowCustomRepo] = createSignal(false);
   const projects = () => props.projects.filter(project => project.name.toLowerCase().includes(filter().toLowerCase()));
-  const choices = (): string[] => step() === 0 ? [...projects().map(project => `${project.openspec ? '●' : '○'} ${project.name}`), 'Custom path…'] : step() === 4 ? ['worktree', 'checkout'].filter(item => item.includes(filter().toLowerCase())) : props.models.filter(item => item.toLowerCase().includes(filter().toLowerCase()));
+  const choices = (): string[] => step() === 0 ? [...projects().map(project => `${project.openspec ? '●' : '○'} ${project.name}`), `Current Directory (${process.cwd().split('/').pop()})`, 'Custom path…'] : step() === 4 ? ['worktree', 'checkout'].filter(item => item.includes(filter().toLowerCase())) : props.models.filter(item => item.toLowerCase().includes(filter().toLowerCase()));
   const listStep = () => [0, 4, 5].includes(step());
   const confirmStep = () => step() === fields.length;
   const totalSteps = fields.length + 1;
@@ -61,7 +61,8 @@ export function NewWorkflowModal(props: { projects: Project[]; models: string[];
     if (name === 'return' || name === 'enter') {
       const choice = items[selected()];
       if (!choice) return true;
-      if (step() === 0 && selected() === projects().length) { setShowCustomRepo(true); return true; }
+      if (step() === 0 && selected() === projects().length) { next(process.cwd()); return true; }
+      if (step() === 0 && selected() === projects().length + 1) { setShowCustomRepo(true); return true; }
       if (choice) next(step() === 0 ? projects()[selected()]?.path ?? '' : choice);
       return true;
     }
