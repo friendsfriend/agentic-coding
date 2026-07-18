@@ -118,6 +118,24 @@ The dotfiles installation scripts SHALL continue to install or link remaining Pi
 - **WHEN** a Pi asset source directory contains no children after removal cleanup
 - **THEN** the installation script SHALL complete without failing solely because there are no assets to link
 
+### Requirement: Herdr agent definitions isolated from pi discovery
+Herdr-specific agent definitions SHALL reside under `agent-definitions/` rather than `pi/skills/` or `pi/extensions/` so they are not auto-discovered by pi.
+
+#### Scenario: Herdr skill not auto-discovered
+- **GIVEN** a herdr skill at `agent-definitions/skills/herdr-openspec-planner/SKILL.md`
+- **WHEN** pi starts without explicit `--skill` flags
+- **THEN** pi SHALL NOT advertise `herdr-openspec-planner` in its available skills
+
+#### Scenario: Herdr extension not auto-discovered
+- **GIVEN** a herdr extension at `agent-definitions/extensions/herdr-telemetry.ts`
+- **WHEN** pi starts without explicit `--extension` flags
+- **THEN** pi SHALL NOT load `herdr-telemetry.ts`
+
+#### Scenario: Herdr workflow loads definitions explicitly
+- **GIVEN** an active workflow change
+- **WHEN** `herdr-workflow` starts any role agent
+- **THEN** the agent command SHALL include `--skill` and `--extension` flags pointing to `agent-definitions/` paths
+
 ### Requirement: Stow installation coverage verification
 The scripts area SHALL be protected by repository verifier policy so changed installable dotfile assets are checked for coverage in `scripts/stow.sh` before an OpenSpec change is considered verified.
 

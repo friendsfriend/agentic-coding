@@ -13,7 +13,7 @@ The system SHALL classify agent roles into two categories: unrestricted (planner
 - **WHEN** the workflow starts a planner or worker agent via `pi_command()`
 - **THEN** the pi command SHALL NOT include `--no-extensions` or `--no-skills`
 - **AND** the pi command SHALL NOT include a hardcoded `--tools` restriction
-- **AND** the pi command SHALL still include `--extension` for `herdr-telemetry.ts`
+- **AND** the pi command SHALL still include `--extension` pointing to `agent-definitions/extensions/herdr-telemetry.ts`
 
 #### Scenario: Verifier stays restricted
 - **GIVEN** a verifier, triage, recovery, or archive role

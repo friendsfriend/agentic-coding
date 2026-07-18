@@ -42,6 +42,7 @@ Do not require stow installation coverage for these paths unless the change arti
 - Generated graph output under `graphify-out/`.
 - Dependency/package list files such as `scripts/brew-minimal.txt`, `scripts/brew-work.txt`, `scripts/omarchy.txt`, and related setup input lists.
 - Git metadata and ignore/config files such as `.gitignore`.
+- `agent-definitions/` directory and its contents. Herdr-specific agent definitions in `agent-definitions/skills/` and `agent-definitions/extensions/` are loaded by explicit path from `herdr-workflow`, not by pi global discovery. They are intentionally not stowed.
 
 ## Acceptable stow coverage evidence
 

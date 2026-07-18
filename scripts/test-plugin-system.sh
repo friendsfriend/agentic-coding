@@ -12,32 +12,12 @@ trap 'rm -rf "$home"' EXIT
 # Override AGENT_DIR
 export PI_CODING_AGENT_DIR="$home/.pi/agent"
 mkdir -p "$home/.pi/agent/extensions"
-mkdir -p "$home/.pi/agent/skills"
 mkdir -p "$home/.pi"
 
 # Create test extensions
 echo "export const tools = [];" > "$home/.pi/agent/extensions/test-jira.ts"
 echo "export const tools = [];" > "$home/.pi/agent/extensions/test-websearch.ts"
 echo "export const tools = [];" > "$home/.pi/agent/extensions/test-db.ts"
-
-# Create telemetry mock (needed by pi_command)
-echo "export const tools = [];" > "$home/.pi/agent/extensions/herdr-telemetry.ts"
-
-# Create role skills
-mkdir -p "$home/.pi/agent/skills/herdr-openspec-planner"
-echo "# planner skill" > "$home/.pi/agent/skills/herdr-openspec-planner/SKILL.md"
-mkdir -p "$home/.pi/agent/skills/herdr-openspec-worker"
-echo "# worker skill" > "$home/.pi/agent/skills/herdr-openspec-worker/SKILL.md"
-mkdir -p "$home/.pi/agent/skills/herdr-openspec-triage"
-echo "# triage skill" > "$home/.pi/agent/skills/herdr-openspec-triage/SKILL.md"
-mkdir -p "$home/.pi/agent/skills/herdr-openspec-recovery"
-echo "# recovery skill" > "$home/.pi/agent/skills/herdr-openspec-recovery/SKILL.md"
-mkdir -p "$home/.pi/agent/skills/herdr-openspec-archive"
-echo "# archive skill" > "$home/.pi/agent/skills/herdr-openspec-archive/SKILL.md"
-for role in security-verifier agents-verifier quality-verifier performance-verifier openspec-verifier test-verifier; do
-    mkdir -p "$home/.pi/agent/skills/herdr-openspec-$role"
-    echo "# $role skill" > "$home/.pi/agent/skills/herdr-openspec-$role/SKILL.md"
-done
 
 PASS=0
 FAIL=0
@@ -63,7 +43,18 @@ loader = importlib.machinery.SourceFileLoader('hw', '$workflow')
 mod = loader.load_module()
 # Override AGENT_DIR to test home
 mod.AGENT_DIR = Path('$home/.pi/agent')
-mod.PI_EXTENSION_DIRS = [Path('$home/.pi/agent/extensions')]
+mod.PI_EXTENSION_DIRS = [Path('$home/.pi/agent/extensions'), mod.AGENT_DEF_DIR / 'extensions']
+# Override AGENT_DEF_DIR to test-isolated path
+mod.AGENT_DEF_DIR = Path('$home/agent-definitions')
+(mod.AGENT_DEF_DIR / 'extensions').mkdir(parents=True, exist_ok=True)
+(mod.AGENT_DEF_DIR / 'skills').mkdir(parents=True, exist_ok=True)
+# Create mock herdr extensions and skills for test isolation
+(mod.AGENT_DEF_DIR / 'extensions' / 'herdr-telemetry.ts').write_text('export const tools = [];')
+(mod.AGENT_DEF_DIR / 'extensions' / 'herdr-workflow.ts').write_text('export const tools = [];')
+for role in ['planner','worker','triage','recovery','archive','security-verifier','agents-verifier','quality-verifier','performance-verifier','openspec-verifier','test-verifier']:
+    skill_dir = mod.AGENT_DEF_DIR / 'skills' / f'herdr-openspec-{role}'
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / 'SKILL.md').write_text(f'# {role} skill')
 
 $1
 " 2>&1
@@ -263,6 +254,12 @@ print(cmd)
         : # good
     else
         fail "$role telemetry" "no herdr-telemetry.ts in command"
+        continue
+    fi
+    if echo "$result" | grep -q "herdr-workflow.ts"; then
+        : # good
+    else
+        fail "$role workflow" "no herdr-workflow.ts in command"
         continue
     fi
     if echo "$result" | grep -q -- "--no-extensions"; then

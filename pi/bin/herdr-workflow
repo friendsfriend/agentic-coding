@@ -20,11 +20,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 AGENT_DIR = Path.home() / ".pi" / "agent"
+AGENT_DEF_DIR = Path(__file__).resolve().parent.parent.parent / "agent-definitions"
 CONFIG = Path(os.environ.get("HERDR_WORKFLOW_CONFIG", AGENT_DIR / "herdr-workflow.toml"))
-SKILLS = AGENT_DIR / "skills"
+SKILLS = AGENT_DEF_DIR / "skills"
 
 # Standard pi extension discovery locations
-PI_EXTENSION_DIRS = [AGENT_DIR / "extensions", Path.home() / ".config" / "pi" / "extensions"]
+PI_EXTENSION_DIRS = [AGENT_DIR / "extensions", AGENT_DEF_DIR / "extensions", Path.home() / ".config" / "pi" / "extensions"]
+# Herdr extensions loaded by explicit --extension flag, skip in discovery to avoid double-loading
+HERDR_EXTENSIONS = {"herdr-telemetry", "herdr-workflow"}
 UNRESTRICTED_ROLES = {"planner", "worker"}
 ONE_SHOT_ROLES = {"recovery", "archive"}
 OPERATIONAL_PHASES = ("explore", "proposed", "apply", "fix", "triage", "verify", "paused", "developer-review", "archive", "completed")
@@ -141,7 +144,7 @@ def role_prompt(role, change, verification_round=None):
     if role == "recovery":
         return f"You are recovery agent for {change}. Read .herdr-workflow/{change}/reviews/recovery-context.json. Use write tool to create .herdr-workflow/{change}/reviews/recovery-plan.json before ending. Its recoveryId must match context and contain exactly one allowlisted action: retry-verification, dispatch-triage, or record-verifier-result (include role). Do not put plan JSON in chat. Do not execute it, mutate state, commit, push, or archive. No chat output." + restricted
     if role == "worker":
-        return f"Silent worker for {change}. Follow loaded skill. Apply plan silently. No chat output."
+        return f"Silent worker for {change}. Follow loaded skill. Apply plan silently. Mark each OpenSpec task [x] only after its focused validation; verification rejects unfinished tasks. No chat output."
     if role.endswith("-verifier"):
         context = f".herdr-workflow/{change}/reviews/round-{verification_round}-{role}-context.md"
         report = f".herdr-workflow/{change}/reviews/round-{verification_round}-{role}.findings.jsonl"
@@ -220,17 +223,20 @@ def pi_arguments(role, model, thinking, change):
         exclusions = resolve_exclusions(config, role)
         if exclusions:
             parts.append("--no-extensions")
-            parts.extend(["--extension", str(AGENT_DIR / "extensions" / "herdr-telemetry.ts")])
+            parts.extend(["--extension", str(AGENT_DEF_DIR / "extensions" / "herdr-telemetry.ts")])
+            parts.extend(["--extension", str(AGENT_DEF_DIR / "extensions" / "herdr-workflow.ts")])
             for name, path in discover_extensions().items():
-                if name not in exclusions:
+                if name not in exclusions and name not in HERDR_EXTENSIONS:
                     parts.extend(["--extension", path])
         else:
-            parts.extend(["--extension", str(AGENT_DIR / "extensions" / "herdr-telemetry.ts")])
+            parts.extend(["--extension", str(AGENT_DEF_DIR / "extensions" / "herdr-telemetry.ts")])
+            parts.extend(["--extension", str(AGENT_DEF_DIR / "extensions" / "herdr-workflow.ts")])
         parts.extend(["--no-prompt-templates", "--skill", str(skill)])
     else:
         parts.extend([
             "--tools", tools, "--no-extensions",
-            "--extension", str(AGENT_DIR / "extensions" / "herdr-telemetry.ts"),
+            "--extension", str(AGENT_DEF_DIR / "extensions" / "herdr-telemetry.ts"),
+            "--extension", str(AGENT_DEF_DIR / "extensions" / "herdr-workflow.ts"),
             "--no-prompt-templates", "--no-skills", "--skill", str(skill),
         ])
 
@@ -262,24 +268,13 @@ def create_tab(workspace, label, role=None, change=None):
     return herdr(*args)["root_pane"]["pane_id"]
 
 
-def split_role_pane(pane, direction, role, change):
-    return herdr("pane", "split", pane, "--direction", direction, "--no-focus", *role_env(role, change))["pane"]["pane_id"]
-
-
-def create_verifier_panes(workspace, change):
-    security = create_tab(workspace, "verify", "security-verifier", change)
-    agents = split_role_pane(security, "right", "agents-verifier", change)
-    tests = split_role_pane(security, "down", "test-verifier", change)
-    quality = split_role_pane(agents, "down", "quality-verifier", change)
-    performance = split_role_pane(tests, "right", "performance-verifier", change)
-    openspec = split_role_pane(quality, "right", "openspec-verifier", change)
-    panes = {
-        "security-verifier": security, "agents-verifier": agents, "test-verifier": tests,
-        "quality-verifier": quality, "performance-verifier": performance, "openspec-verifier": openspec,
-    }
-    for role, pane in panes.items():
-        herdr("pane", "rename", pane, role.removesuffix("-verifier"))
-    return panes
+def ensure_role_pane(state, role):
+    if state["panes"].get(role):
+        return False
+    label = {"planner": "explore", "worker": "apply"}.get(role, role.removesuffix("-verifier"))
+    state["panes"][role] = create_tab(state["workspace"], label, role, state["changeId"])
+    save_state(state)
+    return True
 
 
 def cmd_start(args):
@@ -313,17 +308,8 @@ def cmd_start(args):
     herdr("workspace", "rename", workspace, args.change)
     first_tab = herdr("tab", "list", "--workspace", workspace)["tabs"][0]["tab_id"]
     herdr("tab", "rename", first_tab, "dashboard")
-    panes = {
-        "dashboard": root,
-        "planner": create_tab(workspace, "explore", "planner", args.change),
-        "triage": create_tab(workspace, "triage", "triage", args.change),
-        "recovery": create_tab(workspace, "recovery", "recovery", args.change),
-        "worker": create_tab(workspace, "apply", "worker", args.change),
-        "git": create_tab(workspace, "git"),
-        **create_verifier_panes(workspace, args.change),
-    }
+    panes = {"dashboard": root, "git": create_tab(workspace, "git")}
     models = config["models"]
-    thinking = config["thinking"]
     worker = args.worker or models["worker_default"]
     state = {
         "changeId": args.change, "phase": "explore", "repository": source,
@@ -350,9 +336,8 @@ def cmd_start(args):
                 file.write("\n.herdr-workflow/\n")
     dashboard = shlex.join(["agent-dash", "--repo", worktree, "--change", args.change])
     herdr("pane", "run", panes["dashboard"], dashboard)
-    start_role(state, "planner")
-    launch_role(state, "triage")
     herdr("pane", "run", panes["git"], "lazygit")
+    start_role(state, "planner")
     print(json.dumps(state, indent=2))
 
 
@@ -383,7 +368,14 @@ def launch_role(state, role):
         model = models["verifier_fallback"]
     command = ["agent", "start", role_agent_name(state, role), "--kind", "pi", "--pane", state["panes"][role], "--timeout", "120000", "--"]
     try:
-        herdr(*command, *pi_arguments(role, model, level, state["changeId"]))
+        for attempt in range(25):
+            try:
+                herdr(*command, *pi_arguments(role, model, level, state["changeId"]))
+                break
+            except SystemExit as error:
+                if "not an available shell" not in str(error) or attempt == 24:
+                    raise
+                time.sleep(0.2)
     except SystemExit:
         fallback = models.get("verifier_fallback") if role.endswith("-verifier") else None
         if not fallback or fallback == model:
@@ -436,9 +428,16 @@ def prompt_role(state, role, text=None):
             raise SystemExit(f"agent prompt was not acknowledged: {name}")
 
 
-def start_role(state, role):
-    launch_role(state, role)
-    prompt_role(state, role)
+def start_role(state, role, text=None):
+    created = ensure_role_pane(state, role)
+    if not created:
+        try:
+            herdr("agent", "get", role_agent_name(state, role))
+        except SystemExit:
+            launch_role(state, role)
+    else:
+        launch_role(state, role)
+    prompt_role(state, role, text)
 
 
 def cmd_planner(args):
@@ -457,6 +456,18 @@ def plan_quality(state):
     task_count = len(re.findall(r"^\s*[-*]\s+\[.\]", required["tasks"].read_text(), re.MULTILINE)) if "tasks" not in missing else 0
     issues = [f"missing or empty {name}.md" for name in missing] + ([] if specs else ["missing spec scenarios"]) + ([] if task_count else ["tasks.md has no actionable tasks"])
     return {"passed": not issues, "issues": issues, "specFiles": len(specs), "taskCount": task_count}
+
+
+def ensure_tasks_complete(state):
+    path = Path(state["worktree"]) / "openspec" / "changes" / state["changeId"] / "tasks.md"
+    if not path.is_file():
+        raise SystemExit(f"missing OpenSpec tasks: {path}")
+    tasks = re.findall(r"^\s*[-*]\s+\[([ xX])\]\s+(.+)$", path.read_text(), re.MULTILINE)
+    if not tasks:
+        raise SystemExit(f"no OpenSpec tasks found: {path}")
+    incomplete = [text for mark, text in tasks if mark == " "]
+    if incomplete:
+        raise SystemExit(f"verification requires completed OpenSpec tasks; {len(incomplete)} remain in {path}. Mark each implemented task [x] after focused validation.")
 
 
 def cmd_apply(args):
@@ -784,17 +795,8 @@ def fail_verification(state):
     set_phase(state, "fix")
     save_state(state)
     telemetry(state, "verification_failed", report=consolidated)
-    prompt_role(state, "worker", f"Verification failed. Read only {worker_context}. Fix every blocker, run its focused validation, then run `herdr-workflow verify --repo . --change {state['changeId']}`. Do not report completion until that command succeeds.")
+    start_role(state, "worker", f"Verification failed. Read only {worker_context}. Fix every blocker, run its focused validation, then run `herdr-workflow verify --repo . --change {state['changeId']}`. Do not report completion until that command succeeds.")
     print("verification failed; worker notified to fix and restart verification")
-
-
-def ensure_recovery(state):
-    if state["panes"].get("recovery"):
-        return
-    pane = create_tab(state["workspace"], "recovery", "recovery", state["changeId"])
-    herdr("pane", "rename", pane, "recovery")
-    state["panes"]["recovery"] = pane
-    save_state(state)
 
 
 def write_recovery_context(state):
@@ -824,7 +826,7 @@ def recovery_plan_error(state, plan):
 
 def cmd_recover(args):
     state = load_state(args.repo, args.change)
-    ensure_recovery(state)
+    ensure_role_pane(state, "recovery")
     root = workflow_dir(state) / "reviews"
     root.mkdir(parents=True, exist_ok=True)
     (root / "recovery-plan.json").unlink(missing_ok=True)
@@ -858,18 +860,9 @@ def cmd_apply_recovery(args):
     telemetry(state, "recovery_applied", action=action, role=plan.get("role"), recovery_id=state["recoveryRunId"])
 
 
-def ensure_triage(state):
-    if state["panes"].get("triage"):
-        return False
-    pane = create_tab(state["workspace"], "triage", "triage", state["changeId"])
-    herdr("pane", "rename", pane, "triage")
-    state["panes"]["triage"] = pane
-    return True
-
-
 def cmd_verify(args):
     state = load_state(args.repo, args.change)
-    ensure_triage(state)
+    ensure_tasks_complete(state)
     ensure_base_fresh(state)
     if state["phase"] == "verify":
         print(f"verification already running: round {state['verificationRound']}")
@@ -879,7 +872,7 @@ def cmd_verify(args):
     if state["verificationRound"] >= load_config()["workflow"]["max_verification_rounds"]:
         raise SystemExit("verification limit reached; reset explicitly before another round")
     first_round = state["verificationRound"] == 0
-    if first_round:
+    if first_round and state["panes"].get("planner"):
         try:
             herdr("pane", "close", state["panes"]["planner"])
         except SystemExit:
@@ -897,7 +890,7 @@ def cmd_verify(args):
     set_phase(state, "triage")
     write_triage_input(state, tier)
     save_state(state)
-    prompt_role(state, "triage")
+    start_role(state, "triage")
     print(f"triage started: round {state['verificationRound']} ({tier})")
 
 
@@ -1008,19 +1001,31 @@ def cmd_archive(args):
     state = load_state(args.repo, args.change)
     if state["phase"] != "developer-review":
         raise SystemExit(f"archive requires developer-review phase, found {state['phase']}")
+    ensure_tasks_complete(state)
     ensure_base_fresh(state)
     for role in ("planner", "triage", "worker", *VERIFIER_ROLES, TEST_VERIFIER):
+        pane = state["panes"].get(role)
+        if not pane:
+            continue
         try:
-            herdr("pane", "close", state["panes"][role])
+            herdr("pane", "close", pane)
         except SystemExit:
             pass
     pane = create_tab(state["workspace"], "archive", "archive", state["changeId"])
     state["panes"]["archive"] = pane
+    try:
+        launch_role(state, "archive")
+    except SystemExit:
+        try:
+            herdr("pane", "close", pane)
+        except SystemExit:
+            pass
+        raise
     set_phase(state, "archive")
     state["developerApproval"] = True
     save_state(state)
     write_archive_context(state)
-    start_role(state, "archive")
+    prompt_role(state, "archive")
     print("archive agent started")
 
 

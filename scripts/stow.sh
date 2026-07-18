@@ -36,3 +36,11 @@ mkdir -p "$HOME/.pi/agent" "$HOME/.config/herdr" "$HOME/.config/opencode"
 link_tree "$root/pi" "$HOME/.pi/agent"
 link_tree "$root/herdr" "$HOME/.config/herdr"
 link_tree "$root/opencode" "$HOME/.config/opencode"
+
+# Remove stale herdr agent definition symlinks from global pi discovery
+# These were previously linked from pi/skills/herdr-* and pi/extensions/herdr-*
+shopt -s nullglob
+for stale in "$HOME/.pi/agent/skills"/herdr-* "$HOME/.pi/agent/extensions"/herdr-*; do
+    [ -L "$stale" ] && rm "$stale"
+done
+shopt -u nullglob
