@@ -24,6 +24,7 @@ export interface WorkflowState {
   verificationTimeoutRoles?: string[];
   verificationRoleStartedAt?: Record<string, string>;
   verificationModels?: Record<string, string>;
+  recoveryRunId?: string;
   planQuality?: { passed: boolean; issues: string[]; specFiles: number; taskCount: number };
   panes: Record<string, string>;
 }
@@ -97,8 +98,10 @@ export interface DashboardData {
   events: Array<{ at: string; event: string; role?: string; model?: string; cost?: number; status?: number; tier?: string; roles?: string[]; reports?: string[]; fallback?: string }>;
   verifierTimeline: Array<{ role: string; status: string; durationSeconds?: number; model?: string; cost?: number; providerErrors: number; fallback: boolean }>;
   telemetrySummary: Array<{ model: string; durationSeconds: number; errors: number; fallbacks: number; inputTokens: number; outputTokens: number; cost: number }>;
-  recoveryPlan?: { action: string; role?: string };
+  recoveryPlan?: { recoveryId: string; action: string; role?: string };
 }
+
+export const operationalPhases = ['explore', 'proposed', 'apply', 'fix', 'triage', 'verify', 'paused', 'developer-review', 'archive', 'completed'];
 
 const read = (path: string) => existsSync(path) ? readFileSync(path, 'utf8') : '';
 
@@ -123,6 +126,17 @@ function latestReview(root: string) {
 function git(repo: string, ...args: string[]) { const result = Bun.spawnSync(['git', ...args], { cwd: repo, stdout: 'pipe', stderr: 'ignore' }); return result.exitCode === 0 ? result.stdout.toString().trim() : ''; }
 function telemetryEvents(path: string): Array<Record<string, any>> {
   return read(path).split(/\r?\n/).filter(Boolean).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
+}
+
+function validRecoveryPlan(state: WorkflowState, plan: unknown): plan is { recoveryId: string; action: string; role?: string } {
+  if (!plan || typeof plan !== 'object') return false;
+  const value = plan as Record<string, unknown>;
+  if (value.recoveryId !== state.recoveryRunId || typeof value.action !== 'string') return false;
+  const expectedKeys = value.action === 'record-verifier-result' ? ['recoveryId', 'action', 'role'] : ['recoveryId', 'action'];
+  if (!expectedKeys.every(key => key in value)) return false;
+  if (value.action === 'retry-verification') return ['apply', 'fix', 'paused'].includes(state.phase);
+  if (value.action === 'dispatch-triage') return state.phase === 'triage';
+  return value.action === 'record-verifier-result' && state.phase === 'verify' && typeof value.role === 'string' && [...(state.verificationRoles ?? ['security-verifier', 'agents-verifier', 'quality-verifier', 'performance-verifier', 'openspec-verifier']), 'test-verifier'].includes(value.role);
 }
 
 function agentStatuses() {
@@ -207,7 +221,7 @@ export function loadDashboard(repo: string, change: string): DashboardData {
     events: telemetry.slice(-20).map(event => ({ at: new Date(event.at).toLocaleTimeString(), event: String(event.event), role: event.role as string | undefined, model: event.model as string | undefined, cost: Number(event.cost ?? 0) || undefined, status: Number(event.status ?? 0) || undefined, tier: event.tier as string | undefined, roles: event.roles as string[] | undefined, reports: event.reports as string[] | undefined, fallback: event.fallback as string | undefined })), 
     verifierTimeline,
     telemetrySummary: [...summaryByModel.values()],
-    recoveryPlan: (() => { try { return JSON.parse(read(join(workflowRoot, 'reviews', 'recovery-plan.json'))) as { action: string; role?: string }; } catch { return undefined; } })(),
+    recoveryPlan: (() => { try { const plan: unknown = JSON.parse(read(join(workflowRoot, 'reviews', 'recovery-plan.json'))); return validRecoveryPlan(state, plan) ? plan : undefined; } catch { return undefined; } })(),
   };
 }
 
@@ -368,8 +382,10 @@ export async function startWorkflow(input: { repo: string; ticket: string; chang
   return stdout.trim() || 'Workflow started';
 }
 
-export async function runWorkflow(action: string, repo: string, change: string) {
-  const process = Bun.spawn(['herdr-workflow', action, '--repo', repo, '--change', change], { stdout: 'pipe', stderr: 'pipe' });
+export async function runWorkflow(action: string, repo: string, change: string, argument?: string) {
+  const args = ['herdr-workflow', action, '--repo', repo, '--change', change];
+  if (argument) args.push(argument);
+  const process = Bun.spawn(args, { stdout: 'pipe', stderr: 'pipe' });
   const [stdout, stderr, exitCode] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
   if (exitCode !== 0) throw new Error((stderr || stdout || `${action} failed`).trim());
   return stdout.trim() || `${action} complete`;

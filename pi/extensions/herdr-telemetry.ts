@@ -7,6 +7,12 @@ export default function (pi: ExtensionAPI) {
   const role = process.env.HERDR_ROLE;
   const path = change ? join(process.cwd(), '.herdr-workflow', change, 'telemetry.jsonl') : undefined;
   const healthPath = join(process.env.HOME ?? '', '.pi', 'agent', 'herdr-provider-health.json');
+  const restricted = !!role && !['manager', 'planner', 'worker'].includes(role);
+  const oneShot = role === 'recovery' || role === 'archive' || role?.endsWith('-verifier');
+  const commandStart = String.raw`(?:^|[\n;&|()'"])\s*`;
+  const agentExecutable = new RegExp(`${commandStart}(?:(?:command|exec|nohup)\\s+)?(?:env(?:\\s+[A-Za-z_][A-Za-z0-9_]*=\\S+)*\\s+)?(?:\\S*\\/)?(?:pi|opencode|claude|codex)(?=\\s|$)`, 'i');
+  const agentRunner = new RegExp(`${commandStart}(?:npx|bunx|uvx)\\s+(?:pi|opencode|claude|codex)(?=\\s|$)`, 'i');
+  const herdrSpawner = new RegExp(`${commandStart}(?:\\S*\\/)?herdr\\s+(?:agent\\s+(?:start|prompt)|pane\\s+run)\\b`, 'i');
   let model = 'unknown';
   const write = (event: string, fields: Record<string, unknown> = {}) => {
     if (!path) return;
@@ -29,7 +35,15 @@ export default function (pi: ExtensionAPI) {
   pi.on('model_select', (event: any) => { model = `${event.model.provider}/${event.model.id}`; write('model_selected', { model }); });
   pi.on('agent_start', () => write('pi_agent_start', { model }));
   pi.on('agent_end', () => write('pi_agent_end'));
-  pi.on('agent_settled', () => write('pi_agent_settled'));
+  pi.on('agent_settled', (_event, ctx) => { write('pi_agent_settled'); if (oneShot) ctx.shutdown(); });
+  pi.on('tool_call', (event: any) => {
+    if (!restricted || event.toolName !== 'bash') return;
+    const command = String(event.input?.command ?? '');
+    if (agentExecutable.test(command) || agentRunner.test(command) || herdrSpawner.test(command)) {
+      write('nested_agent_blocked', { command: command.slice(0, 500) });
+      return { block: true, reason: 'Restricted workflow roles must complete work themselves; nested agent spawning is blocked.' };
+    }
+  });
   pi.on('after_provider_response', (event: any) => { write('provider_response', { status: event.status, retryAfter: event.headers?.['retry-after'], model }); recordProviderFailure(event.status); });
   pi.on('message_end', (event: any) => {
     if (event.message?.role !== 'assistant') return;
