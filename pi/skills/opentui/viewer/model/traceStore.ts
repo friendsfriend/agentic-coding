@@ -32,11 +32,13 @@ export class TraceStore {
   appendLine(line: string): boolean {
     const span = parseLine(line);
     if (!span) return false;
-    this.spans.push(span);
-    if (this.matchesFilter(span)) {
-      this.filtered.push(span);
-    }
+    this.pushBatch([span]);
     return true;
+  }
+
+  pushBatch(spans: SpanData[]): void {
+    this.spans.push(...spans);
+    this.filtered.push(...spans.filter(span => this.matchesFilter(span)));
   }
 
   getRootSpans(): SpanData[] {
