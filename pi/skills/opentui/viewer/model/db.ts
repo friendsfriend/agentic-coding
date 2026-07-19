@@ -3,12 +3,26 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { parseJsonl } from './parser';
-import type { SpanData } from './types';
+import type { SpanData, MetricData, LogData } from './types';
 
 interface TraceRow {
   id: number;
   change_id: string;
   span: string;
+  ingested_at: string;
+}
+
+interface MetricRow {
+  id: number;
+  change_id: string;
+  metric: string;
+  ingested_at: string;
+}
+
+interface LogRow {
+  id: number;
+  change_id: string;
+  log: string;
   ingested_at: string;
 }
 
@@ -22,6 +36,8 @@ interface WorkspaceRow {
 export class TraceDb {
   private db: Database;
   private ingestStmt: any;
+  private ingestMetricStmt: any;
+  private ingestLogStmt: any;
   private upsertWorkspaceStmt: any;
 
   constructor(dbPath?: string) {
@@ -42,8 +58,28 @@ export class TraceDb {
       file_mtime INTEGER NOT NULL DEFAULT 0,
       parser_version INTEGER NOT NULL DEFAULT 1
     )`);
-    try { this.db.run('ALTER TABLE workspace_files ADD COLUMN parser_version INTEGER NOT NULL DEFAULT 1'); } catch { /* existing database */ }
+    try { this.db.run('ALTER TABLE workspace_files ADD COLUMN parser_version INTEGER NOT NULL DEFAULT 1'); }
+    catch (error) {
+      if (!String(error).includes('duplicate column name')) throw error;
+    }
+    this.db.run(`CREATE TABLE IF NOT EXISTS metrics (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      change_id TEXT NOT NULL,
+      metric TEXT NOT NULL,
+      ingested_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+    this.db.run(`CREATE INDEX IF NOT EXISTS idx_metrics_change ON metrics(change_id)`);
+    this.db.run(`CREATE TABLE IF NOT EXISTS logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      change_id TEXT NOT NULL,
+      log TEXT NOT NULL,
+      ingested_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )`);
+    this.db.run(`CREATE INDEX IF NOT EXISTS idx_logs_change ON logs(change_id)`);
+    this.db.run(`CREATE INDEX IF NOT EXISTS idx_logs_trace ON logs(json_extract(log, '$.traceId'))`);
     this.ingestStmt = this.db.prepare('INSERT INTO traces (change_id, span, ingested_at) VALUES ($change_id, $span, datetime(\'now\'))');
+    this.ingestMetricStmt = this.db.prepare('INSERT INTO metrics (change_id, metric, ingested_at) VALUES ($change_id, $metric, datetime(\'now\'))');
+    this.ingestLogStmt = this.db.prepare('INSERT INTO logs (change_id, log, ingested_at) VALUES ($change_id, $log, datetime(\'now\'))');
     this.upsertWorkspaceStmt = this.db.prepare('INSERT INTO workspace_files (change_id, path, file_mtime, parser_version) VALUES ($change_id, $path, $mtime, 2) ON CONFLICT(change_id) DO UPDATE SET path=$path, file_mtime=$mtime, parser_version=2');
   }
 
@@ -67,6 +103,40 @@ export class TraceDb {
     return spans.length;
   }
 
+  ingestMetrics(changeId: string, metrics: MetricData[]): number {
+    const insert = this.db.transaction(() => {
+      for (const metric of metrics) {
+        this.ingestMetricStmt.run({ $change_id: changeId, $metric: JSON.stringify(metric) });
+      }
+    });
+    insert();
+    return metrics.length;
+  }
+
+  ingestLogs(changeId: string, logs: LogData[]): number {
+    const insert = this.db.transaction(() => {
+      for (const log of logs) {
+        this.ingestLogStmt.run({ $change_id: changeId, $log: JSON.stringify(log) });
+      }
+    });
+    insert();
+    return logs.length;
+  }
+
+  loadMetrics(changeId?: string): MetricData[] {
+    const rows = changeId
+      ? this.db.prepare('SELECT metric FROM metrics WHERE change_id=? ORDER BY id').all(changeId) as MetricRow[]
+      : this.db.prepare('SELECT metric FROM metrics ORDER BY id').all() as MetricRow[];
+    return rows.map(r => JSON.parse(r.metric) as MetricData);
+  }
+
+  loadLogs(changeId?: string): LogData[] {
+    const rows = changeId
+      ? this.db.prepare('SELECT log FROM logs WHERE change_id=? ORDER BY id').all(changeId) as LogRow[]
+      : this.db.prepare('SELECT log FROM logs ORDER BY id').all() as LogRow[];
+    return rows.map(r => JSON.parse(r.log) as LogData);
+  }
+
   loadSpans(changeId?: string): SpanData[] {
     const rows = changeId
       ? this.db.prepare('SELECT span FROM traces WHERE change_id=? ORDER BY id').all(changeId) as TraceRow[]
@@ -75,9 +145,11 @@ export class TraceDb {
   }
 
   cleanupOlderThan(days = 30): number {
-    const cutoff = (BigInt(Date.now() - days * 86_400_000) * 1_000_000n).toString();
-    const result = this.db.run("DELETE FROM traces WHERE CAST(json_extract(span, '$.endTimeUnixNano') AS TEXT) < ?", [cutoff]);
-    this.db.run('DELETE FROM workspace_files WHERE NOT EXISTS (SELECT 1 FROM traces WHERE traces.change_id = workspace_files.change_id)');
+    const cutoff = BigInt(Date.now() - days * 86_400_000) * 1_000_000n;
+    const result = this.db.run("DELETE FROM traces WHERE CAST(json_extract(span, '$.endTimeUnixNano') AS INTEGER) < ?", [cutoff]);
+    this.db.run("DELETE FROM metrics WHERE CAST(json_extract(metric, '$.dataPoints[0].timeUnixNano') AS INTEGER) < ?", [cutoff]);
+    this.db.run("DELETE FROM logs WHERE CAST(json_extract(log, '$.timeUnixNano') AS INTEGER) < ?", [cutoff]);
+    this.db.run('DELETE FROM workspace_files WHERE NOT EXISTS (SELECT 1 FROM traces WHERE traces.change_id = workspace_files.change_id) AND NOT EXISTS (SELECT 1 FROM metrics WHERE metrics.change_id = workspace_files.change_id) AND NOT EXISTS (SELECT 1 FROM logs WHERE logs.change_id = workspace_files.change_id)');
     return Number(result.changes ?? 0);
   }
 
@@ -100,7 +172,7 @@ export class TraceDb {
         const count = this.ingestWorkspace(join(workflowDir, entry.name), entry.name);
         total += count;
       }
-    } catch {}
+    } catch (e) { console.error('scanAllWorkspaces error:', e); }
     return total;
   }
 
@@ -129,7 +201,7 @@ export class TraceDb {
           insert();
           onNew(entry.name, spans);
         }
-      } catch {}
+      } catch (e) { console.error('watchWorkspaces error:', e); }
     }, 2000);
     return () => clearInterval(timer);
   }

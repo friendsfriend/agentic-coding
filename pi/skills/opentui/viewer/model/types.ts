@@ -1,3 +1,44 @@
+export interface MetricData {
+  resource: { attributes: Array<{ key: string; value: string }> };
+  scope: { name: string; version: string };
+  name: string;
+  description: string;
+  unit: string;
+  type: 'gauge' | 'sum' | 'histogram';
+  dataPoints: MetricDataPoint[];
+  serviceName: string;
+}
+
+export interface MetricDataPoint {
+  startTimeUnixNano: string;
+  timeUnixNano: string;
+  value: number;
+  bucketCounts?: number[];
+  explicitBounds?: number[];
+  attributes: Array<{ key: string; value: string }>;
+}
+
+export interface LogData {
+  resource: { attributes: Array<{ key: string; value: string }> };
+  scope: { name: string; version: string };
+  timeUnixNano: string;
+  severity: string;
+  body: string;
+  attributes: Array<{ key: string; value: string }>;
+  traceId?: string;
+  spanId?: string;
+  serviceName: string;
+}
+
+export interface ServiceNode {
+  id: string;
+  parentIds: string[];
+  childIds: string[];
+  spanCount: number;
+  errorCount: number;
+  avgDurationMs: number;
+}
+
 export interface SpanData {
   traceId: string;
   spanId: string;
