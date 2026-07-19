@@ -37,6 +37,10 @@ worktree_directory = "~/.herdr/worktrees"
 root = "~/development"
 max_depth = 3
 
+[telemetry]
+# Capture prompt/output/tool I/O in local traces.jsonl only. Never sent to OTLP.
+capture_content = true
+
 [ui]
 theme = "catppuccin"
 selection_height = 10

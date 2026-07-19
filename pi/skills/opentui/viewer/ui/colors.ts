@@ -1,0 +1,19 @@
+import { themeColor } from './theme';
+
+export const uiColors = {
+  get primary() { return themeColor('primary', '#89b4fa'); },
+  get success() { return themeColor('success', '#a6e3a1'); },
+  get warning() { return themeColor('warning', '#f9e2af'); },
+  get error() { return themeColor('error', '#f38ba8'); },
+  get info() { return themeColor('info', '#89dceb'); },
+  get accent() { return themeColor('accent', '#b4befe'); },
+  get textPrimary() { return themeColor('text', '#cdd6f4'); },
+  get textSecondary() { return themeColor('textMuted', '#bac2de'); },
+  get textMuted() { return themeColor('textMuted', '#9399b2'); },
+  get bgBase() { return themeColor('background', '#1e1e2e'); },
+  get bgMantle() { return themeColor('backgroundPanel', '#181825'); },
+  get bgCrust() { return themeColor('backgroundElement', '#11111b'); },
+  get bgSurface0() { return themeColor('backgroundPanel', '#313244'); },
+  get bgSurface1() { return themeColor('backgroundElement', '#45475a'); },
+  get border() { return themeColor('border', '#45475a'); },
+} as const;
