@@ -27,6 +27,7 @@ export interface WorkflowState {
   verificationModels?: Record<string, string>;
   recoveryRunId?: string;
   planQuality?: { passed: boolean; issues: string[]; specFiles: number; taskCount: number };
+  workflowModules?: string[];
   panes: Record<string, string>;
 }
 
@@ -379,9 +380,9 @@ export function startWorkflowWizard() {
   return Bun.spawnSync(['bash', '-lc', script], { stdin: 'inherit', stdout: 'inherit', stderr: 'inherit' }).exitCode === 0;
 }
 
-export async function startWorkflow(input: { repo: string; ticket: string; change: string; task: string; mode: string; worker: string }) {
+export async function startWorkflow(input: { repo: string; ticket: string; change: string; task: string; mode: string; worker: string; workflowType?: string }) {
   const repo = input.repo.startsWith('~') ? resolve(input.repo.replace('~', homedir())) : resolve(input.repo);
-  const args = ['herdr-workflow', 'start', '--repo', repo, '--change', input.change, '--task', input.task, '--mode', input.mode, '--worker', input.worker];
+  const args = ['herdr-workflow', 'start', '--repo', repo, '--change', input.change, '--task', input.task, '--mode', input.mode, '--worker', input.worker, '--workflow-type', input.workflowType ?? 'standard'];
   if (input.ticket) args.push('--ticket', input.ticket);
   const process = Bun.spawn(args, { stdout: 'pipe', stderr: 'pipe' });
   const [stdout, stderr, exitCode] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);

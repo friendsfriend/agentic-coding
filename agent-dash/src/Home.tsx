@@ -159,7 +159,7 @@ export function Home(props: { keymap: Keymap<any, KeyEvent> }) {
         <Show when={loading()} fallback={<Show when={items().length > 0} fallback={<text fg={uiColors.textMuted}>No workflows found in ~/development</text>}>
           <SelectableList items={visibleItems()} selectedIndex={selected()} renderItem={(item, active) => <box height={2} flexDirection="column" paddingLeft={1}>
             <text fg={active ? uiColors.textPrimary : uiColors.textSecondary}>{item.state.changeId}  <span style={{ fg: uiColors.primary }}>{item.state.phase}</span></text>
-            <text fg={uiColors.textMuted}>{item.tasks[0]}/{item.tasks[1]} tasks · planner:{item.agents.find(agent => agent.role === 'planner')?.status ?? 'not started'} · {item.agents.filter(agent => agent.status === 'working' || agent.status === 'done' || agent.status === 'idle').length}/{item.agents.length} agents active</text>
+            <text fg={uiColors.textMuted}>{(item.state.workflowModules ?? ['plan','plan-approval','apply-verify','developer-approval','archive'])[0] === 'plan' ? 'standard' : 'direct-apply'} · {item.tasks[0]}/{item.tasks[1]} tasks · planner:{item.agents.find(agent => agent.role === 'planner')?.status ?? 'not started'} · {item.agents.filter(agent => agent.status === 'working' || agent.status === 'done' || agent.status === 'idle').length}/{item.agents.length} agents active</text>
           </box>} />
         </Show>}>
           <text fg={uiColors.textMuted}>Loading workspaces…</text>
@@ -168,7 +168,7 @@ export function Home(props: { keymap: Keymap<any, KeyEvent> }) {
       <StatusBar prompt={`${items().length} workspaces`} approval={false} keybinds={[{ key: 'Enter', action: 'switch workspace' }, { key: 'n', action: 'new workflow' }, { key: 'f', action: 'filter' }, { key: 'o', action: 'sort' }, { key: 'r', action: 'refresh' }, { key: '?', action: 'help' }, { key: 'Shift+T', action: 'theme' }, { key: 'q', action: 'quit' }]} />
       <NotificationOverlay />
       <Show when={themePicker()}><ThemePickerModal selected={themeIndex()} active={getActiveThemeName()} themes={themeNames} query="" filtering={false} /></Show>
-      <Show when={modal()}><NewWorkflowModal projects={projects()} models={models()} onKeyReady={handler => setModalHandler(() => handler)} onCancel={() => { setModal(false); props.keymap.setData('modal.active', 'none'); setModalHandler(undefined); }} onComplete={async (input) => { setModal(false); props.keymap.setData('modal.active', 'none'); setModalHandler(undefined); if (!herdrAvailable()) { showHerdrUnavailable(); return; } setMessage('Starting workflow…'); try { setMessage(await startWorkflow(input)); refresh(); } catch (error) {
+      <Show when={modal()}><NewWorkflowModal projects={projects()} models={models()} onKeyReady={handler => setModalHandler(() => handler)} onCancel={() => { setModal(false); props.keymap.setData('modal.active', 'none'); setModalHandler(undefined); }} onComplete={async (input) => { setModal(false); props.keymap.setData('modal.active', 'none'); setModalHandler(undefined); if (!herdrAvailable()) { showHerdrUnavailable(); return; } setMessage('Starting workflow…'); try { setMessage(await startWorkflow({ ...input, workflowType: input.workflowType ?? 'standard' })); refresh(); } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         showError('Workflow execution failed', message);
       } }} /></Show>

@@ -1,0 +1,7 @@
+- [x] 1. Define `WORKFLOW_MODULES` and `WORKFLOW_TYPES` registries in `pi/bin/herdr-workflow`
+- [x] 2. Add `workflowModules` to state schema, add `--workflow-type` arg to `start`, conditional planner/worker launch based on first module's roles
+- [x] 3. Derive allowed transitions from module list instead of hardcoded `allowed` dict in `cmd_phase`
+- [x] 4. Extend `WorkflowState` interface and `startWorkflow` in `agent-dash/src/data.ts`; expose module info
+- [x] 5. Add workflow type selection (standard / direct-apply) to `NewWorkflowModal.tsx`
+- [x] 6. Display workflow type/module info in `App.tsx` (change panel) and `Home.tsx` (workspace list)
+- [x] 7. Validate: CLI regression for direct-apply start, standard start, phase transitions, legacy backward compat, dashboard rendering

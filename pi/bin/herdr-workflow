@@ -33,6 +33,50 @@ ONE_SHOT_ROLES = {"recovery", "archive"}
 OPERATIONAL_PHASES = ("explore", "proposed", "apply", "fix", "triage", "verify", "paused", "developer-review", "archive", "completed")
 RECOVERY_ACTION_PHASES = {"retry-verification": {"apply", "fix", "paused"}, "dispatch-triage": {"triage"}, "record-verifier-result": {"verify"}}
 
+# Module-based workflow composition
+WORKFLOW_MODULES = {
+    "plan": {
+        "entry": "explore",
+        "exit": "proposed",
+        "roles": ["planner"],
+        "gate": False,
+        "phases": {"explore"},
+    },
+    "plan-approval": {
+        "entry": "proposed",
+        "exit": "apply",
+        "roles": [],
+        "gate": True,
+        "phases": {"proposed"},
+    },
+    "apply-verify": {
+        "entry": "apply",
+        "exit": "developer-review",
+        "roles": ["worker"],
+        "gate": False,
+        "phases": {"apply", "verify", "fix", "paused", "triage"},
+    },
+    "developer-approval": {
+        "entry": "developer-review",
+        "exit": "archive",
+        "roles": [],
+        "gate": True,
+        "phases": {"developer-review"},
+    },
+    "archive": {
+        "entry": "archive",
+        "exit": "completed",
+        "roles": ["archive"],
+        "gate": False,
+        "phases": {"archive"},
+    },
+}
+
+WORKFLOW_TYPES = {
+    "standard": ["plan", "plan-approval", "apply-verify", "developer-approval", "archive"],
+    "direct-apply": ["apply-verify", "developer-approval", "archive"],
+}
+
 
 def run(*args, cwd=None, capture=True):
     result = subprocess.run(args, cwd=cwd, text=True, capture_output=capture, check=False)
@@ -277,6 +321,36 @@ def ensure_role_pane(state, role):
     return True
 
 
+def resolve_modules(state):
+    return state.get("workflowModules") or list(WORKFLOW_TYPES["standard"])
+
+
+def allowed_transitions(state):
+    modules = resolve_modules(state)
+    allowed = {}
+    for i, name in enumerate(modules):
+        module = WORKFLOW_MODULES[name]
+        for phase in module["phases"]:
+            allowed.setdefault(phase, set())
+        if name == "apply-verify":
+            allowed["apply"].add("verify")
+            allowed["verify"].update({"fix", "paused"})
+            allowed["fix"].add("verify")
+            allowed["paused"].update({"fix", "verify"})
+        if not module["gate"]:
+            if i + 1 < len(modules):
+                next_entry = WORKFLOW_MODULES[modules[i + 1]]["entry"]
+                if name == "apply-verify":
+                    source = "verify"
+                else:
+                    source = next(iter(module["phases"]))
+                allowed.setdefault(source, set()).add(next_entry)
+            elif module["exit"] not in module["phases"]:
+                source = next(iter(module["phases"]))
+                allowed.setdefault(source, set()).add(module["exit"])
+    return allowed
+
+
 def cmd_start(args):
     config = load_config()
     args.ticket = args.ticket.strip() if args.ticket else None
@@ -311,11 +385,15 @@ def cmd_start(args):
     panes = {"dashboard": root, "git": create_tab(workspace, "git")}
     models = config["models"]
     worker = args.worker or models["worker_default"]
+    modules = list(WORKFLOW_TYPES[getattr(args, "workflow_type", "standard")])
+    initial_phase = WORKFLOW_MODULES[modules[0]]["entry"]
+    initial_roles = WORKFLOW_MODULES[modules[0]]["roles"]
     state = {
-        "changeId": args.change, "phase": "explore", "repository": source,
+        "changeId": args.change, "phase": initial_phase, "repository": source,
         "worktree": worktree, "branch": branch, "workspace": workspace,
         "task": args.task, "ticketNumber": args.ticket, "workerModel": worker, "verificationRound": 0,
         "returnWorkspace": os.environ.get("HERDR_WORKSPACE_ID"), "baseBranch": base_branch, "baseCommit": base, "developerApproval": False, "panes": panes,
+        "workflowModules": modules,
         "createdAt": datetime.now(timezone.utc).isoformat(),
         "otelTraceRoot": child_context(parse_traceparent(os.environ.get("TRACEPARENT"))),
         "otelTraceRootStartedUnixNano": str(time.time_ns()),
@@ -339,7 +417,8 @@ def cmd_start(args):
     dashboard = shlex.join(["agent-dash", "--repo", worktree, "--change", args.change])
     herdr("pane", "run", panes["dashboard"], dashboard)
     herdr("pane", "run", panes["git"], "lazygit")
-    start_role(state, "planner")
+    for role in initial_roles:
+        start_role(state, role)
     print(json.dumps(state, indent=2))
 
 
@@ -1077,10 +1156,7 @@ def cmd_override_phase(args):
 
 def cmd_phase(args):
     state = load_state(args.repo, args.change)
-    allowed = {
-        "explore": {"proposed"}, "apply": {"verify"}, "verify": {"fix", "developer-review", "paused"},
-        "fix": {"verify"}, "paused": {"fix", "verify"}, "archive": {"completed"},
-    }
+    allowed = allowed_transitions(state)
     if args.phase == "completed":
         ensure_workflow_branch(state)
     if args.phase not in allowed.get(state["phase"], set()):
@@ -1308,7 +1384,7 @@ def parser():
     start = commands.add_parser("start")
     start.add_argument("--repo", required=True); start.add_argument("--change", required=True)
     start.add_argument("--task", required=True); start.add_argument("--mode", choices=("worktree", "checkout"), required=True)
-    start.add_argument("--ticket", type=str); start.add_argument("--worker")
+    start.add_argument("--ticket", type=str); start.add_argument("--worker"); start.add_argument("--workflow-type", choices=tuple(WORKFLOW_TYPES.keys()), default="standard")
     for name in ("planner", "apply", "verify", "recover", "apply-recovery", "dispatch-verifiers", "archive", "close", "status", "check-timeout"):
         sub = commands.add_parser(name); sub.add_argument("--repo", required=True); sub.add_argument("--change", required=True)
     phase = commands.add_parser("phase"); phase.add_argument("--repo", required=True); phase.add_argument("--change", required=True); phase.add_argument("phase")

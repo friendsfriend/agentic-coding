@@ -5,20 +5,20 @@ import { GenericModal } from './GenericModal';
 import { uiColors } from './colors';
 import type { KeyEvent } from '@opentui/core';
 
-export type NewWorkflowInput = { repo: string; ticket: string; change: string; task: string; mode: string; worker: string };
+export type NewWorkflowInput = { repo: string; ticket: string; change: string; task: string; mode: string; worker: string; workflowType: string };
 type Project = { name: string; path: string; openspec: boolean };
 export function NewWorkflowModal(props: { projects: Project[]; models: string[]; onCancel: () => void; onComplete: (input: NewWorkflowInput) => void; onKeyReady: (handler: (key: KeyEvent) => boolean) => void }) {
-  const labels = ['Repository', 'Ticket identifier (optional)', 'Change ID', 'Task', 'Checkout mode', 'Worker model'];
-  const fields: (keyof NewWorkflowInput)[] = ['repo', 'ticket', 'change', 'task', 'mode', 'worker'];
+  const labels = ['Repository', 'Ticket identifier (optional)', 'Change ID', 'Task', 'Checkout mode', 'Workflow type', 'Worker model'];
+  const fields: (keyof NewWorkflowInput)[] = ['repo', 'ticket', 'change', 'task', 'mode', 'workflowType', 'worker'];
   const [step, setStep] = createSignal(0);
   const [selected, setSelected] = createSignal(0);
   const [filter, setFilter] = createSignal('');
   const [filtering, setFiltering] = createSignal(false);
-  const [values, setValues] = createSignal<NewWorkflowInput>({ repo: '', ticket: '', change: '', task: '', mode: '', worker: '' });
+  const [values, setValues] = createSignal<NewWorkflowInput>({ repo: '', ticket: '', change: '', task: '', mode: '', worker: '', workflowType: 'standard' });
   const [showCustomRepo, setShowCustomRepo] = createSignal(false);
   const projects = () => props.projects.filter(project => project.name.toLowerCase().includes(filter().toLowerCase()));
-  const choices = (): string[] => step() === 0 ? [...projects().map(project => `${project.openspec ? '●' : '○'} ${project.name}`), `Current Directory (${process.cwd().split('/').pop()})`, 'Custom path…'] : step() === 4 ? ['worktree', 'checkout'].filter(item => item.includes(filter().toLowerCase())) : props.models.filter(item => item.toLowerCase().includes(filter().toLowerCase()));
-  const listStep = () => [0, 4, 5].includes(step());
+  const choices = (): string[] => step() === 0 ? [...projects().map(project => `${project.openspec ? '●' : '○'} ${project.name}`), `Current Directory (${process.cwd().split('/').pop()})`, 'Custom path…'] : step() === 4 ? ['worktree', 'checkout'].filter(item => item.includes(filter().toLowerCase())) : step() === 5 ? ['standard', 'direct-apply'].filter(item => item.includes(filter().toLowerCase())) : props.models.filter(item => item.toLowerCase().includes(filter().toLowerCase()));
+  const listStep = () => [0, 4, 5, 6].includes(step());
   const confirmStep = () => step() === fields.length;
   const totalSteps = fields.length + 1;
   const field = () => fields[step()]!;
