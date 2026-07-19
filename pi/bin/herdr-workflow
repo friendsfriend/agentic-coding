@@ -317,6 +317,8 @@ def cmd_start(args):
         "task": args.task, "ticketNumber": args.ticket, "workerModel": worker, "verificationRound": 0,
         "returnWorkspace": os.environ.get("HERDR_WORKSPACE_ID"), "baseBranch": base_branch, "baseCommit": base, "developerApproval": False, "panes": panes,
         "createdAt": datetime.now(timezone.utc).isoformat(),
+        "otelTraceRoot": child_context(parse_traceparent(os.environ.get("TRACEPARENT"))),
+        "otelTraceRootStartedUnixNano": str(time.time_ns()),
     }
     save_state(state)
     request = Path(worktree) / ".herdr-workflow" / args.change / "request.md"
@@ -518,6 +520,30 @@ def child_context(parent=None):
     return {"traceId": parent["traceId"] if parent else uuid.uuid4().hex, "spanId": uuid.uuid4().hex[:16], "flags": parent.get("flags", "01") if parent else "01"}
 
 
+def workspace_context(state):
+    context = state.get("otelTraceRoot")
+    if context and parse_traceparent(traceparent(context)):
+        return context
+    context = child_context(parse_traceparent(os.environ.get("TRACEPARENT")))
+    state["otelTraceRoot"] = context
+    state["otelTraceRootStartedUnixNano"] = str(time.time_ns())
+    return context
+
+
+def finalize_workspace_trace(state):
+    if state.get("otelTraceRootFinalized"):
+        return
+    context = workspace_context(state)
+    root = workflow_dir(state)
+    end = str(time.time_ns())
+    record = {"traceId": context["traceId"], "spanId": context["spanId"], "name": "workflow.workspace", "startTimeUnixNano": state.get("otelTraceRootStartedUnixNano", end), "endTimeUnixNano": end, "status": "OK", "attributes": {"service.name": "herdr-workflow", "herdr.change.id": state["changeId"], "herdr.phase": state.get("phase", "completed")}}
+    with (root / "traces.jsonl").open("a") as file:
+        file.write(json.dumps(record) + "\n")
+    export_trace(record)
+    state["otelTraceRootFinalized"] = True
+    save_state(state)
+
+
 def trace_endpoint():
     return os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") or (os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"].rstrip("/") + "/v1/traces" if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT") else "http://127.0.0.1:4318/v1/traces")
 
@@ -541,7 +567,7 @@ def telemetry(state, event, **fields):
     at = datetime.now(timezone.utc)
     with path.open("a") as file:
         file.write(json.dumps({"at": at.isoformat(), "event": event, "change": state["changeId"], **fields}) + "\n")
-    parent = parse_traceparent(os.environ.get("TRACEPARENT"))
+    parent = parse_traceparent(os.environ.get("TRACEPARENT")) or workspace_context(state)
     context = child_context(parent)
     nanos = str(int(at.timestamp() * 1_000_000_000))
     record = {"traceId": context["traceId"], "spanId": context["spanId"], "parentSpanId": parent["spanId"] if parent else None, "name": f"workflow.{event}", "startTimeUnixNano": nanos, "endTimeUnixNano": nanos, "status": "OK", "attributes": {"service.name": "herdr-workflow", "herdr.change.id": state["changeId"], "herdr.phase": state.get("phase", "unknown"), "herdr.verification.round": state.get("verificationRound", 0), **{f"herdr.{key}": value for key, value in fields.items() if isinstance(value, (str, int, float, bool))}}}
@@ -554,15 +580,14 @@ def telemetry(state, event, **fields):
 def write_trace_handoff(state, role):
     root = workflow_dir(state) / "trace-context"
     root.mkdir(parents=True, exist_ok=True)
-    parent = parse_traceparent(os.environ.get("TRACEPARENT"))
+    parent = parse_traceparent(os.environ.get("TRACEPARENT")) or workspace_context(state)
     action = child_context(parent)
     nanos = str(int(datetime.now(timezone.utc).timestamp() * 1_000_000_000))
     record = {"traceId": action["traceId"], "spanId": action["spanId"], "parentSpanId": parent["spanId"] if parent else None, "name": f"workflow.prompt.{role}", "startTimeUnixNano": nanos, "endTimeUnixNano": nanos, "status": "OK", "attributes": {"service.name": "herdr-workflow", "herdr.change.id": state["changeId"], "herdr.role": role, "herdr.phase": state.get("phase", "unknown"), "herdr.verification.round": state.get("verificationRound", 0)}}
     with (workflow_dir(state) / "traces.jsonl").open("a") as file:
         file.write(json.dumps(record) + "\n")
     export_trace(record)
-    context = child_context(action)
-    payload = {"traceparent": traceparent(context), "expiresAt": int(time.time() * 1000) + 120_000, "messageId": uuid.uuid4().hex, "operation": f"workflow.prompt.{role}", "attributes": {"herdr.change.id": state["changeId"], "herdr.role": role, "herdr.phase": state.get("phase", "unknown"), "herdr.verification.round": state.get("verificationRound", 0)}}
+    payload = {"traceparent": traceparent(action), "expiresAt": int(time.time() * 1000) + 120_000, "messageId": uuid.uuid4().hex, "operation": f"workflow.prompt.{role}", "attributes": {"herdr.change.id": state["changeId"], "herdr.role": role, "herdr.phase": state.get("phase", "unknown"), "herdr.verification.round": state.get("verificationRound", 0)}}
     path = root / f"{role}.json"
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(payload))
@@ -1071,6 +1096,8 @@ def cmd_phase(args):
         args.phase = "paused"
     set_phase(state, args.phase)
     save_state(state)
+    if args.phase == "completed":
+        finalize_workspace_trace(state)
     print(args.phase)
 
 

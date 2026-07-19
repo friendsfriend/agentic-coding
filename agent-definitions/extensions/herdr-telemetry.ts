@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
-import { appendFileSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
 
@@ -13,6 +14,24 @@ const parseTraceparent = (value?: string): Context | undefined => {
 };
 const traceparent = (context: Context) => `00-${context.traceId}-${context.spanId}-${context.flags ?? '01'}`;
 const endpoint = () => process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT || (process.env.OTEL_EXPORTER_OTLP_ENDPOINT ? `${process.env.OTEL_EXPORTER_OTLP_ENDPOINT.replace(/\/$/, '')}/v1/traces` : 'http://127.0.0.1:4318/v1/traces');
+const telemetryConfig = () => {
+  const paths = [join(homedir(), '.pi', 'agent', 'herdr-workflow.toml'), join(process.cwd(), '.pi', 'herdr-workflow.toml')];
+  let captureContent = false;
+  for (const path of paths) try {
+    if (!existsSync(path)) continue;
+    let inTelemetry = false;
+    for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
+      const section = line.match(/^\s*\[([^\]]+)\]\s*$/);
+      if (section) { inTelemetry = section[1] === 'telemetry'; continue; }
+      const value = inTelemetry && line.match(/^\s*capture_content\s*=\s*(true|false)\s*(?:#.*)?$/)?.[1];
+      if (value) captureContent = value === 'true';
+    }
+  } catch { /* telemetry config is optional */ }
+  return { captureContent };
+};
+const json = (value: unknown) => { try { return JSON.stringify(value); } catch { return String(value); } };
+const assistantText = (message: any) => Array.isArray(message?.content) ? message.content.filter((part: any) => part?.type === 'text').map((part: any) => String(part.text ?? '')).join('') : '';
+const modelName = (value: any) => value?.provider && value?.id ? `${value.provider}/${value.id}` : undefined;
 
 export default function (pi: ExtensionAPI) {
   const change = process.env.HERDR_CHANGE_ID;
@@ -21,6 +40,7 @@ export default function (pi: ExtensionAPI) {
   const telemetryPath = root && join(root, 'telemetry.jsonl');
   const tracesPath = root && join(root, 'traces.jsonl');
   const healthPath = join(process.env.HOME ?? '', '.pi', 'agent', 'herdr-provider-health.json');
+  const captureContent = () => telemetryConfig().captureContent;
   const restricted = !!role && !['manager', 'planner', 'worker'].includes(role);
   const oneShot = role === 'recovery' || role === 'archive' || role?.endsWith('-verifier');
   const commandStart = String.raw`(?:^|[\n;&|()'"])\s*`;
@@ -36,7 +56,7 @@ export default function (pi: ExtensionAPI) {
   const exportSpan = (span: Span) => {
     if (!span.endTimeUnixNano) return;
     if (tracesPath) try { mkdirSync(root!, { recursive: true }); appendFileSync(tracesPath, JSON.stringify(span) + '\n'); } catch { /* local fallback is best effort */ }
-    const attributes = Object.entries(span.attributes).map(([key, attribute]) => ({
+    const attributes = Object.entries(span.attributes).filter(([key]) => !key.startsWith('herdr.content.')).map(([key, attribute]) => ({
       key,
       value: typeof attribute === 'string' ? { stringValue: attribute } : typeof attribute === 'boolean' ? { boolValue: attribute } : { intValue: String(attribute) },
     }));
@@ -51,16 +71,16 @@ export default function (pi: ExtensionAPI) {
     try { const value = JSON.parse(readFileSync(path, 'utf8')); unlinkSync(path); return Number(value.expiresAt) > Date.now() ? { context: parseTraceparent(value.traceparent), messageId: typeof value.messageId === 'string' ? value.messageId : undefined, attributes: value.attributes as Record<string, string | number | boolean> } : undefined; } catch { return undefined; }
   };
   const recordProviderFailure = (status: number) => { if (status !== 429 && status < 500) return; try { const health = JSON.parse(readFileSync(healthPath, 'utf8')) as Record<string, { failures: number; lastFailure: string }>; const provider = model.split('/')[0] ?? 'unknown'; const previous = health[provider]; const recent = previous && Date.now() - Date.parse(previous.lastFailure) < 120_000; health[provider] = { failures: recent ? previous.failures + 1 : 1, lastFailure: new Date().toISOString() }; writeFileSync(healthPath, JSON.stringify(health)); } catch { /* advisory */ } };
-  pi.on('before_agent_start', (event: any, ctx: any) => { const handoff = consumeHandoff(); const session = ctx.sessionManager?.getSessionId?.() ?? 'unknown'; const leaf = handoff?.messageId ?? ctx.sessionManager?.getLeafEntry?.()?.id ?? hex(8); const prompt = String(event.prompt ?? ''); const preview = process.env.HERDR_TELEMETRY_MESSAGE_PREVIEW ? prompt.slice(0, Math.min(500, Number(process.env.HERDR_TELEMETRY_MESSAGE_PREVIEW) || 500)) : undefined; operation = start('agent.operation', handoff?.context, { ...handoff?.attributes, 'herdr.message.id': String(leaf), 'herdr.message.hash': createHash('sha256').update(prompt).digest('hex'), 'herdr.message.bytes': Buffer.byteLength(prompt), ...(preview ? { 'herdr.message.preview': preview } : {}), 'pi.session.id': String(session), 'gen_ai.operation.name': 'invoke_agent' }); });
-  pi.on('model_select', (event: any) => { model = `${event.model.provider}/${event.model.id}`; write('model_selected', { model }); });
+  pi.on('before_agent_start', (event: any, ctx: any) => { model = modelName(ctx.model) ?? model; const handoff = consumeHandoff(); const session = ctx.sessionManager?.getSessionId?.() ?? 'unknown'; const leaf = handoff?.messageId ?? ctx.sessionManager?.getLeafEntry?.()?.id ?? hex(8); const prompt = String(event.prompt ?? ''); operation = start('agent.operation', handoff?.context, { ...handoff?.attributes, 'herdr.message.id': String(leaf), 'herdr.message.hash': createHash('sha256').update(prompt).digest('hex'), 'herdr.message.bytes': Buffer.byteLength(prompt), ...(captureContent() ? { 'herdr.content.input': prompt } : {}), 'pi.session.id': String(session), 'gen_ai.operation.name': 'invoke_agent' }); });
+  pi.on('model_select', (event: any) => { model = modelName(event.model) ?? 'unknown'; write('model_selected', { model }); });
   pi.on('agent_start', () => write('pi_agent_start', { model }));
   pi.on('agent_end', () => write('pi_agent_end'));
   pi.on('agent_settled', (_event, ctx) => { end(operation); operation = undefined; write('pi_agent_settled'); if (oneShot) ctx.shutdown(); });
-  pi.on('turn_start', (event: any) => { if (operation) turns.set(event.turnIndex, start('gen_ai.chat', operation, { 'gen_ai.provider.name': model.split('/')[0] ?? 'unknown', 'gen_ai.request.model': model })); });
-  pi.on('turn_end', (event: any) => end(turns.get(event.turnIndex)));
-  pi.on('tool_execution_start', (event: any) => { if (operation) tools.set(event.toolCallId, start(`tool.${event.toolName}`, operation, { 'tool.name': event.toolName, 'tool.call.id': event.toolCallId })); });
+  pi.on('turn_start', (event: any, ctx: any) => { model = modelName(ctx.model) ?? model; if (operation) turns.set(event.turnIndex, start('gen_ai.chat', operation, { 'gen_ai.provider.name': model.split('/')[0] ?? 'unknown', 'gen_ai.request.model': model })); });
+  pi.on('turn_end', (event: any) => { const span = turns.get(event.turnIndex); if (span) { const usage = event.message?.usage; Object.assign(span.attributes, { ...(captureContent() && assistantText(event.message) ? { 'herdr.content.output': assistantText(event.message) } : {}), ...(usage ? { 'gen_ai.usage.input_tokens': Number(usage.inputTokens ?? 0), 'gen_ai.usage.output_tokens': Number(usage.outputTokens ?? 0), 'gen_ai.usage.cost': Number(usage.cost?.total ?? 0) } : {}) }); } end(span); });
+  pi.on('tool_execution_start', (event: any) => { if (operation) tools.set(event.toolCallId, start(`tool.${event.toolName}`, operation, { 'tool.name': event.toolName, 'tool.call.id': event.toolCallId, ...(captureContent() ? { 'herdr.content.tool_input': json(event.args) } : {}) })); });
   pi.on('tool_call', (event: any) => { const command = String(event.input?.command ?? ''); if (restricted && event.toolName === 'bash' && (agentExecutable.test(command) || agentRunner.test(command) || herdrSpawner.test(command))) { write('nested_agent_blocked', { command: command.slice(0, 500) }); return { block: true, reason: 'Restricted workflow roles must complete work themselves; nested agent spawning is blocked.' }; } if (event.toolName === 'bash') { const span = tools.get(event.toolCallId); if (span && event.input?.command) event.input.command = `TRACEPARENT=${JSON.stringify(traceparent(span))} ${event.input.command}`; } });
-  pi.on('tool_execution_end', (event: any) => { end(tools.get(event.toolCallId), event.isError ? 'ERROR' : 'OK'); tools.delete(event.toolCallId); if (event.isError) write('tool_error', { tool: event.toolName }); });
+  pi.on('tool_execution_end', (event: any) => { const span = tools.get(event.toolCallId); if (span && captureContent()) span.attributes['herdr.content.tool_output'] = json(event.result); end(span, event.isError ? 'ERROR' : 'OK'); tools.delete(event.toolCallId); if (event.isError) write('tool_error', { tool: event.toolName }); });
   pi.on('after_provider_response', (event: any) => { write('provider_response', { status: event.status, retryAfter: event.headers?.['retry-after'], model }); recordProviderFailure(event.status); });
   pi.on('message_end', (event: any) => { if (event.message?.role !== 'assistant') return; const usage = event.message.usage; if (usage) write('model_usage', { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cacheReadTokens: usage.cacheReadTokens, cacheWriteTokens: usage.cacheWriteTokens, cost: usage.cost?.total }); });
 }
