@@ -1,0 +1,14 @@
+- [x] 1. Add `git-operations` module to `WORKFLOW_MODULES` registry in `pi/bin/herdr-workflow`
+- [x] 2. Add `no-openspec` workflow type to `WORKFLOW_TYPES` and update `standard`/`direct-apply` to include `git-operations` before `archive`
+- [x] 3. Add `workflowType` field to state schema, wire in `cmd_start`
+- [x] 4. Create `cmd_git_operations` handler that closes panes, creates git tab, launches git agent
+- [x] 5. Refactor `cmd_archive` to detect `git-operations` module and route to git operations on developer approval; simplify archive phase to cleanup only
+- [x] 6. Create `write_git_context` function
+- [x] 7. Branch `role_prompt("worker")` on `workflowType` — skip OpenSpec task tracking for no-openspec
+- [x] 8. Skip `ensure_tasks_complete` in `cmd_verify` when `workflowType === "no-openspec"`
+- [x] 9. Create `agent-definitions/skills/herdr-openspec-git/SKILL.md` — commit/push skill
+- [x] 10. Simplify `agent-definitions/skills/herdr-openspec-archive/SKILL.md` — remove git steps
+- [x] 11. Add `workflowType` to `WorkflowState` interface in `agent-dash/src/data.ts`
+- [x] 12. Add `no-openspec` to workflow type choices in `NewWorkflowModal.tsx`
+- [x] 13. Update `App.tsx` and `Home.tsx` to display `workflowType` explicitly instead of module-list inference
+- [x] 14. Validate: CLI regression for no-openspec start, verify, archive; standard/direct-apply archive split; legacy backward compat; dashboard rendering
