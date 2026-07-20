@@ -369,6 +369,17 @@ export function focusWorkflow(workflow: WorkflowOverview) {
   focusWorkspace(state.workspace);
 }
 
+export function discoverChanges(repo: string): string[] {
+  const changesDir = join(repo, 'openspec', 'changes');
+  if (!existsSync(changesDir)) return [];
+  try {
+    return readdirSync(changesDir, { withFileTypes: true })
+      .filter(entry => entry.isDirectory() && entry.name !== 'archive')
+      .map(entry => entry.name)
+      .sort();
+  } catch { return []; }
+}
+
 export function discoverProjects(): Array<{ name: string; path: string; openspec: boolean }> {
   const result = Bun.spawnSync(['herdr-workflow', 'projects'], { stdout: 'pipe', stderr: 'ignore' });
   if (result.exitCode !== 0) return [];
@@ -380,9 +391,11 @@ export function startWorkflowWizard() {
   return Bun.spawnSync(['bash', '-lc', script], { stdin: 'inherit', stdout: 'inherit', stderr: 'inherit' }).exitCode === 0;
 }
 
-export async function startWorkflow(input: { repo: string; ticket: string; change: string; task: string; mode: string; worker: string; workflowType?: string; sshPassphrase?: string }) {
+export async function startWorkflow(input: { repo: string; ticket: string; change: string; task?: string; mode: string; worker: string; workflowType?: string; sshPassphrase?: string }) {
   const repo = input.repo.startsWith('~') ? resolve(input.repo.replace('~', homedir())) : resolve(input.repo);
-  const args = ['herdr-workflow', 'start', '--repo', repo, '--change', input.change, '--task', input.task, '--mode', input.mode, '--worker', input.worker, '--workflow-type', input.workflowType ?? 'standard'];
+  const workflowType = input.workflowType === 'quick' ? 'no-openspec' : input.workflowType ?? 'standard';
+  const args = ['herdr-workflow', 'start', '--repo', repo, '--change', input.change, '--mode', input.mode, '--worker', input.worker, '--workflow-type', workflowType];
+  if (workflowType === 'standard' && input.task) args.push('--task', input.task);
   if (input.ticket) args.push('--ticket', input.ticket);
   const env = { ...process.env, ...(input.sshPassphrase ? { HERDR_SSH_PASSPHRASE: input.sshPassphrase } : {}) };
   const child = Bun.spawn(args, { stdout: 'pipe', stderr: 'pipe', env });
