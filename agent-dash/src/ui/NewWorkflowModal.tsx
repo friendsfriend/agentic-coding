@@ -1,20 +1,20 @@
 /** @jsxImportSource @opentui/solid */
-import { Show, createSignal, onCleanup, onMount } from 'solid-js';
+import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import { ListViewModal } from './ListViewModal';
 import { GenericModal } from './GenericModal';
 import { uiColors } from './colors';
 import type { KeyEvent } from '@opentui/core';
 
-export type NewWorkflowInput = { repo: string; ticket: string; change: string; task: string; mode: string; worker: string; workflowType: string };
+export type NewWorkflowInput = { repo: string; ticket: string; change: string; task: string; mode: string; worker: string; workflowType: string; sshPassphrase: string };
 type Project = { name: string; path: string; openspec: boolean };
-export function NewWorkflowModal(props: { projects: Project[]; models: string[]; onCancel: () => void; onComplete: (input: NewWorkflowInput) => void; onKeyReady: (handler: (key: KeyEvent) => boolean) => void }) {
-  const labels = ['Repository', 'Ticket identifier (optional)', 'Change ID', 'Task', 'Checkout mode', 'Workflow type', 'Worker model'];
-  const fields: (keyof NewWorkflowInput)[] = ['repo', 'ticket', 'change', 'task', 'mode', 'workflowType', 'worker'];
+export function NewWorkflowModal(props: { projects: Project[]; models: string[]; sshPassphraseRequired: boolean; onCancel: () => void; onComplete: (input: NewWorkflowInput) => void; onKeyReady: (handler: (key: KeyEvent) => boolean) => void }) {
+  const labels = ['Repository', 'Ticket identifier (optional)', 'Change ID', 'Task', 'Checkout mode', 'Workflow type', 'Worker model', 'SSH key passphrase (optional)'];
+  const fields: (keyof NewWorkflowInput)[] = ['repo', 'ticket', 'change', 'task', 'mode', 'workflowType', 'worker', 'sshPassphrase'];
   const [step, setStep] = createSignal(0);
   const [selected, setSelected] = createSignal(0);
   const [filter, setFilter] = createSignal('');
   const [filtering, setFiltering] = createSignal(false);
-  const [values, setValues] = createSignal<NewWorkflowInput>({ repo: '', ticket: '', change: '', task: '', mode: '', worker: '', workflowType: 'standard' });
+  const [values, setValues] = createSignal<NewWorkflowInput>({ repo: '', ticket: '', change: '', task: '', mode: '', worker: '', workflowType: 'standard', sshPassphrase: '' });
   const [showCustomRepo, setShowCustomRepo] = createSignal(false);
   const projects = () => props.projects.filter(project => project.name.toLowerCase().includes(filter().toLowerCase()));
   const choices = (): string[] => step() === 0 ? [...projects().map(project => `${project.openspec ? '●' : '○'} ${project.name}`), `Current Directory (${process.cwd().split('/').pop()})`, 'Custom path…'] : step() === 4 ? ['worktree', 'checkout'].filter(item => item.includes(filter().toLowerCase())) : step() === 5 ? ['standard', 'direct-apply'].filter(item => item.includes(filter().toLowerCase())) : props.models.filter(item => item.toLowerCase().includes(filter().toLowerCase()));
@@ -22,7 +22,7 @@ export function NewWorkflowModal(props: { projects: Project[]; models: string[];
   const confirmStep = () => step() === fields.length;
   const totalSteps = fields.length + 1;
   const field = () => fields[step()]!;
-  const summary = () => fields.map((key, index) => ({ label: labels[index]!, value: values()[key] || '—' }));
+  const summary = () => fields.map((key, index) => ({ label: labels[index]!, value: key === 'sshPassphrase' && values()[key] ? '••••••••' : values()[key] || '—' }));
   const updateCurrent = (value: string) => { const key = field(); setValues(current => ({ ...current, [key]: value })); };
   const back = () => { if (step() === 0) props.onCancel(); else { setStep(index => index - 1); setSelected(0); setFilter(''); setFiltering(false); } };
   const next = (value: string) => { const key = field(); setValues(current => ({ ...current, [key]: value })); setStep(index => index + 1); setSelected(0); setFilter(''); setFiltering(false); };
@@ -68,6 +68,7 @@ export function NewWorkflowModal(props: { projects: Project[]; models: string[];
     }
     return true;
   };
+  createEffect(() => { if (props.sshPassphraseRequired) setStep(fields.indexOf('sshPassphrase')); });
   onMount(() => props.onKeyReady(handler));
   onCleanup(() => props.onKeyReady(() => true));
   return <>
@@ -79,7 +80,9 @@ export function NewWorkflowModal(props: { projects: Project[]; models: string[];
     <Show when={confirmStep()} fallback={
       <Show when={listStep()} fallback={
         <GenericModal title="New workflow" fieldLabel={labels[step()]} summary={summary()} step={step()} total={totalSteps} help={[{ key: 'Enter', action: 'Next' }, { key: 'Esc', action: 'Back' }]}>
-          <input focused value={values()[field()]} placeholder={step() === 1 ? 'optional' : ''} onInput={updateCurrent} onSubmit={() => next(values()[field()])} onKeyDown={(event: KeyEvent) => { if (event.name.toLowerCase() === 'escape') back(); }} focusedBackgroundColor={uiColors.bgBase} focusedTextColor={uiColors.textPrimary} />
+          <Show when={field() === 'sshPassphrase'} fallback={<input focused value={values()[field()]} placeholder={step() === 1 ? 'optional' : ''} onInput={updateCurrent} onSubmit={() => next(values()[field()])} onKeyDown={(event: KeyEvent) => { if (event.name.toLowerCase() === 'escape') back(); }} focusedBackgroundColor={uiColors.bgBase} focusedTextColor={uiColors.textPrimary} />}>
+            <box height={1} flexDirection="row"><text fg={values().sshPassphrase ? uiColors.textPrimary : uiColors.textMuted}>{values().sshPassphrase ? '*'.repeat(values().sshPassphrase.length) : 'optional'}</text><Show when={values().sshPassphrase}><text fg={uiColors.primary}>█</text></Show></box>
+          </Show>
         </GenericModal>
       }>
         <ListViewModal title="New workflow" fieldLabel={labels[step()]} summary={summary()} items={choices()} selectedIndex={selected()} step={step()} total={totalSteps} filterActive={filtering()} filterQuery={filter()} help={[{ key: 'j/k', action: 'Navigate' }, { key: '/', action: 'Filter' }, { key: 'Enter', action: 'Select' }, { key: 'Esc', action: 'Back' }]} renderItem={(item, active) => <text fg={active ? uiColors.primary : uiColors.textSecondary}>{item}</text>} />

@@ -31,6 +31,7 @@ export function Home(props: { keymap: Keymap<any, KeyEvent> }) {
   const [selected, setSelected] = createSignal(0);
   const [modal, setModal] = createSignal(false);
   const [modalHandler, setModalHandler] = createSignal<(event: KeyEvent) => boolean>();
+  const [sshPassphraseRequired, setSshPassphraseRequired] = createSignal(false);
   const [message, setMessage] = createSignal('');
   const [error, setError] = createSignal<{ title: string; message: string }>();
   const [help, setHelp] = createSignal(false);
@@ -61,7 +62,7 @@ export function Home(props: { keymap: Keymap<any, KeyEvent> }) {
   });
   const helpSections: HelpSection[] = [{ title: 'Navigation', items: [{ key: 'j/k or ↑/↓', description: 'Select workspace' }] }, { title: 'Actions', items: [{ key: 'Enter', description: 'Switch active workspace' }, { key: 'n', description: 'New workflow' }, { key: 'f', description: 'Open filter modal' }, { key: 'o', description: 'Open sort modal' }, { key: 'r', description: 'Refresh' }, { key: 'q', description: 'Quit' }, { key: '?', description: 'Open help' }] }];
   const helpMaxOffset = () => Math.max(0, helpSections.reduce((count, section) => count + section.items.length + 1, 0) - Math.max(5, Math.floor(dimensions().height * .78) - 5));
-  const closeError = () => { setError(undefined); props.keymap.setData('modal.active', 'none'); };
+  const closeError = () => { setError(undefined); props.keymap.setData('modal.active', modal() ? 'new-workflow' : 'none'); };
   const showError = (title: string, message: string) => { setError({ title, message }); props.keymap.setData('modal.active', 'error'); };
   const showHerdrUnavailable = (message = 'Herdr executable was not found. Install Herdr or add it to PATH.') => showError('Herdr unavailable', message);
   const refresh = () => { setItems(listWorkflows()); setSelected(index => Math.min(index, Math.max(0, items().length - 1))); };
@@ -77,7 +78,7 @@ export function Home(props: { keymap: Keymap<any, KeyEvent> }) {
     if (name === 't' && key.shift) { setThemePicker(true); props.keymap.setData('modal.active', 'theme'); }
     else if (name === '?') { setHelp(true); setHelpOffset(0); props.keymap.setData('modal.active', 'help'); }
     else if (name === 'q') renderer.destroy();
-    else if (name === 'n') { setModal(true); props.keymap.setData('modal.active', 'new-workflow'); }
+    else if (name === 'n') { setSshPassphraseRequired(false); setModal(true); props.keymap.setData('modal.active', 'new-workflow'); }
     else if (name === 'r') refresh();
     else if (name === 'f') { setFilterModal(true); setFilterFocusedPane('parameter'); setFilterSelectedParameter(0); setFilterSelectedValue(0); props.keymap.setData('modal.active', 'filter'); }
     else if (name === 'o') { setSortModal(true); setSortSelectedIndex(0); props.keymap.setData('modal.active', 'sort'); }
@@ -168,8 +169,9 @@ export function Home(props: { keymap: Keymap<any, KeyEvent> }) {
       <StatusBar prompt={`${items().length} workspaces`} approval={false} keybinds={[{ key: 'Enter', action: 'switch workspace' }, { key: 'n', action: 'new workflow' }, { key: 'f', action: 'filter' }, { key: 'o', action: 'sort' }, { key: 'r', action: 'refresh' }, { key: '?', action: 'help' }, { key: 'Shift+T', action: 'theme' }, { key: 'q', action: 'quit' }]} />
       <NotificationOverlay />
       <Show when={themePicker()}><ThemePickerModal selected={themeIndex()} active={getActiveThemeName()} themes={themeNames} query="" filtering={false} /></Show>
-      <Show when={modal()}><NewWorkflowModal projects={projects()} models={models()} onKeyReady={handler => setModalHandler(() => handler)} onCancel={() => { setModal(false); props.keymap.setData('modal.active', 'none'); setModalHandler(undefined); }} onComplete={async (input) => { setModal(false); props.keymap.setData('modal.active', 'none'); setModalHandler(undefined); if (!herdrAvailable()) { showHerdrUnavailable(); return; } setMessage('Starting workflow…'); try { setMessage(await startWorkflow({ ...input, workflowType: input.workflowType ?? 'standard' })); refresh(); } catch (error) {
+      <Show when={modal()}><NewWorkflowModal projects={projects()} models={models()} sshPassphraseRequired={sshPassphraseRequired()} onKeyReady={handler => setModalHandler(() => handler)} onCancel={() => { setModal(false); props.keymap.setData('modal.active', 'none'); setModalHandler(undefined); }} onComplete={async (input) => { if (!herdrAvailable()) { showHerdrUnavailable(); return; } setSshPassphraseRequired(false); setMessage('Starting workflow…'); try { setMessage(await startWorkflow({ ...input, workflowType: input.workflowType ?? 'standard' })); setModal(false); props.keymap.setData('modal.active', 'none'); setModalHandler(undefined); refresh(); } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        if (/permission denied \(publickey\)/i.test(message)) { setSshPassphraseRequired(true); return; }
         showError('Workflow execution failed', message);
       } }} /></Show>
       <Show when={help()}><HelpModal title="Workspace overview keybindings" sections={helpSections} offset={helpOffset()} lines={Math.max(5, Math.floor(dimensions().height * .78) - 5)} /></Show>

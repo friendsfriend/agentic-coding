@@ -11,6 +11,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 import uuid
@@ -171,6 +172,39 @@ def ensure_clean(repo):
         raise SystemExit(f"OpenSpec project not found: {repo}/openspec/config.yaml")
 
 
+def unlock_ssh_keys(repo, remote, passphrase):
+    """Add configured SSH identities to running agent without persisting secret."""
+    if not passphrase:
+        return
+    url = run("git", "remote", "get-url", remote, cwd=repo)
+    match = re.match(r"ssh://(?:[^@/]+@)?([^/:]+)", url) or re.match(r"(?:[^@/:]+@)?([^/:]+)(?::|/)", url)
+    identities = []
+    if match:
+        probe = subprocess.run(["ssh", "-G", match.group(1)], text=True, capture_output=True, check=False)
+        identities = [str(Path(line.split(None, 1)[1]).expanduser()) for line in probe.stdout.splitlines() if line.startswith("identityfile ") and Path(line.split(None, 1)[1]).expanduser().is_file()]
+    passphrase_fd, passphrase_path = tempfile.mkstemp(prefix="herdr-ssh-passphrase-")
+    script_fd, script_path = tempfile.mkstemp(prefix="herdr-ssh-askpass-")
+    try:
+        os.write(passphrase_fd, passphrase.encode())
+        os.close(passphrase_fd)
+        os.chmod(passphrase_path, 0o600)
+        os.write(script_fd, f'#!/bin/sh\ncat "{passphrase_path}"\n'.encode())
+        os.close(script_fd)
+        os.chmod(script_path, 0o700)
+        env = {**os.environ, "SSH_ASKPASS": script_path, "SSH_ASKPASS_REQUIRE": "force", "DISPLAY": os.environ.get("DISPLAY", ":0")}
+        result = subprocess.run(["ssh-add", *identities], text=True, capture_output=True, env=env, check=False)
+        if result.returncode:
+            raise SystemExit("could not unlock SSH key: " + (result.stderr or result.stdout or "ssh-add failed").strip())
+    finally:
+        for fd in (passphrase_fd, script_fd):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        Path(passphrase_path).unlink(missing_ok=True)
+        Path(script_path).unlink(missing_ok=True)
+
+
 def remote_default_branch(repo, remote):
     run("git", "fetch", remote, "--prune", cwd=repo)
     return run("git", "symbolic-ref", "--quiet", "--short", f"refs/remotes/{remote}/HEAD", cwd=repo)
@@ -325,14 +359,24 @@ def create_tab(workspace, label, role=None, change=None):
     if role:
         args.extend(role_env(role, change))
     args.extend(["--label", label])
-    return herdr(*args)["root_pane"]["pane_id"]
+    return herdr(*args)["root_pane"]
+
+
+def role_tab(state, role):
+    tab = state.get("tabs", {}).get(role)
+    if tab:
+        return tab
+    pane = herdr("pane", "get", state["panes"][role])["pane"]
+    return pane["tab_id"]
 
 
 def ensure_role_pane(state, role):
     if state["panes"].get(role):
         return False
     label = {"planner": "explore", "worker": "apply"}.get(role, role.removesuffix("-verifier"))
-    state["panes"][role] = create_tab(state["workspace"], label, role, state["changeId"])
+    tab = create_tab(state["workspace"], label, role, state["changeId"])
+    state["panes"][role] = tab["pane_id"]
+    state.setdefault("tabs", {})[role] = tab["tab_id"]
     save_state(state)
     return True
 
@@ -374,8 +418,10 @@ def cmd_start(args):
     if args.ticket and not re.search(r"[A-Za-z0-9]", args.ticket):
         raise SystemExit("ticket identifier must contain at least one letter or digit")
     source = str(Path(args.repo).expanduser().resolve())
+    passphrase = os.environ.pop("HERDR_SSH_PASSPHRASE", "")
     ensure_clean(source)
     remote = config["workflow"]["remote"]
+    unlock_ssh_keys(source, remote, passphrase)
     base_branch = remote_default_branch(source, remote)
     base = run("git", "rev-parse", "--verify", base_branch, cwd=source)
     branch_name = f"{ticket_branch}-{args.change}" if ticket_branch else args.change
@@ -398,7 +444,9 @@ def cmd_start(args):
     herdr("workspace", "rename", workspace, args.change)
     first_tab = herdr("tab", "list", "--workspace", workspace)["tabs"][0]["tab_id"]
     herdr("tab", "rename", first_tab, "dashboard")
-    panes = {"dashboard": root, "git": create_tab(workspace, "git")}
+    git_tab = create_tab(workspace, "git")
+    panes = {"dashboard": root, "git": git_tab["pane_id"]}
+    tabs = {"dashboard": first_tab, "git": git_tab["tab_id"]}
     models = config["models"]
     worker = args.worker or models["worker_default"]
     modules = list(WORKFLOW_TYPES[getattr(args, "workflow_type", "standard")])
@@ -408,7 +456,7 @@ def cmd_start(args):
         "changeId": args.change, "phase": initial_phase, "repository": source,
         "worktree": worktree, "branch": branch, "workspace": workspace,
         "task": args.task, "ticketNumber": args.ticket, "workerModel": worker, "verificationRound": 0,
-        "returnWorkspace": os.environ.get("HERDR_WORKSPACE_ID"), "baseBranch": base_branch, "baseCommit": base, "developerApproval": False, "panes": panes,
+        "returnWorkspace": os.environ.get("HERDR_WORKSPACE_ID"), "baseBranch": base_branch, "baseCommit": base, "developerApproval": False, "panes": panes, "tabs": tabs,
         "workflowModules": modules,
         "workflowType": getattr(args, "workflow_type", "standard"),
         "createdAt": datetime.now(timezone.utc).isoformat(),
@@ -464,11 +512,15 @@ def launch_role(state, role):
     if role.endswith("-verifier") and provider_unhealthy(model) and models.get("verifier_fallback"):
         telemetry(state, "provider_circuit_open", role=role, model=model, fallback=models["verifier_fallback"])
         model = models["verifier_fallback"]
-    command = ["agent", "start", role_agent_name(state, role), "--kind", "pi", "--pane", state["panes"][role], "--timeout", "120000", "--"]
+    command = ["agent", "start", role_agent_name(state, role), "--tab", role_tab(state, role), "--no-focus", "--", "pi"]
     try:
         for attempt in range(25):
             try:
-                herdr(*command, *pi_arguments(role, model, level, state["changeId"]))
+                result = herdr(*command, *pi_arguments(role, model, level, state["changeId"]))
+                if pane := result.get("agent", {}).get("pane_id"):
+                    state["panes"][role] = pane
+                    state.setdefault("tabs", {})[role] = result["agent"].get("tab_id", role_tab(state, role))
+                    save_state(state)
                 break
             except SystemExit as error:
                 if "not an available shell" not in str(error) or attempt == 24:
@@ -479,7 +531,11 @@ def launch_role(state, role):
         if not fallback or fallback == model:
             raise
         telemetry(state, "provider_launch_fallback", role=role, model=model, fallback=fallback)
-        herdr(*command, *pi_arguments(role, fallback, level, state["changeId"]))
+        result = herdr(*command, *pi_arguments(role, fallback, level, state["changeId"]))
+        if pane := result.get("agent", {}).get("pane_id"):
+            state["panes"][role] = pane
+            state.setdefault("tabs", {})[role] = result["agent"].get("tab_id", role_tab(state, role))
+            save_state(state)
         model = fallback
     state.setdefault("verificationModels", {})[role] = model
     if role.endswith("-verifier"):
@@ -1143,8 +1199,10 @@ def _start_git_operations(state):
             herdr("pane", "close", lazygit_pane)
         except SystemExit:
             pass
-    pane = create_tab(state["workspace"], "git-ops", "git", state["changeId"])
+    tab = create_tab(state["workspace"], "git-ops", "git", state["changeId"])
+    pane = tab["pane_id"]
     state["panes"]["git"] = pane
+    state.setdefault("tabs", {})["git"] = tab["tab_id"]
     try:
         launch_role(state, "git")
     except SystemExit:

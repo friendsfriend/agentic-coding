@@ -26,7 +26,7 @@ cat > "$root/bin/herdr" <<MOCK
 case "\$1 \$2" in
   "workspace create") echo '{"result":{"workspace":{"workspace_id":"w1"},"root_pane":{"pane_id":"p1"}}}' ;;
   "tab list") echo '{"result":{"tabs":[{"tab_id":"t1"}]}}' ;;
-  "tab create") label="\${*: -1}"; echo "{\"result\":{\"root_pane\":{\"pane_id\":\"p-\$label\"}}}" ;;
+  "tab create") label="\${*: -1}"; echo "{\"result\":{\"root_pane\":{\"pane_id\":\"p-\$label\",\"tab_id\":\"t-\$label\"}}}" ;;
   "pane split") echo "{\"result\":{\"pane\":{\"pane_id\":\"p-\$3-\$5\"}}}" ;;
   "agent start")
     if [[ "\$3" == *-archive && ! -e "$root/archive_launch_retried" ]]; then
