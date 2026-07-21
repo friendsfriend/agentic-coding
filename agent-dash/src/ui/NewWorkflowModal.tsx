@@ -3,13 +3,15 @@ import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import { ListViewModal } from './ListViewModal';
 import { GenericModal } from './GenericModal';
 import { uiColors } from './colors';
+import { ProgressModal } from './ProgressModal';
 import { discoverChanges } from '../data';
 import type { KeyEvent } from '@opentui/core';
 
 export type NewWorkflowInput = { repo: string; ticket: string; change: string; task?: string; mode: string; worker: string; workflowType: string; sshPassphrase: string };
 type Project = { name: string; path: string; openspec: boolean };
-export function NewWorkflowModal(props: { projects: Project[]; models: string[]; sshPassphraseRequired: boolean; onCancel: () => void; onComplete: (input: NewWorkflowInput) => void; onKeyReady: (handler: (key: KeyEvent) => boolean) => void }) {
+export function NewWorkflowModal(props: { projects: Project[]; models: string[]; sshPassphraseRequired: boolean; onCancel: () => void; onComplete: (input: NewWorkflowInput) => Promise<void>; onKeyReady: (handler: (key: KeyEvent) => boolean) => void }) {
   const [step, setStep] = createSignal(0);
+  const [creating, setCreating] = createSignal(false);
   const [selected, setSelected] = createSignal(0);
   const [filter, setFilter] = createSignal('');
   const [filtering, setFiltering] = createSignal(false);
@@ -63,7 +65,13 @@ export function NewWorkflowModal(props: { projects: Project[]; models: string[];
   const back = () => { if (step() === 0) props.onCancel(); else { setStep(i => Math.max(0, i - 1)); setSelected(0); setFilter(''); setFiltering(false); } };
   const next = (value: string) => { const key = field(); if (!key) return; setValues(current => ({ ...current, [key]: value })); setStep(i => Math.min(i + 1, fields().length)); setSelected(0); setFilter(''); setFiltering(false); };
 
+  const submit = async () => {
+    setCreating(true);
+    try { await props.onComplete(values()); } finally { setCreating(false); }
+  };
+
   const handler = (key: KeyEvent) => {
+    if (creating()) return true;
     const name = key.name.toLowerCase();
     if (showCustomRepo()) {
       if (name === 'escape') { setShowCustomRepo(false); return true; }
@@ -74,7 +82,7 @@ export function NewWorkflowModal(props: { projects: Project[]; models: string[];
     }
     if (name === 'escape') { back(); return true; }
     if (confirmStep()) {
-      if (name === 'return' || name === 'enter') props.onComplete(values());
+      if (name === 'return' || name === 'enter') void submit();
       return true;
     }
     if (!listStep()) {
@@ -117,7 +125,8 @@ export function NewWorkflowModal(props: { projects: Project[]; models: string[];
   onCleanup(() => props.onKeyReady(() => true));
 
   return <>
-    <Show when={showCustomRepo()}>
+    <Show when={creating()}><ProgressModal message="Starting workspace and agents…" /></Show>
+    <Show when={!creating() && showCustomRepo()}>
       <GenericModal title="New workflow" fieldLabel="Custom repository path"
         summary={summary()} step={0} total={totalSteps()}
         help={[{ key: 'Enter', action: 'Next' }, { key: 'Esc', action: 'Back' }]}>
@@ -128,7 +137,7 @@ export function NewWorkflowModal(props: { projects: Project[]; models: string[];
           focusedBackgroundColor={uiColors.bgBase} focusedTextColor={uiColors.textPrimary} />
       </GenericModal>
     </Show>
-    <Show when={confirmStep()} fallback={
+    <Show when={!creating()}><Show when={confirmStep()} fallback={
       <Show when={listStep()} fallback={
         <GenericModal title="New workflow" fieldLabel={fieldLabels[field()!]}
           summary={summary()} step={step()} total={totalSteps()}
@@ -164,6 +173,6 @@ export function NewWorkflowModal(props: { projects: Project[]; models: string[];
         help={[{ key: 'Enter', action: 'Create workflow' }, { key: 'Esc', action: 'Back' }]}>
         <box />
       </GenericModal>
-    </Show>
+    </Show></Show>
   </>;
 }

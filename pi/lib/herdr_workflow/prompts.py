@@ -6,7 +6,7 @@ from pathlib import Path
 from . import paths
 
 UNRESTRICTED_ROLES = {"planner", "worker"}
-ONE_SHOT_ROLES = {"recovery", "archive", "git"}
+ONE_SHOT_ROLES = {"recovery", "archive"}
 # Herdr extensions loaded by explicit --extension flag, skip in discovery to avoid double-loading
 HERDR_EXTENSIONS = {"herdr-telemetry", "herdr-workflow"}
 PI_EXTENSION_DIRS = [paths.AGENT_DIR / "extensions", paths.AGENT_DEF_DIR / "extensions", Path.home() / ".config" / "pi" / "extensions"]
@@ -22,7 +22,6 @@ ROLE_TOOLS = {
     "performance-verifier": "read,bash",
     "openspec-verifier": "read,bash",
     "test-verifier": "read,bash",
-    "git": "read,bash",
     "archive": "read,bash",
 }
 
@@ -88,7 +87,7 @@ def role_prompt(role, change, verification_round=None, workflow_type=None):
         reviews = f".herdr-workflow/{change}/reviews"
         return f"Silent triage for round {verification_round}. Read {reviews}/round-{verification_round}-triage-input.json. Choose only needed reviewers from availableRoles and assign each only relevant changed files or hunks. Write {reviews}/round-{verification_round}-triage.json, then run `herdr-workflow dispatch-verifiers --repo . --change {change}`. No chat output." + restricted
     if role == "archive":
-        return shared + f" Read .herdr-workflow/{change}/reviews/archive-context.md only; do not read review history or telemetry. Follow its instructions, then run `herdr-workflow archive --repo . --change {change}` to hand off to git operations. No chat output." + restricted
+        return shared + f" Read .herdr-workflow/{change}/reviews/archive-context.md only; do not read review history or telemetry. Follow its instructions, then run `herdr-workflow archive --repo . --change {change}` to hand off to deterministic git operations. No chat output." + restricted
     if role == "recovery":
         return f"You are recovery agent for {change}. Read .herdr-workflow/{change}/reviews/recovery-context.json. Use write tool to create .herdr-workflow/{change}/reviews/recovery-plan.json before ending. Its recoveryId must match context and contain exactly one allowlisted action: retry-verification, dispatch-triage, or record-verifier-result (include role). Do not put plan JSON in chat. Do not execute it, mutate state, commit, push, or archive. No chat output." + restricted
     if role == "worker":
@@ -131,6 +130,6 @@ def pi_arguments(role, model, thinking, change, config):
 
     if is_one_shot(role):
         parts.append("--no-session")
-    if role in ("archive", "git"):
+    if role == "archive":
         parts.append("--no-context-files")
     return parts

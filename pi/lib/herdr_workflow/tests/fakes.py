@@ -116,9 +116,20 @@ class FakeHerdr:
             # root_pane (and in "tab"). Both launch_role and create_tab() read it
             # from root_pane["tab_id"].
             return {"root_pane": {"pane_id": pane_id, "tab_id": tab_id}, "tab": {"tab_id": tab_id}}
+        if args[:2] == ("agent", "start"):
+            self._tab_seq += 1
+            self._pane_seq += 1
+            tab_id, pane_id = f"tab-{self._tab_seq}", f"pane-{self._pane_seq}"
+            self.register_pane(pane_id, args[2])
+            self._pane_status[pane_id] = "idle"
+            return {"agent": {"pane_id": pane_id, "tab_id": tab_id}}
         if args[:2] == ("agent", "rename"):
             self.register_pane(args[2], args[3])
             return {}
+        if args[:2] == ("pane", "process-info"):
+            return {"process_info": {"foreground_processes": [{"name": "zsh"}]}}
+        if args[:2] == ("pane", "read"):
+            return {"read": {"text": "❯ "}}
         if args[:2] == ("pane", "run"):
             pane_id = args[2]
             if self.auto_advance_on_submit:

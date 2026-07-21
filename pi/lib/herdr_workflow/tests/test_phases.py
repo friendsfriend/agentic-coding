@@ -26,6 +26,11 @@ class PhaseTestCase(unittest.TestCase):
         # "main" is the upstream base (fixed after init); the workflow itself commits
         # on a separate feature branch, so ensure_base_fresh's rev-parse of the base
         # branch never moves out from under a test that commits during archive/git.
+        self.origin = Path(self._tmp.name) / "origin.git"
+        import subprocess
+        subprocess.run(["git", "init", "--bare", "-q", "-b", "main", str(self.origin)], check=True)
+        self.ctx.git.run("remote", "add", "origin", str(self.origin), cwd=self.repo)
+        self.ctx.git.run("push", "-q", "origin", "main", cwd=self.repo)
         self.ctx.git.run("checkout", "-b", "feature/my-change", cwd=self.repo)
 
     def make_state(self, phase, workflow_type="standard", **overrides):
@@ -62,11 +67,6 @@ class PhaseTestCase(unittest.TestCase):
         tasks = "\n".join(f"- [{mark}] task {i}" for i, mark in enumerate(task_marks))
         (root / "tasks.md").write_text(tasks + "\n" if complete else "")
         (root / "specs" / "delta.md").write_text("## ADDED Requirements\n### Requirement: X\n")
-
-    def _simulate_git_agent_commit(self):
-        """Stand in for the git role: stage and commit whatever the worker/archive left dirty."""
-        self.ctx.git.run("add", "-A", cwd=self.repo)
-        self.ctx.git.run("commit", "-q", "-m", "apply change", cwd=self.repo)
 
     def dirty_file(self, name="README.md", content="# test\nchanged\n"):
         """Modify an already-tracked file so `git diff HEAD` picks it up (untracked
@@ -364,12 +364,16 @@ class ArchiveAndGitOperationsTest(PhaseTestCase):
         state = state_mod.load_state(self.repo, "my-change")
         self.assertEqual(state["phase"], "archive")
 
-    def test_archive_phase_starts_git_operations(self):
+    def test_archive_phase_commits_and_pushes_without_agent(self):
         self.make_state("archive")
+        self.dirty_file()
         commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
         state = state_mod.load_state(self.repo, "my-change")
         self.assertEqual(state["phase"], "committing")
-        self.assertIn("git", state["panes"])
+        self.assertEqual(self.ctx.git.run("log", "-1", "--format=%s", cwd=self.repo), "Apply my-change")
+        self.assertEqual(self.ctx.git.run("rev-parse", "HEAD", cwd=self.repo), self.ctx.git.run("rev-parse", "origin/feature/my-change", cwd=self.repo))
+        self.assertIn(("pane", "close", "pane-git"), self.herdr.calls)
+        self.assertFalse(any(call[:2] == ("agent", "start") for call in self.herdr.calls))
 
     def test_git_operations_subcommand_requires_archive_phase(self):
         self.make_state("developer-review")
@@ -415,7 +419,7 @@ class CmdMessageTest(PhaseTestCase):
         self.herdr.register_pane("pane-worker", name)
         self.herdr.set_agent(name, agent_status="idle")
         commands.cmd_message(self.ctx, Args(repo=str(self.repo), change="my-change", sender="dev", target="worker", text="please hurry"))
-        calls = [call for call in self.herdr.calls if call[:2] == ("pane", "run") and "please hurry" in call[3]]
+        calls = [call for call in self.herdr.calls if call[:2] == ("agent", "send") and "please hurry" in call[3]]
         self.assertEqual(len(calls), 1)
 
     def test_unknown_target_rejected(self):
@@ -425,52 +429,28 @@ class CmdMessageTest(PhaseTestCase):
 
 
 class LaunchRoleTest(PhaseTestCase):
-    def test_uses_tab_create_and_pane_run_not_agent_start(self):
+    def test_creates_tab_then_runs_pi_prompt_without_agent_start(self):
         state = self.make_state("apply")
         commands.launch_role(self.ctx, state, "worker")
         kinds = [call[:2] for call in self.herdr.calls]
+        launch = next(call for call in self.herdr.calls if call[:2] == ("pane", "run"))
         self.assertIn(("tab", "create"), kinds)
+        self.assertIn(("pane", "process-info"), kinds)
         self.assertIn(("pane", "run"), kinds)
         self.assertNotIn(("agent", "start"), kinds)
-        self.assertFalse(any(call[:2] == ("pane", "move") for call in self.herdr.calls))
+        self.assertNotIn(("pane", "send-keys"), kinds)
+        self.assertIn("/skill:herdr-openspec-worker", launch[3])
         self.assertIn("worker", state["panes"])
         self.assertIn("worker", state["tabs"])
 
 
 class PromptSubmissionTest(PhaseTestCase):
-    def _state_with_pane(self, role="worker"):
-        self.herdr.auto_advance_on_submit = False
-        state = self.make_state("apply", panes={role: "pane-1"})
-        name = commands.role_agent_name(state, role)
-        self.herdr.register_pane("pane-1", name)
-        self.herdr.set_agent(name, agent_status="idle")
-        return state
-
-    def test_submits_on_first_pane_run(self):
-        state = self._state_with_pane()
-        name = commands.role_agent_name(state, "worker")
-        self.herdr.after(lambda args: args[:2] == ("pane", "run"), lambda args: self.herdr.set_status(name, "working"))
+    def test_sends_follow_up_through_agent_api(self):
+        state = self.make_state("apply", panes={"worker": "pane-1"})
+        self.herdr.register_pane("pane-1", commands.role_agent_name(state, "worker"))
         commands.prompt_role(self.ctx, state, "worker", text="go")
-        send_keys = [call for call in self.herdr.calls if call[:2] == ("pane", "send-keys")]
-        self.assertEqual(send_keys, [])
-
-    def test_nudges_with_enter_when_prefilled(self):
-        state = self._state_with_pane()
-        name = commands.role_agent_name(state, "worker")
-        self.herdr.after(lambda args: args[:3] == ("pane", "send-keys", "pane-1") and args[3] == "enter", lambda args: self.herdr.set_status(name, "working"))
-        commands.prompt_role(self.ctx, state, "worker", text="go")
-        enter_calls = [call for call in self.herdr.calls if call == ("pane", "send-keys", "pane-1", "enter")]
-        self.assertEqual(len(enter_calls), 1)
-
-    def test_raises_after_exhausting_retries(self):
-        state = self._state_with_pane()
-        (state_mod.workflow_dir(state) / "trace-context").mkdir(parents=True, exist_ok=True)
-        trace_file = state_mod.workflow_dir(state) / "trace-context" / "worker.json"
-        trace_file.write_text("{}")
-        with self.assertRaises(SystemExit) as ctx:
-            commands.prompt_role(self.ctx, state, "worker", text="go")
-        self.assertIn("not acknowledged", str(ctx.exception))
-        self.assertFalse(trace_file.exists())
+        self.assertIn(("agent", "send", "pane-1", "/skill:herdr-openspec-worker go"), self.herdr.calls)
+        self.assertFalse(any(call[:2] in {("pane", "send-keys"), ("wait", "agent-status")} for call in self.herdr.calls))
 
 
 if __name__ == "__main__":
