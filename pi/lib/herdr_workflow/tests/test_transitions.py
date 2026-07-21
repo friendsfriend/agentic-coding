@@ -28,10 +28,12 @@ class TransitionsTest(unittest.TestCase):
         self.assertIn("apply", allowed)
         self.assertIn("verify", allowed["apply"])
 
-    def test_no_openspec_same_shape_as_direct_apply(self):
-        direct = transitions.allowed_transitions({"workflowModules": transitions.WORKFLOW_TYPES["direct-apply"]})
-        no_openspec = transitions.allowed_transitions({"workflowModules": transitions.WORKFLOW_TYPES["no-openspec"]})
-        self.assertEqual(direct, no_openspec)
+    def test_no_openspec_skips_archive(self):
+        modules = transitions.WORKFLOW_TYPES["no-openspec"]
+        allowed = transitions.allowed_transitions({"workflowModules": modules})
+        self.assertNotIn("archive", modules)
+        self.assertNotIn("archive", allowed)
+        self.assertIn("completed", allowed["committing"])
 
     def test_verify_fix_paused_loop(self):
         state = {"workflowModules": transitions.WORKFLOW_TYPES["standard"]}

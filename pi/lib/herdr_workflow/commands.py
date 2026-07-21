@@ -212,6 +212,14 @@ def role_agent_name(state, role):
 
 
 def _close_old_pane(ctx, state, role):
+    """Close role's owning tab before replacing an unknown or stale Pi process."""
+    old_tab = state.get("tabs", {}).get(role)
+    if old_tab:
+        try:
+            ctx.herdr.call("tab", "close", old_tab)
+            return
+        except SystemExit:
+            pass
     old = state.get("panes", {}).get(role)
     if old:
         try:
@@ -268,24 +276,25 @@ def launch_role(ctx, state, role, text=None):
 
 
 def prompt_role(ctx, state, role, text=None):
-    """Send a follow-up through Herdr's Pi integration, not simulated keypresses."""
+    """Submit a follow-up to an active Pi process through pane run."""
     if role not in state.get("panes", {}):
         raise SystemExit(f"no pane for role {role} in prompt_role")
     instructions = text or prompts.role_prompt(role, state["changeId"], state.get("verificationRound"), state.get("workflowType"))
     write_trace_handoff(ctx, state, role)
-    ctx.herdr.call("agent", "send", state["panes"][role], f"/skill:herdr-openspec-{role} {instructions}")
+    ctx.herdr.call("pane", "run", state["panes"][role], f"/skill:herdr-openspec-{role} {instructions}")
 
 
 def start_role(ctx, state, role, text=None):
     if has_role_pane(state, role):
         try:
-            ctx.herdr.call("agent", "get", role_agent_name(state, role))
-        except SystemExit:
+            agent = ctx.herdr.call("agent", "get", role_agent_name(state, role))["agent"]
+        except (KeyError, SystemExit):
             launch_role(ctx, state, role, text)
-        else:
+            return
+        if agent.get("pane_id") == state["panes"][role] and agent.get("agent_status") in {"idle", "working", "blocked"}:
             prompt_role(ctx, state, role, text)
-    else:
-        launch_role(ctx, state, role, text)
+            return
+    launch_role(ctx, state, role, text)
 
 
 def cmd_planner(ctx, args):
@@ -743,6 +752,11 @@ def cmd_close(ctx, args):
     print("workspace closed; branch and checkout kept")
 
 
+def has_openspec_change(state):
+    """Return True iff this change directory exists under openspec/changes/ and needs archiving."""
+    return (Path(state["worktree"]) / "openspec" / "changes" / state["changeId"]).is_dir()
+
+
 def write_archive_context(state):
     results = {role: result.get("verdict") for role, result in state.get("verificationResults", {}).items()}
     path = state_mod.workflow_dir(state) / "reviews" / "archive-context.md"
@@ -751,8 +765,8 @@ def write_archive_context(state):
     path.write_text(f"# Archive context\n\nChange: {state['changeId']}\nBranch: {state['branch']}\nTicket: {state.get('ticketNumber') or '(none)'}\nVerification: {json.dumps(results)}\n\n{instruction} Leave a clean, stageable working tree, do not commit or push, then start git operations.\n")
 
 
-def _start_archive(ctx, state):
-    """Launch archive agent with its native Pi initial prompt."""
+def close_completed_role_panes(ctx, state):
+    """Close built-in planner, triage, worker, verifier, and test-verifier panes; custom roles stay open."""
     for role in ("planner", "triage", "worker", *tiering.VERIFIER_ROLES, tiering.TEST_VERIFIER):
         pane = state["panes"].get(role)
         if pane:
@@ -760,6 +774,11 @@ def _start_archive(ctx, state):
                 ctx.herdr.call("pane", "close", pane)
             except SystemExit:
                 pass
+
+
+def _start_archive(ctx, state):
+    """Launch archive agent with its native Pi initial prompt."""
+    close_completed_role_panes(ctx, state)
     write_archive_context(state)
     launch_role(ctx, state, "archive")
     state_mod.set_phase(state, "archive")
@@ -767,8 +786,26 @@ def _start_archive(ctx, state):
     state_mod.save_state(state)
 
 
+def _complete_git_operations(ctx, state):
+    ensure_workflow_branch(ctx, state)
+    dirty = ctx.git.run("status", "--porcelain", cwd=state["worktree"])
+    if dirty:
+        raise SystemExit("working tree is dirty after git operations; commit or clean first")
+    ensure_base_fresh(ctx, state)
+    for role in ("git", "archive"):
+        pane = state["panes"].get(role)
+        if pane:
+            try:
+                ctx.herdr.call("pane", "close", pane)
+            except SystemExit:
+                pass
+    finalize_workspace_trace(ctx, state)
+    state_mod.set_phase(state, "completed")
+    state_mod.save_state(state)
+
+
 def _start_git_operations(ctx, state):
-    """Stage, commit, and push workflow changes without an agent."""
+    """Stage, commit, push, and complete workflow changes without an agent."""
     lazygit_pane = state["panes"].get("git")
     if lazygit_pane:
         try:
@@ -776,13 +813,23 @@ def _start_git_operations(ctx, state):
         except SystemExit:
             pass
     ensure_workflow_branch(ctx, state)
+    ensure_base_fresh(ctx, state)
     root = state["worktree"]
     ctx.git.run("add", "-A", cwd=root)
     if ctx.git.run("diff", "--cached", "--name-only", cwd=root):
         ctx.git.run("commit", "-m", f"Apply {state['changeId']}", cwd=root)
-        ctx.git.run("push", "--set-upstream", ctx.config["workflow"]["remote"], state["branch"], cwd=root)
-    state_mod.set_phase(state, "committing")
-    state_mod.save_state(state)
+    local_head = ctx.git.run("rev-parse", "HEAD", cwd=root)
+    remote = ctx.config["workflow"]["remote"]
+    try:
+        remote_matches = ctx.git.run("rev-parse", f"{remote}/{state['branch']}", cwd=root) == local_head
+    except SystemExit:
+        remote_matches = False
+    if not remote_matches:
+        try:
+            ctx.git.run("push", "--set-upstream", remote, state["branch"], cwd=root)
+        except SystemExit:
+            raise
+    _complete_git_operations(ctx, state)
 
 
 def cmd_git_operations(ctx, args):
@@ -796,32 +843,22 @@ def cmd_git_operations(ctx, args):
 def cmd_archive(ctx, args):
     state = state_mod.load_state(args.repo, args.change)
     if state["phase"] == "developer-review":
-        if state.get("workflowType") != "no-openspec":
+        if has_openspec_change(state):
             ensure_tasks_complete(state)
-        _start_archive(ctx, state)
-        print("archive started")
+            _start_archive(ctx, state)
+            print("archive started")
+            return
+        close_completed_role_panes(ctx, state)
+        state["developerApproval"] = True
+        _start_git_operations(ctx, state)
+        print("git operations started")
         return
     if state["phase"] == "archive":
         _start_git_operations(ctx, state)
         print("git operations started")
         return
     if state["phase"] == "committing":
-        ensure_workflow_branch(ctx, state)
-        dirty = ctx.git.run("status", "--porcelain", cwd=state["worktree"])
-        if dirty:
-            raise SystemExit("working tree is dirty after git operations; commit or clean first")
-        ensure_base_fresh(ctx, state)
-        for role in ("git", "archive"):
-            pane = state["panes"].get(role)
-            if not pane:
-                continue
-            try:
-                ctx.herdr.call("pane", "close", pane)
-            except SystemExit:
-                pass
-        finalize_workspace_trace(ctx, state)
-        state_mod.set_phase(state, "completed")
-        state_mod.save_state(state)
+        _complete_git_operations(ctx, state)
         print("archive complete")
         return
     raise SystemExit(f"archive requires developer-review, archive, or committing phase, found {state['phase']}")
