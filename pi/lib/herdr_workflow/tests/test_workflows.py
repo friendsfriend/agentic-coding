@@ -70,7 +70,6 @@ class StandardWorkflowTest(PhaseTestCase):
         phases_seen.append(state["phase"])
         self.assertEqual(state["phase"], "committing")
 
-        self._simulate_git_agent_commit()
         commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
         state = state_mod.load_state(self.repo, "my-change")
         phases_seen.append(state["phase"])
@@ -100,7 +99,6 @@ class DirectApplyWorkflowTest(PhaseTestCase):
 
         commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
         commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
-        self._simulate_git_agent_commit()
         commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
         state = state_mod.load_state(self.repo, "my-change")
         self.assertEqual(state["phase"], "completed")
@@ -129,7 +127,6 @@ class NoOpenspecWorkflowTest(PhaseTestCase):
         self.assertEqual(state["phase"], "archive")
 
         commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
-        self._simulate_git_agent_commit()
         commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
         state = state_mod.load_state(self.repo, "my-change")
         self.assertEqual(state["phase"], "completed")

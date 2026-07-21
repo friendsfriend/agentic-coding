@@ -42,7 +42,7 @@ WORKFLOW_MODULES = {
     "git-operations": {
         "entry": "committing",
         "exit": "completed",
-        "roles": ["git"],
+        "roles": [],
         "gate": False,
         "phases": {"committing"},
     },

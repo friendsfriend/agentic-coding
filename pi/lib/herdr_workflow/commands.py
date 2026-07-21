@@ -15,44 +15,19 @@ from pathlib import Path
 from . import effects, findings, gates, paths, prompts, recovery, tiering, tracing, transitions
 from . import state as state_mod
 
-PROMPT_SUBMIT_ATTEMPTS = 3
-PROMPT_VERIFY_WINDOW_MS = 3000  # window to observe the agent leave idle after a submit action
-PROMPT_IDLE_TIMEOUT_MS = 8000
-LAUNCH_SUBMIT_ATTEMPTS = 3
-LAUNCH_SETTLE_TIMEOUT_MS = 10000  # cold pi boot (loading extensions/skills) needs more room than a routine prompt
+PANE_READY_TIMEOUT_SECONDS = 5
 
 
-def _wait_status(ctx, pane_id, status, timeout_ms):
-    """True once `pane_id`'s agent reaches `status` (immediately if already there),
-    False if the window elapses first. Backs every submission-verification check:
-    `herdr agent get` has no sequence counter in this herdr build (no
-    `state_change_seq` field), so status transitions are the only observable signal.
-    """
-    try:
-        ctx.herdr.call("wait", "agent-status", pane_id, "--status", status, "--timeout", str(timeout_ms))
-        return True
-    except SystemExit:
-        return False
-
-
-def _submit_verified(ctx, pane_id, text, confirm_status, confirm_timeout_ms, attempts, not_acknowledged_message):
-    """Submit `text` via `pane run`, confirmed by `confirm_status`. `pane run`'s
-    Enter can race the target pane's readiness (bracketed-paste ingestion on a
-    running pi TUI, or shell-not-settled right after `tab create`) and land the
-    text prefilled-but-unsubmitted. An explicit `send-keys enter` nudge handles
-    that; a bounded ctrl+c + resubmit handles the rest.
-    """
-    for attempt in range(attempts):
-        ctx.herdr.call("pane", "run", pane_id, text)
-        if _wait_status(ctx, pane_id, confirm_status, confirm_timeout_ms):
+def wait_for_pane_ready(ctx, pane_id):
+    """Wait for shell process, then give its prompt a single short settle window."""
+    deadline = ctx.clock.monotonic() + PANE_READY_TIMEOUT_SECONDS
+    while ctx.clock.monotonic() < deadline:
+        process = ctx.herdr.call("pane", "process-info", "--pane", pane_id).get("process_info", {})
+        if process.get("foreground_processes"):
+            ctx.clock.sleep(0.25)
             return
-        ctx.herdr.call("pane", "send-keys", pane_id, "enter")
-        if _wait_status(ctx, pane_id, confirm_status, confirm_timeout_ms):
-            return
-        if attempt == attempts - 1:
-            raise SystemExit(not_acknowledged_message)
-        ctx.herdr.call("pane", "send-keys", pane_id, "ctrl+c")
-        ctx.clock.sleep(0.3)
+        ctx.clock.sleep(0.1)
+    raise SystemExit(f"pane shell did not become ready: {pane_id}")
 
 
 # ---------------------------------------------------------------------------
@@ -245,13 +220,8 @@ def _close_old_pane(ctx, state, role):
             pass
 
 
-def launch_role(ctx, state, role):
-    """Spawn a role's pi agent: `tab create` -> `pane run "pi ..."` -> optional `agent rename`.
-
-    Replaces the old `agent start` + `pane move --new-tab` path (and its 25x
-    "not an available shell" retry loop): `tab create` returns a settled pane,
-    so `pane run` lands in a ready shell without the spawn race.
-    """
+def launch_role(ctx, state, role, text=None):
+    """Spawn Pi with its initial prompt; never emulate terminal input."""
     config = ctx.config
     models = config["models"]
     thinking = config["thinking"]
@@ -260,30 +230,23 @@ def launch_role(ctx, state, role):
     if role.endswith("-verifier") and provider_unhealthy(ctx, model) and models.get("verifier_fallback"):
         telemetry(ctx, state, "provider_circuit_open", role=role, model=model, fallback=models["verifier_fallback"])
         model = models["verifier_fallback"]
-    label = {"planner": "explore", "worker": "apply"}.get(role, role.removesuffix("-verifier"))
     change = state["changeId"]
 
     def spawn(spawn_model):
         _close_old_pane(ctx, state, role)
+        label = {"planner": "explore", "worker": "apply"}.get(role, role.removesuffix("-verifier"))
         tab = ctx.herdr.call("tab", "create", "--workspace", state["workspace"], "--label", label, *prompts.role_env(role, change), "--no-focus")
         pane_id = tab["root_pane"]["pane_id"]
-        tab_id = tab["root_pane"]["tab_id"]  # `tab create`'s result has no top-level tab_id
-        pi_cmd = shlex.join(["pi", *prompts.pi_arguments(role, spawn_model, level, change, config)])
-        try:
-            # Confirm pi actually started (reaches idle once booted), not just that the
-            # launch line landed prefilled in a not-yet-ready shell.
-            _submit_verified(ctx, pane_id, pi_cmd, "idle", LAUNCH_SETTLE_TIMEOUT_MS, LAUNCH_SUBMIT_ATTEMPTS, f"agent launch was not acknowledged for role {role}: {pane_id}")
-        except SystemExit:
-            try:
-                ctx.herdr.call("pane", "close", pane_id)
-            except SystemExit:
-                pass
-            raise
+        tab_id = tab["root_pane"]["tab_id"]
+        instructions = text or prompts.role_prompt(role, change, state.get("verificationRound"), state.get("workflowType"))
+        pi_cmd = shlex.join(["pi", *prompts.pi_arguments(role, spawn_model, level, change, config), f"/skill:herdr-openspec-{role} {instructions}"])
+        wait_for_pane_ready(ctx, pane_id)
+        ctx.herdr.call("pane", "run", pane_id, pi_cmd)
         agent_name = role_agent_name(state, role)
         try:
             ctx.herdr.call("agent", "rename", pane_id, agent_name)
         except SystemExit:
-            pass  # name addressing is a convenience; pane_id addressing still works
+            pass
         state.setdefault("panes", {})[role] = pane_id
         state.setdefault("tabs", {})[role] = tab_id
         state_mod.save_state(state)
@@ -305,44 +268,12 @@ def launch_role(ctx, state, role):
 
 
 def prompt_role(ctx, state, role, text=None):
-    """Submit a role's prompt, verified against the agent leaving idle.
-
-    `pane run` stays the primary submit. On a running pi TUI its Enter can race
-    bracketed-paste ingestion and land prefilled-but-unsubmitted, so submission
-    is verified and, if flat, nudged with an explicit `send-keys enter` before
-    falling back to a bounded ctrl+c + resubmit retry.
-    """
-    name = role_agent_name(state, role)
-    instructions = text or prompts.role_prompt(role, state["changeId"], state.get("verificationRound"), state.get("workflowType"))
-    prompt = f"/skill:herdr-openspec-{role} {instructions}"
-    pane_id = state.get("panes", {}).get(role)
-    if not pane_id:
+    """Send a follow-up through Herdr's Pi integration, not simulated keypresses."""
+    if role not in state.get("panes", {}):
         raise SystemExit(f"no pane for role {role} in prompt_role")
-
-    for attempt in range(PROMPT_SUBMIT_ATTEMPTS):
-        final_attempt = attempt == PROMPT_SUBMIT_ATTEMPTS - 1
-        try:
-            ctx.herdr.call("wait", "agent-status", pane_id, "--status", "idle", "--timeout", str(PROMPT_IDLE_TIMEOUT_MS))
-        except SystemExit:
-            telemetry(ctx, state, "prompt_wait_timeout", role=role)
-            if final_attempt:
-                raise SystemExit(f"agent did not reach idle before prompt: {name}")
-
-        write_trace_handoff(ctx, state, role)
-        ctx.herdr.call("pane", "run", pane_id, prompt)
-
-        if _wait_status(ctx, pane_id, "working", PROMPT_VERIFY_WINDOW_MS):
-            return
-
-        ctx.herdr.call("pane", "send-keys", pane_id, "enter")
-        if _wait_status(ctx, pane_id, "working", PROMPT_VERIFY_WINDOW_MS):
-            return
-
-        if final_attempt:
-            (state_mod.workflow_dir(state) / "trace-context" / f"{role}.json").unlink(missing_ok=True)
-            raise SystemExit(f"agent prompt was not acknowledged: {name}")
-        ctx.herdr.call("pane", "send-keys", pane_id, "ctrl+c")
-        ctx.clock.sleep(0.3)
+    instructions = text or prompts.role_prompt(role, state["changeId"], state.get("verificationRound"), state.get("workflowType"))
+    write_trace_handoff(ctx, state, role)
+    ctx.herdr.call("agent", "send", state["panes"][role], f"/skill:herdr-openspec-{role} {instructions}")
 
 
 def start_role(ctx, state, role, text=None):
@@ -350,10 +281,11 @@ def start_role(ctx, state, role, text=None):
         try:
             ctx.herdr.call("agent", "get", role_agent_name(state, role))
         except SystemExit:
-            launch_role(ctx, state, role)
+            launch_role(ctx, state, role, text)
+        else:
+            prompt_role(ctx, state, role, text)
     else:
-        launch_role(ctx, state, role)
-    prompt_role(ctx, state, role, text)
+        launch_role(ctx, state, role, text)
 
 
 def cmd_planner(ctx, args):
@@ -814,50 +746,41 @@ def cmd_close(ctx, args):
 def write_archive_context(state):
     results = {role: result.get("verdict") for role, result in state.get("verificationResults", {}).items()}
     path = state_mod.workflow_dir(state) / "reviews" / "archive-context.md"
-    if state.get("workflowType") == "no-openspec":
-        instruction = "No OpenSpec project in this workflow; validate only and do NOT run `openspec archive`."
-    else:
-        instruction = f"Run `openspec archive {state['changeId']} --yes` to move `openspec/changes/{state['changeId']}/` into `openspec/changes/archive/`, then validate."
+    instruction = "No OpenSpec project in this workflow; validate only and do NOT run `openspec archive`." if state.get("workflowType") == "no-openspec" else f"Run `openspec archive {state['changeId']} --yes` to move `openspec/changes/{state['changeId']}/` into `openspec/changes/archive/`, then validate."
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"# Archive context\n\nChange: {state['changeId']}\nBranch: {state['branch']}\nTicket: {state.get('ticketNumber') or '(none)'}\nVerification: {json.dumps(results)}\n\n{instruction} Leave a clean, stageable working tree, do not commit or push, then start git operations.\n")
 
 
-def write_git_context(state):
-    results = {role: result.get("verdict") for role, result in state.get("verificationResults", {}).items()}
-    path = state_mod.workflow_dir(state) / "reviews" / "git-context.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"# Git operations\n\nChange: {state['changeId']}\nBranch: {state['branch']}\nTicket: {state.get('ticketNumber') or '(none)'}\nVerification: {json.dumps(results)}\n\nArchive step already ran; any OpenSpec archive move is already sitting uncommitted in the working tree. Run preflight, stage all changes including that archive move, commit, and push.\n")
-
-
 def _start_archive(ctx, state):
-    """Close non-essential panes, launch archive agent."""
+    """Launch archive agent with its native Pi initial prompt."""
     for role in ("planner", "triage", "worker", *tiering.VERIFIER_ROLES, tiering.TEST_VERIFIER):
         pane = state["panes"].get(role)
-        if not pane:
-            continue
-        try:
-            ctx.herdr.call("pane", "close", pane)
-        except SystemExit:
-            pass
-    launch_role(ctx, state, "archive")
+        if pane:
+            try:
+                ctx.herdr.call("pane", "close", pane)
+            except SystemExit:
+                pass
     write_archive_context(state)
-    prompt_role(ctx, state, "archive")
+    launch_role(ctx, state, "archive")
     state_mod.set_phase(state, "archive")
     state["developerApproval"] = True
     state_mod.save_state(state)
 
 
 def _start_git_operations(ctx, state):
-    """Close lazygit pane, launch git agent."""
+    """Stage, commit, and push workflow changes without an agent."""
     lazygit_pane = state["panes"].get("git")
     if lazygit_pane:
         try:
             ctx.herdr.call("pane", "close", lazygit_pane)
         except SystemExit:
             pass
-    launch_role(ctx, state, "git")
-    write_git_context(state)
-    prompt_role(ctx, state, "git")
+    ensure_workflow_branch(ctx, state)
+    root = state["worktree"]
+    ctx.git.run("add", "-A", cwd=root)
+    if ctx.git.run("diff", "--cached", "--name-only", cwd=root):
+        ctx.git.run("commit", "-m", f"Apply {state['changeId']}", cwd=root)
+        ctx.git.run("push", "--set-upstream", ctx.config["workflow"]["remote"], state["branch"], cwd=root)
     state_mod.set_phase(state, "committing")
     state_mod.save_state(state)
 
