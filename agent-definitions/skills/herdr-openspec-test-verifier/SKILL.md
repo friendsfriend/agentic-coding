@@ -22,5 +22,5 @@ No passing verdict without successful full-suite result.
 5. Submit:
 
 ```bash
-herdr-workflow verification-result --repo "$PWD" --change "$HERDR_CHANGE_ID" --role test-verifier --verdict <PASS|FAIL>
+herdr-workflow verification-result --repo "$PWD" --change "$HERDR_CHANGE_ID" --role test-verifier
 ```

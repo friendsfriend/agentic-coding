@@ -1,8 +1,5 @@
-# git-operations-module Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change introduce-no-openspec-workflow. Update Purpose after archive.
-## Requirements
 ### Requirement: Git-operations module
 The system SHALL provide a `git-operations` module that stages, commits, and pushes changes after the archive step. For standard and direct-apply workflows the OpenSpec archive move is performed by the preceding archive module and is staged by git-operations. Git-operations is the final module.
 
@@ -68,4 +65,3 @@ The archive module SHALL run before git-operations and, for standard and direct-
 - **WHEN** the archive agent runs
 - **THEN** it SHALL validate only and SHALL NOT run `openspec archive`
 - **AND** it SHALL advance the workflow to `committing`
-

@@ -16,8 +16,8 @@ herdr-workflow message --repo "$PWD" --change "$HERDR_CHANGE_ID" --from worker -
 ```
 
 4. Run only focused tests covering changed behavior: affected test file/class/module or nearest existing regression test. Never run project-wide test suite; verifier owns that gate. Run relevant non-test build/lint/type checks when cheap.
-5. After validating each implemented task, immediately change its checkbox in `openspec/changes/$HERDR_CHANGE_ID/tasks.md` from `[ ]` to `[x]`. Do not defer checkbox updates until verification.
-6. Start verification only after every task is checked; the workflow rejects unfinished tasks. Do not send an implementation summary—Git diff and OpenSpec artifacts are authoritative:
+5. If `openspec/changes/$HERDR_CHANGE_ID/tasks.md` exists (standard/direct-apply), after validating each implemented task immediately change its checkbox from `[ ]` to `[x]`. Do not defer checkbox updates until verification. If it does not exist (no-openspec), implement from `request.md` instead and skip checkbox tracking entirely.
+6. If `tasks.md` exists, start verification only after every task is checked; the workflow rejects unfinished tasks. If it does not exist, start verification once the change is applied. Do not send an implementation summary—Git diff and OpenSpec artifacts are authoritative:
 
 ```bash
 herdr-workflow verify --repo "$PWD" --change "$HERDR_CHANGE_ID"

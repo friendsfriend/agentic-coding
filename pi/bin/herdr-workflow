@@ -66,7 +66,7 @@ WORKFLOW_MODULES = {
     },
     "archive": {
         "entry": "archive",
-        "exit": "completed",
+        "exit": "committing",
         "roles": ["archive"],
         "gate": False,
         "phases": {"archive"},
@@ -81,9 +81,9 @@ WORKFLOW_MODULES = {
 }
 
 WORKFLOW_TYPES = {
-    "standard": ["plan", "plan-approval", "apply-verify", "developer-approval", "git-operations", "archive"],
-    "direct-apply": ["apply-verify", "developer-approval", "git-operations", "archive"],
-    "no-openspec": ["apply-verify", "developer-approval", "git-operations", "archive"],
+    "standard": ["plan", "plan-approval", "apply-verify", "developer-approval", "archive", "git-operations"],
+    "direct-apply": ["apply-verify", "developer-approval", "archive", "git-operations"],
+    "no-openspec": ["apply-verify", "developer-approval", "archive", "git-operations"],
 }
 
 
@@ -97,7 +97,7 @@ def run(*args, cwd=None, capture=True):
 
 def herdr(*args):
     output = run("herdr", *args)
-    return json.loads(output)["result"] if output else {}
+    return json.loads(output).get("result", {}) if output else {}
 
 
 def load_config():
@@ -165,10 +165,10 @@ def ensure_base_fresh(state):
         raise SystemExit(f"base branch moved: {base} is now {current[:12]}, workflow planned against {state.get('baseCommit', '')[:12]}; rebase/replan explicitly")
 
 
-def ensure_clean(repo):
+def ensure_clean(repo, require_openspec=True):
     if run("git", "status", "--porcelain", cwd=repo):
         raise SystemExit("working tree is dirty; commit or clean it first")
-    if not (Path(repo) / "openspec" / "config.yaml").exists():
+    if require_openspec and not (Path(repo) / "openspec" / "config.yaml").exists():
         raise SystemExit(f"OpenSpec project not found: {repo}/openspec/config.yaml")
 
 
@@ -226,7 +226,7 @@ def role_prompt(role, change, verification_round=None, repo=None):
         reviews = f".herdr-workflow/{change}/reviews"
         return f"Silent triage for round {verification_round}. Read {reviews}/round-{verification_round}-triage-input.json. Choose only needed reviewers from availableRoles and assign each only relevant changed files or hunks. Write {reviews}/round-{verification_round}-triage.json, then run `herdr-workflow dispatch-verifiers --repo . --change {change}`. No chat output." + restricted
     if role == "archive":
-        return shared + f" Read .herdr-workflow/{change}/reviews/archive-context.md only; do not read review history or telemetry. Run preflight, report pass/fail. No chat output." + restricted
+        return shared + f" Read .herdr-workflow/{change}/reviews/archive-context.md only; do not read review history or telemetry. Follow its instructions, then run `herdr-workflow archive --repo . --change {change}` to hand off to git operations. No chat output." + restricted
     if role == "recovery":
         return f"You are recovery agent for {change}. Read .herdr-workflow/{change}/reviews/recovery-context.json. Use write tool to create .herdr-workflow/{change}/reviews/recovery-plan.json before ending. Its recoveryId must match context and contain exactly one allowlisted action: retry-verification, dispatch-triage, or record-verifier-result (include role). Do not put plan JSON in chat. Do not execute it, mutate state, commit, push, or archive. No chat output." + restricted
     if role == "worker":
@@ -234,7 +234,7 @@ def role_prompt(role, change, verification_round=None, repo=None):
             try:
                 wf_state = load_state(repo, change)
                 if wf_state.get("workflowType") == "no-openspec":
-                    return f"Silent worker for {change}. Read .herdr-workflow/{change}/request.md which describes the change. Apply it silently based on the user's description. No task checklist to read — signal completion when done. No chat output."
+                    return f"Silent worker for {change}. Read .herdr-workflow/{change}/request.md which describes the change. Apply it silently based on the user's description. No task checklist to read — signal completion by running `herdr-workflow verify --repo . --change {change}` once the change is applied. No chat output."
             except SystemExit:
                 pass
         return f"Silent worker for {change}. Follow loaded skill. Apply plan silently. Mark each OpenSpec task [x] only after its focused validation; verification rejects unfinished tasks. No chat output."
@@ -405,7 +405,7 @@ def cmd_start(args):
         raise SystemExit("ticket identifier must contain at least one letter or digit")
     source = str(Path(args.repo).expanduser().resolve())
     passphrase = os.environ.pop("HERDR_SSH_PASSPHRASE", "")
-    ensure_clean(source)
+    ensure_clean(source, require_openspec=getattr(args, "workflow_type", "standard") != "no-openspec")
     remote = config["workflow"]["remote"]
     unlock_ssh_keys(source, remote, passphrase)
     base_branch = remote_default_branch(source, remote)
@@ -584,14 +584,13 @@ def prompt_role(state, role, text=None):
         if not attempt and agent.get("agent_status") == "working":
             time.sleep(1.5)
         baseline = agent.get("state_change_seq")
-        # Wait for Pi to finish starting up before sending prompt
+        # Wait for Pi to reach idle before submitting the prompt
         try:
-            herdr("wait", "output", pane_id, "--match", "ctrl+o", "--timeout", "8000")
+            herdr("wait", "agent-status", pane_id, "--status", "idle", "--timeout", "8000")
         except SystemExit:
             telemetry(state, "prompt_wait_timeout", role=role)
         write_trace_handoff(state, role)
-        herdr("pane", "send-text", pane_id, prompt)
-        herdr("pane", "send-keys", pane_id, "enter")
+        herdr("pane", "run", pane_id, prompt)
         # When integration doesn't report state_change_seq, assume prompt delivered
         if baseline is None:
             return
@@ -1204,18 +1203,23 @@ def cmd_close(args):
 def write_archive_context(state):
     results = {role: result.get("verdict") for role, result in state.get("verificationResults", {}).items()}
     path = workflow_dir(state) / "reviews" / "archive-context.md"
-    path.write_text(f"# Archive context\n\nChange: {state['changeId']}\nBranch: {state['branch']}\nTicket: {state.get('ticketNumber') or '(none)'}\nVerification: {json.dumps(results)}\n\nRun preflight immediately before commit and push.\n")
+    if state.get("workflowType") == "no-openspec":
+        instruction = "No OpenSpec project in this workflow; validate only and do NOT run `openspec archive`."
+    else:
+        instruction = f"Run `openspec archive {state['changeId']} --yes` to move `openspec/changes/{state['changeId']}/` into `openspec/changes/archive/`, then validate."
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"# Archive context\n\nChange: {state['changeId']}\nBranch: {state['branch']}\nTicket: {state.get('ticketNumber') or '(none)'}\nVerification: {json.dumps(results)}\n\n{instruction} Leave a clean, stageable working tree, do not commit or push, then start git operations.\n")
 
 
 def write_git_context(state):
     results = {role: result.get("verdict") for role, result in state.get("verificationResults", {}).items()}
     path = workflow_dir(state) / "reviews" / "git-context.md"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"# Git operations\n\nChange: {state['changeId']}\nBranch: {state['branch']}\nTicket: {state.get('ticketNumber') or '(none)'}\nVerification: {json.dumps(results)}\n\nRun preflight, stage implementation changes, commit, and push.\n")
+    path.write_text(f"# Git operations\n\nChange: {state['changeId']}\nBranch: {state['branch']}\nTicket: {state.get('ticketNumber') or '(none)'}\nVerification: {json.dumps(results)}\n\nArchive step already ran; any OpenSpec archive move is already sitting uncommitted in the working tree. Run preflight, stage all changes including that archive move, commit, and push.\n")
 
 
-def _start_git_operations(state):
-    """Close non-essential panes, create git tab, launch git agent."""
+def _start_archive(state):
+    """Close non-essential panes, launch archive agent."""
     for role in ("planner", "triage", "worker", *VERIFIER_ROLES, TEST_VERIFIER):
         pane = state["panes"].get(role)
         if not pane:
@@ -1224,28 +1228,33 @@ def _start_git_operations(state):
             herdr("pane", "close", pane)
         except SystemExit:
             pass
-    # Close original lazygit pane before creating git-ops tab
+    launch_role(state, "archive")
+    write_archive_context(state)
+    prompt_role(state, "archive")
+    set_phase(state, "archive")
+    state["developerApproval"] = True
+    save_state(state)
+
+
+def _start_git_operations(state):
+    """Close lazygit pane, create git tab, launch git agent."""
     lazygit_pane = state["panes"].get("git")
     if lazygit_pane:
         try:
             herdr("pane", "close", lazygit_pane)
         except SystemExit:
             pass
-    try:
-        launch_role(state, "git")
-    except SystemExit:
-        raise
+    launch_role(state, "git")
     write_git_context(state)
     prompt_role(state, "git")
     set_phase(state, "committing")
-    state["developerApproval"] = True
     save_state(state)
 
 
 def cmd_git_operations(args):
     state = load_state(args.repo, args.change)
-    if state["phase"] != "developer-review":
-        raise SystemExit(f"git-operations requires developer-review phase, found {state['phase']}")
+    if state["phase"] != "archive":
+        raise SystemExit(f"git-operations requires archive phase, found {state['phase']}")
     _start_git_operations(state)
     print("git operations started")
 
@@ -1253,6 +1262,12 @@ def cmd_git_operations(args):
 def cmd_archive(args):
     state = load_state(args.repo, args.change)
     if state["phase"] == "developer-review":
+        if state.get("workflowType") != "no-openspec":
+            ensure_tasks_complete(state)
+        _start_archive(state)
+        print("archive started")
+        return
+    if state["phase"] == "archive":
         _start_git_operations(state)
         print("git operations started")
         return
@@ -1261,8 +1276,6 @@ def cmd_archive(args):
         dirty = run("git", "status", "--porcelain", cwd=state["worktree"])
         if dirty:
             raise SystemExit(f"working tree is dirty after git operations; commit or clean first")
-        if state.get("workflowType") != "no-openspec":
-            ensure_tasks_complete(state)
         ensure_base_fresh(state)
         for role in ("git", "archive"):
             pane = state["panes"].get(role)
@@ -1277,21 +1290,7 @@ def cmd_archive(args):
         save_state(state)
         print("archive complete")
         return
-    if state["phase"] == "archive":
-        for role in ("git", "archive"):
-            pane = state["panes"].get(role)
-            if not pane:
-                continue
-            try:
-                herdr("pane", "close", pane)
-            except SystemExit:
-                pass
-        finalize_workspace_trace(state)
-        set_phase(state, "completed")
-        save_state(state)
-        print("archive complete")
-        return
-    raise SystemExit(f"archive requires developer-review, committing, or archive phase, found {state['phase']}")
+    raise SystemExit(f"archive requires developer-review, archive, or committing phase, found {state['phase']}")
 
 
 def cmd_preflight_archive(args):

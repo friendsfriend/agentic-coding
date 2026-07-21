@@ -22,5 +22,5 @@ Use visible chat updates for scope, progress, findings, and blockers. JSONL is d
 5. Submit report:
 
 ```bash
-herdr-workflow verification-result --repo "$PWD" --change "$HERDR_CHANGE_ID" --role agents-verifier --verdict <PASS|FAIL>
+herdr-workflow verification-result --repo "$PWD" --change "$HERDR_CHANGE_ID" --role agents-verifier
 ```
