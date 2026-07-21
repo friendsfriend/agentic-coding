@@ -73,6 +73,11 @@ export default function (pi: ExtensionAPI) {
   const recordProviderFailure = (status: number) => { if (status !== 429 && status < 500) return; try { const health = JSON.parse(readFileSync(healthPath, 'utf8')) as Record<string, { failures: number; lastFailure: string }>; const provider = model.split('/')[0] ?? 'unknown'; const previous = health[provider]; const recent = previous && Date.now() - Date.parse(previous.lastFailure) < 120_000; health[provider] = { failures: recent ? previous.failures + 1 : 1, lastFailure: new Date().toISOString() }; writeFileSync(healthPath, JSON.stringify(health)); } catch { /* advisory */ } };
   pi.on('before_agent_start', (event: any, ctx: any) => { model = modelName(ctx.model) ?? model; const handoff = consumeHandoff(); const session = ctx.sessionManager?.getSessionId?.() ?? 'unknown'; const leaf = handoff?.messageId ?? ctx.sessionManager?.getLeafEntry?.()?.id ?? hex(8); const prompt = String(event.prompt ?? ''); operation = start('agent.operation', handoff?.context, { ...handoff?.attributes, 'herdr.message.id': String(leaf), 'herdr.message.hash': createHash('sha256').update(prompt).digest('hex'), 'herdr.message.bytes': Buffer.byteLength(prompt), ...(captureContent() ? { 'herdr.content.input': prompt } : {}), 'pi.session.id': String(session), 'gen_ai.operation.name': 'invoke_agent' }); });
   pi.on('model_select', (event: any) => { model = modelName(event.model) ?? 'unknown'; write('model_selected', { model }); });
+  // Boot-ready marker: session_start fires when pi has finished booting (extensions/skills
+  // loaded) and is idle at the prompt — the moment the launching workflow can safely prompt.
+  // agent_start fires only AFTER the first prompt is submitted, so it is too late for a
+  // launch handshake and would deadlock the parent's pre-prompt marker wait.
+  pi.on('session_start', () => { if (root && role) try { mkdirSync(join(root, 'ready'), { recursive: true }); writeFileSync(join(root, 'ready', role), String(process.pid)); } catch { /* ready marker is best effort; parent falls back to nudge/resubmit */ } });
   pi.on('agent_start', () => write('pi_agent_start', { model }));
   pi.on('agent_end', () => write('pi_agent_end'));
   pi.on('agent_settled', (_event, ctx) => { end(operation); operation = undefined; write('pi_agent_settled'); if (oneShot) ctx.shutdown(); });

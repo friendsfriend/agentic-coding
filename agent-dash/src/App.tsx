@@ -93,6 +93,7 @@ export function App(props: { repo: string; change: string; profile?: 'test'; key
     if (active.role === 'planner') return { text: 'Planning', working: true };
     if (active.role.endsWith('verifier')) return { text: 'Verifying', working: true };
     if (active.role === 'archive') return { text: 'Archiving', working: true };
+    if (active.role === 'git') return { text: 'Committing', working: true };
     return { text: 'Applying', working: true };
   });
 

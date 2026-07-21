@@ -35,22 +35,39 @@ def _wait_status(ctx, pane_id, status, timeout_ms):
         return False
 
 
-def _submit_verified(ctx, pane_id, text, confirm_status, confirm_timeout_ms, attempts, not_acknowledged_message):
-    """Submit `text` via `pane run`, confirmed by `confirm_status`. `pane run`'s
-    Enter can race the target pane's readiness (bracketed-paste ingestion on a
-    running pi TUI, or shell-not-settled right after `tab create`) and land the
-    text prefilled-but-unsubmitted. An explicit `send-keys enter` nudge handles
-    that; a bounded ctrl+c + resubmit handles the rest.
+def _ready_marker(state, role):
+    return state_mod.workflow_dir(state) / "ready" / role
+
+
+def _submit_launch(ctx, state, role, pane_id, pi_cmd):
+    """Submit the `pi ...` launch line and confirm pi actually booted via the
+    ready-marker the herdr-telemetry extension writes on `session_start`.
+
+    The marker is deterministic proof pi finished booting (extensions/skills
+    loaded, idle at the prompt) — the moment we can safely prompt it. It beats
+    an `agent-status idle` poll, which can't tell "pi booted and idle" from
+    "the launch line was swallowed by a not-yet-ready shell and the pane is
+    still idle".
+
+    No enter-nudge here (unlike prompt submission): once pi has booted, a bare
+    Enter would submit an EMPTY prompt to it. The only failure this handles is
+    `pane run "pi ..."` not landing in the shell at all, so the retry is
+    ctrl+c (clear any half-typed shell line) then resubmit the full launch.
     """
-    for attempt in range(attempts):
-        ctx.herdr.call("pane", "run", pane_id, text)
-        if _wait_status(ctx, pane_id, confirm_status, confirm_timeout_ms):
-            return
-        ctx.herdr.call("pane", "send-keys", pane_id, "enter")
-        if _wait_status(ctx, pane_id, confirm_status, confirm_timeout_ms):
-            return
-        if attempt == attempts - 1:
-            raise SystemExit(not_acknowledged_message)
+    marker = _ready_marker(state, role)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.unlink(missing_ok=True)  # clear any stale marker from a prior launch of this role
+    poll_ms = 250
+    for attempt in range(LAUNCH_SUBMIT_ATTEMPTS):
+        ctx.herdr.call("pane", "run", pane_id, pi_cmd)
+        waited = 0
+        while waited < LAUNCH_SETTLE_TIMEOUT_MS:
+            if marker.exists():
+                return
+            ctx.clock.sleep(poll_ms / 1000)
+            waited += poll_ms
+        if attempt == LAUNCH_SUBMIT_ATTEMPTS - 1:
+            raise SystemExit(f"agent launch was not acknowledged for role {role}: {pane_id}")
         ctx.herdr.call("pane", "send-keys", pane_id, "ctrl+c")
         ctx.clock.sleep(0.3)
 
@@ -248,9 +265,11 @@ def _close_old_pane(ctx, state, role):
 def launch_role(ctx, state, role):
     """Spawn a role's pi agent: `tab create` -> `pane run "pi ..."` -> optional `agent rename`.
 
-    Replaces the old `agent start` + `pane move --new-tab` path (and its 25x
-    "not an available shell" retry loop): `tab create` returns a settled pane,
-    so `pane run` lands in a ready shell without the spawn race.
+    `tab create` returns a settled pane, so `pane run` lands in a ready shell.
+    Boot is confirmed deterministically by the ready-marker file the agent's
+    herdr-telemetry extension writes on `session_start` (see `_submit_launch`),
+    not by an `agent-status idle` poll that can't distinguish a booted-idle
+    agent from a launch line swallowed by a not-yet-ready shell.
     """
     config = ctx.config
     models = config["models"]
@@ -270,9 +289,7 @@ def launch_role(ctx, state, role):
         tab_id = tab["root_pane"]["tab_id"]  # `tab create`'s result has no top-level tab_id
         pi_cmd = shlex.join(["pi", *prompts.pi_arguments(role, spawn_model, level, change, config)])
         try:
-            # Confirm pi actually started (reaches idle once booted), not just that the
-            # launch line landed prefilled in a not-yet-ready shell.
-            _submit_verified(ctx, pane_id, pi_cmd, "idle", LAUNCH_SETTLE_TIMEOUT_MS, LAUNCH_SUBMIT_ATTEMPTS, f"agent launch was not acknowledged for role {role}: {pane_id}")
+            _submit_launch(ctx, state, role, pane_id, pi_cmd)
         except SystemExit:
             try:
                 ctx.herdr.call("pane", "close", pane_id)
@@ -743,12 +760,32 @@ def cmd_dispatch_verifiers(ctx, args):
         return
 
     state_mod.set_phase(state, "verify")
+    # Record every planned verifier's start time BEFORE launching. launch_role only
+    # sets this on success, so a verifier that fails to boot would otherwise never be
+    # in verificationRoleStartedAt and cmd_check_timeout (which only inspects started
+    # roles) could never flag it — the round would hang forever waiting for a result
+    # that never comes. Seeding here makes a failed launch a recoverable timeout.
+    now = ctx.clock.now().isoformat()
+    started = state.setdefault("verificationRoleStartedAt", {})
+    for role in plan:
+        started[role] = now
     state_mod.save_state(state)
     write_review_context(ctx, state, state["verificationTier"], plan)
     telemetry(ctx, state, "verification_started", tier=state["verificationTier"], roles=list(plan))
+    failed = []
     for role in plan:
-        start_role(ctx, state, role)
-    print(f"verification started: round {state['verificationRound']} ({state['verificationTier']}, {len(plan)} selected verifiers)")
+        try:
+            start_role(ctx, state, role)
+        except SystemExit as error:
+            # Isolate per-verifier launch failures: one bad boot must not orphan the
+            # verifiers already launched in this loop. Failed roles keep their seeded
+            # start time, so cmd_check_timeout will pick them up and route to recovery.
+            failed.append(role)
+            telemetry(ctx, state, "verifier_launch_failed", role=role, error=str(error))
+    if failed:
+        print(f"verification started with launch failures: {', '.join(failed)} (will time out for recovery)")
+    else:
+        print(f"verification started: round {state['verificationRound']} ({state['verificationTier']}, {len(plan)} selected verifiers)")
 
 
 def cmd_verification_result(ctx, args):
@@ -887,7 +924,10 @@ def cmd_archive(ctx, args):
         dirty = ctx.git.run("status", "--porcelain", cwd=state["worktree"])
         if dirty:
             raise SystemExit("working tree is dirty after git operations; commit or clean first")
-        ensure_base_fresh(ctx, state)
+        # ensure_base_fresh runs in preflight-archive (pre-push), not here: by now the
+        # git agent has already committed and pushed, so raising would wedge the workflow
+        # in `committing` with no gate to advance it and no way to close (close needs
+        # `completed`). Post-push, finalize.
         for role in ("git", "archive"):
             pane = state["panes"].get(role)
             if not pane:
@@ -909,6 +949,7 @@ def cmd_preflight_archive(ctx, args):
     if state["phase"] not in ("archive", "committing"):
         raise SystemExit(f"archive preflight requires archive or committing phase, found {state['phase']}")
     ensure_workflow_branch(ctx, state)
+    ensure_base_fresh(ctx, state)  # base-freshness must gate BEFORE commit/push, never after
     print(f"archive preflight passed: {state['branch']}")
 
 

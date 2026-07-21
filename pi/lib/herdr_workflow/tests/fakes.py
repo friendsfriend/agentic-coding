@@ -61,6 +61,14 @@ class FakeHerdr:
         self._pane_seq = 0
         self.handlers = []      # [(predicate(args) -> bool, handler(args) -> dict)]
         self.after_hooks = []   # [(predicate(args) -> bool, effect(args) -> None)]
+        # Marker seam: mirrors the herdr-telemetry extension writing
+        # <worktree>/.herdr-workflow/<change>/ready/<role> on agent_start, so
+        # _submit_launch's deterministic marker wait resolves in tests. Set via
+        # enable_ready_markers(worktree, change); when armed, a pi-launch `pane
+        # run` (command containing `--name <change>-<role>`) writes the marker.
+        self._marker_worktree = None
+        self._marker_change = None
+        self._marker_skip_roles = set()  # roles whose launch marker the fake withholds (simulate boot failure)
         # Default: `pane run` settles the target pane into the status a real
         # submission would reach — "idle" for a pi cold-boot (first `pane run` on a
         # pane), "working" for a prompt on an already-launched agent (any later
@@ -90,6 +98,34 @@ class FakeHerdr:
     def set_status(self, pane_id_or_name, status):
         pane_id = self._agent_to_pane.get(pane_id_or_name, pane_id_or_name)
         self._pane_status[pane_id] = status
+
+    def enable_ready_markers(self, worktree, change, skip_roles=()):
+        """Arm the fake to write the session_start ready-marker on pi launches.
+
+        `skip_roles` withholds the marker for those roles, simulating a pi that
+        never finishes booting so `_submit_launch` raises for that role only.
+        """
+        self._marker_worktree = Path(worktree)
+        self._marker_change = change
+        self._marker_skip_roles = set(skip_roles)
+
+    def _maybe_write_marker(self, command):
+        if not self._marker_worktree or "--name " not in command:
+            return
+        tokens = command.split()
+        try:
+            name = tokens[tokens.index("--name") + 1]
+        except (ValueError, IndexError):
+            return
+        prefix = f"{self._marker_change}-"
+        if not name.startswith(prefix):
+            return
+        role = name[len(prefix):]
+        if role in self._marker_skip_roles:
+            return
+        marker = self._marker_worktree / ".herdr-workflow" / self._marker_change / "ready" / role
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("0")
 
     def call(self, *args):
         self.calls.append(args)
@@ -121,11 +157,15 @@ class FakeHerdr:
             return {}
         if args[:2] == ("pane", "run"):
             pane_id = args[2]
+            command = args[3] if len(args) > 3 else ""
+            is_launch = pane_id not in self._pane_status
+            if is_launch:
+                self._maybe_write_marker(command)  # telemetry extension writes ready-marker on agent_start
             if self.auto_advance_on_submit:
                 # First `pane run` on a pane is the pi launch (settles to idle once
                 # booted); any later one is a prompt on an already-running agent
                 # (settles to working).
-                self._pane_status[pane_id] = "working" if pane_id in self._pane_status else "idle"
+                self._pane_status[pane_id] = "working" if not is_launch else "idle"
             return {}
         if args[:2] in {("pane", "close"), ("pane", "send-keys"), ("notification", "show")}:
             return {}

@@ -86,6 +86,7 @@ class GoldenStateShapeTest(unittest.TestCase):
             subprocess.run(["git", "push", "-q", "origin", "main"], cwd=repo, check=True)
             subprocess.run(["git", "remote", "set-head", "origin", "main"], cwd=repo, check=True)
             herdr = FakeHerdr()
+            herdr.enable_ready_markers(repo, "golden-change")
             ctx = make_context(herdr=herdr, clock=FakeClock())
 
             def workspace_create(_args):

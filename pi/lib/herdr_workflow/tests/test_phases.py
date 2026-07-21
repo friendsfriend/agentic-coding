@@ -21,6 +21,7 @@ class PhaseTestCase(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.repo = init_repo(Path(self._tmp.name) / "repo")
         self.herdr = FakeHerdr()
+        self.herdr.enable_ready_markers(self.repo, "my-change")
         self.clock = FakeClock()
         self.ctx = make_context(herdr=self.herdr, clock=self.clock)
         # "main" is the upstream base (fixed after init); the workflow itself commits
@@ -225,6 +226,45 @@ class CmdDispatchVerifiersTest(PhaseTestCase):
         self.assertEqual(state["phase"], "verify")
         self.assertIn("quality-verifier", state["panes"])
 
+    def test_launch_failure_of_one_verifier_does_not_orphan_others(self):
+        # A verifier whose pi never boots must not abort the dispatch loop: the other
+        # verifier still launches, and BOTH keep a seeded start time so cmd_check_timeout
+        # can flag the failed one for recovery (it never records a result otherwise).
+        self.herdr.enable_ready_markers(self.repo, "my-change", skip_roles={"agents-verifier"})
+        state = self._prepare_triage()
+        triage_input = json.loads(commands.triage_input_path(state).read_text())
+        files = triage_input["allChangedFiles"]
+        plan = {"roles": {
+            "quality-verifier": {"reason": "code change", "files": files},
+            "agents-verifier": {"reason": "agent change", "files": files},
+        }}
+        commands.triage_plan_path(state).write_text(json.dumps(plan))
+        commands.cmd_dispatch_verifiers(self.ctx, Args(repo=str(self.repo), change="my-change"))
+        state = state_mod.load_state(self.repo, "my-change")
+        self.assertEqual(state["phase"], "verify")
+        self.assertIn("quality-verifier", state["panes"])  # healthy verifier still launched
+        self.assertNotIn("agents-verifier", state["panes"])  # failed launch left no pane
+        # both seeded so the failed one is a recoverable timeout, not a silent hang
+        self.assertIn("quality-verifier", state["verificationRoleStartedAt"])
+        self.assertIn("agents-verifier", state["verificationRoleStartedAt"])
+
+    def test_timeout_flags_verifier_that_never_launched(self):
+        self.herdr.enable_ready_markers(self.repo, "my-change", skip_roles={"agents-verifier"})
+        state = self._prepare_triage()
+        triage_input = json.loads(commands.triage_input_path(state).read_text())
+        files = triage_input["allChangedFiles"]
+        plan = {"roles": {
+            "quality-verifier": {"reason": "code change", "files": files},
+            "agents-verifier": {"reason": "agent change", "files": files},
+        }}
+        commands.triage_plan_path(state).write_text(json.dumps(plan))
+        commands.cmd_dispatch_verifiers(self.ctx, Args(repo=str(self.repo), change="my-change"))
+        self.clock.advance(int(self.ctx.config["workflow"].get("verification_timeout_seconds", 600)) + 1)
+        commands.cmd_check_timeout(self.ctx, Args(repo=str(self.repo), change="my-change"))
+        state = state_mod.load_state(self.repo, "my-change")
+        self.assertEqual(state["phase"], "paused")
+        self.assertIn("agents-verifier", state["verificationTimeoutRoles"])
+
     def test_empty_plan_goes_straight_to_developer_review(self):
         state = self._prepare_triage()
         commands.triage_plan_path(state).write_text(json.dumps({"roles": {}}))
@@ -388,6 +428,36 @@ class ArchiveAndGitOperationsTest(PhaseTestCase):
         with self.assertRaises(SystemExit):
             commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
 
+    def _advance_base_branch(self):
+        """Move `main` forward, simulating an upstream merge during the workflow."""
+        self.ctx.git.run("checkout", "main", cwd=self.repo)
+        (self.repo / "UPSTREAM.md").write_text("moved\n")
+        self.ctx.git.run("add", "-A", cwd=self.repo)
+        self.ctx.git.run("commit", "-q", "-m", "upstream moved", cwd=self.repo)
+        self.ctx.git.run("checkout", "feature/my-change", cwd=self.repo)
+
+    def test_committing_completes_even_when_base_moved(self):
+        # Bug: after the git agent already committed and pushed, a moved base must
+        # NOT wedge the workflow in `committing` (no gate to advance, close needs
+        # `completed`). Post-push, finalize regardless.
+        self.make_state("committing")
+        self._advance_base_branch()
+        commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
+        state = state_mod.load_state(self.repo, "my-change")
+        self.assertEqual(state["phase"], "completed")
+
+    def test_preflight_archive_rejects_moved_base(self):
+        # The base-freshness gate belongs pre-push, in preflight, where stopping is safe.
+        self.make_state("committing")
+        self._advance_base_branch()
+        with self.assertRaises(SystemExit) as ctx:
+            commands.cmd_preflight_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
+        self.assertIn("base branch moved", str(ctx.exception))
+
+    def test_preflight_archive_passes_on_fresh_base(self):
+        self.make_state("committing")
+        commands.cmd_preflight_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))  # no raise
+
 
 class CheckTimeoutTest(PhaseTestCase):
     def test_reports_no_timeout_when_not_verifying(self):
@@ -471,6 +541,33 @@ class PromptSubmissionTest(PhaseTestCase):
             commands.prompt_role(self.ctx, state, "worker", text="go")
         self.assertIn("not acknowledged", str(ctx.exception))
         self.assertFalse(trace_file.exists())
+
+
+class LaunchReadyMarkerTest(PhaseTestCase):
+    """launch confirms boot via the ready-marker, not an agent-status heuristic."""
+
+    def test_launch_succeeds_when_marker_appears(self):
+        state = self.make_state("apply", panes={"dashboard": "pane-dash"})
+        commands.launch_role(self.ctx, state, "worker")
+        self.assertTrue((state_mod.workflow_dir(state) / "ready" / "worker").exists())
+        self.assertIn("worker", state["panes"])
+
+    def test_launch_raises_and_closes_pane_when_marker_never_appears(self):
+        self.herdr.enable_ready_markers(self.repo, "never-matches")  # disarm marker for my-change launches
+        state = self.make_state("apply", panes={"dashboard": "pane-dash"})
+        with self.assertRaises(SystemExit) as ctx:
+            commands.launch_role(self.ctx, state, "worker")
+        self.assertIn("not acknowledged", str(ctx.exception))
+        self.assertTrue(any(call[:2] == ("pane", "close") for call in self.herdr.calls))
+
+    def test_launch_clears_stale_marker_before_confirming(self):
+        state = self.make_state("apply", panes={"dashboard": "pane-dash"})
+        stale = state_mod.workflow_dir(state) / "ready" / "worker"
+        stale.parent.mkdir(parents=True, exist_ok=True)
+        stale.write_text("stale")
+        self.herdr.enable_ready_markers(self.repo, "never-matches")  # fake will not re-create it
+        with self.assertRaises(SystemExit):
+            commands.launch_role(self.ctx, state, "worker")  # stale marker must not be mistaken for boot
 
 
 if __name__ == "__main__":

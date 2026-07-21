@@ -104,7 +104,7 @@ export interface DashboardData {
   recoveryPlan?: { recoveryId: string; action: string; role?: string };
 }
 
-export const operationalPhases = ['explore', 'proposed', 'apply', 'fix', 'triage', 'verify', 'paused', 'developer-review', 'archive', 'completed'];
+export const operationalPhases = ['explore', 'proposed', 'apply', 'fix', 'triage', 'verify', 'paused', 'developer-review', 'archive', 'committing', 'completed'];
 
 const read = (path: string) => existsSync(path) ? readFileSync(path, 'utf8') : '';
 
@@ -218,7 +218,8 @@ export function loadDashboard(repo: string, change: string): DashboardData {
     review: latestReview(join(workflowRoot, 'reviews')),
     reviewHistory: reviewHistory(join(workflowRoot, 'reviews')),
     agents: Object.entries(state.panes)
-      .filter(([role]) => !['git', 'dashboard'].includes(role))
+      // `git` is a lazygit pane until git-operations starts; from `committing` on it is the git agent, so surface it then.
+      .filter(([role]) => role !== 'dashboard' && (role !== 'git' || ['committing', 'completed', 'closed'].includes(state.phase)))
       .map(([role, pane]) => ({ role, status: statuses.get(pane) ?? (role === 'planner' && closedPlannerPhases.has(state.phase) ? 'closed' : 'not started'), model: role === 'worker' ? state.workerModel : state.verificationModels?.[role] })),
     updated: new Date().toLocaleTimeString(),
     health: { dirty: !!git(state.worktree, 'status', '--porcelain'), ahead: Number(git(state.worktree, 'rev-list', '--count', '@{upstream}..HEAD')) || 0, behind: Number(git(state.worktree, 'rev-list', '--count', 'HEAD..@{upstream}')) || 0, branch: git(state.worktree, 'branch', '--show-current') },
