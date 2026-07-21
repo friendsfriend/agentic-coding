@@ -5,7 +5,7 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-workflow="$root/pi/bin/herdr-workflow"
+lib="$root/pi/lib"
 home=$(mktemp -d)
 trap 'rm -rf "$home"' EXIT
 
@@ -35,12 +35,32 @@ fail() {
 # Helper: run a Python snippet that has access to the workflow module
 run_py() {
     python3 -c "
-import importlib.machinery, json, os, sys, tempfile
+import json, os, sys, tempfile
 from pathlib import Path
 
-# Load the workflow module
-loader = importlib.machinery.SourceFileLoader('hw', '$workflow')
-mod = loader.load_module()
+sys.path.insert(0, '$lib')
+from herdr_workflow import commands, effects, paths, prompts
+
+class _ModuleProxy:
+    \"\"\"Forwards mod.X reads/writes to whichever submodule actually defines X,
+    so this test script's pre-refactor-style attribute pokes keep working against
+    the decomposed herdr_workflow package.\"\"\"
+    _targets = (paths, prompts, effects, commands)
+
+    def __getattr__(self, name):
+        for target in self._targets:
+            if hasattr(target, name):
+                return getattr(target, name)
+        raise AttributeError(name)
+
+    def __setattr__(self, name, value):
+        for target in self._targets:
+            if hasattr(target, name):
+                setattr(target, name, value)
+                return
+        setattr(paths, name, value)
+
+mod = _ModuleProxy()
 # Override AGENT_DIR to test home
 mod.AGENT_DIR = Path('$home/.pi/agent')
 mod.PI_EXTENSION_DIRS = [Path('$home/.pi/agent/extensions'), mod.AGENT_DEF_DIR / 'extensions']
