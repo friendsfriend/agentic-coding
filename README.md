@@ -49,3 +49,13 @@ Start managed workflow inside Herdr:
 ```bash
 herdr-manager
 ```
+
+## Testing
+
+`herdr-workflow` (`pi/lib/herdr_workflow/`) has a stdlib `unittest` suite covering
+pure logic, per-phase commands, and full per-workflow-type runs against fakes:
+
+```bash
+./scripts/test-workflow.sh    # herdr_workflow package: unit + phase + workflow tests
+./scripts/test-plugin-system.sh  # agent-plugin subsystem integration test
+```
