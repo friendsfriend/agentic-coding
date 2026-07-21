@@ -51,7 +51,7 @@ WORKFLOW_MODULES = {
 WORKFLOW_TYPES = {
     "standard": ["plan", "plan-approval", "apply-verify", "developer-approval", "archive", "git-operations"],
     "direct-apply": ["apply-verify", "developer-approval", "archive", "git-operations"],
-    "no-openspec": ["apply-verify", "developer-approval", "archive", "git-operations"],
+    "no-openspec": ["apply-verify", "developer-approval", "git-operations"],
 }
 
 

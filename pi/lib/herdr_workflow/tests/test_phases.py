@@ -5,7 +5,18 @@ from pathlib import Path
 
 from herdr_workflow import commands
 from herdr_workflow import state as state_mod
-from herdr_workflow.tests.fakes import FakeClock, FakeHerdr, init_repo, make_context
+from herdr_workflow.tests.fakes import FakeClock, FakeGit, FakeHerdr, init_repo, make_context
+
+
+class FailFirstPushGit(FakeGit):
+    def __init__(self):
+        self.fail_push = True
+
+    def run(self, *args, cwd):
+        if args[0] == "push" and self.fail_push:
+            self.fail_push = False
+            raise SystemExit("push failed")
+        return super().run(*args, cwd=cwd)
 
 
 class Args:
@@ -358,22 +369,38 @@ class ArchiveAndGitOperationsTest(PhaseTestCase):
         self.assertTrue(state["developerApproval"])
         self.assertIn("archive", state["panes"])
 
-    def test_no_openspec_developer_review_skips_task_check(self):
+    def test_developer_review_without_openspec_change_skips_archive(self):
         self.make_state("developer-review", workflowType="no-openspec")
+        self.dirty_file()
         commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
         state = state_mod.load_state(self.repo, "my-change")
-        self.assertEqual(state["phase"], "archive")
+        self.assertEqual(state["phase"], "completed")
+        self.assertNotIn("archive", state["panes"])
+        self.assertFalse(any("herdr-openspec-archive" in str(call) for call in self.herdr.calls))
 
     def test_archive_phase_commits_and_pushes_without_agent(self):
         self.make_state("archive")
         self.dirty_file()
         commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
         state = state_mod.load_state(self.repo, "my-change")
-        self.assertEqual(state["phase"], "committing")
+        self.assertEqual(state["phase"], "completed")
         self.assertEqual(self.ctx.git.run("log", "-1", "--format=%s", cwd=self.repo), "Apply my-change")
         self.assertEqual(self.ctx.git.run("rev-parse", "HEAD", cwd=self.repo), self.ctx.git.run("rev-parse", "origin/feature/my-change", cwd=self.repo))
         self.assertIn(("pane", "close", "pane-git"), self.herdr.calls)
         self.assertFalse(any(call[:2] == ("agent", "start") for call in self.herdr.calls))
+
+    def test_push_failure_keeps_workflow_retryable(self):
+        self.ctx.git = FailFirstPushGit()
+        self.make_state("archive")
+        self.dirty_file()
+        with self.assertRaisesRegex(SystemExit, "push failed"):
+            commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
+        self.assertEqual(state_mod.load_state(self.repo, "my-change")["phase"], "archive")
+
+        commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
+        state = state_mod.load_state(self.repo, "my-change")
+        self.assertEqual(state["phase"], "completed")
+        self.assertEqual(self.ctx.git.run("rev-parse", "HEAD", cwd=self.repo), self.ctx.git.run("rev-parse", "origin/feature/my-change", cwd=self.repo))
 
     def test_git_operations_subcommand_requires_archive_phase(self):
         self.make_state("developer-review")
@@ -419,7 +446,7 @@ class CmdMessageTest(PhaseTestCase):
         self.herdr.register_pane("pane-worker", name)
         self.herdr.set_agent(name, agent_status="idle")
         commands.cmd_message(self.ctx, Args(repo=str(self.repo), change="my-change", sender="dev", target="worker", text="please hurry"))
-        calls = [call for call in self.herdr.calls if call[:2] == ("agent", "send") and "please hurry" in call[3]]
+        calls = [call for call in self.herdr.calls if call[:2] == ("pane", "run") and "please hurry" in call[3]]
         self.assertEqual(len(calls), 1)
 
     def test_unknown_target_rejected(self):
@@ -445,12 +472,29 @@ class LaunchRoleTest(PhaseTestCase):
 
 
 class PromptSubmissionTest(PhaseTestCase):
-    def test_sends_follow_up_through_agent_api(self):
+    def test_submits_follow_up_through_pane_run(self):
         state = self.make_state("apply", panes={"worker": "pane-1"})
         self.herdr.register_pane("pane-1", commands.role_agent_name(state, "worker"))
         commands.prompt_role(self.ctx, state, "worker", text="go")
-        self.assertIn(("agent", "send", "pane-1", "/skill:herdr-openspec-worker go"), self.herdr.calls)
-        self.assertFalse(any(call[:2] in {("pane", "send-keys"), ("wait", "agent-status")} for call in self.herdr.calls))
+        self.assertIn(("pane", "run", "pane-1", "/skill:herdr-openspec-worker go"), self.herdr.calls)
+        self.assertFalse(any(call[:2] in {("agent", "send"), ("pane", "send-keys"), ("wait", "agent-status")} for call in self.herdr.calls))
+
+    def test_active_agent_receives_follow_up_in_its_pane(self):
+        state = self.make_state("apply", panes={"worker": "pane-1"})
+        self.herdr.register_pane("pane-1", commands.role_agent_name(state, "worker"))
+        self.herdr.set_status("pane-1", "idle")
+        commands.start_role(self.ctx, state, "worker", text="go")
+        self.assertIn(("pane", "run", "pane-1", "/skill:herdr-openspec-worker go"), self.herdr.calls)
+        self.assertFalse(any(call[:2] == ("tab", "create") for call in self.herdr.calls))
+
+    def test_unknown_agent_restarts_in_fresh_tab(self):
+        state = self.make_state("apply", panes={"worker": "old-pane"}, tabs={"worker": "old-tab"})
+        self.herdr.register_pane("old-pane", commands.role_agent_name(state, "worker"))
+        self.herdr.set_status("old-pane", "unknown")
+        commands.start_role(self.ctx, state, "worker", text="go")
+        self.assertIn(("tab", "close", "old-tab"), self.herdr.calls)
+        self.assertNotEqual(state["panes"]["worker"], "old-pane")
+        self.assertIn(("pane", "run", state["panes"]["worker"],), [call[:3] for call in self.herdr.calls])
 
 
 if __name__ == "__main__":

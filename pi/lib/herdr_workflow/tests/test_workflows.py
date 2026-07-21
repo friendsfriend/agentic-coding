@@ -59,7 +59,7 @@ class StandardWorkflowTest(PhaseTestCase):
         phases_seen.append(state["phase"])
         self.assertEqual(state["phase"], "developer-review")
 
-        # developer approves -> archive -> committing -> completed
+        # developer approves -> archive -> completed
         commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
         state = state_mod.load_state(self.repo, "my-change")
         phases_seen.append(state["phase"])
@@ -68,14 +68,9 @@ class StandardWorkflowTest(PhaseTestCase):
         commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
         state = state_mod.load_state(self.repo, "my-change")
         phases_seen.append(state["phase"])
-        self.assertEqual(state["phase"], "committing")
-
-        commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
-        state = state_mod.load_state(self.repo, "my-change")
-        phases_seen.append(state["phase"])
         self.assertEqual(state["phase"], "completed")
 
-        self.assertEqual(phases_seen, ["explore", "proposed", "apply", "triage", "verify", "developer-review", "archive", "committing", "completed"])
+        self.assertEqual(phases_seen, ["explore", "proposed", "apply", "triage", "verify", "developer-review", "archive", "completed"])
 
 
 class DirectApplyWorkflowTest(PhaseTestCase):
@@ -97,7 +92,6 @@ class DirectApplyWorkflowTest(PhaseTestCase):
         state = _pass_verifier(self, state, "test-verifier")
         self.assertEqual(state["phase"], "developer-review")
 
-        commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
         commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
         commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
         state = state_mod.load_state(self.repo, "my-change")
@@ -122,13 +116,11 @@ class NoOpenspecWorkflowTest(PhaseTestCase):
         state = _pass_verifier(self, state, "test-verifier")
         self.assertEqual(state["phase"], "developer-review")
 
-        commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))  # skips ensure_tasks_complete
+        commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
         state = state_mod.load_state(self.repo, "my-change")
-        self.assertEqual(state["phase"], "archive")
+        self.assertEqual(state["phase"], "completed")
+        self.assertNotIn("archive", state["panes"])
 
-        commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
-        commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
-        state = state_mod.load_state(self.repo, "my-change")
         self.assertEqual(state["phase"], "completed")
 
 
