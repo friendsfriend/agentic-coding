@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source=${BASH_SOURCE[0]}
+while [[ -L $source ]]; do
+  source_dir=$(cd -P "$(dirname "$source")" && pwd)
+  source=$(readlink "$source")
+  [[ $source = /* ]] || source=$source_dir/$source
+done
+root=$(cd -P "$(dirname "$source")/.." && pwd)
+exec bun --preload "$root/node_modules/@opentui/solid/scripts/preload.js" "$root/index.tsx" "$@"

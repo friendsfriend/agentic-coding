@@ -13,7 +13,7 @@ export interface SignalRouter {
 
 // ---- HTTP request router for receiver endpoints ----
 
-export function routeReceiverRequest(request: Request, router: SignalRouter): Response | null {
+export function routeReceiverRequest(request: Request, router: SignalRouter): Response | Promise<Response> | null {
   const url = new URL(request.url);
   const path = url.pathname;
 
@@ -161,15 +161,17 @@ export function startPrometheusScraper(targets: Array<{ host: string; port: numb
 
 export function startStatsDListener(port: number, source: string, router: SignalRouter): { stop: () => void } {
   // Bun UDP listener
-  const udp = Bun.udpSocket({
+  let udp: { close(): void } | undefined;
+  Bun.udpSocket({
     hostname: '0.0.0.0',
     port,
-    data: (socket, buffer) => {
-      const text = new TextDecoder().decode(buffer);
-      const lines = text.split('\n').filter(l => l.trim());
-      const metrics = normalizeStatsDMetrics(lines, source);
-      if (metrics.length) router.pushMetrics(metrics);
+    socket: {
+      data: (_socket, buffer) => {
+        const lines = new TextDecoder().decode(buffer).split('\n').filter(line => line.trim());
+        const metrics = normalizeStatsDMetrics(lines, source);
+        if (metrics.length) router.pushMetrics(metrics);
+      },
     },
-  });
-  return { stop: () => { try { udp.close(); } catch {} } };
+  }).then(socket => { udp = socket; }).catch(error => console.warn(`StatsD listener unavailable: ${error.message}`));
+  return { stop: () => { try { udp?.close(); } catch {} } };
 }

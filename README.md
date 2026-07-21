@@ -1,12 +1,12 @@
 # Agentic coding setup
 
-Pi agent assets, Herdr workflow configuration, OpenCode assets, OpenSpec history, and agent dashboard.
+Pi agent assets, Herdr workflow configuration, OpenCode assets, OpenSpec history, workflow dashboard, and OTEL viewer.
 
 ## Dependencies
 
 - [Pi](https://github.com/badlogic/pi-mono) and `pi install npm:@ogulcancelik/pi-herdr`
-- [Herdr](https://github.com/ogulcancelik/herdr) HEAD with `agent start`/`agent prompt` support
-- [Bun](https://bun.sh/) for `agent-dash`
+- [Herdr](https://github.com/ogulcancelik/herdr) HEAD
+- [Bun](https://bun.sh/) for `agent-dash` and `otel-tui`
 - `opencode` only when using OpenCode assets
 
 ## Install
@@ -18,31 +18,23 @@ Pi agent assets, Herdr workflow configuration, OpenCode assets, OpenSpec history
 ./scripts/install-otel-tui.sh      # otel-tui only
 ```
 
-`stow.sh` creates file-level links for:
-
-- `pi/` → `~/.pi/agent/`
-- `herdr/` → `~/.config/herdr/`
-- `opencode/` → `~/.config/opencode/`
-
-Local files in these target directories remain real files and are never overwritten.
-
-`install-tui.sh` builds and installs both binaries. Specialized scripts build and install only their named TUI into `~/.local/bin`.
+`stow.sh` creates file-level links for `pi/` → `~/.pi/agent/`, `herdr/` → `~/.config/herdr/`, and `opencode/` → `~/.config/opencode/`. Local target files remain real files and are never overwritten.
 
 ## TUI development
 
 ```bash
 cd agent-dash
 bun install
-bun run dev           # run TUI from source
+bun run dev
+
+cd ../otel-tui
+bun install
+bun run dev -- --repo /path/to/repo
 bun run type-check
 bun test
-bun run build:single  # build current OS/architecture
-bun run install:bin   # build current target and copy both binaries to ~/.local/bin
-
-otel-tui --file /path/to/.herdr-workflow/change/traces.jsonl
 ```
 
-`bun run build` builds all supported platform variants. Build output is under `agent-dash/dist/`; it is ignored by Git. `otel-tui` accepts OTLP HTTP JSON at loopback `127.0.0.1:4318/v1/traces`; use only protected networks for `--host` non-loopback because receiver has no authentication. Herdr keeps local `traces.jsonl` history and sends best-effort exports to standard `OTEL_EXPORTER_OTLP_*` trace endpoints. Re-run `bun run install:bin` after TUI changes before using `herdr-manager`.
+`agent-dash` manages Herdr workflows. `otel-tui` receives OTLP HTTP JSON at loopback `127.0.0.1:4318`. Herdr keeps local `traces.jsonl` history and exports best-effort spans to standard `OTEL_EXPORTER_OTLP_*` trace endpoints.
 
 Start managed workflow inside Herdr:
 
@@ -52,10 +44,8 @@ herdr-manager
 
 ## Testing
 
-`herdr-workflow` (`pi/lib/herdr_workflow/`) has a stdlib `unittest` suite covering
-pure logic, per-phase commands, and full per-workflow-type runs against fakes:
-
 ```bash
-./scripts/test-workflow.sh    # herdr_workflow package: unit + phase + workflow tests
-./scripts/test-plugin-system.sh  # agent-plugin subsystem integration test
+./scripts/test-workflow.sh
+./scripts/test-plugin-system.sh
+./scripts/test-herdr-manager.sh
 ```

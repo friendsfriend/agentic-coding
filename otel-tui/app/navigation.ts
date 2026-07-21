@@ -1,7 +1,7 @@
 import { createSignal } from 'solid-js';
 
 export type View = 'selection' | 'detail' | 'span';
-export type Modal = 'filter' | 'sort';
+export type Modal = 'filter' | 'sort' | 'theme';
 
 export function createNavigation() {
   const [views, setViews] = createSignal<View[]>(['selection']);

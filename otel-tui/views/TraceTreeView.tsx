@@ -1,10 +1,10 @@
 /** @jsxImportSource @opentui/solid */
 import { TextAttributes } from '@opentui/core';
 import { useTerminalDimensions } from '@opentui/solid';
-import { createMemo } from 'solid-js';
+import { For, createMemo } from 'solid-js';
 import type { TreeNode } from '../model/types';
 import { HighlightedText } from '../components/Highlight';
-import { SelectableList } from '../components/Selectable';
+import { Selectable } from '../components/Selectable';
 import { uiColors } from '../ui/colors';
 
 const durationMs = (node: TreeNode) => Math.max(0, Number((BigInt(node.span.endTimeUnixNano) - BigInt(node.span.startTimeUnixNano)) / 1_000_000n));
@@ -19,6 +19,14 @@ const runtimeColor = (share: number) => {
 
 type Item = { node: TreeNode; path: number[] };
 const spanKey = (node: TreeNode) => `${node.span.traceId}:${node.span.spanId}`;
+
+export function treeWindow(count: number, selected: number, rows: number) {
+  if (count <= 0) return { start: 0, end: 0 };
+  const size = Math.min(count, Math.max(1, rows));
+  const index = Math.max(0, Math.min(count - 1, selected));
+  const start = Math.min(Math.max(0, index - Math.floor(size / 2)), count - size);
+  return { start, end: start + size };
+}
 
 export function TraceTreeView(props: {
   roots: () => TreeNode[];
@@ -63,21 +71,28 @@ export function TraceTreeView(props: {
     }
     return { items, offsets };
   });
+  const rows = createMemo(() => {
+    const { items } = data();
+    const window = treeWindow(items.length, props.selectedIndex(), size().height - 8);
+    return { ...window, items: items.slice(window.start, window.end) };
+  });
 
   return <box flexDirection="column" width="100%" height="100%">
-    {data().items.length > 0 && <SelectableList items={data().items} selectedIndex={props.selectedIndex} onSelect={index => props.onSelect(data().items[index]!.path)} renderItem={(item, selected) => {
+    {data().items.length > 0 && <box flexGrow={1} minHeight={0} overflow="hidden" flexDirection="column"><For each={rows().items}>{(item, index) => {
+      const fullIndex = () => rows().start + index();
+      const selected = () => fullIndex() === props.selectedIndex();
       const { node, path } = item; const childMark = node.children.length ? (node.expanded ? '▼' : '▶') : '·';
       const status = node.span.status.code === 2 ? 'negative' : node.span.status.code === 1 ? 'warning' : 'positive';
       const runtime = data().offsets.get(spanKey(node)) ?? { offset: 0, share: 0, parentShare: 0, color: uiColors.textMuted }; const offset = Math.max(0, Math.min(barWidth(), Math.round(runtime.offset * barWidth()))); const width = runtime.share ? Math.max(1, Math.round(runtime.share * barWidth())) : 0;
       const bar = `${' '.repeat(offset)}${'━'.repeat(Math.min(width, Math.max(0, barWidth() - offset)))}`;
-      return <box height={1} flexDirection="row">
-        <box width={42} flexShrink={0} overflow="hidden" flexDirection="row" paddingLeft={node.depth * 2}><box width={2} flexShrink={0} onMouseUp={() => node.children.length > 0 && props.onToggle(node, path)}><HighlightedText text={childMark} highlight={node.children.length ? 'secondary' : 'primary'} /></box><HighlightedText text={node.span.name} highlight={selected ? 'primary' : 'secondary'} attributes={selected ? TextAttributes.BOLD : 0} /></box>
+      return <Selectable selected={selected()} height={1} onMouseUp={() => props.onSelect(path)}><box height={1} flexDirection="row">
+        <box width={42} flexShrink={0} overflow="hidden" flexDirection="row" paddingLeft={node.depth * 2}><box width={2} flexShrink={0} onMouseUp={() => node.children.length > 0 && props.onToggle(node, path)}><HighlightedText text={childMark} highlight={node.children.length ? 'secondary' : 'primary'} /></box><HighlightedText text={node.span.name} highlight={selected() ? 'primary' : 'secondary'} attributes={selected() ? TextAttributes.BOLD : 0} /></box>
         <box width={1} flexShrink={0} />
         <box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden" flexDirection="row"><text fg={uiColors.textMuted}>{`${(runtime.parentShare * 100).toFixed(1).padStart(5)}% `}</text><text fg={runtime.color}>{bar}</text></box>
         <box width={1} flexShrink={0} />
         <box width={12} flexShrink={0} justifyContent="flex-end"><text fg={status === 'negative' ? uiColors.error : status === 'warning' ? uiColors.warning : uiColors.success}>{duration(node)}</text></box>
-      </box>;
-    }} />}
+      </box></Selectable>;
+    }}</For></box>}
     {data().items.length === 0 && <box paddingLeft={1}><text fg={uiColors.textMuted}>Select a trace to view tree</text></box>}
   </box>;
 }

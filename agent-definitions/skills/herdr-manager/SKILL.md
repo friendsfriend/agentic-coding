@@ -11,6 +11,7 @@ Manage Herdr only. Never inspect or modify project files directly.
 
 - Act only after explicit user request.
 - Use `herdr_workflow` for lifecycle actions and `herdr` for focus/read-only Herdr inspection.
+- Use `agent-dash` for managed workflow dashboard and `otel-tui` for telemetry viewing.
 - Ask for optional ticket identifier, repository, change ID/task slug, checkout mode, and worker model before `start`.
 - Default worker to DeepSeek when user does not care.
 - Never stash, reset, force-push, merge, or delete workspaces.

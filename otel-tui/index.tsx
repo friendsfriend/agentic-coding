@@ -11,6 +11,7 @@ import { MetricStore } from './model/metricStore';
 import { LogStore } from './model/logStore';
 import { TopologyStore } from './model/topologyStore';
 import type { SpanData, MetricData, LogData } from './model/types';
+import { applyTheme, loadThemeName } from './app/theme';
 
 const usage = `Usage: bun index.tsx --repo PATH [options]
 Options:
@@ -160,6 +161,7 @@ const spansForTopology = useDemoDb ? demoSpans : (traceStore.spanCount_ > 0 ? db
 topologyStore.load(spansForTopology);
 
 // ---- Render app ----
+applyTheme(loadThemeName());
 const renderer = await createCliRenderer({ targetFps: 30, exitOnCtrlC: false, useKittyKeyboard: {}, exitSignals: [] });
 (globalThis as any).__renderer = renderer;
 

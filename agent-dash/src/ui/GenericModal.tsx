@@ -52,7 +52,7 @@ export function GenericModal(props: { title: string; titleColor?: string; fieldL
   const progressEnd = () => Math.min(progressWidth() - 1, Math.floor(animatedProgress()));
   const progressCharacter = (index: number) => index < progressEnd() ? '━' : index === progressEnd() ? '▸' : '─';
   return <box position="absolute" top={0} left={0} width={dimensions().width} height={dimensions().height} flexDirection="column" justifyContent="center" alignItems="center" backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)} onMouseUp={props.onBackdropClick}>
-    <box backgroundColor={RGBA.fromValues(24 / 255, 24 / 255, 37 / 255, 0.96)} onMouseUp={() => invokeGlobalSelectionMouseUpHandler()} width={width()} height={height()} flexDirection="column" paddingTop={1} paddingBottom={1} paddingLeft={2} paddingRight={2}>
+    <box backgroundColor={uiColors.bgMantle} onMouseUp={() => invokeGlobalSelectionMouseUpHandler()} width={width()} height={height()} flexDirection="column" paddingTop={1} paddingBottom={1} paddingLeft={2} paddingRight={2}>
       <SearchHeader search={props.search}><text fg={props.titleColor ?? uiColors.primary} attributes={TextAttributes.BOLD}>{props.title}</text></SearchHeader>
       {props.step !== undefined && <box width="100%" height={1}><text><For each={Array.from({ length: progressWidth() }, (_, index) => index)}>{index => <span style={{ fg: index <= progressEnd() ? progressColor(index / Math.max(1, progressWidth() - 1)) : uiColors.textMuted }}>{progressCharacter(index)}</span>}</For></text></box>}
       <Show when={props.summaryOnly} fallback={

@@ -8,6 +8,7 @@ import { HighlightedText } from '../components/Highlight';
 import { NotificationOverlay } from '../components/Notification';
 import { StatusBar } from '../components/StatusBar';
 import { FilterModal, SortModal, statusOptions } from '../components/TraceModals';
+import { ThemePickerModal } from '../components/ThemePickerModal';
 import { TraceDb } from '../model/db';
 import { TraceStore, type SortCriterion } from '../model/traceStore';
 import { MetricStore } from '../model/metricStore';
@@ -27,7 +28,7 @@ import { ServiceDetailView } from '../views/ServiceDetailView';
 import { copyText } from './clipboard';
 import { createNavigation } from './navigation';
 import { notify } from './notifications';
-import { applyTheme, loadThemeName, themeNames } from './theme';
+import { applyTheme, getActiveThemeName, loadThemeName, saveThemeName, themeNames } from './theme';
 
 type Tab = 'traces' | 'metrics' | 'logs' | 'topology';
 type Workspace = { changeId: string; path: string; spanCount: number };
@@ -54,6 +55,9 @@ export function App(props: {
   const [spanCount, setSpanCount] = createSignal(0);
   const [filteredCount, setFilteredCount] = createSignal(0);
   const [themeIndex, setThemeIndex] = createSignal(Math.max(0, themeNames.indexOf(loadThemeName())));
+  const [themeQuery, setThemeQuery] = createSignal('');
+  const [themeFiltering, setThemeFiltering] = createSignal(false);
+  const filteredThemes = () => themeNames.filter(name => name.includes(themeQuery().toLowerCase()));
   const [lastQuit, setLastQuit] = createSignal(0);
   const [dataVersion, setDataVersion] = createSignal(0);
   const [filterPane, setFilterPane] = createSignal<'criteria' | 'values'>('criteria');
@@ -86,13 +90,13 @@ export function App(props: {
   setFilteredCount(traceStore.filteredCount_);
 
   const summaries = createMemo(() => { dataVersion(); return traceStore.getTraceSummaries(); });
-  const flatTree = () => {
+  const flatTree = createMemo(() => {
     const walk = (nodes: TreeNode[], parents: number[]): Array<{ node: TreeNode; path: number[] }> => nodes.flatMap((node, index) => {
       const path = [...parents, index];
       return [{ node, path }, ...(node.expanded ? walk(node.children, path) : [])];
     });
     return walk(treeRoots(), []);
-  };
+  });
   const refresh = () => { setDataVersion(v => v + 1); setSpanCount(traceStore.spanCount_); setFilteredCount(traceStore.filteredCount_); };
 
   function selectTrace(index: number) {
@@ -179,6 +183,27 @@ export function App(props: {
     // Global copy
     if ((event.meta && key === 'c') || (event.ctrl && event.shift && key === 'c')) { copySelection(true); return; }
 
+    if (nav.modal() === 'theme') {
+      const items = filteredThemes();
+      if (key === 'escape') {
+        if (themeFiltering()) { setThemeFiltering(false); setThemeQuery(''); setThemeIndex(0); }
+        else nav.popModal();
+      } else if (key === '/') { setThemeFiltering(true); setThemeQuery(''); setThemeIndex(0); }
+      else if (themeFiltering() && key === 'backspace') { setThemeQuery(query => query.slice(0, -1)); setThemeIndex(0); }
+      else if (themeFiltering() && key.length === 1) { setThemeQuery(query => query + key); setThemeIndex(0); }
+      else if (key === 'j' || key === 'down') {
+        const next = Math.min(items.length - 1, themeIndex() + 1);
+        if (items[next]) { setThemeIndex(next); applyTheme(items[next]!); }
+      } else if (key === 'k' || key === 'up') {
+        const next = Math.max(0, themeIndex() - 1);
+        if (items[next]) { setThemeIndex(next); applyTheme(items[next]!); }
+      } else if (key === 'enter' || key === 'return') {
+        if (themeFiltering()) setThemeFiltering(false);
+        else if (items[themeIndex()]) { saveThemeName(items[themeIndex()]!); nav.popModal(); }
+      }
+      return;
+    }
+
     // Tab switching (global, except when in a modal)
     const tabIds: Tab[] = props.tracesOnly ? ['traces'] : ['traces', 'metrics', 'logs', 'topology'];
     const isTab = ename === 'Tab' || key === 'tab' || key === '\t';
@@ -214,6 +239,8 @@ export function App(props: {
 
     // Escape / back
     if (key === 'escape' && nav.esc()) return;
+
+    if (event.shift && key === 't' && nav.modal() === 'none') { setThemeIndex(Math.max(0, themeNames.indexOf(getActiveThemeName()))); setThemeQuery(''); setThemeFiltering(false); nav.pushModal('theme'); return; }
 
     // Search mode (shared across tabs)
     if (searchMode()) {
@@ -282,7 +309,6 @@ export function App(props: {
     if (key === '/') { searchPrevious = traceStore.filterQuery_; setSearchQuery(searchPrevious); setSearchMode(true); }
     else if (key === 'f' && shifted) { setFilterPane('criteria'); setFilterCriterion(0); setFilterStatusIndex(Math.max(0, statusOptions.findIndex(o => o.value === traceStore.statusFilter_))); setFilterWorkspaceIndex(Math.max(0, workspaces().findIndex(w => w.changeId === activeWorkspace()) + 1)); nav.pushModal('filter'); }
     else if (key === 'o' && shifted) { setSortDraft(traceStore.sortCriteria_); setSortIndex(0); nav.pushModal('sort'); }
-    else if (event.shift && key === 't') { const next = (themeIndex() + 1) % themeNames.length; setThemeIndex(next); applyTheme(themeNames[next]!); notify(`Theme: ${themeNames[next]}`, 'info'); }
     else if (key === '?') notify('j/k select · Enter trace · w workspaces · 1-4 tabs · q quit', 'info');
     else if (key === 'w') { switchWorkspace(); notify('All workspaces', 'info'); }
     else if (nav.view() === 'selection') {
@@ -465,5 +491,6 @@ export function App(props: {
     <NotificationOverlay />
     {nav.modal() === 'filter' && <FilterModal pane={filterPane} criterion={filterCriterion} statusIndex={filterStatusIndex} workspaceIndex={filterWorkspaceIndex} workspaces={workspaces} />}
     {nav.modal() === 'sort' && <SortModal selected={sortIndex} criteria={sortDraft} />}
+    {nav.modal() === 'theme' && <ThemePickerModal selected={themeIndex} active={getActiveThemeName} themes={filteredThemes} query={themeQuery} filtering={themeFiltering} />}
   </box>;
 }
