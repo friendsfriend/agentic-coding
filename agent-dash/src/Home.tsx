@@ -89,7 +89,7 @@ export function Home(props: { keymap: Keymap<any, KeyEvent> }) {
   onMount(() => {
     props.keymap.setData('app.view', 'home');
     props.keymap.setData('modal.active', 'none');
-    const modalKeys = ['escape', 'return', 'enter', 'backspace', 'delete', 'up', 'down', 'j', 'k', 'd', 'u', '/', ...'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_=+[]{};:\\|,.<>`~!@#$%^&*() '.split('').map(key => key === ' ' ? 'space' : key)];
+    const modalKeys = ['escape', 'return', 'enter', 'meta+return', 'meta+enter', 'backspace', 'delete', 'up', 'down', 'left', 'right', 'home', 'end', 'j', 'k', 'd', 'u', '/', ...'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_=+[]{};:\\|,.<>`~!@#$%^&*() '.split('').map(key => key === ' ' ? 'space' : key)];
     const disposeModal = props.keymap.registerLayer({ name: 'new-workflow', priority: 1000, activeModal: 'new-workflow',
       commands: [{ name: 'new-workflow.handle', run: ({ event }) => modalHandler()?.(event) ?? true }],
       bindings: modalKeys.map(key => ({ key, cmd: 'new-workflow.handle' })),

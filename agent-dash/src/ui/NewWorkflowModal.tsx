@@ -5,7 +5,7 @@ import { GenericModal } from './GenericModal';
 import { uiColors } from './colors';
 import { ProgressModal } from './ProgressModal';
 import { discoverChanges } from '../data';
-import type { KeyEvent } from '@opentui/core';
+import type { KeyEvent, TextareaRenderable } from '@opentui/core';
 
 export type NewWorkflowInput = { repo: string; ticket: string; change: string; task?: string; mode: string; worker: string; workflowType: string; sshPassphrase: string };
 type Project = { name: string; path: string; openspec: boolean };
@@ -17,11 +17,12 @@ export function NewWorkflowModal(props: { projects: Project[]; models: string[];
   const [filtering, setFiltering] = createSignal(false);
   const [values, setValues] = createSignal<NewWorkflowInput>({ repo: '', ticket: '', change: '', mode: '', worker: '', workflowType: 'standard', sshPassphrase: '' });
   const [showCustomRepo, setShowCustomRepo] = createSignal(false);
+  let taskInput: TextareaRenderable | undefined;
   const projects = () => props.projects.filter(project => project.name.toLowerCase().includes(filter().toLowerCase()));
 
   const fields = (): (keyof NewWorkflowInput)[] => {
     const base: (keyof NewWorkflowInput)[] = ['repo', 'workflowType', 'ticket', 'change', 'mode', 'worker', 'sshPassphrase'];
-    if (values().workflowType === 'standard') {
+    if (values().workflowType === 'standard' || values().workflowType === 'quick') {
       return ['repo', 'workflowType', 'ticket', 'change', 'task', 'mode', 'worker', 'sshPassphrase'];
     }
     return base;
@@ -88,6 +89,11 @@ export function NewWorkflowModal(props: { projects: Project[]; models: string[];
     if (!listStep()) {
       const keyName = field();
       if (!keyName) return true;
+      if (keyName === 'task') {
+        if ((name === 'return' || name === 'enter') && key.meta) next(values().task || '');
+        else taskInput?.handleKeyPress(key);
+        return true;
+      }
       if (name === 'backspace') { setValues(current => ({ ...current, [keyName]: (current[keyName] as string)?.slice(0, -1) || '' })); return true; }
       if (name === 'return' || name === 'enter') { next((values()[keyName] as string) || ''); return true; }
       if (key.sequence.length === 1 && key.sequence >= ' ') { setValues(current => ({ ...current, [keyName]: ((current[keyName] as string) || '') + key.sequence })); return true; }
@@ -141,13 +147,22 @@ export function NewWorkflowModal(props: { projects: Project[]; models: string[];
       <Show when={listStep()} fallback={
         <GenericModal title="New workflow" fieldLabel={fieldLabels[field()!]}
           summary={summary()} step={step()} total={totalSteps()}
-          help={[{ key: 'Enter', action: 'Next' }, { key: 'Esc', action: 'Back' }]}>
+          help={field() === 'task'
+            ? [{ key: 'Enter', action: 'New line' }, { key: 'Alt+Enter', action: 'Next' }, { key: 'Esc', action: 'Back' }]
+            : [{ key: 'Enter', action: 'Next' }, { key: 'Esc', action: 'Back' }]}>
           <Show when={field() === 'sshPassphrase'} fallback={
-            <input focused value={values()[field()!] as string || ''}
-              placeholder={field() === 'ticket' ? 'optional' : ''}
-              onInput={updateCurrent} onSubmit={() => next(values()[field()!] as string || '')}
-              onKeyDown={(event: KeyEvent) => { if (event.name.toLowerCase() === 'escape') back(); }}
-              focusedBackgroundColor={uiColors.bgBase} focusedTextColor={uiColors.textPrimary} />
+            <Show when={field() === 'task'} fallback={
+              <input focused value={values()[field()!] as string || ''}
+                placeholder={field() === 'ticket' ? 'optional' : ''}
+                onInput={updateCurrent} onSubmit={() => next(values()[field()!] as string || '')}
+                onKeyDown={(event: KeyEvent) => { if (event.name.toLowerCase() === 'escape') back(); }}
+                focusedBackgroundColor={uiColors.bgBase} focusedTextColor={uiColors.textPrimary} />
+            }>
+              <textarea ref={taskInput} focused width="100%" height="100%" initialValue={values().task || ''} wrapMode="word"
+                onContentChange={() => updateCurrent(taskInput?.plainText || '')}
+                onSubmit={() => next(values().task || '')}
+                focusedBackgroundColor={uiColors.bgBase} focusedTextColor={uiColors.textPrimary} />
+            </Show>
           }>
             <box height={1} flexDirection="row">
               <text fg={values().sshPassphrase ? uiColors.textPrimary : uiColors.textMuted}>{values().sshPassphrase ? '*'.repeat(values().sshPassphrase.length) : 'optional'}</text>

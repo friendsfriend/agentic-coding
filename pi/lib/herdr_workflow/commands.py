@@ -240,12 +240,12 @@ def _close_old_pane(ctx, state, role):
             pass
 
 
-def _live_verification_target(ctx, state, role):
+def _live_verification_target(ctx, state, role, candidates=None):
     tab = state.get("tabs", {}).get("verification")
     standalone_tabs = {value for key, value in state.get("tabs", {}).items() if key not in (*VERIFICATION_TAB_ROLES, "verification")}
     if not tab or tab in standalone_tabs:
         return None
-    for sibling in VERIFICATION_TAB_ROLES:
+    for sibling in candidates or VERIFICATION_TAB_ROLES:
         pane = state.get("panes", {}).get(sibling)
         if sibling == role or not pane or state.get("tabs", {}).get(sibling) != tab:
             continue
@@ -276,6 +276,13 @@ def launch_role(ctx, state, role, text=None):
         instructions = text or prompts.role_prompt(role, change, state.get("verificationRound"), state.get("workflowType"), state.get("task"))
         target = _live_verification_target(ctx, state, role) if role in VERIFICATION_TAB_ROLES else None
         created_tab = target is None
+        created_spare = None
+        used_spare = False
+        order = state.get("verificationPaneOrder") or [
+            sibling for sibling in VERIFICATION_TAB_ROLES
+            if state.get("panes", {}).get(sibling) and state.get("tabs", {}).get(sibling) == state.get("tabs", {}).get("verification")
+        ]
+        position = order.index(role) if role in order else len(order)
         if created_tab:
             pane = ctx.herdr.call(
                 "tab", "create", "--workspace", state["workspace"], "--cwd", state["worktree"],
@@ -284,10 +291,28 @@ def launch_role(ctx, state, role, text=None):
             target_tab, launch_pane = pane["tab_id"], pane["pane_id"]
         else:
             target_tab, sibling_pane = target
-            launch_pane = ctx.herdr.call(
-                "pane", "split", sibling_pane, "--direction", "right", "--cwd", state["worktree"],
-                *prompts.role_env(role, change), "--no-focus",
-            )["pane"]["pane_id"]
+            spare_role = None
+            if position == 1 and len(order) == 1:
+                # Split bottom first so BSP layout becomes (first | second) / third.
+                selected = state.get("verificationRoles", [])
+                selected_index = selected.index(role) if role in selected else -1
+                spare_role = selected[selected_index + 1] if selected_index + 1 < len(selected) else tiering.TEST_VERIFIER
+                created_spare = ctx.herdr.call(
+                    "pane", "split", sibling_pane, "--direction", "down", "--cwd", state["worktree"],
+                    *prompts.role_env(spare_role, change), "--no-focus",
+                )["pane"]["pane_id"]
+            if position >= 2 and state.get("verificationSecondRowPane") and state.get("verificationSecondRowRole") == role:
+                launch_pane = state["verificationSecondRowPane"]
+                used_spare = True
+            else:
+                row_target = _live_verification_target(ctx, state, role, reversed(order[2:] if position >= 2 else order[:2]))
+                sibling_pane = (row_target or target)[1]
+                direction = "down" if position >= 2 and not row_target else "right"
+                launch_pane = ctx.herdr.call(
+                    "pane", "split", sibling_pane, "--direction", direction, "--cwd", state["worktree"],
+                    *prompts.role_env(role, change), "--no-focus",
+                )["pane"]["pane_id"]
+        ctx.herdr.call("pane", "rename", launch_pane, role)
         wait_for_pane_ready(ctx, launch_pane)
         write_trace_handoff(ctx, state, role)
         command = [
@@ -298,8 +323,10 @@ def launch_role(ctx, state, role, text=None):
         def cleanup():
             if created_tab:
                 ctx.herdr.call("tab", "close", target_tab)
-            else:
+            elif not used_spare:
                 ctx.herdr.call("pane", "close", launch_pane)
+            if created_spare:
+                ctx.herdr.call("pane", "close", created_spare)
 
         try:
             agent = ctx.herdr.call(*command)["agent"]
@@ -323,6 +350,18 @@ def launch_role(ctx, state, role, text=None):
         state.setdefault("tabs", {})[role] = tab_id
         if role in VERIFICATION_TAB_ROLES:
             state["tabs"]["verification"] = tab_id
+            if created_tab:
+                order = [role]
+                state.pop("verificationSecondRowPane", None)
+            elif role not in order:
+                order.append(role)
+            state["verificationPaneOrder"] = order
+            if created_spare:
+                state["verificationSecondRowPane"] = created_spare
+                state["verificationSecondRowRole"] = spare_role
+            elif used_spare:
+                state.pop("verificationSecondRowPane", None)
+                state.pop("verificationSecondRowRole", None)
         state_mod.save_state(state)
 
     try:
@@ -413,11 +452,12 @@ def cmd_apply(ctx, args):
     state["planQuality"] = plan_quality(state)
     state_mod.save_state(state)
     if not state["planQuality"]["passed"]:
+        telemetry(ctx, state, "plan_quality_rejected", issue_count=len(state["planQuality"]["issues"]), span_status="ERROR")
+        trace_items(ctx, state, "plan_quality_issue", "issue", state["planQuality"]["issues"], span_status="ERROR")
         raise SystemExit("plan quality gate failed: " + "; ".join(state["planQuality"]["issues"]))
     telemetry(ctx, state, "plan_quality_passed", tasks=state["planQuality"]["taskCount"], specs=state["planQuality"]["specFiles"])
     start_role(ctx, state, "worker")
-    state_mod.set_phase(state, "apply")
-    state_mod.save_state(state)
+    change_phase(ctx, state, "apply")
     print("worker started")
 
 
@@ -449,7 +489,7 @@ def finalize_workspace_trace(ctx, state):
     state_mod.save_state(state)
 
 
-def telemetry(ctx, state, event, **fields):
+def telemetry(ctx, state, event, span_status="OK", **fields):
     root = state_mod.workflow_dir(state)
     path = root / "telemetry.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -459,12 +499,24 @@ def telemetry(ctx, state, event, **fields):
     parent = tracing.parse_traceparent(os.environ.get("TRACEPARENT")) or workspace_context(ctx, state)
     context = tracing.child_context(parent)
     nanos = str(int(at.timestamp() * 1_000_000_000))
-    attributes = {"service.name": "herdr-workflow", "herdr.change.id": state["changeId"], "herdr.phase": state.get("phase", "unknown"), "herdr.verification.round": state.get("verificationRound", 0), **{f"herdr.{key}": value for key, value in fields.items() if isinstance(value, (str, int, float, bool))}}
-    record = tracing.span_record(context, f"workflow.{event}", nanos, nanos, attributes, parent_span_id=parent["spanId"] if parent else None)
+    attributes = {"service.name": "herdr-workflow", "herdr.change.id": state["changeId"], "herdr.phase": state.get("phase", "unknown"), "herdr.verification.round": state.get("verificationRound", 0), "herdr.span_status": span_status, **{f"herdr.{key}": value for key, value in fields.items() if isinstance(value, (str, int, float, bool))}}
+    record = tracing.span_record(context, f"workflow.{event}", nanos, nanos, attributes, parent_span_id=parent["spanId"] if parent else None, status=span_status)
     with (root / "traces.jsonl").open("a") as file:
         file.write(json.dumps(record) + "\n")
     ctx.exporter.export(record)
     return context
+
+
+def change_phase(ctx, state, target, **fields):
+    source = state["phase"]
+    state_mod.set_phase(state, target)
+    state_mod.save_state(state)
+    telemetry(ctx, state, "phase_changed", source=source, target=target, **fields)
+
+
+def trace_items(ctx, state, event, field, values, **fields):
+    for index, value in enumerate(values, 1):
+        telemetry(ctx, state, event, item_index=index, **{field: value}, **fields)
 
 
 def write_trace_handoff(ctx, state, role):
@@ -616,6 +668,17 @@ def consolidate_findings(ctx, state, roles):
     return output
 
 
+def trace_findings(ctx, state, event, findings_list, status=None):
+    for finding in findings_list:
+        telemetry(
+            ctx, state, event,
+            finding_id=finding["id"], role=finding.get("role"), severity=finding.get("severity"),
+            status=status or finding.get("status"), finding_path=finding.get("path"),
+            finding_line=finding.get("line"), description=finding.get("detail"),
+            evidence=finding.get("evidence"), resolution=finding.get("fix"),
+        )
+
+
 def current_findings(state, ctx=None):
     history_path = state_mod.workflow_dir(state) / "reviews" / "findings.json"
     try:
@@ -624,7 +687,7 @@ def current_findings(state, ctx=None):
         return json.loads(history_path.read_text()).get("rounds", {}).get(str(state["verificationRound"]), [])
     except (OSError, json.JSONDecodeError) as error:
         if ctx:
-            telemetry(ctx, state, "findings_read_failed", path=str(history_path), error=str(error))
+            telemetry(ctx, state, "findings_read_failed", path=str(history_path), error=str(error), span_status="ERROR")
         return []
 
 
@@ -652,19 +715,24 @@ def write_worker_fix_context(ctx, state):
 
 def fail_verification(ctx, state):
     worker_context = write_worker_fix_context(ctx, state)
+    spare = state.pop("verificationSecondRowPane", None)
+    state.pop("verificationSecondRowRole", None)
+    if spare:
+        try:
+            ctx.herdr.call("pane", "close", spare)
+        except SystemExit:
+            pass
     consolidated = state.get("verificationResults", {}).get("coordinator", {}).get("report")
     if not consolidated:
         consolidated = str(state_mod.workflow_dir(state) / "reviews" / f"round-{state['verificationRound']}-consolidated.md")
     if state["verificationRound"] >= ctx.config["workflow"]["max_verification_rounds"]:
-        state_mod.set_phase(state, "paused")
-        state_mod.save_state(state)
-        telemetry(ctx, state, "verification_failed", report=consolidated)
+        change_phase(ctx, state, "paused", reason="verification_round_limit")
+        telemetry(ctx, state, "verification_failed", report=consolidated, span_status="ERROR")
         ctx.herdr.call("notification", "show", "Verification limit reached", "--body", f"{state['changeId']} failed round {state['verificationRound']}; developer instruction required", "--sound", "request")
         print("verification failed at round limit; developer instruction required")
         return
-    state_mod.set_phase(state, "fix")
-    state_mod.save_state(state)
-    telemetry(ctx, state, "verification_failed", report=consolidated)
+    change_phase(ctx, state, "fix", reason="verification_failed")
+    telemetry(ctx, state, "verification_failed", report=consolidated, span_status="ERROR")
     start_role(ctx, state, "worker", f"Verification failed. Read only {worker_context}. Fix every blocker, run its focused validation, then run `herdr-workflow verify --repo . --change {state['changeId']}`. Do not report completion until that command succeeds.")
     print("verification failed; worker notified to fix and restart verification")
 
@@ -731,7 +799,7 @@ def cmd_verify(ctx, args):
         except SystemExit:
             pass
     state["verificationRound"] += 1
-    state_mod.set_phase(state, "verify")
+    change_phase(ctx, state, "verify", reason="verification_requested")
     state["testVerifierStarted"] = False
     state["previousVerificationResults"] = state.get("verificationResults", {})
     state["verificationResults"] = {}
@@ -740,8 +808,11 @@ def cmd_verify(ctx, args):
     tier, _ = get_review_tier(ctx, state)
     state["verificationTier"] = tier
     state["verificationRoles"] = []
-    state_mod.set_phase(state, "triage")
+    change_phase(ctx, state, "triage", tier=tier)
     write_triage_input(ctx, state, tier)
+    triage_input = json.loads(triage_input_path(state).read_text())
+    telemetry(ctx, state, "triage_started", tier=tier, changed_file_count=len(triage_input["allChangedFiles"]), suggested_role_count=len(triage_input["suggestedRoles"]))
+    trace_items(ctx, state, "triage_role_suggested", "role", triage_input["suggestedRoles"])
     state_mod.save_state(state)
     start_role(ctx, state, "triage")
     print(f"triage started: round {state['verificationRound']} ({tier})")
@@ -768,18 +839,25 @@ def cmd_dispatch_verifiers(ctx, args):
     state["verificationStartedAt"] = ctx.clock.now().isoformat()
 
     if not plan:
-        state_mod.set_phase(state, "developer-review")
-        state_mod.save_state(state)
-        telemetry(ctx, state, "developer_review_ready", tier=state["verificationTier"], reused=len(triage_input["reusablePasses"]))
+        change_phase(ctx, state, "developer-review", reason="no_verifiers_selected")
+        telemetry(ctx, state, "developer_review_ready", tier=state["verificationTier"], reused=len(triage_input["reusablePasses"]), verifier_count=0)
         ctx.herdr.call("notification", "show", "Developer review ready", "--body", f"{state['changeId']} passed verification (nothing changed); approve archive in dashboard", "--sound", "done")
         print("verification passed: no verifiers needed")
         return
 
-    state_mod.set_phase(state, "verify")
-    state_mod.save_state(state)
+    change_phase(ctx, state, "verify", tier=state["verificationTier"])
     write_review_context(ctx, state, state["verificationTier"], plan)
-    telemetry(ctx, state, "verification_started", tier=state["verificationTier"], roles=list(plan))
+    telemetry(ctx, state, "triage_plan_selected", tier=state["verificationTier"], role_count=len(plan))
+    for role, entry in plan.items():
+        hunks = entry.get("hunks", {})
+        telemetry(ctx, state, "triage_role_selected", role=role, reason=entry["reason"], file_count=len(entry["files"]), hunk_count=sum(len(ids) for ids in hunks.values()))
+        for file in entry["files"]:
+            telemetry(ctx, state, "triage_file_selected", role=role, path=file, hunk_count=len(hunks.get(file, [])))
+        for file, ids in hunks.items():
+            trace_items(ctx, state, "triage_hunk_selected", "hunk", ids, role=role, path=file)
+    telemetry(ctx, state, "verification_started", tier=state["verificationTier"], role_count=len(plan))
     for role in plan:
+        telemetry(ctx, state, "verifier_dispatched", role=role)
         start_role(ctx, state, role)
     print(f"verification started: round {state['verificationRound']} ({state['verificationTier']}, {len(plan)} selected verifiers)")
 
@@ -797,20 +875,24 @@ def cmd_verification_result(ctx, args):
     if not verdict_event or verdict_event.get("verdict") not in {"PASS", "FAIL"}:
         raise SystemExit(f"report must end with JSONL verdict PASS or FAIL: {report}")
     verdict = verdict_event["verdict"]
+    observed_findings = findings.consolidate({args.role: events}, [], set())
     state.setdefault("verificationResults", {})[args.role] = {"verdict": verdict, "report": str(report)}
     state_mod.save_state(state)
     started = state.get("verificationRoleStartedAt", {}).get(args.role)
     duration = (ctx.clock.now() - datetime.fromisoformat(started)).total_seconds() if started else None
-    telemetry(ctx, state, "verifier_result", role=args.role, verdict=verdict, duration_seconds=duration, model=state.get("verificationModels", {}).get(args.role))
+    severity_counts = {f"{severity}_count": sum(item.get("severity") == severity for item in observed_findings) for severity in ("critical", "warning", "info")}
+    telemetry(ctx, state, "verifier_result", role=args.role, verdict=verdict, duration_seconds=duration, model=state.get("verificationModels", {}).get(args.role), finding_count=len(observed_findings), **severity_counts)
+    trace_findings(ctx, state, "verification_finding_observed", observed_findings)
     if args.role == tiering.TEST_VERIFIER:
         consolidated = consolidate_findings(ctx, state, (*roles, tiering.TEST_VERIFIER))
+        trace_findings(ctx, state, "verification_finding", current_findings(state, ctx))
         state["verificationResults"]["coordinator"] = {"verdict": verdict, "report": str(consolidated)}
         state_mod.save_state(state)
         if verdict == "FAIL":
             fail_verification(ctx, state)
             return
-        state_mod.set_phase(state, "developer-review")
-        state_mod.save_state(state)
+        change_phase(ctx, state, "developer-review", reason="verification_passed")
+        telemetry(ctx, state, "developer_review_ready", tier=state.get("verificationTier"), verifier_count=len(roles), reused=len(state.get("verificationReusedResults", {})))
         ctx.herdr.call("notification", "show", "Developer review ready", "--body", f"{state['changeId']} passed verification; approve archive in dashboard", "--sound", "done")
         print("verification passed")
         return
@@ -819,6 +901,7 @@ def cmd_verification_result(ctx, args):
         failed = any(results[role]["verdict"] == "FAIL" for role in roles)
         consolidated = consolidate_findings(ctx, state, roles if failed else (*roles, tiering.TEST_VERIFIER))
         if failed:
+            trace_findings(ctx, state, "verification_finding", current_findings(state, ctx))
             results["coordinator"] = {"verdict": "FAIL", "report": str(consolidated)}
             state_mod.save_state(state)
             fail_verification(ctx, state)
@@ -828,6 +911,7 @@ def cmd_verification_result(ctx, args):
             results["coordinator"] = {"verdict": "PENDING", "report": str(consolidated)}
             write_test_context(ctx, state)
             state_mod.save_state(state)
+            telemetry(ctx, state, "test_verifier_started", selected_verifier_count=len(roles))
             start_role(ctx, state, tiering.TEST_VERIFIER)
             print("selected verifiers passed; test verifier started")
             return
@@ -838,8 +922,8 @@ def cmd_close(ctx, args):
     state = state_mod.load_state(args.repo, args.change)
     if state["phase"] != "completed":
         raise SystemExit(f"close requires completed phase, found {state['phase']}")
-    state_mod.set_phase(state, "closed")
-    state_mod.save_state(state)
+    change_phase(ctx, state, "closed")
+    telemetry(ctx, state, "workflow_closed")
     ctx.herdr.call("workspace", "close", state["workspace"])
     print("workspace closed; branch and checkout kept")
 
@@ -873,12 +957,12 @@ def _start_archive(ctx, state):
     close_completed_role_panes(ctx, state)
     write_archive_context(state)
     launch_role(ctx, state, "archive")
-    state_mod.set_phase(state, "archive")
     state["developerApproval"] = True
-    state_mod.save_state(state)
+    change_phase(ctx, state, "archive", reason="developer_approved")
+    telemetry(ctx, state, "archive_started")
 
 
-def _complete_git_operations(ctx, state):
+def _complete_git_operations(ctx, state, commit=None, pushed=None):
     ensure_workflow_branch(ctx, state)
     dirty = ctx.git.run("status", "--porcelain", cwd=state["worktree"])
     if dirty:
@@ -890,9 +974,9 @@ def _complete_git_operations(ctx, state):
                 ctx.herdr.call("pane", "close", pane)
             except SystemExit:
                 pass
+    telemetry(ctx, state, "git_operations_completed", commit=commit, pushed=pushed)
+    change_phase(ctx, state, "completed")
     finalize_workspace_trace(ctx, state)
-    state_mod.set_phase(state, "completed")
-    state_mod.save_state(state)
 
 
 def _start_git_operations(ctx, state):
@@ -900,8 +984,8 @@ def _start_git_operations(ctx, state):
     previous_phase = state["phase"]
     previous_phase_started_at = state.get("phaseStartedAt")
     try:
-        state_mod.set_phase(state, "committing")
-        state_mod.save_state(state)
+        change_phase(ctx, state, "committing", reason="archive_completed")
+        telemetry(ctx, state, "git_operations_started")
         lazygit_pane = state["panes"].get("git")
         if lazygit_pane:
             try:
@@ -920,16 +1004,20 @@ def _start_git_operations(ctx, state):
             remote_matches = ctx.git.run("rev-parse", f"{remote}/{state['branch']}", cwd=root) == local_head
         except SystemExit:
             remote_matches = False
-        if not remote_matches:
+        pushed = not remote_matches
+        if pushed:
             ctx.git.run("push", "--set-upstream", remote, state["branch"], cwd=root)
-        _complete_git_operations(ctx, state)
-    except (SystemExit, Exception):
+        telemetry(ctx, state, "git_operations_pushed", commit=local_head, pushed=pushed)
+        _complete_git_operations(ctx, state, commit=local_head, pushed=pushed)
+    except (SystemExit, Exception) as error:
         state_mod.set_phase(state, previous_phase)
         if previous_phase_started_at is None:
             state.pop("phaseStartedAt", None)
         else:
             state["phaseStartedAt"] = previous_phase_started_at
         state_mod.save_state(state)
+        telemetry(ctx, state, "git_operations_failed", error=str(error), span_status="ERROR")
+        telemetry(ctx, state, "phase_changed", source="committing", target=previous_phase, reason="git_operations_failed", span_status="ERROR")
         raise
 
 
@@ -943,6 +1031,7 @@ def cmd_git_operations(ctx, args):
 
 def _approve_developer_review(ctx, state):
     """Advance an approved developer review into archive or git operations."""
+    telemetry(ctx, state, "developer_review_approved", workflow_type=state.get("workflowType"))
     if has_openspec_change(state):
         ensure_tasks_complete(state)
         _start_archive(ctx, state)
@@ -978,26 +1067,31 @@ def cmd_finish_review(ctx, args):
         accepted = set(json.loads(accepted_path.read_text()).get("ids", [])) if accepted_path.exists() else set()
     except (OSError, json.JSONDecodeError):
         accepted = set()
-    accepted.update(str(item["id"]) for item in advisory if str(item["id"]) not in selected_ids)
+    accepted_findings = [item for item in advisory if str(item["id"]) not in selected_ids]
+    accepted.update(str(item["id"]) for item in accepted_findings)
     accepted_path.write_text(json.dumps({"ids": sorted(accepted)}, indent=2) + "\n")
+    trace_findings(ctx, state, "developer_accepted_finding", accepted_findings, status="accepted")
+
+    def comment_location(comment):
+        start = comment.get("startLine", comment.get("line", 1))
+        end = comment.get("endLine")
+        return f"{comment.get('filePath', 'repository')}:{start}-{end}" if end is not None and end != start else f"{comment.get('filePath', 'repository')}:{start}"
+
+    for index, comment in enumerate(comments, 1):
+        telemetry(ctx, state, "developer_review_comment", comment_index=index, finding_id=comment.get("findingId"), file_path=comment.get("filePath"), start_line=comment.get("startLine", comment.get("line")), end_line=comment.get("endLine"), body=comment["body"])
 
     if not comments:
         print(_approve_developer_review(ctx, state))
         return
 
     context_path = review_dir / "developer-review-context.md"
-    def comment_location(comment):
-        start = comment.get("startLine", comment.get("line", 1))
-        end = comment.get("endLine")
-        return f"{comment.get('filePath', 'repository')}:{start}-{end}" if end is not None and end != start else f"{comment.get('filePath', 'repository')}:{start}"
     context_path.write_text("# Developer review comments\n\n" + "\n".join(
         f"- `{comment_location(comment)}`: {str(comment['body']).strip()}"
         for comment in comments
     ) + "\n")
     state["developerReviewComments"] = comments
     state["developerApproval"] = False
-    state_mod.set_phase(state, "apply")
-    state_mod.save_state(state)
+    change_phase(ctx, state, "apply", reason="developer_review_comments")
     telemetry(ctx, state, "developer_review_comments_received", count=len(comments), report=str(context_path))
     prompt = f"Developer review found comments. Read only {context_path}. Address every comment, run focused validation, then run `herdr-workflow verify --repo . --change {state['changeId']}`. Do not report completion until verification starts."
     start_role(ctx, state, "worker", prompt)
@@ -1010,6 +1104,7 @@ def cmd_archive(ctx, args):
         print(_approve_developer_review(ctx, state))
         return
     if state["phase"] == "archive":
+        telemetry(ctx, state, "archive_completed")
         _start_git_operations(ctx, state)
         print("git operations started")
         return
@@ -1035,8 +1130,7 @@ def cmd_override_phase(ctx, args):
     if state["phase"] == "closed":
         raise SystemExit("cannot override closed workflow")
     source = state["phase"]
-    state_mod.set_phase(state, args.phase)
-    state_mod.save_state(state)
+    change_phase(ctx, state, args.phase, reason="manual_override")
     telemetry(ctx, state, "workflow_phase_overridden", source=source, target=args.phase)
     print(args.phase)
 
@@ -1053,12 +1147,12 @@ def cmd_phase(ctx, args):
         state_mod.save_state(state)
         if not state["planQuality"]["passed"]:
             issues = "; ".join(state["planQuality"]["issues"])
-            telemetry(ctx, state, "plan_quality_rejected", issues=state["planQuality"]["issues"])
+            telemetry(ctx, state, "plan_quality_rejected", issue_count=len(state["planQuality"]["issues"]), span_status="ERROR")
+            trace_items(ctx, state, "plan_quality_issue", "issue", state["planQuality"]["issues"], span_status="ERROR")
             raise SystemExit(f"PLAN_REJECTED: {issues}. Fix every issue and rerun the proposed transition before ending.")
     if args.phase == "fix" and state["verificationRound"] >= ctx.config["workflow"]["max_verification_rounds"]:
         args.phase = "paused"
-    state_mod.set_phase(state, args.phase)
-    state_mod.save_state(state)
+    change_phase(ctx, state, args.phase)
     if args.phase == "completed":
         finalize_workspace_trace(ctx, state)
     print(args.phase)
@@ -1090,10 +1184,10 @@ def cmd_check_timeout(ctx, args):
     if not pending:
         print("verification within timeout")
         return
-    state_mod.set_phase(state, "paused")
     state["verificationTimeoutRoles"] = pending
-    state_mod.save_state(state)
-    telemetry(ctx, state, "verification_timeout", pending=pending)
+    change_phase(ctx, state, "paused", reason="verification_timeout")
+    telemetry(ctx, state, "verification_timeout", pending_count=len(pending), span_status="ERROR")
+    trace_items(ctx, state, "verifier_timeout", "role", pending, span_status="ERROR")
     ctx.herdr.call("notification", "show", "Verification timed out", "--body", f"{state['changeId']}: {', '.join(pending)}", "--sound", "request")
     print(f"verification timed out: {', '.join(pending)}")
 

@@ -1,6 +1,8 @@
+import json
 import unittest
+from unittest.mock import patch
 
-from herdr_workflow import tracing
+from herdr_workflow import effects, tracing
 
 
 class TraceparentTest(unittest.TestCase):
@@ -44,6 +46,22 @@ class ChildContextTest(unittest.TestCase):
         self.assertEqual(child["traceId"], parent["traceId"])
         self.assertNotEqual(child["spanId"], parent["spanId"])
         self.assertEqual(child["flags"], "01")
+
+
+class TraceExporterTest(unittest.TestCase):
+    def test_exports_error_status(self):
+        payloads = []
+
+        class ImmediateThread:
+            def __init__(self, target, daemon):
+                self.target = target
+            def start(self):
+                self.target()
+
+        with patch("herdr_workflow.effects.threading.Thread", ImmediateThread), patch("herdr_workflow.effects.urllib.request.urlopen", lambda request, timeout: payloads.append(json.loads(request.data))):
+            effects.TraceExporter().export({"traceId": "a" * 32, "spanId": "b" * 16, "name": "test", "startTimeUnixNano": "1", "endTimeUnixNano": "2", "attributes": {}, "status": "ERROR"})
+
+        self.assertEqual(payloads[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["status"]["code"], 2)
 
 
 class SpanRecordTest(unittest.TestCase):
