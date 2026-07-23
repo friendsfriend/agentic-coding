@@ -208,8 +208,9 @@ def provider_unhealthy(ctx, model):
 
 
 def role_agent_name(state, role):
-    name = f"{state['changeId']}-{role}"
-    return name[:32] if len(name) > 32 else name
+    suffix = f"-{role}"
+    name = f"{state['changeId']}{suffix}"
+    return name if len(name) <= 32 else f"{state['changeId'][:32 - len(suffix)]}{suffix}"
 
 
 def _close_old_pane(ctx, state, role):
@@ -248,11 +249,11 @@ def launch_role(ctx, state, role, text=None):
         pane_id = tab["root_pane"]["pane_id"]
         tab_id = tab["root_pane"]["tab_id"]
         instructions = text or prompts.role_prompt(role, change, state.get("verificationRound"), state.get("workflowType"))
-        agent_name = role_agent_name(state, role)
         wait_for_pane_ready(ctx, pane_id)
-        ctx.herdr.call("agent", "start", agent_name, "--kind", "pi", "--pane", pane_id, "--",
-                       *prompts.pi_arguments(role, spawn_model, level, change, config),
-                       f"/skill:herdr-openspec-{role} {instructions}")
+        ctx.herdr.call("pane", "run", pane_id, shlex.join([
+            "pi", *prompts.pi_arguments(role, spawn_model, level, change, config),
+            f"/skill:herdr-openspec-{role} {instructions}",
+        ]))
         state.setdefault("panes", {})[role] = pane_id
         state.setdefault("tabs", {})[role] = tab_id
         state_mod.save_state(state)
@@ -279,7 +280,7 @@ def prompt_role(ctx, state, role, text=None):
         raise SystemExit(f"no pane for role {role} in prompt_role")
     instructions = text or prompts.role_prompt(role, state["changeId"], state.get("verificationRound"), state.get("workflowType"))
     write_trace_handoff(ctx, state, role)
-    ctx.herdr.call("agent", "prompt", role_agent_name(state, role), f"/skill:herdr-openspec-{role} {instructions}")
+    ctx.herdr.call("pane", "run", state["panes"][role], instructions)
 
 
 def start_role(ctx, state, role, text=None):
@@ -805,7 +806,6 @@ def _complete_git_operations(ctx, state):
     dirty = ctx.git.run("status", "--porcelain", cwd=state["worktree"])
     if dirty:
         raise SystemExit("working tree is dirty after git operations; commit or clean first")
-    ensure_base_fresh(ctx, state)
     for role in ("git", "archive"):
         pane = state["panes"].get(role)
         if pane:
