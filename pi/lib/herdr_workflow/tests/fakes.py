@@ -151,10 +151,10 @@ class FakeHerdr:
         if args[:2] in {("pane", "close"), ("pane", "send-keys"), ("notification", "show")}:
             return {}
         if args[:2] == ("agent", "get"):
-            name = args[2]
-            pane_id = self._agent_to_pane.get(name)
+            target = args[2]
+            pane_id = target if target in self._pane_status else self._agent_to_pane.get(target)
             if pane_id is None:
-                raise SystemExit(f"agent not found: {name}")
+                raise SystemExit(f"agent not found: {target}")
             return {"agent": {"agent_status": self._pane_status.get(pane_id, "idle"), "pane_id": pane_id}}
         if args[:2] == ("wait", "agent-status"):
             # herdr wait agent-status <pane_id> --status <status> --timeout <ms>
