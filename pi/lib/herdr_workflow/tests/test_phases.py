@@ -93,8 +93,8 @@ class CmdPlannerTest(PhaseTestCase):
         commands.cmd_planner(self.ctx, Args(repo=str(self.repo), change="my-change"))
         state = state_mod.load_state(self.repo, "my-change")
         self.assertIn("planner", state["panes"])
-        prompts = [call for call in self.herdr.calls if call[:2] == ("pane", "run") and "/skill:herdr-openspec-planner" in call[3]]
-        self.assertEqual(len(prompts), 1)
+        launches = [call for call in self.herdr.calls if call[:2] == ("agent", "start") and "/skill:herdr-openspec-planner" in call[-1]]
+        self.assertEqual(len(launches), 1)
 
     def test_rejects_wrong_phase(self):
         self.make_state("apply")
@@ -325,6 +325,52 @@ class CmdVerificationResultTest(PhaseTestCase):
         self.make_state("fix")
         commands.cmd_verification_result(self.ctx, Args(repo=str(self.repo), change="my-change", role="quality-verifier"))  # no raise
 
+    def test_finish_review_only_sends_selected_findings_to_worker(self):
+        state = self.make_state("developer-review", verificationRound=1, verificationResults={"quality-verifier": {"verdict": "PASS"}, "test-verifier": {"verdict": "PASS"}})
+        reviews = state_mod.workflow_dir(state) / "reviews"
+        reviews.mkdir(parents=True, exist_ok=True)
+        reviews.joinpath("findings.json").write_text(json.dumps({"rounds": {"1": [
+            {"id": "warn-1", "severity": "warning", "role": "quality-verifier", "status": "new", "path": "a.py", "line": 1, "detail": "optional cleanup"},
+            {"id": "info-1", "severity": "info", "role": "quality-verifier", "status": "new", "path": "b.py", "line": 2, "detail": "accepted cleanup"},
+        ]}}))
+        reviews.joinpath("developer-review.json").write_text(json.dumps({"comments": [
+            {"findingId": "warn-1", "filePath": "a.py", "line": 1, "body": "optional cleanup"},
+            {"filePath": "c.py", "line": 4, "startLine": 2, "endLine": 4, "body": "review range"},
+        ]}))
+
+        commands.cmd_finish_review(self.ctx, Args(repo=str(self.repo), change="my-change"))
+
+        state = state_mod.load_state(self.repo, "my-change")
+        context = reviews.joinpath("developer-review-context.md").read_text()
+        accepted = json.loads(reviews.joinpath("accepted-findings.json").read_text())
+        self.assertEqual(state["phase"], "apply")
+        self.assertIn("worker", state["panes"])
+        self.assertIn("optional cleanup", context)
+        self.assertIn("c.py:2-4", context)
+        self.assertNotIn("accepted cleanup", context)
+        self.assertEqual(accepted["ids"], ["info-1"])
+
+    def test_finish_review_without_comments_archives_and_accepts_findings(self):
+        state = self.make_state("developer-review", verificationRound=1)
+        self.write_change_artifacts(complete=True, task_marks=("x",))
+        reviews = state_mod.workflow_dir(state) / "reviews"
+        reviews.mkdir(parents=True, exist_ok=True)
+        reviews.joinpath("findings.json").write_text(json.dumps({"rounds": {"1": [{"id": "info-1", "severity": "info", "status": "new"}]}}))
+        reviews.joinpath("developer-review.json").write_text(json.dumps({"comments": []}))
+
+        commands.cmd_finish_review(self.ctx, Args(repo=str(self.repo), change="my-change"))
+
+        state = state_mod.load_state(self.repo, "my-change")
+        self.assertEqual(state["phase"], "archive")
+        self.assertEqual(json.loads(reviews.joinpath("accepted-findings.json").read_text())["ids"], ["info-1"])
+
+    def test_accepted_optional_findings_are_not_reoffered(self):
+        state = self.make_state("developer-review", verificationRound=1)
+        reviews = state_mod.workflow_dir(state) / "reviews"
+        reviews.mkdir(parents=True, exist_ok=True)
+        reviews.joinpath("findings.json").write_text(json.dumps({"rounds": {"1": [{"id": "info-1", "severity": "info", "status": "accepted"}]}}))
+        self.assertEqual(commands.optional_findings(state), [])
+
 
 class RecoveryTest(PhaseTestCase):
     def test_cmd_recover_writes_context_and_starts_recovery_agent(self):
@@ -446,7 +492,7 @@ class CmdMessageTest(PhaseTestCase):
         self.herdr.register_pane("pane-worker", name)
         self.herdr.set_agent(name, agent_status="idle")
         commands.cmd_message(self.ctx, Args(repo=str(self.repo), change="my-change", sender="dev", target="worker", text="please hurry"))
-        calls = [call for call in self.herdr.calls if call[:2] == ("pane", "run") and "please hurry" in call[3]]
+        calls = [call for call in self.herdr.calls if call[:2] == ("agent", "prompt") and "please hurry" in call[3]]
         self.assertEqual(len(calls), 1)
 
     def test_unknown_target_rejected(self):
@@ -456,35 +502,37 @@ class CmdMessageTest(PhaseTestCase):
 
 
 class LaunchRoleTest(PhaseTestCase):
-    def test_creates_tab_then_runs_pi_prompt_without_agent_start(self):
+    def test_creates_tab_then_starts_agent_with_initial_prompt(self):
         state = self.make_state("apply")
         commands.launch_role(self.ctx, state, "worker")
         kinds = [call[:2] for call in self.herdr.calls]
-        launch = next(call for call in self.herdr.calls if call[:2] == ("pane", "run"))
+        launch = next(call for call in self.herdr.calls if call[:2] == ("agent", "start"))
         self.assertIn(("tab", "create"), kinds)
         self.assertIn(("pane", "process-info"), kinds)
-        self.assertIn(("pane", "run"), kinds)
-        self.assertNotIn(("agent", "start"), kinds)
+        self.assertNotIn(("pane", "run"), kinds)
+        self.assertNotIn(("agent", "rename"), kinds)
         self.assertNotIn(("pane", "send-keys"), kinds)
-        self.assertIn("/skill:herdr-openspec-worker", launch[3])
+        self.assertEqual(launch[2], commands.role_agent_name(state, "worker"))
+        self.assertEqual(launch[3:7], ("--kind", "pi", "--pane", state["panes"]["worker"]))
+        self.assertIn("/skill:herdr-openspec-worker", launch[-1])
         self.assertIn("worker", state["panes"])
         self.assertIn("worker", state["tabs"])
 
 
 class PromptSubmissionTest(PhaseTestCase):
-    def test_submits_follow_up_through_pane_run(self):
+    def test_submits_follow_up_through_agent_prompt(self):
         state = self.make_state("apply", panes={"worker": "pane-1"})
         self.herdr.register_pane("pane-1", commands.role_agent_name(state, "worker"))
         commands.prompt_role(self.ctx, state, "worker", text="go")
-        self.assertIn(("pane", "run", "pane-1", "/skill:herdr-openspec-worker go"), self.herdr.calls)
-        self.assertFalse(any(call[:2] in {("agent", "send"), ("pane", "send-keys"), ("wait", "agent-status")} for call in self.herdr.calls))
+        self.assertIn(("agent", "prompt", commands.role_agent_name(state, "worker"), "/skill:herdr-openspec-worker go"), self.herdr.calls)
+        self.assertFalse(any(call[:2] in {("pane", "run"), ("pane", "send-keys"), ("wait", "agent-status")} for call in self.herdr.calls))
 
     def test_active_agent_receives_follow_up_in_its_pane(self):
         state = self.make_state("apply", panes={"worker": "pane-1"})
         self.herdr.register_pane("pane-1", commands.role_agent_name(state, "worker"))
         self.herdr.set_status("pane-1", "idle")
         commands.start_role(self.ctx, state, "worker", text="go")
-        self.assertIn(("pane", "run", "pane-1", "/skill:herdr-openspec-worker go"), self.herdr.calls)
+        self.assertIn(("agent", "prompt", commands.role_agent_name(state, "worker"), "/skill:herdr-openspec-worker go"), self.herdr.calls)
         self.assertFalse(any(call[:2] == ("tab", "create") for call in self.herdr.calls))
 
     def test_unknown_agent_restarts_in_fresh_tab(self):
@@ -494,7 +542,8 @@ class PromptSubmissionTest(PhaseTestCase):
         commands.start_role(self.ctx, state, "worker", text="go")
         self.assertIn(("tab", "close", "old-tab"), self.herdr.calls)
         self.assertNotEqual(state["panes"]["worker"], "old-pane")
-        self.assertIn(("pane", "run", state["panes"]["worker"],), [call[:3] for call in self.herdr.calls])
+        launch = next(call for call in self.herdr.calls if call[:2] == ("agent", "start"))
+        self.assertEqual(launch[3:7], ("--kind", "pi", "--pane", state["panes"]["worker"]))
 
 
 if __name__ == "__main__":

@@ -208,7 +208,8 @@ def provider_unhealthy(ctx, model):
 
 
 def role_agent_name(state, role):
-    return f"{state['changeId']}-{role}"
+    name = f"{state['changeId']}-{role}"
+    return name[:32] if len(name) > 32 else name
 
 
 def _close_old_pane(ctx, state, role):
@@ -247,14 +248,11 @@ def launch_role(ctx, state, role, text=None):
         pane_id = tab["root_pane"]["pane_id"]
         tab_id = tab["root_pane"]["tab_id"]
         instructions = text or prompts.role_prompt(role, change, state.get("verificationRound"), state.get("workflowType"))
-        pi_cmd = shlex.join(["pi", *prompts.pi_arguments(role, spawn_model, level, change, config), f"/skill:herdr-openspec-{role} {instructions}"])
-        wait_for_pane_ready(ctx, pane_id)
-        ctx.herdr.call("pane", "run", pane_id, pi_cmd)
         agent_name = role_agent_name(state, role)
-        try:
-            ctx.herdr.call("agent", "rename", pane_id, agent_name)
-        except SystemExit:
-            pass
+        wait_for_pane_ready(ctx, pane_id)
+        ctx.herdr.call("agent", "start", agent_name, "--kind", "pi", "--pane", pane_id, "--",
+                       *prompts.pi_arguments(role, spawn_model, level, change, config),
+                       f"/skill:herdr-openspec-{role} {instructions}")
         state.setdefault("panes", {})[role] = pane_id
         state.setdefault("tabs", {})[role] = tab_id
         state_mod.save_state(state)
@@ -276,12 +274,12 @@ def launch_role(ctx, state, role, text=None):
 
 
 def prompt_role(ctx, state, role, text=None):
-    """Submit a follow-up to an active Pi process through pane run."""
+    """Submit a follow-up to the live Pi agent, keeping its session and prior-round context."""
     if role not in state.get("panes", {}):
         raise SystemExit(f"no pane for role {role} in prompt_role")
     instructions = text or prompts.role_prompt(role, state["changeId"], state.get("verificationRound"), state.get("workflowType"))
     write_trace_handoff(ctx, state, role)
-    ctx.herdr.call("pane", "run", state["panes"][role], f"/skill:herdr-openspec-{role} {instructions}")
+    ctx.herdr.call("agent", "prompt", role_agent_name(state, role), f"/skill:herdr-openspec-{role} {instructions}")
 
 
 def start_role(ctx, state, role, text=None):
@@ -540,9 +538,25 @@ def consolidate_findings(ctx, state, roles):
     return output
 
 
-def write_worker_fix_context(state):
+def current_findings(state, ctx=None):
     history_path = state_mod.workflow_dir(state) / "reviews" / "findings.json"
-    findings_list = json.loads(history_path.read_text()).get("rounds", {}).get(str(state["verificationRound"]), []) if history_path.exists() else []
+    try:
+        if not history_path.exists():
+            return []
+        return json.loads(history_path.read_text()).get("rounds", {}).get(str(state["verificationRound"]), [])
+    except (OSError, json.JSONDecodeError) as error:
+        if ctx:
+            telemetry(ctx, state, "findings_read_failed", path=str(history_path), error=str(error))
+        return []
+
+
+def optional_findings(state, ctx=None):
+    """Return PASS-round warning/info findings still awaiting developer choice."""
+    return [item for item in current_findings(state, ctx) if item.get("severity") in {"warning", "info"} and item.get("status") in {"new", "unfixed"}]
+
+
+def write_worker_fix_context(ctx, state):
+    findings_list = current_findings(state, ctx)
     failed_roles = {role for role, result in state.get("verificationResults", {}).items() if role != "coordinator" and result.get("verdict") == "FAIL"}
     actionable = [item for item in findings_list if item.get("role") in failed_roles and item.get("status") != "fixed"]
     files = sorted({item.get("path", "") for item in actionable if item.get("path")})
@@ -559,7 +573,7 @@ def write_worker_fix_context(state):
 
 
 def fail_verification(ctx, state):
-    worker_context = write_worker_fix_context(state)
+    worker_context = write_worker_fix_context(ctx, state)
     consolidated = state.get("verificationResults", {}).get("coordinator", {}).get("report")
     if not consolidated:
         consolidated = str(state_mod.workflow_dir(state) / "reviews" / f"round-{state['verificationRound']}-consolidated.md")
@@ -840,18 +854,73 @@ def cmd_git_operations(ctx, args):
     print("git operations started")
 
 
+def _approve_developer_review(ctx, state):
+    """Advance an approved developer review into archive or git operations."""
+    if has_openspec_change(state):
+        ensure_tasks_complete(state)
+        _start_archive(ctx, state)
+        return "archive started"
+    close_completed_role_panes(ctx, state)
+    state["developerApproval"] = True
+    _start_git_operations(ctx, state)
+    return "git operations started"
+
+
+def cmd_finish_review(ctx, args):
+    state = state_mod.load_state(args.repo, args.change)
+    if state["phase"] != "developer-review":
+        raise SystemExit(f"finish-review requires developer-review phase, found {state['phase']}")
+    review_dir = state_mod.workflow_dir(state) / "reviews"
+    review_path = review_dir / "developer-review.json"
+    try:
+        payload = json.loads(review_path.read_text()) if review_path.exists() else {"comments": []}
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"invalid developer review comments: {error}")
+    comments = payload.get("comments", []) if isinstance(payload, dict) else None
+    if not isinstance(comments, list) or any(not isinstance(comment, dict) or not str(comment.get("body", "")).strip() for comment in comments):
+        raise SystemExit("developer review comments must be a list of non-empty comment objects")
+    advisory = optional_findings(state, ctx)
+    selected_ids = {str(comment["findingId"]) for comment in comments if comment.get("findingId") is not None}
+    available_ids = {str(item["id"]) for item in advisory}
+    unknown_ids = selected_ids - available_ids
+    if unknown_ids:
+        raise SystemExit(f"developer review references unknown findings: {', '.join(sorted(unknown_ids))}")
+
+    accepted_path = review_dir / "accepted-findings.json"
+    try:
+        accepted = set(json.loads(accepted_path.read_text()).get("ids", [])) if accepted_path.exists() else set()
+    except (OSError, json.JSONDecodeError):
+        accepted = set()
+    accepted.update(str(item["id"]) for item in advisory if str(item["id"]) not in selected_ids)
+    accepted_path.write_text(json.dumps({"ids": sorted(accepted)}, indent=2) + "\n")
+
+    if not comments:
+        print(_approve_developer_review(ctx, state))
+        return
+
+    context_path = review_dir / "developer-review-context.md"
+    def comment_location(comment):
+        start = comment.get("startLine", comment.get("line", 1))
+        end = comment.get("endLine")
+        return f"{comment.get('filePath', 'repository')}:{start}-{end}" if end is not None and end != start else f"{comment.get('filePath', 'repository')}:{start}"
+    context_path.write_text("# Developer review comments\n\n" + "\n".join(
+        f"- `{comment_location(comment)}`: {str(comment['body']).strip()}"
+        for comment in comments
+    ) + "\n")
+    state["developerReviewComments"] = comments
+    state["developerApproval"] = False
+    state_mod.set_phase(state, "apply")
+    state_mod.save_state(state)
+    telemetry(ctx, state, "developer_review_comments_received", count=len(comments), report=str(context_path))
+    prompt = f"Developer review found comments. Read only {context_path}. Address every comment, run focused validation, then run `herdr-workflow verify --repo . --change {state['changeId']}`. Do not report completion until verification starts."
+    start_role(ctx, state, "worker", prompt)
+    print("developer review findings sent to worker")
+
+
 def cmd_archive(ctx, args):
     state = state_mod.load_state(args.repo, args.change)
     if state["phase"] == "developer-review":
-        if has_openspec_change(state):
-            ensure_tasks_complete(state)
-            _start_archive(ctx, state)
-            print("archive started")
-            return
-        close_completed_role_panes(ctx, state)
-        state["developerApproval"] = True
-        _start_git_operations(ctx, state)
-        print("git operations started")
+        print(_approve_developer_review(ctx, state))
         return
     if state["phase"] == "archive":
         _start_git_operations(ctx, state)

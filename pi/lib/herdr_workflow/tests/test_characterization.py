@@ -19,6 +19,7 @@ EXPECTED_SUBCOMMANDS = {
     "apply-recovery", "dispatch-verifiers", "archive", "close", "status",
     "check-timeout", "git-operations", "phase", "override-phase",
     "preflight-archive", "set-return", "verification-result", "message", "plugin",
+    "finish-review",
 }
 
 # subcommand -> set of required flag dests (positionals excluded)

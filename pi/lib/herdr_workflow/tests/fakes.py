@@ -117,12 +117,22 @@ class FakeHerdr:
             # from root_pane["tab_id"].
             return {"root_pane": {"pane_id": pane_id, "tab_id": tab_id}, "tab": {"tab_id": tab_id}}
         if args[:2] == ("agent", "start"):
-            self._tab_seq += 1
-            self._pane_seq += 1
-            tab_id, pane_id = f"tab-{self._tab_seq}", f"pane-{self._pane_seq}"
-            self.register_pane(pane_id, args[2])
+            # Real `agent start` launches inside the caller-supplied `--pane`; it
+            # never fabricates a new pane. Registering anything else here would
+            # desync `state["panes"][role]` from what `agent get` resolves.
+            name = args[2]
+            pane_id = args[args.index("--pane") + 1]
+            self.register_pane(pane_id, name)
             self._pane_status[pane_id] = "idle"
-            return {"agent": {"pane_id": pane_id, "tab_id": tab_id}}
+            return {"agent": {"pane_id": pane_id, "name": name}}
+        if args[:2] == ("agent", "prompt"):
+            name = args[2]
+            pane_id = self._agent_to_pane.get(name)
+            if pane_id is None:
+                raise SystemExit(f"agent not found: {name}")
+            if self.auto_advance_on_submit:
+                self._pane_status[pane_id] = "working"
+            return {"agent": {"pane_id": pane_id, "agent_status": self._pane_status.get(pane_id, "working")}}
         if args[:2] == ("agent", "rename"):
             self.register_pane(args[2], args[3])
             return {}

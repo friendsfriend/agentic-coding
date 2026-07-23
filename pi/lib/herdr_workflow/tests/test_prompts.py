@@ -24,15 +24,26 @@ class RolePromptTest(unittest.TestCase):
         text = prompts.role_prompt("triage", "my-change", verification_round=2)
         self.assertIn("round-2-triage-input.json", text)
 
+    def test_triage_prompt_stays_alive_between_rounds(self):
+        text = prompts.role_prompt("triage", "my-change", verification_round=1)
+        self.assertIn("wait", text.lower())
+        self.assertNotIn("do not stay active", text)
+
     def test_verifier_prompt_references_context_and_report(self):
         text = prompts.role_prompt("security-verifier", "my-change", verification_round=1)
         self.assertIn("round-1-security-verifier-context.md", text)
         self.assertIn("round-1-security-verifier.findings.jsonl", text)
         self.assertIn("PASS", text)
 
+    def test_verifier_prompt_stays_alive_between_rounds(self):
+        text = prompts.role_prompt("security-verifier", "my-change", verification_round=1)
+        self.assertIn("wait", text.lower())
+        self.assertNotIn("do not stay active", text)
+
     def test_archive_prompt_reads_archive_context_only(self):
         text = prompts.role_prompt("archive", "my-change")
         self.assertIn("archive-context.md", text)
+        self.assertIn("do not stay active", text)  # archive is terminal, still one-shot
 
     def test_recovery_prompt_lists_allowlisted_actions(self):
         text = prompts.role_prompt("recovery", "my-change")
@@ -57,7 +68,7 @@ class PiArgumentsTest(unittest.TestCase):
         self.assertIn("--no-extensions", joined)
         self.assertIn("--no-skills", joined)
         self.assertIn("--tools", joined)
-        self.assertIn("--no-session", joined)  # verifiers are one-shot
+        self.assertNotIn("--no-session", joined)  # verifiers now persist across verification rounds
 
     def test_archive_role_has_no_context_files(self):
         args = prompts.pi_arguments("archive", "model/x", "high", "change", DEFAULT_CONFIG)

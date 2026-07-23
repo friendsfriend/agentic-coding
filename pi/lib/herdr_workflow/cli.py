@@ -17,7 +17,7 @@ def parser():
     start.add_argument("--ticket", type=str)
     start.add_argument("--worker")
     start.add_argument("--workflow-type", choices=tuple(transitions.WORKFLOW_TYPES.keys()), default="standard")
-    for name in ("planner", "apply", "verify", "recover", "apply-recovery", "dispatch-verifiers", "archive", "close", "status", "check-timeout", "git-operations"):
+    for name in ("planner", "apply", "verify", "recover", "apply-recovery", "dispatch-verifiers", "finish-review", "archive", "close", "status", "check-timeout", "git-operations"):
         cmd = sub.add_parser(name)
         cmd.add_argument("--repo", required=True)
         cmd.add_argument("--change", required=True)
