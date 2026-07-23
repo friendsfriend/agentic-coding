@@ -820,30 +820,40 @@ def _complete_git_operations(ctx, state):
 
 def _start_git_operations(ctx, state):
     """Stage, commit, push, and complete workflow changes without an agent."""
-    lazygit_pane = state["panes"].get("git")
-    if lazygit_pane:
-        try:
-            ctx.herdr.call("pane", "close", lazygit_pane)
-        except SystemExit:
-            pass
-    ensure_workflow_branch(ctx, state)
-    ensure_base_fresh(ctx, state)
-    root = state["worktree"]
-    ctx.git.run("add", "-A", cwd=root)
-    if ctx.git.run("diff", "--cached", "--name-only", cwd=root):
-        ctx.git.run("commit", "-m", f"Apply {state['changeId']}", cwd=root)
-    local_head = ctx.git.run("rev-parse", "HEAD", cwd=root)
-    remote = ctx.config["workflow"]["remote"]
+    previous_phase = state["phase"]
+    previous_phase_started_at = state.get("phaseStartedAt")
     try:
-        remote_matches = ctx.git.run("rev-parse", f"{remote}/{state['branch']}", cwd=root) == local_head
-    except SystemExit:
-        remote_matches = False
-    if not remote_matches:
+        state_mod.set_phase(state, "committing")
+        state_mod.save_state(state)
+        lazygit_pane = state["panes"].get("git")
+        if lazygit_pane:
+            try:
+                ctx.herdr.call("pane", "close", lazygit_pane)
+            except SystemExit:
+                pass
+        ensure_workflow_branch(ctx, state)
+        ensure_base_fresh(ctx, state)
+        root = state["worktree"]
+        ctx.git.run("add", "-A", cwd=root)
+        if ctx.git.run("diff", "--cached", "--name-only", cwd=root):
+            ctx.git.run("commit", "-m", f"Apply {state['changeId']}", cwd=root)
+        local_head = ctx.git.run("rev-parse", "HEAD", cwd=root)
+        remote = ctx.config["workflow"]["remote"]
         try:
-            ctx.git.run("push", "--set-upstream", remote, state["branch"], cwd=root)
+            remote_matches = ctx.git.run("rev-parse", f"{remote}/{state['branch']}", cwd=root) == local_head
         except SystemExit:
-            raise
-    _complete_git_operations(ctx, state)
+            remote_matches = False
+        if not remote_matches:
+            ctx.git.run("push", "--set-upstream", remote, state["branch"], cwd=root)
+        _complete_git_operations(ctx, state)
+    except (SystemExit, Exception):
+        state_mod.set_phase(state, previous_phase)
+        if previous_phase_started_at is None:
+            state.pop("phaseStartedAt", None)
+        else:
+            state["phaseStartedAt"] = previous_phase_started_at
+        state_mod.save_state(state)
+        raise
 
 
 def cmd_git_operations(ctx, args):

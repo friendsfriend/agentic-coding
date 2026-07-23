@@ -222,6 +222,7 @@ export const operationalPhases = [
   "paused",
   "developer-review",
   "archive",
+  "committing",
   "completed",
 ];
 
@@ -793,7 +794,9 @@ export function loadDashboard(repo: string, change: string): DashboardData {
               ?.text ?? "Worker completing tasks")
           : state.phase === "verify"
             ? "Verification in progress"
-            : state.phase,
+            : state.phase === "committing"
+              ? "Pushing changes"
+              : state.phase,
     events: telemetry
       .slice(-20)
       .map((event) => ({
@@ -830,12 +833,14 @@ export function testDashboard(phase = "proposed"): DashboardData {
     "verify",
     "developer-review",
     "archive",
+    "committing",
     "completed",
     "closed",
   ].includes(phase);
   const verified = [
     "developer-review",
     "archive",
+    "committing",
     "completed",
     "closed",
   ].includes(phase);
