@@ -108,6 +108,10 @@ class GoldenStateShapeTest(unittest.TestCase):
             self.assertIsInstance(state["panes"], dict)
             self.assertIsInstance(state["tabs"], dict)
 
+            args = type("Args", (), dict(repo=str(repo), change="quick-change", task=None, mode="checkout", ticket=None, worker=None, workflow_type="no-openspec"))()
+            commands.cmd_start(ctx, args)
+            self.assertFalse((repo / ".herdr-workflow" / "quick-change" / "request.md").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

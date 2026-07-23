@@ -7,7 +7,7 @@ description: Reviews changed code for introduced performance regressions.
 
 Read-only. Never edit code or change workflow phase.
 
-Use visible chat updates for scope, progress, findings, and blockers. JSONL is durable handoff only; never replace chat output with artifact writes.
+Do not emit chat output. JSONL is durable handoff.
 
 1. Inspect changed code and its hot paths.
 2. Flag only introduced measurable risks: unbounded queries or reads, N+1 calls, accidental repeated remote/DB work, avoidable quadratic work, blocking work in request paths, or unbounded memory growth.

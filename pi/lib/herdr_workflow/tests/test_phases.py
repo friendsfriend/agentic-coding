@@ -125,7 +125,7 @@ class CmdPlannerTest(PhaseTestCase):
         commands.cmd_planner(self.ctx, Args(repo=str(self.repo), change="my-change"))
         state = state_mod.load_state(self.repo, "my-change")
         self.assertIn("planner", state["panes"])
-        launches = [call for call in self.herdr.calls if call[:2] == ("pane", "run") and "/skill:herdr-openspec-planner" in call[-1]]
+        launches = [call for call in self.herdr.calls if call[:2] == ("agent", "start") and "/skill:herdr-openspec-planner" in call[-1]]
         self.assertEqual(len(launches), 1)
 
     def test_rejects_wrong_phase(self):
@@ -215,12 +215,16 @@ class CmdVerifyTest(PhaseTestCase):
         self.assertIn("triage", state["panes"])
         self.assertTrue(commands.triage_input_path(state).exists())
 
-    def test_no_openspec_workflow_skips_task_check(self):
+    def test_no_openspec_workflow_skips_tasks_and_openspec_review(self):
         self.make_state("apply", verificationRound=0, workflowType="no-openspec")
         self.dirty_file()
         commands.cmd_verify(self.ctx, Args(repo=str(self.repo), change="my-change"))
         state = state_mod.load_state(self.repo, "my-change")
+        triage_input = json.loads(commands.triage_input_path(state).read_text())
         self.assertEqual(state["phase"], "triage")
+        self.assertNotIn("openspec-verifier", triage_input["availableRoles"])
+        self.assertNotIn("openspec-verifier", triage_input["suggestedRoles"])
+        self.assertNotIn("openSpec", triage_input["deterministicChecks"])
 
     def test_rejects_incomplete_tasks(self):
         self.make_state("apply", verificationRound=0)
@@ -280,6 +284,14 @@ class CmdDispatchVerifiersTest(PhaseTestCase):
         plan = {"roles": {"not-a-role": {"reason": "x", "files": ["a.py"]}}}
         commands.triage_plan_path(state).write_text(json.dumps(plan))
         with self.assertRaises(SystemExit):
+            commands.cmd_dispatch_verifiers(self.ctx, Args(repo=str(self.repo), change="my-change"))
+
+    def test_no_openspec_workflow_rejects_openspec_verifier(self):
+        state = self._prepare_triage("no-openspec")
+        files = json.loads(commands.triage_input_path(state).read_text())["allChangedFiles"]
+        plan = {"roles": {"openspec-verifier": {"reason": "openspec changed", "files": files}}}
+        commands.triage_plan_path(state).write_text(json.dumps(plan))
+        with self.assertRaisesRegex(SystemExit, "unavailable roles"):
             commands.cmd_dispatch_verifiers(self.ctx, Args(repo=str(self.repo), change="my-change"))
 
     def test_rejects_wrong_phase(self):
@@ -558,7 +570,7 @@ class CmdMessageTest(PhaseTestCase):
         self.herdr.register_pane("pane-worker", name)
         self.herdr.set_agent(name, agent_status="idle")
         commands.cmd_message(self.ctx, Args(repo=str(self.repo), change="my-change", sender="dev", target="worker", text="please hurry"))
-        calls = [call for call in self.herdr.calls if call[:2] == ("pane", "run") and "please hurry" in call[3]]
+        calls = [call for call in self.herdr.calls if call[:2] == ("agent", "send") and "please hurry" in call[3]]
         self.assertEqual(len(calls), 1)
 
     def test_unknown_target_rejected(self):
@@ -578,30 +590,61 @@ class LaunchRoleTest(PhaseTestCase):
         self.assertTrue(triage.endswith("-triage"))
         self.assertNotEqual(worker, triage)
 
-    def test_creates_tab_then_runs_pi_with_initial_prompt(self):
+    def test_starts_pi_agent_with_initial_prompt(self):
         state = self.make_state("apply")
         commands.launch_role(self.ctx, state, "worker")
         kinds = [call[:2] for call in self.herdr.calls]
-        launch = next(call for call in self.herdr.calls if call[:2] == ("pane", "run"))
+        launch = next(call for call in self.herdr.calls if call[:2] == ("agent", "start"))
         self.assertIn(("tab", "create"), kinds)
-        self.assertIn(("pane", "process-info"), kinds)
-        self.assertNotIn(("agent", "start"), kinds)
-        self.assertNotIn(("agent", "rename"), kinds)
+        self.assertNotIn(("pane", "run"), kinds)
         self.assertNotIn(("pane", "send-keys"), kinds)
-        self.assertEqual(launch[2], state["panes"]["worker"])
-        self.assertIn("--name my-change-worker", launch[3])
-        self.assertIn("/skill:herdr-openspec-worker", launch[3])
+        self.assertEqual(launch[2], "my-change-worker")
+        self.assertIn("--tab", launch)
+        self.assertIn("--split", launch)
+        self.assertTrue(any(call[:2] == ("pane", "close") for call in self.herdr.calls))
+        self.assertIn("--name", launch)
+        self.assertIn("my-change-worker", launch)
+        self.assertIn("/skill:herdr-openspec-worker", launch[-1])
         self.assertIn("worker", state["panes"])
         self.assertIn("worker", state["tabs"])
 
+    def test_groups_triage_and_verifiers_in_verification_tab(self):
+        state = self.make_state("triage")
+        commands.launch_role(self.ctx, state, "triage")
+        commands.launch_role(self.ctx, state, "quality-verifier")
+        commands.launch_role(self.ctx, state, "performance-verifier")
+        launches = [call for call in self.herdr.calls if call[:2] == ("agent", "start")]
+        verification_tab = state["tabs"]["verification"]
+        self.assertEqual(len([call for call in self.herdr.calls if call[:2] == ("tab", "create")]), 1)
+        for launch in launches:
+            self.assertIn("--tab", launch)
+            self.assertEqual(launch[launch.index("--tab") + 1], verification_tab)
+            self.assertEqual(launch[launch.index("--split") + 1], "right")
+        self.assertEqual(state["tabs"]["triage"], verification_tab)
+        self.assertEqual(state["tabs"]["quality-verifier"], verification_tab)
+        self.assertEqual(state["tabs"]["performance-verifier"], verification_tab)
+
+    def test_replacing_grouped_role_closes_only_its_pane(self):
+        state = self.make_state("verify", panes={"quality-verifier": "old-pane"}, tabs={"quality-verifier": "verification-tab", "verification": "verification-tab"})
+        commands.launch_role(self.ctx, state, "quality-verifier")
+        self.assertIn(("pane", "close", "old-pane"), self.herdr.calls)
+        self.assertNotIn(("tab", "close", "verification-tab"), self.herdr.calls)
+
+    def test_never_reuses_worker_tab_as_verification_tab(self):
+        state = self.make_state("verify", panes={"worker": "worker-pane"}, tabs={"worker": "worker-tab", "verification": "worker-tab"})
+        commands.launch_role(self.ctx, state, "quality-verifier")
+        launch = next(call for call in self.herdr.calls if call[:2] == ("agent", "start"))
+        self.assertNotEqual(launch[launch.index("--tab") + 1], "worker-tab")
+        self.assertNotIn(("pane", "close", "worker-pane"), self.herdr.calls)
+        self.assertNotIn(("tab", "close", "worker-tab"), self.herdr.calls)
 
 class PromptSubmissionTest(PhaseTestCase):
-    def test_submits_follow_up_through_pane_run(self):
+    def test_submits_follow_up_through_agent_send(self):
         state = self.make_state("apply", panes={"worker": "pane-1"})
         self.herdr.register_pane("pane-1", commands.role_agent_name(state, "worker"))
         commands.prompt_role(self.ctx, state, "worker", text="go")
-        self.assertIn(("pane", "run", "pane-1", "go"), self.herdr.calls)
-        self.assertFalse(any(call[:2] in {("agent", "prompt"), ("pane", "send-keys"), ("wait", "agent-status")} for call in self.herdr.calls))
+        self.assertIn(("agent", "send", "pane-1", "go"), self.herdr.calls)
+        self.assertFalse(any(call[:2] in {("pane", "run"), ("pane", "send-keys"), ("wait", "agent-status")} for call in self.herdr.calls))
 
     def test_reuses_role_launched_with_pi_name(self):
         state = self.make_state("apply")
@@ -611,8 +654,25 @@ class PromptSubmissionTest(PhaseTestCase):
         commands.start_role(self.ctx, state, "worker", text="go")
 
         self.assertIn(("agent", "get", state["panes"]["worker"]), self.herdr.calls)
-        self.assertIn(("pane", "run", state["panes"]["worker"], "go"), self.herdr.calls)
-        self.assertFalse(any(call[:2] == ("tab", "create") for call in self.herdr.calls))
+        self.assertIn(("agent", "send", state["panes"]["worker"], "go"), self.herdr.calls)
+        self.assertFalse(any(call[:2] == ("agent", "start") for call in self.herdr.calls))
+
+    def test_reuses_persistent_done_verifier(self):
+        state = self.make_state("verify", panes={"quality-verifier": "pane-1"}, tabs={"quality-verifier": "tab-verification", "verification": "tab-verification"})
+        self.herdr.register_pane("pane-1", commands.role_agent_name(state, "quality-verifier"), "tab-verification")
+        self.herdr.set_status("pane-1", "done")
+        commands.start_role(self.ctx, state, "quality-verifier", text="next round")
+        self.assertIn(("agent", "send", "pane-1", "next round"), self.herdr.calls)
+        self.assertFalse(any(call[:2] == ("agent", "start") for call in self.herdr.calls))
+
+    def test_refreshes_moved_standalone_agent_tab(self):
+        state = self.make_state("apply")
+        commands.launch_role(self.ctx, state, "worker")
+        actual_tab = state["tabs"]["worker"]
+        state["tabs"]["worker"] = "stale-tab"
+        commands.start_role(self.ctx, state, "worker", text="go")
+        self.assertEqual(state["tabs"]["worker"], actual_tab)
+        self.assertNotIn(("tab", "close", "stale-tab"), self.herdr.calls)
 
     def test_unknown_agent_restarts_in_fresh_tab(self):
         state = self.make_state("apply", panes={"worker": "old-pane"}, tabs={"worker": "old-tab"})
@@ -621,8 +681,8 @@ class PromptSubmissionTest(PhaseTestCase):
         commands.start_role(self.ctx, state, "worker", text="go")
         self.assertIn(("tab", "close", "old-tab"), self.herdr.calls)
         self.assertNotEqual(state["panes"]["worker"], "old-pane")
-        launch = next(call for call in self.herdr.calls if call[:2] == ("pane", "run"))
-        self.assertEqual(launch[2], state["panes"]["worker"])
+        launch = next(call for call in self.herdr.calls if call[:2] == ("agent", "start"))
+        self.assertEqual(launch[2], commands.role_agent_name(state, "worker"))
 
 
 if __name__ == "__main__":

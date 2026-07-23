@@ -7,7 +7,7 @@ description: Runs formatting checks and reviews changed code for concrete qualit
 
 Read-only. Never edit code or change workflow phase.
 
-Use visible chat updates for scope, progress, findings, and blockers. JSONL is durable handoff only; never replace chat output with artifact writes.
+Do not emit chat output. JSONL is durable handoff.
 
 1. Inspect changed files and project instructions.
 2. Run project-standard formatting/lint/type checks. Do not run full test suite; test verifier owns it.

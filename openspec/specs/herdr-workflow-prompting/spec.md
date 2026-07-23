@@ -3,24 +3,52 @@
 ## Purpose
 TBD - created by archiving change check-workflow-bugs-frontier-model. Update Purpose after archive.
 ## Requirements
-### Requirement: Role prompts are submitted atomically
-The workflow SHALL submit a role agent's prompt so that the prompt text and its Enter/submit are delivered together, and SHALL only submit once the target agent's TUI is ready to accept input.
+### Requirement: Role lifecycle uses Herdr agent commands
+The workflow SHALL use Herdr's agent lifecycle API instead of coordinating raw terminal startup and input.
 
-#### Scenario: Prompt text and Enter are delivered together
-- **GIVEN** a role agent whose pane has been created and the agent moved into it
-- **WHEN** the workflow submits the role's prompt via `prompt_role`
-- **THEN** it SHALL deliver the prompt text and its submit together as a single atomic action (`herdr pane run`)
-- **AND** it SHALL NOT rely on a separate `send-text` followed by a separate `send-keys "enter"`, which can leave the prompt prefilled but unsent
+#### Scenario: Initial prompt starts atomically
+- **WHEN** workflow launches a managed role
+- **THEN** it SHALL create labeled container tab, wait for bootstrap shell readiness, and pass Pi executable, arguments, and complete initial prompt in one `herdr agent start --tab <id> --split right ... -- pi ... <prompt>` command
+- **AND** retry once only when Herdr reports target is not yet an available shell
+- **AND** close bootstrap shell pane after agent starts so agent owns resulting tab or split
+- **AND** it SHALL NOT separately submit startup text or Enter keys
 
-#### Scenario: Wait for readiness before submitting
-- **GIVEN** a freshly launched role agent
-- **WHEN** the workflow prepares to submit its prompt
-- **THEN** it SHALL wait for the agent to reach `idle` status (bounded by a timeout) before submitting
-- **AND** on timeout it SHALL record `prompt_wait_timeout` telemetry and still attempt the submit
+#### Scenario: Follow-up prompt targets detected agent
+- **GIVEN** a managed role already has a detected Pi process
+- **WHEN** workflow submits another round or message
+- **THEN** it SHALL confirm process with `herdr agent get`
+- **AND** submit prompt with `herdr agent send`
 
-#### Scenario: Prompt submission is verified and retried
-- **GIVEN** a submitted prompt whose delivery is not acknowledged (the agent's state-change sequence does not advance within the deadline)
-- **WHEN** the workflow retries
-- **THEN** it SHALL interrupt the pane (`ctrl+c`) and re-submit the prompt atomically via `herdr pane run`
-- **AND** if the retry is still not acknowledged it SHALL raise an error rather than silently leaving the agent idle
+### Requirement: Verification roles share one tab
+The workflow SHALL group triage and all verifier roles in one tab while retaining one pane per role.
+
+#### Scenario: First verification role creates group tab
+- **WHEN** triage is first verification role launched
+- **THEN** workflow SHALL create tab labeled `verification`, start triage in split, and close bootstrap shell pane
+- **AND** record tab ID as verification group tab
+
+#### Scenario: Additional verification roles split group tab
+- **GIVEN** live verification group tab exists
+- **WHEN** triage or verifier role starts
+- **THEN** workflow SHALL call `herdr agent start` with group tab ID and `--split right`
+- **AND** preserve sibling panes when replacing stale grouped agent
+
+#### Scenario: Closed verification tab is recreated
+- **GIVEN** recorded verification tab and panes are no longer live
+- **WHEN** next triage or verifier starts
+- **THEN** workflow SHALL create new tab instead of targeting stale tab ID
+- **AND** SHALL reject any recorded group tab also owned by dashboard, git, worker, planner, recovery, or archive
+
+### Requirement: Every role has a role-specific prompt
+The workflow SHALL provide dedicated instructions for planner, worker, triage, each verifier, recovery, and archive rather than deriving all agents from one generic prompt.
+
+#### Scenario: Role focus is explicit
+- **WHEN** workflow builds initial prompt for a managed role
+- **THEN** prompt SHALL name that role's specific input artifact, review or implementation focus, output artifact, and handoff command
+- **AND** each verifier prompt SHALL describe its own verification scope
+
+#### Scenario: Chat visibility follows role
+- **WHEN** workflow builds role prompt
+- **THEN** planner and worker prompts SHALL permit visible chat for discussion, progress, and blockers
+- **AND** triage, verifier, recovery, and archive prompts SHALL require silent artifact-based handoff
 

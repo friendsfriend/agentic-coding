@@ -16,17 +16,20 @@ The system SHALL support creating a workflow that starts in `apply` phase with t
 - **AND** system SHALL NOT require `proposal.md`, `design.md`, `tasks.md`, or spec scenarios under `openspec/changes/<change>/`
 - **AND** SHALL NOT run plan quality gate
 
-#### Scenario: No-openspec worker reads request.md not OpenSpec tasks
+#### Scenario: No-openspec worker starts without a request
 - **GIVEN** a no-openspec workflow in `apply` phase
 - **WHEN** the worker agent is prompted
-- **THEN** the prompt SHALL reference `.herdr-workflow/<change>/request.md` as the change description
+- **THEN** system SHALL NOT create `.herdr-workflow/<change>/request.md`
+- **AND** prompt SHALL instruct worker to run `herdr-workflow verify --repo . --change <change>` once change is applied
 - **AND** SHALL NOT reference OpenSpec task tracking or task checkboxes
 
-#### Scenario: No-openspec verification skips task completion check
+#### Scenario: No-openspec verification skips OpenSpec gates
 - **GIVEN** a no-openspec workflow in `apply` phase with worker work finished
 - **WHEN** developer runs `herdr-workflow verify --repo <repo> --change <change>`
-- **THEN** system SHALL NOT call `ensure_tasks_complete`
-- **AND** SHALL proceed to triage and verification as in standard workflow
+- **THEN** system SHALL NOT call `ensure_tasks_complete` or `plan_quality`
+- **AND** triage input SHALL exclude `openspec-verifier` from available, suggested, and reusable roles
+- **AND** dispatch SHALL reject a triage plan that selects `openspec-verifier`
+- **AND** SHALL proceed with applicable non-OpenSpec verification
 
 #### Scenario: No-openspec transitions through full lifecycle
 - **GIVEN** a no-openspec workflow
@@ -92,7 +95,7 @@ The system SHALL give the no-openspec worker instructions that do not require an
 #### Scenario: No-openspec worker prompt names the verify command
 - **GIVEN** a no-openspec workflow in `apply` phase
 - **WHEN** the worker agent is prompted
-- **THEN** the prompt SHALL reference `.herdr-workflow/<change>/request.md` as the change description
+- **THEN** the prompt SHALL NOT reference `.herdr-workflow/<change>/request.md`
 - **AND** the prompt SHALL instruct the worker to run `herdr-workflow verify --repo . --change <change>` once the change is applied
 - **AND** the prompt SHALL NOT instruct the worker to read or update OpenSpec task checkboxes
 
@@ -100,7 +103,7 @@ The system SHALL give the no-openspec worker instructions that do not require an
 - **GIVEN** the loaded `herdr-openspec-worker` skill applies to standard, direct-apply, and no-openspec workers
 - **WHEN** a worker follows the skill in a no-openspec workflow with no `openspec/changes/<change>/tasks.md`
 - **THEN** the skill SHALL scope the task-checkbox steps to workflows where `tasks.md` exists
-- **AND** the skill SHALL NOT direct a no-openspec worker to read or mark a non-existent `tasks.md`
+- **AND** the skill SHALL NOT direct a no-openspec worker to read or mark a non-existent `tasks.md` or require a missing `request.md`
 - **AND** the skill guidance SHALL NOT contradict the no-openspec worker prompt
 
 ### Requirement: No-openspec archives before git operations

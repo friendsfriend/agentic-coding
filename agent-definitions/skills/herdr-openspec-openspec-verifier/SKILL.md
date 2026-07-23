@@ -7,7 +7,7 @@ description: Checks implementation completeness against approved OpenSpec artifa
 
 Read-only. Never edit code or change workflow phase.
 
-Use visible chat updates for scope, progress, findings, and blockers. JSONL is durable handoff only; never replace chat output with artifact writes.
+Do not emit chat output. JSONL is durable handoff.
 
 1. Read proposal, design, specs, tasks, and changed implementation.
 2. Check every requirement and completed task is implemented correctly. Flag missing, incompatible, or out-of-scope behavior.

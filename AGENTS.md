@@ -1,5 +1,9 @@
 # Herdr workflow agent launch
 
-Launch a role in its own tab: create tab with `herdr tab create`, wait until `herdr pane process-info --pane <id>` reports a foreground shell, allow one short shell settle window, then issue one `herdr pane run <id> "pi ... <initial prompt>"` command.
+Launch every role with `herdr agent start`; never coordinate raw shell startup, text insertion, or Enter keys. Pass Pi executable and complete initial prompt after `--` in same command.
 
-Do not use `herdr agent start`: it creates a split instead of owning tab root. Do not send text then manually press Enter, retry Enter, or retry `ctrl+c`; those race Pi and shell startup. Do not run `pane run` immediately after tab creation: root shell can exist before terminal input is ready, dropping or pre-filling Pi command. Follow-up prompts use `herdr pane run <id> "prompt"` only after Pi is detected. If Pi state is unknown or missing, close its tab and spawn a fresh role.
+Planner, worker, recovery, and archive roles own separate tabs. Create labeled container tab, wait until bootstrap pane reports foreground shell, start role with `herdr agent start <name> --tab <tab-id> --split right ... -- pi ... <initial prompt>`, then close bootstrap shell pane so agent owns tab root. Retry `agent start` once only when Herdr reports target pane is not yet available shell.
+
+Triage and all verifier roles share one `verification` tab. Create labeled container tab for first role, wait for bootstrap shell, start it with `herdr agent start --tab <verification-tab-id> --split right`, then close bootstrap shell pane. Start each additional role with same tab ID and `--split right`. If grouped agent state is unknown or missing, close only its pane; preserve sibling verification panes. Never reuse dashboard, git, worker, or other standalone tab as verification tab.
+
+Send follow-up prompts with `herdr agent send <name-or-pane> <prompt>` only after `herdr agent get` confirms Pi process. If standalone agent state is unknown or missing, close its tab and start fresh role.

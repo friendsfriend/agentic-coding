@@ -14,11 +14,12 @@ class RolePromptTest(unittest.TestCase):
         text = prompts.role_prompt("worker", "my-change")
         self.assertIn("Mark each OpenSpec task", text)
 
-    def test_worker_prompt_no_openspec_skips_tasks(self):
-        text = prompts.role_prompt("worker", "my-change", workflow_type="no-openspec")
-        self.assertNotIn("OpenSpec task", text)
-        self.assertIn("request.md", text)
+    def test_worker_prompt_no_openspec_has_completion_instruction(self):
+        text = prompts.role_prompt("worker", "my-change", workflow_type="no-openspec", task="Fix login")
+        self.assertNotIn("request.md", text)
+        self.assertIn("No task checklist to read", text)
         self.assertIn("herdr-workflow verify --repo . --change my-change", text)
+        self.assertIn("Fix login", text)
 
     def test_triage_prompt_references_round(self):
         text = prompts.role_prompt("triage", "my-change", verification_round=2)
@@ -35,10 +36,30 @@ class RolePromptTest(unittest.TestCase):
         self.assertIn("round-1-security-verifier.findings.jsonl", text)
         self.assertIn("PASS", text)
 
-    def test_verifier_prompt_stays_alive_between_rounds(self):
-        text = prompts.role_prompt("security-verifier", "my-change", verification_round=1)
-        self.assertIn("wait", text.lower())
-        self.assertNotIn("do not stay active", text)
+    def test_each_verifier_has_custom_silent_prompt(self):
+        expected = {
+            "security-verifier": "trust boundaries",
+            "agents-verifier": "AGENTS.md and CLAUDE.md",
+            "quality-verifier": "formatting, lint, and type checks",
+            "performance-verifier": "changed hot paths",
+            "openspec-verifier": "approved proposal, design, specs, and tasks",
+            "test-verifier": "complete configured test suite",
+        }
+        for role, focus in expected.items():
+            with self.subTest(role=role):
+                text = prompts.role_prompt(role, "my-change", verification_round=1)
+                self.assertIn(focus, text)
+                self.assertIn("No chat output", text)
+                self.assertIn("wait", text.lower())
+                self.assertNotIn("do not stay active", text)
+
+    def test_only_planner_and_worker_are_not_silent(self):
+        for role in ("planner", "worker"):
+            with self.subTest(role=role):
+                self.assertNotIn("silent", prompts.role_prompt(role, "my-change").lower())
+        for role in ("triage", "security-verifier", "agents-verifier", "quality-verifier", "performance-verifier", "openspec-verifier", "test-verifier", "archive", "recovery"):
+            with self.subTest(role=role):
+                self.assertIn("silent", prompts.role_prompt(role, "my-change", verification_round=1).lower())
 
     def test_archive_prompt_reads_archive_context_only(self):
         text = prompts.role_prompt("archive", "my-change")
