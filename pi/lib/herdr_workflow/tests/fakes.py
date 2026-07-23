@@ -56,6 +56,7 @@ class FakeHerdr:
         self.calls = []
         self._pane_to_agent = {}   # pane_id -> name, set by `agent rename` (or register_pane)
         self._agent_to_pane = {}   # reverse of the above
+        self._pane_to_tab = {}
         self._pane_status = {}     # pane_id -> agent_status; absent until first touched
         self._tab_seq = 0
         self._pane_seq = 0
@@ -74,10 +75,12 @@ class FakeHerdr:
     def after(self, predicate, effect):
         self.after_hooks.append((predicate, effect))
 
-    def register_pane(self, pane_id, name):
+    def register_pane(self, pane_id, name, tab_id=None):
         """Associate a pane with an agent name, as `agent rename` would."""
         self._pane_to_agent[pane_id] = name
         self._agent_to_pane[name] = pane_id
+        if tab_id:
+            self._pane_to_tab[pane_id] = tab_id
 
     def set_agent(self, name, pane_id=None, agent_status=None, **_ignored):
         """Test convenience: register/update an agent's pane and/or status directly."""
@@ -117,25 +120,30 @@ class FakeHerdr:
             # from root_pane["tab_id"].
             return {"root_pane": {"pane_id": pane_id, "tab_id": tab_id}, "tab": {"tab_id": tab_id}}
         if args[:2] == ("agent", "start"):
-            # Real `agent start` launches inside the caller-supplied `--pane`; it
-            # never fabricates a new pane. Registering anything else here would
-            # desync `state["panes"][role]` from what `agent get` resolves.
             name = args[2]
-            pane_id = args[args.index("--pane") + 1]
-            self.register_pane(pane_id, name)
+            self._pane_seq += 1
+            pane_id = f"pane-{self._pane_seq}"
+            if "--tab" in args:
+                tab_id = args[args.index("--tab") + 1]
+            else:
+                self._tab_seq += 1
+                tab_id = f"tab-{self._tab_seq}"
+            self.register_pane(pane_id, name, tab_id)
             self._pane_status[pane_id] = "idle"
-            return {"agent": {"pane_id": pane_id, "name": name}}
-        if args[:2] == ("agent", "prompt"):
-            name = args[2]
-            pane_id = self._agent_to_pane.get(name)
+            return {"agent": {"pane_id": pane_id, "tab_id": tab_id, "name": name, "agent_status": "idle"}}
+        if args[:2] in {("agent", "prompt"), ("agent", "send")}:
+            target = args[2]
+            pane_id = target if target in self._pane_to_agent or target in self._pane_status else self._agent_to_pane.get(target)
             if pane_id is None:
-                raise SystemExit(f"agent not found: {name}")
+                raise SystemExit(f"agent not found: {target}")
             if self.auto_advance_on_submit:
                 self._pane_status[pane_id] = "working"
             return {"agent": {"pane_id": pane_id, "agent_status": self._pane_status.get(pane_id, "working")}}
         if args[:2] == ("agent", "rename"):
             self.register_pane(args[2], args[3])
             return {}
+        if args[:2] == ("pane", "get"):
+            return {"pane": {"pane_id": args[2], "tab_id": self._pane_to_tab.get(args[2])}}
         if args[:2] == ("pane", "process-info"):
             return {"process_info": {"foreground_processes": [{"name": "zsh"}]}}
         if args[:2] == ("pane", "read"):
@@ -152,10 +160,10 @@ class FakeHerdr:
             return {}
         if args[:2] == ("agent", "get"):
             target = args[2]
-            pane_id = target if target in self._pane_status else self._agent_to_pane.get(target)
+            pane_id = target if target in self._pane_to_agent or target in self._pane_status else self._agent_to_pane.get(target)
             if pane_id is None:
                 raise SystemExit(f"agent not found: {target}")
-            return {"agent": {"agent_status": self._pane_status.get(pane_id, "idle"), "pane_id": pane_id}}
+            return {"agent": {"agent_status": self._pane_status.get(pane_id, "idle"), "pane_id": pane_id, "tab_id": self._pane_to_tab.get(pane_id)}}
         if args[:2] == ("wait", "agent-status"):
             # herdr wait agent-status <pane_id> --status <status> --timeout <ms>
             pane_id = args[2]

@@ -5,7 +5,7 @@ description: Runs full project test suite after all parallel code reviews pass.
 
 # Test Verifier
 
-Read-only. Started only after security, AGENTS.md, quality, performance, and OpenSpec verifiers pass.
+Read-only. Started only after security, AGENTS.md, quality, performance, and OpenSpec verifiers pass. Do not emit chat output; JSONL is durable handoff.
 
 1. Find repository’s standard full test command from root config, CI, and instructions.
 2. Run full configured suite, including required integration/e2e tests. Never use file/test-name filters.

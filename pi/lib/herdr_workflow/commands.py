@@ -16,10 +16,10 @@ from . import effects, findings, gates, paths, prompts, recovery, tiering, traci
 from . import state as state_mod
 
 PANE_READY_TIMEOUT_SECONDS = 5
+VERIFICATION_TAB_ROLES = ("triage", *tiering.VERIFIER_ROLES, tiering.TEST_VERIFIER)
 
 
 def wait_for_pane_ready(ctx, pane_id):
-    """Wait for shell process, then give its prompt a single short settle window."""
     deadline = ctx.clock.monotonic() + PANE_READY_TIMEOUT_SECONDS
     while ctx.clock.monotonic() < deadline:
         process = ctx.herdr.call("pane", "process-info", "--pane", pane_id).get("process_info", {})
@@ -164,17 +164,15 @@ def cmd_start(ctx, args):
         "otelTraceRootStartedUnixNano": str(ctx.clock.time_ns()),
     }
     state_mod.save_state(state)
-    request = Path(worktree) / ".herdr-workflow" / args.change / "request.md"
-    ticket = f"\n**Ticket:** {args.ticket}\n" if args.ticket else ""
-    task = args.task.strip() if args.task else ""
-    if task:
-        request.write_text(f"# {args.change}\n{ticket}{task}\n")
-    else:
-        request.write_text(f"# {args.change}\n{ticket}")
-    if source != worktree:
-        source_request = Path(source) / ".herdr-workflow" / args.change / "request.md"
-        source_request.parent.mkdir(parents=True, exist_ok=True)
-        source_request.write_text(request.read_text())
+    if state["workflowType"] != "no-openspec":
+        request = Path(worktree) / ".herdr-workflow" / args.change / "request.md"
+        ticket = f"\n**Ticket:** {args.ticket}\n" if args.ticket else ""
+        task = args.task.strip() if args.task else ""
+        request.write_text(f"# {args.change}\n{ticket}{task}\n" if task else f"# {args.change}\n{ticket}")
+        if source != worktree:
+            source_request = Path(source) / ".herdr-workflow" / args.change / "request.md"
+            source_request.parent.mkdir(parents=True, exist_ok=True)
+            source_request.write_text(request.read_text())
     for checkout in {source, worktree}:
         exclude = Path(ctx.git.run("rev-parse", "--git-path", "info/exclude", cwd=checkout))
         if not exclude.is_absolute():
@@ -214,15 +212,27 @@ def role_agent_name(state, role):
 
 
 def _close_old_pane(ctx, state, role):
-    """Close role's owning tab before replacing an unknown or stale Pi process."""
+    """Close stale grouped pane or standalone role tab."""
+    old = state.get("panes", {}).get(role)
+    if role in VERIFICATION_TAB_ROLES:
+        if old:
+            try:
+                ctx.herdr.call("pane", "close", old)
+            except SystemExit:
+                pass
+        return
     old_tab = state.get("tabs", {}).get(role)
+    if old:
+        try:
+            old_tab = ctx.herdr.call("pane", "get", old)["pane"].get("tab_id") or old_tab
+        except (KeyError, SystemExit):
+            pass
     if old_tab:
         try:
             ctx.herdr.call("tab", "close", old_tab)
             return
         except SystemExit:
             pass
-    old = state.get("panes", {}).get(role)
     if old:
         try:
             ctx.herdr.call("pane", "close", old)
@@ -230,8 +240,26 @@ def _close_old_pane(ctx, state, role):
             pass
 
 
+def _live_verification_tab(ctx, state, role):
+    tab = state.get("tabs", {}).get("verification")
+    standalone_tabs = {value for key, value in state.get("tabs", {}).items() if key not in (*VERIFICATION_TAB_ROLES, "verification")}
+    if not tab or tab in standalone_tabs:
+        return None
+    for sibling in VERIFICATION_TAB_ROLES:
+        pane = state.get("panes", {}).get(sibling)
+        if sibling == role or not pane or state.get("tabs", {}).get(sibling) != tab:
+            continue
+        try:
+            agent = ctx.herdr.call("agent", "get", pane)["agent"]
+        except (KeyError, SystemExit):
+            continue
+        if agent.get("pane_id") == pane:
+            return tab
+    return None
+
+
 def launch_role(ctx, state, role, text=None):
-    """Spawn Pi with its initial prompt; never emulate terminal input."""
+    """Spawn Pi through Herdr's agent lifecycle API."""
     config = ctx.config
     models = config["models"]
     thinking = config["thinking"]
@@ -244,18 +272,47 @@ def launch_role(ctx, state, role, text=None):
 
     def spawn(spawn_model):
         _close_old_pane(ctx, state, role)
-        label = {"planner": "explore", "worker": "apply"}.get(role, role.removesuffix("-verifier"))
-        tab = ctx.herdr.call("tab", "create", "--workspace", state["workspace"], "--label", label, *prompts.role_env(role, change), "--no-focus")
-        pane_id = tab["root_pane"]["pane_id"]
-        tab_id = tab["root_pane"]["tab_id"]
-        instructions = text or prompts.role_prompt(role, change, state.get("verificationRound"), state.get("workflowType"))
-        wait_for_pane_ready(ctx, pane_id)
-        ctx.herdr.call("pane", "run", pane_id, shlex.join([
-            "pi", *prompts.pi_arguments(role, spawn_model, level, change, config),
-            f"/skill:herdr-openspec-{role} {instructions}",
-        ]))
+        label = "verification" if role in VERIFICATION_TAB_ROLES else {"planner": "explore", "worker": "apply"}.get(role, role.removesuffix("-verifier"))
+        instructions = text or prompts.role_prompt(role, change, state.get("verificationRound"), state.get("workflowType"), state.get("task"))
+        target_tab = _live_verification_tab(ctx, state, role) if role in VERIFICATION_TAB_ROLES else None
+        bootstrap_pane = None
+        if not target_tab:
+            tab = ctx.herdr.call("tab", "create", "--workspace", state["workspace"], "--label", label, "--no-focus")["root_pane"]
+            target_tab = tab["tab_id"]
+            bootstrap_pane = tab["pane_id"]
+            wait_for_pane_ready(ctx, bootstrap_pane)
+        write_trace_handoff(ctx, state, role)
+        command = [
+            "agent", "start", role_agent_name(state, role), "--cwd", state["worktree"],
+            "--tab", target_tab, "--split", "right", *prompts.role_env(role, change), "--no-focus",
+            "--", "pi", *prompts.pi_arguments(role, spawn_model, level, change, config), f"/skill:herdr-openspec-{role} {instructions}",
+        ]
+        try:
+            agent = ctx.herdr.call(*command)["agent"]
+        except SystemExit as error:
+            if not bootstrap_pane or "not an available shell" not in str(error):
+                if bootstrap_pane:
+                    ctx.herdr.call("tab", "close", target_tab)
+                raise
+            ctx.clock.sleep(0.25)
+            try:
+                agent = ctx.herdr.call(*command)["agent"]
+            except (Exception, SystemExit):
+                ctx.herdr.call("tab", "close", target_tab)
+                raise
+        except (Exception, SystemExit):
+            if bootstrap_pane:
+                ctx.herdr.call("tab", "close", target_tab)
+            raise
+        if bootstrap_pane:
+            ctx.herdr.call("pane", "close", bootstrap_pane)
+        pane_id = agent["pane_id"]
+        tab_id = agent.get("tab_id") or target_tab
+        ctx.herdr.call("tab", "rename", tab_id, label)
         state.setdefault("panes", {})[role] = pane_id
         state.setdefault("tabs", {})[role] = tab_id
+        if role in VERIFICATION_TAB_ROLES:
+            state["tabs"]["verification"] = tab_id
         state_mod.save_state(state)
 
     try:
@@ -278,19 +335,26 @@ def prompt_role(ctx, state, role, text=None):
     """Submit a follow-up to the live Pi agent, keeping its session and prior-round context."""
     if role not in state.get("panes", {}):
         raise SystemExit(f"no pane for role {role} in prompt_role")
-    instructions = text or prompts.role_prompt(role, state["changeId"], state.get("verificationRound"), state.get("workflowType"))
+    instructions = text or prompts.role_prompt(role, state["changeId"], state.get("verificationRound"), state.get("workflowType"), state.get("task"))
     write_trace_handoff(ctx, state, role)
-    ctx.herdr.call("pane", "run", state["panes"][role], instructions)
+    ctx.herdr.call("agent", "send", state["panes"][role], instructions)
 
 
 def start_role(ctx, state, role, text=None):
+    verification_tab = state.get("tabs", {}).get("verification")
+    if role in VERIFICATION_TAB_ROLES and (not verification_tab or state.get("tabs", {}).get(role) != verification_tab):
+        launch_role(ctx, state, role, text)
+        return
     if has_role_pane(state, role):
         try:
             agent = ctx.herdr.call("agent", "get", state["panes"][role])["agent"]
         except (KeyError, SystemExit):
             launch_role(ctx, state, role, text)
             return
-        if agent.get("pane_id") == state["panes"][role] and agent.get("agent_status") in {"idle", "working", "blocked"}:
+        if agent.get("pane_id") == state["panes"][role] and agent.get("agent_status") in {"idle", "working", "blocked", "done"}:
+            if agent.get("tab_id") and state.get("tabs", {}).get(role) != agent["tab_id"]:
+                state.setdefault("tabs", {})[role] = agent["tab_id"]
+                state_mod.save_state(state)
             prompt_role(ctx, state, role, text)
             return
     launch_role(ctx, state, role, text)
@@ -447,13 +511,16 @@ def write_triage_input(ctx, state, tier):
     else:
         changed = list(files)
     state.setdefault("verificationSnapshots", {})[str(state["verificationRound"])] = hashes
-    checks = {"openSpec": plan_quality(state), "applicableInstructions": tiering.applicable_instructions(root, changed), "triagePlanSchema": "validated by dispatch-verifiers"}
-    suggested = tiering.eligible_verifier_roles(changed)
+    available = [role for role in tiering.VERIFIER_ROLES if role != "openspec-verifier" or state.get("workflowType") != "no-openspec"]
+    checks = {"applicableInstructions": tiering.applicable_instructions(root, changed), "triagePlanSchema": "validated by dispatch-verifiers"}
+    if state.get("workflowType") != "no-openspec":
+        checks["openSpec"] = plan_quality(state)
+    suggested = [role for role in tiering.eligible_verifier_roles(changed) if role in available]
     prior = state.get("previousVerificationResults", {})
-    reusable = {role: result for role, result in prior.items() if role in tiering.VERIFIER_ROLES and result.get("verdict") == "PASS"}
+    reusable = {role: result for role, result in prior.items() if role in available and result.get("verdict") == "PASS"}
     path = triage_input_path(state)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"round": state["verificationRound"], "tier": tier, "fileManifest": get_file_manifest(ctx, root, changed), "allChangedFiles": files, "deterministicChecks": checks, "availableRoles": list(tiering.VERIFIER_ROLES), "suggestedRoles": suggested, "reusablePasses": reusable}, indent=2) + "\n")
+    path.write_text(json.dumps({"round": state["verificationRound"], "tier": tier, "fileManifest": get_file_manifest(ctx, root, changed), "allChangedFiles": files, "deterministicChecks": checks, "availableRoles": available, "suggestedRoles": suggested, "reusablePasses": reusable}, indent=2) + "\n")
 
 
 def scoped_diff(ctx, root, files, hunks=None, limit=12000):

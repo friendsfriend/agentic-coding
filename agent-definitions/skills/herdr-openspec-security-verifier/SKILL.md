@@ -7,7 +7,7 @@ description: Reviews changed code only for newly introduced security defects in 
 
 Read-only. Never edit code or change workflow phase.
 
-Use visible chat updates for scope, progress, findings, and blockers. JSONL is durable handoff only; never replace chat output with artifact writes.
+Do not emit chat output. JSONL is durable handoff.
 
 1. Read `git diff`, relevant changed files, and trust boundaries.
 2. Flag only introduced: SQL/XSS/command/path injection, auth/authz bypasses, secrets, insecure crypto, or missing validation of untrusted input.

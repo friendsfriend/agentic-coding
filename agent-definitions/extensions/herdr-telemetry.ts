@@ -32,6 +32,7 @@ const telemetryConfig = () => {
 const json = (value: unknown) => { try { return JSON.stringify(value); } catch { return String(value); } };
 const assistantText = (message: any) => Array.isArray(message?.content) ? message.content.filter((part: any) => part?.type === 'text').map((part: any) => String(part.text ?? '')).join('') : '';
 const modelName = (value: any) => value?.provider && value?.id ? `${value.provider}/${value.id}` : undefined;
+const isOneShot = (role?: string) => role === 'recovery' || role === 'archive';
 
 export default function (pi: ExtensionAPI) {
   const change = process.env.HERDR_CHANGE_ID;
@@ -42,7 +43,7 @@ export default function (pi: ExtensionAPI) {
   const healthPath = join(process.env.HOME ?? '', '.pi', 'agent', 'herdr-provider-health.json');
   const captureContent = () => telemetryConfig().captureContent;
   const restricted = !!role && !['manager', 'planner', 'worker'].includes(role);
-  const oneShot = role === 'recovery' || role === 'archive' || role?.endsWith('-verifier');
+  const oneShot = isOneShot(role);
   const commandStart = String.raw`(?:^|[\n;&|()'"])\s*`;
   const agentExecutable = new RegExp(`${commandStart}(?:(?:command|exec|nohup)\\s+)?(?:env(?:\\s+[A-Za-z_][A-Za-z0-9_]*=\\S+)*\\s+)?(?:\\S*\\/)?(?:pi|opencode|claude|codex)(?=\\s|$)`, 'i');
   const agentRunner = new RegExp(`${commandStart}(?:npx|bunx|uvx)\\s+(?:pi|opencode|claude|codex)(?=\\s|$)`, 'i');
@@ -85,4 +86,4 @@ export default function (pi: ExtensionAPI) {
   pi.on('message_end', (event: any) => { if (event.message?.role !== 'assistant') return; const usage = event.message.usage; if (usage) write('model_usage', { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cacheReadTokens: usage.cacheReadTokens, cacheWriteTokens: usage.cacheWriteTokens, cost: usage.cost?.total }); });
 }
 
-export const telemetryTest = { parseTraceparent, traceparent };
+export const telemetryTest = { parseTraceparent, traceparent, isOneShot };
