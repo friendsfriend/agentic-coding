@@ -603,12 +603,15 @@ class PromptSubmissionTest(PhaseTestCase):
         self.assertIn(("pane", "run", "pane-1", "go"), self.herdr.calls)
         self.assertFalse(any(call[:2] in {("agent", "prompt"), ("pane", "send-keys"), ("wait", "agent-status")} for call in self.herdr.calls))
 
-    def test_active_agent_receives_follow_up_in_its_pane(self):
-        state = self.make_state("apply", panes={"worker": "pane-1"})
-        self.herdr.register_pane("pane-1", commands.role_agent_name(state, "worker"))
-        self.herdr.set_status("pane-1", "idle")
+    def test_reuses_role_launched_with_pi_name(self):
+        state = self.make_state("apply")
+        commands.launch_role(self.ctx, state, "worker")
+        self.herdr.calls.clear()
+
         commands.start_role(self.ctx, state, "worker", text="go")
-        self.assertIn(("pane", "run", "pane-1", "go"), self.herdr.calls)
+
+        self.assertIn(("agent", "get", state["panes"]["worker"]), self.herdr.calls)
+        self.assertIn(("pane", "run", state["panes"]["worker"], "go"), self.herdr.calls)
         self.assertFalse(any(call[:2] == ("tab", "create") for call in self.herdr.calls))
 
     def test_unknown_agent_restarts_in_fresh_tab(self):

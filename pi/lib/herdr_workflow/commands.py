@@ -286,7 +286,7 @@ def prompt_role(ctx, state, role, text=None):
 def start_role(ctx, state, role, text=None):
     if has_role_pane(state, role):
         try:
-            agent = ctx.herdr.call("agent", "get", role_agent_name(state, role))["agent"]
+            agent = ctx.herdr.call("agent", "get", state["panes"][role])["agent"]
         except (KeyError, SystemExit):
             launch_role(ctx, state, role, text)
             return
