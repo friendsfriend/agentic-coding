@@ -28,6 +28,29 @@ class MoveBaseAfterPushGit(FakeGit):
         return result
 
 
+class FailFirstPushExceptionGit(FakeGit):
+    def __init__(self):
+        self.fail_push = True
+
+    def run(self, *args, cwd):
+        if args[0] == "push" and self.fail_push:
+            self.fail_push = False
+            raise OSError("push failed")
+        return super().run(*args, cwd=cwd)
+
+
+class CommittingPushGit(FakeGit):
+    def __init__(self, repo):
+        super().__init__()
+        self.repo = repo
+        self.phases = []
+
+    def run(self, *args, cwd):
+        if args[0] == "push":
+            self.phases.append(state_mod.load_state(self.repo, "my-change")["phase"])
+        return super().run(*args, cwd=cwd)
+
+
 class Args:
     """Plain namespace standing in for argparse.Namespace in tests."""
 
@@ -444,6 +467,15 @@ class ArchiveAndGitOperationsTest(PhaseTestCase):
         self.assertIn(("pane", "close", "pane-git"), self.herdr.calls)
         self.assertFalse(any(call[:2] == ("agent", "start") for call in self.herdr.calls))
 
+    def test_git_operations_are_committing_while_pushing(self):
+        self.ctx.git = CommittingPushGit(self.repo)
+        self.make_state("archive")
+        self.dirty_file()
+
+        commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
+
+        self.assertEqual(self.ctx.git.phases, ["committing"])
+
     def test_push_failure_keeps_workflow_retryable(self):
         self.ctx.git = FailFirstPushGit()
         self.make_state("archive")
@@ -456,6 +488,19 @@ class ArchiveAndGitOperationsTest(PhaseTestCase):
         state = state_mod.load_state(self.repo, "my-change")
         self.assertEqual(state["phase"], "completed")
         self.assertEqual(self.ctx.git.run("rev-parse", "HEAD", cwd=self.repo), self.ctx.git.run("rev-parse", "origin/feature/my-change", cwd=self.repo))
+
+    def test_exception_during_push_restores_archive_phase_and_start_time(self):
+        self.ctx.git = FailFirstPushExceptionGit()
+        original_start = "2024-01-01T00:00:00+00:00"
+        self.make_state("archive", phaseStartedAt=original_start)
+        self.dirty_file()
+
+        with self.assertRaisesRegex(OSError, "push failed"):
+            commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
+
+        state = state_mod.load_state(self.repo, "my-change")
+        self.assertEqual(state["phase"], "archive")
+        self.assertEqual(state["phaseStartedAt"], original_start)
 
     def test_base_move_after_push_does_not_block_completion(self):
         self.ctx.git = MoveBaseAfterPushGit()

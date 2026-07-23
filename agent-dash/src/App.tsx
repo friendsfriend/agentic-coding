@@ -463,12 +463,13 @@ export function App(props: {
   });
   const workflowStatus = createMemo(() => {
     const phase = data().state.phase;
+    if (phase === "committing") return { text: "Pushing changes", working: true };
+    if (phase === "archive") return { text: "Archiving", working: true };
     const active = data().agents.find((agent) => agent.status === "working");
     if (!active) return { text: phase, working: false };
     if (active.role === "planner") return { text: "Planning", working: true };
     if (active.role.endsWith("verifier"))
       return { text: "Verifying", working: true };
-    if (active.role === "archive") return { text: "Archiving", working: true };
     return { text: "Applying", working: true };
   });
 
@@ -1409,7 +1410,7 @@ export function App(props: {
     const phase = data().state.phase;
     if (phase === "paused") return "Workflow paused";
     if (
-      !["explore", "apply", "fix", "triage", "verify", "archive"].includes(
+      !["explore", "apply", "fix", "triage", "verify", "archive", "committing"].includes(
         phase,
       ) ||
       data().agents.some((agent) => agent.status === "working")
