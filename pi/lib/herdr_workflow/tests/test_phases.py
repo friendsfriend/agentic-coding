@@ -143,6 +143,10 @@ class CmdApplyTest(PhaseTestCase):
         self.assertEqual(state["phase"], "apply")
         self.assertTrue(state["planQuality"]["passed"])
         self.assertIn("worker", state["panes"])
+        traces = [json.loads(line) for line in (state_mod.workflow_dir(state) / "traces.jsonl").read_text().splitlines()]
+        phase_change = next(trace for trace in traces if trace["name"] == "workflow.phase_changed")
+        self.assertEqual(phase_change["attributes"]["herdr.source"], "proposed")
+        self.assertEqual(phase_change["attributes"]["herdr.target"], "apply")
 
     def test_fails_quality_gate_without_tasks(self):
         self.make_state("proposed")
@@ -175,7 +179,10 @@ class CmdPhaseTest(PhaseTestCase):
             commands.cmd_phase(self.ctx, Args(repo=str(self.repo), change="my-change", phase="proposed"))
         self.assertTrue(str(ctx.exception).startswith("PLAN_REJECTED:"))
         state = state_mod.load_state(self.repo, "my-change")
+        traces = [json.loads(line) for line in (state_mod.workflow_dir(state) / "traces.jsonl").read_text().splitlines()]
         self.assertEqual(state["phase"], "explore")  # unchanged
+        self.assertEqual(next(trace for trace in traces if trace["name"] == "workflow.plan_quality_rejected")["attributes"]["herdr.span_status"], "ERROR")
+        self.assertEqual(next(trace for trace in traces if trace["name"] == "workflow.plan_quality_issue")["attributes"]["herdr.span_status"], "ERROR")
 
     def test_invalid_transition_rejected(self):
         self.make_state("explore")
@@ -214,6 +221,8 @@ class CmdVerifyTest(PhaseTestCase):
         self.assertIn(state["verificationTier"], {"lite", "full", "trivial"})
         self.assertIn("triage", state["panes"])
         self.assertTrue(commands.triage_input_path(state).exists())
+        traces = [json.loads(line) for line in (state_mod.workflow_dir(state) / "traces.jsonl").read_text().splitlines()]
+        self.assertTrue(any(trace["name"] == "workflow.triage_started" for trace in traces))
 
     def test_no_openspec_workflow_skips_tasks_and_openspec_review(self):
         self.make_state("apply", verificationRound=0, workflowType="no-openspec")
@@ -269,8 +278,11 @@ class CmdDispatchVerifiersTest(PhaseTestCase):
         commands.triage_plan_path(state).write_text(json.dumps(plan))
         commands.cmd_dispatch_verifiers(self.ctx, Args(repo=str(self.repo), change="my-change"))
         state = state_mod.load_state(self.repo, "my-change")
+        traces = [json.loads(line) for line in (state_mod.workflow_dir(state) / "traces.jsonl").read_text().splitlines()]
         self.assertEqual(state["phase"], "verify")
         self.assertIn("quality-verifier", state["panes"])
+        self.assertTrue(any(trace["name"] == "workflow.triage_role_selected" for trace in traces))
+        self.assertTrue(any(trace["name"] == "workflow.verifier_dispatched" for trace in traces))
 
     def test_empty_plan_goes_straight_to_developer_review(self):
         state = self._prepare_triage()
@@ -339,16 +351,27 @@ class CmdVerificationResultTest(PhaseTestCase):
         state = state_mod.load_state(self.repo, "my-change")
         self.assertEqual(state["phase"], "developer-review")
         self.assertEqual(state["verificationResults"]["coordinator"]["verdict"], "PASS")
+        traces = [json.loads(line) for line in (state_mod.workflow_dir(state) / "traces.jsonl").read_text().splitlines()]
+        self.assertTrue(any(trace["name"] == "workflow.developer_review_ready" for trace in traces))
 
     def test_any_fail_moves_to_fix(self):
         state = self._verifying_state(roles=("quality-verifier", "security-verifier"))
-        _write_report(state, "quality-verifier", "FAIL", findings=[{"type": "finding", "severity": "critical", "path": "a.py", "line": 1, "detail": "bug"}])
+        _write_report(state, "quality-verifier", "FAIL", findings=[{"type": "finding", "severity": "critical", "path": "a.py", "line": 1, "detail": "bug", "evidence": "repro", "fix": "fix bug"}])
         commands.cmd_verification_result(self.ctx, Args(repo=str(self.repo), change="my-change", role="quality-verifier"))
         _write_report(state, "security-verifier", "PASS")
         commands.cmd_verification_result(self.ctx, Args(repo=str(self.repo), change="my-change", role="security-verifier"))
         state = state_mod.load_state(self.repo, "my-change")
+        traces = [json.loads(line) for line in (state_mod.workflow_dir(state) / "traces.jsonl").read_text().splitlines()]
+        finding_trace = next(trace for trace in traces if trace["name"] == "workflow.verification_finding")
         self.assertEqual(state["phase"], "fix")
         self.assertIn("worker", state["panes"])
+        self.assertEqual(finding_trace["attributes"]["herdr.severity"], "critical")
+        self.assertTrue(finding_trace["attributes"]["herdr.finding_id"])
+        self.assertEqual(finding_trace["attributes"]["herdr.finding_path"], "a.py")
+        self.assertEqual(finding_trace["attributes"]["herdr.finding_line"], 1)
+        self.assertEqual(finding_trace["attributes"]["herdr.description"], "bug")
+        self.assertEqual(finding_trace["attributes"]["herdr.evidence"], "repro")
+        self.assertEqual(finding_trace["attributes"]["herdr.resolution"], "fix bug")
 
     def test_round_limit_reached_pauses(self):
         max_rounds = self.ctx.config["workflow"]["max_verification_rounds"]
@@ -393,6 +416,16 @@ class CmdVerificationResultTest(PhaseTestCase):
         self.assertIn("c.py:2-4", context)
         self.assertNotIn("accepted cleanup", context)
         self.assertEqual(accepted["ids"], ["info-1"])
+        traces = [json.loads(line) for line in (state_mod.workflow_dir(state) / "traces.jsonl").read_text().splitlines()]
+        comments = [trace for trace in traces if trace["name"] == "workflow.developer_review_comment"]
+        accepted_trace = next(trace for trace in traces if trace["name"] == "workflow.developer_accepted_finding")
+        self.assertEqual(len(comments), 2)
+        self.assertEqual(comments[0]["attributes"]["herdr.finding_id"], "warn-1")
+        self.assertEqual(comments[0]["attributes"]["herdr.file_path"], "a.py")
+        self.assertEqual(comments[0]["attributes"]["herdr.start_line"], 1)
+        self.assertEqual(comments[0]["attributes"]["herdr.body"], "optional cleanup")
+        self.assertEqual(accepted_trace["attributes"]["herdr.finding_id"], "info-1")
+        self.assertEqual(accepted_trace["attributes"]["herdr.status"], "accepted")
 
     def test_finish_review_without_comments_archives_and_accepts_findings(self):
         state = self.make_state("developer-review", verificationRound=1)
@@ -610,21 +643,35 @@ class LaunchRoleTest(PhaseTestCase):
         self.assertIn("worker", state["panes"])
         self.assertIn("worker", state["tabs"])
 
-    def test_groups_triage_and_verifiers_in_verification_tab(self):
-        state = self.make_state("triage")
-        commands.launch_role(self.ctx, state, "triage")
-        commands.launch_role(self.ctx, state, "quality-verifier")
-        commands.launch_role(self.ctx, state, "performance-verifier")
+    def test_groups_named_agents_in_two_verification_rows(self):
+        roles = ("triage", "quality-verifier", "performance-verifier", "security-verifier", "agents-verifier")
+        state = self.make_state("triage", verificationRoles=list(roles[1:]))
+        for role in roles:
+            commands.launch_role(self.ctx, state, role)
+
         launches = [call for call in self.herdr.calls if call[:2] == ("agent", "start")]
         splits = [call for call in self.herdr.calls if call[:2] == ("pane", "split")]
+        renames = [call for call in self.herdr.calls if call[:2] == ("pane", "rename")]
         verification_tab = state["tabs"]["verification"]
+
         self.assertEqual(len([call for call in self.herdr.calls if call[:2] == ("tab", "create")]), 1)
-        self.assertEqual(len(splits), 2)
-        self.assertTrue(all(split[split.index("--direction") + 1] == "right" for split in splits))
+        self.assertEqual([(call[2], call[call.index("--direction") + 1]) for call in splits], [
+            ("pane-1", "down"),
+            ("pane-1", "right"),
+            ("pane-2", "right"),
+            ("pane-4", "right"),
+        ])
+        self.assertEqual(splits[0][splits[0].index("--env") + 1], "HERDR_ROLE=performance-verifier")
+        self.assertEqual([call[call.index("--pane") + 1] for call in launches], ["pane-1", "pane-3", "pane-2", "pane-4", "pane-5"])
+        self.assertEqual(renames, [
+            ("pane", "rename", "pane-1", "triage"),
+            ("pane", "rename", "pane-3", "quality-verifier"),
+            ("pane", "rename", "pane-2", "performance-verifier"),
+            ("pane", "rename", "pane-4", "security-verifier"),
+            ("pane", "rename", "pane-5", "agents-verifier"),
+        ])
         self.assertTrue(all(self.herdr._pane_to_tab[launch[launch.index("--pane") + 1]] == verification_tab for launch in launches))
-        self.assertEqual(state["tabs"]["triage"], verification_tab)
-        self.assertEqual(state["tabs"]["quality-verifier"], verification_tab)
-        self.assertEqual(state["tabs"]["performance-verifier"], verification_tab)
+        self.assertTrue(all(state["tabs"][role] == verification_tab for role in roles))
 
     def test_replacing_grouped_role_closes_only_its_pane(self):
         state = self.make_state("verify", panes={"quality-verifier": "old-pane"}, tabs={"quality-verifier": "verification-tab", "verification": "verification-tab"})

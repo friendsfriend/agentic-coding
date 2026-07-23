@@ -2,8 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, expect, test } from 'bun:test';
-import { loadLocalChanges, loadLocalDiff, saveDeveloperReview, type DeveloperReviewComment } from './data';
+import { afterEach, expect, spyOn, test } from 'bun:test';
+import { loadLocalChanges, loadLocalDiff, saveDeveloperReview, startWorkflow, type DeveloperReviewComment } from './data';
 
 const roots: string[] = [];
 const runGit = (repo: string, ...args: string[]) => execFileSync('git', args, { cwd: repo, stdio: 'pipe' }).toString().trim();
@@ -61,4 +61,19 @@ test('saveDeveloperReview creates review directory and serializes comments', asy
   await saveDeveloperReview(repo, 'review', comments);
 
   expect(JSON.parse(readFileSync(join(repo, '.herdr-workflow', 'review', 'reviews', 'developer-review.json'), 'utf8'))).toEqual({ comments });
+});
+
+test('startWorkflow passes quick implementation task to worker', async () => {
+  const spawn = spyOn(Bun, 'spawn').mockReturnValue({
+    stdout: new Blob(['started']).stream(),
+    stderr: new Blob().stream(),
+    exited: Promise.resolve(0),
+  } as any);
+
+  await startWorkflow({ repo: '.', ticket: '', change: 'quick-fix', task: 'Fix login\nand add coverage', mode: 'worktree', worker: 'test/worker', workflowType: 'quick' });
+
+  const args = spawn.mock.calls[0]![0] as string[];
+  spawn.mockRestore();
+  expect(args).toContain('no-openspec');
+  expect(args.slice(args.indexOf('--task'), args.indexOf('--task') + 2)).toEqual(['--task', 'Fix login\nand add coverage']);
 });

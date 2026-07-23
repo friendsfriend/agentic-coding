@@ -66,7 +66,7 @@ class TraceExporter:
         def send():
             try:
                 attributes = [{"key": key, "value": {"stringValue": str(value)}} for key, value in record["attributes"].items()]
-                payload = {"resourceSpans": [{"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "herdr-workflow"}}]}, "scopeSpans": [{"scope": {"name": "herdr-workflow"}, "spans": [{"traceId": record["traceId"], "spanId": record["spanId"], "parentSpanId": record.get("parentSpanId"), "name": record["name"], "startTimeUnixNano": record["startTimeUnixNano"], "endTimeUnixNano": record["endTimeUnixNano"], "attributes": attributes, "status": {"code": 1}}]}]}]}
+                payload = {"resourceSpans": [{"resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "herdr-workflow"}}]}, "scopeSpans": [{"scope": {"name": "herdr-workflow"}, "spans": [{"traceId": record["traceId"], "spanId": record["spanId"], "parentSpanId": record.get("parentSpanId"), "name": record["name"], "startTimeUnixNano": record["startTimeUnixNano"], "endTimeUnixNano": record["endTimeUnixNano"], "attributes": attributes, "status": {"code": 2 if record.get("status") == "ERROR" else 1}}]}]}]}
                 request = urllib.request.Request(trace_endpoint(), data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST")
                 urllib.request.urlopen(request, timeout=0.75).read()
             except Exception:

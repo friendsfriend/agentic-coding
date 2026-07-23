@@ -1309,8 +1309,7 @@ export async function startWorkflow(input: {
     "--workflow-type",
     workflowType,
   ];
-  if (workflowType === "standard" && input.task)
-    args.push("--task", input.task);
+  if (input.task) args.push("--task", input.task);
   if (input.ticket) args.push("--ticket", input.ticket);
   const env = {
     ...process.env,
