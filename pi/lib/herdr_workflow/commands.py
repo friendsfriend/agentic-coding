@@ -240,7 +240,7 @@ def _close_old_pane(ctx, state, role):
             pass
 
 
-def _live_verification_tab(ctx, state, role):
+def _live_verification_target(ctx, state, role):
     tab = state.get("tabs", {}).get("verification")
     standalone_tabs = {value for key, value in state.get("tabs", {}).items() if key not in (*VERIFICATION_TAB_ROLES, "verification")}
     if not tab or tab in standalone_tabs:
@@ -254,7 +254,7 @@ def _live_verification_tab(ctx, state, role):
         except (KeyError, SystemExit):
             continue
         if agent.get("pane_id") == pane:
-            return tab
+            return tab, pane
     return None
 
 
@@ -274,38 +274,48 @@ def launch_role(ctx, state, role, text=None):
         _close_old_pane(ctx, state, role)
         label = "verification" if role in VERIFICATION_TAB_ROLES else {"planner": "explore", "worker": "apply"}.get(role, role.removesuffix("-verifier"))
         instructions = text or prompts.role_prompt(role, change, state.get("verificationRound"), state.get("workflowType"), state.get("task"))
-        target_tab = _live_verification_tab(ctx, state, role) if role in VERIFICATION_TAB_ROLES else None
-        bootstrap_pane = None
-        if not target_tab:
-            tab = ctx.herdr.call("tab", "create", "--workspace", state["workspace"], "--label", label, "--no-focus")["root_pane"]
-            target_tab = tab["tab_id"]
-            bootstrap_pane = tab["pane_id"]
-            wait_for_pane_ready(ctx, bootstrap_pane)
+        target = _live_verification_target(ctx, state, role) if role in VERIFICATION_TAB_ROLES else None
+        created_tab = target is None
+        if created_tab:
+            pane = ctx.herdr.call(
+                "tab", "create", "--workspace", state["workspace"], "--cwd", state["worktree"],
+                *prompts.role_env(role, change), "--label", label, "--no-focus",
+            )["root_pane"]
+            target_tab, launch_pane = pane["tab_id"], pane["pane_id"]
+        else:
+            target_tab, sibling_pane = target
+            launch_pane = ctx.herdr.call(
+                "pane", "split", sibling_pane, "--direction", "right", "--cwd", state["worktree"],
+                *prompts.role_env(role, change), "--no-focus",
+            )["pane"]["pane_id"]
+        wait_for_pane_ready(ctx, launch_pane)
         write_trace_handoff(ctx, state, role)
         command = [
-            "agent", "start", role_agent_name(state, role), "--cwd", state["worktree"],
-            "--tab", target_tab, "--split", "right", *prompts.role_env(role, change), "--no-focus",
-            "--", "pi", *prompts.pi_arguments(role, spawn_model, level, change, config), f"/skill:herdr-openspec-{role} {instructions}",
+            "agent", "start", role_agent_name(state, role), "--kind", "pi", "--pane", launch_pane,
+            "--", *prompts.pi_arguments(role, spawn_model, level, change, config), f"/skill:herdr-openspec-{role} {instructions}",
         ]
+
+        def cleanup():
+            if created_tab:
+                ctx.herdr.call("tab", "close", target_tab)
+            else:
+                ctx.herdr.call("pane", "close", launch_pane)
+
         try:
             agent = ctx.herdr.call(*command)["agent"]
         except SystemExit as error:
-            if not bootstrap_pane or "not an available shell" not in str(error):
-                if bootstrap_pane:
-                    ctx.herdr.call("tab", "close", target_tab)
+            if "not an available shell" not in str(error):
+                cleanup()
                 raise
             ctx.clock.sleep(0.25)
             try:
                 agent = ctx.herdr.call(*command)["agent"]
             except (Exception, SystemExit):
-                ctx.herdr.call("tab", "close", target_tab)
+                cleanup()
                 raise
         except (Exception, SystemExit):
-            if bootstrap_pane:
-                ctx.herdr.call("tab", "close", target_tab)
+            cleanup()
             raise
-        if bootstrap_pane:
-            ctx.herdr.call("pane", "close", bootstrap_pane)
         pane_id = agent["pane_id"]
         tab_id = agent.get("tab_id") or target_tab
         ctx.herdr.call("tab", "rename", tab_id, label)
@@ -337,7 +347,7 @@ def prompt_role(ctx, state, role, text=None):
         raise SystemExit(f"no pane for role {role} in prompt_role")
     instructions = text or prompts.role_prompt(role, state["changeId"], state.get("verificationRound"), state.get("workflowType"), state.get("task"))
     write_trace_handoff(ctx, state, role)
-    ctx.herdr.call("agent", "send", state["panes"][role], instructions)
+    ctx.herdr.call("agent", "prompt", state["panes"][role], instructions)
 
 
 def start_role(ctx, state, role, text=None):

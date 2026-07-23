@@ -570,7 +570,7 @@ class CmdMessageTest(PhaseTestCase):
         self.herdr.register_pane("pane-worker", name)
         self.herdr.set_agent(name, agent_status="idle")
         commands.cmd_message(self.ctx, Args(repo=str(self.repo), change="my-change", sender="dev", target="worker", text="please hurry"))
-        calls = [call for call in self.herdr.calls if call[:2] == ("agent", "send") and "please hurry" in call[3]]
+        calls = [call for call in self.herdr.calls if call[:2] == ("agent", "prompt") and "please hurry" in call[3]]
         self.assertEqual(len(calls), 1)
 
     def test_unknown_target_rejected(self):
@@ -594,14 +594,16 @@ class LaunchRoleTest(PhaseTestCase):
         state = self.make_state("apply")
         commands.launch_role(self.ctx, state, "worker")
         kinds = [call[:2] for call in self.herdr.calls]
+        tab_create = next(call for call in self.herdr.calls if call[:2] == ("tab", "create"))
         launch = next(call for call in self.herdr.calls if call[:2] == ("agent", "start"))
         self.assertIn(("tab", "create"), kinds)
+        self.assertNotIn(("pane", "split"), kinds)
         self.assertNotIn(("pane", "run"), kinds)
         self.assertNotIn(("pane", "send-keys"), kinds)
-        self.assertEqual(launch[2], "my-change-worker")
-        self.assertIn("--tab", launch)
-        self.assertIn("--split", launch)
-        self.assertTrue(any(call[:2] == ("pane", "close") for call in self.herdr.calls))
+        self.assertEqual(launch[:7], ("agent", "start", "my-change-worker", "--kind", "pi", "--pane", state["panes"]["worker"]))
+        self.assertEqual(launch[7], "--")
+        self.assertNotIn("--cwd", launch[:7])
+        self.assertEqual(tab_create[tab_create.index("--cwd") + 1], str(self.repo))
         self.assertIn("--name", launch)
         self.assertIn("my-change-worker", launch)
         self.assertIn("/skill:herdr-openspec-worker", launch[-1])
@@ -614,12 +616,12 @@ class LaunchRoleTest(PhaseTestCase):
         commands.launch_role(self.ctx, state, "quality-verifier")
         commands.launch_role(self.ctx, state, "performance-verifier")
         launches = [call for call in self.herdr.calls if call[:2] == ("agent", "start")]
+        splits = [call for call in self.herdr.calls if call[:2] == ("pane", "split")]
         verification_tab = state["tabs"]["verification"]
         self.assertEqual(len([call for call in self.herdr.calls if call[:2] == ("tab", "create")]), 1)
-        for launch in launches:
-            self.assertIn("--tab", launch)
-            self.assertEqual(launch[launch.index("--tab") + 1], verification_tab)
-            self.assertEqual(launch[launch.index("--split") + 1], "right")
+        self.assertEqual(len(splits), 2)
+        self.assertTrue(all(split[split.index("--direction") + 1] == "right" for split in splits))
+        self.assertTrue(all(self.herdr._pane_to_tab[launch[launch.index("--pane") + 1]] == verification_tab for launch in launches))
         self.assertEqual(state["tabs"]["triage"], verification_tab)
         self.assertEqual(state["tabs"]["quality-verifier"], verification_tab)
         self.assertEqual(state["tabs"]["performance-verifier"], verification_tab)
@@ -633,17 +635,16 @@ class LaunchRoleTest(PhaseTestCase):
     def test_never_reuses_worker_tab_as_verification_tab(self):
         state = self.make_state("verify", panes={"worker": "worker-pane"}, tabs={"worker": "worker-tab", "verification": "worker-tab"})
         commands.launch_role(self.ctx, state, "quality-verifier")
-        launch = next(call for call in self.herdr.calls if call[:2] == ("agent", "start"))
-        self.assertNotEqual(launch[launch.index("--tab") + 1], "worker-tab")
+        self.assertNotEqual(state["tabs"]["quality-verifier"], "worker-tab")
         self.assertNotIn(("pane", "close", "worker-pane"), self.herdr.calls)
         self.assertNotIn(("tab", "close", "worker-tab"), self.herdr.calls)
 
 class PromptSubmissionTest(PhaseTestCase):
-    def test_submits_follow_up_through_agent_send(self):
+    def test_submits_follow_up_through_agent_prompt(self):
         state = self.make_state("apply", panes={"worker": "pane-1"})
         self.herdr.register_pane("pane-1", commands.role_agent_name(state, "worker"))
         commands.prompt_role(self.ctx, state, "worker", text="go")
-        self.assertIn(("agent", "send", "pane-1", "go"), self.herdr.calls)
+        self.assertIn(("agent", "prompt", "pane-1", "go"), self.herdr.calls)
         self.assertFalse(any(call[:2] in {("pane", "run"), ("pane", "send-keys"), ("wait", "agent-status")} for call in self.herdr.calls))
 
     def test_reuses_role_launched_with_pi_name(self):
@@ -654,7 +655,7 @@ class PromptSubmissionTest(PhaseTestCase):
         commands.start_role(self.ctx, state, "worker", text="go")
 
         self.assertIn(("agent", "get", state["panes"]["worker"]), self.herdr.calls)
-        self.assertIn(("agent", "send", state["panes"]["worker"], "go"), self.herdr.calls)
+        self.assertIn(("agent", "prompt", state["panes"]["worker"], "go"), self.herdr.calls)
         self.assertFalse(any(call[:2] == ("agent", "start") for call in self.herdr.calls))
 
     def test_reuses_persistent_done_verifier(self):
@@ -662,7 +663,7 @@ class PromptSubmissionTest(PhaseTestCase):
         self.herdr.register_pane("pane-1", commands.role_agent_name(state, "quality-verifier"), "tab-verification")
         self.herdr.set_status("pane-1", "done")
         commands.start_role(self.ctx, state, "quality-verifier", text="next round")
-        self.assertIn(("agent", "send", "pane-1", "next round"), self.herdr.calls)
+        self.assertIn(("agent", "prompt", "pane-1", "next round"), self.herdr.calls)
         self.assertFalse(any(call[:2] == ("agent", "start") for call in self.herdr.calls))
 
     def test_refreshes_moved_standalone_agent_tab(self):

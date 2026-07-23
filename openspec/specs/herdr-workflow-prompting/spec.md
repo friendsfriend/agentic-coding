@@ -8,29 +8,28 @@ The workflow SHALL use Herdr's agent lifecycle API instead of coordinating raw t
 
 #### Scenario: Initial prompt starts atomically
 - **WHEN** workflow launches a managed role
-- **THEN** it SHALL create labeled container tab, wait for bootstrap shell readiness, and pass Pi executable, arguments, and complete initial prompt in one `herdr agent start --tab <id> --split right ... -- pi ... <prompt>` command
+- **THEN** it SHALL create a labeled tab with role cwd and environment, wait for its root shell pane, and pass Pi arguments and complete initial prompt in one `herdr agent start <name> --kind pi --pane <id> -- ... <prompt>` command
 - **AND** retry once only when Herdr reports target is not yet an available shell
-- **AND** close bootstrap shell pane after agent starts so agent owns resulting tab or split
 - **AND** it SHALL NOT separately submit startup text or Enter keys
 
 #### Scenario: Follow-up prompt targets detected agent
 - **GIVEN** a managed role already has a detected Pi process
 - **WHEN** workflow submits another round or message
 - **THEN** it SHALL confirm process with `herdr agent get`
-- **AND** submit prompt with `herdr agent send`
+- **AND** submit prompt with `herdr agent prompt`
 
 ### Requirement: Verification roles share one tab
 The workflow SHALL group triage and all verifier roles in one tab while retaining one pane per role.
 
 #### Scenario: First verification role creates group tab
 - **WHEN** triage is first verification role launched
-- **THEN** workflow SHALL create tab labeled `verification`, start triage in split, and close bootstrap shell pane
+- **THEN** workflow SHALL create tab labeled `verification` and start triage in returned root pane
 - **AND** record tab ID as verification group tab
 
 #### Scenario: Additional verification roles split group tab
 - **GIVEN** live verification group tab exists
 - **WHEN** triage or verifier role starts
-- **THEN** workflow SHALL call `herdr agent start` with group tab ID and `--split right`
+- **THEN** workflow SHALL split a live sibling pane right and start role in returned shell pane
 - **AND** preserve sibling panes when replacing stale grouped agent
 
 #### Scenario: Closed verification tab is recreated

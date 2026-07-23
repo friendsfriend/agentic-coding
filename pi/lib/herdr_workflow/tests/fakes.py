@@ -115,23 +115,24 @@ class FakeHerdr:
             self._tab_seq += 1
             self._pane_seq += 1
             tab_id, pane_id = f"tab-{self._tab_seq}", f"pane-{self._pane_seq}"
+            self._pane_to_tab[pane_id] = tab_id
             # Real `herdr tab create` result has no top-level tab_id: it's nested in
             # root_pane (and in "tab"). Both launch_role and create_tab() read it
             # from root_pane["tab_id"].
             return {"root_pane": {"pane_id": pane_id, "tab_id": tab_id}, "tab": {"tab_id": tab_id}}
-        if args[:2] == ("agent", "start"):
-            name = args[2]
+        if args[:2] == ("pane", "split"):
             self._pane_seq += 1
             pane_id = f"pane-{self._pane_seq}"
-            if "--tab" in args:
-                tab_id = args[args.index("--tab") + 1]
-            else:
-                self._tab_seq += 1
-                tab_id = f"tab-{self._tab_seq}"
+            self._pane_to_tab[pane_id] = self._pane_to_tab.get(args[2])
+            return {"pane": {"pane_id": pane_id, "tab_id": self._pane_to_tab[pane_id]}}
+        if args[:2] == ("agent", "start"):
+            name = args[2]
+            pane_id = args[args.index("--pane") + 1]
+            tab_id = self._pane_to_tab.get(pane_id)
             self.register_pane(pane_id, name, tab_id)
             self._pane_status[pane_id] = "idle"
             return {"agent": {"pane_id": pane_id, "tab_id": tab_id, "name": name, "agent_status": "idle"}}
-        if args[:2] in {("agent", "prompt"), ("agent", "send")}:
+        if args[:2] == ("agent", "prompt"):
             target = args[2]
             pane_id = target if target in self._pane_to_agent or target in self._pane_status else self._agent_to_pane.get(target)
             if pane_id is None:
