@@ -733,7 +733,7 @@ def fail_verification(ctx, state):
         return
     change_phase(ctx, state, "fix", reason="verification_failed")
     telemetry(ctx, state, "verification_failed", report=consolidated, span_status="ERROR")
-    start_role(ctx, state, "worker", f"Verification failed. Read only {worker_context}. Fix every blocker, run its focused validation, then run `herdr-workflow verify --repo . --change {state['changeId']}`. Do not report completion until that command succeeds.")
+    start_role(ctx, state, "worker", f"Verification failed. Read only {worker_context}. Fix every blocker, run its focused validation, then run herdr-workflow verify --repo . --change {state['changeId']}. Do not report completion until that command succeeds.")
     print("verification failed; worker notified to fix and restart verification")
 
 

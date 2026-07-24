@@ -5,15 +5,16 @@ set -euo pipefail
 command -v agent-dash >/dev/null || { echo "agent-dash not installed; run: ~/agentic-coding/scripts/install-agent-dash.sh" >&2; exit 1; }
 command -v otel-tui >/dev/null || { echo "otel-tui not installed; run: ~/agentic-coding/scripts/install-otel-tui.sh" >&2; exit 1; }
 
-tab=$(herdr tab create --workspace "${HERDR_WORKSPACE_ID:?missing Herdr workspace}" --label otel-tui --no-focus)
-pane=$(python3 -c 'import json, sys; print(json.load(sys.stdin)["result"]["root_pane"]["pane_id"])' <<<"$tab")
-for _ in {1..100}; do
-  if herdr pane process-info --pane "$pane" | python3 -c 'import json, sys; sys.exit(not bool(json.load(sys.stdin)["result"]["process_info"].get("foreground_processes")))'; then
-    sleep 0.25
-    herdr pane run "$pane" otel-tui
-    exec agent-dash --home
-  fi
-  sleep 0.1
-done
-echo "otel-tui tab shell did not become ready" >&2
-exit 1
+if ! pgrep -qx otel-tui 2>/dev/null; then
+  tab=$(herdr tab create --workspace "${HERDR_WORKSPACE_ID:?missing Herdr workspace}" --label otel-tui --no-focus)
+  pane=$(python3 -c 'import json, sys; print(json.load(sys.stdin)["result"]["root_pane"]["pane_id"])' <<<"$tab")
+  for _ in {1..100}; do
+    if herdr pane process-info --pane "$pane" | python3 -c 'import json, sys; sys.exit(not bool(json.load(sys.stdin)["result"]["process_info"].get("foreground_processes")))'; then
+      sleep 0.25
+      herdr pane run "$pane" otel-tui
+      break
+    fi
+    sleep 0.1
+  done
+fi
+exec agent-dash --home
