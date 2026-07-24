@@ -16,8 +16,23 @@ edit_scrollback = "prefix+shift+e"
 confirm_close = true
 prompt_new_tab_name = true
 agent_panel_sort = "spaces"
-
 show_agent_labels_on_pane_borders = true
+
+[ui.sidebar.agents]
+row_gap = 0
+rows = [
+  ["state_icon", "workspace"],
+  ["tab", { token = "$project", fg = "#a6e3a1", dim = true }],
+  ["agent"],
+]
+
+[ui.sidebar.spaces]
+row_gap = 0
+rows = [
+  [{ token = "$project", fg = "#89b4fa", bold = true }],
+  ["state_icon", "workspace"],
+  ["branch", "git_status"],
+]
 [ui.toast]
 delivery = "herdr"
 delay_seconds = 1
