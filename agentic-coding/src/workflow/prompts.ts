@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import * as paths from './paths.ts';
+import * as naming from './naming.ts';
 
 export const UNRESTRICTED_ROLES = new Set(['planner', 'worker']);
 export const ONE_SHOT_ROLES = new Set(['recovery', 'archive']);
@@ -148,7 +149,7 @@ export function rolePrompt(role: string, change: string, verificationRound?: num
 export function piArguments(role: string, model: string, thinking: string, change: string, config: any): string[] {
   const skill = path.join(paths.SKILLS, `herdr-openspec-${role}`, 'SKILL.md');
   const tools = ROLE_TOOLS[role];
-  const parts = ['--name', `${change}-${role}`, '--model', model, '--thinking', thinking];
+  const parts = ['--name', naming.agentName(change, role), '--model', model, '--thinking', thinking];
   const telemetryExt = path.join(paths.AGENT_DEF_DIR, 'extensions', 'herdr-telemetry.ts');
   const workflowExt = path.join(paths.AGENT_DEF_DIR, 'extensions', 'herdr-workflow.ts');
 

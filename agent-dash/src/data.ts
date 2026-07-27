@@ -4,7 +4,8 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { directionBetween, Herdr, type Rect } from "agentic-coding/src/herdr-client.ts";
 import { discoverProjectsInProcess, runWorkflowAction, setReturnInProcess, startWorkflowInProcess } from "./engine";
-import { decodeJsonl, type TraceSpan } from "./traces";
+import { parseJsonl } from "otel-tui/model/parser.ts";
+import type { SpanData } from "otel-tui/model/types.ts";
 
 const herdr = new Herdr();
 
@@ -207,7 +208,7 @@ export interface DashboardData {
     outputTokens: number;
     cost: number;
   }>;
-  traceSpans: TraceSpan[];
+  traceSpans: SpanData[];
 }
 
 export const operationalPhases = [
@@ -762,7 +763,7 @@ export function loadDashboard(repo: string, change: string): DashboardData {
       })),
     verifierTimeline,
     telemetrySummary: [...summaryByModel.values()],
-    traceSpans: decodeJsonl(read(join(workflowRoot, "traces.jsonl"))),
+    traceSpans: parseJsonl(read(join(workflowRoot, "traces.jsonl"))),
   };
 }
 

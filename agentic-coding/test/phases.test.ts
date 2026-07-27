@@ -5,8 +5,9 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import type { Context } from '../src/workflow/effects.ts';
 import * as orchestration from '../src/workflow/orchestration.ts';
+import * as prompts from '../src/workflow/prompts.ts';
 import * as stateMod from '../src/workflow/state.ts';
-import { FakeClock, FakeGit, FakeHerdr, initRepo, makeContext } from './fakes.ts';
+import { DEFAULT_CONFIG, FakeClock, FakeGit, FakeHerdr, initRepo, makeContext } from './fakes.ts';
 
 class FailFirstPushGit extends FakeGit {
   private failPush = true;
@@ -671,6 +672,16 @@ describe('launchRole', () => {
     expect(worker.endsWith('-worker')).toBe(true);
     expect(triage.endsWith('-triage')).toBe(true);
     expect(worker).not.toBe(triage);
+  });
+
+  test('herdr agent name and pi --name agree, including truncation', () => {
+    for (const changeId of ['short-change', 'x'.repeat(32), 'y'.repeat(50)]) {
+      const state = { changeId };
+      const herdrName = orchestration.roleAgentName(state, 'worker');
+      const args = prompts.piArguments('worker', 'test/worker', 'high', changeId, DEFAULT_CONFIG);
+      const piName = args[args.indexOf('--name') + 1];
+      expect(piName).toBe(herdrName);
+    }
   });
 
   test('starts pi agent with initial prompt', async () => {
