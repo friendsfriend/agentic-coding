@@ -946,6 +946,14 @@ export function approvalFor(phase: string) {
         prompt: "Press Enter to review changed files",
         action: "review",
       },
+      archive: {
+        prompt: "Press Enter to advance archive",
+        action: "archive",
+      },
+      committing: {
+        prompt: "Press Enter to complete committing",
+        action: "archive",
+      },
       completed: {
         prompt: "Press Enter to close Herdr workspace",
         action: "close",
