@@ -13,6 +13,7 @@ DEFAULT_CONFIG = {
     "models": {
         "worker_default": "test/worker",
         "verifier": "test/verifier",
+        "usability_verifier": "test/usability",
         "verifier_fallback": "test/verifier-fallback",
         "archive": "test/archive",
         "git": "test/git",

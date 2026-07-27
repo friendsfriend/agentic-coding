@@ -22,6 +22,7 @@ ROLE_TOOLS = {
     "performance-verifier": "read,bash",
     "openspec-verifier": "read,bash",
     "test-verifier": "read,bash",
+    "usability-verifier": "read,bash",
     "archive": "read,bash",
 }
 
@@ -111,6 +112,10 @@ def role_prompt(role, change, verification_round=None, workflow_type=None, task=
         context = f".herdr-workflow/{change}/reviews/round-{verification_round}-openspec-verifier-context.md"
         report = f".herdr-workflow/{change}/reviews/round-{verification_round}-openspec-verifier.findings.jsonl"
         return f"Silent OpenSpec verifier for {change} round {verification_round}. Read {context}. Compare implementation against approved proposal, design, specs, and tasks for missing, incompatible, or out-of-scope behavior. Write JSONL findings plus final PASS/FAIL verdict to {report}, then run herdr-workflow verification-result --repo . --change {change} --role openspec-verifier. No chat output." + persistent
+    if role == "usability-verifier":
+        context = f".herdr-workflow/{change}/reviews/round-{verification_round}-usability-verifier-context.md"
+        report = f".herdr-workflow/{change}/reviews/round-{verification_round}-usability-verifier.findings.jsonl"
+        return f"Silent usability verifier for {change} round {verification_round}. Read {context}. Review changed frontend and asset files for introduced visual consistency, accessibility, responsive layout, design-system, component-state, and hardcoded-style defects. Write JSONL findings plus final PASS/FAIL verdict to {report}, then run herdr-workflow verification-result --repo . --change {change} --role usability-verifier. No chat output." + persistent
     if role == "test-verifier":
         context = f".herdr-workflow/{change}/reviews/round-{verification_round}-test-verifier-context.md"
         report = f".herdr-workflow/{change}/reviews/round-{verification_round}-test-verifier.findings.jsonl"

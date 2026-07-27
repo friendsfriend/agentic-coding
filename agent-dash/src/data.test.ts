@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, spyOn, test } from 'bun:test';
-import { loadLocalChanges, loadLocalDiff, saveDeveloperReview, startWorkflow, type DeveloperReviewComment } from './data';
+import { loadLocalChanges, loadLocalDiff, saveDeveloperReview, startWorkflow, testDashboard, type DeveloperReviewComment } from './data';
 
 const roots: string[] = [];
 const runGit = (repo: string, ...args: string[]) => execFileSync('git', args, { cwd: repo, stdio: 'pipe' }).toString().trim();
@@ -61,6 +61,10 @@ test('saveDeveloperReview creates review directory and serializes comments', asy
   await saveDeveloperReview(repo, 'review', comments);
 
   expect(JSON.parse(readFileSync(join(repo, '.herdr-workflow', 'review', 'reviews', 'developer-review.json'), 'utf8'))).toEqual({ comments });
+});
+
+test('demo dashboard includes usability verifier', () => {
+  expect(testDashboard('verify').agents.map(agent => agent.role)).toContain('usability-verifier');
 });
 
 test('startWorkflow passes quick implementation task to worker', async () => {

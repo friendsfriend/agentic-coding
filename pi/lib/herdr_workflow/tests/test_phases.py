@@ -284,6 +284,22 @@ class CmdDispatchVerifiersTest(PhaseTestCase):
         self.assertTrue(any(trace["name"] == "workflow.triage_role_selected" for trace in traces))
         self.assertTrue(any(trace["name"] == "workflow.verifier_dispatched" for trace in traces))
 
+    def test_ui_file_suggests_and_dispatches_usability_verifier(self):
+        self.make_state("apply", verificationRound=0)
+        self.write_change_artifacts(complete=True)
+        self.dirty_file("ui/Button.tsx", "export const Button = () => <button>Save</button>;\n")
+        self.ctx.git.run("add", "ui/Button.tsx", cwd=self.repo)
+        commands.cmd_verify(self.ctx, Args(repo=str(self.repo), change="my-change"))
+        state = state_mod.load_state(self.repo, "my-change")
+        triage_input = json.loads(commands.triage_input_path(state).read_text())
+        self.assertIn("usability-verifier", triage_input["suggestedRoles"])
+        commands.triage_plan_path(state).write_text(json.dumps({"roles": {"usability-verifier": {"reason": "UI change", "files": ["ui/Button.tsx"]}}}))
+        commands.cmd_dispatch_verifiers(self.ctx, Args(repo=str(self.repo), change="my-change"))
+        state = state_mod.load_state(self.repo, "my-change")
+        self.assertEqual(state["phase"], "verify")
+        self.assertIn("usability-verifier", state["panes"])
+        self.assertEqual(state["verificationModels"]["usability-verifier"], "test/usability")
+
     def test_empty_plan_goes_straight_to_developer_review(self):
         state = self._prepare_triage()
         commands.triage_plan_path(state).write_text(json.dumps({"roles": {}}))
