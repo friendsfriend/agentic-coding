@@ -43,6 +43,7 @@ class RolePromptTest(unittest.TestCase):
             "quality-verifier": "formatting, lint, and type checks",
             "performance-verifier": "changed hot paths",
             "openspec-verifier": "approved proposal, design, specs, and tasks",
+            "usability-verifier": "visual consistency, accessibility, responsive layout",
             "test-verifier": "complete configured test suite",
         }
         for role, focus in expected.items():
@@ -57,7 +58,7 @@ class RolePromptTest(unittest.TestCase):
         for role in ("planner", "worker"):
             with self.subTest(role=role):
                 self.assertNotIn("silent", prompts.role_prompt(role, "my-change").lower())
-        for role in ("triage", "security-verifier", "agents-verifier", "quality-verifier", "performance-verifier", "openspec-verifier", "test-verifier", "archive", "recovery"):
+        for role in ("triage", "security-verifier", "agents-verifier", "quality-verifier", "performance-verifier", "openspec-verifier", "usability-verifier", "test-verifier", "archive", "recovery"):
             with self.subTest(role=role):
                 self.assertIn("silent", prompts.role_prompt(role, "my-change", verification_round=1).lower())
 
@@ -84,7 +85,8 @@ class PiArgumentsTest(unittest.TestCase):
         self.assertIn("herdr-workflow.ts", joined)
 
     def test_verifier_role_is_restricted(self):
-        args = prompts.pi_arguments("quality-verifier", "model/x", "high", "change", DEFAULT_CONFIG)
+        self.assertEqual(prompts.ROLE_TOOLS["usability-verifier"], "read,bash")
+        args = prompts.pi_arguments("usability-verifier", "model/x", "high", "change", DEFAULT_CONFIG)
         joined = " ".join(args)
         self.assertIn("--no-extensions", joined)
         self.assertIn("--no-skills", joined)

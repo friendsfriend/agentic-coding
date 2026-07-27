@@ -57,6 +57,11 @@ class EligibleVerifierRolesTest(unittest.TestCase):
     def test_performance_keyword_triggers_performance_verifier(self):
         self.assertIn("performance-verifier", tiering.eligible_verifier_roles(["src/cache/query_batch.py"]))
 
+    def test_ui_files_trigger_usability_verifier(self):
+        for path in ("src/Button.tsx", "nested/ui/dialog.py", "frontend/api.py", "app/state.py", "theme.config.ts", "assets/logo.svg"):
+            with self.subTest(path=path):
+                self.assertIn("usability-verifier", tiering.eligible_verifier_roles([path]))
+
     def test_unrelated_file_triggers_nothing_extra(self):
         roles = tiering.eligible_verifier_roles(["docs/readme.md"])
         self.assertEqual(roles, [])

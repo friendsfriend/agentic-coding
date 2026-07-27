@@ -2,7 +2,7 @@
 import re
 from pathlib import Path
 
-VERIFIER_ROLES = ("security-verifier", "agents-verifier", "quality-verifier", "performance-verifier", "openspec-verifier")
+VERIFIER_ROLES = ("security-verifier", "agents-verifier", "quality-verifier", "usability-verifier", "performance-verifier", "openspec-verifier")
 TEST_VERIFIER = "test-verifier"
 
 
@@ -28,6 +28,13 @@ def eligible_verifier_roles(files):
         eligible.add("agents-verifier")
     if any(path.startswith("openspec/") or path.endswith(("openapi.yaml", "openapi.yml")) for path in files):
         eligible.add("openspec-verifier")
+    if any(
+        Path(path).suffix.lower() in {".css", ".scss", ".less", ".html", ".htm", ".jsx", ".tsx", ".vue", ".svelte", ".svg", ".png", ".gif", ".ico", ".woff", ".woff2", ".ttf", ".eot"}
+        or {"frontend", "ui", "app"}.intersection(Path(path).parts[:-1])
+        or re.match(r"^(theme|colors|tokens)\.", Path(path).name, re.I)
+        for path in files
+    ):
+        eligible.add("usability-verifier")
     if re.search(r"(performance|benchmark|cache|stream|batch|query|algorithm)", joined, re.I):
         eligible.add("performance-verifier")
     return sorted(eligible)

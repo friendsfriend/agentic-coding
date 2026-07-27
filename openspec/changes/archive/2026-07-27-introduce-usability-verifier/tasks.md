@@ -1,0 +1,9 @@
+- [x] Create `agent-definitions/skills/herdr-openspec-usability-verifier/SKILL.md` with full design review instructions
+- [x] Add `usability_verifier = "opencode/deepseek-v4-flash-free"` to `pi/herdr-workflow.toml` models section
+- [x] Add `"usability-verifier": "read,bash"` to `ROLE_TOOLS` in `pi/lib/herdr_workflow/prompts.py`
+- [x] Add `role_prompt()` case for `"usability-verifier"` in `pi/lib/herdr_workflow/prompts.py`
+- [x] Add `"usability-verifier"` to `VERIFIER_ROLES` in `pi/lib/herdr_workflow/tiering.py`
+- [x] Add frontend/asset file pattern detection to `eligible_verifier_roles()` in `pi/lib/herdr_workflow/tiering.py`
+- [x] Add `"usability-verifier"` to recovery-plan role validation list in `agent-dash/src/data.ts`
+- [x] Add `"usability-verifier"` to demo data default verification roles list in `agent-dash/src/data.ts`
+- [x] Verify triage can select usability-verifier when UI files change and dispatch works end-to-end
