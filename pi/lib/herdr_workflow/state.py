@@ -24,7 +24,9 @@ def save_state(state):
     paths = {state_path(state["worktree"], state["changeId"]), state_path(state["repository"], state["changeId"])}
     for path in paths:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(state, indent=2) + "\n")
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state, indent=2) + "\n")
+        tmp.rename(path)
     return state_path(state["worktree"], state["changeId"])
 
 

@@ -967,6 +967,11 @@ def _start_git_operations(ctx, state):
         telemetry(ctx, state, "git_operations_pushed", commit=local_head, pushed=pushed)
         _complete_git_operations(ctx, state, commit=local_head, pushed=pushed)
     except (SystemExit, Exception) as error:
+        if state["phase"] == "completed":
+            # _complete_git_operations already committed/pushed and saved "completed";
+            # a later failure (e.g. finalize_workspace_trace) must not roll that back.
+            telemetry(ctx, state, "git_operations_rollback_skipped", error=str(error), span_status="ERROR")
+            raise
         state_mod.set_phase(state, previous_phase)
         if previous_phase_started_at is None:
             state.pop("phaseStartedAt", None)
@@ -1066,7 +1071,13 @@ def cmd_archive(ctx, args):
         print("git operations started")
         return
     if state["phase"] == "committing":
-        _complete_git_operations(ctx, state)
+        try:
+            _complete_git_operations(ctx, state)
+        except SystemExit as error:
+            if "working tree is dirty" in str(error):
+                raise
+            # Clean tree (already committed/pushed) but completion step failed after that check — advance anyway.
+            change_phase(ctx, state, "completed")
         print("archive complete")
         return
     raise SystemExit(f"archive requires developer-review, archive, or committing phase, found {state['phase']}")

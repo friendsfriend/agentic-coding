@@ -1,0 +1,4 @@
+- [x] Make `save_state` atomic via `.tmp` + `rename`
+- [x] Fix `_start_git_operations` rollback: skip restore if phase already `completed`
+- [x] Protect `cmd_archive` committing path: handle clean tree without error
+- [x] Add dashboard `approvalFor` entries for `archive` and `committing` phases
