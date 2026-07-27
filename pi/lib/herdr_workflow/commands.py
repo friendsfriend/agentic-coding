@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from . import effects, findings, gates, paths, prompts, recovery, tiering, tracing, transitions
+from . import effects, findings, gates, paths, prompts, tiering, tracing, transitions
 from . import state as state_mod
 
 PANE_READY_TIMEOUT_SECONDS = 5
@@ -737,49 +737,6 @@ def fail_verification(ctx, state):
     print("verification failed; worker notified to fix and restart verification")
 
 
-def write_recovery_context(state):
-    root = state_mod.workflow_dir(state) / "reviews"
-    root.mkdir(parents=True, exist_ok=True)
-    context = {"recoveryId": state.get("recoveryRunId"), "phase": state["phase"], "phaseStartedAt": state.get("phaseStartedAt"), "verificationRound": state["verificationRound"], "roles": state.get("verificationRoles", []), "results": state.get("verificationResults", {}), "timeouts": state.get("verificationTimeoutRoles", []), "allowedActions": [action for action, phases in recovery.RECOVERY_ACTION_PHASES.items() if state["phase"] in phases], "panes": state["panes"]}
-    (root / "recovery-context.json").write_text(json.dumps(context, indent=2) + "\n")
-    return root / "recovery-context.json"
-
-
-def cmd_recover(ctx, args):
-    state = state_mod.load_state(args.repo, args.change)
-    root = state_mod.workflow_dir(state) / "reviews"
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "recovery-plan.json").unlink(missing_ok=True)
-    state["recoveryRunId"] = uuid.uuid4().hex
-    state_mod.save_state(state)
-    write_recovery_context(state)
-    telemetry(ctx, state, "recovery_started", phase=state["phase"], round=state["verificationRound"], recovery_id=state["recoveryRunId"])
-    start_role(ctx, state, "recovery")
-    print("recovery analysis started")
-
-
-def cmd_apply_recovery(ctx, args):
-    state = state_mod.load_state(args.repo, args.change)
-    plan_path = state_mod.workflow_dir(state) / "reviews" / "recovery-plan.json"
-    if not plan_path.exists():
-        raise SystemExit("missing recovery plan")
-    try:
-        plan = json.loads(plan_path.read_text())
-    except json.JSONDecodeError:
-        raise SystemExit("invalid recovery plan schema")
-    if error := recovery.recovery_plan_error(state, plan):
-        raise SystemExit(error)
-    action = plan["action"]
-    if action == "retry-verification":
-        cmd_verify(ctx, args)
-    elif action == "dispatch-triage":
-        cmd_dispatch_verifiers(ctx, args)
-    else:
-        args.role = plan["role"]
-        cmd_verification_result(ctx, args)
-    telemetry(ctx, state, "recovery_applied", action=action, role=plan.get("role"), recovery_id=state["recoveryRunId"])
-
-
 def cmd_verify(ctx, args):
     state = state_mod.load_state(args.repo, args.change)
     if state.get("workflowType") != "no-openspec":
@@ -1170,26 +1127,6 @@ def cmd_message(ctx, args):
     artifact.write_text(f"# {args.sender} → {args.target}\n\n{args.text}\n")
     prompt_role(ctx, state, args.target, f"Message from {args.sender}: {args.text} Full message: {artifact}")
     print(artifact)
-
-
-def cmd_check_timeout(ctx, args):
-    state = state_mod.load_state(args.repo, args.change)
-    if state["phase"] != "verify" or not state.get("verificationStartedAt"):
-        print("verification timeout not applicable")
-        return
-    timeout = int(ctx.config["workflow"].get("verification_timeout_seconds", 600))
-    started = state.get("verificationRoleStartedAt", {})
-    roles = [*state.get("verificationRoles", tiering.VERIFIER_ROLES), tiering.TEST_VERIFIER]
-    pending = [role for role in roles if role in started and role not in state.get("verificationResults", {}) and (ctx.clock.now() - datetime.fromisoformat(started[role])).total_seconds() >= timeout]
-    if not pending:
-        print("verification within timeout")
-        return
-    state["verificationTimeoutRoles"] = pending
-    change_phase(ctx, state, "paused", reason="verification_timeout")
-    telemetry(ctx, state, "verification_timeout", pending_count=len(pending), span_status="ERROR")
-    trace_items(ctx, state, "verifier_timeout", "role", pending, span_status="ERROR")
-    ctx.herdr.call("notification", "show", "Verification timed out", "--body", f"{state['changeId']}: {', '.join(pending)}", "--sound", "request")
-    print(f"verification timed out: {', '.join(pending)}")
 
 
 def cmd_status(ctx, args):

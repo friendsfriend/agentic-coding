@@ -137,9 +137,6 @@ export function App(props: {
   const [selectedVerification, setSelectedVerification] = createSignal(0);
   const [help, setHelp] = createSignal(false);
   const [themePicker, setThemePicker] = createSignal(false);
-  const [recovery, setRecovery] = createSignal(false);
-  const [recoveryRequested, setRecoveryRequested] = createSignal(false);
-  const [recoverySelection, setRecoverySelection] = createSignal(0);
   const [overridePicker, setOverridePicker] = createSignal(false);
   const [overrideConfirm, setOverrideConfirm] = createSignal(false);
   const [overrideSelection, setOverrideSelection] = createSignal(0);
@@ -568,21 +565,6 @@ export function App(props: {
       }
       return;
     }
-    if (name === "r" && key.shift) {
-      setRecoveryRequested(true);
-      setBusy(true);
-      setMessage("Starting recovery analysis…");
-      void runWorkflow("recover", props.repo, props.change)
-        .then(setMessage)
-        .catch((error) =>
-          setMessage(error instanceof Error ? error.message : String(error)),
-        )
-        .finally(() => {
-          setBusy(false);
-          refresh();
-        });
-      return;
-    }
     if (name === "r") {
       refresh();
       setMessage("Refreshed");
@@ -782,50 +764,6 @@ export function App(props: {
         "up",
         "down",
       ].map((key) => ({ key, cmd: "theme.handle" })),
-    });
-    const disposeRecovery = props.keymap.registerLayer({
-      name: "recovery",
-      priority: 1000,
-      activeModal: "recovery",
-      commands: [
-        {
-          name: "recovery.handle",
-          run: ({ event }) => {
-            const key = event.name.toLowerCase();
-            if (key === "escape") {
-              setRecovery(false);
-              props.keymap.setData("modal.active", "none");
-            } else if (key === "j" || key === "down") setRecoverySelection(1);
-            else if (key === "k" || key === "up") setRecoverySelection(0);
-            else if (key === "enter" || key === "return") {
-              if (recoverySelection() === 1) {
-                setRecovery(false);
-                props.keymap.setData("modal.active", "none");
-                return true;
-              }
-              if (!data().recoveryPlan) return true;
-              setRecovery(false);
-              props.keymap.setData("modal.active", "none");
-              setBusy(true);
-              void runWorkflow("apply-recovery", props.repo, props.change)
-                .then(setMessage)
-                .catch((error) =>
-                  setMessage(
-                    error instanceof Error ? error.message : String(error),
-                  ),
-                )
-                .finally(() => {
-                  setBusy(false);
-                  refresh();
-                });
-            }
-            return true;
-          },
-        },
-      ],
-      bindings: ["escape", "enter", "return", "j", "k", "up", "down"].map(
-        (key) => ({ key, cmd: "recovery.handle" }),
-      ),
     });
     const disposeOverridePicker = props.keymap.registerLayer({
       name: "override-picker",
@@ -1359,7 +1297,6 @@ export function App(props: {
     });
     onCleanup(() => {
       disposeTheme();
-      disposeRecovery();
       disposeOverridePicker();
       disposeOverrideConfirm();
       disposeHelp();
@@ -1372,15 +1309,6 @@ export function App(props: {
       disposeVerdict();
       dispose();
     });
-  });
-
-  createEffect(() => {
-    if (recoveryRequested() && data().recoveryPlan) {
-      setRecoveryRequested(false);
-      setRecoverySelection(0);
-      setRecovery(true);
-      props.keymap.setData("modal.active", "recovery");
-    }
   });
   const doneTasks = createMemo(
     () => data().tasks.filter((task) => task.done).length,
@@ -1465,7 +1393,6 @@ export function App(props: {
                     WORKFLOW MAY BE STALLED · {message()}
                   </text>
                   <box flexGrow={1} />
-                  <text fg={uiColors.bgBase}>Shift+R recovery</text>
                 </box>
               )}
             </Show>
@@ -1865,7 +1792,6 @@ export function App(props: {
                                 { key: "v", action: "view verdict" },
                               ]
                             : []),
-              ...(gate() ? [{ key: "Shift+R", action: "recover" }] : []),
               { key: "Shift+O", action: "overwrite phase" },
               { key: "r", action: "refresh" },
               { key: "Esc", action: "dashboard" },
@@ -1874,27 +1800,6 @@ export function App(props: {
           />
         }
       />
-      <Show when={recovery()}>
-        <ListViewModal
-          title="Recovery"
-          fieldLabel="Choose action"
-          items={[
-            `Apply: ${data().recoveryPlan?.action ?? "unavailable"}${data().recoveryPlan?.role ? ` · ${data().recoveryPlan?.role}` : ""}`,
-            "Cancel",
-          ]}
-          selectedIndex={recoverySelection()}
-          help={[
-            { key: "j/k", action: "Navigate" },
-            { key: "Enter", action: "Confirm" },
-            { key: "Esc", action: "Cancel" },
-          ]}
-          renderItem={(item, selected) => (
-            <text fg={selected ? uiColors.primary : uiColors.textSecondary}>
-              {item}
-            </text>
-          )}
-        />
-      </Show>
       <Show when={overridePicker()}>
         <ListViewModal
           title="Overwrite workflow phase"

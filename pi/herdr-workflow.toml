@@ -28,7 +28,6 @@ archive = "high"
 
 [workflow]
 max_verification_rounds = 6
-verification_timeout_seconds = 600
 remote = "origin"
 branch_prefix = "feature/"
 base_branch = "origin/HEAD"

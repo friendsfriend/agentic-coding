@@ -27,7 +27,6 @@ export interface WorkflowState {
   verificationTimeoutRoles?: string[];
   verificationRoleStartedAt?: Record<string, string>;
   verificationModels?: Record<string, string>;
-  recoveryRunId?: string;
   planQuality?: {
     passed: boolean;
     issues: string[];
@@ -209,7 +208,6 @@ export interface DashboardData {
     cost: number;
   }>;
   traceSpans: TraceSpan[];
-  recoveryPlan?: { recoveryId: string; action: string; role?: string };
 }
 
 export const operationalPhases = [
@@ -302,43 +300,6 @@ function telemetryEvents(path: string): Array<Record<string, any>> {
         return [];
       }
     });
-}
-
-function validRecoveryPlan(
-  state: WorkflowState,
-  plan: unknown,
-): plan is { recoveryId: string; action: string; role?: string } {
-  if (!plan || typeof plan !== "object") return false;
-  const value = plan as Record<string, unknown>;
-  if (
-    value.recoveryId !== state.recoveryRunId ||
-    typeof value.action !== "string"
-  )
-    return false;
-  const expectedKeys =
-    value.action === "record-verifier-result"
-      ? ["recoveryId", "action", "role"]
-      : ["recoveryId", "action"];
-  if (!expectedKeys.every((key) => key in value)) return false;
-  if (value.action === "retry-verification")
-    return ["apply", "fix", "paused"].includes(state.phase);
-  if (value.action === "dispatch-triage") return state.phase === "triage";
-  return (
-    value.action === "record-verifier-result" &&
-    state.phase === "verify" &&
-    typeof value.role === "string" &&
-    [
-      ...(state.verificationRoles ?? [
-        "security-verifier",
-        "agents-verifier",
-        "quality-verifier",
-        "usability-verifier",
-        "performance-verifier",
-        "openspec-verifier",
-      ]),
-      "test-verifier",
-    ].includes(value.role)
-  );
 }
 
 function agentStatuses() {
@@ -650,10 +611,6 @@ export async function saveDeveloperReview(
 }
 
 export function loadDashboard(repo: string, change: string): DashboardData {
-  Bun.spawnSync(
-    ["herdr-workflow", "check-timeout", "--repo", repo, "--change", change],
-    { stdout: "ignore", stderr: "ignore" },
-  );
   const state = JSON.parse(
     read(join(repo, ".herdr-workflow", change, "state.json")),
   ) as WorkflowState;
@@ -700,11 +657,7 @@ export function loadDashboard(repo: string, change: string): DashboardData {
       cost: roleEvents
         .filter((event) => event.event === "model_usage")
         .reduce((sum, event) => sum + Number(event.cost ?? 0), 0),
-      status:
-        result?.verdict ??
-        (state.verificationTimeoutRoles?.includes(role)
-          ? "TIMEOUT"
-          : (statuses.get(state.panes[role] ?? "") ?? "RUN")),
+      status: result?.verdict ?? (statuses.get(state.panes[role] ?? "") ?? "RUN"),
       durationSeconds,
       model: state.verificationModels?.[role],
       providerErrors: responseErrors,
@@ -815,16 +768,6 @@ export function loadDashboard(repo: string, change: string): DashboardData {
     verifierTimeline,
     telemetrySummary: [...summaryByModel.values()],
     traceSpans: decodeJsonl(read(join(workflowRoot, "traces.jsonl"))),
-    recoveryPlan: (() => {
-      try {
-        const plan: unknown = JSON.parse(
-          read(join(workflowRoot, "reviews", "recovery-plan.json")),
-        );
-        return validRecoveryPlan(state, plan) ? plan : undefined;
-      } catch {
-        return undefined;
-      }
-    })(),
   };
 }
 
