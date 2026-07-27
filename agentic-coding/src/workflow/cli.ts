@@ -35,6 +35,46 @@ export const REQUIRED_FLAGS: Record<string, string[]> = {
 export const WORKFLOW_TYPE_CHOICES = Object.keys(transitions.WORKFLOW_TYPES);
 export const PLUGIN_SUBCOMMANDS = ['list', 'install', 'install-local'] as const;
 
+// One-line usage + description per subcommand, shown by `--help`/`-h`. Kept next to
+// REQUIRED_FLAGS/SUBCOMMANDS so drift is a one-file diff, not a hunt across docs.
+const HELP: Record<string, { usage: string; summary: string }> = {
+  projects: { usage: 'projects', summary: 'List discovered repositories under the configured projects root.' },
+  config: { usage: 'config', summary: 'Print the resolved workflow config as JSON.' },
+  start: {
+    usage: 'start --repo <path> --change <id> --mode <worktree|checkout> [--workflow-type <standard|direct-apply|no-openspec>] [--task <text>] [--ticket <id>] [--worker <model>]',
+    summary: 'Create the branch/worktree, Herdr workspace, and launch the first-phase role(s) for a new change.',
+  },
+  planner: { usage: 'planner --repo <path> --change <id>', summary: 'Restart the planner role during the explore phase.' },
+  apply: { usage: 'apply --repo <path> --change <id>', summary: 'Run the plan-quality gate and start the worker role.' },
+  verify: { usage: 'verify --repo <path> --change <id>', summary: 'Re-enter the verify phase (e.g. after a fix round).' },
+  'dispatch-verifiers': { usage: 'dispatch-verifiers --repo <path> --change <id>', summary: 'Start the review-tier verifier roles for the current round.' },
+  'finish-review': { usage: 'finish-review --repo <path> --change <id>', summary: 'Consolidate verifier verdicts and transition out of verify.' },
+  archive: { usage: 'archive --repo <path> --change <id>', summary: 'Start the archive role after developer approval.' },
+  close: { usage: 'close --repo <path> --change <id>', summary: 'Tear down the workflow (panes/tabs) after archive completes.' },
+  status: { usage: 'status --repo <path> --change <id>', summary: 'Print the current state.json for the change.' },
+  'git-operations': { usage: 'git-operations --repo <path> --change <id>', summary: 'Start the git-operations role to push/PR the finished change.' },
+  phase: { usage: 'phase --repo <path> --change <id> <phase>', summary: 'Force-set the recorded phase without running its transition logic.' },
+  'override-phase': { usage: 'override-phase --repo <path> --change <id> <phase>', summary: 'Operator escape hatch: jump the workflow to an arbitrary phase.' },
+  'preflight-archive': { usage: 'preflight-archive --repo <path> --change <id>', summary: 'Validate archive preconditions (clean tree, tasks complete) without starting archive.' },
+  'set-return': { usage: 'set-return --repo <path> --change <id> --workspace <id>', summary: 'Record the Herdr workspace to focus once the workflow closes.' },
+  'verification-result': { usage: 'verification-result --repo <path> --change <id> --role <name>', summary: 'Record one verifier role\'s pass/fail verdict for the current round.' },
+  message: { usage: 'message --repo <path> --change <id> --from <role> --to <role> <text>', summary: 'Deliver an inter-role message (e.g. PLAN_REJECTED) and act on it.' },
+  plugin: { usage: 'plugin <list|install <source>|install-local <path>> [--worker] [--planner]', summary: 'List or install Pi extensions, optionally scoped to worker/planner roles.' },
+};
+
+function printTopHelp(): void {
+  console.log('Usage: agentic-coding workflow <command> [flags]\n');
+  console.log('Commands:');
+  for (const name of SUBCOMMANDS) console.log(`  ${name.padEnd(22)} ${HELP[name]?.summary ?? ''}`);
+  console.log('\nRun `agentic-coding workflow <command> --help` for a command\'s full usage.');
+}
+
+function printCommandHelp(command: string): void {
+  const entry = HELP[command];
+  console.log(`Usage: agentic-coding workflow ${entry?.usage ?? command}`);
+  if (entry?.summary) console.log(entry.summary);
+}
+
 function flag(argv: string[], name: string): string | undefined {
   const i = argv.indexOf(`--${name}`);
   return i === -1 ? undefined : argv[i + 1];
@@ -58,8 +98,21 @@ export function buildContext(): effects.Context {
 
 export async function run(argv: string[]): Promise<void> {
   const [command, ...rest] = argv;
-  if (!command || !(SUBCOMMANDS as readonly string[]).includes(command)) {
-    throw new Error(`unknown command: ${command ?? '(none)'}`);
+  if (!command || command === '--help' || command === '-h' || command === 'help') {
+    printTopHelp();
+    return;
+  }
+  if (!(SUBCOMMANDS as readonly string[]).includes(command)) {
+    throw new Error(`unknown command: ${command}`);
+  }
+  if (rest.includes('--help') || rest.includes('-h')) {
+    if (command === 'plugin') {
+      console.log(`Usage: agentic-coding workflow ${HELP.plugin.usage}`);
+      console.log(HELP.plugin.summary);
+    } else {
+      printCommandHelp(command);
+    }
+    return;
   }
   const ctx = buildContext();
   const repo = flag(rest, 'repo');

@@ -23,6 +23,42 @@ The `herdr-workflow` command agents call is a thin shim (`pi/bin/herdr-workflow`
 
 `stow.sh` creates file-level links for `pi/` → `~/.pi/agent/`, `herdr/` → `~/.config/herdr/`, and `opencode/` → `~/.config/opencode/`. Local target files remain real files and are never overwritten.
 
+## `agentic-coding` usage
+
+Since `consolidate-workflow-to-typescript`, the workflow engine is TypeScript, invoked as `agentic-coding <surface> <command> [flags]`. `workflow` is the only surface today. `herdr-workflow <command> [flags]` (agent-facing) is a shim for `agentic-coding workflow <command> [flags]` — same commands and flags, either invocation works.
+
+```bash
+agentic-coding --help                    # list surfaces
+agentic-coding workflow --help           # list workflow commands
+agentic-coding workflow start --help     # usage for one command
+```
+
+Commands (`--repo <path> --change <id>` required on all but `projects`/`config`):
+
+| Command | Flags | Purpose |
+|---|---|---|
+| `projects` | — | List discovered repositories under the configured projects root. |
+| `config` | — | Print the resolved workflow config as JSON. |
+| `start` | `--mode <worktree\|checkout>` (required), `--workflow-type <standard\|direct-apply\|no-openspec>`, `--task`, `--ticket`, `--worker` | Create branch/worktree, Herdr workspace, launch first-phase role(s). |
+| `planner` | — | Restart the planner role during `explore`. |
+| `apply` | — | Run the plan-quality gate, start the worker role. |
+| `verify` | — | Re-enter the verify phase (e.g. after a fix round). |
+| `dispatch-verifiers` | — | Start the review-tier verifier roles for the current round. |
+| `finish-review` | — | Consolidate verifier verdicts, transition out of verify. |
+| `archive` | — | Start the archive role after developer approval. |
+| `close` | — | Tear down panes/tabs after archive completes. |
+| `status` | — | Print the current `state.json`. |
+| `git-operations` | — | Start the git-operations role (push/PR). |
+| `phase <phase>` | — | Force-set the recorded phase (no transition logic). |
+| `override-phase <phase>` | — | Operator escape hatch: jump to an arbitrary phase. |
+| `preflight-archive` | — | Validate archive preconditions without starting archive. |
+| `set-return` | `--workspace <id>` (required) | Record the Herdr workspace to focus once closed. |
+| `verification-result` | `--role <name>` (required) | Record one verifier role's pass/fail verdict. |
+| `message <text>` | `--from <role> --to <role>` (required) | Deliver an inter-role message (e.g. `PLAN_REJECTED`). |
+| `plugin list\|install <source>\|install-local <path>` | `[--worker] [--planner]` | List/install Pi extensions, optionally scoped to roles. |
+
+Subcommand names and flags are a frozen contract (agent skills/prompts and the dashboard invoke them literally); see `test/characterization.test.ts`.
+
 ## TUI development
 
 ```bash

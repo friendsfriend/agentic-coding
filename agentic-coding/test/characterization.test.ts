@@ -65,6 +65,23 @@ describe('subcommand surface', () => {
   });
 });
 
+describe('--help', () => {
+  test('every subcommand and no-args print help without touching config/herdr', async () => {
+    const logs: string[] = [];
+    const original = console.log;
+    console.log = (msg: string) => logs.push(msg);
+    try {
+      await cli.run([]);
+      await cli.run(['--help']);
+      for (const name of cli.SUBCOMMANDS) await cli.run([name, '--help']);
+    } finally {
+      console.log = original;
+    }
+    expect(logs.length).toBeGreaterThan(cli.SUBCOMMANDS.length);
+    expect(logs.every(line => typeof line === 'string' && line.length > 0)).toBe(true);
+  });
+});
+
 describe('golden state shape', () => {
   test("start produces expected state shape", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-characterization-'));
