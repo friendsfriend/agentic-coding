@@ -15,9 +15,9 @@ from herdr_workflow import cli, commands
 from herdr_workflow.tests.fakes import FakeClock, FakeHerdr, init_repo, make_context
 
 EXPECTED_SUBCOMMANDS = {
-    "projects", "config", "start", "planner", "apply", "verify", "recover",
-    "apply-recovery", "dispatch-verifiers", "archive", "close", "status",
-    "check-timeout", "git-operations", "phase", "override-phase",
+    "projects", "config", "start", "planner", "apply", "verify",
+    "dispatch-verifiers", "archive", "close", "status",
+    "git-operations", "phase", "override-phase",
     "preflight-archive", "set-return", "verification-result", "message", "plugin",
     "finish-review",
 }
@@ -28,13 +28,10 @@ EXPECTED_REQUIRED_FLAGS = {
     "planner": {"repo", "change"},
     "apply": {"repo", "change"},
     "verify": {"repo", "change"},
-    "recover": {"repo", "change"},
-    "apply-recovery": {"repo", "change"},
     "dispatch-verifiers": {"repo", "change"},
     "archive": {"repo", "change"},
     "close": {"repo", "change"},
     "status": {"repo", "change"},
-    "check-timeout": {"repo", "change"},
     "git-operations": {"repo", "change"},
     "phase": {"repo", "change"},
     "override-phase": {"repo", "change"},

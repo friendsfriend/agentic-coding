@@ -465,39 +465,6 @@ class CmdVerificationResultTest(PhaseTestCase):
         self.assertEqual(commands.optional_findings(state), [])
 
 
-class RecoveryTest(PhaseTestCase):
-    def test_cmd_recover_writes_context_and_starts_recovery_agent(self):
-        self.make_state("fix", verificationRound=1)
-        commands.cmd_recover(self.ctx, Args(repo=str(self.repo), change="my-change"))
-        state = state_mod.load_state(self.repo, "my-change")
-        self.assertIn("recovery", state["panes"])
-        self.assertTrue((state_mod.workflow_dir(state) / "reviews" / "recovery-context.json").exists())
-
-    def test_apply_recovery_retry_verification(self):
-        state = self.make_state("fix", verificationRound=0, recoveryRunId="run-1")
-        self.write_change_artifacts(complete=True)
-        self.dirty_file()
-        plan_path = state_mod.workflow_dir(state) / "reviews" / "recovery-plan.json"
-        plan_path.parent.mkdir(parents=True, exist_ok=True)
-        plan_path.write_text(json.dumps({"recoveryId": "run-1", "action": "retry-verification"}))
-        commands.cmd_apply_recovery(self.ctx, Args(repo=str(self.repo), change="my-change"))
-        state = state_mod.load_state(self.repo, "my-change")
-        self.assertEqual(state["phase"], "triage")
-
-    def test_apply_recovery_rejects_wrong_recovery_id(self):
-        state = self.make_state("fix", recoveryRunId="run-1")
-        plan_path = state_mod.workflow_dir(state) / "reviews" / "recovery-plan.json"
-        plan_path.parent.mkdir(parents=True, exist_ok=True)
-        plan_path.write_text(json.dumps({"recoveryId": "other", "action": "retry-verification"}))
-        with self.assertRaises(SystemExit):
-            commands.cmd_apply_recovery(self.ctx, Args(repo=str(self.repo), change="my-change"))
-
-    def test_apply_recovery_missing_plan_rejected(self):
-        self.make_state("fix", recoveryRunId="run-1")
-        with self.assertRaises(SystemExit):
-            commands.cmd_apply_recovery(self.ctx, Args(repo=str(self.repo), change="my-change"))
-
-
 class ArchiveAndGitOperationsTest(PhaseTestCase):
     def test_developer_review_starts_archive(self):
         state = self.make_state("developer-review")
@@ -591,25 +558,6 @@ class ArchiveAndGitOperationsTest(PhaseTestCase):
         self.dirty_file()
         with self.assertRaises(SystemExit):
             commands.cmd_archive(self.ctx, Args(repo=str(self.repo), change="my-change"))
-
-
-class CheckTimeoutTest(PhaseTestCase):
-    def test_reports_no_timeout_when_not_verifying(self):
-        self.make_state("apply")
-        commands.cmd_check_timeout(self.ctx, Args(repo=str(self.repo), change="my-change"))  # no raise
-
-    def test_flags_timed_out_roles(self):
-        self.make_state("verify", verificationStartedAt=self.clock.now().isoformat(), verificationRoles=["quality-verifier"], verificationRoleStartedAt={"quality-verifier": "2000-01-01T00:00:00+00:00"})
-        commands.cmd_check_timeout(self.ctx, Args(repo=str(self.repo), change="my-change"))
-        state = state_mod.load_state(self.repo, "my-change")
-        self.assertEqual(state["phase"], "paused")
-        self.assertIn("quality-verifier", state["verificationTimeoutRoles"])
-
-    def test_within_timeout_does_not_pause(self):
-        self.make_state("verify", verificationStartedAt=self.clock.now().isoformat(), verificationRoles=["quality-verifier"], verificationRoleStartedAt={"quality-verifier": self.clock.now().isoformat()})
-        commands.cmd_check_timeout(self.ctx, Args(repo=str(self.repo), change="my-change"))
-        state = state_mod.load_state(self.repo, "my-change")
-        self.assertEqual(state["phase"], "verify")
 
 
 class CmdMessageTest(PhaseTestCase):
