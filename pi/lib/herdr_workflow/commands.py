@@ -653,6 +653,9 @@ def consolidate_findings(ctx, state, roles):
     accepted_path = state_mod.workflow_dir(state) / "reviews" / "accepted-findings.json"
     accepted = set(json.loads(accepted_path.read_text()).get("ids", [])) if accepted_path.exists() else set()
     findings_list = findings.consolidate(events_by_role, prior_round, accepted)
+    created_at = ctx.clock.now().isoformat()
+    for item in findings_list:
+        item.setdefault("createdAt", created_at)
     history["rounds"][str(state["verificationRound"])] = findings_list
     history_path.write_text(json.dumps(history, indent=2) + "\n")
 

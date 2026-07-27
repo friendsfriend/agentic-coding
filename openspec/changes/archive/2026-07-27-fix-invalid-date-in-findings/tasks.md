@@ -1,0 +1,5 @@
+- [x] Guard `formatTimestamp()` in `DiffViewModal.tsx` against invalid/empty dates
+- [x] Populate `created_at` with `new Date().toISOString()` in `App.tsx` developer comment notes
+- [x] Populate `created_at` with `new Date().toISOString()` in `App.tsx` verifier finding notes
+- [x] Add `createdAt` timestamp to consolidated findings in `commands.py` `consolidate_findings()`
+- [x] Append issue-only instruction to all 7 verifier role prompts in `prompts.py`

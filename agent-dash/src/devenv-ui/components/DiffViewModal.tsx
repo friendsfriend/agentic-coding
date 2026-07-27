@@ -392,6 +392,7 @@ export function DiffViewModal(props: DiffViewModalProps) {
   // Helper: Format timestamp for display
   const formatTimestamp = (timestamp: string): string => {
     const date = new Date(timestamp);
+    if (!timestamp || isNaN(date.getTime())) return "N/A";
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
     const diffMins = Math.floor(diffMs / 60000);
