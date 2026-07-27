@@ -1,7 +1,11 @@
-// Seams: the only place that touches `herdr`, git, subprocess, time, network, and config I/O.
+// Seams: the only place that touches git, subprocess, time, network, and config I/O.
+// Herdr access itself lives in ../herdr-client.ts (the single shared `.result` parser).
 import fs from 'node:fs';
 import path from 'node:path';
+import { Herdr } from '../herdr-client.ts';
 import * as paths from './paths.ts';
+
+export { Herdr };
 
 export function run(args: string[], cwd?: string): string {
   const result = Bun.spawnSync(args, { cwd, stdout: 'pipe', stderr: 'pipe' });
@@ -12,14 +16,6 @@ export function run(args: string[], cwd?: string): string {
     throw new Error(`${args.join(' ')}: ${detail}`);
   }
   return stdout.trim();
-}
-
-export class Herdr {
-  /** Wraps the `herdr` CLI, parsing its JSON `result` envelope. */
-  call(...args: string[]): any {
-    const output = run(['herdr', ...args]);
-    return output ? (JSON.parse(output).result ?? {}) : {};
-  }
 }
 
 export class Git {
