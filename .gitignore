@@ -3,4 +3,5 @@
 agent-dash/node_modules/
 agent-dash/dist/
 agent-dash/*.bun-build/
+agentic-coding/node_modules/
 __pycache__/

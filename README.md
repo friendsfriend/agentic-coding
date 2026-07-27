@@ -6,17 +6,20 @@ Pi agent assets, Herdr workflow configuration, OpenCode assets, OpenSpec history
 
 - [Pi](https://github.com/badlogic/pi-mono) and `pi install npm:@ogulcancelik/pi-herdr`
 - [Herdr](https://github.com/ogulcancelik/herdr) HEAD
-- [Bun](https://bun.sh/) for `agent-dash` and `otel-tui`
+- [Bun](https://bun.sh/) for `agent-dash`, `otel-tui`, and the `agentic-coding` workflow engine
 - `opencode` only when using OpenCode assets
 
 ## Install
 
 ```bash
 ./scripts/stow.sh
-./scripts/install-tui.sh           # agent-dash + otel-tui
-./scripts/install-agent-dash.sh    # agent-dash only
-./scripts/install-otel-tui.sh      # otel-tui only
+./scripts/install-tui.sh              # agent-dash + otel-tui + agentic-coding
+./scripts/install-agent-dash.sh       # agent-dash only
+./scripts/install-otel-tui.sh         # otel-tui only
+./scripts/install-agentic-coding.sh   # agentic-coding (workflow engine) only
 ```
+
+The `herdr-workflow` command agents call is a thin shim (`pi/bin/herdr-workflow`) that forwards to `agentic-coding workflow`; installing `agentic-coding` is required for any workflow to run.
 
 `stow.sh` creates file-level links for `pi/` → `~/.pi/agent/`, `herdr/` → `~/.config/herdr/`, and `opencode/` → `~/.config/opencode/`. Local target files remain real files and are never overwritten.
 
@@ -46,6 +49,5 @@ herdr-manager
 
 ```bash
 ./scripts/test-workflow.sh
-./scripts/test-plugin-system.sh
 ./scripts/test-herdr-manager.sh
 ```

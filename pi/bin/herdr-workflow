@@ -1,11 +1,5 @@
-#!/usr/bin/env python3
-"""Thin entrypoint: resolves the herdr_workflow package and delegates to its CLI."""
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
-
-from herdr_workflow.cli import main  # noqa: E402
-
-if __name__ == "__main__":
-    main()
+#!/usr/bin/env bash
+# Thin shim: forwards argv to `agentic-coding workflow`, preserving the exact
+# agent-facing CLI surface (skills, prompts, PLAN_REJECTED loop unchanged).
+set -euo pipefail
+exec agentic-coding workflow "$@"
