@@ -11,6 +11,7 @@ import * as findings from './findings.ts';
 import * as gates from './gates.ts';
 import * as git from './git.ts';
 import * as layout from './layout.ts';
+import * as naming from './naming.ts';
 import * as paths from './paths.ts';
 import * as prompts from './prompts.ts';
 import * as stateMod from './state.ts';
@@ -53,9 +54,7 @@ function providerUnhealthy(ctx: Context, model: string): boolean {
 }
 
 export function roleAgentName(state: WorkflowState, role: string): string {
-  const suffix = `-${role}`;
-  const name = `${state.changeId}${suffix}`;
-  return name.length <= 32 ? name : `${state.changeId.slice(0, 32 - suffix.length)}${suffix}`;
+  return naming.agentName(state.changeId, role);
 }
 
 export async function launchRole(ctx: Context, state: WorkflowState, role: string, text?: string): Promise<void> {

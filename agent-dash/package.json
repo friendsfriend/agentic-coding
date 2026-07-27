@@ -13,10 +13,11 @@
     "test": "bun test"
   },
   "dependencies": {
-    "agentic-coding": "file:../agentic-coding",
     "@opentui/core": "0.4.2",
     "@opentui/keymap": "0.4.2",
     "@opentui/solid": "0.4.2",
+    "agentic-coding": "file:../agentic-coding",
+    "otel-tui": "file:../otel-tui",
     "solid-js": "^1.9.12"
   },
   "devDependencies": {

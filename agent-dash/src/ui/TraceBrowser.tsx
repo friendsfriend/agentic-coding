@@ -1,16 +1,32 @@
 /** @jsxImportSource @opentui/solid */
 import { Show, createMemo } from 'solid-js';
-import { duration, traces, tree, type TraceSpan } from '../traces';
+import { TraceStore } from 'otel-tui/model/traceStore.ts';
+import type { SpanData, TreeNode } from 'otel-tui/model/types.ts';
 import { uiColors } from './colors';
 
-export function TraceBrowser(props: { spans: TraceSpan[]; filter?: string; change?: string }) {
-  const visible = createMemo(() => traces(props.spans.filter(span => !props.change || span.attributes['herdr.change.id'] === props.change), props.filter));
+function duration(span: SpanData): string {
+  return `${Math.max(0, Number((BigInt(span.endTimeUnixNano) - BigInt(span.startTimeUnixNano)) / 1_000_000n))}ms`;
+}
+
+function flatten(nodes: TreeNode[]): TreeNode[] {
+  return nodes.flatMap(node => [node, ...flatten(node.children)]);
+}
+
+/** Embedded read-only trace viewer for a single change's workflow spans, backed by
+ * the shared otel-tui TraceStore (same parsing/grouping otel-tui's own binary uses). */
+export function TraceBrowser(props: { spans: SpanData[]; filter?: string; change?: string }) {
+  const store = createMemo(() => {
+    const traceStore = new TraceStore(props.spans);
+    if (props.filter) traceStore.applyFilter(props.filter);
+    return traceStore;
+  });
+  const rows = createMemo(() => flatten(store().getSpanTree(props.change ?? '')));
   return <box flexDirection="column" width="100%" height="100%">
-    <Show when={visible().length} fallback={<text fg={uiColors.textMuted}>No traces yet</text>}>
-      <text fg={uiColors.textMuted}>{visible().length} traces · {props.spans.length} spans</text>
-      {visible().slice(0, 20).map(trace => <box flexDirection="column" marginTop={1}>
-        <text fg={uiColors.primary}>{trace.id}</text>
-        {tree(trace.spans).map(row => <box flexDirection="column"><text fg={row.span.status === 'ERROR' ? uiColors.error : uiColors.textSecondary}>{'  '.repeat(row.depth)}{row.span.name} · {duration(row.span)}{row.span.status ? ` · ${row.span.status}` : ''}</text><text fg={uiColors.textMuted}>{'  '.repeat(row.depth + 1)}{String(row.span.attributes['service.name'] ?? 'unknown')} · {Object.entries(row.span.attributes).map(([key, value]) => `${key}=${value}`).join(' · ').slice(0, 240)}</text></box>)}
+    <Show when={rows().length} fallback={<text fg={uiColors.textMuted}>No traces yet</text>}>
+      <text fg={uiColors.textMuted}>{props.spans.length} spans</text>
+      {rows().map(row => <box flexDirection="column">
+        <text fg={row.span.status.code === 2 ? uiColors.error : uiColors.textSecondary}>{'  '.repeat(row.depth)}{row.span.name} · {duration(row.span)}{row.span.status.code === 2 ? ' · ERROR' : ''}</text>
+        <text fg={uiColors.textMuted}>{'  '.repeat(row.depth + 1)}{row.span.serviceName} · {row.span.attributes.map(a => `${a.key}=${a.value}`).join(' · ').slice(0, 240)}</text>
       </box>)}
     </Show>
   </box>;
