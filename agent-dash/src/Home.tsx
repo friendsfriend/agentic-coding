@@ -3,8 +3,10 @@
 import { useRenderer, useTerminalDimensions } from '@opentui/solid';
 import { TextAttributes, type KeyEvent } from '@opentui/core';
 import type { Keymap } from '@opentui/keymap';
-import { Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { join } from 'node:path';
+import { Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { availableModels, discoverProjects, focusWorkflow, herdrAvailable, listWorkflows, notifyHerdrError, startWorkflow, type WorkflowOverview } from './data';
+import { watchDirectories } from './watchRefresh';
 import { ErrorDialog } from './ui/ErrorDialog';
 import { HelpModal, type HelpSection } from './ui/HelpModal';
 import { NewWorkflowModal } from './ui/NewWorkflowModal';
@@ -69,8 +71,15 @@ export function Home(props: { keymap: Keymap<any, KeyEvent> }) {
   onMount(() => {
     const loadStartup = () => { setItems(listWorkflows()); setModels(availableModels()); setProjects(discoverProjects()); setLoading(false); };
     const startup = setTimeout(loadStartup, 0);
-    const timer = setInterval(refresh, 5000);
-    onCleanup(() => { clearTimeout(startup); clearInterval(timer); });
+    // ponytail: 30s safety re-sync also discovers brand-new workflows the
+    // per-workflow watchers below don't know about yet.
+    const safety = setInterval(refresh, 30000);
+    onCleanup(() => { clearTimeout(startup); clearInterval(safety); });
+  });
+  createEffect(() => {
+    const dirs = items().map(item => join(item.state.worktree, '.herdr-workflow', item.state.changeId));
+    const dispose = watchDirectories(dirs, refresh);
+    onCleanup(dispose);
   });
   const handleKey = (key: KeyEvent) => {
     const name = key.name.toLowerCase();

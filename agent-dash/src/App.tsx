@@ -6,6 +6,7 @@ import {
 } from "@opentui/core";
 import type { Binding, Keymap } from "@opentui/keymap";
 import { useRenderer, useTerminalDimensions } from "@opentui/solid";
+import { join } from "node:path";
 import {
   Show,
   createEffect,
@@ -36,6 +37,7 @@ import {
   type DeveloperReviewFinding,
   type LocalChange,
 } from "./data";
+import { watchDirectories } from "./watchRefresh";
 import { Badge } from "./ui/Badge";
 import { HighlightedText } from "./ui/Highlight";
 import { Header } from "./ui/Header";
@@ -482,8 +484,21 @@ export function App(props: {
   };
 
   onMount(() => {
-    const timer = setInterval(refresh, 5000);
-    onCleanup(() => clearInterval(timer));
+    // ponytail: 30s safety re-sync catches drift the watchers miss (e.g. a
+    // directory that didn't exist yet); file watches give near-instant refresh.
+    const dirs =
+      props.profile === "test"
+        ? []
+        : [
+            join(props.repo, ".herdr-workflow", props.change),
+            join(data().state.worktree, ".herdr-workflow", props.change),
+          ];
+    const dispose = watchDirectories(dirs, refresh);
+    const safety = setInterval(refresh, 30000);
+    onCleanup(() => {
+      dispose();
+      clearInterval(safety);
+    });
   });
 
   const handleKey = async (key: KeyEvent) => {

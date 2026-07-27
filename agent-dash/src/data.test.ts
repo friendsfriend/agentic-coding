@@ -2,8 +2,9 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, expect, spyOn, test } from 'bun:test';
-import { loadLocalChanges, loadLocalDiff, saveDeveloperReview, startWorkflow, testDashboard, type DeveloperReviewComment } from './data';
+import { afterEach, expect, test } from 'bun:test';
+import { loadLocalChanges, loadLocalDiff, saveDeveloperReview, testDashboard, type DeveloperReviewComment } from './data';
+import { startArgs } from './engine';
 
 const roots: string[] = [];
 const runGit = (repo: string, ...args: string[]) => execFileSync('git', args, { cwd: repo, stdio: 'pipe' }).toString().trim();
@@ -67,17 +68,9 @@ test('demo dashboard includes usability verifier', () => {
   expect(testDashboard('verify').agents.map(agent => agent.role)).toContain('usability-verifier');
 });
 
-test('startWorkflow passes quick implementation task to worker', async () => {
-  const spawn = spyOn(Bun, 'spawn').mockReturnValue({
-    stdout: new Blob(['started']).stream(),
-    stderr: new Blob().stream(),
-    exited: Promise.resolve(0),
-  } as any);
+test('startArgs maps quick workflow type to no-openspec and passes task through', () => {
+  const args = startArgs({ repo: '.', ticket: '', change: 'quick-fix', task: 'Fix login\nand add coverage', mode: 'worktree', worker: 'test/worker', workflowType: 'quick' });
 
-  await startWorkflow({ repo: '.', ticket: '', change: 'quick-fix', task: 'Fix login\nand add coverage', mode: 'worktree', worker: 'test/worker', workflowType: 'quick' });
-
-  const args = spawn.mock.calls[0]![0] as string[];
-  spawn.mockRestore();
-  expect(args).toContain('no-openspec');
-  expect(args.slice(args.indexOf('--task'), args.indexOf('--task') + 2)).toEqual(['--task', 'Fix login\nand add coverage']);
+  expect(args.workflowType).toBe('no-openspec');
+  expect(args.task).toBe('Fix login\nand add coverage');
 });

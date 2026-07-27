@@ -2,7 +2,11 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { directionBetween, Herdr, type Rect } from "agentic-coding/src/herdr-client.ts";
+import { discoverProjectsInProcess, runWorkflowAction, setReturnInProcess, startWorkflowInProcess } from "./engine";
 import { decodeJsonl, type TraceSpan } from "./traces";
+
+const herdr = new Herdr();
 
 export interface WorkflowState {
   changeId: string;
@@ -45,14 +49,10 @@ export interface WorkflowOverview {
 }
 
 function openWorkspaceIds(): Set<string> | undefined {
-  const result = Bun.spawnSync(["herdr", "workspace", "list"], {
-    stdout: "pipe",
-    stderr: "ignore",
-  });
-  if (result.exitCode !== 0) return undefined;
   try {
-    const workspaces = JSON.parse(result.stdout.toString()).result
-      .workspaces as Array<{ workspace_id: string }>;
+    const workspaces = herdr.call("workspace", "list").workspaces as Array<{
+      workspace_id: string;
+    }>;
     return new Set(workspaces.map((workspace) => workspace.workspace_id));
   } catch {
     return undefined;
@@ -303,13 +303,8 @@ function telemetryEvents(path: string): Array<Record<string, any>> {
 }
 
 function agentStatuses() {
-  const result = Bun.spawnSync(["herdr", "agent", "list"], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (result.exitCode !== 0) return new Map<string, string>();
   try {
-    const agents = JSON.parse(result.stdout.toString()).result.agents as Array<{
+    const agents = herdr.call("agent", "list").agents as Array<{
       pane_id: string;
       agent_status: string;
     }>;
@@ -1009,18 +1004,7 @@ export function notifyHerdrError(message: string) {
 }
 
 export function focusWorkspace(workspace: string) {
-  const result = Bun.spawnSync(["herdr", "workspace", "focus", workspace], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (result.exitCode !== 0)
-    throw new Error(
-      (
-        result.stderr.toString() ||
-        result.stdout.toString() ||
-        "workspace focus failed"
-      ).trim(),
-    );
+  herdr.call("workspace", "focus", workspace);
 }
 
 function openSpecRoot(state: WorkflowState) {
@@ -1056,68 +1040,28 @@ export function openFindingInEditor(
 ) {
   if (!finding.path) throw new Error("Finding has no file path.");
   const file = join(state.worktree, finding.path);
-  const tab = Bun.spawnSync(
-    [
-      "herdr",
-      "tab",
-      "create",
-      "--workspace",
-      state.workspace,
-      "--label",
-      `finding:${finding.path.split("/").at(-1)}`,
-      "--focus",
-    ],
-    { stdout: "pipe", stderr: "pipe" },
-  );
-  if (tab.exitCode !== 0)
-    throw new Error(
-      (tab.stderr.toString() || "editor tab creation failed").trim(),
-    );
-  const pane = JSON.parse(tab.stdout.toString()).result.root_pane
-    .pane_id as string;
+  const pane = herdr.call(
+    "tab",
+    "create",
+    "--workspace",
+    state.workspace,
+    "--label",
+    `finding:${finding.path.split("/").at(-1)}`,
+    "--focus",
+  ).root_pane.pane_id as string;
   const editor = process.env.EDITOR || "vi";
   const command = `${editor} +${finding.line ?? 1} ${JSON.stringify(file)}`;
-  const run = Bun.spawnSync(["herdr", "pane", "run", pane, command], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (run.exitCode !== 0)
-    throw new Error((run.stderr.toString() || "editor launch failed").trim());
+  herdr.call("pane", "run", pane, command);
 }
 
 export function focusAgent(state: WorkflowState, pane: string) {
   focusWorkspace(state.workspace);
-  const paneInfo = Bun.spawnSync(["herdr", "pane", "get", pane], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (paneInfo.exitCode !== 0)
-    throw new Error(
-      (paneInfo.stderr.toString() || "agent pane not found").trim(),
-    );
-  const tabId = JSON.parse(paneInfo.stdout.toString()).result.pane
-    .tab_id as string;
-  const tab = Bun.spawnSync(["herdr", "tab", "focus", tabId], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (tab.exitCode !== 0)
-    throw new Error((tab.stderr.toString() || "agent tab focus failed").trim());
+  const tabId = herdr.call("pane", "get", pane).pane.tab_id as string;
+  herdr.call("tab", "focus", tabId);
   for (let attempt = 0; attempt < 8; attempt++) {
-    const layoutResult = Bun.spawnSync(
-      ["herdr", "pane", "layout", "--pane", pane],
-      { stdout: "pipe", stderr: "pipe" },
-    );
-    if (layoutResult.exitCode !== 0)
-      throw new Error(
-        (layoutResult.stderr.toString() || "agent pane layout failed").trim(),
-      );
-    const layout = JSON.parse(layoutResult.stdout.toString()).result.layout as {
+    const layout = herdr.call("pane", "layout", "--pane", pane).layout as {
       focused_pane_id: string;
-      panes: Array<{
-        pane_id: string;
-        rect: { x: number; y: number; width: number; height: number };
-      }>;
+      panes: Array<{ pane_id: string; rect: Rect }>;
     };
     if (layout.focused_pane_id === pane) return;
     const current = layout.panes.find(
@@ -1126,38 +1070,15 @@ export function focusAgent(state: WorkflowState, pane: string) {
     const target = layout.panes.find((item) => item.pane_id === pane);
     if (!current || !target)
       throw new Error("agent pane not present in focused tab");
-    const dx =
-      target.rect.x +
-      target.rect.width / 2 -
-      (current.rect.x + current.rect.width / 2);
-    const dy =
-      target.rect.y +
-      target.rect.height / 2 -
-      (current.rect.y + current.rect.height / 2);
-    const direction =
-      Math.abs(dx) >= Math.abs(dy)
-        ? dx > 0
-          ? "right"
-          : "left"
-        : dy > 0
-          ? "down"
-          : "up";
-    const focused = Bun.spawnSync(
-      [
-        "herdr",
-        "pane",
-        "focus",
-        "--pane",
-        current.pane_id,
-        "--direction",
-        direction,
-      ],
-      { stdout: "pipe", stderr: "pipe" },
+    const direction = directionBetween(current.rect, target.rect);
+    herdr.call(
+      "pane",
+      "focus",
+      "--pane",
+      current.pane_id,
+      "--direction",
+      direction,
     );
-    if (focused.exitCode !== 0)
-      throw new Error(
-        (focused.stderr.toString() || "agent pane focus failed").trim(),
-      );
   }
   throw new Error("could not reach agent pane");
 }
@@ -1167,27 +1088,7 @@ export function focusWorkflow(workflow: WorkflowOverview) {
   if (!returnWorkspace)
     throw new Error("Dashboard is not running inside a Herdr workspace.");
   const state = workflow.state;
-  const result = Bun.spawnSync(
-    [
-      "herdr-workflow",
-      "set-return",
-      "--repo",
-      state.repository,
-      "--change",
-      state.changeId,
-      "--workspace",
-      returnWorkspace,
-    ],
-    { stdout: "pipe", stderr: "pipe" },
-  );
-  if (result.exitCode !== 0)
-    throw new Error(
-      (
-        result.stderr.toString() ||
-        result.stdout.toString() ||
-        "failed to set return workspace"
-      ).trim(),
-    );
+  setReturnInProcess(state.repository, state.changeId, returnWorkspace);
   focusWorkspace(state.workspace);
 }
 
@@ -1209,13 +1110,8 @@ export function discoverProjects(): Array<{
   path: string;
   openspec: boolean;
 }> {
-  const result = Bun.spawnSync(["herdr-workflow", "projects"], {
-    stdout: "pipe",
-    stderr: "ignore",
-  });
-  if (result.exitCode !== 0) return [];
   try {
-    return JSON.parse(result.stdout.toString());
+    return discoverProjectsInProcess();
   } catch {
     return [];
   }
@@ -1245,41 +1141,7 @@ export async function startWorkflow(input: {
   const repo = input.repo.startsWith("~")
     ? resolve(input.repo.replace("~", homedir()))
     : resolve(input.repo);
-  const workflowType =
-    input.workflowType === "quick"
-      ? "no-openspec"
-      : (input.workflowType ?? "standard");
-  const args = [
-    "herdr-workflow",
-    "start",
-    "--repo",
-    repo,
-    "--change",
-    input.change,
-    "--mode",
-    input.mode,
-    "--worker",
-    input.worker,
-    "--workflow-type",
-    workflowType,
-  ];
-  if (input.task) args.push("--task", input.task);
-  if (input.ticket) args.push("--ticket", input.ticket);
-  const env = {
-    ...process.env,
-    ...(input.sshPassphrase
-      ? { HERDR_SSH_PASSPHRASE: input.sshPassphrase }
-      : {}),
-  };
-  const child = Bun.spawn(args, { stdout: "pipe", stderr: "pipe", env });
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
-  if (exitCode !== 0)
-    throw new Error((stderr || stdout || "start failed").trim());
-  return stdout.trim() || "Workflow started";
+  return startWorkflowInProcess({ ...input, repo });
 }
 
 export async function runWorkflow(
@@ -1288,15 +1150,5 @@ export async function runWorkflow(
   change: string,
   argument?: string,
 ) {
-  const args = ["herdr-workflow", action, "--repo", repo, "--change", change];
-  if (argument) args.push(argument);
-  const process = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(process.stdout).text(),
-    new Response(process.stderr).text(),
-    process.exited,
-  ]);
-  if (exitCode !== 0)
-    throw new Error((stderr || stdout || `${action} failed`).trim());
-  return stdout.trim() || `${action} complete`;
+  return runWorkflowAction(action, repo, change, argument);
 }
