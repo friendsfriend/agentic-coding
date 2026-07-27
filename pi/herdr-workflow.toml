@@ -1,9 +1,8 @@
 [models]
-manager = "opencode/deepseek-v4-flash-free"
-triage = "opencode/deepseek-v4-flash-free"
+triage = "github-copilot/claude-sonnet-5"
 recovery = "opencode/deepseek-v4-flash-free"
-planner = "opencode/deepseek-v4-flash-free"
-worker_default = "opencode/deepseek-v4-flash-free"
+planner = "github-copilot/claude-opus-4.8"
+worker_default = "github-copilot/claude-sonnet-5"
 worker_alternative = "opencode/deepseek-v4-flash-free"
 verifier = "opencode/deepseek-v4-flash-free"
 security_verifier = "opencode/deepseek-v4-flash-free"
@@ -17,7 +16,6 @@ verifier_fallback = "opencode/deepseek-v4-flash-free"
 archive = "opencode/deepseek-v4-flash-free"
 
 [thinking]
-manager = "high"
 triage = "high"
 recovery = "high"
 verifier_lite = "high"
