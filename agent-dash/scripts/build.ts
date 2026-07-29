@@ -64,7 +64,11 @@ for (const target of selected) {
     compile: { autoloadBunfig: false, autoloadDotenv: false, // @ts-expect-error Bun target types omit supported cross-compile names.
       target: bunTarget, outfile: output },
     entrypoints: ['./src/index.tsx', parserWorker],
-    define: { OTUI_TREE_SITTER_WORKER_PATH: JSON.stringify(bunfsRoot + workerRelativePath), ...(target.os === 'linux' ? { 'process.env.OPENTUI_LIBC': JSON.stringify(target.abi === 'musl' ? 'musl' : 'glibc') } : {}) },
+    define: {
+      OTUI_TREE_SITTER_WORKER_PATH: JSON.stringify(bunfsRoot + workerRelativePath),
+      'process.env.HERDR_AGENT_DEF_DIR': JSON.stringify(path.resolve(root, '..', 'agent-definitions')),
+      ...(target.os === 'linux' ? { 'process.env.OPENTUI_LIBC': JSON.stringify(target.abi === 'musl' ? 'musl' : 'glibc') } : {}),
+    },
   });
   await Bun.write(`dist/${name}/package.json`, JSON.stringify({ name, version: '0.1.0', os: [target.os], cpu: [target.arch] }, null, 2));
 }
