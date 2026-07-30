@@ -136,11 +136,18 @@ export function placeLaunchPane(ctx: Context, state: WorkflowState, role: string
     targetTab = tab;
     let siblingPane = initialSibling;
     if (position === 1 && order.length === 1) {
-      // Split bottom first so BSP layout becomes (first | second) / third.
+      // Split bottom first so BSP layout becomes (first | second) / third — but only
+      // when a third role is already known and launching in this same dispatch batch.
+      // The eventual test-verifier (which always runs later, after verifiers pass) is
+      // not "known soon": reserving space for it here would leave an empty pane sitting
+      // idle for the verifier's whole run. Let it split in lazily when it actually starts.
       const selected: string[] = state.verificationRoles ?? [];
       const selectedIndex = selected.indexOf(role);
-      spareRole = selectedIndex + 1 < selected.length ? selected[selectedIndex + 1] : tiering.TEST_VERIFIER;
-      createdSparePane = ctx.herdr.call('pane', 'split', siblingPane, '--direction', 'down', '--cwd', worktree, ...prompts.roleEnv(spareRole, change), '--no-focus').pane.pane_id;
+      const nextRole = selectedIndex + 1 < selected.length ? selected[selectedIndex + 1] : null;
+      if (nextRole) {
+        spareRole = nextRole;
+        createdSparePane = ctx.herdr.call('pane', 'split', siblingPane, '--direction', 'down', '--cwd', worktree, ...prompts.roleEnv(spareRole, change), '--no-focus').pane.pane_id;
+      }
     }
     if (position >= 2 && state.verificationSecondRowPane && state.verificationSecondRowRole === role) {
       launchPane = state.verificationSecondRowPane;

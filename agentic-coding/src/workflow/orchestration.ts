@@ -319,7 +319,7 @@ export function ensureTasksComplete(state: WorkflowState): void {
 export async function cmdApply(ctx: Context, args: Args): Promise<void> {
   const state = stateMod.loadState(args.repo!, args.change!);
   if (state.phase !== 'proposed') throw new Error(`apply requires approved proposal, found phase ${state.phase}`);
-  git.ensureBaseFresh(ctx, state);
+  const baseStatus = git.baseStatus(ctx, state);
   state.planQuality = planQuality(state);
   stateMod.saveState(state);
   if (!state.planQuality.passed) {
@@ -328,7 +328,15 @@ export async function cmdApply(ctx: Context, args: Args): Promise<void> {
     throw new Error(`plan quality gate failed: ${state.planQuality.issues.join('; ')}`);
   }
   telemetry.telemetry(ctx, state, 'plan_quality_passed', { tasks: state.planQuality.taskCount, specs: state.planQuality.specFiles });
-  await startRole(ctx, state, 'worker');
+  let prompt: string | undefined;
+  if (baseStatus.moved) {
+    const oldBase = state.baseCommit;
+    state.baseCommit = baseStatus.current!;
+    stateMod.saveState(state);
+    telemetry.telemetry(ctx, state, 'apply_base_moved', { base: baseStatus.base, from: oldBase, to: baseStatus.current });
+    prompt = `${git.rebaseInstruction(baseStatus, oldBase, 'implementing anything else')} ${prompts.rolePrompt('worker', state.changeId, state.verificationRound, state.workflowType, state.task)}`;
+  }
+  await startRole(ctx, state, 'worker', prompt);
   telemetry.changePhase(ctx, state, 'apply');
   console.log('worker started');
 }
@@ -727,16 +735,25 @@ function hasOpenspecChange(state: WorkflowState): boolean {
   return fs.existsSync(p) && fs.statSync(p).isDirectory();
 }
 
-function writeArchiveContext(state: WorkflowState): void {
+function writeArchiveContext(ctx: Context, state: WorkflowState): void {
   const results: Record<string, unknown> = {};
   for (const [role, result] of Object.entries(state.verificationResults ?? {})) results[role] = (result as any).verdict;
   const p = path.join(stateMod.workflowDir(state), 'reviews', 'archive-context.md');
+  const baseStatus = git.baseStatus(ctx, state);
+  let rebaseNote = '';
+  if (baseStatus.moved) {
+    const oldBase = state.baseCommit;
+    state.baseCommit = baseStatus.current!;
+    stateMod.saveState(state);
+    telemetry.telemetry(ctx, state, 'archive_base_moved', { base: baseStatus.base, from: oldBase, to: baseStatus.current });
+    rebaseNote = `\n**${git.rebaseInstruction(baseStatus, oldBase, 'archiving or committing')}**\n`;
+  }
   const instruction =
     state.workflowType === 'no-openspec'
       ? 'No OpenSpec project in this workflow; validate only and do NOT run `openspec archive`.'
       : `Run \`openspec archive ${state.changeId} --yes\` to move \`openspec/changes/${state.changeId}/\` into \`openspec/changes/archive/\`, then validate.`;
   fs.mkdirSync(path.dirname(p), { recursive: true });
-  fs.writeFileSync(p, `# Archive context\n\nChange: ${state.changeId}\nBranch: ${state.branch}\nTicket: ${state.ticketNumber ?? '(none)'}\nVerification: ${JSON.stringify(results)}\n\n${instruction} Leave a clean, stageable working tree, do not commit or push, then start git operations.\n`);
+  fs.writeFileSync(p, `# Archive context\n\nChange: ${state.changeId}\nBranch: ${state.branch}\nTicket: ${state.ticketNumber ?? '(none)'}\nVerification: ${JSON.stringify(results)}\n${rebaseNote}\n${instruction} Leave a clean, stageable working tree, do not commit or push, then start git operations.\n`);
 }
 
 /** Close built-in planner, triage, worker, verifier, and test-verifier panes; custom roles stay open. */
@@ -756,7 +773,7 @@ function closeCompletedRolePanes(ctx: Context, state: WorkflowState): void {
 /** Launch archive agent with its native Pi initial prompt. */
 async function startArchive(ctx: Context, state: WorkflowState): Promise<void> {
   closeCompletedRolePanes(ctx, state);
-  writeArchiveContext(state);
+  writeArchiveContext(ctx, state);
   await launchRole(ctx, state, 'archive');
   state.developerApproval = true;
   telemetry.changePhase(ctx, state, 'archive', { reason: 'developer_approved' });

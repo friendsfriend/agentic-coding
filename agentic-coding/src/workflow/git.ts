@@ -15,16 +15,33 @@ export function ensureClean(ctx: Context, repo: string, requireOpenspec = true):
   }
 }
 
-export function ensureBaseFresh(ctx: Context, state: WorkflowState): void {
+export interface BaseStatus {
+  base: string;
+  current: string | null; // null when base branch isn't a tracked remote (legacy/local workflow)
+  moved: boolean;
+}
+
+/** Query whether the configured base branch has advanced past what the plan was built against. Never throws. */
+export function baseStatus(ctx: Context, state: WorkflowState): BaseStatus {
   const base = state.baseBranch ?? ctx.config.workflow.base_branch ?? 'origin/HEAD';
-  let current: string;
+  let current: string | null;
   try {
     current = ctx.git.run(['rev-parse', '--verify', base], state.worktree);
   } catch {
-    return; // legacy/local workflow without a tracked remote base
+    current = null;
   }
-  if (current !== state.baseCommit) {
-    throw new Error(`base branch moved: ${base} is now ${current.slice(0, 12)}, workflow planned against ${(state.baseCommit ?? '').slice(0, 12)}; rebase/replan explicitly`);
+  return { base, current, moved: current !== null && current !== state.baseCommit };
+}
+
+/** One-line instruction telling an agent to rebase before doing `action` (e.g. "implementing", "archiving or committing"). */
+export function rebaseInstruction(status: BaseStatus, oldBase: string | null | undefined, action: string): string {
+  return `${status.base} advanced from ${(oldBase ?? '').slice(0, 12)} to ${status.current!.slice(0, 12)} since planning. Rebase this branch onto ${status.base} and resolve any conflicts before ${action}.`;
+}
+
+export function ensureBaseFresh(ctx: Context, state: WorkflowState): void {
+  const status = baseStatus(ctx, state);
+  if (status.moved) {
+    throw new Error(`base branch moved: ${status.base} is now ${status.current!.slice(0, 12)}, workflow planned against ${(state.baseCommit ?? '').slice(0, 12)}; rebase/replan explicitly`);
   }
 }
 
