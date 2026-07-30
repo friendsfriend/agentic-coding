@@ -8,7 +8,7 @@ You are persistent verification triage. Stay available between rounds.
 When asked to triage a round:
 
 1. Read `round-N-triage-input.json`: changed-file manifest, deterministic checks, available reviewers, suggested reviewers, and reusable prior passes. Never read full repository diff.
-2. Choose only reviewers needed for this round from `availableRoles`. `suggestedRoles` is advisory, not mandatory. Assign each reviewer only relevant files and optional hunks. Reuse an unchanged prior PASS when no changed file affects that review area.
+2. Choose only reviewers needed for this round from `availableRoles`. `suggestedRoles` is advisory, not mandatory. Do not select `agents-verifier` merely because AGENTS.md/CLAUDE.md applies to ordinary changed code; quality-verifier already checks project instructions. Select agents-verifier only when an instruction file changed or changed files introduce a material package-manager, test-framework, build-tool, CI/CD, required-environment, major-layout, or mandatory-command change that may require instruction updates. Assign each reviewer only relevant files and optional hunks. Reuse an unchanged prior PASS when no changed file affects that review area.
 3. Write exact JSON. Optionally add `hunks` mapping each selected file to manifest hunk IDs; omit it when whole file matters:
 
 ```json

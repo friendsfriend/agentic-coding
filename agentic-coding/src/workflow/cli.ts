@@ -3,6 +3,7 @@
 import * as effects from './effects.ts';
 import * as orchestration from './orchestration.ts';
 import * as plugins from './plugins.ts';
+import { REPORT_CONTRACT } from './findings.ts';
 import * as transitions from './transitions.ts';
 
 export const SUBCOMMANDS = [
@@ -37,7 +38,7 @@ export const PLUGIN_SUBCOMMANDS = ['list', 'install', 'install-local'] as const;
 
 // One-line usage + description per subcommand, shown by `--help`/`-h`. Kept next to
 // REQUIRED_FLAGS/SUBCOMMANDS so drift is a one-file diff, not a hunt across docs.
-const HELP: Record<string, { usage: string; summary: string }> = {
+const HELP: Record<string, { usage: string; summary: string; details?: string }> = {
   projects: { usage: 'projects', summary: 'List discovered repositories under the configured projects root.' },
   config: { usage: 'config', summary: 'Print the resolved workflow config as JSON.' },
   start: {
@@ -53,11 +54,11 @@ const HELP: Record<string, { usage: string; summary: string }> = {
   close: { usage: 'close --repo <path> --change <id>', summary: 'Tear down the workflow (panes/tabs) after archive completes.' },
   status: { usage: 'status --repo <path> --change <id>', summary: 'Print the current state.json for the change.' },
   'git-operations': { usage: 'git-operations --repo <path> --change <id>', summary: 'Start the git-operations role to push/PR the finished change.' },
-  phase: { usage: 'phase --repo <path> --change <id> <phase>', summary: 'Force-set the recorded phase without running its transition logic.' },
-  'override-phase': { usage: 'override-phase --repo <path> --change <id> <phase>', summary: 'Operator escape hatch: jump the workflow to an arbitrary phase.' },
+  phase: { usage: 'phase <phase> --repo <path> --change <id>', summary: 'Force-set the recorded phase without running its transition logic.' },
+  'override-phase': { usage: 'override-phase <phase> --repo <path> --change <id>', summary: 'Operator escape hatch: jump the workflow to an arbitrary phase.' },
   'preflight-archive': { usage: 'preflight-archive --repo <path> --change <id>', summary: 'Validate archive preconditions (clean tree, tasks complete) without starting archive.' },
   'set-return': { usage: 'set-return --repo <path> --change <id> --workspace <id>', summary: 'Record the Herdr workspace to focus once the workflow closes.' },
-  'verification-result': { usage: 'verification-result --repo <path> --change <id> --role <name>', summary: 'Record one verifier role\'s pass/fail verdict for the current round.' },
+  'verification-result': { usage: 'verification-result --repo <path> --change <id> --role <name>', summary: 'Record one verifier role\'s pass/fail verdict for the current round.', details: REPORT_CONTRACT },
   message: { usage: 'message --repo <path> --change <id> --from <role> --to <role> <text>', summary: 'Deliver an inter-role message (e.g. PLAN_REJECTED) and act on it.' },
   plugin: { usage: 'plugin <list|install <source>|install-local <path>> [--worker] [--planner]', summary: 'List or install Pi extensions, optionally scoped to worker/planner roles.' },
 };
@@ -73,17 +74,23 @@ function printCommandHelp(command: string): void {
   const entry = HELP[command];
   console.log(`Usage: agentic-coding workflow ${entry?.usage ?? command}`);
   if (entry?.summary) console.log(entry.summary);
+  if (entry?.details) console.log(entry.details);
 }
 
 function flag(argv: string[], name: string): string | undefined {
-  const i = argv.indexOf(`--${name}`);
-  return i === -1 ? undefined : argv[i + 1];
+  const exact = argv.indexOf(`--${name}`);
+  if (exact !== -1) return argv[exact + 1];
+  const prefix = `--${name}=`;
+  return argv.find(token => token.startsWith(prefix))?.slice(prefix.length);
 }
 
 function requirePositional(argv: string[], command: string): string {
-  const positional = argv.find(token => !token.startsWith('--'));
-  if (positional === undefined) throw new Error(`${command}: missing required positional argument`);
-  return positional;
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i]!;
+    if (!token.startsWith('--')) return token;
+    if (!token.includes('=') && !['--worker', '--planner'].includes(token)) i++;
+  }
+  throw new Error(`${command}: missing required positional argument`);
 }
 
 function requireFlags(command: string, flags: Record<string, string | undefined>): void {
@@ -223,6 +230,8 @@ export async function run(argv: string[]): Promise<void> {
     }
   }
 }
+
+export const cliTest = { flag, requirePositional };
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   try {

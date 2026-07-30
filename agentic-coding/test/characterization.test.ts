@@ -65,6 +65,22 @@ describe('subcommand surface', () => {
   });
 });
 
+describe('argument parsing', () => {
+  test('phase positional works before or after flags', () => {
+    expect(cli.cliTest.requirePositional(['proposed', '--repo', '.', '--change', 'my-change'], 'phase')).toBe('proposed');
+    expect(cli.cliTest.requirePositional(['--repo', '.', '--change', 'my-change', 'proposed'], 'phase')).toBe('proposed');
+  });
+
+  test('message text is not confused with flag values', () => {
+    expect(cli.cliTest.requirePositional(['--repo', '.', '--change', 'my-change', '--from', 'worker', '--to', 'planner', 'base moved'], 'message')).toBe('base moved');
+  });
+
+  test('flags support separate and equals forms', () => {
+    expect(cli.cliTest.flag(['--repo', '/tmp/repo'], 'repo')).toBe('/tmp/repo');
+    expect(cli.cliTest.flag(['--repo=/tmp/repo'], 'repo')).toBe('/tmp/repo');
+  });
+});
+
 describe('--help', () => {
   test('every subcommand and no-args print help without touching config/herdr', async () => {
     const logs: string[] = [];
@@ -79,6 +95,8 @@ describe('--help', () => {
     }
     expect(logs.length).toBeGreaterThan(cli.SUBCOMMANDS.length);
     expect(logs.every(line => typeof line === 'string' && line.length > 0)).toBe(true);
+    expect(logs.some(line => line.includes('critical|warning|info'))).toBe(true);
+    expect(logs.some(line => line.includes('finding and verdict only'))).toBe(true);
   });
 });
 

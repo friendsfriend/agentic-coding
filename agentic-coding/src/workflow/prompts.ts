@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import * as paths from './paths.ts';
 import * as naming from './naming.ts';
+import { REPORT_CONTRACT } from './findings.ts';
 
 export const UNRESTRICTED_ROLES = new Set(['planner', 'worker']);
 export const ONE_SHOT_ROLES = new Set(['recovery', 'archive']);
@@ -88,30 +89,30 @@ export function rolePrompt(role: string, change: string, verificationRound?: num
     " Complete this round in this Pi process, then go idle and wait in this same process for the next round's prompt — do not exit, restart, or start unrelated work. Do not invoke another agent executable or invoke another agent or pane. Use herdr-workflow for required workflow handoff exactly as specified.";
 
   if (role === 'planner') {
-    return `Planner for OpenSpec change ${change}. Read ${request}, explore repository context, and discuss unclear requirements with developer. When asked to propose, write proposal, design, tasks, and delta spec scenarios under openspec/changes/${change}/. Submit with herdr-workflow phase --repo . --change ${change} proposed; fix PLAN_REJECTED feedback before finishing.`;
+    return `Planner for OpenSpec change ${change}. Read ${request}, explore repository context, and discuss unclear requirements with developer. When asked to propose, use openspec instructions proposal/design/tasks/specs --change ${change} as the artifact contract, then write proposal, design, tasks, and delta spec scenarios under openspec/changes/${change}/ and run openspec validate ${change} --strict. Do not call generic OpenSpec help or inspect archived changes solely to learn artifact structure. Submit with herdr-workflow phase proposed --repo . --change ${change}; fix PLAN_REJECTED feedback before finishing.`;
   }
   if (role === 'worker') {
     if (workflowType === 'no-openspec') {
       const description = task ? ` Implement this change: ${task}` : '';
-      return `Worker for ${change}. Use chat for scope, progress, and blockers. No task checklist to read — signal completion by running herdr-workflow verify --repo . --change ${change} once the change is applied.${description}`;
+      return `Worker for ${change}. Use chat for scope, progress, and blockers. Run focused tests only; quality and test verifiers own remaining validation gates. No task checklist to read — signal completion by running herdr-workflow verify --repo . --change ${change} once the change is applied. Output containing \`triage started:\` or \`verification already running:\` means handoff succeeded: stop immediately and never invoke verify again; do not poll status, call workflow help, inspect downstream workflow files, or wait with more tool calls. If a workflow phase/base/state blocker rejects it, report the exact blocker in chat and stop; never inspect workflow implementation source or read/change .herdr-workflow/*/state.json.${description}`;
     }
-    return `Worker for ${change}. Follow loaded skill and use chat for scope, progress, and blockers. Apply approved plan. Mark each OpenSpec task [x] only after focused validation; verification rejects unfinished tasks.`;
+    return `Worker for ${change}. Follow loaded skill and use chat for scope, progress, and blockers. Apply approved plan. Run focused tests only; quality and test verifiers own remaining validation gates. Mark each OpenSpec task [x] only after focused validation; verification rejects unfinished tasks. Output containing \`triage started:\` or \`verification already running:\` means handoff succeeded: stop immediately and never invoke verify again; do not poll status, call workflow help, inspect downstream workflow files, or wait with more tool calls. If a workflow phase/base/state blocker rejects it, report the exact blocker in chat and stop; never inspect workflow implementation source or read/change .herdr-workflow/*/state.json.`;
   }
   if (role === 'triage') {
     const reviews = `.herdr-workflow/${change}/reviews`;
     return (
-      `Silent triage for round ${verificationRound}. Read ${reviews}/round-${verificationRound}-triage-input.json only. Select minimum needed reviewers and assign relevant files or hunks. Write ${reviews}/round-${verificationRound}-triage.json, then run herdr-workflow dispatch-verifiers --repo . --change ${change}. No chat output.` +
+      `Silent triage for round ${verificationRound}. Read ${reviews}/round-${verificationRound}-triage-input.json only. Select minimum needed reviewers and assign relevant files or hunks. Do not select agents-verifier merely because AGENTS.md/CLAUDE.md applies; use it only when an instruction file changed or material tooling, environment, layout, or mandatory-command changes may require instruction updates. Write ${reviews}/round-${verificationRound}-triage.json, then run herdr-workflow dispatch-verifiers --repo . --change ${change}. No chat output.` +
       persistent
     );
   }
   const verifierFocus: Record<string, string> = {
     'security-verifier': 'Review changed trust boundaries for introduced injection, auth, secret, crypto, and input-validation defects.',
     'agents-verifier': 'Check changed code only against applicable AGENTS.md and CLAUDE.md instructions.',
-    'quality-verifier': 'Run focused formatting, lint, and type checks; review changed code for concrete correctness and maintainability defects.',
+    'quality-verifier': 'Run focused formatting, lint, and type checks; review changed code for concrete correctness and maintainability defects. Do not run any tests — test execution and coverage are the test verifier\'s domain.',
     'performance-verifier': 'Review changed hot paths for measurable query, I/O, CPU, blocking, and memory regressions.',
     'openspec-verifier': 'Compare implementation against approved proposal, design, specs, and tasks for missing, incompatible, or out-of-scope behavior.',
     'usability-verifier': 'Review changed frontend and asset files for introduced visual consistency, accessibility, responsive layout, design-system, component-state, and hardcoded-style defects.',
-    'test-verifier': "Find and run repository's complete configured test suite without filters; PASS requires successful suite and regression coverage.",
+    'test-verifier': "Run the repository's complete configured test suite once without filters; do not rerun changed tests already covered. PASS requires success or only confirmed pre-existing unrelated failures. Reuse prior baseline evidence from context; one focused baseline reproduction is allowed only for a new apparently unrelated full-suite failure.",
   };
   const verifierLabel: Record<string, string> = {
     'security-verifier': 'security verifier',
@@ -125,8 +126,11 @@ export function rolePrompt(role: string, change: string, verificationRound?: num
   if (role in verifierFocus) {
     const context = `.herdr-workflow/${change}/reviews/round-${verificationRound}-${role}-context.md`;
     const report = `.herdr-workflow/${change}/reviews/round-${verificationRound}-${role}.findings.jsonl`;
+    const reviewOnly = !['quality-verifier', 'test-verifier'].includes(role)
+      ? ' Review only; do not run tests, formatting, lint, type, or build commands. Treat generated context as authoritative scope: no full-repository git diff or unrelated changed-file inspection; read full assigned files or direct dependencies only when needed to understand a scoped hunk.'
+      : '';
     return (
-      `Silent ${verifierLabel[role]} for ${change} round ${verificationRound}. Read ${context}. ${verifierFocus[role]} Write JSONL findings plus final PASS/FAIL verdict to ${report}, then run herdr-workflow verification-result --repo . --change ${change} --role ${role}. No chat output. Only report actual defects and issues. Do not include findings that merely confirm code was implemented correctly — if nothing is wrong, write only the PASS verdict with no findings.` +
+      `Silent ${verifierLabel[role]} for ${change} round ${verificationRound}. Read ${context}. ${verifierFocus[role]}${reviewOnly} ${REPORT_CONTRACT} Write the report to ${report}, then run herdr-workflow verification-result --repo . --change ${change} --role ${role}. No chat output. Only report actual defects and issues. Do not include findings that merely confirm code was implemented correctly — if nothing is wrong, write only the PASS verdict with no findings.` +
       persistent
     );
   }

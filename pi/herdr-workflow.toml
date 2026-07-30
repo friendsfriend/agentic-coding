@@ -12,7 +12,7 @@ test_verifier = "opencode/deepseek-v4-flash-free"
 usability_verifier = "opencode/deepseek-v4-flash-free"
 agents_verifier = "opencode/deepseek-v4-flash-free"
 openspec_verifier = "opencode/deepseek-v4-flash-free"
-verifier_fallback = "opencode/deepseek-v4-flash-free"
+verifier_fallback = "eon/claude-5-sonnet"
 archive = "opencode/deepseek-v4-flash-free"
 
 [thinking]

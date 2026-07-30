@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { App } from './app/App';
 import { spawn } from 'node:child_process';
 import { routeReceiverRequest, startPrometheusScraper, startStatsDListener } from './receiver/index';
-import { TraceDb } from './model/db';
+import { TraceDb, discoverProjectRepos } from './model/db';
 import { TraceStore } from './model/traceStore';
 import { MetricStore } from './model/metricStore';
 import { LogStore } from './model/logStore';
@@ -60,6 +60,10 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
 
 const repoPath = arg('--repo') ?? resolve('.');
 const repo = resolve(repoPath);
+// Watch every repo under the configured [projects] root too, not just the one otel-tui
+// happened to launch from — herdr-manager starts this as a single long-lived shared
+// instance, so it must see workflows across all repos, not just its original cwd.
+const repos = Array.from(new Set([repo, ...discoverProjectRepos()]));
 const useDemoDb = process.argv.includes('--demo-db');
 const explicitHttp = process.argv.includes('--http-port');
 const httpPort = explicitHttp ? portArg('--http-port') : (useDemoDb ? undefined : 4318);
@@ -102,7 +106,7 @@ if (useDemoDb) {
   logStore.load(logs);
 } else {
   db = new TraceDb();
-  db.scanAllWorkspaces(repo);
+  for (const r of repos) db.scanAllWorkspaces(r);
   db.cleanupOlderThan();
   traceStore.loadFile(db.loadSpans());
 }
@@ -176,7 +180,7 @@ process.on('SIGTERM', cleanup);
 process.on('SIGHUP', cleanup);
 
 await render(() => <App
-  repo={repo}
+  repos={repos}
   db={db}
   traceStore={traceStore}
   metricStore={metricStore}

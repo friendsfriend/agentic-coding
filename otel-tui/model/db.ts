@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { parseJsonl } from './parser';
 import type { SpanData, MetricData, LogData } from './types';
@@ -207,4 +207,40 @@ export class TraceDb {
   }
 
   close() { this.db.close(); }
+}
+
+/** Read the same `[projects]` root herdr-workflow uses (~/.pi/agent/herdr-workflow.toml), so a
+ * single shared otel-tui instance discovers every repo's `.herdr-workflow/` — not just the one
+ * it happened to be launched from. Best effort: returns [] if unconfigured or unreadable. */
+export function discoverProjectRepos(): string[] {
+  const configPath = process.env.HERDR_WORKFLOW_CONFIG || join(homedir(), '.pi', 'agent', 'herdr-workflow.toml');
+  if (!existsSync(configPath)) return [];
+  let root: string, maxDepth: number;
+  try {
+    const cfg: any = Bun.TOML.parse(readFileSync(configPath, 'utf8'));
+    if (!cfg?.projects?.root) return [];
+    root = resolve(String(cfg.projects.root).replace(/^~/, homedir()));
+    maxDepth = Number(cfg.projects.max_depth ?? 3);
+  } catch {
+    return [];
+  }
+  if (!existsSync(root) || !statSync(root).isDirectory()) return [];
+  const repos: string[] = [];
+  const walk = (current: string, depth: number): void => {
+    if (existsSync(join(current, '.git'))) {
+      repos.push(current);
+      return;
+    }
+    if (depth >= maxDepth) return;
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith('.') || ['node_modules', 'build', 'dist', 'target'].includes(entry.name)) continue;
+      walk(join(current, entry.name), depth + 1);
+    }
+  };
+  try {
+    walk(root, 0);
+  } catch {
+    /* best effort */
+  }
+  return repos;
 }

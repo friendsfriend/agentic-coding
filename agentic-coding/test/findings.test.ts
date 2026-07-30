@@ -17,21 +17,26 @@ describe('validateReportEvents', () => {
   });
 
   test('unsupported type rejected', () => {
-    expect(() => findings.validateReportEvents([{ type: 'note' }] as any, 'report')).toThrow();
+    expect(() => findings.validateReportEvents([{ type: 'note' }, { type: 'verdict', verdict: 'FAIL' }] as any, 'report')).toThrow();
   });
 
   test('bad severity rejected', () => {
-    expect(() => findings.validateReportEvents([{ type: 'finding', severity: 'urgent', path: 'a.py', line: 1, detail: 'x' }], 'report')).toThrow();
+    expect(() => findings.validateReportEvents([{ type: 'finding', severity: 'urgent', path: 'a.py', line: 1, detail: 'x' }, { type: 'verdict', verdict: 'FAIL' }], 'report')).toThrow();
+  });
+
+  test('verdict must be unique and final', () => {
+    expect(() => findings.validateReportEvents([{ type: 'verdict', verdict: 'PASS' }, { type: 'finding', severity: 'info', path: 'a.py', line: 1, detail: 'x' }], 'report')).toThrow();
+    expect(() => findings.validateReportEvents([{ type: 'verdict', verdict: 'PASS' }, { type: 'verdict', verdict: 'PASS' }], 'report')).toThrow();
   });
 
   test('detail over limit rejected', () => {
     const event = { type: 'finding', severity: 'info', path: 'a.py', line: 1, detail: 'x'.repeat(1001) };
-    expect(() => findings.validateReportEvents([event], 'report')).toThrow();
+    expect(() => findings.validateReportEvents([event, { type: 'verdict', verdict: 'FAIL' }], 'report')).toThrow();
   });
 
   test('evidence over limit rejected', () => {
     const event = { type: 'finding', severity: 'info', path: 'a.py', line: 1, detail: 'x', evidence: 'y'.repeat(2001) };
-    expect(() => findings.validateReportEvents([event], 'report')).toThrow();
+    expect(() => findings.validateReportEvents([event, { type: 'verdict', verdict: 'FAIL' }], 'report')).toThrow();
   });
 });
 

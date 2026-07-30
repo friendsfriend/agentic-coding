@@ -14,16 +14,26 @@ description: Explores and proposes one OpenSpec change, discusses requirements w
 ## Propose
 
 1. Use supplied change ID.
-2. Run standard OpenSpec explore/propose workflow, including delta spec scenarios under `openspec/changes/$HERDR_CHANGE_ID/specs/`.
-3. Validate proposal, design, specs, and tasks. Never mark proposed without at least one spec scenario.
-4. Run `herdr-workflow phase --repo "$PWD" --change "$HERDR_CHANGE_ID" proposed`. `PLAN_REJECTED` is feedback to this planner turn: fix every reported artifact issue and retry immediately. Never end proposal work while transition remains rejected.
-5. Notify developer that dashboard approval is ready:
+2. Use these commands as the authoritative artifact contract; do not discover syntax with generic `openspec --help` or subcommand help:
+
+```bash
+openspec instructions proposal --change "$HERDR_CHANGE_ID"
+openspec instructions design --change "$HERDR_CHANGE_ID"
+openspec instructions tasks --change "$HERDR_CHANGE_ID"
+openspec instructions specs --change "$HERDR_CHANGE_ID"
+```
+
+Do not inspect archived changes or read another OpenSpec skill solely to infer artifact structure. Current specs and past changes remain valid sources when their domain content or repository precedent is directly relevant.
+3. Write proposal, design, tasks, and delta spec scenarios under `openspec/changes/$HERDR_CHANGE_ID/specs/`.
+4. Validate proposal, design, specs, and tasks with `openspec validate "$HERDR_CHANGE_ID" --strict`. Never mark proposed without at least one spec scenario.
+5. Run `herdr-workflow phase proposed --repo "$PWD" --change "$HERDR_CHANGE_ID"`. `PLAN_REJECTED` is feedback to this planner turn: fix every reported artifact issue and retry immediately. Never end proposal work while transition remains rejected.
+6. Notify developer that dashboard approval is ready:
 
 ```bash
 herdr notification show "Proposal ready" --body "$HERDR_CHANGE_ID: approve apply in dashboard" --sound request
 ```
 
-6. **Close your response.** Do not continue with any summary sections. Output ends after a short artifacts table and the notification line. No "Core Approach", "Tasks", "Next Step", or any prose beyond the artifacts table and the one-line dashboard instruction.
+7. **Close your response.** Do not continue with any summary sections. Output ends after a short artifacts table and the notification line. No "Core Approach", "Tasks", "Next Step", or any prose beyond the artifacts table and the one-line dashboard instruction.
 
 Wait. Dashboard owns apply approval and worker startup.
 

@@ -14,7 +14,7 @@ import { TraceStore, type SortCriterion } from '../model/traceStore';
 import { MetricStore } from '../model/metricStore';
 import { LogStore } from '../model/logStore';
 import { TopologyStore } from '../model/topologyStore';
-import type { TreeNode } from '../model/types';
+import type { TreeNode, SpanData } from '../model/types';
 import { uiColors } from '../ui/colors';
 import { TraceListView } from '../views/TraceListView';
 import { TraceTreeView } from '../views/TraceTreeView';
@@ -34,7 +34,7 @@ type Tab = 'traces' | 'metrics' | 'logs' | 'topology';
 type Workspace = { changeId: string; path: string; spanCount: number };
 
 export function App(props: {
-  repo: string;
+  repos: string[];
   db: TraceDb;
   traceStore: TraceStore;
   metricStore: MetricStore;
@@ -157,15 +157,16 @@ export function App(props: {
       notify(`Pruned ${removed} spans older than 30 days`, 'info');
     };
     const dailyPrune = setInterval(prune, 86_400_000);
-    const stop = db.watchWorkspaces(props.repo, (changeId, spans) => {
+    const onNew = (changeId: string, spans: SpanData[]) => {
       setWorkspaces(db.getWorkspaces());
       if (!activeWorkspace() || activeWorkspace() === changeId) {
         traceStore.loadFile(db.loadSpans(activeWorkspace()));
         refresh();
       }
       notify(`${changeId}: ${spans.length} new spans`, 'info');
-    });
-    onCleanup(() => { clearInterval(dailyPrune); stop(); db.close(); });
+    };
+    const stops = props.repos.map(r => db.watchWorkspaces(r, onNew));
+    onCleanup(() => { clearInterval(dailyPrune); stops.forEach(stop => stop()); db.close(); });
   });
 
   const copySelection = (reportEmpty = false) => {

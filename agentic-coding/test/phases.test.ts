@@ -390,6 +390,29 @@ describe('cmdVerificationResult', () => {
     expect(after.panes['test-verifier']).toBeDefined();
   });
 
+  test('test verifier context carries prior baseline evidence', async () => {
+    const state = makeState('verify', {
+      verificationRound: 2,
+      verificationRoles: ['quality-verifier'],
+      verificationTier: 'lite',
+      verificationRoleStartedAt: { 'quality-verifier': clock.now().toISOString() },
+    });
+    const priorReport = path.join(stateMod.workflowDir(state), 'reviews', 'round-1-test-verifier.findings.jsonl');
+    fs.mkdirSync(path.dirname(priorReport), { recursive: true });
+    fs.writeFileSync(priorReport, '{"type":"finding","severity":"info","path":"src/old.test.ts","line":1,"detail":"known baseline failure"}\n{"type":"verdict","verdict":"PASS"}\n');
+    state.previousVerificationResults = { 'test-verifier': { verdict: 'PASS', report: priorReport } };
+    stateMod.saveState(state);
+    writeTriageInputFixture(state);
+    writeReportFixture(state, 'quality-verifier', 'PASS');
+
+    await orchestration.cmdVerificationResult(ctx, { repo, change: 'my-change', role: 'quality-verifier' });
+
+    const context = fs.readFileSync(path.join(stateMod.workflowDir(state), 'reviews', 'round-2-test-verifier-context.md'), 'utf8');
+    expect(context).toContain('Prior test-verifier baseline evidence');
+    expect(context).toContain('known baseline failure');
+    expect(context).toContain('Do not rerun changed tests already covered');
+  });
+
   test('test verifier pass moves to developer review', async () => {
     const state = verifyingState();
     writeReportFixture(state, 'quality-verifier', 'PASS');

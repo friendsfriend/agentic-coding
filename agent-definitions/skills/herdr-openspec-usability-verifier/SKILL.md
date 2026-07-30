@@ -9,7 +9,7 @@ Read-only. Never edit code or change workflow phase.
 
 Do not emit chat output. JSONL is durable handoff.
 
-1. Read assigned review context and applicable project instructions. Review only scoped changed frontend or asset files.
+1. Treat assigned review context as authoritative scope and read applicable project instructions. Do not run a full-repository `git diff` or inspect unrelated changed files. Read full assigned frontend/asset files or direct dependencies only when required to understand a scoped UI hunk.
 2. Flag introduced, concrete defects in:
    - visual consistency: spacing, alignment, typography, palette, design tokens
    - accessibility: semantic HTML, labels, alt text, keyboard/focus behavior, ARIA, color contrast

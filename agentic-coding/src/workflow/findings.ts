@@ -1,6 +1,8 @@
 // Pure finding schema validation and cross-verifier consolidation.
 import { createHash } from 'node:crypto';
 
+export const REPORT_CONTRACT = 'JSONL report contract: write 0-30 {"type":"finding","severity":"critical|warning|info","path":"<file>","line":<integer>,"detail":"<issue>","evidence":"<optional evidence>","fix":"<optional fix>"} records, then exactly one final {"type":"verdict","verdict":"PASS|FAIL"} record. Supported record types are finding and verdict only.';
+
 export interface FindingEvent {
   type?: string;
   severity?: string;
@@ -29,6 +31,8 @@ export interface Finding {
 
 export function validateReportEvents(events: FindingEvent[], path: string): void {
   if (events.length > 31) throw new Error(`report exceeds 30 findings plus verdict: ${path}`);
+  const verdicts = events.filter(event => event.type === 'verdict');
+  if (verdicts.length !== 1 || events.at(-1)?.type !== 'verdict' || !['PASS', 'FAIL'].includes(verdicts[0]?.verdict ?? '')) throw new Error(`report must end with exactly one JSONL verdict PASS or FAIL: ${path}`);
   for (const event of events) {
     if (event.type === 'verdict') continue;
     if (event.type !== 'finding') throw new Error(`report contains unsupported record type: ${path}`);

@@ -10,7 +10,7 @@ Read-only. Never edit code or change workflow phase.
 Do not emit chat output. JSONL is durable handoff.
 
 1. Get repository root with `git rev-parse --show-toplevel`. Read only `AGENTS.md`/`CLAUDE.md` at that root and ancestors/descendants of changed paths within this repository. Never run `find /`, `locate`, or scan outside repository root; skills are already loaded.
-2. Review changed code only for concrete instruction violations.
+2. Treat assigned review context as authoritative code scope. Do not run a full-repository `git diff` or inspect unrelated changed files. Read full assigned files or direct dependencies only when required to evaluate a scoped instruction violation.
 3. Assess AGENTS.md materiality. Flag a missing/update-needed instruction only when changed files introduce package-manager, test-framework, build-tool, CI/CD, required-environment, major directory-layout, or mandatory command changes. Do not flag ordinary feature/bugfix/CSS changes using existing patterns. Also flag AGENTS.md only when it is materially unusable: generic filler, more than 200 lines, or tool references without runnable commands.
 4. Write `.herdr-workflow/$HERDR_CHANGE_ID/reviews/round-N-agents-verifier.findings.jsonl`:
 

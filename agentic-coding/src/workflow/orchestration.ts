@@ -441,10 +441,15 @@ function writeTestContext(ctx: Context, state: WorkflowState): void {
   for (const [role, result] of Object.entries(state.verificationResults ?? {})) {
     if (role !== 'coordinator') results[role] = (result as any).verdict;
   }
+  const previousTestReport = (state.previousVerificationResults?.[tiering.TEST_VERIFIER] as any)?.report;
+  let priorBaseline = '(none)';
+  if (typeof previousTestReport === 'string' && fs.existsSync(previousTestReport)) {
+    priorBaseline = fs.readFileSync(previousTestReport, 'utf8').slice(0, 8000);
+  }
   const p = path.join(stateMod.workflowDir(state), 'reviews', `round-${state.verificationRound}-${tiering.TEST_VERIFIER}-context.md`);
   fs.writeFileSync(
     p,
-    `# Test verification context\n\nRun the repository's full configured test suite without filters. Review regression coverage only for scoped changed behavior.\n\n## Changed files\n${files.join('\n')}\n\n## Changed test files\n${tests.join('\n') || '(none)'}\n\n## Selected verifier verdicts\n\`\`\`json\n${JSON.stringify(results)}\n\`\`\`\n\n## Scoped diff (max 12000 chars)\n\`\`\`diff\n${scopedDiff(ctx, root, files)}\n\`\`\`\n`,
+    `# Test verification context\n\nRun the repository's full configured test suite once without filters. Do not rerun changed tests already covered by that suite. Review regression coverage only for scoped changed behavior. Reuse matching prior baseline evidence below; only a new apparently unrelated failure permits one focused baseline reproduction.\n\n## Prior test-verifier baseline evidence\n\`\`\`jsonl\n${priorBaseline}\n\`\`\`\n\n## Changed files\n${files.join('\n')}\n\n## Changed test files\n${tests.join('\n') || '(none)'}\n\n## Selected verifier verdicts\n\`\`\`json\n${JSON.stringify(results)}\n\`\`\`\n\n## Scoped diff (max 12000 chars)\n\`\`\`diff\n${scopedDiff(ctx, root, files)}\n\`\`\`\n`,
   );
 }
 
