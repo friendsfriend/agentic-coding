@@ -1,19 +1,10 @@
-[models]
-triage = "opencode-go/deepseek-v4-flash"
-recovery = "opencode-go/deepseek-v4-flash"
-planner = "opencode-go/deepseek-v4-flash"
-worker_default = "opencode-go/deepseek-v4-flash"
-worker_alternative = "eon/claude-5-sonnet"
-verifier = "opencode-go/deepseek-v4-flash"
-security_verifier = "opencode-go/deepseek-v4-flash"
-quality_verifier = "opencode-go/deepseek-v4-flash"
-performance_verifier = "opencode-go/deepseek-v4-flash"
-test_verifier = "opencode-go/deepseek-v4-flash"
-usability_verifier = "opencode-go/deepseek-v4-flash"
-agents_verifier = "opencode-go/deepseek-v4-flash"
-openspec_verifier = "opencode-go/deepseek-v4-flash"
-verifier_fallback = "eon/claude-5-sonnet"
-archive = "opencode-go/deepseek-v4-flash"
+# Workflow configuration — installed to ~/.config/agentic-coding/config.toml.
+# Models are intentionally not pinned: an unconfigured step uses the model pi
+# selects by default. Add entries to pin per role, e.g.:
+# [models]
+# worker_default = "provider/model"
+# planner = "provider/model"
+# verifier = "provider/model"
 
 [thinking]
 triage = "high"

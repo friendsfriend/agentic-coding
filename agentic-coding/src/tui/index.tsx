@@ -144,7 +144,7 @@ export async function main(): Promise<void> {
   if (grpcPort && httpPort) {
     // Compiled binaries embed no source files; the sidecar is a second executable
     // built next to this one. Source runs spawn the script via bun.
-    const compiled = import.meta.url.startsWith('/$bunfs/') || import.meta.url.startsWith('B:/~BUN/');
+    const compiled = import.meta.url.includes('/$bunfs/') || import.meta.url.includes('B:/~BUN/');
     const sidecarScript = compiled
       ? join(dirname(process.execPath), 'agentic-coding-grpc-sidecar')
       : new URL('./otel/receiver/otlp-grpc-sidecar.ts', import.meta.url).pathname;

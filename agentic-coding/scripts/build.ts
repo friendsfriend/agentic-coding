@@ -16,6 +16,10 @@ if (!fs.existsSync(solidPluginPath)) {
 }
 const solidPlugin = (await import(solidPluginPath)).default;
 
+// Bundle the current agent-definitions snapshot into the binary (skills +
+// extensions), materialized on first run (see src/workflow/bootstrap.ts).
+await Bun.$`bun run scripts/generate-embedded.ts`;
+
 const agentDefDir = path.resolve(root, '..', 'agent-definitions');
 if (!fs.existsSync(agentDefDir)) {
   console.error(`agent-definitions not found at ${agentDefDir}`);
@@ -32,7 +36,6 @@ await Bun.build({
   plugins: [solidPlugin],
   compile: { outfile: main, autoloadBunfig: false, autoloadDotenv: false },
   entrypoints: ['./src/cli.ts'],
-  define: { 'process.env.HERDR_AGENT_DEF_DIR': JSON.stringify(agentDefDir) },
 });
 
 await Bun.build({

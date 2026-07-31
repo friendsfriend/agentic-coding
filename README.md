@@ -93,3 +93,43 @@ Start managed workflow inside Herdr:
 ```bash
 herdr-manager
 ```
+
+## Configuration
+
+Config is read from `~/.config/agentic-coding/config.toml` (XDG default;
+`HERDR_WORKFLOW_CONFIG` env overrides; legacy
+`~/.pi/agent/herdr-workflow.toml` still consulted as fallback). Per-project
+overrides live in `<repo>/.pi/herdr-workflow.toml`.
+
+**Models are not defaulted**: an unconfigured step gets no `--model` flag and pi
+selects its own default model. Pin per role only if you want to, e.g.:
+
+```toml
+[models]
+worker_default = "provider/model"
+planner = "provider/model"
+```
+
+## Binary-only install
+
+The compiled binary is self-sufficient: it embeds a snapshot of the agent
+skills + extensions (14 role skills, 2 Pi extensions) and **injects them
+per-workflow** — on each role launch they are materialized into that workflow's
+own `<repo>/.herdr-workflow/<change>/agent-definitions/` (gitignored) and only
+that workflow's agents reference them via `--skill`/`--extension`. Nothing is
+installed into the user's global pi setup (`~/.pi/agent`) or any user-global
+location. Config falls back to built-in defaults (partial
+`~/.pi/agent/herdr-workflow.toml` files deep-merge over them). The
+`herdr-workflow` Pi extension execs the installed `agentic-coding` binary
+instead of a repo shim. So a workflow-capable setup is:
+
+```bash
+cp agentic-coding/dist/agentic-coding ~/.local/bin/   # one file
+# plus external prerequisites: herdr, pi, openspec on PATH
+```
+
+Remaining external prerequisites (separate products, not part of this repo):
+`herdr` (terminal/workspace host), `pi` (agent runtime), and `openspec`
+(planner/archive agents run it). The `stow.sh`-based install is only needed
+when you want the pi agent assets, herdr terminal config, or opencode assets
+installed outside the binary.

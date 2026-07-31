@@ -7,10 +7,18 @@ import { promisify } from "node:util";
 import path from "node:path";
 
 const execFileAsync = promisify(execFile);
-const workflow = path.join(process.env.HOME!, ".pi", "agent", "bin", "herdr-workflow");
+const legacyShim = path.join(process.env.HOME!, ".pi", "agent", "bin", "herdr-workflow");
 
 async function execute(args: string[]) {
-  const { stdout, stderr } = await execFileAsync(workflow, args, { timeout: 120_000, maxBuffer: 1024 * 1024 });
+  // Prefer the installed `agentic-coding` binary on PATH (binary-only installs);
+  // fall back to the stowed herdr-workflow shim.
+  try {
+    const { stdout, stderr } = await execFileAsync("agentic-coding", ["workflow", ...args], { timeout: 120_000, maxBuffer: 1024 * 1024 });
+    return (stdout || stderr).trim();
+  } catch (error: unknown) {
+    if ((error as { code?: string })?.code !== "ENOENT") throw error;
+  }
+  const { stdout, stderr } = await execFileAsync(legacyShim, args, { timeout: 120_000, maxBuffer: 1024 * 1024 });
   return (stdout || stderr).trim();
 }
 
@@ -67,7 +75,7 @@ export default function (pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       try {
         const config = JSON.parse(await execute(["config"])) as {
-          models: { worker_default: string; worker_alternative: string };
+          models: Record<string, string>;
           ui: { selection_height: number };
         };
         const height = Math.max(3, config.ui.selection_height);
@@ -97,14 +105,14 @@ export default function (pi: ExtensionAPI) {
         if (!task) return;
         const mode = await pagedSelect(ctx, "Git checkout mode", ["worktree", "checkout"], height);
         if (!mode) return;
-        const workers = [config.models.worker_default, config.models.worker_alternative];
-        const worker = await pagedSelect(ctx, "Worker model", workers, height);
-        if (!worker) return;
-        if (!await ctx.ui.confirm("Create implementation workspace?", `${project.name}\n${ticket ? `Ticket ${ticket}\n` : ""}${change}\n${mode}\n${worker}`)) return;
-        const startArgs = ["start", "--repo", project.path, "--change", change, "--task", task, "--mode", mode, "--worker", worker];
-        if (ticket) startArgs.push("--ticket", ticket);
-        await execute(startArgs);
-        ctx.ui.notify(`Created ${change}`, "info");
+        // Only offer configured models; with none configured, omit --worker so pi picks its default.
+        const workers = [config.models.worker_default, config.models.worker_alternative].filter((value): value is string => !!value);
+        let worker: string | undefined;
+        if (workers.length === 1) worker = workers[0];
+        else if (workers.length > 1) worker = (await pagedSelect(ctx, "Worker model", workers, height)) ?? undefined;
+        if (!await ctx.ui.confirm("Create implementation workspace?", `${project.name}\n${ticket ? `Ticket ${ticket}\n` : ""}${change}\n${mode}${worker ? `\n${worker}` : ""}`)) return;
+        const startArgs = ["start", "--repo", project.path, "--change", change, "--task", task, "--mode", mode];
+        if (worker) startArgs.push("--worker", worker);
       } catch (error) {
         ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
       }

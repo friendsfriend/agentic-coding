@@ -4,6 +4,7 @@
 // and how to (re)start it.
 import fs from 'node:fs';
 import path from 'node:path';
+import { ensureWorkflowAgentDefinitions } from './bootstrap.ts';
 import type { Context } from './effects.ts';
 import * as layout from './layout.ts';
 import * as naming from './naming.ts';
@@ -13,7 +14,8 @@ import * as stateMod from './state.ts';
 import type { WorkflowState } from './state.ts';
 import * as telemetry from './telemetry.ts';
 
-function providerUnhealthy(ctx: Context, model: string): boolean {
+function providerUnhealthy(ctx: Context, model: string | undefined): boolean {
+  if (!model) return false;
   const p = path.join(paths.AGENT_DIR, 'herdr-provider-health.json');
   if (!fs.existsSync(p)) return false;
   try {
@@ -33,23 +35,27 @@ export async function launchRole(ctx: Context, state: WorkflowState, role: strin
   const config = ctx.config;
   const models = config.models;
   const thinking = config.thinking;
-  let model = role === 'worker'
-    ? state.workerModel
+  let model: string | undefined = role === 'worker'
+    ? state.workerModel ?? undefined
     : role.endsWith('-verifier')
       ? (models[role.replace(/-/g, '_')] ?? models.verifier)
       : (models[role] ?? models.archive ?? models.verifier);
-  const level = role === 'worker'
+  const level: string | undefined = role === 'worker'
     ? thinking.worker_default
     : role.endsWith('-verifier')
       ? (state.verificationTier === 'lite' ? thinking.verifier_lite : thinking.verifier)
       : (thinking[role] ?? thinking.archive ?? thinking.verifier);
-  if (role.endsWith('-verifier') && providerUnhealthy(ctx, model) && models.verifier_fallback) {
+  if (role.endsWith('-verifier') && model && providerUnhealthy(ctx, model) && models.verifier_fallback) {
     telemetry.telemetry(ctx, state, 'provider_circuit_open', { role, model, fallback: models.verifier_fallback });
     model = models.verifier_fallback;
   }
   const change = state.changeId;
+  // Per-workflow injection: agents of this workflow reference skills/extensions
+  // materialized into its own .herdr-workflow dir (compiled binaries); source
+  // runs and HERDR_AGENT_DEF_DIR overrides use the shared definitions.
+  const agentDefDir = ensureWorkflowAgentDefinitions(state.worktree, change);
 
-  const spawn = async (spawnModel: string): Promise<void> => {
+  const spawn = async (spawnModel: string | undefined): Promise<void> => {
     layout.closeOldPane(ctx, state, role);
     const label = layout.launchLabel(role);
     const instructions = text ?? prompts.rolePrompt(role, change, state.verificationRound, state.workflowType, state.task);
@@ -61,7 +67,7 @@ export async function launchRole(ctx: Context, state: WorkflowState, role: strin
     telemetry.writeTraceHandoff(ctx, state, role);
     const command = [
       'agent', 'start', roleAgentName(state, role), '--kind', 'pi', '--pane', launchPane,
-      '--', ...prompts.piArguments(role, spawnModel, level, change, config), `/skill:herdr-openspec-${role} ${instructions}`,
+      '--', ...prompts.piArguments(role, spawnModel, level, change, config, agentDefDir), `/skill:herdr-openspec-${role} ${instructions}`,
     ];
 
     const cleanup = (): void => {
@@ -99,7 +105,7 @@ export async function launchRole(ctx: Context, state: WorkflowState, role: strin
     await spawn(model);
   } catch (error) {
     const fallback = role.endsWith('-verifier') ? models.verifier_fallback : undefined;
-    if (!fallback || fallback === model) throw error;
+    if (!fallback || fallback === model || !model) throw error;
     telemetry.telemetry(ctx, state, 'provider_launch_fallback', { role, model, fallback });
     await spawn(fallback);
     model = fallback;

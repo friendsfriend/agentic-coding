@@ -1,6 +1,7 @@
 // Seams: the only place that touches git, subprocess, time, network, and config I/O.
 // Herdr access itself lives in ../herdr-client.ts (the single shared `.result` parser).
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { Herdr } from '../herdr-client.ts';
 import * as paths from './paths.ts';
@@ -138,8 +139,44 @@ export interface WorkflowConfig {
   plugins?: { exclude_extensions?: string[]; roles?: Record<string, { exclude_extensions?: string[] }> };
 }
 
+/** Built-in fallback (mirror of pi/herdr-workflow.toml) — used only when no
+ * config file exists anywhere. Models are intentionally NOT defaulted: an
+ * unconfigured step lets pi pick its own default model. */
+export const DEFAULT_CONFIG: WorkflowConfig = {
+  models: {},
+  thinking: {
+    triage: 'high',
+    recovery: 'high',
+    verifier_lite: 'high',
+    planner: 'high',
+    worker_default: 'high',
+    verifier: 'high',
+    archive: 'high',
+  },
+  workflow: {
+    max_verification_rounds: 6,
+    remote: 'origin',
+    branch_prefix: 'feature/',
+    base_branch: 'origin/HEAD',
+    worktree_directory: '~/.herdr/worktrees',
+  },
+  projects: { root: '~/development', max_depth: 3 },
+  telemetry: { capture_content: true },
+  ui: { theme: 'catppuccin', selection_height: 10 },
+};
+
 export function loadConfig(): WorkflowConfig {
-  let cfg = Bun.TOML.parse(fs.readFileSync(paths.CONFIG, 'utf8')) as WorkflowConfig;
+  // Canonical location: ~/.config/agentic-coding/config.toml. Legacy
+  // ~/.pi/agent/herdr-workflow.toml (stow-based installs) still consulted as a
+  // fallback; HERDR_WORKFLOW_CONFIG always wins.
+  const candidates = [
+    process.env.HERDR_WORKFLOW_CONFIG,
+    path.join(os.homedir(), '.config', 'agentic-coding', 'config.toml'),
+    path.join(os.homedir(), '.pi', 'agent', 'herdr-workflow.toml'),
+  ].filter(Boolean) as string[];
+  const file = candidates.find(candidate => fs.existsSync(candidate));
+  const parsed = file ? (Bun.TOML.parse(fs.readFileSync(file, 'utf8')) as WorkflowConfig) : {};
+  let cfg = deepMerge(structuredClone(DEFAULT_CONFIG), parsed);
   const projectConfig = path.join(process.cwd(), '.pi', 'herdr-workflow.toml');
   if (fs.existsSync(projectConfig)) {
     cfg = deepMerge(cfg, Bun.TOML.parse(fs.readFileSync(projectConfig, 'utf8')));

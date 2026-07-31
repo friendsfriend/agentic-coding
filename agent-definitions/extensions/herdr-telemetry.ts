@@ -15,7 +15,7 @@ const parseTraceparent = (value?: string): Context | undefined => {
 const traceparent = (context: Context) => `00-${context.traceId}-${context.spanId}-${context.flags ?? '01'}`;
 const endpoint = () => process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT || (process.env.OTEL_EXPORTER_OTLP_ENDPOINT ? `${process.env.OTEL_EXPORTER_OTLP_ENDPOINT.replace(/\/$/, '')}/v1/traces` : 'http://127.0.0.1:4318/v1/traces');
 const telemetryConfig = () => {
-  const paths = [join(homedir(), '.pi', 'agent', 'herdr-workflow.toml'), join(process.cwd(), '.pi', 'herdr-workflow.toml')];
+  const paths = [join(homedir(), '.config', 'agentic-coding', 'config.toml'), join(homedir(), '.pi', 'agent', 'herdr-workflow.toml'), join(process.cwd(), '.pi', 'herdr-workflow.toml')];
   let captureContent = false;
   let verifierFallback: string | undefined;
   for (const path of paths) try {

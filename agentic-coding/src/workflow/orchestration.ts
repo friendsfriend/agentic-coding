@@ -96,7 +96,7 @@ export async function cmdStart(ctx: Context, args: Args): Promise<void> {
   const panes: Record<string, string> = { dashboard: root, git: gitTab.pane_id };
   const tabs: Record<string, string> = { dashboard: firstTab, git: gitTab.tab_id };
   const models = config.models;
-  const worker = args.worker ?? models.worker_default;
+  const worker = args.worker ?? models.worker_default ?? null;
   const modules = [...transitions.WORKFLOW_TYPES[workflowType]];
   const initialPhase = transitions.WORKFLOW_MODULES[modules[0]].entry;
   const initialRoles = transitions.WORKFLOW_MODULES[modules[0]].roles;

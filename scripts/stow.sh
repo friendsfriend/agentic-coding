@@ -32,10 +32,16 @@ link_tree() {
     done
 }
 
-mkdir -p "$HOME/.pi/agent" "$HOME/.config/herdr" "$HOME/.config/opencode"
+mkdir -p "$HOME/.pi/agent" "$HOME/.config/herdr" "$HOME/.config/opencode" "$HOME/.config/agentic-coding"
 link_tree "$root/pi" "$HOME/.pi/agent"
 link_tree "$root/herdr" "$HOME/.config/herdr"
 link_tree "$root/opencode" "$HOME/.config/opencode"
+
+# Workflow config lives at the XDG location; a real user file there wins.
+config_dest="$HOME/.config/agentic-coding/config.toml"
+if [[ ! -e "$config_dest" || -L "$config_dest" ]]; then
+    ln -sfn "$root/pi/herdr-workflow.toml" "$config_dest"
+fi
 
 # Remove stale herdr agent definition symlinks from global pi discovery
 # These were previously linked from pi/skills/herdr-* and pi/extensions/herdr-*
