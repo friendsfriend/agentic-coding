@@ -128,8 +128,18 @@ function deepMerge(base: any, overlay: any): any {
   return merged;
 }
 
-export function loadConfig(): any {
-  let cfg = Bun.TOML.parse(fs.readFileSync(paths.CONFIG, 'utf8'));
+export interface WorkflowConfig {
+  models: Record<string, string>;
+  thinking: Record<string, string>;
+  workflow: { max_verification_rounds: number; remote: string; branch_prefix: string; base_branch: string; worktree_directory: string };
+  projects: { root: string; max_depth: number };
+  telemetry: { capture_content: boolean };
+  ui: { theme: string; selection_height: number };
+  plugins?: { exclude_extensions?: string[]; roles?: Record<string, { exclude_extensions?: string[] }> };
+}
+
+export function loadConfig(): WorkflowConfig {
+  let cfg = Bun.TOML.parse(fs.readFileSync(paths.CONFIG, 'utf8')) as WorkflowConfig;
   const projectConfig = path.join(process.cwd(), '.pi', 'herdr-workflow.toml');
   if (fs.existsSync(projectConfig)) {
     cfg = deepMerge(cfg, Bun.TOML.parse(fs.readFileSync(projectConfig, 'utf8')));
@@ -138,7 +148,7 @@ export function loadConfig(): any {
 }
 
 export interface Context {
-  config: any;
+  config: WorkflowConfig;
   herdr: Herdr;
   git: Git;
   clock: Clock;

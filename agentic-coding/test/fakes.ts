@@ -30,12 +30,14 @@ export const DEFAULT_CONFIG = {
   },
   workflow: {
     max_verification_rounds: 6,
-    verification_timeout_seconds: 600,
     remote: 'origin',
     branch_prefix: 'feature/',
     base_branch: 'origin/HEAD',
+    worktree_directory: '~/.herdr/worktrees',
   },
   projects: { root: '~/development', max_depth: 3 },
+  telemetry: { capture_content: false },
+  ui: { theme: 'catppuccin', selection_height: 10 },
   plugins: {},
 };
 

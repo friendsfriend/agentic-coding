@@ -124,7 +124,16 @@ describe('golden state shape', () => {
 
       await orchestration.cmdStart(ctx, { repo, change: 'golden-change', task: 'do it', mode: 'checkout', ticket: null, worker: undefined, workflowType: 'standard' });
 
-      const state = JSON.parse(fs.readFileSync(path.join(repo, '.herdr-workflow', 'golden-change', 'state.json'), 'utf8'));
+      // State is exposed through the CLI: `status` prints the full workflow state.
+      const logs: string[] = [];
+      const original = console.log;
+      console.log = (msg: string) => logs.push(msg);
+      try {
+        orchestration.cmdStatus(ctx, { repo, change: 'golden-change' });
+      } finally {
+        console.log = original;
+      }
+      const state = JSON.parse(logs.at(-1)!);
       expect(new Set(Object.keys(state))).toEqual(EXPECTED_STATE_FIELDS);
       expect(state.changeId).toBe('golden-change');
       expect(state.phase).toBe('explore');

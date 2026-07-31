@@ -1,7 +1,5 @@
 .DS_Store
 .herdr-workflow/
-agent-dash/node_modules/
-agent-dash/dist/
-agent-dash/*.bun-build/
 agentic-coding/node_modules/
+agentic-coding/.pytest_cache/
 __pycache__/

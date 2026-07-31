@@ -26,4 +26,7 @@ No passing verdict unless the full suite succeeds or every failure is confirmed 
 
 ```bash
 herdr-workflow verification-result --repo "$PWD" --change "$HERDR_CHANGE_ID" --role test-verifier
+herdr-workflow finish-review --repo "$PWD" --change "$HERDR_CHANGE_ID"
 ```
+
+`verification-result` only records your verdict; `finish-review` consolidates all dispatched verifier verdicts and moves the round out of `verify` (PASS → developer review, FAIL → fix round). Run both, in that order, after writing the report.

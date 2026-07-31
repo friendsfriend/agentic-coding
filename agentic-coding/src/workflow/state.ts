@@ -1,23 +1,61 @@
-// Workflow state object: load/save/phase bookkeeping, path helpers.
+// Workflow state store: one SQLite row per change in <repo>/.herdr-workflow/herdr.db
+// (bun:sqlite, zero deps). State stays exposed through the CLI (`status`) exactly
+// as before. Legacy state.json files are migrated to the DB on first load; the
+// review artifacts (request.md, reviews/, traces) remain plain files.
 import fs from 'node:fs';
 import path from 'node:path';
+import { Database } from 'bun:sqlite';
 
 export type WorkflowState = Record<string, any>;
 
 // ponytail: layout fields never leave this module — kept in-memory during a single
 // process run (e.g. sequential launch_role calls in cmd_dispatch_verifiers) but
-// stripped before every disk write, so persisted state.json never carries terminal
+// stripped before every disk write, so persisted state never carries terminal
 // geometry. Legacy files that still contain them simply load as extra ignored keys.
 const LAYOUT_FIELDS = ['verificationSecondRowPane', 'verificationSecondRowRole', 'verificationPaneOrder'];
 
+/** Legacy state.json path, kept for migration reads only. */
 export function statePath(repo: string, change: string): string {
   return path.join(repo, '.herdr-workflow', change, 'state.json');
 }
 
+export function dbPath(repo: string): string {
+  return path.join(repo, '.herdr-workflow', 'herdr.db');
+}
+
+function openDb(repo: string): Database {
+  const dir = path.join(repo, '.herdr-workflow');
+  fs.mkdirSync(dir, { recursive: true });
+  const db = new Database(dbPath(repo), { create: true });
+  db.exec('CREATE TABLE IF NOT EXISTS workflows (change_id TEXT PRIMARY KEY, state TEXT NOT NULL)');
+  return db;
+}
+
+function upsert(db: Database, change: string, state: WorkflowState): void {
+  db.query('INSERT OR REPLACE INTO workflows (change_id, state) VALUES (?, ?)').run(change, JSON.stringify(state));
+}
+
 export function loadState(repo: string, change: string): WorkflowState {
+  const db = openDb(repo);
+  try {
+    const row = db.query('SELECT state FROM workflows WHERE change_id = ?').get(change) as { state: string } | null;
+    if (row) return JSON.parse(row.state);
+  } finally {
+    db.close();
+  }
+  // Legacy migration: state.json written by pre-sqlite versions.
   const p = statePath(repo, change);
-  if (!fs.existsSync(p)) throw new Error(`workflow not found: ${p}`);
-  return JSON.parse(fs.readFileSync(p, 'utf8'));
+  if (fs.existsSync(p)) {
+    const state = JSON.parse(fs.readFileSync(p, 'utf8')) as WorkflowState;
+    const migrate = openDb(repo);
+    try {
+      upsert(migrate, change, state);
+    } finally {
+      migrate.close();
+    }
+    return state;
+  }
+  throw new Error(`workflow not found: ${p}`);
 }
 
 export function setPhase(state: WorkflowState, phase: string): void {
@@ -25,17 +63,32 @@ export function setPhase(state: WorkflowState, phase: string): void {
   state.phaseStartedAt = new Date().toISOString();
 }
 
+/** Persist the state object. Written to the worktree DB and, in worktree mode,
+ * the repository DB — same dual-path semantics the old state.json had. */
 export function saveState(state: WorkflowState): string {
   const persisted = { ...state };
   for (const field of LAYOUT_FIELDS) delete persisted[field];
-  const paths = new Set([statePath(state.worktree, state.changeId), statePath(state.repository, state.changeId)]);
-  for (const p of paths) {
-    fs.mkdirSync(path.dirname(p), { recursive: true });
-    const tmp = p.replace(/\.json$/, '.tmp');
-    fs.writeFileSync(tmp, JSON.stringify(persisted, null, 2) + '\n');
-    fs.renameSync(tmp, p);
+  for (const repo of new Set([state.worktree, state.repository])) {
+    const db = openDb(repo);
+    try {
+      upsert(db, state.changeId, persisted);
+    } finally {
+      db.close();
+    }
   }
-  return statePath(state.worktree, state.changeId);
+  return dbPath(state.worktree);
+}
+
+/** All workflows recorded for one repository, newest first. */
+export function listWorkflows(repo: string): Array<{ changeId: string; state: WorkflowState }> {
+  if (!fs.existsSync(dbPath(repo))) return [];
+  const db = openDb(repo);
+  try {
+    const rows = db.query('SELECT change_id, state FROM workflows ORDER BY change_id DESC').all() as Array<{ change_id: string; state: string }>;
+    return rows.map(row => ({ changeId: row.change_id, state: JSON.parse(row.state) }));
+  } finally {
+    db.close();
+  }
 }
 
 export function workflowDir(state: WorkflowState): string {

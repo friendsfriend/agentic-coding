@@ -420,6 +420,8 @@ describe('cmdVerificationResult', () => {
     const mid = stateMod.loadState(repo, 'my-change');
     writeReportFixture(mid, 'test-verifier', 'PASS');
     await orchestration.cmdVerificationResult(ctx, { repo, change: 'my-change', role: 'test-verifier' });
+    // test-verifier skill ends with finish-review: deterministic consolidation
+    await orchestration.cmdFinishReview(ctx, { repo, change: 'my-change' });
     const after = stateMod.loadState(repo, 'my-change');
     expect(after.phase).toBe('developer-review');
     expect(after.verificationResults.coordinator.verdict).toBe('PASS');
@@ -429,6 +431,13 @@ describe('cmdVerificationResult', () => {
       .split('\n')
       .map(line => JSON.parse(line));
     expect(traces.some(t => t.name === 'workflow.developer_review_ready')).toBe(true);
+  });
+
+  test('finish-review during verify requires all dispatched reports', async () => {
+    verifyingState(['quality-verifier', 'security-verifier']);
+    writeReportFixture(stateMod.loadState(repo, 'my-change'), 'quality-verifier', 'PASS');
+    await orchestration.cmdVerificationResult(ctx, { repo, change: 'my-change', role: 'quality-verifier' });
+    await expect(orchestration.cmdFinishReview(ctx, { repo, change: 'my-change' })).rejects.toThrow(/missing: security-verifier/);
   });
 
   test('any fail moves to fix', async () => {
@@ -660,15 +669,29 @@ describe('legacy layout-state fields', () => {
     const loaded = stateMod.loadState(repo, 'my-change');
     expect(loaded.phase).toBe('verify');
 
-    // The next save strips those fields from the persisted file (R3).
+    // The next save strips those fields from the persisted store (R3).
     stateMod.saveState(state);
-    const onDisk = JSON.parse(fs.readFileSync(stateMod.statePath(repo, 'my-change'), 'utf8'));
+    const onDisk = stateMod.loadState(repo, 'my-change');
     expect(onDisk.verificationSecondRowPane).toBeUndefined();
     expect(onDisk.verificationSecondRowRole).toBeUndefined();
     expect(onDisk.verificationPaneOrder).toBeUndefined();
   });
-});
 
+  test('legacy state.json migrates into the sqlite store on first load', () => {
+    const legacy = makeState('explore');
+    stateMod.saveState(legacy); // writes db
+    const dir = path.join(repo, '.herdr-workflow', 'my-change');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.rmSync(stateMod.dbPath(repo), { force: true }); // simulate pre-sqlite repo
+    fs.writeFileSync(stateMod.statePath(repo, 'my-change'), JSON.stringify({ ...legacy, phase: 'proposed' }));
+
+    const migrated = stateMod.loadState(repo, 'my-change');
+    expect(migrated.phase).toBe('proposed');
+    // second load comes from the db, not the json
+    fs.rmSync(stateMod.statePath(repo, 'my-change'), { force: true });
+    expect(stateMod.loadState(repo, 'my-change').phase).toBe('proposed');
+  });
+});
 describe('cmdMessage', () => {
   test('writes artifact and prompts target', () => {
     const state = makeState('apply', { panes: { worker: 'pane-worker' } });

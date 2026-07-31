@@ -35,7 +35,7 @@ describe('rolePrompt', () => {
     expect(text).toContain('do not poll status');
     expect(text).toContain('workflow phase/base/state blocker');
     expect(text).toContain('never inspect workflow implementation source');
-    expect(text).toContain('.herdr-workflow/*/state.json');
+    expect(text).toContain('.herdr-workflow state (herdr.db)');
   });
 
   test('worker prompt no-openspec has completion instruction', () => {
@@ -47,7 +47,7 @@ describe('rolePrompt', () => {
     expect(text).toContain('never invoke verify again');
     expect(text).toContain('do not poll status');
     expect(text).toContain('workflow phase/base/state blocker');
-    expect(text).toContain('.herdr-workflow/*/state.json');
+    expect(text).toContain('.herdr-workflow state (herdr.db)');
     expect(text).toContain('Fix login');
   });
 

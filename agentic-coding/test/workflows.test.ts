@@ -83,6 +83,10 @@ async function passVerifier(role: string) {
   fs.mkdirSync(path.dirname(reportPath), { recursive: true });
   fs.writeFileSync(reportPath, JSON.stringify({ type: 'verdict', verdict: 'PASS' }) + '\n');
   await orchestration.cmdVerificationResult(ctx, { repo, change: 'my-change', role });
+  if (role === 'test-verifier') {
+    // test-verifier skill ends with finish-review (deterministic consolidation)
+    await orchestration.cmdFinishReview(ctx, { repo, change: 'my-change' });
+  }
   return stateMod.loadState(repo, 'my-change');
 }
 
