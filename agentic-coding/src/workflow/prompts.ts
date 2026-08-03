@@ -152,11 +152,11 @@ export function rolePrompt(role: string, change: string, verificationRound?: num
 /** Build Pi arguments for a Herdr-managed role agent. `agentDefDir` is the
  * workflow-scoped skills/extensions dir (per-workflow injection); defaults to
  * the shared definitions for source runs and overrides. */
-export function piArguments(role: string, model: string | undefined, thinking: string | undefined, change: string, config: any, agentDefDir: string = paths.AGENT_DEF_DIR): string[] {
+export function piArguments(role: string, model: string | undefined, thinking: string | undefined, change: string, config: any, agentDefDir: string = paths.AGENT_DEF_DIR, name?: string): string[] {
   const skill = path.join(agentDefDir, 'skills', `herdr-openspec-${role}`, 'SKILL.md');
   const tools = ROLE_TOOLS[role];
   // No --model/--thinking when unconfigured: pi selects its own default.
-  const parts = ['--name', naming.agentName(change, role)];
+  const parts = ['--name', name ?? naming.agentName(change, role)];
   if (model) parts.push('--model', model);
   if (thinking) parts.push('--thinking', thinking);
   const telemetryExt = path.join(agentDefDir, 'extensions', 'herdr-telemetry.ts');

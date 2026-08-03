@@ -754,6 +754,39 @@ describe('launchRole', () => {
     expect(state.tabs.worker).toBeDefined();
   });
 
+  test('retries with a unique name suffix on agent name collision', async () => {
+    const state = makeState('apply');
+    let started = 0;
+    herdr.on(args => args[0] === 'agent' && args[1] === 'start', () => {
+      started += 1;
+      if (started === 1) throw new Error('agent name already in use: my-change-worker');
+      return { agent: { pane_id: 'pane-collision', tab_id: 'tab-collision', agent_status: 'idle', state_change_seq: 0 } };
+    });
+    await orchestration.launchRole(ctx, state, 'worker');
+    const starts = herdr.calls.filter(call => call[0] === 'agent' && call[1] === 'start');
+    expect(starts.length).toBe(2);
+    expect(starts[0]![2]).toBe('my-change-worker');
+    expect(starts[1]![2]).toBe('my-change-worker-2');
+    // pi --name matches the herdr agent name on every attempt
+    expect(starts[0]![starts[0]!.indexOf('--name') + 1]).toBe('my-change-worker');
+    expect(starts[1]![starts[1]!.indexOf('--name') + 1]).toBe('my-change-worker-2');
+    // the collision retry is telemetried
+    const traces = fs.readFileSync(path.join(stateMod.workflowDir(state), 'traces.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    expect(traces.some(t => t.name === 'workflow.agent_name_collision_retry')).toBe(true);
+  });
+
+  test('logs agent launch failure', async () => {
+    const state = makeState('apply');
+    herdr.on(args => args[0] === 'agent' && args[1] === 'start', () => {
+      throw new Error('agent name already in use: my-change-worker');
+    });
+    await expect(orchestration.launchRole(ctx, state, 'worker')).rejects.toThrow('agent name already in use');
+    const traces = fs.readFileSync(path.join(stateMod.workflowDir(state), 'traces.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    const failure = traces.find(t => t.name === 'workflow.agent_launch_failed');
+    expect(failure).toBeTruthy();
+    expect(failure!.attributes['herdr.error']).toContain('agent name already in use');
+  });
+
   test('groups named agents in two verification rows', async () => {
     const roles = ['triage', 'quality-verifier', 'performance-verifier', 'security-verifier', 'agents-verifier'];
     const state = makeState('triage', { verificationRoles: roles.slice(1) });

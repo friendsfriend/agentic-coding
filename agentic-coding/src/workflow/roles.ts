@@ -65,10 +65,6 @@ export async function launchRole(ctx: Context, state: WorkflowState, role: strin
     ctx.herdr.call('pane', 'rename', launchPane, role);
     await layout.waitForPaneReady(ctx, launchPane);
     telemetry.writeTraceHandoff(ctx, state, role);
-    const command = [
-      'agent', 'start', roleAgentName(state, role), '--kind', 'pi', '--pane', launchPane,
-      '--', ...prompts.piArguments(role, spawnModel, level, change, config, agentDefDir), `/skill:herdr-openspec-${role} ${instructions}`,
-    ];
 
     const cleanup = (): void => {
       if (createdTab) ctx.herdr.call('tab', 'close', targetTab);
@@ -76,21 +72,43 @@ export async function launchRole(ctx: Context, state: WorkflowState, role: strin
       if (createdSparePane) ctx.herdr.call('pane', 'close', createdSparePane);
     };
 
+    const startAgent = (name: string) =>
+      ctx.herdr.call(
+        'agent', 'start', name, '--kind', 'pi', '--pane', launchPane,
+        '--', ...prompts.piArguments(role, spawnModel, level, change, config, agentDefDir, name), `/skill:herdr-openspec-${role} ${instructions}`,
+      );
+
     let agent: any;
-    try {
-      agent = ctx.herdr.call(...command).agent;
-    } catch (error) {
-      if (!String((error as Error).message).includes('not an available shell')) {
-        cleanup();
-        throw error;
-      }
-      await ctx.clock.sleep(0.25);
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const name = naming.agentName(change, role, attempt);
       try {
-        agent = ctx.herdr.call(...command).agent;
-      } catch (retryError) {
-        cleanup();
-        throw retryError;
+        agent = startAgent(name).agent;
+        if (attempt > 0) telemetry.telemetry(ctx, state, 'agent_name_collision_retry', { role, attempt: attempt + 1, name });
+        break;
+      } catch (error) {
+        lastError = error;
+        const msg = String((error as Error).message);
+        if (!msg.includes('not an available shell')) {
+          // Likely a duplicate herdr agent name (a concurrent workflow with the
+          // same changeId) — retry with a unique numeric suffix.
+          if (attempt < 2) await ctx.clock.sleep(0.25);
+          continue;
+        }
+        // Pane not yet interactive: retry the same name once (existing behavior).
+        await ctx.clock.sleep(0.25);
+        try {
+          agent = startAgent(name).agent;
+        } catch (retryError) {
+          lastError = retryError;
+        }
+        break;
       }
+    }
+    if (!agent) {
+      telemetry.telemetry(ctx, state, 'agent_launch_failed', { role, model: spawnModel, error: String((lastError as Error)?.message ?? lastError), spanStatus: 'ERROR' });
+      cleanup();
+      throw lastError;
     }
     const paneId = agent.pane_id;
     const tabId = agent.tab_id ?? targetTab;
