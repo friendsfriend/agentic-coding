@@ -18,7 +18,7 @@ Pi agent assets, Herdr workflow configuration, OpenCode assets, OpenSpec history
 ./scripts/test-herdr-manager.sh   # herdr-manager shim smoke test
 ```
 
-`install.sh` runs `stow.sh` (file-level links for `pi/` → `~/.pi/agent/`, `herdr/` → `~/.config/herdr/`, `opencode/` → `~/.config/opencode/`), then compiles the **single self-contained `agentic-coding` executable** (`bun build --compile`, engine + TUI in one binary, `@opentui/solid` JSX plugin, `HERDR_AGENT_DEF_DIR` injected at compile time) and links it to `~/.local/bin/agentic-coding`. Local target files remain real files and are never overwritten.
+`install.sh` runs `stow.sh` (file-level links for `pi/` → `~/.pi/agent/`, `opencode/` → `~/.config/opencode/`; the herdr terminal config now lives in the dotfiles repo), then compiles the **single self-contained `agentic-coding` executable** (`bun build --compile`, engine + TUI in one binary, `@opentui/solid` JSX plugin, `HERDR_AGENT_DEF_DIR` injected at compile time) and links it to `~/.local/bin/agentic-coding`. Local target files remain real files and are never overwritten.
 
 Manual rebuild: `bun run --cwd agentic-coding build` → `agentic-coding/dist/agentic-coding` (+ `agentic-coding-grpc-sidecar` for the OTLP gRPC receiver). The dev shim `agentic-coding/bin/agentic-coding` runs the sources via `bun` (no compile) for development.
 
@@ -35,7 +35,7 @@ One binary, four surfaces:
 | `home` | `agentic-coding home` | Workflow list + observability TUI (long-lived launcher) |
 | `manager` | `agentic-coding manager` | Alias for `home`; what `herdr-manager` execs |
 
-The TUI is one process with a single TabBar: **Workflow** (dashboard/home) and **Observability** (traces/logs/metrics/topology). Switch with `Ctrl+1` / `Ctrl+2`. The OTLP receiver lives at shell level, so spans keep flowing while the workflow tab is active — `home`/`manager` binds `127.0.0.1:4318` by default; per-workflow `dash` panes don't (the manager instance owns the receiver).
+The TUI is one process with a single merged tab bar — **Workflow · Traces · Metrics · Logs · Topology** (the dashboard and the otel views share one tab bar; observability views stay mounted across switches, so tab changes are instant). Cycle with `t` or `Tab`/`Shift+Tab`, pick otel tabs with `1`–`4` (kitty-protocol terminals also get `Ctrl+1`/`Ctrl+2`), or click. The OTLP receiver lives at shell level, so spans keep flowing while the workflow tab is active — `home`/`manager` binds `127.0.0.1:4318` by default; per-workflow `dash` panes don't (the manager instance owns the receiver).
 
 ```bash
 agentic-coding --help                    # list surfaces

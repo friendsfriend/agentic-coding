@@ -1,9 +1,10 @@
 /** @jsxImportSource @opentui/solid */
 import { TextAttributes, type KeyEvent } from '@opentui/core';
 import { useRenderer } from '@opentui/solid';
-import { createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { TabBar } from '../components/TabBar';
 import { Badge } from '../components/Badge';
+import { Header } from '../../dash/ui/Header';
 import { HighlightedText } from '../components/Highlight';
 import { NotificationOverlay } from '../components/Notification';
 import { StatusBar } from '../components/StatusBar';
@@ -27,11 +28,34 @@ import { TopologyView } from '../views/TopologyView';
 import { ServiceDetailView } from '../views/ServiceDetailView';
 import { copyText } from './clipboard';
 import { createNavigation } from './navigation';
+import { join } from 'node:path';
+import { listWorkflows, availableModels, discoverProjects, type WorkflowOverview } from '../../dash/data';
+import { watchDirectories } from '../../dash/watchRefresh';
 import { notify } from './notifications';
 import { applyTheme, getActiveThemeName, loadThemeName, saveThemeName, themeNames } from './theme';
+import { App as DashApp } from '../../dash/App';
+import { Home as DashHome } from '../../dash/Home';
+import type { Renderable } from '@opentui/core';
+import type { Keymap } from '@opentui/keymap';
 
-type Tab = 'traces' | 'metrics' | 'logs' | 'topology';
+type Tab = 'workflow' | 'traces' | 'metrics' | 'logs' | 'topology';
 type Workspace = { changeId: string; path: string; spanCount: number };
+
+export interface WorkflowHeaderInfo {
+  change: string;
+  phase: string;
+  branch: string;
+  updated: string;
+}
+
+export interface DashboardTab {
+  mode: 'home' | 'dash';
+  repo?: string;
+  change?: string;
+  profile?: string;
+  keymap: Keymap<Renderable, KeyEvent>;
+  /** Workflow header context pushed up from the dashboard tab content. */
+}
 
 export function App(props: {
   repos: string[];
@@ -41,10 +65,42 @@ export function App(props: {
   logStore: LogStore;
   topologyStore: TopologyStore;
   tracesOnly?: boolean;
+  /** When set, a Workflow tab is prepended that renders the dashboard. */
+  dashboard?: DashboardTab;
 }) {
   const renderer = useRenderer();
   const nav = createNavigation();
-  const [activeTab, setActiveTab] = createSignal<Tab>('traces');
+  const [activeTab, setActiveTab] = createSignal<Tab>(props.dashboard ? 'workflow' : 'traces');
+  // Workflow header context pushed up from the dashboard tab content (single source
+  // of truth; the dashboard polls, the shell renders). Null in home mode / before data.
+  const [workflowHeader, setWorkflowHeader] = createSignal<WorkflowHeaderInfo | null>(null);
+
+  // Home mode: the shell owns the workspace list — loaded in the background at
+  // startup and kept fresh, so visiting the Workflow tab never reloads or shows
+  // the loading indicator again.
+  const [homeItems, setHomeItems] = createSignal<WorkflowOverview[]>([]);
+  const [homeLoading, setHomeLoading] = createSignal(true);
+  const [homeModels, setHomeModels] = createSignal<string[]>([]);
+  const [homeProjects, setHomeProjects] = createSignal<Array<{ name: string; path: string; openspec: boolean }>>([]);
+  createEffect(() => {
+    if (props.dashboard?.mode !== 'home') return;
+    const load = () => {
+      setHomeItems(listWorkflows());
+      setHomeModels(availableModels());
+      setHomeProjects(discoverProjects());
+      setHomeLoading(false);
+    };
+    load();
+    // ponytail: 30s safety re-sync also discovers brand-new workflows.
+    const safety = setInterval(load, 30000);
+    onCleanup(() => clearInterval(safety));
+  });
+  createEffect(() => {
+    if (props.dashboard?.mode !== 'home') return;
+    const dirs = homeItems().map(item => join(item.state.worktree, '.herdr-workflow', item.state.changeId));
+    const dispose = watchDirectories(dirs, () => setHomeItems(listWorkflows()));
+    onCleanup(dispose);
+  });
   const [selectedListIndex, setSelectedListIndex] = createSignal(0);
   const [selectedTraceId, setSelectedTraceId] = createSignal<string>();
   const [treeRoots, setTreeRoots] = createSignal<TreeNode[]>([]);
@@ -166,7 +222,9 @@ export function App(props: {
       notify(`${changeId}: ${spans.length} new spans`, 'info');
     };
     const stops = props.repos.map(r => db.watchWorkspaces(r, onNew));
-    onCleanup(() => { clearInterval(dailyPrune); stops.forEach(stop => stop()); db.close(); });
+    // The TraceDb is owned by the shell (index.tsx) for the process lifetime;
+    // remounting this view must not close it. Only stop this view's watchers.
+    onCleanup(() => { clearInterval(dailyPrune); stops.forEach(stop => stop()); });
   });
 
   const copySelection = (reportEmpty = false) => {
@@ -180,6 +238,14 @@ export function App(props: {
   const handleKey = (event: KeyEvent) => {
     const key = event.name.toLowerCase();
     const ename = event.name;
+    const trace = (msg: string) => {
+      const target = process.env.AGENTIC_CODING_TRACE;
+      if (target) {
+        try { require('node:fs').appendFileSync(target, `${Date.now()} otel ${msg}\n`); } catch { /* noop */ }
+      }
+    };
+    const traceDashModal = props.dashboard ? props.dashboard.keymap.getData?.('modal.active') : 'none';
+    trace(`key=${key} ctrl=${!!event.ctrl} tab=${activeTab()} nav=${nav.modal()} dashModal=${traceDashModal}`);
 
     // Global copy
     if ((event.meta && key === 'c') || (event.ctrl && event.shift && key === 'c')) { copySelection(true); return; }
@@ -206,29 +272,38 @@ export function App(props: {
     }
 
     // Tab switching (global, except when in a modal)
-    const tabIds: Tab[] = props.tracesOnly ? ['traces'] : ['traces', 'metrics', 'logs', 'topology'];
+    const ids = tabIds();
     const isTab = ename === 'Tab' || key === 'tab' || key === '\t';
     const isCtrlTab = event.ctrl && key === 'i';  // Ctrl+I = Tab in many terminals
     const tabForward = (isTab || isCtrlTab) && !event.shift;
     const tabBack = (isTab || isCtrlTab) && event.shift;
-    if (nav.modal() === 'none') {
+    const dashModal = props.dashboard ? props.dashboard.keymap.getData?.('modal.active') : 'none';
+    if (nav.modal() === 'none' && (!props.dashboard || dashModal === 'none' || dashModal === undefined)) {
+      if (key === 't' && !event.ctrl && !event.meta && !event.shift) {
+        const current = ids.indexOf(activeTab());
+        switchTab(ids[(current + 1) % ids.length]!);
+        return;
+      }
       if (key === '1') { switchTab('traces'); return; }
       if (key === '2' && !props.tracesOnly) { switchTab('metrics'); return; }
       if (key === '3' && !props.tracesOnly) { switchTab('logs'); return; }
       if (key === '4' && !props.tracesOnly) { switchTab('topology'); return; }
       if (tabBack) {
-        const current = tabIds.indexOf(activeTab());
-        const prev = (current - 1 + tabIds.length) % tabIds.length;
-        switchTab(tabIds[prev]!);
+        const current = ids.indexOf(activeTab());
+        const prev = (current - 1 + ids.length) % ids.length;
+        switchTab(ids[prev]!);
         return;
       }
       if (tabForward) {
-        const current = tabIds.indexOf(activeTab());
-        const next = (current + 1) % tabIds.length;
-        switchTab(tabIds[next]!);
+        const current = ids.indexOf(activeTab());
+        const next = (current + 1) % ids.length;
+        switchTab(ids[next]!);
         return;
       }
     }
+
+    // Dashboard keys are handled by its own keymap (runs before this handler).
+    if (activeTab() === 'workflow') return;
 
     // Quit (global)
     if (key === 'q') {
@@ -247,17 +322,17 @@ export function App(props: {
     if (searchMode()) {
       // Tab key should switch tabs even in search mode
       if (tabForward) {
-        const current = tabIds.indexOf(activeTab());
-        const next = (current + 1) % tabIds.length;
+        const current = ids.indexOf(activeTab());
+        const next = (current + 1) % ids.length;
         setSearchMode(false);
-        switchTab(tabIds[next]!);
+        switchTab(ids[next]!);
         return;
       }
       if (tabBack) {
-        const current = tabIds.indexOf(activeTab());
-        const prev = (current - 1 + tabIds.length) % tabIds.length;
+        const current = ids.indexOf(activeTab());
+        const prev = (current - 1 + ids.length) % ids.length;
         setSearchMode(false);
-        switchTab(tabIds[prev]!);
+        switchTab(ids[prev]!);
         return;
       }
       if (key === 'escape') {
@@ -378,17 +453,39 @@ export function App(props: {
   onCleanup(() => renderer.keyInput.off('keypress', handleKey));
 
   const tabs = () => {
-    const all: Array<{ id: Tab; label: string; count?: number }> = [
+    const all: Array<{ id: Tab; label: string; count?: number }> = [];
+    if (props.dashboard) all.push({ id: 'workflow', label: props.dashboard.mode === 'home' ? 'Workflows' : 'Workflow' });
+    all.push(
       { id: 'traces', label: 'Traces', count: filteredCount() },
       { id: 'metrics', label: 'Metrics', count: metricStore.filteredCount_ },
       { id: 'logs', label: 'Logs', count: logStore.filteredCount_ },
       { id: 'topology', label: 'Topology', count: topologyStore.getServices().length },
-    ];
-    return props.tracesOnly ? all.slice(0, 1) : all;
+    );
+    return props.tracesOnly ? all.filter(tab => tab.id === 'workflow' || tab.id === 'traces') : all;
+  };
+
+  /** All selectable tabs in display order (workflow first when a dashboard is injected). */
+  const tabIds = () => {
+    const ids: Tab[] = props.dashboard ? ['workflow', 'traces', 'metrics', 'logs', 'topology'] : ['traces', 'metrics', 'logs', 'topology'];
+    return props.tracesOnly ? ids.filter(id => id === 'workflow' || id === 'traces') : ids;
   };
 
   const tabStatusBarKeybinds = () => {
     switch (activeTab()) {
+      case 'workflow': return props.dashboard?.mode === 'home' ? [
+        { key: 'Enter', action: 'switch workspace' },
+        { key: 'n', action: 'new workflow' },
+        { key: 'f', action: 'filter' },
+        { key: 'o', action: 'sort' },
+        { key: 'r', action: 'refresh' },
+        { key: '?', action: 'help' },
+        { key: 'q', action: 'quit' },
+      ] : [
+        { key: 'J/K', action: 'switch panel' },
+        { key: 'j/k', action: 'scroll focused panel' },
+        { key: 'r', action: 'refresh' },
+        { key: 'q', action: 'quit' },
+      ];
       case 'metrics': return [
         { key: 'j/k', action: 'nav' },
         { key: 'Enter', action: 'detail' },
@@ -424,16 +521,28 @@ export function App(props: {
 
   return <box backgroundColor={uiColors.bgBase} width="100%" height="100%" onMouseUp={() => copySelection()}>
     <box backgroundColor={uiColors.bgBase} style={{ width: '100%', height: '100%', flexDirection: 'column', padding: 1, gap: 0 }}>
-      {/* Header */}
-      <box style={{ height: 1, flexDirection: 'row', alignItems: 'center' }}>
-        <HighlightedText text="OTEL TUI" attributes={TextAttributes.BOLD} />
-        <box style={{ flexGrow: 1 }} />
-        <Badge text={activeTab()} highlight="accent" />
+      {/* Header — the workflow header (dashboard data) or a simple logo bar */}
+      <box backgroundColor={uiColors.bgMantle} style={{ width: '100%', flexDirection: 'column' }}>
+        {workflowHeader() ? (
+          <Header change={workflowHeader()!.change} phase={workflowHeader()!.phase} branch={workflowHeader()!.branch} updated={workflowHeader()!.updated} />
+        ) : (
+          <box style={{ height: 1, flexDirection: 'row', alignItems: 'center', paddingLeft: 1, paddingRight: 1 }}>
+            <text fg={uiColors.textPrimary} attributes={TextAttributes.BOLD}>AGENTIC CODING</text>
+            <box style={{ flexGrow: 1 }} />
+            <Badge text={activeTab()} highlight="accent" />
+          </box>
+        )}
       </box>
+      <box style={{ height: 1 }} />
       {!props.tracesOnly && <TabBar tabs={tabs()} activeId={activeTab()} onSelect={(id) => switchTab(id as Tab)} />}
 
       {/* Tab content */}
-      <box backgroundColor={uiColors.bgMantle} style={{ flexGrow: 1, minHeight: 0, flexDirection: 'column' }}>
+      <box backgroundColor={uiColors.bgBase} style={{ flexGrow: 1, minHeight: 0, flexDirection: 'column' }}>
+        {activeTab() === 'workflow' && props.dashboard && (props.dashboard.mode === 'home' ? (
+          <DashHome keymap={props.dashboard.keymap} items={homeItems()} loading={homeLoading()} models={homeModels()} projects={homeProjects()} refresh={() => setHomeItems(listWorkflows())} />
+        ) : (
+          <DashApp repo={props.dashboard.repo!} change={props.dashboard.change!} profile={props.dashboard.profile as 'test' | undefined} keymap={props.dashboard.keymap} onHeader={setWorkflowHeader} />
+        ))}
         {activeTab() === 'traces' && <>
           {nav.view() === 'selection' && <TraceListView summaries={summaries} selectedIndex={selectedListIndex} searchMode={searchMode} searchQuery={searchQuery} resultCount={filteredCount} onSelect={selectTrace} />}
           {nav.view() === 'detail' && <box style={{ flexGrow: 1, minHeight: 0, flexDirection: 'column' }}>
@@ -477,7 +586,8 @@ export function App(props: {
         </>}
       </box>
 
-      {/* Status bar */}
+      {/* Status bar — one global footer for all tabs; keybinds are tab-dependent. */}
+      <box style={{ height: 1 }} />
       <StatusBar keybinds={activeTab() === 'traces' && nav.view() === 'selection' ? [
         { key: 'j/k', action: 'select' }, { key: 'Enter', action: 'open trace' }, { key: '/', action: 'search' },
         { key: 'Shift+F', action: 'filter' }, { key: 'Shift+O', action: 'sort' }, { key: '1-4', action: 'tabs' },

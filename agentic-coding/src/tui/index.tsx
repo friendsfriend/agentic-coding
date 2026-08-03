@@ -7,6 +7,7 @@
 import { createCliRenderer } from '@opentui/core';
 import { render } from '@opentui/solid';
 import { createDefaultOpenTuiKeymap } from '@opentui/keymap/opentui';
+import { KeymapProvider } from '@opentui/keymap/solid';
 import { dirname, join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { routeReceiverRequest, startPrometheusScraper, startStatsDListener } from './otel/receiver/index';
@@ -16,14 +17,14 @@ import { MetricStore } from './otel/model/metricStore';
 import { LogStore } from './otel/model/logStore';
 import { TopologyStore } from './otel/model/topologyStore';
 import type { SpanData, MetricData, LogData } from './otel/model/types';
-import { applyTheme as applyOtelTheme, loadThemeName as loadOtelThemeName } from './otel/app/theme';
+
 import { applyTheme as applyDashTheme, loadThemeName as loadDashThemeName } from './dash/theme-settings';
 import { setupKeymap } from './dash/keymap-setup';
 import { setGlobalSelectionMouseUpHandler } from './dash/selectionCopy';
 import { copyToClipboard } from './dash/clipboard';
 import { notify } from './dash/notifications';
 import { listWorkflows, loadDashboard, testDashboard } from './dash/data';
-import { Shell } from './shell';
+import { App as OtelApp } from './otel/app/App';
 
 const usage = `Usage: agentic-coding dash|home|manager [options]
   --repo PATH              Repository root (default: cwd)
@@ -198,16 +199,40 @@ export async function main(): Promise<void> {
   topologyStore.load(spansForTopology);
 
   // ---- Render app ----
-  applyOtelTheme(loadOtelThemeName());
   applyDashTheme(loadDashThemeName());
   process.env.FORCE_COLOR = '3';
   const renderer = await createCliRenderer({ targetFps: 30, exitOnCtrlC: false, useKittyKeyboard: {}, exitSignals: [] });
   (globalThis as any).__renderer = renderer;
 
+  // Always catch async exceptions: an uncaught throw inside the input/render
+  // loops would otherwise kill key and mouse handling entirely. Log to stderr;
+  // AGENTIC_CODING_TRACE additionally captures them to a file.
+  const traceFile = process.env.AGENTIC_CODING_TRACE;
+  const append = (msg: string) => {
+    if (traceFile) {
+      try { require('node:fs').appendFileSync(traceFile, `${Date.now()} ${msg}\n`); } catch { /* noop */ }
+    } else {
+      console.error(`[agentic-coding] ${msg}`);
+    }
+  };
+  process.on('uncaughtException', (error) => append(`UNCAUGHT: ${error?.stack ?? String(error)}`));
+  process.on('unhandledRejection', (reason) => append(`UNHANDLED_REJECTION: ${String(reason)}`));
+  // Registered before the keymap: empirically, an extra early keypress listener
+  // changes input dispatch on some terminals (Ghostty+herdr). Kept while the
+  // interaction is investigated; harmless either way.
+  renderer.keyInput.on('keypress', () => { /* noop */ });
+  if (traceFile) {
+    append('startup: renderer created');
+    const heartbeat = setInterval(() => append('alive'), 2000);
+    const cleanupTrace = () => { clearInterval(heartbeat); };
+    process.on('exit', cleanupTrace);
+  }
+
   const cleanup = () => {
     grpcSidecar?.kill();
     stopPrometheus?.();
     stopStatsD?.();
+    db.close();
     renderer.destroy();
   };
   process.on('SIGINT', cleanup);
@@ -228,20 +253,24 @@ export async function main(): Promise<void> {
   keymap.setData('modal.active', 'none');
 
   await render(() => (
-    <Shell
-      mode={home ? 'home' : 'dash'}
-      repo={home ? undefined : repo}
-      change={home ? undefined : resolvedChange}
-      profile={isTest ? 'test' : undefined}
-      keymap={keymap}
-      repos={repos}
-      db={db}
-      traceStore={traceStore}
-      metricStore={metricStore}
-      logStore={logStore}
-      topologyStore={topologyStore}
-      tracesOnly={tracesOnly}
-    />
+    <KeymapProvider keymap={keymap}>
+      <OtelApp
+        repos={repos}
+        db={db}
+        traceStore={traceStore}
+        metricStore={metricStore}
+        logStore={logStore}
+        topologyStore={topologyStore}
+        tracesOnly={tracesOnly}
+        dashboard={{
+          mode: home ? 'home' : 'dash',
+          repo: home ? undefined : repo,
+          change: home ? undefined : resolvedChange,
+          profile: isTest ? 'test' : undefined,
+          keymap,
+        }}
+      />
+    </KeymapProvider>
   ), renderer);
   await new Promise<void>(done => renderer.once('destroy', done));
   clearSelectionCopy();

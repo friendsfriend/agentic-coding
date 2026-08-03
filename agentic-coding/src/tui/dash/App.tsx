@@ -40,10 +40,8 @@ import {
 import { watchDirectories } from "./watchRefresh";
 import { Badge } from "./ui/Badge";
 import { HighlightedText } from "./ui/Highlight";
-import { Header } from "./ui/Header";
 import { Layout } from "./ui/Layout";
 import { Panel } from "./ui/Panel";
-import { StatusBar } from "./ui/StatusBar";
 import { VerdictModal } from "./ui/VerdictModal";
 import { ScrollableContent } from "./ui/ScrollableContent";
 import { VerificationTimelineModal } from "./ui/VerificationTimelineModal";
@@ -69,6 +67,8 @@ export function App(props: {
   change: string;
   profile?: "test";
   keymap: Keymap<any, KeyEvent>;
+  /** Push the workflow header context up to the shell's global header. */
+  onHeader?: (header: import('../otel/app/App').WorkflowHeaderInfo | null) => void;
 }) {
   const renderer = useRenderer();
   const dimensions = useTerminalDimensions();
@@ -86,6 +86,10 @@ export function App(props: {
       ? testDashboard(demoPhases[demoIndex()]!)
       : loadDashboard(props.repo, props.change);
   const [data, setData] = createSignal<DashboardData>(load());
+  // Feed the shell's global header from the dashboard's single data source.
+  createEffect(() => {
+    props.onHeader?.({ change: data().state.changeId, phase: data().state.phase, branch: data().state.branch, updated: data().updated });
+  });
   const [message, setMessage] = createSignal("");
   let lastQuitAt = 0;
   const [busy, setBusy] = createSignal(false);
@@ -502,6 +506,13 @@ export function App(props: {
   });
 
   const handleKey = async (key: KeyEvent) => {
+    const trace = (msg: string) => {
+      const target = process.env.AGENTIC_CODING_TRACE;
+      if (target) {
+        try { require('node:fs').appendFileSync(target, `${Date.now()} dash ${msg}\n`); } catch { /* noop */ }
+      }
+    };
+    trace(`key=${key.name} modal.active=${props.keymap.getData?.('modal.active')}`);
     if (busy()) return;
     const name = key.name.toLowerCase();
     if (name === "q" || (key.ctrl && name === "c")) {
@@ -1324,6 +1335,13 @@ export function App(props: {
       disposeVerdict();
       dispose();
     });
+    // Self-heal: reconcile the keymap modal data with the real modal state, so a
+    // modal closed by any path (mouse backdrop click, cancel, submit) never leaves
+    // `modal.active` stuck — a stuck value deactivates the layers and kills keys.
+    createEffect(() => {
+      const anyOpen = !!(verdict() || findings() || verificationDetail() || eventsDetail() || traceDetail() || help() || themePicker() || overridePicker() || overrideConfirm());
+      if (!anyOpen) props.keymap.setData("modal.active", "none");
+    });
   });
   const doneTasks = createMemo(
     () => data().tasks.filter((task) => task.done).length,
@@ -1370,16 +1388,8 @@ export function App(props: {
   });
 
   return (
-    <box width={dimensions().width} height={dimensions().height}>
+    <box style={{ width: '100%', height: '100%' }}>
       <Layout
-        header={
-          <Header
-            change={data().state.changeId}
-            phase={data().state.phase}
-            branch={data().state.branch}
-            updated={data().updated}
-          />
-        }
         content={
           <box
             backgroundColor={uiColors.bgBase}
@@ -1777,42 +1787,6 @@ export function App(props: {
               </box>
             </box>
           </box>
-        }
-        footer={
-          <StatusBar
-            prompt={
-              activePanel() === 1
-                ? "Selected agent"
-                : activePanel() === 3
-                  ? "Verification timeline"
-                  : prompt()
-            }
-            approval={activePanel() !== 1 && !!gate() && !busy()}
-            keybinds={[
-              ...(activePanel() === 2
-                ? [{ key: "Enter", action: "view tasks" }]
-                : activePanel() === 3
-                  ? [{ key: "Enter", action: "view timeline" }]
-                  : activePanel() === 4
-                    ? [{ key: "Enter", action: "open lazygit" }]
-                    : activePanel() === 5
-                      ? [{ key: "Enter", action: "view traces" }]
-                      : activePanel() === 6
-                        ? [{ key: "Enter", action: "open artifact" }]
-                        : activePanel() !== 1 && !!gate() && !busy()
-                          ? [{ key: "Enter", action: "approve" }]
-                          : activePanel() === 1
-                            ? [
-                                { key: "Enter", action: "focus agent" },
-                                { key: "v", action: "view verdict" },
-                              ]
-                            : []),
-              { key: "Shift+O", action: "overwrite phase" },
-              { key: "r", action: "refresh" },
-              { key: "Esc", action: "dashboard" },
-              { key: "q", action: "quit" },
-            ]}
-          />
         }
       />
       <Show when={overridePicker()}>

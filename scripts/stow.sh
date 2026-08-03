@@ -32,9 +32,8 @@ link_tree() {
     done
 }
 
-mkdir -p "$HOME/.pi/agent" "$HOME/.config/herdr" "$HOME/.config/opencode" "$HOME/.config/agentic-coding"
+mkdir -p "$HOME/.pi/agent" "$HOME/.config/opencode" "$HOME/.config/agentic-coding"
 link_tree "$root/pi" "$HOME/.pi/agent"
-link_tree "$root/herdr" "$HOME/.config/herdr"
 link_tree "$root/opencode" "$HOME/.config/opencode"
 
 # Workflow config lives at the XDG location; a real user file there wins.
