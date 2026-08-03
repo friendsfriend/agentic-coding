@@ -78,6 +78,27 @@ export async function launchRole(ctx: Context, state: WorkflowState, role: strin
         '--', ...prompts.piArguments(role, spawnModel, level, change, config, agentDefDir, name), `/skill:herdr-openspec-${role} ${instructions}`,
       );
 
+    // herdr >=0.7.5 blocks `agent start` for 30s waiting for the terminal to
+    // report Idle/Blocked; a pi agent launched with a prompt works immediately
+    // and stays Working, so the readiness wait times out even though the agent
+    // is up and answering. Confirm liveness directly and treat it as launched.
+    const agentOnPane = () => {
+      try {
+        const info = ctx.herdr.call('agent', 'get', launchPane).agent;
+        return info && info.pane_id === launchPane && ['idle', 'working', 'blocked', 'done'].includes(info.agent_status) ? info : null;
+      } catch {
+        return null;
+      }
+    };
+    const recoverFromTimeout = (error: unknown, name: string, attempt: number): boolean => {
+      if (!String((error as Error)?.message ?? error).includes('timed out waiting for agent startup')) return false;
+      const live = agentOnPane();
+      if (!live) return false;
+      agent = live;
+      telemetry.telemetry(ctx, state, 'agent_start_timeout_recovered', { role, attempt: attempt + 1, name });
+      return true;
+    };
+
     let agent: any;
     let lastError: unknown;
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -88,6 +109,7 @@ export async function launchRole(ctx: Context, state: WorkflowState, role: strin
         break;
       } catch (error) {
         lastError = error;
+        if (recoverFromTimeout(error, name, attempt)) break;
         const msg = String((error as Error).message);
         if (!msg.includes('not an available shell')) {
           // Likely a duplicate herdr agent name (a concurrent workflow with the
@@ -101,6 +123,7 @@ export async function launchRole(ctx: Context, state: WorkflowState, role: strin
           agent = startAgent(name).agent;
         } catch (retryError) {
           lastError = retryError;
+          recoverFromTimeout(retryError, name, attempt);
         }
         break;
       }

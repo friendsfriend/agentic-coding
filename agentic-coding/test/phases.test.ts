@@ -794,6 +794,28 @@ describe('launchRole', () => {
     expect(traces.some(t => t.name === 'workflow.agent_name_collision_retry')).toBe(true);
   });
 
+  test('recovers when herdr start readiness wait times out but agent is live', async () => {
+    const state = makeState('apply');
+    // Real sequence: transient pane-busy on the first attempt, same-name retry
+    // spawns the agent, then herdr's 30s readiness wait times out mid-turn.
+    let starts = 0;
+    herdr.on(args => args[0] === 'agent' && args[1] === 'start', () => {
+      starts += 1;
+      if (starts === 1) throw new Error('herdr agent start my-change-worker ...: {"error":{"code":"agent_pane_busy","message":"agent target pane pane-1 is not an available shell"}}');
+      throw new Error('herdr agent start my-change-worker ...: {"id":"cli:agent:start","error":{"code":"timeout","message":"timed out waiting for agent startup"}}');
+    });
+    herdr.on(args => args[0] === 'agent' && args[1] === 'get', args => ({
+      agent: { pane_id: args[2], tab_id: 'tab-live', agent_status: 'working' },
+    }));
+    await orchestration.launchRole(ctx, state, 'worker');
+    // Same-name retry spawned the live agent; no suffixed retry against the occupied pane.
+    expect(herdr.calls.filter(call => call[0] === 'agent' && call[1] === 'start').length).toBe(2);
+    expect(state.panes.worker).toBeDefined();
+    expect(state.tabs.worker).toBe('tab-live');
+    const traces = fs.readFileSync(path.join(stateMod.workflowDir(state), 'traces.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    expect(traces.some(t => t.name === 'workflow.agent_start_timeout_recovered')).toBe(true);
+  });
+
   test('logs agent launch failure', async () => {
     const state = makeState('apply');
     herdr.on(args => args[0] === 'agent' && args[1] === 'start', () => {

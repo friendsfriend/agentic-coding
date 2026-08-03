@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { RGBA, TextAttributes } from '@opentui/core';
-import { useTerminalDimensions } from '@opentui/solid';
+import { Portal, useTerminalDimensions } from '@opentui/solid';
 import { For, Show, createEffect, createSignal, onCleanup, untrack, type JSX } from 'solid-js';
 import { colors, uiColors } from './colors';
 import { SearchHeader } from './SearchHeader';
@@ -51,7 +51,7 @@ export function GenericModal(props: { title: string; titleColor?: string; fieldL
   onCleanup(() => clearInterval(progressTimer));
   const progressEnd = () => Math.min(progressWidth() - 1, Math.floor(animatedProgress()));
   const progressCharacter = (index: number) => index < progressEnd() ? '━' : index === progressEnd() ? '▸' : '─';
-  return <box position="absolute" top={0} left={0} zIndex={props.zIndex} width={dimensions().width} height={dimensions().height} flexDirection="column" justifyContent="center" alignItems="center" backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)} onMouseUp={props.onBackdropClick}>
+  return <Portal ref={(el) => { (el as { position?: string }).position = 'absolute'; }}><box position="absolute" top={0} left={0} zIndex={props.zIndex} width={dimensions().width} height={dimensions().height} flexDirection="column" justifyContent="center" alignItems="center" backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)} onMouseUp={props.onBackdropClick}>
     <box backgroundColor={uiColors.bgMantle} onMouseUp={() => invokeGlobalSelectionMouseUpHandler()} width={width()} height={height()} flexDirection="column" paddingTop={1} paddingBottom={1} paddingLeft={2} paddingRight={2}>
       <SearchHeader search={props.search}><text fg={props.titleColor ?? uiColors.primary} attributes={TextAttributes.BOLD}>{props.title}</text></SearchHeader>
       {props.step !== undefined && <box width="100%" height={1}><text><For each={Array.from({ length: progressWidth() }, (_, index) => index)}>{index => <span style={{ fg: index <= progressEnd() ? progressColor(index / Math.max(1, progressWidth() - 1)) : uiColors.textMuted }}>{progressCharacter(index)}</span>}</For></text></box>}
@@ -68,5 +68,5 @@ export function GenericModal(props: { title: string; titleColor?: string; fieldL
       </Show>
       <box style={{ flexDirection: 'row', height: 1 }}><For each={props.help}>{(entry, index) => <text fg={uiColors.textMuted}><span style={{ fg: uiColors.primary, attributes: TextAttributes.BOLD }}>{entry.key}</span> {entry.action}{index() < props.help.length - 1 ? '  •  ' : ''}</text>}</For></box>
     </box>
-  </box>;
+  </box></Portal>;
 }

@@ -3,7 +3,7 @@ import { For, JSX, Show, createMemo } from 'solid-js';
 import { RGBA } from '@opentui/core';
 import { SearchHeader } from './SearchHeader';
 import { FilterStatusBar } from './FilterStatusBar';
-import { useTerminalDimensions } from '@opentui/solid';
+import { Portal, useTerminalDimensions } from '@opentui/solid';
 import { uiColors } from '../colors';
 import { TextAttributes } from '@opentui/core';
 import { invokeGlobalSelectionMouseUpHandler } from '../selectionCopy';
@@ -101,7 +101,7 @@ export function GenericModal(props: GenericModalProps) {
   const helpLines = createMemo(() => typeof props.helpText === 'string' ? wrapHelpText(props.helpText, Math.max(1, dialogWidth() - 4)) : ['']);
 
   return (
-    <box
+    <Portal ref={(el) => { (el as { position?: string }).position = 'absolute'; }}><box
       position="absolute"
       top={0}
       left={0}
@@ -181,6 +181,6 @@ export function GenericModal(props: GenericModalProps) {
           </box>
         )}
       </box>
-    </box>
+    </box></Portal>
   );
 }
