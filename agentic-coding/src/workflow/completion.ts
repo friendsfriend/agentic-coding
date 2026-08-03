@@ -68,16 +68,8 @@ function completeGitOperations(ctx: Context, state: WorkflowState, commit?: stri
   git.ensureWorkflowBranch(ctx, state);
   const dirty = ctx.git.run(['status', '--porcelain'], state.worktree);
   if (dirty) throw new Error('working tree is dirty after git operations; commit or clean first');
-  for (const role of ['git', 'archive']) {
-    const pane = state.panes?.[role];
-    if (pane) {
-      try {
-        ctx.herdr.call('pane', 'close', pane);
-      } catch {
-        /* already gone */
-      }
-    }
-  }
+  // No pane closing here: the archive pane runs this very command, and all panes
+  // (including lazygit) are cleaned up by the workspace close on completion.
   telemetry.telemetry(ctx, state, 'git_operations_completed', { commit, pushed });
   telemetry.changePhase(ctx, state, 'completed');
   telemetry.finalizeWorkspaceTrace(ctx, state);

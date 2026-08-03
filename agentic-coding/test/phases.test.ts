@@ -590,6 +590,9 @@ describe('archive and git operations', () => {
     expect(ctx.git.run(['log', '-1', '--format=%s'], repo)).toBe('Apply my-change');
     expect(ctx.git.run(['rev-parse', 'HEAD'], repo)).toBe(ctx.git.run(['rev-parse', 'origin/feature/my-change'], repo));
     expect(herdr.calls).toContainEqual(['pane', 'close', 'pane-git']);
+    // The archive pane runs this very command; closing it would SIGHUP-kill the
+    // process before `completed` persists (stuck in `committing`).
+    expect(herdr.calls).not.toContainEqual(['pane', 'close', 'pane-archive']);
     expect(herdr.calls.some(call => call[0] === 'agent' && call[1] === 'start')).toBe(false);
   });
 
