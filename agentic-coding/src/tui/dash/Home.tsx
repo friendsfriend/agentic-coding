@@ -4,7 +4,7 @@ import { useRenderer, useTerminalDimensions } from '@opentui/solid';
 import { TextAttributes, type KeyEvent } from '@opentui/core';
 import type { Keymap } from '@opentui/keymap';
 import { Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
-import { focusWorkflow, herdrAvailable, notifyHerdrError, startWorkflow, type WorkflowOverview } from './data';
+import { focusWorkflow, herdrAvailable, isStale, notifyHerdrError, startWorkflow, type WorkflowOverview } from './data';
 import { ErrorDialog } from './ui/ErrorDialog';
 import { HelpModal, type HelpSection } from './ui/HelpModal';
 import { NewWorkflowModal } from './ui/NewWorkflowModal';
@@ -174,7 +174,7 @@ export function Home(props: {
       <Panel title="Workspaces" active style={{ flexGrow: 1, minHeight: 0 }}>
         <Show when={loading()} fallback={<Show when={items().length > 0} fallback={<text fg={uiColors.textMuted}>No workflows found in ~/development</text>}>
           <SelectableList items={visibleItems()} selectedIndex={selected()} renderItem={(item, active) => <box height={2} flexDirection="column" paddingLeft={1}>
-            <text fg={active ? uiColors.textPrimary : uiColors.textSecondary}>{item.state.changeId}  <span style={{ fg: uiColors.primary }}>{item.state.phase}</span></text>
+            <text fg={active ? uiColors.textPrimary : uiColors.textSecondary}>{item.state.changeId}  <span style={{ fg: uiColors.primary }}>{item.state.phase}</span>{isStale(item.state, Date.now()) ? <span style={{ fg: uiColors.warning }}>  · STALE</span> : <></>}</text>
             <text fg={uiColors.textMuted}>{(item.state.workflowModules ?? ['plan','plan-approval','apply-verify','developer-approval','archive'])[0] === 'plan' ? 'standard' : 'direct-apply'} · {item.tasks[0]}/{item.tasks[1]} tasks · planner:{item.agents.find(agent => agent.role === 'planner')?.status ?? 'not started'} · {item.agents.filter(agent => agent.status === 'working' || agent.status === 'done' || agent.status === 'idle').length}/{item.agents.length} agents active</text>
           </box>} />
         </Show>}>

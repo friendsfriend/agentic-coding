@@ -7,6 +7,7 @@ import type { Context } from '../src/workflow/effects.ts';
 import * as orchestration from '../src/workflow/orchestration.ts';
 import * as prompts from '../src/workflow/prompts.ts';
 import * as stateMod from '../src/workflow/state.ts';
+import * as telemetry from '../src/workflow/telemetry.ts';
 import { DEFAULT_CONFIG, FakeClock, FakeGit, FakeHerdr, initRepo, makeContext } from './fakes.ts';
 
 class FailFirstPushGit extends FakeGit {
@@ -360,12 +361,11 @@ function writeTriageInputFixture(state: stateMod.WorkflowState, files: string[] 
   fs.writeFileSync(p, JSON.stringify({ allChangedFiles: files }));
 }
 
-function writeReportFixture(state: stateMod.WorkflowState, role: string, verdict = 'PASS', findingsList: any[] = []) {
+function writeReportFixture(state: stateMod.WorkflowState, role: string, findingsList: any[] = []) {
   const p = orchestration.reportPath(state, role);
   fs.mkdirSync(path.dirname(p), { recursive: true });
   const lines = findingsList.map(finding => JSON.stringify(finding));
-  lines.push(JSON.stringify({ type: 'verdict', verdict }));
-  fs.writeFileSync(p, lines.join('\n') + '\n');
+  fs.writeFileSync(p, lines.join('\n') + (lines.length ? '\n' : ''));
 }
 
 describe('cmdVerificationResult', () => {
@@ -382,7 +382,7 @@ describe('cmdVerificationResult', () => {
 
   test('single verifier pass starts test verifier', async () => {
     const state = verifyingState();
-    writeReportFixture(state, 'quality-verifier', 'PASS');
+    writeReportFixture(state, 'quality-verifier');
     await orchestration.cmdVerificationResult(ctx, { repo, change: 'my-change', role: 'quality-verifier' });
     const after = stateMod.loadState(repo, 'my-change');
     expect(after.phase).toBe('verify');
@@ -399,11 +399,11 @@ describe('cmdVerificationResult', () => {
     });
     const priorReport = path.join(stateMod.workflowDir(state), 'reviews', 'round-1-test-verifier.findings.jsonl');
     fs.mkdirSync(path.dirname(priorReport), { recursive: true });
-    fs.writeFileSync(priorReport, '{"type":"finding","severity":"info","path":"src/old.test.ts","line":1,"detail":"known baseline failure"}\n{"type":"verdict","verdict":"PASS"}\n');
+    fs.writeFileSync(priorReport, '{"type":"finding","severity":"info","path":"src/old.test.ts","line":1,"detail":"known baseline failure"}\n');
     state.previousVerificationResults = { 'test-verifier': { verdict: 'PASS', report: priorReport } };
     stateMod.saveState(state);
     writeTriageInputFixture(state);
-    writeReportFixture(state, 'quality-verifier', 'PASS');
+    writeReportFixture(state, 'quality-verifier');
 
     await orchestration.cmdVerificationResult(ctx, { repo, change: 'my-change', role: 'quality-verifier' });
 
@@ -415,10 +415,10 @@ describe('cmdVerificationResult', () => {
 
   test('test verifier pass moves to developer review', async () => {
     const state = verifyingState();
-    writeReportFixture(state, 'quality-verifier', 'PASS');
+    writeReportFixture(state, 'quality-verifier');
     await orchestration.cmdVerificationResult(ctx, { repo, change: 'my-change', role: 'quality-verifier' });
     const mid = stateMod.loadState(repo, 'my-change');
-    writeReportFixture(mid, 'test-verifier', 'PASS');
+    writeReportFixture(mid, 'test-verifier');
     await orchestration.cmdVerificationResult(ctx, { repo, change: 'my-change', role: 'test-verifier' });
     // test-verifier skill ends with finish-review: deterministic consolidation
     await orchestration.cmdFinishReview(ctx, { repo, change: 'my-change' });
@@ -435,16 +435,35 @@ describe('cmdVerificationResult', () => {
 
   test('finish-review during verify requires all dispatched reports', async () => {
     verifyingState(['quality-verifier', 'security-verifier']);
-    writeReportFixture(stateMod.loadState(repo, 'my-change'), 'quality-verifier', 'PASS');
+    writeReportFixture(stateMod.loadState(repo, 'my-change'), 'quality-verifier');
     await orchestration.cmdVerificationResult(ctx, { repo, change: 'my-change', role: 'quality-verifier' });
     await expect(orchestration.cmdFinishReview(ctx, { repo, change: 'my-change' })).rejects.toThrow(/missing: security-verifier/);
   });
 
+  test('changePhase does not clobber concurrently committed verifier results', async () => {
+    makeState('verify', { verificationRound: 1, verificationRoles: ['quality-verifier'], verificationResults: {}, verificationReported: {}, testVerifierStarted: false });
+    // Stale snapshot held by a caller; a verifier result commits in between.
+    const stale = stateMod.loadState(repo, 'my-change');
+    stateMod.updateState(repo, 'my-change', s => {
+      s.verificationResults = { ...(s.verificationResults ?? {}), 'quality-verifier': { verdict: 'FAIL' } };
+    });
+    telemetry.changePhase(ctx, stale, 'fix', { reason: 'concurrent' });
+    const after = stateMod.loadState(repo, 'my-change');
+    expect(after.phase).toBe('fix');
+    // Old snapshot-save lost the committed verdict; the atomic changePhase keeps it.
+    expect(after.verificationResults['quality-verifier'].verdict).toBe('FAIL');
+  });
+
+  test('finish-review approval requires a recorded developer review', async () => {
+    makeState('developer-review', { verificationRound: 1 });
+    await expect(orchestration.cmdFinishReview(ctx, { repo, change: 'my-change' })).rejects.toThrow(/no developer review recorded/);
+  });
+
   test('any fail moves to fix', async () => {
     const state = verifyingState(['quality-verifier', 'security-verifier']);
-    writeReportFixture(state, 'quality-verifier', 'FAIL', [{ type: 'finding', severity: 'critical', path: 'a.py', line: 1, detail: 'bug', evidence: 'repro', fix: 'fix bug' }]);
+    writeReportFixture(state, 'quality-verifier', [{ type: 'finding', severity: 'critical', path: 'a.py', line: 1, detail: 'bug', evidence: 'repro', fix: 'fix bug' }]);
     await orchestration.cmdVerificationResult(ctx, { repo, change: 'my-change', role: 'quality-verifier' });
-    writeReportFixture(state, 'security-verifier', 'PASS');
+    writeReportFixture(state, 'security-verifier');
     await orchestration.cmdVerificationResult(ctx, { repo, change: 'my-change', role: 'security-verifier' });
     const after = stateMod.loadState(repo, 'my-change');
     const traces = fs
@@ -469,7 +488,7 @@ describe('cmdVerificationResult', () => {
     const state = verifyingState();
     state.verificationRound = maxRounds;
     stateMod.saveState(state);
-    writeReportFixture(state, 'quality-verifier', 'FAIL');
+    writeReportFixture(state, 'quality-verifier', [{ type: 'finding', severity: 'critical', path: 'a.py', line: 1, detail: 'bug' }]);
     await orchestration.cmdVerificationResult(ctx, { repo, change: 'my-change', role: 'quality-verifier' });
     expect(stateMod.loadState(repo, 'my-change').phase).toBe('paused');
   });

@@ -21,6 +21,8 @@ export interface WorkflowState {
   baseCommit?: string;
   createdAt?: string;
   phaseStartedAt?: string;
+  prCreated?: boolean;
+  prUrl?: string | null;
   ticketNumber?: string;
   workerModel?: string;
   returnWorkspace?: string;
@@ -47,7 +49,7 @@ export interface WorkflowOverview {
   state: WorkflowState;
   workspaceOpen: boolean;
   tasks: [number, number];
-  agents: Array<{ role: string; status: string; model?: string }>;
+  agents: Array<{ role: string; status: string; model?: string; cost?: number }>;
 }
 
 function openWorkspaceIds(): Set<string> | undefined {
@@ -173,7 +175,7 @@ export interface DashboardData {
   tasks: Array<{ done: boolean; text: string }>;
   review: string;
   reviewHistory: string[];
-  agents: Array<{ role: string; status: string; model?: string }>;
+  agents: Array<{ role: string; status: string; model?: string; cost?: number }>;
   updated: string;
   health: { dirty: boolean; ahead: number; behind: number; branch: string };
   age: string;
@@ -184,6 +186,9 @@ export interface DashboardData {
     role?: string;
     model?: string;
     cost?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
     status?: number;
     tier?: string;
     roles?: string[];
@@ -195,19 +200,10 @@ export interface DashboardData {
     status: string;
     durationSeconds?: number;
     model?: string;
-    cost?: number;
     providerErrors: number;
     fallback: boolean;
   }>;
-  telemetrySummary: Array<{
-    model: string;
-    durationSeconds: number;
-    errors: number;
-    fallbacks: number;
-    inputTokens: number;
-    outputTokens: number;
-    cost: number;
-  }>;
+  costBreakdown: Array<Omit<CostRow, 'messages'> & { messages: CostMessage[] }>;
   traceSpans: SpanData[];
 }
 
@@ -303,6 +299,76 @@ function telemetryEvents(path: string): Array<Record<string, any>> {
     });
 }
 
+export interface CostRow {
+  role: string;
+  messages: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cost: number;
+}
+
+export interface CostMessage {
+  at: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cost: number;
+}
+
+/** Per-role lifetime cost from model_usage rows (one per assistant message). */
+export function costSummary(events: Array<Record<string, any>>): CostRow[] {
+  const byRole = new Map<string, CostRow>();
+  for (const event of events) {
+    if (event.event !== "model_usage" || !event.role) continue;
+    const row = byRole.get(event.role) ?? {
+      role: event.role,
+      messages: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      cost: 0,
+    };
+    row.messages += 1;
+    row.inputTokens += Number(event.inputTokens ?? 0);
+    row.outputTokens += Number(event.outputTokens ?? 0);
+    row.totalTokens += Number(event.totalTokens ?? 0);
+    row.cost += Number(event.cost ?? 0);
+    byRole.set(event.role, row);
+  }
+  return [...byRole.values()].sort((a, b) => b.cost - a.cost);
+}
+
+/** Per-message cost rows for one role, oldest first. */
+export function costMessages(events: Array<Record<string, any>>, role: string): CostMessage[] {
+  return events
+    .filter((event) => event.event === "model_usage" && event.role === role)
+    .sort((a, b) => String(a.at).localeCompare(String(b.at)))
+    .map((event) => ({
+      at: String(event.at ?? ""),
+      inputTokens: Number(event.inputTokens ?? 0),
+      outputTokens: Number(event.outputTokens ?? 0),
+      totalTokens: Number(event.totalTokens ?? 0),
+      cost: Number(event.cost ?? 0),
+    }));
+}
+
+/** Hours spent in the current phase (phase start, falling back to creation). */
+export function phaseAgeHours(state: { phase: string; phaseStartedAt?: string; createdAt?: string }, now: number): number {
+  const at = state.phaseStartedAt ?? state.createdAt;
+  if (!at) return 0;
+  const age = (now - Date.parse(at)) / 3_600_000;
+  return Math.max(0, Math.floor(age));
+}
+
+/** True when a workflow has sat in a non-terminal phase longer than the threshold. */
+export function isStale(state: { phase: string; phaseStartedAt?: string; createdAt?: string }, now: number, thresholdHours = 6): boolean {
+  if (state.phase === "completed" || state.phase === "closed") return false;
+  const at = state.phaseStartedAt ?? state.createdAt;
+  if (!at) return false;
+  return (now - Date.parse(at)) / 3_600_000 > thresholdHours;
+}
+
 function agentStatuses() {
   try {
     const agents = herdr.call("agent", "list").agents as Array<{
@@ -343,7 +409,6 @@ export function loadVerifierFindings(
     title: `${role} · round ${state.verificationRound}`,
     events: events as Array<{
       type: string;
-      verdict?: string;
       severity?: string;
       path?: string;
       line?: number;
@@ -416,31 +481,28 @@ export function loadVerifierReport(repo: string, change: string, role: string) {
           return [];
         }
       });
+    const derivedVerdict = entries.some(entry => entry.type === 'finding' && entry.severity === 'critical') ? 'FAIL' : 'PASS';
     const content =
-      entries
-        .map((entry) => {
-          if (entry.type === "verdict")
-            return `# Verdict\n${String(entry.verdict ?? "UNKNOWN")}`;
-          return [
-            `# ${(entry.severity ?? "info").toString().toUpperCase()} · ${entry.path ?? "repository"}`,
-            entry.line ? `Line ${entry.line}` : "",
-            String(entry.detail ?? ""),
-            entry.evidence
-              ? `Evidence: ${entry.evidence}`
-              : entry.changedCode
-                ? `Changed code: ${entry.changedCode}`
-                : "",
-            entry.fix ? `Resolution: ${entry.fix}` : "",
-          ]
-            .filter(Boolean)
-            .join("\n");
-        })
-        .join("\n\n") || "# No findings";
+      [`# Verdict (derived)\n${derivedVerdict}`, ...entries.map((entry) =>
+        [
+          `# ${(entry.severity ?? "info").toString().toUpperCase()} · ${entry.path ?? "repository"}`,
+          entry.line ? `Line ${entry.line}` : "",
+          String(entry.detail ?? ""),
+          entry.evidence
+            ? `Evidence: ${entry.evidence}`
+            : entry.changedCode
+              ? `Changed code: ${entry.changedCode}`
+              : "",
+          entry.fix ? `Resolution: ${entry.fix}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n")),
+      ].join("\n\n") || "# No findings";
     return { title: `${role} · round ${state.verificationRound}`, content };
   }
   const markdown = join(reviews, `round-${state.verificationRound}-${role}.md`);
   if (!existsSync(markdown))
-    throw new Error(`No verdict result yet for ${role}.`);
+    throw new Error(`No report yet for ${role}.`);
   return {
     title: `${role} · round ${state.verificationRound}`,
     content: read(markdown),
@@ -636,9 +698,6 @@ export function loadDashboard(repo: string, change: string): DashboardData {
       : undefined;
     return {
       role,
-      cost: roleEvents
-        .filter((event) => event.event === "model_usage")
-        .reduce((sum, event) => sum + Number(event.cost ?? 0), 0),
       status: result?.verdict ?? (statuses.get(state.panes[role] ?? "") ?? "RUN"),
       durationSeconds,
       model: state.verificationModels?.[role],
@@ -648,41 +707,8 @@ export function loadDashboard(repo: string, change: string): DashboardData {
       ),
     };
   });
-  const summaryByModel = new Map<
-    string,
-    {
-      model: string;
-      durationSeconds: number;
-      errors: number;
-      fallbacks: number;
-      inputTokens: number;
-      outputTokens: number;
-      cost: number;
-    }
-  >();
-  for (const event of telemetry) {
-    const model = String(event.model ?? "unknown");
-    const summary = summaryByModel.get(model) ?? {
-      model,
-      durationSeconds: 0,
-      errors: 0,
-      fallbacks: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      cost: 0,
-    };
-    if (event.event === "verifier_result")
-      summary.durationSeconds += Number(event.duration_seconds ?? 0);
-    if (event.event === "provider_response" && Number(event.status) >= 400)
-      summary.errors++;
-    if (event.event === "provider_launch_fallback") summary.fallbacks++;
-    if (event.event === "model_usage") {
-      summary.inputTokens += Number(event.inputTokens ?? 0);
-      summary.outputTokens += Number(event.outputTokens ?? 0);
-      summary.cost += Number(event.cost ?? 0);
-    }
-    summaryByModel.set(model, summary);
-  }
+  const costByRole = new Map(costSummary(telemetry).map(row => [row.role, row]));
+  const costBreakdown = costSummary(telemetry).map(row => ({ ...row, messages: costMessages(telemetry, row.role) }));
   return {
     state,
     request: summary(join(workflowRoot, "request.md")),
@@ -703,6 +729,7 @@ export function loadDashboard(repo: string, change: string): DashboardData {
           role === "worker"
             ? state.workerModel
             : state.verificationModels?.[role],
+        cost: costByRole.get(role)?.cost,
       })),
     updated: new Date().toLocaleTimeString(),
     health: {
@@ -748,7 +775,7 @@ export function loadDashboard(repo: string, change: string): DashboardData {
         fallback: event.fallback as string | undefined,
       })),
     verifierTimeline,
-    telemetrySummary: [...summaryByModel.values()],
+    costBreakdown,
     traceSpans: parseJsonl(read(join(workflowRoot, "traces.jsonl"))),
   };
 }
@@ -815,11 +842,12 @@ export function testDashboard(phase = "proposed"): DashboardData {
       ? ["round-1-consolidated.md: CLEAR", "round-2-consolidated.md: CLEAR"]
       : [],
     agents: [
-      { role: "planner", status: applying ? "closed" : "idle" },
+      { role: "planner", status: applying ? "closed" : "idle", cost: 0.08 },
       {
         role: "worker",
         status:
           phase === "apply" ? "working" : applying ? "idle" : "not started",
+        cost: 0.42,
       },
       ...[
         "security-verifier",
@@ -870,6 +898,11 @@ export function testDashboard(phase = "proposed"): DashboardData {
         role: "worker",
         model: "claude-sonnet",
       },
+      { at: "10:41", event: "model_usage", role: "planner", inputTokens: 2100, outputTokens: 400, totalTokens: 2500, cost: 0.08 },
+      { at: "10:44", event: "model_usage", role: "worker", inputTokens: 5200, outputTokens: 1400, totalTokens: 6600, cost: 0.21 },
+      { at: "10:48", event: "model_usage", role: "worker", inputTokens: 4800, outputTokens: 1100, totalTokens: 5900, cost: 0.21 },
+      { at: "10:50", event: "model_usage", role: "security-verifier", inputTokens: 3200, outputTokens: 600, totalTokens: 3800, cost: 0.05 },
+      { at: "10:51", event: "model_usage", role: "quality-verifier", inputTokens: 4100, outputTokens: 900, totalTokens: 5000, cost: 0.07 },
     ],
     verifierTimeline:
       phase === "verify"
@@ -900,22 +933,53 @@ export function testDashboard(phase = "proposed"): DashboardData {
             },
           ]
         : [],
-    telemetrySummary: [
+    costBreakdown: [
       {
-        model: "claude-sonnet",
-        durationSeconds: 304,
-        errors: 0,
-        fallbacks: 0,
-        inputTokens: 12300,
-        outputTokens: 3400,
-        cost: 0.12,
+        role: "worker",
+        inputTokens: 10000,
+        outputTokens: 2500,
+        totalTokens: 12500,
+        cost: 0.42,
+        messages: [
+          { at: "10:44:12", inputTokens: 5200, outputTokens: 1400, totalTokens: 6600, cost: 0.21 },
+          { at: "10:48:03", inputTokens: 4800, outputTokens: 1100, totalTokens: 5900, cost: 0.21 },
+        ],
+      },
+      {
+        role: "planner",
+        inputTokens: 2100,
+        outputTokens: 400,
+        totalTokens: 2500,
+        cost: 0.08,
+        messages: [{ at: "10:41:55", inputTokens: 2100, outputTokens: 400, totalTokens: 2500, cost: 0.08 }],
+      },
+      {
+        role: "quality-verifier",
+        inputTokens: 4100,
+        outputTokens: 900,
+        totalTokens: 5000,
+        cost: 0.07,
+        messages: [{ at: "10:51:07", inputTokens: 4100, outputTokens: 900, totalTokens: 5000, cost: 0.07 }],
+      },
+      {
+        role: "security-verifier",
+        inputTokens: 3200,
+        outputTokens: 600,
+        totalTokens: 3800,
+        cost: 0.05,
+        messages: [{ at: "10:50:20", inputTokens: 3200, outputTokens: 600, totalTokens: 3800, cost: 0.05 }],
       },
     ],
     traceSpans: [],
   };
 }
 
-export function approvalFor(phase: string) {
+export function approvalFor(phase: string, prCreated = false) {
+  if (phase === 'completed') {
+    return prCreated
+      ? { prompt: 'Press Enter to close Herdr workspace', action: 'close' }
+      : { prompt: 'Press Enter to create MR/PR or close', action: 'completed-actions' };
+  }
   return (
     {
       proposed: { prompt: "Press Enter to approve apply", action: "apply" },
@@ -935,10 +999,6 @@ export function approvalFor(phase: string) {
       committing: {
         prompt: "Press Enter to complete committing",
         action: "archive",
-      },
-      completed: {
-        prompt: "Press Enter to close Herdr workspace",
-        action: "close",
       },
     } as Record<string, { prompt: string; action: string }>
   )[phase];

@@ -60,6 +60,7 @@ async function startArchive(ctx: Context, state: WorkflowState): Promise<void> {
   writeArchiveContext(ctx, state);
   await roles.launchRole(ctx, state, 'archive');
   state.developerApproval = true;
+  stateMod.saveState(state);
   telemetry.changePhase(ctx, state, 'archive', { reason: 'developer_approved' });
   telemetry.telemetry(ctx, state, 'archive_started');
 }
@@ -144,6 +145,7 @@ export async function approveDeveloperReview(ctx: Context, state: WorkflowState)
   }
   closeCompletedRolePanes(ctx, state);
   state.developerApproval = true;
+  stateMod.saveState(state);
   startGitOperations(ctx, state);
   return 'git operations started';
 }

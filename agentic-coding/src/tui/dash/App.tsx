@@ -46,6 +46,7 @@ import { VerdictModal } from "./ui/VerdictModal";
 import { ScrollableContent } from "./ui/ScrollableContent";
 import { VerificationTimelineModal } from "./ui/VerificationTimelineModal";
 import { FindingsModal, type FindingEvent } from "./ui/FindingsModal";
+import { CostModal } from "./ui/CostModal";
 import { EventsModal } from "./ui/EventsModal";
 import { HelpModal, type HelpSection } from "./ui/HelpModal";
 import { uiColors } from "./ui/colors";
@@ -147,6 +148,12 @@ export function App(props: {
   const [overrideConfirm, setOverrideConfirm] = createSignal(false);
   const [overrideSelection, setOverrideSelection] = createSignal(0);
   const [overridePhase, setOverridePhase] = createSignal<string>();
+  const [completedPicker, setCompletedPicker] = createSignal(false);
+  const [completedSelection, setCompletedSelection] = createSignal(0);
+  const [costOpen, setCostOpen] = createSignal(false);
+  const [costSelection, setCostSelection] = createSignal(0);
+  const [costAgent, setCostAgent] = createSignal<string | null>(null);
+  const [costOffset, setCostOffset] = createSignal(0);
   const [themeIndex, setThemeIndex] = createSignal(
     Math.max(0, themeNames.indexOf(loadThemeName())),
   );
@@ -324,6 +331,8 @@ export function App(props: {
         { key: "Enter", description: "Focus selected agent (Agents panel)" },
         { key: "Shift+O", description: "Overwrite workflow phase" },
         { key: "v", description: "View selected verifier verdict" },
+        { key: "c", description: "View agent cost breakdown" },
+        { key: "p", description: "Pause workflow (resume with Enter)" },
         { key: "r", description: "Refresh dashboard" },
         { key: "q", description: "Quit" },
         { key: "?", description: "Open help" },
@@ -462,8 +471,13 @@ export function App(props: {
       data().agents.find((agent) => agent.role === "worker")?.status !== "idle"
     )
       return undefined;
-    return approvalFor(data().state.phase);
+    return approvalFor(data().state.phase, data().state.prCreated);
   });
+  const completedActions = () => [
+    { label: "Create MR/PR", command: "create-pr" },
+    { label: "Close Herdr workspace", command: "close" },
+    { label: "Close & delete worktree", command: "close-clean" },
+  ];
   const workflowStatus = createMemo(() => {
     const phase = data().state.phase;
     if (phase === "committing") return { text: "Pushing changes", working: true };
@@ -576,6 +590,21 @@ export function App(props: {
       setHelp(true);
       setHelpOffset(0);
       props.keymap.setData("modal.active", "help");
+      return;
+    }
+    if (name === "c") {
+      setCostAgent(null);
+      setCostSelection(0);
+      setCostOffset(0);
+      setCostOpen(true);
+      props.keymap.setData("modal.active", "cost");
+      return;
+    }
+    if (name === "p" && !["paused", "completed", "closed"].includes(data().state.phase)) {
+      setOverridePhase("paused");
+      setOverrideSelection(1); // Cancel is the safe default
+      setOverrideConfirm(true);
+      props.keymap.setData("modal.active", "override-confirm");
       return;
     }
     if (name === "v" && activePanel() === 1) {
@@ -705,6 +734,12 @@ export function App(props: {
       if (!approval) return;
       if (approval.action === "review") {
         openDeveloperReview();
+        return;
+      }
+      if (approval.action === "completed-actions") {
+        setCompletedPicker(true);
+        setCompletedSelection(0);
+        props.keymap.setData("modal.active", "completed-picker");
         return;
       }
       setBusy(true);
@@ -876,6 +911,93 @@ export function App(props: {
       ],
       bindings: ["escape", "enter", "return", "j", "k", "up", "down"].map(
         (key) => ({ key, cmd: "override-confirm.handle" }),
+      ),
+    });
+    const disposeCompletedPicker = props.keymap.registerLayer({
+      name: "completed-picker",
+      priority: 1000,
+      activeModal: "completed-picker",
+      commands: [
+        {
+          name: "completed-picker.handle",
+          run: ({ event }) => {
+            if (busy()) return true;
+            const key = event.name.toLowerCase();
+            if (key === "escape") {
+              setCompletedPicker(false);
+              props.keymap.setData("modal.active", "none");
+            } else if (key === "j" || key === "down")
+              setCompletedSelection((index) =>
+                Math.min(2, index + 1),
+              );
+            else if (key === "k" || key === "up")
+              setCompletedSelection((index) => Math.max(0, index - 1));
+            else if (key === "enter" || key === "return") {
+              const action = completedActions()[completedSelection()];
+              if (!action) return true;
+              setCompletedPicker(false);
+              props.keymap.setData("modal.active", "none");
+              setBusy(true);
+              setMessage(`Running ${action.label}…`);
+              void runWorkflow(action.command, props.repo, props.change)
+                .then(setMessage)
+                .catch((error) =>
+                  setMessage(
+                    error instanceof Error ? error.message : String(error),
+                  ),
+                )
+                .finally(() => {
+                  setBusy(false);
+                  refresh();
+                });
+            }
+            return true;
+          },
+        },
+      ],
+      bindings: ["escape", "enter", "return", "j", "k", "up", "down"].map(
+        (key) => ({ key, cmd: "completed-picker.handle" }),
+      ),
+    });
+    const disposeCost = props.keymap.registerLayer({
+      name: "cost",
+      priority: 1000,
+      activeModal: "cost",
+      commands: [
+        {
+          name: "cost.handle",
+          run: ({ event }) => {
+            if (busy()) return true;
+            const key = event.name.toLowerCase();
+            if (key === "escape") {
+              if (costAgent()) {
+                setCostAgent(null);
+                setCostOffset(0);
+              } else {
+                setCostOpen(false);
+                props.keymap.setData("modal.active", "none");
+              }
+            } else if (key === "j" || key === "down") {
+              if (costAgent()) setCostOffset((value) => value + 1);
+              else
+                setCostSelection((index) =>
+                  Math.min(data().costBreakdown.length - 1, index + 1),
+                );
+            } else if (key === "k" || key === "up") {
+              if (costAgent()) setCostOffset((value) => Math.max(0, value - 1));
+              else setCostSelection((index) => Math.max(0, index - 1));
+            } else if (key === "enter" || key === "return") {
+              const row = data().costBreakdown[costSelection()];
+              if (!row) return true;
+              setCostAgent(row.role);
+              setCostOffset(0);
+            }
+            return true;
+          },
+        },
+      ],
+      bindings: ["escape", "enter", "return", "j", "k", "up", "down"].map(
+        (key) => ({ key, cmd: "cost.handle" }),
       ),
     });
     const disposeHelp = props.keymap.registerLayer({
@@ -1307,6 +1429,8 @@ export function App(props: {
         "shift+o",
         "r",
         "v",
+        "c",
+        "p",
         "?",
         "j",
         "k",
@@ -1325,6 +1449,8 @@ export function App(props: {
       disposeTheme();
       disposeOverridePicker();
       disposeOverrideConfirm();
+      disposeCompletedPicker();
+      disposeCost();
       disposeHelp();
       disposeVerification();
       disposeEvents();
@@ -1339,7 +1465,7 @@ export function App(props: {
     // modal closed by any path (mouse backdrop click, cancel, submit) never leaves
     // `modal.active` stuck — a stuck value deactivates the layers and kills keys.
     createEffect(() => {
-      const anyOpen = !!(verdict() || findings() || verificationDetail() || eventsDetail() || traceDetail() || help() || themePicker() || overridePicker() || overrideConfirm());
+      const anyOpen = !!(verdict() || findings() || verificationDetail() || eventsDetail() || traceDetail() || help() || themePicker() || overridePicker() || overrideConfirm() || completedPicker() || costOpen());
       if (!anyOpen) props.keymap.setData("modal.active", "none");
     });
   });
@@ -1353,39 +1479,16 @@ export function App(props: {
     const rows = data().verifierTimeline;
     const count = (status: string) =>
       rows.filter((row) => row.status.toLowerCase() === status).length;
-    const cost = data().telemetrySummary.reduce(
-      (sum, row) => sum + row.cost,
-      0,
-    );
     const reused = Object.keys(
       data().state.verificationReusedResults ?? {},
     ).length;
-    return `run ${count("run")} · pass ${count("pass")} · fail ${count("fail")} · skip ${count("skipped")}${reused ? ` · reused:${reused}` : ""} · $${cost.toFixed(2)}`;
+    return `run ${count("run")} · pass ${count("pass")} · fail ${count("fail")} · skip ${count("skipped")}${reused ? ` · reused:${reused}` : ""}`;
   });
   const prompt = createMemo(() =>
     data().state.phase === "paused"
       ? "Verification paused · developer intervention required"
       : (gate()?.prompt ?? "Waiting for workflow activity"),
   );
-  const stallBanner = createMemo(() => {
-    const phase = data().state.phase;
-    if (phase === "paused") return "Workflow paused";
-    if (
-      !["explore", "apply", "fix", "triage", "verify", "archive", "committing"].includes(
-        phase,
-      ) ||
-      data().agents.some((agent) => agent.status === "working")
-    )
-      return undefined;
-    const since =
-      data().state.phaseStartedAt ??
-      data().state.verificationStartedAt ??
-      data().state.createdAt;
-    const minutes = since
-      ? Math.floor((Date.now() - Date.parse(since)) / 60000)
-      : 0;
-    return minutes >= 10 ? `${phase} idle for ${minutes}m` : undefined;
-  });
 
   return (
     <box style={{ width: '100%', height: '100%' }}>
@@ -1403,24 +1506,6 @@ export function App(props: {
               gap: 1,
             }}
           >
-            <Show when={stallBanner()}>
-              {(message) => (
-                <box
-                  width="100%"
-                  height={1}
-                  flexShrink={0}
-                  backgroundColor={uiColors.warning}
-                  paddingLeft={1}
-                  paddingRight={1}
-                  flexDirection="row"
-                >
-                  <text fg={uiColors.bgBase}>
-                    WORKFLOW MAY BE STALLED · {message()}
-                  </text>
-                  <box flexGrow={1} />
-                </box>
-              )}
-            </Show>
             <box
               style={{
                 width: "100%",
@@ -1671,8 +1756,8 @@ export function App(props: {
                                 {entry().durationSeconds !== undefined
                                   ? ` · ${entry().durationSeconds}s`
                                   : ""}
-                                {entry().cost
-                                  ? ` · $${(entry().cost ?? 0).toFixed(2)}`
+                                {agent.cost
+                                  ? ` · $${agent.cost.toFixed(2)}`
                                   : ""}
                                 {entry().fallback ? " · fallback" : ""}
                               </text>
@@ -1825,6 +1910,24 @@ export function App(props: {
           )}
         />
       </Show>
+      <Show when={completedPicker()}>
+        <ListViewModal
+          title="Workflow complete — choose next step"
+          fieldLabel="Action"
+          items={completedActions().map(action => action.label)}
+          selectedIndex={completedSelection()}
+          help={[
+            { key: "j/k", action: "Navigate" },
+            { key: "Enter", action: "Run" },
+            { key: "Esc", action: "Cancel" },
+          ]}
+          renderItem={(item, selected) => (
+            <text fg={selected ? uiColors.primary : uiColors.textSecondary}>
+              {item}
+            </text>
+          )}
+        />
+      </Show>
       <Show when={help()}>
         <HelpModal
           title="Dashboard keybindings"
@@ -1955,6 +2058,14 @@ export function App(props: {
           startedAt={data().state.verificationStartedAt}
           entries={data().verifierTimeline}
           selected={selectedVerification()}
+        />
+      </Show>
+      <Show when={costOpen()}>
+        <CostModal
+          rows={data().costBreakdown}
+          selected={costSelection()}
+          agent={costAgent()}
+          offset={costOffset()}
         />
       </Show>
       <Show when={verdict()}>

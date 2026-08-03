@@ -57,9 +57,10 @@ Workflow commands (`--repo <path> --change <id>` required on all but `projects`/
 | `verify` | — | Re-enter the verify phase (e.g. after a fix round). |
 | `dispatch-verifiers` | — | Start the review-tier verifier roles for the current round. |
 | `finish-review` | — | Consolidate verifier verdicts and transition out of verify (also: developer review approval). |
+| `create-pr` | — | Create the PR/MR for a completed workflow (once; then only `close` remains). |
 | `verification-result` | `--role <name>` (required) | Record one verifier role's pass/fail verdict. |
 | `archive` | — | Start the archive role after developer approval; then commit/push. |
-| `close` | — | Tear down panes/tabs after archive completes. |
+| `close` | `--clean` (optional) | Tear down panes/tabs after archive completes; `--clean` also deletes the worktree directory. |
 | `status` | — | Print the current workflow state (read from the sqlite store). |
 | `git-operations` | — | Stage/commit/push the finished change without an agent. |
 | `phase <phase>` | — | Force-set the recorded phase (no transition logic). |
@@ -110,10 +111,17 @@ worker_default = "provider/model"
 planner = "provider/model"
 ```
 
+PR/MR creation is optional and user-triggered (`create-pr` after git operations); the tool is auto-detected from the origin remote (`github.com` → `gh`, `gitlab.com` → `glab`) unless pinned:
+
+```toml
+[workflow]
+pr_tool = "gh"
+```
+
 ## Binary-only install
 
 The compiled binary is self-sufficient: it embeds a snapshot of the agent
-skills + extensions (14 role skills, 2 Pi extensions) and **injects them
+skills + extensions (13 role skills, 2 Pi extensions) and **injects them
 per-workflow** — on each role launch they are materialized into that workflow's
 own `<repo>/.herdr-workflow/<change>/agent-definitions/` (gitignored) and only
 that workflow's agents reference them via `--skill`/`--extension`. Nothing is

@@ -69,8 +69,8 @@ describe('rolePrompt', () => {
     expect(text).toContain('round-1-security-verifier-context.md');
     expect(text).toContain('round-1-security-verifier.findings.jsonl');
     expect(text).toContain('critical|warning|info');
-    expect(text).toContain('Supported record types are finding and verdict only');
-    expect(text).toContain('exactly one final');
+    expect(text).toContain('Supported record type is finding only');
+    expect(text).toContain('verdict is derived by the workflow engine');
   });
 
   test('each verifier has custom silent prompt', () => {
@@ -98,7 +98,7 @@ describe('rolePrompt', () => {
     expect(text).toContain('do not rerun changed tests already covered');
     expect(text).toContain('Reuse prior baseline evidence from context');
     expect(text).toContain('one focused baseline reproduction');
-    expect(text).toContain('confirmed pre-existing unrelated failures');
+    expect(text).toContain('confirmed pre-existing unrelated failure');
   });
 
   test('specialized verifiers stay within assigned context', () => {
@@ -116,7 +116,7 @@ describe('rolePrompt', () => {
     for (const role of ['planner', 'worker']) {
       expect(prompts.rolePrompt(role, 'my-change').toLowerCase()).not.toContain('silent');
     }
-    for (const role of ['triage', 'security-verifier', 'agents-verifier', 'quality-verifier', 'performance-verifier', 'openspec-verifier', 'usability-verifier', 'test-verifier', 'archive', 'recovery']) {
+    for (const role of ['triage', 'security-verifier', 'agents-verifier', 'quality-verifier', 'performance-verifier', 'openspec-verifier', 'usability-verifier', 'test-verifier', 'archive']) {
       expect(prompts.rolePrompt(role, 'my-change', 1).toLowerCase()).toContain('silent');
     }
   });
@@ -135,12 +135,6 @@ describe('rolePrompt', () => {
     expect(text).toContain('do not stay active'); // archive is terminal, still one-shot
   });
 
-  test('recovery prompt lists allowlisted actions', () => {
-    const text = prompts.rolePrompt('recovery', 'my-change');
-    expect(text).toContain('retry-verification');
-    expect(text).toContain('dispatch-triage');
-    expect(text).toContain('record-verifier-result');
-  });
 });
 
 describe('piArguments', () => {

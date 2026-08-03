@@ -27,6 +27,11 @@ function openDb(repo: string): Database {
   const dir = path.join(repo, '.herdr-workflow');
   fs.mkdirSync(dir, { recursive: true });
   const db = new Database(dbPath(repo), { create: true });
+  // Multi-process writers (concurrent verifier reports) wait for the lock
+  // instead of failing with SQLITE_BUSY. WAL keeps readers (dashboard polls)
+  // from blocking writers and vice versa.
+  db.exec('PRAGMA busy_timeout = 10000');
+  db.exec('PRAGMA journal_mode = WAL');
   db.exec('CREATE TABLE IF NOT EXISTS workflows (change_id TEXT PRIMARY KEY, state TEXT NOT NULL)');
   return db;
 }
@@ -63,12 +68,15 @@ export function setPhase(state: WorkflowState, phase: string): void {
   state.phaseStartedAt = new Date().toISOString();
 }
 
-/** Persist the state object. Written to the worktree DB and, in worktree mode,
- * the repository DB — same dual-path semantics the old state.json had. */
-export function saveState(state: WorkflowState): string {
+function persistedState(state: WorkflowState): WorkflowState {
   const persisted = { ...state };
   for (const field of LAYOUT_FIELDS) delete persisted[field];
+  return persisted;
+}
+
+function writeMirror(state: WorkflowState, persisted: WorkflowState, skip?: string): void {
   for (const repo of new Set([state.worktree, state.repository])) {
+    if (repo === skip) continue;
     const db = openDb(repo);
     try {
       upsert(db, state.changeId, persisted);
@@ -76,7 +84,44 @@ export function saveState(state: WorkflowState): string {
       db.close();
     }
   }
+}
+
+/** Persist the state object. Written to the worktree DB and, in worktree mode,
+ * the repository DB — same dual-path semantics the old state.json had. */
+export function saveState(state: WorkflowState): string {
+  writeMirror(state, persistedState(state));
   return dbPath(state.worktree);
+}
+
+/**
+ * Atomic read-modify-write: load, mutate, and save under one BEGIN IMMEDIATE
+ * transaction, so concurrent writers (verifier agents reporting at the same
+ * moment) serialize instead of clobbering each other's results. The other DB
+ * (worktree <-> repository) is mirrored after commit. Callers pass a sync fn;
+ * the state argument is the committed row.
+ */
+export function updateState(repo: string, change: string, fn: (s: WorkflowState) => void): WorkflowState {
+  const db = openDb(repo);
+  try {
+    db.exec('BEGIN IMMEDIATE');
+    const row = db.query('SELECT state FROM workflows WHERE change_id = ?').get(change) as { state: string } | null;
+    if (!row) throw new Error(`workflow not found: ${change}`);
+    const state = JSON.parse(row.state) as WorkflowState;
+    fn(state);
+    upsert(db, change, persistedState(state));
+    db.exec('COMMIT');
+    writeMirror(state, persistedState(state), repo);
+    return state;
+  } catch (error) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      /* no active transaction */
+    }
+    throw error;
+  } finally {
+    db.close();
+  }
 }
 
 /** All workflows recorded for one repository, newest first. */

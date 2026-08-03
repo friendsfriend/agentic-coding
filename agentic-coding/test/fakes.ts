@@ -17,7 +17,6 @@ export const DEFAULT_CONFIG = {
     git: 'test/git',
     planner: 'test/planner',
     triage: 'test/triage',
-    recovery: 'test/recovery',
   },
   thinking: {
     worker_default: 'high',
@@ -25,7 +24,6 @@ export const DEFAULT_CONFIG = {
     verifier_lite: 'medium',
     planner: 'high',
     triage: 'high',
-    recovery: 'high',
     archive: 'high',
   },
   workflow: {

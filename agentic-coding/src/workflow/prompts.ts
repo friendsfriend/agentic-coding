@@ -8,7 +8,7 @@ import * as naming from './naming.ts';
 import { REPORT_CONTRACT } from './findings.ts';
 
 export const UNRESTRICTED_ROLES = new Set(['planner', 'worker']);
-export const ONE_SHOT_ROLES = new Set(['recovery', 'archive']);
+export const ONE_SHOT_ROLES = new Set(['archive']);
 // Herdr extensions loaded by explicit --extension flag, skip in discovery to avoid double-loading
 export const HERDR_EXTENSIONS = new Set(['herdr-telemetry', 'herdr-workflow']);
 export const PI_EXTENSION_DIRS = [path.join(paths.AGENT_DIR, 'extensions'), path.join(paths.AGENT_DEF_DIR, 'extensions'), path.join(os.homedir(), '.config', 'pi', 'extensions')];
@@ -16,7 +16,6 @@ export const PI_EXTENSION_DIRS = [path.join(paths.AGENT_DIR, 'extensions'), path
 export const ROLE_TOOLS: Record<string, string> = {
   planner: 'read,bash,edit,write',
   triage: 'read,bash,edit,write',
-  recovery: 'read,bash,edit,write',
   worker: 'read,bash,edit,write',
   'security-verifier': 'read,bash',
   'agents-verifier': 'read,bash',
@@ -112,7 +111,7 @@ export function rolePrompt(role: string, change: string, verificationRound?: num
     'performance-verifier': 'Review changed hot paths for measurable query, I/O, CPU, blocking, and memory regressions.',
     'openspec-verifier': 'Compare implementation against approved proposal, design, specs, and tasks for missing, incompatible, or out-of-scope behavior.',
     'usability-verifier': 'Review changed frontend and asset files for introduced visual consistency, accessibility, responsive layout, design-system, component-state, and hardcoded-style defects.',
-    'test-verifier': "Run the repository's complete configured test suite once without filters; do not rerun changed tests already covered. PASS requires success or only confirmed pre-existing unrelated failures. Reuse prior baseline evidence from context; one focused baseline reproduction is allowed only for a new apparently unrelated full-suite failure.",
+    'test-verifier': "Run the repository's complete configured test suite once without filters; do not rerun changed tests already covered. Report a critical finding for any failure not confirmed pre-existing and unrelated in the prior baseline; report an info finding for each confirmed pre-existing unrelated failure; report nothing when the suite passes. Reuse prior baseline evidence from context; one focused baseline reproduction is allowed only for a new apparently unrelated full-suite failure.",
   };
   const verifierLabel: Record<string, string> = {
     'security-verifier': 'security verifier',
@@ -130,19 +129,13 @@ export function rolePrompt(role: string, change: string, verificationRound?: num
       ? ' Review only; do not run tests, formatting, lint, type, or build commands. Treat generated context as authoritative scope: no full-repository git diff or unrelated changed-file inspection; read full assigned files or direct dependencies only when needed to understand a scoped hunk.'
       : '';
     return (
-      `Silent ${verifierLabel[role]} for ${change} round ${verificationRound}. Read ${context}. ${verifierFocus[role]}${reviewOnly} ${REPORT_CONTRACT} Write the report to ${report}, then run herdr-workflow verification-result --repo . --change ${change} --role ${role}. No chat output. Only report actual defects and issues. Do not include findings that merely confirm code was implemented correctly — if nothing is wrong, write only the PASS verdict with no findings.` +
+      `Silent ${verifierLabel[role]} for ${change} round ${verificationRound}. Read ${context}. ${verifierFocus[role]}${reviewOnly} ${REPORT_CONTRACT} Write the report to ${report}, then run herdr-workflow verification-result --repo . --change ${change} --role ${role}. No chat output. Only report actual defects and issues. Do not include findings that merely confirm code was implemented correctly — if nothing is wrong, write no findings and the round passes.` +
       persistent
     );
   }
   if (role === 'archive') {
     return (
       `Silent archive agent for OpenSpec change ${change}. Read .herdr-workflow/${change}/reviews/archive-context.md only; do not read review history or telemetry. Follow its archive instructions, then run herdr-workflow archive --repo . --change ${change}. No chat output.` +
-      restricted
-    );
-  }
-  if (role === 'recovery') {
-    return (
-      `Silent recovery agent for ${change}. Read .herdr-workflow/${change}/reviews/recovery-context.json. Write .herdr-workflow/${change}/reviews/recovery-plan.json with matching recoveryId and exactly one allowlisted action: retry-verification, dispatch-triage, or record-verifier-result (include role). Do not execute plan, mutate state, commit, push, or archive. No chat output.` +
       restricted
     );
   }

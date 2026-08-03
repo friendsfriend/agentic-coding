@@ -3,6 +3,7 @@
 import * as effects from './effects.ts';
 import * as orchestration from './orchestration.ts';
 import * as plugins from './plugins.ts';
+import * as pr from './pr.ts';
 import { REPORT_CONTRACT } from './findings.ts';
 import * as transitions from './transitions.ts';
 
@@ -11,7 +12,7 @@ export const SUBCOMMANDS = [
   'dispatch-verifiers', 'archive', 'close', 'status',
   'git-operations', 'phase', 'override-phase',
   'preflight-archive', 'set-return', 'verification-result', 'message', 'plugin',
-  'finish-review',
+  'finish-review', 'create-pr',
 ] as const;
 
 // subcommand -> required flag dests (positionals excluded)
@@ -29,6 +30,7 @@ export const REQUIRED_FLAGS: Record<string, string[]> = {
   'override-phase': ['repo', 'change'],
   'preflight-archive': ['repo', 'change'],
   'set-return': ['repo', 'change', 'workspace'],
+  'create-pr': ['repo', 'change'],
   'verification-result': ['repo', 'change', 'role'],
   message: ['repo', 'change', 'sender', 'target'],
 };
@@ -50,8 +52,9 @@ const HELP: Record<string, { usage: string; summary: string; details?: string }>
   verify: { usage: 'verify --repo <path> --change <id>', summary: 'Re-enter the verify phase (e.g. after a fix round).' },
   'dispatch-verifiers': { usage: 'dispatch-verifiers --repo <path> --change <id>', summary: 'Start the review-tier verifier roles for the current round.' },
   'finish-review': { usage: 'finish-review --repo <path> --change <id>', summary: 'Consolidate verifier verdicts and transition out of verify.' },
+  'create-pr': { usage: 'create-pr --repo <path> --change <id>', summary: 'Create the PR/MR for a completed workflow (once; then only close remains).' },
   archive: { usage: 'archive --repo <path> --change <id>', summary: 'Start the archive role after developer approval.' },
-  close: { usage: 'close --repo <path> --change <id>', summary: 'Tear down the workflow (panes/tabs) after archive completes.' },
+  close: { usage: 'close --repo <path> --change <id> [--clean]', summary: 'Tear down the workflow (panes/tabs) after archive completes; --clean also deletes the worktree directory.' },
   status: { usage: 'status --repo <path> --change <id>', summary: 'Print the current state.json for the change.' },
   'git-operations': { usage: 'git-operations --repo <path> --change <id>', summary: 'Start the git-operations role to push/PR the finished change.' },
   phase: { usage: 'phase <phase> --repo <path> --change <id>', summary: 'Force-set the recorded phase without running its transition logic.' },
@@ -160,13 +163,17 @@ export async function run(argv: string[]): Promise<void> {
       requireFlags(command, { repo, change });
       await orchestration.cmdFinishReview(ctx, { repo, change });
       return;
+    case 'create-pr':
+      requireFlags(command, { repo, change });
+      pr.cmdCreatePr(ctx, { repo, change });
+      return;
     case 'archive':
       requireFlags(command, { repo, change });
       await orchestration.cmdArchive(ctx, { repo, change });
       return;
     case 'close':
       requireFlags(command, { repo, change });
-      orchestration.cmdClose(ctx, { repo, change });
+      orchestration.cmdClose(ctx, { repo, change, clean: rest.includes('--clean') });
       return;
     case 'status':
       requireFlags(command, { repo, change });

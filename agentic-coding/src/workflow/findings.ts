@@ -1,7 +1,7 @@
 // Pure finding schema validation and cross-verifier consolidation.
 import { createHash } from 'node:crypto';
 
-export const REPORT_CONTRACT = 'JSONL report contract: write 0-30 {"type":"finding","severity":"critical|warning|info","path":"<file>","line":<integer>,"detail":"<issue>","evidence":"<optional evidence>","fix":"<optional fix>"} records, then exactly one final {"type":"verdict","verdict":"PASS|FAIL"} record. Supported record types are finding and verdict only.';
+export const REPORT_CONTRACT = 'JSONL report contract: write 0-30 {"type":"finding","severity":"critical|warning|info","path":"<file>","line":<integer>,"detail":"<issue>","evidence":"<optional evidence>","fix":"<optional fix>"} records. Supported record type is finding only; the verdict is derived by the workflow engine (any critical finding fails the round).';
 
 export interface FindingEvent {
   type?: string;
@@ -12,7 +12,6 @@ export interface FindingEvent {
   evidence?: string;
   fix?: string;
   id?: string;
-  verdict?: string;
   [key: string]: unknown;
 }
 
@@ -30,11 +29,8 @@ export interface Finding {
 }
 
 export function validateReportEvents(events: FindingEvent[], path: string): void {
-  if (events.length > 31) throw new Error(`report exceeds 30 findings plus verdict: ${path}`);
-  const verdicts = events.filter(event => event.type === 'verdict');
-  if (verdicts.length !== 1 || events.at(-1)?.type !== 'verdict' || !['PASS', 'FAIL'].includes(verdicts[0]?.verdict ?? '')) throw new Error(`report must end with exactly one JSONL verdict PASS or FAIL: ${path}`);
+  if (events.length > 30) throw new Error(`report exceeds 30 findings: ${path}`);
   for (const event of events) {
-    if (event.type === 'verdict') continue;
     if (event.type !== 'finding') throw new Error(`report contains unsupported record type: ${path}`);
     if (
       !['critical', 'warning', 'info'].includes(event.severity ?? '') ||

@@ -65,8 +65,12 @@ export function telemetry(ctx: Context, state: WorkflowState, event: string, opt
 
 export function changePhase(ctx: Context, state: WorkflowState, target: string, fields: Record<string, unknown> = {}): void {
   const source = state.phase;
+  // Commit under one write transaction (re-reading the row) so a phase change
+  // never clobbers a concurrently committed verifier result. The caller's
+  // in-memory object is updated with the same phase fields — accumulate-then-
+  // save callers (cmdVerify) keep their pending mutations on the object.
   stateMod.setPhase(state, target);
-  stateMod.saveState(state);
+  stateMod.updateState(state.worktree, state.changeId, s => stateMod.setPhase(s, target));
   telemetry(ctx, state, 'phase_changed', { source, target, ...fields });
 }
 

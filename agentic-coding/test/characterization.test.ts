@@ -19,7 +19,7 @@ const EXPECTED_SUBCOMMANDS = new Set([
   'dispatch-verifiers', 'archive', 'close', 'status',
   'git-operations', 'phase', 'override-phase',
   'preflight-archive', 'set-return', 'verification-result', 'message', 'plugin',
-  'finish-review',
+  'finish-review', 'create-pr',
 ]);
 
 const EXPECTED_REQUIRED_FLAGS: Record<string, Set<string>> = {
@@ -36,6 +36,7 @@ const EXPECTED_REQUIRED_FLAGS: Record<string, Set<string>> = {
   'override-phase': new Set(['repo', 'change']),
   'preflight-archive': new Set(['repo', 'change']),
   'set-return': new Set(['repo', 'change', 'workspace']),
+  'create-pr': new Set(['repo', 'change']),
   'verification-result': new Set(['repo', 'change', 'role']),
   message: new Set(['repo', 'change', 'sender', 'target']),
 };
@@ -96,7 +97,7 @@ describe('--help', () => {
     expect(logs.length).toBeGreaterThan(cli.SUBCOMMANDS.length);
     expect(logs.every(line => typeof line === 'string' && line.length > 0)).toBe(true);
     expect(logs.some(line => line.includes('critical|warning|info'))).toBe(true);
-    expect(logs.some(line => line.includes('finding and verdict only'))).toBe(true);
+    expect(logs.some(line => line.includes('Supported record type is finding only'))).toBe(true);
   });
 });
 

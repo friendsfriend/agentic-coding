@@ -8,7 +8,6 @@
 
 [thinking]
 triage = "high"
-recovery = "high"
 verifier_lite = "high"
 planner = "high"
 worker_default = "high"

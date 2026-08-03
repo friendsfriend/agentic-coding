@@ -25,6 +25,7 @@ import * as transitions from './transitions.ts';
 
 export { cmdFinishReview } from './reviews.ts';
 export { cmdArchive, cmdGitOperations, cmdPreflightArchive } from './completion.ts';
+export { cmdCreatePr } from './pr.ts';
 export { launchRole, promptRole, roleAgentName, startRole } from './roles.ts';
 export { triageInputPath, triagePlanPath, reportPath, optionalFindings } from './reviews.ts';
 
@@ -42,6 +43,7 @@ export interface Args {
   sender?: string;
   target?: string;
   text?: string;
+  clean?: boolean;
 }
 
 export async function cmdPlanner(ctx: Context, args: Args): Promise<void> {
@@ -207,6 +209,7 @@ export async function cmdVerify(ctx: Context, args: Args): Promise<void> {
   state.testVerifierStarted = false;
   state.previousVerificationResults = state.verificationResults ?? {};
   state.verificationResults = {};
+  state.verificationReported = {};
   state.verificationRoleStartedAt = {};
   delete state.verificationTimeoutRoles;
   const [tier] = reviews.getReviewTier(ctx, state);
@@ -275,20 +278,36 @@ export async function cmdDispatchVerifiers(ctx: Context, args: Args): Promise<vo
 }
 
 export async function cmdVerificationResult(ctx: Context, args: Args): Promise<void> {
-  const state = stateMod.loadState(args.repo!, args.change!);
-  if (state.phase !== 'verify') {
-    console.log(`verification result ignored: phase ${state.phase}`);
-    return;
-  }
+  // Load, record, and save under one write transaction (state.updateState): a
+  // verifier's report counts exactly once per round, and concurrent reporters
+  // serialize instead of clobbering each other's results.
+  let recorded = false;
+  let verdict = '';
+  let observedFindings: findings.Finding[] = [];
+  const state = stateMod.updateState(args.repo!, args.change!, s => {
+    if (s.phase !== 'verify') {
+      console.log(`verification result ignored: phase ${s.phase}`);
+      return;
+    }
+    const rolesList: readonly string[] = s.verificationRoles ?? tiering.VERIFIER_ROLES;
+    if (!rolesList.includes(args.role!) && args.role !== tiering.TEST_VERIFIER) throw new Error(`unknown verifier role: ${args.role}`);
+    const roundKey = `${s.verificationRound}:${args.role}`;
+    if (s.verificationReported?.[roundKey]) {
+      console.log(`verification result already recorded for ${args.role} (round ${s.verificationRound}); ignoring duplicate`);
+      return;
+    }
+    const [report, events] = reviews.reportEvents(s, args.role!);
+    observedFindings = findings.consolidate({ [args.role!]: events }, [], new Set());
+    // The verdict is derived from the findings — agents never write a verdict
+    // record. Any critical finding fails the round; warning/info findings ride a
+    // PASS into the developer-review advisory flow.
+    verdict = observedFindings.some(item => item.severity === 'critical') ? 'FAIL' : 'PASS';
+    s.verificationResults = { ...(s.verificationResults ?? {}), [args.role!]: { verdict, report } };
+    s.verificationReported = { ...(s.verificationReported ?? {}), [roundKey]: true };
+    recorded = true;
+  });
+  if (!recorded) return;
   const rolesList: readonly string[] = state.verificationRoles ?? tiering.VERIFIER_ROLES;
-  if (!rolesList.includes(args.role!) && args.role !== tiering.TEST_VERIFIER) throw new Error(`unknown verifier role: ${args.role}`);
-  const [report, events] = reviews.reportEvents(state, args.role!);
-  const verdictEvent = [...events].reverse().find(event => event.type === 'verdict');
-  if (!verdictEvent || !['PASS', 'FAIL'].includes(verdictEvent.verdict ?? '')) throw new Error(`report must end with JSONL verdict PASS or FAIL: ${report}`);
-  const verdict = verdictEvent.verdict!;
-  const observedFindings = findings.consolidate({ [args.role!]: events }, [], new Set());
-  state.verificationResults = { ...(state.verificationResults ?? {}), [args.role!]: { verdict, report } };
-  stateMod.saveState(state);
   const started = state.verificationRoleStartedAt?.[args.role!];
   const duration = started ? (ctx.clock.now().getTime() - new Date(started).getTime()) / 1000 : null;
   const severityCounts: Record<string, number> = {};
@@ -325,9 +344,20 @@ export function cmdClose(ctx: Context, args: Args): void {
   const state = stateMod.loadState(args.repo!, args.change!);
   if (state.phase !== 'completed') throw new Error(`close requires completed phase, found ${state.phase}`);
   telemetry.changePhase(ctx, state, 'closed');
-  telemetry.telemetry(ctx, state, 'workflow_closed');
+  telemetry.telemetry(ctx, state, 'workflow_closed', args.clean ? { clean: true } : {});
   ctx.herdr.call('workspace', 'close', state.workspace);
-  console.log('workspace closed; branch and checkout kept');
+  if (args.clean && state.worktree !== state.repository) {
+    // Delete the workflow's worktree dir. Prefer `git worktree remove` so the
+    // registration is dropped too; fall back to plain removal when the dir was
+    // never a registered worktree (or is already gone). Explicit --clean only.
+    try {
+      ctx.git.run(['worktree', 'remove', '--force', state.worktree], state.repository);
+    } catch {
+      fs.rmSync(state.worktree, { recursive: true, force: true });
+    }
+    console.log('worktree removed');
+  }
+  console.log('workspace closed; branch kept');
 }
 
 export function cmdOverridePhase(ctx: Context, args: Args): void {

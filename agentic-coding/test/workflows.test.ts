@@ -81,7 +81,7 @@ async function passVerifier(role: string) {
   const state = stateMod.loadState(repo, 'my-change');
   const reportPath = orchestration.reportPath(state, role);
   fs.mkdirSync(path.dirname(reportPath), { recursive: true });
-  fs.writeFileSync(reportPath, JSON.stringify({ type: 'verdict', verdict: 'PASS' }) + '\n');
+  fs.writeFileSync(reportPath, ''); // no findings = pass (verdict is engine-derived)
   await orchestration.cmdVerificationResult(ctx, { repo, change: 'my-change', role });
   if (role === 'test-verifier') {
     // test-verifier skill ends with finish-review (deterministic consolidation)
@@ -196,5 +196,157 @@ describe('no-openspec workflow', () => {
     state = stateMod.loadState(repo, 'my-change');
     expect(state.phase).toBe('completed');
     expect(state.panes.archive).toBeUndefined();
+  });
+});
+
+describe('close', () => {
+  test('close --clean removes the worktree directory', () => {
+    const worktree = path.join(tmp, 'worktree');
+    fs.mkdirSync(worktree, { recursive: true });
+    fs.writeFileSync(path.join(worktree, 'file.txt'), 'work');
+    makeState('completed', { worktree, repository: repo });
+
+    orchestration.cmdClose(ctx, { repo, change: 'my-change', clean: true });
+
+    expect(fs.existsSync(worktree)).toBe(false);
+    expect(herdr.calls.some(call => call[0] === 'workspace' && call[1] === 'close')).toBe(true);
+  });
+
+  test('close without --clean keeps the worktree directory', () => {
+    const worktree = path.join(tmp, 'worktree-keep');
+    fs.mkdirSync(worktree, { recursive: true });
+    fs.writeFileSync(path.join(worktree, 'file.txt'), 'work');
+    makeState('completed', { worktree, repository: repo });
+
+    orchestration.cmdClose(ctx, { repo, change: 'my-change' });
+
+    expect(fs.existsSync(worktree)).toBe(true);
+    expect(herdr.calls.some(call => call[0] === 'workspace' && call[1] === 'close')).toBe(true);
+  });
+});
+
+describe('verification-result idempotency and concurrency', () => {
+  function writeReport(role: string, findingsList: any[] = []) {
+    const reportPath = orchestration.reportPath(stateMod.loadState(repo, 'my-change'), role);
+    fs.mkdirSync(path.dirname(reportPath), { recursive: true });
+    fs.writeFileSync(reportPath, findingsList.map(finding => JSON.stringify(finding)).join('\n') + (findingsList.length ? '\n' : ''));
+  }
+
+  function agentStarts(role: string): number {
+    const prefix = `my-change-${role}`;
+    return herdr.calls.filter(call => call[0] === 'agent' && call[1] === 'start' && call[2]?.startsWith(prefix)).length;
+  }
+
+  test('duplicate reports do not re-trigger transitions', async () => {
+    // Set up a real round 1 through verify/dispatch so all review artifacts exist.
+    makeState('apply');
+    writeChangeArtifacts(true);
+    dirtyFile();
+    await orchestration.cmdVerify(ctx, { repo, change: 'my-change' });
+    let state = stateMod.loadState(repo, 'my-change');
+    expect(state.phase).toBe('triage');
+    const triageInput = JSON.parse(fs.readFileSync(orchestration.triageInputPath(state), 'utf8'));
+    const plan = { roles: { 'quality-verifier': { reason: 'code change', files: triageInput.allChangedFiles } } };
+    fs.writeFileSync(orchestration.triagePlanPath(state), JSON.stringify(plan));
+    await orchestration.cmdDispatchVerifiers(ctx, { repo, change: 'my-change' });
+    state = stateMod.loadState(repo, 'my-change');
+    expect(state.phase).toBe('verify');
+
+    // First quality-verifier pass (no findings): records, starts test verifier, stays in verify.
+    writeReport('quality-verifier');
+    await orchestration.cmdVerificationResult(ctx, { repo, change: 'my-change', role: 'quality-verifier' });
+    state = stateMod.loadState(repo, 'my-change');
+    expect(state.testVerifierStarted).toBe(true);
+    expect(state.verificationReported?.['1:quality-verifier']).toBe(true);
+    expect(agentStarts('test-verifier')).toBe(1);
+
+    // Duplicate PASS while still in verify: ignored, no second test-verifier start.
+    await orchestration.cmdVerificationResult(ctx, { repo, change: 'my-change', role: 'quality-verifier' });
+    state = stateMod.loadState(repo, 'my-change');
+    expect(state.phase).toBe('verify');
+    expect(state.verificationResults?.['quality-verifier']?.verdict).toBe('PASS');
+    expect(agentStarts('test-verifier')).toBe(1);
+
+    // Test verifier FAIL (critical finding): one fix round, one worker start.
+    writeReport('test-verifier', [{ type: 'finding', severity: 'critical', path: 'src/suite.test.ts', line: 1, detail: 'suite failure introduced by change' }]);
+    await orchestration.cmdVerificationResult(ctx, { repo, change: 'my-change', role: 'test-verifier' });
+    state = stateMod.loadState(repo, 'my-change');
+    expect(state.phase).toBe('fix');
+    expect(agentStarts('worker')).toBe(1);
+
+    // Duplicate FAIL after the round transitioned: ignored, no second worker start.
+    await orchestration.cmdVerificationResult(ctx, { repo, change: 'my-change', role: 'test-verifier' });
+    state = stateMod.loadState(repo, 'my-change');
+    expect(state.phase).toBe('fix');
+    expect(agentStarts('worker')).toBe(1);
+  });
+
+  test('critical finding fails the round with no verdict record', async () => {
+    // Set up a real round 1 through verify/dispatch so all review artifacts exist.
+    makeState('apply');
+    writeChangeArtifacts(true);
+    dirtyFile();
+    await orchestration.cmdVerify(ctx, { repo, change: 'my-change' });
+    let state = stateMod.loadState(repo, 'my-change');
+    const triageInput = JSON.parse(fs.readFileSync(orchestration.triageInputPath(state), 'utf8'));
+    const plan = { roles: { 'quality-verifier': { reason: 'code change', files: triageInput.allChangedFiles } } };
+    fs.writeFileSync(orchestration.triagePlanPath(state), JSON.stringify(plan));
+    await orchestration.cmdDispatchVerifiers(ctx, { repo, change: 'my-change' });
+    state = stateMod.loadState(repo, 'my-change');
+    expect(state.phase).toBe('verify');
+
+    // Findings-only report — no verdict record anywhere. A critical finding
+    // derives FAIL and the round fails fast to a fix round.
+    const reportPath = orchestration.reportPath(state, 'quality-verifier');
+    fs.mkdirSync(path.dirname(reportPath), { recursive: true });
+    fs.writeFileSync(reportPath, JSON.stringify({ type: 'finding', severity: 'critical', path: 'src/thing.ts', line: 5, detail: 'sql injection' }) + '\n');
+    await orchestration.cmdVerificationResult(ctx, { repo, change: 'my-change', role: 'quality-verifier' });
+    state = stateMod.loadState(repo, 'my-change');
+    expect(state.phase).toBe('fix');
+    expect(state.verificationResults?.['quality-verifier']?.verdict).toBe('FAIL');
+    expect(agentStarts('worker')).toBe(1);
+  });
+
+  test('warning findings derive PASS and stay advisory', async () => {
+    makeState('verify', { verificationRound: 1, verificationRoles: ['quality-verifier'], verificationResults: {}, verificationReported: {}, testVerifierStarted: false });
+    // writeTestContext reads the triage input for the changed-files list.
+    const triageInput = orchestration.triageInputPath(stateMod.loadState(repo, 'my-change'));
+    fs.mkdirSync(path.dirname(triageInput), { recursive: true });
+    fs.writeFileSync(triageInput, JSON.stringify({ allChangedFiles: ['README.md'] }));
+    writeReport('quality-verifier', [{ type: 'finding', severity: 'warning', path: 'src/thing.ts', line: 5, detail: 'naming smell' }]);
+    await orchestration.cmdVerificationResult(ctx, { repo, change: 'my-change', role: 'quality-verifier' });
+    // Pass the round fully so findings consolidate into the developer-review flow.
+    writeReport('test-verifier');
+    await orchestration.cmdVerificationResult(ctx, { repo, change: 'my-change', role: 'test-verifier' });
+    await orchestration.cmdFinishReview(ctx, { repo, change: 'my-change' });
+    const state = stateMod.loadState(repo, 'my-change');
+    expect(state.phase).toBe('developer-review');
+    expect(state.verificationResults?.['quality-verifier']?.verdict).toBe('PASS');
+    const advisory = orchestration.optionalFindings(state);
+    expect(advisory.map(item => item.detail)).toContain('naming smell');
+  });
+
+  test('concurrent reporters both land in state', async () => {
+    makeState('verify', { verificationRound: 1, verificationRoles: ['security-verifier', 'quality-verifier'], verificationResults: {}, verificationReported: {}, testVerifierStarted: false });
+    // Two separate processes update the same row at once; the spin widens the
+    // load->save window so a missing write transaction loses one update.
+    const script = path.join(tmp, 'report-role.ts');
+    fs.writeFileSync(
+      script,
+      `import { updateState } from '${path.resolve(__dirname, '../src/workflow/state.ts')}';
+const [repoDir, change, role] = process.argv.slice(2);
+updateState(repoDir, change, s => {
+  const end = Date.now() + 150;
+  while (Date.now() < end) {}
+  s.verificationResults = { ...(s.verificationResults ?? {}), [role]: { verdict: 'PASS' } };
+});
+`,
+    );
+    const [a, b] = [Bun.spawn([process.execPath, script, repo, 'my-change', 'security-verifier'], { stdout: 'pipe' }), Bun.spawn([process.execPath, script, repo, 'my-change', 'quality-verifier'], { stdout: 'pipe' })];
+    expect(await a.exited).toBe(0);
+    expect(await b.exited).toBe(0);
+    const state = stateMod.loadState(repo, 'my-change');
+    expect(state.verificationResults?.['security-verifier']?.verdict).toBe('PASS');
+    expect(state.verificationResults?.['quality-verifier']?.verdict).toBe('PASS');
   });
 });

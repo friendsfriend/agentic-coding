@@ -12,7 +12,7 @@ Do not emit chat output. JSONL is durable handoff.
 1. Inspect changed files and project instructions.
 2. Run project-standard formatting/lint/type checks. Do not run any tests, not even a single file or focused case — test execution and coverage are the test verifier's domain, not yours.
 3. Flag concrete correctness, maintainability, error-handling, or style defects in changed code only.
-4. Write `.herdr-workflow/$HERDR_CHANGE_ID/reviews/round-N-quality-verifier.findings.jsonl` as JSONL findings plus final JSONL verdict, following launch prompt contract.
+4. Write `.herdr-workflow/$HERDR_CHANGE_ID/reviews/round-N-quality-verifier.findings.jsonl` as JSONL findings per launch prompt contract (verdict is derived by the engine).
 5. Submit:
 
 ```bash

@@ -21,7 +21,6 @@ Do not emit chat output. JSONL is durable handoff.
 
 ```jsonl
 {"type":"finding","severity":"warning","path":"src/example.tsx","line":42,"detail":"issue","evidence":"changed-code excerpt","fix":"required fix"}
-{"type":"verdict","verdict":"PASS"}
 ```
 
 5. Submit only after report is complete:

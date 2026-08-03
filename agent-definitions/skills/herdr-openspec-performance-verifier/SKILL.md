@@ -12,7 +12,7 @@ Do not emit chat output. JSONL is durable handoff.
 1. Treat assigned review context as authoritative scope. Do not run a full-repository `git diff` or inspect unrelated changed files. Read full assigned files or direct dependencies only when required to understand a scoped hot path.
 2. Flag only introduced measurable risks: unbounded queries or reads, N+1 calls, accidental repeated remote/DB work, avoidable quadratic work, blocking work in request paths, or unbounded memory growth.
 3. Do not flag speculative micro-optimizations or unchanged code.
-4. Write `.herdr-workflow/$HERDR_CHANGE_ID/reviews/round-N-performance-verifier.findings.jsonl` as JSONL findings plus final JSONL verdict, following launch prompt contract.
+4. Write `.herdr-workflow/$HERDR_CHANGE_ID/reviews/round-N-performance-verifier.findings.jsonl` as JSONL findings per launch prompt contract (verdict is derived by the engine).
 5. Submit:
 
 ```bash

@@ -2,41 +2,44 @@ import { describe, expect, test } from 'bun:test';
 import * as findings from '../src/workflow/findings.ts';
 
 describe('validateReportEvents', () => {
-  test('valid finding and verdict pass', () => {
+  test('valid findings-only report passes', () => {
     const events = [
       { type: 'finding', severity: 'warning', path: 'a.py', line: 1, detail: 'x' },
-      { type: 'verdict', verdict: 'PASS' },
+      { type: 'finding', severity: 'info', path: 'b.py', line: 2, detail: 'y' },
     ];
     expect(() => findings.validateReportEvents(events, 'report')).not.toThrow();
   });
 
+  test('empty report passes (no findings = pass)', () => {
+    expect(() => findings.validateReportEvents([], 'report')).not.toThrow();
+  });
+
   test('too many findings rejected', () => {
     const events = Array.from({ length: 31 }, () => ({ type: 'finding', severity: 'info', path: 'a.py', line: 1, detail: 'x' }));
-    events.push({ type: 'verdict', verdict: 'PASS' } as any);
     expect(() => findings.validateReportEvents(events as any, 'report')).toThrow();
   });
 
+  test('verdict record is rejected', () => {
+    expect(() => findings.validateReportEvents([{ type: 'verdict', verdict: 'PASS' }] as any, 'report')).toThrow();
+    expect(() => findings.validateReportEvents([{ type: 'finding', severity: 'info', path: 'a.py', line: 1, detail: 'x' }, { type: 'verdict', verdict: 'PASS' }] as any, 'report')).toThrow();
+  });
+
   test('unsupported type rejected', () => {
-    expect(() => findings.validateReportEvents([{ type: 'note' }, { type: 'verdict', verdict: 'FAIL' }] as any, 'report')).toThrow();
+    expect(() => findings.validateReportEvents([{ type: 'note' }] as any, 'report')).toThrow();
   });
 
   test('bad severity rejected', () => {
-    expect(() => findings.validateReportEvents([{ type: 'finding', severity: 'urgent', path: 'a.py', line: 1, detail: 'x' }, { type: 'verdict', verdict: 'FAIL' }], 'report')).toThrow();
-  });
-
-  test('verdict must be unique and final', () => {
-    expect(() => findings.validateReportEvents([{ type: 'verdict', verdict: 'PASS' }, { type: 'finding', severity: 'info', path: 'a.py', line: 1, detail: 'x' }], 'report')).toThrow();
-    expect(() => findings.validateReportEvents([{ type: 'verdict', verdict: 'PASS' }, { type: 'verdict', verdict: 'PASS' }], 'report')).toThrow();
+    expect(() => findings.validateReportEvents([{ type: 'finding', severity: 'urgent', path: 'a.py', line: 1, detail: 'x' }], 'report')).toThrow();
   });
 
   test('detail over limit rejected', () => {
     const event = { type: 'finding', severity: 'info', path: 'a.py', line: 1, detail: 'x'.repeat(1001) };
-    expect(() => findings.validateReportEvents([event, { type: 'verdict', verdict: 'FAIL' }], 'report')).toThrow();
+    expect(() => findings.validateReportEvents([event], 'report')).toThrow();
   });
 
   test('evidence over limit rejected', () => {
     const event = { type: 'finding', severity: 'info', path: 'a.py', line: 1, detail: 'x', evidence: 'y'.repeat(2001) };
-    expect(() => findings.validateReportEvents([event, { type: 'verdict', verdict: 'FAIL' }], 'report')).toThrow();
+    expect(() => findings.validateReportEvents([event], 'report')).toThrow();
   });
 });
 

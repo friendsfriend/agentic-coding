@@ -132,7 +132,7 @@ function deepMerge(base: any, overlay: any): any {
 export interface WorkflowConfig {
   models: Record<string, string>;
   thinking: Record<string, string>;
-  workflow: { max_verification_rounds: number; remote: string; branch_prefix: string; base_branch: string; worktree_directory: string };
+  workflow: { max_verification_rounds: number; remote: string; branch_prefix: string; base_branch: string; worktree_directory: string; pr_tool?: string };
   projects: { root: string; max_depth: number };
   telemetry: { capture_content: boolean };
   ui: { theme: string; selection_height: number };
@@ -146,7 +146,6 @@ export const DEFAULT_CONFIG: WorkflowConfig = {
   models: {},
   thinking: {
     triage: 'high',
-    recovery: 'high',
     verifier_lite: 'high',
     planner: 'high',
     worker_default: 'high',

@@ -61,7 +61,7 @@ const isWorkflowStateAccess = (toolName: string, input: any) => {
 const isWorkerVerifyCommand = (command: string) => /(?:^|[\n;&|()])\s*(?:\S*\/)?herdr-workflow\s+verify(?:\s|$)/i.test(command);
 const verificationHandoffSucceeded = (isError: boolean, result: unknown) => !isError && /(?:triage started:|verification already running:)/i.test(json(result));
 const shouldRuntimeFallback = (role: string | undefined, resultRecorded: boolean, attempted: boolean, currentModel: string, fallbackModel?: string) => !!role?.endsWith('-verifier') && !resultRecorded && !attempted && !!fallbackModel && fallbackModel !== currentModel;
-const isOneShot = (role?: string) => role === 'recovery' || role === 'archive';
+const isOneShot = (role?: string) => role === 'archive';
 
 export default function (pi: ExtensionAPI) {
   const change = process.env.HERDR_CHANGE_ID;

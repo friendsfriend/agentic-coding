@@ -209,7 +209,7 @@ function writeWorkerFixContext(ctx: Context, state: WorkflowState): string {
   for (const role of [...failedRoles].sort()) {
     const grouped = actionable.filter(item => item.role === role);
     lines.push('', `## ${role}`);
-    lines.push(...(grouped.length ? grouped.map(item => `- [${item.severity}] ${item.id} | ${item.path} | ${item.detail} | fix: ${item.fix || 'resolve finding'}`) : ['- FAIL verdict reported without findings']));
+    lines.push(...(grouped.length ? grouped.map(item => `- [${item.severity}] ${item.id} | ${item.path} | ${item.detail} | fix: ${item.fix || 'resolve finding'}`) : ['- FAIL verdict without critical finding (contract violation)']));
   }
   lines.push('', '## Files', ...(files.length ? files.map(file => `- ${file}`) : ['- none']));
   lines.push('', '## Focused validation', ...(tests.length ? tests.map(test => `- ${test}`) : ['- nearest existing regression test for changed behavior']));
@@ -274,26 +274,37 @@ export async function cmdFinishReview(ctx: Context, args: Args): Promise<void> {
   const state = stateMod.loadState(args.repo!, args.change!);
   if (state.phase === 'verify') {
     // Deterministic verification coordination: consolidate once every dispatched
-    // verifier has reported. FAIL rounds are already handled automatically by
-    // cmdVerificationResult -> failRound; this branch covers the PASS final step.
-    const rolesList: readonly string[] = state.verificationRoles ?? tiering.VERIFIER_ROLES;
-    const dispatched: string[] = state.testVerifierStarted ? [...rolesList, tiering.TEST_VERIFIER] : [...rolesList];
-    const missing = dispatched.filter(role => !state.verificationResults?.[role]);
-    if (missing.length) throw new Error(`finish-review requires every dispatched verifier to have reported; missing: ${missing.join(', ')}`);
-    const failed = dispatched.some(role => state.verificationResults?.[role]?.verdict === 'FAIL');
+    // verifier has reported. The gate re-reads the row under one write
+    // transaction, so a concurrently committing verifier result either lands
+    // before us (visible here) or transitions the phase out of verify (this
+    // call then fails loudly) — the round can never be consolidated from a
+    // stale snapshot that drops a FAIL verdict.
+    let dispatched: string[] = [];
+    const decided = stateMod.updateState(args.repo!, args.change!, s => {
+      if (s.phase !== 'verify') throw new Error(`finish-review requires verify phase, found ${s.phase}`);
+      const rolesList: readonly string[] = s.verificationRoles ?? tiering.VERIFIER_ROLES;
+      dispatched = s.testVerifierStarted ? [...rolesList, tiering.TEST_VERIFIER] : [...rolesList];
+      const missing = dispatched.filter(role => !s.verificationResults?.[role]);
+      if (missing.length) throw new Error(`finish-review requires every dispatched verifier to have reported; missing: ${missing.join(', ')}`);
+    });
+    const failed = dispatched.some(role => decided.verificationResults?.[role]?.verdict === 'FAIL');
     if (failed) {
-      await failRound(ctx, state, dispatched);
+      await failRound(ctx, decided, dispatched);
       return;
     }
-    await completeVerification(ctx, state, dispatched);
+    await completeVerification(ctx, decided, dispatched);
     return;
   }
   if (state.phase !== 'developer-review') throw new Error(`finish-review requires verify or developer-review phase, found ${state.phase}`);
   const reviewDir = path.join(stateMod.workflowDir(state), 'reviews');
   const reviewPath = path.join(reviewDir, 'developer-review.json');
+  // Approval requires an explicit recorded decision (the dashboard writes this
+  // file before invoking finish-review). Without it, a retried finish-review
+  // after the verify -> developer-review consolidation would silently approve.
+  if (!fs.existsSync(reviewPath)) throw new Error(`no developer review recorded: ${reviewPath}; approve from the dashboard`);
   let payload: any;
   try {
-    payload = fs.existsSync(reviewPath) ? JSON.parse(fs.readFileSync(reviewPath, 'utf8')) : { comments: [] };
+    payload = JSON.parse(fs.readFileSync(reviewPath, 'utf8'));
   } catch (error) {
     throw new Error(`invalid developer review comments: ${(error as Error).message}`);
   }
@@ -346,6 +357,7 @@ export async function cmdFinishReview(ctx: Context, args: Args): Promise<void> {
   fs.writeFileSync(contextPath, '# Developer review comments\n\n' + comments.map((comment: any) => `- \`${commentLocation(comment)}\`: ${String(comment.body).trim()}`).join('\n') + '\n');
   state.developerReviewComments = comments;
   state.developerApproval = false;
+  stateMod.saveState(state);
   telemetry.changePhase(ctx, state, 'apply', { reason: 'developer_review_comments' });
   telemetry.telemetry(ctx, state, 'developer_review_comments_received', { count: comments.length, report: contextPath });
   const prompt = `Developer review found comments. Read only ${contextPath}. Address every comment, run focused validation, then run \`herdr-workflow verify --repo . --change ${state.changeId}\`. Do not report completion until verification starts.`;

@@ -40,6 +40,8 @@ const WORKFLOW_ACTIONS: Record<string, (ctx: ReturnType<typeof buildContext>, ar
   "finish-review": orchestration.cmdFinishReview,
   archive: orchestration.cmdArchive,
   close: orchestration.cmdClose,
+  "close-clean": (ctx, args) => orchestration.cmdClose(ctx, { ...args, clean: true }),
+  "create-pr": orchestration.cmdCreatePr,
   "override-phase": orchestration.cmdOverridePhase,
 };
 

@@ -12,15 +12,15 @@ Read-only. Started only after security, AGENTS.md, quality, performance, and Ope
 3. If the full suite fails:
    - Reuse matching prior-round baseline evidence from context without rerunning or reconfirming it.
    - Otherwise, only when a failure appears unrelated to changed behavior, one focused baseline reproduction is allowed to determine whether it predates the change. Preserve and restore the working tree in the same command; never discard or edit working changes.
-   - A confirmed pre-existing unrelated failure is an `info` finding and permits PASS. An unconfirmed or introduced failure requires FAIL.
+   - A confirmed pre-existing unrelated failure is an `info` finding. An unconfirmed or introduced failure is a `critical` finding.
 4. Write `.herdr-workflow/$HERDR_CHANGE_ID/reviews/round-N-test-verifier.findings.jsonl`:
 
 ```jsonl
 {"type":"finding","severity":"warning","path":"src/example.ts","line":42,"detail":"missing regression coverage","evidence":"scenario has no covering test","fix":"add test"}
-{"type":"verdict","verdict":"PASS"}
+{"type":"finding","severity":"critical","path":"src/example.test.ts","line":12,"detail":"suite failure introduced by change","evidence":"failing assertion output"}
 ```
 
-No passing verdict unless the full suite succeeds or every failure is confirmed pre-existing and unrelated.
+Report no findings when the full suite succeeds or every failure is confirmed pre-existing and unrelated.
 
 5. Submit:
 
@@ -29,4 +29,4 @@ herdr-workflow verification-result --repo "$PWD" --change "$HERDR_CHANGE_ID" --r
 herdr-workflow finish-review --repo "$PWD" --change "$HERDR_CHANGE_ID"
 ```
 
-`verification-result` only records your verdict; `finish-review` consolidates all dispatched verifier verdicts and moves the round out of `verify` (PASS → developer review, FAIL → fix round). Run both, in that order, after writing the report.
+`verification-result` records your findings; the engine derives the round verdict (any critical finding fails). `finish-review` consolidates all dispatched verifier reports and moves the round out of `verify` (all pass → developer review, any fail → fix round). Run both, in that order, after writing the report.

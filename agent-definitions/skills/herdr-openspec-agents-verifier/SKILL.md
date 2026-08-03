@@ -16,7 +16,6 @@ Do not emit chat output. JSONL is durable handoff.
 
 ```jsonl
 {"type":"finding","severity":"warning","path":"AGENTS.md","line":42,"detail":"violated instruction","evidence":"changed-code excerpt","fix":"required fix"}
-{"type":"verdict","verdict":"PASS"}
 ```
 
 5. Submit report:
