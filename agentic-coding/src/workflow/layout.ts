@@ -14,13 +14,13 @@ export const VERIFICATION_TAB_ROLES: readonly string[] = ['triage', ...tiering.V
 
 export async function waitForPaneReady(ctx: Context, paneId: string): Promise<void> {
   const deadline = ctx.clock.monotonic() + PANE_READY_TIMEOUT_SECONDS;
+  let stableShellPolls = 0;
   while (ctx.clock.monotonic() < deadline) {
     const process = ctx.herdr.call('pane', 'process-info', '--pane', paneId).process_info ?? {};
-    if (process.foreground_processes?.length) {
-      await ctx.clock.sleep(0.25);
-      return;
-    }
-    await ctx.clock.sleep(0.1);
+    const shellIsForeground = typeof process.shell_pid === 'number' && process.foreground_processes?.some(({ pid }: { pid?: number }) => pid === process.shell_pid);
+    stableShellPolls = shellIsForeground ? stableShellPolls + 1 : 0;
+    if (stableShellPolls === 2) return;
+    await ctx.clock.sleep(shellIsForeground ? 0.25 : 0.1);
   }
   throw new Error(`pane shell did not become ready: ${paneId}`);
 }

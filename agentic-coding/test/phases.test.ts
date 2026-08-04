@@ -131,8 +131,10 @@ describe('cmdPlanner', () => {
     await orchestration.cmdPlanner(ctx, { repo, change: 'my-change' });
     const state = stateMod.loadState(repo, 'my-change');
     expect(state.panes.planner).toBeDefined();
-    const launches = herdr.calls.filter(call => call[0] === 'agent' && call[1] === 'start' && call.at(-1)?.includes('/skill:herdr-openspec-planner'));
+    const launches = herdr.calls.filter(call => call[0] === 'agent' && call[1] === 'start');
+    const prompts = herdr.calls.filter(call => call[0] === 'agent' && call[1] === 'prompt' && call[3]?.includes('/skill:herdr-openspec-planner'));
     expect(launches.length).toBe(1);
+    expect(prompts.length).toBe(1);
   });
 
   test('rejects wrong phase', async () => {
@@ -752,68 +754,78 @@ describe('launchRole', () => {
     }
   });
 
-  test('starts pi agent with initial prompt', async () => {
+  test('starts pi, confirms it, then submits initial prompt', async () => {
     const state = makeState('apply');
     await orchestration.launchRole(ctx, state, 'worker');
     const kinds = herdr.calls.map(call => `${call[0]} ${call[1]}`);
     const tabCreate = herdr.calls.find(call => call[0] === 'tab' && call[1] === 'create')!;
-    const launch = herdr.calls.find(call => call[0] === 'agent' && call[1] === 'start')!;
+    const launchIndex = herdr.calls.findIndex(call => call[0] === 'agent' && call[1] === 'start');
+    const getIndex = herdr.calls.findIndex(call => call[0] === 'agent' && call[1] === 'get');
+    const promptIndex = herdr.calls.findIndex(call => call[0] === 'agent' && call[1] === 'prompt');
+    const launch = herdr.calls[launchIndex]!;
     expect(kinds).toContain('tab create');
     expect(kinds).not.toContain('pane split');
     expect(kinds).not.toContain('pane run');
     expect(kinds).not.toContain('pane send-keys');
     expect(launch.slice(0, 7)).toEqual(['agent', 'start', 'my-change-worker', '--kind', 'pi', '--pane', state.panes.worker]);
-    expect(launch[7]).toBe('--');
+    expect(launch.slice(7, 10)).toEqual(['--timeout', '60000', '--']);
     expect(launch.slice(0, 7)).not.toContain('--cwd');
     expect(tabCreate[tabCreate.indexOf('--cwd') + 1]).toBe(repo);
     expect(launch).toContain('--name');
     expect(launch).toContain('my-change-worker');
-    expect(launch.at(-1)).toContain('/skill:herdr-openspec-worker');
+    expect(launch.some(arg => arg.includes('/skill:herdr-openspec-worker'))).toBe(false);
+    expect(herdr.calls[promptIndex]).toEqual(['agent', 'prompt', state.panes.worker, expect.stringContaining('/skill:herdr-openspec-worker')]);
+    expect(getIndex).toBeGreaterThan(launchIndex);
+    expect(promptIndex).toBeGreaterThan(getIndex);
     expect(state.panes.worker).toBeDefined();
     expect(state.tabs.worker).toBeDefined();
   });
 
-  test('retries with a unique name suffix on agent name collision', async () => {
+  test('waits for two stable foreground-shell polls before starting', async () => {
     const state = makeState('apply');
-    let started = 0;
-    herdr.on(args => args[0] === 'agent' && args[1] === 'start', () => {
-      started += 1;
-      if (started === 1) throw new Error('agent name already in use: my-change-worker');
-      return { agent: { pane_id: 'pane-collision', tab_id: 'tab-collision', agent_status: 'idle', state_change_seq: 0 } };
+    let polls = 0;
+    herdr.on(args => args[0] === 'pane' && args[1] === 'process-info', () => {
+      polls += 1;
+      return polls === 1
+        ? { process_info: { shell_pid: 42, foreground_processes: [{ name: 'direnv', pid: 43 }] } }
+        : { process_info: { shell_pid: 42, foreground_processes: [{ name: 'zsh', pid: 42 }] } };
     });
     await orchestration.launchRole(ctx, state, 'worker');
-    const starts = herdr.calls.filter(call => call[0] === 'agent' && call[1] === 'start');
-    expect(starts.length).toBe(2);
-    expect(starts[0]![2]).toBe('my-change-worker');
-    expect(starts[1]![2]).toBe('my-change-worker-2');
-    // pi --name matches the herdr agent name on every attempt
-    expect(starts[0]![starts[0]!.indexOf('--name') + 1]).toBe('my-change-worker');
-    expect(starts[1]![starts[1]!.indexOf('--name') + 1]).toBe('my-change-worker-2');
-    // the collision retry is telemetried
-    const traces = fs.readFileSync(path.join(stateMod.workflowDir(state), 'traces.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
-    expect(traces.some(t => t.name === 'workflow.agent_name_collision_retry')).toBe(true);
+    expect(polls).toBe(3);
   });
 
-  test('recovers when herdr start readiness wait times out but agent is live', async () => {
+  test('reports agent name collisions without retrying', async () => {
     const state = makeState('apply');
-    // Real sequence: transient pane-busy on the first attempt, same-name retry
-    // spawns the agent, then herdr's 30s readiness wait times out mid-turn.
-    let starts = 0;
     herdr.on(args => args[0] === 'agent' && args[1] === 'start', () => {
+      throw new Error('agent name already in use: my-change-worker');
+    });
+    await expect(orchestration.launchRole(ctx, state, 'worker')).rejects.toThrow('agent name already in use');
+    expect(herdr.calls.filter(call => call[0] === 'agent' && call[1] === 'start').length).toBe(1);
+  });
+
+  test('retries once only when the target pane is not an available shell', async () => {
+    const state = makeState('apply');
+    let starts = 0;
+    herdr.on(args => args[0] === 'agent' && args[1] === 'start', args => {
       starts += 1;
       if (starts === 1) throw new Error('herdr agent start my-change-worker ...: {"error":{"code":"agent_pane_busy","message":"agent target pane pane-1 is not an available shell"}}');
-      throw new Error('herdr agent start my-change-worker ...: {"id":"cli:agent:start","error":{"code":"timeout","message":"timed out waiting for agent startup"}}');
+      const paneId = args[args.indexOf('--pane') + 1]!;
+      herdr.registerPane(paneId, 'my-change-worker', 'tab-live');
+      herdr.setStatus(paneId, 'idle');
+      return { agent: { pane_id: paneId, tab_id: 'tab-live', agent_status: 'idle' } };
     });
-    herdr.on(args => args[0] === 'agent' && args[1] === 'get', args => ({
-      agent: { pane_id: args[2], tab_id: 'tab-live', agent_status: 'working' },
-    }));
     await orchestration.launchRole(ctx, state, 'worker');
-    // Same-name retry spawned the live agent; no suffixed retry against the occupied pane.
-    expect(herdr.calls.filter(call => call[0] === 'agent' && call[1] === 'start').length).toBe(2);
-    expect(state.panes.worker).toBeDefined();
+    expect(starts).toBe(2);
     expect(state.tabs.worker).toBe('tab-live');
-    const traces = fs.readFileSync(path.join(stateMod.workflowDir(state), 'traces.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
-    expect(traces.some(t => t.name === 'workflow.agent_start_timeout_recovered')).toBe(true);
+  });
+
+  test('reports verifier startup timeout without retry or fallback', async () => {
+    const state = makeState('triage');
+    herdr.on(args => args[0] === 'agent' && args[1] === 'start', () => {
+      throw new Error('herdr agent start my-change-quality-verifier ...: {"id":"cli:agent:start","error":{"code":"timeout","message":"timed out waiting for agent startup"}}');
+    });
+    await expect(orchestration.launchRole(ctx, state, 'quality-verifier')).rejects.toThrow('timed out waiting for agent startup');
+    expect(herdr.calls.filter(call => call[0] === 'agent' && call[1] === 'start').length).toBe(1);
   });
 
   test('logs agent launch failure', async () => {

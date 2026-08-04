@@ -1,6 +1,6 @@
 # Herdr workflow agent launch
 
-Launch every role with `herdr agent start`; never coordinate raw shell startup, text insertion, or Enter keys. Create topology first, then pass complete Pi arguments and initial prompt after `--` in same command: `herdr agent start <name> --kind pi --pane <pane-id> -- ... <initial prompt>`.
+Launch every role with `herdr agent start`; never coordinate raw shell startup, text insertion, or Enter keys. Create topology first, then pass complete Pi arguments after `--`: `herdr agent start <name> --kind pi --pane <pane-id> -- ...`. After `agent start` succeeds, confirm Pi on returned pane with `herdr agent get`, then submit initial prompt through `herdr agent prompt`.
 
 Planner, worker, and archive roles own separate tabs. Create labeled tab with role cwd and env, wait until returned root pane reports foreground shell, then start role in that pane. Retry `agent start` once only when Herdr reports target pane is not yet available shell.
 

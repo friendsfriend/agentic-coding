@@ -151,7 +151,7 @@ export class FakeHerdr {
       return { pane: { pane_id: args[2], tab_id: this.paneToTab.get(args[2]) } };
     }
     if (args[0] === 'pane' && args[1] === 'process-info') {
-      return { process_info: { foreground_processes: [{ name: 'zsh' }] } };
+      return { process_info: { shell_pid: 42, foreground_processes: [{ name: 'zsh', pid: 42 }] } };
     }
     if (args[0] === 'pane' && args[1] === 'read') {
       return { read: { text: '❯ ' } };

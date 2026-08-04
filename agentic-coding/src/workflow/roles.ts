@@ -74,67 +74,43 @@ export async function launchRole(ctx: Context, state: WorkflowState, role: strin
 
     const startAgent = (name: string) =>
       ctx.herdr.call(
-        'agent', 'start', name, '--kind', 'pi', '--pane', launchPane,
-        '--', ...prompts.piArguments(role, spawnModel, level, change, config, agentDefDir, name), `/skill:herdr-openspec-${role} ${instructions}`,
+        'agent', 'start', name, '--kind', 'pi', '--pane', launchPane, '--timeout', '60000',
+        '--', ...prompts.piArguments(role, spawnModel, level, change, config, agentDefDir, name),
       );
-
-    // herdr >=0.7.5 blocks `agent start` for 30s waiting for the terminal to
-    // report Idle/Blocked; a pi agent launched with a prompt works immediately
-    // and stays Working, so the readiness wait times out even though the agent
-    // is up and answering. Confirm liveness directly and treat it as launched.
-    const agentOnPane = () => {
-      try {
-        const info = ctx.herdr.call('agent', 'get', launchPane).agent;
-        return info && info.pane_id === launchPane && ['idle', 'working', 'blocked', 'done'].includes(info.agent_status) ? info : null;
-      } catch {
-        return null;
-      }
-    };
-    const recoverFromTimeout = (error: unknown, name: string, attempt: number): boolean => {
-      if (!String((error as Error)?.message ?? error).includes('timed out waiting for agent startup')) return false;
-      const live = agentOnPane();
-      if (!live) return false;
-      agent = live;
-      telemetry.telemetry(ctx, state, 'agent_start_timeout_recovered', { role, attempt: attempt + 1, name });
-      return true;
+    const launchFailed = (error: unknown): never => {
+      telemetry.telemetry(ctx, state, 'agent_launch_failed', { role, model: spawnModel, error: String((error as Error)?.message ?? error), spanStatus: 'ERROR' });
+      cleanup();
+      throw error;
     };
 
+    const name = naming.agentName(change, role);
     let agent: any;
-    let lastError: unknown;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const name = naming.agentName(change, role, attempt);
-      try {
-        agent = startAgent(name).agent;
-        if (attempt > 0) telemetry.telemetry(ctx, state, 'agent_name_collision_retry', { role, attempt: attempt + 1, name });
-        break;
-      } catch (error) {
-        lastError = error;
-        if (recoverFromTimeout(error, name, attempt)) break;
-        const msg = String((error as Error).message);
-        if (!msg.includes('not an available shell')) {
-          // Likely a duplicate herdr agent name (a concurrent workflow with the
-          // same changeId) — retry with a unique numeric suffix.
-          if (attempt < 2) await ctx.clock.sleep(0.25);
-          continue;
-        }
-        // Pane not yet interactive: retry the same name once (existing behavior).
+    let launchError: unknown;
+    try {
+      agent = startAgent(name).agent;
+    } catch (error) {
+      launchError = error;
+      if (String((error as Error)?.message ?? error).includes('not an available shell')) {
         await ctx.clock.sleep(0.25);
         try {
           agent = startAgent(name).agent;
         } catch (retryError) {
-          lastError = retryError;
-          recoverFromTimeout(retryError, name, attempt);
+          launchError = retryError;
         }
-        break;
       }
     }
-    if (!agent) {
-      telemetry.telemetry(ctx, state, 'agent_launch_failed', { role, model: spawnModel, error: String((lastError as Error)?.message ?? lastError), spanStatus: 'ERROR' });
-      cleanup();
-      throw lastError;
-    }
+    if (!agent) launchFailed(launchError);
     const paneId = agent.pane_id;
     const tabId = agent.tab_id ?? targetTab;
+    try {
+      const live = ctx.herdr.call('agent', 'get', paneId).agent;
+      if (!live || live.pane_id !== paneId || !['idle', 'working', 'blocked', 'done'].includes(live.agent_status)) {
+        throw new Error(`pi agent did not become ready on pane ${paneId}`);
+      }
+      ctx.herdr.call('agent', 'prompt', paneId, `/skill:herdr-openspec-${role} ${instructions}`);
+    } catch (error) {
+      launchFailed(error);
+    }
     ctx.herdr.call('tab', 'rename', tabId, label);
     state.panes = { ...(state.panes ?? {}), [role]: paneId };
     state.tabs = { ...(state.tabs ?? {}), [role]: tabId };
@@ -142,15 +118,7 @@ export async function launchRole(ctx: Context, state: WorkflowState, role: strin
     stateMod.saveState(state);
   };
 
-  try {
-    await spawn(model);
-  } catch (error) {
-    const fallback = role.endsWith('-verifier') ? models.verifier_fallback : undefined;
-    if (!fallback || fallback === model || !model) throw error;
-    telemetry.telemetry(ctx, state, 'provider_launch_fallback', { role, model, fallback });
-    await spawn(fallback);
-    model = fallback;
-  }
+  await spawn(model);
 
   state.verificationModels = { ...(state.verificationModels ?? {}), [role]: model };
   if (role.endsWith('-verifier')) {

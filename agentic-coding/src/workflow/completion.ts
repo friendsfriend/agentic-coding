@@ -54,7 +54,7 @@ function closeCompletedRolePanes(ctx: Context, state: WorkflowState): void {
   }
 }
 
-/** Launch archive agent with its native Pi initial prompt. */
+/** Launch archive agent and submit its initial prompt. */
 async function startArchive(ctx: Context, state: WorkflowState): Promise<void> {
   closeCompletedRolePanes(ctx, state);
   writeArchiveContext(ctx, state);
