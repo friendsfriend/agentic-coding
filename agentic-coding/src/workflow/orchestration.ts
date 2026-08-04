@@ -69,8 +69,9 @@ export async function cmdStart(ctx: Context, args: Args): Promise<void> {
   git.ensureClean(ctx, source, workflowType !== 'no-openspec');
   const remote = config.workflow.remote;
   git.unlockSshKeys(ctx, source, remote, passphrase);
-  const baseBranch = git.remoteDefaultBranch(ctx, source, remote);
-  const base = ctx.git.run(['rev-parse', '--verify', baseBranch], source);
+  const syncedBase = git.syncDefaultBranch(ctx, source, remote);
+  const baseBranch = syncedBase.remoteBranch;
+  const base = syncedBase.commit;
   const branchName = ticketBranch ? `${ticketBranch}-${args.change}` : args.change!;
   const branch = config.workflow.branch_prefix + branchName;
 

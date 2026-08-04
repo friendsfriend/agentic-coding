@@ -76,9 +76,23 @@ export function unlockSshKeys(ctx: Context, repo: string, remote: string, passph
   }
 }
 
-export function remoteDefaultBranch(ctx: Context, repo: string, remote: string): string {
+export function syncDefaultBranch(ctx: Context, repo: string, remote: string) {
   ctx.git.run(['fetch', remote, '--prune'], repo);
-  return ctx.git.run(['symbolic-ref', '--quiet', '--short', `refs/remotes/${remote}/HEAD`], repo);
+  ctx.git.run(['remote', 'set-head', remote, '--auto'], repo);
+  const remoteBranch = ctx.git.run(['symbolic-ref', '--quiet', '--short', `refs/remotes/${remote}/HEAD`], repo);
+  const prefix = `${remote}/`;
+  if (!remoteBranch.startsWith(prefix)) throw new Error(`remote default branch is not owned by ${remote}: ${remoteBranch}`);
+  const localBranch = remoteBranch.slice(prefix.length);
+  if (ctx.git.run(['branch', '--list', localBranch], repo)) {
+    ctx.git.run(['switch', localBranch], repo);
+  } else {
+    ctx.git.run(['switch', '--track', '-c', localBranch, remoteBranch], repo);
+  }
+  ctx.git.run(['pull', '--ff-only', remote, localBranch], repo);
+  const commit = ctx.git.run(['rev-parse', '--verify', localBranch], repo);
+  const remoteCommit = ctx.git.run(['rev-parse', '--verify', remoteBranch], repo);
+  if (commit !== remoteCommit) throw new Error(`local default branch ${localBranch} does not match ${remoteBranch}`);
+  return { remoteBranch, commit };
 }
 
 export function ensureWorkflowBranch(ctx: Context, state: WorkflowState): void {

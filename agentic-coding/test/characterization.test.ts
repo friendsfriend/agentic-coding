@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import * as orchestration from '../src/workflow/orchestration.ts';
+import * as stateMod from '../src/workflow/state.ts';
 import * as cli from '../src/workflow/cli.ts';
 import { FakeClock, FakeHerdr, initRepo, makeContext } from './fakes.ts';
 
@@ -143,6 +144,56 @@ describe('golden state shape', () => {
 
       await orchestration.cmdStart(ctx, { repo, change: 'quick-change', task: null, mode: 'checkout', ticket: null, worker: undefined, workflowType: 'no-openspec' });
       expect(fs.existsSync(path.join(repo, '.herdr-workflow', 'quick-change', 'request.md'))).toBe(false);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('start refreshes a stale remote HEAD and branches from latest default branch', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-default-branch-'));
+    try {
+      const repo = initRepo(path.join(tmp, 'repo'));
+      const bare = path.join(tmp, 'origin.git');
+      execFileSync('git', ['init', '--bare', '-q', '-b', 'main', bare]);
+      execFileSync('git', ['remote', 'add', 'origin', bare], { cwd: repo });
+      execFileSync('git', ['push', '-q', 'origin', 'main'], { cwd: repo });
+      execFileSync('git', ['remote', 'set-head', 'origin', 'main'], { cwd: repo });
+      execFileSync('git', ['switch', '-q', '-c', 'develop'], { cwd: repo });
+      fs.appendFileSync(path.join(repo, 'README.md'), 'develop\n');
+      execFileSync('git', ['commit', '-qam', 'develop'], { cwd: repo });
+      execFileSync('git', ['push', '-q', 'origin', 'develop'], { cwd: repo });
+      execFileSync('git', ['switch', '-q', 'main'], { cwd: repo });
+
+      const updater = path.join(tmp, 'updater');
+      execFileSync('git', ['clone', '-q', '-b', 'develop', bare, updater]);
+      execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: updater });
+      execFileSync('git', ['config', 'user.name', 'Test'], { cwd: updater });
+      fs.appendFileSync(path.join(updater, 'README.md'), 'latest\n');
+      execFileSync('git', ['commit', '-qam', 'latest develop'], { cwd: updater });
+      execFileSync('git', ['push', '-q', 'origin', 'develop'], { cwd: updater });
+      execFileSync('git', [`--git-dir=${bare}`, 'symbolic-ref', 'HEAD', 'refs/heads/develop']);
+      const latest = execFileSync('git', [`--git-dir=${bare}`, 'rev-parse', 'develop'], { encoding: 'utf8' }).trim();
+      expect(execFileSync('git', ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { cwd: repo, encoding: 'utf8' }).trim()).toBe('origin/main');
+
+      const herdr = new FakeHerdr();
+      const ctx = makeContext({ herdr, clock: new FakeClock() });
+      herdr.on(
+        args => args[0] === 'workspace' && args[1] === 'create',
+        () => ({ workspace: { workspace_id: 'ws-1' }, root_pane: { pane_id: 'pane-root' } }),
+      );
+      herdr.on(
+        args => args[0] === 'tab' && args[1] === 'list',
+        () => ({ tabs: [{ tab_id: 'tab-dashboard' }] }),
+      );
+
+      await orchestration.cmdStart(ctx, { repo, change: 'latest-default', task: 'test', mode: 'checkout', ticket: null, workflowType: 'standard' });
+
+      expect(execFileSync('git', ['branch', '--show-current'], { cwd: repo, encoding: 'utf8' }).trim()).toBe('feature/latest-default');
+      expect(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim()).toBe(latest);
+      expect(execFileSync('git', ['rev-parse', 'develop'], { cwd: repo, encoding: 'utf8' }).trim()).toBe(latest);
+      const state = stateMod.loadState(repo, 'latest-default');
+      expect(state.baseBranch).toBe('origin/develop');
+      expect(state.baseCommit).toBe(latest);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
