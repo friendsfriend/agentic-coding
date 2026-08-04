@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 
-import { useRenderer, useTerminalDimensions } from '@opentui/solid';
+import { useTerminalDimensions } from '@opentui/solid';
 import { TextAttributes, type KeyEvent } from '@opentui/core';
 import type { Keymap } from '@opentui/keymap';
 import { Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
@@ -19,6 +19,7 @@ import { notify } from './notifications';
 import { SelectableList } from './ui/Selectable';
 import { FilterModal } from './ui/FilterModal';
 import { SortModal } from './ui/SortModal';
+import { phase } from '../lifecycle';
 
 export function Home(props: {
   keymap: Keymap<any, KeyEvent>;
@@ -28,7 +29,6 @@ export function Home(props: {
   projects: Array<{ name: string; path: string; openspec: boolean }>;
   refresh: () => void;
 }) {
-  const renderer = useRenderer();
   const dimensions = useTerminalDimensions();
   const [models, setModels] = createSignal<string[]>([]);
   const [projects, setProjects] = createSignal<Array<{ name: string; path: string; openspec: boolean }>>([]);
@@ -91,10 +91,17 @@ export function Home(props: {
     };
     trace(`key=${key.name} modal.active=${props.keymap.getData?.('modal.active')}`);
     const name = key.name.toLowerCase();
+    // Lifecycle overlay (startup/shutdown modal) consumes keys; 'q' stays live
+    // so startup can be cancelled (requestShutdown is idempotent).
+    const lifecycleActive = phase() === 'starting' || phase() === 'stopping';
+    if (lifecycleActive) {
+      if (name === 'q') (globalThis as any).__requestShutdown?.();
+      return;
+    }
     if (modal()) return;
     if (name === 't' && key.shift) { setThemePicker(true); props.keymap.setData('modal.active', 'theme'); }
     else if (name === '?') { setHelp(true); setHelpOffset(0); props.keymap.setData('modal.active', 'help'); }
-    else if (name === 'q') renderer.destroy();
+    else if (name === 'q') (globalThis as any).__requestShutdown?.();
     else if (name === 'n') { setSshPassphraseRequired(false); setModal(true); props.keymap.setData('modal.active', 'new-workflow'); }
     else if (name === 'r') refresh();
     else if (name === 'f') { setFilterModal(true); setFilterFocusedPane('parameter'); setFilterSelectedParameter(0); setFilterSelectedValue(0); props.keymap.setData('modal.active', 'filter'); }

@@ -17,6 +17,8 @@ import { MetricStore } from './otel/model/metricStore';
 import { LogStore } from './otel/model/logStore';
 import { TopologyStore } from './otel/model/topologyStore';
 import type { SpanData, MetricData, LogData } from './otel/model/types';
+import { beginStartup, finishStartup, isShutdownRequested, registerStopSequence, requestShutdown, setStepActive, setStepDone, setStepError, beginShutdown } from './lifecycle';
+import { LifecycleModal } from './lifecycle/LifecycleModal';
 
 import { applyTheme as applyDashTheme, loadThemeName as loadDashThemeName } from './dash/theme-settings';
 import { setupKeymap } from './dash/keymap-setup';
@@ -69,6 +71,61 @@ function intervalArg(name: string, fallback: number): number {
   return seconds * 1000;
 }
 
+const tick = () => new Promise<void>(resolve => setTimeout(resolve, 34));
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+/** Everything the stop sequence must reach; partially filled during startup. */
+export interface ServerStack {
+  servers: Array<{ stop: (closeActiveConnections?: boolean) => void }>;
+  grpcSidecar?: { kill(): void; once(event: string, listener: (...args: unknown[]) => void): unknown };
+  stopPrometheus?: () => void;
+  stopStatsD?: () => void;
+}
+
+/**
+ * Stop the server stack and exit: HTTP receivers → gRPC sidecar (bounded wait
+ * for exit) → Prometheus scraper → StatsD listener → db close → renderer
+ * destroy → one paint tick → exit. Every component is optional, so a quit
+ * during startup stops only what already started.
+ */
+export async function stopServerStack(
+  stack: ServerStack,
+  db: { close(): void },
+  renderer: { destroy(): void },
+  exit: (code: number) => void = (code) => process.exit(code),
+): Promise<void> {
+  beginShutdown([
+    { id: 'receiver', label: 'Stopping telemetry receiver' },
+    { id: 'sidecar', label: 'Stopping gRPC sidecar' },
+    { id: 'collectors', label: 'Stopping metric collectors' },
+    { id: 'db', label: 'Closing database' },
+  ]);
+  setStepActive('receiver');
+  for (const server of stack.servers) server.stop(true);
+  setStepDone('receiver');
+  await tick();
+  setStepActive('sidecar');
+  if (stack.grpcSidecar) {
+    const exited = new Promise<void>(resolve => stack.grpcSidecar!.once('exit', () => resolve()));
+    stack.grpcSidecar.kill();
+    await Promise.race([exited, sleep(2000)]);
+  }
+  setStepDone('sidecar');
+  await tick();
+  setStepActive('collectors');
+  stack.stopPrometheus?.();
+  stack.stopStatsD?.();
+  setStepDone('collectors');
+  await tick();
+  setStepActive('db');
+  db.close();
+  setStepDone('db');
+  await tick();
+  renderer.destroy();
+  await tick();
+  exit(0);
+}
+
 export async function main(): Promise<void> {
   if (process.argv.includes('--help') || process.argv.includes('-h')) {
     console.log(usage);
@@ -91,7 +148,7 @@ export async function main(): Promise<void> {
     process.exit(0);
   }
 
-  // ---- observability bootstrap (stores + receiver at shell level) ----
+  // ---- Observability stores + DB (the shell owns them for the process lifetime) ----
   const useDemoDb = process.argv.includes('--demo-db');
   const explicitHttp = process.argv.includes('--http-port');
   const httpPort = explicitHttp ? portArg('--http-port') : (home && !useDemoDb ? 4318 : undefined);
@@ -115,7 +172,6 @@ export async function main(): Promise<void> {
   const metricStore = new MetricStore();
   const logStore = new LogStore();
   const topologyStore = new TopologyStore();
-  let db: TraceDb;
 
   const signalRouter = {
     pushTraces: (spans: SpanData[]) => traceStore.pushBatch(spans),
@@ -123,9 +179,11 @@ export async function main(): Promise<void> {
     pushLogs: (logs: LogData[]) => logStore.pushBatch(logs),
   };
 
-  // ---- Scan existing data or load demo ----
-  let demoSpans: SpanData[] = [];
   const repos = Array.from(new Set([repo, ...discoverProjectRepos()]));
+  // Demo DB is async; non-demo construction is cheap. The scan/load itself
+  // happens in startServerStack (render-first so the startup modal shows).
+  let db: TraceDb;
+  let demoSpans: SpanData[] = [];
   if (useDemoDb) {
     const { db: demoDb, spans, metrics, logs } = await import('./otel/model/demoDb').then(m => m.createDemoDb());
     db = demoDb;
@@ -135,70 +193,24 @@ export async function main(): Promise<void> {
     logStore.load(logs);
   } else {
     db = new TraceDb();
-    for (const r of repos) db.scanAllWorkspaces(r);
-    db.cleanupOlderThan();
-    traceStore.loadFile(db.loadSpans());
   }
 
-  // ---- Spawn gRPC sidecar ----
-  let grpcSidecar: ReturnType<typeof spawn> | undefined;
-  if (grpcPort && httpPort) {
-    // Compiled binaries embed no source files; the sidecar is a second executable
-    // built next to this one. Source runs spawn the script via bun.
-    const compiled = import.meta.url.includes('/$bunfs/') || import.meta.url.includes('B:/~BUN/');
-    const sidecarScript = compiled
-      ? join(dirname(process.execPath), 'agentic-coding-grpc-sidecar')
-      : new URL('./otel/receiver/otlp-grpc-sidecar.ts', import.meta.url).pathname;
-    grpcSidecar = spawn(compiled ? sidecarScript : 'bun', [sidecarScript, '--port', String(grpcPort), '--forward', `http://127.0.0.1:${httpPort}`], {
-      stdio: ['ignore', 'inherit', 'inherit'],
-    });
-    grpcSidecar.on('error', error => console.warn(`gRPC sidecar unavailable: ${error.message}`));
-  } else if (grpcPort) {
-    console.warn('gRPC sidecar requires --http-port');
-  }
-
-  // ---- Start HTTP server for receivers ----
-  if (httpPort || zipkinPort || datadogPort) {
-    const hostname = '127.0.0.1';
-    const ports: number[] = [];
-    if (httpPort) ports.push(httpPort);
-    if (zipkinPort && zipkinPort !== httpPort) ports.push(zipkinPort);
-    if (datadogPort && datadogPort !== httpPort && datadogPort !== zipkinPort) ports.push(datadogPort);
-
-    const servers: Array<{ stop: (closeActiveConnections?: boolean) => void }> = [];
-    try {
-      for (const port of ports) {
-        servers.push(Bun.serve({
-          hostname,
-          port,
-          fetch: (request) => routeReceiverRequest(request, signalRouter) ?? new Response('not found', { status: 404 }),
-        }));
-      }
-    } catch (error) {
-      servers.forEach(server => server.stop(true));
-      console.error(`Cannot start receiver: ${String(error)}`);
-      process.exit(1);
+  if (!home) {
+    // Dash/test mode has no startup modal: keep the old synchronous bootstrap
+    // so the observability views snapshot real data at first render (and the
+    // deferred path never touches db after a signal-triggered close).
+    if (!useDemoDb) {
+      for (const r of repos) db.scanAllWorkspaces(r);
+      db.cleanupOlderThan();
+      traceStore.loadFile(db.loadSpans());
     }
+    topologyStore.load(useDemoDb ? demoSpans : (traceStore.spanCount_ > 0 ? db.loadSpans() : []));
   }
 
-  // ---- Start Prometheus scraper ----
-  let stopPrometheus: (() => void) | undefined;
-  if (promTargets.length) {
-    stopPrometheus = startPrometheusScraper(promTargets, promInterval, signalRouter);
-  }
+  /** Partial stack the stop sequence reaches; filled by startServerStack. */
+  const stack: ServerStack = { servers: [] };
 
-  // ---- Start StatsD listener ----
-  let stopStatsD: (() => void) | undefined;
-  if (statsdPort) {
-    const statsd = startStatsDListener(statsdPort, `statsd-${statsdPort}`, signalRouter);
-    stopStatsD = statsd.stop;
-  }
-
-  // ---- Build topology from loaded spans ----
-  const spansForTopology = useDemoDb ? demoSpans : (traceStore.spanCount_ > 0 ? db.loadSpans() : []);
-  topologyStore.load(spansForTopology);
-
-  // ---- Render app ----
+  // ---- Render app first; the startup modal covers the bootstrap below ----
   applyDashTheme(loadDashThemeName());
   process.env.FORCE_COLOR = '3';
   const renderer = await createCliRenderer({ targetFps: 30, exitOnCtrlC: false, useKittyKeyboard: {}, exitSignals: [] });
@@ -229,15 +241,24 @@ export async function main(): Promise<void> {
   }
 
   const cleanup = () => {
-    grpcSidecar?.kill();
-    stopPrometheus?.();
-    stopStatsD?.();
+    stack.grpcSidecar?.kill();
+    stack.stopPrometheus?.();
+    stack.stopStatsD?.();
     db.close();
     renderer.destroy();
   };
-  process.on('SIGINT', cleanup);
-  process.on('SIGTERM', cleanup);
-  process.on('SIGHUP', cleanup);
+  if (home) {
+    registerStopSequence(() => stopServerStack(stack, db, renderer));
+    (globalThis as any).__requestShutdown = requestShutdown;
+    process.on('SIGINT', requestShutdown);
+    process.on('SIGTERM', requestShutdown);
+    process.on('SIGHUP', requestShutdown);
+  } else {
+    // Dash/test mode: no receiver stack, keep the direct cleanup path.
+    process.on('SIGINT', cleanup);
+    process.on('SIGTERM', cleanup);
+    process.on('SIGHUP', cleanup);
+  }
 
   const clearSelectionCopy = setGlobalSelectionMouseUpHandler(() => {
     const text = renderer.getSelection()?.getSelectedText();
@@ -251,6 +272,15 @@ export async function main(): Promise<void> {
   const disposeKeymap = setupKeymap(keymap);
   keymap.setData('app.view', home ? 'home' : 'detail');
   keymap.setData('modal.active', 'none');
+
+  if (home) {
+    beginStartup([
+      { id: 'history', label: 'Loading workspace history' },
+      { id: 'receiver', label: 'Starting telemetry receiver' },
+      { id: 'sidecar', label: 'Starting gRPC sidecar' },
+      { id: 'collectors', label: 'Starting metric collectors' },
+    ]);
+  }
 
   await render(() => (
     <KeymapProvider keymap={keymap}>
@@ -270,11 +300,106 @@ export async function main(): Promise<void> {
           keymap,
         }}
       />
+      <LifecycleModal />
     </KeymapProvider>
   ), renderer);
+
+  // ---- Server-stack bootstrap (after first paint; modal shows progress) ----
+  void startServerStack(home);
   await new Promise<void>(done => renderer.once('destroy', done));
   clearSelectionCopy();
   disposeKeymap();
+
+  // ---- Server-stack start sequence ----
+  async function startServerStack(homeMode: boolean): Promise<void> {
+    let activeStep = 'history';
+    const mark = (id: string) => { activeStep = id; setStepActive(id); };
+    try {
+      mark('history');
+      if (homeMode && !useDemoDb) {
+        // Home mode loads history deferred (behind the startup modal); dash/test
+        // already loaded it synchronously pre-render.
+        for (const r of repos) db.scanAllWorkspaces(r);
+        db.cleanupOlderThan();
+        traceStore.loadFile(db.loadSpans());
+      }
+      setStepDone('history');
+      await tick();
+      if (isShutdownRequested()) return;
+
+      mark('receiver');
+      if (httpPort || zipkinPort || datadogPort) {
+        const hostname = '127.0.0.1';
+        const ports: number[] = [];
+        if (httpPort) ports.push(httpPort);
+        if (zipkinPort && zipkinPort !== httpPort) ports.push(zipkinPort);
+        if (datadogPort && datadogPort !== httpPort && datadogPort !== zipkinPort) ports.push(datadogPort);
+
+        for (const port of ports) {
+          stack.servers.push(Bun.serve({
+            hostname,
+            port,
+            fetch: (request) => routeReceiverRequest(request, signalRouter) ?? new Response('not found', { status: 404 }),
+          }));
+        }
+      }
+      setStepDone('receiver');
+      await tick();
+      if (isShutdownRequested()) return;
+
+      mark('sidecar');
+      if (grpcPort && httpPort) {
+        // Compiled binaries embed no source files; the sidecar is a second executable
+        // built next to this one. Source runs spawn the script via bun.
+        const compiled = import.meta.url.includes('/$bunfs/') || import.meta.url.includes('B:/~BUN/');
+        const sidecarScript = compiled
+          ? join(dirname(process.execPath), 'agentic-coding-grpc-sidecar')
+          : new URL('./otel/receiver/otlp-grpc-sidecar.ts', import.meta.url).pathname;
+        const sidecar = spawn(compiled ? sidecarScript : 'bun', [sidecarScript, '--port', String(grpcPort), '--forward', `http://127.0.0.1:${httpPort}`], {
+          stdio: ['ignore', 'inherit', 'inherit'],
+        });
+        sidecar.on('error', error => console.warn(`gRPC sidecar unavailable: ${error.message}`));
+        stack.grpcSidecar = sidecar;
+      } else if (grpcPort) {
+        console.warn('gRPC sidecar requires --http-port');
+      }
+      setStepDone('sidecar');
+      await tick();
+      if (isShutdownRequested()) return;
+
+      mark('collectors');
+      if (promTargets.length) {
+        stack.stopPrometheus = startPrometheusScraper(promTargets, promInterval, signalRouter);
+      }
+      if (statsdPort) {
+        const statsd = startStatsDListener(statsdPort, `statsd-${statsdPort}`, signalRouter);
+        stack.stopStatsD = statsd.stop;
+      }
+      setStepDone('collectors');
+      await tick();
+      if (isShutdownRequested()) return;
+
+      // Build topology from loaded spans (dash/test: already loaded pre-render)
+      if (homeMode) {
+        topologyStore.load(useDemoDb ? demoSpans : (traceStore.spanCount_ > 0 ? db.loadSpans() : []));
+        finishStartup();
+      }
+    } catch (error) {
+      // Stop whatever already started so a failed bootstrap leaks no port or sidecar.
+      for (const server of stack.servers) server.stop(true);
+      stack.grpcSidecar?.kill();
+      stack.stopPrometheus?.();
+      stack.stopStatsD?.();
+      if (homeMode) {
+        setStepError(activeStep, String(error));
+        // Hold so the user sees the failure behind the modal, then exit.
+        await sleep(1000);
+      } else {
+        console.error(`Cannot start server stack: ${String(error)}`);
+      }
+      process.exit(1);
+    }
+  }
 }
 
 if (import.meta.main) {

@@ -35,6 +35,7 @@ import { notify } from './notifications';
 import { applyTheme, getActiveThemeName, loadThemeName, saveThemeName, themeNames } from './theme';
 import { App as DashApp } from '../../dash/App';
 import { Home as DashHome } from '../../dash/Home';
+import { phase } from '../../lifecycle';
 import type { Renderable } from '@opentui/core';
 import type { Keymap } from '@opentui/keymap';
 
@@ -246,6 +247,9 @@ export function App(props: {
     };
     const traceDashModal = props.dashboard ? props.dashboard.keymap.getData?.('modal.active') : 'none';
     trace(`key=${key} ctrl=${!!event.ctrl} tab=${activeTab()} nav=${nav.modal()} dashModal=${traceDashModal}`);
+    // Lifecycle overlay (startup/shutdown modal) consumes keys; 'q' still works
+    // via the home keymap layer, which routes it to requestShutdown.
+    if (phase() === 'starting' || phase() === 'stopping') return;
 
     // Global copy
     if ((event.meta && key === 'c') || (event.ctrl && event.shift && key === 'c')) { copySelection(true); return; }
@@ -308,8 +312,10 @@ export function App(props: {
     // Quit (global)
     if (key === 'q') {
       const now = Date.now();
-      if (lastQuit() && now - lastQuit() < 1000) (globalThis as any).__renderer?.destroy();
-      else { setLastQuit(now); notify('Press q again to quit', 'info'); }
+      if (lastQuit() && now - lastQuit() < 1000) {
+        if (props.dashboard?.mode === 'home') (globalThis as any).__requestShutdown?.();
+        else (globalThis as any).__renderer?.destroy();
+      } else { setLastQuit(now); notify('Press q again to quit', 'info'); }
       return;
     }
 
