@@ -1,10 +1,16 @@
-// Single naming helper: Herdr agent name and pi `--name` must agree for a
-// given {change}-{role}. Herdr enforces a 32-char agent-name limit; truncate
-// the change id (keeping the role suffix intact) so both names match exactly.
-const HERDR_NAME_LIMIT = 32;
+import { createHash } from 'node:crypto';
 
-export function agentName(changeId: string, role: string): string {
+// Workspace scopes names across repositories. Herdr limits names to 32 chars;
+// hash only workspace IDs that do not fit or contain unsupported characters.
+const HERDR_NAME_LIMIT = 32;
+const HERDR_NAME = /^[a-z][a-z0-9_-]*$/;
+
+export function agentName(workspaceId: string, role: string): string {
   const suffix = `-${role}`;
-  const name = `${changeId}${suffix}`;
-  return name.length <= HERDR_NAME_LIMIT ? name : `${changeId.slice(0, HERDR_NAME_LIMIT - suffix.length)}${suffix}`;
+  const tokenLength = HERDR_NAME_LIMIT - suffix.length;
+  if (tokenLength < 2) throw new Error(`role too long for Herdr agent name: ${role}`);
+  const direct = `${workspaceId}${suffix}`;
+  if (direct.length <= HERDR_NAME_LIMIT && HERDR_NAME.test(direct)) return direct;
+  const token = `w${createHash('sha256').update(workspaceId).digest('hex').slice(0, tokenLength - 1)}`;
+  return `${token}${suffix}`;
 }

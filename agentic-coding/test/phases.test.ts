@@ -734,8 +734,8 @@ describe('cmdMessage', () => {
 });
 
 describe('launchRole', () => {
-  test('long change agent names keep role suffix', () => {
-    const state = { changeId: 'x'.repeat(32) };
+  test('long workspace agent names keep role suffix', () => {
+    const state = { workspace: 'x'.repeat(32) };
     const worker = orchestration.roleAgentName(state, 'worker');
     const triage = orchestration.roleAgentName(state, 'triage');
     expect(worker.length).toBe(32);
@@ -744,11 +744,21 @@ describe('launchRole', () => {
     expect(worker).not.toBe(triage);
   });
 
-  test('herdr agent name and pi --name agree, including truncation', () => {
-    for (const changeId of ['short-change', 'x'.repeat(32), 'y'.repeat(50)]) {
-      const state = { changeId };
+  test('same change in different workspaces gets different agent names', () => {
+    const first = orchestration.roleAgentName({ changeId: 'same-change', workspace: 'ws-1' }, 'worker');
+    const second = orchestration.roleAgentName({ changeId: 'same-change', workspace: 'ws-2' }, 'worker');
+    const longFirst = orchestration.roleAgentName({ changeId: 'same-change', workspace: `${'x'.repeat(40)}1` }, 'performance-verifier');
+    const longSecond = orchestration.roleAgentName({ changeId: 'same-change', workspace: `${'x'.repeat(40)}2` }, 'performance-verifier');
+    expect(first).not.toBe(second);
+    expect(longFirst).not.toBe(longSecond);
+    expect(longFirst).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
+  });
+
+  test('herdr agent name and pi --name agree, including hashing', () => {
+    for (const workspace of ['ws-1', 'x'.repeat(32), 'invalid:workspace']) {
+      const state = { workspace };
       const herdrName = orchestration.roleAgentName(state, 'worker');
-      const args = prompts.piArguments('worker', 'test/worker', 'high', changeId, DEFAULT_CONFIG);
+      const args = prompts.piArguments('worker', 'test/worker', 'high', workspace, DEFAULT_CONFIG);
       const piName = args[args.indexOf('--name') + 1];
       expect(piName).toBe(herdrName);
     }
@@ -767,12 +777,12 @@ describe('launchRole', () => {
     expect(kinds).not.toContain('pane split');
     expect(kinds).not.toContain('pane run');
     expect(kinds).not.toContain('pane send-keys');
-    expect(launch.slice(0, 7)).toEqual(['agent', 'start', 'my-change-worker', '--kind', 'pi', '--pane', state.panes.worker]);
+    expect(launch.slice(0, 7)).toEqual(['agent', 'start', 'ws-1-worker', '--kind', 'pi', '--pane', state.panes.worker]);
     expect(launch.slice(7, 10)).toEqual(['--timeout', '60000', '--']);
     expect(launch.slice(0, 7)).not.toContain('--cwd');
     expect(tabCreate[tabCreate.indexOf('--cwd') + 1]).toBe(repo);
     expect(launch).toContain('--name');
-    expect(launch).toContain('my-change-worker');
+    expect(launch).toContain('ws-1-worker');
     expect(launch.some(arg => arg.includes('/skill:herdr-openspec-worker'))).toBe(false);
     expect(herdr.calls[promptIndex]).toEqual(['agent', 'prompt', state.panes.worker, expect.stringContaining('/skill:herdr-openspec-worker')]);
     expect(getIndex).toBeGreaterThan(launchIndex);
@@ -797,7 +807,7 @@ describe('launchRole', () => {
   test('reports agent name collisions without retrying', async () => {
     const state = makeState('apply');
     herdr.on(args => args[0] === 'agent' && args[1] === 'start', () => {
-      throw new Error('agent name already in use: my-change-worker');
+      throw new Error('agent name already in use: ws-1-worker');
     });
     await expect(orchestration.launchRole(ctx, state, 'worker')).rejects.toThrow('agent name already in use');
     expect(herdr.calls.filter(call => call[0] === 'agent' && call[1] === 'start').length).toBe(1);
@@ -808,9 +818,9 @@ describe('launchRole', () => {
     let starts = 0;
     herdr.on(args => args[0] === 'agent' && args[1] === 'start', args => {
       starts += 1;
-      if (starts === 1) throw new Error('herdr agent start my-change-worker ...: {"error":{"code":"agent_pane_busy","message":"agent target pane pane-1 is not an available shell"}}');
+      if (starts === 1) throw new Error('herdr agent start ws-1-worker ...: {"error":{"code":"agent_pane_busy","message":"agent target pane pane-1 is not an available shell"}}');
       const paneId = args[args.indexOf('--pane') + 1]!;
-      herdr.registerPane(paneId, 'my-change-worker', 'tab-live');
+      herdr.registerPane(paneId, 'ws-1-worker', 'tab-live');
       herdr.setStatus(paneId, 'idle');
       return { agent: { pane_id: paneId, tab_id: 'tab-live', agent_status: 'idle' } };
     });
@@ -822,7 +832,7 @@ describe('launchRole', () => {
   test('reports verifier startup timeout without retry or fallback', async () => {
     const state = makeState('triage');
     herdr.on(args => args[0] === 'agent' && args[1] === 'start', () => {
-      throw new Error('herdr agent start my-change-quality-verifier ...: {"id":"cli:agent:start","error":{"code":"timeout","message":"timed out waiting for agent startup"}}');
+      throw new Error('herdr agent start ws-1-quality-verifier ...: {"id":"cli:agent:start","error":{"code":"timeout","message":"timed out waiting for agent startup"}}');
     });
     await expect(orchestration.launchRole(ctx, state, 'quality-verifier')).rejects.toThrow('timed out waiting for agent startup');
     expect(herdr.calls.filter(call => call[0] === 'agent' && call[1] === 'start').length).toBe(1);
@@ -831,7 +841,7 @@ describe('launchRole', () => {
   test('logs agent launch failure', async () => {
     const state = makeState('apply');
     herdr.on(args => args[0] === 'agent' && args[1] === 'start', () => {
-      throw new Error('agent name already in use: my-change-worker');
+      throw new Error('agent name already in use: ws-1-worker');
     });
     await expect(orchestration.launchRole(ctx, state, 'worker')).rejects.toThrow('agent name already in use');
     const traces = fs.readFileSync(path.join(stateMod.workflowDir(state), 'traces.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));

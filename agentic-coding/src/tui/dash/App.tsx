@@ -235,7 +235,6 @@ export function App(props: {
         old_path: comment.filePath,
         new_path: comment.filePath,
         position_type: "text",
-        old_line: comment.line,
         new_line: comment.line,
       };
       const note = {
@@ -272,7 +271,6 @@ export function App(props: {
           old_path: finding.path!,
           new_path: finding.path!,
           position_type: "text",
-          old_line: finding.line,
           new_line: finding.line,
         };
         const note = {

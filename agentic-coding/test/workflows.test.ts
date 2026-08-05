@@ -233,8 +233,8 @@ describe('verification-result idempotency and concurrency', () => {
   }
 
   function agentStarts(role: string): number {
-    const prefix = `my-change-${role}`;
-    return herdr.calls.filter(call => call[0] === 'agent' && call[1] === 'start' && call[2]?.startsWith(prefix)).length;
+    const name = orchestration.roleAgentName(stateMod.loadState(repo, 'my-change'), role);
+    return herdr.calls.filter(call => call[0] === 'agent' && call[1] === 'start' && call[2] === name).length;
   }
 
   test('duplicate reports do not re-trigger transitions', async () => {

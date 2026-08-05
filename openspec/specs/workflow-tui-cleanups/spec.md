@@ -12,12 +12,16 @@ The otel trace-view code SHALL exist once and be shared between the dashboard's 
 - **AND** both the dashboard trace tab and the `otel-tui` binary SHALL import it rather than keeping separate copies
 
 ### Requirement: Consistent agent naming
-The Herdr agent name and the pi `--name` for a role SHALL agree for a given `{change}-{role}`.
+The Herdr agent name and the pi `--name` for a role SHALL agree and SHALL be scoped by `{workspace}-{role}`.
 
-#### Scenario: Names match including truncation
-- **WHEN** a role agent is launched for a change whose `{change}-{role}` exceeds the Herdr name limit
-- **THEN** the Herdr agent name and pi `--name` SHALL be produced by one naming helper applying one truncation rule
-- **AND** the two names SHALL be equal
+#### Scenario: Same change in different workspaces
+- **WHEN** role agents for the same change are launched in different workspaces
+- **THEN** their agent names SHALL differ
+
+#### Scenario: Names match within the Herdr limit
+- **WHEN** a workspace ID is too long or contains unsupported agent-name characters
+- **THEN** one naming helper SHALL replace the workspace portion with a deterministic valid token while preserving the role suffix
+- **AND** the Herdr agent name and pi `--name` SHALL be equal and no longer than 32 characters
 
 ### Requirement: Legacy dead paths removed
 Superseded helpers SHALL be removed.

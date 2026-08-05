@@ -28,7 +28,7 @@ function providerUnhealthy(ctx: Context, model: string | undefined): boolean {
 }
 
 export function roleAgentName(state: WorkflowState, role: string): string {
-  return naming.agentName(state.changeId, role);
+  return naming.agentName(state.workspace, role);
 }
 
 export async function launchRole(ctx: Context, state: WorkflowState, role: string, text?: string): Promise<void> {
@@ -75,7 +75,7 @@ export async function launchRole(ctx: Context, state: WorkflowState, role: strin
     const startAgent = (name: string) =>
       ctx.herdr.call(
         'agent', 'start', name, '--kind', 'pi', '--pane', launchPane, '--timeout', '60000',
-        '--', ...prompts.piArguments(role, spawnModel, level, change, config, agentDefDir, name),
+        '--', ...prompts.piArguments(role, spawnModel, level, state.workspace, config, agentDefDir, name),
       );
     const launchFailed = (error: unknown): never => {
       telemetry.telemetry(ctx, state, 'agent_launch_failed', { role, model: spawnModel, error: String((error as Error)?.message ?? error), spanStatus: 'ERROR' });
@@ -83,7 +83,7 @@ export async function launchRole(ctx: Context, state: WorkflowState, role: strin
       throw error;
     };
 
-    const name = naming.agentName(change, role);
+    const name = naming.agentName(state.workspace, role);
     let agent: any;
     let launchError: unknown;
     try {
