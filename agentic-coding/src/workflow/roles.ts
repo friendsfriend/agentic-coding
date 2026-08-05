@@ -91,7 +91,8 @@ export async function launchRole(ctx: Context, state: WorkflowState, role: strin
     } catch (error) {
       launchError = error;
       if (String((error as Error)?.message ?? error).includes('not an available shell')) {
-        await ctx.clock.sleep(0.25);
+        // Herdr can take about a second to accept a fresh split pane as an available shell.
+        await ctx.clock.sleep(1);
         try {
           agent = startAgent(name).agent;
         } catch (retryError) {

@@ -813,19 +813,20 @@ describe('launchRole', () => {
     expect(herdr.calls.filter(call => call[0] === 'agent' && call[1] === 'start').length).toBe(1);
   });
 
-  test('retries once only when the target pane is not an available shell', async () => {
+  test('retries once after fresh pane settles when target is not an available shell', async () => {
     const state = makeState('apply');
-    let starts = 0;
+    const startTimes: number[] = [];
     herdr.on(args => args[0] === 'agent' && args[1] === 'start', args => {
-      starts += 1;
-      if (starts === 1) throw new Error('herdr agent start ws-1-worker ...: {"error":{"code":"agent_pane_busy","message":"agent target pane pane-1 is not an available shell"}}');
+      startTimes.push(ctx.clock.monotonic());
+      if (startTimes.length === 1) throw new Error('herdr agent start ws-1-worker ...: {"error":{"code":"agent_pane_busy","message":"agent target pane pane-1 is not an available shell"}}');
       const paneId = args[args.indexOf('--pane') + 1]!;
       herdr.registerPane(paneId, 'ws-1-worker', 'tab-live');
       herdr.setStatus(paneId, 'idle');
       return { agent: { pane_id: paneId, tab_id: 'tab-live', agent_status: 'idle' } };
     });
     await orchestration.launchRole(ctx, state, 'worker');
-    expect(starts).toBe(2);
+    expect(startTimes).toHaveLength(2);
+    expect(startTimes[1]! - startTimes[0]!).toBe(1);
     expect(state.tabs.worker).toBe('tab-live');
   });
 
