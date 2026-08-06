@@ -927,6 +927,19 @@ describe('prompt submission', () => {
     expect(herdr.calls.some(call => call[0] === 'agent' && call[1] === 'start')).toBe(false);
   });
 
+  test('reused pane path persists caller state mutations made before startRole', async () => {
+    // Regression: cmdDispatchVerifiers mutates state (e.g. verificationRoles) in
+    // memory, then calls startRole per role. When the role's pane already exists
+    // (round >= 2 reusing a verifier pane), startRole must still flush that
+    // mutation to disk — the reuse path used to skip saveState entirely.
+    const state = makeState('verify', { panes: { 'quality-verifier': 'pane-1' }, tabs: { 'quality-verifier': 'tab-verification', verification: 'tab-verification' } });
+    herdr.registerPane('pane-1', orchestration.roleAgentName(state, 'quality-verifier'), 'tab-verification');
+    herdr.setStatus('pane-1', 'idle');
+    state.verificationRoles = ['quality-verifier'];
+    await orchestration.startRole(ctx, state, 'quality-verifier', 'round 2');
+    expect(stateMod.loadState(repo, 'my-change').verificationRoles).toEqual(['quality-verifier']);
+  });
+
   test('refreshes moved standalone agent tab', async () => {
     const state = makeState('apply');
     await orchestration.launchRole(ctx, state, 'worker');

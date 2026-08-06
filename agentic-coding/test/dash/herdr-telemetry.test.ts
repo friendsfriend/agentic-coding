@@ -67,3 +67,10 @@ test("falls back once when verifier settles without result", () => {
   expect(telemetryTest.shouldRuntimeFallback("worker", false, false, "opencode/deepseek", "eon/sonnet")).toBe(false);
   expect(telemetryTest.shouldRuntimeFallback("quality-verifier", false, false, "eon/sonnet", "eon/sonnet")).toBe(false);
 });
+
+test("nudges once when verifier settles empty with no fallback available", () => {
+  expect(telemetryTest.shouldNudgeEmptySettle("quality-verifier", false, false)).toBe(true);
+  expect(telemetryTest.shouldNudgeEmptySettle("quality-verifier", true, false)).toBe(false);
+  expect(telemetryTest.shouldNudgeEmptySettle("quality-verifier", false, true)).toBe(false);
+  expect(telemetryTest.shouldNudgeEmptySettle("worker", false, false)).toBe(false);
+});

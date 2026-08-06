@@ -38,6 +38,7 @@ const modelName = (value: any) => value?.provider && value?.id ? `${value.provid
 const tokenUsage = (usage: any) => ({ inputTokens: Number(usage?.input ?? 0), outputTokens: Number(usage?.output ?? 0), cacheReadTokens: Number(usage?.cacheRead ?? 0), cacheWriteTokens: Number(usage?.cacheWrite ?? 0), totalTokens: Number(usage?.totalTokens ?? 0) });
 const COMPACT_THRESHOLD_TOKENS = 250_000;
 const COMPACTION_RESUME_PROMPT = 'Continue current worker task from compacted context. Complete remaining implementation and required focused validation.';
+const EMPTY_SETTLE_NUDGE_PROMPT = 'Your previous turn ended without recording a verification result. Finish the review now and call herdr-workflow verification-result before stopping.';
 const shouldCompact = (role: string | undefined, previous: number | undefined, current: number, pending: boolean) => role === 'worker' && !pending && current > COMPACT_THRESHOLD_TOKENS && (previous === undefined || previous <= COMPACT_THRESHOLD_TOKENS);
 const resumeAfterCompaction = (role: string | undefined, send: (prompt: string) => void) => { if (role !== 'worker') return false; send(COMPACTION_RESUME_PROMPT); return true; };
 const SEARCH_COMMAND_START = String.raw`(?:^|[\n;&|()])\s*`;
@@ -61,6 +62,7 @@ const isWorkflowStateAccess = (toolName: string, input: any) => {
 const isWorkerVerifyCommand = (command: string) => /(?:^|[\n;&|()])\s*(?:\S*\/)?herdr-workflow\s+verify(?:\s|$)/i.test(command);
 const verificationHandoffSucceeded = (isError: boolean, result: unknown) => !isError && /(?:triage started:|verification already running:)/i.test(json(result));
 const shouldRuntimeFallback = (role: string | undefined, resultRecorded: boolean, attempted: boolean, currentModel: string, fallbackModel?: string) => !!role?.endsWith('-verifier') && !resultRecorded && !attempted && !!fallbackModel && fallbackModel !== currentModel;
+const shouldNudgeEmptySettle = (role: string | undefined, resultRecorded: boolean, nudged: boolean) => !!role?.endsWith('-verifier') && !resultRecorded && !nudged;
 const isOneShot = (role?: string) => role === 'archive';
 
 export default function (pi: ExtensionAPI) {
@@ -84,6 +86,8 @@ export default function (pi: ExtensionAPI) {
   let operationToolCalls = 0;
   let fallbackAttempted = false;
   let fallbackRetryPending = false;
+  let emptySettleNudged = false;
+  let emptySettleRetryPending = false;
   let previousContextTokens: number | undefined;
   let compactionPending = false;
   let workerHandoffComplete = false;
@@ -115,7 +119,7 @@ export default function (pi: ExtensionAPI) {
     try { return Boolean(JSON.parse(readFileSync(join(root, 'state.json'), 'utf8')).verificationResults?.[role]); } catch { return false; }
   };
   const recordProviderFailure = (status: number) => { if (status !== 429 && status < 500) return undefined; try { const health = JSON.parse(readFileSync(healthPath, 'utf8')) as Record<string, { failures: number; lastFailure: string }>; const provider = model.split('/')[0] ?? 'unknown'; const previous = health[provider]; const recent = previous && Date.now() - Date.parse(previous.lastFailure) < 120_000; health[provider] = { failures: recent ? previous.failures + 1 : 1, lastFailure: new Date().toISOString() }; writeFileSync(healthPath, JSON.stringify(health)); return health[provider].failures; } catch { return undefined; } };
-  pi.on('before_agent_start', (event: any, ctx: any) => { model = modelName(ctx.model) ?? model; const handoff = consumeHandoff(); const session = ctx.sessionManager?.getSessionId?.() ?? 'unknown'; const leaf = handoff?.messageId ?? ctx.sessionManager?.getLeafEntry?.()?.id ?? hex(8); const prompt = String(event.prompt ?? ''); if (fallbackRetryPending) fallbackRetryPending = false; else fallbackAttempted = false; currentPrompt = prompt; operationToolCalls = 0; workerHandoffComplete = false; workerVerifyCalls.clear(); operation = start('agent.operation', handoff?.context, { ...handoff?.attributes, 'herdr.message.id': String(leaf), 'herdr.message.hash': createHash('sha256').update(prompt).digest('hex'), 'herdr.message.bytes': Buffer.byteLength(prompt), ...(captureContent() ? { 'herdr.content.input': prompt } : {}), 'pi.session.id': String(session), 'gen_ai.operation.name': 'invoke_agent' }); if (managedRole) return { systemPrompt: `${event.systemPrompt}\n\nNever run filesystem-global searches. Scope find, rg, grep, and mdfind to an explicit directory; do not search / or the entire home directory. Outside-repository directories are allowed when relevant.` }; });
+  pi.on('before_agent_start', (event: any, ctx: any) => { model = modelName(ctx.model) ?? model; const handoff = consumeHandoff(); const session = ctx.sessionManager?.getSessionId?.() ?? 'unknown'; const leaf = handoff?.messageId ?? ctx.sessionManager?.getLeafEntry?.()?.id ?? hex(8); const prompt = String(event.prompt ?? ''); if (fallbackRetryPending) fallbackRetryPending = false; else fallbackAttempted = false; if (emptySettleRetryPending) emptySettleRetryPending = false; else emptySettleNudged = false; currentPrompt = prompt; operationToolCalls = 0; workerHandoffComplete = false; workerVerifyCalls.clear(); operation = start('agent.operation', handoff?.context, { ...handoff?.attributes, 'herdr.message.id': String(leaf), 'herdr.message.hash': createHash('sha256').update(prompt).digest('hex'), 'herdr.message.bytes': Buffer.byteLength(prompt), ...(captureContent() ? { 'herdr.content.input': prompt } : {}), 'pi.session.id': String(session), 'gen_ai.operation.name': 'invoke_agent' }); if (managedRole) return { systemPrompt: `${event.systemPrompt}\n\nNever run filesystem-global searches. Scope find, rg, grep, and mdfind to an explicit directory; do not search / or the entire home directory. Outside-repository directories are allowed when relevant.` }; });
   pi.on('model_select', (event: any) => { model = modelName(event.model) ?? 'unknown'; write('model_selected', { model }); traceEvent('model_selected', { 'gen_ai.request.model': model }); });
   pi.on('agent_start', () => { write('pi_agent_start', { model }); traceEvent('started', { 'gen_ai.request.model': model }); });
   pi.on('agent_end', () => { write('pi_agent_end'); traceEvent('ended'); });
@@ -142,13 +146,23 @@ export default function (pi: ExtensionAPI) {
           traceEvent('verifier_runtime_fallback_error', { 'gen_ai.request.model': fromModel, 'herdr.fallback.model': fallback! }, 'ERROR');
         }
       }
+      // No fallback configured (or it was already spent this round): nudge the
+      // same model once to finish and report, rather than leaving the round
+      // stuck forever waiting on a result that will never arrive.
+      if (!retryPrompt && shouldNudgeEmptySettle(role, resultRecorded, emptySettleNudged)) {
+        emptySettleNudged = true;
+        emptySettleRetryPending = true;
+        write('verifier_empty_settle_nudged');
+        traceEvent('verifier_empty_settle_nudged');
+        retryPrompt = EMPTY_SETTLE_NUDGE_PROMPT;
+      }
     }
     end(operation);
     operation = undefined;
     write('pi_agent_settled');
     if (retryPrompt) {
       try { pi.sendUserMessage(retryPrompt); return; }
-      catch (error) { fallbackRetryPending = false; write('verifier_runtime_fallback_error', { fromModel, fallback, error: String(error) }); }
+      catch (error) { fallbackRetryPending = false; emptySettleRetryPending = false; write('verifier_runtime_fallback_error', { fromModel, fallback, error: String(error) }); }
     }
     if (oneShot) ctx.shutdown();
   });
@@ -215,4 +229,4 @@ export default function (pi: ExtensionAPI) {
   pi.on('message_end', (event: any) => { if (event.message?.role !== 'assistant') return; const usage = event.message.usage; if (usage) write('model_usage', { ...tokenUsage(usage), cost: usage.cost?.total }); });
 }
 
-export const telemetryTest = { parseTraceparent, traceparent, tokenUsage, shouldCompact, resumeAfterCompaction, isGlobalSearch, isWorkflowStateAccess, isWorkerVerifyCommand, verificationHandoffSucceeded, shouldRuntimeFallback, isOneShot };
+export const telemetryTest = { parseTraceparent, traceparent, tokenUsage, shouldCompact, resumeAfterCompaction, isGlobalSearch, isWorkflowStateAccess, isWorkerVerifyCommand, verificationHandoffSucceeded, shouldRuntimeFallback, shouldNudgeEmptySettle, isOneShot };

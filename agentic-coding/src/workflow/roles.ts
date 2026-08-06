@@ -86,18 +86,19 @@ export async function launchRole(ctx: Context, state: WorkflowState, role: strin
     const name = naming.agentName(state.workspace, role);
     let agent: any;
     let launchError: unknown;
-    try {
-      agent = startAgent(name).agent;
-    } catch (error) {
-      launchError = error;
-      if (String((error as Error)?.message ?? error).includes('not an available shell')) {
-        // Herdr can take about a second to accept a fresh split pane as an available shell.
-        await ctx.clock.sleep(1);
-        try {
-          agent = startAgent(name).agent;
-        } catch (retryError) {
-          launchError = retryError;
-        }
+    // Herdr can take a variable amount of time to accept a fresh split pane as an
+    // available shell, especially when several role panes are being split at once
+    // (shell rc / direnv / nvm init competing for CPU). A single 1s retry isn't
+    // always enough margin, so back off across a few attempts before giving up.
+    for (const delaySeconds of [0, 1, 2, 4]) {
+      if (delaySeconds) await ctx.clock.sleep(delaySeconds);
+      try {
+        agent = startAgent(name).agent;
+        launchError = undefined;
+        break;
+      } catch (error) {
+        launchError = error;
+        if (!String((error as Error)?.message ?? error).includes('not an available shell')) break;
       }
     }
     if (!agent) launchFailed(launchError);
@@ -151,10 +152,12 @@ export async function startRole(ctx: Context, state: WorkflowState, role: string
       return;
     }
     if (agent?.pane_id === state.panes[role] && ['idle', 'working', 'blocked', 'done'].includes(agent.agent_status)) {
-      if (agent.tab_id && (state.tabs ?? {})[role] !== agent.tab_id) {
-        state.tabs = { ...(state.tabs ?? {}), [role]: agent.tab_id };
-        stateMod.saveState(state);
-      }
+      if (agent.tab_id && (state.tabs ?? {})[role] !== agent.tab_id) state.tabs = { ...(state.tabs ?? {}), [role]: agent.tab_id };
+      // Reusing an existing pane skips launchRole (which flushes state at the
+      // end of its spawn). Callers like cmdDispatchVerifiers mutate `state` in
+      // memory (verificationRoles, etc.) before calling startRole, so it must
+      // be saved here too or those mutations never reach disk.
+      stateMod.saveState(state);
       promptRole(ctx, state, role, text);
       return;
     }
