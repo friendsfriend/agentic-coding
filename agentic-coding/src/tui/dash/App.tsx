@@ -30,6 +30,7 @@ import {
   openSpecArtifact,
   openSpecArtifacts,
   previewRepair,
+  requiredUserActionFor,
   runWorkflow,
   saveDeveloperReview,
   testDashboard,
@@ -37,6 +38,7 @@ import {
   type DeveloperReviewComment,
   type DeveloperReviewFinding,
   type LocalChange,
+  type RequiredUserActionItem,
 } from "./data";
 import { watchDirectories } from "./watchRefresh";
 import { Badge } from "./ui/Badge";
@@ -100,11 +102,23 @@ export function App(props: {
   const [selectedAgent, setSelectedAgent] = createSignal(0);
   const [selectedArtifact, setSelectedArtifact] = createSignal(0);
   const artifacts = createMemo(() => openSpecArtifacts(data().state));
+  const requiredUserAction = createMemo(() =>
+    requiredUserActionFor(
+      data().state.phase,
+      data().state.prCreated,
+      artifacts(),
+    ),
+  );
+  const [userActionOpen, setUserActionOpen] = createSignal(false);
+  const [userActionSelection, setUserActionSelection] = createSignal(0);
+  let promptedUserActionKey: string | undefined;
   const [verdict, setVerdict] = createSignal<{
     title: string;
     content: string;
   }>();
   const [verdictReturnToFindings, setVerdictReturnToFindings] =
+    createSignal(false);
+  const [verdictReturnToUserAction, setVerdictReturnToUserAction] =
     createSignal(false);
   const [findings, setFindings] = createSignal<{
     title: string;
@@ -115,6 +129,7 @@ export function App(props: {
   const [selectedFinding, setSelectedFinding] = createSignal(0);
   const openVerifierResult = (role: string, returnToVerification = false) => {
     setVerdictReturnToFindings(false);
+    setVerdictReturnToUserAction(false);
     setFindingsReturnToVerification(returnToVerification);
     const parsed =
       props.profile === "test"
@@ -352,11 +367,16 @@ export function App(props: {
     Math.max(4, Math.floor(dimensions().height * 0.75) - 5),
   );
   const closeVerdict = () => {
-    const restore = verdictReturnToFindings();
+    const restoreFindings = verdictReturnToFindings();
+    const restoreUserAction = verdictReturnToUserAction();
     setVerdict(undefined);
     setVerdictReturnToFindings(false);
-    if (restore) props.keymap.setData("modal.active", "findings");
-    else props.keymap.setData("modal.active", "none");
+    setVerdictReturnToUserAction(false);
+    if (restoreFindings) props.keymap.setData("modal.active", "findings");
+    else if (restoreUserAction) {
+      setUserActionOpen(true);
+      props.keymap.setData("modal.active", "user-action");
+    } else props.keymap.setData("modal.active", "none");
   };
   const openDeveloperReview = () => {
     try {
@@ -469,11 +489,70 @@ export function App(props: {
       };
     if (data().state.stepId === "core.developer-review") return { prompt: "Press Enter to review changed files", action: "review" };
     const actions = data().state.availableActions ?? []; if (actions.length > 1 || actions[0]?.confirmation !== 'none') return actions.length ? { prompt: "Press Enter to choose workflow action", action: "completed-actions" } : undefined;
-    const action = actions[0]; return action ? { prompt: `Press Enter: ${action.label}`, action: action.id } : undefined;
+    const action = actions[0]; if (action) return { prompt: `Press Enter: ${action.label}`, action: action.id };
+    if (
+      data().state.phase === "fix" &&
+      data().agents.find((agent) => agent.role === "worker")?.status !== "idle"
+    )
+      return undefined;
+    return approvalFor(data().state.phase);
   });
   const completedActions = () => data().state.availableActions?.map(action => ({ label: action.label, command: action.id, confirmation: action.confirmation })) ?? [];
   const actionSignature = createMemo(() => completedActions().map(action => `${action.command}:${action.confirmation}`).join('\0')); let previousActionSignature: string | undefined;
   createEffect(() => { const next = actionSignature(); if (previousActionSignature !== undefined && next !== previousActionSignature) { setCompletedSelection(0); setActionConfirmed(false); setActionReason('') } previousActionSignature = next });
+  const openRequiredUserAction = () => {
+    const action = requiredUserAction();
+    if (!action || (promptedUserActionKey === action.key && activePanel() !== 0))
+      return false;
+    setUserActionSelection(0);
+    setUserActionOpen(true);
+    props.keymap.setData("modal.active", "user-action");
+    return true;
+  };
+  // ponytail: legacy action ids from the pre-engine dashboard; new engine dispatches by id.
+  const workflowActionId = (value: string) => ({ apply: "approve-plan" })[value] ?? value;
+  const runRequiredUserAction = async (item: RequiredUserActionItem) => {
+    if (item.kind === "dismiss") {
+      setUserActionOpen(false);
+      props.keymap.setData("modal.active", "none");
+      return;
+    }
+    if (item.kind === "artifact") {
+      setUserActionOpen(false);
+      setVerdictReturnToFindings(false);
+      setVerdictReturnToUserAction(true);
+      let content: string;
+      try {
+        content = openSpecArtifact(data().state, item.value);
+      } catch (error) {
+        content = `Could not open ${item.value}: ${error instanceof Error ? error.message : String(error)}`;
+      }
+      setVerdict({ title: `OpenSpec · ${item.value}`, content });
+      setVerdictOffset(0);
+      props.keymap.setData("modal.active", "verdict");
+      return;
+    }
+    setUserActionOpen(false);
+    props.keymap.setData("modal.active", "none");
+    if (item.kind === "review") {
+      openDeveloperReview();
+      return;
+    }
+    setBusy(true);
+    setMessage(`Running ${item.label}…`);
+    try {
+      if (props.profile === "test") {
+        setDemoIndex((index) => (index + 1) % demoPhases.length);
+        setMessage("Advanced dummy workflow");
+      } else
+        setMessage(await runWorkflow(workflowActionId(item.value), props.repo, props.change, data().state.revision));
+      refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
   const workflowStatus = createMemo(() => {
     const label = data().state.stepLabel ?? data().state.phase;
     const active = data().agents.find((agent) => agent.status === "working");
@@ -645,6 +724,7 @@ export function App(props: {
       return;
     }
     if (name === "enter" || name === "return") {
+      if (openRequiredUserAction()) return;
       if (data().state.stepId === "core.developer-review") {
         openDeveloperReview();
         return;
@@ -855,6 +935,38 @@ export function App(props: {
       ],
       bindings: ["escape", "enter", "return", "j", "k", "up", "down", "backspace", "space", ..."abcdefghijklmnopqrstuvwxyz0123456789-_.".split("")].map(
         (key) => ({ key, cmd: "completed-picker.handle" }),
+      ),
+    });
+    const disposeUserAction = props.keymap.registerLayer({
+      name: "user-action",
+      priority: 1150,
+      activeModal: "user-action",
+      commands: [
+        {
+          name: "user-action.handle",
+          run: ({ event }) => {
+            if (busy()) return true;
+            const key = event.name.toLowerCase();
+            const items = requiredUserAction()?.items ?? [];
+            if (key === "escape") {
+              setUserActionOpen(false);
+              props.keymap.setData("modal.active", "none");
+            } else if (key === "j" || key === "down")
+              setUserActionSelection((index) =>
+                Math.min(Math.max(0, items.length - 1), index + 1),
+              );
+            else if (key === "k" || key === "up")
+              setUserActionSelection((index) => Math.max(0, index - 1));
+            else if (key === "enter" || key === "return") {
+              const item = items[userActionSelection()];
+              if (item) void runRequiredUserAction(item);
+            }
+            return true;
+          },
+        },
+      ],
+      bindings: ["escape", "enter", "return", "j", "k", "up", "down"].map(
+        (key) => ({ key, cmd: "user-action.handle" }),
       ),
     });
     const disposeCost = props.keymap.registerLayer({
@@ -1347,6 +1459,7 @@ export function App(props: {
       disposeTheme();
       disposeCompletedPicker();
       disposeRepair();
+      disposeUserAction();
       disposeCost();
       disposeHelp();
       disposeVerification();
@@ -1358,12 +1471,47 @@ export function App(props: {
       disposeVerdict();
       dispose();
     });
-    // Self-heal: reconcile the keymap modal data with the real modal state, so a
-    // modal closed by any path (mouse backdrop click, cancel, submit) never leaves
-    // `modal.active` stuck — a stuck value deactivates the layers and kills keys.
+    const anyModalOpen = () =>
+      !!(
+        verdict() ||
+        findings() ||
+        verificationDetail() ||
+        eventsDetail() ||
+        traceDetail() ||
+        help() ||
+        themePicker() ||
+        completedPicker() ||
+        repairOpen() ||
+        userActionOpen() ||
+        costOpen() ||
+        reviewOpen() ||
+        reviewCommentMode()
+      );
+    // Self-heal: reconcile keymap modal data with real modal state.
     createEffect(() => {
-      const anyOpen = !!(verdict() || findings() || verificationDetail() || eventsDetail() || traceDetail() || help() || themePicker() || completedPicker() || repairOpen() || reviewOpen() || reviewCommentMode() || costOpen());
-      if (!anyOpen) props.keymap.setData("modal.active", "none");
+      if (!anyModalOpen()) props.keymap.setData("modal.active", "none");
+    });
+    createEffect(() => {
+      const action = requiredUserAction();
+      if (!action) {
+        promptedUserActionKey = undefined;
+        if (userActionOpen()) {
+          setUserActionOpen(false);
+          props.keymap.setData("modal.active", "none");
+        }
+        return;
+      }
+      if (promptedUserActionKey === action.key) return;
+      if (userActionOpen()) {
+        promptedUserActionKey = action.key;
+        setUserActionSelection(0);
+        return;
+      }
+      if (anyModalOpen()) return;
+      promptedUserActionKey = action.key;
+      setUserActionSelection(0);
+      setUserActionOpen(true);
+      props.keymap.setData("modal.active", "user-action");
     });
   });
   const doneTasks = createMemo(
@@ -1766,6 +1914,28 @@ export function App(props: {
           renderItem={(item, selected) => (
             <text fg={selected ? uiColors.primary : uiColors.textSecondary}>
               {item}
+            </text>
+          )}
+        />
+      </Show>
+      <Show when={userActionOpen() && requiredUserAction()}>
+        <ListViewModal
+          title={`⚠ ${requiredUserAction()!.title}`}
+          fieldLabel={requiredUserAction()!.prompt}
+          items={requiredUserAction()!.items}
+          selectedIndex={userActionSelection()}
+          heightPercent={0.5}
+          help={[
+            { key: "j/k", action: "Navigate" },
+            { key: "Enter", action: "Start" },
+            { key: "Esc", action: "Not now" },
+          ]}
+          renderItem={(item, selected) => (
+            <text
+              fg={selected ? uiColors.warning : uiColors.textSecondary}
+              attributes={selected ? TextAttributes.BOLD : 0}
+            >
+              {item.label}
             </text>
           )}
         />
