@@ -29,6 +29,7 @@ import {
   openSpecArtifact,
   openSpecArtifacts,
   operationalPhases,
+  requiredUserActionFor,
   runWorkflow,
   saveDeveloperReview,
   testDashboard,
@@ -36,6 +37,7 @@ import {
   type DeveloperReviewComment,
   type DeveloperReviewFinding,
   type LocalChange,
+  type RequiredUserActionItem,
 } from "./data";
 import { watchDirectories } from "./watchRefresh";
 import { Badge } from "./ui/Badge";
@@ -99,11 +101,23 @@ export function App(props: {
   const [selectedAgent, setSelectedAgent] = createSignal(0);
   const [selectedArtifact, setSelectedArtifact] = createSignal(0);
   const artifacts = createMemo(() => openSpecArtifacts(data().state));
+  const requiredUserAction = createMemo(() =>
+    requiredUserActionFor(
+      data().state.phase,
+      data().state.prCreated,
+      artifacts(),
+    ),
+  );
+  const [userActionOpen, setUserActionOpen] = createSignal(false);
+  const [userActionSelection, setUserActionSelection] = createSignal(0);
+  let promptedUserActionKey: string | undefined;
   const [verdict, setVerdict] = createSignal<{
     title: string;
     content: string;
   }>();
   const [verdictReturnToFindings, setVerdictReturnToFindings] =
+    createSignal(false);
+  const [verdictReturnToUserAction, setVerdictReturnToUserAction] =
     createSignal(false);
   const [findings, setFindings] = createSignal<{
     title: string;
@@ -114,6 +128,7 @@ export function App(props: {
   const [selectedFinding, setSelectedFinding] = createSignal(0);
   const openVerifierResult = (role: string, returnToVerification = false) => {
     setVerdictReturnToFindings(false);
+    setVerdictReturnToUserAction(false);
     setFindingsReturnToVerification(returnToVerification);
     const parsed =
       props.profile === "test"
@@ -148,8 +163,6 @@ export function App(props: {
   const [overrideConfirm, setOverrideConfirm] = createSignal(false);
   const [overrideSelection, setOverrideSelection] = createSignal(0);
   const [overridePhase, setOverridePhase] = createSignal<string>();
-  const [completedPicker, setCompletedPicker] = createSignal(false);
-  const [completedSelection, setCompletedSelection] = createSignal(0);
   const [costOpen, setCostOpen] = createSignal(false);
   const [costSelection, setCostSelection] = createSignal(0);
   const [costAgent, setCostAgent] = createSignal<string | null>(null);
@@ -349,11 +362,16 @@ export function App(props: {
     Math.max(4, Math.floor(dimensions().height * 0.75) - 5),
   );
   const closeVerdict = () => {
-    const restore = verdictReturnToFindings();
+    const restoreFindings = verdictReturnToFindings();
+    const restoreUserAction = verdictReturnToUserAction();
     setVerdict(undefined);
     setVerdictReturnToFindings(false);
-    if (restore) props.keymap.setData("modal.active", "findings");
-    else props.keymap.setData("modal.active", "none");
+    setVerdictReturnToUserAction(false);
+    if (restoreFindings) props.keymap.setData("modal.active", "findings");
+    else if (restoreUserAction) {
+      setUserActionOpen(true);
+      props.keymap.setData("modal.active", "user-action");
+    } else props.keymap.setData("modal.active", "none");
   };
   const openDeveloperReview = () => {
     try {
@@ -469,13 +487,59 @@ export function App(props: {
       data().agents.find((agent) => agent.role === "worker")?.status !== "idle"
     )
       return undefined;
-    return approvalFor(data().state.phase, data().state.prCreated);
+    return approvalFor(data().state.phase);
   });
-  const completedActions = () => [
-    { label: "Create MR/PR", command: "create-pr" },
-    { label: "Close Herdr workspace", command: "close" },
-    { label: "Close & delete worktree", command: "close-clean" },
-  ];
+  const openRequiredUserAction = () => {
+    const action = requiredUserAction();
+    if (!action || (promptedUserActionKey === action.key && activePanel() !== 0))
+      return false;
+    setUserActionSelection(0);
+    setUserActionOpen(true);
+    props.keymap.setData("modal.active", "user-action");
+    return true;
+  };
+  const runRequiredUserAction = async (item: RequiredUserActionItem) => {
+    if (item.kind === "dismiss") {
+      setUserActionOpen(false);
+      props.keymap.setData("modal.active", "none");
+      return;
+    }
+    if (item.kind === "artifact") {
+      setUserActionOpen(false);
+      setVerdictReturnToFindings(false);
+      setVerdictReturnToUserAction(true);
+      let content: string;
+      try {
+        content = openSpecArtifact(data().state, item.value);
+      } catch (error) {
+        content = `Could not open ${item.value}: ${error instanceof Error ? error.message : String(error)}`;
+      }
+      setVerdict({ title: `OpenSpec · ${item.value}`, content });
+      setVerdictOffset(0);
+      props.keymap.setData("modal.active", "verdict");
+      return;
+    }
+    setUserActionOpen(false);
+    props.keymap.setData("modal.active", "none");
+    if (item.kind === "review") {
+      openDeveloperReview();
+      return;
+    }
+    setBusy(true);
+    setMessage(`Running ${item.label}…`);
+    try {
+      if (props.profile === "test") {
+        setDemoIndex((index) => (index + 1) % demoPhases.length);
+        setMessage("Advanced dummy workflow");
+      } else
+        setMessage(await runWorkflow(item.value, props.repo, props.change));
+      refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
   const workflowStatus = createMemo(() => {
     const phase = data().state.phase;
     if (phase === "committing") return { text: "Pushing changes", working: true };
@@ -662,10 +726,7 @@ export function App(props: {
       return;
     }
     if (name === "enter" || name === "return") {
-      if (data().state.phase === "developer-review") {
-        openDeveloperReview();
-        return;
-      }
+      if (openRequiredUserAction()) return;
       if (activePanel() === 6) {
         const artifact = artifacts()[selectedArtifact()];
         if (artifact) {
@@ -730,16 +791,6 @@ export function App(props: {
       }
       const approval = gate();
       if (!approval) return;
-      if (approval.action === "review") {
-        openDeveloperReview();
-        return;
-      }
-      if (approval.action === "completed-actions") {
-        setCompletedPicker(true);
-        setCompletedSelection(0);
-        props.keymap.setData("modal.active", "completed-picker");
-        return;
-      }
       setBusy(true);
       setMessage(`Running ${approval.action}…`);
       try {
@@ -911,50 +962,36 @@ export function App(props: {
         (key) => ({ key, cmd: "override-confirm.handle" }),
       ),
     });
-    const disposeCompletedPicker = props.keymap.registerLayer({
-      name: "completed-picker",
-      priority: 1000,
-      activeModal: "completed-picker",
+    const disposeUserAction = props.keymap.registerLayer({
+      name: "user-action",
+      priority: 1150,
+      activeModal: "user-action",
       commands: [
         {
-          name: "completed-picker.handle",
+          name: "user-action.handle",
           run: ({ event }) => {
             if (busy()) return true;
             const key = event.name.toLowerCase();
+            const items = requiredUserAction()?.items ?? [];
             if (key === "escape") {
-              setCompletedPicker(false);
+              setUserActionOpen(false);
               props.keymap.setData("modal.active", "none");
             } else if (key === "j" || key === "down")
-              setCompletedSelection((index) =>
-                Math.min(2, index + 1),
+              setUserActionSelection((index) =>
+                Math.min(Math.max(0, items.length - 1), index + 1),
               );
             else if (key === "k" || key === "up")
-              setCompletedSelection((index) => Math.max(0, index - 1));
+              setUserActionSelection((index) => Math.max(0, index - 1));
             else if (key === "enter" || key === "return") {
-              const action = completedActions()[completedSelection()];
-              if (!action) return true;
-              setCompletedPicker(false);
-              props.keymap.setData("modal.active", "none");
-              setBusy(true);
-              setMessage(`Running ${action.label}…`);
-              void runWorkflow(action.command, props.repo, props.change)
-                .then(setMessage)
-                .catch((error) =>
-                  setMessage(
-                    error instanceof Error ? error.message : String(error),
-                  ),
-                )
-                .finally(() => {
-                  setBusy(false);
-                  refresh();
-                });
+              const item = items[userActionSelection()];
+              if (item) void runRequiredUserAction(item);
             }
             return true;
           },
         },
       ],
       bindings: ["escape", "enter", "return", "j", "k", "up", "down"].map(
-        (key) => ({ key, cmd: "completed-picker.handle" }),
+        (key) => ({ key, cmd: "user-action.handle" }),
       ),
     });
     const disposeCost = props.keymap.registerLayer({
@@ -1447,7 +1484,7 @@ export function App(props: {
       disposeTheme();
       disposeOverridePicker();
       disposeOverrideConfirm();
-      disposeCompletedPicker();
+      disposeUserAction();
       disposeCost();
       disposeHelp();
       disposeVerification();
@@ -1459,12 +1496,46 @@ export function App(props: {
       disposeVerdict();
       dispose();
     });
-    // Self-heal: reconcile the keymap modal data with the real modal state, so a
-    // modal closed by any path (mouse backdrop click, cancel, submit) never leaves
-    // `modal.active` stuck — a stuck value deactivates the layers and kills keys.
+    const anyModalOpen = () =>
+      !!(
+        verdict() ||
+        findings() ||
+        verificationDetail() ||
+        eventsDetail() ||
+        traceDetail() ||
+        help() ||
+        themePicker() ||
+        overridePicker() ||
+        overrideConfirm() ||
+        userActionOpen() ||
+        costOpen() ||
+        reviewOpen()
+      );
+    // Self-heal: reconcile keymap modal data with real modal state.
     createEffect(() => {
-      const anyOpen = !!(verdict() || findings() || verificationDetail() || eventsDetail() || traceDetail() || help() || themePicker() || overridePicker() || overrideConfirm() || completedPicker() || costOpen());
-      if (!anyOpen) props.keymap.setData("modal.active", "none");
+      if (!anyModalOpen()) props.keymap.setData("modal.active", "none");
+    });
+    createEffect(() => {
+      const action = requiredUserAction();
+      if (!action) {
+        promptedUserActionKey = undefined;
+        if (userActionOpen()) {
+          setUserActionOpen(false);
+          props.keymap.setData("modal.active", "none");
+        }
+        return;
+      }
+      if (promptedUserActionKey === action.key) return;
+      if (userActionOpen()) {
+        promptedUserActionKey = action.key;
+        setUserActionSelection(0);
+        return;
+      }
+      if (anyModalOpen()) return;
+      promptedUserActionKey = action.key;
+      setUserActionSelection(0);
+      setUserActionOpen(true);
+      props.keymap.setData("modal.active", "user-action");
     });
   });
   const doneTasks = createMemo(
@@ -1482,12 +1553,6 @@ export function App(props: {
     ).length;
     return `run ${count("run")} · pass ${count("pass")} · fail ${count("fail")} · skip ${count("skipped")}${reused ? ` · reused:${reused}` : ""}`;
   });
-  const prompt = createMemo(() =>
-    data().state.phase === "paused"
-      ? "Verification paused · developer intervention required"
-      : (gate()?.prompt ?? "Waiting for workflow activity"),
-  );
-
   return (
     <box style={{ width: '100%', height: '100%' }}>
       <Layout
@@ -1908,20 +1973,24 @@ export function App(props: {
           )}
         />
       </Show>
-      <Show when={completedPicker()}>
+      <Show when={userActionOpen() && requiredUserAction()}>
         <ListViewModal
-          title="Workflow complete — choose next step"
-          fieldLabel="Action"
-          items={completedActions().map(action => action.label)}
-          selectedIndex={completedSelection()}
+          title={`⚠ ${requiredUserAction()!.title}`}
+          fieldLabel={requiredUserAction()!.prompt}
+          items={requiredUserAction()!.items}
+          selectedIndex={userActionSelection()}
+          heightPercent={0.5}
           help={[
             { key: "j/k", action: "Navigate" },
-            { key: "Enter", action: "Run" },
-            { key: "Esc", action: "Cancel" },
+            { key: "Enter", action: "Start" },
+            { key: "Esc", action: "Not now" },
           ]}
           renderItem={(item, selected) => (
-            <text fg={selected ? uiColors.primary : uiColors.textSecondary}>
-              {item}
+            <text
+              fg={selected ? uiColors.warning : uiColors.textSecondary}
+              attributes={selected ? TextAttributes.BOLD : 0}
+            >
+              {item.label}
             </text>
           )}
         />

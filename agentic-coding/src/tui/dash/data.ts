@@ -974,23 +974,94 @@ export function testDashboard(phase = "proposed"): DashboardData {
   };
 }
 
-export function approvalFor(phase: string, prCreated = false) {
-  if (phase === 'completed') {
-    return prCreated
-      ? { prompt: 'Press Enter to close Herdr workspace', action: 'close' }
-      : { prompt: 'Press Enter to create MR/PR or close', action: 'completed-actions' };
-  }
+export type RequiredUserActionItem =
+  | { label: string; kind: "artifact"; value: string }
+  | { label: string; kind: "review" }
+  | { label: string; kind: "workflow"; value: string }
+  | { label: string; kind: "dismiss" };
+
+export interface RequiredUserAction {
+  key: string;
+  title: string;
+  prompt: string;
+  items: RequiredUserActionItem[];
+}
+
+export function requiredUserActionFor(
+  phase: string,
+  prCreated = false,
+  artifacts: string[] = [],
+): RequiredUserAction | undefined {
+  const later = { label: "Not now", kind: "dismiss" } as const;
+  if (phase === "proposed")
+    return {
+      key: phase,
+      title: "Action required · Approve plan",
+      prompt: "Review plan artifacts, then approve implementation.",
+      items: [
+        ...artifacts.map((artifact) => ({
+          label: `Review ${artifact}`,
+          kind: "artifact" as const,
+          value: artifact,
+        })),
+        {
+          label: "Approve plan and start implementation",
+          kind: "workflow",
+          value: "apply",
+        },
+        later,
+      ],
+    };
+  if (phase === "developer-review")
+    return {
+      key: phase,
+      title: "Action required · Developer review",
+      prompt: "Review changed files before workflow continues.",
+      items: [
+        { label: "Start developer review", kind: "review" },
+        later,
+      ],
+    };
+  if (phase === "completed")
+    return {
+      key: `${phase}:${prCreated ? "pr-created" : "no-pr"}`,
+      title: "Action required · Workflow complete",
+      prompt: prCreated
+        ? "Close workspace when finished."
+        : "Create MR/PR or close workspace.",
+      items: [
+        ...(!prCreated
+          ? [
+              {
+                label: "Create MR/PR",
+                kind: "workflow" as const,
+                value: "create-pr",
+              },
+            ]
+          : []),
+        {
+          label: "Close Herdr workspace",
+          kind: "workflow",
+          value: "close",
+        },
+        {
+          label: "Close and delete worktree",
+          kind: "workflow",
+          value: "close-clean",
+        },
+        later,
+      ],
+    };
+  return undefined;
+}
+
+export function approvalFor(phase: string) {
   return (
     {
-      proposed: { prompt: "Press Enter to approve apply", action: "apply" },
       fix: { prompt: "Press Enter to retry verification", action: "verify" },
       paused: {
         prompt: "Press Enter to resume verification",
         action: "verify",
-      },
-      "developer-review": {
-        prompt: "Press Enter to review changed files",
-        action: "review",
       },
       archive: {
         prompt: "Press Enter to advance archive",

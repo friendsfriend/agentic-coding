@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, test } from 'bun:test';
-import { loadLocalChanges, loadLocalDiff, saveDeveloperReview, testDashboard, costSummary, costMessages, isStale, type DeveloperReviewComment } from '../../src/tui/dash/data';
+import { loadLocalChanges, loadLocalDiff, saveDeveloperReview, testDashboard, costSummary, costMessages, isStale, requiredUserActionFor, type DeveloperReviewComment } from '../../src/tui/dash/data';
 import { startArgs } from '../../src/tui/dash/engine';
 
 const roots: string[] = [];
@@ -66,6 +66,37 @@ test('saveDeveloperReview creates review directory and serializes comments', asy
 
 test('demo dashboard includes usability verifier', () => {
   expect(testDashboard('verify').agents.map(agent => agent.role)).toContain('usability-verifier');
+});
+
+test('required user actions keep plan review and approval inside modal flow', () => {
+  const action = requiredUserActionFor('proposed', false, ['proposal.md', 'tasks.md']);
+
+  expect(action?.title).toContain('Approve plan');
+  expect(action?.items).toEqual([
+    { label: 'Review proposal.md', kind: 'artifact', value: 'proposal.md' },
+    { label: 'Review tasks.md', kind: 'artifact', value: 'tasks.md' },
+    { label: 'Approve plan and start implementation', kind: 'workflow', value: 'apply' },
+    { label: 'Not now', kind: 'dismiss' },
+  ]);
+});
+
+test('required user actions expose developer review and completion commands', () => {
+  expect(requiredUserActionFor('developer-review')?.items[0]).toEqual({
+    label: 'Start developer review',
+    kind: 'review',
+  });
+  expect(requiredUserActionFor('completed', false)?.items.map(item => item.label)).toEqual([
+    'Create MR/PR',
+    'Close Herdr workspace',
+    'Close and delete worktree',
+    'Not now',
+  ]);
+  expect(requiredUserActionFor('completed', true)?.items.map(item => item.label)).toEqual([
+    'Close Herdr workspace',
+    'Close and delete worktree',
+    'Not now',
+  ]);
+  expect(requiredUserActionFor('verify')).toBeUndefined();
 });
 
 test('startArgs maps quick workflow type to no-openspec and passes task through', () => {
