@@ -25,25 +25,21 @@ export function Home(props: {
   keymap: Keymap<any, KeyEvent>;
   items: WorkflowOverview[];
   loading: boolean;
-  models: string[];
   projects: Array<{ name: string; path: string; openspec: boolean }>;
   refresh: () => void;
 }) {
   const dimensions = useTerminalDimensions();
-  const [models, setModels] = createSignal<string[]>([]);
   const [projects, setProjects] = createSignal<Array<{ name: string; path: string; openspec: boolean }>>([]);
   const [items, setItems] = createSignal<WorkflowOverview[]>([]);
   const [loading, setLoading] = createSignal(true);
   // The shell owns the workspace list (background load/refresh, survives tab
   // switches); this tab content just mirrors it.
   createEffect(() => setItems(props.items));
-  createEffect(() => setModels(props.models));
   createEffect(() => setProjects(props.projects));
   createEffect(() => setLoading(props.loading));
   const [selected, setSelected] = createSignal(0);
   const [modal, setModal] = createSignal(false);
   const [modalHandler, setModalHandler] = createSignal<(event: KeyEvent) => boolean>();
-  const [sshPassphraseRequired, setSshPassphraseRequired] = createSignal(false);
   const [message, setMessage] = createSignal('');
   const [error, setError] = createSignal<{ title: string; message: string }>();
   const [help, setHelp] = createSignal(false);
@@ -59,19 +55,22 @@ export function Home(props: {
   const [sortSelectedIndex, setSortSelectedIndex] = createSignal(0);
   const [sortDirection, setSortDirection] = createSignal<'asc' | 'desc'>('asc');
   const filterParameters = ['Status', 'Phase', 'Agent'];
-  const filterValues = ['Active', 'Archived'];
+  const filterValues = createMemo(() => filterParameters[filterSelectedParameter()] === 'Status' ? ['active', 'paused', 'attention-required', 'completed', 'closed'] : filterParameters[filterSelectedParameter()] === 'Phase' ? [...new Set(items().map(item => item.state.stepId ?? item.state.phase))].sort() : ['Active', 'Inactive']);
   const sortOptions = ['Name', 'Created', 'Updated', 'Status'];
+  createEffect(() => { filterSelectedParameter(); const length = filterValues().length; setFilterSelectedValue(index => Math.min(Math.max(0, index), Math.max(0, length - 1))) });
   const visibleItems = createMemo(() => {
     const parameter = filterParameters[filterSelectedParameter()]!;
-    const value = filterValues[filterSelectedValue()]!;
-    const filtered = items().filter(item => parameter === 'Agent'
-      ? value === 'Active' ? item.agents.some(agent => ['working', 'idle', 'done'].includes(agent.status)) : item.agents.every(agent => agent.status === 'closed')
-      : value === 'Active' ? item.state.phase !== 'closed' : item.state.phase === 'closed');
+    const value = filterValues()[filterSelectedValue()];
+    const filtered = !value ? items() : items().filter(item => parameter === 'Agent'
+      ? value === 'Active' ? item.agents.some(agent => ['pending', 'working'].includes(agent.status)) : !item.agents.some(agent => ['pending', 'working'].includes(agent.status))
+      : parameter === 'Status' ? item.state.status === value : (item.state.stepId ?? item.state.phase) === value);
     const option = sortOptions[sortSelectedIndex()]!;
     const direction = sortDirection() === 'asc' ? 1 : -1;
-    const valueFor = (item: WorkflowOverview) => option === 'Name' ? item.state.changeId : option === 'Created' ? item.state.createdAt ?? '' : option === 'Updated' ? item.state.phaseStartedAt ?? '' : item.state.phase;
+    const valueFor = (item: WorkflowOverview) => option === 'Name' ? item.state.changeId : option === 'Created' ? item.state.createdAt ?? '' : option === 'Updated' ? item.state.phaseStartedAt ?? '' : item.state.status ?? '';
     return [...filtered].sort((left, right) => valueFor(left).localeCompare(valueFor(right)) * direction);
   });
+  createEffect(() => { const length = visibleItems().length; setSelected(index => Math.min(Math.max(0, index), Math.max(0, length - 1))) });
+  const diagnostic = (value?: string) => value ? value.replace(/\s+/g, ' ').slice(0, 96) : undefined;
   const helpSections: HelpSection[] = [{ title: 'Navigation', items: [{ key: 'j/k or ↑/↓', description: 'Select workspace' }] }, { title: 'Actions', items: [{ key: 'Enter', description: 'Switch active workspace' }, { key: 'n', description: 'New workflow' }, { key: 'f', description: 'Open filter modal' }, { key: 'o', description: 'Open sort modal' }, { key: 'r', description: 'Refresh' }, { key: 'q', description: 'Quit' }, { key: '?', description: 'Open help' }] }];
   const helpMaxOffset = () => Math.max(0, helpSections.reduce((count, section) => count + section.items.length + 1, 0) - Math.max(5, Math.floor(dimensions().height * .78) - 5));
   const closeError = () => { setError(undefined); props.keymap.setData('modal.active', modal() ? 'new-workflow' : 'none'); };
@@ -102,13 +101,13 @@ export function Home(props: {
     if (name === 't' && key.shift) { setThemePicker(true); props.keymap.setData('modal.active', 'theme'); }
     else if (name === '?') { setHelp(true); setHelpOffset(0); props.keymap.setData('modal.active', 'help'); }
     else if (name === 'q') (globalThis as any).__requestShutdown?.();
-    else if (name === 'n') { setSshPassphraseRequired(false); setModal(true); props.keymap.setData('modal.active', 'new-workflow'); }
+    else if (name === 'n') { setModal(true); props.keymap.setData('modal.active', 'new-workflow'); }
     else if (name === 'r') refresh();
     else if (name === 'f') { setFilterModal(true); setFilterFocusedPane('parameter'); setFilterSelectedParameter(0); setFilterSelectedValue(0); props.keymap.setData('modal.active', 'filter'); }
     else if (name === 'o') { setSortModal(true); setSortSelectedIndex(0); props.keymap.setData('modal.active', 'sort'); }
-    else if (name === 'j' || name === 'down') setSelected(index => Math.min(index + 1, visibleItems().length - 1));
+    else if (name === 'j' || name === 'down') setSelected(index => Math.min(index + 1, Math.max(0, visibleItems().length - 1)));
     else if (name === 'k' || name === 'up') setSelected(index => Math.max(index - 1, 0));
-    else if (name === 'enter' || name === 'return') { const item = visibleItems()[selected()]; if (item?.workspaceOpen && item.state.phase !== 'closed') { try { focusWorkflow(item); } catch (error) { const message = error instanceof Error ? error.message : String(error); if (!notifyHerdrError(message)) showError(herdrAvailable() ? 'Workspace switch failed' : 'Herdr unavailable', message); } } }
+    else if (name === 'enter' || name === 'return') { const item = visibleItems()[selected()]; if (item?.state.health?.diagnostic) { showError('Invalid workflow state', item.state.health.diagnostic); return } if (item?.workspaceOpen && item.state.status !== 'closed') { try { focusWorkflow(item); } catch (error) { const message = error instanceof Error ? error.message : String(error); if (!notifyHerdrError(message)) showError(herdrAvailable() ? 'Workspace switch failed' : 'Herdr unavailable', message); } } }
   };
   onMount(() => {
     props.keymap.setData('app.view', 'home');
@@ -137,12 +136,12 @@ export function Home(props: {
         if (key === 'h' || key === 'left') { setFilterFocusedPane('parameter'); return true; }
         if (key === 'l' || key === 'right') { setFilterFocusedPane('value'); return true; }
         if (key === 'j' || key === 'down') {
-          if (filterFocusedPane() === 'parameter') setFilterSelectedParameter(i => Math.min(filterParameters.length - 1, i + 1));
-          else setFilterSelectedValue(i => Math.min(filterValues.length - 1, i + 1));
+          if (filterFocusedPane() === 'parameter') { setFilterSelectedParameter(i => Math.min(filterParameters.length - 1, i + 1)); setFilterSelectedValue(0) }
+          else setFilterSelectedValue(i => Math.min(filterValues().length - 1, i + 1));
           return true;
         }
         if (key === 'k' || key === 'up') {
-          if (filterFocusedPane() === 'parameter') setFilterSelectedParameter(i => Math.max(0, i - 1));
+          if (filterFocusedPane() === 'parameter') { setFilterSelectedParameter(i => Math.max(0, i - 1)); setFilterSelectedValue(0) }
           else setFilterSelectedValue(i => Math.max(0, i - 1));
           return true;
         }
@@ -179,10 +178,10 @@ export function Home(props: {
   return (
     <box backgroundColor={uiColors.bgBase} style={{ width: '100%', height: '100%', flexDirection: 'column' }} onMouseUp={() => invokeGlobalSelectionMouseUpHandler()}>
       <Panel title="Workspaces" active style={{ flexGrow: 1, minHeight: 0 }}>
-        <Show when={loading()} fallback={<Show when={items().length > 0} fallback={<text fg={uiColors.textMuted}>No workflows found in ~/development</text>}>
+        <Show when={loading()} fallback={<Show when={visibleItems().length > 0} fallback={<text fg={uiColors.textMuted}>{items().length ? 'No workflows match current filter' : 'No workflows found in configured project roots'}</text>}>
           <SelectableList items={visibleItems()} selectedIndex={selected()} renderItem={(item, active) => <box height={2} flexDirection="column" paddingLeft={1}>
-            <text fg={active ? uiColors.textPrimary : uiColors.textSecondary}>{item.state.changeId}  <span style={{ fg: uiColors.primary }}>{item.state.phase}</span>{isStale(item.state, Date.now()) ? <span style={{ fg: uiColors.warning }}>  · STALE</span> : <></>}</text>
-            <text fg={uiColors.textMuted}>{(item.state.workflowModules ?? ['plan','plan-approval','apply-verify','developer-approval','archive'])[0] === 'plan' ? 'standard' : 'direct-apply'} · {item.tasks[0]}/{item.tasks[1]} tasks · planner:{item.agents.find(agent => agent.role === 'planner')?.status ?? 'not started'} · {item.agents.filter(agent => agent.status === 'working' || agent.status === 'done' || agent.status === 'idle').length}/{item.agents.length} agents active</text>
+            <text fg={active ? uiColors.textPrimary : uiColors.textSecondary}>{item.state.changeId}  <span style={{ fg: uiColors.primary }}>{item.state.stepLabel ?? item.state.phase}</span>{diagnostic(item.state.health?.diagnostic) ? <span style={{ fg: uiColors.error }}>  · INVALID: {diagnostic(item.state.health?.diagnostic)}</span> : <></>}{isStale(item.state, Date.now()) ? <span style={{ fg: uiColors.warning }}>  · STALE</span> : <></>}</text>
+            <text fg={uiColors.textMuted}>{item.state.definition?.label ?? 'Workflow'} · {item.tasks[0]}/{item.tasks[1]} tasks · planner:{item.agents.find(agent => agent.role === 'planner')?.status ?? 'not started'} · {item.agents.filter(agent => agent.status === 'working' || agent.status === 'pending').length}/{item.agents.length} agents active</text>
           </box>} />
         </Show>}>
           <text fg={uiColors.textMuted}>Loading workspaces…</text>
@@ -190,13 +189,12 @@ export function Home(props: {
       </Panel>
       <NotificationOverlay />
       <Show when={themePicker()}><ThemePickerModal selected={themeIndex()} active={getActiveThemeName()} themes={themeNames} query="" filtering={false} /></Show>
-      <Show when={modal()}><NewWorkflowModal projects={projects()} models={models()} sshPassphraseRequired={sshPassphraseRequired()} onKeyReady={handler => setModalHandler(() => handler)} onCancel={() => { setModal(false); props.keymap.setData('modal.active', 'none'); setModalHandler(undefined); }} onComplete={async (input) => { if (!herdrAvailable()) { showHerdrUnavailable(); return; } setSshPassphraseRequired(false); setMessage('Starting workflow…'); try { setMessage(await startWorkflow({ ...input, workflowType: input.workflowType ?? 'standard' })); setModal(false); props.keymap.setData('modal.active', 'none'); setModalHandler(undefined); refresh(); } catch (error) {
+      <Show when={modal()}><NewWorkflowModal projects={projects()} onKeyReady={handler => setModalHandler(() => handler)} onCancel={() => { setModal(false); props.keymap.setData('modal.active', 'none'); setModalHandler(undefined); }} onComplete={async (input) => { if (!herdrAvailable()) { showHerdrUnavailable(); return; } setMessage('Starting workflow…'); try { setMessage(await startWorkflow({ ...input, workflowType: input.workflowType ?? 'standard' })); setModal(false); props.keymap.setData('modal.active', 'none'); setModalHandler(undefined); refresh(); } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (/permission denied \(publickey\)/i.test(message)) { setSshPassphraseRequired(true); return; }
-        showError('Workflow execution failed', message);
+        showError('Workflow execution failed', /permission denied \(publickey\)/i.test(message) ? `${message}\nConfigure Git/SSH credential agent before starting workflow.` : message);
       } }} /></Show>
       <Show when={help()}><HelpModal title="Workspace overview keybindings" sections={helpSections} offset={helpOffset()} lines={Math.max(5, Math.floor(dimensions().height * .78) - 5)} /></Show>
-      <Show when={filterModal()}><FilterModal focusedPane={filterFocusedPane()} selectedParameter={filterSelectedParameter()} selectedValue={filterSelectedValue()} parameters={filterParameters} values={filterValues} /></Show>
+      <Show when={filterModal()}><FilterModal focusedPane={filterFocusedPane()} selectedParameter={filterSelectedParameter()} selectedValue={filterSelectedValue()} parameters={filterParameters} values={filterValues()} /></Show>
       <Show when={sortModal()}><SortModal selectedIndex={sortSelectedIndex()} options={sortOptions} direction={sortDirection()} /></Show>
       <Show when={error()}>{current => <ErrorDialog title={current().title} message={current().message} onClose={closeError} onScrollBoxReady={ref => { errorScroll = ref; }} />}</Show>
     </box>

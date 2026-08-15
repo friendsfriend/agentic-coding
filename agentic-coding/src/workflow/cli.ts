@@ -1,250 +1,76 @@
-// argv surface + entrypoint wiring. Subcommand names/flags are the frozen external
-// contract (agent skills, prompts, and the dashboard invoke them literally).
-import * as effects from './effects.ts';
-import * as orchestration from './orchestration.ts';
-import * as plugins from './plugins.ts';
-import * as pr from './pr.ts';
-import { REPORT_CONTRACT } from './findings.ts';
-import * as transitions from './transitions.ts';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { loadConfig } from './effects.ts';
+import { definitionVersionForPolicy, registerBuiltins } from './definitions.ts';
+import { parseAgentsConfig, preflightProfile, resolveRouting } from './profiles.ts';
+import { WorkflowEngine, validateChangeId } from './runtime.ts';
+import { Herdr } from '../herdr-client.ts';
+import { HerdrLifecycle, OpenCodeAdapter, OpenCodeV2Adapter, PiAdapter, type AgentAdapter } from './adapters.ts';
+import { agentEffectHandlers, EffectRunner } from './effect-runner.ts';
+import { manageAgentExtension } from './agent-extensions.ts';
 
-export const SUBCOMMANDS = [
-  'projects', 'config', 'start', 'planner', 'apply', 'verify',
-  'dispatch-verifiers', 'archive', 'close', 'status',
-  'git-operations', 'phase', 'override-phase',
-  'preflight-archive', 'set-return', 'verification-result', 'message', 'plugin',
-  'finish-review', 'create-pr',
-] as const;
+export const SUBCOMMANDS = ['start', 'status', 'action', 'handoff', 'repair', 'projects', 'config', 'agent-extension'] as const;
+export const REQUIRED_FLAGS: Record<string, string[]> = { start: ['repo', 'change', 'mode'], status: ['repo', 'change'], action: ['repo', 'change', 'revision'], repair: ['repo', 'change', 'revision', 'step', 'reason'], handoff: ['outcome'] };
+export const AGENT_EXTENSION_SUBCOMMANDS = ['list', 'install', 'install-local'] as const;
+export const PLUGIN_SUBCOMMANDS = AGENT_EXTENSION_SUBCOMMANDS;
+const registry = registerBuiltins(undefined, loadConfig().workflow.max_verification_rounds);
+export function engine(): WorkflowEngine { return new WorkflowEngine(registry) }
+export async function drainEffects(workflowEngine: WorkflowEngine, repo: string): Promise<void> { const config = loadConfig(); const herdr = new Herdr(); const lifecycle = new HerdrLifecycle(herdr); const adapters = new Map<string, AgentAdapter>([['pi', new PiAdapter(lifecycle)], ['opencode', new OpenCodeAdapter(lifecycle)], ['opencode-v2', new OpenCodeV2Adapter(lifecycle)]]); const handlers = agentEffectHandlers(repo, workflowEngine, { registry, adapters, herdr, remote: config.workflow.remote, prTool: config.workflow.pr_tool, async paneForRun(runId) { const run = workflowEngine.getRun(repo, runId); const snapshot = workflowEngine.getSnapshot(repo, run.workflowId); if (!snapshot.metadata.workspace) throw new Error('workflow workspace unavailable'); if (['core.triage', 'core.verification'].includes(run.stepId)) { const siblings = workflowEngine.status(repo, snapshot.metadata.changeId).runs.map(item => workflowEngine.getRun(repo, item.id)).filter(item => item.id !== run.id && ['core.triage', 'core.verification'].includes(item.stepId) && item.attempt === run.attempt && !['expired', 'failed'].includes(item.status) && item.handle); for (const sibling of siblings) { const handle = sibling.handle!; let live: { agent?: { pane_id?: string; agent_status?: string } }; try { live = herdr.call('agent', 'get', handle.paneId) as typeof live } catch (error) { if (/not found|unknown agent|missing/i.test(String((error as Error).message))) try { herdr.call('pane', 'close', handle.paneId) } catch {} continue } if (live.agent?.pane_id !== handle.paneId || !live.agent.agent_status || live.agent.agent_status === 'unknown') { try { herdr.call('pane', 'close', handle.paneId) } catch {} continue } try { const split = herdr.call('pane', 'split', handle.paneId, '--direction', 'right', '--cwd', snapshot.metadata.worktree) as { pane?: { pane_id?: string; tab_id?: string } }; if (!split.pane?.pane_id) continue; return { paneId: split.pane.pane_id, ...(split.pane.tab_id ? { tabId: split.pane.tab_id } : {}) } } catch { continue } } } const label = ['core.triage', 'core.verification'].includes(run.stepId) ? 'verification' : run.role; const result = herdr.call('tab', 'create', '--workspace', snapshot.metadata.workspace, '--cwd', snapshot.metadata.worktree, '--label', label) as { root_pane?: { pane_id?: string; tab_id?: string } }; if (!result.root_pane?.pane_id) throw new Error('Herdr tab create returned no pane'); return { paneId: result.root_pane.pane_id, ...(result.root_pane.tab_id ? { tabId: result.root_pane.tab_id } : {}) } } }); await new EffectRunner(repo, workflowEngine, handlers).drain() }
 
-// subcommand -> required flag dests (positionals excluded)
-export const REQUIRED_FLAGS: Record<string, string[]> = {
-  start: ['repo', 'change', 'mode'],
-  planner: ['repo', 'change'],
-  apply: ['repo', 'change'],
-  verify: ['repo', 'change'],
-  'dispatch-verifiers': ['repo', 'change'],
-  archive: ['repo', 'change'],
-  close: ['repo', 'change'],
-  status: ['repo', 'change'],
-  'git-operations': ['repo', 'change'],
-  phase: ['repo', 'change'],
-  'override-phase': ['repo', 'change'],
-  'preflight-archive': ['repo', 'change'],
-  'set-return': ['repo', 'change', 'workspace'],
-  'create-pr': ['repo', 'change'],
-  'verification-result': ['repo', 'change', 'role'],
-  message: ['repo', 'change', 'sender', 'target'],
-};
-
-export const WORKFLOW_TYPE_CHOICES = Object.keys(transitions.WORKFLOW_TYPES);
-export const PLUGIN_SUBCOMMANDS = ['list', 'install', 'install-local'] as const;
-
-// One-line usage + description per subcommand, shown by `--help`/`-h`. Kept next to
-// REQUIRED_FLAGS/SUBCOMMANDS so drift is a one-file diff, not a hunt across docs.
-const HELP: Record<string, { usage: string; summary: string; details?: string }> = {
-  projects: { usage: 'projects', summary: 'List discovered repositories under the configured projects root.' },
-  config: { usage: 'config', summary: 'Print the resolved workflow config as JSON.' },
-  start: {
-    usage: 'start --repo <path> --change <id> --mode <worktree|checkout> [--workflow-type <standard|direct-apply|no-openspec>] [--task <text>] [--ticket <id>] [--worker <model>]',
-    summary: 'Create the branch/worktree, Herdr workspace, and launch the first-phase role(s) for a new change.',
-  },
-  planner: { usage: 'planner --repo <path> --change <id>', summary: 'Restart the planner role during the explore phase.' },
-  apply: { usage: 'apply --repo <path> --change <id>', summary: 'Run the plan-quality gate and start the worker role.' },
-  verify: { usage: 'verify --repo <path> --change <id>', summary: 'Re-enter the verify phase (e.g. after a fix round).' },
-  'dispatch-verifiers': { usage: 'dispatch-verifiers --repo <path> --change <id>', summary: 'Start the review-tier verifier roles for the current round.' },
-  'finish-review': { usage: 'finish-review --repo <path> --change <id>', summary: 'Consolidate verifier verdicts and transition out of verify.' },
-  'create-pr': { usage: 'create-pr --repo <path> --change <id>', summary: 'Create the PR/MR for a completed workflow (once; then only close remains).' },
-  archive: { usage: 'archive --repo <path> --change <id>', summary: 'Start the archive role after developer approval.' },
-  close: { usage: 'close --repo <path> --change <id> [--clean]', summary: 'Tear down the workflow (panes/tabs) after archive completes; --clean also deletes the worktree directory.' },
-  status: { usage: 'status --repo <path> --change <id>', summary: 'Print the current state.json for the change.' },
-  'git-operations': { usage: 'git-operations --repo <path> --change <id>', summary: 'Start the git-operations role to push/PR the finished change.' },
-  phase: { usage: 'phase <phase> --repo <path> --change <id>', summary: 'Force-set the recorded phase without running its transition logic.' },
-  'override-phase': { usage: 'override-phase <phase> --repo <path> --change <id>', summary: 'Operator escape hatch: jump the workflow to an arbitrary phase.' },
-  'preflight-archive': { usage: 'preflight-archive --repo <path> --change <id>', summary: 'Validate archive preconditions (clean tree, tasks complete) without starting archive.' },
-  'set-return': { usage: 'set-return --repo <path> --change <id> --workspace <id>', summary: 'Record the Herdr workspace to focus once the workflow closes.' },
-  'verification-result': { usage: 'verification-result --repo <path> --change <id> --role <name>', summary: 'Record one verifier role\'s pass/fail verdict for the current round.', details: REPORT_CONTRACT },
-  message: { usage: 'message --repo <path> --change <id> --from <role> --to <role> <text>', summary: 'Deliver an inter-role message (e.g. PLAN_REJECTED) and act on it.' },
-  plugin: { usage: 'plugin <list|install <source>|install-local <path>> [--worker] [--planner]', summary: 'List or install Pi extensions, optionally scoped to worker/planner roles.' },
-};
-
-function printTopHelp(): void {
-  console.log('Usage: agentic-coding workflow <command> [flags]\n');
-  console.log('Commands:');
-  for (const name of SUBCOMMANDS) console.log(`  ${name.padEnd(22)} ${HELP[name]?.summary ?? ''}`);
-  console.log('\nRun `agentic-coding workflow <command> --help` for a command\'s full usage.');
+function flag(argv: string[], name: string): string | undefined { const exact = argv.indexOf(`--${name}`); if (exact !== -1) return argv[exact + 1]; const prefix = `--${name}=`; return argv.find(token => token.startsWith(prefix))?.slice(prefix.length) }
+function positionals(argv: string[]): string[] { const values: string[] = []; for (let i = 0; i < argv.length; i++) { const token = argv[i]!; if (!token.startsWith('--')) values.push(token); else if (!token.includes('=') && !['--clean', '--confirm'].includes(token)) i++ } return values }
+function positional(argv: string[]): string | undefined { return positionals(argv)[0] }
+function parseMode(value: string | undefined): 'worktree' | 'checkout' { if (value !== 'worktree' && value !== 'checkout') throw new Error('start: --mode must be worktree or checkout'); return value }
+function required(command: string, argv: string[]): void { for (const name of REQUIRED_FLAGS[command] ?? []) if (flag(argv, name) === undefined) throw new Error(`${command}: --${name} is required`) }
+const FLAG_SCHEMA: Record<string, { values: string[]; booleans?: string[]; positionals: [number, number] }> = { start: { values: ['repo', 'change', 'mode', 'workflow', 'task', 'ticket'], positionals: [0, 0] }, status: { values: ['repo', 'change'], positionals: [0, 0] }, action: { values: ['repo', 'change', 'revision', 'input'], positionals: [1, 1] }, handoff: { values: ['outcome', 'artifact', 'message'], booleans: ['no-drain'], positionals: [0, 0] }, repair: { values: ['repo', 'change', 'revision', 'step', 'reason'], booleans: ['confirm'], positionals: [0, 0] }, projects: { values: [], positionals: [0, 0] }, config: { values: [], positionals: [0, 0] }, 'agent-extension': { values: ['profile'], positionals: [1, 2] } };
+function validateArgs(command: string, argv: string[]): void { const schema = FLAG_SCHEMA[command]!; const seen = new Set<string>(); let positionalCount = 0; for (let i = 0; i < argv.length; i++) { const token = argv[i]!; if (!token.startsWith('--')) { positionalCount++; continue } const [rawName, inline] = token.slice(2).split('=', 2); if (!schema.values.includes(rawName!) && !schema.booleans?.includes(rawName!)) throw new Error(`${command}: unknown flag --${rawName}`); if (seen.has(rawName!)) throw new Error(`${command}: duplicate flag --${rawName}`); seen.add(rawName!); if (schema.booleans?.includes(rawName!)) { if (inline !== undefined) throw new Error(`${command}: --${rawName} does not take a value`); continue } if (inline !== undefined) { if (!inline) throw new Error(`${command}: --${rawName} requires a value`); continue } const value = argv[++i]; if (!value || value.startsWith('--')) throw new Error(`${command}: --${rawName} requires a value`) } if (positionalCount < schema.positionals[0]) throw new Error(command === 'action' ? 'action: ACTION_ID is required' : `${command}: missing required positional argument`); if (positionalCount > schema.positionals[1]) throw new Error(`${command}: unexpected positional argument`) }
+function help(command?: string): void {
+  if (!command) { console.log('Usage: agentic-coding workflow <command> [flags]\n\nCommands:\n  start            Start pinned workflow definition\n  status           Print validated workflow view\n  action           Dispatch revision-bound engine action\n  handoff          Submit run-bound agent outcome\n  repair           Repair to compatible step, paused\n  projects         List configured projects\n  config           Print resolved configuration\n  agent-extension  Manage Pi agent extensions'); return }
+  const usage: Record<string, string> = {
+    start: 'start --repo PATH --change ID --mode worktree|checkout [--workflow standard|direct-apply|no-openspec] [--task TEXT] [--ticket ID]',
+    status: 'status --repo PATH --change ID', action: 'action ACTION_ID --repo PATH --change ID --revision N [--input JSON_OR_PATH]',
+    handoff: 'handoff --outcome complete|blocked|failed [--artifact PATH] [--message TEXT]', repair: 'repair --repo PATH --change ID --revision N --step STEP --reason TEXT [--confirm]',
+    projects: 'projects', config: 'config', 'agent-extension': 'agent-extension list|install SOURCE|install-local PATH [--profile NAME]',
+  }; console.log(`Usage: agentic-coding workflow ${usage[command] ?? command}`);
 }
-
-function printCommandHelp(command: string): void {
-  const entry = HELP[command];
-  console.log(`Usage: agentic-coding workflow ${entry?.usage ?? command}`);
-  if (entry?.summary) console.log(entry.summary);
-  if (entry?.details) console.log(entry.details);
-}
-
-function flag(argv: string[], name: string): string | undefined {
-  const exact = argv.indexOf(`--${name}`);
-  if (exact !== -1) return argv[exact + 1];
-  const prefix = `--${name}=`;
-  return argv.find(token => token.startsWith(prefix))?.slice(prefix.length);
-}
-
-function requirePositional(argv: string[], command: string): string {
-  for (let i = 0; i < argv.length; i++) {
-    const token = argv[i]!;
-    if (!token.startsWith('--')) return token;
-    if (!token.includes('=') && !['--worker', '--planner'].includes(token)) i++;
-  }
-  throw new Error(`${command}: missing required positional argument`);
-}
-
-function requireFlags(command: string, flags: Record<string, string | undefined>): void {
-  for (const dest of REQUIRED_FLAGS[command] ?? []) {
-    if (flags[dest] === undefined) throw new Error(`${command}: the --${dest} flag is required`);
+function parseInput(value?: string): unknown { if (!value) return undefined; const text = fs.existsSync(value) ? fs.readFileSync(value, 'utf8') : value; try { return JSON.parse(text) } catch { throw new Error('--input must be JSON or path to JSON') } }
+export function runGit(repo: string, ...args: string[]): string { const result = Bun.spawnSync(['git', '-C', repo, ...args], { stdout: 'pipe', stderr: 'pipe' }); if (result.exitCode !== 0) throw new Error((result.stderr.toString() || result.stdout.toString()).trim()); return result.stdout.toString().trim() }
+export function validateStart(repo: string, change: string, workflow: string, task?: string): void {
+  const dirty = runGit(repo, 'status', '--porcelain'); if (dirty) throw new Error('working tree must be clean before workflow start');
+  if (workflow === 'no-openspec') { if (!task?.trim()) throw new Error('no-openspec workflow requires non-empty --task'); return }
+  if (!fs.existsSync(path.join(repo, 'openspec', 'config.yaml'))) throw new Error('OpenSpec project required for this workflow');
+  if (workflow === 'direct-apply') {
+    const root = path.join(repo, 'openspec', 'changes', change); const requiredFiles = ['proposal.md', 'design.md', 'tasks.md']; for (const file of requiredFiles) if (!fs.existsSync(path.join(root, file)) || !fs.readFileSync(path.join(root, file), 'utf8').trim()) throw new Error(`invalid direct-apply artifact: ${file}`);
+    const specs = path.join(root, 'specs'); if (!fs.existsSync(specs) || !findFiles(specs).some(file => /#### Scenario:/.test(fs.readFileSync(file, 'utf8')))) throw new Error('direct-apply requires at least one OpenSpec scenario');
+    if (!/\[ \]/.test(fs.readFileSync(path.join(root, 'tasks.md'), 'utf8'))) throw new Error('direct-apply requires actionable unchecked task');
+    const result = Bun.spawnSync(['openspec', 'validate', change, '--strict'], { cwd: repo, stdout: 'pipe', stderr: 'pipe' }); if (result.exitCode !== 0) throw new Error(`OpenSpec validation failed: ${(result.stderr.toString() || result.stdout.toString()).trim()}`);
   }
 }
-
-export function buildContext(): effects.Context {
-  return { config: effects.loadConfig(), herdr: new effects.Herdr(), git: new effects.Git(), clock: new effects.Clock(), exporter: new effects.TraceExporter() };
+function findFiles(root: string): string[] { const result: string[] = []; for (const entry of fs.readdirSync(root, { withFileTypes: true })) { const file = path.join(root, entry.name); if (entry.isDirectory()) result.push(...findFiles(file)); else result.push(file) } return result }
+export function listProjects(): Array<{ name: string; path: string; openspec: boolean }> {
+  const config = loadConfig().projects; const root = path.resolve(String(config.root).replace(/^~/, os.homedir())); const found: Array<{ name: string; path: string; openspec: boolean }> = [];
+  const walk = (directory: string, depth: number) => { if (depth > config.max_depth) return; try { if (!fs.existsSync(directory)) return; if (fs.existsSync(path.join(directory, '.git'))) { found.push({ name: path.relative(root, directory) || '.', path: directory, openspec: fs.existsSync(path.join(directory, 'openspec', 'config.yaml')) }); return } for (const entry of fs.readdirSync(directory, { withFileTypes: true })) if (entry.isDirectory() && !entry.name.startsWith('.') && !['node_modules', 'dist', 'build', 'target'].includes(entry.name)) walk(path.join(directory, entry.name), depth + 1) } catch { return } };
+  walk(root, 0); return found.sort((a, b) => a.name.localeCompare(b.name));
 }
-
 export async function run(argv: string[]): Promise<void> {
-  const [command, ...rest] = argv;
-  if (!command || command === '--help' || command === '-h' || command === 'help') {
-    printTopHelp();
-    return;
+  const [command, ...rest] = argv; if (!command || ['help', '--help', '-h'].includes(command)) { help(); return } if (!(SUBCOMMANDS as readonly string[]).includes(command)) throw new Error(`unknown command: ${command}`); if (rest.includes('--help') || rest.includes('-h')) { help(command); return }
+  validateArgs(command, rest); required(command, rest); const workflowEngine = engine();
+  if (command === 'config') { console.log(JSON.stringify(loadConfig(), null, 2)); return }
+  if (command === 'projects') { console.log(JSON.stringify(listProjects())); return }
+  if (command === 'start') {
+    const repo = fs.realpathSync(path.resolve(flag(rest, 'repo')!)); const change = validateChangeId(flag(rest, 'change')!); const mode = parseMode(flag(rest, 'mode')); const workflow = flag(rest, 'workflow') ?? 'standard'; if (!['standard', 'direct-apply', 'no-openspec'].includes(workflow)) throw new Error(`unknown workflow definition: ${workflow}`); const task = flag(rest, 'task'); validateStart(repo, change, workflow, task);
+    const config = loadConfig(); const definitionVersion = definitionVersionForPolicy(config.workflow.max_verification_rounds); const definition = registry.definition(workflow, definitionVersion); const agents = parseAgentsConfig(config.agents, config); const roles = Object.fromEntries(definition.steps.filter(stepId => registry.step(stepId).actor === 'agent').map(stepId => [stepId, stepId === 'core.plan' ? ['planner'] : stepId === 'core.implementation' ? ['worker'] : stepId === 'core.triage' ? ['triage'] : stepId === 'core.verification' ? ['quality-verifier', 'security-verifier', 'performance-verifier', 'openspec-verifier', 'usability-verifier', 'test-verifier'].filter(role => workflow !== 'no-openspec' || role !== 'openspec-verifier') : stepId === 'core.archive' ? ['archive'] : []])); const routing = resolveRouting(definition, roles, agents); for (const route of routing.routes) preflightProfile(route.profile, registry.step(route.stepId).requirements);
+    const baseBranch = config.workflow.base_branch; const baseCommit = runGit(repo, 'rev-parse', `${baseBranch}^{commit}`); runGit(repo, 'remote', 'get-url', config.workflow.remote); workflowEngine.start({ repo, mode, changeId: change, definitionId: workflow, definitionVersion, metadata: { branch: `${config.workflow.branch_prefix}${change}`, baseBranch, baseCommit, ...(task?.trim() ? { task: task.trim() } : {}), ...(flag(rest, 'ticket') ? { ticket: flag(rest, 'ticket')! } : {}) }, routing }); await drainEffects(workflowEngine, repo); console.log(JSON.stringify(workflowEngine.status(repo, change), null, 2)); return;
   }
-  if (!(SUBCOMMANDS as readonly string[]).includes(command)) {
-    throw new Error(`unknown command: ${command}`);
-  }
-  if (rest.includes('--help') || rest.includes('-h')) {
-    if (command === 'plugin') {
-      console.log(`Usage: agentic-coding workflow ${HELP.plugin.usage}`);
-      console.log(HELP.plugin.summary);
-    } else {
-      printCommandHelp(command);
-    }
-    return;
-  }
-  const ctx = buildContext();
-  const repo = flag(rest, 'repo');
-  const change = flag(rest, 'change');
-
-  switch (command) {
-    case 'projects':
-      orchestration.cmdProjects(ctx);
-      return;
-    case 'config':
-      orchestration.cmdConfig(ctx);
-      return;
-    case 'start': {
-      const mode = flag(rest, 'mode') as 'worktree' | 'checkout' | undefined;
-      requireFlags(command, { repo, change, mode });
-      const workflowType = flag(rest, 'workflow-type') ?? 'standard';
-      if (!WORKFLOW_TYPE_CHOICES.includes(workflowType)) throw new Error(`invalid --workflow-type: ${workflowType}`);
-      await orchestration.cmdStart(ctx, { repo, change, mode, task: flag(rest, 'task') ?? null, ticket: flag(rest, 'ticket') ?? null, worker: flag(rest, 'worker'), workflowType });
-      return;
-    }
-    case 'planner':
-      requireFlags(command, { repo, change });
-      await orchestration.cmdPlanner(ctx, { repo, change });
-      return;
-    case 'apply':
-      requireFlags(command, { repo, change });
-      await orchestration.cmdApply(ctx, { repo, change });
-      return;
-    case 'verify':
-      requireFlags(command, { repo, change });
-      await orchestration.cmdVerify(ctx, { repo, change });
-      return;
-    case 'dispatch-verifiers':
-      requireFlags(command, { repo, change });
-      await orchestration.cmdDispatchVerifiers(ctx, { repo, change });
-      return;
-    case 'finish-review':
-      requireFlags(command, { repo, change });
-      await orchestration.cmdFinishReview(ctx, { repo, change });
-      return;
-    case 'create-pr':
-      requireFlags(command, { repo, change });
-      pr.cmdCreatePr(ctx, { repo, change });
-      return;
-    case 'archive':
-      requireFlags(command, { repo, change });
-      await orchestration.cmdArchive(ctx, { repo, change });
-      return;
-    case 'close':
-      requireFlags(command, { repo, change });
-      orchestration.cmdClose(ctx, { repo, change, clean: rest.includes('--clean') });
-      return;
-    case 'status':
-      requireFlags(command, { repo, change });
-      orchestration.cmdStatus(ctx, { repo, change });
-      return;
-    case 'git-operations':
-      requireFlags(command, { repo, change });
-      orchestration.cmdGitOperations(ctx, { repo, change });
-      return;
-    case 'phase': {
-      requireFlags(command, { repo, change });
-      const phase = requirePositional(rest, command);
-      orchestration.cmdPhase(ctx, { repo, change, phase });
-      return;
-    }
-    case 'override-phase': {
-      requireFlags(command, { repo, change });
-      const phase = requirePositional(rest, command);
-      orchestration.cmdOverridePhase(ctx, { repo, change, phase });
-      return;
-    }
-    case 'preflight-archive':
-      requireFlags(command, { repo, change });
-      orchestration.cmdPreflightArchive(ctx, { repo, change });
-      return;
-    case 'set-return': {
-      const workspace = flag(rest, 'workspace');
-      requireFlags(command, { repo, change, workspace });
-      orchestration.cmdSetReturn(ctx, { repo, change, workspace });
-      return;
-    }
-    case 'verification-result': {
-      const role = flag(rest, 'role');
-      requireFlags(command, { repo, change, role });
-      await orchestration.cmdVerificationResult(ctx, { repo, change, role });
-      return;
-    }
-    case 'message': {
-      const sender = flag(rest, 'from');
-      const target = flag(rest, 'to');
-      requireFlags(command, { repo, change, sender, target });
-      const text = requirePositional(rest, command);
-      orchestration.cmdMessage(ctx, { repo, change, sender, target, text });
-      return;
-    }
-    case 'plugin': {
-      const [pluginCommand, ...pluginRest] = rest;
-      if (!(PLUGIN_SUBCOMMANDS as readonly string[]).includes(pluginCommand)) {
-        throw new Error(`unknown plugin subcommand: ${pluginCommand ?? '(none)'}`);
-      }
-      const worker = pluginRest.includes('--worker');
-      const planner = pluginRest.includes('--planner');
-      if (pluginCommand === 'list') {
-        plugins.cmdPlugin(ctx.config, { pluginCommand: 'list' });
-      } else if (pluginCommand === 'install') {
-        plugins.cmdPlugin(ctx.config, { pluginCommand: 'install', source: requirePositional(pluginRest, 'plugin install'), worker, planner });
-      } else {
-        plugins.cmdPlugin(ctx.config, { pluginCommand: 'install-local', path: requirePositional(pluginRest, 'plugin install-local'), worker, planner });
-      }
-      return;
-    }
-  }
+  const repo = flag(rest, 'repo') ?? process.cwd();
+  if (command === 'status') { await drainEffects(workflowEngine, repo); console.log(JSON.stringify(workflowEngine.status(repo, flag(rest, 'change')!), null, 2)); return }
+  if (command === 'action') { const actions = positionals(rest); if (actions.length !== 1 || !actions[0]?.trim()) throw new Error(actions.length > 1 ? 'action: unexpected positional argument' : 'action: ACTION_ID is required'); const view = workflowEngine.status(repo, flag(rest, 'change')!); workflowEngine.dispatch(repo, { type: 'developer.action', workflowId: view.workflowId, revision: Number(flag(rest, 'revision')), actionId: actions[0], input: parseInput(flag(rest, 'input')) }); await drainEffects(workflowEngine, repo); console.log(JSON.stringify(workflowEngine.status(repo, flag(rest, 'change')!), null, 2)); return }
+  if (command === 'handoff') { const outcome = flag(rest, 'outcome'); if (!['complete', 'blocked', 'failed'].includes(outcome!)) throw new Error('handoff: invalid --outcome'); const runId = process.env.HERDR_RUN_ID; const generation = Number(process.env.HERDR_RUN_GENERATION); const token = process.env.HERDR_RUN_TOKEN; if (!runId || !generation || !token || !process.env.HERDR_WORKFLOW_ID) throw new Error('handoff requires engine-provided run environment'); const result = workflowEngine.dispatch(process.cwd(), { type: 'agent.handoff', runId, generation, token, outcome, ...(flag(rest, 'artifact') ? { artifact: flag(rest, 'artifact') } : {}), ...(flag(rest, 'message') ? { message: flag(rest, 'message') } : {}) }); if (!rest.includes('--no-drain')) await drainEffects(workflowEngine, process.cwd()); else { const entry = Bun.main.startsWith('$bunfs') ? undefined : Bun.main; const drain = Bun.spawn(detachedDrainArgv(entry, process.cwd(), result.view.changeId), { detached: true, stdio: ['ignore', 'ignore', 'ignore'], cwd: process.cwd(), env: process.env }); const deadline = Date.now() + 2000; while (Date.now() < deadline && drain.exitCode === null) Bun.sleepSync(50); if (drain.exitCode !== null && drain.exitCode !== 0) console.error(`detached drain exited early (${drain.exitCode}); run status to drain pending effects`); drain.unref() } console.log(JSON.stringify(workflowEngine.status(process.cwd(), result.view.changeId), null, 2)); return }
+  if (command === 'repair') { if (!rest.includes('--confirm')) { console.log(JSON.stringify(workflowEngine.previewRepair(repo, flag(rest, 'change')!), null, 2)); return } const view = workflowEngine.status(repo, flag(rest, 'change')!); workflowEngine.dispatch(repo, { type: 'operator.repair', workflowId: view.workflowId, revision: Number(flag(rest, 'revision')), targetStep: flag(rest, 'step'), reason: flag(rest, 'reason') }); await drainEffects(workflowEngine, repo); console.log(JSON.stringify(workflowEngine.status(repo, flag(rest, 'change')!), null, 2)); return }
+  if (command === 'agent-extension') { const [subcommand, ...args] = rest; if (!(AGENT_EXTENSION_SUBCOMMANDS as readonly string[]).includes(subcommand)) throw new Error(`unknown agent-extension command: ${subcommand ?? '(none)'}`); const profiles = args.flatMap((value, index) => value === '--profile' && args[index + 1] ? [args[index + 1]!] : []); if (subcommand === 'list') manageAgentExtension({ command: 'list' }); else if (subcommand === 'install') manageAgentExtension({ command: 'install', source: positional(args), profiles }); else manageAgentExtension({ command: 'install-local', source: positional(args), profiles }); }
 }
+export function detachedDrainArgv(entry: string | undefined, repo: string, change: string): string[] { return [process.execPath, ...(entry ? [entry] : []), 'workflow', 'status', '--repo', repo, '--change', change] }
 
-export const cliTest = { flag, requirePositional };
-
-export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
-  try {
-    await run(argv);
-  } catch (error) {
-    console.error((error as Error).message ?? String(error));
-    process.exit(1);
-  }
-}
+export const cliTest = { flag, parseMode, positionals, requirePositional: (argv: string[]) => { const value = positional(argv); if (!value) throw new Error('missing positional argument'); return value }, detachedDrainArgv };
+export async function main(argv: string[] = process.argv.slice(2)): Promise<void> { try { await run(argv) } catch (error) { console.error((error as Error).message ?? String(error)); process.exitCode = 1 } }

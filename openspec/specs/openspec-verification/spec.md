@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change add-openspec-verifier-step. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: OpenSpec verify workflow command
 The system SHALL provide an OpenSpec verify workflow action invokable as `/opsx-verify <change>` for active OpenSpec changes.
 
@@ -163,24 +165,26 @@ The OpenSpec verification workflow SHALL allow graphify as advisory navigation f
 - **AND** the workflow SHALL NOT fail solely because graphify navigation is unavailable
 
 ### Requirement: Verifier completion command contract
-The Herdr verifier skills SHALL signal their verdict to the workflow using the exact `verification-result` command accepted by `herdr-workflow`, which reads the verdict from the mandatory final JSONL verdict line and accepts no verdict flag.
+Every Herdr verifier run SHALL submit declared report through generic run-bound `agentic-coding workflow handoff --outcome complete --artifact "$HERDR_OUTPUT"`; verdict SHALL be derived by engine from validated findings schema.
 
 #### Scenario: Verifier signals result with only supported flags
-- **GIVEN** a Herdr verifier (`security-verifier`, `agents-verifier`, `quality-verifier`, `performance-verifier`, `openspec-verifier`, or `test-verifier`) that has written its `round-N-<role>.findings.jsonl` ending in a `{"type":"verdict","verdict":"PASS"|"FAIL"}` line
-- **WHEN** the verifier signals completion
-- **THEN** it SHALL run `herdr-workflow verification-result --repo "$PWD" --change "$HERDR_CHANGE_ID" --role <role>`
-- **AND** the command SHALL NOT include a `--verdict` flag
-- **AND** the command SHALL exit successfully so `cmd_verification_result` records the verdict and advances the workflow out of `verify`
+- **GIVEN** active verifier run has written declared output artifact matching assignment schema
+- **WHEN** verifier invokes generic complete handoff
+- **THEN** engine SHALL derive run, role, workflow, run generation, and output path authorization from environment capability
+- **AND** engine SHALL validate findings and derive PASS/FAIL without verifier-provided verdict or role flag
 
 #### Scenario: Unknown flag would stall verification
-- **GIVEN** the `verification-result` argument parser declares only `--repo`, `--change`, and `--role`
-- **WHEN** a verifier skill instructs the agent to pass an unsupported flag such as `--verdict`
-- **THEN** the command SHALL be treated as a defect because argparse rejects the unknown flag, the verdict is never recorded, and the workflow remains stuck in `verify` until the timeout watchdog forces `paused`
-- **AND** every verifier skill SHALL therefore use only the supported flags
+- **WHEN** handoff or report attempts to set role, change, phase, next step, successor, or verdict outside declared schema
+- **THEN** engine SHALL reject handoff without consuming run capability
+- **AND** workflow SHALL remain on current verification step
 
 #### Scenario: Verifier skills share one identical completion command
-- **GIVEN** the six verifier skill documents
-- **WHEN** each defines its completion step
-- **THEN** the only difference between them SHALL be the `--role` value
-- **AND** none SHALL include a `--verdict` flag
+- **WHEN** each dispatched verifier submits generic handoff
+- **THEN** engine SHALL record each run exactly once
+- **AND** verification reducer SHALL automatically start required test run or decide pass/fix after required set completes
+- **AND** no verifier SHALL invoke separate coordination or finish-review command
 
+#### Scenario: Verifier settles without handoff
+- **WHEN** runtime becomes idle but valid handoff is absent
+- **THEN** verifier run SHALL remain pending until handoff or configured timeout
+- **AND** telemetry bridge SHALL not manufacture result

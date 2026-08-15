@@ -117,47 +117,37 @@ export class TraceExporter implements Exporter {
   }
 }
 
-function deepMerge(base: any, overlay: any): any {
-  const merged = structuredClone(base);
+function deepMerge<T extends object>(base: T, overlay: unknown): T {
+  const merged = structuredClone(base) as Record<string, unknown>;
+  if (!overlay || typeof overlay !== 'object' || Array.isArray(overlay)) return merged as T;
   for (const [key, value] of Object.entries(overlay)) {
     if (merged[key] && typeof merged[key] === 'object' && !Array.isArray(merged[key]) && typeof value === 'object' && value !== null && !Array.isArray(value)) {
-      merged[key] = deepMerge(merged[key], value);
-    } else {
-      merged[key] = value;
-    }
+      merged[key] = deepMerge(merged[key] as Record<string, unknown>, value);
+    } else merged[key] = value;
   }
-  return merged;
+  return merged as T;
 }
 
 export interface WorkflowConfig {
-  models: Record<string, string>;
-  thinking: Record<string, string>;
-  workflow: { max_verification_rounds: number; remote: string; branch_prefix: string; base_branch: string; worktree_directory: string; pr_tool?: string };
+  /** Legacy-only input migrated by profile parser. */
+  models?: Record<string, string>;
+  thinking?: Record<string, string>;
+  agents?: unknown;
+  workflow: { max_verification_rounds: number; remote: string; branch_prefix: string; base_branch: string; pr_tool?: string };
   projects: { root: string; max_depth: number };
   telemetry: { capture_content: boolean };
   ui: { theme: string; selection_height: number };
-  plugins?: { exclude_extensions?: string[]; roles?: Record<string, { exclude_extensions?: string[] }> };
 }
 
 /** Built-in fallback (mirror of pi/herdr-workflow.toml) — used only when no
  * config file exists anywhere. Models are intentionally NOT defaulted: an
  * unconfigured step lets pi pick its own default model. */
 export const DEFAULT_CONFIG: WorkflowConfig = {
-  models: {},
-  thinking: {
-    triage: 'high',
-    verifier_lite: 'high',
-    planner: 'high',
-    worker_default: 'high',
-    verifier: 'high',
-    archive: 'high',
-  },
   workflow: {
     max_verification_rounds: 6,
     remote: 'origin',
     branch_prefix: 'feature/',
     base_branch: 'origin/HEAD',
-    worktree_directory: '~/.herdr/worktrees',
   },
   projects: { root: '~/development', max_depth: 3 },
   telemetry: { capture_content: true },

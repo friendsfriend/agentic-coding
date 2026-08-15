@@ -14,10 +14,7 @@ export function isCompiled(): boolean {
 /** Directory where a compiled binary materializes the bundled agent-definitions. */
 export const MATERIALIZED_AGENT_DEF_DIR = path.join(os.homedir(), '.local', 'share', 'agentic-coding', 'agent-definitions');
 
-// Resolution order: explicit env override -> compiled-binary fallback (used
-// only for plugin discovery; workflow agents get a per-workflow injected dir,
-// see bootstrap.ts) -> repo-relative walk (source/dev). `HERDR_AGENT_DEF_DIR`
-// always wins so users can point at their own skills/extensions.
+// Resolution order: explicit override -> compiled asset fallback -> source tree.
 const here = fileURLToPath(import.meta.url);
 export const AGENT_DEF_DIR =
   process.env.HERDR_AGENT_DEF_DIR ||
@@ -26,4 +23,3 @@ export const AGENT_DEF_DIR =
     : path.resolve(path.dirname(here), '..', '..', '..', 'agent-definitions'));
 
 export const CONFIG = process.env.HERDR_WORKFLOW_CONFIG || path.join(os.homedir(), '.config', 'agentic-coding', 'config.toml');
-export const SKILLS = path.join(AGENT_DEF_DIR, 'skills');

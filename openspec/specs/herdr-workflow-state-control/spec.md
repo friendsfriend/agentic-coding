@@ -2,46 +2,40 @@
 
 ## Purpose
 TBD - created by archiving change manual-workflow-state-overwrite. Update Purpose after archive.
+
 ## Requirements
-### Requirement: Manual workflow phase override
-The system SHALL let developer overwrite an active managed workflow phase through dashboard or `herdr-workflow override-phase` without using normal transition graph.
 
-#### Scenario: Developer confirms dashboard override
-- **GIVEN** dashboard displays active workflow in any operational phase
-- **WHEN** developer selects a different operational phase and confirms overwrite
-- **THEN** dashboard SHALL invoke workflow override command
-- **AND** dashboard SHALL refresh displayed workflow state after command completes
-- **AND** override SHALL NOT start, stop, or message an agent
+### Requirement: Validated workflow repair
+The system SHALL let developer repair active workflow to registered target step only through revision-checked command carrying non-empty reason and producing fully valid paused snapshot.
 
-#### Scenario: CLI overrides phase
-- **GIVEN** managed workflow state exists
-- **WHEN** developer runs `herdr-workflow override-phase` with an operational target phase
-- **THEN** system SHALL persist target phase and a new phase-start timestamp through normal state persistence locations
-- **AND** preserve all other workflow state fields
-- **AND** record telemetry containing source and target phase
+#### Scenario: Developer previews repair
+- **WHEN** dashboard opens repair for active workflow
+- **THEN** engine SHALL return only target steps compatible with pinned definition and current durable evidence
+- **AND** preview SHALL identify runs/evidence that repair would expire or retain
 
-#### Scenario: Invalid override target
-- **WHEN** developer requests an unknown phase or `closed` through phase override
-- **THEN** system SHALL reject request before mutating workflow state
-- **AND** `closed` lifecycle SHALL remain owned by normal close command
+#### Scenario: Developer confirms repair
+- **WHEN** developer confirms target with current revision and reason
+- **THEN** engine SHALL expire incompatible run capabilities, rebuild target-step state, validate all invariants, commit repair event, and leave workflow paused
+- **AND** repair SHALL NOT launch successor agent until separate explicit resume action
 
-### Requirement: Run-bound recovery plan artifact
-The system SHALL consume recovery action only from current recovery run's validated plan artifact.
+#### Scenario: Repair is stale or invalid
+- **WHEN** revision changed, target is unknown/incompatible/terminal, reason empty, or rebuilt state invalid
+- **THEN** repair SHALL fail before mutation
+- **AND** active runs and effects SHALL remain unchanged
 
-#### Scenario: Recovery agent creates plan
-- **WHEN** recovery starts
-- **THEN** system SHALL create recovery context containing fresh recovery identifier and exact plan artifact path
-- **AND** recovery instructions SHALL require agent to write JSON plan to that path rather than output plan JSON in chat
-- **AND** prior recovery plan artifact SHALL not be considered current
+#### Scenario: Repaired-away agent submits
+- **WHEN** agent from expired run submits handoff after repair
+- **THEN** engine SHALL reject stale capability
+- **AND** repaired workflow SHALL remain unchanged
 
-#### Scenario: Dashboard displays current recovery plan
-- **WHEN** dashboard loads recovery plan
-- **THEN** it SHALL present only a plan whose recovery identifier matches current workflow recovery identifier
-- **AND** malformed or stale plan SHALL not be offered for application
+### Requirement: Explicit resume after repair
+A repaired workflow SHALL resume only through current engine-provided action and SHALL revalidate routing, adapter capabilities, artifacts, and entry guards before creating run/effects.
 
-#### Scenario: Recovery action is applied
-- **WHEN** developer confirms recovery plan application
-- **THEN** controller SHALL validate plan identifier, allowlisted action shape, verifier role when required, and compatibility with current workflow phase before dispatch
-- **AND** invalid, stale, or incompatible plan SHALL fail without changing workflow state
-- **AND** valid plan SHALL retain explicit dashboard confirmation before executing existing recovery handler
+#### Scenario: Repair resumes successfully
+- **WHEN** developer invokes available resume action with current revision
+- **THEN** engine SHALL enter repaired step and enqueue required effects through normal command runtime
 
+#### Scenario: Repair cannot resume
+- **WHEN** required definition, runtime, artifact, or entry condition is unavailable
+- **THEN** resume SHALL fail closed while workflow remains paused
+- **AND** diagnostic SHALL identify unmet requirement

@@ -1,33 +1,60 @@
-# Workflow configuration — installed to ~/.config/agentic-coding/config.toml.
-# Models are intentionally not pinned: an unconfigured step uses the model pi
-# selects by default. Add entries to pin per role, e.g.:
-# [models]
-# worker_default = "provider/model"
-# planner = "provider/model"
-# verifier = "provider/model"
+# Agentic Coding workflow configuration.
 
-[thinking]
-triage = "high"
-verifier_lite = "high"
-planner = "high"
-worker_default = "high"
-verifier = "high"
-archive = "high"
+[agents]
+default_profile = "pi-default"
+
+[agents.profiles.pi-default]
+runtime = "pi"
+thinking = "high"
+tools = ["read", "bash", "edit", "write"]
+
+[agents.profiles.pi-review]
+runtime = "pi"
+thinking = "high"
+tools = ["read", "bash"]
+read_only = true
+
+# Stable OpenCode example (must already be installed as `opencode`).
+# [agents.profiles.oc-review]
+# runtime = "opencode"
+# model = "provider/model"
+# agent = "build"
+# read_only = true
+
+# Official V2 beta example (must already be installed as `opencode2`).
+# [agents.profiles.oc2-review]
+# runtime = "opencode-v2"
+# model = "provider/model"
+# agent = "build"
+# variant = "high"
+# read_only = true
+
+[agents.routes]
+"core.plan" = "pi-default"
+"core.implementation" = "pi-default"
+"core.triage" = "pi-default"
+"core.verification" = "pi-review"
+"core.archive" = "pi-default"
+
+# [agents.role_routes."core.verification"]
+# security-verifier = "oc-review"
+#
+# [[agents.runtime_diversity]]
+# steps = ["core.implementation", "core.verification"]
 
 [workflow]
-max_verification_rounds = 6
+max_verification_rounds = 20
 remote = "origin"
 branch_prefix = "feature/"
 base_branch = "origin/HEAD"
-worktree_directory = "~/.herdr/worktrees"
 
 [projects]
 root = "~/development"
 max_depth = 3
 
 [telemetry]
-# Capture prompt/output/tool I/O in local traces.jsonl only. Never sent to OTLP.
-capture_content = true
+# Content stays local and bounded. OTLP export excludes content.
+capture_content = false
 
 [ui]
 theme = "catppuccin"

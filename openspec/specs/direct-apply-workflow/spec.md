@@ -2,98 +2,62 @@
 
 ## Purpose
 TBD - created by archiving change introduce-other-workflows. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Direct-apply workflow creation
-The system SHALL support creating a workflow that starts in `apply` phase with the worker running, composed from the `apply-verify`, `developer-approval`, and `archive` modules.
+The system SHALL support starting pinned `direct-apply` workflow definition at implementation step after validating pre-authored OpenSpec proposal, design, tasks, and scenarios.
 
 #### Scenario: CLI creates direct-apply workflow
-- **GIVEN** pre-authored `proposal.md`, `design.md`, `tasks.md`, and spec scenarios exist under `openspec/changes/<change>/`
-- **WHEN** developer runs `herdr-workflow start --repo <repo> --change <change> --task "<task>" --workflow-type direct-apply`
-- **THEN** system SHALL set `workflowModules` in state to `["apply-verify", "developer-approval", "archive"]`
-- **AND** system SHALL set initial phase to `apply` (entry of first module)
-- **AND** system SHALL NOT launch a planner agent (plan module absent)
-- **AND** system SHALL launch the worker agent (apply-verify module's role)
-- **AND** SHALL NOT run plan quality gate
+- **GIVEN** pre-authored OpenSpec artifacts exist for change
+- **WHEN** developer runs `agentic-coding workflow start --repo <repo> --change <change> --workflow direct-apply ...`
+- **THEN** engine SHALL validate artifacts and definition entry guards before creating workflow
+- **AND** current step SHALL be implementation with no planning run
+- **AND** implementation run SHALL use pinned routed profile
 
 #### Scenario: Default workflow type preserves existing behavior
-- **GIVEN** existing codebase
-- **WHEN** developer runs `herdr-workflow start --repo <repo> --change <change> --task "<task>"` (without `--workflow-type`)
-- **THEN** system SHALL create workflow with phase `"explore"` and launch planner
-- **AND** state's `workflowModules` SHALL be `["plan", "plan-approval", "apply-verify", "developer-approval", "archive"]`
-- **AND** all existing behavior (plan quality gate, proposed transition, dashboard approval) SHALL be preserved
+- **WHEN** developer starts workflow without `--workflow`
+- **THEN** engine SHALL select pinned standard definition
+- **AND** initial run SHALL be planning rather than direct implementation
+
+#### Scenario: Direct apply artifacts are invalid
+- **WHEN** required artifact is missing, empty, malformed, has no scenario, or has no actionable task
+- **THEN** start SHALL fail before workflow row, workspace, pane, or agent is created
+- **AND** diagnostic SHALL identify invalid artifact
 
 #### Scenario: Legacy workflow backward compatibility
-- **GIVEN** existing workflow state without `workflowModules` field
-- **WHEN** system reads state
-- **THEN** system SHALL treat the workflow as standard module list
-- **AND** all phase transitions and dashboard rendering SHALL be identical to current behavior
-
-### Requirement: Apply-verify module internal lifecycle
-The system SHALL support the apply → verify → fix loop as a single indivisible module with the same internal gates as today.
-
-#### Scenario: Direct-apply transitions through verification
-- **GIVEN** direct-apply workflow in `apply` phase with worker completed
-- **WHEN** developer runs `herdr-workflow phase --repo <repo> --change <change> verify`
-- **THEN** system SHALL transition to `verify` phase (internal to apply-verify module)
-- **AND** on verifier failure SHALL transition to `fix` phase
-- **AND** on fix complete SHALL retry `verify`
-- **AND** on all verifiers pass SHALL transition to `developer-review` (exit to next module)
-
-#### Scenario: Paused phase within apply-verify module
-- **GIVEN** direct-apply workflow in `verify` phase with timeout
-- **WHEN** timeout handler triggers
-- **THEN** system SHALL transition to `paused` phase within apply-verify module
-- **AND** from paused, developer SHALL resume to `fix` or `verify`
-- **AND** this SHALL match standard workflow behavior
-
-### Requirement: Module gate transitions
-The system SHALL enforce dashboard approval gates only at module boundaries where `gate: True`.
-
-#### Scenario: Developer approval gate for direct-apply
-- **GIVEN** direct-apply workflow in `developer-review` phase (exit of apply-verify, entry of developer-approval module)
-- **WHEN** developer presses Enter to approve
-- **THEN** system SHALL transition to `archive` phase
-- **AND** archive module SHALL launch archive agent
+- **WHEN** valid legacy direct-apply state is first accessed
+- **THEN** engine SHALL map it to pinned direct-apply definition and valid step/run state
+- **AND** ambiguous state SHALL become repair-required rather than guessed
 
 ### Requirement: Dashboard displays module-aware workflow
-The system SHALL render workflow type and module information in the dashboard.
+Dashboard SHALL display pinned direct-apply definition, current step, resolved runtime profile, and available actions without assuming planner or phase list.
 
 #### Scenario: Dashboard shows direct-apply detail
-- **GIVEN** direct-apply workflow in `apply` phase
-- **WHEN** dashboard loads workflow detail
-- **THEN** change panel SHALL display workflow type `"direct-apply"`
-- **AND** agents panel SHALL show worker (not planner)
-- **AND** no approval gate SHALL display (worker already running)
+- **WHEN** direct-apply workflow view is loaded during implementation
+- **THEN** it SHALL identify definition `direct-apply`
+- **AND** it SHALL show implementation run and no planning run
+- **AND** it SHALL render only actions returned by engine
 
 ### Requirement: Direct-apply archives before git operations
-The system SHALL sequence the archive module before the git-operations module in the direct-apply workflow so the OpenSpec archive move is committed and pushed by the git role, not left un-archived.
+Direct-apply definition SHALL sequence implementation, triage, verification/fix loop, developer review, OpenSpec archive, delivery, and completion with each successor selected by registered reducer.
 
 #### Scenario: Direct-apply module order places archive before git-operations
-- **GIVEN** the direct-apply workflow type definition
-- **WHEN** system reads `WORKFLOW_TYPES["direct-apply"]`
-- **THEN** module list SHALL be `["apply-verify", "developer-approval", "archive", "git-operations"]`
-- **AND** `archive` SHALL appear before `git-operations`
+- **WHEN** all required verifier runs complete without blocking critical findings
+- **THEN** engine SHALL enter developer-review gate
+- **AND** approval action SHALL enter archive before delivery
 
 #### Scenario: Archive move is staged into the pushed commit
-- **GIVEN** an approved, verified direct-apply change with a directory under `openspec/changes/<change>/`
-- **WHEN** the workflow advances past developer approval
-- **THEN** the archive role SHALL run `openspec archive` to move the change directory into `openspec/changes/archive/` before the git role runs
-- **AND** the git role SHALL stage that archive move together with the implementation changes into a single commit
-- **AND** the git role SHALL push a branch where the change directory is already archived
+- **WHEN** archive run submits valid completion after OpenSpec archive validation
+- **THEN** engine SHALL enter delivery step and enqueue idempotent commit/push effects including archive move
+- **AND** workflow SHALL complete only after delivery confirms pushed archived tree
 
 #### Scenario: Direct-apply phase flow after developer approval
-- **GIVEN** a direct-apply workflow in `developer-review` phase with approval granted
-- **WHEN** the workflow advances
-- **THEN** it SHALL transition `developer-review → archive → committing → completed`
-- **AND** the git role SHALL NOT run until the archive role has left a clean, stageable tree
+- **WHEN** developer approves verified direct-apply workflow
+- **THEN** registered flow SHALL proceed archive, delivery, then completed
+- **AND** delivery SHALL not run before archive completes
 
-### Requirement: Module registry orders archive before git-operations
-The system SHALL define the archive module to exit into the git-operations entry phase.
-
-#### Scenario: Archive module exits to committing
-- **GIVEN** the workflow module registry
-- **WHEN** system reads `WORKFLOW_MODULES["archive"]`
-- **THEN** its `exit` SHALL be `"committing"`
-- **AND** `WORKFLOW_MODULES["git-operations"]["exit"]` SHALL be `"completed"`
-- **AND** `git-operations` SHALL be the final module in every workflow type that includes it
-
+#### Scenario: Verification fails
+- **WHEN** verifier output contains critical finding
+- **THEN** definition SHALL return to implementation fix run with validated findings input
+- **AND** next verification attempt SHALL use same pinned routing unless repaired

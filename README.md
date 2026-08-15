@@ -1,143 +1,129 @@
-# Agentic coding setup
+# Agentic Coding
 
-Pi agent assets, Herdr workflow configuration, OpenCode assets, OpenSpec history, and the merged `agentic-coding` TUI (workflow dashboard + observability).
-
-## Dependencies
-
-- [Pi](https://github.com/badlogic/pi-mono) and `pi install npm:@ogulcancelik/pi-herdr`
-- [Herdr](https://github.com/ogulcancelik/herdr) HEAD
-- [Bun](https://bun.sh/) for the `agentic-coding` engine + TUI
-- `opencode` only when using OpenCode assets
+`agentic-coding` combines transactional workflow engine and OpenTUI dashboard. Herdr hosts workspaces and managed agent processes; engine alone owns workflow state.
 
 ## Install
 
-```bash
-./scripts/install.sh          # stow assets + build and link the agentic-coding binary
-./scripts/test-workflow.sh    # unit + characterization tests (agentic-coding package)
-./scripts/test-herdr-workflow.sh  # end-to-end workflow through the real CLI
-./scripts/test-herdr-manager.sh   # herdr-manager shim smoke test
-```
+Requires Bun, Git, Herdr, and at least one configured agent runtime:
 
-`install.sh` runs `stow.sh` (file-level links for `pi/` → `~/.pi/agent/`, `opencode/` → `~/.config/opencode/`; the herdr terminal config now lives in the dotfiles repo), then compiles the **single self-contained `agentic-coding` executable** (`bun build --compile`, engine + TUI in one binary, `@opentui/solid` JSX plugin, `HERDR_AGENT_DEF_DIR` injected at compile time) and links it to `~/.local/bin/agentic-coding`. Local target files remain real files and are never overwritten.
+- Pi: `pi`
+- stable OpenCode: `opencode`
+- official OpenCode V2 beta: `opencode2`
 
-Manual rebuild: `bun run --cwd agentic-coding build` → `agentic-coding/dist/agentic-coding` (+ `agentic-coding-grpc-sidecar` for the OTLP gRPC receiver). The dev shim `agentic-coding/bin/agentic-coding` runs the sources via `bun` (no compile) for development.
-
-The `herdr-workflow` command agents call is a thin shim (`pi/bin/herdr-workflow`) that forwards to `agentic-coding workflow`; installing `agentic-coding` is required for any workflow to run.
-
-## `agentic-coding` surfaces
-
-One binary, four surfaces:
-
-| Surface | Invocation | Purpose |
-|---|---|---|
-| `workflow` | `agentic-coding workflow <command>` | Workflow engine (CLI) |
-| `dash` | `agentic-coding dash --repo PATH --change ID` | Per-workflow dashboard + observability TUI (run in the workflow's dashboard pane) |
-| `home` | `agentic-coding home` | Workflow list + observability TUI (long-lived launcher) |
-| `manager` | `agentic-coding manager` | Alias for `home`; what `herdr-manager` execs |
-
-The TUI is one process with a single merged tab bar — **Workflow · Traces · Metrics · Logs · Topology** (the dashboard and the otel views share one tab bar; observability views stay mounted across switches, so tab changes are instant). Cycle with `t` or `Tab`/`Shift+Tab`, pick otel tabs with `1`–`4` (kitty-protocol terminals also get `Ctrl+1`/`Ctrl+2`), or click. The OTLP receiver lives at shell level, so spans keep flowing while the workflow tab is active — `home`/`manager` binds `127.0.0.1:4318` by default; per-workflow `dash` panes don't (the manager instance owns the receiver).
+Installer never installs agent runtimes, providers, or credentials. Configure Git credential helper or SSH agent before workflow start; dashboard never collects or persists passphrases.
 
 ```bash
-agentic-coding --help                    # list surfaces
-agentic-coding workflow --help           # list workflow commands
-agentic-coding workflow start --help     # usage for one command
-agentic-coding dash --profile test       # interactive dummy-data dashboard
-agentic-coding home --json               # dump workflow list as JSON (headless)
+./scripts/install.sh
 ```
 
-Workflow commands (`--repo <path> --change <id>` required on all but `projects`/`config`):
+Configuration installs at `~/.config/agentic-coding/config.toml`. See [`pi/herdr-workflow.toml`](pi/herdr-workflow.toml) for named profiles, step routes, role overrides, adapter policy, and optional runtime-diversity guard.
 
-| Command | Flags | Purpose |
-|---|---|---|
-| `projects` | — | List discovered repositories under the configured projects root. |
-| `config` | — | Print the resolved workflow config as JSON. |
-| `start` | `--mode <worktree\|checkout>` (required), `--workflow-type <standard\|direct-apply\|no-openspec>`, `--task`, `--ticket`, `--worker` | Create branch/worktree, Herdr workspace, launch first-phase role(s). |
-| `planner` | — | Restart the planner role during `explore`. |
-| `apply` | — | Run the plan-quality gate, start the worker role. |
-| `verify` | — | Re-enter the verify phase (e.g. after a fix round). |
-| `dispatch-verifiers` | — | Start the review-tier verifier roles for the current round. |
-| `finish-review` | — | Consolidate verifier verdicts and transition out of verify (also: developer review approval). |
-| `create-pr` | — | Create the PR/MR for a completed workflow (once; then only `close` remains). |
-| `verification-result` | `--role <name>` (required) | Record one verifier role's pass/fail verdict. |
-| `archive` | — | Start the archive role after developer approval; then commit/push. |
-| `close` | `--clean` (optional) | Tear down panes/tabs after archive completes; `--clean` also deletes the worktree directory. |
-| `status` | — | Print the current workflow state (read from the sqlite store). |
-| `git-operations` | — | Stage/commit/push the finished change without an agent. |
-| `phase <phase>` | — | Force-set the recorded phase (no transition logic). |
-| `override-phase <phase>` | — | Operator escape hatch: jump to an arbitrary phase. |
-| `preflight-archive` | — | Validate archive preconditions without starting archive. |
-| `set-return` | `--workspace <id>` (required) | Record the Herdr workspace to focus once closed. |
-| `message <text>` | `--from <role> --to <role>` (required) | Deliver an inter-role message (e.g. `PLAN_REJECTED`). |
-| `plugin list\|install <source>\|install-local <path>` | `[--worker] [--planner]` | List/install Pi extensions, optionally scoped to roles. |
+> New engine migrates recognized legacy workflows on first access. Legacy rows/files remain preserved, but old engine must not resume workflow after new revisions/effects exist. Restore recorded pre-migration repository/worktree backup before binary rollback.
 
-Subcommand names and flags are a frozen contract (agent skills/prompts and the dashboard invoke them literally); see `test/characterization.test.ts`.
+## Surfaces
 
-## Verification flow
+```text
+agentic-coding workflow  transactional engine
+agentic-coding dash      workflow dashboard and observations
+agentic-coding home      workflow list and observations
+agentic-coding manager   alias for home
+```
 
-`verify` → triage tiers the diff → selected verifiers report JSONL findings → when **every dispatched verifier has reported**, `finish-review` consolidates deterministically (no verifier doubles as coordinator). Any FAIL round fails fast to a fix round. State lives in `<repo>/.herdr-workflow/herdr.db` (one row per change, `bun:sqlite`); legacy `state.json` files migrate on first load. Review artifacts (`request.md`, `reviews/`, traces) remain plain files.
+### Workflow CLI
 
-## TUI development
+```text
+start --repo PATH --change ID --mode worktree|checkout
+      [--workflow standard|direct-apply|no-openspec] [--task TEXT] [--ticket ID]
+status --repo PATH --change ID
+action ACTION_ID --repo PATH --change ID --revision N [--input JSON_OR_PATH]
+handoff --outcome complete|blocked|failed [--artifact PATH] [--message TEXT]
+repair --repo PATH --change ID --revision N --step STEP --reason TEXT --confirm
+projects
+config
+agent-extension list|install SOURCE|install-local PATH [--profile NAME]
+```
+
+`status` returns validated workflow view: revision, exact definition pin, current registered step, active runs, runtime/profile routing, effects, health, and available action IDs. Dashboard submits only returned action ID plus displayed revision.
+
+Legacy role/phase verbs are removed. No compatibility shim translates `apply`, `verify`, `phase`, `override-phase`, verifier result, archive, or role-message commands.
+
+## Workflow definitions
+
+Built-ins register through public registry seam and pin exact `{id, version, digest}`:
+
+- `standard`: plan → approval → implementation → triage → verification/fix → developer review → archive → delivery → completed
+- `direct-apply`: validates pre-authored OpenSpec artifacts, then starts implementation; archive still precedes delivery
+- `no-openspec`: requires non-empty task; excludes planning, OpenSpec verifier/checklist, and archive
+
+Registry validates IDs, actors, contracts, outcomes, effects, reachability, terminal paths, declared bounded cycles, and adapter requirements. Extra registered steps never alter existing graph unless explicitly composed. External workflow plugin loading is deferred; `agent-extension` means Pi runtime extension only.
+
+## State and recovery
+
+Canonical authority is `<main-repository>/.herdr-workflow/herdr.db`, resolved through Git common directory from main checkout or linked worktree. Normalized instance, run, event, and outbox tables replace writable worktree mirrors.
+
+Every command executes under `BEGIN IMMEDIATE`:
+
+1. parse command
+2. load and validate snapshot plus pinned definition
+3. authorize revision, run generation/capability, or effect lease
+4. apply pure registered reducer
+5. validate result
+6. atomically persist snapshot, event, runs, and outbox
+7. drain durable effects
+
+Agent capabilities are random, single-use, generation-bound, hashed at rest, and consumed only after exact path/size/schema/run artifact validation. External effects use stable idempotency keys, leases, bounded retry, and observe-before-retry handlers. Unsafe exhaustion enters `attention-required`.
+
+Raw phase overwrite is removed. `repair` previews compatible targets and affected runs, requires current revision plus reason/confirmation, expires incompatible runs/effects, and leaves paused state. Separate returned `resume` action revalidates routing and entry guards.
+
+## Agent routing
+
+Named profiles select `pi`, `opencode`, or `opencode-v2`. Precedence:
+
+1. exact step/role route
+2. step route
+3. definition default
+4. global default
+
+Resolved non-secret route is pinned for workflow lifetime. Missing executable, unsupported read-only/tool policy, capability mismatch, or diversity violation fails before agent/pane creation. Runtime/model never falls back silently.
+
+All adapters use Herdr lifecycle only: create topology, wait for foreground shell, call `herdr agent start`, retry once only for unavailable shell, confirm with `herdr agent get`, then send full assignment with `herdr agent prompt`.
+
+## Assignments and telemetry
+
+Workflow instructions are plain Markdown under `agent-definitions/instructions/`, outside runtime skill/plugin discovery. Adapter sends common protocol + pinned step instructions + complete run assignment as normal message. No `SKILL.md`, `--skill`, or `/skill:` workflow loading.
+
+Agents report only generic run outcome:
+
+```bash
+agentic-coding workflow handoff --outcome complete --artifact "$HERDR_OUTPUT"
+```
+
+Engine derives workflow, role, generation, output schema, and successor from run environment and pinned definition.
+
+Telemetry uses normalized engine/adapter/runtime envelope with W3C trace context. Runtime bridges under `agent-definitions/bridges/` are explicitly injected per managed run, best effort, and observational only. They never read workflow state, infer completion, nudge/retry agents, or switch runtime/model. Unsupported deep runtime fields remain absent; baseline adapter lifecycle stays available.
+
+## Development
 
 ```bash
 cd agentic-coding
-bun install
-bun run dev:ui          # home mode: workflow list + observability
-bun run dev:ui-dash     # dash mode: requires --repo/--change or --profile test
-bun run type-check
+bun install --frozen-lockfile
 bun test
+bun run type-check
+bun run build
 ```
 
-Herdr keeps local `traces.jsonl` history and exports best-effort spans to standard `OTEL_EXPORTER_OTLP_*` trace endpoints. The merged TUI receives OTLP HTTP JSON at loopback `127.0.0.1:4318` (home/manager mode).
+Focused workflow tests live in `agentic-coding/test/workflow-*.test.ts`. Worker runs only affected files.
 
-Start managed workflow inside Herdr:
+Downstream verifier gates (not worker implementation commands):
 
 ```bash
-herdr-manager
+cd agentic-coding && bun install --frozen-lockfile
+cd agentic-coding && bun test
+cd agentic-coding && bun run type-check
+cd agentic-coding && bun run build
+scripts/test-herdr-workflow.sh
+openspec validate rework-workflow-state-handling --strict
+HERDR_LIVE_RUNTIME_SMOKE=1 HERDR_LIVE_RUNTIME_EXECUTABLE=pi scripts/test-herdr-workflow.sh  # opt-in
 ```
 
-## Configuration
-
-Config is read from `~/.config/agentic-coding/config.toml` (XDG default;
-`HERDR_WORKFLOW_CONFIG` env overrides; legacy
-`~/.pi/agent/herdr-workflow.toml` still consulted as fallback). Per-project
-overrides live in `<repo>/.pi/herdr-workflow.toml`.
-
-**Models are not defaulted**: an unconfigured step gets no `--model` flag and pi
-selects its own default model. Pin per role only if you want to, e.g.:
-
-```toml
-[models]
-worker_default = "provider/model"
-planner = "provider/model"
-```
-
-PR/MR creation is optional and user-triggered (`create-pr` after git operations); the tool is auto-detected from the origin remote (`github.com` → `gh`, `gitlab.com` → `glab`) unless pinned:
-
-```toml
-[workflow]
-pr_tool = "gh"
-```
-
-## Binary-only install
-
-The compiled binary is self-sufficient: it embeds a snapshot of the agent
-skills + extensions (13 role skills, 2 Pi extensions) and **injects them
-per-workflow** — on each role launch they are materialized into that workflow's
-own `<repo>/.herdr-workflow/<change>/agent-definitions/` (gitignored) and only
-that workflow's agents reference them via `--skill`/`--extension`. Nothing is
-installed into the user's global pi setup (`~/.pi/agent`) or any user-global
-location. Config falls back to built-in defaults (partial
-`~/.pi/agent/herdr-workflow.toml` files deep-merge over them). The
-`herdr-workflow` Pi extension execs the installed `agentic-coding` binary
-instead of a repo shim. So a workflow-capable setup is:
-
-```bash
-cp agentic-coding/dist/agentic-coding ~/.local/bin/   # one file
-# plus external prerequisites: herdr, pi, openspec on PATH
-```
-
-Remaining external prerequisites (separate products, not part of this repo):
-`herdr` (terminal/workspace host), `pi` (agent runtime), and `openspec`
-(planner/archive agents run it). The `stow.sh`-based install is only needed
-when you want the pi agent assets, herdr terminal config, or opencode assets
-installed outside the binary.
+Shell smoke uses fake Herdr by default and exercises new start/status/action/handoff/repair surface. Live smoke requires installed/configured Herdr and selected runtime.

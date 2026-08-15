@@ -7,23 +7,23 @@ import { ProgressModal } from './ProgressModal';
 import { discoverChanges } from '../data';
 import type { KeyEvent, TextareaRenderable } from '@opentui/core';
 
-export type NewWorkflowInput = { repo: string; ticket: string; change: string; task?: string; mode: string; worker: string; workflowType: string; sshPassphrase: string };
+export type NewWorkflowInput = { repo: string; ticket: string; change: string; task?: string; mode: string; workflowType: string };
 type Project = { name: string; path: string; openspec: boolean };
-export function NewWorkflowModal(props: { projects: Project[]; models: string[]; sshPassphraseRequired: boolean; onCancel: () => void; onComplete: (input: NewWorkflowInput) => Promise<void>; onKeyReady: (handler: (key: KeyEvent) => boolean) => void }) {
+export function NewWorkflowModal(props: { projects: Project[]; onCancel: () => void; onComplete: (input: NewWorkflowInput) => Promise<void>; onKeyReady: (handler: (key: KeyEvent) => boolean) => void }) {
   const [step, setStep] = createSignal(0);
   const [creating, setCreating] = createSignal(false);
   const [selected, setSelected] = createSignal(0);
   const [filter, setFilter] = createSignal('');
   const [filtering, setFiltering] = createSignal(false);
-  const [values, setValues] = createSignal<NewWorkflowInput>({ repo: '', ticket: '', change: '', mode: '', worker: '', workflowType: 'standard', sshPassphrase: '' });
+  const [values, setValues] = createSignal<NewWorkflowInput>({ repo: '', ticket: '', change: '', mode: '', workflowType: 'standard' });
   const [showCustomRepo, setShowCustomRepo] = createSignal(false);
   let taskInput: TextareaRenderable | undefined;
   const projects = () => props.projects.filter(project => project.name.toLowerCase().includes(filter().toLowerCase()));
 
   const fields = (): (keyof NewWorkflowInput)[] => {
-    const base: (keyof NewWorkflowInput)[] = ['repo', 'workflowType', 'ticket', 'change', 'mode', 'worker', 'sshPassphrase'];
+    const base: (keyof NewWorkflowInput)[] = ['repo', 'workflowType', 'ticket', 'change', 'mode'];
     if (values().workflowType === 'standard' || values().workflowType === 'quick') {
-      return ['repo', 'workflowType', 'ticket', 'change', 'task', 'mode', 'worker', 'sshPassphrase'];
+      return ['repo', 'workflowType', 'ticket', 'change', 'task', 'mode'];
     }
     return base;
   };
@@ -35,8 +35,6 @@ export function NewWorkflowModal(props: { projects: Project[]; models: string[];
     change: 'Change ID',
     task: 'Task',
     mode: 'Checkout mode',
-    worker: 'Worker model',
-    sshPassphrase: 'SSH key passphrase (optional)',
   };
 
   const workflowTypeChoices = ['standard', 'direct-apply', 'quick'];
@@ -48,19 +46,18 @@ export function NewWorkflowModal(props: { projects: Project[]; models: string[];
     if (f === 'workflowType') return workflowTypeChoices;
     if (f === 'change' && values().workflowType === 'direct-apply') return discoverChanges(values().repo);
     if (f === 'mode') return ['worktree', 'checkout'].filter(item => item.includes(filter().toLowerCase()));
-    if (f === 'worker') return props.models.filter(item => item.toLowerCase().includes(filter().toLowerCase()));
     return [];
   };
 
   const listStep = () => {
     const f = field();
-    return f === 'repo' || f === 'workflowType' || (f === 'change' && values().workflowType === 'direct-apply') || f === 'mode' || f === 'worker';
+    return f === 'repo' || f === 'workflowType' || (f === 'change' && values().workflowType === 'direct-apply') || f === 'mode';
   };
 
   const confirmStep = () => step() === fields().length;
   const totalSteps = () => fields().length + 1;
   const field = () => fields()[step()];
-  const summary = () => fields().map((key, index) => ({ label: fieldLabels[key], value: key === 'sshPassphrase' && values()[key] ? '••••••••' : values()[key] || '—' }));
+  const summary = () => [...fields().map((key) => ({ label: fieldLabels[key], value: values()[key] || '—' })), { label: 'Agent routing', value: 'Resolved from configured profiles' }];
 
   const updateCurrent = (value: string) => { const key = field(); if (!key) return; setValues(current => ({ ...current, [key]: value })); };
   const back = () => { if (step() === 0) props.onCancel(); else { setStep(i => Math.max(0, i - 1)); setSelected(0); setFilter(''); setFiltering(false); } };
@@ -126,7 +123,6 @@ export function NewWorkflowModal(props: { projects: Project[]; models: string[];
     if (step() > maxIdx) setStep(maxIdx);
   });
 
-  createEffect(() => { if (props.sshPassphraseRequired) setStep(fields().indexOf('sshPassphrase')); });
   onMount(() => props.onKeyReady(handler));
   onCleanup(() => props.onKeyReady(() => true));
 
@@ -150,24 +146,17 @@ export function NewWorkflowModal(props: { projects: Project[]; models: string[];
           help={field() === 'task'
             ? [{ key: 'Enter', action: 'New line' }, { key: 'Alt+Enter', action: 'Next' }, { key: 'Esc', action: 'Back' }]
             : [{ key: 'Enter', action: 'Next' }, { key: 'Esc', action: 'Back' }]}>
-          <Show when={field() === 'sshPassphrase'} fallback={
-            <Show when={field() === 'task'} fallback={
-              <input focused value={values()[field()!] as string || ''}
-                placeholder={field() === 'ticket' ? 'optional' : ''}
-                onInput={updateCurrent} onSubmit={() => next(values()[field()!] as string || '')}
-                onKeyDown={(event: KeyEvent) => { if (event.name.toLowerCase() === 'escape') back(); }}
-                focusedBackgroundColor={uiColors.bgBase} focusedTextColor={uiColors.textPrimary} />
-            }>
-              <textarea ref={taskInput} focused width="100%" height="100%" initialValue={values().task || ''} wrapMode="word"
-                onContentChange={() => updateCurrent(taskInput?.plainText || '')}
-                onSubmit={() => next(values().task || '')}
-                focusedBackgroundColor={uiColors.bgBase} focusedTextColor={uiColors.textPrimary} />
-            </Show>
+          <Show when={field() === 'task'} fallback={
+            <input focused value={values()[field()!] as string || ''}
+              placeholder={field() === 'ticket' ? 'optional' : ''}
+              onInput={updateCurrent} onSubmit={() => next(values()[field()!] as string || '')}
+              onKeyDown={(event: KeyEvent) => { if (event.name.toLowerCase() === 'escape') back(); }}
+              focusedBackgroundColor={uiColors.bgBase} focusedTextColor={uiColors.textPrimary} />
           }>
-            <box height={1} flexDirection="row">
-              <text fg={values().sshPassphrase ? uiColors.textPrimary : uiColors.textMuted}>{values().sshPassphrase ? '*'.repeat(values().sshPassphrase.length) : 'optional'}</text>
-              <Show when={values().sshPassphrase}><text fg={uiColors.primary}>█</text></Show>
-            </box>
+            <textarea ref={taskInput} focused width="100%" height="100%" initialValue={values().task || ''} wrapMode="word"
+              onContentChange={() => updateCurrent(taskInput?.plainText || '')}
+              onSubmit={() => next(values().task || '')}
+              focusedBackgroundColor={uiColors.bgBase} focusedTextColor={uiColors.textPrimary} />
           </Show>
         </GenericModal>
       }>

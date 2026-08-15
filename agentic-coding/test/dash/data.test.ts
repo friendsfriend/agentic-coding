@@ -1,10 +1,12 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, test } from 'bun:test';
 import { loadLocalChanges, loadLocalDiff, saveDeveloperReview, testDashboard, costSummary, costMessages, isStale, type DeveloperReviewComment } from '../../src/tui/dash/data';
 import { startArgs } from '../../src/tui/dash/engine';
+import { registerBuiltins } from '../../src/workflow/definitions';
+import { WorkflowEngine } from '../../src/workflow/runtime';
 
 const roots: string[] = [];
 const runGit = (repo: string, ...args: string[]) => execFileSync('git', args, { cwd: repo, stdio: 'pipe' }).toString().trim();
@@ -22,10 +24,9 @@ function fixture() {
 }
 
 function writeState(repo: string, change = 'review') {
-  const stateDir = join(repo, '.herdr-workflow', change);
-  mkdirSync(stateDir, { recursive: true });
-  writeFileSync(join(stateDir, 'state.json'), JSON.stringify({ worktree: repo, baseCommit: 'HEAD' }));
-  return stateDir;
+  const baseCommit = runGit(repo, 'rev-parse', 'HEAD');
+  new WorkflowEngine(registerBuiltins()).start({ repo, changeId: change, definitionId: 'no-openspec', metadata: { branch: runGit(repo, 'branch', '--show-current'), baseBranch: 'main', baseCommit, task: 'test' }, routing: { defaultProfile: 'test', routes: [{ stepId: 'core.implementation', role: 'worker', profile: { name: 'test', runtime: 'pi', executable: 'sh', tools: [], extensions: [], readOnly: false, capabilities: ['prompt', 'run-environment', 'observe'], digest: 'test' } }], diversity: [] } });
+  return join(repo, '.herdr-workflow', change);
 }
 
 afterEach(() => {
@@ -69,9 +70,9 @@ test('demo dashboard includes usability verifier', () => {
 });
 
 test('startArgs maps quick workflow type to no-openspec and passes task through', () => {
-  const args = startArgs({ repo: '.', ticket: '', change: 'quick-fix', task: 'Fix login\nand add coverage', mode: 'worktree', worker: 'test/worker', workflowType: 'quick' });
+  const args = startArgs({ repo: '.', ticket: '', change: 'quick-fix', task: 'Fix login\nand add coverage', mode: 'worktree', workflowType: 'quick' });
 
-  expect(args.workflowType).toBe('no-openspec');
+  expect(args.definitionId).toBe('no-openspec');
   expect(args.task).toBe('Fix login\nand add coverage');
 });
 
@@ -116,6 +117,6 @@ test('isStale flags long-running non-terminal phases', () => {
   const now = Date.parse('2026-01-01T12:00:00Z');
   expect(isStale({ phase: 'verify', phaseStartedAt: '2026-01-01T06:01:00Z' }, now)).toBe(false);
   expect(isStale({ phase: 'verify', phaseStartedAt: '2026-01-01T05:59:00Z' }, now)).toBe(true);
-  expect(isStale({ phase: 'completed', phaseStartedAt: '2026-01-01T00:00:00Z' }, now)).toBe(false);
+  expect(isStale({ phase: 'verify', status: 'completed', phaseStartedAt: '2026-01-01T00:00:00Z' }, now)).toBe(false);
   expect(isStale({ phase: 'verify' }, now)).toBe(false);
 });

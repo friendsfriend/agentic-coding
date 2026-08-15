@@ -2,54 +2,51 @@
 
 ## Purpose
 TBD - created by archiving change consolidate-workflow-to-typescript. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: TypeScript engine binary surface
-The workflow engine SHALL be provided by the `agentic-coding` binary as `agentic-coding workflow <verb>`, and the Python engine SHALL be retired.
+The workflow engine SHALL be provided by `agentic-coding workflow` with mutation surface limited to `start`, `action`, `handoff`, and `repair`, read-only `status`, `projects`, and `config`, and separately named `agent-extension` management.
 
 #### Scenario: Engine verb runs through the binary
-- **WHEN** `agentic-coding workflow status --repo <repo> --change <id>` is run for an existing workflow
-- **THEN** it SHALL print the same state JSON the Python `herdr-workflow status` produced
-- **AND** the Python `pi/lib/herdr_workflow/` package and `pi/bin/herdr-workflow` entrypoint SHALL no longer be present
+- **WHEN** `agentic-coding workflow status --repo <repo> --change <id>` is run for existing workflow
+- **THEN** it SHALL print validated workflow view with revision, pinned definition, current step, active runs, routing, health, and available actions
+- **AND** it SHALL NOT expose raw mutable persisted snapshot as command contract
+
+#### Scenario: Developer action executes
+- **WHEN** caller runs `agentic-coding workflow action <action-id> --repo <repo> --change <id> --revision <revision>`
+- **THEN** engine SHALL dispatch engine-provided action through unified command runtime
+- **AND** unknown, unavailable, or stale action SHALL fail without mutation
 
 #### Scenario: All verbs preserved
-- **WHEN** a caller invokes any of `start`, `planner`, `apply`, `verify`, `dispatch-verifiers`, `verification-result`, `finish-review`, `archive`, `close`, `phase`, `override-phase`, `preflight-archive`, `set-return`, `message`, `status`, `projects`, `config`, or `plugin`
-- **THEN** the verb SHALL exist with the same flags and stdout contract as the Python engine
-
-### Requirement: Agent CLI compatibility shim
-A `herdr-workflow` executable SHALL forward its arguments to `agentic-coding workflow` so agent skills, prompts, and the `PLAN_REJECTED` loop keep working unchanged.
-
-#### Scenario: Agent invocation still works
-- **WHEN** an agent runs `herdr-workflow verify --repo . --change <id>`
-- **THEN** the shim SHALL execute `agentic-coding workflow verify --repo . --change <id>`
-- **AND** the exit code and stdout SHALL match the engine's direct output
-
-#### Scenario: Proposed transition loop unchanged
-- **WHEN** a planner runs `herdr-workflow phase --repo . --change <id> proposed` and the plan quality gate fails
-- **THEN** the shim SHALL surface the same `PLAN_REJECTED` message the engine emits
+- **WHEN** caller inspects engine command surface
+- **THEN** `start`, `status`, `action`, `handoff`, `repair`, `projects`, `config`, and `agent-extension` SHALL exist with specified contracts
+- **AND** removed legacy role/phase verbs SHALL not exist
+- **AND** handoff SHALL not accept agent-selected phase, role, change, or successor step
 
 ### Requirement: Engine module boundaries
-The ported engine SHALL separate orchestration, git/ssh, terminal layout, tracing/telemetry, and plugin management so that no single module spans all of these concerns.
+The engine SHALL separate workflow definitions and reducers, transactional state runtime, external effect handlers, agent adapters, git/ssh, terminal layout, tracing/telemetry, and agent-extension management.
 
 #### Scenario: Concerns are separated
-- **WHEN** a developer inspects the engine source
-- **THEN** phase orchestration, git/ssh helpers, Herdr terminal layout, tracing/telemetry, and plugins SHALL each live in their own module
-- **AND** no module SHALL contain all five concerns (as the former `commands.py` did)
+- **WHEN** developer inspects engine source
+- **THEN** pure definitions/reducers SHALL not invoke SQLite, filesystem, Git, Herdr, network, clock, or agent runtime
+- **AND** agent adapters SHALL not select workflow successor or mutate workflow state directly
+- **AND** no orchestration module SHALL bypass unified command runtime
 
 ### Requirement: Persisted state excludes terminal layout
-Durable workflow state SHALL NOT contain terminal-layout fields; pane layout SHALL be reconstructed from live Herdr queries or a non-durable store.
+Durable workflow snapshot SHALL contain workflow-meaningful state and run handles but SHALL NOT use pane/tab geometry or observed runtime status as lifecycle authority.
 
 #### Scenario: Layout fields absent from saved state
-- **WHEN** the engine saves `state.json` at any phase
-- **THEN** the file SHALL NOT contain `verificationSecondRowPane`, `verificationSecondRowRole`, or `verificationPaneOrder`
+- **WHEN** engine persists workflow
+- **THEN** snapshot SHALL omit transient verification pane order and spare-pane geometry
+- **AND** current step completion SHALL derive only from committed commands, not pane state
 
 #### Scenario: Legacy state still loads
-- **WHEN** the engine loads an existing `state.json` that contains those layout fields
-- **THEN** it SHALL load without error, ignoring the removed fields
+- **WHEN** recognized legacy state contains removed layout fields
+- **THEN** migration SHALL ignore transient geometry while preserving validated workflow evidence
+- **AND** resulting canonical snapshot SHALL omit those fields
 
-### Requirement: Behavioral parity gate
-The ported engine SHALL preserve the observable behavior of the Python engine for every verb and phase transition, validated by the ported test suite.
-
-#### Scenario: Parity suite passes
-- **WHEN** the ported `bun test` suite (including the characterization test) runs
-- **THEN** verb stdout and `state.json` semantics SHALL match the Python engine's behavior for every covered case
-
+#### Scenario: Runtime layout is reconstructed
+- **WHEN** dashboard or adapter needs terminal layout
+- **THEN** it SHALL query live Herdr state or non-authoritative runtime records
+- **AND** missing pane SHALL not corrupt workflow snapshot

@@ -2,21 +2,28 @@
 
 ## Purpose
 TBD - created by archiving change check-workflow-bugs-frontier-model. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Role lifecycle uses Herdr agent commands
-The workflow SHALL use Herdr's agent lifecycle API instead of coordinating raw terminal startup and input.
+The workflow SHALL launch each managed run through configured agent adapter using Herdr agent lifecycle, never raw terminal startup or key injection.
 
 #### Scenario: Initial prompt starts atomically
-- **WHEN** workflow launches a managed role
-- **THEN** it SHALL create a labeled tab with role cwd and environment, wait for its root shell pane, and pass Pi arguments and complete initial prompt in one `herdr agent start <name> --kind pi --pane <id> -- ... <prompt>` command
-- **AND** retry once only when Herdr reports target is not yet an available shell
-- **AND** it SHALL NOT separately submit startup text or Enter keys
+- **WHEN** workflow outbox requests managed agent launch
+- **THEN** adapter SHALL create required labeled tab/pane topology with run environment, wait for foreground shell, and call `herdr agent start` with runtime kind and adapter arguments
+- **AND** adapter SHALL retry once only when Herdr reports target pane is not yet available shell
+
+#### Scenario: Initial assignment is delivered
+- **WHEN** Herdr agent start succeeds
+- **THEN** adapter SHALL confirm detected process with `herdr agent get`
+- **AND** submit complete rendered assignment message through `herdr agent prompt`
+- **AND** it SHALL NOT use raw pane text, Enter keys, runtime skills, or slash skill invocation
 
 #### Scenario: Follow-up prompt targets detected agent
-- **GIVEN** a managed role already has a detected Pi process
-- **WHEN** workflow submits another round or message
-- **THEN** it SHALL confirm process with `herdr agent get`
-- **AND** submit prompt with `herdr agent prompt`
+- **GIVEN** adapter permits session reuse and managed agent remains detected
+- **WHEN** engine assigns later run to session
+- **THEN** adapter SHALL confirm process with `herdr agent get`
+- **AND** submit complete new assignment through `herdr agent prompt`
 
 ### Requirement: Verification roles share one tab
 The workflow SHALL group triage and all verifier roles in one tab while retaining one pane per role.
@@ -39,15 +46,20 @@ The workflow SHALL group triage and all verifier roles in one tab while retainin
 - **AND** SHALL reject any recorded group tab also owned by dashboard, git, worker, planner, recovery, or archive
 
 ### Requirement: Every role has a role-specific prompt
-The workflow SHALL provide dedicated instructions for planner, worker, triage, each verifier, recovery, and archive rather than deriving all agents from one generic prompt.
+The workflow SHALL render each run message from one common protocol Markdown, registered step instruction assets, and validated dynamic assignment rather than runtime-specific skill documents.
 
 #### Scenario: Role focus is explicit
-- **WHEN** workflow builds initial prompt for a managed role
-- **THEN** prompt SHALL name that role's specific input artifact, review or implementation focus, output artifact, and handoff command
-- **AND** each verifier prompt SHALL describe its own verification scope
+- **WHEN** engine renders assignment
+- **THEN** message SHALL name exact objective, interaction mode, scoped input, permission/check policy, output artifact/schema, allowed outcomes, and generic handoff
+- **AND** verifier message SHALL include selected review scope from run assignment
+
+#### Scenario: Prompt behavior is runtime independent
+- **WHEN** same step routes to Pi, OpenCode, or OpenCode V2
+- **THEN** semantic assignment content SHALL remain same
+- **AND** adapter SHALL change only runtime launch/prompt transport details
 
 #### Scenario: Chat visibility follows role
-- **WHEN** workflow builds role prompt
-- **THEN** planner and worker prompts SHALL permit visible chat for discussion, progress, and blockers
-- **AND** triage, verifier, recovery, and archive prompts SHALL require silent artifact-based handoff
-
+- **WHEN** assignment interaction mode is developer-dialogue
+- **THEN** prompt SHALL permit visible discussion and blockers
+- **WHEN** assignment interaction mode is silent
+- **THEN** prompt SHALL require artifact-based handoff without chat summary

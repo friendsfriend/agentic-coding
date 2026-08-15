@@ -16,8 +16,7 @@ if (!fs.existsSync(solidPluginPath)) {
 }
 const solidPlugin = (await import(solidPluginPath)).default;
 
-// Bundle the current agent-definitions snapshot into the binary (skills +
-// extensions), materialized on first run (see src/workflow/bootstrap.ts).
+// Bundle runtime-neutral instructions and explicitly injected bridges.
 await Bun.$`bun run scripts/generate-embedded.ts`;
 
 const agentDefDir = path.resolve(root, '..', 'agent-definitions');

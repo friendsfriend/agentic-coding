@@ -12,3 +12,6 @@ bun run --cwd "$root/agentic-coding" build
 mkdir -p "$HOME/.local/bin"
 ln -sfn "$root/agentic-coding/dist/agentic-coding" "$HOME/.local/bin/agentic-coding"
 echo "installed: $(command -v agentic-coding || echo "$HOME/.local/bin/agentic-coding")"
+for runtime in opencode opencode2; do
+    command -v "$runtime" >/dev/null 2>&1 || echo "optional runtime not found (not installed automatically): $runtime" >&2
+done

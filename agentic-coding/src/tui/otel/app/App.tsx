@@ -29,7 +29,7 @@ import { ServiceDetailView } from '../views/ServiceDetailView';
 import { copyText } from './clipboard';
 import { createNavigation } from './navigation';
 import { join } from 'node:path';
-import { listWorkflows, availableModels, discoverProjects, type WorkflowOverview } from '../../dash/data';
+import { listWorkflows, discoverProjects, type WorkflowOverview } from '../../dash/data';
 import { watchDirectories } from '../../dash/watchRefresh';
 import { notify } from './notifications';
 import { applyTheme, getActiveThemeName, loadThemeName, saveThemeName, themeNames } from './theme';
@@ -81,13 +81,11 @@ export function App(props: {
   // the loading indicator again.
   const [homeItems, setHomeItems] = createSignal<WorkflowOverview[]>([]);
   const [homeLoading, setHomeLoading] = createSignal(true);
-  const [homeModels, setHomeModels] = createSignal<string[]>([]);
   const [homeProjects, setHomeProjects] = createSignal<Array<{ name: string; path: string; openspec: boolean }>>([]);
   createEffect(() => {
     if (props.dashboard?.mode !== 'home') return;
     const load = () => {
       setHomeItems(listWorkflows());
-      setHomeModels(availableModels());
       setHomeProjects(discoverProjects());
       setHomeLoading(false);
     };
@@ -545,7 +543,7 @@ export function App(props: {
       {/* Tab content */}
       <box backgroundColor={uiColors.bgBase} style={{ flexGrow: 1, minHeight: 0, flexDirection: 'column' }}>
         {activeTab() === 'workflow' && props.dashboard && (props.dashboard.mode === 'home' ? (
-          <DashHome keymap={props.dashboard.keymap} items={homeItems()} loading={homeLoading()} models={homeModels()} projects={homeProjects()} refresh={() => setHomeItems(listWorkflows())} />
+          <DashHome keymap={props.dashboard.keymap} items={homeItems()} loading={homeLoading()} projects={homeProjects()} refresh={() => setHomeItems(listWorkflows())} />
         ) : (
           <DashApp repo={props.dashboard.repo!} change={props.dashboard.change!} profile={props.dashboard.profile as 'test' | undefined} keymap={props.dashboard.keymap} onHeader={setWorkflowHeader} />
         ))}

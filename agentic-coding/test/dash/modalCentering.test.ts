@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createTestRenderer } from "@opentui/core/testing";
-import { BoxRenderable, TextRenderable, type Renderable } from "@opentui/core";
+import { BoxRenderable, TextRenderable } from "@opentui/core";
 
 // Regression test for dashboard-modal-centering: dash modals draw an absolute
 // overlay sized to the terminal, so the overlay must anchor at the renderer
@@ -15,7 +15,7 @@ function titleRow(frame: string): number {
 }
 
 /** GenericModal-style overlay: absolute box at terminal origin, centered dialog. */
-function makeOverlay(renderer: Renderable, dialogHeight: number): BoxRenderable {
+function makeOverlay(renderer: ConstructorParameters<typeof BoxRenderable>[0], dialogHeight: number): BoxRenderable {
   const overlay = new BoxRenderable(renderer, {
     position: "absolute",
     top: 0,

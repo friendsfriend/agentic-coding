@@ -5,68 +5,40 @@ Allow planner and worker agents to inherit and use the user's installed pi exten
 
 ## Requirements
 
-### Requirement: Agent role classification
-The system SHALL classify agent roles into two categories: unrestricted (planner, worker) and restricted (all verifiers, triage, recovery, archive).
+### Requirement: Agent extensions are runtime-scoped
+User-installed Pi extensions SHALL be modeled as Pi profile options named agent extensions and SHALL not be treated as workflow step plugins, instruction assets, or portable behavior.
 
-#### Scenario: Planner inherits user extensions
-- **GIVEN** the user has pi extensions installed in `~/.pi/agent/extensions/` or via `pi install`
-- **WHEN** the workflow starts a planner or worker agent via `pi_command()`
-- **THEN** the pi command SHALL NOT include `--no-extensions` or `--no-skills`
-- **AND** the pi command SHALL NOT include a hardcoded `--tools` restriction
-- **AND** the pi command SHALL still include `--extension` pointing to `agent-definitions/extensions/herdr-telemetry.ts`
+#### Scenario: Pi profile enables extensions
+- **WHEN** unrestricted Pi profile explicitly permits user extensions
+- **THEN** Pi adapter MAY load configured extensions subject to exclusions
+- **AND** workflow semantics SHALL remain unchanged when extensions absent
 
-#### Scenario: Verifier stays restricted
-- **GIVEN** a verifier, triage, recovery, or archive role
-- **WHEN** the workflow starts that agent
-- **THEN** the pi command SHALL include `--no-extensions` and `--no-skills` (current behavior preserved)
-- **AND** the pi command SHALL include the hardcoded `--tools` restriction
+#### Scenario: Non-Pi profile is routed
+- **WHEN** step routes to OpenCode or OpenCode V2
+- **THEN** Pi extension configuration SHALL be ignored for that run
+- **AND** engine SHALL not attempt to translate extension into another runtime plugin
 
-### Requirement: Extension exclusion
-Users SHALL be able to exclude specific extensions from unrestricted agent roles via configuration.
+### Requirement: Agent extension management naming
+CLI SHALL expose `agent-extension` management for legacy Pi extension list/install operations and SHALL reserve `plugin` terminology for future workflow-definition plugins.
 
-#### Scenario: Extension excluded globally
-- **GIVEN** a `[plugins]` section in `herdr-workflow.toml` with `exclude_extensions = ["my-tui-game"]`
-- **WHEN** a planner or worker agent starts
-- **THEN** the `my-tui-game` extension SHALL be excluded (via `--exclude-extensions` flag)
+#### Scenario: User lists Pi extensions
+- **WHEN** user runs `agentic-coding workflow agent-extension list`
+- **THEN** command SHALL display discovered Pi extensions and Pi profile assignments/exclusions
+- **AND** it SHALL not claim they extend workflow registry
 
-#### Scenario: Extension excluded per-role
-- **GIVEN** a `[plugins.roles.worker]` section with `exclude_extensions = ["heavy-fetcher"]`
-- **WHEN** a worker agent starts
-- **THEN** the `heavy-fetcher` extension SHALL be excluded
-- **WHEN** a planner agent starts
-- **THEN** the `heavy-fetcher` extension SHALL NOT be excluded (unless also listed globally)
+#### Scenario: User installs Pi extension
+- **WHEN** user explicitly runs `agent-extension install` or `install-local`
+- **THEN** manager SHALL perform existing Pi install/copy behavior and record Pi profile assignment
+- **AND** no workflow definition SHALL change automatically
 
-#### Scenario: No exclusion config
-- **GIVEN** no `[plugins]` section exists in `herdr-workflow.toml`
-- **WHEN** a planner or worker agent starts
-- **THEN** all user extensions SHALL be loaded without exclusion
+### Requirement: Runtime policy is profile-driven
+Restricted/unrestricted behavior SHALL be expressed as adapter capability and profile policy, not global role classification tied to Pi commands.
 
-### Requirement: Plugin discoverability
-The `herdr-workflow plugin` command SHALL provide subcommands for listing, installing, and managing agent plugins.
+#### Scenario: Verification uses Pi
+- **WHEN** verifier routes to restricted Pi profile
+- **THEN** adapter SHALL disable unapproved skills/extensions and enforce declared tool policy
 
-#### Scenario: List installed plugins
-- **WHEN** the user runs `herdr-workflow plugin list`
-- **THEN** it SHALL display all discovered extensions and their status per role (active or excluded)
-
-#### Scenario: Install a plugin with role assignment
-- **WHEN** the user runs `herdr-workflow plugin install npm:@foo/pi-jira --worker --planner`
-- **THEN** it SHALL invoke `pi install npm:@foo/pi-jira`
-- **AND** record the install with roles `["worker", "planner"]` in `plugin-assignments.json`
-
-#### Scenario: Install a local extension
-- **WHEN** the user runs `herdr-workflow plugin install-local ./my-ext.ts --worker`
-- **THEN** it SHALL copy/symlink `my-ext.ts` to `~/.pi/agent/extensions/`
-- **AND** record the install with role `["worker"]` in `plugin-assignments.json`
-
-### Requirement: Backward compatibility
-Existing workflows and installed packages without agent role metadata SHALL continue to work without changes.
-
-#### Scenario: No plugin-assignments.json exists
-- **GIVEN** no `plugin-assignments.json` file exists
-- **WHEN** `plugin list` is run
-- **THEN** it SHALL show all extensions as active for all unrestricted roles
-
-#### Scenario: Only restricted roles configured
-- **GIVEN** only restricted roles (verifiers, triage, etc.) exist in the workflow config
-- **WHEN** the workflow starts
-- **THEN** behavior SHALL be identical to pre-change behavior
+#### Scenario: Verification uses OpenCode
+- **WHEN** same verifier routes to restricted OpenCode profile
+- **THEN** OpenCode adapter SHALL enforce equivalent declared capabilities using its runtime policy
+- **AND** absence of equivalent enforcement SHALL fail routing preflight

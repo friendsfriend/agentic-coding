@@ -2,130 +2,95 @@
 
 ## Purpose
 TBD - created by archiving change introduce-no-openspec-workflow. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: No-openspec workflow creation
-The system SHALL support creating a workflow that starts in `apply` phase with the worker running, composed from the `apply-verify`, `developer-approval`, `git-operations`, and `archive` modules, without requiring OpenSpec artifacts.
+The system SHALL support pinned `no-openspec` workflow definition starting at implementation from non-empty task without requiring or creating OpenSpec artifacts.
 
 #### Scenario: CLI creates no-openspec workflow
-- **GIVEN** a repository with an initialized Herdr workflow config
-- **WHEN** developer runs `herdr-workflow start --repo <repo> --change <change> --task "<task>" --workflow-type no-openspec`
-- **THEN** system SHALL set `workflowModules` in state to `["apply-verify", "developer-approval", "git-operations", "archive"]`
-- **AND** system SHALL set `workflowType` in state to `"no-openspec"`
-- **AND** system SHALL set initial phase to `apply` (entry of first module)
-- **AND** system SHALL launch the worker agent (apply-verify module's role)
-- **AND** system SHALL NOT require `proposal.md`, `design.md`, `tasks.md`, or spec scenarios under `openspec/changes/<change>/`
-- **AND** SHALL NOT run plan quality gate
+- **GIVEN** clean Git repository and non-empty task
+- **WHEN** developer runs `agentic-coding workflow start --repo <repo> --change <change> --workflow no-openspec --task <task> ...`
+- **THEN** engine SHALL pin no-OpenSpec definition and routing
+- **AND** current step SHALL be implementation with no planner or OpenSpec artifact gate
+- **AND** implementation assignment SHALL include task directly
+
+#### Scenario: Task is missing
+- **WHEN** no-OpenSpec start receives empty task
+- **THEN** start SHALL fail before workspace or workflow is created
 
 #### Scenario: No-openspec worker starts without a request
-- **GIVEN** a no-openspec workflow in `apply` phase
-- **WHEN** the worker agent is prompted
-- **THEN** system SHALL NOT create `.herdr-workflow/<change>/request.md`
-- **AND** prompt SHALL instruct worker to run `herdr-workflow verify --repo . --change <change>` once change is applied
-- **AND** SHALL NOT reference OpenSpec task tracking or task checkboxes
+- **WHEN** no-OpenSpec implementation run starts
+- **THEN** assignment SHALL include task directly without requiring request file
+- **AND** no planner SHALL launch
 
 #### Scenario: No-openspec verification skips OpenSpec gates
-- **GIVEN** a no-openspec workflow in `apply` phase with worker work finished
-- **WHEN** developer runs `herdr-workflow verify --repo <repo> --change <change>`
-- **THEN** system SHALL NOT call `ensure_tasks_complete` or `plan_quality`
-- **AND** triage input SHALL exclude `openspec-verifier` from available, suggested, and reusable roles
-- **AND** dispatch SHALL reject a triage plan that selects `openspec-verifier`
-- **AND** SHALL proceed with applicable non-OpenSpec verification
+- **WHEN** implementation completes
+- **THEN** definition SHALL enter triage and verification without OpenSpec validator or OpenSpec verifier role
+- **AND** other applicable verifier and test runs SHALL use common assignment/handoff protocol
 
 #### Scenario: No-openspec transitions through full lifecycle
-- **GIVEN** a no-openspec workflow
-- **WHEN** developer completes apply, verify, and approves at developer-review
-- **THEN** system SHALL transition to `committing` phase (entry of git-operations)
-- **AND** SHALL launch git agent
-- **AND** after git agent completes, SHALL transition to `archive` phase
-- **AND** after archive cleanup, SHALL transition to `completed`
-- **AND** SHALL NOT require any OpenSpec artifact paths to exist
+- **WHEN** implementation and verification complete and developer approves
+- **THEN** workflow SHALL proceed implementation, triage, verification, developer-review, delivery, completed
+- **AND** no planning or archive step SHALL run
 
 ### Requirement: Default workflow type preserves existing behavior
-The system SHALL default to `standard` workflow type when no `--workflow-type` is provided, preserving all existing behavior.
+The system SHALL default start to pinned `standard` definition when no workflow definition is supplied.
 
 #### Scenario: Default start is standard
-- **GIVEN** existing codebase
-- **WHEN** developer runs `herdr-workflow start --repo <repo> --change <change> --task "<task>"` (without `--workflow-type`)
-- **THEN** system SHALL create workflow with `workflowType` set to `"standard"`
-- **AND** state's `workflowModules` SHALL be `["plan", "plan-approval", "apply-verify", "developer-approval", "git-operations", "archive"]`
-- **AND** initial phase SHALL be `"explore"` with planner launched
-- **AND** plan quality gate SHALL run at proposed transition
+- **WHEN** developer starts workflow without `--workflow`
+- **THEN** engine SHALL validate standard definition and begin planning run
+- **AND** it SHALL not infer workflow type from presence of modules or phases
 
 #### Scenario: Legacy workflow backward compatibility
-- **GIVEN** existing workflow state without `workflowType` or `workflowModules` fields
-- **WHEN** system reads state
-- **THEN** system SHALL treat `workflowType` as `"standard"`
-- **AND** SHALL treat `workflowModules` as standard module list
-- **AND** all phase transitions, dashboard rendering, and approval gates SHALL be identical to current behavior
+- **WHEN** valid legacy state has no workflow type or modules
+- **THEN** migration SHALL map it to pinned standard definition only when phase/evidence are consistent
+- **AND** otherwise expose repair-required state
 
 ### Requirement: Dashboard displays no-openspec workflow
-The system SHALL render workflow type and module information in the dashboard.
+Dashboard SHALL display pinned no-OpenSpec definition and engine-provided step/run/action view.
 
 #### Scenario: Dashboard shows no-openspec detail
-- **GIVEN** no-openspec workflow in `apply` phase
-- **WHEN** dashboard loads workflow detail
-- **THEN** change panel SHALL display workflow type `"no-openspec"`
-- **AND** agents panel SHALL show worker (not planner)
-- **AND** no approval gate SHALL display (worker already running)
-- **AND** module list SHALL show 4 modules
+- **WHEN** no-OpenSpec workflow is in implementation
+- **THEN** UI SHALL show worker run, configured runtime/profile, and no planner/OpenSpec tasks
+- **AND** UI SHALL not infer type from module list
 
 ### Requirement: No-openspec workflow starts without an OpenSpec project
-The system SHALL allow starting a `no-openspec` workflow in a repository that has no `openspec/config.yaml`, while still enforcing a clean working tree.
+No-OpenSpec start SHALL allow repository without `openspec/config.yaml` while enforcing clean tree, branch, runtime, and workflow entry preconditions.
 
 #### Scenario: No-openspec start skips OpenSpec project check
-- **GIVEN** a clean repository with no `openspec/config.yaml`
-- **WHEN** developer runs `herdr-workflow start --repo <repo> --change <change> --task "<task>" --workflow-type no-openspec`
-- **THEN** system SHALL NOT raise `OpenSpec project not found`
-- **AND** system SHALL still verify the working tree is clean and abort if it is dirty
-- **AND** system SHALL create the workflow in `apply` phase with the worker running
+- **WHEN** valid no-OpenSpec start targets clean repository without OpenSpec config
+- **THEN** workflow SHALL start implementation
 
 #### Scenario: Standard and direct-apply still require OpenSpec
-- **GIVEN** a clean repository with no `openspec/config.yaml`
-- **WHEN** developer runs `herdr-workflow start` with `--workflow-type standard` or `--workflow-type direct-apply` (or no `--workflow-type`)
-- **THEN** system SHALL raise `OpenSpec project not found` and abort
+- **WHEN** standard or direct-apply start targets repository without OpenSpec config
+- **THEN** start SHALL fail before creating workflow
 
 #### Scenario: Dirty tree still blocks no-openspec start
-- **GIVEN** a repository with uncommitted changes
-- **WHEN** developer runs `herdr-workflow start ... --workflow-type no-openspec`
-- **THEN** system SHALL abort with a dirty-working-tree error
+- **WHEN** no-OpenSpec start targets dirty repository
+- **THEN** start SHALL fail before creating branch, workspace, workflow, or agent
 
 ### Requirement: No-openspec worker guidance is self-consistent
-The system SHALL give the no-openspec worker instructions that do not require an OpenSpec `tasks.md` and that name the exact command to start verification.
+No-OpenSpec implementation assignment SHALL contain task, focused validation policy, declared output, and generic handoff without OpenSpec task/checklist or skill references.
 
 #### Scenario: No-openspec worker prompt names the verify command
-- **GIVEN** a no-openspec workflow in `apply` phase
-- **WHEN** the worker agent is prompted
-- **THEN** the prompt SHALL NOT reference `.herdr-workflow/<change>/request.md`
-- **AND** the prompt SHALL instruct the worker to run `herdr-workflow verify --repo . --change <change>` once the change is applied
-- **AND** the prompt SHALL NOT instruct the worker to read or update OpenSpec task checkboxes
+- **WHEN** no-OpenSpec implementation run starts
+- **THEN** message SHALL no longer name legacy verify command or instruct agent to read proposal/tasks
+- **AND** completion SHALL use generic handoff declared by assignment
 
 #### Scenario: Worker skill task tracking is conditional on tasks.md
-- **GIVEN** the loaded `herdr-openspec-worker` skill applies to standard, direct-apply, and no-openspec workers
-- **WHEN** a worker follows the skill in a no-openspec workflow with no `openspec/changes/<change>/tasks.md`
-- **THEN** the skill SHALL scope the task-checkbox steps to workflows where `tasks.md` exists
-- **AND** the skill SHALL NOT direct a no-openspec worker to read or mark a non-existent `tasks.md` or require a missing `request.md`
-- **AND** the skill guidance SHALL NOT contradict the no-openspec worker prompt
+- **WHEN** no-OpenSpec implementation assignment is rendered
+- **THEN** no workflow skill SHALL load and no OpenSpec task tracking instruction SHALL appear
+- **AND** output validation SHALL use no-OpenSpec step contract
 
-### Requirement: No-openspec archives before git operations
-The system SHALL sequence the archive module before the git-operations module in the no-openspec workflow so the archive step completes before commit and push.
+### Requirement: No-openspec skips archive step
+No-OpenSpec definition SHALL proceed from approved developer review directly to delivery because no OpenSpec change exists to archive.
 
-#### Scenario: No-openspec module order places archive before git-operations
-- **GIVEN** the no-openspec workflow type definition
-- **WHEN** system reads `WORKFLOW_TYPES["no-openspec"]`
-- **THEN** module list SHALL be `["apply-verify", "developer-approval", "archive", "git-operations"]`
-- **AND** `archive` SHALL appear before `git-operations`
+#### Scenario: Developer approves no-OpenSpec review
+- **WHEN** developer-review action approves verified no-OpenSpec change
+- **THEN** definition SHALL enter delivery and enqueue commit/push effects
+- **AND** no archive agent SHALL launch
 
-#### Scenario: No-openspec phase flow after developer approval
-- **GIVEN** a no-openspec workflow in `developer-review` phase with approval granted
-- **WHEN** the workflow advances
-- **THEN** it SHALL transition `developer-review → archive → committing → completed`
-- **AND** the archive role SHALL run before the git role
-- **AND** because there is no OpenSpec change directory, the archive role SHALL only validate and SHALL NOT run `openspec archive`
-
-#### Scenario: No-openspec transition table
-- **GIVEN** the no-openspec workflow module list
-- **WHEN** system computes `allowed_transitions`
-- **THEN** `archive` SHALL allow transition to `committing`
-- **AND** `committing` SHALL allow transition to `completed`
-- **AND** there SHALL be no transition `committing → archive`
-
+#### Scenario: Delivery completes
+- **WHEN** idempotent delivery confirms commit and push
+- **THEN** workflow SHALL enter completed terminal step

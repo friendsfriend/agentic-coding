@@ -1,241 +1,83 @@
 #!/usr/bin/env bash
-# End-to-end workflow test through the real CLI surface (herdr-workflow shim):
-# start -> phase proposed -> apply -> verify -> finish-review -> archive ->
-# git operations. State is read from the sqlite store via `status`.
+# CLI smoke for new registry/view/action/repair/handoff surface.
 set -euo pipefail
 
 root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT
 repo="$root/repo"
-mkdir -p "$repo/openspec" "$root/bin"
-printf 'schema: spec-driven\n' > "$repo/openspec/config.yaml"
-git -C "$repo" init -q
+mkdir -p "$repo"
+git -C "$repo" init -q -b main
 git -C "$repo" config user.email test@example.com
 git -C "$repo" config user.name Test
-touch "$repo/README.md"
+printf 'smoke\n' > "$repo/README.md"
 git -C "$repo" add .
 git -C "$repo" commit -qm init
-git -C "$repo" remote add origin "$repo"
-git -C "$repo" fetch origin -q
-git -C "$repo" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/master
-python3 - "$PWD/pi/herdr-workflow.toml" "$root/config.toml" "$root" <<'PY'
-import sys
-text = open(sys.argv[1]).read().replace('root = "~/development"', f'root = "{sys.argv[3]}"')
-open(sys.argv[2], 'w').write(text)
-PY
+git init -q --bare "$root/remote.git"
+git -C "$repo" remote add origin "$root/remote.git"
+git -C "$repo" push -q -u origin main
 
-cat > "$root/bin/herdr" <<MOCK
+runtime=sh
+runtime_path=""
+if [[ "${HERDR_LIVE_RUNTIME_SMOKE:-0}" != 1 ]]; then
+  mkdir -p "$root/bin"
+  cat > "$root/bin/herdr" <<'SH'
 #!/usr/bin/env bash
-case "\$1 \$2" in
-  "workspace create") echo '{"result":{"workspace":{"workspace_id":"w1"},"root_pane":{"pane_id":"p1"}}}' ;;
-  "tab list") echo '{"result":{"tabs":[{"tab_id":"t1"}]}}' ;;
-  "tab create")
-    args=("\$@"); label="tab"
-    for ((i=0; i<\${#args[@]}; i++)); do [[ "\${args[i]}" == "--label" ]] && label="\${args[i+1]}"; done
-    echo "{\"result\":{\"root_pane\":{\"pane_id\":\"p-\$label-bootstrap\",\"tab_id\":\"t-\$label\"}}}"
-    ;;
-  "pane split") echo "{\"result\":{\"pane\":{\"pane_id\":\"p-\$3-\$5\"}}}" ;;
-  "pane process-info") echo '{"result":{"process_info":{"foreground_processes":[{"name":"zsh"}]}}}' ;;
-  "pane run") echo '{"result":{"type":"ok"}}' ;;
-  "agent start")
-    echo "\$3" >> "$root/agent_launches"
-    name="\$3"
-    case "\$name" in
-      *-planner) label="explore" ;;
-      *-worker) label="apply" ;;
-      *-archive) label="archive" ;;
-      *-quality-verifier) label="quality" ;;
-      *-agents-verifier) label="agents" ;;
-      *-test-verifier) label="test" ;;
-      *-triage) label="triage" ;;
-      *) label="\${name##*-}" ;;
-    esac
-    echo "{\"result\":{\"agent\":{\"pane_id\":\"p-\$label\",\"tab_id\":\"t-\$label\",\"agent_status\":\"idle\",\"state_change_seq\":0}}}"
-    ;;
-  "agent get")
-    seq=\$(cat "$root/agent_seq" 2>/dev/null || echo 0)
-    echo \$(( seq + 1 )) > "$root/agent_seq"
-    name="\$3"
-    case "\$name" in
-      *-planner) label="explore" ;;
-      *-worker) label="apply" ;;
-      *-archive) label="archive" ;;
-      *-quality-verifier) label="quality" ;;
-      *-agents-verifier) label="agents" ;;
-      *-test-verifier) label="test" ;;
-      *-triage) label="triage" ;;
-      *) label="\${name##*-}" ;;
-    esac
-    echo "{\"result\":{\"agent\":{\"pane_id\":\"p-\$label\",\"tab_id\":\"t-\$label\",\"agent_status\":\"working\",\"state_change_seq\":\"\$(( seq + 1 ))\"}}}"
-    ;;
-  "pane send-text") echo '{"result":{"type":"ok"}}' ;;
-  *) echo '{"result":{"type":"ok"}}' ;;
+case "$1 $2" in
+  "workspace create") echo '{"result":{"workspace":{"workspace_id":"smoke-workspace"}}}' ;;
+  "tab create") echo '{"result":{"root_pane":{"pane_id":"smoke-pane","tab_id":"smoke-tab"}}}' ;;
+  "pane process-info") echo '{"result":{"process_info":{"foreground_processes":[{"name":"sh"}]}}}' ;;
+  "agent start"|"agent get") echo '{"result":{"agent":{"pane_id":"smoke-pane","tab_id":"smoke-tab","agent_status":"working"}}}' ;;
+  "agent prompt"|"agent stop"|"pane close") echo '{"result":{}}' ;;
+  *) echo "unsupported fake herdr call: $*" >&2; exit 2 ;;
 esac
-MOCK
-chmod +x "$root/bin/herdr"
-env=(PATH="$root/bin:$PATH" HERDR_WORKFLOW_CONFIG="$root/config.toml" HERDR_WORKSPACE_ID="w-dashboard")
-wf() { env "${env[@]}" pi/bin/herdr-workflow "$@"; }
-st() { wf status --repo "$1" --change "$2"; }
+SH
+  chmod +x "$root/bin/herdr"
+  runtime_path="$root/bin:"
+else
+  runtime=${HERDR_LIVE_RUNTIME_EXECUTABLE:-pi}
+fi
 
-wf projects | python3 -c 'import json,sys; p=json.load(sys.stdin); assert p[0]["name"] == "repo"'
-wf start --repo "$repo" --change test-change --ticket DDS_DHP-123 --task test --mode checkout >/dev/null
-wf set-return --repo "$repo" --change test-change --workspace w-home >/dev/null
-st "$repo" test-change | python3 -c 'import json,sys; state=json.load(sys.stdin); assert set(state["panes"]) == {"dashboard", "git", "planner"}'
-grep -qx 'test-change-planner' "$root/agent_launches"
-change="$repo/openspec/changes/test-change"
-mkdir -p "$change/specs/core"
-printf '# Proposal\n' > "$change/proposal.md"
-printf '# Design\n' > "$change/design.md"
-printf '%s\n' '- [ ] Implement test change' > "$change/tasks.md"
-printf '# Requirements\n## Scenario: works\n' > "$change/specs/core/spec.md"
-wf phase --repo "$repo" --change test-change proposed >/dev/null
-traceparent=00-0123456789abcdef0123456789abcdef-0123456789abcdef-01
-env "${env[@]}" TRACEPARENT="$traceparent" pi/bin/herdr-workflow apply --repo "$repo" --change test-change >/dev/null
-env "${env[@]}" TRACEPARENT="$traceparent" pi/bin/herdr-workflow override-phase --repo "$repo" --change test-change paused | grep -qx paused
-if env "${env[@]}" pi/bin/herdr-workflow override-phase --repo "$repo" --change test-change closed >/dev/null 2>&1; then exit 1; fi
-if env "${env[@]}" pi/bin/herdr-workflow override-phase --repo "$repo" --change test-change unknown >/dev/null 2>&1; then exit 1; fi
+config="$root/config.toml"
+cat > "$config" <<TOML
+[agents]
+default_profile = "smoke"
+[agents.profiles.smoke]
+runtime = "pi"
+executable = "$runtime"
+capabilities = ["prompt", "run-environment", "observe"]
+[agents.profiles.smoke-review]
+runtime = "pi"
+executable = "$runtime"
+capabilities = ["prompt", "run-environment", "observe"]
+read_only = true
+[agents.routes]
+"core.triage" = "smoke-review"
+"core.verification" = "smoke-review"
+"core.archive" = "smoke-review"
+[workflow]
+max_verification_rounds = 6
+remote = "origin"
+branch_prefix = "feature/"
+base_branch = "main"
+[projects]
+root = "/tmp"
+max_depth = 1
+[telemetry]
+capture_content = false
+[ui]
+theme = "catppuccin"
+selection_height = 10
+TOML
 
-st "$repo" test-change | python3 -c 'import json,sys; state=json.load(sys.stdin); assert state["phase"] == "paused"; assert state["verificationRound"] == 0; assert state["branch"] == "feature/DDS_DHP-123-test-change"; assert state["ticketNumber"] == "DDS_DHP-123"; assert state["returnWorkspace"] == "w-home"; assert state["panes"]["dashboard"] == "p1"; assert state["panes"]["planner"] == "p-explore"; assert state["panes"]["worker"] == "p-apply"; assert set(state["panes"]) == {"dashboard", "git", "planner", "worker"}'
-python3 - "$repo" <<'PY'
-import json, sys
-from pathlib import Path
-root = Path(sys.argv[1]) / '.herdr-workflow/test-change'
-assert any(json.loads(line)['event'] == 'workflow_phase_overridden' and json.loads(line)['source'] == 'apply' and json.loads(line)['target'] == 'paused' for line in (root / 'telemetry.jsonl').read_text().splitlines())
-assert (root / 'request.md').read_text() == '# test-change\n\n**Ticket:** DDS_DHP-123\ntest\n'
-handoff = json.loads((root / 'trace-context/worker.json').read_text())
-assert handoff['traceparent'].startswith('00-0123456789abcdef0123456789abcdef-')
-assert handoff['expiresAt'] > 0 and handoff['attributes']['herdr.role'] == 'worker'
-traces = [json.loads(line) for line in (root / 'traces.jsonl').read_text().splitlines()]
-assert any(item['name'] == 'workflow.workflow_phase_overridden' and item['parentSpanId'] == '0123456789abcdef' for item in traces)
-PY
-
-sync="$root/worktree"
-python3 - "$repo" "$sync" <<'PY'
-import json, sqlite3, sys
-from pathlib import Path
-repo, worktree = map(Path, sys.argv[1:])
-con = sqlite3.connect(str(repo / '.herdr-workflow/herdr.db'))
-row = con.execute("SELECT state FROM workflows WHERE change_id='test-change'").fetchone()
-state = json.loads(row[0])
-state.update(changeId='sync-change', repository=str(repo), worktree=str(worktree), phase='apply')
-for target in (repo, worktree):
-    # legacy state.json still migrates into the sqlite store on first load
-    path = target / '.herdr-workflow/sync-change/state.json'
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state))
-PY
-wf override-phase --repo "$sync" --change sync-change paused >/dev/null
-for target in "$repo" "$sync"; do
-  python3 - "$target" sync-change "$repo" <<'PY'
-import json, sqlite3, sys
-target, change, repo = sys.argv[1], sys.argv[2], sys.argv[3]
-con = sqlite3.connect(f'{target}/.herdr-workflow/herdr.db')
-state = json.loads(con.execute("SELECT state FROM workflows WHERE change_id=?", (change,)).fetchone()[0])
-assert state['phase'] == 'paused'
-assert state['panes']['worker'] == 'p-apply'
-PY
-done
-python3 - "$repo" "$sync" <<'PY'
-import sqlite3, sys
-def load(repo):
-    con = sqlite3.connect(f'{repo}/.herdr-workflow/herdr.db')
-    return json.loads(con.execute("SELECT state FROM workflows WHERE change_id='sync-change'").fetchone()[0])
-import json
-states = [load(r) for r in sys.argv[1:]]
-assert states[0] == states[1]
-PY
-python3 - "$repo" "$sync" <<'PY'
-import json, sqlite3, sys
-for target in sys.argv[1:]:
-    con = sqlite3.connect(f'{target}/.herdr-workflow/herdr.db')
-    row = con.execute("SELECT state FROM workflows WHERE change_id='sync-change'").fetchone()
-    state = json.loads(row[0]); state['phase'] = 'closed'
-    con.execute("UPDATE workflows SET state=? WHERE change_id='sync-change'", (json.dumps(state),))
-    con.commit()
-PY
-if wf override-phase --repo "$sync" --change sync-change apply >/dev/null 2>&1; then exit 1; fi
-
-reviews="$repo/.herdr-workflow/test-change/reviews"
-mkdir -p "$reviews"
-if wf verify --repo "$repo" --change test-change >"$root/verify.out" 2>&1; then exit 1; fi
-grep -q 'verification requires completed OpenSpec tasks; 1 remain' "$root/verify.out"
-printf '%s\n' '- [x] Implement test change' > "$change/tasks.md"
-wf verify --repo "$repo" --change test-change >/dev/null
-printf '%s\n' '{"roles":{}}' > "$reviews/round-1-triage.json"
-wf dispatch-verifiers --repo "$repo" --change test-change >/dev/null
-
-st "$repo" test-change | python3 -c 'import json,sys; state=json.load(sys.stdin); assert state["phase"] == "developer-review"; assert state["verificationRound"] == 1; assert state["verificationRoles"] == []; assert not set(state["panes"]) & {"security-verifier", "agents-verifier", "quality-verifier", "performance-verifier", "openspec-verifier", "test-verifier"}'
-
-env "${env[@]}" agentic-coding dash --repo "$repo" --change test-change --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["state"]["phase"] == "developer-review"; assert len(d["tasks"]) == 1'
-agentic-coding dash --profile test --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["state"]["phase"] == "proposed"; assert len(d["tasks"]) == 5'
-env "${env[@]}" pi/bin/herdr-workflow archive --repo "$repo" --change test-change >/dev/null
-
-python3 - "$repo" <<'PY'
-import json, sqlite3, sys
-con = sqlite3.connect(f"{sys.argv[1]}/.herdr-workflow/herdr.db")
-state = json.loads(con.execute("SELECT state FROM workflows WHERE change_id='test-change'").fetchone()[0])
-assert state['phase'] == 'archive'
-assert state['developerApproval']
-assert state['panes']['archive'] == 'p-archive'
-assert (Path := __import__('pathlib').Path(sys.argv[1]) / '.herdr-workflow/test-change/reviews/archive-context.md').exists()
-PY
-
-python3 - "$repo" <<'PY'
-import json, sqlite3, sys
-from pathlib import Path
-con = sqlite3.connect(f"{sys.argv[1]}/.herdr-workflow/herdr.db")
-con.execute("UPDATE workflows SET state=? WHERE change_id='test-change'", (json.dumps({
-    **json.loads(con.execute("SELECT state FROM workflows WHERE change_id='test-change'").fetchone()[0]),
-    'phase': 'triage', 'verificationRound': 2, 'verificationTier': 'lite', 'verificationRoles': [], 'verificationResults': {}, 'testVerifierStarted': False, 'verificationRoleStartedAt': {},
-}),))
-con.commit()
-reviews = Path(sys.argv[1]) / '.herdr-workflow/test-change/reviews'
-(reviews / 'round-2-triage-input.json').write_text(json.dumps({'allChangedFiles': ['README.md'], 'availableRoles': ['quality-verifier', 'security-verifier'], 'reusablePasses': {}}))
-(reviews / 'round-2-triage.json').write_text(json.dumps({'roles': {'quality-verifier': {'reason': 'changed code', 'files': ['README.md']}}}))
-PY
-wf dispatch-verifiers --repo "$repo" --change test-change >/dev/null
-st "$repo" test-change | python3 -c 'import json,sys; state=json.load(sys.stdin); assert state["panes"]["quality-verifier"] == "p-quality"; assert not set(state["panes"]) & {"security-verifier", "agents-verifier", "performance-verifier", "openspec-verifier", "test-verifier"}'
-printf '%s\n' '{"type":"finding","severity":"critical","path":"README.md","line":1,"detail":"critical metadata does not override PASS"}' '{"type":"verdict","verdict":"PASS"}' > "$reviews/round-2-quality-verifier.findings.jsonl"
-wf verification-result --repo "$repo" --change test-change --role quality-verifier >/dev/null
-st "$repo" test-change | python3 -c 'import json,sys; state=json.load(sys.stdin); assert state["phase"] == "verify"; assert state["testVerifierStarted"]; assert state["panes"]["test-verifier"] == "p-test"; assert "coordinator" not in state["verificationResults"]'
-printf '%s\n' '{"type":"finding","severity":"critical","path":"README.md","line":1,"detail":"test metadata does not override PASS"}' '{"type":"verdict","verdict":"PASS"}' > "$reviews/round-2-test-verifier.findings.jsonl"
-wf verification-result --repo "$repo" --change test-change --role test-verifier >/dev/null
-# finish-review (test-verifier skill step) consolidates deterministically
-wf finish-review --repo "$repo" --change test-change >/dev/null
-st "$repo" test-change | python3 -c 'import json,sys; state=json.load(sys.stdin); assert state["phase"] == "developer-review"; assert state["verificationResults"]["coordinator"]["verdict"] == "PASS"'
-python3 - "$repo" <<'PY'
-import sys
-from pathlib import Path
-root = Path(sys.argv[1]) / '.herdr-workflow/test-change'
-report = (root / 'reviews/round-2-consolidated.md').read_text()
-assert 'Overall verdict: PASS' in report
-assert '### test-verifier' in report
-PY
-
-python3 - "$repo" <<'PY'
-import json, sqlite3, sys
-con = sqlite3.connect(f"{sys.argv[1]}/.herdr-workflow/herdr.db")
-con.execute("UPDATE workflows SET state=? WHERE change_id='test-change'", (json.dumps({
-    **json.loads(con.execute("SELECT state FROM workflows WHERE change_id='test-change'").fetchone()[0]),
-    'phase': 'verify', 'verificationRound': 3, 'verificationRoles': ['quality-verifier'], 'verificationResults': {}, 'testVerifierStarted': False, 'verificationRoleStartedAt': {},
-}),))
-con.commit()
-PY
-printf '%s\n' '{"type":"finding","severity":"info","path":"README.md","line":1,"detail":"info metadata does not override FAIL","fix":"fix reported issue"}' '{"type":"verdict","verdict":"FAIL"}' > "$reviews/round-3-quality-verifier.findings.jsonl"
-wf verification-result --repo "$repo" --change test-change --role quality-verifier >/dev/null
-python3 - "$repo" <<'PY'
-import json, sqlite3, sys
-from pathlib import Path
-con = sqlite3.connect(f"{sys.argv[1]}/.herdr-workflow/herdr.db")
-state = json.loads(con.execute("SELECT state FROM workflows WHERE change_id='test-change'").fetchone()[0])
-assert state['phase'] == 'fix'
-assert state['verificationResults']['coordinator']['verdict'] == 'FAIL'
-root = Path(sys.argv[1]) / '.herdr-workflow/test-change'
-report = (root / 'reviews/round-3-consolidated.md').read_text()
-context = (root / 'reviews/round-3-worker-fix-context.md').read_text()
-assert 'Overall verdict: FAIL' in report
-assert '## quality-verifier' in context
-assert '[info]' in context
-PY
-env "${env[@]}" bun run agentic-coding/src/tui/index.tsx --repo "$repo" --change test-change --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["reviewHistory"][-2:] == ["round-2-consolidated.md: PASS", "round-3-consolidated.md: FAIL"]'
-echo "integration test passed"
+wf() { PATH="${runtime_path}${PATH}" HERDR_WORKFLOW_CONFIG="$config" agentic-coding workflow "$@"; }
+wf --help | grep -q 'agent-extension'
+wf start --repo "$repo" --change smoke --mode checkout --workflow no-openspec --task 'smoke task' >/dev/null
+view=$(wf status --repo "$repo" --change smoke)
+revision=$(printf '%s' "$view" | python3 -c 'import json,sys; v=json.load(sys.stdin); assert v["definition"]["id"] == "no-openspec"; assert v["currentStep"]["id"] == "core.implementation"; assert v["health"]["valid"]; print(v["revision"])')
+wf repair --repo "$repo" --change smoke --revision "$revision" --step core.implementation --reason 'smoke repair' --confirm >/dev/null
+wf status --repo "$repo" --change smoke | python3 -c 'import json,sys; v=json.load(sys.stdin); assert v["status"] == "paused"; assert [a["id"] for a in v["availableActions"]] == ["resume"]'
+if wf verify --repo "$repo" --change smoke >/dev/null 2>&1; then
+  echo 'legacy verify command unexpectedly accepted' >&2
+  exit 1
+fi
+printf 'workflow smoke passed\n'

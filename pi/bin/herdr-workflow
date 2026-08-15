@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Thin shim: forwards argv to `agentic-coding workflow`, preserving the exact
-# agent-facing CLI surface (skills, prompts, PLAN_REJECTED loop unchanged).
+# Thin shim: forwards generic transactional workflow commands.
 set -euo pipefail
 exec agentic-coding workflow "$@"

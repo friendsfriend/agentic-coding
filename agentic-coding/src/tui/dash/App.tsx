@@ -17,8 +17,9 @@ import {
 } from "solid-js";
 import {
   approvalFor,
+  applyRepair,
   focusAgent,
-  focusWorkspace,
+  focusReturnWorkspace,
   loadDashboard,
   loadDeveloperReviewFindings,
   loadLocalChanges,
@@ -28,7 +29,7 @@ import {
   openFindingInEditor,
   openSpecArtifact,
   openSpecArtifacts,
-  operationalPhases,
+  previewRepair,
   runWorkflow,
   saveDeveloperReview,
   testDashboard,
@@ -89,7 +90,7 @@ export function App(props: {
   const [data, setData] = createSignal<DashboardData>(load());
   // Feed the shell's global header from the dashboard's single data source.
   createEffect(() => {
-    props.onHeader?.({ change: data().state.changeId, phase: data().state.phase, branch: data().state.branch, updated: data().updated });
+    props.onHeader?.({ change: data().state.changeId, phase: data().state.stepLabel ?? data().state.phase, branch: data().state.branch, updated: data().updated });
   });
   const [message, setMessage] = createSignal("");
   let lastQuitAt = 0;
@@ -144,12 +145,15 @@ export function App(props: {
   const [selectedVerification, setSelectedVerification] = createSignal(0);
   const [help, setHelp] = createSignal(false);
   const [themePicker, setThemePicker] = createSignal(false);
-  const [overridePicker, setOverridePicker] = createSignal(false);
-  const [overrideConfirm, setOverrideConfirm] = createSignal(false);
-  const [overrideSelection, setOverrideSelection] = createSignal(0);
-  const [overridePhase, setOverridePhase] = createSignal<string>();
   const [completedPicker, setCompletedPicker] = createSignal(false);
   const [completedSelection, setCompletedSelection] = createSignal(0);
+  const [actionReason, setActionReason] = createSignal("");
+  const [actionConfirmed, setActionConfirmed] = createSignal(false);
+  const [repairOpen, setRepairOpen] = createSignal(false);
+  const [repairTargets, setRepairTargets] = createSignal<Array<{ targetStep: string; label: string; expiresRuns: string[]; retainedEvidence: string[] }>>([]);
+  const [repairSelection, setRepairSelection] = createSignal(0);
+  const [repairReason, setRepairReason] = createSignal("");
+  const [repairConfirmed, setRepairConfirmed] = createSignal(false);
   const [costOpen, setCostOpen] = createSignal(false);
   const [costSelection, setCostSelection] = createSignal(0);
   const [costAgent, setCostAgent] = createSignal<string | null>(null);
@@ -295,7 +299,7 @@ export function App(props: {
           individual_note: true,
           notes: [note],
           position,
-          findingId: finding.id,
+          findingId: finding.originalId,
           findingSeverity: finding.severity,
         };
       }),
@@ -327,10 +331,9 @@ export function App(props: {
       items: [
         { key: "Enter", description: "Approve workflow gate" },
         { key: "Enter", description: "Focus selected agent (Agents panel)" },
-        { key: "Shift+O", description: "Overwrite workflow phase" },
+        { key: "Shift+O", description: "Show safe repair guidance" },
         { key: "v", description: "View selected verifier verdict" },
         { key: "c", description: "View agent cost breakdown" },
-        { key: "p", description: "Pause workflow (resume with Enter)" },
         { key: "r", description: "Refresh dashboard" },
         { key: "q", description: "Quit" },
         { key: "?", description: "Open help" },
@@ -374,7 +377,8 @@ export function App(props: {
         props.profile === "test"
           ? [
               {
-                id: "demo-warning",
+                id: "demo-run:demo-warning",
+                originalId: "demo-warning",
                 severity: "warning" as const,
                 path: "src/example.ts",
                 line: 2,
@@ -427,20 +431,19 @@ export function App(props: {
     setBusy(true);
     setMessage("Finishing developer review…");
     try {
-      const findingComments = reviewFindings()
+      const findingComments: DeveloperReviewComment[] = reviewFindings()
         .filter((finding) => selectedReviewFindingIds().has(finding.id))
         .map((finding) => ({
           filePath: finding.path ?? "repository",
           line: finding.line ?? 1,
           body: `${finding.detail}${finding.fix ? ` Fix: ${finding.fix}` : ""}`,
-          findingId: finding.id,
+          findingId: finding.originalId,
         }));
       const comments = [...reviewComments(), ...findingComments];
       if (props.profile !== "test") {
         await saveDeveloperReview(props.repo, props.change, comments);
-        setMessage(
-          await runWorkflow("finish-review", props.repo, props.change),
-        );
+        const engineComments = comments.map(comment => ({ comment: comment.body, ...(comment.filePath ? { file: comment.filePath } : {}), ...(comment.line ? { line: comment.line } : {}), ...(comment.startLine ? { startLine: comment.startLine } : {}), ...(comment.endLine ? { endLine: comment.endLine } : {}), ...(comment.findingId ? { findingId: comment.findingId } : {}) }));
+        setMessage(await runWorkflow(comments.length ? "review-comments" : "approve-review", props.repo, props.change, data().state.revision, comments.length ? JSON.stringify({ comments: engineComments }) : undefined));
         refresh();
       } else {
         setMessage(
@@ -464,24 +467,17 @@ export function App(props: {
         prompt: "Press Enter to advance demo phase",
         action: "next demo phase",
       };
-    if (
-      data().state.phase === "fix" &&
-      data().agents.find((agent) => agent.role === "worker")?.status !== "idle"
-    )
-      return undefined;
-    return approvalFor(data().state.phase, data().state.prCreated);
+    if (data().state.stepId === "core.developer-review") return { prompt: "Press Enter to review changed files", action: "review" };
+    const actions = data().state.availableActions ?? []; if (actions.length > 1 || actions[0]?.confirmation !== 'none') return actions.length ? { prompt: "Press Enter to choose workflow action", action: "completed-actions" } : undefined;
+    const action = actions[0]; return action ? { prompt: `Press Enter: ${action.label}`, action: action.id } : undefined;
   });
-  const completedActions = () => [
-    { label: "Create MR/PR", command: "create-pr" },
-    { label: "Close Herdr workspace", command: "close" },
-    { label: "Close & delete worktree", command: "close-clean" },
-  ];
+  const completedActions = () => data().state.availableActions?.map(action => ({ label: action.label, command: action.id, confirmation: action.confirmation })) ?? [];
+  const actionSignature = createMemo(() => completedActions().map(action => `${action.command}:${action.confirmation}`).join('\0')); let previousActionSignature: string | undefined;
+  createEffect(() => { const next = actionSignature(); if (previousActionSignature !== undefined && next !== previousActionSignature) { setCompletedSelection(0); setActionConfirmed(false); setActionReason('') } previousActionSignature = next });
   const workflowStatus = createMemo(() => {
-    const phase = data().state.phase;
-    if (phase === "committing") return { text: "Pushing changes", working: true };
-    if (phase === "archive") return { text: "Archiving", working: true };
+    const label = data().state.stepLabel ?? data().state.phase;
     const active = data().agents.find((agent) => agent.status === "working");
-    if (!active) return { text: phase, working: false };
+    if (!active) return { text: label, working: false };
     if (active.role === "planner") return { text: "Planning", working: true };
     if (active.role.endsWith("verifier"))
       return { text: "Verifying", working: true };
@@ -561,7 +557,7 @@ export function App(props: {
           throw new Error(
             "No dashboard workspace recorded. Open this workflow from the overview first.",
           );
-        focusWorkspace(workspace);
+        focusReturnWorkspace(props.repo, props.change, workspace);
       } catch (error) {
         setMessage(error instanceof Error ? error.message : String(error));
       }
@@ -574,14 +570,7 @@ export function App(props: {
       return;
     }
     if (name === "o" && key.shift) {
-      const index = operationalPhases.indexOf(data().state.phase);
-      if (index < 0) {
-        setMessage(`Phase overwrite unavailable for ${data().state.phase}.`);
-        return;
-      }
-      setOverrideSelection(index);
-      setOverridePicker(true);
-      props.keymap.setData("modal.active", "override-picker");
+      try { setRepairTargets(previewRepair(props.repo, props.change)); setRepairSelection(0); setRepairReason(""); setRepairConfirmed(false); setRepairOpen(true); props.keymap.setData("modal.active", "repair"); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)) }
       return;
     }
     if (name === "?") {
@@ -598,13 +587,7 @@ export function App(props: {
       props.keymap.setData("modal.active", "cost");
       return;
     }
-    if (name === "p" && !["paused", "completed", "closed"].includes(data().state.phase)) {
-      setOverridePhase("paused");
-      setOverrideSelection(1); // Cancel is the safe default
-      setOverrideConfirm(true);
-      props.keymap.setData("modal.active", "override-confirm");
-      return;
-    }
+
     if (name === "v" && activePanel() === 1) {
       const agent = data().agents[selectedAgent()];
       if (!agent?.role.endsWith("verifier")) {
@@ -662,7 +645,7 @@ export function App(props: {
       return;
     }
     if (name === "enter" || name === "return") {
-      if (data().state.phase === "developer-review") {
+      if (data().state.stepId === "core.developer-review") {
         openDeveloperReview();
         return;
       }
@@ -736,7 +719,7 @@ export function App(props: {
       }
       if (approval.action === "completed-actions") {
         setCompletedPicker(true);
-        setCompletedSelection(0);
+        setCompletedSelection(0); setActionReason(""); setActionConfirmed(false);
         props.keymap.setData("modal.active", "completed-picker");
         return;
       }
@@ -748,7 +731,7 @@ export function App(props: {
           setMessage("Advanced dummy workflow");
         } else {
           setMessage(
-            await runWorkflow(approval.action, props.repo, props.change),
+            await runWorkflow(approval.action, props.repo, props.change, data().state.revision),
           );
         }
         refresh();
@@ -824,92 +807,10 @@ export function App(props: {
         "down",
       ].map((key) => ({ key, cmd: "theme.handle" })),
     });
-    const disposeOverridePicker = props.keymap.registerLayer({
-      name: "override-picker",
-      priority: 1000,
-      activeModal: "override-picker",
-      commands: [
-        {
-          name: "override-picker.handle",
-          run: ({ event }) => {
-            if (busy()) return true;
-            const key = event.name.toLowerCase();
-            if (key === "escape") {
-              setOverridePicker(false);
-              props.keymap.setData("modal.active", "none");
-            } else if (key === "j" || key === "down")
-              setOverrideSelection((index) =>
-                Math.min(operationalPhases.length - 1, index + 1),
-              );
-            else if (key === "k" || key === "up")
-              setOverrideSelection((index) => Math.max(0, index - 1));
-            else if (key === "enter" || key === "return") {
-              const phase = operationalPhases[overrideSelection()];
-              if (!phase) return true;
-              setOverridePhase(phase);
-              setOverridePicker(false);
-              setOverrideSelection(1);
-              setOverrideConfirm(true);
-              props.keymap.setData("modal.active", "override-confirm");
-            }
-            return true;
-          },
-        },
-      ],
-      bindings: ["escape", "enter", "return", "j", "k", "up", "down"].map(
-        (key) => ({ key, cmd: "override-picker.handle" }),
-      ),
-    });
-    const disposeOverrideConfirm = props.keymap.registerLayer({
-      name: "override-confirm",
-      priority: 1000,
-      activeModal: "override-confirm",
-      commands: [
-        {
-          name: "override-confirm.handle",
-          run: ({ event }) => {
-            if (busy()) return true;
-            const key = event.name.toLowerCase();
-            if (key === "escape") {
-              setOverrideConfirm(false);
-              props.keymap.setData("modal.active", "none");
-            } else if (key === "j" || key === "down") setOverrideSelection(1);
-            else if (key === "k" || key === "up") setOverrideSelection(0);
-            else if (key === "enter" || key === "return") {
-              if (overrideSelection() === 1 || !overridePhase()) {
-                setOverrideConfirm(false);
-                props.keymap.setData("modal.active", "none");
-                return true;
-              }
-              const phase = overridePhase()!;
-              setOverrideConfirm(false);
-              props.keymap.setData("modal.active", "none");
-              setBusy(true);
-              setMessage(`Overwriting phase with ${phase}…`);
-              void runWorkflow(
-                "override-phase",
-                props.repo,
-                props.change,
-                phase,
-              )
-                .then(setMessage)
-                .catch((error) =>
-                  setMessage(
-                    error instanceof Error ? error.message : String(error),
-                  ),
-                )
-                .finally(() => {
-                  setBusy(false);
-                  refresh();
-                });
-            }
-            return true;
-          },
-        },
-      ],
-      bindings: ["escape", "enter", "return", "j", "k", "up", "down"].map(
-        (key) => ({ key, cmd: "override-confirm.handle" }),
-      ),
+    const disposeRepair = props.keymap.registerLayer({
+      name: "repair", priority: 1000, activeModal: "repair",
+      commands: [{ name: "repair.handle", run: ({ event }) => { const key = event.name.toLowerCase(); if (key === "escape") { setRepairOpen(false); props.keymap.setData("modal.active", "none") } else if (key === "j" || key === "down") { setRepairSelection(index => Math.min(repairTargets().length - 1, index + 1)); setRepairConfirmed(false) } else if (key === "k" || key === "up") { setRepairSelection(index => Math.max(0, index - 1)); setRepairConfirmed(false) } else if (key === "backspace") { setRepairReason(value => value.slice(0, -1)); setRepairConfirmed(false) } else if (key === "enter" || key === "return") { const target = repairTargets()[repairSelection()]; if (!target || !repairReason().trim()) setMessage("Repair reason is required"); else if (!repairConfirmed()) setRepairConfirmed(true); else { try { applyRepair(props.repo, props.change, data().state.revision, target.targetStep, repairReason()); setRepairOpen(false); props.keymap.setData("modal.active", "none"); refresh(); setMessage(`Repaired to ${target.label}; resume separately`) } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); refresh() } } } else if (key.length === 1 && !event.ctrl && !event.meta) { setRepairReason(value => `${value}${key}`.slice(0, 256)); setRepairConfirmed(false) } else if (key === "space") { setRepairReason(value => `${value} `.slice(0, 256)); setRepairConfirmed(false) } return true } }],
+      bindings: ["escape", "enter", "return", "j", "k", "up", "down", "backspace", "space", ..."abcdefghijklmnopqrstuvwxyz0123456789-_.".split("")].map(key => ({ key, cmd: "repair.handle" })),
     });
     const disposeCompletedPicker = props.keymap.registerLayer({
       name: "completed-picker",
@@ -924,20 +825,19 @@ export function App(props: {
             if (key === "escape") {
               setCompletedPicker(false);
               props.keymap.setData("modal.active", "none");
-            } else if (key === "j" || key === "down")
-              setCompletedSelection((index) =>
-                Math.min(2, index + 1),
-              );
-            else if (key === "k" || key === "up")
-              setCompletedSelection((index) => Math.max(0, index - 1));
+            } else if (key === "j" || key === "down") { setCompletedSelection((index) => Math.min(Math.max(0, completedActions().length - 1), index + 1)); setActionConfirmed(false) }
+            else if (key === "k" || key === "up") { setCompletedSelection((index) => Math.max(0, index - 1)); setActionConfirmed(false) }
+            else if (key === 'backspace' && completedActions()[completedSelection()]?.confirmation === 'reason') { setActionReason(value => value.slice(0, -1)); setActionConfirmed(false) }
+            else if (key === 'space' && completedActions()[completedSelection()]?.confirmation === 'reason') { setActionReason(value => `${value} `.slice(0, 2048)); setActionConfirmed(false) }
+            else if (key.length === 1 && !event.ctrl && !event.meta && completedActions()[completedSelection()]?.confirmation === 'reason') { setActionReason(value => `${value}${key}`.slice(0, 2048)); setActionConfirmed(false) }
             else if (key === "enter" || key === "return") {
               const action = completedActions()[completedSelection()];
-              if (!action) return true;
+              if (!action) return true; if (action.confirmation === 'reason' && !actionReason().trim()) { setMessage('Action reason is required'); return true } if (action.confirmation !== 'none' && !actionConfirmed()) { setActionConfirmed(true); setMessage(`Press Enter again to confirm ${action.label}`); return true }
               setCompletedPicker(false);
               props.keymap.setData("modal.active", "none");
               setBusy(true);
               setMessage(`Running ${action.label}…`);
-              void runWorkflow(action.command, props.repo, props.change)
+              void runWorkflow(action.command, props.repo, props.change, data().state.revision, action.confirmation === 'reason' ? JSON.stringify({ reason: actionReason().trim() }) : undefined)
                 .then(setMessage)
                 .catch((error) =>
                   setMessage(
@@ -953,7 +853,7 @@ export function App(props: {
           },
         },
       ],
-      bindings: ["escape", "enter", "return", "j", "k", "up", "down"].map(
+      bindings: ["escape", "enter", "return", "j", "k", "up", "down", "backspace", "space", ..."abcdefghijklmnopqrstuvwxyz0123456789-_.".split("")].map(
         (key) => ({ key, cmd: "completed-picker.handle" }),
       ),
     });
@@ -1445,9 +1345,8 @@ export function App(props: {
     });
     onCleanup(() => {
       disposeTheme();
-      disposeOverridePicker();
-      disposeOverrideConfirm();
       disposeCompletedPicker();
+      disposeRepair();
       disposeCost();
       disposeHelp();
       disposeVerification();
@@ -1463,7 +1362,7 @@ export function App(props: {
     // modal closed by any path (mouse backdrop click, cancel, submit) never leaves
     // `modal.active` stuck — a stuck value deactivates the layers and kills keys.
     createEffect(() => {
-      const anyOpen = !!(verdict() || findings() || verificationDetail() || eventsDetail() || traceDetail() || help() || themePicker() || overridePicker() || overrideConfirm() || completedPicker() || costOpen());
+      const anyOpen = !!(verdict() || findings() || verificationDetail() || eventsDetail() || traceDetail() || help() || themePicker() || completedPicker() || repairOpen() || reviewOpen() || reviewCommentMode() || costOpen());
       if (!anyOpen) props.keymap.setData("modal.active", "none");
     });
   });
@@ -1483,7 +1382,7 @@ export function App(props: {
     return `run ${count("run")} · pass ${count("pass")} · fail ${count("fail")} · skip ${count("skipped")}${reused ? ` · reused:${reused}` : ""}`;
   });
   const prompt = createMemo(() =>
-    data().state.phase === "paused"
+    data().state.status === "paused"
       ? "Verification paused · developer intervention required"
       : (gate()?.prompt ?? "Waiting for workflow activity"),
   );
@@ -1546,41 +1445,11 @@ export function App(props: {
                         }
                       />
                     </box>
-                    <Show
-                      when={
-                        data().state.workflowModules ||
-                        data().state.phase !== "closed"
-                      }
-                    >
-                      <box flexDirection="row">
-                        <box width={7}>
-                          <text fg={uiColors.textMuted}>TYPE</text>
-                        </box>
-                        <text fg={uiColors.textSecondary}>
-                          {(data().state.workflowModules ?? [
-                            "plan",
-                            "plan-approval",
-                            "apply-verify",
-                            "developer-approval",
-                            "archive",
-                          ])[0] === "plan"
-                            ? "standard"
-                            : "direct-apply"}{" "}
-                          ·{" "}
-                          {
-                            (
-                              data().state.workflowModules ?? [
-                                "plan",
-                                "plan-approval",
-                                "apply-verify",
-                                "developer-approval",
-                                "archive",
-                              ]
-                            ).length
-                          }{" "}
-                          modules
-                        </text>
-                      </box>
+                    <Show when={data().state.definition}>
+                      {definition => <box flexDirection="row">
+                        <box width={7}><text fg={uiColors.textMuted}>FLOW</text></box>
+                        <text fg={uiColors.textSecondary}>{definition().label} · v{definition().version}</text>
+                      </box>}
                     </Show>
                     <Show when={data().state.ticketNumber}>
                       <box flexDirection="row">
@@ -1872,51 +1741,26 @@ export function App(props: {
           </box>
         }
       />
-      <Show when={overridePicker()}>
+      <Show when={repairOpen()}>
         <ListViewModal
-          title="Overwrite workflow phase"
-          fieldLabel="Choose phase"
-          items={operationalPhases}
-          selectedIndex={overrideSelection()}
-          help={[
-            { key: "j/k", action: "Navigate" },
-            { key: "Enter", action: "Continue" },
-            { key: "Esc", action: "Cancel" },
-          ]}
-          renderItem={(item, selected) => (
-            <text fg={selected ? uiColors.primary : uiColors.textSecondary}>
-              {item}
-            </text>
-          )}
-        />
-      </Show>
-      <Show when={overrideConfirm()}>
-        <ListViewModal
-          title={`Overwrite ${data().state.phase} → ${overridePhase() ?? ""}`}
-          fieldLabel="Confirm overwrite"
-          items={["Overwrite phase", "Cancel"]}
-          selectedIndex={overrideSelection()}
-          help={[
-            { key: "j/k", action: "Navigate" },
-            { key: "Enter", action: "Confirm" },
-            { key: "Esc", action: "Cancel" },
-          ]}
-          renderItem={(item, selected) => (
-            <text fg={selected ? uiColors.warning : uiColors.textSecondary}>
-              {item}
-            </text>
-          )}
+          title={`Repair r${data().state.revision} · reason: ${repairReason() || "(type reason)"} · ${repairConfirmed() ? "ENTER confirms" : "ENTER previews"}`}
+          fieldLabel="Compatible target"
+          items={repairTargets().map(target => `${target.label} · expire [${target.expiresRuns.slice(0, 4).join(', ') || 'none'}${target.expiresRuns.length > 4 ? ', …' : ''}] · retain [${target.retainedEvidence.slice(0, 4).join(', ') || 'none'}${target.retainedEvidence.length > 4 ? ', …' : ''}]`)}
+          selectedIndex={repairSelection()}
+          help={[{ key: "j/k", action: "Target" }, { key: "type", action: "Reason" }, { key: "Enter×2", action: "Confirm" }, { key: "Esc", action: "Cancel" }]}
+          renderItem={(item, selected) => <text fg={selected ? uiColors.primary : uiColors.textSecondary}>{item}</text>}
         />
       </Show>
       <Show when={completedPicker()}>
         <ListViewModal
-          title="Workflow complete — choose next step"
+          title={`Choose workflow action · ${actionReason() || (completedActions()[completedSelection()]?.confirmation === 'reason' ? 'type reason' : actionConfirmed() ? 'confirmed' : 'confirmation required')}`}
           fieldLabel="Action"
           items={completedActions().map(action => action.label)}
           selectedIndex={completedSelection()}
           help={[
             { key: "j/k", action: "Navigate" },
-            { key: "Enter", action: "Run" },
+            { key: "type", action: "Reason when required" },
+            { key: "Enter×2", action: "Confirm and run" },
             { key: "Esc", action: "Cancel" },
           ]}
           renderItem={(item, selected) => (

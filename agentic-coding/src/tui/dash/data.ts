@@ -1,10 +1,12 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { directionBetween, Herdr, type Rect } from "../../herdr-client.ts";
-import * as stateMod from "../../workflow/state.ts";
-import { discoverProjectsInProcess, runWorkflowAction, setReturnInProcess, startWorkflowInProcess } from "./engine";
+import type { WorkflowView } from '../../workflow/contracts.ts';
+import { canonicalStorePath } from '../../workflow/runtime.ts';
+import { consumeReturnWorkspace, dashboardState, discoverProjectsInProcess, listWorkflowViews, previewWorkflowRepair, repairWorkflow, runWorkflowAction, setReturnInProcess, startWorkflowInProcess, viewToDashboardState } from "./engine";
 import { parseJsonl } from "../otel/model/parser.ts";
 import type { SpanData } from "../otel/model/types.ts";
 
@@ -13,6 +15,13 @@ const herdr = new Herdr();
 export interface WorkflowState {
   changeId: string;
   phase: string;
+  stepId?: string;
+  stepLabel?: string;
+  revision: number;
+  definition?: { id: string; version: number; digest: string; label: string };
+  status: string;
+  health: { valid: boolean; attention: string[]; diagnostic?: string };
+  availableActions?: Array<{ id: string; label: string; confirmation: string }>;
   repository: string;
   worktree: string;
   branch: string;
@@ -28,6 +37,7 @@ export interface WorkflowState {
   returnWorkspace?: string;
   verificationTier?: string;
   verificationRoles?: string[];
+  runs: Array<{ id: string; stepId: string; role: string; attempt: number; status: string; runtime: string; profile: string; model?: string; paneId?: string; outputPath?: string; outputDigest?: string }>;
   verificationResults?: Record<string, unknown>;
   verificationReusedResults?: Record<string, unknown>;
   verificationStartedAt?: string;
@@ -41,7 +51,6 @@ export interface WorkflowState {
     specFiles: number;
     taskCount: number;
   };
-  workflowModules?: string[];
   panes: Record<string, string>;
 }
 
@@ -67,74 +76,24 @@ export function listWorkflows(...roots: string[]): WorkflowOverview[] {
   const found: WorkflowOverview[] = [];
   const seen = new Set<string>();
   const openWorkspaces = openWorkspaceIds();
-  const statuses = agentStatuses();
+  const addRepository = (repo: string) => {
+    try { if (!existsSync(canonicalStorePath(repo))) return } catch { return }
+    let views: WorkflowView[]; try { views = listWorkflowViews(repo) } catch { return }
+    for (const view of views) { try {
+      if (seen.has(view.workflowId)) continue;
+      seen.add(view.workflowId);
+      const state = viewToDashboardState(view) as WorkflowState;
+      const items = tasks(join(state.worktree, "openspec", "changes", state.changeId, "tasks.md"));
+      const workspaceOpen = Boolean(state.workspace && state.health.valid && state.status !== 'closed' && (openWorkspaces?.has(state.workspace) ?? true));
+      found.push({ state, workspaceOpen, tasks: [items.filter(item => item.done).length, items.length], agents: view.runs.map(run => ({ role: run.role, status: run.status, model: run.model })) });
+    } catch { continue } }
+  };
   const walk = (directory: string, depth: number) => {
     if (depth > 4 || !existsSync(directory)) return;
-    let entries;
-    try {
-      entries = readdirSync(directory, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const path = join(directory, entry.name);
-      if (entry.isDirectory() && entry.name === ".herdr-workflow") {
-        let changes;
-        try {
-          changes = readdirSync(path, { withFileTypes: true });
-        } catch {
-          continue;
-        }
-        for (const change of changes) {
-          if (!change.isDirectory()) continue;
-          try {
-            const state = stateMod.loadState(directory, change.name) as WorkflowState;
-            if (seen.has(state.workspace)) continue;
-            seen.add(state.workspace);
-            const tasksFile = join(
-              state.worktree,
-              "openspec",
-              "changes",
-              state.changeId,
-              "tasks.md",
-            );
-            const items = tasks(tasksFile);
-            const workspaceOpen = openWorkspaces
-              ? openWorkspaces.has(state.workspace)
-              : state.phase !== "closed";
-            found.push({
-              state,
-              workspaceOpen,
-              tasks: [items.filter((item) => item.done).length, items.length],
-              agents: Object.entries(state.panes)
-                .filter(([role]) => !["git", "dashboard"].includes(role))
-                .map(([role, pane]) => ({
-                  role,
-                  status:
-                    statuses.get(pane) ??
-                    (workspaceOpen ? "not started" : "closed"),
-                  model:
-                    role === "worker"
-                      ? state.workerModel
-                      : state.verificationModels?.[role],
-                })),
-            });
-          } catch {
-            /* ignore stale state */
-          }
-        }
-        continue;
-      }
-      if (
-        entry.name.startsWith(".") ||
-        ["node_modules", "target", "dist", "build"].includes(entry.name)
-      )
-        continue;
-      if (entry.isDirectory()) walk(path, depth + 1);
-    }
+    if (existsSync(join(directory, ".git"))) { addRepository(directory); return; }
+    let entries; try { entries = readdirSync(directory, { withFileTypes: true }) } catch { return } for (const entry of entries) if (entry.isDirectory() && !entry.name.startsWith(".") && !["node_modules", "target", "dist", "build"].includes(entry.name)) walk(join(directory, entry.name), depth + 1);
   };
-  if (roots.length === 0)
-    roots = [join(homedir(), "development"), process.cwd()];
+  if (!roots.length) roots = [join(homedir(), "development"), process.cwd()];
   for (const root of roots) walk(root, 0);
   return found.sort((a, b) => a.state.changeId.localeCompare(b.state.changeId));
 }
@@ -160,6 +119,7 @@ export interface DeveloperReviewComment {
 
 export interface DeveloperReviewFinding {
   id: string;
+  originalId: string;
   severity: "warning" | "info";
   path?: string;
   line?: number;
@@ -198,6 +158,8 @@ export interface DashboardData {
   verifierTimeline: Array<{
     role: string;
     status: string;
+    rawStatus?: string;
+    diagnostic?: string;
     durationSeconds?: number;
     model?: string;
     providerErrors: number;
@@ -206,20 +168,6 @@ export interface DashboardData {
   costBreakdown: Array<Omit<CostRow, 'messages'> & { messages: CostMessage[] }>;
   traceSpans: SpanData[];
 }
-
-export const operationalPhases = [
-  "explore",
-  "proposed",
-  "apply",
-  "fix",
-  "triage",
-  "verify",
-  "paused",
-  "developer-review",
-  "archive",
-  "committing",
-  "completed",
-];
 
 const read = (path: string) =>
   existsSync(path) ? readFileSync(path, "utf8") : "";
@@ -246,24 +194,6 @@ function tasks(path: string) {
       text: match[2]!.trim(),
     }),
   );
-}
-
-function reviewHistory(root: string) {
-  if (!existsSync(root)) return [];
-  return readdirSync(root)
-    .filter((file) => /^round-\d+-consolidated\.md$/.test(file))
-    .sort()
-    .map((file) => {
-      const verdict =
-        read(join(root, file)).match(
-          /^Overall verdict: (PASS|FAIL|PENDING)$/m,
-        )?.[1] ?? "UNKNOWN";
-      return `${file}: ${verdict}`;
-    });
-}
-
-function latestReview(root: string) {
-  return reviewHistory(root).at(-1) ?? "Not run";
 }
 
 function git(repo: string, ...args: string[]) {
@@ -362,8 +292,8 @@ export function phaseAgeHours(state: { phase: string; phaseStartedAt?: string; c
 }
 
 /** True when a workflow has sat in a non-terminal phase longer than the threshold. */
-export function isStale(state: { phase: string; phaseStartedAt?: string; createdAt?: string }, now: number, thresholdHours = 6): boolean {
-  if (state.phase === "completed" || state.phase === "closed") return false;
+export function isStale(state: { phase: string; status?: string; phaseStartedAt?: string; createdAt?: string }, now: number, thresholdHours = 6): boolean {
+  if (state.status === "completed" || state.status === "closed") return false;
   const at = state.phaseStartedAt ?? state.createdAt;
   if (!at) return false;
   return (now - Date.parse(at)) / 3_600_000 > thresholdHours;
@@ -381,32 +311,22 @@ function agentStatuses() {
   }
 }
 
+interface VerifierFinding { id: string; severity: 'critical' | 'warning' | 'info'; detail: string; path?: string; line?: number; status?: string; evidence?: string; changedCode?: string; fix?: string }
+function verifierFinding(value: unknown): VerifierFinding | undefined { if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined; const item = value as Record<string, unknown>; if (typeof item.id !== 'string' || !['critical', 'warning', 'info'].includes(String(item.severity)) || typeof item.detail !== 'string') return undefined; return { id: item.id, severity: item.severity as VerifierFinding['severity'], detail: item.detail, ...(typeof item.path === 'string' ? { path: item.path } : {}), ...(typeof item.line === 'number' ? { line: item.line } : {}), ...(typeof item.status === 'string' ? { status: item.status } : {}), ...(typeof item.evidence === 'string' ? { evidence: item.evidence } : {}), ...(typeof item.changedCode === 'string' ? { changedCode: item.changedCode } : {}), ...(typeof item.fix === 'string' ? { fix: item.fix } : {}) } }
+function committedVerifierRun(run: WorkflowState['runs'][number]): { run: WorkflowState['runs'][number]; findings: VerifierFinding[] } | undefined { if (run.status !== 'completed' || !run.outputPath || !run.outputDigest || !existsSync(run.outputPath)) return undefined; const bytes = readFileSync(run.outputPath); if (createHash('sha256').update(bytes).digest('hex') !== run.outputDigest) return undefined; try { const envelope = JSON.parse(bytes.toString('utf8')) as { runId?: unknown; schemaId?: unknown; schemaVersion?: unknown; payload?: { findings?: unknown } }; if (envelope.runId !== run.id || envelope.schemaId !== 'core.findings' || envelope.schemaVersion !== 1 || !Array.isArray(envelope.payload?.findings)) return undefined; const findings = envelope.payload.findings.map(verifierFinding); if (findings.some(item => !item)) return undefined; return { run, findings: findings as VerifierFinding[] } } catch { return undefined } }
+function committedVerifierOutput(state: WorkflowState, role: string) { const run = state.runs.filter(item => item.stepId === 'core.verification' && item.attempt === state.verificationRound && item.role === role).at(-1); return run ? committedVerifierRun(run) : undefined }
+function verificationHistory(state: WorkflowState): string[] { const attempts = [...new Set(state.runs.filter(run => run.stepId === 'core.verification').map(run => run.attempt))].sort((a, b) => a - b); return attempts.map(attempt => { const runs = state.runs.filter(run => run.stepId === 'core.verification' && run.attempt === attempt); const reports = runs.filter(run => run.status === 'completed').map(committedVerifierRun); const verdict = runs.some(run => ['pending', 'working'].includes(run.status)) ? 'PENDING' : reports.some(report => report !== undefined && report.findings.some(finding => finding.severity === 'critical')) ? 'FAIL' : reports.some(report => report === undefined) ? 'EVIDENCE ERROR' : runs.some(run => run.status === 'failed') ? 'FAILED' : runs.some(run => run.status === 'blocked') ? 'BLOCKED' : runs.some(run => run.status === 'expired') ? 'EXPIRED' : reports.length && runs.every(run => run.status === 'completed') ? 'PASS' : 'PENDING'; return `round-${attempt}: ${verdict}` }) }
+
+export const dashboardTestHelpers = { committedVerifierOutput, verificationHistory };
+
 export function loadVerifierFindings(
   repo: string,
   change: string,
   role: string,
 ) {
-  const state = stateMod.loadState(repo, change) as WorkflowState;
-  const path = join(
-    state.worktree,
-    ".herdr-workflow",
-    change,
-    "reviews",
-    `round-${state.verificationRound}-${role}.findings.jsonl`,
-  );
-  if (!existsSync(path)) return undefined;
-  const events = read(path)
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .flatMap((line) => {
-      try {
-        return [JSON.parse(line) as Record<string, unknown>];
-      } catch {
-        return [];
-      }
-    });
+  const state = dashboardState(repo, change) as WorkflowState; const output = committedVerifierOutput(state, role); if (!output) return undefined; const events = output.findings.map(finding => ({ ...finding, type: 'finding' }));
   return {
-    title: `${role} · round ${state.verificationRound}`,
+    title: `${role} · round ${output.run.attempt}`,
     events: events as Array<{
       type: string;
       severity?: string;
@@ -424,98 +344,40 @@ export function loadDeveloperReviewFindings(
   repo: string,
   change: string,
 ): DeveloperReviewFinding[] {
-  const state = stateMod.loadState(repo, change) as WorkflowState;
-  const path = join(
-    state.worktree,
-    ".herdr-workflow",
-    change,
-    "reviews",
-    "findings.json",
-  );
-  if (!existsSync(dirname(path)))
-    throw new Error(`Review directory not found: ${dirname(path)}`);
-  if (!existsSync(path)) return [];
-  let payload: {
-    rounds?: Record<string, Array<Record<string, unknown>>>;
-  };
-  try {
-    payload = JSON.parse(readFileSync(path, "utf8"));
-  } catch (error) {
-    if (error instanceof SyntaxError) return [];
-    throw error;
-  }
-  return (payload.rounds?.[String(state.verificationRound)] ?? [])
+  const state = dashboardState(repo, change) as WorkflowState;
+  const findings = state.runs.filter(run => run.stepId === 'core.verification' && run.attempt === state.verificationRound).flatMap(run => (committedVerifierRun(run)?.findings ?? []).map(finding => ({ ...finding, runId: run.id })));
+  return findings
     .filter(
       (item) =>
         (item.severity === "warning" || item.severity === "info") &&
-        (item.status === "new" || item.status === "unfixed") &&
+        (item.status === undefined || item.status === "new" || item.status === "unfixed") &&
         typeof item.id === "string" &&
         typeof item.detail === "string",
     )
     .map((item) => ({
-      id: item.id as string,
+      id: `${item.runId}:${item.id}`,
+      originalId: item.id,
       severity: item.severity as "warning" | "info",
       path: typeof item.path === "string" ? item.path : undefined,
       line: typeof item.line === "number" ? item.line : undefined,
-      detail: item.detail as string,
+      detail: item.detail,
       evidence: typeof item.evidence === "string" ? item.evidence : undefined,
       fix: typeof item.fix === "string" ? item.fix : undefined,
     }));
 }
 
 export function loadVerifierReport(repo: string, change: string, role: string) {
-  const state = stateMod.loadState(repo, change) as WorkflowState;
-  const reviews = join(state.worktree, ".herdr-workflow", change, "reviews");
-  const jsonl = join(
-    reviews,
-    `round-${state.verificationRound}-${role}.findings.jsonl`,
-  );
-  if (existsSync(jsonl)) {
-    const entries = read(jsonl)
-      .split(/\r?\n/)
-      .filter(Boolean)
-      .flatMap((line) => {
-        try {
-          return [JSON.parse(line) as Record<string, unknown>];
-        } catch {
-          return [];
-        }
-      });
-    const derivedVerdict = entries.some(entry => entry.type === 'finding' && entry.severity === 'critical') ? 'FAIL' : 'PASS';
-    const content =
-      [`# Verdict (derived)\n${derivedVerdict}`, ...entries.map((entry) =>
-        [
-          `# ${(entry.severity ?? "info").toString().toUpperCase()} · ${entry.path ?? "repository"}`,
-          entry.line ? `Line ${entry.line}` : "",
-          String(entry.detail ?? ""),
-          entry.evidence
-            ? `Evidence: ${entry.evidence}`
-            : entry.changedCode
-              ? `Changed code: ${entry.changedCode}`
-              : "",
-          entry.fix ? `Resolution: ${entry.fix}` : "",
-        ]
-          .filter(Boolean)
-          .join("\n")),
-      ].join("\n\n") || "# No findings";
-    return { title: `${role} · round ${state.verificationRound}`, content };
-  }
-  const markdown = join(reviews, `round-${state.verificationRound}-${role}.md`);
-  if (!existsSync(markdown))
-    throw new Error(`No report yet for ${role}.`);
-  return {
-    title: `${role} · round ${state.verificationRound}`,
-    content: read(markdown),
-  };
+  const state = dashboardState(repo, change) as WorkflowState;
+  const output = committedVerifierOutput(state, role); if (!output) throw new Error(`No committed report yet for ${role}.`); const derivedVerdict = output.findings.some(entry => entry.severity === 'critical') ? 'FAIL' : 'PASS'; const content = [`# Verdict (derived)\n${derivedVerdict}`, ...output.findings.map(entry => [`# ${(entry.severity ?? 'info').toString().toUpperCase()} · ${entry.path ?? 'repository'}`, entry.line ? `Line ${entry.line}` : '', String(entry.detail ?? ''), entry.evidence ? `Evidence: ${entry.evidence}` : entry.changedCode ? `Changed code: ${entry.changedCode}` : '', entry.fix ? `Resolution: ${entry.fix}` : ''].filter(Boolean).join('\n'))].join('\n\n') || '# No findings'; return { title: `${role} · round ${output.run.attempt}`, content };
 }
 
 export function loadLocalChanges(repo: string, change: string): LocalChange[] {
-  const state = stateMod.loadState(repo, change) as WorkflowState;
+  const state = dashboardState(repo, change) as WorkflowState;
   const base = state.baseCommit ?? "HEAD";
   const changes = new Map<string, LocalChange>();
   const numstat =
     git(
-      repo,
+      state.worktree,
       "diff",
       "--no-ext-diff",
       "--find-renames",
@@ -537,7 +399,7 @@ export function loadLocalChanges(repo: string, change: string): LocalChange[] {
   }
   const statuses =
     git(
-      repo,
+      state.worktree,
       "diff",
       "--no-ext-diff",
       "--find-renames",
@@ -576,7 +438,7 @@ export function loadLocalChanges(repo: string, change: string): LocalChange[] {
       changes.set(path, existing);
     }
   }
-  for (const line of (git(repo, "status", "--short") ?? "")
+  for (const line of (git(state.worktree, "status", "--short") ?? "")
     .split(/\r?\n/)
     .filter(Boolean)) {
     if (!line.startsWith("?? ")) continue;
@@ -585,7 +447,7 @@ export function loadLocalChanges(repo: string, change: string): LocalChange[] {
       continue;
     if (changes.has(path)) continue;
     const result = gitResult(
-      repo,
+      state.worktree,
       "diff",
       "--no-index",
       "--numstat",
@@ -612,14 +474,14 @@ export function loadLocalDiff(
   change: string,
   file: LocalChange,
 ): string {
-  const state = stateMod.loadState(repo, change) as WorkflowState;
+  const state = dashboardState(repo, change) as WorkflowState;
   const base = state.baseCommit ?? "HEAD";
   const paths =
     file.oldPath && file.oldPath !== file.newPath
       ? [file.oldPath, file.newPath]
       : [file.newPath];
   const result = gitResult(
-    repo,
+    state.worktree,
     "diff",
     "--no-ext-diff",
     "--find-renames",
@@ -630,7 +492,7 @@ export function loadLocalDiff(
   if (result.stdout.toString()) return result.stdout.toString();
   if (!file.newFile) return "";
   return gitResult(
-    repo,
+    state.worktree,
     "diff",
     "--no-ext-diff",
     "--no-index",
@@ -644,7 +506,7 @@ export async function saveDeveloperReview(
   change: string,
   comments: DeveloperReviewComment[],
 ) {
-  const state = stateMod.loadState(repo, change) as WorkflowState;
+  const state = dashboardState(repo, change) as WorkflowState;
   const path = join(
     state.worktree,
     ".herdr-workflow",
@@ -657,27 +519,13 @@ export async function saveDeveloperReview(
 }
 
 export function loadDashboard(repo: string, change: string): DashboardData {
-  const state = stateMod.loadState(repo, change) as WorkflowState;
+  const state = dashboardState(repo, change) as WorkflowState;
   const workflowRoot = join(state.worktree, ".herdr-workflow", change);
   const changeRoot = join(state.worktree, "openspec", "changes", change);
   const statuses = agentStatuses();
-  const closedPlannerPhases = new Set([
-    "verify",
-    "fix",
-    "paused",
-    "developer-review",
-    "archive",
-    "completed",
-    "closed",
-  ]);
+
   const telemetry = telemetryEvents(join(workflowRoot, "telemetry.jsonl"));
-  const roles = [
-    ...(state.verificationRoles ?? []),
-    ...(state.testVerifierStarted ? ["test-verifier"] : []),
-  ];
-  const results = state.verificationResults ?? {};
-  const verifierTimeline = roles.map((role) => {
-    const result = results[role] as { verdict?: string } | undefined;
+  const verifierRuns = state.runs.filter(run => run.stepId === 'core.verification' && run.attempt === state.verificationRound); const verifierTimeline = verifierRuns.map((run) => { const role = run.role; const committed = run.status === 'completed' ? committedVerifierOutput(state, role) : undefined; const verdict = run.status === 'completed' ? (!committed ? 'EVIDENCE ERROR' : committed.findings.some(finding => finding.severity === 'critical') ? 'FAIL' : 'PASS') : ['pending', 'working'].includes(run.status) ? 'RUN' : ['failed', 'blocked'].includes(run.status) ? 'FAIL' : 'SKIPPED';
     const roleEvents = telemetry.filter((event) => event.role === role);
     const responseErrors = roleEvents.filter(
       (event) =>
@@ -698,7 +546,9 @@ export function loadDashboard(repo: string, change: string): DashboardData {
       : undefined;
     return {
       role,
-      status: result?.verdict ?? (statuses.get(state.panes[role] ?? "") ?? "RUN"),
+      status: verdict,
+      rawStatus: run.status,
+      ...(!committed && run.status === 'completed' ? { diagnostic: 'Committed verifier artifact missing, unreadable, malformed, or digest-mismatched' } : {}),
       durationSeconds,
       model: state.verificationModels?.[role],
       providerErrors: responseErrors,
@@ -714,23 +564,16 @@ export function loadDashboard(repo: string, change: string): DashboardData {
     request: summary(join(workflowRoot, "request.md")),
     proposal: summary(join(changeRoot, "proposal.md")),
     tasks: tasks(join(changeRoot, "tasks.md")),
-    review: latestReview(join(workflowRoot, "reviews")),
-    reviewHistory: reviewHistory(join(workflowRoot, "reviews")),
+    review: verificationHistory(state).at(-1) ?? 'Not run',
+    reviewHistory: verificationHistory(state),
     agents: Object.entries(state.panes)
       .filter(([role]) => !["git", "dashboard"].includes(role))
-      .map(([role, pane]) => ({
+      .map(([role, pane]) => { const run = [...state.runs].reverse().find(item => item.role === role); return {
         role,
-        status:
-          statuses.get(pane) ??
-          (role === "planner" && closedPlannerPhases.has(state.phase)
-            ? "closed"
-            : "not started"),
-        model:
-          role === "worker"
-            ? state.workerModel
-            : state.verificationModels?.[role],
+        status: statuses.get(pane) ?? (role === "planner" && state.stepId !== "core.plan" ? "closed" : "not started"),
+        model: run?.model ?? run?.profile ?? run?.runtime,
         cost: costByRole.get(role)?.cost,
-      })),
+      } }),
     updated: new Date().toLocaleTimeString(),
     health: {
       dirty: !!(git(state.worktree, "status", "--porcelain") ?? ""),
@@ -749,17 +592,9 @@ export function loadDashboard(repo: string, change: string): DashboardData {
     age: state.createdAt
       ? `${Math.max(0, Math.floor((Date.now() - Date.parse(state.createdAt)) / 3600000))}h`
       : "unknown",
-    currentTask:
-      state.phase === "explore"
-        ? "Planner exploring change"
-        : state.phase === "apply" || state.phase === "fix"
-          ? (tasks(join(changeRoot, "tasks.md")).find((task) => !task.done)
-              ?.text ?? "Worker completing tasks")
-          : state.phase === "verify"
-            ? "Verification in progress"
-            : state.phase === "committing"
-              ? "Pushing changes"
-              : state.phase,
+    currentTask: state.stepId === "core.implementation"
+      ? (tasks(join(changeRoot, "tasks.md")).find(task => !task.done)?.text ?? "Worker completing tasks")
+      : state.stepLabel ?? state.phase,
     events: telemetry
       .slice(-20)
       .map((event) => ({
@@ -802,6 +637,10 @@ export function testDashboard(phase = "proposed"): DashboardData {
     state: {
       changeId: "demo-optional-realisation-date",
       phase,
+      revision: 0,
+      status: phase === 'closed' ? 'closed' : phase === 'completed' ? 'completed' : 'active',
+      health: { valid: true, attention: [] },
+      runs: [],
       repository: "/demo/customer-mw",
       worktree: "/demo/worktrees/demo-optional-realisation-date",
       branch: "feature/demo-optional-realisation-date",
@@ -982,24 +821,16 @@ export function approvalFor(phase: string, prCreated = false) {
   }
   return (
     {
-      proposed: { prompt: "Press Enter to approve apply", action: "apply" },
-      fix: { prompt: "Press Enter to retry verification", action: "verify" },
+      proposed: { prompt: "Press Enter to approve plan", action: "approve-plan" },
       paused: {
-        prompt: "Press Enter to resume verification",
-        action: "verify",
+        prompt: "Press Enter to resume repaired workflow",
+        action: "resume",
       },
       "developer-review": {
         prompt: "Press Enter to review changed files",
         action: "review",
       },
-      archive: {
-        prompt: "Press Enter to advance archive",
-        action: "archive",
-      },
-      committing: {
-        prompt: "Press Enter to complete committing",
-        action: "archive",
-      },
+
     } as Record<string, { prompt: string; action: string }>
   )[phase];
 }
@@ -1050,6 +881,7 @@ export function notifyHerdrError(message: string) {
   );
 }
 
+export function focusReturnWorkspace(repo: string, change: string, workspace: string) { focusWorkspace(workspace); consumeReturnWorkspace(repo, change, workspace) }
 export function focusWorkspace(workspace: string) {
   herdr.call("workspace", "focus", workspace);
 }
@@ -1165,7 +997,7 @@ export function discoverProjects(): Array<{
 }
 
 export function startWorkflowWizard() {
-  const script = `read -r -p 'Repository path: ' repo; read -r -p 'Ticket identifier (optional): ' ticket; read -r -p 'Change ID: ' change; read -r -p 'Task: ' task; read -r -p 'Mode (worktree/checkout): ' mode; read -r -p 'Worker model: ' worker; args=(start --repo "$repo" --change "$change" --task "$task" --mode "\${mode:-worktree}" --worker "$worker"); if [[ -n "$ticket" ]]; then args+=(--ticket "$ticket"); fi; herdr-workflow "\${args[@]}"`;
+  const script = `read -r -p 'Repository path: ' repo; read -r -p 'Ticket identifier (optional): ' ticket; read -r -p 'Change ID: ' change; read -r -p 'Task: ' task; read -r -p 'Mode (worktree/checkout): ' mode; args=(start --repo "$repo" --change "$change" --task "$task" --mode "\${mode:-worktree}"); if [[ -n "$ticket" ]]; then args+=(--ticket "$ticket"); fi; herdr-workflow "\${args[@]}"`;
   return (
     Bun.spawnSync(["bash", "-lc", script], {
       stdin: "inherit",
@@ -1181,9 +1013,7 @@ export async function startWorkflow(input: {
   change: string;
   task?: string;
   mode: string;
-  worker: string;
   workflowType?: string;
-  sshPassphrase?: string;
 }) {
   const repo = input.repo.startsWith("~")
     ? resolve(input.repo.replace("~", homedir()))
@@ -1191,11 +1021,15 @@ export async function startWorkflow(input: {
   return startWorkflowInProcess({ ...input, repo });
 }
 
+export function previewRepair(repo: string, change: string) { return previewWorkflowRepair(repo, change) }
+export function applyRepair(repo: string, change: string, revision: number, targetStep: string, reason: string) { return repairWorkflow(repo, change, revision, targetStep, reason) }
+
 export async function runWorkflow(
   action: string,
   repo: string,
   change: string,
+  revision: number,
   argument?: string,
 ) {
-  return runWorkflowAction(action, repo, change, argument);
+  return runWorkflowAction(action, repo, change, revision, argument);
 }

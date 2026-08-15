@@ -2,65 +2,72 @@
 
 ## Purpose
 TBD - created by archiving change ui-improvements-and-telemetry. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: User-message correlated agent traces
-The system SHALL create one agent-operation span for each Pi user message handled by a managed role and SHALL identify that message independently of captured message content.
+The system SHALL create one agent-operation span for each assignment or follow-up message handled by any managed runtime and identify workflow, run, step, role, runtime, profile, and message independently of captured content.
 
 #### Scenario: Managed role handles controller prompt
-- **WHEN** workflow controller prompts a managed role with valid upstream trace context
-- **THEN** role's agent-operation span SHALL continue upstream trace
-- **AND** span SHALL identify workflow change, role, phase, verification round when present, Pi session, and user-message entry
+- **WHEN** adapter sends assignment with valid upstream trace context
+- **THEN** agent-operation span SHALL continue upstream trace
+- **AND** span SHALL identify workflow/run/step/role/runtime/profile and runtime session when available
 
 #### Scenario: Developer sends direct agent message
-- **WHEN** managed agent receives user message without valid upstream trace context
-- **THEN** system SHALL start new trace for that message
-- **AND** all instrumented actions caused by message SHALL descend from its agent-operation span
+- **WHEN** managed runtime handles message without valid one-use upstream trace context
+- **THEN** bridge SHALL start independent trace
+- **AND** it SHALL NOT attach operation to unrelated workflow command
 
 #### Scenario: Agent receives later message
-- **WHEN** same agent session handles another user message
-- **THEN** later message SHALL have distinct message identifier and agent-operation span
-- **AND** actions from two messages SHALL NOT be attributed to each other
+- **WHEN** same runtime session handles another run message
+- **THEN** later message SHALL have distinct message ID and operation span
+- **AND** actions from runs SHALL not be attributed to each other
 
 ### Requirement: Agent action spans
-The system SHALL trace model turns and tool executions performed for active user message with timing, outcome, and non-content operational attributes.
+The system SHALL normalize available model turns, tool executions, provider responses, compaction, and runtime errors under active agent-operation span without requiring every runtime to expose same deep hooks.
 
 #### Scenario: Model turn completes
-- **WHEN** agent completes model turn
-- **THEN** system SHALL end child model span under active agent-operation span
-- **AND** span SHALL include provider/model, stop or error outcome, and available input/output/cache token usage and cost
+- **WHEN** Pi, OpenCode, or OpenCode V2 bridge receives model-turn lifecycle
+- **THEN** it SHALL emit common event/span schema with runtime identifier
+- **AND** include timing, outcome, model and available token/cost metadata
 
 #### Scenario: Tool execution completes
-- **WHEN** agent tool execution succeeds, fails, or is blocked
-- **THEN** system SHALL end child tool span under active agent-operation span
-- **AND** span SHALL include tool name, tool-call identifier, duration, and error status
+- **WHEN** runtime bridge receives tool completion or block
+- **THEN** it SHALL emit normalized child tool span with tool/call identity, duration, and outcome
+- **AND** tool span SHALL remain under active agent operation
+
+#### Scenario: Runtime lacks deep hook
+- **WHEN** adapter cannot observe model or tool detail
+- **THEN** baseline assignment, process, status, and handoff telemetry SHALL remain available
+- **AND** system SHALL omit unsupported fields rather than infer them
 
 #### Scenario: Parallel tools finish out of order
-- **WHEN** agent runs sibling tool calls concurrently
-- **THEN** each tool SHALL retain independent span identifier and correct parent
-- **AND** trace hierarchy SHALL NOT depend on completion or file-write order
+- **WHEN** runtime reports sibling tool calls concurrently
+- **THEN** each normalized tool span SHALL keep independent span ID and parent
+- **AND** hierarchy SHALL not depend on event write order
 
 ### Requirement: Workflow trace propagation
-The system SHALL propagate W3C trace context across instrumented Bash, `herdr-workflow`, and managed role prompt boundaries.
+The system SHALL propagate W3C trace context across unified workflow commands, outbox effects, agent adapters, runtime bridges, and generic handoff.
 
 #### Scenario: Agent invokes workflow command
-- **WHEN** instrumented Bash tool invokes `herdr-workflow`
-- **THEN** command action span SHALL descend from Bash tool span
-- **AND** downstream roles prompted by command SHALL receive one-use child trace context without adding trace metadata to model prompt text
+- **WHEN** instrumented runtime invokes `agentic-coding workflow handoff`
+- **THEN** command span SHALL descend from current agent operation when trace context is available
+- **AND** successor assignment SHALL receive one-use child context without trace metadata in model prompt
 
 #### Scenario: Verification dispatches parallel roles
-- **WHEN** triage dispatches selected verifiers for verification round
-- **THEN** verifier agent-operation spans SHALL remain descendants of initiating verification trace
-- **AND** spans SHALL expose change ID, round, tier, and verifier role for filtering
+- **WHEN** verification step dispatches selected verifier runs
+- **THEN** operation spans SHALL descend from initiating workflow command
+- **AND** spans SHALL expose workflow/run/step/role/runtime for filtering
 
 #### Scenario: Verification continues to test or fix
-- **WHEN** selected verifier results cause test verification or worker fix
-- **THEN** next role prompt and its actions SHALL remain connected through inherited trace context
-- **AND** pass, fail, retry, and timeout workflow actions SHALL be visible as spans
+- **WHEN** verifier results start test verification or implementation fix
+- **THEN** successor assignment spans SHALL remain connected through engine command/effect trace
+- **AND** pass, fail, retry, and attempt-limit outcomes SHALL remain visible
 
 #### Scenario: Prompt context is stale or malformed
-- **WHEN** managed role starts message with missing, expired, consumed, or malformed handoff context
-- **THEN** extension SHALL ignore context and start independent trace
-- **AND** stale context SHALL NOT attach message to unrelated workflow action
+- **WHEN** runtime starts message with missing, expired, consumed, or malformed handoff context
+- **THEN** bridge SHALL ignore it and start independent trace
+- **AND** stale context SHALL not connect unrelated run
 
 ### Requirement: Best-effort OTLP export and local history
 The system SHALL export ended spans as OTLP/HTTP JSON and SHALL retain normalized workflow-local span history without affecting workflow correctness.
@@ -93,3 +100,22 @@ The system SHALL omit prompt text, model text, tool arguments, tool results, and
 - **THEN** system SHALL record only configured bounded preview
 - **AND** system SHALL still omit model text, tool arguments, tool results, and repository content
 
+### Requirement: Runtime-neutral baseline telemetry
+Every registered agent adapter SHALL emit normalized launch, assignment-delivered, observed-status, stop, error, and handoff events even when no runtime plugin bridge is installed.
+
+#### Scenario: Any adapter launches run
+- **WHEN** adapter begins and completes launch attempt
+- **THEN** baseline events SHALL identify workflow, run, step, role, profile, runtime, effect, attempt, outcome, and duration
+
+#### Scenario: Runtime bridge fails
+- **WHEN** Pi extension or OpenCode plugin throws, is unavailable, or emits malformed data
+- **THEN** workflow and agent SHALL continue unchanged
+- **AND** baseline adapter telemetry SHALL remain authoritative only for observation, never lifecycle mutation
+
+### Requirement: Telemetry is observational
+Telemetry bridge SHALL NOT read or mutate workflow state, decide completion, retry/nudge agents, switch runtime/model, or trigger workflow transition.
+
+#### Scenario: Runtime settles without handoff
+- **WHEN** bridge observes idle or settled event
+- **THEN** it SHALL emit observation only
+- **AND** state engine SHALL retain active run until valid handoff or timeout policy
