@@ -101,7 +101,7 @@ function withRuntimeLauncher(ctx: LaunchContext, name: 'pi' | 'opencode'): Launc
 export class OpenCodeV2Adapter extends BaseAdapter {
   readonly id = 'opencode-v2' as const;
   async launch(ctx: LaunchContext): Promise<AgentHandle> {
-    const args: string[] = []; if (ctx.profile.model) args.push('--model', ctx.profile.model); if (ctx.profile.agent) args.push('--agent', ctx.profile.agent); // ponytail: variant is tolerated in the config schema but not passed — neither opencode 1.x nor the next-build CLI accepts --variant (spawns print help)
+    const args: string[] = []; if (ctx.profile.model) args.push('--model', ctx.profile.model); if (ctx.profile.agent) args.push('--agent', ctx.profile.agent);
     return this.lifecycle.start('opencode', withOpenCodeLauncher(isolatedOpenCode(ctx)), args);
   }
 }

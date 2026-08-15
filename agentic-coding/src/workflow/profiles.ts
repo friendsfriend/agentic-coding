@@ -4,7 +4,7 @@ import type { CompiledWorkflowDefinition } from './registry.ts';
 import { stableJson } from './registry.ts';
 import { loadAssignments } from './agent-extensions.ts';
 
-export interface ProfileConfig { runtime: RuntimeId; executable?: string; model?: string; agent?: string; thinking?: string; variant?: string; tools?: string[]; extensions?: string[]; read_only?: boolean; capabilities?: AdapterCapability[] }
+export interface ProfileConfig { runtime: RuntimeId; executable?: string; model?: string; agent?: string; thinking?: string; tools?: string[]; extensions?: string[]; read_only?: boolean; capabilities?: AdapterCapability[] }
 export interface AgentsConfig {
   default_profile: string; profiles: Record<string, ProfileConfig>; routes?: Record<string, string>;
   role_routes?: Record<string, Record<string, string>>; definition_defaults?: Record<string, string>; runtime_diversity?: Array<{ routes?: string[]; steps?: string[] }>;
@@ -12,7 +12,7 @@ export interface AgentsConfig {
 const RUNTIME_OPTIONS: Record<string, Set<string>> = {
   pi: new Set(['runtime', 'executable', 'model', 'thinking', 'tools', 'extensions', 'read_only', 'capabilities']),
   opencode: new Set(['runtime', 'executable', 'model', 'agent', 'tools', 'read_only', 'capabilities']),
-  'opencode-v2': new Set(['runtime', 'executable', 'model', 'agent', 'variant', 'tools', 'read_only', 'capabilities']),
+  'opencode-v2': new Set(['runtime', 'executable', 'model', 'agent', 'tools', 'read_only', 'capabilities']),
 };
 const DEFAULT_CAPABILITIES: AdapterCapability[] = ['interactive', 'prompt', 'persistent-session', 'run-environment', 'observe', 'shell', 'edit', 'runtime-bridge'];
 export function parseAgentsConfig(value: unknown, legacy?: { models?: Record<string, string>; thinking?: Record<string, string> }): AgentsConfig {
@@ -35,7 +35,7 @@ export function resolveProfile(name: string, config: AgentsConfig): ResolvedProf
   const profile = config.profiles[name]; if (!profile) throw new Error(`unknown agent profile: ${name}`);
   const capabilities = [...new Set(profile.capabilities ?? DEFAULT_CAPABILITIES)]; let tools = [...(profile.tools ?? [])];
   if (profile.read_only) { const index = capabilities.indexOf('edit'); if (index >= 0) capabilities.splice(index, 1); if (!capabilities.includes('read-only')) capabilities.push('read-only'); tools = tools.filter(tool => !['edit', 'write'].includes(tool)) }
-  const assigned = profile.runtime === 'pi' ? loadAssignments().extensions.filter(item => item.profiles.includes(name)).map(item => item.source) : []; const unsigned = { name, runtime: profile.runtime, executable: executable(profile.runtime, profile.executable), ...(profile.model ? { model: profile.model } : {}), ...(profile.agent ? { agent: profile.agent } : {}), ...(profile.thinking ? { thinking: profile.thinking } : {}), ...(profile.variant ? { variant: profile.variant } : {}), tools: Object.freeze(tools), extensions: Object.freeze([...new Set([...(profile.extensions ?? []), ...assigned])]), readOnly: Boolean(profile.read_only), capabilities: Object.freeze(capabilities) };
+  const assigned = profile.runtime === 'pi' ? loadAssignments().extensions.filter(item => item.profiles.includes(name)).map(item => item.source) : []; const unsigned = { name, runtime: profile.runtime, executable: executable(profile.runtime, profile.executable), ...(profile.model ? { model: profile.model } : {}), ...(profile.agent ? { agent: profile.agent } : {}), ...(profile.thinking ? { thinking: profile.thinking } : {}), tools: Object.freeze(tools), extensions: Object.freeze([...new Set([...(profile.extensions ?? []), ...assigned])]), readOnly: Boolean(profile.read_only), capabilities: Object.freeze(capabilities) };
   return Object.freeze({ ...unsigned, digest: createHash('sha256').update(stableJson(unsigned)).digest('hex') });
 }
 export function profileFor(stepId: string, role: string | undefined, definition: CompiledWorkflowDefinition, config: AgentsConfig): ResolvedProfile {
