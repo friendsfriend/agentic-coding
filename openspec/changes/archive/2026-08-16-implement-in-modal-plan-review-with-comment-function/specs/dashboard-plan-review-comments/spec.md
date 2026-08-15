@@ -1,0 +1,65 @@
+## Purpose
+
+Plan approval is reviewed through a modal flow that mirrors the developer review: an artifact list popup, a separate markdown view for each artifact, and line-anchored comments that decide between approval and planner feedback.
+
+## ADDED Requirements
+
+### Requirement: Plan review popup lists OpenSpec artifacts
+When the workflow reaches the plan approval gate, the plan review popup SHALL open and list all OpenSpec artifacts created by the planner (proposal, design, tasks, and every delta spec) instead of the generic action picker.
+
+#### Scenario: Popup shows the artifact list
+- **WHEN** the workflow enters the plan approval gate and the review popup opens
+- **THEN** the popup lists every OpenSpec artifact of the change with its file name
+
+#### Scenario: Postpone the review
+- **WHEN** the user presses Esc in the plan review popup
+- **THEN** the popup closes without dispatching any workflow action
+
+#### Scenario: Search the artifact list
+- **WHEN** the user presses `/` in the plan review popup and types a query
+- **THEN** the artifact list filters by path
+
+### Requirement: Markdown view modal with line-anchored comments
+The plan review popup SHALL open each artifact in a separate markdown modal that renders the artifact text as selectable lines, and the user SHALL be able to anchor comments to lines or line ranges, mirroring the developer review diff view.
+
+#### Scenario: Open an artifact in the markdown modal
+- **WHEN** the user presses Enter on an artifact row in the plan review popup
+- **THEN** the artifact content opens in the separate markdown modal
+
+#### Scenario: Comment on a line
+- **WHEN** the user selects a line in the markdown modal and presses `c`
+- **THEN** a comment input appears and the submitted comment is anchored to the selected line and rendered inline as a comment thread
+
+#### Scenario: Comment on a visual range
+- **WHEN** the user selects a line range in the markdown modal and submits a comment
+- **THEN** the comment carries the range start and end lines
+
+#### Scenario: Cycle comments
+- **WHEN** the user presses `n` or `N` in the markdown modal
+- **THEN** the selection jumps to the next or previous commented line
+
+#### Scenario: Return to the artifact list
+- **WHEN** the user presses Esc in the markdown modal
+- **THEN** the markdown modal closes and the plan review popup is shown again
+
+### Requirement: Finish checks comments and dispatches the matching action
+Finishing the plan review SHALL check whether comments exist: without comments the workflow SHALL dispatch the plan approval action so the worker starts implementation; with comments the workflow SHALL save the comments and dispatch the review-comments action with a bounded payload so the planner receives the feedback.
+
+#### Scenario: Finish without comments approves the plan
+- **WHEN** the user presses `f` in the plan review and no comments exist
+- **THEN** the review closes and the workflow dispatches the plan approval action
+
+#### Scenario: Finish with comments sends feedback to the planner
+- **WHEN** the user presses `f` in the plan review and comments exist
+- **THEN** the review closes, the comments are persisted under the change's review directory, and the workflow dispatches the review-comments action with the comments
+
+#### Scenario: Comments persist for the review round
+- **WHEN** the plan review is finished with comments
+- **THEN** the comments are written to `reviews/plan-review.json` under the workflow's change directory
+
+### Requirement: Demo dashboard exercises the plan review flow
+The demo dashboard SHALL provide plan artifacts and markdown content so the plan review popup and markdown modal are exercisable without a real workflow.
+
+#### Scenario: Demo opens the plan review popup
+- **WHEN** the demo dashboard reaches the plan approval phase and the review opens
+- **THEN** the popup shows demo artifacts and the markdown modal shows demo artifact content

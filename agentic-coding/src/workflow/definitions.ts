@@ -36,7 +36,7 @@ export function registerBuiltins(registry = new WorkflowRegistry(EFFECTS, CAPABI
   if (!Number.isInteger(maxVerificationRounds) || maxVerificationRounds < 1 || maxVerificationRounds > 20) throw new Error('max_verification_rounds must be an integer from 1 to 20');
   const catalog: StepDefinition[] = [
     step('core.plan', 'Planning', 'agent', ['complete', 'blocked', 'failed'], { retryLimit: 3, allowedEffects: ['artifact.write', 'agent.launch', 'agent.prompt', 'agent.stop', 'openspec.validate', 'notification.show'] }),
-    step('core.plan-approval', 'Plan approval', 'developer', ['approve', 'reject']),
+    step('core.plan-approval', 'Plan approval', 'developer', ['approve', 'reject', 'comments']),
     step('core.implementation', 'Implementation', 'agent', ['complete', 'blocked', 'failed'], { retryLimit: 6 }),
     step('core.triage', 'Verification triage', 'agent', ['complete', 'blocked', 'failed'], { output: triage, retryLimit: 3 }),
     step('core.verification', 'Verification', 'agent', ['pass', 'fix', 'limit', 'blocked', 'failed'], { requirements: ['prompt', 'run-environment', 'observe', 'read-only'], output: findings, retryLimit: 20 }),
@@ -51,7 +51,7 @@ export function registerBuiltins(registry = new WorkflowRegistry(EFFECTS, CAPABI
   const manifests = (rounds: number, version: number): WorkflowManifest[] => [
     { id: 'standard', version, label: 'Standard', initial: 'core.plan', terminal: ['core.closed'], steps: ['core.plan', 'core.plan-approval', ...common, 'core.archive', 'core.delivery', 'core.completed', 'core.closed'], edges: [
       { from: 'core.plan', outcome: 'complete', to: 'core.plan-approval' }, { from: 'core.plan', outcome: 'blocked', to: 'core.plan', loop: { maxAttempts: 3 } }, { from: 'core.plan', outcome: 'failed', to: 'core.plan', loop: { maxAttempts: 3 } },
-      { from: 'core.plan-approval', outcome: 'approve', to: 'core.implementation' }, { from: 'core.plan-approval', outcome: 'reject', to: 'core.plan', loop: { maxAttempts: 3 } }, ...workflowEdges(true, rounds),
+      { from: 'core.plan-approval', outcome: 'approve', to: 'core.implementation' }, { from: 'core.plan-approval', outcome: 'reject', to: 'core.plan', loop: { maxAttempts: 3 } }, { from: 'core.plan-approval', outcome: 'comments', to: 'core.plan', loop: { maxAttempts: 3 } }, ...workflowEdges(true, rounds),
     ] },
     { id: 'direct-apply', version, label: 'Direct apply', initial: 'core.implementation', terminal: ['core.closed'], steps: [...common, 'core.archive', 'core.delivery', 'core.completed', 'core.closed'], edges: workflowEdges(true, rounds) },
     { id: 'no-openspec', version, label: 'No OpenSpec', initial: 'core.implementation', terminal: ['core.closed'], steps: [...common, 'core.delivery', 'core.completed', 'core.closed'], edges: workflowEdges(false, rounds) },

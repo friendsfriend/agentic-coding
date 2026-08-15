@@ -34,11 +34,13 @@ import {
   requiredUserActionFor,
   runWorkflow,
   saveDeveloperReview,
+  savePlanReview,
   testDashboard,
   type DashboardData,
   type DeveloperReviewComment,
   type DeveloperReviewFinding,
   type LocalChange,
+  type PlanReviewComment,
   type RequiredUserActionItem,
 } from "./data";
 import { watchDirectories } from "./watchRefresh";
@@ -67,6 +69,7 @@ import { CredentialsModal, pendingCredentialRequest } from "./ui/CredentialsModa
 import { TraceBrowser } from "./ui/TraceBrowser";
 import { ChangedFilesView } from "./devenv-ui/components/ChangedFilesView";
 import { DiffViewModal } from "./devenv-ui/components/DiffViewModal";
+import { MarkdownViewModal } from "./devenv-ui/components/MarkdownViewModal";
 import { GenericModal } from "./devenv-ui/components/GenericModal";
 import type { Discussion } from "./devenv-ui/types";
 
@@ -201,6 +204,9 @@ export function App(props: {
   const [themeQuery, setThemeQuery] = createSignal("");
   const [themeFiltering, setThemeFiltering] = createSignal(false);
   const [reviewOpen, setReviewOpen] = createSignal(false);
+  const [reviewKind, setReviewKind] = createSignal<"developer" | "plan">(
+    "developer",
+  );
   const [reviewView, setReviewView] = createSignal<"files" | "diff">("files");
   const [reviewChanges, setReviewChanges] = createSignal<LocalChange[]>([]);
   const [reviewChangeIndex, setReviewChangeIndex] = createSignal(0);
@@ -460,6 +466,7 @@ export function App(props: {
       setSelectedReviewFindingIds(new Set<string>());
       setReviewView("files");
       setReviewOpen(true);
+      setReviewKind("developer");
       queueMicrotask(() =>
         props.keymap.setData("modal.active", "developer-review"),
       );
@@ -517,6 +524,252 @@ export function App(props: {
       setBusy(false);
     }
   };
+  const demoPlanArtifacts = () => [
+    {
+      newPath: "proposal.md",
+      linesAdded: 4,
+      linesDeleted: 0,
+      newFile: true,
+      deletedFile: false,
+      renamedFile: false,
+    },
+    {
+      newPath: "design.md",
+      linesAdded: 6,
+      linesDeleted: 0,
+      newFile: true,
+      deletedFile: false,
+      renamedFile: false,
+    },
+    {
+      newPath: "tasks.md",
+      linesAdded: 5,
+      linesDeleted: 0,
+      newFile: true,
+      deletedFile: false,
+      renamedFile: false,
+    },
+    {
+      newPath: "specs/workflow-engine-runtime/spec.md",
+      linesAdded: 8,
+      linesDeleted: 0,
+      newFile: true,
+      deletedFile: false,
+      renamedFile: false,
+    },
+  ];
+  const demoPlanContent = (artifact: string) => {
+    const demo = {
+      "proposal.md": "# Proposal\n\nMake the plan review modal-based.\n\n## What changes\n- Artifact list popup.\n- Markdown review modal.",
+      "design.md": "# Design\n\n## Context\n\nMirror the developer review gate.\n\n## Decisions\n\nD1: Engine comments outcome.\n\nD2: Planner review-fix mode.",
+      "tasks.md": "# Tasks\n\n- [ ] Engine routing\n- [ ] Markdown modal\n- [ ] Planner instruction",
+      "specs/workflow-engine-runtime/spec.md": "# Workflow engine runtime\n\n## ADDED Requirements\n\n### Requirement: Review comments route to the planner\n\nThe plan gate SHALL accept bounded review comments.\n\n#### Scenario: Comments return to planning\n\nWHEN the developer dispatches review-comments.\n\nTHEN the workflow transitions to planning with feedback.",
+    } as Record<string, string>;
+    return demo[artifact] ?? `# ${artifact}\n\nDemo artifact content.`;
+  };
+  const openPlanReview = () => {
+    try {
+      const changes: LocalChange[] =
+        props.profile === "test"
+          ? demoPlanArtifacts()
+          : openSpecArtifacts(data().state).map((artifact) => {
+              let linesAdded = 0;
+              try {
+                linesAdded = openSpecArtifact(data().state, artifact).split(
+                  /\r?\n/,
+                ).length;
+              } catch {
+                /* line count falls back to 0 when the artifact is unreadable */
+              }
+              return {
+                newPath: artifact,
+                linesAdded,
+                linesDeleted: 0,
+                newFile: true,
+                deletedFile: false,
+                renamedFile: false,
+              };
+            });
+      setReviewKind("plan");
+      setReviewChanges(changes);
+      setReviewChangeIndex(0);
+      setReviewLine(0);
+      setReviewDiff("");
+      setReviewComments([]);
+      setReviewFindings([]);
+      setSelectedReviewFindingIds(new Set<string>());
+      setReviewVisualMode(false);
+      setReviewVisualStart(0);
+      setReviewSourceRange({});
+      setReviewDiscussionLineIndices([]);
+      setReviewSelectableLineCount(0);
+      setReviewSelectedLineFindingIds([]);
+      setReviewSearchMode(false);
+      setReviewSearchQuery("");
+      setReviewSplitView(null);
+      setReviewView("files");
+      setReviewOpen(true);
+      queueMicrotask(() =>
+        props.keymap.setData("modal.active", "plan-review"),
+      );
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    }
+  };
+  const openPlanMarkdown = () => {
+    const file = reviewVisibleChanges()[reviewChangeIndex()];
+    if (!file) return;
+    try {
+      setReviewDiff(
+        props.profile === "test"
+          ? demoPlanContent(file.newPath)
+          : openSpecArtifact(data().state, file.newPath),
+      );
+      setReviewLine(0);
+      setReviewView("diff");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    }
+  };
+  const finishPlanReview = async () => {
+    if (busy()) return;
+    setBusy(true);
+    setMessage("Finishing plan review…");
+    try {
+      const comments = reviewComments();
+      if (props.profile !== "test") {
+        await savePlanReview(props.repo, props.change, comments);
+        const engineComments = comments.map(comment => ({ comment: comment.body, ...(comment.filePath ? { file: comment.filePath } : {}), ...(comment.line ? { line: comment.line } : {}), ...(comment.startLine ? { startLine: comment.startLine } : {}), ...(comment.endLine ? { endLine: comment.endLine } : {}) }));
+        setMessage(await runWorkflow(comments.length ? "review-comments" : "approve-plan", props.repo, props.change, data().state.revision, comments.length ? JSON.stringify({ comments: engineComments }) : undefined));
+        refresh();
+      } else {
+        if (comments.length) {
+          setMessage("Plan review comments sent to planner");
+        } else {
+          setDemoIndex((index) => (index + 1) % demoPhases.length);
+          setMessage("Plan approved");
+        }
+        refresh();
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setReviewView("files");
+      setReviewOpen(false);
+      props.keymap.setData("modal.active", "none");
+      setBusy(false);
+    }
+  };
+  const handleReviewKey = (event: KeyEvent) => {
+    const key = event.name.toLowerCase();
+    if (reviewView() === "files" && reviewSearchMode()) {
+      if (key === "escape") {
+        setReviewSearchMode(false);
+        setReviewSearchQuery("");
+        setReviewChangeIndex(0);
+      } else if (key === "enter" || key === "return") {
+        setReviewSearchMode(false);
+      } else if (key === "backspace" || key === "delete") {
+        setReviewSearchQuery((query) => query.slice(0, -1));
+        setReviewChangeIndex(0);
+      } else if (
+        event.sequence &&
+        event.sequence.length === 1 &&
+        event.sequence >= " "
+      ) {
+        setReviewSearchQuery((query) => query + event.sequence);
+        setReviewChangeIndex(0);
+      }
+      return true;
+    }
+    if (key === "escape") {
+      if (reviewView() === "diff") {
+        setReviewVisualMode(false);
+        setReviewView("files");
+      } else if (reviewSearchQuery()) {
+        setReviewSearchQuery("");
+        setReviewSearchMode(false);
+        setReviewChangeIndex(0);
+      } else {
+        setReviewOpen(false);
+        props.keymap.setData("modal.active", "none");
+      }
+    } else if (key === "f" && !event.shift) {
+      if (reviewKind() === "plan") void finishPlanReview();
+      else void finishDeveloperReview();
+    } else if (
+      reviewView() === "files" &&
+      (key === "/" || event.sequence === "/")
+    ) {
+      setReviewSearchMode(true);
+      setReviewSearchQuery("");
+      setReviewChangeIndex(0);
+    } else if (
+      reviewView() === "files" &&
+      (key === "j" || key === "down")
+    )
+      setReviewChangeIndex((index) =>
+        Math.min(
+          Math.max(0, reviewVisibleChanges().length - 1),
+          index + 1,
+        ),
+      );
+    else if (reviewView() === "files" && (key === "k" || key === "up"))
+      setReviewChangeIndex((index) => Math.max(0, index - 1));
+    else if (
+      reviewView() === "files" &&
+      (key === "enter" || key === "return")
+    ) {
+      if (reviewKind() === "plan") openPlanMarkdown();
+      else openReviewDiff();
+    } else if (reviewView() === "diff" && key === "v") {
+      if (reviewVisualMode()) setReviewVisualMode(false);
+      else {
+        setReviewVisualStart(reviewLine());
+        setReviewVisualMode(true);
+      }
+    } else if (reviewView() === "diff" && key === "n")
+      cycleReviewComments(event.shift ? -1 : 1);
+    else if (
+      reviewView() === "diff" &&
+      key === "s" &&
+      reviewKind() !== "plan"
+    )
+      setReviewSplitView((split) =>
+        split === null ? dimensions().width < 160 : !split,
+      );
+    else if (reviewView() === "diff" && (key === "j" || key === "down"))
+      setReviewLine((line) =>
+        Math.min(
+          Math.max(0, reviewSelectableLineCount() - 1),
+          line + 1,
+        ),
+      );
+    else if (reviewView() === "diff" && (key === "k" || key === "up"))
+      setReviewLine((line) => Math.max(0, line - 1));
+    else if (
+      reviewView() === "diff" &&
+      (key === "space" || key === " ") &&
+      reviewKind() !== "plan"
+    ) {
+      const ids = reviewSelectedLineFindingIds();
+      if (ids.length)
+        setSelectedReviewFindingIds((selected) => {
+          const next = new Set(selected);
+          const select = ids.some((id) => !next.has(id));
+          for (const id of ids) {
+            if (select) next.add(id);
+            else next.delete(id);
+          }
+          return next;
+        });
+    } else if (reviewView() === "diff" && key === "c") {
+      setReviewCommentText("");
+      setReviewCommentMode(true);
+      props.keymap.setData("modal.active", "review-comment");
+    }
+    return true;
+  };
   const gate = createMemo(() => {
     if (props.profile === "test")
       return {
@@ -524,6 +777,7 @@ export function App(props: {
         action: "next demo phase",
       };
     if (data().state.stepId === "core.developer-review") return { prompt: "Press Enter to review changed files", action: "review" };
+    if (data().state.stepId === "core.plan-approval") return { prompt: "Press Enter to review plan artifacts", action: "plan-review" };
     const actions = data().state.availableActions ?? []; if (actions.length > 1 || actions[0]?.confirmation !== 'none') return actions.length ? { prompt: "Press Enter to choose workflow action", action: "completed-actions" } : undefined;
     const action = actions[0]; if (action) return { prompt: `Press Enter: ${action.label}`, action: action.id };
     if (
@@ -545,6 +799,13 @@ export function App(props: {
       // intermediate item selection, open the review directly.
       promptedUserActionKey = action.key;
       openDeveloperReview();
+      return true;
+    }
+    if (action.key === "plan-review") {
+      // The plan review user action IS the artifact-list popup: no
+      // intermediate item selection, open the review directly.
+      promptedUserActionKey = action.key;
+      openPlanReview();
       return true;
     }
     setUserActionSelection(0);
@@ -768,6 +1029,10 @@ export function App(props: {
         openDeveloperReview();
         return;
       }
+      if (data().state.stepId === "core.plan-approval") {
+        openPlanReview();
+        return;
+      }
       if (activePanel() === 6) {
         const artifact = artifacts()[selectedArtifact()];
         if (artifact) {
@@ -834,6 +1099,10 @@ export function App(props: {
       if (!approval) return;
       if (approval.action === "review") {
         openDeveloperReview();
+        return;
+      }
+      if (approval.action === "plan-review") {
+        openPlanReview();
         return;
       }
       if (approval.action === "completed-actions") {
@@ -1223,10 +1492,12 @@ export function App(props: {
           name: "review-comment.handle",
           run: ({ event }) => {
             const key = event.name.toLowerCase();
+            const returnModal = () =>
+              reviewKind() === "plan" ? "plan-review" : "developer-review";
             if (key === "escape") {
               setReviewCommentMode(false);
               setReviewCommentText("");
-              props.keymap.setData("modal.active", "developer-review");
+              props.keymap.setData("modal.active", returnModal());
             } else if (key === "backspace")
               setReviewCommentText((text) => text.slice(0, -1));
             else if (key === "enter" || key === "return") {
@@ -1247,11 +1518,11 @@ export function App(props: {
                   { filePath: file.newPath, line, body, ...rangeComment },
                 ]);
               } else if (file)
-                setMessage("Could not map selected diff line to file line.");
+                setMessage("Could not map selected line to file line.");
               setReviewVisualMode(false);
               setReviewCommentMode(false);
               setReviewCommentText("");
-              props.keymap.setData("modal.active", "developer-review");
+              props.keymap.setData("modal.active", returnModal());
             } else if (event.name === "space" || event.name === " ")
               setReviewCommentText((text) => `${text} `);
             else if (event.name.length === 1)
@@ -1284,109 +1555,7 @@ export function App(props: {
       commands: [
         {
           name: "developer-review.handle",
-          run: ({ event }) => {
-            const key = event.name.toLowerCase();
-            if (reviewView() === "files" && reviewSearchMode()) {
-              if (key === "escape") {
-                setReviewSearchMode(false);
-                setReviewSearchQuery("");
-                setReviewChangeIndex(0);
-              } else if (key === "enter" || key === "return") {
-                setReviewSearchMode(false);
-              } else if (key === "backspace" || key === "delete") {
-                setReviewSearchQuery((query) => query.slice(0, -1));
-                setReviewChangeIndex(0);
-              } else if (
-                event.sequence &&
-                event.sequence.length === 1 &&
-                event.sequence >= " "
-              ) {
-                setReviewSearchQuery((query) => query + event.sequence);
-                setReviewChangeIndex(0);
-              }
-              return true;
-            }
-            if (key === "escape") {
-              if (reviewView() === "diff") {
-                setReviewVisualMode(false);
-                setReviewView("files");
-              } else if (reviewSearchQuery()) {
-                setReviewSearchQuery("");
-                setReviewSearchMode(false);
-                setReviewChangeIndex(0);
-              } else {
-                setReviewOpen(false);
-                props.keymap.setData("modal.active", "none");
-              }
-            } else if (key === "f" && !event.shift)
-              void finishDeveloperReview();
-            else if (
-              reviewView() === "files" &&
-              (key === "/" || event.sequence === "/")
-            ) {
-              setReviewSearchMode(true);
-              setReviewSearchQuery("");
-              setReviewChangeIndex(0);
-            } else if (
-              reviewView() === "files" &&
-              (key === "j" || key === "down")
-            )
-              setReviewChangeIndex((index) =>
-                Math.min(
-                  Math.max(0, reviewVisibleChanges().length - 1),
-                  index + 1,
-                ),
-              );
-            else if (reviewView() === "files" && (key === "k" || key === "up"))
-              setReviewChangeIndex((index) => Math.max(0, index - 1));
-            else if (
-              reviewView() === "files" &&
-              (key === "enter" || key === "return")
-            )
-              openReviewDiff();
-            else if (reviewView() === "diff" && key === "v") {
-              if (reviewVisualMode()) setReviewVisualMode(false);
-              else {
-                setReviewVisualStart(reviewLine());
-                setReviewVisualMode(true);
-              }
-            } else if (reviewView() === "diff" && key === "n")
-              cycleReviewComments(event.shift ? -1 : 1);
-            else if (reviewView() === "diff" && key === "s")
-              setReviewSplitView((split) =>
-                split === null ? dimensions().width < 160 : !split,
-              );
-            else if (reviewView() === "diff" && (key === "j" || key === "down"))
-              setReviewLine((line) =>
-                Math.min(
-                  Math.max(0, reviewSelectableLineCount() - 1),
-                  line + 1,
-                ),
-              );
-            else if (reviewView() === "diff" && (key === "k" || key === "up"))
-              setReviewLine((line) => Math.max(0, line - 1));
-            else if (
-              reviewView() === "diff" &&
-              (key === "space" || key === " ")
-            ) {
-              const ids = reviewSelectedLineFindingIds();
-              if (ids.length)
-                setSelectedReviewFindingIds((selected) => {
-                  const next = new Set(selected);
-                  const select = ids.some((id) => !next.has(id));
-                  for (const id of ids) {
-                    if (select) next.add(id);
-                    else next.delete(id);
-                  }
-                  return next;
-                });
-            } else if (reviewView() === "diff" && key === "c") {
-              setReviewCommentText("");
-              setReviewCommentMode(true);
-              props.keymap.setData("modal.active", "review-comment");
-            }
-            return true;
-          },
+          run: ({ event }) => handleReviewKey(event),
         },
       ],
       bindings: [
@@ -1411,6 +1580,37 @@ export function App(props: {
           "",
         ),
       ].map((key) => ({ key, cmd: "developer-review.handle" })),
+    });
+    const disposePlanReview = props.keymap.registerLayer({
+      name: "plan-review",
+      priority: 1100,
+      activeModal: "plan-review",
+      commands: [
+        {
+          name: "plan-review.handle",
+          run: ({ event }) => handleReviewKey(event),
+        },
+      ],
+      bindings: [
+        "escape",
+        "f",
+        "v",
+        "n",
+        "N",
+        "j",
+        "k",
+        "up",
+        "down",
+        "enter",
+        "return",
+        "backspace",
+        "delete",
+        "/",
+        "c",
+        ..."abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,:;!?-_()/\\".split(
+          "",
+        ),
+      ].map((key) => ({ key, cmd: "plan-review.handle" })),
     });
     const disposeFindings = props.keymap.registerLayer({
       name: "findings",
@@ -1561,6 +1761,7 @@ export function App(props: {
       disposeTraces();
       disposeReviewComment();
       disposeDeveloperReview();
+      disposePlanReview();
       disposeFindings();
       disposeVerdict();
       dispose();
@@ -1622,6 +1823,12 @@ export function App(props: {
         // Auto-open the review as the changed-files popup, not the generic
         // ListViewModal (the merged user action has no selectable items).
         openDeveloperReview();
+        return;
+      }
+      if (action.key === "plan-review") {
+        // Auto-open the review as the artifact-list popup, not the generic
+        // ListViewModal (the merged user action has no selectable items).
+        openPlanReview();
         return;
       }
       setUserActionSelection(0);
@@ -2111,12 +2318,19 @@ export function App(props: {
       </Show>
       <Show when={reviewOpen() && reviewView() === "files"}>
         <GenericModal
-          title={requiredUserAction()?.title ?? "Developer review"}
+          title={
+            reviewKind() === "plan"
+              ? "Plan review"
+              : (requiredUserAction()?.title ?? "Developer review")
+          }
           widthPercent={0.9}
           heightPercent={0.75}
           helpText={[
             { key: "j/k", action: "Navigate" },
-            { key: "Enter", action: "Open diff" },
+            {
+              key: "Enter",
+              action: reviewKind() === "plan" ? "Open artifact" : "Open diff",
+            },
             { key: "/", action: "Search files" },
             { key: "f", action: "Finish review" },
             { key: "Esc", action: "Postpone" },
@@ -2139,7 +2353,68 @@ export function App(props: {
           />
         </GenericModal>
       </Show>
-      <Show when={reviewOpen() && reviewView() === "diff" && reviewDiffFile()}>
+      <Show
+        when={
+          reviewOpen() &&
+          reviewView() === "diff" &&
+          reviewKind() === "plan" &&
+          reviewFile()
+        }
+      >
+        <MarkdownViewModal
+          filePath={reviewFile()?.newPath ?? ""}
+          content={reviewDiff()}
+          currentFileIndex={reviewChangeIndex()}
+          totalFiles={reviewVisibleChanges().length}
+          selectedLine={reviewLine()}
+          visualModeActive={reviewVisualMode()}
+          visualModeStart={reviewVisualStart()}
+          commentMode={reviewCommentMode()}
+          commentText={reviewCommentText()}
+          discussions={reviewDiscussions()}
+          onSelectedLineChange={setReviewLine}
+          onSelectedSourceRangeChange={(start, end) =>
+            setReviewSourceRange({ start, end })
+          }
+          onDiscussionLineIndicesChange={setReviewDiscussionLineIndices}
+          onSelectableLineCountChange={setReviewSelectableLineCount}
+          onClose={() => {
+            setReviewVisualMode(false);
+            setReviewCommentMode(false);
+            setReviewView("files");
+          }}
+          onNavigateFile={(direction) => {
+            const previous = reviewChangeIndex();
+            try {
+              const total = reviewVisibleChanges().length;
+              if (!total) return;
+              const next = (previous + direction + total) % total;
+              const file = reviewVisibleChanges()[next];
+              if (!file) return;
+              setReviewChangeIndex(next);
+              setReviewVisualMode(false);
+              setReviewVisualStart(0);
+              setReviewLine(0);
+              setReviewDiff(
+                props.profile === "test"
+                  ? demoPlanContent(file.newPath)
+                  : openSpecArtifact(data().state, file.newPath),
+              );
+            } catch (error) {
+              setReviewChangeIndex(previous);
+              setMessage(error instanceof Error ? error.message : String(error));
+            }
+          }}
+        />
+      </Show>
+      <Show
+        when={
+          reviewOpen() &&
+          reviewView() === "diff" &&
+          reviewKind() === "developer" &&
+          reviewDiffFile()
+        }
+      >
         {(file) => (
           <DiffViewModal
             filePath={file().new_path}

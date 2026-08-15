@@ -117,6 +117,14 @@ export interface DeveloperReviewComment {
   findingId?: string;
 }
 
+export interface PlanReviewComment {
+  filePath: string;
+  line: number;
+  startLine?: number;
+  endLine?: number;
+  body: string;
+}
+
 export interface DeveloperReviewFinding {
   id: string;
   originalId: string;
@@ -518,6 +526,58 @@ export async function saveDeveloperReview(
   await writeFile(path, JSON.stringify({ comments }, null, 2) + "\n");
 }
 
+export async function savePlanReview(
+  repo: string,
+  change: string,
+  comments: PlanReviewComment[],
+) {
+  const state = dashboardState(repo, change) as WorkflowState;
+  const path = join(
+    state.worktree,
+    ".herdr-workflow",
+    change,
+    "reviews",
+    "plan-review.json",
+  );
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify({ comments }, null, 2) + "\n");
+}
+
+export function loadPlanReviewComments(
+  repo: string,
+  change: string,
+): PlanReviewComment[] {
+  const state = dashboardState(repo, change) as WorkflowState;
+  const path = join(
+    state.worktree,
+    ".herdr-workflow",
+    change,
+    "reviews",
+    "plan-review.json",
+  );
+  try {
+    const parsed = JSON.parse(read(path)) as { comments?: unknown };
+    if (!Array.isArray(parsed.comments)) return [];
+    return (parsed.comments as unknown[]).flatMap((value) => {
+      if (!value || typeof value !== "object") return [];
+      const item = value as Record<string, unknown>;
+      if (typeof item.filePath !== "string" || typeof item.body !== "string")
+        return [];
+      const line = Number(item.line);
+      if (!Number.isInteger(line) || line < 1) return [];
+      return [{
+        filePath: item.filePath,
+        line,
+        ...(typeof item.startLine === "number" ? { startLine: item.startLine } : {}),
+        ...(typeof item.endLine === "number" ? { endLine: item.endLine } : {}),
+        body: item.body,
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
 export function loadDashboard(repo: string, change: string): DashboardData {
   const state = dashboardState(repo, change) as WorkflowState;
   const workflowRoot = join(state.worktree, ".herdr-workflow", change);
@@ -831,24 +891,15 @@ export function requiredUserActionFor(
   artifacts: string[] = [],
 ): RequiredUserAction | undefined {
   const later = { label: "Not now", kind: "dismiss" } as const;
-  if (phase === "proposed")
+  if (phase === "proposed" || phase === "core.plan-approval")
     return {
-      key: phase,
-      title: "Action required · Approve plan",
-      prompt: "Review plan artifacts, then approve implementation.",
-      items: [
-        ...artifacts.map((artifact) => ({
-          label: `Review ${artifact}`,
-          kind: "artifact" as const,
-          value: artifact,
-        })),
-        {
-          label: "Approve plan and start implementation",
-          kind: "workflow",
-          value: "apply",
-        },
-        later,
-      ],
+      key: "plan-review",
+      title: "Action required · Plan review",
+      prompt: "Review the OpenSpec artifacts before the worker starts.",
+      // Trigger-only: the action opens the plan review popup (artifact list)
+      // directly, so there are no selectable items to render in the generic
+      // ListViewModal.
+      items: [],
     };
   if (phase === "developer-review")
     return {

@@ -21,47 +21,56 @@ function TestDashboard() {
   return <App repo="/demo" change="demo" profile="test" keymap={keymap} />;
 }
 
-test("dismissed required action stays closed during panel interactions", async () => {
+test("dismissed plan review stays closed during panel interactions", async () => {
   const t = await testRender(() => <TestDashboard />, {
     width: 120,
     height: 40,
   });
 
-  await t.waitForFrame((frame) =>
-    frame.includes("Action required · Approve plan"),
-  );
+  await t.waitForFrame((frame) => frame.includes("Plan review"));
   t.mockInput.pressEscape();
-  await t.waitForFrame(
-    (frame) => !frame.includes("Action required · Approve plan"),
-  );
+  await t.waitForFrame((frame) => !frame.includes("Plan review"));
 
   t.mockInput.pressTab();
   t.mockInput.pressEnter();
   await t.flush();
-  expect(t.captureCharFrame()).not.toContain("Action required · Approve plan");
+  expect(t.captureCharFrame()).not.toContain("Plan review");
   t.renderer.destroy();
 });
 
-test("required action modal appears and executes plan approval", async () => {
+test("plan review popup appears and executes plan approval via finish", async () => {
   const t = await testRender(() => <TestDashboard />, {
     width: 120,
     height: 40,
   });
 
+  // The plan approval user action opens the artifact-list popup directly.
   const actionFrame = await t.waitForFrame((frame) =>
-    frame.includes("Action required · Approve plan"),
+    frame.includes("Plan review"),
   );
-  expect(actionFrame).toContain("Approve plan and start implementation");
-  expect(actionFrame).toContain("Not now");
+  expect(actionFrame).toContain("proposal.md");
+  expect(actionFrame).toContain("design.md");
+  expect(actionFrame).toContain("tasks.md");
+  expect(actionFrame).not.toContain("Approve plan and start implementation");
 
+  // Enter on the artifact row opens the separate markdown modal.
   t.mockInput.pressEnter();
-  const appliedFrame = await t.waitForFrame(
-    (frame) =>
-      frame.includes("Applying") &&
-      !frame.includes("Action required · Approve plan"),
+  const markdownFrame = await t.waitForFrame((frame) =>
+    frame.includes("# Proposal"),
   );
-  expect(appliedFrame).toContain("Applying");
+  expect(markdownFrame).toContain("Make the plan review modal-based.");
+  expect(markdownFrame).not.toContain("Changed Files (4 files)");
 
+  // Esc in the markdown modal returns to the artifact-list popup.
+  t.mockInput.pressEscape();
+  await t.waitForFrame((frame) => frame.includes("Changed Files (4 files)"));
+
+  // f with no comments finishes the plan review: approval is dispatched and
+  // the popup closes (demo advances to the implementation phase).
+  t.mockInput.pressKey("f");
+  await t.waitForFrame((frame) => !frame.includes("Changed Files (4 files)"));
+
+  // Advance the demo through apply/verify to the developer review.
   t.mockInput.pressEnter();
   await t.waitForFrame((frame) => frame.includes("Verifying"));
   t.mockInput.pressEnter();
@@ -89,5 +98,39 @@ test("required action modal appears and executes plan approval", async () => {
   // popup closes (message state is shell-level, not rendered in this frame).
   t.mockInput.pressKey("f");
   await t.waitForFrame((frame) => !frame.includes("Changed Files (1 files)"));
+  t.renderer.destroy();
+});
+
+test("plan review comment on a markdown line routes feedback to the planner", async () => {
+  const t = await testRender(() => <TestDashboard />, {
+    width: 120,
+    height: 40,
+  });
+
+  await t.waitForFrame((frame) => frame.includes("Plan review"));
+
+  // Enter opens the markdown modal for the selected artifact.
+  t.mockInput.pressEnter();
+  await t.waitForFrame((frame) => frame.includes("# Proposal"));
+
+  // c starts comment input on the selected line; typing and Enter submit it.
+  t.mockInput.pressKey("c");
+  await t.flush();
+  const commentFrame = t.captureCharFrame();
+  expect(commentFrame).toContain("COMMENT");
+  expect(commentFrame).toContain("Comment here...");
+  for (const ch of "add a diagram") {
+    t.mockInput.pressKey(ch);
+    await t.flush();
+  }
+  t.mockInput.pressEnter();
+  await t.flush();
+  const afterSubmit = t.captureCharFrame();
+  expect(afterSubmit).toContain("add a diagram");
+
+  // f with comments finishes: feedback is routed to the planner (the review
+  // closes and the demo stays at the proposed/plan-review phase).
+  t.mockInput.pressKey("f");
+  await t.waitForFrame((frame) => !frame.includes("Changed Files (4 files)"));
   t.renderer.destroy();
 });

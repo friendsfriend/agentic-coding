@@ -57,7 +57,7 @@ export interface WorkflowMetadata {
 export interface WorkflowSnapshot {
   schemaVersion: 1; workflowId: string; revision: number; definition: DefinitionPin; status: WorkflowStatus; currentStep: string;
   step: StepAttemptState; metadata: WorkflowMetadata; routing: WorkflowRouting; evidence: Array<{ kind: string; path: string; digest: string }>;
-  loopCounts: Record<string, number>; attention: string[]; repaired?: { reason: string; fromStep: string; at: string };
+  loopCounts: Record<string, number>; attention: string[]; repaired?: { reason: string; fromStep: string; at: string }; repinned?: { fromDigest: string; at: string };
 }
 export interface WorkflowRun {
   id: string; workflowId: string; stepId: string; role: string; generation: number; attempt: number; status: RunStatus;
@@ -90,6 +90,7 @@ export type WorkflowCommand =
   | { type: 'agent.handoff'; runId: string; generation: number; token: string; outcome: 'complete' | 'blocked' | 'failed'; artifact?: string; message?: string }
   | { type: 'effect.result'; effectId: string; lease: string; outcome: 'complete' | 'retry' | 'failed'; data?: unknown }
   | { type: 'operator.repair'; workflowId: string; revision: number; targetStep: string; reason: string }
+  | { type: 'operator.repin'; workflowId: string; revision: number }
   | { type: 'operator.resume'; workflowId: string; revision: number };
 
 export const commandContract: Contract<WorkflowCommand> = {
@@ -101,6 +102,7 @@ export const commandContract: Contract<WorkflowCommand> = {
     if (type === 'agent.handoff') return { type, runId: text(input.runId, '$.runId'), generation: integer(input.generation, '$.generation', 1), token: text(input.token, '$.token', 1024), outcome: enumValue(input.outcome, '$.outcome', ['complete', 'blocked', 'failed']), ...(input.artifact === undefined ? {} : { artifact: text(input.artifact, '$.artifact') }), ...(input.message === undefined ? {} : { message: text(input.message, '$.message', 4096) }) };
     if (type === 'effect.result') return { type, effectId: text(input.effectId, '$.effectId'), lease: text(input.lease, '$.lease'), outcome: enumValue(input.outcome, '$.outcome', ['complete', 'retry', 'failed']), data: input.data };
     if (type === 'operator.repair') return { type, workflowId: text(input.workflowId, '$.workflowId'), revision: integer(input.revision, '$.revision'), targetStep: text(input.targetStep, '$.targetStep'), reason: text(input.reason, '$.reason', 2048) };
+    if (type === 'operator.repin') return { type, workflowId: text(input.workflowId, '$.workflowId'), revision: integer(input.revision, '$.revision') };
     if (type === 'operator.resume') return { type, workflowId: text(input.workflowId, '$.workflowId'), revision: integer(input.revision, '$.revision') };
     throw new ContractFailure('core.workflow-command', [{ path: '$.type', message: 'unknown command' }]);
   },

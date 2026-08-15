@@ -1,6 +1,6 @@
 # Implementation
 
-Apply the assigned mode (`apply`, verifier fix, or developer-review fix). Read only the declared inputs and the files the change touches. Ask the planner through developer-visible chat when intent is unclear.
+Apply the assigned mode (`apply`, verifier fix, or developer-review fix). Read only the declared inputs and the files the change touches. Ask the planner through developer-visible chat when intent is unclear. If a task needs work beyond what the spec and tasks describe — or you are tempted to drop, narrow, or defer specified behavior to make it fit — surface the added scope and ask; do not absorb it silently.
 
 For tests and APIs, mirror what the repository already does: read the sibling tests in `test/` that exercise similar surfaces (key simulation, mocks, dash components) before researching library internals. Do not dig through `node_modules` type definitions, inspect git history or other commits, or explore other workflows' artifacts.
 

@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, test } from 'bun:test';
-import { loadLocalChanges, loadLocalDiff, saveDeveloperReview, testDashboard, costSummary, costMessages, isStale, requiredUserActionFor, type DeveloperReviewComment } from '../../src/tui/dash/data';
+import { loadLocalChanges, loadLocalDiff, saveDeveloperReview, savePlanReview, loadPlanReviewComments, testDashboard, costSummary, costMessages, isStale, requiredUserActionFor, type DeveloperReviewComment } from '../../src/tui/dash/data';
 import { startArgs } from '../../src/tui/dash/engine';
 import { registerBuiltins } from '../../src/workflow/definitions';
 import { WorkflowEngine } from '../../src/workflow/runtime';
@@ -65,6 +65,20 @@ test('saveDeveloperReview creates review directory and serializes comments', asy
   expect(JSON.parse(readFileSync(join(repo, '.herdr-workflow', 'review', 'reviews', 'developer-review.json'), 'utf8'))).toEqual({ comments });
 });
 
+test('savePlanReview serializes and reloads plan review comments', async () => {
+  const repo = fixture();
+  writeState(repo, 'plan-review');
+  const comments = [
+    { filePath: 'proposal.md', line: 3, body: 'Clarify scope.' },
+    { filePath: 'design.md', line: 7, startLine: 7, endLine: 9, body: 'Add a diagram.' },
+  ];
+
+  await savePlanReview(repo, 'plan-review', comments);
+
+  expect(JSON.parse(readFileSync(join(repo, '.herdr-workflow', 'plan-review', 'reviews', 'plan-review.json'), 'utf8'))).toEqual({ comments });
+  expect(loadPlanReviewComments(repo, 'plan-review')).toEqual(comments);
+});
+
 test('demo dashboard includes usability verifier', () => {
   expect(testDashboard('verify').agents.map(agent => agent.role)).toContain('usability-verifier');
 });
@@ -72,13 +86,11 @@ test('demo dashboard includes usability verifier', () => {
 test('required user actions keep plan review and approval inside modal flow', () => {
   const action = requiredUserActionFor('proposed', false, ['proposal.md', 'tasks.md']);
 
-  expect(action?.title).toContain('Approve plan');
-  expect(action?.items).toEqual([
-    { label: 'Review proposal.md', kind: 'artifact', value: 'proposal.md' },
-    { label: 'Review tasks.md', kind: 'artifact', value: 'tasks.md' },
-    { label: 'Approve plan and start implementation', kind: 'workflow', value: 'apply' },
-    { label: 'Not now', kind: 'dismiss' },
-  ]);
+  expect(action?.key).toBe('plan-review');
+  expect(action?.title).toContain('Plan review');
+  // Trigger-only: the action opens the artifact-list popup directly, so there
+  // are no selectable items in the generic ListViewModal.
+  expect(action?.items).toEqual([]);
 });
 
 test('required user actions expose developer review and completion commands', () => {

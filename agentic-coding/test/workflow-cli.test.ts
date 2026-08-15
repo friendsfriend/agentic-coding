@@ -3,7 +3,7 @@ import { AGENT_EXTENSION_SUBCOMMANDS, REQUIRED_FLAGS, SUBCOMMANDS, cliTest, run 
 
 describe('breaking workflow CLI surface', () => {
   test('exports only typed lifecycle commands', () => {
-    expect(SUBCOMMANDS).toEqual(['start', 'status', 'action', 'handoff', 'repair', 'projects', 'config', 'agent-extension']);
+    expect(SUBCOMMANDS).toEqual(['start', 'status', 'action', 'handoff', 'repair', 'repin', 'projects', 'config', 'agent-extension']);
     for (const removed of ['planner', 'apply', 'verify', 'dispatch-verifiers', 'verification-result', 'finish-review', 'archive', 'git-operations', 'phase', 'override-phase', 'message', 'plugin']) expect(SUBCOMMANDS).not.toContain(removed as never);
     expect(AGENT_EXTENSION_SUBCOMMANDS).toEqual(['list', 'install', 'install-local']);
     expect(REQUIRED_FLAGS.action).toEqual(['repo', 'change', 'revision']);
