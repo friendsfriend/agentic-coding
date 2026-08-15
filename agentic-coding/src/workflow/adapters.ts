@@ -23,13 +23,18 @@ function requireExecutable(executable: string): string {
   if (!resolved || !fs.existsSync(resolved)) throw new Error(`configured runtime executable not found: ${executable}`);
   return fs.realpathSync(resolved);
 }
+const SHELL_NAMES = new Set(['sh', 'bash', 'dash', 'zsh', 'fish', 'ksh', 'mksh', 'csh', 'tcsh', 'elvish', 'xonsh', 'nu', 'pwsh', 'powershell', 'cmd']);
 export class HerdrLifecycle {
   constructor(private readonly herdr: HerdrPort, private readonly sleep: (ms: number) => Promise<void> = Bun.sleep) {}
   async waitForShell(paneId: string): Promise<void> {
     for (let attempt = 0; attempt < 50; attempt++) {
-      const result = this.herdr.call('pane', 'process-info', paneId) as { process_info?: { foreground_processes?: Array<{ name?: string }> } };
-      const names = result.process_info?.foreground_processes?.map(item => item.name) ?? [];
-      if (names.some(name => name && /^(?:ba|z|fi)?sh$/.test(name))) return;
+      const result = this.herdr.call('pane', 'process-info', paneId) as { process_info?: { shell_pid?: number; foreground_process_group_id?: number; foreground_processes?: Array<{ name?: string; argv?: string[]; pid?: number }> } };
+      const info = result.process_info; const foreground = info?.foreground_processes ?? [];
+      // Match Herdr's Linux/macOS available-shell check. Linux can report zsh
+      // alongside startup helpers; seeing zsh somewhere in that job is not ready.
+      const foregroundName = String(foreground[0]?.name ?? foreground[0]?.argv?.[0] ?? '').split(/[\\/]/).at(-1)?.replace(/^-/, '').replace(/\.exe$/, '').toLowerCase();
+      const shellIsForeground = typeof info?.shell_pid === 'number' && info.foreground_process_group_id === info.shell_pid && foreground.length === 1 && foreground[0]?.pid === info.shell_pid && SHELL_NAMES.has(foregroundName ?? '');
+      if (shellIsForeground) return;
       await this.sleep(100);
     }
     throw new Error(`pane did not reach foreground shell: ${paneId}`);
