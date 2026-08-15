@@ -1,40 +1,92 @@
 # Agentic Coding workflow configuration.
 
 [agents]
-default_profile = "pi-default"
+ default_profile = "pi-planner"
 
-[agents.profiles.pi-default]
-runtime = "pi"
-thinking = "high"
-tools = ["read", "bash", "edit", "write"]
+ # ---- pi profiles (frontier planning, cheap everything-else) ----
+ [agents.profiles.pi-planner]
+ runtime = "pi"
+ model = "opencode-go/deepseek-v4-flash"
+ thinking = "xhigh"
+ tools = ["read", "bash", "edit", "write"]
 
-[agents.profiles.pi-review]
-runtime = "pi"
-thinking = "high"
-tools = ["read", "bash"]
-read_only = true
+ [agents.profiles.pi-cheap]          # no-openspec default + fallback
+ runtime = "pi"
+ model = "opencode-go/deepseek-v4-flash"
+ thinking = "high"
+ tools = ["read", "bash", "edit", "write"]
 
-# Stable OpenCode example (must already be installed as `opencode`).
-# [agents.profiles.oc-review]
-# runtime = "opencode"
-# model = "provider/model"
-# agent = "build"
-# read_only = true
+ [agents.profiles.pi-review]
+ runtime = "pi"
+ model = "opencode-go/deepseek-v4-flash"
+ thinking = "high"
+ tools = ["read", "bash"]            # read-only keeps bash: git + handoff CLI
+ read_only = true
 
-# Official V2 beta example (must already be installed as `opencode2`).
-# [agents.profiles.oc2-review]
-# runtime = "opencode-v2"
-# model = "provider/model"
-# agent = "build"
-# variant = "high"
-# read_only = true
+ [agents.profiles.pi-review-min]     # strictest: read-only, no bash, low thinking
+ runtime = "pi"
+ model = "opencode-go/deepseek-v4-flash"
+ thinking = "high"
+ tools = ["read"]
+ read_only = true
 
-[agents.routes]
-"core.plan" = "pi-default"
-"core.implementation" = "pi-default"
-"core.triage" = "pi-default"
-"core.verification" = "pi-review"
-"core.archive" = "pi-default"
+ [agents.profiles.pi-test-review]
+ runtime = "pi"
+ model = "opencode-go/deepseek-v4-flash"
+ thinking = "high"
+ tools = ["read", "bash"]
+ read_only = true
+
+ # ---- opencode profiles (worker + secondary verifiers) ----
+ [agents.profiles.oc-worker]
+ runtime = "opencode"
+ model = "opencode-go/deepseek-v4-free"
+ agent = "build"
+ tools = ["read", "bash", "edit", "write"]
+
+ [agents.profiles.oc-review]
+ runtime = "opencode"
+ model = "opencode-go/deepseek-v4-free"
+ agent = "plan"
+ read_only = true
+
+ # ---- opencode-v2 profiles (variant knob) ----
+ [agents.profiles.oc2-review]
+ runtime = "opencode-v2"
+ model = "opencode-go/deepseek-v4-free"
+ agent = "build"
+ variant = "high"
+ read_only = true
+
+ [agents.profiles.oc2-archive]
+ runtime = "opencode-v2"
+ model = "opencode-go/deepseek-v4-free"
+ variant = "medium"
+
+ # ---- step routing ----
+ [agents.routes]
+ "core.plan" = "pi-planner"            # strongest model, max thinking
+ "core.implementation" = "oc-worker"   # opencode does the editing
+ "core.triage" = "pi-review"
+ "core.verification" = "pi-review"     # fallback when no role route
+ "core.archive" = "oc2-archive"
+
+ # ---- per-role verification matrix ----
+ [agents.role_routes."core.verification"]
+ quality-verifier = "pi-review"        # pi · glm-5.3 · high
+ security-verifier = "oc-review"       # opencode · gpt-5.4-mini
+ performance-verifier = "oc2-review"   # opencode-v2 · gpt-5.6-luna · variant high
+ openspec-verifier = "pi-review-min"   # pi · flash · low · read-only-no-bash
+ usability-verifier = "oc-review"
+ test-verifier = "pi-test-review"      # pi · flash · minimal
+
+ # ---- per-definition defaults ----
+ [agents.definition_defaults]
+ "no-openspec" = "pi-cheap"
+
+ # ---- require mixed runtimes across steps (fails config if violated) ----
+ [[agents.runtime_diversity]]
+ routes = ["core.plan", "core.implementation"]
 
 # [agents.role_routes."core.verification"]
 # security-verifier = "oc-review"
