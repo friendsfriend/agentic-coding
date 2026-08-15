@@ -23,11 +23,11 @@
  tools = ["read", "bash"]            # read-only keeps bash: git + handoff CLI
  read_only = true
 
- [agents.profiles.pi-review-min]     # strictest: read-only, no bash, low thinking
+ [agents.profiles.pi-review-min]     # read-only + bash (bash is the handoff path)
  runtime = "pi"
  model = "opencode-go/deepseek-v4-flash"
  thinking = "high"
- tools = ["read"]
+ tools = ["read", "bash"]
  read_only = true
 
  [agents.profiles.pi-test-review]
@@ -48,6 +48,7 @@
  runtime = "opencode"
  model = "opencode-go/deepseek-v4-flash"
  agent = "build"
+ read_only = true
 
  # ---- opencode-v2 profiles (variant knob) ----
  [agents.profiles.oc2-review]
@@ -55,11 +56,12 @@
  model = "opencode-go/deepseek-v4-flash"
  agent = "build"
  variant = "high"
+ read_only = true
 
  [agents.profiles.oc2-archive]
  runtime = "opencode-v2"
  model = "opencode-go/deepseek-v4-flash"
- variant = "medium"
+ variant = "high"
  agent = "build"
 
  # ---- step routing ----
