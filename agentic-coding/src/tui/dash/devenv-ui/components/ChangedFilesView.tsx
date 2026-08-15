@@ -22,6 +22,13 @@ interface ChangedFilesViewProps {
   searchQuery?: string;
   filterSummary?: string;
   sortSummary?: string;
+  /**
+   * When set, renders without the full-screen ContentPanel chrome (the
+   * embedding modal provides its own panel) and sizes the ScrollableList to
+   * this many lines. ScrollableList prefers `availableLines` over
+   * `reservedLines`; see its docs. Absent = current full-screen behavior.
+   */
+  availableLines?: number;
 }
 
 /**
@@ -73,8 +80,10 @@ export function ChangedFilesView(props: ChangedFilesViewProps) {
   //                                   Total  = 11
   const reservedLines = () => LAYOUT_CHROME_LINES + 2 + 2 + 1 + 1;
 
-  return (
-    <ContentPanel>
+  const embedded = () => props.availableLines !== undefined;
+
+  const content = (
+    <>
       <Show when={props.loading}>
         <CenteredState
           message="Loading changed files..."
@@ -173,7 +182,8 @@ export function ChangedFilesView(props: ChangedFilesViewProps) {
         <ScrollableList<ChangeRequestChange>
           items={props.changes}
           selectedIndex={props.selectedIndex}
-          reservedLines={reservedLines()}
+          availableLines={props.availableLines}
+          reservedLines={embedded() ? undefined : reservedLines()}
           estimatedItemHeight={1}
           showScrollIndicator={false}
           renderItem={(change, isSelected) => {
@@ -255,6 +265,8 @@ export function ChangedFilesView(props: ChangedFilesViewProps) {
           }}
         />
       </Show>
-    </ContentPanel>
+    </>
   );
+
+  return embedded() ? content : <ContentPanel>{content}</ContentPanel>;
 }

@@ -65,15 +65,29 @@ test("required action modal appears and executes plan approval", async () => {
   t.mockInput.pressEnter();
   await t.waitForFrame((frame) => frame.includes("Verifying"));
   t.mockInput.pressEnter();
-  const reviewActionFrame = await t.waitForFrame((frame) =>
-    frame.includes("Action required · Developer review"),
-  );
-  expect(reviewActionFrame).toContain("Start developer review");
-
-  t.mockInput.pressEnter();
   const reviewFrame = await t.waitForFrame((frame) =>
     frame.includes("Changed Files (1 files)"),
   );
-  expect(reviewFrame).not.toContain("Action required · Developer review");
+  // The developer review user action opens the changed-files popup directly.
+  expect(reviewFrame).toContain("Action required · Developer review");
+  expect(reviewFrame).not.toContain("Start developer review");
+  expect(reviewFrame).toContain("src/example.ts");
+
+  // Enter on the file row opens the diff in the separate diff modal.
+  t.mockInput.pressEnter();
+  const diffFrame = await t.waitForFrame((frame) =>
+    frame.includes("reviewed();"),
+  );
+  expect(diffFrame).toContain("diff --git a/src/example.ts");
+  expect(diffFrame).not.toContain("Changed Files (1 files)");
+
+  // Esc in the diff returns to the files popup.
+  t.mockInput.pressEscape();
+  await t.waitForFrame((frame) => frame.includes("Changed Files (1 files)"));
+
+  // f finishes the review from the popup: approval is dispatched and the
+  // popup closes (message state is shell-level, not rendered in this frame).
+  t.mockInput.pressKey("f");
+  await t.waitForFrame((frame) => !frame.includes("Changed Files (1 files)"));
   t.renderer.destroy();
 });

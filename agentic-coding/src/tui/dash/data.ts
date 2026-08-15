@@ -815,7 +815,6 @@ export function testDashboard(phase = "proposed"): DashboardData {
 
 export type RequiredUserActionItem =
   | { label: string; kind: "artifact"; value: string }
-  | { label: string; kind: "review" }
   | { label: string; kind: "workflow"; value: string }
   | { label: string; kind: "dismiss" };
 
@@ -856,10 +855,9 @@ export function requiredUserActionFor(
       key: phase,
       title: "Action required · Developer review",
       prompt: "Review changed files before workflow continues.",
-      items: [
-        { label: "Start developer review", kind: "review" },
-        later,
-      ],
+      // Trigger-only: the action opens the changed-files popup directly, so
+      // there are no selectable items to render in the generic ListViewModal.
+      items: [],
     };
   if (phase === "completed")
     return {
