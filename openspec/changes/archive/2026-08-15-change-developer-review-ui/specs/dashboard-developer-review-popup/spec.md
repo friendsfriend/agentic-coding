@@ -1,0 +1,41 @@
+# dashboard-developer-review-popup Specification
+
+## Purpose
+
+The developer review changed-files list is rendered directly inside the developer review user-action popup, so review starts immediately in the modal flow, while the diff view remains a separate modal.
+
+## ADDED Requirements
+
+### Requirement: Changed files list rendered in the developer review user-action popup
+When the workflow reaches the developer review phase, the developer review user action SHALL open a popup that renders the changed-files list directly (file rows with type, path, `+/-` change counts, findings count, and the `Changed Files (N files)` header), instead of a separate full-screen files view or an intermediate `Start developer review` item.
+
+#### Scenario: Popup shows changed files when review is ready
+- **WHEN** the workflow enters the developer review phase and the user action popup opens
+- **THEN** the popup shows the changed-files list with file rows and change statistics
+
+#### Scenario: Open the diff from the popup
+- **WHEN** the user presses Enter on a changed-file row in the popup
+- **THEN** the diff for that file opens in the separate diff modal
+
+#### Scenario: Postpone the review
+- **WHEN** the user presses Esc in the files popup
+- **THEN** the popup closes without dispatching any review finish action
+
+#### Scenario: Finish the review from the popup
+- **WHEN** the user presses `f` in the files popup
+- **THEN** the review finishes (comments are saved / approval is dispatched) and the popup closes
+
+#### Scenario: Search within the popup
+- **WHEN** the user presses `/` in the files popup and types a query
+- **THEN** the file list filters by path
+
+### Requirement: Diff view remains a separate modal
+The diff view SHALL stay a separate modal opened from the files popup, with its existing navigation and interactions preserved.
+
+#### Scenario: Return from the diff to the files popup
+- **WHEN** the user presses Esc in the diff modal
+- **THEN** the diff modal closes and the files popup is shown again
+
+#### Scenario: Diff interactions unchanged
+- **WHEN** the user interacts with the diff modal (line navigation, file navigation, visual mode, split view, comments, finding selection)
+- **THEN** the behavior matches the pre-change diff modal

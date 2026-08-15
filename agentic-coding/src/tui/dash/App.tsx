@@ -66,6 +66,7 @@ import { ListViewModal } from "./ui/ListViewModal";
 import { TraceBrowser } from "./ui/TraceBrowser";
 import { ChangedFilesView } from "./devenv-ui/components/ChangedFilesView";
 import { DiffViewModal } from "./devenv-ui/components/DiffViewModal";
+import { GenericModal } from "./devenv-ui/components/GenericModal";
 import type { Discussion } from "./devenv-ui/types";
 
 export function App(props: {
@@ -243,6 +244,20 @@ export function App(props: {
   const reviewChangesForView = createMemo(() =>
     reviewVisibleChanges().map((change) => reviewChangeForView(change)),
   );
+  // Lines available to the embedded ChangedFilesView list inside the popup:
+  // GenericModal chrome (padding top/bottom + title + help footer) = 4,
+  // ChangedFilesView chrome (stats header 2 + table header 1) = 3.
+  // Mirrors GenericModal's own height calc (Math.floor(height * 0.75)).
+  const reviewFilesAvailableLines = () =>
+    Math.max(
+      1,
+      Math.min(
+        dimensions().height,
+        Math.floor(dimensions().height * 0.75),
+      ) -
+        4 -
+        3,
+    );
   const reviewDiffFile = createMemo(() => {
     const file = reviewFile();
     return file ? reviewChangeForView(file, reviewDiff()) : undefined;
@@ -506,6 +521,13 @@ export function App(props: {
     const action = requiredUserAction();
     if (!action || (promptedUserActionKey === action.key && activePanel() !== 0))
       return false;
+    if (action.key === "developer-review") {
+      // The developer review user action IS the changed-files popup: no
+      // intermediate item selection, open the review directly.
+      promptedUserActionKey = action.key;
+      openDeveloperReview();
+      return true;
+    }
     setUserActionSelection(0);
     setUserActionOpen(true);
     props.keymap.setData("modal.active", "user-action");
@@ -536,10 +558,6 @@ export function App(props: {
     }
     setUserActionOpen(false);
     props.keymap.setData("modal.active", "none");
-    if (item.kind === "review") {
-      openDeveloperReview();
-      return;
-    }
     setBusy(true);
     setMessage(`Running ${item.label}…`);
     try {
@@ -1511,6 +1529,12 @@ export function App(props: {
       }
       if (anyModalOpen()) return;
       promptedUserActionKey = action.key;
+      if (action.key === "developer-review") {
+        // Auto-open the review as the changed-files popup, not the generic
+        // ListViewModal (the merged user action has no selectable items).
+        openDeveloperReview();
+        return;
+      }
       setUserActionSelection(0);
       setUserActionOpen(true);
       props.keymap.setData("modal.active", "user-action");
@@ -1997,25 +2021,34 @@ export function App(props: {
         )}
       </Show>
       <Show when={reviewOpen() && reviewView() === "files"}>
-        <box
-          position="absolute"
-          top={0}
-          left={0}
-          width={dimensions().width}
-          height={dimensions().height}
-          backgroundColor={uiColors.bgBase}
+        <GenericModal
+          title={requiredUserAction()?.title ?? "Developer review"}
+          widthPercent={0.9}
+          heightPercent={0.75}
+          helpText={[
+            { key: "j/k", action: "Navigate" },
+            { key: "Enter", action: "Open diff" },
+            { key: "/", action: "Search files" },
+            { key: "f", action: "Finish review" },
+            { key: "Esc", action: "Postpone" },
+          ]}
+          onBackdropClick={() => {
+            setReviewOpen(false);
+            props.keymap.setData("modal.active", "none");
+          }}
         >
           <ChangedFilesView
             changes={reviewChangesForView()}
             selectedIndex={reviewChangeIndex()}
             searchMode={reviewSearchMode()}
             searchQuery={reviewSearchQuery()}
+            availableLines={reviewFilesAvailableLines()}
             onClose={() => {
               setReviewOpen(false);
               props.keymap.setData("modal.active", "none");
             }}
           />
-        </box>
+        </GenericModal>
       </Show>
       <Show when={reviewOpen() && reviewView() === "diff" && reviewDiffFile()}>
         {(file) => (

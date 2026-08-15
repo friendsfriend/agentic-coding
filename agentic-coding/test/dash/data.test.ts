@@ -82,10 +82,11 @@ test('required user actions keep plan review and approval inside modal flow', ()
 });
 
 test('required user actions expose developer review and completion commands', () => {
-  expect(requiredUserActionFor('developer-review')?.items[0]).toEqual({
-    label: 'Start developer review',
-    kind: 'review',
-  });
+  const review = requiredUserActionFor('developer-review');
+  expect(review).toBeDefined();
+  expect(review?.key).toBe('developer-review');
+  expect(review?.title).toContain('Developer review');
+  expect(review?.items).toEqual([]); // trigger-only: popup opens the changed-files view directly
   expect(requiredUserActionFor('completed', false)?.items.map(item => item.label)).toEqual([
     'Create MR/PR',
     'Close Herdr workspace',
