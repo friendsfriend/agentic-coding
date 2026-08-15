@@ -40,28 +40,27 @@
  # ---- opencode profiles (worker + secondary verifiers) ----
  [agents.profiles.oc-worker]
  runtime = "opencode"
- model = "opencode-go/deepseek-v4-free"
+ model = "opencode-go/deepseek-v4-flash"
  agent = "build"
  tools = ["read", "bash", "edit", "write"]
 
  [agents.profiles.oc-review]
  runtime = "opencode"
- model = "opencode-go/deepseek-v4-free"
- agent = "plan"
- read_only = true
+ model = "opencode-go/deepseek-v4-flash"
+ agent = "build"
 
  # ---- opencode-v2 profiles (variant knob) ----
  [agents.profiles.oc2-review]
  runtime = "opencode-v2"
- model = "opencode-go/deepseek-v4-free"
+ model = "opencode-go/deepseek-v4-flash"
  agent = "build"
  variant = "high"
- read_only = true
 
  [agents.profiles.oc2-archive]
  runtime = "opencode-v2"
- model = "opencode-go/deepseek-v4-free"
+ model = "opencode-go/deepseek-v4-flash"
  variant = "medium"
+ agent = "build"
 
  # ---- step routing ----
  [agents.routes]
