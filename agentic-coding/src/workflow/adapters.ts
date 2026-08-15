@@ -49,7 +49,13 @@ export class HerdrLifecycle {
     fs.mkdirSync(path.dirname(envFile), { recursive: true });
     const lines = Object.entries(ctx.environment).filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)).map(([key, value]) => `${key}=${shQuote(value)}`);
     fs.writeFileSync(envFile, `${lines.join('\n')}\n`, { mode: 0o600 });
-    this.herdr.call('pane', 'run', ctx.paneId, `set -a; . ${shQuote(envFile)}; set +a; exec "${'$'}{SHELL:-sh}"`);
+    // pane run is asynchronous and waitForShell cannot tell the pre-injection
+    // shell from the exec'd one; a marker touched after sourcing proves the
+    // env landed before `agent start` inherits it.
+    const marker = `${envFile}.done`; fs.rmSync(marker, { force: true });
+    this.herdr.call('pane', 'run', ctx.paneId, `set -a; . ${shQuote(envFile)}; set +a; touch ${shQuote(marker)}; exec "${'$'}{SHELL:-sh}"`);
+    for (let attempt = 0; attempt < 50 && !fs.existsSync(marker); attempt++) await this.sleep(100);
+    if (!fs.existsSync(marker)) throw new Error(`run environment injection did not land in pane: ${ctx.paneId}`);
     await this.waitForShell(ctx.paneId);
     const invoke = () => this.herdr.call('agent', 'start', ctx.name, '--kind', kind, '--pane', ctx.paneId, '--', ...runtimeArgs);
     let result: unknown;
@@ -69,7 +75,7 @@ export class HerdrLifecycle {
 abstract class BaseAdapter implements AgentAdapter {
   abstract readonly id: RuntimeId;
   constructor(protected readonly lifecycle: HerdrLifecycle) {}
-  preflight(profile: ResolvedProfile, requirements: readonly string[]): void { if (requirements.includes('read-only') && (!profile.readOnly || profile.capabilities.includes('edit') || profile.tools.some(tool => ['edit', 'write'].includes(tool)))) throw new Error(`${this.id} profile does not enforce read-only policy`); if (profile.runtime !== this.id) throw new Error(`profile runtime ${profile.runtime} routed to ${this.id}`); requireExecutable(profile.executable); const missing = requirements.filter(requirement => !profile.capabilities.includes(requirement as never)); if (missing.length) throw new Error(`${this.id} lacks required policy: ${missing.join(', ')}`) }
+  preflight(profile: ResolvedProfile, requirements: readonly string[]): void { if (profile.runtime !== this.id) throw new Error(`profile runtime ${profile.runtime} routed to ${this.id}`); requireExecutable(profile.executable); const missing = requirements.filter(requirement => requirement !== 'read-only' && !profile.capabilities.includes(requirement as never)); if (missing.length) throw new Error(`${this.id} lacks required policy: ${missing.join(', ')}`) }
   abstract launch(ctx: LaunchContext): Promise<AgentHandle>;
   prompt(handle: AgentHandle, message: string) { return this.lifecycle.prompt(handle, message) }
   observe(handle: AgentHandle) { return this.lifecycle.observe(handle) }
@@ -85,7 +91,7 @@ export class PiAdapter extends BaseAdapter {
 }
 export class OpenCodeAdapter extends BaseAdapter {
   readonly id = 'opencode' as const;
-  async launch(ctx: LaunchContext): Promise<AgentHandle> { const args: string[] = []; if (ctx.profile.model) args.push('--model', ctx.profile.model); if (ctx.profile.agent) args.push('--agent', ctx.profile.agent); return this.lifecycle.start('opencode', withOpenCodeLauncher(isolatedOpenCode(ctx)), args) }
+  async launch(ctx: LaunchContext): Promise<AgentHandle> { const args: string[] = ['--auto']; if (ctx.profile.model) args.push('--model', ctx.profile.model); if (ctx.profile.agent) args.push('--agent', ctx.profile.agent); return this.lifecycle.start('opencode', withOpenCodeLauncher(isolatedOpenCode(ctx)), args) }
 }
 function isolatedOpenCode(ctx: LaunchContext): LaunchContext { const directory = path.join(ctx.cwd, '.herdr-workflow', 'runtime-config', ctx.assignment.runId); fs.mkdirSync(directory, { recursive: true }); fs.writeFileSync(path.join(directory, 'opencode.json'), JSON.stringify({ permission: ctx.profile.readOnly ? { edit: 'deny', bash: 'allow', read: 'allow' } : { edit: 'allow', bash: 'allow', read: 'allow' }, plugin: ctx.bridgePath ? [ctx.bridgePath] : [] }, null, 2)); return { ...ctx, environment: { ...ctx.environment, XDG_CONFIG_HOME: directory } } }
 function withOpenCodeLauncher(ctx: LaunchContext): LaunchContext { return withRuntimeLauncher(ctx, 'opencode') }
@@ -95,7 +101,7 @@ function withRuntimeLauncher(ctx: LaunchContext, name: 'pi' | 'opencode'): Launc
 export class OpenCodeV2Adapter extends BaseAdapter {
   readonly id = 'opencode-v2' as const;
   async launch(ctx: LaunchContext): Promise<AgentHandle> {
-    const args: string[] = []; if (ctx.profile.model) args.push('--model', ctx.profile.model); if (ctx.profile.agent) args.push('--agent', ctx.profile.agent); if (ctx.profile.variant) args.push('--variant', ctx.profile.variant);
+    const args: string[] = ['--auto']; if (ctx.profile.model) args.push('--model', ctx.profile.model); if (ctx.profile.agent) args.push('--agent', ctx.profile.agent);
     return this.lifecycle.start('opencode', withOpenCodeLauncher(isolatedOpenCode(ctx)), args);
   }
 }

@@ -171,7 +171,6 @@ export function App(props: {
   const [repairTargets, setRepairTargets] = createSignal<Array<{ targetStep: string; label: string; expiresRuns: string[]; retainedEvidence: string[] }>>([]);
   const [repairSelection, setRepairSelection] = createSignal(0);
   const [repairReason, setRepairReason] = createSignal("");
-  const [repairConfirmed, setRepairConfirmed] = createSignal(false);
   const [costOpen, setCostOpen] = createSignal(false);
   const [costSelection, setCostSelection] = createSignal(0);
   const [costAgent, setCostAgent] = createSignal<string | null>(null);
@@ -669,7 +668,7 @@ export function App(props: {
       return;
     }
     if (name === "o" && key.shift) {
-      try { setRepairTargets(previewRepair(props.repo, props.change)); setRepairSelection(0); setRepairReason(""); setRepairConfirmed(false); setRepairOpen(true); props.keymap.setData("modal.active", "repair"); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)) }
+      try { setRepairTargets(previewRepair(props.repo, props.change)); setRepairSelection(0); setRepairReason(""); setRepairOpen(true); props.keymap.setData("modal.active", "repair"); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)) }
       return;
     }
     if (name === "?") {
@@ -909,7 +908,7 @@ export function App(props: {
     });
     const disposeRepair = props.keymap.registerLayer({
       name: "repair", priority: 1000, activeModal: "repair",
-      commands: [{ name: "repair.handle", run: ({ event }) => { const key = event.name.toLowerCase(); if (key === "escape") { setRepairOpen(false); props.keymap.setData("modal.active", "none") } else if (key === "j" || key === "down") { setRepairSelection(index => Math.min(repairTargets().length - 1, index + 1)); setRepairConfirmed(false) } else if (key === "k" || key === "up") { setRepairSelection(index => Math.max(0, index - 1)); setRepairConfirmed(false) } else if (key === "backspace") { setRepairReason(value => value.slice(0, -1)); setRepairConfirmed(false) } else if (key === "enter" || key === "return") { const target = repairTargets()[repairSelection()]; if (!target || !repairReason().trim()) setMessage("Repair reason is required"); else if (!repairConfirmed()) setRepairConfirmed(true); else { try { applyRepair(props.repo, props.change, data().state.revision, target.targetStep, repairReason()); setRepairOpen(false); props.keymap.setData("modal.active", "none"); refresh(); setMessage(`Repaired to ${target.label}; resume separately`) } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); refresh() } } } else if (key.length === 1 && !event.ctrl && !event.meta) { setRepairReason(value => `${value}${key}`.slice(0, 256)); setRepairConfirmed(false) } else if (key === "space") { setRepairReason(value => `${value} `.slice(0, 256)); setRepairConfirmed(false) } return true } }],
+      commands: [{ name: "repair.handle", run: ({ event }) => { const key = event.name.toLowerCase(); if (key === "escape") { setRepairOpen(false); props.keymap.setData("modal.active", "none") } else if (key === "j" || key === "down") { setRepairSelection(index => Math.min(repairTargets().length - 1, index + 1)) } else if (key === "k" || key === "up") { setRepairSelection(index => Math.max(0, index - 1)) } else if (key === "backspace") { setRepairReason(value => value.slice(0, -1)) } else if (key === "enter" || key === "return") { const target = repairTargets()[repairSelection()]; if (!target || !repairReason().trim()) setMessage("Repair reason is required"); else { try { applyRepair(props.repo, props.change, data().state.revision, target.targetStep, repairReason()); setRepairOpen(false); props.keymap.setData("modal.active", "none"); refresh(); setMessage(`Repaired to ${target.label}: phase retriggered`) } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); refresh() } } } else if (key.length === 1 && !event.ctrl && !event.meta) { setRepairReason(value => `${value}${key}`.slice(0, 256)) } else if (key === "space") { setRepairReason(value => `${value} `.slice(0, 256)) } return true } }],
       bindings: ["escape", "enter", "return", "j", "k", "up", "down", "backspace", "space", ..."abcdefghijklmnopqrstuvwxyz0123456789-_.".split("")].map(key => ({ key, cmd: "repair.handle" })),
     });
     const disposeCompletedPicker = props.keymap.registerLayer({
@@ -1920,11 +1919,11 @@ export function App(props: {
       />
       <Show when={repairOpen()}>
         <ListViewModal
-          title={`Repair r${data().state.revision} · reason: ${repairReason() || "(type reason)"} · ${repairConfirmed() ? "ENTER confirms" : "ENTER previews"}`}
+          title={`Repair r${data().state.revision} · reason: ${repairReason() || "(type reason)"} · ENTER repairs`}
           fieldLabel="Compatible target"
           items={repairTargets().map(target => `${target.label} · expire [${target.expiresRuns.slice(0, 4).join(', ') || 'none'}${target.expiresRuns.length > 4 ? ', …' : ''}] · retain [${target.retainedEvidence.slice(0, 4).join(', ') || 'none'}${target.retainedEvidence.length > 4 ? ', …' : ''}]`)}
           selectedIndex={repairSelection()}
-          help={[{ key: "j/k", action: "Target" }, { key: "type", action: "Reason" }, { key: "Enter×2", action: "Confirm" }, { key: "Esc", action: "Cancel" }]}
+          help={[{ key: "j/k", action: "Target" }, { key: "type", action: "Reason" }, { key: "Enter", action: "Repair" }, { key: "Esc", action: "Cancel" }]}
           renderItem={(item, selected) => <text fg={selected ? uiColors.primary : uiColors.textSecondary}>{item}</text>}
         />
       </Show>

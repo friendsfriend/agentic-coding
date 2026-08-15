@@ -897,10 +897,6 @@ export function approvalFor(phase: string) {
     {
       proposed: { prompt: "Press Enter to approve plan", action: "approve-plan" },
       fix: { prompt: "Press Enter to retry verification", action: "verify" },
-      paused: {
-        prompt: "Press Enter to resume repaired workflow",
-        action: "resume",
-      },
       "developer-review": {
         prompt: "Press Enter to review changed files",
         action: "review",

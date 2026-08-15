@@ -1,9 +1,4 @@
-# herdr-workflow-state-control Specification
-
-## Purpose
-TBD - created by archiving change manual-workflow-state-overwrite. Update Purpose after archive.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Validated workflow repair
 The system SHALL let developer repair active workflow to registered target step only through revision-checked command carrying non-empty reason, expiring incompatible run capabilities, rebuilding target-step state, validating all invariants, and directly retriggering the target step without an intermediate paused state.
@@ -27,6 +22,14 @@ The system SHALL let developer repair active workflow to registered target step 
 - **WHEN** agent from expired run submits handoff after repair
 - **THEN** engine SHALL reject stale capability
 - **AND** repaired workflow SHALL remain unchanged
+
+## REMOVED Requirements
+
+### Requirement: Explicit resume after repair
+**Reason**: Repair no longer pauses the workflow; it directly retriggers the target step. The "explicit resume after repair" contract is obsolete.
+**Migration**: Resume remains available only for paused workflows that do not originate from repair (legacy migration), as specified by the new "Explicit resume of paused workflow" requirement.
+
+## ADDED Requirements
 
 ### Requirement: Explicit resume of paused workflow
 A paused workflow SHALL resume only through current engine-provided action and SHALL revalidate routing, adapter capabilities, artifacts, and entry guards before creating run/effects; repair SHALL NOT produce a paused workflow.
