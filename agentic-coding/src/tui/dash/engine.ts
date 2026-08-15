@@ -7,22 +7,23 @@ import { definitionVersionForPolicy, registerBuiltins } from '../../workflow/def
 import type { WorkflowView } from '../../workflow/contracts.ts';
 import { canonicalStorePath, validateChangeId } from '../../workflow/runtime.ts';
 import { Herdr } from '../../herdr-client.ts';
+import { credentialPromptBridge } from './ui/CredentialsModal.tsx';
 
-export function getWorkflowView(repo: string, change: string): WorkflowView { const engine = workflowEngineFactory(); void drainEffects(engine, repo).catch(() => undefined); return engine.status(repo, change) }
+export function getWorkflowView(repo: string, change: string): WorkflowView { const engine = workflowEngineFactory(); void drainEffects(engine, repo, credentialPromptBridge()).catch(() => undefined); return engine.status(repo, change) }
 export function listWorkflowViews(repo: string): WorkflowView[] { return workflowEngineFactory().list(repo) }
 export function previewWorkflowRepair(repo: string, change: string) { return workflowEngineFactory().previewRepair(repo, change) }
 export function repairWorkflow(repo: string, change: string, revision: number, targetStep: string, reason: string) { if (!reason.trim()) throw new Error('repair reason is required'); const engine = workflowEngineFactory(); const view = engine.status(repo, change); if (view.revision !== revision) throw new Error(`stale revision ${revision}; current ${view.revision}`); return engine.dispatch(repo, { type: 'operator.repair', workflowId: view.workflowId, revision, targetStep, reason }).view }
 export async function runWorkflowAction(actionId: string, repo: string, change: string, revision: number, input?: string): Promise<string> {
   const engine = workflowEngineFactory(); const view = engine.status(repo, change);
   let parsed: unknown; if (input) { try { parsed = JSON.parse(input) } catch { parsed = input } }
-  engine.dispatch(repo, { type: 'developer.action', workflowId: view.workflowId, revision, actionId, input: parsed }); await drainEffects(engine, repo); return JSON.stringify(engine.status(repo, change));
+  engine.dispatch(repo, { type: 'developer.action', workflowId: view.workflowId, revision, actionId, input: parsed }); await drainEffects(engine, repo, credentialPromptBridge()); return JSON.stringify(engine.status(repo, change));
 }
 export function startArgs(input: { repo: string; ticket: string; change: string; task?: string; mode: string; workflowType?: string }) { return { repo: input.repo, changeId: validateChangeId(input.change), definitionId: input.workflowType === 'quick' ? 'no-openspec' : (input.workflowType ?? 'standard'), task: input.task || undefined, ticket: input.ticket || undefined, mode: input.mode } }
 export async function startWorkflowInProcess(input: Parameters<typeof startArgs>[0]): Promise<string> {
   const args = startArgs(input); validateStart(args.repo, args.changeId, args.definitionId, args.task); const config = loadConfig(); const definitionVersion = definitionVersionForPolicy(config.workflow.max_verification_rounds); const registry = registerBuiltins(undefined, config.workflow.max_verification_rounds); const definition = registry.definition(args.definitionId, definitionVersion); const agents = parseAgentsConfig(config.agents, config);
   const roles = Object.fromEntries(definition.steps.filter(step => registry.step(step).actor === 'agent').map(step => [step, step === 'core.plan' ? ['planner'] : step === 'core.implementation' ? ['worker'] : step === 'core.triage' ? ['triage'] : step === 'core.verification' ? ['quality-verifier', 'security-verifier', 'performance-verifier', 'openspec-verifier', 'usability-verifier', 'test-verifier'].filter(role => args.definitionId !== 'no-openspec' || role !== 'openspec-verifier') : step === 'core.archive' ? ['archive'] : []]));
   const routing = resolveRouting(definition, roles, agents); for (const route of routing.routes) preflightProfile(route.profile, registry.step(route.stepId).requirements); const baseCommit = runGit(args.repo, 'rev-parse', `${config.workflow.base_branch}^{commit}`); runGit(args.repo, 'remote', 'get-url', config.workflow.remote);
-  const engine = workflowEngineFactory(); engine.start({ repo: args.repo, mode: args.mode as 'worktree' | 'checkout', changeId: args.changeId, definitionId: args.definitionId, definitionVersion, metadata: { branch: `${config.workflow.branch_prefix}${args.changeId}`, baseBranch: config.workflow.base_branch, baseCommit, ...(args.task ? { task: args.task } : {}), ...(args.ticket ? { ticket: args.ticket } : {}) }, routing }); await drainEffects(engine, args.repo);
+  const engine = workflowEngineFactory(); engine.start({ repo: args.repo, mode: args.mode as 'worktree' | 'checkout', changeId: args.changeId, definitionId: args.definitionId, definitionVersion, metadata: { branch: `${config.workflow.branch_prefix}${args.changeId}`, baseBranch: config.workflow.base_branch, baseCommit, ...(args.task ? { task: args.task } : {}), ...(args.ticket ? { ticket: args.ticket } : {}) }, routing }); await drainEffects(engine, args.repo, credentialPromptBridge());
   return `Workflow started: ${args.changeId}`;
 }
 function navigationPath(repo: string, change: string): string { return path.join(path.dirname(canonicalStorePath(repo)), 'navigation', `${encodeURIComponent(change)}.json`) }

@@ -21,7 +21,10 @@ function serializable(value: unknown): unknown {
 export function stableJson(value: unknown): string { return JSON.stringify(serializable(value)) }
 export function digest(value: unknown): string { return createHash('sha256').update(stableJson(value)).digest('hex') }
 function stepDigest(step: StepDefinition): string {
-  return digest({ id: step.id, version: step.version, actor: step.actor, assets: step.instructionAssets.map((asset, i) => ({ asset, digest: step.instructionDigests[i] })), requirements: [...step.requirements], input: { id: step.input.id, version: step.input.version }, output: { id: step.output.id, version: step.output.version }, outcomes: [...step.outcomes], retryLimit: step.retryLimit ?? null, effects: [...step.allowedEffects] });
+  // Instruction assets are a rendering concern (the assignment pins each asset
+  // digest at render time); they must not change the state-machine contract,
+  // otherwise instruction edits break every pinned workflow (pin mismatch).
+  return digest({ id: step.id, version: step.version, actor: step.actor, requirements: [...step.requirements], input: { id: step.input.id, version: step.input.version }, output: { id: step.output.id, version: step.output.version }, outcomes: [...step.outcomes], retryLimit: step.retryLimit ?? null, effects: [...step.allowedEffects] });
 }
 
 export class WorkflowRegistry {

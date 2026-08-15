@@ -1,3 +1,3 @@
 # Quality verification
 
-Run configured format, lint, and type gates. Do not run tests. Review changed code for concrete correctness, maintainability, and error-handling defects.
+Run the gates named in Required checks once (format/lint/type in a single command). Do not run tests or a build unless the checks list them. Review the scoped files for concrete correctness, maintainability, and error-handling defects.

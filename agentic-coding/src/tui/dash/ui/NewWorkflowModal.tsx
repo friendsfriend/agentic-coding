@@ -57,7 +57,7 @@ export function NewWorkflowModal(props: { projects: Project[]; onCancel: () => v
   const confirmStep = () => step() === fields().length;
   const totalSteps = () => fields().length + 1;
   const field = () => fields()[step()];
-  const summary = () => [...fields().map((key) => ({ label: fieldLabels[key], value: values()[key] || '—' })), { label: 'Agent routing', value: 'Resolved from configured profiles' }];
+  const summary = () => fields().map((key) => ({ label: fieldLabels[key], value: values()[key] || '—' }));
 
   const updateCurrent = (value: string) => { const key = field(); if (!key) return; setValues(current => ({ ...current, [key]: value })); };
   const back = () => { if (step() === 0) props.onCancel(); else { setStep(i => Math.max(0, i - 1)); setSelected(0); setFilter(''); setFiltering(false); } };

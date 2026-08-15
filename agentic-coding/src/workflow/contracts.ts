@@ -73,7 +73,7 @@ export interface Assignment {
   protocolVersion: 1; workflowId: string; runId: string; generation: number; stepId: string; role: string; objective: string;
   interaction: 'developer-dialogue' | 'silent'; inputs: readonly string[]; permissions: readonly string[]; checks: readonly string[];
   output?: { path: string; schemaId: string; schemaVersion: number; maxBytes: number }; allowedOutcomes: readonly ('complete' | 'blocked' | 'failed')[];
-  environment: Readonly<Record<'HERDR_WORKFLOW_ID' | 'HERDR_RUN_ID' | 'HERDR_RUN_GENERATION' | 'HERDR_RUN_TOKEN' | 'HERDR_OUTPUT' | 'HERDR_OUTPUT_SCHEMA_ID' | 'HERDR_OUTPUT_SCHEMA_VERSION' | 'HERDR_STEP_ID' | 'HERDR_ROLE' | 'HERDR_PROFILE' | 'HERDR_RUNTIME' | 'HERDR_TELEMETRY_PATH' | 'TRACEPARENT', string>>;
+  environment: Readonly<Record<'HERDR_WORKFLOW_ID' | 'HERDR_CHANGE_ID' | 'HERDR_RUN_ID' | 'HERDR_RUN_GENERATION' | 'HERDR_RUN_TOKEN' | 'HERDR_OUTPUT' | 'HERDR_OUTPUT_SCHEMA_ID' | 'HERDR_OUTPUT_SCHEMA_VERSION' | 'HERDR_STEP_ID' | 'HERDR_ROLE' | 'HERDR_PROFILE' | 'HERDR_RUNTIME' | 'HERDR_TELEMETRY_PATH' | 'TRACEPARENT', string>>;
 }
 export interface WorkflowActionView { id: string; label: string; input?: { schemaId: string; schemaVersion: number }; confirmation: 'none' | 'confirm' | 'reason' }
 export interface WorkflowView {

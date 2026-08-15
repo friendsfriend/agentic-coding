@@ -63,6 +63,7 @@ import { getActiveThemeName, themeNames } from "./ui/theme";
 import { ThemePickerModal } from "./ui/ThemePickerModal";
 import { SelectableList } from "./ui/Selectable";
 import { ListViewModal } from "./ui/ListViewModal";
+import { CredentialsModal, pendingCredentialRequest } from "./ui/CredentialsModal";
 import { TraceBrowser } from "./ui/TraceBrowser";
 import { ChangedFilesView } from "./devenv-ui/components/ChangedFilesView";
 import { DiffViewModal } from "./devenv-ui/components/DiffViewModal";
@@ -171,6 +172,25 @@ export function App(props: {
   const [repairTargets, setRepairTargets] = createSignal<Array<{ targetStep: string; label: string; expiresRuns: string[]; retainedEvidence: string[] }>>([]);
   const [repairSelection, setRepairSelection] = createSignal(0);
   const [repairReason, setRepairReason] = createSignal("");
+  // On-demand credential popup (askpass bridge): `pendingCredentialRequest()`
+  // is set by the in-process effect runner while a git command awaits an SSH
+  // passphrase. The popup keymap layer must not be gated on busy() because the
+  // delivery drain runs while the dashboard is busy.
+  const credentialRequest = createMemo(() => pendingCredentialRequest());
+  const [credentialInput, setCredentialInput] = createSignal("");
+  let modalBeforeCredential: string | undefined;
+  const commitCredential = () => {
+    const request = pendingCredentialRequest();
+    if (!request) return;
+    request.resolve(credentialInput());
+    setCredentialInput("");
+  };
+  const cancelCredential = () => {
+    const request = pendingCredentialRequest();
+    if (!request) return;
+    request.resolve("");
+    setCredentialInput("");
+  };
   const [costOpen, setCostOpen] = createSignal(false);
   const [costSelection, setCostSelection] = createSignal(0);
   const [costAgent, setCostAgent] = createSignal<string | null>(null);
@@ -297,7 +317,7 @@ export function App(props: {
       };
     }),
     ...reviewFindings()
-      .filter((finding) => finding.path && finding.line)
+      .filter((finding) => finding.path)
       .map((finding) => {
         const position = {
           base_sha: "",
@@ -306,7 +326,7 @@ export function App(props: {
           old_path: finding.path!,
           new_path: finding.path!,
           position_type: "text",
-          new_line: finding.line,
+          new_line: finding.line ?? 1, // legacy artifacts may lack a line
         };
         const note = {
           id: 10000 + reviewFindings().indexOf(finding),
@@ -906,6 +926,60 @@ export function App(props: {
         "down",
       ].map((key) => ({ key, cmd: "theme.handle" })),
     });
+    const disposeCredentials = props.keymap.registerLayer({
+      name: "credentials",
+      priority: 1300,
+      activeModal: "credentials",
+      commands: [
+        {
+          name: "credentials.handle",
+          run: ({ event }) => {
+            // Intentionally NOT gated on busy(): the delivery drain that
+            // requests the passphrase runs while the dashboard is busy.
+            const key = event.name.toLowerCase();
+            if (key === "escape") {
+              cancelCredential();
+              setMessage("Credential prompt cancelled");
+              return true;
+            }
+            if (key === "enter" || key === "return") {
+              commitCredential();
+              return true;
+            }
+            if (key === "backspace") {
+              setCredentialInput((value) => value.slice(0, -1));
+              return true;
+            }
+            if (key === "space" || event.name === " ") {
+              setCredentialInput((value) => `${value} `.slice(0, 1024));
+              return true;
+            }
+            if (
+              event.sequence &&
+              event.sequence.length === 1 &&
+              !event.ctrl &&
+              !event.meta
+            ) {
+              setCredentialInput((value) =>
+                `${value}${event.shift ? event.sequence.toUpperCase() : event.sequence}`.slice(0, 1024),
+              );
+              return true;
+            }
+            return true;
+          },
+        },
+      ],
+      bindings: [
+        "escape",
+        "enter",
+        "return",
+        "backspace",
+        "space",
+        ..."abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,:;!?-_()/\\@#*+=[]{}~`'\"".split(
+          "",
+        ),
+      ].map((key) => ({ key, cmd: "credentials.handle" })),
+    });
     const disposeRepair = props.keymap.registerLayer({
       name: "repair", priority: 1000, activeModal: "repair",
       commands: [{ name: "repair.handle", run: ({ event }) => { const key = event.name.toLowerCase(); if (key === "escape") { setRepairOpen(false); props.keymap.setData("modal.active", "none") } else if (key === "j" || key === "down") { setRepairSelection(index => Math.min(repairTargets().length - 1, index + 1)) } else if (key === "k" || key === "up") { setRepairSelection(index => Math.max(0, index - 1)) } else if (key === "backspace") { setRepairReason(value => value.slice(0, -1)) } else if (key === "enter" || key === "return") { const target = repairTargets()[repairSelection()]; if (!target || !repairReason().trim()) setMessage("Repair reason is required"); else { try { applyRepair(props.repo, props.change, data().state.revision, target.targetStep, repairReason()); setRepairOpen(false); props.keymap.setData("modal.active", "none"); refresh(); setMessage(`Repaired to ${target.label}: phase retriggered`) } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); refresh() } } } else if (key.length === 1 && !event.ctrl && !event.meta) { setRepairReason(value => `${value}${key}`.slice(0, 256)) } else if (key === "space") { setRepairReason(value => `${value} `.slice(0, 256)) } return true } }],
@@ -1476,6 +1550,7 @@ export function App(props: {
     });
     onCleanup(() => {
       disposeTheme();
+      disposeCredentials();
       disposeCompletedPicker();
       disposeRepair();
       disposeUserAction();
@@ -1492,6 +1567,7 @@ export function App(props: {
     });
     const anyModalOpen = () =>
       !!(
+        credentialRequest() ||
         verdict() ||
         findings() ||
         verificationDetail() ||
@@ -1509,6 +1585,20 @@ export function App(props: {
     // Self-heal: reconcile keymap modal data with real modal state.
     createEffect(() => {
       if (!anyModalOpen()) props.keymap.setData("modal.active", "none");
+    });
+    // The credential popup opens while the dashboard is busy (delivery drain);
+    // switch the keymap to the non-busy-gated layer and restore the previous
+    // modal on resolution.
+    createEffect(() => {
+      const request = credentialRequest();
+      const current = props.keymap.getData?.("modal.active");
+      if (request && current !== "credentials") {
+        modalBeforeCredential = typeof current === "string" ? current : undefined;
+        props.keymap.setData("modal.active", "credentials");
+      } else if (!request && modalBeforeCredential !== undefined) {
+        props.keymap.setData("modal.active", modalBeforeCredential);
+        modalBeforeCredential = undefined;
+      }
     });
     createEffect(() => {
       const action = requiredUserAction();
@@ -2124,6 +2214,15 @@ export function App(props: {
             content={report().content}
             offset={verdictOffset()}
             lines={verdictLines()}
+          />
+        )}
+      </Show>
+      <Show when={credentialRequest()}>
+        {(request) => (
+          <CredentialsModal
+            prompt={request().prompt}
+            mask={request().mask}
+            value={credentialInput()}
           />
         )}
       </Show>
