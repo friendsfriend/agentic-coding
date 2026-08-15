@@ -91,7 +91,7 @@ export class PiAdapter extends BaseAdapter {
 }
 export class OpenCodeAdapter extends BaseAdapter {
   readonly id = 'opencode' as const;
-  async launch(ctx: LaunchContext): Promise<AgentHandle> { const args: string[] = []; if (ctx.profile.model) args.push('--model', ctx.profile.model); if (ctx.profile.agent) args.push('--agent', ctx.profile.agent); return this.lifecycle.start('opencode', withOpenCodeLauncher(isolatedOpenCode(ctx)), args) }
+  async launch(ctx: LaunchContext): Promise<AgentHandle> { const args: string[] = ['--auto']; if (ctx.profile.model) args.push('--model', ctx.profile.model); if (ctx.profile.agent) args.push('--agent', ctx.profile.agent); return this.lifecycle.start('opencode', withOpenCodeLauncher(isolatedOpenCode(ctx)), args) }
 }
 function isolatedOpenCode(ctx: LaunchContext): LaunchContext { const directory = path.join(ctx.cwd, '.herdr-workflow', 'runtime-config', ctx.assignment.runId); fs.mkdirSync(directory, { recursive: true }); fs.writeFileSync(path.join(directory, 'opencode.json'), JSON.stringify({ permission: ctx.profile.readOnly ? { edit: 'deny', bash: 'allow', read: 'allow' } : { edit: 'allow', bash: 'allow', read: 'allow' }, plugin: ctx.bridgePath ? [ctx.bridgePath] : [] }, null, 2)); return { ...ctx, environment: { ...ctx.environment, XDG_CONFIG_HOME: directory } } }
 function withOpenCodeLauncher(ctx: LaunchContext): LaunchContext { return withRuntimeLauncher(ctx, 'opencode') }
@@ -101,7 +101,7 @@ function withRuntimeLauncher(ctx: LaunchContext, name: 'pi' | 'opencode'): Launc
 export class OpenCodeV2Adapter extends BaseAdapter {
   readonly id = 'opencode-v2' as const;
   async launch(ctx: LaunchContext): Promise<AgentHandle> {
-    const args: string[] = []; if (ctx.profile.model) args.push('--model', ctx.profile.model); if (ctx.profile.agent) args.push('--agent', ctx.profile.agent);
+    const args: string[] = ['--auto']; if (ctx.profile.model) args.push('--model', ctx.profile.model); if (ctx.profile.agent) args.push('--agent', ctx.profile.agent);
     return this.lifecycle.start('opencode', withOpenCodeLauncher(isolatedOpenCode(ctx)), args);
   }
 }

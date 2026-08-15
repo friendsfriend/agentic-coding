@@ -55,4 +55,5 @@ Dashboard SHALL consume one typed workflow view containing revision, pinned defi
 #### Scenario: Repair UI opens
 - **WHEN** developer requests repair
 - **THEN** dashboard SHALL request compatible targets from engine
-- **AND** confirmation SHALL show revision, target, reason requirement, and affected runs before dispatch
+- **AND** repair modal SHALL show revision, target, reason requirement, and affected runs before dispatch
+- **AND** a single Enter with non-empty reason SHALL dispatch repair with current revision

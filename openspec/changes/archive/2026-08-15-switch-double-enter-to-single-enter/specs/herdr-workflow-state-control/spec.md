@@ -1,8 +1,3 @@
-## RENAMED Requirements
-
-- FROM: `### Requirement: Explicit resume after repair`
-- TO: `### Requirement: Explicit resume of paused workflow`
-
 ## MODIFIED Requirements
 
 ### Requirement: Validated workflow repair
@@ -27,6 +22,14 @@ The system SHALL let developer repair active workflow to registered target step 
 - **WHEN** agent from expired run submits handoff after repair
 - **THEN** engine SHALL reject stale capability
 - **AND** repaired workflow SHALL remain unchanged
+
+## REMOVED Requirements
+
+### Requirement: Explicit resume after repair
+**Reason**: Repair no longer pauses the workflow; it directly retriggers the target step. The "explicit resume after repair" contract is obsolete.
+**Migration**: Resume remains available only for paused workflows that do not originate from repair (legacy migration), as specified by the new "Explicit resume of paused workflow" requirement.
+
+## ADDED Requirements
 
 ### Requirement: Explicit resume of paused workflow
 A paused workflow SHALL resume only through current engine-provided action and SHALL revalidate routing, adapter capabilities, artifacts, and entry guards before creating run/effects; repair SHALL NOT produce a paused workflow.
