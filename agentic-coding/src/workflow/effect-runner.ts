@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { AgentAdapter, HerdrPort, LaunchContext } from './adapters.ts';
+import { HerdrLifecycle, type AgentAdapter, type HerdrPort, type LaunchContext } from './adapters.ts';
 import { renderAssignment } from './assignment.ts';
 import type { Assignment, EffectKind, JsonValue } from './contracts.ts';
 import type { WorkflowRegistry } from './registry.ts';
@@ -31,8 +31,8 @@ export function agentEffectHandlers(repo: string, engine: WorkflowEngine, option
   const git = (cwd: string, ...args: string[]) => { const result = Bun.spawnSync(['git', '-C', cwd, ...args], { stdout: 'pipe', stderr: 'pipe' }); if (result.exitCode !== 0) throw new Error((result.stderr.toString() || result.stdout.toString()).trim()); return result.stdout.toString().trim() };
   return {
     'workspace.setup': {
-      async observe(effect) { const snapshot = snapshotFor(effect); if (snapshot.metadata.workspace) return { workspace: snapshot.metadata.workspace, worktree: snapshot.metadata.worktree, branch: snapshot.metadata.branch }; const input = effect.payload as { mode?: string; branch?: string }; const branch = input.branch ?? snapshot.metadata.branch; const worktree = input.mode === 'worktree' ? worktreeForBranch(snapshot.metadata.repository, branch) : currentBranch(snapshot.metadata.repository) === branch ? snapshot.metadata.repository : undefined; const workspace = recoverWorkspace(options.herdr, snapshot.metadata.changeId); return worktree && workspace ? { workspace, worktree, branch } : undefined },
-      async execute(effect) { const snapshot = snapshotFor(effect); const input = effect.payload as { mode?: string; branch?: string; baseCommit?: string }; const branch = input.branch ?? snapshot.metadata.branch; let worktree = input.mode === 'worktree' ? worktreeForBranch(snapshot.metadata.repository, branch) : snapshot.metadata.repository; let workspace = recoverWorkspace(options.herdr, snapshot.metadata.changeId); if (input.mode === 'worktree' && !worktree) { const result = options.herdr.call('worktree', 'create', '--cwd', snapshot.metadata.repository, '--branch', branch, '--base', input.baseCommit ?? snapshot.metadata.baseCommit, '--label', snapshot.metadata.changeId, '--no-focus') as { workspace?: { workspace_id?: string }; worktree?: { path?: string } }; workspace = result.workspace?.workspace_id; worktree = result.worktree?.path; if (!workspace || !worktree) throw new Error('Herdr worktree setup returned incomplete identity') } else { if (input.mode !== 'worktree' && currentBranch(snapshot.metadata.repository) !== branch) { const exists = git(snapshot.metadata.repository, 'branch', '--list', branch); git(snapshot.metadata.repository, 'switch', ...(exists ? [branch] : ['-c', branch, input.baseCommit ?? snapshot.metadata.baseCommit])) } if (!workspace) { const result = options.herdr.call('workspace', 'create', '--cwd', worktree!, '--label', snapshot.metadata.changeId) as { workspace?: { workspace_id?: string } }; workspace = result.workspace?.workspace_id } } if (!workspace || !worktree) throw new Error('workspace setup returned incomplete identity'); return { workspace, worktree, branch } },
+      async observe(effect) { const snapshot = snapshotFor(effect); const input = effect.payload as { mode?: string; branch?: string }; const branch = input.branch ?? snapshot.metadata.branch; const worktree = snapshot.metadata.worktree ?? (input.mode === 'worktree' ? worktreeForBranch(snapshot.metadata.repository, branch) : currentBranch(snapshot.metadata.repository) === branch ? snapshot.metadata.repository : undefined); const workspace = snapshot.metadata.workspace ?? recoverWorkspace(options.herdr, snapshot.metadata.changeId); return worktree && workspace && dashboardReady(options.herdr, workspace) ? { workspace, worktree, branch } : undefined },
+      async execute(effect) { const snapshot = snapshotFor(effect); const input = effect.payload as { mode?: string; branch?: string; baseCommit?: string }; const branch = input.branch ?? snapshot.metadata.branch; let worktree = input.mode === 'worktree' ? worktreeForBranch(snapshot.metadata.repository, branch) : snapshot.metadata.repository; let workspace = recoverWorkspace(options.herdr, snapshot.metadata.changeId); if (input.mode === 'worktree' && !worktree) { const result = options.herdr.call('worktree', 'create', '--cwd', snapshot.metadata.repository, '--branch', branch, '--base', input.baseCommit ?? snapshot.metadata.baseCommit, '--label', snapshot.metadata.changeId, '--no-focus') as { workspace?: { workspace_id?: string }; worktree?: { path?: string } }; workspace = result.workspace?.workspace_id; worktree = result.worktree?.path; if (!workspace || !worktree) throw new Error('Herdr worktree setup returned incomplete identity') } else { if (input.mode !== 'worktree' && currentBranch(snapshot.metadata.repository) !== branch) { const exists = git(snapshot.metadata.repository, 'branch', '--list', branch); git(snapshot.metadata.repository, 'switch', ...(exists ? [branch] : ['-c', branch, input.baseCommit ?? snapshot.metadata.baseCommit])) } if (!workspace) { const result = options.herdr.call('workspace', 'create', '--cwd', worktree!, '--label', snapshot.metadata.changeId) as { workspace?: { workspace_id?: string } }; workspace = result.workspace?.workspace_id } } if (!workspace || !worktree) throw new Error('workspace setup returned incomplete identity'); await ensureWorkspaceTabs(options.herdr, workspace, worktree, snapshot.metadata.changeId); return { workspace, worktree, branch } },
     },
     'artifact.write': {
       async observe(effect) { const expected = renderedAssignment(engine, repo, options.registry, runId(effect), ''); try { return fs.readFileSync(expected.run.assignmentPath, 'utf8') === `${expected.rendered.prompt}\n` ? { path: expected.run.assignmentPath, digest: expected.rendered.digest } : undefined } catch { return undefined } },
@@ -62,7 +62,36 @@ export function agentEffectHandlers(repo: string, engine: WorkflowEngine, option
 function currentBranch(repo: string): string | undefined { const result = Bun.spawnSync(['git', '-C', repo, 'branch', '--show-current'], { stdout: 'pipe', stderr: 'pipe' }); return result.exitCode === 0 ? result.stdout.toString().trim() || undefined : undefined }
 function worktreeForBranch(repo: string, branch: string): string | undefined { const result = Bun.spawnSync(['git', '-C', repo, 'worktree', 'list', '--porcelain'], { stdout: 'pipe', stderr: 'pipe' }); if (result.exitCode !== 0) return undefined; for (const block of result.stdout.toString().trim().split(/\n\n+/)) { const lines = block.split('\n'); if (lines.includes(`branch refs/heads/${branch}`)) return lines.find(line => line.startsWith('worktree '))?.slice(9) } return undefined }
 function recoverWorkspace(herdr: HerdrPort, identity: string): string | undefined { try { const result = herdr.call('workspace', 'get', identity) as { workspace?: { workspace_id?: string; status?: string } }; if (result.workspace?.status !== 'closed' && result.workspace?.workspace_id) return result.workspace.workspace_id } catch { /* fall through to list recovery */ } try { const result = herdr.call('workspace', 'list') as { workspaces?: Array<{ workspace_id?: string; label?: string; name?: string; status?: string }> }; return result.workspaces?.find(item => item.status !== 'closed' && (item.label === identity || item.name === identity))?.workspace_id } catch { return undefined } }
-function runName(changeId: string, run: ReturnType<WorkflowEngine['getRun']>): string { return `${changeId}-${run.role}-${run.id.slice(0, 8)}` }
+function dashboardReady(herdr: HerdrPort, workspace: string): boolean { try { const result = herdr.call('tab', 'list', '--workspace', workspace) as { tabs?: Array<{ label?: string }> }; return (result.tabs ?? []).some(tab => tab.label === 'dashboard') } catch { return false } }
+async function ensureWorkspaceTabs(herdr: HerdrPort, workspace: string, worktree: string, changeId: string): Promise<void> {
+  const tabs = (herdr.call('tab', 'list', '--workspace', workspace) as { tabs?: Array<{ tab_id?: string; label?: string }> }).tabs ?? [];
+  if (!tabs.some(tab => tab.label === 'dashboard')) {
+    const panes = (herdr.call('pane', 'list', '--workspace', workspace) as { panes?: Array<{ pane_id?: string; tab_id?: string }> }).panes ?? [];
+    const tab = tabs[0]; const root = tab?.tab_id ? panes.find(pane => pane.tab_id === tab.tab_id)?.pane_id : undefined;
+    if (!tab?.tab_id || !root) throw new Error('workspace dashboard pane unavailable');
+    await new HerdrLifecycle(herdr).waitForShell(root);
+    herdr.call('tab', 'rename', tab.tab_id, 'dashboard');
+    const command = ['agentic-coding', 'dash', '--repo', worktree, '--change', changeId].map(value => Bun.$.escape(value)).join(' ');
+    herdr.call('pane', 'run', root, command);
+  }
+  // Auxiliary git tab (lazygit): best-effort — the dashboard's Git panel
+  // recreates it on demand if this fails (e.g. lazygit not installed).
+  if (!tabs.some(tab => tab.label === 'git')) {
+    try {
+      const result = herdr.call('tab', 'create', '--workspace', workspace, '--cwd', worktree, '--label', 'git') as { root_pane?: { pane_id?: string } };
+      const pane = result.root_pane?.pane_id;
+      if (pane) herdr.call('pane', 'run', pane, 'lazygit');
+    } catch { try { herdr.call('tab', 'close', tabs.find(tab => tab.label === 'git')?.tab_id ?? '') } catch {} }
+  }
+}
+function runName(changeId: string, run: ReturnType<WorkflowEngine['getRun']>): string {
+  // Herdr caps agent names at 32 chars (^[a-z][a-z0-9_-]*$). Anchor uniqueness
+  // on role + run id; truncate the change id prefix when it does not fit.
+  const suffix = `-${run.role}-${run.id.slice(0, 8)}`;
+  const head = changeId.slice(0, Math.max(1, 32 - suffix.length));
+  return `${head}${suffix}`.slice(0, 32);
+}
+export const effectRunnerTest = { runName };
 function renderedAssignment(engine: WorkflowEngine, repo: string, registry: WorkflowRegistry, runId: string, token: string) { const run = engine.getRun(repo, runId); const snapshot = engine.getSnapshot(repo, run.workflowId); const step = registry.step(run.stepId); const assignment = assignmentFor(run, snapshot, token); return { run, rendered: renderAssignment(step, assignment, `${workflowAssets(snapshot.metadata.worktree, snapshot.metadata.changeId)}/instructions`) } }
 function runId(effect: ClaimedEffect): string { const id = String((effect.payload as { runId?: string }).runId ?? ''); if (!id) throw new Error(`effect ${effect.id} missing runId`); return id }
 function assignmentFor(run: ReturnType<WorkflowEngine['getRun']>, snapshot: ReturnType<WorkflowEngine['getSnapshot']>, token: string): Assignment {

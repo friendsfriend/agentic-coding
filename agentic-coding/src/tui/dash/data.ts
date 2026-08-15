@@ -1017,6 +1017,21 @@ export function openFindingInEditor(
   herdr.call("pane", "run", pane, command);
 }
 
+export function focusGitPane(state: WorkflowState) {
+  // Git tab is auxiliary: find it by label (workspace.setup pre-creates it),
+  // recreate on demand when missing (e.g. lazygit was unavailable at start).
+  const tabs = (herdr.call("tab", "list", "--workspace", state.workspace).tabs ?? []) as Array<{ tab_id?: string; label?: string }>;
+  const tab = tabs.find(item => item.label === "git");
+  let pane = tab?.tab_id ? (herdr.call("pane", "list", "--workspace", state.workspace).panes as Array<{ pane_id?: string; tab_id?: string }>)?.find(item => item.tab_id === tab.tab_id)?.pane_id : undefined;
+  if (!pane) {
+    const created = herdr.call("tab", "create", "--workspace", state.workspace, "--cwd", state.worktree, "--label", "git") as { root_pane?: { pane_id?: string } };
+    pane = created.root_pane?.pane_id;
+    if (!pane) throw new Error("Git tab create returned no pane");
+    try { herdr.call("pane", "run", pane, "lazygit"); } catch { /* pane stays usable as a plain shell */ }
+  }
+  focusAgent(state, pane);
+}
+
 export function focusAgent(state: WorkflowState, pane: string) {
   focusWorkspace(state.workspace);
   const tabId = herdr.call("pane", "get", pane).pane.tab_id as string;

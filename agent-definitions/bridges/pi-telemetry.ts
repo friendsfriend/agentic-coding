@@ -1,8 +1,6 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
-import { Type } from 'typebox';
-import { StringEnum } from '@earendil-works/pi-ai';
-import { dirname, join } from 'node:path';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 const output = process.env.HERDR_TELEMETRY_PATH;
 const SECRET_PATTERN = /(-----BEGIN[\s\S]*?-----END[^\n]*|sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|github_pat_[A-Za-z0-9_]{20,}|HERDR_RUN_TOKEN=[^\s]+)/g;
@@ -13,21 +11,8 @@ function emit(event: string, fields: Record<string, unknown> = {}) {
   const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT; if (endpoint) void fetch(`${endpoint.replace(/\/$/, '')}/v1/logs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(envelope), signal: AbortSignal.timeout(750) }).catch(() => undefined);
 }
 export default function bridge(pi: ExtensionAPI) {
-  pi.registerTool({ name: 'herdr_check', label: 'Read-only checks', description: 'Inspect Git or run one declared package script in a networkless bubblewrap sandbox with only dependency caches mounted read-only.', parameters: Type.Object({ action: StringEnum(['git-status', 'git-diff', 'bun-test', 'script'] as const), script: Type.Optional(Type.String({ maxLength: 64, pattern: '^[a-z0-9][a-z0-9:_-]{0,63}$' })), paths: Type.Optional(Type.Array(Type.String({ maxLength: 512 }), { maxItems: 64 })) }), async execute(_id, params, signal, _update, ctx) { const paths = params.paths ?? []; if (paths.some(value => value.startsWith('/') || value.split(/[\\/]/).includes('..'))) throw new Error('paths must stay repository-relative'); if (params.action === 'git-status' || params.action === 'git-diff') { const args = params.action === 'git-status' ? ['--no-optional-locks', 'status', '--short'] : ['--no-optional-locks', 'diff', '--no-ext-diff', '--', ...paths]; const result = await pi.exec('git', args, { cwd: ctx.cwd, signal, timeout: 30_000, env: { PATH: process.env.PATH ?? '', GIT_OPTIONAL_LOCKS: '0' } }); if (result.code !== 0) throw new Error(result.stderr.trim()); return { content: [{ type: 'text', text: redact(result.stdout.slice(0, 50_000)) }], details: {} } } const bwrap = Bun.which('bwrap'); const bun = Bun.which('bun'); if (!bwrap || !bun) throw new Error('read-only checks require bwrap and bun'); const declared = (() => { try { const pkg = JSON.parse(readFileSync(join(ctx.cwd, 'package.json'), 'utf8')) as { scripts?: Record<string, unknown> }; return Object.keys(pkg.scripts ?? {}) } catch { return [] } })(); if (params.action === 'script' && (!params.script || !declared.includes(params.script))) throw new Error(`script not declared in package.json: ${params.script ?? '(none)'} (declared: ${declared.join(', ') || 'none'})`); const command = params.action === 'bun-test' ? ['test', ...paths] : ['run', params.script!]; const bunPath = realpathSync(bun); const cwdReal = realpathSync(ctx.cwd); const args = ['--die-with-parent', '--unshare-all', '--new-session', '--clearenv', '--setenv', 'HOME', '/tmp', '--setenv', 'PATH', '/usr/bin:/bin', '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp', '--ro-bind', bunPath, bunPath, '--ro-bind', cwdReal, cwdReal, '--chdir', cwdReal]; const home = process.env.HOME ?? ''; const bunCache = join(home, '.bun', 'install', 'cache'); const npmCache = join(home, '.npm'); const pnpmStore = join(home, '.local', 'share', 'pnpm', 'store'); for (const [source, dest] of [[bunCache, '/tmp/.bun/install/cache'], [npmCache, '/tmp/.npm'], [pnpmStore, '/tmp/.local/share/pnpm/store']] as Array<[string, string]>) if (existsSync(source)) { args.push('--dir', dirname(dest)); args.push('--ro-bind', source, dest) } for (const directory of ['/usr', '/bin', '/lib', '/lib64', '/etc', '/opt', '/nix', '/snap']) if (existsSync(directory)) args.push('--ro-bind', directory, directory); args.push(bunPath, ...command); const result = await pi.exec(bwrap, args, { signal, timeout: 120_000, env: { PATH: '/usr/bin:/bin' } }); const text = `${result.stdout}${result.stderr}`.slice(-50_000); if (result.code !== 0) throw new Error(redact(text) || `sandboxed check exited ${result.code}`); return { content: [{ type: 'text', text: redact(text) || 'Check passed.' }], details: {} } } });
-  pi.registerTool({
-    name: 'herdr_handoff', label: 'Herdr handoff', description: 'Submit this run output through its capability-bound workflow handoff. Only writes the assigned output artifact.',
-    parameters: Type.Object({ outcome: StringEnum(['complete', 'blocked', 'failed'] as const), payload: Type.Optional(Type.Unknown()), message: Type.Optional(Type.String({ maxLength: 4096 })) }),
-    async execute(_id, params, signal) {
-      const runId = process.env.HERDR_RUN_ID; const outputPath = process.env.HERDR_OUTPUT; const schemaId = process.env.HERDR_OUTPUT_SCHEMA_ID; const schemaVersion = Number(process.env.HERDR_OUTPUT_SCHEMA_VERSION);
-      if (!runId) throw new Error('missing engine run identity');
-      const args = ['workflow', 'handoff', '--outcome', params.outcome];
-      if (params.outcome === 'complete' && outputPath) { if (!schemaId || !Number.isInteger(schemaVersion)) throw new Error('missing output schema identity'); mkdirSync(dirname(outputPath), { recursive: true }); writeFileSync(outputPath, JSON.stringify({ runId, schemaId, schemaVersion, payload: params.payload ?? null })); args.push('--artifact', outputPath) }
-      if (params.message) args.push('--message', params.message); args.push('--no-drain');
-      const result = await pi.exec('agentic-coding', args, { signal, timeout: 30_000 }); if (result.code !== 0) throw new Error(`handoff failed: ${(result.stderr || result.stdout).trim()}; the run outcome is already committed by the engine and must not be resubmitted`);
-      return { content: [{ type: 'text', text: 'Workflow handoff accepted.' }], details: { outcome: params.outcome }, terminate: true };
-    },
-  });
-  pi.on('session_start', () => pi.setActiveTools([...new Set([...pi.getActiveTools(), 'herdr_check', 'herdr_handoff'])]));
+  // Telemetry only: runtime lifecycle + usage events. Handoff and checks go
+  // through the agent's normal tools (`agentic-coding workflow handoff`).
   pi.on('agent_start', () => emit('runtime.started'));
   pi.on('agent_settled', () => emit('runtime.settled'));
   pi.on('tool_execution_end', (event: { toolName?: string; isError?: boolean }) => emit('runtime.tool', { tool: event.toolName, outcome: event.isError ? 'error' : 'ok' }));

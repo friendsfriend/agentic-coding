@@ -19,6 +19,7 @@ import {
   approvalFor,
   applyRepair,
   focusAgent,
+  focusGitPane,
   focusReturnWorkspace,
   loadDashboard,
   loadDeveloperReviewFindings,
@@ -41,6 +42,7 @@ import {
   type RequiredUserActionItem,
 } from "./data";
 import { watchDirectories } from "./watchRefresh";
+import { formatDuration } from "../../workflow/format";
 import { Badge } from "./ui/Badge";
 import { HighlightedText } from "./ui/Highlight";
 import { Layout } from "./ui/Layout";
@@ -748,7 +750,7 @@ export function App(props: {
       }
       if (activePanel() === 4) {
         try {
-          focusAgent(data().state, data().state.panes.git!);
+          focusGitPane(data().state);
         } catch (error) {
           setVerdictReturnToFindings(false);
           setVerdict({
@@ -1757,26 +1759,29 @@ export function App(props: {
                             </text>
                           </box>
                           <Show when={timeline()}>
-                            {(entry) => (
-                              <text
-                                fg={
-                                  entry().status === "PASS"
-                                    ? uiColors.success
-                                    : entry().status === "FAIL"
-                                      ? uiColors.error
-                                      : uiColors.warning
-                                }
-                              >
-                                {entry().status}
-                                {entry().durationSeconds !== undefined
-                                  ? ` · ${entry().durationSeconds}s`
-                                  : ""}
-                                {agent.cost
-                                  ? ` · $${agent.cost.toFixed(2)}`
-                                  : ""}
-                                {entry().fallback ? " · fallback" : ""}
-                              </text>
-                            )}
+                            {(entry) => {
+                              const duration = entry().durationSeconds;
+                              return (
+                                <text
+                                  fg={
+                                    entry().status === "PASS"
+                                      ? uiColors.success
+                                      : entry().status === "FAIL"
+                                        ? uiColors.error
+                                        : uiColors.warning
+                                  }
+                                >
+                                  {entry().status}
+                                  {duration !== undefined
+                                    ? ` · ${formatDuration(duration)}`
+                                    : ""}
+                                  {agent.cost
+                                    ? ` · $${agent.cost.toFixed(2)}`
+                                    : ""}
+                                  {entry().fallback ? " · fallback" : ""}
+                                </text>
+                              );
+                            }}
                           </Show>
                         </box>
                       </box>
