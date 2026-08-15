@@ -84,7 +84,7 @@ Named profiles select `pi`, `opencode`, or `opencode-v2`. Precedence:
 3. definition default
 4. global default
 
-Resolved non-secret route is pinned for workflow lifetime. Missing executable, unsupported read-only/tool policy, capability mismatch, or diversity violation fails before agent/pane creation. Runtime/model never falls back silently.
+Resolved non-secret route is pinned for workflow lifetime. Missing executable, unsupported tool policy, capability mismatch, or diversity violation fails before agent/pane creation. Runtime/model never falls back silently.
 
 All adapters use Herdr lifecycle only: create topology, wait for foreground shell, call `herdr agent start`, retry once only for unavailable shell, confirm with `herdr agent get`, then send full assignment with `herdr agent prompt`.
 

@@ -1,3 +1,8 @@
+## RENAMED Requirements
+
+- FROM: `### Requirement: Explicit resume after repair`
+- TO: `### Requirement: Explicit resume of paused workflow`
+
 ## MODIFIED Requirements
 
 ### Requirement: Validated workflow repair

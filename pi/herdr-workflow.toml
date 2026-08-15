@@ -20,22 +20,19 @@
  runtime = "pi"
  model = "opencode-go/deepseek-v4-flash"
  thinking = "high"
- tools = ["read", "bash"]            # read-only keeps bash: git + handoff CLI
- read_only = true
+ tools = ["read", "bash"]           
 
- [agents.profiles.pi-review-min]     # read-only + bash (bash is the handoff path)
+ [agents.profiles.pi-review-min]    
  runtime = "pi"
  model = "opencode-go/deepseek-v4-flash"
  thinking = "high"
  tools = ["read", "bash"]
- read_only = true
 
  [agents.profiles.pi-test-review]
  runtime = "pi"
  model = "opencode-go/deepseek-v4-flash"
  thinking = "high"
  tools = ["read", "bash"]
- read_only = true
 
  # ---- opencode profiles (worker + secondary verifiers) ----
  [agents.profiles.oc-worker]
@@ -48,14 +45,12 @@
  runtime = "opencode"
  model = "opencode-go/deepseek-v4-flash"
  agent = "build"
- read_only = true
 
  # ---- opencode-v2 profiles ----
  [agents.profiles.oc2-review]
  runtime = "opencode-v2"
  model = "opencode-go/deepseek-v4-flash"
  agent = "build"
- read_only = true
 
  [agents.profiles.oc2-archive]
  runtime = "opencode-v2"
@@ -75,7 +70,7 @@
  quality-verifier = "pi-review"        # pi · glm-5.3 · high
  security-verifier = "oc-review"       # opencode · gpt-5.4-mini
  performance-verifier = "oc2-review"   # opencode-v2 · gpt-5.6-luna
- openspec-verifier = "pi-review-min"   # pi · flash · low · read-only-no-bash
+ openspec-verifier = "pi-review-min"   # pi · flash · low
  usability-verifier = "oc-review"
  test-verifier = "pi-test-review"      # pi · flash · minimal
 

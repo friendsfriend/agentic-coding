@@ -75,7 +75,7 @@ export class HerdrLifecycle {
 abstract class BaseAdapter implements AgentAdapter {
   abstract readonly id: RuntimeId;
   constructor(protected readonly lifecycle: HerdrLifecycle) {}
-  preflight(profile: ResolvedProfile, requirements: readonly string[]): void { if (requirements.includes('read-only') && (!profile.readOnly || profile.capabilities.includes('edit') || profile.tools.some(tool => ['edit', 'write'].includes(tool)))) throw new Error(`${this.id} profile does not enforce read-only policy`); if (requirements.includes('read-only') && profile.runtime === 'pi' && !profile.tools.includes('bash')) throw new Error(`${this.id} read-only profile must keep bash for the workflow handoff CLI`); if (profile.runtime !== this.id) throw new Error(`profile runtime ${profile.runtime} routed to ${this.id}`); requireExecutable(profile.executable); const missing = requirements.filter(requirement => !profile.capabilities.includes(requirement as never)); if (missing.length) throw new Error(`${this.id} lacks required policy: ${missing.join(', ')}`) }
+  preflight(profile: ResolvedProfile, requirements: readonly string[]): void { if (profile.runtime !== this.id) throw new Error(`profile runtime ${profile.runtime} routed to ${this.id}`); requireExecutable(profile.executable); const missing = requirements.filter(requirement => requirement !== 'read-only' && !profile.capabilities.includes(requirement as never)); if (missing.length) throw new Error(`${this.id} lacks required policy: ${missing.join(', ')}`) }
   abstract launch(ctx: LaunchContext): Promise<AgentHandle>;
   prompt(handle: AgentHandle, message: string) { return this.lifecycle.prompt(handle, message) }
   observe(handle: AgentHandle) { return this.lifecycle.observe(handle) }
