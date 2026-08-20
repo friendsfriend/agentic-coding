@@ -27,8 +27,34 @@ printf '%s\\n' "$prompt" > "$dir/request.fifo" 2>/dev/null || exit 1
 timeout="\${AGENTIC_CODING_ASKPASS_TIMEOUT:-120}"
 if command -v timeout >/dev/null 2>&1; then
   answer="$(timeout "$timeout" cat "$dir/response.fifo" 2>/dev/null || true)"
+elif command -v gtimeout >/dev/null 2>&1; then
+  answer="$(gtimeout "$timeout" cat "$dir/response.fifo" 2>/dev/null || true)"
 else
-  answer="$(cat "$dir/response.fifo" 2>/dev/null || true)"
+  # Neither GNU coreutils' timeout(1) nor macOS's gtimeout is guaranteed to be
+  # on PATH. Without one of them, \`cat response.fifo\` blocks in open(2) until
+  # a writer connects and can hang forever, wedging the whole workflow runner.
+  # Enforce the same bound manually: read into a temp file in the background
+  # and poll it from the foreground, explicitly killing the reader once the
+  # deadline passes (a backgrounded \`sleep "$timeout"; kill ...\` companion
+  # process is not reliable here: a non-interactive shell blocked in a
+  # synchronous \`sleep\` does not act on a delivered SIGTERM until \`sleep\`
+  # itself returns, so waiting on that companion can still block for the
+  # full timeout).
+  tmp="$dir/response.\$\$.tmp"
+  cat "$dir/response.fifo" > "$tmp" 2>/dev/null &
+  reader="$!"
+  elapsed=0
+  while kill -0 "$reader" 2>/dev/null; do
+    if [ "$elapsed" -ge "$timeout" ]; then
+      kill "$reader" 2>/dev/null
+      break
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+  wait "$reader" 2>/dev/null
+  answer="$(cat "$tmp" 2>/dev/null || true)"
+  rm -f "$tmp"
 fi
 printf '%s' "$answer"
 `;

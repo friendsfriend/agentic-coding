@@ -86,14 +86,21 @@ async function ensureWorkspaceTabs(herdr: HerdrPort, workspace: string, worktree
   }
 }
 function runName(changeId: string, run: ReturnType<WorkflowEngine['getRun']>): string {
-  // Herdr caps agent names at 32 chars (^[a-z][a-z0-9_-]*$). Anchor uniqueness
-  // on role + run id; truncate the change id prefix when it does not fit.
-  const suffix = `-${run.role}-${run.id.slice(0, 8)}`;
+  // Herdr caps agent names at 32 chars (^[a-z][a-z0-9_-]*$). Grouped, one-shot
+  // roles (triage/verification) anchor uniqueness on role + run id so each
+  // round gets a fresh agent. Persistent single-role steps (planner, worker,
+  // archive) must keep one stable identity across every run/generation of
+  // that role within a workflow, so follow-up cycles (review comments,
+  // blocked/failed retries) reuse the existing agent via `herdr agent prompt`
+  // instead of always launching a new one.
+  const suffix = ['core.triage', 'core.verification'].includes(run.stepId)
+    ? `-${run.role}-${run.id.slice(0, 8)}`
+    : `-${run.role}`;
   const head = changeId.slice(0, Math.max(1, 32 - suffix.length));
   return `${head}${suffix}`.slice(0, 32);
 }
 export const effectRunnerTest = { runName };
-function renderedAssignment(engine: WorkflowEngine, repo: string, registry: WorkflowRegistry, runId: string, token: string) { const run = engine.getRun(repo, runId); const snapshot = engine.getSnapshot(repo, run.workflowId); const step = registry.step(run.stepId); const assignment = assignmentFor(run, snapshot, token); return { run, rendered: renderAssignment(step, assignment, `${workflowAssets(snapshot.metadata.worktree, snapshot.metadata.changeId)}/instructions`) } }
+function renderedAssignment(engine: WorkflowEngine, repo: string, registry: WorkflowRegistry, runId: string, token: string) { const run = engine.getRun(repo, runId); const snapshot = engine.getSnapshot(repo, run.workflowId); const step = registry.step(run.stepId); const assignment = assignmentFor(run, snapshot, token); return { run, assignment, rendered: renderAssignment(step, assignment, `${workflowAssets(snapshot.metadata.worktree, snapshot.metadata.changeId)}/instructions`) } }
 function runId(effect: ClaimedEffect): string { const id = String((effect.payload as { runId?: string }).runId ?? ''); if (!id) throw new Error(`effect ${effect.id} missing runId`); return id }
 function assignmentFor(run: ReturnType<WorkflowEngine['getRun']>, snapshot: ReturnType<WorkflowEngine['getSnapshot']>, token: string): Assignment {
   const output = run.outputPath && run.outputSchema ? { path: run.outputPath, schemaId: run.outputSchema.id, schemaVersion: run.outputSchema.version, maxBytes: 512 * 1024 } : undefined;

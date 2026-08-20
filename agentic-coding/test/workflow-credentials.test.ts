@@ -96,6 +96,41 @@ test('shim times out instead of hanging when no answer is ever provided', async 
   }
 });
 
+test('shim still times out instead of hanging when neither timeout(1) nor gtimeout(1) is on PATH', async () => {
+  // Regression test for a hang the test-verifier found: without `timeout`/
+  // `gtimeout` on PATH, the shim's fallback used to run a plain, unbounded
+  // `cat response.fifo`, blocking forever. Force that fallback deterministically
+  // (independent of whatever happens to be installed on the host running this
+  // suite) with a minimal PATH containing only the plain utilities the shim
+  // needs, and none named `timeout`/`gtimeout`.
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'credentials-minimal-bin-'));
+  const shim = installAskpassShim();
+  try {
+    for (const utility of ['cat', 'sleep', 'rm']) {
+      const resolved = Bun.which(utility);
+      if (!resolved) throw new Error(`test environment is missing required utility: ${utility}`);
+      fs.symlinkSync(resolved, path.join(binDir, utility));
+    }
+    const started = Date.now();
+    const proc = Bun.spawn([shim.shimPath, "Enter passphrase for key '/home/test/.ssh/id_ed25519':"], {
+      env: { AGENTIC_CODING_ASKPASS_DIR: shim.dir, AGENTIC_CODING_ASKPASS_TIMEOUT: '1', PATH: binDir, HOME: os.homedir() },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const reader = await fs.promises.open(shim.requestFifo, 'r');
+    await reader.readFile({ encoding: 'utf8' });
+    await reader.close();
+    const stdout = await new Response(proc.stdout).text();
+    const exitCode = await proc.exited;
+    expect(stdout).toBe('');
+    expect(exitCode).toBe(0);
+    expect(Date.now() - started).toBeLessThan(5000);
+  } finally {
+    cleanupAskpassShim(shim);
+    fs.rmSync(binDir, { recursive: true, force: true });
+  }
+});
+
 test('runner detects the prompt, feeds the answer, and the command completes', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'credentials-runner-'));
   try {
