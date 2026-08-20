@@ -25,7 +25,7 @@ function fixture() {
 
 function writeState(repo: string, change = 'review') {
   const baseCommit = runGit(repo, 'rev-parse', 'HEAD');
-  new WorkflowEngine(registerBuiltins()).start({ repo, changeId: change, definitionId: 'no-openspec', metadata: { branch: runGit(repo, 'branch', '--show-current'), baseBranch: 'main', baseCommit, task: 'test' }, routing: { defaultProfile: 'test', routes: [{ stepId: 'core.implementation', role: 'worker', profile: { name: 'test', runtime: 'pi', executable: 'sh', tools: [], extensions: [], readOnly: false, capabilities: ['prompt', 'run-environment', 'observe'], digest: 'test' } }], diversity: [] } });
+  new WorkflowEngine(registerBuiltins()).start({ repo, changeId: change, definitionId: 'no-openspec', metadata: { branch: runGit(repo, 'branch', '--show-current'), baseBranch: 'main', baseCommit, task: 'test' }, routing: { defaultProfile: 'test', routes: [{ stepId: 'core.implementation', role: 'worker', profile: { name: 'test', runtime: 'pi', executable: 'sh', tools: [], extensions: [], readOnly: false, capabilities: ['prompt', 'run-environment', 'observe'], digest: 'test' } }] } });
   return join(repo, '.herdr-workflow', change);
 }
 

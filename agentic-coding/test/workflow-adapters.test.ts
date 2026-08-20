@@ -17,9 +17,9 @@ function assignment(stepId = 'core.verification'): Assignment { return { protoco
 
 describe('profiles, assignments, and adapters', () => {
   test('routing precedence and diversity are deterministic', () => {
-    const registry = registerBuiltins(); const definition = registry.definition('no-openspec', 1); const config = parseAgentsConfig({ default_profile: 'default', profiles: { default: { runtime: 'pi' }, step: { runtime: 'opencode' }, role: { runtime: 'opencode-v2' } }, routes: { 'core.verification': 'step' }, role_routes: { 'core.verification': { 'quality-verifier': 'role' } }, runtime_diversity: [{ routes: ['core.implementation', 'core.verification/quality-verifier'] }] });
+    const registry = registerBuiltins(); const definition = registry.definition('no-openspec', 1); const config = parseAgentsConfig({ default_profile: 'default', profiles: { default: { runtime: 'pi' }, step: { runtime: 'opencode' }, role: { runtime: 'opencode-v2' } }, routes: { 'core.verification': 'step' }, role_routes: { 'core.verification': { 'quality-verifier': 'role' } } });
     expect(profileFor('core.verification', 'quality-verifier', definition, config).name).toBe('role'); expect(profileFor('core.verification', 'security-verifier', definition, config).name).toBe('step');
-    const routing = resolveRouting(definition, { 'core.implementation': ['worker'], 'core.verification': ['quality-verifier'] }, config); expect(routing.diversity[0]?.satisfied).toBe(true);
+    const routing = resolveRouting(definition, { 'core.implementation': ['worker'], 'core.verification': ['quality-verifier'] }, config); expect(routing.routes).toHaveLength(2);
   });
   test('renderer pins assets, bounds prompt, and uses generic handoff only', () => {
     const step = registerBuiltins().step('core.verification'); const rendered = renderAssignment(step, assignment()); expect(rendered.prompt).toContain('agentic-coding workflow handoff --outcome complete'); expect(rendered.prompt).not.toContain('/skill:'); expect(rendered.prompt).not.toContain('HERDR_RUN_TOKEN'); expect(rendered.prompt).not.toContain('herdr_'); expect(rendered.prompt).toContain(`"runId": "run"`); expect(rendered.prompt).toContain('each item requires unique string `id`');
