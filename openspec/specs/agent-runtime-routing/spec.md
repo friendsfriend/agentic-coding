@@ -2,9 +2,7 @@
 
 ## Purpose
 Routes each workflow run through a pinned, capability-checked agent-runtime profile while supporting Pi, OpenCode, and OpenCode V2 without coupling workflow semantics to any one agent product.
-
 ## Requirements
-
 ### Requirement: Named agent profiles
 Configuration SHALL define named agent profiles containing runtime identifier and runtime-specific model/options, plus default profile.
 
@@ -79,19 +77,6 @@ The system SHALL provide adapters for Pi, stable OpenCode `opencode`, and offici
 - **THEN** preflight SHALL fail with runtime/profile diagnostic before state advances or pane is created
 - **AND** engine SHALL NOT install executable automatically
 
-### Requirement: Optional runtime diversity constraints
-Configuration SHALL allow workflow to require selected steps or roles to use different runtime identifiers.
-
-#### Scenario: Implementation and verification differ
-- **WHEN** workflow requires runtime diversity and routes implementation to Pi and verification to OpenCode V2
-- **THEN** routing validation SHALL pass
-- **AND** pinned view SHALL expose satisfied constraint
-
-#### Scenario: Diversity constraint is violated
-- **WHEN** constrained implementation and verification resolve to same runtime
-- **THEN** workflow start SHALL fail before any role launches
-- **AND** error SHALL name conflicting routes
-
 ### Requirement: No implicit runtime fallback
 Agent launch or execution failure SHALL NOT silently switch profile, runtime, model, or executable.
 
@@ -99,3 +84,4 @@ Agent launch or execution failure SHALL NOT silently switch profile, runtime, mo
 - **WHEN** selected adapter cannot launch configured runtime
 - **THEN** run SHALL become blocked or effect SHALL remain failed according to retry policy
 - **AND** alternate runtime SHALL require explicit configured retry policy or validated operator repair
+

@@ -7,7 +7,7 @@ import { loadAssignments } from './agent-extensions.ts';
 export interface ProfileConfig { runtime: RuntimeId; executable?: string; model?: string; agent?: string; thinking?: string; tools?: string[]; extensions?: string[]; capabilities?: AdapterCapability[] }
 export interface AgentsConfig {
   default_profile: string; profiles: Record<string, ProfileConfig>; routes?: Record<string, string>;
-  role_routes?: Record<string, Record<string, string>>; definition_defaults?: Record<string, string>; runtime_diversity?: Array<{ routes?: string[]; steps?: string[] }>;
+  role_routes?: Record<string, Record<string, string>>; definition_defaults?: Record<string, string>;
 }
 const RUNTIME_OPTIONS: Record<string, Set<string>> = {
   pi: new Set(['runtime', 'executable', 'model', 'thinking', 'tools', 'extensions', 'capabilities']),
@@ -49,14 +49,7 @@ export function resolveRouting(definition: CompiledWorkflowDefinition, rolesBySt
     if (!roles.length) routes.push({ stepId, profile: profileFor(stepId, undefined, definition, config) });
     else for (const role of roles) routes.push({ stepId, role, profile: profileFor(stepId, role, definition, config) });
   }
-  const diversity = (config.runtime_diversity ?? []).map(rule => {
-    const names = rule.routes ?? rule.steps ?? [];
-    const selected = routes.filter(route => names.includes(route.role ? `${route.stepId}/${route.role}` : route.stepId) || names.includes(route.stepId));
-    const satisfied = selected.length > 1 && new Set(selected.map(route => route.profile.runtime)).size === selected.length;
-    if (!satisfied) throw new Error(`runtime diversity violated: ${names.join(', ')}`);
-    return { routes: names, satisfied };
-  });
-  return { defaultProfile: config.default_profile, routes, diversity };
+  return { defaultProfile: config.default_profile, routes };
 }
 export function preflightProfile(profile: ResolvedProfile, requirements: readonly AdapterCapability[]): void { const executable = profile.executable; const resolved = executable.startsWith('/') ? executable : Bun.which(executable); if (!resolved) throw new Error(`configured runtime executable not found for profile ${profile.name}: ${executable}`); validateProfileRequirements(profile, requirements) }
 export function validateProfileRequirements(profile: ResolvedProfile, requirements: readonly AdapterCapability[]): void {

@@ -42,7 +42,7 @@ describe('breaking workflow CLI surface', () => {
     try {
       execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo }); fs.writeFileSync(path.join(repo, 'README.md'), 'x\n'); execFileSync('git', ['add', '.'], { cwd: repo }); execFileSync('git', ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '-qm', 'base'], { cwd: repo });
       const profile = { name: 'pi', runtime: 'pi' as const, executable: 'sh', tools: [], extensions: [], readOnly: false, capabilities: ['prompt', 'run-environment', 'observe'] as const, digest: 'profile' };
-      const routing = { defaultProfile: 'pi', routes: [{ stepId: 'core.implementation', role: 'worker', profile }, { stepId: 'core.triage', role: 'triage', profile }, { stepId: 'core.verification', profile }], diversity: [] };
+      const routing = { defaultProfile: 'pi', routes: [{ stepId: 'core.implementation', role: 'worker', profile }, { stepId: 'core.triage', role: 'triage', profile }, { stepId: 'core.verification', profile }] };
       const registry = registerBuiltins(); const workflowEngine = new WorkflowEngine(registry);
       const started = workflowEngine.start({ repo, changeId: 'handoff-identity', definitionId: 'no-openspec', metadata: { branch: 'main', baseBranch: 'main', baseCommit: 'base', task: 'task' }, routing });
       const handlers = agentEffectHandlers(repo, workflowEngine, { registry, adapters: new Map([['pi', new StubAdapter()]]), herdr: stubHerdr(), async paneForRun() { return { paneId: 'pane' } } });
@@ -79,7 +79,7 @@ describe('breaking workflow CLI surface', () => {
     try {
       execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo }); fs.writeFileSync(path.join(repo, 'README.md'), 'x\n'); execFileSync('git', ['add', '.'], { cwd: repo }); execFileSync('git', ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '-qm', 'base'], { cwd: repo });
       const profile = { name: 'pi', runtime: 'pi' as const, executable: 'sh', tools: [], extensions: [], readOnly: false, capabilities: ['prompt', 'run-environment', 'observe'] as const, digest: 'profile' };
-      const routing = { defaultProfile: 'pi', routes: [{ stepId: 'core.implementation', role: 'worker', profile }, { stepId: 'core.triage', role: 'triage', profile }, { stepId: 'core.verification', profile }], diversity: [] };
+      const routing = { defaultProfile: 'pi', routes: [{ stepId: 'core.implementation', role: 'worker', profile }, { stepId: 'core.triage', role: 'triage', profile }, { stepId: 'core.verification', profile }] };
       const registry = registerBuiltins(); const workflowEngine = new WorkflowEngine(registry);
       const started = workflowEngine.start({ repo, changeId: 'repair-race', definitionId: 'no-openspec', metadata: { branch: 'main', baseBranch: 'main', baseCommit: 'base', task: 'task' }, routing });
       const handlers = agentEffectHandlers(repo, workflowEngine, { registry, adapters: new Map([['pi', new StubAdapter()]]), herdr: stubHerdr(), async paneForRun() { return { paneId: 'pane' } } });
