@@ -69,7 +69,7 @@
  # ---- step routing ----
  [agents.routes]
  "core.plan" = "pi-planner"            # strongest model, max thinking
- "core.implementation" = "oc-worker"   # opencode does the editing
+ "core.implementation" = "pi-worker"   # opencode does the editing
  "core.triage" = "pi-review"
  "core.verification" = "pi-review"     # fallback when no role route
  "core.archive" = "pi-archive"
