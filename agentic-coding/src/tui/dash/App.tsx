@@ -170,11 +170,9 @@ export function App(props: {
   const [completedPicker, setCompletedPicker] = createSignal(false);
   const [completedSelection, setCompletedSelection] = createSignal(0);
   const [actionReason, setActionReason] = createSignal("");
-  const [actionConfirmed, setActionConfirmed] = createSignal(false);
   const [repairOpen, setRepairOpen] = createSignal(false);
   const [repairTargets, setRepairTargets] = createSignal<Array<{ targetStep: string; label: string; expiresRuns: string[]; retainedEvidence: string[] }>>([]);
   const [repairSelection, setRepairSelection] = createSignal(0);
-  const [repairReason, setRepairReason] = createSignal("");
   // On-demand credential popup (askpass bridge): `pendingCredentialRequest()`
   // is set by the in-process effect runner while a git command awaits an SSH
   // passphrase. The popup keymap layer must not be gated on busy() because the
@@ -789,7 +787,7 @@ export function App(props: {
   });
   const completedActions = () => data().state.availableActions?.map(action => ({ label: action.label, command: action.id, confirmation: action.confirmation })) ?? [];
   const actionSignature = createMemo(() => completedActions().map(action => `${action.command}:${action.confirmation}`).join('\0')); let previousActionSignature: string | undefined;
-  createEffect(() => { const next = actionSignature(); if (previousActionSignature !== undefined && next !== previousActionSignature) { setCompletedSelection(0); setActionConfirmed(false); setActionReason('') } previousActionSignature = next });
+  createEffect(() => { const next = actionSignature(); if (previousActionSignature !== undefined && next !== previousActionSignature) { setCompletedSelection(0); setActionReason('') } previousActionSignature = next });
   const openRequiredUserAction = () => {
     const action = requiredUserAction();
     if (!action || (promptedUserActionKey === action.key && activePanel() !== 0))
@@ -949,7 +947,7 @@ export function App(props: {
       return;
     }
     if (name === "o" && key.shift) {
-      try { setRepairTargets(previewRepair(props.repo, props.change)); setRepairSelection(0); setRepairReason(""); setRepairOpen(true); props.keymap.setData("modal.active", "repair"); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)) }
+      try { setRepairTargets(previewRepair(props.repo, props.change)); setRepairSelection(0); setRepairOpen(true); props.keymap.setData("modal.active", "repair"); } catch (error) { setMessage(error instanceof Error ? error.message : String(error)) }
       return;
     }
     if (name === "?") {
@@ -1107,7 +1105,7 @@ export function App(props: {
       }
       if (approval.action === "completed-actions") {
         setCompletedPicker(true);
-        setCompletedSelection(0); setActionReason(""); setActionConfirmed(false);
+        setCompletedSelection(0); setActionReason("");
         props.keymap.setData("modal.active", "completed-picker");
         return;
       }
@@ -1251,8 +1249,8 @@ export function App(props: {
     });
     const disposeRepair = props.keymap.registerLayer({
       name: "repair", priority: 1000, activeModal: "repair",
-      commands: [{ name: "repair.handle", run: ({ event }) => { const key = event.name.toLowerCase(); if (key === "escape") { setRepairOpen(false); props.keymap.setData("modal.active", "none") } else if (key === "j" || key === "down") { setRepairSelection(index => Math.min(repairTargets().length - 1, index + 1)) } else if (key === "k" || key === "up") { setRepairSelection(index => Math.max(0, index - 1)) } else if (key === "backspace") { setRepairReason(value => value.slice(0, -1)) } else if (key === "enter" || key === "return") { const target = repairTargets()[repairSelection()]; if (!target || !repairReason().trim()) setMessage("Repair reason is required"); else { try { applyRepair(props.repo, props.change, data().state.revision, target.targetStep, repairReason()); setRepairOpen(false); props.keymap.setData("modal.active", "none"); refresh(); setMessage(`Repaired to ${target.label}: phase retriggered`) } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); refresh() } } } else if (key.length === 1 && !event.ctrl && !event.meta) { setRepairReason(value => `${value}${key}`.slice(0, 256)) } else if (key === "space") { setRepairReason(value => `${value} `.slice(0, 256)) } return true } }],
-      bindings: ["escape", "enter", "return", "j", "k", "up", "down", "backspace", "space", ..."abcdefghijklmnopqrstuvwxyz0123456789-_.".split("")].map(key => ({ key, cmd: "repair.handle" })),
+      commands: [{ name: "repair.handle", run: ({ event }) => { const key = event.name.toLowerCase(); if (key === "escape") { setRepairOpen(false); props.keymap.setData("modal.active", "none") } else if (key === "j" || key === "down") { setRepairSelection(index => Math.min(repairTargets().length - 1, index + 1)) } else if (key === "k" || key === "up") { setRepairSelection(index => Math.max(0, index - 1)) } else if (key === "enter" || key === "return") { const target = repairTargets()[repairSelection()]; if (!target) return true; try { applyRepair(props.repo, props.change, data().state.revision, target.targetStep, ""); setRepairOpen(false); props.keymap.setData("modal.active", "none"); refresh(); setMessage(`Repaired to ${target.label}: phase retriggered`) } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); refresh() } } return true } }],
+      bindings: ["escape", "enter", "return", "j", "k", "up", "down"].map(key => ({ key, cmd: "repair.handle" })),
     });
     const disposeCompletedPicker = props.keymap.registerLayer({
       name: "completed-picker",
@@ -1267,14 +1265,14 @@ export function App(props: {
             if (key === "escape") {
               setCompletedPicker(false);
               props.keymap.setData("modal.active", "none");
-            } else if (key === "j" || key === "down") { setCompletedSelection((index) => Math.min(Math.max(0, completedActions().length - 1), index + 1)); setActionConfirmed(false) }
-            else if (key === "k" || key === "up") { setCompletedSelection((index) => Math.max(0, index - 1)); setActionConfirmed(false) }
-            else if (key === 'backspace' && completedActions()[completedSelection()]?.confirmation === 'reason') { setActionReason(value => value.slice(0, -1)); setActionConfirmed(false) }
-            else if (key === 'space' && completedActions()[completedSelection()]?.confirmation === 'reason') { setActionReason(value => `${value} `.slice(0, 2048)); setActionConfirmed(false) }
-            else if (key.length === 1 && !event.ctrl && !event.meta && completedActions()[completedSelection()]?.confirmation === 'reason') { setActionReason(value => `${value}${key}`.slice(0, 2048)); setActionConfirmed(false) }
+            } else if (key === "j" || key === "down") { setCompletedSelection((index) => Math.min(Math.max(0, completedActions().length - 1), index + 1)) }
+            else if (key === "k" || key === "up") { setCompletedSelection((index) => Math.max(0, index - 1)) }
+            else if (key === 'backspace' && completedActions()[completedSelection()]?.confirmation === 'reason') { setActionReason(value => value.slice(0, -1)) }
+            else if (key === 'space' && completedActions()[completedSelection()]?.confirmation === 'reason') { setActionReason(value => `${value} `.slice(0, 2048)) }
+            else if (key.length === 1 && !event.ctrl && !event.meta && completedActions()[completedSelection()]?.confirmation === 'reason') { setActionReason(value => `${value}${key}`.slice(0, 2048)) }
             else if (key === "enter" || key === "return") {
               const action = completedActions()[completedSelection()];
-              if (!action) return true; if (action.confirmation === 'reason' && !actionReason().trim()) { setMessage('Action reason is required'); return true } if (action.confirmation !== 'none' && !actionConfirmed()) { setActionConfirmed(true); setMessage(`Press Enter again to confirm ${action.label}`); return true }
+              if (!action) return true; if (action.confirmation === 'reason' && !actionReason().trim()) { setMessage('Action reason is required'); return true }
               setCompletedPicker(false);
               props.keymap.setData("modal.active", "none");
               setBusy(true);
@@ -2216,24 +2214,24 @@ export function App(props: {
       />
       <Show when={repairOpen()}>
         <ListViewModal
-          title={`Repair r${data().state.revision} · reason: ${repairReason() || "(type reason)"} · ENTER repairs`}
+          title={`Repair r${data().state.revision} · ENTER repairs`}
           fieldLabel="Compatible target"
           items={repairTargets().map(target => `${target.label} · expire [${target.expiresRuns.slice(0, 4).join(', ') || 'none'}${target.expiresRuns.length > 4 ? ', …' : ''}] · retain [${target.retainedEvidence.slice(0, 4).join(', ') || 'none'}${target.retainedEvidence.length > 4 ? ', …' : ''}]`)}
           selectedIndex={repairSelection()}
-          help={[{ key: "j/k", action: "Target" }, { key: "type", action: "Reason" }, { key: "Enter", action: "Repair" }, { key: "Esc", action: "Cancel" }]}
+          help={[{ key: "j/k", action: "Target" }, { key: "Enter", action: "Repair" }, { key: "Esc", action: "Cancel" }]}
           renderItem={(item, selected) => <text fg={selected ? uiColors.primary : uiColors.textSecondary}>{item}</text>}
         />
       </Show>
       <Show when={completedPicker()}>
         <ListViewModal
-          title={`Choose workflow action · ${actionReason() || (completedActions()[completedSelection()]?.confirmation === 'reason' ? 'type reason' : actionConfirmed() ? 'confirmed' : 'confirmation required')}`}
+          title={`Choose workflow action · ${actionReason() || (completedActions()[completedSelection()]?.confirmation === 'reason' ? 'type reason' : 'Enter to run')}`}
           fieldLabel="Action"
           items={completedActions().map(action => action.label)}
           selectedIndex={completedSelection()}
           help={[
             { key: "j/k", action: "Navigate" },
             { key: "type", action: "Reason when required" },
-            { key: "Enter×2", action: "Confirm and run" },
+            { key: "Enter", action: "Run" },
             { key: "Esc", action: "Cancel" },
           ]}
           renderItem={(item, selected) => (

@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { registerBuiltins } from '../src/workflow/definitions.ts';
-import { parseSnapshot, type ResolvedProfile, type WorkflowRouting } from '../src/workflow/contracts.ts';
+import { commandContract, parseSnapshot, type ResolvedProfile, type WorkflowRouting } from '../src/workflow/contracts.ts';
 import { WorkflowEngine, WorkflowRuntimeError, canonicalStorePath, validateChangeId } from '../src/workflow/runtime.ts';
 
 function repository(root: string): string { fs.mkdirSync(root, { recursive: true }); execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root }); execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: root }); execFileSync('git', ['config', 'user.name', 'Test'], { cwd: root }); fs.writeFileSync(path.join(root, 'README.md'), 'test\n'); fs.mkdirSync(path.join(root, 'openspec')); fs.writeFileSync(path.join(root, 'openspec', 'config.yaml'), 'schema: spec-driven\n'); execFileSync('git', ['add', '.'], { cwd: root }); execFileSync('git', ['commit', '-qm', 'base'], { cwd: root }); return root }
@@ -41,6 +41,20 @@ describe('transactional workflow runtime', () => {
       expect(() => engine.dispatch(repo, { type: 'developer.action', workflowId: result.view.workflowId, revision: 0, actionId: 'approve-plan' })).toThrow(/stale revision/);
       const approved = engine.dispatch(repo, { type: 'developer.action', workflowId: result.view.workflowId, revision: repaired.view.revision, actionId: 'approve-plan' }); expect(approved.view.currentStep.id).toBe('core.implementation');
       expect(() => engine.dispatch(repo, { type: 'developer.action', workflowId: result.view.workflowId, revision: repaired.view.revision, actionId: 'approve-plan' })).toThrow(/stale revision/);
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }) }
+  });
+  test('repair accepts omitted and empty reasons', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-repair-empty-reason-')); try {
+      const repo = repository(path.join(tmp, 'repo')); const engine = new WorkflowEngine(registerBuiltins());
+      const started = engine.start({ repo, changeId: 'repair-empty', definitionId: 'no-openspec', metadata: { branch: 'main', baseBranch: 'main', baseCommit: 'base', task: 'task' }, routing: routing() });
+      const omitted = commandContract.parse({ type: 'operator.repair', workflowId: started.view.workflowId, revision: started.view.revision, targetStep: 'core.implementation' }) as Extract<import('../src/workflow/contracts.ts').WorkflowCommand, { type: 'operator.repair' }>;
+      expect(omitted.reason).toBe('');
+      const repaired = engine.dispatch(repo, { ...omitted });
+      expect(repaired.snapshot.repaired?.reason).toBe('');
+      const parsed = parseSnapshot({ ...repaired.snapshot, repaired: { ...repaired.snapshot.repaired!, reason: '' } });
+      expect(parsed.repaired?.reason).toBe('');
+      const empty = engine.dispatch(repo, { type: 'operator.repair', workflowId: started.view.workflowId, revision: repaired.view.revision, targetStep: 'core.implementation', reason: '' });
+      expect(empty.snapshot.repaired?.reason).toBe('');
     } finally { fs.rmSync(tmp, { recursive: true, force: true }) }
   });
   test('review-comments at plan approval returns to planning with feedback and review-fix mode', () => { const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'workflow-plan-comments-')); try { const repo = repository(path.join(tmp, 'repo')); const engine = new WorkflowEngine(registerBuiltins()); const result = engine.start({ repo, changeId: 'plan-comments', definitionId: 'standard', metadata: { branch: 'main', baseBranch: 'main', baseCommit: 'base' }, routing: routing() }); const atGate = engine.dispatch(repo, { type: 'operator.repair', workflowId: result.view.workflowId, revision: 0, targetStep: 'core.plan-approval', reason: 'operator confirmed evidence' }); const comments = [{ comment: 'clarify scope', file: 'proposal.md', line: 3 }, { comment: 'design needs a diagram', file: 'design.md', line: 7, startLine: 7, endLine: 9 }]; const reentered = engine.dispatch(repo, { type: 'developer.action', workflowId: result.view.workflowId, revision: atGate.view.revision, actionId: 'review-comments', input: { comments } }); expect(reentered.view.currentStep.id).toBe('core.plan'); expect(reentered.snapshot.step.mode).toBe('review-fix'); expect(reentered.snapshot.step.context).toEqual(JSON.parse(JSON.stringify({ comments }))); expect(engine.getRun(repo, result.view.runs[0]!.id).status).toBe('expired') } finally { fs.rmSync(tmp, { recursive: true, force: true }) } });
