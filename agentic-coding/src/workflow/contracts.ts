@@ -26,6 +26,11 @@ function text(value: unknown, at: string, max = 4096): string {
   if (typeof value !== 'string' || !value.trim() || value.length > max) throw new ContractFailure(at, [{ path: at, message: `expected non-empty string <= ${max} bytes` }]);
   return value;
 }
+function boundedText(value: unknown, at: string, max = 4096): string {
+  if (value === undefined || value === null) return '';
+  if (typeof value !== 'string' || value.length > max) throw new ContractFailure(at, [{ path: at, message: `expected string <= ${max} bytes` }]);
+  return value;
+}
 function integer(value: unknown, at: string, min = 0): number {
   if (!Number.isInteger(value) || Number(value) < min) throw new ContractFailure(at, [{ path: at, message: `expected integer >= ${min}` }]);
   return Number(value);
@@ -38,7 +43,7 @@ function enumValue<const T extends readonly string[]>(value: unknown, at: string
   if (typeof value !== 'string' || !values.includes(value as T[number])) throw new ContractFailure(at, [{ path: at, message: `expected ${values.join('|')}` }]);
   return value as T[number];
 }
-export const validation = { object, text, integer, strings, enumValue };
+export const validation = { object, text, boundedText, integer, strings, enumValue };
 
 export interface DefinitionPin { id: string; version: number; digest: string }
 export interface ResolvedProfile {
@@ -101,7 +106,7 @@ export const commandContract: Contract<WorkflowCommand> = {
     if (type === 'developer.action') return { type, workflowId: text(input.workflowId, '$.workflowId'), revision: integer(input.revision, '$.revision'), actionId: text(input.actionId, '$.actionId'), input: input.input };
     if (type === 'agent.handoff') return { type, runId: text(input.runId, '$.runId'), generation: integer(input.generation, '$.generation', 1), token: text(input.token, '$.token', 1024), outcome: enumValue(input.outcome, '$.outcome', ['complete', 'blocked', 'failed']), ...(input.artifact === undefined ? {} : { artifact: text(input.artifact, '$.artifact') }), ...(input.message === undefined ? {} : { message: text(input.message, '$.message', 4096) }) };
     if (type === 'effect.result') return { type, effectId: text(input.effectId, '$.effectId'), lease: text(input.lease, '$.lease'), outcome: enumValue(input.outcome, '$.outcome', ['complete', 'retry', 'failed']), data: input.data };
-    if (type === 'operator.repair') return { type, workflowId: text(input.workflowId, '$.workflowId'), revision: integer(input.revision, '$.revision'), targetStep: text(input.targetStep, '$.targetStep'), reason: text(input.reason, '$.reason', 2048) };
+    if (type === 'operator.repair') return { type, workflowId: text(input.workflowId, '$.workflowId'), revision: integer(input.revision, '$.revision'), targetStep: text(input.targetStep, '$.targetStep'), reason: boundedText(input.reason, '$.reason', 2048) };
     if (type === 'operator.repin') return { type, workflowId: text(input.workflowId, '$.workflowId'), revision: integer(input.revision, '$.revision') };
     if (type === 'operator.resume') return { type, workflowId: text(input.workflowId, '$.workflowId'), revision: integer(input.revision, '$.revision') };
     throw new ContractFailure('core.workflow-command', [{ path: '$.type', message: 'unknown command' }]);
@@ -124,7 +129,7 @@ export function parseSnapshot(value: unknown): WorkflowSnapshot {
     metadata: { repository: path.resolve(text(metadata.repository, '$.metadata.repository')), worktree: path.resolve(text(metadata.worktree, '$.metadata.worktree')), changeId: text(metadata.changeId, '$.metadata.changeId'), branch: text(metadata.branch, '$.metadata.branch'), baseBranch: text(metadata.baseBranch, '$.metadata.baseBranch'), baseCommit: text(metadata.baseCommit, '$.metadata.baseCommit'), ...(metadata.workspace === undefined ? {} : { workspace: text(metadata.workspace, '$.metadata.workspace') }), ...(metadata.task === undefined ? {} : { task: text(metadata.task, '$.metadata.task', 65536) }), ...(metadata.ticket === undefined ? {} : { ticket: text(metadata.ticket, '$.metadata.ticket') }), createdAt: text(metadata.createdAt, '$.metadata.createdAt'), updatedAt: text(metadata.updatedAt, '$.metadata.updatedAt'), stepEnteredAt: text(metadata.stepEnteredAt, '$.metadata.stepEnteredAt') },
     routing: { defaultProfile: text(routing.defaultProfile, '$.routing.defaultProfile'), routes: (() => { if (!Array.isArray(routing.routes)) throw new ContractFailure('core.workflow-snapshot', [{ path: '$.routing.routes', message: 'expected array' }]); return routing.routes.map((entry, i) => { const item = object(entry, `$.routing.routes[${i}]`); return { stepId: text(item.stepId, `$.routing.routes[${i}].stepId`), ...(item.role === undefined ? {} : { role: text(item.role, `$.routing.routes[${i}].role`) }), profile: profile(item.profile, `$.routing.routes[${i}].profile`) } }) })(), diversity: (() => { if (!Array.isArray(routing.diversity)) throw new ContractFailure('core.workflow-snapshot', [{ path: '$.routing.diversity', message: 'expected array' }]); return routing.diversity.map((entry, i) => { const item = object(entry, `$.routing.diversity[${i}]`); if (typeof item.satisfied !== 'boolean') throw new ContractFailure('core.workflow-routing', [{ path: `$.routing.diversity[${i}].satisfied`, message: 'expected boolean' }]); return { routes: strings(item.routes, `$.routing.diversity[${i}].routes`), satisfied: item.satisfied } }) })() },
     evidence: (() => { if (!Array.isArray(input.evidence)) throw new ContractFailure('core.workflow-snapshot', [{ path: '$.evidence', message: 'expected array' }]); return input.evidence.map((entry, i) => { const item = object(entry, `$.evidence[${i}]`); return { kind: text(item.kind, `$.evidence[${i}].kind`), path: text(item.path, `$.evidence[${i}].path`), digest: text(item.digest, `$.evidence[${i}].digest`) } }) })(), loopCounts: (() => { const counts = object(input.loopCounts, '$.loopCounts'); return Object.fromEntries(Object.entries(counts).map(([key, value]) => [key, integer(value, `$.loopCounts.${key}`)])) })(), attention: strings(input.attention, '$.attention'),
-    ...(input.repaired && typeof input.repaired === 'object' ? (() => { const item = object(input.repaired, '$.repaired'); return { repaired: { reason: text(item.reason, '$.repaired.reason'), fromStep: text(item.fromStep, '$.repaired.fromStep'), at: text(item.at, '$.repaired.at') } } })() : {}),
+    ...(input.repaired && typeof input.repaired === 'object' ? (() => { const item = object(input.repaired, '$.repaired'); return { repaired: { reason: boundedText(item.reason, '$.repaired.reason'), fromStep: text(item.fromStep, '$.repaired.fromStep'), at: text(item.at, '$.repaired.at') } } })() : {}),
   };
   if (snapshot.schemaVersion !== 1) throw new ContractFailure('core.workflow-snapshot', [{ path: '$.schemaVersion', message: 'expected 1' }]);
   if (snapshot.status === 'active' && ['core.completed', 'core.closed'].includes(snapshot.currentStep)) throw new ContractFailure('core.workflow-snapshot', [{ path: '$.status', message: 'terminal step cannot be active' }]);

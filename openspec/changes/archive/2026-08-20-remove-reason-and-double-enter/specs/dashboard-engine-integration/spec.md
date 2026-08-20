@@ -1,8 +1,5 @@
-# dashboard-engine-integration Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change dashboard-in-process-engine. Update Purpose after archive.
-## Requirements
 ### Requirement: In-process engine use
 Dashboard SHALL invoke unified workflow command runtime in-process and submit only action identifiers returned in latest workflow view.
 
@@ -26,27 +23,6 @@ Dashboard SHALL invoke unified workflow command runtime in-process and submit on
 - **THEN** it SHALL invoke `agentic-coding workflow handoff` directly
 - **AND** dashboard in-process execution SHALL not require or preserve legacy shim
 
-### Requirement: Single shared Herdr client
-There SHALL be one Herdr client module that parses the `.result` envelope and provides pane-geometry helpers, consumed by both the engine and the dashboard.
-
-#### Scenario: One envelope parser
-- **WHEN** a developer inspects Herdr access across the codebase
-- **THEN** the `.result` envelope SHALL be parsed in exactly one module
-- **AND** pane-geometry/direction math SHALL be defined once and reused (not duplicated between engine launch logic and dashboard focus logic)
-
-### Requirement: Event-driven refresh
-Dashboard SHALL refresh from canonical workflow events, outbox status, runtime observations, and telemetry updates rather than fixed phase assumptions.
-
-#### Scenario: Refresh reacts to workflow output
-- **WHEN** state revision or effect status changes
-- **THEN** dashboard SHALL refresh validated workflow view
-- **AND** it SHALL render current step/run state and available actions from view
-
-#### Scenario: Runtime observation changes
-- **WHEN** Herdr agent status or telemetry changes without state revision
-- **THEN** dashboard MAY refresh observation panels
-- **AND** observation SHALL not be presented as committed step completion
-
 ### Requirement: Engine-provided workflow view
 Dashboard SHALL consume one typed workflow view containing revision, pinned definition, current step, active runs, resolved runtime/profile per run, validation/attention state, and available actions.
 
@@ -60,4 +36,3 @@ Dashboard SHALL consume one typed workflow view containing revision, pinned defi
 - **THEN** dashboard SHALL request compatible targets from engine
 - **AND** repair modal SHALL show revision, target, and affected runs before dispatch, without a reason requirement
 - **AND** a single Enter SHALL dispatch repair with current revision regardless of whether a reason was provided
-

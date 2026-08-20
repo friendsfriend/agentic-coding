@@ -12,7 +12,7 @@ import type { CredentialPrompt } from './credentials.ts';
 import { manageAgentExtension } from './agent-extensions.ts';
 
 export const SUBCOMMANDS = ['start', 'status', 'action', 'handoff', 'repair', 'repin', 'projects', 'config', 'agent-extension'] as const;
-export const REQUIRED_FLAGS: Record<string, string[]> = { start: ['repo', 'change', 'mode'], status: ['repo', 'change'], action: ['repo', 'change', 'revision'], repair: ['repo', 'change', 'revision', 'step', 'reason'], repin: ['repo', 'change'], handoff: ['outcome'] };
+export const REQUIRED_FLAGS: Record<string, string[]> = { start: ['repo', 'change', 'mode'], status: ['repo', 'change'], action: ['repo', 'change', 'revision'], repair: ['repo', 'change', 'revision', 'step'], repin: ['repo', 'change'], handoff: ['outcome'] };
 export const AGENT_EXTENSION_SUBCOMMANDS = ['list', 'install', 'install-local'] as const;
 export const PLUGIN_SUBCOMMANDS = AGENT_EXTENSION_SUBCOMMANDS;
 const registry = registerBuiltins(undefined, loadConfig().workflow.max_verification_rounds);
@@ -51,7 +51,7 @@ function help(command?: string): void {
   const usage: Record<string, string> = {
     start: 'start --repo PATH --change ID --mode worktree|checkout [--workflow standard|direct-apply|no-openspec] [--task TEXT] [--ticket ID]',
     status: 'status --repo PATH --change ID', action: 'action ACTION_ID --repo PATH --change ID --revision N [--input JSON_OR_PATH]',
-    handoff: 'handoff --outcome complete|blocked|failed [--artifact PATH] [--message TEXT]', repair: 'repair --repo PATH --change ID --revision N --step STEP --reason TEXT [--confirm]',
+    handoff: 'handoff --outcome complete|blocked|failed [--artifact PATH] [--message TEXT]', repair: 'repair --repo PATH --change ID --revision N --step STEP [--reason TEXT] [--confirm]',
     projects: 'projects', config: 'config', 'agent-extension': 'agent-extension list|install SOURCE|install-local PATH [--profile NAME]',
   }; console.log(`Usage: agentic-coding workflow ${usage[command] ?? command}`);
 }
@@ -95,7 +95,7 @@ export async function run(argv: string[]): Promise<void> {
     if (!rest.includes('--no-drain')) await drainEffects(workflowEngine, process.cwd()); else { const entry = Bun.main.startsWith('$bunfs') ? undefined : Bun.main; const drain = Bun.spawn(detachedDrainArgv(entry, process.cwd(), result.view.changeId), { detached: true, stdio: ['ignore', 'ignore', 'ignore'], cwd: process.cwd(), env: process.env }); const deadline = Date.now() + 2000; while (Date.now() < deadline && drain.exitCode === null) Bun.sleepSync(50); if (drain.exitCode !== null && drain.exitCode !== 0) console.error(`detached drain exited early (${drain.exitCode}); run status to drain pending effects`); drain.unref() }
     console.log(JSON.stringify(workflowEngine.status(process.cwd(), result.view.changeId), null, 2)); return;
   }
-  if (command === 'repair') { if (!rest.includes('--confirm')) { console.log(JSON.stringify(workflowEngine.previewRepair(repo, flag(rest, 'change')!), null, 2)); return } const view = workflowEngine.status(repo, flag(rest, 'change')!); workflowEngine.dispatch(repo, { type: 'operator.repair', workflowId: view.workflowId, revision: Number(flag(rest, 'revision')), targetStep: flag(rest, 'step'), reason: flag(rest, 'reason') }); await drainEffects(workflowEngine, repo); console.log(JSON.stringify(workflowEngine.status(repo, flag(rest, 'change')!), null, 2)); return }
+  if (command === 'repair') { if (!rest.includes('--confirm')) { console.log(JSON.stringify(workflowEngine.previewRepair(repo, flag(rest, 'change')!), null, 2)); return } const view = workflowEngine.status(repo, flag(rest, 'change')!); workflowEngine.dispatch(repo, { type: 'operator.repair', workflowId: view.workflowId, revision: Number(flag(rest, 'revision')), targetStep: flag(rest, 'step'), reason: flag(rest, 'reason') ?? '' }); await drainEffects(workflowEngine, repo); console.log(JSON.stringify(workflowEngine.status(repo, flag(rest, 'change')!), null, 2)); return }
   if (command === 'repin') { const view = workflowEngine.status(repo, flag(rest, 'change')!); const revision = flag(rest, 'revision') === undefined ? view.revision : Number(flag(rest, 'revision')); workflowEngine.dispatch(repo, { type: 'operator.repin', workflowId: view.workflowId, revision }); await drainEffects(workflowEngine, repo); console.log(JSON.stringify(workflowEngine.status(repo, flag(rest, 'change')!), null, 2)); return }
   if (command === 'agent-extension') { const [subcommand, ...args] = rest; if (!(AGENT_EXTENSION_SUBCOMMANDS as readonly string[]).includes(subcommand)) throw new Error(`unknown agent-extension command: ${subcommand ?? '(none)'}`); const profiles = args.flatMap((value, index) => value === '--profile' && args[index + 1] ? [args[index + 1]!] : []); if (subcommand === 'list') manageAgentExtension({ command: 'list' }); else if (subcommand === 'install') manageAgentExtension({ command: 'install', source: positional(args), profiles }); else manageAgentExtension({ command: 'install-local', source: positional(args), profiles }); }
 }

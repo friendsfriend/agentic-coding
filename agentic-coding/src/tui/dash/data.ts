@@ -1166,7 +1166,7 @@ export async function startWorkflow(input: {
 }
 
 export function previewRepair(repo: string, change: string) { return previewWorkflowRepair(repo, change) }
-export function applyRepair(repo: string, change: string, revision: number, targetStep: string, reason: string) { return repairWorkflow(repo, change, revision, targetStep, reason) }
+export function applyRepair(repo: string, change: string, revision: number, targetStep: string, reason = "") { return repairWorkflow(repo, change, revision, targetStep, reason) }
 
 export async function runWorkflow(
   action: string,
