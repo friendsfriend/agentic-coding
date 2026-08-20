@@ -852,13 +852,10 @@ export function App(props: {
     }
   };
   const workflowStatus = createMemo(() => {
-    const label = data().state.stepLabel ?? data().state.phase;
-    const active = data().agents.find((agent) => agent.status === "working");
-    if (!active) return { text: label, working: false };
-    if (active.role === "planner") return { text: "Planning", working: true };
-    if (active.role.endsWith("verifier"))
-      return { text: "Verifying", working: true };
-    return { text: "Applying", working: true };
+    const state = data().state;
+    const text = state.stepLabel ?? state.phase;
+    const terminal = ["completed", "closed"].includes(state.status ?? state.phase);
+    return { text, working: !terminal };
   });
 
   const refresh = () => {
