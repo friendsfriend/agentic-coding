@@ -33,7 +33,7 @@ test("dismissed plan review stays closed during panel interactions", async () =>
 
   t.mockInput.pressTab();
   t.mockInput.pressEnter();
-  await t.flush();
+  await t.renderOnce();
   expect(t.captureCharFrame()).not.toContain("Plan review");
   t.renderer.destroy();
 });
@@ -72,7 +72,7 @@ test("plan review popup appears and executes plan approval via finish", async ()
 
   // Advance the demo through apply/verify to the developer review.
   t.mockInput.pressEnter();
-  await t.waitForFrame((frame) => frame.includes("Verifying"));
+  await t.waitForFrame((frame) => frame.includes("verify"));
   t.mockInput.pressEnter();
   const reviewFrame = await t.waitForFrame((frame) =>
     frame.includes("Changed Files (1 files)"),
@@ -115,16 +115,16 @@ test("plan review comment on a markdown line routes feedback to the planner", as
 
   // c starts comment input on the selected line; typing and Enter submit it.
   t.mockInput.pressKey("c");
-  await t.flush();
+  await t.renderOnce();
   const commentFrame = t.captureCharFrame();
   expect(commentFrame).toContain("COMMENT");
   expect(commentFrame).toContain("Comment here...");
   for (const ch of "add a diagram") {
     t.mockInput.pressKey(ch);
-    await t.flush();
+    await t.renderOnce();
   }
   t.mockInput.pressEnter();
-  await t.flush();
+  await t.renderOnce();
   const afterSubmit = t.captureCharFrame();
   expect(afterSubmit).toContain("add a diagram");
 
