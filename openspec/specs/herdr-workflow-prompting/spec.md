@@ -2,9 +2,7 @@
 
 ## Purpose
 TBD - created by archiving change check-workflow-bugs-frontier-model. Update Purpose after archive.
-
 ## Requirements
-
 ### Requirement: Role lifecycle uses Herdr agent commands
 The workflow SHALL launch each managed run through configured agent adapter using Herdr agent lifecycle, never raw terminal startup or key injection.
 
@@ -24,6 +22,14 @@ The workflow SHALL launch each managed run through configured agent adapter usin
 - **WHEN** engine assigns later run to session
 - **THEN** adapter SHALL confirm process with `herdr agent get`
 - **AND** submit complete new assignment through `herdr agent prompt`
+- **AND** detection SHALL use the same agent identity that was used to launch the role's prior run, so the lookup can succeed
+
+#### Scenario: Persistent single-role identity remains stable across generations
+- **GIVEN** a single-role step (planner, worker, or archive) re-enters itself or is re-entered through a review-comment, reject, blocked, or failed transition within the same workflow instance
+- **WHEN** engine computes the Herdr agent identity for the new run
+- **THEN** the computed identity SHALL be identical to the identity used for the role's previous run in that workflow instance
+- **AND** engine SHALL NOT derive that identity from the per-run identifier
+- **AND** grouped triage/verifier roles SHALL keep a per-run identity unaffected by this scenario
 
 ### Requirement: Verification roles share one tab
 The workflow SHALL group triage and all verifier roles in one tab while retaining one pane per role.
@@ -63,3 +69,4 @@ The workflow SHALL render each run message from one common protocol Markdown, re
 - **THEN** prompt SHALL permit visible discussion and blockers
 - **WHEN** assignment interaction mode is silent
 - **THEN** prompt SHALL require artifact-based handoff without chat summary
+

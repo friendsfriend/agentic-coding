@@ -107,6 +107,27 @@ export class WorkflowEngine {
   issueRunCapability(repo: string, runId: string): string { const db = openStore(repo); try { db.exec('BEGIN IMMEDIATE'); const row = db.query('SELECT * FROM workflow_runs WHERE id=?').get(runId) as RunRow | null; if (!row || !ACTIVE_RUN.has(row.status)) throw new WorkflowRuntimeError('stale-run', 'run is stale or inactive'); const token = randomBytes(32).toString('base64url'); db.query('UPDATE workflow_runs SET capability_hash=? WHERE id=?').run(hashToken(token), runId); db.exec('COMMIT'); return token } catch (error) { rollback(db); throw error } finally { db.close() } }
   list(repo: string): WorkflowView[] { const db = openStore(repo); try { if (tableExists(db, 'workflows')) for (const row of db.query('SELECT change_id FROM workflows').all() as Array<{ change_id: string }>) if (!db.query('SELECT 1 FROM workflow_instances WHERE change_id=?').get(row.change_id)) this.migrateLegacy(db, canonicalRepository(repo), row.change_id); const views = (db.query('SELECT id FROM workflow_instances ORDER BY updated_at DESC').all() as Array<{ id: string }>).map(row => this.view(db, row.id)); const diagnostics = (db.query('SELECT change_id,diagnostic FROM workflow_migration_diagnostics').all() as Array<{ change_id: string; diagnostic: string }>).map(row => diagnosticView(row.change_id, row.diagnostic)); return [...views, ...diagnostics] } finally { db.close() } }
   getRun(repo: string, runId: string): WorkflowRun { const db = openStore(repo); try { const row = db.query('SELECT * FROM workflow_runs WHERE id=?').get(runId) as RunRow | null; if (!row) throw new WorkflowRuntimeError('not-found', `run not found: ${runId}`); return runFromRow(row) } finally { db.close() } }
+  // Resolves the run currently assigned to an agent process by the same
+  // (workflowId, stepId, role) identity triple that process was launched
+  // with — which stays valid across a persistent role's reused generations,
+  // unlike the run-scoped id/generation/token — instead of trusting a
+  // client-supplied runId/token that may reflect a prior, already-completed
+  // generation. At most one run per (workflowId, stepId, role) is ever
+  // pending/working at a time by construction, so this uniquely identifies
+  // "the run this process should be handing off right now". Status must be
+  // `working`, not merely `pending`: a run only reaches `working` when its
+  // `agent.launch` effect actually completes (runtime.ts effectResult sets
+  // handle_json and status='working' atomically), which for a persistent
+  // role only happens once the reuse `observe` path has confirmed the pane
+  // is live and delivered the new prompt to it. `operator.repair` can expire
+  // a stale run and synchronously create a fresh `pending` run for the same
+  // role before that new run's `agent.launch` effect has been drained; a
+  // still-alive stale process (unaware of the new run, never re-prompted
+  // yet) must not be able to hand off that not-yet-launched run merely by
+  // sharing its (workflowId, stepId, role) — excluding `pending` closes that
+  // window and preserves the same `stale-run` rejection the old run-scoped
+  // env check used to provide.
+  activeRunForRole(repo: string, workflowId: string, stepId: string, role: string): WorkflowRun { const db = openStore(repo); try { const row = db.query("SELECT * FROM workflow_runs WHERE workflow_id=? AND step_id=? AND role=? AND status='working' ORDER BY rowid DESC LIMIT 1").get(workflowId, stepId, role) as RunRow | null; if (!row) throw new WorkflowRuntimeError('not-found', `no active run for ${stepId}/${role}`); return runFromRow(row) } finally { db.close() } }
   getSnapshot(repo: string, workflowId: string): WorkflowSnapshot { const db = openStore(repo); try { return parseSnapshot(JSON.parse(this.instance(db, workflowId).snapshot_json)) } finally { db.close() } }
 
   private migrateLegacy(db: Database, repository: string, changeId: string): void {
