@@ -1862,9 +1862,7 @@ export function App(props: {
               width: "100%",
               height: "100%",
               flexDirection: "column",
-              paddingTop: 1,
               paddingRight: 1,
-              paddingBottom: 1,
               gap: 1,
             }}
           >
