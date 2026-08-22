@@ -19,7 +19,6 @@ import {
   approvalFor,
   applyRepair,
   focusAgent,
-  focusGitPane,
   focusReturnWorkspace,
   loadDashboard,
   loadDeveloperReviewFindings,
@@ -487,8 +486,20 @@ export function App(props: {
       setMessage(error instanceof Error ? error.message : String(error));
     }
   };
+  const developerReviewPhase = () =>
+    data().state.stepId === "core.developer-review" ||
+    data().state.phase === "developer-review";
   const finishDeveloperReview = async () => {
     if (busy()) return;
+    // Finishing dispatches the workflow gate, so it is only meaningful while
+    // the workflow actually waits in the developer review phase.
+    if (!developerReviewPhase()) {
+      notify(
+        "Developer review can only be finished during the developer review phase",
+        "warning",
+      );
+      return;
+    }
     setBusy(true);
     setMessage("Finishing developer review…");
     try {
@@ -503,7 +514,14 @@ export function App(props: {
       const comments = [...reviewComments(), ...findingComments];
       if (props.profile !== "test") {
         await saveDeveloperReview(props.repo, props.change, comments);
-        const engineComments = comments.map(comment => ({ comment: comment.body, ...(comment.filePath ? { file: comment.filePath } : {}), ...(comment.line ? { line: comment.line } : {}), ...(comment.startLine ? { startLine: comment.startLine } : {}), ...(comment.endLine ? { endLine: comment.endLine } : {}), ...(comment.findingId ? { findingId: comment.findingId } : {}) }));
+        const engineComments = comments.map((comment) => ({
+          comment: comment.body,
+          ...(comment.filePath ? { file: comment.filePath } : {}),
+          ...(comment.line ? { line: comment.line } : {}),
+          ...(comment.startLine ? { startLine: comment.startLine } : {}),
+          ...(comment.endLine ? { endLine: comment.endLine } : {}),
+          ...(comment.findingId ? { findingId: comment.findingId } : {}),
+        }));
         setMessage(await runWorkflow(comments.length ? "review-comments" : "approve-review", props.repo, props.change, data().state.revision, comments.length ? JSON.stringify({ comments: engineComments }) : undefined));
         refresh();
       } else {
@@ -1046,17 +1064,9 @@ export function App(props: {
         return;
       }
       if (activePanel() === 4) {
-        try {
-          focusGitPane(data().state);
-        } catch (error) {
-          setVerdictReturnToFindings(false);
-          setVerdict({
-            title: "Lazygit launch failed",
-            content: error instanceof Error ? error.message : String(error),
-          });
-          setVerdictOffset(0);
-          props.keymap.setData("modal.active", "verdict");
-        }
+        // Enter on the git panel opens the changed-files modal used by the
+        // developer review instead of launching lazygit.
+        openDeveloperReview();
         return;
       }
       if (activePanel() === 2) {
@@ -2325,7 +2335,9 @@ export function App(props: {
               action: reviewKind() === "plan" ? "Open artifact" : "Open diff",
             },
             { key: "/", action: "Search files" },
-            { key: "f", action: "Finish review" },
+            ...(reviewKind() === "plan" || developerReviewPhase()
+              ? [{ key: "f", action: "Finish review" }]
+              : []),
             { key: "Esc", action: "Postpone" },
           ]}
           onBackdropClick={() => {

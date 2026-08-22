@@ -101,6 +101,58 @@ test("plan review popup appears and executes plan approval via finish", async ()
   t.renderer.destroy();
 });
 
+test("git panel enter opens the changed-files modal and finish stays gated to the developer review phase", async () => {
+  const t = await testRender(() => <TestDashboard />, {
+    width: 120,
+    height: 40,
+  });
+
+  await t.waitForFrame((frame) => frame.includes("Plan review"));
+
+  // Finish the plan review (no comments) so the demo advances to apply.
+  t.mockInput.pressKey("f");
+  await t.waitForFrame((frame) => !frame.includes("Changed Files (4 files)"));
+
+  // Tab to the git status panel (order [0, 6, 1, 2, 3, 4, 5] → index 4).
+  for (let i = 0; i < 5; i++) t.mockInput.pressTab();
+
+  // Enter on the git panel opens the developer review changed-files modal.
+  t.mockInput.pressEnter();
+  const gitFrame = await t.waitForFrame((frame) =>
+    frame.includes("Changed Files (1 files)"),
+  );
+  expect(gitFrame).toContain("src/example.ts");
+
+  // f outside the developer review phase is rejected with a visible warning
+  // and the popup stays open.
+  t.mockInput.pressKey("f");
+  const rejectedFrame = await t.waitForFrame((frame) =>
+    frame.includes("only be finished during the developer review phase"),
+  );
+  expect(rejectedFrame).toContain("Changed Files (1 files)");
+
+  t.mockInput.pressEscape();
+  await t.waitForFrame((frame) => !frame.includes("Changed Files (1 files)"));
+
+  // Advance apply → verify → developer-review via the dashboard gate.
+  t.mockInput.pressTab();
+  t.mockInput.pressTab();
+  t.mockInput.pressEnter();
+  await t.waitForFrame((frame) => frame.includes("verify"));
+  t.mockInput.pressEnter();
+
+  // Reaching the developer review phase auto-opens the changed-files popup.
+  const reviewFrame = await t.waitForFrame((frame) =>
+    frame.includes("Changed Files (1 files)"),
+  );
+  expect(reviewFrame).toContain("Action required · Developer review");
+
+  // f inside the developer review phase finishes and closes the popup.
+  t.mockInput.pressKey("f");
+  await t.waitForFrame((frame) => !frame.includes("Changed Files (1 files)"));
+  t.renderer.destroy();
+});
+
 test("plan review comment on a markdown line routes feedback to the planner", async () => {
   const t = await testRender(() => <TestDashboard />, {
     width: 120,
