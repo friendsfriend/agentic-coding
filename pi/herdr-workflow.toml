@@ -6,64 +6,64 @@
  # ---- pi profiles (frontier planning, cheap everything-else) ----
  [agents.profiles.pi-planner]
  runtime = "pi"
- model = "eon/claude-5-sonnet"
+ model = "opencode-go/ox-alpha-free"
  thinking = "high"
 
  [agents.profiles.pi-cheap]          # no-openspec default + fallback
  runtime = "pi"
- model = "eon/claude-5-sonnet"
+ model = "opencode-go/ox-alpha-free"
  thinking = "high"
 
  [agents.profiles.pi-worker]
  runtime = "pi"
- model = "eon/claude-5-sonnet"
+ model = "opencode-go/ox-alpha-free"
  thinking = "high"
 
  [agents.profiles.pi-review]
  runtime = "pi"
- model = "eon/claude-5-sonnet"
+ model = "opencode-go/ox-alpha-free"
  thinking = "high"
 
  [agents.profiles.pi-review-min]    
  runtime = "pi"
- model = "eon/claude-5-sonnet"
+ model = "opencode-go/ox-alpha-free"
  thinking = "high"
 
  [agents.profiles.pi-test-review]
  runtime = "pi"
- model = "eon/claude-5-sonnet"
+ model = "opencode-go/ox-alpha-free"
  thinking = "high"
 
  [agents.profiles.pi-archive]
  runtime = "pi"
- model = "eon/claude-5-sonnet"
+ model = "opencode-go/ox-alpha-free"
  thinking = "high"
 
  # ---- opencode profiles (worker + secondary verifiers) ----
  [agents.profiles.oc-worker]
  runtime = "opencode"
- model = "eon/claude-5-sonnet"
+ model = "opencode-go/ox-alpha-free"
  agent = "build"
 
  [agents.profiles.oc-review]
  runtime = "opencode"
- model = "eon/claude-5-sonnet"
+ model = "opencode-go/ox-alpha-free"
  agent = "build"
 
  [agents.profiles.oc-archive]
  runtime = "opencode"
- model = "eon/claude-5-sonnet"
+ model = "opencode-go/ox-alpha-free"
  agent = "build"
 
  # ---- opencode-v2 profiles ----
  [agents.profiles.oc2-review]
  runtime = "opencode-v2"
- model = "eon/claude-5-sonnet"
+ model = "opencode-go/ox-alpha-free"
  agent = "build"
 
  [agents.profiles.oc2-archive]
  runtime = "opencode-v2"
- model = "eon/claude-5-sonnet"
+ model = "opencode-go/ox-alpha-free"
  agent = "build"
 
  # ---- step routing ----
