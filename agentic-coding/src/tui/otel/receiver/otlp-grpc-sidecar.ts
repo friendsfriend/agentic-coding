@@ -7,14 +7,18 @@
  *
  * Requires: npm install @grpc/grpc-js @grpc/proto-loader
  */
-const grpcPort = Number(process.argv[process.argv.indexOf('--port') + 1] ?? 4317);
-const forwardUrl = process.argv[process.argv.indexOf('--forward') + 1] ?? 'http://127.0.0.1:4318';
+const grpcPort = Number(
+	process.argv[process.argv.indexOf("--port") + 1] ?? 4317,
+);
+const forwardUrl =
+	process.argv[process.argv.indexOf("--forward") + 1] ??
+	"http://127.0.0.1:4318";
 
 async function main() {
-  const grpc = await import('@grpc/grpc-js');
-  const protoLoader = await import('@grpc/proto-loader');
+	const grpc = await import("@grpc/grpc-js");
+	const protoLoader = await import("@grpc/proto-loader");
 
-  const otlpProto = `
+	const otlpProto = `
     syntax = "proto3";
     package opentelemetry.proto.collector.trace.v1;
     service TraceService {
@@ -53,33 +57,45 @@ async function main() {
     message AnyValue { oneof value { string stringValue = 1; bool boolValue = 2; int64 intValue = 3; double doubleValue = 4; } }
   `;
 
-  const packageDefinition = protoLoader.loadSync(otlpProto);
-  const proto = grpc.loadPackageDefinition(packageDefinition) as any;
+	const packageDefinition = protoLoader.loadSync(otlpProto);
+	// biome-ignore lint/suspicious/noExplicitAny: dynamically loaded protobuf definition
+	const proto = grpc.loadPackageDefinition(packageDefinition) as any;
 
-  async function forward(path: string, body: any) {
-    try {
-      await fetch(`${forwardUrl}${path}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-    } catch { /* loopback down, drop */ }
-  }
+	// biome-ignore lint/suspicious/noExplicitAny: decoded OTLP JSON payload of arbitrary shape
+	async function forward(path: string, body: any) {
+		try {
+			await fetch(`${forwardUrl}${path}`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(body),
+			});
+		} catch {
+			/* loopback down, drop */
+		}
+	}
 
-  const server = new grpc.Server();
-  server.addService(proto.opentelemetry.proto.collector.trace.v1.TraceService.service, {
-    Export: (call: any, callback: any) => {
-      forward('/v1/traces', call.request).catch(() => {});
-      callback(null, { partialSuccess: {} });
-    },
-  });
-  server.bindAsync(`0.0.0.0:${grpcPort}`, grpc.ServerCredentials.createInsecure(), () => {
-    server.start();
-    console.log(`[grpc-sidecar] OTLP gRPC on :${grpcPort} → ${forwardUrl}`);
-  });
+	const server = new grpc.Server();
+	server.addService(
+		proto.opentelemetry.proto.collector.trace.v1.TraceService.service,
+		{
+			// biome-ignore lint/suspicious/noExplicitAny: untyped generated gRPC handler signature
+			Export: (call: any, callback: any) => {
+				forward("/v1/traces", call.request).catch(() => {});
+				callback(null, { partialSuccess: {} });
+			},
+		},
+	);
+	server.bindAsync(
+		`0.0.0.0:${grpcPort}`,
+		grpc.ServerCredentials.createInsecure(),
+		() => {
+			server.start();
+			console.log(`[grpc-sidecar] OTLP gRPC on :${grpcPort} → ${forwardUrl}`);
+		},
+	);
 
-  process.on('SIGTERM', () => server.tryShutdown(() => process.exit(0)));
-  process.on('SIGINT', () => server.tryShutdown(() => process.exit(0)));
+	process.on("SIGTERM", () => server.tryShutdown(() => process.exit(0)));
+	process.on("SIGINT", () => server.tryShutdown(() => process.exit(0)));
 }
 
 main().catch(console.error);

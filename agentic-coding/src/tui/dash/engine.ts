@@ -1,39 +1,323 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { loadConfig } from '../../workflow/effects.ts';
-import { drainEffects, engine as workflowEngineFactory, listProjects, runGit, validateStart } from '../../workflow/cli.ts';
-import { parseAgentsConfig, preflightProfile, resolveRouting } from '../../workflow/profiles.ts';
-import { definitionVersionForPolicy, registerBuiltins } from '../../workflow/definitions.ts';
-import type { WorkflowView } from '../../workflow/contracts.ts';
-import { canonicalStorePath, validateChangeId } from '../../workflow/runtime.ts';
-import { Herdr } from '../../herdr-client.ts';
-import { credentialPromptBridge } from './ui/CredentialsModal.tsx';
+import fs from "node:fs";
+import path from "node:path";
+import { Herdr } from "../../herdr-client.ts";
+import {
+	drainEffects,
+	listProjects,
+	runGit,
+	validateStart,
+	engine as workflowEngineFactory,
+} from "../../workflow/cli.ts";
+import type { WorkflowView } from "../../workflow/contracts.ts";
+import {
+	definitionVersionForPolicy,
+	registerBuiltins,
+} from "../../workflow/definitions.ts";
+import { loadConfig } from "../../workflow/effects.ts";
+import {
+	parseAgentsConfig,
+	preflightProfile,
+	resolveRouting,
+} from "../../workflow/profiles.ts";
+import {
+	canonicalStorePath,
+	validateChangeId,
+} from "../../workflow/runtime.ts";
+import { credentialPromptBridge } from "./ui/CredentialsModal.tsx";
 
-export function getWorkflowView(repo: string, change: string): WorkflowView { const engine = workflowEngineFactory(); void drainEffects(engine, repo, credentialPromptBridge()).catch(() => undefined); return engine.status(repo, change) }
-export function listWorkflowViews(repo: string): WorkflowView[] { return workflowEngineFactory().list(repo) }
-export function previewWorkflowRepair(repo: string, change: string) { return workflowEngineFactory().previewRepair(repo, change) }
-export function repairWorkflow(repo: string, change: string, revision: number, targetStep: string, reason = "") { const engine = workflowEngineFactory(); const view = engine.status(repo, change); if (view.revision !== revision) throw new Error(`stale revision ${revision}; current ${view.revision}`); return engine.dispatch(repo, { type: 'operator.repair', workflowId: view.workflowId, revision, targetStep, reason }).view }
-export async function runWorkflowAction(actionId: string, repo: string, change: string, revision: number, input?: string): Promise<string> {
-  const engine = workflowEngineFactory(); const view = engine.status(repo, change);
-  let parsed: unknown; if (input) { try { parsed = JSON.parse(input) } catch { parsed = input } }
-  engine.dispatch(repo, { type: 'developer.action', workflowId: view.workflowId, revision, actionId, input: parsed }); await drainEffects(engine, repo, credentialPromptBridge()); return JSON.stringify(engine.status(repo, change));
+export function getWorkflowView(repo: string, change: string): WorkflowView {
+	const engine = workflowEngineFactory();
+	void drainEffects(engine, repo, credentialPromptBridge()).catch(
+		() => undefined,
+	);
+	return engine.status(repo, change);
 }
-export function startArgs(input: { repo: string; ticket: string; change: string; task?: string; mode: string; workflowType?: string }) { return { repo: input.repo, changeId: validateChangeId(input.change), definitionId: input.workflowType === 'quick' ? 'no-openspec' : (input.workflowType ?? 'standard'), task: input.task || undefined, ticket: input.ticket || undefined, mode: input.mode } }
-export async function startWorkflowInProcess(input: Parameters<typeof startArgs>[0]): Promise<string> {
-  const args = startArgs(input); validateStart(args.repo, args.changeId, args.definitionId, args.task); const config = loadConfig(); const definitionVersion = definitionVersionForPolicy(config.workflow.max_verification_rounds); const registry = registerBuiltins(undefined, config.workflow.max_verification_rounds); const definition = registry.definition(args.definitionId, definitionVersion); const agents = parseAgentsConfig(config.agents, config);
-  const roles = Object.fromEntries(definition.steps.filter(step => registry.step(step).actor === 'agent').map(step => [step, step === 'core.plan' ? ['planner'] : step === 'core.implementation' ? ['worker'] : step === 'core.triage' ? ['triage'] : step === 'core.verification' ? ['quality-verifier', 'security-verifier', 'performance-verifier', 'openspec-verifier', 'usability-verifier', 'test-verifier'].filter(role => args.definitionId !== 'no-openspec' || role !== 'openspec-verifier') : step === 'core.archive' ? ['archive'] : []]));
-  const routing = resolveRouting(definition, roles, agents); for (const route of routing.routes) preflightProfile(route.profile, registry.step(route.stepId).requirements); const baseCommit = runGit(args.repo, 'rev-parse', `${config.workflow.base_branch}^{commit}`); runGit(args.repo, 'remote', 'get-url', config.workflow.remote);
-  const engine = workflowEngineFactory(); engine.start({ repo: args.repo, mode: args.mode as 'worktree' | 'checkout', changeId: args.changeId, definitionId: args.definitionId, definitionVersion, metadata: { branch: `${config.workflow.branch_prefix}${args.changeId}`, baseBranch: config.workflow.base_branch, baseCommit, ...(args.task ? { task: args.task } : {}), ...(args.ticket ? { ticket: args.ticket } : {}) }, routing }); await drainEffects(engine, args.repo, credentialPromptBridge());
-  return `Workflow started: ${args.changeId}`;
+export function listWorkflowViews(repo: string): WorkflowView[] {
+	return workflowEngineFactory().list(repo);
 }
-function navigationPath(repo: string, change: string): string { return path.join(path.dirname(canonicalStorePath(repo)), 'navigation', `${encodeURIComponent(change)}.json`) }
-function returnWorkspace(repo: string, change: string): string | undefined { let file: string | undefined; try { file = navigationPath(repo, change); const value = JSON.parse(fs.readFileSync(file, 'utf8')) as { workspace?: unknown; at?: unknown }; const workspace = typeof value.workspace === 'string' && value.workspace.length <= 256 && !/[\x00-\x1f]/.test(value.workspace) ? value.workspace : undefined; const fresh = typeof value.at === 'string' && Date.now() - Date.parse(value.at) <= 10 * 60_000; if (!workspace || !fresh) { fs.rmSync(file, { force: true }); return undefined } const live = new Herdr().call('workspace', 'get', workspace) as { workspace?: { status?: string; closed_at?: string } }; if (!live.workspace || live.workspace.status === 'closed' || live.workspace.closed_at) { fs.rmSync(file, { force: true }); return undefined } return workspace } catch (error) { if (file && /not found|unknown workspace|closed/i.test(String((error as Error).message))) fs.rmSync(file, { force: true }); return undefined } }
-export function consumeReturnWorkspace(repo: string, change: string, workspace: string): void { try { const file = navigationPath(repo, change); const value = JSON.parse(fs.readFileSync(file, 'utf8')) as { workspace?: unknown }; if (value.workspace === workspace) fs.rmSync(file, { force: true }) } catch {} }
-export function setReturnInProcess(repo: string, change: string, workspace: string): void { if (!workspace || workspace.length > 256 || /[\x00-\x1f]/.test(workspace)) throw new Error('invalid return workspace identity'); const file = navigationPath(repo, change); fs.mkdirSync(path.dirname(file), { recursive: true }); const temporary = `${file}.${process.pid}.tmp`; fs.writeFileSync(temporary, `${JSON.stringify({ workspace, at: new Date().toISOString() })}\n`, { mode: 0o600 }); fs.renameSync(temporary, file) }
-export function discoverProjectsInProcess(): Array<{ name: string; path: string; openspec: boolean }> { return listProjects() }
+export function previewWorkflowRepair(repo: string, change: string) {
+	return workflowEngineFactory().previewRepair(repo, change);
+}
+export function repairWorkflow(
+	repo: string,
+	change: string,
+	revision: number,
+	targetStep: string,
+	reason = "",
+) {
+	const engine = workflowEngineFactory();
+	const view = engine.status(repo, change);
+	if (view.revision !== revision)
+		throw new Error(`stale revision ${revision}; current ${view.revision}`);
+	return engine.dispatch(repo, {
+		type: "operator.repair",
+		workflowId: view.workflowId,
+		revision,
+		targetStep,
+		reason,
+	}).view;
+}
+export async function runWorkflowAction(
+	actionId: string,
+	repo: string,
+	change: string,
+	revision: number,
+	input?: string,
+): Promise<string> {
+	const engine = workflowEngineFactory();
+	const view = engine.status(repo, change);
+	let parsed: unknown;
+	if (input) {
+		try {
+			parsed = JSON.parse(input);
+		} catch {
+			parsed = input;
+		}
+	}
+	engine.dispatch(repo, {
+		type: "developer.action",
+		workflowId: view.workflowId,
+		revision,
+		actionId,
+		input: parsed,
+	});
+	await drainEffects(engine, repo, credentialPromptBridge());
+	return JSON.stringify(engine.status(repo, change));
+}
+export function startArgs(input: {
+	repo: string;
+	ticket: string;
+	change: string;
+	task?: string;
+	mode: string;
+	workflowType?: string;
+}) {
+	return {
+		repo: input.repo,
+		changeId: validateChangeId(input.change),
+		definitionId:
+			input.workflowType === "quick"
+				? "no-openspec"
+				: (input.workflowType ?? "standard"),
+		task: input.task || undefined,
+		ticket: input.ticket || undefined,
+		mode: input.mode,
+	};
+}
+export async function startWorkflowInProcess(
+	input: Parameters<typeof startArgs>[0],
+): Promise<string> {
+	const args = startArgs(input);
+	validateStart(args.repo, args.changeId, args.definitionId, args.task);
+	const config = loadConfig();
+	const definitionVersion = definitionVersionForPolicy(
+		config.workflow.max_verification_rounds,
+	);
+	const registry = registerBuiltins(
+		undefined,
+		config.workflow.max_verification_rounds,
+	);
+	const definition = registry.definition(args.definitionId, definitionVersion);
+	const agents = parseAgentsConfig(config.agents, config);
+	const roles = Object.fromEntries(
+		definition.steps
+			.filter((step) => registry.step(step).actor === "agent")
+			.map((step) => [
+				step,
+				step === "core.plan"
+					? ["planner"]
+					: step === "core.implementation"
+						? ["worker"]
+						: step === "core.triage"
+							? ["triage"]
+							: step === "core.verification"
+								? [
+										"quality-verifier",
+										"security-verifier",
+										"performance-verifier",
+										"openspec-verifier",
+										"usability-verifier",
+										"test-verifier",
+									].filter(
+										(role) =>
+											args.definitionId !== "no-openspec" ||
+											role !== "openspec-verifier",
+									)
+								: step === "core.archive"
+									? ["archive"]
+									: [],
+			]),
+	);
+	const routing = resolveRouting(definition, roles, agents);
+	for (const route of routing.routes)
+		preflightProfile(route.profile, registry.step(route.stepId).requirements);
+	const baseCommit = runGit(
+		args.repo,
+		"rev-parse",
+		`${config.workflow.base_branch}^{commit}`,
+	);
+	runGit(args.repo, "remote", "get-url", config.workflow.remote);
+	const engine = workflowEngineFactory();
+	engine.start({
+		repo: args.repo,
+		mode: args.mode as "worktree" | "checkout",
+		changeId: args.changeId,
+		definitionId: args.definitionId,
+		definitionVersion,
+		metadata: {
+			branch: `${config.workflow.branch_prefix}${args.changeId}`,
+			baseBranch: config.workflow.base_branch,
+			baseCommit,
+			...(args.task ? { task: args.task } : {}),
+			...(args.ticket ? { ticket: args.ticket } : {}),
+		},
+		routing,
+	});
+	await drainEffects(engine, args.repo, credentialPromptBridge());
+	return `Workflow started: ${args.changeId}`;
+}
+function navigationPath(repo: string, change: string): string {
+	return path.join(
+		path.dirname(canonicalStorePath(repo)),
+		"navigation",
+		`${encodeURIComponent(change)}.json`,
+	);
+}
+function returnWorkspace(repo: string, change: string): string | undefined {
+	let file: string | undefined;
+	try {
+		file = navigationPath(repo, change);
+		const value = JSON.parse(fs.readFileSync(file, "utf8")) as {
+			workspace?: unknown;
+			at?: unknown;
+		};
+		const workspace =
+			typeof value.workspace === "string" &&
+			value.workspace.length <= 256 &&
+			// biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally rejects control characters
+			!/[\x00-\x1f]/.test(value.workspace)
+				? value.workspace
+				: undefined;
+		const fresh =
+			typeof value.at === "string" &&
+			Date.now() - Date.parse(value.at) <= 10 * 60_000;
+		if (!workspace || !fresh) {
+			fs.rmSync(file, { force: true });
+			return undefined;
+		}
+		const live = new Herdr().call("workspace", "get", workspace) as {
+			workspace?: { status?: string; closed_at?: string };
+		};
+		if (
+			!live.workspace ||
+			live.workspace.status === "closed" ||
+			live.workspace.closed_at
+		) {
+			fs.rmSync(file, { force: true });
+			return undefined;
+		}
+		return workspace;
+	} catch (error) {
+		if (
+			file &&
+			/not found|unknown workspace|closed/i.test(
+				String((error as Error).message),
+			)
+		)
+			fs.rmSync(file, { force: true });
+		return undefined;
+	}
+}
+export function consumeReturnWorkspace(
+	repo: string,
+	change: string,
+	workspace: string,
+): void {
+	try {
+		const file = navigationPath(repo, change);
+		const value = JSON.parse(fs.readFileSync(file, "utf8")) as {
+			workspace?: unknown;
+		};
+		if (value.workspace === workspace) fs.rmSync(file, { force: true });
+	} catch {}
+}
+export function setReturnInProcess(
+	repo: string,
+	change: string,
+	workspace: string,
+): void {
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally rejects control characters
+	if (!workspace || workspace.length > 256 || /[\x00-\x1f]/.test(workspace))
+		throw new Error("invalid return workspace identity");
+	const file = navigationPath(repo, change);
+	fs.mkdirSync(path.dirname(file), { recursive: true });
+	const temporary = `${file}.${process.pid}.tmp`;
+	fs.writeFileSync(
+		temporary,
+		`${JSON.stringify({ workspace, at: new Date().toISOString() })}\n`,
+		{ mode: 0o600 },
+	);
+	fs.renameSync(temporary, file);
+}
+export function discoverProjectsInProcess(): Array<{
+	name: string;
+	path: string;
+	openspec: boolean;
+}> {
+	return listProjects();
+}
 
-export function dashboardState(repo: string, change: string) { return viewToDashboardState(getWorkflowView(repo, change)) }
+export function dashboardState(repo: string, change: string) {
+	return viewToDashboardState(getWorkflowView(repo, change));
+}
 export function viewToDashboardState(view: WorkflowView) {
-  const verifierRuns = view.runs.filter(run => run.stepId === 'core.verification'); const verificationRound = Math.max(0, ...verifierRuns.map(run => run.attempt)); const currentVerifierRuns = verifierRuns.filter(run => run.attempt === verificationRound); const latestByRole = new Map<string, (typeof view.runs)[number]>(); for (const run of view.runs) if (!latestByRole.has(run.role) || latestByRole.get(run.role)!.attempt <= run.attempt) latestByRole.set(run.role, run); const panes = Object.fromEntries([...latestByRole.values()].flatMap(run => run.paneId ? [[run.role, run.paneId]] : []));
-  return { changeId: view.changeId, returnWorkspace: returnWorkspace(view.repository, view.changeId), phase: view.currentStep.id, stepId: view.currentStep.id, stepLabel: view.currentStep.label, revision: view.revision, definition: view.definition, status: view.status, health: view.health, availableActions: view.availableActions, repository: view.repository, worktree: view.worktree, branch: view.branch, workspace: view.workspace ?? '', verificationRound, baseCommit: view.baseCommit, createdAt: view.createdAt, phaseStartedAt: view.currentStep.enteredAt, panes, runs: view.runs, verificationRoles: currentVerifierRuns.map(run => run.role), verificationModels: Object.fromEntries(currentVerifierRuns.flatMap(run => run.model ? [[run.role, run.model]] : [])) };
+	const verifierRuns = view.runs.filter(
+		(run) => run.stepId === "core.verification",
+	);
+	const verificationRound = Math.max(
+		0,
+		...verifierRuns.map((run) => run.attempt),
+	);
+	const currentVerifierRuns = verifierRuns.filter(
+		(run) => run.attempt === verificationRound,
+	);
+	const latestByRole = new Map<string, (typeof view.runs)[number]>();
+	for (const run of view.runs) {
+		const existing = latestByRole.get(run.role);
+		if (!existing || existing.attempt <= run.attempt)
+			latestByRole.set(run.role, run);
+	}
+	const panes = Object.fromEntries(
+		[...latestByRole.values()].flatMap((run) =>
+			run.paneId ? [[run.role, run.paneId]] : [],
+		),
+	);
+	return {
+		changeId: view.changeId,
+		returnWorkspace: returnWorkspace(view.repository, view.changeId),
+		phase: view.currentStep.id,
+		stepId: view.currentStep.id,
+		stepLabel: view.currentStep.label,
+		revision: view.revision,
+		definition: view.definition,
+		status: view.status,
+		health: view.health,
+		availableActions: view.availableActions,
+		repository: view.repository,
+		worktree: view.worktree,
+		branch: view.branch,
+		workspace: view.workspace ?? "",
+		verificationRound,
+		baseCommit: view.baseCommit,
+		createdAt: view.createdAt,
+		phaseStartedAt: view.currentStep.enteredAt,
+		panes,
+		runs: view.runs,
+		verificationRoles: currentVerifierRuns.map((run) => run.role),
+		verificationModels: Object.fromEntries(
+			currentVerifierRuns.flatMap((run) =>
+				run.model ? [[run.role, run.model]] : [],
+			),
+		),
+	};
 }
