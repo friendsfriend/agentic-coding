@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -8,7 +9,7 @@ import {
 } from "./adapters.ts";
 import { workflowAssets } from "./assets.ts";
 import { renderAssignment } from "./assignment.ts";
-import type { Assignment, EffectKind } from "./contracts.ts";
+import type { AgentHandle, Assignment, EffectKind } from "./contracts.ts";
 import { type CredentialPrompt, runGitWithCredentials } from "./credentials.ts";
 import { childTrace, parseTraceparent, traceparent } from "./observability.ts";
 import type { WorkflowRegistry } from "./registry.ts";
@@ -258,32 +259,14 @@ export function agentEffectHandlers(
 			async observe(effect) {
 				const run = engine.getRun(repo, runId(effect));
 				const snapshot = engine.getSnapshot(repo, run.workflowId);
-				if (run.handle) {
-					try {
-						const adapter = options.adapters.get(run.profile.runtime);
-						return (await adapter?.observe(run.handle))?.status !== "unknown"
-							? run.handle
-							: undefined;
-					} catch {
-						return undefined;
-					}
-				}
+				const resolved = resolveLiveAgent(
+					options.herdr,
+					snapshot.metadata.changeId,
+					snapshot.definition.id,
+					run,
+				);
+				if (!resolved) return undefined;
 				try {
-					const result = options.herdr.call(
-						"agent",
-						"get",
-						runName(snapshot.metadata.changeId, run),
-					) as {
-						agent?: {
-							pane_id?: string;
-							tab_id?: string;
-							session_id?: string;
-							agent_status?: string;
-						};
-					};
-					const live = result.agent;
-					if (!live?.pane_id || live.agent_status === "unknown")
-						return undefined;
 					const expected = renderedAssignment(
 						engine,
 						repo,
@@ -291,18 +274,23 @@ export function agentEffectHandlers(
 						run.id,
 						"",
 					);
+					writeAgentEnvPointer(
+						snapshot.metadata.worktree,
+						resolved.name,
+						run.id,
+					);
 					options.herdr.call(
 						"agent",
 						"prompt",
-						live.pane_id,
+						resolved.paneId,
 						expected.rendered.prompt,
 					);
 					return {
 						runtime: run.profile.runtime,
-						name: runName(snapshot.metadata.changeId, run),
-						paneId: live.pane_id,
-						...(live.tab_id ? { tabId: live.tab_id } : {}),
-						...(live.session_id ? { sessionId: live.session_id } : {}),
+						name: resolved.name,
+						paneId: resolved.paneId,
+						...(resolved.tabId ? { tabId: resolved.tabId } : {}),
+						...(resolved.sessionId ? { sessionId: resolved.sessionId } : {}),
 					};
 				} catch {
 					return undefined;
@@ -328,6 +316,14 @@ export function agentEffectHandlers(
 				if (!adapter)
 					throw new Error(`adapter unavailable: ${run.profile.runtime}`);
 				adapter.preflight(run.profile, step.requirements);
+				const name = canonicalAgentName(
+					snapshot.metadata.changeId,
+					snapshot.definition.id,
+					run,
+				);
+				// The telemetry bridge recovers the run env through this pointer, so it
+				// must exist before the agent process boots inside adapter.launch.
+				writeAgentEnvPointer(snapshot.metadata.worktree, name, run.id);
 				const pane = await options.paneForRun(run.id);
 				const ctx: LaunchContext = {
 					profile: run.profile,
@@ -336,7 +332,7 @@ export function agentEffectHandlers(
 					paneId: pane.paneId,
 					...(pane.tabId ? { tabId: pane.tabId } : {}),
 					cwd: snapshot.metadata.worktree,
-					name: runName(snapshot.metadata.changeId, run),
+					name,
 					environment: assignment.environment,
 					bridgePath:
 						run.profile.runtime === "pi"
@@ -664,24 +660,152 @@ async function ensureWorkspaceTabs(
 		}
 	}
 }
-function runName(
+function roundScoped(stepId: string): boolean {
+	return ["core.triage", "core.verification"].includes(stepId);
+}
+/**
+ * Canonical Herdr agent name for a workflow-managed agent.
+ *
+ * Herdr caps names at 32 chars matching ^[a-z][a-z0-9_-]*$. Instead of
+ * truncating the discriminating change ID (which let concurrent workflows
+ * collide), uniqueness is carried by an 8-hex SHA-256 digest over
+ * changeId/definitionId/stepId/role — injective across every live workflow.
+ *
+ * Persistent single-role steps (planner, worker, archive) get `<role>-<hash8>`:
+ * one stable identity across every run/generation of that role within the
+ * workflow, so follow-up cycles (review comments, retries) reuse the existing
+ * agent instead of always launching a new one. Grouped one-shot roles
+ * (triage/verification) get `<shortrole>-<hash8>-<runId8>` so each round gets a
+ * fresh agent; the role prefix is cosmetic only (the hash already encodes the
+ * full role) and is clamped to keep the name under the cap.
+ */
+export function canonicalAgentName(
 	changeId: string,
-	run: ReturnType<WorkflowEngine["getRun"]>,
+	definitionId: string,
+	run: { stepId: string; role: string; id: string },
 ): string {
-	// Herdr caps agent names at 32 chars (^[a-z][a-z0-9_-]*$). Grouped, one-shot
-	// roles (triage/verification) anchor uniqueness on role + run id so each
-	// round gets a fresh agent. Persistent single-role steps (planner, worker,
-	// archive) must keep one stable identity across every run/generation of
-	// that role within a workflow, so follow-up cycles (review comments,
-	// blocked/failed retries) reuse the existing agent via `herdr agent prompt`
-	// instead of always launching a new one.
-	const suffix = ["core.triage", "core.verification"].includes(run.stepId)
+	const hash = createHash("sha256")
+		.update(`${changeId}\n${definitionId}\n${run.stepId}\n${run.role}`)
+		.digest("hex")
+		.slice(0, 8);
+	if (!roundScoped(run.stepId)) return `${run.role}-${hash}`;
+	const shortRole = run.role.endsWith("-verifier")
+		? `${run.role.slice(0, -9)}-verif`
+		: run.role;
+	return `${shortRole.slice(0, 14)}-${hash}-${run.id.slice(0, 8)}`;
+}
+/**
+ * Pre-canonical naming (`<truncated changeId>-<role>[-<runId8>]`). Lossy under
+ * Herdr's 32-char cap; kept only so in-flight workflows launched before the
+ * canonical scheme resolve once via the legacy derivation, then migrate to
+ * canonical names on first adoption.
+ */
+export function legacyRunName(
+	changeId: string,
+	run: { stepId: string; role: string; id: string },
+): string {
+	const suffix = roundScoped(run.stepId)
 		? `-${run.role}-${run.id.slice(0, 8)}`
 		: `-${run.role}`;
 	const head = changeId.slice(0, Math.max(1, 32 - suffix.length));
 	return `${head}${suffix}`.slice(0, 32);
 }
-export const effectRunnerTest = { runName };
+interface HerdrAgent {
+	pane_id?: string;
+	tab_id?: string;
+	session_id?: string;
+	agent_status?: string;
+}
+export interface LiveAgent {
+	name: string;
+	paneId: string;
+	tabId?: string;
+	sessionId?: string;
+}
+function getLiveAgent(herdr: HerdrPort, key: string): HerdrAgent | undefined {
+	try {
+		const agent = (herdr.call("agent", "get", key) as { agent?: HerdrAgent })
+			.agent;
+		if (!agent?.pane_id) return undefined;
+		if (!agent.agent_status || agent.agent_status === "unknown")
+			return undefined;
+		return agent;
+	} catch {
+		return undefined;
+	}
+}
+function adopt(name: string, live: HerdrAgent): LiveAgent {
+	return {
+		name,
+		paneId: String(live.pane_id),
+		...(live.tab_id ? { tabId: String(live.tab_id) } : {}),
+		...(live.session_id ? { sessionId: String(live.session_id) } : {}),
+	};
+}
+/**
+ * Single authority for reuse-before-spawn: given a run's persisted handle and
+ * its canonical identity, find the live agent to talk to.
+ *
+ * 1. A stored handle's pane id is transport only — confirm it still belongs to
+ *    a live agent; on mismatch/death discard the pane id but keep looking.
+ * 2. Look the agent up by canonical name and adopt its current pane.
+ * 3. Fall back to the legacy derivation once (migration window for agents
+ *    launched before the canonical scheme).
+ *
+ * The returned name is always canonical, so adopting re-keys stale handles
+ * onto the canonical scheme. Returns undefined when no live agent exists —
+ * the only outcome under which callers may spawn a fresh pane.
+ */
+export function resolveLiveAgent(
+	herdr: HerdrPort,
+	changeId: string,
+	definitionId: string,
+	run: { stepId: string; role: string; id: string; handle?: AgentHandle },
+): LiveAgent | undefined {
+	const canonical = canonicalAgentName(changeId, definitionId, run);
+	if (run.handle?.paneId) {
+		const live = getLiveAgent(herdr, run.handle.paneId);
+		if (live && live.pane_id === run.handle.paneId)
+			return adopt(canonical, live);
+	}
+	const byCanonical = getLiveAgent(herdr, canonical);
+	if (byCanonical) return adopt(canonical, byCanonical);
+	const legacy = legacyRunName(changeId, run);
+	if (legacy === canonical) return undefined;
+	const byLegacy = getLiveAgent(herdr, legacy);
+	return byLegacy ? adopt(canonical, byLegacy) : undefined;
+}
+/**
+ * Publishes `.herdr-workflow/runtime-bin/by-agent/<canonicalName>` pointing at
+ * the current run's run.env (relative to the worktree), via atomic rename. The
+ * pi telemetry bridge reads it with its own --name to recover the run env
+ * deterministically for every name shape. Written at launch and at every
+ * reused-prompt delivery so the pointer never outlives its run.
+ */
+export function writeAgentEnvPointer(
+	worktree: string,
+	agentName: string,
+	runId: string,
+): void {
+	const pointer = path.join(
+		worktree,
+		".herdr-workflow",
+		"runtime-bin",
+		"by-agent",
+		agentName,
+	);
+	fs.mkdirSync(path.dirname(pointer), { recursive: true });
+	const target = path.join(".herdr-workflow", "runtime-bin", runId, "run.env");
+	const temporary = `${pointer}.${process.pid}.tmp`;
+	fs.writeFileSync(temporary, `${target}\n`, { mode: 0o600 });
+	fs.renameSync(temporary, pointer);
+}
+export const effectRunnerTest = {
+	canonicalAgentName,
+	legacyRunName,
+	resolveLiveAgent,
+	writeAgentEnvPointer,
+};
 function renderedAssignment(
 	engine: WorkflowEngine,
 	repo: string,
