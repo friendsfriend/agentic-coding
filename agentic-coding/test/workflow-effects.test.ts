@@ -122,6 +122,24 @@ test("runner drains workspace and agent effects, then stops stale run after repa
 		expect(active.runs[0]?.status).toBe("working");
 		expect(active.runs[0]?.paneId).toBe("pane");
 		expect(adapter.launches).toBe(1);
+		// Launch publishes the per-agent pointer at the canonical name so the
+		// telemetry bridge can recover this run's env.
+		expect(
+			fs.readFileSync(
+				path.join(
+					repo,
+					".herdr-workflow",
+					"runtime-bin",
+					"by-agent",
+					effectRunnerTest.canonicalAgentName("effects", "no-openspec", {
+						stepId: "core.implementation",
+						role: "worker",
+						id: String(active.runs[0]?.id),
+					}),
+				),
+				"utf8",
+			),
+		).toContain(String(active.runs[0]?.id));
 		expect(adapter.context?.environment.HERDR_STEP_ID).toBe(
 			"core.implementation",
 		);
@@ -316,6 +334,7 @@ test("review-comment loop reuses the planner agent by stable name instead of lau
 		let prompts = 0;
 		let paneForRunCalls = 0;
 		const capturedNames: string[] = [];
+		const promptTargets: string[] = [];
 		const herdr = {
 			call(...args: string[]) {
 				if (args[0] === "tab" && args[1] === "list")
@@ -336,6 +355,7 @@ test("review-comment loop reuses the planner agent by stable name instead of lau
 				}
 				if (args[0] === "agent" && args[1] === "prompt") {
 					prompts++;
+					promptTargets.push(String(args[2]));
 					return {};
 				}
 				throw new Error(`unexpected ${args.join(" ")}`);
@@ -365,7 +385,13 @@ test("review-comment loop reuses the planner agent by stable name instead of lau
 		expect(paneForRunCalls).toBe(1);
 		const firstRunId = started.view.runs[0]?.id;
 		const firstName = adapter.context?.name;
-		expect(firstName).toBe("plan-reuse-planner");
+		expect(firstName).toBe(
+			effectRunnerTest.canonicalAgentName("plan-reuse", "standard", {
+				stepId: "core.plan",
+				role: "planner",
+				id: "irrelevant-for-persistent-roles",
+			}),
+		);
 
 		const atGate = engine.dispatch(repo, {
 			type: "operator.repair",
@@ -394,7 +420,23 @@ test("review-comment loop reuses the planner agent by stable name instead of lau
 		expect(adapter.launches).toBe(1);
 		expect(paneForRunCalls).toBe(1);
 		expect(prompts).toBe(1);
-		expect(capturedNames.every((name) => name === firstName)).toBe(true);
+		// The reuse prompt is delivered to the adopted live pane (transport id),
+		// while the persisted handle keeps the canonical name (identity).
+		expect(promptTargets).toEqual(["planner-pane"]);
+		// Reused-prompt delivery republishes the per-agent run-env pointer for the
+		// new run, so the telemetry bridge recovers the right environment.
+		expect(
+			fs.readFileSync(
+				path.join(
+					repo,
+					".herdr-workflow",
+					"runtime-bin",
+					"by-agent",
+					String(firstName),
+				),
+				"utf8",
+			),
+		).toContain(secondRun?.id ?? "");
 		if (!secondRun) throw new Error("expected second run");
 		const run = engine.getRun(repo, secondRun.id);
 		expect(run.handle?.paneId).toBe("planner-pane");
@@ -440,72 +482,198 @@ test("review-comment loop reuses the planner agent by stable name instead of lau
 	}
 });
 
-test("runName stays within herdr 32-char agent name limit and stays unique", () => {
-	const run = {
+test("canonical agent names stay within herdr limits and never collide across long change IDs", () => {
+	const verifier = {
 		role: "performance-verifier",
 		id: "1234567890abcdef1234567890abcdef",
 		stepId: "core.verification",
-	} as Parameters<typeof effectRunnerTest.runName>[1];
-	const short = effectRunnerTest.runName("test-123", run);
-	expect(short.length).toBeLessThanOrEqual(32);
-	expect(short).toMatch(/^[a-z][a-z0-9_-]*$/);
-	const long = effectRunnerTest.runName(
+	} as Parameters<typeof effectRunnerTest.canonicalAgentName>[2];
+	for (const changeId of [
+		"test-123",
 		"this-change-id-is-way-too-long-for-any-agent-name-limit",
-		run,
+	]) {
+		const name = effectRunnerTest.canonicalAgentName(
+			changeId,
+			"standard",
+			verifier,
+		);
+		expect(name.length).toBeLessThanOrEqual(32);
+		expect(name).toMatch(/^[a-z][a-z0-9_-]*$/);
+		expect(name.endsWith(verifier.id.slice(0, 8))).toBe(true);
+	}
+	// Change IDs sharing a long common prefix (legacy truncation width) must
+	// still map to distinct live agent names.
+	const worker = {
+		role: "worker",
+		id: "1234567890abcdef1234567890abcdef",
+		stepId: "core.implementation",
+	} as Parameters<typeof effectRunnerTest.canonicalAgentName>[2];
+	const prefix = "rethink-agent-and-pane-identification-shared-prefix";
+	const one = effectRunnerTest.canonicalAgentName(
+		`${prefix}-one`,
+		"standard",
+		worker,
 	);
-	expect(long.length).toBeLessThanOrEqual(32);
-	expect(long).toMatch(/^[a-z][a-z0-9_-]*$/);
-	expect(long.includes(run.role)).toBe(true);
-	expect(long.endsWith(run.id.slice(0, 8))).toBe(true);
-	expect(effectRunnerTest.runName("a", run).length).toBeLessThanOrEqual(32);
+	const two = effectRunnerTest.canonicalAgentName(
+		`${prefix}-two`,
+		"direct-apply",
+		worker,
+	);
+	expect(one).not.toBe(two);
+	expect(one.length).toBeLessThanOrEqual(32);
 });
 
-test("runName is stable across generations for persistent single-role steps", () => {
-	const first = {
-		role: "planner",
-		id: "1234567890abcdef1234567890abcdef",
-		stepId: "core.plan",
-	} as Parameters<typeof effectRunnerTest.runName>[1];
-	const second = {
-		role: "planner",
-		id: "fedcba0987654321fedcba0987654321",
-		stepId: "core.plan",
-	} as Parameters<typeof effectRunnerTest.runName>[1];
-	expect(effectRunnerTest.runName("change-id", first)).toBe(
-		effectRunnerTest.runName("change-id", second),
+test("canonical agent names are stable across generations and isolated per round", () => {
+	const name = (stepId: string, role: string, id: string) =>
+		effectRunnerTest.canonicalAgentName("change-id", "standard", {
+			stepId,
+			role,
+			id,
+		});
+	// Persistent single-role steps keep one identity across every run/generation.
+	expect(name("core.plan", "planner", "12345678")).toBe(
+		name("core.plan", "planner", "fedcba09"),
 	);
-	const worker1 = {
-		role: "worker",
-		id: "1234567890abcdef1234567890abcdef",
+	expect(name("core.implementation", "worker", "12345678")).toBe(
+		name("core.implementation", "worker", "fedcba09"),
+	);
+	expect(name("core.archive", "archive", "12345678")).toBe(
+		name("core.archive", "archive", "fedcba09"),
+	);
+	// Grouped one-shot roles scope per round via the run id.
+	expect(name("core.verification", "quality-verifier", "12345678")).not.toBe(
+		name("core.verification", "quality-verifier", "fedcba09"),
+	);
+	// Roles within the same round stay distinct even when abbreviated.
+	const roles = [
+		"quality-verifier",
+		"security-verifier",
+		"performance-verifier",
+		"openspec-verifier",
+		"usability-verifier",
+		"test-verifier",
+	];
+	const roundNames = roles.map((role) =>
+		name("core.verification", role, "12345678"),
+	);
+	for (const roleName of roundNames) {
+		expect(roleName.length).toBeLessThanOrEqual(32);
+		expect(roleName).toMatch(/^[a-z][a-z0-9_-]*$/);
+	}
+	expect(new Set(roundNames).size).toBe(roles.length);
+	for (const value of [
+		name("core.plan", "planner", "12345678"),
+		...roundNames,
+	]) {
+		expect(value.length).toBeLessThanOrEqual(32);
+		expect(value).toMatch(/^[a-z][a-z0-9_-]*$/);
+	}
+});
+
+test("resolveLiveAgent reuses the live pane and recovers stale handles by identity", () => {
+	const run = {
 		stepId: "core.implementation",
-	} as Parameters<typeof effectRunnerTest.runName>[1];
-	const worker2 = {
 		role: "worker",
-		id: "fedcba0987654321fedcba0987654321",
-		stepId: "core.implementation",
-	} as Parameters<typeof effectRunnerTest.runName>[1];
-	expect(effectRunnerTest.runName("change-id", worker1)).toBe(
-		effectRunnerTest.runName("change-id", worker2),
+		id: "1234567890abcdef",
+	};
+	const canonical = effectRunnerTest.canonicalAgentName(
+		"change",
+		"standard",
+		run,
 	);
-	const archive1 = {
-		role: "archive",
-		id: "1234567890abcdef1234567890abcdef",
-		stepId: "core.archive",
-	} as Parameters<typeof effectRunnerTest.runName>[1];
-	const archive2 = {
-		role: "archive",
-		id: "fedcba0987654321fedcba0987654321",
-		stepId: "core.archive",
-	} as Parameters<typeof effectRunnerTest.runName>[1];
-	expect(effectRunnerTest.runName("change-id", archive1)).toBe(
-		effectRunnerTest.runName("change-id", archive2),
+	const legacy = effectRunnerTest.legacyRunName("change", run);
+	const herdrWith = (responses: Record<string, unknown>) => ({
+		call(...args: string[]) {
+			if (args[0] === "agent" && args[1] === "get") {
+				if (!(args[2] in responses)) throw new Error(`not found: ${args[2]}`);
+				return responses[args[2]];
+			}
+			throw new Error(`unexpected ${args.join(" ")}`);
+		},
+	});
+
+	// Stale stored pane id, live agent under the canonical name: adopt its pane.
+	const stale = effectRunnerTest.resolveLiveAgent(
+		herdrWith({
+			[canonical]: {
+				agent: {
+					pane_id: "moved-pane",
+					tab_id: "tab9",
+					agent_status: "working",
+				},
+			},
+		}),
+		"change",
+		"standard",
+		{ ...run, handle: { runtime: "pi", name: canonical, paneId: "dead-pane" } },
 	);
+	expect(stale?.paneId).toBe("moved-pane");
+	expect(stale?.tabId).toBe("tab9");
+	expect(stale?.name).toBe(canonical);
+
+	// Live handle confirmed via its own pane id: reused as-is.
+	const healthy = effectRunnerTest.resolveLiveAgent(
+		herdrWith({
+			"kept-pane": {
+				agent: { pane_id: "kept-pane", agent_status: "idle" },
+			},
+		}),
+		"change",
+		"standard",
+		{ ...run, handle: { runtime: "pi", name: canonical, paneId: "kept-pane" } },
+	);
+	expect(healthy?.paneId).toBe("kept-pane");
+
+	// Live agent reachable only under the legacy name: adopted and re-keyed.
+	const migrated = effectRunnerTest.resolveLiveAgent(
+		herdrWith({
+			[legacy]: { agent: { pane_id: "legacy-pane", agent_status: "working" } },
+		}),
+		"change",
+		"standard",
+		run,
+	);
+	expect(migrated?.paneId).toBe("legacy-pane");
+	expect(migrated?.name).toBe(canonical);
+
+	// No live agent anywhere: the only outcome allowed to spawn.
 	expect(
-		effectRunnerTest.runName("change-id", first).length,
-	).toBeLessThanOrEqual(32);
-	expect(effectRunnerTest.runName("change-id", first)).toMatch(
-		/^[a-z][a-z0-9_-]*$/,
-	);
+		effectRunnerTest.resolveLiveAgent(herdrWith({}), "change", "standard", run),
+	).toBeUndefined();
+	// A dead tracked process reports 'unknown' and must not count as live.
+	expect(
+		effectRunnerTest.resolveLiveAgent(
+			herdrWith({
+				[canonical]: { agent: { pane_id: "p", agent_status: "unknown" } },
+			}),
+			"change",
+			"standard",
+			run,
+		),
+	).toBeUndefined();
+});
+
+test("writeAgentEnvPointer atomically publishes the run env path keyed by agent name", () => {
+	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "env-pointer-"));
+	try {
+		effectRunnerTest.writeAgentEnvPointer(repo, "planner-ab12cd34", "run-1234");
+		const pointer = path.join(
+			repo,
+			".herdr-workflow",
+			"runtime-bin",
+			"by-agent",
+			"planner-ab12cd34",
+		);
+		expect(fs.readFileSync(pointer, "utf8")).toBe(
+			".herdr-workflow/runtime-bin/run-1234/run.env\n",
+		);
+		// Republishing overwrites in place without leaving temp files behind.
+		effectRunnerTest.writeAgentEnvPointer(repo, "planner-ab12cd34", "run-5678");
+		expect(fs.readFileSync(pointer, "utf8")).toContain("run-5678");
+		expect(fs.readdirSync(path.dirname(pointer))).toEqual(["planner-ab12cd34"]);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
 });
 
 test("workspace retry recovers stable branch and workspace identity", async () => {

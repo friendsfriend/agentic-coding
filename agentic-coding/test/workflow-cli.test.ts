@@ -11,6 +11,7 @@ import type {
 import {
 	AGENT_EXTENSION_SUBCOMMANDS,
 	cliTest,
+	paneForRunFactory,
 	REQUIRED_FLAGS,
 	run,
 	SUBCOMMANDS,
@@ -20,6 +21,7 @@ import { registerBuiltins } from "../src/workflow/definitions.ts";
 import {
 	agentEffectHandlers,
 	EffectRunner,
+	effectRunnerTest,
 } from "../src/workflow/effect-runner.ts";
 import { WorkflowEngine } from "../src/workflow/runtime.ts";
 
@@ -397,5 +399,145 @@ describe("breaking workflow CLI surface", () => {
 			process.env = saved;
 			fs.rmSync(repo, { recursive: true, force: true });
 		}
+	});
+
+	test("persistent roles reuse the resolved pane; tab create fires only on the no-agent outcome", async () => {
+		const snapshot = {
+			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
+			definition: { id: "standard", version: 1, digest: "d" },
+		};
+		const run = {
+			id: "run-worker",
+			workflowId: "wf",
+			stepId: "core.implementation",
+			role: "worker",
+			attempt: 1,
+			status: "pending",
+		};
+		const fakeEngine = {
+			getRun: (_repo: string, id: string) => (id === run.id ? run : undefined),
+			getSnapshot: () => snapshot,
+			status: () => ({ runs: [run] }),
+		} as unknown as WorkflowEngine;
+		const canonical = effectRunnerTest.canonicalAgentName(
+			"change",
+			"standard",
+			{
+				stepId: run.stepId,
+				role: run.role,
+				id: run.id,
+			},
+		);
+		const calls: string[][] = [];
+		const herdrWithLive = (live: boolean) => ({
+			call(...args: string[]) {
+				calls.push(args);
+				if (args[0] === "agent" && args[1] === "get") {
+					if (live && args[2] === canonical)
+						return {
+							agent: { pane_id: "live-pane", agent_status: "working" },
+						};
+					throw new Error(`not found: ${args[2]}`);
+				}
+				if (args[0] === "tab" && args[1] === "create")
+					return { root_pane: { pane_id: "new-pane", tab_id: "new-tab" } };
+				return {};
+			},
+		});
+
+		// Live agent under the canonical name: adopt its pane, never create a tab.
+		calls.length = 0;
+		const reused = await paneForRunFactory(
+			fakeEngine,
+			"/repo",
+			herdrWithLive(true),
+		)(run.id);
+		expect(reused).toEqual({ paneId: "live-pane" });
+		expect(
+			calls.some((args) => args[0] === "tab" && args[1] === "create"),
+		).toBe(false);
+
+		// No live agent anywhere: only now may a new tab be created.
+		calls.length = 0;
+		const spawned = await paneForRunFactory(
+			fakeEngine,
+			"/repo",
+			herdrWithLive(false),
+		)(run.id);
+		expect(spawned).toEqual({ paneId: "new-pane", tabId: "new-tab" });
+		expect(
+			calls.filter((args) => args[0] === "tab" && args[1] === "create"),
+		).toHaveLength(1);
+	});
+
+	test("verification layout anchors on siblings confirmed live by canonical name, not stored pane ids", async () => {
+		const snapshot = {
+			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
+			definition: { id: "standard", version: 1, digest: "d" },
+		};
+		const qv = {
+			id: "qv",
+			workflowId: "wf",
+			stepId: "core.verification",
+			role: "quality-verifier",
+			attempt: 1,
+			status: "working",
+		};
+		const sibling = {
+			id: "sv",
+			workflowId: "wf",
+			stepId: "core.verification",
+			role: "security-verifier",
+			attempt: 1,
+			status: "working",
+			handle: { runtime: "pi", name: "whatever", paneId: "dead-pane" },
+		};
+		const fakeEngine = {
+			getRun: (_repo: string, id: string) =>
+				[qv, sibling].find((r) => r.id === id),
+			getSnapshot: () => snapshot,
+			status: () => ({ runs: [qv, sibling] }),
+		} as unknown as WorkflowEngine;
+		const siblingCanonical = effectRunnerTest.canonicalAgentName(
+			"change",
+			"standard",
+			{ stepId: sibling.stepId, role: sibling.role, id: sibling.id },
+		);
+		const calls: string[][] = [];
+		const herdr = {
+			call(...args: string[]) {
+				calls.push(args);
+				if (args[0] === "agent" && args[1] === "get") {
+					if (args[2] === siblingCanonical)
+						return {
+							agent: { pane_id: "sibling-live", agent_status: "working" },
+						};
+					throw new Error(`not found: ${args[2]}`);
+				}
+				if (args[0] === "pane" && args[1] === "layout")
+					return {
+						layout: { panes: [{ pane_id: "sibling-live", rect: { y: 0 } }] },
+					};
+				if (args[0] === "pane" && args[1] === "split")
+					return { pane: { pane_id: "split-pane", tab_id: "tab-split" } };
+				return {};
+			},
+		};
+		const pane = await paneForRunFactory(fakeEngine, "/repo", herdr)(qv.id);
+		// The stale stored pane id was discarded as a probe (never anchored on):
+		// the split targets the sibling's live pane found via its canonical name.
+		expect(
+			calls.some((args) => args[0] === "pane" && args.includes("dead-pane")),
+		).toBe(false);
+		expect(calls).toContainEqual([
+			"pane",
+			"split",
+			"sibling-live",
+			"--direction",
+			"down",
+			"--ratio",
+			"0.5",
+		]);
+		expect(pane).toEqual({ paneId: "split-pane", tabId: "tab-split" });
 	});
 });

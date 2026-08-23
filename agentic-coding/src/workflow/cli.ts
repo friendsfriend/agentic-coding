@@ -5,6 +5,7 @@ import { Herdr } from "../herdr-client.ts";
 import {
 	type AgentAdapter,
 	HerdrLifecycle,
+	type HerdrPort,
 	OpenCodeAdapter,
 	OpenCodeV2Adapter,
 	PiAdapter,
@@ -12,7 +13,11 @@ import {
 import { manageAgentExtension } from "./agent-extensions.ts";
 import type { CredentialPrompt } from "./credentials.ts";
 import { definitionVersionForPolicy, registerBuiltins } from "./definitions.ts";
-import { agentEffectHandlers, EffectRunner } from "./effect-runner.ts";
+import {
+	agentEffectHandlers,
+	EffectRunner,
+	resolveLiveAgent,
+} from "./effect-runner.ts";
 import { loadConfig } from "./effects.ts";
 import {
 	parseAgentsConfig,
@@ -53,6 +58,162 @@ const registry = registerBuiltins(
 export function engine(): WorkflowEngine {
 	return new WorkflowEngine(registry);
 }
+/**
+ * Allocates the pane a run launches into. Reuse-before-spawn is authoritative:
+ * persistent roles adopt the live agent's resolved pane and a new tab is
+ * created only when no live agent resolves; grouped triage/verification rounds
+ * keep their split geometry but anchor on siblings confirmed live through the
+ * canonical-name resolver instead of raw stored pane ids.
+ */
+export function paneForRunFactory(
+	workflowEngine: WorkflowEngine,
+	repo: string,
+	herdr: HerdrPort,
+): (runId: string) => Promise<{ paneId: string; tabId?: string }> {
+	return async (runId) => {
+		const run = workflowEngine.getRun(repo, runId);
+		const snapshot = workflowEngine.getSnapshot(repo, run.workflowId);
+		if (!snapshot.metadata.workspace)
+			throw new Error("workflow workspace unavailable");
+		const roundScoped = ["core.triage", "core.verification"].includes(
+			run.stepId,
+		);
+		if (!roundScoped) {
+			// Persistent role: adopt the live agent's pane instead of spawning a
+			// duplicate; fall through to tab create only on the no-agent outcome.
+			const resolved = resolveLiveAgent(
+				herdr,
+				snapshot.metadata.changeId,
+				snapshot.definition.id,
+				run,
+			);
+			if (resolved) return { paneId: resolved.paneId };
+		}
+		if (roundScoped) {
+			const round = workflowEngine
+				.status(repo, snapshot.metadata.changeId)
+				.runs.map((item) => workflowEngine.getRun(repo, item.id))
+				.filter(
+					(item) =>
+						["core.triage", "core.verification"].includes(item.stepId) &&
+						item.attempt === run.attempt &&
+						!["expired", "failed"].includes(item.status),
+				); // rowid order = launch order; a createdAt/id tiebreak shuffles same-ms runs
+			const { k, n } = verificationPosition(round, run.id);
+			const all = round.filter((item) => item.id !== run.id);
+			const bottomPane = (anchor: string): string | undefined => {
+				try {
+					const layout = herdr.call("pane", "layout", "--pane", anchor) as {
+						layout?: {
+							panes?: Array<{ pane_id?: string; rect?: { y?: number } }>;
+						};
+					};
+					const panes = layout.layout?.panes ?? [];
+					return [...panes]
+						.filter((pane) => pane.pane_id !== anchor)
+						.sort((a, b) => (b.rect?.y ?? 0) - (a.rect?.y ?? 0))[0]?.pane_id;
+				} catch {
+					return undefined;
+				}
+			};
+			const split = (target: string, direction: "right" | "down") => {
+				try {
+					const result = herdr.call(
+						"pane",
+						"split",
+						target,
+						"--direction",
+						direction,
+						"--ratio",
+						"0.5",
+					) as { pane?: { pane_id?: string; tab_id?: string } };
+					return result.pane?.pane_id
+						? {
+								paneId: result.pane.pane_id,
+								...(result.pane.tab_id ? { tabId: result.pane.tab_id } : {}),
+							}
+						: undefined;
+				} catch {
+					return undefined;
+				}
+			};
+			if (n >= 2) {
+				// Siblings anchor by identity: resolve each live through the same
+				// canonical-name resolver as every other launch path.
+				const resolvedSiblings = new Map<string, string>();
+				for (const sibling of all) {
+					if (!sibling.handle) continue;
+					const resolved = resolveLiveAgent(
+						herdr,
+						snapshot.metadata.changeId,
+						snapshot.definition.id,
+						sibling,
+					);
+					if (resolved) resolvedSiblings.set(sibling.id, resolved.paneId);
+				}
+				let anchor: string | undefined;
+				for (const sibling of all) {
+					const pane = resolvedSiblings.get(sibling.id);
+					if (pane) {
+						anchor = pane;
+						break;
+					}
+				}
+				if (anchor) {
+					if (k === 2) {
+						if (n >= 3) split(anchor, "down");
+						const placed = split(anchor, "right");
+						if (placed) return placed;
+					} else if (k === 3) {
+						// bottom full-width row was created with the second pane; reuse it, or create it now if the second launch was retried
+						const spare = bottomPane(anchor);
+						if (spare) return { paneId: spare };
+						const placed = split(anchor, "down");
+						if (placed) return placed;
+					} else if (k === 4) {
+						const bottom = bottomPane(anchor);
+						if (bottom) {
+							const placed = split(bottom, "right");
+							if (placed) return placed;
+						}
+						const placed = split(anchor, "down");
+						if (placed) return placed;
+					} else {
+						const nextSibling = all[k - 3];
+						const target =
+							(nextSibling
+								? resolvedSiblings.get(nextSibling.id)
+								: undefined) ??
+							bottomPane(anchor) ??
+							anchor;
+						if (target) {
+							const placed = split(target, "down");
+							if (placed) return placed;
+						}
+					}
+				}
+			}
+		}
+		const label = roundScoped ? "verification" : run.role;
+		const result = herdr.call(
+			"tab",
+			"create",
+			"--workspace",
+			snapshot.metadata.workspace,
+			"--cwd",
+			snapshot.metadata.worktree,
+			"--label",
+			label,
+		) as { root_pane?: { pane_id?: string; tab_id?: string } };
+		if (!result.root_pane?.pane_id)
+			throw new Error("Herdr tab create returned no pane");
+		return {
+			paneId: result.root_pane.pane_id,
+			...(result.root_pane.tab_id ? { tabId: result.root_pane.tab_id } : {}),
+		};
+	};
+}
+
 export async function drainEffects(
 	workflowEngine: WorkflowEngine,
 	repo: string,
@@ -73,144 +234,7 @@ export async function drainEffects(
 		remote: config.workflow.remote,
 		prTool: config.workflow.pr_tool,
 		credentialPrompt,
-		async paneForRun(runId) {
-			const run = workflowEngine.getRun(repo, runId);
-			const snapshot = workflowEngine.getSnapshot(repo, run.workflowId);
-			if (!snapshot.metadata.workspace)
-				throw new Error("workflow workspace unavailable");
-			if (["core.triage", "core.verification"].includes(run.stepId)) {
-				const round = workflowEngine
-					.status(repo, snapshot.metadata.changeId)
-					.runs.map((item) => workflowEngine.getRun(repo, item.id))
-					.filter(
-						(item) =>
-							["core.triage", "core.verification"].includes(item.stepId) &&
-							item.attempt === run.attempt &&
-							!["expired", "failed"].includes(item.status),
-					); // rowid order = launch order; a createdAt/id tiebreak shuffles same-ms runs
-				const { k, n } = verificationPosition(round, run.id);
-				const all = round.filter((item) => item.id !== run.id);
-				const bottomPane = (anchor: string): string | undefined => {
-					try {
-						const layout = herdr.call("pane", "layout", "--pane", anchor) as {
-							layout?: {
-								panes?: Array<{ pane_id?: string; rect?: { y?: number } }>;
-							};
-						};
-						const panes = layout.layout?.panes ?? [];
-						return [...panes]
-							.filter((pane) => pane.pane_id !== anchor)
-							.sort((a, b) => (b.rect?.y ?? 0) - (a.rect?.y ?? 0))[0]?.pane_id;
-					} catch {
-						return undefined;
-					}
-				};
-				const split = (target: string, direction: "right" | "down") => {
-					try {
-						const result = herdr.call(
-							"pane",
-							"split",
-							target,
-							"--direction",
-							direction,
-							"--ratio",
-							"0.5",
-						) as { pane?: { pane_id?: string; tab_id?: string } };
-						return result.pane?.pane_id
-							? {
-									paneId: result.pane.pane_id,
-									...(result.pane.tab_id ? { tabId: result.pane.tab_id } : {}),
-								}
-							: undefined;
-					} catch {
-						return undefined;
-					}
-				};
-				if (n >= 2) {
-					let anchor: string | undefined;
-					for (const sibling of all) {
-						if (!sibling.handle) continue;
-						let live: { agent?: { pane_id?: string; agent_status?: string } };
-						try {
-							live = herdr.call(
-								"agent",
-								"get",
-								sibling.handle.paneId,
-							) as typeof live;
-						} catch (error) {
-							if (
-								/not found|unknown agent|missing/i.test(
-									String((error as Error).message),
-								)
-							)
-								try {
-									herdr.call("pane", "close", sibling.handle.paneId);
-								} catch {}
-							continue;
-						}
-						if (
-							live.agent?.pane_id !== sibling.handle.paneId ||
-							!live.agent.agent_status ||
-							live.agent.agent_status === "unknown"
-						) {
-							try {
-								herdr.call("pane", "close", sibling.handle.paneId);
-							} catch {}
-							continue;
-						}
-						anchor = sibling.handle.paneId;
-						break;
-					}
-					if (anchor) {
-						if (k === 2) {
-							if (n >= 3) split(anchor, "down");
-							const placed = split(anchor, "right");
-							if (placed) return placed;
-						} else if (k === 3) {
-							// bottom full-width row was created with the second pane; reuse it, or create it now if the second launch was retried
-							const spare = bottomPane(anchor);
-							if (spare) return { paneId: spare };
-							const placed = split(anchor, "down");
-							if (placed) return placed;
-						} else if (k === 4) {
-							const bottom = bottomPane(anchor);
-							if (bottom) {
-								const placed = split(bottom, "right");
-								if (placed) return placed;
-							}
-							const placed = split(anchor, "down");
-							if (placed) return placed;
-						} else {
-							const target =
-								all[k - 3]?.handle?.paneId ?? bottomPane(anchor) ?? anchor;
-							if (target) {
-								const placed = split(target, "down");
-								if (placed) return placed;
-							}
-						}
-					}
-				}
-			}
-			const label = ["core.triage", "core.verification"].includes(run.stepId)
-				? "verification"
-				: run.role;
-			const result = herdr.call(
-				"tab",
-				"create",
-				"--workspace",
-				snapshot.metadata.workspace,
-				"--cwd",
-				snapshot.metadata.worktree,
-				"--label",
-				label,
-			) as { root_pane?: { pane_id?: string; tab_id?: string } };
-			if (!result.root_pane?.pane_id)
-				throw new Error("Herdr tab create returned no pane");
-			return {
-				paneId: result.root_pane.pane_id,
-				...(result.root_pane.tab_id ? { tabId: result.root_pane.tab_id } : {}),
-			};
-		},
+		paneForRun: paneForRunFactory(workflowEngine, repo, herdr),
 	});
 	await new EffectRunner(repo, workflowEngine, handlers).drain();
 }

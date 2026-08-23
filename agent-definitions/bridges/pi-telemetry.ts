@@ -1,24 +1,23 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
-import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 // Deterministic env backstop: herdr's agent spawn does not reliably inherit the
 // pane shell env (first agent start often fails with "not an available shell"
 // and the retry spawns in a stale tracked shell, giving the agent another run's
-// environment). Recover the run environment from the engine-written
-// runtime-bin/<runId>/run.env — the run id is the 8-char suffix of --name.
+// environment). The engine writes .herdr-workflow/runtime-bin/by-agent/<name>
+// pointing at the current run's run.env before every launch and every
+// reused-prompt delivery, so recover keyed off this process's own --name
+// identity — works for persistent-role and round-scoped names alike.
 function recoverRunEnv(): void {
   try {
     const nameIndex = process.argv.indexOf('--name');
     const name = nameIndex >= 0 ? process.argv[nameIndex + 1] : undefined;
-    const runId8 = name?.split('-').at(-1);
-    if (!runId8 || !/^[0-9a-f]{8}$/.test(runId8)) return;
-    const bin = join(process.cwd(), '.herdr-workflow', 'runtime-bin');
-    let candidates: string[];
-    try { candidates = readdirSync(bin).filter(entry => entry.startsWith(runId8)) } catch { return }
-    if (!candidates.length) return;
-    candidates.sort((a, b) => statSync(join(bin, b)).mtimeMs - statSync(join(bin, a)).mtimeMs);
-    const content = readFileSync(join(bin, candidates[0]!, 'run.env'), 'utf8');
+    if (!name || !/^[a-z][a-z0-9_-]*$/.test(name)) return;
+    const pointer = join(process.cwd(), '.herdr-workflow', 'runtime-bin', 'by-agent', name);
+    const relative = readFileSync(pointer, 'utf8').trim();
+    if (!relative) return;
+    const content = readFileSync(join(process.cwd(), relative), 'utf8');
     for (const line of content.split('\n')) {
       const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
       if (!match) continue;
