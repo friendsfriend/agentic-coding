@@ -10,15 +10,17 @@
  *   `25h 2m` (sub-minute remainder is truncated).
  */
 export function formatDuration(totalSeconds: number): string {
-  if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return "0s";
-  const total = Math.floor(totalSeconds);
-  if (total < 60) return `${total}s`;
-  const minutes = Math.floor(total / 60);
-  if (minutes < 60) {
-    const seconds = total % 60;
-    return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
-  }
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = minutes % 60;
-  return remainingMinutes === 0 ? `${hours}h` : `${hours}h ${remainingMinutes}m`;
+	if (!Number.isFinite(totalSeconds) || totalSeconds < 0) return "0s";
+	const total = Math.floor(totalSeconds);
+	if (total < 60) return `${total}s`;
+	const minutes = Math.floor(total / 60);
+	if (minutes < 60) {
+		const seconds = total % 60;
+		return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+	}
+	const hours = Math.floor(minutes / 60);
+	const remainingMinutes = minutes % 60;
+	return remainingMinutes === 0
+		? `${hours}h`
+		: `${hours}h ${remainingMinutes}m`;
 }

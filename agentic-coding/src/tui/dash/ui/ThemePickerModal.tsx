@@ -1,6 +1,55 @@
 /** @jsxImportSource @opentui/solid */
-import { GenericModal } from './GenericModal';
-import { themeColorForTheme } from './theme';
-import { uiColors } from './colors';
-import { SelectableList } from './Selectable';
-export function ThemePickerModal(props: { selected: number; active: string; themes: string[]; query: string; filtering: boolean }) { return <GenericModal title="Theme Picker" widthPercent={0.7} heightPercent={0.75} help={[{ key: 'j/k', action: 'Navigate' }, { key: 'Enter', action: 'Apply' }, { key: 'Esc', action: 'Close' }]} search={props.filtering ? props.query : undefined}><SelectableList items={props.themes} selectedIndex={props.selected} renderItem={name => <box height={1} width="100%" flexDirection="row"><text fg={uiColors.textPrimary}>{name === props.active ? '✓ ' : '  '}{name.padEnd(28)}</text><text fg={themeColorForTheme(name, 'primary', uiColors.primary)}>▬▬</text><text fg={themeColorForTheme(name, 'accent', uiColors.accent)}>▬▬</text><text fg={themeColorForTheme(name, 'success', uiColors.success)}>▬▬</text><text fg={themeColorForTheme(name, 'warning', uiColors.warning)}>▬▬</text><text fg={themeColorForTheme(name, 'error', uiColors.error)}>▬▬</text></box>} /></GenericModal>; }
+
+import { uiColors } from "./colors";
+import { GenericModal } from "./GenericModal";
+import { SelectableList } from "./Selectable";
+import { themeColorForTheme } from "./theme";
+export function ThemePickerModal(props: {
+	selected: number;
+	active: string;
+	themes: string[];
+	query: string;
+	filtering: boolean;
+}) {
+	return (
+		<GenericModal
+			title="Theme Picker"
+			widthPercent={0.7}
+			heightPercent={0.75}
+			help={[
+				{ key: "j/k", action: "Navigate" },
+				{ key: "Enter", action: "Apply" },
+				{ key: "Esc", action: "Close" },
+			]}
+			search={props.filtering ? props.query : undefined}
+		>
+			<SelectableList
+				items={props.themes}
+				selectedIndex={props.selected}
+				renderItem={(name) => (
+					<box height={1} width="100%" flexDirection="row">
+						<text fg={uiColors.textPrimary}>
+							{name === props.active ? "✓ " : "  "}
+							{name.padEnd(28)}
+						</text>
+						<text fg={themeColorForTheme(name, "primary", uiColors.primary)}>
+							▬▬
+						</text>
+						<text fg={themeColorForTheme(name, "accent", uiColors.accent)}>
+							▬▬
+						</text>
+						<text fg={themeColorForTheme(name, "success", uiColors.success)}>
+							▬▬
+						</text>
+						<text fg={themeColorForTheme(name, "warning", uiColors.warning)}>
+							▬▬
+						</text>
+						<text fg={themeColorForTheme(name, "error", uiColors.error)}>
+							▬▬
+						</text>
+					</box>
+				)}
+			/>
+		</GenericModal>
+	);
+}

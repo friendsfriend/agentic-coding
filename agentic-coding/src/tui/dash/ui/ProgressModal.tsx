@@ -1,7 +1,14 @@
 /** @jsxImportSource @opentui/solid */
-import { GenericModal } from './GenericModal';
-import { uiColors } from './colors';
+
+import { uiColors } from "./colors";
+import { GenericModal } from "./GenericModal";
 
 export function ProgressModal(props: { message: string }) {
-  return <GenericModal title="Creating workflow" heightLines={7} help={[]}><box alignItems="center" justifyContent="center"><text fg={uiColors.primary}>● {props.message}</text></box></GenericModal>;
+	return (
+		<GenericModal title="Creating workflow" heightLines={7} help={[]}>
+			<box alignItems="center" justifyContent="center">
+				<text fg={uiColors.primary}>● {props.message}</text>
+			</box>
+		</GenericModal>
+	);
 }

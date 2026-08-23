@@ -1,9 +1,18 @@
-# Herdr workflow agent launch
+# Biome linting and formatting
 
-Launch every role with `herdr agent start`; never coordinate raw shell startup, text insertion, or Enter keys. Create topology first, then pass complete Pi arguments after `--`: `herdr agent start <name> --kind pi --pane <pane-id> -- ...`. After `agent start` succeeds, confirm Pi on returned pane with `herdr agent get`, then submit initial prompt through `herdr agent prompt`.
+The `agentic-coding/` package uses Biome as its single linter, import organizer, and formatter (config: `agentic-coding/biome.json`). Do not introduce eslint or prettier; Biome covers both roles.
 
-Planner, worker, and archive roles own separate tabs. Create labeled tab with role cwd and env, wait until returned root pane reports foreground shell, then start role in that pane. Retry `agent start` once only when Herdr reports target pane is not yet available shell.
+Run from `agentic-coding/`:
 
-Triage and all verifier roles share one `verification` tab. Start first role in new tab's returned root pane. For each additional role, split live sibling pane right with role cwd and env, wait for new shell pane, then start role there. If grouped agent state is unknown or missing, close only its pane; preserve sibling verification panes. Never reuse dashboard, git, worker, or other standalone tab as verification tab.
+- `bun run lint` — check for lint, formatting, and import-order issues (must pass with zero diagnostics before finishing any change).
+- `bun run format` — rewrite files in place to fix formatting only.
+- `bunx biome check --write .` — apply safe fixes (formatting, imports); add `--unsafe` for fixable lint issues, then review the diff.
 
-Send follow-up prompts with `herdr agent prompt <name-or-pane> <prompt>` only after `herdr agent get` confirms Pi process. If standalone agent state is unknown or missing, close its tab and start fresh role.
+Rules of thumb:
+
+- Formatting uses tabs. Run `bun run format` (or let editor-on-save) instead of hand-aligning code.
+- Prefer fixing the underlying issue over suppressing; when a warning is intentional (untyped CLI JSON envelopes, shell `${VAR}` strings, generated or deliberately malformed data), add a `// biome-ignore lint/<rule>: <reason>` comment on the line directly above the diagnostic.
+- `a11y` rules are off globally because this is an OpenTUI terminal app, not a web page.
+- Non-null assertions (`value!`) are banned by `style/noNonNullAssertion`. Replace them with a real guard (`if (!x) throw ...` / early return), a fallback (`??`), or restructure so the compiler narrows the value. If a case is genuinely unavoidable, add `// biome-ignore lint/style/noNonNullAssertion: <reason>` on the line directly above.
+- `src/workflow/embedded.generated.ts` is excluded via config override; never hand-edit it or reformat it — regenerate with `bun run build`.
+- Type checking stays with `bun run type-check` (`tsc --noEmit`); Biome does not replace it.
