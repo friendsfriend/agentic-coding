@@ -2084,11 +2084,12 @@ export function App(props: {
 							}}
 						>
 							<box
-								width="50%"
+								flexGrow={1}
+								flexBasis={0}
+								minWidth={0}
 								height="100%"
 								flexDirection="column"
 								gap={1}
-								flexShrink={0}
 							>
 								<Panel
 									title={`Change (${data().age} ago)`}
@@ -2226,7 +2227,12 @@ export function App(props: {
 								title="Agents"
 								accent={uiColors.accent}
 								active={activePanel() === 1}
-								style={{ width: "50%", height: "100%", flexShrink: 0 }}
+								style={{
+									flexGrow: 1,
+									flexBasis: 0,
+									minWidth: 0,
+									height: "100%",
+								}}
 							>
 								<SelectableList
 									items={data().agents}
