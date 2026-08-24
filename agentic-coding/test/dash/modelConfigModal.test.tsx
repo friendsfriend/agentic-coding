@@ -38,39 +38,50 @@ function key(name: string): KeyEvent {
 }
 
 test("model config modal shows profile and preset lists with help entry", async () => {
-	let handler: ((event: KeyEvent) => boolean) | undefined;
-	const t = await testRender(
-		() => (
-			<ModelConfigModal
-				onKeyReady={(h) => {
-					handler = h;
-				}}
-				onCancel={() => {}}
-			/>
-		),
-		{ width: 90, height: 26 },
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "model-modal-test-"));
+	process.env.HERDR_WORKFLOW_CONFIG = path.join(dir, "config.toml");
+	fs.writeFileSync(
+		process.env.HERDR_WORKFLOW_CONFIG,
+		'[ui]\ntheme = "catppuccin"\n',
 	);
-	await t.flush();
-	let frame = t.captureCharFrame();
-	expect(frame).toContain("Model configuration");
-	expect(frame).toContain("Profiles");
-	expect(frame).toContain("Presets");
-	expect(frame).toContain("comments in it are not preserved");
-	handler?.(key("enter")); // open Profiles list
-	await t.flush();
-	frame = t.captureCharFrame();
-	expect(frame).toContain("Agent profiles");
-	expect(frame).toContain("(create new profile…)");
-	handler?.(key("escape"));
-	await t.flush();
-	handler?.(key("down")); // menu -> Presets
-	handler?.(key("enter"));
-	await t.flush();
-	frame = t.captureCharFrame();
-	expect(frame).toContain("Agent presets");
-	expect(frame).toContain("(create new preset…)");
-	t.renderer.destroy();
-});
+	let handler: ((event: KeyEvent) => boolean) | undefined;
+	try {
+		const t = await testRender(
+			() => (
+				<ModelConfigModal
+					onKeyReady={(h) => {
+						handler = h;
+					}}
+					onCancel={() => {}}
+				/>
+			),
+			{ width: 90, height: 26 },
+		);
+		await t.flush();
+		let frame = t.captureCharFrame();
+		expect(frame).toContain("Model configuration");
+		expect(frame).toContain("Profiles");
+		expect(frame).toContain("Presets");
+		expect(frame).toContain("comments in it are not preserved");
+		handler?.(key("enter")); // open Profiles list
+		await t.flush();
+		frame = t.captureCharFrame();
+		expect(frame).toContain("Agent profiles");
+		expect(frame).toContain("(create new profile…)");
+		handler?.(key("escape"));
+		await t.flush();
+		handler?.(key("down")); // menu -> Presets
+		handler?.(key("enter"));
+		await t.flush();
+		frame = t.captureCharFrame();
+		expect(frame).toContain("Agent presets");
+		expect(frame).toContain("(create new preset…)");
+		t.renderer.destroy();
+	} finally {
+		delete process.env.HERDR_WORKFLOW_CONFIG;
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}, 20000);
 
 test("profile editor walks name -> runtime -> model fields", async () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "model-modal-test-"));
@@ -138,7 +149,7 @@ test("deleting a profile requires explicit confirmation", async () => {
 	process.env.HERDR_WORKFLOW_CONFIG = path.join(dir, "config.toml");
 	fs.writeFileSync(
 		process.env.HERDR_WORKFLOW_CONFIG,
-		'[agents]\ndefault_profile = "doomed"\n\n[agents.profiles.doomed]\nruntime = "pi"\n\n[agents.profiles.free]\nruntime = "opencode"\n',
+		'[agents]\ndefault_profile = "doomed"\n\n[agents.profiles.doomed]\nruntime = "pi"\n\n[agents.profiles.free]\nruntime = "opencode"\n\n[agents.profiles.preset-used]\nruntime = "pi"\n\n[agents.presets.some]\ndefault_profile = "doomed"\n[agents.presets.some.steps]\n"core.plan" = "preset-used"\n',
 	);
 	let handler: ((event: KeyEvent) => boolean) | undefined;
 	try {
@@ -186,6 +197,24 @@ test("deleting a profile requires explicit confirmation", async () => {
 		expect(
 			fs.readFileSync(process.env.HERDR_WORKFLOW_CONFIG, "utf8"),
 		).not.toContain("[agents.profiles.free]");
+		// listIndex still points where "free" was: now "preset-used". A profile
+		// referenced by any preset is refused with an error.
+		handler?.(key("d"));
+		await t.flush();
+		handler?.(key("y"));
+		await t.flush();
+		frame = t.captureCharFrame();
+		expect(frame).not.toContain("Delete profile?");
+		const persistedAfterPresetRefusal = fs.readFileSync(
+			process.env.HERDR_WORKFLOW_CONFIG,
+			"utf8",
+		);
+		expect(persistedAfterPresetRefusal).toContain(
+			"[agents.profiles.preset-used]",
+		);
+		expect(persistedAfterPresetRefusal).toContain(
+			'"core.plan" = "preset-used"',
+		);
 		t.renderer.destroy();
 	} finally {
 		delete process.env.HERDR_WORKFLOW_CONFIG;

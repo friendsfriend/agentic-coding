@@ -798,6 +798,7 @@ export function App(props: {
 					? [
 							{ key: "Enter", action: "switch workspace" },
 							{ key: "n", action: "new workflow" },
+							{ key: "m", action: "agent config" },
 							{ key: "f", action: "filter" },
 							{ key: "o", action: "sort" },
 							{ key: "r", action: "refresh" },

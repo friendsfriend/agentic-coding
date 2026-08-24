@@ -9,5 +9,8 @@ export const activeNotification = notification;
 export function notify(message: string, type: Notification["type"] = "info") {
 	setNotification({ message, type });
 	clearTimeout(timer);
-	timer = setTimeout(() => setNotification(undefined), 2200);
+	timer = setTimeout(
+		() => setNotification(undefined),
+		type === "error" ? 6000 : 2200,
+	);
 }
