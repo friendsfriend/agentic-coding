@@ -62,7 +62,7 @@ Built-in steps and workflows SHALL register through same public definition contr
 
 #### Scenario: Built-in workflows initialize
 - **WHEN** engine starts
-- **THEN** standard, direct-apply, and no-OpenSpec definitions SHALL be registered through public registry contract
+- **THEN** standard, direct-apply, no-OpenSpec, and plan-fusion definitions SHALL be registered through public registry contract
 - **AND** engine SHALL validate them identically to later registered definitions
 
 #### Scenario: External package is present

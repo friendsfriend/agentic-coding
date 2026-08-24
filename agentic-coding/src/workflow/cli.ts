@@ -23,6 +23,7 @@ import {
 	parseAgentsConfig,
 	preflightProfile,
 	resolvePreset,
+	resolveProfile,
 	resolveRouting,
 	validatePresetCoverage,
 } from "./profiles.ts";
@@ -296,6 +297,21 @@ function parseMode(value: string | undefined): "worktree" | "checkout" {
 		throw new Error("start: --mode must be worktree or checkout");
 	return value;
 }
+/** Ordered 2–5 profile list for plan-fusion's planner fan-out, following the
+ * existing single-flag convention: comma-separated names, order = role order. */
+export function parseFusionProfiles(value: string | undefined): string[] {
+	const names = (value ?? "")
+		.split(",")
+		.map((name) => name.trim())
+		.filter(Boolean);
+	if (names.length < 2 || names.length > 5)
+		throw new Error(
+			"plan-fusion: --fusion-profiles requires 2-5 comma-separated profile names",
+		);
+	if (new Set(names).size !== names.length)
+		throw new Error("plan-fusion: duplicate profile in --fusion-profiles");
+	return names;
+}
 function required(command: string, argv: string[]): void {
 	for (const name of REQUIRED_FLAGS[command] ?? [])
 		if (flag(argv, name) === undefined)
@@ -306,7 +322,16 @@ const FLAG_SCHEMA: Record<
 	{ values: string[]; booleans?: string[]; positionals: [number, number] }
 > = {
 	start: {
-		values: ["repo", "change", "mode", "workflow", "task", "ticket", "preset"],
+		values: [
+			"repo",
+			"change",
+			"mode",
+			"workflow",
+			"task",
+			"ticket",
+			"preset",
+			"fusion-profiles",
+		],
 		positionals: [0, 0],
 	},
 	status: { values: ["repo", "change"], positionals: [0, 0] },
@@ -376,7 +401,7 @@ function help(command?: string): void {
 	}
 	const usage: Record<string, string> = {
 		start:
-			"start --repo PATH --change ID --mode worktree|checkout [--workflow standard|direct-apply|no-openspec] [--task TEXT] [--ticket ID] [--preset NAME]",
+			"start --repo PATH --change ID --mode worktree|checkout [--workflow standard|direct-apply|no-openspec|plan-fusion] [--fusion-profiles NAME,NAME,...] [--task TEXT] [--ticket ID] [--preset NAME]",
 		status: "status --repo PATH --change ID",
 		action:
 			"action ACTION_ID --repo PATH --change ID --revision N [--input JSON_OR_PATH]",
@@ -502,6 +527,50 @@ export function listProjects(): Array<{
 	walk(root, 0);
 	return found.sort((a, b) => a.name.localeCompare(b.name));
 }
+/** Agent roles per step for a built-in definition. The plan-fusion fan-out
+ * derives one planner role per entry of the ordered profile list. */
+export function rolesForDefinition(
+	definitionId: string,
+	steps: readonly string[],
+	registry: { step(id: string): { actor: string } },
+	fusionPlannerCount = 0,
+): Record<string, string[]> {
+	const roles: Record<string, string[]> = {};
+	for (const stepId of steps) {
+		if (registry.step(stepId).actor !== "agent") continue;
+		roles[stepId] =
+			stepId === "core.plan"
+				? ["planner"]
+				: stepId === "fusion.plan"
+					? Array.from(
+							{ length: fusionPlannerCount },
+							(_, index) => `planner-${index + 1}`,
+						)
+					: stepId === "fusion.consolidate"
+						? ["consolidator"]
+						: stepId === "core.implementation"
+							? ["worker"]
+							: stepId === "core.triage"
+								? ["triage"]
+								: stepId === "core.verification"
+									? [
+											"quality-verifier",
+											"security-verifier",
+											"performance-verifier",
+											"openspec-verifier",
+											"usability-verifier",
+											"test-verifier",
+										].filter(
+											(role) =>
+												definitionId !== "no-openspec" ||
+												role !== "openspec-verifier",
+										)
+									: stepId === "core.archive"
+										? ["archive"]
+										: [];
+	}
+	return roles;
+}
 export async function run(argv: string[]): Promise<void> {
 	const [command, ...rest] = argv;
 	if (!command || ["help", "--help", "-h"].includes(command)) {
@@ -530,8 +599,16 @@ export async function run(argv: string[]): Promise<void> {
 		const change = validateChangeId(requireFlag(rest, "change"));
 		const mode = parseMode(flag(rest, "mode"));
 		const workflow = flag(rest, "workflow") ?? "standard";
-		if (!["standard", "direct-apply", "no-openspec"].includes(workflow))
+		if (
+			!["standard", "direct-apply", "no-openspec", "plan-fusion"].includes(
+				workflow,
+			)
+		)
 			throw new Error(`unknown workflow definition: ${workflow}`);
+		const fusionProfiles =
+			workflow === "plan-fusion"
+				? parseFusionProfiles(flag(rest, "fusion-profiles"))
+				: undefined;
 		const task = flag(rest, "task");
 		validateStart(repo, change, workflow, task);
 		const config = loadConfig();
@@ -540,40 +617,31 @@ export async function run(argv: string[]): Promise<void> {
 		);
 		const definition = registry.definition(workflow, definitionVersion);
 		const agents = parseAgentsConfig(config.agents, config);
-		const roles = Object.fromEntries(
-			definition.steps
-				.filter((stepId) => registry.step(stepId).actor === "agent")
-				.map((stepId) => [
-					stepId,
-					stepId === "core.plan"
-						? ["planner"]
-						: stepId === "core.implementation"
-							? ["worker"]
-							: stepId === "core.triage"
-								? ["triage"]
-								: stepId === "core.verification"
-									? [
-											"quality-verifier",
-											"security-verifier",
-											"performance-verifier",
-											"openspec-verifier",
-											"usability-verifier",
-											"test-verifier",
-										].filter(
-											(role) =>
-												workflow !== "no-openspec" ||
-												role !== "openspec-verifier",
-										)
-									: stepId === "core.archive"
-										? ["archive"]
-										: [],
-				]),
+		const roles = rolesForDefinition(
+			definition.id,
+			definition.steps,
+			registry,
+			fusionProfiles?.length ?? 0,
 		);
 		const presetName = flag(rest, "preset");
 		const preset = presetName ? resolvePreset(agents, presetName) : undefined;
 		if (preset)
 			validatePresetCoverage(preset, definition, Object.keys(roles), agents);
 		const routing = resolveRouting(definition, roles, agents, preset);
+		if (fusionProfiles) {
+			// Explicit per-task model list overrides preset/config resolution for
+			// the planner fan-out; position i binds to role planner-i.
+			for (const [index, name] of fusionProfiles.entries()) {
+				const route = routing.routes.find(
+					(item) =>
+						item.stepId === "fusion.plan" &&
+						item.role === `planner-${index + 1}`,
+				);
+				if (!route)
+					throw new Error(`missing fusion planner route planner-${index + 1}`);
+				route.profile = resolveProfile(name, agents);
+			}
+		}
 		for (const route of routing.routes)
 			preflightProfile(route.profile, registry.step(route.stepId).requirements);
 		const baseBranch = config.workflow.base_branch;

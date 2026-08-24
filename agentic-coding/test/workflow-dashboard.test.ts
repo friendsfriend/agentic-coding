@@ -102,6 +102,17 @@ test("dashboard projection renders registry-provided future step and generated a
 	expect(state.panes.audit).toBe("pane");
 	expect(state.phaseStartedAt).toBe("2026-01-01T12:00:00Z");
 });
+test("plan-fusion steps render their registry labels in phase status", () => {
+	const fusion = (stepId: string, label: string) => {
+		const fixture = view();
+		fixture.definition = { ...fixture.definition, id: "plan-fusion" };
+		fixture.currentStep = { ...fixture.currentStep, id: stepId, label };
+		const state = viewToDashboardState(fixture);
+		expect(state.stepLabel).toBe(label);
+	};
+	fusion("fusion.plan", "Fusion planning");
+	fusion("fusion.consolidate", "Plan fusion");
+});
 test("committed run state stays separate from adapter observation", () => {
 	const current = view();
 	expect(current.runs[0]?.status).toBe("working");

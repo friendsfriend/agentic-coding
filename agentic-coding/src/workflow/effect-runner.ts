@@ -803,6 +803,7 @@ export const effectRunnerTest = {
 	legacyRunName,
 	resolveLiveAgent,
 	writeAgentEnvPointer,
+	renderedAssignment,
 };
 function renderedAssignment(
 	engine: WorkflowEngine,
@@ -873,9 +874,11 @@ function assignmentFor(
 		stepId: run.stepId,
 		role: run.role,
 		objective: `Complete ${run.stepId} for ${snapshot.metadata.changeId}${snapshot.step.mode ? ` in ${snapshot.step.mode} mode` : ""}.`,
-		interaction: ["planner", "worker"].includes(run.role)
-			? "developer-dialogue"
-			: "silent",
+		interaction:
+			["planner", "worker", "consolidator"].includes(run.role) ||
+			/^planner-[1-5]$/.test(run.role)
+				? "developer-dialogue"
+				: "silent",
 		inputs,
 		permissions: run.profile.readOnly
 			? ["read repository"]

@@ -155,6 +155,66 @@ const triage: Contract<{
 		return { roles: roleNames, assignments: roles };
 	},
 };
+const planDraft: Contract<{
+	approach: string;
+	files: Array<{ path: string; change: string }>;
+	risks: Array<{ detail: string }>;
+	questions: Array<{ detail: string }>;
+}> = {
+	id: "core.plan-draft",
+	version: 1,
+	parse(value) {
+		const item = validation.object(value, "$");
+		const approach = validation.text(item.approach, "$.approach", 8192);
+		if (!Array.isArray(item.files))
+			throw new ContractFailure("core.plan-draft", [
+				{ path: "$.files", message: "expected file plan array" },
+			]);
+		if (!item.files.length)
+			throw new ContractFailure("core.plan-draft", [
+				{ path: "$.files", message: "expected at least one planned file" },
+			]);
+		const files = item.files.map((entry, index) => {
+			const file = validation.object(entry, `$.files[${index}]`);
+			const filePath = validation.text(
+				file.path,
+				`$.files[${index}].path`,
+				1024,
+			);
+			validation.text(file.change, `$.files[${index}].change`, 4096);
+			if (path.isAbsolute(filePath) || filePath.split(path.sep).includes(".."))
+				throw new ContractFailure("core.plan-draft", [
+					{
+						path: `$.files[${index}].path`,
+						message: "expected repository-relative file path",
+					},
+				]);
+			return { path: filePath, change: String(file.change) };
+		});
+		const section = (field: "risks" | "questions") => {
+			if (!Array.isArray(item[field]))
+				throw new ContractFailure("core.plan-draft", [
+					{ path: `$.${field}`, message: `expected ${field} array` },
+				]);
+			return item[field].map((entry, index) => {
+				const detail = validation.object(entry, `$.${field}[${index}]`);
+				return {
+					detail: validation.text(
+						detail.detail,
+						`$.${field}[${index}].detail`,
+						4096,
+					),
+				};
+			});
+		};
+		return {
+			approach,
+			files,
+			risks: section("risks"),
+			questions: section("questions"),
+		};
+	},
+};
 function unchanged(snapshot: WorkflowSnapshot): Reduction {
 	return { snapshot: structuredClone(snapshot), effects: [] };
 }
@@ -174,6 +234,11 @@ const INSTRUCTION_BY_STEP: Record<string, string[]> = {
 		"verification-test.md",
 	],
 	"core.archive": ["workflow-agent-protocol.md", "archive.md"],
+	"fusion.plan": ["workflow-agent-protocol.md", "planning-fusion.md"],
+	"fusion.consolidate": [
+		"workflow-agent-protocol.md",
+		"fusion-consolidation.md",
+	],
 };
 function instructionDigest(name: string): string {
 	const content = AGENT_DEFINITIONS[`instructions/${name}`];
@@ -244,6 +309,41 @@ export function registerBuiltins(
 				"notification.show",
 			],
 		}),
+		step(
+			"fusion.plan",
+			"Fusion planning",
+			"agent",
+			["complete", "blocked", "failed"],
+			{
+				output: planDraft,
+				retryLimit: 3,
+				allowedEffects: [
+					"artifact.write",
+					"agent.launch",
+					"agent.prompt",
+					"agent.stop",
+					"openspec.validate",
+					"notification.show",
+				],
+			},
+		),
+		step(
+			"fusion.consolidate",
+			"Plan fusion",
+			"agent",
+			["complete", "blocked", "failed"],
+			{
+				retryLimit: 3,
+				allowedEffects: [
+					"artifact.write",
+					"agent.launch",
+					"agent.prompt",
+					"agent.stop",
+					"openspec.validate",
+					"notification.show",
+				],
+			},
+		),
 		step("core.plan-approval", "Plan approval", "developer", [
 			"approve",
 			"reject",
@@ -385,6 +485,77 @@ export function registerBuiltins(
 			terminal: ["core.closed"],
 			steps: [...common, "core.delivery", "core.completed", "core.closed"],
 			edges: workflowEdges(false, rounds),
+		},
+		{
+			id: "plan-fusion",
+			version,
+			label: "Plan fusion",
+			initial: "fusion.plan",
+			terminal: ["core.closed"],
+			steps: [
+				"fusion.plan",
+				"fusion.consolidate",
+				"core.plan-approval",
+				...common,
+				"core.archive",
+				"core.delivery",
+				"core.completed",
+				"core.closed",
+			],
+			edges: [
+				{
+					from: "fusion.plan",
+					outcome: "complete",
+					to: "fusion.consolidate",
+				},
+				{
+					from: "fusion.plan",
+					outcome: "blocked",
+					to: "fusion.plan",
+					loop: { maxAttempts: 3 },
+				},
+				{
+					from: "fusion.plan",
+					outcome: "failed",
+					to: "fusion.plan",
+					loop: { maxAttempts: 3 },
+				},
+				{
+					from: "fusion.consolidate",
+					outcome: "complete",
+					to: "core.plan-approval",
+				},
+				{
+					from: "fusion.consolidate",
+					outcome: "blocked",
+					to: "fusion.consolidate",
+					loop: { maxAttempts: 3 },
+				},
+				{
+					from: "fusion.consolidate",
+					outcome: "failed",
+					to: "fusion.consolidate",
+					loop: { maxAttempts: 3 },
+				},
+				{
+					from: "core.plan-approval",
+					outcome: "approve",
+					to: "core.implementation",
+				},
+				{
+					from: "core.plan-approval",
+					outcome: "reject",
+					to: "fusion.consolidate",
+					loop: { maxAttempts: 3 },
+				},
+				{
+					from: "core.plan-approval",
+					outcome: "comments",
+					to: "fusion.consolidate",
+					loop: { maxAttempts: 3 },
+				},
+				...workflowEdges(true, rounds),
+			],
 		},
 	];
 	for (const [rounds, version] of [

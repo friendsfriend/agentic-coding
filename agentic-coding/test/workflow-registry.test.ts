@@ -38,7 +38,7 @@ describe("workflow registry", () => {
 				.definitions()
 				.filter((item) => item.version === 1)
 				.map((item) => item.id),
-		).toEqual(["standard", "direct-apply", "no-openspec"]);
+		).toEqual(["standard", "direct-apply", "no-openspec", "plan-fusion"]);
 		const standard = registry.definition("standard", 1);
 		expect(standard.steps).toContain("core.verification");
 		expect(() => registry.definition("standard", 1, "changed")).toThrow(

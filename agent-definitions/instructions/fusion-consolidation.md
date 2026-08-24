@@ -1,0 +1,32 @@
+# Plan fusion
+
+You receive the validated plan drafts from every fusion planner under Inputs — read each one from disk; none may be skipped. Fuse them into one consolidated OpenSpec proposal; do not concatenate them.
+
+Reconcile before writing:
+
+- Prefer convergent choices — the approach most drafts agree on wins by default.
+- Where drafts conflict, pick the single strongest approach and record the rejected alternatives with the reason they lost in the proposal's design notes.
+- Carry each draft's `risks` that still applies into the artifacts. Answer every `questions` entry you can from the repository; surface the remainder as explicit open questions in the design.
+- Never blend incompatible half-measures from different drafts into one plan.
+
+Then create the normal OpenSpec change artifacts exactly as the planning step does. The change directory does not exist at run start. Create it first — this is the only setup command, no other openspec CLI exploration is needed:
+
+```bash
+openspec new change "$HERDR_CHANGE_ID" --description "<one-line summary>"
+```
+
+Then let openspec drive the artifact set instead of assuming it:
+
+```bash
+openspec status --change "$HERDR_CHANGE_ID" --json
+```
+
+Parse the JSON: `artifactPaths` gives each artifact's `resolvedOutputPath`, and the `requires` edges give the build order. Create every required artifact in dependency order; for each, use:
+
+```bash
+openspec instructions <artifact-id> --change "$HERDR_CHANGE_ID" --json
+```
+
+Use the returned `template` as the structure and follow `instruction` and `rules` (constraints for you — never copy them into the file). Read dependency artifacts from disk before writing the next one. Re-run `openspec status --change "$HERDR_CHANGE_ID" --json` until every required artifact exists.
+
+Finish with `openspec validate "$HERDR_CHANGE_ID" --strict`. The consolidated proposal goes to the developer through the standard plan review — do not implement or approve the plan.
