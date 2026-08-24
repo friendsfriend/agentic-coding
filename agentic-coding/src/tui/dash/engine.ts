@@ -15,9 +15,12 @@ import {
 } from "../../workflow/definitions.ts";
 import { loadConfig } from "../../workflow/effects.ts";
 import {
+	type AgentsConfig,
 	parseAgentsConfig,
 	preflightProfile,
+	resolvePreset,
 	resolveRouting,
+	validatePresetCoverage,
 } from "../../workflow/profiles.ts";
 import {
 	canonicalStorePath,
@@ -84,6 +87,10 @@ export async function runWorkflowAction(
 	await drainEffects(engine, repo, credentialPromptBridge());
 	return JSON.stringify(engine.status(repo, change));
 }
+/** Sentinel choice meaning "use existing global config defaults"; stripped
+ * before routing so it never reaches resolvePreset. */
+export const PRESET_CONFIG_DEFAULTS = "(config defaults)";
+
 export function startArgs(input: {
 	repo: string;
 	ticket: string;
@@ -91,6 +98,7 @@ export function startArgs(input: {
 	task?: string;
 	mode: string;
 	workflowType?: string;
+	preset?: string;
 }) {
 	return {
 		repo: input.repo,
@@ -102,7 +110,27 @@ export function startArgs(input: {
 		task: input.task || undefined,
 		ticket: input.ticket || undefined,
 		mode: input.mode,
+		...(input.preset && input.preset !== PRESET_CONFIG_DEFAULTS
+			? { preset: input.preset }
+			: {}),
 	};
+}
+/** Preset names available for the new workflow modal's agent-preset step. */
+export function listPresetNames(): string[] {
+	const config = loadConfig();
+	try {
+		const agents = parseAgentsConfig(config.agents, config);
+		return Object.keys(agents.presets ?? {}).sort();
+	} catch {
+		return [];
+	}
+}
+function resolveStartPreset(
+	agents: AgentsConfig,
+	presetName?: string,
+): ReturnType<typeof resolvePreset> | undefined {
+	if (!presetName || presetName === PRESET_CONFIG_DEFAULTS) return undefined;
+	return resolvePreset(agents, presetName);
 }
 export async function startWorkflowInProcess(
 	input: Parameters<typeof startArgs>[0],
@@ -148,7 +176,10 @@ export async function startWorkflowInProcess(
 									: [],
 			]),
 	);
-	const routing = resolveRouting(definition, roles, agents);
+	const preset = resolveStartPreset(agents, args.preset);
+	if (preset)
+		validatePresetCoverage(preset, definition, Object.keys(roles), agents);
+	const routing = resolveRouting(definition, roles, agents, preset);
 	for (const route of routing.routes)
 		preflightProfile(route.profile, registry.step(route.stepId).requirements);
 	const baseCommit = runGit(

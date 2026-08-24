@@ -100,6 +100,39 @@ agentic-coding workflow handoff --outcome complete --artifact "$HERDR_OUTPUT"
 
 Engine derives workflow, role, generation, output schema, and successor from run environment and pinned definition.
 
+### Agent configuration presets
+
+Named presets bundle a full step/role → profile routing into the committable
+agents config (`[agents.presets]` in `config.toml` or project
+`.pi/herdr-workflow.toml`), so switching between agent/model strategies no
+longer requires rewriting routes:
+
+```toml
+[agents.presets.frontier-plan]
+description = "Frontier planning, cheap workers"
+default_profile = "pi-cheap"          # fallback for unrouted steps
+[agents.presets.frontier-plan.steps]
+"core.plan" = "pi-planner"
+"core.implementation" = "oc-worker"
+[agents.presets.frontier-plan.roles."core.verification"]
+quality-verifier = "pi-review"
+```
+
+Select a preset per workflow start via the new-workflow modal's **Agent
+preset** step or `agentic-coding workflow start --preset <name>`; selection is
+per start and never rewrites global defaults. Resolution order: preset role →
+preset step → preset default → existing chain. Profiles and presets can be
+created, edited, and deleted from the home dashboard's model configuration
+modal (`m`); edits are written back to the config file that supplied the
+agents section. Because project-level `.pi/herdr-workflow.toml` is merged over
+the user config, a committed agent configuration is trusted and executed as
+code: profile `executable`, `model`, `tools`, and preset routes from a cloned
+repository are honored by workflow starts. Only commit agent config you
+control, and review `.pi/herdr-workflow.toml` when cloning untrusted
+repositories. At startup every routed profile's model is validated against
+its runtime's model enumeration (`pi --list-models`, `<exe> models`); an
+unknown model fails startup before any agent launches.
+
 Telemetry uses normalized engine/adapter/runtime envelope with W3C trace context. Runtime bridges under `agent-definitions/bridges/` are explicitly injected per managed run, best effort, and observational only. They never read workflow state, infer completion, nudge/retry agents, or switch runtime/model. Unsupported deep runtime fields remain absent; baseline adapter lifecycle stays available.
 
 ## Development

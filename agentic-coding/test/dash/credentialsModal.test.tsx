@@ -97,9 +97,10 @@ test("new workflow confirm summary has no Agent routing row", async () => {
 		{ width: 110, height: 30 },
 	);
 	await t.flush();
-	// Drive through repo -> workflow type -> ticket -> change -> task -> mode.
+	// Drive through repo -> workflow type -> agent preset -> ticket -> change -> task -> mode.
 	handler?.(key("enter")); // repo: Current Directory
 	handler?.(key("enter")); // workflow type: standard
+	handler?.(key("enter")); // agent preset: (config defaults)
 	handler?.(key("enter")); // ticket: optional, advance
 	handler?.(key("enter")); // change: advance
 	handler?.(key("enter", { meta: true })); // task: Alt+Enter advances
