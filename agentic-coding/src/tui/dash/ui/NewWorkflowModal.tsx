@@ -3,6 +3,7 @@
 import type { KeyEvent, TextareaRenderable } from "@opentui/core";
 import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { discoverChanges } from "../data";
+import { PRESET_CONFIG_DEFAULTS } from "../engine";
 import { uiColors } from "./colors";
 import { GenericModal } from "./GenericModal";
 import { ListViewModal } from "./ListViewModal";
@@ -15,10 +16,12 @@ export type NewWorkflowInput = {
 	task?: string;
 	mode: string;
 	workflowType: string;
+	preset: string;
 };
 type Project = { name: string; path: string; openspec: boolean };
 export function NewWorkflowModal(props: {
 	projects: Project[];
+	presets?: string[];
 	onCancel: () => void;
 	onComplete: (input: NewWorkflowInput) => Promise<void>;
 	onKeyReady: (handler: (key: KeyEvent) => boolean) => void;
@@ -34,6 +37,7 @@ export function NewWorkflowModal(props: {
 		change: "",
 		mode: "",
 		workflowType: "standard",
+		preset: PRESET_CONFIG_DEFAULTS,
 	});
 	const [showCustomRepo, setShowCustomRepo] = createSignal(false);
 	let taskInput: TextareaRenderable | undefined;
@@ -46,6 +50,7 @@ export function NewWorkflowModal(props: {
 		const base: (keyof NewWorkflowInput)[] = [
 			"repo",
 			"workflowType",
+			"preset",
 			"ticket",
 			"change",
 			"mode",
@@ -54,7 +59,15 @@ export function NewWorkflowModal(props: {
 			values().workflowType === "standard" ||
 			values().workflowType === "quick"
 		) {
-			return ["repo", "workflowType", "ticket", "change", "task", "mode"];
+			return [
+				"repo",
+				"workflowType",
+				"preset",
+				"ticket",
+				"change",
+				"task",
+				"mode",
+			];
 		}
 		return base;
 	};
@@ -62,6 +75,7 @@ export function NewWorkflowModal(props: {
 	const fieldLabels: Record<string, string> = {
 		repo: "Repository",
 		workflowType: "Workflow type",
+		preset: "Agent preset",
 		ticket: "Ticket identifier (optional)",
 		change: "Change ID",
 		task: "Task",
@@ -83,7 +97,14 @@ export function NewWorkflowModal(props: {
 				`Current Directory (${process.cwd().split("/").pop()})`,
 				"Custom path…",
 			];
-		if (f === "workflowType") return workflowTypeChoices;
+		if (f === "workflowType")
+			return workflowTypeChoices.filter((item) =>
+				item.includes(filter().toLowerCase()),
+			);
+		if (f === "preset")
+			return [PRESET_CONFIG_DEFAULTS, ...(props.presets ?? [])].filter((item) =>
+				item.toLowerCase().includes(filter().toLowerCase()),
+			);
 		if (f === "change" && values().workflowType === "direct-apply")
 			return discoverChanges(values().repo);
 		if (f === "mode")
@@ -98,6 +119,7 @@ export function NewWorkflowModal(props: {
 		return (
 			f === "repo" ||
 			f === "workflowType" ||
+			f === "preset" ||
 			(f === "change" && values().workflowType === "direct-apply") ||
 			f === "mode"
 		);
@@ -172,6 +194,12 @@ export function NewWorkflowModal(props: {
 			return true;
 		}
 		if (name === "escape") {
+			// Esc while filtering first dismisses the filter, keeping the wizard
+			// step; a second Esc navigates back.
+			if (filtering()) {
+				setFiltering(false);
+				return true;
+			}
 			back();
 			return true;
 		}
@@ -209,9 +237,11 @@ export function NewWorkflowModal(props: {
 			return true;
 		}
 		const items = choices();
-		if (name === "/") {
+		// While a filter is active, '/' is a literal query character; only start
+		// filtering when not already filtering.
+		if (name === "/" && !filtering()) {
+			// Resume editing any retained query rather than wiping it.
 			setFiltering(true);
-			setFilter("");
 			setSelected(0);
 			return true;
 		}
@@ -384,14 +414,23 @@ export function NewWorkflowModal(props: {
 								selectedIndex={selected()}
 								step={step()}
 								total={totalSteps()}
-								filterActive={filtering()}
+								filterActive={filtering() || filter().length > 0}
 								filterQuery={filter()}
-								help={[
-									{ key: "j/k", action: "Navigate" },
-									{ key: "/", action: "Filter" },
-									{ key: "Enter", action: "Select" },
-									{ key: "Esc", action: "Back" },
-								]}
+								help={
+									filtering()
+										? [
+												{ key: "Type", action: "Filter query" },
+												{ key: "/", action: "Literal /" },
+												{ key: "Enter", action: "Done filtering" },
+												{ key: "Esc", action: "Dismiss filter" },
+											]
+										: [
+												{ key: "j/k", action: "Navigate" },
+												{ key: "/", action: "Filter" },
+												{ key: "Enter", action: "Select" },
+												{ key: "Esc", action: "Back" },
+											]
+								}
 								renderItem={(item, active) => {
 									const display =
 										field() === "workflowType"

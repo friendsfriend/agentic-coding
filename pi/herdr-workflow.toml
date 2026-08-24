@@ -87,6 +87,21 @@
  [agents.definition_defaults]
  "no-openspec" = "pi-cheap"
 
+ # ---- agent configuration presets (selectable per workflow start) ----
+ # A preset maps workflow steps (and per-role verification overrides) to
+ # profiles. Select one via the new-workflow modal's "Agent preset" step or
+ # `agentic-coding workflow start --preset <name>`; selection is per start and
+ # never rewrites global defaults. Steps without a preset entry fall back to
+ # the normal resolution chain.
+ [agents.presets.frontier-plan]
+ description = "Frontier planning, cheap workers"
+ default_profile = "pi-cheap"                 # fallback for unrouted steps
+ [agents.presets.frontier-plan.steps]
+ "core.plan" = "pi-planner"
+ "core.implementation" = "oc-worker"
+ [agents.presets.frontier-plan.roles."core.verification"]
+ quality-verifier = "pi-review"
+
  # ---- require mixed runtimes across steps (fails config if violated) ----
  [[agents.runtime_diversity]]
  routes = ["core.plan", "core.implementation"]

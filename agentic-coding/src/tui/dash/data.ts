@@ -12,6 +12,7 @@ import {
 	consumeReturnWorkspace,
 	dashboardState,
 	discoverProjectsInProcess,
+	listPresetNames,
 	listWorkflowViews,
 	previewWorkflowRepair,
 	repairWorkflow,
@@ -20,6 +21,8 @@ import {
 	startWorkflowInProcess,
 	viewToDashboardState,
 } from "./engine";
+
+export { listPresetNames };
 
 const herdr = new Herdr();
 
@@ -1542,6 +1545,7 @@ export async function startWorkflow(input: {
 	task?: string;
 	mode: string;
 	workflowType?: string;
+	preset?: string;
 }) {
 	const repo = input.repo.startsWith("~")
 		? resolve(input.repo.replace("~", homedir()))

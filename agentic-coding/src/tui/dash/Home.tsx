@@ -16,6 +16,7 @@ import {
 	focusWorkflow,
 	herdrAvailable,
 	isStale,
+	listPresetNames,
 	notifyHerdrError,
 	startWorkflow,
 	type WorkflowOverview,
@@ -27,6 +28,7 @@ import { uiColors } from "./ui/colors";
 import { ErrorDialog } from "./ui/ErrorDialog";
 import { FilterModal } from "./ui/FilterModal";
 import { HelpModal, type HelpSection } from "./ui/HelpModal";
+import { ModelConfigModal } from "./ui/ModelConfigModal";
 import { NewWorkflowModal } from "./ui/NewWorkflowModal";
 import { NotificationOverlay } from "./ui/Notification";
 import { Panel } from "./ui/Panel";
@@ -56,6 +58,10 @@ export function Home(props: {
 	const [selected, setSelected] = createSignal(0);
 	const [modal, setModal] = createSignal(false);
 	const [modalHandler, setModalHandler] =
+		createSignal<(event: KeyEvent) => boolean>();
+	const [workflowPresets, setWorkflowPresets] = createSignal<string[]>([]);
+	const [modelConfig, setModelConfig] = createSignal(false);
+	const [modelConfigHandler, setModelConfigHandler] =
 		createSignal<(event: KeyEvent) => boolean>();
 	const [_message, setMessage] = createSignal("");
 	const [error, setError] = createSignal<{ title: string; message: string }>();
@@ -146,6 +152,7 @@ export function Home(props: {
 			items: [
 				{ key: "Enter", description: "Switch active workspace" },
 				{ key: "n", description: "New workflow" },
+				{ key: "m", description: "Agent configuration (profiles / presets)" },
 				{ key: "f", description: "Open filter modal" },
 				{ key: "o", description: "Open sort modal" },
 				{ key: "r", description: "Refresh" },
@@ -216,8 +223,12 @@ export function Home(props: {
 			props.keymap.setData("modal.active", "help");
 		} else if (name === "q") globalThis.__requestShutdown?.();
 		else if (name === "n") {
+			setWorkflowPresets(listPresetNames());
 			setModal(true);
 			props.keymap.setData("modal.active", "new-workflow");
+		} else if (name === "m") {
+			setModelConfig(true);
+			props.keymap.setData("modal.active", "model-config");
 		} else if (name === "r") refresh();
 		else if (name === "f") {
 			setFilterModal(true);
@@ -295,6 +306,18 @@ export function Home(props: {
 				},
 			],
 			bindings: modalKeys.map((key) => ({ key, cmd: "new-workflow.handle" })),
+		});
+		const disposeModelConfig = props.keymap.registerLayer({
+			name: "model-config",
+			priority: 1000,
+			activeModal: "model-config",
+			commands: [
+				{
+					name: "model-config.handle",
+					run: ({ event }) => modelConfigHandler()?.(event) ?? true,
+				},
+			],
+			bindings: modalKeys.map((key) => ({ key, cmd: "model-config.handle" })),
 		});
 		const disposeTheme = props.keymap.registerLayer({
 			name: "theme-home",
@@ -518,6 +541,7 @@ export function Home(props: {
 			bindings: [
 				"q",
 				"n",
+				"m",
 				"r",
 				"f",
 				"o",
@@ -533,6 +557,7 @@ export function Home(props: {
 		});
 		onCleanup(() => {
 			disposeModal();
+			disposeModelConfig();
 			disposeTheme();
 			disposeHelp();
 			disposeError();
@@ -550,6 +575,7 @@ export function Home(props: {
 				sortModal() ||
 				help() ||
 				themePicker() ||
+				modelConfig() ||
 				error() != null;
 			if (!anyOpen) props.keymap.setData("modal.active", "none");
 		});
@@ -635,6 +661,7 @@ export function Home(props: {
 			<Show when={modal()}>
 				<NewWorkflowModal
 					projects={projects()}
+					presets={workflowPresets()}
 					onKeyReady={(handler) => setModalHandler(() => handler)}
 					onCancel={() => {
 						setModal(false);
@@ -668,6 +695,16 @@ export function Home(props: {
 									: message,
 							);
 						}
+					}}
+				/>
+			</Show>
+			<Show when={modelConfig()}>
+				<ModelConfigModal
+					onKeyReady={(handler) => setModelConfigHandler(() => handler)}
+					onCancel={() => {
+						setModelConfig(false);
+						props.keymap.setData("modal.active", "none");
+						setModelConfigHandler(undefined);
 					}}
 				/>
 			</Show>

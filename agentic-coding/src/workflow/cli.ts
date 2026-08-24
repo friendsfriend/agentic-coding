@@ -22,7 +22,9 @@ import { loadConfig } from "./effects.ts";
 import {
 	parseAgentsConfig,
 	preflightProfile,
+	resolvePreset,
 	resolveRouting,
+	validatePresetCoverage,
 } from "./profiles.ts";
 import { validateChangeId, WorkflowEngine } from "./runtime.ts";
 
@@ -307,7 +309,7 @@ const FLAG_SCHEMA: Record<
 	{ values: string[]; booleans?: string[]; positionals: [number, number] }
 > = {
 	start: {
-		values: ["repo", "change", "mode", "workflow", "task", "ticket"],
+		values: ["repo", "change", "mode", "workflow", "task", "ticket", "preset"],
 		positionals: [0, 0],
 	},
 	status: { values: ["repo", "change"], positionals: [0, 0] },
@@ -377,7 +379,7 @@ function help(command?: string): void {
 	}
 	const usage: Record<string, string> = {
 		start:
-			"start --repo PATH --change ID --mode worktree|checkout [--workflow standard|direct-apply|no-openspec] [--task TEXT] [--ticket ID]",
+			"start --repo PATH --change ID --mode worktree|checkout [--workflow standard|direct-apply|no-openspec] [--task TEXT] [--ticket ID] [--preset NAME]",
 		status: "status --repo PATH --change ID",
 		action:
 			"action ACTION_ID --repo PATH --change ID --revision N [--input JSON_OR_PATH]",
@@ -570,7 +572,11 @@ export async function run(argv: string[]): Promise<void> {
 										: [],
 				]),
 		);
-		const routing = resolveRouting(definition, roles, agents);
+		const presetName = flag(rest, "preset");
+		const preset = presetName ? resolvePreset(agents, presetName) : undefined;
+		if (preset)
+			validatePresetCoverage(preset, definition, Object.keys(roles), agents);
+		const routing = resolveRouting(definition, roles, agents, preset);
 		for (const route of routing.routes)
 			preflightProfile(route.profile, registry.step(route.stepId).requirements);
 		const baseBranch = config.workflow.base_branch;
