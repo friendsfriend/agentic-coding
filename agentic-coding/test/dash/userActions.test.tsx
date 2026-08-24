@@ -113,8 +113,8 @@ test("git panel enter opens the changed-files modal and finish stays gated to th
 	t.mockInput.pressKey("f");
 	await t.waitForFrame((frame) => !frame.includes("Changed Files (4 files)"));
 
-	// Tab to the git status panel (order [0, 6, 1, 2, 3, 4, 5] → index 4).
-	for (let i = 0; i < 5; i++) t.mockInput.pressTab();
+	// Tab to the git status panel (order [0, 6, 1, 2, 4, 5] → index 4).
+	for (let i = 0; i < 4; i++) t.mockInput.pressTab();
 
 	// Enter on the git panel opens the developer review changed-files modal.
 	t.mockInput.pressEnter();

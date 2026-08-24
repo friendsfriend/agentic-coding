@@ -73,7 +73,6 @@ import { ThemePickerModal } from "./ui/ThemePickerModal";
 import { TraceBrowser } from "./ui/TraceBrowser";
 import { getActiveThemeName, themeNames } from "./ui/theme";
 import { VerdictModal } from "./ui/VerdictModal";
-import { VerificationTimelineModal } from "./ui/VerificationTimelineModal";
 import { watchDirectories } from "./watchRefresh";
 
 export function App(props: {
@@ -141,13 +140,10 @@ export function App(props: {
 		title: string;
 		events: FindingEvent[];
 	}>();
-	const [findingsReturnToVerification, setFindingsReturnToVerification] =
-		createSignal(false);
 	const [selectedFinding, setSelectedFinding] = createSignal(0);
-	const openVerifierResult = (role: string, returnToVerification = false) => {
+	const openVerifierResult = (role: string) => {
 		setVerdictReturnToFindings(false);
 		setVerdictReturnToUserAction(false);
-		setFindingsReturnToVerification(returnToVerification);
 		const parsed =
 			props.profile === "test"
 				? undefined
@@ -170,11 +166,9 @@ export function App(props: {
 		props.keymap.setData("modal.active", "verdict");
 	};
 	const [verdictOffset, setVerdictOffset] = createSignal(0);
-	const [verificationDetail, setVerificationDetail] = createSignal(false);
 	const [eventsDetail, setEventsDetail] = createSignal(false);
 	const [traceDetail, setTraceDetail] = createSignal(false);
 	const [selectedEvent, setSelectedEvent] = createSignal(0);
-	const [selectedVerification, setSelectedVerification] = createSignal(0);
 	const [help, setHelp] = createSignal(false);
 	const [themePicker, setThemePicker] = createSignal(false);
 	const [completedPicker, setCompletedPicker] = createSignal(false);
@@ -401,7 +395,7 @@ export function App(props: {
 				{ key: "Enter", description: "Approve workflow gate" },
 				{ key: "Enter", description: "Focus selected agent (Agents panel)" },
 				{ key: "Shift+O", description: "Show safe repair guidance" },
-				{ key: "v", description: "View selected verifier verdict" },
+				{ key: "v", description: "View selected verification agent's result" },
 				{ key: "c", description: "View agent cost breakdown" },
 				{ key: "r", description: "Refresh dashboard" },
 				{ key: "q", description: "Quit" },
@@ -1077,11 +1071,10 @@ export function App(props: {
 		}
 
 		if (name === "v" && activePanel() === 1) {
+			// Silent no-op for non-verification agents: only verifier roles have
+			// results to show.
 			const agent = data().agents[selectedAgent()];
-			if (!agent?.role.endsWith("verifier")) {
-				setMessage("Select a verifier agent to view its verdict.");
-				return;
-			}
+			if (!agent?.role.endsWith("verifier")) return;
 			try {
 				openVerifierResult(agent.role);
 			} catch (error) {
@@ -1100,7 +1093,7 @@ export function App(props: {
 			name === "tab"
 		) {
 			setActivePanel((panel) => {
-				const order = [0, 6, 1, 2, 3, 4, 5];
+				const order = [0, 6, 1, 2, 4, 5];
 				const index = order.indexOf(panel);
 				return (
 					order[
@@ -1180,12 +1173,6 @@ export function App(props: {
 				});
 				setVerdictOffset(0);
 				props.keymap.setData("modal.active", "verdict");
-				return;
-			}
-			if (activePanel() === 3) {
-				setVerificationDetail(true);
-				setSelectedVerification(0);
-				props.keymap.setData("modal.active", "verification-detail");
 				return;
 			}
 			if (activePanel() === 1) {
@@ -1599,49 +1586,6 @@ export function App(props: {
 				cmd: "help.handle",
 			})),
 		});
-		const disposeVerification = props.keymap.registerLayer({
-			name: "verification-detail",
-			priority: 1000,
-			activeModal: "verification-detail",
-			commands: [
-				{
-					name: "verification.handle",
-					run: ({ event }) => {
-						const key = event.name.toLowerCase();
-						const entries = data().verifierTimeline;
-						if (key === "escape") {
-							setVerificationDetail(false);
-							props.keymap.setData("modal.active", "none");
-						} else if (key === "j" || key === "down")
-							setSelectedVerification((value) =>
-								Math.min(entries.length - 1, value + 1),
-							);
-						else if (key === "k" || key === "up")
-							setSelectedVerification((value) => Math.max(0, value - 1));
-						else if (key === "enter" || key === "return") {
-							const entry = entries[selectedVerification()];
-							if (!entry) return true;
-							try {
-								setVerificationDetail(false);
-								openVerifierResult(entry.role, true);
-							} catch (error) {
-								setVerdict({
-									title: `${entry.role} · result pending`,
-									content:
-										error instanceof Error ? error.message : String(error),
-								});
-								setVerdictOffset(0);
-								props.keymap.setData("modal.active", "verdict");
-							}
-						}
-						return true;
-					},
-				},
-			],
-			bindings: ["escape", "enter", "return", "j", "k", "up", "down"].map(
-				(key) => ({ key, cmd: "verification.handle" }),
-			),
-		});
 		const disposeEvents = props.keymap.registerLayer({
 			name: "events",
 			priority: 1000,
@@ -1827,13 +1771,8 @@ export function App(props: {
 							(item) => item.type !== "verdict",
 						);
 						if (key === "escape") {
-							const restore = findingsReturnToVerification();
 							setFindings(undefined);
-							setFindingsReturnToVerification(false);
-							if (restore) {
-								setVerificationDetail(true);
-								props.keymap.setData("modal.active", "verification-detail");
-							} else props.keymap.setData("modal.active", "none");
+							props.keymap.setData("modal.active", "none");
 						} else if (key === "j" || key === "down")
 							setSelectedFinding((value) =>
 								Math.min(items.length - 1, value + 1),
@@ -1958,7 +1897,6 @@ export function App(props: {
 			disposeUserAction();
 			disposeCost();
 			disposeHelp();
-			disposeVerification();
 			disposeEvents();
 			disposeTraces();
 			disposeReviewComment();
@@ -1973,7 +1911,6 @@ export function App(props: {
 				credentialRequest() ||
 				verdict() ||
 				findings() ||
-				verificationDetail() ||
 				eventsDetail() ||
 				traceDetail() ||
 				help() ||
@@ -2045,15 +1982,6 @@ export function App(props: {
 	const currentTask = createMemo(
 		() => data().tasks.find((task) => !task.done)?.text ?? "All tasks complete",
 	);
-	const verificationSummary = createMemo(() => {
-		const rows = data().verifierTimeline;
-		const count = (status: string) =>
-			rows.filter((row) => row.status.toLowerCase() === status).length;
-		const reused = Object.keys(
-			data().state.verificationReusedResults ?? {},
-		).length;
-		return `run ${count("run")} · pass ${count("pass")} · fail ${count("fail")} · skip ${count("skipped")}${reused ? ` · reused:${reused}` : ""}`;
-	});
 	const _prompt = createMemo(() =>
 		data().state.status === "paused"
 			? "Verification paused · developer intervention required"
@@ -2332,52 +2260,26 @@ export function App(props: {
 								gap: 1,
 							}}
 						>
-							<box
+							<Panel
+								title={`Current task · ${doneTasks()}/${data().tasks.length}`}
+								accent={uiColors.success}
+								active={activePanel() === 2}
 								style={{
 									width: "100%",
 									height: 2,
-									flexDirection: "row",
-									gap: 1,
 								}}
 							>
-								<Panel
-									title={`Current task · ${doneTasks()}/${data().tasks.length}`}
-									accent={uiColors.success}
-									active={activePanel() === 2}
-									style={{
-										flexGrow: 1,
-										flexBasis: 0,
-										minWidth: 0,
-										height: "100%",
-									}}
+								<text
+									fg={
+										doneTasks() === data().tasks.length
+											? uiColors.success
+											: uiColors.textPrimary
+									}
 								>
-									<text
-										fg={
-											doneTasks() === data().tasks.length
-												? uiColors.success
-												: uiColors.textPrimary
-										}
-									>
-										{doneTasks() === data().tasks.length ? "✓" : "○"}{" "}
-										{currentTask()}
-									</text>
-								</Panel>
-								<Panel
-									title="Verification"
-									accent={uiColors.info}
-									active={activePanel() === 3}
-									style={{
-										flexGrow: 1,
-										flexBasis: 0,
-										minWidth: 0,
-										height: "100%",
-									}}
-								>
-									<text fg={uiColors.textSecondary}>
-										{verificationSummary()}
-									</text>
-								</Panel>
-							</box>
+									{doneTasks() === data().tasks.length ? "✓" : "○"}{" "}
+									{currentTask()}
+								</text>
+							</Panel>
 							<box
 								style={{
 									width: "100%",
@@ -2696,13 +2598,6 @@ export function App(props: {
 						}}
 					/>
 				)}
-			</Show>
-			<Show when={verificationDetail()}>
-				<VerificationTimelineModal
-					startedAt={data().state.verificationStartedAt}
-					entries={data().verifierTimeline}
-					selected={selectedVerification()}
-				/>
 			</Show>
 			<Show when={costOpen()}>
 				<CostModal
