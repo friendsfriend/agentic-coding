@@ -13,6 +13,7 @@ import type {
 	WorkflowActionView,
 	WorkflowCommand,
 	WorkflowEffect,
+	WorkflowRouting,
 	WorkflowRun,
 	WorkflowSnapshot,
 	WorkflowView,
@@ -278,6 +279,28 @@ export class WorkflowEngine {
 			input.definitionId,
 			input.definitionVersion ?? 1,
 		);
+		if (definition.id === "plan-fusion") {
+			// Reject invalid model lists before any state mutation or launch.
+			const roles = fusionPlannerRoles(input.routing);
+			if (roles.length < 2 || roles.length > 5)
+				throw new WorkflowRuntimeError(
+					"fusion-routing",
+					"plan-fusion requires between 2 and 5 planner routings",
+				);
+			const digests = input.routing.routes
+				.filter(
+					(route) =>
+						route.stepId === "fusion.plan" &&
+						route.role &&
+						PLANNER_ROLE.test(route.role),
+				)
+				.map((route) => route.profile.digest);
+			if (new Set(digests).size !== digests.length)
+				throw new WorkflowRuntimeError(
+					"fusion-routing",
+					"plan-fusion requires distinct planner profiles",
+				);
+		}
 		const at = nowIso(this.now);
 		const workflowId = randomUUID();
 		const snapshot: WorkflowSnapshot = {
@@ -1350,6 +1373,30 @@ export class WorkflowEngine {
 			}
 		} else if (
 			command.outcome === "complete" &&
+			snapshot.currentStep === "fusion.plan"
+		) {
+			// Fan-out completion counting: each validated draft is recorded as it
+			// arrives; the step only transitions when every planner role holds one.
+			snapshot.step.results.push({
+				runId: run.id,
+				role: run.role,
+				critical: 0,
+				...(outputDigest ? { outputDigest } : {}),
+			});
+			const expected = fusionPlannerRoles(snapshot.routing);
+			if (
+				!snapshot.step.activeRunIds.length &&
+				expected.every((role) =>
+					snapshot.step.results.some(
+						(result) => result.role === role && result.outputDigest,
+					),
+				)
+			)
+				this.transition(db, snapshot, definition, "complete", {
+					drafts: fusionDraftInputs(snapshot),
+				});
+		} else if (
+			command.outcome === "complete" &&
 			snapshot.currentStep === "core.plan"
 		)
 			this.enqueue(
@@ -1357,6 +1404,17 @@ export class WorkflowEngine {
 				snapshot,
 				"openspec.validate",
 				`openspec:${snapshot.workflowId}:plan:${snapshot.step.attempt}`,
+				{ changeId: snapshot.metadata.changeId },
+			);
+		else if (
+			command.outcome === "complete" &&
+			snapshot.currentStep === "fusion.consolidate"
+		)
+			this.enqueue(
+				db,
+				snapshot,
+				"openspec.validate",
+				`openspec:${snapshot.workflowId}:consolidate:${snapshot.step.attempt}`,
 				{ changeId: snapshot.metadata.changeId },
 			);
 		else if (command.outcome === "complete")
@@ -1439,7 +1497,8 @@ export class WorkflowEngine {
 		if (
 			command.outcome === "complete" &&
 			row.kind === "openspec.validate" &&
-			snapshot.currentStep === "core.plan"
+			(snapshot.currentStep === "core.plan" ||
+				snapshot.currentStep === "fusion.consolidate")
 		)
 			this.transition(db, snapshot, definition, "complete");
 		if (
@@ -1561,6 +1620,7 @@ export class WorkflowEngine {
 				`no ${outcome} transition from ${snapshot.currentStep}`,
 			);
 		const priorAttempt = snapshot.step.attempt;
+		const priorResults = snapshot.step.results;
 		if (edge.loop) {
 			const key = `${edge.from}:${edge.outcome}`;
 			const attempts = (snapshot.loopCounts[key] ?? 0) + 1;
@@ -1574,6 +1634,12 @@ export class WorkflowEngine {
 		snapshot.currentStep = edge.to;
 		snapshot.metadata.stepEnteredAt = nowIso(this.now);
 		snapshot.step = freshStep(edge.loop ? priorAttempt + 1 : 1);
+		if (edge.from === "fusion.plan" && edge.to === "fusion.plan")
+			// Retry of a failed role resumes collection: surviving validated
+			// drafts are preserved instead of re-fanning every planner.
+			snapshot.step.results = priorResults.filter(
+				(result) => result.role.startsWith("planner-") && result.outputDigest,
+			);
 		if (edge.to === "core.triage")
 			snapshot.step.attempt =
 				(snapshot.loopCounts["core.verification:round"] ?? 0) + 1;
@@ -1584,9 +1650,12 @@ export class WorkflowEngine {
 		}
 		if (
 			output !== undefined &&
-			["core.plan", "core.implementation", "core.verification"].includes(
-				edge.to,
-			)
+			[
+				"core.plan",
+				"core.implementation",
+				"core.verification",
+				"fusion.consolidate",
+			].includes(edge.to)
 		)
 			snapshot.step.context = JSON.parse(JSON.stringify(output)) as JsonValue;
 		if (
@@ -1623,7 +1692,26 @@ export class WorkflowEngine {
 		this.applyReduction(db, snapshot, step, step.enter(snapshot));
 		if (step.actor === "agent") {
 			const roles = roleForStep(snapshot.currentStep, snapshot);
-			for (const role of roles) this.createRun(db, snapshot, step, role);
+			for (const role of roles) {
+				if (snapshot.currentStep === "fusion.plan") {
+					// Resume collection: never relaunch a role whose validated draft
+					// already survived, nor one whose run is still pending/working.
+					if (
+						snapshot.step.results.some(
+							(result) => result.role === role && result.outputDigest,
+						)
+					)
+						continue;
+					const active = snapshot.step.activeRunIds.find((id) => {
+						const row = db
+							.query("SELECT role FROM workflow_runs WHERE id=?")
+							.get(id) as { role?: string } | undefined;
+						return row?.role === role;
+					});
+					if (active) continue;
+				}
+				this.createRun(db, snapshot, step, role);
+			}
 			return;
 		}
 		if (snapshot.currentStep === "core.delivery")
@@ -1924,34 +2012,8 @@ export class WorkflowEngine {
 		snapshot: WorkflowSnapshot,
 		stepId: string,
 	): void {
-		if (stepId === "core.plan") {
-			const root = path.join(
-				snapshot.metadata.worktree,
-				"openspec",
-				"changes",
-				snapshot.metadata.changeId,
-			);
-			for (const file of ["proposal.md", "design.md", "tasks.md"])
-				if (
-					!fs.existsSync(path.join(root, file)) ||
-					!fs.readFileSync(path.join(root, file), "utf8").trim()
-				)
-					throw new WorkflowRuntimeError(
-						"entry-guard",
-						`planning artifact invalid: ${file}`,
-					);
-			const specs = path.join(root, "specs");
-			if (
-				!fs.existsSync(specs) ||
-				!walkFiles(specs).some((file) =>
-					/#### Scenario:/.test(fs.readFileSync(file, "utf8")),
-				)
-			)
-				throw new WorkflowRuntimeError(
-					"entry-guard",
-					"planning requires at least one OpenSpec scenario",
-				);
-		}
+		if (stepId === "core.plan" || stepId === "fusion.consolidate")
+			this.validatePlanningArtifacts(snapshot);
 		if (
 			stepId === "core.implementation" &&
 			snapshot.definition.id !== "no-openspec"
@@ -1998,6 +2060,36 @@ export class WorkflowEngine {
 			)
 				throw new WorkflowRuntimeError("entry-guard", "archive move not found");
 		}
+	}
+	/** Planning and consolidation both must leave a complete OpenSpec change
+	 * directory behind before their completion counts. */
+	private validatePlanningArtifacts(snapshot: WorkflowSnapshot): void {
+		const root = path.join(
+			snapshot.metadata.worktree,
+			"openspec",
+			"changes",
+			snapshot.metadata.changeId,
+		);
+		for (const file of ["proposal.md", "design.md", "tasks.md"])
+			if (
+				!fs.existsSync(path.join(root, file)) ||
+				!fs.readFileSync(path.join(root, file), "utf8").trim()
+			)
+				throw new WorkflowRuntimeError(
+					"entry-guard",
+					`planning artifact invalid: ${file}`,
+				);
+		const specs = path.join(root, "specs");
+		if (
+			!fs.existsSync(specs) ||
+			!walkFiles(specs).some((file) =>
+				/#### Scenario:/.test(fs.readFileSync(file, "utf8")),
+			)
+		)
+			throw new WorkflowRuntimeError(
+				"entry-guard",
+				"planning requires at least one OpenSpec scenario",
+			);
 	}
 	private validateSnapshot(
 		snapshot: WorkflowSnapshot,
@@ -2382,6 +2474,42 @@ export class WorkflowEngine {
 		snapshot.step.activeRunIds = [];
 	}
 }
+const PLANNER_ROLE = /^planner-[1-5]$/;
+/** Ordered planner roles (planner-1..N) pinned in the snapshot's fusion routes.
+ * The model list is start-time configuration: each planner-i route carries the
+ * i-th profile, so retries and restarts re-resolve identically from the
+ * recorded routes without extra snapshot schema. */
+export function fusionPlannerRoles(routing: WorkflowRouting): string[] {
+	const roles = new Set<string>();
+	for (const route of routing.routes)
+		if (
+			route.stepId === "fusion.plan" &&
+			route.role &&
+			PLANNER_ROLE.test(route.role)
+		)
+			roles.add(route.role);
+	return [...roles].sort(
+		(a, b) =>
+			Number(a.slice("planner-".length)) - Number(b.slice("planner-".length)),
+	);
+}
+/** Validated planner drafts in stable role order, deduplicated by role with
+ * the latest digest winning (a repaired or retried role may re-submit). */
+function fusionDraftInputs(snapshot: WorkflowSnapshot): JsonValue {
+	const byRole = new Map<string, { path: string; digest: string }>();
+	for (const item of snapshot.evidence) {
+		const match = /^fusion\.plan:(planner-[1-5])$/.exec(item.kind);
+		if (match?.[1])
+			byRole.set(match[1], { path: item.path, digest: item.digest });
+	}
+	return fusionPlannerRoles(snapshot.routing)
+		.filter((role) => byRole.has(role))
+		.map((role) => ({
+			role,
+			path: byRole.get(role)?.path ?? "",
+			digest: byRole.get(role)?.digest ?? "",
+		}));
+}
 function freshStep(attempt: number): WorkflowSnapshot["step"] {
 	return {
 		attempt,
@@ -2437,6 +2565,8 @@ export function changedFilesIn(snapshot: WorkflowSnapshot): string[] {
 }
 function roleForStep(step: string, snapshot: WorkflowSnapshot): string[] {
 	if (step === "core.plan") return ["planner"];
+	if (step === "fusion.plan") return fusionPlannerRoles(snapshot.routing);
+	if (step === "fusion.consolidate") return ["consolidator"];
 	if (step === "core.implementation") return ["worker"];
 	if (step === "core.triage") return ["triage"];
 	if (step === "core.verification")

@@ -85,7 +85,19 @@ export function renderAssignment(
 							},
 						],
 					}
-				: { result: "step-specific JSON value" };
+				: assignment.output?.schemaId === "core.plan-draft"
+					? {
+							approach: "one-paragraph implementation strategy",
+							files: [
+								{
+									path: "relative/path.ts",
+									change: "concrete change for this file",
+								},
+							],
+							risks: [{ detail: "what could break" }],
+							questions: [{ detail: "unresolved decision" }],
+						}
+					: { result: "step-specific JSON value" };
 
 	const dynamic = [
 		"# Run assignment",
@@ -140,7 +152,11 @@ export function renderAssignment(
 							? [
 									"Payload: `findings` array; each item requires unique string `id`, `severity` (`critical`, `warning`, or `info`), non-empty string `detail`, repository-relative `path`, and integer `line` (1-based line in the current file).",
 								]
-							: ["Payload: JSON value required by step instructions."]),
+							: assignment.output.schemaId === "core.plan-draft"
+								? [
+										"Payload: non-empty string `approach`; non-empty `files` array of `{ path, change }` items with repository-relative paths; `risks` and `questions` arrays of `{ detail }` items.",
+									]
+								: ["Payload: JSON value required by step instructions."]),
 				]
 			: ["No output artifact."]),
 		"",
