@@ -80,17 +80,15 @@ export function paneForRunFactory(
 		const roundScoped = ["core.triage", "core.verification"].includes(
 			run.stepId,
 		);
-		if (!roundScoped) {
-			// Persistent role: adopt the live agent's pane instead of spawning a
-			// duplicate; fall through to tab create only on the no-agent outcome.
-			const resolved = resolveLiveAgent(
-				herdr,
-				snapshot.metadata.changeId,
-				snapshot.definition.id,
-				run,
-			);
-			if (resolved) return { paneId: resolved.paneId };
-		}
+		// Adopt any live agent's pane instead of spawning a duplicate; fall
+		// through to geometry or tab creation only when no agent resolves.
+		const resolved = resolveLiveAgent(
+			herdr,
+			snapshot.metadata.changeId,
+			snapshot.definition.id,
+			run,
+		);
+		if (resolved) return { paneId: resolved.paneId };
 		if (roundScoped) {
 			const round = workflowEngine
 				.status(repo, snapshot.metadata.changeId)
@@ -144,7 +142,6 @@ export function paneForRunFactory(
 				// canonical-name resolver as every other launch path.
 				const resolvedSiblings = new Map<string, string>();
 				for (const sibling of all) {
-					if (!sibling.handle) continue;
 					const resolved = resolveLiveAgent(
 						herdr,
 						snapshot.metadata.changeId,

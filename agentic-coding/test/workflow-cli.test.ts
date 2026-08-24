@@ -470,6 +470,56 @@ describe("breaking workflow CLI surface", () => {
 		).toHaveLength(1);
 	});
 
+	test("verifier runs reuse a live canonical-name pane before creating a tab", async () => {
+		const snapshot = {
+			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
+			definition: { id: "standard", version: 1, digest: "d" },
+		};
+		const run = {
+			id: "qv",
+			workflowId: "wf",
+			stepId: "core.verification",
+			role: "quality-verifier",
+			attempt: 1,
+			status: "pending",
+		};
+		const fakeEngine = {
+			getRun: (_repo: string, id: string) => (id === run.id ? run : undefined),
+			getSnapshot: () => snapshot,
+			status: () => ({ runs: [run] }),
+		} as unknown as WorkflowEngine;
+		const canonical = effectRunnerTest.canonicalAgentName(
+			"change",
+			"standard",
+			{ stepId: run.stepId, role: run.role, id: run.id },
+		);
+		const calls: string[][] = [];
+		const herdr = {
+			call(...args: string[]) {
+				calls.push(args);
+				if (args[0] === "agent" && args[1] === "get") {
+					if (args[2] === canonical)
+						return {
+							agent: { pane_id: "verifier-live", agent_status: "working" },
+						};
+					throw new Error(`not found: ${args[2]}`);
+				}
+				if (args[0] === "tab" && args[1] === "create")
+					return { root_pane: { pane_id: "new-pane", tab_id: "new-tab" } };
+				return {};
+			},
+		};
+
+		expect(await paneForRunFactory(fakeEngine, "/repo", herdr)(run.id)).toEqual(
+			{
+				paneId: "verifier-live",
+			},
+		);
+		expect(
+			calls.some((args) => args[0] === "tab" && args[1] === "create"),
+		).toBe(false);
+	});
+
 	test("verification layout anchors on siblings confirmed live by canonical name, not stored pane ids", async () => {
 		const snapshot = {
 			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
@@ -490,7 +540,6 @@ describe("breaking workflow CLI surface", () => {
 			role: "security-verifier",
 			attempt: 1,
 			status: "working",
-			handle: { runtime: "pi", name: "whatever", paneId: "dead-pane" },
 		};
 		const fakeEngine = {
 			getRun: (_repo: string, id: string) =>
@@ -524,8 +573,8 @@ describe("breaking workflow CLI surface", () => {
 			},
 		};
 		const pane = await paneForRunFactory(fakeEngine, "/repo", herdr)(qv.id);
-		// The stale stored pane id was discarded as a probe (never anchored on):
-		// the split targets the sibling's live pane found via its canonical name.
+		// The sibling had no persisted handle: the split targets its live pane
+		// found via the canonical name instead of falling through to tab creation.
 		expect(
 			calls.some((args) => args[0] === "pane" && args.includes("dead-pane")),
 		).toBe(false);
