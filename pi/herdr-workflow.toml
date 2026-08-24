@@ -63,7 +63,7 @@ agent = "build"
 
 [agents.profiles.pi-ox-alpha-free]
 runtime = "pi"
-model = "opencode/ox-alpha-free"
+model = "opencode-go/ox-alpha-free"
 thinking = "high"
 
 [agents.profiles."pi-gpt-5.6-luna"]
