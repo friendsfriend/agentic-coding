@@ -671,13 +671,11 @@ function roundScoped(stepId: string): boolean {
  * collide), uniqueness is carried by an 8-hex SHA-256 digest over
  * changeId/definitionId/stepId/role — injective across every live workflow.
  *
- * Persistent single-role steps (planner, worker, archive) get `<role>-<hash8>`:
- * one stable identity across every run/generation of that role within the
- * workflow, so follow-up cycles (review comments, retries) reuse the existing
- * agent instead of always launching a new one. Grouped one-shot roles
- * (triage/verification) get `<shortrole>-<hash8>-<runId8>` so each round gets a
- * fresh agent; the role prefix is cosmetic only (the hash already encodes the
- * full role) and is clamped to keep the name under the cap.
+ * Every role gets `<shortrole>-<hash8>`: the digest encodes the full
+ * change/definition/step/role identity, so persistent roles and grouped
+ * triage/verification roles reuse the same agent across runs. The role prefix
+ * is cosmetic only (the hash already encodes the full role) and is clamped to
+ * keep the name under the cap.
  */
 export function canonicalAgentName(
 	changeId: string,
@@ -692,7 +690,7 @@ export function canonicalAgentName(
 	const shortRole = run.role.endsWith("-verifier")
 		? `${run.role.slice(0, -9)}-verif`
 		: run.role;
-	return `${shortRole.slice(0, 14)}-${hash}-${run.id.slice(0, 8)}`;
+	return `${shortRole.slice(0, 14)}-${hash}`;
 }
 /**
  * Pre-canonical naming (`<truncated changeId>-<role>[-<runId8>]`). Lossy under

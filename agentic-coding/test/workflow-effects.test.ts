@@ -499,7 +499,6 @@ test("canonical agent names stay within herdr limits and never collide across lo
 		);
 		expect(name.length).toBeLessThanOrEqual(32);
 		expect(name).toMatch(/^[a-z][a-z0-9_-]*$/);
-		expect(name.endsWith(verifier.id.slice(0, 8))).toBe(true);
 	}
 	// Change IDs sharing a long common prefix (legacy truncation width) must
 	// still map to distinct live agent names.
@@ -523,7 +522,7 @@ test("canonical agent names stay within herdr limits and never collide across lo
 	expect(one.length).toBeLessThanOrEqual(32);
 });
 
-test("canonical agent names are stable across generations and isolated per round", () => {
+test("canonical agent names are stable across generations and grouped rounds", () => {
 	const name = (stepId: string, role: string, id: string) =>
 		effectRunnerTest.canonicalAgentName("change-id", "standard", {
 			stepId,
@@ -540,8 +539,8 @@ test("canonical agent names are stable across generations and isolated per round
 	expect(name("core.archive", "archive", "12345678")).toBe(
 		name("core.archive", "archive", "fedcba09"),
 	);
-	// Grouped one-shot roles scope per round via the run id.
-	expect(name("core.verification", "quality-verifier", "12345678")).not.toBe(
+	// Grouped verifier roles keep one identity across every round.
+	expect(name("core.verification", "quality-verifier", "12345678")).toBe(
 		name("core.verification", "quality-verifier", "fedcba09"),
 	);
 	// Roles within the same round stay distinct even when abbreviated.
