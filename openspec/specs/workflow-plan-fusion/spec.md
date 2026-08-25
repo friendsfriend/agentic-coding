@@ -2,9 +2,7 @@
 
 ## Purpose
 Defines the plan-fusion workflow type: parallel multi-model planning where 2–5 planner runs receive the same prompt-engineered objective, each produces a structured plan draft against a pinned output schema, and a consolidation step fuses the drafts into one OpenSpec proposal before the standard approval and execution flow.
-
 ## Requirements
-
 ### Requirement: Plan-fusion workflow composition
 The system SHALL register a built-in workflow definition `plan-fusion` whose graph prepends a fusion-planning fan-out step and a plan-fusion consolidation step ahead of the standard flow's plan-approval step, reusing the standard flow's steps unchanged from plan approval onward.
 
@@ -62,3 +60,30 @@ The plan-fusion consolidation step SHALL be an agent step whose declared inputs 
 - **WHEN** the consolidation agent hands off `complete`
 - **THEN** the workflow SHALL present the consolidated proposal to the developer through the standard plan-approval step
 - **AND** approval comments MAY return the workflow to either fusion step per the pinned graph without bypassing review
+
+### Requirement: Dashboard plan-fusion workflow selection
+The home dashboard SHALL expose the registered `plan-fusion` workflow in the new workflow modal and SHALL pass the selected definition ID to workflow startup without changing the identifiers or behavior of existing workflow choices.
+
+#### Scenario: User selects plan-fusion
+- **WHEN** a user opens the new workflow modal and chooses Plan Fusion
+- **THEN** the modal SHALL submit `workflowType` as `plan-fusion`
+- **AND** dashboard startup SHALL start the registered `plan-fusion` definition
+
+#### Scenario: Existing workflow choices remain available
+- **WHEN** a user opens the new workflow modal after this change
+- **THEN** standard, direct-apply, and quick SHALL remain selectable
+- **AND** their submitted workflow types SHALL retain their existing mappings
+
+### Requirement: Dashboard plan-fusion startup creates the required fan-out
+When the dashboard starts `plan-fusion` with a valid preset configuration, it SHALL derive ordered `planner-1` through `planner-N` routes for the configured N planner profiles and a `consolidator` route for `fusion.consolidate` before invoking the workflow engine.
+
+#### Scenario: Valid preset starts plan-fusion
+- **WHEN** the selected preset defines 2–5 ordered, distinct profiles for `fusion.plan` planner roles and a resolvable consolidator route
+- **THEN** dashboard startup SHALL create one route per planner role and one consolidator route
+- **AND** the workflow SHALL start at the existing `fusion.plan` step
+
+#### Scenario: Invalid planner configuration is rejected before launch
+- **WHEN** a selected plan-fusion preset defines fewer than 2, more than 5, non-contiguous, duplicate, or unresolved planner routes
+- **THEN** dashboard startup SHALL report a configuration error
+- **AND** it SHALL launch no workspace agents
+

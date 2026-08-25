@@ -33,6 +33,14 @@ const PRESET_STEPS = [
 	"core.triage",
 	"core.archive",
 ];
+const FUSION_CONSOLIDATE_STEP = "fusion.consolidate";
+const FUSION_PLAN_ROLES = [
+	"planner-1",
+	"planner-2",
+	"planner-3",
+	"planner-4",
+	"planner-5",
+];
 const VERIFICATION_ROLES = [
 	"quality-verifier",
 	"security-verifier",
@@ -59,7 +67,10 @@ type PresetDraft = {
 	defaultProfile: string;
 	steps: Record<string, string>;
 	roles: Record<string, string>;
-	/** Role tables for steps other than core.verification, preserved verbatim. */
+	/** Role assignments under roles.fusion.plan (planner-1..5). */
+	fusionRoles: Record<string, string>;
+	/** Role tables for steps other than core.verification and fusion.plan,
+	 * preserved verbatim. */
 	otherRoles: Record<string, Record<string, string>>;
 };
 type Draft = ProfileDraft | PresetDraft;
@@ -136,6 +147,18 @@ function presetFields(profileNames: string[]): EditorField[] {
 			kind: "choice" as const,
 			options,
 		})),
+		{
+			key: `step:${FUSION_CONSOLIDATE_STEP}`,
+			label: `Step ${FUSION_CONSOLIDATE_STEP}`,
+			kind: "choice" as const,
+			options,
+		},
+		...FUSION_PLAN_ROLES.map((role) => ({
+			key: `fusionRole:${role}`,
+			label: `Fusion ${role}`,
+			kind: "choice" as const,
+			options,
+		})),
 		...VERIFICATION_ROLES.map((role) => ({
 			key: `role:${role}`,
 			label: `Verification ${role}`,
@@ -191,16 +214,21 @@ export function ModelConfigModal(props: {
 	};
 	const openPresetEditor = (existing?: string) => {
 		const current = existing ? agents()?.presets?.[existing] : undefined;
-		// Edit only the core.verification role table; other steps' tables are kept
-		// verbatim so an edit-save cycle never collapses them into one step.
-		const { "core.verification": verification = {}, ...otherRoles } =
-			current?.roles ?? {};
+		// Edit only the core.verification and fusion.plan role tables; other
+		// steps' tables are kept verbatim so an edit-save cycle never collapses
+		// them into one step.
+		const {
+			"core.verification": verification = {},
+			"fusion.plan": fusionPlan = {},
+			...otherRoles
+		} = current?.roles ?? {};
 		setDraft({
 			kind: "preset",
 			name: existing ?? "",
 			defaultProfile: current?.default_profile ?? "",
 			steps: { ...(current?.steps ?? {}) },
 			roles: { ...verification },
+			fusionRoles: { ...fusionPlan },
 			otherRoles,
 		});
 		startEditor();
@@ -236,6 +264,8 @@ export function ModelConfigModal(props: {
 			if (f.key === "name") return d.name;
 			if (f.key === "defaultProfile") return d.defaultProfile;
 			if (f.key.startsWith("step:")) return d.steps[f.key.slice(5)] ?? "";
+			if (f.key.startsWith("fusionRole:"))
+				return d.fusionRoles[f.key.slice("fusionRole:".length)] ?? "";
 			if (f.key.startsWith("role:")) return d.roles[f.key.slice(5)] ?? "";
 		}
 		return "";
@@ -290,10 +320,13 @@ export function ModelConfigModal(props: {
 				...current,
 				steps: { ...current.steps },
 				roles: { ...current.roles },
+				fusionRoles: { ...current.fusionRoles },
 			};
 			if (f.key === "name") next.name = value;
 			else if (f.key === "defaultProfile") next.defaultProfile = value;
 			else if (f.key.startsWith("step:")) next.steps[f.key.slice(5)] = value;
+			else if (f.key.startsWith("fusionRole:"))
+				next.fusionRoles[f.key.slice("fusionRole:".length)] = value;
 			else if (f.key.startsWith("role:")) next.roles[f.key.slice(5)] = value;
 			return next;
 		});
@@ -374,11 +407,16 @@ export function ModelConfigModal(props: {
 		const verificationRoles = Object.fromEntries(
 			Object.entries(d.roles).filter(([, value]) => value),
 		);
+		const fusionPlanRoles = Object.fromEntries(
+			Object.entries(d.fusionRoles).filter(([, value]) => value),
+		);
 		const roleTables: Record<string, Record<string, string>> = {
 			...d.otherRoles,
 		};
 		if (Object.keys(verificationRoles).length)
 			roleTables["core.verification"] = verificationRoles;
+		if (Object.keys(fusionPlanRoles).length)
+			roleTables["fusion.plan"] = fusionPlanRoles;
 		const preset: PresetConfig = {
 			...(d.defaultProfile ? { default_profile: d.defaultProfile } : {}),
 			...(Object.keys(steps).length ? { steps } : {}),

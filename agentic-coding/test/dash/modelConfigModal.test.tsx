@@ -221,3 +221,146 @@ test("deleting a profile requires explicit confirmation", async () => {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
 }, 20000);
+
+test("preset editor persists fusion planner roles and consolidator step", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "model-modal-test-"));
+	process.env.HERDR_WORKFLOW_CONFIG = path.join(dir, "config.toml");
+	fs.writeFileSync(
+		process.env.HERDR_WORKFLOW_CONFIG,
+		`[ui]\ntheme = "catppuccin"\n\n[agents]\ndefault_profile = "a"\n\n[agents.profiles.a]\nruntime = "pi"\n\n[agents.profiles.b]\nruntime = "pi"\n`,
+	);
+	let handler: ((event: KeyEvent) => boolean) | undefined;
+	try {
+		const t = await testRender(
+			() => (
+				<ModelConfigModal
+					onKeyReady={(h) => {
+						handler = h;
+					}}
+					onCancel={() => {}}
+				/>
+			),
+			{ width: 100, height: 30 },
+		);
+		await t.flush();
+		handler?.(key("down")); // menu -> Presets
+		handler?.(key("enter")); // open Presets list
+		await t.flush();
+		handler?.(key("enter")); // "(create new preset…)"
+		await t.flush();
+		expect(t.captureCharFrame()).toContain("Preset name");
+		for (const char of "fusion-preset") handler?.(key(char));
+		handler?.(key("return"));
+		await t.flush();
+		// defaultProfile: keep (unset)
+		handler?.(key("return"));
+		// core.plan .. core.archive: keep (unset)
+		for (let i = 0; i < 4; i += 1) handler?.(key("return"));
+		await t.flush();
+		let frame = t.captureCharFrame();
+		expect(frame).toContain("Step fusion.consolidate");
+		// select profile "a" for the consolidator step
+		handler?.(key("j"));
+		handler?.(key("return"));
+		await t.flush();
+		frame = t.captureCharFrame();
+		expect(frame).toContain("Fusion planner-1");
+		// planner-1 -> a, planner-2 -> b, planner-3..5 stay unset
+		handler?.(key("j"));
+		handler?.(key("return"));
+		await t.flush();
+		handler?.(key("j"));
+		handler?.(key("j"));
+		handler?.(key("return"));
+		for (let i = 0; i < 3; i += 1) handler?.(key("return"));
+		// six verification roles stay (unset)
+		for (let i = 0; i < 6; i += 1) handler?.(key("return"));
+		await t.flush();
+		const persisted = fs.readFileSync(
+			process.env.HERDR_WORKFLOW_CONFIG,
+			"utf8",
+		);
+		expect(persisted).toContain("fusion-preset");
+		expect(persisted).toMatch(/planner-1 = "a"/);
+		expect(persisted).toMatch(/planner-2 = "b"/);
+		expect(persisted).toMatch(/"fusion.consolidate" = "a"/);
+		// unset optional fields are never persisted as the literal sentinel
+		expect(persisted).not.toContain("(unset)");
+		expect(persisted).not.toMatch(/planner-[345]/);
+		t.renderer.destroy();
+	} finally {
+		delete process.env.HERDR_WORKFLOW_CONFIG;
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}, 20000);
+
+test("editing an existing preset preserves role tables outside the edited fields", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "model-modal-test-"));
+	process.env.HERDR_WORKFLOW_CONFIG = path.join(dir, "config.toml");
+	fs.writeFileSync(
+		process.env.HERDR_WORKFLOW_CONFIG,
+		`[ui]
+theme = "catppuccin"
+
+[agents]
+default_profile = "a"
+
+[agents.profiles.a]
+runtime = "pi"
+
+[agents.profiles.b]
+runtime = "pi"
+
+[agents.presets.existing.steps]
+"core.plan" = "a"
+"core.implementation" = "b"
+
+[agents.presets.existing.roles."core.verification"]
+quality-verifier = "b"
+
+[agents.presets.existing.roles."custom.step"]
+custom-role = "a"
+`,
+	);
+	let handler: ((event: KeyEvent) => boolean) | undefined;
+	try {
+		const t = await testRender(
+			() => (
+				<ModelConfigModal
+					onKeyReady={(h) => {
+						handler = h;
+					}}
+					onCancel={() => {}}
+				/>
+			),
+			{ width: 100, height: 30 },
+		);
+		await t.flush();
+		handler?.(key("down")); // menu -> Presets
+		handler?.(key("enter")); // open Presets list
+		await t.flush();
+		handler?.(key("enter")); // edit "existing"
+		await t.flush();
+		expect(t.captureCharFrame()).toContain("Agent configuration preset");
+		// accept every field unchanged through the full editor walk
+		for (let i = 0; i < 18; i += 1) handler?.(key("return"));
+		await t.flush();
+		const persisted = fs.readFileSync(
+			process.env.HERDR_WORKFLOW_CONFIG,
+			"utf8",
+		);
+		expect(persisted).toContain('"core.plan" = "a"');
+		expect(persisted).toContain('"core.implementation" = "b"');
+		expect(persisted).toContain('quality-verifier = "b"');
+		// arbitrary role tables survive verbatim
+		expect(persisted).toContain('"custom.step"');
+		expect(persisted).toContain('custom-role = "a"');
+		expect(persisted).not.toContain("(unset)");
+		// untouched fusion fields are not introduced by the save
+		expect(persisted).not.toContain("fusion");
+		t.renderer.destroy();
+	} finally {
+		delete process.env.HERDR_WORKFLOW_CONFIG;
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}, 20000);

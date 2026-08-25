@@ -82,11 +82,17 @@ export function NewWorkflowModal(props: {
 		mode: "Checkout mode",
 	};
 
-	const workflowTypeChoices = ["standard", "direct-apply", "quick"];
+	const workflowTypeChoices = [
+		"standard",
+		"direct-apply",
+		"quick",
+		"plan-fusion",
+	];
 	const workflowTypeDisplay: Record<string, string> = {
 		standard: "Standard",
 		"direct-apply": "Apply",
 		quick: "Quick Implementation",
+		"plan-fusion": "Plan Fusion",
 	};
 
 	const choices = (): string[] => {
