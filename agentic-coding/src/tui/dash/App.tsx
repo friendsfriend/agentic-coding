@@ -21,6 +21,7 @@ import {
 import { formatDuration } from "../../workflow/format";
 import { copyToClipboard } from "./clipboard";
 import {
+	type AgentUsageMetrics,
 	applyRepair,
 	approvalFor,
 	type DashboardData,
@@ -76,6 +77,42 @@ import { ThemePickerModal } from "./ui/ThemePickerModal";
 import { getActiveThemeName, themeNames } from "./ui/theme";
 import { VerdictModal } from "./ui/VerdictModal";
 import { watchDirectories } from "./watchRefresh";
+
+/** Compact token count for the Agents panel metric line (1234 → 1.2k). */
+function formatTokens(count: number): string {
+	if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+	if (count >= 1000) return `${(count / 1000).toFixed(1)}k`;
+	return String(count);
+}
+
+/** One compact, fixed-order metric line per agent: cost, tokens in→out, cache
+ * hit rate (cache-read / total input), duration, tokens/s. Undefined when the
+ * role recorded no metrics so the panel can omit the line entirely instead of
+ * showing zero placeholders that could be mistaken for measured values. */
+export function agentMetricLine(
+	metrics: AgentUsageMetrics | undefined,
+): string | undefined {
+	if (!metrics) return undefined;
+	const inputTokens = metrics.inputTokens ?? 0;
+	const parts = [
+		...(metrics.cost !== undefined ? [`$${metrics.cost.toFixed(2)}`] : []),
+		...(metrics.inputTokens !== undefined || metrics.outputTokens !== undefined
+			? [
+					`tok ${formatTokens(inputTokens)}→${formatTokens(metrics.outputTokens ?? 0)}`,
+				]
+			: []),
+		...(metrics.cacheReadTokens !== undefined && inputTokens > 0
+			? [`${Math.round((metrics.cacheReadTokens / inputTokens) * 100)}% cached`]
+			: []),
+		...(metrics.durationSeconds !== undefined
+			? [formatDuration(metrics.durationSeconds)]
+			: []),
+		...(metrics.tokensPerSecond !== undefined
+			? [`${metrics.tokensPerSecond} tok/s`]
+			: []),
+	];
+	return parts.length > 0 ? parts.join(" · ") : undefined;
+}
 
 export function App(props: {
 	repo: string;
@@ -2243,6 +2280,7 @@ export function App(props: {
 											data().verifierTimeline.find(
 												(item) => item.role === agent.role,
 											);
+										const metricsLine = () => agentMetricLine(agent.metrics);
 										const highlight = () =>
 											agent.status === "working"
 												? "highlight2"
@@ -2254,7 +2292,7 @@ export function App(props: {
 										return (
 											<box
 												width="100%"
-												height={2}
+												height={metricsLine() ? 3 : 2}
 												flexDirection="column"
 												paddingLeft={1}
 												paddingRight={1}
@@ -2318,6 +2356,11 @@ export function App(props: {
 														}}
 													</Show>
 												</box>
+												<Show when={metricsLine()}>
+													<box width="100%" height={1} overflow="hidden">
+														<text fg={uiColors.textMuted}>{metricsLine()}</text>
+													</box>
+												</Show>
 											</box>
 										);
 									}}

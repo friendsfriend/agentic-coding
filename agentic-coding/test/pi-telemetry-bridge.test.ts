@@ -64,6 +64,65 @@ for (const name of ["planner-ab12cd34", "quality-verif-ab12cd34-12345678"]) {
 	});
 }
 
+test("pi telemetry bridge emits usage envelope with cache, duration, tok/s", async () => {
+	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-usage-"));
+	const telemetryPath = path.join(repo, "telemetry.jsonl");
+	const savedPath = process.env.HERDR_TELEMETRY_PATH;
+	process.env.HERDR_TELEMETRY_PATH = telemetryPath;
+	try {
+		const module = path.join(repo, "bridge-usage.ts");
+		fs.copyFileSync(
+			path.resolve(
+				import.meta.dir,
+				"../../agent-definitions/bridges/pi-telemetry.ts",
+			),
+			module,
+		);
+		const handlers = new Map<string, (event: unknown) => void>();
+		const pi = {
+			on: (event: string, handler: (event: unknown) => void) => {
+				handlers.set(event, handler);
+			},
+		};
+		const bridge = await import(module);
+		bridge.default(pi);
+
+		handlers.get("message_start")?.({ message: { role: "assistant" } });
+		// Ensure measurable wall-clock generation time (millisecond resolution).
+		await Bun.sleep(5);
+		handlers.get("message_end")?.({
+			message: {
+				role: "assistant",
+				usage: {
+					input: 1200,
+					output: 300,
+					cacheRead: 900,
+					cacheWrite: 0,
+					totalTokens: 1500,
+					cost: { total: 0.012 },
+				},
+			},
+		});
+
+		const lines = fs.readFileSync(telemetryPath, "utf8").trim().split("\n");
+		expect(lines).toHaveLength(1);
+		const envelope = JSON.parse(lines[0]) as Record<string, unknown>;
+		expect(envelope.event).toBe("runtime.usage");
+		expect(envelope.inputTokens).toBe(1200);
+		expect(envelope.outputTokens).toBe(300);
+		expect(envelope.cacheReadTokens).toBe(900);
+		// cacheWrite is 0 → treated as not provided and omitted.
+		expect(envelope.cacheWriteTokens).toBeUndefined();
+		expect(envelope.cost).toBe(0.012);
+		expect(Number(envelope.durationMs)).toBeGreaterThan(0);
+		expect(envelope.tokensPerSecond).toBeGreaterThan(0);
+	} finally {
+		if (savedPath === undefined) delete process.env.HERDR_TELEMETRY_PATH;
+		else process.env.HERDR_TELEMETRY_PATH = savedPath;
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
 test("embedded bridge bundle contains the pointer-based recovery", async () => {
 	const { AGENT_DEFINITIONS } = await import(
 		"../src/workflow/embedded.generated.ts"

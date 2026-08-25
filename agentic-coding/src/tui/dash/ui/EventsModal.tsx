@@ -22,6 +22,7 @@ const label = (event: TraceEvent) =>
 		pi_agent_end: "Agent completed",
 		pi_agent_settled: "Agent waiting",
 		model_usage: "Model usage",
+		"runtime.usage": "Model usage",
 		provider_response: "Provider response",
 		verification_started: "Verification started",
 		verification_failed: "Verification failed",
@@ -69,7 +70,11 @@ export function EventsModal(props: { events: TraceEvent[]; selected: number }) {
 							<box flexGrow={1} />
 							<text fg={uiColors.textMuted}>{event.at}</text>
 						</box>
-						<Show when={event.event === "model_usage"}>
+						<Show
+							when={
+								event.event === "model_usage" || event.event === "runtime.usage"
+							}
+						>
 							<text fg={uiColors.textSecondary}>
 								{event.role ?? "agent"} · {event.model ?? "default"} · $
 								{event.cost?.toFixed(4) ?? "0.0000"}
