@@ -70,7 +70,6 @@ import { Panel } from "./ui/Panel";
 import { ScrollableContent } from "./ui/ScrollableContent";
 import { SelectableList } from "./ui/Selectable";
 import { ThemePickerModal } from "./ui/ThemePickerModal";
-import { TraceBrowser } from "./ui/TraceBrowser";
 import { getActiveThemeName, themeNames } from "./ui/theme";
 import { VerdictModal } from "./ui/VerdictModal";
 import { watchDirectories } from "./watchRefresh";
@@ -167,7 +166,6 @@ export function App(props: {
 	};
 	const [verdictOffset, setVerdictOffset] = createSignal(0);
 	const [eventsDetail, setEventsDetail] = createSignal(false);
-	const [traceDetail, setTraceDetail] = createSignal(false);
 	const [selectedEvent, setSelectedEvent] = createSignal(0);
 	const [help, setHelp] = createSignal(false);
 	const [themePicker, setThemePicker] = createSignal(false);
@@ -1093,7 +1091,7 @@ export function App(props: {
 			name === "tab"
 		) {
 			setActivePanel((panel) => {
-				const order = [0, 6, 1, 2, 4, 5];
+				const order = [0, 6, 1, 2, 4];
 				const index = order.indexOf(panel);
 				return (
 					order[
@@ -1147,11 +1145,6 @@ export function App(props: {
 					setVerdictOffset(0);
 					props.keymap.setData("modal.active", "verdict");
 				}
-				return;
-			}
-			if (activePanel() === 5) {
-				setTraceDetail(true);
-				props.keymap.setData("modal.active", "traces");
 				return;
 			}
 			if (activePanel() === 4) {
@@ -1613,22 +1606,6 @@ export function App(props: {
 				cmd: "events.handle",
 			})),
 		});
-		const disposeTraces = props.keymap.registerLayer({
-			name: "traces",
-			priority: 1000,
-			activeModal: "traces",
-			commands: [
-				{
-					name: "traces.close",
-					run: () => {
-						setTraceDetail(false);
-						props.keymap.setData("modal.active", "none");
-						return true;
-					},
-				},
-			],
-			bindings: [{ key: "escape", cmd: "traces.close" }],
-		});
 		const disposeReviewComment = props.keymap.registerLayer({
 			name: "review-comment",
 			priority: 1200,
@@ -1898,7 +1875,6 @@ export function App(props: {
 			disposeCost();
 			disposeHelp();
 			disposeEvents();
-			disposeTraces();
 			disposeReviewComment();
 			disposeDeveloperReview();
 			disposePlanReview();
@@ -1912,7 +1888,6 @@ export function App(props: {
 				verdict() ||
 				findings() ||
 				eventsDetail() ||
-				traceDetail() ||
 				help() ||
 				themePicker() ||
 				completedPicker() ||
@@ -2309,21 +2284,6 @@ export function App(props: {
 											: `clean · ↑${data().health.ahead} ↓${data().health.behind}`}
 									</text>
 								</Panel>
-								<Panel
-									title={`Traces · ${data().traceSpans.length}`}
-									accent={uiColors.primary}
-									active={activePanel() === 5}
-									style={{
-										flexGrow: 1,
-										flexBasis: 0,
-										minWidth: 0,
-										height: "100%",
-									}}
-								>
-									<text fg={uiColors.textSecondary}>
-										{data().traceSpans.at(-1)?.name ?? "No spans yet"}
-									</text>
-								</Panel>
 							</box>
 						</box>
 					</box>
@@ -2414,24 +2374,6 @@ export function App(props: {
 					events={[...data().events].reverse()}
 					selected={selectedEvent()}
 				/>
-			</Show>
-			<Show when={traceDetail()}>
-				<box
-					position="absolute"
-					top={2}
-					left={2}
-					right={2}
-					bottom={2}
-					backgroundColor={uiColors.bgBase}
-					border
-					borderColor={uiColors.primary}
-					padding={1}
-				>
-					<TraceBrowser
-						spans={data().traceSpans}
-						change={data().state.changeId}
-					/>
-				</box>
 			</Show>
 			<Show when={findings()}>
 				{(result) => (

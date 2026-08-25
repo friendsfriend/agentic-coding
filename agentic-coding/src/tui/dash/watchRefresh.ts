@@ -1,5 +1,5 @@
 // Event-driven refresh trigger for the dashboard's file-backed workflow state
-// (telemetry.jsonl / traces.jsonl / state.json) — replaces the fixed 5s
+// (telemetry.jsonl / state.json) — replaces the fixed 5s
 // re-spawn poll. Debounces bursts of file events into a single refresh call.
 import { type FSWatcher, watch } from "node:fs";
 

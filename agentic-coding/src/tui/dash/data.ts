@@ -6,8 +6,6 @@ import { dirname, join, resolve } from "node:path";
 import { directionBetween, Herdr, type Rect } from "../../herdr-client.ts";
 import type { WorkflowView } from "../../workflow/contracts.ts";
 import { canonicalStorePath } from "../../workflow/runtime.ts";
-import { parseJsonl } from "../otel/model/parser.ts";
-import type { SpanData } from "../otel/model/types.ts";
 import {
 	consumeReturnWorkspace,
 	dashboardState,
@@ -258,7 +256,6 @@ export interface DashboardData {
 		fallback: boolean;
 	}>;
 	costBreakdown: Array<Omit<CostRow, "messages"> & { messages: CostMessage[] }>;
-	traceSpans: SpanData[];
 }
 
 const read = (path: string) =>
@@ -982,7 +979,6 @@ export function loadDashboard(repo: string, change: string): DashboardData {
 		})),
 		verifierTimeline,
 		costBreakdown,
-		traceSpans: parseJsonl(read(join(workflowRoot, "traces.jsonl"))),
 	};
 }
 
@@ -1261,7 +1257,6 @@ export function testDashboard(phase = "proposed"): DashboardData {
 				],
 			},
 		],
-		traceSpans: [],
 	};
 }
 
