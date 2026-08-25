@@ -223,7 +223,7 @@ export function GenericModal(props: {
 											overflow: "hidden",
 										}}
 									>
-										{props.children}
+										<Show when={props.children}>{props.children}</Show>
 									</box>
 								</box>
 								{props.summary?.length ? (
@@ -249,7 +249,7 @@ export function GenericModal(props: {
 										{entry.key}
 									</span>{" "}
 									{entry.action}
-									{index() < props.help.length - 1 ? "  •  " : ""}
+									{index() < props.help.length - 1 ? "  •  " : " "}
 								</text>
 							)}
 						</For>
