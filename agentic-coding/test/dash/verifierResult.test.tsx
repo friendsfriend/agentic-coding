@@ -22,7 +22,7 @@ function TestDashboard() {
 }
 
 // Dismiss the auto-opened plan review popup and move focus to the Agents
-// panel (Tab order [0, 6, 1, 2, 4, 5]: Change → OpenSpec → Agents).
+// panel (Tab order [0, 6, 1, 2, 4]: Change → OpenSpec → Agents).
 async function focusAgentsPanel(t: Awaited<ReturnType<typeof testRender>>) {
 	await t.waitForFrame((frame) => frame.includes("Plan review"));
 	t.mockInput.pressEscape();

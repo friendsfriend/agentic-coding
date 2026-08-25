@@ -113,7 +113,7 @@ test("git panel enter opens the changed-files modal and finish stays gated to th
 	t.mockInput.pressKey("f");
 	await t.waitForFrame((frame) => !frame.includes("Changed Files (4 files)"));
 
-	// Tab to the git status panel (order [0, 6, 1, 2, 4, 5] → index 4).
+	// Tab to the git status panel (order [0, 6, 1, 2, 4] → index 4).
 	for (let i = 0; i < 4; i++) t.mockInput.pressTab();
 
 	// Enter on the git panel opens the developer review changed-files modal.
@@ -134,8 +134,9 @@ test("git panel enter opens the changed-files modal and finish stays gated to th
 	t.mockInput.pressEscape();
 	await t.waitForFrame((frame) => !frame.includes("Changed Files (1 files)"));
 
-	// Advance apply → verify → developer-review via the dashboard gate.
-	t.mockInput.pressTab();
+	// Advance apply → verify → developer-review via the dashboard gate
+	// (one more Tab wraps from the git panel to the Change panel, whose
+	// Enter falls through to the phase gate).
 	t.mockInput.pressTab();
 	t.mockInput.pressEnter();
 	await t.waitForFrame((frame) => frame.includes("verify"));
@@ -184,5 +185,27 @@ test("plan review comment on a markdown line routes feedback to the planner", as
 	// closes and the demo stays at the proposed/plan-review phase).
 	t.mockInput.pressKey("f");
 	await t.waitForFrame((frame) => !frame.includes("Changed Files (4 files)"));
+	t.renderer.destroy();
+});
+
+test("traces panel is removed and the tab cycle skips it", async () => {
+	const t = await testRender(() => <TestDashboard />, {
+		width: 120,
+		height: 40,
+	});
+
+	await t.waitForFrame((frame) => frame.includes("Plan review"));
+	t.mockInput.pressEscape();
+	await t.waitForFrame((frame) => !frame.includes("Plan review"));
+
+	// The traces panel no longer renders anywhere in the dashboard.
+	expect(t.captureCharFrame()).not.toContain("Traces ·");
+
+	// Cycling through every panel (order [0, 6, 1, 2, 4]) never shows traces.
+	for (let i = 0; i < 6; i++) {
+		t.mockInput.pressTab();
+		await t.renderOnce();
+		expect(t.captureCharFrame()).not.toContain("Traces ·");
+	}
 	t.renderer.destroy();
 });

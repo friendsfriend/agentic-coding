@@ -38,19 +38,6 @@ The trace viewer SHALL group spans by trace and expose parent/child hierarchy, t
 - **WHEN** receiver accepts additional spans for visible trace
 - **THEN** viewer SHALL update trace and span hierarchy while preserving valid selection where possible
 
-### Requirement: Managed workflow dashboard trace browser
-The Herdr dashboard SHALL expose same trace browser for selected workflow's local trace history.
-
-#### Scenario: Developer opens dashboard traces
-- **WHEN** developer activates Traces panel in `agent-dash`
-- **THEN** dashboard SHALL load selected workflow's normalized trace JSONL
-- **AND** browser SHALL prefilter spans to selected workflow change
-
-#### Scenario: Workflow has no spans yet
-- **WHEN** selected workflow has no trace file or valid spans
-- **THEN** dashboard SHALL show empty trace state
-- **AND** remaining workflow dashboard SHALL continue operating
-
 ### Requirement: Bounded and safe trace ingestion
 The standalone receiver SHALL validate untrusted network payloads and bound memory use.
 
