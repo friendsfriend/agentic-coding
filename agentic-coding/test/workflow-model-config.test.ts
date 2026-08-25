@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fusionPlannerCount, startRouting } from "../src/tui/dash/engine.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import {
 	agentsConfigPath,
@@ -577,5 +578,185 @@ describe("start argument threading", () => {
 				preset: PRESET_CONFIG_DEFAULTS,
 			}).preset,
 		).toBeUndefined();
+	});
+});
+
+describe("dashboard plan-fusion start routing", () => {
+	const baseConfig = {
+		default_profile: "d",
+		profiles: {
+			d: { runtime: "pi" },
+			a: { runtime: "pi" },
+			b: { runtime: "pi" },
+		},
+	};
+	const registry = registerBuiltins();
+	function routesFor(
+		definitionId: string,
+		agents: AgentsConfig,
+		presetName?: string,
+	) {
+		return startRouting(
+			definitionId,
+			presetName,
+			registry.definition(definitionId, 1),
+			registry,
+			agents,
+		).routes.map((route) => [route.stepId, route.role, route.profile.name]);
+	}
+	test("fusionPlannerCount derives the contiguous run and rejects gaps", () => {
+		expect(fusionPlannerCount(undefined)).toBe(0);
+		expect(
+			fusionPlannerCount({ name: "p", roles: { "fusion.plan": {} } }),
+		).toBe(0);
+		expect(
+			fusionPlannerCount({
+				name: "p",
+				roles: { "fusion.plan": { "planner-1": "a", "planner-2": "b" } },
+			}),
+		).toBe(2);
+		expect(
+			fusionPlannerCount({
+				name: "p",
+				roles: {
+					"fusion.plan": {
+						"planner-1": "a",
+						"planner-2": "a",
+						"planner-3": "a",
+						"planner-4": "a",
+						"planner-5": "a",
+					},
+				},
+			}),
+		).toBe(5);
+		expect(() =>
+			fusionPlannerCount({
+				name: "p",
+				roles: { "fusion.plan": { "planner-1": "a", "planner-3": "b" } },
+			}),
+		).toThrow(/contiguous planner roles/);
+	});
+	test("valid 2-planner preset creates ordered planner and consolidator routes", () => {
+		const agents = parseAgentsConfig({
+			...baseConfig,
+			presets: {
+				duo: {
+					steps: { "fusion.consolidate": "b" },
+					roles: {
+						"fusion.plan": { "planner-1": "a", "planner-2": "b" },
+					},
+				},
+			},
+		});
+		const routes = routesFor("plan-fusion", agents, "duo");
+		expect(routes.filter(([step]) => step === "fusion.plan")).toEqual([
+			["fusion.plan", "planner-1", "a"],
+			["fusion.plan", "planner-2", "b"],
+		]);
+		expect(routes.filter(([step]) => step === "fusion.consolidate")).toEqual([
+			["fusion.consolidate", "consolidator", "b"],
+		]);
+		// remaining agent steps resolve through the config default as before
+		expect(
+			routes
+				.filter(([step]) => step === "core.implementation")
+				.map((route) => route[2]),
+		).toEqual(["d"]);
+	});
+	test("valid 5-planner preset creates planner-1 through planner-5", () => {
+		const agents = parseAgentsConfig({
+			...baseConfig,
+			profiles: {
+				...baseConfig.profiles,
+				c: { runtime: "pi" },
+				e: { runtime: "pi" },
+			},
+			presets: {
+				five: {
+					default_profile: "d",
+					roles: {
+						"fusion.plan": {
+							"planner-1": "a",
+							"planner-2": "b",
+							"planner-3": "c",
+							"planner-4": "d",
+							"planner-5": "e",
+						},
+					},
+				},
+			},
+		});
+		expect(
+			routesFor("plan-fusion", agents, "five").filter(
+				([step]) => step === "fusion.plan",
+			),
+		).toEqual([
+			["fusion.plan", "planner-1", "a"],
+			["fusion.plan", "planner-2", "b"],
+			["fusion.plan", "planner-3", "c"],
+			["fusion.plan", "planner-4", "d"],
+			["fusion.plan", "planner-5", "e"],
+		]);
+	});
+	test("fewer than 2 or more than 5 planners are rejected before launch", async () => {
+		const one = parseAgentsConfig({
+			...baseConfig,
+			presets: {
+				one: { roles: { "fusion.plan": { "planner-1": "a" } } },
+			},
+		});
+		expect(() => routesFor("plan-fusion", one, "one")).toThrow(
+			/between 2 and 5 planner routings/,
+		);
+		// a gap in the run is caught during count derivation
+		const gapped = parseAgentsConfig({
+			...baseConfig,
+			presets: {
+				gapped: {
+					roles: {
+						"fusion.plan": {
+							"planner-1": "a",
+							"planner-2": "b",
+							"planner-4": "a",
+						},
+					},
+				},
+			},
+		});
+		expect(() => routesFor("plan-fusion", gapped, "gapped")).toThrow(
+			/contiguous planner roles/,
+		);
+	});
+	test("duplicate resolved planner profiles are rejected before launch", () => {
+		// without per-planner role assignments every planner falls back to the
+		// same profile, which the engine would reject at start time
+		const fallback = parseAgentsConfig({
+			...baseConfig,
+			presets: {
+				thin: {
+					roles: {
+						"fusion.plan": { "planner-1": "d", "planner-2": "d" },
+					},
+				},
+			},
+		});
+		expect(() => routesFor("plan-fusion", fallback, "thin")).toThrow(
+			/distinct planner profiles/,
+		);
+	});
+	test("non-fusion workflows keep their existing routing without a preset", () => {
+		const agents = parseAgentsConfig(baseConfig);
+		expect(routesFor("standard", agents)).toEqual([
+			["core.plan", "planner", "d"],
+			["core.implementation", "worker", "d"],
+			["core.triage", "triage", "d"],
+			["core.verification", "quality-verifier", "d"],
+			["core.verification", "security-verifier", "d"],
+			["core.verification", "performance-verifier", "d"],
+			["core.verification", "openspec-verifier", "d"],
+			["core.verification", "usability-verifier", "d"],
+			["core.verification", "test-verifier", "d"],
+			["core.archive", "archive", "d"],
+		]);
 	});
 });

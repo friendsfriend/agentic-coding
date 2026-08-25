@@ -4,11 +4,15 @@ import { Herdr } from "../../herdr-client.ts";
 import {
 	drainEffects,
 	listProjects,
+	rolesForDefinition,
 	runGit,
 	validateStart,
 	engine as workflowEngineFactory,
 } from "../../workflow/cli.ts";
-import type { WorkflowView } from "../../workflow/contracts.ts";
+import type {
+	WorkflowRouting,
+	WorkflowView,
+} from "../../workflow/contracts.ts";
 import {
 	definitionVersionForPolicy,
 	registerBuiltins,
@@ -18,10 +22,12 @@ import {
 	type AgentsConfig,
 	parseAgentsConfig,
 	preflightProfile,
+	type RoutingPreset,
 	resolvePreset,
 	resolveRouting,
 	validatePresetCoverage,
 } from "../../workflow/profiles.ts";
+import type { WorkflowRegistry } from "../../workflow/registry.ts";
 import {
 	canonicalStorePath,
 	validateChangeId,
@@ -128,9 +134,65 @@ export function listPresetNames(): string[] {
 function resolveStartPreset(
 	agents: AgentsConfig,
 	presetName?: string,
-): ReturnType<typeof resolvePreset> | undefined {
+): RoutingPreset | undefined {
 	if (!presetName || presetName === PRESET_CONFIG_DEFAULTS) return undefined;
 	return resolvePreset(agents, presetName);
+}
+/** Ordered plan-fusion planner count configured under the selected preset's
+ * roles.fusion.plan table: the contiguous run planner-1..planner-N. An entry
+ * beyond the run is rejected so an edited preset can never silently drop a
+ * planner or launch an unintended count. */
+export function fusionPlannerCount(preset: RoutingPreset | undefined): number {
+	const table = (preset?.roles?.["fusion.plan"] ?? {}) as Record<
+		string,
+		unknown
+	>;
+	const has = (role: string): boolean =>
+		typeof table[role] === "string" && table[role] !== "";
+	let count = 0;
+	while (count < 5 && has(`planner-${count + 1}`)) count += 1;
+	for (let index = count + 1; index <= 5; index += 1)
+		if (has(`planner-${index}`))
+			throw new Error(
+				`plan-fusion preset ${preset?.name} requires contiguous planner roles: planner-${index} is set but planner-${count + 1} is missing`,
+			);
+	return count;
+}
+/** Shared dashboard-start routing: derives agent roles through the CLI's
+ * rolesForDefinition (including the plan-fusion planner fan-out), validates
+ * preset coverage, resolves routes via the existing preset precedence chain,
+ * and rejects unusable plan-fusion configuration before any workspace or
+ * agent effects occur. */
+export function startRouting(
+	definitionId: string,
+	presetName: string | undefined,
+	definition: ReturnType<WorkflowRegistry["definition"]>,
+	registry: Pick<WorkflowRegistry, "step">,
+	agents: AgentsConfig,
+): WorkflowRouting {
+	const preset = resolveStartPreset(agents, presetName);
+	const roles = rolesForDefinition(
+		definitionId,
+		definition.steps,
+		registry,
+		definitionId === "plan-fusion" ? fusionPlannerCount(preset) : 0,
+	);
+	if (preset)
+		validatePresetCoverage(preset, definition, Object.keys(roles), agents);
+	const routing = resolveRouting(definition, roles, agents, preset);
+	if (definitionId === "plan-fusion") {
+		// Mirror the engine's defensive start-time checks with clearer errors
+		// before git inspection, workspace creation, or agent launches.
+		const planners = routing.routes.filter(
+			(route) => route.stepId === "fusion.plan",
+		);
+		if (planners.length < 2 || planners.length > 5)
+			throw new Error("plan-fusion requires between 2 and 5 planner routings");
+		const names = planners.map((route) => route.profile.name);
+		if (new Set(names).size !== names.length)
+			throw new Error("plan-fusion requires distinct planner profiles");
+	}
+	return routing;
 }
 export async function startWorkflowInProcess(
 	input: Parameters<typeof startArgs>[0],
@@ -147,39 +209,13 @@ export async function startWorkflowInProcess(
 	);
 	const definition = registry.definition(args.definitionId, definitionVersion);
 	const agents = parseAgentsConfig(config.agents, config);
-	const roles = Object.fromEntries(
-		definition.steps
-			.filter((step) => registry.step(step).actor === "agent")
-			.map((step) => [
-				step,
-				step === "core.plan"
-					? ["planner"]
-					: step === "core.implementation"
-						? ["worker"]
-						: step === "core.triage"
-							? ["triage"]
-							: step === "core.verification"
-								? [
-										"quality-verifier",
-										"security-verifier",
-										"performance-verifier",
-										"openspec-verifier",
-										"usability-verifier",
-										"test-verifier",
-									].filter(
-										(role) =>
-											args.definitionId !== "no-openspec" ||
-											role !== "openspec-verifier",
-									)
-								: step === "core.archive"
-									? ["archive"]
-									: [],
-			]),
+	const routing = startRouting(
+		args.definitionId,
+		args.preset,
+		definition,
+		registry,
+		agents,
 	);
-	const preset = resolveStartPreset(agents, args.preset);
-	if (preset)
-		validatePresetCoverage(preset, definition, Object.keys(roles), agents);
-	const routing = resolveRouting(definition, roles, agents, preset);
 	for (const route of routing.routes)
 		preflightProfile(route.profile, registry.step(route.stepId).requirements);
 	const baseCommit = runGit(
