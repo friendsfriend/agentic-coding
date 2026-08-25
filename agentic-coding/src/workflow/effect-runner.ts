@@ -109,12 +109,19 @@ export function agentEffectHandlers(
 		"workspace.setup": {
 			async observe(effect) {
 				const snapshot = snapshotFor(effect);
-				const input = effect.payload as { mode?: string; branch?: string };
-				const branch = input.branch ?? snapshot.metadata.branch;
+				const input = effect.payload as {
+					mode?: string;
+					branch?: string;
+					sameCheckout?: boolean;
+				};
+				const sameCheckout = input.sameCheckout === true;
+				const branch = sameCheckout
+					? currentBranch(snapshot.metadata.repository)
+					: (input.branch ?? snapshot.metadata.branch);
 				const worktree =
 					snapshot.metadata.worktree ??
 					(input.mode === "worktree"
-						? worktreeForBranch(snapshot.metadata.repository, branch)
+						? worktreeForBranch(snapshot.metadata.repository, branch ?? "")
 						: currentBranch(snapshot.metadata.repository) === branch
 							? snapshot.metadata.repository
 							: undefined);
@@ -131,10 +138,15 @@ export function agentEffectHandlers(
 					mode?: string;
 					branch?: string;
 					baseCommit?: string;
+					sameCheckout?: boolean;
 				};
-				const branch = input.branch ?? snapshot.metadata.branch;
+				const sameCheckout = input.sameCheckout === true;
+				const branch = sameCheckout
+					? currentBranch(snapshot.metadata.repository)
+					: (input.branch ?? snapshot.metadata.branch);
+				if (!branch) throw new Error("workspace setup requires a named branch");
 				let worktree =
-					input.mode === "worktree"
+					input.mode === "worktree" && !sameCheckout
 						? worktreeForBranch(snapshot.metadata.repository, branch)
 						: snapshot.metadata.repository;
 				let workspace = recoverWorkspace(
@@ -166,6 +178,7 @@ export function agentEffectHandlers(
 						);
 				} else {
 					if (
+						!sameCheckout &&
 						input.mode !== "worktree" &&
 						currentBranch(snapshot.metadata.repository) !== branch
 					) {

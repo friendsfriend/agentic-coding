@@ -1,8 +1,5 @@
-# workflow-plan-fusion Specification
+## MODIFIED Requirements
 
-## Purpose
-Defines the plan-fusion workflow type: parallel multi-model planning where 2–5 planner runs receive the same prompt-engineered objective, each produces a structured plan draft against a pinned output schema, and a consolidation step fuses the drafts into one OpenSpec proposal before the standard approval and execution flow.
-## Requirements
 ### Requirement: Plan-fusion workflow composition
 The system SHALL register a built-in workflow definition `plan-fusion` whose graph prepends a fusion-planning fan-out step and a plan-fusion consolidation step ahead of the standard flow's plan-approval step, reusing the standard flow's steps unchanged from plan approval onward. The system SHALL also register `fusion-propose`, which uses the same fusion-planning and consolidation steps but routes successful consolidation directly to `core.closed` and omits approval and execution steps.
 
@@ -108,4 +105,3 @@ When the dashboard starts `plan-fusion` or `fusion-propose` with a valid preset 
 - **WHEN** a selected plan-fusion or fusion-propose preset defines fewer than 2, more than 5, non-contiguous, duplicate, or unresolved planner routes
 - **THEN** dashboard startup SHALL report a configuration error
 - **AND** it SHALL launch no workspace agents
-

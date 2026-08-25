@@ -237,6 +237,7 @@ export interface StartWorkflowInput {
 	definitionId: string;
 	definitionVersion?: number;
 	mode?: "worktree" | "checkout";
+	sameCheckout?: boolean;
 	metadata: Omit<
 		WorkflowSnapshot["metadata"],
 		| "repository"
@@ -274,33 +275,34 @@ export class WorkflowEngine {
 		const worktree = fs.realpathSync(
 			path.resolve(input.worktree ?? input.repo),
 		);
-		this.validateStartEvidence(repository, input);
 		const definition = this.registry.definition(
 			input.definitionId,
 			input.definitionVersion ?? 1,
 		);
-		if (definition.id === "plan-fusion") {
-			// Reject invalid model lists before any state mutation or launch.
-			const roles = fusionPlannerRoles(input.routing);
-			if (roles.length < 2 || roles.length > 5)
+		const proposal = ["standard-propose", "fusion-propose"].includes(
+			definition.id,
+		);
+		if (proposal) {
+			if (input.mode !== "checkout")
 				throw new WorkflowRuntimeError(
-					"fusion-routing",
-					"plan-fusion requires between 2 and 5 planner routings",
+					"start-guard",
+					"proposal workflows require checkout mode",
 				);
-			const digests = input.routing.routes
-				.filter(
-					(route) =>
-						route.stepId === "fusion.plan" &&
-						route.role &&
-						PLANNER_ROLE.test(route.role),
-				)
-				.map((route) => route.profile.digest);
-			if (new Set(digests).size !== digests.length)
+			if (worktree !== repository)
 				throw new WorkflowRuntimeError(
-					"fusion-routing",
-					"plan-fusion requires distinct planner profiles",
+					"start-guard",
+					"proposal workflows must use the repository checkout",
+				);
+			const branch = currentBranch(repository);
+			if (!branch || input.metadata.branch !== branch)
+				throw new WorkflowRuntimeError(
+					"start-guard",
+					"proposal workflows require the named current branch",
 				);
 		}
+		this.validateStartEvidence(repository, input, proposal);
+		if (["plan-fusion", "fusion-propose"].includes(definition.id))
+			validateFusionRouting(definition.id, input.routing);
 		const at = nowIso(this.now);
 		const workflowId = randomUUID();
 		const snapshot: WorkflowSnapshot = {
@@ -375,6 +377,7 @@ export class WorkflowEngine {
 					`workspace:${workflowId}:setup`,
 					{
 						mode: input.mode,
+						sameCheckout: proposal,
 						branch: snapshot.metadata.branch,
 						baseCommit: snapshot.metadata.baseCommit,
 					},
@@ -1017,6 +1020,7 @@ export class WorkflowEngine {
 	private validateStartEvidence(
 		repository: string,
 		input: StartWorkflowInput,
+		proposal = false,
 	): void {
 		const status = Bun.spawnSync(
 			["git", "-C", repository, "status", "--porcelain"],
@@ -1027,7 +1031,7 @@ export class WorkflowEngine {
 				"start-guard",
 				"unable to inspect Git worktree",
 			);
-		if (status.stdout.toString().trim())
+		if (status.stdout.toString().trim() && !proposal)
 			throw new WorkflowRuntimeError(
 				"start-guard",
 				"working tree must be clean before workflow start",
@@ -2475,6 +2479,36 @@ export class WorkflowEngine {
 	}
 }
 const PLANNER_ROLE = /^planner-[1-5]$/;
+function validateFusionRouting(
+	definitionId: string,
+	routing: WorkflowRouting,
+): void {
+	const plannerRoutes = routing.routes.filter(
+		(route) => route.stepId === "fusion.plan",
+	);
+	const roles = plannerRoutes.map((route) => route.role);
+	const expected = Array.from(
+		{ length: roles.length },
+		(_, index) => `planner-${index + 1}`,
+	);
+	if (
+		roles.length < 2 ||
+		roles.length > 5 ||
+		roles.some((role) => !role || !PLANNER_ROLE.test(role)) ||
+		new Set(roles).size !== roles.length ||
+		!expected.every((role) => roles.includes(role))
+	)
+		throw new WorkflowRuntimeError(
+			"fusion-routing",
+			`${definitionId} requires contiguous planner-1..planner-N routings`,
+		);
+	const digests = plannerRoutes.map((route) => route.profile.digest);
+	if (new Set(digests).size !== digests.length)
+		throw new WorkflowRuntimeError(
+			"fusion-routing",
+			`${definitionId} requires distinct planner profiles`,
+		);
+}
 /** Ordered planner roles (planner-1..N) pinned in the snapshot's fusion routes.
  * The model list is start-time configuration: each planner-i route carries the
  * i-th profile, so retries and restarts re-resolve identically from the
@@ -2509,6 +2543,15 @@ function fusionDraftInputs(snapshot: WorkflowSnapshot): JsonValue {
 			path: byRole.get(role)?.path ?? "",
 			digest: byRole.get(role)?.digest ?? "",
 		}));
+}
+function currentBranch(repo: string): string | undefined {
+	const result = Bun.spawnSync(
+		["git", "-C", repo, "branch", "--show-current"],
+		{ stdout: "pipe", stderr: "pipe" },
+	);
+	return result.exitCode === 0
+		? result.stdout.toString().trim() || undefined
+		: undefined;
 }
 function freshStep(attempt: number): WorkflowSnapshot["step"] {
 	return {

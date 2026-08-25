@@ -238,6 +238,35 @@ test("startArgs maps quick workflow type to no-openspec and preserves task text"
 
 	expect(fusionArgs.definitionId).toBe("plan-fusion");
 	expect(fusionArgs.task).toBe("Compare plans\nand recommend one");
+
+	const proposalArgs = startArgs({
+		repo: ".",
+		ticket: "",
+		change: "proposal",
+		task: "Draft a plan",
+		mode: "worktree",
+		workflowType: "standard-propose",
+	});
+	expect(proposalArgs).toMatchObject({
+		definitionId: "standard-propose",
+		mode: "checkout",
+		sameCheckout: true,
+	});
+	const fusionProposalArgs = startArgs({
+		repo: ".",
+		ticket: "T-1",
+		change: "fusion-proposal",
+		task: "Compare drafts",
+		mode: "worktree",
+		workflowType: "fusion-propose",
+	});
+	expect(fusionProposalArgs).toMatchObject({
+		definitionId: "fusion-propose",
+		ticket: "T-1",
+		task: "Compare drafts",
+		mode: "checkout",
+		sameCheckout: true,
+	});
 });
 
 test("costSummary aggregates model_usage rows per role and sorts by cost", () => {

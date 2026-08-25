@@ -263,7 +263,12 @@ describe("plan-fusion workflow", () => {
 				routingWith([{ role: "planner-1", digest: "d1" }]),
 				routingWith([
 					{ role: "planner-1", digest: "d1" },
+					{ role: "planner-3", digest: "d2" },
+				]),
+				routingWith([
+					{ role: "planner-1", digest: "d1" },
 					{ role: "planner-1", digest: "d2" },
+					{ role: "planner-2", digest: "d3" },
 				]),
 				routingWith([
 					{ role: "planner-1", digest: "same" },
@@ -592,6 +597,77 @@ describe("plan-fusion workflow", () => {
 			const definition = registerBuiltins().definition("plan-fusion", 1);
 			for (const step of visited) expect(definition.steps).toContain(step);
 			expect(definition.initial).toBe("fusion.plan");
+		} finally {
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+	test("fusion-propose closes after validated consolidation without downstream work", () => {
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "fusion-propose-e2e-"));
+		try {
+			const repo = repository(path.join(tmp, "repo"));
+			const engine = new WorkflowEngine(registerBuiltins());
+			let view = engine.start({
+				repo,
+				mode: "checkout",
+				changeId: "fusion-propose",
+				definitionId: "fusion-propose",
+				metadata: {
+					branch: "main",
+					baseBranch: "main",
+					baseCommit: "base",
+					task: "compare plans",
+				},
+				routing: fusionRouting(2),
+			}).view;
+			const setup = requireDefined(
+				engine
+					.claimEffects(repo, 100)
+					.find((effect) => effect.kind === "workspace.setup"),
+				"workspace setup effect",
+			);
+			view = engine.dispatch(repo, {
+				type: "effect.result",
+				effectId: setup.id,
+				lease: requireDefined(setup.lease, "setup lease"),
+				outcome: "complete",
+				data: { workspace: "workspace", worktree: repo, branch: "main" },
+			}).view;
+			const cache = tokenCache(engine, repo);
+			view = handoff(engine, repo, view, "planner-1", draft(), cache);
+			view = handoff(engine, repo, view, "planner-2", draft(), cache);
+			expect(view.currentStep.id).toBe("fusion.consolidate");
+			seedChangeArtifacts(repo, "fusion-propose");
+			view = handoff(
+				engine,
+				repo,
+				view,
+				"consolidator",
+				{ consolidated: true },
+				cache,
+			);
+			const validation = requireDefined(
+				engine
+					.claimEffects(repo, 100)
+					.find((effect) => effect.kind === "openspec.validate"),
+				"openspec validation effect",
+			);
+			view = engine.dispatch(repo, {
+				type: "effect.result",
+				effectId: validation.id,
+				lease: requireDefined(validation.lease, "validation lease"),
+				outcome: "complete",
+			}).view;
+			expect(view.currentStep.id).toBe("core.closed");
+			expect(view.status).toBe("closed");
+			expect(view.effects.map((effect) => effect.kind)).not.toContain(
+				"delivery.commit",
+			);
+			expect(view.effects.map((effect) => effect.kind)).not.toContain(
+				"pull-request.create",
+			);
+			expect(view.effects.map((effect) => effect.kind)).toContain(
+				"workspace.close",
+			);
 		} finally {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
