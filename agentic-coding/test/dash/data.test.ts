@@ -286,6 +286,27 @@ test("required user actions expose developer review and completion commands", ()
 	expect(
 		requiredUserActionFor("completed", true)?.items.map((item) => item.label),
 	).toEqual(["Close Herdr workspace", "Close and delete worktree", "Not now"]);
+	const proposal = requiredUserActionFor(
+		"core.completed",
+		false,
+		[],
+		"standard-propose",
+	);
+	expect(proposal?.items.map((item) => item.label)).toEqual([
+		"Close Herdr workspace",
+		"Not now",
+	]);
+	expect(proposal?.items.map((item) => item.kind)).toEqual([
+		"workflow",
+		"dismiss",
+	]);
+	const planAction = requiredUserActionFor(
+		"core.plan-approval",
+		false,
+		[],
+		"standard-propose",
+	);
+	expect(planAction?.prompt).toContain("before completing the proposal");
 	expect(requiredUserActionFor("verify")).toBeUndefined();
 });
 

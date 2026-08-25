@@ -124,6 +124,7 @@ export function App(props: {
 			data().state.phase,
 			data().state.prCreated,
 			artifacts(),
+			data().state.definition?.id,
 		),
 	);
 	const [userActionOpen, setUserActionOpen] = createSignal(false);
@@ -174,6 +175,14 @@ export function App(props: {
 	const [completedPicker, setCompletedPicker] = createSignal(false);
 	const [completedSelection, setCompletedSelection] = createSignal(0);
 	const [actionReason, setActionReason] = createSignal("");
+	const planRejectionReasons = [
+		"Needs more detail",
+		"Scope is not approved",
+		"Requires design changes",
+		"Reject proposal",
+	];
+	const [planRejectionOpen, setPlanRejectionOpen] = createSignal(false);
+	const [planRejectionSelection, setPlanRejectionSelection] = createSignal(0);
 	const [repairOpen, setRepairOpen] = createSignal(false);
 	const [repairTargets, setRepairTargets] = createSignal<
 		Array<{
@@ -713,6 +722,38 @@ export function App(props: {
 			setBusy(false);
 		}
 	};
+	const openPlanRejection = () => {
+		setPlanRejectionSelection(0);
+		setPlanRejectionOpen(true);
+		queueMicrotask(() =>
+			props.keymap.setData("modal.active", "plan-rejection"),
+		);
+	};
+	const rejectPlan = async (reason: string) => {
+		if (busy()) return;
+		setBusy(true);
+		setMessage("Rejecting plan…");
+		try {
+			if (props.profile === "test") setMessage("Plan rejected");
+			else {
+				await runWorkflow(
+					"reject-plan",
+					props.repo,
+					props.change,
+					data().state.revision,
+					JSON.stringify({ reason }),
+				);
+				refresh();
+			}
+		} catch (error) {
+			setMessage(error instanceof Error ? error.message : String(error));
+		} finally {
+			setPlanRejectionOpen(false);
+			setReviewOpen(false);
+			props.keymap.setData("modal.active", "none");
+			setBusy(false);
+		}
+	};
 	const handleReviewKey = (event: KeyEvent) => {
 		const key = event.name.toLowerCase();
 		if (reviewView() === "files" && reviewSearchMode()) {
@@ -747,6 +788,12 @@ export function App(props: {
 				setReviewOpen(false);
 				props.keymap.setData("modal.active", "none");
 			}
+		} else if (
+			key === "r" &&
+			reviewKind() === "plan" &&
+			reviewView() === "files"
+		) {
+			openPlanRejection();
 		} else if (key === "f" && !event.shift) {
 			if (reviewKind() === "plan") void finishPlanReview();
 			else void finishDeveloperReview();
@@ -1706,6 +1753,36 @@ export function App(props: {
 				),
 			].map((key) => ({ key, cmd: "developer-review.handle" })),
 		});
+		const disposePlanRejection = props.keymap.registerLayer({
+			name: "plan-rejection",
+			priority: 1300,
+			activeModal: "plan-rejection",
+			commands: [
+				{
+					name: "plan-rejection.handle",
+					run: ({ event }) => {
+						const key = event.name.toLowerCase();
+						if (key === "escape") {
+							setPlanRejectionOpen(false);
+							props.keymap.setData("modal.active", "plan-review");
+						} else if (key === "j" || key === "down")
+							setPlanRejectionSelection((index) =>
+								Math.min(planRejectionReasons.length - 1, index + 1),
+							);
+						else if (key === "k" || key === "up")
+							setPlanRejectionSelection((index) => Math.max(0, index - 1));
+						else if (key === "enter" || key === "return") {
+							const reason = planRejectionReasons[planRejectionSelection()];
+							if (reason) void rejectPlan(reason);
+						}
+						return true;
+					},
+				},
+			],
+			bindings: ["escape", "enter", "return", "j", "k", "up", "down"].map(
+				(key) => ({ key, cmd: "plan-rejection.handle" }),
+			),
+		});
 		const disposePlanReview = props.keymap.registerLayer({
 			name: "plan-review",
 			priority: 1100,
@@ -1879,6 +1956,7 @@ export function App(props: {
 			disposeEvents();
 			disposeReviewComment();
 			disposeDeveloperReview();
+			disposePlanRejection();
 			disposePlanReview();
 			disposeFindings();
 			disposeVerdict();
@@ -1894,6 +1972,7 @@ export function App(props: {
 				themePicker() ||
 				completedPicker() ||
 				repairOpen() ||
+				planRejectionOpen() ||
 				userActionOpen() ||
 				costOpen() ||
 				reviewOpen() ||
@@ -2415,6 +2494,24 @@ export function App(props: {
 					/>
 				)}
 			</Show>
+			<Show when={planRejectionOpen()}>
+				<ListViewModal
+					title="Reject plan"
+					fieldLabel="Choose a rejection reason"
+					items={planRejectionReasons}
+					selectedIndex={planRejectionSelection()}
+					help={[
+						{ key: "j/k", action: "Navigate" },
+						{ key: "Enter", action: "Reject plan" },
+						{ key: "Esc", action: "Cancel" },
+					]}
+					renderItem={(item, selected) => (
+						<text fg={selected ? uiColors.warning : uiColors.textSecondary}>
+							{item}
+						</text>
+					)}
+				/>
+			</Show>
 			<Show when={reviewOpen() && reviewView() === "files"}>
 				<GenericModal
 					title={
@@ -2433,6 +2530,9 @@ export function App(props: {
 						{ key: "/", action: "Search files" },
 						...(reviewKind() === "plan" || developerReviewPhase()
 							? [{ key: "f", action: "Finish review" }]
+							: []),
+						...(reviewKind() === "plan"
+							? [{ key: "r", action: "Reject plan" }]
 							: []),
 						{ key: "Esc", action: "Postpone" },
 					]}

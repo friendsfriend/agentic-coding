@@ -1,8 +1,5 @@
-# workflow-proposal-only Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change implement-propose-only-worflows. Update Purpose after archive.
-## Requirements
 ### Requirement: Proposal-only workflow graphs
 The system SHALL register `standard-propose` and `fusion-propose` as explicit versioned workflow definitions. `standard-propose` SHALL start at `core.plan`, route a completed plan to `core.plan-approval`, route approval to `core.completed`, and route an explicit close from `core.completed` to `core.closed`. `fusion-propose` SHALL start at `fusion.plan`, route completed consolidation to `core.plan-approval`, route approval to `core.completed`, and route an explicit close to `core.closed`. Both definitions SHALL retain their planning retry bounds and SHALL expose no reachable implementation, verification, archive, delivery, or pull-request action/effect path.
 
@@ -51,40 +48,6 @@ The system SHALL register `standard-propose` and `fusion-propose` as explicit ve
 - **AND** the returned planning step SHALL receive the comments as review-fix context
 - **AND** the workspace SHALL remain open
 
-### Requirement: Same-checkout proposal startup
-The system SHALL require proposal-only workflows to start in checkout mode and SHALL use the repository itself and the currently checked-out non-detached branch as their worktree identity. Proposal workspace setup SHALL never create or switch a Git branch and SHALL never create a Git worktree.
-
-#### Scenario: Proposal starts in checkout mode
-- **WHEN** a caller starts `standard-propose` or `fusion-propose` with `--mode checkout` on a named current branch
-- **THEN** the engine SHALL create or recover only the Herdr workspace and use the repository as the worktree
-- **AND** it SHALL record the current branch without switching it
-
-#### Scenario: Worktree mode is rejected
-- **WHEN** a caller starts a proposal-only definition with worktree mode
-- **THEN** startup SHALL fail before workspace or agent effects are launched
-
-#### Scenario: Detached checkout is rejected
-- **WHEN** a proposal-only workflow is started without a named current branch
-- **THEN** startup SHALL fail with a start-guard diagnostic
-- **AND** no Git or workspace mutation SHALL occur
-
-### Requirement: Concurrent proposal isolation
-The system SHALL allow a proposal-only workflow to start in a checkout already used by another workflow, including when the tree is dirty, while preserving canonical change-ID uniqueness and isolating each run's OpenSpec artifacts under its own change ID. The dirty-tree exception SHALL apply only to proposal-only definitions.
-
-#### Scenario: Proposal coexists with full checkout workflow
-- **WHEN** a full workflow and a proposal-only workflow use the same repository checkout concurrently
-- **THEN** the proposal start SHALL not reject the checkout solely because it is occupied or dirty
-- **AND** the proposal SHALL not switch the branch or create/remove a worktree used by the full workflow
-
-#### Scenario: Duplicate change ID is used
-- **WHEN** a proposal-only start uses a change ID already owned by a workflow
-- **THEN** the canonical workflow store SHALL reject the start before launching agents
-- **AND** the existing workflow SHALL remain unchanged
-
-#### Scenario: Full workflow guard remains strict
-- **WHEN** a standard, direct-apply, no-openspec, or plan-fusion workflow is started on a dirty checkout
-- **THEN** the existing clean-tree start rejection SHALL remain in force
-
 ### Requirement: Normal validated proposal artifacts
 The planning steps of proposal-only workflows SHALL use the existing planning instructions, structured output contracts, and OpenSpec validation effects. Standard proposal planning and fusion consolidation SHALL create the normal OpenSpec change artifacts required by the planning protocol, and those artifacts SHALL remain available while the workflow awaits approval and while it is in `core.completed`.
 
@@ -126,4 +89,3 @@ The CLI and dashboard SHALL expose both proposal-only definition IDs, preserve t
 - **WHEN** a fusion proposal preset has fewer than 2, more than 5, non-contiguous, duplicate, or unresolved planner routes
 - **THEN** startup SHALL report a routing error
 - **AND** it SHALL launch no workspace or agent effects
-

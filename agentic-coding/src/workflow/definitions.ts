@@ -468,9 +468,14 @@ export function registerBuiltins(
 			label: "Standard propose",
 			initial: "core.plan",
 			terminal: ["core.closed"],
-			steps: ["core.plan", "core.closed"],
+			steps: [
+				"core.plan",
+				"core.plan-approval",
+				"core.completed",
+				"core.closed",
+			],
 			edges: [
-				{ from: "core.plan", outcome: "complete", to: "core.closed" },
+				{ from: "core.plan", outcome: "complete", to: "core.plan-approval" },
 				{
 					from: "core.plan",
 					outcome: "blocked",
@@ -483,6 +488,30 @@ export function registerBuiltins(
 					to: "core.plan",
 					loop: { maxAttempts: 3 },
 				},
+				{
+					from: "core.plan-approval",
+					outcome: "approve",
+					to: "core.completed",
+				},
+				{
+					from: "core.plan-approval",
+					outcome: "reject",
+					to: "core.plan",
+					loop: { maxAttempts: 3 },
+				},
+				{
+					from: "core.plan-approval",
+					outcome: "comments",
+					to: "core.plan",
+					loop: { maxAttempts: 3 },
+				},
+				{
+					from: "core.completed",
+					outcome: "create-pr",
+					to: "core.completed",
+					loop: { maxAttempts: 3 },
+				},
+				{ from: "core.completed", outcome: "close", to: "core.closed" },
 			],
 		},
 		{
@@ -586,7 +615,13 @@ export function registerBuiltins(
 			label: "Fusion propose",
 			initial: "fusion.plan",
 			terminal: ["core.closed"],
-			steps: ["fusion.plan", "fusion.consolidate", "core.closed"],
+			steps: [
+				"fusion.plan",
+				"fusion.consolidate",
+				"core.plan-approval",
+				"core.completed",
+				"core.closed",
+			],
 			edges: [
 				{ from: "fusion.plan", outcome: "complete", to: "fusion.consolidate" },
 				{
@@ -604,7 +639,7 @@ export function registerBuiltins(
 				{
 					from: "fusion.consolidate",
 					outcome: "complete",
-					to: "core.closed",
+					to: "core.plan-approval",
 				},
 				{
 					from: "fusion.consolidate",
@@ -618,6 +653,30 @@ export function registerBuiltins(
 					to: "fusion.consolidate",
 					loop: { maxAttempts: 3 },
 				},
+				{
+					from: "core.plan-approval",
+					outcome: "approve",
+					to: "core.completed",
+				},
+				{
+					from: "core.plan-approval",
+					outcome: "reject",
+					to: "fusion.consolidate",
+					loop: { maxAttempts: 3 },
+				},
+				{
+					from: "core.plan-approval",
+					outcome: "comments",
+					to: "fusion.consolidate",
+					loop: { maxAttempts: 3 },
+				},
+				{
+					from: "core.completed",
+					outcome: "create-pr",
+					to: "core.completed",
+					loop: { maxAttempts: 3 },
+				},
+				{ from: "core.completed", outcome: "close", to: "core.closed" },
 			],
 		},
 	];

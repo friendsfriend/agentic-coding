@@ -55,8 +55,8 @@ Built-ins register through public registry seam and pin exact `{id, version, dig
 - `standard`: plan → approval → implementation → triage → verification/fix → developer review → archive → delivery → completed
 - `direct-apply`: validates pre-authored OpenSpec artifacts, then starts implementation; archive still precedes delivery
 - `no-openspec`: requires non-empty task; excludes planning, OpenSpec verifier/checklist, and archive
-- `standard-propose`: plans and validates an OpenSpec change, then closes without approval or implementation
-- `fusion-propose`: runs fusion planning and validation, then closes without approval or implementation
+- `standard-propose`: plans and validates an OpenSpec change, waits for plan approval, then holds in completed until explicitly closed; it never implements or creates a PR
+- `fusion-propose`: runs fusion planning and validation, waits for plan approval, then holds in completed until explicitly closed; it never implements or creates a PR
 
 Proposal workflows require `--mode checkout`, stay on the current branch, and never create or switch a Git branch/worktree. They may run alongside a full checkout workflow; each workflow keeps its own change ID and artifacts. Because Git branch selection is checkout-global, a concurrent full checkout workflow can switch the branch while proposal agents are active; proposal observations may therefore race with that switch.
 

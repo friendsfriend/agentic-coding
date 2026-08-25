@@ -54,10 +54,20 @@ describe("workflow registry", () => {
 		);
 		expect(Object.isFrozen(standard)).toBe(true);
 		for (const [id, steps, initial] of [
-			["standard-propose", ["core.plan", "core.closed"], "core.plan"],
+			[
+				"standard-propose",
+				["core.plan", "core.plan-approval", "core.completed", "core.closed"],
+				"core.plan",
+			],
 			[
 				"fusion-propose",
-				["fusion.plan", "fusion.consolidate", "core.closed"],
+				[
+					"fusion.plan",
+					"fusion.consolidate",
+					"core.plan-approval",
+					"core.completed",
+					"core.closed",
+				],
 				"fusion.plan",
 			],
 		] as const) {
@@ -68,7 +78,7 @@ describe("workflow registry", () => {
 		}
 		const standardProposal = registry.definition("standard-propose", 1);
 		expect(standardProposal.edges).toEqual([
-			{ from: "core.plan", outcome: "complete", to: "core.closed" },
+			{ from: "core.plan", outcome: "complete", to: "core.plan-approval" },
 			{
 				from: "core.plan",
 				outcome: "blocked",
@@ -81,6 +91,30 @@ describe("workflow registry", () => {
 				to: "core.plan",
 				loop: { maxAttempts: 3 },
 			},
+			{
+				from: "core.plan-approval",
+				outcome: "approve",
+				to: "core.completed",
+			},
+			{
+				from: "core.plan-approval",
+				outcome: "reject",
+				to: "core.plan",
+				loop: { maxAttempts: 3 },
+			},
+			{
+				from: "core.plan-approval",
+				outcome: "comments",
+				to: "core.plan",
+				loop: { maxAttempts: 3 },
+			},
+			{
+				from: "core.completed",
+				outcome: "create-pr",
+				to: "core.completed",
+				loop: { maxAttempts: 3 },
+			},
+			{ from: "core.completed", outcome: "close", to: "core.closed" },
 		]);
 		const fusionProposal = registry.definition("fusion-propose", 1);
 		for (const outcome of ["blocked", "failed"])
@@ -95,7 +129,13 @@ describe("workflow registry", () => {
 				(edge) =>
 					edge.from === "fusion.consolidate" && edge.outcome === "complete",
 			)?.to,
-		).toBe("core.closed");
+		).toBe("core.plan-approval");
+		for (const proposal of [standardProposal, fusionProposal]) {
+			expect(proposal.steps).not.toContain("core.implementation");
+			expect(proposal.steps).not.toContain("core.verification");
+			expect(proposal.steps).not.toContain("core.archive");
+			expect(proposal.steps).not.toContain("core.delivery");
+		}
 		expect(registry.definition("standard", 1).steps).toContain(
 			"core.implementation",
 		);
