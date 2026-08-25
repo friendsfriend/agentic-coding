@@ -267,6 +267,11 @@ test("required user actions keep plan review and approval inside modal flow", ()
 	// Trigger-only: the action opens the artifact-list popup directly, so there
 	// are no selectable items in the generic ListViewModal.
 	expect(action?.items).toEqual([]);
+
+	// Engine step id naming must resolve to the same stable action key.
+	const engineAction = requiredUserActionFor("core.plan-approval", false, []);
+	expect(engineAction?.key).toBe("plan-review");
+	expect(engineAction?.items).toEqual([]);
 });
 
 test("required user actions expose developer review and completion commands", () => {
@@ -275,6 +280,11 @@ test("required user actions expose developer review and completion commands", ()
 	expect(review?.key).toBe("developer-review");
 	expect(review?.title).toContain("Developer review");
 	expect(review?.items).toEqual([]); // trigger-only: popup opens the changed-files view directly
+
+	// Engine step id naming must resolve to the same stable action key.
+	const engineReview = requiredUserActionFor("core.developer-review");
+	expect(engineReview?.key).toBe("developer-review");
+	expect(engineReview?.items).toEqual([]);
 	expect(
 		requiredUserActionFor("completed", false)?.items.map((item) => item.label),
 	).toEqual([
