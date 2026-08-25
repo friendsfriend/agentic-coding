@@ -214,8 +214,8 @@ test("required user actions expose developer review and completion commands", ()
 	expect(requiredUserActionFor("verify")).toBeUndefined();
 });
 
-test("startArgs maps quick workflow type to no-openspec and passes task through", () => {
-	const args = startArgs({
+test("startArgs maps quick workflow type to no-openspec and preserves task text", () => {
+	const quickArgs = startArgs({
 		repo: ".",
 		ticket: "",
 		change: "quick-fix",
@@ -224,8 +224,20 @@ test("startArgs maps quick workflow type to no-openspec and passes task through"
 		workflowType: "quick",
 	});
 
-	expect(args.definitionId).toBe("no-openspec");
-	expect(args.task).toBe("Fix login\nand add coverage");
+	expect(quickArgs.definitionId).toBe("no-openspec");
+	expect(quickArgs.task).toBe("Fix login\nand add coverage");
+
+	const fusionArgs = startArgs({
+		repo: ".",
+		ticket: "",
+		change: "fusion-fix",
+		task: "Compare plans\nand recommend one",
+		mode: "worktree",
+		workflowType: "plan-fusion",
+	});
+
+	expect(fusionArgs.definitionId).toBe("plan-fusion");
+	expect(fusionArgs.task).toBe("Compare plans\nand recommend one");
 });
 
 test("costSummary aggregates model_usage rows per role and sorts by cost", () => {

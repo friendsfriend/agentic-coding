@@ -1,5 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { KeyEvent } from "@opentui/core";
 import { testRender } from "@opentui/solid";
 import {
@@ -7,16 +10,19 @@ import {
 	NewWorkflowModal,
 } from "../../src/tui/dash/ui/NewWorkflowModal";
 
-function key(name: string): KeyEvent {
+function key(
+	name: string,
+	extra: { meta?: boolean; sequence?: string } = {},
+): KeyEvent {
 	return new KeyEvent({
 		name,
 		ctrl: false,
-		meta: false,
+		meta: extra.meta ?? false,
 		shift: false,
 		option: false,
-		sequence: name,
+		sequence: extra.sequence ?? name,
 		number: false,
-		raw: name,
+		raw: extra.sequence ?? name,
 		eventType: "press",
 		source: "raw",
 	});
@@ -48,6 +54,50 @@ test("workflow type list offers plan-fusion alongside existing choices", async (
 	t.renderer.destroy();
 });
 
+test("direct-apply omits the task step and submits no task", async () => {
+	const repo = mkdtempSync(join(tmpdir(), "new-workflow-modal-"));
+	mkdirSync(join(repo, "openspec", "changes", "direct-apply-test"), {
+		recursive: true,
+	});
+	let handler: ((event: KeyEvent) => boolean) | undefined;
+	const completed: NewWorkflowInput[] = [];
+	try {
+		const t = await testRender(
+			() => (
+				<NewWorkflowModal
+					projects={[{ name: "Fixture", path: repo, openspec: true }]}
+					onKeyReady={(h) => {
+						handler = h;
+					}}
+					onCancel={() => {}}
+					onComplete={async (input) => {
+						completed.push(input);
+					}}
+				/>
+			),
+			{ width: 110, height: 30 },
+		);
+		await t.flush();
+		handler?.(key("enter")); // repo: Fixture -> workflow type list
+		await t.flush();
+		handler?.(key("j")); // standard -> direct-apply
+		handler?.(key("enter")); // select direct-apply
+		await t.flush();
+		handler?.(key("enter")); // preset: (config defaults)
+		handler?.(key("enter")); // ticket: optional
+		handler?.(key("enter")); // change: direct-apply-test
+		handler?.(key("enter")); // mode: worktree
+		handler?.(key("enter")); // create workflow
+		await t.flush();
+		expect(completed).toHaveLength(1);
+		expect(completed[0].workflowType).toBe("direct-apply");
+		expect(completed[0].task).toBeUndefined();
+		t.renderer.destroy();
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+	}
+});
+
 test("selecting plan-fusion submits workflowType plan-fusion", async () => {
 	let handler: ((event: KeyEvent) => boolean) | undefined;
 	const completed: NewWorkflowInput[] = [];
@@ -74,10 +124,16 @@ test("selecting plan-fusion submits workflowType plan-fusion", async () => {
 	handler?.(key("j")); // quick -> plan-fusion
 	handler?.(key("enter")); // select plan-fusion
 	await t.flush();
-	// plan-fusion uses the base fields: preset -> ticket -> change -> mode.
+	// plan-fusion uses the task-driven fields: preset -> ticket -> change -> task -> mode.
 	handler?.(key("enter")); // preset: (config defaults)
 	handler?.(key("enter")); // ticket: optional
 	handler?.(key("enter")); // change
+	for (const character of "Compare the proposed approaches")
+		handler?.(key(character));
+	handler?.(key("enter", { sequence: "\n" }));
+	for (const character of "and recommend one") handler?.(key(character));
+	await t.flush();
+	handler?.(key("enter", { meta: true })); // task: Alt+Enter advances
 	handler?.(key("enter")); // mode: worktree
 	await t.flush();
 	expect(t.captureCharFrame()).toContain("Confirm workflow");
@@ -85,5 +141,8 @@ test("selecting plan-fusion submits workflowType plan-fusion", async () => {
 	await t.flush();
 	expect(completed).toHaveLength(1);
 	expect(completed[0].workflowType).toBe("plan-fusion");
+	expect(completed[0].task).toBe(
+		"Compare the proposed approaches\nand recommend one",
+	);
 	t.renderer.destroy();
 });

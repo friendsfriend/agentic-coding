@@ -57,7 +57,8 @@ export function NewWorkflowModal(props: {
 		];
 		if (
 			values().workflowType === "standard" ||
-			values().workflowType === "quick"
+			values().workflowType === "quick" ||
+			values().workflowType === "plan-fusion"
 		) {
 			return [
 				"repo",
