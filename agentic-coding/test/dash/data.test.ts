@@ -1,6 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -16,6 +22,7 @@ import {
 	saveDeveloperReview,
 	savePlanReview,
 	testDashboard,
+	worktreeGitStatus,
 } from "../../src/tui/dash/data";
 import { startArgs } from "../../src/tui/dash/engine";
 import { registerBuiltins } from "../../src/workflow/definitions";
@@ -174,6 +181,82 @@ test("savePlanReview serializes and reloads plan review comments", async () => {
 		),
 	).toEqual({ comments });
 	expect(loadPlanReviewComments(repo, "plan-review")).toEqual(comments);
+});
+
+test("worktreeGitStatus reports clean worktrees and missing upstreams", () => {
+	const repo = fixture();
+	const status = worktreeGitStatus(repo);
+	expect(status.available).toBe(true);
+	expect(status.branch).toBeTypeOf("string");
+	expect(status.changedFiles).toBe(0);
+	expect(status.addedFiles).toBe(0);
+	expect(status.deletedFiles).toBe(0);
+	// A fresh local fixture branch has no configured upstream.
+	expect(status.noUpstream).toBe(true);
+	expect(status.ahead).toBeUndefined();
+	expect(status.behind).toBeUndefined();
+});
+
+test("worktreeGitStatus classifies modified, added, deleted, and renamed paths once each", () => {
+	const repo = fixture();
+	writeFileSync(join(repo, "tracked.ts"), "const value = 2;\n"); // modified
+	writeFileSync(join(repo, "untracked.ts"), "new\n"); // untracked -> added
+	writeFileSync(join(repo, "gone.ts"), "export {};\n");
+	runGit(repo, "add", "gone.ts");
+	runGit(repo, "commit", "-qm", "second");
+	rmSync(join(repo, "gone.ts")); // deleted
+	runGit(repo, "mv", "tracked.ts", "moved.ts"); // staged rename
+	// Staged add + further worktree edits must count once.
+	writeFileSync(join(repo, "partial.ts"), "a\n");
+	runGit(repo, "add", "partial.ts");
+	writeFileSync(join(repo, "partial.ts"), "b\n");
+	const status = worktreeGitStatus(repo);
+	expect(status.changedFiles).toBe(1); // moved.ts (rename)
+	expect(status.addedFiles).toBe(2); // untracked.ts + partial.ts (staged+edited once)
+	expect(status.deletedFiles).toBe(1); // gone.ts
+});
+
+test("worktreeGitStatus expands untracked directories into their files", () => {
+	const repo = fixture();
+	mkdirSync(join(repo, "fresh-dir"), { recursive: true });
+	writeFileSync(join(repo, "fresh-dir", "inside.ts"), "export {};\n");
+	const status = worktreeGitStatus(repo);
+	// The directory record must not count as a single added "file".
+	expect(status.addedFiles).toBe(1);
+});
+
+test("worktreeGitStatus computes ahead/behind against the configured upstream", () => {
+	const repo = fixture();
+	const main = runGit(repo, "rev-parse", "--abbrev-ref", "HEAD");
+	runGit(repo, "checkout", "-qb", "feature");
+	writeFileSync(join(repo, "feature.ts"), "export {};\n");
+	runGit(repo, "add", "feature.ts");
+	runGit(repo, "commit", "-qm", "feature work");
+	runGit(repo, "branch", "--set-upstream-to", main);
+	let status = worktreeGitStatus(repo);
+	expect(status.noUpstream).toBe(false);
+	expect(status.ahead).toBe(1);
+	expect(status.behind).toBe(0);
+	runGit(repo, "checkout", "-q", main);
+	writeFileSync(join(repo, "main.ts"), "export {};\n");
+	runGit(repo, "add", "main.ts");
+	runGit(repo, "commit", "-qm", "main work");
+	runGit(repo, "checkout", "-q", "feature");
+	status = worktreeGitStatus(repo);
+	expect(status.ahead).toBe(1);
+	expect(status.behind).toBe(1);
+});
+
+test("worktreeGitStatus reports bounded diagnostics for unavailable worktrees", () => {
+	const missing = worktreeGitStatus(join(tmpdir(), "missing-worktree-fixture"));
+	expect(missing.available).toBe(false);
+	expect(missing.diagnostic).toContain("worktree not found");
+	const plain = mkdtempSync(join(tmpdir(), "agent-dash-nongit-"));
+	roots.push(plain);
+	const status = worktreeGitStatus(plain);
+	expect(status.available).toBe(false);
+	expect(status.diagnostic).toBeTruthy();
+	expect((status.diagnostic ?? "").length).toBeLessThanOrEqual(96);
 });
 
 test("task viewport centers the active task when possible", () => {

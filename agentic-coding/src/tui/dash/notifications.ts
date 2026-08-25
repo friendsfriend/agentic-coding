@@ -14,3 +14,12 @@ export function notify(message: string, type: Notification["type"] = "info") {
 		type === "error" ? 6000 : 2200,
 	);
 }
+
+/** Clear any mounted notification and its pending auto-clear timer. Exists so
+ * tests can isolate: bun runs all files in one process and this signal is
+ * module-global, so a toast from an earlier file would bleed into later ones. */
+export function resetNotifications() {
+	clearTimeout(timer);
+	timer = undefined;
+	setNotification(undefined);
+}

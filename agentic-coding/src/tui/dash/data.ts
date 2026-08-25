@@ -78,10 +78,26 @@ export interface WorkflowState {
 	panes: Record<string, string>;
 }
 
+export interface WorktreeGitStatus {
+	/** False when Git could not be inspected (missing or non-Git worktree). */
+	available: boolean;
+	/** Bounded reason shown when unavailable. */
+	diagnostic?: string;
+	branch?: string;
+	changedFiles: number;
+	addedFiles: number;
+	deletedFiles: number;
+	/** Undefined when the branch has no configured upstream. */
+	ahead?: number;
+	behind?: number;
+	noUpstream: boolean;
+}
+
 export interface WorkflowOverview {
 	state: WorkflowState;
 	workspaceOpen: boolean;
 	tasks: [number, number];
+	gitStatus?: WorktreeGitStatus;
 	agents: Array<{
 		role: string;
 		status: string;
@@ -141,6 +157,7 @@ export function listWorkflows(...roots: string[]): WorkflowOverview[] {
 					state,
 					workspaceOpen,
 					tasks: [items.filter((item) => item.done).length, items.length],
+					gitStatus: worktreeGitStatus(state.worktree),
 					agents: view.runs.map((run) => ({
 						role: run.role,
 						status: run.status,
@@ -336,8 +353,113 @@ function gitResult(repo: string, ...args: string[]) {
 	return Bun.spawnSync(["git", ...args], {
 		cwd: repo,
 		stdout: "pipe",
-		stderr: "ignore",
+		stderr: "pipe",
 	});
+}
+
+const unavailableGitStatus = (diagnostic: string): WorktreeGitStatus => ({
+	available: false,
+	diagnostic: diagnostic.replace(/\s+/g, " ").slice(0, 96),
+	branch: undefined,
+	changedFiles: 0,
+	addedFiles: 0,
+	deletedFiles: 0,
+	ahead: undefined,
+	behind: undefined,
+	noUpstream: true,
+});
+
+/** Workflow metadata never counts toward overview Git status. */
+const isWorkflowMetadataPath = (path: string) =>
+	path === ".herdr-workflow" || path.startsWith(".herdr-workflow/");
+
+/**
+ * Inspect a workflow worktree's Git state: branch, distinct changed/added/
+ * deleted file counts (porcelain status, paths deduplicated), and upstream
+ * ahead/behind counts. Best-effort: a missing or non-Git worktree yields an
+ * unavailable result with a bounded diagnostic instead of throwing.
+ */
+export function worktreeGitStatus(worktree: string): WorktreeGitStatus {
+	if (!existsSync(worktree)) return unavailableGitStatus("worktree not found");
+	// One synchronous invocation per worktree carries everything: -b adds the
+	// branch header (branch...upstream [ahead N, behind M]), -uall expands
+	// untracked directories into files, core.quotePath=false keeps paths raw.
+	const status = gitResult(
+		worktree,
+		"-c",
+		"core.quotePath=false",
+		"status",
+		"--porcelain=v1",
+		"-b",
+		"-uall",
+	);
+	if (status.exitCode !== 0)
+		return unavailableGitStatus(
+			status.stderr.toString().trim() || "git status failed",
+		);
+	const lines = status.stdout.toString().split(/\r?\n/).filter(Boolean);
+	const result: WorktreeGitStatus = {
+		available: true,
+		branch: undefined,
+		changedFiles: 0,
+		addedFiles: 0,
+		deletedFiles: 0,
+		ahead: undefined,
+		behind: undefined,
+		noUpstream: true,
+	};
+	// Path-keyed so a path staged and modified again counts once; per path the
+	// classification precedence is deleted > added > changed (modified/renamed).
+	const rank = { changed: 0, added: 1, deleted: 2 } as const;
+	const kinds = new Map<string, keyof typeof rank>();
+	for (const line of lines) {
+		if (line.startsWith("## ")) {
+			applyBranchHeader(line.slice(3), result);
+			continue;
+		}
+		const code = line.slice(0, 2);
+		let path = line.slice(3);
+		const arrow = path.indexOf(" -> ");
+		if (arrow >= 0) path = path.slice(arrow + 4); // renames count the destination
+		if (!path || isWorkflowMetadataPath(path)) continue;
+		const kind = code.includes("D")
+			? "deleted"
+			: code.includes("A") || code.trim() === "??"
+				? "added"
+				: "changed";
+		const previous = kinds.get(path);
+		if (!previous || rank[kind] > rank[previous]) kinds.set(path, kind);
+	}
+	for (const kind of kinds.values()) result[`${kind}Files` as const]++;
+	return result;
+}
+
+/** Parse the porcelain -b branch header into branch/upstream/ahead/behind. */
+function applyBranchHeader(head: string, result: WorktreeGitStatus) {
+	if (head.startsWith("No commits yet on ")) {
+		result.branch = head.slice("No commits yet on ".length);
+		return;
+	}
+	if (head.startsWith("HEAD (no branch)")) return; // detached: no branch/upstream
+	const dots = head.indexOf("...");
+	if (dots === -1) {
+		result.branch = head;
+		return;
+	}
+	result.branch = head.slice(0, dots);
+	const info = head.slice(dots + 3);
+	const bracket = info.indexOf(" [");
+	const upstream = bracket >= 0 ? info.slice(0, bracket) : info;
+	const suffix = bracket >= 0 ? info.slice(bracket + 2).replace(/\]$/, "") : "";
+	result.noUpstream = !upstream.trim() || suffix === "gone";
+	// A configured-but-gone upstream has no meaningful counts; per the contract
+	// ahead/behind stay undefined whenever there is no usable upstream.
+	if (result.noUpstream) return;
+	// The header only lists non-zero counts; zero values are implicit.
+	const aheadMatch = /\bahead (\d+)/.exec(suffix);
+	result.ahead = aheadMatch ? Number(aheadMatch[1]) : 0;
+	const behindMatch = /\bbehind (\d+)/.exec(suffix);
+	result.behind = behindMatch ? Number(behindMatch[1]) : 0;
 }
 function telemetryEvents(path: string): Array<Record<string, unknown>> {
 	return read(path)
@@ -954,13 +1076,14 @@ export function loadDashboard(repo: string, change: string): DashboardData {
 		...row,
 		messages: costMessages(telemetry, row.role),
 	}));
+	const reviewHistory = verificationHistory(state);
 	return {
 		state,
 		request: summary(join(workflowRoot, "request.md")),
 		proposal: summary(join(changeRoot, "proposal.md")),
 		tasks: tasks(join(changeRoot, "tasks.md")),
-		review: verificationHistory(state).at(-1) ?? "Not run",
-		reviewHistory: verificationHistory(state),
+		review: reviewHistory.at(-1) ?? "Not run",
+		reviewHistory,
 		agents: Object.entries(state.panes)
 			.filter(([role]) => !["git", "dashboard"].includes(role))
 			.map(([role, pane]) => {
@@ -979,18 +1102,21 @@ export function loadDashboard(repo: string, change: string): DashboardData {
 				};
 			}),
 		updated: new Date().toLocaleTimeString(),
-		health: {
-			dirty: !!(git(state.worktree, "status", "--porcelain") ?? ""),
-			ahead:
-				Number(
-					git(state.worktree, "rev-list", "--count", "@{upstream}..HEAD") ?? "",
-				) || 0,
-			behind:
-				Number(
-					git(state.worktree, "rev-list", "--count", "HEAD..@{upstream}") ?? "",
-				) || 0,
-			branch: git(state.worktree, "branch", "--show-current") ?? "",
-		},
+		health: (() => {
+			// Same inspection as the workspace overview so both panels cannot drift.
+			const gitStatus = worktreeGitStatus(state.worktree);
+			return {
+				dirty:
+					gitStatus.available &&
+					gitStatus.changedFiles +
+						gitStatus.addedFiles +
+						gitStatus.deletedFiles >
+						0,
+				ahead: gitStatus.ahead ?? 0,
+				behind: gitStatus.behind ?? 0,
+				branch: gitStatus.branch ?? "",
+			};
+		})(),
 		age: state.createdAt
 			? `${Math.max(0, Math.floor((Date.now() - Date.parse(state.createdAt)) / 3600000))}h`
 			: "unknown",

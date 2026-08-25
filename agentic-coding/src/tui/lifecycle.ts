@@ -47,6 +47,16 @@ export function beginShutdown(defs: LifecycleStepDef[]): void {
 	setMessage("");
 }
 
+/** Return the store to its initial idle state without running any stop
+ * sequence. Exists for test isolation: bun runs all files in one process, so a
+ * shutdown begun by an earlier file would leave phase() === "stopping" and make
+ * later files' components swallow every key except 'q'. */
+export function resetLifecycle(): void {
+	setPhase("idle");
+	setSteps([]);
+	setMessage("");
+}
+
 export function setStepActive(id: string): void {
 	if (!inProgress()) return;
 	setSteps((list) =>
