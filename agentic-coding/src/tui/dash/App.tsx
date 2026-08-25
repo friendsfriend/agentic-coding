@@ -69,6 +69,7 @@ import { Layout } from "./ui/Layout";
 import { ListViewModal } from "./ui/ListViewModal";
 import { NotificationOverlay } from "./ui/Notification";
 import { Panel } from "./ui/Panel";
+import { ProgressModal } from "./ui/ProgressModal";
 import { ScrollableContent } from "./ui/ScrollableContent";
 import { SelectableList } from "./ui/Selectable";
 import { ThemePickerModal } from "./ui/ThemePickerModal";
@@ -114,6 +115,10 @@ export function App(props: {
 	const [_message, setMessage] = createSignal("");
 	let lastQuitAt = 0;
 	const [busy, setBusy] = createSignal(false);
+	// Dedicated review-finishing signal (in addition to the busy guard): scopes
+	// the progress overlay to review finishes instead of every busy action.
+	const [reviewFinishing, setReviewFinishing] = createSignal(false);
+	const [reviewFinishingMessage, setReviewFinishingMessage] = createSignal("");
 	let changeScroll: ScrollBoxRenderable | undefined;
 	const [activePanel, setActivePanel] = createSignal(0);
 	const [selectedAgent, setSelectedAgent] = createSignal(0);
@@ -520,7 +525,14 @@ export function App(props: {
 		}
 		setBusy(true);
 		setMessage("Finishing developer review…");
+		setReviewFinishing(true);
+		setReviewFinishingMessage(
+			"Saving comments and dispatching developer review…",
+		);
 		try {
+			// Yield one macrotask so the progress overlay paints before any
+			// synchronous save/dispatch work begins.
+			await new Promise((resolve) => setTimeout(resolve, 0));
 			const findingComments: DeveloperReviewComment[] = reviewFindings()
 				.filter((finding) => selectedReviewFindingIds().has(finding.id))
 				.map((finding) => ({
@@ -566,6 +578,7 @@ export function App(props: {
 			setReviewOpen(false);
 			props.keymap.setData("modal.active", "none");
 			setBusy(false);
+			setReviewFinishing(false);
 		}
 	};
 	const demoPlanArtifacts = () => [
@@ -681,7 +694,12 @@ export function App(props: {
 		if (busy()) return;
 		setBusy(true);
 		setMessage("Finishing plan review…");
+		setReviewFinishing(true);
+		setReviewFinishingMessage("Saving comments and dispatching plan review…");
 		try {
+			// Yield one macrotask so the progress overlay paints before any
+			// synchronous save/dispatch work begins.
+			await new Promise((resolve) => setTimeout(resolve, 0));
 			const comments = reviewComments();
 			if (props.profile !== "test") {
 				await savePlanReview(props.repo, props.change, comments);
@@ -720,6 +738,7 @@ export function App(props: {
 			setReviewOpen(false);
 			props.keymap.setData("modal.active", "none");
 			setBusy(false);
+			setReviewFinishing(false);
 		}
 	};
 	const openPlanRejection = () => {
@@ -2698,6 +2717,14 @@ export function App(props: {
 						value={credentialInput()}
 					/>
 				)}
+			</Show>
+			<Show when={reviewFinishing()}>
+				{/* Stacks above the still-open review popup; cleared in the finish
+				    handlers' existing finally cleanup. */}
+				<ProgressModal
+					title="Finishing review"
+					message={reviewFinishingMessage()}
+				/>
 			</Show>
 		</box>
 	);

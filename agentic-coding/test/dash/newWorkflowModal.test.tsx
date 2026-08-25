@@ -198,3 +198,49 @@ test("selecting plan-fusion submits workflowType plan-fusion", async () => {
 	);
 	t.renderer.destroy();
 });
+
+test("creation indicator renders before completion and clears after it settles", async () => {
+	let handler: ((event: KeyEvent) => boolean) | undefined;
+	let resolveComplete: (() => void) | undefined;
+	const t = await testRender(
+		() => (
+			<NewWorkflowModal
+				projects={[]}
+				onKeyReady={(h) => {
+					handler = h;
+				}}
+				onCancel={() => {}}
+				onComplete={() =>
+					new Promise<void>((resolve) => {
+						resolveComplete = resolve;
+					})
+				}
+			/>
+		),
+		{ width: 110, height: 30 },
+	);
+	await t.flush();
+	handler?.(key("enter")); // repo: Current Directory
+	await t.flush();
+	handler?.(key("enter")); // workflow type: standard
+	handler?.(key("enter")); // preset: (config defaults)
+	handler?.(key("enter")); // ticket: optional
+	for (const character of "demo") handler?.(key(character));
+	handler?.(key("enter")); // change
+	handler?.(key("enter", { meta: true })); // task: Alt+Enter advances
+	handler?.(key("enter")); // mode: worktree -> confirm
+	await t.flush();
+	expect(t.captureCharFrame()).toContain("Confirm workflow");
+
+	handler?.(key("return")); // create workflow
+	// The progress modal must be visible while the completion callback is
+	// still in flight (deferred via an unresolved promise).
+	const creatingFrame = await t.waitForFrame((frame) =>
+		frame.includes("Starting workspace"),
+	);
+	expect(creatingFrame).toContain("Creating workflow");
+	expect(resolveComplete).toBeDefined();
+	resolveComplete?.();
+	await t.waitForFrame((frame) => !frame.includes("Creating workflow"));
+	t.renderer.destroy();
+});

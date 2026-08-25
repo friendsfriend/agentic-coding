@@ -230,3 +230,54 @@ test("traces panel is removed and the tab cycle skips it", async () => {
 	}
 	t.renderer.destroy();
 });
+
+test("plan review finish shows a finishing indicator before closing", async () => {
+	const t = await testRender(() => <TestDashboard />, {
+		width: 120,
+		height: 40,
+	});
+
+	await t.waitForFrame((frame) => frame.includes("Plan review"));
+
+	// Pressing f enters the finishing state: the indicator paints while the
+	// popup is still open (completion work is deferred by one macrotask).
+	t.mockInput.pressKey("f");
+	await t.renderOnce();
+	expect(t.captureCharFrame()).toContain("Finishing review");
+
+	// After the operation settles the indicator clears and the review closes.
+	await t.waitForFrame(
+		(frame) =>
+			!frame.includes("Finishing review") &&
+			!frame.includes("Changed Files (4 files)"),
+	);
+	t.renderer.destroy();
+});
+
+test("developer review finish shows a finishing indicator before closing", async () => {
+	const t = await testRender(() => <TestDashboard />, {
+		width: 120,
+		height: 40,
+	});
+
+	// Advance to the developer-review phase via plan approval.
+	await t.waitForFrame((frame) => frame.includes("Plan review"));
+	t.mockInput.pressKey("f");
+	await t.waitForFrame((frame) => !frame.includes("Changed Files (4 files)"));
+	t.mockInput.pressEnter();
+	await t.waitForFrame((frame) => frame.includes("verify"));
+	t.mockInput.pressEnter();
+	await t.waitForFrame((frame) => frame.includes("Changed Files (1 files)"));
+
+	// The finishing indicator appears while the developer review popup remains
+	// open, then clears and the popup closes once the operation settles.
+	t.mockInput.pressKey("f");
+	await t.renderOnce();
+	const finishingFrame = t.captureCharFrame();
+	expect(finishingFrame).toContain("Finishing review");
+	expect(finishingFrame).toContain("Changed Files (1 files)");
+
+	await t.waitForFrame((frame) => !frame.includes("Finishing review"));
+	await t.waitForFrame((frame) => !frame.includes("Changed Files (1 files)"));
+	t.renderer.destroy();
+});

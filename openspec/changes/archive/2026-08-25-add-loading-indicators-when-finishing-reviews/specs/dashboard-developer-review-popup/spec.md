@@ -1,4 +1,4 @@
-## MODIFIED Requirements
+## ADDED Requirements
 
 ### Requirement: Finish the review from the popup
 When the user finishes the developer review from the files popup, the dashboard SHALL immediately show a finishing-review progress indicator, save comments and dispatch the developer-review outcome, then clear the indicator and close the popup when the operation settles.
