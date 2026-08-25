@@ -100,15 +100,27 @@ test-verifier = "pi-test-review"
 no-openspec = "pi-cheap"
 
 [agents.presets.frontier-plan]
-description = "Frontier planning, cheap workers"
-default_profile = "pi-cheap"
+default_profile = "pi-sonnet-5"
 
 [agents.presets.frontier-plan.steps]
-"core.plan" = "pi-planner"
-"core.implementation" = "oc-worker"
+"core.plan" = "pi-opus-5"
+"core.implementation" = "pi-sonnet-5"
+"core.triage" = "pi-gpt-5.6-luna"
+"core.archive" = "pi-gpt-5.6-luna"
+"fusion.consolidate" = "pi-opus-5"
 
 [agents.presets.frontier-plan.roles."core.verification"]
-quality-verifier = "pi-review"
+quality-verifier = "pi-sonnet-5"
+security-verifier = "pi-sonnet-5"
+performance-verifier = "pi-sonnet-5"
+openspec-verifier = "pi-sonnet-5"
+usability-verifier = "pi-sonnet-5"
+test-verifier = "pi-sonnet-5"
+
+[agents.presets.frontier-plan.roles."fusion.plan"]
+planner-1 = "pi-opus-5"
+planner-2 = "pi-gpt-5.6-luna"
+planner-3 = "pi-sonnet-5"
 
 [agents.presets.cheap-luna]
 default_profile = "pi-gpt-5.6-luna"
@@ -118,6 +130,7 @@ default_profile = "pi-gpt-5.6-luna"
 "core.implementation" = "pi-gpt-5.6-luna"
 "core.triage" = "pi-gpt-5.6-luna"
 "core.archive" = "pi-gpt-5.6-luna"
+"fusion.consolidate" = "pi-gpt-5.6-luna"
 
 [agents.presets.cheap-luna.roles."core.verification"]
 quality-verifier = "pi-gpt-5.6-luna"
@@ -127,6 +140,11 @@ openspec-verifier = "pi-gpt-5.6-luna"
 usability-verifier = "pi-gpt-5.6-luna"
 test-verifier = "pi-gpt-5.6-luna"
 
+[agents.presets.cheap-luna.roles."fusion.plan"]
+planner-1 = "pi-gpt-5.6-luna"
+planner-2 = "pi-gpt-5.6-luna"
+planner-3 = "pi-gpt-5.6-luna"
+
 [agents.presets.free-ox-alpha]
 default_profile = "pi-ox-alpha-free"
 
@@ -135,6 +153,7 @@ default_profile = "pi-ox-alpha-free"
 "core.implementation" = "pi-ox-alpha-free"
 "core.triage" = "pi-ox-alpha-free"
 "core.archive" = "pi-ox-alpha-free"
+"fusion.consolidate" = "pi-ox-alpha-free"
 
 [agents.presets.free-ox-alpha.roles."core.verification"]
 quality-verifier = "pi-ox-alpha-free"
@@ -144,6 +163,10 @@ openspec-verifier = "pi-ox-alpha-free"
 usability-verifier = "pi-ox-alpha-free"
 test-verifier = "pi-ox-alpha-free"
 
+[agents.presets.free-ox-alpha.roles."fusion.plan"]
+planner-1 = "pi-ox-alpha-free"
+planner-2 = "pi-ox-alpha-free"
+
 [agents.presets.effective-sonnet]
 default_profile = "pi-sonnet-5"
 
@@ -152,6 +175,7 @@ default_profile = "pi-sonnet-5"
 "core.implementation" = "pi-sonnet-5"
 "core.triage" = "pi-sonnet-5"
 "core.archive" = "pi-sonnet-5"
+"fusion.consolidate" = "pi-sonnet-5"
 
 [agents.presets.effective-sonnet.roles."core.verification"]
 quality-verifier = "pi-sonnet-5"
@@ -161,6 +185,11 @@ openspec-verifier = "pi-sonnet-5"
 usability-verifier = "pi-sonnet-5"
 test-verifier = "pi-sonnet-5"
 
+[agents.presets.effective-sonnet.roles."fusion.plan"]
+planner-1 = "pi-sonnet-5"
+planner-2 = "pi-sonnet-5"
+planner-3 = "pi-sonnet-5"
+
 [agents.presets.opus-planner-sonnet-worker]
 default_profile = "pi-sonnet-5"
 
@@ -169,6 +198,7 @@ default_profile = "pi-sonnet-5"
 "core.implementation" = "pi-sonnet-5"
 "core.triage" = "pi-sonnet-5"
 "core.archive" = "pi-sonnet-5"
+"fusion.consolidate" = "pi-opus-5"
 
 [agents.presets.opus-planner-sonnet-worker.roles."core.verification"]
 quality-verifier = "pi-sonnet-5"
@@ -178,14 +208,20 @@ openspec-verifier = "pi-sonnet-5"
 usability-verifier = "pi-sonnet-5"
 test-verifier = "pi-sonnet-5"
 
+[agents.presets.opus-planner-sonnet-worker.roles."fusion.plan"]
+planner-1 = "pi-opus-5"
+planner-2 = "pi-gpt-5.6-luna"
+planner-3 = "pi-sonnet-5"
+
 [agents.presets.opus-planner-sonnet-worker-luna-reviewer]
-default_profile = "pi-gpt-5.6-luna"
+default_profile = "pi-opus-5"
 
 [agents.presets.opus-planner-sonnet-worker-luna-reviewer.steps]
 "core.plan" = "pi-opus-5"
 "core.implementation" = "pi-sonnet-5"
 "core.triage" = "pi-gpt-5.6-luna"
 "core.archive" = "pi-gpt-5.6-luna"
+"fusion.consolidate" = "pi-opus-5"
 
 [agents.presets.opus-planner-sonnet-worker-luna-reviewer.roles."core.verification"]
 quality-verifier = "pi-gpt-5.6-luna"
@@ -194,6 +230,11 @@ performance-verifier = "pi-gpt-5.6-luna"
 openspec-verifier = "pi-gpt-5.6-luna"
 usability-verifier = "pi-gpt-5.6-luna"
 test-verifier = "pi-gpt-5.6-luna"
+
+[agents.presets.opus-planner-sonnet-worker-luna-reviewer.roles."fusion.plan"]
+planner-1 = "pi-gpt-5.6-luna"
+planner-2 = "pi-opus-5"
+planner-3 = "pi-sonnet-5"
 
 [[agents.runtime_diversity]]
 routes = ["core.plan", "core.implementation"]
