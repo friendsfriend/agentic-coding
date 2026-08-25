@@ -675,6 +675,120 @@ test("writeAgentEnvPointer atomically publishes the run env path keyed by agent 
 	}
 });
 
+test("proposal workspace setup stays on the dirty current checkout", async () => {
+	const repo = fs.mkdtempSync(
+		path.join(os.tmpdir(), "workflow-proposal-workspace-"),
+	);
+	try {
+		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+		fs.mkdirSync(path.join(repo, "openspec"));
+		fs.writeFileSync(path.join(repo, "README.md"), "x\n");
+		fs.writeFileSync(
+			path.join(repo, "openspec", "config.yaml"),
+			"schema: spec-driven\n",
+		);
+		execFileSync("git", ["add", "."], { cwd: repo });
+		execFileSync(
+			"git",
+			[
+				"-c",
+				"user.email=test@example.com",
+				"-c",
+				"user.name=Test",
+				"commit",
+				"-qm",
+				"base",
+			],
+			{ cwd: repo },
+		);
+		fs.writeFileSync(path.join(repo, "uncommitted.txt"), "allowed\n");
+		const profile = {
+			name: "pi",
+			runtime: "pi" as const,
+			executable: "sh",
+			tools: [],
+			extensions: [],
+			readOnly: false,
+			capabilities: ["prompt", "run-environment", "observe"] as const,
+			digest: "profile",
+		};
+		const engine = new WorkflowEngine(registerBuiltins());
+		const started = engine.start({
+			repo,
+			mode: "checkout",
+			changeId: "proposal-workspace",
+			definitionId: "standard-propose",
+			metadata: {
+				branch: "main",
+				baseBranch: "main",
+				baseCommit: "main",
+				task: "propose",
+			},
+			routing: {
+				defaultProfile: "pi",
+				routes: [{ stepId: "core.plan", role: "planner", profile }],
+			},
+		});
+		const calls: string[][] = [];
+		const herdr = {
+			call(...args: string[]) {
+				calls.push(args);
+				if (args[0] === "workspace" && args[1] === "get")
+					throw new Error("not found");
+				if (args[0] === "workspace" && args[1] === "list")
+					return { workspaces: [] };
+				if (args[0] === "workspace" && args[1] === "create")
+					return { workspace: { workspace_id: "proposal-workspace" } };
+				if (args[0] === "workspace" && args[1] === "close") return {};
+				if (args[0] === "tab" && args[1] === "list")
+					return { tabs: [{ tab_id: "tab", label: "dashboard" }] };
+				throw new Error(`unexpected ${args.join(" ")}`);
+			},
+		};
+		const handlers = agentEffectHandlers(repo, engine, {
+			registry: registerBuiltins(),
+			adapters: new Map(),
+			herdr,
+			async paneForRun() {
+				return { paneId: "pane" };
+			},
+		});
+		const setup = engine.claimEffects(repo, 10)[0];
+		if (!setup) throw new Error("expected workspace setup effect");
+		const result = await handlers["workspace.setup"]?.execute(setup);
+		expect(result).toEqual({
+			workspace: "proposal-workspace",
+			worktree: fs.realpathSync(repo),
+			branch: "main",
+		});
+		expect(
+			calls.some(
+				(args) => args.includes("switch") || args.includes("worktree"),
+			),
+		).toBe(false);
+		engine.dispatch(repo, {
+			type: "effect.result",
+			effectId: setup.id,
+			lease: setup.lease ?? "",
+			outcome: "complete",
+			data: result,
+		});
+		const closeEffect = { ...setup, kind: "workspace.close" as const };
+		const close = handlers["workspace.close"];
+		const cleanup = handlers["workspace.cleanup"];
+		if (!close || !cleanup?.observe)
+			throw new Error("missing workspace handlers");
+		await close.execute(closeEffect);
+		expect(await cleanup.observe(closeEffect)).toBe(true);
+		expect(await cleanup.execute(closeEffect)).toEqual({ cleaned: true });
+		expect(calls).toContainEqual(["workspace", "close", "proposal-workspace"]);
+		expect(fs.existsSync(repo)).toBe(true);
+		expect(started.view.definition.id).toBe("standard-propose");
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
 test("workspace retry recovers stable branch and workspace identity", async () => {
 	const repo = fs.mkdtempSync(
 		path.join(os.tmpdir(), "workflow-workspace-recover-"),
@@ -774,7 +888,7 @@ test("workspace retry recovers stable branch and workspace identity", async () =
 		await new EffectRunner(repo, engine, handlers).drain();
 		const view = engine.status(repo, "workspace-recover");
 		expect(view.workspace).toBe("recovered-workspace");
-		expect(view.worktree).toBe(repo);
+		expect(view.worktree).toBe(fs.realpathSync(repo));
 		expect(creates).toBe(0);
 		expect(adapter.launches).toBe(1);
 	} finally {

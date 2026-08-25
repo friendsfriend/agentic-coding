@@ -106,16 +106,21 @@ export function startArgs(input: {
 	workflowType?: string;
 	preset?: string;
 }) {
+	const definitionId =
+		input.workflowType === "quick"
+			? "no-openspec"
+			: (input.workflowType ?? "standard");
+	const proposal = ["standard-propose", "fusion-propose"].includes(
+		definitionId,
+	);
 	return {
 		repo: input.repo,
 		changeId: validateChangeId(input.change),
-		definitionId:
-			input.workflowType === "quick"
-				? "no-openspec"
-				: (input.workflowType ?? "standard"),
+		definitionId,
 		task: input.task || undefined,
 		ticket: input.ticket || undefined,
-		mode: input.mode,
+		mode: proposal ? "checkout" : input.mode,
+		...(proposal ? { sameCheckout: true } : {}),
 		...(input.preset && input.preset !== PRESET_CONFIG_DEFAULTS
 			? { preset: input.preset }
 			: {}),
@@ -149,6 +154,13 @@ export function fusionPlannerCount(preset: RoutingPreset | undefined): number {
 	>;
 	const has = (role: string): boolean =>
 		typeof table[role] === "string" && table[role] !== "";
+	for (const role of Object.keys(table)) {
+		const match = /^planner-(\d+)$/.exec(role);
+		if (match && Number(match[1]) > 5)
+			throw new Error(
+				`plan-fusion preset ${preset?.name} supports at most planner-5`,
+			);
+	}
 	let count = 0;
 	while (count < 5 && has(`planner-${count + 1}`)) count += 1;
 	for (let index = count + 1; index <= 5; index += 1)
@@ -175,22 +187,26 @@ export function startRouting(
 		definitionId,
 		definition.steps,
 		registry,
-		definitionId === "plan-fusion" ? fusionPlannerCount(preset) : 0,
+		["plan-fusion", "fusion-propose"].includes(definitionId)
+			? fusionPlannerCount(preset)
+			: 0,
 	);
 	if (preset)
 		validatePresetCoverage(preset, definition, Object.keys(roles), agents);
 	const routing = resolveRouting(definition, roles, agents, preset);
-	if (definitionId === "plan-fusion") {
+	if (["plan-fusion", "fusion-propose"].includes(definitionId)) {
 		// Mirror the engine's defensive start-time checks with clearer errors
 		// before git inspection, workspace creation, or agent launches.
 		const planners = routing.routes.filter(
 			(route) => route.stepId === "fusion.plan",
 		);
 		if (planners.length < 2 || planners.length > 5)
-			throw new Error("plan-fusion requires between 2 and 5 planner routings");
+			throw new Error(
+				`${definitionId} requires between 2 and 5 planner routings`,
+			);
 		const names = planners.map((route) => route.profile.name);
 		if (new Set(names).size !== names.length)
-			throw new Error("plan-fusion requires distinct planner profiles");
+			throw new Error(`${definitionId} requires distinct planner profiles`);
 	}
 	return routing;
 }
@@ -224,15 +240,21 @@ export async function startWorkflowInProcess(
 		`${config.workflow.base_branch}^{commit}`,
 	);
 	runGit(args.repo, "remote", "get-url", config.workflow.remote);
+	const branch = args.sameCheckout
+		? runGit(args.repo, "branch", "--show-current")
+		: `${config.workflow.branch_prefix}${args.changeId}`;
+	if (args.sameCheckout && !branch)
+		throw new Error("proposal workflows require a named current branch");
 	const engine = workflowEngineFactory();
 	engine.start({
 		repo: args.repo,
 		mode: args.mode as "worktree" | "checkout",
+		sameCheckout: args.sameCheckout,
 		changeId: args.changeId,
 		definitionId: args.definitionId,
 		definitionVersion,
 		metadata: {
-			branch: `${config.workflow.branch_prefix}${args.changeId}`,
+			branch,
 			baseBranch: config.workflow.base_branch,
 			baseCommit,
 			...(args.task ? { task: args.task } : {}),

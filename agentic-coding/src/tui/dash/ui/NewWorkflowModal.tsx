@@ -46,6 +46,8 @@ export function NewWorkflowModal(props: {
 			project.name.toLowerCase().includes(filter().toLowerCase()),
 		);
 
+	const isProposal = (type: string) =>
+		type === "standard-propose" || type === "fusion-propose";
 	const fields = (): (keyof NewWorkflowInput)[] => {
 		const base: (keyof NewWorkflowInput)[] = [
 			"repo",
@@ -56,9 +58,13 @@ export function NewWorkflowModal(props: {
 			"mode",
 		];
 		if (
-			values().workflowType === "standard" ||
-			values().workflowType === "quick" ||
-			values().workflowType === "plan-fusion"
+			[
+				"standard",
+				"quick",
+				"plan-fusion",
+				"standard-propose",
+				"fusion-propose",
+			].includes(values().workflowType)
 		) {
 			return [
 				"repo",
@@ -67,7 +73,7 @@ export function NewWorkflowModal(props: {
 				"ticket",
 				"change",
 				"task",
-				"mode",
+				...(isProposal(values().workflowType) ? [] : (["mode"] as const)),
 			];
 		}
 		return base;
@@ -88,12 +94,16 @@ export function NewWorkflowModal(props: {
 		"direct-apply",
 		"quick",
 		"plan-fusion",
+		"standard-propose",
+		"fusion-propose",
 	];
 	const workflowTypeDisplay: Record<string, string> = {
 		standard: "Standard",
 		"direct-apply": "Apply",
 		quick: "Quick Implementation",
 		"plan-fusion": "Plan Fusion",
+		"standard-propose": "Standard Propose",
+		"fusion-propose": "Fusion Propose",
 	};
 
 	const choices = (): string[] => {
@@ -158,7 +168,13 @@ export function NewWorkflowModal(props: {
 	const next = (value: string) => {
 		const key = field();
 		if (!key) return;
-		setValues((current) => ({ ...current, [key]: value }));
+		setValues((current) => ({
+			...current,
+			[key]: value,
+			...(key === "workflowType" && isProposal(value)
+				? { mode: "checkout" }
+				: {}),
+		}));
 		setStep((i) => Math.min(i + 1, fields().length));
 		setSelected(0);
 		setFilter("");

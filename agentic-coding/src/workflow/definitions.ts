@@ -463,6 +463,29 @@ export function registerBuiltins(
 			],
 		},
 		{
+			id: "standard-propose",
+			version,
+			label: "Standard propose",
+			initial: "core.plan",
+			terminal: ["core.closed"],
+			steps: ["core.plan", "core.closed"],
+			edges: [
+				{ from: "core.plan", outcome: "complete", to: "core.closed" },
+				{
+					from: "core.plan",
+					outcome: "blocked",
+					to: "core.plan",
+					loop: { maxAttempts: 3 },
+				},
+				{
+					from: "core.plan",
+					outcome: "failed",
+					to: "core.plan",
+					loop: { maxAttempts: 3 },
+				},
+			],
+		},
+		{
 			id: "direct-apply",
 			version,
 			label: "Direct apply",
@@ -555,6 +578,46 @@ export function registerBuiltins(
 					loop: { maxAttempts: 3 },
 				},
 				...workflowEdges(true, rounds),
+			],
+		},
+		{
+			id: "fusion-propose",
+			version,
+			label: "Fusion propose",
+			initial: "fusion.plan",
+			terminal: ["core.closed"],
+			steps: ["fusion.plan", "fusion.consolidate", "core.closed"],
+			edges: [
+				{ from: "fusion.plan", outcome: "complete", to: "fusion.consolidate" },
+				{
+					from: "fusion.plan",
+					outcome: "blocked",
+					to: "fusion.plan",
+					loop: { maxAttempts: 3 },
+				},
+				{
+					from: "fusion.plan",
+					outcome: "failed",
+					to: "fusion.plan",
+					loop: { maxAttempts: 3 },
+				},
+				{
+					from: "fusion.consolidate",
+					outcome: "complete",
+					to: "core.closed",
+				},
+				{
+					from: "fusion.consolidate",
+					outcome: "blocked",
+					to: "fusion.consolidate",
+					loop: { maxAttempts: 3 },
+				},
+				{
+					from: "fusion.consolidate",
+					outcome: "failed",
+					to: "fusion.consolidate",
+					loop: { maxAttempts: 3 },
+				},
 			],
 		},
 	];

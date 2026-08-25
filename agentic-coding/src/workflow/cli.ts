@@ -401,7 +401,7 @@ function help(command?: string): void {
 	}
 	const usage: Record<string, string> = {
 		start:
-			"start --repo PATH --change ID --mode worktree|checkout [--workflow standard|direct-apply|no-openspec|plan-fusion] [--fusion-profiles NAME,NAME,...] [--task TEXT] [--ticket ID] [--preset NAME]",
+			"start --repo PATH --change ID --mode worktree|checkout [--workflow standard|standard-propose|direct-apply|no-openspec|plan-fusion|fusion-propose] [--fusion-profiles NAME,NAME,...] [--task TEXT] [--ticket ID] [--preset NAME]",
 		status: "status --repo PATH --change ID",
 		action:
 			"action ACTION_ID --repo PATH --change ID --revision N [--input JSON_OR_PATH]",
@@ -443,7 +443,8 @@ export function validateStart(
 	task?: string,
 ): void {
 	const dirty = runGit(repo, "status", "--porcelain");
-	if (dirty)
+	const proposal = ["standard-propose", "fusion-propose"].includes(workflow);
+	if (dirty && !proposal)
 		throw new Error("working tree must be clean before workflow start");
 	if (workflow === "no-openspec") {
 		if (!task?.trim())
@@ -599,14 +600,22 @@ export async function run(argv: string[]): Promise<void> {
 		const change = validateChangeId(requireFlag(rest, "change"));
 		const mode = parseMode(flag(rest, "mode"));
 		const workflow = flag(rest, "workflow") ?? "standard";
+		const proposal = ["standard-propose", "fusion-propose"].includes(workflow);
 		if (
-			!["standard", "direct-apply", "no-openspec", "plan-fusion"].includes(
-				workflow,
-			)
+			![
+				"standard",
+				"standard-propose",
+				"direct-apply",
+				"no-openspec",
+				"plan-fusion",
+				"fusion-propose",
+			].includes(workflow)
 		)
 			throw new Error(`unknown workflow definition: ${workflow}`);
+		if (proposal && mode !== "checkout")
+			throw new Error("proposal workflows require --mode checkout");
 		const fusionProfiles =
-			workflow === "plan-fusion"
+			workflow === "plan-fusion" || workflow === "fusion-propose"
 				? parseFusionProfiles(flag(rest, "fusion-profiles"))
 				: undefined;
 		const task = flag(rest, "task");
@@ -647,14 +656,20 @@ export async function run(argv: string[]): Promise<void> {
 		const baseBranch = config.workflow.base_branch;
 		const baseCommit = runGit(repo, "rev-parse", `${baseBranch}^{commit}`);
 		runGit(repo, "remote", "get-url", config.workflow.remote);
+		const branch = proposal
+			? runGit(repo, "branch", "--show-current")
+			: `${config.workflow.branch_prefix}${change}`;
+		if (proposal && !branch)
+			throw new Error("proposal workflows require a named current branch");
 		workflowEngine.start({
 			repo,
 			mode,
+			sameCheckout: proposal,
 			changeId: change,
 			definitionId: workflow,
 			definitionVersion,
 			metadata: {
-				branch: `${config.workflow.branch_prefix}${change}`,
+				branch,
 				baseBranch,
 				baseCommit,
 				...(task?.trim() ? { task: task.trim() } : {}),

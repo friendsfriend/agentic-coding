@@ -33,7 +33,8 @@ agentic-coding manager   alias for home
 
 ```text
 start --repo PATH --change ID --mode worktree|checkout
-      [--workflow standard|direct-apply|no-openspec] [--task TEXT] [--ticket ID]
+      [--workflow standard|standard-propose|direct-apply|no-openspec|plan-fusion|fusion-propose]
+      [--fusion-profiles NAME,NAME,...] [--task TEXT] [--ticket ID]
 status --repo PATH --change ID
 action ACTION_ID --repo PATH --change ID --revision N [--input JSON_OR_PATH]
 handoff --outcome complete|blocked|failed [--artifact PATH] [--message TEXT]
@@ -54,6 +55,10 @@ Built-ins register through public registry seam and pin exact `{id, version, dig
 - `standard`: plan → approval → implementation → triage → verification/fix → developer review → archive → delivery → completed
 - `direct-apply`: validates pre-authored OpenSpec artifacts, then starts implementation; archive still precedes delivery
 - `no-openspec`: requires non-empty task; excludes planning, OpenSpec verifier/checklist, and archive
+- `standard-propose`: plans and validates an OpenSpec change, then closes without approval or implementation
+- `fusion-propose`: runs fusion planning and validation, then closes without approval or implementation
+
+Proposal workflows require `--mode checkout`, stay on the current branch, and never create or switch a Git branch/worktree. They may run alongside a full checkout workflow; each workflow keeps its own change ID and artifacts. Because Git branch selection is checkout-global, a concurrent full checkout workflow can switch the branch while proposal agents are active; proposal observations may therefore race with that switch.
 
 Registry validates IDs, actors, contracts, outcomes, effects, reachability, terminal paths, declared bounded cycles, and adapter requirements. Extra registered steps never alter existing graph unless explicitly composed. External workflow plugin loading is deferred; `agent-extension` means Pi runtime extension only.
 

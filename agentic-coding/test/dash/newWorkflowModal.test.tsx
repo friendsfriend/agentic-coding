@@ -51,7 +51,59 @@ test("workflow type list offers plan-fusion alongside existing choices", async (
 	expect(frame).toContain("Apply");
 	expect(frame).toContain("Quick Implementation");
 	expect(frame).toContain("Plan Fusion");
+	expect(frame).toContain("Standard Propose");
+	expect(frame).toContain("Fusion Propose");
 	t.renderer.destroy();
+});
+
+test("proposal choices submit their type, task, and fixed checkout mode", async () => {
+	for (const [offset, workflowType] of [
+		[4, "standard-propose"],
+		[5, "fusion-propose"],
+	] as const) {
+		let handler: ((event: KeyEvent) => boolean) | undefined;
+		const completed: NewWorkflowInput[] = [];
+		const t = await testRender(
+			() => (
+				<NewWorkflowModal
+					projects={[]}
+					onKeyReady={(h) => {
+						handler = h;
+					}}
+					onCancel={() => {}}
+					onComplete={async (input) => {
+						completed.push(input);
+					}}
+				/>
+			),
+			{ width: 110, height: 30 },
+		);
+		await t.flush();
+		handler?.(key("enter")); // repo: Current Directory
+		await t.flush();
+		for (let index = 0; index < offset; index++) handler?.(key("j"));
+		handler?.(key("enter")); // proposal workflow type
+		await t.flush();
+		handler?.(key("enter")); // preset
+		await t.flush();
+		handler?.(key("enter")); // ticket
+		await t.flush();
+		for (const character of "proposal") handler?.(key(character));
+		handler?.(key("enter")); // change
+		await t.flush();
+		for (const character of "Draft only") handler?.(key(character));
+		await t.flush();
+		handler?.(key("enter", { meta: true })); // task -> confirm
+		handler?.(key("enter"));
+		await t.flush();
+		expect(completed).toHaveLength(1);
+		expect(completed[0]).toMatchObject({
+			workflowType,
+			task: "Draft only",
+			mode: "checkout",
+		});
+		t.renderer.destroy();
+	}
 });
 
 test("direct-apply omits the task step and submits no task", async () => {

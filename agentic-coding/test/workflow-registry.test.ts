@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { rolesForDefinition } from "../src/workflow/cli.ts";
 import type { WorkflowSnapshot } from "../src/workflow/contracts.ts";
 import {
 	BUILTIN_CAPABILITIES,
@@ -38,13 +39,69 @@ describe("workflow registry", () => {
 				.definitions()
 				.filter((item) => item.version === 1)
 				.map((item) => item.id),
-		).toEqual(["standard", "direct-apply", "no-openspec", "plan-fusion"]);
+		).toEqual([
+			"standard",
+			"standard-propose",
+			"direct-apply",
+			"no-openspec",
+			"plan-fusion",
+			"fusion-propose",
+		]);
 		const standard = registry.definition("standard", 1);
 		expect(standard.steps).toContain("core.verification");
 		expect(() => registry.definition("standard", 1, "changed")).toThrow(
 			/pin mismatch/,
 		);
 		expect(Object.isFrozen(standard)).toBe(true);
+		for (const [id, steps, initial] of [
+			["standard-propose", ["core.plan", "core.closed"], "core.plan"],
+			[
+				"fusion-propose",
+				["fusion.plan", "fusion.consolidate", "core.closed"],
+				"fusion.plan",
+			],
+		] as const) {
+			const proposal = registry.definition(id, 1);
+			expect(proposal.steps).toEqual(steps);
+			expect(proposal.initial).toBe(initial);
+			expect(proposal.terminal).toEqual(["core.closed"]);
+		}
+		const standardProposal = registry.definition("standard-propose", 1);
+		expect(standardProposal.edges).toEqual([
+			{ from: "core.plan", outcome: "complete", to: "core.closed" },
+			{
+				from: "core.plan",
+				outcome: "blocked",
+				to: "core.plan",
+				loop: { maxAttempts: 3 },
+			},
+			{
+				from: "core.plan",
+				outcome: "failed",
+				to: "core.plan",
+				loop: { maxAttempts: 3 },
+			},
+		]);
+		const fusionProposal = registry.definition("fusion-propose", 1);
+		for (const outcome of ["blocked", "failed"])
+			expect(
+				fusionProposal.edges.find(
+					(edge) =>
+						edge.from === "fusion.consolidate" && edge.outcome === outcome,
+				)?.loop?.maxAttempts,
+			).toBe(3);
+		expect(
+			fusionProposal.edges.find(
+				(edge) =>
+					edge.from === "fusion.consolidate" && edge.outcome === "complete",
+			)?.to,
+		).toBe("core.closed");
+		expect(registry.definition("standard", 1).steps).toContain(
+			"core.implementation",
+		);
+		expect(registry.definition("plan-fusion", 1).steps).toContain(
+			"core.plan-approval",
+		);
 	});
 	test("configured verification policy is pinned as a distinct definition", () => {
 		const registry = registerBuiltins(undefined, 20);
@@ -56,13 +113,23 @@ describe("workflow registry", () => {
 				(edge) => edge.from === "core.verification" && edge.outcome === "fix",
 			)?.loop?.maxAttempts,
 		).toBe(20);
-		for (let rounds = 1; rounds <= 20; rounds++)
-			expect(
-				registry.definition(
-					"standard",
-					rounds === 6 ? 1 : rounds === 1 ? 21 : rounds,
-				),
-			).toBeTruthy();
+		for (let rounds = 1; rounds <= 20; rounds++) {
+			const version = rounds === 6 ? 1 : rounds === 1 ? 21 : rounds;
+			expect(registry.definition("standard", version)).toBeTruthy();
+			for (const id of ["standard-propose", "fusion-propose"])
+				expect(registry.definition(id, version)).toBeTruthy();
+		}
+		const planFusion = registry.definition("plan-fusion", 20);
+		const fusionProposal = registry.definition("fusion-propose", 20);
+		expect(
+			rolesForDefinition("plan-fusion", planFusion.steps, registry, 2)[
+				"fusion.plan"
+			],
+		).toEqual(
+			rolesForDefinition("fusion-propose", fusionProposal.steps, registry, 2)[
+				"fusion.plan"
+			],
+		);
 		expect(() => registerBuiltins(undefined, 21)).toThrow(
 			"max_verification_rounds",
 		);
