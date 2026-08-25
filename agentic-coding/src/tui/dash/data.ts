@@ -98,6 +98,7 @@ export interface WorkflowOverview {
 	workspaceOpen: boolean;
 	tasks: [number, number];
 	gitStatus?: WorktreeGitStatus;
+	// WorkflowOverview agents: role/status/model plus lifetime cost.
 	agents: Array<{
 		role: string;
 		status: string;
@@ -276,6 +277,7 @@ export interface DashboardData {
 		status: string;
 		model?: string;
 		cost?: number;
+		metrics?: AgentUsageMetrics;
 	}>;
 	updated: string;
 	health: { dirty: boolean; ahead: number; behind: number; branch: string };
@@ -491,12 +493,112 @@ export interface CostMessage {
 	cost: number;
 }
 
-/** Per-role lifetime cost from model_usage rows (one per assistant message). */
+/** Usage-event names: current bridges emit `runtime.usage`, legacy files
+ * `model_usage`. Both feed cost and per-agent metric aggregation. */
+export const USAGE_EVENT_NAMES = new Set(["runtime.usage", "model_usage"]);
+
+function isUsageEvent(event: Record<string, unknown>): boolean {
+	return USAGE_EVENT_NAMES.has(String(event.event));
+}
+
+/** Compact per-agent metrics shown in the Agents panel. Fields the telemetry
+ * never recorded stay undefined so the panel can omit them instead of showing
+ * zero placeholders that could be mistaken for measured values. */
+export interface AgentUsageMetrics {
+	cost?: number;
+	inputTokens?: number;
+	outputTokens?: number;
+	cacheReadTokens?: number;
+	durationSeconds?: number;
+	tokensPerSecond?: number;
+}
+
+interface MetricAccumulator extends AgentUsageMetrics {
+	generationMs?: number;
+	firstAt?: number;
+	lastAt?: number;
+	hasUsage?: boolean;
+}
+
+/** Aggregate per-role agent metrics from a workflow's telemetry events:
+ * summed cost/tokens/cache-read from usage events, wall-clock duration from
+ * the role's first to last timestamped event (lifecycle or usage), and output
+ * tokens per second preferring summed per-message generation time over the
+ * wall-clock span. Roles without any metric are omitted from the result. */
+export function agentMetrics(
+	events: Array<Record<string, unknown>>,
+): Map<string, AgentUsageMetrics> {
+	const byRole = new Map<string, MetricAccumulator>();
+	for (const event of events) {
+		const role = event.role;
+		if (typeof role !== "string") continue;
+		const row = byRole.get(role) ?? {};
+		byRole.set(role, row);
+		const at = Date.parse(String(event.at ?? ""));
+		if (Number.isFinite(at)) {
+			row.firstAt = row.firstAt === undefined ? at : Math.min(row.firstAt, at);
+			row.lastAt = row.lastAt === undefined ? at : Math.max(row.lastAt, at);
+		}
+		if (!isUsageEvent(event)) continue;
+		for (const field of [
+			"cost",
+			"inputTokens",
+			"outputTokens",
+			"cacheReadTokens",
+		] as const) {
+			if (event[field] !== undefined)
+				row[field] = (row[field] ?? 0) + Number(event[field]);
+		}
+		if (
+			row.cost !== undefined ||
+			row.inputTokens !== undefined ||
+			row.outputTokens !== undefined ||
+			row.cacheReadTokens !== undefined
+		)
+			row.hasUsage = true;
+		if (Number(event.durationMs) > 0)
+			row.generationMs = (row.generationMs ?? 0) + Number(event.durationMs);
+	}
+	const result = new Map<string, AgentUsageMetrics>();
+	for (const [role, row] of byRole) {
+		const durationSeconds =
+			row.firstAt !== undefined &&
+			row.lastAt !== undefined &&
+			row.lastAt > row.firstAt
+				? Math.max(0, Math.round((row.lastAt - row.firstAt) / 1000))
+				: undefined;
+		const outputTokens = row.outputTokens ?? 0;
+		const generationSeconds = (row.generationMs ?? 0) / 1000;
+		const tokensPerSecond =
+			outputTokens > 0 && generationSeconds > 0
+				? Math.round((outputTokens / generationSeconds) * 10) / 10
+				: undefined;
+		if (!row.hasUsage && durationSeconds === undefined) continue;
+		result.set(role, {
+			...(row.cost !== undefined ? { cost: row.cost } : {}),
+			...(row.inputTokens !== undefined
+				? { inputTokens: row.inputTokens }
+				: {}),
+			...(row.outputTokens !== undefined
+				? { outputTokens: row.outputTokens }
+				: {}),
+			...(row.cacheReadTokens !== undefined
+				? { cacheReadTokens: row.cacheReadTokens }
+				: {}),
+			...(durationSeconds !== undefined ? { durationSeconds } : {}),
+			...(tokensPerSecond !== undefined ? { tokensPerSecond } : {}),
+		});
+	}
+	return result;
+}
+
+/** Per-role lifetime cost from model_usage rows (one per assistant message).
+ * Accepts both `runtime.usage` and legacy `model_usage` event names. */
 export function costSummary(events: Array<Record<string, unknown>>): CostRow[] {
 	const byRole = new Map<string, CostRow>();
 	for (const event of events) {
 		const role = event.role;
-		if (event.event !== "model_usage" || typeof role !== "string") continue;
+		if (!isUsageEvent(event) || typeof role !== "string") continue;
 		const row = byRole.get(role) ?? {
 			role,
 			messages: 0,
@@ -521,7 +623,7 @@ export function costMessages(
 	role: string,
 ): CostMessage[] {
 	return events
-		.filter((event) => event.event === "model_usage" && event.role === role)
+		.filter((event) => isUsageEvent(event) && event.role === role)
 		.sort((a, b) => String(a.at).localeCompare(String(b.at)))
 		.map((event) => ({
 			at: String(event.at ?? ""),
@@ -1072,6 +1174,7 @@ export function loadDashboard(repo: string, change: string): DashboardData {
 	const costByRole = new Map(
 		costSummary(telemetry).map((row) => [row.role, row]),
 	);
+	const metricsByRole = agentMetrics(telemetry);
 	const costBreakdown = costSummary(telemetry).map((row) => ({
 		...row,
 		messages: costMessages(telemetry, row.role),
@@ -1099,6 +1202,7 @@ export function loadDashboard(repo: string, change: string): DashboardData {
 							: "not started"),
 					model: run?.model ?? run?.profile ?? run?.runtime,
 					cost: costByRole.get(role)?.cost,
+					metrics: metricsByRole.get(role),
 				};
 			}),
 		updated: new Date().toLocaleTimeString(),
@@ -1160,6 +1264,87 @@ export function testDashboard(phase = "proposed"): DashboardData {
 		"closed",
 	].includes(phase);
 	const archived = ["completed", "closed"].includes(phase);
+	// Demo telemetry mirrors what the pi bridge emits: runtime lifecycle plus
+	// per-message usage rows carrying cache/duration/tok-s fields. Metrics are
+	// derived through the real aggregation so fixtures cannot drift from it.
+	const demoTelemetry: Array<Record<string, unknown>> = [
+		{ event: "runtime.started", role: "planner", at: "2026-01-01T10:35:00Z" },
+		{
+			event: "runtime.usage",
+			role: "planner",
+			at: "2026-01-01T10:41:55Z",
+			inputTokens: 2100,
+			outputTokens: 400,
+			cacheReadTokens: 1680,
+			cost: 0.08,
+			durationMs: 52000,
+		},
+		{ event: "runtime.settled", role: "planner", at: "2026-01-01T10:41:58Z" },
+		{ event: "runtime.started", role: "worker", at: "2026-01-01T10:42:00Z" },
+		{
+			event: "runtime.usage",
+			role: "worker",
+			at: "2026-01-01T10:44:12Z",
+			inputTokens: 5200,
+			outputTokens: 1400,
+			cacheReadTokens: 4200,
+			cost: 0.21,
+			durationMs: 61000,
+		},
+		{
+			event: "runtime.usage",
+			role: "worker",
+			at: "2026-01-01T10:48:03Z",
+			inputTokens: 4800,
+			outputTokens: 1100,
+			cacheReadTokens: 3900,
+			cost: 0.21,
+			durationMs: 55000,
+		},
+		{
+			event: "runtime.started",
+			role: "security-verifier",
+			at: "2026-01-01T10:49:30Z",
+		},
+		{
+			event: "runtime.usage",
+			role: "security-verifier",
+			at: "2026-01-01T10:50:20Z",
+			inputTokens: 3200,
+			outputTokens: 600,
+			cacheReadTokens: 2600,
+			cost: 0.05,
+			durationMs: 30000,
+		},
+		// Partial coverage: lifecycle events only, so duration renders without
+		// inventing token or cost values.
+		{
+			event: "runtime.started",
+			role: "agents-verifier",
+			at: "2026-01-01T10:50:40Z",
+		},
+		{
+			event: "runtime.settled",
+			role: "agents-verifier",
+			at: "2026-01-01T10:51:30Z",
+		},
+		{
+			event: "runtime.started",
+			role: "quality-verifier",
+			at: "2026-01-01T10:50:00Z",
+		},
+		{
+			event: "runtime.usage",
+			role: "quality-verifier",
+			at: "2026-01-01T10:51:07Z",
+			inputTokens: 4100,
+			outputTokens: 900,
+			cacheReadTokens: 3300,
+			cost: 0.07,
+			durationMs: 45000,
+		},
+	];
+	const demoMetrics = agentMetrics(demoTelemetry);
 	return {
 		state: {
 			changeId: "demo-optional-realisation-date",
@@ -1213,12 +1398,18 @@ export function testDashboard(phase = "proposed"): DashboardData {
 			? ["round-1-consolidated.md: CLEAR", "round-2-consolidated.md: CLEAR"]
 			: [],
 		agents: [
-			{ role: "planner", status: applying ? "closed" : "idle", cost: 0.08 },
+			{
+				role: "planner",
+				status: applying ? "closed" : "idle",
+				cost: 0.08,
+				metrics: demoMetrics.get("planner"),
+			},
 			{
 				role: "worker",
 				status:
 					phase === "apply" ? "working" : applying ? "idle" : "not started",
 				cost: 0.42,
+				metrics: demoMetrics.get("worker"),
 			},
 			...[
 				"security-verifier",
@@ -1231,6 +1422,7 @@ export function testDashboard(phase = "proposed"): DashboardData {
 				role,
 				status:
 					phase === "verify" ? "working" : verified ? "done" : "not started",
+				metrics: demoMetrics.get(role),
 			})),
 			{
 				role: "test-verifier",
@@ -1257,62 +1449,19 @@ export function testDashboard(phase = "proposed"): DashboardData {
 			? "Apply next implementation task"
 			: "Planner exploring change",
 		events: [
+			...demoTelemetry.map((event) => ({
+				at: String(event.at).slice(11, 19),
+				event: String(event.event),
+				role: event.role as string | undefined,
+				cost: Number(event.cost ?? 0) || undefined,
+				inputTokens: event.inputTokens as number | undefined,
+				outputTokens: event.outputTokens as number | undefined,
+			})),
 			{
-				at: "10:42",
+				at: "10:42:00",
 				event: "verification_started",
 				tier: "standard",
 				roles: ["security-verifier", "quality-verifier"],
-			},
-			{
-				at: "10:40",
-				event: "pi_agent_start",
-				role: "worker",
-				model: "claude-sonnet",
-			},
-			{
-				at: "10:41",
-				event: "model_usage",
-				role: "planner",
-				inputTokens: 2100,
-				outputTokens: 400,
-				totalTokens: 2500,
-				cost: 0.08,
-			},
-			{
-				at: "10:44",
-				event: "model_usage",
-				role: "worker",
-				inputTokens: 5200,
-				outputTokens: 1400,
-				totalTokens: 6600,
-				cost: 0.21,
-			},
-			{
-				at: "10:48",
-				event: "model_usage",
-				role: "worker",
-				inputTokens: 4800,
-				outputTokens: 1100,
-				totalTokens: 5900,
-				cost: 0.21,
-			},
-			{
-				at: "10:50",
-				event: "model_usage",
-				role: "security-verifier",
-				inputTokens: 3200,
-				outputTokens: 600,
-				totalTokens: 3800,
-				cost: 0.05,
-			},
-			{
-				at: "10:51",
-				event: "model_usage",
-				role: "quality-verifier",
-				inputTokens: 4100,
-				outputTokens: 900,
-				totalTokens: 5000,
-				cost: 0.07,
 			},
 		],
 		verifierTimeline:

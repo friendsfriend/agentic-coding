@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	agentMetrics,
 	costMessages,
 	costSummary,
 	type DeveloperReviewComment,
@@ -535,6 +536,124 @@ test("costMessages returns per-message rows for one role oldest first", () => {
 	]);
 	expect(messages[0]?.cost).toBe(0.02);
 	expect(messages[1]?.inputTokens).toBe(1);
+});
+
+test("costSummary aggregates runtime.usage and legacy model_usage rows", () => {
+	const rows = costSummary([
+		{
+			event: "runtime.usage",
+			role: "worker",
+			inputTokens: 100,
+			outputTokens: 20,
+			totalTokens: 120,
+			cost: 0.1,
+		},
+		{
+			event: "model_usage",
+			role: "worker",
+			inputTokens: 50,
+			outputTokens: 10,
+			totalTokens: 60,
+			cost: 0.2,
+		},
+	]);
+	expect(rows).toHaveLength(1);
+	expect(rows[0]?.messages).toBe(2);
+	expect(rows[0]?.cost).toBeCloseTo(0.3, 10);
+});
+
+test("agentMetrics sums usage events per role and prefers generation time for tok/s", () => {
+	const metrics = agentMetrics([
+		{ event: "runtime.started", role: "worker", at: "2026-01-01T10:00:00Z" },
+		{
+			event: "runtime.usage",
+			role: "worker",
+			at: "2026-01-01T10:01:00Z",
+			inputTokens: 1000,
+			outputTokens: 200,
+			cacheReadTokens: 800,
+			cost: 0.1,
+			durationMs: 40000,
+		},
+		{
+			event: "runtime.usage",
+			role: "worker",
+			at: "2026-01-01T10:03:00Z",
+			inputTokens: 500,
+			outputTokens: 100,
+			cacheReadTokens: 400,
+			cost: 0.05,
+			durationMs: 10000,
+		},
+	]);
+	const worker = metrics.get("worker");
+	expect(worker?.cost).toBeCloseTo(0.15, 10);
+	expect(worker?.inputTokens).toBe(1500);
+	expect(worker?.outputTokens).toBe(300);
+	expect(worker?.cacheReadTokens).toBe(1200);
+	// Wall-clock span from first to last role event.
+	expect(worker?.durationSeconds).toBe(180);
+	// Summed generation time (50s), not wall-clock (180s).
+	expect(worker?.tokensPerSecond).toBe(6);
+});
+
+test("agentMetrics omits fields the events never recorded", () => {
+	const metrics = agentMetrics([
+		// Usage row without cache or timing detail.
+		{
+			event: "model_usage",
+			role: "planner",
+			at: "2026-01-01T10:00:00Z",
+			inputTokens: 100,
+			outputTokens: 10,
+			cost: 0.01,
+		},
+		// Lifecycle-only role: duration without any usage values.
+		{ event: "runtime.started", role: "verifier", at: "2026-01-01T10:00:00Z" },
+		{ event: "runtime.settled", role: "verifier", at: "2026-01-01T10:02:00Z" },
+	]);
+	const planner = metrics.get("planner");
+	expect(planner?.cost).toBe(0.01);
+	expect(planner?.cacheReadTokens).toBeUndefined();
+	expect(planner?.durationSeconds).toBeUndefined();
+	expect(planner?.tokensPerSecond).toBeUndefined();
+	const verifier = metrics.get("verifier");
+	expect(verifier?.durationSeconds).toBe(120);
+	expect(verifier?.cost).toBeUndefined();
+	expect(verifier?.inputTokens).toBeUndefined();
+	// Roles without any metric-bearing event are omitted entirely.
+	expect(metrics.has("worker")).toBe(false);
+});
+
+test("demo dashboard renders every metric field with runtime.usage fixtures", () => {
+	const dashboard = testDashboard("verify");
+	for (const role of [
+		"planner",
+		"worker",
+		"security-verifier",
+		"quality-verifier",
+	]) {
+		const metrics = dashboard.agents.find(
+			(agent) => agent.role === role,
+		)?.metrics;
+		expect(metrics?.cost).toBeDefined();
+		expect(metrics?.inputTokens).toBeGreaterThan(0);
+		expect(metrics?.outputTokens).toBeGreaterThan(0);
+		expect(metrics?.cacheReadTokens).toBeGreaterThan(0);
+		expect(metrics?.durationSeconds).toBeGreaterThan(0);
+		expect(metrics?.tokensPerSecond).toBeGreaterThan(0);
+	}
+	// Partial agent: lifecycle events only → duration, no invented values.
+	const partial = dashboard.agents.find(
+		(agent) => agent.role === "agents-verifier",
+	)?.metrics;
+	expect(partial?.durationSeconds).toBeGreaterThan(0);
+	expect(partial?.cost).toBeUndefined();
+	expect(partial?.inputTokens).toBeUndefined();
+	// Untouched agents carry no metrics at all.
+	expect(
+		dashboard.agents.find((agent) => agent.role === "test-verifier")?.metrics,
+	).toBeUndefined();
 });
 
 test("demo dashboard exposes cost breakdown", () => {

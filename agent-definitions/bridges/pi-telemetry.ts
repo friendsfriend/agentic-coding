@@ -38,8 +38,32 @@ function emit(event: string, fields: Record<string, unknown> = {}) {
 export default function bridge(pi: ExtensionAPI) {
   // Telemetry only: runtime lifecycle + usage events. Handoff and checks go
   // through the agent's normal tools (`agentic-coding workflow handoff`).
-  pi.on('agent_start', () => emit('runtime.started'));
+  // Wall-clock start of the in-flight assistant message, used to derive per-
+  // message generation duration and tokens/s on message_end.
+  let assistantStartedAt: number | undefined;
+  pi.on('agent_start', () => { assistantStartedAt = undefined; emit('runtime.started'); });
   pi.on('agent_settled', () => emit('runtime.settled'));
   pi.on('tool_execution_end', (event: { toolName?: string; isError?: boolean }) => emit('runtime.tool', { tool: event.toolName, outcome: event.isError ? 'error' : 'ok' }));
-  pi.on('message_end', (event: { message?: { usage?: { input?: number; output?: number; cost?: { total?: number } } } }) => { const usage = event.message?.usage; if (usage) emit('runtime.usage', { inputTokens: usage.input, outputTokens: usage.output, cost: usage.cost?.total }); });
+  pi.on('message_start', (event: { message?: { role?: string } }) => {
+    if (event.message?.role === 'assistant') assistantStartedAt = Date.now();
+  });
+  pi.on('message_end', (event: { message?: { role?: string; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; cost?: { total?: number } } } }) => {
+    const usage = event.message?.usage;
+    if (event.message?.role !== 'assistant' || !usage) return;
+    const durationMs = assistantStartedAt !== undefined ? Math.max(0, Date.now() - assistantStartedAt) : undefined;
+    assistantStartedAt = undefined;
+    // Omit fields the runtime did not provide rather than emitting zeros:
+    // downstream consumers treat absent fields as "not measurable".
+    emit('runtime.usage', {
+      inputTokens: usage.input,
+      outputTokens: usage.output,
+      ...(typeof usage.cacheRead === 'number' ? { cacheReadTokens: usage.cacheRead } : {}),
+      ...(typeof usage.cacheWrite === 'number' && usage.cacheWrite > 0 ? { cacheWriteTokens: usage.cacheWrite } : {}),
+      cost: usage.cost?.total,
+      ...(durationMs !== undefined && durationMs > 0 ? {
+        durationMs,
+        ...(usage.output ? { tokensPerSecond: Math.round((usage.output / durationMs) * 10000) / 10 } : {}),
+      } : {}),
+    });
+  });
 }
