@@ -7,6 +7,7 @@ import {
 	costMessages,
 	costSummary,
 	type DeveloperReviewComment,
+	getTaskViewport,
 	isStale,
 	loadLocalChanges,
 	loadLocalDiff,
@@ -173,6 +174,80 @@ test("savePlanReview serializes and reloads plan review comments", async () => {
 		),
 	).toEqual({ comments });
 	expect(loadPlanReviewComments(repo, "plan-review")).toEqual(comments);
+});
+
+test("task viewport centers the active task when possible", () => {
+	const tasks = Array.from({ length: 10 }, (_, index) => ({
+		done: index !== 4,
+		text: `Task ${index + 1}`,
+	}));
+
+	expect(getTaskViewport(tasks)).toEqual({
+		visibleTasks: tasks.slice(2, 7),
+		start: 2,
+		activeIndex: 4,
+		activePosition: 5,
+		activeRow: 2,
+	});
+});
+
+test("task viewport clamps active task at the beginning and end", () => {
+	const tasks = Array.from({ length: 10 }, (_, index) => ({
+		done: index !== 0,
+		text: `Task ${index + 1}`,
+	}));
+	expect(getTaskViewport(tasks)).toMatchObject({
+		start: 0,
+		activeIndex: 0,
+		activePosition: 1,
+		activeRow: 0,
+	});
+
+	const endingTasks = tasks.map((task, index) => ({
+		...task,
+		done: index !== 9,
+	}));
+	expect(getTaskViewport(endingTasks)).toMatchObject({
+		start: 5,
+		activeIndex: 9,
+		activePosition: 10,
+		activeRow: 4,
+	});
+});
+
+test("task viewport renders short, empty, and all-complete lists", () => {
+	const shortTasks = [
+		{ done: true, text: "Task 1" },
+		{ done: false, text: "Task 2" },
+		{ done: true, text: "Task 3" },
+	];
+	expect(getTaskViewport(shortTasks)).toMatchObject({
+		visibleTasks: shortTasks,
+		start: 0,
+		activeIndex: 1,
+		activePosition: 2,
+		activeRow: 1,
+	});
+
+	expect(getTaskViewport([])).toEqual({
+		visibleTasks: [],
+		start: 0,
+		activeIndex: undefined,
+		activePosition: undefined,
+		activeRow: undefined,
+	});
+
+	const completeTasks = Array.from({ length: 7 }, (_, index) => ({
+		done: true,
+		text: `Task ${index + 1}`,
+	}));
+	expect(getTaskViewport(completeTasks)).toEqual({
+		visibleTasks: completeTasks.slice(2),
+		start: 2,
+		activeIndex: undefined,
+		activePosition: undefined,
+		activeRow: undefined,
+	});
 });
 
 test("demo dashboard includes usability verifier", () => {

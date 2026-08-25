@@ -213,11 +213,45 @@ export interface DeveloperReviewFinding {
 	fix?: string;
 }
 
+export interface DashboardTask {
+	done: boolean;
+	text: string;
+}
+
+export interface TaskViewport {
+	visibleTasks: DashboardTask[];
+	start: number;
+	activeIndex: number | undefined;
+	activePosition: number | undefined;
+	activeRow: number | undefined;
+}
+
+/** Return the five-row task window centered on the first incomplete task. */
+export function getTaskViewport(tasks: DashboardTask[]): TaskViewport {
+	const activeIndex = tasks.findIndex((task) => !task.done);
+	const start =
+		tasks.length <= 5
+			? 0
+			: activeIndex === -1
+				? tasks.length - 5
+				: Math.max(0, Math.min(activeIndex - 2, tasks.length - 5));
+	const visibleTasks = tasks.slice(start, start + 5);
+	const hasActiveTask = activeIndex !== -1;
+
+	return {
+		visibleTasks,
+		start,
+		activeIndex: hasActiveTask ? activeIndex : undefined,
+		activePosition: hasActiveTask ? activeIndex + 1 : undefined,
+		activeRow: hasActiveTask ? activeIndex - start : undefined,
+	};
+}
+
 export interface DashboardData {
 	state: WorkflowState;
 	request: string;
 	proposal: string;
-	tasks: Array<{ done: boolean; text: string }>;
+	tasks: DashboardTask[];
 	review: string;
 	reviewHistory: string[];
 	agents: Array<{
