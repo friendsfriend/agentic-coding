@@ -1186,6 +1186,12 @@ export class WorkflowEngine {
 			};
 		}
 		if (command.actionId === "create-pr") {
+			if (["standard-propose", "fusion-propose"].includes(definition.id))
+				throw new WorkflowRuntimeError(
+					"unavailable",
+					"proposal workflows do not support pull-request creation",
+					snapshot.revision,
+				);
 			this.registry
 				.step(snapshot.currentStep)
 				.reduce(snapshot, { outcome: "create-pr" });
@@ -2193,11 +2199,17 @@ export class WorkflowEngine {
 						]
 					: snapshot.currentStep === "core.completed"
 						? [
-								{
-									id: "create-pr",
-									label: "Create pull request",
-									confirmation: "confirm",
-								},
+								...(["standard-propose", "fusion-propose"].includes(
+									snapshot.definition.id,
+								)
+									? []
+									: [
+											{
+												id: "create-pr",
+												label: "Create pull request",
+												confirmation: "confirm" as const,
+											},
+										]),
 								{
 									id: "close",
 									label: "Close workflow",

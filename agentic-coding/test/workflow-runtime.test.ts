@@ -295,6 +295,233 @@ describe("transactional workflow runtime", () => {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
 	});
+	test("proposal planning waits for approval and explicit close before cleanup", () => {
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "workflow-proposal-lifecycle-"),
+		);
+		try {
+			const repo = repository(path.join(tmp, "repo"));
+			const changeRoot = path.join(
+				repo,
+				"openspec",
+				"changes",
+				"proposal-lifecycle",
+			);
+			fs.mkdirSync(path.join(changeRoot, "specs", "proposal"), {
+				recursive: true,
+			});
+			for (const file of ["proposal.md", "design.md", "tasks.md"])
+				fs.writeFileSync(path.join(changeRoot, file), "# proposal\n");
+			fs.writeFileSync(
+				path.join(changeRoot, "specs", "proposal", "spec.md"),
+				"#### Scenario: proposal remains open\n",
+			);
+			const engine = new WorkflowEngine(registerBuiltins());
+			let view = engine.start({
+				repo,
+				mode: "checkout",
+				changeId: "proposal-lifecycle",
+				definitionId: "standard-propose",
+				metadata: {
+					branch: "main",
+					baseBranch: "main",
+					baseCommit: "base",
+					task: "propose a change",
+				},
+				routing: routing(),
+			}).view;
+			const setup = requireDefined(
+				engine
+					.claimEffects(repo, 100)
+					.find((effect) => effect.kind === "workspace.setup"),
+				"workspace setup effect",
+			);
+			view = engine.dispatch(repo, {
+				type: "effect.result",
+				effectId: setup.id,
+				lease: requireDefined(setup.lease, "setup lease"),
+				outcome: "complete",
+				data: { workspace: "proposal", worktree: repo, branch: "main" },
+			}).view;
+			const run = requireDefined(view.runs[0], "planner run");
+			const launch = engine
+				.claimEffects(repo, 100)
+				.find(
+					(effect) =>
+						effect.kind === "agent.launch" &&
+						(effect.payload as { runId?: string }).runId === run.id,
+				);
+			const token = requireDefined(launch?.runToken, "planner token");
+			const stored = engine.getRun(repo, run.id);
+			const outputPath = requireDefined(
+				stored.outputPath,
+				"planner output path",
+			);
+			fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+			fs.writeFileSync(
+				outputPath,
+				JSON.stringify({
+					runId: run.id,
+					schemaId: stored.outputSchema?.id,
+					schemaVersion: stored.outputSchema?.version,
+					payload: { planned: true },
+				}),
+			);
+			view = engine.dispatch(repo, {
+				type: "agent.handoff",
+				runId: run.id,
+				generation: stored.generation,
+				token,
+				outcome: "complete",
+				artifact: outputPath,
+			}).view;
+			const validation = requireDefined(
+				engine
+					.claimEffects(repo, 100)
+					.find((effect) => effect.kind === "openspec.validate"),
+				"OpenSpec validation effect",
+			);
+			view = engine.dispatch(repo, {
+				type: "effect.result",
+				effectId: validation.id,
+				lease: requireDefined(validation.lease, "validation lease"),
+				outcome: "complete",
+			}).view;
+			expect(view.currentStep.id).toBe("core.plan-approval");
+			expect(view.status).toBe("active");
+			expect(view.effects.map((effect) => effect.kind)).not.toContain(
+				"workspace.close",
+			);
+			expect(view.effects.map((effect) => effect.kind)).not.toContain(
+				"workspace.cleanup",
+			);
+			expect(view.availableActions.map((action) => action.id)).toEqual([
+				"approve-plan",
+				"review-comments",
+				"reject-plan",
+			]);
+			view = engine.dispatch(repo, {
+				type: "developer.action",
+				workflowId: view.workflowId,
+				revision: view.revision,
+				actionId: "approve-plan",
+			}).view;
+			expect(view.currentStep.id).toBe("core.completed");
+			expect(view.status).toBe("completed");
+			expect(view.availableActions.map((action) => action.id)).toEqual([
+				"close",
+			]);
+			for (const kind of [
+				"delivery.commit",
+				"delivery.push",
+				"pull-request.create",
+			] as const)
+				expect(view.effects.map((effect) => effect.kind)).not.toContain(kind);
+			expect(
+				view.runs.some((run) =>
+					["core.implementation", "core.verification", "core.archive"].includes(
+						run.stepId,
+					),
+				),
+			).toBe(false);
+			expect(() =>
+				engine.dispatch(repo, {
+					type: "developer.action",
+					workflowId: view.workflowId,
+					revision: view.revision,
+					actionId: "create-pr",
+				}),
+			).toThrow(/unavailable/);
+			view = engine.dispatch(repo, {
+				type: "developer.action",
+				workflowId: view.workflowId,
+				revision: view.revision,
+				actionId: "close",
+			}).view;
+			expect(view.currentStep.id).toBe("core.closed");
+			const close = requireDefined(
+				engine
+					.claimEffects(repo, 100)
+					.find((effect) => effect.kind === "workspace.close"),
+				"workspace close effect",
+			);
+			expect(
+				engine
+					.claimEffects(repo, 100)
+					.some((effect) => effect.kind === "workspace.cleanup"),
+			).toBe(false);
+			engine.dispatch(repo, {
+				type: "effect.result",
+				effectId: close.id,
+				lease: requireDefined(close.lease, "close lease"),
+				outcome: "complete",
+			});
+			expect(
+				engine
+					.claimEffects(repo, 100)
+					.some((effect) => effect.kind === "workspace.cleanup"),
+			).toBe(true);
+		} finally {
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+	test("proposal plan rejection and comments return to planning", () => {
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "workflow-proposal-review-"),
+		);
+		try {
+			const repo = repository(path.join(tmp, "repo"));
+			const engine = new WorkflowEngine(registerBuiltins());
+			const started = engine.start({
+				repo,
+				mode: "checkout",
+				changeId: "proposal-review",
+				definitionId: "standard-propose",
+				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
+				routing: routing(),
+			});
+			const gate = engine.dispatch(repo, {
+				type: "operator.repair",
+				workflowId: started.view.workflowId,
+				revision: started.view.revision,
+				targetStep: "core.plan-approval",
+				reason: "review proposal",
+			});
+			const rejected = engine.dispatch(repo, {
+				type: "developer.action",
+				workflowId: started.view.workflowId,
+				revision: gate.view.revision,
+				actionId: "reject-plan",
+				input: { reason: "needs more detail" },
+			});
+			expect(rejected.view.currentStep.id).toBe("core.plan");
+			const commentsGate = engine.dispatch(repo, {
+				type: "operator.repair",
+				workflowId: started.view.workflowId,
+				revision: rejected.view.revision,
+				targetStep: "core.plan-approval",
+				reason: "review again",
+			});
+			const comments = [
+				{ comment: "clarify scope", file: "proposal.md", line: 1 },
+			];
+			const returned = engine.dispatch(repo, {
+				type: "developer.action",
+				workflowId: started.view.workflowId,
+				revision: commentsGate.view.revision,
+				actionId: "review-comments",
+				input: { comments },
+			});
+			expect(returned.view.currentStep.id).toBe("core.plan");
+			expect(returned.snapshot.step.mode).toBe("review-fix");
+			expect(returned.snapshot.step.context).toEqual({ comments });
+			expect(returned.view.effects.map((effect) => effect.kind)).not.toContain(
+				"workspace.close",
+			);
+		} finally {
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
 	test("developer CAS and repair invalidate runs and retrigger target step", () => {
 		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-repair-"));
 		try {

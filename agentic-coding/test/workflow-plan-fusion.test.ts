@@ -601,7 +601,7 @@ describe("plan-fusion workflow", () => {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
 	});
-	test("fusion-propose closes after validated consolidation without downstream work", () => {
+	test("fusion-propose waits for approval and closes explicitly without downstream work", () => {
 		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "fusion-propose-e2e-"));
 		try {
 			const repo = repository(path.join(tmp, "repo"));
@@ -657,14 +657,39 @@ describe("plan-fusion workflow", () => {
 				lease: requireDefined(validation.lease, "validation lease"),
 				outcome: "complete",
 			}).view;
-			expect(view.currentStep.id).toBe("core.closed");
-			expect(view.status).toBe("closed");
+			expect(view.currentStep.id).toBe("core.plan-approval");
+			expect(view.status).toBe("active");
+			expect(view.effects.map((effect) => effect.kind)).not.toContain(
+				"workspace.close",
+			);
+			expect(view.effects.map((effect) => effect.kind)).not.toContain(
+				"workspace.cleanup",
+			);
+			view = engine.dispatch(repo, {
+				type: "developer.action",
+				workflowId: view.workflowId,
+				revision: view.revision,
+				actionId: "approve-plan",
+			}).view;
+			expect(view.currentStep.id).toBe("core.completed");
+			expect(view.status).toBe("completed");
+			expect(view.availableActions.map((action) => action.id)).toEqual([
+				"close",
+			]);
 			expect(view.effects.map((effect) => effect.kind)).not.toContain(
 				"delivery.commit",
 			);
 			expect(view.effects.map((effect) => effect.kind)).not.toContain(
 				"pull-request.create",
 			);
+			view = engine.dispatch(repo, {
+				type: "developer.action",
+				workflowId: view.workflowId,
+				revision: view.revision,
+				actionId: "close",
+			}).view;
+			expect(view.currentStep.id).toBe("core.closed");
+			expect(view.status).toBe("closed");
 			expect(view.effects.map((effect) => effect.kind)).toContain(
 				"workspace.close",
 			);

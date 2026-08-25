@@ -1310,19 +1310,25 @@ export function requiredUserActionFor(
 	phase: string,
 	prCreated = false,
 	_artifacts: string[] = [],
+	definitionId?: string,
 ): RequiredUserAction | undefined {
 	const later = { label: "Not now", kind: "dismiss" } as const;
-	if (phase === "proposed" || phase === "core.plan-approval")
+	if (phase === "proposed" || phase === "core.plan-approval") {
+		const proposal =
+			definitionId === "standard-propose" || definitionId === "fusion-propose";
 		return {
 			key: "plan-review",
 			title: "Action required · Plan review",
-			prompt: "Review the OpenSpec artifacts before the worker starts.",
+			prompt: proposal
+				? "Review the OpenSpec artifacts before completing the proposal."
+				: "Review the OpenSpec artifacts before the worker starts.",
 			// Trigger-only: the action opens the plan review popup (artifact list)
 			// directly, so there are no selectable items to render in the generic
 			// ListViewModal.
 			items: [],
 		};
-	if (phase === "developer-review")
+	}
+	if (phase === "developer-review" || phase === "core.developer-review")
 		return {
 			key: phase,
 			title: "Action required · Developer review",
@@ -1331,15 +1337,19 @@ export function requiredUserActionFor(
 			// there are no selectable items to render in the generic ListViewModal.
 			items: [],
 		};
-	if (phase === "completed")
+	if (phase === "completed" || phase === "core.completed") {
+		const proposal =
+			definitionId === "standard-propose" || definitionId === "fusion-propose";
 		return {
-			key: `${phase}:${prCreated ? "pr-created" : "no-pr"}`,
+			key: `${phase}:${proposal ? "proposal" : prCreated ? "pr-created" : "no-pr"}`,
 			title: "Action required · Workflow complete",
-			prompt: prCreated
-				? "Close workspace when finished."
-				: "Create MR/PR or close workspace.",
+			prompt: proposal
+				? "Close workflow when finished."
+				: prCreated
+					? "Close workspace when finished."
+					: "Create MR/PR or close workspace.",
 			items: [
-				...(!prCreated
+				...(!proposal && !prCreated
 					? [
 							{
 								label: "Create MR/PR",
@@ -1353,14 +1363,19 @@ export function requiredUserActionFor(
 					kind: "workflow",
 					value: "close",
 				},
-				{
-					label: "Close and delete worktree",
-					kind: "workflow",
-					value: "close-clean",
-				},
+				...(!proposal
+					? [
+							{
+								label: "Close and delete worktree",
+								kind: "workflow" as const,
+								value: "close-clean",
+							},
+						]
+					: []),
 				later,
 			],
 		};
+	}
 	return undefined;
 }
 

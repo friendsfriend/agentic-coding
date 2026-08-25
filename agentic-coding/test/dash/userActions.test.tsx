@@ -101,6 +101,27 @@ test("plan review popup appears and executes plan approval via finish", async ()
 	t.renderer.destroy();
 });
 
+test("plan review exposes a bounded rejection action", async () => {
+	const t = await testRender(() => <TestDashboard />, {
+		width: 120,
+		height: 40,
+	});
+
+	const reviewFrame = await t.waitForFrame((frame) =>
+		frame.includes("Plan review"),
+	);
+	expect(reviewFrame).toContain("Reject plan");
+	t.mockInput.pressKey("r");
+	const rejectionFrame = await t.waitForFrame((frame) =>
+		frame.includes("Choose a rejection reason"),
+	);
+	expect(rejectionFrame).toContain("Needs more detail");
+	t.mockInput.pressKey("down");
+	t.mockInput.pressEnter();
+	await t.waitForFrame((frame) => !frame.includes("Choose a rejection reason"));
+	t.renderer.destroy();
+});
+
 test("git panel enter opens the changed-files modal and finish stays gated to the developer review phase", async () => {
 	const t = await testRender(() => <TestDashboard />, {
 		width: 120,
