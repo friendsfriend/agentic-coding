@@ -13,6 +13,7 @@ import {
 	createEffect,
 	createMemo,
 	createSignal,
+	For,
 	onCleanup,
 	onMount,
 	Show,
@@ -27,6 +28,7 @@ import {
 	type DeveloperReviewFinding,
 	focusAgent,
 	focusReturnWorkspace,
+	getTaskViewport,
 	type LocalChange,
 	loadDashboard,
 	loadDeveloperReviewFindings,
@@ -1954,9 +1956,7 @@ export function App(props: {
 	const doneTasks = createMemo(
 		() => data().tasks.filter((task) => task.done).length,
 	);
-	const currentTask = createMemo(
-		() => data().tasks.find((task) => !task.done)?.text ?? "All tasks complete",
-	);
+	const taskViewport = createMemo(() => getTaskViewport(data().tasks));
 	const _prompt = createMemo(() =>
 		data().state.status === "paused"
 			? "Verification paused · developer intervention required"
@@ -2229,31 +2229,62 @@ export function App(props: {
 						<box
 							style={{
 								width: "100%",
-								height: 5,
+								height: 9,
 								flexShrink: 0,
 								flexDirection: "column",
 								gap: 1,
 							}}
 						>
 							<Panel
-								title={`Current task · ${doneTasks()}/${data().tasks.length}`}
+								title={`Current task · ${
+									taskViewport().activePosition !== undefined
+										? `task ${taskViewport().activePosition} of ${data().tasks.length}`
+										: data().tasks.length === 0
+											? "no tasks"
+											: `all ${data().tasks.length} tasks complete`
+								}`}
 								accent={uiColors.success}
 								active={activePanel() === 2}
 								style={{
 									width: "100%",
-									height: 2,
+									height: 6,
 								}}
 							>
-								<text
-									fg={
-										doneTasks() === data().tasks.length
-											? uiColors.success
-											: uiColors.textPrimary
-									}
+								<Show
+									when={taskViewport().visibleTasks.length > 0}
+									fallback={<text fg={uiColors.textMuted}>No tasks yet.</text>}
 								>
-									{doneTasks() === data().tasks.length ? "✓" : "○"}{" "}
-									{currentTask()}
-								</text>
+									<For each={taskViewport().visibleTasks}>
+										{(task, index) => {
+											const active = () =>
+												taskViewport().start + index() ===
+												taskViewport().activeIndex;
+											return (
+												<box
+													height={1}
+													width="100%"
+													backgroundColor={
+														active() ? uiColors.bgSurface0 : uiColors.bgMantle
+													}
+												>
+													<text
+														fg={
+															task.done
+																? uiColors.success
+																: active()
+																	? uiColors.primary
+																	: uiColors.textPrimary
+														}
+														attributes={active() ? TextAttributes.BOLD : 0}
+													>
+														{task.done ? "✓" : "○"}{" "}
+														{taskViewport().start + index() + 1}. {task.text}
+													</text>
+												</box>
+											);
+										}}
+									</For>
+								</Show>
 							</Panel>
 							<box
 								style={{
