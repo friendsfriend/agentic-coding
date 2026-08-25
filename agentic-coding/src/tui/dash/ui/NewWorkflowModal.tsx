@@ -184,6 +184,9 @@ export function NewWorkflowModal(props: {
 	const submit = async () => {
 		setCreating(true);
 		try {
+			// Yield one macrotask so the progress modal paints before the
+			// completion callback can block the event loop.
+			await new Promise((resolve) => setTimeout(resolve, 0));
 			await props.onComplete(values());
 		} finally {
 			setCreating(false);
