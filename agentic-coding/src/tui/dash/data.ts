@@ -1330,7 +1330,9 @@ export function requiredUserActionFor(
 	}
 	if (phase === "developer-review" || phase === "core.developer-review")
 		return {
-			key: phase,
+			// Stable key independent of legacy vs engine (`core.*`) phase naming,
+			// so App.tsx's direct-open matching fires for both.
+			key: "developer-review",
 			title: "Action required · Developer review",
 			prompt: "Review changed files before workflow continues.",
 			// Trigger-only: the action opens the changed-files popup directly, so
