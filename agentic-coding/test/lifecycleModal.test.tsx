@@ -4,6 +4,7 @@ import {
 	beginShutdown,
 	beginStartup,
 	finishStartup,
+	resetLifecycle,
 	setStepActive,
 	setStepDone,
 } from "../src/tui/lifecycle";
@@ -54,6 +55,10 @@ test("lifecycle modal renders at the renderer root only while starting/stopping"
 	frame = t.captureCharFrame();
 	expect(frame).toContain("Stopping server");
 	expect(frame).toContain("Stopping telemetry receiver");
+
+	// bun runs all files in one process; leaving phase() === "stopping" here
+	// would make later files' Home swallow every key except 'q'.
+	resetLifecycle();
 
 	t.renderer.destroy();
 });
