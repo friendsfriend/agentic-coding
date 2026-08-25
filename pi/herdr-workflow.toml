@@ -142,8 +142,7 @@ test-verifier = "pi-gpt-5.6-luna"
 
 [agents.presets.cheap-luna.roles."fusion.plan"]
 planner-1 = "pi-gpt-5.6-luna"
-planner-2 = "pi-gpt-5.6-luna"
-planner-3 = "pi-gpt-5.6-luna"
+planner-2 = "pi-ox-alpha-free"
 
 [agents.presets.free-ox-alpha]
 default_profile = "pi-ox-alpha-free"
@@ -165,7 +164,7 @@ test-verifier = "pi-ox-alpha-free"
 
 [agents.presets.free-ox-alpha.roles."fusion.plan"]
 planner-1 = "pi-ox-alpha-free"
-planner-2 = "pi-ox-alpha-free"
+planner-2 = "pi-gpt-5.6-luna"
 
 [agents.presets.effective-sonnet]
 default_profile = "pi-sonnet-5"
@@ -187,8 +186,7 @@ test-verifier = "pi-sonnet-5"
 
 [agents.presets.effective-sonnet.roles."fusion.plan"]
 planner-1 = "pi-sonnet-5"
-planner-2 = "pi-sonnet-5"
-planner-3 = "pi-sonnet-5"
+planner-2 = "pi-gpt-5.6-luna"
 
 [agents.presets.opus-planner-sonnet-worker]
 default_profile = "pi-sonnet-5"
