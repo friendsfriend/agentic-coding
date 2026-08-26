@@ -280,6 +280,7 @@ export interface DashboardData {
 	}>;
 	updated: string;
 	health: { dirty: boolean; ahead: number; behind: number; branch: string };
+	gitStatus: WorktreeGitStatus;
 	age: string;
 	currentTask: string;
 	events: Array<{
@@ -1196,6 +1197,7 @@ export function loadDashboard(repo: string, change: string): DashboardData {
 		messages: costMessages(telemetry, row.role),
 	}));
 	const reviewHistory = verificationHistory(state);
+	const gitStatus = worktreeGitStatus(state.worktree);
 	return {
 		state,
 		request: state.task?.trim()
@@ -1224,21 +1226,16 @@ export function loadDashboard(repo: string, change: string): DashboardData {
 				};
 			}),
 		updated: new Date().toLocaleTimeString(),
-		health: (() => {
-			// Same inspection as the workspace overview so both panels cannot drift.
-			const gitStatus = worktreeGitStatus(state.worktree);
-			return {
-				dirty:
-					gitStatus.available &&
-					gitStatus.changedFiles +
-						gitStatus.addedFiles +
-						gitStatus.deletedFiles >
-						0,
-				ahead: gitStatus.ahead ?? 0,
-				behind: gitStatus.behind ?? 0,
-				branch: gitStatus.branch ?? "",
-			};
-		})(),
+		health: {
+			dirty:
+				gitStatus.available &&
+				gitStatus.changedFiles + gitStatus.addedFiles + gitStatus.deletedFiles >
+					0,
+			ahead: gitStatus.ahead ?? 0,
+			behind: gitStatus.behind ?? 0,
+			branch: gitStatus.branch ?? "",
+		},
+		gitStatus,
 		age: state.createdAt
 			? `${Math.max(0, Math.floor((Date.now() - Date.parse(state.createdAt)) / 3600000))}h`
 			: "unknown",
@@ -1466,6 +1463,16 @@ export function testDashboard(phase = "proposed"): DashboardData {
 			ahead: 0,
 			behind: 0,
 			branch: "feature/demo-optional-realisation-date",
+		},
+		gitStatus: {
+			available: true,
+			branch: "feature/demo-optional-realisation-date",
+			changedFiles: 0,
+			addedFiles: 0,
+			deletedFiles: 0,
+			ahead: 0,
+			behind: 0,
+			noUpstream: false,
 		},
 		age: "2h",
 		currentTask: applying

@@ -122,56 +122,48 @@ test("plan review exposes a bounded rejection action", async () => {
 	t.renderer.destroy();
 });
 
-test("git panel enter opens the changed-files modal and finish stays gated to the developer review phase", async () => {
+test("overview contains Git status and the panel focus cycle has no Git panel", async () => {
 	const t = await testRender(() => <TestDashboard />, {
 		width: 120,
 		height: 40,
 	});
 
-	await t.waitForFrame((frame) => frame.includes("Plan review"));
-
-	// Finish the plan review (no comments) so the demo advances to apply.
-	t.mockInput.pressKey("f");
-	await t.waitForFrame((frame) => !frame.includes("Changed Files (4 files)"));
-
-	// Tab to the git status panel (order [0, 6, 1, 2, 4] → index 4).
-	for (let i = 0; i < 4; i++) t.mockInput.pressTab();
-
-	// Enter on the git panel opens the developer review changed-files modal.
-	t.mockInput.pressEnter();
-	const gitFrame = await t.waitForFrame((frame) =>
-		frame.includes("Changed Files (1 files)"),
-	);
-	expect(gitFrame).toContain("src/example.ts");
-
-	// f outside the developer review phase is rejected with a visible warning
-	// and the popup stays open.
-	t.mockInput.pressKey("f");
-	const rejectedFrame = await t.waitForFrame((frame) =>
-		frame.includes("only be finished during the developer review phase"),
-	);
-	expect(rejectedFrame).toContain("Changed Files (1 files)");
-
+	await t.waitForFrame((value) => value.includes("Plan review"));
 	t.mockInput.pressEscape();
-	await t.waitForFrame((frame) => !frame.includes("Changed Files (1 files)"));
+	await t.waitForFrame((value) => !value.includes("Plan review"));
+	const frame = t.captureCharFrame();
+	expect(frame).toContain("GIT STATUS");
+	expect(frame).toContain("CHANGED");
+	expect(frame).toContain("NEW");
+	expect(frame).toContain("DELETED");
+	expect(frame).toContain("AHEAD");
+	expect(frame).toContain("BEHIND");
+	expect(frame).not.toContain("clean ·");
 
-	// Advance apply → verify → developer-review via the dashboard gate
-	// (one more Tab wraps from the git panel to the Change panel, whose
-	// Enter falls through to the phase gate).
-	t.mockInput.pressTab();
+	// Focus order is Change → OpenSpec → Agents → Current task → Change.
+	for (let i = 0; i < 4; i++) t.mockInput.pressTab();
 	t.mockInput.pressEnter();
-	await t.waitForFrame((frame) => frame.includes("verify"));
-	t.mockInput.pressEnter();
-
-	// Reaching the developer review phase auto-opens the changed-files popup.
-	const reviewFrame = await t.waitForFrame((frame) =>
-		frame.includes("Changed Files (1 files)"),
+	await t.waitForFrame((value) => value.includes("Plan review"));
+	expect(t.captureCharFrame()).not.toContain(
+		"Action required · Developer review",
 	);
-	expect(reviewFrame).toContain("Action required · Developer review");
+	t.renderer.destroy();
+});
 
-	// f inside the developer review phase finishes and closes the popup.
-	t.mockInput.pressKey("f");
-	await t.waitForFrame((frame) => !frame.includes("Changed Files (1 files)"));
+test("overview Git summary stays within the panel at a narrow width", async () => {
+	const t = await testRender(() => <TestDashboard />, {
+		width: 50,
+		height: 40,
+	});
+
+	await t.waitForFrame((value) => value.includes("Plan review"));
+	t.mockInput.pressEscape();
+	await t.waitForFrame((value) => !value.includes("Plan review"));
+	const frame = t.captureCharFrame();
+	const lines = frame.split("\n");
+	expect(lines.every((line) => line.length <= 50)).toBe(true);
+	expect(frame).toContain("CHANGED");
+	expect(frame).toContain("DELETED");
 	t.renderer.destroy();
 });
 
