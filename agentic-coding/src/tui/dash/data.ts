@@ -37,6 +37,7 @@ export interface WorkflowState {
 	repository: string;
 	worktree: string;
 	branch: string;
+	task?: string;
 	workspace: string;
 	verificationRound: number;
 	baseCommit?: string;
@@ -1182,7 +1183,9 @@ export function loadDashboard(repo: string, change: string): DashboardData {
 	const reviewHistory = verificationHistory(state);
 	return {
 		state,
-		request: summary(join(workflowRoot, "request.md")),
+		request: state.task?.trim()
+			? state.task
+			: summary(join(workflowRoot, "request.md")),
 		proposal: summary(join(changeRoot, "proposal.md")),
 		tasks: tasks(join(changeRoot, "tasks.md")),
 		review: reviewHistory.at(-1) ?? "Not run",
