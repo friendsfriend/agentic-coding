@@ -330,6 +330,10 @@ describe("plan-fusion workflow", () => {
 				rendered[0].indexOf("# Fusion planning"),
 			);
 			expect(rendered[0]).toContain("core.plan-draft@1");
+			expect(rendered[0]).toContain("focused, change-relevant checks");
+			expect(rendered[0]).toContain("complete repository test suite");
+			expect(rendered[0]).toContain("workflow-owned `test-verifier`");
+			expect(rendered[0]).toContain("Do not require the worker");
 		} finally {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
@@ -450,6 +454,10 @@ describe("plan-fusion workflow", () => {
 				).drafts)
 					expect(inputs).toContain(digest.digest);
 				expect(prompt).toContain("# Plan fusion");
+				expect(prompt).toContain("focused, change-relevant checks");
+				expect(prompt).toContain("complete repository test suite");
+				expect(prompt).toContain("workflow-owned `test-verifier`");
+				expect(prompt).toContain("Do not require the worker");
 			}
 		} finally {
 			fs.rmSync(tmp, { recursive: true, force: true });
@@ -724,7 +732,11 @@ describe("plan-fusion workflow", () => {
 			"agent-definitions",
 			"instructions",
 		);
-		for (const name of ["planning-fusion.md", "fusion-consolidation.md"]) {
+		for (const name of [
+			"planning.md",
+			"planning-fusion.md",
+			"fusion-consolidation.md",
+		]) {
 			const embedded = AGENT_DEFINITIONS[`instructions/${name}`];
 			expect(embedded).toBeTruthy();
 			expect(createHash("sha256").update(embedded).digest("hex")).toBe(

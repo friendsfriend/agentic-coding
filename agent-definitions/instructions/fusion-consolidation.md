@@ -29,4 +29,6 @@ openspec instructions <artifact-id> --change "$HERDR_CHANGE_ID" --json
 
 Use the returned `template` as the structure and follow `instruction` and `rules` (constraints for you — never copy them into the file). Read dependency artifacts from disk before writing the next one. Re-run `openspec status --change "$HERDR_CHANGE_ID" --json` until every required artifact exists.
 
+When reconciling implementation tasks or required validation, preserve focused, change-relevant checks that cover the changed behavior. Do not require the worker to run the complete repository test suite or add a complete-suite worker task. The workflow-owned `test-verifier` runs the complete configured repository test suite after implementation and selected verifier checks complete; do not prescribe a repository-wide test command in the consolidated plan.
+
 Finish with `openspec validate "$HERDR_CHANGE_ID" --strict`. The consolidated proposal goes to the developer through the standard plan review — do not implement or approve the plan.

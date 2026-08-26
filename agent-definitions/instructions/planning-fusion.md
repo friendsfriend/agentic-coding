@@ -11,4 +11,6 @@ Study the objective and read only the files the change touches plus their direct
 - `risks` — one `{ "detail": ... }` entry per risk: anything that could make this plan fail, break consumers, or regress behavior.
 - `questions` — one `{ "detail": ... }` entry per open question you could not resolve from the repository alone.
 
+When proposing implementation tasks or required validation, require focused, change-relevant checks that cover the changed behavior. Do not require the worker to run the complete repository test suite or add a complete-suite worker task. The workflow-owned `test-verifier` runs the complete configured repository test suite after implementation and selected verifier checks complete; do not prescribe a repository-wide test command in the plan draft.
+
 Be decisive: commit to one approach instead of listing alternatives. Free-form prose outside these sections will be rejected by the output schema. Output only the run-bound plan draft.
