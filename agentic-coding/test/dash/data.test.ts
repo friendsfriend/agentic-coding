@@ -136,6 +136,30 @@ test("workflow metadata task reaches dashboard state and request", () => {
 	});
 });
 
+test("loadDashboard projects the pinned runtime without fabricating a model", () => {
+	const repo = fixture();
+	writeState(repo);
+	const db = new Database(canonicalStorePath(repo));
+	db.query("UPDATE workflow_runs SET handle_json=? WHERE role=?").run(
+		JSON.stringify({ runtime: "pi", name: "worker", paneId: "worker-pane" }),
+		"worker",
+	);
+	db.close();
+
+	const agent = loadDashboard(repo, "review").agents.find(
+		(item) => item.role === "worker",
+	);
+	expect(agent).toMatchObject({ runtime: "pi" });
+	expect(agent?.model).toBeUndefined();
+});
+
+test("dashboard does not fabricate runtime for synthetic agents without runs", () => {
+	const agent = testDashboard("verify").agents.find(
+		(item) => item.role === "test-verifier",
+	);
+	expect(agent?.runtime).toBeUndefined();
+});
+
 test("loadDashboard falls back to the legacy request artifact", () => {
 	const repo = fixture();
 	const workflowRoot = writeState(repo, "legacy");

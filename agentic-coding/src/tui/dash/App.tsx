@@ -86,6 +86,21 @@ function formatTokens(count: number): string {
 	return String(count);
 }
 
+/** Compose the presentation-only runtime/model label used in agent rows. */
+export function agentRuntimeModelLine(
+	runtime: string | undefined,
+	model: string | undefined,
+): string | undefined {
+	const runtimeLabel = runtime
+		? runtime === "opencode-v2"
+			? "opencode2"
+			: runtime
+		: undefined;
+	return runtimeLabel && model
+		? `${runtimeLabel} · ${model}`
+		: runtimeLabel || model || undefined;
+}
+
 /** One compact, fixed-order metric line per agent: cost, tokens in→out, cache
  * hit rate (cache-read / total prompt input), duration, tokens/s. Undefined when
  * the role recorded no metrics so the panel can omit the line entirely instead
@@ -2413,6 +2428,11 @@ export function App(props: {
 												(item) => item.role === agent.role,
 											);
 										const metricsLine = () => agentMetricLine(agent.metrics);
+										const runtimeModelLine = () =>
+											agentRuntimeModelLine(
+												agent.runtime,
+												timeline()?.model ?? agent.model,
+											);
 										const findingSummaryRows = () =>
 											dimensions().width < 90 ? 3 : 1;
 										const highlight = () =>
@@ -2458,14 +2478,12 @@ export function App(props: {
 												<box width="100%" height={1} flexDirection="row">
 													<box flexGrow={1} minWidth={0} overflow="hidden">
 														<text fg={uiColors.textMuted}>
-															{timeline()
-																? (timeline()?.model ??
-																	agent.model ??
-																	"default")
-																: (agent.model ??
-																	(agent.role.endsWith("verifier")
+															{runtimeModelLine() ??
+																(timeline()
+																	? "default"
+																	: agent.role.endsWith("verifier")
 																		? "Awaiting verification run"
-																		: "Interactive workflow agent"))}
+																		: "Interactive workflow agent")}
 														</text>
 													</box>
 													<Show when={timeline()}>
