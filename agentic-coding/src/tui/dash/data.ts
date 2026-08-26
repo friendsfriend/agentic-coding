@@ -508,6 +508,7 @@ export interface AgentUsageMetrics {
 	inputTokens?: number;
 	outputTokens?: number;
 	cacheReadTokens?: number;
+	cacheWriteTokens?: number;
 	durationSeconds?: number;
 	tokensPerSecond?: number;
 }
@@ -517,6 +518,7 @@ interface MetricAccumulator extends AgentUsageMetrics {
 	firstAt?: number;
 	lastAt?: number;
 	hasUsage?: boolean;
+	cacheInputsComplete?: boolean;
 }
 
 /** Aggregate per-role agent metrics from a workflow's telemetry events:
@@ -539,11 +541,22 @@ export function agentMetrics(
 			row.lastAt = row.lastAt === undefined ? at : Math.max(row.lastAt, at);
 		}
 		if (!isUsageEvent(event)) continue;
+		const cacheInputsComplete = [
+			"inputTokens",
+			"cacheReadTokens",
+			"cacheWriteTokens",
+		].every((field) => {
+			const value = event[field];
+			return typeof value === "number" && Number.isFinite(value) && value >= 0;
+		});
+		row.cacheInputsComplete =
+			(row.cacheInputsComplete ?? true) && cacheInputsComplete;
 		for (const field of [
 			"cost",
 			"inputTokens",
 			"outputTokens",
 			"cacheReadTokens",
+			"cacheWriteTokens",
 		] as const) {
 			const value = event[field];
 			if (typeof value !== "number" || !Number.isFinite(value) || value < 0)
@@ -582,8 +595,11 @@ export function agentMetrics(
 			...(row.outputTokens !== undefined
 				? { outputTokens: row.outputTokens }
 				: {}),
-			...(row.cacheReadTokens !== undefined
+			...(row.cacheInputsComplete && row.cacheReadTokens !== undefined
 				? { cacheReadTokens: row.cacheReadTokens }
+				: {}),
+			...(row.cacheInputsComplete && row.cacheWriteTokens !== undefined
+				? { cacheWriteTokens: row.cacheWriteTokens }
 				: {}),
 			...(durationSeconds !== undefined ? { durationSeconds } : {}),
 			...(tokensPerSecond !== undefined ? { tokensPerSecond } : {}),
@@ -1278,6 +1294,7 @@ export function testDashboard(phase = "proposed"): DashboardData {
 			inputTokens: 2100,
 			outputTokens: 400,
 			cacheReadTokens: 1680,
+			cacheWriteTokens: 0,
 			cost: 0.08,
 			durationMs: 52000,
 		},
@@ -1290,6 +1307,7 @@ export function testDashboard(phase = "proposed"): DashboardData {
 			inputTokens: 5200,
 			outputTokens: 1400,
 			cacheReadTokens: 4200,
+			cacheWriteTokens: 100,
 			cost: 0.21,
 			durationMs: 61000,
 		},
@@ -1300,6 +1318,7 @@ export function testDashboard(phase = "proposed"): DashboardData {
 			inputTokens: 4800,
 			outputTokens: 1100,
 			cacheReadTokens: 3900,
+			cacheWriteTokens: 200,
 			cost: 0.21,
 			durationMs: 55000,
 		},
@@ -1315,6 +1334,7 @@ export function testDashboard(phase = "proposed"): DashboardData {
 			inputTokens: 3200,
 			outputTokens: 600,
 			cacheReadTokens: 2600,
+			cacheWriteTokens: 0,
 			cost: 0.05,
 			durationMs: 30000,
 		},
@@ -1342,6 +1362,7 @@ export function testDashboard(phase = "proposed"): DashboardData {
 			inputTokens: 4100,
 			outputTokens: 900,
 			cacheReadTokens: 12300,
+			cacheWriteTokens: 0,
 			cost: 0.07,
 			durationMs: 45000,
 		},
