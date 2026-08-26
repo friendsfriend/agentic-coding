@@ -124,6 +124,52 @@ export class TraceExporter implements Exporter {
 	}
 }
 
+function tomlKey(key: string): string {
+	return /^[A-Za-z0-9_-]+$/.test(key) ? key : JSON.stringify(key);
+}
+function tomlValue(value: unknown): string {
+	if (typeof value === "string") return JSON.stringify(value);
+	if (typeof value === "number" || typeof value === "boolean")
+		return String(value);
+	if (value instanceof Date) return value.toISOString();
+	if (Array.isArray(value)) {
+		if (value.every((item) => !item || typeof item !== "object"))
+			return `[${value.map(tomlValue).join(", ")}]`;
+		return JSON.stringify(value);
+	}
+	if (value && typeof value === "object")
+		return `{ ${Object.entries(value)
+			.map(([key, item]) => `${tomlKey(key)} = ${tomlValue(item)}`)
+			.join(", ")} }`;
+	throw new Error(`unsupported TOML value: ${String(value)}`);
+}
+function stringifyToml(document: Record<string, unknown>): string {
+	const lines: string[] = [];
+	const writeTable = (table: Record<string, unknown>, prefix: string) => {
+		for (const [key, value] of Object.entries(table)) {
+			if (!value || typeof value !== "object" || value instanceof Date)
+				lines.push(`${tomlKey(key)} = ${tomlValue(value)}`);
+			else if (
+				Array.isArray(value) &&
+				value.every((item) => item && typeof item === "object")
+			) {
+				for (const item of value) {
+					lines.push(`\n[[${prefix ? `${prefix}.` : ""}${tomlKey(key)}]]`);
+					writeTable(item as Record<string, unknown>, "");
+				}
+			} else if (Array.isArray(value)) {
+				lines.push(`${tomlKey(key)} = ${tomlValue(value)}`);
+			} else if (!Array.isArray(value)) {
+				const name = prefix ? `${prefix}.${tomlKey(key)}` : tomlKey(key);
+				lines.push(`\n[${name}]`);
+				writeTable(value as Record<string, unknown>, name);
+			}
+		}
+	};
+	writeTable(document, "");
+	return `${lines.join("\n").replace(/^\n/, "")}\n`;
+}
+
 function deepMerge<T extends object>(base: T, overlay: unknown): T {
 	const merged = structuredClone(base) as Record<string, unknown>;
 	if (!overlay || typeof overlay !== "object" || Array.isArray(overlay))
@@ -273,11 +319,16 @@ export function readToml(file: string): Record<string, unknown> {
 		: {};
 }
 /** Read-modify-write the config file backing the agents section. The whole
- * file is rewritten with Bun.TOML.stringify; hand comments in managed files
- * are not preserved (accepted trade-off, documented in the modal help). */
+ * file is rewritten with the local TOML serializer; hand comments in managed
+ * files are not preserved (accepted trade-off, documented in the modal help). */
 export function saveAgentsSection(
 	mutate: (agents: Record<string, unknown>) => void,
 ): void {
+	const conflicts = conflictingAgentsFiles();
+	if (conflicts.length)
+		throw new Error(
+			`[agents] is also defined in ${conflicts.join(", ")}; edit the layered sources separately`,
+		);
 	const file = agentsConfigPath();
 	const document = readToml(file);
 	if (
@@ -287,8 +338,22 @@ export function saveAgentsSection(
 	)
 		document.agents = {};
 	mutate(document.agents as Record<string, unknown>);
+	const contents = stringifyToml(document);
 	fs.mkdirSync(path.dirname(file), { recursive: true });
-	fs.writeFileSync(file, Bun.TOML.stringify(document) ?? "");
+	// Rename a temporary file so a failed serialization or write cannot leave a
+	// truncated config. Resolve symlinks before renaming so the dashboard keeps
+	// the link itself intact on Linux.
+	const target =
+		fs.existsSync(file) && fs.lstatSync(file).isSymbolicLink()
+			? fs.realpathSync(file)
+			: file;
+	const temporary = `${target}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+	try {
+		fs.writeFileSync(temporary, contents, { mode: 0o600 });
+		fs.renameSync(temporary, target);
+	} finally {
+		fs.rmSync(temporary, { force: true });
+	}
 }
 
 export interface Context {
