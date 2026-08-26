@@ -17,7 +17,7 @@ beforeEach(() => {
 	resetLifecycle();
 });
 
-function overview(gitStatus?: WorkflowOverview["gitStatus"]): WorkflowOverview {
+function overview(): WorkflowOverview {
 	return {
 		state: {
 			changeId: "demo-change",
@@ -35,7 +35,6 @@ function overview(gitStatus?: WorkflowOverview["gitStatus"]): WorkflowOverview {
 		},
 		workspaceOpen: true,
 		tasks: [1, 2],
-		gitStatus,
 		agents: [],
 	};
 }
@@ -64,133 +63,40 @@ function TestHome(props: { items: WorkflowOverview[] }) {
 	);
 }
 
-test("overview git status panel shows branch and labeled counts", async () => {
-	const t = await testRender(
-		() => (
-			<TestHome
-				items={[
-					overview({
-						available: true,
-						branch: "feature/demo",
-						changedFiles: 2,
-						addedFiles: 1,
-						deletedFiles: 1,
-						ahead: 3,
-						behind: 1,
-						noUpstream: false,
-					}),
-				]}
-			/>
-		),
-		{ width: 120, height: 40 },
-	);
+test("overview omits detail-dashboard Git status", async () => {
+	const t = await testRender(() => <TestHome items={[overview()]} />, {
+		width: 120,
+		height: 40,
+	});
 	await t.flush();
 	const frame = t.captureCharFrame();
-	expect(frame).toContain("Git status");
-	expect(frame).toContain("feature/demo");
-	expect(frame).toContain("changed 2");
-	expect(frame).toContain("added 1");
-	expect(frame).toContain("deleted 1");
-	expect(frame).toContain("ahead 3");
-	expect(frame).toContain("behind 1");
+	expect(frame).toContain("Workspaces");
+	expect(frame).not.toContain("Git status");
+	expect(frame).not.toContain("changed");
 	t.renderer.destroy();
 });
 
-test("overview git status panel covers no-selection, no-upstream, and unavailable states", async () => {
-	const empty = await testRender(() => <TestHome items={[]} />, {
+test("overview remains usable without a Git panel", async () => {
+	const t = await testRender(() => <TestHome items={[]} />, {
 		width: 120,
 		height: 40,
 	});
-	await empty.flush();
-	expect(empty.captureCharFrame()).toContain("No workspace selected");
-	empty.renderer.destroy();
-
-	const noUpstream = await testRender(
-		() => (
-			<TestHome
-				items={[
-					overview({
-						available: true,
-						branch: "feature/demo",
-						changedFiles: 0,
-						addedFiles: 0,
-						deletedFiles: 0,
-						ahead: undefined,
-						behind: undefined,
-						noUpstream: true,
-					}),
-				]}
-			/>
-		),
-		{ width: 120, height: 40 },
-	);
-	await noUpstream.flush();
-	const upstreamFrame = noUpstream.captureCharFrame();
-	expect(upstreamFrame).toContain("no upstream configured");
-	expect(upstreamFrame).not.toContain("ahead undefined");
-	noUpstream.renderer.destroy();
-
-	const unavailable = await testRender(
-		() => (
-			<TestHome
-				items={[
-					overview({
-						...emptyGitStatus(),
-						available: false,
-						diagnostic: "worktree not found",
-					}),
-				]}
-			/>
-		),
-		{ width: 120, height: 40 },
-	);
-	await unavailable.flush();
-	expect(unavailable.captureCharFrame()).toContain(
-		"Unavailable · worktree not found",
-	);
-	unavailable.renderer.destroy();
+	await t.flush();
+	const frame = t.captureCharFrame();
+	expect(frame).toContain("Workspaces");
+	expect(frame).toContain("No workflows found");
+	expect(frame).not.toContain("Git status");
+	t.renderer.destroy();
 });
 
-function emptyGitStatus() {
-	return {
-		branch: undefined,
-		changedFiles: 0,
-		addedFiles: 0,
-		deletedFiles: 0,
-		ahead: undefined,
-		behind: undefined,
-		noUpstream: true,
-	};
-}
-
-test("G opens changed files for the selected workspace and is ignored without one", async () => {
-	const withoutSelection = await testRender(() => <TestHome items={[]} />, {
+test("G does not open changed files from the workspace overview", async () => {
+	const t = await testRender(() => <TestHome items={[overview()]} />, {
 		width: 120,
 		height: 40,
 	});
-	await withoutSelection.flush();
-	withoutSelection.mockInput.pressKey("g", { shift: true });
-	await withoutSelection.flush();
-	expect(withoutSelection.captureCharFrame()).not.toContain("Changed files ·");
-	withoutSelection.renderer.destroy();
-
-	const t = await testRender(
-		() => (
-			<TestHome
-				items={[
-					overview({ ...emptyGitStatus(), available: true, branch: "demo" }),
-				]}
-			/>
-		),
-		{ width: 120, height: 40 },
-	);
 	await t.flush();
 	t.mockInput.pressKey("g", { shift: true });
-	await t.waitForFrame((frame) =>
-		frame.includes("Changed files · demo-change"),
-	);
-	// The fabricated repo has no workflow state, so load errors surface inside
-	// the modal while the overview stays intact behind it.
-	expect(t.captureCharFrame()).toContain("Search files");
+	await t.flush();
+	expect(t.captureCharFrame()).not.toContain("Changed files ·");
 	t.renderer.destroy();
 });

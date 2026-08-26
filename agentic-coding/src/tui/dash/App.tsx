@@ -93,16 +93,32 @@ export function agentMetricLine(
 	metrics: AgentUsageMetrics | undefined,
 ): string | undefined {
 	if (!metrics) return undefined;
-	const inputTokens = metrics.inputTokens ?? 0;
+	const inputTokens = metrics.inputTokens;
+	const cacheReadTokens = metrics.cacheReadTokens;
+	const totalInputTokens =
+		inputTokens !== undefined && cacheReadTokens !== undefined
+			? inputTokens + cacheReadTokens
+			: undefined;
+	const cacheRate =
+		totalInputTokens !== undefined &&
+		Number.isFinite(totalInputTokens) &&
+		totalInputTokens > 0 &&
+		inputTokens !== undefined &&
+		cacheReadTokens !== undefined
+			? (cacheReadTokens / totalInputTokens) * 100
+			: undefined;
 	const parts = [
 		...(metrics.cost !== undefined ? [`$${metrics.cost.toFixed(2)}`] : []),
 		...(metrics.inputTokens !== undefined || metrics.outputTokens !== undefined
 			? [
-					`tok ${formatTokens(inputTokens)}→${formatTokens(metrics.outputTokens ?? 0)}`,
+					`tok ${formatTokens(inputTokens ?? 0)}→${formatTokens(metrics.outputTokens ?? 0)}`,
 				]
 			: []),
-		...(metrics.cacheReadTokens !== undefined && inputTokens > 0
-			? [`${Math.round((metrics.cacheReadTokens / inputTokens) * 100)}% cached`]
+		...(cacheRate !== undefined &&
+		Number.isFinite(cacheRate) &&
+		cacheRate >= 0 &&
+		cacheRate <= 100
+			? [`${Math.round(cacheRate)}% cached`]
 			: []),
 		...(metrics.durationSeconds !== undefined
 			? [formatDuration(metrics.durationSeconds)]
@@ -2346,9 +2362,6 @@ export function App(props: {
 																	{entry().status}
 																	{duration !== undefined
 																		? ` · ${formatDuration(duration)}`
-																		: ""}
-																	{agent.cost
-																		? ` · $${agent.cost.toFixed(2)}`
 																		: ""}
 																	{entry().fallback ? " · fallback" : ""}
 																</text>

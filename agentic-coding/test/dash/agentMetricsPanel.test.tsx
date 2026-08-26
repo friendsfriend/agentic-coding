@@ -33,8 +33,10 @@ test("agents panel renders compact bounded metric lines per agent", async () => 
 	// Full metric line for a populated agent (cost · tokens in→out · cache hit
 	// rate · duration · tok/s), derived from runtime.usage demo telemetry.
 	expect(frame).toContain(
-		"$0.07 · tok 4.1k→900 · 80% cached · 1m 7s · 20 tok/s",
+		"$0.07 · tok 4.1k→900 · 75% cached · 1m 7s · 20 tok/s",
 	);
+	expect(frame.split("$0.07").length - 1).toBe(1);
+	expect(frame).not.toContain("PASS · 1m 7s · $0.07");
 	// Bounded rendering: an over-long line is truncated inside the panel
 	// instead of overflowing into adjacent panels.
 	expect(frame).toContain("7.7 tok");
