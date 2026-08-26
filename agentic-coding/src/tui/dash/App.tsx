@@ -86,27 +86,39 @@ function formatTokens(count: number): string {
 }
 
 /** One compact, fixed-order metric line per agent: cost, tokens in→out, cache
- * hit rate (cache-read / total input), duration, tokens/s. Undefined when the
- * role recorded no metrics so the panel can omit the line entirely instead of
- * showing zero placeholders that could be mistaken for measured values. */
+ * hit rate (cache-read / total prompt input), duration, tokens/s. Undefined when
+ * the role recorded no metrics so the panel can omit the line entirely instead
+ * of showing zero placeholders that could be mistaken for measured values. */
 export function agentMetricLine(
 	metrics: AgentUsageMetrics | undefined,
 ): string | undefined {
 	if (!metrics) return undefined;
 	const inputTokens = metrics.inputTokens;
 	const cacheReadTokens = metrics.cacheReadTokens;
-	const totalInputTokens =
-		inputTokens !== undefined && cacheReadTokens !== undefined
-			? inputTokens + cacheReadTokens
-			: undefined;
-	const cacheRate =
-		totalInputTokens !== undefined &&
-		Number.isFinite(totalInputTokens) &&
-		totalInputTokens > 0 &&
+	const cacheWriteTokens = metrics.cacheWriteTokens;
+	let cacheRate: number | undefined;
+	if (
 		inputTokens !== undefined &&
-		cacheReadTokens !== undefined
-			? (cacheReadTokens / totalInputTokens) * 100
-			: undefined;
+		cacheReadTokens !== undefined &&
+		cacheWriteTokens !== undefined &&
+		Number.isFinite(inputTokens) &&
+		Number.isFinite(cacheReadTokens) &&
+		Number.isFinite(cacheWriteTokens) &&
+		inputTokens >= 0 &&
+		cacheReadTokens >= 0 &&
+		cacheWriteTokens >= 0
+	) {
+		const totalPromptTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
+		if (Number.isFinite(totalPromptTokens) && totalPromptTokens > 0) {
+			const calculatedRate = (cacheReadTokens / totalPromptTokens) * 100;
+			if (
+				Number.isFinite(calculatedRate) &&
+				calculatedRate >= 0 &&
+				calculatedRate <= 100
+			)
+				cacheRate = Math.min(100, Math.max(0, calculatedRate));
+		}
+	}
 	const parts = [
 		...(metrics.cost !== undefined ? [`$${metrics.cost.toFixed(2)}`] : []),
 		...(metrics.inputTokens !== undefined || metrics.outputTokens !== undefined
@@ -114,11 +126,10 @@ export function agentMetricLine(
 					`tok ${formatTokens(inputTokens ?? 0)}→${formatTokens(metrics.outputTokens ?? 0)}`,
 				]
 			: []),
-		...(cacheRate !== undefined &&
-		Number.isFinite(cacheRate) &&
-		cacheRate >= 0 &&
-		cacheRate <= 100
-			? [`${Math.round(cacheRate)}% cached`]
+		...(cacheRate !== undefined
+			? [
+					`${(cacheRate === 100 ? cacheRate : Math.floor(cacheRate * 10) / 10).toFixed(1)}%`,
+				]
 			: []),
 		...(metrics.durationSeconds !== undefined
 			? [formatDuration(metrics.durationSeconds)]

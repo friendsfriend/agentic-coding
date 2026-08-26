@@ -58,7 +58,7 @@ export default function bridge(pi: ExtensionAPI) {
       inputTokens: usage.input,
       outputTokens: usage.output,
       ...(typeof usage.cacheRead === 'number' ? { cacheReadTokens: usage.cacheRead } : {}),
-      ...(typeof usage.cacheWrite === 'number' && usage.cacheWrite > 0 ? { cacheWriteTokens: usage.cacheWrite } : {}),
+      ...(typeof usage.cacheWrite === 'number' ? { cacheWriteTokens: usage.cacheWrite } : {}),
       cost: usage.cost?.total,
       ...(durationMs !== undefined && durationMs > 0 ? {
         durationMs,

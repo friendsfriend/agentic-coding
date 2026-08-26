@@ -111,8 +111,9 @@ test("pi telemetry bridge emits usage envelope with cache, duration, tok/s", asy
 		expect(envelope.inputTokens).toBe(1200);
 		expect(envelope.outputTokens).toBe(300);
 		expect(envelope.cacheReadTokens).toBe(900);
-		// cacheWrite is 0 → treated as not provided and omitted.
-		expect(envelope.cacheWriteTokens).toBeUndefined();
+		// An explicitly reported zero cache write must remain distinguishable from
+		// unavailable cache-write telemetry.
+		expect(envelope.cacheWriteTokens).toBe(0);
 		expect(envelope.cost).toBe(0.012);
 		expect(Number(envelope.durationMs)).toBeGreaterThan(0);
 		expect(envelope.tokensPerSecond).toBeGreaterThan(0);

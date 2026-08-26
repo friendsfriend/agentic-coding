@@ -628,6 +628,7 @@ test("agentMetrics sums usage events per role and prefers generation time for to
 			inputTokens: 1000,
 			outputTokens: 200,
 			cacheReadTokens: 800,
+			cacheWriteTokens: 100,
 			cost: 0.1,
 			durationMs: 40000,
 		},
@@ -638,6 +639,7 @@ test("agentMetrics sums usage events per role and prefers generation time for to
 			inputTokens: 500,
 			outputTokens: 100,
 			cacheReadTokens: 400,
+			cacheWriteTokens: 50,
 			cost: 0.05,
 			durationMs: 10000,
 		},
@@ -647,23 +649,27 @@ test("agentMetrics sums usage events per role and prefers generation time for to
 	expect(worker?.inputTokens).toBe(1500);
 	expect(worker?.outputTokens).toBe(300);
 	expect(worker?.cacheReadTokens).toBe(1200);
+	expect(worker?.cacheWriteTokens).toBe(150);
 	expect(
 		(worker?.cacheReadTokens ?? 0) /
-			((worker?.inputTokens ?? 0) + (worker?.cacheReadTokens ?? 0)),
-	).toBeCloseTo(0.4444, 4);
+			((worker?.inputTokens ?? 0) +
+				(worker?.cacheReadTokens ?? 0) +
+				(worker?.cacheWriteTokens ?? 0)),
+	).toBeCloseTo(0.421, 3);
 	// Wall-clock span from first to last role event.
 	expect(worker?.durationSeconds).toBe(180);
 	// Summed generation time (50s), not wall-clock (180s).
 	expect(worker?.tokensPerSecond).toBe(6);
 });
 
-test("agentMetricLine uses total input when cached reads exceed uncached input", () => {
+test("agentMetrics retains complete cache inputs when cached reads exceed uncached input", () => {
 	const metrics = agentMetrics([
 		{
 			event: "runtime.usage",
 			role: "worker",
 			inputTokens: 1000,
 			cacheReadTokens: 3000,
+			cacheWriteTokens: 0,
 		},
 	]);
 
@@ -671,8 +677,41 @@ test("agentMetricLine uses total input when cached reads exceed uncached input",
 	expect(worker?.cacheReadTokens).toBe(3000);
 	expect(
 		(worker?.cacheReadTokens ?? 0) /
-			((worker?.inputTokens ?? 0) + (worker?.cacheReadTokens ?? 0)),
+			((worker?.inputTokens ?? 0) +
+				(worker?.cacheReadTokens ?? 0) +
+				(worker?.cacheWriteTokens ?? 0)),
 	).toBe(0.75);
+});
+
+test("agentMetrics omits cache metrics when any usage event is incomplete", () => {
+	const metrics = agentMetrics([
+		{
+			event: "runtime.usage",
+			role: "worker",
+			inputTokens: 100,
+			cacheReadTokens: 900,
+			cacheWriteTokens: 0,
+		},
+		{
+			event: "runtime.usage",
+			role: "worker",
+			inputTokens: 200,
+			cacheReadTokens: 1800,
+		},
+		{
+			event: "runtime.usage",
+			role: "invalid",
+			inputTokens: 100,
+			cacheReadTokens: 900,
+			cacheWriteTokens: -1,
+		},
+	]);
+
+	expect(metrics.get("worker")).toMatchObject({ inputTokens: 300 });
+	expect(metrics.get("worker")?.cacheReadTokens).toBeUndefined();
+	expect(metrics.get("worker")?.cacheWriteTokens).toBeUndefined();
+	expect(metrics.get("invalid")?.cacheReadTokens).toBeUndefined();
+	expect(metrics.get("invalid")?.cacheWriteTokens).toBeUndefined();
 });
 
 test("agentMetrics omits invalid cache inputs instead of poisoning aggregates", () => {
@@ -700,6 +739,7 @@ test("agentMetrics omits invalid cache inputs instead of poisoning aggregates", 
 			role: "zero",
 			inputTokens: 0,
 			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
 		},
 		{
 			event: "runtime.usage",
@@ -711,6 +751,21 @@ test("agentMetrics omits invalid cache inputs instead of poisoning aggregates", 
 			role: "non-finite-cache",
 			inputTokens: 100,
 			cacheReadTokens: Number.NaN,
+			cacheWriteTokens: 0,
+		},
+		{
+			event: "runtime.usage",
+			role: "negative-write",
+			inputTokens: 100,
+			cacheReadTokens: 10,
+			cacheWriteTokens: -1,
+		},
+		{
+			event: "runtime.usage",
+			role: "non-finite-write",
+			inputTokens: 100,
+			cacheReadTokens: 10,
+			cacheWriteTokens: Number.POSITIVE_INFINITY,
 		},
 	]);
 
@@ -719,9 +774,12 @@ test("agentMetrics omits invalid cache inputs instead of poisoning aggregates", 
 	expect(metrics.get("non-finite")?.inputTokens).toBeUndefined();
 	expect(metrics.get("missing-input")?.inputTokens).toBeUndefined();
 	expect(metrics.get("non-finite-cache")?.cacheReadTokens).toBeUndefined();
+	expect(metrics.get("negative-write")?.cacheWriteTokens).toBeUndefined();
+	expect(metrics.get("non-finite-write")?.cacheWriteTokens).toBeUndefined();
 	expect(metrics.get("zero")).toMatchObject({
 		inputTokens: 0,
 		cacheReadTokens: 0,
+		cacheWriteTokens: 0,
 	});
 });
 
@@ -768,6 +826,7 @@ test("demo dashboard renders every metric field with runtime.usage fixtures", ()
 		expect(metrics?.inputTokens).toBeGreaterThan(0);
 		expect(metrics?.outputTokens).toBeGreaterThan(0);
 		expect(metrics?.cacheReadTokens).toBeGreaterThan(0);
+		expect(metrics?.cacheWriteTokens).toBeGreaterThanOrEqual(0);
 		expect(metrics?.durationSeconds).toBeGreaterThan(0);
 		expect(metrics?.tokensPerSecond).toBeGreaterThan(0);
 	}
