@@ -133,11 +133,10 @@ test("overview contains Git status and the panel focus cycle has no Git panel", 
 	await t.waitForFrame((value) => !value.includes("Plan review"));
 	const frame = t.captureCharFrame();
 	expect(frame).toContain("GIT STATUS");
-	expect(frame).toContain("CHANGED");
-	expect(frame).toContain("NEW");
-	expect(frame).toContain("DELETED");
-	expect(frame).toContain("AHEAD");
-	expect(frame).toContain("BEHIND");
+	expect(frame).toContain("+0*0-0");
+	expect(frame).toContain("↑0");
+	expect(frame).toContain("↓0");
+	expect(frame).toContain("feature/demo-optional-realisation-date");
 	expect(frame).not.toContain("clean ·");
 
 	// Focus order is Change → OpenSpec → Agents → Current task → Change.
@@ -162,8 +161,8 @@ test("overview Git summary stays within the panel at a narrow width", async () =
 	const frame = t.captureCharFrame();
 	const lines = frame.split("\n");
 	expect(lines.every((line) => line.length <= 50)).toBe(true);
-	expect(frame).toContain("CHANGED");
-	expect(frame).toContain("DELETED");
+	expect(frame).toContain("+0*0-0");
+	expect(frame).toContain("↑0");
 	t.renderer.destroy();
 });
 

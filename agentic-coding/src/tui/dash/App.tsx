@@ -2228,59 +2228,61 @@ export function App(props: {
 										>
 											<Show when={data().gitStatus.branch}>
 												<box flexDirection="row" overflow="hidden">
-													<box width={9}>
-														<text fg={uiColors.textMuted}>BRANCH</text>
-													</box>
-													<text fg={uiColors.textSecondary}>
+													<text
+														fg={uiColors.success}
+														flexShrink={0}
+														wrapMode="none"
+													>
+														+{data().gitStatus.addedFiles}
+													</text>
+													<text
+														fg={uiColors.warning}
+														flexShrink={0}
+														wrapMode="none"
+													>
+														*{data().gitStatus.changedFiles}
+													</text>
+													<text
+														fg={uiColors.error}
+														flexShrink={0}
+														wrapMode="none"
+													>
+														-{data().gitStatus.deletedFiles}{" "}
+													</text>
+													<Show
+														when={!data().gitStatus.noUpstream}
+														fallback={
+															<text
+																fg={uiColors.textMuted}
+																flexShrink={0}
+																wrapMode="none"
+															>
+																no upstream
+															</text>
+														}
+													>
+														<text
+															fg={uiColors.success}
+															flexShrink={0}
+															wrapMode="none"
+														>
+															↑{data().gitStatus.ahead}{" "}
+														</text>
+														<text
+															fg={uiColors.success}
+															flexShrink={0}
+															wrapMode="none"
+														>
+															↓{data().gitStatus.behind}
+														</text>
+													</Show>
+													<text
+														fg={uiColors.textSecondary}
+														flexShrink={0}
+														wrapMode="none"
+													>
+														{" "}
 														{data().gitStatus.branch}
-													</text>
-												</box>
-											</Show>
-											{[
-												["CHANGED", data().gitStatus.changedFiles],
-												["NEW", data().gitStatus.addedFiles],
-												["DELETED", data().gitStatus.deletedFiles],
-											].map(([label, value]) => (
-												<box flexDirection="row">
-													<box width={9}>
-														<text fg={uiColors.textMuted}>{label}</text>
-													</box>
-													<text fg={uiColors.textSecondary}>{value}</text>
-												</box>
-											))}
-											<Show
-												when={!data().gitStatus.noUpstream}
-												fallback={
-													<>
-														<box flexDirection="row">
-															<box width={9}>
-																<text fg={uiColors.textMuted}>AHEAD</text>
-															</box>
-															<text fg={uiColors.textMuted}>no upstream</text>
-														</box>
-														<box flexDirection="row">
-															<box width={9}>
-																<text fg={uiColors.textMuted}>BEHIND</text>
-															</box>
-															<text fg={uiColors.textMuted}>no upstream</text>
-														</box>
-													</>
-												}
-											>
-												<box flexDirection="row">
-													<box width={9}>
-														<text fg={uiColors.textMuted}>AHEAD</text>
-													</box>
-													<text fg={uiColors.textSecondary}>
-														{data().gitStatus.ahead}
-													</text>
-												</box>
-												<box flexDirection="row">
-													<box width={9}>
-														<text fg={uiColors.textMuted}>BEHIND</text>
-													</box>
-													<text fg={uiColors.textSecondary}>
-														{data().gitStatus.behind}
 													</text>
 												</box>
 											</Show>
