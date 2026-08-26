@@ -28,6 +28,10 @@ Understand the task's domain surface: read only the files the change touches and
 
 Finish with `openspec validate "$HERDR_CHANGE_ID" --strict`. Output artifact must identify validated files and evidence. Do not implement or approve plan.
 
+## Validation ownership
+
+When defining implementation tasks or required validation, require focused, change-relevant checks that cover the changed behavior. Do not require the worker to run the complete repository test suite or add a complete-suite worker task. The workflow-owned `test-verifier` runs the complete configured repository test suite after implementation and selected verifier checks complete; do not prescribe a repository-wide test command in planning artifacts.
+
 ## Revising after plan review
 
 When the plan gate returns the workflow to planning (a plan review requested changes), the run context carries the review comments. Read them with `agentic-coding workflow status --json`: the current `step.context.comments` array lists each comment with `comment` (body), `file`, and optional `line`/`startLine`/`endLine` pointing at the reviewed artifact.

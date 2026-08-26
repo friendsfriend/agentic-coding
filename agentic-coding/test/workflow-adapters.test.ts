@@ -65,7 +65,10 @@ const baseProfile = (runtime: ResolvedProfile["runtime"]): ResolvedProfile => ({
 	capabilities: ["prompt", "run-environment", "observe", "read-only"],
 	digest: runtime,
 });
-function assignment(stepId = "core.verification"): Assignment {
+function assignment(
+	stepId = "core.verification",
+	overrides: Partial<Assignment> = {},
+): Assignment {
 	return {
 		protocolVersion: 1,
 		workflowId: "workflow",
@@ -101,6 +104,7 @@ function assignment(stepId = "core.verification"): Assignment {
 			HERDR_TELEMETRY_PATH: "/tmp/telemetry.jsonl",
 			TRACEPARENT: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
 		},
+		...overrides,
 	};
 }
 
@@ -164,6 +168,17 @@ describe("profiles, assignments, and adapters", () => {
 		expect(() =>
 			renderAssignment({ ...step, instructionDigests: ["bad"] }, assignment()),
 		).toThrow(/pin mismatch/);
+	});
+	test("planning assignments preserve test-verifier ownership", () => {
+		const step = registerBuiltins().step("core.plan");
+		const prompt = renderAssignment(
+			step,
+			assignment("core.plan", { role: "planner" }),
+		).prompt;
+		expect(prompt).toContain("focused, change-relevant checks");
+		expect(prompt).toContain("complete repository test suite");
+		expect(prompt).toContain("workflow-owned `test-verifier`");
+		expect(prompt).toContain("Do not require the worker");
 	});
 	test("all adapters use managed start/get/prompt and retry unavailable shell once", async () => {
 		for (const [Adapter, runtime] of [

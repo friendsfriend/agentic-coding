@@ -5,106 +5,6 @@
 [agents.presets.use-default-model]
 runtime = "pi"
 
-[agents.presets.openai-luna]
-default_profile = "pi-openai-luna"
-
-[agents.presets.openai-luna.steps]
-"core.plan" = "pi-openai-luna"
-"core.implementation" = "pi-openai-luna"
-"core.triage" = "pi-openai-luna"
-"core.archive" = "pi-openai-luna"
-"fusion.consolidate" = "pi-openai-luna"
-
-[agents.presets.openai-luna.roles]
-
-[agents.presets.openai-luna.roles."core.verification"]
-quality-verifier = "pi-openai-luna"
-security-verifier = "pi-openai-luna"
-performance-verifier = "pi-openai-luna"
-openspec-verifier = "pi-openai-luna"
-usability-verifier = "pi-openai-luna"
-test-verifier = "pi-openai-luna"
-
-[agents.presets.openai-luna.roles."fusion.plan"]
-planner-1 = "pi-openai-luna"
-planner-2 = "pi-opencode-deepseek-flash-free"
-planner-3 = "pi-opencode-hy3-free"
-
-[agents.presets.openai-terra-plan-luna-work]
-default_profile = "pi-openai-luna"
-
-[agents.presets.openai-terra-plan-luna-work.steps]
-"core.plan" = "pi-openai-terra"
-"core.implementation" = "pi-openai-luna"
-"core.triage" = "pi-openai-luna"
-"core.archive" = "pi-openai-luna"
-"fusion.consolidate" = "pi-openai-terra"
-
-[agents.presets.openai-terra-plan-luna-work.roles]
-
-[agents.presets.openai-terra-plan-luna-work.roles."core.verification"]
-quality-verifier = "pi-openai-luna"
-security-verifier = "pi-openai-luna"
-performance-verifier = "pi-openai-luna"
-openspec-verifier = "pi-openai-luna"
-usability-verifier = "pi-openai-luna"
-test-verifier = "pi-openai-luna"
-
-[agents.presets.openai-terra-plan-luna-work.roles."fusion.plan"]
-planner-1 = "pi-openai-terra"
-planner-2 = "pi-openai-luna"
-planner-3 = "pi-opencode-deepseek-flash-free"
-
-[agents.presets.openai-sol-plan-luna-worker]
-default_profile = "pi-openai-luna"
-
-[agents.presets.openai-sol-plan-luna-worker.steps]
-"core.plan" = "pi-openai-sol"
-"core.implementation" = "pi-openai-luna"
-"core.triage" = "pi-openai-luna"
-"core.archive" = "pi-openai-luna"
-"fusion.consolidate" = "pi-openai-sol"
-
-[agents.presets.openai-sol-plan-luna-worker.roles]
-
-[agents.presets.openai-sol-plan-luna-worker.roles."core.verification"]
-quality-verifier = "pi-openai-luna"
-security-verifier = "pi-openai-luna"
-performance-verifier = "pi-openai-luna"
-openspec-verifier = "pi-openai-luna"
-usability-verifier = "pi-openai-luna"
-test-verifier = "pi-openai-luna"
-
-[agents.presets.openai-sol-plan-luna-worker.roles."fusion.plan"]
-planner-1 = "pi-openai-sol"
-planner-2 = "pi-openai-terra"
-planner-3 = "pi-openai-luna"
-
-[agents.presets.openai-sol-plan-terra-work]
-default_profile = "pi-openai-luna"
-
-[agents.presets.openai-sol-plan-terra-work.steps]
-"core.plan" = "pi-openai-sol"
-"core.implementation" = "pi-openai-terra"
-"core.triage" = "pi-openai-luna"
-"core.archive" = "pi-openai-luna"
-"fusion.consolidate" = "pi-openai-sol"
-
-[agents.presets.openai-sol-plan-terra-work.roles]
-
-[agents.presets.openai-sol-plan-terra-work.roles."core.verification"]
-quality-verifier = "pi-openai-luna"
-security-verifier = "pi-openai-luna"
-performance-verifier = "pi-openai-luna"
-openspec-verifier = "pi-openai-luna"
-usability-verifier = "pi-openai-luna"
-test-verifier = "pi-openai-luna"
-
-[agents.presets.openai-sol-plan-terra-work.roles."fusion.plan"]
-planner-1 = "pi-openai-sol"
-planner-2 = "pi-openai-terra"
-planner-3 = "pi-openai-luna"
-
 [agents.presets.deepseek-go]
 default_profile = "pi-opencode-go-deepseek-flash"
 
@@ -250,21 +150,6 @@ planner-1 = "pi-opencode-hy3-free"
 planner-2 = "pi-opencode-deepseek-flash-free"
 
 [agents.profiles]
-
-[agents.profiles.pi-openai-luna]
-runtime = "pi"
-model = "openai-codex/gpt-5.6-luna"
-thinking = "high"
-
-[agents.profiles.pi-openai-terra]
-runtime = "pi"
-model = "openai-codex/gpt-5.6-terra"
-thinking = "high"
-
-[agents.profiles.pi-openai-sol]
-runtime = "pi"
-model = "openai-codex/gpt-5.6-sol"
-thinking = "high"
 
 [agents.profiles.pi-opencode-go-deepseek-flash]
 runtime = "pi"

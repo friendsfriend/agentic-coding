@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change check-workflow-bugs-frontier-model. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Role lifecycle uses Herdr agent commands
 The workflow SHALL launch each managed run through configured agent adapter using Herdr agent lifecycle, never raw terminal startup or key injection.
 
@@ -52,7 +54,7 @@ The workflow SHALL group triage and all verifier roles in one tab while retainin
 - **AND** SHALL reject any recorded group tab also owned by dashboard, git, worker, planner, recovery, or archive
 
 ### Requirement: Every role has a role-specific prompt
-The workflow SHALL render each run message from one common protocol Markdown, registered step instruction assets, and validated dynamic assignment rather than runtime-specific skill documents.
+The workflow SHALL render each run message from one common protocol Markdown, registered step instruction assets, and validated dynamic assignment rather than runtime-specific skill documents. Planning-role instructions SHALL distinguish focused, change-relevant validation that belongs in implementation tasks from the complete repository test suite owned by the automatically launched test-verifier.
 
 #### Scenario: Role focus is explicit
 - **WHEN** engine renders assignment
@@ -70,3 +72,13 @@ The workflow SHALL render each run message from one common protocol Markdown, re
 - **WHEN** assignment interaction mode is silent
 - **THEN** prompt SHALL require artifact-based handoff without chat summary
 
+#### Scenario: Planner assigns focused validation only
+- **WHEN** a planning role defines implementation tasks or required validation for an OpenSpec change
+- **THEN** its instructions SHALL require focused checks that cover the changed behavior
+- **AND** its instructions SHALL prohibit requiring the worker to run the complete repository test suite
+- **AND** its instructions SHALL identify the complete suite as owned by the workflow test-verifier after implementation and selected verification runs complete
+
+#### Scenario: Fusion planning preserves test ownership
+- **WHEN** a fusion planner or consolidation role proposes or reconciles implementation validation for an OpenSpec change
+- **THEN** the resulting plan SHALL preserve focused worker checks for changed behavior
+- **AND** it SHALL not add a complete-suite worker task that duplicates the workflow test-verifier run
