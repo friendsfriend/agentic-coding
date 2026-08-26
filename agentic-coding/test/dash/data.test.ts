@@ -125,7 +125,15 @@ test("workflow metadata task reaches dashboard state and request", () => {
 
 	expect(workflowView.task).toBe("test");
 	expect(viewToDashboardState(workflowView)).toMatchObject({ task: "test" });
-	expect(loadDashboard(repo, "review").request).toBe("test");
+	const dashboard = loadDashboard(repo, "review");
+	expect(dashboard.request).toBe("test");
+	expect(dashboard.gitStatus).toMatchObject({
+		available: true,
+		changedFiles: 0,
+		addedFiles: 0,
+		deletedFiles: 0,
+		noUpstream: true,
+	});
 });
 
 test("loadDashboard falls back to the legacy request artifact", () => {
@@ -305,6 +313,21 @@ test("worktreeGitStatus computes ahead/behind against the configured upstream", 
 	status = worktreeGitStatus(repo);
 	expect(status.ahead).toBe(1);
 	expect(status.behind).toBe(1);
+});
+
+test("loadDashboard exposes the complete Git status snapshot", () => {
+	const repo = fixture();
+	writeState(repo);
+	writeFileSync(join(repo, "tracked.ts"), "const value = 2;\n");
+	writeFileSync(join(repo, "new.ts"), "export const added = true;\n");
+
+	expect(loadDashboard(repo, "review").gitStatus).toMatchObject({
+		available: true,
+		changedFiles: 1,
+		addedFiles: 1,
+		deletedFiles: 0,
+		noUpstream: true,
+	});
 });
 
 test("worktreeGitStatus reports bounded diagnostics for unavailable worktrees", () => {

@@ -1262,7 +1262,7 @@ export function App(props: {
 			name === "tab"
 		) {
 			setActivePanel((panel) => {
-				const order = [0, 6, 1, 2, 4];
+				const order = [0, 6, 1, 2];
 				const index = order.indexOf(panel);
 				return (
 					order[
@@ -1316,12 +1316,6 @@ export function App(props: {
 					setVerdictOffset(0);
 					props.keymap.setData("modal.active", "verdict");
 				}
-				return;
-			}
-			if (activePanel() === 4) {
-				// Enter on the git panel opens the changed-files modal used by the
-				// developer review instead of launching lazygit.
-				openDeveloperReview();
 				return;
 			}
 			if (activePanel() === 2) {
@@ -2221,6 +2215,76 @@ export function App(props: {
 												}
 											/>
 										</box>
+										<text fg={uiColors.textMuted}>GIT STATUS</text>
+										<Show
+											when={data().gitStatus.available}
+											fallback={
+												<text fg={uiColors.warning}>
+													UNAVAILABLE ·{" "}
+													{data().gitStatus.diagnostic ??
+														"git status unavailable"}
+												</text>
+											}
+										>
+											<Show when={data().gitStatus.branch}>
+												<box flexDirection="row" overflow="hidden">
+													<box width={9}>
+														<text fg={uiColors.textMuted}>BRANCH</text>
+													</box>
+													<text fg={uiColors.textSecondary}>
+														{data().gitStatus.branch}
+													</text>
+												</box>
+											</Show>
+											{[
+												["CHANGED", data().gitStatus.changedFiles],
+												["NEW", data().gitStatus.addedFiles],
+												["DELETED", data().gitStatus.deletedFiles],
+											].map(([label, value]) => (
+												<box flexDirection="row">
+													<box width={9}>
+														<text fg={uiColors.textMuted}>{label}</text>
+													</box>
+													<text fg={uiColors.textSecondary}>{value}</text>
+												</box>
+											))}
+											<Show
+												when={!data().gitStatus.noUpstream}
+												fallback={
+													<>
+														<box flexDirection="row">
+															<box width={9}>
+																<text fg={uiColors.textMuted}>AHEAD</text>
+															</box>
+															<text fg={uiColors.textMuted}>no upstream</text>
+														</box>
+														<box flexDirection="row">
+															<box width={9}>
+																<text fg={uiColors.textMuted}>BEHIND</text>
+															</box>
+															<text fg={uiColors.textMuted}>no upstream</text>
+														</box>
+													</>
+												}
+											>
+												<box flexDirection="row">
+													<box width={9}>
+														<text fg={uiColors.textMuted}>AHEAD</text>
+													</box>
+													<text fg={uiColors.textSecondary}>
+														{data().gitStatus.ahead}
+													</text>
+												</box>
+												<box flexDirection="row">
+													<box width={9}>
+														<text fg={uiColors.textMuted}>BEHIND</text>
+													</box>
+													<text fg={uiColors.textSecondary}>
+														{data().gitStatus.behind}
+													</text>
+												</box>
+											</Show>
+										</Show>
 										<Show when={data().state.definition}>
 											{(definition) => (
 												<box flexDirection="row">
@@ -2447,10 +2511,9 @@ export function App(props: {
 						<box
 							style={{
 								width: "100%",
-								height: 9,
+								height: 6,
 								flexShrink: 0,
 								flexDirection: "column",
-								gap: 1,
 							}}
 						>
 							<Panel
@@ -2504,36 +2567,6 @@ export function App(props: {
 									</For>
 								</Show>
 							</Panel>
-							<box
-								style={{
-									width: "100%",
-									height: 2,
-									flexDirection: "row",
-									gap: 1,
-								}}
-							>
-								<Panel
-									title="Git status"
-									accent={uiColors.warning}
-									active={activePanel() === 4}
-									style={{
-										flexGrow: 1,
-										flexBasis: 0,
-										minWidth: 0,
-										height: "100%",
-									}}
-								>
-									<text
-										fg={
-											data().health.dirty ? uiColors.warning : uiColors.success
-										}
-									>
-										{data().health.dirty
-											? `changed · ↑${data().health.ahead} ↓${data().health.behind}`
-											: `clean · ↑${data().health.ahead} ↓${data().health.behind}`}
-									</text>
-								</Panel>
-							</box>
 						</box>
 					</box>
 				}
