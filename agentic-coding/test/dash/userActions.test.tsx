@@ -8,6 +8,30 @@ import { App } from "../../src/tui/dash/App";
 function TestDashboard(props: { noUpstream?: boolean } = {}) {
 	const renderer = useRenderer();
 	const keymap = createDefaultOpenTuiKeymap(renderer);
+	// Mirror the production detail keymap (src/tui/index.tsx → setupKeymap):
+	// shift+letter events resolve to their uppercase binding ("J" ↔ Shift+J).
+	const disposeKeymap = keymap.appendEventMatchResolver((event, ctx) => {
+		if (
+			!event.shift ||
+			event.ctrl ||
+			event.meta ||
+			event.super ||
+			event.name.length !== 1
+		)
+			return undefined;
+		const upper = event.name.toUpperCase();
+		return upper !== event.name
+			? [
+					ctx.resolveKey({
+						name: upper,
+						ctrl: false,
+						shift: false,
+						meta: false,
+						super: false,
+					}),
+				]
+			: undefined;
+	});
 	const dispose = keymap.registerLayerFields({
 		name() {},
 		appView(value, ctx) {
@@ -17,7 +41,10 @@ function TestDashboard(props: { noUpstream?: boolean } = {}) {
 			ctx.require("modal.active", String(value));
 		},
 	});
-	onCleanup(dispose);
+	onCleanup(() => {
+		disposeKeymap();
+		dispose();
+	});
 	return (
 		<App
 			repo="/demo"
@@ -39,10 +66,14 @@ test("dismissed plan review stays closed during panel interactions", async () =>
 	t.mockInput.pressEscape();
 	await t.waitForFrame((frame) => !frame.includes("Plan review"));
 
-	t.mockInput.pressTab();
+	// Interacting with another panel (Shift+J to Current task, then Enter)
+	// must not reopen the dismissed plan review.
+	t.mockInput.pressKey("j", { shift: true });
 	t.mockInput.pressEnter();
 	await t.renderOnce();
-	expect(t.captureCharFrame()).not.toContain("Plan review");
+	const frame = t.captureCharFrame();
+	expect(frame).toContain("Tasks ·");
+	expect(frame).not.toContain("Plan review");
 	t.renderer.destroy();
 });
 
@@ -130,7 +161,7 @@ test("plan review exposes a bounded rejection action", async () => {
 	t.renderer.destroy();
 });
 
-test("overview contains Git status and the panel focus cycle has no Git panel", async () => {
+test("overview contains Git status and no Git panel", async () => {
 	const t = await testRender(() => <TestDashboard />, {
 		width: 120,
 		height: 40,
@@ -147,8 +178,12 @@ test("overview contains Git status and the panel focus cycle has no Git panel", 
 	expect(frame).toContain("feature/demo-optional-realisation-date");
 	expect(frame).not.toContain("clean ·");
 
-	// Focus order is Change → OpenSpec → Agents → Current task → Change.
-	for (let i = 0; i < 4; i++) t.mockInput.pressTab();
+	// Grid round trip Change → Agents → Change → Current task → Change:
+	// returning to Change and pressing Enter reopens the plan review.
+	t.mockInput.pressKey("l", { shift: true });
+	t.mockInput.pressKey("h", { shift: true });
+	t.mockInput.pressKey("j", { shift: true });
+	t.mockInput.pressKey("k", { shift: true });
 	t.mockInput.pressEnter();
 	await t.waitForFrame((value) => value.includes("Plan review"));
 	expect(t.captureCharFrame()).not.toContain(
@@ -227,7 +262,7 @@ test("plan review comment on a markdown line routes feedback to the planner", as
 	t.renderer.destroy();
 });
 
-test("traces panel is removed and the tab cycle skips it", async () => {
+test("traces panel is removed from the rendered dashboard", async () => {
 	const t = await testRender(() => <TestDashboard />, {
 		width: 120,
 		height: 40,
@@ -240,9 +275,15 @@ test("traces panel is removed and the tab cycle skips it", async () => {
 	// The traces panel no longer renders anywhere in the dashboard.
 	expect(t.captureCharFrame()).not.toContain("Traces ·");
 
-	// Cycling through every panel (order [0, 6, 1, 2, 4]) never shows traces.
-	for (let i = 0; i < 6; i++) {
-		t.mockInput.pressTab();
+	// Visiting every panel through the grid never shows traces.
+	const moves = [
+		["j", { shift: true }], // Change → Current task
+		["k", { shift: true }], // Current task → Change
+		["l", { shift: true }], // Change → Agents
+		["h", { shift: true }], // Agents → Change
+	] as const;
+	for (const [key, opts] of moves) {
+		t.mockInput.pressKey(key, opts);
 		await t.renderOnce();
 		expect(t.captureCharFrame()).not.toContain("Traces ·");
 	}
