@@ -14,6 +14,30 @@ import {
 function TestDashboard() {
 	const renderer = useRenderer();
 	const keymap = createDefaultOpenTuiKeymap(renderer);
+	// Mirror the production detail keymap (src/tui/index.tsx → setupKeymap):
+	// shift+letter events resolve to their uppercase binding ("L" ↔ Shift+L).
+	const disposeKeymap = keymap.appendEventMatchResolver((event, ctx) => {
+		if (
+			!event.shift ||
+			event.ctrl ||
+			event.meta ||
+			event.super ||
+			event.name.length !== 1
+		)
+			return undefined;
+		const upper = event.name.toUpperCase();
+		return upper !== event.name
+			? [
+					ctx.resolveKey({
+						name: upper,
+						ctrl: false,
+						shift: false,
+						meta: false,
+						super: false,
+					}),
+				]
+			: undefined;
+	});
 	const dispose = keymap.registerLayerFields({
 		name() {},
 		appView(value, ctx) {
@@ -23,7 +47,10 @@ function TestDashboard() {
 			ctx.require("modal.active", String(value));
 		},
 	});
-	onCleanup(dispose);
+	onCleanup(() => {
+		disposeKeymap();
+		dispose();
+	});
 	return <App repo="/demo" change="demo" profile="test" keymap={keymap} />;
 }
 
@@ -57,8 +84,7 @@ test("agents panel wraps finding summaries at narrow widths", async () => {
 	await t.waitForFrame((frame) => frame.includes("Agents"));
 	t.mockInput.pressEscape();
 	await t.waitForFrame((frame) => !frame.includes("Plan review"));
-	t.mockInput.pressTab();
-	t.mockInput.pressTab();
+	t.mockInput.pressKey("l", { shift: true });
 	for (let index = 0; index < 4; index++) t.mockInput.pressKey("j");
 	await t.renderOnce();
 	const frame = t.captureCharFrame();

@@ -55,6 +55,7 @@ import { GenericModal } from "./devenv-ui/components/GenericModal";
 import { MarkdownViewModal } from "./devenv-ui/components/MarkdownViewModal";
 import type { Discussion } from "./devenv-ui/types";
 import { notify } from "./notifications";
+import { movePanel, type PanelDirection } from "./panel-grid";
 import { applyTheme, loadThemeName, saveThemeName } from "./theme-settings";
 import { Badge } from "./ui/Badge";
 import { CostModal } from "./ui/CostModal";
@@ -529,7 +530,7 @@ export function App(props: {
 		{
 			title: "Navigation",
 			items: [
-				{ key: "Tab / Shift+Tab", description: "Switch panel" },
+				{ key: "Shift+J/K/H/L", description: "Move between panels" },
 				{ key: "j/k or ↑/↓", description: "Scroll focused panel" },
 				{ key: "Esc", description: "Return to dashboard workspace" },
 			],
@@ -1287,21 +1288,22 @@ export function App(props: {
 		if (
 			(name === "j" && key.shift) ||
 			(name === "k" && key.shift) ||
-			name === "tab"
+			(name === "h" && key.shift) ||
+			(name === "l" && key.shift)
 		) {
-			setActivePanel((panel) => {
-				const order = [0, 6, 1, 2];
-				const index = order.indexOf(panel);
-				return (
-					order[
-						(index +
-							(name === "k" || (name === "tab" && key.shift)
-								? order.length - 1
-								: 1)) %
-							order.length
-					] ?? panel
-				);
-			});
+			const direction: PanelDirection =
+				name === "j"
+					? "down"
+					: name === "k"
+						? "up"
+						: name === "h"
+							? "left"
+							: "right";
+			setActivePanel((panel) =>
+				movePanel(panel, direction, {
+					artifactsVisible: artifacts().length > 0,
+				}),
+			);
 			return;
 		}
 		if (name === "down" || name === "j") {
@@ -2080,8 +2082,8 @@ export function App(props: {
 				"k",
 				"J",
 				"K",
-				"tab",
-				"shift+tab",
+				"H",
+				"L",
 				"up",
 				"down",
 				"enter",
