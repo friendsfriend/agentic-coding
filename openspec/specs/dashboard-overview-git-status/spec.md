@@ -56,6 +56,6 @@ The dashboard's primary Change/overview panel SHALL render the worktree's git st
 
 #### Scenario: Worktree has no usable upstream
 - **WHEN** the worktree has no configured upstream, or its configured upstream is gone
-- **THEN** the compact line SHALL replace both arrow segments with a single muted `no upstream` indication
-- **AND** it SHALL still show the added, changed, deleted counts and branch name
+- **THEN** the compact line SHALL replace both arrow segments with a single muted `` glyph
+- **AND** it SHALL still show the added, changed, and deleted counts and branch name
 

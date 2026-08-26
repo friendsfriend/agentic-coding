@@ -199,6 +199,8 @@ export function App(props: {
 	repo: string;
 	change: string;
 	profile?: "test";
+	/** Test fixture override for rendering a branch without a usable upstream. */
+	testNoUpstream?: boolean;
 	keymap: Keymap<Renderable, KeyEvent>;
 	/** Push the workflow header context up to the shell's global header. */
 	onHeader?: (
@@ -216,10 +218,21 @@ export function App(props: {
 		"completed",
 	] as const;
 	const [demoIndex, setDemoIndex] = createSignal(0);
-	const load = () =>
-		props.profile === "test"
-			? testDashboard(demoPhases[demoIndex()])
-			: loadDashboard(props.repo, props.change);
+	const load = () => {
+		if (props.profile !== "test")
+			return loadDashboard(props.repo, props.change);
+		const dashboard = testDashboard(demoPhases[demoIndex()]);
+		if (!props.testNoUpstream) return dashboard;
+		return {
+			...dashboard,
+			gitStatus: {
+				...dashboard.gitStatus,
+				ahead: undefined,
+				behind: undefined,
+				noUpstream: true,
+			},
+		};
+	};
 	const [data, setData] = createSignal<DashboardData>(load());
 	// Feed the shell's global header from the dashboard's single data source.
 	createEffect(() => {
@@ -2272,7 +2285,7 @@ export function App(props: {
 																flexShrink={0}
 																wrapMode="none"
 															>
-																no upstream
+																
 															</text>
 														}
 													>

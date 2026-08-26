@@ -5,7 +5,7 @@ import { testRender, useRenderer } from "@opentui/solid";
 import { onCleanup } from "solid-js";
 import { App } from "../../src/tui/dash/App";
 
-function TestDashboard() {
+function TestDashboard(props: { noUpstream?: boolean } = {}) {
 	const renderer = useRenderer();
 	const keymap = createDefaultOpenTuiKeymap(renderer);
 	const dispose = keymap.registerLayerFields({
@@ -18,7 +18,15 @@ function TestDashboard() {
 		},
 	});
 	onCleanup(dispose);
-	return <App repo="/demo" change="demo" profile="test" keymap={keymap} />;
+	return (
+		<App
+			repo="/demo"
+			change="demo"
+			profile="test"
+			testNoUpstream={props.noUpstream}
+			keymap={keymap}
+		/>
+	);
 }
 
 test("dismissed plan review stays closed during panel interactions", async () => {
@@ -146,6 +154,25 @@ test("overview contains Git status and the panel focus cycle has no Git panel", 
 	expect(t.captureCharFrame()).not.toContain(
 		"Action required · Developer review",
 	);
+	t.renderer.destroy();
+});
+
+test("overview uses a muted glyph when no upstream is usable", async () => {
+	const t = await testRender(() => <TestDashboard noUpstream />, {
+		width: 120,
+		height: 40,
+	});
+
+	await t.waitForFrame((value) => value.includes("Plan review"));
+	t.mockInput.pressEscape();
+	await t.waitForFrame((value) => !value.includes("Plan review"));
+	const frame = t.captureCharFrame();
+	expect(frame).toContain("+0*0-0");
+	expect(frame).toContain("");
+	expect(frame).not.toContain("no upstream");
+	expect(frame).not.toContain("↑0");
+	expect(frame).not.toContain("↓0");
+	expect(frame).toContain("feature/demo-optional-realisation-date");
 	t.renderer.destroy();
 });
 
