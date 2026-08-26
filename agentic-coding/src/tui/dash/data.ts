@@ -98,7 +98,6 @@ export interface WorkflowOverview {
 	state: WorkflowState;
 	workspaceOpen: boolean;
 	tasks: [number, number];
-	gitStatus?: WorktreeGitStatus;
 	// WorkflowOverview agents: role/status/model plus lifetime cost.
 	agents: Array<{
 		role: string;
@@ -159,7 +158,6 @@ export function listWorkflows(...roots: string[]): WorkflowOverview[] {
 					state,
 					workspaceOpen,
 					tasks: [items.filter((item) => item.done).length, items.length],
-					gitStatus: worktreeGitStatus(state.worktree),
 					agents: view.runs.map((run) => ({
 						role: run.role,
 						status: run.status,
@@ -547,18 +545,19 @@ export function agentMetrics(
 			"outputTokens",
 			"cacheReadTokens",
 		] as const) {
-			if (event[field] !== undefined)
-				row[field] = (row[field] ?? 0) + Number(event[field]);
-		}
-		if (
-			row.cost !== undefined ||
-			row.inputTokens !== undefined ||
-			row.outputTokens !== undefined ||
-			row.cacheReadTokens !== undefined
-		)
+			const value = event[field];
+			if (typeof value !== "number" || !Number.isFinite(value) || value < 0)
+				continue;
+			row[field] = (row[field] ?? 0) + value;
 			row.hasUsage = true;
-		if (Number(event.durationMs) > 0)
-			row.generationMs = (row.generationMs ?? 0) + Number(event.durationMs);
+		}
+		const durationMs = event.durationMs;
+		if (
+			typeof durationMs === "number" &&
+			Number.isFinite(durationMs) &&
+			durationMs > 0
+		)
+			row.generationMs = (row.generationMs ?? 0) + durationMs;
 	}
 	const result = new Map<string, AgentUsageMetrics>();
 	for (const [role, row] of byRole) {
@@ -1342,7 +1341,7 @@ export function testDashboard(phase = "proposed"): DashboardData {
 			at: "2026-01-01T10:51:07Z",
 			inputTokens: 4100,
 			outputTokens: 900,
-			cacheReadTokens: 3300,
+			cacheReadTokens: 12300,
 			cost: 0.07,
 			durationMs: 45000,
 		},

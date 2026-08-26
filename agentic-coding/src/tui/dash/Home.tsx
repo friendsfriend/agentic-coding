@@ -24,7 +24,6 @@ import {
 import { notify } from "./notifications";
 import { invokeGlobalSelectionMouseUpHandler } from "./selectionCopy";
 import { applyTheme, loadThemeName, saveThemeName } from "./theme-settings";
-import { ChangedFilesBrowser } from "./ui/ChangedFilesBrowser";
 import { uiColors } from "./ui/colors";
 import { ErrorDialog } from "./ui/ErrorDialog";
 import { FilterModal } from "./ui/FilterModal";
@@ -66,12 +65,6 @@ export function Home(props: {
 		createSignal<(event: KeyEvent) => boolean>();
 	const [_message, setMessage] = createSignal("");
 	const [error, setError] = createSignal<{ title: string; message: string }>();
-	const [changedFilesTarget, setChangedFilesTarget] = createSignal<{
-		repo: string;
-		change: string;
-	}>();
-	const [changedFilesHandler, setChangedFilesHandler] =
-		createSignal<(event: KeyEvent) => boolean>();
 	const [help, setHelp] = createSignal(false);
 	const [helpOffset, setHelpOffset] = createSignal(0);
 	let errorScroll: { scrollBy(dy: number): void } | undefined;
@@ -149,26 +142,6 @@ export function Home(props: {
 	});
 	const diagnostic = (value?: string) =>
 		value ? value.replace(/\s+/g, " ").slice(0, 96) : undefined;
-	// Compact Git status for the selected overview row; every state (no
-	// selection, unavailable Git, no upstream) stays a single labeled line.
-	const gitStatusLine = () => {
-		const item = visibleItems()[selected()];
-		if (!item)
-			return { text: "No workspace selected", color: uiColors.textMuted };
-		const status = item.gitStatus;
-		if (!status?.available)
-			return {
-				text: `Unavailable${status?.diagnostic ? ` · ${status.diagnostic}` : ""}`,
-				color: uiColors.error,
-			};
-		const upstream = status.noUpstream
-			? "ahead/behind unavailable · no upstream configured"
-			: `ahead ${status.ahead ?? 0} · behind ${status.behind ?? 0}`;
-		return {
-			text: `${status.branch || "(no branch)"} · changed ${status.changedFiles} · added ${status.addedFiles} · deleted ${status.deletedFiles} · ${upstream}`,
-			color: uiColors.textSecondary,
-		};
-	};
 	const helpSections: HelpSection[] = [
 		{
 			title: "Navigation",
@@ -182,7 +155,6 @@ export function Home(props: {
 				{ key: "m", description: "Agent configuration (profiles / presets)" },
 				{ key: "f", description: "Open filter modal" },
 				{ key: "o", description: "Open sort modal" },
-				{ key: "G", description: "Open changed files" },
 				{ key: "r", description: "Refresh" },
 				{ key: "q", description: "Quit" },
 				{ key: "?", description: "Open help" },
@@ -258,17 +230,7 @@ export function Home(props: {
 			setModelConfig(true);
 			props.keymap.setData("modal.active", "model-config");
 		} else if (name === "r") refresh();
-		else if (name === "g" && key.shift) {
-			// Ignored without a selected workspace; load errors surface inside the
-			// browser modal so the overview stays usable.
-			const item = visibleItems()[selected()];
-			if (!item) return;
-			setChangedFilesTarget({
-				repo: item.state.repository,
-				change: item.state.changeId,
-			});
-			props.keymap.setData("modal.active", "changed-files");
-		} else if (name === "f") {
+		else if (name === "f") {
 			setFilterModal(true);
 			setFilterFocusedPane("parameter");
 			setFilterSelectedParameter(0);
@@ -562,18 +524,6 @@ export function Home(props: {
 				"down",
 			].map((key) => ({ key, cmd: "sort.handle" })),
 		});
-		const disposeChangedFiles = props.keymap.registerLayer({
-			name: "changed-files",
-			priority: 1000,
-			activeModal: "changed-files",
-			commands: [
-				{
-					name: "changed-files.handle",
-					run: ({ event }) => changedFilesHandler()?.(event) ?? true,
-				},
-			],
-			bindings: modalKeys.map((key) => ({ key, cmd: "changed-files.handle" })),
-		});
 		const disposeHome = props.keymap.registerLayer({
 			name: "home",
 			priority: 100,
@@ -597,7 +547,6 @@ export function Home(props: {
 				"o",
 				"?",
 				"shift+t",
-				"shift+g",
 				"j",
 				"k",
 				"up",
@@ -614,7 +563,6 @@ export function Home(props: {
 			disposeError();
 			disposeFilter();
 			disposeSort();
-			disposeChangedFiles();
 			disposeHome();
 		});
 		// Self-heal: reconcile the keymap modal data with the real modal state, so a
@@ -628,7 +576,6 @@ export function Home(props: {
 				help() ||
 				themePicker() ||
 				modelConfig() ||
-				changedFilesTarget() != null ||
 				error() != null;
 			if (!anyOpen) props.keymap.setData("modal.active", "none");
 		});
@@ -701,25 +648,7 @@ export function Home(props: {
 					<text fg={uiColors.textMuted}>Loading workspaces…</text>
 				</Show>
 			</Panel>
-			<Panel title="Git status" style={{ height: 3, flexShrink: 0 }}>
-				<text fg={gitStatusLine().color}>{gitStatusLine().text}</text>
-			</Panel>
 			<NotificationOverlay />
-			<Show when={changedFilesTarget()}>
-				{(target) => (
-					<ChangedFilesBrowser
-						title={`Changed files · ${target().change}`}
-						repo={target().repo}
-						change={target().change}
-						onKeyReady={(handler) => setChangedFilesHandler(() => handler)}
-						onClose={() => {
-							setChangedFilesTarget(undefined);
-							setChangedFilesHandler(undefined);
-							props.keymap.setData("modal.active", "none");
-						}}
-					/>
-				)}
-			</Show>
 			<Show when={themePicker()}>
 				<ThemePickerModal
 					selected={themeIndex()}

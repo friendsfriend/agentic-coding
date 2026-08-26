@@ -647,10 +647,82 @@ test("agentMetrics sums usage events per role and prefers generation time for to
 	expect(worker?.inputTokens).toBe(1500);
 	expect(worker?.outputTokens).toBe(300);
 	expect(worker?.cacheReadTokens).toBe(1200);
+	expect(
+		(worker?.cacheReadTokens ?? 0) /
+			((worker?.inputTokens ?? 0) + (worker?.cacheReadTokens ?? 0)),
+	).toBeCloseTo(0.4444, 4);
 	// Wall-clock span from first to last role event.
 	expect(worker?.durationSeconds).toBe(180);
 	// Summed generation time (50s), not wall-clock (180s).
 	expect(worker?.tokensPerSecond).toBe(6);
+});
+
+test("agentMetricLine uses total input when cached reads exceed uncached input", () => {
+	const metrics = agentMetrics([
+		{
+			event: "runtime.usage",
+			role: "worker",
+			inputTokens: 1000,
+			cacheReadTokens: 3000,
+		},
+	]);
+
+	const worker = metrics.get("worker");
+	expect(worker?.cacheReadTokens).toBe(3000);
+	expect(
+		(worker?.cacheReadTokens ?? 0) /
+			((worker?.inputTokens ?? 0) + (worker?.cacheReadTokens ?? 0)),
+	).toBe(0.75);
+});
+
+test("agentMetrics omits invalid cache inputs instead of poisoning aggregates", () => {
+	const metrics = agentMetrics([
+		{
+			event: "runtime.usage",
+			role: "missing",
+			inputTokens: 100,
+			cost: 0.01,
+		},
+		{
+			event: "runtime.usage",
+			role: "negative",
+			inputTokens: 100,
+			cacheReadTokens: -1,
+		},
+		{
+			event: "runtime.usage",
+			role: "non-finite",
+			inputTokens: Number.POSITIVE_INFINITY,
+			cacheReadTokens: 10,
+		},
+		{
+			event: "runtime.usage",
+			role: "zero",
+			inputTokens: 0,
+			cacheReadTokens: 0,
+		},
+		{
+			event: "runtime.usage",
+			role: "missing-input",
+			cacheReadTokens: 10,
+		},
+		{
+			event: "runtime.usage",
+			role: "non-finite-cache",
+			inputTokens: 100,
+			cacheReadTokens: Number.NaN,
+		},
+	]);
+
+	expect(metrics.get("missing")?.cacheReadTokens).toBeUndefined();
+	expect(metrics.get("negative")?.cacheReadTokens).toBeUndefined();
+	expect(metrics.get("non-finite")?.inputTokens).toBeUndefined();
+	expect(metrics.get("missing-input")?.inputTokens).toBeUndefined();
+	expect(metrics.get("non-finite-cache")?.cacheReadTokens).toBeUndefined();
+	expect(metrics.get("zero")).toMatchObject({
+		inputTokens: 0,
+		cacheReadTokens: 0,
+	});
 });
 
 test("agentMetrics omits fields the events never recorded", () => {
