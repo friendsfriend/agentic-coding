@@ -27,6 +27,7 @@ import {
 	type DashboardData,
 	type DeveloperReviewComment,
 	type DeveloperReviewFinding,
+	type FindingCounts,
 	focusAgent,
 	focusReturnWorkspace,
 	getTaskViewport,
@@ -139,6 +140,44 @@ export function agentMetricLine(
 			: []),
 	];
 	return parts.length > 0 ? parts.join(" · ") : undefined;
+}
+
+function FindingCountSummary(props: {
+	counts: FindingCounts;
+	compact: boolean;
+}) {
+	const entries = () => (
+		<>
+			<text fg={uiColors.error}>critical {props.counts.critical}</text>
+			<text fg={uiColors.textMuted}> · </text>
+			<text fg={uiColors.warning}>warning {props.counts.warning}</text>
+			<text fg={uiColors.textMuted}> · </text>
+			<text fg={uiColors.info}>info {props.counts.info}</text>
+		</>
+	);
+	return props.compact ? (
+		<box
+			width="100%"
+			minWidth={0}
+			height={3}
+			flexDirection="column"
+			overflow="hidden"
+		>
+			<text fg={uiColors.error}>critical {props.counts.critical}</text>
+			<text fg={uiColors.warning}>warning {props.counts.warning}</text>
+			<text fg={uiColors.info}>info {props.counts.info}</text>
+		</box>
+	) : (
+		<box
+			width="100%"
+			minWidth={0}
+			height={1}
+			flexDirection="row"
+			overflow="hidden"
+		>
+			{entries()}
+		</box>
+	);
 }
 
 export function App(props: {
@@ -2308,6 +2347,8 @@ export function App(props: {
 												(item) => item.role === agent.role,
 											);
 										const metricsLine = () => agentMetricLine(agent.metrics);
+										const findingSummaryRows = () =>
+											dimensions().width < 90 ? 3 : 1;
 										const highlight = () =>
 											agent.status === "working"
 												? "highlight2"
@@ -2319,7 +2360,11 @@ export function App(props: {
 										return (
 											<box
 												width="100%"
-												height={metricsLine() ? 3 : 2}
+												height={
+													2 +
+													(metricsLine() ? 1 : 0) +
+													(agent.findingCounts ? findingSummaryRows() : 0)
+												}
 												flexDirection="column"
 												paddingLeft={1}
 												paddingRight={1}
@@ -2380,6 +2425,14 @@ export function App(props: {
 														}}
 													</Show>
 												</box>
+												<Show when={agent.findingCounts}>
+													{(counts) => (
+														<FindingCountSummary
+															counts={counts()}
+															compact={findingSummaryRows() === 3}
+														/>
+													)}
+												</Show>
 												<Show when={metricsLine()}>
 													<box width="100%" height={1} overflow="hidden">
 														<text fg={uiColors.textMuted}>{metricsLine()}</text>

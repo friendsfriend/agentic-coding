@@ -272,9 +272,15 @@ export class WorkflowEngine {
 	start(input: StartWorkflowInput): DispatchResult {
 		validateChangeId(input.changeId);
 		const repository = canonicalRepository(input.repo);
-		const worktree = fs.realpathSync(
-			path.resolve(input.worktree ?? input.repo),
-		);
+		// Keep an explicitly supplied worktree path for the workflow view while
+		// resolving it separately for repository guards. On macOS, /var is a
+		// symlink to /private/var; canonicalizing the stored path would make the
+		// view differ from the path the caller supplied.
+		const worktree =
+			input.worktree === undefined
+				? fs.realpathSync(path.resolve(input.repo))
+				: path.resolve(input.worktree);
+		const resolvedWorktree = fs.realpathSync(worktree);
 		const definition = this.registry.definition(
 			input.definitionId,
 			input.definitionVersion ?? 1,
@@ -288,7 +294,7 @@ export class WorkflowEngine {
 					"start-guard",
 					"proposal workflows require checkout mode",
 				);
-			if (worktree !== repository)
+			if (resolvedWorktree !== repository)
 				throw new WorkflowRuntimeError(
 					"start-guard",
 					"proposal workflows must use the repository checkout",
