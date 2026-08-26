@@ -3,7 +3,11 @@ import { expect, test } from "bun:test";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
 import { onCleanup } from "solid-js";
-import { App, agentMetricLine } from "../../src/tui/dash/App";
+import {
+	App,
+	agentMetricLine,
+	agentRuntimeModelLine,
+} from "../../src/tui/dash/App";
 
 // Renders the demo dashboard (profile="test") so the Agents panel exercises
 // populated, partial, and metric-less agent rows from testDashboard fixtures.
@@ -30,6 +34,9 @@ test("agents panel renders compact bounded metric lines per agent", async () => 
 	});
 	await t.waitForFrame((frame) => frame.includes("Agents"));
 	const frame = t.captureCharFrame();
+	expect(frame).toContain("pi · provider/planner");
+	expect(frame).toContain("opencode · provider/worker");
+	expect(frame).toContain("opencode2 · provider/security");
 	// Populated-agent metrics (cost · tokens in→out · cache hit rate · duration
 	// · tok/s), derived from runtime.usage demo telemetry.
 	expect(frame).toContain("$0.07 · tok 4.1k→900 · 75.0% · 1m 7s · 20 tok/s");
@@ -59,6 +66,23 @@ test("agents panel wraps finding summaries at narrow widths", async () => {
 	expect(frame).toContain("warning 3");
 	expect(frame).toContain("info 2");
 	t.renderer.destroy();
+});
+
+test("agent runtime/model line normalizes OpenCode V2 and preserves fallbacks", () => {
+	expect(agentRuntimeModelLine("pi", "provider/model")).toBe(
+		"pi · provider/model",
+	);
+	expect(agentRuntimeModelLine("opencode", "provider/model")).toBe(
+		"opencode · provider/model",
+	);
+	expect(agentRuntimeModelLine("opencode-v2", "provider/model")).toBe(
+		"opencode2 · provider/model",
+	);
+	expect(agentRuntimeModelLine("pi", undefined)).toBe("pi");
+	expect(agentRuntimeModelLine(undefined, "provider/model")).toBe(
+		"provider/model",
+	);
+	expect(agentRuntimeModelLine(undefined, undefined)).toBeUndefined();
 });
 
 test("agent metric line includes cache writes and preserves incomplete precision", () => {

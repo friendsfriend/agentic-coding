@@ -102,6 +102,7 @@ export interface WorkflowOverview {
 	agents: Array<{
 		role: string;
 		status: string;
+		runtime?: string;
 		model?: string;
 		cost?: number;
 	}>;
@@ -161,6 +162,7 @@ export function listWorkflows(...roots: string[]): WorkflowOverview[] {
 					agents: view.runs.map((run) => ({
 						role: run.role,
 						status: run.status,
+						runtime: run.runtime,
 						model: run.model,
 					})),
 				});
@@ -280,6 +282,7 @@ export interface DashboardData {
 	agents: Array<{
 		role: string;
 		status: string;
+		runtime?: string;
 		model?: string;
 		cost?: number;
 		metrics?: AgentUsageMetrics;
@@ -1245,7 +1248,8 @@ export function loadDashboard(repo: string, change: string): DashboardData {
 						(role === "planner" && state.stepId !== "core.plan"
 							? "closed"
 							: "not started"),
-					model: run?.model ?? run?.profile ?? run?.runtime,
+					runtime: run?.runtime,
+					model: run?.model,
 					cost: costByRole.get(role)?.cost,
 					metrics: metricsByRole.get(role),
 					findingCounts: role.endsWith("verifier")
@@ -1453,6 +1457,8 @@ export function testDashboard(phase = "proposed"): DashboardData {
 			{
 				role: "planner",
 				status: applying ? "closed" : "idle",
+				runtime: "pi",
+				model: "provider/planner",
 				cost: 0.08,
 				metrics: demoMetrics.get("planner"),
 			},
@@ -1460,6 +1466,8 @@ export function testDashboard(phase = "proposed"): DashboardData {
 				role: "worker",
 				status:
 					phase === "apply" ? "working" : applying ? "idle" : "not started",
+				runtime: "opencode",
+				model: "provider/worker",
 				cost: 0.42,
 				metrics: demoMetrics.get("worker"),
 			},
@@ -1472,6 +1480,8 @@ export function testDashboard(phase = "proposed"): DashboardData {
 				"openspec-verifier",
 			].map((role) => ({
 				role,
+				runtime: role === "security-verifier" ? "opencode-v2" : undefined,
+				model: role === "security-verifier" ? "provider/security" : undefined,
 				status:
 					phase === "verify" ? "working" : verified ? "done" : "not started",
 				metrics: demoMetrics.get(role),
