@@ -86,14 +86,17 @@ test("proposal choices submit their type, task, and fixed checkout mode", async 
 		await t.flush();
 		handler?.(key("enter")); // preset
 		await t.flush();
-		handler?.(key("enter")); // ticket
+		t.mockInput.pressEnter(); // ticket
 		await t.flush();
-		for (const character of "proposal") handler?.(key(character));
-		handler?.(key("enter")); // change
+		for (const character of "proposal") t.mockInput.pressKey(character);
 		await t.flush();
-		for (const character of "Draft only") handler?.(key(character));
+		const changeFrame = t.captureCharFrame();
+		expect(changeFrame.match(/proposal/g)).toHaveLength(2);
+		t.mockInput.pressEnter(); // change
 		await t.flush();
-		handler?.(key("enter", { meta: true })); // task -> confirm
+		for (const character of "Draft only") t.mockInput.pressKey(character);
+		await t.flush();
+		t.mockInput.pressEnter({ meta: true }); // task -> confirm
 		handler?.(key("enter"));
 		await t.flush();
 		expect(completed).toHaveLength(1);
@@ -136,7 +139,7 @@ test("direct-apply omits the task step and submits no task", async () => {
 		handler?.(key("enter")); // select direct-apply
 		await t.flush();
 		handler?.(key("enter")); // preset: (config defaults)
-		handler?.(key("enter")); // ticket: optional
+		t.mockInput.pressEnter(); // ticket: optional
 		handler?.(key("enter")); // change: direct-apply-test
 		handler?.(key("enter")); // mode: worktree
 		handler?.(key("enter")); // create workflow
@@ -166,7 +169,7 @@ test("selecting plan-fusion submits workflowType plan-fusion", async () => {
 				}}
 			/>
 		),
-		{ width: 110, height: 30 },
+		{ width: 160, height: 30 },
 	);
 	await t.flush();
 	handler?.(key("enter")); // repo: Current Directory
@@ -178,14 +181,18 @@ test("selecting plan-fusion submits workflowType plan-fusion", async () => {
 	await t.flush();
 	// plan-fusion uses the task-driven fields: preset -> ticket -> change -> task -> mode.
 	handler?.(key("enter")); // preset: (config defaults)
-	handler?.(key("enter")); // ticket: optional
-	handler?.(key("enter")); // change
-	for (const character of "Compare the proposed approaches")
-		handler?.(key(character));
-	handler?.(key("enter", { sequence: "\n" }));
-	for (const character of "and recommend one") handler?.(key(character));
+	t.mockInput.pressEnter(); // ticket: optional
+	t.mockInput.pressEnter(); // change
 	await t.flush();
-	handler?.(key("enter", { meta: true })); // task: Alt+Enter advances
+	for (const character of "Compare the proposed approaches")
+		t.mockInput.pressKey(character);
+	t.mockInput.pressEnter();
+	for (const character of "and recommend one") t.mockInput.pressKey(character);
+	await t.flush();
+	const taskFrame = t.captureCharFrame();
+	expect(taskFrame).toContain("Compare the proposed approaches");
+	expect(taskFrame).toContain("and recommend one");
+	t.mockInput.pressEnter({ meta: true }); // task: Alt+Enter advances
 	handler?.(key("enter")); // mode: worktree
 	await t.flush();
 	expect(t.captureCharFrame()).toContain("Confirm workflow");
@@ -224,10 +231,11 @@ test("creation indicator renders before completion and clears after it settles",
 	await t.flush();
 	handler?.(key("enter")); // workflow type: standard
 	handler?.(key("enter")); // preset: (config defaults)
-	handler?.(key("enter")); // ticket: optional
-	for (const character of "demo") handler?.(key(character));
-	handler?.(key("enter")); // change
-	handler?.(key("enter", { meta: true })); // task: Alt+Enter advances
+	t.mockInput.pressEnter(); // ticket: optional
+	for (const character of "demo") t.mockInput.pressKey(character);
+	t.mockInput.pressEnter(); // change
+	await t.flush();
+	t.mockInput.pressEnter({ meta: true }); // task: Alt+Enter advances
 	handler?.(key("enter")); // mode: worktree -> confirm
 	await t.flush();
 	expect(t.captureCharFrame()).toContain("Confirm workflow");

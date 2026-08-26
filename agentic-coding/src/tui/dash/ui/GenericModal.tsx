@@ -223,7 +223,7 @@ export function GenericModal(props: {
 											overflow: "hidden",
 										}}
 									>
-										<Show when={props.children}>{props.children}</Show>
+										{props.children}
 									</box>
 								</box>
 								{props.summary?.length ? (

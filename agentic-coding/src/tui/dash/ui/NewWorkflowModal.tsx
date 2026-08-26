@@ -1,8 +1,20 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { KeyEvent, TextareaRenderable } from "@opentui/core";
-import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
+import type {
+	InputRenderable,
+	KeyEvent,
+	TextareaRenderable,
+} from "@opentui/core";
+import {
+	createEffect,
+	createSignal,
+	onCleanup,
+	onMount,
+	Show,
+	untrack,
+} from "solid-js";
 import { discoverChanges } from "../data";
+import { focusSoon } from "../devenv-ui/utils/focusSoon";
 import { PRESET_CONFIG_DEFAULTS } from "../engine";
 import { uiColors } from "./colors";
 import { GenericModal } from "./GenericModal";
@@ -40,6 +52,7 @@ export function NewWorkflowModal(props: {
 		preset: PRESET_CONFIG_DEFAULTS,
 	});
 	const [showCustomRepo, setShowCustomRepo] = createSignal(false);
+	let currentInput: InputRenderable | undefined;
 	let taskInput: TextareaRenderable | undefined;
 	const projects = () =>
 		props.projects.filter((project) =>
@@ -197,27 +210,13 @@ export function NewWorkflowModal(props: {
 		if (creating()) return true;
 		const name = key.name.toLowerCase();
 		if (showCustomRepo()) {
+			// The focused input owns insertion, deletion, cursor movement, paste,
+			// and submit. Only handle the wizard-level escape here.
 			if (name === "escape") {
 				setShowCustomRepo(false);
 				return true;
 			}
-			if (name === "backspace") {
-				setValues((v) => ({ ...v, repo: v.repo.slice(0, -1) }));
-				return true;
-			}
-			if (name === "return" || name === "enter") {
-				setShowCustomRepo(false);
-				setStep(1);
-				setSelected(0);
-				setFilter("");
-				setFiltering(false);
-				return true;
-			}
-			if (key.sequence.length === 1 && key.sequence >= " ") {
-				setValues((v) => ({ ...v, repo: v.repo + key.sequence }));
-				return true;
-			}
-			return true;
+			return false;
 		}
 		if (name === "escape") {
 			// Esc while filtering first dismisses the filter, keeping the wizard
@@ -234,33 +233,11 @@ export function NewWorkflowModal(props: {
 			return true;
 		}
 		if (!listStep()) {
-			const keyName = field();
-			if (!keyName) return true;
-			if (keyName === "task") {
-				if ((name === "return" || name === "enter") && key.meta)
-					next(values().task || "");
-				else taskInput?.handleKeyPress(key);
-				return true;
-			}
-			if (name === "backspace") {
-				setValues((current) => ({
-					...current,
-					[keyName]: (current[keyName] as string)?.slice(0, -1) || "",
-				}));
-				return true;
-			}
-			if (name === "return" || name === "enter") {
-				next((values()[keyName] as string) || "");
-				return true;
-			}
-			if (key.sequence.length === 1 && key.sequence >= " ") {
-				setValues((current) => ({
-					...current,
-					[keyName]: ((current[keyName] as string) || "") + key.sequence,
-				}));
-				return true;
-			}
-			return true;
+			// Native OpenTUI editors are the sole owner of text editing. Returning
+			// false lets the keymap fall through without preventing the editor's
+			// focused key handler. Enter/Alt+Enter are delivered to onSubmit, while
+			// plain Enter in the textarea remains a newline.
+			return false;
 		}
 		const items = choices();
 		// While a filter is active, '/' is a literal query character; only start
@@ -347,6 +324,7 @@ export function NewWorkflowModal(props: {
 					]}
 				>
 					<input
+						ref={currentInput}
 						focused
 						value={values().repo}
 						placeholder="/absolute/path/to/repo"
@@ -399,12 +377,13 @@ export function NewWorkflowModal(props: {
 										when={field() === "task"}
 										fallback={
 											<input
+												ref={currentInput}
 												focused
 												value={(values()[field()] as string) || ""}
 												placeholder={field() === "ticket" ? "optional" : ""}
 												onInput={updateCurrent}
 												onSubmit={() =>
-													next((values()[field()] as string) || "")
+													next(currentInput?.value ?? values()[field()] ?? "")
 												}
 												onKeyDown={(event: KeyEvent) => {
 													if (event.name.toLowerCase() === "escape") back();
@@ -415,16 +394,21 @@ export function NewWorkflowModal(props: {
 										}
 									>
 										<textarea
-											ref={taskInput}
+											ref={(input) => {
+												taskInput = input;
+												focusSoon(input);
+											}}
 											focused
 											width="100%"
 											height="100%"
-											initialValue={values().task || ""}
+											initialValue={untrack(() => values().task || "")}
 											wrapMode="word"
 											onContentChange={() =>
-												updateCurrent(taskInput?.plainText || "")
+												updateCurrent(taskInput?.plainText ?? "")
 											}
-											onSubmit={() => next(values().task || "")}
+											onSubmit={() =>
+												next(taskInput?.plainText ?? values().task ?? "")
+											}
 											focusedBackgroundColor={uiColors.bgBase}
 											focusedTextColor={uiColors.textPrimary}
 										/>
