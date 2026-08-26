@@ -16,7 +16,7 @@ Installer never installs agent runtimes, providers, or credentials. Configure Gi
 ./scripts/install.sh
 ```
 
-Configuration installs at `~/.config/agentic-coding/config.toml`. See [`pi/herdr-workflow.toml`](pi/herdr-workflow.toml) for named profiles, step routes, role overrides, adapter policy, and optional runtime-diversity guard.
+Configuration installs at `~/.config/agentic-coding/config.toml`. The shipped [`pi/herdr-workflow.toml`](pi/herdr-workflow.toml) provides only the model-agnostic `use-default-model` preset; add custom profiles, routes, and presets to your user or project configuration as needed.
 
 > New engine migrates recognized legacy workflows on first access. Legacy rows/files remain preserved, but old engine must not resume workflow after new revisions/effects exist. Restore recorded pre-migration repository/worktree backup before binary rollback.
 
@@ -82,12 +82,16 @@ Raw phase overwrite is removed. `repair` previews compatible targets and affecte
 
 ## Agent routing
 
-Named profiles select `pi`, `opencode`, or `opencode-v2`. Precedence:
+Named profiles select `pi`, `opencode`, or `opencode-v2`. A fresh installation has no model-specific profiles: the built-in `use-default-model` preset uses Pi (configurable to another supported harness) without passing a model, allowing the selected harness to choose its own default. Custom profiles and presets are optional.
+
+For custom profiles, precedence is:
 
 1. exact step/role route
 2. step route
-3. definition default
-4. global default
+3. preset fallback
+4. definition default
+5. global default
+6. `use-default-model`
 
 Resolved non-secret route is pinned for workflow lifetime. Missing executable, unsupported tool policy, capability mismatch, or diversity violation fails before agent/pane creation. Runtime/model never falls back silently.
 
@@ -110,7 +114,9 @@ Engine derives workflow, role, generation, output schema, and successor from run
 Named presets bundle a full step/role → profile routing into the committable
 agents config (`[agents.presets]` in `config.toml` or project
 `.pi/herdr-workflow.toml`), so switching between agent/model strategies no
-longer requires rewriting routes:
+longer requires rewriting routes. `use-default-model` is always available as
+an immutable built-in choice; only custom profiles and presets are persisted by
+the dashboard:
 
 ```toml
 [agents.presets.frontier-plan]

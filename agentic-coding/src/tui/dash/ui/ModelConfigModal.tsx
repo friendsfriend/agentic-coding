@@ -10,6 +10,7 @@ import {
 } from "../../../workflow/effects.ts";
 import {
 	type AgentsConfig,
+	BUILTIN_PRESET_NAME,
 	clearModelCache,
 	type PresetConfig,
 	type ProfileConfig,
@@ -64,6 +65,7 @@ type ProfileDraft = {
 type PresetDraft = {
 	kind: "preset";
 	name: string;
+	runtime?: RuntimeId;
 	defaultProfile: string;
 	steps: Record<string, string>;
 	roles: Record<string, string>;
@@ -183,21 +185,30 @@ export function ModelConfigModal(props: {
 		name: string;
 	}>();
 	const [textValue, setTextValue] = createSignal("");
+	let lastReadError: string | undefined;
 	const reload = () => setVersion((value) => value + 1);
 
 	const agents = (): AgentsConfig | undefined => {
 		version();
 		try {
-			// Wrapped so a malformed config keeps the modal usable instead of
-			// crashing the dashboard.
 			const config = loadConfig();
-			return parseAgentsConfig(config.agents, config);
-		} catch {
+			const parsed = parseAgentsConfig(config.agents, config);
+			lastReadError = undefined;
+			return parsed;
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			if (lastReadError !== message) {
+				lastReadError = message;
+				notify(`Configuration could not be read: ${message}`, "error");
+			}
 			return undefined;
 		}
 	};
 	const profileNames = () => Object.keys(agents()?.profiles ?? {}).sort();
-	const presetNames = () => Object.keys(agents()?.presets ?? {}).sort();
+	const presetNames = () =>
+		Object.keys(agents()?.presets ?? {})
+			.filter((name) => name !== BUILTIN_PRESET_NAME)
+			.sort();
 
 	const openProfileEditor = (existing?: string) => {
 		const current = existing ? agents()?.profiles[existing] : undefined;
@@ -213,6 +224,13 @@ export function ModelConfigModal(props: {
 		startEditor();
 	};
 	const openPresetEditor = (existing?: string) => {
+		if (existing === BUILTIN_PRESET_NAME) {
+			notify(
+				"The use-default-model preset is built in and cannot be edited",
+				"error",
+			);
+			return;
+		}
 		const current = existing ? agents()?.presets?.[existing] : undefined;
 		// Edit only the core.verification and fusion.plan role tables; other
 		// steps' tables are kept verbatim so an edit-save cycle never collapses
@@ -225,6 +243,7 @@ export function ModelConfigModal(props: {
 		setDraft({
 			kind: "preset",
 			name: existing ?? "",
+			runtime: current?.runtime,
 			defaultProfile: current?.default_profile ?? "",
 			steps: { ...(current?.steps ?? {}) },
 			roles: { ...verification },
@@ -353,13 +372,18 @@ export function ModelConfigModal(props: {
 	 * living only there cannot be removed via this target and would resurrect
 	 * at load time. */
 	const refuseOnConflict = (): boolean => {
-		const conflicts = conflictingAgentsFiles();
-		if (!conflicts.length) return false;
-		notify(
-			`Not saved: [agents] is also defined in ${conflicts.join(", ")}; remove it there first so dashboard edits are not shadowed`,
-			"error",
-		);
-		return true;
+		try {
+			const conflicts = conflictingAgentsFiles();
+			if (!conflicts.length) return false;
+			notify(
+				`Not saved: [agents] is also defined in ${conflicts.join(", ")}; remove it there first so dashboard edits are not shadowed`,
+				"error",
+			);
+			return true;
+		} catch (error) {
+			notify(error instanceof Error ? error.message : String(error), "error");
+			return true;
+		}
 	};
 
 	const finishEditor = (): void => {
@@ -368,6 +392,10 @@ export function ModelConfigModal(props: {
 		if (refuseOnConflict()) return;
 		if (!d.name.trim()) {
 			notify("Name is required", "error");
+			return;
+		}
+		if (d.name === BUILTIN_PRESET_NAME) {
+			notify("The use-default-model name is reserved", "error");
 			return;
 		}
 		try {
@@ -393,11 +421,14 @@ export function ModelConfigModal(props: {
 			...(d.thinking ? { thinking: d.thinking } : {}),
 		};
 		saveAgentsSection((section) => {
-			if (!section.profiles || typeof section.profiles !== "object")
+			if (section.profiles === undefined || section.profiles === null)
 				section.profiles = {};
+			else if (
+				typeof section.profiles !== "object" ||
+				Array.isArray(section.profiles)
+			)
+				throw new Error("agents.profiles must be a table of profiles");
 			(section.profiles as Record<string, unknown>)[d.name] = profile;
-			if (typeof section.default_profile !== "string")
-				section.default_profile = d.name;
 		});
 	};
 	const savePreset = (d: PresetDraft): void => {
@@ -418,18 +449,20 @@ export function ModelConfigModal(props: {
 		if (Object.keys(fusionPlanRoles).length)
 			roleTables["fusion.plan"] = fusionPlanRoles;
 		const preset: PresetConfig = {
+			...(d.runtime ? { runtime: d.runtime } : {}),
 			...(d.defaultProfile ? { default_profile: d.defaultProfile } : {}),
 			...(Object.keys(steps).length ? { steps } : {}),
 			...(Object.keys(roleTables).length ? { roles: roleTables } : {}),
 		};
 		saveAgentsSection((section) => {
-			if (!section.presets || typeof section.presets !== "object")
+			if (section.presets === undefined || section.presets === null)
 				section.presets = {};
+			else if (
+				typeof section.presets !== "object" ||
+				Array.isArray(section.presets)
+			)
+				throw new Error("agents.presets must be a table of presets");
 			(section.presets as Record<string, unknown>)[d.name] = preset;
-			if (typeof section.default_profile !== "string") {
-				const fallback = d.defaultProfile || Object.values(steps)[0];
-				if (fallback) section.default_profile = fallback;
-			}
 		});
 	};
 
@@ -481,6 +514,13 @@ export function ModelConfigModal(props: {
 		notify(`Profile ${name} deleted`, "success");
 	};
 	const deletePreset = (name: string): void => {
+		if (name === BUILTIN_PRESET_NAME) {
+			notify(
+				"The use-default-model preset is built in and cannot be deleted",
+				"error",
+			);
+			return;
+		}
 		if (refuseOnConflict()) return;
 		try {
 			saveAgentsSection((section) => {
@@ -498,12 +538,13 @@ export function ModelConfigModal(props: {
 	const listItems = (): string[] => {
 		if (view() === "profiles")
 			return [...profileNames(), "(create new profile…)"];
-		if (view() === "presets") return [...presetNames(), "(create new preset…)"];
+		if (view() === "presets")
+			return [...presetNames(), "(create new preset…)", BUILTIN_PRESET_NAME];
 		return [];
 	};
 	const isCreateItem = (index: number) =>
-		index === listItems().length - 1 &&
-		listItems()[index]?.startsWith("(create");
+		listItems()[index] ===
+		(view() === "profiles" ? "(create new profile…)" : "(create new preset…)");
 
 	const editorTitle = () => {
 		const d = draft();
@@ -574,7 +615,7 @@ export function ModelConfigModal(props: {
 				// Deletion is destructive and writes straight to config: require an
 				// explicit second confirmation before issuing it.
 				const item = items[listIndex()];
-				if (item && !isCreateItem(listIndex()))
+				if (item && !isCreateItem(listIndex()) && item !== BUILTIN_PRESET_NAME)
 					setPendingDelete({
 						kind: view() === "profiles" ? "profile" : "preset",
 						name: item,
@@ -741,7 +782,7 @@ export function ModelConfigModal(props: {
 						selectedIndex={listIndex()}
 						renderItem={(item, active) => (
 							<text fg={active ? uiColors.primary : uiColors.textSecondary}>
-								{item.startsWith("(create") ? item : item}
+								{item === BUILTIN_PRESET_NAME ? `${item} (built-in)` : item}
 							</text>
 						)}
 					/>

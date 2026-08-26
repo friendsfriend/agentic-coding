@@ -19,14 +19,17 @@ export interface ProfileConfig {
 	extensions?: string[];
 	capabilities?: AdapterCapability[];
 }
+export const BUILTIN_PRESET_NAME = "use-default-model";
+
 export interface PresetConfig {
 	description?: string;
+	runtime?: RuntimeId;
 	default_profile?: string;
 	steps?: Record<string, string>;
 	roles?: Record<string, Record<string, string>>;
 }
 export interface AgentsConfig {
-	default_profile: string;
+	default_profile?: string;
 	profiles: Record<string, ProfileConfig>;
 	routes?: Record<string, string>;
 	role_routes?: Record<string, Record<string, string>>;
@@ -36,6 +39,7 @@ export interface AgentsConfig {
 /** A selected preset as passed into per-start routing resolution. */
 export interface RoutingPreset {
 	name: string;
+	runtime?: RuntimeId;
 	default_profile?: string;
 	steps?: Record<string, string>;
 	roles?: Record<string, Record<string, string>>;
@@ -86,26 +90,40 @@ export function parseAgentsConfig(
 ): AgentsConfig {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
 		const model = legacy?.models?.worker_default;
-		return {
-			default_profile: "pi-default",
-			profiles: {
-				"pi-default": {
-					runtime: "pi",
-					...(model ? { model } : {}),
-					thinking: legacy?.thinking?.worker_default,
+		if (model || legacy?.thinking?.worker_default) {
+			return {
+				default_profile: "pi-default",
+				profiles: {
+					"pi-default": {
+						runtime: "pi",
+						...(model ? { model } : {}),
+						thinking: legacy?.thinking?.worker_default,
+					},
 				},
-			},
+				presets: { [BUILTIN_PRESET_NAME]: { runtime: "pi" } },
+			};
+		}
+		return {
+			profiles: {},
+			presets: { [BUILTIN_PRESET_NAME]: { runtime: "pi" } },
 		};
 	}
 	const input = value as Record<string, unknown>;
 	if (
-		typeof input.default_profile !== "string" ||
-		!input.profiles ||
-		typeof input.profiles !== "object" ||
-		Array.isArray(input.profiles)
+		input.default_profile !== undefined &&
+		typeof input.default_profile !== "string"
 	)
-		throw new Error("agents.default_profile and agents.profiles are required");
-	const profiles = input.profiles as Record<string, ProfileConfig>;
+		throw new Error("agents.default_profile must be a string");
+	if (
+		input.profiles !== undefined &&
+		(!input.profiles ||
+			typeof input.profiles !== "object" ||
+			Array.isArray(input.profiles))
+	)
+		throw new Error("agents.profiles must be a table of profiles");
+	const profiles = (input.profiles ?? {}) as Record<string, ProfileConfig>;
+	if (Object.hasOwn(profiles, BUILTIN_PRESET_NAME))
+		throw new Error(`reserved agent profile name: ${BUILTIN_PRESET_NAME}`);
 	for (const [name, profile] of Object.entries(profiles)) {
 		if (
 			!profile ||
@@ -119,22 +137,62 @@ export function parseAgentsConfig(
 					`unsupported ${profile.runtime} option in profile ${name}: ${key}`,
 				);
 	}
-	if (!ownProfile(profiles, input.default_profile))
+	if (
+		input.default_profile !== undefined &&
+		!ownProfile(profiles, input.default_profile)
+	)
 		throw new Error(`unknown default profile: ${input.default_profile}`);
-	validatePresets(input.presets, profiles);
-	return input as unknown as AgentsConfig;
+	const presets = validatePresets(input.presets, profiles);
+	return {
+		...(input.default_profile !== undefined
+			? { default_profile: input.default_profile }
+			: {}),
+		profiles,
+		presets,
+		...(input.routes ? { routes: input.routes as Record<string, string> } : {}),
+		...(input.role_routes
+			? {
+					role_routes: input.role_routes as Record<
+						string,
+						Record<string, string>
+					>,
+				}
+			: {}),
+		...(input.definition_defaults
+			? {
+					definition_defaults: input.definition_defaults as Record<
+						string,
+						string
+					>,
+				}
+			: {}),
+	};
 }
 function validatePresets(
 	presets: unknown,
 	profiles: Record<string, ProfileConfig>,
-): void {
-	if (presets === undefined) return;
+): Record<string, PresetConfig> {
+	if (presets === undefined)
+		return { [BUILTIN_PRESET_NAME]: { runtime: "pi" } };
 	if (!presets || typeof presets !== "object" || Array.isArray(presets))
 		throw new Error("agents.presets must be a table of presets");
+	const parsed = presets as Record<string, PresetConfig>;
 	for (const [name, value] of Object.entries(presets)) {
 		if (!value || typeof value !== "object" || Array.isArray(value))
 			throw new Error(`invalid preset: ${name}`);
 		const preset = value as PresetConfig;
+		if (
+			preset.runtime !== undefined &&
+			!Object.hasOwn(RUNTIME_OPTIONS, preset.runtime)
+		)
+			throw new Error(`invalid runtime in preset ${name}`);
+		if (name === BUILTIN_PRESET_NAME) {
+			if (Object.keys(preset).some((key) => key !== "runtime"))
+				throw new Error(
+					`reserved preset ${BUILTIN_PRESET_NAME} may only configure runtime`,
+				);
+			continue;
+		}
 		if (
 			preset.default_profile !== undefined &&
 			!ownProfile(profiles, preset.default_profile)
@@ -159,6 +217,9 @@ function validatePresets(
 					);
 		}
 	}
+	if (!Object.hasOwn(parsed, BUILTIN_PRESET_NAME))
+		parsed[BUILTIN_PRESET_NAME] = { runtime: "pi" };
+	return parsed;
 }
 /** Own-property profile lookup; inherited prototype names like "constructor"
  * or "toString" must resolve as unknown profiles, never as configs. */
@@ -179,18 +240,25 @@ function ownValue<T>(
 function executable(runtime: RuntimeId, configured?: string): string {
 	return configured ?? (runtime === "opencode-v2" ? "opencode2" : runtime);
 }
+function builtinRuntime(config: AgentsConfig, override?: RuntimeId): RuntimeId {
+	return override ?? config.presets?.[BUILTIN_PRESET_NAME]?.runtime ?? "pi";
+}
 export function resolveProfile(
 	name: string,
 	config: AgentsConfig,
+	runtimeOverride?: RuntimeId,
 ): ResolvedProfile {
-	const profile = ownProfile(config.profiles, name);
+	const builtin = name === BUILTIN_PRESET_NAME;
+	const profile = builtin
+		? { runtime: builtinRuntime(config, runtimeOverride) }
+		: ownProfile(config.profiles, name);
 	if (!profile) throw new Error(`unknown agent profile: ${name}`);
 	const capabilities = [
 		...new Set(profile.capabilities ?? DEFAULT_CAPABILITIES),
 	];
 	const tools = [...(profile.tools ?? [])];
 	const assigned =
-		profile.runtime === "pi"
+		!builtin && profile.runtime === "pi"
 			? loadAssignments()
 					.extensions.filter((item) => item.profiles.includes(name))
 					.map((item) => item.source)
@@ -223,6 +291,7 @@ export function resolvePreset(
 	if (!preset) throw new Error(`unknown agent preset: ${name}`);
 	return {
 		name,
+		...(preset.runtime ? { runtime: preset.runtime } : {}),
 		...(preset.default_profile
 			? { default_profile: preset.default_profile }
 			: {}),
@@ -242,6 +311,7 @@ export function validatePresetCoverage(
 			ownValue(preset.steps, stepId) ||
 			Object.keys(ownValue(preset.roles, stepId) ?? {}).length > 0 ||
 			preset.default_profile ||
+			ownValue(config.presets, BUILTIN_PRESET_NAME) ||
 			ownValue(config.routes, stepId) ||
 			Object.keys(ownValue(config.role_routes, stepId) ?? {}).length > 0 ||
 			ownValue(config.definition_defaults, definition.id) ||
@@ -268,8 +338,13 @@ export function profileFor(
 		ownValue(config.routes, stepId) ??
 		ownValue(config.definition_defaults, definition.id) ??
 		definition.defaultProfile ??
-		config.default_profile;
-	return resolveProfile(name, config);
+		config.default_profile ??
+		BUILTIN_PRESET_NAME;
+	return resolveProfile(
+		name,
+		config,
+		name === BUILTIN_PRESET_NAME ? preset?.runtime : undefined,
+	);
 }
 export function resolveRouting(
 	definition: CompiledWorkflowDefinition,
@@ -294,7 +369,10 @@ export function resolveRouting(
 					profile: profileFor(stepId, role, definition, config, preset),
 				});
 	}
-	return { defaultProfile: config.default_profile, routes };
+	return {
+		defaultProfile: config.default_profile ?? BUILTIN_PRESET_NAME,
+		routes,
+	};
 }
 export function preflightProfile(
 	profile: ResolvedProfile,
