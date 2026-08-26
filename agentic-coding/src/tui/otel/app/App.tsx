@@ -861,7 +861,7 @@ export function App(props: {
 					width: "100%",
 					height: "100%",
 					flexDirection: "column",
-					padding: 1,
+					padding: props.dashboard ? 0 : 1,
 					gap: 0,
 				}}
 			>
