@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
@@ -16,6 +17,7 @@ import {
 	type DeveloperReviewComment,
 	getTaskViewport,
 	isStale,
+	loadDashboard,
 	loadLocalChanges,
 	loadLocalDiff,
 	loadPlanReviewComments,
@@ -25,9 +27,9 @@ import {
 	testDashboard,
 	worktreeGitStatus,
 } from "../../src/tui/dash/data";
-import { startArgs } from "../../src/tui/dash/engine";
+import { startArgs, viewToDashboardState } from "../../src/tui/dash/engine";
 import { registerBuiltins } from "../../src/workflow/definitions";
-import { WorkflowEngine } from "../../src/workflow/runtime";
+import { canonicalStorePath, WorkflowEngine } from "../../src/workflow/runtime";
 
 function requireChange<T extends { newPath: string }>(
 	changes: T[],
@@ -89,9 +91,63 @@ function writeState(repo: string, change = "review") {
 	return join(repo, ".herdr-workflow", change);
 }
 
+function removeWorkflowTask(repo: string, change: string) {
+	const db = new Database(canonicalStorePath(repo));
+	const row = db
+		.query("SELECT id, snapshot_json FROM workflow_instances WHERE change_id=?")
+		.get(change) as { id: string; snapshot_json: string };
+	const snapshot = JSON.parse(row.snapshot_json) as {
+		metadata: { task?: string };
+	};
+	delete snapshot.metadata.task;
+	db.query("UPDATE workflow_instances SET snapshot_json=? WHERE id=?").run(
+		JSON.stringify(snapshot),
+		row.id,
+	);
+	db.close();
+}
+
 afterEach(() => {
 	for (const root of roots.splice(0))
 		rmSync(root, { recursive: true, force: true });
+});
+
+test("workflow metadata task reaches dashboard state and request", () => {
+	const repo = fixture();
+	writeState(repo);
+	const workflowView = new WorkflowEngine(registerBuiltins()).status(
+		repo,
+		"review",
+	);
+
+	expect(workflowView.task).toBe("test");
+	expect(viewToDashboardState(workflowView)).toMatchObject({ task: "test" });
+	expect(loadDashboard(repo, "review").request).toBe("test");
+});
+
+test("loadDashboard falls back to the legacy request artifact", () => {
+	const repo = fixture();
+	const workflowRoot = writeState(repo, "legacy");
+	removeWorkflowTask(repo, "legacy");
+	writeFileSync(
+		join(workflowRoot, "request.md"),
+		`# Request
+
+- Keep the legacy fallback
+`,
+	);
+
+	expect(loadDashboard(repo, "legacy").request).toBe(
+		"Keep the legacy fallback",
+	);
+});
+
+test("loadDashboard shows the empty request state without either source", () => {
+	const repo = fixture();
+	writeState(repo, "empty");
+	removeWorkflowTask(repo, "empty");
+
+	expect(loadDashboard(repo, "empty").request).toBe("Not created yet");
 });
 
 test("loadLocalChanges includes tracked and untracked files, excluding workflow metadata", () => {

@@ -299,6 +299,7 @@ export interface WorkflowView {
 	branch: string;
 	baseCommit: string;
 	workspace?: string;
+	task?: string;
 	createdAt: string;
 	updatedAt: string;
 	currentStep: {

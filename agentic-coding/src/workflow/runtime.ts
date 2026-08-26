@@ -2268,6 +2268,9 @@ export class WorkflowEngine {
 				...(snapshot.metadata.workspace
 					? { workspace: snapshot.metadata.workspace }
 					: {}),
+				...(snapshot.metadata.task !== undefined
+					? { task: snapshot.metadata.task }
+					: {}),
 				createdAt: snapshot.metadata.createdAt,
 				updatedAt: snapshot.metadata.updatedAt,
 				currentStep: {
@@ -2330,6 +2333,9 @@ export class WorkflowEngine {
 						baseCommit: snapshot.metadata.baseCommit,
 						...(snapshot.metadata.workspace
 							? { workspace: snapshot.metadata.workspace }
+							: {}),
+						...(snapshot.metadata.task !== undefined
+							? { task: snapshot.metadata.task }
 							: {}),
 						createdAt: snapshot.metadata.createdAt,
 						updatedAt: snapshot.metadata.updatedAt,

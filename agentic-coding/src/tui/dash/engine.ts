@@ -395,6 +395,7 @@ export function viewToDashboardState(view: WorkflowView) {
 		repository: view.repository,
 		worktree: view.worktree,
 		branch: view.branch,
+		task: view.task,
 		workspace: view.workspace ?? "",
 		verificationRound,
 		baseCommit: view.baseCommit,
