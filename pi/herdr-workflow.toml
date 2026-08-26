@@ -1,5 +1,295 @@
+[agents]
+
+[agents.presets]
+
 [agents.presets.use-default-model]
 runtime = "pi"
+
+[agents.presets.openai-luna]
+default_profile = "pi-openai-luna"
+
+[agents.presets.openai-luna.steps]
+"core.plan" = "pi-openai-luna"
+"core.implementation" = "pi-openai-luna"
+"core.triage" = "pi-openai-luna"
+"core.archive" = "pi-openai-luna"
+"fusion.consolidate" = "pi-openai-luna"
+
+[agents.presets.openai-luna.roles]
+
+[agents.presets.openai-luna.roles."core.verification"]
+quality-verifier = "pi-openai-luna"
+security-verifier = "pi-openai-luna"
+performance-verifier = "pi-openai-luna"
+openspec-verifier = "pi-openai-luna"
+usability-verifier = "pi-openai-luna"
+test-verifier = "pi-openai-luna"
+
+[agents.presets.openai-luna.roles."fusion.plan"]
+planner-1 = "pi-openai-luna"
+planner-2 = "pi-opencode-deepseek-flash-free"
+planner-3 = "pi-opencode-hy3-free"
+
+[agents.presets.openai-terra-plan-luna-work]
+default_profile = "pi-openai-luna"
+
+[agents.presets.openai-terra-plan-luna-work.steps]
+"core.plan" = "pi-openai-terra"
+"core.implementation" = "pi-openai-luna"
+"core.triage" = "pi-openai-luna"
+"core.archive" = "pi-openai-luna"
+"fusion.consolidate" = "pi-openai-terra"
+
+[agents.presets.openai-terra-plan-luna-work.roles]
+
+[agents.presets.openai-terra-plan-luna-work.roles."core.verification"]
+quality-verifier = "pi-openai-luna"
+security-verifier = "pi-openai-luna"
+performance-verifier = "pi-openai-luna"
+openspec-verifier = "pi-openai-luna"
+usability-verifier = "pi-openai-luna"
+test-verifier = "pi-openai-luna"
+
+[agents.presets.openai-terra-plan-luna-work.roles."fusion.plan"]
+planner-1 = "pi-openai-terra"
+planner-2 = "pi-openai-luna"
+planner-3 = "pi-opencode-deepseek-flash-free"
+
+[agents.presets.openai-sol-plan-luna-worker]
+default_profile = "pi-openai-luna"
+
+[agents.presets.openai-sol-plan-luna-worker.steps]
+"core.plan" = "pi-openai-sol"
+"core.implementation" = "pi-openai-luna"
+"core.triage" = "pi-openai-luna"
+"core.archive" = "pi-openai-luna"
+"fusion.consolidate" = "pi-openai-sol"
+
+[agents.presets.openai-sol-plan-luna-worker.roles]
+
+[agents.presets.openai-sol-plan-luna-worker.roles."core.verification"]
+quality-verifier = "pi-openai-luna"
+security-verifier = "pi-openai-luna"
+performance-verifier = "pi-openai-luna"
+openspec-verifier = "pi-openai-luna"
+usability-verifier = "pi-openai-luna"
+test-verifier = "pi-openai-luna"
+
+[agents.presets.openai-sol-plan-luna-worker.roles."fusion.plan"]
+planner-1 = "pi-openai-sol"
+planner-2 = "pi-openai-terra"
+planner-3 = "pi-openai-luna"
+
+[agents.presets.openai-sol-plan-terra-work]
+default_profile = "pi-openai-luna"
+
+[agents.presets.openai-sol-plan-terra-work.steps]
+"core.plan" = "pi-openai-sol"
+"core.implementation" = "pi-openai-terra"
+"core.triage" = "pi-openai-luna"
+"core.archive" = "pi-openai-luna"
+"fusion.consolidate" = "pi-openai-sol"
+
+[agents.presets.openai-sol-plan-terra-work.roles]
+
+[agents.presets.openai-sol-plan-terra-work.roles."core.verification"]
+quality-verifier = "pi-openai-luna"
+security-verifier = "pi-openai-luna"
+performance-verifier = "pi-openai-luna"
+openspec-verifier = "pi-openai-luna"
+usability-verifier = "pi-openai-luna"
+test-verifier = "pi-openai-luna"
+
+[agents.presets.openai-sol-plan-terra-work.roles."fusion.plan"]
+planner-1 = "pi-openai-sol"
+planner-2 = "pi-openai-terra"
+planner-3 = "pi-openai-luna"
+
+[agents.presets.deepseek-go]
+default_profile = "pi-opencode-go-deepseek-flash"
+
+[agents.presets.deepseek-go.steps]
+"core.plan" = "pi-opencode-go-deepseek-flash"
+"core.implementation" = "pi-opencode-go-deepseek-flash"
+"core.triage" = "pi-opencode-go-deepseek-flash"
+"core.archive" = "pi-opencode-go-deepseek-flash"
+"fusion.consolidate" = "pi-opencode-go-deepseek-flash"
+
+[agents.presets.deepseek-go.roles]
+
+[agents.presets.deepseek-go.roles."core.verification"]
+quality-verifier = "pi-opencode-go-deepseek-flash"
+security-verifier = "pi-opencode-go-deepseek-flash"
+performance-verifier = "pi-opencode-go-deepseek-flash"
+openspec-verifier = "pi-opencode-go-deepseek-flash"
+usability-verifier = "pi-opencode-go-deepseek-flash"
+test-verifier = "pi-opencode-go-deepseek-flash"
+
+[agents.presets.deepseek-go.roles."fusion.plan"]
+planner-1 = "pi-opencode-go-deepseek-flash"
+planner-2 = "pi-opencode-go-luna"
+
+[agents.presets.deepseek-free]
+default_profile = "pi-opencode-deepseek-flash-free"
+
+[agents.presets.deepseek-free.steps]
+"core.plan" = "pi-opencode-deepseek-flash-free"
+"core.implementation" = "pi-opencode-deepseek-flash-free"
+"core.triage" = "pi-opencode-deepseek-flash-free"
+"core.archive" = "pi-opencode-deepseek-flash-free"
+"fusion.consolidate" = "pi-opencode-deepseek-flash-free"
+
+[agents.presets.deepseek-free.roles]
+
+[agents.presets.deepseek-free.roles."core.verification"]
+quality-verifier = "pi-opencode-deepseek-flash-free"
+security-verifier = "pi-opencode-deepseek-flash-free"
+performance-verifier = "pi-opencode-deepseek-flash-free"
+openspec-verifier = "pi-opencode-deepseek-flash-free"
+usability-verifier = "pi-opencode-deepseek-flash-free"
+test-verifier = "pi-opencode-deepseek-flash-free"
+
+[agents.presets.deepseek-free.roles."fusion.plan"]
+planner-1 = "pi-opencode-deepseek-flash-free"
+planner-2 = "pi-opencode-hy3-free"
+
+[agents.presets.deepseek-pro-plan-flash-worker]
+default_profile = "pi-opencode-go-deepseek-flash"
+
+[agents.presets.deepseek-pro-plan-flash-worker.steps]
+"core.plan" = "pi-opencode-go-deepseek-pro"
+"core.implementation" = "pi-opencode-go-deepseek-flash"
+"core.triage" = "pi-opencode-go-deepseek-flash"
+"core.archive" = "pi-opencode-go-deepseek-flash"
+"fusion.consolidate" = "pi-opencode-go-deepseek-flash"
+
+[agents.presets.deepseek-pro-plan-flash-worker.roles]
+
+[agents.presets.deepseek-pro-plan-flash-worker.roles."core.verification"]
+quality-verifier = "pi-opencode-go-deepseek-flash"
+security-verifier = "pi-opencode-go-deepseek-flash"
+performance-verifier = "pi-opencode-go-deepseek-flash"
+openspec-verifier = "pi-opencode-go-deepseek-flash"
+usability-verifier = "pi-opencode-go-deepseek-flash"
+test-verifier = "pi-opencode-go-deepseek-flash"
+
+[agents.presets.deepseek-pro-plan-flash-worker.roles."fusion.plan"]
+planner-1 = "pi-opencode-go-deepseek-pro"
+planner-2 = "pi-opencode-go-deepseek-flash"
+
+[agents.presets.deepseek-pro-plan-flash-free-work]
+default_profile = "pi-opencode-deepseek-flash-free"
+
+[agents.presets.deepseek-pro-plan-flash-free-work.steps]
+"core.plan" = "pi-opencode-go-deepseek-pro"
+"core.implementation" = "pi-opencode-deepseek-flash-free"
+"core.triage" = "pi-opencode-deepseek-flash-free"
+"core.archive" = "pi-opencode-deepseek-flash-free"
+"fusion.consolidate" = "pi-opencode-go-deepseek-pro"
+
+[agents.presets.deepseek-pro-plan-flash-free-work.roles]
+
+[agents.presets.deepseek-pro-plan-flash-free-work.roles."core.verification"]
+quality-verifier = "pi-opencode-deepseek-flash-free"
+security-verifier = "pi-opencode-deepseek-flash-free"
+performance-verifier = "pi-opencode-deepseek-flash-free"
+openspec-verifier = "pi-opencode-deepseek-flash-free"
+usability-verifier = "pi-opencode-deepseek-flash-free"
+test-verifier = "pi-opencode-deepseek-flash-free"
+
+[agents.presets.deepseek-pro-plan-flash-free-work.roles."fusion.plan"]
+planner-1 = "pi-opencode-go-deepseek-pro"
+planner-2 = "pi-opencode-deepseek-flash-free"
+
+[agents.presets.opencode-go-luna]
+default_profile = "pi-opencode-go-luna"
+
+[agents.presets.opencode-go-luna.steps]
+"core.plan" = "pi-opencode-go-luna"
+"core.implementation" = "pi-opencode-go-luna"
+"core.triage" = "pi-opencode-go-luna"
+"core.archive" = "pi-opencode-go-luna"
+"fusion.consolidate" = "pi-opencode-go-luna"
+
+[agents.presets.opencode-go-luna.roles]
+
+[agents.presets.opencode-go-luna.roles."core.verification"]
+quality-verifier = "pi-opencode-go-luna"
+security-verifier = "pi-opencode-go-luna"
+performance-verifier = "pi-opencode-go-luna"
+openspec-verifier = "pi-opencode-go-luna"
+usability-verifier = "pi-opencode-go-luna"
+test-verifier = "pi-opencode-go-luna"
+
+[agents.presets.opencode-go-luna.roles."fusion.plan"]
+planner-1 = "pi-opencode-go-luna"
+planner-2 = "pi-opencode-go-deepseek-flash"
+
+[agents.presets.hy3-free]
+default_profile = "pi-opencode-hy3-free"
+
+[agents.presets.hy3-free.steps]
+"core.plan" = "pi-opencode-hy3-free"
+"core.implementation" = "pi-opencode-hy3-free"
+"core.triage" = "pi-opencode-hy3-free"
+"core.archive" = "pi-opencode-hy3-free"
+"fusion.consolidate" = "pi-opencode-hy3-free"
+
+[agents.presets.hy3-free.roles]
+
+[agents.presets.hy3-free.roles."core.verification"]
+quality-verifier = "pi-opencode-hy3-free"
+security-verifier = "pi-opencode-hy3-free"
+performance-verifier = "pi-opencode-hy3-free"
+openspec-verifier = "pi-opencode-hy3-free"
+usability-verifier = "pi-opencode-hy3-free"
+test-verifier = "pi-opencode-hy3-free"
+
+[agents.presets.hy3-free.roles."fusion.plan"]
+planner-1 = "pi-opencode-hy3-free"
+planner-2 = "pi-opencode-deepseek-flash-free"
+
+[agents.profiles]
+
+[agents.profiles.pi-openai-luna]
+runtime = "pi"
+model = "openai-codex/gpt-5.6-luna"
+thinking = "high"
+
+[agents.profiles.pi-openai-terra]
+runtime = "pi"
+model = "openai-codex/gpt-5.6-terra"
+thinking = "high"
+
+[agents.profiles.pi-openai-sol]
+runtime = "pi"
+model = "openai-codex/gpt-5.6-sol"
+thinking = "high"
+
+[agents.profiles.pi-opencode-go-deepseek-flash]
+runtime = "pi"
+model = "opencode-go/deepseek-v4-flash"
+thinking = "high"
+
+[agents.profiles.pi-opencode-go-deepseek-pro]
+runtime = "pi"
+model = "opencode-go/deepseek-v4-pro"
+thinking = "high"
+
+[agents.profiles.pi-opencode-go-luna]
+runtime = "pi"
+model = "opencode-go/gpt-5.6-luna"
+thinking = "high"
+
+[agents.profiles.pi-opencode-deepseek-flash-free]
+runtime = "pi"
+model = "opencode/deepseek-v4-flash-free"
+thinking = "high"
+
+[agents.profiles.pi-opencode-hy3-free]
+runtime = "pi"
+model = "opencode/hy3-free"
+thinking = "high"
 
 [workflow]
 max_verification_rounds = 20
