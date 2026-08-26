@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
 	mkdirSync,
 	mkdtempSync,
@@ -14,6 +15,7 @@ import {
 	agentMetrics,
 	costMessages,
 	costSummary,
+	countVerifierFindings,
 	type DeveloperReviewComment,
 	getTaskViewport,
 	isStale,
@@ -25,6 +27,7 @@ import {
 	saveDeveloperReview,
 	savePlanReview,
 	testDashboard,
+	verifierFindingCounts,
 	worktreeGitStatus,
 } from "../../src/tui/dash/data";
 import { startArgs, viewToDashboardState } from "../../src/tui/dash/engine";
@@ -809,6 +812,73 @@ test("agentMetrics omits fields the events never recorded", () => {
 	expect(verifier?.inputTokens).toBeUndefined();
 	// Roles without any metric-bearing event are omitted entirely.
 	expect(metrics.has("worker")).toBe(false);
+});
+
+test("verifier finding counts preserve zero severities", () => {
+	expect(
+		countVerifierFindings([
+			{ severity: "critical" },
+			{ severity: "warning" },
+			{ severity: "warning" },
+			{ severity: "info" },
+		]),
+	).toEqual({ critical: 1, warning: 2, info: 1 });
+	expect(countVerifierFindings([])).toEqual({
+		critical: 0,
+		warning: 0,
+		info: 0,
+	});
+});
+
+test("verifier finding counts require a valid current-round committed result", () => {
+	const repo = fixture();
+	const outputPath = join(repo, "findings.json");
+	const output = JSON.stringify({
+		runId: "verifier-run",
+		schemaId: "core.findings",
+		schemaVersion: 1,
+		payload: { findings: [] },
+	});
+	writeFileSync(outputPath, output);
+	const state = {
+		verificationRound: 1,
+		runs: [
+			{
+				id: "verifier-run",
+				stepId: "core.verification",
+				role: "quality-verifier",
+				attempt: 1,
+				status: "completed",
+				runtime: "test",
+				profile: "test",
+				outputPath,
+				outputDigest: createHash("sha256").update(output).digest("hex"),
+			},
+		],
+	} as import("../../src/tui/dash/data").WorkflowState;
+
+	expect(verifierFindingCounts(state, "quality-verifier")).toEqual({
+		critical: 0,
+		warning: 0,
+		info: 0,
+	});
+	expect(verifierFindingCounts(state, "security-verifier")).toBeUndefined();
+});
+
+test("demo dashboard includes representative verifier finding counts", () => {
+	const dashboard = testDashboard("verify");
+	expect(
+		dashboard.agents.find((agent) => agent.role === "security-verifier")
+			?.findingCounts,
+	).toEqual({ critical: 2, warning: 1, info: 0 });
+	expect(
+		dashboard.agents.find((agent) => agent.role === "quality-verifier")
+			?.findingCounts,
+	).toEqual({ critical: 0, warning: 3, info: 2 });
+	expect(
+		dashboard.agents.find((agent) => agent.role === "agents-verifier")
+			?.findingCounts,
+	).toBeUndefined();
 });
 
 test("demo dashboard renders every metric field with runtime.usage fixtures", () => {

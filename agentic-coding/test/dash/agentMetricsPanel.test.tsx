@@ -37,6 +37,27 @@ test("agents panel renders compact bounded metric lines per agent", async () => 
 	expect(frame).not.toContain("PASS · 1m 7s · $0.07");
 	// The compact line keeps the tokens/s unit visible at the panel width.
 	expect(frame).toContain("7.7 tok/s");
+	// The visible verifier finding summary includes explicit zero severities.
+	expect(frame).toContain("critical 0 · warning 3 · info 2");
+	t.renderer.destroy();
+});
+
+test("agents panel wraps finding summaries at narrow widths", async () => {
+	const t = await testRender(() => <TestDashboard />, {
+		width: 60,
+		height: 40,
+	});
+	await t.waitForFrame((frame) => frame.includes("Agents"));
+	t.mockInput.pressEscape();
+	await t.waitForFrame((frame) => !frame.includes("Plan review"));
+	t.mockInput.pressTab();
+	t.mockInput.pressTab();
+	for (let index = 0; index < 4; index++) t.mockInput.pressKey("j");
+	await t.renderOnce();
+	const frame = t.captureCharFrame();
+	expect(frame).toContain("critical 0");
+	expect(frame).toContain("warning 3");
+	expect(frame).toContain("info 2");
 	t.renderer.destroy();
 });
 

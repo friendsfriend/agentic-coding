@@ -264,6 +264,12 @@ export function getTaskViewport(tasks: DashboardTask[]): TaskViewport {
 	};
 }
 
+export interface FindingCounts {
+	critical: number;
+	warning: number;
+	info: number;
+}
+
 export interface DashboardData {
 	state: WorkflowState;
 	request: string;
@@ -277,6 +283,7 @@ export interface DashboardData {
 		model?: string;
 		cost?: number;
 		metrics?: AgentUsageMetrics;
+		findingCounts?: FindingCounts;
 	}>;
 	updated: string;
 	health: { dirty: boolean; ahead: number; behind: number; branch: string };
@@ -737,10 +744,10 @@ function committedVerifierRun(
 		!existsSync(run.outputPath)
 	)
 		return undefined;
-	const bytes = readFileSync(run.outputPath);
-	if (createHash("sha256").update(bytes).digest("hex") !== run.outputDigest)
-		return undefined;
 	try {
+		const bytes = readFileSync(run.outputPath);
+		if (createHash("sha256").update(bytes).digest("hex") !== run.outputDigest)
+			return undefined;
 		const envelope = JSON.parse(bytes.toString("utf8")) as {
 			runId?: unknown;
 			schemaId?: unknown;
@@ -771,6 +778,24 @@ function committedVerifierOutput(state: WorkflowState, role: string) {
 		)
 		.at(-1);
 	return run ? committedVerifierRun(run) : undefined;
+}
+
+/** Count each validated finding once while preserving explicit zero severities. */
+export function countVerifierFindings(
+	findings: Array<Pick<VerifierFinding, "severity">>,
+): FindingCounts {
+	const counts: FindingCounts = { critical: 0, warning: 0, info: 0 };
+	for (const finding of findings) counts[finding.severity]++;
+	return counts;
+}
+
+/** Current-round committed finding counts for one verifier, when available. */
+export function verifierFindingCounts(
+	state: WorkflowState,
+	role: string,
+): FindingCounts | undefined {
+	const output = committedVerifierOutput(state, role);
+	return output ? countVerifierFindings(output.findings) : undefined;
 }
 function verificationHistory(state: WorkflowState): string[] {
 	const attempts = [
@@ -1221,6 +1246,9 @@ export function loadDashboard(repo: string, change: string): DashboardData {
 					model: run?.model ?? run?.profile ?? run?.runtime,
 					cost: costByRole.get(role)?.cost,
 					metrics: metricsByRole.get(role),
+					findingCounts: role.endsWith("verifier")
+						? verifierFindingCounts(state, role)
+						: undefined,
 				};
 			}),
 		updated: new Date().toLocaleTimeString(),
@@ -1368,6 +1396,10 @@ export function testDashboard(phase = "proposed"): DashboardData {
 		},
 	];
 	const demoMetrics = agentMetrics(demoTelemetry);
+	const demoFindingCounts: Record<string, FindingCounts | undefined> = {
+		"security-verifier": { critical: 2, warning: 1, info: 0 },
+		"quality-verifier": { critical: 0, warning: 3, info: 2 },
+	};
 	return {
 		state: {
 			changeId: "demo-optional-realisation-date",
@@ -1446,6 +1478,7 @@ export function testDashboard(phase = "proposed"): DashboardData {
 				status:
 					phase === "verify" ? "working" : verified ? "done" : "not started",
 				metrics: demoMetrics.get(role),
+				findingCounts: demoFindingCounts[role],
 			})),
 			{
 				role: "test-verifier",
