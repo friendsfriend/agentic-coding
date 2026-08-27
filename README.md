@@ -16,7 +16,20 @@ Installer never installs agent runtimes, providers, or credentials. Configure Gi
 ./scripts/install.sh
 ```
 
-Configuration installs at `~/.config/agentic-coding/config.toml`. The shipped [`pi/herdr-workflow.toml`](pi/herdr-workflow.toml) provides only the model-agnostic `use-default-model` preset; add custom profiles, routes, and presets to your user or project configuration as needed.
+Configuration installs at `~/.config/agentic-coding/config.toml`. The shipped [`pi/herdr-workflow.toml`](pi/herdr-workflow.toml) is a portable defaults template and provides only the model-agnostic `use-default-model` preset. Custom profiles, routes, and presets belong in the user configuration at that location (or in an explicitly supplied project configuration).
+
+For an existing installation, migrate the current configuration before updating this checkout or running the installer. If the user config is still the repository symlink, materialize it as a regular file so its current profiles and presets remain user-owned:
+
+```bash
+config="$HOME/.config/agentic-coding/config.toml"
+tmp="$config.migration.tmp"
+if [[ -L "$config" ]]; then
+  cp -L "$config" "$tmp" && mv "$tmp" "$config"
+fi
+test -f "$config" && test ! -L "$config"
+```
+
+After this one-time migration, update the checkout and run `./scripts/install.sh`. Installation copies the defaults only when the user config is missing and never overwrites an existing file or symlink.
 
 > New engine migrates recognized legacy workflows on first access. Legacy rows/files remain preserved, but old engine must not resume workflow after new revisions/effects exist. Restore recorded pre-migration repository/worktree backup before binary rollback.
 

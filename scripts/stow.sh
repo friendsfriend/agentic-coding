@@ -7,7 +7,9 @@ link_tree() {
     local source="$1" target="$2" path relative destination linked
     local -a files=() conflicts=()
 
-    while IFS= read -r -d '' path; do files+=("$path"); done < <(find "$source" \( -type f -o -type l \) -print0)
+    while IFS= read -r -d '' path; do
+        [[ "$path" == "$source/herdr-workflow.toml" ]] || files+=("$path")
+    done < <(find "$source" \( -type f -o -type l \) -print0)
 
     while IFS= read -r -d '' path; do
         linked=$(readlink "$path" || true)
@@ -36,10 +38,16 @@ mkdir -p "$HOME/.pi/agent" "$HOME/.config/opencode" "$HOME/.config/agentic-codin
 link_tree "$root/pi" "$HOME/.pi/agent"
 link_tree "$root/opencode" "$HOME/.config/opencode"
 
-# Workflow config lives at the XDG location; a real user file there wins.
+# Remove the legacy template link without touching other user-owned files.
+legacy_template_link="$HOME/.pi/agent/herdr-workflow.toml"
+if [[ -L "$legacy_template_link" && "$(readlink "$legacy_template_link")" == "$root/pi/herdr-workflow.toml" ]]; then
+    rm "$legacy_template_link"
+fi
+
+# Initialize the XDG config once; user-owned files and symlinks win.
 config_dest="$HOME/.config/agentic-coding/config.toml"
-if [[ ! -e "$config_dest" || -L "$config_dest" ]]; then
-    ln -sfn "$root/pi/herdr-workflow.toml" "$config_dest"
+if [[ ! -e "$config_dest" && ! -L "$config_dest" ]]; then
+    cp "$root/pi/herdr-workflow.toml" "$config_dest"
 fi
 
 # Remove stale herdr agent definition symlinks from global pi discovery
