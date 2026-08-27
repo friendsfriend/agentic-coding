@@ -29,30 +29,6 @@ test-verifier = "pi-opencode-go-deepseek-flash"
 planner-1 = "pi-opencode-go-deepseek-flash"
 planner-2 = "pi-opencode-go-luna"
 
-[agents.presets.deepseek-free]
-default_profile = "pi-opencode-deepseek-flash-free"
-
-[agents.presets.deepseek-free.steps]
-"core.plan" = "pi-opencode-deepseek-flash-free"
-"core.implementation" = "pi-opencode-deepseek-flash-free"
-"core.triage" = "pi-opencode-deepseek-flash-free"
-"core.archive" = "pi-opencode-deepseek-flash-free"
-"fusion.consolidate" = "pi-opencode-deepseek-flash-free"
-
-[agents.presets.deepseek-free.roles]
-
-[agents.presets.deepseek-free.roles."core.verification"]
-quality-verifier = "pi-opencode-deepseek-flash-free"
-security-verifier = "pi-opencode-deepseek-flash-free"
-performance-verifier = "pi-opencode-deepseek-flash-free"
-openspec-verifier = "pi-opencode-deepseek-flash-free"
-usability-verifier = "pi-opencode-deepseek-flash-free"
-test-verifier = "pi-opencode-deepseek-flash-free"
-
-[agents.presets.deepseek-free.roles."fusion.plan"]
-planner-1 = "pi-opencode-deepseek-flash-free"
-planner-2 = "pi-opencode-hy3-free"
-
 [agents.presets.deepseek-pro-plan-flash-worker]
 default_profile = "pi-opencode-go-deepseek-flash"
 
@@ -76,30 +52,6 @@ test-verifier = "pi-opencode-go-deepseek-flash"
 [agents.presets.deepseek-pro-plan-flash-worker.roles."fusion.plan"]
 planner-1 = "pi-opencode-go-deepseek-pro"
 planner-2 = "pi-opencode-go-deepseek-flash"
-
-[agents.presets.deepseek-pro-plan-flash-free-work]
-default_profile = "pi-opencode-deepseek-flash-free"
-
-[agents.presets.deepseek-pro-plan-flash-free-work.steps]
-"core.plan" = "pi-opencode-go-deepseek-pro"
-"core.implementation" = "pi-opencode-deepseek-flash-free"
-"core.triage" = "pi-opencode-deepseek-flash-free"
-"core.archive" = "pi-opencode-deepseek-flash-free"
-"fusion.consolidate" = "pi-opencode-go-deepseek-pro"
-
-[agents.presets.deepseek-pro-plan-flash-free-work.roles]
-
-[agents.presets.deepseek-pro-plan-flash-free-work.roles."core.verification"]
-quality-verifier = "pi-opencode-deepseek-flash-free"
-security-verifier = "pi-opencode-deepseek-flash-free"
-performance-verifier = "pi-opencode-deepseek-flash-free"
-openspec-verifier = "pi-opencode-deepseek-flash-free"
-usability-verifier = "pi-opencode-deepseek-flash-free"
-test-verifier = "pi-opencode-deepseek-flash-free"
-
-[agents.presets.deepseek-pro-plan-flash-free-work.roles."fusion.plan"]
-planner-1 = "pi-opencode-go-deepseek-pro"
-planner-2 = "pi-opencode-deepseek-flash-free"
 
 [agents.presets.opencode-go-luna]
 default_profile = "pi-opencode-go-luna"
@@ -147,7 +99,149 @@ test-verifier = "pi-opencode-hy3-free"
 
 [agents.presets.hy3-free.roles."fusion.plan"]
 planner-1 = "pi-opencode-hy3-free"
-planner-2 = "pi-opencode-deepseek-flash-free"
+
+[agents.presets.copilot-luna]
+default_profile = "pi-copilot-luna"
+
+[agents.presets.copilot-luna.steps]
+"core.plan" = "pi-copilot-luna"
+"core.implementation" = "pi-copilot-luna"
+"core.triage" = "pi-copilot-luna"
+"core.archive" = "pi-copilot-luna"
+"fusion.consolidate" = "pi-copilot-luna"
+
+[agents.presets.copilot-luna.roles]
+
+[agents.presets.copilot-luna.roles."core.verification"]
+quality-verifier = "pi-copilot-luna"
+security-verifier = "pi-copilot-luna"
+performance-verifier = "pi-copilot-luna"
+openspec-verifier = "pi-copilot-luna"
+usability-verifier = "pi-copilot-luna"
+test-verifier = "pi-copilot-luna"
+
+[agents.presets.copilot-luna.roles."fusion.plan"]
+planner-1 = "pi-copilot-luna"
+
+[agents.presets.copilot-terra-plan-luna-work]
+default_profile = "pi-copilot-luna"
+
+[agents.presets.copilot-terra-plan-luna-work.steps]
+"core.plan" = "pi-copilot-terra"
+"core.implementation" = "pi-copilot-luna"
+"core.triage" = "pi-copilot-luna"
+"core.archive" = "pi-copilot-luna"
+"fusion.consolidate" = "pi-copilot-luna"
+
+[agents.presets.copilot-terra-plan-luna-work.roles]
+
+[agents.presets.copilot-terra-plan-luna-work.roles."core.verification"]
+quality-verifier = "pi-copilot-luna"
+security-verifier = "pi-copilot-luna"
+performance-verifier = "pi-copilot-luna"
+openspec-verifier = "pi-copilot-luna"
+usability-verifier = "pi-copilot-luna"
+test-verifier = "pi-copilot-luna"
+
+[agents.presets.copilot-terra-plan-luna-work.roles."fusion.plan"]
+planner-1 = "pi-copilot-terra"
+planner-2 = "pi-copilot-luna"
+
+[agents.presets.copilot-sonnet]
+default_profile = "pi-copilot-sonnet"
+
+[agents.presets.copilot-sonnet.steps]
+"core.plan" = "pi-copilot-sonnet"
+"core.implementation" = "pi-copilot-sonnet"
+"core.triage" = "pi-copilot-sonnet"
+"core.archive" = "pi-copilot-sonnet"
+"fusion.consolidate" = "pi-copilot-sonnet"
+
+[agents.presets.copilot-sonnet.roles]
+
+[agents.presets.copilot-sonnet.roles."core.verification"]
+quality-verifier = "pi-copilot-sonnet"
+security-verifier = "pi-copilot-sonnet"
+performance-verifier = "pi-copilot-sonnet"
+openspec-verifier = "pi-copilot-sonnet"
+usability-verifier = "pi-copilot-sonnet"
+test-verifier = "pi-copilot-sonnet"
+
+[agents.presets.copilot-sonnet.roles."fusion.plan"]
+planner-1 = "pi-copilot-sonnet"
+
+[agents.presets.copilot-opus-plan-sonnet-work]
+default_profile = "pi-copilot-sonnet"
+
+[agents.presets.copilot-opus-plan-sonnet-work.steps]
+"core.plan" = "pi-copilot-opus"
+"core.implementation" = "pi-copilot-sonnet"
+"core.triage" = "pi-copilot-sonnet"
+"core.archive" = "pi-copilot-sonnet"
+"fusion.consolidate" = "pi-copilot-sonnet"
+
+[agents.presets.copilot-opus-plan-sonnet-work.roles]
+
+[agents.presets.copilot-opus-plan-sonnet-work.roles."core.verification"]
+quality-verifier = "pi-copilot-sonnet"
+security-verifier = "pi-copilot-sonnet"
+performance-verifier = "pi-copilot-sonnet"
+openspec-verifier = "pi-copilot-sonnet"
+usability-verifier = "pi-copilot-sonnet"
+test-verifier = "pi-copilot-sonnet"
+
+[agents.presets.copilot-opus-plan-sonnet-work.roles."fusion.plan"]
+planner-1 = "pi-copilot-opus"
+planner-2 = "pi-copilot-sonnet"
+
+[agents.presets.copilot-opus-plan-luna-work]
+default_profile = "pi-copilot-luna"
+
+[agents.presets.copilot-opus-plan-luna-work.steps]
+"core.plan" = "pi-copilot-opus"
+"core.implementation" = "pi-copilot-luna"
+"core.triage" = "pi-copilot-luna"
+"core.archive" = "pi-copilot-luna"
+"fusion.consolidate" = "pi-copilot-opus"
+
+[agents.presets.copilot-opus-plan-luna-work.roles]
+
+[agents.presets.copilot-opus-plan-luna-work.roles."core.verification"]
+quality-verifier = "pi-copilot-luna"
+security-verifier = "pi-copilot-luna"
+performance-verifier = "pi-copilot-luna"
+openspec-verifier = "pi-copilot-luna"
+usability-verifier = "pi-copilot-luna"
+test-verifier = "pi-copilot-luna"
+
+[agents.presets.copilot-opus-plan-luna-work.roles."fusion.plan"]
+planner-1 = "pi-copilot-opus"
+planner-2 = "pi-copilot-luna"
+
+[agents.presets.copilot-opus-plan-luna-work-sonnet-review]
+default_profile = "pi-copilot-luna"
+
+[agents.presets.copilot-opus-plan-luna-work-sonnet-review.steps]
+"core.plan" = "pi-copilot-opus"
+"core.implementation" = "pi-copilot-luna"
+"core.triage" = "pi-copilot-luna"
+"core.archive" = "pi-copilot-luna"
+"fusion.consolidate" = "pi-copilot-opus"
+
+[agents.presets.copilot-opus-plan-luna-work-sonnet-review.roles]
+
+[agents.presets.copilot-opus-plan-luna-work-sonnet-review.roles."core.verification"]
+quality-verifier = "pi-copilot-sonnet"
+security-verifier = "pi-copilot-sonnet"
+performance-verifier = "pi-copilot-sonnet"
+openspec-verifier = "pi-copilot-sonnet"
+usability-verifier = "pi-copilot-sonnet"
+test-verifier = "pi-copilot-sonnet"
+
+[agents.presets.copilot-opus-plan-luna-work-sonnet-review.roles."fusion.plan"]
+planner-1 = "pi-copilot-opus"
+planner-2 = "pi-copilot-sonnet"
+planner-3 = "pi-copilot-luna"
 
 [agents.profiles]
 
@@ -166,14 +260,44 @@ runtime = "pi"
 model = "opencode-go/gpt-5.6-luna"
 thinking = "high"
 
-[agents.profiles.pi-opencode-deepseek-flash-free]
-runtime = "pi"
-model = "opencode/deepseek-v4-flash-free"
-thinking = "high"
-
 [agents.profiles.pi-opencode-hy3-free]
 runtime = "pi"
 model = "opencode/hy3-free"
+thinking = "high"
+
+[agents.profiles.pi-eon-sonnet]
+runtime = "pi"
+model = "eon/claude-5-sonnet"
+thinking = "high"
+
+[agents.profiles.pi-eon-opus]
+runtime = "pi"
+model = "eon/claude-4.8-opus"
+thinking = "high"
+
+[agents.profiles.pi-eon-haiku]
+runtime = "pi"
+model = "eon/claude-haiku-4-5-20251001"
+thinking = "high"
+
+[agents.profiles.pi-copilot-luna]
+runtime = "pi"
+model = "github-copilot/gpt-5.6-luna"
+thinking = "high"
+
+[agents.profiles.pi-copilot-terra]
+runtime = "pi"
+model = "github-copilot/gpt-5.6-terra"
+thinking = "high"
+
+[agents.profiles.pi-copilot-sonnet]
+runtime = "pi"
+model = "github-copilot/claude-sonnet-5"
+thinking = "high"
+
+[agents.profiles.pi-copilot-opus]
+runtime = "pi"
+model = "github-copilot/claude-opus-5"
 thinking = "high"
 
 [workflow]
