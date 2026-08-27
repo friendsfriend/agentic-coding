@@ -1,8 +1,7 @@
-# default-model-preset Specification
+# Default model preset Specification Delta
 
-## Purpose
-Provide a built-in model-agnostic workflow choice with a configurable harness, so installations run agents without shipping provider-specific model configuration.
-## Requirements
+## MODIFIED Requirements
+
 ### Requirement: Built-in use-default-model preset
 The system SHALL expose `use-default-model` as the only built-in agent preset when the effective configuration has no custom configuration. The repository-provided `pi/herdr-workflow.toml` SHALL contain only this model-agnostic agent default and portable application defaults; it SHALL NOT contain machine-specific profiles or custom presets. The built-in preset configuration SHALL select one supported harness (`pi`, `opencode`, or `opencode-v2`) and SHALL not configure a model. Selecting it, or starting with no custom routing configured, SHALL route agent work through the configured harness without a model so that the harness selects its own default model.
 
@@ -33,4 +32,3 @@ The system SHALL keep `use-default-model` available independently of persisted c
 - **WHEN** a fresh user configuration is initialized from the repository template
 - **THEN** it SHALL contain no machine-specific profile or custom preset definitions
 - **AND** the built-in `use-default-model` choice SHALL remain available
-
