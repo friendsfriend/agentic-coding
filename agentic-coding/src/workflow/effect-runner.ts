@@ -11,6 +11,7 @@ import { workflowAssets } from "./assets.ts";
 import { renderAssignment } from "./assignment.ts";
 import type { AgentHandle, Assignment, EffectKind } from "./contracts.ts";
 import { type CredentialPrompt, runGitWithCredentials } from "./credentials.ts";
+import { loadConfig } from "./effects.ts";
 import { childTrace, parseTraceparent, traceparent } from "./observability.ts";
 import type { WorkflowRegistry } from "./registry.ts";
 import {
@@ -18,6 +19,7 @@ import {
 	changedFilesIn,
 	type WorkflowEngine,
 } from "./runtime.ts";
+import { snapshotList, verifyConcept } from "./wiki.ts";
 
 export interface EffectHandler {
 	observe?(effect: ClaimedEffect): Promise<unknown | undefined>;
@@ -285,7 +287,12 @@ export function agentEffectHandlers(
 						repo,
 						options.registry,
 						run.id,
-						"",
+						effect.runToken ?? "",
+					);
+					writeRunEnvironment(
+						snapshot.metadata.worktree,
+						run.id,
+						expected.assignment.environment,
 					);
 					writeAgentEnvPointer(
 						snapshot.metadata.worktree,
@@ -395,6 +402,29 @@ export function agentEffectHandlers(
 					body.body ?? "",
 				);
 				return { shown: true };
+			},
+		},
+		"wiki.verify": {
+			async execute(effect) {
+				const snapshot = snapshotFor(effect);
+				const configured = loadConfig().wiki?.reviewer;
+				let reviewer = configured;
+				if (!reviewer) {
+					try {
+						reviewer = git(snapshot.metadata.worktree, "config", "user.email");
+					} catch {
+						reviewer = undefined;
+					}
+				}
+				const actor = reviewer?.startsWith("human:")
+					? reviewer
+					: `human:${reviewer || "developer"}`;
+				const concepts = snapshotList(
+					snapshot.metadata.changeId,
+					snapshot.metadata.worktree,
+				);
+				for (const concept of concepts) verifyConcept(concept, actor);
+				return { verified: concepts, actor };
 			},
 		},
 		"openspec.validate": {
@@ -793,6 +823,28 @@ export function resolveLiveAgent(
  * deterministically for every name shape. Written at launch and at every
  * reused-prompt delivery so the pointer never outlives its run.
  */
+function writeRunEnvironment(
+	worktree: string,
+	runId: string,
+	environment: Record<string, string>,
+): void {
+	const envFile = path.join(
+		worktree,
+		".herdr-workflow",
+		"runtime-bin",
+		runId,
+		"run.env",
+	);
+	fs.mkdirSync(path.dirname(envFile), { recursive: true });
+	if (Object.values(environment).some((value) => /[\r\n]/.test(value)))
+		throw new Error("run environment values may not contain newlines");
+	const content = Object.entries(environment)
+		.map(([key, value]) => `${key}=${value}`)
+		.join("\n");
+	const temporary = `${envFile}.${process.pid}.tmp`;
+	fs.writeFileSync(temporary, `${content}\n`, { mode: 0o600 });
+	fs.renameSync(temporary, envFile);
+}
 export function writeAgentEnvPointer(
 	worktree: string,
 	agentName: string,

@@ -40,6 +40,7 @@ export type EffectKind =
 	| "agent.stop"
 	| "notification.show"
 	| "openspec.validate"
+	| "wiki.verify"
 	| "delivery.commit"
 	| "delivery.push"
 	| "pull-request.create"

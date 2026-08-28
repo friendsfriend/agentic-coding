@@ -208,6 +208,7 @@ export interface WorkflowConfig {
 	projects: { root: string; max_depth: number };
 	telemetry: { capture_content: boolean };
 	ui: { theme: string; selection_height: number };
+	wiki?: { root?: string; reviewer?: string };
 }
 
 /** Built-in fallback (mirror of pi/herdr-workflow.toml) — used only when no
@@ -223,6 +224,7 @@ export const DEFAULT_CONFIG: WorkflowConfig = {
 	projects: { root: "~/development", max_depth: 3 },
 	telemetry: { capture_content: true },
 	ui: { theme: "catppuccin", selection_height: 10 },
+	wiki: { root: "~/.config/agentic-coding/wiki" },
 };
 
 export function loadConfig(): WorkflowConfig {

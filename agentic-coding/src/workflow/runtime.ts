@@ -41,6 +41,7 @@ const EFFECT_KINDS = new Set<EffectKind>([
 	"agent.stop",
 	"notification.show",
 	"openspec.validate",
+	"wiki.verify",
 	"delivery.commit",
 	"delivery.push",
 	"pull-request.create",
@@ -552,7 +553,7 @@ export class WorkflowEngine {
 			const at = this.now();
 			const rows = db
 				.query(
-					`SELECT * FROM workflow_outbox WHERE (status IN ('pending','retry') AND (next_attempt_at IS NULL OR next_attempt_at<=?)) OR (status='running' AND lease_expires_at<=?) ORDER BY rowid LIMIT ?`,
+					`SELECT * FROM workflow_outbox AS ready WHERE ((ready.status IN ('pending','retry') AND (ready.next_attempt_at IS NULL OR ready.next_attempt_at<=?)) OR (ready.status='running' AND ready.lease_expires_at<=?)) AND NOT (ready.kind IN ('delivery.commit','delivery.push') AND EXISTS (SELECT 1 FROM workflow_outbox AS promotion WHERE promotion.workflow_id=ready.workflow_id AND promotion.kind='wiki.verify' AND promotion.status<>'completed')) ORDER BY ready.rowid LIMIT ?`,
 				)
 				.all(at.toISOString(), at.toISOString(), limit) as EffectRow[];
 			for (const row of rows) {
@@ -1258,7 +1259,8 @@ export class WorkflowEngine {
 		}
 		const outcome =
 			command.actionId === "approve-plan" ||
-			command.actionId === "approve-review"
+			command.actionId === "approve-review" ||
+			command.actionId === "approve-wiki"
 				? "approve"
 				: command.actionId === "reject-plan"
 					? "reject"
@@ -1665,13 +1667,14 @@ export class WorkflowEngine {
 			snapshot.step.attempt = round;
 		}
 		if (
-			output !== undefined &&
-			[
-				"core.plan",
-				"core.implementation",
-				"core.verification",
-				"fusion.consolidate",
-			].includes(edge.to)
+			(output !== undefined &&
+				[
+					"core.plan",
+					"core.implementation",
+					"core.verification",
+					"fusion.consolidate",
+				].includes(edge.to)) ||
+			(edge.to === "core.archive" && outcome === "comments")
 		)
 			snapshot.step.context = JSON.parse(JSON.stringify(output)) as JsonValue;
 		if (
@@ -1697,6 +1700,14 @@ export class WorkflowEngine {
 		if (edge.to === "core.completed") snapshot.status = "completed";
 		else if (edge.to === "core.closed") snapshot.status = "closed";
 		else snapshot.status = "active";
+		for (const effect of edge.effects ?? [])
+			this.enqueue(
+				db,
+				snapshot,
+				effect.kind,
+				`${snapshot.workflowId}:${effect.idempotencyKey}:${snapshot.revision}`,
+				effect.payload,
+			);
 		this.enterStep(db, snapshot, definition);
 	}
 	private enterStep(
@@ -1962,11 +1973,20 @@ export class WorkflowEngine {
 		const allowed = this.registry
 			.step(snapshot.currentStep)
 			.allowedEffects.includes(row.kind);
+		// Edge effects are enqueued while advancing into delivery. Keep the
+		// approval promotion legal without broadening delivery's effect contract.
+		const wikiPromotionAtDelivery =
+			row.kind === "wiki.verify" && snapshot.currentStep === "core.delivery";
 		const setupBeforeEntry =
 			row.kind === "workspace.setup" &&
 			!snapshot.step.activeRunIds.length &&
 			snapshot.revision === 0;
-		if (!allowed && !setupBeforeEntry && row.kind !== "agent.stop")
+		if (
+			!allowed &&
+			!wikiPromotionAtDelivery &&
+			!setupBeforeEntry &&
+			row.kind !== "agent.stop"
+		)
 			throw new WorkflowRuntimeError(
 				"invalid-state",
 				`effect ${row.kind} is illegal at ${snapshot.currentStep}`,
@@ -2203,26 +2223,40 @@ export class WorkflowEngine {
 								input: { schemaId: "core.review-comments", schemaVersion: 1 },
 							},
 						]
-					: snapshot.currentStep === "core.completed"
+					: snapshot.currentStep === "core.wiki-approval"
 						? [
-								...(["standard-propose", "fusion-propose"].includes(
-									snapshot.definition.id,
-								)
-									? []
-									: [
-											{
-												id: "create-pr",
-												label: "Create pull request",
-												confirmation: "confirm" as const,
-											},
-										]),
 								{
-									id: "close",
-									label: "Close workflow",
+									id: "approve-wiki",
+									label: "Approve wiki",
 									confirmation: "confirm",
 								},
+								{
+									id: "review-comments",
+									label: "Request wiki changes",
+									confirmation: "confirm",
+									input: { schemaId: "core.review-comments", schemaVersion: 1 },
+								},
 							]
-						: [];
+						: snapshot.currentStep === "core.completed"
+							? [
+									...(["standard-propose", "fusion-propose"].includes(
+										snapshot.definition.id,
+									)
+										? []
+										: [
+												{
+													id: "create-pr",
+													label: "Create pull request",
+													confirmation: "confirm" as const,
+												},
+											]),
+									{
+										id: "close",
+										label: "Close workflow",
+										confirmation: "confirm",
+									},
+								]
+							: [];
 		return actions;
 	}
 	private viewById(repo: string, id: string): WorkflowView {
@@ -2284,6 +2318,9 @@ export class WorkflowEngine {
 					label: this.registry.step(snapshot.currentStep).label,
 					attempt: snapshot.step.attempt,
 					enteredAt: snapshot.metadata.stepEnteredAt,
+					...(snapshot.step.context !== undefined
+						? { context: snapshot.step.context }
+						: {}),
 				},
 				runs: runs.map((run) => ({
 					id: run.id,

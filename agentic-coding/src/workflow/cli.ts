@@ -28,8 +28,17 @@ import {
 	validatePresetCoverage,
 } from "./profiles.ts";
 import { validateChangeId, WorkflowEngine } from "./runtime.ts";
+import {
+	appendLog,
+	ensureBundle,
+	listConcepts,
+	readConcept,
+	searchConcepts,
+	verifyConcept,
+	writeConcept,
+} from "./wiki.ts";
 
-export const SUBCOMMANDS = [
+export const SUBCOMMANDS: readonly string[] = [
 	"start",
 	"status",
 	"action",
@@ -39,6 +48,7 @@ export const SUBCOMMANDS = [
 	"projects",
 	"config",
 	"agent-extension",
+	"wiki",
 ] as const;
 export const REQUIRED_FLAGS: Record<string, string[]> = {
 	start: ["repo", "change", "mode"],
@@ -52,6 +62,14 @@ export const AGENT_EXTENSION_SUBCOMMANDS = [
 	"list",
 	"install",
 	"install-local",
+] as const;
+export const WIKI_SUBCOMMANDS = [
+	"list",
+	"search",
+	"show",
+	"write",
+	"verify",
+	"log",
 ] as const;
 export const PLUGIN_SUBCOMMANDS = AGENT_EXTENSION_SUBCOMMANDS;
 const registry = registerBuiltins(
@@ -257,10 +275,9 @@ function flag(argv: string[], name: string): string | undefined {
 // (they identify *what this process is*, not *which run it was last given*).
 // Resolve the run this process should be handing off right now from the
 // engine (which only ever has one run pending/working per role at a time)
-// instead of trusting the process's own possibly-stale run identity, and
-// mint the capability token fresh, in-process, right before use — it is
-// never written to disk or exposed via env, so no other co-located agent
-// process can read or replay it.
+// instead of trusting the process's own possibly-stale run identity. The
+// launch-bound token remains the authorization proof; never mint one from
+// ambient role identity.
 function resolveHandoffIdentity(
 	workflowEngine: WorkflowEngine,
 	repo: string,
@@ -268,10 +285,35 @@ function resolveHandoffIdentity(
 	const workflowId = process.env.HERDR_WORKFLOW_ID;
 	const stepId = process.env.HERDR_STEP_ID;
 	const role = process.env.HERDR_ROLE;
+	const suppliedToken = process.env.HERDR_RUN_TOKEN;
 	if (!workflowId || !stepId || !role)
-		throw new Error("handoff requires engine-provided run environment");
+		throw new Error(
+			"handoff requires engine-provided run environment and capability",
+		);
 	const run = workflowEngine.activeRunForRole(repo, workflowId, stepId, role);
-	const token = workflowEngine.issueRunCapability(repo, run.id);
+	let token = suppliedToken;
+	if (process.env.HERDR_RUN_ID !== run.id) {
+		try {
+			const envFile = path.join(
+				repo,
+				".herdr-workflow",
+				"runtime-bin",
+				run.id,
+				"run.env",
+			);
+			const line = fs
+				.readFileSync(envFile, "utf8")
+				.split("\n")
+				.find((item) => item.startsWith("HERDR_RUN_TOKEN="));
+			if (line) token = line.slice("HERDR_RUN_TOKEN=".length);
+		} catch {
+			/* dispatch rejects a stale token when no launch env is available */
+		}
+	}
+	if (!token)
+		throw new Error(
+			"handoff requires a launch-bound capability for the active run",
+		);
 	return {
 		runId: run.id,
 		generation: run.generation,
@@ -353,6 +395,28 @@ const FLAG_SCHEMA: Record<
 	projects: { values: [], positionals: [0, 0] },
 	config: { values: [], positionals: [0, 0] },
 	"agent-extension": { values: ["profile"], positionals: [1, 2] },
+	wiki: {
+		values: [
+			"tag",
+			"type",
+			"title",
+			"description",
+			"limit",
+			"path",
+			"body-file",
+			"tags",
+			"resource",
+			"status",
+			"stale-after",
+			"source",
+			"actor",
+			"entry",
+			"generated-by",
+			"verified",
+		],
+		booleans: ["json"],
+		positionals: [0, 100],
+	},
 };
 function validateArgs(command: string, argv: string[]): void {
 	const schema = FLAG_SCHEMA[command];
@@ -395,7 +459,7 @@ function validateArgs(command: string, argv: string[]): void {
 function help(command?: string): void {
 	if (!command) {
 		console.log(
-			"Usage: agentic-coding workflow <command> [flags]\n\nCommands:\n  start            Start pinned workflow definition\n  status           Print validated workflow view\n  action           Dispatch revision-bound engine action\n  handoff          Submit run-bound agent outcome\n  repair           Repair to compatible step, retriggers phase\n  repin            Re-pin to current definition digest\n  projects         List configured projects\n  config           Print resolved configuration\n  agent-extension  Manage Pi agent extensions",
+			"Usage: agentic-coding workflow <command> [flags]\n\nCommands:\n  start            Start pinned workflow definition\n  status           Print validated workflow view\n  action           Dispatch revision-bound engine action\n  handoff          Submit run-bound agent outcome\n  repair           Repair to compatible step, retriggers phase\n  repin            Re-pin to current definition digest\n  projects         List configured projects\n  config           Print resolved configuration\n  agent-extension  Manage Pi agent extensions\n  wiki             Read/update OKF wiki; planner, consolidator, and archive may write drafts; archive verifies",
 		);
 		return;
 	}
@@ -413,6 +477,7 @@ function help(command?: string): void {
 		config: "config",
 		"agent-extension":
 			"agent-extension list|install SOURCE|install-local PATH [--profile NAME]",
+		wiki: "wiki list|search TERMS|show ID|write --path ID --type T --title T --description D|verify --path ID [--actor A]|log --entry TEXT [--path DIR]",
 	};
 	console.log(`Usage: agentic-coding workflow ${usage[command] ?? command}`);
 }
@@ -572,6 +637,167 @@ export function rolesForDefinition(
 	}
 	return roles;
 }
+function wikiRole(): string | undefined {
+	return process.env.HERDR_ROLE || undefined;
+}
+function managedAgent(): boolean {
+	return Boolean(
+		process.env.HERDR_RUN_TOKEN ||
+			process.env.HERDR_WORKFLOW_ID ||
+			process.env.HERDR_STEP_ID,
+	);
+}
+function wikiActor(role: string | undefined): string {
+	return role
+		? `herdr-${role}/${process.env.HERDR_PROFILE || "default"}`
+		: "human:developer";
+}
+function wikiOutput(rest: string[], value: unknown): void {
+	console.log(
+		JSON.stringify(value, null, rest.includes("--json") ? 2 : undefined),
+	);
+}
+async function runWiki(rest: string[]): Promise<void> {
+	const [operation, ...terms] = positionals(rest);
+	if (
+		!operation ||
+		!(WIKI_SUBCOMMANDS as readonly string[]).includes(operation)
+	)
+		throw new Error(
+			`unknown wiki command: ${operation ?? "(none)"}; usage: agentic-coding workflow wiki list|search|show|write|verify|log`,
+		);
+	const role = wikiRole();
+	if (operation === "list") {
+		wikiOutput(
+			rest,
+			listConcepts({ tag: flag(rest, "tag"), type: flag(rest, "type") }),
+		);
+		return;
+	}
+	if (operation === "search") {
+		if (!terms.length)
+			throw new Error(
+				"wiki search requires TERMS; usage: wiki search TERMS [--limit N]",
+			);
+		const rawLimit = flag(rest, "limit");
+		const limit = rawLimit === undefined ? 20 : Number(rawLimit);
+		if (!Number.isInteger(limit) || limit < 1 || limit > 1000)
+			throw new Error("wiki search --limit must be an integer from 1 to 1000");
+		wikiOutput(rest, searchConcepts(terms, limit));
+		return;
+	}
+	if (operation === "show") {
+		if (!terms[0])
+			throw new Error("wiki show requires a concept id; usage: wiki show ID");
+		wikiOutput(rest, readConcept(terms[0]));
+		return;
+	}
+	if (operation === "write") {
+		if (!role && managedAgent())
+			throw new Error("wiki write requires an authenticated workflow role");
+		if (role && !["planner", "consolidator", "archive"].includes(role))
+			throw new Error(`wiki write is not permitted for role ${role}`);
+		const concept = flag(rest, "path");
+		const type = flag(rest, "type");
+		const title = flag(rest, "title");
+		const description = flag(rest, "description");
+		if (!concept || !type || !title || !description)
+			throw new Error(
+				"wiki write requires --path, --type, --title, and --description; usage: wiki write --path ID --type T --title T --description D",
+			);
+		const requestedStatus = flag(rest, "status");
+		const requestedVerified = flag(rest, "verified");
+		const requestedActor = flag(rest, "generated-by");
+		if (
+			role &&
+			(requestedActor?.startsWith("human:") ||
+				requestedVerified?.startsWith("human:"))
+		)
+			throw new Error(
+				"human-reviewed tier is granted only by the approval gate",
+			);
+		if (
+			role &&
+			role !== "archive" &&
+			(requestedStatus === "stable" || requestedVerified)
+		)
+			throw new Error(
+				"only archive may write stable or verified wiki concepts",
+			);
+		const resources = [flag(rest, "resource"), flag(rest, "source")].filter(
+			(value): value is string => Boolean(value),
+		);
+		const bodyFile = flag(rest, "body-file");
+		wikiOutput(
+			rest,
+			writeConcept(concept, {
+				type,
+				title,
+				description,
+				...(flag(rest, "tags")
+					? {
+							tags: flag(rest, "tags")
+								?.split(",")
+								.map((tag) => tag.trim())
+								.filter(Boolean),
+						}
+					: {}),
+				...(resources.length
+					? { sources: resources.map((resource) => ({ resource })) }
+					: {}),
+				status: role && role !== "archive" ? "draft" : requestedStatus,
+				...(flag(rest, "stale-after")
+					? { stale_after: flag(rest, "stale-after") }
+					: {}),
+				...(bodyFile ? { body: fs.readFileSync(bodyFile, "utf8") } : {}),
+				generatedBy: requestedActor ?? wikiActor(role),
+				...(requestedVerified
+					? {
+							verified: [
+								{ by: requestedVerified, at: new Date().toISOString() },
+							],
+						}
+					: {}),
+				changeId: process.env.HERDR_CHANGE_ID,
+			}),
+		);
+		return;
+	}
+	if (operation === "verify") {
+		if (!role && managedAgent())
+			throw new Error(
+				"wiki verify requires the archive role or an interactive caller",
+			);
+		if (role && role !== "archive")
+			throw new Error("wiki verify is archive-only");
+		const concept = flag(rest, "path");
+		if (!concept)
+			throw new Error(
+				"wiki verify requires --path ID; usage: wiki verify --path ID",
+			);
+		const verifyingActor = flag(rest, "actor") ?? "process:herdr-archive";
+		if (role && verifyingActor.startsWith("human:"))
+			throw new Error(
+				"human-reviewed tier is granted only by the approval gate",
+			);
+		wikiOutput(rest, verifyConcept(concept, verifyingActor));
+		return;
+	}
+	if (!role && managedAgent())
+		throw new Error(
+			"wiki log requires the archive role or an interactive caller",
+		);
+	if (role && role !== "archive") throw new Error("wiki log is archive-only");
+	const entry = flag(rest, "entry");
+	if (!entry)
+		throw new Error(
+			"wiki log requires --entry TEXT; usage: wiki log --entry TEXT [--path DIR]",
+		);
+	wikiOutput(rest, {
+		path: appendLog(flag(rest, "path") ?? ensureBundle(), entry),
+	});
+}
+
 export async function run(argv: string[]): Promise<void> {
 	const [command, ...rest] = argv;
 	if (!command || ["help", "--help", "-h"].includes(command)) {
@@ -586,6 +812,10 @@ export async function run(argv: string[]): Promise<void> {
 	}
 	validateArgs(command, rest);
 	required(command, rest);
+	if (command === "wiki") {
+		await runWiki(rest);
+		return;
+	}
 	const workflowEngine = engine();
 	if (command === "config") {
 		console.log(JSON.stringify(loadConfig(), null, 2));
@@ -696,6 +926,10 @@ export async function run(argv: string[]): Promise<void> {
 		return;
 	}
 	if (command === "action") {
+		if (managedAgent())
+			throw new Error(
+				"developer actions require the interactive developer channel",
+			);
 		const actions = positionals(rest);
 		if (actions.length !== 1 || !actions[0]?.trim())
 			throw new Error(

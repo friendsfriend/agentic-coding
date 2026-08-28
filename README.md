@@ -65,7 +65,7 @@ Legacy role/phase verbs are removed. No compatibility shim translates `apply`, `
 
 Built-ins register through public registry seam and pin exact `{id, version, digest}`:
 
-- `standard`: plan → approval → implementation → triage → verification/fix → developer review → archive → delivery → completed
+- `standard`: plan → approval → implementation → triage → verification/fix → developer review → archive → wiki approval → delivery → completed
 - `direct-apply`: validates pre-authored OpenSpec artifacts, then starts implementation; archive still precedes delivery
 - `no-openspec`: requires non-empty task; excludes planning, OpenSpec verifier/checklist, and archive
 - `standard-propose`: plans and validates an OpenSpec change, waits for plan approval, then holds in completed until explicitly closed; it never implements or creates a PR
@@ -158,6 +158,12 @@ its runtime's model enumeration (`pi --list-models`, `<exe> models`); an
 unknown model fails startup before any agent launches.
 
 Telemetry uses normalized engine/adapter/runtime envelope with W3C trace context. Runtime bridges under `agent-definitions/bridges/` are explicitly injected per managed run, best effort, and observational only. They never read workflow state, infer completion, nudge/retry agents, or switch runtime/model. Unsupported deep runtime fields remain absent; baseline adapter lifecycle stays available.
+
+## Knowledge wiki
+
+Agentic Coding keeps a centralized **Open Knowledge Format v0.2** bundle (see [the OKF specification](https://github.com/GoogleCloudPlatform/open-knowledge-format)) at `~/.config/agentic-coding/wiki`. Set `HERDR_WIKI_DIR` or `[wiki] root = "..."` to relocate it. The root `index.md` declares `okf_version: "0.2"`; concept ids are relative Markdown paths beneath the root. `index.md` and `log.md` are reserved filenames, not concept documents. Concepts use YAML frontmatter with `type`, `title`, `description`, optional `tags`, provenance, trust, and lifecycle fields, followed by Markdown.
+
+Use `agentic-coding workflow wiki list`, `search`, `show`, `write`, `verify`, and `log`. Sequential planners and the consolidator can write drafts; archive verifies shipped knowledge. Reads expose status, trust tier, and staleness. The wiki approval gate grants the human-reviewed tier only after developer approval; `[wiki] reviewer` configures the reviewer identity. OKF §3 recommends `git init` on the bundle for history. Changing pinned instructions or manifests may require `agentic-coding workflow repin` for in-flight workflows.
 
 ## Development
 
