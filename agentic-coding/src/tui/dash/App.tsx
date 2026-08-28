@@ -38,6 +38,8 @@ import {
 	loadLocalDiff,
 	loadVerifierFindings,
 	loadVerifierReport,
+	loadWikiSnapshotChanges,
+	loadWikiSnapshotDiff,
 	openFindingInEditor,
 	openSpecArtifact,
 	openSpecArtifacts,
@@ -47,7 +49,9 @@ import {
 	runWorkflow,
 	saveDeveloperReview,
 	savePlanReview,
+	saveWikiReview,
 	testDashboard,
+	WIKI_REVIEW_BOUNDARY,
 } from "./data";
 import { ChangedFilesView } from "./devenv-ui/components/ChangedFilesView";
 import { DiffViewModal } from "./devenv-ui/components/DiffViewModal";
@@ -359,9 +363,9 @@ export function App(props: {
 	const [themeQuery, setThemeQuery] = createSignal("");
 	const [themeFiltering, setThemeFiltering] = createSignal(false);
 	const [reviewOpen, setReviewOpen] = createSignal(false);
-	const [reviewKind, setReviewKind] = createSignal<"developer" | "plan">(
-		"developer",
-	);
+	const [reviewKind, setReviewKind] = createSignal<
+		"developer" | "plan" | "wiki"
+	>("developer");
 	const [reviewView, setReviewView] = createSignal<"files" | "diff">("files");
 	const [reviewChanges, setReviewChanges] = createSignal<LocalChange[]>([]);
 	const [reviewChangeIndex, setReviewChangeIndex] = createSignal(0);
@@ -513,6 +517,16 @@ export function App(props: {
 				};
 			}),
 	]);
+	const currentReviewDiscussions = createMemo(() => {
+		const file = reviewFile()?.newPath;
+		if (!file) return [];
+		return reviewDiscussions().filter((discussion) => {
+			const position = discussion.position ?? discussion.notes?.[0]?.position;
+			return (
+				!position || position.new_path === file || position.old_path === file
+			);
+		});
+	});
 	const cycleReviewComments = (direction: 1 | -1) => {
 		const lines = reviewDiscussionLineIndices();
 		if (!lines.length) return;
@@ -762,8 +776,12 @@ export function App(props: {
 	};
 	const openPlanReview = () => {
 		try {
-			const changes: LocalChange[] =
-				props.profile === "test"
+			const wikiReview =
+				data().state.stepId === "core.wiki-approval" ||
+				data().state.phase === "wiki-approval";
+			const changes: LocalChange[] = wikiReview
+				? loadWikiSnapshotChanges(props.repo, props.change)
+				: props.profile === "test"
 					? demoPlanArtifacts()
 					: openSpecArtifacts(data().state).map((artifact) => {
 							let linesAdded = 0;
@@ -783,7 +801,7 @@ export function App(props: {
 								renamedFile: false,
 							};
 						});
-			setReviewKind("plan");
+			setReviewKind(wikiReview ? "wiki" : "plan");
 			setReviewChanges(changes);
 			setReviewChangeIndex(0);
 			setReviewLine(0);
@@ -812,9 +830,11 @@ export function App(props: {
 		if (!file) return;
 		try {
 			setReviewDiff(
-				props.profile === "test"
-					? demoPlanContent(file.newPath)
-					: openSpecArtifact(data().state, file.newPath),
+				reviewKind() === "wiki"
+					? loadWikiSnapshotDiff(props.repo, props.change, file.newPath)
+					: props.profile === "test"
+						? demoPlanContent(file.newPath)
+						: openSpecArtifact(data().state, file.newPath),
 			);
 			setReviewLine(0);
 			setReviewView("diff");
@@ -824,17 +844,27 @@ export function App(props: {
 	};
 	const finishPlanReview = async () => {
 		if (busy()) return;
+		const wikiReview =
+			data().state.stepId === "core.wiki-approval" ||
+			data().state.phase === "wiki-approval";
+		const saveReview = wikiReview ? saveWikiReview : savePlanReview;
 		setBusy(true);
-		setMessage("Finishing plan review…");
+		setMessage(
+			wikiReview ? "Finishing wiki review…" : "Finishing plan review…",
+		);
 		setReviewFinishing(true);
-		setReviewFinishingMessage("Saving comments and dispatching plan review…");
+		setReviewFinishingMessage(
+			wikiReview
+				? "Saving comments and dispatching wiki review…"
+				: "Saving comments and dispatching plan review…",
+		);
 		try {
 			// Yield one macrotask so the progress overlay paints before any
 			// synchronous save/dispatch work begins.
 			await new Promise((resolve) => setTimeout(resolve, 0));
 			const comments = reviewComments();
 			if (props.profile !== "test") {
-				await savePlanReview(props.repo, props.change, comments);
+				await saveReview(props.repo, props.change, comments);
 				const engineComments = comments.map((comment) => ({
 					comment: comment.body,
 					...(comment.filePath ? { file: comment.filePath } : {}),
@@ -844,7 +874,11 @@ export function App(props: {
 				}));
 				setMessage(
 					await runWorkflow(
-						comments.length ? "review-comments" : "approve-plan",
+						comments.length
+							? "review-comments"
+							: wikiReview
+								? "approve-wiki"
+								: "approve-plan",
 						props.repo,
 						props.change,
 						data().state.revision,
@@ -946,7 +980,8 @@ export function App(props: {
 		) {
 			openPlanRejection();
 		} else if (key === "f" && !event.shift) {
-			if (reviewKind() === "plan") void finishPlanReview();
+			if (reviewKind() === "plan" || reviewKind() === "wiki")
+				void finishPlanReview();
 			else void finishDeveloperReview();
 		} else if (
 			reviewView() === "files" &&
@@ -965,7 +1000,8 @@ export function App(props: {
 			reviewView() === "files" &&
 			(key === "enter" || key === "return")
 		) {
-			if (reviewKind() === "plan") openPlanMarkdown();
+			if (reviewKind() === "plan" || reviewKind() === "wiki")
+				openPlanMarkdown();
 			else openReviewDiff();
 		} else if (reviewView() === "diff" && key === "v") {
 			if (reviewVisualMode()) setReviewVisualMode(false);
@@ -975,7 +1011,11 @@ export function App(props: {
 			}
 		} else if (reviewView() === "diff" && key === "n")
 			cycleReviewComments(event.shift ? -1 : 1);
-		else if (reviewView() === "diff" && key === "s" && reviewKind() !== "plan")
+		else if (
+			reviewView() === "diff" &&
+			key === "s" &&
+			reviewKind() === "developer"
+		)
 			setReviewSplitView((split) =>
 				split === null ? dimensions().width < 160 : !split,
 			);
@@ -988,7 +1028,7 @@ export function App(props: {
 		else if (
 			reviewView() === "diff" &&
 			(key === "space" || key === " ") &&
-			reviewKind() !== "plan"
+			reviewKind() === "developer"
 		) {
 			const ids = reviewSelectedLineFindingIds();
 			if (ids.length)
@@ -1002,6 +1042,22 @@ export function App(props: {
 					return next;
 				});
 		} else if (reviewView() === "diff" && key === "c") {
+			const snapshotBoundary = reviewDiff()
+				.split("\n")
+				.indexOf(WIKI_REVIEW_BOUNDARY);
+			const selectedRange = reviewSourceRange();
+			if (
+				reviewKind() === "wiki" &&
+				(snapshotBoundary <= reviewLine() ||
+					(selectedRange.end ?? selectedRange.start ?? 0) > snapshotBoundary ||
+					(selectedRange.start ?? selectedRange.end ?? 0) > snapshotBoundary)
+			) {
+				notify(
+					"Snapshot context is not commentable; select a current document line",
+					"warning",
+				);
+				return true;
+			}
 			setReviewCommentText("");
 			setReviewCommentMode(true);
 			props.keymap.setData("modal.active", "review-comment");
@@ -1023,6 +1079,11 @@ export function App(props: {
 			return {
 				prompt: "Press Enter to review plan artifacts",
 				action: "plan-review",
+			};
+		if (data().state.stepId === "core.wiki-approval")
+			return {
+				prompt: "Press Enter to review wiki changes",
+				action: "wiki-review",
 			};
 		const actions = data().state.availableActions ?? [];
 		if (actions.length > 1 || actions[0]?.confirmation !== "none")
@@ -1079,9 +1140,8 @@ export function App(props: {
 			openDeveloperReview();
 			return true;
 		}
-		if (action.key === "plan-review") {
-			// The plan review user action IS the artifact-list popup: no
-			// intermediate item selection, open the review directly.
+		if (action.key === "plan-review" || action.key === "wiki-review") {
+			// Review gates open their popup directly; no empty generic selection list.
 			promptedUserActionKey = action.key;
 			openPlanReview();
 			return true;
@@ -1381,7 +1441,10 @@ export function App(props: {
 				openDeveloperReview();
 				return;
 			}
-			if (approval.action === "plan-review") {
+			if (
+				approval.action === "plan-review" ||
+				approval.action === "wiki-review"
+			) {
 				openPlanReview();
 				return;
 			}
@@ -1811,7 +1874,9 @@ export function App(props: {
 					run: ({ event }) => {
 						const key = event.name.toLowerCase();
 						const returnModal = () =>
-							reviewKind() === "plan" ? "plan-review" : "developer-review";
+							reviewKind() === "plan" || reviewKind() === "wiki"
+								? "plan-review"
+								: "developer-review";
 						if (key === "escape") {
 							setReviewCommentMode(false);
 							setReviewCommentText("");
@@ -2167,9 +2232,9 @@ export function App(props: {
 				openDeveloperReview();
 				return;
 			}
-			if (action.key === "plan-review") {
-				// Auto-open the review as the artifact-list popup, not the generic
-				// ListViewModal (the merged user action has no selectable items).
+			if (action.key === "plan-review" || action.key === "wiki-review") {
+				// Auto-open trigger-only review actions directly, not the generic
+				// ListViewModal (there are no selectable items).
 				openPlanReview();
 				return;
 			}
@@ -2723,7 +2788,9 @@ export function App(props: {
 					title={
 						reviewKind() === "plan"
 							? "Plan review"
-							: (requiredUserAction()?.title ?? "Developer review")
+							: reviewKind() === "wiki"
+								? "Wiki review"
+								: (requiredUserAction()?.title ?? "Developer review")
 					}
 					widthPercent={0.9}
 					heightPercent={0.75}
@@ -2731,10 +2798,17 @@ export function App(props: {
 						{ key: "j/k", action: "Navigate" },
 						{
 							key: "Enter",
-							action: reviewKind() === "plan" ? "Open artifact" : "Open diff",
+							action:
+								reviewKind() === "plan"
+									? "Open artifact"
+									: reviewKind() === "wiki"
+										? "Open document"
+										: "Open diff",
 						},
 						{ key: "/", action: "Search files" },
-						...(reviewKind() === "plan" || developerReviewPhase()
+						...(reviewKind() === "plan" ||
+						reviewKind() === "wiki" ||
+						developerReviewPhase()
 							? [{ key: "f", action: "Finish review" }]
 							: []),
 						...(reviewKind() === "plan"
@@ -2764,7 +2838,7 @@ export function App(props: {
 				when={
 					reviewOpen() &&
 					reviewView() === "diff" &&
-					reviewKind() === "plan" &&
+					(reviewKind() === "plan" || reviewKind() === "wiki") &&
 					reviewFile()
 				}
 			>
@@ -2778,7 +2852,7 @@ export function App(props: {
 					visualModeStart={reviewVisualStart()}
 					commentMode={reviewCommentMode()}
 					commentText={reviewCommentText()}
-					discussions={reviewDiscussions()}
+					discussions={currentReviewDiscussions()}
 					onSelectedLineChange={setReviewLine}
 					onSelectedSourceRangeChange={(start, end) =>
 						setReviewSourceRange({ start, end })
@@ -2803,9 +2877,11 @@ export function App(props: {
 							setReviewVisualStart(0);
 							setReviewLine(0);
 							setReviewDiff(
-								props.profile === "test"
-									? demoPlanContent(file.newPath)
-									: openSpecArtifact(data().state, file.newPath),
+								reviewKind() === "wiki"
+									? loadWikiSnapshotDiff(props.repo, props.change, file.newPath)
+									: props.profile === "test"
+										? demoPlanContent(file.newPath)
+										: openSpecArtifact(data().state, file.newPath),
 							);
 						} catch (error) {
 							setReviewChangeIndex(previous);

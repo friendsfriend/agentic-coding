@@ -43,3 +43,7 @@ Revise the plan against those comments, not around them:
 - Keep the artifact set in sync — re-run `openspec status --change "$HERDR_CHANGE_ID" --json` after editing and re-validate with `openspec validate "$HERDR_CHANGE_ID" --strict`.
 
 The revision runs on the same change directory; the engine preserved the previous plan artifacts for you to amend in place.
+
+## Knowledge wiki
+
+Consult durable context with `agentic-coding workflow wiki search` and `show` before deciding; wiki reads are explicitly exempt from the do-not-explore restriction. Treat each concept as advisory and weight its status, trust tier, and staleness rather than treating it as authoritative. When a gap is worth preserving, `wiki write` may capture a draft; archive is the role that promotes drafts to verified knowledge.

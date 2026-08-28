@@ -32,3 +32,5 @@ Use the returned `template` as the structure and follow `instruction` and `rules
 When reconciling implementation tasks or required validation, preserve focused, change-relevant checks that cover the changed behavior. Do not require the worker to run the complete repository test suite or add a complete-suite worker task. The workflow-owned `test-verifier` runs the complete configured repository test suite after implementation and selected verifier checks complete; do not prescribe a repository-wide test command in the consolidated plan.
 
 Finish with `openspec validate "$HERDR_CHANGE_ID" --strict`. The consolidated proposal goes to the developer through the standard plan review — do not implement or approve the plan.
+
+Consult `agentic-coding workflow wiki search` and `show` while reconciling; wiki reads are exempt from the file-scope restriction. Weight status, trust tier, and staleness, preferring verified stable concepts over contradictory drafts and recording that reason in design notes. This sequential role may use `wiki write` for durable gaps surfaced by planners; write drafts only, leaving promotion to archive.

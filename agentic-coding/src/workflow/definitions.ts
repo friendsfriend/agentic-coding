@@ -24,6 +24,7 @@ const EFFECTS: EffectKind[] = [
 	"agent.stop",
 	"notification.show",
 	"openspec.validate",
+	"wiki.verify",
 	"delivery.commit",
 	"delivery.push",
 	"pull-request.create",
@@ -379,6 +380,15 @@ export function registerBuiltins(
 			"comments",
 		]),
 		step(
+			"core.wiki-approval",
+			"Wiki approval",
+			"developer",
+			["approve", "comments"],
+			{
+				allowedEffects: ["wiki.verify"],
+			},
+		),
+		step(
 			"core.archive",
 			"OpenSpec archive",
 			"agent",
@@ -412,7 +422,11 @@ export function registerBuiltins(
 		"core.verification",
 		"core.developer-review",
 	];
-	const manifests = (rounds: number, version: number): WorkflowManifest[] => [
+	const manifests = (
+		rounds: number,
+		version: number,
+		wikiGate = true,
+	): WorkflowManifest[] => [
 		{
 			id: "standard",
 			version,
@@ -424,6 +438,7 @@ export function registerBuiltins(
 				"core.plan-approval",
 				...common,
 				"core.archive",
+				...(wikiGate ? ["core.wiki-approval"] : []),
 				"core.delivery",
 				"core.completed",
 				"core.closed",
@@ -459,7 +474,7 @@ export function registerBuiltins(
 					to: "core.plan",
 					loop: { maxAttempts: 3 },
 				},
-				...workflowEdges(true, rounds),
+				...workflowEdges(true, rounds, wikiGate),
 			],
 		},
 		{
@@ -523,11 +538,12 @@ export function registerBuiltins(
 			steps: [
 				...common,
 				"core.archive",
+				...(wikiGate ? ["core.wiki-approval"] : []),
 				"core.delivery",
 				"core.completed",
 				"core.closed",
 			],
-			edges: workflowEdges(true, rounds),
+			edges: workflowEdges(true, rounds, wikiGate),
 		},
 		{
 			id: "no-openspec",
@@ -550,6 +566,7 @@ export function registerBuiltins(
 				"core.plan-approval",
 				...common,
 				"core.archive",
+				...(wikiGate ? ["core.wiki-approval"] : []),
 				"core.delivery",
 				"core.completed",
 				"core.closed",
@@ -606,7 +623,7 @@ export function registerBuiltins(
 					to: "fusion.consolidate",
 					loop: { maxAttempts: 3 },
 				},
-				...workflowEdges(true, rounds),
+				...workflowEdges(true, rounds, wikiGate),
 			],
 		},
 		{
@@ -680,22 +697,23 @@ export function registerBuiltins(
 			],
 		},
 	];
-	for (const [rounds, version] of [
-		[6, 1],
-		...Array.from({ length: 20 }, (_, index) => index + 1)
-			.map((rounds) => [rounds, definitionVersionForPolicy(rounds)] as const)
-			.filter(([, version]) => version !== 1),
-	] as const)
-		for (const definition of manifests(rounds, version))
+	for (const rounds of Array.from({ length: 20 }, (_, index) => index + 1)) {
+		const legacyVersion = rounds === 6 ? 1 : rounds === 1 ? 21 : rounds;
+		for (const definition of manifests(rounds, legacyVersion, false))
 			registry.registerWorkflow(definition);
+		const version = definitionVersionForPolicy(rounds);
+		for (const definition of manifests(rounds, version, true))
+			registry.registerWorkflow(definition);
+	}
 	return registry;
 }
 export function definitionVersionForPolicy(rounds: number): number {
-	return rounds === 6 ? 1 : rounds === 1 ? 21 : rounds;
+	return rounds + 100;
 }
 function workflowEdges(
 	archive: boolean,
 	maxVerificationRounds: number,
+	wikiGate = true,
 ): WorkflowManifest["edges"] {
 	const approved = archive ? "core.archive" : "core.delivery";
 	return [
@@ -758,21 +776,59 @@ function workflowEdges(
 			loop: { maxAttempts: 6 },
 		},
 		...(archive
-			? ([
-					{ from: "core.archive", outcome: "complete", to: "core.delivery" },
-					{
-						from: "core.archive",
-						outcome: "blocked",
-						to: "core.archive",
-						loop: { maxAttempts: 3 },
-					},
-					{
-						from: "core.archive",
-						outcome: "failed",
-						to: "core.archive",
-						loop: { maxAttempts: 3 },
-					},
-				] as const)
+			? wikiGate
+				? ([
+						{
+							from: "core.archive",
+							outcome: "complete",
+							to: "core.wiki-approval",
+						},
+						{
+							from: "core.wiki-approval",
+							outcome: "approve",
+							to: "core.delivery",
+							effects: [
+								{
+									kind: "wiki.verify",
+									idempotencyKey: "wiki.verify",
+									payload: {},
+								},
+							],
+						},
+						{
+							from: "core.wiki-approval",
+							outcome: "comments",
+							to: "core.archive",
+							loop: { maxAttempts: 6 },
+						},
+						{
+							from: "core.archive",
+							outcome: "blocked",
+							to: "core.archive",
+							loop: { maxAttempts: 3 },
+						},
+						{
+							from: "core.archive",
+							outcome: "failed",
+							to: "core.archive",
+							loop: { maxAttempts: 3 },
+						},
+					] as const)
+				: ([
+						{ from: "core.archive", outcome: "complete", to: "core.delivery" },
+						{
+							from: "core.archive",
+							outcome: "blocked",
+							to: "core.archive",
+							loop: { maxAttempts: 3 },
+						},
+						{
+							from: "core.archive",
+							outcome: "failed",
+							to: "core.archive",
+							loop: { maxAttempts: 3 },
+						},
+					] as const)
 			: []),
 		{ from: "core.delivery", outcome: "complete", to: "core.completed" },
 		{

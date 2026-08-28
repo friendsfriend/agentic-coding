@@ -7,6 +7,12 @@ import { directionBetween, Herdr, type Rect } from "../../herdr-client.ts";
 import type { WorkflowView } from "../../workflow/contracts.ts";
 import { canonicalStorePath } from "../../workflow/runtime.ts";
 import {
+	readConcept,
+	renderDocument,
+	snapshotList,
+	snapshotRead,
+} from "../../workflow/wiki.ts";
+import {
 	consumeReturnWorkspace,
 	dashboardState,
 	discoverProjectsInProcess,
@@ -204,6 +210,133 @@ export interface LocalChange {
 	renamedFile: boolean;
 }
 
+export const WIKI_REVIEW_BOUNDARY = "\u0000WIKI_SNAPSHOT_BOUNDARY";
+function sourceLines(value: string): string[] {
+	if (!value) return [];
+	return value.replace(/\r?\n$/, "").split(/\r?\n/);
+}
+function wikiLineCounts(
+	before: string,
+	after: string,
+): { added: number; deleted: number } {
+	const oldLines = before ? sourceLines(before) : [];
+	const newLines = after ? sourceLines(after) : [];
+	let previous = new Array(newLines.length + 1).fill(0) as number[];
+	for (const oldLine of oldLines) {
+		const current = [0];
+		for (let index = 0; index < newLines.length; index++)
+			current.push(
+				oldLine === newLines[index]
+					? (previous[index] ?? 0) + 1
+					: Math.max(current[index] ?? 0, previous[index + 1] ?? 0),
+			);
+		previous = current;
+	}
+	const common = previous[newLines.length] ?? 0;
+	return { added: newLines.length - common, deleted: oldLines.length - common };
+}
+export function loadWikiSnapshotChanges(
+	repo: string,
+	change: string,
+): LocalChange[] {
+	const state = dashboardState(repo, change) as WorkflowState;
+	return snapshotList(change, state.worktree).map((id) => {
+		const before = snapshotRead(change, id, state.worktree) ?? "";
+		let after = "";
+		try {
+			const current = readConcept(id);
+			after = renderDocument(current.frontmatter, current.body);
+		} catch {
+			/* the concept was deleted; the snapshot remains reviewable */
+		}
+		const counts = wikiLineCounts(
+			before.trim() === "<!-- okf tombstone: concept did not exist -->"
+				? ""
+				: before,
+			after,
+		);
+		return {
+			newPath: id,
+			linesAdded: counts.added,
+			linesDeleted: counts.deleted,
+			newFile:
+				!before ||
+				before.trim() === "<!-- okf tombstone: concept did not exist -->",
+			deletedFile: !after,
+			renamedFile: false,
+		};
+	});
+}
+
+export function loadWikiSnapshotDiff(
+	repo: string,
+	change: string,
+	id: string,
+): string {
+	const state = dashboardState(repo, change) as WorkflowState;
+	const snapshot = snapshotRead(change, id, state.worktree) ?? "";
+	const before =
+		snapshot.trim() === "<!-- okf tombstone: concept did not exist -->"
+			? ""
+			: snapshot;
+	let after = "";
+	try {
+		const current = readConcept(id);
+		after = renderDocument(current.frontmatter, current.body);
+	} catch {
+		/* deleted concepts have an empty current side */
+	}
+	// Keep current lines first so MarkdownViewModal's displayed line numbers map
+	// directly to document comments. Append a real unified diff as review context.
+	const oldLines = sourceLines(before);
+	if (!after)
+		return `${WIKI_REVIEW_BOUNDARY}\n--- snapshot (before) ---\n+++ current (after; deleted) +++\n${oldLines
+			.map((line) => `-${line}`)
+			.join("\n")}`;
+	const newLines = sourceLines(after);
+	const lcs: number[][] = Array.from({ length: oldLines.length + 1 }, () =>
+		new Array(newLines.length + 1).fill(0),
+	);
+	for (let oldIndex = oldLines.length - 1; oldIndex >= 0; oldIndex--) {
+		const row = lcs[oldIndex];
+		if (!row) continue;
+		for (let newIndex = newLines.length - 1; newIndex >= 0; newIndex--)
+			row[newIndex] =
+				oldLines[oldIndex] === newLines[newIndex]
+					? (lcs[oldIndex + 1]?.[newIndex + 1] ?? 0) + 1
+					: Math.max(
+							lcs[oldIndex + 1]?.[newIndex] ?? 0,
+							row[newIndex + 1] ?? 0,
+						);
+	}
+	const diff: string[] = ["--- a/snapshot.md", "+++ b/current.md"];
+	let oldIndex = 0;
+	let newIndex = 0;
+	while (oldIndex < oldLines.length || newIndex < newLines.length) {
+		if (oldIndex >= oldLines.length) {
+			diff.push(`+${newLines[newIndex] ?? ""}`);
+			newIndex++;
+		} else if (newIndex >= newLines.length) {
+			diff.push(`-${oldLines[oldIndex] ?? ""}`);
+			oldIndex++;
+		} else if (oldLines[oldIndex] === newLines[newIndex]) {
+			diff.push(` ${oldLines[oldIndex] ?? ""}`);
+			oldIndex++;
+			newIndex++;
+		} else if (
+			(lcs[oldIndex + 1]?.[newIndex] ?? 0) >=
+			(lcs[oldIndex]?.[newIndex + 1] ?? 0)
+		) {
+			diff.push(`-${oldLines[oldIndex] ?? ""}`);
+			oldIndex++;
+		} else {
+			diff.push(`+${newLines[newIndex] ?? ""}`);
+			newIndex++;
+		}
+	}
+	return `${after.replace(/\n+$/, "")}\n${WIKI_REVIEW_BOUNDARY}\n--- snapshot (before) ---\n${diff.join("\n")}`;
+}
+
 export interface DeveloperReviewComment {
 	filePath: string;
 	line: number;
@@ -220,6 +353,7 @@ export interface PlanReviewComment {
 	endLine?: number;
 	body: string;
 }
+export type WikiReviewComment = PlanReviewComment;
 
 export interface DeveloperReviewFinding {
 	id: string;
@@ -1106,6 +1240,66 @@ export async function savePlanReview(
 	await writeFile(path, `${JSON.stringify({ comments }, null, 2)}\n`);
 }
 
+export async function saveWikiReview(
+	repo: string,
+	change: string,
+	comments: WikiReviewComment[],
+) {
+	const state = dashboardState(repo, change) as WorkflowState;
+	const path = join(
+		state.worktree,
+		".herdr-workflow",
+		change,
+		"reviews",
+		"wiki-review.json",
+	);
+	await mkdir(dirname(path), { recursive: true });
+	await writeFile(path, `${JSON.stringify({ comments }, null, 2)}\n`);
+}
+
+export function loadWikiReviewComments(
+	repo: string,
+	change: string,
+): WikiReviewComment[] {
+	const state = dashboardState(repo, change) as WorkflowState;
+	const path = join(
+		state.worktree,
+		".herdr-workflow",
+		change,
+		"reviews",
+		"wiki-review.json",
+	);
+	try {
+		const parsed = JSON.parse(read(path)) as { comments?: unknown };
+		if (!Array.isArray(parsed.comments)) return [];
+		return parsed.comments.flatMap((value) => {
+			if (!value || typeof value !== "object") return [];
+			const item = value as Record<string, unknown>;
+			const line = Number(item.line);
+			return typeof item.filePath === "string" &&
+				typeof item.body === "string" &&
+				Number.isInteger(line) &&
+				line > 0
+				? [
+						{
+							filePath: item.filePath,
+							line,
+							...(typeof item.startLine === "number"
+								? { startLine: item.startLine }
+								: {}),
+							...(typeof item.endLine === "number"
+								? { endLine: item.endLine }
+								: {}),
+							body: item.body,
+						},
+					]
+				: [];
+		});
+	} catch {
+		return [];
+	}
+}
+
 export function loadPlanReviewComments(
 	repo: string,
 	change: string,
@@ -1676,6 +1870,13 @@ export function requiredUserActionFor(
 			items: [],
 		};
 	}
+	if (phase === "wiki-approval" || phase === "core.wiki-approval")
+		return {
+			key: "wiki-review",
+			title: "Action required · Wiki review",
+			prompt: "Review knowledge changes before delivery.",
+			items: [],
+		};
 	if (phase === "developer-review" || phase === "core.developer-review")
 		return {
 			// Stable key independent of legacy vs engine (`core.*`) phase naming,
