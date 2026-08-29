@@ -459,7 +459,7 @@ function validateArgs(command: string, argv: string[]): void {
 function help(command?: string): void {
 	if (!command) {
 		console.log(
-			"Usage: agentic-coding workflow <command> [flags]\n\nCommands:\n  start            Start pinned workflow definition\n  status           Print validated workflow view\n  action           Dispatch revision-bound engine action\n  handoff          Submit run-bound agent outcome\n  repair           Repair to compatible step, retriggers phase\n  repin            Re-pin to current definition digest\n  projects         List configured projects\n  config           Print resolved configuration\n  agent-extension  Manage Pi agent extensions\n  wiki             Read/update OKF wiki; planner, consolidator, and archive may write drafts; archive verifies",
+			"Usage: agentic-coding workflow <command> [flags]\n\nCommands:\n  start            Start pinned workflow definition\n  status           Print validated workflow view\n  action           Dispatch revision-bound engine action\n  handoff          Submit run-bound agent outcome\n  repair           Repair to compatible step, retriggers phase\n  repin            Re-pin to current definition digest\n  projects         List configured projects\n  config           Print resolved configuration\n  agent-extension  Manage Pi agent extensions\n  wiki             Read/update OKF wiki; only the managed wiki role may write drafts; archive verifies",
 		);
 		return;
 	}
@@ -631,9 +631,11 @@ export function rolesForDefinition(
 												definitionId !== "no-openspec" ||
 												role !== "openspec-verifier",
 										)
-									: stepId === "core.archive"
-										? ["archive"]
-										: [];
+									: stepId === "core.wiki"
+										? ["wiki"]
+										: stepId === "core.archive"
+											? ["archive"]
+											: [];
 	}
 	return roles;
 }
@@ -645,6 +647,21 @@ function managedAgent(): boolean {
 		process.env.HERDR_RUN_TOKEN ||
 			process.env.HERDR_WORKFLOW_ID ||
 			process.env.HERDR_STEP_ID,
+	);
+}
+function authorizeWikiWriter(): void {
+	const workflowId = process.env.HERDR_WORKFLOW_ID;
+	const stepId = process.env.HERDR_STEP_ID;
+	const role = process.env.HERDR_ROLE;
+	const token = process.env.HERDR_RUN_TOKEN;
+	if (!workflowId || stepId !== "core.wiki" || role !== "wiki" || !token)
+		throw new Error("wiki write requires an authenticated core.wiki run");
+	engine().authorizeAgentCapability(
+		process.cwd(),
+		workflowId,
+		stepId,
+		role,
+		token,
 	);
 }
 function wikiActor(role: string | undefined): string {
@@ -695,8 +712,9 @@ async function runWiki(rest: string[]): Promise<void> {
 	if (operation === "write") {
 		if (!role && managedAgent())
 			throw new Error("wiki write requires an authenticated workflow role");
-		if (role && !["planner", "consolidator", "archive"].includes(role))
+		if (role && role !== "wiki")
 			throw new Error(`wiki write is not permitted for role ${role}`);
+		if (role === "wiki") authorizeWikiWriter();
 		const concept = flag(rest, "path");
 		const type = flag(rest, "type");
 		const title = flag(rest, "title");
@@ -716,13 +734,9 @@ async function runWiki(rest: string[]): Promise<void> {
 			throw new Error(
 				"human-reviewed tier is granted only by the approval gate",
 			);
-		if (
-			role &&
-			role !== "archive" &&
-			(requestedStatus === "stable" || requestedVerified)
-		)
+		if (requestedStatus === "stable" || requestedVerified)
 			throw new Error(
-				"only archive may write stable or verified wiki concepts",
+				"stable or verified wiki metadata is granted only by the approval gate",
 			);
 		const resources = [flag(rest, "resource"), flag(rest, "source")].filter(
 			(value): value is string => Boolean(value),
@@ -745,7 +759,7 @@ async function runWiki(rest: string[]): Promise<void> {
 				...(resources.length
 					? { sources: resources.map((resource) => ({ resource })) }
 					: {}),
-				status: role && role !== "archive" ? "draft" : requestedStatus,
+				status: role ? "draft" : requestedStatus,
 				...(flag(rest, "stale-after")
 					? { stale_after: flag(rest, "stale-after") }
 					: {}),
@@ -776,9 +790,9 @@ async function runWiki(rest: string[]): Promise<void> {
 				"wiki verify requires --path ID; usage: wiki verify --path ID",
 			);
 		const verifyingActor = flag(rest, "actor") ?? "process:herdr-archive";
-		if (role && verifyingActor.startsWith("human:"))
+		if (verifyingActor !== "process:herdr-archive")
 			throw new Error(
-				"human-reviewed tier is granted only by the approval gate",
+				"wiki verify requires process:herdr-archive; human promotion requires the approval gate",
 			);
 		wikiOutput(rest, verifyConcept(concept, verifyingActor));
 		return;

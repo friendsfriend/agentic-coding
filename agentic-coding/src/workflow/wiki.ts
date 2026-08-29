@@ -560,7 +560,10 @@ export function writeConcept(
 			});
 		frontmatter.sources = sources;
 	}
-	if (["planner", "consolidator"].includes(process.env.HERDR_ROLE ?? "")) {
+	if (
+		existing?.frontmatter.verified !== undefined ||
+		["wiki", "planner", "consolidator"].includes(process.env.HERDR_ROLE ?? "")
+	) {
 		frontmatter.status = "draft";
 		delete frontmatter.verified;
 	}
@@ -604,9 +607,13 @@ export function writeConcept(
 export function verifyConcept(
 	concept: string,
 	verifyingActor: string,
+	validatedContent?: string,
+	promote = true,
 ): WikiConcept {
 	actor(verifyingActor, "actor");
-	const current = readConcept(concept);
+	const file = conceptPath(concept);
+	const content = validatedContent ?? fs.readFileSync(file, "utf8");
+	const current = parseDocument(content);
 	const verified = Array.isArray(current.frontmatter.verified)
 		? [...current.frontmatter.verified]
 		: current.frontmatter.verified
@@ -621,15 +628,32 @@ export function verifyConcept(
 		)
 	)
 		verified.push({ by: verifyingActor, at: new Date().toISOString() });
-	return writeConcept(concept, {
+	const generated =
+		current.frontmatter.generated &&
+		typeof current.frontmatter.generated === "object"
+			? (current.frontmatter.generated as Record<string, unknown>)
+			: {};
+	const frontmatter = {
 		...current.frontmatter,
-		body: current.body,
 		verified,
-		status: "stable",
-		generatedBy: (
-			current.frontmatter.generated as Record<string, unknown> | undefined
-		)?.by as string | undefined,
-	});
+		status: promote ? "stable" : "draft",
+		generated: { ...generated, at: new Date().toISOString() },
+	};
+	validateProducerFields(frontmatter);
+	fs.mkdirSync(path.dirname(file), { recursive: true });
+	const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
+	try {
+		fs.writeFileSync(temporary, renderDocument(frontmatter, current.body), {
+			mode: 0o600,
+		});
+		fs.renameSync(temporary, file);
+	} catch (error) {
+		try {
+			fs.rmSync(temporary, { force: true });
+		} catch {}
+		throw error;
+	}
+	return readConcept(concept);
 }
 
 export function appendLog(dir: string, entry: string): string {
