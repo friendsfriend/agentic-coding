@@ -254,8 +254,8 @@ test("preset editor persists fusion planner roles and consolidator step", async 
 		await t.flush();
 		// defaultProfile: keep (unset)
 		handler?.(key("return"));
-		// core.plan .. core.archive: keep (unset)
-		for (let i = 0; i < 4; i += 1) handler?.(key("return"));
+		// core.plan .. core.archive, including core.wiki: keep (unset)
+		for (let i = 0; i < 5; i += 1) handler?.(key("return"));
 		await t.flush();
 		let frame = t.captureCharFrame();
 		expect(frame).toContain("Step fusion.consolidate");

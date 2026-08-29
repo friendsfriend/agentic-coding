@@ -19,7 +19,7 @@ import {
 	changedFilesIn,
 	type WorkflowEngine,
 } from "./runtime.ts";
-import { snapshotList, verifyConcept } from "./wiki.ts";
+import { conceptPath, snapshotList, verifyConcept } from "./wiki.ts";
 
 export interface EffectHandler {
 	observe?(effect: ClaimedEffect): Promise<unknown | undefined>;
@@ -407,6 +407,34 @@ export function agentEffectHandlers(
 		"wiki.verify": {
 			async execute(effect) {
 				const snapshot = snapshotFor(effect);
+				const approved = effect.payload as {
+					concepts?: Array<{ id?: unknown; digest?: unknown }>;
+				};
+				const approvedContent = new Map<string, string>();
+				let concepts = snapshotList(
+					snapshot.metadata.changeId,
+					snapshot.metadata.worktree,
+				);
+				if (Array.isArray(approved.concepts)) {
+					const expected = approved.concepts.map((item) => String(item.id));
+					if (
+						concepts.length !== expected.length ||
+						concepts.some((id, index) => id !== expected[index])
+					)
+						throw new Error("wiki changed after developer approval");
+					for (const item of approved.concepts) {
+						if (typeof item.id !== "string" || typeof item.digest !== "string")
+							throw new Error("invalid approved wiki snapshot");
+						const content = fs.readFileSync(conceptPath(item.id), "utf8");
+						const digest = createHash("sha256").update(content).digest("hex");
+						if (digest !== item.digest)
+							throw new Error(
+								`wiki changed after developer approval: ${item.id}`,
+							);
+						approvedContent.set(item.id, content);
+					}
+					concepts = approved.concepts.map((item) => String(item.id));
+				}
 				const configured = loadConfig().wiki?.reviewer;
 				let reviewer = configured;
 				if (!reviewer) {
@@ -419,11 +447,8 @@ export function agentEffectHandlers(
 				const actor = reviewer?.startsWith("human:")
 					? reviewer
 					: `human:${reviewer || "developer"}`;
-				const concepts = snapshotList(
-					snapshot.metadata.changeId,
-					snapshot.metadata.worktree,
-				);
-				for (const concept of concepts) verifyConcept(concept, actor);
+				for (const concept of concepts)
+					verifyConcept(concept, actor, approvedContent.get(concept));
 				return { verified: concepts, actor };
 			},
 		},

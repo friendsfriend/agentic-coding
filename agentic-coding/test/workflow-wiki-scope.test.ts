@@ -1,34 +1,36 @@
 import { expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
+import { AGENT_DEFINITIONS } from "../src/workflow/embedded.generated.ts";
 
 const repositoryRoot = path.resolve(import.meta.dir, "..", "..");
 const readRepositoryFile = (relativePath: string) =>
 	fs.readFileSync(path.join(repositoryRoot, relativePath), "utf8");
 
-const instructionPaths = [
+const planningInstructionPaths = [
 	"agent-definitions/instructions/planning.md",
 	"agent-definitions/instructions/planning-fusion.md",
 	"agent-definitions/instructions/fusion-consolidation.md",
-	"agent-definitions/instructions/archive.md",
 ];
+const wikiInstructionPath = "agent-definitions/instructions/wiki.md";
 
 test("wiki guidance distinguishes project and shared knowledge", () => {
-	const guidance = instructionPaths.map(readRepositoryFile);
-	const specs = [
-		readRepositoryFile(
-			"openspec/changes/adjust-okf-wiki-structure/specs/knowledge-wiki/spec.md",
-		),
-		readRepositoryFile("openspec/specs/knowledge-wiki/spec.md"),
-	];
+	const guidance = planningInstructionPaths.map(readRepositoryFile);
+	const wiki = readRepositoryFile(wikiInstructionPath);
+	const archive = readRepositoryFile(
+		"agent-definitions/instructions/archive.md",
+	);
+	expect(AGENT_DEFINITIONS["instructions/wiki.md"]).toBe(wiki);
+	expect(AGENT_DEFINITIONS["instructions/archive.md"]).toBe(archive);
+	const specs = [readRepositoryFile("openspec/specs/knowledge-wiki/spec.md")];
 	const readme = readRepositoryFile("README.md");
 
-	for (const source of [...guidance, ...specs, readme]) {
+	for (const source of [...guidance, wiki, ...specs, readme]) {
 		expect(source).toContain("projects/<project-id>/<concept>");
 		expect(source).toContain("shared/<concept>");
 		expect(source).toMatch(/repository-relative source path/i);
 	}
-	for (const source of [...guidance, ...specs]) {
+	for (const source of [...guidance, wiki, ...specs]) {
 		expect(source).toMatch(
 			/evidence from every covered project|evidenced by every covered project|every project covered/i,
 		);
@@ -37,7 +39,7 @@ test("wiki guidance distinguishes project and shared knowledge", () => {
 		);
 		expect(source).toMatch(/active near-duplicates|active duplicate/i);
 	}
-	for (const source of [...guidance, ...specs, readme]) {
+	for (const source of [...guidance, wiki, ...specs, readme]) {
 		expect(source).not.toMatch(
 			/(?:each|one) repository(?:-specific)? bundle is required|one repository per (?:wiki )?bundle is the default|bundle belongs to one repository/i,
 		);
@@ -52,13 +54,20 @@ test("wiki guidance distinguishes project and shared knowledge", () => {
 	expect(readme).not.toMatch(
 		/one repository per (?:wiki )?bundle is the default/i,
 	);
-	expect(guidance[1]).toContain("Do not write wiki concepts");
-	expect(guidance[1]).not.toContain("wiki write");
+	for (const source of guidance)
+		expect(source).toContain("Do not write wiki concepts");
+	expect(wiki).toContain("OKF v0.2");
+	expect(wiki).toContain("review comments");
+	expect(wiki).toContain("agentic-coding workflow wiki write");
+	expect(wiki).toContain("no durable knowledge found");
+	expect(wiki).toContain("status: draft");
+	expect(archive).not.toMatch(/wiki/i);
 });
 
 test("wiki scope requirements preserve the existing CLI and migration lifecycle", () => {
-	const spec = readRepositoryFile(
-		"openspec/changes/adjust-okf-wiki-structure/specs/knowledge-wiki/spec.md",
+	const spec = readRepositoryFile("openspec/specs/knowledge-wiki/spec.md");
+	const changeSpec = readRepositoryFile(
+		"openspec/changes/use-a-wiki-agent-for-documentation/specs/knowledge-wiki/spec.md",
 	);
 
 	expect(spec).toMatch(/Scenario: CLI surface remains unchanged/);
@@ -69,4 +78,9 @@ test("wiki scope requirements preserve the existing CLI and migration lifecycle"
 	expect(spec).toContain("status: draft");
 	expect(spec).toContain("no `verified` event is added");
 	expect(spec).toContain("status: deprecated");
+	expect(changeSpec).toContain(
+		"administrative `wiki verify` operation MAY set `status: stable`",
+	);
+	expect(changeSpec).toContain("process:herdr-archive");
+	expect(changeSpec).toContain("human-reviewed trust");
 });

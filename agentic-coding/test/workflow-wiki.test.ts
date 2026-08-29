@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { run as runWorkflow } from "../src/workflow/cli.ts";
 import {
 	appendLog,
 	checkConformance,
@@ -118,6 +119,89 @@ describe("OKF wiki bundle", () => {
 		verifyConcept("existing", "process:archive");
 		verifyConcept("existing", "process:archive");
 		expect(readConceptForTest("existing").frontmatter.verified).toHaveLength(1);
+	});
+	test("managed wiki writes are isolated to the wiki role", async () => {
+		const args = [
+			"wiki",
+			"write",
+			"--path",
+			"projects/demo/architecture",
+			"--type",
+			"concept",
+			"--title",
+			"Architecture",
+			"--description",
+			"Durable architecture facts",
+		];
+		const saved = {
+			workflow: process.env.HERDR_WORKFLOW_ID,
+			step: process.env.HERDR_STEP_ID,
+			role: process.env.HERDR_ROLE,
+			token: process.env.HERDR_RUN_TOKEN,
+			change: process.env.HERDR_CHANGE_ID,
+		};
+		try {
+			delete process.env.HERDR_WORKFLOW_ID;
+			delete process.env.HERDR_STEP_ID;
+			delete process.env.HERDR_ROLE;
+			delete process.env.HERDR_RUN_TOKEN;
+			delete process.env.HERDR_CHANGE_ID;
+			await runWorkflow(args);
+			const file = path.join(root, "projects", "demo", "architecture.md");
+			const before = fs.readFileSync(file, "utf8");
+			expect(before).not.toContain("verified");
+			for (const role of [
+				"planner",
+				"consolidator",
+				"archive",
+				"worker",
+				"verifier",
+			]) {
+				process.env.HERDR_ROLE = role;
+				process.env.HERDR_RUN_TOKEN = "managed";
+				await expect(runWorkflow(args)).rejects.toThrow(/not permitted/);
+				expect(fs.readFileSync(file, "utf8")).toBe(before);
+			}
+			process.env.HERDR_ROLE = "wiki";
+			process.env.HERDR_RUN_TOKEN = "managed";
+			await expect(
+				runWorkflow([...args, "--status", "stable"]),
+			).rejects.toThrow(/authenticated core\.wiki run/);
+			delete process.env.HERDR_WORKFLOW_ID;
+			delete process.env.HERDR_STEP_ID;
+			delete process.env.HERDR_ROLE;
+			delete process.env.HERDR_RUN_TOKEN;
+			await runWorkflow([
+				"wiki",
+				"verify",
+				"--path",
+				"projects/demo/architecture",
+			]);
+			expect(
+				readConceptForTest("projects/demo/architecture").frontmatter.status,
+			).toBe("stable");
+			await expect(
+				runWorkflow([
+					"wiki",
+					"verify",
+					"--path",
+					"projects/demo/architecture",
+					"--actor",
+					"process:other",
+				]),
+			).rejects.toThrow(/process:herdr-archive/);
+		} finally {
+			if (saved.workflow === undefined) delete process.env.HERDR_WORKFLOW_ID;
+			else process.env.HERDR_WORKFLOW_ID = saved.workflow;
+			if (saved.step === undefined) delete process.env.HERDR_STEP_ID;
+			else process.env.HERDR_STEP_ID = saved.step;
+			if (saved.role === undefined) delete process.env.HERDR_ROLE;
+			else process.env.HERDR_ROLE = saved.role;
+			if (saved.token === undefined) delete process.env.HERDR_RUN_TOKEN;
+			else process.env.HERDR_RUN_TOKEN = saved.token;
+			if (saved.change === undefined) delete process.env.HERDR_CHANGE_ID;
+			else process.env.HERDR_CHANGE_ID = saved.change;
+		}
 	});
 	test("groups log entries by newest ISO date heading", () => {
 		appendLog(root, "first");

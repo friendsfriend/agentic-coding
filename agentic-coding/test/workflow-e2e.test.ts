@@ -46,6 +46,7 @@ const routing: WorkflowRouting = {
 		"core.implementation",
 		"core.triage",
 		"core.verification",
+		"core.wiki",
 		"core.archive",
 	].map((stepId) => ({ stepId, profile })),
 };
@@ -127,18 +128,21 @@ function action(
 	root: string,
 	view: WorkflowView,
 	actionId: string,
+	input?: unknown,
 ): WorkflowView {
 	return engine.dispatch(root, {
 		type: "developer.action",
 		workflowId: view.workflowId,
 		revision: view.revision,
 		actionId,
+		...(input === undefined ? {} : { input }),
 	}).view;
 }
 function drive(
 	engine: WorkflowEngine,
 	root: string,
 	definitionId: "standard" | "direct-apply" | "no-openspec",
+	policy = false,
 ): string[] {
 	if (definitionId !== "no-openspec") {
 		const change = path.join(root, "openspec", "changes", definitionId);
@@ -172,6 +176,7 @@ function drive(
 		repo: root,
 		changeId: definitionId,
 		definitionId,
+		...(policy ? { definitionVersion: 106 } : {}),
 		metadata: {
 			branch: "main",
 			baseBranch: "main",
@@ -222,6 +227,46 @@ function drive(
 	view = action(engine, root, view, "approve-review");
 	visited.push(view.currentStep.id);
 	if (definitionId !== "no-openspec") {
+		if (policy) {
+			view = complete(engine, root, view, "wiki", { touched: [] });
+			visited.push(view.currentStep.id);
+			view = action(engine, root, view, "review-comments", {
+				comments: [
+					{
+						comment: "add the source citation",
+						concept: "architecture",
+						line: 1,
+					},
+				],
+			});
+			expect(view.currentStep.id).toBe("core.wiki");
+			expect(engine.getSnapshot(root, view.workflowId).step.context).toEqual({
+				comments: [
+					{
+						comment: "add the source citation",
+						concept: "architecture",
+						line: 1,
+					},
+				],
+			});
+			visited.push(view.currentStep.id);
+			view = complete(engine, root, view, "wiki", {
+				touched: ["architecture"],
+			});
+			visited.push(view.currentStep.id);
+			view = action(engine, root, view, "approve-wiki");
+			const verification = requireEffect(
+				engine.claimEffects(root, 1),
+				"wiki.verify",
+			);
+			view = engine.dispatch(root, {
+				type: "effect.result",
+				effectId: verification.id,
+				lease: requireDefined(verification.lease, "effect lease"),
+				outcome: "complete",
+			}).view;
+			visited.push(view.currentStep.id);
+		}
 		const active = path.join(root, "openspec", "changes", definitionId);
 		const archived = path.join(
 			root,
@@ -274,6 +319,26 @@ for (const type of ["standard", "direct-apply", "no-openspec"] as const)
 			fs.rmSync(root, { recursive: true, force: true });
 		}
 	});
+test("policy workflow returns wiki comments before approval and archive", () => {
+	const root = repo();
+	try {
+		const sequence = drive(
+			new WorkflowEngine(registerBuiltins()),
+			root,
+			"direct-apply",
+			true,
+		);
+		const wiki = sequence.indexOf("core.wiki");
+		const approval = sequence.indexOf("core.wiki-approval");
+		const archive = sequence.indexOf("core.archive");
+		expect(wiki).toBeGreaterThan(-1);
+		expect(approval).toBeGreaterThan(wiki);
+		expect(archive).toBeGreaterThan(approval);
+		expect(sequence.indexOf("core.delivery")).toBeGreaterThan(archive);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
 test("review-comments request-changes dispatch validates bounded comment entries", () => {
 	const root = repo();
 	try {

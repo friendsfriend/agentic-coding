@@ -159,7 +159,16 @@ describe("workflow registry", () => {
 			for (const id of ["standard-propose", "fusion-propose"])
 				expect(registry.definition(id, version)).toBeTruthy();
 		}
-		const planFusion = registry.definition("plan-fusion", 20);
+		const planFusion = registry.definition("plan-fusion", 120);
+		expect(
+			rolesForDefinition(
+				"standard",
+				registry.definition("standard", 120).steps,
+				registry,
+			),
+		).toMatchObject({
+			"core.wiki": ["wiki"],
+		});
 		const fusionProposal = registry.definition("fusion-propose", 20);
 		expect(
 			rolesForDefinition("plan-fusion", planFusion.steps, registry, 2)[

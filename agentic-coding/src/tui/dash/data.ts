@@ -1874,7 +1874,7 @@ export function requiredUserActionFor(
 		return {
 			key: "wiki-review",
 			title: "Action required · Wiki review",
-			prompt: "Review knowledge changes before delivery.",
+			prompt: "Review knowledge changes before archival.",
 			items: [],
 		};
 	if (phase === "developer-review" || phase === "core.developer-review")

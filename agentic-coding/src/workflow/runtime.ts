@@ -30,6 +30,7 @@ import type {
 	StepDefinition,
 	WorkflowRegistry,
 } from "./registry.ts";
+import { conceptPath, snapshotList } from "./wiki.ts";
 
 const MAX_ARTIFACT_BYTES = 512 * 1024;
 const ACTIVE_RUN = new Set(["pending", "working"]);
@@ -716,6 +717,34 @@ export class WorkflowEngine {
 		} finally {
 			db.close();
 		}
+	}
+	/** Validate the launch-bound capability for a role-scoped CLI operation. */
+	authorizeAgentCapability(
+		repo: string,
+		workflowId: string,
+		stepId: string,
+		role: string,
+		token: string,
+	): WorkflowRun {
+		if (!token)
+			throw new WorkflowRuntimeError(
+				"unauthorized",
+				"authenticated run capability is required",
+			);
+		const run = this.activeRunForRole(repo, workflowId, stepId, role);
+		const snapshot = this.getSnapshot(repo, workflowId);
+		if (
+			snapshot.currentStep !== stepId ||
+			!snapshot.step.activeRunIds.includes(run.id) ||
+			!run.capabilityHash ||
+			Date.parse(run.capabilityExpiresAt) <= this.now().getTime() ||
+			!tokenMatches(token, run.capabilityHash)
+		)
+			throw new WorkflowRuntimeError(
+				"unauthorized",
+				"invalid or inactive run capability",
+			);
+		return run;
 	}
 	getSnapshot(repo: string, workflowId: string): WorkflowSnapshot {
 		const db = openStore(repo);
@@ -1639,6 +1668,7 @@ export class WorkflowEngine {
 			);
 		const priorAttempt = snapshot.step.attempt;
 		const priorResults = snapshot.step.results;
+		const priorContext = snapshot.step.context;
 		if (edge.loop) {
 			const key = `${edge.from}:${edge.outcome}`;
 			const attempts = (snapshot.loopCounts[key] ?? 0) + 1;
@@ -1674,9 +1704,14 @@ export class WorkflowEngine {
 					"core.verification",
 					"fusion.consolidate",
 				].includes(edge.to)) ||
-			(edge.to === "core.archive" && outcome === "comments")
+			((edge.to === "core.wiki" || edge.to === "core.archive") &&
+				outcome === "comments") ||
+			(edge.to === "core.wiki-approval" && outcome === "complete")
 		)
-			snapshot.step.context = JSON.parse(JSON.stringify(output)) as JsonValue;
+			snapshot.step.context =
+				edge.to === "core.wiki-approval" && outcome === "complete"
+					? wikiVerificationPayload(snapshot)
+					: (JSON.parse(JSON.stringify(output)) as JsonValue);
 		if (
 			edge.to === "core.verification" &&
 			output &&
@@ -1706,7 +1741,9 @@ export class WorkflowEngine {
 				snapshot,
 				effect.kind,
 				`${snapshot.workflowId}:${effect.idempotencyKey}:${snapshot.revision}`,
-				effect.payload,
+				effect.kind === "wiki.verify"
+					? (priorContext ?? wikiVerificationPayload(snapshot))
+					: effect.payload,
 			);
 		this.enterStep(db, snapshot, definition);
 	}
@@ -2667,6 +2704,21 @@ export function changedFilesIn(snapshot: WorkflowSnapshot): string[] {
 		changed.add(file);
 	return [...changed].sort();
 }
+function wikiVerificationPayload(snapshot: WorkflowSnapshot): {
+	concepts: Array<{ id: string; digest: string }>;
+} {
+	return {
+		concepts: snapshotList(
+			snapshot.metadata.changeId,
+			snapshot.metadata.worktree,
+		).map((id) => ({
+			id,
+			digest: createHash("sha256")
+				.update(fs.readFileSync(conceptPath(id)))
+				.digest("hex"),
+		})),
+	};
+}
 function roleForStep(step: string, snapshot: WorkflowSnapshot): string[] {
 	if (step === "core.plan") return ["planner"];
 	if (step === "fusion.plan") return fusionPlannerRoles(snapshot.routing);
@@ -2679,6 +2731,7 @@ function roleForStep(step: string, snapshot: WorkflowSnapshot): string[] {
 			: snapshot.step.testRunStarted
 				? ["test-verifier"]
 				: ["quality-verifier"];
+	if (step === "core.wiki") return ["wiki"];
 	if (step === "core.archive") return ["archive"];
 	return [];
 }

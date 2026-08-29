@@ -72,6 +72,10 @@ const IN_FLIGHT_GATE_PINS = new Map([
 		"direct-apply@20:7e39d4c024d2cda28173582b819d934513126a0f84130705df2e1c95f66cd814",
 		120,
 	],
+	[
+		"standard@120:0322fe876b4d950b00c70c68b64425b9acc1f1e54831abbb100a8526b916b18e",
+		1000,
+	],
 ]);
 
 function serializable(value: unknown): unknown {

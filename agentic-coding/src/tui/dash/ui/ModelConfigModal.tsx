@@ -32,6 +32,7 @@ const PRESET_STEPS = [
 	"core.plan",
 	"core.implementation",
 	"core.triage",
+	"core.wiki",
 	"core.archive",
 ];
 const FUSION_CONSOLIDATE_STEP = "fusion.consolidate";

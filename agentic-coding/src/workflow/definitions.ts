@@ -234,6 +234,7 @@ const INSTRUCTION_BY_STEP: Record<string, string[]> = {
 		"verification-usability.md",
 		"verification-test.md",
 	],
+	"core.wiki": ["workflow-agent-protocol.md", "wiki.md"],
 	"core.archive": ["workflow-agent-protocol.md", "archive.md"],
 	"fusion.plan": ["workflow-agent-protocol.md", "planning-fusion.md"],
 	"fusion.consolidate": [
@@ -380,6 +381,16 @@ export function registerBuiltins(
 			"comments",
 		]),
 		step(
+			"core.wiki",
+			"Wiki documentation",
+			"agent",
+			["complete", "blocked", "failed"],
+			{
+				requirements: ["prompt", "run-environment", "observe", "shell", "edit"],
+				retryLimit: 3,
+			},
+		),
+		step(
 			"core.wiki-approval",
 			"Wiki approval",
 			"developer",
@@ -402,6 +413,7 @@ export function registerBuiltins(
 					"agent.prompt",
 					"agent.stop",
 					"openspec.validate",
+					"wiki.verify",
 				],
 			},
 		),
@@ -426,6 +438,7 @@ export function registerBuiltins(
 		rounds: number,
 		version: number,
 		wikiGate = true,
+		wikiBeforeArchive = true,
 	): WorkflowManifest[] => [
 		{
 			id: "standard",
@@ -437,8 +450,11 @@ export function registerBuiltins(
 				"core.plan",
 				"core.plan-approval",
 				...common,
+				...(wikiGate && wikiBeforeArchive
+					? ["core.wiki", "core.wiki-approval"]
+					: []),
 				"core.archive",
-				...(wikiGate ? ["core.wiki-approval"] : []),
+				...(wikiGate && !wikiBeforeArchive ? ["core.wiki-approval"] : []),
 				"core.delivery",
 				"core.completed",
 				"core.closed",
@@ -474,7 +490,7 @@ export function registerBuiltins(
 					to: "core.plan",
 					loop: { maxAttempts: 3 },
 				},
-				...workflowEdges(true, rounds, wikiGate),
+				...workflowEdges(true, rounds, wikiGate, wikiBeforeArchive),
 			],
 		},
 		{
@@ -537,13 +553,16 @@ export function registerBuiltins(
 			terminal: ["core.closed"],
 			steps: [
 				...common,
+				...(wikiGate && wikiBeforeArchive
+					? ["core.wiki", "core.wiki-approval"]
+					: []),
 				"core.archive",
-				...(wikiGate ? ["core.wiki-approval"] : []),
+				...(wikiGate && !wikiBeforeArchive ? ["core.wiki-approval"] : []),
 				"core.delivery",
 				"core.completed",
 				"core.closed",
 			],
-			edges: workflowEdges(true, rounds, wikiGate),
+			edges: workflowEdges(true, rounds, wikiGate, wikiBeforeArchive),
 		},
 		{
 			id: "no-openspec",
@@ -565,8 +584,11 @@ export function registerBuiltins(
 				"fusion.consolidate",
 				"core.plan-approval",
 				...common,
+				...(wikiGate && wikiBeforeArchive
+					? ["core.wiki", "core.wiki-approval"]
+					: []),
 				"core.archive",
-				...(wikiGate ? ["core.wiki-approval"] : []),
+				...(wikiGate && !wikiBeforeArchive ? ["core.wiki-approval"] : []),
 				"core.delivery",
 				"core.completed",
 				"core.closed",
@@ -623,7 +645,7 @@ export function registerBuiltins(
 					to: "fusion.consolidate",
 					loop: { maxAttempts: 3 },
 				},
-				...workflowEdges(true, rounds, wikiGate),
+				...workflowEdges(true, rounds, wikiGate, wikiBeforeArchive),
 			],
 		},
 		{
@@ -704,6 +726,9 @@ export function registerBuiltins(
 		const version = definitionVersionForPolicy(rounds);
 		for (const definition of manifests(rounds, version, true))
 			registry.registerWorkflow(definition);
+		if (rounds === 6)
+			for (const definition of manifests(20, 1000, true, false))
+				registry.registerWorkflow(definition);
 	}
 	return registry;
 }
@@ -714,8 +739,13 @@ function workflowEdges(
 	archive: boolean,
 	maxVerificationRounds: number,
 	wikiGate = true,
+	wikiBeforeArchive = true,
 ): WorkflowManifest["edges"] {
-	const approved = archive ? "core.archive" : "core.delivery";
+	const approved = archive
+		? wikiGate && wikiBeforeArchive
+			? "core.wiki"
+			: "core.archive"
+		: "core.delivery";
 	return [
 		{ from: "core.implementation", outcome: "complete", to: "core.triage" },
 		{
@@ -777,43 +807,98 @@ function workflowEdges(
 		},
 		...(archive
 			? wikiGate
-				? ([
-						{
-							from: "core.archive",
-							outcome: "complete",
-							to: "core.wiki-approval",
-						},
-						{
-							from: "core.wiki-approval",
-							outcome: "approve",
-							to: "core.delivery",
-							effects: [
-								{
-									kind: "wiki.verify",
-									idempotencyKey: "wiki.verify",
-									payload: {},
-								},
-							],
-						},
-						{
-							from: "core.wiki-approval",
-							outcome: "comments",
-							to: "core.archive",
-							loop: { maxAttempts: 6 },
-						},
-						{
-							from: "core.archive",
-							outcome: "blocked",
-							to: "core.archive",
-							loop: { maxAttempts: 3 },
-						},
-						{
-							from: "core.archive",
-							outcome: "failed",
-							to: "core.archive",
-							loop: { maxAttempts: 3 },
-						},
-					] as const)
+				? wikiBeforeArchive
+					? ([
+							{
+								from: "core.wiki",
+								outcome: "complete",
+								to: "core.wiki-approval",
+							},
+							{
+								from: "core.wiki",
+								outcome: "blocked",
+								to: "core.wiki",
+								loop: { maxAttempts: 3 },
+							},
+							{
+								from: "core.wiki",
+								outcome: "failed",
+								to: "core.wiki",
+								loop: { maxAttempts: 3 },
+							},
+							{
+								from: "core.wiki-approval",
+								outcome: "approve",
+								to: "core.archive",
+								effects: [
+									{
+										kind: "wiki.verify",
+										idempotencyKey: "wiki.verify",
+										payload: {},
+									},
+								],
+							},
+							{
+								from: "core.wiki-approval",
+								outcome: "comments",
+								to: "core.wiki",
+								loop: { maxAttempts: 6 },
+							},
+							{
+								from: "core.archive",
+								outcome: "complete",
+								to: "core.delivery",
+							},
+							{
+								from: "core.archive",
+								outcome: "blocked",
+								to: "core.archive",
+								loop: { maxAttempts: 3 },
+							},
+							{
+								from: "core.archive",
+								outcome: "failed",
+								to: "core.archive",
+								loop: { maxAttempts: 3 },
+							},
+						] as const)
+					: ([
+							{
+								from: "core.archive",
+								outcome: "complete",
+								to: "core.wiki-approval",
+							},
+							{
+								from: "core.wiki-approval",
+								outcome: "approve",
+								to: "core.delivery",
+								effects: [
+									{
+										kind: "wiki.verify",
+										idempotencyKey: "wiki.verify",
+										payload: {},
+									},
+								],
+							},
+							{
+								from: "core.wiki-approval",
+								outcome: "comments",
+								to: "core.archive",
+								loop: { maxAttempts: 6 },
+							},
+							{
+								from: "core.archive",
+								outcome: "blocked",
+								to: "core.archive",
+								loop: { maxAttempts: 3 },
+							},
+							{
+								from: "core.archive",
+								outcome: "failed",
+								to: "core.archive",
+								loop: { maxAttempts: 3 },
+							},
+						] as const)
 				: ([
 						{ from: "core.archive", outcome: "complete", to: "core.delivery" },
 						{
