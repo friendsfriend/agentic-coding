@@ -26,6 +26,7 @@ const walk = (dir: string, prefix: string) => {
 };
 walk(path.join(defDir, "instructions"), "instructions/");
 walk(path.join(defDir, "bridges"), "bridges/");
+walk(path.join(defDir, "extensions"), "extensions/");
 
 const hash = createHash("sha1")
 	.update(

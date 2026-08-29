@@ -27,7 +27,11 @@ import {
 	resolveRouting,
 	validatePresetCoverage,
 } from "./profiles.ts";
-import { validateChangeId, WorkflowEngine } from "./runtime.ts";
+import {
+	QUESTION_WAIT_MS,
+	validateChangeId,
+	WorkflowEngine,
+} from "./runtime.ts";
 import {
 	appendLog,
 	ensureBundle,
@@ -43,6 +47,7 @@ export const SUBCOMMANDS: readonly string[] = [
 	"status",
 	"action",
 	"handoff",
+	"question",
 	"repair",
 	"repin",
 	"projects",
@@ -57,6 +62,7 @@ export const REQUIRED_FLAGS: Record<string, string[]> = {
 	repair: ["repo", "change", "revision", "step"],
 	repin: ["repo", "change"],
 	handoff: ["outcome"],
+	question: ["description"],
 };
 export const AGENT_EXTENSION_SUBCOMMANDS = [
 	"list",
@@ -268,56 +274,159 @@ function flag(argv: string[], name: string): string | undefined {
 	const prefix = `--${name}=`;
 	return argv.find((token) => token.startsWith(prefix))?.slice(prefix.length);
 }
-// A reused persistent-role agent's own process keeps the HERDR_RUN_ID/
-// GENERATION/TOKEN env vars it was originally launched with; those go stale
-// the moment a later generation reuses that pane, but HERDR_WORKFLOW_ID/
-// HERDR_STEP_ID/HERDR_ROLE stay valid across every generation of that role
-// (they identify *what this process is*, not *which run it was last given*).
-// Resolve the run this process should be handing off right now from the
-// engine (which only ever has one run pending/working per role at a time)
-// instead of trusting the process's own possibly-stale run identity. The
-// launch-bound token remains the authorization proof; never mint one from
-// ambient role identity.
+type CallerEnvironment = Record<string, string>;
+function processEnvironment(pid: number): CallerEnvironment {
+	return Object.fromEntries(
+		fs
+			.readFileSync(`/proc/${pid}/environ`)
+			.toString()
+			.split("\0")
+			.flatMap((entry) => {
+				const separator = entry.indexOf("=");
+				return separator > 0
+					? [[entry.slice(0, separator), entry.slice(separator + 1)]]
+					: [];
+			}),
+	);
+}
+function parentProcessId(pid: number): number | undefined {
+	const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+	const fields = stat
+		.slice(stat.lastIndexOf(")") + 1)
+		.trim()
+		.split(/\s+/);
+	const parent = Number(fields[1]);
+	if (!Number.isInteger(parent) || parent < 0)
+		throw new Error("managed caller ancestry is malformed");
+	return parent === 0 ? undefined : parent;
+}
+/** Read the launch environment from the caller's process ancestry. A child
+ * cannot bypass the managed-agent boundary by unsetting its own environment. */
+function callerEnvironment(): CallerEnvironment {
+	const local = process.env as CallerEnvironment;
+	let managed: CallerEnvironment = {};
+	let managedPid: number | undefined;
+	const seen = new Set<number>();
+	let pid = process.pid;
+	let rootReached = false;
+	while (!seen.has(pid)) {
+		seen.add(pid);
+		// PID 1 is the process-tree root in the host namespace; its environment
+		// is not needed to establish the managed ancestor and may be unreadable.
+		let environment: CallerEnvironment;
+		try {
+			environment =
+				pid === process.pid ? local : pid === 1 ? {} : processEnvironment(pid);
+		} catch {
+			if (managedPid !== undefined) {
+				rootReached = true;
+				break;
+			}
+			throw new Error("managed caller ancestry is unavailable");
+		}
+		if (
+			pid !== process.pid &&
+			(environment.HERDR_RUN_TOKEN || environment.HERDR_WORKFLOW_ID)
+		) {
+			managed = environment;
+			managedPid = pid;
+		}
+		const parent = parentProcessId(pid);
+		if (parent === undefined) {
+			rootReached = true;
+			break;
+		}
+		pid = parent;
+	}
+	if (!rootReached) throw new Error("managed caller ancestry is cyclic");
+	if (local.HERDR_RUN_TOKEN || local.HERDR_WORKFLOW_ID) {
+		if (managedPid === undefined)
+			throw new Error("managed caller ancestry is unavailable");
+	}
+	return managed;
+}
 function resolveHandoffIdentity(
 	workflowEngine: WorkflowEngine,
 	repo: string,
-): { runId: string; generation: number; token: string; outputPath?: string } {
-	const workflowId = process.env.HERDR_WORKFLOW_ID;
-	const stepId = process.env.HERDR_STEP_ID;
-	const role = process.env.HERDR_ROLE;
-	const suppliedToken = process.env.HERDR_RUN_TOKEN;
-	if (!workflowId || !stepId || !role)
+	overrideEnvironment?: CallerEnvironment,
+): {
+	runId: string;
+	generation: number;
+	token: string;
+	workflowId: string;
+	stepId: string;
+	role: string;
+	outputPath?: string;
+} {
+	const environment = overrideEnvironment ?? callerEnvironment();
+	const workflowId = environment.HERDR_WORKFLOW_ID;
+	const stepId = environment.HERDR_STEP_ID;
+	const role = environment.HERDR_ROLE;
+	const runId = environment.HERDR_RUN_ID;
+	let token = environment.HERDR_RUN_TOKEN;
+	if (!workflowId || !stepId || !role || !runId)
 		throw new Error(
-			"handoff requires engine-provided run environment and capability",
+			"handoff requires an exact launch-bound run environment and capability",
 		);
-	const run = workflowEngine.activeRunForRole(repo, workflowId, stepId, role);
-	let token = suppliedToken;
-	if (process.env.HERDR_RUN_ID !== run.id) {
-		try {
-			const envFile = path.join(
-				repo,
-				".herdr-workflow",
-				"runtime-bin",
-				run.id,
-				"run.env",
-			);
-			const line = fs
-				.readFileSync(envFile, "utf8")
-				.split("\n")
-				.find((item) => item.startsWith("HERDR_RUN_TOKEN="));
-			if (line) token = line.slice("HERDR_RUN_TOKEN=".length);
-		} catch {
-			/* dispatch rejects a stale token when no launch env is available */
-		}
+	const callerRun = workflowEngine.getRun(repo, runId);
+	let run = callerRun;
+	try {
+		workflowEngine.authorizeExactRunCapability(
+			repo,
+			workflowId,
+			runId,
+			stepId,
+			role,
+			token ?? "",
+		);
+	} catch {
+		// Persistent agents keep the original environment when their pane is
+		// reused. Only adopt the current generation when the immutable caller
+		// run and current run resolve to the same live pane; never select by
+		// mutable role identity alone.
+		const current = workflowEngine.activeRunForRole(
+			repo,
+			workflowId,
+			stepId,
+			role,
+		);
+		if (
+			!callerRun.handle?.paneId ||
+			!current.handle?.paneId ||
+			callerRun.handle.paneId !== current.handle.paneId
+		)
+			throw new Error("invalid or inactive run capability");
+		const envFile = path.join(
+			repo,
+			".herdr-workflow",
+			"runtime-bin",
+			current.id,
+			"run.env",
+		);
+		const line = fs
+			.readFileSync(envFile, "utf8")
+			.split("\n")
+			.find((item) => item.startsWith("HERDR_RUN_TOKEN="));
+		const refreshedToken = line?.slice("HERDR_RUN_TOKEN=".length);
+		if (!refreshedToken)
+			throw new Error("persistent agent run capability is unavailable");
+		token = refreshedToken;
+		run = workflowEngine.authorizeExactRunCapability(
+			repo,
+			workflowId,
+			current.id,
+			stepId,
+			role,
+			refreshedToken,
+		);
 	}
-	if (!token)
-		throw new Error(
-			"handoff requires a launch-bound capability for the active run",
-		);
 	return {
 		runId: run.id,
 		generation: run.generation,
-		token,
+		token: token ?? "",
+		workflowId,
+		stepId,
+		role,
 		...(run.outputPath ? { outputPath: run.outputPath } : {}),
 	};
 }
@@ -384,6 +493,10 @@ const FLAG_SCHEMA: Record<
 	handoff: {
 		values: ["outcome", "artifact", "message"],
 		booleans: ["no-drain"],
+		positionals: [0, 0],
+	},
+	question: {
+		values: ["description", "options", "timeout"],
 		positionals: [0, 0],
 	},
 	repair: {
@@ -459,7 +572,7 @@ function validateArgs(command: string, argv: string[]): void {
 function help(command?: string): void {
 	if (!command) {
 		console.log(
-			"Usage: agentic-coding workflow <command> [flags]\n\nCommands:\n  start            Start pinned workflow definition\n  status           Print validated workflow view\n  action           Dispatch revision-bound engine action\n  handoff          Submit run-bound agent outcome\n  repair           Repair to compatible step, retriggers phase\n  repin            Re-pin to current definition digest\n  projects         List configured projects\n  config           Print resolved configuration\n  agent-extension  Manage Pi agent extensions\n  wiki             Read/update OKF wiki; only the managed wiki role may write drafts; archive verifies",
+			"Usage: agentic-coding workflow <command> [flags]\n\nCommands:\n  start            Start pinned workflow definition\n  status           Print validated workflow view\n  action           Dispatch revision-bound engine action\n  handoff          Submit run-bound agent outcome\n  question         Ask the developer a bounded question\n  repair           Repair to compatible step, retriggers phase\n  repin            Re-pin to current definition digest\n  projects         List configured projects\n  config           Print resolved configuration\n  agent-extension  Manage Pi agent extensions\n  wiki             Read/update OKF wiki; only the managed wiki role may write drafts; archive verifies",
 		);
 		return;
 	}
@@ -471,6 +584,8 @@ function help(command?: string): void {
 			"action ACTION_ID --repo PATH --change ID --revision N [--input JSON_OR_PATH]",
 		handoff:
 			"handoff --outcome complete|blocked|failed [--artifact PATH] [--message TEXT]",
+		question:
+			"question --description TEXT [--options JSON] [--timeout MILLISECONDS]",
 		repair:
 			"repair --repo PATH --change ID --revision N --step STEP [--reason TEXT] [--confirm]",
 		projects: "projects",
@@ -501,6 +616,88 @@ export function runGit(repo: string, ...args: string[]): string {
 		);
 	return result.stdout.toString().trim();
 }
+export async function runDeveloperQuestion(
+	engineInstance: WorkflowEngine,
+	repo: string,
+	description: string,
+	options: unknown = [],
+	timeoutMs = QUESTION_WAIT_MS,
+): Promise<string> {
+	if (!description.trim())
+		throw new Error("question requires a non-empty description");
+	if (
+		!Number.isInteger(timeoutMs) ||
+		timeoutMs < 1 ||
+		timeoutMs > QUESTION_WAIT_MS
+	)
+		throw new Error(
+			`question timeout must be an integer from 1 to ${QUESTION_WAIT_MS}`,
+		);
+	const identity = resolveHandoffIdentity(engineInstance, repo);
+	const run = engineInstance.authorizeExactRunCapability(
+		repo,
+		identity.workflowId,
+		identity.runId,
+		identity.stepId,
+		identity.role,
+		identity.token,
+	);
+	const created = engineInstance.dispatch(repo, {
+		type: "agent.question",
+		workflowId: run.workflowId,
+		runId: run.id,
+		stepId: run.stepId,
+		role: run.role,
+		token: identity.token,
+		description,
+		options,
+	});
+	const questionId = created.snapshot.developerDialogue.at(-1)?.id;
+	if (!questionId) throw new Error("question was not recorded");
+	const deadline = Date.now() + timeoutMs;
+	let interrupted = false;
+	const interrupt = () => {
+		interrupted = true;
+	};
+	process.on("SIGTERM", interrupt);
+	process.on("SIGINT", interrupt);
+	try {
+		while (!interrupted && Date.now() < deadline) {
+			const question = engineInstance
+				.getSnapshot(repo, run.workflowId)
+				.developerDialogue.find((item) => item.id === questionId);
+			if (!question)
+				throw new Error("question disappeared from workflow state");
+			if (question.status !== "pending") return JSON.stringify(question);
+			await Bun.sleep(Math.min(100, Math.max(1, deadline - Date.now())));
+		}
+		try {
+			engineInstance.dispatch(repo, {
+				type: "agent.question-expire",
+				workflowId: run.workflowId,
+				questionId,
+				runId: run.id,
+				stepId: run.stepId,
+				role: run.role,
+				token: identity.token,
+			});
+		} catch (error) {
+			if (
+				!(error instanceof Error) ||
+				!/no longer pending|expired/.test(error.message)
+			)
+				throw error;
+		}
+		const expired = engineInstance
+			.getSnapshot(repo, run.workflowId)
+			.developerDialogue.find((item) => item.id === questionId);
+		return JSON.stringify(expired ?? { status: "expired", id: questionId });
+	} finally {
+		process.off("SIGTERM", interrupt);
+		process.off("SIGINT", interrupt);
+	}
+}
+
 export function validateStart(
 	repo: string,
 	change: string,
@@ -643,11 +840,17 @@ function wikiRole(): string | undefined {
 	return process.env.HERDR_ROLE || undefined;
 }
 function managedAgent(): boolean {
-	return Boolean(
-		process.env.HERDR_RUN_TOKEN ||
-			process.env.HERDR_WORKFLOW_ID ||
-			process.env.HERDR_STEP_ID,
-	);
+	try {
+		const environment = callerEnvironment();
+		return Boolean(
+			environment.HERDR_RUN_TOKEN ||
+				environment.HERDR_WORKFLOW_ID ||
+				environment.HERDR_STEP_ID,
+		);
+	} catch {
+		// If ancestry cannot be authenticated, fail closed as managed.
+		return true;
+	}
 }
 function authorizeWikiWriter(): void {
 	const workflowId = process.env.HERDR_WORKFLOW_ID;
@@ -969,6 +1172,27 @@ export async function run(argv: string[]): Promise<void> {
 		);
 		return;
 	}
+	if (command === "question") {
+		if (!managedAgent())
+			throw new Error("question requires an authenticated managed agent");
+		const description = requireFlag(rest, "description");
+		const options = flag(rest, "options")
+			? parseInput(flag(rest, "options"))
+			: [];
+		const timeout = flag(rest, "timeout");
+		const timeoutMs =
+			timeout === undefined ? QUESTION_WAIT_MS : Number(timeout);
+		console.log(
+			await runDeveloperQuestion(
+				workflowEngine,
+				process.cwd(),
+				description,
+				options,
+				timeoutMs,
+			),
+		);
+		return;
+	}
 	if (command === "handoff") {
 		const outcome = flag(rest, "outcome");
 		if (
@@ -1132,7 +1356,12 @@ export const cliTest = {
 	},
 	detachedDrainArgv,
 	verificationPosition,
-	resolveHandoffIdentity,
+	resolveHandoffIdentity: (workflowEngine: WorkflowEngine, repo: string) =>
+		resolveHandoffIdentity(
+			workflowEngine,
+			repo,
+			process.env as CallerEnvironment,
+		),
 };
 export async function main(
 	argv: string[] = process.argv.slice(2),

@@ -204,6 +204,7 @@ describe("profiles, assignments, and adapters", () => {
 					name: `agent-${runtime}`,
 					environment: current.environment,
 					bridgePath: "/tmp/bridge.ts",
+					workflowExtensionPath: "/tmp/developer-question.ts",
 				});
 				expect(handle.paneId).toBe("pane");
 				expect(fake.starts).toBe(2);
@@ -230,6 +231,7 @@ describe("profiles, assignments, and adapters", () => {
 				expect(start).toContain("provider/model");
 				expect(start.some((value) => value.startsWith("--env"))).toBe(false);
 				if (runtime === "pi") {
+					expect(start).toContain("/tmp/developer-question.ts");
 					const toolsArg = start[start.indexOf("--tools") + 1];
 					expect(toolsArg).toBeDefined();
 					expect(toolsArg.split(",").sort()).toEqual(["bash", "read"]);

@@ -21,6 +21,8 @@ export interface LaunchContext {
 	name: string;
 	environment: Record<string, string>;
 	bridgePath?: string;
+	/** Trusted workflow extension; distinct from user-configured extensions. */
+	workflowExtensionPath?: string;
 }
 export interface AgentObservation {
 	status: "idle" | "working" | "blocked" | "done" | "unknown";
@@ -252,6 +254,8 @@ export class PiAdapter extends BaseAdapter {
 			args.push("--no-extensions");
 		for (const extension of ctx.profile.extensions)
 			args.push("--extension", extension);
+		if (ctx.workflowExtensionPath)
+			args.push("--extension", ctx.workflowExtensionPath);
 		if (ctx.bridgePath) args.push("--extension", ctx.bridgePath);
 		return this.lifecycle.start("pi", withRuntimeLauncher(ctx, "pi"), args);
 	}

@@ -185,6 +185,32 @@ export interface WorkflowMetadata {
 	updatedAt: string;
 	stepEnteredAt: string;
 }
+export type DeveloperQuestionStatus =
+	| "pending"
+	| "answered"
+	| "cancelled"
+	| "expired";
+export interface DeveloperQuestionOption {
+	label: string;
+	value: string;
+}
+export interface DeveloperDialogueRecord {
+	id: string;
+	workflowId: string;
+	runId: string;
+	stepId: string;
+	role: string;
+	description: string;
+	options: readonly DeveloperQuestionOption[];
+	status: DeveloperQuestionStatus;
+	createdAt: string;
+	expiresAt: string;
+	answeredAt?: string;
+	answer?: {
+		kind: "option" | "custom" | "cancel";
+		value?: string;
+	};
+}
 export interface WorkflowSnapshot {
 	schemaVersion: 1;
 	workflowId: string;
@@ -198,6 +224,8 @@ export interface WorkflowSnapshot {
 	evidence: Array<{ kind: string; path: string; digest: string }>;
 	loopCounts: Record<string, number>;
 	attention: string[];
+	/** Bounded, ordered question/answer history. Missing in legacy snapshots. */
+	developerDialogue: DeveloperDialogueRecord[];
 	repaired?: { reason: string; fromStep: string; at: string };
 	repinned?: { fromDigest: string; at: string };
 }
@@ -337,6 +365,10 @@ export interface WorkflowView {
 		at: string;
 	}>;
 	health: { valid: boolean; attention: string[]; diagnostic?: string };
+	/** Answered and terminal questions in creation order. */
+	developerDialogue?: DeveloperDialogueRecord[];
+	/** Pending subset, ordered oldest first. */
+	pendingQuestions?: DeveloperDialogueRecord[];
 	availableActions: WorkflowActionView[];
 }
 
@@ -347,6 +379,25 @@ export type WorkflowCommand =
 			revision: number;
 			actionId: string;
 			input?: unknown;
+	  }
+	| {
+			type: "agent.question";
+			workflowId: string;
+			runId: string;
+			stepId: string;
+			role: string;
+			token: string;
+			description: string;
+			options: readonly DeveloperQuestionOption[];
+	  }
+	| {
+			type: "agent.question-expire";
+			workflowId: string;
+			questionId: string;
+			runId: string;
+			stepId: string;
+			role: string;
+			token: string;
 	  }
 	| {
 			type: "agent.handoff";
@@ -380,13 +431,39 @@ export const commandContract: Contract<WorkflowCommand> = {
 	parse(value: unknown): WorkflowCommand {
 		const input = object(value, "$");
 		const type = text(input.type, "$.type", 64);
-		if (type === "developer.action")
+		if (type === "developer.action") {
+			const actionId = text(input.actionId, "$.actionId");
 			return {
 				type,
 				workflowId: text(input.workflowId, "$.workflowId"),
 				revision: integer(input.revision, "$.revision"),
-				actionId: text(input.actionId, "$.actionId"),
-				input: input.input,
+				actionId,
+				input:
+					actionId === "answer-question"
+						? parseDeveloperQuestionAnswer(input.input)
+						: input.input,
+			};
+		}
+		if (type === "agent.question")
+			return {
+				type,
+				workflowId: text(input.workflowId, "$.workflowId"),
+				runId: text(input.runId, "$.runId"),
+				stepId: text(input.stepId, "$.stepId"),
+				role: text(input.role, "$.role"),
+				token: text(input.token, "$.token", 1024),
+				description: text(input.description, "$.description", 4096),
+				options: questionOptions(input.options, "$.options"),
+			};
+		if (type === "agent.question-expire")
+			return {
+				type,
+				workflowId: text(input.workflowId, "$.workflowId"),
+				questionId: text(input.questionId, "$.questionId"),
+				runId: text(input.runId, "$.runId"),
+				stepId: text(input.stepId, "$.stepId"),
+				role: text(input.role, "$.role"),
+				token: text(input.token, "$.token", 1024),
 			};
 		if (type === "agent.handoff")
 			return {
@@ -443,6 +520,106 @@ export const commandContract: Contract<WorkflowCommand> = {
 		]);
 	},
 };
+
+function questionOptions(
+	value: unknown,
+	at: string,
+): DeveloperQuestionOption[] {
+	if (value === undefined) return [];
+	if (!Array.isArray(value) || value.length > 16)
+		throw new ContractFailure("core.developer-question", [
+			{ path: at, message: "expected at most 16 option objects" },
+		]);
+	const options = value.map((entry, index) => {
+		const item = object(entry, `${at}[${index}]`);
+		return {
+			label: text(item.label, `${at}[${index}].label`, 256),
+			value: text(item.value, `${at}[${index}].value`, 1024),
+		};
+	});
+	if (new Set(options.map((item) => item.value)).size !== options.length)
+		throw new ContractFailure("core.developer-question", [
+			{ path: at, message: "option values must be unique" },
+		]);
+	return options;
+}
+export function parseDeveloperQuestionAnswer(value: unknown): {
+	questionId: string;
+	kind: "option" | "custom" | "cancel";
+	value?: string;
+} {
+	const input = object(value, "$.input");
+	const kind = enumValue(input.kind, "$.input.kind", [
+		"option",
+		"custom",
+		"cancel",
+	]);
+	if (kind === "cancel")
+		return { questionId: text(input.questionId, "$.input.questionId"), kind };
+	const answer = text(input.value, "$.input.value", 8192);
+	return {
+		questionId: text(input.questionId, "$.input.questionId"),
+		kind,
+		value: answer,
+	};
+}
+function dialogue(value: unknown): DeveloperDialogueRecord[] {
+	if (value === undefined) return [];
+	if (!Array.isArray(value) || value.length > 100)
+		throw new ContractFailure("core.workflow-snapshot", [
+			{ path: "$.developerDialogue", message: "expected at most 100 records" },
+		]);
+	return value.map((entry, index) => {
+		const at = `$.developerDialogue[${index}]`;
+		const item = object(entry, at);
+		const status = enumValue(item.status, `${at}.status`, [
+			"pending",
+			"answered",
+			"cancelled",
+			"expired",
+		]);
+		const result: DeveloperDialogueRecord = {
+			id: text(item.id, `${at}.id`),
+			workflowId: text(item.workflowId, `${at}.workflowId`),
+			runId: text(item.runId, `${at}.runId`),
+			stepId: text(item.stepId, `${at}.stepId`),
+			role: text(item.role, `${at}.role`),
+			description: text(item.description, `${at}.description`, 4096),
+			options: questionOptions(item.options, `${at}.options`),
+			status,
+			createdAt: text(item.createdAt, `${at}.createdAt`),
+			expiresAt: text(item.expiresAt, `${at}.expiresAt`),
+		};
+		if (item.answeredAt !== undefined)
+			result.answeredAt = text(item.answeredAt, `${at}.answeredAt`);
+		if (item.answer !== undefined) {
+			const answer = object(item.answer, `${at}.answer`);
+			const kind = enumValue(answer.kind, `${at}.answer.kind`, [
+				"option",
+				"custom",
+				"cancel",
+			]);
+			result.answer = {
+				kind,
+				...(kind === "cancel"
+					? {}
+					: { value: text(answer.value, `${at}.answer.value`, 8192) }),
+			};
+		}
+		if (status === "pending" && result.answer)
+			throw new ContractFailure("core.workflow-snapshot", [
+				{
+					path: `${at}.answer`,
+					message: "pending question cannot have answer",
+				},
+			]);
+		if (status !== "pending" && !result.answer)
+			throw new ContractFailure("core.workflow-snapshot", [
+				{ path: `${at}.answer`, message: "resolved question requires answer" },
+			]);
+		return result;
+	});
+}
 
 function profile(value: unknown, at: string): ResolvedProfile {
 	const input = object(value, at);
@@ -626,6 +803,7 @@ export function parseSnapshot(value: unknown): WorkflowSnapshot {
 			);
 		})(),
 		attention: strings(input.attention, "$.attention"),
+		developerDialogue: dialogue(input.developerDialogue),
 		...(input.repaired && typeof input.repaired === "object"
 			? (() => {
 					const item = object(input.repaired, "$.repaired");
@@ -649,6 +827,23 @@ export function parseSnapshot(value: unknown): WorkflowSnapshot {
 	)
 		throw new ContractFailure("core.workflow-snapshot", [
 			{ path: "$.status", message: "terminal step cannot be active" },
+		]);
+	if (
+		new Set(snapshot.developerDialogue.map((item) => item.id)).size !==
+		snapshot.developerDialogue.length
+	)
+		throw new ContractFailure("core.workflow-snapshot", [
+			{ path: "$.developerDialogue", message: "duplicate question ID" },
+		]);
+	if (
+		Buffer.byteLength(JSON.stringify(snapshot.developerDialogue)) >
+		128 * 1024
+	)
+		throw new ContractFailure("core.workflow-snapshot", [
+			{
+				path: "$.developerDialogue",
+				message: "dialogue content exceeds bound",
+			},
 		]);
 	if (
 		new Set(snapshot.step.activeRunIds).size !==

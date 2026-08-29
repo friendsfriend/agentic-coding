@@ -8,6 +8,7 @@ import {
 import fs from "node:fs";
 import path from "node:path";
 import type {
+	DeveloperDialogueRecord,
 	EffectKind,
 	JsonValue,
 	WorkflowActionView,
@@ -18,7 +19,11 @@ import type {
 	WorkflowSnapshot,
 	WorkflowView,
 } from "./contracts.ts";
-import { commandContract, parseSnapshot } from "./contracts.ts";
+import {
+	commandContract,
+	parseDeveloperQuestionAnswer,
+	parseSnapshot,
+} from "./contracts.ts";
 import {
 	childTrace,
 	parseTraceparent,
@@ -33,6 +38,8 @@ import type {
 import { conceptPath, snapshotList } from "./wiki.ts";
 
 const MAX_ARTIFACT_BYTES = 512 * 1024;
+export const MAX_DEVELOPER_DIALOGUE_RECORDS = 100;
+export const QUESTION_WAIT_MS = 5 * 60_000;
 const ACTIVE_RUN = new Set(["pending", "working"]);
 const EFFECT_KINDS = new Set<EffectKind>([
 	"workspace.setup",
@@ -338,6 +345,7 @@ export class WorkflowEngine {
 			evidence: [],
 			loopCounts: {},
 			attention: [],
+			developerDialogue: [],
 		};
 		this.validateSnapshot(snapshot, definition, []);
 		const db = openStore(repository);
@@ -446,7 +454,9 @@ export class WorkflowEngine {
 			this.telemetry(
 				snapshot,
 				event.type,
-				command.type === "agent.handoff"
+				command.type === "agent.handoff" ||
+					command.type === "agent.question" ||
+					command.type === "agent.question-expire"
 					? { runId: command.runId }
 					: command.type === "effect.result"
 						? { effectId: command.effectId }
@@ -746,6 +756,41 @@ export class WorkflowEngine {
 			);
 		return run;
 	}
+	/** Validate a capability against the exact run that issued it. This is used
+	 * by subprocess-facing commands; role-scoped lookup is intentionally not
+	 * sufficient because a child process must not select a sibling run. */
+	authorizeExactRunCapability(
+		repo: string,
+		workflowId: string,
+		runId: string,
+		stepId: string,
+		role: string,
+		token: string,
+	): WorkflowRun {
+		if (!token)
+			throw new WorkflowRuntimeError(
+				"unauthorized",
+				"authenticated run capability is required",
+			);
+		const run = this.getRun(repo, runId);
+		const snapshot = this.getSnapshot(repo, workflowId);
+		if (
+			run.workflowId !== workflowId ||
+			run.stepId !== stepId ||
+			run.role !== role ||
+			snapshot.currentStep !== stepId ||
+			!snapshot.step.activeRunIds.includes(run.id) ||
+			!ACTIVE_RUN.has(run.status) ||
+			!run.capabilityHash ||
+			Date.parse(run.capabilityExpiresAt) <= this.now().getTime() ||
+			!tokenMatches(token, run.capabilityHash)
+		)
+			throw new WorkflowRuntimeError(
+				"unauthorized",
+				"invalid or inactive run capability",
+			);
+		return run;
+	}
 	getSnapshot(repo: string, workflowId: string): WorkflowSnapshot {
 		const db = openStore(repo);
 		try {
@@ -964,6 +1009,7 @@ export class WorkflowEngine {
 						}
 					: {},
 			attention: [],
+			developerDialogue: [],
 		};
 		try {
 			this.validateSnapshot(snapshot, definition, []);
@@ -1126,6 +1172,10 @@ export class WorkflowEngine {
 	): { type: string; actor: unknown; data: unknown } {
 		if (command.type === "developer.action")
 			return this.developerAction(db, snapshot, definition, command);
+		if (command.type === "agent.question")
+			return this.agentQuestion(db, snapshot, command);
+		if (command.type === "agent.question-expire")
+			return this.expireQuestion(db, snapshot, command);
 		if (command.type === "agent.handoff")
 			return this.agentHandoff(db, snapshot, definition, command);
 		if (command.type === "effect.result")
@@ -1153,6 +1203,155 @@ export class WorkflowEngine {
 		}
 		throw new WorkflowRuntimeError("invalid-command", "unsupported command");
 	}
+	private questionRun(
+		db: Database,
+		snapshot: WorkflowSnapshot,
+		command: {
+			workflowId: string;
+			runId: string;
+			stepId: string;
+			role: string;
+			token: string;
+		},
+	): WorkflowRun {
+		const row = db
+			.query("SELECT * FROM workflow_runs WHERE id=?")
+			.get(command.runId) as RunRow | null;
+		if (!row) throw new WorkflowRuntimeError("unauthorized", "unknown run");
+		const run = runFromRow(row);
+		if (
+			run.workflowId !== snapshot.workflowId ||
+			command.workflowId !== snapshot.workflowId ||
+			run.stepId !== command.stepId ||
+			run.role !== command.role ||
+			run.stepId !== snapshot.currentStep ||
+			!snapshot.step.activeRunIds.includes(run.id) ||
+			!ACTIVE_RUN.has(run.status) ||
+			!run.capabilityHash ||
+			!tokenMatches(command.token, run.capabilityHash) ||
+			Date.parse(run.capabilityExpiresAt) <= this.now().getTime()
+		)
+			throw new WorkflowRuntimeError(
+				"unauthorized",
+				"invalid or inactive run capability",
+			);
+		return run;
+	}
+	private agentQuestion(
+		db: Database,
+		snapshot: WorkflowSnapshot,
+		command: Extract<WorkflowCommand, { type: "agent.question" }>,
+	) {
+		const run = this.questionRun(db, snapshot, command);
+		if (snapshot.developerDialogue.length >= MAX_DEVELOPER_DIALOGUE_RECORDS)
+			throw new WorkflowRuntimeError(
+				"dialogue-bounds",
+				"developer dialogue limit reached; resolve the existing questions before asking again",
+			);
+		const question: DeveloperDialogueRecord = {
+			id: randomUUID(),
+			workflowId: snapshot.workflowId,
+			runId: run.id,
+			stepId: run.stepId,
+			role: run.role,
+			description: command.description,
+			options: command.options,
+			status: "pending",
+			createdAt: nowIso(this.now),
+			expiresAt: new Date(
+				this.now().getTime() + QUESTION_WAIT_MS,
+			).toISOString(),
+		};
+		const bytes = Buffer.byteLength(
+			JSON.stringify([...snapshot.developerDialogue, question]),
+		);
+		if (bytes > 128 * 1024)
+			throw new WorkflowRuntimeError(
+				"dialogue-bounds",
+				"developer dialogue content limit reached; shorten the question or options",
+			);
+		snapshot.developerDialogue.push(question);
+		return {
+			type: "developer.question.created",
+			actor: { kind: "agent", runId: run.id, role: run.role },
+			data: { questionId: question.id, role: run.role },
+		};
+	}
+	private expireQuestion(
+		db: Database,
+		snapshot: WorkflowSnapshot,
+		command: Extract<WorkflowCommand, { type: "agent.question-expire" }>,
+	) {
+		const run = this.questionRun(db, snapshot, command);
+		const question = snapshot.developerDialogue.find(
+			(item) => item.id === command.questionId && item.runId === run.id,
+		);
+		if (question?.status !== "pending")
+			throw new WorkflowRuntimeError(
+				"stale-question",
+				"question is no longer pending",
+			);
+		question.status = "expired";
+		question.answeredAt = nowIso(this.now);
+		question.answer = { kind: "cancel" };
+		return {
+			type: "developer.question.expired",
+			actor: { kind: "agent", runId: run.id, role: run.role },
+			data: { questionId: question.id, outcome: "expired" },
+		};
+	}
+	private answerQuestion(snapshot: WorkflowSnapshot, raw: unknown) {
+		let answer: ReturnType<typeof parseDeveloperQuestionAnswer>;
+		try {
+			answer = parseDeveloperQuestionAnswer(raw);
+		} catch (error) {
+			throw new WorkflowRuntimeError(
+				"invalid-command",
+				error instanceof Error ? error.message : String(error),
+			);
+		}
+		const question = snapshot.developerDialogue.find(
+			(item) => item.id === answer.questionId,
+		);
+		if (question?.status !== "pending")
+			throw new WorkflowRuntimeError(
+				"stale-question",
+				"question is no longer pending",
+			);
+		if (Date.parse(question.expiresAt) <= this.now().getTime()) {
+			question.status = "expired";
+			question.answeredAt = nowIso(this.now);
+			question.answer = { kind: "cancel" };
+			return {
+				type: "developer.question.expired",
+				actor: { kind: "system" },
+				data: { questionId: question.id, outcome: "expired" },
+			};
+		}
+		if (answer.kind === "option") {
+			if (!question.options.some((option) => option.value === answer.value))
+				throw new WorkflowRuntimeError(
+					"invalid-command",
+					"answer is not a recommended option",
+				);
+		} else if (answer.kind === "custom" && !answer.value?.trim()) {
+			throw new WorkflowRuntimeError(
+				"invalid-command",
+				"custom answer must not be empty",
+			);
+		}
+		question.status = answer.kind === "cancel" ? "cancelled" : "answered";
+		question.answeredAt = nowIso(this.now);
+		question.answer = {
+			kind: answer.kind,
+			...(answer.value === undefined ? {} : { value: answer.value }),
+		};
+		return {
+			type: "developer.question.answered",
+			actor: { kind: "developer" },
+			data: { questionId: question.id, outcome: question.status },
+		};
+	}
 	private developerAction(
 		db: Database,
 		snapshot: WorkflowSnapshot,
@@ -1160,6 +1359,8 @@ export class WorkflowEngine {
 		command: Extract<WorkflowCommand, { type: "developer.action" }>,
 	) {
 		this.requireRevision(snapshot, command.revision);
+		if (command.actionId === "answer-question")
+			return this.answerQuestion(snapshot, command.input);
 		if (command.actionId.startsWith("retry-effect:")) {
 			const id = command.actionId.slice(13);
 			const row = db
@@ -2382,6 +2583,12 @@ export class WorkflowEngine {
 				})),
 				observations: [],
 				health: { valid: true, attention: snapshot.attention },
+				developerDialogue: snapshot.developerDialogue,
+				pendingQuestions: snapshot.developerDialogue.filter(
+					(item) =>
+						item.status === "pending" &&
+						Date.parse(item.expiresAt) > this.now().getTime(),
+				),
 				availableActions: [
 					...this.actions(snapshot).filter(
 						(action) =>
@@ -2430,6 +2637,12 @@ export class WorkflowEngine {
 						effects: [],
 						observations: [],
 						health: { valid: false, attention: [diagnostic], diagnostic },
+						developerDialogue: snapshot.developerDialogue,
+						pendingQuestions: snapshot.developerDialogue.filter(
+							(item) =>
+								item.status === "pending" &&
+								Date.parse(item.expiresAt) > this.now().getTime(),
+						),
 						availableActions: [
 							{
 								id: "re-pin",
@@ -2470,6 +2683,8 @@ export class WorkflowEngine {
 				effects: [],
 				observations: [],
 				health: { valid: false, attention: [], diagnostic },
+				developerDialogue: [],
+				pendingQuestions: [],
 				availableActions: [],
 			};
 		}
@@ -2566,14 +2781,30 @@ export class WorkflowEngine {
 					{ runId: run.id },
 				);
 		}
+		this.expireQuestions(
+			snapshot,
+			siblings.map((run) => run.id),
+		);
 		snapshot.step.activeRunIds = [];
 	}
 	private expireRuns(db: Database, snapshot: WorkflowSnapshot): void {
-		for (const id of snapshot.step.activeRunIds)
+		const runIds = [...snapshot.step.activeRunIds];
+		for (const id of runIds)
 			db.query(
 				"UPDATE workflow_runs SET status='expired',capability_hash='',completed_at=? WHERE id=? AND status IN ('pending','working')",
 			).run(nowIso(this.now), id);
+		this.expireQuestions(snapshot, runIds);
 		snapshot.step.activeRunIds = [];
+	}
+	private expireQuestions(snapshot: WorkflowSnapshot, runIds: string[]): void {
+		const expired = new Set(runIds);
+		const at = nowIso(this.now);
+		for (const question of snapshot.developerDialogue)
+			if (question.status === "pending" && expired.has(question.runId)) {
+				question.status = "expired";
+				question.answeredAt = at;
+				question.answer = { kind: "cancel" };
+			}
 	}
 }
 const PLANNER_ROLE = /^planner-[1-5]$/;
@@ -2836,6 +3067,8 @@ function diagnosticView(changeId: string, diagnostic: string): WorkflowView {
 		effects: [],
 		observations: [],
 		health: { valid: false, attention: [diagnostic], diagnostic },
+		developerDialogue: [],
+		pendingQuestions: [],
 		availableActions: [],
 	};
 }
