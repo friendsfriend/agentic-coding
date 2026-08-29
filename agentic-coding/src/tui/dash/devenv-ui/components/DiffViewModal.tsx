@@ -1,5 +1,9 @@
 /** @jsxImportSource @opentui/solid */
-import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
+import {
+	type ScrollBoxRenderable,
+	SyntaxStyle,
+	TextAttributes,
+} from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
 import { createEffect, createMemo, For, Show } from "solid-js";
 import { uiColors } from "../colors";
@@ -7,6 +11,7 @@ import { isDiffFileAddedOrDeleted } from "../core";
 import type { Discussion } from "../types";
 import { GenericModal } from "./GenericModal";
 import { formatHelpTextLines } from "./HelpText";
+import { MarkdownSourceLine, markdownFenceStates } from "./MarkdownSourceLine";
 import { ScrollableContent } from "./ScrollableContent";
 import { SearchHeader } from "./SearchHeader";
 
@@ -21,6 +26,10 @@ interface DiffViewModalProps {
 	forceSplitView?: boolean | null; // null = auto (based on width), true = force split, false = force unified
 	isNewFile?: boolean;
 	isDeletedFile?: boolean;
+	/** Wiki reviews only allow comments on the current/new side. */
+	currentSideOnly?: boolean;
+	/** Render diff content as Markdown instead of literal source text. */
+	renderMarkdown?: boolean;
 	commentMode: boolean; // Is comment input mode active
 	commentText: string; // Current comment text being typed
 	discussions?: Discussion[]; // NEW: Comment threads to display inline
@@ -42,12 +51,30 @@ interface DiffLine {
 	content: string;
 	oldLineNum?: number; // Original line number (for removed/context)
 	newLineNum?: number; // New file line number (for added/context)
+	codeLanguage?: string;
+	isFence?: boolean;
+	oldCodeLanguage?: string;
+	oldIsFence?: boolean;
+	newCodeLanguage?: string;
+	newIsFence?: boolean;
 }
 
 interface SplitDiffLine {
 	lineNumber: number; // Index in the split view
-	oldLine?: { lineNum?: number; content: string; type: "removed" | "context" };
-	newLine?: { lineNum?: number; content: string; type: "added" | "context" };
+	oldLine?: {
+		lineNum?: number;
+		content: string;
+		type: "removed" | "context";
+		codeLanguage?: string;
+		isFence?: boolean;
+	};
+	newLine?: {
+		lineNum?: number;
+		content: string;
+		type: "added" | "context";
+		codeLanguage?: string;
+		isFence?: boolean;
+	};
 	header?: string;
 }
 
@@ -75,6 +102,7 @@ interface SplitDiffLine {
  */
 export function DiffViewModal(props: DiffViewModalProps) {
 	const renderer = useRenderer();
+	const syntaxStyle = SyntaxStyle.create();
 
 	let scrollBox: ScrollBoxRenderable;
 
@@ -99,7 +127,7 @@ export function DiffViewModal(props: DiffViewModalProps) {
 			lineNumber++;
 
 			// Skip diff header lines (---, +++, @@)
-			if (line.startsWith("---") || line.startsWith("+++")) {
+			if (line.startsWith("--- ") || line.startsWith("+++ ")) {
 				lines.push({
 					lineNumber,
 					type: "header",
@@ -165,6 +193,41 @@ export function DiffViewModal(props: DiffViewModalProps) {
 			}
 		}
 
+		if (props.renderMarkdown) {
+			const oldLines = lines.filter(
+				(line) => line.type === "removed" || line.type === "context",
+			);
+			const newLines = lines.filter(
+				(line) => line.type === "added" || line.type === "context",
+			);
+			const oldStates = markdownFenceStates(
+				oldLines.map((line) => line.content),
+			);
+			const newStates = markdownFenceStates(
+				newLines.map((line) => line.content),
+			);
+			let oldIndex = 0;
+			let newIndex = 0;
+			for (const line of lines) {
+				if (line.type === "header") continue;
+				const oldState =
+					line.type === "added" ? undefined : oldStates[oldIndex++];
+				const newState =
+					line.type === "removed" ? undefined : newStates[newIndex++];
+				Object.assign(line, {
+					codeLanguage:
+						line.type === "removed"
+							? oldState?.codeLanguage
+							: newState?.codeLanguage,
+					isFence:
+						line.type === "removed" ? oldState?.isFence : newState?.isFence,
+					oldCodeLanguage: oldState?.codeLanguage,
+					oldIsFence: oldState?.isFence,
+					newCodeLanguage: newState?.codeLanguage,
+					newIsFence: newState?.isFence,
+				});
+			}
+		}
 		return lines;
 	});
 
@@ -216,11 +279,15 @@ export function DiffViewModal(props: DiffViewModalProps) {
 						lineNum: line.oldLineNum,
 						content: line.content,
 						type: "context",
+						codeLanguage: line.oldCodeLanguage ?? line.codeLanguage,
+						isFence: line.oldIsFence ?? line.isFence,
 					},
 					newLine: {
 						lineNum: line.newLineNum,
 						content: line.content,
 						type: "context",
+						codeLanguage: line.newCodeLanguage ?? line.codeLanguage,
+						isFence: line.newIsFence ?? line.isFence,
 					},
 				});
 				i++;
@@ -259,6 +326,8 @@ export function DiffViewModal(props: DiffViewModalProps) {
 									lineNum: removed.oldLineNum,
 									content: removed.content,
 									type: "removed",
+									codeLanguage: removed.oldCodeLanguage ?? removed.codeLanguage,
+									isFence: removed.oldIsFence ?? removed.isFence,
 								}
 							: undefined,
 						newLine: added
@@ -266,6 +335,8 @@ export function DiffViewModal(props: DiffViewModalProps) {
 									lineNum: added.newLineNum,
 									content: added.content,
 									type: "added",
+									codeLanguage: added.newCodeLanguage ?? added.codeLanguage,
+									isFence: added.newIsFence ?? added.isFence,
 								}
 							: undefined,
 					});
@@ -283,6 +354,8 @@ export function DiffViewModal(props: DiffViewModalProps) {
 						lineNum: line.newLineNum,
 						content: line.content,
 						type: "added",
+						codeLanguage: line.codeLanguage,
+						isFence: line.isFence,
 					},
 				});
 				i++;
@@ -359,20 +432,24 @@ export function DiffViewModal(props: DiffViewModalProps) {
 		if (line.type === "added" && line.newLineNum)
 			return commentsForKeys([`new:${line.newLineNum}`]);
 		if (line.type === "removed" && line.oldLineNum)
-			return commentsForKeys([`old:${line.oldLineNum}`]);
+			return props.currentSideOnly
+				? []
+				: commentsForKeys([`old:${line.oldLineNum}`]);
 		if (line.type === "context") {
 			const keys: string[] = [];
 			if (line.newLineNum) keys.push(`new:${line.newLineNum}`);
-			if (line.oldLineNum) keys.push(`old:${line.oldLineNum}`);
+			if (!props.currentSideOnly && line.oldLineNum)
+				keys.push(`old:${line.oldLineNum}`);
 			return commentsForKeys(keys);
 		}
 		return [];
 	};
 
-	// Helper: Get comments for a split view line (checks both old and new line)
+	// Wiki comments are anchored exclusively to the current/new side.
 	const getCommentsForSplitLine = (line: SplitDiffLine): Discussion[] => {
 		const keys: string[] = [];
-		if (line.oldLine?.lineNum) keys.push(`old:${line.oldLine.lineNum}`);
+		if (!props.currentSideOnly && line.oldLine?.lineNum)
+			keys.push(`old:${line.oldLine.lineNum}`);
 		if (line.newLine?.lineNum) keys.push(`new:${line.newLine.lineNum}`);
 		return commentsForKeys(keys);
 	};
@@ -428,17 +505,31 @@ export function DiffViewModal(props: DiffViewModalProps) {
 		const sourceLine = (line: DiffLine | SplitDiffLine | undefined) => {
 			if (!line) return undefined;
 			if ("header" in line) return undefined;
-			if ("newLineNum" in line) return line.newLineNum ?? line.oldLineNum;
+			if ("newLineNum" in line)
+				return (
+					line.newLineNum ??
+					(props.currentSideOnly ? undefined : line.oldLineNum)
+				);
 			const splitLine = line as SplitDiffLine;
-			return splitLine.newLine?.lineNum ?? splitLine.oldLine?.lineNum;
+			return (
+				splitLine.newLine?.lineNum ??
+				(props.currentSideOnly ? undefined : splitLine.oldLine?.lineNum)
+			);
 		};
 		const selectedSourceLine = sourceLine(selected);
 		const startSourceLine = sourceLine(start);
+		const hasUncommentableSelection =
+			props.currentSideOnly &&
+			(startSourceLine === undefined || selectedSourceLine === undefined);
 		props.onSelectedSourceRangeChange?.(
-			startSourceLine === undefined || selectedSourceLine === undefined
-				? selectedSourceLine
+			hasUncommentableSelection ||
+				startSourceLine === undefined ||
+				selectedSourceLine === undefined
+				? startSourceLine
 				: Math.min(startSourceLine, selectedSourceLine),
-			startSourceLine === undefined || selectedSourceLine === undefined
+			hasUncommentableSelection ||
+				startSourceLine === undefined ||
+				selectedSourceLine === undefined
 				? selectedSourceLine
 				: Math.max(startSourceLine, selectedSourceLine),
 		);
@@ -549,11 +640,14 @@ export function DiffViewModal(props: DiffViewModalProps) {
 						{ key: "n/N", action: "Next/Prev" },
 						{ key: "v", action: "Visual" },
 						{ key: "c", action: "Comment" },
-						{ key: "Space", action: "Toggle finding" },
+						...(props.currentSideOnly
+							? []
+							: [{ key: "Space", action: "Toggle finding" }]),
 						{ key: "s", action: "Split" },
 						{ key: "h/l ←/→", action: "Scroll" },
 						{ key: "[/]", action: "File" },
-						{ key: "e", action: "Edit" },
+						{ key: "f", action: "Finish" },
+						...(props.currentSideOnly ? [] : [{ key: "e", action: "Edit" }]),
 						{ key: "Esc", action: "Close" },
 					],
 			Math.max(1, Math.floor(dimensions().width * 0.9) - 4),
@@ -750,9 +844,26 @@ export function DiffViewModal(props: DiffViewModalProps) {
 												</text>
 
 												{/* Line content */}
-												<text fg={fgColor()} flexGrow={1}>
-													{line.content}
-												</text>
+												<Show
+													when={props.renderMarkdown}
+													fallback={
+														<text fg={fgColor()} flexGrow={1}>
+															{line.content}
+														</text>
+													}
+												>
+													<MarkdownSourceLine
+														content={line.content}
+														codeLanguage={line.codeLanguage}
+														isFence={line.isFence}
+														width={Math.max(
+															20,
+															Math.floor(renderer.width * 0.6),
+														)}
+														syntaxStyle={syntaxStyle}
+														fg={fgColor()}
+													/>
+												</Show>
 												<Show when={findingComments().length > 0}>
 													<text
 														fg={
@@ -1112,8 +1223,29 @@ export function DiffViewModal(props: DiffViewModalProps) {
 													}
 													flexGrow={1}
 												>
-													{line.oldLine?.content || ""}
+													{props.renderMarkdown
+														? ""
+														: line.oldLine?.content || ""}
 												</text>
+												<Show when={props.renderMarkdown}>
+													<MarkdownSourceLine
+														content={line.oldLine?.content || " "}
+														codeLanguage={line.oldLine?.codeLanguage}
+														isFence={line.oldLine?.isFence}
+														width={Math.max(
+															1,
+															Math.floor(renderer.width / 2) - 8,
+														)}
+														syntaxStyle={syntaxStyle}
+														fg={
+															isSelected()
+																? uiColors.bgBase
+																: line.oldLine?.type === "removed"
+																	? uiColors.diffRemoved
+																	: uiColors.diffContext
+														}
+													/>
+												</Show>
 											</box>
 
 											{/* RIGHT PANEL (NEW/ADDED) */}
@@ -1157,8 +1289,29 @@ export function DiffViewModal(props: DiffViewModalProps) {
 													}
 													flexGrow={1}
 												>
-													{line.newLine?.content || ""}
+													{props.renderMarkdown
+														? ""
+														: line.newLine?.content || ""}
 												</text>
+												<Show when={props.renderMarkdown}>
+													<MarkdownSourceLine
+														content={line.newLine?.content || " "}
+														codeLanguage={line.newLine?.codeLanguage}
+														isFence={line.newLine?.isFence}
+														width={Math.max(
+															1,
+															Math.floor(renderer.width / 2) - 8,
+														)}
+														syntaxStyle={syntaxStyle}
+														fg={
+															isSelected()
+																? uiColors.bgBase
+																: line.newLine?.type === "added"
+																	? uiColors.diffAdded
+																	: uiColors.diffContext
+														}
+													/>
+												</Show>
 												<Show when={findingComments().length > 0}>
 													<text
 														fg={
