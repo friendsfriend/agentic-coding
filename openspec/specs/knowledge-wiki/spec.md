@@ -268,7 +268,7 @@ No step between the archive step's completion and the resolution of the wiki app
 - **THEN** the still-running archive agent receives the work instead of a newly launched agent
 
 ### Requirement: Wiki review modal
-The wiki approval gate SHALL open a review modal listing the concepts the change touched, each showing its change counts, and SHALL open a selected concept in a diff view of its snapshot against its current content. The user SHALL be able to anchor comments to lines or line ranges, finish the review, and postpone it without dispatching an action.
+The wiki approval gate SHALL open a review modal listing the concepts the change touched, each showing its change counts, and SHALL open a selected concept in a real diff view comparing its pre-change snapshot with its current content. The diff view SHALL use the same selectable unified/split review presentation and established color semantics as developer review: added content is visibly green, removed content is visibly red, and unchanged context remains distinguishable. The user SHALL be able to navigate the changed lines, anchor comments to current-document lines or line ranges, finish the review, and postpone it without dispatching an action.
 
 #### Scenario: Gate opens the concept list directly
 - **WHEN** the workflow reaches the wiki approval gate
@@ -276,11 +276,23 @@ The wiki approval gate SHALL open a review modal listing the concepts the change
 
 #### Scenario: Open a concept diff
 - **WHEN** the user selects a concept row
-- **THEN** the concept opens in a diff view of the snapshot against the current content
+- **THEN** the concept opens in a diff view comparing the snapshot (before) against the current (after) content, with the concept's change counts and file navigation context preserved
+
+#### Scenario: Added and removed content is color coded
+- **WHEN** the snapshot and current concept differ
+- **THEN** added lines are rendered with the developer-review green styling, removed lines with the developer-review red styling, and context lines with the normal diff styling
+
+#### Scenario: New and deleted concepts remain reviewable
+- **WHEN** a touched concept exists only in the current bundle or only in the snapshot
+- **THEN** the diff view shows all current-only lines as additions or all snapshot-only lines as removals, respectively, without crashing or presenting the concept as unchanged
 
 #### Scenario: Comment on a line
-- **WHEN** the user selects a line in the diff view and submits a comment
-- **THEN** the comment is anchored to that line and rendered as a comment thread
+- **WHEN** the user selects a current-document line in the diff view and submits a comment
+- **THEN** the comment is anchored to that current concept line and rendered as a comment thread
+
+#### Scenario: Snapshot-only lines are not commentable
+- **WHEN** the user selects a removed snapshot line or snapshot-only context in the diff view and attempts to comment
+- **THEN** the review prevents a writable comment anchor and explains that only current-document content is commentable
 
 #### Scenario: Postpone the review
 - **WHEN** the user dismisses the wiki review popup

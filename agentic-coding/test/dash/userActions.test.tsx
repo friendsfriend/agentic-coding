@@ -2,8 +2,9 @@
 import { expect, test } from "bun:test";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
-import { onCleanup } from "solid-js";
+import { createSignal, onCleanup } from "solid-js";
 import { App } from "../../src/tui/dash/App";
+import { DiffViewModal } from "../../src/tui/dash/devenv-ui/components/DiffViewModal";
 
 function TestDashboard(props: { noUpstream?: boolean } = {}) {
 	const renderer = useRenderer();
@@ -56,6 +57,51 @@ function TestDashboard(props: { noUpstream?: boolean } = {}) {
 	);
 }
 
+test("wiki review diff renders Markdown and only maps current lines", async () => {
+	const [selectedLine, setSelectedLine] = createSignal(0);
+	let selectedStart: number | undefined;
+	let selectedEnd: number | undefined;
+	const t = await testRender(
+		() => (
+			<DiffViewModal
+				filePath="projects/demo/wiki.md"
+				diff={
+					"--- a/projects/demo/wiki.md\n+++ b/projects/demo/wiki.md\n@@ -1,2 +1,2 @@\n-# Old title\n+# New title\n"
+				}
+				currentFileIndex={0}
+				totalFiles={1}
+				selectedLine={selectedLine()}
+				visualModeActive={false}
+				visualModeStart={0}
+				forceSplitView={false}
+				currentSideOnly
+				renderMarkdown
+				commentMode={false}
+				commentText=""
+				onSelectedLineChange={setSelectedLine}
+				onSelectedSourceRangeChange={(start, end) => {
+					selectedStart = start;
+					selectedEnd = end;
+				}}
+				onClose={() => {}}
+			/>
+		),
+		{ width: 120, height: 30 },
+	);
+	await t.flush();
+	const snapshotFrame = t.captureCharFrame();
+	expect(snapshotFrame).toContain("Finish");
+	expect(snapshotFrame).not.toContain("Toggle finding");
+	expect(selectedStart).toBeUndefined();
+	expect(selectedEnd).toBeUndefined();
+
+	setSelectedLine(1);
+	await t.flush();
+	expect(selectedStart).toBe(1);
+	expect(selectedEnd).toBe(1);
+	t.renderer.destroy();
+});
+
 test("dismissed plan review stays closed during panel interactions", async () => {
 	const t = await testRender(() => <TestDashboard />, {
 		width: 120,
@@ -95,8 +141,10 @@ test("plan review popup appears and executes plan approval via finish", async ()
 	// Enter on the artifact row opens the separate markdown modal.
 	t.mockInput.pressEnter();
 	const markdownFrame = await t.waitForFrame((frame) =>
-		frame.includes("# Proposal"),
+		frame.includes("Proposal"),
 	);
+	expect(markdownFrame).toContain("Proposal");
+	expect(markdownFrame).not.toContain("# Proposal");
 	expect(markdownFrame).toContain("Make the plan review modal-based.");
 	expect(markdownFrame).not.toContain("Changed Files (4 files)");
 
@@ -238,7 +286,7 @@ test("plan review comment on a markdown line routes feedback to the planner", as
 
 	// Enter opens the markdown modal for the selected artifact.
 	t.mockInput.pressEnter();
-	await t.waitForFrame((frame) => frame.includes("# Proposal"));
+	await t.waitForFrame((frame) => frame.includes("Proposal"));
 
 	// c starts comment input on the selected line; typing and Enter submit it.
 	t.mockInput.pressKey("c");

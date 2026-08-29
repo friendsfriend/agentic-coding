@@ -52,7 +52,6 @@ import {
 	savePlanReview,
 	saveWikiReview,
 	testDashboard,
-	WIKI_REVIEW_BOUNDARY,
 } from "./data";
 import { ChangedFilesView } from "./devenv-ui/components/ChangedFilesView";
 import { DiffViewModal } from "./devenv-ui/components/DiffViewModal";
@@ -889,6 +888,34 @@ export function App(props: {
 			setMessage(error instanceof Error ? error.message : String(error));
 		}
 	};
+	const navigateReviewFile = (direction: 1 | -1) => {
+		const previous = reviewChangeIndex();
+		const total = reviewVisibleChanges().length;
+		if (!total) return;
+		const next = (previous + direction + total) % total;
+		const file = reviewVisibleChanges()[next];
+		if (!file) return;
+		try {
+			const content =
+				reviewKind() === "wiki"
+					? loadWikiSnapshotDiff(props.repo, props.change, file.newPath)
+					: reviewKind() === "plan"
+						? props.profile === "test"
+							? demoPlanContent(file.newPath)
+							: openSpecArtifact(data().state, file.newPath)
+						: props.profile === "test"
+							? "diff --git a/src/example.ts b/src/example.ts\n@@ -1,2 +1,4 @@\n const value = 1;\n-old();\n+new();\n+reviewed();\n"
+							: loadLocalDiff(props.repo, props.change, file);
+			setReviewChangeIndex(next);
+			setReviewVisualMode(false);
+			setReviewVisualStart(0);
+			setReviewLine(0);
+			setReviewDiff(content);
+		} catch (error) {
+			setReviewChangeIndex(previous);
+			setMessage(error instanceof Error ? error.message : String(error));
+		}
+	};
 	const finishPlanReview = async () => {
 		if (busy()) return;
 		const wikiReview =
@@ -1058,10 +1085,12 @@ export function App(props: {
 			}
 		} else if (reviewView() === "diff" && key === "n")
 			cycleReviewComments(event.shift ? -1 : 1);
+		else if (reviewView() === "diff" && (key === "[" || key === "]"))
+			navigateReviewFile(key === "]" ? 1 : -1);
 		else if (
 			reviewView() === "diff" &&
 			key === "s" &&
-			reviewKind() === "developer"
+			(reviewKind() === "developer" || reviewKind() === "wiki")
 		)
 			setReviewSplitView((split) =>
 				split === null ? dimensions().width < 160 : !split,
@@ -1089,15 +1118,10 @@ export function App(props: {
 					return next;
 				});
 		} else if (reviewView() === "diff" && key === "c") {
-			const snapshotBoundary = reviewDiff()
-				.split("\n")
-				.indexOf(WIKI_REVIEW_BOUNDARY);
 			const selectedRange = reviewSourceRange();
 			if (
 				reviewKind() === "wiki" &&
-				(snapshotBoundary <= reviewLine() ||
-					(selectedRange.end ?? selectedRange.start ?? 0) > snapshotBoundary ||
-					(selectedRange.start ?? selectedRange.end ?? 0) > snapshotBoundary)
+				(selectedRange.start === undefined || selectedRange.end === undefined)
 			) {
 				notify(
 					"Snapshot context is not commentable; select a current document line",
@@ -2050,6 +2074,8 @@ export function App(props: {
 				"n",
 				"N",
 				"s",
+				"[",
+				"]",
 				"j",
 				"k",
 				"up",
@@ -2109,6 +2135,8 @@ export function App(props: {
 			bindings: [
 				"escape",
 				"f",
+				"[",
+				"]",
 				"v",
 				"n",
 				"N",
@@ -2963,7 +2991,7 @@ export function App(props: {
 				when={
 					reviewOpen() &&
 					reviewView() === "diff" &&
-					(reviewKind() === "plan" || reviewKind() === "wiki") &&
+					reviewKind() === "plan" &&
 					reviewFile()
 				}
 			>
@@ -3021,7 +3049,7 @@ export function App(props: {
 				when={
 					reviewOpen() &&
 					reviewView() === "diff" &&
-					reviewKind() === "developer" &&
+					(reviewKind() === "developer" || reviewKind() === "wiki") &&
 					reviewDiffFile()
 				}
 			>
@@ -3037,6 +3065,8 @@ export function App(props: {
 						forceSplitView={reviewSplitView()}
 						isNewFile={file().new_file}
 						isDeletedFile={file().deleted_file}
+						currentSideOnly={reviewKind() === "wiki"}
+						renderMarkdown={reviewKind() === "wiki"}
 						commentMode={reviewCommentMode()}
 						commentText={reviewCommentText()}
 						discussions={reviewDiscussions()}

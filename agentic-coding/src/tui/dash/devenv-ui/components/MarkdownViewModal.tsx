@@ -1,11 +1,16 @@
 /** @jsxImportSource @opentui/solid */
-import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
+import {
+	type ScrollBoxRenderable,
+	SyntaxStyle,
+	TextAttributes,
+} from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
 import { createEffect, createMemo, For, Show } from "solid-js";
 import { uiColors } from "../colors";
 import type { Discussion } from "../types";
 import { GenericModal } from "./GenericModal";
 import { formatHelpTextLines } from "./HelpText";
+import { MarkdownSourceLine, markdownFenceStates } from "./MarkdownSourceLine";
 import { ScrollableContent } from "./ScrollableContent";
 import { SearchHeader } from "./SearchHeader";
 
@@ -32,6 +37,8 @@ interface MarkdownViewModalProps {
 interface MarkdownLine {
 	lineNumber: number; // 1-based line number in the artifact file
 	content: string;
+	codeLanguage?: string;
+	isFence: boolean;
 }
 
 /**
@@ -46,6 +53,7 @@ interface MarkdownLine {
  */
 export function MarkdownViewModal(props: MarkdownViewModalProps) {
 	const renderer = useRenderer();
+	const syntaxStyle = SyntaxStyle.create();
 
 	let scrollBox: ScrollBoxRenderable;
 
@@ -58,10 +66,13 @@ export function MarkdownViewModal(props: MarkdownViewModalProps) {
 
 	// Every non-empty line of the artifact is a selectable row.
 	const parsedLines = createMemo((): MarkdownLine[] => {
-		const lines = props.content.split("\n");
+		const lines = props.content.split(/\r?\n/);
+		if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+		const fenceStates = markdownFenceStates(lines);
 		return lines.map((content, index) => ({
 			lineNumber: index + 1,
 			content,
+			...(fenceStates[index] ?? { isFence: false }),
 		}));
 	});
 
@@ -284,9 +295,14 @@ export function MarkdownViewModal(props: MarkdownViewModalProps) {
 										>
 											{String(line.lineNumber)}
 										</text>
-										<text fg={fgColor()} flexGrow={1}>
-											{line.content || " "}
-										</text>
+										<MarkdownSourceLine
+											content={line.content}
+											codeLanguage={line.codeLanguage}
+											isFence={line.isFence}
+											syntaxStyle={syntaxStyle}
+											width={Math.max(20, Math.floor(renderer.width * 0.7))}
+											fg={fgColor()}
+										/>
 									</box>
 
 									{/* Render inline comments for this line */}

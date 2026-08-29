@@ -216,7 +216,6 @@ export interface LocalChange {
 	renamedFile: boolean;
 }
 
-export const WIKI_REVIEW_BOUNDARY = "\u0000WIKI_SNAPSHOT_BOUNDARY";
 function sourceLines(value: string): string[] {
 	if (!value) return [];
 	return value.replace(/\r?\n$/, "").split(/\r?\n/);
@@ -292,13 +291,7 @@ export function loadWikiSnapshotDiff(
 	} catch {
 		/* deleted concepts have an empty current side */
 	}
-	// Keep current lines first so MarkdownViewModal's displayed line numbers map
-	// directly to document comments. Append a real unified diff as review context.
 	const oldLines = sourceLines(before);
-	if (!after)
-		return `${WIKI_REVIEW_BOUNDARY}\n--- snapshot (before) ---\n+++ current (after; deleted) +++\n${oldLines
-			.map((line) => `-${line}`)
-			.join("\n")}`;
 	const newLines = sourceLines(after);
 	const lcs: number[][] = Array.from({ length: oldLines.length + 1 }, () =>
 		new Array(newLines.length + 1).fill(0),
@@ -315,32 +308,46 @@ export function loadWikiSnapshotDiff(
 							row[newIndex + 1] ?? 0,
 						);
 	}
-	const diff: string[] = ["--- a/snapshot.md", "+++ b/current.md"];
+
+	const body: string[] = [];
 	let oldIndex = 0;
 	let newIndex = 0;
 	while (oldIndex < oldLines.length || newIndex < newLines.length) {
 		if (oldIndex >= oldLines.length) {
-			diff.push(`+${newLines[newIndex] ?? ""}`);
+			body.push(`+${newLines[newIndex] ?? ""}`);
 			newIndex++;
 		} else if (newIndex >= newLines.length) {
-			diff.push(`-${oldLines[oldIndex] ?? ""}`);
+			body.push(`-${oldLines[oldIndex] ?? ""}`);
 			oldIndex++;
 		} else if (oldLines[oldIndex] === newLines[newIndex]) {
-			diff.push(` ${oldLines[oldIndex] ?? ""}`);
+			body.push(` ${oldLines[oldIndex] ?? ""}`);
 			oldIndex++;
 			newIndex++;
 		} else if (
 			(lcs[oldIndex + 1]?.[newIndex] ?? 0) >=
 			(lcs[oldIndex]?.[newIndex + 1] ?? 0)
 		) {
-			diff.push(`-${oldLines[oldIndex] ?? ""}`);
+			body.push(`-${oldLines[oldIndex] ?? ""}`);
 			oldIndex++;
 		} else {
-			diff.push(`+${newLines[newIndex] ?? ""}`);
+			body.push(`+${newLines[newIndex] ?? ""}`);
 			newIndex++;
 		}
 	}
-	return `${after.replace(/\n+$/, "")}\n${WIKI_REVIEW_BOUNDARY}\n--- snapshot (before) ---\n${diff.join("\n")}`;
+
+	const oldStart = oldLines.length ? 1 : 0;
+	const newStart = newLines.length ? 1 : 0;
+	const diff = [
+		`--- a/${id}`,
+		`+++ b/${id}`,
+		...(body.length
+			? [
+					`@@ -${oldStart},${oldLines.length} +${newStart},${newLines.length} @@`,
+					...body,
+				]
+			: []),
+	];
+	return diff.join("\n");
 }
 
 export interface DeveloperReviewComment {
