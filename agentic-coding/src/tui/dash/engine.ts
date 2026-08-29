@@ -66,6 +66,24 @@ export function repairWorkflow(
 		reason,
 	}).view;
 }
+export function answerWorkflowQuestion(
+	repo: string,
+	change: string,
+	revision: number,
+	questionId: string,
+	answer: { kind: "option" | "custom" | "cancel"; value?: string },
+): WorkflowView {
+	const workflow = workflowEngineFactory();
+	const view = workflow.status(repo, change);
+	return workflow.dispatch(repo, {
+		type: "developer.action",
+		workflowId: view.workflowId,
+		revision,
+		actionId: "answer-question",
+		input: { questionId, ...answer },
+	}).view;
+}
+
 export async function runWorkflowAction(
 	actionId: string,
 	repo: string,
@@ -391,6 +409,8 @@ export function viewToDashboardState(view: WorkflowView) {
 		definition: view.definition,
 		status: view.status,
 		health: view.health,
+		developerDialogue: view.developerDialogue ?? [],
+		pendingQuestions: view.pendingQuestions ?? [],
 		availableActions: view.availableActions,
 		repository: view.repository,
 		worktree: view.worktree,

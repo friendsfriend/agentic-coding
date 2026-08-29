@@ -4,7 +4,10 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { directionBetween, Herdr, type Rect } from "../../herdr-client.ts";
-import type { WorkflowView } from "../../workflow/contracts.ts";
+import type {
+	DeveloperDialogueRecord,
+	WorkflowView,
+} from "../../workflow/contracts.ts";
 import { canonicalStorePath } from "../../workflow/runtime.ts";
 import {
 	readConcept,
@@ -13,6 +16,7 @@ import {
 	snapshotRead,
 } from "../../workflow/wiki.ts";
 import {
+	answerWorkflowQuestion,
 	consumeReturnWorkspace,
 	dashboardState,
 	discoverProjectsInProcess,
@@ -76,6 +80,8 @@ export interface WorkflowState {
 	verificationTimeoutRoles?: string[];
 	verificationRoleStartedAt?: Record<string, string>;
 	verificationModels?: Record<string, string>;
+	developerDialogue?: DeveloperDialogueRecord[];
+	pendingQuestions?: DeveloperDialogueRecord[];
 	planQuality?: {
 		passed: boolean;
 		issues: string[];
@@ -1607,6 +1613,8 @@ export function testDashboard(phase = "proposed"): DashboardData {
 						? "completed"
 						: "active",
 			health: { valid: true, attention: [] },
+			developerDialogue: [],
+			pendingQuestions: [],
 			runs: [],
 			repository: "/demo/customer-mw",
 			worktree: "/demo/worktrees/demo-optional-realisation-date",
@@ -2159,6 +2167,16 @@ export function applyRepair(
 	reason = "",
 ) {
 	return repairWorkflow(repo, change, revision, targetStep, reason);
+}
+
+export function answerQuestion(
+	repo: string,
+	change: string,
+	revision: number,
+	questionId: string,
+	answer: { kind: "option" | "custom" | "cancel"; value?: string },
+) {
+	return answerWorkflowQuestion(repo, change, revision, questionId, answer);
 }
 
 export async function runWorkflow(

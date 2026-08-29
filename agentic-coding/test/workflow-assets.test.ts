@@ -6,9 +6,13 @@ test("embedded workflow assets stay outside skill/plugin discovery", () => {
 	expect(names.some((name) => name.includes("SKILL.md"))).toBe(false);
 	expect(
 		names.every(
-			(name) => name.startsWith("instructions/") || name.startsWith("bridges/"),
+			(name) =>
+				name.startsWith("instructions/") ||
+				name.startsWith("bridges/") ||
+				name.startsWith("extensions/"),
 		),
 	).toBe(true);
+	expect(names).toContain("extensions/developer-question.ts");
 	expect(names).toContain("bridges/pi-telemetry.ts");
 	expect(names).toContain("bridges/opencode-telemetry.js");
 	expect(names).toContain("bridges/opencode-v2-telemetry.js");

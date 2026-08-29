@@ -56,6 +56,7 @@ describe("breaking workflow CLI surface", () => {
 			"status",
 			"action",
 			"handoff",
+			"question",
 			"repair",
 			"repin",
 			"projects",
@@ -84,6 +85,7 @@ describe("breaking workflow CLI surface", () => {
 			"install-local",
 		]);
 		expect(REQUIRED_FLAGS.action).toEqual(["repo", "change", "revision"]);
+		expect(REQUIRED_FLAGS.question).toEqual(["description"]);
 	});
 	test("help needs no config, database, or runtime", async () => {
 		const lines: string[] = [];
@@ -243,23 +245,13 @@ describe("breaking workflow CLI surface", () => {
 			const activeRun = workflowEngine.getRun(repo, started.view.runs[0]?.id);
 			expect(activeRun.status).toBe("working");
 
-			// A reused agent's OS process env still carries stale run identifiers,
-			// while the launch-bound capability remains the authorization proof.
-			const launchToken = workflowEngine.issueRunCapability(repo, activeRun.id);
-			const runEnv = path.join(
-				repo,
-				".herdr-workflow",
-				"runtime-bin",
-				activeRun.id,
-				"run.env",
-			);
-			fs.mkdirSync(path.dirname(runEnv), { recursive: true });
-			fs.writeFileSync(runEnv, `HERDR_RUN_TOKEN=${launchToken}\n`);
+			// The subprocess must present the exact run identity and its launch-bound
+			// token; sibling run.env files are never consulted for resolution.
 			process.env.HERDR_WORKFLOW_ID = started.view.workflowId;
 			process.env.HERDR_STEP_ID = "core.implementation";
 			process.env.HERDR_ROLE = "worker";
-			process.env.HERDR_RUN_ID = "stale-run-id";
-			process.env.HERDR_RUN_GENERATION = "999";
+			process.env.HERDR_RUN_ID = activeRun.id;
+			process.env.HERDR_RUN_GENERATION = String(activeRun.generation);
 			process.env.HERDR_RUN_TOKEN = workflowEngine.issueRunCapability(
 				repo,
 				activeRun.id,
@@ -269,23 +261,12 @@ describe("breaking workflow CLI surface", () => {
 			expect(identity.runId).toBe(activeRun.id);
 			expect(identity.generation).toBe(activeRun.generation);
 			expect(identity.outputPath).toBe(activeRun.outputPath);
-			expect(identity.token).not.toBe(process.env.HERDR_RUN_TOKEN);
-			// The launch-bound token must authorize a handoff for this exact run.
-			expect(() =>
-				workflowEngine.dispatch(repo, {
-					type: "agent.handoff",
-					runId: identity.runId,
-					generation: identity.generation,
-					token: identity.token,
-					outcome: "blocked",
-					message: "resolved via role identity",
-				}),
-			).toThrow("invalid or expired run capability");
+			expect(identity.token).toBe(process.env.HERDR_RUN_TOKEN);
 
 			delete process.env.HERDR_STEP_ID;
 			expect(() =>
 				cliTest.resolveHandoffIdentity(workflowEngine, repo),
-			).toThrow("handoff requires engine-provided run environment");
+			).toThrow("exact launch-bound run environment");
 
 			// A sibling process cannot borrow another role's run just by knowing
 			// its own workflow/step: resolution is scoped to its own role, and no
@@ -404,6 +385,12 @@ describe("breaking workflow CLI surface", () => {
 			if (!freshRun) throw new Error("expected relaunched run");
 			const relaunched = workflowEngine.getRun(repo, freshRun.id);
 			expect(relaunched.status).toBe("working");
+			process.env.HERDR_RUN_ID = relaunched.id;
+			process.env.HERDR_RUN_GENERATION = String(relaunched.generation);
+			process.env.HERDR_RUN_TOKEN = workflowEngine.issueRunCapability(
+				repo,
+				relaunched.id,
+			);
 			const identity = cliTest.resolveHandoffIdentity(workflowEngine, repo);
 			expect(identity.runId).toBe(freshRun?.id);
 		} finally {

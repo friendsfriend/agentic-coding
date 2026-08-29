@@ -22,6 +22,7 @@ import { formatDuration } from "../../workflow/format";
 import { copyToClipboard } from "./clipboard";
 import {
 	type AgentUsageMetrics,
+	answerQuestion,
 	applyRepair,
 	approvalFor,
 	type DashboardData,
@@ -68,6 +69,7 @@ import {
 	pendingCredentialRequest,
 } from "./ui/CredentialsModal";
 import { uiColors } from "./ui/colors";
+import { DeveloperQuestionModal } from "./ui/DeveloperQuestionModal";
 import { EventsModal } from "./ui/EventsModal";
 import { type FindingEvent, FindingsModal } from "./ui/FindingsModal";
 import { HelpModal, type HelpSection } from "./ui/HelpModal";
@@ -340,7 +342,15 @@ export function App(props: {
 	// delivery drain runs while the dashboard is busy.
 	const credentialRequest = createMemo(() => pendingCredentialRequest());
 	const [credentialInput, setCredentialInput] = createSignal("");
+	const pendingQuestion = createMemo(() => data().state.pendingQuestions?.[0]);
+	const [questionOpen, setQuestionOpen] = createSignal(false);
+	const [questionSelection, setQuestionSelection] = createSignal(0);
+	const [questionCustom, setQuestionCustom] = createSignal(false);
+	const [questionCustomText, setQuestionCustomText] = createSignal("");
+	const [questionSubmitting, setQuestionSubmitting] = createSignal(false);
 	let modalBeforeCredential: string | undefined;
+	let modalBeforeQuestion: string | undefined;
+	let pendingQuestionId: string | undefined;
 	const commitCredential = () => {
 		const request = pendingCredentialRequest();
 		if (!request) return;
@@ -352,6 +362,43 @@ export function App(props: {
 		if (!request) return;
 		request.resolve("");
 		setCredentialInput("");
+	};
+	const closeQuestion = () => {
+		setQuestionOpen(false);
+		setQuestionCustom(false);
+		setQuestionCustomText("");
+		props.keymap.setData("modal.active", modalBeforeQuestion ?? "none");
+		modalBeforeQuestion = undefined;
+	};
+	const submitQuestion = async (answer: {
+		kind: "option" | "custom" | "cancel";
+		value?: string;
+	}) => {
+		const question = pendingQuestion();
+		if (!question || questionSubmitting()) return;
+		if (answer.kind === "custom" && !answer.value?.trim()) {
+			setMessage("Custom response cannot be empty");
+			return;
+		}
+		setQuestionSubmitting(true);
+		try {
+			if (props.profile !== "test")
+				answerQuestion(
+					props.repo,
+					props.change,
+					data().state.revision,
+					question.id,
+					answer,
+				);
+			closeQuestion();
+			refresh();
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			setMessage(message);
+			if (/stale|revision|pending|expired/i.test(message)) refresh();
+		} finally {
+			setQuestionSubmitting(false);
+		}
 	};
 	const [costOpen, setCostOpen] = createSignal(false);
 	const [costSelection, setCostSelection] = createSignal(0);
@@ -1547,6 +1594,61 @@ export function App(props: {
 				"down",
 			].map((key) => ({ key, cmd: "theme.handle" })),
 		});
+		const disposeQuestion = props.keymap.registerLayer({
+			name: "developer-question",
+			priority: 1400,
+			activeModal: "developer-question",
+			commands: [
+				{
+					name: "developer-question.handle",
+					run: ({ event }) => {
+						const question = pendingQuestion();
+						if (!question || questionSubmitting()) return true;
+						const key = event.name.toLowerCase();
+						const customIndex = question.options.length;
+						if (key === "escape") {
+							void submitQuestion({ kind: "cancel" });
+						} else if (questionCustom()) {
+							if (key === "enter" || key === "return")
+								void submitQuestion({
+									kind: "custom",
+									value: questionCustomText().trim(),
+								});
+							else return false;
+						} else if (key === "j" || key === "down")
+							setQuestionSelection((index) => Math.min(customIndex, index + 1));
+						else if (key === "k" || key === "up")
+							setQuestionSelection((index) => Math.max(0, index - 1));
+						else if (key === "enter" || key === "return") {
+							if (questionSelection() === customIndex) {
+								setQuestionCustom(true);
+								setQuestionCustomText("");
+							} else {
+								const option = question.options[questionSelection()];
+								if (option)
+									void submitQuestion({ kind: "option", value: option.value });
+							}
+						}
+						return true;
+					},
+				},
+			],
+			bindings: [
+				"escape",
+				"enter",
+				"return",
+				"j",
+				"k",
+				"up",
+				"down",
+				"backspace",
+				"delete",
+				"space",
+				..."abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,:;!?-_()/\\@#*+=[]{}~`'\"".split(
+					"",
+				),
+			].map((key) => ({ key, cmd: "developer-question.handle" })),
+		});
 		const disposeCredentials = props.keymap.registerLayer({
 			name: "credentials",
 			priority: 1300,
@@ -2158,6 +2260,7 @@ export function App(props: {
 		});
 		onCleanup(() => {
 			disposeTheme();
+			disposeQuestion();
 			disposeCredentials();
 			disposeCompletedPicker();
 			disposeRepair();
@@ -2185,6 +2288,7 @@ export function App(props: {
 				repairOpen() ||
 				planRejectionOpen() ||
 				userActionOpen() ||
+				questionOpen() ||
 				costOpen() ||
 				reviewOpen() ||
 				reviewCommentMode()
@@ -2206,6 +2310,27 @@ export function App(props: {
 			} else if (!request && modalBeforeCredential !== undefined) {
 				props.keymap.setData("modal.active", modalBeforeCredential);
 				modalBeforeCredential = undefined;
+			}
+		});
+		createEffect(() => {
+			const question = pendingQuestion();
+			if (question && question.id !== pendingQuestionId) {
+				pendingQuestionId = question.id;
+				setQuestionSelection(0);
+				setQuestionCustom(false);
+				setQuestionCustomText("");
+			}
+			if (question && !questionOpen()) {
+				const current = props.keymap.getData?.("modal.active");
+				modalBeforeQuestion =
+					typeof current === "string" && current !== "none"
+						? current
+						: undefined;
+				setQuestionOpen(true);
+				props.keymap.setData("modal.active", "developer-question");
+			} else if (!question && questionOpen()) {
+				pendingQuestionId = undefined;
+				closeQuestion();
 			}
 		});
 		createEffect(() => {
@@ -2969,6 +3094,17 @@ export function App(props: {
 						content={report().content}
 						offset={verdictOffset()}
 						lines={verdictLines()}
+					/>
+				)}
+			</Show>
+			<Show when={questionOpen() && pendingQuestion()}>
+				{(question) => (
+					<DeveloperQuestionModal
+						question={question()}
+						selected={questionSelection()}
+						custom={questionCustom()}
+						customText={questionCustomText()}
+						onCustomTextChange={setQuestionCustomText}
 					/>
 				)}
 			</Show>
