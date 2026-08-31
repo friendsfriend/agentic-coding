@@ -32,12 +32,12 @@ test("wiki guidance distinguishes project and shared knowledge", () => {
 	}
 	for (const source of [...guidance, wiki, ...specs]) {
 		expect(source).toMatch(
-			/evidence from every covered project|evidenced by every covered project|every project covered/i,
+			/evidence from every covered project|evidence from each covered project|evidenced by every covered project|every project covered/i,
 		);
 		expect(source).toMatch(
-			/update(?:s|d)? (?:an )?existing concepts? in place/i,
+			/update(?:s|d)? (?:an )?existing concepts? in place|updates that identifier/i,
 		);
-		expect(source).toMatch(/active near-duplicates|active duplicate/i);
+		expect(source).toMatch(/active near-duplicates?|active duplicate/i);
 	}
 	for (const source of [...guidance, wiki, ...specs, readme]) {
 		expect(source).not.toMatch(
@@ -64,10 +64,38 @@ test("wiki guidance distinguishes project and shared knowledge", () => {
 	expect(archive).not.toMatch(/wiki/i);
 });
 
+test("wiki guidance updates existing concepts before creating", () => {
+	const wiki = readRepositoryFile(wikiInstructionPath);
+	const embedded = AGENT_DEFINITIONS["instructions/wiki.md"];
+
+	expect(embedded).toBe(wiki);
+	expect(wiki).toMatch(
+		/1\.\s+Search the centralized bundle with multiple related terms/i,
+	);
+	expect(wiki).toMatch(
+		/2\.\s+Inspect every plausible candidate with `agentic-coding workflow wiki show <concept-id>`/i,
+	);
+	expect(wiki).toMatch(
+		/3\.\s+When a candidate covers the intended subject, select its canonical existing concept identifier and update that concept in place/i,
+	);
+	expect(wiki).toMatch(
+		/4\.\s+Create a new project-scoped concept only when no candidate is the intended subject or when the requested knowledge is materially distinct from every candidate/i,
+	);
+	expect(wiki).toMatch(
+		/run-bound evidence must name the searches and candidates considered and explain why updating an existing candidate would be incorrect/i,
+	);
+	expect(wiki).toMatch(
+		/preserve the existing concept identifier, unrelated body content, unknown frontmatter fields, and applicable provenance and lifecycle metadata/i,
+	);
+	expect(wiki).toMatch(
+		/For every new concept, also report the evidence-backed reason that no existing concept could be updated or that the knowledge is materially distinct/i,
+	);
+});
+
 test("wiki scope requirements preserve the existing CLI and migration lifecycle", () => {
 	const spec = readRepositoryFile("openspec/specs/knowledge-wiki/spec.md");
 	const changeSpec = readRepositoryFile(
-		"openspec/changes/use-a-wiki-agent-for-documentation/specs/knowledge-wiki/spec.md",
+		"openspec/changes/archive/2026-08-29-use-a-wiki-agent-for-documentation/specs/knowledge-wiki/spec.md",
 	);
 
 	expect(spec).toMatch(/Scenario: CLI surface remains unchanged/);
