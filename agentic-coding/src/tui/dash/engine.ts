@@ -128,17 +128,19 @@ export function startArgs(input: {
 		input.workflowType === "quick"
 			? "no-openspec"
 			: (input.workflowType ?? "standard");
-	const proposal = ["standard-propose", "fusion-propose"].includes(
-		definitionId,
-	);
+	const sameCheckout = [
+		"standard-propose",
+		"fusion-propose",
+		"wiki-only",
+	].includes(definitionId);
 	return {
 		repo: input.repo,
 		changeId: validateChangeId(input.change),
 		definitionId,
 		task: input.task || undefined,
 		ticket: input.ticket || undefined,
-		mode: proposal ? "checkout" : input.mode,
-		...(proposal ? { sameCheckout: true } : {}),
+		mode: sameCheckout ? "checkout" : input.mode,
+		...(sameCheckout ? { sameCheckout: true } : {}),
 		...(input.preset && input.preset !== PRESET_CONFIG_DEFAULTS
 			? { preset: input.preset }
 			: {}),
@@ -252,17 +254,19 @@ export async function startWorkflowInProcess(
 	);
 	for (const route of routing.routes)
 		preflightProfile(route.profile, registry.step(route.stepId).requirements);
-	const baseCommit = runGit(
-		args.repo,
-		"rev-parse",
-		`${config.workflow.base_branch}^{commit}`,
-	);
-	runGit(args.repo, "remote", "get-url", config.workflow.remote);
-	const branch = args.sameCheckout
+	const sameCheckout = args.sameCheckout === true;
+	const baseCommit = sameCheckout
+		? runGit(args.repo, "rev-parse", "HEAD")
+		: runGit(args.repo, "rev-parse", `${config.workflow.base_branch}^{commit}`);
+	if (!sameCheckout)
+		runGit(args.repo, "remote", "get-url", config.workflow.remote);
+	const branch = sameCheckout
 		? runGit(args.repo, "branch", "--show-current")
 		: `${config.workflow.branch_prefix}${args.changeId}`;
-	if (args.sameCheckout && !branch)
-		throw new Error("proposal workflows require a named current branch");
+	if (sameCheckout && !branch)
+		throw new Error(
+			"repository-backed workflows require a named current branch",
+		);
 	const engine = workflowEngineFactory();
 	engine.start({
 		repo: args.repo,

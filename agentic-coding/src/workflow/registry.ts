@@ -57,6 +57,9 @@ export interface WorkflowManifest {
 	terminal: readonly string[];
 	steps: readonly string[];
 	edges: readonly WorkflowEdge[];
+	/** Optional per-manifest restriction for steps that expose more outcomes
+	 * than this workflow can legally use (for example, wiki-only completion). */
+	allowedOutcomes?: Readonly<Record<string, readonly string[]>>;
 	defaultProfile?: string;
 }
 export interface CompiledWorkflowDefinition extends WorkflowManifest {
@@ -201,6 +204,18 @@ export class WorkflowRegistry {
 			manifest.terminal.some((id) => !steps.has(id))
 		)
 			throw new Error(`missing terminal step in ${manifest.id}`);
+		const allowedOutcomes = manifest.allowedOutcomes ?? {};
+		for (const [id, outcomes] of Object.entries(allowedOutcomes)) {
+			const step = steps.get(id);
+			if (!step) throw new Error(`unknown outcome restriction step: ${id}`);
+			if (
+				!Array.isArray(outcomes) ||
+				!outcomes.length ||
+				new Set(outcomes).size !== outcomes.length ||
+				outcomes.some((outcome) => !step.outcomes.includes(outcome))
+			)
+				throw new Error(`invalid outcome restriction for ${id}`);
+		}
 		const edgeKeys = new Set<string>();
 		const adjacency = new Map(
 			manifest.steps.map((id) => [id, [] as WorkflowEdge[]]),
@@ -228,7 +243,8 @@ export class WorkflowRegistry {
 		}
 		for (const [id, step] of steps) {
 			if (manifest.terminal.includes(id)) continue;
-			const missing = step.outcomes.filter(
+			const outcomes = allowedOutcomes[id] ?? step.outcomes;
+			const missing = outcomes.filter(
 				(outcome) => !edgeKeys.has(`${id}:${outcome}`),
 			);
 			if (missing.length)
@@ -281,6 +297,14 @@ export class WorkflowRegistry {
 			terminal: Object.freeze([...manifest.terminal]),
 			edges: Object.freeze(
 				manifest.edges.map((edge) => Object.freeze({ ...edge })),
+			),
+			allowedOutcomes: Object.freeze(
+				Object.fromEntries(
+					Object.entries(allowedOutcomes).map(([id, outcomes]) => [
+						id,
+						Object.freeze([...outcomes]),
+					]),
+				),
 			),
 			stepDigests: Object.freeze(stepDigests),
 			digest: digest({ ...manifest, stepDigests }),

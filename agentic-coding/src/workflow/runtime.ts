@@ -35,7 +35,7 @@ import type {
 	StepDefinition,
 	WorkflowRegistry,
 } from "./registry.ts";
-import { conceptPath, snapshotList } from "./wiki.ts";
+import { conceptPath, snapshotList, wikiRoot } from "./wiki.ts";
 
 const MAX_ARTIFACT_BYTES = 512 * 1024;
 export const MAX_DEVELOPER_DIALOGUE_RECORDS = 100;
@@ -297,7 +297,9 @@ export class WorkflowEngine {
 		const proposal = ["standard-propose", "fusion-propose"].includes(
 			definition.id,
 		);
-		if (proposal) {
+		const wikiOnly = definition.id === "wiki-only";
+		const sameCheckout = proposal || wikiOnly;
+		if (sameCheckout) {
 			if (input.mode !== "checkout")
 				throw new WorkflowRuntimeError(
 					"start-guard",
@@ -315,7 +317,7 @@ export class WorkflowEngine {
 					"proposal workflows require the named current branch",
 				);
 		}
-		this.validateStartEvidence(repository, input, proposal);
+		this.validateStartEvidence(repository, input, sameCheckout);
 		if (["plan-fusion", "fusion-propose"].includes(definition.id))
 			validateFusionRouting(definition.id, input.routing);
 		const at = nowIso(this.now);
@@ -340,12 +342,25 @@ export class WorkflowEngine {
 				createdAt: at,
 				updatedAt: at,
 				stepEnteredAt: at,
+				...(definition.steps.includes("core.wiki")
+					? { wikiRoot: path.resolve(wikiRoot()) }
+					: {}),
 			},
 			routing: input.routing,
 			evidence: [],
 			loopCounts: {},
 			attention: [],
 			developerDialogue: [],
+			...(wikiOnly
+				? {
+						sourceBaseline: {
+							fingerprint: sourceContentFingerprint(
+								repository,
+								path.resolve(wikiRoot()),
+							),
+						},
+					}
+				: {}),
 		};
 		this.validateSnapshot(snapshot, definition, []);
 		const db = openStore(repository);
@@ -393,7 +408,7 @@ export class WorkflowEngine {
 					`workspace:${workflowId}:setup`,
 					{
 						mode: input.mode,
-						sameCheckout: proposal,
+						sameCheckout,
 						branch: snapshot.metadata.branch,
 						baseCommit: snapshot.metadata.baseCommit,
 					},
@@ -1113,11 +1128,23 @@ export class WorkflowEngine {
 				"start-guard",
 				"unable to inspect Git worktree",
 			);
-		if (status.stdout.toString().trim() && !proposal)
+		if (
+			status.stdout.toString().trim() &&
+			!proposal &&
+			input.definitionId !== "wiki-only"
+		)
 			throw new WorkflowRuntimeError(
 				"start-guard",
 				"working tree must be clean before workflow start",
 			);
+		if (input.definitionId === "wiki-only") {
+			if (!input.metadata.task?.trim())
+				throw new WorkflowRuntimeError(
+					"start-guard",
+					"wiki-only requires non-empty task",
+				);
+			return;
+		}
 		if (input.definitionId === "no-openspec") {
 			if (!input.metadata.task?.trim())
 				throw new WorkflowRuntimeError(
@@ -1445,6 +1472,11 @@ export class WorkflowEngine {
 				data: { actionId: command.actionId },
 			};
 		}
+		if (
+			(command.actionId === "approve-wiki" || command.actionId === "close") &&
+			snapshot.definition.id === "wiki-only"
+		)
+			this.validateSourceBaseline(snapshot);
 		if (command.actionId === "review-comments") {
 			const comments =
 				command.input &&
@@ -1548,6 +1580,7 @@ export class WorkflowEngine {
 		if (output !== undefined) output = step.output.parse(output);
 		if (command.outcome === "complete") {
 			this.validateStepEvidence(snapshot, run.stepId);
+			if (run.stepId === "core.wiki") this.validateSourceBaseline(snapshot);
 			if (run.stepId === "core.triage")
 				this.validateTriageScope(
 					snapshot,
@@ -1668,12 +1701,24 @@ export class WorkflowEngine {
 		else if (command.outcome === "complete")
 			this.transition(db, snapshot, definition, "complete", output);
 		else if (command.outcome === "blocked") {
-			snapshot.status = "attention-required";
-			snapshot.attention = [command.message ?? `${run.role} blocked`];
+			if (snapshot.definition.id === "wiki-only")
+				this.transition(db, snapshot, definition, "blocked", command.message);
+			else {
+				snapshot.status = "attention-required";
+				snapshot.attention = [command.message ?? `${run.role} blocked`];
+			}
 		} else {
 			this.expireSiblingRuns(db, snapshot);
 			this.transition(db, snapshot, definition, "failed", command.message);
 		}
+		if (run.stepId === "core.wiki" && run.handle)
+			this.enqueue(
+				db,
+				snapshot,
+				"agent.stop",
+				`run:${run.id}:stop:${run.generation}`,
+				{ runId: run.id },
+			);
 		return {
 			type: "agent.handoff",
 			actor: { kind: "agent", runId: run.id, role: run.role },
@@ -2282,6 +2327,25 @@ export class WorkflowEngine {
 					);
 		}
 	}
+	private validateSourceBaseline(snapshot: WorkflowSnapshot): void {
+		if (snapshot.definition.id !== "wiki-only") return;
+		const baseline = snapshot.sourceBaseline?.fingerprint;
+		if (!baseline)
+			throw new WorkflowRuntimeError(
+				"source-isolation",
+				"wiki-only source baseline is missing",
+			);
+		if (
+			sourceContentFingerprint(
+				snapshot.metadata.repository,
+				snapshot.metadata.wikiRoot,
+			) !== baseline
+		)
+			throw new WorkflowRuntimeError(
+				"source-isolation",
+				"wiki-only source repository changed during documentation run",
+			);
+	}
 	private validateStepEvidence(
 		snapshot: WorkflowSnapshot,
 		stepId: string,
@@ -2477,9 +2541,11 @@ export class WorkflowEngine {
 							]
 						: snapshot.currentStep === "core.completed"
 							? [
-									...(["standard-propose", "fusion-propose"].includes(
-										snapshot.definition.id,
-									)
+									...([
+										"standard-propose",
+										"fusion-propose",
+										"wiki-only",
+									].includes(snapshot.definition.id)
 										? []
 										: [
 												{
@@ -2892,6 +2958,102 @@ function freshStep(attempt: number): WorkflowSnapshot["step"] {
 		results: [],
 	};
 }
+function gitNullSeparated(repository: string, args: string[]): string[] {
+	const result = Bun.spawnSync(["git", "-C", repository, ...args], {
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	if (result.exitCode !== 0)
+		throw new WorkflowRuntimeError(
+			"source-isolation",
+			`unable to fingerprint Git content: ${result.stderr.toString().trim()}`,
+		);
+	return result.stdout.toString().split("\0").filter(Boolean);
+}
+function sourcePathExcluded(
+	repository: string,
+	relative: string,
+	configuredWikiPath = wikiRoot(),
+): boolean {
+	const absolute = path.resolve(repository, relative);
+	const workflowRoot = path.resolve(repository, ".herdr-workflow");
+	if (
+		absolute === workflowRoot ||
+		absolute.startsWith(`${workflowRoot}${path.sep}`)
+	)
+		return true;
+	const repositoryRoot = path.resolve(repository);
+	const configuredWiki = path.resolve(configuredWikiPath);
+	const wikiIsInsideRepository =
+		configuredWiki !== repositoryRoot &&
+		configuredWiki.startsWith(`${repositoryRoot}${path.sep}`);
+	return (
+		wikiIsInsideRepository &&
+		(absolute === configuredWiki ||
+			absolute.startsWith(`${configuredWiki}${path.sep}`))
+	);
+}
+/** Fingerprint source content and index state while excluding engine bookkeeping
+ * and a centralized wiki bundle if it happens to live under the repository. */
+export function sourceContentFingerprint(
+	repository: string,
+	configuredWikiPath = wikiRoot(),
+): string {
+	const tracked = [
+		...gitNullSeparated(repository, ["ls-files", "-z", "--cached"]),
+		...gitNullSeparated(repository, [
+			"ls-files",
+			"-z",
+			"--others",
+			"--exclude-standard",
+		]),
+		...gitNullSeparated(repository, [
+			"ls-files",
+			"-z",
+			"--others",
+			"--ignored",
+			"--exclude-standard",
+		]),
+	].filter(
+		(relative) =>
+			sourcePathExcluded(repository, relative, configuredWikiPath) === false,
+	);
+	const staged = gitNullSeparated(repository, ["ls-files", "--stage", "-z"])
+		.filter((entry) => {
+			const separator = entry.indexOf("\t");
+			return (
+				separator >= 0 &&
+				sourcePathExcluded(
+					repository,
+					entry.slice(separator + 1),
+					configuredWikiPath,
+				) === false
+			);
+		})
+		.sort();
+	const hash = createHash("sha256");
+	for (const entry of staged) hash.update(`index:${entry.length}:${entry}\0`);
+	for (const relative of [...new Set(tracked)].sort()) {
+		hash.update(`path:${relative.length}:${relative}\0`);
+		const file = path.join(repository, relative);
+		try {
+			const stat = fs.lstatSync(file);
+			if (stat.isSymbolicLink()) {
+				const target = fs.readlinkSync(file);
+				hash.update(`symlink:${target.length}:${target}\0`);
+			} else if (stat.isFile()) {
+				const content = fs.readFileSync(file);
+				hash.update(`file:${content.length}:`);
+				hash.update(content);
+				hash.update("\0");
+			} else hash.update(`mode:${stat.mode}\0`);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			hash.update("missing\0");
+		}
+	}
+	return hash.digest("hex");
+}
 export function changedFilesIn(snapshot: WorkflowSnapshot): string[] {
 	const root = snapshot.metadata.worktree;
 	const changed = new Set<string>();
@@ -2935,10 +3097,33 @@ export function changedFilesIn(snapshot: WorkflowSnapshot): string[] {
 		changed.add(file);
 	return [...changed].sort();
 }
+function samePath(left: string, right: string): boolean {
+	try {
+		return fs.realpathSync(left) === fs.realpathSync(right);
+	} catch {
+		return path.resolve(left) === path.resolve(right);
+	}
+}
+function withWikiRoot<T>(root: string, operation: () => T): T {
+	const previous = process.env.HERDR_WIKI_DIR;
+	process.env.HERDR_WIKI_DIR = root;
+	try {
+		return operation();
+	} finally {
+		if (previous === undefined) delete process.env.HERDR_WIKI_DIR;
+		else process.env.HERDR_WIKI_DIR = previous;
+	}
+}
 function wikiVerificationPayload(snapshot: WorkflowSnapshot): {
 	concepts: Array<{ id: string; digest: string }>;
 } {
-	return {
+	const pinnedRoot = path.resolve(snapshot.metadata.wikiRoot ?? wikiRoot(true));
+	if (!samePath(wikiRoot(), pinnedRoot))
+		throw new WorkflowRuntimeError(
+			"wiki-root",
+			"wiki root does not match the pinned workflow wiki root",
+		);
+	return withWikiRoot(pinnedRoot, () => ({
 		concepts: snapshotList(
 			snapshot.metadata.changeId,
 			snapshot.metadata.worktree,
@@ -2948,7 +3133,7 @@ function wikiVerificationPayload(snapshot: WorkflowSnapshot): {
 				.update(fs.readFileSync(conceptPath(id)))
 				.digest("hex"),
 		})),
-	};
+	}));
 }
 function roleForStep(step: string, snapshot: WorkflowSnapshot): string[] {
 	if (step === "core.plan") return ["planner"];

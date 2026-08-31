@@ -718,6 +718,62 @@ export function registerBuiltins(
 				{ from: "core.completed", outcome: "close", to: "core.closed" },
 			],
 		},
+		...(wikiGate
+			? [
+					{
+						id: "wiki-only",
+						version,
+						label: "Wiki only",
+						initial: "core.wiki",
+						terminal: ["core.closed"],
+						steps: [
+							"core.wiki",
+							"core.wiki-approval",
+							"core.completed",
+							"core.closed",
+						],
+						allowedOutcomes: { "core.completed": ["close"] },
+						edges: [
+							{
+								from: "core.wiki",
+								outcome: "complete",
+								to: "core.wiki-approval",
+							},
+							{
+								from: "core.wiki",
+								outcome: "blocked",
+								to: "core.wiki",
+								loop: { maxAttempts: 3 },
+							},
+							{
+								from: "core.wiki",
+								outcome: "failed",
+								to: "core.wiki",
+								loop: { maxAttempts: 3 },
+							},
+							{
+								from: "core.wiki-approval",
+								outcome: "approve",
+								to: "core.completed",
+								effects: [
+									{
+										kind: "wiki.verify",
+										idempotencyKey: "wiki.verify",
+										payload: {},
+									},
+								],
+							},
+							{
+								from: "core.wiki-approval",
+								outcome: "comments",
+								to: "core.wiki",
+								loop: { maxAttempts: 6 },
+							},
+							{ from: "core.completed", outcome: "close", to: "core.closed" },
+						] as const,
+					},
+				]
+			: []),
 	];
 	for (const rounds of Array.from({ length: 20 }, (_, index) => index + 1)) {
 		const legacyVersion = rounds === 6 ? 1 : rounds === 1 ? 21 : rounds;

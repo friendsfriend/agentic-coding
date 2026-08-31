@@ -61,6 +61,8 @@ export function NewWorkflowModal(props: {
 
 	const isProposal = (type: string) =>
 		type === "standard-propose" || type === "fusion-propose";
+	const isRepositoryBacked = (type: string) =>
+		isProposal(type) || type === "wiki-only";
 	const fields = (): (keyof NewWorkflowInput)[] => {
 		const base: (keyof NewWorkflowInput)[] = [
 			"repo",
@@ -77,6 +79,7 @@ export function NewWorkflowModal(props: {
 				"plan-fusion",
 				"standard-propose",
 				"fusion-propose",
+				"wiki-only",
 			].includes(values().workflowType)
 		) {
 			return [
@@ -86,7 +89,9 @@ export function NewWorkflowModal(props: {
 				"ticket",
 				"change",
 				"task",
-				...(isProposal(values().workflowType) ? [] : (["mode"] as const)),
+				...(isRepositoryBacked(values().workflowType)
+					? []
+					: (["mode"] as const)),
 			];
 		}
 		return base;
@@ -94,11 +99,11 @@ export function NewWorkflowModal(props: {
 
 	const fieldLabels: Record<string, string> = {
 		repo: "Repository",
-		workflowType: "Workflow type",
+		workflowType: "Workflow type (wiki-only uses repository evidence only)",
 		preset: "Agent preset",
 		ticket: "Ticket identifier (optional)",
 		change: "Change ID",
-		task: "Task",
+		task: "Task (required for wiki-only)",
 		mode: "Checkout mode",
 	};
 
@@ -109,6 +114,7 @@ export function NewWorkflowModal(props: {
 		"plan-fusion",
 		"standard-propose",
 		"fusion-propose",
+		"wiki-only",
 	];
 	const workflowTypeDisplay: Record<string, string> = {
 		standard: "Standard",
@@ -117,6 +123,7 @@ export function NewWorkflowModal(props: {
 		"plan-fusion": "Plan Fusion",
 		"standard-propose": "Standard Propose",
 		"fusion-propose": "Fusion Propose",
+		"wiki-only": "Wiki Only (centralized wiki; no source changes)",
 	};
 
 	const choices = (): string[] => {
@@ -156,6 +163,8 @@ export function NewWorkflowModal(props: {
 	};
 
 	const confirmStep = () => step() === fields().length;
+	const canSubmit = () =>
+		values().workflowType !== "wiki-only" || Boolean(values().task?.trim());
 	const totalSteps = () => fields().length + 1;
 	const field = () => fields()[step()];
 	const summary = () =>
@@ -184,7 +193,7 @@ export function NewWorkflowModal(props: {
 		setValues((current) => ({
 			...current,
 			[key]: value,
-			...(key === "workflowType" && isProposal(value)
+			...(key === "workflowType" && isRepositoryBacked(value)
 				? { mode: "checkout" }
 				: {}),
 		}));
@@ -195,6 +204,7 @@ export function NewWorkflowModal(props: {
 	};
 
 	const submit = async () => {
+		if (!canSubmit()) return;
 		setCreating(true);
 		try {
 			// Yield one macrotask so the progress modal paints before the
@@ -229,7 +239,15 @@ export function NewWorkflowModal(props: {
 			return true;
 		}
 		if (confirmStep()) {
-			if (name === "return" || name === "enter") void submit();
+			if (name === "return" || name === "enter") {
+				if (!canSubmit()) {
+					setStep(fields().indexOf("task"));
+					setSelected(0);
+					setFilter("");
+					setFiltering(false);
+				} else void submit();
+				return true;
+			}
 			return true;
 		}
 		if (!listStep()) {

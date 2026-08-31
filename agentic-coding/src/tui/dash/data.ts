@@ -1889,7 +1889,10 @@ export function requiredUserActionFor(
 		return {
 			key: "wiki-review",
 			title: "Action required · Wiki review",
-			prompt: "Review knowledge changes before archival.",
+			prompt:
+				definitionId === "wiki-only"
+					? "Review knowledge changes before completion."
+					: "Review knowledge changes before archival.",
 			items: [],
 		};
 	if (phase === "developer-review" || phase === "core.developer-review")
@@ -1906,16 +1909,18 @@ export function requiredUserActionFor(
 	if (phase === "completed" || phase === "core.completed") {
 		const proposal =
 			definitionId === "standard-propose" || definitionId === "fusion-propose";
+		const wikiOnly = definitionId === "wiki-only";
+		const closeOnly = proposal || wikiOnly;
 		return {
-			key: `${phase}:${proposal ? "proposal" : prCreated ? "pr-created" : "no-pr"}`,
+			key: `${phase}:${closeOnly ? "proposal" : prCreated ? "pr-created" : "no-pr"}`,
 			title: "Action required · Workflow complete",
-			prompt: proposal
+			prompt: closeOnly
 				? "Close workflow when finished."
 				: prCreated
 					? "Close workspace when finished."
 					: "Create MR/PR or close workspace.",
 			items: [
-				...(!proposal && !prCreated
+				...(!closeOnly && !prCreated
 					? [
 							{
 								label: "Create MR/PR",
@@ -1929,7 +1934,7 @@ export function requiredUserActionFor(
 					kind: "workflow",
 					value: "close",
 				},
-				...(!proposal
+				...(!closeOnly
 					? [
 							{
 								label: "Close and delete worktree",

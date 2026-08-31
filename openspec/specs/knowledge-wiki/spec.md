@@ -2,9 +2,7 @@
 
 ## Purpose
 TBD - created by archiving change introduce-okf-wiki. Update Purpose after archive.
-
 ## Requirements
-
 ### Requirement: Centralized bundle location
 The system SHALL store the knowledge bundle in a single machine-wide directory outside every repository, resolved with the precedence `HERDR_WIKI_DIR` environment variable, then the `[wiki] root` configuration key (tilde-expanded), then the default `~/.config/agentic-coding/wiki`. The centralized bundle SHALL support concepts from multiple projects; OKF SHALL NOT be treated as requiring one repository per bundle, and the system SHALL NOT automatically federate multiple bundle roots.
 
@@ -230,31 +228,36 @@ The first time a run belonging to a change modifies a concept, the system SHALL 
 - **THEN** the snapshot enumerates exactly those concepts
 
 ### Requirement: Wiki approval gate precedes delivery
-The system SHALL provide a developer-actor workflow step for wiki approval, positioned after the dedicated wiki documentation step and before the OpenSpec archive and delivery steps in every workflow definition that includes an archive step. The gate SHALL have the outcomes `approve` and `comments`. The approve outcome SHALL enqueue the engine-owned human-verification effect and proceed to archive; the comments outcome SHALL return to the dedicated wiki documentation step under a bounded loop. Definitions without an archive step SHALL NOT gain the documentation or wiki approval steps.
+The system SHALL provide a developer-actor workflow step for wiki approval, positioned after the dedicated wiki documentation step. In every workflow definition that includes an archive step, the wiki documentation and approval steps SHALL precede the OpenSpec archive and delivery steps according to that definition's configured ordering. A definition without an archive step SHALL remain free of these steps unless it is explicitly the archive-free `wiki-only` workflow, whose purpose is documentation and whose approval advances directly to completion. The gate SHALL have the outcomes `approve` and `comments`. The approve outcome SHALL enqueue the engine-owned human-verification effect when the workflow has touched concepts and proceed to the definition's configured next step; the comments outcome SHALL return to the documentation step for `wiki-only` and for archive-before-approval definitions, or to the archive step for archive-after-approval definitions, under a bounded loop.
 
 #### Scenario: Documentation precedes review and archive
 - **WHEN** an archive-bearing workflow is registered
-- **THEN** its reachable path contains the wiki documentation step, wiki approval gate, archive step, and delivery step in that order
+- **THEN** its reachable path contains the wiki documentation step, wiki approval gate, archive step, and delivery step in the configured order
 
 #### Scenario: Approval promotes before archive
-- **WHEN** the developer approves at the wiki approval gate
-- **THEN** the engine promotes every touched concept through its human-verification effect and advances to OpenSpec archive
+- **WHEN** the developer approves at the wiki approval gate in an archive-bearing workflow
+- **THEN** the engine promotes every touched concept through its human-verification effect and advances to the configured archive or delivery path
 
-#### Scenario: Comments return to wiki documentation
-- **WHEN** the developer submits comments at the wiki approval gate
-- **THEN** the workflow returns to the wiki documentation step so the wiki agent can revise the documentation
+#### Scenario: Comments return to documentation before archive
+- **WHEN** the developer submits comments at the wiki approval gate positioned before archive
+- **THEN** the workflow returns to the dedicated wiki documentation step so the agent can revise the documentation
+
+#### Scenario: Comments return to archive after archive
+- **WHEN** the developer submits comments at the wiki approval gate positioned after archive
+- **THEN** the workflow returns to the archive step so the archive agent can revise
 
 #### Scenario: Definitions without archive are unaffected
-- **WHEN** a workflow definition has no archive step
+- **WHEN** a workflow definition has no archive step and is not explicitly `wiki-only`
 - **THEN** it contains neither the wiki documentation step nor the wiki approval step
 
-#### Scenario: Approval proceeds to delivery
-- **WHEN** the developer approves at the wiki approval gate
-- **THEN** the workflow advances to the delivery step
+#### Scenario: Wiki-only approval completes directly
+- **WHEN** the developer approves at the wiki approval gate for `wiki-only`
+- **THEN** the engine promotes the touched concepts through its human-verification effect and advances directly to `core.completed`
+- **AND** it SHALL not enqueue archive, delivery, or pull-request effects
 
-#### Scenario: Comments return to the archive agent
-- **WHEN** the developer submits comments at the wiki approval gate
-- **THEN** the workflow returns to the archive step so the agent can revise
+#### Scenario: Wiki-only comments return to documentation
+- **WHEN** the developer submits comments at the wiki approval gate for `wiki-only`
+- **THEN** the workflow returns to `core.wiki` under its bounded review loop
 
 ### Requirement: The archive agent survives the gate
 No step between the archive step's completion and the resolution of the wiki approval gate SHALL be permitted to close or clean up the workspace, so the archive agent remains available to act on review comments. A comments outcome SHALL reuse the running archive agent rather than launching a replacement.
@@ -491,3 +494,4 @@ When the developer review gate returns comments, the workflow SHALL expose the b
 #### Scenario: Revision remains unverified
 - **WHEN** the wiki role completes a comment-driven revision
 - **THEN** touched concepts remain drafts without a human verification event until the developer approves again
+

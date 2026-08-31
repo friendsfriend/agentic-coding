@@ -50,8 +50,10 @@ function expand(value: string): string {
 }
 
 /** Resolve the shared wiki root without requiring a repository or workflow. */
-export function wikiRoot(): string {
-	const configured = process.env.HERDR_WIKI_DIR || loadConfig().wiki?.root;
+export function wikiRoot(ignoreEnvironment = false): string {
+	const configured = ignoreEnvironment
+		? loadConfig().wiki?.root
+		: process.env.HERDR_WIKI_DIR || loadConfig().wiki?.root;
 	return path.resolve(expand(configured || "~/.config/agentic-coding/wiki"));
 }
 
