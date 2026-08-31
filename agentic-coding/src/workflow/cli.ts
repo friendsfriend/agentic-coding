@@ -673,6 +673,17 @@ export function runGit(repo: string, ...args: string[]): string {
 		);
 	return result.stdout.toString().trim();
 }
+export function validateQuestionTimeout(timeoutMs: number): void {
+	if (
+		!Number.isInteger(timeoutMs) ||
+		timeoutMs < 1 ||
+		timeoutMs > QUESTION_WAIT_MS
+	)
+		throw new Error(
+			`question timeout must be an integer from 1 to ${QUESTION_WAIT_MS}`,
+		);
+}
+
 export async function runDeveloperQuestion(
 	engineInstance: WorkflowEngine,
 	repo: string,
@@ -682,14 +693,7 @@ export async function runDeveloperQuestion(
 ): Promise<string> {
 	if (!description.trim())
 		throw new Error("question requires a non-empty description");
-	if (
-		!Number.isInteger(timeoutMs) ||
-		timeoutMs < 1 ||
-		timeoutMs > QUESTION_WAIT_MS
-	)
-		throw new Error(
-			`question timeout must be an integer from 1 to ${QUESTION_WAIT_MS}`,
-		);
+	validateQuestionTimeout(timeoutMs);
 	const identity = resolveHandoffIdentity(engineInstance, repo);
 	const run = engineInstance.authorizeExactRunCapability(
 		repo,
@@ -1461,6 +1465,7 @@ export const cliTest = {
 	},
 	detachedDrainArgv,
 	verificationPosition,
+	validateQuestionTimeout,
 	resolveHandoffIdentity: (workflowEngine: WorkflowEngine, repo: string) =>
 		resolveHandoffIdentity(
 			workflowEngine,

@@ -39,7 +39,7 @@ import { conceptPath, snapshotList, wikiRoot } from "./wiki.ts";
 
 const MAX_ARTIFACT_BYTES = 512 * 1024;
 export const MAX_DEVELOPER_DIALOGUE_RECORDS = 100;
-export const QUESTION_WAIT_MS = 5 * 60_000;
+export const QUESTION_WAIT_MS = 24 * 60 * 60_000;
 const ACTIVE_RUN = new Set(["pending", "working"]);
 const EFFECT_KINDS = new Set<EffectKind>([
 	"workspace.setup",

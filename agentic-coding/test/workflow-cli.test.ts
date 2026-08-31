@@ -23,7 +23,7 @@ import {
 	EffectRunner,
 	effectRunnerTest,
 } from "../src/workflow/effect-runner.ts";
-import { WorkflowEngine } from "../src/workflow/runtime.ts";
+import { QUESTION_WAIT_MS, WorkflowEngine } from "../src/workflow/runtime.ts";
 
 class StubAdapter implements AgentAdapter {
 	readonly id = "pi" as const;
@@ -86,6 +86,17 @@ describe("breaking workflow CLI surface", () => {
 		]);
 		expect(REQUIRED_FLAGS.action).toEqual(["repo", "change", "revision"]);
 		expect(REQUIRED_FLAGS.question).toEqual(["description"]);
+	});
+	test("question timeout accepts the 24-hour maximum and rejects invalid values", () => {
+		expect(QUESTION_WAIT_MS).toBe(24 * 60 * 60_000);
+		expect(() => cliTest.validateQuestionTimeout(1)).not.toThrow();
+		expect(() =>
+			cliTest.validateQuestionTimeout(QUESTION_WAIT_MS),
+		).not.toThrow();
+		for (const timeout of [0, -1, 1.5, Number.NaN, QUESTION_WAIT_MS + 1])
+			expect(() => cliTest.validateQuestionTimeout(timeout)).toThrow(
+				`question timeout must be an integer from 1 to ${QUESTION_WAIT_MS}`,
+			);
 	});
 	test("help needs no config, database, or runtime", async () => {
 		const lines: string[] = [];

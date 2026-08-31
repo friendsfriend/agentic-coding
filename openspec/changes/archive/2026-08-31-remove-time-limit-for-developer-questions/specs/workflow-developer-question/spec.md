@@ -1,8 +1,5 @@
-# workflow-developer-question Specification
+## MODIFIED Requirements
 
-## Purpose
-Give managed agents a safe, durable way to pause on an unclear decision and obtain explicit developer guidance through the workflow dashboard.
-## Requirements
 ### Requirement: Authenticated developer question interface
 Every active managed agent SHALL be able to submit a bounded developer question containing a description and zero or more recommended options, and SHALL receive the developer's selected option, custom response, or explicit cancellation. The interface SHALL authenticate the request against the active run capability and SHALL not allow an agent to identify another run or workflow. A question created without a shorter explicit wait SHALL remain pending for up to 24 hours before automatic expiry, and an explicit CLI wait SHALL be accepted only when it is a positive duration no greater than 24 hours.
 
@@ -95,4 +92,3 @@ Question and answer content SHALL be bounded at input validation, excluded from 
 - **WHEN** a response targets an already answered, cancelled, expired, or replaced question
 - **THEN** the engine SHALL reject it without changing dialogue history
 - **AND** the dash SHALL refresh and present the current pending question state
-
