@@ -11,6 +11,10 @@ import { createCliRenderer } from "@opentui/core";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { KeymapProvider } from "@opentui/keymap/solid";
 import { render } from "@opentui/solid";
+import {
+	isResearchWorkflowTarget,
+	isWikiWorkflowTarget,
+} from "../workflow/runtime";
 import { copyToClipboard } from "./dash/clipboard";
 import { listWorkflows, loadDashboard, testDashboard } from "./dash/data";
 import { setupKeymap } from "./dash/keymap-setup";
@@ -167,7 +171,13 @@ export async function main(): Promise<void> {
 		);
 		process.exit(2);
 	}
-	const repo = repoArg ? resolve(repoArg) : "/demo";
+	const repo =
+		repoArg &&
+		(isResearchWorkflowTarget(repoArg) || isWikiWorkflowTarget(repoArg))
+			? repoArg
+			: repoArg
+				? resolve(repoArg)
+				: "/demo";
 	const resolvedChange = change ?? "demo-optional-realisation-date";
 	if (process.argv.includes("--json")) {
 		console.log(

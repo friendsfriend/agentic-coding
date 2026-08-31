@@ -52,6 +52,7 @@ export function NewWorkflowModal(props: {
 		preset: PRESET_CONFIG_DEFAULTS,
 	});
 	const [showCustomRepo, setShowCustomRepo] = createSignal(false);
+	const [standaloneSelected, setStandaloneSelected] = createSignal(false);
 	let currentInput: InputRenderable | undefined;
 	let taskInput: TextareaRenderable | undefined;
 	const projects = () =>
@@ -80,6 +81,7 @@ export function NewWorkflowModal(props: {
 				"standard-propose",
 				"fusion-propose",
 				"wiki-only",
+				"research",
 			].includes(values().workflowType)
 		) {
 			return [
@@ -89,7 +91,8 @@ export function NewWorkflowModal(props: {
 				"ticket",
 				"change",
 				"task",
-				...(isRepositoryBacked(values().workflowType)
+				...(isRepositoryBacked(values().workflowType) ||
+				values().workflowType === "research"
 					? []
 					: (["mode"] as const)),
 			];
@@ -99,11 +102,12 @@ export function NewWorkflowModal(props: {
 
 	const fieldLabels: Record<string, string> = {
 		repo: "Repository",
-		workflowType: "Workflow type (wiki-only uses repository evidence only)",
+		workflowType:
+			"Workflow type (research accepts optional read-only repository context)",
 		preset: "Agent preset",
 		ticket: "Ticket identifier (optional)",
 		change: "Change ID",
-		task: "Task (required for wiki-only)",
+		task: "Task (required for wiki-only and research)",
 		mode: "Checkout mode",
 	};
 
@@ -115,6 +119,7 @@ export function NewWorkflowModal(props: {
 		"standard-propose",
 		"fusion-propose",
 		"wiki-only",
+		"research",
 	];
 	const workflowTypeDisplay: Record<string, string> = {
 		standard: "Standard",
@@ -124,6 +129,7 @@ export function NewWorkflowModal(props: {
 		"standard-propose": "Standard Propose",
 		"fusion-propose": "Fusion Propose",
 		"wiki-only": "Wiki Only (centralized wiki; no source changes)",
+		research: "Research (persistent; optional repository context)",
 	};
 
 	const choices = (): string[] => {
@@ -132,12 +138,15 @@ export function NewWorkflowModal(props: {
 			return [
 				...projects().map((p) => `${p.openspec ? "●" : "○"} ${p.name}`),
 				`Current Directory (${process.cwd().split("/").pop()})`,
+				"Standalone research (selects Research)",
 				"Custom path…",
 			];
 		if (f === "workflowType")
-			return workflowTypeChoices.filter((item) =>
-				item.includes(filter().toLowerCase()),
-			);
+			return standaloneSelected()
+				? ["research"]
+				: workflowTypeChoices.filter((item) =>
+						item.includes(filter().toLowerCase()),
+					);
 		if (f === "preset")
 			return [PRESET_CONFIG_DEFAULTS, ...(props.presets ?? [])].filter((item) =>
 				item.toLowerCase().includes(filter().toLowerCase()),
@@ -164,7 +173,8 @@ export function NewWorkflowModal(props: {
 
 	const confirmStep = () => step() === fields().length;
 	const canSubmit = () =>
-		values().workflowType !== "wiki-only" || Boolean(values().task?.trim());
+		!["wiki-only", "research"].includes(values().workflowType) ||
+		Boolean(values().task?.trim());
 	const totalSteps = () => fields().length + 1;
 	const field = () => fields()[step()];
 	const summary = () =>
@@ -190,9 +200,13 @@ export function NewWorkflowModal(props: {
 	const next = (value: string) => {
 		const key = field();
 		if (!key) return;
+		const standaloneResearch =
+			key === "repo" && value === "Standalone research (selects Research)";
+		if (key === "repo") setStandaloneSelected(standaloneResearch);
 		setValues((current) => ({
 			...current,
-			[key]: value,
+			[key]: standaloneResearch ? "" : value,
+			...(standaloneResearch ? { workflowType: "research" } : {}),
 			...(key === "workflowType" && isRepositoryBacked(value)
 				? { mode: "checkout" }
 				: {}),
@@ -306,6 +320,10 @@ export function NewWorkflowModal(props: {
 				return true;
 			}
 			if (step() === 0 && selected() === projects().length + 1) {
+				next("Standalone research (selects Research)");
+				return true;
+			}
+			if (step() === 0 && selected() === projects().length + 2) {
 				setShowCustomRepo(true);
 				return true;
 			}

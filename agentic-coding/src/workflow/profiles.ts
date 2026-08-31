@@ -274,7 +274,7 @@ export function resolveProfile(
 		extensions: Object.freeze([
 			...new Set([...(profile.extensions ?? []), ...assigned]),
 		]),
-		readOnly: false,
+		readOnly: capabilities.includes("read-only"),
 		capabilities: Object.freeze(capabilities),
 	};
 	return Object.freeze({
@@ -469,6 +469,50 @@ export function assertModelAvailable(profile: ResolvedProfile): void {
 	throw new Error(
 		`profile ${profile.name}: unknown model ${profile.model} for runtime ${profile.runtime} (${suffix})`,
 	);
+}
+export function validateResearchRepositoryProfile(
+	profile: ResolvedProfile,
+): ResolvedProfile {
+	const readOnlyTools =
+		/^(?:read|grep|find|ls|cat|head|tail|rg|git-(?:status|diff|log|show)|context7_[a-z0-9_-]+|gh_grep_search|playwright_(?:navigate|screenshot|snapshot|click|type|fill|select_option|press_key|wait_for|evaluate|scroll|back|forward|get_console|get_network))$/i;
+	const unsafeTools = profile.tools.filter((tool) => !readOnlyTools.test(tool));
+	if (unsafeTools.length)
+		throw new Error(
+			`profile ${profile.name} must expose an allowlisted read-only tool policy for research`,
+		);
+	const capabilities = [
+		...new Set([
+			...profile.capabilities.filter(
+				(capability) => capability !== "shell" && capability !== "edit",
+			),
+			"read-only" as const,
+		]),
+	];
+	const unsigned = {
+		...profile,
+		readOnly: true,
+		capabilities: Object.freeze(capabilities),
+		extensions: Object.freeze([] as string[]),
+	};
+	return Object.freeze({
+		...unsigned,
+		digest: createHash("sha256").update(stableJson(unsigned)).digest("hex"),
+	});
+}
+export function enforceResearchReadOnlyRouting(
+	routing: WorkflowRouting,
+): WorkflowRouting {
+	return {
+		...routing,
+		routes: routing.routes.map((route) =>
+			route.stepId === "core.research" && route.role === "researcher"
+				? {
+						...route,
+						profile: validateResearchRepositoryProfile(route.profile),
+					}
+				: route,
+		),
+	};
 }
 export function validateProfileRequirements(
 	profile: ResolvedProfile,

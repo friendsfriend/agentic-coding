@@ -11,13 +11,20 @@ import type {
 } from "../src/workflow/adapters.ts";
 import { cliTest } from "../src/workflow/cli.ts";
 import type { AgentHandle } from "../src/workflow/contracts.ts";
-import { registerBuiltins } from "../src/workflow/definitions.ts";
+import {
+	definitionVersionForPolicy,
+	registerBuiltins,
+} from "../src/workflow/definitions.ts";
 import {
 	agentEffectHandlers,
 	EffectRunner,
 	effectRunnerTest,
 } from "../src/workflow/effect-runner.ts";
-import { canonicalStorePath, WorkflowEngine } from "../src/workflow/runtime.ts";
+import {
+	canonicalStorePath,
+	researchWorkflowTarget,
+	WorkflowEngine,
+} from "../src/workflow/runtime.ts";
 
 class Adapter implements AgentAdapter {
 	readonly id = "pi" as const;
@@ -38,6 +45,81 @@ class Adapter implements AgentAdapter {
 		this.stops++;
 	}
 }
+
+test("research workspace setup launches and prompts the researcher", async () => {
+	const root = fs.mkdtempSync(
+		path.join(os.tmpdir(), "workflow-research-effects-"),
+	);
+	const previousWikiRoot = process.env.HERDR_WIKI_DIR;
+	process.env.HERDR_WIKI_DIR = path.join(root, "wiki");
+	try {
+		const registry = registerBuiltins(undefined, 6);
+		const engine = new WorkflowEngine(registry);
+		const adapter = new Adapter();
+		const profile = {
+			name: "research",
+			runtime: "pi" as const,
+			executable: "sh",
+			tools: [],
+			extensions: [],
+			readOnly: false,
+			capabilities: [
+				"interactive",
+				"prompt",
+				"persistent-session",
+				"run-environment",
+				"observe",
+				"read-only",
+			] as const,
+			digest: "research-profile",
+		};
+		engine.start({
+			repo: researchWorkflowTarget(),
+			changeId: "research-effects",
+			definitionId: "research",
+			definitionVersion: definitionVersionForPolicy(6),
+			metadata: {
+				branch: "",
+				baseBranch: "",
+				baseCommit: "",
+				task: "research",
+			},
+			routing: {
+				defaultProfile: profile.name,
+				routes: [{ stepId: "core.research", role: "researcher", profile }],
+				diversity: [],
+			},
+		});
+		const herdr = {
+			call(...args: string[]) {
+				if (args[0] === "tab" && args[1] === "list")
+					return { tabs: [{ tab_id: "research-tab", label: "dashboard" }] };
+				if (args[0] === "workspace" && args[1] === "create")
+					return { workspace: { workspace_id: "research-workspace" } };
+				throw new Error(`unexpected ${args.join(" ")}`);
+			},
+		};
+		const handlers = agentEffectHandlers(researchWorkflowTarget(), engine, {
+			registry,
+			adapters: new Map([["pi", adapter]]),
+			herdr,
+			async paneForRun() {
+				return { paneId: "research-pane" };
+			},
+		});
+		await new EffectRunner(researchWorkflowTarget(), engine, handlers).drain();
+		expect(adapter.launches).toBe(1);
+		expect(adapter.context?.assignment.role).toBe("researcher");
+		expect(
+			engine.status(researchWorkflowTarget(), "research-effects").runs[0]
+				?.status,
+		).toBe("working");
+	} finally {
+		if (previousWikiRoot === undefined) delete process.env.HERDR_WIKI_DIR;
+		else process.env.HERDR_WIKI_DIR = previousWikiRoot;
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
 
 test("runner drains workspace and agent effects, then stops stale run after repair", async () => {
 	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-effects-"));

@@ -1,20 +1,4 @@
-# workflow-agent-assignment Specification
-
-## Purpose
-Defines one agent-product-independent assignment and handoff protocol so every managed agent receives complete Markdown instructions as a message and can never mutate workflow lifecycle directly.
-## Requirements
-### Requirement: Skill-free instruction delivery
-Managed workflow agents SHALL NOT load, invoke, or discover workflow skills; engine SHALL render trusted Markdown protocol and step instruction assets into assignment message.
-
-#### Scenario: Agent run starts
-- **WHEN** adapter launches managed run
-- **THEN** runtime arguments/configuration SHALL not reference workflow `SKILL.md` or skill invocation
-- **AND** engine SHALL send rendered Markdown instructions and dynamic assignment as normal agent message
-
-#### Scenario: Runtime has native skill support
-- **WHEN** selected runtime can load skills automatically
-- **THEN** workflow instruction delivery SHALL remain message-based
-- **AND** workflow correctness SHALL NOT depend on runtime skill mechanism
+## MODIFIED Requirements
 
 ### Requirement: Complete assignment envelope
 Each agent prompt SHALL identify protocol version, run, stable step and role, objective, interaction mode, scoped inputs, permissions, required checks, exact output path and schema, allowed outcomes, and generic handoff syntax. A `core.research` assignment SHALL additionally identify the user task, optional repository evidence boundary, persistent-session expectation, and the rule that research remains active until the developer dispatches an explicit wiki-request action or closure. A research `core.wiki` assignment SHALL identify the carried research context, centralized draft boundary, and pending developer approval.
@@ -57,18 +41,6 @@ Every managed agent SHALL report only `complete`, `blocked`, or `failed` through
 - **THEN** it SHALL hand off `failed` with bounded diagnostic
 - **AND** the step definition SHALL apply its pinned failure/retry policy
 
-### Requirement: Run capability authority
-Each assignment SHALL carry single-use capability scoped to workflow, run, actor, run generation, issued revision, allowed outcomes, output location, and expiry; persisted authority SHALL not store reusable plaintext token.
-
-#### Scenario: Valid capability is submitted
-- **WHEN** active run handoff matches capability scope and revision
-- **THEN** engine SHALL authorize handoff and consume capability only after output validation and successful transaction
-
-#### Scenario: Capability is stale or forged
-- **WHEN** handoff uses expired, consumed, repaired-away, wrong-run, wrong-actor, or invalid capability
-- **THEN** engine SHALL reject it without state change
-- **AND** attempt SHALL be audited without exposing secret
-
 ### Requirement: Agents do not choose lifecycle
 Assignment protocol SHALL prohibit agents from naming target step, phase, next role, effect, or workflow closure and the engine SHALL ignore any such fields if present outside output schema. Only the registered reducer selects the wiki and approval successors; only the developer's revision-bound `close-research` action may directly close an active research workflow.
 
@@ -94,4 +66,3 @@ Pi, OpenCode, OpenCode V2, and future adapters SHALL transport the same rendered
 - **WHEN** routing changes from Pi to OpenCode for a newly created workflow
 - **THEN** assignment fields, output contract, reducer outcomes, and handoff semantics SHALL remain unchanged
 - **AND** only launch, prompt transport, status observation, and runtime telemetry bridge SHALL differ
-

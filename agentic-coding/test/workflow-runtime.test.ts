@@ -11,9 +11,13 @@ import {
 	type ResolvedProfile,
 	type WorkflowRouting,
 } from "../src/workflow/contracts.ts";
-import { registerBuiltins } from "../src/workflow/definitions.ts";
+import {
+	definitionVersionForPolicy,
+	registerBuiltins,
+} from "../src/workflow/definitions.ts";
 import {
 	canonicalStorePath,
+	researchWorkflowTarget,
 	validateChangeId,
 	WorkflowEngine,
 	WorkflowRuntimeError,
@@ -81,6 +85,199 @@ function routing(): WorkflowRouting {
 }
 
 describe("transactional workflow runtime", () => {
+	test("research setup remains claimable after an intervening revision", () => {
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "workflow-research-setup-"),
+		);
+		const previousWikiRoot = process.env.HERDR_WIKI_DIR;
+		process.env.HERDR_WIKI_DIR = path.join(tmp, "wiki");
+		try {
+			let now = new Date("2026-01-01T00:00:00Z");
+			const engine = new WorkflowEngine(
+				registerBuiltins(undefined, 6),
+				() => now,
+			);
+			const version = definitionVersionForPolicy(6);
+			const researchProfile: ResolvedProfile = {
+				...profile,
+				tools: ["read"],
+				capabilities: [
+					"interactive",
+					"prompt",
+					"persistent-session",
+					"run-environment",
+					"observe",
+					"read-only",
+				],
+			};
+			const started = engine.start({
+				repo: researchWorkflowTarget(),
+				changeId: "research-setup-retry",
+				definitionId: "research",
+				definitionVersion: version,
+				metadata: {
+					branch: "",
+					baseBranch: "",
+					baseCommit: "",
+					task: "research",
+				},
+				routing: {
+					defaultProfile: researchProfile.name,
+					routes: [
+						{
+							stepId: "core.research",
+							role: "researcher",
+							profile: researchProfile,
+						},
+					],
+				},
+			});
+			const setup = requireDefined(
+				engine
+					.claimEffects(researchWorkflowTarget())
+					.find((effect) => effect.kind === "workspace.setup"),
+				"research workspace setup effect",
+			);
+			engine.dispatch(researchWorkflowTarget(), {
+				type: "effect.result",
+				effectId: setup.id,
+				lease: requireDefined(setup.lease, "setup lease"),
+				outcome: "retry",
+				data: "runtime temporarily unavailable",
+			});
+			now = new Date("2026-01-01T00:00:02Z");
+			const retried = engine
+				.claimEffects(researchWorkflowTarget())
+				.find((effect) => effect.kind === "workspace.setup");
+			expect(retried?.status).toBe("running");
+			expect(
+				engine.getSnapshot(
+					researchWorkflowTarget(),
+					started.snapshot.workflowId,
+				).currentStep,
+			).toBe("core.research");
+		} finally {
+			if (previousWikiRoot === undefined) delete process.env.HERDR_WIKI_DIR;
+			else process.env.HERDR_WIKI_DIR = previousWikiRoot;
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+	test("research hands off to wiki approval and exposes close before approval", () => {
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "workflow-research-life-"),
+		);
+		const previousWikiRoot = process.env.HERDR_WIKI_DIR;
+		process.env.HERDR_WIKI_DIR = path.join(tmp, "wiki");
+		try {
+			const engine = new WorkflowEngine(registerBuiltins());
+			const researchProfile: ResolvedProfile = {
+				...profile,
+				tools: ["read"],
+				capabilities: [
+					"interactive",
+					"prompt",
+					"persistent-session",
+					"run-environment",
+					"observe",
+					"read-only",
+				],
+			};
+			const started = engine.start({
+				repo: researchWorkflowTarget(),
+				changeId: "research-lifecycle",
+				definitionId: "research",
+				definitionVersion: definitionVersionForPolicy(6),
+				metadata: {
+					branch: "",
+					baseBranch: "",
+					baseCommit: "",
+					task: "research",
+				},
+				routing: {
+					defaultProfile: researchProfile.name,
+					routes: [
+						{
+							stepId: "core.research",
+							role: "researcher",
+							profile: researchProfile,
+						},
+						{ stepId: "core.wiki", role: "wiki", profile: researchProfile },
+					],
+				},
+			});
+			const setup = requireDefined(
+				engine
+					.claimEffects(researchWorkflowTarget())
+					.find((effect) => effect.kind === "workspace.setup"),
+				"research setup",
+			);
+			engine.dispatch(researchWorkflowTarget(), {
+				type: "effect.result",
+				effectId: setup.id,
+				lease: requireDefined(setup.lease, "setup lease"),
+				outcome: "complete",
+				data: { workspace: "research-workspace" },
+			});
+			let view = engine.status(researchWorkflowTarget(), "research-lifecycle");
+			const researcherSummary = requireDefined(view.runs[0], "researcher run");
+			const researcher = engine.getRun(
+				researchWorkflowTarget(),
+				researcherSummary.id,
+			);
+			expect(researcher.allowedOutcomes).toEqual(["blocked", "failed"]);
+			view = engine.dispatch(researchWorkflowTarget(), {
+				type: "developer.action",
+				workflowId: started.snapshot.workflowId,
+				revision: view.revision,
+				actionId: "request-research-wiki",
+			}).view;
+			expect(view.currentStep.id).toBe("core.wiki");
+			expect(view.runs.some((run) => run.role === "wiki")).toBe(true);
+			const wikiSummary = requireDefined(
+				view.runs.find((run) => run.role === "wiki"),
+				"wiki run",
+			);
+			const wiki = engine.getRun(researchWorkflowTarget(), wikiSummary.id);
+			const wikiLaunches = engine.claimEffects(researchWorkflowTarget(), 20);
+			const wikiOutput = requireDefined(wiki.outputPath, "wiki output");
+			fs.mkdirSync(path.dirname(wikiOutput), { recursive: true });
+			fs.writeFileSync(
+				wikiOutput,
+				JSON.stringify({
+					runId: wiki.id,
+					schemaId: wiki.outputSchema?.id,
+					schemaVersion: wiki.outputSchema?.version,
+					payload: { draft: true },
+				}),
+			);
+			view = engine.dispatch(researchWorkflowTarget(), {
+				type: "agent.handoff",
+				runId: wiki.id,
+				generation: wiki.generation,
+				token: requireToken(wikiLaunches, wiki.id),
+				outcome: "complete",
+				artifact: wikiOutput,
+			}).view;
+			expect(view.currentStep.id).toBe("core.wiki-approval");
+			expect(view.availableActions.map((action) => action.id)).toContain(
+				"close-research",
+			);
+			view = engine.dispatch(researchWorkflowTarget(), {
+				type: "developer.action",
+				workflowId: started.snapshot.workflowId,
+				revision: view.revision,
+				actionId: "approve-wiki",
+			}).view;
+			expect(view.currentStep.id).toBe("core.closed");
+			expect(view.effects.some((effect) => effect.kind === "wiki.verify")).toBe(
+				true,
+			);
+		} finally {
+			if (previousWikiRoot === undefined) delete process.env.HERDR_WIKI_DIR;
+			else process.env.HERDR_WIKI_DIR = previousWikiRoot;
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
 	test("change identifiers are bounded before paths are derived", () => {
 		expect(validateChangeId("safe-change")).toBe("safe-change");
 		for (const value of ["../escape", "a/b", "UPPER", "", `a${"b".repeat(80)}`])

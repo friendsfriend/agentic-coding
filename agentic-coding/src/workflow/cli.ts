@@ -20,6 +20,7 @@ import {
 } from "./effect-runner.ts";
 import { loadConfig } from "./effects.ts";
 import {
+	enforceResearchReadOnlyRouting,
 	parseAgentsConfig,
 	preflightProfile,
 	resolvePreset,
@@ -28,7 +29,10 @@ import {
 	validatePresetCoverage,
 } from "./profiles.ts";
 import {
+	isResearchWorkflowTarget,
+	isWikiWorkflowTarget,
 	QUESTION_WAIT_MS,
+	researchWorkflowTarget,
 	validateChangeId,
 	WorkflowEngine,
 	wikiWorkflowDataRoot,
@@ -59,7 +63,7 @@ export const SUBCOMMANDS: readonly string[] = [
 	"wiki",
 ] as const;
 export const REQUIRED_FLAGS: Record<string, string[]> = {
-	start: ["repo", "change", "mode"],
+	start: ["change"],
 	status: ["repo", "change"],
 	action: ["repo", "change", "revision"],
 	repair: ["repo", "change", "revision", "step"],
@@ -457,7 +461,7 @@ function resolveHandoffIdentity(
 			throw new Error("invalid or inactive run capability");
 		const currentSnapshot = workflowEngine.getSnapshot(repo, workflowId);
 		const envFile = path.join(
-			repo === wikiWorkflowTarget()
+			isWikiWorkflowTarget(repo) || isResearchWorkflowTarget(repo)
 				? path.join(wikiWorkflowDataRoot(), currentSnapshot.metadata.changeId)
 				: path.join(repo, ".herdr-workflow"),
 			"runtime-bin",
@@ -588,7 +592,7 @@ const FLAG_SCHEMA: Record<
 			"generated-by",
 			"verified",
 		],
-		booleans: ["json"],
+		booleans: ["json", "confirm"],
 		positionals: [0, 100],
 	},
 };
@@ -633,13 +637,14 @@ function validateArgs(command: string, argv: string[]): void {
 function help(command?: string): void {
 	if (!command) {
 		console.log(
-			"Usage: agentic-coding workflow <command> [flags]\n\nCommands:\n  start            Start pinned workflow definition\n  status           Print validated workflow view\n  action           Dispatch revision-bound engine action\n  handoff          Submit run-bound agent outcome\n  question         Ask the developer a bounded question\n  repair           Repair to compatible step, retriggers phase\n  repin            Re-pin to current definition digest\n  projects         List configured projects\n  config           Print resolved configuration\n  agent-extension  Manage Pi agent extensions\n  wiki             Read/update OKF wiki; only the managed wiki role may write drafts; archive verifies",
+			"Usage: agentic-coding workflow <command> [flags]\n\nCommands:\n  start            Start pinned workflow definition\n  status           Print validated workflow view\n  action           Dispatch revision-bound engine action (including close-research)\n  handoff          Submit run-bound agent outcome\n  question         Ask the developer a bounded question\n  repair           Repair to compatible step, retriggers phase\n  repin            Re-pin to current definition digest\n  projects         List configured projects\n  config           Print resolved configuration\n  agent-extension  Manage Pi agent extensions\n  wiki             Read/update OKF wiki; only the managed wiki role may write drafts; archive verifies",
 		);
 		return;
 	}
 	const usage: Record<string, string> = {
 		start:
-			"start --repo PATH --change ID --mode worktree|checkout [--workflow standard|standard-propose|direct-apply|no-openspec|plan-fusion|fusion-propose|wiki-only] [--fusion-profiles NAME,NAME,...] [--task TEXT] [--ticket ID] [--preset NAME]",
+			"start [--repo PATH] --change ID [--mode worktree|checkout] [--workflow standard|standard-propose|direct-apply|no-openspec|plan-fusion|fusion-propose|wiki-only|research] [--fusion-profiles NAME,NAME,...] [--task TEXT] [--ticket ID] [--preset NAME]",
+
 		status: "status --repo PATH --change ID",
 		action:
 			"action ACTION_ID --repo PATH --change ID --revision N [--input JSON_OR_PATH]",
@@ -769,6 +774,15 @@ export function validateStart(
 	workflow: string,
 	task?: string,
 ): void {
+	if (workflow === "research") {
+		if (!task?.trim())
+			throw new Error("research workflow requires non-empty --task");
+		if (repo) {
+			const resolved = fs.realpathSync(path.resolve(repo));
+			runGit(resolved, "rev-parse", "--show-toplevel");
+		}
+		return;
+	}
 	const dirty = runGit(repo, "status", "--porcelain");
 	const proposal = ["standard-propose", "fusion-propose"].includes(workflow);
 	if (workflow === "wiki-only") {
@@ -900,9 +914,11 @@ export function rolesForDefinition(
 										)
 									: stepId === "core.wiki"
 										? ["wiki"]
-										: stepId === "core.archive"
-											? ["archive"]
-											: [];
+										: stepId === "core.research"
+											? ["researcher"]
+											: stepId === "core.archive"
+												? ["archive"]
+												: [];
 	}
 	return roles;
 }
@@ -919,7 +935,9 @@ function wikiRole(): string | undefined {
 function managedWorkflowTarget(fallback = process.cwd()): string {
 	return process.env.HERDR_WORKFLOW_TARGET === wikiWorkflowTarget()
 		? wikiWorkflowTarget()
-		: fallback;
+		: process.env.HERDR_WORKFLOW_TARGET === researchWorkflowTarget()
+			? researchWorkflowTarget()
+			: fallback;
 }
 function managedAgent(): boolean {
 	try {
@@ -939,12 +957,13 @@ function authorizeWikiWriter(): ReturnType<WorkflowEngine["getSnapshot"]> {
 	const stepId = process.env.HERDR_STEP_ID;
 	const role = process.env.HERDR_ROLE;
 	const token = process.env.HERDR_RUN_TOKEN;
-	if (!workflowId || stepId !== "core.wiki" || role !== "wiki" || !token)
-		throw new Error("wiki write requires an authenticated core.wiki run");
+	if (!workflowId || !token || !(stepId === "core.wiki" && role === "wiki"))
+		throw new Error("wiki write requires an authenticated managed wiki run");
 	const workflowEngine = engine();
 	const target =
-		process.env.HERDR_WORKFLOW_TARGET === wikiWorkflowTarget()
-			? wikiWorkflowTarget()
+		process.env.HERDR_WORKFLOW_TARGET === wikiWorkflowTarget() ||
+		process.env.HERDR_WORKFLOW_TARGET === researchWorkflowTarget()
+			? process.env.HERDR_WORKFLOW_TARGET
 			: process.cwd();
 	workflowEngine.authorizeAgentCapability(
 		target,
@@ -954,12 +973,74 @@ function authorizeWikiWriter(): ReturnType<WorkflowEngine["getSnapshot"]> {
 		token,
 	);
 	const snapshot = workflowEngine.getSnapshot(target, workflowId);
+	if (
+		snapshot.definition.id !== "research" &&
+		snapshot.definition.id !== "wiki-only" &&
+		snapshot.definition.id !== "wiki-comment-review"
+	)
+		throw new Error("wiki writes require a documentation workflow stage");
 	const pinnedRoot = path.resolve(snapshot.metadata.wikiRoot ?? wikiRoot(true));
 	if (!samePath(wikiRoot(), pinnedRoot))
 		throw new Error(
 			"wiki write destination does not match the pinned workflow wiki root",
 		);
 	return snapshot;
+}
+function safeWikiBodyFile(
+	snapshot: ReturnType<WorkflowEngine["getSnapshot"]> | undefined,
+	value: string,
+): string {
+	if (!snapshot) return value;
+	const file = fs.realpathSync(path.resolve(value));
+	const roots = [
+		path.join(
+			snapshot.metadata.worktree,
+			".herdr-workflow",
+			snapshot.metadata.changeId,
+			"runs",
+		),
+		wikiRoot(true),
+	];
+	const operational = [
+		path.join(snapshot.metadata.worktree, "runtime-bin"),
+		path.join(snapshot.metadata.worktree, "runtime-config"),
+		path.join(snapshot.metadata.worktree, ".herdr-workflow", "herdr.db"),
+	];
+	const evidenceFiles = snapshot.evidence.flatMap((item) => {
+		try {
+			return [fs.realpathSync(item.path)];
+		} catch {
+			return [];
+		}
+	});
+	if (
+		operational.some(
+			(root) => file === root || file.startsWith(`${root}${path.sep}`),
+		)
+	)
+		throw new Error("wiki body file cannot read workflow operational data");
+	const allowed =
+		evidenceFiles.includes(file) ||
+		roots.some((root) => {
+			try {
+				const resolvedRoot = fs.realpathSync(root);
+				return (
+					file === resolvedRoot || file.startsWith(`${resolvedRoot}${path.sep}`)
+				);
+			} catch {
+				return false;
+			}
+		});
+	if (!allowed)
+		throw new Error(
+			"wiki body file must stay inside approved workflow or evidence roots",
+		);
+	const stat = fs.statSync(file);
+	if (!stat.isFile() || stat.size > 512 * 1024)
+		throw new Error(
+			"wiki body file must be a regular file no larger than 512 KiB",
+		);
+	return file;
 }
 function wikiActor(role: string | undefined): string {
 	return role
@@ -1068,6 +1149,9 @@ async function runWiki(rest: string[]): Promise<void> {
 			(value): value is string => Boolean(value),
 		);
 		const bodyFile = flag(rest, "body-file");
+		const safeBodyFile = bodyFile
+			? safeWikiBodyFile(authorizedSnapshot, bodyFile)
+			: undefined;
 		wikiOutput(
 			rest,
 			writeConcept(concept, {
@@ -1089,7 +1173,9 @@ async function runWiki(rest: string[]): Promise<void> {
 				...(flag(rest, "stale-after")
 					? { stale_after: flag(rest, "stale-after") }
 					: {}),
-				...(bodyFile ? { body: fs.readFileSync(bodyFile, "utf8") } : {}),
+				...(safeBodyFile
+					? { body: fs.readFileSync(safeBodyFile, "utf8") }
+					: {}),
 				generatedBy: requestedActor ?? wikiActor(role),
 				...(requestedVerified
 					? {
@@ -1178,10 +1264,15 @@ export async function run(argv: string[]): Promise<void> {
 		return;
 	}
 	if (command === "start") {
-		const repo = fs.realpathSync(path.resolve(requireFlag(rest, "repo")));
-		const change = validateChangeId(requireFlag(rest, "change"));
-		const mode = parseMode(flag(rest, "mode"));
 		const workflow = flag(rest, "workflow") ?? "standard";
+		const research = workflow === "research";
+		const repo = research
+			? flag(rest, "repo")
+				? fs.realpathSync(path.resolve(requireFlag(rest, "repo")))
+				: ""
+			: fs.realpathSync(path.resolve(requireFlag(rest, "repo")));
+		const change = validateChangeId(requireFlag(rest, "change"));
+		const mode = research ? undefined : parseMode(flag(rest, "mode"));
 		const proposal = ["standard-propose", "fusion-propose"].includes(workflow);
 		const sameCheckout = proposal || workflow === "wiki-only";
 		if (
@@ -1193,10 +1284,11 @@ export async function run(argv: string[]): Promise<void> {
 				"plan-fusion",
 				"fusion-propose",
 				"wiki-only",
+				"research",
 			].includes(workflow)
 		)
 			throw new Error(`unknown workflow definition: ${workflow}`);
-		if (sameCheckout && mode !== "checkout")
+		if (!research && sameCheckout && mode !== "checkout")
 			throw new Error("repository-backed workflows require --mode checkout");
 		const fusionProfiles =
 			workflow === "plan-fusion" || workflow === "fusion-propose"
@@ -1220,7 +1312,7 @@ export async function run(argv: string[]): Promise<void> {
 		const preset = presetName ? resolvePreset(agents, presetName) : undefined;
 		if (preset)
 			validatePresetCoverage(preset, definition, Object.keys(roles), agents);
-		const routing = resolveRouting(definition, roles, agents, preset);
+		let routing = resolveRouting(definition, roles, agents, preset);
 		if (fusionProfiles) {
 			// Explicit per-task model list overrides preset/config resolution for
 			// the planner fan-out; position i binds to role planner-i.
@@ -1235,31 +1327,37 @@ export async function run(argv: string[]): Promise<void> {
 				route.profile = resolveProfile(name, agents);
 			}
 		}
+		if (research) routing = enforceResearchReadOnlyRouting(routing);
 		for (const route of routing.routes)
 			preflightProfile(route.profile, registry.step(route.stepId).requirements);
 		const baseBranch = config.workflow.base_branch;
-		const baseCommit = sameCheckout
-			? runGit(repo, "rev-parse", "HEAD")
-			: runGit(repo, "rev-parse", `${baseBranch}^{commit}`);
-		if (!sameCheckout)
+		const baseCommit = research
+			? ""
+			: sameCheckout
+				? runGit(repo, "rev-parse", "HEAD")
+				: runGit(repo, "rev-parse", `${baseBranch}^{commit}`);
+		if (!research && !sameCheckout)
 			runGit(repo, "remote", "get-url", config.workflow.remote);
-		const branch = sameCheckout
-			? runGit(repo, "branch", "--show-current")
-			: `${config.workflow.branch_prefix}${change}`;
-		if (sameCheckout && !branch)
+		const branch = research
+			? ""
+			: sameCheckout
+				? runGit(repo, "branch", "--show-current")
+				: `${config.workflow.branch_prefix}${change}`;
+		if (!research && sameCheckout && !branch)
 			throw new Error(
 				"repository-backed workflows require a named current branch",
 			);
 		workflowEngine.start({
-			repo,
-			mode,
+			repo: research ? researchWorkflowTarget() : repo,
+			...(research && repo ? { repositoryContext: repo } : {}),
+			...(mode ? { mode } : {}),
 			sameCheckout,
 			changeId: change,
 			definitionId: workflow,
 			definitionVersion,
 			metadata: {
 				branch,
-				baseBranch,
+				baseBranch: research ? "" : baseBranch,
 				baseCommit,
 				...(task?.trim() ? { task: task.trim() } : {}),
 				...(flag(rest, "ticket")
@@ -1268,8 +1366,9 @@ export async function run(argv: string[]): Promise<void> {
 			},
 			routing,
 		});
-		await drainEffects(workflowEngine, repo);
-		console.log(JSON.stringify(workflowEngine.status(repo, change), null, 2));
+		const target = research ? researchWorkflowTarget() : repo;
+		await drainEffects(workflowEngine, target);
+		console.log(JSON.stringify(workflowEngine.status(target, change), null, 2));
 		return;
 	}
 	const repo = flag(rest, "repo") ?? process.cwd();

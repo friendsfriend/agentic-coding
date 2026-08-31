@@ -2,20 +2,31 @@
 
 ## Purpose
 Provides one validated, transactional authority for workflow commands, state, audit events, and recoverable external effects so crashes and concurrency cannot create impossible lifecycle state.
-
 ## Requirements
-
 ### Requirement: Unified command processing
-Every workflow mutation SHALL pass through one command-processing contract that validates command shape, actor authority, required developer revision or active run generation, current workflow state, step legality, and resulting state before commit.
+Every workflow mutation SHALL pass through one command-processing contract that validates command shape, actor authority, required developer revision or active run generation, current workflow state, step legality, and resulting state before commit. The contract SHALL recognize developer-only `request-research-wiki` at `core.research` and `close-research` at any active research, wiki drafting, or wiki approval step in the pinned `research` definition.
 
 #### Scenario: Valid command executes
-- **WHEN** authorized actor submits command valid for current step and revision
-- **THEN** engine SHALL reduce command against current snapshot
-- **AND** engine SHALL validate resulting snapshot before committing it
+- **WHEN** an authorized actor submits a command valid for the current step and revision
+- **THEN** the engine SHALL reduce the command against the current snapshot
+- **AND** the engine SHALL validate the resulting snapshot before committing it
+
+#### Scenario: Research wiki request executes transactionally
+- **WHEN** the developer submits a valid `request-research-wiki` action against an active research workflow revision
+- **THEN** the engine SHALL expire the researcher run, enqueue the required stop effect, transition to `core.wiki`, and commit the state/event/effects atomically
+
+#### Scenario: Research close executes transactionally
+- **WHEN** the developer submits a valid `close-research` action against an active research workflow revision at any non-terminal step
+- **THEN** the engine SHALL expire active research runs, enqueue required stop effects, transition to `core.closed`, and commit the state/event/effects atomically
+
+#### Scenario: Research close does not require an agent handoff
+- **WHEN** the researcher runtime is unavailable or has settled without handoff
+- **THEN** a valid `close-research` action SHALL still be able to close the workflow
+- **AND** the engine SHALL not infer closure from the runtime state itself
 
 #### Scenario: Command is invalid
-- **WHEN** command has invalid payload, stale revision, unauthorized actor, expired run, illegal outcome, or is unavailable in current step
-- **THEN** engine SHALL reject command before mutation
+- **WHEN** a command has invalid payload, stale revision, unauthorized actor, expired run, illegal outcome, or is unavailable in the current step
+- **THEN** the engine SHALL reject the command before mutation
 - **AND** persisted snapshot, audit history, and pending effects SHALL remain unchanged
 
 ### Requirement: Optimistic concurrency
@@ -37,17 +48,22 @@ Persisted workflows SHALL carry monotonically increasing revision used for devel
 - **AND** successor runs or effects SHALL NOT be created twice
 
 ### Requirement: Atomic state, event, and outbox commit
-A successful command SHALL atomically persist new validated snapshot, audit event, and requested external effects before those effects execute.
+A successful command SHALL atomically persist the new validated snapshot, audit event, and requested external effects before those effects execute. This SHALL include direct research closure and expiration of its active researcher ownership.
 
 #### Scenario: Transaction fails
-- **WHEN** snapshot, event, or outbox write fails
-- **THEN** none of three SHALL commit
-- **AND** no external effect SHALL start for failed command
+- **WHEN** the snapshot, event, or outbox write fails
+- **THEN** none of the three SHALL commit
+- **AND** no external effect SHALL start for the failed command
+
+#### Scenario: Research close cannot partially apply
+- **WHEN** one stop-effect enqueue or active-run expiration fails while processing `close-research`
+- **THEN** the workflow SHALL not commit a terminal snapshot with only some researcher ownership removed
+- **AND** the transaction SHALL roll back for retry or operator attention
 
 #### Scenario: Process exits after commit
-- **WHEN** command commits but process exits before requested effect completes
-- **THEN** workflow SHALL expose pending effect rather than falsely report effect complete
-- **AND** later engine execution SHALL resume pending effect
+- **WHEN** a command commits but the process exits before a requested effect completes
+- **THEN** the workflow SHALL expose the pending effect rather than falsely report effect completion
+- **AND** later engine execution SHALL resume the pending effect
 
 ### Requirement: Idempotent external effects
 Every external effect SHALL have stable idempotency key, durable status, bounded attempts, and handler that can determine whether requested work already completed.
@@ -119,3 +135,4 @@ Agent-produced output SHALL be accepted only from declared output path for activ
 - **WHEN** handoff references another run's artifact, path outside assigned workflow area, oversized content, or schema mismatch
 - **THEN** handoff SHALL fail without consuming run capability
 - **AND** engine SHALL NOT infer outcome from file existence alone
+

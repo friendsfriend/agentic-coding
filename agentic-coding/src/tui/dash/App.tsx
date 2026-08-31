@@ -19,6 +19,7 @@ import {
 	Show,
 } from "solid-js";
 import { formatDuration } from "../../workflow/format";
+import { wikiWorkflowDataRoot } from "../../workflow/runtime";
 import { copyToClipboard } from "./clipboard";
 import {
 	type AgentUsageMetrics,
@@ -1222,6 +1223,12 @@ export function App(props: {
 			command: action.id,
 			confirmation: action.confirmation,
 		})) ?? [];
+	const completedInputHint = () => {
+		const action = completedActions()[completedSelection()];
+		if (action?.command === "research-follow-up")
+			return "type follow-up question";
+		return action?.confirmation === "reason" ? "type reason" : "Enter to run";
+	};
 	const actionSignature = createMemo(() =>
 		completedActions()
 			.map((action) => `${action.command}:${action.confirmation}`)
@@ -1253,7 +1260,10 @@ export function App(props: {
 			openDeveloperReview();
 			return true;
 		}
-		if (action.key === "plan-review" || action.key === "wiki-review") {
+		if (
+			(action.key === "plan-review" || action.key === "wiki-review") &&
+			data().state.definition?.id !== "research"
+		) {
 			// Review gates open their popup directly; no empty generic selection list.
 			promptedUserActionKey = action.key;
 			openPlanReview();
@@ -1271,6 +1281,12 @@ export function App(props: {
 		if (item.kind === "dismiss") {
 			setUserActionOpen(false);
 			props.keymap.setData("modal.active", "none");
+			return;
+		}
+		if (item.kind === "review") {
+			setUserActionOpen(false);
+			props.keymap.setData("modal.active", "none");
+			openPlanReview();
 			return;
 		}
 		if (item.kind === "artifact") {
@@ -1329,10 +1345,12 @@ export function App(props: {
 		const dirs =
 			props.profile === "test"
 				? []
-				: [
-						join(props.repo, ".herdr-workflow", props.change),
-						join(data().state.worktree, ".herdr-workflow", props.change),
-					];
+				: data().state.definition?.id === "research"
+					? [join(wikiWorkflowDataRoot(), props.change)]
+					: [
+							join(props.repo, ".herdr-workflow", props.change),
+							join(data().state.worktree, ".herdr-workflow", props.change),
+						];
 		const dispose = watchDirectories(dirs, refresh);
 		const safety = setInterval(refresh, 30000);
 		onCleanup(() => {
@@ -1867,7 +1885,11 @@ export function App(props: {
 								props.change,
 								data().state.revision,
 								action.confirmation === "reason"
-									? JSON.stringify({ reason: actionReason().trim() })
+									? JSON.stringify(
+											action.command === "research-follow-up"
+												? { message: actionReason().trim() }
+												: { reason: actionReason().trim() },
+										)
 									: undefined,
 							)
 								.then(setMessage)
@@ -2418,7 +2440,10 @@ export function App(props: {
 				openDeveloperReview();
 				return;
 			}
-			if (action.key === "plan-review" || action.key === "wiki-review") {
+			if (
+				(action.key === "plan-review" || action.key === "wiki-review") &&
+				data().state.definition?.id !== "research"
+			) {
 				// Auto-open trigger-only review actions directly, not the generic
 				// ListViewModal (there are no selectable items).
 				openPlanReview();
@@ -2870,13 +2895,20 @@ export function App(props: {
 			</Show>
 			<Show when={completedPicker()}>
 				<ListViewModal
-					title={`Choose workflow action · ${actionReason() || (completedActions()[completedSelection()]?.confirmation === "reason" ? "type reason" : "Enter to run")}`}
+					title={`Choose workflow action · ${actionReason() || completedInputHint()}`}
 					fieldLabel="Action"
 					items={completedActions().map((action) => action.label)}
 					selectedIndex={completedSelection()}
 					help={[
 						{ key: "j/k", action: "Navigate" },
-						{ key: "type", action: "Reason when required" },
+						{
+							key: "type",
+							action:
+								completedActions()[completedSelection()]?.command ===
+								"research-follow-up"
+									? "Follow-up question"
+									: "Reason when required",
+						},
 						{ key: "Enter", action: "Run" },
 						{ key: "Esc", action: "Cancel" },
 					]}

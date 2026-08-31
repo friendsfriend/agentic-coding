@@ -754,21 +754,29 @@ export function parseSnapshot(value: unknown): WorkflowSnapshot {
 		},
 		metadata: {
 			repository:
-				definition.id === "wiki-comment-review" && metadata.repository === ""
+				(definition.id === "wiki-comment-review" ||
+					definition.id === "research") &&
+				metadata.repository === ""
 					? ""
 					: path.resolve(text(metadata.repository, "$.metadata.repository")),
 			worktree: path.resolve(text(metadata.worktree, "$.metadata.worktree")),
 			changeId: text(metadata.changeId, "$.metadata.changeId"),
 			branch:
-				definition.id === "wiki-comment-review" && metadata.branch === ""
+				(definition.id === "wiki-comment-review" ||
+					definition.id === "research") &&
+				metadata.branch === ""
 					? ""
 					: text(metadata.branch, "$.metadata.branch"),
 			baseBranch:
-				definition.id === "wiki-comment-review" && metadata.baseBranch === ""
+				(definition.id === "wiki-comment-review" ||
+					definition.id === "research") &&
+				metadata.baseBranch === ""
 					? ""
 					: text(metadata.baseBranch, "$.metadata.baseBranch"),
 			baseCommit:
-				definition.id === "wiki-comment-review" && metadata.baseCommit === ""
+				(definition.id === "wiki-comment-review" ||
+					definition.id === "research") &&
+				metadata.baseCommit === ""
 					? ""
 					: text(metadata.baseCommit, "$.metadata.baseCommit"),
 			...(metadata.workspace === undefined

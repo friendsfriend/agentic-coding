@@ -638,7 +638,8 @@ function ensureSnapshotParent(root: string, file: string): void {
 	}
 }
 function workflowSnapshotBase(): string {
-	return process.env.HERDR_WORKFLOW_TARGET === "wiki://centralized"
+	return process.env.HERDR_WORKFLOW_TARGET === "wiki://centralized" ||
+		process.env.HERDR_WORKFLOW_TARGET === "research://standalone"
 		? path.join(path.dirname(wikiRoot()), ".agentic-coding-workflow")
 		: process.cwd();
 }

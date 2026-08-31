@@ -21,6 +21,7 @@ import {
 import { loadConfig } from "../../workflow/effects.ts";
 import {
 	type AgentsConfig,
+	enforceResearchReadOnlyRouting,
 	parseAgentsConfig,
 	preflightProfile,
 	type RoutingPreset,
@@ -31,6 +32,7 @@ import {
 import type { WorkflowRegistry } from "../../workflow/registry.ts";
 import {
 	canonicalStorePath,
+	researchWorkflowTarget,
 	validateChangeId,
 	wikiWorkflowTarget,
 } from "../../workflow/runtime.ts";
@@ -139,13 +141,15 @@ export function startArgs(input: {
 		"fusion-propose",
 		"wiki-only",
 	].includes(definitionId);
+	const research = definitionId === "research";
 	return {
-		repo: input.repo,
+		repo: research ? researchWorkflowTarget() : input.repo,
+		...(research && input.repo ? { repositoryContext: input.repo } : {}),
 		changeId: validateChangeId(input.change),
 		definitionId,
 		task: input.task || undefined,
 		ticket: input.ticket || undefined,
-		mode: sameCheckout ? "checkout" : input.mode,
+		...(research ? {} : { mode: sameCheckout ? "checkout" : input.mode }),
 		...(sameCheckout ? { sameCheckout: true } : {}),
 		...(input.preset && input.preset !== PRESET_CONFIG_DEFAULTS
 			? { preset: input.preset }
@@ -240,7 +244,14 @@ export async function startWorkflowInProcess(
 	input: Parameters<typeof startArgs>[0],
 ): Promise<string> {
 	const args = startArgs(input);
-	validateStart(args.repo, args.changeId, args.definitionId, args.task);
+	validateStart(
+		args.definitionId === "research"
+			? (args.repositoryContext ?? "")
+			: args.repo,
+		args.changeId,
+		args.definitionId,
+		args.task,
+	);
 	const config = loadConfig();
 	const definitionVersion = definitionVersionForPolicy(
 		config.workflow.max_verification_rounds,
@@ -251,39 +262,53 @@ export async function startWorkflowInProcess(
 	);
 	const definition = registry.definition(args.definitionId, definitionVersion);
 	const agents = parseAgentsConfig(config.agents, config);
-	const routing = startRouting(
+	let routing = startRouting(
 		args.definitionId,
 		args.preset,
 		definition,
 		registry,
 		agents,
 	);
+	if (args.definitionId === "research")
+		routing = enforceResearchReadOnlyRouting(routing);
 	for (const route of routing.routes)
 		preflightProfile(route.profile, registry.step(route.stepId).requirements);
+	const research = args.definitionId === "research";
 	const sameCheckout = args.sameCheckout === true;
-	const baseCommit = sameCheckout
-		? runGit(args.repo, "rev-parse", "HEAD")
-		: runGit(args.repo, "rev-parse", `${config.workflow.base_branch}^{commit}`);
-	if (!sameCheckout)
+	const baseCommit = research
+		? ""
+		: sameCheckout
+			? runGit(args.repo, "rev-parse", "HEAD")
+			: runGit(
+					args.repo,
+					"rev-parse",
+					`${config.workflow.base_branch}^{commit}`,
+				);
+	if (!research && !sameCheckout)
 		runGit(args.repo, "remote", "get-url", config.workflow.remote);
-	const branch = sameCheckout
-		? runGit(args.repo, "branch", "--show-current")
-		: `${config.workflow.branch_prefix}${args.changeId}`;
-	if (sameCheckout && !branch)
+	const branch = research
+		? ""
+		: sameCheckout
+			? runGit(args.repo, "branch", "--show-current")
+			: `${config.workflow.branch_prefix}${args.changeId}`;
+	if (!research && sameCheckout && !branch)
 		throw new Error(
 			"repository-backed workflows require a named current branch",
 		);
 	const engine = workflowEngineFactory();
 	engine.start({
 		repo: args.repo,
-		mode: args.mode as "worktree" | "checkout",
+		...(args.repositoryContext
+			? { repositoryContext: args.repositoryContext }
+			: {}),
+		...(args.mode ? { mode: args.mode as "worktree" | "checkout" } : {}),
 		sameCheckout: args.sameCheckout,
 		changeId: args.changeId,
 		definitionId: args.definitionId,
 		definitionVersion,
 		metadata: {
 			branch,
-			baseBranch: config.workflow.base_branch,
+			baseBranch: research ? "" : config.workflow.base_branch,
 			baseCommit,
 			...(args.task ? { task: args.task } : {}),
 			...(args.ticket ? { ticket: args.ticket } : {}),
