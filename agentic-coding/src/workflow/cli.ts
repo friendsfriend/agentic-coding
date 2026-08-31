@@ -31,6 +31,8 @@ import {
 	QUESTION_WAIT_MS,
 	validateChangeId,
 	WorkflowEngine,
+	wikiWorkflowDataRoot,
+	wikiWorkflowTarget,
 } from "./runtime.ts";
 import {
 	appendLog,
@@ -453,9 +455,11 @@ function resolveHandoffIdentity(
 			callerRun.handle.paneId !== current.handle.paneId
 		)
 			throw new Error("invalid or inactive run capability");
+		const currentSnapshot = workflowEngine.getSnapshot(repo, workflowId);
 		const envFile = path.join(
-			repo,
-			".herdr-workflow",
+			repo === wikiWorkflowTarget()
+				? path.join(wikiWorkflowDataRoot(), currentSnapshot.metadata.changeId)
+				: path.join(repo, ".herdr-workflow"),
 			"runtime-bin",
 			current.id,
 			"run.env",
@@ -912,6 +916,11 @@ function samePath(left: string, right: string): boolean {
 function wikiRole(): string | undefined {
 	return process.env.HERDR_ROLE || undefined;
 }
+function managedWorkflowTarget(fallback = process.cwd()): string {
+	return process.env.HERDR_WORKFLOW_TARGET === wikiWorkflowTarget()
+		? wikiWorkflowTarget()
+		: fallback;
+}
 function managedAgent(): boolean {
 	try {
 		const environment = callerEnvironment();
@@ -925,7 +934,7 @@ function managedAgent(): boolean {
 		return true;
 	}
 }
-function authorizeWikiWriter(): void {
+function authorizeWikiWriter(): ReturnType<WorkflowEngine["getSnapshot"]> {
 	const workflowId = process.env.HERDR_WORKFLOW_ID;
 	const stepId = process.env.HERDR_STEP_ID;
 	const role = process.env.HERDR_ROLE;
@@ -933,19 +942,24 @@ function authorizeWikiWriter(): void {
 	if (!workflowId || stepId !== "core.wiki" || role !== "wiki" || !token)
 		throw new Error("wiki write requires an authenticated core.wiki run");
 	const workflowEngine = engine();
+	const target =
+		process.env.HERDR_WORKFLOW_TARGET === wikiWorkflowTarget()
+			? wikiWorkflowTarget()
+			: process.cwd();
 	workflowEngine.authorizeAgentCapability(
-		process.cwd(),
+		target,
 		workflowId,
 		stepId,
 		role,
 		token,
 	);
-	const snapshot = workflowEngine.getSnapshot(process.cwd(), workflowId);
+	const snapshot = workflowEngine.getSnapshot(target, workflowId);
 	const pinnedRoot = path.resolve(snapshot.metadata.wikiRoot ?? wikiRoot(true));
 	if (!samePath(wikiRoot(), pinnedRoot))
 		throw new Error(
 			"wiki write destination does not match the pinned workflow wiki root",
 		);
+	return snapshot;
 }
 function wikiActor(role: string | undefined): string {
 	return role
@@ -1007,7 +1021,8 @@ async function runWiki(rest: string[]): Promise<void> {
 			throw new Error("wiki write requires an authenticated workflow role");
 		if (role && role !== "wiki")
 			throw new Error(`wiki write is not permitted for role ${role}`);
-		if (role === "wiki") authorizeWikiWriter();
+		const authorizedSnapshot =
+			role === "wiki" ? authorizeWikiWriter() : undefined;
 		const concept = flag(rest, "path");
 		const type = flag(rest, "type");
 		const title = flag(rest, "title");
@@ -1016,6 +1031,24 @@ async function runWiki(rest: string[]): Promise<void> {
 			throw new Error(
 				"wiki write requires --path, --type, --title, and --description; usage: wiki write --path ID --type T --title T --description D",
 			);
+		if (authorizedSnapshot?.definition.id === "wiki-comment-review") {
+			const context = authorizedSnapshot.step.context;
+			const comments =
+				context && typeof context === "object" && !Array.isArray(context)
+					? (context as { comments?: unknown }).comments
+					: undefined;
+			const permitted = new Set(
+				Array.isArray(comments)
+					? comments.flatMap((item) =>
+							item && typeof item === "object" && "conceptId" in item
+								? [String((item as { conceptId: unknown }).conceptId)]
+								: [],
+						)
+					: [],
+			);
+			if (!permitted.has(concept.replaceAll("\\", "/").replace(/\.md$/, "")))
+				throw new Error("wiki write is outside the submitted comment scope");
+		}
 		const requestedStatus = flag(rest, "status");
 		const requestedVerified = flag(rest, "verified");
 		const requestedActor = flag(rest, "generated-by");
@@ -1294,7 +1327,7 @@ export async function run(argv: string[]): Promise<void> {
 		console.log(
 			await runDeveloperQuestion(
 				workflowEngine,
-				process.cwd(),
+				managedWorkflowTarget(),
 				description,
 				options,
 				timeoutMs,
@@ -1309,9 +1342,10 @@ export async function run(argv: string[]): Promise<void> {
 			!["complete", "blocked", "failed"].includes(outcome)
 		)
 			throw new Error("handoff: invalid --outcome");
-		const identity = resolveHandoffIdentity(workflowEngine, process.cwd());
+		const target = managedWorkflowTarget();
+		const identity = resolveHandoffIdentity(workflowEngine, target);
 		const artifact = identity.outputPath ?? flag(rest, "artifact");
-		const result = workflowEngine.dispatch(process.cwd(), {
+		const result = workflowEngine.dispatch(target, {
 			type: "agent.handoff",
 			runId: identity.runId,
 			generation: identity.generation,
@@ -1321,11 +1355,11 @@ export async function run(argv: string[]): Promise<void> {
 			...(flag(rest, "message") ? { message: flag(rest, "message") } : {}),
 		});
 		if (!rest.includes("--no-drain"))
-			await drainEffects(workflowEngine, process.cwd());
+			await drainEffects(workflowEngine, target);
 		else {
 			const entry = Bun.main.startsWith("$bunfs") ? undefined : Bun.main;
 			const drain = Bun.spawn(
-				detachedDrainArgv(entry, process.cwd(), result.view.changeId),
+				detachedDrainArgv(entry, target, result.view.changeId),
 				{
 					detached: true,
 					stdio: ["ignore", "ignore", "ignore"],
@@ -1344,7 +1378,7 @@ export async function run(argv: string[]): Promise<void> {
 		}
 		console.log(
 			JSON.stringify(
-				workflowEngine.status(process.cwd(), result.view.changeId),
+				workflowEngine.status(target, result.view.changeId),
 				null,
 				2,
 			),

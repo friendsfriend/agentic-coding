@@ -12,12 +12,15 @@ import {
 	onCleanup,
 	onMount,
 } from "solid-js";
+import { wikiWorkflowDataRoot } from "../../../workflow/runtime";
+import type { WikiReviewComment } from "../../../workflow/wiki";
 import { App as DashApp } from "../../dash/App";
 import {
 	discoverProjects,
 	listWorkflows,
 	type WorkflowOverview,
 } from "../../dash/data";
+import { startWikiCommentWorkflowInProcess } from "../../dash/engine";
 import { Home as DashHome } from "../../dash/Home";
 import { Header } from "../../dash/ui/Header";
 import { watchDirectories } from "../../dash/watchRefresh";
@@ -49,6 +52,7 @@ import { SpanDetailView } from "../views/SpanDetailView";
 import { TopologyView } from "../views/TopologyView";
 import { TraceListView } from "../views/TraceListView";
 import { TraceTreeView } from "../views/TraceTreeView";
+import { WikiView } from "../views/WikiView";
 import { copyText } from "./clipboard";
 import { createNavigation } from "./navigation";
 import { notify } from "./notifications";
@@ -60,7 +64,7 @@ import {
 	themeNames,
 } from "./theme";
 
-type Tab = "workflow" | "traces" | "metrics" | "logs" | "topology";
+type Tab = "workflow" | "wiki" | "traces" | "metrics" | "logs" | "topology";
 type Workspace = { changeId: string; path: string; spanCount: number };
 
 export interface WorkflowHeaderInfo {
@@ -99,6 +103,10 @@ export function App(props: {
 	// of truth; the dashboard polls, the shell renders). Null in home mode / before data.
 	const [workflowHeader, setWorkflowHeader] =
 		createSignal<WorkflowHeaderInfo | null>(null);
+	// Review comments deliberately live above the conditional tab content so
+	// closing a note or switching tabs cannot discard the in-memory session.
+	const [wikiComments, setWikiComments] = createSignal<WikiReviewComment[]>([]);
+	const [wikiSubmitting, setWikiSubmitting] = createSignal(false);
 
 	// Home mode: the shell owns the workspace list — loaded in the background at
 	// startup and kept fresh, so visiting the Workflow tab never reloads or shows
@@ -123,7 +131,9 @@ export function App(props: {
 	createEffect(() => {
 		if (props.dashboard?.mode !== "home") return;
 		const dirs = homeItems().map((item) =>
-			join(item.state.worktree, ".herdr-workflow", item.state.changeId),
+			item.state.definition?.id === "wiki-comment-review"
+				? join(wikiWorkflowDataRoot(), item.state.changeId)
+				: join(item.state.worktree, ".herdr-workflow", item.state.changeId),
 		);
 		const dispose = watchDirectories(dirs, () => setHomeItems(listWorkflows()));
 		onCleanup(dispose);
@@ -253,6 +263,14 @@ export function App(props: {
 		setSelectedSpan(undefined);
 		nav.popView();
 		refresh();
+	}
+
+	async function finishWikiReview(
+		comments: readonly WikiReviewComment[],
+	): Promise<string> {
+		const message = startWikiCommentWorkflowInProcess(comments);
+		setHomeItems(listWorkflows());
+		return message;
 	}
 
 	function switchTab(tab: Tab) {
@@ -401,20 +419,9 @@ export function App(props: {
 				switchTab(ids[(current + 1) % ids.length] ?? activeTab());
 				return;
 			}
-			if (key === "1") {
-				switchTab("traces");
-				return;
-			}
-			if (key === "2" && !props.tracesOnly) {
-				switchTab("metrics");
-				return;
-			}
-			if (key === "3" && !props.tracesOnly) {
-				switchTab("logs");
-				return;
-			}
-			if (key === "4" && !props.tracesOnly) {
-				switchTab("topology");
+			if (/^[1-9]$/.test(key)) {
+				const selectedTab = ids[Number(key) - 1];
+				if (selectedTab) switchTab(selectedTab);
 				return;
 			}
 			if (tabBack) {
@@ -432,7 +439,7 @@ export function App(props: {
 		}
 
 		// Dashboard keys are handled by its own keymap (runs before this handler).
-		if (activeTab() === "workflow") return;
+		if (activeTab() === "workflow" || activeTab() === "wiki") return;
 
 		// Quit (global)
 		if (key === "q") {
@@ -759,6 +766,7 @@ export function App(props: {
 	renderer.keyInput.on("keypress", handleKey);
 	onCleanup(() => renderer.keyInput.off("keypress", handleKey));
 
+	/** Single source of truth for displayed and selectable tab order. */
 	const tabs = () => {
 		const all: Array<{ id: Tab; label: string; count?: number }> = [];
 		if (props.dashboard)
@@ -766,6 +774,8 @@ export function App(props: {
 				id: "workflow",
 				label: props.dashboard.mode === "home" ? "Workflows" : "Workflow",
 			});
+		if (props.dashboard?.mode === "home")
+			all.push({ id: "wiki", label: "Wiki" });
 		all.push(
 			{ id: "traces", label: "Traces", count: filteredCount() },
 			{ id: "metrics", label: "Metrics", count: metricStore.filteredCount_ },
@@ -777,19 +787,14 @@ export function App(props: {
 			},
 		);
 		return props.tracesOnly
-			? all.filter((tab) => tab.id === "workflow" || tab.id === "traces")
+			? all.filter(
+					(tab) =>
+						tab.id === "workflow" || tab.id === "wiki" || tab.id === "traces",
+				)
 			: all;
 	};
 
-	/** All selectable tabs in display order (workflow first when a dashboard is injected). */
-	const tabIds = () => {
-		const ids: Tab[] = props.dashboard
-			? ["workflow", "traces", "metrics", "logs", "topology"]
-			: ["traces", "metrics", "logs", "topology"];
-		return props.tracesOnly
-			? ids.filter((id) => id === "workflow" || id === "traces")
-			: ids;
-	};
+	const tabIds = () => tabs().map((tab) => tab.id);
 
 	const tabStatusBarKeybinds = () => {
 		switch (activeTab()) {
@@ -811,12 +816,22 @@ export function App(props: {
 							{ key: "r", action: "refresh" },
 							{ key: "q", action: "quit" },
 						];
+			case "wiki":
+				return [
+					{ key: "j/k", action: "select" },
+					{ key: "Enter", action: "open/expand" },
+					{ key: "c", action: "comment" },
+					{ key: "r", action: "refresh" },
+					{ key: "f", action: "finish review" },
+					{ key: `1-${tabIds().length}`, action: "tabs" },
+					{ key: "q", action: "quit" },
+				];
 			case "metrics":
 				return [
 					{ key: "j/k", action: "nav" },
 					{ key: "Enter", action: "detail" },
 					{ key: "Esc", action: "back" },
-					{ key: "1-4", action: "tabs" },
+					{ key: `1-${tabIds().length}`, action: "tabs" },
 					{ key: "q", action: "quit" },
 				];
 			case "logs":
@@ -825,7 +840,7 @@ export function App(props: {
 					{ key: "Enter", action: "detail" },
 					{ key: "/", action: "search" },
 					{ key: "Esc", action: "back" },
-					{ key: "1-4", action: "tabs" },
+					{ key: `1-${tabIds().length}`, action: "tabs" },
 					{ key: "q", action: "quit" },
 				];
 			case "topology":
@@ -833,7 +848,7 @@ export function App(props: {
 					{ key: "j/k", action: "select" },
 					{ key: "Enter", action: "detail" },
 					{ key: "Esc", action: "back" },
-					{ key: "1-4", action: "tabs" },
+					{ key: `1-${tabIds().length}`, action: "tabs" },
 					{ key: "q", action: "quit" },
 				];
 			default:
@@ -842,7 +857,7 @@ export function App(props: {
 					{ key: "Enter", action: "open trace" },
 					{ key: "/", action: "search" },
 					{ key: "Shift+F", action: "filter" },
-					{ key: "1-4", action: "tabs" },
+					{ key: `1-${tabIds().length}`, action: "tabs" },
 					{ key: "q", action: "quit" },
 				];
 		}
@@ -902,7 +917,7 @@ export function App(props: {
 					})()}
 				</box>
 				<box style={{ height: 1 }} />
-				{!props.tracesOnly && (
+				{(!props.tracesOnly || props.dashboard?.mode === "home") && (
 					<TabBar
 						tabs={tabs()}
 						activeId={activeTab()}
@@ -934,6 +949,19 @@ export function App(props: {
 								onHeader={setWorkflowHeader}
 							/>
 						))}
+					{activeTab() === "wiki" && props.dashboard?.mode === "home" && (
+						<WikiView
+							keymap={props.dashboard.keymap}
+							comments={wikiComments()}
+							onAddComment={(comment) =>
+								setWikiComments((comments) => [...comments, comment])
+							}
+							onFinish={finishWikiReview}
+							submitting={wikiSubmitting()}
+							onSubmittingChange={setWikiSubmitting}
+							onClearComments={() => setWikiComments([])}
+						/>
+					)}
 					{activeTab() === "traces" && (
 						<>
 							{nav.view() === "selection" && (
@@ -1057,7 +1085,7 @@ export function App(props: {
 									{ key: "/", action: "search" },
 									{ key: "Shift+F", action: "filter" },
 									{ key: "Shift+O", action: "sort" },
-									{ key: "1-4", action: "tabs" },
+									{ key: `1-${tabIds().length}`, action: "tabs" },
 									{ key: "q", action: "quit" },
 								]
 							: activeTab() === "traces" && nav.view() === "detail"

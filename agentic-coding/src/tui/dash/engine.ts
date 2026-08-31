@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Herdr } from "../../herdr-client.ts";
@@ -31,7 +32,12 @@ import type { WorkflowRegistry } from "../../workflow/registry.ts";
 import {
 	canonicalStorePath,
 	validateChangeId,
+	wikiWorkflowTarget,
 } from "../../workflow/runtime.ts";
+import {
+	validateWikiReviewComments,
+	type WikiReviewComment,
+} from "../../workflow/wiki.ts";
 import { credentialPromptBridge } from "./ui/CredentialsModal.tsx";
 
 export function getWorkflowView(repo: string, change: string): WorkflowView {
@@ -287,6 +293,58 @@ export async function startWorkflowInProcess(
 	await drainEffects(engine, args.repo, credentialPromptBridge());
 	return `Workflow started: ${args.changeId}`;
 }
+
+/** Start the home-only wiki review without requiring a repository or blocking
+ * the UI while Herdr creates the workspace and launches the agent. */
+export function startWikiCommentWorkflowInProcess(
+	input: readonly WikiReviewComment[],
+	sessionId = `wiki-review-${randomUUID()}`,
+): string {
+	const comments = validateWikiReviewComments(input);
+	const config = loadConfig();
+	const definitionVersion = definitionVersionForPolicy(
+		config.workflow.max_verification_rounds,
+	);
+	const registry = registerBuiltins(
+		undefined,
+		config.workflow.max_verification_rounds,
+	);
+	const definition = registry.definition(
+		"wiki-comment-review",
+		definitionVersion,
+	);
+	const agents = parseAgentsConfig(config.agents, config);
+	const routing = startRouting(
+		"wiki-comment-review",
+		undefined,
+		definition,
+		registry,
+		agents,
+	);
+	for (const route of routing.routes)
+		preflightProfile(route.profile, registry.step(route.stepId).requirements);
+	const engine = workflowEngineFactory();
+	engine.start({
+		repo: wikiWorkflowTarget(),
+		changeId: validateChangeId(sessionId),
+		definitionId: "wiki-comment-review",
+		definitionVersion,
+		context: JSON.parse(JSON.stringify({ comments })),
+		metadata: {
+			branch: "",
+			baseBranch: "",
+			baseCommit: "",
+			task: "Address the submitted wiki review comments.",
+		},
+		routing,
+	});
+	void drainEffects(
+		engine,
+		wikiWorkflowTarget(),
+		credentialPromptBridge(),
+	).catch(() => undefined);
+	return `Wiki review workflow started: ${sessionId}`;
+}
 function navigationPath(repo: string, change: string): string {
 	return path.join(
 		path.dirname(canonicalStorePath(repo)),
@@ -405,7 +463,9 @@ export function viewToDashboardState(view: WorkflowView) {
 	);
 	return {
 		changeId: view.changeId,
-		returnWorkspace: returnWorkspace(view.repository, view.changeId),
+		...(view.repository
+			? { returnWorkspace: returnWorkspace(view.repository, view.changeId) }
+			: {}),
 		phase: view.currentStep.id,
 		stepId: view.currentStep.id,
 		stepLabel: view.currentStep.label,

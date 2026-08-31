@@ -6,9 +6,15 @@ import {
 } from "./embedded.generated.ts";
 import { AGENT_DEF_DIR, isCompiled } from "./paths.ts";
 
-export function workflowAssets(worktree: string, changeId: string): string {
+export function workflowAssets(
+	worktree: string,
+	changeId: string,
+	storageRoot?: string,
+): string {
 	if (!isCompiled()) return AGENT_DEF_DIR;
-	const workflowRoot = path.resolve(worktree, ".herdr-workflow");
+	const workflowRoot = path.resolve(
+		storageRoot ?? path.join(worktree, ".herdr-workflow"),
+	);
 	const root = path.resolve(workflowRoot, changeId, "agent-assets");
 	if (!root.startsWith(`${workflowRoot}${path.sep}`))
 		throw new Error("workflow asset path escapes worktree");

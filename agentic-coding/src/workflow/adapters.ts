@@ -18,6 +18,8 @@ export interface LaunchContext {
 	paneId: string;
 	tabId?: string;
 	cwd: string;
+	/** Runtime bookkeeping is kept outside a wiki-root agent workspace. */
+	runDirectory?: string;
 	name: string;
 	environment: Record<string, string>;
 	bridgePath?: string;
@@ -127,8 +129,7 @@ export class HerdrLifecycle {
 		// a 0600 env file (secrets stay out of the terminal scrollback), then keep a
 		// shell alive with the exported vars for `agent start` to inherit.
 		const envFile = path.join(
-			ctx.cwd,
-			".herdr-workflow",
+			ctx.runDirectory ?? path.join(ctx.cwd, ".herdr-workflow"),
 			"runtime-bin",
 			ctx.assignment.runId,
 			"run.env",
@@ -275,8 +276,7 @@ export class OpenCodeAdapter extends BaseAdapter {
 }
 function isolatedOpenCode(ctx: LaunchContext): LaunchContext {
 	const directory = path.join(
-		ctx.cwd,
-		".herdr-workflow",
+		ctx.runDirectory ?? path.join(ctx.cwd, ".herdr-workflow"),
 		"runtime-config",
 		ctx.assignment.runId,
 	);
@@ -311,8 +311,7 @@ function withRuntimeLauncher(
 ): LaunchContext {
 	const target = requireExecutable(ctx.profile.executable);
 	const directory = path.join(
-		ctx.cwd,
-		".herdr-workflow",
+		ctx.runDirectory ?? path.join(ctx.cwd, ".herdr-workflow"),
 		"runtime-bin",
 		ctx.assignment.runId,
 	);
