@@ -462,11 +462,20 @@ The system SHALL provide a dedicated agent step and role for documentation in ar
 - **THEN** it is a valid UTF-8 Markdown concept with OKF v0.2-compatible frontmatter and meaningful body-level claims tied to source resources
 
 ### Requirement: Wiki authoring is isolated to the dedicated role
-Managed workflow invocations SHALL permit wiki draft writes for the dedicated `wiki` role and SHALL reject wiki draft writes from planner, consolidator, fusion-planner, worker, triage, verifier, and archive roles. The dedicated role SHALL NOT be able to set a stable status or supply a machine or human verification event. The existing administrative `wiki verify` operation MAY set `status: stable` with a `process:herdr-archive` machine verification event, but SHALL reject human or arbitrary actors. Human-reviewed promotion SHALL remain an engine-owned effect of developer approval.
+Managed workflow invocations SHALL permit wiki draft writes for the dedicated `wiki` role only when it is executing an authenticated `core.wiki` run, including the research workflow's wiki drafting stage. The system SHALL reject wiki draft writes from researcher, planner, consolidator, fusion-planner, worker, triage, verifier, and archive roles. The dedicated wiki role SHALL not be able to set a stable status or supply a machine or human verification event. The existing administrative `wiki verify` operation MAY set `status: stable` with a `process:herdr-archive` machine verification event, but SHALL reject human or arbitrary actors. Human-reviewed promotion SHALL remain an engine-owned effect of developer approval.
 
-#### Scenario: Dedicated role is permitted to write
+#### Scenario: Dedicated wiki role is permitted to write
 - **WHEN** `wiki write` runs with the managed `wiki` role
 - **THEN** the concept is installed as an unverified draft
+
+#### Scenario: Research wiki stage is permitted only after explicit request
+- **WHEN** `wiki write` runs with an authenticated `wiki` role on `core.wiki` after the developer dispatches `request-research-wiki` for an explicit user request
+- **THEN** the concept is installed or updated as an unverified centralized draft
+- **AND** the research workflow remains pending developer approval in `core.wiki-approval`
+
+#### Scenario: Researcher cannot write implicitly or from another step
+- **WHEN** a researcher or wiki write lacks an authenticated `core.wiki` capability or originates from another step
+- **THEN** the operation exits non-zero and the bundle remains unchanged
 
 #### Scenario: Planning and archive roles cannot write
 - **WHEN** `wiki write` runs with a managed planner, consolidator, or archive role
@@ -477,7 +486,7 @@ Managed workflow invocations SHALL permit wiki draft writes for the dedicated `w
 - **THEN** the operation exits non-zero and the bundle remains unchanged
 
 #### Scenario: Wiki role cannot self-verify
-- **WHEN** the dedicated wiki role attempts to set stable status or provide a verification actor
+- **WHEN** the dedicated `wiki` or `researcher` role attempts to set stable status or provide a verification actor
 - **THEN** the operation rejects the request or stores only a draft without verification
 
 #### Scenario: Administrative process verification remains machine-confirmed
@@ -485,7 +494,7 @@ Managed workflow invocations SHALL permit wiki draft writes for the dedicated `w
 - **THEN** the operation records that process verification and sets `status: stable` with machine-confirmed trust, without granting human-reviewed trust
 
 #### Scenario: Human approval grants human-reviewed trust
-- **WHEN** the developer approves the reviewed wiki content
+- **WHEN** the developer approves reviewed wiki content through an applicable workflow gate
 - **THEN** the engine-owned `wiki.verify` effect adds the human verification event and leaves the concept `status: stable` with human-reviewed trust
 
 ### Requirement: Wiki review comments are applied by the wiki role

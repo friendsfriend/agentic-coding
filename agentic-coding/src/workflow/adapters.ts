@@ -251,7 +251,16 @@ export class PiAdapter extends BaseAdapter {
 		if (ctx.profile.thinking) args.push("--thinking", ctx.profile.thinking);
 		if (ctx.profile.tools.length)
 			args.push("--tools", ctx.profile.tools.join(","));
-		if (ctx.profile.readOnly || ctx.profile.extensions.length === 0)
+		else if (
+			ctx.profile.readOnly ||
+			ctx.profile.capabilities.includes("read-only")
+		)
+			args.push("--tools", "read");
+		if (
+			ctx.profile.readOnly ||
+			ctx.profile.capabilities.includes("read-only") ||
+			ctx.profile.extensions.length === 0
+		)
 			args.push("--no-extensions");
 		for (const extension of ctx.profile.extensions)
 			args.push("--extension", extension);
@@ -285,9 +294,10 @@ function isolatedOpenCode(ctx: LaunchContext): LaunchContext {
 		path.join(directory, "opencode.json"),
 		JSON.stringify(
 			{
-				permission: ctx.profile.readOnly
-					? { edit: "deny", bash: "allow", read: "allow" }
-					: { edit: "allow", bash: "allow", read: "allow" },
+				permission:
+					ctx.profile.readOnly || ctx.profile.capabilities.includes("read-only")
+						? { edit: "deny", bash: "deny", read: "allow" }
+						: { edit: "allow", bash: "allow", read: "allow" },
 				plugin: ctx.bridgePath ? [ctx.bridgePath] : [],
 			},
 			null,

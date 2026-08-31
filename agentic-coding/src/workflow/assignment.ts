@@ -60,9 +60,10 @@ export function renderAssignment(
 				? [readPinnedAsset(name, step.instructionDigests[index], assetRoot)]
 				: [],
 	);
-	const handoff =
-		"agentic-coding workflow handoff --outcome complete" +
-		(assignment.output ? ' --artifact "$HERDR_OUTPUT"' : "");
+	const handoff = assignment.allowedOutcomes.includes("complete")
+		? "agentic-coding workflow handoff --outcome complete" +
+			(assignment.output ? ' --artifact "$HERDR_OUTPUT"' : "")
+		: undefined;
 	const payloadExample =
 		assignment.output?.schemaId === "core.triage-plan"
 			? {
@@ -163,9 +164,15 @@ export function renderAssignment(
 		`Allowed outcomes: ${assignment.allowedOutcomes.join(", ")}`,
 		"",
 		"## Handoff",
-		"Finish the run by reporting exactly one outcome with the workflow CLI:",
+		...(assignment.stepId === "core.research"
+			? [
+					"Do not hand off `complete` for a research answer, follow-up, or wiki request. Remain in the persistent session and tell the developer to dispatch `request-research-wiki` after an explicit user request; use `blocked` or `failed` only for bounded handoffs.",
+				]
+			: [
+					"Finish the run by reporting exactly one outcome with the workflow CLI:",
+				]),
 		"```bash",
-		handoff,
+		...(handoff ? [handoff] : []),
 		'agentic-coding workflow handoff --outcome blocked --message "reason"',
 		'agentic-coding workflow handoff --outcome failed --message "diagnostic"',
 		"```",

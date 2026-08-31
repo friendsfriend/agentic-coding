@@ -10,7 +10,10 @@ import type {
 } from "../../workflow/contracts.ts";
 import {
 	canonicalStorePath,
+	isResearchWorkflowTarget,
 	isWikiWorkflowTarget,
+	researchWorkflowTarget,
+	wikiWorkflowDataRoot,
 	wikiWorkflowTarget,
 } from "../../workflow/runtime.ts";
 import {
@@ -210,6 +213,7 @@ export function listWorkflows(...roots: string[]): WorkflowOverview[] {
 	// UI-only wiki reviews live in the centralized target store rather than a
 	// Git repository, so include them in the same canonical home list.
 	addRepository(wikiWorkflowTarget());
+	addRepository(researchWorkflowTarget());
 	return found.sort((a, b) => a.state.changeId.localeCompare(b.state.changeId));
 }
 
@@ -1363,7 +1367,10 @@ export function loadPlanReviewComments(
 
 export function loadDashboard(repo: string, change: string): DashboardData {
 	const state = dashboardState(repo, change) as WorkflowState;
-	const workflowRoot = join(state.worktree, ".herdr-workflow", change);
+	const workflowRoot =
+		isResearchWorkflowTarget(repo) || state.definition?.id === "research"
+			? join(wikiWorkflowDataRoot(), change)
+			: join(state.worktree, ".herdr-workflow", change);
 	const changeRoot = join(state.worktree, "openspec", "changes", change);
 	const statuses = agentStatuses();
 
@@ -1861,6 +1868,7 @@ export function testDashboard(phase = "proposed"): DashboardData {
 export type RequiredUserActionItem =
 	| { label: string; kind: "artifact"; value: string }
 	| { label: string; kind: "workflow"; value: string }
+	| { label: string; kind: "review"; value: string }
 	| { label: string; kind: "dismiss" };
 
 export interface RequiredUserAction {
@@ -1892,6 +1900,17 @@ export function requiredUserActionFor(
 			items: [],
 		};
 	}
+	if (definitionId === "research" && phase === "core.wiki")
+		return {
+			key: "research-wiki",
+			title: "Wiki drafting active",
+			prompt:
+				"The researcher requested a wiki entry; review it when drafting finishes, or close research now.",
+			items: [
+				{ label: "Close research", kind: "workflow", value: "close-research" },
+				later,
+			],
+		};
 	if (phase === "wiki-approval" || phase === "core.wiki-approval")
 		return {
 			key: "wiki-review",
@@ -1899,8 +1918,30 @@ export function requiredUserActionFor(
 			prompt:
 				definitionId === "wiki-only"
 					? "Review knowledge changes before completion."
-					: "Review knowledge changes before archival.",
-			items: [],
+					: definitionId === "research"
+						? "Review knowledge changes before closing research."
+						: "Review knowledge changes before archival.",
+			items:
+				definitionId === "research"
+					? [
+							{
+								label: "Approve wiki",
+								kind: "workflow",
+								value: "approve-wiki",
+							},
+							{
+								label: "Request wiki changes",
+								kind: "review",
+								value: "review-comments",
+							},
+							{
+								label: "Close research",
+								kind: "workflow",
+								value: "close-research",
+							},
+							later,
+						]
+					: [],
 		};
 	if (phase === "developer-review" || phase === "core.developer-review")
 		return {
@@ -1912,6 +1953,26 @@ export function requiredUserActionFor(
 			// Trigger-only: the action opens the changed-files popup directly, so
 			// there are no selectable items to render in the generic ListViewModal.
 			items: [],
+		};
+	if (phase === "research" || phase === "core.research")
+		return {
+			key: "research",
+			title: "Research active",
+			prompt:
+				"Ask follow-ups in the researcher session, or close research when finished.",
+			items: [
+				{
+					label: "Create wiki draft",
+					kind: "workflow",
+					value: "request-research-wiki",
+				},
+				{
+					label: "Close research",
+					kind: "workflow",
+					value: "close-research",
+				},
+				later,
+			],
 		};
 	if (phase === "completed" || phase === "core.completed") {
 		const proposal =
@@ -2117,7 +2178,11 @@ export function focusAgent(state: WorkflowState, pane: string) {
 
 export function focusWorkflow(workflow: WorkflowOverview) {
 	const state = workflow.state;
-	if (isWikiWorkflowTarget(state.repository) || !state.repository) {
+	if (
+		isWikiWorkflowTarget(state.repository) ||
+		!state.repository ||
+		state.definition?.id === "research"
+	) {
 		focusWorkspace(state.workspace);
 		return;
 	}
@@ -2173,9 +2238,12 @@ export async function startWorkflow(input: {
 	workflowType?: string;
 	preset?: string;
 }) {
-	const repo = input.repo.startsWith("~")
-		? resolve(input.repo.replace("~", homedir()))
-		: resolve(input.repo);
+	const repo =
+		input.workflowType === "research" && !input.repo
+			? ""
+			: input.repo.startsWith("~")
+				? resolve(input.repo.replace("~", homedir()))
+				: resolve(input.repo);
 	return startWorkflowInProcess({ ...input, repo });
 }
 

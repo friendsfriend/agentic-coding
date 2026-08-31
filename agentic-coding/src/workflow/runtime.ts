@@ -101,17 +101,24 @@ export function canonicalRepository(repo: string): string {
 }
 /** Explicit locator for workflows that review the centralized wiki without a repository. */
 export const WIKI_WORKFLOW_TARGET = "wiki://centralized";
+export const RESEARCH_WORKFLOW_TARGET = "research://standalone";
 export function wikiWorkflowTarget(): string {
 	return WIKI_WORKFLOW_TARGET;
 }
+export function researchWorkflowTarget(): string {
+	return RESEARCH_WORKFLOW_TARGET;
+}
 export function isWikiWorkflowTarget(repo: string): boolean {
 	return repo === WIKI_WORKFLOW_TARGET;
+}
+export function isResearchWorkflowTarget(repo: string): boolean {
+	return repo === RESEARCH_WORKFLOW_TARGET;
 }
 export function wikiWorkflowDataRoot(): string {
 	return path.join(path.dirname(wikiRoot()), ".agentic-coding-workflow");
 }
 export function canonicalStorePath(repo: string): string {
-	return isWikiWorkflowTarget(repo)
+	return isWikiWorkflowTarget(repo) || isResearchWorkflowTarget(repo)
 		? path.join(wikiWorkflowDataRoot(), "herdr.db")
 		: path.join(canonicalRepository(repo), ".herdr-workflow", "herdr.db");
 }
@@ -261,8 +268,10 @@ function payload(value: unknown): JsonValue {
 }
 
 export interface StartWorkflowInput {
-	/** Canonical repository path, or WIKI_WORKFLOW_TARGET. */
+	/** Canonical repository path, WIKI_WORKFLOW_TARGET, or RESEARCH_WORKFLOW_TARGET. */
 	repo: string;
+	/** Optional source repository used as read-only evidence by research. */
+	repositoryContext?: string;
 	/** Initial input retained in the current step as untrusted context. */
 	context?: JsonValue;
 	worktree?: string;
@@ -307,31 +316,75 @@ export class WorkflowEngine {
 		const wikiOnlyTarget =
 			isWikiWorkflowTarget(input.repo) &&
 			input.definitionId === "wiki-comment-review";
-		if (isWikiWorkflowTarget(input.repo) && !wikiOnlyTarget)
+		const researchTarget = isResearchWorkflowTarget(input.repo);
+		if (
+			(isWikiWorkflowTarget(input.repo) && !wikiOnlyTarget) ||
+			(researchTarget && input.definitionId !== "research")
+		)
 			throw new WorkflowRuntimeError(
 				"start-guard",
-				"the centralized wiki target is only valid for wiki-comment-review",
+				"the repository-independent target is invalid for this workflow",
 			);
-		const repository = wikiOnlyTarget ? "" : canonicalRepository(input.repo);
+		const repository = researchTarget
+			? input.repositoryContext
+				? canonicalRepository(input.repositoryContext)
+				: ""
+			: wikiOnlyTarget
+				? ""
+				: canonicalRepository(input.repo);
 		// Keep an explicitly supplied worktree path for the workflow view while
 		// resolving it separately for repository guards. On macOS, /var is a
 		// symlink to /private/var; canonicalizing the stored path would make the
 		// view differ from the path the caller supplied.
-		const worktree = wikiOnlyTarget
-			? path.resolve(ensureBundle())
-			: input.worktree === undefined
-				? fs.realpathSync(path.resolve(input.repo))
-				: path.resolve(input.worktree);
+		const worktree = researchTarget
+			? path.resolve(wikiWorkflowDataRoot())
+			: wikiOnlyTarget
+				? path.resolve(ensureBundle())
+				: input.worktree === undefined
+					? fs.realpathSync(path.resolve(input.repo))
+					: path.resolve(input.worktree);
+		if (researchTarget) fs.mkdirSync(worktree, { recursive: true });
 		const resolvedWorktree = fs.realpathSync(worktree);
 		const definition = this.registry.definition(
 			input.definitionId,
 			input.definitionVersion ?? 1,
 		);
+		if (researchTarget) {
+			const route = input.routing.routes.find(
+				(item) => item.stepId === "core.research" && item.role === "researcher",
+			);
+			const readOnlyTools =
+				/^(?:read|grep|find|ls|cat|head|tail|rg|git-(?:status|diff|log|show)|context7_[a-z0-9_-]+|gh_grep_search|playwright_(?:navigate|screenshot|snapshot|click|type|fill|select_option|press_key|wait_for|evaluate|scroll|back|forward|get_console|get_network))$/i;
+			const unsafeTools = route?.profile.tools.some(
+				(tool) => !readOnlyTools.test(tool),
+			);
+			if (
+				!route?.profile.capabilities.includes("read-only") ||
+				route.profile.capabilities.includes("shell") ||
+				route.profile.capabilities.includes("edit") ||
+				route.profile.extensions.length ||
+				unsafeTools
+			)
+				throw new WorkflowRuntimeError(
+					"start-guard",
+					"research requires an allowlisted read-only researcher profile",
+				);
+		}
 		const proposal = ["standard-propose", "fusion-propose"].includes(
 			definition.id,
 		);
 		const wikiOnly = definition.id === "wiki-only";
+		if (researchTarget && !input.metadata.task?.trim())
+			throw new WorkflowRuntimeError(
+				"start-guard",
+				"research requires non-empty task",
+			);
 		const sameCheckout = proposal || wikiOnly;
+		if (researchTarget && definition.id !== "research")
+			throw new WorkflowRuntimeError(
+				"start-guard",
+				"invalid research definition",
+			);
 		if (sameCheckout) {
 			if (input.mode !== "checkout")
 				throw new WorkflowRuntimeError(
@@ -350,7 +403,7 @@ export class WorkflowEngine {
 					"proposal workflows require the named current branch",
 				);
 		}
-		if (!wikiOnlyTarget)
+		if (!wikiOnlyTarget && !researchTarget)
 			this.validateStartEvidence(repository, input, sameCheckout);
 		if (["plan-fusion", "fusion-propose"].includes(definition.id))
 			validateFusionRouting(definition.id, input.routing);
@@ -381,7 +434,8 @@ export class WorkflowEngine {
 				createdAt: at,
 				updatedAt: at,
 				stepEnteredAt: at,
-				...(definition.steps.includes("core.wiki")
+				...(definition.steps.includes("core.wiki") ||
+				definition.id === "research"
 					? { wikiRoot: path.resolve(wikiRoot()) }
 					: {}),
 			},
@@ -390,7 +444,7 @@ export class WorkflowEngine {
 			loopCounts: {},
 			attention: [],
 			developerDialogue: [],
-			...(wikiOnly
+			...(wikiOnly || (researchTarget && repository)
 				? {
 						sourceBaseline: {
 							fingerprint: sourceContentFingerprint(
@@ -405,7 +459,9 @@ export class WorkflowEngine {
 				: {}),
 		};
 		this.validateSnapshot(snapshot, definition, []);
-		const db = openStore(repository);
+		const storeTarget =
+			wikiOnlyTarget || researchTarget ? input.repo : repository;
+		const db = openStore(storeTarget);
 		try {
 			db.exec("BEGIN IMMEDIATE");
 			if (
@@ -442,14 +498,14 @@ export class WorkflowEngine {
 				json({ definition: snapshot.definition }),
 				at,
 			);
-			if (input.mode || wikiOnlyTarget)
+			if (input.mode || wikiOnlyTarget || researchTarget)
 				this.enqueue(
 					db,
 					snapshot,
 					"workspace.setup",
 					`workspace:${workflowId}:setup`,
 					{
-						mode: input.mode ?? "wiki",
+						mode: input.mode ?? (researchTarget ? "research" : "wiki"),
 						sameCheckout,
 						branch: snapshot.metadata.branch,
 						baseCommit: snapshot.metadata.baseCommit,
@@ -466,8 +522,8 @@ export class WorkflowEngine {
 			db.close();
 		}
 		this.telemetry(snapshot, "workflow.started");
-		this.onCommitted(repository);
-		return { snapshot, view: this.viewById(repository, workflowId) };
+		this.onCommitted(storeTarget);
+		return { snapshot, view: this.viewById(storeTarget, workflowId) };
 	}
 	dispatch(repo: string, raw: unknown): DispatchResult {
 		const command = commandContract.parse(raw);
@@ -521,7 +577,9 @@ export class WorkflowEngine {
 						: undefined,
 			);
 			this.onCommitted(
-				isWikiWorkflowTarget(repo) ? wikiRoot(true) : canonicalRepository(repo),
+				isWikiWorkflowTarget(repo) || isResearchWorkflowTarget(repo)
+					? wikiRoot(true)
+					: canonicalRepository(repo),
 			);
 			return { snapshot, view: this.viewById(repo, snapshot.workflowId) };
 		} catch (error) {
@@ -613,6 +671,20 @@ export class WorkflowEngine {
 					expiresRuns: runs.map((run) => run.id),
 					retainedEvidence: snapshot.evidence.map((item) => item.digest),
 				}));
+		} finally {
+			db.close();
+		}
+	}
+	effectIsLive(repo: string, effectId: string, lease: string): boolean {
+		const db = openStore(repo);
+		try {
+			return Boolean(
+				db
+					.query(
+						"SELECT 1 FROM workflow_outbox WHERE id=? AND status='running' AND lease=?",
+					)
+					.get(effectId, lease),
+			);
 		} finally {
 			db.close();
 		}
@@ -1486,6 +1558,172 @@ export class WorkflowEngine {
 				`action unavailable: ${command.actionId}`,
 				snapshot.revision,
 			);
+		if (command.actionId === "close-research") {
+			if (
+				snapshot.definition.id !== "research" ||
+				snapshot.currentStep === "core.closed"
+			)
+				throw new WorkflowRuntimeError(
+					"unavailable",
+					"close-research is only available while research is active",
+				);
+			if (snapshot.definition.id === "research")
+				this.validateSourceBaseline(snapshot);
+			const active = this.runs(db, snapshot.workflowId).filter((run) =>
+				snapshot.step.activeRunIds.includes(run.id),
+			);
+			this.expireRuns(db, snapshot);
+			for (const run of active)
+				if (run.handle)
+					this.enqueue(
+						db,
+						snapshot,
+						"agent.stop",
+						`run:${run.id}:stop:${run.generation}`,
+						{ runId: run.id },
+					);
+			snapshot.currentStep = "core.closed";
+			snapshot.metadata.stepEnteredAt = nowIso(this.now);
+			snapshot.status = "closed";
+			snapshot.step = freshStep(1);
+			this.enterStep(db, snapshot, definition);
+			return {
+				type: "developer.action",
+				actor: { kind: "developer" },
+				data: { actionId: command.actionId },
+			};
+		}
+		if (command.actionId === "request-research-wiki") {
+			if (
+				snapshot.definition.id !== "research" ||
+				snapshot.currentStep !== "core.research"
+			)
+				throw new WorkflowRuntimeError(
+					"unavailable",
+					"research wiki request is only available while research is active",
+				);
+			this.validateSourceBaseline(snapshot);
+			if (!snapshot.metadata.workspace)
+				throw new WorkflowRuntimeError(
+					"unavailable",
+					"research wiki request requires a ready workspace",
+				);
+			const active = this.runs(db, snapshot.workflowId).filter((run) =>
+				snapshot.step.activeRunIds.includes(run.id),
+			);
+			const currentContext =
+				snapshot.step.context &&
+				typeof snapshot.step.context === "object" &&
+				!Array.isArray(snapshot.step.context)
+					? snapshot.step.context
+					: {};
+			const researcher = active.find((run) => run.role === "researcher");
+			let summary: JsonValue | undefined;
+			if (researcher?.outputPath && fs.existsSync(researcher.outputPath)) {
+				try {
+					const artifact = this.artifact(researcher, researcher.outputPath);
+					const parsed = this.registry
+						.step("core.research")
+						.output.parse(artifact.output) as JsonValue;
+					if (Buffer.byteLength(JSON.stringify(parsed), "utf8") <= 64 * 1024)
+						summary = parsed;
+				} catch {
+					/* A missing or malformed optional summary does not block wiki drafting. */
+				}
+			}
+			const researchContext = {
+				task: snapshot.metadata.task ?? "",
+				...(Array.isArray(currentContext.followUps)
+					? { followUps: currentContext.followUps.slice(-50) }
+					: {}),
+				...(currentContext.summary === undefined && summary === undefined
+					? {}
+					: { summary: summary ?? currentContext.summary }),
+			};
+			this.expireRuns(db, snapshot);
+			for (const run of active)
+				if (run.handle)
+					this.enqueue(
+						db,
+						snapshot,
+						"agent.stop",
+						`run:${run.id}:stop:${run.generation}`,
+						{ runId: run.id },
+					);
+			this.transition(
+				db,
+				snapshot,
+				definition,
+				"request-wiki",
+				researchContext,
+			);
+			return {
+				type: "developer.action",
+				actor: { kind: "developer" },
+				data: { actionId: command.actionId },
+			};
+		}
+		if (command.actionId === "research-follow-up") {
+			if (
+				snapshot.definition.id !== "research" ||
+				snapshot.currentStep !== "core.research"
+			)
+				throw new WorkflowRuntimeError(
+					"unavailable",
+					"research follow-up is only available while research is active",
+				);
+			const message =
+				typeof command.input === "string"
+					? command.input
+					: command.input &&
+							typeof command.input === "object" &&
+							"message" in command.input
+						? String((command.input as { message: unknown }).message)
+						: "";
+			if (!message.trim() || message.length > 8192)
+				throw new WorkflowRuntimeError(
+					"invalid-command",
+					"research-follow-up requires a bounded message",
+				);
+			const run = this.runs(db, snapshot.workflowId).find(
+				(item) =>
+					snapshot.step.activeRunIds.includes(item.id) &&
+					ACTIVE_RUN.has(item.status),
+			);
+			if (!run)
+				throw new WorkflowRuntimeError(
+					"unavailable",
+					"researcher run is not available",
+				);
+			const context =
+				snapshot.step.context &&
+				typeof snapshot.step.context === "object" &&
+				!Array.isArray(snapshot.step.context)
+					? snapshot.step.context
+					: {};
+			const followUps =
+				"followUps" in context && Array.isArray(context.followUps)
+					? context.followUps.filter(
+							(item): item is string => typeof item === "string",
+						)
+					: [];
+			snapshot.step.context = {
+				...context,
+				followUps: [...followUps, message.trim()].slice(-50),
+			};
+			this.enqueue(
+				db,
+				snapshot,
+				"agent.prompt",
+				`run:${run.id}:prompt:${snapshot.revision + 1}`,
+				{ runId: run.id, message: message.trim() },
+			);
+			return {
+				type: "developer.action",
+				actor: { kind: "developer" },
+				data: { actionId: command.actionId },
+			};
+		}
 		if (command.actionId === "resume") {
 			if (snapshot.status !== "paused")
 				throw new WorkflowRuntimeError("unavailable", "workflow is not paused");
@@ -1523,7 +1761,8 @@ export class WorkflowEngine {
 		}
 		if (
 			(command.actionId === "approve-wiki" || command.actionId === "close") &&
-			snapshot.definition.id === "wiki-only"
+			(snapshot.definition.id === "wiki-only" ||
+				snapshot.definition.id === "research")
 		)
 			this.validateSourceBaseline(snapshot);
 		if (command.actionId === "review-comments") {
@@ -1627,6 +1866,8 @@ export class WorkflowEngine {
 		}
 		const step = this.registry.step(run.stepId);
 		if (output !== undefined) output = step.output.parse(output);
+		if (snapshot.definition.id === "research")
+			this.validateSourceBaseline(snapshot);
 		if (command.outcome === "complete") {
 			this.validateStepEvidence(snapshot, run.stepId);
 			if (run.stepId === "core.wiki") this.validateSourceBaseline(snapshot);
@@ -1752,7 +1993,8 @@ export class WorkflowEngine {
 		else if (command.outcome === "blocked") {
 			if (
 				snapshot.definition.id === "wiki-only" ||
-				snapshot.definition.id === "wiki-comment-review"
+				snapshot.definition.id === "wiki-comment-review" ||
+				snapshot.definition.id === "research"
 			)
 				this.transition(db, snapshot, definition, "blocked", command.message);
 			else {
@@ -1763,7 +2005,10 @@ export class WorkflowEngine {
 			this.expireSiblingRuns(db, snapshot);
 			this.transition(db, snapshot, definition, "failed", command.message);
 		}
-		if (run.stepId === "core.wiki" && run.handle)
+		if (
+			(run.stepId === "core.wiki" || run.stepId === "core.research") &&
+			run.handle
+		)
 			this.enqueue(
 				db,
 				snapshot,
@@ -2003,6 +2248,7 @@ export class WorkflowEngine {
 					"core.plan",
 					"core.implementation",
 					"core.verification",
+					"core.wiki",
 					"fusion.consolidate",
 				].includes(edge.to)) ||
 			((edge.to === "core.wiki" || edge.to === "core.archive") &&
@@ -2172,6 +2418,10 @@ export class WorkflowEngine {
 			this.now().getTime() + 24 * 3600_000,
 		).toISOString();
 		const created = nowIso(this.now);
+		const allowedOutcomes: WorkflowRun["allowedOutcomes"] =
+			snapshot.definition.id === "research" && step.id === "core.research"
+				? ["blocked", "failed"]
+				: ["complete", "blocked", "failed"];
 		const run: WorkflowRun = {
 			id,
 			workflowId: snapshot.workflowId,
@@ -2182,7 +2432,7 @@ export class WorkflowEngine {
 			status: "pending",
 			profile: route.profile,
 			issuedRevision: snapshot.revision,
-			allowedOutcomes: ["complete", "blocked", "failed"],
+			allowedOutcomes,
 			capabilityHash: "",
 			capabilityExpiresAt: expires,
 			assignmentPath,
@@ -2329,15 +2579,29 @@ export class WorkflowEngine {
 			row.kind === "wiki.verify" &&
 			snapshot.definition.id === "wiki-comment-review" &&
 			snapshot.currentStep === "core.completed";
+		const researchWikiPromotion =
+			row.kind === "wiki.verify" &&
+			snapshot.definition.id === "research" &&
+			snapshot.currentStep === "core.closed";
 		const setupBeforeEntry =
 			row.kind === "workspace.setup" &&
 			!snapshot.step.activeRunIds.length &&
 			snapshot.revision === 0;
+		// Research deliberately starts its agent only after the repository-neutral
+		// workspace setup effect completes. The workflow can receive other
+		// revisions while that effect is pending, so keep that setup effect legal
+		// for the active research step instead of incorrectly treating it as stale.
+		const researchSetup =
+			row.kind === "workspace.setup" &&
+			snapshot.definition.id === "research" &&
+			snapshot.currentStep === "core.research";
 		if (
 			!allowed &&
 			!wikiPromotionAtDelivery &&
 			!wikiPromotionAtCompletion &&
+			!researchWikiPromotion &&
 			!setupBeforeEntry &&
+			!researchSetup &&
 			row.kind !== "agent.stop"
 		)
 			throw new WorkflowRuntimeError(
@@ -2398,12 +2662,18 @@ export class WorkflowEngine {
 		}
 	}
 	private validateSourceBaseline(snapshot: WorkflowSnapshot): void {
-		if (snapshot.definition.id !== "wiki-only") return;
+		if (
+			snapshot.definition.id !== "wiki-only" &&
+			snapshot.definition.id !== "research"
+		)
+			return;
+		if (snapshot.definition.id === "research" && !snapshot.metadata.repository)
+			return;
 		const baseline = snapshot.sourceBaseline?.fingerprint;
 		if (!baseline)
 			throw new WorkflowRuntimeError(
 				"source-isolation",
-				"wiki-only source baseline is missing",
+				`${snapshot.definition.id} source baseline is missing`,
 			);
 		if (
 			sourceContentFingerprint(
@@ -2413,7 +2683,7 @@ export class WorkflowEngine {
 		)
 			throw new WorkflowRuntimeError(
 				"source-isolation",
-				"wiki-only source repository changed during documentation run",
+				"source repository changed during documentation or research run",
 			);
 	}
 	private validateStepEvidence(
@@ -2561,77 +2831,142 @@ export class WorkflowEngine {
 		if (snapshot.status === "paused")
 			return [{ id: "resume", label: "Resume", confirmation: "confirm" }];
 		const actions: WorkflowActionView[] =
-			snapshot.currentStep === "core.plan-approval"
+			snapshot.definition.id === "research" &&
+			snapshot.currentStep !== "core.closed"
 				? [
+						...(snapshot.currentStep === "core.research"
+							? [
+									{
+										id: "research-follow-up",
+										label: "Ask researcher follow-up",
+										confirmation: "reason" as const,
+										input: {
+											schemaId: "core.research-follow-up",
+											schemaVersion: 1,
+										},
+									},
+									{
+										id: "request-research-wiki",
+										label: "Create wiki draft",
+										confirmation: "confirm" as const,
+									},
+								]
+							: snapshot.currentStep === "core.wiki-approval"
+								? [
+										{
+											id: "approve-wiki",
+											label: "Approve wiki",
+											confirmation: "confirm" as const,
+										},
+										{
+											id: "review-comments",
+											label: "Request wiki changes",
+											confirmation: "confirm" as const,
+											input: {
+												schemaId: "core.review-comments",
+												schemaVersion: 1,
+											},
+										},
+									]
+								: []),
 						{
-							id: "approve-plan",
-							label: "Approve plan",
+							id: "close-research",
+							label: "Close research",
 							confirmation: "confirm",
-						},
-						{
-							id: "review-comments",
-							label: "Request plan changes",
-							confirmation: "confirm",
-							input: { schemaId: "core.review-comments", schemaVersion: 1 },
-						},
-						{
-							id: "reject-plan",
-							label: "Reject plan",
-							confirmation: "reason",
-							input: { schemaId: "core.plan-rejection", schemaVersion: 1 },
 						},
 					]
-				: snapshot.currentStep === "core.developer-review"
+				: snapshot.currentStep === "core.plan-approval"
 					? [
 							{
-								id: "approve-review",
-								label: "Approve change",
+								id: "approve-plan",
+								label: "Approve plan",
 								confirmation: "confirm",
 							},
 							{
 								id: "review-comments",
-								label: "Request changes",
+								label: "Request plan changes",
 								confirmation: "confirm",
 								input: { schemaId: "core.review-comments", schemaVersion: 1 },
 							},
+							{
+								id: "reject-plan",
+								label: "Reject plan",
+								confirmation: "reason",
+								input: { schemaId: "core.plan-rejection", schemaVersion: 1 },
+							},
 						]
-					: snapshot.currentStep === "core.wiki-approval"
+					: snapshot.currentStep === "core.developer-review"
 						? [
 								{
-									id: "approve-wiki",
-									label: "Approve wiki",
+									id: "approve-review",
+									label: "Approve change",
 									confirmation: "confirm",
 								},
 								{
 									id: "review-comments",
-									label: "Request wiki changes",
+									label: "Request changes",
 									confirmation: "confirm",
 									input: { schemaId: "core.review-comments", schemaVersion: 1 },
 								},
 							]
-						: snapshot.currentStep === "core.completed"
+						: snapshot.currentStep === "core.wiki-approval"
 							? [
-									...([
-										"standard-propose",
-										"fusion-propose",
-										"wiki-only",
-										"wiki-comment-review",
-									].includes(snapshot.definition.id)
-										? []
-										: [
-												{
-													id: "create-pr",
-													label: "Create pull request",
-													confirmation: "confirm" as const,
-												},
-											]),
 									{
-										id: "close",
-										label: "Close workflow",
+										id: "approve-wiki",
+										label: "Approve wiki",
 										confirmation: "confirm",
 									},
+									{
+										id: "review-comments",
+										label: "Request wiki changes",
+										confirmation: "confirm",
+										input: {
+											schemaId: "core.review-comments",
+											schemaVersion: 1,
+										},
+									},
 								]
-							: [];
+							: snapshot.definition.id === "research" &&
+									snapshot.currentStep === "core.research"
+								? [
+										{
+											id: "research-follow-up",
+											label: "Ask researcher follow-up",
+											confirmation: "none",
+											input: {
+												schemaId: "core.research-follow-up",
+												schemaVersion: 1,
+											},
+										},
+										{
+											id: "close-research",
+											label: "Close research",
+											confirmation: "confirm",
+										},
+									]
+								: snapshot.currentStep === "core.completed"
+									? [
+											...([
+												"standard-propose",
+												"fusion-propose",
+												"wiki-only",
+												"wiki-comment-review",
+											].includes(snapshot.definition.id)
+												? []
+												: [
+														{
+															id: "create-pr",
+															label: "Create pull request",
+															confirmation: "confirm" as const,
+														},
+													]),
+											{
+												id: "close",
+												label: "Close workflow",
+												confirmation: "confirm",
+											},
+										]
+									: [];
 		return actions;
 	}
 	private viewById(repo: string, id: string): WorkflowView {
@@ -2926,10 +3261,18 @@ export class WorkflowEngine {
 	}
 	private expireRuns(db: Database, snapshot: WorkflowSnapshot): void {
 		const runIds = [...snapshot.step.activeRunIds];
-		for (const id of runIds)
+		for (const id of runIds) {
 			db.query(
 				"UPDATE workflow_runs SET status='expired',capability_hash='',completed_at=? WHERE id=? AND status IN ('pending','working')",
 			).run(nowIso(this.now), id);
+			db.query(
+				"UPDATE workflow_outbox SET status='expired',lease=NULL,lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry','running') AND kind IN ('artifact.write','agent.launch','agent.prompt') AND json_extract(payload_json,'$.runId')=?",
+			).run(snapshot.workflowId, id);
+		}
+		if (snapshot.definition.id === "research")
+			db.query(
+				"UPDATE workflow_outbox SET status='expired',lease=NULL,lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry','running') AND kind='workspace.setup'",
+			).run(snapshot.workflowId);
 		this.expireQuestions(snapshot, runIds);
 		snapshot.step.activeRunIds = [];
 	}
@@ -3241,7 +3584,8 @@ function wikiVerificationPayload(snapshot: WorkflowSnapshot): {
 	return withWikiRoot(pinnedRoot, () => {
 		const all = snapshotList(
 			snapshot.metadata.changeId,
-			snapshot.definition.id === "wiki-comment-review"
+			snapshot.definition.id === "wiki-comment-review" ||
+				snapshot.definition.id === "research"
 				? wikiWorkflowDataRoot()
 				: snapshot.metadata.worktree,
 		);
@@ -3276,6 +3620,7 @@ function roleForStep(step: string, snapshot: WorkflowSnapshot): string[] {
 				? ["test-verifier"]
 				: ["quality-verifier"];
 	if (step === "core.wiki") return ["wiki"];
+	if (step === "core.research") return ["researcher"];
 	if (step === "core.archive") return ["archive"];
 	return [];
 }

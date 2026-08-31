@@ -235,6 +235,7 @@ const INSTRUCTION_BY_STEP: Record<string, string[]> = {
 		"verification-test.md",
 	],
 	"core.wiki": ["workflow-agent-protocol.md", "wiki.md"],
+	"core.research": ["workflow-agent-protocol.md", "research.md"],
 	"core.archive": ["workflow-agent-protocol.md", "archive.md"],
 	"fusion.plan": ["workflow-agent-protocol.md", "planning-fusion.md"],
 	"fusion.consolidate": [
@@ -397,6 +398,22 @@ export function registerBuiltins(
 			["approve", "comments"],
 			{
 				allowedEffects: ["wiki.verify"],
+			},
+		),
+		step(
+			"core.research",
+			"Research",
+			"agent",
+			["blocked", "failed", "request-wiki", "close-research"],
+			{
+				retryLimit: 3,
+				requirements: [
+					"interactive",
+					"prompt",
+					"persistent-session",
+					"run-environment",
+					"observe",
+				],
 			},
 		),
 		step(
@@ -718,6 +735,90 @@ export function registerBuiltins(
 				{ from: "core.completed", outcome: "close", to: "core.closed" },
 			],
 		},
+		...(wikiGate
+			? [
+					{
+						id: "research",
+						version,
+						label: "Research",
+						initial: "core.research",
+						terminal: ["core.closed"],
+						steps: [
+							"core.research",
+							"core.wiki",
+							"core.wiki-approval",
+							"core.closed",
+						],
+						allowedOutcomes: {
+							"core.research": [
+								"blocked",
+								"failed",
+								"request-wiki",
+								"close-research",
+							],
+						},
+						edges: [
+							{
+								from: "core.research",
+								outcome: "request-wiki",
+								to: "core.wiki",
+							},
+							{
+								from: "core.research",
+								outcome: "blocked",
+								to: "core.research",
+								loop: { maxAttempts: 3 },
+							},
+							{
+								from: "core.research",
+								outcome: "failed",
+								to: "core.research",
+								loop: { maxAttempts: 3 },
+							},
+							{
+								from: "core.research",
+								outcome: "close-research",
+								to: "core.closed",
+							},
+							{
+								from: "core.wiki",
+								outcome: "complete",
+								to: "core.wiki-approval",
+							},
+							{
+								from: "core.wiki",
+								outcome: "blocked",
+								to: "core.wiki",
+								loop: { maxAttempts: 3 },
+							},
+							{
+								from: "core.wiki",
+								outcome: "failed",
+								to: "core.wiki",
+								loop: { maxAttempts: 3 },
+							},
+							{
+								from: "core.wiki-approval",
+								outcome: "approve",
+								to: "core.closed",
+								effects: [
+									{
+										kind: "wiki.verify",
+										idempotencyKey: "wiki.verify",
+										payload: {},
+									},
+								],
+							},
+							{
+								from: "core.wiki-approval",
+								outcome: "comments",
+								to: "core.wiki",
+								loop: { maxAttempts: 6 },
+							},
+						] as const,
+					},
+				]
+			: []),
 		...(wikiGate
 			? [
 					{
