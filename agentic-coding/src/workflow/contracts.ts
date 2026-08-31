@@ -172,11 +172,15 @@ export interface StepAttemptState {
 	}>;
 }
 export interface WorkflowMetadata {
+	/** Empty for repository-independent workflows such as wiki-comment-review. */
 	repository: string;
 	worktree: string;
 	changeId: string;
+	/** Empty for repository-independent workflows. */
 	branch: string;
+	/** Empty for repository-independent workflows. */
 	baseBranch: string;
+	/** Empty for repository-independent workflows. */
 	baseCommit: string;
 	workspace?: string;
 	task?: string;
@@ -230,6 +234,11 @@ export interface WorkflowSnapshot {
 	developerDialogue: DeveloperDialogueRecord[];
 	/** Deterministic source-content baseline for repository-backed wiki-only runs. */
 	sourceBaseline?: { fingerprint: string };
+	/** Complete pre-agent baseline for repository-independent wiki reviews. */
+	wikiBaseline?: {
+		fingerprint: string;
+		concepts: Array<{ id: string; digest: string }>;
+	};
 	repaired?: { reason: string; fromStep: string; at: string };
 	repinned?: { fromDigest: string; at: string };
 }
@@ -312,7 +321,8 @@ export interface Assignment {
 			| "HERDR_TELEMETRY_PATH"
 			| "TRACEPARENT",
 			string
-		>
+		> &
+			Readonly<{ HERDR_WORKFLOW_TARGET?: string }>
 	>;
 }
 export interface WorkflowActionView {
@@ -743,14 +753,24 @@ export function parseSnapshot(value: unknown): WorkflowSnapshot {
 			})(),
 		},
 		metadata: {
-			repository: path.resolve(
-				text(metadata.repository, "$.metadata.repository"),
-			),
+			repository:
+				definition.id === "wiki-comment-review" && metadata.repository === ""
+					? ""
+					: path.resolve(text(metadata.repository, "$.metadata.repository")),
 			worktree: path.resolve(text(metadata.worktree, "$.metadata.worktree")),
 			changeId: text(metadata.changeId, "$.metadata.changeId"),
-			branch: text(metadata.branch, "$.metadata.branch"),
-			baseBranch: text(metadata.baseBranch, "$.metadata.baseBranch"),
-			baseCommit: text(metadata.baseCommit, "$.metadata.baseCommit"),
+			branch:
+				definition.id === "wiki-comment-review" && metadata.branch === ""
+					? ""
+					: text(metadata.branch, "$.metadata.branch"),
+			baseBranch:
+				definition.id === "wiki-comment-review" && metadata.baseBranch === ""
+					? ""
+					: text(metadata.baseBranch, "$.metadata.baseBranch"),
+			baseCommit:
+				definition.id === "wiki-comment-review" && metadata.baseCommit === ""
+					? ""
+					: text(metadata.baseCommit, "$.metadata.baseCommit"),
 			...(metadata.workspace === undefined
 				? {}
 				: { workspace: text(metadata.workspace, "$.metadata.workspace") }),
@@ -815,6 +835,38 @@ export function parseSnapshot(value: unknown): WorkflowSnapshot {
 		})(),
 		attention: strings(input.attention, "$.attention"),
 		developerDialogue: dialogue(input.developerDialogue),
+		...(input.wikiBaseline && typeof input.wikiBaseline === "object"
+			? (() => {
+					const item = object(input.wikiBaseline, "$.wikiBaseline");
+					if (!Array.isArray(item.concepts))
+						throw new ContractFailure("core.workflow-snapshot", [
+							{ path: "$.wikiBaseline.concepts", message: "expected array" },
+						]);
+					return {
+						wikiBaseline: {
+							fingerprint: text(
+								item.fingerprint,
+								"$.wikiBaseline.fingerprint",
+								128,
+							),
+							concepts: item.concepts.map((entry, index) => {
+								const concept = object(
+									entry,
+									`$.wikiBaseline.concepts[${index}]`,
+								);
+								return {
+									id: text(concept.id, `$.wikiBaseline.concepts[${index}].id`),
+									digest: text(
+										concept.digest,
+										`$.wikiBaseline.concepts[${index}].digest`,
+										128,
+									),
+								};
+							}),
+						},
+					};
+				})()
+			: {}),
 		...(input.sourceBaseline && typeof input.sourceBaseline === "object"
 			? (() => {
 					const item = object(input.sourceBaseline, "$.sourceBaseline");

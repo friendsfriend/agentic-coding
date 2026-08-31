@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -38,7 +39,179 @@ export interface WikiSearchHit {
 	score: number;
 }
 
+/** A temporary, line-anchored review comment from the home Wiki view. */
+export interface WikiReviewComment {
+	conceptId: string;
+	line: number;
+	startLine?: number;
+	endLine?: number;
+	body: string;
+}
+
+export function validateWikiReviewComments(
+	comments: readonly WikiReviewComment[],
+): WikiReviewComment[] {
+	if (!comments.length || comments.length > 100)
+		throw new Error("wiki review requires between 1 and 100 comments");
+	const normalized = comments.map((comment, index) => {
+		const conceptId = comment.conceptId?.replaceAll("\\", "/").trim();
+		if (
+			!conceptId ||
+			path.isAbsolute(conceptId) ||
+			conceptId.split("/").includes("..")
+		)
+			throw new Error(`wiki comment ${index} requires a safe concept`);
+		if (RESERVED.has(path.posix.basename(`${conceptId}.md`)))
+			throw new Error(`wiki comment ${index} targets a reserved file`);
+		if (!Number.isInteger(comment.line) || comment.line < 1)
+			throw new Error(`wiki comment ${index} requires a 1-based line`);
+		if (!comment.body?.trim() || comment.body.length > 4096)
+			throw new Error(`wiki comment ${index} requires a bounded body`);
+		if (
+			(comment.startLine !== undefined &&
+				(!Number.isInteger(comment.startLine) || comment.startLine < 1)) ||
+			(comment.endLine !== undefined &&
+				(!Number.isInteger(comment.endLine) || comment.endLine < 1)) ||
+			(comment.startLine !== undefined &&
+				comment.endLine !== undefined &&
+				comment.startLine > comment.endLine)
+		)
+			throw new Error(`wiki comment ${index} has an invalid line range`);
+		return {
+			conceptId,
+			line: comment.line,
+			...(comment.startLine === undefined
+				? {}
+				: { startLine: comment.startLine }),
+			...(comment.endLine === undefined ? {} : { endLine: comment.endLine }),
+			body: comment.body.trim(),
+		};
+	});
+	// The assignment includes this context twice (dedicated and generic input).
+	// Keep both copies plus pinned instructions below renderAssignment's 96 KiB
+	// hard limit.
+	if (Buffer.byteLength(JSON.stringify(normalized), "utf8") > 40 * 1024)
+		throw new Error("wiki review comments exceed the 40 KiB input bound");
+	return normalized;
+}
+
+export type WikiTreeNode = {
+	kind: "directory" | "concept";
+	id: string;
+	label: string;
+	depth: number;
+	children: WikiTreeNode[];
+};
+
+/** Build a deterministic tree without reading note bodies. */
+export function buildWikiTree(
+	concepts: readonly Pick<WikiConcept, "id">[],
+): WikiTreeNode[] {
+	const root: WikiTreeNode[] = [];
+	const directories = new Map<string, WikiTreeNode>();
+	for (const concept of concepts) {
+		const id = concept.id.replaceAll("\\", "/").replace(/\.md$/, "");
+		if (!id || RESERVED.has(`${id}.md`)) continue;
+		const parts = id.split("/").filter(Boolean);
+		if (!parts.length || RESERVED.has(`${parts[parts.length - 1]}.md`))
+			continue;
+		let siblings = root;
+		let prefix = "";
+		for (const [index, part] of parts.entries()) {
+			prefix = prefix ? `${prefix}/${part}` : part;
+			const leaf = index === parts.length - 1;
+			if (leaf) {
+				siblings.push({
+					kind: "concept",
+					id,
+					label: `${part}.md`,
+					depth: index,
+					children: [],
+				});
+				continue;
+			}
+			let directory = directories.get(prefix);
+			if (!directory) {
+				directory = {
+					kind: "directory",
+					id: prefix,
+					label: part,
+					depth: index,
+					children: [],
+				};
+				directories.set(prefix, directory);
+				siblings.push(directory);
+			}
+			siblings = directory.children;
+		}
+	}
+	const sort = (nodes: WikiTreeNode[]): void => {
+		nodes.sort(
+			(a, b) => a.label.localeCompare(b.label) || a.kind.localeCompare(b.kind),
+		);
+		for (const node of nodes) sort(node.children);
+	};
+	sort(root);
+	return root;
+}
+
+export function flattenWikiTree(
+	nodes: readonly WikiTreeNode[],
+	expanded: ReadonlySet<string> = new Set(),
+): WikiTreeNode[] {
+	return nodes.flatMap((node) => [
+		node,
+		...(node.kind === "directory" && expanded.has(node.id)
+			? flattenWikiTree(node.children, expanded)
+			: []),
+	]);
+}
+
 const RESERVED = new Set(["index.md", "log.md"]);
+
+/** Digest the bundle contents while excluding the operational workflow area and
+ * optionally the concepts that the current review is allowed to edit. */
+export function wikiBundleFingerprint(
+	root = wikiRoot(),
+	excludedConcepts: ReadonlySet<string> = new Set(),
+): string {
+	const base = path.resolve(root);
+	const hash = createHash("sha256");
+	const walk = (directory: string): void => {
+		for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+			if (entry.name === ".herdr-workflow") continue;
+			const file = path.join(directory, entry.name);
+			const relative = path.relative(base, file).split(path.sep).join("/");
+			const conceptId = relative.replace(/\.md$/, "");
+			if (excludedConcepts.has(conceptId)) continue;
+			if (entry.isDirectory()) walk(file);
+			else if (entry.isSymbolicLink())
+				hash.update(`link:${relative}:${fs.readlinkSync(file)}\\0`);
+			else if (entry.isFile()) {
+				const content = fs.readFileSync(file);
+				hash.update(`file:${relative}:${content.length}:`);
+				hash.update(content);
+				hash.update("\\0");
+			}
+		}
+	};
+	walk(base);
+	return hash.digest("hex");
+}
+export function wikiConceptFingerprint(
+	concept: string,
+	root = wikiRoot(),
+): string | undefined {
+	const file = path.join(
+		path.resolve(root),
+		`${concept.replaceAll("/", path.sep)}.md`,
+	);
+	try {
+		return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+	} catch {
+		return undefined;
+	}
+}
 const ACTOR =
 	/^(?:[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*|human:[^\s/]+|process:[^\s/]+)$/;
 const STATUS = new Set(["draft", "stable", "deprecated"]);
@@ -464,6 +637,11 @@ function ensureSnapshotParent(root: string, file: string): void {
 			throw error;
 	}
 }
+function workflowSnapshotBase(): string {
+	return process.env.HERDR_WORKFLOW_TARGET === "wiki://centralized"
+		? path.join(path.dirname(wikiRoot()), ".agentic-coding-workflow")
+		: process.cwd();
+}
 export function snapshotOnFirstTouch(
 	changeId: string,
 	concept: string,
@@ -580,7 +758,11 @@ export function writeConcept(
 	};
 	validateProducerFields(frontmatter as WikiWriteInput);
 	if (changeFor(input))
-		snapshotOnFirstTouch(changeFor(input) as string, concept);
+		snapshotOnFirstTouch(
+			changeFor(input) as string,
+			concept,
+			workflowSnapshotBase(),
+		);
 	const body = input.body ?? existing?.body ?? "";
 	fs.mkdirSync(path.dirname(file), { recursive: true });
 	const realRoot = fs.realpathSync(wikiRoot());

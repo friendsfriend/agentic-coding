@@ -772,6 +772,42 @@ export function registerBuiltins(
 							{ from: "core.completed", outcome: "close", to: "core.closed" },
 						] as const,
 					},
+					{
+						id: "wiki-comment-review",
+						version,
+						label: "Wiki comment review",
+						initial: "core.wiki",
+						terminal: ["core.closed"],
+						steps: ["core.wiki", "core.completed", "core.closed"],
+						allowedOutcomes: { "core.completed": ["close"] },
+						edges: [
+							{
+								from: "core.wiki",
+								outcome: "complete",
+								to: "core.completed",
+								effects: [
+									{
+										kind: "wiki.verify",
+										idempotencyKey: "wiki.verify",
+										payload: {},
+									},
+								],
+							},
+							{
+								from: "core.wiki",
+								outcome: "blocked",
+								to: "core.wiki",
+								loop: { maxAttempts: 3 },
+							},
+							{
+								from: "core.wiki",
+								outcome: "failed",
+								to: "core.wiki",
+								loop: { maxAttempts: 3 },
+							},
+							{ from: "core.completed", outcome: "close", to: "core.closed" },
+						] as const,
+					},
 				]
 			: []),
 	];

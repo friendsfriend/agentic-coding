@@ -35,7 +35,15 @@ import type {
 	StepDefinition,
 	WorkflowRegistry,
 } from "./registry.ts";
-import { conceptPath, snapshotList, wikiRoot } from "./wiki.ts";
+import {
+	conceptPath,
+	ensureBundle,
+	listConcepts,
+	snapshotList,
+	wikiBundleFingerprint,
+	wikiConceptFingerprint,
+	wikiRoot,
+} from "./wiki.ts";
 
 const MAX_ARTIFACT_BYTES = 512 * 1024;
 export const MAX_DEVELOPER_DIALOGUE_RECORDS = 100;
@@ -91,8 +99,21 @@ export function canonicalRepository(repo: string): string {
 	const common = fs.realpathSync(result.stdout.toString().trim());
 	return path.basename(common) === ".git" ? path.dirname(common) : resolved;
 }
+/** Explicit locator for workflows that review the centralized wiki without a repository. */
+export const WIKI_WORKFLOW_TARGET = "wiki://centralized";
+export function wikiWorkflowTarget(): string {
+	return WIKI_WORKFLOW_TARGET;
+}
+export function isWikiWorkflowTarget(repo: string): boolean {
+	return repo === WIKI_WORKFLOW_TARGET;
+}
+export function wikiWorkflowDataRoot(): string {
+	return path.join(path.dirname(wikiRoot()), ".agentic-coding-workflow");
+}
 export function canonicalStorePath(repo: string): string {
-	return path.join(canonicalRepository(repo), ".herdr-workflow", "herdr.db");
+	return isWikiWorkflowTarget(repo)
+		? path.join(wikiWorkflowDataRoot(), "herdr.db")
+		: path.join(canonicalRepository(repo), ".herdr-workflow", "herdr.db");
 }
 function openStore(repo: string): Database {
 	const file = canonicalStorePath(repo);
@@ -240,7 +261,10 @@ function payload(value: unknown): JsonValue {
 }
 
 export interface StartWorkflowInput {
+	/** Canonical repository path, or WIKI_WORKFLOW_TARGET. */
 	repo: string;
+	/** Initial input retained in the current step as untrusted context. */
+	context?: JsonValue;
 	worktree?: string;
 	changeId: string;
 	definitionId: string;
@@ -280,13 +304,22 @@ export class WorkflowEngine {
 	) {}
 	start(input: StartWorkflowInput): DispatchResult {
 		validateChangeId(input.changeId);
-		const repository = canonicalRepository(input.repo);
+		const wikiOnlyTarget =
+			isWikiWorkflowTarget(input.repo) &&
+			input.definitionId === "wiki-comment-review";
+		if (isWikiWorkflowTarget(input.repo) && !wikiOnlyTarget)
+			throw new WorkflowRuntimeError(
+				"start-guard",
+				"the centralized wiki target is only valid for wiki-comment-review",
+			);
+		const repository = wikiOnlyTarget ? "" : canonicalRepository(input.repo);
 		// Keep an explicitly supplied worktree path for the workflow view while
 		// resolving it separately for repository guards. On macOS, /var is a
 		// symlink to /private/var; canonicalizing the stored path would make the
 		// view differ from the path the caller supplied.
-		const worktree =
-			input.worktree === undefined
+		const worktree = wikiOnlyTarget
+			? path.resolve(ensureBundle())
+			: input.worktree === undefined
 				? fs.realpathSync(path.resolve(input.repo))
 				: path.resolve(input.worktree);
 		const resolvedWorktree = fs.realpathSync(worktree);
@@ -317,7 +350,8 @@ export class WorkflowEngine {
 					"proposal workflows require the named current branch",
 				);
 		}
-		this.validateStartEvidence(repository, input, sameCheckout);
+		if (!wikiOnlyTarget)
+			this.validateStartEvidence(repository, input, sameCheckout);
 		if (["plan-fusion", "fusion-propose"].includes(definition.id))
 			validateFusionRouting(definition.id, input.routing);
 		const at = nowIso(this.now);
@@ -333,7 +367,12 @@ export class WorkflowEngine {
 			},
 			status: "active",
 			currentStep: definition.initial,
-			step: freshStep(1),
+			step: {
+				...freshStep(1),
+				...(input.context === undefined
+					? {}
+					: { context: payload(input.context) }),
+			},
 			metadata: {
 				...input.metadata,
 				repository,
@@ -360,6 +399,9 @@ export class WorkflowEngine {
 							),
 						},
 					}
+				: {}),
+			...(wikiOnlyTarget
+				? { wikiBaseline: wikiBaselineFor(worktree, input.context) }
 				: {}),
 		};
 		this.validateSnapshot(snapshot, definition, []);
@@ -400,17 +442,18 @@ export class WorkflowEngine {
 				json({ definition: snapshot.definition }),
 				at,
 			);
-			if (input.mode)
+			if (input.mode || wikiOnlyTarget)
 				this.enqueue(
 					db,
 					snapshot,
 					"workspace.setup",
 					`workspace:${workflowId}:setup`,
 					{
-						mode: input.mode,
+						mode: input.mode ?? "wiki",
 						sameCheckout,
 						branch: snapshot.metadata.branch,
 						baseCommit: snapshot.metadata.baseCommit,
+						...(wikiOnlyTarget ? { wikiRoot: worktree } : {}),
 					},
 				);
 			else this.enterStep(db, snapshot, definition);
@@ -477,7 +520,9 @@ export class WorkflowEngine {
 						? { effectId: command.effectId }
 						: undefined,
 			);
-			this.onCommitted(canonicalRepository(repo));
+			this.onCommitted(
+				isWikiWorkflowTarget(repo) ? wikiRoot(true) : canonicalRepository(repo),
+			);
 			return { snapshot, view: this.viewById(repo, snapshot.workflowId) };
 		} catch (error) {
 			rollback(db);
@@ -520,7 +565,8 @@ export class WorkflowEngine {
 				.query("SELECT id FROM workflow_instances WHERE change_id=?")
 				.get(changeId) as { id: string } | null;
 			if (!row) {
-				this.migrateLegacy(db, canonicalRepository(repo), changeId);
+				if (!isWikiWorkflowTarget(repo))
+					this.migrateLegacy(db, canonicalRepository(repo), changeId);
 				row = db
 					.query("SELECT id FROM workflow_instances WHERE change_id=?")
 					.get(changeId) as { id: string } | null;
@@ -669,7 +715,8 @@ export class WorkflowEngine {
 							.query("SELECT 1 FROM workflow_instances WHERE change_id=?")
 							.get(row.change_id)
 					)
-						this.migrateLegacy(db, canonicalRepository(repo), row.change_id);
+						if (!isWikiWorkflowTarget(repo))
+							this.migrateLegacy(db, canonicalRepository(repo), row.change_id);
 			const views = (
 				db
 					.query("SELECT id FROM workflow_instances ORDER BY updated_at DESC")
@@ -1097,11 +1144,13 @@ export class WorkflowEngine {
 	): void {
 		const context = childTrace(parseTraceparent(process.env.TRACEPARENT));
 		new TelemetrySink(
-			path.join(
-				snapshot.metadata.worktree,
-				".herdr-workflow",
-				snapshot.metadata.changeId,
-			),
+			snapshot.definition.id === "wiki-comment-review"
+				? path.join(wikiWorkflowDataRoot(), snapshot.metadata.changeId)
+				: path.join(
+						snapshot.metadata.worktree,
+						".herdr-workflow",
+						snapshot.metadata.changeId,
+					),
 		).emit({
 			schemaVersion: 1,
 			at: nowIso(this.now),
@@ -1701,7 +1750,10 @@ export class WorkflowEngine {
 		else if (command.outcome === "complete")
 			this.transition(db, snapshot, definition, "complete", output);
 		else if (command.outcome === "blocked") {
-			if (snapshot.definition.id === "wiki-only")
+			if (
+				snapshot.definition.id === "wiki-only" ||
+				snapshot.definition.id === "wiki-comment-review"
+			)
 				this.transition(db, snapshot, definition, "blocked", command.message);
 			else {
 				snapshot.status = "attention-required";
@@ -1943,6 +1995,9 @@ export class WorkflowEngine {
 			snapshot.step.attempt = round;
 		}
 		if (
+			(snapshot.definition.id === "wiki-comment-review" &&
+				priorContext !== undefined) ||
+			(edge.loop && priorContext !== undefined && edge.to === edge.from) ||
 			(output !== undefined &&
 				[
 					"core.plan",
@@ -1955,9 +2010,14 @@ export class WorkflowEngine {
 			(edge.to === "core.wiki-approval" && outcome === "complete")
 		)
 			snapshot.step.context =
-				edge.to === "core.wiki-approval" && outcome === "complete"
-					? wikiVerificationPayload(snapshot)
-					: (JSON.parse(JSON.stringify(output)) as JsonValue);
+				snapshot.definition.id === "wiki-comment-review" &&
+				priorContext !== undefined
+					? priorContext
+					: edge.to === "core.wiki-approval" && outcome === "complete"
+						? wikiVerificationPayload(snapshot)
+						: output === undefined
+							? priorContext
+							: (JSON.parse(JSON.stringify(output)) as JsonValue);
 		if (
 			edge.to === "core.verification" &&
 			output &&
@@ -1988,7 +2048,9 @@ export class WorkflowEngine {
 				effect.kind,
 				`${snapshot.workflowId}:${effect.idempotencyKey}:${snapshot.revision}`,
 				effect.kind === "wiki.verify"
-					? (priorContext ?? wikiVerificationPayload(snapshot))
+					? snapshot.definition.id === "wiki-comment-review"
+						? wikiVerificationPayload(snapshot)
+						: (priorContext ?? wikiVerificationPayload(snapshot))
 					: effect.payload,
 			);
 		this.enterStep(db, snapshot, definition);
@@ -2095,12 +2157,15 @@ export class WorkflowEngine {
 				"routing",
 				`missing pinned route for ${step.id}/${role}`,
 			);
-		const directory = path.join(
-			snapshot.metadata.worktree,
-			".herdr-workflow",
-			snapshot.metadata.changeId,
-			"runs",
-		);
+		const directory =
+			snapshot.definition.id === "wiki-comment-review"
+				? path.join(wikiWorkflowDataRoot(), snapshot.metadata.changeId, "runs")
+				: path.join(
+						snapshot.metadata.worktree,
+						".herdr-workflow",
+						snapshot.metadata.changeId,
+						"runs",
+					);
 		const assignmentPath = path.join(directory, `${id}.assignment.md`);
 		const outputPath = path.join(directory, `${id}.output.json`);
 		const expires = new Date(
@@ -2260,6 +2325,10 @@ export class WorkflowEngine {
 		// approval promotion legal without broadening delivery's effect contract.
 		const wikiPromotionAtDelivery =
 			row.kind === "wiki.verify" && snapshot.currentStep === "core.delivery";
+		const wikiPromotionAtCompletion =
+			row.kind === "wiki.verify" &&
+			snapshot.definition.id === "wiki-comment-review" &&
+			snapshot.currentStep === "core.completed";
 		const setupBeforeEntry =
 			row.kind === "workspace.setup" &&
 			!snapshot.step.activeRunIds.length &&
@@ -2267,6 +2336,7 @@ export class WorkflowEngine {
 		if (
 			!allowed &&
 			!wikiPromotionAtDelivery &&
+			!wikiPromotionAtCompletion &&
 			!setupBeforeEntry &&
 			row.kind !== "agent.stop"
 		)
@@ -2545,6 +2615,7 @@ export class WorkflowEngine {
 										"standard-propose",
 										"fusion-propose",
 										"wiki-only",
+										"wiki-comment-review",
 									].includes(snapshot.definition.id)
 										? []
 										: [
@@ -3114,6 +3185,50 @@ function withWikiRoot<T>(root: string, operation: () => T): T {
 		else process.env.HERDR_WIKI_DIR = previous;
 	}
 }
+function wikiBaselineFor(
+	root: string,
+	context: JsonValue | undefined,
+): WorkflowSnapshot["wikiBaseline"] {
+	const comments =
+		context && typeof context === "object" && !Array.isArray(context)
+			? (context as { comments?: unknown }).comments
+			: undefined;
+	const allowed = new Set(
+		Array.isArray(comments)
+			? comments.flatMap((comment) =>
+					comment && typeof comment === "object" && "conceptId" in comment
+						? [String((comment as { conceptId: unknown }).conceptId)]
+						: [],
+				)
+			: [],
+	);
+	return {
+		fingerprint: wikiBundleFingerprint(root, allowed),
+		concepts: listConcepts().map((concept) => ({
+			id: concept.id,
+			digest: wikiConceptFingerprint(concept.id, root) ?? "",
+		})),
+	};
+}
+function wikiReviewConceptIds(
+	snapshot: WorkflowSnapshot,
+): Set<string> | undefined {
+	if (snapshot.definition.id !== "wiki-comment-review") return undefined;
+	const context = snapshot.step.context;
+	const comments =
+		context && typeof context === "object" && !Array.isArray(context)
+			? (context as { comments?: unknown }).comments
+			: undefined;
+	return new Set(
+		Array.isArray(comments)
+			? comments.flatMap((comment) =>
+					comment && typeof comment === "object" && "conceptId" in comment
+						? [String((comment as { conceptId: unknown }).conceptId)]
+						: [],
+				)
+			: [],
+	);
+}
 function wikiVerificationPayload(snapshot: WorkflowSnapshot): {
 	concepts: Array<{ id: string; digest: string }>;
 } {
@@ -3123,17 +3238,30 @@ function wikiVerificationPayload(snapshot: WorkflowSnapshot): {
 			"wiki-root",
 			"wiki root does not match the pinned workflow wiki root",
 		);
-	return withWikiRoot(pinnedRoot, () => ({
-		concepts: snapshotList(
+	return withWikiRoot(pinnedRoot, () => {
+		const all = snapshotList(
 			snapshot.metadata.changeId,
-			snapshot.metadata.worktree,
-		).map((id) => ({
-			id,
-			digest: createHash("sha256")
-				.update(fs.readFileSync(conceptPath(id)))
-				.digest("hex"),
-		})),
-	}));
+			snapshot.definition.id === "wiki-comment-review"
+				? wikiWorkflowDataRoot()
+				: snapshot.metadata.worktree,
+		);
+		const requested = wikiReviewConceptIds(snapshot);
+		if (requested && all.some((id) => !requested.has(id)))
+			throw new WorkflowRuntimeError(
+				"wiki-scope",
+				"wiki agent touched a concept outside submitted comments",
+			);
+		return {
+			concepts: all
+				.filter((id) => !requested || requested.has(id))
+				.map((id) => ({
+					id,
+					digest: createHash("sha256")
+						.update(fs.readFileSync(conceptPath(id)))
+						.digest("hex"),
+				})),
+		};
+	});
 }
 function roleForStep(step: string, snapshot: WorkflowSnapshot): string[] {
 	if (step === "core.plan") return ["planner"];

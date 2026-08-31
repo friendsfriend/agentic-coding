@@ -8,7 +8,11 @@ import type {
 	DeveloperDialogueRecord,
 	WorkflowView,
 } from "../../workflow/contracts.ts";
-import { canonicalStorePath } from "../../workflow/runtime.ts";
+import {
+	canonicalStorePath,
+	isWikiWorkflowTarget,
+	wikiWorkflowTarget,
+} from "../../workflow/runtime.ts";
 import {
 	readConcept,
 	renderDocument,
@@ -203,6 +207,9 @@ export function listWorkflows(...roots: string[]): WorkflowOverview[] {
 	};
 	if (!roots.length) roots = [join(homedir(), "development"), process.cwd()];
 	for (const root of roots) walk(root, 0);
+	// UI-only wiki reviews live in the centralized target store rather than a
+	// Git repository, so include them in the same canonical home list.
+	addRepository(wikiWorkflowTarget());
 	return found.sort((a, b) => a.state.changeId.localeCompare(b.state.changeId));
 }
 
@@ -2109,10 +2116,14 @@ export function focusAgent(state: WorkflowState, pane: string) {
 }
 
 export function focusWorkflow(workflow: WorkflowOverview) {
+	const state = workflow.state;
+	if (isWikiWorkflowTarget(state.repository) || !state.repository) {
+		focusWorkspace(state.workspace);
+		return;
+	}
 	const returnWorkspace = process.env.HERDR_WORKSPACE_ID;
 	if (!returnWorkspace)
 		throw new Error("Dashboard is not running inside a Herdr workspace.");
-	const state = workflow.state;
 	setReturnInProcess(state.repository, state.changeId, returnWorkspace);
 	focusWorkspace(state.workspace);
 }
