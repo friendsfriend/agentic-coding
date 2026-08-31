@@ -1,10 +1,19 @@
+import { spawn } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 const Option = Type.Object({
-	label: Type.String({ description: "Short display label", minLength: 1, maxLength: 256 }),
-	value: Type.String({ description: "Value returned when selected", minLength: 1, maxLength: 1024 }),
+	label: Type.String({
+		description: "Short display label",
+		minLength: 1,
+		maxLength: 256,
+	}),
+	value: Type.String({
+		description: "Value returned when selected",
+		minLength: 1,
+		maxLength: 1024,
+	}),
 });
 const Parameters = Type.Object({
 	description: Type.String({
@@ -37,20 +46,28 @@ export default function developerQuestion(pi: ExtensionAPI) {
 				"--options",
 				JSON.stringify(params.options ?? []),
 			];
-			const child = Bun.spawn(["agentic-coding", ...args], {
+			const child = spawn("agentic-coding", args, {
 				cwd: process.cwd(),
 				env: process.env,
-				stdout: "pipe",
-				stderr: "pipe",
+				stdio: ["ignore", "pipe", "pipe"],
+			});
+			let stdout = "";
+			let stderr = "";
+			child.stdout?.setEncoding("utf8");
+			child.stderr?.setEncoding("utf8");
+			child.stdout?.on("data", (chunk: string) => {
+				stdout += chunk;
+			});
+			child.stderr?.on("data", (chunk: string) => {
+				stderr += chunk;
 			});
 			const abort = () => child.kill();
 			signal.addEventListener("abort", abort, { once: true });
 			try {
-				const [exitCode, stdout, stderr] = await Promise.all([
-					child.exited,
-					new Response(child.stdout).text(),
-					new Response(child.stderr).text(),
-				]);
+				const exitCode = await new Promise<number>((resolve, reject) => {
+					child.once("error", reject);
+					child.once("close", (code) => resolve(code ?? 1));
+				});
 				if (signal.aborted)
 					return {
 						content: [{ type: "text", text: "Developer question cancelled" }],
@@ -58,11 +75,21 @@ export default function developerQuestion(pi: ExtensionAPI) {
 					};
 				if (exitCode !== 0)
 					return {
-						content: [{ type: "text", text: `Developer question failed: ${stderr.trim() || stdout.trim()}` }],
+						content: [
+							{
+								type: "text",
+								text: `Developer question failed: ${stderr.trim() || stdout.trim()}`,
+							},
+						],
 						isError: true,
 					};
 				return {
-					content: [{ type: "text", text: stdout.trim() || "Developer question resolved" }],
+					content: [
+						{
+							type: "text",
+							text: stdout.trim() || "Developer question resolved",
+						},
+					],
 					details: {},
 				};
 			} finally {
@@ -73,7 +100,10 @@ export default function developerQuestion(pi: ExtensionAPI) {
 			const options = Array.isArray(args.options) ? args.options.length : 0;
 			return new Text(
 				theme.fg("toolTitle", theme.bold("developer_question ")) +
-					theme.fg("muted", `${args.description}${options ? ` (${options} recommended options)` : ""}`),
+					theme.fg(
+						"muted",
+						`${args.description}${options ? ` (${options} recommended options)` : ""}`,
+					),
 				0,
 				0,
 			);
@@ -81,7 +111,10 @@ export default function developerQuestion(pi: ExtensionAPI) {
 		renderResult(result, _options, theme) {
 			const text = result.content[0];
 			return new Text(
-				theme.fg(result.isError ? "warning" : "success", text?.type === "text" ? text.text : ""),
+				theme.fg(
+					result.isError ? "warning" : "success",
+					text?.type === "text" ? text.text : "",
+				),
 				0,
 				0,
 			);

@@ -13,6 +13,12 @@ test("embedded workflow assets stay outside skill/plugin discovery", () => {
 		),
 	).toBe(true);
 	expect(names).toContain("extensions/developer-question.ts");
+	expect(AGENT_DEFINITIONS["extensions/developer-question.ts"]).not.toContain(
+		"Bun.",
+	);
+	expect(AGENT_DEFINITIONS["extensions/developer-question.ts"]).toContain(
+		'from "node:child_process"',
+	);
 	expect(names).toContain("bridges/pi-telemetry.ts");
 	expect(names).toContain("bridges/opencode-telemetry.js");
 	expect(names).toContain("bridges/opencode-v2-telemetry.js");
