@@ -19,7 +19,7 @@ import {
 	changedFilesIn,
 	type WorkflowEngine,
 } from "./runtime.ts";
-import { conceptPath, snapshotList, verifyConcept } from "./wiki.ts";
+import { conceptPath, snapshotList, verifyConcept, wikiRoot } from "./wiki.ts";
 
 export interface EffectHandler {
 	observe?(effect: ClaimedEffect): Promise<unknown | undefined>;
@@ -78,6 +78,31 @@ export class EffectRunner {
 			}
 		}
 		return completed;
+	}
+}
+function samePath(left: string, right: string): boolean {
+	try {
+		return fs.realpathSync(left) === fs.realpathSync(right);
+	} catch {
+		return path.resolve(left) === path.resolve(right);
+	}
+}
+function pinnedWikiRoot(
+	snapshot: ReturnType<WorkflowEngine["getSnapshot"]>,
+): string {
+	const pinnedRoot = path.resolve(snapshot.metadata.wikiRoot ?? wikiRoot(true));
+	if (!samePath(wikiRoot(), pinnedRoot))
+		throw new Error("wiki root does not match the pinned workflow wiki root");
+	return pinnedRoot;
+}
+function withWikiRoot<T>(root: string, operation: () => T): T {
+	const previous = process.env.HERDR_WIKI_DIR;
+	process.env.HERDR_WIKI_DIR = root;
+	try {
+		return operation();
+	} finally {
+		if (previous === undefined) delete process.env.HERDR_WIKI_DIR;
+		else process.env.HERDR_WIKI_DIR = previous;
 	}
 }
 export interface AdapterEffectOptions {
@@ -411,49 +436,59 @@ export function agentEffectHandlers(
 		"wiki.verify": {
 			async execute(effect) {
 				const snapshot = snapshotFor(effect);
-				const approved = effect.payload as {
-					concepts?: Array<{ id?: unknown; digest?: unknown }>;
-				};
-				const approvedContent = new Map<string, string>();
-				let concepts = snapshotList(
-					snapshot.metadata.changeId,
-					snapshot.metadata.worktree,
-				);
-				if (Array.isArray(approved.concepts)) {
-					const expected = approved.concepts.map((item) => String(item.id));
-					if (
-						concepts.length !== expected.length ||
-						concepts.some((id, index) => id !== expected[index])
-					)
-						throw new Error("wiki changed after developer approval");
-					for (const item of approved.concepts) {
-						if (typeof item.id !== "string" || typeof item.digest !== "string")
-							throw new Error("invalid approved wiki snapshot");
-						const content = fs.readFileSync(conceptPath(item.id), "utf8");
-						const digest = createHash("sha256").update(content).digest("hex");
-						if (digest !== item.digest)
-							throw new Error(
-								`wiki changed after developer approval: ${item.id}`,
+				const pinnedRoot = pinnedWikiRoot(snapshot);
+				return withWikiRoot(pinnedRoot, () => {
+					const approved = effect.payload as {
+						concepts?: Array<{ id?: unknown; digest?: unknown }>;
+					};
+					const approvedContent = new Map<string, string>();
+					let concepts = snapshotList(
+						snapshot.metadata.changeId,
+						snapshot.metadata.worktree,
+					);
+					if (Array.isArray(approved.concepts)) {
+						const expected = approved.concepts.map((item) => String(item.id));
+						if (
+							concepts.length !== expected.length ||
+							concepts.some((id, index) => id !== expected[index])
+						)
+							throw new Error("wiki changed after developer approval");
+						for (const item of approved.concepts) {
+							if (
+								typeof item.id !== "string" ||
+								typeof item.digest !== "string"
+							)
+								throw new Error("invalid approved wiki snapshot");
+							const content = fs.readFileSync(conceptPath(item.id), "utf8");
+							const digest = createHash("sha256").update(content).digest("hex");
+							if (digest !== item.digest)
+								throw new Error(
+									`wiki changed after developer approval: ${item.id}`,
+								);
+							approvedContent.set(item.id, content);
+						}
+						concepts = approved.concepts.map((item) => String(item.id));
+					}
+					const configured = loadConfig().wiki?.reviewer;
+					let reviewer = configured;
+					if (!reviewer) {
+						try {
+							reviewer = git(
+								snapshot.metadata.worktree,
+								"config",
+								"user.email",
 							);
-						approvedContent.set(item.id, content);
+						} catch {
+							reviewer = undefined;
+						}
 					}
-					concepts = approved.concepts.map((item) => String(item.id));
-				}
-				const configured = loadConfig().wiki?.reviewer;
-				let reviewer = configured;
-				if (!reviewer) {
-					try {
-						reviewer = git(snapshot.metadata.worktree, "config", "user.email");
-					} catch {
-						reviewer = undefined;
-					}
-				}
-				const actor = reviewer?.startsWith("human:")
-					? reviewer
-					: `human:${reviewer || "developer"}`;
-				for (const concept of concepts)
-					verifyConcept(concept, actor, approvedContent.get(concept));
-				return { verified: concepts, actor };
+					const actor = reviewer?.startsWith("human:")
+						? reviewer
+						: `human:${reviewer || "developer"}`;
+					for (const concept of concepts)
+						verifyConcept(concept, actor, approvedContent.get(concept));
+					return { verified: concepts, actor };
+				});
 			},
 		},
 		"openspec.validate": {
@@ -988,11 +1023,18 @@ function assignmentFor(
 				? "developer-dialogue"
 				: "silent",
 		inputs,
-		permissions: run.profile.readOnly
-			? ["read repository"]
-			: ["read and edit repository"],
+		permissions:
+			run.stepId === "core.wiki"
+				? ["read repository evidence", "write centralized wiki drafts only"]
+				: run.profile.readOnly
+					? ["read repository"]
+					: ["read and edit repository"],
 		checks:
-			run.role === "worker" ? ["focused tests only"] : ["assigned checks"],
+			run.stepId === "core.wiki"
+				? ["documentation scope and source-isolation checks"]
+				: run.role === "worker"
+					? ["focused tests only"]
+					: ["assigned checks"],
 		...(output ? { output } : {}),
 		allowedOutcomes: ["complete", "blocked", "failed"],
 		environment: {

@@ -39,6 +39,7 @@ import {
 	readConcept,
 	searchConcepts,
 	verifyConcept,
+	wikiRoot,
 	writeConcept,
 } from "./wiki.ts";
 
@@ -290,7 +291,27 @@ function processEnvironment(pid: number): CallerEnvironment {
 	);
 }
 function parentProcessId(pid: number): number | undefined {
-	const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+	if (process.platform !== "linux") {
+		const result = Bun.spawnSync(["ps", "-p", String(pid), "-o", "ppid="], {
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		if (result.exitCode !== 0)
+			throw new Error("managed caller ancestry is unavailable");
+		const parent = Number(result.stdout.toString().trim());
+		if (!Number.isInteger(parent) || parent < 0)
+			throw new Error("managed caller ancestry is malformed");
+		return parent === 0 ? undefined : parent;
+	}
+	let stat: string;
+	try {
+		stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+	} catch (error) {
+		// Process entries can disappear while walking ancestry.
+		if (error instanceof Error && "code" in error && error.code === "ENOENT")
+			return undefined;
+		throw error;
+	}
 	const fields = stat
 		.slice(stat.lastIndexOf(")") + 1)
 		.trim()
@@ -300,10 +321,46 @@ function parentProcessId(pid: number): number | undefined {
 		throw new Error("managed caller ancestry is malformed");
 	return parent === 0 ? undefined : parent;
 }
+function processCommand(pid: number): string {
+	const result = Bun.spawnSync(["ps", "-p", String(pid), "-o", "command="], {
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	if (result.exitCode !== 0)
+		throw new Error("managed caller ancestry is unavailable");
+	return result.stdout.toString().trim();
+}
+function managedProcessAncestor(): boolean {
+	const seen = new Set<number>();
+	let pid = process.ppid;
+	while (pid > 1 && !seen.has(pid)) {
+		seen.add(pid);
+		if (
+			/(?:^|[\\s/])(pi|opencode|opencode2|opencode-v2)(?:[\\s]|$)/i.test(
+				processCommand(pid),
+			)
+		)
+			return true;
+		const parent = parentProcessId(pid);
+		if (parent === undefined) return false;
+		pid = parent;
+	}
+	if (seen.has(pid)) throw new Error("managed caller ancestry is cyclic");
+	return false;
+}
 /** Read the launch environment from the caller's process ancestry. A child
  * cannot bypass the managed-agent boundary by unsetting its own environment. */
 function callerEnvironment(): CallerEnvironment {
 	const local = process.env as CallerEnvironment;
+	if (process.platform !== "linux") {
+		// A managed run always carries these values in the current process. If a
+		// child clears them, identify the managed runtime through its ancestry;
+		// never infer interactivity from the current working directory.
+		if (local.HERDR_RUN_TOKEN || local.HERDR_WORKFLOW_ID) return local;
+		if (managedProcessAncestor())
+			throw new Error("managed caller ancestry is unavailable");
+		return {};
+	}
 	let managed: CallerEnvironment = {};
 	let managedPid: number | undefined;
 	const seen = new Set<number>();
@@ -578,7 +635,7 @@ function help(command?: string): void {
 	}
 	const usage: Record<string, string> = {
 		start:
-			"start --repo PATH --change ID --mode worktree|checkout [--workflow standard|standard-propose|direct-apply|no-openspec|plan-fusion|fusion-propose] [--fusion-profiles NAME,NAME,...] [--task TEXT] [--ticket ID] [--preset NAME]",
+			"start --repo PATH --change ID --mode worktree|checkout [--workflow standard|standard-propose|direct-apply|no-openspec|plan-fusion|fusion-propose|wiki-only] [--fusion-profiles NAME,NAME,...] [--task TEXT] [--ticket ID] [--preset NAME]",
 		status: "status --repo PATH --change ID",
 		action:
 			"action ACTION_ID --repo PATH --change ID --revision N [--input JSON_OR_PATH]",
@@ -706,6 +763,11 @@ export function validateStart(
 ): void {
 	const dirty = runGit(repo, "status", "--porcelain");
 	const proposal = ["standard-propose", "fusion-propose"].includes(workflow);
+	if (workflow === "wiki-only") {
+		if (!task?.trim())
+			throw new Error("wiki-only workflow requires non-empty --task");
+		return;
+	}
 	if (dirty && !proposal)
 		throw new Error("working tree must be clean before workflow start");
 	if (workflow === "no-openspec") {
@@ -836,6 +898,13 @@ export function rolesForDefinition(
 	}
 	return roles;
 }
+function samePath(left: string, right: string): boolean {
+	try {
+		return fs.realpathSync(left) === fs.realpathSync(right);
+	} catch {
+		return path.resolve(left) === path.resolve(right);
+	}
+}
 function wikiRole(): string | undefined {
 	return process.env.HERDR_ROLE || undefined;
 }
@@ -859,13 +928,20 @@ function authorizeWikiWriter(): void {
 	const token = process.env.HERDR_RUN_TOKEN;
 	if (!workflowId || stepId !== "core.wiki" || role !== "wiki" || !token)
 		throw new Error("wiki write requires an authenticated core.wiki run");
-	engine().authorizeAgentCapability(
+	const workflowEngine = engine();
+	workflowEngine.authorizeAgentCapability(
 		process.cwd(),
 		workflowId,
 		stepId,
 		role,
 		token,
 	);
+	const snapshot = workflowEngine.getSnapshot(process.cwd(), workflowId);
+	const pinnedRoot = path.resolve(snapshot.metadata.wikiRoot ?? wikiRoot(true));
+	if (!samePath(wikiRoot(), pinnedRoot))
+		throw new Error(
+			"wiki write destination does not match the pinned workflow wiki root",
+		);
 }
 function wikiActor(role: string | undefined): string {
 	return role
@@ -913,7 +989,17 @@ async function runWiki(rest: string[]): Promise<void> {
 		return;
 	}
 	if (operation === "write") {
-		if (!role && managedAgent())
+		// Preserve the explicitly supported unmanaged administrative path when
+		// no managed identity is present. This is the selected compatibility
+		// trade-off for hosts where managed ancestry may be detectable without
+		// workflow variables.
+		if (
+			!role &&
+			managedAgent() &&
+			(process.env.HERDR_RUN_TOKEN ||
+				process.env.HERDR_WORKFLOW_ID ||
+				process.env.HERDR_STEP_ID)
+		)
 			throw new Error("wiki write requires an authenticated workflow role");
 		if (role && role !== "wiki")
 			throw new Error(`wiki write is not permitted for role ${role}`);
@@ -981,7 +1067,13 @@ async function runWiki(rest: string[]): Promise<void> {
 		return;
 	}
 	if (operation === "verify") {
-		if (!role && managedAgent())
+		if (
+			!role &&
+			managedAgent() &&
+			(process.env.HERDR_RUN_TOKEN ||
+				process.env.HERDR_WORKFLOW_ID ||
+				process.env.HERDR_STEP_ID)
+		)
 			throw new Error(
 				"wiki verify requires the archive role or an interactive caller",
 			);
@@ -1000,7 +1092,13 @@ async function runWiki(rest: string[]): Promise<void> {
 		wikiOutput(rest, verifyConcept(concept, verifyingActor));
 		return;
 	}
-	if (!role && managedAgent())
+	if (
+		!role &&
+		managedAgent() &&
+		(process.env.HERDR_RUN_TOKEN ||
+			process.env.HERDR_WORKFLOW_ID ||
+			process.env.HERDR_STEP_ID)
+	)
 		throw new Error(
 			"wiki log requires the archive role or an interactive caller",
 		);
@@ -1048,6 +1146,7 @@ export async function run(argv: string[]): Promise<void> {
 		const mode = parseMode(flag(rest, "mode"));
 		const workflow = flag(rest, "workflow") ?? "standard";
 		const proposal = ["standard-propose", "fusion-propose"].includes(workflow);
+		const sameCheckout = proposal || workflow === "wiki-only";
 		if (
 			![
 				"standard",
@@ -1056,11 +1155,12 @@ export async function run(argv: string[]): Promise<void> {
 				"no-openspec",
 				"plan-fusion",
 				"fusion-propose",
+				"wiki-only",
 			].includes(workflow)
 		)
 			throw new Error(`unknown workflow definition: ${workflow}`);
-		if (proposal && mode !== "checkout")
-			throw new Error("proposal workflows require --mode checkout");
+		if (sameCheckout && mode !== "checkout")
+			throw new Error("repository-backed workflows require --mode checkout");
 		const fusionProfiles =
 			workflow === "plan-fusion" || workflow === "fusion-propose"
 				? parseFusionProfiles(flag(rest, "fusion-profiles"))
@@ -1101,17 +1201,22 @@ export async function run(argv: string[]): Promise<void> {
 		for (const route of routing.routes)
 			preflightProfile(route.profile, registry.step(route.stepId).requirements);
 		const baseBranch = config.workflow.base_branch;
-		const baseCommit = runGit(repo, "rev-parse", `${baseBranch}^{commit}`);
-		runGit(repo, "remote", "get-url", config.workflow.remote);
-		const branch = proposal
+		const baseCommit = sameCheckout
+			? runGit(repo, "rev-parse", "HEAD")
+			: runGit(repo, "rev-parse", `${baseBranch}^{commit}`);
+		if (!sameCheckout)
+			runGit(repo, "remote", "get-url", config.workflow.remote);
+		const branch = sameCheckout
 			? runGit(repo, "branch", "--show-current")
 			: `${config.workflow.branch_prefix}${change}`;
-		if (proposal && !branch)
-			throw new Error("proposal workflows require a named current branch");
+		if (sameCheckout && !branch)
+			throw new Error(
+				"repository-backed workflows require a named current branch",
+			);
 		workflowEngine.start({
 			repo,
 			mode,
-			sameCheckout: proposal,
+			sameCheckout,
 			changeId: change,
 			definitionId: workflow,
 			definitionVersion,

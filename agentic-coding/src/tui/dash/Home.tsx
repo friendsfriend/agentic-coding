@@ -142,6 +142,10 @@ export function Home(props: {
 	});
 	const diagnostic = (value?: string) =>
 		value ? value.replace(/\s+/g, " ").slice(0, 96) : undefined;
+	const workflowProgress = (item: WorkflowOverview) =>
+		item.state.definition?.id === "wiki-only"
+			? `documentation: ${item.agents.find((agent) => agent.role === "wiki")?.status ?? "not started"}`
+			: `${item.tasks[0]}/${item.tasks[1]} tasks · planner: ${item.agents.find((agent) => agent.role === "planner")?.status ?? "not started"}`;
 	const helpSections: HelpSection[] = [
 		{
 			title: "Navigation",
@@ -626,10 +630,7 @@ export function Home(props: {
 										</text>
 										<text fg={uiColors.textMuted}>
 											{item.state.definition?.label ?? "Workflow"} ·{" "}
-											{item.tasks[0]}/{item.tasks[1]} tasks · planner:
-											{item.agents.find((agent) => agent.role === "planner")
-												?.status ?? "not started"}{" "}
-											·{" "}
+											{workflowProgress(item)} ·{" "}
 											{
 												item.agents.filter(
 													(agent) =>

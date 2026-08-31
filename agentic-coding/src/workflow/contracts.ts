@@ -184,6 +184,8 @@ export interface WorkflowMetadata {
 	createdAt: string;
 	updatedAt: string;
 	stepEnteredAt: string;
+	/** Engine-pinned centralized wiki destination for workflows with core.wiki. */
+	wikiRoot?: string;
 }
 export type DeveloperQuestionStatus =
 	| "pending"
@@ -226,6 +228,8 @@ export interface WorkflowSnapshot {
 	attention: string[];
 	/** Bounded, ordered question/answer history. Missing in legacy snapshots. */
 	developerDialogue: DeveloperDialogueRecord[];
+	/** Deterministic source-content baseline for repository-backed wiki-only runs. */
+	sourceBaseline?: { fingerprint: string };
 	repaired?: { reason: string; fromStep: string; at: string };
 	repinned?: { fromDigest: string; at: string };
 }
@@ -759,6 +763,13 @@ export function parseSnapshot(value: unknown): WorkflowSnapshot {
 			createdAt: text(metadata.createdAt, "$.metadata.createdAt"),
 			updatedAt: text(metadata.updatedAt, "$.metadata.updatedAt"),
 			stepEnteredAt: text(metadata.stepEnteredAt, "$.metadata.stepEnteredAt"),
+			...(metadata.wikiRoot === undefined
+				? {}
+				: {
+						wikiRoot: path.resolve(
+							text(metadata.wikiRoot, "$.metadata.wikiRoot"),
+						),
+					}),
 		},
 		routing: {
 			defaultProfile: text(routing.defaultProfile, "$.routing.defaultProfile"),
@@ -804,6 +815,20 @@ export function parseSnapshot(value: unknown): WorkflowSnapshot {
 		})(),
 		attention: strings(input.attention, "$.attention"),
 		developerDialogue: dialogue(input.developerDialogue),
+		...(input.sourceBaseline && typeof input.sourceBaseline === "object"
+			? (() => {
+					const item = object(input.sourceBaseline, "$.sourceBaseline");
+					return {
+						sourceBaseline: {
+							fingerprint: text(
+								item.fingerprint,
+								"$.sourceBaseline.fingerprint",
+								128,
+							),
+						},
+					};
+				})()
+			: {}),
 		...(input.repaired && typeof input.repaired === "object"
 			? (() => {
 					const item = object(input.repaired, "$.repaired");
