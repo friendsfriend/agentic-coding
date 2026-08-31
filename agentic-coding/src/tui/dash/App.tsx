@@ -52,6 +52,7 @@ import {
 	savePlanReview,
 	saveWikiReview,
 	testDashboard,
+	type WorkflowState,
 } from "./data";
 import { ChangedFilesView } from "./devenv-ui/components/ChangedFilesView";
 import { DiffViewModal } from "./devenv-ui/components/DiffViewModal";
@@ -161,6 +162,47 @@ export function agentMetricLine(
 			: []),
 	];
 	return parts.length > 0 ? parts.join(" · ") : undefined;
+}
+
+export type PhaseStatusState = Pick<
+	WorkflowState,
+	"phase" | "stepId" | "stepLabel" | "status"
+> & {
+	runs: Array<Pick<WorkflowState["runs"][number], "stepId" | "status">>;
+};
+
+export function phaseStatus(state: PhaseStatusState) {
+	const text = state.stepLabel ?? state.phase;
+	const terminal = ["completed", "closed"].includes(state.status);
+	const blocked =
+		state.status === "attention-required" &&
+		state.stepId !== undefined &&
+		state.runs.some(
+			(run) => run.stepId === state.stepId && run.status === "blocked",
+		);
+	return { text, working: !terminal, blocked };
+}
+
+export function PhaseStatus(props: { state: PhaseStatusState }) {
+	const status = createMemo(() => phaseStatus(props.state));
+	return (
+		<box flexDirection="row" gap={1}>
+			<Badge
+				text={status().text}
+				appearance="badge"
+				highlight={status().working ? "highlight2" : "secondary"}
+				animation={status().working ? "aurora" : "static"}
+			/>
+			<Show when={status().blocked}>
+				<Badge
+					text="BLOCKED"
+					appearance="badge"
+					highlight="warning"
+					animation="static"
+				/>
+			</Show>
+		</box>
+	);
 }
 
 function FindingCountSummary(props: {
@@ -1270,15 +1312,6 @@ export function App(props: {
 			setBusy(false);
 		}
 	};
-	const workflowStatus = createMemo(() => {
-		const state = data().state;
-		const text = state.stepLabel ?? state.phase;
-		const terminal = ["completed", "closed"].includes(
-			state.status ?? state.phase,
-		);
-		return { text, working: !terminal };
-	});
-
 	const refresh = () => {
 		try {
 			setData(load());
@@ -2451,16 +2484,7 @@ export function App(props: {
 											<box width={7}>
 												<text fg={uiColors.textMuted}>STATUS</text>
 											</box>
-											<Badge
-												text={workflowStatus().text}
-												appearance="badge"
-												highlight={
-													workflowStatus().working ? "highlight2" : "secondary"
-												}
-												animation={
-													workflowStatus().working ? "aurora" : "static"
-												}
-											/>
+											<PhaseStatus state={data().state} />
 										</box>
 										<text fg={uiColors.textMuted}>GIT STATUS</text>
 										<Show

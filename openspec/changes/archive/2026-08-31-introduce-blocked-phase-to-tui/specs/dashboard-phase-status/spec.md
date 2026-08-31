@@ -1,8 +1,5 @@
-# dashboard-phase-status Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change rework-dashboard-phase-display. Update Purpose after archive.
-## Requirements
 ### Requirement: Change panel STATUS shows workflow phase only
 The dashboard's Change panel STATUS row SHALL display the workflow's current phase label and, when the current workflow step is blocked, a separate blocked indicator adjacent to that label. It SHALL NOT substitute or blend in any individual agent's activity status, since agent status is already displayed per-role in the Agents panel.
 
@@ -36,4 +33,3 @@ The STATUS badge's animated ("working") visual state SHALL be derived from wheth
 - **THEN** the STATUS phase badge SHALL render with its static appearance
 - **AND** this SHALL hold even if an agent pane still reports a non-terminal status
 - **AND** the separate blocked indicator SHALL not change the terminality rule
-
