@@ -9,7 +9,7 @@ import {
 	type ResolvedProfile,
 } from "../src/workflow/contracts.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
-import { WorkflowEngine } from "../src/workflow/runtime.ts";
+import { QUESTION_WAIT_MS, WorkflowEngine } from "../src/workflow/runtime.ts";
 
 function repository(root: string): string {
 	fs.mkdirSync(root, { recursive: true });
@@ -189,7 +189,7 @@ test("questions persist, answer in FIFO order, and do not change workflow lifecy
 	}
 });
 
-test("question capability rejects another run and expiry resolves the wait", () => {
+test("question capability rejects another run and expires after 24 hours", () => {
 	const { repo, engine, run, token, now } = setup();
 	try {
 		const identity = {
@@ -205,8 +205,18 @@ test("question capability rejects another run and expiry resolves the wait", () 
 			description: "need guidance",
 			options: [],
 		});
-		const questionId = created.snapshot.developerDialogue[0]?.id;
+		const question = created.snapshot.developerDialogue[0];
+		const questionId = question?.id;
 		if (!questionId) throw new Error("question id missing");
+		expect(question?.expiresAt).toBe(
+			new Date(
+				new Date("2026-01-01T00:00:00Z").getTime() + QUESTION_WAIT_MS,
+			).toISOString(),
+		);
+		now(new Date("2026-01-01T23:59:59.999Z"));
+		expect(engine.status(repo, "question").pendingQuestions).toHaveLength(1);
+		now(new Date("2026-01-02T00:00:00.000Z"));
+		expect(engine.status(repo, "question").pendingQuestions).toHaveLength(0);
 		expect(() =>
 			engine.dispatch(repo, {
 				type: "agent.question",
@@ -216,8 +226,6 @@ test("question capability rejects another run and expiry resolves the wait", () 
 				options: [],
 			}),
 		).toThrow(/capability/);
-		now(new Date("2026-01-01T00:06:00Z"));
-		expect(engine.status(repo, "question").pendingQuestions).toHaveLength(0);
 		const expired = engine.dispatch(repo, {
 			type: "developer.action",
 			workflowId: run.workflowId,
@@ -227,6 +235,7 @@ test("question capability rejects another run and expiry resolves the wait", () 
 		});
 		expect(expired.view.developerDialogue?.[0]?.status).toBe("expired");
 		expect(expired.view.pendingQuestions).toHaveLength(0);
+		now(new Date("2026-01-01T23:59:59.999Z"));
 		expect(() =>
 			engine.dispatch(repo, {
 				type: "agent.question-expire",
