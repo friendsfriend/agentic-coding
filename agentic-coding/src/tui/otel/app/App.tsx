@@ -14,6 +14,7 @@ import {
 } from "solid-js";
 import { wikiWorkflowDataRoot } from "../../../workflow/runtime";
 import type { WikiReviewComment } from "../../../workflow/wiki";
+import { copyToClipboard } from "../../clipboard";
 import { App as DashApp } from "../../dash/App";
 import {
 	discoverProjects,
@@ -53,7 +54,6 @@ import { TopologyView } from "../views/TopologyView";
 import { TraceListView } from "../views/TraceListView";
 import { TraceTreeView } from "../views/TraceTreeView";
 import { WikiView } from "../views/WikiView";
-import { copyText } from "./clipboard";
 import { createNavigation } from "./navigation";
 import { notify } from "./notifications";
 import {
@@ -316,7 +316,7 @@ export function App(props: {
 			if (reportEmpty) notify("No selection to copy", "warning");
 			return;
 		}
-		const copied = copyText(text);
+		const copied = copyToClipboard(text);
 		notify(
 			copied ? "Copied selection" : "Copy failed",
 			copied ? "success" : "error",

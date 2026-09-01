@@ -21,7 +21,7 @@ import {
 import type { DeveloperDialogueRecord } from "../../workflow/contracts";
 import { formatDuration } from "../../workflow/format";
 import { wikiWorkflowDataRoot } from "../../workflow/runtime";
-import { copyToClipboard } from "./clipboard";
+import { copyToClipboard } from "../clipboard";
 import {
 	type AgentUsageMetrics,
 	answerQuestion,
@@ -1521,8 +1521,8 @@ export function App(props: {
 		if (name === "q" || (key.ctrl && name === "c")) {
 			const selection = renderer.getSelection()?.getSelectedText();
 			if (key.ctrl && selection) {
-				copyToClipboard(selection);
-				notify("Selection copied", "success");
+				if (copyToClipboard(selection)) notify("Selection copied", "success");
+				else notify("Copy failed", "error");
 				return;
 			}
 			const now = Date.now();
@@ -1536,8 +1536,8 @@ export function App(props: {
 		if (key.meta && name === "c") {
 			const selection = renderer.getSelection()?.getSelectedText();
 			if (selection) {
-				copyToClipboard(selection);
-				notify("Selection copied", "success");
+				if (copyToClipboard(selection)) notify("Selection copied", "success");
+				else notify("Copy failed", "error");
 			} else notify("No selection to copy", "warning");
 			return;
 		}
