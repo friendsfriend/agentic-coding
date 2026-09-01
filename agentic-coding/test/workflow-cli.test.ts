@@ -57,6 +57,7 @@ describe("breaking workflow CLI surface", () => {
 			"action",
 			"handoff",
 			"question",
+			"research-handoff",
 			"repair",
 			"repin",
 			"projects",
@@ -86,7 +87,9 @@ describe("breaking workflow CLI surface", () => {
 		]);
 		expect(REQUIRED_FLAGS.action).toEqual(["repo", "change", "revision"]);
 		expect(REQUIRED_FLAGS.question).toEqual(["description"]);
+		expect(REQUIRED_FLAGS["research-handoff"]).toEqual(["subject", "findings"]);
 	});
+
 	test("question timeout accepts the 24-hour maximum and rejects invalid values", () => {
 		expect(QUESTION_WAIT_MS).toBe(24 * 60 * 60_000);
 		expect(() => cliTest.validateQuestionTimeout(1)).not.toThrow();

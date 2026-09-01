@@ -59,6 +59,7 @@ export const SUBCOMMANDS: readonly string[] = [
 	"action",
 	"handoff",
 	"question",
+	"research-handoff",
 	"repair",
 	"repin",
 	"projects",
@@ -74,6 +75,7 @@ export const REQUIRED_FLAGS: Record<string, string[]> = {
 	repin: ["repo", "change"],
 	handoff: ["outcome"],
 	question: ["description"],
+	"research-handoff": ["subject", "findings"],
 };
 export const AGENT_EXTENSION_SUBCOMMANDS = [
 	"list",
@@ -577,6 +579,11 @@ const FLAG_SCHEMA: Record<
 		values: ["description", "context", "options", "questions", "timeout"],
 		positionals: [0, 0],
 	},
+	"research-handoff": {
+		values: ["subject", "target", "findings", "citations"],
+		booleans: ["no-sources"],
+		positionals: [0, 0],
+	},
 	repair: {
 		values: ["repo", "change", "revision", "step", "reason"],
 		booleans: ["confirm"],
@@ -650,7 +657,7 @@ function validateArgs(command: string, argv: string[]): void {
 function help(command?: string): void {
 	if (!command) {
 		console.log(
-			"Usage: agentic-coding workflow <command> [flags]\n\nCommands:\n  start            Start pinned workflow definition\n  status           Print validated workflow view\n  action           Dispatch revision-bound engine action (including close-research)\n  handoff          Submit run-bound agent outcome\n  question         Ask the developer a bounded question\n  repair           Repair to compatible step, retriggers phase\n  repin            Re-pin to current definition digest\n  projects         List configured projects\n  config           Print resolved configuration\n  agent-extension  Manage Pi agent extensions\n  wiki             Read/update OKF wiki; only the managed wiki role may write drafts; archive verifies",
+			"Usage: agentic-coding workflow <command> [flags]\n\nCommands:\n  start            Start pinned workflow definition\n  status           Print validated workflow view\n  action           Dispatch revision-bound engine action (including close-research)\n  handoff          Submit run-bound agent outcome\n  question         Ask the developer a bounded question\n  research-handoff Record the active researcher run's structured handoff\n  repair           Repair to compatible step, retriggers phase\n  repin            Re-pin to current definition digest\n  projects         List configured projects\n  config           Print resolved configuration\n  agent-extension  Manage Pi agent extensions\n  wiki             Read/update OKF wiki; only the managed wiki role may write drafts; archive verifies",
 		);
 		return;
 	}
@@ -665,6 +672,8 @@ function help(command?: string): void {
 			"handoff --outcome complete|blocked|failed [--artifact PATH] [--message TEXT]",
 		question:
 			"question [--description TEXT | --questions JSON] [--context TEXT] [--options JSON] [--timeout MILLISECONDS]",
+		"research-handoff":
+			"research-handoff --subject TEXT --findings TEXT [--target TEXT] [--citations TEXT,TEXT] [--no-sources]",
 		repair:
 			"repair --repo PATH --change ID --revision N --step STEP [--reason TEXT] [--confirm]",
 		projects: "projects",
@@ -1530,6 +1539,60 @@ export async function run(argv: string[]): Promise<void> {
 				managedWorkflowTarget(),
 				input,
 				timeoutMs,
+			),
+		);
+		return;
+	}
+	if (command === "research-handoff") {
+		if (!managedAgent())
+			throw new Error(
+				"research-handoff requires an authenticated managed agent",
+			);
+		const target = managedWorkflowTarget();
+		const identity = resolveHandoffIdentity(workflowEngine, target);
+		if (identity.stepId !== "core.research" || identity.role !== "researcher")
+			throw new Error(
+				"research-handoff is only available to the active core.research researcher run",
+			);
+		const run = workflowEngine.authorizeExactRunCapability(
+			target,
+			identity.workflowId,
+			identity.runId,
+			identity.stepId,
+			identity.role,
+			identity.token,
+		);
+		const subject = requireFlag(rest, "subject");
+		const findingsText = requireFlag(rest, "findings");
+		const canonicalTarget = flag(rest, "target");
+		const citationsFlag = flag(rest, "citations");
+		const noSourcesUsed = rest.includes("--no-sources");
+		const citations = citationsFlag
+			? citationsFlag
+					.split(",")
+					.map((entry) => entry.trim())
+					.filter(Boolean)
+			: [];
+		const result = workflowEngine.dispatch(target, {
+			type: "agent.research-handoff",
+			workflowId: run.workflowId,
+			runId: run.id,
+			stepId: run.stepId,
+			role: run.role,
+			token: identity.token,
+			handoff: {
+				subject,
+				...(canonicalTarget ? { canonicalTarget } : {}),
+				findings: findingsText,
+				citations,
+				noSourcesUsed,
+			},
+		});
+		console.log(
+			JSON.stringify(
+				workflowEngine.status(target, result.view.changeId),
+				null,
+				2,
 			),
 		);
 		return;

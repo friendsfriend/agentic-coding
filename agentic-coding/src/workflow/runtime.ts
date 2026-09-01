@@ -26,6 +26,7 @@ import {
 	parseDeveloperQuestionAnswer,
 	parseSnapshot,
 } from "./contracts.ts";
+import { researchHandoffContract } from "./definitions.ts";
 import {
 	childTrace,
 	parseTraceparent,
@@ -569,7 +570,8 @@ export class WorkflowEngine {
 				event.type,
 				command.type === "agent.handoff" ||
 					command.type === "agent.question" ||
-					command.type === "agent.question-expire"
+					command.type === "agent.question-expire" ||
+					command.type === "agent.research-handoff"
 					? { runId: command.runId }
 					: command.type === "effect.result"
 						? { effectId: command.effectId }
@@ -1383,6 +1385,8 @@ export class WorkflowEngine {
 			return this.expireQuestion(db, snapshot, command);
 		if (command.type === "agent.handoff")
 			return this.agentHandoff(db, snapshot, definition, command);
+		if (command.type === "agent.research-handoff")
+			return this.recordResearchHandoff(db, snapshot, command);
 		if (command.type === "effect.result")
 			return this.effectResult(db, snapshot, definition, command);
 		if (command.type === "operator.repair")
@@ -1501,6 +1505,50 @@ export class WorkflowEngine {
 					: { groupId, questionIds: questions.map((question) => question.id) }),
 				role: run.role,
 			},
+		};
+	}
+	/** Record (or overwrite) the active researcher run's handoff without
+	 * transitioning the step or ending the run generation; the interactive
+	 * researcher session stays live until a developer dispatches
+	 * request-research-wiki or close-research. */
+	private recordResearchHandoff(
+		db: Database,
+		snapshot: WorkflowSnapshot,
+		command: Extract<WorkflowCommand, { type: "agent.research-handoff" }>,
+	) {
+		if (
+			snapshot.definition.id !== "research" ||
+			command.stepId !== "core.research" ||
+			command.role !== "researcher"
+		)
+			throw new WorkflowRuntimeError(
+				"unavailable",
+				"research handoff recording is only available to the active core.research researcher run",
+			);
+		const run = this.questionRun(db, snapshot, command);
+		let handoff: ReturnType<typeof researchHandoffContract.parse>;
+		try {
+			handoff = researchHandoffContract.parse(command.handoff);
+		} catch (error) {
+			throw new WorkflowRuntimeError(
+				"invalid-command",
+				error instanceof Error ? error.message : String(error),
+			);
+		}
+		const context =
+			snapshot.step.context &&
+			typeof snapshot.step.context === "object" &&
+			!Array.isArray(snapshot.step.context)
+				? snapshot.step.context
+				: {};
+		snapshot.step.context = {
+			...context,
+			handoff: handoff as unknown as JsonValue,
+		};
+		return {
+			type: "research.handoff.recorded",
+			actor: { kind: "agent", runId: run.id, role: run.role },
+			data: { runId: run.id },
 		};
 	}
 	private expireQuestion(
@@ -1782,6 +1830,23 @@ export class WorkflowEngine {
 					"unavailable",
 					"research wiki request is only available while research is active",
 				);
+			const currentContext =
+				snapshot.step.context &&
+				typeof snapshot.step.context === "object" &&
+				!Array.isArray(snapshot.step.context)
+					? snapshot.step.context
+					: {};
+			let handoff: ReturnType<typeof researchHandoffContract.parse>;
+			try {
+				handoff = researchHandoffContract.parse(currentContext.handoff);
+			} catch (error) {
+				throw new WorkflowRuntimeError(
+					"unavailable",
+					`request-research-wiki requires the researcher to record a valid handoff first (${
+						error instanceof Error ? error.message : String(error)
+					})`,
+				);
+			}
 			this.validateSourceBaseline(snapshot);
 			if (!snapshot.metadata.workspace)
 				throw new WorkflowRuntimeError(
@@ -1791,34 +1856,9 @@ export class WorkflowEngine {
 			const active = this.runs(db, snapshot.workflowId).filter((run) =>
 				snapshot.step.activeRunIds.includes(run.id),
 			);
-			const currentContext =
-				snapshot.step.context &&
-				typeof snapshot.step.context === "object" &&
-				!Array.isArray(snapshot.step.context)
-					? snapshot.step.context
-					: {};
-			const researcher = active.find((run) => run.role === "researcher");
-			let summary: JsonValue | undefined;
-			if (researcher?.outputPath && fs.existsSync(researcher.outputPath)) {
-				try {
-					const artifact = this.artifact(researcher, researcher.outputPath);
-					const parsed = this.registry
-						.step("core.research")
-						.output.parse(artifact.output) as JsonValue;
-					if (Buffer.byteLength(JSON.stringify(parsed), "utf8") <= 64 * 1024)
-						summary = parsed;
-				} catch {
-					/* A missing or malformed optional summary does not block wiki drafting. */
-				}
-			}
 			const researchContext = {
 				task: snapshot.metadata.task ?? "",
-				...(Array.isArray(currentContext.followUps)
-					? { followUps: currentContext.followUps.slice(-50) }
-					: {}),
-				...(currentContext.summary === undefined && summary === undefined
-					? {}
-					: { summary: summary ?? currentContext.summary }),
+				handoff: handoff as unknown as JsonValue,
 			};
 			this.expireRuns(db, snapshot);
 			for (const run of active)

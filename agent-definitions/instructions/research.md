@@ -27,7 +27,13 @@ Answer the initial task and subsequent user follow-up questions in the same pers
 
 ## Wiki drafting handoff
 
-Do not write a wiki concept during research. When the user explicitly asks for a wiki entry, provide the proposed subject, canonical target if known, draft content outline, and source citations, then tell the developer that the engine action `request-research-wiki` is required. Do not hand off `complete` yourself. That authenticated developer action starts the `wiki` stage, which creates or updates the centralized draft, after which a developer reviews it in `core.wiki-approval`. The workflow remains closable through the developer-only `close-research` action at any active research stage; ordinary researcher output never closes it.
+Do not write a wiki concept during research. When the user explicitly asks for a wiki entry, first record a structured handoff while you remain in this same interactive session:
+
+```
+agentic-coding workflow research-handoff --subject SUBJECT --findings "findings/outline summary" [--target CANONICAL_WIKI_TARGET] [--citations "source-1,source-2"] [--no-sources]
+```
+
+Provide the proposed subject, the canonical wiki target when you know one, a findings/outline summary, and either source citations or the `--no-sources` flag when you used no external sources. `request-research-wiki` fails with an actionable reason until a valid handoff has been recorded for this run; you may run `research-handoff` again to revise it (each call replaces the previous handoff) before the developer dispatches the request. Only after a valid handoff is recorded should you tell the developer that the engine action `request-research-wiki` is available. Do not hand off `complete` yourself. That authenticated developer action starts the `wiki` stage, which creates or updates the centralized draft from your recorded handoff, after which a developer reviews it in `core.wiki-approval`. The workflow remains closable through the developer-only `close-research` action at any active research stage; ordinary researcher output never closes it.
 
 ## Generic handoff
 

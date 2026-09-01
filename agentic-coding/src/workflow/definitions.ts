@@ -158,6 +158,71 @@ const findings: Contract<{ critical: number }> = {
 		return { critical };
 	},
 };
+export interface ResearchHandoff {
+	subject: string;
+	canonicalTarget?: string;
+	findings: string;
+	citations: string[];
+	noSourcesUsed: boolean;
+}
+const MAX_RESEARCH_HANDOFF_CITATIONS = 32;
+const MAX_RESEARCH_HANDOFF_BYTES = 48 * 1024;
+export const researchHandoffContract: Contract<ResearchHandoff> = {
+	id: "core.research-handoff",
+	version: 1,
+	parse(value) {
+		const item = validation.object(value, "$");
+		const subject = validation.text(item.subject, "$.subject", 512);
+		const canonicalTarget =
+			item.canonicalTarget === undefined || item.canonicalTarget === null
+				? undefined
+				: validation.text(item.canonicalTarget, "$.canonicalTarget", 512);
+		const findingsSummary = validation.text(item.findings, "$.findings", 16384);
+		const noSourcesUsed = item.noSourcesUsed === true;
+		if (
+			item.citations !== undefined &&
+			(!Array.isArray(item.citations) ||
+				item.citations.length > MAX_RESEARCH_HANDOFF_CITATIONS)
+		)
+			throw new ContractFailure("core.research-handoff", [
+				{
+					path: "$.citations",
+					message: `expected at most ${MAX_RESEARCH_HANDOFF_CITATIONS} source citations`,
+				},
+			]);
+		const citations = Array.isArray(item.citations)
+			? item.citations.map((entry, index) =>
+					validation.text(entry, `$.citations[${index}]`, 1024),
+				)
+			: [];
+		if (!noSourcesUsed && !citations.length)
+			throw new ContractFailure("core.research-handoff", [
+				{
+					path: "$.citations",
+					message:
+						"expected at least one source citation, or noSourcesUsed set to true",
+				},
+			]);
+		const parsed: ResearchHandoff = {
+			subject,
+			...(canonicalTarget === undefined ? {} : { canonicalTarget }),
+			findings: findingsSummary,
+			citations,
+			noSourcesUsed,
+		};
+		if (
+			Buffer.byteLength(JSON.stringify(parsed), "utf8") >
+			MAX_RESEARCH_HANDOFF_BYTES
+		)
+			throw new ContractFailure("core.research-handoff", [
+				{
+					path: "$",
+					message: `handoff exceeds ${MAX_RESEARCH_HANDOFF_BYTES} bytes serialized`,
+				},
+			]);
+		return parsed;
+	},
+};
 const triage: Contract<{
 	roles: string[];
 	assignments: Array<{ role: string; reason: string; files: string[] }>;
