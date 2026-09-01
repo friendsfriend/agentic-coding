@@ -58,7 +58,7 @@ export interface WorkflowManifest {
 	steps: readonly string[];
 	edges: readonly WorkflowEdge[];
 	/** Optional per-manifest restriction for steps that expose more outcomes
-	 * than this workflow can legally use (for example, wiki-only completion). */
+	 * than this workflow can legally use (for example, wiki completion). */
 	allowedOutcomes?: Readonly<Record<string, readonly string[]>>;
 	defaultProfile?: string;
 }
@@ -67,20 +67,6 @@ export interface CompiledWorkflowDefinition extends WorkflowManifest {
 	stepDigests: Readonly<Record<string, string>>;
 }
 const ID = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/;
-// The implementation step may be rerun after the definition has already
-// advanced once. Preserve the digest produced by the prior gated definition
-// while the in-flight run finishes on the same graph.
-const IN_FLIGHT_GATE_PINS = new Map([
-	[
-		"direct-apply@20:7e39d4c024d2cda28173582b819d934513126a0f84130705df2e1c95f66cd814",
-		120,
-	],
-	[
-		"standard@120:0322fe876b4d950b00c70c68b64425b9acc1f1e54831abbb100a8526b916b18e",
-		1000,
-	],
-]);
-
 function serializable(value: unknown): unknown {
 	if (Array.isArray(value)) return value.map(serializable);
 	if (value && typeof value === "object")
@@ -329,17 +315,8 @@ export class WorkflowRegistry {
 		const definition = this.#definitions.get(`${id}@${version}`);
 		if (!definition)
 			throw new Error(`missing workflow definition: ${id}@${version}`);
-		if (expectedDigest && definition.digest !== expectedDigest) {
-			const compatibilityVersion = IN_FLIGHT_GATE_PINS.get(
-				`${id}@${version}:${expectedDigest}`,
-			);
-			if (compatibilityVersion === undefined)
-				throw new Error(`workflow definition pin mismatch: ${id}@${version}`);
-			const compatible = this.#definitions.get(`${id}@${compatibilityVersion}`);
-			if (!compatible)
-				throw new Error(`workflow definition pin mismatch: ${id}@${version}`);
-			return Object.freeze({ ...compatible, digest: expectedDigest });
-		}
+		if (expectedDigest && definition.digest !== expectedDigest)
+			throw new Error(`workflow definition pin mismatch: ${id}@${version}`);
 		return definition;
 	}
 	definitions(): readonly Readonly<CompiledWorkflowDefinition>[] {

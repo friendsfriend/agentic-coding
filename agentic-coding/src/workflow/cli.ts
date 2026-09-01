@@ -12,7 +12,11 @@ import {
 } from "./adapters.ts";
 import { manageAgentExtension } from "./agent-extensions.ts";
 import type { CredentialPrompt } from "./credentials.ts";
-import { definitionVersionForPolicy, registerBuiltins } from "./definitions.ts";
+import {
+	definitionVersionForPolicy,
+	PUBLIC_WORKFLOW_CATALOG,
+	registerBuiltins,
+} from "./definitions.ts";
 import {
 	agentEffectHandlers,
 	EffectRunner,
@@ -513,7 +517,7 @@ function parseMode(value: string | undefined): "worktree" | "checkout" {
 		throw new Error("start: --mode must be worktree or checkout");
 	return value;
 }
-/** Ordered 2–5 profile list for plan-fusion's planner fan-out, following the
+/** Ordered 2–5 profile list for openspec-fusion-full's planner fan-out, following the
  * existing single-flag convention: comma-separated names, order = role order. */
 export function parseFusionProfiles(value: string | undefined): string[] {
 	const names = (value ?? "")
@@ -522,10 +526,12 @@ export function parseFusionProfiles(value: string | undefined): string[] {
 		.filter(Boolean);
 	if (names.length < 2 || names.length > 5)
 		throw new Error(
-			"plan-fusion: --fusion-profiles requires 2-5 comma-separated profile names",
+			"openspec-fusion-full: --fusion-profiles requires 2-5 comma-separated profile names",
 		);
 	if (new Set(names).size !== names.length)
-		throw new Error("plan-fusion: duplicate profile in --fusion-profiles");
+		throw new Error(
+			"openspec-fusion-full: duplicate profile in --fusion-profiles",
+		);
 	return names;
 }
 function required(command: string, argv: string[]): void {
@@ -643,7 +649,7 @@ function help(command?: string): void {
 	}
 	const usage: Record<string, string> = {
 		start:
-			"start [--repo PATH] --change ID [--mode worktree|checkout] [--workflow standard|standard-propose|direct-apply|no-openspec|plan-fusion|fusion-propose|wiki-only|research] [--fusion-profiles NAME,NAME,...] [--task TEXT] [--ticket ID] [--preset NAME]",
+			"start [--repo PATH] --change ID [--mode worktree|checkout] [--workflow openspec-full|openspec-propose|openspec-apply|no-openspec|openspec-fusion-full|openspec-fusion-propose|wiki|research] [--fusion-profiles NAME,NAME,...] [--task TEXT] [--ticket ID] [--preset NAME]",
 
 		status: "status --repo PATH --change ID",
 		action:
@@ -784,10 +790,12 @@ export function validateStart(
 		return;
 	}
 	const dirty = runGit(repo, "status", "--porcelain");
-	const proposal = ["standard-propose", "fusion-propose"].includes(workflow);
-	if (workflow === "wiki-only") {
+	const proposal = ["openspec-propose", "openspec-fusion-propose"].includes(
+		workflow,
+	);
+	if (workflow === "wiki") {
 		if (!task?.trim())
-			throw new Error("wiki-only workflow requires non-empty --task");
+			throw new Error("wiki workflow requires non-empty --task");
 		return;
 	}
 	if (dirty && !proposal)
@@ -799,7 +807,7 @@ export function validateStart(
 	}
 	if (!fs.existsSync(path.join(repo, "openspec", "config.yaml")))
 		throw new Error("OpenSpec project required for this workflow");
-	if (workflow === "direct-apply") {
+	if (workflow === "openspec-apply") {
 		const root = path.join(repo, "openspec", "changes", change);
 		const requiredFiles = ["proposal.md", "design.md", "tasks.md"];
 		for (const file of requiredFiles)
@@ -807,7 +815,7 @@ export function validateStart(
 				!fs.existsSync(path.join(root, file)) ||
 				!fs.readFileSync(path.join(root, file), "utf8").trim()
 			)
-				throw new Error(`invalid direct-apply artifact: ${file}`);
+				throw new Error(`invalid openspec-apply artifact: ${file}`);
 		const specs = path.join(root, "specs");
 		if (
 			!fs.existsSync(specs) ||
@@ -815,9 +823,9 @@ export function validateStart(
 				/#### Scenario:/.test(fs.readFileSync(file, "utf8")),
 			)
 		)
-			throw new Error("direct-apply requires at least one OpenSpec scenario");
+			throw new Error("openspec-apply requires at least one OpenSpec scenario");
 		if (!/\[ \]/.test(fs.readFileSync(path.join(root, "tasks.md"), "utf8")))
-			throw new Error("direct-apply requires actionable unchecked task");
+			throw new Error("openspec-apply requires actionable unchecked task");
 		const result = Bun.spawnSync(["openspec", "validate", change, "--strict"], {
 			cwd: repo,
 			stdout: "pipe",
@@ -874,7 +882,7 @@ export function listProjects(): Array<{
 	walk(root, 0);
 	return found.sort((a, b) => a.name.localeCompare(b.name));
 }
-/** Agent roles per step for a built-in definition. The plan-fusion fan-out
+/** Agent roles per step for a built-in definition. The openspec-fusion-full fan-out
  * derives one planner role per entry of the ordered profile list. */
 export function rolesForDefinition(
 	definitionId: string,
@@ -975,8 +983,8 @@ function authorizeWikiWriter(): ReturnType<WorkflowEngine["getSnapshot"]> {
 	const snapshot = workflowEngine.getSnapshot(target, workflowId);
 	if (
 		snapshot.definition.id !== "research" &&
-		snapshot.definition.id !== "wiki-only" &&
-		snapshot.definition.id !== "wiki-comment-review"
+		snapshot.definition.id !== "wiki" &&
+		snapshot.definition.id !== "wiki-comments"
 	)
 		throw new Error("wiki writes require a documentation workflow stage");
 	const pinnedRoot = path.resolve(snapshot.metadata.wikiRoot ?? wikiRoot(true));
@@ -1112,7 +1120,7 @@ async function runWiki(rest: string[]): Promise<void> {
 			throw new Error(
 				"wiki write requires --path, --type, --title, and --description; usage: wiki write --path ID --type T --title T --description D",
 			);
-		if (authorizedSnapshot?.definition.id === "wiki-comment-review") {
+		if (authorizedSnapshot?.definition.id === "wiki-comments") {
 			const context = authorizedSnapshot.step.context;
 			const comments =
 				context && typeof context === "object" && !Array.isArray(context)
@@ -1264,7 +1272,7 @@ export async function run(argv: string[]): Promise<void> {
 		return;
 	}
 	if (command === "start") {
-		const workflow = flag(rest, "workflow") ?? "standard";
+		const workflow = flag(rest, "workflow") ?? "openspec-full";
 		const research = workflow === "research";
 		const repo = research
 			? flag(rest, "repo")
@@ -1273,25 +1281,17 @@ export async function run(argv: string[]): Promise<void> {
 			: fs.realpathSync(path.resolve(requireFlag(rest, "repo")));
 		const change = validateChangeId(requireFlag(rest, "change"));
 		const mode = research ? undefined : parseMode(flag(rest, "mode"));
-		const proposal = ["standard-propose", "fusion-propose"].includes(workflow);
-		const sameCheckout = proposal || workflow === "wiki-only";
-		if (
-			![
-				"standard",
-				"standard-propose",
-				"direct-apply",
-				"no-openspec",
-				"plan-fusion",
-				"fusion-propose",
-				"wiki-only",
-				"research",
-			].includes(workflow)
-		)
+		const proposal = ["openspec-propose", "openspec-fusion-propose"].includes(
+			workflow,
+		);
+		const sameCheckout = proposal || workflow === "wiki";
+		if (!PUBLIC_WORKFLOW_CATALOG.some((item) => item.id === workflow))
 			throw new Error(`unknown workflow definition: ${workflow}`);
 		if (!research && sameCheckout && mode !== "checkout")
 			throw new Error("repository-backed workflows require --mode checkout");
 		const fusionProfiles =
-			workflow === "plan-fusion" || workflow === "fusion-propose"
+			workflow === "openspec-fusion-full" ||
+			workflow === "openspec-fusion-propose"
 				? parseFusionProfiles(flag(rest, "fusion-profiles"))
 				: undefined;
 		const task = flag(rest, "task");

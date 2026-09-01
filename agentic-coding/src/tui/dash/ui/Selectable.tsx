@@ -9,14 +9,18 @@ export function Selectable(props: {
 	children?: JSX.Element;
 	backgroundColor?: string;
 	indicatorColor?: string;
+	height?: number;
 	ref?: (box: BoxRenderable) => void;
 }) {
 	return (
 		<box
 			ref={props.ref}
 			width="100%"
+			height={props.height}
 			flexDirection="row"
 			flexShrink={0}
+			alignItems="stretch"
+			style={props.height === undefined ? undefined : { height: props.height }}
 			backgroundColor={
 				props.selected
 					? uiColors.bgSurface1
@@ -25,6 +29,7 @@ export function Selectable(props: {
 		>
 			<box
 				width={1}
+				height="100%"
 				flexShrink={0}
 				backgroundColor={
 					props.selected
@@ -32,7 +37,7 @@ export function Selectable(props: {
 						: (props.backgroundColor ?? uiColors.bgMantle)
 				}
 			/>
-			<box flexGrow={1} minWidth={0}>
+			<box flexGrow={1} minWidth={0} flexDirection="column">
 				{props.children}
 			</box>
 		</box>
@@ -42,6 +47,7 @@ export function Selectable(props: {
 export function SelectableList<T>(props: {
 	items: T[];
 	selectedIndex: number;
+	itemHeight?: number;
 	renderItem: (item: T, selected: boolean, index: number) => JSX.Element;
 	backgroundColor?: (item: T, index: number) => string | undefined;
 	style?: Record<string, unknown>;
@@ -65,6 +71,7 @@ export function SelectableList<T>(props: {
 						ref={(card) => {
 							cards[index()] = card;
 						}}
+						height={props.itemHeight}
 						selected={index() === props.selectedIndex}
 						backgroundColor={props.backgroundColor?.(item, index())}
 					>

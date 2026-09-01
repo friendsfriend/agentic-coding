@@ -131,7 +131,7 @@ export function App(props: {
 	createEffect(() => {
 		if (props.dashboard?.mode !== "home") return;
 		const dirs = homeItems().map((item) =>
-			item.state.definition?.id === "wiki-comment-review" ||
+			item.state.definition?.id === "wiki-comments" ||
 			item.state.definition?.id === "research"
 				? join(wikiWorkflowDataRoot(), item.state.changeId)
 				: join(item.state.worktree, ".herdr-workflow", item.state.changeId),

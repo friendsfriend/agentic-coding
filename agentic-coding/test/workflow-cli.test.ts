@@ -413,7 +413,7 @@ describe("breaking workflow CLI surface", () => {
 	test("persistent roles reuse the resolved pane; tab create fires only on the no-agent outcome", async () => {
 		const snapshot = {
 			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
-			definition: { id: "standard", version: 1, digest: "d" },
+			definition: { id: "openspec-full", version: 1, digest: "d" },
 		};
 		const run = {
 			id: "run-worker",
@@ -430,7 +430,7 @@ describe("breaking workflow CLI surface", () => {
 		} as unknown as WorkflowEngine;
 		const canonical = effectRunnerTest.canonicalAgentName(
 			"change",
-			"standard",
+			"openspec-full",
 			{
 				stepId: run.stepId,
 				role: run.role,
@@ -482,7 +482,7 @@ describe("breaking workflow CLI surface", () => {
 	test("verifier runs reuse a live canonical-name pane before creating a tab", async () => {
 		const snapshot = {
 			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
-			definition: { id: "standard", version: 1, digest: "d" },
+			definition: { id: "openspec-full", version: 1, digest: "d" },
 		};
 		const run = {
 			id: "qv",
@@ -499,7 +499,7 @@ describe("breaking workflow CLI surface", () => {
 		} as unknown as WorkflowEngine;
 		const canonical = effectRunnerTest.canonicalAgentName(
 			"change",
-			"standard",
+			"openspec-full",
 			{ stepId: run.stepId, role: run.role, id: run.id },
 		);
 		const calls: string[][] = [];
@@ -532,7 +532,7 @@ describe("breaking workflow CLI surface", () => {
 	test("verification layout anchors on siblings confirmed live by canonical name, not stored pane ids", async () => {
 		const snapshot = {
 			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
-			definition: { id: "standard", version: 1, digest: "d" },
+			definition: { id: "openspec-full", version: 1, digest: "d" },
 		};
 		const qv = {
 			id: "qv",
@@ -558,7 +558,7 @@ describe("breaking workflow CLI surface", () => {
 		} as unknown as WorkflowEngine;
 		const siblingCanonical = effectRunnerTest.canonicalAgentName(
 			"change",
-			"standard",
+			"openspec-full",
 			{ stepId: sibling.stepId, role: sibling.role, id: sibling.id },
 		);
 		const calls: string[][] = [];

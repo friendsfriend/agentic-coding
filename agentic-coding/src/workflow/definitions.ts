@@ -42,6 +42,65 @@ const CAPABILITIES: AdapterCapability[] = [
 	"edit",
 	"runtime-bridge",
 ];
+
+export type WorkflowCatalogEntry = Readonly<{
+	id: string;
+	label: string;
+	description: string;
+	alias?: string;
+}>;
+
+export const PUBLIC_WORKFLOW_CATALOG: readonly WorkflowCatalogEntry[] =
+	Object.freeze([
+		Object.freeze({
+			id: "openspec-full",
+			label: "Openspec",
+			description:
+				"Standard openspec flow with explore, propose, plan review, apply, verify, developer review, wiki, wiki review, archive phases",
+		}),
+		Object.freeze({
+			id: "openspec-apply",
+			label: "Openspec apply",
+			description:
+				"Openspec flow with reduced apply, verify, developer-review, wiki, wiki-review, archive phases",
+		}),
+		Object.freeze({
+			id: "no-openspec",
+			label: "No OpenSpec",
+			description:
+				"Workflow for repositories without openspec. Has apply, review, developer-review, wiki, wiki-review phases.",
+			alias: "quick",
+		}),
+		Object.freeze({
+			id: "openspec-fusion-full",
+			label: "Openspec fusion",
+			description:
+				"Openspec fusion flow that spawns multiple explorers that consolidate to one plan. Has fusion-plan, fusion-consolidate, plan review, apply, verify, developer review, wiki, wiki-review, archive phases",
+		}),
+		Object.freeze({
+			id: "openspec-propose",
+			label: "Openspec Propose Only",
+			description:
+				"Openspec flow with reduced explore, propose, plan review phases",
+		}),
+		Object.freeze({
+			id: "openspec-fusion-propose",
+			label: "Openspec fusion propose",
+			description:
+				"Openspec fusion workflow with reduced fusion plan, fusion consolidate, plan review phases",
+		}),
+		Object.freeze({
+			id: "wiki",
+			label: "Wiki",
+			description: "Wiki workflow used for interacting with the wiki",
+		}),
+		Object.freeze({
+			id: "research",
+			label: "Research",
+			description: "Research with research, wiki, wiki review phases",
+		}),
+	] as const);
+
 const passthrough: Contract<JsonValue> = {
 	id: "core.json",
 	version: 1,
@@ -458,9 +517,9 @@ export function registerBuiltins(
 		wikiBeforeArchive = true,
 	): WorkflowManifest[] => [
 		{
-			id: "standard",
+			id: "openspec-full",
 			version,
-			label: "Standard",
+			label: "Openspec",
 			initial: "core.plan",
 			terminal: ["core.closed"],
 			steps: [
@@ -511,9 +570,9 @@ export function registerBuiltins(
 			],
 		},
 		{
-			id: "standard-propose",
+			id: "openspec-propose",
 			version,
-			label: "Standard propose",
+			label: "Openspec Propose Only",
 			initial: "core.plan",
 			terminal: ["core.closed"],
 			steps: [
@@ -563,9 +622,9 @@ export function registerBuiltins(
 			],
 		},
 		{
-			id: "direct-apply",
+			id: "openspec-apply",
 			version,
-			label: "Direct apply",
+			label: "Openspec apply",
 			initial: "core.implementation",
 			terminal: ["core.closed"],
 			steps: [
@@ -591,9 +650,9 @@ export function registerBuiltins(
 			edges: workflowEdges(false, rounds),
 		},
 		{
-			id: "plan-fusion",
+			id: "openspec-fusion-full",
 			version,
-			label: "Plan fusion",
+			label: "Openspec fusion",
 			initial: "fusion.plan",
 			terminal: ["core.closed"],
 			steps: [
@@ -666,9 +725,9 @@ export function registerBuiltins(
 			],
 		},
 		{
-			id: "fusion-propose",
+			id: "openspec-fusion-propose",
 			version,
-			label: "Fusion propose",
+			label: "Openspec fusion propose",
 			initial: "fusion.plan",
 			terminal: ["core.closed"],
 			steps: [
@@ -822,9 +881,9 @@ export function registerBuiltins(
 		...(wikiGate
 			? [
 					{
-						id: "wiki-only",
+						id: "wiki",
 						version,
-						label: "Wiki only",
+						label: "Wiki",
 						initial: "core.wiki",
 						terminal: ["core.closed"],
 						steps: [
@@ -874,9 +933,9 @@ export function registerBuiltins(
 						] as const,
 					},
 					{
-						id: "wiki-comment-review",
+						id: "wiki-comments",
 						version,
-						label: "Wiki comment review",
+						label: "Wiki Comments",
 						initial: "core.wiki",
 						terminal: ["core.closed"],
 						steps: ["core.wiki", "core.completed", "core.closed"],

@@ -102,10 +102,10 @@ test("dashboard projection renders registry-provided future step and generated a
 	expect(state.panes.audit).toBe("pane");
 	expect(state.phaseStartedAt).toBe("2026-01-01T12:00:00Z");
 });
-test("plan-fusion steps render their registry labels in phase status", () => {
+test("openspec-fusion-full steps render their registry labels in phase status", () => {
 	const fusion = (stepId: string, label: string) => {
 		const fixture = view();
-		fixture.definition = { ...fixture.definition, id: "plan-fusion" };
+		fixture.definition = { ...fixture.definition, id: "openspec-fusion-full" };
 		fixture.currentStep = { ...fixture.currentStep, id: stepId, label };
 		const state = viewToDashboardState(fixture);
 		expect(state.stepLabel).toBe(label);

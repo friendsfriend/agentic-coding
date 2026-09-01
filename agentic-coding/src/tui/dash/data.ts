@@ -1756,7 +1756,7 @@ export function testDashboard(phase = "proposed"): DashboardData {
 			{
 				at: "10:42:00",
 				event: "verification_started",
-				tier: "standard",
+				tier: "openspec-full",
 				roles: ["security-verifier", "quality-verifier"],
 			},
 		],
@@ -1887,7 +1887,8 @@ export function requiredUserActionFor(
 	const later = { label: "Not now", kind: "dismiss" } as const;
 	if (phase === "proposed" || phase === "core.plan-approval") {
 		const proposal =
-			definitionId === "standard-propose" || definitionId === "fusion-propose";
+			definitionId === "openspec-propose" ||
+			definitionId === "openspec-fusion-propose";
 		return {
 			key: "plan-review",
 			title: "Action required · Plan review",
@@ -1916,7 +1917,7 @@ export function requiredUserActionFor(
 			key: "wiki-review",
 			title: "Action required · Wiki review",
 			prompt:
-				definitionId === "wiki-only"
+				definitionId === "wiki"
 					? "Review knowledge changes before completion."
 					: definitionId === "research"
 						? "Review knowledge changes before closing research."
@@ -1976,8 +1977,9 @@ export function requiredUserActionFor(
 		};
 	if (phase === "completed" || phase === "core.completed") {
 		const proposal =
-			definitionId === "standard-propose" || definitionId === "fusion-propose";
-		const wikiOnly = definitionId === "wiki-only";
+			definitionId === "openspec-propose" ||
+			definitionId === "openspec-fusion-propose";
+		const wikiOnly = definitionId === "wiki";
 		const closeOnly = proposal || wikiOnly;
 		return {
 			key: `${phase}:${closeOnly ? "proposal" : prCreated ? "pr-created" : "no-pr"}`,

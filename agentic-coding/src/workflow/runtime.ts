@@ -315,7 +315,7 @@ export class WorkflowEngine {
 		validateChangeId(input.changeId);
 		const wikiOnlyTarget =
 			isWikiWorkflowTarget(input.repo) &&
-			input.definitionId === "wiki-comment-review";
+			input.definitionId === "wiki-comments";
 		const researchTarget = isResearchWorkflowTarget(input.repo);
 		if (
 			(isWikiWorkflowTarget(input.repo) && !wikiOnlyTarget) ||
@@ -370,10 +370,10 @@ export class WorkflowEngine {
 					"research requires an allowlisted read-only researcher profile",
 				);
 		}
-		const proposal = ["standard-propose", "fusion-propose"].includes(
+		const proposal = ["openspec-propose", "openspec-fusion-propose"].includes(
 			definition.id,
 		);
-		const wikiOnly = definition.id === "wiki-only";
+		const wikiOnly = definition.id === "wiki";
 		if (researchTarget && !input.metadata.task?.trim())
 			throw new WorkflowRuntimeError(
 				"start-guard",
@@ -405,7 +405,11 @@ export class WorkflowEngine {
 		}
 		if (!wikiOnlyTarget && !researchTarget)
 			this.validateStartEvidence(repository, input, sameCheckout);
-		if (["plan-fusion", "fusion-propose"].includes(definition.id))
+		if (
+			["openspec-fusion-full", "openspec-fusion-propose"].includes(
+				definition.id,
+			)
+		)
 			validateFusionRouting(definition.id, input.routing);
 		const at = nowIso(this.now);
 		const workflowId = randomUUID();
@@ -1013,9 +1017,9 @@ export class WorkflowEngine {
 				: Array.isArray(legacy.workflowModules) &&
 						!(legacy.workflowModules as unknown[]).includes("plan")
 					? (legacy.workflowModules as unknown[]).includes("archive")
-						? "direct-apply"
+						? "openspec-apply"
 						: "no-openspec"
-					: "standard";
+					: "openspec-full";
 		const stepMap: Record<string, string> = {
 			explore: "core.plan",
 			proposed: "core.plan-approval",
@@ -1216,7 +1220,7 @@ export class WorkflowEngine {
 	): void {
 		const context = childTrace(parseTraceparent(process.env.TRACEPARENT));
 		new TelemetrySink(
-			snapshot.definition.id === "wiki-comment-review"
+			snapshot.definition.id === "wiki-comments"
 				? path.join(wikiWorkflowDataRoot(), snapshot.metadata.changeId)
 				: path.join(
 						snapshot.metadata.worktree,
@@ -1252,17 +1256,17 @@ export class WorkflowEngine {
 		if (
 			status.stdout.toString().trim() &&
 			!proposal &&
-			input.definitionId !== "wiki-only"
+			input.definitionId !== "wiki"
 		)
 			throw new WorkflowRuntimeError(
 				"start-guard",
 				"working tree must be clean before workflow start",
 			);
-		if (input.definitionId === "wiki-only") {
+		if (input.definitionId === "wiki") {
 			if (!input.metadata.task?.trim())
 				throw new WorkflowRuntimeError(
 					"start-guard",
-					"wiki-only requires non-empty task",
+					"wiki requires non-empty task",
 				);
 			return;
 		}
@@ -1279,7 +1283,7 @@ export class WorkflowEngine {
 				"start-guard",
 				"OpenSpec project required",
 			);
-		if (input.definitionId === "direct-apply") {
+		if (input.definitionId === "openspec-apply") {
 			const root = path.join(repository, "openspec", "changes", input.changeId);
 			for (const file of ["proposal.md", "design.md", "tasks.md"])
 				if (
@@ -1288,7 +1292,7 @@ export class WorkflowEngine {
 				)
 					throw new WorkflowRuntimeError(
 						"start-guard",
-						`invalid direct-apply artifact: ${file}`,
+						`invalid openspec-apply artifact: ${file}`,
 					);
 			if (
 				!fs.existsSync(path.join(root, "specs")) ||
@@ -1298,7 +1302,7 @@ export class WorkflowEngine {
 			)
 				throw new WorkflowRuntimeError(
 					"start-guard",
-					"direct-apply requires OpenSpec scenario",
+					"openspec-apply requires OpenSpec scenario",
 				);
 			if (
 				!/^\s*[-*]\s+\[ \]/m.test(
@@ -1307,7 +1311,7 @@ export class WorkflowEngine {
 			)
 				throw new WorkflowRuntimeError(
 					"start-guard",
-					"direct-apply requires actionable unchecked task",
+					"openspec-apply requires actionable unchecked task",
 				);
 		}
 	}
@@ -1737,7 +1741,9 @@ export class WorkflowEngine {
 			};
 		}
 		if (command.actionId === "create-pr") {
-			if (["standard-propose", "fusion-propose"].includes(definition.id))
+			if (
+				["openspec-propose", "openspec-fusion-propose"].includes(definition.id)
+			)
 				throw new WorkflowRuntimeError(
 					"unavailable",
 					"proposal workflows do not support pull-request creation",
@@ -1761,7 +1767,7 @@ export class WorkflowEngine {
 		}
 		if (
 			(command.actionId === "approve-wiki" || command.actionId === "close") &&
-			(snapshot.definition.id === "wiki-only" ||
+			(snapshot.definition.id === "wiki" ||
 				snapshot.definition.id === "research")
 		)
 			this.validateSourceBaseline(snapshot);
@@ -1992,8 +1998,8 @@ export class WorkflowEngine {
 			this.transition(db, snapshot, definition, "complete", output);
 		else if (command.outcome === "blocked") {
 			if (
-				snapshot.definition.id === "wiki-only" ||
-				snapshot.definition.id === "wiki-comment-review" ||
+				snapshot.definition.id === "wiki" ||
+				snapshot.definition.id === "wiki-comments" ||
 				snapshot.definition.id === "research"
 			)
 				this.transition(db, snapshot, definition, "blocked", command.message);
@@ -2240,7 +2246,7 @@ export class WorkflowEngine {
 			snapshot.step.attempt = round;
 		}
 		if (
-			(snapshot.definition.id === "wiki-comment-review" &&
+			(snapshot.definition.id === "wiki-comments" &&
 				priorContext !== undefined) ||
 			(edge.loop && priorContext !== undefined && edge.to === edge.from) ||
 			(output !== undefined &&
@@ -2256,8 +2262,7 @@ export class WorkflowEngine {
 			(edge.to === "core.wiki-approval" && outcome === "complete")
 		)
 			snapshot.step.context =
-				snapshot.definition.id === "wiki-comment-review" &&
-				priorContext !== undefined
+				snapshot.definition.id === "wiki-comments" && priorContext !== undefined
 					? priorContext
 					: edge.to === "core.wiki-approval" && outcome === "complete"
 						? wikiVerificationPayload(snapshot)
@@ -2294,7 +2299,7 @@ export class WorkflowEngine {
 				effect.kind,
 				`${snapshot.workflowId}:${effect.idempotencyKey}:${snapshot.revision}`,
 				effect.kind === "wiki.verify"
-					? snapshot.definition.id === "wiki-comment-review"
+					? snapshot.definition.id === "wiki-comments"
 						? wikiVerificationPayload(snapshot)
 						: (priorContext ?? wikiVerificationPayload(snapshot))
 					: effect.payload,
@@ -2404,7 +2409,7 @@ export class WorkflowEngine {
 				`missing pinned route for ${step.id}/${role}`,
 			);
 		const directory =
-			snapshot.definition.id === "wiki-comment-review"
+			snapshot.definition.id === "wiki-comments"
 				? path.join(wikiWorkflowDataRoot(), snapshot.metadata.changeId, "runs")
 				: path.join(
 						snapshot.metadata.worktree,
@@ -2577,7 +2582,7 @@ export class WorkflowEngine {
 			row.kind === "wiki.verify" && snapshot.currentStep === "core.delivery";
 		const wikiPromotionAtCompletion =
 			row.kind === "wiki.verify" &&
-			snapshot.definition.id === "wiki-comment-review" &&
+			snapshot.definition.id === "wiki-comments" &&
 			snapshot.currentStep === "core.completed";
 		const researchWikiPromotion =
 			row.kind === "wiki.verify" &&
@@ -2663,7 +2668,7 @@ export class WorkflowEngine {
 	}
 	private validateSourceBaseline(snapshot: WorkflowSnapshot): void {
 		if (
-			snapshot.definition.id !== "wiki-only" &&
+			snapshot.definition.id !== "wiki" &&
 			snapshot.definition.id !== "research"
 		)
 			return;
@@ -2947,10 +2952,10 @@ export class WorkflowEngine {
 								: snapshot.currentStep === "core.completed"
 									? [
 											...([
-												"standard-propose",
-												"fusion-propose",
-												"wiki-only",
-												"wiki-comment-review",
+												"openspec-propose",
+												"openspec-fusion-propose",
+												"wiki",
+												"wiki-comments",
 											].includes(snapshot.definition.id)
 												? []
 												: [
@@ -3556,7 +3561,7 @@ function wikiBaselineFor(
 function wikiReviewConceptIds(
 	snapshot: WorkflowSnapshot,
 ): Set<string> | undefined {
-	if (snapshot.definition.id !== "wiki-comment-review") return undefined;
+	if (snapshot.definition.id !== "wiki-comments") return undefined;
 	const context = snapshot.step.context;
 	const comments =
 		context && typeof context === "object" && !Array.isArray(context)
@@ -3584,7 +3589,7 @@ function wikiVerificationPayload(snapshot: WorkflowSnapshot): {
 	return withWikiRoot(pinnedRoot, () => {
 		const all = snapshotList(
 			snapshot.metadata.changeId,
-			snapshot.definition.id === "wiki-comment-review" ||
+			snapshot.definition.id === "wiki-comments" ||
 				snapshot.definition.id === "research"
 				? wikiWorkflowDataRoot()
 				: snapshot.metadata.worktree,

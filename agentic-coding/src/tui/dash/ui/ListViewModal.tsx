@@ -21,6 +21,7 @@ export function ListViewModal<T>(props: {
 	filterQuery?: string;
 	filterActive?: boolean;
 	heightPercent?: number;
+	itemHeight?: number;
 }) {
 	return (
 		<GenericModal
@@ -47,9 +48,15 @@ export function ListViewModal<T>(props: {
 				>
 					<SelectableList
 						items={props.items}
+						itemHeight={props.itemHeight}
 						selectedIndex={props.selectedIndex}
 						renderItem={(item, selected) => (
-							<box width="100%" height={1} flexShrink={0} overflow="hidden">
+							<box
+								width="100%"
+								height={props.itemHeight ?? 1}
+								flexShrink={0}
+								overflow="hidden"
+							>
 								{props.renderItem(item, selected)}
 							</box>
 						)}

@@ -581,7 +581,7 @@ describe("start argument threading", () => {
 	});
 });
 
-describe("dashboard plan-fusion start routing", () => {
+describe("dashboard openspec-fusion-full start routing", () => {
 	const baseConfig = {
 		default_profile: "d",
 		profiles: {
@@ -648,7 +648,7 @@ describe("dashboard plan-fusion start routing", () => {
 				},
 			},
 		});
-		const routes = routesFor("plan-fusion", agents, "duo");
+		const routes = routesFor("openspec-fusion-full", agents, "duo");
 		expect(routes.filter(([step]) => step === "fusion.plan")).toEqual([
 			["fusion.plan", "planner-1", "a"],
 			["fusion.plan", "planner-2", "b"],
@@ -687,7 +687,7 @@ describe("dashboard plan-fusion start routing", () => {
 			},
 		});
 		expect(
-			routesFor("plan-fusion", agents, "five").filter(
+			routesFor("openspec-fusion-full", agents, "five").filter(
 				([step]) => step === "fusion.plan",
 			),
 		).toEqual([
@@ -705,7 +705,7 @@ describe("dashboard plan-fusion start routing", () => {
 				one: { roles: { "fusion.plan": { "planner-1": "a" } } },
 			},
 		});
-		expect(() => routesFor("plan-fusion", one, "one")).toThrow(
+		expect(() => routesFor("openspec-fusion-full", one, "one")).toThrow(
 			/between 2 and 5 planner routings/,
 		);
 		// a gap in the run is caught during count derivation
@@ -723,7 +723,7 @@ describe("dashboard plan-fusion start routing", () => {
 				},
 			},
 		});
-		expect(() => routesFor("plan-fusion", gapped, "gapped")).toThrow(
+		expect(() => routesFor("openspec-fusion-full", gapped, "gapped")).toThrow(
 			/contiguous planner roles/,
 		);
 	});
@@ -740,13 +740,13 @@ describe("dashboard plan-fusion start routing", () => {
 				},
 			},
 		});
-		expect(() => routesFor("plan-fusion", fallback, "thin")).toThrow(
+		expect(() => routesFor("openspec-fusion-full", fallback, "thin")).toThrow(
 			/distinct planner profiles/,
 		);
 	});
 	test("non-fusion workflows keep their existing routing without a preset", () => {
 		const agents = parseAgentsConfig(baseConfig);
-		expect(routesFor("standard", agents)).toEqual([
+		expect(routesFor("openspec-full", agents)).toEqual([
 			["core.plan", "planner", "d"],
 			["core.implementation", "worker", "d"],
 			["core.triage", "triage", "d"],

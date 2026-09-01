@@ -518,7 +518,7 @@ describe("transactional workflow runtime", () => {
 				repo,
 				mode: "checkout",
 				changeId: "proposal-lifecycle",
-				definitionId: "standard-propose",
+				definitionId: "openspec-propose",
 				metadata: {
 					branch: "main",
 					baseBranch: "main",
@@ -673,7 +673,7 @@ describe("transactional workflow runtime", () => {
 				repo,
 				mode: "checkout",
 				changeId: "proposal-review",
-				definitionId: "standard-propose",
+				definitionId: "openspec-propose",
 				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
 				routing: routing(),
 			});
@@ -727,7 +727,7 @@ describe("transactional workflow runtime", () => {
 			const result = engine.start({
 				repo,
 				changeId: "repair",
-				definitionId: "standard",
+				definitionId: "openspec-full",
 				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
 				routing: routing(),
 			});
@@ -842,7 +842,7 @@ describe("transactional workflow runtime", () => {
 			const result = engine.start({
 				repo,
 				changeId: "plan-comments",
-				definitionId: "standard",
+				definitionId: "openspec-full",
 				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
 				routing: routing(),
 			});
@@ -892,7 +892,7 @@ describe("transactional workflow runtime", () => {
 			const result = engine.start({
 				repo,
 				changeId: "plan-comments-invalid",
-				definitionId: "standard",
+				definitionId: "openspec-full",
 				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
 				routing: routing(),
 			});
@@ -946,7 +946,7 @@ describe("transactional workflow runtime", () => {
 			const result = engine.start({
 				repo,
 				changeId: "plan-gate",
-				definitionId: "standard",
+				definitionId: "openspec-full",
 				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
 				routing: routing(),
 			});
@@ -969,7 +969,7 @@ describe("transactional workflow runtime", () => {
 			const rejected = rejectedEngine.start({
 				repo: rejectedRepo,
 				changeId: "plan-reject",
-				definitionId: "standard",
+				definitionId: "openspec-full",
 				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
 				routing: routing(),
 			});

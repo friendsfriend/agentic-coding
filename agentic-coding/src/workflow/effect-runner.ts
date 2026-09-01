@@ -458,7 +458,7 @@ export function agentEffectHandlers(
 						effect.runToken ?? "",
 					);
 					writeRunEnvironment(
-						snapshot.definition.id === "wiki-comment-review"
+						snapshot.definition.id === "wiki-comments"
 							? path.join(
 									wikiWorkflowDataRoot(),
 									snapshot.metadata.changeId,
@@ -472,7 +472,7 @@ export function agentEffectHandlers(
 						snapshot.metadata.worktree,
 						resolved.name,
 						run.id,
-						snapshot.definition.id === "wiki-comment-review"
+						snapshot.definition.id === "wiki-comments"
 							? path.join(
 									wikiWorkflowDataRoot(),
 									snapshot.metadata.changeId,
@@ -507,7 +507,7 @@ export function agentEffectHandlers(
 				const assetRoot = workflowAssets(
 					snapshot.metadata.worktree,
 					snapshot.metadata.changeId,
-					snapshot.definition.id === "wiki-comment-review"
+					snapshot.definition.id === "wiki-comments"
 						? wikiWorkflowDataRoot()
 						: undefined,
 				);
@@ -528,7 +528,7 @@ export function agentEffectHandlers(
 				// The telemetry bridge recovers the run env through this pointer, so it
 				// must exist before the agent process boots inside adapter.launch.
 				const runDirectory =
-					snapshot.definition.id === "wiki-comment-review"
+					snapshot.definition.id === "wiki-comments"
 						? path.join(
 								wikiWorkflowDataRoot(),
 								snapshot.metadata.changeId,
@@ -662,12 +662,12 @@ export function agentEffectHandlers(
 					const approvedContent = new Map<string, string>();
 					let concepts = snapshotList(
 						snapshot.metadata.changeId,
-						snapshot.definition.id === "wiki-comment-review" ||
+						snapshot.definition.id === "wiki-comments" ||
 							snapshot.definition.id === "research"
 							? wikiWorkflowDataRoot()
 							: snapshot.metadata.worktree,
 					);
-					if (snapshot.definition.id === "wiki-comment-review") {
+					if (snapshot.definition.id === "wiki-comments") {
 						const context = snapshot.step.context;
 						const comments =
 							context && typeof context === "object" && !Array.isArray(context)
@@ -1239,7 +1239,7 @@ function renderedAssignment(
 			`${workflowAssets(
 				snapshot.metadata.worktree,
 				snapshot.metadata.changeId,
-				snapshot.definition.id === "wiki-comment-review"
+				snapshot.definition.id === "wiki-comments"
 					? wikiWorkflowDataRoot()
 					: undefined,
 			)}/instructions`,
@@ -1290,7 +1290,7 @@ function assignmentFor(
 			].join("\n")
 		: undefined;
 	const wikiReviewInput =
-		(snapshot.definition.id === "wiki-comment-review" ||
+		(snapshot.definition.id === "wiki-comments" ||
 			snapshot.definition.id === "research") &&
 		context !== undefined &&
 		context !== null &&
@@ -1405,14 +1405,14 @@ function assignmentFor(
 			HERDR_ROLE: run.role,
 			HERDR_PROFILE: run.profile.name,
 			HERDR_WORKFLOW_TARGET:
-				snapshot.definition.id === "wiki-comment-review"
+				snapshot.definition.id === "wiki-comments"
 					? "wiki://centralized"
 					: snapshot.definition.id === "research"
 						? "research://standalone"
 						: snapshot.metadata.repository,
 			HERDR_RUNTIME: run.profile.runtime,
 			HERDR_TELEMETRY_PATH:
-				snapshot.definition.id === "wiki-comment-review" ||
+				snapshot.definition.id === "wiki-comments" ||
 				snapshot.definition.id === "research"
 					? `${wikiWorkflowDataRoot()}/${snapshot.metadata.changeId}/telemetry.jsonl`
 					: `${snapshot.metadata.worktree}/.herdr-workflow/${snapshot.metadata.changeId}/telemetry.jsonl`,
