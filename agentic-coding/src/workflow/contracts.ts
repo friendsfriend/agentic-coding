@@ -200,6 +200,11 @@ export interface DeveloperQuestionOption {
 	label: string;
 	value: string;
 }
+export interface DeveloperQuestionItem {
+	description: string;
+	context?: string;
+	options: readonly DeveloperQuestionOption[];
+}
 export interface DeveloperDialogueRecord {
 	id: string;
 	workflowId: string;
@@ -207,7 +212,11 @@ export interface DeveloperDialogueRecord {
 	stepId: string;
 	role: string;
 	description: string;
+	context?: string;
 	options: readonly DeveloperQuestionOption[];
+	/** Present for items created by one questionnaire; absent in legacy records. */
+	groupId?: string;
+	itemIndex?: number;
 	status: DeveloperQuestionStatus;
 	createdAt: string;
 	expiresAt: string;
@@ -401,8 +410,10 @@ export type WorkflowCommand =
 			stepId: string;
 			role: string;
 			token: string;
-			description: string;
-			options: readonly DeveloperQuestionOption[];
+			description?: string;
+			context?: string;
+			options?: readonly DeveloperQuestionOption[];
+			questions?: readonly DeveloperQuestionItem[];
 	  }
 	| {
 			type: "agent.question-expire";
@@ -458,7 +469,29 @@ export const commandContract: Contract<WorkflowCommand> = {
 						: input.input,
 			};
 		}
-		if (type === "agent.question")
+		if (type === "agent.question") {
+			const hasDescription = input.description !== undefined;
+			const hasQuestions = input.questions !== undefined;
+			if (hasDescription === hasQuestions)
+				throw new ContractFailure("core.developer-question", [
+					{
+						path: "$.description",
+						message: "provide either description or questions, but not both",
+					},
+				]);
+			if (
+				hasQuestions &&
+				(input.options !== undefined || input.context !== undefined)
+			)
+				throw new ContractFailure("core.developer-question", [
+					{
+						path: "$.questions",
+						message: "questionnaires use per-item context and options",
+					},
+				]);
+			const questions = hasQuestions
+				? questionItems(input.questions)
+				: undefined;
 			return {
 				type,
 				workflowId: text(input.workflowId, "$.workflowId"),
@@ -466,9 +499,17 @@ export const commandContract: Contract<WorkflowCommand> = {
 				stepId: text(input.stepId, "$.stepId"),
 				role: text(input.role, "$.role"),
 				token: text(input.token, "$.token", 1024),
-				description: text(input.description, "$.description", 4096),
-				options: questionOptions(input.options, "$.options"),
+				...(hasDescription
+					? {
+							description: text(input.description, "$.description", 4096),
+							...(input.context === undefined
+								? {}
+								: { context: boundedText(input.context, "$.context", 4096) }),
+							options: questionOptions(input.options, "$.options"),
+						}
+					: { questions }),
 			};
+		}
 		if (type === "agent.question-expire")
 			return {
 				type,
@@ -535,6 +576,31 @@ export const commandContract: Contract<WorkflowCommand> = {
 	},
 };
 
+const MAX_QUESTIONNAIRE_ITEMS = 8;
+function questionItems(value: unknown): DeveloperQuestionItem[] {
+	if (
+		!Array.isArray(value) ||
+		value.length < 1 ||
+		value.length > MAX_QUESTIONNAIRE_ITEMS
+	)
+		throw new ContractFailure("core.developer-question", [
+			{
+				path: "$.questions",
+				message: `expected 1-${MAX_QUESTIONNAIRE_ITEMS} question items`,
+			},
+		]);
+	return value.map((entry, index) => {
+		const at = `$.questions[${index}]`;
+		const item = object(entry, at);
+		return {
+			description: text(item.description, `${at}.description`, 4096),
+			...(item.context === undefined
+				? {}
+				: { context: boundedText(item.context, `${at}.context`, 4096) }),
+			options: questionOptions(item.options, `${at}.options`),
+		};
+	});
+}
 function questionOptions(
 	value: unknown,
 	at: string,
@@ -557,25 +623,72 @@ function questionOptions(
 		]);
 	return options;
 }
-export function parseDeveloperQuestionAnswer(value: unknown): {
-	questionId: string;
-	kind: "option" | "custom" | "cancel";
-	value?: string;
-} {
+export type DeveloperQuestionAnswer =
+	| {
+			questionId: string;
+			kind: "option" | "custom" | "cancel";
+			value?: string;
+	  }
+	| {
+			groupId: string;
+			kind: "cancel";
+	  }
+	| {
+			groupId: string;
+			responses: Array<{
+				questionId: string;
+				kind: "option" | "custom";
+				value: string;
+			}>;
+	  };
+export function parseDeveloperQuestionAnswer(
+	value: unknown,
+): DeveloperQuestionAnswer {
 	const input = object(value, "$.input");
+	if (input.groupId !== undefined) {
+		const groupId = text(input.groupId, "$.input.groupId");
+		if (input.kind === "cancel") return { groupId, kind: "cancel" };
+		if (
+			!Array.isArray(input.responses) ||
+			input.responses.length < 1 ||
+			input.responses.length > MAX_QUESTIONNAIRE_ITEMS
+		)
+			throw new ContractFailure("core.developer-question", [
+				{
+					path: "$.input.responses",
+					message: `expected 1-${MAX_QUESTIONNAIRE_ITEMS} responses`,
+				},
+			]);
+		const responses = input.responses.map((entry, index) => {
+			const at = `$.input.responses[${index}]`;
+			const item = object(entry, at);
+			const kind = enumValue(item.kind, `${at}.kind`, ["option", "custom"]);
+			return {
+				questionId: text(item.questionId, `${at}.questionId`),
+				kind,
+				value: text(item.value, `${at}.value`, 8192),
+			};
+		});
+		if (
+			new Set(responses.map((item) => item.questionId)).size !==
+			responses.length
+		)
+			throw new ContractFailure("core.developer-question", [
+				{
+					path: "$.input.responses",
+					message: "response question IDs must be unique",
+				},
+			]);
+		return { groupId, responses };
+	}
+	const questionId = text(input.questionId, "$.input.questionId");
 	const kind = enumValue(input.kind, "$.input.kind", [
 		"option",
 		"custom",
 		"cancel",
 	]);
-	if (kind === "cancel")
-		return { questionId: text(input.questionId, "$.input.questionId"), kind };
-	const answer = text(input.value, "$.input.value", 8192);
-	return {
-		questionId: text(input.questionId, "$.input.questionId"),
-		kind,
-		value: answer,
-	};
+	if (kind === "cancel") return { questionId, kind };
+	return { questionId, kind, value: text(input.value, "$.input.value", 8192) };
 }
 function dialogue(value: unknown): DeveloperDialogueRecord[] {
 	if (value === undefined) return [];
@@ -599,7 +712,16 @@ function dialogue(value: unknown): DeveloperDialogueRecord[] {
 			stepId: text(item.stepId, `${at}.stepId`),
 			role: text(item.role, `${at}.role`),
 			description: text(item.description, `${at}.description`, 4096),
+			...(item.context === undefined
+				? {}
+				: { context: boundedText(item.context, `${at}.context`, 4096) }),
 			options: questionOptions(item.options, `${at}.options`),
+			...(item.groupId === undefined
+				? {}
+				: { groupId: text(item.groupId, `${at}.groupId`) }),
+			...(item.itemIndex === undefined
+				? {}
+				: { itemIndex: integer(item.itemIndex, `${at}.itemIndex`) }),
 			status,
 			createdAt: text(item.createdAt, `${at}.createdAt`),
 			expiresAt: text(item.expiresAt, `${at}.expiresAt`),

@@ -2267,7 +2267,17 @@ export function answerQuestion(
 	change: string,
 	revision: number,
 	questionId: string,
-	answer: { kind: "option" | "custom" | "cancel"; value?: string },
+	answer:
+		| { kind: "option" | "custom" | "cancel"; value?: string }
+		| {
+				groupId: string;
+				responses: Array<{
+					questionId: string;
+					kind: "option" | "custom";
+					value: string;
+				}>;
+		  }
+		| { groupId: string; kind: "cancel" },
 ) {
 	return answerWorkflowQuestion(repo, change, revision, questionId, answer);
 }

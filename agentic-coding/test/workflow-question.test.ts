@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import {
 	commandContract,
+	parseDeveloperQuestionAnswer,
 	parseSnapshot,
 	type ResolvedProfile,
 } from "../src/workflow/contracts.ts";
@@ -134,6 +135,126 @@ test("question contracts accept legacy snapshots and reject invalid answers", ()
 	).toThrow();
 });
 
+test("questionnaire contracts preserve order and require complete response sets", () => {
+	const command = commandContract.parse({
+		type: "agent.question",
+		workflowId: "w",
+		runId: "r",
+		stepId: "core.implementation",
+		role: "worker",
+		token: "t",
+		questions: [
+			{
+				description: "first",
+				context: "evidence",
+				options: [{ label: "A", value: "a" }],
+			},
+			{ description: "second", options: [] },
+		],
+	});
+	expect(command.type).toBe("agent.question");
+	if (command.type !== "agent.question") throw new Error("wrong command");
+	expect(command.questions?.map((item) => item.description)).toEqual([
+		"first",
+		"second",
+	]);
+	expect(
+		parseDeveloperQuestionAnswer({
+			groupId: "g",
+			responses: [
+				{ questionId: "a", kind: "option", value: "a" },
+				{ questionId: "b", kind: "custom", value: "line 1\nline 2" },
+			],
+		}),
+	).toEqual({
+		groupId: "g",
+		responses: [
+			{ questionId: "a", kind: "option", value: "a" },
+			{ questionId: "b", kind: "custom", value: "line 1\nline 2" },
+		],
+	});
+	expect(() =>
+		commandContract.parse({
+			type: "agent.question",
+			workflowId: "w",
+			runId: "r",
+			stepId: "core.implementation",
+			role: "worker",
+			token: "t",
+			description: "ambiguous",
+			questions: [{ description: "also present" }],
+		}),
+	).toThrow(/either description or questions/);
+});
+
+test("questionnaires persist and answer all items atomically", () => {
+	const { repo, engine, run, token } = setup();
+	try {
+		const identity = {
+			workflowId: run.workflowId,
+			runId: run.id,
+			stepId: run.stepId,
+			role: run.role,
+			token,
+		};
+		const created = engine.dispatch(repo, {
+			type: "agent.question",
+			...identity,
+			questions: [
+				{ description: "format", options: [{ label: "JSON", value: "json" }] },
+				{ description: "notes", options: [] },
+			],
+		});
+		const items = created.snapshot.developerDialogue;
+		expect(items).toHaveLength(2);
+		const groupId = items[0]?.groupId;
+		if (!groupId || !items[1]?.id)
+			throw new Error("questionnaire metadata missing");
+		expect(items.map((item) => item.itemIndex)).toEqual([0, 1]);
+		const beforeInvalid = engine.getSnapshot(repo, run.workflowId);
+		expect(() =>
+			engine.dispatch(repo, {
+				type: "developer.action",
+				workflowId: run.workflowId,
+				revision: created.snapshot.revision,
+				actionId: "answer-question",
+				input: {
+					groupId,
+					responses: [
+						{ questionId: items[0]?.id, kind: "option", value: "json" },
+					],
+				},
+			}),
+		).toThrow(/every item/);
+		expect(engine.getSnapshot(repo, run.workflowId).revision).toBe(
+			beforeInvalid.revision,
+		);
+		const answered = engine.dispatch(repo, {
+			type: "developer.action",
+			workflowId: run.workflowId,
+			revision: created.snapshot.revision,
+			actionId: "answer-question",
+			input: {
+				groupId,
+				responses: [
+					{ questionId: items[0]?.id, kind: "option", value: "json" },
+					{
+						questionId: items[1]?.id,
+						kind: "custom",
+						value: "line 1\nline 2",
+					},
+				],
+			},
+		});
+		expect(answered.view.pendingQuestions).toHaveLength(0);
+		expect(
+			answered.view.developerDialogue?.map((item) => item.answer?.value),
+		).toEqual(["json", "line 1\nline 2"]);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
 test("questions persist, answer in FIFO order, and do not change workflow lifecycle", () => {
 	const { repo, engine, run, token } = setup();
 	try {
@@ -216,7 +337,9 @@ test("question capability rejects another run and expires after 24 hours", () =>
 		now(new Date("2026-01-01T23:59:59.999Z"));
 		expect(engine.status(repo, "question").pendingQuestions).toHaveLength(1);
 		now(new Date("2026-01-02T00:00:00.000Z"));
-		expect(engine.status(repo, "question").pendingQuestions).toHaveLength(0);
+		const expiredView = engine.status(repo, "question");
+		expect(expiredView.pendingQuestions).toHaveLength(0);
+		expect(expiredView.developerDialogue?.[0]?.status).toBe("expired");
 		expect(() =>
 			engine.dispatch(repo, {
 				type: "agent.question",
@@ -226,15 +349,15 @@ test("question capability rejects another run and expires after 24 hours", () =>
 				options: [],
 			}),
 		).toThrow(/capability/);
-		const expired = engine.dispatch(repo, {
-			type: "developer.action",
-			workflowId: run.workflowId,
-			revision: created.snapshot.revision,
-			actionId: "answer-question",
-			input: { questionId, kind: "custom", value: "too late" },
-		});
-		expect(expired.view.developerDialogue?.[0]?.status).toBe("expired");
-		expect(expired.view.pendingQuestions).toHaveLength(0);
+		expect(() =>
+			engine.dispatch(repo, {
+				type: "developer.action",
+				workflowId: run.workflowId,
+				revision: expiredView.revision,
+				actionId: "answer-question",
+				input: { questionId, kind: "custom", value: "too late" },
+			}),
+		).toThrow(/no longer pending/);
 		now(new Date("2026-01-01T23:59:59.999Z"));
 		expect(() =>
 			engine.dispatch(repo, {
