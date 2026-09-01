@@ -15,6 +15,7 @@ import {
 	parseAgentsConfig,
 	profileFor,
 	resolveRouting,
+	validateResearchRepositoryProfile,
 } from "../src/workflow/profiles.ts";
 
 class FakeHerdr {
@@ -139,6 +140,20 @@ describe("profiles, assignments, and adapters", () => {
 			config,
 		);
 		expect(routing.routes).toHaveLength(2);
+	});
+	test("research normalization preserves configured tools and extensions", () => {
+		const profile = {
+			...baseProfile("pi"),
+			tools: ["read", "web_search"],
+			extensions: ["/tmp/research-extension.ts"],
+			capabilities: ["prompt", "shell", "edit"] as const,
+		};
+		const normalized = validateResearchRepositoryProfile(profile);
+		expect(normalized.tools).toEqual(["read", "web_search"]);
+		expect(normalized.extensions).toEqual(["/tmp/research-extension.ts"]);
+		expect(normalized.capabilities).toEqual(["prompt", "read-only"]);
+		expect(normalized.readOnly).toBe(true);
+		expect(normalized.digest).not.toBe(profile.digest);
 	});
 	test("renderer pins assets, bounds prompt, and uses generic handoff only", () => {
 		const step = registerBuiltins().step("core.verification");
@@ -286,6 +301,90 @@ describe("profiles, assignments, and adapters", () => {
 							call[0] === "pane" && call[1] === "close" && call[2] === "pane",
 					),
 				).toBe(true);
+			} finally {
+				fs.rmSync(cwd, { recursive: true, force: true });
+			}
+		}
+	});
+	test("research launch retains configured Pi tools and extensions", async () => {
+		const fake = new FakeHerdr();
+		const adapter = new PiAdapter(new HerdrLifecycle(fake, async () => {}));
+		const current = assignment("core.research", { role: "researcher" });
+		const rendered = renderAssignment(
+			registerBuiltins().step("core.research"),
+			current,
+		);
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "adapter-research-"));
+		try {
+			await adapter.launch({
+				profile: {
+					...baseProfile("pi"),
+					tools: ["read", "web_search", "bash", "edit", "write"],
+					extensions: ["/tmp/research-extension.ts"],
+				},
+				assignment: current,
+				rendered,
+				paneId: "pane",
+				cwd,
+				name: "agent-research",
+				environment: current.environment,
+			});
+			const start = fake.calls.find(
+				(call) => call[0] === "agent" && call[1] === "start",
+			);
+			if (!start) throw new Error("expected agent start call");
+			expect(start).not.toContain("--no-extensions");
+			expect(start).toContain("/tmp/research-extension.ts");
+			expect(start[start.indexOf("--tools") + 1]).toBe("read,web_search");
+			expect(start).not.toContain("bash");
+			expect(start).not.toContain("edit");
+			expect(start).not.toContain("write");
+		} finally {
+			fs.rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+	test("research OpenCode launch allows configured tools without changing other read-only defaults", async () => {
+		for (const [Adapter, runtime] of [
+			[OpenCodeAdapter, "opencode"],
+			[OpenCodeV2Adapter, "opencode-v2"],
+		] as const) {
+			const fake = new FakeHerdr();
+			const adapter = new Adapter(new HerdrLifecycle(fake, async () => {}));
+			const current = assignment("core.research", { role: "researcher" });
+			const rendered = renderAssignment(
+				registerBuiltins().step("core.research"),
+				current,
+			);
+			const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "adapter-research-"));
+			try {
+				await adapter.launch({
+					profile: {
+						...baseProfile(runtime),
+						tools: ["read", "web_search", "custom_tool"],
+					},
+					assignment: current,
+					rendered,
+					paneId: "pane",
+					cwd,
+					name: `agent-${runtime}`,
+					environment: current.environment,
+				});
+				const config = JSON.parse(
+					fs.readFileSync(
+						path.join(
+							cwd,
+							".herdr-workflow",
+							"runtime-config",
+							"run",
+							"opencode.json",
+						),
+						"utf8",
+					),
+				) as { permission: Record<string, string> };
+				expect(config.permission.web_search).toBe("allow");
+				expect(config.permission.custom_tool).toBe("allow");
+				expect(config.permission.edit).toBe("deny");
+				expect(config.permission.bash).toBe("deny");
 			} finally {
 				fs.rmSync(cwd, { recursive: true, force: true });
 			}

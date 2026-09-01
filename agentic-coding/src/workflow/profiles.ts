@@ -473,13 +473,6 @@ export function assertModelAvailable(profile: ResolvedProfile): void {
 export function validateResearchRepositoryProfile(
 	profile: ResolvedProfile,
 ): ResolvedProfile {
-	const readOnlyTools =
-		/^(?:read|grep|find|ls|cat|head|tail|rg|git-(?:status|diff|log|show)|context7_[a-z0-9_-]+|gh_grep_search|playwright_(?:navigate|screenshot|snapshot|click|type|fill|select_option|press_key|wait_for|evaluate|scroll|back|forward|get_console|get_network))$/i;
-	const unsafeTools = profile.tools.filter((tool) => !readOnlyTools.test(tool));
-	if (unsafeTools.length)
-		throw new Error(
-			`profile ${profile.name} must expose an allowlisted read-only tool policy for research`,
-		);
 	const capabilities = [
 		...new Set([
 			...profile.capabilities.filter(
@@ -490,9 +483,10 @@ export function validateResearchRepositoryProfile(
 	];
 	const unsigned = {
 		...profile,
+		tools: Object.freeze([...profile.tools]),
 		readOnly: true,
 		capabilities: Object.freeze(capabilities),
-		extensions: Object.freeze([] as string[]),
+		extensions: Object.freeze([...profile.extensions]),
 	};
 	return Object.freeze({
 		...unsigned,

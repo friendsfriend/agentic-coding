@@ -355,21 +355,14 @@ export class WorkflowEngine {
 			const route = input.routing.routes.find(
 				(item) => item.stepId === "core.research" && item.role === "researcher",
 			);
-			const readOnlyTools =
-				/^(?:read|grep|find|ls|cat|head|tail|rg|git-(?:status|diff|log|show)|context7_[a-z0-9_-]+|gh_grep_search|playwright_(?:navigate|screenshot|snapshot|click|type|fill|select_option|press_key|wait_for|evaluate|scroll|back|forward|get_console|get_network))$/i;
-			const unsafeTools = route?.profile.tools.some(
-				(tool) => !readOnlyTools.test(tool),
-			);
 			if (
 				!route?.profile.capabilities.includes("read-only") ||
 				route.profile.capabilities.includes("shell") ||
-				route.profile.capabilities.includes("edit") ||
-				route.profile.extensions.length ||
-				unsafeTools
+				route.profile.capabilities.includes("edit")
 			)
 				throw new WorkflowRuntimeError(
 					"start-guard",
-					"research requires an allowlisted read-only researcher profile",
+					"research requires a read-only researcher profile without shell or edit capabilities",
 				);
 		}
 		const proposal = ["openspec-propose", "openspec-fusion-propose"].includes(

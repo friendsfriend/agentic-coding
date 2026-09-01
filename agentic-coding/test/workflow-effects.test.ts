@@ -60,8 +60,8 @@ test("research workspace setup launches and prompts the researcher", async () =>
 			name: "research",
 			runtime: "pi" as const,
 			executable: "sh",
-			tools: [],
-			extensions: [],
+			tools: ["read", "web_search"],
+			extensions: ["/tmp/research-extension.ts"],
 			readOnly: false,
 			capabilities: [
 				"interactive",
@@ -110,6 +110,10 @@ test("research workspace setup launches and prompts the researcher", async () =>
 		await new EffectRunner(researchWorkflowTarget(), engine, handlers).drain();
 		expect(adapter.launches).toBe(1);
 		expect(adapter.context?.assignment.role).toBe("researcher");
+		expect(adapter.context?.profile.tools).toEqual(["read", "web_search"]);
+		expect(adapter.context?.profile.extensions).toEqual([
+			"/tmp/research-extension.ts",
+		]);
 		expect(
 			engine.status(researchWorkflowTarget(), "research-effects").runs[0]
 				?.status,
