@@ -1,0 +1,21 @@
+## 1. Workflow catalog and registered definitions
+
+- [x] 1.1 Add the immutable public workflow catalog in `agentic-coding/src/workflow/definitions.ts` with each approved technical ID, UI label, description, and the `quick` alias for `no-openspec`; rename manifest IDs/labels for `openspec-full`, `openspec-apply`, `openspec-fusion-full`, `openspec-propose`, `openspec-fusion-propose`, `wiki`, and `wiki-comments` while retaining `no-openspec` and `research`; verify every catalog entry resolves to a registered definition and the workflow graphs retain their existing step order.
+- [x] 1.2 Remove old-ID in-flight pin exceptions and update related registry comments in `agentic-coding/src/workflow/registry.ts`; verify an old definition ID is not accepted as a current registered definition and a renamed definition still validates its digest/pin contract.
+
+## 2. Runtime, CLI, and routing propagation
+
+- [x] 2.1 Replace active definition-ID comparisons and start guards in `agentic-coding/src/workflow/runtime.ts`, `agentic-coding/src/workflow/cli.ts`, `agentic-coding/src/workflow/contracts.ts`, and `agentic-coding/src/workflow/effect-runner.ts` with the approved IDs, including defaults, proposal/wiki/research routing, wiki-comments internal paths, validation diagnostics, action availability, and CLI help/allowlists; verify new flags start the expected definitions and old public flags are rejected.
+- [x] 2.2 Update dashboard startup and projections in `agentic-coding/src/tui/dash/engine.ts`, `agentic-coding/src/tui/dash/data.ts`, `agentic-coding/src/tui/dash/Home.tsx`, and `agentic-coding/src/tui/otel/app/App.tsx` so they pass/display the renamed IDs, map `quick` only to `no-openspec`, and keep `wiki-comments` UI-only; verify `startArgs`, proposal/fusion routing, wiki/research actions, and home status use the new IDs.
+- [x] 2.3 Update user-facing documentation and smoke entry points in `README.md`, `scripts/test-herdr-workflow.sh`, and `agent-definitions/instructions/wiki.md` to use the new public names and descriptions; verify no old public workflow flag remains in these maintained surfaces.
+
+## 3. New Workflow modal presentation
+
+- [x] 3.1 Refactor `agentic-coding/src/tui/dash/ui/NewWorkflowModal.tsx` to consume the shared catalog, submit new technical IDs while retaining the `quick` alias, show each public workflow's UI label and description, keep `wiki-comments` absent, and remove every parenthesized fragment from all modal labels, selectable values, and workflow display text while preserving task/mode/standalone semantics; verify the wizard still omits task for OpenSpec apply, requires task for wiki/research/no-OpenSpec where applicable, and submits the expected IDs.
+- [x] 3.2 Extend `agentic-coding/src/tui/dash/ui/ListViewModal.tsx` with an opt-in multi-line row height and use it only for workflow choices so descriptions render as additional muted information without changing other list modals; verify list navigation, filtering, selection, and scrolling remain correct at the existing modal sizes.
+
+## 4. Focused regression coverage
+
+- [x] 4.1 Update affected workflow registry, runtime, CLI, effects, migration, dashboard, model-config, e2e, question, adapter, wiki-gate, and fusion tests under `agentic-coding/test/` to use the renamed IDs and assert the intentional rejection/absence of old public IDs; verify with focused commands covering `test/workflow-registry.test.ts`, `test/workflow-runtime.test.ts`, `test/workflow-cli.test.ts`, `test/workflow-effects.test.ts`, `test/workflow-plan-fusion.test.ts`, and related dashboard tests.
+- [x] 4.2 Expand `agentic-coding/test/dash/newWorkflowModal.test.tsx` and `agentic-coding/test/dash/credentialsModal.test.tsx` to assert all public choices' labels/descriptions, no parenthesized modal text, quick-to-no-OpenSpec mapping, renamed proposal/wiki/fusion submissions, and unchanged task-step behavior; verify with `bun test test/dash/newWorkflowModal.test.tsx test/dash/credentialsModal.test.tsx test/dash/data.test.ts` from `agentic-coding/`.
+- [x] 4.3 Run `bun run type-check` and `bun run build` from `agentic-coding/`, then inspect the generated output rather than editing `agentic-coding/src/workflow/embedded.generated.ts`; verify the build completes and the generated asset remains reproducible from source.

@@ -149,7 +149,7 @@ export function Home(props: {
 				: item.state.stepId === "core.wiki-approval"
 					? "wiki approval"
 					: `researcher: ${item.agents.find((agent) => agent.role === "researcher")?.status ?? "not started"}`
-			: item.state.definition?.id === "wiki-only"
+			: item.state.definition?.id === "wiki"
 				? `documentation: ${item.agents.find((agent) => agent.role === "wiki")?.status ?? "not started"}`
 				: `${item.tasks[0]}/${item.tasks[1]} tasks · planner: ${item.agents.find((agent) => agent.role === "planner")?.status ?? "not started"}`;
 	const helpSections: HelpSection[] = [
@@ -685,7 +685,7 @@ export function Home(props: {
 							setMessage(
 								await startWorkflow({
 									...input,
-									workflowType: input.workflowType ?? "standard",
+									workflowType: input.workflowType ?? "openspec-full",
 								}),
 							);
 							setModal(false);

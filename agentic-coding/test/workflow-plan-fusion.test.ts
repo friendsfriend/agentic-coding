@@ -95,7 +95,7 @@ function start(
 	return engine.start({
 		repo,
 		changeId,
-		definitionId: "plan-fusion",
+		definitionId: "openspec-fusion-full",
 		metadata: {
 			branch: "main",
 			baseBranch: "main",
@@ -185,9 +185,11 @@ function seedChangeArtifacts(repo: string, changeId: string): void {
 	);
 }
 
-describe("plan-fusion workflow", () => {
+describe("openspec-fusion-full workflow", () => {
 	test("core.plan-draft contract rejects malformed drafts without consuming the capability", () => {
-		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "plan-fusion-draft-"));
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "openspec-fusion-full-draft-"),
+		);
 		try {
 			const repo = repository(path.join(tmp, "repo"));
 			const engine = new WorkflowEngine(registerBuiltins());
@@ -238,7 +240,9 @@ describe("plan-fusion workflow", () => {
 		}
 	});
 	test("out-of-range counts and duplicate profiles are rejected before any launch", () => {
-		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "plan-fusion-bounds-"));
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "openspec-fusion-full-bounds-"),
+		);
 		try {
 			const repo = repository(path.join(tmp, "repo"));
 			const engine = new WorkflowEngine(registerBuiltins());
@@ -279,7 +283,7 @@ describe("plan-fusion workflow", () => {
 					engine.start({
 						repo,
 						changeId: "bounds",
-						definitionId: "plan-fusion",
+						definitionId: "openspec-fusion-full",
 						metadata: {
 							branch: "main",
 							baseBranch: "main",
@@ -288,14 +292,16 @@ describe("plan-fusion workflow", () => {
 						},
 						routing: bad,
 					}),
-				).toThrow(/plan-fusion requires/);
+				).toThrow(/openspec-fusion-full requires/);
 			expect(fs.existsSync(canonicalStorePath(repo))).toBe(false);
 		} finally {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
 	});
 	test("fan-out assignments are byte-identical across planners except the role field", () => {
-		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "plan-fusion-render-"));
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "openspec-fusion-full-render-"),
+		);
 		try {
 			const repo = repository(path.join(tmp, "repo"));
 			const registry = registerBuiltins();
@@ -339,7 +345,9 @@ describe("plan-fusion workflow", () => {
 		}
 	});
 	test("failed planner retries only missing roles while preserving surviving drafts", () => {
-		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "plan-fusion-retry-"));
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "openspec-fusion-full-retry-"),
+		);
 		try {
 			const repo = repository(path.join(tmp, "repo"));
 			const engine = new WorkflowEngine(registerBuiltins());
@@ -408,7 +416,9 @@ describe("plan-fusion workflow", () => {
 		}
 	});
 	test("consolidation inputs list every validated draft for N=2 and N=5", () => {
-		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "plan-fusion-inputs-"));
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "openspec-fusion-full-inputs-"),
+		);
 		try {
 			const registry = registerBuiltins();
 			for (const n of [2, 5]) {
@@ -463,8 +473,10 @@ describe("plan-fusion workflow", () => {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
 	});
-	test("plan-fusion reaches terminal through registered commands with one retry", () => {
-		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "plan-fusion-e2e-"));
+	test("openspec-fusion-full reaches terminal through registered commands with one retry", () => {
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "openspec-fusion-full-e2e-"),
+		);
 		try {
 			const repo = repository(path.join(tmp, "repo"));
 			const engine = new WorkflowEngine(registerBuiltins());
@@ -602,23 +614,28 @@ describe("plan-fusion workflow", () => {
 			visited.push(view.currentStep.id);
 			expect(visited.at(-1)).toBe("core.closed");
 			// Every transition matches the pinned definition's step order.
-			const definition = registerBuiltins().definition("plan-fusion", 1);
+			const definition = registerBuiltins().definition(
+				"openspec-fusion-full",
+				1,
+			);
 			for (const step of visited) expect(definition.steps).toContain(step);
 			expect(definition.initial).toBe("fusion.plan");
 		} finally {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
 	});
-	test("fusion-propose waits for approval and closes explicitly without downstream work", () => {
-		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "fusion-propose-e2e-"));
+	test("openspec-fusion-propose waits for approval and closes explicitly without downstream work", () => {
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "openspec-fusion-propose-e2e-"),
+		);
 		try {
 			const repo = repository(path.join(tmp, "repo"));
 			const engine = new WorkflowEngine(registerBuiltins());
 			let view = engine.start({
 				repo,
 				mode: "checkout",
-				changeId: "fusion-propose",
-				definitionId: "fusion-propose",
+				changeId: "openspec-fusion-propose",
+				definitionId: "openspec-fusion-propose",
 				metadata: {
 					branch: "main",
 					baseBranch: "main",
@@ -644,7 +661,7 @@ describe("plan-fusion workflow", () => {
 			view = handoff(engine, repo, view, "planner-1", draft(), cache);
 			view = handoff(engine, repo, view, "planner-2", draft(), cache);
 			expect(view.currentStep.id).toBe("fusion.consolidate");
-			seedChangeArtifacts(repo, "fusion-propose");
+			seedChangeArtifacts(repo, "openspec-fusion-propose");
 			view = handoff(
 				engine,
 				repo,
@@ -707,7 +724,7 @@ describe("plan-fusion workflow", () => {
 	});
 	test("existing built-in definitions keep identifiers, versions, graphs, and pins", () => {
 		const registry = registerBuiltins();
-		const standard = registry.definition("standard", 1);
+		const standard = registry.definition("openspec-full", 1);
 		expect(standard.steps[0]).toBe("core.plan");
 		expect(
 			standard.edges.find(
@@ -715,7 +732,7 @@ describe("plan-fusion workflow", () => {
 					edge.from === "core.plan-approval" && edge.outcome === "reject",
 			)?.to,
 		).toBe("core.plan");
-		for (const id of ["standard", "direct-apply", "no-openspec"])
+		for (const id of ["openspec-full", "openspec-apply", "no-openspec"])
 			expect(registry.definition(id, 1).version).toBe(1);
 	});
 	test("--fusion-profiles parses an ordered unique 2-5 profile list", () => {

@@ -40,14 +40,14 @@ test("recognized legacy phases migrate once into pinned schema and reissue activ
 			branch: "feature/old",
 			baseBranch: "main",
 			baseCommit: "abc",
-			workflowType: "standard",
+			workflowType: "openspec-full",
 			verificationRound: 2,
 			panes: { worker: "stale" },
 		});
 		const engine = new WorkflowEngine(registerBuiltins());
 		const view = engine.status(root, "old");
 		expect(view.revision).toBe(1);
-		expect(view.definition.id).toBe("standard");
+		expect(view.definition.id).toBe("openspec-full");
 		expect(view.currentStep.id).toBe("core.verification");
 		expect(view.runs).toHaveLength(1);
 		expect(view.runs[0]?.status).toBe("pending");
@@ -84,7 +84,7 @@ test("every compatible legacy workflow type and phase maps deterministically", (
 			"completed",
 			"closed",
 		],
-		"direct-apply": [
+		"openspec-apply": [
 			"apply",
 			"fix",
 			"triage",
@@ -191,7 +191,7 @@ test("conflicting legacy mirrors require repair instead of latest-wins", () => {
 	try {
 		legacy(root, "conflict", {
 			phase: "apply",
-			workflowType: "standard",
+			workflowType: "openspec-full",
 			repository: root,
 			worktree,
 			branch: "one",
@@ -209,7 +209,7 @@ test("conflicting legacy mirrors require repair instead of latest-wins", () => {
 			"conflict",
 			JSON.stringify({
 				phase: "verify",
-				workflowType: "standard",
+				workflowType: "openspec-full",
 				repository: root,
 				worktree,
 				branch: "two",

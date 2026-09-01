@@ -13,6 +13,7 @@ import {
 	Show,
 	untrack,
 } from "solid-js";
+import { PUBLIC_WORKFLOW_CATALOG } from "../../../workflow/definitions";
 import { discoverChanges } from "../data";
 import { focusSoon } from "../devenv-ui/utils/focusSoon";
 import { PRESET_CONFIG_DEFAULTS } from "../engine";
@@ -48,7 +49,7 @@ export function NewWorkflowModal(props: {
 		ticket: "",
 		change: "",
 		mode: "",
-		workflowType: "standard",
+		workflowType: "openspec-full",
 		preset: PRESET_CONFIG_DEFAULTS,
 	});
 	const [showCustomRepo, setShowCustomRepo] = createSignal(false);
@@ -61,9 +62,9 @@ export function NewWorkflowModal(props: {
 		);
 
 	const isProposal = (type: string) =>
-		type === "standard-propose" || type === "fusion-propose";
+		type === "openspec-propose" || type === "openspec-fusion-propose";
 	const isRepositoryBacked = (type: string) =>
-		isProposal(type) || type === "wiki-only";
+		isProposal(type) || type === "wiki";
 	const fields = (): (keyof NewWorkflowInput)[] => {
 		const base: (keyof NewWorkflowInput)[] = [
 			"repo",
@@ -75,13 +76,14 @@ export function NewWorkflowModal(props: {
 		];
 		if (
 			[
-				"standard",
+				"openspec-full",
 				"quick",
-				"plan-fusion",
-				"standard-propose",
-				"fusion-propose",
-				"wiki-only",
+				"openspec-fusion-full",
+				"openspec-propose",
+				"openspec-fusion-propose",
+				"wiki",
 				"research",
+				"no-openspec",
 			].includes(values().workflowType)
 		) {
 			return [
@@ -102,43 +104,29 @@ export function NewWorkflowModal(props: {
 
 	const fieldLabels: Record<string, string> = {
 		repo: "Repository",
-		workflowType:
-			"Workflow type (research accepts optional read-only repository context)",
+		workflowType: "Workflow type",
 		preset: "Agent preset",
-		ticket: "Ticket identifier (optional)",
+		ticket: "Ticket identifier optional",
 		change: "Change ID",
-		task: "Task (required for wiki-only and research)",
+		task: "Task required for wiki, research, and no OpenSpec",
 		mode: "Checkout mode",
 	};
 
-	const workflowTypeChoices = [
-		"standard",
-		"direct-apply",
-		"quick",
-		"plan-fusion",
-		"standard-propose",
-		"fusion-propose",
-		"wiki-only",
-		"research",
-	];
-	const workflowTypeDisplay: Record<string, string> = {
-		standard: "Standard",
-		"direct-apply": "Apply",
-		quick: "Quick Implementation",
-		"plan-fusion": "Plan Fusion",
-		"standard-propose": "Standard Propose",
-		"fusion-propose": "Fusion Propose",
-		"wiki-only": "Wiki Only (centralized wiki; no source changes)",
-		research: "Research (persistent; optional repository context)",
-	};
+	const workflowTypeChoices = PUBLIC_WORKFLOW_CATALOG.map(
+		(item) => item.alias ?? item.id,
+	);
+	const workflowTypeEntry = (choice: string) =>
+		PUBLIC_WORKFLOW_CATALOG.find(
+			(item) => item.id === choice || item.alias === choice,
+		);
 
 	const choices = (): string[] => {
 		const f = field();
 		if (f === "repo")
 			return [
 				...projects().map((p) => `${p.openspec ? "●" : "○"} ${p.name}`),
-				`Current Directory (${process.cwd().split("/").pop()})`,
-				"Standalone research (selects Research)",
+				`Current directory: ${process.cwd().split("/").pop()}`,
+				"Standalone research",
 				"Custom path…",
 			];
 		if (f === "workflowType")
@@ -151,7 +139,7 @@ export function NewWorkflowModal(props: {
 			return [PRESET_CONFIG_DEFAULTS, ...(props.presets ?? [])].filter((item) =>
 				item.toLowerCase().includes(filter().toLowerCase()),
 			);
-		if (f === "change" && values().workflowType === "direct-apply")
+		if (f === "change" && values().workflowType === "openspec-apply")
 			return discoverChanges(values().repo);
 		if (f === "mode")
 			return ["worktree", "checkout"].filter((item) =>
@@ -166,15 +154,16 @@ export function NewWorkflowModal(props: {
 			f === "repo" ||
 			f === "workflowType" ||
 			f === "preset" ||
-			(f === "change" && values().workflowType === "direct-apply") ||
+			(f === "change" && values().workflowType === "openspec-apply") ||
 			f === "mode"
 		);
 	};
 
 	const confirmStep = () => step() === fields().length;
 	const canSubmit = () =>
-		!["wiki-only", "research"].includes(values().workflowType) ||
-		Boolean(values().task?.trim());
+		!["wiki", "research", "quick", "no-openspec"].includes(
+			values().workflowType,
+		) || Boolean(values().task?.trim());
 	const totalSteps = () => fields().length + 1;
 	const field = () => fields()[step()];
 	const summary = () =>
@@ -201,7 +190,7 @@ export function NewWorkflowModal(props: {
 		const key = field();
 		if (!key) return;
 		const standaloneResearch =
-			key === "repo" && value === "Standalone research (selects Research)";
+			key === "repo" && value === "Standalone research";
 		if (key === "repo") setStandaloneSelected(standaloneResearch);
 		setValues((current) => ({
 			...current,
@@ -320,7 +309,7 @@ export function NewWorkflowModal(props: {
 				return true;
 			}
 			if (step() === 0 && selected() === projects().length + 1) {
-				next("Standalone research (selects Research)");
+				next("Standalone research");
 				return true;
 			}
 			if (step() === 0 && selected() === projects().length + 2) {
@@ -462,6 +451,7 @@ export function NewWorkflowModal(props: {
 								total={totalSteps()}
 								filterActive={filtering() || filter().length > 0}
 								filterQuery={filter()}
+								itemHeight={field() === "workflowType" ? 2 : 1}
 								help={
 									filtering()
 										? [
@@ -478,16 +468,34 @@ export function NewWorkflowModal(props: {
 											]
 								}
 								renderItem={(item, active) => {
-									const display =
-										field() === "workflowType"
-											? workflowTypeDisplay[item] || item
-											: item;
+									if (field() !== "workflowType")
+										return (
+											<text
+												fg={active ? uiColors.primary : uiColors.textSecondary}
+											>
+												{item}
+											</text>
+										);
+									const workflow = workflowTypeEntry(item);
 									return (
-										<text
-											fg={active ? uiColors.primary : uiColors.textSecondary}
+										<box
+											width="100%"
+											flexShrink={0}
+											flexDirection="column"
+											height={2}
+											overflow="hidden"
 										>
-											{display}
-										</text>
+											<text
+												height={1}
+												flexShrink={0}
+												fg={active ? uiColors.primary : uiColors.textSecondary}
+											>
+												{workflow?.label ?? item}
+											</text>
+											<text height={1} flexShrink={0} fg={uiColors.textMuted}>
+												{workflow?.description ?? ""}
+											</text>
+										</box>
 									);
 								}}
 							/>

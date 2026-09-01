@@ -407,7 +407,7 @@ test("review-comment loop reuses the planner agent by stable name instead of lau
 		const started = engine.start({
 			repo,
 			changeId: "plan-reuse",
-			definitionId: "standard",
+			definitionId: "openspec-full",
 			metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
 			routing,
 		});
@@ -468,7 +468,7 @@ test("review-comment loop reuses the planner agent by stable name instead of lau
 		const firstRunId = started.view.runs[0]?.id;
 		const firstName = adapter.context?.name;
 		expect(firstName).toBe(
-			effectRunnerTest.canonicalAgentName("plan-reuse", "standard", {
+			effectRunnerTest.canonicalAgentName("plan-reuse", "openspec-full", {
 				stepId: "core.plan",
 				role: "planner",
 				id: "irrelevant-for-persistent-roles",
@@ -576,7 +576,7 @@ test("canonical agent names stay within herdr limits and never collide across lo
 	]) {
 		const name = effectRunnerTest.canonicalAgentName(
 			changeId,
-			"standard",
+			"openspec-full",
 			verifier,
 		);
 		expect(name.length).toBeLessThanOrEqual(32);
@@ -592,12 +592,12 @@ test("canonical agent names stay within herdr limits and never collide across lo
 	const prefix = "rethink-agent-and-pane-identification-shared-prefix";
 	const one = effectRunnerTest.canonicalAgentName(
 		`${prefix}-one`,
-		"standard",
+		"openspec-full",
 		worker,
 	);
 	const two = effectRunnerTest.canonicalAgentName(
 		`${prefix}-two`,
-		"direct-apply",
+		"openspec-apply",
 		worker,
 	);
 	expect(one).not.toBe(two);
@@ -606,7 +606,7 @@ test("canonical agent names stay within herdr limits and never collide across lo
 
 test("canonical agent names are stable across generations and grouped rounds", () => {
 	const name = (stepId: string, role: string, id: string) =>
-		effectRunnerTest.canonicalAgentName("change-id", "standard", {
+		effectRunnerTest.canonicalAgentName("change-id", "openspec-full", {
 			stepId,
 			role,
 			id,
@@ -659,7 +659,7 @@ test("resolveLiveAgent reuses the live pane and recovers stale handles by identi
 	};
 	const canonical = effectRunnerTest.canonicalAgentName(
 		"change",
-		"standard",
+		"openspec-full",
 		run,
 	);
 	const legacy = effectRunnerTest.legacyRunName("change", run);
@@ -685,7 +685,7 @@ test("resolveLiveAgent reuses the live pane and recovers stale handles by identi
 			},
 		}),
 		"change",
-		"standard",
+		"openspec-full",
 		{ ...run, handle: { runtime: "pi", name: canonical, paneId: "dead-pane" } },
 	);
 	expect(stale?.paneId).toBe("moved-pane");
@@ -700,7 +700,7 @@ test("resolveLiveAgent reuses the live pane and recovers stale handles by identi
 			},
 		}),
 		"change",
-		"standard",
+		"openspec-full",
 		{ ...run, handle: { runtime: "pi", name: canonical, paneId: "kept-pane" } },
 	);
 	expect(healthy?.paneId).toBe("kept-pane");
@@ -711,7 +711,7 @@ test("resolveLiveAgent reuses the live pane and recovers stale handles by identi
 			[legacy]: { agent: { pane_id: "legacy-pane", agent_status: "working" } },
 		}),
 		"change",
-		"standard",
+		"openspec-full",
 		run,
 	);
 	expect(migrated?.paneId).toBe("legacy-pane");
@@ -719,7 +719,12 @@ test("resolveLiveAgent reuses the live pane and recovers stale handles by identi
 
 	// No live agent anywhere: the only outcome allowed to spawn.
 	expect(
-		effectRunnerTest.resolveLiveAgent(herdrWith({}), "change", "standard", run),
+		effectRunnerTest.resolveLiveAgent(
+			herdrWith({}),
+			"change",
+			"openspec-full",
+			run,
+		),
 	).toBeUndefined();
 	// A dead tracked process reports 'unknown' and must not count as live.
 	expect(
@@ -728,7 +733,7 @@ test("resolveLiveAgent reuses the live pane and recovers stale handles by identi
 				[canonical]: { agent: { pane_id: "p", agent_status: "unknown" } },
 			}),
 			"change",
-			"standard",
+			"openspec-full",
 			run,
 		),
 	).toBeUndefined();
@@ -799,7 +804,7 @@ test("proposal workspace setup stays on the dirty current checkout", async () =>
 			repo,
 			mode: "checkout",
 			changeId: "proposal-workspace",
-			definitionId: "standard-propose",
+			definitionId: "openspec-propose",
 			metadata: {
 				branch: "main",
 				baseBranch: "main",
@@ -865,7 +870,7 @@ test("proposal workspace setup stays on the dirty current checkout", async () =>
 		expect(await cleanup.execute(closeEffect)).toEqual({ cleaned: true });
 		expect(calls).toContainEqual(["workspace", "close", "proposal-workspace"]);
 		expect(fs.existsSync(repo)).toBe(true);
-		expect(started.view.definition.id).toBe("standard-propose");
+		expect(started.view.definition.id).toBe("openspec-propose");
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
 	}

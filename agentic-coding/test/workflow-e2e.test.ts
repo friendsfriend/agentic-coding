@@ -141,7 +141,7 @@ function action(
 function drive(
 	engine: WorkflowEngine,
 	root: string,
-	definitionId: "standard" | "direct-apply" | "no-openspec",
+	definitionId: "openspec-full" | "openspec-apply" | "no-openspec",
 	policy = false,
 ): string[] {
 	if (definitionId !== "no-openspec") {
@@ -151,7 +151,7 @@ function drive(
 		fs.writeFileSync(path.join(change, "design.md"), "design\n");
 		fs.writeFileSync(
 			path.join(change, "tasks.md"),
-			definitionId === "direct-apply" ? "- [ ] task\n" : "- [x] task\n",
+			definitionId === "openspec-apply" ? "- [ ] task\n" : "- [x] task\n",
 		);
 		fs.writeFileSync(
 			path.join(change, "specs", "feature", "spec.md"),
@@ -186,7 +186,7 @@ function drive(
 		routing,
 	}).view;
 	const visited = [view.currentStep.id];
-	if (definitionId === "standard") {
+	if (definitionId === "openspec-full") {
 		view = complete(engine, root, view, "planner", { validated: true });
 		const validation = requireEffect(
 			engine.claimEffects(root, 100),
@@ -202,7 +202,7 @@ function drive(
 		view = action(engine, root, view, "approve-plan");
 		visited.push(view.currentStep.id);
 	}
-	if (definitionId === "direct-apply")
+	if (definitionId === "openspec-apply")
 		fs.writeFileSync(
 			path.join(root, "openspec", "changes", definitionId, "tasks.md"),
 			"- [x] task\n",
@@ -302,7 +302,7 @@ function drive(
 	visited.push(view.currentStep.id);
 	return visited;
 }
-for (const type of ["standard", "direct-apply", "no-openspec"] as const)
+for (const type of ["openspec-full", "openspec-apply", "no-openspec"] as const)
 	test(`${type} definition reaches terminal through registered commands`, () => {
 		const root = repo();
 		try {
@@ -312,7 +312,7 @@ for (const type of ["standard", "direct-apply", "no-openspec"] as const)
 				type,
 			);
 			expect(sequence.at(-1)).toBe("core.closed");
-			if (type === "standard") expect(sequence[0]).toBe("core.plan");
+			if (type === "openspec-full") expect(sequence[0]).toBe("core.plan");
 			else expect(sequence[0]).toBe("core.implementation");
 			expect(sequence.includes("core.archive")).toBe(type !== "no-openspec");
 		} finally {
@@ -325,7 +325,7 @@ test("policy workflow returns wiki comments before approval and archive", () => 
 		const sequence = drive(
 			new WorkflowEngine(registerBuiltins()),
 			root,
-			"direct-apply",
+			"openspec-apply",
 			true,
 		);
 		const wiki = sequence.indexOf("core.wiki");

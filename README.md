@@ -46,7 +46,7 @@ agentic-coding manager   alias for home
 
 ```text
 start --repo PATH --change ID --mode worktree|checkout
-      [--workflow standard|standard-propose|direct-apply|no-openspec|plan-fusion|fusion-propose|wiki-only]
+      [--workflow openspec-full|openspec-propose|openspec-apply|no-openspec|openspec-fusion-full|openspec-fusion-propose|wiki|research]
       [--fusion-profiles NAME,NAME,...] [--task TEXT] [--ticket ID]
 status --repo PATH --change ID
 action ACTION_ID --repo PATH --change ID --revision N [--input JSON_OR_PATH]
@@ -65,14 +65,15 @@ Legacy role/phase verbs are removed. No compatibility shim translates `apply`, `
 
 Built-ins register through public registry seam and pin exact `{id, version, digest}`:
 
-- `standard`: plan → approval → implementation → triage → verification/fix → developer review → archive → wiki approval → delivery → completed
-- `direct-apply`: validates pre-authored OpenSpec artifacts, then starts implementation; archive still precedes delivery
+- `openspec-full`: plan → approval → implementation → triage → verification/fix → developer review → archive → wiki approval → delivery → completed
+- `openspec-apply`: validates pre-authored OpenSpec artifacts, then starts implementation; archive still precedes delivery
 - `no-openspec`: requires non-empty task; excludes planning, OpenSpec verifier/checklist, and archive
-- `standard-propose`: plans and validates an OpenSpec change, waits for plan approval, then holds in completed until explicitly closed; it never implements or creates a PR
-- `fusion-propose`: runs fusion planning and validation, waits for plan approval, then holds in completed until explicitly closed; it never implements or creates a PR
-- `wiki-only`: requires a repository as read-only evidence, writes drafts only to the centralized wiki, and progresses through documentation → wiki approval → completed until explicitly closed; it never modifies source files or runs implementation, verification, archive, delivery, or pull-request stages
+- `openspec-propose`: plans and validates an OpenSpec change, waits for plan approval, then holds in completed until explicitly closed; it never implements or creates a PR
+- `openspec-fusion-propose`: runs fusion planning and validation, waits for plan approval, then holds in completed until explicitly closed; it never implements or creates a PR
+- `wiki`: requires a repository as read-only evidence, writes drafts only to the centralized wiki, and progresses through documentation → wiki approval → completed until explicitly closed; it never modifies source files or runs implementation, verification, archive, delivery, or pull-request stages
+- `research`: runs research, wiki, and wiki review phases
 
-Proposal and wiki-only workflows require `--mode checkout`, stay on the current branch, and never create or switch a Git branch/worktree. Wiki-only accepts a dirty checkout as its source baseline and requires a non-empty documentation task, so it supports repository initialization, undocumented-feature documentation, and business-information updates without changing repository content. They may run alongside a full checkout workflow; each workflow keeps its own change ID and artifacts. Because Git branch selection is checkout-global, a concurrent full checkout workflow can switch the branch while proposal agents are active; proposal observations may therefore race with that switch.
+Proposal and wiki workflows require `--mode checkout`, stay on the current branch, and never create or switch a Git branch/worktree. Wiki accepts a dirty checkout as its source baseline and requires a non-empty documentation task, so it supports repository initialization, undocumented-feature documentation, and business-information updates without changing repository content. They may run alongside a full checkout workflow; each workflow keeps its own change ID and artifacts. Because Git branch selection is checkout-global, a concurrent full checkout workflow can switch the branch while proposal agents are active; proposal observations may therefore race with that switch.
 
 Registry validates IDs, actors, contracts, outcomes, effects, reachability, terminal paths, declared bounded cycles, and adapter requirements. Extra registered steps never alter existing graph unless explicitly composed. External workflow plugin loading is deferred; `agent-extension` means Pi runtime extension only.
 
@@ -164,7 +165,7 @@ Telemetry uses normalized engine/adapter/runtime envelope with W3C trace context
 
 Agentic Coding keeps a centralized **Open Knowledge Format v0.2** bundle (see [the OKF specification](https://github.com/GoogleCloudPlatform/open-knowledge-format)) at `~/.config/agentic-coding/wiki`. Set `HERDR_WIKI_DIR` or `[wiki] root = "..."` to relocate it; the centralized bundle can contain knowledge from multiple projects and OKF does not require one repository per bundle. The root `index.md` declares `okf_version: "0.2"`; concept ids are relative Markdown paths beneath the root. Use `projects/<project-id>/<concept>` for facts specific to one project or repository, and `shared/<concept>` only for claims that apply across projects with evidence from every project covered. A repository-relative source path is meaningful in the context of the project named by its concept, not as a universal location or rule. `index.md` and `log.md` are reserved filenames, not concept documents. Concepts use YAML frontmatter with `type`, `title`, `description`, optional `tags`, provenance, trust, and lifecycle fields, followed by Markdown.
 
-Use `agentic-coding workflow wiki list`, `search`, `show`, `write`, `verify`, and `log`. Search and read before writing, update an existing concept in place, and do not create active near-duplicates. Sequential planners and the consolidator can write drafts; archive verifies shipped knowledge. The wiki-only role may read repository evidence and write centralized wiki drafts only; it must not write source files. Reads expose status, trust tier, and staleness. Existing `repository/*` Agentic Coding drafts should move to the matching `projects/agentic-coding/*` identifier without verification; if a safe move is unavailable, retain the legacy record as explicitly deprecated and keep only the project-scoped replacement active. The wiki approval gate grants the human-reviewed tier only after developer approval; `[wiki] reviewer` configures the reviewer identity. OKF §3 recommends `git init` on the bundle for history. Changing pinned instructions or manifests may require `agentic-coding workflow repin` for in-flight workflows.
+Use `agentic-coding workflow wiki list`, `search`, `show`, `write`, `verify`, and `log`. Search and read before writing, update an existing concept in place, and do not create active near-duplicates. Sequential planners and the consolidator can write drafts; archive verifies shipped knowledge. The wiki role may read repository evidence and write centralized wiki drafts only; it must not write source files. Reads expose status, trust tier, and staleness. Existing `repository/*` Agentic Coding drafts should move to the matching `projects/agentic-coding/*` identifier without verification; if a safe move is unavailable, retain the legacy record as explicitly deprecated and keep only the project-scoped replacement active. The wiki approval gate grants the human-reviewed tier only after developer approval; `[wiki] reviewer` configures the reviewer identity. OKF §3 recommends `git init` on the bundle for history. Changing pinned instructions or manifests may require `agentic-coding workflow repin` for in-flight workflows.
 
 ## Development
 

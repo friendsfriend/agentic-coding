@@ -490,7 +490,7 @@ test("required user actions expose developer review and completion commands", ()
 		"core.completed",
 		false,
 		[],
-		"standard-propose",
+		"openspec-propose",
 	);
 	expect(proposal?.items.map((item) => item.label)).toEqual([
 		"Close Herdr workspace",
@@ -504,7 +504,7 @@ test("required user actions expose developer review and completion commands", ()
 		"core.plan-approval",
 		false,
 		[],
-		"standard-propose",
+		"openspec-propose",
 	);
 	expect(planAction?.prompt).toContain("before completing the proposal");
 	expect(requiredUserActionFor("verify")).toBeUndefined();
@@ -529,10 +529,10 @@ test("startArgs maps quick workflow type to no-openspec and preserves task text"
 		change: "fusion-fix",
 		task: "Compare plans\nand recommend one",
 		mode: "worktree",
-		workflowType: "plan-fusion",
+		workflowType: "openspec-fusion-full",
 	});
 
-	expect(fusionArgs.definitionId).toBe("plan-fusion");
+	expect(fusionArgs.definitionId).toBe("openspec-fusion-full");
 	expect(fusionArgs.task).toBe("Compare plans\nand recommend one");
 
 	const proposalArgs = startArgs({
@@ -541,10 +541,10 @@ test("startArgs maps quick workflow type to no-openspec and preserves task text"
 		change: "proposal",
 		task: "Draft a plan",
 		mode: "worktree",
-		workflowType: "standard-propose",
+		workflowType: "openspec-propose",
 	});
 	expect(proposalArgs).toMatchObject({
-		definitionId: "standard-propose",
+		definitionId: "openspec-propose",
 		mode: "checkout",
 		sameCheckout: true,
 	});
@@ -554,10 +554,10 @@ test("startArgs maps quick workflow type to no-openspec and preserves task text"
 		change: "fusion-proposal",
 		task: "Compare drafts",
 		mode: "worktree",
-		workflowType: "fusion-propose",
+		workflowType: "openspec-fusion-propose",
 	});
 	expect(fusionProposalArgs).toMatchObject({
-		definitionId: "fusion-propose",
+		definitionId: "openspec-fusion-propose",
 		ticket: "T-1",
 		task: "Compare drafts",
 		mode: "checkout",

@@ -172,7 +172,7 @@ export interface StepAttemptState {
 	}>;
 }
 export interface WorkflowMetadata {
-	/** Empty for repository-independent workflows such as wiki-comment-review. */
+	/** Empty for repository-independent workflows such as wiki-comments. */
 	repository: string;
 	worktree: string;
 	changeId: string;
@@ -232,7 +232,7 @@ export interface WorkflowSnapshot {
 	attention: string[];
 	/** Bounded, ordered question/answer history. Missing in legacy snapshots. */
 	developerDialogue: DeveloperDialogueRecord[];
-	/** Deterministic source-content baseline for repository-backed wiki-only runs. */
+	/** Deterministic source-content baseline for repository-backed wiki runs. */
 	sourceBaseline?: { fingerprint: string };
 	/** Complete pre-agent baseline for repository-independent wiki reviews. */
 	wikiBaseline?: {
@@ -754,28 +754,24 @@ export function parseSnapshot(value: unknown): WorkflowSnapshot {
 		},
 		metadata: {
 			repository:
-				(definition.id === "wiki-comment-review" ||
-					definition.id === "research") &&
+				(definition.id === "wiki-comments" || definition.id === "research") &&
 				metadata.repository === ""
 					? ""
 					: path.resolve(text(metadata.repository, "$.metadata.repository")),
 			worktree: path.resolve(text(metadata.worktree, "$.metadata.worktree")),
 			changeId: text(metadata.changeId, "$.metadata.changeId"),
 			branch:
-				(definition.id === "wiki-comment-review" ||
-					definition.id === "research") &&
+				(definition.id === "wiki-comments" || definition.id === "research") &&
 				metadata.branch === ""
 					? ""
 					: text(metadata.branch, "$.metadata.branch"),
 			baseBranch:
-				(definition.id === "wiki-comment-review" ||
-					definition.id === "research") &&
+				(definition.id === "wiki-comments" || definition.id === "research") &&
 				metadata.baseBranch === ""
 					? ""
 					: text(metadata.baseBranch, "$.metadata.baseBranch"),
 			baseCommit:
-				(definition.id === "wiki-comment-review" ||
-					definition.id === "research") &&
+				(definition.id === "wiki-comments" || definition.id === "research") &&
 				metadata.baseCommit === ""
 					? ""
 					: text(metadata.baseCommit, "$.metadata.baseCommit"),

@@ -121,7 +121,7 @@ export async function runWorkflowAction(
 }
 /** Sentinel choice meaning "use existing global config defaults"; stripped
  * before routing so it never reaches resolvePreset. */
-export const PRESET_CONFIG_DEFAULTS = "(config defaults)";
+export const PRESET_CONFIG_DEFAULTS = "Config defaults";
 
 export function startArgs(input: {
 	repo: string;
@@ -135,11 +135,11 @@ export function startArgs(input: {
 	const definitionId =
 		input.workflowType === "quick"
 			? "no-openspec"
-			: (input.workflowType ?? "standard");
+			: (input.workflowType ?? "openspec-full");
 	const sameCheckout = [
-		"standard-propose",
-		"fusion-propose",
-		"wiki-only",
+		"openspec-propose",
+		"openspec-fusion-propose",
+		"wiki",
 	].includes(definitionId);
 	const research = definitionId === "research";
 	return {
@@ -173,7 +173,7 @@ function resolveStartPreset(
 	if (!presetName || presetName === PRESET_CONFIG_DEFAULTS) return undefined;
 	return resolvePreset(agents, presetName);
 }
-/** Ordered plan-fusion planner count configured under the selected preset's
+/** Ordered openspec-fusion-full planner count configured under the selected preset's
  * roles.fusion.plan table: the contiguous run planner-1..planner-N. An entry
  * beyond the run is rejected so an edited preset can never silently drop a
  * planner or launch an unintended count. */
@@ -188,7 +188,7 @@ export function fusionPlannerCount(preset: RoutingPreset | undefined): number {
 		const match = /^planner-(\d+)$/.exec(role);
 		if (match && Number(match[1]) > 5)
 			throw new Error(
-				`plan-fusion preset ${preset?.name} supports at most planner-5`,
+				`openspec-fusion-full preset ${preset?.name} supports at most planner-5`,
 			);
 	}
 	let count = 0;
@@ -196,14 +196,14 @@ export function fusionPlannerCount(preset: RoutingPreset | undefined): number {
 	for (let index = count + 1; index <= 5; index += 1)
 		if (has(`planner-${index}`))
 			throw new Error(
-				`plan-fusion preset ${preset?.name} requires contiguous planner roles: planner-${index} is set but planner-${count + 1} is missing`,
+				`openspec-fusion-full preset ${preset?.name} requires contiguous planner roles: planner-${index} is set but planner-${count + 1} is missing`,
 			);
 	return count;
 }
 /** Shared dashboard-start routing: derives agent roles through the CLI's
- * rolesForDefinition (including the plan-fusion planner fan-out), validates
+ * rolesForDefinition (including the openspec-fusion-full planner fan-out), validates
  * preset coverage, resolves routes via the existing preset precedence chain,
- * and rejects unusable plan-fusion configuration before any workspace or
+ * and rejects unusable openspec-fusion-full configuration before any workspace or
  * agent effects occur. */
 export function startRouting(
 	definitionId: string,
@@ -217,14 +217,16 @@ export function startRouting(
 		definitionId,
 		definition.steps,
 		registry,
-		["plan-fusion", "fusion-propose"].includes(definitionId)
+		["openspec-fusion-full", "openspec-fusion-propose"].includes(definitionId)
 			? fusionPlannerCount(preset)
 			: 0,
 	);
 	if (preset)
 		validatePresetCoverage(preset, definition, Object.keys(roles), agents);
 	const routing = resolveRouting(definition, roles, agents, preset);
-	if (["plan-fusion", "fusion-propose"].includes(definitionId)) {
+	if (
+		["openspec-fusion-full", "openspec-fusion-propose"].includes(definitionId)
+	) {
 		// Mirror the engine's defensive start-time checks with clearer errors
 		// before git inspection, workspace creation, or agent launches.
 		const planners = routing.routes.filter(
@@ -334,13 +336,10 @@ export function startWikiCommentWorkflowInProcess(
 		undefined,
 		config.workflow.max_verification_rounds,
 	);
-	const definition = registry.definition(
-		"wiki-comment-review",
-		definitionVersion,
-	);
+	const definition = registry.definition("wiki-comments", definitionVersion);
 	const agents = parseAgentsConfig(config.agents, config);
 	const routing = startRouting(
-		"wiki-comment-review",
+		"wiki-comments",
 		undefined,
 		definition,
 		registry,
@@ -352,7 +351,7 @@ export function startWikiCommentWorkflowInProcess(
 	engine.start({
 		repo: wikiWorkflowTarget(),
 		changeId: validateChangeId(sessionId),
-		definitionId: "wiki-comment-review",
+		definitionId: "wiki-comments",
 		definitionVersion,
 		context: JSON.parse(JSON.stringify({ comments })),
 		metadata: {
