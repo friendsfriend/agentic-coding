@@ -162,6 +162,100 @@ describe("transactional workflow runtime", () => {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
 	});
+	test("research accepts trusted integrations but rejects source mutations", () => {
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "workflow-research-source-isolation-"),
+		);
+		const previousWikiRoot = process.env.HERDR_WIKI_DIR;
+		process.env.HERDR_WIKI_DIR = path.join(tmp, "wiki");
+		try {
+			const source = repository(path.join(tmp, "source"));
+			const engine = new WorkflowEngine(registerBuiltins());
+			const researchProfile: ResolvedProfile = {
+				...profile,
+				tools: ["read", "web_search"],
+				extensions: ["/tmp/research-extension.ts"],
+				capabilities: [
+					"interactive",
+					"prompt",
+					"persistent-session",
+					"run-environment",
+					"observe",
+					"read-only",
+				],
+			};
+			const started = engine.start({
+				repo: researchWorkflowTarget(),
+				repositoryContext: source,
+				changeId: "research-source-isolation",
+				definitionId: "research",
+				definitionVersion: definitionVersionForPolicy(6),
+				metadata: {
+					branch: "",
+					baseBranch: "",
+					baseCommit: "",
+					task: "research",
+				},
+				routing: {
+					defaultProfile: researchProfile.name,
+					routes: [
+						{
+							stepId: "core.research",
+							role: "researcher",
+							profile: researchProfile,
+						},
+					],
+				},
+			});
+			expect(() =>
+				engine.start({
+					repo: researchWorkflowTarget(),
+					repositoryContext: source,
+					changeId: "research-invalid-capabilities",
+					definitionId: "research",
+					definitionVersion: definitionVersionForPolicy(6),
+					metadata: {
+						branch: "",
+						baseBranch: "",
+						baseCommit: "",
+						task: "research",
+					},
+					routing: {
+						defaultProfile: researchProfile.name,
+						routes: [
+							{
+								stepId: "core.research",
+								role: "researcher",
+								profile: {
+									...researchProfile,
+									capabilities: [...researchProfile.capabilities, "shell"],
+								},
+							},
+						],
+					},
+				}),
+			).toThrow(/without shell or edit/);
+			fs.writeFileSync(path.join(source, "README.md"), "mutated\n");
+			expect(() =>
+				engine.dispatch(researchWorkflowTarget(), {
+					type: "developer.action",
+					workflowId: started.snapshot.workflowId,
+					revision: started.snapshot.revision,
+					actionId: "close-research",
+				}),
+			).toThrow(/source repository changed/);
+			expect(
+				engine.getSnapshot(
+					researchWorkflowTarget(),
+					started.snapshot.workflowId,
+				).currentStep,
+			).toBe("core.research");
+		} finally {
+			if (previousWikiRoot === undefined) delete process.env.HERDR_WIKI_DIR;
+			else process.env.HERDR_WIKI_DIR = previousWikiRoot;
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
 	test("research hands off to wiki approval and exposes close before approval", () => {
 		const tmp = fs.mkdtempSync(
 			path.join(os.tmpdir(), "workflow-research-life-"),

@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change introduce-research-workflow. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Research workflow has an explicit research-to-wiki lifecycle
 The system SHALL provide a versioned `research` workflow whose successful path is `core.research` → `core.wiki` → `core.wiki-approval` → `core.closed`. The workflow SHALL start at `core.research`, use the common `core.closed` terminal lifecycle marker, and SHALL contain no implementation, verification, review, archive, delivery, or pull-request stage.
 
@@ -85,12 +87,18 @@ The system SHALL expose a developer-only `close-research` action while a researc
 - **AND** no duplicate stop effect or lifecycle transition is created
 
 ### Requirement: Researcher follows evidence-oriented web research behavior
-The dedicated researcher instructions SHALL require use of only tools exposed by the selected runtime/profile, without requiring a specific browser, MCP server, provider, or new dependency. When web sources are used, the researcher SHALL identify source URLs, distinguish sourced facts from synthesis, and disclose uncertainty or conflicting evidence.
+The dedicated researcher instructions SHALL require use of only tools and extensions exposed by the selected runtime/profile, without requiring a specific browser, search engine, MCP server, provider, or new dependency. Every tool name and extension explicitly configured by the user for the selected research profile SHALL remain available to that runtime according to its own tool-loading semantics; research SHALL NOT apply an additional hard-coded tool-name allowlist. When web or external sources are used, the researcher SHALL identify source URLs, distinguish sourced facts from synthesis, and disclose uncertainty or conflicting evidence. For repository-context research, configured tools and extensions are user-trusted integrations, while the workflow's source-isolation guard remains authoritative and repository mutations SHALL still be rejected or blocked before the research result is accepted.
 
 #### Scenario: Runtime tool availability is respected
-- **WHEN** a research runtime exposes a configured web, browser, or search tool
-- **THEN** the researcher may use that tool within its declared permissions
+- **WHEN** a research runtime exposes a configured web, browser, search, or other user-defined tool or extension
+- **THEN** the researcher may use that configured integration within the runtime's declared permissions
+- **AND** the workflow does not reject it merely because its name is absent from a built-in allowlist
 - **AND** the workflow does not assume an unconfigured integration exists
+
+#### Scenario: Configured research extensions are retained
+- **WHEN** a user selects a research profile with configured runtime extensions that provide research tools
+- **THEN** those extensions remain part of the research launch configuration for runtimes that support profile extensions
+- **AND** the workflow does not silently remove them as a side effect of research read-only routing
 
 #### Scenario: Research cites web evidence
 - **WHEN** a response relies on web research
@@ -99,6 +107,11 @@ The dedicated researcher instructions SHALL require use of only tools exposed by
 #### Scenario: Conflicting evidence is found
 - **WHEN** credible sources disagree or evidence is incomplete
 - **THEN** the researcher reports the conflict or uncertainty instead of presenting an unsupported conclusion as fact
+
+#### Scenario: User-trusted integration mutates repository context
+- **WHEN** a configured research tool or extension changes the supplied source repository
+- **THEN** the workflow's source-isolation validation rejects or blocks the research result
+- **AND** the source repository is not presented as unchanged or as a valid research result
 
 ### Requirement: Researcher may hand off to a reviewed wiki draft only on explicit request
 During the active research stage, the researcher SHALL remain interactive until the user explicitly requests a wiki entry. The developer SHALL then dispatch the authenticated `request-research-wiki` action, which expires the researcher run and enters `core.wiki`; the dedicated wiki role searches, inspects, and writes centralized concepts. Wiki writing SHALL use the existing OKF v0.2 conventions, update an intended existing concept in place before creating a near-duplicate, use project-aware namespaces when repository context exists, and produce an unverified draft. The researcher and wiki agent SHALL not verify concepts or set human-reviewed metadata; a developer approves the draft in `core.wiki-approval`.
@@ -127,4 +140,3 @@ During the active research stage, the researcher SHALL remain interactive until 
 - **THEN** only the centralized wiki output changes
 - **AND** the supplied repository remains unchanged
 - **AND** developer approval is required before the workflow reaches `core.closed`
-

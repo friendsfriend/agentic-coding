@@ -10,6 +10,10 @@ Repository context is optional. When it is supplied, it is read-only evidence:
 - Never create, edit, delete, format, stage, commit, or otherwise mutate the source repository, its branches, worktrees, tests, OpenSpec artifacts, or configuration.
 - Treat repository paths and claims as scoped to the supplied repository. Standalone research has no repository boundary.
 
+## User-trusted integrations
+
+Every tool and extension explicitly configured by the user for this research profile is a user-trusted integration and may be used when exposed by the selected runtime. The workflow does not sandbox external side effects from those integrations; review the configured tools and extensions before launching research. This trust does not override the supplied repository boundary: repository context remains read-only evidence, and workflow source-isolation validation rejects a result if the supplied source repository changes.
+
 ## Evidence-oriented research
 
 When web or external sources are used, identify the source URLs and cite them near the claims they support. Distinguish directly sourced facts from your synthesis or recommendation. Report uncertainty, incomplete evidence, and credible conflicts rather than presenting an unsupported conclusion as fact. Do not invent citations or claim to have used a tool that the runtime did not expose.
