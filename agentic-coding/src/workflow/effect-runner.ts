@@ -154,7 +154,9 @@ export interface AdapterEffectOptions {
 	remote?: string;
 	prTool?: string;
 	credentialPrompt?: CredentialPrompt;
-	paneForRun(runId: string): Promise<{ paneId: string; tabId?: string }>;
+	paneForRun(
+		runId: string,
+	): Promise<{ paneId: string; tabId?: string; owned: boolean }>;
 }
 export function agentEffectHandlers(
 	repo: string,
@@ -571,10 +573,15 @@ export function agentEffectHandlers(
 					}
 					return handle;
 				} catch (error) {
-					try {
-						options.herdr.call("pane", "close", pane.paneId);
-					} catch {
-						/* preserve original launch error */
+					// Only close the pane when this launch call created it; a
+					// reused pane may still host another live agent, so a failed
+					// relaunch must never tear it down.
+					if (pane.owned === true) {
+						try {
+							options.herdr.call("pane", "close", pane.paneId);
+						} catch {
+							/* preserve original launch error */
+						}
 					}
 					throw error;
 				}

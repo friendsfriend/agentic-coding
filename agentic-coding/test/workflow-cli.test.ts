@@ -249,7 +249,7 @@ describe("breaking workflow CLI surface", () => {
 				adapters: new Map([["pi", new StubAdapter()]]),
 				herdr: stubHerdr(),
 				async paneForRun() {
-					return { paneId: "pane" };
+					return { paneId: "pane", owned: true };
 				},
 			});
 			await new EffectRunner(repo, workflowEngine, handlers).drain();
@@ -351,7 +351,7 @@ describe("breaking workflow CLI surface", () => {
 				adapters: new Map([["pi", new StubAdapter()]]),
 				herdr: stubHerdr(),
 				async paneForRun() {
-					return { paneId: "pane" };
+					return { paneId: "pane", owned: true };
 				},
 			});
 			await new EffectRunner(repo, workflowEngine, handlers).drain();
@@ -461,7 +461,7 @@ describe("breaking workflow CLI surface", () => {
 			"/repo",
 			herdrWithLive(true),
 		)(run.id);
-		expect(reused).toEqual({ paneId: "live-pane" });
+		expect(reused).toEqual({ paneId: "live-pane", owned: false });
 		expect(
 			calls.some((args) => args[0] === "tab" && args[1] === "create"),
 		).toBe(false);
@@ -473,7 +473,11 @@ describe("breaking workflow CLI surface", () => {
 			"/repo",
 			herdrWithLive(false),
 		)(run.id);
-		expect(spawned).toEqual({ paneId: "new-pane", tabId: "new-tab" });
+		expect(spawned).toEqual({
+			paneId: "new-pane",
+			tabId: "new-tab",
+			owned: true,
+		});
 		expect(
 			calls.filter((args) => args[0] === "tab" && args[1] === "create"),
 		).toHaveLength(1);
@@ -522,6 +526,7 @@ describe("breaking workflow CLI surface", () => {
 		expect(await paneForRunFactory(fakeEngine, "/repo", herdr)(run.id)).toEqual(
 			{
 				paneId: "verifier-live",
+				owned: false,
 			},
 		);
 		expect(
@@ -596,6 +601,10 @@ describe("breaking workflow CLI surface", () => {
 			"--ratio",
 			"0.5",
 		]);
-		expect(pane).toEqual({ paneId: "split-pane", tabId: "tab-split" });
+		expect(pane).toEqual({
+			paneId: "split-pane",
+			tabId: "tab-split",
+			owned: true,
+		});
 	});
 });

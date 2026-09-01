@@ -107,7 +107,9 @@ export function paneForRunFactory(
 	workflowEngine: WorkflowEngine,
 	repo: string,
 	herdr: HerdrPort,
-): (runId: string) => Promise<{ paneId: string; tabId?: string }> {
+): (
+	runId: string,
+) => Promise<{ paneId: string; tabId?: string; owned: boolean }> {
 	return async (runId) => {
 		const run = workflowEngine.getRun(repo, runId);
 		const snapshot = workflowEngine.getSnapshot(repo, run.workflowId);
@@ -124,7 +126,7 @@ export function paneForRunFactory(
 			snapshot.definition.id,
 			run,
 		);
-		if (resolved) return { paneId: resolved.paneId };
+		if (resolved) return { paneId: resolved.paneId, owned: false };
 		if (roundScoped) {
 			const round = workflowEngine
 				.status(repo, snapshot.metadata.changeId)
@@ -167,6 +169,7 @@ export function paneForRunFactory(
 						? {
 								paneId: result.pane.pane_id,
 								...(result.pane.tab_id ? { tabId: result.pane.tab_id } : {}),
+								owned: true as const,
 							}
 						: undefined;
 				} catch {
@@ -202,7 +205,7 @@ export function paneForRunFactory(
 					} else if (k === 3) {
 						// bottom full-width row was created with the second pane; reuse it, or create it now if the second launch was retried
 						const spare = bottomPane(anchor);
-						if (spare) return { paneId: spare };
+						if (spare) return { paneId: spare, owned: false };
 						const placed = split(anchor, "down");
 						if (placed) return placed;
 					} else if (k === 4) {
@@ -245,6 +248,7 @@ export function paneForRunFactory(
 		return {
 			paneId: result.root_pane.pane_id,
 			...(result.root_pane.tab_id ? { tabId: result.root_pane.tab_id } : {}),
+			owned: true,
 		};
 	};
 }

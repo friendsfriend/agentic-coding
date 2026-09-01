@@ -104,7 +104,7 @@ test("research workspace setup launches and prompts the researcher", async () =>
 			adapters: new Map([["pi", adapter]]),
 			herdr,
 			async paneForRun() {
-				return { paneId: "research-pane" };
+				return { paneId: "research-pane", owned: true };
 			},
 		});
 		await new EffectRunner(researchWorkflowTarget(), engine, handlers).drain();
@@ -200,7 +200,7 @@ test("runner drains workspace and agent effects, then stops stale run after repa
 			adapters: new Map([["pi", adapter]]),
 			herdr,
 			async paneForRun() {
-				return { paneId: "pane" };
+				return { paneId: "pane", owned: true };
 			},
 		});
 		await new EffectRunner(repo, engine, handlers).drain();
@@ -249,6 +249,247 @@ test("runner drains workspace and agent effects, then stops stale run after repa
 		expect(adapter.stops).toBe(1);
 		expect(adapter.launches).toBe(2);
 		expect(engine.status(repo, "effects").status).toBe("active");
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("launch failure on a reused pane does not close it", async () => {
+	const repo = fs.mkdtempSync(
+		path.join(os.tmpdir(), "workflow-launch-fail-reused-"),
+	);
+	try {
+		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+		fs.writeFileSync(path.join(repo, "README.md"), "x\n");
+		execFileSync("git", ["add", "."], { cwd: repo });
+		execFileSync(
+			"git",
+			[
+				"-c",
+				"user.email=test@example.com",
+				"-c",
+				"user.name=Test",
+				"commit",
+				"-qm",
+				"base",
+			],
+			{ cwd: repo },
+		);
+		const registry = registerBuiltins();
+		const engine = new WorkflowEngine(registry);
+		engine.start({
+			repo,
+			mode: "checkout",
+			changeId: "launch-fail-reused",
+			definitionId: "no-openspec",
+			metadata: {
+				branch: "feature/launch-fail-reused",
+				baseBranch: "main",
+				baseCommit: execFileSync("git", ["rev-parse", "HEAD"], {
+					cwd: repo,
+					encoding: "utf8",
+				}).trim(),
+				task: "task",
+			},
+			routing: {
+				defaultProfile: "pi",
+				routes: [
+					{
+						stepId: "core.implementation",
+						role: "worker",
+						profile: {
+							name: "pi",
+							runtime: "pi",
+							executable: "sh",
+							tools: [],
+							extensions: [],
+							readOnly: false,
+							capabilities: ["prompt", "run-environment", "observe"],
+							digest: "profile",
+						},
+					},
+				],
+				diversity: [],
+			},
+		});
+		const calls: string[][] = [];
+		const herdr = {
+			call(...args: string[]) {
+				calls.push(args);
+				if (args[0] === "tab" && args[1] === "list")
+					return { tabs: [{ tab_id: "tab1", label: "dashboard" }] };
+				if (args[0] === "workspace" && args[1] === "create")
+					return { workspace: { workspace_id: "workspace" } };
+				if (args[0] === "pane" && args[1] === "close") return {};
+				throw new Error(`unexpected ${args.join(" ")}`);
+			},
+		};
+		class FailingAdapter implements AgentAdapter {
+			readonly id = "pi" as const;
+			preflight() {}
+			async launch(): Promise<AgentHandle> {
+				throw new Error("launch exploded");
+			}
+			async prompt() {}
+			async observe(): Promise<AgentObservation> {
+				return { status: "working", paneId: "n/a" };
+			}
+			async stop() {}
+		}
+		const handlers = agentEffectHandlers(repo, engine, {
+			registry,
+			adapters: new Map([["pi", new FailingAdapter()]]),
+			herdr,
+			async paneForRun() {
+				// A live agent already resolved to this pane; the allocator did not
+				// create it, so a launch failure must not close it.
+				return { paneId: "reused-pane", owned: false };
+			},
+		});
+		// Drain workspace.setup so the agent.launch effect becomes claimable.
+		const setup = engine
+			.claimEffects(repo, 10)
+			.find((effect) => effect.kind === "workspace.setup");
+		if (!setup) throw new Error("expected workspace.setup effect");
+		const setupResult = await handlers["workspace.setup"]?.execute(setup);
+		engine.dispatch(repo, {
+			type: "effect.result",
+			effectId: setup.id,
+			lease: setup.lease ?? "",
+			outcome: "complete",
+			data: setupResult,
+		});
+		const launch = engine
+			.claimEffects(repo, 10)
+			.find((effect) => effect.kind === "agent.launch");
+		if (!launch) throw new Error("expected agent.launch effect");
+		const launchHandler = handlers["agent.launch"];
+		if (!launchHandler) throw new Error("missing agent.launch handler");
+		await expect(launchHandler.execute(launch)).rejects.toThrow(
+			"launch exploded",
+		);
+		expect(
+			calls.some((args) => args[0] === "pane" && args[1] === "close"),
+		).toBe(false);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("launch failure on a newly created pane still cleans it up", async () => {
+	const repo = fs.mkdtempSync(
+		path.join(os.tmpdir(), "workflow-launch-fail-created-"),
+	);
+	try {
+		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+		fs.writeFileSync(path.join(repo, "README.md"), "x\n");
+		execFileSync("git", ["add", "."], { cwd: repo });
+		execFileSync(
+			"git",
+			[
+				"-c",
+				"user.email=test@example.com",
+				"-c",
+				"user.name=Test",
+				"commit",
+				"-qm",
+				"base",
+			],
+			{ cwd: repo },
+		);
+		const registry = registerBuiltins();
+		const engine = new WorkflowEngine(registry);
+		engine.start({
+			repo,
+			mode: "checkout",
+			changeId: "launch-fail-created",
+			definitionId: "no-openspec",
+			metadata: {
+				branch: "feature/launch-fail-created",
+				baseBranch: "main",
+				baseCommit: execFileSync("git", ["rev-parse", "HEAD"], {
+					cwd: repo,
+					encoding: "utf8",
+				}).trim(),
+				task: "task",
+			},
+			routing: {
+				defaultProfile: "pi",
+				routes: [
+					{
+						stepId: "core.implementation",
+						role: "worker",
+						profile: {
+							name: "pi",
+							runtime: "pi",
+							executable: "sh",
+							tools: [],
+							extensions: [],
+							readOnly: false,
+							capabilities: ["prompt", "run-environment", "observe"],
+							digest: "profile",
+						},
+					},
+				],
+				diversity: [],
+			},
+		});
+		const calls: string[][] = [];
+		const herdr = {
+			call(...args: string[]) {
+				calls.push(args);
+				if (args[0] === "tab" && args[1] === "list")
+					return { tabs: [{ tab_id: "tab1", label: "dashboard" }] };
+				if (args[0] === "workspace" && args[1] === "create")
+					return { workspace: { workspace_id: "workspace" } };
+				if (args[0] === "pane" && args[1] === "close") return {};
+				throw new Error(`unexpected ${args.join(" ")}`);
+			},
+		};
+		class FailingAdapter implements AgentAdapter {
+			readonly id = "pi" as const;
+			preflight() {}
+			async launch(): Promise<AgentHandle> {
+				throw new Error("launch exploded");
+			}
+			async prompt() {}
+			async observe(): Promise<AgentObservation> {
+				return { status: "working", paneId: "n/a" };
+			}
+			async stop() {}
+		}
+		const handlers = agentEffectHandlers(repo, engine, {
+			registry,
+			adapters: new Map([["pi", new FailingAdapter()]]),
+			herdr,
+			async paneForRun() {
+				// This allocation call created the pane itself (e.g. a fresh tab),
+				// so a launch failure must still clean it up.
+				return { paneId: "created-pane", owned: true };
+			},
+		});
+		const setup = engine
+			.claimEffects(repo, 10)
+			.find((effect) => effect.kind === "workspace.setup");
+		if (!setup) throw new Error("expected workspace.setup effect");
+		const setupResult = await handlers["workspace.setup"]?.execute(setup);
+		engine.dispatch(repo, {
+			type: "effect.result",
+			effectId: setup.id,
+			lease: setup.lease ?? "",
+			outcome: "complete",
+			data: setupResult,
+		});
+		const launch = engine
+			.claimEffects(repo, 10)
+			.find((effect) => effect.kind === "agent.launch");
+		if (!launch) throw new Error("expected agent.launch effect");
+		const launchHandler = handlers["agent.launch"];
+		if (!launchHandler) throw new Error("missing agent.launch handler");
+		await expect(launchHandler.execute(launch)).rejects.toThrow(
+			"launch exploded",
+		);
+		expect(calls).toContainEqual(["pane", "close", "created-pane"]);
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
 	}
@@ -462,7 +703,7 @@ test("review-comment loop reuses the planner agent by stable name instead of lau
 				paneForRunCalls++;
 				if (paneForRunCalls > 1)
 					throw new Error("must not create a second pane");
-				return { paneId: "planner-pane" };
+				return { paneId: "planner-pane", owned: true };
 			},
 		});
 
@@ -841,7 +1082,7 @@ test("proposal workspace setup stays on the dirty current checkout", async () =>
 			adapters: new Map(),
 			herdr,
 			async paneForRun() {
-				return { paneId: "pane" };
+				return { paneId: "pane", owned: true };
 			},
 		});
 		const setup = engine.claimEffects(repo, 10)[0];
@@ -973,7 +1214,7 @@ test("workspace retry recovers stable branch and workspace identity", async () =
 			adapters: new Map([["pi", adapter]]),
 			herdr,
 			async paneForRun() {
-				return { paneId: "pane" };
+				return { paneId: "pane", owned: true };
 			},
 		});
 		await new EffectRunner(repo, engine, handlers).drain();

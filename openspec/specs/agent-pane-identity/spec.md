@@ -2,7 +2,9 @@
 
 ## Purpose
 Gives every workflow-managed agent a deterministic, collision-free identity and guarantees that launches reuse the agent's existing pane instead of spawning duplicates, so long-running workflows stay stable across retries, generations, and engine restarts.
+
 ## Requirements
+
 ### Requirement: Deterministic unique agent names
 Each workflow-managed agent SHALL have one canonical name derived from its workflow change ID, step, and role (plus round discriminator for grouped one-shot roles). The derivation SHALL be injective within the Herdr runtime: two different workflows, steps, or roles SHALL never map to the same live agent name. The discriminating identity (change + role) SHALL NOT be truncated away to satisfy runtime name limits.
 
@@ -15,7 +17,8 @@ Each workflow-managed agent SHALL have one canonical name derived from its workf
 - **THEN** the same workflow, step, role, and round SHALL produce the identical name as before
 
 ### Requirement: Reuse before spawn
-Before launching a new agent process for a run, the engine SHALL attempt to resolve a live agent for the run's canonical identity — first from the run's persisted handle, then by the canonical agent name — and reuse that agent's pane when it is confirmed alive. A new tab or pane SHALL be created only when no live agent resolves or confirmation fails. This SHALL apply to every launch path, including grouped-round launches anchoring sibling geometry.
+
+Before launching a new agent process for a run, the engine SHALL attempt to resolve a live agent for the run's canonical identity — first from the run's persisted handle, then by the canonical agent name — and reuse that agent's pane when it is confirmed alive. A new tab or pane SHALL be created only when no live agent resolves or confirmation fails. This SHALL apply to every launch path, including grouped-round launches anchoring sibling geometry. Pane allocation SHALL record whether the allocated pane was newly created by that allocation call or reused from an existing pane, and SHALL close the pane after a launch failure only when that allocation call created it; a reused pane SHALL never be closed as a side effect of a launch failure on that pane.
 
 #### Scenario: Persistent role relaunches into its existing pane
 - **WHEN** a planner, worker, or archive run launches and a live agent with the canonical name already exists
@@ -28,6 +31,14 @@ Before launching a new agent process for a run, the engine SHALL attempt to reso
 #### Scenario: Grouped-round siblings anchor by identity without handles
 - **WHEN** a grouped-round launch computes split geometry while sibling runs have no persisted handles but live agents exist under their canonical names
 - **THEN** the engine SHALL still resolve those siblings by canonical name and anchor the layout on their panes
+
+#### Scenario: Launch failure on a reused pane does not destroy it
+- **WHEN** a run is allocated an existing pane (a live agent's resolved pane, or an existing sibling pane discovered through layout inspection) and `adapter.launch()` subsequently fails for that run
+- **THEN** the engine SHALL NOT close that pane, so any other agent still running in it remains untouched
+
+#### Scenario: Launch failure on a newly created pane still cleans it up
+- **WHEN** a run is allocated a pane freshly created by that same allocation call (via a new tab or a pane split) and `adapter.launch()` subsequently fails for that run
+- **THEN** the engine SHALL close the newly created pane
 
 ### Requirement: Handle staleness recovers by identity, not geometry
 A persisted run handle whose pane has died SHALL be detected and discarded without discarding the agent identity: the engine SHALL re-resolve the agent by its canonical name and adopt the agent's current pane. Resolution SHALL distinguish finding the agent (by canonical name) from communicating with it (by its live pane id), and stored pane ids SHALL never be treated as proof of liveness on their own.
@@ -57,4 +68,3 @@ Grouped triage and verification roles SHALL derive their canonical agent name fr
 #### Scenario: Roles and workflows remain distinct
 - **WHEN** two different verifier roles run for the same step, or the same role runs for two workflows whose change IDs share a leading prefix
 - **THEN** their canonical agent names SHALL differ
-
