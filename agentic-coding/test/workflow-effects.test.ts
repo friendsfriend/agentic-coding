@@ -125,6 +125,133 @@ test("research workspace setup launches and prompts the researcher", async () =>
 	}
 });
 
+test("wiki run's assignment carries the researcher's full recorded handoff verbatim", async () => {
+	const root = fs.mkdtempSync(
+		path.join(os.tmpdir(), "workflow-research-handoff-wiki-"),
+	);
+	const previousWikiRoot = process.env.HERDR_WIKI_DIR;
+	process.env.HERDR_WIKI_DIR = path.join(root, "wiki");
+	try {
+		const registry = registerBuiltins(undefined, 6);
+		const engine = new WorkflowEngine(registry);
+		const adapter = new Adapter();
+		const researchProfile = {
+			name: "research",
+			runtime: "pi" as const,
+			executable: "sh",
+			tools: ["read"],
+			extensions: [],
+			readOnly: false,
+			capabilities: [
+				"interactive",
+				"prompt",
+				"persistent-session",
+				"run-environment",
+				"observe",
+				"read-only",
+			] as const,
+			digest: "research-profile",
+		};
+		engine.start({
+			repo: researchWorkflowTarget(),
+			changeId: "research-handoff-wiki",
+			definitionId: "research",
+			definitionVersion: definitionVersionForPolicy(6),
+			metadata: {
+				branch: "",
+				baseBranch: "",
+				baseCommit: "",
+				task: "research task",
+			},
+			routing: {
+				defaultProfile: researchProfile.name,
+				routes: [
+					{
+						stepId: "core.research",
+						role: "researcher",
+						profile: researchProfile,
+					},
+					{ stepId: "core.wiki", role: "wiki", profile: researchProfile },
+				],
+				diversity: [],
+			},
+		});
+		const herdr = {
+			call(...args: string[]) {
+				if (args[0] === "tab" && args[1] === "list")
+					return { tabs: [{ tab_id: "research-tab", label: "dashboard" }] };
+				if (args[0] === "workspace" && args[1] === "create")
+					return { workspace: { workspace_id: "research-workspace" } };
+				throw new Error(`unexpected ${args.join(" ")}`);
+			},
+		};
+		const handlers = agentEffectHandlers(researchWorkflowTarget(), engine, {
+			registry,
+			adapters: new Map([["pi", adapter]]),
+			herdr,
+			async paneForRun() {
+				return { paneId: "research-pane", owned: true };
+			},
+		});
+		await new EffectRunner(researchWorkflowTarget(), engine, handlers).drain();
+		const view = engine.status(
+			researchWorkflowTarget(),
+			"research-handoff-wiki",
+		);
+		const researcherSummary = view.runs.find(
+			(run) => run.role === "researcher",
+		);
+		if (!researcherSummary) throw new Error("expected researcher run");
+		const researcher = engine.getRun(
+			researchWorkflowTarget(),
+			researcherSummary.id,
+		);
+		const token = engine.issueRunCapability(
+			researchWorkflowTarget(),
+			researcher.id,
+		);
+		engine.dispatch(researchWorkflowTarget(), {
+			type: "agent.research-handoff",
+			workflowId: researcher.workflowId,
+			runId: researcher.id,
+			stepId: "core.research",
+			role: "researcher",
+			token,
+			handoff: {
+				subject: "widget subsystem",
+				canonicalTarget: "projects/demo/widget-subsystem",
+				findings: "widgets are produced by the widget factory",
+				citations: ["src/widget.ts"],
+				noSourcesUsed: false,
+			},
+		});
+		const afterHandoff = engine.status(
+			researchWorkflowTarget(),
+			"research-handoff-wiki",
+		);
+		engine.dispatch(researchWorkflowTarget(), {
+			type: "developer.action",
+			workflowId: researcher.workflowId,
+			revision: afterHandoff.revision,
+			actionId: "request-research-wiki",
+		});
+		await new EffectRunner(researchWorkflowTarget(), engine, handlers).drain();
+		expect(adapter.launches).toBe(2);
+		expect(adapter.context?.assignment.role).toBe("wiki");
+		const inputs = adapter.context?.assignment.inputs ?? [];
+		const combined = inputs.join("\n");
+		expect(combined).toContain("Research handoff");
+		expect(combined).toContain("widget subsystem");
+		expect(combined).toContain("projects/demo/widget-subsystem");
+		expect(combined).toContain("widgets are produced by the widget factory");
+		expect(combined).toContain("src/widget.ts");
+	} finally {
+		if (previousWikiRoot === undefined) delete process.env.HERDR_WIKI_DIR;
+		else process.env.HERDR_WIKI_DIR = previousWikiRoot;
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("runner drains workspace and agent effects, then stops stale run after repair", async () => {
 	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-effects-"));
 	try {

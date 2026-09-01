@@ -434,6 +434,15 @@ export type WorkflowCommand =
 			message?: string;
 	  }
 	| {
+			type: "agent.research-handoff";
+			workflowId: string;
+			runId: string;
+			stepId: string;
+			role: string;
+			token: string;
+			handoff: unknown;
+	  }
+	| {
 			type: "effect.result";
 			effectId: string;
 			lease: string;
@@ -537,6 +546,16 @@ export const commandContract: Contract<WorkflowCommand> = {
 				...(input.message === undefined
 					? {}
 					: { message: text(input.message, "$.message", 4096) }),
+			};
+		if (type === "agent.research-handoff")
+			return {
+				type,
+				workflowId: text(input.workflowId, "$.workflowId"),
+				runId: text(input.runId, "$.runId"),
+				stepId: text(input.stepId, "$.stepId"),
+				role: text(input.role, "$.role"),
+				token: text(input.token, "$.token", 1024),
+				handoff: input.handoff,
 			};
 		if (type === "effect.result")
 			return {

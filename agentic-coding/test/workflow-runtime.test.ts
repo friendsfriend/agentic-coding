@@ -14,6 +14,7 @@ import {
 import {
 	definitionVersionForPolicy,
 	registerBuiltins,
+	researchHandoffContract,
 } from "../src/workflow/definitions.ts";
 import {
 	canonicalStorePath,
@@ -21,7 +22,9 @@ import {
 	validateChangeId,
 	WorkflowEngine,
 	WorkflowRuntimeError,
+	wikiWorkflowDataRoot,
 } from "../src/workflow/runtime.ts";
+import { listConcepts } from "../src/workflow/wiki.ts";
 
 // Replaces non-null assertions: fail loudly with a clear message instead of
 // asserting away `undefined`.
@@ -322,13 +325,102 @@ describe("transactional workflow runtime", () => {
 				researcherSummary.id,
 			);
 			expect(researcher.allowedOutcomes).toEqual(["blocked", "failed"]);
+
+			// request-research-wiki is rejected until the researcher records a
+			// valid handoff, and rejection does not expire the researcher run or
+			// move the workflow off core.research.
+			expect(() =>
+				engine.dispatch(researchWorkflowTarget(), {
+					type: "developer.action",
+					workflowId: started.snapshot.workflowId,
+					revision: view.revision,
+					actionId: "request-research-wiki",
+				}),
+			).toThrow(/valid handoff/);
+			expect(
+				engine.getSnapshot(
+					researchWorkflowTarget(),
+					started.snapshot.workflowId,
+				).currentStep,
+			).toBe("core.research");
+			expect(
+				engine.getRun(researchWorkflowTarget(), researcher.id).status,
+			).not.toBe("expired");
+
+			const researcherToken = engine.issueRunCapability(
+				researchWorkflowTarget(),
+				researcher.id,
+			);
+			const recorded = engine.dispatch(researchWorkflowTarget(), {
+				type: "agent.research-handoff",
+				workflowId: started.snapshot.workflowId,
+				runId: researcher.id,
+				stepId: "core.research",
+				role: "researcher",
+				token: researcherToken,
+				handoff: {
+					subject: "widget subsystem",
+					canonicalTarget: "projects/demo/widget-subsystem",
+					findings: "widgets are assembled by the widget factory",
+					citations: ["src/widget.ts"],
+					noSourcesUsed: false,
+				},
+			});
+			// Recording a handoff does not transition the step, end the run, or
+			// bump the run generation.
+			expect(recorded.snapshot.currentStep).toBe("core.research");
+			expect(recorded.snapshot.status).toBe("active");
+			expect(
+				engine.getRun(researchWorkflowTarget(), researcher.id).status,
+			).toBe(researcher.status);
+			expect(
+				engine.getRun(researchWorkflowTarget(), researcher.id).generation,
+			).toBe(researcher.generation);
+			// Recording a handoff is not itself a wiki write.
+			expect(listConcepts()).toEqual([]);
+
+			// A later submission overwrites the previously recorded handoff rather
+			// than erroring or accumulating duplicates.
+			const revised = engine.dispatch(researchWorkflowTarget(), {
+				type: "agent.research-handoff",
+				workflowId: started.snapshot.workflowId,
+				runId: researcher.id,
+				stepId: "core.research",
+				role: "researcher",
+				token: researcherToken,
+				handoff: {
+					subject: "widget subsystem (revised)",
+					findings: "widgets are produced by the widget factory",
+					noSourcesUsed: true,
+				},
+			});
+			expect(
+				(revised.snapshot.step.context as { handoff?: { subject?: string } })
+					.handoff?.subject,
+			).toBe("widget subsystem (revised)");
+
 			view = engine.dispatch(researchWorkflowTarget(), {
 				type: "developer.action",
 				workflowId: started.snapshot.workflowId,
-				revision: view.revision,
+				revision: revised.snapshot.revision,
 				actionId: "request-research-wiki",
 			}).view;
 			expect(view.currentStep.id).toBe("core.wiki");
+			expect(
+				engine.getRun(researchWorkflowTarget(), researcher.id).status,
+			).toBe("expired");
+			const wikiContext = engine.getSnapshot(
+				researchWorkflowTarget(),
+				started.snapshot.workflowId,
+			).step.context as {
+				task: string;
+				handoff: { subject: string; findings: string; noSourcesUsed: boolean };
+			};
+			expect(wikiContext.handoff.subject).toBe("widget subsystem (revised)");
+			expect(wikiContext.handoff.findings).toBe(
+				"widgets are produced by the widget factory",
+			);
+			expect(wikiContext.handoff.noSourcesUsed).toBe(true);
 			expect(view.runs.some((run) => run.role === "wiki")).toBe(true);
 			const wikiSummary = requireDefined(
 				view.runs.find((run) => run.role === "wiki"),
@@ -369,6 +461,311 @@ describe("transactional workflow runtime", () => {
 			expect(view.effects.some((effect) => effect.kind === "wiki.verify")).toBe(
 				true,
 			);
+		} finally {
+			if (previousWikiRoot === undefined) delete process.env.HERDR_WIKI_DIR;
+			else process.env.HERDR_WIKI_DIR = previousWikiRoot;
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+	test("research handoff recording is rejected for any run other than the active core.research researcher", () => {
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "workflow-research-handoff-auth-"),
+		);
+		const previousWikiRoot = process.env.HERDR_WIKI_DIR;
+		process.env.HERDR_WIKI_DIR = path.join(tmp, "wiki");
+		try {
+			const engine = new WorkflowEngine(registerBuiltins());
+			const researchProfile: ResolvedProfile = {
+				...profile,
+				tools: ["read"],
+				capabilities: [
+					"interactive",
+					"prompt",
+					"persistent-session",
+					"run-environment",
+					"observe",
+					"read-only",
+				],
+			};
+			const started = engine.start({
+				repo: researchWorkflowTarget(),
+				changeId: "research-handoff-auth",
+				definitionId: "research",
+				definitionVersion: definitionVersionForPolicy(6),
+				metadata: {
+					branch: "",
+					baseBranch: "",
+					baseCommit: "",
+					task: "research",
+				},
+				routing: {
+					defaultProfile: researchProfile.name,
+					routes: [
+						{
+							stepId: "core.research",
+							role: "researcher",
+							profile: researchProfile,
+						},
+					],
+				},
+			});
+			const setup = requireDefined(
+				engine
+					.claimEffects(researchWorkflowTarget())
+					.find((effect) => effect.kind === "workspace.setup"),
+				"research setup",
+			);
+			engine.dispatch(researchWorkflowTarget(), {
+				type: "effect.result",
+				effectId: setup.id,
+				lease: requireDefined(setup.lease, "setup lease"),
+				outcome: "complete",
+				data: { workspace: "research-workspace" },
+			});
+			const view = engine.status(
+				researchWorkflowTarget(),
+				"research-handoff-auth",
+			);
+			const researcherSummary = requireDefined(view.runs[0], "researcher run");
+			const researcher = engine.getRun(
+				researchWorkflowTarget(),
+				researcherSummary.id,
+			);
+			const token = engine.issueRunCapability(
+				researchWorkflowTarget(),
+				researcher.id,
+			);
+			const validHandoff = {
+				subject: "x",
+				findings: "y",
+				noSourcesUsed: true,
+			};
+			// Wrong role is rejected even with the correct run id, step, and token.
+			expect(() =>
+				engine.dispatch(researchWorkflowTarget(), {
+					type: "agent.research-handoff",
+					workflowId: started.snapshot.workflowId,
+					runId: researcher.id,
+					stepId: "core.research",
+					role: "not-the-researcher",
+					token,
+					handoff: validHandoff,
+				}),
+			).toThrow();
+			// Wrong step is rejected.
+			expect(() =>
+				engine.dispatch(researchWorkflowTarget(), {
+					type: "agent.research-handoff",
+					workflowId: started.snapshot.workflowId,
+					runId: researcher.id,
+					stepId: "core.wiki",
+					role: "researcher",
+					token,
+					handoff: validHandoff,
+				}),
+			).toThrow();
+			// An invalid token is rejected.
+			expect(() =>
+				engine.dispatch(researchWorkflowTarget(), {
+					type: "agent.research-handoff",
+					workflowId: started.snapshot.workflowId,
+					runId: researcher.id,
+					stepId: "core.research",
+					role: "researcher",
+					token: "wrong-token",
+					handoff: validHandoff,
+				}),
+			).toThrow(/invalid or inactive run capability/);
+			// An invalid handoff payload (missing subject/findings, no citations and
+			// no explicit no-sources statement) is rejected.
+			for (const invalid of [
+				{ findings: "y", noSourcesUsed: true },
+				{ subject: "x", noSourcesUsed: true },
+				{ subject: "x", findings: "y" },
+			])
+				expect(() =>
+					engine.dispatch(researchWorkflowTarget(), {
+						type: "agent.research-handoff",
+						workflowId: started.snapshot.workflowId,
+						runId: researcher.id,
+						stepId: "core.research",
+						role: "researcher",
+						token,
+						handoff: invalid,
+					}),
+				).toThrow();
+			// The valid handoff still succeeds through the same authenticated path.
+			const recorded = engine.dispatch(researchWorkflowTarget(), {
+				type: "agent.research-handoff",
+				workflowId: started.snapshot.workflowId,
+				runId: researcher.id,
+				stepId: "core.research",
+				role: "researcher",
+				token,
+				handoff: validHandoff,
+			});
+			expect(recorded.snapshot.currentStep).toBe("core.research");
+		} finally {
+			if (previousWikiRoot === undefined) delete process.env.HERDR_WIKI_DIR;
+			else process.env.HERDR_WIKI_DIR = previousWikiRoot;
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+	test("research handoff contract requires subject, findings, and either citations or an explicit no-sources statement", () => {
+		expect(() =>
+			researchHandoffContract.parse({
+				subject: "widget subsystem",
+				findings: "widgets are produced by the widget factory",
+				citations: ["src/widget.ts"],
+				noSourcesUsed: false,
+			}),
+		).not.toThrow();
+		expect(() =>
+			researchHandoffContract.parse({
+				subject: "widget subsystem",
+				findings: "widgets are produced by the widget factory",
+				noSourcesUsed: true,
+			}),
+		).not.toThrow();
+		for (const invalid of [
+			{ findings: "y", noSourcesUsed: true },
+			{ subject: "", findings: "y", noSourcesUsed: true },
+			{ subject: "x", noSourcesUsed: true },
+			{ subject: "x", findings: "y" },
+			{ subject: "x", findings: "y", citations: [], noSourcesUsed: false },
+		])
+			expect(() => researchHandoffContract.parse(invalid)).toThrow();
+		const parsed = researchHandoffContract.parse({
+			subject: "widget subsystem",
+			canonicalTarget: "projects/demo/widget-subsystem",
+			findings: "widgets are produced by the widget factory",
+			citations: ["src/widget.ts"],
+			noSourcesUsed: false,
+		});
+		expect(parsed.canonicalTarget).toBe("projects/demo/widget-subsystem");
+	});
+	test("research handoff contract bounds citation count and total serialized size", () => {
+		expect(() =>
+			researchHandoffContract.parse({
+				subject: "x",
+				findings: "y",
+				citations: Array.from({ length: 32 }, (_, index) => `source-${index}`),
+				noSourcesUsed: false,
+			}),
+		).not.toThrow();
+		expect(() =>
+			researchHandoffContract.parse({
+				subject: "x",
+				findings: "y",
+				citations: Array.from({ length: 33 }, (_, index) => `source-${index}`),
+				noSourcesUsed: false,
+			}),
+		).toThrow(/at most 32 source citations/);
+		expect(() =>
+			researchHandoffContract.parse({
+				subject: "x",
+				findings: "y".repeat(16384),
+				citations: Array.from({ length: 32 }, () => "s".repeat(1024)),
+				noSourcesUsed: false,
+			}),
+		).toThrow(/exceeds 49152 bytes/);
+	});
+	test("recording a research handoff emits telemetry identified by the researcher run id", () => {
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "workflow-research-handoff-telemetry-"),
+		);
+		const previousWikiRoot = process.env.HERDR_WIKI_DIR;
+		process.env.HERDR_WIKI_DIR = path.join(tmp, "wiki");
+		try {
+			const engine = new WorkflowEngine(registerBuiltins());
+			const researchProfile: ResolvedProfile = {
+				...profile,
+				tools: ["read"],
+				capabilities: [
+					"interactive",
+					"prompt",
+					"persistent-session",
+					"run-environment",
+					"observe",
+					"read-only",
+				],
+			};
+			const started = engine.start({
+				repo: researchWorkflowTarget(),
+				changeId: "research-handoff-telemetry",
+				definitionId: "research",
+				definitionVersion: definitionVersionForPolicy(6),
+				metadata: {
+					branch: "",
+					baseBranch: "",
+					baseCommit: "",
+					task: "research",
+				},
+				routing: {
+					defaultProfile: researchProfile.name,
+					routes: [
+						{
+							stepId: "core.research",
+							role: "researcher",
+							profile: researchProfile,
+						},
+					],
+				},
+			});
+			const setup = requireDefined(
+				engine
+					.claimEffects(researchWorkflowTarget())
+					.find((effect) => effect.kind === "workspace.setup"),
+				"research setup",
+			);
+			engine.dispatch(researchWorkflowTarget(), {
+				type: "effect.result",
+				effectId: setup.id,
+				lease: requireDefined(setup.lease, "setup lease"),
+				outcome: "complete",
+				data: { workspace: "research-workspace" },
+			});
+			const view = engine.status(
+				researchWorkflowTarget(),
+				"research-handoff-telemetry",
+			);
+			const researcherSummary = requireDefined(view.runs[0], "researcher run");
+			const researcher = engine.getRun(
+				researchWorkflowTarget(),
+				researcherSummary.id,
+			);
+			const token = engine.issueRunCapability(
+				researchWorkflowTarget(),
+				researcher.id,
+			);
+			engine.dispatch(researchWorkflowTarget(), {
+				type: "agent.research-handoff",
+				workflowId: started.snapshot.workflowId,
+				runId: researcher.id,
+				stepId: "core.research",
+				role: "researcher",
+				token,
+				handoff: {
+					subject: "x",
+					findings: "y",
+					noSourcesUsed: true,
+				},
+			});
+			const telemetryPath = path.join(
+				wikiWorkflowDataRoot(),
+				".herdr-workflow",
+				"research-handoff-telemetry",
+				"telemetry.jsonl",
+			);
+			const events = fs
+				.readFileSync(telemetryPath, "utf8")
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line) as { event: string; runId?: string });
+			const recorded = events.find(
+				(item) => item.event === "research.handoff.recorded",
+			);
+			expect(recorded?.runId).toBe(researcher.id);
 		} finally {
 			if (previousWikiRoot === undefined) delete process.env.HERDR_WIKI_DIR;
 			else process.env.HERDR_WIKI_DIR = previousWikiRoot;
