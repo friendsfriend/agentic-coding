@@ -243,25 +243,21 @@ abstract class BaseAdapter implements AgentAdapter {
 		return this.lifecycle.stop(handle);
 	}
 }
-const RESEARCH_MUTATING_PI_TOOLS = new Set(["bash", "edit", "write"]);
 export class PiAdapter extends BaseAdapter {
 	readonly id = "pi" as const;
 	async launch(ctx: LaunchContext): Promise<AgentHandle> {
 		const args = ["--name", ctx.name, "--no-prompt-templates"];
 		if (ctx.profile.model) args.push("--model", ctx.profile.model);
 		if (ctx.profile.thinking) args.push("--thinking", ctx.profile.thinking);
-		const tools =
-			ctx.assignment.stepId === "core.research"
-				? ctx.profile.tools.filter(
-						(tool) => !RESEARCH_MUTATING_PI_TOOLS.has(tool.toLowerCase()),
-					)
-				: ctx.profile.tools;
-		if (tools.length) args.push("--tools", tools.join(","));
-		else if (
-			ctx.profile.readOnly ||
-			ctx.profile.capabilities.includes("read-only")
-		)
-			args.push("--tools", "read");
+		if (ctx.assignment.stepId !== "core.research") {
+			const tools = ctx.profile.tools;
+			if (tools.length) args.push("--tools", tools.join(","));
+			else if (
+				ctx.profile.readOnly ||
+				ctx.profile.capabilities.includes("read-only")
+			)
+				args.push("--tools", "read");
+		}
 		if (
 			ctx.assignment.stepId !== "core.research" &&
 			(ctx.profile.readOnly ||
@@ -302,18 +298,13 @@ function isolatedOpenCode(ctx: LaunchContext): LaunchContext {
 		JSON.stringify(
 			{
 				permission:
-					ctx.profile.readOnly || ctx.profile.capabilities.includes("read-only")
-						? {
-								...Object.fromEntries(
-									ctx.assignment.stepId === "core.research"
-										? ctx.profile.tools.map((tool) => [tool, "allow"])
-										: [],
-								),
-								edit: "deny",
-								bash: "deny",
-								read: "allow",
-							}
-						: { edit: "allow", bash: "allow", read: "allow" },
+					ctx.assignment.stepId === "core.research" ||
+					!(
+						ctx.profile.readOnly ||
+						ctx.profile.capabilities.includes("read-only")
+					)
+						? { edit: "allow", bash: "allow", read: "allow" }
+						: { edit: "deny", bash: "deny", read: "allow" },
 				plugin: ctx.bridgePath ? [ctx.bridgePath] : [],
 			},
 			null,

@@ -173,7 +173,10 @@ describe("transactional workflow runtime", () => {
 			const engine = new WorkflowEngine(registerBuiltins());
 			const researchProfile: ResolvedProfile = {
 				...profile,
-				tools: ["read", "web_search"],
+				// Even with a widened research tool surface (mutating tool names
+				// present, matching an unrestricted launch), source-isolation
+				// validation - not tool-name gating - must still catch a mutation.
+				tools: ["read", "web_search", "bash", "edit", "write"],
 				extensions: ["/tmp/research-extension.ts"],
 				capabilities: [
 					"interactive",
