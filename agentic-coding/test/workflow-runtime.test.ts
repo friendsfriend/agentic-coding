@@ -325,10 +325,11 @@ describe("transactional workflow runtime", () => {
 				researcherSummary.id,
 			);
 			expect(researcher.allowedOutcomes).toEqual(["blocked", "failed"]);
-
-			// request-research-wiki is rejected until the researcher records a
-			// valid handoff, and rejection does not expire the researcher run or
-			// move the workflow off core.research.
+			// There is no developer dashboard trigger for wiki drafting: the
+			// action is not offered, and dispatching it is rejected outright.
+			expect(view.availableActions.map((action) => action.id)).not.toContain(
+				"request-research-wiki",
+			);
 			expect(() =>
 				engine.dispatch(researchWorkflowTarget(), {
 					type: "developer.action",
@@ -336,7 +337,31 @@ describe("transactional workflow runtime", () => {
 					revision: view.revision,
 					actionId: "request-research-wiki",
 				}),
-			).toThrow(/valid handoff/);
+			).toThrow(/action unavailable/);
+
+			const researcherToken = engine.issueRunCapability(
+				researchWorkflowTarget(),
+				researcher.id,
+			);
+			// An invalid handoff (no documentation directives) is rejected, does
+			// not expire the researcher run, and leaves the workflow at
+			// core.research.
+			expect(() =>
+				engine.dispatch(researchWorkflowTarget(), {
+					type: "agent.research-handoff",
+					workflowId: started.snapshot.workflowId,
+					runId: researcher.id,
+					stepId: "core.research",
+					role: "researcher",
+					token: researcherToken,
+					handoff: {
+						subject: "widget subsystem",
+						findings: "widgets are assembled by the widget factory",
+						citations: ["src/widget.ts"],
+						noSourcesUsed: false,
+					},
+				}),
+			).toThrow(/documentation directive/);
 			expect(
 				engine.getSnapshot(
 					researchWorkflowTarget(),
@@ -346,42 +371,12 @@ describe("transactional workflow runtime", () => {
 			expect(
 				engine.getRun(researchWorkflowTarget(), researcher.id).status,
 			).not.toBe("expired");
-
-			const researcherToken = engine.issueRunCapability(
-				researchWorkflowTarget(),
-				researcher.id,
-			);
-			const recorded = engine.dispatch(researchWorkflowTarget(), {
-				type: "agent.research-handoff",
-				workflowId: started.snapshot.workflowId,
-				runId: researcher.id,
-				stepId: "core.research",
-				role: "researcher",
-				token: researcherToken,
-				handoff: {
-					subject: "widget subsystem",
-					canonicalTarget: "projects/demo/widget-subsystem",
-					findings: "widgets are assembled by the widget factory",
-					citations: ["src/widget.ts"],
-					noSourcesUsed: false,
-				},
-			});
-			// Recording a handoff does not transition the step, end the run, or
-			// bump the run generation.
-			expect(recorded.snapshot.currentStep).toBe("core.research");
-			expect(recorded.snapshot.status).toBe("active");
-			expect(
-				engine.getRun(researchWorkflowTarget(), researcher.id).status,
-			).toBe(researcher.status);
-			expect(
-				engine.getRun(researchWorkflowTarget(), researcher.id).generation,
-			).toBe(researcher.generation);
-			// Recording a handoff is not itself a wiki write.
+			// Recording is rejected, so no wiki write happened as a side effect.
 			expect(listConcepts()).toEqual([]);
 
-			// A later submission overwrites the previously recorded handoff rather
-			// than erroring or accumulating duplicates.
-			const revised = engine.dispatch(researchWorkflowTarget(), {
+			// A valid handoff both records and transitions in one step: the
+			// researcher run is expired and the workflow enters core.wiki.
+			view = engine.dispatch(researchWorkflowTarget(), {
 				type: "agent.research-handoff",
 				workflowId: started.snapshot.workflowId,
 				runId: researcher.id,
@@ -390,20 +385,19 @@ describe("transactional workflow runtime", () => {
 				token: researcherToken,
 				handoff: {
 					subject: "widget subsystem (revised)",
-					findings: "widgets are produced by the widget factory",
-					noSourcesUsed: true,
+					canonicalTarget: "projects/demo/widget-subsystem",
+					findings: "open question: naming for the sub-assembly stage",
+					directives: [
+						{
+							target: "projects/demo/widget-subsystem",
+							intent: "update",
+							claims: ["widgets are produced by the widget factory"],
+							citations: ["src/widget.ts"],
+						},
+					],
+					citations: ["src/widget.ts"],
+					noSourcesUsed: false,
 				},
-			});
-			expect(
-				(revised.snapshot.step.context as { handoff?: { subject?: string } })
-					.handoff?.subject,
-			).toBe("widget subsystem (revised)");
-
-			view = engine.dispatch(researchWorkflowTarget(), {
-				type: "developer.action",
-				workflowId: started.snapshot.workflowId,
-				revision: revised.snapshot.revision,
-				actionId: "request-research-wiki",
 			}).view;
 			expect(view.currentStep.id).toBe("core.wiki");
 			expect(
@@ -414,13 +408,31 @@ describe("transactional workflow runtime", () => {
 				started.snapshot.workflowId,
 			).step.context as {
 				task: string;
-				handoff: { subject: string; findings: string; noSourcesUsed: boolean };
+				handoff: {
+					subject: string;
+					findings: string;
+					directives: Array<{
+						target: string;
+						intent: string;
+						claims: string[];
+						citations: string[];
+					}>;
+					noSourcesUsed: boolean;
+				};
 			};
 			expect(wikiContext.handoff.subject).toBe("widget subsystem (revised)");
 			expect(wikiContext.handoff.findings).toBe(
-				"widgets are produced by the widget factory",
+				"open question: naming for the sub-assembly stage",
 			);
-			expect(wikiContext.handoff.noSourcesUsed).toBe(true);
+			expect(wikiContext.handoff.directives).toEqual([
+				{
+					target: "projects/demo/widget-subsystem",
+					intent: "update",
+					claims: ["widgets are produced by the widget factory"],
+					citations: ["src/widget.ts"],
+				},
+			]);
+			expect(wikiContext.handoff.noSourcesUsed).toBe(false);
 			expect(view.runs.some((run) => run.role === "wiki")).toBe(true);
 			const wikiSummary = requireDefined(
 				view.runs.find((run) => run.role === "wiki"),
@@ -506,6 +518,7 @@ describe("transactional workflow runtime", () => {
 							role: "researcher",
 							profile: researchProfile,
 						},
+						{ stepId: "core.wiki", role: "wiki", profile: researchProfile },
 					],
 				},
 			});
@@ -538,6 +551,13 @@ describe("transactional workflow runtime", () => {
 			const validHandoff = {
 				subject: "x",
 				findings: "y",
+				directives: [
+					{
+						target: "x",
+						intent: "create",
+						claims: ["y"],
+					},
+				],
 				noSourcesUsed: true,
 			};
 			// Wrong role is rejected even with the correct run id, step, and token.
@@ -594,7 +614,8 @@ describe("transactional workflow runtime", () => {
 						handoff: invalid,
 					}),
 				).toThrow();
-			// The valid handoff still succeeds through the same authenticated path.
+			// The valid handoff still succeeds through the same authenticated path
+			// and drives the transition into core.wiki.
 			const recorded = engine.dispatch(researchWorkflowTarget(), {
 				type: "agent.research-handoff",
 				workflowId: started.snapshot.workflowId,
@@ -604,18 +625,26 @@ describe("transactional workflow runtime", () => {
 				token,
 				handoff: validHandoff,
 			});
-			expect(recorded.snapshot.currentStep).toBe("core.research");
+			expect(recorded.snapshot.currentStep).toBe("core.wiki");
 		} finally {
 			if (previousWikiRoot === undefined) delete process.env.HERDR_WIKI_DIR;
 			else process.env.HERDR_WIKI_DIR = previousWikiRoot;
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
 	});
-	test("research handoff contract requires subject, findings, and either citations or an explicit no-sources statement", () => {
+	test("research handoff contract requires subject, at least one valid documentation directive, and either citations or an explicit no-sources statement", () => {
 		expect(() =>
 			researchHandoffContract.parse({
 				subject: "widget subsystem",
 				findings: "widgets are produced by the widget factory",
+				directives: [
+					{
+						target: "projects/demo/widget-subsystem",
+						intent: "update",
+						claims: ["widgets are produced by the widget factory"],
+						citations: ["src/widget.ts"],
+					},
+				],
 				citations: ["src/widget.ts"],
 				noSourcesUsed: false,
 			}),
@@ -623,32 +652,76 @@ describe("transactional workflow runtime", () => {
 		expect(() =>
 			researchHandoffContract.parse({
 				subject: "widget subsystem",
-				findings: "widgets are produced by the widget factory",
+				directives: [
+					{
+						target: "projects/demo/widget-subsystem",
+						intent: "create",
+						claims: ["widgets are produced by the widget factory"],
+					},
+				],
 				noSourcesUsed: true,
 			}),
 		).not.toThrow();
+		const validDirective = {
+			target: "x",
+			intent: "create",
+			claims: ["y"],
+		};
 		for (const invalid of [
-			{ findings: "y", noSourcesUsed: true },
-			{ subject: "", findings: "y", noSourcesUsed: true },
-			{ subject: "x", noSourcesUsed: true },
-			{ subject: "x", findings: "y" },
-			{ subject: "x", findings: "y", citations: [], noSourcesUsed: false },
+			{ directives: [validDirective], noSourcesUsed: true }, // missing subject
+			{ subject: "", directives: [validDirective], noSourcesUsed: true }, // empty subject
+			{ subject: "x", noSourcesUsed: true }, // missing directives
+			{ subject: "x", directives: [], noSourcesUsed: true }, // empty directives array
+			{
+				subject: "x",
+				directives: [{ intent: "create", claims: ["y"] }],
+				noSourcesUsed: true,
+			}, // missing target
+			{
+				subject: "x",
+				directives: [{ target: "x", claims: ["y"] }],
+				noSourcesUsed: true,
+			}, // missing intent
+			{
+				subject: "x",
+				directives: [{ target: "x", intent: "delete", claims: ["y"] }],
+				noSourcesUsed: true,
+			}, // invalid intent
+			{
+				subject: "x",
+				directives: [{ target: "x", intent: "create", claims: [] }],
+				noSourcesUsed: true,
+			}, // empty claims
+			{
+				subject: "x",
+				directives: [validDirective],
+				citations: [],
+				noSourcesUsed: false,
+			}, // no citations, not no-sources
 		])
 			expect(() => researchHandoffContract.parse(invalid)).toThrow();
 		const parsed = researchHandoffContract.parse({
 			subject: "widget subsystem",
 			canonicalTarget: "projects/demo/widget-subsystem",
-			findings: "widgets are produced by the widget factory",
+			directives: [
+				{
+					target: "projects/demo/widget-subsystem",
+					intent: "update",
+					claims: ["widgets are produced by the widget factory"],
+				},
+			],
 			citations: ["src/widget.ts"],
 			noSourcesUsed: false,
 		});
 		expect(parsed.canonicalTarget).toBe("projects/demo/widget-subsystem");
+		expect(parsed.findings).toBe("");
 	});
-	test("research handoff contract bounds citation count and total serialized size", () => {
+	test("research handoff contract bounds citation, directive, and claim counts and total serialized size", () => {
+		const directive = { target: "x", intent: "create" as const, claims: ["y"] };
 		expect(() =>
 			researchHandoffContract.parse({
 				subject: "x",
-				findings: "y",
+				directives: [directive],
 				citations: Array.from({ length: 32 }, (_, index) => `source-${index}`),
 				noSourcesUsed: false,
 			}),
@@ -656,7 +729,7 @@ describe("transactional workflow runtime", () => {
 		expect(() =>
 			researchHandoffContract.parse({
 				subject: "x",
-				findings: "y",
+				directives: [directive],
 				citations: Array.from({ length: 33 }, (_, index) => `source-${index}`),
 				noSourcesUsed: false,
 			}),
@@ -664,7 +737,43 @@ describe("transactional workflow runtime", () => {
 		expect(() =>
 			researchHandoffContract.parse({
 				subject: "x",
+				directives: Array.from({ length: 16 }, (_, index) => ({
+					target: `x-${index}`,
+					intent: "create",
+					claims: ["y"],
+				})),
+				noSourcesUsed: true,
+			}),
+		).not.toThrow();
+		expect(() =>
+			researchHandoffContract.parse({
+				subject: "x",
+				directives: Array.from({ length: 17 }, (_, index) => ({
+					target: `x-${index}`,
+					intent: "create",
+					claims: ["y"],
+				})),
+				noSourcesUsed: true,
+			}),
+		).toThrow(/at most 16 documentation directives/);
+		expect(() =>
+			researchHandoffContract.parse({
+				subject: "x",
+				directives: [
+					{
+						target: "x",
+						intent: "create",
+						claims: Array.from({ length: 17 }, (_, index) => `claim-${index}`),
+					},
+				],
+				noSourcesUsed: true,
+			}),
+		).toThrow(/at most 16 claims/);
+		expect(() =>
+			researchHandoffContract.parse({
+				subject: "x",
 				findings: "y".repeat(16384),
+				directives: [directive],
 				citations: Array.from({ length: 32 }, () => "s".repeat(1024)),
 				noSourcesUsed: false,
 			}),
@@ -709,6 +818,7 @@ describe("transactional workflow runtime", () => {
 							role: "researcher",
 							profile: researchProfile,
 						},
+						{ stepId: "core.wiki", role: "wiki", profile: researchProfile },
 					],
 				},
 			});
@@ -748,6 +858,7 @@ describe("transactional workflow runtime", () => {
 				handoff: {
 					subject: "x",
 					findings: "y",
+					directives: [{ target: "x", intent: "create", claims: ["y"] }],
 					noSourcesUsed: true,
 				},
 			});

@@ -166,7 +166,7 @@ export function renderAssignment(
 		"## Handoff",
 		...(assignment.stepId === "core.research"
 			? [
-					"Do not hand off `complete` for a research answer, follow-up, or wiki request. Remain in the persistent session and tell the developer to dispatch `request-research-wiki` after an explicit user request; use `blocked` or `failed` only for bounded handoffs.",
+					"Do not hand off `complete` for a research answer or follow-up. Remain in the persistent session until the user explicitly requests a wiki entry, then dispatch `agentic-coding workflow research-handoff` yourself with the structured directives and narrative — it records the handoff and transitions to wiki drafting in one authenticated step. Use `blocked` or `failed` only for bounded handoffs.",
 				]
 			: [
 					"Finish the run by reporting exactly one outcome with the workflow CLI:",

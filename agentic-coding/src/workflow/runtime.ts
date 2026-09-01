@@ -1386,7 +1386,7 @@ export class WorkflowEngine {
 		if (command.type === "agent.handoff")
 			return this.agentHandoff(db, snapshot, definition, command);
 		if (command.type === "agent.research-handoff")
-			return this.recordResearchHandoff(db, snapshot, command);
+			return this.recordResearchHandoff(db, snapshot, definition, command);
 		if (command.type === "effect.result")
 			return this.effectResult(db, snapshot, definition, command);
 		if (command.type === "operator.repair")
@@ -1507,13 +1507,18 @@ export class WorkflowEngine {
 			},
 		};
 	}
-	/** Record (or overwrite) the active researcher run's handoff without
-	 * transitioning the step or ending the run generation; the interactive
-	 * researcher session stays live until a developer dispatches
-	 * request-research-wiki or close-research. */
+	/** Record the active researcher run's structured handoff and, in the same
+	 * authenticated step, request the transition into wiki drafting. Reuses
+	 * the same source-isolation and workspace-readiness checks a developer
+	 * dashboard action previously performed before that transition: an
+	 * invalid handoff or a failed check throws, leaves the researcher run
+	 * active, and performs no expiry or transition. Only a valid handoff that
+	 * passes every check expires the researcher run, stops its session, and
+	 * enters `core.wiki`. */
 	private recordResearchHandoff(
 		db: Database,
 		snapshot: WorkflowSnapshot,
+		definition: CompiledWorkflowDefinition,
 		command: Extract<WorkflowCommand, { type: "agent.research-handoff" }>,
 	) {
 		if (
@@ -1535,16 +1540,30 @@ export class WorkflowEngine {
 				error instanceof Error ? error.message : String(error),
 			);
 		}
-		const context =
-			snapshot.step.context &&
-			typeof snapshot.step.context === "object" &&
-			!Array.isArray(snapshot.step.context)
-				? snapshot.step.context
-				: {};
-		snapshot.step.context = {
-			...context,
+		this.validateSourceBaseline(snapshot);
+		if (!snapshot.metadata.workspace)
+			throw new WorkflowRuntimeError(
+				"unavailable",
+				"research handoff requires a ready workspace",
+			);
+		const active = this.runs(db, snapshot.workflowId).filter((item) =>
+			snapshot.step.activeRunIds.includes(item.id),
+		);
+		const researchContext = {
+			task: snapshot.metadata.task ?? "",
 			handoff: handoff as unknown as JsonValue,
 		};
+		this.expireRuns(db, snapshot);
+		for (const item of active)
+			if (item.handle)
+				this.enqueue(
+					db,
+					snapshot,
+					"agent.stop",
+					`run:${item.id}:stop:${item.generation}`,
+					{ runId: item.id },
+				);
+		this.transition(db, snapshot, definition, "request-wiki", researchContext);
 		return {
 			type: "research.handoff.recorded",
 			actor: { kind: "agent", runId: run.id, role: run.role },
@@ -1815,68 +1834,6 @@ export class WorkflowEngine {
 			snapshot.status = "closed";
 			snapshot.step = freshStep(1);
 			this.enterStep(db, snapshot, definition);
-			return {
-				type: "developer.action",
-				actor: { kind: "developer" },
-				data: { actionId: command.actionId },
-			};
-		}
-		if (command.actionId === "request-research-wiki") {
-			if (
-				snapshot.definition.id !== "research" ||
-				snapshot.currentStep !== "core.research"
-			)
-				throw new WorkflowRuntimeError(
-					"unavailable",
-					"research wiki request is only available while research is active",
-				);
-			const currentContext =
-				snapshot.step.context &&
-				typeof snapshot.step.context === "object" &&
-				!Array.isArray(snapshot.step.context)
-					? snapshot.step.context
-					: {};
-			let handoff: ReturnType<typeof researchHandoffContract.parse>;
-			try {
-				handoff = researchHandoffContract.parse(currentContext.handoff);
-			} catch (error) {
-				throw new WorkflowRuntimeError(
-					"unavailable",
-					`request-research-wiki requires the researcher to record a valid handoff first (${
-						error instanceof Error ? error.message : String(error)
-					})`,
-				);
-			}
-			this.validateSourceBaseline(snapshot);
-			if (!snapshot.metadata.workspace)
-				throw new WorkflowRuntimeError(
-					"unavailable",
-					"research wiki request requires a ready workspace",
-				);
-			const active = this.runs(db, snapshot.workflowId).filter((run) =>
-				snapshot.step.activeRunIds.includes(run.id),
-			);
-			const researchContext = {
-				task: snapshot.metadata.task ?? "",
-				handoff: handoff as unknown as JsonValue,
-			};
-			this.expireRuns(db, snapshot);
-			for (const run of active)
-				if (run.handle)
-					this.enqueue(
-						db,
-						snapshot,
-						"agent.stop",
-						`run:${run.id}:stop:${run.generation}`,
-						{ runId: run.id },
-					);
-			this.transition(
-				db,
-				snapshot,
-				definition,
-				"request-wiki",
-				researchContext,
-			);
 			return {
 				type: "developer.action",
 				actor: { kind: "developer" },
@@ -3065,11 +3022,6 @@ export class WorkflowEngine {
 											schemaId: "core.research-follow-up",
 											schemaVersion: 1,
 										},
-									},
-									{
-										id: "request-research-wiki",
-										label: "Create wiki draft",
-										confirmation: "confirm" as const,
 									},
 								]
 							: snapshot.currentStep === "core.wiki-approval"

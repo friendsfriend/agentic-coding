@@ -1960,13 +1960,8 @@ export function requiredUserActionFor(
 			key: "research",
 			title: "Research active",
 			prompt:
-				"Ask follow-ups in the researcher session, or close research when finished.",
+				"Ask follow-ups in the researcher session, or close research when finished. The researcher itself starts wiki drafting when the user explicitly requests it.",
 			items: [
-				{
-					label: "Create wiki draft",
-					kind: "workflow",
-					value: "request-research-wiki",
-				},
 				{
 					label: "Close research",
 					kind: "workflow",
