@@ -158,14 +158,32 @@ const findings: Contract<{ critical: number }> = {
 		return { critical };
 	},
 };
+export type ResearchHandoffDirectiveIntent = "create" | "update";
+export interface ResearchHandoffDirective {
+	/** Existing concept identifier to update, or a proposed project-scoped
+	 * identifier for a new concept, depending on `intent`. */
+	target: string;
+	intent: ResearchHandoffDirectiveIntent;
+	/** Specific source-backed facts the wiki agent must document. */
+	claims: string[];
+	/** Citations supporting this directive's claims. */
+	citations: string[];
+}
 export interface ResearchHandoff {
 	subject: string;
 	canonicalTarget?: string;
+	/** Freeform narrative/context the structured directives cannot capture. */
 	findings: string;
+	/** Per-concept documentation directives; the wiki agent's actionable
+	 * starting point for which concepts to create or update. */
+	directives: ResearchHandoffDirective[];
 	citations: string[];
 	noSourcesUsed: boolean;
 }
 const MAX_RESEARCH_HANDOFF_CITATIONS = 32;
+const MAX_RESEARCH_HANDOFF_DIRECTIVES = 16;
+const MAX_RESEARCH_HANDOFF_CLAIMS = 16;
+const MAX_RESEARCH_HANDOFF_DIRECTIVE_CITATIONS = 16;
 const MAX_RESEARCH_HANDOFF_BYTES = 48 * 1024;
 export const researchHandoffContract: Contract<ResearchHandoff> = {
 	id: "core.research-handoff",
@@ -177,7 +195,7 @@ export const researchHandoffContract: Contract<ResearchHandoff> = {
 			item.canonicalTarget === undefined || item.canonicalTarget === null
 				? undefined
 				: validation.text(item.canonicalTarget, "$.canonicalTarget", 512);
-		const findingsSummary = validation.text(item.findings, "$.findings", 16384);
+		const findings = validation.boundedText(item.findings, "$.findings", 16384);
 		const noSourcesUsed = item.noSourcesUsed === true;
 		if (
 			item.citations !== undefined &&
@@ -203,10 +221,82 @@ export const researchHandoffContract: Contract<ResearchHandoff> = {
 						"expected at least one source citation, or noSourcesUsed set to true",
 				},
 			]);
+		if (!Array.isArray(item.directives) || !item.directives.length)
+			throw new ContractFailure("core.research-handoff", [
+				{
+					path: "$.directives",
+					message: "expected at least one documentation directive",
+				},
+			]);
+		if (item.directives.length > MAX_RESEARCH_HANDOFF_DIRECTIVES)
+			throw new ContractFailure("core.research-handoff", [
+				{
+					path: "$.directives",
+					message: `expected at most ${MAX_RESEARCH_HANDOFF_DIRECTIVES} documentation directives`,
+				},
+			]);
+		const directives: ResearchHandoffDirective[] = item.directives.map(
+			(raw, index) => {
+				const entry = validation.object(raw, `$.directives[${index}]`);
+				const target = validation.text(
+					entry.target,
+					`$.directives[${index}].target`,
+					512,
+				);
+				const intent = validation.enumValue(
+					entry.intent,
+					`$.directives[${index}].intent`,
+					["create", "update"],
+				);
+				if (!Array.isArray(entry.claims) || !entry.claims.length)
+					throw new ContractFailure("core.research-handoff", [
+						{
+							path: `$.directives[${index}].claims`,
+							message: "expected at least one source-backed claim",
+						},
+					]);
+				if (entry.claims.length > MAX_RESEARCH_HANDOFF_CLAIMS)
+					throw new ContractFailure("core.research-handoff", [
+						{
+							path: `$.directives[${index}].claims`,
+							message: `expected at most ${MAX_RESEARCH_HANDOFF_CLAIMS} claims`,
+						},
+					]);
+				const claims = entry.claims.map((claim, claimIndex) =>
+					validation.text(
+						claim,
+						`$.directives[${index}].claims[${claimIndex}]`,
+						2048,
+					),
+				);
+				if (
+					entry.citations !== undefined &&
+					(!Array.isArray(entry.citations) ||
+						entry.citations.length > MAX_RESEARCH_HANDOFF_DIRECTIVE_CITATIONS)
+				)
+					throw new ContractFailure("core.research-handoff", [
+						{
+							path: `$.directives[${index}].citations`,
+							message: `expected at most ${MAX_RESEARCH_HANDOFF_DIRECTIVE_CITATIONS} citations`,
+						},
+					]);
+				const directiveCitations = Array.isArray(entry.citations)
+					? entry.citations.map((entryCitation, citationIndex) =>
+							validation.text(
+								entryCitation,
+								`$.directives[${index}].citations[${citationIndex}]`,
+								1024,
+							),
+						)
+					: [];
+				return { target, intent, claims, citations: directiveCitations };
+			},
+		);
 		const parsed: ResearchHandoff = {
 			subject,
 			...(canonicalTarget === undefined ? {} : { canonicalTarget }),
-			findings: findingsSummary,
+			findings,
+			directives,
 			citations,
 			noSourcesUsed,
 		};

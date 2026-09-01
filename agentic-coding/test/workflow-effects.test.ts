@@ -210,6 +210,9 @@ test("wiki run's assignment carries the researcher's full recorded handoff verba
 			researchWorkflowTarget(),
 			researcher.id,
 		);
+		// The researcher-initiated command records the handoff and transitions
+		// to wiki drafting in one authenticated step; there is no separate
+		// developer dashboard action.
 		engine.dispatch(researchWorkflowTarget(), {
 			type: "agent.research-handoff",
 			workflowId: researcher.workflowId,
@@ -220,20 +223,18 @@ test("wiki run's assignment carries the researcher's full recorded handoff verba
 			handoff: {
 				subject: "widget subsystem",
 				canonicalTarget: "projects/demo/widget-subsystem",
-				findings: "widgets are produced by the widget factory",
+				findings: "open question: naming for the sub-assembly stage",
+				directives: [
+					{
+						target: "projects/demo/widget-subsystem",
+						intent: "update",
+						claims: ["widgets are produced by the widget factory"],
+						citations: ["src/widget.ts"],
+					},
+				],
 				citations: ["src/widget.ts"],
 				noSourcesUsed: false,
 			},
-		});
-		const afterHandoff = engine.status(
-			researchWorkflowTarget(),
-			"research-handoff-wiki",
-		);
-		engine.dispatch(researchWorkflowTarget(), {
-			type: "developer.action",
-			workflowId: researcher.workflowId,
-			revision: afterHandoff.revision,
-			actionId: "request-research-wiki",
 		});
 		await new EffectRunner(researchWorkflowTarget(), engine, handlers).drain();
 		expect(adapter.launches).toBe(2);
@@ -241,9 +242,14 @@ test("wiki run's assignment carries the researcher's full recorded handoff verba
 		const inputs = adapter.context?.assignment.inputs ?? [];
 		const combined = inputs.join("\n");
 		expect(combined).toContain("Research handoff");
+		expect(combined).toContain("Documentation directives");
+		expect(combined).toContain("actionable starting point");
 		expect(combined).toContain("widget subsystem");
 		expect(combined).toContain("projects/demo/widget-subsystem");
 		expect(combined).toContain("widgets are produced by the widget factory");
+		expect(combined).toContain(
+			"open question: naming for the sub-assembly stage",
+		);
 		expect(combined).toContain("src/widget.ts");
 	} finally {
 		if (previousWikiRoot === undefined) delete process.env.HERDR_WIKI_DIR;

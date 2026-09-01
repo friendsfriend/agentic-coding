@@ -87,7 +87,10 @@ describe("breaking workflow CLI surface", () => {
 		]);
 		expect(REQUIRED_FLAGS.action).toEqual(["repo", "change", "revision"]);
 		expect(REQUIRED_FLAGS.question).toEqual(["description"]);
-		expect(REQUIRED_FLAGS["research-handoff"]).toEqual(["subject", "findings"]);
+		expect(REQUIRED_FLAGS["research-handoff"]).toEqual([
+			"subject",
+			"directives",
+		]);
 	});
 
 	test("question timeout accepts the 24-hour maximum and rejects invalid values", () => {
@@ -609,5 +612,36 @@ describe("breaking workflow CLI surface", () => {
 			tabId: "tab-split",
 			owned: true,
 		});
+	});
+	test("research-handoff CLI command requires --subject and --directives and is restricted to an authenticated active core.research researcher run", async () => {
+		// Missing --directives is rejected by flag validation before any engine
+		// or authentication call, regardless of caller identity.
+		await expect(
+			run(["research-handoff", "--subject", "widget subsystem"]),
+		).rejects.toThrow(/--directives is required/);
+		// A syntactically complete command dispatched without an authenticated
+		// active core.research researcher run identity is rejected outright: it
+		// never reaches (and therefore never performs) the record-and-transition
+		// path. This matches the runtime-level guarantee (see
+		// workflow-runtime.test.ts) that only a valid handoff dispatched by the
+		// exact active researcher run can drive the core.research -> core.wiki
+		// transition.
+		await expect(
+			run([
+				"research-handoff",
+				"--subject",
+				"widget subsystem",
+				"--directives",
+				JSON.stringify([
+					{
+						target: "projects/demo/widget-subsystem",
+						intent: "update",
+						claims: ["widgets are produced by the widget factory"],
+					},
+				]),
+				"--citations",
+				"src/widget.ts",
+			]),
+		).rejects.toThrow();
 	});
 });

@@ -510,6 +510,27 @@ test("required user actions expose developer review and completion commands", ()
 	expect(requiredUserActionFor("verify")).toBeUndefined();
 });
 
+test("required user actions for active research exclude any developer wiki-drafting trigger", () => {
+	const action = requiredUserActionFor("core.research", false, [], "research");
+	expect(action?.key).toBe("research");
+	expect(action?.items.map((item) => item.label)).toEqual([
+		"Close research",
+		"Not now",
+	]);
+	expect(
+		action?.items.some(
+			(item) => "value" in item && item.value === "request-research-wiki",
+		),
+	).toBe(false);
+
+	// Legacy phase naming resolves to the same stable action set.
+	const legacyAction = requiredUserActionFor("research", false, [], "research");
+	expect(legacyAction?.items.map((item) => item.label)).toEqual([
+		"Close research",
+		"Not now",
+	]);
+});
+
 test("startArgs maps quick workflow type to no-openspec and preserves task text", () => {
 	const quickArgs = startArgs({
 		repo: ".",
