@@ -15,7 +15,7 @@ import {
 	isResearchWorkflowTarget,
 	isWikiWorkflowTarget,
 } from "../workflow/runtime";
-import { copyToClipboard } from "./dash/clipboard";
+import { copyToClipboard } from "./clipboard";
 import { listWorkflows, loadDashboard, testDashboard } from "./dash/data";
 import { setupKeymap } from "./dash/keymap-setup";
 import { notify } from "./dash/notifications";

@@ -1,0 +1,25 @@
+## 1. Consolidate the clipboard module
+
+- [x] 1.1 Create `src/tui/clipboard.ts` exporting `copyToClipboard(text: string): boolean` and `writeOsc52(text: string): void`, ported from `src/tui/dash/clipboard.ts`, with the Linux command fallback chain extended to try `wl-copy` (stdin input, e.g. `["wl-copy"]`) ahead of `xclip`/`xsel`, and with `copyToClipboard` calling `writeOsc52` and returning `true` when every command attempt throws. Verify by reading the new file: darwin/win32 behavior unchanged, Linux order is `wl-copy`, `xclip`, `xsel`, then OSC 52.
+- [x] 1.2 Delete `src/tui/dash/clipboard.ts` and `src/tui/otel/app/clipboard.ts`, and update their three import sites (`src/tui/dash/App.tsx`, `src/tui/otel/app/App.tsx`, `src/tui/index.tsx`) to import `copyToClipboard` from `../clipboard` / `./clipboard` (adjusted relative path) as appropriate, replacing `copyText` usage in `src/tui/otel/app/App.tsx` with `copyToClipboard`. Verify with `bun run type-check` reporting no unresolved-import or unused-import errors.
+
+## 2. Fix dash TUI copy-result reporting
+
+- [x] 2.1 In `src/tui/dash/App.tsx`, update the Ctrl+C selection-copy branch to check `copyToClipboard(selection)`'s return value, notifying `"Selection copied"` (`success`) only when it returns `true` and a copy-failed warning/error notification when it returns `false`.
+- [x] 2.2 Apply the same fix to the Meta+C (`key.meta && name === "c"`) selection-copy branch in the same file.
+- [x] 2.3 Run `bun run lint` and confirm zero Biome diagnostics on `src/tui/clipboard.ts`, `src/tui/dash/App.tsx`, `src/tui/otel/app/App.tsx`, and `src/tui/index.tsx`.
+
+## 3. Test the clipboard fallback chain and reporting
+
+- [x] 3.1 Add a unit test module (`test/tui-clipboard.test.ts`) that mocks `node:child_process`'s `execFileSync` (via `spyOn`, restored in `afterEach` so it doesn't leak into other test files sharing the bun test process) and covers: macOS uses `pbcopy`, Windows uses `clip`, Linux uses `wl-copy` when it succeeds, Linux falls back to `xclip` when `wl-copy` throws, Linux falls back to `xsel` when both `wl-copy` and `xclip` throw, and Linux writes an OSC 52 escape sequence to `process.stdout` (including the `tmux` passthrough wrapper when `process.env.TMUX` is set) and returns `true` when all three commands throw. Verified by running `bun test test/tui-clipboard.test.ts`.
+- [x] 3.2 Added `test/dash/clipboardNotifications.test.tsx` (a new file rather than extending `userActions.test.tsx`, since it needs `spyOn(node:child_process, "execFileSync")` mocked before/while `App` is rendered) that drag-selects on-screen text, then asserts the Ctrl+C and Meta+C selection-copy paths in `src/tui/dash/App.tsx` each show a copy-succeeded notification when the clipboard write succeeds and a copy-failed notification when it fails. Verified by running that test file.
+- [x] 3.3 Confirmed the otel/trace TUI's `copySelection` (`src/tui/otel/app/App.tsx`) success/failure logic is unaffected by the import switch to `copyToClipboard`. No prior test coverage existed, so added `test/otel/appCopySelection.test.tsx` (drag-selects text, triggers the Meta+C global copy shortcut, and asserts the copy-succeeded/copy-failed notification). While building this, found that the notification never actually rendered in the otel TUI regardless of clipboard outcome — see the added scope note below — and added `test/otel/notificationOverlay.test.tsx` as a regression test for that fix. Verified by running both test files.
+
+### Added scope (developer-approved via in-run question)
+
+While writing the task 3.3 test, discovered a pre-existing, unrelated bug: `src/tui/otel/components/Notification.tsx`'s `NotificationOverlay` read `activeNotification()` directly in the component body (`const n = activeNotification(); if (!n) return null; ...`) instead of through a reactive primitive. Since Solid components run once, the toast only ever reflected whatever notification was active at first mount and never updated again — so the otel TUI's copy-succeeded/copy-failed toasts (and every other otel notification) never actually appeared. Asked the developer; approved fixing it now. Fixed by switching to `<Show when={activeNotification()} keyed>`, mirroring the dash TUI's already-correct equivalent, and added `test/otel/notificationOverlay.test.tsx` as a regression test.
+
+## 4. Final change-scoped verification
+
+- [x] 4.1 Ran `bun run type-check` and `bun run build`: both succeed with no errors.
+- [x] 4.2 Ran the specific test files added/touched in Section 3 together (`bun test test/tui-clipboard.test.ts test/dash/clipboardNotifications.test.tsx test/otel/appCopySelection.test.tsx test/otel/notificationOverlay.test.tsx`) and confirmed they pass; also ran the full `test/dash` and `test/otel` directories together with `test/tui-clipboard.test.ts` (196 pass, 0 fail) to confirm no test-isolation leakage from the new `execFileSync`/`process.platform` spies into pre-existing tests (e.g. `changedFilesBrowser.test.tsx`, `data.test.ts`, which shell out to real `git`).
