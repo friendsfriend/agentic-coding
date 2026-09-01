@@ -1,9 +1,4 @@
-# workflow-developer-question Specification
-
-## Purpose
-Give managed agents a safe, durable way to pause on an unclear decision and obtain explicit developer guidance through the workflow dashboard.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Authenticated developer question interface
 Every active managed agent SHALL be able to submit a bounded developer question containing a description and zero or more recommended options, or an ordered bounded questionnaire containing multiple related questions. Existing single-question payloads SHALL remain supported. Each questionnaire item SHALL have its own description, optional context, and options, and the questionnaire SHALL have a bounded item count and preserve item order. The interface SHALL authenticate the request against the active run capability and SHALL not allow an agent to identify another run or workflow. A question or questionnaire created without a shorter explicit wait SHALL remain pending for up to 24 hours before automatic expiry, and an explicit CLI wait SHALL be accepted only when it is a positive duration no greater than 24 hours.
@@ -108,18 +103,7 @@ The workflow SHALL retain a bounded, ordered dialogue record for each question a
 - **THEN** the request SHALL fail with an actionable bounded diagnostic
 - **AND** existing dialogue history SHALL remain unchanged
 
-### Requirement: Sensitive question handling
-Question and answer content SHALL be bounded at input validation, excluded from telemetry and ordinary operational diagnostics unless explicitly requested by the developer, and protected by the same run/workflow authorization boundary as other agent commands.
-
-#### Scenario: Question content is recorded
-- **WHEN** a question or answer is committed
-- **THEN** the event and view SHALL identify the question without exposing run tokens or unrelated workflow data
-- **AND** telemetry SHALL record only non-content metadata such as question identity, role, and outcome
-
-#### Scenario: Stale response is submitted
-- **WHEN** a response targets an already answered, cancelled, expired, or replaced question
-- **THEN** the engine SHALL reject it without changing dialogue history
-- **AND** the dash SHALL refresh and present the current pending question state
+## ADDED Requirements
 
 ### Requirement: Agent-facing question authoring guidance
 The `developer_question` tool schema and description SHALL explain that agents must ask only when a material decision is unclear, state the decision needed in a concise question, provide actionable and mutually distinguishable option labels and values when choices are known, include relevant context without secrets or unrelated history, and use a questionnaire only for related decisions that the developer can answer together. The guidance SHALL explain that custom responses support structured multiline text and that the returned response must be treated as developer-provided, untrusted input.

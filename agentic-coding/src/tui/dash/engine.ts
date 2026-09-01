@@ -79,7 +79,17 @@ export function answerWorkflowQuestion(
 	change: string,
 	revision: number,
 	questionId: string,
-	answer: { kind: "option" | "custom" | "cancel"; value?: string },
+	answer:
+		| { kind: "option" | "custom" | "cancel"; value?: string }
+		| {
+				groupId: string;
+				responses: Array<{
+					questionId: string;
+					kind: "option" | "custom";
+					value: string;
+				}>;
+		  }
+		| { groupId: string; kind: "cancel" },
 ): WorkflowView {
 	const workflow = workflowEngineFactory();
 	const view = workflow.status(repo, change);
@@ -88,7 +98,7 @@ export function answerWorkflowQuestion(
 		workflowId: view.workflowId,
 		revision,
 		actionId: "answer-question",
-		input: { questionId, ...answer },
+		input: "groupId" in answer ? answer : { questionId, ...answer },
 	}).view;
 }
 

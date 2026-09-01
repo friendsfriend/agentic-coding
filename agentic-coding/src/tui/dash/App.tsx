@@ -18,6 +18,7 @@ import {
 	onMount,
 	Show,
 } from "solid-js";
+import type { DeveloperDialogueRecord } from "../../workflow/contracts";
 import { formatDuration } from "../../workflow/format";
 import { wikiWorkflowDataRoot } from "../../workflow/runtime";
 import { copyToClipboard } from "./clipboard";
@@ -385,10 +386,25 @@ export function App(props: {
 	const credentialRequest = createMemo(() => pendingCredentialRequest());
 	const [credentialInput, setCredentialInput] = createSignal("");
 	const pendingQuestion = createMemo(() => data().state.pendingQuestions?.[0]);
+	const pendingQuestionGroup = createMemo<DeveloperDialogueRecord[]>(() => {
+		const question = pendingQuestion();
+		if (!question) return [];
+		const pending = data().state.pendingQuestions ?? [];
+		return (
+			question.groupId
+				? pending.filter((item) => item.groupId === question.groupId)
+				: [question]
+		).sort((a, b) => (a.itemIndex ?? 0) - (b.itemIndex ?? 0));
+	});
 	const [questionOpen, setQuestionOpen] = createSignal(false);
+	const [questionTab, setQuestionTab] = createSignal(0);
+	const [questionPromptOffset, setQuestionPromptOffset] = createSignal(0);
 	const [questionSelection, setQuestionSelection] = createSignal(0);
 	const [questionCustom, setQuestionCustom] = createSignal(false);
 	const [questionCustomText, setQuestionCustomText] = createSignal("");
+	const [questionDrafts, setQuestionDrafts] = createSignal<
+		Record<string, { kind: "option" | "custom"; value: string }>
+	>({});
 	const [questionSubmitting, setQuestionSubmitting] = createSignal(false);
 	let modalBeforeCredential: string | undefined;
 	let modalBeforeQuestion: string | undefined;
@@ -407,10 +423,48 @@ export function App(props: {
 	};
 	const closeQuestion = () => {
 		setQuestionOpen(false);
+		setQuestionTab(0);
+		setQuestionSelection(0);
 		setQuestionCustom(false);
 		setQuestionCustomText("");
+		setQuestionDrafts({});
 		props.keymap.setData("modal.active", modalBeforeQuestion ?? "none");
 		modalBeforeQuestion = undefined;
+	};
+	const activateQuestion = (index: number) => {
+		const group = pendingQuestionGroup();
+		const item = group[index];
+		if (!item) return;
+		const draft = questionDrafts()[item.id];
+		setQuestionTab(index);
+		setQuestionPromptOffset(0);
+		if (draft?.kind === "option") {
+			const selected = item.options.findIndex(
+				(option) => option.value === draft.value,
+			);
+			setQuestionSelection(selected >= 0 ? selected : 0);
+			setQuestionCustom(false);
+			setQuestionCustomText("");
+		} else {
+			setQuestionSelection(
+				draft
+					? item.options.length
+					: item.options.length > 0
+						? 0
+						: item.options.length,
+			);
+			setQuestionCustom(Boolean(draft));
+			setQuestionCustomText(draft?.value ?? "");
+		}
+	};
+	const updateQuestionCustomText = (value: string) => {
+		setQuestionCustomText(value);
+		const item = pendingQuestionGroup()[questionTab()];
+		if (item)
+			setQuestionDrafts((drafts) => ({
+				...drafts,
+				[item.id]: { kind: "custom", value },
+			}));
 	};
 	const submitQuestion = async (answer: {
 		kind: "option" | "custom" | "cancel";
@@ -420,6 +474,92 @@ export function App(props: {
 		if (!question || questionSubmitting()) return;
 		if (answer.kind === "custom" && !answer.value?.trim()) {
 			setMessage("Custom response cannot be empty");
+			return;
+		}
+		const group = pendingQuestionGroup();
+		if (answer.kind === "cancel" && group.length > 1 && question.groupId) {
+			setQuestionSubmitting(true);
+			try {
+				if (props.profile !== "test")
+					answerQuestion(
+						props.repo,
+						props.change,
+						data().state.revision,
+						question.id,
+						{
+							groupId: question.groupId,
+							kind: "cancel",
+						},
+					);
+				closeQuestion();
+				refresh();
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				setMessage(message);
+				if (/stale|revision|pending|expired/i.test(message)) refresh();
+			} finally {
+				setQuestionSubmitting(false);
+			}
+			return;
+		}
+		if (answer.kind !== "cancel" && group.length > 1) {
+			const responseKind = answer.kind;
+			const item = group[questionTab()];
+			if (!item) return;
+			setQuestionDrafts((drafts) => ({
+				...drafts,
+				[item.id]: {
+					kind: responseKind,
+					value: answer.value ?? "",
+				},
+			}));
+			if (questionTab() < group.length - 1) {
+				activateQuestion(questionTab() + 1);
+				return;
+			}
+			const drafts = questionDrafts();
+			const responses = group.map((item, index) =>
+				index === questionTab()
+					? {
+							questionId: item.id,
+							kind: answer.kind,
+							value: answer.value ?? "",
+						}
+					: { questionId: item.id, ...(drafts[item.id] ?? {}) },
+			);
+			if (
+				responses.some((response) => !response.kind || !response.value.trim())
+			) {
+				setMessage("Answer every question before submitting");
+				return;
+			}
+			answer = { kind: "custom", value: "" };
+			setQuestionSubmitting(true);
+			try {
+				if (props.profile !== "test")
+					answerQuestion(
+						props.repo,
+						props.change,
+						data().state.revision,
+						question.id,
+						{
+							groupId: question.groupId ?? "",
+							responses: responses.map((response) => ({
+								questionId: response.questionId,
+								kind: response.kind as "option" | "custom",
+								value: response.value,
+							})),
+						},
+					);
+				closeQuestion();
+				refresh();
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				setMessage(message);
+				if (/stale|revision|pending|expired/i.test(message)) refresh();
+			} finally {
+				setQuestionSubmitting(false);
+			}
 			return;
 		}
 		setQuestionSubmitting(true);
@@ -1680,14 +1820,34 @@ export function App(props: {
 						const question = pendingQuestion();
 						if (!question || questionSubmitting()) return true;
 						const key = event.name.toLowerCase();
-						const customIndex = question.options.length;
+						const group = pendingQuestionGroup();
+						const current = group[questionTab()] ?? question;
+						const customIndex = current.options.length;
 						if (key === "escape") {
-							void submitQuestion({ kind: "cancel" });
+							void submitQuestion(
+								question.groupId && group.length > 1
+									? { kind: "cancel", value: question.groupId }
+									: { kind: "cancel" },
+							);
+						} else if (
+							(key === "pageup" || key === "pagedown") &&
+							(!questionCustom() || event.ctrl)
+						) {
+							setQuestionPromptOffset((offset) =>
+								Math.max(0, offset + (key === "pageup" ? -3 : 3)),
+							);
+						} else if (key === "tab") {
+							const direction = event.shift ? -1 : 1;
+							activateQuestion(
+								(questionTab() + direction + group.length) % group.length,
+							);
 						} else if (questionCustom()) {
-							if (key === "enter" || key === "return")
+							// The focused textarea owns plain Enter, insertion, deletion,
+							// cursor movement, and paste. Alt+Enter is the explicit advance.
+							if ((key === "enter" || key === "return") && event.meta)
 								void submitQuestion({
 									kind: "custom",
-									value: questionCustomText().trim(),
+									value: questionCustomText(),
 								});
 							else return false;
 						} else if (key === "j" || key === "down")
@@ -1697,9 +1857,11 @@ export function App(props: {
 						else if (key === "enter" || key === "return") {
 							if (questionSelection() === customIndex) {
 								setQuestionCustom(true);
-								setQuestionCustomText("");
+								setQuestionCustomText(
+									questionDrafts()[current.id]?.value ?? "",
+								);
 							} else {
-								const option = question.options[questionSelection()];
+								const option = current.options[questionSelection()];
 								if (option)
 									void submitQuestion({ kind: "option", value: option.value });
 							}
@@ -1712,10 +1874,19 @@ export function App(props: {
 				"escape",
 				"enter",
 				"return",
+				"meta+enter",
+				"meta+return",
+				"ctrl+pageup",
+				"ctrl+pagedown",
+				"alt+enter",
+				"alt+return",
 				"j",
 				"k",
 				"up",
 				"down",
+				"tab",
+				"pageup",
+				"pagedown",
 				"backspace",
 				"delete",
 				"space",
@@ -2399,9 +2570,12 @@ export function App(props: {
 			const question = pendingQuestion();
 			if (question && question.id !== pendingQuestionId) {
 				pendingQuestionId = question.id;
+				setQuestionTab(0);
+				setQuestionPromptOffset(0);
 				setQuestionSelection(0);
 				setQuestionCustom(false);
 				setQuestionCustomText("");
+				setQuestionDrafts({});
 			}
 			if (question && !questionOpen()) {
 				const current = props.keymap.getData?.("modal.active");
@@ -3184,13 +3358,20 @@ export function App(props: {
 				)}
 			</Show>
 			<Show when={questionOpen() && pendingQuestion()}>
-				{(question) => (
+				{(_question) => (
 					<DeveloperQuestionModal
-						question={question()}
+						questions={pendingQuestionGroup()}
+						activeIndex={questionTab()}
+						promptOffset={questionPromptOffset()}
 						selected={questionSelection()}
 						custom={questionCustom()}
 						customText={questionCustomText()}
-						onCustomTextChange={setQuestionCustomText}
+						responseState={pendingQuestionGroup().map((item) =>
+							questionDrafts()[item.id]?.value.trim()
+								? "answered"
+								: "unanswered",
+						)}
+						onCustomTextChange={updateQuestionCustomText}
 					/>
 				)}
 			</Show>

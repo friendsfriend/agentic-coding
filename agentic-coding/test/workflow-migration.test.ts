@@ -127,7 +127,9 @@ test("every compatible legacy workflow type and phase maps deterministically", (
 					root,
 					change,
 				);
-				expect(view.definition.id).toBe(workflowType);
+				expect(view.definition.id).toBe(
+					workflowType === "standard" ? "openspec-full" : workflowType,
+				);
 				expect(view.health.valid).toBe(true);
 				expect(view.status).toBe(
 					phase === "paused"

@@ -536,7 +536,10 @@ export function parseFusionProfiles(value: string | undefined): string[] {
 }
 function required(command: string, argv: string[]): void {
 	for (const name of REQUIRED_FLAGS[command] ?? [])
-		if (flag(argv, name) === undefined)
+		if (
+			flag(argv, name) === undefined &&
+			!(command === "question" && flag(argv, "questions") !== undefined)
+		)
 			throw new Error(`${command}: --${name} is required`);
 }
 const FLAG_SCHEMA: Record<
@@ -567,7 +570,7 @@ const FLAG_SCHEMA: Record<
 		positionals: [0, 0],
 	},
 	question: {
-		values: ["description", "options", "timeout"],
+		values: ["description", "context", "options", "questions", "timeout"],
 		positionals: [0, 0],
 	},
 	repair: {
@@ -657,7 +660,7 @@ function help(command?: string): void {
 		handoff:
 			"handoff --outcome complete|blocked|failed [--artifact PATH] [--message TEXT]",
 		question:
-			"question --description TEXT [--options JSON] [--timeout MILLISECONDS]",
+			"question [--description TEXT | --questions JSON] [--context TEXT] [--options JSON] [--timeout MILLISECONDS]",
 		repair:
 			"repair --repo PATH --change ID --revision N --step STEP [--reason TEXT] [--confirm]",
 		projects: "projects",
@@ -675,6 +678,15 @@ function parseInput(value?: string): unknown {
 		return JSON.parse(text);
 	} catch {
 		throw new Error("--input must be JSON or path to JSON");
+	}
+}
+function parseInlineJson(value: string, name: string): unknown {
+	if (value.length > 128 * 1024)
+		throw new Error(`${name} must be inline JSON no larger than 128 KiB`);
+	try {
+		return JSON.parse(value);
+	} catch {
+		throw new Error(`${name} must be valid inline JSON`);
 	}
 }
 export function runGit(repo: string, ...args: string[]): string {
@@ -699,16 +711,30 @@ export function validateQuestionTimeout(timeoutMs: number): void {
 		);
 }
 
+type DeveloperQuestionCliInput = {
+	description?: string;
+	context?: string;
+	options?: unknown;
+	questions?: unknown;
+};
 export async function runDeveloperQuestion(
 	engineInstance: WorkflowEngine,
 	repo: string,
-	description: string,
-	options: unknown = [],
+	inputOrDescription: DeveloperQuestionCliInput | string,
+	optionsOrTimeout: unknown = [],
 	timeoutMs = QUESTION_WAIT_MS,
 ): Promise<string> {
-	if (!description.trim())
+	const input: DeveloperQuestionCliInput =
+		typeof inputOrDescription === "string"
+			? { description: inputOrDescription, options: optionsOrTimeout }
+			: inputOrDescription;
+	const wait =
+		typeof optionsOrTimeout === "number" ? optionsOrTimeout : timeoutMs;
+	if (input.description !== undefined && !input.description.trim())
 		throw new Error("question requires a non-empty description");
-	validateQuestionTimeout(timeoutMs);
+	if (input.description === undefined && input.questions === undefined)
+		throw new Error("question requires --description or --questions");
+	validateQuestionTimeout(wait);
 	const identity = resolveHandoffIdentity(engineInstance, repo);
 	const run = engineInstance.authorizeExactRunCapability(
 		repo,
@@ -725,12 +751,22 @@ export async function runDeveloperQuestion(
 		stepId: run.stepId,
 		role: run.role,
 		token: identity.token,
-		description,
-		options,
+		...(input.description === undefined
+			? {}
+			: { description: input.description }),
+		...(input.context === undefined ? {} : { context: input.context }),
+		...(input.options === undefined ? {} : { options: input.options }),
+		...(input.questions === undefined ? {} : { questions: input.questions }),
 	});
-	const questionId = created.snapshot.developerDialogue.at(-1)?.id;
-	if (!questionId) throw new Error("question was not recorded");
-	const deadline = Date.now() + timeoutMs;
+	const newest = created.snapshot.developerDialogue.at(-1);
+	if (!newest) throw new Error("question was not recorded");
+	const groupId = newest.groupId;
+	const questionIds = groupId
+		? created.snapshot.developerDialogue
+				.filter((item) => item.groupId === groupId)
+				.map((item) => item.id)
+		: [newest.id];
+	const deadline = Date.now() + wait;
 	let interrupted = false;
 	const interrupt = () => {
 		interrupted = true;
@@ -739,19 +775,42 @@ export async function runDeveloperQuestion(
 	process.on("SIGINT", interrupt);
 	try {
 		while (!interrupted && Date.now() < deadline) {
-			const question = engineInstance
-				.getSnapshot(repo, run.workflowId)
-				.developerDialogue.find((item) => item.id === questionId);
-			if (!question)
+			const dialogue = engineInstance.getSnapshot(
+				repo,
+				run.workflowId,
+			).developerDialogue;
+			const questions = questionIds.map((id) =>
+				dialogue.find((item) => item.id === id),
+			);
+			if (questions.some((question) => !question))
 				throw new Error("question disappeared from workflow state");
-			if (question.status !== "pending") return JSON.stringify(question);
+			if (
+				questions.every((question) => question && question.status !== "pending")
+			)
+				return groupId
+					? JSON.stringify({
+							groupId,
+							status: questions.some(
+								(question) => question?.status === "expired",
+							)
+								? "expired"
+								: questions.some((question) => question?.status === "cancelled")
+									? "cancelled"
+									: "answered",
+							responses: questions.map((question) => ({
+								questionId: question?.id,
+								itemIndex: question?.itemIndex,
+								answer: question?.answer,
+							})),
+						})
+					: JSON.stringify(questions[0]);
 			await Bun.sleep(Math.min(100, Math.max(1, deadline - Date.now())));
 		}
 		try {
 			engineInstance.dispatch(repo, {
 				type: "agent.question-expire",
 				workflowId: run.workflowId,
-				questionId,
+				questionId: questionIds[0] ?? "",
 				runId: run.id,
 				stepId: run.stepId,
 				role: run.role,
@@ -764,10 +823,31 @@ export async function runDeveloperQuestion(
 			)
 				throw error;
 		}
-		const expired = engineInstance
-			.getSnapshot(repo, run.workflowId)
-			.developerDialogue.find((item) => item.id === questionId);
-		return JSON.stringify(expired ?? { status: "expired", id: questionId });
+		const dialogue = engineInstance.getSnapshot(
+			repo,
+			run.workflowId,
+		).developerDialogue;
+		const expired = questionIds.map((id) =>
+			dialogue.find((item) => item.id === id),
+		);
+		if (!groupId)
+			return JSON.stringify(
+				expired[0] ?? { status: "expired", id: questionIds[0] },
+			);
+		const status = expired.some((question) => question?.status === "expired")
+			? "expired"
+			: expired.some((question) => question?.status === "cancelled")
+				? "cancelled"
+				: "answered";
+		return JSON.stringify({
+			groupId,
+			status,
+			responses: expired.map((question) => ({
+				questionId: question?.id,
+				itemIndex: question?.itemIndex,
+				answer: question?.answer,
+			})),
+		});
 	} finally {
 		process.off("SIGTERM", interrupt);
 		process.off("SIGINT", interrupt);
@@ -966,7 +1046,9 @@ function authorizeWikiWriter(): ReturnType<WorkflowEngine["getSnapshot"]> {
 	const role = process.env.HERDR_ROLE;
 	const token = process.env.HERDR_RUN_TOKEN;
 	if (!workflowId || !token || !(stepId === "core.wiki" && role === "wiki"))
-		throw new Error("wiki write requires an authenticated managed wiki run");
+		throw new Error(
+			"wiki write requires an authenticated managed wiki run (authenticated core.wiki run required)",
+		);
 	const workflowEngine = engine();
 	const target =
 		process.env.HERDR_WORKFLOW_TARGET === wikiWorkflowTarget() ||
@@ -982,6 +1064,7 @@ function authorizeWikiWriter(): ReturnType<WorkflowEngine["getSnapshot"]> {
 	);
 	const snapshot = workflowEngine.getSnapshot(target, workflowId);
 	if (
+		snapshot.currentStep !== "core.wiki" &&
 		snapshot.definition.id !== "research" &&
 		snapshot.definition.id !== "wiki" &&
 		snapshot.definition.id !== "wiki-comments"
@@ -1416,10 +1499,24 @@ export async function run(argv: string[]): Promise<void> {
 	if (command === "question") {
 		if (!managedAgent())
 			throw new Error("question requires an authenticated managed agent");
-		const description = requireFlag(rest, "description");
-		const options = flag(rest, "options")
-			? parseInput(flag(rest, "options"))
-			: [];
+		const description = flag(rest, "description");
+		const questions = flag(rest, "questions");
+		if (description === undefined && questions === undefined)
+			throw new Error("question requires --description or --questions");
+		if (description !== undefined && questions !== undefined)
+			throw new Error("question accepts either --description or --questions");
+		const input = {
+			...(description === undefined ? {} : { description }),
+			...(flag(rest, "context") === undefined
+				? {}
+				: { context: flag(rest, "context") }),
+			...(flag(rest, "options") === undefined
+				? {}
+				: { options: parseInput(flag(rest, "options")) }),
+			...(questions === undefined
+				? {}
+				: { questions: parseInlineJson(questions, "--questions") }),
+		};
 		const timeout = flag(rest, "timeout");
 		const timeoutMs =
 			timeout === undefined ? QUESTION_WAIT_MS : Number(timeout);
@@ -1427,8 +1524,7 @@ export async function run(argv: string[]): Promise<void> {
 			await runDeveloperQuestion(
 				workflowEngine,
 				managedWorkflowTarget(),
-				description,
-				options,
+				input,
 				timeoutMs,
 			),
 		);

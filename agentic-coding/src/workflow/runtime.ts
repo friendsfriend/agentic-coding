@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type {
 	DeveloperDialogueRecord,
+	DeveloperQuestionItem,
 	EffectKind,
 	JsonValue,
 	WorkflowActionView,
@@ -21,6 +22,7 @@ import type {
 } from "./contracts.ts";
 import {
 	commandContract,
+	type DeveloperQuestionAnswer,
 	parseDeveloperQuestionAnswer,
 	parseSnapshot,
 } from "./contracts.ts";
@@ -645,6 +647,7 @@ export class WorkflowEngine {
 					`workflow not found: ${changeId}`,
 				);
 			}
+			this.expireDueQuestions(db, row.id);
 			return this.view(db, row.id);
 		} finally {
 			db.close();
@@ -932,11 +935,65 @@ export class WorkflowEngine {
 	getSnapshot(repo: string, workflowId: string): WorkflowSnapshot {
 		const db = openStore(repo);
 		try {
+			this.expireDueQuestions(db, workflowId);
 			return parseSnapshot(
 				JSON.parse(this.instance(db, workflowId).snapshot_json),
 			);
 		} finally {
 			db.close();
+		}
+	}
+	private expireDueQuestions(db: Database, workflowId: string): void {
+		db.exec("BEGIN IMMEDIATE");
+		try {
+			const row = this.instance(db, workflowId);
+			const snapshot = parseSnapshot(JSON.parse(row.snapshot_json));
+			const due = snapshot.developerDialogue.filter(
+				(item) =>
+					item.status === "pending" &&
+					Date.parse(item.expiresAt) <= this.now().getTime(),
+			);
+			if (!due.length) {
+				db.exec("COMMIT");
+				return;
+			}
+			const groups = new Set(due.map((item) => item.groupId).filter(Boolean));
+			const dueIds = new Set(due.map((item) => item.id));
+			const expiredIds = new Set(dueIds);
+			const at = nowIso(this.now);
+			for (const item of snapshot.developerDialogue) {
+				if (
+					item.status === "pending" &&
+					(dueIds.has(item.id) ||
+						(item.groupId !== undefined && groups.has(item.groupId)))
+				) {
+					item.status = "expired";
+					item.answeredAt = at;
+					item.answer = { kind: "cancel" };
+					expiredIds.add(item.id);
+				}
+			}
+			const definition = this.registry.definition(
+				snapshot.definition.id,
+				snapshot.definition.version,
+				snapshot.definition.digest,
+			);
+			this.validateSnapshot(snapshot, definition, this.runs(db, workflowId));
+			snapshot.revision += 1;
+			snapshot.metadata.updatedAt = at;
+			this.writeSnapshot(db, snapshot);
+			db.query("INSERT INTO workflow_events VALUES (?,?,?,?,?,?)").run(
+				snapshot.workflowId,
+				snapshot.revision,
+				"developer.question.expired",
+				json({ kind: "system" }),
+				json({ questionIds: [...expiredIds], outcome: "expired" }),
+				at,
+			);
+			db.exec("COMMIT");
+		} catch (error) {
+			rollback(db);
+			throw error;
 		}
 	}
 
@@ -1011,15 +1068,18 @@ export class WorkflowEngine {
 			}
 		}
 		const phase = String(legacy.phase ?? "");
+		const legacyWorkflowType =
+			typeof legacy.workflowType === "string" ? legacy.workflowType : undefined;
 		const workflowType =
-			typeof legacy.workflowType === "string"
-				? legacy.workflowType
-				: Array.isArray(legacy.workflowModules) &&
-						!(legacy.workflowModules as unknown[]).includes("plan")
-					? (legacy.workflowModules as unknown[]).includes("archive")
-						? "openspec-apply"
-						: "no-openspec"
-					: "openspec-full";
+			legacyWorkflowType === "standard"
+				? "openspec-full"
+				: (legacyWorkflowType ??
+					(Array.isArray(legacy.workflowModules) &&
+					!(legacy.workflowModules as unknown[]).includes("plan")
+						? (legacy.workflowModules as unknown[]).includes("archive")
+							? "openspec-apply"
+							: "no-openspec"
+						: "openspec-full"));
 		const stepMap: Record<string, string> = {
 			explore: "core.plan",
 			proposed: "core.plan-approval",
@@ -1395,38 +1455,59 @@ export class WorkflowEngine {
 		command: Extract<WorkflowCommand, { type: "agent.question" }>,
 	) {
 		const run = this.questionRun(db, snapshot, command);
-		if (snapshot.developerDialogue.length >= MAX_DEVELOPER_DIALOGUE_RECORDS)
+		const items: readonly DeveloperQuestionItem[] = command.questions ?? [
+			{
+				description: command.description ?? "",
+				...(command.context === undefined ? {} : { context: command.context }),
+				options: command.options ?? [],
+			},
+		];
+		if (
+			snapshot.developerDialogue.length + items.length >
+			MAX_DEVELOPER_DIALOGUE_RECORDS
+		)
 			throw new WorkflowRuntimeError(
 				"dialogue-bounds",
 				"developer dialogue limit reached; resolve the existing questions before asking again",
 			);
-		const question: DeveloperDialogueRecord = {
-			id: randomUUID(),
-			workflowId: snapshot.workflowId,
-			runId: run.id,
-			stepId: run.stepId,
-			role: run.role,
-			description: command.description,
-			options: command.options,
-			status: "pending",
-			createdAt: nowIso(this.now),
-			expiresAt: new Date(
-				this.now().getTime() + QUESTION_WAIT_MS,
-			).toISOString(),
-		};
-		const bytes = Buffer.byteLength(
-			JSON.stringify([...snapshot.developerDialogue, question]),
+		const grouped = command.questions !== undefined;
+		const groupId = grouped ? randomUUID() : undefined;
+		const createdAt = nowIso(this.now);
+		const expiresAt = new Date(
+			this.now().getTime() + QUESTION_WAIT_MS,
+		).toISOString();
+		const questions = items.map(
+			(item, itemIndex): DeveloperDialogueRecord => ({
+				id: randomUUID(),
+				workflowId: snapshot.workflowId,
+				runId: run.id,
+				stepId: run.stepId,
+				role: run.role,
+				description: item.description,
+				...(item.context === undefined ? {} : { context: item.context }),
+				options: item.options,
+				...(groupId === undefined ? {} : { groupId, itemIndex }),
+				status: "pending",
+				createdAt,
+				expiresAt,
+			}),
 		);
-		if (bytes > 128 * 1024)
+		const nextDialogue = [...snapshot.developerDialogue, ...questions];
+		if (Buffer.byteLength(JSON.stringify(nextDialogue)) > 128 * 1024)
 			throw new WorkflowRuntimeError(
 				"dialogue-bounds",
 				"developer dialogue content limit reached; shorten the question or options",
 			);
-		snapshot.developerDialogue.push(question);
+		snapshot.developerDialogue.push(...questions);
 		return {
 			type: "developer.question.created",
 			actor: { kind: "agent", runId: run.id, role: run.role },
-			data: { questionId: question.id, role: run.role },
+			data: {
+				...(groupId === undefined
+					? { questionId: questions[0]?.id }
+					: { groupId, questionIds: questions.map((question) => question.id) }),
+				role: run.role,
+			},
 		};
 	}
 	private expireQuestion(
@@ -1443,17 +1524,31 @@ export class WorkflowEngine {
 				"stale-question",
 				"question is no longer pending",
 			);
-		question.status = "expired";
-		question.answeredAt = nowIso(this.now);
-		question.answer = { kind: "cancel" };
+		const group = question.groupId
+			? snapshot.developerDialogue.filter(
+					(item) =>
+						item.groupId === question.groupId && item.status === "pending",
+				)
+			: [question];
+		const at = nowIso(this.now);
+		for (const item of group) {
+			item.status = "expired";
+			item.answeredAt = at;
+			item.answer = { kind: "cancel" };
+		}
 		return {
 			type: "developer.question.expired",
 			actor: { kind: "agent", runId: run.id, role: run.role },
-			data: { questionId: question.id, outcome: "expired" },
+			data: {
+				...(question.groupId
+					? { groupId: question.groupId }
+					: { questionId: question.id }),
+				outcome: "expired",
+			},
 		};
 	}
 	private answerQuestion(snapshot: WorkflowSnapshot, raw: unknown) {
-		let answer: ReturnType<typeof parseDeveloperQuestionAnswer>;
+		let answer: DeveloperQuestionAnswer;
 		try {
 			answer = parseDeveloperQuestionAnswer(raw);
 		} catch (error) {
@@ -1462,9 +1557,97 @@ export class WorkflowEngine {
 				error instanceof Error ? error.message : String(error),
 			);
 		}
+		if ("groupId" in answer) {
+			const group = snapshot.developerDialogue
+				.filter((item) => item.groupId === answer.groupId)
+				.sort((a, b) => (a.itemIndex ?? 0) - (b.itemIndex ?? 0));
+			if (!group.length || group.some((item) => item.status !== "pending"))
+				throw new WorkflowRuntimeError(
+					"stale-question",
+					"questionnaire is no longer pending",
+				);
+			if (
+				group.some((item) => Date.parse(item.expiresAt) <= this.now().getTime())
+			) {
+				const at = nowIso(this.now);
+				for (const item of group) {
+					item.status = "expired";
+					item.answeredAt = at;
+					item.answer = { kind: "cancel" };
+				}
+				return {
+					type: "developer.question.expired",
+					actor: { kind: "system" },
+					data: { groupId: answer.groupId, outcome: "expired" },
+				};
+			}
+			if (!("responses" in answer)) {
+				const at = nowIso(this.now);
+				for (const item of group) {
+					item.status = "cancelled";
+					item.answeredAt = at;
+					item.answer = { kind: "cancel" };
+				}
+				return {
+					type: "developer.question.answered",
+					actor: { kind: "developer" },
+					data: { groupId: answer.groupId, outcome: "cancelled" },
+				};
+			}
+			if (answer.responses.length !== group.length)
+				throw new WorkflowRuntimeError(
+					"invalid-command",
+					"questionnaire responses must include every item exactly once",
+				);
+			const byId = new Map(group.map((item) => [item.id, item]));
+			for (const response of answer.responses) {
+				const item = byId.get(response.questionId);
+				if (!item)
+					throw new WorkflowRuntimeError(
+						"invalid-command",
+						"questionnaire response does not match its items",
+					);
+				if (
+					response.kind === "option" &&
+					!item.options.some((option) => option.value === response.value)
+				)
+					throw new WorkflowRuntimeError(
+						"invalid-command",
+						"answer is not a recommended option",
+					);
+				if (response.kind === "custom" && !response.value.trim())
+					throw new WorkflowRuntimeError(
+						"invalid-command",
+						"custom answer must not be empty",
+					);
+			}
+			const at = nowIso(this.now);
+			for (const response of answer.responses) {
+				const item = byId.get(response.questionId);
+				if (!item) continue;
+				item.status = "answered";
+				item.answeredAt = at;
+				item.answer = { kind: response.kind, value: response.value };
+			}
+			return {
+				type: "developer.question.answered",
+				actor: { kind: "developer" },
+				data: { groupId: answer.groupId, outcome: "answered" },
+			};
+		}
 		const question = snapshot.developerDialogue.find(
 			(item) => item.id === answer.questionId,
 		);
+		if (question?.groupId) {
+			const groupSize = snapshot.developerDialogue.filter(
+				(item) => item.groupId === question.groupId,
+			).length;
+			if (groupSize > 1)
+				throw new WorkflowRuntimeError(
+					"invalid-command",
+					"questionnaire requires a complete grouped response set",
+				);
+		}
 		if (question?.status !== "pending")
 			throw new WorkflowRuntimeError(
 				"stale-question",
