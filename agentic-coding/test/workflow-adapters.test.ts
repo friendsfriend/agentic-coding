@@ -306,7 +306,7 @@ describe("profiles, assignments, and adapters", () => {
 			}
 		}
 	});
-	test("research launch retains configured Pi tools and extensions", async () => {
+	test("research Pi launch omits --tools and retains configured extensions", async () => {
 		const fake = new FakeHerdr();
 		const adapter = new PiAdapter(new HerdrLifecycle(fake, async () => {}));
 		const current = assignment("core.research", { role: "researcher" });
@@ -335,15 +335,12 @@ describe("profiles, assignments, and adapters", () => {
 			if (!start) throw new Error("expected agent start call");
 			expect(start).not.toContain("--no-extensions");
 			expect(start).toContain("/tmp/research-extension.ts");
-			expect(start[start.indexOf("--tools") + 1]).toBe("read,web_search");
-			expect(start).not.toContain("bash");
-			expect(start).not.toContain("edit");
-			expect(start).not.toContain("write");
+			expect(start).not.toContain("--tools");
 		} finally {
 			fs.rmSync(cwd, { recursive: true, force: true });
 		}
 	});
-	test("research OpenCode launch allows configured tools without changing other read-only defaults", async () => {
+	test("research OpenCode launch uses unrestricted permissions regardless of read-only profile", async () => {
 		for (const [Adapter, runtime] of [
 			[OpenCodeAdapter, "opencode"],
 			[OpenCodeV2Adapter, "opencode-v2"],
@@ -381,10 +378,56 @@ describe("profiles, assignments, and adapters", () => {
 						"utf8",
 					),
 				) as { permission: Record<string, string> };
-				expect(config.permission.web_search).toBe("allow");
-				expect(config.permission.custom_tool).toBe("allow");
-				expect(config.permission.edit).toBe("deny");
-				expect(config.permission.bash).toBe("deny");
+				expect(config.permission).toEqual({
+					edit: "allow",
+					bash: "allow",
+					read: "allow",
+				});
+			} finally {
+				fs.rmSync(cwd, { recursive: true, force: true });
+			}
+		}
+	});
+	test("non-research OpenCode launch keeps deny-by-default permissions for read-only profiles", async () => {
+		for (const [Adapter, runtime] of [
+			[OpenCodeAdapter, "opencode"],
+			[OpenCodeV2Adapter, "opencode-v2"],
+		] as const) {
+			const fake = new FakeHerdr();
+			const adapter = new Adapter(new HerdrLifecycle(fake, async () => {}));
+			const current = assignment("core.verification");
+			const rendered = renderAssignment(
+				registerBuiltins().step("core.verification"),
+				current,
+			);
+			const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "adapter-verify-"));
+			try {
+				await adapter.launch({
+					profile: baseProfile(runtime),
+					assignment: current,
+					rendered,
+					paneId: "pane",
+					cwd,
+					name: `agent-${runtime}`,
+					environment: current.environment,
+				});
+				const config = JSON.parse(
+					fs.readFileSync(
+						path.join(
+							cwd,
+							".herdr-workflow",
+							"runtime-config",
+							"run",
+							"opencode.json",
+						),
+						"utf8",
+					),
+				) as { permission: Record<string, string> };
+				expect(config.permission).toEqual({
+					edit: "deny",
+					bash: "deny",
+					read: "allow",
+				});
 			} finally {
 				fs.rmSync(cwd, { recursive: true, force: true });
 			}
