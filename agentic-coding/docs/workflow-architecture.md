@@ -168,7 +168,7 @@ blast radius to the named functions:
 | `cli.ts` `authorizeWikiWriter`, research-handoff restriction | `stepId === "core.wiki"`, `"core.research"` | Capability/authorization boundaries — this stage's non-goals explicitly exclude capability handling changes. |
 | `registry.ts`, `cli.ts` `rolesForDefinition` (`fusion.plan` empty-candidate exemption) | `id === "fusion.plan"` | A registration-time structural invariant (which step may have zero catalog-time candidates), not step business semantics. |
 | `contracts.ts` `parseSnapshot()` (~line 1061) | `snapshot.status === "active"` combined with `["core.completed", "core.closed"].includes(snapshot.currentStep)` (rejects an `active` status at a terminal step) | A schema-level snapshot invariant enforced while deserializing/validating persisted JSON, before any `StepBehavior` lookup is possible from the raw input; a data-shape guard, not step business semantics. |
-| `src/tui/dash/*.ts`, `src/tui/*.tsx` | Many | **Stage D's job** — this stage leaves `tui/dash/data.ts` re-deriving action availability; it only makes the engine side single-sourced so stage D has something correct to read. |
+| `src/tui/dash/*.ts`, `src/tui/*.tsx` | None (stage D closed this row) | `tui/dash/data.ts`'s `requiredUserActionFor` derives which actions to show from the engine view's `availableActions` array (keyed by action id), not from step or definition ids; `App.tsx`'s review-popup and submit-path selection switches on the required action's stable `key` instead of comparing `stepId` to `core.*` literals. The dashboard is an action *client*: it owns presentation copy (titles, prompts, item labels) keyed by action id, and a narrow legacy fallback for a view with no `availableActions` array at all, but it derives, extends, or filters nothing from step or workflow definition identifiers. |
 
 Not included above because they check `snapshot.definition.id` (a workflow
 *definition* id such as `"research"`, `"wiki-comments"`, `"no-openspec"`) and
@@ -203,13 +203,20 @@ respectively.
 
 ## Planned follow-ups
 
-Stage A (`restructure-repo-for-agent-use`) and stage B
-(`move-step-semantics-to-behavior-hooks`) are complete. Remaining stages:
+Stage A (`restructure-repo-for-agent-use`), stage B
+(`move-step-semantics-to-behavior-hooks`), and stage D
+(`derive-dashboard-actions-from-engine`) are complete. Remaining stage:
 
 - **Stage C — `split-workflow-god-modules`:** split `runtime.ts`,
   `definitions.ts`, and `cli.ts` into focused modules behind compatibility
   barrels. The context carry-over resolver and the handful of remaining
   engine-resident functions listed above are candidates for that split, not
   for further behavior-hook extraction.
-- **Stage D — `derive-dashboard-actions-from-engine`:** derive dashboard action
-  availability from the engine's workflow view.
+
+Stage D also resolved two live divergences between the engine's action list
+and the dashboard's own (now-deleted) copy: a completed `wiki-comments`
+workflow no longer offers `create-pr` (the engine never reported it as
+available), and the dashboard's undispatchable `close-clean` menu item is
+removed outright — it duplicated `workspace.cleanup`, which the engine
+already enqueues automatically after every `workspace.close` completes, so
+there was no missing capability to add.

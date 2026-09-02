@@ -51,9 +51,21 @@ The correct fix is not to add `wiki-comments` to the dashboard's allowlist. It i
 
 The six step-id checks resolve to "which review popup and which submit path". Both are functions of the required action's key, which `data.ts` already produces (`plan-review`, `wiki-review`, `developer-review`). Switching on that key means a new approval step that produces a known key needs no `App.tsx` change, and one that produces a new key fails visibly at the switch rather than silently rendering nothing.
 
+### D4a. A third, undocumented divergence surfaced during implementation
+
+Migrating the Enter-key handler's post-`openRequiredUserAction()` fallback (task 4.2) from `data().state.stepId === "core.plan-approval" | "core.developer-review"` to the required action's key exposed a real behavioral gap that predates this change: for an engine-driven view (where `stepId` genuinely equals those `core.*` strings), that fallback already bypassed `openRequiredUserAction`'s dismissal guard (`promptedUserActionKey === action.key && activePanel() !== 0`) and force-reopened the review popup on every Enter press, on any panel. The dashboard's demo/test profile never exercised this because its legacy phase strings (`"proposed"`, `"developer-review"`) never equal the `core.*` literals, so the guard was the only thing ever observed there, and `test/dash/userActions.test.tsx`'s "dismissed plan review stays closed during panel interactions" only ever tested the demo path.
+
+Asked which behavior to standardize on, the developer chose to keep the dismissal-respecting behavior everywhere rather than adopt the force-reopen one: the redundant fallback is deleted outright, leaving `openRequiredUserAction()` (which already honors the guard) as the sole mechanism for reopening a review popup on Enter, for both legacy and engine-driven views. This is a small, additional bug fix bundled into task 4.2 rather than a new divergence to preserve.
+
 ### D5. Parity is asserted against captured values, not reasoned about
 
 A dropped action is silent: the workflow stalls with no button and no error. So the test captures the current rendered item list for every phase × definition id × `prCreated` combination *before* the change, and asserts the new implementation produces the same list — except for the two divergences, which are asserted to change in the specific documented way. Everything that is not one of those two cases must be byte-identical.
+
+## Task 2.1 audit finding: `close-clean` is dead UI, not an unimplemented capability
+
+Current-repository evidence (no git history consulted): `close-clean` appeared in exactly one place, `data.ts`'s `core.completed` item list, dispatched through `App.tsx`'s `workflowActionId` passthrough to an action id the engine never defines. Searching the engine for anything that deletes a worktree finds `workspace.cleanup` (`effect-runner.ts`), which runs `git worktree remove --force` (skipping wiki/research targets, which have no worktree). That effect is not dormant or half-built: `runtime.ts`'s effect-completion handler unconditionally enqueues `workspace.cleanup` immediately after every `workspace.close` effect completes, for every repository-backed workflow. In other words, the ordinary "Close Herdr workspace" action (`close`) already deletes the worktree as part of closing — automatically, not on request.
+
+So `close-clean` was never a wanted-but-unimplemented capability; the capability it names already exists and already fires on plain `close`. It is dead UI: a second button promising a behavior the first button already performs unconditionally. Resolution per D2's dead-UI branch: delete the item outright (task 2.2), with no follow-up change needed — there is nothing left to implement.
 
 ## Risks / Trade-offs
 

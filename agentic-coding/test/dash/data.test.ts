@@ -446,11 +446,54 @@ test("demo dashboard includes usability verifier", () => {
 	);
 });
 
+// Engine `actions` arrays mirroring src/workflow/steps/{lifecycle,research}.ts
+// `developerActions` output, used to drive `requiredUserActionFor` the way
+// the real dashboard does (via `WorkflowState.availableActions`).
+const PLAN_APPROVAL_ACTIONS = [
+	{ id: "approve-plan", label: "Approve plan", confirmation: "confirm" },
+	{
+		id: "review-comments",
+		label: "Request plan changes",
+		confirmation: "confirm",
+	},
+	{ id: "reject-plan", label: "Reject plan", confirmation: "reason" },
+];
+const DEVELOPER_REVIEW_ACTIONS = [
+	{ id: "approve-review", label: "Approve change", confirmation: "confirm" },
+	{ id: "review-comments", label: "Request changes", confirmation: "confirm" },
+];
+const WIKI_APPROVAL_ACTIONS = [
+	{ id: "approve-wiki", label: "Approve wiki", confirmation: "confirm" },
+	{
+		id: "review-comments",
+		label: "Request wiki changes",
+		confirmation: "confirm",
+	},
+];
+const RESEARCH_ACTIONS = [
+	{
+		id: "research-follow-up",
+		label: "Ask researcher follow-up",
+		confirmation: "reason",
+	},
+	{ id: "close-research", label: "Close research", confirmation: "confirm" },
+];
+const COMPLETED_WITH_PR_ACTIONS = [
+	{ id: "create-pr", label: "Create pull request", confirmation: "confirm" },
+	{ id: "close", label: "Close workflow", confirmation: "confirm" },
+];
+const COMPLETED_CLOSE_ONLY_ACTIONS = [
+	{ id: "close", label: "Close workflow", confirmation: "confirm" },
+];
+
 test("required user actions keep plan review and approval inside modal flow", () => {
-	const action = requiredUserActionFor("proposed", false, [
-		"proposal.md",
-		"tasks.md",
-	]);
+	const action = requiredUserActionFor(
+		"proposed",
+		false,
+		["proposal.md", "tasks.md"],
+		undefined,
+		PLAN_APPROVAL_ACTIONS,
+	);
 
 	expect(action?.key).toBe("plan-review");
 	expect(action?.title).toContain("Plan review");
@@ -459,38 +502,73 @@ test("required user actions keep plan review and approval inside modal flow", ()
 	expect(action?.items).toEqual([]);
 
 	// Engine step id naming must resolve to the same stable action key.
-	const engineAction = requiredUserActionFor("core.plan-approval", false, []);
+	const engineAction = requiredUserActionFor(
+		"core.plan-approval",
+		false,
+		[],
+		undefined,
+		PLAN_APPROVAL_ACTIONS,
+	);
 	expect(engineAction?.key).toBe("plan-review");
 	expect(engineAction?.items).toEqual([]);
+
+	// A step with no pending action (an empty-but-present array) renders none,
+	// distinct from the legacy no-array fallback.
+	expect(
+		requiredUserActionFor("core.plan-approval", false, [], undefined, []),
+	).toBeUndefined();
 });
 
 test("required user actions expose developer review and completion commands", () => {
-	const review = requiredUserActionFor("developer-review");
+	const review = requiredUserActionFor(
+		"developer-review",
+		false,
+		[],
+		undefined,
+		DEVELOPER_REVIEW_ACTIONS,
+	);
 	expect(review).toBeDefined();
 	expect(review?.key).toBe("developer-review");
 	expect(review?.title).toContain("Developer review");
 	expect(review?.items).toEqual([]); // trigger-only: popup opens the changed-files view directly
 
 	// Engine step id naming must resolve to the same stable action key.
-	const engineReview = requiredUserActionFor("core.developer-review");
+	const engineReview = requiredUserActionFor(
+		"core.developer-review",
+		false,
+		[],
+		undefined,
+		DEVELOPER_REVIEW_ACTIONS,
+	);
 	expect(engineReview?.key).toBe("developer-review");
 	expect(engineReview?.items).toEqual([]);
 	expect(
-		requiredUserActionFor("completed", false)?.items.map((item) => item.label),
-	).toEqual([
-		"Create MR/PR",
-		"Close Herdr workspace",
-		"Close and delete worktree",
-		"Not now",
-	]);
+		requiredUserActionFor(
+			"completed",
+			false,
+			[],
+			undefined,
+			COMPLETED_WITH_PR_ACTIONS,
+		)?.items.map((item) => item.label),
+	).toEqual(["Create MR/PR", "Close Herdr workspace", "Not now"]);
+	// Once a pull request already exists, the engine stops reporting `create-pr`
+	// (runtime.ts view() filters it once a pull-request.create effect exists) —
+	// the dashboard only reflects that, it never re-derives it from `prCreated`.
 	expect(
-		requiredUserActionFor("completed", true)?.items.map((item) => item.label),
-	).toEqual(["Close Herdr workspace", "Close and delete worktree", "Not now"]);
+		requiredUserActionFor(
+			"completed",
+			true,
+			[],
+			undefined,
+			COMPLETED_CLOSE_ONLY_ACTIONS,
+		)?.items.map((item) => item.label),
+	).toEqual(["Close Herdr workspace", "Not now"]);
 	const proposal = requiredUserActionFor(
 		"core.completed",
 		false,
 		[],
 		"openspec-propose",
+		COMPLETED_CLOSE_ONLY_ACTIONS,
 	);
 	expect(proposal?.items.map((item) => item.label)).toEqual([
 		"Close Herdr workspace",
@@ -505,21 +583,151 @@ test("required user actions expose developer review and completion commands", ()
 		false,
 		[],
 		"openspec-propose",
+		PLAN_APPROVAL_ACTIONS,
 	);
 	expect(planAction?.prompt).toContain("before completing the proposal");
 	expect(requiredUserActionFor("verify")).toBeUndefined();
 	// Research at core.completed is close-only, same as the wiki-only flow:
-	// create-pr is never offered for a documentation-only workflow.
+	// create-pr is never offered for a documentation-only workflow. This now
+	// comes from the engine's action list, not a dashboard definition-id check.
 	const researchCompleted = requiredUserActionFor(
 		"core.completed",
 		false,
 		[],
 		"research",
+		COMPLETED_CLOSE_ONLY_ACTIONS,
 	);
 	expect(researchCompleted?.items.map((item) => item.label)).toEqual([
 		"Close Herdr workspace",
 		"Not now",
 	]);
+});
+
+test("required user actions offer exactly what the engine reports for wiki-comments and openspec-full completion", () => {
+	// The known divergence this change fixes: wiki-comments is close-only
+	// because the engine's core.completed action list omits create-pr for it,
+	// not because of a separate dashboard allowlist.
+	const wikiComments = requiredUserActionFor(
+		"core.completed",
+		false,
+		[],
+		"wiki-comments",
+		COMPLETED_CLOSE_ONLY_ACTIONS,
+	);
+	expect(wikiComments?.items.map((item) => item.label)).toEqual([
+		"Close Herdr workspace",
+		"Not now",
+	]);
+	expect(
+		wikiComments?.items.some(
+			(item) => "value" in item && item.value === "create-pr",
+		),
+	).toBe(false);
+
+	// A completed openspec-full workflow still offers create-pr, because the
+	// engine still reports it.
+	const openspecFull = requiredUserActionFor(
+		"core.completed",
+		false,
+		[],
+		"openspec-full",
+		COMPLETED_WITH_PR_ACTIONS,
+	);
+	expect(openspecFull?.items.map((item) => item.label)).toEqual([
+		"Create MR/PR",
+		"Close Herdr workspace",
+		"Not now",
+	]);
+
+	// The other known divergence: close-clean is not an engine action, so it is
+	// never rendered, regardless of definition id.
+	for (const result of [wikiComments, openspecFull]) {
+		expect(
+			result?.items.some(
+				(item) => "value" in item && item.value === "close-clean",
+			),
+		).toBe(false);
+	}
+});
+
+test("required user actions never dispatch an id the engine did not report", () => {
+	const cases: Array<
+		[string, string | undefined, typeof COMPLETED_WITH_PR_ACTIONS]
+	> = [
+		["core.plan-approval", undefined, PLAN_APPROVAL_ACTIONS],
+		["core.developer-review", undefined, DEVELOPER_REVIEW_ACTIONS],
+		["core.wiki-approval", undefined, WIKI_APPROVAL_ACTIONS],
+		["core.research", "research", RESEARCH_ACTIONS],
+		["core.completed", "openspec-full", COMPLETED_WITH_PR_ACTIONS],
+		["core.completed", "wiki-comments", COMPLETED_CLOSE_ONLY_ACTIONS],
+	];
+	for (const [phase, definitionId, actions] of cases) {
+		const result = requiredUserActionFor(
+			phase,
+			false,
+			[],
+			definitionId,
+			actions,
+		);
+		const ids = new Set(actions.map((action) => action.id));
+		for (const item of result?.items ?? []) {
+			if (item.kind === "dismiss") continue;
+			expect(ids.has(item.value)).toBe(true);
+		}
+	}
+});
+
+test("required user actions render an unmapped action id using the engine's own label", () => {
+	// design D1: a `core.completed` action id with no dashboard copy entry
+	// degrades to a usable button carrying the engine's label, instead of
+	// disappearing.
+	const result = requiredUserActionFor(
+		"core.completed",
+		false,
+		[],
+		"openspec-full",
+		[
+			{ id: "close", label: "Close workflow", confirmation: "confirm" },
+			{
+				id: "archive-and-notify",
+				label: "Archive and notify the team",
+				confirmation: "confirm",
+			},
+		],
+	);
+	expect(result?.items.map((item) => item.label)).toEqual([
+		"Close Herdr workspace",
+		"Archive and notify the team",
+		"Not now",
+	]);
+	expect(
+		result?.items.some(
+			(item) => "value" in item && item.value === "archive-and-notify",
+		),
+	).toBe(true);
+});
+
+test("required user actions fall back to the legacy phase-derived set only when no actions array is present", () => {
+	// No `actions` argument at all: this dashboard's demo fixture and any
+	// pre-engine store view. Every legacy phase name still resolves.
+	expect(requiredUserActionFor("proposed")?.key).toBe("plan-review");
+	expect(requiredUserActionFor("wiki-approval")?.key).toBe("wiki-review");
+	expect(requiredUserActionFor("developer-review")?.key).toBe(
+		"developer-review",
+	);
+	expect(
+		requiredUserActionFor("research")?.items.map((item) => item.label),
+	).toEqual(["Close research", "Not now"]);
+	// close-clean is removed everywhere (design D2), including this fallback.
+	expect(
+		requiredUserActionFor("completed")?.items.map((item) => item.label),
+	).toEqual(["Create MR/PR", "Close Herdr workspace", "Not now"]);
+
+	// A present-but-empty array is authoritative and distinct from "no array":
+	// it renders no action even though the legacy phase table would have.
+	expect(
+		requiredUserActionFor("proposed", false, [], undefined, []),
+	).toBeUndefined();
 });
 
 test("required user actions for research wiki-approval use the standard trigger-only wiki review, not a close-research list item", () => {
@@ -528,6 +736,7 @@ test("required user actions for research wiki-approval use the standard trigger-
 		false,
 		[],
 		"research",
+		WIKI_APPROVAL_ACTIONS,
 	);
 	expect(action?.key).toBe("wiki-review");
 	// Trigger-only: the wiki-review popup drives approve/request-changes, so
@@ -535,7 +744,13 @@ test("required user actions for research wiki-approval use the standard trigger-
 	expect(action?.items).toEqual([]);
 
 	// Legacy phase naming resolves to the same stable action set.
-	const legacy = requiredUserActionFor("wiki-approval", false, [], "research");
+	const legacy = requiredUserActionFor(
+		"wiki-approval",
+		false,
+		[],
+		"research",
+		WIKI_APPROVAL_ACTIONS,
+	);
 	expect(legacy?.key).toBe("wiki-review");
 	expect(legacy?.items).toEqual([]);
 
@@ -548,7 +763,13 @@ test("required user actions for research wiki-approval use the standard trigger-
 });
 
 test("required user actions for active research exclude any developer wiki-drafting trigger", () => {
-	const action = requiredUserActionFor("core.research", false, [], "research");
+	const action = requiredUserActionFor(
+		"core.research",
+		false,
+		[],
+		"research",
+		RESEARCH_ACTIONS,
+	);
 	expect(action?.key).toBe("research");
 	expect(action?.items.map((item) => item.label)).toEqual([
 		"Close research",
@@ -561,7 +782,13 @@ test("required user actions for active research exclude any developer wiki-draft
 	).toBe(false);
 
 	// Legacy phase naming resolves to the same stable action set.
-	const legacyAction = requiredUserActionFor("research", false, [], "research");
+	const legacyAction = requiredUserActionFor(
+		"research",
+		false,
+		[],
+		"research",
+		RESEARCH_ACTIONS,
+	);
 	expect(legacyAction?.items.map((item) => item.label)).toEqual([
 		"Close research",
 		"Not now",

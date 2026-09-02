@@ -1878,14 +1878,34 @@ export interface RequiredUserAction {
 	items: RequiredUserActionItem[];
 }
 
+/** Dashboard-owned copy for `core.completed` action ids. An id the engine
+ * reports with no entry here still renders, using the engine's own label
+ * (design D1) — a missing translation degrades to a usable button rather
+ * than disappearing. */
+const COMPLETED_ACTION_LABELS: Record<string, string> = {
+	"create-pr": "Create MR/PR",
+	close: "Close Herdr workspace",
+};
+
 export function requiredUserActionFor(
 	phase: string,
 	prCreated = false,
 	_artifacts: string[] = [],
 	definitionId?: string,
+	/** The engine view's available actions for the current step. `undefined`
+	 * means no view carries this information at all (this dashboard's demo
+	 * fixture, or a pre-engine store) and the legacy phase-derived set below
+	 * applies. A present-but-empty array is authoritative and renders no
+	 * action. */
+	actions?: Array<{ id: string; label: string; confirmation: string }>,
 ): RequiredUserAction | undefined {
 	const later = { label: "Not now", kind: "dismiss" } as const;
+	if (actions !== undefined && actions.length === 0) return undefined;
+	const hasAction = (id: string) =>
+		actions === undefined || actions.some((action) => action.id === id);
+
 	if (phase === "proposed" || phase === "core.plan-approval") {
+		if (!hasAction("approve-plan")) return undefined;
 		const proposal =
 			definitionId === "openspec-propose" ||
 			definitionId === "openspec-fusion-propose";
@@ -1901,7 +1921,8 @@ export function requiredUserActionFor(
 			items: [],
 		};
 	}
-	if (phase === "wiki-approval" || phase === "core.wiki-approval")
+	if (phase === "wiki-approval" || phase === "core.wiki-approval") {
+		if (!hasAction("approve-wiki")) return undefined;
 		return {
 			key: "wiki-review",
 			title: "Action required · Wiki review",
@@ -1916,7 +1937,9 @@ export function requiredUserActionFor(
 			// there are no selectable items to render in the generic ListViewModal.
 			items: [],
 		};
-	if (phase === "developer-review" || phase === "core.developer-review")
+	}
+	if (phase === "developer-review" || phase === "core.developer-review") {
+		if (!hasAction("approve-review")) return undefined;
 		return {
 			// Stable key independent of legacy vs engine (`core.*`) phase naming,
 			// so App.tsx's direct-open matching fires for both.
@@ -1927,7 +1950,9 @@ export function requiredUserActionFor(
 			// there are no selectable items to render in the generic ListViewModal.
 			items: [],
 		};
-	if (phase === "research" || phase === "core.research")
+	}
+	if (phase === "research" || phase === "core.research") {
+		if (!hasAction("close-research")) return undefined;
 		return {
 			key: "research",
 			title: "Research active",
@@ -1942,7 +1967,32 @@ export function requiredUserActionFor(
 				later,
 			],
 		};
+	}
 	if (phase === "completed" || phase === "core.completed") {
+		if (actions !== undefined) {
+			// Availability comes entirely from the engine's action list: whatever
+			// it reports (create-pr present or absent, per its close-only manifest
+			// policy and whether a pull request already exists) is exactly what
+			// renders, with no separate dashboard allowlist.
+			const hasCreatePr = actions.some((action) => action.id === "create-pr");
+			return {
+				key: `${phase}:${hasCreatePr ? "pr-available" : "closed"}`,
+				title: "Action required · Workflow complete",
+				prompt: hasCreatePr
+					? "Create MR/PR or close workspace."
+					: "Close workspace when finished.",
+				items: [
+					...actions.map((action) => ({
+						label: COMPLETED_ACTION_LABELS[action.id] ?? action.label,
+						kind: "workflow" as const,
+						value: action.id,
+					})),
+					later,
+				],
+			};
+		}
+		// Legacy fallback: no `actions` array at all, so there is no engine data
+		// to consult. Derives close-only the pre-engine way.
 		const proposal =
 			definitionId === "openspec-propose" ||
 			definitionId === "openspec-fusion-propose";
@@ -1971,15 +2021,6 @@ export function requiredUserActionFor(
 					kind: "workflow",
 					value: "close",
 				},
-				...(!closeOnly
-					? [
-							{
-								label: "Close and delete worktree",
-								kind: "workflow" as const,
-								value: "close-clean",
-							},
-						]
-					: []),
 				later,
 			],
 		};
