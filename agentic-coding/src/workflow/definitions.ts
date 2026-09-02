@@ -806,8 +806,14 @@ export function registerBuiltins(
 			label: "No OpenSpec",
 			initial: "core.implementation",
 			terminal: ["core.closed"],
-			steps: [...common, "core.delivery", "core.completed", "core.closed"],
-			edges: workflowEdges(false, rounds),
+			steps: [
+				...common,
+				...(wikiGate ? ["core.wiki", "core.wiki-approval"] : []),
+				"core.delivery",
+				"core.completed",
+				"core.closed",
+			],
+			edges: workflowEdges(false, rounds, wikiGate),
 		},
 		{
 			id: "openspec-fusion-full",
@@ -1160,7 +1166,9 @@ function workflowEdges(
 		? wikiGate && wikiBeforeArchive
 			? "core.wiki"
 			: "core.archive"
-		: "core.delivery";
+		: wikiGate
+			? "core.wiki"
+			: "core.delivery";
 	return [
 		{ from: "core.implementation", outcome: "complete", to: "core.triage" },
 		{
@@ -1329,7 +1337,45 @@ function workflowEdges(
 							loop: { maxAttempts: 3 },
 						},
 					] as const)
-			: []),
+			: wikiGate
+				? ([
+						{
+							from: "core.wiki",
+							outcome: "complete",
+							to: "core.wiki-approval",
+						},
+						{
+							from: "core.wiki",
+							outcome: "blocked",
+							to: "core.wiki",
+							loop: { maxAttempts: 3 },
+						},
+						{
+							from: "core.wiki",
+							outcome: "failed",
+							to: "core.wiki",
+							loop: { maxAttempts: 3 },
+						},
+						{
+							from: "core.wiki-approval",
+							outcome: "approve",
+							to: "core.delivery",
+							effects: [
+								{
+									kind: "wiki.verify",
+									idempotencyKey: "wiki.verify",
+									payload: {},
+								},
+							],
+						},
+						{
+							from: "core.wiki-approval",
+							outcome: "comments",
+							to: "core.wiki",
+							loop: { maxAttempts: 6 },
+						},
+					] as const)
+				: []),
 		{ from: "core.delivery", outcome: "complete", to: "core.completed" },
 		{
 			from: "core.delivery",
