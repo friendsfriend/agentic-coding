@@ -508,6 +508,43 @@ test("required user actions expose developer review and completion commands", ()
 	);
 	expect(planAction?.prompt).toContain("before completing the proposal");
 	expect(requiredUserActionFor("verify")).toBeUndefined();
+	// Research at core.completed is close-only, same as the wiki-only flow:
+	// create-pr is never offered for a documentation-only workflow.
+	const researchCompleted = requiredUserActionFor(
+		"core.completed",
+		false,
+		[],
+		"research",
+	);
+	expect(researchCompleted?.items.map((item) => item.label)).toEqual([
+		"Close Herdr workspace",
+		"Not now",
+	]);
+});
+
+test("required user actions for research wiki-approval use the standard trigger-only wiki review, not a close-research list item", () => {
+	const action = requiredUserActionFor(
+		"core.wiki-approval",
+		false,
+		[],
+		"research",
+	);
+	expect(action?.key).toBe("wiki-review");
+	// Trigger-only: the wiki-review popup drives approve/request-changes, so
+	// there is no generic list item (and, in particular, no close-research).
+	expect(action?.items).toEqual([]);
+
+	// Legacy phase naming resolves to the same stable action set.
+	const legacy = requiredUserActionFor("wiki-approval", false, [], "research");
+	expect(legacy?.key).toBe("wiki-review");
+	expect(legacy?.items).toEqual([]);
+
+	// The wiki step itself is an agent step (no developer action pending) for
+	// research now, same as the standalone wiki flow: no close-research escape
+	// hatch is advertised once drafting begins.
+	expect(
+		requiredUserActionFor("core.wiki", false, [], "research"),
+	).toBeUndefined();
 });
 
 test("required user actions for active research exclude any developer wiki-drafting trigger", () => {

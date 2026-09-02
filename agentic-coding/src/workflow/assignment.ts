@@ -11,6 +11,13 @@ export interface RenderedAssignment {
 	digest: string;
 	bytes: number;
 }
+/** Maps a wiki-family role to the one role-specific approach asset it reads,
+ * out of the several pinned under the core.wiki step (see registerBuiltins'
+ * INSTRUCTION_BY_STEP in definitions.ts). */
+const WIKI_ROLE_ASSET: Record<string, string> = {
+	wiki: "wiki-openspec.md",
+	"research-wiki": "wiki-research.md",
+};
 function readPinnedAsset(
 	name: string,
 	expected: string,
@@ -51,15 +58,25 @@ export function renderAssignment(
 	);
 	const protocolHash = createHash("sha256").update(protocol).digest("hex");
 	const roleAsset = assignment.role.replace(/-verifier$/, "");
-	const assets = step.instructionAssets.flatMap((name, index) =>
-		name === "workflow-agent-protocol.md"
-			? []
-			: name === "verification.md" ||
-					!name.startsWith("verification-") ||
-					name === `verification-${roleAsset}.md`
+	// Two role families select one variant asset out of several pinned for the
+	// step, instead of every asset unconditionally: verification roles pick
+	// their own severity-specific file, and the wiki roles ('wiki' for
+	// discovery-based openspec/implementation drafting, 'research-wiki' for
+	// directive-first research-handoff drafting) pick their own approach file.
+	// Any other pinned asset for the step is always included.
+	const wikiAsset = WIKI_ROLE_ASSET[assignment.role];
+	const assets = step.instructionAssets.flatMap((name, index) => {
+		if (name === "workflow-agent-protocol.md") return [];
+		if (name.startsWith("verification-"))
+			return name === `verification-${roleAsset}.md`
 				? [readPinnedAsset(name, step.instructionDigests[index], assetRoot)]
-				: [],
-	);
+				: [];
+		if (name.startsWith("wiki-"))
+			return name === wikiAsset
+				? [readPinnedAsset(name, step.instructionDigests[index], assetRoot)]
+				: [];
+		return [readPinnedAsset(name, step.instructionDigests[index], assetRoot)];
+	});
 	const handoff = assignment.allowedOutcomes.includes("complete")
 		? "agentic-coding workflow handoff --outcome complete" +
 			(assignment.output ? ' --artifact "$HERDR_OUTPUT"' : "")

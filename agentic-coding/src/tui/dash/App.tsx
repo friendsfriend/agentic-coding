@@ -1400,10 +1400,7 @@ export function App(props: {
 			openDeveloperReview();
 			return true;
 		}
-		if (
-			(action.key === "plan-review" || action.key === "wiki-review") &&
-			data().state.definition?.id !== "research"
-		) {
+		if (action.key === "plan-review" || action.key === "wiki-review") {
 			// Review gates open their popup directly; no empty generic selection list.
 			promptedUserActionKey = action.key;
 			openPlanReview();
@@ -2614,10 +2611,7 @@ export function App(props: {
 				openDeveloperReview();
 				return;
 			}
-			if (
-				(action.key === "plan-review" || action.key === "wiki-review") &&
-				data().state.definition?.id !== "research"
-			) {
+			if (action.key === "plan-review" || action.key === "wiki-review") {
 				// Auto-open trigger-only review actions directly, not the generic
 				// ListViewModal (there are no selectable items).
 				openPlanReview();

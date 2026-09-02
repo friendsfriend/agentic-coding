@@ -1808,14 +1808,13 @@ export class WorkflowEngine {
 		if (command.actionId === "close-research") {
 			if (
 				snapshot.definition.id !== "research" ||
-				snapshot.currentStep === "core.closed"
+				snapshot.currentStep !== "core.research"
 			)
 				throw new WorkflowRuntimeError(
 					"unavailable",
-					"close-research is only available while research is active",
+					"close-research is only available while research is purely conversational (core.research)",
 				);
-			if (snapshot.definition.id === "research")
-				this.validateSourceBaseline(snapshot);
+			this.validateSourceBaseline(snapshot);
 			const active = this.runs(db, snapshot.workflowId).filter((run) =>
 				snapshot.step.activeRunIds.includes(run.id),
 			);
@@ -2760,7 +2759,7 @@ export class WorkflowEngine {
 		const researchWikiPromotion =
 			row.kind === "wiki.verify" &&
 			snapshot.definition.id === "research" &&
-			snapshot.currentStep === "core.closed";
+			snapshot.currentStep === "core.completed";
 		const setupBeforeEntry =
 			row.kind === "workspace.setup" &&
 			!snapshot.step.activeRunIds.length &&
@@ -3010,44 +3009,43 @@ export class WorkflowEngine {
 			return [{ id: "resume", label: "Resume", confirmation: "confirm" }];
 		const actions: WorkflowActionView[] =
 			snapshot.definition.id === "research" &&
-			snapshot.currentStep !== "core.closed"
-				? [
-						...(snapshot.currentStep === "core.research"
-							? [
-									{
-										id: "research-follow-up",
-										label: "Ask researcher follow-up",
-										confirmation: "reason" as const,
-										input: {
-											schemaId: "core.research-follow-up",
-											schemaVersion: 1,
-										},
+			snapshot.currentStep !== "core.closed" &&
+			snapshot.currentStep !== "core.completed"
+				? snapshot.currentStep === "core.research"
+					? [
+							{
+								id: "research-follow-up",
+								label: "Ask researcher follow-up",
+								confirmation: "reason" as const,
+								input: {
+									schemaId: "core.research-follow-up",
+									schemaVersion: 1,
+								},
+							},
+							{
+								id: "close-research",
+								label: "Close research",
+								confirmation: "confirm",
+							},
+						]
+					: snapshot.currentStep === "core.wiki-approval"
+						? [
+								{
+									id: "approve-wiki",
+									label: "Approve wiki",
+									confirmation: "confirm" as const,
+								},
+								{
+									id: "review-comments",
+									label: "Request wiki changes",
+									confirmation: "confirm" as const,
+									input: {
+										schemaId: "core.review-comments",
+										schemaVersion: 1,
 									},
-								]
-							: snapshot.currentStep === "core.wiki-approval"
-								? [
-										{
-											id: "approve-wiki",
-											label: "Approve wiki",
-											confirmation: "confirm" as const,
-										},
-										{
-											id: "review-comments",
-											label: "Request wiki changes",
-											confirmation: "confirm" as const,
-											input: {
-												schemaId: "core.review-comments",
-												schemaVersion: 1,
-											},
-										},
-									]
-								: []),
-						{
-							id: "close-research",
-							label: "Close research",
-							confirmation: "confirm",
-						},
-					]
+								},
+							]
+						: []
 				: snapshot.currentStep === "core.plan-approval"
 					? [
 							{
@@ -3099,47 +3097,30 @@ export class WorkflowEngine {
 										},
 									},
 								]
-							: snapshot.definition.id === "research" &&
-									snapshot.currentStep === "core.research"
+							: snapshot.currentStep === "core.completed"
 								? [
+										...([
+											"openspec-propose",
+											"openspec-fusion-propose",
+											"wiki",
+											"wiki-comments",
+											"research",
+										].includes(snapshot.definition.id)
+											? []
+											: [
+													{
+														id: "create-pr",
+														label: "Create pull request",
+														confirmation: "confirm" as const,
+													},
+												]),
 										{
-											id: "research-follow-up",
-											label: "Ask researcher follow-up",
-											confirmation: "none",
-											input: {
-												schemaId: "core.research-follow-up",
-												schemaVersion: 1,
-											},
-										},
-										{
-											id: "close-research",
-											label: "Close research",
+											id: "close",
+											label: "Close workflow",
 											confirmation: "confirm",
 										},
 									]
-								: snapshot.currentStep === "core.completed"
-									? [
-											...([
-												"openspec-propose",
-												"openspec-fusion-propose",
-												"wiki",
-												"wiki-comments",
-											].includes(snapshot.definition.id)
-												? []
-												: [
-														{
-															id: "create-pr",
-															label: "Create pull request",
-															confirmation: "confirm" as const,
-														},
-													]),
-											{
-												id: "close",
-												label: "Close workflow",
-												confirmation: "confirm",
-											},
-										]
-									: [];
+								: [];
 		return actions;
 	}
 	private viewById(repo: string, id: string): WorkflowView {
@@ -3792,7 +3773,8 @@ function roleForStep(step: string, snapshot: WorkflowSnapshot): string[] {
 			: snapshot.step.testRunStarted
 				? ["test-verifier"]
 				: ["quality-verifier"];
-	if (step === "core.wiki") return ["wiki"];
+	if (step === "core.wiki")
+		return [snapshot.definition.id === "research" ? "research-wiki" : "wiki"];
 	if (step === "core.research") return ["researcher"];
 	if (step === "core.archive") return ["archive"];
 	return [];

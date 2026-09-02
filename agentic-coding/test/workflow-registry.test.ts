@@ -161,6 +161,48 @@ describe("workflow registry", () => {
 				/missing workflow definition/,
 			);
 	});
+	test("research graph routes wiki approval through the completed close gate", () => {
+		const registry = registerBuiltins();
+		const research = registry.definition("research", 106);
+		expect(research.steps).toEqual([
+			"core.research",
+			"core.wiki",
+			"core.wiki-approval",
+			"core.completed",
+			"core.closed",
+		]);
+		expect(research.initial).toBe("core.research");
+		expect(research.terminal).toEqual(["core.closed"]);
+		for (const forbidden of [
+			"core.implementation",
+			"core.verification",
+			"core.archive",
+			"core.delivery",
+		])
+			expect(research.steps).not.toContain(forbidden);
+		expect(
+			research.edges.find(
+				(edge) =>
+					edge.from === "core.wiki-approval" && edge.outcome === "approve",
+			),
+		).toMatchObject({
+			to: "core.completed",
+			effects: [
+				{ kind: "wiki.verify", idempotencyKey: "wiki.verify", payload: {} },
+			],
+		});
+		expect(
+			research.edges.find(
+				(edge) =>
+					edge.from === "core.wiki-approval" && edge.outcome === "comments",
+			),
+		).toMatchObject({ to: "core.wiki" });
+		expect(
+			research.edges.find(
+				(edge) => edge.from === "core.completed" && edge.outcome === "close",
+			),
+		).toMatchObject({ to: "core.closed" });
+	});
 	test("configured verification policy is pinned as a distinct definition", () => {
 		const registry = registerBuiltins(undefined, 20);
 		const legacy = registry.definition("openspec-full", 1);
