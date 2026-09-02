@@ -43,6 +43,7 @@ import {
 	wikiWorkflowDataRoot,
 	wikiWorkflowTarget,
 } from "./runtime.ts";
+import type { StepBehavior } from "./steps/types.ts";
 import {
 	appendLog,
 	ensureBundle,
@@ -989,46 +990,24 @@ export function listProjects(): Array<{
 export function rolesForDefinition(
 	definitionId: string,
 	steps: readonly string[],
-	registry: { step(id: string): { actor: string } },
+	registry: {
+		step(id: string): { actor: string; behavior?: StepBehavior };
+	},
 	fusionPlannerCount = 0,
 ): Record<string, string[]> {
 	const roles: Record<string, string[]> = {};
 	for (const stepId of steps) {
-		if (registry.step(stepId).actor !== "agent") continue;
-		roles[stepId] =
-			stepId === "core.plan"
-				? ["planner"]
-				: stepId === "fusion.plan"
-					? Array.from(
-							{ length: fusionPlannerCount },
-							(_, index) => `planner-${index + 1}`,
-						)
-					: stepId === "fusion.consolidate"
-						? ["consolidator"]
-						: stepId === "core.implementation"
-							? ["worker"]
-							: stepId === "core.triage"
-								? ["triage"]
-								: stepId === "core.verification"
-									? [
-											"quality-verifier",
-											"security-verifier",
-											"performance-verifier",
-											"openspec-verifier",
-											"usability-verifier",
-											"test-verifier",
-										].filter(
-											(role) =>
-												definitionId !== "no-openspec" ||
-												role !== "openspec-verifier",
-										)
-									: stepId === "core.wiki"
-										? [definitionId === "research" ? "research-wiki" : "wiki"]
-										: stepId === "core.research"
-											? ["researcher"]
-											: stepId === "core.archive"
-												? ["archive"]
-												: [];
+		const step = registry.step(stepId);
+		if (step.actor !== "agent") continue;
+		const candidateRoles = step.behavior?.candidateRoles;
+		if (!candidateRoles)
+			throw new Error(`missing candidate roles for agent step ${stepId}`);
+		const resolved = candidateRoles({ definitionId, fusionPlannerCount });
+		if (!Array.isArray(resolved))
+			throw new Error(`invalid candidate roles for ${stepId}: expected array`);
+		if (stepId !== "fusion.plan" && !resolved.length)
+			throw new Error(`empty candidate roles for agent step ${stepId}`);
+		roles[stepId] = resolved;
 	}
 	return roles;
 }
