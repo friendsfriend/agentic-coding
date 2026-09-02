@@ -1,5 +1,18 @@
 import path from "node:path";
 
+/** Shared with `src/workflow/steps/*.ts` so step behavior hooks can throw the
+ * same engine error the runtime recognizes, without importing runtime.ts and
+ * creating a cycle back through definitions.ts -> steps/index.ts. */
+export class WorkflowRuntimeError extends Error {
+	constructor(
+		readonly code: string,
+		message: string,
+		readonly currentRevision?: number,
+	) {
+		super(message);
+	}
+}
+
 export type ActorKind = "agent" | "developer" | "system";
 export type WorkflowStatus =
 	| "active"

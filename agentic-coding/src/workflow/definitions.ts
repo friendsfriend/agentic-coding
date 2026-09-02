@@ -13,6 +13,7 @@ import {
 	type Reduction,
 	type StepDefinition,
 	type WorkflowManifest,
+	type WorkflowManifestPolicy,
 	WorkflowRegistry,
 } from "./registry.ts";
 import { assertStepBehaviorCoverage, stepBehavior } from "./steps/index.ts";
@@ -1159,10 +1160,102 @@ export function registerBuiltins(
 				registry.registerWorkflow(definition);
 			}
 	}
+	// Manifest-policy tier (design D1): identical graphs to the wikiGate policy
+	// tier above, plus a declared `policy` block. Registered under its own
+	// version — per the digest-spreads-the-whole-manifest constraint in
+	// registry.ts's `digest()`, adding a field to an existing version would
+	// silently strand every in-flight workflow pinned to that digest — and in
+	// its own pass after every prior-tier round so it only ever appends to the
+	// registration order instead of interleaving with the tiers above.
+	for (const rounds of Array.from({ length: 20 }, (_, index) => index + 1)) {
+		const manifestPolicyVersion = definitionVersionForManifestPolicy(rounds);
+		for (const definition of manifests(rounds, manifestPolicyVersion, true)) {
+			const withPolicy = withManifestPolicy(definition);
+			assertStepBehaviorCoverage(withPolicy.steps);
+			registry.registerWorkflow(withPolicy);
+		}
+	}
 	return registry;
 }
 export function definitionVersionForPolicy(rounds: number): number {
 	return rounds + 100;
+}
+/** The version the app actually starts new workflows against — see D1. Prior
+ * tiers (legacy `wikiGate=false`, and the `wikiGate=true` tier without a
+ * `policy` block) stay registered so in-flight workflows pinned to them keep
+ * dispatching without repair. */
+export function definitionVersionForManifestPolicy(rounds: number): number {
+	return rounds + 200;
+}
+const MANIFEST_POLICY: Readonly<Record<string, WorkflowManifestPolicy>> = {
+	"openspec-full": {
+		targetKind: "repository",
+		checkoutRequired: false,
+		requiresReadOnlyResearcher: false,
+	},
+	"openspec-propose": {
+		targetKind: "repository",
+		checkoutRequired: true,
+		requiresReadOnlyResearcher: false,
+	},
+	"openspec-apply": {
+		targetKind: "repository",
+		checkoutRequired: false,
+		requiresReadOnlyResearcher: false,
+	},
+	"no-openspec": {
+		targetKind: "repository",
+		checkoutRequired: false,
+		requiresReadOnlyResearcher: false,
+	},
+	"openspec-fusion-full": {
+		targetKind: "repository",
+		checkoutRequired: false,
+		requiresReadOnlyResearcher: false,
+	},
+	"openspec-fusion-propose": {
+		targetKind: "repository",
+		checkoutRequired: true,
+		requiresReadOnlyResearcher: false,
+	},
+	// The repository-backed `wiki` workflow runs against a real checkout, in
+	// contrast to `wiki-comments`'s repository-independent centralized target.
+	wiki: {
+		targetKind: "repository",
+		checkoutRequired: true,
+		requiresReadOnlyResearcher: false,
+	},
+	"wiki-comments": {
+		targetKind: "wiki",
+		checkoutRequired: false,
+		requiresReadOnlyResearcher: false,
+	},
+	research: {
+		targetKind: "research",
+		checkoutRequired: false,
+		requiresReadOnlyResearcher: true,
+	},
+};
+function withManifestPolicy(manifest: WorkflowManifest): WorkflowManifest {
+	const policy = MANIFEST_POLICY[manifest.id];
+	if (!policy) throw new Error(`missing manifest policy for ${manifest.id}`);
+	return { ...manifest, policy };
+}
+/** A pre-policy definition version has no `policy` block (adding one would
+ * change its digest and strand every in-flight workflow pinned to it — see
+ * D1). `start()` still needs a policy value for every version, so it falls
+ * back to the same per-id table the current manifest-policy tier is built
+ * from; this is catalog data (identical to `PUBLIC_WORKFLOW_CATALOG` and
+ * `INSTRUCTION_BY_STEP` already being keyed by definition id), not a
+ * re-introduction of the scattered start-time id comparisons this stage
+ * removes. */
+export function effectiveManifestPolicy(definition: {
+	id: string;
+	policy?: WorkflowManifestPolicy;
+}): WorkflowManifestPolicy {
+	const policy = definition.policy ?? MANIFEST_POLICY[definition.id];
+	if (!policy) throw new Error(`missing manifest policy for ${definition.id}`);
+	return policy;
 }
 function workflowEdges(
 	archive: boolean,

@@ -54,6 +54,26 @@ export interface WorkflowEdge {
 		payload: unknown;
 	}[];
 }
+export type WorkflowTargetKind = "repository" | "wiki" | "research";
+/** Declarative replacement for the engine's former `isWikiWorkflowTarget` /
+ * `isResearchWorkflowTarget` / definition-id array checks at workflow start
+ * time (design D1). Optional so pre-policy definition versions keep
+ * registering — and keep their existing digest — unchanged; only manifests
+ * that opt in are validated below. */
+export interface WorkflowManifestPolicy {
+	targetKind: WorkflowTargetKind;
+	/** Repository-target workflows that must run against the checkout itself
+	 * (no worktree) — proposal-only flows and the repository-backed `wiki`
+	 * workflow. Meaningless (must be false) outside the repository target. */
+	checkoutRequired: boolean;
+	/** Only the research workflow's entry role must be forced read-only. */
+	requiresReadOnlyResearcher: boolean;
+}
+const TARGET_KINDS: readonly WorkflowTargetKind[] = [
+	"repository",
+	"wiki",
+	"research",
+];
 export interface WorkflowManifest {
 	id: string;
 	version: number;
@@ -66,6 +86,7 @@ export interface WorkflowManifest {
 	 * than this workflow can legally use (for example, wiki completion). */
 	allowedOutcomes?: Readonly<Record<string, readonly string[]>>;
 	defaultProfile?: string;
+	policy?: WorkflowManifestPolicy;
 }
 export interface CompiledWorkflowDefinition extends WorkflowManifest {
 	digest: string;
@@ -206,6 +227,22 @@ export class WorkflowRegistry {
 			new Set(manifest.steps).size !== manifest.steps.length
 		)
 			throw new Error(`invalid step list in ${manifest.id}`);
+		if (manifest.policy) {
+			const { targetKind, checkoutRequired, requiresReadOnlyResearcher } =
+				manifest.policy;
+			if (!TARGET_KINDS.includes(targetKind))
+				throw new Error(
+					`unknown policy target kind in ${manifest.id}: ${targetKind}`,
+				);
+			if (requiresReadOnlyResearcher && targetKind !== "research")
+				throw new Error(
+					`contradictory policy in ${manifest.id}: requiresReadOnlyResearcher without research target`,
+				);
+			if (checkoutRequired && targetKind !== "repository")
+				throw new Error(
+					`contradictory policy in ${manifest.id}: checkoutRequired outside repository target`,
+				);
+		}
 		const steps = new Map(manifest.steps.map((id) => [id, this.step(id)]));
 		for (const [id, step] of steps) {
 			if (step.actor !== "agent") continue;
@@ -335,6 +372,9 @@ export class WorkflowRegistry {
 			),
 			stepDigests: Object.freeze(stepDigests),
 			digest: digest({ ...manifest, stepDigests }),
+			...(manifest.policy
+				? { policy: Object.freeze({ ...manifest.policy }) }
+				: {}),
 		};
 		const key = `${compiled.id}@${compiled.version}`;
 		if (this.#definitions.has(key))

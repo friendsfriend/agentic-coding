@@ -15,7 +15,7 @@ import type {
 	WorkflowView,
 } from "../../workflow/contracts.ts";
 import {
-	definitionVersionForPolicy,
+	definitionVersionForManifestPolicy,
 	registerBuiltins,
 } from "../../workflow/definitions.ts";
 import { loadConfig } from "../../workflow/effects.ts";
@@ -265,7 +265,7 @@ export async function startWorkflowInProcess(
 		args.task,
 	);
 	const config = loadConfig();
-	const definitionVersion = definitionVersionForPolicy(
+	const definitionVersion = definitionVersionForManifestPolicy(
 		config.workflow.max_verification_rounds,
 	);
 	const registry = registerBuiltins(
@@ -282,7 +282,7 @@ export async function startWorkflowInProcess(
 		agents,
 	);
 	if (args.definitionId === "research")
-		routing = enforceResearchReadOnlyRouting(routing);
+		routing = enforceResearchReadOnlyRouting(routing, definition.initial);
 	for (const route of routing.routes)
 		preflightProfile(route.profile, registry.step(route.stepId).requirements);
 	const research = args.definitionId === "research";
@@ -339,7 +339,7 @@ export function startWikiCommentWorkflowInProcess(
 ): string {
 	const comments = validateWikiReviewComments(input);
 	const config = loadConfig();
-	const definitionVersion = definitionVersionForPolicy(
+	const definitionVersion = definitionVersionForManifestPolicy(
 		config.workflow.max_verification_rounds,
 	);
 	const registry = registerBuiltins(

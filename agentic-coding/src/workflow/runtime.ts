@@ -25,8 +25,12 @@ import {
 	type DeveloperQuestionAnswer,
 	parseDeveloperQuestionAnswer,
 	parseSnapshot,
+	WorkflowRuntimeError,
 } from "./contracts.ts";
-import { researchHandoffContract } from "./definitions.ts";
+import {
+	effectiveManifestPolicy,
+	researchHandoffContract,
+} from "./definitions.ts";
 import {
 	childTrace,
 	parseTraceparent,
@@ -36,9 +40,15 @@ import {
 import type {
 	CompiledWorkflowDefinition,
 	StepDefinition,
+	WorkflowEdge,
 	WorkflowRegistry,
 } from "./registry.ts";
 import { fusionPlannerRoles as stepFusionPlannerRoles } from "./steps/planning.ts";
+import type {
+	ArriveResult,
+	StepArrivalPrior,
+	StepBehavior,
+} from "./steps/types.ts";
 import {
 	conceptPath,
 	ensureBundle,
@@ -68,15 +78,8 @@ const EFFECT_KINDS = new Set<EffectKind>([
 	"workspace.close",
 	"workspace.cleanup",
 ]);
-export class WorkflowRuntimeError extends Error {
-	constructor(
-		readonly code: string,
-		message: string,
-		readonly currentRevision?: number,
-	) {
-		super(message);
-	}
-}
+
+export { WorkflowRuntimeError };
 export function validateChangeId(value: string): string {
 	if (!/^[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$/.test(value))
 		throw new WorkflowRuntimeError(
@@ -317,13 +320,20 @@ export class WorkflowEngine {
 	) {}
 	start(input: StartWorkflowInput): DispatchResult {
 		validateChangeId(input.changeId);
+		// Resolved before the target-kind guard so the guard reads the pinned
+		// definition's declared policy (design D1) instead of comparing
+		// `input.definitionId` against a literal id or id array.
+		const definition = this.registry.definition(
+			input.definitionId,
+			input.definitionVersion ?? 1,
+		);
+		const policy = effectiveManifestPolicy(definition);
 		const wikiOnlyTarget =
-			isWikiWorkflowTarget(input.repo) &&
-			input.definitionId === "wiki-comments";
+			isWikiWorkflowTarget(input.repo) && policy.targetKind === "wiki";
 		const researchTarget = isResearchWorkflowTarget(input.repo);
 		if (
 			(isWikiWorkflowTarget(input.repo) && !wikiOnlyTarget) ||
-			(researchTarget && input.definitionId !== "research")
+			(researchTarget && policy.targetKind !== "research")
 		)
 			throw new WorkflowRuntimeError(
 				"start-guard",
@@ -349,13 +359,10 @@ export class WorkflowEngine {
 					: path.resolve(input.worktree);
 		if (researchTarget) fs.mkdirSync(worktree, { recursive: true });
 		const resolvedWorktree = fs.realpathSync(worktree);
-		const definition = this.registry.definition(
-			input.definitionId,
-			input.definitionVersion ?? 1,
-		);
-		if (researchTarget) {
+		if (policy.requiresReadOnlyResearcher) {
 			const route = input.routing.routes.find(
-				(item) => item.stepId === "core.research" && item.role === "researcher",
+				(item) =>
+					item.stepId === definition.initial && item.role === "researcher",
 			);
 			if (
 				!route?.profile.capabilities.includes("read-only") ||
@@ -367,21 +374,17 @@ export class WorkflowEngine {
 					"research requires a read-only researcher profile without shell or edit capabilities",
 				);
 		}
-		const proposal = ["openspec-propose", "openspec-fusion-propose"].includes(
-			definition.id,
-		);
+		// Distinct from `policy.checkoutRequired`: this decides whether start
+		// seeds a source-content baseline, not whether checkout mode is
+		// required — `openspec-propose`/`openspec-fusion-propose` also require
+		// checkout but never seed this baseline.
 		const wikiOnly = definition.id === "wiki";
 		if (researchTarget && !input.metadata.task?.trim())
 			throw new WorkflowRuntimeError(
 				"start-guard",
 				"research requires non-empty task",
 			);
-		const sameCheckout = proposal || wikiOnly;
-		if (researchTarget && definition.id !== "research")
-			throw new WorkflowRuntimeError(
-				"start-guard",
-				"invalid research definition",
-			);
+		const sameCheckout = policy.checkoutRequired;
 		if (sameCheckout) {
 			if (input.mode !== "checkout")
 				throw new WorkflowRuntimeError(
@@ -2392,9 +2395,11 @@ export class WorkflowEngine {
 				"illegal-outcome",
 				`no ${outcome} transition from ${snapshot.currentStep}`,
 			);
-		const priorAttempt = snapshot.step.attempt;
-		const priorResults = snapshot.step.results;
-		const priorContext = snapshot.step.context;
+		const prior: StepArrivalPrior = {
+			attempt: snapshot.step.attempt,
+			results: snapshot.step.results,
+			context: snapshot.step.context,
+		};
 		if (edge.loop) {
 			const key = `${edge.from}:${edge.outcome}`;
 			const attempts = (snapshot.loopCounts[key] ?? 0) + 1;
@@ -2407,68 +2412,34 @@ export class WorkflowEngine {
 		}
 		snapshot.currentStep = edge.to;
 		snapshot.metadata.stepEnteredAt = nowIso(this.now);
-		snapshot.step = freshStep(edge.loop ? priorAttempt + 1 : 1);
-		if (edge.from === "fusion.plan" && edge.to === "fusion.plan")
-			// Retry of a failed role resumes collection: surviving validated
-			// drafts are preserved instead of re-fanning every planner.
-			snapshot.step.results = priorResults.filter(
-				(result) => result.role.startsWith("planner-") && result.outputDigest,
-			);
-		if (edge.to === "core.triage")
-			snapshot.step.attempt =
-				(snapshot.loopCounts["core.verification:round"] ?? 0) + 1;
-		if (edge.to === "core.verification") {
-			const round = (snapshot.loopCounts["core.verification:round"] ?? 0) + 1;
-			snapshot.loopCounts["core.verification:round"] = round;
-			snapshot.step.attempt = round;
+		snapshot.step = freshStep(edge.loop ? prior.attempt + 1 : 1);
+		const destination = this.registry.step(edge.to);
+		const arrival: ArriveResult =
+			destination.behavior?.onArrive?.({
+				snapshot,
+				edge,
+				outcome,
+				output,
+				prior,
+			}) ?? {};
+		if (arrival.attempt !== undefined) snapshot.step.attempt = arrival.attempt;
+		if (arrival.mode !== undefined) snapshot.step.mode = arrival.mode;
+		if (arrival.results !== undefined) snapshot.step.results = arrival.results;
+		if (arrival.selectedRoles !== undefined) {
+			snapshot.step.selectedRoles = arrival.selectedRoles;
+			if (!arrival.selectedRoles.length) snapshot.step.testRunStarted = true;
 		}
-		if (
-			(snapshot.definition.id === "wiki-comments" &&
-				priorContext !== undefined) ||
-			(edge.loop && priorContext !== undefined && edge.to === edge.from) ||
-			(output !== undefined &&
-				[
-					"core.plan",
-					"core.implementation",
-					"core.verification",
-					"core.wiki",
-					"fusion.consolidate",
-				].includes(edge.to)) ||
-			((edge.to === "core.wiki" || edge.to === "core.archive") &&
-				outcome === "comments") ||
-			(edge.to === "core.wiki-approval" && outcome === "complete")
-		)
-			snapshot.step.context =
-				snapshot.definition.id === "wiki-comments" && priorContext !== undefined
-					? priorContext
-					: edge.to === "core.wiki-approval" && outcome === "complete"
-						? wikiVerificationPayload(snapshot)
-						: output === undefined
-							? priorContext
-							: (JSON.parse(JSON.stringify(output)) as JsonValue);
-		if (
-			edge.to === "core.verification" &&
-			output &&
-			typeof output === "object" &&
-			"roles" in output &&
-			Array.isArray((output as { roles: unknown }).roles)
-		) {
-			snapshot.step.selectedRoles = [...(output as { roles: string[] }).roles];
-			if (!snapshot.step.selectedRoles.length)
-				snapshot.step.testRunStarted = true;
-		}
-		if (edge.to === "core.plan" && outcome === "comments")
-			snapshot.step.mode = "review-fix";
-		if (edge.to === "core.implementation")
-			snapshot.step.mode =
-				outcome === "comments"
-					? "review-fix"
-					: outcome === "fix" || outcome === "failed"
-						? "fix"
-						: "apply";
-		if (edge.to === "core.completed") snapshot.status = "completed";
-		else if (edge.to === "core.closed") snapshot.status = "closed";
-		else snapshot.status = "active";
+		const context = resolveArrivalContext(
+			(id) => this.registry.step(id).behavior,
+			snapshot.definition.id,
+			edge,
+			outcome,
+			output,
+			prior.context,
+			() => wikiVerificationPayload(snapshot),
+		);
+		if (context !== undefined) snapshot.step.context = context;
+		snapshot.status = arrival.status ?? "active";
 		for (const effect of edge.effects ?? [])
 			this.enqueue(
 				db,
@@ -2478,7 +2449,7 @@ export class WorkflowEngine {
 				effect.kind === "wiki.verify"
 					? snapshot.definition.id === "wiki-comments"
 						? wikiVerificationPayload(snapshot)
-						: (priorContext ?? wikiVerificationPayload(snapshot))
+						: (prior.context ?? wikiVerificationPayload(snapshot))
 					: effect.payload,
 			);
 		this.enterStep(db, snapshot, definition);
@@ -2490,49 +2461,36 @@ export class WorkflowEngine {
 	): void {
 		const step = this.registry.step(snapshot.currentStep);
 		this.applyReduction(db, snapshot, step, step.enter(snapshot));
+		const hasLiveRun = (role: string): boolean => {
+			if (
+				snapshot.step.results.some(
+					(result) => result.role === role && result.outputDigest,
+				)
+			)
+				return true;
+			return snapshot.step.activeRunIds.some((id) => {
+				const row = db
+					.query("SELECT role FROM workflow_runs WHERE id=?")
+					.get(id) as { role?: string } | undefined;
+				return row?.role === role;
+			});
+		};
+		const enqueue = (kind: EffectKind, key: string, payload: JsonValue) =>
+			this.enqueue(db, snapshot, kind, key, payload);
 		if (step.actor === "agent") {
 			if (!step.behavior) throw new Error(`missing step behavior: ${step.id}`);
 			if (!step.behavior.roles)
 				throw new Error(`missing role behavior for agent step ${step.id}`);
 			const roles = step.behavior.roles({ snapshot });
+			const entry = step.behavior.onEnter?.({ snapshot, enqueue, hasLiveRun });
+			const skip = new Set(entry?.skipRoles ?? []);
 			for (const role of roles) {
-				if (snapshot.currentStep === "fusion.plan") {
-					// Resume collection: never relaunch a role whose validated draft
-					// already survived, nor one whose run is still pending/working.
-					if (
-						snapshot.step.results.some(
-							(result) => result.role === role && result.outputDigest,
-						)
-					)
-						continue;
-					const active = snapshot.step.activeRunIds.find((id) => {
-						const row = db
-							.query("SELECT role FROM workflow_runs WHERE id=?")
-							.get(id) as { role?: string } | undefined;
-						return row?.role === role;
-					});
-					if (active) continue;
-				}
+				if (skip.has(role)) continue;
 				this.createRun(db, snapshot, step, role);
 			}
 			return;
 		}
-		if (snapshot.currentStep === "core.delivery")
-			this.enqueue(
-				db,
-				snapshot,
-				"delivery.commit",
-				`delivery:${snapshot.workflowId}:commit`,
-				{ workflowId: snapshot.workflowId },
-			);
-		if (snapshot.currentStep === "core.closed")
-			this.enqueue(
-				db,
-				snapshot,
-				"workspace.close",
-				`workspace:${snapshot.workflowId}:close`,
-				{ workflowId: snapshot.workflowId },
-			);
+		step.behavior?.onEnter?.({ snapshot, enqueue, hasLiveRun });
 	}
 	private applyReduction(
 		db: Database,
@@ -2875,84 +2833,7 @@ export class WorkflowEngine {
 		snapshot: WorkflowSnapshot,
 		stepId: string,
 	): void {
-		if (stepId === "core.plan" || stepId === "fusion.consolidate")
-			this.validatePlanningArtifacts(snapshot);
-		if (
-			stepId === "core.implementation" &&
-			snapshot.definition.id !== "no-openspec"
-		) {
-			const tasks = path.join(
-				snapshot.metadata.worktree,
-				"openspec",
-				"changes",
-				snapshot.metadata.changeId,
-				"tasks.md",
-			);
-			if (
-				!fs.existsSync(tasks) ||
-				/^\s*[-*]\s+\[ \]/m.test(fs.readFileSync(tasks, "utf8"))
-			)
-				throw new WorkflowRuntimeError(
-					"entry-guard",
-					"implementation requires completed OpenSpec tasks",
-				);
-		}
-		if (stepId === "core.archive") {
-			const active = path.join(
-				snapshot.metadata.worktree,
-				"openspec",
-				"changes",
-				snapshot.metadata.changeId,
-			);
-			const archive = path.join(
-				snapshot.metadata.worktree,
-				"openspec",
-				"changes",
-				"archive",
-			);
-			if (
-				fs.existsSync(active) ||
-				!fs.existsSync(archive) ||
-				!fs
-					.readdirSync(archive)
-					.some(
-						(name) =>
-							name === snapshot.metadata.changeId ||
-							name.endsWith(`-${snapshot.metadata.changeId}`),
-					)
-			)
-				throw new WorkflowRuntimeError("entry-guard", "archive move not found");
-		}
-	}
-	/** Planning and consolidation both must leave a complete OpenSpec change
-	 * directory behind before their completion counts. */
-	private validatePlanningArtifacts(snapshot: WorkflowSnapshot): void {
-		const root = path.join(
-			snapshot.metadata.worktree,
-			"openspec",
-			"changes",
-			snapshot.metadata.changeId,
-		);
-		for (const file of ["proposal.md", "design.md", "tasks.md"])
-			if (
-				!fs.existsSync(path.join(root, file)) ||
-				!fs.readFileSync(path.join(root, file), "utf8").trim()
-			)
-				throw new WorkflowRuntimeError(
-					"entry-guard",
-					`planning artifact invalid: ${file}`,
-				);
-		const specs = path.join(root, "specs");
-		if (
-			!fs.existsSync(specs) ||
-			!walkFiles(specs).some((file) =>
-				/#### Scenario:/.test(fs.readFileSync(file, "utf8")),
-			)
-		)
-			throw new WorkflowRuntimeError(
-				"entry-guard",
-				"planning requires at least one OpenSpec scenario",
-			);
+		this.registry.step(stepId).behavior?.validateEvidence?.({ snapshot });
 	}
 	private validateSnapshot(
 		snapshot: WorkflowSnapshot,
@@ -3015,121 +2896,11 @@ export class WorkflowEngine {
 	private actions(snapshot: WorkflowSnapshot): WorkflowActionView[] {
 		if (snapshot.status === "paused")
 			return [{ id: "resume", label: "Resume", confirmation: "confirm" }];
-		const actions: WorkflowActionView[] =
-			snapshot.definition.id === "research" &&
-			snapshot.currentStep !== "core.closed" &&
-			snapshot.currentStep !== "core.completed"
-				? snapshot.currentStep === "core.research"
-					? [
-							{
-								id: "research-follow-up",
-								label: "Ask researcher follow-up",
-								confirmation: "reason" as const,
-								input: {
-									schemaId: "core.research-follow-up",
-									schemaVersion: 1,
-								},
-							},
-							{
-								id: "close-research",
-								label: "Close research",
-								confirmation: "confirm",
-							},
-						]
-					: snapshot.currentStep === "core.wiki-approval"
-						? [
-								{
-									id: "approve-wiki",
-									label: "Approve wiki",
-									confirmation: "confirm" as const,
-								},
-								{
-									id: "review-comments",
-									label: "Request wiki changes",
-									confirmation: "confirm" as const,
-									input: {
-										schemaId: "core.review-comments",
-										schemaVersion: 1,
-									},
-								},
-							]
-						: []
-				: snapshot.currentStep === "core.plan-approval"
-					? [
-							{
-								id: "approve-plan",
-								label: "Approve plan",
-								confirmation: "confirm",
-							},
-							{
-								id: "review-comments",
-								label: "Request plan changes",
-								confirmation: "confirm",
-								input: { schemaId: "core.review-comments", schemaVersion: 1 },
-							},
-							{
-								id: "reject-plan",
-								label: "Reject plan",
-								confirmation: "reason",
-								input: { schemaId: "core.plan-rejection", schemaVersion: 1 },
-							},
-						]
-					: snapshot.currentStep === "core.developer-review"
-						? [
-								{
-									id: "approve-review",
-									label: "Approve change",
-									confirmation: "confirm",
-								},
-								{
-									id: "review-comments",
-									label: "Request changes",
-									confirmation: "confirm",
-									input: { schemaId: "core.review-comments", schemaVersion: 1 },
-								},
-							]
-						: snapshot.currentStep === "core.wiki-approval"
-							? [
-									{
-										id: "approve-wiki",
-										label: "Approve wiki",
-										confirmation: "confirm",
-									},
-									{
-										id: "review-comments",
-										label: "Request wiki changes",
-										confirmation: "confirm",
-										input: {
-											schemaId: "core.review-comments",
-											schemaVersion: 1,
-										},
-									},
-								]
-							: snapshot.currentStep === "core.completed"
-								? [
-										...([
-											"openspec-propose",
-											"openspec-fusion-propose",
-											"wiki",
-											"wiki-comments",
-											"research",
-										].includes(snapshot.definition.id)
-											? []
-											: [
-													{
-														id: "create-pr",
-														label: "Create pull request",
-														confirmation: "confirm" as const,
-													},
-												]),
-										{
-											id: "close",
-											label: "Close workflow",
-											confirmation: "confirm",
-										},
-									]
-								: [];
-		return actions;
+		return (
+			this.registry.step(snapshot.currentStep).behavior?.developerActions?.({
+				snapshot,
+			}) ?? []
+		);
 	}
 	private viewById(repo: string, id: string): WorkflowView {
 		const db = openStore(repo);
@@ -3540,6 +3311,49 @@ function currentBranch(repo: string): string | undefined {
 		? result.stdout.toString().trim() || undefined
 		: undefined;
 }
+/** Ordered context carry-over resolver (design D3): the `wiki-comments`
+ * definition override beats a self-loop's preserved context, which beats the
+ * output-carrying step list, which beats comments-into-wiki/archive, which
+ * beats wiki-approval + complete -> wikiVerificationPayload. Steps opt into
+ * the step-keyed rules via declared `StepBehavior` flags; the definition
+ * override and the loop-shape rule are generic and stay here. */
+function resolveArrivalContext(
+	behaviorFor: (stepId: string) => StepBehavior | undefined,
+	definitionId: string,
+	edge: WorkflowEdge,
+	outcome: string,
+	output: unknown,
+	priorContext: JsonValue | undefined,
+	wikiVerification: () => JsonValue,
+): JsonValue | undefined {
+	const destination = behaviorFor(edge.to);
+	const definitionOverride =
+		definitionId === "wiki-comments" && priorContext !== undefined;
+	const loopSelfEdge =
+		!!edge.loop && priorContext !== undefined && edge.to === edge.from;
+	const carriesOutput =
+		output !== undefined && destination?.carriesOutputContext === true;
+	const acceptsComments =
+		destination?.acceptsCommentsContext === true && outcome === "comments";
+	const producesWikiVerification =
+		destination?.producesWikiVerificationContext === true &&
+		outcome === "complete";
+	if (
+		!(
+			definitionOverride ||
+			loopSelfEdge ||
+			carriesOutput ||
+			acceptsComments ||
+			producesWikiVerification
+		)
+	)
+		return undefined;
+	if (definitionOverride) return priorContext;
+	if (producesWikiVerification) return wikiVerification();
+	return output === undefined
+		? priorContext
+		: (JSON.parse(JSON.stringify(output)) as JsonValue);
+}
 function freshStep(attempt: number): WorkflowSnapshot["step"] {
 	return {
 		attempt,
@@ -3907,4 +3721,9 @@ function rollback(db: Database): void {
 		/* no transaction */
 	}
 }
-export const runtimeTest = { hashToken, tokenMatches, MAX_ARTIFACT_BYTES };
+export const runtimeTest = {
+	hashToken,
+	tokenMatches,
+	MAX_ARTIFACT_BYTES,
+	resolveArrivalContext,
+};
