@@ -13,6 +13,13 @@ Workflow code follows a one-way flow:
 4. Effects execute external work.
 5. CLI and TUI modules present workflow state.
 
+`runtime.ts`, `definitions.ts`, and `cli.ts` are each now a re-export barrel
+over a focused module tree (`runtime/`, `definitions/`, `cli/`) — see
+[Module map](#module-map-after-split-workflow-god-modules) below. Every
+importer listed above keeps importing the barrel path unchanged; the split is
+a pure internal reorganization with no behavior change (digests, exports, and
+the full test suite are unmodified oracles for that claim).
+
 ## Step ownership
 
 Step knowledge belongs only in `src/workflow/steps/`. The engine, CLI, and
@@ -186,6 +193,84 @@ they now read `StepBehavior.roundScoped`, `assignmentInputs`,
 `definition.initial` (instead of a hardcoded `"core.research"`),
 respectively.
 
+## Module map (after split-workflow-god-modules)
+
+`src/workflow/runtime.ts`, `src/workflow/definitions.ts`, and
+`src/workflow/cli.ts` are re-export barrels; their pre-split export surface
+is pinned by `test/workflow-module-exports.test.ts` against
+`test/fixtures/workflow-god-module-export-surface.json`, and
+`test/workflow-module-import-cycles.test.ts` asserts no module under
+`runtime/`, `definitions/`, or `cli/` imports its own parent barrel.
+
+### `src/workflow/runtime/`
+
+Dependency order is enforced one-way (a lower row never imports a higher
+row):
+
+| Module | Owns |
+| --- | --- |
+| `targets.ts` | Change-id validation, the wiki/research repository-independent target locators, canonical repository/store path resolution. |
+| `store.ts` | Schema DDL, row mapping, open/close, snapshot/run/effect read-write helpers, plus the registry-only structural invariants (`validateStructure`, `validateSnapshot`, `validateEffect`, `actions`, `requireRevision`) and the due-question-expiry read path (`expireDueQuestions`, `getSnapshot`) — grouped here because none of them touch anything beyond `registry` and an already-open `db`, so they sit at the foundation alongside row IO rather than needing a home in a higher tier. |
+| `evidence.ts` | Git inspection, source-content fingerprinting, changed-file discovery, current-branch lookup, wiki baseline/verification content reads — all external-I/O reads. |
+| `capability.ts` | **The security boundary** (design D2): token hashing/comparison, run capability issuance, agent and exact-run authorization, and the `MAX_ARTIFACT_BYTES`-bounded artifact checks. Extracted as one cohesive unit so it can be reviewed and tested as a whole. |
+| `dialogue.ts` | Developer-question dialogue: resolving the run a question command acts on (`questionRun`), answering a question or questionnaire (`answerQuestion`), and marking questions expired (`expireQuestions`). Needs only the clock. |
+| `engine-types.ts` | Public request/result shapes (`StartWorkflowInput`, `DispatchResult`, `ClaimedEffect`, `RepairPreview`) factored out so leaf modules can reference them without importing `engine.ts`. |
+| `kernel.ts` | The shared step-transition primitives every reducer and `engine.ts` need: `enqueue`, `applyReduction`, `createRun`, `enterStep`, `transition`, plus the pure step-shape helpers (`freshStep`, `resolveArrivalContext`, fusion routing/draft helpers) and round-cleanup helpers (`stopRoundAgents`, `expireRuns`, `expireSiblingRuns`). Kept separate from `engine.ts` because `migration.ts` and every `reducers/*.ts` module need these without needing the `WorkflowEngine` class itself — importing `engine.ts` from either would close the cycle `engine.ts -> reducer -> engine.ts`. |
+| `migration.ts` | Legacy `workflows`-table discovery, phase-to-step mapping, legacy evidence conversion, migration diagnostics. **Thinnest test coverage in the package** (`test/workflow-migration.test.ts` is the only oracle) — moved verbatim with no signature change beyond taking `registry`/`now` as explicit parameters. |
+| `view.ts` | The read model: `view`, `list`, `status`, `previewRepair`, and the run/effect projection into `WorkflowView`. Read path only. |
+| `reducers/*.ts` | One file per `reduce()` command branch (or a small explicitly-grouped set: `agent-question.ts` holds both `agent.question` and `agent.question-expire`; `repair.ts` holds `operator.repair`, `operator.repin`, and `operator.resume`). Each reducer receives `registry`/`now` as explicit parameters and the already-open `db`/`snapshot` — it runs inside the kernel's existing transaction, never opening its own. |
+| `engine.ts` | The `WorkflowEngine` class: `start`, `dispatch`, the `reduce()` command-type dispatch table, `claimEffects`, `telemetry`, `locate`, and thin public-API delegates to the modules above. The residue once every leaf/feature/reducer is moved out. |
+
+### `src/workflow/definitions/`
+
+| Module | Owns |
+| --- | --- |
+| `catalog.ts` | `PUBLIC_WORKFLOW_CATALOG` — the human-facing workflow family list. |
+| `contracts.ts` | The step output contracts (`triage`, `findings`, `planDraft`, `passthrough`, `empty`) and the standalone `researchHandoffContract`. |
+| `steps.ts` | The `step()` factory, per-step instruction asset list, and the full `WORKFLOW_STEPS` catalog. |
+| `edges.ts` | `workflowEdges()` (the shared implementation-loop edge builder) and `definitionVersionForPolicy`. |
+| `manifest-policy.ts` | The manifest-policy tier (design D1): the per-workflow-id policy table, `definitionVersionForManifestPolicy`, `effectiveManifestPolicy`. |
+| `graphs/*.ts` | One file per workflow family — `openspec.ts`, `no-openspec.ts`, `fusion.ts`, `wiki.ts`, `research.ts` — each exporting a manifest-builder function for that family only. |
+| `registerBuiltins.ts` | Orchestrates step registration and every family's graphs across every verification-round count and wikiGate/manifest-policy tier. |
+
+### `src/workflow/cli/`
+
+| Module | Owns |
+| --- | --- |
+| `args.ts` | argv parsing primitives (`flag`, `requireFlag`, `positionals`, `parseInput`, `parseInlineJson`). |
+| `git.ts` | `runGit`. |
+| `caller-environment.ts` | Process-ancestry authentication for managed-agent commands (`callerEnvironment`, `managedAgent`, `managedWorkflowTarget`). |
+| `identity.ts` | `resolveHandoffIdentity` — resolves and authorizes the run identity a handoff/question/research-handoff command acts on. |
+| `schema.ts` | `SUBCOMMANDS`, `REQUIRED_FLAGS`, subcommand vocabularies, and the flag/positional-argument schema validator. |
+| `help.ts` | Usage text. |
+| `registry.ts` | The process-lifetime builtin registry and `engine()`. |
+| `pane.ts` | Pane allocation for a launched run (`paneForRunFactory`, `verificationPosition`). |
+| `drain.ts` | `drainEffects`, `detachedDrainArgv`. |
+| `commands/*.ts` | One module per command (or small group): `start.ts`, `dispatch-actions.ts` (action/question/handoff), `wiki.ts`, `research-handoff.ts`, `misc.ts` (repair/repin/agent-extension/listProjects). |
+| `run.ts` | The command-name lookup table that replaces the former `run(argv)` branch chain, plus `main` and the test-only `cliTest` bundle. |
+
+### Extending the split without touching unrelated modules
+
+- **New workflow family:** add `definitions/graphs/<family>.ts` exporting a
+  manifest-builder function, then add it to `registerBuiltins.ts`'s
+  `manifests()` concatenation. Do not touch `steps.ts` or another family's
+  graph file.
+- **New CLI command:** add `cli/commands/<command>.ts`, then register it in
+  `cli/run.ts`'s `COMMAND_HANDLERS` table (or as an early special-case next to
+  `wiki`/`config`/`projects` if it must run before `repo`/`engine` setup). Add
+  its flag schema to `cli/schema.ts`.
+- **New reducer (new `WorkflowCommand` variant):** add
+  `runtime/reducers/<command>.ts` exporting a function that takes
+  `(db, snapshot, definition, command, registry, now)` and returns
+  `{ type, actor, data }`, then add a branch in `engine.ts`'s `reduce()`
+  dispatch table. It may import any of `store.ts`, `evidence.ts`,
+  `capability.ts`, `dialogue.ts`, and `kernel.ts`, but never `engine.ts` or
+  another `reducers/*.ts` module — that would risk the
+  `engine.ts -> reducer -> engine.ts` cycle design D5 calls out. A reducer
+  that turns out to need something not expressible via those modules stays a
+  private method on `WorkflowEngine` in `engine.ts` instead of widening this
+  contract.
+
 ## Adding a step
 
 1. Add the versioned step contract and graph references in `definitions.ts`.
@@ -207,11 +292,18 @@ Stage A (`restructure-repo-for-agent-use`), stage B
 (`move-step-semantics-to-behavior-hooks`), and stage D
 (`derive-dashboard-actions-from-engine`) are complete. Remaining stage:
 
-- **Stage C — `split-workflow-god-modules`:** split `runtime.ts`,
-  `definitions.ts`, and `cli.ts` into focused modules behind compatibility
-  barrels. The context carry-over resolver and the handful of remaining
-  engine-resident functions listed above are candidates for that split, not
-  for further behavior-hook extraction.
+Stage C (`split-workflow-god-modules`) is also complete: `runtime.ts`,
+`definitions.ts`, and `cli.ts` are now re-export barrels over the module trees
+described in [Module map](#module-map-after-split-workflow-god-modules) above.
+The file-and-line references in the step-identity table above predate that
+split; the qualitative disposition of each match is unchanged, but the
+functions now live in `runtime/kernel.ts` (`transition`, `enterStep`,
+`stopRoundAgents`, `validateFusionRouting`), `runtime/reducers/agent-handoff.ts`
+(`agentHandoff`), `runtime/reducers/effect-result.ts` (`effectResult`),
+`runtime/reducers/developer-action.ts` (`developerAction`),
+`runtime/reducers/research-handoff.ts` (`recordResearchHandoff`),
+`runtime/migration.ts` (`migrateLegacy`), `runtime/store.ts` (`validateEffect`),
+and `runtime/kernel.ts` (`createRun`) rather than directly in `runtime.ts`.
 
 Stage D also resolved two live divergences between the engine's action list
 and the dashboard's own (now-deleted) copy: a completed `wiki-comments`
