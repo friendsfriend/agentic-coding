@@ -75,7 +75,7 @@ test("research workspace setup launches and prompts the researcher", async () =>
 		};
 		engine.start({
 			repo: researchWorkflowTarget(),
-			changeId: "research-effects",
+			workflowId: "research-effects",
 			definitionId: "research",
 			definitionVersion: definitionVersionForPolicy(6),
 			metadata: {
@@ -154,7 +154,7 @@ test("wiki run's assignment carries the researcher's full recorded handoff verba
 		};
 		engine.start({
 			repo: researchWorkflowTarget(),
-			changeId: "research-handoff-wiki",
+			workflowId: "research-handoff-wiki",
 			definitionId: "research",
 			definitionVersion: definitionVersionForPolicy(6),
 			metadata: {
@@ -297,7 +297,7 @@ test("runner drains workspace and agent effects, then stops stale run after repa
 		const started = engine.start({
 			repo,
 			mode: "checkout",
-			changeId: "effects",
+			workflowId: "effects",
 			definitionId: "no-openspec",
 			metadata: {
 				branch: "feature/effects",
@@ -427,7 +427,7 @@ test("launch failure on a reused pane does not close it", async () => {
 		engine.start({
 			repo,
 			mode: "checkout",
-			changeId: "launch-fail-reused",
+			workflowId: "launch-fail-reused",
 			definitionId: "no-openspec",
 			metadata: {
 				branch: "feature/launch-fail-reused",
@@ -549,7 +549,7 @@ test("launch failure on a newly created pane still cleans it up", async () => {
 		engine.start({
 			repo,
 			mode: "checkout",
-			changeId: "launch-fail-created",
+			workflowId: "launch-fail-created",
 			definitionId: "no-openspec",
 			metadata: {
 				branch: "feature/launch-fail-created",
@@ -686,7 +686,7 @@ test("launch retry recovers stable Herdr agent without duplicating launch, minti
 		const engine = new WorkflowEngine(registry);
 		const started = engine.start({
 			repo,
-			changeId: "recover",
+			workflowId: "recover",
 			definitionId: "no-openspec",
 			metadata: {
 				branch: "main",
@@ -829,7 +829,7 @@ test("review-comment loop reuses the planner agent by stable name instead of lau
 		const engine = new WorkflowEngine(registry);
 		const started = engine.start({
 			repo,
-			changeId: "plan-reuse",
+			workflowId: "plan-reuse",
 			definitionId: "openspec-full",
 			metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
 			routing,
@@ -1226,7 +1226,7 @@ test("proposal workspace setup stays on the dirty current checkout", async () =>
 		const started = engine.start({
 			repo,
 			mode: "checkout",
-			changeId: "proposal-workspace",
+			workflowId: "proposal-workspace",
 			definitionId: "openspec-propose",
 			metadata: {
 				branch: "main",
@@ -1348,7 +1348,7 @@ test("workspace retry recovers stable branch and workspace identity", async () =
 		const started = engine.start({
 			repo,
 			mode: "checkout",
-			changeId: "workspace-recover",
+			workflowId: "workspace-recover",
 			definitionId: "no-openspec",
 			metadata: {
 				branch: "feature/recover",

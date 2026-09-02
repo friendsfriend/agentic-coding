@@ -8,14 +8,14 @@ import { AGENT_DEF_DIR, isCompiled } from "./paths.ts";
 
 export function workflowAssets(
 	worktree: string,
-	changeId: string,
+	workflowId: string,
 	storageRoot?: string,
 ): string {
 	if (!isCompiled()) return AGENT_DEF_DIR;
 	const workflowRoot = path.resolve(
 		storageRoot ?? path.join(worktree, ".herdr-workflow"),
 	);
-	const root = path.resolve(workflowRoot, changeId, "agent-assets");
+	const root = path.resolve(workflowRoot, workflowId, "agent-assets");
 	if (!root.startsWith(`${workflowRoot}${path.sep}`))
 		throw new Error("workflow asset path escapes worktree");
 	const marker = path.join(root, ".version");

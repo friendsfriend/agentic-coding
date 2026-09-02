@@ -38,7 +38,7 @@ async function runStatus(
 	await drainEffects(workflowEngine, repo);
 	console.log(
 		JSON.stringify(
-			workflowEngine.status(repo, requireFlag(rest, "change")),
+			workflowEngine.status(repo, requireFlag(rest, "workflow-id")),
 			null,
 			2,
 		),

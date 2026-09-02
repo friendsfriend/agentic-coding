@@ -49,7 +49,7 @@ function TestDashboard(props: { noUpstream?: boolean } = {}) {
 	return (
 		<App
 			repo="/demo"
-			change="demo"
+			workflowId="demo"
 			profile="test"
 			testNoUpstream={props.noUpstream}
 			keymap={keymap}

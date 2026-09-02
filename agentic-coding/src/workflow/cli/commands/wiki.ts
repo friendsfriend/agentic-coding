@@ -7,6 +7,7 @@ import path from "node:path";
 import {
 	researchWorkflowTarget,
 	type WorkflowEngine,
+	wikiWorkflowDataRoot,
 	wikiWorkflowTarget,
 } from "../../runtime.ts";
 import {
@@ -88,9 +89,13 @@ function safeWikiBodyFile(
 	const file = fs.realpathSync(path.resolve(value));
 	const roots = [
 		path.join(
-			snapshot.metadata.worktree,
-			".herdr-workflow",
-			snapshot.metadata.changeId,
+			snapshot.definition.id === "wiki-comments"
+				? path.join(wikiWorkflowDataRoot(), snapshot.workflowId)
+				: path.join(
+						snapshot.metadata.worktree,
+						".herdr-workflow",
+						snapshot.workflowId,
+					),
 			"runs",
 		),
 		wikiRoot(true),

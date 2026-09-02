@@ -45,7 +45,7 @@ export async function drainEffects(
 export function detachedDrainArgv(
 	entry: string | undefined,
 	repo: string,
-	change: string,
+	workflowId: string,
 ): string[] {
 	return [
 		process.execPath,
@@ -54,7 +54,7 @@ export function detachedDrainArgv(
 		"status",
 		"--repo",
 		repo,
-		"--change",
-		change,
+		"--workflow-id",
+		workflowId,
 	];
 }

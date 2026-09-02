@@ -51,7 +51,7 @@ function TestDashboard() {
 		disposeKeymap();
 		dispose();
 	});
-	return <App repo="/demo" change="demo" profile="test" keymap={keymap} />;
+	return <App repo="/demo" workflowId="demo" profile="test" keymap={keymap} />;
 }
 
 test("agents panel renders compact bounded metric lines per agent", async () => {

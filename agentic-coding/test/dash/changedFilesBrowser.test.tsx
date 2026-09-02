@@ -45,7 +45,7 @@ function writeState(repo: string, change = "review") {
 	const baseCommit = runGit(repo, "rev-parse", "HEAD");
 	new WorkflowEngine(registerBuiltins()).start({
 		repo,
-		changeId: change,
+		workflowId: change,
 		definitionId: "no-openspec",
 		metadata: {
 			branch: runGit(repo, "branch", "--show-current"),

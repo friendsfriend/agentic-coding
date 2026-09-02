@@ -89,12 +89,12 @@ function draft(
 function start(
 	engine: WorkflowEngine,
 	repo: string,
-	changeId: string,
+	workflowId: string,
 	n: number,
 ): WorkflowView {
 	return engine.start({
 		repo,
-		changeId,
+		workflowId,
 		definitionId: "openspec-fusion-full",
 		metadata: {
 			branch: "main",
@@ -282,7 +282,7 @@ describe("openspec-fusion-full workflow", () => {
 				expect(() =>
 					engine.start({
 						repo,
-						changeId: "bounds",
+						workflowId: "bounds",
 						definitionId: "openspec-fusion-full",
 						metadata: {
 							branch: "main",
@@ -508,6 +508,7 @@ describe("openspec-fusion-full workflow", () => {
 				view,
 				"consolidator",
 				{
+					primaryChangeId: "fusion-e2e",
 					consolidated: true,
 				},
 				cache,
@@ -634,7 +635,7 @@ describe("openspec-fusion-full workflow", () => {
 			let view = engine.start({
 				repo,
 				mode: "checkout",
-				changeId: "openspec-fusion-propose",
+				workflowId: "openspec-fusion-propose",
 				definitionId: "openspec-fusion-propose",
 				metadata: {
 					branch: "main",
@@ -667,7 +668,7 @@ describe("openspec-fusion-full workflow", () => {
 				repo,
 				view,
 				"consolidator",
-				{ consolidated: true },
+				{ consolidated: true, primaryChangeId: "openspec-fusion-propose" },
 				cache,
 			);
 			const validation = requireDefined(

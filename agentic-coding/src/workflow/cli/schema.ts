@@ -18,11 +18,11 @@ export const SUBCOMMANDS: readonly string[] = [
 	"wiki",
 ] as const;
 export const REQUIRED_FLAGS: Record<string, string[]> = {
-	start: ["change"],
-	status: ["repo", "change"],
-	action: ["repo", "change", "revision"],
-	repair: ["repo", "change", "revision", "step"],
-	repin: ["repo", "change"],
+	start: ["workflow-id"],
+	status: ["repo", "workflow-id"],
+	action: ["repo", "workflow-id", "revision"],
+	repair: ["repo", "workflow-id", "revision", "step"],
+	repin: ["repo", "workflow-id"],
 	handoff: ["outcome"],
 	question: ["description"],
 	"research-handoff": ["subject", "directives"],
@@ -57,7 +57,7 @@ const FLAG_SCHEMA: Record<
 	start: {
 		values: [
 			"repo",
-			"change",
+			"workflow-id",
 			"mode",
 			"workflow",
 			"task",
@@ -67,9 +67,9 @@ const FLAG_SCHEMA: Record<
 		],
 		positionals: [0, 0],
 	},
-	status: { values: ["repo", "change"], positionals: [0, 0] },
+	status: { values: ["repo", "workflow-id"], positionals: [0, 0] },
 	action: {
-		values: ["repo", "change", "revision", "input"],
+		values: ["repo", "workflow-id", "revision", "input"],
 		positionals: [1, 1],
 	},
 	handoff: {
@@ -87,11 +87,11 @@ const FLAG_SCHEMA: Record<
 		positionals: [0, 0],
 	},
 	repair: {
-		values: ["repo", "change", "revision", "step", "reason"],
+		values: ["repo", "workflow-id", "revision", "step", "reason"],
 		booleans: ["confirm"],
 		positionals: [0, 0],
 	},
-	repin: { values: ["repo", "change", "revision"], positionals: [0, 0] },
+	repin: { values: ["repo", "workflow-id", "revision"], positionals: [0, 0] },
 	projects: { values: [], positionals: [0, 0] },
 	config: { values: [], positionals: [0, 0] },
 	"agent-extension": { values: ["profile"], positionals: [1, 2] },

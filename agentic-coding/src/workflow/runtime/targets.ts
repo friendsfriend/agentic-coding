@@ -7,8 +7,24 @@ import path from "node:path";
 import { WorkflowRuntimeError } from "../contracts.ts";
 import { wikiRoot } from "../wiki.ts";
 
+const WORKFLOW_ID = /^[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$/;
+
+/** User-supplied workflow identifier: the string a workflow is started and
+ * addressed with. Shares the change-id shape so both can serve as branch
+ * seeds and directory-name components interchangeably. */
+export function validateWorkflowId(value: string): string {
+	if (!WORKFLOW_ID.test(value))
+		throw new WorkflowRuntimeError(
+			"workflow-id",
+			"workflow id must be 1-80 lowercase letters, digits, or hyphens",
+		);
+	return value;
+}
+
+/** Planner-derived change identifier (declared as the primary change at plan
+ * handoff; also used to bound legacy/open-spec directory names). */
 export function validateChangeId(value: string): string {
-	if (!/^[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$/.test(value))
+	if (!WORKFLOW_ID.test(value))
 		throw new WorkflowRuntimeError(
 			"change-id",
 			"change ID must be 1-80 lowercase letters, digits, or hyphens",

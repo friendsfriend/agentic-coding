@@ -123,11 +123,11 @@ export function createRun(
 		);
 	const directory =
 		snapshot.definition.id === "wiki-comments"
-			? path.join(wikiWorkflowDataRoot(), snapshot.metadata.changeId, "runs")
+			? path.join(wikiWorkflowDataRoot(), snapshot.workflowId, "runs")
 			: path.join(
 					snapshot.metadata.worktree,
 					".herdr-workflow",
-					snapshot.metadata.changeId,
+					snapshot.workflowId,
 					"runs",
 				);
 	const assignmentPath = path.join(directory, `${id}.assignment.md`);

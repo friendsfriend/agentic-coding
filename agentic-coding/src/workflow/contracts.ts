@@ -188,6 +188,8 @@ export interface WorkflowMetadata {
 	/** Empty for repository-independent workflows such as wiki-comments. */
 	repository: string;
 	worktree: string;
+	/** Empty until the plan step records the planner-declared primary change.
+	 * `openspec-apply` (which has no planner) records it at start. */
 	changeId: string;
 	/** Empty for repository-independent workflows. */
 	branch: string;
@@ -329,7 +331,6 @@ export interface Assignment {
 	environment: Readonly<
 		Record<
 			| "HERDR_WORKFLOW_ID"
-			| "HERDR_CHANGE_ID"
 			| "HERDR_RUN_ID"
 			| "HERDR_RUN_GENERATION"
 			| "HERDR_RUN_TOKEN"
@@ -344,7 +345,13 @@ export interface Assignment {
 			| "TRACEPARENT",
 			string
 		> &
-			Readonly<{ HERDR_WORKFLOW_TARGET?: string }>
+			Readonly<{
+				/** Present only for steps that run after the primary change is
+				 * recorded (implementation onward; archive); absent during
+				 * planning, where the planner chooses the change id(s). */
+				HERDR_CHANGE_ID?: string;
+				HERDR_WORKFLOW_TARGET?: string;
+			}>
 	>;
 }
 export interface WorkflowActionView {
@@ -913,7 +920,7 @@ export function parseSnapshot(value: unknown): WorkflowSnapshot {
 					? ""
 					: path.resolve(text(metadata.repository, "$.metadata.repository")),
 			worktree: path.resolve(text(metadata.worktree, "$.metadata.worktree")),
-			changeId: text(metadata.changeId, "$.metadata.changeId"),
+			changeId: boundedText(metadata.changeId, "$.metadata.changeId"),
 			branch:
 				(definition.id === "wiki-comments" || definition.id === "research") &&
 				metadata.branch === ""

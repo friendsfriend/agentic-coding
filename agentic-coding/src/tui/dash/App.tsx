@@ -247,7 +247,7 @@ function FindingCountSummary(props: {
 
 export function App(props: {
 	repo: string;
-	change: string;
+	workflowId: string;
 	profile?: "test";
 	/** Test fixture override for rendering a branch without a usable upstream. */
 	testNoUpstream?: boolean;
@@ -270,7 +270,7 @@ export function App(props: {
 	const [demoIndex, setDemoIndex] = createSignal(0);
 	const load = () => {
 		if (props.profile !== "test")
-			return loadDashboard(props.repo, props.change);
+			return loadDashboard(props.repo, props.workflowId);
 		const dashboard = testDashboard(demoPhases[demoIndex()]);
 		if (!props.testNoUpstream) return dashboard;
 		return {
@@ -287,7 +287,7 @@ export function App(props: {
 	// Feed the shell's global header from the dashboard's single data source.
 	createEffect(() => {
 		props.onHeader?.({
-			change: data().state.changeId,
+			change: data().state.workflowId,
 			phase: data().state.stepLabel ?? data().state.phase,
 			branch: data().state.branch,
 			updated: data().updated,
@@ -336,7 +336,7 @@ export function App(props: {
 		const parsed =
 			props.profile === "test"
 				? undefined
-				: loadVerifierFindings(props.repo, props.change, role);
+				: loadVerifierFindings(props.repo, props.workflowId, role);
 		if (parsed) {
 			setFindings(parsed);
 			setSelectedFinding(0);
@@ -349,7 +349,7 @@ export function App(props: {
 						title: `${role} · demo`,
 						content: "VERDICT: PASS\n\n## VALIDATION\nDemo verifier report.",
 					}
-				: loadVerifierReport(props.repo, props.change, role),
+				: loadVerifierReport(props.repo, props.workflowId, role),
 		);
 		setVerdictOffset(0);
 		props.keymap.setData("modal.active", "verdict");
@@ -484,7 +484,7 @@ export function App(props: {
 				if (props.profile !== "test")
 					answerQuestion(
 						props.repo,
-						props.change,
+						props.workflowId,
 						data().state.revision,
 						question.id,
 						{
@@ -540,7 +540,7 @@ export function App(props: {
 				if (props.profile !== "test")
 					answerQuestion(
 						props.repo,
-						props.change,
+						props.workflowId,
 						data().state.revision,
 						question.id,
 						{
@@ -568,7 +568,7 @@ export function App(props: {
 			if (props.profile !== "test")
 				answerQuestion(
 					props.repo,
-					props.change,
+					props.workflowId,
 					data().state.revision,
 					question.id,
 					answer,
@@ -830,7 +830,7 @@ export function App(props: {
 								renamedFile: false,
 							},
 						]
-					: loadLocalChanges(props.repo, props.change);
+					: loadLocalChanges(props.repo, props.workflowId);
 			const findings =
 				props.profile === "test"
 					? [
@@ -844,7 +844,7 @@ export function App(props: {
 								fix: "Use const.",
 							},
 						]
-					: loadDeveloperReviewFindings(props.repo, props.change);
+					: loadDeveloperReviewFindings(props.repo, props.workflowId);
 			setReviewChanges(changes);
 			setReviewChangeIndex(0);
 			setReviewLine(0);
@@ -877,7 +877,7 @@ export function App(props: {
 			setReviewDiff(
 				props.profile === "test"
 					? "diff --git a/src/example.ts b/src/example.ts\n@@ -1,2 +1,4 @@\n const value = 1;\n-old();\n+new();\n+reviewed();\n"
-					: loadLocalDiff(props.repo, props.change, file),
+					: loadLocalDiff(props.repo, props.workflowId, file),
 			);
 			setReviewLine(0);
 			setReviewView("diff");
@@ -918,7 +918,7 @@ export function App(props: {
 				}));
 			const comments = [...reviewComments(), ...findingComments];
 			if (props.profile !== "test") {
-				await saveDeveloperReview(props.repo, props.change, comments);
+				await saveDeveloperReview(props.repo, props.workflowId, comments);
 				const engineComments = comments.map((comment) => ({
 					comment: comment.body,
 					...(comment.filePath ? { file: comment.filePath } : {}),
@@ -931,7 +931,7 @@ export function App(props: {
 					await runWorkflow(
 						comments.length ? "review-comments" : "approve-review",
 						props.repo,
-						props.change,
+						props.workflowId,
 						data().state.revision,
 						comments.length
 							? JSON.stringify({ comments: engineComments })
@@ -1007,7 +1007,7 @@ export function App(props: {
 		try {
 			const wikiReview = requiredUserAction()?.key === "wiki-review";
 			const changes: LocalChange[] = wikiReview
-				? loadWikiSnapshotChanges(props.repo, props.change)
+				? loadWikiSnapshotChanges(props.repo, props.workflowId)
 				: props.profile === "test"
 					? demoPlanArtifacts()
 					: openSpecArtifacts(data().state).map((artifact) => {
@@ -1058,7 +1058,7 @@ export function App(props: {
 		try {
 			setReviewDiff(
 				reviewKind() === "wiki"
-					? loadWikiSnapshotDiff(props.repo, props.change, file.newPath)
+					? loadWikiSnapshotDiff(props.repo, props.workflowId, file.newPath)
 					: props.profile === "test"
 						? demoPlanContent(file.newPath)
 						: openSpecArtifact(data().state, file.newPath),
@@ -1079,14 +1079,14 @@ export function App(props: {
 		try {
 			const content =
 				reviewKind() === "wiki"
-					? loadWikiSnapshotDiff(props.repo, props.change, file.newPath)
+					? loadWikiSnapshotDiff(props.repo, props.workflowId, file.newPath)
 					: reviewKind() === "plan"
 						? props.profile === "test"
 							? demoPlanContent(file.newPath)
 							: openSpecArtifact(data().state, file.newPath)
 						: props.profile === "test"
 							? "diff --git a/src/example.ts b/src/example.ts\n@@ -1,2 +1,4 @@\n const value = 1;\n-old();\n+new();\n+reviewed();\n"
-							: loadLocalDiff(props.repo, props.change, file);
+							: loadLocalDiff(props.repo, props.workflowId, file);
 			setReviewChangeIndex(next);
 			setReviewVisualMode(false);
 			setReviewVisualStart(0);
@@ -1117,7 +1117,7 @@ export function App(props: {
 			await new Promise((resolve) => setTimeout(resolve, 0));
 			const comments = reviewComments();
 			if (props.profile !== "test") {
-				await saveReview(props.repo, props.change, comments);
+				await saveReview(props.repo, props.workflowId, comments);
 				const engineComments = comments.map((comment) => ({
 					comment: comment.body,
 					...(comment.filePath ? { file: comment.filePath } : {}),
@@ -1133,7 +1133,7 @@ export function App(props: {
 								? "approve-wiki"
 								: "approve-plan",
 						props.repo,
-						props.change,
+						props.workflowId,
 						data().state.revision,
 						comments.length
 							? JSON.stringify({ comments: engineComments })
@@ -1177,7 +1177,7 @@ export function App(props: {
 				await runWorkflow(
 					"reject-plan",
 					props.repo,
-					props.change,
+					props.workflowId,
 					data().state.revision,
 					JSON.stringify({ reason }),
 				);
@@ -1452,7 +1452,7 @@ export function App(props: {
 					await runWorkflow(
 						workflowActionId(item.value),
 						props.repo,
-						props.change,
+						props.workflowId,
 						data().state.revision,
 					),
 				);
@@ -1481,10 +1481,10 @@ export function App(props: {
 			props.profile === "test"
 				? []
 				: data().state.definition?.id === "research"
-					? [join(wikiWorkflowDataRoot(), props.change)]
+					? [join(wikiWorkflowDataRoot(), props.workflowId)]
 					: [
-							join(props.repo, ".herdr-workflow", props.change),
-							join(data().state.worktree, ".herdr-workflow", props.change),
+							join(props.repo, ".herdr-workflow", props.workflowId),
+							join(data().state.worktree, ".herdr-workflow", props.workflowId),
 						];
 		const dispose = watchDirectories(dirs, refresh);
 		const safety = setInterval(refresh, 30000);
@@ -1541,13 +1541,13 @@ export function App(props: {
 				const workspace = (
 					props.profile === "test"
 						? data()
-						: loadDashboard(props.repo, props.change)
+						: loadDashboard(props.repo, props.workflowId)
 				).state.returnWorkspace;
 				if (!workspace)
 					throw new Error(
 						"No dashboard workspace recorded. Open this workflow from the overview first.",
 					);
-				focusReturnWorkspace(props.repo, props.change, workspace);
+				focusReturnWorkspace(props.repo, props.workflowId, workspace);
 			} catch (error) {
 				setMessage(error instanceof Error ? error.message : String(error));
 			}
@@ -1561,7 +1561,7 @@ export function App(props: {
 		}
 		if (name === "o" && key.shift) {
 			try {
-				setRepairTargets(previewRepair(props.repo, props.change));
+				setRepairTargets(previewRepair(props.repo, props.workflowId));
 				setRepairSelection(0);
 				setRepairOpen(true);
 				props.keymap.setData("modal.active", "repair");
@@ -1720,7 +1720,7 @@ export function App(props: {
 						await runWorkflow(
 							approval.action,
 							props.repo,
-							props.change,
+							props.workflowId,
 							data().state.revision,
 						),
 					);
@@ -1968,7 +1968,7 @@ export function App(props: {
 							try {
 								applyRepair(
 									props.repo,
-									props.change,
+									props.workflowId,
 									data().state.revision,
 									target.targetStep,
 									"",
@@ -2045,7 +2045,7 @@ export function App(props: {
 							void runWorkflow(
 								action.command,
 								props.repo,
-								props.change,
+								props.workflowId,
 								data().state.revision,
 								action.confirmation === "reason"
 									? JSON.stringify(
@@ -3250,7 +3250,11 @@ export function App(props: {
 							setReviewLine(0);
 							setReviewDiff(
 								reviewKind() === "wiki"
-									? loadWikiSnapshotDiff(props.repo, props.change, file.newPath)
+									? loadWikiSnapshotDiff(
+											props.repo,
+											props.workflowId,
+											file.newPath,
+										)
 									: props.profile === "test"
 										? demoPlanContent(file.newPath)
 										: openSpecArtifact(data().state, file.newPath),
@@ -3312,7 +3316,7 @@ export function App(props: {
 								const diff =
 									props.profile === "test"
 										? "diff --git a/src/example.ts b/src/example.ts\n@@ -1,2 +1,4 @@\n const value = 1;\n-old();\n+new();\n+reviewed();\n"
-										: loadLocalDiff(props.repo, props.change, file);
+										: loadLocalDiff(props.repo, props.workflowId, file);
 								setReviewChangeIndex(next);
 								setReviewVisualMode(false);
 								setReviewVisualStart(0);

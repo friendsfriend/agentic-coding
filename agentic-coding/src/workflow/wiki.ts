@@ -597,7 +597,13 @@ export function searchConcepts(terms: string[], limit = 20): WikiSearchHit[] {
 }
 
 function changeFor(input: WikiWriteInput): string | undefined {
-	return input.changeId || process.env.HERDR_CHANGE_ID;
+	return (
+		input.changeId ||
+		process.env.HERDR_CHANGE_ID ||
+		// Wiki-only and research workflows have no planner to record a change
+		// id; their snapshot/verify identity is the workflow id.
+		process.env.HERDR_WORKFLOW_ID
+	);
 }
 function snapshotRoot(changeId: string, baseDir: string): string {
 	if (!CHANGE_ID.test(changeId)) throw new Error("invalid change id");

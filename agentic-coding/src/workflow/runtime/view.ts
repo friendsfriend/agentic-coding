@@ -14,7 +14,6 @@ import {
 	effects,
 	expireDueQuestions,
 	instance,
-	instanceByChange,
 	openStore,
 	runs,
 	tableExists,
@@ -266,32 +265,40 @@ export function viewById(
 
 export function status(
 	repo: string,
-	changeId: string,
+	workflowId: string,
 	registry: WorkflowRegistry,
 	now: () => Date,
 ): WorkflowView {
 	const db = openStore(repo);
 	try {
+		// Primary addressing is by the user-supplied workflow id (the row key).
+		// Fall back to the recorded change id so in-flight workflows started
+		// before the identity split remain addressable by the id they were
+		// started with, then to the legacy `workflows` table migration path.
 		let row = db
-			.query("SELECT id FROM workflow_instances WHERE change_id=?")
-			.get(changeId) as { id: string } | null;
-		if (!row) {
-			if (!isWikiWorkflowTarget(repo))
-				migrateLegacy(db, canonicalRepository(repo), changeId, registry, now);
+			.query("SELECT id FROM workflow_instances WHERE id=?")
+			.get(workflowId) as { id: string } | null;
+		if (!row)
 			row = db
 				.query("SELECT id FROM workflow_instances WHERE change_id=?")
-				.get(changeId) as { id: string } | null;
+				.get(workflowId) as { id: string } | null;
+		if (!row) {
+			if (!isWikiWorkflowTarget(repo))
+				migrateLegacy(db, canonicalRepository(repo), workflowId, registry, now);
+			row = db
+				.query("SELECT id FROM workflow_instances WHERE change_id=?")
+				.get(workflowId) as { id: string } | null;
 		}
 		if (!row) {
 			const diagnostic = db
 				.query(
 					"SELECT diagnostic FROM workflow_migration_diagnostics WHERE change_id=?",
 				)
-				.get(changeId) as { diagnostic: string } | null;
-			if (diagnostic) return diagnosticView(changeId, diagnostic.diagnostic);
+				.get(workflowId) as { diagnostic: string } | null;
+			if (diagnostic) return diagnosticView(workflowId, diagnostic.diagnostic);
 			throw new WorkflowRuntimeError(
 				"not-found",
-				`workflow not found: ${changeId}`,
+				`workflow not found: ${workflowId}`,
 			);
 		}
 		expireDueQuestions(db, row.id, registry, now);
@@ -345,12 +352,12 @@ export function list(
 
 export function previewRepair(
 	repo: string,
-	changeId: string,
+	workflowId: string,
 	registry: WorkflowRegistry,
 ): RepairPreview[] {
 	const db = openStore(repo);
 	try {
-		const row = instanceByChange(db, changeId);
+		const row = instance(db, workflowId);
 		const snapshot = parseSnapshot(JSON.parse(row.snapshot_json));
 		const definition = registry.definition(
 			snapshot.definition.id,

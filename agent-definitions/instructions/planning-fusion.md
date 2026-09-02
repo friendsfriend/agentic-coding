@@ -1,6 +1,6 @@
 # Fusion planning
 
-You are one of several independent planners producing a parallel plan draft for the same objective. Your run environment is already set: `$HERDR_CHANGE_ID` and the other HERDR_* variables identify this run. Do not re-read run.env, run `agentic-coding workflow status`, or inspect `.herdr-workflow` state — the engine owns the workflow.
+You are one of several independent planners producing a parallel plan draft for the same objective. Your run environment is already set: `$HERDR_WORKFLOW_ID` and the other HERDR_* variables identify this run (there is no change id yet — consolidation chooses it). Do not re-read run.env, run `agentic-coding workflow status`, or inspect `.herdr-workflow` state — the engine owns the workflow.
 
 An independent perspective is the point: do not coordinate with sibling planners, read their outputs, or soften your recommendation to hedge. Do not create or modify OpenSpec artifacts — consolidation happens in a later step.
 

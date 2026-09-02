@@ -123,7 +123,7 @@ export function Home(props: {
 		const direction = sortDirection() === "asc" ? 1 : -1;
 		const valueFor = (item: WorkflowOverview) =>
 			option === "Name"
-				? item.state.changeId
+				? item.state.workflowId
 				: option === "Created"
 					? (item.state.createdAt ?? "")
 					: option === "Updated"
@@ -620,7 +620,7 @@ export function Home(props: {
 												active ? uiColors.textPrimary : uiColors.textSecondary
 											}
 										>
-											{item.state.changeId}{" "}
+											{item.state.workflowId}{" "}
 											<span style={{ fg: uiColors.primary }}>
 												{item.state.stepLabel ?? item.state.phase}
 											</span>

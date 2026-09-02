@@ -189,7 +189,7 @@ export function agentEffectHandlers(
 				) {
 					const workspace =
 						snapshot.metadata.workspace ??
-						recoverWorkspace(options.herdr, snapshot.metadata.changeId);
+						recoverWorkspace(options.herdr, snapshot.workflowId);
 					return workspace && dashboardReady(options.herdr, workspace)
 						? { workspace, worktree: snapshot.metadata.worktree, branch: "" }
 						: undefined;
@@ -212,7 +212,7 @@ export function agentEffectHandlers(
 							: undefined);
 				const workspace =
 					snapshot.metadata.workspace ??
-					recoverWorkspace(options.herdr, snapshot.metadata.changeId);
+					recoverWorkspace(options.herdr, snapshot.workflowId);
 				return worktree && workspace && dashboardReady(options.herdr, workspace)
 					? { workspace, worktree, branch }
 					: undefined;
@@ -226,7 +226,7 @@ export function agentEffectHandlers(
 				) {
 					let workspace =
 						snapshot.metadata.workspace ??
-						recoverWorkspace(options.herdr, snapshot.metadata.changeId);
+						recoverWorkspace(options.herdr, snapshot.workflowId);
 					if (!workspace) {
 						if (!engine.effectIsLive(repo, effect.id, effect.lease ?? ""))
 							return { cancelled: true };
@@ -237,7 +237,7 @@ export function agentEffectHandlers(
 								"--cwd",
 								snapshot.metadata.worktree,
 								"--label",
-								snapshot.metadata.changeId,
+								snapshot.workflowId,
 							) as { workspace?: { workspace_id?: string } }
 						).workspace?.workspace_id;
 					}
@@ -258,7 +258,7 @@ export function agentEffectHandlers(
 							options.herdr,
 							workspace,
 							snapshot.metadata.worktree,
-							snapshot.metadata.changeId,
+							snapshot.workflowId,
 							isResearchWorkflowTarget(repo) ||
 								snapshot.definition.id === "research"
 								? researchWorkflowTarget()
@@ -304,10 +304,7 @@ export function agentEffectHandlers(
 					input.mode === "worktree" && !sameCheckout
 						? worktreeForBranch(snapshot.metadata.repository, branch)
 						: snapshot.metadata.repository;
-				let workspace = recoverWorkspace(
-					options.herdr,
-					snapshot.metadata.changeId,
-				);
+				let workspace = recoverWorkspace(options.herdr, snapshot.workflowId);
 				if (input.mode === "worktree" && !worktree) {
 					const result = options.herdr.call(
 						"worktree",
@@ -319,7 +316,7 @@ export function agentEffectHandlers(
 						"--base",
 						input.baseCommit ?? snapshot.metadata.baseCommit,
 						"--label",
-						snapshot.metadata.changeId,
+						snapshot.workflowId,
 						"--no-focus",
 					) as {
 						workspace?: { workspace_id?: string };
@@ -364,7 +361,7 @@ export function agentEffectHandlers(
 							"--cwd",
 							worktree,
 							"--label",
-							snapshot.metadata.changeId,
+							snapshot.workflowId,
 						) as { workspace?: { workspace_id?: string } };
 						workspace = result.workspace?.workspace_id;
 					}
@@ -375,7 +372,7 @@ export function agentEffectHandlers(
 					options.herdr,
 					workspace,
 					worktree,
-					snapshot.metadata.changeId,
+					snapshot.workflowId,
 				);
 				return { workspace, worktree, branch };
 			},
@@ -447,7 +444,7 @@ export function agentEffectHandlers(
 				const snapshot = engine.getSnapshot(repo, run.workflowId);
 				const resolved = resolveLiveAgent(
 					options.herdr,
-					snapshot.metadata.changeId,
+					snapshot.workflowId,
 					snapshot.definition.id,
 					run,
 				);
@@ -470,11 +467,7 @@ export function agentEffectHandlers(
 					);
 					writeRunEnvironment(
 						snapshot.definition.id === "wiki-comments"
-							? path.join(
-									wikiWorkflowDataRoot(),
-									snapshot.metadata.changeId,
-									"runs",
-								)
+							? path.join(wikiWorkflowDataRoot(), snapshot.workflowId, "runs")
 							: snapshot.metadata.worktree,
 						run.id,
 						expected.assignment.environment,
@@ -484,11 +477,7 @@ export function agentEffectHandlers(
 						resolved.name,
 						run.id,
 						snapshot.definition.id === "wiki-comments"
-							? path.join(
-									wikiWorkflowDataRoot(),
-									snapshot.metadata.changeId,
-									"runs",
-								)
+							? path.join(wikiWorkflowDataRoot(), snapshot.workflowId, "runs")
 							: undefined,
 					);
 					options.herdr.call(
@@ -517,7 +506,7 @@ export function agentEffectHandlers(
 				const assignment = assignmentFor(run, snapshot, token);
 				const assetRoot = workflowAssets(
 					snapshot.metadata.worktree,
-					snapshot.metadata.changeId,
+					snapshot.workflowId,
 					snapshot.definition.id === "wiki-comments"
 						? wikiWorkflowDataRoot()
 						: undefined,
@@ -532,7 +521,7 @@ export function agentEffectHandlers(
 					throw new Error(`adapter unavailable: ${run.profile.runtime}`);
 				adapter.preflight(run.profile, step.requirements);
 				const name = canonicalAgentName(
-					snapshot.metadata.changeId,
+					snapshot.workflowId,
 					snapshot.definition.id,
 					run,
 				);
@@ -540,11 +529,7 @@ export function agentEffectHandlers(
 				// must exist before the agent process boots inside adapter.launch.
 				const runDirectory =
 					snapshot.definition.id === "wiki-comments"
-						? path.join(
-								wikiWorkflowDataRoot(),
-								snapshot.metadata.changeId,
-								"runs",
-							)
+						? path.join(wikiWorkflowDataRoot(), snapshot.workflowId, "runs")
 						: undefined;
 				writeAgentEnvPointer(
 					snapshot.metadata.worktree,
@@ -677,7 +662,7 @@ export function agentEffectHandlers(
 					};
 					const approvedContent = new Map<string, string>();
 					let concepts = snapshotList(
-						snapshot.metadata.changeId,
+						snapshot.metadata.changeId || snapshot.workflowId,
 						snapshot.definition.id === "wiki-comments" ||
 							snapshot.definition.id === "research"
 							? wikiWorkflowDataRoot()
@@ -797,7 +782,7 @@ export function agentEffectHandlers(
 						snapshot.metadata.worktree,
 						"commit",
 						"-m",
-						`Apply ${snapshot.metadata.changeId}`,
+						`Apply ${snapshot.metadata.changeId || snapshot.workflowId}`,
 					);
 				return { head: git(snapshot.metadata.worktree, "rev-parse", "HEAD") };
 			},
@@ -996,7 +981,7 @@ async function ensureWorkspaceTabs(
 	herdr: HerdrPort,
 	workspace: string,
 	worktree: string,
-	changeId: string,
+	workflowId: string,
 	dashboardRepo = worktree,
 ): Promise<void> {
 	const tabs =
@@ -1025,8 +1010,8 @@ async function ensureWorkspaceTabs(
 			"dash",
 			"--repo",
 			dashboardRepo,
-			"--change",
-			changeId,
+			"--workflow-id",
+			workflowId,
 		]
 			.map((value) => Bun.$.escape(value))
 			.join(" ");
@@ -1066,23 +1051,23 @@ function roundScoped(stepId: string): boolean {
  * Canonical Herdr agent name for a workflow-managed agent.
  *
  * Herdr caps names at 32 chars matching ^[a-z][a-z0-9_-]*$. Instead of
- * truncating the discriminating change ID (which let concurrent workflows
+ * truncating the discriminating workflow id (which let concurrent workflows
  * collide), uniqueness is carried by an 8-hex SHA-256 digest over
- * changeId/definitionId/stepId/role — injective across every live workflow.
+ * workflowId/definitionId/stepId/role — injective across every live workflow.
  *
  * Every role gets `<shortrole>-<hash8>`: the digest encodes the full
- * change/definition/step/role identity, so persistent roles and grouped
+ * workflow/definition/step/role identity, so persistent roles and grouped
  * triage/verification roles reuse the same agent across runs. The role prefix
  * is cosmetic only (the hash already encodes the full role) and is clamped to
  * keep the name under the cap.
  */
 export function canonicalAgentName(
-	changeId: string,
+	workflowId: string,
 	definitionId: string,
 	run: { stepId: string; role: string; id: string },
 ): string {
 	const hash = createHash("sha256")
-		.update(`${changeId}\n${definitionId}\n${run.stepId}\n${run.role}`)
+		.update(`${workflowId}\n${definitionId}\n${run.stepId}\n${run.role}`)
 		.digest("hex")
 		.slice(0, 8);
 	if (!roundScoped(run.stepId)) return `${run.role}-${hash}`;
@@ -1092,19 +1077,19 @@ export function canonicalAgentName(
 	return `${shortRole.slice(0, 14)}-${hash}`;
 }
 /**
- * Pre-canonical naming (`<truncated changeId>-<role>[-<runId8>]`). Lossy under
+ * Pre-canonical naming (`<truncated workflowId>-<role>[-<runId8>]`). Lossy under
  * Herdr's 32-char cap; kept only so in-flight workflows launched before the
  * canonical scheme resolve once via the legacy derivation, then migrate to
  * canonical names on first adoption.
  */
 export function legacyRunName(
-	changeId: string,
+	workflowId: string,
 	run: { stepId: string; role: string; id: string },
 ): string {
 	const suffix = roundScoped(run.stepId)
 		? `-${run.role}-${run.id.slice(0, 8)}`
 		: `-${run.role}`;
-	const head = changeId.slice(0, Math.max(1, 32 - suffix.length));
+	const head = workflowId.slice(0, Math.max(1, 32 - suffix.length));
 	return `${head}${suffix}`.slice(0, 32);
 }
 interface HerdrAgent {
@@ -1164,11 +1149,11 @@ function adopt(name: string, live: HerdrAgent): LiveAgent {
  */
 export function resolveLiveAgent(
 	herdr: HerdrPort,
-	changeId: string,
+	workflowId: string,
 	definitionId: string,
 	run: { stepId: string; role: string; id: string; handle?: AgentHandle },
 ): LiveAgent | undefined {
-	const canonical = canonicalAgentName(changeId, definitionId, run);
+	const canonical = canonicalAgentName(workflowId, definitionId, run);
 	if (run.handle?.paneId) {
 		const live = getLiveAgent(herdr, run.handle.paneId);
 		if (live && live.pane_id === run.handle.paneId)
@@ -1176,7 +1161,7 @@ export function resolveLiveAgent(
 	}
 	const byCanonical = getLiveAgent(herdr, canonical);
 	if (byCanonical) return adopt(canonical, byCanonical);
-	const legacy = legacyRunName(changeId, run);
+	const legacy = legacyRunName(workflowId, run);
 	if (legacy === canonical) return undefined;
 	const byLegacy = getLiveAgent(herdr, legacy);
 	return byLegacy ? adopt(canonical, byLegacy) : undefined;
@@ -1263,7 +1248,7 @@ function renderedAssignment(
 			assignment,
 			`${workflowAssets(
 				snapshot.metadata.worktree,
-				snapshot.metadata.changeId,
+				snapshot.workflowId,
 				snapshot.definition.id === "wiki-comments"
 					? wikiWorkflowDataRoot()
 					: undefined,
@@ -1400,7 +1385,7 @@ function assignmentFor(
 		role: run.role,
 		objective:
 			hooked?.objective ??
-			`Complete ${run.stepId} for ${snapshot.metadata.changeId}${snapshot.step.mode ? ` in ${snapshot.step.mode} mode` : ""}.`,
+			`Complete ${run.stepId} for ${snapshot.metadata.changeId || snapshot.workflowId}${snapshot.step.mode ? ` in ${snapshot.step.mode} mode` : ""}.`,
 		interaction:
 			hooked?.interaction ??
 			(["planner", "worker", "consolidator"].includes(run.role) ||
@@ -1420,7 +1405,9 @@ function assignmentFor(
 		allowedOutcomes: run.allowedOutcomes,
 		environment: {
 			HERDR_WORKFLOW_ID: run.workflowId,
-			HERDR_CHANGE_ID: snapshot.metadata.changeId,
+			...(snapshot.metadata.changeId
+				? { HERDR_CHANGE_ID: snapshot.metadata.changeId }
+				: {}),
 			HERDR_RUN_ID: run.id,
 			HERDR_RUN_GENERATION: String(run.generation),
 			HERDR_RUN_TOKEN: token,
@@ -1440,8 +1427,8 @@ function assignmentFor(
 			HERDR_TELEMETRY_PATH:
 				snapshot.definition.id === "wiki-comments" ||
 				snapshot.definition.id === "research"
-					? `${wikiWorkflowDataRoot()}/${snapshot.metadata.changeId}/telemetry.jsonl`
-					: `${snapshot.metadata.worktree}/.herdr-workflow/${snapshot.metadata.changeId}/telemetry.jsonl`,
+					? `${wikiWorkflowDataRoot()}/${snapshot.workflowId}/telemetry.jsonl`
+					: `${snapshot.metadata.worktree}/.herdr-workflow/${snapshot.workflowId}/telemetry.jsonl`,
 			TRACEPARENT: traceparent(
 				childTrace(parseTraceparent(process.env.TRACEPARENT)),
 			),

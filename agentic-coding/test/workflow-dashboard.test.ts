@@ -150,7 +150,7 @@ test("dashboard discovery keeps malformed workflows visible with diagnostic", ()
 		};
 		const started = new WorkflowEngine(registerBuiltins()).start({
 			repo,
-			changeId: "invalid",
+			workflowId: "invalid",
 			definitionId: "no-openspec",
 			metadata: {
 				branch: "main",
@@ -172,7 +172,7 @@ test("dashboard discovery keeps malformed workflows visible with diagnostic", ()
 		).run(JSON.stringify(snapshot), "broken.step", started.view.workflowId);
 		db.close();
 		const item = listWorkflows(repo).find(
-			(entry) => entry.state.changeId === "invalid",
+			(entry) => entry.state.workflowId === "invalid",
 		);
 		expect(item?.state.health?.valid).toBe(false);
 		expect(item?.state.health?.diagnostic).toContain(
@@ -287,7 +287,7 @@ test("developer review reads authoritative workflow worktree and closed state is
 		new WorkflowEngine(registerBuiltins()).start({
 			repo,
 			worktree: linked,
-			changeId: "review",
+			workflowId: "review",
 			definitionId: "no-openspec",
 			metadata: {
 				branch: "feature/review",
@@ -306,7 +306,7 @@ test("developer review reads authoritative workflow worktree and closed state is
 			loadLocalChanges(repo, "review").map((item) => item.newPath),
 		).toContain("README.md");
 		expect(
-			listWorkflows(linked).some((item) => item.state.changeId === "review"),
+			listWorkflows(linked).some((item) => item.state.workflowId === "review"),
 		).toBe(true);
 		setReturnInProcess(repo, "review", "dashboard-workspace");
 		expect(
@@ -359,7 +359,7 @@ test("dashboard repair and actions use displayed revision", async () => {
 		};
 		const started = new WorkflowEngine(registerBuiltins()).start({
 			repo,
-			changeId: "repair",
+			workflowId: "repair",
 			definitionId: "no-openspec",
 			metadata: {
 				branch: "main",
@@ -440,7 +440,7 @@ test("dashboard repair dispatches with an empty/omitted reason", () => {
 		};
 		const started = new WorkflowEngine(registerBuiltins()).start({
 			repo,
-			changeId: "repair-empty",
+			workflowId: "repair-empty",
 			definitionId: "no-openspec",
 			metadata: {
 				branch: "main",

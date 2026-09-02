@@ -33,7 +33,7 @@ import type { WorkflowRegistry } from "../../workflow/registry.ts";
 import {
 	canonicalStorePath,
 	researchWorkflowTarget,
-	validateChangeId,
+	validateWorkflowId,
 	wikiWorkflowTarget,
 } from "../../workflow/runtime.ts";
 import {
@@ -42,28 +42,31 @@ import {
 } from "../../workflow/wiki.ts";
 import { credentialPromptBridge } from "./ui/CredentialsModal.tsx";
 
-export function getWorkflowView(repo: string, change: string): WorkflowView {
+export function getWorkflowView(
+	repo: string,
+	workflowId: string,
+): WorkflowView {
 	const engine = workflowEngineFactory();
 	void drainEffects(engine, repo, credentialPromptBridge()).catch(
 		() => undefined,
 	);
-	return engine.status(repo, change);
+	return engine.status(repo, workflowId);
 }
 export function listWorkflowViews(repo: string): WorkflowView[] {
 	return workflowEngineFactory().list(repo);
 }
-export function previewWorkflowRepair(repo: string, change: string) {
-	return workflowEngineFactory().previewRepair(repo, change);
+export function previewWorkflowRepair(repo: string, workflowId: string) {
+	return workflowEngineFactory().previewRepair(repo, workflowId);
 }
 export function repairWorkflow(
 	repo: string,
-	change: string,
+	workflowId: string,
 	revision: number,
 	targetStep: string,
 	reason = "",
 ) {
 	const engine = workflowEngineFactory();
-	const view = engine.status(repo, change);
+	const view = engine.status(repo, workflowId);
 	if (view.revision !== revision)
 		throw new Error(`stale revision ${revision}; current ${view.revision}`);
 	return engine.dispatch(repo, {
@@ -76,7 +79,7 @@ export function repairWorkflow(
 }
 export function answerWorkflowQuestion(
 	repo: string,
-	change: string,
+	workflowId: string,
 	revision: number,
 	questionId: string,
 	answer:
@@ -92,7 +95,7 @@ export function answerWorkflowQuestion(
 		| { groupId: string; kind: "cancel" },
 ): WorkflowView {
 	const workflow = workflowEngineFactory();
-	const view = workflow.status(repo, change);
+	const view = workflow.status(repo, workflowId);
 	return workflow.dispatch(repo, {
 		type: "developer.action",
 		workflowId: view.workflowId,
@@ -105,12 +108,12 @@ export function answerWorkflowQuestion(
 export async function runWorkflowAction(
 	actionId: string,
 	repo: string,
-	change: string,
+	workflowId: string,
 	revision: number,
 	input?: string,
 ): Promise<string> {
 	const engine = workflowEngineFactory();
-	const view = engine.status(repo, change);
+	const view = engine.status(repo, workflowId);
 	let parsed: unknown;
 	if (input) {
 		try {
@@ -127,7 +130,7 @@ export async function runWorkflowAction(
 		input: parsed,
 	});
 	await drainEffects(engine, repo, credentialPromptBridge());
-	return JSON.stringify(engine.status(repo, change));
+	return JSON.stringify(engine.status(repo, workflowId));
 }
 /** Sentinel choice meaning "use existing global config defaults"; stripped
  * before routing so it never reaches resolvePreset. */
@@ -136,7 +139,7 @@ export const PRESET_CONFIG_DEFAULTS = "Config defaults";
 export function startArgs(input: {
 	repo: string;
 	ticket: string;
-	change: string;
+	workflowId: string;
 	task?: string;
 	mode: string;
 	workflowType?: string;
@@ -155,7 +158,7 @@ export function startArgs(input: {
 	return {
 		repo: research ? researchWorkflowTarget() : input.repo,
 		...(research && input.repo ? { repositoryContext: input.repo } : {}),
-		changeId: validateChangeId(input.change),
+		workflowId: validateWorkflowId(input.workflowId),
 		definitionId,
 		task: input.task || undefined,
 		ticket: input.ticket || undefined,
@@ -260,7 +263,7 @@ export async function startWorkflowInProcess(
 		args.definitionId === "research"
 			? (args.repositoryContext ?? "")
 			: args.repo,
-		args.changeId,
+		args.workflowId,
 		args.definitionId,
 		args.task,
 	);
@@ -302,7 +305,7 @@ export async function startWorkflowInProcess(
 		? ""
 		: sameCheckout
 			? runGit(args.repo, "branch", "--show-current")
-			: `${config.workflow.branch_prefix}${args.changeId}`;
+			: `${config.workflow.branch_prefix}${args.workflowId}`;
 	if (!research && sameCheckout && !branch)
 		throw new Error(
 			"repository-backed workflows require a named current branch",
@@ -315,7 +318,7 @@ export async function startWorkflowInProcess(
 			: {}),
 		...(args.mode ? { mode: args.mode as "worktree" | "checkout" } : {}),
 		sameCheckout: args.sameCheckout,
-		changeId: args.changeId,
+		workflowId: args.workflowId,
 		definitionId: args.definitionId,
 		definitionVersion,
 		metadata: {
@@ -328,7 +331,7 @@ export async function startWorkflowInProcess(
 		routing,
 	});
 	await drainEffects(engine, args.repo, credentialPromptBridge());
-	return `Workflow started: ${args.changeId}`;
+	return `Workflow started: ${args.workflowId}`;
 }
 
 /** Start the home-only wiki review without requiring a repository or blocking
@@ -360,7 +363,7 @@ export function startWikiCommentWorkflowInProcess(
 	const engine = workflowEngineFactory();
 	engine.start({
 		repo: wikiWorkflowTarget(),
-		changeId: validateChangeId(sessionId),
+		workflowId: validateWorkflowId(sessionId),
 		definitionId: "wiki-comments",
 		definitionVersion,
 		context: JSON.parse(JSON.stringify({ comments })),
@@ -379,17 +382,17 @@ export function startWikiCommentWorkflowInProcess(
 	).catch(() => undefined);
 	return `Wiki review workflow started: ${sessionId}`;
 }
-function navigationPath(repo: string, change: string): string {
+function navigationPath(repo: string, workflowId: string): string {
 	return path.join(
 		path.dirname(canonicalStorePath(repo)),
 		"navigation",
-		`${encodeURIComponent(change)}.json`,
+		`${encodeURIComponent(workflowId)}.json`,
 	);
 }
-function returnWorkspace(repo: string, change: string): string | undefined {
+function returnWorkspace(repo: string, workflowId: string): string | undefined {
 	let file: string | undefined;
 	try {
-		file = navigationPath(repo, change);
+		file = navigationPath(repo, workflowId);
 		const value = JSON.parse(fs.readFileSync(file, "utf8")) as {
 			workspace?: unknown;
 			at?: unknown;
@@ -433,11 +436,11 @@ function returnWorkspace(repo: string, change: string): string | undefined {
 }
 export function consumeReturnWorkspace(
 	repo: string,
-	change: string,
+	workflowId: string,
 	workspace: string,
 ): void {
 	try {
-		const file = navigationPath(repo, change);
+		const file = navigationPath(repo, workflowId);
 		const value = JSON.parse(fs.readFileSync(file, "utf8")) as {
 			workspace?: unknown;
 		};
@@ -446,13 +449,13 @@ export function consumeReturnWorkspace(
 }
 export function setReturnInProcess(
 	repo: string,
-	change: string,
+	workflowId: string,
 	workspace: string,
 ): void {
 	// biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally rejects control characters
 	if (!workspace || workspace.length > 256 || /[\x00-\x1f]/.test(workspace))
 		throw new Error("invalid return workspace identity");
-	const file = navigationPath(repo, change);
+	const file = navigationPath(repo, workflowId);
 	fs.mkdirSync(path.dirname(file), { recursive: true });
 	const temporary = `${file}.${process.pid}.tmp`;
 	fs.writeFileSync(
@@ -470,8 +473,8 @@ export function discoverProjectsInProcess(): Array<{
 	return listProjects();
 }
 
-export function dashboardState(repo: string, change: string) {
-	return viewToDashboardState(getWorkflowView(repo, change));
+export function dashboardState(repo: string, workflowId: string) {
+	return viewToDashboardState(getWorkflowView(repo, workflowId));
 }
 export function viewToDashboardState(view: WorkflowView) {
 	const verifierRuns = view.runs.filter(
@@ -496,9 +499,10 @@ export function viewToDashboardState(view: WorkflowView) {
 		),
 	);
 	return {
+		workflowId: view.workflowId,
 		changeId: view.changeId,
 		...(view.repository
-			? { returnWorkspace: returnWorkspace(view.repository, view.changeId) }
+			? { returnWorkspace: returnWorkspace(view.repository, view.workflowId) }
 			: {}),
 		phase: view.currentStep.id,
 		stepId: view.currentStep.id,

@@ -183,7 +183,7 @@ export async function runAction(
 				? "action: unexpected positional argument"
 				: "action: ACTION_ID is required",
 		);
-	const view = workflowEngine.status(repo, requireFlag(rest, "change"));
+	const view = workflowEngine.status(repo, requireFlag(rest, "workflow-id"));
 	workflowEngine.dispatch(repo, {
 		type: "developer.action",
 		workflowId: view.workflowId,
@@ -194,7 +194,7 @@ export async function runAction(
 	await drainEffects(workflowEngine, repo);
 	console.log(
 		JSON.stringify(
-			workflowEngine.status(repo, requireFlag(rest, "change")),
+			workflowEngine.status(repo, requireFlag(rest, "workflow-id")),
 			null,
 			2,
 		),
@@ -263,7 +263,7 @@ export async function runHandoff(
 	else {
 		const entry = Bun.main.startsWith("$bunfs") ? undefined : Bun.main;
 		const drain = Bun.spawn(
-			detachedDrainArgv(entry, target, result.view.changeId),
+			detachedDrainArgv(entry, target, result.view.workflowId),
 			{
 				detached: true,
 				stdio: ["ignore", "ignore", "ignore"],
@@ -281,7 +281,7 @@ export async function runHandoff(
 	}
 	console.log(
 		JSON.stringify(
-			workflowEngine.status(target, result.view.changeId),
+			workflowEngine.status(target, result.view.workflowId),
 			null,
 			2,
 		),

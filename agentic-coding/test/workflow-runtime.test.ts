@@ -115,7 +115,7 @@ describe("transactional workflow runtime", () => {
 			};
 			const started = engine.start({
 				repo: researchWorkflowTarget(),
-				changeId: "research-setup-retry",
+				workflowId: "research-setup-retry",
 				definitionId: "research",
 				definitionVersion: version,
 				metadata: {
@@ -193,7 +193,7 @@ describe("transactional workflow runtime", () => {
 			const started = engine.start({
 				repo: researchWorkflowTarget(),
 				repositoryContext: source,
-				changeId: "research-source-isolation",
+				workflowId: "research-source-isolation",
 				definitionId: "research",
 				definitionVersion: definitionVersionForPolicy(6),
 				metadata: {
@@ -217,7 +217,7 @@ describe("transactional workflow runtime", () => {
 				engine.start({
 					repo: researchWorkflowTarget(),
 					repositoryContext: source,
-					changeId: "research-invalid-capabilities",
+					workflowId: "research-invalid-capabilities",
 					definitionId: "research",
 					definitionVersion: definitionVersionForPolicy(6),
 					metadata: {
@@ -284,7 +284,7 @@ describe("transactional workflow runtime", () => {
 			};
 			const started = engine.start({
 				repo: researchWorkflowTarget(),
-				changeId: "research-qa-close",
+				workflowId: "research-qa-close",
 				definitionId: "research",
 				definitionVersion: definitionVersionForPolicy(6),
 				metadata: {
@@ -355,7 +355,7 @@ describe("transactional workflow runtime", () => {
 			};
 			const started = engine.start({
 				repo: researchWorkflowTarget(),
-				changeId: "research-lifecycle",
+				workflowId: "research-lifecycle",
 				definitionId: "research",
 				definitionVersion: definitionVersionForPolicy(6),
 				metadata: {
@@ -611,7 +611,7 @@ describe("transactional workflow runtime", () => {
 			};
 			const started = engine.start({
 				repo: researchWorkflowTarget(),
-				changeId: "research-handoff-auth",
+				workflowId: "research-handoff-auth",
 				definitionId: "research",
 				definitionVersion: definitionVersionForPolicy(6),
 				metadata: {
@@ -915,7 +915,7 @@ describe("transactional workflow runtime", () => {
 			};
 			const started = engine.start({
 				repo: researchWorkflowTarget(),
-				changeId: "research-handoff-telemetry",
+				workflowId: "research-handoff-telemetry",
 				definitionId: "research",
 				definitionVersion: definitionVersionForPolicy(6),
 				metadata: {
@@ -1019,7 +1019,7 @@ describe("transactional workflow runtime", () => {
 			engine.start({
 				repo,
 				worktree: linked,
-				changeId: "linked",
+				workflowId: "linked",
 				definitionId: "no-openspec",
 				metadata: {
 					branch: "linked",
@@ -1047,7 +1047,7 @@ describe("transactional workflow runtime", () => {
 			);
 			const started = engine.start({
 				repo,
-				changeId: "change",
+				workflowId: "change",
 				definitionId: "no-openspec",
 				metadata: {
 					branch: "main",
@@ -1139,7 +1139,7 @@ describe("transactional workflow runtime", () => {
 			const engine = new WorkflowEngine(registerBuiltins());
 			const started = engine.start({
 				repo,
-				changeId: "malformed",
+				workflowId: "malformed",
 				definitionId: "no-openspec",
 				metadata: {
 					branch: "main",
@@ -1185,7 +1185,7 @@ describe("transactional workflow runtime", () => {
 			const engine = new WorkflowEngine(registerBuiltins());
 			const snapshot = engine.start({
 				repo,
-				changeId: "contract",
+				workflowId: "contract",
 				definitionId: "no-openspec",
 				metadata: {
 					branch: "main",
@@ -1240,7 +1240,7 @@ describe("transactional workflow runtime", () => {
 			let view = engine.start({
 				repo,
 				mode: "checkout",
-				changeId: "proposal-lifecycle",
+				workflowId: "proposal-lifecycle",
 				definitionId: "openspec-propose",
 				metadata: {
 					branch: "main",
@@ -1278,13 +1278,30 @@ describe("transactional workflow runtime", () => {
 				"planner output path",
 			);
 			fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+			// The planner owns the change id: it authors the change directory and
+			// declares it as the primary change in its handoff payload.
+			const declaredPrimaryRoot = path.join(
+				repo,
+				"openspec",
+				"changes",
+				"proposal",
+			);
+			fs.mkdirSync(path.join(declaredPrimaryRoot, "specs", "feature"), {
+				recursive: true,
+			});
+			for (const file of ["proposal.md", "design.md", "tasks.md"])
+				fs.writeFileSync(path.join(declaredPrimaryRoot, file), "- [x] task\n");
+			fs.writeFileSync(
+				path.join(declaredPrimaryRoot, "specs", "feature", "spec.md"),
+				"#### Scenario: works\n",
+			);
 			fs.writeFileSync(
 				outputPath,
 				JSON.stringify({
 					runId: run.id,
 					schemaId: stored.outputSchema?.id,
 					schemaVersion: stored.outputSchema?.version,
-					payload: { planned: true },
+					payload: { primaryChangeId: "proposal", planned: true },
 				}),
 			);
 			view = engine.dispatch(repo, {
@@ -1395,7 +1412,7 @@ describe("transactional workflow runtime", () => {
 			const started = engine.start({
 				repo,
 				mode: "checkout",
-				changeId: "proposal-review",
+				workflowId: "proposal-review",
 				definitionId: "openspec-propose",
 				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
 				routing: routing(),
@@ -1449,7 +1466,7 @@ describe("transactional workflow runtime", () => {
 			const engine = new WorkflowEngine(registerBuiltins());
 			const result = engine.start({
 				repo,
-				changeId: "repair",
+				workflowId: "repair",
 				definitionId: "openspec-full",
 				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
 				routing: routing(),
@@ -1513,7 +1530,7 @@ describe("transactional workflow runtime", () => {
 			const engine = new WorkflowEngine(registerBuiltins());
 			const started = engine.start({
 				repo,
-				changeId: "repair-empty",
+				workflowId: "repair-empty",
 				definitionId: "no-openspec",
 				metadata: {
 					branch: "main",
@@ -1564,7 +1581,7 @@ describe("transactional workflow runtime", () => {
 			const engine = new WorkflowEngine(registerBuiltins());
 			const result = engine.start({
 				repo,
-				changeId: "plan-comments",
+				workflowId: "plan-comments",
 				definitionId: "openspec-full",
 				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
 				routing: routing(),
@@ -1614,7 +1631,7 @@ describe("transactional workflow runtime", () => {
 			const engine = new WorkflowEngine(registerBuiltins());
 			const result = engine.start({
 				repo,
-				changeId: "plan-comments-invalid",
+				workflowId: "plan-comments-invalid",
 				definitionId: "openspec-full",
 				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
 				routing: routing(),
@@ -1668,7 +1685,7 @@ describe("transactional workflow runtime", () => {
 			const engine = new WorkflowEngine(registerBuiltins());
 			const result = engine.start({
 				repo,
-				changeId: "plan-gate",
+				workflowId: "plan-gate",
 				definitionId: "openspec-full",
 				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
 				routing: routing(),
@@ -1691,7 +1708,7 @@ describe("transactional workflow runtime", () => {
 			const rejectedEngine = new WorkflowEngine(registerBuiltins());
 			const rejected = rejectedEngine.start({
 				repo: rejectedRepo,
-				changeId: "plan-reject",
+				workflowId: "plan-reject",
 				definitionId: "openspec-full",
 				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
 				routing: routing(),
@@ -1723,7 +1740,7 @@ describe("transactional workflow runtime", () => {
 			const engine = new WorkflowEngine(registerBuiltins());
 			let view = engine.start({
 				repo,
-				changeId: "parallel",
+				workflowId: "parallel",
 				definitionId: "no-openspec",
 				metadata: {
 					branch: "main",
@@ -1822,7 +1839,7 @@ describe("transactional workflow runtime", () => {
 			const engine = new WorkflowEngine(registerBuiltins());
 			let view = engine.start({
 				repo,
-				changeId: "scope",
+				workflowId: "scope",
 				definitionId: "no-openspec",
 				metadata: {
 					branch: "main",
@@ -1931,7 +1948,7 @@ describe("transactional workflow runtime", () => {
 			const engine = new WorkflowEngine(registerBuiltins());
 			let view = engine.start({
 				repo,
-				changeId: "siblings",
+				workflowId: "siblings",
 				definitionId: "no-openspec",
 				metadata: {
 					branch: "main",
@@ -2051,7 +2068,7 @@ describe("transactional workflow runtime", () => {
 			const engine = new WorkflowEngine(registerBuiltins());
 			let view = engine.start({
 				repo,
-				changeId: "empty",
+				workflowId: "empty",
 				definitionId: "no-openspec",
 				metadata: {
 					branch: "main",
@@ -2119,7 +2136,7 @@ describe("transactional workflow runtime", () => {
 			const engine = new WorkflowEngine(registerBuiltins());
 			let view = engine.start({
 				repo,
-				changeId: "round-pass",
+				workflowId: "round-pass",
 				definitionId: "no-openspec",
 				metadata: {
 					branch: "main",
@@ -2209,7 +2226,7 @@ describe("transactional workflow runtime", () => {
 			const engine = new WorkflowEngine(registerBuiltins());
 			let view = engine.start({
 				repo,
-				changeId: "round-fix",
+				workflowId: "round-fix",
 				definitionId: "no-openspec",
 				metadata: {
 					branch: "main",
@@ -2310,7 +2327,7 @@ describe("transactional workflow runtime", () => {
 			const engine = new WorkflowEngine(registerBuiltins());
 			const started = engine.start({
 				repo,
-				changeId: "repin",
+				workflowId: "repin",
 				definitionId: "no-openspec",
 				metadata: {
 					branch: "main",
@@ -2325,16 +2342,15 @@ describe("transactional workflow runtime", () => {
 			}).view;
 			const db = new Database(canonicalStorePath(repo));
 			const row = db
-				.query(
-					"SELECT snapshot_json FROM workflow_instances WHERE change_id='repin'",
-				)
+				.query("SELECT snapshot_json FROM workflow_instances WHERE id='repin'")
 				.get() as { snapshot_json: string };
 			const snapshot = JSON.parse(row.snapshot_json);
 			snapshot.definition.digest =
 				"deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
-			db.query(
-				"UPDATE workflow_instances SET snapshot_json=? WHERE change_id=?",
-			).run(JSON.stringify(snapshot), "repin");
+			db.query("UPDATE workflow_instances SET snapshot_json=? WHERE id=?").run(
+				JSON.stringify(snapshot),
+				"repin",
+			);
 			db.close();
 			const stale = engine.status(repo, "repin");
 			expect(stale.health.valid).toBe(false);
@@ -2369,7 +2385,7 @@ describe("transactional workflow runtime", () => {
 			const blockedEngine = new WorkflowEngine(registerBuiltins());
 			const blocked = blockedEngine.start({
 				repo,
-				changeId: "blocked",
+				workflowId: "blocked",
 				definitionId: "no-openspec",
 				metadata: {
 					branch: "main",
@@ -2424,7 +2440,7 @@ describe("transactional workflow runtime", () => {
 				metadata: {
 					repository: repo,
 					worktree: repo,
-					changeId: "limit",
+					workflowId: "limit",
 					branch: "main",
 					baseBranch: "main",
 					baseCommit: "base",
@@ -2559,7 +2575,7 @@ describe("transactional workflow runtime", () => {
 			);
 			const _started = engine.start({
 				repo,
-				changeId: "outbox",
+				workflowId: "outbox",
 				definitionId: "no-openspec",
 				metadata: {
 					branch: "main",

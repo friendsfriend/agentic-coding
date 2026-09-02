@@ -8,6 +8,7 @@
 import type { Database } from "bun:sqlite";
 import type { WorkflowCommand, WorkflowSnapshot } from "../../contracts.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
+import { planResult } from "../../definitions/contracts.ts";
 import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
@@ -24,6 +25,7 @@ import {
 	transition,
 } from "../kernel.ts";
 import { ACTIVE_RUN, nowIso, type RunRow, runFromRow } from "../store.ts";
+import { validateChangeId } from "../targets.ts";
 
 function validateTriageScope(
 	snapshot: WorkflowSnapshot,
@@ -98,6 +100,29 @@ export function agentHandoff(
 	if (output !== undefined) output = step.output.parse(output);
 	if (snapshot.definition.id === "research") validateSourceBaseline(snapshot);
 	if (command.outcome === "complete") {
+		if (run.stepId === "core.plan" || run.stepId === "fusion.consolidate") {
+			// The planner owns change scope: it declares exactly one primary
+			// change id in its handoff output, and that id (recorded now, before
+			// the entry guard) is what the change-directory validation and every
+			// downstream step operate on. Shape validation is the same change-id
+			// rule the engine enforces elsewhere. A missing, mis-shaped, or
+			// incomplete declaration rejects the completion; the reducer throws
+			// inside the transaction, which rolls back, so nothing is recorded
+			// and the workflow does not advance.
+			let primary: string | undefined;
+			try {
+				primary = planResult.parse(output).primaryChangeId;
+			} catch (error) {
+				throw new WorkflowRuntimeError(
+					"entry-guard",
+					`plan output must declare a primary change id: ${String(
+						(error as Error).message,
+					)}`,
+				);
+			}
+			validateChangeId(primary);
+			snapshot.metadata.changeId = primary;
+		}
 		registry.step(run.stepId).behavior?.validateEvidence?.({ snapshot });
 		if (run.stepId === "core.wiki") validateSourceBaseline(snapshot);
 		if (run.stepId === "core.triage")

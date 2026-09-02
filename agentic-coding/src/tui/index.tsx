@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 // `agentic-coding` TUI entry — one process, one renderer. Modes:
 //   --home / manager   long-lived launcher: receiver on 4318 + workflow list + observability
-//   --repo P --change C  per-workflow dashboard pane: no receiver (manager owns it), file-based traces
+//   --repo P --workflow-id W  per-workflow dashboard pane: no receiver (manager owns it), file-based traces
 //   --profile test     interactive dummy data
 //   --json             dump dashboard JSON and exit (headless/CI)
 
@@ -51,7 +51,7 @@ import {
 
 const usage = `Usage: agentic-coding dash|home|manager [options]
   --repo PATH              Repository root (default: cwd)
-  --change ID              Change id (dash mode)
+  --workflow-id ID         Workflow id (dash mode)
   --home / manager         Workflow list + observability (long-lived)
   --profile test           Interactive dummy data
   --json                   Dump dashboard JSON and exit
@@ -164,10 +164,10 @@ export async function main(): Promise<void> {
 		process.argv.includes("--home") || process.argv.includes("manager");
 	const isTest = profile === "test";
 	const repoArg = arg("--repo");
-	const change = arg("--change");
-	if (!home && !isTest && (!repoArg || !change)) {
+	const workflowId = arg("--workflow-id");
+	if (!home && !isTest && (!repoArg || !workflowId)) {
 		console.error(
-			"usage: agentic-coding home|manager\n       agentic-coding dash --repo PATH --change ID [--json]\n       agentic-coding dash --profile test [--json]",
+			"usage: agentic-coding home|manager\n       agentic-coding dash --repo PATH --workflow-id ID [--json]\n       agentic-coding dash --profile test [--json]",
 		);
 		process.exit(2);
 	}
@@ -178,7 +178,7 @@ export async function main(): Promise<void> {
 			: repoArg
 				? resolve(repoArg)
 				: "/demo";
-	const resolvedChange = change ?? "demo-optional-realisation-date";
+	const resolvedWorkflowId = workflowId ?? "demo-optional-realisation-date";
 	if (process.argv.includes("--json")) {
 		console.log(
 			JSON.stringify(
@@ -186,7 +186,7 @@ export async function main(): Promise<void> {
 					? listWorkflows()
 					: isTest
 						? testDashboard()
-						: loadDashboard(repo, resolvedChange),
+						: loadDashboard(repo, resolvedWorkflowId),
 				null,
 				2,
 			),
@@ -373,7 +373,7 @@ export async function main(): Promise<void> {
 					dashboard={{
 						mode: home ? "home" : "dash",
 						repo: home ? undefined : repo,
-						change: home ? undefined : resolvedChange,
+						change: home ? undefined : resolvedWorkflowId,
 						profile: isTest ? "test" : undefined,
 						keymap,
 					}}

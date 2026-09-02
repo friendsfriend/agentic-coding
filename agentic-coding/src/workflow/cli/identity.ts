@@ -69,7 +69,7 @@ export function resolveHandoffIdentity(
 		const currentSnapshot = workflowEngine.getSnapshot(repo, workflowId);
 		const envFile = path.join(
 			isWikiWorkflowTarget(repo) || isResearchWorkflowTarget(repo)
-				? path.join(wikiWorkflowDataRoot(), currentSnapshot.metadata.changeId)
+				? path.join(wikiWorkflowDataRoot(), currentSnapshot.workflowId)
 				: path.join(repo, ".herdr-workflow"),
 			"runtime-bin",
 			current.id,

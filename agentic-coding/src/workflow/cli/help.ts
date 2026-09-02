@@ -9,11 +9,11 @@ export function help(command?: string): void {
 	}
 	const usage: Record<string, string> = {
 		start:
-			"start [--repo PATH] --change ID [--mode worktree|checkout] [--workflow openspec-full|openspec-propose|openspec-apply|no-openspec|openspec-fusion-full|openspec-fusion-propose|wiki|research] [--fusion-profiles NAME,NAME,...] [--task TEXT] [--ticket ID] [--preset NAME]",
+			"start [--repo PATH] --workflow-id ID [--mode worktree|checkout] [--workflow openspec-full|openspec-propose|openspec-apply|no-openspec|openspec-fusion-full|openspec-fusion-propose|wiki|research] [--fusion-profiles NAME,NAME,...] [--task TEXT] [--ticket ID] [--preset NAME]",
 
-		status: "status --repo PATH --change ID",
+		status: "status --repo PATH --workflow-id ID",
 		action:
-			"action ACTION_ID --repo PATH --change ID --revision N [--input JSON_OR_PATH]",
+			"action ACTION_ID --repo PATH --workflow-id ID --revision N [--input JSON_OR_PATH]",
 		handoff:
 			"handoff --outcome complete|blocked|failed [--artifact PATH] [--message TEXT]",
 		question:
@@ -21,7 +21,7 @@ export function help(command?: string): void {
 		"research-handoff":
 			"research-handoff --subject TEXT --directives JSON_OR_PATH [--target TEXT] [--findings TEXT] [--citations TEXT,TEXT] [--no-sources]; records the structured handoff and transitions to wiki drafting in one authenticated step. --directives is a JSON array of { target, intent: create|update, claims: [TEXT], citations?: [TEXT] }",
 		repair:
-			"repair --repo PATH --change ID --revision N --step STEP [--reason TEXT] [--confirm]",
+			"repair --repo PATH --workflow-id ID --revision N --step STEP [--reason TEXT] [--confirm]",
 		projects: "projects",
 		config: "config",
 		"agent-extension":

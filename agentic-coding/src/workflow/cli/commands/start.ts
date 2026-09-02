@@ -20,7 +20,7 @@ import {
 } from "../../profiles.ts";
 import {
 	researchWorkflowTarget,
-	validateChangeId,
+	validateWorkflowId,
 	type WorkflowEngine,
 } from "../../runtime.ts";
 import type { StepBehavior } from "../../steps/types.ts";
@@ -31,7 +31,7 @@ import { registry } from "../registry.ts";
 
 export function validateStart(
 	repo: string,
-	change: string,
+	workflowId: string,
 	workflow: string,
 	task?: string,
 ): void {
@@ -63,7 +63,9 @@ export function validateStart(
 	if (!fs.existsSync(path.join(repo, "openspec", "config.yaml")))
 		throw new Error("OpenSpec project required for this workflow");
 	if (workflow === "openspec-apply") {
-		const root = path.join(repo, "openspec", "changes", change);
+		// `openspec-apply` has no planner step, so the workflow id also names
+		// the pre-existing change it applies.
+		const root = path.join(repo, "openspec", "changes", workflowId);
 		const requiredFiles = ["proposal.md", "design.md", "tasks.md"];
 		for (const file of requiredFiles)
 			if (
@@ -73,11 +75,14 @@ export function validateStart(
 				throw new Error(`invalid openspec-apply artifact: ${file}`);
 		if (!/\[ \]/.test(fs.readFileSync(path.join(root, "tasks.md"), "utf8")))
 			throw new Error("openspec-apply requires actionable unchecked task");
-		const result = Bun.spawnSync(["openspec", "validate", change, "--strict"], {
-			cwd: repo,
-			stdout: "pipe",
-			stderr: "pipe",
-		});
+		const result = Bun.spawnSync(
+			["openspec", "validate", workflowId, "--strict"],
+			{
+				cwd: repo,
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
 		if (result.exitCode !== 0)
 			throw new Error(
 				`OpenSpec validation failed: ${(result.stderr.toString() || result.stdout.toString()).trim()}`,
@@ -147,7 +152,7 @@ export async function runStart(
 			? fs.realpathSync(path.resolve(requireFlag(rest, "repo")))
 			: ""
 		: fs.realpathSync(path.resolve(requireFlag(rest, "repo")));
-	const change = validateChangeId(requireFlag(rest, "change"));
+	const workflowId = validateWorkflowId(requireFlag(rest, "workflow-id"));
 	const mode = research ? undefined : parseMode(flag(rest, "mode"));
 	const proposal = ["openspec-propose", "openspec-fusion-propose"].includes(
 		workflow,
@@ -163,7 +168,7 @@ export async function runStart(
 			? parseFusionProfiles(flag(rest, "fusion-profiles"))
 			: undefined;
 	const task = flag(rest, "task");
-	validateStart(repo, change, workflow, task);
+	validateStart(repo, workflowId, workflow, task);
 	const config = loadConfig();
 	const definitionVersion = definitionVersionForManifestPolicy(
 		config.workflow.max_verification_rounds,
@@ -210,7 +215,7 @@ export async function runStart(
 		? ""
 		: sameCheckout
 			? runGit(repo, "branch", "--show-current")
-			: `${config.workflow.branch_prefix}${change}`;
+			: `${config.workflow.branch_prefix}${workflowId}`;
 	if (!research && sameCheckout && !branch)
 		throw new Error(
 			"repository-backed workflows require a named current branch",
@@ -220,7 +225,7 @@ export async function runStart(
 		...(research && repo ? { repositoryContext: repo } : {}),
 		...(mode ? { mode } : {}),
 		sameCheckout,
-		changeId: change,
+		workflowId,
 		definitionId: workflow,
 		definitionVersion,
 		metadata: {
@@ -234,5 +239,7 @@ export async function runStart(
 	});
 	const target = research ? researchWorkflowTarget() : repo;
 	await drainEffects(workflowEngine, target);
-	console.log(JSON.stringify(workflowEngine.status(target, change), null, 2));
+	console.log(
+		JSON.stringify(workflowEngine.status(target, workflowId), null, 2),
+	);
 }
