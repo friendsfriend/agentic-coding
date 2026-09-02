@@ -38,6 +38,7 @@ import type {
 	StepDefinition,
 	WorkflowRegistry,
 } from "./registry.ts";
+import { fusionPlannerRoles as stepFusionPlannerRoles } from "./steps/planning.ts";
 import {
 	conceptPath,
 	ensureBundle,
@@ -2490,7 +2491,10 @@ export class WorkflowEngine {
 		const step = this.registry.step(snapshot.currentStep);
 		this.applyReduction(db, snapshot, step, step.enter(snapshot));
 		if (step.actor === "agent") {
-			const roles = roleForStep(snapshot.currentStep, snapshot);
+			if (!step.behavior) throw new Error(`missing step behavior: ${step.id}`);
+			if (!step.behavior.roles)
+				throw new Error(`missing role behavior for agent step ${step.id}`);
+			const roles = step.behavior.roles({ snapshot });
 			for (const role of roles) {
 				if (snapshot.currentStep === "fusion.plan") {
 					// Resume collection: never relaunch a role whose validated draft
@@ -3473,7 +3477,6 @@ export class WorkflowEngine {
 			}
 	}
 }
-const PLANNER_ROLE = /^planner-[1-5]$/;
 function validateFusionRouting(
 	definitionId: string,
 	routing: WorkflowRouting,
@@ -3482,6 +3485,7 @@ function validateFusionRouting(
 		(route) => route.stepId === "fusion.plan",
 	);
 	const roles = plannerRoutes.map((route) => route.role);
+	const resolvedRoles = fusionPlannerRoles(routing);
 	const expected = Array.from(
 		{ length: roles.length },
 		(_, index) => `planner-${index + 1}`,
@@ -3489,9 +3493,8 @@ function validateFusionRouting(
 	if (
 		roles.length < 2 ||
 		roles.length > 5 ||
-		roles.some((role) => !role || !PLANNER_ROLE.test(role)) ||
-		new Set(roles).size !== roles.length ||
-		!expected.every((role) => roles.includes(role))
+		resolvedRoles.length !== roles.length ||
+		!expected.every((role) => resolvedRoles.includes(role))
 	)
 		throw new WorkflowRuntimeError(
 			"fusion-routing",
@@ -3509,18 +3512,7 @@ function validateFusionRouting(
  * i-th profile, so retries and restarts re-resolve identically from the
  * recorded routes without extra snapshot schema. */
 export function fusionPlannerRoles(routing: WorkflowRouting): string[] {
-	const roles = new Set<string>();
-	for (const route of routing.routes)
-		if (
-			route.stepId === "fusion.plan" &&
-			route.role &&
-			PLANNER_ROLE.test(route.role)
-		)
-			roles.add(route.role);
-	return [...roles].sort(
-		(a, b) =>
-			Number(a.slice("planner-".length)) - Number(b.slice("planner-".length)),
-	);
+	return stepFusionPlannerRoles(routing);
 }
 /** Validated planner drafts in stable role order, deduplicated by role with
  * the latest digest winning (a repaired or retried role may re-submit). */
@@ -3792,24 +3784,6 @@ function wikiVerificationPayload(snapshot: WorkflowSnapshot): {
 				})),
 		};
 	});
-}
-function roleForStep(step: string, snapshot: WorkflowSnapshot): string[] {
-	if (step === "core.plan") return ["planner"];
-	if (step === "fusion.plan") return fusionPlannerRoles(snapshot.routing);
-	if (step === "fusion.consolidate") return ["consolidator"];
-	if (step === "core.implementation") return ["worker"];
-	if (step === "core.triage") return ["triage"];
-	if (step === "core.verification")
-		return snapshot.step.selectedRoles.length
-			? snapshot.step.selectedRoles
-			: snapshot.step.testRunStarted
-				? ["test-verifier"]
-				: ["quality-verifier"];
-	if (step === "core.wiki")
-		return [snapshot.definition.id === "research" ? "research-wiki" : "wiki"];
-	if (step === "core.research") return ["researcher"];
-	if (step === "core.archive") return ["archive"];
-	return [];
 }
 function walkFiles(root: string): string[] {
 	const files: string[] = [];

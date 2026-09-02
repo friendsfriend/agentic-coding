@@ -27,6 +27,7 @@ function testStep(id: string, outcomes = ["next"]): StepDefinition {
 		output: contract,
 		outcomes,
 		allowedEffects: [],
+		behavior: {},
 		enter: reduction,
 		reduce: reduction,
 	};

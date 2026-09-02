@@ -15,6 +15,7 @@ import {
 	type WorkflowManifest,
 	WorkflowRegistry,
 } from "./registry.ts";
+import { assertStepBehaviorCoverage, stepBehavior } from "./steps/index.ts";
 
 const EFFECTS: EffectKind[] = [
 	"workspace.setup",
@@ -500,6 +501,7 @@ function step(
 			(actor === "agent"
 				? ["artifact.write", "agent.launch", "agent.prompt", "agent.stop"]
 				: []),
+		behavior: stepBehavior(id),
 		enter: unchanged,
 		reduce(snapshot, command) {
 			if (!outcomes.includes(command.outcome))
@@ -1142,14 +1144,20 @@ export function registerBuiltins(
 	];
 	for (const rounds of Array.from({ length: 20 }, (_, index) => index + 1)) {
 		const legacyVersion = rounds === 6 ? 1 : rounds === 1 ? 21 : rounds;
-		for (const definition of manifests(rounds, legacyVersion, false))
+		for (const definition of manifests(rounds, legacyVersion, false)) {
+			assertStepBehaviorCoverage(definition.steps);
 			registry.registerWorkflow(definition);
+		}
 		const version = definitionVersionForPolicy(rounds);
-		for (const definition of manifests(rounds, version, true))
+		for (const definition of manifests(rounds, version, true)) {
+			assertStepBehaviorCoverage(definition.steps);
 			registry.registerWorkflow(definition);
+		}
 		if (rounds === 6)
-			for (const definition of manifests(20, 1000, true, false))
+			for (const definition of manifests(20, 1000, true, false)) {
+				assertStepBehaviorCoverage(definition.steps);
 				registry.registerWorkflow(definition);
+			}
 	}
 	return registry;
 }

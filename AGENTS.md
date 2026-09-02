@@ -16,3 +16,7 @@ Rules of thumb:
 - Non-null assertions (`value!`) are banned by `style/noNonNullAssertion`. Replace them with a real guard (`if (!x) throw ...` / early return), a fallback (`??`), or restructure so the compiler narrows the value. If a case is genuinely unavoidable, add `// biome-ignore lint/style/noNonNullAssertion: <reason>` on the line directly above.
 - `src/workflow/embedded.generated.ts` is excluded via config override; never hand-edit it or reformat it — regenerate with `bun run build`.
 - Type checking stays with `bun run type-check` (`tsc --noEmit`); Biome does not replace it.
+
+## Workflow architecture
+
+See [`agentic-coding/docs/workflow-architecture.md`](agentic-coding/docs/workflow-architecture.md) for the workflow layer map and step checklist. Role knowledge belongs in `agentic-coding/src/workflow/steps/`; the engine, CLI, and dashboard must read registered step behavior rather than duplicate role tables.

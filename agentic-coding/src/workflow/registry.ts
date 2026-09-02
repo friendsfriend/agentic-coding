@@ -6,6 +6,9 @@ import type {
 	EffectKind,
 	WorkflowSnapshot,
 } from "./contracts.ts";
+import type { StepBehavior } from "./steps/types.ts";
+
+export type { StepBehavior } from "./steps/types.ts";
 
 export interface Reduction {
 	snapshot: WorkflowSnapshot;
@@ -29,6 +32,8 @@ export interface StepDefinition<Input = unknown, Output = unknown> {
 	actor: ActorKind;
 	instructionAssets: readonly string[];
 	instructionDigests: readonly string[];
+	/** Engine-internal step semantics; excluded from step and definition digests. */
+	behavior?: StepBehavior;
 	requirements: readonly AdapterCapability[];
 	input: Contract<Input>;
 	output: Contract<Output>;
@@ -87,6 +92,7 @@ function stepDigest(step: StepDefinition): string {
 	// Instruction assets are a rendering concern (the assignment pins each asset
 	// digest at render time); they must not change the state-machine contract,
 	// otherwise instruction edits break every pinned workflow (pin mismatch).
+	// Behavior is engine-internal for the same reason and must never enter this digest.
 	return digest({
 		id: step.id,
 		version: step.version,
@@ -124,6 +130,14 @@ export class WorkflowRegistry {
 			throw new Error(`invalid step identity: ${step.id}@${step.version}`);
 		if (!["agent", "developer", "system"].includes(step.actor))
 			throw new Error(`unknown actor for ${step.id}: ${step.actor}`);
+		if (step.actor === "agent") {
+			if (!step.behavior)
+				throw new Error(`missing step behavior for agent step ${step.id}`);
+			if (!step.behavior.roles)
+				throw new Error(`missing role behavior for agent step ${step.id}`);
+			if (!step.behavior.candidateRoles)
+				throw new Error(`missing candidate roles for agent step ${step.id}`);
+		}
 		if (
 			!step.input?.id ||
 			!step.output?.id ||
@@ -152,6 +166,16 @@ export class WorkflowRegistry {
 				);
 		if (step.instructionAssets.length !== step.instructionDigests.length)
 			throw new Error(`instruction digest mismatch for ${step.id}`);
+		if (step.behavior?.candidateRoles) {
+			const roles = step.behavior.candidateRoles({
+				definitionId: step.id,
+				fusionPlannerCount: 1,
+			});
+			if (!Array.isArray(roles))
+				throw new Error(
+					`invalid candidate roles for ${step.id}: expected array`,
+				);
+		}
 		const key = `${step.id}@${step.version}`;
 		if (this.#steps.has(key))
 			throw new Error(`step already registered: ${key}`);
@@ -183,6 +207,23 @@ export class WorkflowRegistry {
 		)
 			throw new Error(`invalid step list in ${manifest.id}`);
 		const steps = new Map(manifest.steps.map((id) => [id, this.step(id)]));
+		for (const [id, step] of steps) {
+			if (step.actor !== "agent") continue;
+			if (!step.behavior) throw new Error(`missing step behavior: ${id}`);
+			const candidateRoles = step.behavior.candidateRoles;
+			if (!candidateRoles)
+				throw new Error(`missing candidate roles for agent step ${id}`);
+			const roles = candidateRoles({
+				definitionId: manifest.id,
+				// Fusion planner count is supplied only once routing is selected;
+				// zero is a valid catalog-time candidate set for that fan-out step.
+				fusionPlannerCount: id === "fusion.plan" ? 0 : 1,
+			});
+			if (!Array.isArray(roles))
+				throw new Error(`invalid candidate roles for ${id}: expected array`);
+			if (id !== "fusion.plan" && !roles.length)
+				throw new Error(`empty candidate roles for agent step ${id}`);
+		}
 		if (!steps.has(manifest.initial))
 			throw new Error(`missing initial step: ${manifest.initial}`);
 		if (
