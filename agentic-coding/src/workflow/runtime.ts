@@ -2094,7 +2094,8 @@ export class WorkflowEngine {
 				...(outputDigest ? { outputDigest } : {}),
 			});
 			if (!snapshot.step.activeRunIds.length) {
-				if (snapshot.step.results.some((result) => result.critical > 0))
+				if (snapshot.step.results.some((result) => result.critical > 0)) {
+					this.stopRoundAgents(db, snapshot, snapshot.step.attempt);
 					this.transition(
 						db,
 						snapshot,
@@ -2112,13 +2113,16 @@ export class WorkflowEngine {
 							),
 						},
 					);
-				else if (
+				} else if (
 					!snapshot.step.testRunStarted &&
 					run.role !== "test-verifier"
 				) {
 					snapshot.step.testRunStarted = true;
 					this.createRun(db, snapshot, step, "test-verifier");
-				} else this.transition(db, snapshot, definition, "pass");
+				} else {
+					this.stopRoundAgents(db, snapshot, snapshot.step.attempt);
+					this.transition(db, snapshot, definition, "pass");
+				}
 			}
 		} else if (
 			command.outcome === "complete" &&
@@ -3385,6 +3389,34 @@ export class WorkflowEngine {
 				"revision-conflict",
 				`stale revision ${revision}; current ${snapshot.revision}`,
 				snapshot.revision,
+			);
+	}
+	/**
+	 * Stops the agents for every core.triage/core.verification run that
+	 * belongs to the round transitioning away (pass/fix/limit). Runs within a
+	 * round complete individually as they finish, so by the time the round is
+	 * over their handles no longer live in activeRunIds; find them by shared
+	 * round attempt instead, mirroring the failed-path cleanup in
+	 * expireSiblingRuns so verifier/triage panes never outlive their round.
+	 */
+	private stopRoundAgents(
+		db: Database,
+		snapshot: WorkflowSnapshot,
+		attempt: number,
+	): void {
+		const roundRuns = this.runs(db, snapshot.workflowId).filter(
+			(run) =>
+				(run.stepId === "core.triage" || run.stepId === "core.verification") &&
+				run.attempt === attempt &&
+				run.handle,
+		);
+		for (const run of roundRuns)
+			this.enqueue(
+				db,
+				snapshot,
+				"agent.stop",
+				`run:${run.id}:stop:${run.generation}`,
+				{ runId: run.id },
 			);
 	}
 	private expireSiblingRuns(db: Database, snapshot: WorkflowSnapshot): void {
