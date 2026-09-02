@@ -311,6 +311,7 @@ export function App(props: {
 			data().state.prCreated,
 			artifacts(),
 			data().state.definition?.id,
+			data().state.availableActions,
 		),
 	);
 	const [userActionOpen, setUserActionOpen] = createSignal(false);
@@ -885,8 +886,7 @@ export function App(props: {
 		}
 	};
 	const developerReviewPhase = () =>
-		data().state.stepId === "core.developer-review" ||
-		data().state.phase === "developer-review";
+		requiredUserAction()?.key === "developer-review";
 	const finishDeveloperReview = async () => {
 		if (busy()) return;
 		// Finishing dispatches the workflow gate, so it is only meaningful while
@@ -1005,9 +1005,7 @@ export function App(props: {
 	};
 	const openPlanReview = () => {
 		try {
-			const wikiReview =
-				data().state.stepId === "core.wiki-approval" ||
-				data().state.phase === "wiki-approval";
+			const wikiReview = requiredUserAction()?.key === "wiki-review";
 			const changes: LocalChange[] = wikiReview
 				? loadWikiSnapshotChanges(props.repo, props.change)
 				: props.profile === "test"
@@ -1101,9 +1099,7 @@ export function App(props: {
 	};
 	const finishPlanReview = async () => {
 		if (busy()) return;
-		const wikiReview =
-			data().state.stepId === "core.wiki-approval" ||
-			data().state.phase === "wiki-approval";
+		const wikiReview = requiredUserAction()?.key === "wiki-review";
 		const saveReview = wikiReview ? saveWikiReview : savePlanReview;
 		setBusy(true);
 		setMessage(
@@ -1324,21 +1320,23 @@ export function App(props: {
 				prompt: "Press Enter to advance demo phase",
 				action: "next demo phase",
 			};
-		if (data().state.stepId === "core.developer-review")
-			return {
-				prompt: "Press Enter to review changed files",
-				action: "review",
-			};
-		if (data().state.stepId === "core.plan-approval")
-			return {
-				prompt: "Press Enter to review plan artifacts",
-				action: "plan-review",
-			};
-		if (data().state.stepId === "core.wiki-approval")
-			return {
-				prompt: "Press Enter to review wiki changes",
-				action: "wiki-review",
-			};
+		switch (requiredUserAction()?.key) {
+			case "developer-review":
+				return {
+					prompt: "Press Enter to review changed files",
+					action: "review",
+				};
+			case "plan-review":
+				return {
+					prompt: "Press Enter to review plan artifacts",
+					action: "plan-review",
+				};
+			case "wiki-review":
+				return {
+					prompt: "Press Enter to review wiki changes",
+					action: "wiki-review",
+				};
+		}
 		const actions = data().state.availableActions ?? [];
 		if (actions.length > 1 || actions[0]?.confirmation !== "none")
 			return actions.length
@@ -1646,15 +1644,12 @@ export function App(props: {
 			return;
 		}
 		if (name === "enter" || name === "return") {
+			// openRequiredUserAction is the sole gate for reopening a review popup
+			// on Enter: once its promptedUserActionKey/activePanel guard has
+			// dismissed one, Enter falls through to whatever the focused panel
+			// does instead of force-reopening it (previously a `core.*` stepId
+			// check bypassed that guard for engine-driven views only).
 			if (openRequiredUserAction()) return;
-			if (data().state.stepId === "core.developer-review") {
-				openDeveloperReview();
-				return;
-			}
-			if (data().state.stepId === "core.plan-approval") {
-				openPlanReview();
-				return;
-			}
 			if (activePanel() === 6) {
 				const artifact = artifacts()[selectedArtifact()];
 				if (artifact) {
