@@ -1,9 +1,9 @@
-# no-openspec-workflow Specification
+## RENAMED Requirements
 
-## Purpose
-TBD - created by archiving change introduce-no-openspec-workflow. Update Purpose after archive.
+- FROM: `### Requirement: No-openspec skips archive step`
+- TO: `### Requirement: No-openspec documents through wiki before delivery`
 
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: No-openspec workflow creation
 The system SHALL support pinned `no-openspec` workflow definition starting at implementation from non-empty task without requiring or creating OpenSpec artifacts.
@@ -33,55 +33,6 @@ The system SHALL support pinned `no-openspec` workflow definition starting at im
 - **WHEN** implementation and verification complete and developer approves
 - **THEN** workflow SHALL proceed implementation, triage, verification, developer-review, wiki, wiki-approval, delivery, completed
 - **AND** no planning or archive step SHALL run
-
-### Requirement: Default workflow type preserves existing behavior
-The system SHALL default start to pinned `standard` definition when no workflow definition is supplied.
-
-#### Scenario: Default start is standard
-- **WHEN** developer starts workflow without `--workflow`
-- **THEN** engine SHALL validate standard definition and begin planning run
-- **AND** it SHALL not infer workflow type from presence of modules or phases
-
-#### Scenario: Legacy workflow backward compatibility
-- **WHEN** valid legacy state has no workflow type or modules
-- **THEN** migration SHALL map it to pinned standard definition only when phase/evidence are consistent
-- **AND** otherwise expose repair-required state
-
-### Requirement: Dashboard displays no-openspec workflow
-Dashboard SHALL display pinned no-OpenSpec definition and engine-provided step/run/action view.
-
-#### Scenario: Dashboard shows no-openspec detail
-- **WHEN** no-OpenSpec workflow is in implementation
-- **THEN** UI SHALL show worker run, configured runtime/profile, and no planner/OpenSpec tasks
-- **AND** UI SHALL not infer type from module list
-
-### Requirement: No-openspec workflow starts without an OpenSpec project
-No-OpenSpec start SHALL allow repository without `openspec/config.yaml` while enforcing clean tree, branch, runtime, and workflow entry preconditions.
-
-#### Scenario: No-openspec start skips OpenSpec project check
-- **WHEN** valid no-OpenSpec start targets clean repository without OpenSpec config
-- **THEN** workflow SHALL start implementation
-
-#### Scenario: Standard and direct-apply still require OpenSpec
-- **WHEN** standard or direct-apply start targets repository without OpenSpec config
-- **THEN** start SHALL fail before creating workflow
-
-#### Scenario: Dirty tree still blocks no-openspec start
-- **WHEN** no-OpenSpec start targets dirty repository
-- **THEN** start SHALL fail before creating branch, workspace, workflow, or agent
-
-### Requirement: No-openspec worker guidance is self-consistent
-No-OpenSpec implementation assignment SHALL contain task, focused validation policy, declared output, and generic handoff without OpenSpec task/checklist or skill references.
-
-#### Scenario: No-openspec worker prompt names the verify command
-- **WHEN** no-OpenSpec implementation run starts
-- **THEN** message SHALL no longer name legacy verify command or instruct agent to read proposal/tasks
-- **AND** completion SHALL use generic handoff declared by assignment
-
-#### Scenario: Worker skill task tracking is conditional on tasks.md
-- **WHEN** no-OpenSpec implementation assignment is rendered
-- **THEN** no workflow skill SHALL load and no OpenSpec task tracking instruction SHALL appear
-- **AND** output validation SHALL use no-OpenSpec step contract
 
 ### Requirement: No-openspec documents through wiki before delivery
 No-OpenSpec definition SHALL proceed from approved developer review through the wiki documentation step and wiki approval gate before delivery, and SHALL NOT include an OpenSpec archive step because no OpenSpec change exists to archive. The wiki approval `approve` outcome SHALL enqueue the engine-owned wiki human-verification effect when concepts were touched and advance to delivery; the `comments` outcome SHALL return the workflow to the wiki documentation step under a bounded loop. These wiki steps apply to the wiki-gated definition versions; legacy non-gated definition versions SHALL retain the prior archive-free, wiki-free path directly from developer review to delivery.

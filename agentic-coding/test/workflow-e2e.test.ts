@@ -226,47 +226,47 @@ function drive(
 	visited.push(view.currentStep.id);
 	view = action(engine, root, view, "approve-review");
 	visited.push(view.currentStep.id);
+	if (policy) {
+		view = complete(engine, root, view, "wiki", { touched: [] });
+		visited.push(view.currentStep.id);
+		view = action(engine, root, view, "review-comments", {
+			comments: [
+				{
+					comment: "add the source citation",
+					concept: "architecture",
+					line: 1,
+				},
+			],
+		});
+		expect(view.currentStep.id).toBe("core.wiki");
+		expect(engine.getSnapshot(root, view.workflowId).step.context).toEqual({
+			comments: [
+				{
+					comment: "add the source citation",
+					concept: "architecture",
+					line: 1,
+				},
+			],
+		});
+		visited.push(view.currentStep.id);
+		view = complete(engine, root, view, "wiki", {
+			touched: ["architecture"],
+		});
+		visited.push(view.currentStep.id);
+		view = action(engine, root, view, "approve-wiki");
+		const verification = requireEffect(
+			engine.claimEffects(root, 1),
+			"wiki.verify",
+		);
+		view = engine.dispatch(root, {
+			type: "effect.result",
+			effectId: verification.id,
+			lease: requireDefined(verification.lease, "effect lease"),
+			outcome: "complete",
+		}).view;
+		visited.push(view.currentStep.id);
+	}
 	if (definitionId !== "no-openspec") {
-		if (policy) {
-			view = complete(engine, root, view, "wiki", { touched: [] });
-			visited.push(view.currentStep.id);
-			view = action(engine, root, view, "review-comments", {
-				comments: [
-					{
-						comment: "add the source citation",
-						concept: "architecture",
-						line: 1,
-					},
-				],
-			});
-			expect(view.currentStep.id).toBe("core.wiki");
-			expect(engine.getSnapshot(root, view.workflowId).step.context).toEqual({
-				comments: [
-					{
-						comment: "add the source citation",
-						concept: "architecture",
-						line: 1,
-					},
-				],
-			});
-			visited.push(view.currentStep.id);
-			view = complete(engine, root, view, "wiki", {
-				touched: ["architecture"],
-			});
-			visited.push(view.currentStep.id);
-			view = action(engine, root, view, "approve-wiki");
-			const verification = requireEffect(
-				engine.claimEffects(root, 1),
-				"wiki.verify",
-			);
-			view = engine.dispatch(root, {
-				type: "effect.result",
-				effectId: verification.id,
-				lease: requireDefined(verification.lease, "effect lease"),
-				outcome: "complete",
-			}).view;
-			visited.push(view.currentStep.id);
-		}
 		const active = path.join(root, "openspec", "changes", definitionId);
 		const archived = path.join(
 			root,
@@ -335,6 +335,27 @@ test("policy workflow returns wiki comments before approval and archive", () => 
 		expect(approval).toBeGreaterThan(wiki);
 		expect(archive).toBeGreaterThan(approval);
 		expect(sequence.indexOf("core.delivery")).toBeGreaterThan(archive);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+test("no-openspec policy version documents and reviews before delivery without archive", () => {
+	const root = repo();
+	try {
+		const sequence = drive(
+			new WorkflowEngine(registerBuiltins()),
+			root,
+			"no-openspec",
+			true,
+		);
+		const wiki = sequence.indexOf("core.wiki");
+		const approval = sequence.indexOf("core.wiki-approval");
+		const delivery = sequence.indexOf("core.delivery");
+		expect(wiki).toBeGreaterThan(-1);
+		expect(approval).toBeGreaterThan(wiki);
+		expect(delivery).toBeGreaterThan(approval);
+		expect(sequence.includes("core.archive")).toBe(false);
+		expect(sequence.at(-1)).toBe("core.closed");
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });
 	}
