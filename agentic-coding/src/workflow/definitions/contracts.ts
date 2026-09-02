@@ -335,3 +335,54 @@ export const planDraft: Contract<{
 		};
 	},
 };
+
+/** The planning handoff output (`core.plan` / `fusion.consolidate` complete):
+ * declares the primary change the workflow implements. The planner picks the
+ * change id(s) itself, so the engine cannot know the primary at start — it is
+ * required here and recorded into `metadata.changeId` by the handoff reducer
+ * (which also validates the id shape and the declared change directory). The
+ * remaining fields the planner emits for developer review are bounded but
+ * optional, so single-pass and addressed retries keep their shape. */
+export const planResult: Contract<{
+	primaryChangeId: string;
+	summary?: string;
+	artifacts?: string[];
+	risks?: string[];
+	openQuestions?: string[];
+}> = {
+	id: "core.plan-result",
+	version: 1,
+	parse(value) {
+		const item = validation.object(value, "$");
+		const primaryChangeId = validation.text(
+			item.primaryChangeId,
+			"$.primaryChangeId",
+			80,
+		);
+		const itemList = (field: "artifacts" | "risks" | "openQuestions") => {
+			if (item[field] === undefined) return undefined;
+			if (!Array.isArray(item[field]))
+				throw new ContractFailure("core.plan-result", [
+					{ path: `$.${field}`, message: `expected ${field} array` },
+				]);
+			return (item[field] as unknown[]).map((entry, index) =>
+				validation.text(entry, `$.${field}[${index}]`, 4096),
+			);
+		};
+		const summary =
+			item.summary === undefined
+				? undefined
+				: validation.text(item.summary, "$.summary", 16384);
+		return {
+			primaryChangeId,
+			...(summary === undefined ? {} : { summary }),
+			...(itemList("artifacts") === undefined
+				? {}
+				: { artifacts: itemList("artifacts") }),
+			...(itemList("risks") === undefined ? {} : { risks: itemList("risks") }),
+			...(itemList("openQuestions") === undefined
+				? {}
+				: { openQuestions: itemList("openQuestions") }),
+		};
+	},
+};

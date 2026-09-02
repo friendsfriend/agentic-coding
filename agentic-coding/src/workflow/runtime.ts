@@ -27,6 +27,7 @@ export {
 	RESEARCH_WORKFLOW_TARGET,
 	researchWorkflowTarget,
 	validateChangeId,
+	validateWorkflowId,
 	WIKI_WORKFLOW_TARGET,
 	wikiWorkflowDataRoot,
 	wikiWorkflowTarget,

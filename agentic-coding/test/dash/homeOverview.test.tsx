@@ -20,6 +20,7 @@ beforeEach(() => {
 function overview(): WorkflowOverview {
 	return {
 		state: {
+			workflowId: "demo-change",
 			changeId: "demo-change",
 			phase: "implement",
 			revision: 0,

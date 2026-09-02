@@ -239,7 +239,10 @@ export function wikiVerificationPayload(snapshot: WorkflowSnapshot): {
 		);
 	return withWikiRoot(pinnedRoot, () => {
 		const all = snapshotList(
-			snapshot.metadata.changeId,
+			// The wiki snapshot keys on the recorded change when one exists
+			// (openspec workflows) and on the workflow id otherwise (wiki-only
+			// and research workflows have no planner to record a change).
+			snapshot.metadata.changeId || snapshot.workflowId,
 			snapshot.definition.id === "wiki-comments" ||
 				snapshot.definition.id === "research"
 				? wikiWorkflowDataRoot()
@@ -330,7 +333,7 @@ export function validateStartEvidence(
 	if (!fs.existsSync(path.join(repository, "openspec", "config.yaml")))
 		throw new WorkflowRuntimeError("start-guard", "OpenSpec project required");
 	if (input.definitionId === "openspec-apply") {
-		const root = path.join(repository, "openspec", "changes", input.changeId);
+		const root = path.join(repository, "openspec", "changes", input.workflowId);
 		for (const file of ["proposal.md", "design.md", "tasks.md"])
 			if (
 				!fs.existsSync(path.join(root, file)) ||

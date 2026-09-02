@@ -56,14 +56,14 @@ export async function runRepair(
 	if (!rest.includes("--confirm")) {
 		console.log(
 			JSON.stringify(
-				workflowEngine.previewRepair(repo, requireFlag(rest, "change")),
+				workflowEngine.previewRepair(repo, requireFlag(rest, "workflow-id")),
 				null,
 				2,
 			),
 		);
 		return;
 	}
-	const view = workflowEngine.status(repo, requireFlag(rest, "change"));
+	const view = workflowEngine.status(repo, requireFlag(rest, "workflow-id"));
 	workflowEngine.dispatch(repo, {
 		type: "operator.repair",
 		workflowId: view.workflowId,
@@ -74,7 +74,7 @@ export async function runRepair(
 	await drainEffects(workflowEngine, repo);
 	console.log(
 		JSON.stringify(
-			workflowEngine.status(repo, requireFlag(rest, "change")),
+			workflowEngine.status(repo, requireFlag(rest, "workflow-id")),
 			null,
 			2,
 		),
@@ -86,7 +86,7 @@ export async function runRepin(
 	workflowEngine: WorkflowEngine,
 	repo: string,
 ): Promise<void> {
-	const view = workflowEngine.status(repo, requireFlag(rest, "change"));
+	const view = workflowEngine.status(repo, requireFlag(rest, "workflow-id"));
 	const revision =
 		flag(rest, "revision") === undefined
 			? view.revision
@@ -99,7 +99,7 @@ export async function runRepin(
 	await drainEffects(workflowEngine, repo);
 	console.log(
 		JSON.stringify(
-			workflowEngine.status(repo, requireFlag(rest, "change")),
+			workflowEngine.status(repo, requireFlag(rest, "workflow-id")),
 			null,
 			2,
 		),

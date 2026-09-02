@@ -83,7 +83,7 @@ import {
 	canonicalRepository,
 	isResearchWorkflowTarget,
 	isWikiWorkflowTarget,
-	validateChangeId,
+	validateWorkflowId,
 	wikiWorkflowDataRoot,
 } from "./targets.ts";
 import {
@@ -100,7 +100,7 @@ export class WorkflowEngine {
 		private readonly onCommitted: (repository: string) => void = () => {},
 	) {}
 	start(input: StartWorkflowInput): DispatchResult {
-		validateChangeId(input.changeId);
+		validateWorkflowId(input.workflowId);
 		// Resolved before the target-kind guard so the guard reads the pinned
 		// definition's declared policy (design D1) instead of comparing
 		// `input.definitionId` against a literal id or id array.
@@ -193,7 +193,13 @@ export class WorkflowEngine {
 		)
 			validateFusionRouting(definition.id, input.routing);
 		const at = nowIso(this.now);
-		const workflowId = randomUUID();
+		const workflowId = input.workflowId;
+		// No change identifier exists at start: the planner chooses the change
+		// id(s) during the plan step, and the engine records the declared
+		// primary into metadata.changeId at plan handoff. `openspec-apply` has
+		// no planner step, so its pre-existing change is the workflow id itself.
+		const startChangeId =
+			input.definitionId === "openspec-apply" ? input.workflowId : "";
 		const snapshot: WorkflowSnapshot = {
 			schemaVersion: 1,
 			workflowId,
@@ -215,7 +221,7 @@ export class WorkflowEngine {
 				...input.metadata,
 				repository,
 				worktree,
-				changeId: input.changeId,
+				changeId: startChangeId,
 				createdAt: at,
 				updatedAt: at,
 				stepEnteredAt: at,
@@ -251,18 +257,18 @@ export class WorkflowEngine {
 			db.exec("BEGIN IMMEDIATE");
 			if (
 				db
-					.query("SELECT 1 FROM workflow_instances WHERE change_id=?")
-					.get(input.changeId)
+					.query("SELECT 1 FROM workflow_instances WHERE id=?")
+					.get(input.workflowId)
 			)
 				throw new WorkflowRuntimeError(
 					"already-exists",
-					`workflow already exists: ${input.changeId}`,
+					`workflow already exists: ${input.workflowId}`,
 				);
 			db.query(
 				"INSERT INTO workflow_instances VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
 			).run(
 				workflowId,
-				input.changeId,
+				startChangeId,
 				repository,
 				worktree,
 				definition.id,
@@ -410,11 +416,11 @@ export class WorkflowEngine {
 			db.close();
 		}
 	}
-	status(repo: string, changeId: string): WorkflowView {
-		return viewStatus(repo, changeId, this.registry, this.now);
+	status(repo: string, workflowId: string): WorkflowView {
+		return viewStatus(repo, workflowId, this.registry, this.now);
 	}
-	previewRepair(repo: string, changeId: string): RepairPreview[] {
-		return viewPreviewRepair(repo, changeId, this.registry);
+	previewRepair(repo: string, workflowId: string): RepairPreview[] {
+		return viewPreviewRepair(repo, workflowId, this.registry);
 	}
 	effectIsLive(repo: string, effectId: string, lease: string): boolean {
 		return storeEffectIsLive(repo, effectId, lease);
@@ -554,11 +560,11 @@ export class WorkflowEngine {
 		const context = childTrace(parseTraceparent(process.env.TRACEPARENT));
 		new TelemetrySink(
 			snapshot.definition.id === "wiki-comments"
-				? path.join(wikiWorkflowDataRoot(), snapshot.metadata.changeId)
+				? path.join(wikiWorkflowDataRoot(), snapshot.workflowId)
 				: path.join(
 						snapshot.metadata.worktree,
 						".herdr-workflow",
-						snapshot.metadata.changeId,
+						snapshot.workflowId,
 					),
 		).emit({
 			schemaVersion: 1,

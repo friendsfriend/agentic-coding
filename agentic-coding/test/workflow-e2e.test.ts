@@ -174,7 +174,7 @@ function drive(
 	}
 	let view = engine.start({
 		repo: root,
-		changeId: definitionId,
+		workflowId: definitionId,
 		definitionId,
 		...(policy ? { definitionVersion: 106 } : {}),
 		metadata: {
@@ -187,7 +187,10 @@ function drive(
 	}).view;
 	const visited = [view.currentStep.id];
 	if (definitionId === "openspec-full") {
-		view = complete(engine, root, view, "planner", { validated: true });
+		view = complete(engine, root, view, "planner", {
+			primaryChangeId: definitionId,
+			validated: true,
+		});
 		const validation = requireEffect(
 			engine.claimEffects(root, 100),
 			"openspec.validate",
@@ -366,7 +369,7 @@ test("review-comments request-changes dispatch validates bounded comment entries
 		const engine = new WorkflowEngine(registerBuiltins());
 		let view = engine.start({
 			repo: root,
-			changeId: "review-comments",
+			workflowId: "review-comments",
 			definitionId: "no-openspec",
 			metadata: {
 				branch: "main",

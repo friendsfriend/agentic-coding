@@ -50,7 +50,7 @@ function setup() {
 	const engine = new WorkflowEngine(registerBuiltins(), () => time);
 	const started = engine.start({
 		repo,
-		changeId: "question",
+		workflowId: "question",
 		definitionId: "no-openspec",
 		metadata: {
 			branch: "main",
@@ -104,7 +104,7 @@ test("question contracts accept legacy snapshots and reject invalid answers", ()
 		metadata: {
 			repository: ".",
 			worktree: ".",
-			changeId: "c",
+			workflowId: "c",
 			branch: "main",
 			baseBranch: "main",
 			baseCommit: "x",

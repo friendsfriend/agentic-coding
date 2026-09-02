@@ -63,7 +63,7 @@ function writeState(repo: string, change = "review") {
 	const baseCommit = runGit(repo, "rev-parse", "HEAD");
 	new WorkflowEngine(registerBuiltins()).start({
 		repo,
-		changeId: change,
+		workflowId: change,
 		definitionId: "no-openspec",
 		metadata: {
 			branch: runGit(repo, "branch", "--show-current"),
@@ -97,7 +97,7 @@ function writeState(repo: string, change = "review") {
 function removeWorkflowTask(repo: string, change: string) {
 	const db = new Database(canonicalStorePath(repo));
 	const row = db
-		.query("SELECT id, snapshot_json FROM workflow_instances WHERE change_id=?")
+		.query("SELECT id, snapshot_json FROM workflow_instances WHERE id=?")
 		.get(change) as { id: string; snapshot_json: string };
 	const snapshot = JSON.parse(row.snapshot_json) as {
 		metadata: { task?: string };
@@ -839,7 +839,7 @@ test("startArgs maps quick workflow type to no-openspec and preserves task text"
 	const quickArgs = startArgs({
 		repo: ".",
 		ticket: "",
-		change: "quick-fix",
+		workflowId: "quick-fix",
 		task: "Fix login\nand add coverage",
 		mode: "worktree",
 		workflowType: "quick",
@@ -851,7 +851,7 @@ test("startArgs maps quick workflow type to no-openspec and preserves task text"
 	const fusionArgs = startArgs({
 		repo: ".",
 		ticket: "",
-		change: "fusion-fix",
+		workflowId: "fusion-fix",
 		task: "Compare plans\nand recommend one",
 		mode: "worktree",
 		workflowType: "openspec-fusion-full",
@@ -863,7 +863,7 @@ test("startArgs maps quick workflow type to no-openspec and preserves task text"
 	const proposalArgs = startArgs({
 		repo: ".",
 		ticket: "",
-		change: "proposal",
+		workflowId: "proposal",
 		task: "Draft a plan",
 		mode: "worktree",
 		workflowType: "openspec-propose",
@@ -876,7 +876,7 @@ test("startArgs maps quick workflow type to no-openspec and preserves task text"
 	const fusionProposalArgs = startArgs({
 		repo: ".",
 		ticket: "T-1",
-		change: "fusion-proposal",
+		workflowId: "fusion-proposal",
 		task: "Compare drafts",
 		mode: "worktree",
 		workflowType: "openspec-fusion-propose",

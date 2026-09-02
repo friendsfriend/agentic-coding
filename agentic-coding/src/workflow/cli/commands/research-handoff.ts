@@ -56,7 +56,7 @@ export async function runResearchHandoff(
 	});
 	console.log(
 		JSON.stringify(
-			workflowEngine.status(target, result.view.changeId),
+			workflowEngine.status(target, result.view.workflowId),
 			null,
 			2,
 		),

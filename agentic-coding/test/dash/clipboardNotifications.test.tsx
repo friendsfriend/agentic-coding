@@ -27,7 +27,7 @@ function TestDashboard() {
 		},
 	});
 	onCleanup(() => dispose());
-	return <App repo="/demo" change="demo" profile="test" keymap={keymap} />;
+	return <App repo="/demo" workflowId="demo" profile="test" keymap={keymap} />;
 }
 
 /** Dismiss the plan-review popup and drag-select some on-screen overview text

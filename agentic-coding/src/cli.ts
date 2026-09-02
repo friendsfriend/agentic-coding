@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Top-level `agentic-coding` surface dispatch.
 //   workflow   transactional workflow engine
-//   dash       per-workflow dashboard TUI (--repo --change | --profile test | --json)
+//   dash       per-workflow dashboard TUI (--repo --workflow-id | --profile test | --json)
 //   home       workflow list + observability TUI (long-lived)
 //   manager    alias for home (herdr-manager launches this)
 import { main as workflowMain } from "./workflow/cli.ts";
@@ -15,7 +15,7 @@ if (
 	surface === "help"
 ) {
 	console.log(
-		"Usage: agentic-coding <surface> [args]\n\nSurfaces:\n  workflow   Transactional workflow engine. Run `agentic-coding workflow --help`.\n  dash       Per-workflow dashboard + observability TUI. `agentic-coding dash --repo PATH --change ID`\n  home       Workflow list + observability TUI (long-lived launcher).\n  manager    Alias for home (used by herdr-manager).",
+		"Usage: agentic-coding <surface> [args]\n\nSurfaces:\n  workflow   Transactional workflow engine. Run `agentic-coding workflow --help`.\n  dash       Per-workflow dashboard + observability TUI. `agentic-coding dash --repo PATH --workflow-id ID`\n  home       Workflow list + observability TUI (long-lived launcher).\n  manager    Alias for home (used by herdr-manager).",
 	);
 } else if (surface === "workflow") {
 	await workflowMain(rest);

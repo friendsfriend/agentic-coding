@@ -17,7 +17,8 @@ export interface StartWorkflowInput {
 	/** Initial input retained in the current step as untrusted context. */
 	context?: JsonValue;
 	worktree?: string;
-	changeId: string;
+	/** User-supplied workflow identifier; the store row is keyed by it. */
+	workflowId: string;
 	definitionId: string;
 	definitionVersion?: number;
 	mode?: "worktree" | "checkout";

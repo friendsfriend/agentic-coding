@@ -944,7 +944,7 @@ export function App(props: {
 						) : (
 							<DashApp
 								repo={props.dashboard.repo ?? ""}
-								change={props.dashboard.change ?? ""}
+								workflowId={props.dashboard.change ?? ""}
 								profile={props.dashboard.profile as "test" | undefined}
 								keymap={props.dashboard.keymap}
 								onHeader={setWorkflowHeader}

@@ -45,13 +45,13 @@ agentic-coding manager   alias for home
 ### Workflow CLI
 
 ```text
-start --repo PATH --change ID --mode worktree|checkout
+start --repo PATH --workflow-id ID --mode worktree|checkout
       [--workflow openspec-full|openspec-propose|openspec-apply|no-openspec|openspec-fusion-full|openspec-fusion-propose|wiki|research]
       [--fusion-profiles NAME,NAME,...] [--task TEXT] [--ticket ID]
-status --repo PATH --change ID
-action ACTION_ID --repo PATH --change ID --revision N [--input JSON_OR_PATH]
+status --repo PATH --workflow-id ID
+action ACTION_ID --repo PATH --workflow-id ID --revision N [--input JSON_OR_PATH]
 handoff --outcome complete|blocked|failed [--artifact PATH] [--message TEXT]
-repair --repo PATH --change ID --revision N --step STEP --reason TEXT --confirm
+repair --repo PATH --workflow-id ID --revision N --step STEP --reason TEXT --confirm
 projects
 config
 agent-extension list|install SOURCE|install-local PATH [--profile NAME]

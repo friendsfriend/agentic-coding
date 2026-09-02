@@ -556,14 +556,14 @@ describe("start argument threading", () => {
 			"../src/tui/dash/engine.ts"
 		);
 		expect(
-			startArgs({ repo: "/r", ticket: "", change: "c", mode: "worktree" })
+			startArgs({ repo: "/r", ticket: "", workflowId: "c", mode: "worktree" })
 				.preset,
 		).toBeUndefined();
 		expect(
 			startArgs({
 				repo: "/r",
 				ticket: "",
-				change: "c",
+				workflowId: "c",
 				mode: "worktree",
 				preset: "frontier-plan",
 			}).preset,
@@ -573,7 +573,7 @@ describe("start argument threading", () => {
 			startArgs({
 				repo: "/r",
 				ticket: "",
-				change: "c",
+				workflowId: "c",
 				mode: "worktree",
 				preset: PRESET_CONFIG_DEFAULTS,
 			}).preset,

@@ -38,14 +38,14 @@ export function paneForRunFactory(
 		// through to geometry or tab creation only when no agent resolves.
 		const resolved = resolveLiveAgent(
 			herdr,
-			snapshot.metadata.changeId,
+			snapshot.workflowId,
 			snapshot.definition.id,
 			run,
 		);
 		if (resolved) return { paneId: resolved.paneId, owned: false };
 		if (roundScoped) {
 			const round = workflowEngine
-				.status(repo, snapshot.metadata.changeId)
+				.status(repo, snapshot.workflowId)
 				.runs.map((item) => workflowEngine.getRun(repo, item.id))
 				.filter(
 					(item) =>
@@ -107,7 +107,7 @@ export function paneForRunFactory(
 				for (const sibling of all) {
 					const resolved = resolveLiveAgent(
 						herdr,
-						snapshot.metadata.changeId,
+						snapshot.workflowId,
 						snapshot.definition.id,
 						sibling,
 					);

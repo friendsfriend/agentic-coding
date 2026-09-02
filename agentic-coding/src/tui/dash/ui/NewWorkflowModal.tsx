@@ -25,7 +25,7 @@ import { ProgressModal } from "./ProgressModal";
 export type NewWorkflowInput = {
 	repo: string;
 	ticket: string;
-	change: string;
+	workflowId: string;
 	task?: string;
 	mode: string;
 	workflowType: string;
@@ -47,7 +47,7 @@ export function NewWorkflowModal(props: {
 	const [values, setValues] = createSignal<NewWorkflowInput>({
 		repo: "",
 		ticket: "",
-		change: "",
+		workflowId: "",
 		mode: "",
 		workflowType: "openspec-full",
 		preset: PRESET_CONFIG_DEFAULTS,
@@ -71,7 +71,7 @@ export function NewWorkflowModal(props: {
 			"workflowType",
 			"preset",
 			"ticket",
-			"change",
+			"workflowId",
 			"mode",
 		];
 		if (
@@ -91,7 +91,7 @@ export function NewWorkflowModal(props: {
 				"workflowType",
 				"preset",
 				"ticket",
-				"change",
+				"workflowId",
 				"task",
 				...(isRepositoryBacked(values().workflowType) ||
 				values().workflowType === "research"
@@ -107,7 +107,7 @@ export function NewWorkflowModal(props: {
 		workflowType: "Workflow type",
 		preset: "Agent preset",
 		ticket: "Ticket identifier optional",
-		change: "Change ID",
+		change: "Workflow ID",
 		task: "Task required for wiki, research, and no OpenSpec",
 		mode: "Checkout mode",
 	};
@@ -139,7 +139,7 @@ export function NewWorkflowModal(props: {
 			return [PRESET_CONFIG_DEFAULTS, ...(props.presets ?? [])].filter((item) =>
 				item.toLowerCase().includes(filter().toLowerCase()),
 			);
-		if (f === "change" && values().workflowType === "openspec-apply")
+		if (f === "workflowId" && values().workflowType === "openspec-apply")
 			return discoverChanges(values().repo);
 		if (f === "mode")
 			return ["worktree", "checkout"].filter((item) =>
@@ -154,7 +154,7 @@ export function NewWorkflowModal(props: {
 			f === "repo" ||
 			f === "workflowType" ||
 			f === "preset" ||
-			(f === "change" && values().workflowType === "openspec-apply") ||
+			(f === "workflowId" && values().workflowType === "openspec-apply") ||
 			f === "mode"
 		);
 	};

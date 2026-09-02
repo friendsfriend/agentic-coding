@@ -45,7 +45,7 @@ function TestDashboard() {
 		disposeKeymap();
 		dispose();
 	});
-	return <App repo="/demo" change="demo" profile="test" keymap={keymap} />;
+	return <App repo="/demo" workflowId="demo" profile="test" keymap={keymap} />;
 }
 
 // Dismiss the auto-opened plan review popup and move focus to the Agents

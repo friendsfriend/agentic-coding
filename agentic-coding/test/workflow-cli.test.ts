@@ -85,7 +85,9 @@ describe("breaking workflow CLI surface", () => {
 			"install",
 			"install-local",
 		]);
-		expect(REQUIRED_FLAGS.action).toEqual(["repo", "change", "revision"]);
+		expect(REQUIRED_FLAGS.action).toEqual(["repo", "workflow-id", "revision"]);
+		expect(REQUIRED_FLAGS.status).toEqual(["repo", "workflow-id"]);
+		expect(REQUIRED_FLAGS.repin).toEqual(["repo", "workflow-id"]);
 		expect(REQUIRED_FLAGS.question).toEqual(["description"]);
 		expect(REQUIRED_FLAGS["research-handoff"]).toEqual([
 			"subject",
@@ -123,7 +125,7 @@ describe("breaking workflow CLI surface", () => {
 			"--mode must be worktree or checkout",
 		);
 		await expect(
-			run(["action", "--repo", ".", "--change", "x", "--revision", "1"]),
+			run(["action", "--repo", ".", "--workflow-id", "x", "--revision", "1"]),
 		).rejects.toThrow("ACTION_ID is required");
 		await expect(
 			run([
@@ -132,7 +134,7 @@ describe("breaking workflow CLI surface", () => {
 				"extra",
 				"--repo",
 				".",
-				"--change",
+				"--workflow-id",
 				"x",
 				"--revision",
 				"1",
@@ -143,7 +145,7 @@ describe("breaking workflow CLI surface", () => {
 				"start",
 				"--repo",
 				".",
-				"--change",
+				"--workflow-id",
 				"x",
 				"--mode",
 				"checkout",
@@ -152,7 +154,7 @@ describe("breaking workflow CLI surface", () => {
 			]),
 		).rejects.toThrow("unknown flag --tiket");
 		await expect(
-			run(["status", "--repo", ".", "--repo", ".", "--change", "x"]),
+			run(["status", "--repo", ".", "--repo", ".", "--workflow-id", "x"]),
 		).rejects.toThrow("duplicate flag --repo");
 	});
 	test("detached drain argv works in source-tree and compiled runners", () => {
@@ -164,7 +166,7 @@ describe("breaking workflow CLI surface", () => {
 			"status",
 			"--repo",
 			"/repo",
-			"--change",
+			"--workflow-id",
 			"c1",
 		]);
 		const compiled = cliTest.detachedDrainArgv(undefined, "/repo", "c1");
@@ -173,7 +175,7 @@ describe("breaking workflow CLI surface", () => {
 			"status",
 			"--repo",
 			"/repo",
-			"--change",
+			"--workflow-id",
 			"c1",
 		]);
 		expect(compiled[0]).toBe(process.execPath);
@@ -240,7 +242,7 @@ describe("breaking workflow CLI surface", () => {
 			const workflowEngine = new WorkflowEngine(registry);
 			const started = workflowEngine.start({
 				repo,
-				changeId: "handoff-identity",
+				workflowId: "handoff-identity",
 				definitionId: "no-openspec",
 				metadata: {
 					branch: "main",
@@ -342,7 +344,7 @@ describe("breaking workflow CLI surface", () => {
 			const workflowEngine = new WorkflowEngine(registry);
 			const started = workflowEngine.start({
 				repo,
-				changeId: "repair-race",
+				workflowId: "repair-race",
 				definitionId: "no-openspec",
 				metadata: {
 					branch: "main",
@@ -418,6 +420,7 @@ describe("breaking workflow CLI surface", () => {
 
 	test("persistent roles reuse the resolved pane; tab create fires only on the no-agent outcome", async () => {
 		const snapshot = {
+			workflowId: "change",
 			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
 			definition: { id: "openspec-full", version: 1, digest: "d" },
 		};
@@ -491,6 +494,7 @@ describe("breaking workflow CLI surface", () => {
 
 	test("verifier runs reuse a live canonical-name pane before creating a tab", async () => {
 		const snapshot = {
+			workflowId: "change",
 			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
 			definition: { id: "openspec-full", version: 1, digest: "d" },
 		};
@@ -542,6 +546,7 @@ describe("breaking workflow CLI surface", () => {
 
 	test("verification layout anchors on siblings confirmed live by canonical name, not stored pane ids", async () => {
 		const snapshot = {
+			workflowId: "change",
 			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
 			definition: { id: "openspec-full", version: 1, digest: "d" },
 		};
@@ -615,6 +620,7 @@ describe("breaking workflow CLI surface", () => {
 	});
 	test("third-run pane reuse skips an occupied bottom pane and picks the idle one instead", async () => {
 		const snapshot = {
+			workflowId: "change",
 			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
 			definition: { id: "openspec-full", version: 1, digest: "d" },
 		};
@@ -690,6 +696,7 @@ describe("breaking workflow CLI surface", () => {
 	});
 	test("third-run pane reuse spawns a fresh split when every bottom-pane candidate is occupied", async () => {
 		const snapshot = {
+			workflowId: "change",
 			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
 			definition: { id: "openspec-full", version: 1, digest: "d" },
 		};

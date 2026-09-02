@@ -42,6 +42,9 @@ export { listPresetNames };
 const herdr = new Herdr();
 
 export interface WorkflowState {
+	/** User-supplied workflow identifier; dashboards address workflows by it. */
+	workflowId: string;
+	/** Planner-recorded primary change id; empty until the plan step. */
 	changeId: string;
 	phase: string;
 	stepId?: string;
@@ -214,7 +217,9 @@ export function listWorkflows(...roots: string[]): WorkflowOverview[] {
 	// Git repository, so include them in the same canonical home list.
 	addRepository(wikiWorkflowTarget());
 	addRepository(researchWorkflowTarget());
-	return found.sort((a, b) => a.state.changeId.localeCompare(b.state.changeId));
+	return found.sort((a, b) =>
+		a.state.workflowId.localeCompare(b.state.workflowId),
+	);
 }
 
 export interface LocalChange {
@@ -253,44 +258,49 @@ function wikiLineCounts(
 }
 export function loadWikiSnapshotChanges(
 	repo: string,
-	change: string,
+	workflowId: string,
 ): LocalChange[] {
-	const state = dashboardState(repo, change) as WorkflowState;
-	return snapshotList(change, state.worktree).map((id) => {
-		const before = snapshotRead(change, id, state.worktree) ?? "";
-		let after = "";
-		try {
-			const current = readConcept(id);
-			after = renderDocument(current.frontmatter, current.body);
-		} catch {
-			/* the concept was deleted; the snapshot remains reviewable */
-		}
-		const counts = wikiLineCounts(
-			before.trim() === "<!-- okf tombstone: concept did not exist -->"
-				? ""
-				: before,
-			after,
-		);
-		return {
-			newPath: id,
-			linesAdded: counts.added,
-			linesDeleted: counts.deleted,
-			newFile:
-				!before ||
-				before.trim() === "<!-- okf tombstone: concept did not exist -->",
-			deletedFile: !after,
-			renamedFile: false,
-		};
-	});
+	const state = dashboardState(repo, workflowId) as WorkflowState;
+	return snapshotList(state.changeId || state.workflowId, state.worktree).map(
+		(id) => {
+			const before =
+				snapshotRead(state.changeId || state.workflowId, id, state.worktree) ??
+				"";
+			let after = "";
+			try {
+				const current = readConcept(id);
+				after = renderDocument(current.frontmatter, current.body);
+			} catch {
+				/* the concept was deleted; the snapshot remains reviewable */
+			}
+			const counts = wikiLineCounts(
+				before.trim() === "<!-- okf tombstone: concept did not exist -->"
+					? ""
+					: before,
+				after,
+			);
+			return {
+				newPath: id,
+				linesAdded: counts.added,
+				linesDeleted: counts.deleted,
+				newFile:
+					!before ||
+					before.trim() === "<!-- okf tombstone: concept did not exist -->",
+				deletedFile: !after,
+				renamedFile: false,
+			};
+		},
+	);
 }
 
 export function loadWikiSnapshotDiff(
 	repo: string,
-	change: string,
+	workflowId: string,
 	id: string,
 ): string {
-	const state = dashboardState(repo, change) as WorkflowState;
-	const snapshot = snapshotRead(change, id, state.worktree) ?? "";
+	const state = dashboardState(repo, workflowId) as WorkflowState;
+	const snapshot =
+		snapshotRead(state.changeId || state.workflowId, id, state.worktree) ?? "";
 	const before =
 		snapshot.trim() === "<!-- okf tombstone: concept did not exist -->"
 			? ""
@@ -1005,10 +1015,10 @@ export const dashboardTestHelpers = {
 
 export function loadVerifierFindings(
 	repo: string,
-	change: string,
+	workflowId: string,
 	role: string,
 ) {
-	const state = dashboardState(repo, change) as WorkflowState;
+	const state = dashboardState(repo, workflowId) as WorkflowState;
 	const output = committedVerifierOutput(state, role);
 	if (!output) return undefined;
 	const events = output.findings.map((finding) => ({
@@ -1032,9 +1042,9 @@ export function loadVerifierFindings(
 
 export function loadDeveloperReviewFindings(
 	repo: string,
-	change: string,
+	workflowId: string,
 ): DeveloperReviewFinding[] {
-	const state = dashboardState(repo, change) as WorkflowState;
+	const state = dashboardState(repo, workflowId) as WorkflowState;
 	const findings = state.runs
 		.filter(
 			(run) =>
@@ -1069,8 +1079,12 @@ export function loadDeveloperReviewFindings(
 		}));
 }
 
-export function loadVerifierReport(repo: string, change: string, role: string) {
-	const state = dashboardState(repo, change) as WorkflowState;
+export function loadVerifierReport(
+	repo: string,
+	workflowId: string,
+	role: string,
+) {
+	const state = dashboardState(repo, workflowId) as WorkflowState;
 	const output = committedVerifierOutput(state, role);
 	if (!output) throw new Error(`No committed report yet for ${role}.`);
 	const derivedVerdict = output.findings.some(
@@ -1100,8 +1114,11 @@ export function loadVerifierReport(repo: string, change: string, role: string) {
 	return { title: `${role} · round ${output.run.attempt}`, content };
 }
 
-export function loadLocalChanges(repo: string, change: string): LocalChange[] {
-	const state = dashboardState(repo, change) as WorkflowState;
+export function loadLocalChanges(
+	repo: string,
+	workflowId: string,
+): LocalChange[] {
+	const state = dashboardState(repo, workflowId) as WorkflowState;
 	const base = state.baseCommit ?? "HEAD";
 	const changes = new Map<string, LocalChange>();
 	const numstat =
@@ -1213,10 +1230,10 @@ export function loadLocalChanges(repo: string, change: string): LocalChange[] {
 
 export function loadLocalDiff(
 	repo: string,
-	change: string,
+	workflowId: string,
 	file: LocalChange,
 ): string {
-	const state = dashboardState(repo, change) as WorkflowState;
+	const state = dashboardState(repo, workflowId) as WorkflowState;
 	const base = state.baseCommit ?? "HEAD";
 	const paths =
 		file.oldPath && file.oldPath !== file.newPath
@@ -1245,14 +1262,14 @@ export function loadLocalDiff(
 
 export async function saveDeveloperReview(
 	repo: string,
-	change: string,
+	workflowId: string,
 	comments: DeveloperReviewComment[],
 ) {
-	const state = dashboardState(repo, change) as WorkflowState;
+	const state = dashboardState(repo, workflowId) as WorkflowState;
 	const path = join(
 		state.worktree,
 		".herdr-workflow",
-		change,
+		workflowId,
 		"reviews",
 		"developer-review.json",
 	);
@@ -1262,14 +1279,14 @@ export async function saveDeveloperReview(
 
 export async function savePlanReview(
 	repo: string,
-	change: string,
+	workflowId: string,
 	comments: PlanReviewComment[],
 ) {
-	const state = dashboardState(repo, change) as WorkflowState;
+	const state = dashboardState(repo, workflowId) as WorkflowState;
 	const path = join(
 		state.worktree,
 		".herdr-workflow",
-		change,
+		workflowId,
 		"reviews",
 		"plan-review.json",
 	);
@@ -1279,14 +1296,14 @@ export async function savePlanReview(
 
 export async function saveWikiReview(
 	repo: string,
-	change: string,
+	workflowId: string,
 	comments: WikiReviewComment[],
 ) {
-	const state = dashboardState(repo, change) as WorkflowState;
+	const state = dashboardState(repo, workflowId) as WorkflowState;
 	const path = join(
 		state.worktree,
 		".herdr-workflow",
-		change,
+		workflowId,
 		"reviews",
 		"wiki-review.json",
 	);
@@ -1296,13 +1313,13 @@ export async function saveWikiReview(
 
 export function loadWikiReviewComments(
 	repo: string,
-	change: string,
+	workflowId: string,
 ): WikiReviewComment[] {
-	const state = dashboardState(repo, change) as WorkflowState;
+	const state = dashboardState(repo, workflowId) as WorkflowState;
 	const path = join(
 		state.worktree,
 		".herdr-workflow",
-		change,
+		workflowId,
 		"reviews",
 		"wiki-review.json",
 	);
@@ -1339,13 +1356,13 @@ export function loadWikiReviewComments(
 
 export function loadPlanReviewComments(
 	repo: string,
-	change: string,
+	workflowId: string,
 ): PlanReviewComment[] {
-	const state = dashboardState(repo, change) as WorkflowState;
+	const state = dashboardState(repo, workflowId) as WorkflowState;
 	const path = join(
 		state.worktree,
 		".herdr-workflow",
-		change,
+		workflowId,
 		"reviews",
 		"plan-review.json",
 	);
@@ -1378,13 +1395,18 @@ export function loadPlanReviewComments(
 	}
 }
 
-export function loadDashboard(repo: string, change: string): DashboardData {
-	const state = dashboardState(repo, change) as WorkflowState;
+export function loadDashboard(repo: string, workflowId: string): DashboardData {
+	const state = dashboardState(repo, workflowId) as WorkflowState;
 	const workflowRoot =
 		isResearchWorkflowTarget(repo) || state.definition?.id === "research"
-			? join(wikiWorkflowDataRoot(), change)
-			: join(state.worktree, ".herdr-workflow", change);
-	const changeRoot = join(state.worktree, "openspec", "changes", change);
+			? join(wikiWorkflowDataRoot(), workflowId)
+			: join(state.worktree, ".herdr-workflow", workflowId);
+	const changeRoot = join(
+		state.worktree,
+		"openspec",
+		"changes",
+		state.changeId,
+	);
 	const statuses = agentStatuses();
 
 	const telemetry = telemetryEvents(join(workflowRoot, "telemetry.jsonl"));
@@ -1637,6 +1659,7 @@ export function testDashboard(phase = "proposed"): DashboardData {
 	};
 	return {
 		state: {
+			workflowId: "demo-optional-realisation-date",
 			changeId: "demo-optional-realisation-date",
 			phase,
 			revision: 0,
@@ -2113,11 +2136,11 @@ export function notifyHerdrError(message: string) {
 
 export function focusReturnWorkspace(
 	repo: string,
-	change: string,
+	workflowId: string,
 	workspace: string,
 ) {
 	focusWorkspace(workspace);
-	consumeReturnWorkspace(repo, change, workspace);
+	consumeReturnWorkspace(repo, workflowId, workspace);
 }
 export function focusWorkspace(workspace: string) {
 	herdr.call("workspace", "focus", workspace);
@@ -2212,7 +2235,7 @@ export function focusWorkflow(workflow: WorkflowOverview) {
 	const returnWorkspace = process.env.HERDR_WORKSPACE_ID;
 	if (!returnWorkspace)
 		throw new Error("Dashboard is not running inside a Herdr workspace.");
-	setReturnInProcess(state.repository, state.changeId, returnWorkspace);
+	setReturnInProcess(state.repository, state.workflowId, returnWorkspace);
 	focusWorkspace(state.workspace);
 }
 
@@ -2242,7 +2265,7 @@ export function discoverProjects(): Array<{
 }
 
 export function startWorkflowWizard() {
-	const script = `read -r -p 'Repository path: ' repo; read -r -p 'Ticket identifier (optional): ' ticket; read -r -p 'Change ID: ' change; read -r -p 'Task: ' task; read -r -p 'Mode (worktree/checkout): ' mode; args=(start --repo "$repo" --change "$change" --task "$task" --mode "\${mode:-worktree}"); if [[ -n "$ticket" ]]; then args+=(--ticket "$ticket"); fi; herdr-workflow "\${args[@]}"`;
+	const script = `read -r -p 'Repository path: ' repo; read -r -p 'Ticket identifier (optional): ' ticket; read -r -p 'Workflow ID: ' id; read -r -p 'Task: ' task; read -r -p 'Mode (worktree/checkout): ' mode; args=(start --repo "$repo" --workflow-id "$id" --task "$task" --mode "\${mode:-worktree}"); if [[ -n "$ticket" ]]; then args+=(--ticket "$ticket"); fi; herdr-workflow "\${args[@]}"`;
 	return (
 		Bun.spawnSync(["bash", "-lc", script], {
 			stdin: "inherit",
@@ -2255,7 +2278,7 @@ export function startWorkflowWizard() {
 export async function startWorkflow(input: {
 	repo: string;
 	ticket: string;
-	change: string;
+	workflowId: string;
 	task?: string;
 	mode: string;
 	workflowType?: string;
@@ -2270,22 +2293,22 @@ export async function startWorkflow(input: {
 	return startWorkflowInProcess({ ...input, repo });
 }
 
-export function previewRepair(repo: string, change: string) {
-	return previewWorkflowRepair(repo, change);
+export function previewRepair(repo: string, workflowId: string) {
+	return previewWorkflowRepair(repo, workflowId);
 }
 export function applyRepair(
 	repo: string,
-	change: string,
+	workflowId: string,
 	revision: number,
 	targetStep: string,
 	reason = "",
 ) {
-	return repairWorkflow(repo, change, revision, targetStep, reason);
+	return repairWorkflow(repo, workflowId, revision, targetStep, reason);
 }
 
 export function answerQuestion(
 	repo: string,
-	change: string,
+	workflowId: string,
 	revision: number,
 	questionId: string,
 	answer:
@@ -2300,15 +2323,15 @@ export function answerQuestion(
 		  }
 		| { groupId: string; kind: "cancel" },
 ) {
-	return answerWorkflowQuestion(repo, change, revision, questionId, answer);
+	return answerWorkflowQuestion(repo, workflowId, revision, questionId, answer);
 }
 
 export async function runWorkflow(
 	action: string,
 	repo: string,
-	change: string,
+	workflowId: string,
 	revision: number,
 	argument?: string,
 ) {
-	return runWorkflowAction(action, repo, change, revision, argument);
+	return runWorkflowAction(action, repo, workflowId, revision, argument);
 }

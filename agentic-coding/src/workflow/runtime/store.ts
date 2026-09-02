@@ -83,7 +83,7 @@ export function openStore(repo: string): Database {
 		"PRAGMA foreign_keys=ON; PRAGMA busy_timeout=10000; PRAGMA journal_mode=WAL",
 	);
 	db.exec(`
-CREATE TABLE IF NOT EXISTS workflow_instances(id TEXT PRIMARY KEY, change_id TEXT NOT NULL UNIQUE, repository TEXT NOT NULL, worktree TEXT NOT NULL, definition_id TEXT NOT NULL, definition_version INTEGER NOT NULL CHECK(definition_version > 0), definition_digest TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision >= 0), status TEXT NOT NULL CHECK(status IN ('active','paused','attention-required','completed','closed')), current_step TEXT NOT NULL, snapshot_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS workflow_instances(id TEXT PRIMARY KEY, change_id TEXT NULL, repository TEXT NOT NULL, worktree TEXT NOT NULL, definition_id TEXT NOT NULL, definition_version INTEGER NOT NULL CHECK(definition_version > 0), definition_digest TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision >= 0), status TEXT NOT NULL CHECK(status IN ('active','paused','attention-required','completed','closed')), current_step TEXT NOT NULL, snapshot_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS workflow_runs(id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES workflow_instances(id), step_id TEXT NOT NULL, role TEXT NOT NULL, generation INTEGER NOT NULL CHECK(generation > 0), attempt INTEGER NOT NULL CHECK(attempt > 0), status TEXT NOT NULL CHECK(status IN ('pending','working','completed','blocked','failed','expired')), profile_json TEXT NOT NULL, issued_revision INTEGER NOT NULL, allowed_outcomes_json TEXT NOT NULL, capability_hash TEXT NOT NULL, capability_expires_at TEXT NOT NULL, assignment_path TEXT NOT NULL, output_path TEXT, output_schema_id TEXT, output_schema_version INTEGER, output_digest TEXT, handle_json TEXT, created_at TEXT NOT NULL, completed_at TEXT, UNIQUE(workflow_id,id,generation));
 CREATE TABLE IF NOT EXISTS workflow_events(workflow_id TEXT NOT NULL REFERENCES workflow_instances(id), revision INTEGER NOT NULL, type TEXT NOT NULL, actor_json TEXT NOT NULL, data_json TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY(workflow_id,revision));
 CREATE TABLE IF NOT EXISTS workflow_outbox(id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES workflow_instances(id), revision INTEGER NOT NULL, kind TEXT NOT NULL, idempotency_key TEXT NOT NULL UNIQUE, payload_json TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('pending','running','retry','completed','failed','expired')), attempts INTEGER NOT NULL DEFAULT 0, max_attempts INTEGER NOT NULL CHECK(max_attempts > 0), lease TEXT, lease_expires_at TEXT, next_attempt_at TEXT, last_error TEXT);
@@ -107,6 +107,88 @@ CREATE INDEX IF NOT EXISTS workflow_outbox_ready ON workflow_outbox(status,next_
 		db.exec(
 			`ALTER TABLE workflow_runs ADD COLUMN allowed_outcomes_json TEXT NOT NULL DEFAULT '["complete","blocked","failed"]'`,
 		);
+	// Workflow identity is now the user-supplied workflow id (the row primary
+	// key); `change_id` is the planner-recorded primary change, empty until the
+	// plan step. Pre-identity-store databases declare the column
+	// `change_id TEXT NOT NULL UNIQUE` (start-time change id); rebuild the row
+	// table so an initially-empty recorded change id cannot collide on the old
+	// unique constraint, retaining every row unchanged. The rebuild drops and
+	// recreates the parent table in place (FKs are disabled around it), so the
+	// child tables' references keep resolving to the rebuilt table.
+	const instanceDdl = db
+		.query(
+			"SELECT sql FROM sqlite_master WHERE type='table' AND name='workflow_instances'",
+		)
+		.get() as { sql: string } | null;
+	if (instanceDdl && !/change_id\s+TEXT\s+NULL/.test(instanceDdl.sql)) {
+		db.exec("PRAGMA foreign_keys=OFF");
+		try {
+			db.exec("BEGIN IMMEDIATE");
+			db.exec(`
+CREATE TABLE workflow_instances_new(id TEXT PRIMARY KEY, change_id TEXT NULL, repository TEXT NOT NULL, worktree TEXT NOT NULL, definition_id TEXT NOT NULL, definition_version INTEGER NOT NULL CHECK(definition_version > 0), definition_digest TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision >= 0), status TEXT NOT NULL CHECK(status IN ('active','paused','attention-required','completed','closed')), current_step TEXT NOT NULL, snapshot_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`);
+			db.exec(
+				"INSERT INTO workflow_instances_new SELECT * FROM workflow_instances",
+			);
+			db.exec("DROP TABLE workflow_instances");
+			db.exec(
+				"ALTER TABLE workflow_instances_new RENAME TO workflow_instances",
+			);
+			db.exec("COMMIT");
+		} catch (error) {
+			rollback(db);
+			throw error;
+		} finally {
+			db.exec("PRAGMA foreign_keys=ON");
+		}
+	}
+	// SQLite's `ALTER TABLE ... RENAME` rewrites other tables' foreign-key
+	// clauses to follow the renamed table, and that rewrite is NOT reverted if
+	// the surrounding transaction rolls back (a documented SQLite quirk). A
+	// store that ever ran a rename-based rebuild can therefore carry child
+	// tables still referencing `workflow_instances_legacy`. Rebuild those
+	// children against the canonical schema so writes keep enforcing the real
+	// parent reference. Skipped when every child already references
+	// `workflow_instances`.
+	const CHILD_TABLES = {
+		workflow_runs:
+			"id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES workflow_instances(id), step_id TEXT NOT NULL, role TEXT NOT NULL, generation INTEGER NOT NULL CHECK(generation > 0), attempt INTEGER NOT NULL CHECK(attempt > 0), status TEXT NOT NULL CHECK(status IN ('pending','working','completed','blocked','failed','expired')), profile_json TEXT NOT NULL, issued_revision INTEGER NOT NULL, allowed_outcomes_json TEXT NOT NULL, capability_hash TEXT NOT NULL, capability_expires_at TEXT NOT NULL, assignment_path TEXT NOT NULL, output_path TEXT, output_schema_id TEXT, output_schema_version INTEGER, output_digest TEXT, handle_json TEXT, created_at TEXT NOT NULL, completed_at TEXT, UNIQUE(workflow_id,id,generation)",
+		workflow_events:
+			"workflow_id TEXT NOT NULL REFERENCES workflow_instances(id), revision INTEGER NOT NULL, type TEXT NOT NULL, actor_json TEXT NOT NULL, data_json TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY(workflow_id,revision)",
+		workflow_outbox:
+			"id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES workflow_instances(id), revision INTEGER NOT NULL, kind TEXT NOT NULL, idempotency_key TEXT NOT NULL UNIQUE, payload_json TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('pending','running','retry','completed','failed','expired')), attempts INTEGER NOT NULL DEFAULT 0, max_attempts INTEGER NOT NULL CHECK(max_attempts > 0), lease TEXT, lease_expires_at TEXT, next_attempt_at TEXT, last_error TEXT",
+	} as const;
+	for (const [child, columns] of Object.entries(CHILD_TABLES)) {
+		const childDdl = db
+			.query("SELECT sql FROM sqlite_master WHERE type='table' AND name=?")
+			.get(child) as { sql: string } | null;
+		if (
+			!childDdl ||
+			!/REFERENCES\s+"workflow_instances_legacy"/.test(childDdl.sql ?? "")
+		)
+			continue;
+		db.exec("PRAGMA foreign_keys=OFF");
+		try {
+			db.exec("BEGIN IMMEDIATE");
+			db.exec(`ALTER TABLE ${child} RENAME TO ${child}_legacy`);
+			db.exec(`CREATE TABLE ${child}(${columns})`);
+			db.exec(`INSERT INTO ${child} SELECT * FROM ${child}_legacy`);
+			db.exec(`DROP TABLE ${child}_legacy`);
+			if (child === "workflow_runs")
+				db.exec(
+					"CREATE INDEX IF NOT EXISTS workflow_runs_workflow_status ON workflow_runs(workflow_id,status)",
+				);
+			if (child === "workflow_outbox")
+				db.exec(
+					"CREATE INDEX IF NOT EXISTS workflow_outbox_ready ON workflow_outbox(status,next_attempt_at,lease_expires_at)",
+				);
+			db.exec("COMMIT");
+		} catch (error) {
+			rollback(db);
+			throw error;
+		} finally {
+			db.exec("PRAGMA foreign_keys=ON");
+		}
+	}
 	return db;
 }
 
@@ -210,17 +292,6 @@ export function instance(db: Database, id: string): InstanceRow {
 		.get(id) as InstanceRow | null;
 	if (!row)
 		throw new WorkflowRuntimeError("not-found", `workflow not found: ${id}`);
-	return row;
-}
-export function instanceByChange(db: Database, change: string): InstanceRow {
-	const row = db
-		.query("SELECT * FROM workflow_instances WHERE change_id=?")
-		.get(change) as InstanceRow | null;
-	if (!row)
-		throw new WorkflowRuntimeError(
-			"not-found",
-			`workflow not found: ${change}`,
-		);
 	return row;
 }
 export function runs(db: Database, id: string): WorkflowRun[] {
