@@ -1167,7 +1167,20 @@ export function loadLocalChanges(repo: string, change: string): LocalChange[] {
 			changes.set(path, existing);
 		}
 	}
-	for (const line of (git(state.worktree, "status", "--short") ?? "")
+	// -uall expands untracked directories into their individual files (so a
+	// file created inside a brand-new directory is its own reviewable row
+	// instead of a single "?? dir/" entry whose diff errors); core.quotePath
+	// keeps special-character paths raw, matching worktreeGitStatus.
+	for (const line of (
+		git(
+			state.worktree,
+			"-c",
+			"core.quotePath=false",
+			"status",
+			"--short",
+			"-uall",
+		) ?? ""
+	)
 		.split(/\r?\n/)
 		.filter(Boolean)) {
 		if (!line.startsWith("?? ")) continue;

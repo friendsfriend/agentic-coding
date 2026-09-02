@@ -201,6 +201,46 @@ test("loadLocalChanges includes tracked and untracked files, excluding workflow 
 	).toMatchObject({ newFile: true, linesAdded: 1 });
 });
 
+test("loadLocalChanges lists untracked files inside new directories individually", () => {
+	const repo = fixture();
+	writeState(repo);
+	mkdirSync(join(repo, "newdir", "sub"), { recursive: true });
+	writeFileSync(
+		join(repo, "newdir", "sub", "added.ts"),
+		"export const added = true;\n",
+	);
+	const changes = loadLocalChanges(repo, "review");
+
+	// The directory must not collapse into a single "?? newdir/" entry; the
+	// nested file is its own added-file row.
+	expect(changes.map((change) => change.newPath)).toEqual([
+		"newdir/sub/added.ts",
+	]);
+	expect(requireChange(changes, "newdir/sub/added.ts")).toMatchObject({
+		newFile: true,
+		linesAdded: 1,
+	});
+	expect(
+		loadLocalDiff(
+			repo,
+			"review",
+			requireChange(changes, "newdir/sub/added.ts"),
+		),
+	).toContain("+export const added = true;");
+});
+
+test("loadLocalChanges lists every untracked file in a new directory", () => {
+	const repo = fixture();
+	writeState(repo);
+	mkdirSync(join(repo, "newdir"), { recursive: true });
+	writeFileSync(join(repo, "newdir", "a.ts"), "export {};\n");
+	writeFileSync(join(repo, "newdir", "b.ts"), "export {};\n");
+
+	expect(
+		loadLocalChanges(repo, "review").map((change) => change.newPath),
+	).toEqual(["newdir/a.ts", "newdir/b.ts"]);
+});
+
 test("loadLocalDiff returns tracked and untracked diffs, and rejects missing state", () => {
 	const repo = fixture();
 	writeState(repo);
