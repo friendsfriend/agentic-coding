@@ -918,14 +918,6 @@ export function validateStart(
 				!fs.readFileSync(path.join(root, file), "utf8").trim()
 			)
 				throw new Error(`invalid openspec-apply artifact: ${file}`);
-		const specs = path.join(root, "specs");
-		if (
-			!fs.existsSync(specs) ||
-			!findFiles(specs).some((file) =>
-				/#### Scenario:/.test(fs.readFileSync(file, "utf8")),
-			)
-		)
-			throw new Error("openspec-apply requires at least one OpenSpec scenario");
 		if (!/\[ \]/.test(fs.readFileSync(path.join(root, "tasks.md"), "utf8")))
 			throw new Error("openspec-apply requires actionable unchecked task");
 		const result = Bun.spawnSync(["openspec", "validate", change, "--strict"], {
@@ -938,15 +930,6 @@ export function validateStart(
 				`OpenSpec validation failed: ${(result.stderr.toString() || result.stdout.toString()).trim()}`,
 			);
 	}
-}
-function findFiles(root: string): string[] {
-	const result: string[] = [];
-	for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-		const file = path.join(root, entry.name);
-		if (entry.isDirectory()) result.push(...findFiles(file));
-		else result.push(file);
-	}
-	return result;
 }
 export function listProjects(): Array<{
 	name: string;

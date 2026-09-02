@@ -1354,16 +1354,6 @@ export class WorkflowEngine {
 						`invalid openspec-apply artifact: ${file}`,
 					);
 			if (
-				!fs.existsSync(path.join(root, "specs")) ||
-				!walkFiles(path.join(root, "specs")).some((file) =>
-					/#### Scenario:/.test(fs.readFileSync(file, "utf8")),
-				)
-			)
-				throw new WorkflowRuntimeError(
-					"start-guard",
-					"openspec-apply requires OpenSpec scenario",
-				);
-			if (
 				!/^\s*[-*]\s+\[ \]/m.test(
 					fs.readFileSync(path.join(root, "tasks.md"), "utf8"),
 				)
@@ -3598,15 +3588,6 @@ function wikiVerificationPayload(snapshot: WorkflowSnapshot): {
 				})),
 		};
 	});
-}
-function walkFiles(root: string): string[] {
-	const files: string[] = [];
-	for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-		const file = path.join(root, entry.name);
-		if (entry.isDirectory()) files.push(...walkFiles(file));
-		else files.push(file);
-	}
-	return files;
 }
 function tableExists(db: Database, name: string): boolean {
 	return Boolean(
