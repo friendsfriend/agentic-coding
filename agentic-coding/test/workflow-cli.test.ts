@@ -613,6 +613,166 @@ describe("breaking workflow CLI surface", () => {
 			owned: true,
 		});
 	});
+	test("third-run pane reuse skips an occupied bottom pane and picks the idle one instead", async () => {
+		const snapshot = {
+			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
+			definition: { id: "openspec-full", version: 1, digest: "d" },
+		};
+		const first = {
+			id: "qv",
+			workflowId: "wf",
+			stepId: "core.verification",
+			role: "quality-verifier",
+			attempt: 1,
+			status: "working",
+		};
+		const second = {
+			id: "sv",
+			workflowId: "wf",
+			stepId: "core.verification",
+			role: "security-verifier",
+			attempt: 1,
+			status: "working",
+		};
+		const third = {
+			id: "tv",
+			workflowId: "wf",
+			stepId: "core.verification",
+			role: "test-verifier",
+			attempt: 1,
+			status: "pending",
+		};
+		const fakeEngine = {
+			getRun: (_repo: string, id: string) =>
+				[first, second, third].find((r) => r.id === id),
+			getSnapshot: () => snapshot,
+			status: () => ({ runs: [first, second, third] }),
+		} as unknown as WorkflowEngine;
+		const firstCanonical = effectRunnerTest.canonicalAgentName(
+			"change",
+			"openspec-full",
+			{ stepId: first.stepId, role: first.role, id: first.id },
+		);
+		const calls: string[][] = [];
+		const herdr = {
+			call(...args: string[]) {
+				calls.push(args);
+				if (args[0] === "agent" && args[1] === "get") {
+					if (args[2] === firstCanonical)
+						return {
+							agent: { pane_id: "anchor-pane", agent_status: "working" },
+						};
+					// "occupied" still hosts a live agent from a stale earlier round;
+					// "idle" hosts nothing and is the only reusable candidate.
+					if (args[2] === "occupied")
+						return {
+							agent: { pane_id: "occupied", agent_status: "working" },
+						};
+					throw new Error(`not found: ${args[2]}`);
+				}
+				if (args[0] === "pane" && args[1] === "layout")
+					return {
+						layout: {
+							panes: [
+								{ pane_id: "anchor-pane", rect: { y: 0 } },
+								// Occupied sits lower on screen than idle, so the raw
+								// y-sort would have picked it first before the liveness check.
+								{ pane_id: "occupied", rect: { y: 100 } },
+								{ pane_id: "idle", rect: { y: 50 } },
+							],
+						},
+					};
+				return {};
+			},
+		};
+		const pane = await paneForRunFactory(fakeEngine, "/repo", herdr)(third.id);
+		expect(pane).toEqual({ paneId: "idle", owned: false });
+	});
+	test("third-run pane reuse spawns a fresh split when every bottom-pane candidate is occupied", async () => {
+		const snapshot = {
+			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
+			definition: { id: "openspec-full", version: 1, digest: "d" },
+		};
+		const first = {
+			id: "qv",
+			workflowId: "wf",
+			stepId: "core.verification",
+			role: "quality-verifier",
+			attempt: 1,
+			status: "working",
+		};
+		const second = {
+			id: "sv",
+			workflowId: "wf",
+			stepId: "core.verification",
+			role: "security-verifier",
+			attempt: 1,
+			status: "working",
+		};
+		const third = {
+			id: "tv",
+			workflowId: "wf",
+			stepId: "core.verification",
+			role: "test-verifier",
+			attempt: 1,
+			status: "pending",
+		};
+		const fakeEngine = {
+			getRun: (_repo: string, id: string) =>
+				[first, second, third].find((r) => r.id === id),
+			getSnapshot: () => snapshot,
+			status: () => ({ runs: [first, second, third] }),
+		} as unknown as WorkflowEngine;
+		const firstCanonical = effectRunnerTest.canonicalAgentName(
+			"change",
+			"openspec-full",
+			{ stepId: first.stepId, role: first.role, id: first.id },
+		);
+		const calls: string[][] = [];
+		const herdr = {
+			call(...args: string[]) {
+				calls.push(args);
+				if (args[0] === "agent" && args[1] === "get") {
+					if (args[2] === firstCanonical)
+						return {
+							agent: { pane_id: "anchor-pane", agent_status: "working" },
+						};
+					if (args[2] === "occupied")
+						return {
+							agent: { pane_id: "occupied", agent_status: "working" },
+						};
+					throw new Error(`not found: ${args[2]}`);
+				}
+				if (args[0] === "pane" && args[1] === "layout")
+					return {
+						layout: {
+							panes: [
+								{ pane_id: "anchor-pane", rect: { y: 0 } },
+								{ pane_id: "occupied", rect: { y: 100 } },
+							],
+						},
+					};
+				if (args[0] === "pane" && args[1] === "split")
+					return { pane: { pane_id: "split-pane", tab_id: "tab-split" } };
+				return {};
+			},
+		};
+		const pane = await paneForRunFactory(fakeEngine, "/repo", herdr)(third.id);
+		expect(pane).toEqual({
+			paneId: "split-pane",
+			tabId: "tab-split",
+			owned: true,
+		});
+		expect(
+			calls.some(
+				(args) =>
+					args[0] === "pane" &&
+					args[1] === "split" &&
+					args[2] === "anchor-pane" &&
+					args.includes("down"),
+			),
+		).toBe(true);
+	});
 	test("research-handoff CLI command requires --subject and --directives and is restricted to an authenticated active core.research researcher run", async () => {
 		// Missing --directives is rejected by flag validation before any engine
 		// or authentication call, regardless of caller identity.

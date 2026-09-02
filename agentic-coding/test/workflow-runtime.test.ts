@@ -2110,6 +2110,199 @@ describe("transactional workflow runtime", () => {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
 	});
+	test("verification round agents are stopped once the round passes, including the triage agent", () => {
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "workflow-round-stop-pass-"),
+		);
+		try {
+			const repo = repository(path.join(tmp, "repo"));
+			const engine = new WorkflowEngine(registerBuiltins());
+			let view = engine.start({
+				repo,
+				changeId: "round-pass",
+				definitionId: "no-openspec",
+				metadata: {
+					branch: "main",
+					baseBranch: "main",
+					baseCommit: "base",
+					task: "task",
+				},
+				routing: routing(),
+			}).view;
+			// Gives a run's agent a real pane handle (like a live `pi` process)
+			// before completing it, so a leaked agent.stop gap is observable.
+			const completeWithHandle = (role: string, payload: unknown) => {
+				const runView = requireDefined(
+					view.runs.find((item) => item.role === role),
+					`${role} run`,
+				);
+				const launch = requireDefined(
+					engine
+						.claimEffects(repo, 100)
+						.find(
+							(effect) =>
+								effect.kind === "agent.launch" &&
+								(effect.payload as { runId?: string }).runId === runView.id,
+						),
+					"launch effect",
+				);
+				view = engine.dispatch(repo, {
+					type: "effect.result",
+					effectId: launch.id,
+					lease: requireDefined(launch.lease, "effect lease"),
+					outcome: "complete",
+					data: {
+						runtime: "pi",
+						name: runView.id,
+						paneId: `pane-${runView.id}`,
+					},
+				}).view;
+				const run = engine.getRun(repo, runView.id);
+				fs.mkdirSync(
+					path.dirname(requireDefined(run.outputPath, "output path")),
+					{ recursive: true },
+				);
+				fs.writeFileSync(
+					requireDefined(run.outputPath, "output path"),
+					JSON.stringify({
+						runId: run.id,
+						schemaId: run.outputSchema?.id,
+						schemaVersion: run.outputSchema?.version,
+						payload,
+					}),
+				);
+				view = engine.dispatch(repo, {
+					type: "agent.handoff",
+					runId: run.id,
+					generation: run.generation,
+					token: requireDefined(launch.runToken, "run token"),
+					outcome: "complete",
+					artifact: run.outputPath,
+				}).view;
+				return run;
+			};
+			completeWithHandle("worker", { changed: true });
+			const triageRun = completeWithHandle("triage", { roles: [] });
+			const testVerifierRun = completeWithHandle("test-verifier", {
+				findings: [],
+			});
+			expect(
+				view.runs.find((run) => run.id === testVerifierRun.id)?.status,
+			).toBe("completed");
+			const stoppedRunIds = engine
+				.claimEffects(repo, 100)
+				.filter((effect) => effect.kind === "agent.stop")
+				.map((effect) => (effect.payload as { runId?: string }).runId);
+			expect(stoppedRunIds).toEqual(
+				expect.arrayContaining([triageRun.id, testVerifierRun.id]),
+			);
+		} finally {
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+	test("verification round agents are stopped when a critical finding sends the round back for fixes", () => {
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "workflow-round-stop-fix-"),
+		);
+		try {
+			const repo = repository(path.join(tmp, "repo"));
+			const engine = new WorkflowEngine(registerBuiltins());
+			let view = engine.start({
+				repo,
+				changeId: "round-fix",
+				definitionId: "no-openspec",
+				metadata: {
+					branch: "main",
+					baseBranch: "main",
+					baseCommit: "base",
+					task: "task",
+				},
+				routing: routing(),
+			}).view;
+			const completeWithHandle = (role: string, payload: unknown) => {
+				const runView = requireDefined(
+					view.runs.find((item) => item.role === role),
+					`${role} run`,
+				);
+				const launch = requireDefined(
+					engine
+						.claimEffects(repo, 100)
+						.find(
+							(effect) =>
+								effect.kind === "agent.launch" &&
+								(effect.payload as { runId?: string }).runId === runView.id,
+						),
+					"launch effect",
+				);
+				view = engine.dispatch(repo, {
+					type: "effect.result",
+					effectId: launch.id,
+					lease: requireDefined(launch.lease, "effect lease"),
+					outcome: "complete",
+					data: {
+						runtime: "pi",
+						name: runView.id,
+						paneId: `pane-${runView.id}`,
+					},
+				}).view;
+				const run = engine.getRun(repo, runView.id);
+				fs.mkdirSync(
+					path.dirname(requireDefined(run.outputPath, "output path")),
+					{ recursive: true },
+				);
+				fs.writeFileSync(
+					requireDefined(run.outputPath, "output path"),
+					JSON.stringify({
+						runId: run.id,
+						schemaId: run.outputSchema?.id,
+						schemaVersion: run.outputSchema?.version,
+						payload,
+					}),
+				);
+				view = engine.dispatch(repo, {
+					type: "agent.handoff",
+					runId: run.id,
+					generation: run.generation,
+					token: requireDefined(launch.runToken, "run token"),
+					outcome: "complete",
+					artifact: run.outputPath,
+				}).view;
+				return run;
+			};
+			completeWithHandle("worker", { changed: true });
+			fs.appendFileSync(path.join(repo, "README.md"), "scope\n");
+			const triageRun = completeWithHandle("triage", {
+				roles: [
+					{
+						role: "quality-verifier",
+						reason: "quality",
+						files: ["README.md"],
+					},
+				],
+			});
+			const qualityRun = completeWithHandle("quality-verifier", {
+				findings: [
+					{
+						id: "Q-1",
+						severity: "critical",
+						detail: "bad",
+						path: "README.md",
+						line: 1,
+					},
+				],
+			});
+			expect(view.currentStep.id).toBe("core.implementation");
+			const stoppedRunIds = engine
+				.claimEffects(repo, 100)
+				.filter((effect) => effect.kind === "agent.stop")
+				.map((effect) => (effect.payload as { runId?: string }).runId);
+			expect(stoppedRunIds).toEqual(
+				expect.arrayContaining([triageRun.id, qualityRun.id]),
+			);
+		} finally {
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
 	test("operator.repin re-pins a workflow whose definition digest changed, with revision gate", () => {
 		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-repin-"));
 		try {

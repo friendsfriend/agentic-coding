@@ -1110,6 +1110,15 @@ export interface LiveAgent {
 	tabId?: string;
 	sessionId?: string;
 }
+/**
+ * True when `paneId` currently hosts a live foreground agent. Callers that
+ * pick a pane by screen position (not by resolved identity) must check this
+ * before treating the pane as reusable, otherwise they can hand a brand-new
+ * launch a pane that is still occupied by another run's process.
+ */
+export function isPaneLive(herdr: HerdrPort, paneId: string): boolean {
+	return Boolean(getLiveAgent(herdr, paneId));
+}
 function getLiveAgent(herdr: HerdrPort, key: string): HerdrAgent | undefined {
 	try {
 		const agent = (herdr.call("agent", "get", key) as { agent?: HerdrAgent })

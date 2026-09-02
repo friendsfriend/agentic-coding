@@ -20,6 +20,7 @@ import {
 import {
 	agentEffectHandlers,
 	EffectRunner,
+	isPaneLive,
 	resolveLiveAgent,
 } from "./effect-runner.ts";
 import { loadConfig } from "./effects.ts";
@@ -141,6 +142,9 @@ export function paneForRunFactory(
 				); // rowid order = launch order; a createdAt/id tiebreak shuffles same-ms runs
 			const { k, n } = verificationPosition(round, run.id);
 			const all = round.filter((item) => item.id !== run.id);
+			// Screen position alone doesn't mean the pane is free: a round-1
+			// verifier's pane can still sit at that position long after its own
+			// run finished, so any candidate must be confirmed idle before reuse.
 			const bottomPane = (anchor: string): string | undefined => {
 				try {
 					const layout = herdr.call("pane", "layout", "--pane", anchor) as {
@@ -150,7 +154,12 @@ export function paneForRunFactory(
 					};
 					const panes = layout.layout?.panes ?? [];
 					return [...panes]
-						.filter((pane) => pane.pane_id !== anchor)
+						.filter(
+							(pane) =>
+								pane.pane_id !== anchor &&
+								pane.pane_id !== undefined &&
+								!isPaneLive(herdr, pane.pane_id),
+						)
 						.sort((a, b) => (b.rect?.y ?? 0) - (a.rect?.y ?? 0))[0]?.pane_id;
 				} catch {
 					return undefined;
