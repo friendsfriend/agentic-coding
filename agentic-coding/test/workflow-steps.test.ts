@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { rolesForDefinition } from "../src/workflow/cli.ts";
 import type { WorkflowSnapshot } from "../src/workflow/contracts.ts";
 import {
@@ -10,6 +13,7 @@ import {
 	type StepDefinition,
 	WorkflowRegistry,
 } from "../src/workflow/registry.ts";
+import { runtimeTest } from "../src/workflow/runtime.ts";
 import {
 	assertStepBehaviorCoverage,
 	rolesForStep,
@@ -6709,6 +6713,3866 @@ const EXPECTED_DEFINITIONS: Array<{
 				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
 		},
 	},
+	{
+		id: "openspec-full",
+		version: 201,
+		digest: "8130f76c2814ddc5ca59f090e957996889d0638b6048321eb222d42d1ac53d0f",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-propose",
+		version: 201,
+		digest: "3553dfa3f411a7ca1e03052e61deb06f0873a1b5ec07ab0a48d68919a79715fe",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-apply",
+		version: 201,
+		digest: "3bdfaa662652d8140157e337123ed453549392d40b3530b8832490df70f32b11",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "no-openspec",
+		version: 201,
+		digest: "c3ca1698b2c8c687ddf414b5935c23233565e664805dc6d31d4b1b3c85c8b298",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-full",
+		version: 201,
+		digest: "434ba19dce77d293fa5fe8eb3ad41347bbc9b9ee3ac001ab4e4a79bb329fb489",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-propose",
+		version: 201,
+		digest: "de6e15d6e1ebf92f3e1312056a170fd5ca531502fd78ee042c18faa8ab54a9bf",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "research",
+		version: 201,
+		digest: "d52b307bcf2d5c1e4b6531ef7ffe722fcfc4bb813022d4762b74773d6d9c31df",
+		stepDigests: {
+			"core.research":
+				"5282cce4595026b81389183db8d4cba8c1e039b4dd17ba59c743db9012c63838",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki",
+		version: 201,
+		digest: "1bfa45458d42cb620496f8375e55d49236d593af0ac3032332cb353ee5f98cd9",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki-comments",
+		version: 201,
+		digest: "2b68c8fc66cd872afa949ce31abf2ff46f5668647c8c10903eade722ef9ae57c",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-full",
+		version: 202,
+		digest: "1f5875d6ef4bc7a813fc6b57cb13c9a41ca49131e0a9922e79b0dafb58cebaa4",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-propose",
+		version: 202,
+		digest: "f6c907ea15ff9ce926d844e2e0306dbc4e087074cf891737a8f35c43bba11a2e",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-apply",
+		version: 202,
+		digest: "d79c8f62b3727de766c84c86066b93dc88dff7c9b6102857c0d97d2ca4c5e023",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "no-openspec",
+		version: 202,
+		digest: "56aabd3e8cd3da04a41c039ae34cd867f6b49b3edd937ac2e471b52739061d92",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-full",
+		version: 202,
+		digest: "2dde3fb4c16421dcebf4d773ee603aeefed7090401b2666c74654f70e8732dda",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-propose",
+		version: 202,
+		digest: "9c66b67abc191df054c94aefe4a872fc752f673985a40b39de74b84b10606ec2",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "research",
+		version: 202,
+		digest: "d34733913de8044a370153aed0da5f44cddad4cf7cf21bdcae6336a934ae1a6f",
+		stepDigests: {
+			"core.research":
+				"5282cce4595026b81389183db8d4cba8c1e039b4dd17ba59c743db9012c63838",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki",
+		version: 202,
+		digest: "bc1abc22ff9b8708457479f35258b728c5f3692bb3ae9f5b3fae9935807f8da6",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki-comments",
+		version: 202,
+		digest: "be120f437c21bb06410d68c9ebddb5b79529ceab9848bfe8bf4ffe902bda3cd9",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-full",
+		version: 203,
+		digest: "afd6938b6e2ca433c8067d75ae9c7a6f31cd40ecdac995ed6300cbf8cfaa39ad",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-propose",
+		version: 203,
+		digest: "2b8da6c923ecffefc2646f9887db02a0f35ae1002e309ce29de16f22e78aa0a6",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-apply",
+		version: 203,
+		digest: "f26e68de0da738359e5ea4d5b144dbc3292f03e89f3ba62bcbf05334dcc30566",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "no-openspec",
+		version: 203,
+		digest: "d62aa0fd369f332783d7ed7fd14c21ca6f3ddd47f54ee54d84d5cdd7f613b9c0",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-full",
+		version: 203,
+		digest: "6f4a6bbbeb83d7366e7a347fecbd20291ffd50250beeb935df29eca48413f0c5",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-propose",
+		version: 203,
+		digest: "2f2b55ab8d82b03ef06076594ebe5c89156d019fb57e30732498ddd31d29bd88",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "research",
+		version: 203,
+		digest: "e6454243c409395c85fc386e5902c1bd02a7a444f0b58b6cf26436224eb03fdf",
+		stepDigests: {
+			"core.research":
+				"5282cce4595026b81389183db8d4cba8c1e039b4dd17ba59c743db9012c63838",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki",
+		version: 203,
+		digest: "f5ea2002dcbdecac9871c8b790b7f9e6004e5334ea218c02e3b7bbc17f35c055",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki-comments",
+		version: 203,
+		digest: "cca1e5e9dcf43e3fea622cc24f5b52124b7345f6bfe63fc7d2859f713bf40faa",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-full",
+		version: 204,
+		digest: "d916f2dfbd11975ba8a4245be0fd1f12c8165337a422091f44a0feed1c983d34",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-propose",
+		version: 204,
+		digest: "6ba23f592a892731e0782a99bda53d9b76bab8af70f74655ae425ae9af376177",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-apply",
+		version: 204,
+		digest: "83dcf9d9c6e8c15b7b5e03998d5e61a91e9fd163e47e232f7d8d4327ccf92d0e",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "no-openspec",
+		version: 204,
+		digest: "eb8a12ef1a24cda04a9f7ced847d9f118f9fac086c088ec4a870978855992ba8",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-full",
+		version: 204,
+		digest: "2afdc1104ae649e972866783ec56729be4acac698ca0fb66a6ad3f80df636d8c",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-propose",
+		version: 204,
+		digest: "3791a753ceab3c75b000bd1ae9fdc053cdb03d7bfdacf088705b7e212459de9f",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "research",
+		version: 204,
+		digest: "26fa5a9b689b622622c1bf24bf6807f414232dcb6d71bd43bb0bbd6be3e10b80",
+		stepDigests: {
+			"core.research":
+				"5282cce4595026b81389183db8d4cba8c1e039b4dd17ba59c743db9012c63838",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki",
+		version: 204,
+		digest: "7f5634a0944bf62cc7a7f4c3f08cd055cbe09008d5a2262df1bb1dadc4180c9e",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki-comments",
+		version: 204,
+		digest: "bc394fe576e70709cfbfa6fe8b36f9a6d1a8ddaa9e5086a7d126733902db998d",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-full",
+		version: 205,
+		digest: "344973d1183a695988686586a004985b556dc76b5a58517b6eb1391524ed216c",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-propose",
+		version: 205,
+		digest: "ffa9ea82264ea80c7f39cb8c090194d859740b05a120d2116415928426bc2622",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-apply",
+		version: 205,
+		digest: "e6c7cfba66ed9e1f781f8cf96489feedb0718834f7fde6d0925846e1eb856eb5",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "no-openspec",
+		version: 205,
+		digest: "63330a92c7ad8cfadb07618a22b9a7ec0c36c71fc85b0fcc3a027a87a8f5ebd7",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-full",
+		version: 205,
+		digest: "7e36dc38f9c585cf20e46d03049ff45e0524c5a1b6e52ee6ab81f475b2f96e68",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-propose",
+		version: 205,
+		digest: "672814e7b937bc2c70aac90574f7a97b58af5efe7b8ca0678d1009bb73a80f43",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "research",
+		version: 205,
+		digest: "4a0ef9deadb4774ba377009f6310a1db24703e7a77c6cb2d7892449a7f4824aa",
+		stepDigests: {
+			"core.research":
+				"5282cce4595026b81389183db8d4cba8c1e039b4dd17ba59c743db9012c63838",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki",
+		version: 205,
+		digest: "407707aab96fb05cd7d86c199285f0f3819588aca20b8e929162f795c11291b8",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki-comments",
+		version: 205,
+		digest: "723891f2ae30c63523d305084180294060814470f6bf6576a496bf3efd5fe3ac",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-full",
+		version: 206,
+		digest: "d7ed8f5328c0eb178897b8ec845287eb322ff808a306aece837e4c174062708a",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-propose",
+		version: 206,
+		digest: "58da668c697b1c5853fd0012c71bd9dd841a7520554f58a064722fbe6b3ebe1e",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-apply",
+		version: 206,
+		digest: "2c5799c432c5488cf2f3e5124ed26b1c04d1ab1eedd8753a694f503bab161e00",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "no-openspec",
+		version: 206,
+		digest: "0fb88df59b4d64b0694c5abb34cb383147035d5c6517663b3e8866e2b41fe887",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-full",
+		version: 206,
+		digest: "f8605c30564eeedfba75ef95f2c91f19be55d1206b394f66fe5fd736a75cdcc3",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-propose",
+		version: 206,
+		digest: "b8808a710bbc0de81d72fccb5b8e4b781675b0e6a9257893c188a66fa4e76624",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "research",
+		version: 206,
+		digest: "b1266e74ddbfa471c5ab4a00368e1200db8ce0bfdf004eee7fcf5698dc364e68",
+		stepDigests: {
+			"core.research":
+				"5282cce4595026b81389183db8d4cba8c1e039b4dd17ba59c743db9012c63838",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki",
+		version: 206,
+		digest: "ff17dfd5553efc62b8aad33db92ca9135c35d37c1ead31f7530056c190e92142",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki-comments",
+		version: 206,
+		digest: "a6609a02bc9f3c4ca5433b2989e85c41bb3497dfd5776b7a3df214b5632d4f67",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-full",
+		version: 207,
+		digest: "7275169186db57e4230294d1dfd1b1d9f1801c8243ff41b7ca7517758428dee7",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-propose",
+		version: 207,
+		digest: "c286befe3d786714d67ebd6c8bc58c533c42385254e3003800a9c161d00ed3e9",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-apply",
+		version: 207,
+		digest: "01558832b03ffc3749a5856ad5ae0434f01b30bb8c243f9f56ca3aebacdefcf0",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "no-openspec",
+		version: 207,
+		digest: "4fe2241b13e42fa769e32a15be7f2c8be21b8074c1c61aae465369c67a11f2e7",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-full",
+		version: 207,
+		digest: "f55bbbef7f291fc219e07d51f314bce2f58cf9b3a676df167d86e22c96ed506e",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-propose",
+		version: 207,
+		digest: "d3f66311840dc9226bf3b96ed1f1b616cc33b6dcc3d390fa91b5b5578864ce50",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "research",
+		version: 207,
+		digest: "79bda5c1f40195ddda02c668424ae646530d89cbe1ea8bedcdf0e61c53dce9fa",
+		stepDigests: {
+			"core.research":
+				"5282cce4595026b81389183db8d4cba8c1e039b4dd17ba59c743db9012c63838",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki",
+		version: 207,
+		digest: "fa86545ce57ff4e385a74ba28cce63a805eec030c938d857ac50a5a58fc2de40",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki-comments",
+		version: 207,
+		digest: "e68ffa85c4d4f3bfc402bc3c8bd9e3948a64d9930e1be41e2eec8011696177ca",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-full",
+		version: 208,
+		digest: "e9c1d5629137cbe124e2f57e27b6eb744b73339c3ef5d94c8acbc21ac9796df9",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-propose",
+		version: 208,
+		digest: "84168dec8550d5f7e27a217b9ab9569323129d5d057d77a4fdbc87c18660fd68",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-apply",
+		version: 208,
+		digest: "a62adcc83f542aa37a88299f5b17834c5ea0df0392341d16e5bcd9ebb1bd31e7",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "no-openspec",
+		version: 208,
+		digest: "111bddc3a7b4f6b5955ffaf67056fbe2150d7a09ff77a73a88b3c25f076b777a",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-full",
+		version: 208,
+		digest: "b54ad1c7c8800a8dd11d479e4bae908da2448e518cd530e6459284c36b36f576",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-propose",
+		version: 208,
+		digest: "31061554b5865b11760be11666021bcf8e913bc46300444481491a8fe63cee2d",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "research",
+		version: 208,
+		digest: "f3ab562ffac17e530fd624c217eb3c2e6d9a05a36792a39f509bb688e1a23da1",
+		stepDigests: {
+			"core.research":
+				"5282cce4595026b81389183db8d4cba8c1e039b4dd17ba59c743db9012c63838",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki",
+		version: 208,
+		digest: "327c661bd83d30d1e86402f11d0c6bfc86203b489c1b718d7693080fdad71506",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki-comments",
+		version: 208,
+		digest: "2526aa563b3777ff6f2390b2fc560caf4ceedde8a23590e2447946f2dd2acca5",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-full",
+		version: 209,
+		digest: "9516119369b3adb9eb4a7ba25206862a7abfec652127a62d67c9169101c38f58",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-propose",
+		version: 209,
+		digest: "fc3ddd8a98a19d6ecd2fa2468790872e7c96cfbab133e2a8b31e25b67f5bf1d7",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-apply",
+		version: 209,
+		digest: "a0ac4b009a1589f740220217ccd0d67e98b147d2826f2f6d49463f0a35866626",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "no-openspec",
+		version: 209,
+		digest: "3ff9c9ddec8d07378e4d7176190c3807cef387b28e77edaf821ea1cc2bc2181e",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-full",
+		version: 209,
+		digest: "7e0bbd057cc8abd31e68538a3b1328610c745d5aa6d6a637a2cbfc3da8b313b3",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-propose",
+		version: 209,
+		digest: "ab29347dc18864c6b4c4715d72140d5e8c0e99ba24b438eea324c92a2700042d",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "research",
+		version: 209,
+		digest: "a3871cdaeb479b3dca708f69c9f1519b717d77568317563edd949d46c12fef3d",
+		stepDigests: {
+			"core.research":
+				"5282cce4595026b81389183db8d4cba8c1e039b4dd17ba59c743db9012c63838",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki",
+		version: 209,
+		digest: "8bb986a1518e7781f771bdd91b44a30846a09a89c65cfdac56c24aabfd555ecd",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki-comments",
+		version: 209,
+		digest: "8327ed9c9f945b4054cfd00cc9f44a204a7cf20c583477917b75d74395d55c70",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-full",
+		version: 210,
+		digest: "46ce2e1e7661ed6cd17816347caa393a8537289a771b8734d0edb885481a5c62",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-propose",
+		version: 210,
+		digest: "631d198e901258fb41f62c38d25aa220dfdb12a857d1c15c12147594c987a940",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-apply",
+		version: 210,
+		digest: "03bf1f3de44fd3cc9d0f6a6333d550f4755781c63f517ccc2e276eca54a3c52d",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "no-openspec",
+		version: 210,
+		digest: "26352de199a4032b226d5a4a1654dc9762820a484b4f0e5d599a3b07f9912625",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-full",
+		version: 210,
+		digest: "e59b936b8ce17236f6224673b99e6d8b9ee8a6e5f42683e1714f1709e0c71c03",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-propose",
+		version: 210,
+		digest: "d0b7b261c88c9fe7f8bdeeb78c2c24deb1d86ed577934ebde300d21805c0a2e7",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "research",
+		version: 210,
+		digest: "bc84b887535aa02e3c2dfe536e4093ee6eca624b36729bae344c7e96fa5249af",
+		stepDigests: {
+			"core.research":
+				"5282cce4595026b81389183db8d4cba8c1e039b4dd17ba59c743db9012c63838",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki",
+		version: 210,
+		digest: "583d5ff7b9378403ed88f80edbf878e454281b513a6a310d4d3b765f5e5b2573",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki-comments",
+		version: 210,
+		digest: "d1227dd56bc457e1229f2e4c341977f39e3ceea262f7ab0c661967ef12cfbbe6",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-full",
+		version: 211,
+		digest: "5911ff2f76dd5c18b83132b0ab728086cce9e0558048df4a55ffeafc3c18a3bc",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-propose",
+		version: 211,
+		digest: "6f9e9be7f9282c2ad0f57566e96df44c1744d52684f7afd399ecb3f64433e20e",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-apply",
+		version: 211,
+		digest: "18e794ad4164e6600a9342965142d280b8d34e77b9b13b4cd059a09a0cb96862",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "no-openspec",
+		version: 211,
+		digest: "a7e42a2017219854e5d561675b68b71ec1810aee40fe917afb187a404279ae07",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-full",
+		version: 211,
+		digest: "1b54da6a541b608da3ce268519816e3c45583052c5d4d59a21b0c93a9308793f",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-propose",
+		version: 211,
+		digest: "c303e2bdc2554e0473a12325b2be5fa5d9867e398ac01651fc287be95627e645",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "research",
+		version: 211,
+		digest: "0d5f86d4e7617589913405eea0a686916f9b1fb2432c00dfeb70b40119ea9ae7",
+		stepDigests: {
+			"core.research":
+				"5282cce4595026b81389183db8d4cba8c1e039b4dd17ba59c743db9012c63838",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki",
+		version: 211,
+		digest: "359cb1894d43e6cdce31acfd2aaff2bfec397ed2363ddfcc978a5dc08a81b218",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki-comments",
+		version: 211,
+		digest: "a1562aa801ccaab65666972217ccb06cb98f188ae050b2cfe5aa85b8a9683739",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-full",
+		version: 212,
+		digest: "602608fdc3f0357e4369c8f781d93c196e8d4ad88460c7fe7dd9b00bd30764b4",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-propose",
+		version: 212,
+		digest: "07acf3e7d455a9598c9d2f5c5cdad48f243636ddfee9c0c2af5b29c156da1610",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-apply",
+		version: 212,
+		digest: "7ee505634a449b64d78779f3e7d65e2b89e889b32c7a272370d93e2c0b85677e",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "no-openspec",
+		version: 212,
+		digest: "7151c262ddd3a63e5e5a5faa4f51cecb530cef06f9f4524c003fbdf4b3611853",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-full",
+		version: 212,
+		digest: "5f104c580c71976204ac7a5ccd3c72952190a8c6db60306db63106bec52e5a75",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-propose",
+		version: 212,
+		digest: "5b6e8ba643556432412ce34dfb2e6059d4ba0fbb8c0bf30e695cd0b8d700eecf",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "research",
+		version: 212,
+		digest: "f3275093fe651e6e658c8879b1a29c7d37817064f8f4323d18534380fef2fd3b",
+		stepDigests: {
+			"core.research":
+				"5282cce4595026b81389183db8d4cba8c1e039b4dd17ba59c743db9012c63838",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki",
+		version: 212,
+		digest: "41b361f90eba98f361a6077332f643e5b80125c8831b7be17eee032513b9576f",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki-comments",
+		version: 212,
+		digest: "93bd4ca3fbf65f855de919dfc79b1a55d8a8bd3e574c9165ebce8ff91a6db64c",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-full",
+		version: 213,
+		digest: "e84d5980c004171f2a59f29b7c289147c3d75f68d6799edb443bccbfa3e5cff8",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-propose",
+		version: 213,
+		digest: "3f55677dc168db8edcbc50c6e4dd797b7db96bdb10061503adc8dc5594a6f48f",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-apply",
+		version: 213,
+		digest: "404fbec9712430fd0c59afe364b8e77940f1d61735d014e1da89c1e9b0e1f77b",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "no-openspec",
+		version: 213,
+		digest: "2cb650eaab1b441c393cc4d06705ef2558c6cd5ee5b5fe338af41530d2606078",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-full",
+		version: 213,
+		digest: "075aaa8d60a859e0bf86b7185e098b646ea48801dece4ccebbc824dbfed67f3a",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-propose",
+		version: 213,
+		digest: "9c9c5fd39a45560c1a7b2ae42cb6ce2b3a7cdadd6d26a56e05f0b37345a772f6",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "research",
+		version: 213,
+		digest: "8d479b9e80a40c04755f971c7bbb4b454d6674ed0c4220293238e6310674d805",
+		stepDigests: {
+			"core.research":
+				"5282cce4595026b81389183db8d4cba8c1e039b4dd17ba59c743db9012c63838",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki",
+		version: 213,
+		digest: "b5c33065a8ecfbfd50da8f656484893a955a649248d043078c09bce46e8aff7f",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki-comments",
+		version: 213,
+		digest: "eb1770bdd8d27524292ef8cc4f0c334f4662d456a079d57c5bc2b00f277a266f",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-full",
+		version: 214,
+		digest: "bfa2c25475d79c10afe32bbc0d0f98a92dea445d70fa763cb67ba6fa9b4b2b76",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-propose",
+		version: 214,
+		digest: "2e1c9fbaca2c6a0c031bd7e3fecb1fe6a71c60c1044b092321ed25de8afe6c78",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-apply",
+		version: 214,
+		digest: "375dec92bd4a3f3d158c7c5095fecf8940829053274020f8b4c540d0db848de2",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "no-openspec",
+		version: 214,
+		digest: "4e917dac8e4a4e8f9378214e0ec61e9f6b7cf26049e14583219d42830ad09d82",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-full",
+		version: 214,
+		digest: "2da524f2e2fb00fe92bc91d86e668e7d730a0ff0a78bbe52517e640cdcc3cc4a",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-propose",
+		version: 214,
+		digest: "309fa4d4ce22eb3acc7aa03a254d3790631860e6ed5056543d2bf2e05536cbfd",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "research",
+		version: 214,
+		digest: "9b03bdeb581142700cf95f6736dc3f4e099c009924449e488d1d8c76b3d13595",
+		stepDigests: {
+			"core.research":
+				"5282cce4595026b81389183db8d4cba8c1e039b4dd17ba59c743db9012c63838",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki",
+		version: 214,
+		digest: "606305afaea510f78824fd120b962f262e84299577dffadc62db943414afc953",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki-comments",
+		version: 214,
+		digest: "8782e7a2053197084874a107e389c4f1302e41e79833a110e1d14a5643c23d21",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-full",
+		version: 215,
+		digest: "c87092b6df4bc0f026f40a6bab63aac5457e890888447c6ccef250c2c095b7a7",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-propose",
+		version: 215,
+		digest: "a6435189dfe29dbc8002587e1d03ea85e362ab13ed075bfc29bb021a8f2d68fe",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-apply",
+		version: 215,
+		digest: "1b2801873ca4d06da8d362b4a201b46a88873bcfa359b4b60b93bc6e0fe7aa7b",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "no-openspec",
+		version: 215,
+		digest: "5a4d5cae853e00861d17e74589aff6340685ccec8aad72bd82ff6d86205fba00",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-full",
+		version: 215,
+		digest: "af2a12dc18e6d879a5301ca88d2cec7986cc95d1e9d5cb67509c77bf1b80f603",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-propose",
+		version: 215,
+		digest: "70a358e6be9c8234d5c6abf4f48609f665ae25e1b843328392ff6d0e8bee1be2",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "research",
+		version: 215,
+		digest: "37a92d66260e87f8f88f04594605402b5b7af6bf0c8dc9effd2f24aff318ad56",
+		stepDigests: {
+			"core.research":
+				"5282cce4595026b81389183db8d4cba8c1e039b4dd17ba59c743db9012c63838",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki",
+		version: 215,
+		digest: "3d64545e0c27e20324725f5e619ca369097b73d4d3fd5a5a28a3a42f825191f0",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki-comments",
+		version: 215,
+		digest: "0c71f49ae5ab34dbecd767a341a1a551a2c4a15a15912b8703faf97593d5e4d9",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-full",
+		version: 216,
+		digest: "b037abd64e67e3f04f50548b2ceeecee6a56e1815bbe772e2ea25d79e4b2ae48",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-propose",
+		version: 216,
+		digest: "30d5751ad0e9c637f42ce9411f8a09d858e2f3569b98e7b570e88d2dd1e6921f",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-apply",
+		version: 216,
+		digest: "46c4e482e0ca897f7d757858393df60dbfcdaf8c114cf7c4db19dc6b2711fa79",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "no-openspec",
+		version: 216,
+		digest: "cb66d66dce7fdc09834f143ad5236461535f6b02258b180aa31593046d63294e",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-full",
+		version: 216,
+		digest: "906c13e0999d009de77f29b9fc8a149ecb19f8bf50f8610d5603ab7c6588c9c2",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-propose",
+		version: 216,
+		digest: "31643382cc9231ce78e77f468560f264dce9ef5ede77f13ef43d0e276d353112",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "research",
+		version: 216,
+		digest: "2817c21bc309581dff826f5445eaed3795d9fb0d40371fbf6e702811b280787f",
+		stepDigests: {
+			"core.research":
+				"5282cce4595026b81389183db8d4cba8c1e039b4dd17ba59c743db9012c63838",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki",
+		version: 216,
+		digest: "718b9e50c9f5df8e4bdd5e936edb5c2fde717b037fc5e9a119c0b799f5b1c584",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki-comments",
+		version: 216,
+		digest: "dcdf7b9c6b1d2646516d907a3732a687dc03d0df8ef00881451cad26c1149eba",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-full",
+		version: 217,
+		digest: "30162de9731ef500b67fada695a67a193f9e6dd9e33f9a423b22456580af955c",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-propose",
+		version: 217,
+		digest: "51c3a02e91647ff3a46806c34879ba58f05db9d36488e7abdaa2755ab3fc93c6",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-apply",
+		version: 217,
+		digest: "1cf7b2ac17e5f8d7855139b231a92751873425eeee19e57052ea1cd4d88bb7f1",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "no-openspec",
+		version: 217,
+		digest: "93fca7a74ef15fcdf8f645ba617721111c8fd9e0b06aa0ec4d0efa6943ed4053",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-full",
+		version: 217,
+		digest: "518d9c1623e33e97e06fae34e665c50a07f649768d74e5b16eb6fda3e1cc45bc",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-propose",
+		version: 217,
+		digest: "2c767ad91e99e0dfefb5e446b179485dd82934d0e66904b30e779ad7756d77c6",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "research",
+		version: 217,
+		digest: "7dc35ae5e1f70a62521aebd698783a4422ba534cfbae6e126d2c8a6fa4c5001d",
+		stepDigests: {
+			"core.research":
+				"5282cce4595026b81389183db8d4cba8c1e039b4dd17ba59c743db9012c63838",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki",
+		version: 217,
+		digest: "42ef56033eb78e8c9bbacc7e6c765e4966ef8ca6a1b3c76b0de5b1764fa2fa69",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki-comments",
+		version: 217,
+		digest: "89bbf9698e1baef7a4f95405cb6a2ea2a440a53fd1d441287146946b452c009f",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-full",
+		version: 218,
+		digest: "dad020a2e677b3e9a32bfd2169b598041752e4c8f47b18fc1df7803060df0724",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-propose",
+		version: 218,
+		digest: "8f3a6d729cb71a922a1899f5cd68f9c199895160605f2b28fcb5ae86a354c4be",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-apply",
+		version: 218,
+		digest: "59e4104bbe8fa70fca98d4f83dea2cc3c0ca8cde3dbd49a6560aa288fe3cde27",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "no-openspec",
+		version: 218,
+		digest: "6dc1e92b79d2147e1150310060be391160cc70394a4625d8787e36065b1d3455",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-full",
+		version: 218,
+		digest: "2ed0fbf83c2f1a97e301cb52371c5d386b20a6b2cac119778102b69ca2616f9a",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-propose",
+		version: 218,
+		digest: "18479e02052dbcdf5c54f33ed9b67a7336b3b49d1958fce0a1456b05eff251b6",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "research",
+		version: 218,
+		digest: "c2df1a47d52b557a211591e5a23c9680346e157d819da84b11373b825e9383bf",
+		stepDigests: {
+			"core.research":
+				"5282cce4595026b81389183db8d4cba8c1e039b4dd17ba59c743db9012c63838",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki",
+		version: 218,
+		digest: "39ac30114fcd87212efe160c9f8d3e8742f0deda5d86c8d738fdb0bc83faa49e",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki-comments",
+		version: 218,
+		digest: "053ea75f1a69189005fe06a1496dcbe790236b07cbb8f66e14a4a251bc599332",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-full",
+		version: 219,
+		digest: "1f946e647aa75bd4c7cb2f72a52543d48f68fed77c1bfa562f4450aec4546799",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-propose",
+		version: 219,
+		digest: "c1f715b09d208ba2e8d398a3b50ab80deb8b17e2d69b846078cac2fea546e128",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-apply",
+		version: 219,
+		digest: "8415eb97ca9d73c454c962171dcdcfec504106c1fe7cb91ae7714339a9e3748e",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "no-openspec",
+		version: 219,
+		digest: "6dd07e84cb61a617e8a844faad646eac7c81b0d3ba1cfb0b217bae77ee55fa25",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-full",
+		version: 219,
+		digest: "162c1aa724fd8363825785840af511e9d31c1745b0f04b8e79c9e5377455baaf",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-propose",
+		version: 219,
+		digest: "b41c1fd6ece5f94056b06af48fed0a00d3e5de45a3e9269f3fd5357d0e1b3c1d",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "research",
+		version: 219,
+		digest: "b5d1a80a7fd515b6a5c485b4ee9ea3d4175cebb0af9d644d2c11751bece5aa78",
+		stepDigests: {
+			"core.research":
+				"5282cce4595026b81389183db8d4cba8c1e039b4dd17ba59c743db9012c63838",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki",
+		version: 219,
+		digest: "57b516bb17514399d158be5589fda28e53203c85944c5d6fd4f3a5614988be51",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki-comments",
+		version: 219,
+		digest: "cedee763e8d56ba47499ce70ce437a9b5ce1ed35a43f5a125c42e45aaf8e1157",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-full",
+		version: 220,
+		digest: "906ff64494f1091133b7cd9b9b2902d6da210b344c629ad0b88a74e1d8972e8e",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-propose",
+		version: 220,
+		digest: "eedeafc826d24655de29b95e663b1eb6abdc8747846fbd9b08f2401dace86b72",
+		stepDigests: {
+			"core.plan":
+				"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-apply",
+		version: 220,
+		digest: "ea1d506430cdf6f6556c0ad949c10b242182dd705001caf75e5bc0cf4afd6f98",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "no-openspec",
+		version: 220,
+		digest: "498f9ed31c7062db90da66440b90111a53d703bf1aab0176ad840c0336f7fdd6",
+		stepDigests: {
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-full",
+		version: 220,
+		digest: "e14ece93f95fe44eb83b0daa70e6ab51fb14cf6e0ad489924dca36d049ae90cc",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.implementation":
+				"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+			"core.triage":
+				"d9b73865e7d0f5dbae92c27cf02ee10292ae8f561fe73d2f66732a117c739cbb",
+			"core.verification":
+				"6cfff3c14bc7ca65a7fb9812e4b2b41ac94f4aa6983b233ffc1a10133f9adfa5",
+			"core.developer-review":
+				"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.archive":
+				"eb4f5fa3ac2d1198fcf3a5dbd14b05f24e949b4f7f09a00478fd127e2f48f45b",
+			"core.delivery":
+				"96d619f2fe16425343403de62f3b202c57522c6e59ab10dbb0b75e45ab5e8adf",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "openspec-fusion-propose",
+		version: 220,
+		digest: "ed6c9079917815aa8af9100c701952b2a7856b55a31c04074114608b133fb4ba",
+		stepDigests: {
+			"fusion.plan":
+				"ea97626e45234932f100e422fffea3e30c5dc0e297d43dc9d935adf9007348aa",
+			"fusion.consolidate":
+				"fb20db58c5f1b9c00f38fb3dad28b3ec5561f7740ec58339b7b85439bd0914eb",
+			"core.plan-approval":
+				"b491090a0384e6e230fd84e02ce7fff8a0341cdffa406277a50d25a21a31eee5",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "research",
+		version: 220,
+		digest: "3e9b05e8e9a2e2322cd5f8dc5fb1402811c05c88f0982d89175b8e621b01987f",
+		stepDigests: {
+			"core.research":
+				"5282cce4595026b81389183db8d4cba8c1e039b4dd17ba59c743db9012c63838",
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki",
+		version: 220,
+		digest: "2dc868f6e133ecb0a84a1790a9ebf9746881ad6631c72db1024469081cfd8337",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.wiki-approval":
+				"c25d6c05a3ad1e68cf13f5d550fb5eb2498fdf8226048b77e7846efc74f67ed0",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
+	{
+		id: "wiki-comments",
+		version: 220,
+		digest: "fd9eac20a23ddc6051614bbf88c7cfaa5552f240837677c31029f9550b48c52c",
+		stepDigests: {
+			"core.wiki":
+				"b969c4d7a803a03dc3f28a620c07853afa649544364ac373ef6350d407712382",
+			"core.completed":
+				"62adf8aa6f0d99ada0d0b45c373e4673290d8447bd81f42a973a39a3282f4164",
+			"core.closed":
+				"f627e259325a2f4db5b90020a04476be77510d90ac85e08401825006204a425c",
+		},
+	},
 ];
 
 function snapshot(
@@ -6984,5 +10848,311 @@ describe("workflow step behaviors", () => {
 				edges: [],
 			}).steps,
 		).toEqual(["behavior-free"]);
+	});
+});
+
+describe("workflow step behavior hooks (move-step-semantics-to-behavior-hooks)", () => {
+	function withMetadata(
+		definitionId: string,
+		overrides: Partial<WorkflowSnapshot["metadata"]> = {},
+	): WorkflowSnapshot {
+		const base = snapshot(definitionId);
+		return { ...base, metadata: { ...base.metadata, ...overrides } };
+	}
+	function tempWorktree(): string {
+		return fs.mkdtempSync(path.join(os.tmpdir(), "step-hooks-"));
+	}
+	function writeChange(
+		worktree: string,
+		changeId: string,
+		files: Record<string, string>,
+	): void {
+		const root = path.join(worktree, "openspec", "changes", changeId);
+		for (const [name, content] of Object.entries(files)) {
+			const target = path.join(root, name);
+			fs.mkdirSync(path.dirname(target), { recursive: true });
+			fs.writeFileSync(target, content);
+		}
+	}
+
+	describe("entry-guard validateEvidence hooks", () => {
+		test("core.plan and fusion.consolidate require non-empty planning artifacts and a scenario", () => {
+			const worktree = tempWorktree();
+			const changeId = "demo";
+			const snap = withMetadata("openspec-full", { worktree, changeId });
+			for (const stepId of ["core.plan", "fusion.consolidate"]) {
+				expect(() =>
+					stepBehavior(stepId).validateEvidence?.({ snapshot: snap }),
+				).toThrow("planning artifact invalid: proposal.md");
+				writeChange(worktree, changeId, {
+					"proposal.md": "why",
+					"design.md": "design",
+					"tasks.md": "- [ ] task",
+				});
+				expect(() =>
+					stepBehavior(stepId).validateEvidence?.({ snapshot: snap }),
+				).toThrow("planning requires at least one OpenSpec scenario");
+				writeChange(worktree, changeId, {
+					"specs/x/spec.md": "#### Scenario: works\nok\n",
+				});
+				expect(() =>
+					stepBehavior(stepId).validateEvidence?.({ snapshot: snap }),
+				).not.toThrow();
+				fs.rmSync(path.join(worktree, "openspec", "changes", changeId), {
+					recursive: true,
+					force: true,
+				});
+			}
+		});
+
+		test("core.implementation requires every OpenSpec task checked, except for no-openspec", () => {
+			const worktree = tempWorktree();
+			const changeId = "demo";
+			writeChange(worktree, changeId, { "tasks.md": "- [ ] pending\n" });
+			const openspecSnap = withMetadata("openspec-full", {
+				worktree,
+				changeId,
+			});
+			expect(() =>
+				stepBehavior("core.implementation").validateEvidence?.({
+					snapshot: openspecSnap,
+				}),
+			).toThrow("implementation requires completed OpenSpec tasks");
+			const noOpenspecSnap = withMetadata("no-openspec", {
+				worktree,
+				changeId,
+			});
+			expect(() =>
+				stepBehavior("core.implementation").validateEvidence?.({
+					snapshot: noOpenspecSnap,
+				}),
+			).not.toThrow();
+			writeChange(worktree, changeId, { "tasks.md": "- [x] done\n" });
+			expect(() =>
+				stepBehavior("core.implementation").validateEvidence?.({
+					snapshot: openspecSnap,
+				}),
+			).not.toThrow();
+		});
+
+		test("core.archive requires the change directory moved into openspec/changes/archive", () => {
+			const worktree = tempWorktree();
+			const changeId = "demo";
+			const snap = withMetadata("openspec-full", { worktree, changeId });
+			writeChange(worktree, changeId, { "proposal.md": "why" });
+			expect(() =>
+				stepBehavior("core.archive").validateEvidence?.({ snapshot: snap }),
+			).toThrow("archive move not found");
+			fs.rmSync(path.join(worktree, "openspec", "changes", changeId), {
+				recursive: true,
+				force: true,
+			});
+			fs.mkdirSync(
+				path.join(worktree, "openspec", "changes", "archive", changeId),
+				{ recursive: true },
+			);
+			expect(() =>
+				stepBehavior("core.archive").validateEvidence?.({ snapshot: snap }),
+			).not.toThrow();
+		});
+	});
+
+	describe("developerActions parity", () => {
+		function ids(
+			actions: ReturnType<
+				NonNullable<ReturnType<typeof stepBehavior>["developerActions"]>
+			>,
+		): string[] {
+			return actions.map((action) => action.id);
+		}
+		test("plan/review approval steps offer their fixed action set regardless of definition", () => {
+			for (const definitionId of ["openspec-full", "research"]) {
+				expect(
+					ids(
+						stepBehavior("core.wiki-approval").developerActions?.({
+							snapshot: snapshot(definitionId),
+						}) ?? [],
+					),
+				).toEqual(["approve-wiki", "review-comments"]);
+			}
+			expect(
+				ids(
+					stepBehavior("core.plan-approval").developerActions?.({
+						snapshot: snapshot("openspec-full"),
+					}) ?? [],
+				),
+			).toEqual(["approve-plan", "review-comments", "reject-plan"]);
+			expect(
+				ids(
+					stepBehavior("core.developer-review").developerActions?.({
+						snapshot: snapshot("openspec-full"),
+					}) ?? [],
+				),
+			).toEqual(["approve-review", "review-comments"]);
+		});
+		test("core.research offers follow-up and close-research only while research is current", () => {
+			expect(
+				ids(
+					stepBehavior("core.research").developerActions?.({
+						snapshot: snapshot("research"),
+					}) ?? [],
+				),
+			).toEqual(["research-follow-up", "close-research"]);
+		});
+		test("core.completed offers create-pr except for the five close-only definitions", () => {
+			for (const definitionId of [
+				"openspec-full",
+				"openspec-apply",
+				"no-openspec",
+				"openspec-fusion-full",
+			])
+				expect(
+					ids(
+						stepBehavior("core.completed").developerActions?.({
+							snapshot: snapshot(definitionId),
+						}) ?? [],
+					),
+				).toEqual(["create-pr", "close"]);
+			for (const definitionId of [
+				"openspec-propose",
+				"openspec-fusion-propose",
+				"wiki",
+				"wiki-comments",
+				"research",
+			])
+				expect(
+					ids(
+						stepBehavior("core.completed").developerActions?.({
+							snapshot: snapshot(definitionId),
+						}) ?? [],
+					),
+				).toEqual(["close"]);
+		});
+		test("steps with no developer-facing action return an empty list", () => {
+			for (const stepId of [
+				"core.plan",
+				"core.implementation",
+				"core.triage",
+				"core.verification",
+				"core.wiki",
+				"core.archive",
+				"core.delivery",
+				"core.closed",
+				"fusion.plan",
+				"fusion.consolidate",
+			])
+				expect(
+					stepBehavior(stepId).developerActions?.({
+						snapshot: snapshot("openspec-full"),
+					}) ?? [],
+				).toEqual([]);
+		});
+	});
+
+	describe("context carry-over precedence (design D3)", () => {
+		const edge = (from: string, to: string, loop = false) => ({
+			from,
+			outcome: "complete",
+			to,
+			...(loop ? { loop: { maxAttempts: 3 } } : {}),
+		});
+		function resolve(
+			definitionId: string,
+			e: ReturnType<typeof edge>,
+			outcome: string,
+			output: unknown,
+			priorContext: unknown,
+		) {
+			return runtimeTest.resolveArrivalContext(
+				(id) => stepBehavior(id),
+				definitionId,
+				e as never,
+				outcome,
+				output,
+				priorContext as never,
+				() => ({ concepts: [] }),
+			);
+		}
+		test("no clause matches leaves context unset", () => {
+			expect(
+				resolve(
+					"openspec-full",
+					edge("core.plan", "core.plan-approval"),
+					"complete",
+					{ a: 1 },
+					undefined,
+				),
+			).toBeUndefined();
+		});
+		test("a carriesOutputContext step takes the output verbatim", () => {
+			expect(
+				resolve(
+					"openspec-full",
+					edge("core.plan-approval", "core.implementation"),
+					"approve",
+					{ a: 1 },
+					undefined,
+				),
+			).toEqual({ a: 1 });
+		});
+		test("acceptsCommentsContext requires the comments outcome", () => {
+			// core.archive declares acceptsCommentsContext but not
+			// carriesOutputContext, isolating this clause from clause C.
+			expect(
+				resolve(
+					"openspec-full",
+					edge("core.wiki-approval", "core.archive"),
+					"comments",
+					{ c: 1 },
+					undefined,
+				),
+			).toEqual({ c: 1 });
+			expect(
+				resolve(
+					"openspec-full",
+					edge("core.wiki-approval", "core.archive"),
+					"approve",
+					{ c: 1 },
+					undefined,
+				),
+			).toBeUndefined();
+		});
+		test("producesWikiVerificationContext wins over a plain output-carrying match", () => {
+			expect(
+				resolve(
+					"openspec-full",
+					edge("core.wiki", "core.wiki-approval"),
+					"complete",
+					{ ignored: true },
+					undefined,
+				),
+			).toEqual({ concepts: [] });
+		});
+		test("wiki-comments definition override beats a carriesOutputContext match", () => {
+			expect(
+				resolve(
+					"wiki-comments",
+					edge("core.wiki-approval", "core.wiki", true),
+					"comments",
+					{ fresh: true },
+					{ stale: true },
+				),
+			).toEqual({ stale: true });
+		});
+		test("a self-loop with defined output still takes the output, not the preserved prior context", () => {
+			// This is the load-bearing quirk design D3 documents: the value
+			// ternary only special-cases the definition override and the wiki
+			// verification payload; every other matching clause (including the
+			// generic loop self-edge) falls through to output-if-defined.
+			expect(
+				resolve(
+					"openspec-full",
+					edge("core.wiki", "core.wiki", true),
+					"blocked",
+					"retry message",
+					{ stale: true },
+				),
+			).toBe("retry message");
+		});
 	});
 });

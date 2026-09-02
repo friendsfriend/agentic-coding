@@ -354,4 +354,111 @@ describe("workflow registry", () => {
 		});
 		expect(composed.steps).toEqual(["extension.audit"]);
 	});
+	describe("manifest policy (design D1)", () => {
+		function manifestFor(policy: unknown) {
+			return {
+				id: "policy-flow",
+				version: 1,
+				label: "Policy flow",
+				initial: "extension.audit",
+				terminal: ["extension.audit"],
+				steps: ["extension.audit"],
+				edges: [],
+				policy,
+			};
+		}
+		test("rejects an unknown target kind, naming the manifest", () => {
+			const registry = new WorkflowRegistry(
+				BUILTIN_EFFECTS,
+				BUILTIN_CAPABILITIES,
+			);
+			registry.registerStep(testStep("extension.audit"));
+			expect(() =>
+				registry.registerWorkflow(
+					manifestFor({
+						targetKind: "alien",
+						checkoutRequired: false,
+						requiresReadOnlyResearcher: false,
+					}) as never,
+				),
+			).toThrow(/unknown policy target kind in policy-flow/);
+		});
+		test("rejects a read-only-researcher requirement outside the research target", () => {
+			const registry = new WorkflowRegistry(
+				BUILTIN_EFFECTS,
+				BUILTIN_CAPABILITIES,
+			);
+			registry.registerStep(testStep("extension.audit"));
+			expect(() =>
+				registry.registerWorkflow(
+					manifestFor({
+						targetKind: "repository",
+						checkoutRequired: false,
+						requiresReadOnlyResearcher: true,
+					}) as never,
+				),
+			).toThrow(/contradictory policy in policy-flow/);
+		});
+		test("rejects a checkout requirement outside the repository target", () => {
+			const registry = new WorkflowRegistry(
+				BUILTIN_EFFECTS,
+				BUILTIN_CAPABILITIES,
+			);
+			registry.registerStep(testStep("extension.audit"));
+			expect(() =>
+				registry.registerWorkflow(
+					manifestFor({
+						targetKind: "wiki",
+						checkoutRequired: true,
+						requiresReadOnlyResearcher: false,
+					}) as never,
+				),
+			).toThrow(/contradictory policy in policy-flow/);
+		});
+		test("accepts a consistent policy and pins it on the compiled definition", () => {
+			const registry = new WorkflowRegistry(
+				BUILTIN_EFFECTS,
+				BUILTIN_CAPABILITIES,
+			);
+			registry.registerStep(testStep("extension.audit"));
+			const compiled = registry.registerWorkflow(
+				manifestFor({
+					targetKind: "research",
+					checkoutRequired: false,
+					requiresReadOnlyResearcher: true,
+				}) as never,
+			);
+			expect(compiled.policy).toEqual({
+				targetKind: "research",
+				checkoutRequired: false,
+				requiresReadOnlyResearcher: true,
+			});
+		});
+		test("every built-in manifest-policy-tier definition declares a policy, and prior tiers are unaffected", () => {
+			const registry = registerBuiltins();
+			// The manifest-policy tier is `definitionVersionForManifestPolicy`
+			// (rounds + 200) for rounds 1..20 — versions 201..220. Every other
+			// registered version (legacy, wikiGate-policy, and the frozen 1000
+			// back-compat set) predates the `policy` block.
+			const policyBearing = registry
+				.definitions()
+				.filter(
+					(definition) =>
+						definition.version >= 201 && definition.version <= 220,
+				);
+			expect(policyBearing.length).toBeGreaterThan(0);
+			for (const definition of policyBearing)
+				expect(definition.policy).toBeTruthy();
+			// The pre-manifest-policy tiers (legacy, wikiGate-policy, and the
+			// frozen 1000 set) keep registering under their original versions
+			// with no `policy` field, so their digests are the ones asserted
+			// unchanged in test/workflow-steps.test.ts's full-catalog pin.
+			for (const definition of registry
+				.definitions()
+				.filter(
+					(definition) => definition.version < 201 || definition.version > 220,
+				))
+				expect(definition.policy).toBeUndefined();
+		});
+	});
 });

@@ -24,6 +24,7 @@ import {
 	wikiWorkflowDataRoot,
 	wikiWorkflowTarget,
 } from "./runtime.ts";
+import { stepBehavior } from "./steps/index.ts";
 import {
 	conceptPath,
 	snapshotList,
@@ -452,12 +453,20 @@ export function agentEffectHandlers(
 				);
 				if (!resolved) return undefined;
 				try {
+					// A reused live pane completes this effect here, without ever
+					// reaching execute() below — mint a real capability the same
+					// way execute() does, or the run never gets one and every
+					// later authenticated action (handoff, question,
+					// research-handoff) fails with "persistent agent run
+					// capability is unavailable".
+					const token =
+						effect.runToken ?? engine.issueRunCapability(repo, run.id);
 					const expected = renderedAssignment(
 						engine,
 						repo,
 						options.registry,
 						run.id,
-						effect.runToken ?? "",
+						token,
 					);
 					writeRunEnvironment(
 						snapshot.definition.id === "wiki-comments"
@@ -1051,7 +1060,7 @@ async function ensureWorkspaceTabs(
 	}
 }
 function roundScoped(stepId: string): boolean {
-	return ["core.triage", "core.verification"].includes(stepId);
+	return stepBehavior(stepId).roundScoped === true;
 }
 /**
  * Canonical Herdr agent name for a workflow-managed agent.
@@ -1319,8 +1328,6 @@ function assignmentFor(
 					JSON.stringify(context),
 				]
 			: [];
-	const isResearchWorkflow = snapshot.definition.id === "research";
-	const isResearchStep = isResearchWorkflow && run.stepId === "core.research";
 	// The research-handoff wiki agent is a distinct role (research-wiki), not a
 	// conditional branch of the shared wiki role — see wiki-research.md.
 	const isResearchWikiRole = run.role === "research-wiki";
@@ -1364,31 +1371,19 @@ function assignmentFor(
 					JSON.stringify(context),
 				]
 			: [];
+	const hooked = stepBehavior(run.stepId).assignmentInputs?.({
+		snapshot,
+		run: { stepId: run.stepId, role: run.role, profile: run.profile },
+	});
 	const inputs = [
 		...(snapshot.metadata.task
-			? [
-					isResearchStep
-						? `Research task: ${snapshot.metadata.task}`
-						: `Task: ${snapshot.metadata.task}`,
-				]
+			? [hooked?.taskLine ?? `Task: ${snapshot.metadata.task}`]
 			: []),
-		...(isResearchStep
-			? [
-					`Repository context: ${snapshot.metadata.repository || "none (standalone research)"}`,
-					"Research is a persistent interactive session; answer follow-ups in this same session and remain active until close-research.",
-				]
-			: isResearchWikiRole
-				? [
-						"Directive-first: the completed research handoff below already decided what to document. Start immediately by creating or updating exactly the concepts its directives name, with exactly the claims each directive lists — do not run a broad open-ended rediscovery pass over the repository or wiki to figure out what to document.",
-						"Limit repository/wiki inspection to targeted corroboration of the recorded directives: confirm each directive's claim against its cited source, and use `wiki search`/`wiki show` only to resolve the update-vs-create choice for each named target, not to search for other undocumented material.",
-						`Centralized wiki boundary: ${snapshot.metadata.wikiRoot ?? "configured wiki root"}`,
-						"Write only an unverified centralized draft; developer approval follows this stage.",
-					]
-				: []),
+		...(hooked?.introLines ?? []),
 		...wikiReviewInput,
 		...researchHandoffInput,
 		...(changed.length ? [`Changed files: ${changed.join(" ")}`] : []),
-		...(context === undefined || isResearchWikiRole
+		...(context === undefined || hooked?.suppressStepInputLine
 			? []
 			: [`Step input: ${JSON.stringify(context)}`]),
 		...(dialogueInput ? [dialogueInput] : []),
@@ -1403,47 +1398,24 @@ function assignmentFor(
 		generation: run.generation,
 		stepId: run.stepId,
 		role: run.role,
-		objective: isResearchStep
-			? "Research the user's task, answer follow-ups, and remain available until a wiki request or developer closure."
-			: isResearchWikiRole
-				? "Execute the recorded research handoff directives directive-first: create or update exactly the named concepts with the listed claims, limiting inspection to targeted corroboration of those directives (no broad rediscovery), then wait for developer approval."
-				: `Complete ${run.stepId} for ${snapshot.metadata.changeId}${snapshot.step.mode ? ` in ${snapshot.step.mode} mode` : ""}.`,
+		objective:
+			hooked?.objective ??
+			`Complete ${run.stepId} for ${snapshot.metadata.changeId}${snapshot.step.mode ? ` in ${snapshot.step.mode} mode` : ""}.`,
 		interaction:
-			isResearchStep ||
-			["planner", "worker", "consolidator"].includes(run.role) ||
+			hooked?.interaction ??
+			(["planner", "worker", "consolidator"].includes(run.role) ||
 			/^planner-[1-5]$/.test(run.role)
 				? "developer-dialogue"
-				: "silent",
+				: "silent"),
 		inputs,
-		permissions: isResearchStep
-			? [
-					"use only tools exposed by the selected runtime",
-					...(snapshot.metadata.repository
-						? ["read supplied repository as evidence only"]
-						: []),
-					"dispatch the research-handoff command yourself after an explicit user request; do not wait for a developer dashboard action",
-				]
-			: run.stepId === "core.wiki"
-				? [
-						"read repository evidence only",
-						"write only centralized unverified wiki drafts",
-						...(isResearchWikiRole
-							? [
-									"act on the recorded handoff directives first; do not perform broad rediscovery",
-									"developer approval is required next",
-								]
-							: []),
-					]
-				: run.profile.readOnly
-					? ["read repository"]
-					: ["read and edit repository"],
-		checks: isResearchStep
-			? ["source citations and source-isolation checks"]
-			: run.stepId === "core.wiki"
-				? ["documentation scope and source-isolation checks"]
-				: run.role === "worker"
-					? ["focused tests only"]
-					: ["assigned checks"],
+		permissions:
+			hooked?.permissions ??
+			(run.profile.readOnly
+				? ["read repository"]
+				: ["read and edit repository"]),
+		checks:
+			hooked?.checks ??
+			(run.role === "worker" ? ["focused tests only"] : ["assigned checks"]),
 		...(output ? { output } : {}),
 		allowedOutcomes: run.allowedOutcomes,
 		environment: {

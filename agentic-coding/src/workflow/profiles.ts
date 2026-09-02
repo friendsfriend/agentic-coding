@@ -493,13 +493,17 @@ export function validateResearchRepositoryProfile(
 		digest: createHash("sha256").update(stableJson(unsigned)).digest("hex"),
 	});
 }
+/** `entryStepId` is the target definition's `initial` step (the research
+ * definition's entry point is `core.research`) — passed by the caller instead
+ * of hardcoded here, so this stays free of any `core.*`/`fusion.*` literal. */
 export function enforceResearchReadOnlyRouting(
 	routing: WorkflowRouting,
+	entryStepId: string,
 ): WorkflowRouting {
 	return {
 		...routing,
 		routes: routing.routes.map((route) =>
-			route.stepId === "core.research" && route.role === "researcher"
+			route.stepId === entryStepId && route.role === "researcher"
 				? {
 						...route,
 						profile: validateResearchRepositoryProfile(route.profile),

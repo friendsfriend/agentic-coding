@@ -642,7 +642,7 @@ test("launch failure on a newly created pane still cleans it up", async () => {
 	}
 });
 
-test("launch retry recovers stable Herdr agent without rotating capability or duplicating launch", async () => {
+test("launch retry recovers stable Herdr agent without duplicating launch, minting a fresh capability that actually authorizes", async () => {
 	const repo = fs.mkdtempSync(
 		path.join(os.tmpdir(), "workflow-launch-recover-"),
 	);
@@ -742,7 +742,6 @@ test("launch retry recovers stable Herdr agent without rotating capability or du
 		await new EffectRunner(repo, engine, handlers).drain();
 		const run = engine.getRun(repo, started.view.runs[0]?.id);
 		expect(run.handle?.paneId).toBe("recovered-pane");
-		expect(run.capabilityHash).toBe(hash);
 		expect(adapter.launches).toBe(0);
 		expect(prompts).toBe(1);
 		expect(launch.runToken).toBeTruthy();
@@ -750,6 +749,38 @@ test("launch retry recovers stable Herdr agent without rotating capability or du
 			"Write exactly this envelope shape:",
 		);
 		expect(fs.readFileSync(run.assignmentPath, "utf8")).not.toBe("truncated");
+		// The expired lease discarded `launch`'s original plaintext token before
+		// anything could deliver it (only its hash was ever persisted), so there
+		// is no valid prior token left to preserve: this recovery *must* mint a
+		// fresh one — reusing the stale hash would leave `run.env` carrying an
+		// empty HERDR_RUN_TOKEN and the recovered run permanently unauthorizable
+		// (the actual production failure this test now guards against).
+		expect(run.capabilityHash).not.toBe(hash);
+		const envFile = path.join(
+			repo,
+			".herdr-workflow",
+			"runtime-bin",
+			run.id,
+			"run.env",
+		);
+		const refreshedToken = fs
+			.readFileSync(envFile, "utf8")
+			.split("\n")
+			.find((line) => line.startsWith("HERDR_RUN_TOKEN="))
+			?.slice("HERDR_RUN_TOKEN=".length);
+		expect(refreshedToken).toBeTruthy();
+		// The recovered run must actually be usable: an authenticated handoff
+		// with the token written to run.env has to succeed.
+		expect(
+			engine.authorizeExactRunCapability(
+				repo,
+				run.workflowId,
+				run.id,
+				run.stepId,
+				run.role,
+				refreshedToken ?? "",
+			).id,
+		).toBe(run.id);
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
 	}

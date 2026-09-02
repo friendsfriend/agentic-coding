@@ -13,7 +13,7 @@ import {
 import { manageAgentExtension } from "./agent-extensions.ts";
 import type { CredentialPrompt } from "./credentials.ts";
 import {
-	definitionVersionForPolicy,
+	definitionVersionForManifestPolicy,
 	PUBLIC_WORKFLOW_CATALOG,
 	registerBuiltins,
 } from "./definitions.ts";
@@ -43,6 +43,7 @@ import {
 	wikiWorkflowDataRoot,
 	wikiWorkflowTarget,
 } from "./runtime.ts";
+import { stepBehavior } from "./steps/index.ts";
 import type { StepBehavior } from "./steps/types.ts";
 import {
 	appendLog,
@@ -119,9 +120,7 @@ export function paneForRunFactory(
 		const snapshot = workflowEngine.getSnapshot(repo, run.workflowId);
 		if (!snapshot.metadata.workspace)
 			throw new Error("workflow workspace unavailable");
-		const roundScoped = ["core.triage", "core.verification"].includes(
-			run.stepId,
-		);
+		const roundScoped = stepBehavior(run.stepId).roundScoped === true;
 		// Adopt any live agent's pane instead of spawning a duplicate; fall
 		// through to geometry or tab creation only when no agent resolves.
 		const resolved = resolveLiveAgent(
@@ -137,7 +136,7 @@ export function paneForRunFactory(
 				.runs.map((item) => workflowEngine.getRun(repo, item.id))
 				.filter(
 					(item) =>
-						["core.triage", "core.verification"].includes(item.stepId) &&
+						stepBehavior(item.stepId).roundScoped === true &&
 						item.attempt === run.attempt &&
 						!["expired", "failed"].includes(item.status),
 				); // rowid order = launch order; a createdAt/id tiebreak shuffles same-ms runs
@@ -1392,7 +1391,7 @@ export async function run(argv: string[]): Promise<void> {
 		const task = flag(rest, "task");
 		validateStart(repo, change, workflow, task);
 		const config = loadConfig();
-		const definitionVersion = definitionVersionForPolicy(
+		const definitionVersion = definitionVersionForManifestPolicy(
 			config.workflow.max_verification_rounds,
 		);
 		const definition = registry.definition(workflow, definitionVersion);
@@ -1422,7 +1421,8 @@ export async function run(argv: string[]): Promise<void> {
 				route.profile = resolveProfile(name, agents);
 			}
 		}
-		if (research) routing = enforceResearchReadOnlyRouting(routing);
+		if (research)
+			routing = enforceResearchReadOnlyRouting(routing, definition.initial);
 		for (const route of routing.routes)
 			preflightProfile(route.profile, registry.step(route.stepId).requirements);
 		const baseBranch = config.workflow.base_branch;

@@ -11,13 +11,6 @@ export interface RenderedAssignment {
 	digest: string;
 	bytes: number;
 }
-/** Maps a wiki-family role to the one role-specific approach asset it reads,
- * out of the several pinned under the core.wiki step (see registerBuiltins'
- * INSTRUCTION_BY_STEP in definitions.ts). */
-const WIKI_ROLE_ASSET: Record<string, string> = {
-	wiki: "wiki-openspec.md",
-	"research-wiki": "wiki-research.md",
-};
 function readPinnedAsset(
 	name: string,
 	expected: string,
@@ -64,7 +57,9 @@ export function renderAssignment(
 	// discovery-based openspec/implementation drafting, 'research-wiki' for
 	// directive-first research-handoff drafting) pick their own approach file.
 	// Any other pinned asset for the step is always included.
-	const wikiAsset = WIKI_ROLE_ASSET[assignment.role];
+	const wikiAsset = step.behavior?.instructionAssetForRole?.({
+		role: assignment.role,
+	});
 	const assets = step.instructionAssets.flatMap((name, index) => {
 		if (name === "workflow-agent-protocol.md") return [];
 		if (name.startsWith("verification-"))
@@ -181,13 +176,9 @@ export function renderAssignment(
 		`Allowed outcomes: ${assignment.allowedOutcomes.join(", ")}`,
 		"",
 		"## Handoff",
-		...(assignment.stepId === "core.research"
-			? [
-					"Do not hand off `complete` for a research answer or follow-up. Remain in the persistent session until the user explicitly requests a wiki entry, then dispatch `agentic-coding workflow research-handoff` yourself with the structured directives and narrative — it records the handoff and transitions to wiki drafting in one authenticated step. Use `blocked` or `failed` only for bounded handoffs.",
-				]
-			: [
-					"Finish the run by reporting exactly one outcome with the workflow CLI:",
-				]),
+		...(step.behavior?.handoffNote ?? [
+			"Finish the run by reporting exactly one outcome with the workflow CLI:",
+		]),
 		"```bash",
 		...(handoff ? [handoff] : []),
 		'agentic-coding workflow handoff --outcome blocked --message "reason"',
