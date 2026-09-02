@@ -145,7 +145,7 @@ export function Home(props: {
 	const workflowProgress = (item: WorkflowOverview) =>
 		item.state.definition?.id === "research"
 			? item.state.stepId === "core.wiki"
-				? `wiki drafting: ${item.agents.find((agent) => agent.role === "wiki")?.status ?? "not started"}`
+				? `wiki drafting: ${item.agents.find((agent) => agent.role === "research-wiki")?.status ?? "not started"}`
 				: item.state.stepId === "core.wiki-approval"
 					? "wiki approval"
 					: `researcher: ${item.agents.find((agent) => agent.role === "researcher")?.status ?? "not started"}`

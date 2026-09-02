@@ -657,7 +657,7 @@ function validateArgs(command: string, argv: string[]): void {
 function help(command?: string): void {
 	if (!command) {
 		console.log(
-			"Usage: agentic-coding workflow <command> [flags]\n\nCommands:\n  start            Start pinned workflow definition\n  status           Print validated workflow view\n  action           Dispatch revision-bound engine action (including close-research)\n  handoff          Submit run-bound agent outcome\n  question         Ask the developer a bounded question\n  research-handoff Record structured handoff and start wiki drafting\n  repair           Repair to compatible step, retriggers phase\n  repin            Re-pin to current definition digest\n  projects         List configured projects\n  config           Print resolved configuration\n  agent-extension  Manage Pi agent extensions\n  wiki             Read/update OKF wiki; only the managed wiki role may write drafts; archive verifies",
+			"Usage: agentic-coding workflow <command> [flags]\n\nCommands:\n  start            Start pinned workflow definition\n  status           Print validated workflow view\n  action           Dispatch revision-bound engine action (including close-research)\n  handoff          Submit run-bound agent outcome\n  question         Ask the developer a bounded question\n  research-handoff Record structured handoff and start wiki drafting\n  repair           Repair to compatible step, retriggers phase\n  repin            Re-pin to current definition digest\n  projects         List configured projects\n  config           Print resolved configuration\n  agent-extension  Manage Pi agent extensions\n  wiki             Read/update OKF wiki; only the managed wiki or research-wiki role may write drafts; archive verifies",
 		);
 		return;
 	}
@@ -1014,7 +1014,7 @@ export function rolesForDefinition(
 												role !== "openspec-verifier",
 										)
 									: stepId === "core.wiki"
-										? ["wiki"]
+										? [definitionId === "research" ? "research-wiki" : "wiki"]
 										: stepId === "core.research"
 											? ["researcher"]
 											: stepId === "core.archive"
@@ -1053,12 +1053,21 @@ function managedAgent(): boolean {
 		return true;
 	}
 }
+/** Both wiki-writing roles (openspec/implementation "wiki" and
+ * research-handoff "research-wiki") may write centralized drafts; they
+ * differ only in drafting approach (agent-definitions/instructions), never
+ * in write authorization or promotion rights. */
+const WIKI_WRITER_ROLES: readonly string[] = ["wiki", "research-wiki"];
 function authorizeWikiWriter(): ReturnType<WorkflowEngine["getSnapshot"]> {
 	const workflowId = process.env.HERDR_WORKFLOW_ID;
 	const stepId = process.env.HERDR_STEP_ID;
 	const role = process.env.HERDR_ROLE;
 	const token = process.env.HERDR_RUN_TOKEN;
-	if (!workflowId || !token || !(stepId === "core.wiki" && role === "wiki"))
+	if (
+		!workflowId ||
+		!token ||
+		!(stepId === "core.wiki" && role && WIKI_WRITER_ROLES.includes(role))
+	)
 		throw new Error(
 			"wiki write requires an authenticated managed wiki run (authenticated core.wiki run required)",
 		);
@@ -1204,10 +1213,12 @@ async function runWiki(rest: string[]): Promise<void> {
 				process.env.HERDR_STEP_ID)
 		)
 			throw new Error("wiki write requires an authenticated workflow role");
-		if (role && role !== "wiki")
+		if (role && !WIKI_WRITER_ROLES.includes(role))
 			throw new Error(`wiki write is not permitted for role ${role}`);
 		const authorizedSnapshot =
-			role === "wiki" ? authorizeWikiWriter() : undefined;
+			role && WIKI_WRITER_ROLES.includes(role)
+				? authorizeWikiWriter()
+				: undefined;
 		const concept = flag(rest, "path");
 		const type = flag(rest, "type");
 		const title = flag(rest, "title");

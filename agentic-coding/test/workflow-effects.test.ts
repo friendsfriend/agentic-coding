@@ -171,7 +171,11 @@ test("wiki run's assignment carries the researcher's full recorded handoff verba
 						role: "researcher",
 						profile: researchProfile,
 					},
-					{ stepId: "core.wiki", role: "wiki", profile: researchProfile },
+					{
+						stepId: "core.wiki",
+						role: "research-wiki",
+						profile: researchProfile,
+					},
 				],
 				diversity: [],
 			},
@@ -238,12 +242,22 @@ test("wiki run's assignment carries the researcher's full recorded handoff verba
 		});
 		await new EffectRunner(researchWorkflowTarget(), engine, handlers).drain();
 		expect(adapter.launches).toBe(2);
-		expect(adapter.context?.assignment.role).toBe("wiki");
+		expect(adapter.context?.assignment.role).toBe("research-wiki");
 		const inputs = adapter.context?.assignment.inputs ?? [];
 		const combined = inputs.join("\n");
 		expect(combined).toContain("Research handoff");
 		expect(combined).toContain("Documentation directives");
 		expect(combined).toContain("actionable starting point");
+		// Directive-first: the wiki agent must be told to act on the recorded
+		// directives immediately, not run a broad rediscovery pass first.
+		expect(combined).toContain("Directive-first");
+		expect(combined).toContain("do not run a broad open-ended rediscovery");
+		expect(combined).toContain("targeted corroboration");
+		const assignment = adapter.context?.assignment;
+		expect(assignment?.objective).toContain("directive-first");
+		expect(assignment?.permissions?.join("\n")).toContain(
+			"do not perform broad rediscovery",
+		);
 		expect(combined).toContain("widget subsystem");
 		expect(combined).toContain("projects/demo/widget-subsystem");
 		expect(combined).toContain("widgets are produced by the widget factory");

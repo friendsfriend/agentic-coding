@@ -262,7 +262,78 @@ describe("transactional workflow runtime", () => {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
 	});
-	test("research hands off to wiki approval and exposes close before approval", () => {
+	test("close-research remains available for a purely conversational Q&A session with nothing to document", () => {
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "workflow-research-qa-close-"),
+		);
+		const previousWikiRoot = process.env.HERDR_WIKI_DIR;
+		process.env.HERDR_WIKI_DIR = path.join(tmp, "wiki");
+		try {
+			const engine = new WorkflowEngine(registerBuiltins());
+			const researchProfile: ResolvedProfile = {
+				...profile,
+				tools: ["read"],
+				capabilities: [
+					"interactive",
+					"prompt",
+					"persistent-session",
+					"run-environment",
+					"observe",
+					"read-only",
+				],
+			};
+			const started = engine.start({
+				repo: researchWorkflowTarget(),
+				changeId: "research-qa-close",
+				definitionId: "research",
+				definitionVersion: definitionVersionForPolicy(6),
+				metadata: {
+					branch: "",
+					baseBranch: "",
+					baseCommit: "",
+					task: "research",
+				},
+				routing: {
+					defaultProfile: researchProfile.name,
+					routes: [
+						{
+							stepId: "core.research",
+							role: "researcher",
+							profile: researchProfile,
+						},
+					],
+				},
+			});
+			const setup = requireDefined(
+				engine
+					.claimEffects(researchWorkflowTarget())
+					.find((effect) => effect.kind === "workspace.setup"),
+				"research setup",
+			);
+			const view = engine.dispatch(researchWorkflowTarget(), {
+				type: "effect.result",
+				effectId: setup.id,
+				lease: requireDefined(setup.lease, "setup lease"),
+				outcome: "complete",
+				data: { workspace: "research-workspace" },
+			}).view;
+			expect(view.availableActions.map((action) => action.id)).toContain(
+				"close-research",
+			);
+			const closed = engine.dispatch(researchWorkflowTarget(), {
+				type: "developer.action",
+				workflowId: started.snapshot.workflowId,
+				revision: view.revision,
+				actionId: "close-research",
+			}).view;
+			expect(closed.currentStep.id).toBe("core.closed");
+		} finally {
+			if (previousWikiRoot === undefined) delete process.env.HERDR_WIKI_DIR;
+			else process.env.HERDR_WIKI_DIR = previousWikiRoot;
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+	test("research hands off to wiki approval, requires approval before close, and closes only via the completed gate", () => {
 		const tmp = fs.mkdtempSync(
 			path.join(os.tmpdir(), "workflow-research-life-"),
 		);
@@ -301,7 +372,11 @@ describe("transactional workflow runtime", () => {
 							role: "researcher",
 							profile: researchProfile,
 						},
-						{ stepId: "core.wiki", role: "wiki", profile: researchProfile },
+						{
+							stepId: "core.wiki",
+							role: "research-wiki",
+							profile: researchProfile,
+						},
 					],
 				},
 			});
@@ -400,6 +475,19 @@ describe("transactional workflow runtime", () => {
 				},
 			}).view;
 			expect(view.currentStep.id).toBe("core.wiki");
+			// close-research is no longer offered once the wiki step is entered:
+			// the wiki entry is now mandatory once drafting begins.
+			expect(view.availableActions.map((action) => action.id)).not.toContain(
+				"close-research",
+			);
+			expect(() =>
+				engine.dispatch(researchWorkflowTarget(), {
+					type: "developer.action",
+					workflowId: started.snapshot.workflowId,
+					revision: view.revision,
+					actionId: "close-research",
+				}),
+			).toThrow(/unavailable/);
 			expect(
 				engine.getRun(researchWorkflowTarget(), researcher.id).status,
 			).toBe("expired");
@@ -433,9 +521,9 @@ describe("transactional workflow runtime", () => {
 				},
 			]);
 			expect(wikiContext.handoff.noSourcesUsed).toBe(false);
-			expect(view.runs.some((run) => run.role === "wiki")).toBe(true);
+			expect(view.runs.some((run) => run.role === "research-wiki")).toBe(true);
 			const wikiSummary = requireDefined(
-				view.runs.find((run) => run.role === "wiki"),
+				view.runs.find((run) => run.role === "research-wiki"),
 				"wiki run",
 			);
 			const wiki = engine.getRun(researchWorkflowTarget(), wikiSummary.id);
@@ -460,19 +548,41 @@ describe("transactional workflow runtime", () => {
 				artifact: wikiOutput,
 			}).view;
 			expect(view.currentStep.id).toBe("core.wiki-approval");
-			expect(view.availableActions.map((action) => action.id)).toContain(
+			// close-research remains unavailable at wiki-approval: the developer
+			// must resolve the draft (approve or request changes) first.
+			expect(view.availableActions.map((action) => action.id)).not.toContain(
 				"close-research",
 			);
+			expect(() =>
+				engine.dispatch(researchWorkflowTarget(), {
+					type: "developer.action",
+					workflowId: started.snapshot.workflowId,
+					revision: view.revision,
+					actionId: "close-research",
+				}),
+			).toThrow(/unavailable/);
 			view = engine.dispatch(researchWorkflowTarget(), {
 				type: "developer.action",
 				workflowId: started.snapshot.workflowId,
 				revision: view.revision,
 				actionId: "approve-wiki",
 			}).view;
-			expect(view.currentStep.id).toBe("core.closed");
+			// Approval routes through the completed close gate, not straight to
+			// closed: the developer must take an explicit close action.
+			expect(view.currentStep.id).toBe("core.completed");
 			expect(view.effects.some((effect) => effect.kind === "wiki.verify")).toBe(
 				true,
 			);
+			expect(view.availableActions.map((action) => action.id)).toEqual([
+				"close",
+			]);
+			view = engine.dispatch(researchWorkflowTarget(), {
+				type: "developer.action",
+				workflowId: started.snapshot.workflowId,
+				revision: view.revision,
+				actionId: "close",
+			}).view;
+			expect(view.currentStep.id).toBe("core.closed");
 		} finally {
 			if (previousWikiRoot === undefined) delete process.env.HERDR_WIKI_DIR;
 			else process.env.HERDR_WIKI_DIR = previousWikiRoot;
@@ -518,7 +628,11 @@ describe("transactional workflow runtime", () => {
 							role: "researcher",
 							profile: researchProfile,
 						},
-						{ stepId: "core.wiki", role: "wiki", profile: researchProfile },
+						{
+							stepId: "core.wiki",
+							role: "research-wiki",
+							profile: researchProfile,
+						},
 					],
 				},
 			});
@@ -818,7 +932,11 @@ describe("transactional workflow runtime", () => {
 							role: "researcher",
 							profile: researchProfile,
 						},
-						{ stepId: "core.wiki", role: "wiki", profile: researchProfile },
+						{
+							stepId: "core.wiki",
+							role: "research-wiki",
+							profile: researchProfile,
+						},
 					],
 				},
 			});

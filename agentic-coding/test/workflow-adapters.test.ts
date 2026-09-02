@@ -184,6 +184,26 @@ describe("profiles, assignments, and adapters", () => {
 			renderAssignment({ ...step, instructionDigests: ["bad"] }, assignment()),
 		).toThrow(/pin mismatch/);
 	});
+	test("core.wiki assignment selects one role-specific approach file, never both", () => {
+		const wikiStep = registerBuiltins().step("core.wiki");
+		const wikiAssignment = assignment("core.wiki", { role: "wiki" });
+		const wikiPrompt = renderAssignment(wikiStep, wikiAssignment).prompt;
+		expect(wikiPrompt).toContain("Discovery-based drafting");
+		expect(wikiPrompt).not.toContain("Directive-first drafting");
+		expect(wikiPrompt).toContain("Project and shared knowledge scoping");
+		const researchWikiAssignment = assignment("core.wiki", {
+			role: "research-wiki",
+		});
+		const researchWikiPrompt = renderAssignment(
+			wikiStep,
+			researchWikiAssignment,
+		).prompt;
+		expect(researchWikiPrompt).toContain("Directive-first drafting");
+		expect(researchWikiPrompt).not.toContain("Discovery-based drafting");
+		expect(researchWikiPrompt).toContain(
+			"Project and shared knowledge scoping",
+		);
+	});
 	test("planning assignments preserve test-verifier ownership", () => {
 		const step = registerBuiltins().step("core.plan");
 		const prompt = renderAssignment(

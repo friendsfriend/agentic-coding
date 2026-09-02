@@ -1901,17 +1901,6 @@ export function requiredUserActionFor(
 			items: [],
 		};
 	}
-	if (definitionId === "research" && phase === "core.wiki")
-		return {
-			key: "research-wiki",
-			title: "Wiki drafting active",
-			prompt:
-				"The researcher requested a wiki entry; review it when drafting finishes, or close research now.",
-			items: [
-				{ label: "Close research", kind: "workflow", value: "close-research" },
-				later,
-			],
-		};
 	if (phase === "wiki-approval" || phase === "core.wiki-approval")
 		return {
 			key: "wiki-review",
@@ -1922,27 +1911,10 @@ export function requiredUserActionFor(
 					: definitionId === "research"
 						? "Review knowledge changes before closing research."
 						: "Review knowledge changes before archival.",
-			items:
-				definitionId === "research"
-					? [
-							{
-								label: "Approve wiki",
-								kind: "workflow",
-								value: "approve-wiki",
-							},
-							{
-								label: "Request wiki changes",
-								kind: "review",
-								value: "review-comments",
-							},
-							{
-								label: "Close research",
-								kind: "workflow",
-								value: "close-research",
-							},
-							later,
-						]
-					: [],
+			// Trigger-only: the action opens the wiki review popup (drafted-concept
+			// list + markdown view + comment/approve/request-changes) directly, so
+			// there are no selectable items to render in the generic ListViewModal.
+			items: [],
 		};
 	if (phase === "developer-review" || phase === "core.developer-review")
 		return {
@@ -1974,7 +1946,7 @@ export function requiredUserActionFor(
 		const proposal =
 			definitionId === "openspec-propose" ||
 			definitionId === "openspec-fusion-propose";
-		const wikiOnly = definitionId === "wiki";
+		const wikiOnly = definitionId === "wiki" || definitionId === "research";
 		const closeOnly = proposal || wikiOnly;
 		return {
 			key: `${phase}:${closeOnly ? "proposal" : prCreated ? "pr-created" : "no-pr"}`,

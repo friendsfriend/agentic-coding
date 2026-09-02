@@ -448,7 +448,12 @@ const INSTRUCTION_BY_STEP: Record<string, string[]> = {
 		"verification-usability.md",
 		"verification-test.md",
 	],
-	"core.wiki": ["workflow-agent-protocol.md", "wiki.md"],
+	"core.wiki": [
+		"workflow-agent-protocol.md",
+		"wiki.md",
+		"wiki-openspec.md",
+		"wiki-research.md",
+	],
 	"core.research": ["workflow-agent-protocol.md", "research.md"],
 	"core.archive": ["workflow-agent-protocol.md", "archive.md"],
 	"fusion.plan": ["workflow-agent-protocol.md", "planning-fusion.md"],
@@ -961,6 +966,7 @@ export function registerBuiltins(
 							"core.research",
 							"core.wiki",
 							"core.wiki-approval",
+							"core.completed",
 							"core.closed",
 						],
 						allowedOutcomes: {
@@ -970,6 +976,7 @@ export function registerBuiltins(
 								"request-wiki",
 								"close-research",
 							],
+							"core.completed": ["close"],
 						},
 						edges: [
 							{
@@ -1014,7 +1021,7 @@ export function registerBuiltins(
 							{
 								from: "core.wiki-approval",
 								outcome: "approve",
-								to: "core.closed",
+								to: "core.completed",
 								effects: [
 									{
 										kind: "wiki.verify",
@@ -1029,6 +1036,7 @@ export function registerBuiltins(
 								to: "core.wiki",
 								loop: { maxAttempts: 6 },
 							},
+							{ from: "core.completed", outcome: "close", to: "core.closed" },
 						] as const,
 					},
 				]

@@ -743,7 +743,9 @@ export function writeConcept(
 	}
 	if (
 		existing?.frontmatter.verified !== undefined ||
-		["wiki", "planner", "consolidator"].includes(process.env.HERDR_ROLE ?? "")
+		["wiki", "research-wiki", "planner", "consolidator"].includes(
+			process.env.HERDR_ROLE ?? "",
+		)
 	) {
 		frontmatter.status = "draft";
 		delete frontmatter.verified;

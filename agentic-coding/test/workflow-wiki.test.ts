@@ -162,11 +162,13 @@ describe("OKF wiki bundle", () => {
 				await expect(runWorkflow(args)).rejects.toThrow(/not permitted/);
 				expect(fs.readFileSync(file, "utf8")).toBe(before);
 			}
-			process.env.HERDR_ROLE = "wiki";
-			process.env.HERDR_RUN_TOKEN = "managed";
-			await expect(
-				runWorkflow([...args, "--status", "stable"]),
-			).rejects.toThrow(/authenticated core\.wiki run/);
+			for (const wikiRole of ["wiki", "research-wiki"]) {
+				process.env.HERDR_ROLE = wikiRole;
+				process.env.HERDR_RUN_TOKEN = "managed";
+				await expect(
+					runWorkflow([...args, "--status", "stable"]),
+				).rejects.toThrow(/authenticated core\.wiki run/);
+			}
 			delete process.env.HERDR_WORKFLOW_ID;
 			delete process.env.HERDR_STEP_ID;
 			delete process.env.HERDR_ROLE;

@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change introduce-okf-wiki. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Centralized bundle location
 The system SHALL store the knowledge bundle in a single machine-wide directory outside every repository, resolved with the precedence `HERDR_WIKI_DIR` environment variable, then the `[wiki] root` configuration key (tilde-expanded), then the default `~/.config/agentic-coding/wiki`. The centralized bundle SHALL support concepts from multiple projects; OKF SHALL NOT be treated as requiring one repository per bundle, and the system SHALL NOT automatically federate multiple bundle roots.
 
@@ -462,14 +464,14 @@ The system SHALL provide a dedicated agent step and role for documentation in ar
 - **THEN** it is a valid UTF-8 Markdown concept with OKF v0.2-compatible frontmatter and meaningful body-level claims tied to source resources
 
 ### Requirement: Wiki authoring is isolated to the dedicated role
-Managed workflow invocations SHALL permit wiki draft writes for the dedicated `wiki` role only when it is executing an authenticated `core.wiki` run, including the research workflow's wiki drafting stage. The system SHALL reject wiki draft writes from researcher, planner, consolidator, fusion-planner, worker, triage, verifier, and archive roles. The dedicated wiki role SHALL not be able to set a stable status or supply a machine or human verification event. The existing administrative `wiki verify` operation MAY set `status: stable` with a `process:herdr-archive` machine verification event, but SHALL reject human or arbitrary actors. Human-reviewed promotion SHALL remain an engine-owned effect of developer approval.
+Managed workflow invocations SHALL permit wiki draft writes for the `wiki` role (openspec/implementation and wiki-only workflows, discovery-based drafting) and the dedicated `research-wiki` role (the research workflow's wiki drafting stage, directive-first drafting) only when executing an authenticated `core.wiki` run. The system SHALL reject wiki draft writes from researcher, planner, consolidator, fusion-planner, worker, triage, verifier, and archive roles. Neither wiki-writing role SHALL be able to set a stable status or supply a machine or human verification event. The existing administrative `wiki verify` operation MAY set `status: stable` with a `process:herdr-archive` machine verification event, but SHALL reject human or arbitrary actors. Human-reviewed promotion SHALL remain an engine-owned effect of developer approval.
 
 #### Scenario: Dedicated wiki role is permitted to write
-- **WHEN** `wiki write` runs with the managed `wiki` role
+- **WHEN** `wiki write` runs with the managed `wiki` role or the managed `research-wiki` role
 - **THEN** the concept is installed as an unverified draft
 
 #### Scenario: Research wiki stage is permitted only after explicit request
-- **WHEN** `wiki write` runs with an authenticated `wiki` role on `core.wiki` after the developer dispatches `request-research-wiki` for an explicit user request
+- **WHEN** `wiki write` runs with an authenticated `research-wiki` role on `core.wiki` after the researcher dispatches a valid research-handoff command for an explicit user request
 - **THEN** the concept is installed or updated as an unverified centralized draft
 - **AND** the research workflow remains pending developer approval in `core.wiki-approval`
 
@@ -486,7 +488,7 @@ Managed workflow invocations SHALL permit wiki draft writes for the dedicated `w
 - **THEN** the operation exits non-zero and the bundle remains unchanged
 
 #### Scenario: Wiki role cannot self-verify
-- **WHEN** the dedicated `wiki` or `researcher` role attempts to set stable status or provide a verification actor
+- **WHEN** the `wiki` or `research-wiki` role, or the `researcher` role, attempts to set stable status or provide a verification actor
 - **THEN** the operation rejects the request or stores only a draft without verification
 
 #### Scenario: Administrative process verification remains machine-confirmed
@@ -511,4 +513,3 @@ When the developer review gate returns comments, the workflow SHALL expose the b
 #### Scenario: Revision remains unverified
 - **WHEN** the wiki role completes a comment-driven revision
 - **THEN** touched concepts remain drafts without a human verification event until the developer approves again
-
