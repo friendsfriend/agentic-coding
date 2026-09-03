@@ -326,8 +326,7 @@ export function App(props: {
 	const [verdictReturnToUserAction, setVerdictReturnToUserAction] =
 		createSignal(false);
 	// Opt-in Markdown rendering for the OpenSpec artifact view only (D5).
-	const [verdictRenderMarkdown, setVerdictRenderMarkdown] =
-		createSignal(false);
+	const [verdictRenderMarkdown, setVerdictRenderMarkdown] = createSignal(false);
 	const [findings, setFindings] = createSignal<{
 		title: string;
 		events: FindingEvent[];
@@ -3351,13 +3350,13 @@ export function App(props: {
 			</Show>
 			<Show when={verdict()}>
 				{(report) => (
-						<VerdictModal
-							title={report().title}
-							content={report().content}
-							offset={verdictOffset()}
-							lines={verdictLines()}
-							renderMarkdown={verdictRenderMarkdown()}
-						/>
+					<VerdictModal
+						title={report().title}
+						content={report().content}
+						offset={verdictOffset()}
+						lines={verdictLines()}
+						renderMarkdown={verdictRenderMarkdown()}
+					/>
 				)}
 			</Show>
 			<Show when={questionOpen() && pendingQuestion()}>

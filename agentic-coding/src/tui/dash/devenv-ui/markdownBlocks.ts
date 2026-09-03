@@ -96,8 +96,14 @@ export function blockSelectionToLines(
 	endIndex: number | undefined,
 ): { start?: number; end?: number } {
 	if (!blocks.length) return {};
-	const first = Math.min(startIndex ?? endIndex ?? 0, endIndex ?? startIndex ?? 0);
-	const last = Math.max(startIndex ?? endIndex ?? 0, endIndex ?? startIndex ?? 0);
+	const first = Math.min(
+		startIndex ?? endIndex ?? 0,
+		endIndex ?? startIndex ?? 0,
+	);
+	const last = Math.max(
+		startIndex ?? endIndex ?? 0,
+		endIndex ?? startIndex ?? 0,
+	);
 	const start = blocks[Math.min(Math.max(0, first), blocks.length - 1)];
 	const end = blocks[Math.min(Math.max(0, last), blocks.length - 1)];
 	if (!start) return {};

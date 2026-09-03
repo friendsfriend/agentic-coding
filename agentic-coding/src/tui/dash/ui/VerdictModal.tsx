@@ -62,11 +62,7 @@ export function VerdictModal(props: {
 						<For each={blocks()}>
 							{(block) => (
 								<box flexDirection="row">
-									<text
-										fg={uiColors.textMuted}
-										flexShrink={0}
-										width={6}
-									>
+									<text fg={uiColors.textMuted} flexShrink={0} width={6}>
 										{block.endLine > block.startLine
 											? `${String(block.startLine)}-${String(block.endLine)}`
 											: String(block.startLine)}

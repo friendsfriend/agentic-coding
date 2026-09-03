@@ -30,18 +30,18 @@ const y = 2;
 2. second
 `;
 	const blocks = parseMarkdownBlocks(doc);
-	expect(blocks.map((block) => [block.kind, block.startLine, block.endLine])).toEqual(
-		[
-			["heading", 1, 1],
-			["paragraph", 3, 3],
-			["list", 5, 7],
-			["blockquote", 9, 9],
-			["code", 11, 14],
-			["table", 16, 18],
-			["hr", 20, 20],
-			["list", 22, 23],
-		],
-	);
+	expect(
+		blocks.map((block) => [block.kind, block.startLine, block.endLine]),
+	).toEqual([
+		["heading", 1, 1],
+		["paragraph", 3, 3],
+		["list", 5, 7],
+		["blockquote", 9, 9],
+		["code", 11, 14],
+		["table", 16, 18],
+		["hr", 20, 20],
+		["list", 22, 23],
+	]);
 });
 
 test("keeps blank lines out of block ranges but preserves line numbers", () => {
@@ -57,13 +57,13 @@ test("keeps blank lines out of block ranges but preserves line numbers", () => {
 test("handles CRLF line endings", () => {
 	const doc = "# Title\r\n\r\nbody line\r\n\r\n- x\r\n- y\r\n";
 	const blocks = parseMarkdownBlocks(doc);
-	expect(blocks.map((block) => [block.kind, block.startLine, block.endLine])).toEqual(
-		[
-			["heading", 1, 1],
-			["paragraph", 3, 3],
-			["list", 5, 6],
-		],
-	);
+	expect(
+		blocks.map((block) => [block.kind, block.startLine, block.endLine]),
+	).toEqual([
+		["heading", 1, 1],
+		["paragraph", 3, 3],
+		["list", 5, 6],
+	]);
 });
 
 test("handles empty and whitespace-only documents", () => {
@@ -74,18 +74,24 @@ test("handles empty and whitespace-only documents", () => {
 test("documents without a trailing newline still map their last block", () => {
 	const doc = "# Title\n\nLast paragraph";
 	const blocks = parseMarkdownBlocks(doc);
-	expect(blocks.map((block) => [block.kind, block.startLine, block.endLine])).toEqual(
-		[
-			["heading", 1, 1],
-			["paragraph", 3, 3],
-		],
-	);
+	expect(
+		blocks.map((block) => [block.kind, block.startLine, block.endLine]),
+	).toEqual([
+		["heading", 1, 1],
+		["paragraph", 3, 3],
+	]);
 });
 
 test("blockSelectionToLines maps a single block to its range", () => {
 	const blocks = parseMarkdownBlocks("# a\n\n- one\n- two\n\nb");
-	expect(blockSelectionToLines(blocks, 1, undefined)).toEqual({ start: 3, end: 4 });
-	expect(blockSelectionToLines(blocks, 0, undefined)).toEqual({ start: 1, end: 1 });
+	expect(blockSelectionToLines(blocks, 1, undefined)).toEqual({
+		start: 3,
+		end: 4,
+	});
+	expect(blockSelectionToLines(blocks, 0, undefined)).toEqual({
+		start: 1,
+		end: 1,
+	});
 });
 
 test("blockSelectionToLines maps a visual range across blocks", () => {
@@ -102,5 +108,8 @@ test("blockSelectionToLines stays empty for empty documents", () => {
 
 test("blockSelectionToLines clamps out-of-range indices", () => {
 	const blocks = parseMarkdownBlocks("# a\n\nb");
-	expect(blockSelectionToLines(blocks, 99, undefined)).toEqual({ start: 3, end: 3 });
+	expect(blockSelectionToLines(blocks, 99, undefined)).toEqual({
+		start: 3,
+		end: 3,
+	});
 });

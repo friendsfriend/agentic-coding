@@ -9,8 +9,8 @@ import { createEffect, createMemo, For, Show } from "solid-js";
 import { uiColors } from "../colors";
 import {
 	blockSelectionToLines,
-	parseMarkdownBlocks,
 	type MarkdownBlock,
+	parseMarkdownBlocks,
 } from "../markdownBlocks";
 import type { Discussion } from "../types";
 import { GenericModal } from "./GenericModal";
