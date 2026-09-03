@@ -325,6 +325,8 @@ export function App(props: {
 		createSignal(false);
 	const [verdictReturnToUserAction, setVerdictReturnToUserAction] =
 		createSignal(false);
+	// Opt-in Markdown rendering for the OpenSpec artifact view only (D5).
+	const [verdictRenderMarkdown, setVerdictRenderMarkdown] = createSignal(false);
 	const [findings, setFindings] = createSignal<{
 		title: string;
 		events: FindingEvent[];
@@ -333,6 +335,7 @@ export function App(props: {
 	const openVerifierResult = (role: string) => {
 		setVerdictReturnToFindings(false);
 		setVerdictReturnToUserAction(false);
+		setVerdictRenderMarkdown(false);
 		const parsed =
 			props.profile === "test"
 				? undefined
@@ -810,6 +813,7 @@ export function App(props: {
 		setVerdict(undefined);
 		setVerdictReturnToFindings(false);
 		setVerdictReturnToUserAction(false);
+		setVerdictRenderMarkdown(false);
 		if (restoreFindings) props.keymap.setData("modal.active", "findings");
 		else if (restoreUserAction) {
 			setUserActionOpen(true);
@@ -1428,6 +1432,7 @@ export function App(props: {
 			setUserActionOpen(false);
 			setVerdictReturnToFindings(false);
 			setVerdictReturnToUserAction(true);
+			setVerdictRenderMarkdown(true);
 			let content: string;
 			try {
 				content = openSpecArtifact(data().state, item.value);
@@ -1653,6 +1658,7 @@ export function App(props: {
 			if (activePanel() === 6) {
 				const artifact = artifacts()[selectedArtifact()];
 				if (artifact) {
+					setVerdictRenderMarkdown(true);
 					setVerdict({
 						title: `OpenSpec · ${artifact}`,
 						content: openSpecArtifact(data().state, artifact),
@@ -1663,6 +1669,7 @@ export function App(props: {
 				return;
 			}
 			if (activePanel() === 2) {
+				setVerdictRenderMarkdown(false);
 				setVerdict({
 					title: `Tasks · ${doneTasks()}/${data().tasks.length}`,
 					content:
@@ -2401,6 +2408,7 @@ export function App(props: {
 									openFindingInEditor(data().state, finding);
 								} catch (error) {
 									setVerdictReturnToFindings(true);
+									setVerdictRenderMarkdown(false);
 									setVerdict({
 										title: "Editor launch failed",
 										content:
@@ -3347,6 +3355,7 @@ export function App(props: {
 						content={report().content}
 						offset={verdictOffset()}
 						lines={verdictLines()}
+						renderMarkdown={verdictRenderMarkdown()}
 					/>
 				)}
 			</Show>

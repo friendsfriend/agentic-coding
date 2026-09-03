@@ -7,10 +7,14 @@ import {
 import { useRenderer } from "@opentui/solid";
 import { createEffect, createMemo, For, Show } from "solid-js";
 import { uiColors } from "../colors";
+import {
+	blockSelectionToLines,
+	type MarkdownBlock,
+	parseMarkdownBlocks,
+} from "../markdownBlocks";
 import type { Discussion } from "../types";
 import { GenericModal } from "./GenericModal";
 import { formatHelpTextLines } from "./HelpText";
-import { MarkdownSourceLine, markdownFenceStates } from "./MarkdownSourceLine";
 import { ScrollableContent } from "./ScrollableContent";
 import { SearchHeader } from "./SearchHeader";
 
@@ -34,21 +38,16 @@ interface MarkdownViewModalProps {
 	onScrollBoxReady?: (scrollBox: ScrollBoxRenderable) => void;
 }
 
-interface MarkdownLine {
-	lineNumber: number; // 1-based line number in the artifact file
-	content: string;
-	codeLanguage?: string;
-	isFence: boolean;
-}
-
 /**
- * MarkdownViewModal - presentational line-based markdown viewer.
+ * MarkdownViewModal - presentational block-level markdown viewer.
  *
  * Mirrors DiffViewModal for the plan review gate: selectable rows, visual
- * range selection, inline comment threads, and a comment input row. Unlike
- * the diff view there is no diff parsing, split view, or finding markers —
- * every artifact line is a plain selectable row and comments anchor to file
- * line numbers. Keyboard handling lives in the parent (App.tsx) via the
+ * range selection, inline comment threads, and a comment input row. The whole
+ * artifact document is rendered as block-level Markdown: each top-level block
+ * (heading, paragraph, list, table, block quote, fenced code) is one selectable
+ * row mapped to the source-line range it was parsed from, so multi-line
+ * constructs render as real Markdown while comments keep anchoring to source
+ * lines. Keyboard handling lives in the parent (App.tsx) via the
  * `plan-review` keymap layer.
  */
 export function MarkdownViewModal(props: MarkdownViewModalProps) {
@@ -64,23 +63,14 @@ export function MarkdownViewModal(props: MarkdownViewModalProps) {
 
 	const isCommentMode = createMemo(() => props.commentMode);
 
-	// Every non-empty line of the artifact is a selectable row.
-	const parsedLines = createMemo((): MarkdownLine[] => {
-		const lines = props.content.split(/\r?\n/);
-		if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
-		const fenceStates = markdownFenceStates(lines);
-		return lines.map((content, index) => ({
-			lineNumber: index + 1,
-			content,
-			...(fenceStates[index] ?? { isFence: false }),
-		}));
-	});
+	// Every top-level block of the artifact is a selectable row.
+	const parsedBlocks = createMemo(() => parseMarkdownBlocks(props.content));
 
-	const isInVisualSelection = (lineIndex: number): boolean => {
+	const isInVisualSelection = (blockIndex: number): boolean => {
 		if (!props.visualModeActive) return false;
 		const start = Math.min(props.visualModeStart, props.selectedLine);
 		const end = Math.max(props.visualModeStart, props.selectedLine);
-		return lineIndex >= start && lineIndex <= end;
+		return blockIndex >= start && blockIndex <= end;
 	};
 
 	const commentIndex = createMemo(() => {
@@ -104,8 +94,17 @@ export function MarkdownViewModal(props: MarkdownViewModalProps) {
 		return index;
 	});
 
-	const getCommentsForLine = (line: MarkdownLine): Discussion[] => {
-		return commentIndex().get(`line:${line.lineNumber}`) ?? [];
+	const getCommentsForBlock = (block: MarkdownBlock): Discussion[] => {
+		const seen = new Set<string>();
+		const matches: Discussion[] = [];
+		for (let line = block.startLine; line <= block.endLine; line++) {
+			for (const discussion of commentIndex().get(`line:${line}`) ?? []) {
+				if (seen.has(discussion.id)) continue;
+				seen.add(discussion.id);
+				matches.push(discussion);
+			}
+		}
+		return matches;
 	};
 
 	const formatTimestamp = (timestamp: string): string => {
@@ -126,38 +125,30 @@ export function MarkdownViewModal(props: MarkdownViewModalProps) {
 	};
 
 	createEffect(() => {
-		const lines = parsedLines();
-		const commentIndices = lines.flatMap((line, index) => {
-			return getCommentsForLine(line).length ? [index] : [];
+		const blocks = parsedBlocks();
+		const commentIndices = blocks.flatMap((block, index) => {
+			return getCommentsForBlock(block).length ? [index] : [];
 		});
 		props.onDiscussionLineIndicesChange?.(commentIndices);
-		props.onSelectableLineCountChange?.(lines.length);
+		props.onSelectableLineCountChange?.(blocks.length);
 
-		const selected = lines[props.selectedLine];
-		const start = props.visualModeActive
-			? lines[props.visualModeStart]
-			: selected;
-		const selectedSourceLine = selected?.lineNumber;
-		const startSourceLine = start?.lineNumber;
-		props.onSelectedSourceRangeChange?.(
-			startSourceLine === undefined || selectedSourceLine === undefined
-				? selectedSourceLine
-				: Math.min(startSourceLine, selectedSourceLine),
-			startSourceLine === undefined || selectedSourceLine === undefined
-				? selectedSourceLine
-				: Math.max(startSourceLine, selectedSourceLine),
+		const range = blockSelectionToLines(
+			blocks,
+			props.visualModeActive ? props.visualModeStart : props.selectedLine,
+			props.selectedLine,
 		);
+		props.onSelectedSourceRangeChange?.(range.start, range.end);
 
-		// Auto-scroll when selected line changes.
+		// Auto-scroll when selected block changes.
 		const next = props.selectedLine;
 
 		// Wrap around if out of bounds
-		if (next >= lines.length && lines.length > 0) {
+		if (next >= blocks.length && blocks.length > 0) {
 			props.onSelectedLineChange(0);
 			return;
 		}
-		if (next < 0 && lines.length > 0) {
-			props.onSelectedLineChange(lines.length - 1);
+		if (next < 0 && blocks.length > 0) {
+			props.onSelectedLineChange(blocks.length - 1);
 			return;
 		}
 
@@ -167,14 +158,14 @@ export function MarkdownViewModal(props: MarkdownViewModalProps) {
 		if (!wrapperBox) return;
 
 		const target = wrapperBox.getChildren().find((child) => {
-			return child.id === `line-${next}`;
+			return child.id === `block-${next}`;
 		});
 
 		if (!target) return;
 
 		const following = wrapperBox
 			.getChildren()
-			.find((child) => child.id === `line-${next + 1}`);
+			.find((child) => child.id === `block-${next + 1}`);
 		if (following) scrollBox.scrollChildIntoView(following.id);
 
 		scrollBox.scrollChildIntoView(target.id);
@@ -259,8 +250,8 @@ export function MarkdownViewModal(props: MarkdownViewModalProps) {
 				}}
 			>
 				<box paddingLeft={2} paddingRight={2}>
-					<For each={parsedLines()}>
-						{(line, index) => {
+					<For each={parsedBlocks()}>
+						{(block, index) => {
 							const isSelected = () => index() === props.selectedLine;
 							const isInSelection = () => isInVisualSelection(index());
 
@@ -276,10 +267,15 @@ export function MarkdownViewModal(props: MarkdownViewModalProps) {
 								return uiColors.textPrimary;
 							};
 
+							const lineLabel = () =>
+								block.endLine > block.startLine
+									? `${String(block.startLine)}-${String(block.endLine)}`
+									: String(block.startLine);
+
 							return (
 								<>
 									<box
-										id={`line-${index()}`}
+										id={`block-${index()}`}
 										flexDirection="row"
 										backgroundColor={bgColor()}
 										paddingLeft={1}
@@ -291,23 +287,22 @@ export function MarkdownViewModal(props: MarkdownViewModalProps) {
 										<text
 											fg={isSelected() ? uiColors.bgBase : uiColors.textMuted}
 											flexShrink={0}
-											width={6}
+											width={8}
 										>
-											{String(line.lineNumber)}
+											{lineLabel()}
 										</text>
-										<MarkdownSourceLine
-											content={line.content}
-											codeLanguage={line.codeLanguage}
-											isFence={line.isFence}
+										<markdown
+											content={block.source}
 											syntaxStyle={syntaxStyle}
-											width={Math.max(20, Math.floor(renderer.width * 0.7))}
 											fg={fgColor()}
+											width={Math.max(20, Math.floor(renderer.width * 0.7))}
+											flexGrow={1}
 										/>
 									</box>
 
-									{/* Render inline comments for this line */}
-									<Show when={getCommentsForLine(line).length > 0}>
-										<For each={getCommentsForLine(line)}>
+									{/* Render inline comments for this block */}
+									<Show when={getCommentsForBlock(block).length > 0}>
+										<For each={getCommentsForBlock(block)}>
 											{(discussion) => {
 												const _notesCount = discussion.notes.length;
 
@@ -440,7 +435,7 @@ export function MarkdownViewModal(props: MarkdownViewModalProps) {
 										</For>
 									</Show>
 
-									{/* Show comment input inline after the selected line */}
+									{/* Show comment input inline after the selected block */}
 									{isCommentMode() && isSelected() ? (
 										<box
 											flexDirection="row"

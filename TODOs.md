@@ -8,4 +8,6 @@ Not for agents. This is only for humans.
 * Implement Agent steered version of the workflow. Basically an orchestrator version of the workflow.
 * Show added / deleted files in developer review / changed files view (not git tracked yet)
 * Automatic wiki commit + push if in git repo.
+* openspec panel shows all instead of only relevant changes / specs
+* Make openspec panel have a max height of 5 and be scrollable
 
