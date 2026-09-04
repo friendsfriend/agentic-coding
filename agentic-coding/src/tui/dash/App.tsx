@@ -13,7 +13,6 @@ import {
 	createEffect,
 	createMemo,
 	createSignal,
-	For,
 	onCleanup,
 	onMount,
 	Show,
@@ -33,7 +32,6 @@ import {
 	type FindingCounts,
 	focusAgent,
 	focusReturnWorkspace,
-	getTaskViewport,
 	type LocalChange,
 	loadDashboard,
 	loadDeveloperReviewFindings,
@@ -251,6 +249,8 @@ export function App(props: {
 	profile?: "test";
 	/** Test fixture override for rendering a branch without a usable upstream. */
 	testNoUpstream?: boolean;
+	/** Test fixture override for rendering a custom dashboard (e.g. with artifacts). */
+	testData?: DashboardData;
 	keymap: Keymap<Renderable, KeyEvent>;
 	/** Push the workflow header context up to the shell's global header. */
 	onHeader?: (
@@ -271,6 +271,7 @@ export function App(props: {
 	const load = () => {
 		if (props.profile !== "test")
 			return loadDashboard(props.repo, props.workflowId);
+		if (props.testData) return props.testData;
 		const dashboard = testDashboard(demoPhases[demoIndex()]);
 		if (!props.testNoUpstream) return dashboard;
 		return {
@@ -1668,22 +1669,6 @@ export function App(props: {
 				}
 				return;
 			}
-			if (activePanel() === 2) {
-				setVerdictRenderMarkdown(false);
-				setVerdict({
-					title: `Tasks · ${doneTasks()}/${data().tasks.length}`,
-					content:
-						data()
-							.tasks.map(
-								(task, index) =>
-									`${task.done ? "✓" : "○"} ${index + 1}. ${task.text}`,
-							)
-							.join("\n") || "No tasks yet.",
-				});
-				setVerdictOffset(0);
-				props.keymap.setData("modal.active", "verdict");
-				return;
-			}
 			if (activePanel() === 1) {
 				const agent = data().agents[selectedAgent()];
 				if (!agent) return;
@@ -2625,10 +2610,6 @@ export function App(props: {
 			props.keymap.setData("modal.active", "user-action");
 		});
 	});
-	const doneTasks = createMemo(
-		() => data().tasks.filter((task) => task.done).length,
-	);
-	const taskViewport = createMemo(() => getTaskViewport(data().tasks));
 	const _prompt = createMemo(() =>
 		data().state.status === "paused"
 			? "Verification paused · developer intervention required"
@@ -2833,7 +2814,7 @@ export function App(props: {
 										active={activePanel() === 6}
 										style={{
 											width: "100%",
-											height: artifacts().length + 2,
+											height: Math.min(artifacts().length, 5) + 1,
 											flexShrink: 0,
 										}}
 									>
@@ -2978,66 +2959,6 @@ export function App(props: {
 										);
 									}}
 								/>
-							</Panel>
-						</box>
-						<box
-							style={{
-								width: "100%",
-								height: 6,
-								flexShrink: 0,
-								flexDirection: "column",
-							}}
-						>
-							<Panel
-								title={`Current task · ${
-									taskViewport().activePosition !== undefined
-										? `task ${taskViewport().activePosition} of ${data().tasks.length}`
-										: data().tasks.length === 0
-											? "no tasks"
-											: `all ${data().tasks.length} tasks complete`
-								}`}
-								accent={uiColors.success}
-								active={activePanel() === 2}
-								style={{
-									width: "100%",
-									height: 6,
-								}}
-							>
-								<Show
-									when={taskViewport().visibleTasks.length > 0}
-									fallback={<text fg={uiColors.textMuted}>No tasks yet.</text>}
-								>
-									<For each={taskViewport().visibleTasks}>
-										{(task, index) => {
-											const active = () =>
-												taskViewport().start + index() ===
-												taskViewport().activeIndex;
-											return (
-												<box
-													height={1}
-													width="100%"
-													backgroundColor={
-														active() ? uiColors.bgSurface0 : uiColors.bgMantle
-													}
-												>
-													<text
-														fg={
-															task.done
-																? uiColors.success
-																: active()
-																	? uiColors.primary
-																	: uiColors.textPrimary
-														}
-														attributes={active() ? TextAttributes.BOLD : 0}
-													>
-														{task.done ? "✓" : "○"}{" "}
-														{taskViewport().start + index() + 1}. {task.text}
-													</text>
-												</box>
-											);
-										}}
-									</For>
-								</Show>
 							</Panel>
 						</box>
 					</box>

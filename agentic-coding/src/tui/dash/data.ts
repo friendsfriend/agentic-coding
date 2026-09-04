@@ -400,40 +400,6 @@ export interface DeveloperReviewFinding {
 	fix?: string;
 }
 
-export interface DashboardTask {
-	done: boolean;
-	text: string;
-}
-
-export interface TaskViewport {
-	visibleTasks: DashboardTask[];
-	start: number;
-	activeIndex: number | undefined;
-	activePosition: number | undefined;
-	activeRow: number | undefined;
-}
-
-/** Return the five-row task window centered on the first incomplete task. */
-export function getTaskViewport(tasks: DashboardTask[]): TaskViewport {
-	const activeIndex = tasks.findIndex((task) => !task.done);
-	const start =
-		tasks.length <= 5
-			? 0
-			: activeIndex === -1
-				? tasks.length - 5
-				: Math.max(0, Math.min(activeIndex - 2, tasks.length - 5));
-	const visibleTasks = tasks.slice(start, start + 5);
-	const hasActiveTask = activeIndex !== -1;
-
-	return {
-		visibleTasks,
-		start,
-		activeIndex: hasActiveTask ? activeIndex : undefined,
-		activePosition: hasActiveTask ? activeIndex + 1 : undefined,
-		activeRow: hasActiveTask ? activeIndex - start : undefined,
-	};
-}
-
 export interface FindingCounts {
 	critical: number;
 	warning: number;
@@ -444,7 +410,6 @@ export interface DashboardData {
 	state: WorkflowState;
 	request: string;
 	proposal: string;
-	tasks: DashboardTask[];
 	review: string;
 	reviewHistory: string[];
 	agents: Array<{
@@ -460,7 +425,6 @@ export interface DashboardData {
 	health: { dirty: boolean; ahead: number; behind: number; branch: string };
 	gitStatus: WorktreeGitStatus;
 	age: string;
-	currentTask: string;
 	events: Array<{
 		at: string;
 		event: string;
@@ -1488,7 +1452,6 @@ export function loadDashboard(repo: string, workflowId: string): DashboardData {
 			? state.task
 			: summary(join(workflowRoot, "request.md")),
 		proposal: summary(join(changeRoot, "proposal.md")),
-		tasks: tasks(join(changeRoot, "tasks.md")),
 		review: reviewHistory.at(-1) ?? "Not run",
 		reviewHistory,
 		agents: Object.entries(state.panes)
@@ -1527,11 +1490,6 @@ export function loadDashboard(repo: string, workflowId: string): DashboardData {
 		age: state.createdAt
 			? `${Math.max(0, Math.floor((Date.now() - Date.parse(state.createdAt)) / 3600000))}h`
 			: "unknown",
-		currentTask:
-			state.stepId === "core.implementation"
-				? (tasks(join(changeRoot, "tasks.md")).find((task) => !task.done)
-						?.text ?? "Worker completing tasks")
-				: (state.stepLabel ?? state.phase),
 		events: telemetry.slice(-20).map((event) => ({
 			at: new Date(String(event.at)).toLocaleTimeString(),
 			event: String(event.event),
@@ -1697,13 +1655,6 @@ export function testDashboard(phase = "proposed"): DashboardData {
 			"Make preferredLatestRealisationDate optional and default it to null.",
 		proposal:
 			"Update API contract, persistence mapping, form defaults, and regression coverage while preserving existing supplied values.",
-		tasks: [
-			{ done: applying, text: "Make API field optional and nullable" },
-			{ done: applying, text: "Use null as default value" },
-			{ done: verified, text: "Update frontend form handling" },
-			{ done: verified, text: "Add regression tests" },
-			{ done: archived, text: "Archive OpenSpec change" },
-		],
 		review: verified
 			? "round-2.md: PASS"
 			: phase === "verify"
@@ -1777,9 +1728,6 @@ export function testDashboard(phase = "proposed"): DashboardData {
 			noUpstream: false,
 		},
 		age: "2h",
-		currentTask: applying
-			? "Apply next implementation task"
-			: "Planner exploring change",
 		events: [
 			...demoTelemetry.map((event) => ({
 				at: String(event.at).slice(11, 19),

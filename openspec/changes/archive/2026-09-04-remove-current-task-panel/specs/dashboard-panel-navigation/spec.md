@@ -1,8 +1,5 @@
-# dashboard-panel-navigation Specification
+## MODIFIED Requirements
 
-## Purpose
-Defines two-dimensional, vim-style panel navigation for the workflow dashboard detail view: Shift+J/K/H/L move focus between panels by grid position (rows and columns) with wrap-around at every edge, instead of cycling through a fixed one-dimensional order.
-## Requirements
 ### Requirement: Panel grid positions
 The workflow dashboard detail view SHALL map its interactive panels onto a 2-column, 2-row grid: the Change panel SHALL occupy the top-left cell; the OpenSpec panel SHALL occupy the cell directly below Change and SHALL be present only while OpenSpec artifacts are listed; and the Agents panel SHALL occupy the right column spanning both rows. The detail view SHALL NOT include the Current task panel in the grid.
 
@@ -56,15 +53,3 @@ Unshifted `j`/`k` and `↑`/`↓` SHALL continue to scroll or move the selection
 #### Scenario: Tab does not move panel focus
 - **WHEN** `Tab` or `Shift+Tab` is pressed in the detail view
 - **THEN** panel focus remains unchanged
-
-### Requirement: Help documents panel navigation
-The dashboard help modal SHALL list Shift+J/K/H/L under its navigation section and describe them as moving focus by direction.
-
-#### Scenario: Help lists the directional bindings
-- **WHEN** the dashboard help modal is open in the detail view
-- **THEN** its navigation section SHALL contain entries for Shift+J, Shift+K, Shift+H, and Shift+L describing directional panel movement
-
-#### Scenario: Help still describes in-panel scrolling
-- **WHEN** the dashboard help modal is open in the detail view
-- **THEN** its navigation section SHALL still describe `j`/`k` or `↑`/`↓` as scrolling the focused panel
-
