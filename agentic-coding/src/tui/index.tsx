@@ -25,6 +25,11 @@ import {
 	loadThemeName as loadDashThemeName,
 } from "./dash/theme-settings";
 import {
+	buildSystemTheme,
+	captureTerminalColors,
+} from "./dash/ui/terminal-colors";
+import { setSystemTheme } from "./dash/ui/theme";
+import {
 	beginShutdown,
 	beginStartup,
 	finishStartup,
@@ -271,6 +276,12 @@ export async function main(): Promise<void> {
 	const stack: ServerStack = { servers: [] };
 
 	// ---- Render app first; the startup modal covers the bootstrap below ----
+	// Capture the terminal's configured palette (OSC queries) so a persisted
+	// `system` theme selection resolves here, before the OpenTUI renderer takes
+	// over stdin. Capture is a no-op on non-TTY/headless runs; when it fails,
+	// no `system` entry is registered and the saved name falls back to default.
+	const systemTheme = await captureTerminalColors();
+	if (systemTheme.ok) setSystemTheme(buildSystemTheme(systemTheme.palette));
 	applyDashTheme(loadDashThemeName());
 	process.env.FORCE_COLOR = "3";
 	const renderer = await createCliRenderer({
