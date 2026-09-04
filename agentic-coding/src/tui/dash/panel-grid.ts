@@ -1,22 +1,21 @@
 /**
  * 2D panel navigation model for the dashboard detail view.
  *
- * The rendered panels form a 3×2 occupancy grid; a panel may span more than
+ * The rendered panels form a 2×2 occupancy grid; a panel may span more than
  * one cell:
  *
  * ```
  *         col 0         col 1
  * row 0   Change (0)    Agents (1)
  * row 1   OpenSpec (6)  Agents (1)   (span: rows 0–1)
- * row 2   Current (2)   Current (2)  (span: both columns)
  * ```
  *
  * When no open-spec artifacts are listed the OpenSpec cell `(1, 0)` is empty
  * and navigation transparently skips it. `movePanel` scans from the active
  * panel's anchor cell in the pressed direction, skipping cells owned by the
  * same panel's span and empty cells, wrapping at every grid edge, and landing
- * on the first distinct panel found. A row/column holding no distinct panel
- * (the full-width Current task row) is a documented no-op.
+ * on the first distinct panel found. A direction with no distinct rendered
+ * panel after the scan leaves focus on the active panel.
  */
 
 export type PanelId = number;
@@ -24,10 +23,9 @@ export type PanelDirection = "up" | "down" | "left" | "right";
 
 export const CHANGE_PANEL = 0;
 export const AGENTS_PANEL = 1;
-export const CURRENT_TASK_PANEL = 2;
 export const OPENSPEC_PANEL = 6;
 
-export const GRID_ROWS = 3;
+export const GRID_ROWS = 2;
 export const GRID_COLS = 2;
 
 export interface PanelGridOptions {
@@ -39,7 +37,6 @@ export interface PanelGridOptions {
 const FULL_GRID: ReadonlyArray<ReadonlyArray<PanelId>> = [
 	[CHANGE_PANEL, AGENTS_PANEL],
 	[OPENSPEC_PANEL, AGENTS_PANEL],
-	[CURRENT_TASK_PANEL, CURRENT_TASK_PANEL],
 ];
 
 /** Rendered occupancy: the OpenSpec cell is empty while no artifacts exist. */
@@ -49,7 +46,6 @@ function renderedGrid(
 	return [
 		[CHANGE_PANEL, AGENTS_PANEL],
 		[opts.artifactsVisible ? OPENSPEC_PANEL : undefined, AGENTS_PANEL],
-		[CURRENT_TASK_PANEL, CURRENT_TASK_PANEL],
 	];
 }
 

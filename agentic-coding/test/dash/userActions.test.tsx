@@ -1,12 +1,45 @@
 /** @jsxImportSource @opentui/solid */
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
 import { createSignal, onCleanup } from "solid-js";
 import { App } from "../../src/tui/dash/App";
+import { type DashboardData, testDashboard } from "../../src/tui/dash/data";
 import { DiffViewModal } from "../../src/tui/dash/devenv-ui/components/DiffViewModal";
 
-function TestDashboard(props: { noUpstream?: boolean } = {}) {
+const roots: string[] = [];
+afterEach(() => {
+	for (const root of roots.splice(0))
+		rmSync(root, { recursive: true, force: true });
+});
+
+/** Fixture dashboard with `count` OpenSpec artifacts backed by real files. */
+function artifactsFixture(count: number): DashboardData {
+	const root = mkdtempSync(join(tmpdir(), "agent-dash-openspec-"));
+	roots.push(root);
+	const changeRoot = join(
+		root,
+		"openspec",
+		"changes",
+		"demo-optional-realisation-date",
+	);
+	mkdirSync(changeRoot, { recursive: true });
+	for (let index = 1; index <= count; index++) {
+		writeFileSync(
+			join(changeRoot, `artifact-${index}.md`),
+			`# Artifact ${index}\n\nBody ${index}.\n`,
+		);
+	}
+	const dashboard = testDashboard();
+	return { ...dashboard, state: { ...dashboard.state, worktree: root } };
+}
+
+function TestDashboard(
+	props: { noUpstream?: boolean; artifacts?: number } = {},
+) {
 	const renderer = useRenderer();
 	const keymap = createDefaultOpenTuiKeymap(renderer);
 	// Mirror the production detail keymap (src/tui/index.tsx → setupKeymap):
@@ -52,6 +85,7 @@ function TestDashboard(props: { noUpstream?: boolean } = {}) {
 			workflowId="demo"
 			profile="test"
 			testNoUpstream={props.noUpstream}
+			testData={props.artifacts ? artifactsFixture(props.artifacts) : undefined}
 			keymap={keymap}
 		/>
 	);
@@ -103,7 +137,7 @@ test("wiki review diff renders Markdown and only maps current lines", async () =
 });
 
 test("dismissed plan review stays closed during panel interactions", async () => {
-	const t = await testRender(() => <TestDashboard />, {
+	const t = await testRender(() => <TestDashboard artifacts={5} />, {
 		width: 120,
 		height: 40,
 	});
@@ -112,13 +146,13 @@ test("dismissed plan review stays closed during panel interactions", async () =>
 	t.mockInput.pressEscape();
 	await t.waitForFrame((frame) => !frame.includes("Plan review"));
 
-	// Interacting with another panel (Shift+J to Current task, then Enter)
+	// Interacting with another panel (Shift+J to OpenSpec, then Enter)
 	// must not reopen the dismissed plan review.
 	t.mockInput.pressKey("j", { shift: true });
 	t.mockInput.pressEnter();
 	await t.renderOnce();
 	const frame = t.captureCharFrame();
-	expect(frame).toContain("Tasks ·");
+	expect(frame).toContain("OpenSpec ·");
 	expect(frame).not.toContain("Plan review");
 	t.renderer.destroy();
 });
@@ -226,8 +260,10 @@ test("overview contains Git status and no Git panel", async () => {
 	expect(frame).toContain("feature/demo-optional-realisation-date");
 	expect(frame).not.toContain("clean ·");
 
-	// Grid round trip Change → Agents → Change → Current task → Change:
-	// returning to Change and pressing Enter reopens the plan review.
+	// Grid round trip Change → Agents → Change → OpenSpec → Change: the
+	// vertical move is a no-op without a listed OpenSpec panel (demo has no
+	// artifacts), so returning to Change and pressing Enter reopens the plan
+	// review.
 	t.mockInput.pressKey("l", { shift: true });
 	t.mockInput.pressKey("h", { shift: true });
 	t.mockInput.pressKey("j", { shift: true });
@@ -323,10 +359,11 @@ test("traces panel is removed from the rendered dashboard", async () => {
 	// The traces panel no longer renders anywhere in the dashboard.
 	expect(t.captureCharFrame()).not.toContain("Traces ·");
 
-	// Visiting every panel through the grid never shows traces.
+	// Visiting every panel through the reduced grid never shows traces; the
+	// vertical moves are no-ops without a listed OpenSpec panel.
 	const moves = [
-		["j", { shift: true }], // Change → Current task
-		["k", { shift: true }], // Current task → Change
+		["j", { shift: true }], // Change → (no vertical neighbor)
+		["k", { shift: true }], // Change → (no vertical neighbor)
 		["l", { shift: true }], // Change → Agents
 		["h", { shift: true }], // Agents → Change
 	] as const;
