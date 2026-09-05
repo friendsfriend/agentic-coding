@@ -6,6 +6,7 @@ import type { RuntimeId } from "../../../workflow/contracts.ts";
 import {
 	conflictingAgentsFiles,
 	loadConfig,
+	loadConfigWithProvenance,
 	saveAgentsSection,
 } from "../../../workflow/effects.ts";
 import {
@@ -173,6 +174,7 @@ function presetFields(profileNames: string[]): EditorField[] {
 export function ModelConfigModal(props: {
 	onCancel: () => void;
 	onKeyReady: (handler: (key: KeyEvent) => boolean) => void;
+	repository?: string;
 }) {
 	const [view, setView] = createSignal<View>("menu");
 	const [menuIndex, setMenuIndex] = createSignal(0);
@@ -189,10 +191,18 @@ export function ModelConfigModal(props: {
 	let lastReadError: string | undefined;
 	const reload = () => setVersion((value) => value + 1);
 
+	const source = () => {
+		try {
+			return loadConfigWithProvenance({ repository: props.repository })
+				.provenance;
+		} catch {
+			return undefined;
+		}
+	};
 	const agents = (): AgentsConfig | undefined => {
 		version();
 		try {
-			const config = loadConfig();
+			const config = loadConfig(props.repository);
 			const parsed = parseAgentsConfig(config.agents, config);
 			lastReadError = undefined;
 			return parsed;
@@ -430,7 +440,7 @@ export function ModelConfigModal(props: {
 			)
 				throw new Error("agents.profiles must be a table of profiles");
 			(section.profiles as Record<string, unknown>)[d.name] = profile;
-		});
+		}, props.repository);
 	};
 	const savePreset = (d: PresetDraft): void => {
 		const steps = Object.fromEntries(
@@ -464,7 +474,7 @@ export function ModelConfigModal(props: {
 			)
 				throw new Error("agents.presets must be a table of presets");
 			(section.presets as Record<string, unknown>)[d.name] = preset;
-		});
+		}, props.repository);
 	};
 
 	const profileReferences = (agents: AgentsConfig, name: string): string[] => {
@@ -506,7 +516,7 @@ export function ModelConfigModal(props: {
 			saveAgentsSection((section) => {
 				if (section.profiles && typeof section.profiles === "object")
 					delete (section.profiles as Record<string, unknown>)[name];
-			});
+			}, props.repository);
 		} catch (error) {
 			notify(error instanceof Error ? error.message : String(error), "error");
 			return;
@@ -527,7 +537,7 @@ export function ModelConfigModal(props: {
 			saveAgentsSection((section) => {
 				if (section.presets && typeof section.presets === "object")
 					delete (section.presets as Record<string, unknown>)[name];
-			});
+			}, props.repository);
 		} catch (error) {
 			notify(error instanceof Error ? error.message : String(error), "error");
 			return;
@@ -712,6 +722,10 @@ export function ModelConfigModal(props: {
 								</text>
 							)}
 						/>
+						<text fg={uiColors.textMuted}>
+							Source: {source()?.source ?? "unavailable"}
+							{source()?.files.length ? ` (${source()?.files.join(", ")})` : ""}
+						</text>
 						<text fg={uiColors.textMuted}>
 							Saving rewrites the managed config file; comments in it are not
 							preserved.

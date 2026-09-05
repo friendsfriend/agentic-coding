@@ -12,7 +12,6 @@ import {
 } from "../adapters.ts";
 import type { CredentialPrompt } from "../credentials.ts";
 import { agentEffectHandlers, EffectRunner } from "../effect-runner.ts";
-import { loadConfig } from "../effects.ts";
 import type { WorkflowEngine } from "../runtime.ts";
 import { paneForRunFactory } from "./pane.ts";
 import { registry } from "./registry.ts";
@@ -22,7 +21,6 @@ export async function drainEffects(
 	repo: string,
 	credentialPrompt?: CredentialPrompt,
 ): Promise<void> {
-	const config = loadConfig();
 	const herdr = new Herdr();
 	const lifecycle = new HerdrLifecycle(herdr);
 	const adapters = new Map<string, AgentAdapter>([
@@ -34,8 +32,6 @@ export async function drainEffects(
 		registry,
 		adapters,
 		herdr,
-		remote: config.workflow.remote,
-		prTool: config.workflow.pr_tool,
 		credentialPrompt,
 		paneForRun: paneForRunFactory(workflowEngine, repo, herdr),
 	});

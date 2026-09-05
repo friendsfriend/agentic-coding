@@ -206,8 +206,6 @@ export interface AdapterEffectOptions {
 	registry: WorkflowRegistry;
 	adapters: Map<string, AgentAdapter>;
 	herdr: HerdrPort;
-	remote?: string;
-	prTool?: string;
 	credentialPrompt?: CredentialPrompt;
 	paneForRun(
 		runId: string,
@@ -917,6 +915,7 @@ export function agentEffectHandlers(
 		"delivery.push": {
 			async observe(effect, signal) {
 				const snapshot = snapshotFor(effect);
+				if (!snapshot.metadata.executionSettings) return false;
 				try {
 					return (
 						(await git(
@@ -936,14 +935,14 @@ export function agentEffectHandlers(
 			},
 			async execute(effect, signal) {
 				const snapshot = snapshotFor(effect);
+				const settings = snapshot.metadata.executionSettings;
+				if (!settings)
+					throw new Error(
+						"workflow execution settings adoption required before delivery",
+					);
 				await runGitWithCredentials(
 					snapshot.metadata.worktree,
-					[
-						"push",
-						"--set-upstream",
-						options.remote ?? "origin",
-						snapshot.metadata.branch,
-					],
+					["push", "--set-upstream", settings.remote, snapshot.metadata.branch],
 					{ prompt: options.credentialPrompt, signal },
 				);
 				return {
@@ -958,9 +957,10 @@ export function agentEffectHandlers(
 		"pull-request.create": {
 			async observe(effect, signal) {
 				const snapshot = snapshotFor(effect);
-				const tool = options.prTool
-					? Bun.which(options.prTool)
-					: (Bun.which("gh") ?? Bun.which("glab"));
+				const settings = snapshot.metadata.executionSettings;
+				const tool = settings?.prTool
+					? (Bun.which(settings.prTool) ?? settings.prTool)
+					: null;
 				if (!tool) return false;
 				const args =
 					tool.endsWith("/gh") || tool === "gh"
@@ -977,9 +977,14 @@ export function agentEffectHandlers(
 			},
 			async execute(effect, signal) {
 				const snapshot = snapshotFor(effect);
-				const tool = options.prTool
-					? Bun.which(options.prTool)
-					: (Bun.which("gh") ?? Bun.which("glab"));
+				const settings = snapshot.metadata.executionSettings;
+				if (!settings)
+					throw new Error(
+						"workflow execution settings adoption required before PR creation",
+					);
+				const tool = settings.prTool
+					? (Bun.which(settings.prTool) ?? settings.prTool)
+					: null;
 				if (!tool) throw new Error("no configured PR executable (gh or glab)");
 				const args =
 					tool.endsWith("/gh") || tool === "gh"

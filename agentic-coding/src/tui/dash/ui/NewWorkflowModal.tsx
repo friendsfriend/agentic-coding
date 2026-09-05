@@ -35,6 +35,7 @@ type Project = { name: string; path: string; openspec: boolean };
 export function NewWorkflowModal(props: {
 	projects: Project[];
 	presets?: string[];
+	presetsForRepository?: (repository: string) => string[];
 	onCancel: () => void;
 	onComplete: (input: NewWorkflowInput) => Promise<void>;
 	onKeyReady: (handler: (key: KeyEvent) => boolean) => void;
@@ -135,10 +136,14 @@ export function NewWorkflowModal(props: {
 				: workflowTypeChoices.filter((item) =>
 						item.includes(filter().toLowerCase()),
 					);
-		if (f === "preset")
-			return [PRESET_CONFIG_DEFAULTS, ...(props.presets ?? [])].filter((item) =>
+		if (f === "preset") {
+			const presets = props.presetsForRepository
+				? props.presetsForRepository(values().repo)
+				: (props.presets ?? []);
+			return [PRESET_CONFIG_DEFAULTS, ...presets].filter((item) =>
 				item.toLowerCase().includes(filter().toLowerCase()),
 			);
+		}
 		if (f === "workflowId" && values().workflowType === "openspec-apply")
 			return discoverChanges(values().repo);
 		if (f === "mode")

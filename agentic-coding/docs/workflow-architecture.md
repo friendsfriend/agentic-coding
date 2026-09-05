@@ -20,6 +20,31 @@ importer listed above keeps importing the barrel path unchanged; the split is
 a pure internal reorganization with no behavior change (digests, exports, and
 the full test suite are unmodified oracles for that claim).
 
+## Startup context and execution pins
+
+CLI, dashboard, research, and wiki-comment starts use `src/workflow/startup.ts`.
+The startup boundary resolves the selected repository before reading `.pi` project
+configuration, so linked worktrees use the canonical repository source and
+repository-independent workflows use global configuration. `HERDR_WORKFLOW_CONFIG`
+is a full replacement and carries environment provenance.
+
+Fusion routing has one precedence rule: an explicit ordered `--fusion-profiles`
+list wins; otherwise the selected preset must provide contiguous `planner-1`
+through `planner-N` roles (2–5). The resolved routing is pinned in the workflow
+snapshot before effects run.
+
+Non-secret delivery settings are pinned in `metadata.executionSettings`, including
+the effective remote, resolved PR executable (or `null`), and config provenance.
+Delivery effects never reread ambient cwd configuration. Legacy snapshots remain
+readable but expose a revision-bound `preview-settings` then `adopt-settings`
+flow when a sensitive delivery effect needs settings. The preview is fingerprinted
+and must still match current configuration at acceptance; credentials are never
+persisted.
+
+The dashboard model-configuration modal displays the effective source and writes
+back to that repository's selected config file, preserving layered-source conflict
+checks.
+
 ## Step ownership
 
 Step knowledge belongs only in `src/workflow/steps/`. The engine, CLI, and

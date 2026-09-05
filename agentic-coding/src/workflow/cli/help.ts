@@ -9,7 +9,7 @@ export function help(command?: string): void {
 	}
 	const usage: Record<string, string> = {
 		start:
-			"start [--repo PATH] --workflow-id ID [--mode worktree|checkout] [--workflow openspec-full|openspec-propose|openspec-apply|no-openspec|openspec-fusion-full|openspec-fusion-propose|wiki|research] [--fusion-profiles NAME,NAME,...] [--task TEXT] [--ticket ID] [--preset NAME]",
+			"start [--repo PATH] --workflow-id ID [--mode worktree|checkout] [--workflow openspec-full|openspec-propose|openspec-apply|no-openspec|openspec-fusion-full|openspec-fusion-propose|wiki|research] [--fusion-profiles NAME,NAME,...] [--task TEXT] [--ticket ID] [--preset NAME] (explicit fusion profiles override preset planner roles; config is repository-scoped)",
 
 		status: "status --repo PATH --workflow-id ID",
 		action:
