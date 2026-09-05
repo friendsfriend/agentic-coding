@@ -384,7 +384,10 @@ export function ModelConfigModal(props: {
 	 * at load time. */
 	const refuseOnConflict = (): boolean => {
 		try {
-			const conflicts = conflictingAgentsFiles();
+			const conflicts = conflictingAgentsFiles(
+				undefined,
+				props.repository ?? process.cwd(),
+			);
 			if (!conflicts.length) return false;
 			notify(
 				`Not saved: [agents] is also defined in ${conflicts.join(", ")}; remove it there first so dashboard edits are not shadowed`,

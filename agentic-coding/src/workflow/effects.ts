@@ -147,11 +147,28 @@ function tomlValue(value: unknown): string {
 }
 function stringifyToml(document: Record<string, unknown>): string {
 	const lines: string[] = [];
+	const isTable = (value: unknown): value is Record<string, unknown> =>
+		Boolean(
+			value &&
+				typeof value === "object" &&
+				!Array.isArray(value) &&
+				!(value instanceof Date),
+		);
 	const writeTable = (table: Record<string, unknown>, prefix: string) => {
-		for (const [key, value] of Object.entries(table)) {
-			if (!value || typeof value !== "object" || value instanceof Date)
+		const entries = Object.entries(table);
+		// TOML keeps current table scope after a child table header. Emit parent
+		// scalars first or they are parsed as fields of the last child table.
+		for (const [key, value] of entries)
+			if (
+				!isTable(value) &&
+				!(
+					Array.isArray(value) &&
+					value.every((item) => item && typeof item === "object")
+				)
+			)
 				lines.push(`${tomlKey(key)} = ${tomlValue(value)}`);
-			else if (
+		for (const [key, value] of entries) {
+			if (
 				Array.isArray(value) &&
 				value.every((item) => item && typeof item === "object")
 			) {
@@ -159,12 +176,10 @@ function stringifyToml(document: Record<string, unknown>): string {
 					lines.push(`\n[[${prefix ? `${prefix}.` : ""}${tomlKey(key)}]]`);
 					writeTable(item as Record<string, unknown>, "");
 				}
-			} else if (Array.isArray(value)) {
-				lines.push(`${tomlKey(key)} = ${tomlValue(value)}`);
-			} else if (!Array.isArray(value)) {
+			} else if (isTable(value)) {
 				const name = prefix ? `${prefix}.${tomlKey(key)}` : tomlKey(key);
 				lines.push(`\n[${name}]`);
-				writeTable(value as Record<string, unknown>, name);
+				writeTable(value, name);
 			}
 		}
 	};

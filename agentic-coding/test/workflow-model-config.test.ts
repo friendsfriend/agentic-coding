@@ -286,6 +286,35 @@ describe("agent configuration presets", () => {
 });
 
 describe("agents section write-back", () => {
+	test("parent scalar fields stay in parent table after child edits", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "config-parent-fields-"));
+		const file = path.join(dir, "config.toml");
+		fs.writeFileSync(
+			file,
+			`[agents.profiles.pi-a]\nruntime = "pi"\n\n[agents.presets.base]\ndefault_profile = "pi-a"\n`,
+		);
+		process.env.HERDR_WORKFLOW_CONFIG = file;
+		try {
+			saveAgentsSection((section) => {
+				section.default_profile = "pi-a";
+			});
+			const agents = parseAgentsConfig(
+				(
+					Bun.TOML.parse(fs.readFileSync(file, "utf8")) as Record<
+						string,
+						unknown
+					>
+				).agents,
+			);
+			expect(agents.default_profile).toBe("pi-a");
+			expect(agents.profiles["pi-a"]?.runtime).toBe("pi");
+			expect(agents.presets?.base?.default_profile).toBe("pi-a");
+		} finally {
+			delete process.env.HERDR_WORKFLOW_CONFIG;
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	test("round-trip preserves profiles, presets, routes, and unrelated sections", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "config-write-"));
 		const file = path.join(dir, "config.toml");
