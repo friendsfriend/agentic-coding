@@ -10,6 +10,7 @@ import type {
 
 export interface HerdrPort {
 	call(...args: string[]): unknown;
+	callAsync?(args: string[], signal?: AbortSignal): Promise<unknown>;
 }
 export interface LaunchContext {
 	profile: ResolvedProfile;
@@ -25,6 +26,8 @@ export interface LaunchContext {
 	bridgePath?: string;
 	/** Trusted workflow extension; distinct from user-configured extensions. */
 	workflowExtensionPath?: string;
+	/** Abort ownership-bound external work when the effect lease is lost. */
+	signal?: AbortSignal;
 }
 export interface AgentObservation {
 	status: "idle" | "working" | "blocked" | "done" | "unknown";
@@ -35,9 +38,13 @@ export interface AgentAdapter {
 	readonly id: RuntimeId;
 	preflight(profile: ResolvedProfile, requirements: readonly string[]): void;
 	launch(ctx: LaunchContext): Promise<AgentHandle>;
-	prompt(handle: AgentHandle, message: string): Promise<void>;
-	observe(handle: AgentHandle): Promise<AgentObservation>;
-	stop(handle: AgentHandle): Promise<void>;
+	prompt(
+		handle: AgentHandle,
+		message: string,
+		signal?: AbortSignal,
+	): Promise<void>;
+	observe(handle: AgentHandle, signal?: AbortSignal): Promise<AgentObservation>;
+	stop(handle: AgentHandle, signal?: AbortSignal): Promise<void>;
 }
 function agent(value: unknown): Record<string, unknown> {
 	if (!value || typeof value !== "object" || !("agent" in value))
@@ -76,15 +83,20 @@ export class HerdrLifecycle {
 	constructor(
 		private readonly herdr: HerdrPort,
 		private readonly sleep: (ms: number) => Promise<void> = Bun.sleep,
+		private readonly signal?: AbortSignal,
 	) {}
-	async waitForShell(paneId: string): Promise<void> {
+	private async call(args: string[], signal = this.signal): Promise<unknown> {
+		if (signal?.aborted) throw new Error("effect ownership was lost");
+		return this.herdr.callAsync
+			? this.herdr.callAsync(args, signal)
+			: this.herdr.call(...args);
+	}
+	async waitForShell(paneId: string, signal = this.signal): Promise<void> {
 		for (let attempt = 0; attempt < 50; attempt++) {
-			const result = this.herdr.call(
-				"pane",
-				"process-info",
-				"--pane",
-				paneId,
-			) as {
+			const result = (await this.call(
+				["pane", "process-info", "--pane", paneId],
+				signal,
+			)) as {
 				process_info?: {
 					shell_pid?: number;
 					foreground_process_group_id?: number;
@@ -123,7 +135,7 @@ export class HerdrLifecycle {
 		ctx: LaunchContext,
 		runtimeArgs: string[],
 	): Promise<AgentHandle> {
-		await this.waitForShell(ctx.paneId);
+		await this.waitForShell(ctx.paneId, ctx.signal);
 		// herdr 0.8.0 has no agent-level env flag and spawns agents through the pane
 		// shell, so the run environment must be injected into the pane first. Source
 		// a 0600 env file (secrets stay out of the terminal scrollback), then keep a
@@ -144,47 +156,58 @@ export class HerdrLifecycle {
 		// env landed before `agent start` inherits it.
 		const marker = `${envFile}.done`;
 		fs.rmSync(marker, { force: true });
-		this.herdr.call(
-			"pane",
-			"run",
-			ctx.paneId,
-			`set -a; . ${shQuote(envFile)}; set +a; touch ${shQuote(marker)}; exec "${"$"}{SHELL:-sh}"`,
+		await this.call(
+			[
+				"pane",
+				"run",
+				ctx.paneId,
+				`set -a; . ${shQuote(envFile)}; set +a; touch ${shQuote(marker)}; exec "${"$"}{SHELL:-sh}"`,
+			],
+			ctx.signal,
 		);
-		for (let attempt = 0; attempt < 50 && !fs.existsSync(marker); attempt++)
+		for (let attempt = 0; attempt < 50 && !fs.existsSync(marker); attempt++) {
+			if (ctx.signal?.aborted) throw new Error("effect ownership was lost");
 			await this.sleep(100);
+		}
 		if (!fs.existsSync(marker))
 			throw new Error(
 				`run environment injection did not land in pane: ${ctx.paneId}`,
 			);
-		await this.waitForShell(ctx.paneId);
+		await this.waitForShell(ctx.paneId, ctx.signal);
 		const invoke = () =>
-			this.herdr.call(
-				"agent",
-				"start",
-				ctx.name,
-				"--kind",
-				kind,
-				"--pane",
-				ctx.paneId,
-				"--",
-				...runtimeArgs,
+			this.call(
+				[
+					"agent",
+					"start",
+					ctx.name,
+					"--kind",
+					kind,
+					"--pane",
+					ctx.paneId,
+					"--",
+					...runtimeArgs,
+				],
+				ctx.signal,
 			);
 		let result: unknown;
 		try {
-			result = invoke();
+			result = await invoke();
 		} catch (error) {
 			if (!String((error as Error).message).includes("not an available shell"))
 				throw error;
 			await this.sleep(250);
-			await this.waitForShell(ctx.paneId);
-			result = invoke();
+			await this.waitForShell(ctx.paneId, ctx.signal);
+			result = await invoke();
 		}
 		const started = agent(result);
 		const paneId = String(started.pane_id ?? ctx.paneId);
-		const live = agent(this.herdr.call("agent", "get", paneId));
+		const live = agent(await this.call(["agent", "get", paneId], ctx.signal));
 		if (String(live.pane_id) !== paneId)
 			throw new Error(`agent get mismatch for ${paneId}`);
-		this.herdr.call("agent", "prompt", paneId, ctx.rendered.prompt);
+		await this.call(
+			["agent", "prompt", paneId, ctx.rendered.prompt],
+			ctx.signal,
+		);
 		return {
 			runtime: ctx.profile.runtime,
 			name: ctx.name,
@@ -193,12 +216,21 @@ export class HerdrLifecycle {
 			...(live.session_id ? { sessionId: String(live.session_id) } : {}),
 		};
 	}
-	async prompt(handle: AgentHandle, message: string): Promise<void> {
-		agent(this.herdr.call("agent", "get", handle.paneId));
-		this.herdr.call("agent", "prompt", handle.paneId, message);
+	async prompt(
+		handle: AgentHandle,
+		message: string,
+		signal?: AbortSignal,
+	): Promise<void> {
+		agent(await this.call(["agent", "get", handle.paneId], signal));
+		await this.call(["agent", "prompt", handle.paneId, message], signal);
 	}
-	async observe(handle: AgentHandle): Promise<AgentObservation> {
-		const live = agent(this.herdr.call("agent", "get", handle.paneId));
+	async observe(
+		handle: AgentHandle,
+		signal?: AbortSignal,
+	): Promise<AgentObservation> {
+		const live = agent(
+			await this.call(["agent", "get", handle.paneId], signal),
+		);
 		const observed = String(live.agent_status ?? "unknown");
 		const status = ["idle", "working", "blocked", "done"].includes(observed)
 			? (observed as AgentObservation["status"])
@@ -209,8 +241,8 @@ export class HerdrLifecycle {
 			...(live.session_id ? { sessionId: String(live.session_id) } : {}),
 		};
 	}
-	async stop(handle: AgentHandle): Promise<void> {
-		this.herdr.call("pane", "close", handle.paneId);
+	async stop(handle: AgentHandle, signal?: AbortSignal): Promise<void> {
+		await this.call(["pane", "close", handle.paneId], signal);
 	}
 }
 abstract class BaseAdapter implements AgentAdapter {
@@ -233,14 +265,14 @@ abstract class BaseAdapter implements AgentAdapter {
 			);
 	}
 	abstract launch(ctx: LaunchContext): Promise<AgentHandle>;
-	prompt(handle: AgentHandle, message: string) {
-		return this.lifecycle.prompt(handle, message);
+	prompt(handle: AgentHandle, message: string, signal?: AbortSignal) {
+		return this.lifecycle.prompt(handle, message, signal);
 	}
-	observe(handle: AgentHandle) {
-		return this.lifecycle.observe(handle);
+	observe(handle: AgentHandle, signal?: AbortSignal) {
+		return this.lifecycle.observe(handle, signal);
 	}
-	stop(handle: AgentHandle) {
-		return this.lifecycle.stop(handle);
+	stop(handle: AgentHandle, signal?: AbortSignal) {
+		return this.lifecycle.stop(handle, signal);
 	}
 }
 export class PiAdapter extends BaseAdapter {

@@ -2589,6 +2589,8 @@ describe("transactional workflow runtime", () => {
 				engine.claimEffects(repo, 1, 1000)[0],
 				"claimed effect",
 			);
+			const competing = engine.claimEffects(repo, 1000, 1000);
+			expect(competing.some((item) => item.id === effect.id)).toBe(false);
 			time += 2000;
 			expect(() =>
 				engine.dispatch(repo, {
@@ -2614,6 +2616,56 @@ describe("transactional workflow runtime", () => {
 				done.view.effects.find((item) => item.id === reclaimed.id)?.status,
 			).toBe("completed");
 			expect(done.snapshot.revision).toBe(1);
+		} finally {
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+	test("lease renewal extends only live ownership and expired recovery exhausts safely", () => {
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "workflow-lease-lifecycle-"),
+		);
+		try {
+			const repo = repository(path.join(tmp, "repo"));
+			let time = Date.parse("2026-01-01T00:00:00Z");
+			const engine = new WorkflowEngine(
+				registerBuiltins(),
+				() => new Date(time),
+			);
+			const started = engine.start({
+				repo,
+				workflowId: "lease-lifecycle",
+				definitionId: "no-openspec",
+				metadata: {
+					branch: "main",
+					baseBranch: "main",
+					baseCommit: "base",
+					task: "task",
+				},
+				routing: routing(),
+			});
+			const effect = requireDefined(
+				engine.claimEffects(repo, 1, 1000)[0],
+				"effect",
+			);
+			const lease = requireDefined(effect.lease, "lease");
+			expect(engine.renewEffect(repo, effect.id, lease, 1000)).toBe(true);
+			expect(engine.effectIsLive(repo, effect.id, lease)).toBe(true);
+			time += 1001;
+			expect(engine.renewEffect(repo, effect.id, lease, 1000)).toBe(false);
+			expect(engine.effectIsLive(repo, effect.id, lease)).toBe(false);
+
+			const db = new Database(canonicalStorePath(repo));
+			db.query(
+				"UPDATE workflow_outbox SET attempts=max_attempts, lease_expires_at='2000-01-01T00:00:00Z' WHERE id=?",
+			).run(effect.id);
+			db.close();
+			const recovered = engine.claimEffects(repo, 1, 1000);
+			expect(recovered).toHaveLength(0);
+			const view = engine.status(repo, started.view.workflowId);
+			expect(view.status).toBe("attention-required");
+			expect(view.effects.find((item) => item.id === effect.id)?.status).toBe(
+				"failed",
+			);
 		} finally {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}

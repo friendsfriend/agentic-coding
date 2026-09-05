@@ -473,7 +473,7 @@ export function expireSiblingRuns(
 			"UPDATE workflow_runs SET status='expired',capability_hash='',completed_at=? WHERE id=? AND status IN ('pending','working')",
 		).run(nowIso(now), run.id);
 		db.query(
-			"UPDATE workflow_outbox SET status='expired',lease=NULL WHERE workflow_id=? AND status IN ('pending','retry','running') AND json_extract(payload_json,'$.runId')=?",
+			"UPDATE workflow_outbox SET status='expired',lease=NULL,lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry','running') AND json_extract(payload_json,'$.runId')=?",
 		).run(snapshot.workflowId, run.id);
 		if (run.handle)
 			enqueue(

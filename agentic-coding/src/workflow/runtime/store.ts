@@ -192,6 +192,15 @@ CREATE TABLE workflow_instances_new(id TEXT PRIMARY KEY, change_id TEXT NULL, re
 	return db;
 }
 
+// Lease heartbeats run frequently while an effect is active. Reuse the
+// already-initialized store schema without repeating openStore's migration and
+// DDL bootstrap on every heartbeat.
+function openLeaseStore(repo: string): Database {
+	const db = new Database(canonicalStorePath(repo), { create: true });
+	db.exec("PRAGMA busy_timeout=10000");
+	return db;
+}
+
 export interface InstanceRow {
 	id: string;
 	change_id: string;
@@ -363,16 +372,43 @@ export function effectIsLive(
 	repo: string,
 	effectId: string,
 	lease: string,
+	now: () => Date,
 ): boolean {
-	const db = openStore(repo);
+	const db = openLeaseStore(repo);
 	try {
 		return Boolean(
 			db
 				.query(
-					"SELECT 1 FROM workflow_outbox WHERE id=? AND status='running' AND lease=?",
+					"SELECT 1 FROM workflow_outbox WHERE id=? AND status='running' AND lease=? AND lease_expires_at>?",
 				)
-				.get(effectId, lease),
+				.get(effectId, lease, nowIso(now)),
 		);
+	} finally {
+		db.close();
+	}
+}
+
+export function renewEffect(
+	repo: string,
+	effectId: string,
+	lease: string,
+	leaseMs: number,
+	now: () => Date,
+): boolean {
+	const db = openLeaseStore(repo);
+	try {
+		const at = now();
+		const result = db
+			.query(
+				"UPDATE workflow_outbox SET lease_expires_at=? WHERE id=? AND status='running' AND lease=? AND lease_expires_at>?",
+			)
+			.run(
+				new Date(at.getTime() + leaseMs).toISOString(),
+				effectId,
+				lease,
+				at.toISOString(),
+			);
+		return result.changes === 1;
 	} finally {
 		db.close();
 	}

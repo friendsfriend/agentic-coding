@@ -52,7 +52,7 @@ export function developerAction(
 				snapshot.revision,
 			);
 		db.query(
-			"UPDATE workflow_outbox SET status='retry', next_attempt_at=NULL, last_error=NULL WHERE id=? AND workflow_id=? AND status='failed'",
+			"UPDATE workflow_outbox SET status='retry', attempts=0, lease=NULL, lease_expires_at=NULL, next_attempt_at=NULL, last_error=NULL WHERE id=? AND workflow_id=? AND status='failed'",
 		).run(id, snapshot.workflowId);
 		snapshot.status = "active";
 		snapshot.attention = [];

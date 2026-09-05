@@ -10,7 +10,7 @@ Workflow code follows a one-way flow:
 3. `src/workflow/runtime.ts` applies step-agnostic state-machine mechanics —
    transactions, persistence, the context carry-over resolver, and effect
    delivery — by delegating to the current step's behavior.
-4. Effects execute external work.
+4. Effects execute external work. The serial effect runner claims one effect immediately before processing it, renews its token-bound lease while observation or execution is active, and cancels owned work when renewal fails. Expired claims consume attempts; an expired claim at the automatic attempt limit is failed transactionally and puts the workflow in `attention-required`. Explicit operator retry starts a fresh bounded attempt budget without changing the effect identity. Runner versions with this lifecycle must be deployed together; older drainers do not renew leases and can still reproduce the pre-fix expiry behavior.
 5. CLI and TUI modules present workflow state.
 
 `runtime.ts`, `definitions.ts`, and `cli.ts` are each now a re-export barrel

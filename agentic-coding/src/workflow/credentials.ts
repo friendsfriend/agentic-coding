@@ -111,6 +111,8 @@ export function credentialFailureMessage(prompt: string): string {
 export interface RunGitWithCredentialsOptions {
 	/** Resolves the user's answer for a requested credential; absent => fail fast. */
 	prompt?: CredentialPrompt;
+	/** Cancels the subprocess when the owning workflow lease is lost. */
+	signal?: AbortSignal;
 	/** Executable to run (defaults to `git`; overridable for tests). */
 	executable?: string;
 	/** Extra environment for the spawned command (merged over process env). */
@@ -143,6 +145,9 @@ export async function runGitWithCredentials(
 		stdout: "pipe",
 		stderr: "pipe",
 	});
+	const abort = () => proc.kill();
+	if (options.signal?.aborted) proc.kill();
+	else options.signal?.addEventListener("abort", abort, { once: true });
 	const stdoutPromise = new Response(proc.stdout).text();
 	const stderrPromise = new Response(proc.stderr).text();
 	const readerHolder = { reader: undefined as Subprocess | undefined };
@@ -165,6 +170,7 @@ export async function runGitWithCredentials(
 			);
 		return stdout.trim();
 	} finally {
+		options.signal?.removeEventListener("abort", abort);
 		try {
 			readerHolder.reader?.kill();
 		} catch {
