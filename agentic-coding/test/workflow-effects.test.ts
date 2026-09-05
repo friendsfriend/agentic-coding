@@ -46,6 +46,249 @@ class Adapter implements AgentAdapter {
 	}
 }
 
+test("serial runner renews a slow effect and does not preclaim later work", async () => {
+	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-lease-runner-"));
+	try {
+		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+		fs.writeFileSync(path.join(repo, "README.md"), "x\n");
+		execFileSync("git", ["add", "."], { cwd: repo });
+		execFileSync(
+			"git",
+			[
+				"-c",
+				"user.email=test@example.com",
+				"-c",
+				"user.name=Test",
+				"commit",
+				"-qm",
+				"base",
+			],
+			{ cwd: repo },
+		);
+		const registry = registerBuiltins();
+		let now = Date.now();
+		const engine = new WorkflowEngine(registry, () => new Date(now));
+		const profile = {
+			name: "test",
+			runtime: "pi" as const,
+			executable: "sh",
+			tools: [],
+			extensions: [],
+			readOnly: false,
+			capabilities: ["prompt", "run-environment", "observe"] as const,
+			digest: "test-profile",
+		};
+		const started = engine.start({
+			repo,
+			workflowId: "slow-effect",
+			definitionId: "no-openspec",
+			metadata: {
+				branch: "main",
+				baseBranch: "main",
+				baseCommit: execFileSync("git", ["rev-parse", "HEAD"], {
+					cwd: repo,
+					encoding: "utf8",
+				}).trim(),
+				task: "task",
+			},
+			routing: {
+				defaultProfile: profile.name,
+				routes: [{ stepId: "core.implementation", role: "worker", profile }],
+			},
+		});
+		let executions = 0;
+		let launchFailures = 0;
+		const runner = new EffectRunner(repo, engine, {
+			"artifact.write": {
+				async execute() {
+					executions++;
+					await Bun.sleep(350);
+					return { written: true };
+				},
+			},
+			"agent.launch": {
+				async execute() {
+					launchFailures++;
+					throw new Error("simulated long operation");
+				},
+			},
+		});
+		expect(started.view.effects[0]?.kind).toBe("artifact.write");
+		await runner.drain(1, 100);
+		expect(executions).toBe(1);
+		for (const delay of [3_000, 5_000, 9_000, 17_000]) {
+			now += delay;
+			await runner.drain(1, 100_000);
+		}
+		expect(launchFailures).toBe(4);
+		const view = engine.status(repo, started.view.workflowId);
+		expect(
+			view.effects.find((effect) => effect.kind === "artifact.write")?.status,
+		).toBe("completed");
+		expect(
+			view.effects.find((effect) => effect.kind === "agent.launch")?.status,
+		).toBe("failed");
+		expect(
+			view.effects.find((effect) => effect.kind === "agent.launch")?.attempts,
+		).toBe(4);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("runner cancels a lost effect and a successor can reclaim it", async () => {
+	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-lease-loss-"));
+	try {
+		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+		fs.writeFileSync(path.join(repo, "README.md"), "x\n");
+		fs.writeFileSync(path.join(repo, ".gitignore"), ".herdr-workflow\n");
+		execFileSync("git", ["add", "."], { cwd: repo });
+		execFileSync(
+			"git",
+			[
+				"-c",
+				"user.email=test@example.com",
+				"-c",
+				"user.name=Test",
+				"commit",
+				"-qm",
+				"base",
+			],
+			{ cwd: repo },
+		);
+		const registry = registerBuiltins();
+		const engine = new WorkflowEngine(registry);
+		const profile = {
+			name: "test",
+			runtime: "pi" as const,
+			executable: "sh",
+			tools: [],
+			extensions: [],
+			readOnly: false,
+			capabilities: ["prompt", "run-environment", "observe"] as const,
+			digest: "test-profile",
+		};
+		const _started = engine.start({
+			repo,
+			workflowId: "lease-loss",
+			definitionId: "no-openspec",
+			metadata: {
+				branch: "main",
+				baseBranch: "main",
+				baseCommit: execFileSync("git", ["rev-parse", "HEAD"], {
+					cwd: repo,
+					encoding: "utf8",
+				}).trim(),
+				task: "task",
+			},
+			routing: {
+				defaultProfile: profile.name,
+				routes: [{ stepId: "core.implementation", role: "worker", profile }],
+			},
+		});
+		let cancelled = 0;
+		const marker = path.join(repo, "effect-completed-before-crash");
+		const runner = new EffectRunner(repo, engine, {
+			"artifact.write": {
+				async execute(effect) {
+					fs.writeFileSync(marker, "done");
+					await Bun.sleep(25);
+					const db = new Database(canonicalStorePath(repo));
+					db.query(
+						"UPDATE workflow_outbox SET lease='successor', lease_expires_at='2000-01-01T00:00:00Z' WHERE id=?",
+					).run(effect.id);
+					db.close();
+					await Bun.sleep(50);
+					return { written: true };
+				},
+				async cancel() {
+					cancelled++;
+				},
+			},
+		});
+		await runner.drain(1, 100);
+		expect(cancelled).toBe(1);
+		const successor = engine.claimEffects(repo, 1, 100);
+		expect(successor).toHaveLength(1);
+		expect(successor[0]?.lease).not.toBe("successor");
+		const db = new Database(canonicalStorePath(repo));
+		db.query(
+			"UPDATE workflow_outbox SET lease_expires_at='2000-01-01T00:00:00Z' WHERE id=?",
+		).run(successor[0]?.id);
+		db.close();
+		const recovery = new EffectRunner(repo, engine, {
+			"artifact.write": {
+				async observe() {
+					return fs.existsSync(marker) ? { observed: true } : undefined;
+				},
+				async execute() {
+					throw new Error("recovery should observe existing completion");
+				},
+			},
+		});
+		await recovery.drain(1, 100);
+		expect(
+			engine
+				.status(repo, "lease-loss")
+				.effects.find((effect) => effect.id === successor[0]?.id)?.status,
+		).toBe("completed");
+		fs.rmSync(marker, { force: true });
+		engine.start({
+			repo,
+			workflowId: "repair-during-effect",
+			definitionId: "no-openspec",
+			metadata: {
+				branch: "main",
+				baseBranch: "main",
+				baseCommit: execFileSync("git", ["rev-parse", "HEAD"], {
+					cwd: repo,
+					encoding: "utf8",
+				}).trim(),
+				task: "task",
+			},
+			routing: {
+				defaultProfile: profile.name,
+				routes: [{ stepId: "core.implementation", role: "worker", profile }],
+			},
+		});
+		fs.writeFileSync(marker, "done");
+		await new EffectRunner(repo, engine, {
+			"agent.launch": {
+				async execute() {
+					return {};
+				},
+			},
+		}).drain(1, 100);
+		let repaired = false;
+		const repairRunner = new EffectRunner(repo, engine, {
+			"artifact.write": {
+				async execute() {
+					await Bun.sleep(25);
+					const snapshot = engine.getSnapshot(repo, "repair-during-effect");
+					engine.dispatch(repo, {
+						type: "operator.repair",
+						workflowId: "repair-during-effect",
+						revision: snapshot.revision,
+						targetStep: "core.implementation",
+						reason: "lease test",
+					});
+					repaired = true;
+					await Bun.sleep(50);
+					return { written: true };
+				},
+				async cancel() {
+					cancelled++;
+				},
+			},
+		});
+		await repairRunner.drain(1, 100);
+		expect(repaired).toBe(true);
+		expect(cancelled).toBe(2);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
 test("research workspace setup launches and prompts the researcher", async () => {
 	const root = fs.mkdtempSync(
 		path.join(os.tmpdir(), "workflow-research-effects-"),

@@ -16,8 +16,42 @@ export function runHerdr(args: string[]): any {
 	return stdout.trim() ? (JSON.parse(stdout).result ?? {}) : {};
 }
 
+export async function runHerdrAsync(
+	args: string[],
+	signal?: AbortSignal,
+): Promise<unknown> {
+	const proc = Bun.spawn(["herdr", ...args], {
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const stdout = new Response(proc.stdout).text();
+	const stderr = new Response(proc.stderr).text();
+	const timeout = setTimeout(() => proc.kill(), 120_000);
+	const abort = () => proc.kill();
+	if (signal?.aborted) proc.kill();
+	else signal?.addEventListener("abort", abort, { once: true });
+	try {
+		const exitCode = await proc.exited;
+		const output = await stdout;
+		const error = await stderr;
+		if (exitCode !== 0)
+			throw new Error(`herdr ${args.join(" ")}: ${(error || output).trim()}`);
+		return output.trim() ? (JSON.parse(output).result ?? {}) : {};
+	} finally {
+		clearTimeout(timeout);
+		signal?.removeEventListener("abort", abort);
+	}
+}
+
 export class Herdr {
-	/** Wraps the `herdr` CLI, parsing its JSON `result` envelope. */
+	readonly callAsync?: (
+		args: string[],
+		signal?: AbortSignal,
+	) => Promise<unknown>;
+	constructor() {
+		this.callAsync = runHerdrAsync;
+	}
+	/** Wraps the `herdr` CLI, parsing the `.result` envelope. */
 	// biome-ignore lint/suspicious/noExplicitAny: untyped CLI JSON envelope
 	call(...args: string[]): any {
 		return runHerdr(args);

@@ -8,3 +8,14 @@ Not for agents. This is only for humans.
 * Automatic wiki commit + push if in git repo.
 * openspec panel shows all instead of only relevant changes / specs
 
+* Architecture improvements based on gpt 6 astra:
+  * fix effect lease lifecycle
+  * unify worfklow startup context
+  * version workflow behavior pins
+  * version workflow migrations
+  * seperate workflow observation execution
+  * centralize step completion behavior
+  * contsolidate-tui-primitives
+  * split-dashboard-responsibilities
+  * enforce-source-layer-boundaries
+

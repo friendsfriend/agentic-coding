@@ -35,8 +35,11 @@ import {
 } from "./wiki.ts";
 
 export interface EffectHandler {
-	observe?(effect: ClaimedEffect): Promise<unknown | undefined>;
-	execute(effect: ClaimedEffect): Promise<unknown>;
+	observe?(
+		effect: ClaimedEffect,
+		signal?: AbortSignal,
+	): Promise<unknown | undefined>;
+	execute(effect: ClaimedEffect, signal?: AbortSignal): Promise<unknown>;
 	cancel?(effect: ClaimedEffect, result?: unknown): Promise<void>;
 }
 export class EffectRunner {
@@ -45,83 +48,131 @@ export class EffectRunner {
 		private readonly engine: WorkflowEngine,
 		private readonly handlers: Partial<Record<EffectKind, EffectHandler>>,
 	) {}
-	async drain(limit = 20): Promise<number> {
+	async drain(limit = 20, leaseMs = 30_000): Promise<number> {
 		let completed = 0;
-		for (let batch = 0; batch < 20; batch++) {
-			const effects = this.engine.claimEffects(this.repo, limit);
-			if (!effects.length) break;
-			for (const effect of effects) {
-				const { lease } = effect;
-				if (!lease) throw new Error(`claimed effect ${effect.id} has no lease`);
-				if (!this.engine.effectIsLive(this.repo, effect.id, lease)) continue;
-				const handler = this.handlers[effect.kind];
-				if (!handler) {
+		for (let processed = 0; processed < limit; processed++) {
+			// Claim immediately before execution. A serial runner must not reserve
+			// work that is still waiting behind an earlier, possibly slow effect.
+			const effect = this.engine.claimEffects(this.repo, 1, leaseMs)[0];
+			if (!effect) break;
+			const { lease } = effect;
+			if (!lease) throw new Error(`claimed effect ${effect.id} has no lease`);
+			if (!this.engine.effectIsLive(this.repo, effect.id, lease)) continue;
+			const handler = this.handlers[effect.kind];
+			if (!handler) {
+				this.engine.dispatch(this.repo, {
+					type: "effect.result",
+					effectId: effect.id,
+					lease,
+					outcome: "failed",
+					data: `no handler for ${effect.kind}`,
+				});
+				continue;
+			}
+
+			const controller = new AbortController();
+			let lost = false;
+			const renewal = setInterval(
+				() => {
+					if (!this.engine.renewEffect(this.repo, effect.id, lease, leaseMs)) {
+						lost = true;
+						controller.abort();
+					}
+				},
+				Math.max(1, Math.floor(leaseMs / 3)),
+			);
+			try {
+				const observed = await handler.observe?.(effect, controller.signal);
+				if (lost || controller.signal.aborted) {
+					await handler.cancel?.(effect);
+					continue;
+				}
+				const data =
+					observed === undefined || observed === false
+						? await handler.execute(effect, controller.signal)
+						: observed === true
+							? { observed: true }
+							: observed;
+				if (lost || !this.engine.effectIsLive(this.repo, effect.id, lease)) {
+					await handler.cancel?.(effect, data);
+					continue;
+				}
+				try {
 					this.engine.dispatch(this.repo, {
 						type: "effect.result",
 						effectId: effect.id,
 						lease,
-						outcome: "failed",
-						data: `no handler for ${effect.kind}`,
+						outcome: "complete",
+						data,
 					});
-					continue;
-				}
-				try {
-					const observed = await handler.observe?.(effect);
-					const data =
-						observed === undefined || observed === false
-							? await handler.execute(effect)
-							: observed === true
-								? { observed: true }
-								: observed;
-					if (!this.engine.effectIsLive(this.repo, effect.id, lease)) {
+					completed++;
+				} catch (error) {
+					if (
+						error instanceof Error &&
+						error.message.includes("effect lease is invalid")
+					) {
 						await handler.cancel?.(effect, data);
 						continue;
 					}
-					try {
-						this.engine.dispatch(this.repo, {
-							type: "effect.result",
-							effectId: effect.id,
-							lease,
-							outcome: "complete",
-							data,
-						});
-						completed++;
-					} catch (error) {
-						if (
-							error instanceof Error &&
-							error.message.includes("effect lease is invalid")
-						) {
-							await handler.cancel?.(effect, data);
-							continue;
-						}
-						throw error;
-					}
-				} catch (error) {
-					if (!this.engine.effectIsLive(this.repo, effect.id, lease)) {
-						await handler.cancel?.(effect);
-						continue;
-					}
-					try {
-						this.engine.dispatch(this.repo, {
-							type: "effect.result",
-							effectId: effect.id,
-							lease,
-							outcome:
-								effect.attempts < effect.maxAttempts ? "retry" : "failed",
-							data: String((error as Error).message ?? error),
-						});
-					} catch (dispatchError) {
-						if (
-							!(dispatchError instanceof Error) ||
-							!dispatchError.message.includes("effect lease is invalid")
-						)
-							throw dispatchError;
-					}
+					throw error;
 				}
+			} catch (error) {
+				if (lost || !this.engine.effectIsLive(this.repo, effect.id, lease)) {
+					await handler.cancel?.(effect);
+					continue;
+				}
+				try {
+					this.engine.dispatch(this.repo, {
+						type: "effect.result",
+						effectId: effect.id,
+						lease,
+						outcome: effect.attempts < effect.maxAttempts ? "retry" : "failed",
+						data: String((error as Error).message ?? error),
+					});
+				} catch (dispatchError) {
+					if (
+						!(dispatchError instanceof Error) ||
+						!dispatchError.message.includes("effect lease is invalid")
+					)
+						throw dispatchError;
+				}
+			} finally {
+				clearInterval(renewal);
 			}
 		}
 		return completed;
 	}
+}
+async function runProcess(
+	args: string[],
+	options: { cwd?: string; signal?: AbortSignal; timeoutMs?: number } = {},
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+	const proc = Bun.spawn(args, {
+		cwd: options.cwd,
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const stdout = new Response(proc.stdout).text();
+	const stderr = new Response(proc.stderr).text();
+	const timeout = setTimeout(() => proc.kill(), options.timeoutMs ?? 120_000);
+	const abort = () => proc.kill();
+	if (options.signal?.aborted) proc.kill();
+	else options.signal?.addEventListener("abort", abort, { once: true });
+	try {
+		const exitCode = await proc.exited;
+		return { exitCode, stdout: await stdout, stderr: await stderr };
+	} finally {
+		clearTimeout(timeout);
+		options.signal?.removeEventListener("abort", abort);
+	}
+}
+async function herdrCall(
+	herdr: HerdrPort,
+	args: string[],
+	signal?: AbortSignal,
+): Promise<unknown> {
+	if (signal?.aborted) throw new Error("effect ownership was lost");
+	return herdr.callAsync ? herdr.callAsync(args, signal) : herdr.call(...args);
 }
 function samePath(left: string, right: string): boolean {
 	try {
@@ -138,11 +189,14 @@ function pinnedWikiRoot(
 		throw new Error("wiki root does not match the pinned workflow wiki root");
 	return pinnedRoot;
 }
-function withWikiRoot<T>(root: string, operation: () => T): T {
+async function withWikiRoot<T>(
+	root: string,
+	operation: () => T | Promise<T>,
+): Promise<T> {
 	const previous = process.env.HERDR_WIKI_DIR;
 	process.env.HERDR_WIKI_DIR = root;
 	try {
-		return operation();
+		return await operation();
 	} finally {
 		if (previous === undefined) delete process.env.HERDR_WIKI_DIR;
 		else process.env.HERDR_WIKI_DIR = previous;
@@ -167,20 +221,19 @@ export function agentEffectHandlers(
 	const snapshotFor = (effect: ClaimedEffect) =>
 		engine.getSnapshot(repo, effect.workflowId);
 	const setupWorkspaces = new Map<string, string>();
-	const git = (cwd: string, ...args: string[]) => {
-		const result = Bun.spawnSync(["git", "-C", cwd, ...args], {
-			stdout: "pipe",
-			stderr: "pipe",
-		});
+	const git = async (
+		cwd: string,
+		args: string[],
+		signal?: AbortSignal,
+	): Promise<string> => {
+		const result = await runProcess(["git", "-C", cwd, ...args], { signal });
 		if (result.exitCode !== 0)
-			throw new Error(
-				(result.stderr.toString() || result.stdout.toString()).trim(),
-			);
-		return result.stdout.toString().trim();
+			throw new Error((result.stderr || result.stdout).trim());
+		return result.stdout.trim();
 	};
 	return {
 		"workspace.setup": {
-			async observe(effect) {
+			async observe(effect, signal) {
 				const snapshot = snapshotFor(effect);
 				if (
 					isWikiWorkflowTarget(repo) ||
@@ -189,8 +242,13 @@ export function agentEffectHandlers(
 				) {
 					const workspace =
 						snapshot.metadata.workspace ??
-						recoverWorkspace(options.herdr, snapshot.workflowId);
-					return workspace && dashboardReady(options.herdr, workspace)
+						(await recoverWorkspaceAsync(
+							options.herdr,
+							snapshot.workflowId,
+							signal,
+						));
+					return workspace &&
+						(await dashboardReadyAsync(options.herdr, workspace, signal))
 						? { workspace, worktree: snapshot.metadata.worktree, branch: "" }
 						: undefined;
 				}
@@ -201,23 +259,34 @@ export function agentEffectHandlers(
 				};
 				const sameCheckout = input.sameCheckout === true;
 				const branch = sameCheckout
-					? currentBranch(snapshot.metadata.repository)
+					? await currentBranch(snapshot.metadata.repository, signal)
 					: (input.branch ?? snapshot.metadata.branch);
 				const worktree =
 					snapshot.metadata.worktree ??
 					(input.mode === "worktree"
-						? worktreeForBranch(snapshot.metadata.repository, branch ?? "")
-						: currentBranch(snapshot.metadata.repository) === branch
+						? await worktreeForBranch(
+								snapshot.metadata.repository,
+								branch ?? "",
+								signal,
+							)
+						: (await currentBranch(snapshot.metadata.repository, signal)) ===
+								branch
 							? snapshot.metadata.repository
 							: undefined);
 				const workspace =
 					snapshot.metadata.workspace ??
-					recoverWorkspace(options.herdr, snapshot.workflowId);
-				return worktree && workspace && dashboardReady(options.herdr, workspace)
+					(await recoverWorkspaceAsync(
+						options.herdr,
+						snapshot.workflowId,
+						signal,
+					));
+				return worktree &&
+					workspace &&
+					(await dashboardReadyAsync(options.herdr, workspace, signal))
 					? { workspace, worktree, branch }
 					: undefined;
 			},
-			async execute(effect) {
+			async execute(effect, signal) {
 				const snapshot = snapshotFor(effect);
 				if (
 					isWikiWorkflowTarget(repo) ||
@@ -226,19 +295,27 @@ export function agentEffectHandlers(
 				) {
 					let workspace =
 						snapshot.metadata.workspace ??
-						recoverWorkspace(options.herdr, snapshot.workflowId);
+						(await recoverWorkspaceAsync(
+							options.herdr,
+							snapshot.workflowId,
+							signal,
+						));
 					if (!workspace) {
 						if (!engine.effectIsLive(repo, effect.id, effect.lease ?? ""))
 							return { cancelled: true };
 						workspace = (
-							options.herdr.call(
-								"workspace",
-								"create",
-								"--cwd",
-								snapshot.metadata.worktree,
-								"--label",
-								snapshot.workflowId,
-							) as { workspace?: { workspace_id?: string } }
+							(await herdrCall(
+								options.herdr,
+								[
+									"workspace",
+									"create",
+									"--cwd",
+									snapshot.metadata.worktree,
+									"--label",
+									snapshot.workflowId,
+								],
+								signal,
+							)) as { workspace?: { workspace_id?: string } }
 						).workspace?.workspace_id;
 					}
 					if (!workspace)
@@ -297,28 +374,40 @@ export function agentEffectHandlers(
 				};
 				const sameCheckout = input.sameCheckout === true;
 				const branch = sameCheckout
-					? currentBranch(snapshot.metadata.repository)
+					? await currentBranch(snapshot.metadata.repository, signal)
 					: (input.branch ?? snapshot.metadata.branch);
 				if (!branch) throw new Error("workspace setup requires a named branch");
 				let worktree =
 					input.mode === "worktree" && !sameCheckout
-						? worktreeForBranch(snapshot.metadata.repository, branch)
+						? await worktreeForBranch(
+								snapshot.metadata.repository,
+								branch,
+								signal,
+							)
 						: snapshot.metadata.repository;
-				let workspace = recoverWorkspace(options.herdr, snapshot.workflowId);
+				let workspace = await recoverWorkspaceAsync(
+					options.herdr,
+					snapshot.workflowId,
+					signal,
+				);
 				if (input.mode === "worktree" && !worktree) {
-					const result = options.herdr.call(
-						"worktree",
-						"create",
-						"--cwd",
-						snapshot.metadata.repository,
-						"--branch",
-						branch,
-						"--base",
-						input.baseCommit ?? snapshot.metadata.baseCommit,
-						"--label",
-						snapshot.workflowId,
-						"--no-focus",
-					) as {
+					const result = (await herdrCall(
+						options.herdr,
+						[
+							"worktree",
+							"create",
+							"--cwd",
+							snapshot.metadata.repository,
+							"--branch",
+							branch,
+							"--base",
+							input.baseCommit ?? snapshot.metadata.baseCommit,
+							"--label",
+							snapshot.workflowId,
+							"--no-focus",
+						],
+						signal,
+					)) as {
 						workspace?: { workspace_id?: string };
 						worktree?: { path?: string };
 					};
@@ -332,37 +421,44 @@ export function agentEffectHandlers(
 					if (
 						!sameCheckout &&
 						input.mode !== "worktree" &&
-						currentBranch(snapshot.metadata.repository) !== branch
+						(await currentBranch(snapshot.metadata.repository, signal)) !==
+							branch
 					) {
-						const exists = git(
+						const exists = await git(
 							snapshot.metadata.repository,
-							"branch",
-							"--list",
-							branch,
+							["branch", "--list", branch],
+							signal,
 						);
-						git(
+						await git(
 							snapshot.metadata.repository,
-							"switch",
-							...(exists
-								? [branch]
-								: [
-										"-c",
-										branch,
-										input.baseCommit ?? snapshot.metadata.baseCommit,
-									]),
+							[
+								"switch",
+								...(exists
+									? [branch]
+									: [
+											"-c",
+											branch,
+											input.baseCommit ?? snapshot.metadata.baseCommit,
+										]),
+							],
+							signal,
 						);
 					}
 					if (!worktree)
 						throw new Error("workspace setup returned incomplete identity");
 					if (!workspace) {
-						const result = options.herdr.call(
-							"workspace",
-							"create",
-							"--cwd",
-							worktree,
-							"--label",
-							snapshot.workflowId,
-						) as { workspace?: { workspace_id?: string } };
+						const result = (await herdrCall(
+							options.herdr,
+							[
+								"workspace",
+								"create",
+								"--cwd",
+								worktree,
+								"--label",
+								snapshot.workflowId,
+							],
+							signal,
+						)) as { workspace?: { workspace_id?: string } };
 						workspace = result.workspace?.workspace_id;
 					}
 				}
@@ -373,6 +469,8 @@ export function agentEffectHandlers(
 					workspace,
 					worktree,
 					snapshot.workflowId,
+					undefined,
+					signal,
 				);
 				return { workspace, worktree, branch };
 			},
@@ -439,14 +537,15 @@ export function agentEffectHandlers(
 			},
 		},
 		"agent.launch": {
-			async observe(effect) {
+			async observe(effect, signal) {
 				const run = engine.getRun(repo, runId(effect));
 				const snapshot = engine.getSnapshot(repo, run.workflowId);
-				const resolved = resolveLiveAgent(
+				const resolved = await resolveLiveAgentAsync(
 					options.herdr,
 					snapshot.workflowId,
 					snapshot.definition.id,
 					run,
+					signal,
 				);
 				if (!resolved) return undefined;
 				try {
@@ -480,11 +579,12 @@ export function agentEffectHandlers(
 							? path.join(wikiWorkflowDataRoot(), snapshot.workflowId, "runs")
 							: undefined,
 					);
-					options.herdr.call(
-						"agent",
-						"prompt",
-						resolved.paneId,
-						expected.rendered.prompt,
+					if (!engine.effectIsLive(repo, effect.id, effect.lease ?? ""))
+						return undefined;
+					await herdrCall(
+						options.herdr,
+						["agent", "prompt", resolved.paneId, expected.rendered.prompt],
+						signal,
 					);
 					return {
 						runtime: run.profile.runtime,
@@ -497,7 +597,7 @@ export function agentEffectHandlers(
 					return undefined;
 				}
 			},
-			async execute(effect) {
+			async execute(effect, signal) {
 				const run = engine.getRun(repo, runId(effect));
 				const snapshot = engine.getSnapshot(repo, run.workflowId);
 				const step = options.registry.step(run.stepId);
@@ -558,6 +658,7 @@ export function agentEffectHandlers(
 						run.profile.runtime === "pi"
 							? `${assetRoot}/extensions/developer-question.ts`
 							: undefined,
+					signal,
 				};
 				try {
 					const handle = await adapter.launch(ctx);
@@ -594,7 +695,7 @@ export function agentEffectHandlers(
 			},
 		},
 		"agent.prompt": {
-			async execute(effect) {
+			async execute(effect, signal) {
 				const run = engine.getRun(repo, runId(effect));
 				if (!run.handle)
 					throw new Error("agent prompt requires a live run handle");
@@ -606,7 +707,7 @@ export function agentEffectHandlers(
 					throw new Error("agent prompt requires a message");
 				if (!engine.effectIsLive(repo, effect.id, effect.lease ?? ""))
 					return { cancelled: true };
-				await adapter.prompt(run.handle, message);
+				await adapter.prompt(run.handle, message, signal);
 				return { prompted: true };
 			},
 			async cancel(effect) {
@@ -620,34 +721,42 @@ export function agentEffectHandlers(
 			},
 		},
 		"agent.stop": {
-			async observe(effect) {
+			async observe(effect, signal) {
 				const run = engine.getRun(repo, runId(effect));
 				if (!run.handle) return true;
 				try {
 					const status = (
-						await options.adapters.get(run.profile.runtime)?.observe(run.handle)
+						await options.adapters
+							.get(run.profile.runtime)
+							?.observe(run.handle, signal)
 					)?.status;
 					return status === "done" || status === "unknown";
 				} catch {
 					return true;
 				}
 			},
-			async execute(effect) {
+			async execute(effect, signal) {
 				const run = engine.getRun(repo, runId(effect));
 				if (run.handle)
-					await options.adapters.get(run.profile.runtime)?.stop(run.handle);
+					await options.adapters
+						.get(run.profile.runtime)
+						?.stop(run.handle, signal);
 				return { stopped: true };
 			},
 		},
 		"notification.show": {
-			async execute(effect) {
+			async execute(effect, signal) {
 				const body = effect.payload as { title?: string; body?: string };
-				options.herdr.call(
-					"notification",
-					"show",
-					body.title ?? "Workflow update",
-					"--body",
-					body.body ?? "",
+				await herdrCall(
+					options.herdr,
+					[
+						"notification",
+						"show",
+						body.title ?? "Workflow update",
+						"--body",
+						body.body ?? "",
+					],
+					signal,
 				);
 				return { shown: true };
 			},
@@ -656,7 +765,7 @@ export function agentEffectHandlers(
 			async execute(effect) {
 				const snapshot = snapshotFor(effect);
 				const pinnedRoot = pinnedWikiRoot(snapshot);
-				return withWikiRoot(pinnedRoot, () => {
+				return await withWikiRoot(pinnedRoot, async () => {
 					const approved = effect.payload as {
 						concepts?: Array<{ id?: unknown; digest?: unknown }>;
 					};
@@ -737,11 +846,10 @@ export function agentEffectHandlers(
 					let reviewer = configured;
 					if (!reviewer) {
 						try {
-							reviewer = git(
-								snapshot.metadata.worktree,
+							reviewer = await git(snapshot.metadata.worktree, [
 								"config",
 								"user.email",
-							);
+							]);
 						} catch {
 							reviewer = undefined;
 						}
@@ -756,50 +864,77 @@ export function agentEffectHandlers(
 			},
 		},
 		"openspec.validate": {
-			async execute(effect) {
+			async execute(effect, signal) {
 				const snapshot = snapshotFor(effect);
-				const result = Bun.spawnSync(
+				const result = await runProcess(
 					["openspec", "validate", snapshot.metadata.changeId, "--strict"],
-					{ cwd: snapshot.metadata.worktree, stdout: "pipe", stderr: "pipe" },
+					{ cwd: snapshot.metadata.worktree, signal },
 				);
 				if (result.exitCode !== 0)
-					throw new Error(
-						(result.stderr.toString() || result.stdout.toString()).trim(),
-					);
+					throw new Error((result.stderr || result.stdout).trim());
 				return { validated: true };
 			},
 		},
 		"delivery.commit": {
-			async observe(effect) {
+			async observe(effect, signal) {
 				const snapshot = snapshotFor(effect);
-				return git(snapshot.metadata.worktree, "status", "--porcelain") === "";
-			},
-			async execute(effect) {
-				const snapshot = snapshotFor(effect);
-				git(snapshot.metadata.worktree, "add", "-A");
-				if (git(snapshot.metadata.worktree, "diff", "--cached", "--name-only"))
-					git(
+				return (
+					(await git(
 						snapshot.metadata.worktree,
-						"commit",
-						"-m",
-						`Apply ${snapshot.metadata.changeId || snapshot.workflowId}`,
+						["status", "--porcelain"],
+						signal,
+					)) === ""
+				);
+			},
+			async execute(effect, signal) {
+				const snapshot = snapshotFor(effect);
+				await git(snapshot.metadata.worktree, ["add", "-A"], signal);
+				if (
+					await git(
+						snapshot.metadata.worktree,
+						["diff", "--cached", "--name-only"],
+						signal,
+					)
+				)
+					await git(
+						snapshot.metadata.worktree,
+						[
+							"commit",
+							"-m",
+							`Apply ${snapshot.metadata.changeId || snapshot.workflowId}`,
+						],
+						signal,
 					);
-				return { head: git(snapshot.metadata.worktree, "rev-parse", "HEAD") };
+				return {
+					head: await git(
+						snapshot.metadata.worktree,
+						["rev-parse", "HEAD"],
+						signal,
+					),
+				};
 			},
 		},
 		"delivery.push": {
-			async observe(effect) {
+			async observe(effect, signal) {
 				const snapshot = snapshotFor(effect);
 				try {
 					return (
-						git(snapshot.metadata.worktree, "rev-parse", "@{upstream}") ===
-						git(snapshot.metadata.worktree, "rev-parse", "HEAD")
+						(await git(
+							snapshot.metadata.worktree,
+							["rev-parse", "@{upstream}"],
+							signal,
+						)) ===
+						(await git(
+							snapshot.metadata.worktree,
+							["rev-parse", "HEAD"],
+							signal,
+						))
 					);
 				} catch {
 					return false;
 				}
 			},
-			async execute(effect) {
+			async execute(effect, signal) {
 				const snapshot = snapshotFor(effect);
 				await runGitWithCredentials(
 					snapshot.metadata.worktree,
@@ -809,13 +944,19 @@ export function agentEffectHandlers(
 						options.remote ?? "origin",
 						snapshot.metadata.branch,
 					],
-					{ prompt: options.credentialPrompt },
+					{ prompt: options.credentialPrompt, signal },
 				);
-				return { head: git(snapshot.metadata.worktree, "rev-parse", "HEAD") };
+				return {
+					head: await git(
+						snapshot.metadata.worktree,
+						["rev-parse", "HEAD"],
+						signal,
+					),
+				};
 			},
 		},
 		"pull-request.create": {
-			async observe(effect) {
+			async observe(effect, signal) {
 				const snapshot = snapshotFor(effect);
 				const tool = options.prTool
 					? Bun.which(options.prTool)
@@ -826,14 +967,15 @@ export function agentEffectHandlers(
 						? ["pr", "view", snapshot.metadata.branch, "--json", "url"]
 						: ["mr", "view", snapshot.metadata.branch, "--output", "json"];
 				return (
-					Bun.spawnSync([tool, ...args], {
-						cwd: snapshot.metadata.worktree,
-						stdout: "pipe",
-						stderr: "pipe",
-					}).exitCode === 0
+					(
+						await runProcess([tool, ...args], {
+							cwd: snapshot.metadata.worktree,
+							signal,
+						})
+					).exitCode === 0
 				);
 			},
-			async execute(effect) {
+			async execute(effect, signal) {
 				const snapshot = snapshotFor(effect);
 				const tool = options.prTool
 					? Bun.which(options.prTool)
@@ -843,26 +985,25 @@ export function agentEffectHandlers(
 					tool.endsWith("/gh") || tool === "gh"
 						? ["pr", "create", "--fill"]
 						: ["mr", "create", "--fill"];
-				const result = Bun.spawnSync([tool, ...args], {
+				const result = await runProcess([tool, ...args], {
 					cwd: snapshot.metadata.worktree,
-					stdout: "pipe",
-					stderr: "pipe",
+					signal,
 				});
 				if (result.exitCode !== 0)
-					throw new Error(
-						(result.stderr.toString() || result.stdout.toString()).trim(),
-					);
-				return { url: result.stdout.toString().trim() };
+					throw new Error((result.stderr || result.stdout).trim());
+				return { url: result.stdout.trim() };
 			},
 		},
 		"workspace.close": {
-			async observe(effect) {
+			async observe(effect, signal) {
 				const workspace = snapshotFor(effect).metadata.workspace;
 				if (!workspace) return true;
 				try {
-					const result = options.herdr.call("workspace", "get", workspace) as {
-						workspace?: { status?: string; closed_at?: string };
-					};
+					const result = (await herdrCall(
+						options.herdr,
+						["workspace", "get", workspace],
+						signal,
+					)) as { workspace?: { status?: string; closed_at?: string } };
 					return (
 						result.workspace?.status === "closed" ||
 						Boolean(result.workspace?.closed_at)
@@ -873,9 +1014,14 @@ export function agentEffectHandlers(
 					);
 				}
 			},
-			async execute(effect) {
+			async execute(effect, signal) {
 				const workspace = snapshotFor(effect).metadata.workspace;
-				if (workspace) options.herdr.call("workspace", "close", workspace);
+				if (workspace)
+					await herdrCall(
+						options.herdr,
+						["workspace", "close", workspace],
+						signal,
+					);
 				return { closed: true };
 			},
 		},
@@ -893,7 +1039,7 @@ export function agentEffectHandlers(
 					!fs.existsSync(snapshot.metadata.worktree)
 				);
 			},
-			async execute(effect) {
+			async execute(effect, signal) {
 				const snapshot = snapshotFor(effect);
 				if (
 					isWikiWorkflowTarget(repo) ||
@@ -902,55 +1048,61 @@ export function agentEffectHandlers(
 				)
 					return { cleaned: true };
 				if (snapshot.metadata.worktree !== snapshot.metadata.repository)
-					git(
+					await git(
 						snapshot.metadata.repository,
-						"worktree",
-						"remove",
-						"--force",
-						snapshot.metadata.worktree,
+						["worktree", "remove", "--force", snapshot.metadata.worktree],
+						signal,
 					);
 				return { cleaned: true };
 			},
 		},
 	};
 }
-function currentBranch(repo: string): string | undefined {
-	const result = Bun.spawnSync(
+async function currentBranch(
+	repo: string,
+	signal?: AbortSignal,
+): Promise<string | undefined> {
+	const result = await runProcess(
 		["git", "-C", repo, "branch", "--show-current"],
-		{ stdout: "pipe", stderr: "pipe" },
+		{ signal },
 	);
-	return result.exitCode === 0
-		? result.stdout.toString().trim() || undefined
-		: undefined;
+	return result.exitCode === 0 ? result.stdout.trim() || undefined : undefined;
 }
-function worktreeForBranch(repo: string, branch: string): string | undefined {
-	const result = Bun.spawnSync(
+async function worktreeForBranch(
+	repo: string,
+	branch: string,
+	signal?: AbortSignal,
+): Promise<string | undefined> {
+	const result = await runProcess(
 		["git", "-C", repo, "worktree", "list", "--porcelain"],
-		{ stdout: "pipe", stderr: "pipe" },
+		{ signal },
 	);
 	if (result.exitCode !== 0) return undefined;
-	for (const block of result.stdout.toString().trim().split(/\n\n+/)) {
+	for (const block of result.stdout.trim().split(/\n\n+/)) {
 		const lines = block.split("\n");
 		if (lines.includes(`branch refs/heads/${branch}`))
 			return lines.find((line) => line.startsWith("worktree "))?.slice(9);
 	}
 	return undefined;
 }
-function recoverWorkspace(
+async function recoverWorkspaceAsync(
 	herdr: HerdrPort,
 	identity: string,
-): string | undefined {
+	signal?: AbortSignal,
+): Promise<string | undefined> {
 	try {
-		const result = herdr.call("workspace", "get", identity) as {
-			workspace?: { workspace_id?: string; status?: string };
-		};
+		const result = (await herdrCall(
+			herdr,
+			["workspace", "get", identity],
+			signal,
+		)) as { workspace?: { workspace_id?: string; status?: string } };
 		if (result.workspace?.status !== "closed" && result.workspace?.workspace_id)
 			return result.workspace.workspace_id;
 	} catch {
 		/* fall through to list recovery */
 	}
 	try {
-		const result = herdr.call("workspace", "list") as {
+		const result = (await herdrCall(herdr, ["workspace", "list"], signal)) as {
 			workspaces?: Array<{
 				workspace_id?: string;
 				label?: string;
@@ -967,11 +1119,17 @@ function recoverWorkspace(
 		return undefined;
 	}
 }
-function dashboardReady(herdr: HerdrPort, workspace: string): boolean {
+async function dashboardReadyAsync(
+	herdr: HerdrPort,
+	workspace: string,
+	signal?: AbortSignal,
+): Promise<boolean> {
 	try {
-		const result = herdr.call("tab", "list", "--workspace", workspace) as {
-			tabs?: Array<{ label?: string }>;
-		};
+		const result = (await herdrCall(
+			herdr,
+			["tab", "list", "--workspace", workspace],
+			signal,
+		)) as { tabs?: Array<{ label?: string }> };
 		return (result.tabs ?? []).some((tab) => tab.label === "dashboard");
 	} catch {
 		return false;
@@ -983,19 +1141,24 @@ async function ensureWorkspaceTabs(
 	worktree: string,
 	workflowId: string,
 	dashboardRepo = worktree,
+	signal?: AbortSignal,
 ): Promise<void> {
 	const tabs =
 		(
-			herdr.call("tab", "list", "--workspace", workspace) as {
-				tabs?: Array<{ tab_id?: string; label?: string }>;
-			}
+			(await herdrCall(
+				herdr,
+				["tab", "list", "--workspace", workspace],
+				signal,
+			)) as { tabs?: Array<{ tab_id?: string; label?: string }> }
 		).tabs ?? [];
 	if (!tabs.some((tab) => tab.label === "dashboard")) {
 		const panes =
 			(
-				herdr.call("pane", "list", "--workspace", workspace) as {
-					panes?: Array<{ pane_id?: string; tab_id?: string }>;
-				}
+				(await herdrCall(
+					herdr,
+					["pane", "list", "--workspace", workspace],
+					signal,
+				)) as { panes?: Array<{ pane_id?: string; tab_id?: string }> }
 			).panes ?? [];
 		const tab = tabs[0];
 		const root = tab?.tab_id
@@ -1003,8 +1166,8 @@ async function ensureWorkspaceTabs(
 			: undefined;
 		if (!tab?.tab_id || !root)
 			throw new Error("workspace dashboard pane unavailable");
-		await new HerdrLifecycle(herdr).waitForShell(root);
-		herdr.call("tab", "rename", tab.tab_id, "dashboard");
+		await new HerdrLifecycle(herdr, Bun.sleep, signal).waitForShell(root);
+		await herdrCall(herdr, ["tab", "rename", tab.tab_id, "dashboard"], signal);
 		const command = [
 			"agentic-coding",
 			"dash",
@@ -1015,24 +1178,29 @@ async function ensureWorkspaceTabs(
 		]
 			.map((value) => Bun.$.escape(value))
 			.join(" ");
-		herdr.call("pane", "run", root, command);
+		await herdrCall(herdr, ["pane", "run", root, command], signal);
 	}
 	// Auxiliary git tab (lazygit): best-effort — the dashboard's Git panel
 	// recreates it on demand if this fails (e.g. lazygit not installed).
 	if (!tabs.some((tab) => tab.label === "git")) {
 		try {
-			const result = herdr.call(
-				"tab",
-				"create",
-				"--workspace",
-				workspace,
-				"--cwd",
-				worktree,
-				"--label",
-				"git",
-			) as { root_pane?: { pane_id?: string } };
+			const result = (await herdrCall(
+				herdr,
+				[
+					"tab",
+					"create",
+					"--workspace",
+					workspace,
+					"--cwd",
+					worktree,
+					"--label",
+					"git",
+				],
+				signal,
+			)) as { root_pane?: { pane_id?: string } };
 			const pane = result.root_pane?.pane_id;
-			if (pane) herdr.call("pane", "run", pane, "lazygit");
+			if (pane)
+				await herdrCall(herdr, ["pane", "run", pane, "lazygit"], signal);
 		} catch {
 			try {
 				herdr.call(
@@ -1125,6 +1293,24 @@ function getLiveAgent(herdr: HerdrPort, key: string): HerdrAgent | undefined {
 		return undefined;
 	}
 }
+async function getLiveAgentAsync(
+	herdr: HerdrPort,
+	key: string,
+	signal?: AbortSignal,
+): Promise<HerdrAgent | undefined> {
+	try {
+		const result = (await herdrCall(herdr, ["agent", "get", key], signal)) as {
+			agent?: HerdrAgent;
+		};
+		const agent = result.agent;
+		if (!agent?.pane_id) return undefined;
+		if (!agent.agent_status || agent.agent_status === "unknown")
+			return undefined;
+		return agent;
+	} catch {
+		return undefined;
+	}
+}
 function adopt(name: string, live: HerdrAgent): LiveAgent {
 	return {
 		name,
@@ -1147,6 +1333,27 @@ function adopt(name: string, live: HerdrAgent): LiveAgent {
  * onto the canonical scheme. Returns undefined when no live agent exists —
  * the only outcome under which callers may spawn a fresh pane.
  */
+export async function resolveLiveAgentAsync(
+	herdr: HerdrPort,
+	workflowId: string,
+	definitionId: string,
+	run: { stepId: string; role: string; id: string; handle?: AgentHandle },
+	signal?: AbortSignal,
+): Promise<LiveAgent | undefined> {
+	const canonical = canonicalAgentName(workflowId, definitionId, run);
+	if (run.handle?.paneId) {
+		const live = await getLiveAgentAsync(herdr, run.handle.paneId, signal);
+		if (live && live.pane_id === run.handle.paneId)
+			return adopt(canonical, live);
+	}
+	const byCanonical = await getLiveAgentAsync(herdr, canonical, signal);
+	if (byCanonical) return adopt(canonical, byCanonical);
+	const legacy = legacyRunName(workflowId, run);
+	if (legacy === canonical) return undefined;
+	const byLegacy = await getLiveAgentAsync(herdr, legacy, signal);
+	return byLegacy ? adopt(canonical, byLegacy) : undefined;
+}
+
 export function resolveLiveAgent(
 	herdr: HerdrPort,
 	workflowId: string,

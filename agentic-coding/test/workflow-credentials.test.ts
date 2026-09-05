@@ -225,6 +225,44 @@ test("runner cancels with an empty answer: command fails with its original error
 	}
 });
 
+test("runner aborts a credential wait when ownership is already lost", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "credentials-runner-"));
+	try {
+		const controller = new AbortController();
+		controller.abort();
+		await expect(
+			runGitWithCredentials(dir, [], {
+				executable: fakeCredentialScript(dir),
+				signal: controller.signal,
+			}),
+		).rejects.toThrow();
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("runner aborts a credential wait that is already in progress", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "credentials-runner-"));
+	try {
+		const controller = new AbortController();
+		let prompted = false;
+		const operation = runGitWithCredentials(dir, [], {
+			executable: fakeCredentialScript(dir),
+			prompt: async () => {
+				prompted = true;
+				await Bun.sleep(25);
+				controller.abort();
+				return "";
+			},
+			signal: controller.signal,
+		});
+		await expect(operation).rejects.toThrow();
+		expect(prompted).toBe(true);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("runner fails fast with an actionable diagnostic when no prompt provider is attached", async () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "credentials-runner-"));
 	try {

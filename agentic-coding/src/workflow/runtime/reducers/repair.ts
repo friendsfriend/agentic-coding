@@ -56,7 +56,7 @@ export function repair(
 	);
 	expireRuns(db, snapshot, now);
 	db.query(
-		"UPDATE workflow_outbox SET status='expired', lease=NULL WHERE workflow_id=? AND status IN ('pending','retry','running')",
+		"UPDATE workflow_outbox SET status='expired', lease=NULL, lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry','running')",
 	).run(snapshot.workflowId);
 	for (const run of staleRuns)
 		enqueue(

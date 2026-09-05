@@ -75,6 +75,7 @@ import {
 	effectIsLive as storeEffectIsLive,
 	getRun as storeGetRun,
 	getSnapshot as storeGetSnapshot,
+	renewEffect as storeRenewEffect,
 	validateEffect,
 	validateSnapshot,
 	writeSnapshot,
@@ -423,7 +424,20 @@ export class WorkflowEngine {
 		return viewPreviewRepair(repo, workflowId, this.registry);
 	}
 	effectIsLive(repo: string, effectId: string, lease: string): boolean {
-		return storeEffectIsLive(repo, effectId, lease);
+		return storeEffectIsLive(repo, effectId, lease, this.now);
+	}
+	renewEffect(
+		repo: string,
+		effectId: string,
+		lease: string,
+		leaseMs = 30_000,
+	): boolean {
+		if (!Number.isFinite(leaseMs) || leaseMs <= 0)
+			throw new WorkflowRuntimeError(
+				"invalid-input",
+				"lease duration must be positive",
+			);
+		return storeRenewEffect(repo, effectId, lease, leaseMs, this.now);
 	}
 	claimEffects(repo: string, limit = 10, leaseMs = 30_000): ClaimedEffect[] {
 		const db = openStore(repo);
@@ -433,7 +447,7 @@ export class WorkflowEngine {
 			const at = this.now();
 			const rows = db
 				.query(
-					`SELECT * FROM workflow_outbox AS ready WHERE ((ready.status IN ('pending','retry') AND (ready.next_attempt_at IS NULL OR ready.next_attempt_at<=?)) OR (ready.status='running' AND ready.lease_expires_at<=?)) AND NOT (ready.kind IN ('delivery.commit','delivery.push') AND EXISTS (SELECT 1 FROM workflow_outbox AS promotion WHERE promotion.workflow_id=ready.workflow_id AND promotion.kind='wiki.verify' AND promotion.status<>'completed')) ORDER BY ready.rowid LIMIT ?`,
+					`SELECT * FROM workflow_outbox AS ready WHERE ((ready.status IN ('pending','retry') AND ready.attempts < ready.max_attempts AND (ready.next_attempt_at IS NULL OR ready.next_attempt_at<=?)) OR (ready.status='running' AND ready.lease_expires_at<=?)) AND NOT (ready.kind IN ('delivery.commit','delivery.push') AND EXISTS (SELECT 1 FROM workflow_outbox AS promotion WHERE promotion.workflow_id=ready.workflow_id AND promotion.kind='wiki.verify' AND promotion.status<>'completed')) ORDER BY ready.rowid LIMIT ?`,
 				)
 				.all(at.toISOString(), at.toISOString(), limit) as EffectRow[];
 			for (const row of rows) {
@@ -447,6 +461,27 @@ export class WorkflowEngine {
 				const runList = runs(db, snapshot.workflowId);
 				validateSnapshot(snapshot, definition, runList, this.registry);
 				validateEffect(row, snapshot, runList, this.registry);
+				if (row.status === "running" && row.attempts >= row.max_attempts) {
+					const diagnostic = `effect ${row.kind} exhausted automatic attempts after lease expiry`;
+					db.query(
+						"UPDATE workflow_outbox SET status='failed', lease=NULL, lease_expires_at=NULL, last_error=? WHERE id=? AND status='running' AND lease_expires_at<=?",
+					).run(diagnostic, row.id, at.toISOString());
+					snapshot.revision += 1;
+					snapshot.status = "attention-required";
+					snapshot.attention = [diagnostic];
+					snapshot.metadata.updatedAt = at.toISOString();
+					validateSnapshot(snapshot, definition, runList, this.registry);
+					writeSnapshot(db, snapshot);
+					db.query("INSERT INTO workflow_events VALUES (?,?,?,?,?,?)").run(
+						snapshot.workflowId,
+						snapshot.revision,
+						"effect.exhausted",
+						json({ kind: "system", effectId: row.id }),
+						json({ effectId: row.id, kind: row.kind, diagnostic }),
+						at.toISOString(),
+					);
+					continue;
+				}
 				const lease = randomUUID();
 				const expires = new Date(at.getTime() + leaseMs).toISOString();
 				db.query(
