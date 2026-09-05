@@ -7,6 +7,11 @@
 import type { Database } from "bun:sqlite";
 import type { WorkflowCommand, WorkflowSnapshot } from "../../contracts.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
+import {
+	executionSettings,
+	loadConfigWithProvenance,
+	settingsFingerprint,
+} from "../../effects.ts";
 import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
@@ -73,6 +78,54 @@ export function developerAction(
 			type: "developer.action",
 			actor: { kind: "developer" },
 			data: { actionId: "re-pin" },
+		};
+	}
+	if (
+		command.actionId === "preview-settings" ||
+		command.actionId === "adopt-settings"
+	) {
+		if (snapshot.metadata.executionSettings)
+			throw new WorkflowRuntimeError(
+				"unavailable",
+				"workflow execution settings are already adopted",
+				snapshot.revision,
+			);
+		const selected = loadConfigWithProvenance({
+			repository: snapshot.metadata.repository || undefined,
+			repositoryIndependent: !snapshot.metadata.repository,
+		});
+		const settings = executionSettings(selected.config, selected.provenance);
+		if (command.actionId === "preview-settings") {
+			snapshot.metadata.executionSettingsPreview = {
+				settings,
+				fingerprint: settingsFingerprint(settings),
+				revision: snapshot.revision,
+			};
+			return {
+				type: "developer.action",
+				actor: { kind: "developer" },
+				data: { actionId: command.actionId, settings },
+			};
+		}
+		const preview = snapshot.metadata.executionSettingsPreview;
+		if (
+			!preview ||
+			preview.revision + 1 !== command.revision ||
+			preview.fingerprint !== settingsFingerprint(settings)
+		)
+			throw new WorkflowRuntimeError(
+				"revision-conflict",
+				"execution settings preview is stale; preview current settings again",
+				snapshot.revision,
+			);
+		snapshot.metadata.executionSettings = preview.settings;
+		delete snapshot.metadata.executionSettingsPreview;
+		snapshot.status = "active";
+		snapshot.attention = [];
+		return {
+			type: "developer.action",
+			actor: { kind: "developer" },
+			data: { actionId: command.actionId, settings: preview.settings },
 		};
 	}
 	const action = actions(snapshot, registry).find(

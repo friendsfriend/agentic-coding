@@ -10,7 +10,7 @@ Not for agents. This is only for humans.
 
 * Architecture improvements based on gpt 6 astra:
   * fix effect lease lifecycle (done)
-  * unify worfklow startup context
+  * unify worfklow startup context (done)
   * version workflow behavior pins
   * version workflow migrations
   * seperate workflow observation execution

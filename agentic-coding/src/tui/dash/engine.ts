@@ -5,37 +5,23 @@ import { Herdr } from "../../herdr-client.ts";
 import {
 	drainEffects,
 	listProjects,
-	rolesForDefinition,
-	runGit,
-	validateStart,
 	engine as workflowEngineFactory,
 } from "../../workflow/cli.ts";
-import type {
-	WorkflowRouting,
-	WorkflowView,
-} from "../../workflow/contracts.ts";
-import {
-	definitionVersionForManifestPolicy,
-	registerBuiltins,
-} from "../../workflow/definitions.ts";
+import type { WorkflowView } from "../../workflow/contracts.ts";
 import { loadConfig } from "../../workflow/effects.ts";
-import {
-	type AgentsConfig,
-	enforceResearchReadOnlyRouting,
-	parseAgentsConfig,
-	preflightProfile,
-	type RoutingPreset,
-	resolvePreset,
-	resolveRouting,
-	validatePresetCoverage,
-} from "../../workflow/profiles.ts";
-import type { WorkflowRegistry } from "../../workflow/registry.ts";
+import { parseAgentsConfig } from "../../workflow/profiles.ts";
 import {
 	canonicalStorePath,
 	researchWorkflowTarget,
 	validateWorkflowId,
-	wikiWorkflowTarget,
 } from "../../workflow/runtime.ts";
+import { prepareWorkflowStart } from "../../workflow/startup.ts";
+
+export {
+	fusionPlannerCount,
+	startRouting,
+} from "../../workflow/startup.ts";
+
 import {
 	validateWikiReviewComments,
 	type WikiReviewComment,
@@ -170,8 +156,8 @@ export function startArgs(input: {
 	};
 }
 /** Preset names available for the new workflow modal's agent-preset step. */
-export function listPresetNames(): string[] {
-	const config = loadConfig();
+export function listPresetNames(repository?: string): string[] {
+	const config = loadConfig(repository);
 	try {
 		const agents = parseAgentsConfig(config.agents, config);
 		return Object.keys(agents.presets ?? {}).sort();
@@ -179,158 +165,23 @@ export function listPresetNames(): string[] {
 		return [];
 	}
 }
-function resolveStartPreset(
-	agents: AgentsConfig,
-	presetName?: string,
-): RoutingPreset | undefined {
-	if (!presetName || presetName === PRESET_CONFIG_DEFAULTS) return undefined;
-	return resolvePreset(agents, presetName);
-}
-/** Ordered openspec-fusion-full planner count configured under the selected preset's
- * roles.fusion.plan table: the contiguous run planner-1..planner-N. An entry
- * beyond the run is rejected so an edited preset can never silently drop a
- * planner or launch an unintended count. */
-export function fusionPlannerCount(preset: RoutingPreset | undefined): number {
-	const table = (preset?.roles?.["fusion.plan"] ?? {}) as Record<
-		string,
-		unknown
-	>;
-	const has = (role: string): boolean =>
-		typeof table[role] === "string" && table[role] !== "";
-	for (const role of Object.keys(table)) {
-		const match = /^planner-(\d+)$/.exec(role);
-		if (match && Number(match[1]) > 5)
-			throw new Error(
-				`openspec-fusion-full preset ${preset?.name} supports at most planner-5`,
-			);
-	}
-	let count = 0;
-	while (count < 5 && has(`planner-${count + 1}`)) count += 1;
-	for (let index = count + 1; index <= 5; index += 1)
-		if (has(`planner-${index}`))
-			throw new Error(
-				`openspec-fusion-full preset ${preset?.name} requires contiguous planner roles: planner-${index} is set but planner-${count + 1} is missing`,
-			);
-	return count;
-}
-/** Shared dashboard-start routing: derives agent roles through the CLI's
- * rolesForDefinition (including the openspec-fusion-full planner fan-out), validates
- * preset coverage, resolves routes via the existing preset precedence chain,
- * and rejects unusable openspec-fusion-full configuration before any workspace or
- * agent effects occur. */
-export function startRouting(
-	definitionId: string,
-	presetName: string | undefined,
-	definition: ReturnType<WorkflowRegistry["definition"]>,
-	registry: Pick<WorkflowRegistry, "step">,
-	agents: AgentsConfig,
-): WorkflowRouting {
-	const preset = resolveStartPreset(agents, presetName);
-	const roles = rolesForDefinition(
-		definitionId,
-		definition.steps,
-		registry,
-		["openspec-fusion-full", "openspec-fusion-propose"].includes(definitionId)
-			? fusionPlannerCount(preset)
-			: 0,
-	);
-	if (preset)
-		validatePresetCoverage(preset, definition, Object.keys(roles), agents);
-	const routing = resolveRouting(definition, roles, agents, preset);
-	if (
-		["openspec-fusion-full", "openspec-fusion-propose"].includes(definitionId)
-	) {
-		// Mirror the engine's defensive start-time checks with clearer errors
-		// before git inspection, workspace creation, or agent launches.
-		const planners = routing.routes.filter(
-			(route) => route.stepId === "fusion.plan",
-		);
-		if (planners.length < 2 || planners.length > 5)
-			throw new Error(
-				`${definitionId} requires between 2 and 5 planner routings`,
-			);
-		const names = planners.map((route) => route.profile.name);
-		if (new Set(names).size !== names.length)
-			throw new Error(`${definitionId} requires distinct planner profiles`);
-	}
-	return routing;
-}
 export async function startWorkflowInProcess(
 	input: Parameters<typeof startArgs>[0],
 ): Promise<string> {
 	const args = startArgs(input);
-	validateStart(
-		args.definitionId === "research"
-			? (args.repositoryContext ?? "")
-			: args.repo,
-		args.workflowId,
-		args.definitionId,
-		args.task,
-	);
-	const config = loadConfig();
-	const definitionVersion = definitionVersionForManifestPolicy(
-		config.workflow.max_verification_rounds,
-	);
-	const registry = registerBuiltins(
-		undefined,
-		config.workflow.max_verification_rounds,
-	);
-	const definition = registry.definition(args.definitionId, definitionVersion);
-	const agents = parseAgentsConfig(config.agents, config);
-	let routing = startRouting(
-		args.definitionId,
-		args.preset,
-		definition,
-		registry,
-		agents,
-	);
-	if (args.definitionId === "research")
-		routing = enforceResearchReadOnlyRouting(routing, definition.initial);
-	for (const route of routing.routes)
-		preflightProfile(route.profile, registry.step(route.stepId).requirements);
-	const research = args.definitionId === "research";
-	const sameCheckout = args.sameCheckout === true;
-	const baseCommit = research
-		? ""
-		: sameCheckout
-			? runGit(args.repo, "rev-parse", "HEAD")
-			: runGit(
-					args.repo,
-					"rev-parse",
-					`${config.workflow.base_branch}^{commit}`,
-				);
-	if (!research && !sameCheckout)
-		runGit(args.repo, "remote", "get-url", config.workflow.remote);
-	const branch = research
-		? ""
-		: sameCheckout
-			? runGit(args.repo, "branch", "--show-current")
-			: `${config.workflow.branch_prefix}${args.workflowId}`;
-	if (!research && sameCheckout && !branch)
-		throw new Error(
-			"repository-backed workflows require a named current branch",
-		);
-	const engine = workflowEngineFactory();
-	engine.start({
-		repo: args.repo,
-		...(args.repositoryContext
-			? { repositoryContext: args.repositoryContext }
-			: {}),
-		...(args.mode ? { mode: args.mode as "worktree" | "checkout" } : {}),
-		sameCheckout: args.sameCheckout,
+	const prepared = prepareWorkflowStart({
+		repo: input.repo,
+		repositoryContext: args.repositoryContext,
 		workflowId: args.workflowId,
 		definitionId: args.definitionId,
-		definitionVersion,
-		metadata: {
-			branch,
-			baseBranch: research ? "" : config.workflow.base_branch,
-			baseCommit,
-			...(args.task ? { task: args.task } : {}),
-			...(args.ticket ? { ticket: args.ticket } : {}),
-		},
-		routing,
+		mode: args.mode as "worktree" | "checkout" | undefined,
+		task: args.task,
+		ticket: args.ticket,
+		preset: args.preset,
 	});
-	await drainEffects(engine, args.repo, credentialPromptBridge());
+	const engine = workflowEngineFactory();
+	engine.start(prepared.input);
+	await drainEffects(engine, prepared.target, credentialPromptBridge());
 	return `Workflow started: ${args.workflowId}`;
 }
 
@@ -341,45 +192,17 @@ export function startWikiCommentWorkflowInProcess(
 	sessionId = `wiki-review-${randomUUID()}`,
 ): string {
 	const comments = validateWikiReviewComments(input);
-	const config = loadConfig();
-	const definitionVersion = definitionVersionForManifestPolicy(
-		config.workflow.max_verification_rounds,
-	);
-	const registry = registerBuiltins(
-		undefined,
-		config.workflow.max_verification_rounds,
-	);
-	const definition = registry.definition("wiki-comments", definitionVersion);
-	const agents = parseAgentsConfig(config.agents, config);
-	const routing = startRouting(
-		"wiki-comments",
-		undefined,
-		definition,
-		registry,
-		agents,
-	);
-	for (const route of routing.routes)
-		preflightProfile(route.profile, registry.step(route.stepId).requirements);
-	const engine = workflowEngineFactory();
-	engine.start({
-		repo: wikiWorkflowTarget(),
+	const prepared = prepareWorkflowStart({
 		workflowId: validateWorkflowId(sessionId),
 		definitionId: "wiki-comments",
-		definitionVersion,
-		context: JSON.parse(JSON.stringify({ comments })),
-		metadata: {
-			branch: "",
-			baseBranch: "",
-			baseCommit: "",
-			task: "Address the submitted wiki review comments.",
-		},
-		routing,
+		task: "Address the submitted wiki review comments.",
+		context: { comments },
 	});
-	void drainEffects(
-		engine,
-		wikiWorkflowTarget(),
-		credentialPromptBridge(),
-	).catch(() => undefined);
+	const engine = workflowEngineFactory();
+	engine.start(prepared.input);
+	void drainEffects(engine, prepared.target, credentialPromptBridge()).catch(
+		() => undefined,
+	);
 	return `Wiki review workflow started: ${sessionId}`;
 }
 function navigationPath(repo: string, workflowId: string): string {

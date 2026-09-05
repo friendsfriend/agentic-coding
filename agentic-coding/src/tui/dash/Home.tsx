@@ -233,7 +233,9 @@ export function Home(props: {
 			props.keymap.setData("modal.active", "help");
 		} else if (name === "q") globalThis.__requestShutdown?.();
 		else if (name === "n") {
-			setWorkflowPresets(listPresetNames());
+			setWorkflowPresets(
+				listPresetNames(items()[selected()]?.state.repository),
+			);
 			setModal(true);
 			props.keymap.setData("modal.active", "new-workflow");
 		} else if (name === "m") {
@@ -669,6 +671,7 @@ export function Home(props: {
 				<NewWorkflowModal
 					projects={projects()}
 					presets={workflowPresets()}
+					presetsForRepository={listPresetNames}
 					onKeyReady={(handler) => setModalHandler(() => handler)}
 					onCancel={() => {
 						setModal(false);
@@ -707,6 +710,7 @@ export function Home(props: {
 			</Show>
 			<Show when={modelConfig()}>
 				<ModelConfigModal
+					repository={visibleItems()[selected()]?.state.repository}
 					onKeyReady={(handler) => setModelConfigHandler(() => handler)}
 					onCancel={() => {
 						setModelConfig(false);

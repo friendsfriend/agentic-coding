@@ -1,9 +1,11 @@
 // Seams: the only place that touches git, subprocess, time, network, and config I/O.
 // Herdr access itself lives in ../herdr-client.ts (the single shared `.result` parser).
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Herdr } from "../herdr-client.ts";
+import type { WorkflowExecutionSettings } from "./contracts.ts";
 
 export { Herdr };
 
@@ -227,45 +229,139 @@ export const DEFAULT_CONFIG: WorkflowConfig = {
 	wiki: { root: "~/.config/agentic-coding/wiki" },
 };
 
-export function loadConfig(): WorkflowConfig {
-	// Canonical location: ~/.config/agentic-coding/config.toml. Legacy
-	// ~/.pi/agent/herdr-workflow.toml (stow-based installs) still consulted as a
-	// fallback; HERDR_WORKFLOW_CONFIG always wins.
+export interface ConfigProvenance {
+	source: "default" | "environment" | "user" | "legacy" | "project";
+	files: readonly string[];
+	repository?: string;
+}
+
+export interface ResolvedWorkflowConfig {
+	config: WorkflowConfig;
+	provenance: ConfigProvenance;
+}
+
+export function settingsFingerprint(
+	settings: WorkflowExecutionSettings,
+): string {
+	return createHash("sha256").update(JSON.stringify(settings)).digest("hex");
+}
+
+export function executionSettings(
+	config: WorkflowConfig,
+	provenance: ConfigProvenance,
+): WorkflowExecutionSettings {
+	const configured = config.workflow.pr_tool;
+	return {
+		remote: config.workflow.remote,
+		prTool: configured
+			? (Bun.which(configured) ?? null)
+			: (Bun.which("gh") ?? Bun.which("glab") ?? null),
+		provenance: {
+			source: provenance.source,
+			files: [...provenance.files],
+		},
+	};
+}
+
+function repositoryConfigRoot(repository: string): string | undefined {
+	try {
+		const result = Bun.spawnSync(
+			["git", "-C", path.resolve(repository), "rev-parse", "--git-common-dir"],
+			{ stdout: "pipe", stderr: "ignore" },
+		);
+		if (result.exitCode !== 0) return undefined;
+		const common = result.stdout.toString().trim();
+		if (!common) return undefined;
+		const absolute = path.resolve(repository, common);
+		return path.basename(absolute) === ".git"
+			? path.dirname(absolute)
+			: absolute;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Resolve config without changing cwd. `repository` is the only source of a
+ * project overlay; omit it for the caller's legacy cwd-compatible behavior. */
+type ConfigOptions =
+	| string
+	| { repository?: string; repositoryIndependent?: boolean };
+
+export function loadConfigWithProvenance(
+	options: ConfigOptions = {},
+): ResolvedWorkflowConfig {
+	const normalized =
+		typeof options === "string" ? { repository: options } : options;
 	const envPath = process.env.HERDR_WORKFLOW_CONFIG;
 	if (envPath) {
-		// Full replacement: no legacy fallback and no project overlay, so the
-		// env config unambiguously wins and dashboard write-backs take effect.
-		return deepMerge(
-			structuredClone(DEFAULT_CONFIG),
-			Bun.TOML.parse(fs.readFileSync(envPath, "utf8")) as WorkflowConfig,
-		);
+		return {
+			config: deepMerge(
+				structuredClone(DEFAULT_CONFIG),
+				Bun.TOML.parse(fs.readFileSync(envPath, "utf8")) as WorkflowConfig,
+			),
+			provenance: { source: "environment", files: [envPath] },
+		};
 	}
 	const candidates = [
 		path.join(os.homedir(), ".config", "agentic-coding", "config.toml"),
 		path.join(os.homedir(), ".pi", "agent", "herdr-workflow.toml"),
 	];
 	const file = candidates.find((candidate) => fs.existsSync(candidate));
-	const parsed = file
-		? (Bun.TOML.parse(fs.readFileSync(file, "utf8")) as WorkflowConfig)
-		: {};
-	let cfg = deepMerge(structuredClone(DEFAULT_CONFIG), parsed);
-	const projectConfig = path.join(process.cwd(), ".pi", "herdr-workflow.toml");
-	if (fs.existsSync(projectConfig)) {
+	let cfg = deepMerge(
+		structuredClone(DEFAULT_CONFIG),
+		file ? Bun.TOML.parse(fs.readFileSync(file, "utf8")) : {},
+	);
+	const root = normalized.repositoryIndependent
+		? undefined
+		: (repositoryConfigRoot(normalized.repository ?? process.cwd()) ??
+			(normalized.repository
+				? path.resolve(normalized.repository)
+				: process.cwd()));
+	const projectConfig = root
+		? path.join(root, ".pi", "herdr-workflow.toml")
+		: undefined;
+	if (projectConfig && fs.existsSync(projectConfig)) {
 		cfg = deepMerge(
 			cfg,
 			Bun.TOML.parse(fs.readFileSync(projectConfig, "utf8")),
 		);
 	}
-	return cfg;
+	return {
+		config: cfg,
+		provenance: {
+			source:
+				projectConfig && fs.existsSync(projectConfig)
+					? "project"
+					: file
+						? file === candidates[0]
+							? "user"
+							: "legacy"
+						: "default",
+			files: [
+				...(file ? [file] : []),
+				...(projectConfig && fs.existsSync(projectConfig)
+					? [projectConfig]
+					: []),
+			],
+			...(root ? { repository: root } : {}),
+		},
+	};
+}
+
+export function loadConfig(options?: ConfigOptions): WorkflowConfig {
+	return loadConfigWithProvenance(options).config;
 }
 
 /** Resolve the config file that dashboard edits write back to (see
  * selectAgentsConfigPath for the precedence rules). */
-export function agentsConfigPath(): string {
+export function agentsConfigPath(repository?: string): string {
+	const cwd = repository
+		? (repositoryConfigRoot(repository) ?? path.resolve(repository))
+		: process.cwd();
 	return selectAgentsConfigPath(
 		process.env.HERDR_WORKFLOW_CONFIG,
 		os.homedir(),
-		process.cwd(),
+		cwd,
 	);
 }
 /** Resolve the write-back target for dashboard edits. The target must be the
@@ -325,13 +421,17 @@ export function readToml(file: string): Record<string, unknown> {
  * files are not preserved (accepted trade-off, documented in the modal help). */
 export function saveAgentsSection(
 	mutate: (agents: Record<string, unknown>) => void,
+	repository?: string,
 ): void {
-	const conflicts = conflictingAgentsFiles();
+	const cwd = repository
+		? (repositoryConfigRoot(repository) ?? path.resolve(repository))
+		: process.cwd();
+	const conflicts = conflictingAgentsFiles(os.homedir(), cwd);
 	if (conflicts.length)
 		throw new Error(
 			`[agents] is also defined in ${conflicts.join(", ")}; edit the layered sources separately`,
 		);
-	const file = agentsConfigPath();
+	const file = agentsConfigPath(repository);
 	const document = readToml(file);
 	if (
 		!document.agents ||

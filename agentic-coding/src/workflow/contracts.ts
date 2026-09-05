@@ -184,6 +184,17 @@ export interface StepAttemptState {
 		outputDigest?: string;
 	}>;
 }
+export interface WorkflowExecutionSettings {
+	/** Effective non-secret settings accepted at workflow start. */
+	remote: string;
+	/** Absolute executable path, or null when PR tooling is unavailable. */
+	prTool: string | null;
+	provenance: {
+		source: "default" | "environment" | "user" | "legacy" | "project";
+		files: readonly string[];
+	};
+}
+
 export interface WorkflowMetadata {
 	/** Empty for repository-independent workflows such as wiki-comments. */
 	repository: string;
@@ -205,6 +216,13 @@ export interface WorkflowMetadata {
 	stepEnteredAt: string;
 	/** Engine-pinned centralized wiki destination for workflows with core.wiki. */
 	wikiRoot?: string;
+	/** Missing only on legacy snapshots; sensitive delivery effects must not guess. */
+	executionSettings?: WorkflowExecutionSettings;
+	executionSettingsPreview?: {
+		settings: WorkflowExecutionSettings;
+		fingerprint: string;
+		revision: number;
+	};
 }
 export type DeveloperQuestionStatus =
 	| "pending"
@@ -394,6 +412,7 @@ export interface WorkflowView {
 		outputDigest?: string;
 	}>;
 	routing: WorkflowRouting;
+	executionSettingsPreview?: WorkflowMetadata["executionSettingsPreview"];
 	effects: Array<{
 		id: string;
 		kind: EffectKind;
@@ -843,6 +862,47 @@ function profile(value: unknown, at: string): ResolvedProfile {
 	};
 }
 
+function settingsPreview(
+	value: unknown,
+): NonNullable<WorkflowMetadata["executionSettingsPreview"]> {
+	const input = object(value, "$.metadata.executionSettingsPreview");
+	return {
+		settings: executionSettings(input.settings),
+		fingerprint: text(
+			input.fingerprint,
+			"$.metadata.executionSettingsPreview.fingerprint",
+			128,
+		),
+		revision: integer(
+			input.revision,
+			"$.metadata.executionSettingsPreview.revision",
+		),
+	};
+}
+
+function executionSettings(value: unknown): WorkflowExecutionSettings {
+	const input = object(value, "$.metadata.executionSettings");
+	const source = enumValue(
+		input.provenance &&
+			object(input.provenance, "$.metadata.executionSettings.provenance")
+				.source,
+		"$.metadata.executionSettings.provenance.source",
+		["default", "environment", "user", "legacy", "project"],
+	);
+	const files = strings(
+		object(input.provenance, "$.metadata.executionSettings.provenance").files,
+		"$.metadata.executionSettings.provenance.files",
+	);
+	return {
+		remote: text(input.remote, "$.metadata.executionSettings.remote", 256),
+		prTool:
+			input.prTool === null
+				? null
+				: text(input.prTool, "$.metadata.executionSettings.prTool", 4096),
+		provenance: { source, files },
+	};
+}
+
 export function parseSnapshot(value: unknown): WorkflowSnapshot {
 	const input = object(value, "$");
 	const definition = object(input.definition, "$.definition");
@@ -953,6 +1013,16 @@ export function parseSnapshot(value: unknown): WorkflowSnapshot {
 				: {
 						wikiRoot: path.resolve(
 							text(metadata.wikiRoot, "$.metadata.wikiRoot"),
+						),
+					}),
+			...(metadata.executionSettings === undefined
+				? {}
+				: { executionSettings: executionSettings(metadata.executionSettings) }),
+			...(metadata.executionSettingsPreview === undefined
+				? {}
+				: {
+						executionSettingsPreview: settingsPreview(
+							metadata.executionSettingsPreview,
 						),
 					}),
 		},

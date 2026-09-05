@@ -92,6 +92,28 @@ export function view(
 				label: `Retry ${effect.kind}`,
 				confirmation: "confirm" as const,
 			}));
+		const availableActions = actions(snapshot, registry).filter(
+			(action) =>
+				action.id !== "create-pr" ||
+				!effectList.some((effect) => effect.kind === "pull-request.create"),
+		);
+		if (
+			!snapshot.metadata.executionSettings &&
+			effectList.some(
+				(effect) =>
+					effect.kind === "delivery.push" ||
+					effect.kind === "pull-request.create",
+			)
+		) {
+			const preview = snapshot.metadata.executionSettingsPreview;
+			availableActions.push({
+				id: preview ? "adopt-settings" : "preview-settings",
+				label: preview
+					? `Adopt preview: remote=${preview.settings.remote}, PR=${preview.settings.prTool ?? "unavailable"}`
+					: "Preview current execution settings",
+				confirmation: "confirm",
+			});
+		}
 		return {
 			workflowId: snapshot.workflowId,
 			changeId: snapshot.metadata.changeId,
@@ -133,6 +155,12 @@ export function view(
 				...(run.outputDigest ? { outputDigest: run.outputDigest } : {}),
 			})),
 			routing: snapshot.routing,
+			...(snapshot.metadata.executionSettingsPreview
+				? {
+						executionSettingsPreview:
+							snapshot.metadata.executionSettingsPreview,
+					}
+				: {}),
 			effects: effectList.map((effect) => ({
 				id: effect.id,
 				kind: effect.kind,
@@ -148,14 +176,7 @@ export function view(
 					item.status === "pending" &&
 					Date.parse(item.expiresAt) > now().getTime(),
 			),
-			availableActions: [
-				...actions(snapshot, registry).filter(
-					(action) =>
-						action.id !== "create-pr" ||
-						!effectList.some((effect) => effect.kind === "pull-request.create"),
-				),
-				...failedActions,
-			],
+			availableActions: [...availableActions, ...failedActions],
 		};
 	} catch (error) {
 		const diagnostic = boundedError(error);
@@ -193,6 +214,12 @@ export function view(
 					},
 					runs: [],
 					routing: snapshot.routing,
+					...(snapshot.metadata.executionSettingsPreview
+						? {
+								executionSettingsPreview:
+									snapshot.metadata.executionSettingsPreview,
+							}
+						: {}),
 					effects: [],
 					observations: [],
 					health: { valid: false, attention: [diagnostic], diagnostic },
