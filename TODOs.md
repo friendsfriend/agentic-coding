@@ -9,7 +9,7 @@ Not for agents. This is only for humans.
 * openspec panel shows all instead of only relevant changes / specs
 
 * Architecture improvements based on gpt 6 astra:
-  * fix effect lease lifecycle
+  * fix effect lease lifecycle (done)
   * unify worfklow startup context
   * version workflow behavior pins
   * version workflow migrations
