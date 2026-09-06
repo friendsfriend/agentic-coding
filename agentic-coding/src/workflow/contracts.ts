@@ -146,6 +146,12 @@ export interface DefinitionPin {
 	id: string;
 	version: number;
 	digest: string;
+	/** Present on semantic-pin definitions; absent on legacy snapshots. */
+	stepRefs?: readonly {
+		id: string;
+		version: number;
+		behaviorVersion: number;
+	}[];
 }
 export interface ResolvedProfile {
 	name: string;
@@ -282,6 +288,12 @@ export interface WorkflowSnapshot {
 		concepts: Array<{ id: string; digest: string }>;
 	};
 	repaired?: { reason: string; fromStep: string; at: string };
+	migrated?: {
+		from: DefinitionPin;
+		to: DefinitionPin;
+		reason: string;
+		at: string;
+	};
 	repinned?: { fromDigest: string; at: string };
 }
 export interface WorkflowRun {
@@ -496,6 +508,13 @@ export type WorkflowCommand =
 			reason: string;
 	  }
 	| { type: "operator.repin"; workflowId: string; revision: number }
+	| {
+			type: "operator.migrate";
+			workflowId: string;
+			revision: number;
+			targetVersion: number;
+			reason: string;
+	  }
 	| { type: "operator.resume"; workflowId: string; revision: number };
 
 export const commandContract: Contract<WorkflowCommand> = {
@@ -621,6 +640,14 @@ export const commandContract: Contract<WorkflowCommand> = {
 				type,
 				workflowId: text(input.workflowId, "$.workflowId"),
 				revision: integer(input.revision, "$.revision"),
+			};
+		if (type === "operator.migrate")
+			return {
+				type,
+				workflowId: text(input.workflowId, "$.workflowId"),
+				revision: integer(input.revision, "$.revision"),
+				targetVersion: integer(input.targetVersion, "$.targetVersion", 1),
+				reason: boundedText(input.reason, "$.reason", 2048),
 			};
 		if (type === "operator.resume")
 			return {
@@ -917,6 +944,29 @@ export function parseSnapshot(value: unknown): WorkflowSnapshot {
 			id: text(definition.id, "$.definition.id"),
 			version: integer(definition.version, "$.definition.version", 1),
 			digest: text(definition.digest, "$.definition.digest"),
+			stepRefs: (() => {
+				if (definition.stepRefs === undefined) return undefined;
+				if (!Array.isArray(definition.stepRefs))
+					throw new ContractFailure("$.definition.stepRefs", [
+						{ path: "$.definition.stepRefs", message: "expected array" },
+					]);
+				return definition.stepRefs.map((ref, index) => {
+					const item = object(ref, `$.definition.stepRefs[${index}]`);
+					return {
+						id: text(item.id, `$.definition.stepRefs[${index}].id`),
+						version: integer(
+							item.version,
+							`$.definition.stepRefs[${index}].version`,
+							1,
+						),
+						behaviorVersion: integer(
+							item.behaviorVersion,
+							`$.definition.stepRefs[${index}].behaviorVersion`,
+							1,
+						),
+					};
+				});
+			})(),
 		},
 		status: enumValue(input.status, "$.status", [
 			"active",
@@ -1124,6 +1174,59 @@ export function parseSnapshot(value: unknown): WorkflowSnapshot {
 							reason: boundedText(item.reason, "$.repaired.reason"),
 							fromStep: text(item.fromStep, "$.repaired.fromStep"),
 							at: text(item.at, "$.repaired.at"),
+						},
+					};
+				})()
+			: {}),
+		...(input.migrated && typeof input.migrated === "object"
+			? (() => {
+					const item = object(input.migrated, "$.migrated");
+					const from = object(item.from, "$.migrated.from");
+					const to = object(item.to, "$.migrated.to");
+					const parsePin = (pin: Record<string, unknown>, at: string) => {
+						if (pin.stepRefs !== undefined && !Array.isArray(pin.stepRefs))
+							throw new ContractFailure(`${at}.stepRefs`, [
+								{ path: `${at}.stepRefs`, message: "expected array" },
+							]);
+						const parsed: {
+							id: string;
+							version: number;
+							digest: string;
+							stepRefs?: Array<{
+								id: string;
+								version: number;
+								behaviorVersion: number;
+							}>;
+						} = {
+							id: text(pin.id, `${at}.id`),
+							version: integer(pin.version, `${at}.version`, 1),
+							digest: text(pin.digest, `${at}.digest`),
+						};
+						if (Array.isArray(pin.stepRefs))
+							parsed.stepRefs = pin.stepRefs.map((ref, index) => {
+								const item = object(ref, `${at}.stepRefs[${index}]`);
+								return {
+									id: text(item.id, `${at}.stepRefs[${index}].id`),
+									version: integer(
+										item.version,
+										`${at}.stepRefs[${index}].version`,
+										1,
+									),
+									behaviorVersion: integer(
+										item.behaviorVersion,
+										`${at}.stepRefs[${index}].behaviorVersion`,
+										1,
+									),
+								};
+							});
+						return parsed;
+					};
+					return {
+						migrated: {
+							from: parsePin(from, "$.migrated.from"),
+							to: parsePin(to, "$.migrated.to"),
+							reason: boundedText(item.reason, "$.migrated.reason"),
+							at: text(item.at, "$.migrated.at"),
 						},
 					};
 				})()

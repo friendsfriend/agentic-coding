@@ -81,6 +81,37 @@ export async function runRepair(
 	);
 }
 
+export async function runMigrate(
+	rest: string[],
+	workflowEngine: WorkflowEngine,
+	repo: string,
+): Promise<void> {
+	const workflowId = requireFlag(rest, "workflow-id");
+	const targetVersion = Number(requireFlag(rest, "target-version"));
+	if (!Number.isInteger(targetVersion) || targetVersion < 1)
+		throw new Error("migrate: --target-version must be a positive integer");
+	const preview = workflowEngine.previewMigration(
+		repo,
+		workflowId,
+		targetVersion,
+	);
+	if (!rest.includes("--confirm")) {
+		console.log(JSON.stringify(preview, null, 2));
+		return;
+	}
+	if (!preview.compatible)
+		throw new Error(preview.diagnostic ?? "migration target is incompatible");
+	workflowEngine.dispatch(repo, {
+		type: "operator.migrate",
+		workflowId,
+		revision: Number(flag(rest, "revision")),
+		targetVersion,
+		reason: requireFlag(rest, "reason"),
+	});
+	await drainEffects(workflowEngine, repo);
+	console.log(JSON.stringify(workflowEngine.status(repo, workflowId), null, 2));
+}
+
 export async function runRepin(
 	rest: string[],
 	workflowEngine: WorkflowEngine,

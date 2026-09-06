@@ -427,14 +427,17 @@ export function requireRevision(
 }
 export function actions(
 	snapshot: WorkflowSnapshot,
+	definition: CompiledWorkflowDefinition,
 	registry: WorkflowRegistry,
 ): WorkflowActionView[] {
 	if (snapshot.status === "paused")
 		return [{ id: "resume", label: "Resume", confirmation: "confirm" }];
 	return (
-		registry.step(snapshot.currentStep).behavior?.developerActions?.({
-			snapshot,
-		}) ?? []
+		registry
+			.stepForDefinition(definition, snapshot.currentStep)
+			.behavior?.developerActions?.({
+				snapshot,
+			}) ?? []
 	);
 }
 export function validateStructure(
@@ -475,7 +478,8 @@ export function validateStructure(
 			);
 	}
 	if (
-		registry.step(snapshot.currentStep).actor !== "agent" &&
+		registry.stepForDefinition(definition, snapshot.currentStep).actor !==
+			"agent" &&
 		snapshot.step.activeRunIds.length
 	)
 		throw new WorkflowRuntimeError(
@@ -495,11 +499,22 @@ export function validateSnapshot(
 			"pin-mismatch",
 			"pinned definition digest unavailable",
 		);
+	if (
+		JSON.stringify(snapshot.definition.stepRefs ?? null) !==
+		JSON.stringify(definition.stepRefs ?? null)
+	)
+		throw new WorkflowRuntimeError(
+			"pin-mismatch",
+			"pinned step compatibility references unavailable",
+		);
+	for (const stepId of definition.steps)
+		registry.stepForDefinition(definition, stepId);
 	validateStructure(snapshot, definition, runs, registry);
 }
 export function validateEffect(
 	row: EffectRow,
 	snapshot: WorkflowSnapshot,
+	definition: CompiledWorkflowDefinition,
 	runs: WorkflowRun[],
 	registry: WorkflowRegistry,
 ): void {
@@ -510,7 +525,7 @@ export function validateEffect(
 		);
 	const payload = JSON.parse(row.payload_json) as { runId?: unknown };
 	const allowed = registry
-		.step(snapshot.currentStep)
+		.stepForDefinition(definition, snapshot.currentStep)
 		.allowedEffects.includes(row.kind);
 	// Edge effects are enqueued while advancing into delivery. Keep the
 	// approval promotion legal without broadening delivery's effect contract.
@@ -527,7 +542,7 @@ export function validateEffect(
 	const setupBeforeEntry =
 		row.kind === "workspace.setup" &&
 		!snapshot.step.activeRunIds.length &&
-		snapshot.revision === 0;
+		snapshot.currentStep === definition.initial;
 	// Research deliberately starts its agent only after the repository-neutral
 	// workspace setup effect completes. The workflow can receive other
 	// revisions while that effect is pending, so keep that setup effect legal

@@ -45,6 +45,30 @@ The dashboard model-configuration modal displays the effective source and writes
 back to that repository's selected config file, preserving layered-source conflict
 checks.
 
+### Semantic step compatibility
+
+Definitions registered in the `rounds + 300` tier pin `stepRefs` containing the
+step ID, registered step version, and behavior compatibility version. Runtime
+lookups use the definition-aware registry resolver. Legacy ID-only definitions
+remain supported through the explicit built-in baseline mapping at step version
+1; extension steps without a declared legacy mapping fail closed. Step behavior
+compatibility versions are manual semantic identities: changes to outcomes,
+guards, completion aggregation, context transfer, role selection, or effect
+declarations require a new compatibility identity or a validated migration.
+Instruction asset digests are presentation pins and do not contribute to
+semantic step or definition digests. Repin cannot replace semantic references;
+changed references require migration. Historical definition digests and legacy
+snapshots omit `stepRefs` and remain readable. Retain every registered semantic
+step version and behavior identity for as long as a persisted definition can
+reference it; do not garbage-collect a pin that an active or historical
+snapshot needs. ID-only legacy mappings are supported for the lifetime of those
+readable snapshots and may be removed only through an explicit migration policy
+change. Migration is revision-bound, requires a target with the same graph shape
+and semantic pins, preserves non-run lifecycle effects (including setup gating),
+and expires/restarts run ownership. Rollback is not automatic: it is another
+validated migration to a retained compatible target, and graph-changing or
+unpinned targets are rejected.
+
 ## Step ownership
 
 Step knowledge belongs only in `src/workflow/steps/`. The engine, CLI, and
@@ -157,11 +181,13 @@ already set:
 - wikiGate-policy tier: `definitionVersionForPolicy(rounds)` = `rounds + 100`
   — wiki gate, no `policy`.
 - **Manifest-policy tier:** `definitionVersionForManifestPolicy(rounds)` =
-  `rounds + 200` — wiki gate and `policy`. This is the version
-  `startWorkflowInProcess` / `cli.ts`'s `start` command actually use for new
-  workflows.
+  `rounds + 200` — wiki gate and `policy`.
+- **Behavior-pin tier:** `definitionVersionForBehaviorPins(rounds)` =
+  `rounds + 300` — wiki gate, `policy`, and exact semantic `stepRefs`. This is
+  the version `startWorkflowInProcess` / `cli.ts`'s `start` command actually
+  use for new workflows.
 
-All three tiers stay registered; nothing is removed. `start()` reads policy
+All four tiers stay registered; nothing is removed. `start()` reads policy
 through `effectiveManifestPolicy(definition)`, which falls back to the same
 per-id table the manifest-policy tier is built from when a resolved
 definition has no `policy` block (any legacy or wikiGate-policy version).

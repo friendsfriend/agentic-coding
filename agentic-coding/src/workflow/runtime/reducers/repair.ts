@@ -10,7 +10,14 @@ import type {
 	WorkflowRegistry,
 } from "../../registry.ts";
 import { enqueue, enterStep, expireRuns, freshStep } from "../kernel.ts";
-import { nowIso, requireRevision, runs, validateStructure } from "../store.ts";
+import {
+	effects,
+	nowIso,
+	requireRevision,
+	runs,
+	validateSnapshot,
+	validateStructure,
+} from "../store.ts";
 
 export function repin(
 	db: Database,
@@ -33,6 +40,137 @@ export function repin(
 	};
 }
 
+export function migrate(
+	db: Database,
+	snapshot: WorkflowSnapshot,
+	current: CompiledWorkflowDefinition,
+	target: CompiledWorkflowDefinition,
+	command: Extract<WorkflowCommand, { type: "operator.migrate" }>,
+	registry: WorkflowRegistry,
+	now: () => Date,
+): { type: string; actor: unknown; data: unknown } {
+	requireRevision(snapshot, command.revision);
+	if (current.id !== target.id || current.version === target.version)
+		throw new WorkflowRuntimeError(
+			"invalid-migration",
+			"migration must target another version of the current workflow",
+		);
+	if (!command.reason.trim())
+		throw new WorkflowRuntimeError(
+			"invalid-migration",
+			"migration reason is required",
+		);
+	if (
+		JSON.stringify(current.steps) !== JSON.stringify(target.steps) ||
+		JSON.stringify(current.edges) !== JSON.stringify(target.edges) ||
+		current.initial !== target.initial ||
+		JSON.stringify(current.terminal) !== JSON.stringify(target.terminal) ||
+		!target.stepRefs
+	)
+		throw new WorkflowRuntimeError(
+			"invalid-migration",
+			"migration target changes workflow shape or has no semantic pins",
+		);
+	registry.stepForDefinition(target, snapshot.currentStep);
+	const targetSnapshot = structuredClone(snapshot);
+	targetSnapshot.definition = {
+		...targetSnapshot.definition,
+		version: target.version,
+		digest: target.digest,
+		stepRefs: target.stepRefs,
+	};
+	// Validate the persisted state against the target pin before retiring any
+	// ownership. The transaction also validates the post-migration state after
+	// re-entry, but this preflight keeps an incompatible target from partially
+	// changing the workflow before its first mutation.
+	validateSnapshot(
+		targetSnapshot,
+		target,
+		runs(db, snapshot.workflowId),
+		registry,
+	);
+	const activeRunIds = [...snapshot.step.activeRunIds];
+	const workflowEffects = effects(db, snapshot.workflowId);
+	const expiringEffectIds = workflowEffects
+		.filter((effect) => {
+			if (
+				!["pending", "retry", "running"].includes(effect.status) ||
+				!["artifact.write", "agent.launch", "agent.prompt"].includes(
+					effect.kind,
+				)
+			)
+				return false;
+			if (
+				typeof effect.payload !== "object" ||
+				effect.payload === null ||
+				Array.isArray(effect.payload)
+			)
+				return false;
+			const runId = (effect.payload as { runId?: unknown }).runId;
+			return typeof runId === "string" && activeRunIds.includes(runId);
+		})
+		.map((effect) => effect.id);
+	const active = runs(db, snapshot.workflowId).filter(
+		(run) => activeRunIds.includes(run.id) && run.handle,
+	);
+	const setupIncomplete = workflowEffects.some(
+		(effect) =>
+			effect.kind === "workspace.setup" && effect.status !== "completed",
+	);
+	for (const effect of workflowEffects) {
+		if (effect.kind !== "workspace.setup" || effect.status !== "expired")
+			continue;
+		db.query(
+			"UPDATE workflow_outbox SET status='pending', lease=NULL, lease_expires_at=NULL, next_attempt_at=NULL, last_error=NULL WHERE id=? AND status='expired'",
+		).run(effect.id);
+	}
+	const wasPaused = snapshot.status === "paused";
+	// expireRuns retires run-owned work. Keep non-run lifecycle effects: their
+	// stable idempotency keys are the durable entry contract for delivery,
+	// closing, pull-request creation, and workspace setup. Expiring those keys
+	// would make enterStep unable to recreate the required effect.
+	expireRuns(db, snapshot, now, true);
+	for (const run of active)
+		enqueue(
+			db,
+			snapshot,
+			"agent.stop",
+			`migration:${run.id}:${run.generation}`,
+			{
+				runId: run.id,
+			},
+		);
+	const from = snapshot.definition;
+	const to = {
+		id: target.id,
+		version: target.version,
+		digest: target.digest,
+		stepRefs: target.stepRefs,
+	};
+	snapshot.definition = to;
+	snapshot.migrated = { from, to, reason: command.reason, at: nowIso(now) };
+	if (snapshot.status === "attention-required") snapshot.status = "active";
+	snapshot.attention = [];
+	// Migration expires ownership before changing the semantic pin, then
+	// immediately re-enters the current step so an active workflow cannot be
+	// stranded with no run or effect to make progress. Any non-completed initial
+	// setup effect is the gate for the first agent step; retain it and wait for
+	// explicit retry/recovery instead of bypassing workspace setup.
+	if (!setupIncomplete && !wasPaused)
+		enterStep(db, snapshot, target, registry, now);
+	return {
+		type: "operator.migrate",
+		actor: { kind: "operator" },
+		data: {
+			from,
+			to,
+			reason: command.reason,
+			expiredRuns: activeRunIds,
+			expiredEffects: expiringEffectIds,
+		},
+	};
+}
+
 export function repair(
 	db: Database,
 	snapshot: WorkflowSnapshot,
@@ -45,7 +183,8 @@ export function repair(
 	if (
 		!definition.steps.includes(command.targetStep) ||
 		definition.terminal.includes(command.targetStep) ||
-		registry.step(command.targetStep).actor === "system"
+		registry.stepForDefinition(definition, command.targetStep).actor ===
+			"system"
 	)
 		throw new WorkflowRuntimeError(
 			"invalid-repair",

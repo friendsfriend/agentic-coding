@@ -252,7 +252,7 @@ export function transition(
 	registry: WorkflowRegistry,
 	now: () => Date,
 ): void {
-	const step = registry.step(snapshot.currentStep);
+	const step = registry.stepForDefinition(definition, snapshot.currentStep);
 	applyReduction(
 		db,
 		snapshot,
@@ -285,7 +285,7 @@ export function transition(
 	snapshot.currentStep = edge.to;
 	snapshot.metadata.stepEnteredAt = nowIso(now);
 	snapshot.step = freshStep(edge.loop ? prior.attempt + 1 : 1);
-	const destination = registry.step(edge.to);
+	const destination = registry.stepForDefinition(definition, edge.to);
 	const arrival: ArriveResult =
 		destination.behavior?.onArrive?.({
 			snapshot,
@@ -302,7 +302,7 @@ export function transition(
 		if (!arrival.selectedRoles.length) snapshot.step.testRunStarted = true;
 	}
 	const context = resolveArrivalContext(
-		(id) => registry.step(id).behavior,
+		(id) => registry.stepForDefinition(definition, id).behavior,
 		snapshot.definition.id,
 		edge,
 		outcome,
@@ -330,11 +330,11 @@ export function transition(
 export function enterStep(
 	db: Database,
 	snapshot: WorkflowSnapshot,
-	_definition: CompiledWorkflowDefinition,
+	definition: CompiledWorkflowDefinition,
 	registry: WorkflowRegistry,
 	now: () => Date,
 ): void {
-	const step = registry.step(snapshot.currentStep);
+	const step = registry.stepForDefinition(definition, snapshot.currentStep);
 	applyReduction(db, snapshot, step, step.enter(snapshot));
 	const hasLiveRun = (role: string): boolean => {
 		if (
@@ -497,6 +497,7 @@ export function expireRuns(
 	db: Database,
 	snapshot: WorkflowSnapshot,
 	now: () => Date,
+	preserveSetup = false,
 ): void {
 	const runIds = [...snapshot.step.activeRunIds];
 	for (const id of runIds) {
@@ -507,7 +508,7 @@ export function expireRuns(
 			"UPDATE workflow_outbox SET status='expired',lease=NULL,lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry','running') AND kind IN ('artifact.write','agent.launch','agent.prompt') AND json_extract(payload_json,'$.runId')=?",
 		).run(snapshot.workflowId, id);
 	}
-	if (snapshot.definition.id === "research")
+	if (snapshot.definition.id === "research" && !preserveSetup)
 		db.query(
 			"UPDATE workflow_outbox SET status='expired',lease=NULL,lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry','running') AND kind='workspace.setup'",
 		).run(snapshot.workflowId);

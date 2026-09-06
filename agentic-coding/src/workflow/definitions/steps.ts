@@ -6,7 +6,7 @@
 import { createHash } from "node:crypto";
 import type { WorkflowSnapshot } from "../contracts.ts";
 import { AGENT_DEFINITIONS } from "../embedded.generated.ts";
-import type { Reduction, StepDefinition } from "../registry.ts";
+import type { Reduction, StepDefinition, StepReference } from "../registry.ts";
 import { stepBehavior } from "../steps/index.ts";
 import {
 	empty,
@@ -62,7 +62,11 @@ function step(
 	options: Partial<
 		Pick<
 			StepDefinition,
-			"requirements" | "allowedEffects" | "retryLimit" | "output"
+			| "requirements"
+			| "allowedEffects"
+			| "retryLimit"
+			| "output"
+			| "behaviorVersion"
 		>
 	> = {},
 ): StepDefinition {
@@ -70,6 +74,7 @@ function step(
 	return {
 		id,
 		version: 1,
+		behaviorVersion: options.behaviorVersion ?? 1,
 		label,
 		actor,
 		instructionAssets: assets,
@@ -104,6 +109,15 @@ export const COMMON_IMPLEMENTATION_STEPS: readonly string[] = [
 	"core.verification",
 	"core.developer-review",
 ];
+
+/** Convert a graph's stable step IDs into exact semantic references. Graph
+ * edges intentionally continue using IDs so UI and transition identity stay
+ * stable while new definition versions pin implementation compatibility. */
+export function exactStepReferences(
+	stepIds: readonly string[],
+): StepReference[] {
+	return stepIds.map((id) => ({ id, version: 1, behaviorVersion: 1 }));
+}
 
 export const WORKFLOW_STEPS: readonly StepDefinition[] = [
 	step("core.plan", "Planning", "agent", ["complete", "blocked", "failed"], {

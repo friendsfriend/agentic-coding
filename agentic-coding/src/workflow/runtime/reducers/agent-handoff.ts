@@ -96,7 +96,7 @@ export function agentHandoff(
 		output = validated.output;
 		outputDigest = validated.digest;
 	}
-	const step = registry.step(run.stepId);
+	const step = registry.stepForDefinition(definition, run.stepId);
 	if (output !== undefined) output = step.output.parse(output);
 	if (snapshot.definition.id === "research") validateSourceBaseline(snapshot);
 	if (command.outcome === "complete") {
@@ -123,7 +123,7 @@ export function agentHandoff(
 			validateChangeId(primary);
 			snapshot.metadata.changeId = primary;
 		}
-		registry.step(run.stepId).behavior?.validateEvidence?.({ snapshot });
+		step.behavior?.validateEvidence?.({ snapshot });
 		if (run.stepId === "core.wiki") validateSourceBaseline(snapshot);
 		if (run.stepId === "core.triage")
 			validateTriageScope(

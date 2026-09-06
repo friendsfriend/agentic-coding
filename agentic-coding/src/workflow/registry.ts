@@ -25,9 +25,17 @@ export interface StepCommand<T = unknown> {
 	input?: unknown;
 	role?: string;
 }
+export interface StepReference {
+	id: string;
+	version: number;
+	behaviorVersion: number;
+}
+
 export interface StepDefinition<Input = unknown, Output = unknown> {
 	id: string;
 	version: number;
+	/** Explicit compatibility identity for engine-internal step semantics. */
+	behaviorVersion?: number;
 	label: string;
 	actor: ActorKind;
 	instructionAssets: readonly string[];
@@ -81,6 +89,9 @@ export interface WorkflowManifest {
 	initial: string;
 	terminal: readonly string[];
 	steps: readonly string[];
+	/** Exact step identities for new definition versions. Historical manifests
+	 * intentionally omit this field so their digest format is unchanged. */
+	stepRefs?: readonly StepReference[];
 	edges: readonly WorkflowEdge[];
 	/** Optional per-manifest restriction for steps that expose more outcomes
 	 * than this workflow can legally use (for example, wiki completion). */
@@ -91,8 +102,29 @@ export interface WorkflowManifest {
 export interface CompiledWorkflowDefinition extends WorkflowManifest {
 	digest: string;
 	stepDigests: Readonly<Record<string, string>>;
+	readonly stepRefs?: readonly StepReference[];
 }
 const ID = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/;
+// This is deliberately an explicit allowlist. It is the compatibility claim
+// for manifests written before stepRefs existed, not a promise that arbitrary
+// extension steps behaved like the current implementation.
+const LEGACY_STEP_BASELINE = new Set([
+	"core.plan",
+	"fusion.plan",
+	"fusion.consolidate",
+	"core.plan-approval",
+	"core.implementation",
+	"core.triage",
+	"core.verification",
+	"core.developer-review",
+	"core.wiki",
+	"core.wiki-approval",
+	"core.research",
+	"core.archive",
+	"core.delivery",
+	"core.completed",
+	"core.closed",
+]);
 function serializable(value: unknown): unknown {
 	if (Array.isArray(value)) return value.map(serializable);
 	if (value && typeof value === "object")
@@ -149,6 +181,11 @@ export class WorkflowRegistry {
 			step.version < 1
 		)
 			throw new Error(`invalid step identity: ${step.id}@${step.version}`);
+		if (
+			step.behaviorVersion !== undefined &&
+			(!Number.isInteger(step.behaviorVersion) || step.behaviorVersion < 1)
+		)
+			throw new Error(`invalid behavior compatibility version for ${step.id}`);
 		if (!["agent", "developer", "system"].includes(step.actor))
 			throw new Error(`unknown actor for ${step.id}: ${step.actor}`);
 		if (step.actor === "agent") {
@@ -243,8 +280,38 @@ export class WorkflowRegistry {
 					`contradictory policy in ${manifest.id}: checkoutRequired outside repository target`,
 				);
 		}
-		const steps = new Map(manifest.steps.map((id) => [id, this.step(id)]));
+		const refs = manifest.stepRefs;
+		if (refs) {
+			if (
+				refs.length !== manifest.steps.length ||
+				new Set(refs.map((ref) => ref.id)).size !== refs.length ||
+				refs.some(
+					(ref) =>
+						!ID.test(ref.id) ||
+						!Number.isInteger(ref.version) ||
+						ref.version < 1 ||
+						!Number.isInteger(ref.behaviorVersion) ||
+						ref.behaviorVersion < 1,
+				)
+			)
+				throw new Error(`invalid step references in ${manifest.id}`);
+			for (const id of manifest.steps)
+				if (!refs.some((ref) => ref.id === id))
+					throw new Error(`missing step reference in ${manifest.id}: ${id}`);
+		}
+		const steps = new Map(
+			manifest.steps.map((id) => {
+				const ref = refs?.find((candidate) => candidate.id === id);
+				return [id, this.step(id, ref?.version ?? 1)] as const;
+			}),
+		);
 		for (const [id, step] of steps) {
+			const ref = refs?.find((candidate) => candidate.id === id);
+			if (ref && (step.behaviorVersion ?? 1) !== ref.behaviorVersion)
+				throw new Error(
+					`step behavior compatibility mismatch in ${manifest.id}: ${id}@${ref.version} (pinned ${ref.behaviorVersion}, registered ${step.behaviorVersion ?? 1})`,
+				);
+
 			if (step.actor !== "agent") continue;
 			if (!step.behavior) throw new Error(`missing step behavior: ${id}`);
 			const candidateRoles = step.behavior.candidateRoles;
@@ -358,6 +425,13 @@ export class WorkflowRegistry {
 		const compiled: CompiledWorkflowDefinition = {
 			...manifest,
 			steps: Object.freeze([...manifest.steps]),
+			...(refs
+				? {
+						stepRefs: Object.freeze(
+							refs.map((ref) => Object.freeze({ ...ref })),
+						),
+					}
+				: {}),
 			terminal: Object.freeze([...manifest.terminal]),
 			edges: Object.freeze(
 				manifest.edges.map((edge) => Object.freeze({ ...edge })),
@@ -386,6 +460,38 @@ export class WorkflowRegistry {
 	step(id: string, version = 1): Readonly<StepDefinition> {
 		const step = this.#steps.get(`${id}@${version}`);
 		if (!step) throw new Error(`missing step definition: ${id}@${version}`);
+		return step;
+	}
+	/** Resolve a step using the definition's exact semantic reference. Legacy
+	 * ID-only manifests are supported only for the built-in baseline (step
+	 * version 1); unknown mappings fail closed instead of silently selecting the
+	 * current default implementation. */
+	stepForDefinition(
+		definition: Pick<WorkflowManifest, "id" | "steps" | "stepRefs">,
+		id: string,
+	): Readonly<StepDefinition> {
+		if (!definition.steps.includes(id))
+			throw new Error(
+				`step ${id} is not in workflow definition ${definition.id}`,
+			);
+		const ref = definition.stepRefs?.find((candidate) => candidate.id === id);
+		if (definition.stepRefs && !ref)
+			throw new Error(
+				`missing pinned step reference for ${definition.id}: ${id}`,
+			);
+		if (!ref) {
+			if (!LEGACY_STEP_BASELINE.has(id))
+				throw new Error(
+					`unsupported legacy step compatibility mapping: ${definition.id}/${id}`,
+				);
+			return this.step(id, 1);
+		}
+		const step = this.step(ref.id, ref.version);
+		const behaviorVersion = step.behaviorVersion ?? 1;
+		if (behaviorVersion !== ref.behaviorVersion)
+			throw new Error(
+				`step behavior compatibility mismatch for ${definition.id}: ${id}@${ref.version}`,
+			);
 		return step;
 	}
 	definition(

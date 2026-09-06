@@ -5,7 +5,7 @@ import type { Database } from "bun:sqlite";
 import type { WorkflowView } from "../contracts.ts";
 import { parseSnapshot, WorkflowRuntimeError } from "../contracts.ts";
 import type { WorkflowRegistry } from "../registry.ts";
-import type { RepairPreview } from "./engine-types.ts";
+import type { MigrationPreview, RepairPreview } from "./engine-types.ts";
 import { migrateLegacy } from "./migration.ts";
 import {
 	ACTIVE_RUN,
@@ -92,7 +92,7 @@ export function view(
 				label: `Retry ${effect.kind}`,
 				confirmation: "confirm" as const,
 			}));
-		const availableActions = actions(snapshot, registry).filter(
+		const availableActions = actions(snapshot, definition, registry).filter(
 			(action) =>
 				action.id !== "create-pr" ||
 				!effectList.some((effect) => effect.kind === "pull-request.create"),
@@ -134,7 +134,8 @@ export function view(
 			updatedAt: snapshot.metadata.updatedAt,
 			currentStep: {
 				id: snapshot.currentStep,
-				label: registry.step(snapshot.currentStep).label,
+				label: registry.stepForDefinition(definition, snapshot.currentStep)
+					.label,
 				attempt: snapshot.step.attempt,
 				enteredAt: snapshot.metadata.stepEnteredAt,
 				...(snapshot.step.context !== undefined
@@ -377,6 +378,141 @@ export function list(
 	}
 }
 
+const MIGRATION_RUN_EFFECT_KINDS = new Set([
+	"artifact.write",
+	"agent.launch",
+	"agent.prompt",
+]);
+function migrationExpiresEffect(
+	effect: ReturnType<typeof effects>[number],
+	runIds: ReadonlySet<string>,
+): boolean {
+	if (!MIGRATION_RUN_EFFECT_KINDS.has(effect.kind)) return false;
+	if (
+		typeof effect.payload !== "object" ||
+		effect.payload === null ||
+		Array.isArray(effect.payload)
+	)
+		return false;
+	const runId = (effect.payload as { runId?: unknown }).runId;
+	return typeof runId === "string" && runIds.has(runId);
+}
+
+export function previewMigration(
+	repo: string,
+	workflowId: string,
+	targetVersion: number,
+	registry: WorkflowRegistry,
+): MigrationPreview {
+	const db = openStore(repo);
+	try {
+		const row = instance(db, workflowId);
+		const snapshot = parseSnapshot(JSON.parse(row.snapshot_json));
+		const current = registry.definition(
+			snapshot.definition.id,
+			snapshot.definition.version,
+			snapshot.definition.digest,
+		);
+		let target: ReturnType<WorkflowRegistry["definition"]> | undefined;
+		let diagnostic: string | undefined;
+		try {
+			target = registry.definition(snapshot.definition.id, targetVersion);
+		} catch (error) {
+			diagnostic = String((error as Error).message);
+		}
+		const refs = (definition: typeof current) =>
+			new Map(
+				(
+					definition.stepRefs ??
+					definition.steps.map((id) => ({
+						id,
+						version: 1,
+						behaviorVersion: 1,
+					}))
+				).map((ref) => [ref.id, ref]),
+			);
+		const before = new Map(
+			(
+				snapshot.definition.stepRefs ??
+				current.steps.map((id) => ({
+					id,
+					version: 1,
+					behaviorVersion: 1,
+				}))
+			).map((ref) => [ref.id, ref]),
+		);
+		const after = target ? refs(target) : new Map();
+		const semanticChanges = [...new Set([...before.keys(), ...after.keys()])]
+			.map((stepId) => {
+				const from = before.get(stepId);
+				const to = after.get(stepId);
+				return from?.version !== to?.version ||
+					from?.behaviorVersion !== to?.behaviorVersion
+					? {
+							stepId,
+							from: from
+								? {
+										version: from.version,
+										behaviorVersion: from.behaviorVersion,
+									}
+								: null,
+							to: to
+								? { version: to.version, behaviorVersion: to.behaviorVersion }
+								: null,
+						}
+					: undefined;
+			})
+			.filter((change) => change !== undefined);
+		const runsList = runs(db, workflowId).filter((run) =>
+			ACTIVE_RUN.has(run.status),
+		);
+		const effectsList = effects(db, workflowId).filter((effect) =>
+			["pending", "retry", "running"].includes(effect.status),
+		);
+		const activeRunIds = new Set(snapshot.step.activeRunIds);
+		const expiringEffects = effectsList.filter((effect) =>
+			migrationExpiresEffect(effect, activeRunIds),
+		);
+		const graphCompatible =
+			target !== undefined &&
+			JSON.stringify(current.steps) === JSON.stringify(target.steps) &&
+			JSON.stringify(current.edges) === JSON.stringify(target.edges) &&
+			current.initial === target.initial &&
+			JSON.stringify(current.terminal) === JSON.stringify(target.terminal);
+		const semanticPinsAvailable = target?.stepRefs !== undefined;
+		const compatible =
+			!diagnostic &&
+			graphCompatible &&
+			semanticPinsAvailable &&
+			targetVersion !== snapshot.definition.version;
+		return {
+			workflowId,
+			revision: snapshot.revision,
+			from: snapshot.definition,
+			to: target
+				? { id: target.id, version: target.version, digest: target.digest }
+				: { id: snapshot.definition.id, version: targetVersion, digest: "" },
+			semanticChanges,
+			expiresRuns: runsList
+				.filter((run) => activeRunIds.has(run.id))
+				.map((run) => run.id),
+			expiresEffects: expiringEffects.map((effect) => effect.id),
+			compatible,
+			...(compatible
+				? {}
+				: {
+						diagnostic:
+							diagnostic ??
+							(!graphCompatible || !semanticPinsAvailable
+								? "migration target changes workflow shape or has no semantic pins"
+								: "migration target must use another version"),
+					}),
+		};
+	} finally {
+		db.close();
+	}
+}
+
 export function previewRepair(
 	repo: string,
 	workflowId: string,
@@ -398,11 +534,11 @@ export function previewRepair(
 			.filter(
 				(stepId) =>
 					!definition.terminal.includes(stepId) &&
-					registry.step(stepId).actor !== "system",
+					registry.stepForDefinition(definition, stepId).actor !== "system",
 			)
 			.map((stepId) => ({
 				targetStep: stepId,
-				label: registry.step(stepId).label,
+				label: registry.stepForDefinition(definition, stepId).label,
 				expiresRuns: activeRuns.map((run) => run.id),
 				retainedEvidence: snapshot.evidence.map((item) => item.digest),
 			}));

@@ -47,3 +47,18 @@ export interface RepairPreview {
 	expiresRuns: string[];
 	retainedEvidence: string[];
 }
+export interface MigrationPreview {
+	workflowId: string;
+	revision: number;
+	from: { id: string; version: number; digest: string };
+	to: { id: string; version: number; digest: string };
+	semanticChanges: Array<{
+		stepId: string;
+		from: { version: number; behaviorVersion: number } | null;
+		to: { version: number; behaviorVersion: number } | null;
+	}>;
+	expiresRuns: string[];
+	expiresEffects: string[];
+	compatible: boolean;
+	diagnostic?: string;
+}

@@ -12,6 +12,7 @@ export type {
 export { researchHandoffContract } from "./definitions/contracts.ts";
 export { definitionVersionForPolicy } from "./definitions/edges.ts";
 export {
+	definitionVersionForBehaviorPins,
 	definitionVersionForManifestPolicy,
 	effectiveManifestPolicy,
 } from "./definitions/manifest-policy.ts";

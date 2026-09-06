@@ -4,7 +4,7 @@
 import type { HerdrPort } from "../adapters.ts";
 import { isPaneLive, resolveLiveAgent } from "../effect-runner.ts";
 import type { WorkflowEngine } from "../runtime.ts";
-import { stepBehavior } from "../steps/index.ts";
+import { registry as defaultRegistry } from "./registry.ts";
 
 export function verificationPosition(
 	round: Array<{ id: string }>,
@@ -33,7 +33,15 @@ export function paneForRunFactory(
 		const snapshot = workflowEngine.getSnapshot(repo, run.workflowId);
 		if (!snapshot.metadata.workspace)
 			throw new Error("workflow workspace unavailable");
-		const roundScoped = stepBehavior(run.stepId).roundScoped === true;
+		const stepRegistry = workflowEngine.registry ?? defaultRegistry;
+		const definition = stepRegistry.definition(
+			snapshot.definition.id,
+			snapshot.definition.version,
+			snapshot.definition.digest,
+		);
+		const roundScoped =
+			stepRegistry.stepForDefinition(definition, run.stepId).behavior
+				?.roundScoped === true;
 		// Adopt any live agent's pane instead of spawning a duplicate; fall
 		// through to geometry or tab creation only when no agent resolves.
 		const resolved = resolveLiveAgent(
@@ -41,6 +49,7 @@ export function paneForRunFactory(
 			snapshot.workflowId,
 			snapshot.definition.id,
 			run,
+			stepRegistry.stepForDefinition(definition, run.stepId),
 		);
 		if (resolved) return { paneId: resolved.paneId, owned: false };
 		if (roundScoped) {
@@ -49,7 +58,8 @@ export function paneForRunFactory(
 				.runs.map((item) => workflowEngine.getRun(repo, item.id))
 				.filter(
 					(item) =>
-						stepBehavior(item.stepId).roundScoped === true &&
+						stepRegistry.stepForDefinition(definition, item.stepId).behavior
+							?.roundScoped === true &&
 						item.attempt === run.attempt &&
 						!["expired", "failed"].includes(item.status),
 				); // rowid order = launch order; a createdAt/id tiebreak shuffles same-ms runs
@@ -110,6 +120,7 @@ export function paneForRunFactory(
 						snapshot.workflowId,
 						snapshot.definition.id,
 						sibling,
+						stepRegistry.stepForDefinition(definition, sibling.stepId),
 					);
 					if (resolved) resolvedSiblings.set(sibling.id, resolved.paneId);
 				}

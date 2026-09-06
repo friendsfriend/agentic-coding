@@ -4,12 +4,18 @@
 // Moved verbatim out of definitions.ts (split-workflow-god-modules).
 import type { WorkflowManifest, WorkflowManifestPolicy } from "../registry.ts";
 
-/** The version the app actually starts new workflows against — see D1. Prior
- * tiers (legacy `wikiGate=false`, and the `wikiGate=true` tier without a
- * `policy` block) stay registered so in-flight workflows pinned to them keep
- * dispatching without repair. */
+/** Historical manifest-policy version tier. The behavior-pin tier is the
+ * version used for new workflows; this tier stays registered so in-flight
+ * workflows pinned to it keep dispatching without repair. */
 export function definitionVersionForManifestPolicy(rounds: number): number {
 	return rounds + 200;
+}
+
+/** Version tier for definitions that pin exact step and behavior identities.
+ * Keeping this separate preserves both legacy digest formats and the already
+ * published manifest-policy tier. */
+export function definitionVersionForBehaviorPins(rounds: number): number {
+	return rounds + 300;
 }
 
 const MANIFEST_POLICY: Readonly<Record<string, WorkflowManifestPolicy>> = {

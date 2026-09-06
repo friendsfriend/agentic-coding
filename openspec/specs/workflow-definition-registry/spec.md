@@ -2,26 +2,29 @@
 
 ## Purpose
 Defines rigid, versioned workflow and step contracts that remain easy to compose and can later be registered by trusted workflow plugins without changing runtime semantics.
-
 ## Requirements
-
 ### Requirement: Registered step contract
-The system SHALL represent every workflow step as a registered, versioned definition with a stable identifier, actor kind, input and output contract, permitted outcomes, entry and completion validation, instruction assets when applicable, allowlisted external effects, and a declarative step behavior block that carries the step's own engine-internal semantics. The behavior block SHALL cover the step's agent role selection, entry guards, arrival semantics, entry effects, developer actions, and assignment inputs. The behavior block SHALL NOT contribute to the step digest or the workflow definition digest, so declaring or changing behavior SHALL NOT invalidate any existing pinned workflow.
+The system SHALL represent every workflow step as a registered, versioned definition with a stable identifier, actor kind, input and output contract, permitted outcomes, entry and completion validation, instruction assets when applicable, allowlisted external effects, and a declarative step behavior block carrying the step's engine-internal semantics. The behavior block SHALL cover agent role selection, entry guards, arrival semantics, entry effects, developer actions, and assignment inputs. New definition versions SHALL bind executable semantics through explicit behavior compatibility versions rather than function-source hashes. Supported historical digest formats SHALL remain unchanged through an explicit legacy compatibility mapping; moving equivalent behavior SHALL not by itself invalidate a pin.
 
 #### Scenario: Built-in step is registered
-- **WHEN** engine initializes its built-in step catalog
+- **WHEN** the engine initializes its built-in step catalog
 - **THEN** every step SHALL expose all required contract fields
 - **AND** no command handler SHALL provide an unregistered lifecycle path around the step contract
 
 #### Scenario: Step output is incompatible
 - **WHEN** a run submits output that does not satisfy its pinned step output contract
-- **THEN** engine SHALL reject completion without changing workflow state
+- **THEN** the engine SHALL reject completion without changing workflow state
 - **AND** rejection SHALL identify the failed contract
 
-#### Scenario: Behavior is declared without moving a digest
-- **WHEN** the built-in step catalog is registered with declared step behavior
-- **THEN** every registered workflow definition digest and every step digest SHALL be identical to the value produced before behavior was declared
-- **AND** an existing workflow pinned to that definition SHALL continue to dispatch without repair or migration
+#### Scenario: Equivalent behavior is relocated
+- **WHEN** registered behavior is refactored without changing its declared compatible semantics
+- **THEN** historical definition and step digests SHALL remain unchanged
+- **AND** supported existing workflows SHALL continue dispatching without repair or migration
+
+#### Scenario: Behavior changes incompatibly
+- **WHEN** a step's guards, outcomes, aggregation, role selection, context transfer, or effect behavior changes incompatibly
+- **THEN** the changed implementation SHALL have a distinct semantic compatibility identity
+- **AND** it SHALL not silently replace the implementation resolved by an existing pin
 
 #### Scenario: Behavior declares no agent roles for an agent step
 - **WHEN** a step whose actor kind is `agent` is registered with a behavior block that resolves to no roles
@@ -81,17 +84,31 @@ A registered step or workflow extension SHALL affect only definitions that expli
 - **AND** engine SHALL NOT infer plugin insertion order from discovery order
 
 ### Requirement: Definition pinning
-Each workflow SHALL pin exact workflow-definition identifier, version, and digest for its lifetime unless a validated migration changes that pin.
+Each workflow SHALL pin its exact workflow-definition identifier, version, and digest for its lifetime unless a validated migration changes that pin. New-definition pins SHALL also determine exact executable step and behavior compatibility versions. Supported legacy pins SHALL resolve through explicit compatibility mappings, never an implicit current-version fallback.
 
 #### Scenario: Workflow starts
-- **WHEN** start command accepts a workflow definition
-- **THEN** persisted workflow SHALL record exact definition identifier, version, and digest
-- **AND** all later commands SHALL evaluate against that pinned definition
+- **WHEN** a start command accepts a workflow definition
+- **THEN** the persisted workflow SHALL record its exact definition identity and enough semantic identity to resolve the accepted step implementations
+- **AND** all later commands and effects SHALL evaluate against those implementations
 
 #### Scenario: Registry definition changes
-- **WHEN** registered definition digest no longer matches active workflow pin
-- **THEN** workflow SHALL become blocked before further mutation
-- **AND** engine SHALL require matching definition restoration or validated migration rather than reinterpret state
+- **WHEN** a registered definition digest or required semantic compatibility identity no longer matches an active workflow pin
+- **THEN** the workflow SHALL be blocked before further mutation or effect execution
+- **AND** the engine SHALL require matching implementation restoration or validated migration rather than reinterpret state
+
+#### Scenario: Supported legacy workflow is loaded
+- **WHEN** an existing step-ID-only definition has a declared supported baseline mapping
+- **THEN** the engine SHALL resolve that baseline without rewriting its historical digest
+- **AND** missing or incompatible mappings SHALL fail closed with a compatibility diagnostic
+
+#### Scenario: Semantic migration is accepted
+- **WHEN** an operator confirms a compatible migration with current revision, reason, and a preview of affected runs/effects
+- **THEN** the engine SHALL validate the target state, expire incompatible ownership, and atomically record old/new pins and the migration event
+- **AND** an ordinary digest-only repin SHALL not bypass these checks
+
+#### Scenario: Semantic migration fails
+- **WHEN** target compatibility, evidence, revision, or persistence validation fails
+- **THEN** the prior pins, run ownership, state, and pending effects SHALL remain unchanged
 
 ### Requirement: Plugin-grade built-in registry seam
 Built-in steps and workflows SHALL register through the same public definition contract reserved for future trusted workflow plugins, while this release SHALL NOT automatically discover or execute external workflow plugin code.
@@ -106,6 +123,7 @@ Built-in steps and workflows SHALL register through the same public definition c
 - **WHEN** an unconfigured package or file exports workflow definitions
 - **THEN** the engine SHALL NOT load or execute it automatically
 - **AND** no filesystem discovery order SHALL affect registered workflows
+
 ### Requirement: Step-owned agent role selection
 Agent role selection for a step SHALL be a property of that step's registered definition and SHALL have exactly one source of truth. The engine, the command-line surface, and the dashboard SHALL each read roles from the registered step definition rather than deriving, duplicating, or re-implementing role logic. Resolution MAY depend only on the workflow snapshot supplied to it — its pinned definition identity and its resolved routing — so the same step and snapshot SHALL always resolve the same roles regardless of which consumer asks.
 
@@ -199,3 +217,21 @@ A workflow manifest SHALL declare its execution policy — the kind of target it
 - **WHEN** a manifest declares a policy with an unknown target kind or a contradictory requirement combination
 - **THEN** registration SHALL be rejected identifying the manifest
 - **AND** no partially registered catalog SHALL be exposed
+
+### Requirement: Exact step-version resolution
+New workflow definitions SHALL reference exact registered step versions, and all workflow-dependent registry lookups SHALL use those references. Multiple versions of the same stable step ID SHALL coexist without changing existing definitions.
+
+#### Scenario: Two step versions coexist
+- **WHEN** old and new workflows reference different versions of one stable step ID
+- **THEN** each SHALL use its own version for guards, role routing, completion, assignment contracts, effect legality, and view metadata
+- **AND** neither SHALL fall back to step version 1 or the most recently registered version
+
+#### Scenario: Exact referenced version is unavailable
+- **WHEN** a manifest references an unavailable step or behavior compatibility version
+- **THEN** registration or workflow loading SHALL fail with the missing identity before execution
+
+#### Scenario: Presentation-only instructions change
+- **WHEN** only instruction presentation or labels change without changing semantic contracts
+- **THEN** semantic pins SHALL not change solely because of function formatting or instruction text
+- **AND** rendered assignments SHALL continue recording their instruction asset digests
+

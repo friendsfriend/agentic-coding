@@ -4,7 +4,7 @@ import { runGit } from "./cli/git.ts";
 import { registry as defaultRegistry } from "./cli/registry.ts";
 import type { WorkflowRouting } from "./contracts.ts";
 import {
-	definitionVersionForManifestPolicy,
+	definitionVersionForBehaviorPins,
 	PUBLIC_WORKFLOW_CATALOG,
 	registerBuiltins,
 } from "./definitions.ts";
@@ -131,12 +131,17 @@ export function validateStart(
 export function rolesForDefinition(
 	definitionId: string,
 	steps: readonly string[],
-	registry: Pick<WorkflowRegistry, "step"> = defaultRegistry,
+	registry: Pick<
+		WorkflowRegistry,
+		"step" | "stepForDefinition"
+	> = defaultRegistry,
 	fusionPlannerCount = 0,
+	definition?: ReturnType<WorkflowRegistry["definition"]>,
 ): Record<string, string[]> {
 	const roles: Record<string, string[]> = {};
+	const pinned = definition ?? { id: definitionId, steps };
 	for (const stepId of steps) {
-		const step = registry.step(stepId);
+		const step = registry.stepForDefinition(pinned, stepId);
 		if (step.actor !== "agent") continue;
 		const candidateRoles = step.behavior?.candidateRoles;
 		if (!candidateRoles)
@@ -190,6 +195,7 @@ function resolveRoutingForStart(
 		definition.steps,
 		registry,
 		count,
+		definition,
 	);
 	if (preset)
 		validatePresetCoverage(preset, definition, Object.keys(roles), agents);
@@ -273,7 +279,7 @@ export function prepareWorkflowStart(
 		repositoryIndependent: independent,
 	});
 	const config = resolved.config;
-	const definitionVersion = definitionVersionForManifestPolicy(
+	const definitionVersion = definitionVersionForBehaviorPins(
 		config.workflow.max_verification_rounds,
 	);
 	const registry = registerBuiltins(
@@ -297,7 +303,10 @@ export function prepareWorkflowStart(
 		? enforceResearchReadOnlyRouting(routing, definition.initial)
 		: routing;
 	for (const route of finalRouting.routes)
-		preflightProfile(route.profile, registry.step(route.stepId).requirements);
+		preflightProfile(
+			route.profile,
+			registry.stepForDefinition(definition, route.stepId).requirements,
+		);
 	if (!wikiOnly)
 		validateStart(repo, workflowId, request.definitionId, request.task);
 	const sameCheckout = [
