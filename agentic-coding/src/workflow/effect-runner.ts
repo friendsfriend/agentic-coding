@@ -13,7 +13,7 @@ import type { AgentHandle, Assignment, EffectKind } from "./contracts.ts";
 import { type CredentialPrompt, runGitWithCredentials } from "./credentials.ts";
 import { loadConfig } from "./effects.ts";
 import { childTrace, parseTraceparent, traceparent } from "./observability.ts";
-import type { WorkflowRegistry } from "./registry.ts";
+import type { StepDefinition, WorkflowRegistry } from "./registry.ts";
 import {
 	type ClaimedEffect,
 	changedFilesIn,
@@ -538,12 +538,15 @@ export function agentEffectHandlers(
 			async observe(effect, signal) {
 				const run = engine.getRun(repo, runId(effect));
 				const snapshot = engine.getSnapshot(repo, run.workflowId);
+				const definition = snapshotDefinition(snapshot, options.registry);
+				const step = options.registry.stepForDefinition(definition, run.stepId);
 				const resolved = await resolveLiveAgentAsync(
 					options.herdr,
 					snapshot.workflowId,
 					snapshot.definition.id,
 					run,
 					signal,
+					step,
 				);
 				if (!resolved) return undefined;
 				try {
@@ -598,10 +601,18 @@ export function agentEffectHandlers(
 			async execute(effect, signal) {
 				const run = engine.getRun(repo, runId(effect));
 				const snapshot = engine.getSnapshot(repo, run.workflowId);
-				const step = options.registry.step(run.stepId);
+				const step = options.registry.stepForDefinition(
+					snapshotDefinition(snapshot, options.registry),
+					run.stepId,
+				);
 				const token =
 					effect.runToken ?? engine.issueRunCapability(repo, run.id);
-				const assignment = assignmentFor(run, snapshot, token);
+				const assignment = assignmentFor(
+					run,
+					snapshot,
+					token,
+					options.registry,
+				);
 				const assetRoot = workflowAssets(
 					snapshot.metadata.worktree,
 					snapshot.workflowId,
@@ -622,6 +633,7 @@ export function agentEffectHandlers(
 					snapshot.workflowId,
 					snapshot.definition.id,
 					run,
+					step,
 				);
 				// The telemetry bridge recovers the run env through this pointer, so it
 				// must exist before the agent process boots inside adapter.launch.
@@ -1217,8 +1229,11 @@ async function ensureWorkspaceTabs(
 		}
 	}
 }
-function roundScoped(stepId: string): boolean {
-	return stepBehavior(stepId).roundScoped === true;
+function roundScoped(
+	stepId: string,
+	step?: Pick<StepDefinition, "behavior">,
+): boolean {
+	return (step?.behavior ?? stepBehavior(stepId)).roundScoped === true;
 }
 /**
  * Canonical Herdr agent name for a workflow-managed agent.
@@ -1238,12 +1253,13 @@ export function canonicalAgentName(
 	workflowId: string,
 	definitionId: string,
 	run: { stepId: string; role: string; id: string },
+	step?: Pick<StepDefinition, "behavior">,
 ): string {
 	const hash = createHash("sha256")
 		.update(`${workflowId}\n${definitionId}\n${run.stepId}\n${run.role}`)
 		.digest("hex")
 		.slice(0, 8);
-	if (!roundScoped(run.stepId)) return `${run.role}-${hash}`;
+	if (!roundScoped(run.stepId, step)) return `${run.role}-${hash}`;
 	const shortRole = run.role.endsWith("-verifier")
 		? `${run.role.slice(0, -9)}-verif`
 		: run.role;
@@ -1258,8 +1274,9 @@ export function canonicalAgentName(
 export function legacyRunName(
 	workflowId: string,
 	run: { stepId: string; role: string; id: string },
+	step?: Pick<StepDefinition, "behavior">,
 ): string {
-	const suffix = roundScoped(run.stepId)
+	const suffix = roundScoped(run.stepId, step)
 		? `-${run.role}-${run.id.slice(0, 8)}`
 		: `-${run.role}`;
 	const head = workflowId.slice(0, Math.max(1, 32 - suffix.length));
@@ -1344,8 +1361,9 @@ export async function resolveLiveAgentAsync(
 	definitionId: string,
 	run: { stepId: string; role: string; id: string; handle?: AgentHandle },
 	signal?: AbortSignal,
+	step?: Pick<StepDefinition, "behavior">,
 ): Promise<LiveAgent | undefined> {
-	const canonical = canonicalAgentName(workflowId, definitionId, run);
+	const canonical = canonicalAgentName(workflowId, definitionId, run, step);
 	if (run.handle?.paneId) {
 		const live = await getLiveAgentAsync(herdr, run.handle.paneId, signal);
 		if (live && live.pane_id === run.handle.paneId)
@@ -1353,7 +1371,7 @@ export async function resolveLiveAgentAsync(
 	}
 	const byCanonical = await getLiveAgentAsync(herdr, canonical, signal);
 	if (byCanonical) return adopt(canonical, byCanonical);
-	const legacy = legacyRunName(workflowId, run);
+	const legacy = legacyRunName(workflowId, run, step);
 	if (legacy === canonical) return undefined;
 	const byLegacy = await getLiveAgentAsync(herdr, legacy, signal);
 	return byLegacy ? adopt(canonical, byLegacy) : undefined;
@@ -1364,8 +1382,9 @@ export function resolveLiveAgent(
 	workflowId: string,
 	definitionId: string,
 	run: { stepId: string; role: string; id: string; handle?: AgentHandle },
+	step?: Pick<StepDefinition, "behavior">,
 ): LiveAgent | undefined {
-	const canonical = canonicalAgentName(workflowId, definitionId, run);
+	const canonical = canonicalAgentName(workflowId, definitionId, run, step);
 	if (run.handle?.paneId) {
 		const live = getLiveAgent(herdr, run.handle.paneId);
 		if (live && live.pane_id === run.handle.paneId)
@@ -1373,7 +1392,7 @@ export function resolveLiveAgent(
 	}
 	const byCanonical = getLiveAgent(herdr, canonical);
 	if (byCanonical) return adopt(canonical, byCanonical);
-	const legacy = legacyRunName(workflowId, run);
+	const legacy = legacyRunName(workflowId, run, step);
 	if (legacy === canonical) return undefined;
 	const byLegacy = getLiveAgent(herdr, legacy);
 	return byLegacy ? adopt(canonical, byLegacy) : undefined;
@@ -1441,6 +1460,16 @@ export const effectRunnerTest = {
 	writeAgentEnvPointer,
 	renderedAssignment,
 };
+function snapshotDefinition(
+	snapshot: ReturnType<WorkflowEngine["getSnapshot"]>,
+	registry: WorkflowRegistry,
+) {
+	return registry.definition(
+		snapshot.definition.id,
+		snapshot.definition.version,
+		snapshot.definition.digest,
+	);
+}
 function renderedAssignment(
 	engine: WorkflowEngine,
 	repo: string,
@@ -1450,8 +1479,11 @@ function renderedAssignment(
 ) {
 	const run = engine.getRun(repo, runId);
 	const snapshot = engine.getSnapshot(repo, run.workflowId);
-	const step = registry.step(run.stepId);
-	const assignment = assignmentFor(run, snapshot, token);
+	const step = registry.stepForDefinition(
+		snapshotDefinition(snapshot, registry),
+		run.stepId,
+	);
+	const assignment = assignmentFor(run, snapshot, token, registry);
 	return {
 		run,
 		assignment,
@@ -1477,6 +1509,7 @@ function assignmentFor(
 	run: ReturnType<WorkflowEngine["getRun"]>,
 	snapshot: ReturnType<WorkflowEngine["getSnapshot"]>,
 	token: string,
+	registry: WorkflowRegistry,
 ): Assignment {
 	const output =
 		run.outputPath && run.outputSchema
@@ -1568,10 +1601,12 @@ function assignmentFor(
 					JSON.stringify(context),
 				]
 			: [];
-	const hooked = stepBehavior(run.stepId).assignmentInputs?.({
-		snapshot,
-		run: { stepId: run.stepId, role: run.role, profile: run.profile },
-	});
+	const hooked = registry
+		.stepForDefinition(snapshotDefinition(snapshot, registry), run.stepId)
+		.behavior?.assignmentInputs?.({
+			snapshot,
+			run: { stepId: run.stepId, role: run.role, profile: run.profile },
+		});
 	const inputs = [
 		...(snapshot.metadata.task
 			? [hooked?.taskLine ?? `Task: ${snapshot.metadata.task}`]

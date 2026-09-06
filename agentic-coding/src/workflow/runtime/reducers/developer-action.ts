@@ -128,7 +128,7 @@ export function developerAction(
 			data: { actionId: command.actionId, settings: preview.settings },
 		};
 	}
-	const action = actions(snapshot, registry).find(
+	const action = actions(snapshot, definition, registry).find(
 		(item) => item.id === command.actionId,
 	);
 	if (!action)
@@ -257,7 +257,7 @@ export function developerAction(
 				snapshot.revision,
 			);
 		registry
-			.step(snapshot.currentStep)
+			.stepForDefinition(definition, snapshot.currentStep)
 			.reduce(snapshot, { outcome: "create-pr" });
 		enqueue(
 			db,

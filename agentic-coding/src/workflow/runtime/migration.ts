@@ -248,7 +248,9 @@ export function migrateLegacy(
 	const routing = {
 		defaultProfile: profile.name,
 		routes: definition.steps
-			.filter((id) => registry.step(id).actor === "agent")
+			.filter(
+				(id) => registry.stepForDefinition(definition, id).actor === "agent",
+			)
 			.map((stepId) => ({ stepId, profile })),
 	};
 	const status =

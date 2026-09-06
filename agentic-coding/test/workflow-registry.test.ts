@@ -4,6 +4,7 @@ import type { WorkflowSnapshot } from "../src/workflow/contracts.ts";
 import {
 	BUILTIN_CAPABILITIES,
 	BUILTIN_EFFECTS,
+	definitionVersionForBehaviorPins,
 	PUBLIC_WORKFLOW_CATALOG,
 	registerBuiltins,
 } from "../src/workflow/definitions.ts";
@@ -161,6 +162,133 @@ describe("workflow registry", () => {
 			expect(() => registry.definition(oldId, 1)).toThrow(
 				/missing workflow definition/,
 			);
+	});
+	test("new definitions pin exact step and behavior identities", () => {
+		const registry = registerBuiltins();
+		const legacy = registry.definition("openspec-full", 1);
+		const pinned = registry.definition(
+			"openspec-full",
+			definitionVersionForBehaviorPins(6),
+		);
+		expect(pinned.stepRefs).toEqual(
+			pinned.steps.map((id) => ({ id, version: 1, behaviorVersion: 1 })),
+		);
+		expect(pinned.digest).not.toBe(legacy.digest);
+		for (const id of pinned.steps)
+			expect(registry.stepForDefinition(pinned, id).id).toBe(id);
+		expect(registry.stepForDefinition(legacy, "core.plan").version).toBe(1);
+	});
+	test("resolves a requested step version and fails closed for missing compatibility", () => {
+		const registry = new WorkflowRegistry(
+			BUILTIN_EFFECTS,
+			BUILTIN_CAPABILITIES,
+		);
+		const first = testStep("versioned.step");
+		registry.registerStep(first);
+		registry.registerStep({
+			...first,
+			version: 2,
+			behaviorVersion: 2,
+			reduce() {
+				throw new Error("second behavior");
+			},
+		});
+		const definition = registry.registerWorkflow({
+			id: "versioned-flow",
+			version: 1,
+			label: "Versioned",
+			initial: "versioned.step",
+			terminal: ["versioned.step"],
+			steps: ["versioned.step"],
+			stepRefs: [{ id: "versioned.step", version: 2, behaviorVersion: 2 }],
+			edges: [],
+		});
+		const resolved = registry.stepForDefinition(definition, "versioned.step");
+		expect(resolved.version).toBe(2);
+		expect(() =>
+			resolved.reduce({} as WorkflowSnapshot, { outcome: "next" }),
+		).toThrow(/second behavior/);
+		expect(() =>
+			registry.stepForDefinition(
+				{
+					...definition,
+					stepRefs: [{ id: "versioned.step", version: 2, behaviorVersion: 1 }],
+				},
+				"versioned.step",
+			),
+		).toThrow(/behavior compatibility mismatch/);
+		const legacy = registry.registerWorkflow({
+			id: "unsupported-legacy",
+			version: 1,
+			label: "Unsupported legacy",
+			initial: "versioned.step",
+			terminal: ["versioned.step"],
+			steps: ["versioned.step"],
+			edges: [],
+		});
+		expect(() => registry.stepForDefinition(legacy, "versioned.step")).toThrow(
+			/unsupported legacy step compatibility mapping/,
+		);
+	});
+	test("pinned behavior versions make different completion decisions on one graph", () => {
+		const registry = new WorkflowRegistry(
+			BUILTIN_EFFECTS,
+			BUILTIN_CAPABILITIES,
+		);
+		const first = {
+			...testStep("versioned.complete", ["complete"]),
+			behaviorVersion: 1,
+			reduce(snapshot: WorkflowSnapshot) {
+				return {
+					snapshot: { ...snapshot, status: "completed" as const },
+					effects: [],
+				};
+			},
+		};
+		const second = {
+			...first,
+			version: 2,
+			behaviorVersion: 2,
+			reduce(snapshot: WorkflowSnapshot) {
+				return {
+					snapshot: { ...snapshot, status: "attention-required" as const },
+					effects: [],
+				};
+			},
+		};
+		registry.registerStep(first);
+		registry.registerStep(second);
+		const register = (version: number, stepVersion: number) =>
+			registry.registerWorkflow({
+				id: "versioned-completion-flow",
+				version,
+				label: `Versioned completion ${version}`,
+				initial: "versioned.complete",
+				terminal: ["versioned.complete"],
+				steps: ["versioned.complete"],
+				stepRefs: [
+					{
+						id: "versioned.complete",
+						version: stepVersion,
+						behaviorVersion: stepVersion,
+					},
+				],
+				edges: [],
+			});
+		const complete = (version: number) => {
+			const definition = registry.definition(
+				"versioned-completion-flow",
+				version,
+			);
+			return registry
+				.stepForDefinition(definition, "versioned.complete")
+				.reduce({} as WorkflowSnapshot, { outcome: "complete" }).snapshot
+				.status;
+		};
+		register(1, 1);
+		register(2, 2);
+		expect(complete(1)).toBe("completed");
+		expect(complete(2)).toBe("attention-required");
 	});
 	test("research graph routes wiki approval through the completed close gate", () => {
 		const registry = registerBuiltins();
@@ -437,14 +565,15 @@ describe("workflow registry", () => {
 		test("every built-in manifest-policy-tier definition declares a policy, and prior tiers are unaffected", () => {
 			const registry = registerBuiltins();
 			// The manifest-policy tier is `definitionVersionForManifestPolicy`
-			// (rounds + 200) for rounds 1..20 — versions 201..220. Every other
-			// registered version (legacy, wikiGate-policy, and the frozen 1000
-			// back-compat set) predates the `policy` block.
+			// (rounds + 200) for rounds 1..20 — versions 201..220. The newer
+			// behavior-pin tier (rounds + 300) also carries the policy block —
+			// versions 301..320. Every other registered version predates it.
 			const policyBearing = registry
 				.definitions()
 				.filter(
 					(definition) =>
-						definition.version >= 201 && definition.version <= 220,
+						(definition.version >= 201 && definition.version <= 220) ||
+						(definition.version >= 301 && definition.version <= 320),
 				);
 			expect(policyBearing.length).toBeGreaterThan(0);
 			for (const definition of policyBearing)
@@ -456,7 +585,9 @@ describe("workflow registry", () => {
 			for (const definition of registry
 				.definitions()
 				.filter(
-					(definition) => definition.version < 201 || definition.version > 220,
+					(definition) =>
+						(definition.version < 201 || definition.version > 220) &&
+						(definition.version < 301 || definition.version > 320),
 				))
 				expect(definition.policy).toBeUndefined();
 		});

@@ -25,6 +25,11 @@ import {
 } from "../src/workflow/effect-runner.ts";
 import { QUESTION_WAIT_MS, WorkflowEngine } from "../src/workflow/runtime.ts";
 
+const openspecFullDigest = registerBuiltins().definition(
+	"openspec-full",
+	1,
+).digest;
+
 class StubAdapter implements AgentAdapter {
 	readonly id = "pi" as const;
 	async launch(ctx: LaunchContext): Promise<AgentHandle> {
@@ -60,6 +65,7 @@ describe("breaking workflow CLI surface", () => {
 			"research-handoff",
 			"repair",
 			"repin",
+			"migrate",
 			"projects",
 			"config",
 			"agent-extension",
@@ -422,7 +428,11 @@ describe("breaking workflow CLI surface", () => {
 		const snapshot = {
 			workflowId: "change",
 			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
-			definition: { id: "openspec-full", version: 1, digest: "d" },
+			definition: {
+				id: "openspec-full",
+				version: 1,
+				digest: openspecFullDigest,
+			},
 		};
 		const run = {
 			id: "run-worker",
@@ -496,7 +506,11 @@ describe("breaking workflow CLI surface", () => {
 		const snapshot = {
 			workflowId: "change",
 			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
-			definition: { id: "openspec-full", version: 1, digest: "d" },
+			definition: {
+				id: "openspec-full",
+				version: 1,
+				digest: openspecFullDigest,
+			},
 		};
 		const run = {
 			id: "qv",
@@ -548,7 +562,11 @@ describe("breaking workflow CLI surface", () => {
 		const snapshot = {
 			workflowId: "change",
 			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
-			definition: { id: "openspec-full", version: 1, digest: "d" },
+			definition: {
+				id: "openspec-full",
+				version: 1,
+				digest: openspecFullDigest,
+			},
 		};
 		const qv = {
 			id: "qv",
@@ -622,7 +640,11 @@ describe("breaking workflow CLI surface", () => {
 		const snapshot = {
 			workflowId: "change",
 			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
-			definition: { id: "openspec-full", version: 1, digest: "d" },
+			definition: {
+				id: "openspec-full",
+				version: 1,
+				digest: openspecFullDigest,
+			},
 		};
 		const first = {
 			id: "qv",
@@ -698,7 +720,11 @@ describe("breaking workflow CLI surface", () => {
 		const snapshot = {
 			workflowId: "change",
 			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
-			definition: { id: "openspec-full", version: 1, digest: "d" },
+			definition: {
+				id: "openspec-full",
+				version: 1,
+				digest: openspecFullDigest,
+			},
 		};
 		const first = {
 			id: "qv",

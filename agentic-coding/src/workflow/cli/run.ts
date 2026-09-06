@@ -17,6 +17,7 @@ import {
 import {
 	listProjects,
 	runAgentExtension,
+	runMigrate,
 	runRepair,
 	runRepin,
 } from "./commands/misc.ts";
@@ -61,6 +62,7 @@ const COMMAND_HANDLERS: Record<string, CommandHandler> = {
 	handoff: (rest, workflowEngine) => runHandoff(rest, workflowEngine),
 	repair: runRepair,
 	repin: runRepin,
+	migrate: runMigrate,
 	"agent-extension": (rest) => runAgentExtension(rest),
 };
 

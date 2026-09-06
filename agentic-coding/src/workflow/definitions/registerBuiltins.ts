@@ -14,10 +14,11 @@ import { openspecManifests } from "./graphs/openspec.ts";
 import { researchManifests } from "./graphs/research.ts";
 import { wikiManifests } from "./graphs/wiki.ts";
 import {
+	definitionVersionForBehaviorPins,
 	definitionVersionForManifestPolicy,
 	withManifestPolicy,
 } from "./manifest-policy.ts";
-import { WORKFLOW_STEPS } from "./steps.ts";
+import { exactStepReferences, WORKFLOW_STEPS } from "./steps.ts";
 
 const EFFECTS: EffectKind[] = [
 	"workspace.setup",
@@ -104,6 +105,21 @@ export function registerBuiltins(
 			const withPolicy = withManifestPolicy(definition);
 			assertStepBehaviorCoverage(withPolicy.steps);
 			registry.registerWorkflow(withPolicy);
+		}
+	}
+	// Exact semantic references are introduced in a new tier. Older definitions
+	// remain byte-compatible and continue resolving through the explicit legacy
+	// baseline mapping in WorkflowRegistry.
+	for (const rounds of Array.from({ length: 20 }, (_, index) => index + 1)) {
+		const version = definitionVersionForBehaviorPins(rounds);
+		for (const definition of manifests(rounds, version, true)) {
+			const pinnedBase = withManifestPolicy(definition);
+			const pinned: WorkflowManifest = {
+				...pinnedBase,
+				stepRefs: exactStepReferences(pinnedBase.steps),
+			};
+			assertStepBehaviorCoverage(pinned.steps);
+			registry.registerWorkflow(pinned);
 		}
 	}
 	return registry;

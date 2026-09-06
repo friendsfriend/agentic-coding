@@ -12,6 +12,7 @@ import {
 	type WorkflowRouting,
 } from "../src/workflow/contracts.ts";
 import {
+	definitionVersionForBehaviorPins,
 	definitionVersionForPolicy,
 	registerBuiltins,
 	researchHandoffContract,
@@ -2376,6 +2377,71 @@ describe("transactional workflow runtime", () => {
 			expect(engine.status(repo, "repin").health.valid).toBe(true);
 		} finally {
 			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+	test("semantic migration previews, expires ownership atomically, and rejects stale revisions", () => {
+		const repo = repository(
+			fs.mkdtempSync(path.join(os.tmpdir(), "workflow-migrate-")),
+		);
+		try {
+			const engine = new WorkflowEngine(
+				registerBuiltins(),
+				() => new Date("2026-01-01T00:00:00Z"),
+			);
+			const started = engine.start({
+				repo,
+				workflowId: "migration-test",
+				definitionId: "openspec-full",
+				definitionVersion: definitionVersionForPolicy(6),
+				mode: "worktree",
+				metadata: {
+					branch: "main",
+					baseBranch: "main",
+					baseCommit: "base",
+				},
+				routing: routing(),
+			});
+			const targetVersion = definitionVersionForBehaviorPins(6);
+			const preview = engine.previewMigration(
+				repo,
+				started.snapshot.workflowId,
+				targetVersion,
+			);
+			expect(preview.compatible).toBe(true);
+			expect(preview.from.version).toBe(definitionVersionForPolicy(6));
+			expect(preview.to.version).toBe(targetVersion);
+			expect(() =>
+				engine.dispatch(repo, {
+					type: "operator.migrate",
+					workflowId: started.snapshot.workflowId,
+					revision: started.snapshot.revision + 1,
+					targetVersion,
+					reason: "stale migration",
+				}),
+			).toThrow(/stale revision/);
+			const migrated = engine.dispatch(repo, {
+				type: "operator.migrate",
+				workflowId: started.snapshot.workflowId,
+				revision: started.snapshot.revision,
+				targetVersion,
+				reason: "retain the explicit behavior baseline",
+			});
+			expect(migrated.snapshot.definition.version).toBe(targetVersion);
+			expect(migrated.snapshot.migrated?.from.version).toBe(
+				definitionVersionForPolicy(6),
+			);
+			expect(migrated.snapshot.migrated?.to.version).toBe(targetVersion);
+			const db = new Database(canonicalStorePath(repo));
+			const setup = db
+				.query(
+					"SELECT status FROM workflow_outbox WHERE workflow_id=? AND kind='workspace.setup'",
+				)
+				.get(started.snapshot.workflowId) as { status?: string } | undefined;
+			db.close();
+			expect(setup?.status).toBe("pending");
+			expect(migrated.snapshot.step.activeRunIds).toHaveLength(0);
+		} finally {
+			fs.rmSync(repo, { recursive: true, force: true });
 		}
 	});
 	test("blocked handoff routes attention and verification attempt limit fails closed", () => {

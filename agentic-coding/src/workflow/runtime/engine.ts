@@ -39,6 +39,7 @@ import {
 import type {
 	ClaimedEffect,
 	DispatchResult,
+	MigrationPreview,
 	RepairPreview,
 	StartWorkflowInput,
 } from "./engine-types.ts";
@@ -58,7 +59,7 @@ import { agentHandoff } from "./reducers/agent-handoff.ts";
 import { agentQuestion, expireQuestion } from "./reducers/agent-question.ts";
 import { developerAction } from "./reducers/developer-action.ts";
 import { effectResult } from "./reducers/effect-result.ts";
-import { repair, repin, resume } from "./reducers/repair.ts";
+import { migrate, repair, repin, resume } from "./reducers/repair.ts";
 import { recordResearchHandoff } from "./reducers/research-handoff.ts";
 import {
 	type EffectRow,
@@ -90,6 +91,7 @@ import {
 import {
 	viewById,
 	list as viewList,
+	previewMigration as viewPreviewMigration,
 	previewRepair as viewPreviewRepair,
 	status as viewStatus,
 } from "./view.ts";
@@ -110,17 +112,20 @@ export class WorkflowEngine {
 			input.definitionVersion ?? 1,
 		);
 		const policy = effectiveManifestPolicy(definition);
-		const wikiOnlyTarget =
-			isWikiWorkflowTarget(input.repo) && policy.targetKind === "wiki";
+		const wikiTarget = isWikiWorkflowTarget(input.repo);
 		const researchTarget = isResearchWorkflowTarget(input.repo);
-		if (
-			(isWikiWorkflowTarget(input.repo) && !wikiOnlyTarget) ||
-			(researchTarget && policy.targetKind !== "research")
-		)
+		const validTarget =
+			policy.targetKind === "wiki"
+				? wikiTarget
+				: policy.targetKind === "research"
+					? researchTarget
+					: !wikiTarget && !researchTarget;
+		if (!validTarget)
 			throw new WorkflowRuntimeError(
 				"start-guard",
-				"the repository-independent target is invalid for this workflow",
+				"the workflow target does not match its declared manifest policy",
 			);
+		const wikiOnlyTarget = wikiTarget;
 		const repository = researchTarget
 			? input.repositoryContext
 				? canonicalRepository(input.repositoryContext)
@@ -209,6 +214,7 @@ export class WorkflowEngine {
 				id: definition.id,
 				version: definition.version,
 				digest: definition.digest,
+				...(definition.stepRefs ? { stepRefs: definition.stepRefs } : {}),
 			},
 			status: "active",
 			currentStep: definition.initial,
@@ -330,6 +336,7 @@ export class WorkflowEngine {
 			const repin =
 				command.type === "operator.repin" ||
 				(command.type === "developer.action" && command.actionId === "re-pin");
+			const migration = command.type === "operator.migrate";
 			const definition = repin
 				? this.registry.definition(
 						snapshot.definition.id,
@@ -340,6 +347,23 @@ export class WorkflowEngine {
 						snapshot.definition.version,
 						snapshot.definition.digest,
 					);
+			const targetDefinition = migration
+				? this.registry.definition(
+						snapshot.definition.id,
+						command.targetVersion,
+					)
+				: definition;
+			if (
+				repin &&
+				((snapshot.definition.stepRefs !== undefined &&
+					snapshot.definition.digest !== definition.digest) ||
+					JSON.stringify(snapshot.definition.stepRefs ?? null) !==
+						JSON.stringify(definition.stepRefs ?? null))
+			)
+				throw new WorkflowRuntimeError(
+					"pin-mismatch",
+					"semantic step pin changed; use validated migration instead of repin",
+				);
 			const runList = runs(db, snapshot.workflowId);
 			if (!repin)
 				validateSnapshot(snapshot, definition, runList, this.registry);
@@ -348,7 +372,7 @@ export class WorkflowEngine {
 			snapshot.metadata.updatedAt = nowIso(this.now);
 			validateSnapshot(
 				snapshot,
-				definition,
+				targetDefinition,
 				runs(db, snapshot.workflowId),
 				this.registry,
 			);
@@ -423,6 +447,13 @@ export class WorkflowEngine {
 	previewRepair(repo: string, workflowId: string): RepairPreview[] {
 		return viewPreviewRepair(repo, workflowId, this.registry);
 	}
+	previewMigration(
+		repo: string,
+		workflowId: string,
+		targetVersion: number,
+	): MigrationPreview {
+		return viewPreviewMigration(repo, workflowId, targetVersion, this.registry);
+	}
 	effectIsLive(repo: string, effectId: string, lease: string): boolean {
 		return storeEffectIsLive(repo, effectId, lease, this.now);
 	}
@@ -460,7 +491,7 @@ export class WorkflowEngine {
 				);
 				const runList = runs(db, snapshot.workflowId);
 				validateSnapshot(snapshot, definition, runList, this.registry);
-				validateEffect(row, snapshot, runList, this.registry);
+				validateEffect(row, snapshot, definition, runList, this.registry);
 				if (row.status === "running" && row.attempts >= row.max_attempts) {
 					const diagnostic = `effect ${row.kind} exhausted automatic attempts after lease expiry`;
 					db.query(
@@ -661,6 +692,16 @@ export class WorkflowEngine {
 			);
 		if (command.type === "operator.repair")
 			return repair(db, snapshot, definition, command, this.registry, this.now);
+		if (command.type === "operator.migrate")
+			return migrate(
+				db,
+				snapshot,
+				definition,
+				this.registry.definition(snapshot.definition.id, command.targetVersion),
+				command,
+				this.registry,
+				this.now,
+			);
 		if (command.type === "operator.repin")
 			return repin(db, snapshot, definition, command, this.registry, this.now);
 		if (command.type === "operator.resume")
