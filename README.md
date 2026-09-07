@@ -81,7 +81,7 @@ Registry validates IDs, actors, contracts, outcomes, effects, reachability, term
 
 Canonical authority is `<main-repository>/.herdr-workflow/herdr.db`, resolved through Git common directory from main checkout or linked worktree. Normalized instance, run, event, and outbox tables replace writable worktree mirrors.
 
-Every command executes under `BEGIN IMMEDIATE`:
+Mutating commands execute under `BEGIN IMMEDIATE`; observational reads use a read-only SQLite connection and never initialize, import, expire questions, or claim effects. Explicit bounded drain owns execution and retry continuation.
 
 1. parse command
 2. load and validate snapshot plus pinned definition
@@ -89,11 +89,11 @@ Every command executes under `BEGIN IMMEDIATE`:
 4. apply pure registered reducer
 5. validate result
 6. atomically persist snapshot, event, runs, and outbox
-7. drain durable effects
+7. explicitly drain durable effects with `workflow drain --repo PATH` (status/list/dashboard reads are observational)
 
 Agent capabilities are random, single-use, generation-bound, hashed at rest, and consumed only after exact path/size/schema/run artifact validation. External effects use stable idempotency keys, leases, bounded retry, and observe-before-retry handlers. Unsafe exhaustion enters `attention-required`.
 
-Raw phase overwrite is removed. `repair` previews compatible targets and affected runs, requires current revision plus reason/confirmation, expires incompatible runs/effects, and leaves paused state. Separate returned `resume` action revalidates routing and entry guards.
+Raw phase overwrite is removed. `repair` previews compatible targets and affected runs, requires current revision plus reason/confirmation, expires incompatible runs/effects, and immediately retriggers the repaired step as active after revalidating routing and entry guards.
 
 ## Agent routing
 

@@ -1,8 +1,18 @@
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import {
+	closeSync,
+	existsSync,
+	openSync,
+	readdirSync,
+	readFileSync,
+	readSync,
+	realpathSync,
+	statSync,
+} from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { directionBetween, Herdr, type Rect } from "../../herdr-client.ts";
 import type {
 	DeveloperDialogueRecord,
@@ -35,6 +45,7 @@ import {
 	setReturnInProcess,
 	startWorkflowInProcess,
 	viewToDashboardState,
+	workflowExecutionError,
 } from "./engine";
 
 export { listPresetNames };
@@ -130,6 +141,89 @@ export interface WorkflowOverview {
 	}>;
 }
 
+type DashboardObservation =
+	| { kind: "dashboard"; repo: string; workflowId: string }
+	| { kind: "workflows" }
+	| { kind: "projects" }
+	| { kind: "artifacts"; state: WorkflowState }
+	| { kind: "artifact-content"; state: WorkflowState; artifact: string }
+	| { kind: "wiki-changes"; repo: string; workflowId: string }
+	| { kind: "wiki-diff"; repo: string; workflowId: string; file: LocalChange }
+	| { kind: "local-changes"; repo: string; workflowId: string }
+	| {
+			kind: "local-diff";
+			repo: string;
+			workflowId: string;
+			file: LocalChange;
+	  };
+
+const MAX_OBSERVATION_BYTES = 8 * 1024 * 1024;
+async function readBounded(
+	stream: ReadableStream<Uint8Array>,
+): Promise<string> {
+	const reader = stream.getReader();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	try {
+		for (;;) {
+			const part = await reader.read();
+			if (part.done) break;
+			total += part.value.byteLength;
+			if (total > MAX_OBSERVATION_BYTES)
+				throw new Error("dashboard observation response is too large");
+			chunks.push(part.value);
+		}
+	} finally {
+		reader.releaseLock();
+	}
+	return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString(
+		"utf8",
+	);
+}
+
+async function observeAsync<T>(
+	observation: DashboardObservation,
+	signal?: AbortSignal,
+): Promise<T> {
+	if (signal?.aborted)
+		throw new DOMException("observation cancelled", "AbortError");
+	const encoded = Buffer.from(JSON.stringify(observation)).toString("base64");
+	const sourceEntry = fileURLToPath(new URL("../../cli.ts", import.meta.url));
+	const runningFromBun = process.execPath.split("/").pop() === "bun";
+	const args = runningFromBun
+		? [process.execPath, sourceEntry, "__dashboard-observe", encoded]
+		: [process.execPath, "__dashboard-observe", encoded];
+	const child = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
+	const abort = () => child.kill();
+	signal?.addEventListener("abort", abort, { once: true });
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	try {
+		const output = await Promise.race([
+			readBounded(child.stdout),
+			new Promise<never>((_, reject) => {
+				timeout = setTimeout(() => {
+					child.kill();
+					reject(new Error("dashboard observation timed out"));
+				}, 15_000);
+			}),
+		]);
+		await child.exited;
+		if (signal?.aborted)
+			throw new DOMException("observation cancelled", "AbortError");
+		const result = JSON.parse(output) as {
+			ok: boolean;
+			value?: T;
+			error?: string;
+		};
+		if (!result.ok) throw new Error(result.error ?? "observation failed");
+		return result.value as T;
+	} finally {
+		if (timeout) clearTimeout(timeout);
+		child.kill();
+		signal?.removeEventListener("abort", abort);
+	}
+}
+
 function openWorkspaceIds(): Set<string> | undefined {
 	try {
 		const workspaces = herdr.call("workspace", "list").workspaces as Array<{
@@ -159,8 +253,9 @@ export function listWorkflows(...roots: string[]): WorkflowOverview[] {
 		}
 		for (const view of views) {
 			try {
-				if (seen.has(view.workflowId)) continue;
-				seen.add(view.workflowId);
+				const identity = `${view.repository}\0${view.workflowId}`;
+				if (seen.has(identity)) continue;
+				seen.add(identity);
 				const state = viewToDashboardState(view) as WorkflowState;
 				const items = tasks(
 					join(
@@ -220,6 +315,33 @@ export function listWorkflows(...roots: string[]): WorkflowOverview[] {
 	return found.sort((a, b) =>
 		a.state.workflowId.localeCompare(b.state.workflowId),
 	);
+}
+
+export function listWorkflowsAsync(
+	signal?: AbortSignal,
+): Promise<WorkflowOverview[]> {
+	return observeAsync<WorkflowOverview[]>({ kind: "workflows" }, signal);
+}
+
+export function discoverProjectsAsync(
+	signal?: AbortSignal,
+): Promise<Array<{ name: string; path: string; openspec: boolean }>> {
+	return observeAsync({ kind: "projects" }, signal);
+}
+
+export function openSpecArtifactsAsync(
+	state: WorkflowState,
+	signal?: AbortSignal,
+): Promise<string[]> {
+	return observeAsync({ kind: "artifacts", state }, signal);
+}
+
+export function openSpecArtifactAsync(
+	state: WorkflowState,
+	artifact: string,
+	signal?: AbortSignal,
+): Promise<string> {
+	return observeAsync({ kind: "artifact-content", state, artifact }, signal);
 }
 
 export interface LocalChange {
@@ -314,6 +436,8 @@ export function loadWikiSnapshotDiff(
 	}
 	const oldLines = sourceLines(before);
 	const newLines = sourceLines(after);
+	if (oldLines.length > 4000 || newLines.length > 4000)
+		throw new Error("wiki diff exceeds bounded observation size");
 	const lcs: number[][] = Array.from({ length: oldLines.length + 1 }, () =>
 		new Array(newLines.length + 1).fill(0),
 	);
@@ -605,8 +729,26 @@ function applyBranchHeader(head: string, result: WorktreeGitStatus) {
 	const behindMatch = /\bbehind (\d+)/.exec(suffix);
 	result.behind = behindMatch ? Number(behindMatch[1]) : 0;
 }
+const MAX_TELEMETRY_BYTES = 4 * 1024 * 1024;
+function telemetryText(path: string): string {
+	try {
+		const size = statSync(path).size;
+		if (size <= MAX_TELEMETRY_BYTES) return readFileSync(path, "utf8");
+		const fd = openSync(path, "r");
+		try {
+			const buffer = Buffer.alloc(MAX_TELEMETRY_BYTES);
+			readSync(fd, buffer, 0, buffer.length, size - buffer.length);
+			const firstLine = buffer.indexOf(10);
+			return buffer.toString("utf8", firstLine + 1);
+		} finally {
+			closeSync(fd);
+		}
+	} catch {
+		return "";
+	}
+}
 function telemetryEvents(path: string): Array<Record<string, unknown>> {
-	return read(path)
+	return telemetryText(path)
 		.split(/\r?\n/)
 		.filter(Boolean)
 		.flatMap((line) => {
@@ -1192,12 +1334,58 @@ export function loadLocalChanges(
 	);
 }
 
+export function loadWikiSnapshotChangesAsync(
+	repo: string,
+	workflowId: string,
+	signal?: AbortSignal,
+): Promise<LocalChange[]> {
+	return observeAsync({ kind: "wiki-changes", repo, workflowId }, signal);
+}
+
+export function loadWikiSnapshotDiffAsync(
+	repo: string,
+	workflowId: string,
+	file: LocalChange,
+	signal?: AbortSignal,
+): Promise<string> {
+	return observeAsync({ kind: "wiki-diff", repo, workflowId, file }, signal);
+}
+
+export function loadLocalChangesAsync(
+	repo: string,
+	workflowId: string,
+	signal?: AbortSignal,
+): Promise<LocalChange[]> {
+	return observeAsync({ kind: "local-changes", repo, workflowId }, signal);
+}
+
+export function loadLocalDiffAsync(
+	repo: string,
+	workflowId: string,
+	file: LocalChange,
+	signal?: AbortSignal,
+): Promise<string> {
+	return observeAsync({ kind: "local-diff", repo, workflowId, file }, signal);
+}
+
+function safeWorktreeRelative(worktree: string, value: string): string {
+	if (!value || isAbsolute(value) || value.split(/[\\/]/).includes(".."))
+		throw new Error("observation path must be worktree-relative");
+	const root = resolve(worktree);
+	const resolved = resolve(root, value);
+	if (resolved !== root && !resolved.startsWith(`${root}${sep}`))
+		throw new Error("observation path escapes worktree");
+	return value;
+}
+
 export function loadLocalDiff(
 	repo: string,
 	workflowId: string,
 	file: LocalChange,
 ): string {
 	const state = dashboardState(repo, workflowId) as WorkflowState;
+	safeWorktreeRelative(state.worktree, file.newPath);
+	if (file.oldPath) safeWorktreeRelative(state.worktree, file.oldPath);
 	const base = state.baseCommit ?? "HEAD";
 	const paths =
 		file.oldPath && file.oldPath !== file.newPath
@@ -1220,6 +1408,7 @@ export function loadLocalDiff(
 		"--no-ext-diff",
 		"--no-index",
 		"/dev/null",
+		"--",
 		file.newPath,
 	).stdout.toString();
 }
@@ -1357,6 +1546,32 @@ export function loadPlanReviewComments(
 	} catch {
 		return [];
 	}
+}
+
+export function loadDashboardAsync(
+	repo: string,
+	workflowId: string,
+	signal?: AbortSignal,
+): Promise<DashboardData> {
+	return observeAsync<DashboardData>(
+		{ kind: "dashboard", repo, workflowId },
+		signal,
+	).then((dashboard) => {
+		const error = workflowExecutionError(repo, workflowId);
+		if (!error) return dashboard;
+		return {
+			...dashboard,
+			state: {
+				...dashboard.state,
+				health: {
+					...dashboard.state.health,
+					valid: false,
+					attention: [...dashboard.state.health.attention, error],
+					diagnostic: error,
+				},
+			},
+		};
+	});
 }
 
 export function loadDashboard(repo: string, workflowId: string): DashboardData {
@@ -1943,6 +2158,15 @@ export function requiredUserActionFor(
 			prompt:
 				"Ask follow-ups in the researcher session, or close research when finished. The researcher itself starts wiki drafting when the user explicitly requests it.",
 			items: [
+				...(hasAction("research-follow-up")
+					? [
+							{
+								label: "Ask researcher",
+								kind: "workflow" as const,
+								value: "research-follow-up",
+							},
+						]
+					: []),
 				{
 					label: "Close research",
 					kind: "workflow",
@@ -2118,7 +2342,60 @@ export function openSpecArtifacts(state: WorkflowState) {
 	}
 }
 export function openSpecArtifact(state: WorkflowState, artifact: string) {
-	return read(join(openSpecRoot(state), artifact));
+	const root = resolve(openSpecRoot(state));
+	if (
+		!artifact ||
+		isAbsolute(artifact) ||
+		artifact.split(/[\\/]/).includes("..")
+	)
+		throw new Error("artifact path must be relative");
+	const file = resolve(root, artifact);
+	if (file !== root && !file.startsWith(`${root}${sep}`))
+		throw new Error("artifact path escapes OpenSpec root");
+	const listed = new Set(new Bun.Glob("**/*.md").scanSync({ cwd: root }));
+	if (!listed.has(artifact))
+		throw new Error("artifact is not a listed Markdown file");
+	const realRoot = realpathSync(root);
+	const realFile = realpathSync(file);
+	if (realFile !== realRoot && !realFile.startsWith(`${realRoot}${sep}`))
+		throw new Error("artifact path escapes OpenSpec root");
+	return read(file);
+}
+
+export async function openFindingInEditorAsync(
+	state: WorkflowState,
+	finding: { path?: string; line?: number },
+	signal?: AbortSignal,
+) {
+	if (!finding.path) throw new Error("Finding has no file path.");
+	const file = join(state.worktree, finding.path);
+	const call = herdr.callAsync;
+	if (!call) return openFindingInEditor(state, finding);
+	const pane = (
+		(await call(
+			[
+				"tab",
+				"create",
+				"--workspace",
+				state.workspace,
+				"--label",
+				`finding:${finding.path.split("/").at(-1)}`,
+				"--focus",
+			],
+			signal,
+		)) as { root_pane?: { pane_id?: string } }
+	).root_pane?.pane_id;
+	if (!pane) throw new Error("editor pane was not created");
+	const editor = process.env.EDITOR || "vi";
+	await call(
+		[
+			"pane",
+			"run",
+			pane,
+			`${editor} +${finding.line ?? 1} ${JSON.stringify(file)}`,
+		],
+		signal,
+	);
 }
 
 export function openFindingInEditor(
@@ -2139,6 +2416,53 @@ export function openFindingInEditor(
 	const editor = process.env.EDITOR || "vi";
 	const command = `${editor} +${finding.line ?? 1} ${JSON.stringify(file)}`;
 	herdr.call("pane", "run", pane, command);
+}
+
+export async function focusAgentAsync(
+	state: WorkflowState,
+	pane: string,
+	signal?: AbortSignal,
+) {
+	const call = herdr.callAsync;
+	if (!call) return focusAgent(state, pane);
+	await call(["workspace", "focus", state.workspace], signal);
+	const paneResult = (await call(["pane", "get", pane], signal)) as {
+		pane?: { tab_id?: string };
+	};
+	const tabId = paneResult.pane?.tab_id;
+	if (!tabId) throw new Error("agent pane has no tab");
+	await call(["tab", "focus", tabId], signal);
+	for (let attempt = 0; attempt < 8; attempt++) {
+		const layoutResult = (await call(
+			["pane", "layout", "--pane", pane],
+			signal,
+		)) as {
+			layout?: {
+				focused_pane_id?: string;
+				panes?: Array<{ pane_id: string; rect: Rect }>;
+			};
+		};
+		const layout = layoutResult.layout;
+		if (layout?.focused_pane_id === pane) return;
+		const current = layout?.panes?.find(
+			(item) => item.pane_id === layout?.focused_pane_id,
+		);
+		const target = layout?.panes?.find((item) => item.pane_id === pane);
+		if (!layout || !current || !target)
+			throw new Error("agent pane not present in focused tab");
+		await call(
+			[
+				"pane",
+				"focus",
+				"--pane",
+				current.pane_id,
+				"--direction",
+				directionBetween(current.rect, target.rect),
+			],
+			signal,
+		);
+	}
+	throw new Error("could not reach agent pane");
 }
 
 export function focusAgent(state: WorkflowState, pane: string) {

@@ -30,9 +30,11 @@ repairs rebuilt child foreign keys, and version 4 is the current validated
 schema. Unsupported future versions fail closed. Mutating engine entry points
 initialize before their command transaction and may then import legacy
 `workflows` rows. Status and list do not initialize or import: absent and old
-stores are presented as migration-required diagnostics. Back up persistent
-stores with SQLite's consistent backup mechanism before upgrades, and stop old
-schema writers while a migration is in progress. Migration commits are
+stores are presented as migration-required diagnostics. The explicit drain
+command accepts bounded `--limit` and `--wait-ms` values for retry progress
+without disguising execution as observation. Back up persistent stores with
+SQLite's consistent backup mechanism before upgrades, and stop old schema
+writers while a migration is in progress. Migration commits are
 independent, so a later command rejection does not undo a successful schema
 transition. There are no automatic down migrations; rollback to an older
 binary requires a verified pre-upgrade backup or explicit support in that
@@ -44,7 +46,15 @@ CLI, dashboard, research, and wiki-comment starts use `src/workflow/startup.ts`.
 The startup boundary resolves the selected repository before reading `.pi` project
 configuration, so linked worktrees use the canonical repository source and
 repository-independent workflows use global configuration. `HERDR_WORKFLOW_CONFIG`
-is a full replacement and carries environment provenance.
+is a full replacement and carries environment provenance. Status, list, snapshot,
+view, and dashboard JSON reads are observational: they do not drain effects,
+expire questions, initialize stores, or import legacy rows. Explicit execution
+uses the bounded `workflow drain --repo PATH` command or a mutation-owned
+continuation. Handoff evidence is prepared from bounded artifact/source
+observations before the writer transaction, then reauthorized and checked again
+inside the transaction; concurrent replacement or source drift is rejected,
+not silently accepted. This leaves an intentional filesystem race window and
+keeps the final integrity check load-bearing.
 
 Fusion routing has one precedence rule: an explicit ordered `--fusion-profiles`
 list wins; otherwise the selected preset must provide contiguous `planner-1`
@@ -237,7 +247,6 @@ blast radius to the named functions:
 | `runtime.ts` `effectResult()` (~lines 2273–2282) | `snapshot.currentStep === "core.plan"` / `"fusion.consolidate"` / `"core.delivery"` | Effect-completion routing (an `openspec.validate` pass self-completes plan/consolidate; `delivery.commit` chains into `delivery.push`). Same disposition as `agentHandoff()`. |
 | `runtime.ts` `createRun()` (~line 2565) | `step.id === "core.research"` (narrows `allowedOutcomes` to exclude `complete`) | A capability-shaping rule (research never hands off `complete`), adjacent to but distinct from `StepBehavior`; not in this stage's inventory. |
 | `runtime.ts` `validateEffect()` (~lines 2718–2740) | `snapshot.currentStep === "core.delivery"` / `"core.research"` / `"core.completed"` | Effect-legality exceptions (wiki-verify promoted at delivery/completion, research's workspace-setup-before-entry ordering) — a persistence/outbox invariant, not step business semantics. |
-| `runtime.ts` `stopRoundAgents()` (~line 3184) | `snapshot.currentStep === "core.triage"` | Decides which live runs to stop when a verification round closes; tied to `roundScoped` conceptually but not yet reading it. |
 | `runtime.ts` `validateFusionRouting()` (~line 3256) | `route.stepId === "fusion.plan"` | Routing-shape validation for the fusion fan-out, called only for the two fusion definition ids — a routing concern, not step business semantics. |
 | `effect-runner.ts` `assignmentFor` (`core.triage` changed-files line) | `run.stepId === "core.triage"` | Needs `changedFilesIn`, a `runtime.ts`-resident git-status walker; moving it means either splitting `runtime.ts` (stage C's job) or duplicating a non-trivial recursive helper. Recorded out of scope per design D5. |
 | `adapters.ts` (`ctx.assignment.stepId !== "core.research"`, ×3) | launch-context tool/extension selection | Needs adapter launch context, not `{snapshot, run}`; not named in this stage's design inventory. |
@@ -284,7 +293,7 @@ row):
 | `capability.ts` | **The security boundary** (design D2): token hashing/comparison, run capability issuance, agent and exact-run authorization, and the `MAX_ARTIFACT_BYTES`-bounded artifact checks. Extracted as one cohesive unit so it can be reviewed and tested as a whole. |
 | `dialogue.ts` | Developer-question dialogue: resolving the run a question command acts on (`questionRun`), answering a question or questionnaire (`answerQuestion`), and marking questions expired (`expireQuestions`). Needs only the clock. |
 | `engine-types.ts` | Public request/result shapes (`StartWorkflowInput`, `DispatchResult`, `ClaimedEffect`, `RepairPreview`) factored out so leaf modules can reference them without importing `engine.ts`. |
-| `kernel.ts` | The shared step-transition primitives every reducer and `engine.ts` need: `enqueue`, `applyReduction`, `createRun`, `enterStep`, `transition`, plus the pure step-shape helpers (`freshStep`, `resolveArrivalContext`, fusion routing/draft helpers) and round-cleanup helpers (`stopRoundAgents`, `expireRuns`, `expireSiblingRuns`). Kept separate from `engine.ts` because `migration.ts` and every `reducers/*.ts` module need these without needing the `WorkflowEngine` class itself — importing `engine.ts` from either would close the cycle `engine.ts -> reducer -> engine.ts`. |
+| `kernel.ts` | The shared step-transition primitives every reducer and `engine.ts` need: `enqueue`, `applyReduction`, `createRun`, `enterStep`, `transition`, plus the pure step-shape helpers (`freshStep`, `resolveArrivalContext`, fusion routing/draft helpers) and run-expiry helpers (`expireRuns`, `expireSiblingRuns`). Agents stay live across expired runs; workspace closure owns process shutdown. Kept separate from `engine.ts` because `migration.ts` and every `reducers/*.ts` module need these without needing the `WorkflowEngine` class itself — importing `engine.ts` from either would close the cycle `engine.ts -> reducer -> engine.ts`. |
 | `migration.ts` | Legacy `workflows`-table discovery, phase-to-step mapping, legacy evidence conversion, migration diagnostics. **Thinnest test coverage in the package** (`test/workflow-migration.test.ts` is the only oracle) — moved verbatim with no signature change beyond taking `registry`/`now` as explicit parameters. |
 | `view.ts` | The read model: `view`, `list`, `status`, `previewRepair`, and the run/effect projection into `WorkflowView`. Read path only. |
 | `reducers/*.ts` | One file per `reduce()` command branch (or a small explicitly-grouped set: `agent-question.ts` holds both `agent.question` and `agent.question-expire`; `repair.ts` holds `operator.repair`, `operator.repin`, and `operator.resume`). Each reducer receives `registry`/`now` as explicit parameters and the already-open `db`/`snapshot` — it runs inside the kernel's existing transaction, never opening its own. |
@@ -367,7 +376,7 @@ described in [Module map](#module-map-after-split-workflow-god-modules) above.
 The file-and-line references in the step-identity table above predate that
 split; the qualitative disposition of each match is unchanged, but the
 functions now live in `runtime/kernel.ts` (`transition`, `enterStep`,
-`stopRoundAgents`, `validateFusionRouting`), `runtime/reducers/agent-handoff.ts`
+`validateFusionRouting`), `runtime/reducers/agent-handoff.ts`
 (`agentHandoff`), `runtime/reducers/effect-result.ts` (`effectResult`),
 `runtime/reducers/developer-action.ts` (`developerAction`),
 `runtime/reducers/research-handoff.ts` (`recordResearchHandoff`),

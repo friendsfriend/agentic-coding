@@ -9,7 +9,7 @@ import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
 } from "../../registry.ts";
-import { enqueue, enterStep, expireRuns, freshStep } from "../kernel.ts";
+import { enterStep, expireRuns, freshStep } from "../kernel.ts";
 import {
 	effects,
 	nowIso,
@@ -110,9 +110,6 @@ export function migrate(
 			return typeof runId === "string" && activeRunIds.includes(runId);
 		})
 		.map((effect) => effect.id);
-	const active = runs(db, snapshot.workflowId).filter(
-		(run) => activeRunIds.includes(run.id) && run.handle,
-	);
 	const setupIncomplete = workflowEffects.some(
 		(effect) =>
 			effect.kind === "workspace.setup" && effect.status !== "completed",
@@ -130,16 +127,6 @@ export function migrate(
 	// closing, pull-request creation, and workspace setup. Expiring those keys
 	// would make enterStep unable to recreate the required effect.
 	expireRuns(db, snapshot, now, true);
-	for (const run of active)
-		enqueue(
-			db,
-			snapshot,
-			"agent.stop",
-			`migration:${run.id}:${run.generation}`,
-			{
-				runId: run.id,
-			},
-		);
 	const from = snapshot.definition;
 	const to = {
 		id: target.id,
@@ -190,23 +177,10 @@ export function repair(
 			"invalid-repair",
 			`incompatible repair target: ${command.targetStep}`,
 		);
-	const staleRuns = runs(db, snapshot.workflowId).filter(
-		(run) => snapshot.step.activeRunIds.includes(run.id) && run.handle,
-	);
 	expireRuns(db, snapshot, now);
 	db.query(
 		"UPDATE workflow_outbox SET status='expired', lease=NULL, lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry','running')",
 	).run(snapshot.workflowId);
-	for (const run of staleRuns)
-		enqueue(
-			db,
-			snapshot,
-			"agent.stop",
-			`run:${run.id}:stop:${run.generation}`,
-			{
-				runId: run.id,
-			},
-		);
 	const source = snapshot.currentStep;
 	snapshot.currentStep = command.targetStep;
 	snapshot.metadata.stepEnteredAt = nowIso(now);

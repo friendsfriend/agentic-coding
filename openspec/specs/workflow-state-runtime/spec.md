@@ -13,11 +13,11 @@ Every workflow mutation SHALL pass through one command-processing contract that 
 
 #### Scenario: Research wiki request executes transactionally
 - **WHEN** the developer submits a valid `request-research-wiki` action against an active research workflow revision
-- **THEN** the engine SHALL expire the researcher run, enqueue the required stop effect, transition to `core.wiki`, and commit the state/event/effects atomically
+- **THEN** the engine SHALL expire the researcher run without stopping its session, transition to `core.wiki`, and commit the state/event/effects atomically
 
 #### Scenario: Research close executes transactionally
 - **WHEN** the developer submits a valid `close-research` action against an active research workflow revision at any non-terminal step
-- **THEN** the engine SHALL expire active research runs, enqueue required stop effects, transition to `core.closed`, and commit the state/event/effects atomically
+- **THEN** the engine SHALL expire active research runs without stopping their sessions, transition to `core.closed`, enqueue `workspace.close`, and commit the state/event/effects atomically
 
 #### Scenario: Research close does not require an agent handoff
 - **WHEN** the researcher runtime is unavailable or has settled without handoff
@@ -56,7 +56,7 @@ A successful command SHALL atomically persist the new validated snapshot, audit 
 - **AND** no external effect SHALL start for the failed command
 
 #### Scenario: Research close cannot partially apply
-- **WHEN** one stop-effect enqueue or active-run expiration fails while processing `close-research`
+- **WHEN** active-run expiration or workspace-close enqueue fails while processing `close-research`
 - **THEN** the workflow SHALL not commit a terminal snapshot with only some researcher ownership removed
 - **AND** the transaction SHALL roll back for retry or operator attention
 
@@ -191,8 +191,8 @@ The serial runner SHALL claim an effect only when it can begin processing it. Lo
 
 #### Scenario: Ownership is lost during execution
 - **WHEN** renewal fails or repair replaces active ownership
-- **THEN** the runner SHALL stop initiating further work and cancel its owned subprocess where supported
-- **AND** cleanup SHALL not destroy resources adopted by the successor execution
+- **THEN** the runner SHALL stop initiating further work and cancel its owned non-agent subprocess where supported
+- **AND** it SHALL not stop a managed agent session; workspace closure owns that teardown
 
 #### Scenario: Process crashes after external success
 - **WHEN** an external operation completes but its owner exits before committing the result
@@ -237,4 +237,32 @@ Observational store connections SHALL not run creation DDL, schema repair, or le
 #### Scenario: Absent or old store is read
 - **WHEN** a read encounters a missing store or one requiring initialization
 - **THEN** it SHALL return an absent or migration-required diagnostic without creating or migrating the store
+
+### Requirement: Prepared evidence retains transactional authorization
+Expensive external evidence collection SHALL occur outside the canonical writer transaction where equivalent integrity can be maintained. Prepared evidence SHALL be bound to the workflow, exact run generation or developer revision, relevant source baseline, and validated artifact content. The command transaction SHALL reload current state and reauthorize authority, legality, and evidence bindings before acceptance. Necessary final integrity checks SHALL not be removed merely to shorten the transaction.
+
+#### Scenario: Slow evidence collection is in progress
+- **WHEN** a handoff is waiting for an external evidence collector before transaction application
+- **THEN** it SHALL not hold the canonical SQLite writer lock during that collection
+- **AND** an independent valid workflow command SHALL be able to commit
+
+#### Scenario: Artifact changes after preparation
+- **WHEN** submitted evidence is replaced, moved outside its assigned path, oversized, or changed after its initial preparation
+- **THEN** acceptance SHALL reject or reprepare it using the existing path, size, schema, and digest guarantees
+- **AND** rejected evidence SHALL not consume the run capability
+
+#### Scenario: Source isolation changes during preparation
+- **WHEN** guarded repository content changes after evidence collection but before handoff acceptance
+- **THEN** the engine SHALL detect the invalid binding or perform the required final integrity validation
+- **AND** it SHALL not accept a stale fingerprint as proof that live source remained unchanged
+
+#### Scenario: Sibling handoff commits first
+- **WHEN** a distinct active parallel run commits while evidence is being prepared
+- **THEN** the engine SHALL validate the submitting run against the latest snapshot and reprepare dependent evidence if necessary
+- **AND** an unrelated revision alone SHALL not invalidate an otherwise authorized active-run handoff
+
+#### Scenario: Run is expired during preparation
+- **WHEN** repair, cancellation, or another accepted outcome expires the submitting run before application
+- **THEN** transactional reauthorization SHALL reject the prepared completion
+- **AND** no successor runs, effects, or capability consumption SHALL be committed for it
 

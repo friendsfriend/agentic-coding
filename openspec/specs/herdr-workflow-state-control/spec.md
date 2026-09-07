@@ -4,7 +4,7 @@
 TBD - created by archiving change manual-workflow-state-overwrite. Update Purpose after archive.
 ## Requirements
 ### Requirement: Validated workflow repair
-The system SHALL let developer repair active workflow to registered target step only through a revision-checked command, with an optional reason, expiring incompatible run capabilities, rebuilding target-step state, validating all invariants, and directly retriggering the target step without an intermediate paused state.
+The system SHALL let developer repair active workflow to registered target step only through a revision-checked command, with an optional reason, expiring incompatible run capabilities without stopping their sessions, rebuilding target-step state, validating all invariants, and directly retriggering the target step without an intermediate paused state.
 
 #### Scenario: Developer previews repair
 - **WHEN** dashboard opens repair for active workflow
@@ -13,7 +13,8 @@ The system SHALL let developer repair active workflow to registered target step 
 
 #### Scenario: Developer confirms repair
 - **WHEN** developer confirms target with current revision, with or without a reason
-- **THEN** engine SHALL expire incompatible run capabilities, rebuild target-step state, validate all invariants, commit repair event, and enter the target step directly so successor runs/effects start immediately
+- **THEN** engine SHALL expire incompatible run capabilities, retain their live sessions, rebuild target-step state, validate all invariants, commit repair event, and enter the target step directly so successor runs/effects start immediately
+- **AND** same-step, same-role successor run SHALL re-prompt its retained session with fresh run authority
 - **AND** repair SHALL NOT pause the workflow or require a separate resume action
 
 #### Scenario: Repair is stale or invalid

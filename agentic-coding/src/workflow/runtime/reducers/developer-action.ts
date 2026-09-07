@@ -147,19 +147,7 @@ export function developerAction(
 				"request-research-wiki is only available while research is active",
 			);
 		validateSourceBaseline(snapshot);
-		const active = runs(db, snapshot.workflowId).filter((run) =>
-			snapshot.step.activeRunIds.includes(run.id),
-		);
 		expireRuns(db, snapshot, now);
-		for (const run of active)
-			if (run.handle)
-				enqueue(
-					db,
-					snapshot,
-					"agent.stop",
-					`run:${run.id}:stop:${run.generation}`,
-					{ runId: run.id },
-				);
 		transition(
 			db,
 			snapshot,
@@ -187,21 +175,7 @@ export function developerAction(
 				"close-research is only available while research is active",
 			);
 		validateSourceBaseline(snapshot);
-		const active = runs(db, snapshot.workflowId).filter((run) =>
-			snapshot.step.activeRunIds.includes(run.id),
-		);
 		expireRuns(db, snapshot, now);
-		for (const run of active)
-			if (run.handle)
-				enqueue(
-					db,
-					snapshot,
-					"agent.stop",
-					`run:${run.id}:stop:${run.generation}`,
-					{
-						runId: run.id,
-					},
-				);
 		snapshot.currentStep = "core.closed";
 		snapshot.metadata.stepEnteredAt = nowIso(now);
 		snapshot.status = "closed";

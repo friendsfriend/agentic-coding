@@ -4,7 +4,7 @@
 // across an edge. Also the small pure step-shape helpers these primitives
 // need (freshStep, resolveArrivalContext) and the fusion-specific helpers
 // (validateFusionRouting, fusionPlannerRoles, fusionDraftInputs) and
-// round-cleanup helpers (stopRoundAgents, expireRuns, expireSiblingRuns).
+// run-expiry helpers (expireRuns, expireSiblingRuns).
 // Grouped separately from engine.ts because migration.ts and every
 // reducers/*.ts module need these without needing the WorkflowEngine class
 // itself — importing engine.ts from either would close the cycle
@@ -430,36 +430,6 @@ export function fusionDraftInputs(snapshot: WorkflowSnapshot): JsonValueType {
 		}));
 }
 
-/**
- * Stops the agents for every core.triage/core.verification run that belongs
- * to the round transitioning away (pass/fix/limit). Runs within a round
- * complete individually as they finish, so by the time the round is over
- * their handles no longer live in activeRunIds; find them by shared round
- * attempt instead, mirroring the failed-path cleanup in expireSiblingRuns so
- * verifier/triage panes never outlive their round.
- */
-export function stopRoundAgents(
-	db: Database,
-	snapshot: WorkflowSnapshot,
-	attempt: number,
-): void {
-	const roundRuns = storeRuns(db, snapshot.workflowId).filter(
-		(run) =>
-			(run.stepId === "core.triage" || run.stepId === "core.verification") &&
-			run.attempt === attempt &&
-			run.handle,
-	);
-	for (const run of roundRuns)
-		enqueue(
-			db,
-			snapshot,
-			"agent.stop",
-			`run:${run.id}:stop:${run.generation}`,
-			{
-				runId: run.id,
-			},
-		);
-}
 export function expireSiblingRuns(
 	db: Database,
 	snapshot: WorkflowSnapshot,
@@ -475,16 +445,6 @@ export function expireSiblingRuns(
 		db.query(
 			"UPDATE workflow_outbox SET status='expired',lease=NULL,lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry','running') AND json_extract(payload_json,'$.runId')=?",
 		).run(snapshot.workflowId, run.id);
-		if (run.handle)
-			enqueue(
-				db,
-				snapshot,
-				"agent.stop",
-				`run:${run.id}:stop:${run.generation}`,
-				{
-					runId: run.id,
-				},
-			);
 	}
 	expireQuestions(
 		snapshot,

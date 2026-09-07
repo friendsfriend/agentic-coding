@@ -405,9 +405,9 @@ describe("transactional workflow runtime", () => {
 				researcherSummary.id,
 			);
 			expect(researcher.allowedOutcomes).toEqual(["blocked", "failed"]);
-			// Developer-requested wiki drafting is available while research is active.
+			// Follow-up questions remain available while research is active.
 			expect(view.availableActions.map((action) => action.id)).toContain(
-				"request-research-wiki",
+				"research-follow-up",
 			);
 
 			const researcherToken = engine.issueRunCapability(
@@ -535,9 +535,9 @@ describe("transactional workflow runtime", () => {
 				artifact: wikiOutput,
 			}).view;
 			expect(view.currentStep.id).toBe("core.wiki-approval");
-			// Developer closure remains available while the draft awaits approval.
+			// The draft must be approved before the completed close gate appears.
 			expect(view.availableActions.map((action) => action.id)).toContain(
-				"close-research",
+				"approve-wiki",
 			);
 			view = engine.dispatch(researchWorkflowTarget(), {
 				type: "developer.action",
@@ -2029,12 +2029,9 @@ describe("transactional workflow runtime", () => {
 				"run",
 			);
 			expect(security.status).toBe("expired");
-			expect(
-				view.effects.some(
-					(effect) =>
-						effect.kind === "agent.stop" && effect.status === "pending",
-				),
-			).toBe(true);
+			expect(view.effects.some((effect) => effect.kind === "agent.stop")).toBe(
+				false,
+			);
 		} finally {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
@@ -2107,7 +2104,7 @@ describe("transactional workflow runtime", () => {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
 	});
-	test("verification round agents are stopped once the round passes, including the triage agent", () => {
+	test("verification round agents remain alive after the round passes", () => {
 		const tmp = fs.mkdtempSync(
 			path.join(os.tmpdir(), "workflow-round-stop-pass-"),
 		);
@@ -2126,8 +2123,8 @@ describe("transactional workflow runtime", () => {
 				},
 				routing: routing(),
 			}).view;
-			// Gives a run's agent a real pane handle (like a live `pi` process)
-			// before completing it, so a leaked agent.stop gap is observable.
+			// Give runs real pane handles. Completed reviewer sessions must remain
+			// available for a later round's same-role prompt.
 			const completeWithHandle = (role: string, payload: unknown) => {
 				const runView = requireDefined(
 					view.runs.find((item) => item.role === role),
@@ -2186,18 +2183,18 @@ describe("transactional workflow runtime", () => {
 			expect(
 				view.runs.find((run) => run.id === testVerifierRun.id)?.status,
 			).toBe("completed");
-			const stoppedRunIds = engine
-				.claimEffects(repo, 100)
-				.filter((effect) => effect.kind === "agent.stop")
-				.map((effect) => (effect.payload as { runId?: string }).runId);
-			expect(stoppedRunIds).toEqual(
-				expect.arrayContaining([triageRun.id, testVerifierRun.id]),
-			);
+			expect(triageRun.handle).toBeTruthy();
+			expect(testVerifierRun.handle).toBeTruthy();
+			expect(
+				engine
+					.claimEffects(repo, 100)
+					.some((effect) => effect.kind === "agent.stop"),
+			).toBe(false);
 		} finally {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
 	});
-	test("verification round agents are stopped when a critical finding sends the round back for fixes", () => {
+	test("verification round agents remain alive when findings send work back", () => {
 		const tmp = fs.mkdtempSync(
 			path.join(os.tmpdir(), "workflow-round-stop-fix-"),
 		);
@@ -2289,13 +2286,13 @@ describe("transactional workflow runtime", () => {
 				],
 			});
 			expect(view.currentStep.id).toBe("core.implementation");
-			const stoppedRunIds = engine
-				.claimEffects(repo, 100)
-				.filter((effect) => effect.kind === "agent.stop")
-				.map((effect) => (effect.payload as { runId?: string }).runId);
-			expect(stoppedRunIds).toEqual(
-				expect.arrayContaining([triageRun.id, qualityRun.id]),
-			);
+			expect(triageRun.handle).toBeTruthy();
+			expect(qualityRun.handle).toBeTruthy();
+			expect(
+				engine
+					.claimEffects(repo, 100)
+					.some((effect) => effect.kind === "agent.stop"),
+			).toBe(false);
 		} finally {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}

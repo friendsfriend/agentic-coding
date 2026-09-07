@@ -16,7 +16,11 @@ import {
 	isWikiWorkflowTarget,
 } from "../workflow/runtime";
 import { copyToClipboard } from "./clipboard";
-import { listWorkflows, loadDashboard, testDashboard } from "./dash/data";
+import {
+	listWorkflowsAsync,
+	loadDashboardAsync,
+	testDashboard,
+} from "./dash/data";
 import { setupKeymap } from "./dash/keymap-setup";
 import { notify } from "./dash/notifications";
 import { setGlobalSelectionMouseUpHandler } from "./dash/selectionCopy";
@@ -188,10 +192,10 @@ export async function main(): Promise<void> {
 		console.log(
 			JSON.stringify(
 				home
-					? listWorkflows()
+					? await listWorkflowsAsync()
 					: isTest
 						? testDashboard()
-						: loadDashboard(repo, resolvedWorkflowId),
+						: await loadDashboardAsync(repo, resolvedWorkflowId),
 				null,
 				2,
 			),
@@ -241,7 +245,7 @@ export async function main(): Promise<void> {
 	// Demo DB is async; non-demo construction is cheap. The scan/load itself
 	// happens in startServerStack (render-first so the startup modal shows).
 	let db: TraceDb;
-	let demoSpans: SpanData[] = [];
+	let loadedSpans: SpanData[] = [];
 	if (useDemoDb) {
 		const {
 			db: demoDb,
@@ -250,7 +254,7 @@ export async function main(): Promise<void> {
 			logs,
 		} = await import("./otel/model/demoDb").then((m) => m.createDemoDb());
 		db = demoDb;
-		demoSpans = spans;
+		loadedSpans = spans;
 		traceStore.loadFile(spans);
 		metricStore.load(metrics);
 		logStore.load(logs);
@@ -258,19 +262,8 @@ export async function main(): Promise<void> {
 		db = new TraceDb();
 	}
 
-	if (!home) {
-		// Dash/test mode has no startup modal: keep the old synchronous bootstrap
-		// so the observability views snapshot real data at first render (and the
-		// deferred path never touches db after a signal-triggered close).
-		if (!useDemoDb) {
-			for (const r of repos) db.scanAllWorkspaces(r);
-			db.cleanupOlderThan();
-			traceStore.loadFile(db.loadSpans());
-		}
-		topologyStore.load(
-			useDemoDb ? demoSpans : traceStore.spanCount_ > 0 ? db.loadSpans() : [],
-		);
-	}
+	// Workflow and telemetry history are loaded after first paint by the server
+	// bootstrap below; the dashboard can render its loading state meanwhile.
 
 	/** Partial stack the stop sequence reaches; filled by startServerStack. */
 	const stack: ServerStack = { servers: [] };
@@ -403,6 +396,7 @@ export async function main(): Promise<void> {
 
 	// ---- Server-stack start sequence ----
 	async function startServerStack(homeMode: boolean): Promise<void> {
+		await tick();
 		let activeStep = "history";
 		const mark = (id: string) => {
 			activeStep = id;
@@ -410,12 +404,11 @@ export async function main(): Promise<void> {
 		};
 		try {
 			mark("history");
-			if (homeMode && !useDemoDb) {
-				// Home mode loads history deferred (behind the startup modal); dash/test
-				// already loaded it synchronously pre-render.
-				for (const r of repos) db.scanAllWorkspaces(r);
+			if (!useDemoDb) {
+				for (const r of repos) await db.scanAllWorkspacesAsync(r);
 				db.cleanupOlderThan();
-				traceStore.loadFile(db.loadSpans());
+				loadedSpans = db.loadSpans();
+				traceStore.loadFile(loadedSpans);
 			}
 			setStepDone("history");
 			await tick();
@@ -505,17 +498,9 @@ export async function main(): Promise<void> {
 			await tick();
 			if (isShutdownRequested()) return;
 
-			// Build topology from loaded spans (dash/test: already loaded pre-render)
-			if (homeMode) {
-				topologyStore.load(
-					useDemoDb
-						? demoSpans
-						: traceStore.spanCount_ > 0
-							? db.loadSpans()
-							: [],
-				);
-				finishStartup();
-			}
+			// Build topology from the history loaded after first paint.
+			topologyStore.load(loadedSpans);
+			if (homeMode) finishStartup();
 		} catch (error) {
 			// Stop whatever already started so a failed bootstrap leaks no port or sidecar.
 			for (const server of stack.servers) server.stop(true);

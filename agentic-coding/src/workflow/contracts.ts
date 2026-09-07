@@ -255,6 +255,8 @@ export interface DeveloperDialogueRecord {
 	options: readonly DeveloperQuestionOption[];
 	/** Present for items created by one questionnaire; absent in legacy records. */
 	groupId?: string;
+	/** Secret binding for the internal timer that may expire this question. */
+	timerNonce?: string;
 	itemIndex?: number;
 	status: DeveloperQuestionStatus;
 	createdAt: string;
@@ -476,6 +478,12 @@ export type WorkflowCommand =
 			token: string;
 	  }
 	| {
+			type: "timer.question-expire";
+			workflowId: string;
+			questionId: string;
+			timerNonce: string;
+	  }
+	| {
 			type: "agent.handoff";
 			runId: string;
 			generation: number;
@@ -586,6 +594,13 @@ export const commandContract: Contract<WorkflowCommand> = {
 				stepId: text(input.stepId, "$.stepId"),
 				role: text(input.role, "$.role"),
 				token: text(input.token, "$.token", 1024),
+			};
+		if (type === "timer.question-expire")
+			return {
+				type,
+				workflowId: text(input.workflowId, "$.workflowId"),
+				questionId: text(input.questionId, "$.questionId"),
+				timerNonce: text(input.timerNonce, "$.timerNonce", 128),
 			};
 		if (type === "agent.handoff")
 			return {
@@ -804,6 +819,9 @@ function dialogue(value: unknown): DeveloperDialogueRecord[] {
 			...(item.groupId === undefined
 				? {}
 				: { groupId: text(item.groupId, `${at}.groupId`) }),
+			...(item.timerNonce === undefined
+				? {}
+				: { timerNonce: text(item.timerNonce, `${at}.timerNonce`, 128) }),
 			...(item.itemIndex === undefined
 				? {}
 				: { itemIndex: integer(item.itemIndex, `${at}.itemIndex`) }),

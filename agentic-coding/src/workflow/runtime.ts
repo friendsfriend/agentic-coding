@@ -16,10 +16,15 @@ export type {
 } from "./runtime/engine-types.ts";
 export {
 	changedFilesIn,
+	changedFilesInAsync,
 	sourceContentFingerprint,
 } from "./runtime/evidence.ts";
 export { fusionPlannerRoles } from "./runtime/kernel.ts";
-export { initializeStore, STORE_SCHEMA_VERSION } from "./runtime/store.ts";
+export {
+	dueQuestionTimers,
+	initializeStore,
+	STORE_SCHEMA_VERSION,
+} from "./runtime/store.ts";
 export {
 	canonicalRepository,
 	canonicalStorePath,

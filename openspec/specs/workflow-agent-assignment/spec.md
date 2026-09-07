@@ -21,7 +21,8 @@ Each agent prompt SHALL identify protocol version, run, stable step and role, ob
 
 #### Scenario: Persistent agent receives next run
 - **WHEN** existing agent session is reused for later attempt or round
-- **THEN** the next prompt SHALL include complete current assignment
+- **THEN** the next prompt SHALL include complete current assignment with fresh run ID, generation, output path, and capability
+- **AND** its previous run capability SHALL be rejected
 - **AND** the agent SHALL not need prior prompt context to determine scope or handoff
 
 #### Scenario: Researcher receives complete context
@@ -55,7 +56,8 @@ Every managed agent SHALL report only `complete`, `blocked`, or `failed` through
 #### Scenario: Agent fails assignment
 - **WHEN** an agent encounters non-recoverable execution failure
 - **THEN** it SHALL hand off `failed` with bounded diagnostic
-- **AND** the step definition SHALL apply its pinned failure/retry policy
+- **AND** the step definition SHALL apply its pinned failure/retry policy without stopping the agent session
+- **AND** a later same-role run SHALL re-prompt that session with fresh authority
 
 ### Requirement: Run capability authority
 Each assignment SHALL carry single-use capability scoped to workflow, run, actor, run generation, issued revision, allowed outcomes, output location, and expiry; persisted authority SHALL not store reusable plaintext token.

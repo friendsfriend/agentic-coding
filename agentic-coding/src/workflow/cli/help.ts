@@ -3,15 +3,16 @@
 export function help(command?: string): void {
 	if (!command) {
 		console.log(
-			"Usage: agentic-coding workflow <command> [flags]\n\nCommands:\n  start            Start pinned workflow definition\n  status           Print validated workflow view\n  action           Dispatch revision-bound engine action (including close-research)\n  handoff          Submit run-bound agent outcome\n  question         Ask the developer a bounded question\n  research-handoff Record structured handoff and start wiki drafting\n  repair           Repair to compatible step, retriggers phase\n  repin            Re-pin to current definition digest\n  migrate          Preview or apply a revision-bound semantic migration\n  projects         List configured projects\n  config           Print resolved configuration\n  agent-extension  Manage Pi agent extensions\n  wiki             Read/update OKF wiki; only the managed wiki or research-wiki role may write drafts; archive verifies",
+			"Usage: agentic-coding workflow <command> [flags]\n\nCommands:\n  start            Start pinned workflow definition\n  status           Print observational workflow view\n  drain            Explicitly execute due workflow effects\n  action           Dispatch revision-bound engine action (including close-research)\n  handoff          Submit run-bound agent outcome\n  question         Ask the developer a bounded question\n  research-handoff Record structured handoff and start wiki drafting\n  repair           Repair to compatible step, retriggers phase\n  repin            Re-pin to current definition digest\n  migrate          Preview or apply a revision-bound semantic migration\n  projects         List configured projects\n  config           Print resolved configuration\n  agent-extension  Manage Pi agent extensions\n  wiki             Read/update OKF wiki; only the managed wiki or research-wiki role may write drafts; archive verifies",
 		);
 		return;
 	}
 	const usage: Record<string, string> = {
 		start:
-			"start [--repo PATH] --workflow-id ID [--mode worktree|checkout] [--workflow openspec-full|openspec-propose|openspec-apply|no-openspec|openspec-fusion-full|openspec-fusion-propose|wiki|research] [--fusion-profiles NAME,NAME,...] [--task TEXT] [--ticket ID] [--preset NAME] (explicit fusion profiles override preset planner roles; config is repository-scoped)",
+			"start --workflow-id ID [--repo PATH --mode worktree|checkout] [--workflow openspec-full|openspec-propose|openspec-apply|no-openspec|openspec-fusion-full|openspec-fusion-propose|wiki|research] [--fusion-profiles NAME,NAME,...] [--task TEXT] [--ticket ID] [--preset NAME] (repo and mode are required except for research; explicit fusion profiles override preset planner roles; config is repository-scoped)",
 
 		status: "status --repo PATH --workflow-id ID",
+		drain: "drain --repo PATH [--limit N] [--wait-ms N]",
 		action:
 			"action ACTION_ID --repo PATH --workflow-id ID --revision N [--input JSON_OR_PATH]",
 		handoff:

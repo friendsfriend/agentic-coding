@@ -11,14 +11,19 @@ import {
 	actions,
 	boundedError,
 	effects,
-	expireDueQuestions,
 	instance,
 	observedStore,
-	openStore,
+	openReadStore,
 	runs,
 	STORE_SCHEMA_VERSION,
 	validateSnapshot,
 } from "./store.ts";
+
+function publicDialogue(
+	snapshot: NonNullable<WorkflowView["developerDialogue"]>,
+): NonNullable<WorkflowView["developerDialogue"]> {
+	return snapshot.map(({ timerNonce: _timerNonce, ...question }) => question);
+}
 
 export function diagnosticView(
 	changeId: string,
@@ -170,8 +175,8 @@ export function view(
 			})),
 			observations: [],
 			health: { valid: true, attention: snapshot.attention },
-			developerDialogue: snapshot.developerDialogue,
-			pendingQuestions: snapshot.developerDialogue.filter(
+			developerDialogue: publicDialogue(snapshot.developerDialogue ?? []),
+			pendingQuestions: publicDialogue(snapshot.developerDialogue ?? []).filter(
 				(item) =>
 					item.status === "pending" &&
 					Date.parse(item.expiresAt) > now().getTime(),
@@ -223,8 +228,10 @@ export function view(
 					effects: [],
 					observations: [],
 					health: { valid: false, attention: [diagnostic], diagnostic },
-					developerDialogue: snapshot.developerDialogue,
-					pendingQuestions: snapshot.developerDialogue.filter(
+					developerDialogue: publicDialogue(snapshot.developerDialogue ?? []),
+					pendingQuestions: publicDialogue(
+						snapshot.developerDialogue ?? [],
+					).filter(
 						(item) =>
 							item.status === "pending" &&
 							Date.parse(item.expiresAt) > now().getTime(),
@@ -282,7 +289,7 @@ export function viewById(
 	registry: WorkflowRegistry,
 	now: () => Date,
 ): WorkflowView {
-	const db = openStore(repo);
+	const db = openReadStore(repo);
 	try {
 		return view(db, id, registry, now);
 	} finally {
@@ -299,7 +306,7 @@ export function status(
 	const observed = observedStore(repo);
 	let db: Database;
 	try {
-		db = openStore(repo);
+		db = openReadStore(repo);
 	} catch (error) {
 		if (
 			error instanceof WorkflowRuntimeError &&
@@ -343,7 +350,6 @@ export function status(
 				`workflow not found: ${workflowId}`,
 			);
 		}
-		expireDueQuestions(db, row.id, registry, now);
 		return view(db, row.id, registry, now);
 	} finally {
 		db.close();
@@ -385,7 +391,7 @@ export function list(
 	}
 	let db: Database;
 	try {
-		db = openStore(repo);
+		db = openReadStore(repo);
 	} catch (error) {
 		return [
 			diagnosticView(
@@ -439,7 +445,7 @@ export function previewMigration(
 	targetVersion: number,
 	registry: WorkflowRegistry,
 ): MigrationPreview {
-	const db = openStore(repo);
+	const db = openReadStore(repo);
 	try {
 		const row = instance(db, workflowId);
 		const snapshot = parseSnapshot(JSON.parse(row.snapshot_json));
@@ -553,7 +559,7 @@ export function previewRepair(
 	workflowId: string,
 	registry: WorkflowRegistry,
 ): RepairPreview[] {
-	const db = openStore(repo);
+	const db = openReadStore(repo);
 	try {
 		const row = instance(db, workflowId);
 		const snapshot = parseSnapshot(JSON.parse(row.snapshot_json));

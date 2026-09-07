@@ -4,6 +4,7 @@
 // workspace.close), advances the workflow. Moved verbatim out of
 // runtime.ts's `reduce()` dispatch (split-workflow-god-modules).
 import type { Database } from "bun:sqlite";
+import fs from "node:fs";
 import path from "node:path";
 import type { WorkflowCommand, WorkflowSnapshot } from "../../contracts.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
@@ -70,8 +71,43 @@ export function effectResult(
 			command.data && typeof command.data === "object"
 				? (command.data as Record<string, unknown>)
 				: {};
-		if (typeof data.worktree === "string")
-			snapshot.metadata.worktree = path.resolve(data.worktree);
+		if (typeof data.worktree === "string") {
+			const candidate = path.resolve(data.worktree);
+			const allowed = new Set<string>([
+				path.resolve(snapshot.metadata.worktree),
+			]);
+			if (snapshot.metadata.repository) {
+				allowed.add(path.resolve(snapshot.metadata.repository));
+				const listed = Bun.spawnSync(
+					[
+						"git",
+						"-C",
+						snapshot.metadata.repository,
+						"worktree",
+						"list",
+						"--porcelain",
+					],
+					{ stdout: "pipe", stderr: "ignore" },
+				);
+				for (const line of listed.stdout.toString().split("\n"))
+					if (line.startsWith("worktree "))
+						allowed.add(path.resolve(line.slice(9)));
+			}
+			const candidateReal = fs.realpathSync(candidate);
+			const allowedReal = [...allowed].some((item) => {
+				try {
+					return fs.realpathSync(item) === candidateReal;
+				} catch {
+					return path.resolve(item) === candidate;
+				}
+			});
+			if (!allowedReal)
+				throw new WorkflowRuntimeError(
+					"source-isolation",
+					"workspace setup returned an unregistered worktree",
+				);
+			snapshot.metadata.worktree = candidateReal;
+		}
 		if (typeof data.workspace === "string")
 			snapshot.metadata.workspace = data.workspace;
 		if (typeof data.branch === "string") snapshot.metadata.branch = data.branch;

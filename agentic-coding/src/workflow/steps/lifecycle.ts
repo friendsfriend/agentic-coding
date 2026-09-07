@@ -1,5 +1,8 @@
 import type { StepBehavior } from "./types.ts";
-import { validateArchiveEvidence } from "./validation.ts";
+import {
+	type PreparedStepEvidence,
+	validateArchiveEvidence,
+} from "./validation.ts";
 
 const REVIEW_COMMENTS_INPUT = {
 	schemaId: "core.review-comments",
@@ -50,16 +53,7 @@ export const lifecycleBehaviors: Readonly<Record<string, StepBehavior>> = {
 		],
 	},
 	"core.wiki-approval": {
-		developerActions: ({ snapshot }) => [
-			...(snapshot.definition.id === "research"
-				? [
-						{
-							id: "close-research",
-							label: "Close research",
-							confirmation: "confirm" as const,
-						},
-					]
-				: []),
+		developerActions: () => [
 			{ id: "approve-wiki", label: "Approve wiki", confirmation: "confirm" },
 			{
 				id: "review-comments",
@@ -105,7 +99,8 @@ export const lifecycleBehaviors: Readonly<Record<string, StepBehavior>> = {
 	"core.archive": {
 		roles: () => ["archive"],
 		candidateRoles: () => ["archive"],
-		validateEvidence: ({ snapshot }) => validateArchiveEvidence(snapshot),
+		validateEvidence: ({ evidence }) =>
+			validateArchiveEvidence(evidence as PreparedStepEvidence),
 		acceptsCommentsContext: true,
 	},
 };

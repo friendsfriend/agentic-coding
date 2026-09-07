@@ -6,7 +6,7 @@ TBD - created by archiving change check-workflow-bugs-frontier-model. Update Pur
 ## Requirements
 
 ### Requirement: Role lifecycle uses Herdr agent commands
-The workflow SHALL launch each managed run through configured agent adapter using Herdr agent lifecycle, never raw terminal startup or key injection.
+The workflow SHALL launch each new managed session and re-prompt each reused session through configured agent adapter using Herdr agent lifecycle, never raw terminal startup or key injection. Managed sessions SHALL not be stopped or have panes closed by handoff, failure cleanup, repair, migration, or round completion; workspace closure owns teardown.
 
 #### Scenario: Initial prompt starts atomically
 - **WHEN** workflow outbox requests managed agent launch
@@ -31,7 +31,7 @@ The workflow SHALL launch each managed run through configured agent adapter usin
 - **WHEN** engine computes the Herdr agent identity for the new run
 - **THEN** the computed identity SHALL be identical to the identity used for the role's previous run in that workflow instance
 - **AND** engine SHALL NOT derive that identity from the per-run identifier
-- **AND** grouped triage/verifier roles SHALL keep a per-run identity unaffected by this scenario
+- **AND** grouped triage/verifier roles SHALL keep the same identity for same role across rounds
 
 ### Requirement: Verification roles share one tab
 The workflow SHALL group triage and all verifier roles in one tab while retaining one pane per role.
@@ -52,6 +52,11 @@ The workflow SHALL group triage and all verifier roles in one tab while retainin
 - **WHEN** next triage or verifier starts
 - **THEN** workflow SHALL create new tab instead of targeting stale tab ID
 - **AND** SHALL reject any recorded group tab also owned by dashboard, git, worker, planner, recovery, or archive
+
+#### Scenario: Repair re-prompts without teardown
+- **WHEN** repair or failure cleanup expires a managed run and workflow later needs same step and role
+- **THEN** engine SHALL send its complete fresh assignment through `herdr agent prompt` to existing session
+- **AND** it SHALL NOT call agent stop or close that agent pane before workspace closure
 
 ### Requirement: Every role has a role-specific prompt
 When assignment interaction mode is `developer-dialogue`, the prompt SHALL permit visible discussion and blockers and SHALL identify the `developer_question` interface as the preferred way to resolve an unclear decision before implementation or verification proceeds. When assignment interaction mode is `silent`, the prompt SHALL require artifact-based handoff without chat summary, but the role SHALL still be able to use the authenticated question interface when the workflow exposes it. Every assignment SHALL include the workflow's available prior developer dialogue as explicitly untrusted decision context.

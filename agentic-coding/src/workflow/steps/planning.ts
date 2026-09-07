@@ -1,6 +1,14 @@
 import type { WorkflowRouting } from "../contracts.ts";
 import type { StepBehavior } from "./types.ts";
-import { validatePlanningArtifacts } from "./validation.ts";
+import {
+	type PreparedStepEvidence,
+	validatePlanningArtifacts,
+} from "./validation.ts";
+
+const validatePlanning = ({
+	evidence,
+}: Parameters<NonNullable<StepBehavior["validateEvidence"]>>[0]) =>
+	validatePlanningArtifacts(evidence as PreparedStepEvidence);
 
 const PLANNER_ROLE = /^planner-[1-5]$/;
 const plannerRoles = (count: number): string[] =>
@@ -27,7 +35,7 @@ export const planningBehaviors: Readonly<Record<string, StepBehavior>> = {
 	"core.plan": {
 		roles: () => ["planner"],
 		candidateRoles: () => ["planner"],
-		validateEvidence: ({ snapshot }) => validatePlanningArtifacts(snapshot),
+		validateEvidence: validatePlanning,
 		onArrive: ({ edge, outcome }) =>
 			edge.to === "core.plan" && outcome === "comments"
 				? { mode: "review-fix" }
@@ -58,7 +66,7 @@ export const planningBehaviors: Readonly<Record<string, StepBehavior>> = {
 	"fusion.consolidate": {
 		roles: () => ["consolidator"],
 		candidateRoles: () => ["consolidator"],
-		validateEvidence: ({ snapshot }) => validatePlanningArtifacts(snapshot),
+		validateEvidence: validatePlanning,
 		carriesOutputContext: true,
 	},
 };
