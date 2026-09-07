@@ -19,7 +19,7 @@ Not for agents. This is only for humans.
   * version workflow migrations (done)
   * seperate workflow observation execution (done)
   * centralize step completion behavior (done)
-  * contsolidate-tui-primitives
+  * contsolidate-tui-primitives (done)
   * split-dashboard-responsibilities
   * enforce-source-layer-boundaries
 
