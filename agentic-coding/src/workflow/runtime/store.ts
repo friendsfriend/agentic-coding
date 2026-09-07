@@ -8,7 +8,6 @@
 // tier. Moved out of runtime.ts
 // (split-workflow-god-modules).
 import { Database } from "bun:sqlite";
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type {
@@ -189,65 +188,27 @@ function guardedDatabase(
 		options.create === true,
 		options.readonly === true,
 	);
-	const links: string[] = [];
-	const sidecarGuards: number[] = [];
 	try {
 		const guardedStat = fs.fstatSync(guard);
-		// SQLite accepts a path, not a file descriptor. Open a private hard link
-		// to the descriptor-guarded inode so a canonical-path replacement cannot
-		// change the database SQLite actually opens. Link WAL sidecars as well.
-		const databasePath = `${file}.open-${process.pid}-${randomUUID()}`;
-		fs.linkSync(file, databasePath);
-		links.push(databasePath);
-		for (const suffix of ["-wal", "-shm"]) {
-			const sidecar = `${file}${suffix}`;
-			if (!fs.existsSync(sidecar)) continue;
-			const sidecarFd = fs.openSync(
-				sidecar,
-				fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0),
-			);
-			try {
-				const sidecarStat = fs.fstatSync(sidecarFd);
-				if (!sidecarStat.isFile())
-					throw new WorkflowRuntimeError(
-						"path-security",
-						"workflow store sidecar must be a regular file",
-					);
-				const linkedSidecar = `${databasePath}${suffix}`;
-				fs.linkSync(sidecar, linkedSidecar);
-				const linkedStat = fs.lstatSync(linkedSidecar);
-				if (
-					linkedStat.dev !== sidecarStat.dev ||
-					linkedStat.ino !== sidecarStat.ino ||
-					!linkedStat.isFile()
-				)
-					throw new WorkflowRuntimeError(
-						"path-security",
-						"workflow store sidecar changed while opening",
-					);
-				links.push(linkedSidecar);
-				sidecarGuards.push(sidecarFd);
-			} catch (error) {
-				fs.closeSync(sidecarFd);
-				throw error;
-			}
-		}
-		const linkedStat = fs.statSync(databasePath);
-		if (
-			linkedStat.dev !== guardedStat.dev ||
-			linkedStat.ino !== guardedStat.ino
-		)
-			throw new WorkflowRuntimeError(
-				"path-security",
-				"workflow store changed while opening",
-			);
+		// Keep SQLite on descriptor's stable inode. Hard-link aliases make SQLite
+		// race journal/shared-memory files on macOS (`SQLITE_IOERR_VNODE`).
 		const db = new Database(
-			databasePath,
+			`file:${process.platform === "darwin" ? "/dev/fd" : "/proc/self/fd"}/${guard}`,
 			options.readonly === true ? { readonly: true } : { create: true },
 		);
 		try {
+			db.exec("PRAGMA busy_timeout=10000");
 			db.query("PRAGMA schema_version").get();
 			if (options.readonly !== true) db.exec("PRAGMA journal_mode=MEMORY");
+			const openedStat = fs.fstatSync(guard);
+			if (
+				openedStat.dev !== guardedStat.dev ||
+				openedStat.ino !== guardedStat.ino
+			)
+				throw new WorkflowRuntimeError(
+					"path-security",
+					"workflow store changed while opening",
+				);
 			verifyCanonicalStorePath(repo, file);
 			const close = db.close.bind(db);
 			Object.defineProperty(db, "close", {
@@ -255,8 +216,6 @@ function guardedDatabase(
 					try {
 						close();
 					} finally {
-						for (const link of links) fs.rmSync(link, { force: true });
-						for (const fd of sidecarGuards) fs.closeSync(fd);
 						fs.closeSync(guard);
 					}
 				},
@@ -267,14 +226,6 @@ function guardedDatabase(
 			throw error;
 		}
 	} catch (error) {
-		for (const link of links) fs.rmSync(link, { force: true });
-		for (const fd of sidecarGuards) {
-			try {
-				fs.closeSync(fd);
-			} catch {
-				/* guard already closed */
-			}
-		}
 		try {
 			fs.closeSync(guard);
 		} catch {
@@ -916,7 +867,8 @@ function openStoreWithMode(repo: string, readonly: boolean): Database {
 			"workflow store is absent; initialize the store before writing",
 		);
 	const db = guardedDatabase(repo, file, { readonly });
-	if (!readonly) db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=10000");
+	db.exec("PRAGMA busy_timeout=10000");
+	if (!readonly) db.exec("PRAGMA foreign_keys=ON");
 	try {
 		verifyCanonicalStorePath(repo, file);
 		const version = pragmaVersion(db);

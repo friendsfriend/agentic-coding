@@ -392,14 +392,24 @@ export class WorkflowEngine {
 		// transaction. The reducer repeats the final integrity check after reload
 		// so replacement during the race window is rejected.
 		let preparedHandoff: PreparedHandoffEvidence | undefined;
+		let handoffWorktree: string | undefined;
 		if (command.type === "agent.handoff" && command.outcome === "complete") {
-			const preparedArtifact = prepareHandoffArtifact(repo, command, this.now);
 			const observedRun = storeGetRun(repo, command.runId);
 			const observed = storeGetSnapshot(
 				repo,
 				observedRun.workflowId,
 				this.registry,
 				this.now,
+			);
+			handoffWorktree =
+				observed.definition.id === "wiki-comments"
+					? wikiWorkflowDataRoot()
+					: observed.metadata.worktree;
+			const preparedArtifact = prepareHandoffArtifact(
+				repo,
+				command,
+				this.now,
+				handoffWorktree,
 			);
 			const evidenceStep = this.registry.stepForDefinition(
 				this.registry.definition(
@@ -409,17 +419,28 @@ export class WorkflowEngine {
 				),
 				observed.currentStep,
 			);
-			const evidenceSnapshot =
-				observed.currentStep === "core.plan" && preparedArtifact
-					? {
-							...observed,
-							metadata: {
-								...observed.metadata,
-								changeId: planResult.parse(preparedArtifact.output)
-									.primaryChangeId,
-							},
-						}
-					: observed;
+			let evidenceSnapshot = observed;
+			if (
+				preparedArtifact &&
+				(observed.currentStep === "core.plan" ||
+					observed.currentStep === "fusion.consolidate")
+			) {
+				let primaryChangeId: string;
+				try {
+					primaryChangeId = planResult.parse(
+						preparedArtifact.output,
+					).primaryChangeId;
+				} catch (error) {
+					throw new WorkflowRuntimeError(
+						"entry-guard",
+						`plan output must declare a primary change id: ${String((error as Error).message)}`,
+					);
+				}
+				evidenceSnapshot = {
+					...observed,
+					metadata: { ...observed.metadata, changeId: primaryChangeId },
+				};
+			}
 			const preparedStepEvidence = prepareStepEvidence(evidenceSnapshot);
 			if (evidenceStep.behavior?.validateEvidence)
 				evidenceStep.behavior.validateEvidence({
@@ -469,7 +490,12 @@ export class WorkflowEngine {
 			}
 		}
 		if (command.type === "agent.handoff" && command.outcome === "complete") {
-			const finalArtifact = prepareHandoffArtifact(repo, command, this.now);
+			const finalArtifact = prepareHandoffArtifact(
+				repo,
+				command,
+				this.now,
+				handoffWorktree,
+			);
 			if (
 				preparedHandoff?.artifactDigest !== undefined &&
 				(!finalArtifact ||

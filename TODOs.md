@@ -8,6 +8,9 @@ Not for agents. This is only for humans.
 * Automatic wiki commit + push if in git repo.
 * openspec panel shows all instead of only relevant changes / specs
 * Fix runtime calculation for agents that take multiple turns
+* Use singular pane for verfication triage
+* Write herdr plugin to control coloring of tabs based on agent activity
+* Tui errors dont use the notification system anymore
 
 * Architecture improvements based on gpt 6 astra:
   * fix effect lease lifecycle (done)

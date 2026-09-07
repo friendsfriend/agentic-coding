@@ -114,6 +114,13 @@ performs the write.
 - `validateEvidence({ snapshot })` — entry-guard predicate run before a step's
   `complete` outcome is accepted; throws `WorkflowRuntimeError("entry-guard",
   ...)` to reject.
+- `onAgentComplete({ snapshot, definitionId, run, outcome, output,
+  outputDigest, remainingActiveRunIds, evidence })` and
+  `onEffectComplete({ snapshot, effect })` — completion decisions over
+  authenticated facts. They return only constrained local updates, one legal
+  transition request, candidate-role run requests, and allowlisted effects.
+  The runtime validates routes, roles, effects, and leases, then applies the
+  result atomically; hooks never receive persistence or I/O handles.
 - `onArrive({ snapshot, edge, outcome, output, prior })` — derives arriving
   step-local state (attempt seeding, `mode`, preserved `results`,
   `selectedRoles`, terminal `status`). `prior` carries the pre-reset
@@ -243,8 +250,8 @@ blast radius to the named functions:
 | `runtime.ts` `migrateLegacy()` (~lines 1082–1093, 1200–1202) | The legacy phase-name → step-id map (`explore` → `core.plan`, etc.) and a `core.verification` round-seed check | One-time import of pre-this-engine snapshot shapes; the map's *keys* are legacy phase names, not step ids, so collapsing it into `StepBehavior` would need a new phase-name-owning hook for a migration path, not step semantics. |
 | `runtime.ts` `recordResearchHandoff()` (~line 1530) | `command.stepId !== "core.research"` | Authenticates that a handoff command names the live researcher run; a security boundary, not step business logic. |
 | `runtime.ts` `developerAction()` (~lines 1815, 1835, 1849) | `snapshot.currentStep !== "core.research"` gating `close-research`/`research-follow-up` | Duplicates the same rule `developerActions()` already encodes (task 5.3) as the action *availability* rule; this function enforces it a second time as a command-time invariant so a stale/forged `actionId` cannot bypass the check the dashboard already hides. |
-| `runtime.ts` `agentHandoff()` (~lines 2055–2195) | `run.stepId === "core.wiki"` / `"core.triage"`, `snapshot.currentStep === "core.triage"` / `"core.verification"` / `"fusion.plan"` / `"core.plan"` / `"fusion.consolidate"` / `"core.implementation"` / `"core.completed"` / `"core.closed"` | The largest concentration outside the four named functions: per-outcome completion handling (evidence validation dispatch, `selectedRoles`/`results` bookkeeping, round-limit routing). This is exactly the kind of per-step completion logic stage B's hooks target, but it was not in this stage's design inventory (see design.md's task 6.1 table) and reworking it means re-deriving `transition`'s sibling function with the same rigor — left for stage C, when `runtime.ts` is split and this function's boundary is reconsidered alongside `transition`/`enterStep`. |
-| `runtime.ts` `effectResult()` (~lines 2273–2282) | `snapshot.currentStep === "core.plan"` / `"fusion.consolidate"` / `"core.delivery"` | Effect-completion routing (an `openspec.validate` pass self-completes plan/consolidate; `delivery.commit` chains into `delivery.push`). Same disposition as `agentHandoff()`. |
+| `runtime/reducers/agent-handoff.ts` | No bespoke step-ID completion branches remain; registered behavior owns verification, fusion, planning, and delivery decisions. | The runtime retains authentication, evidence integrity, run bookkeeping, and generic fallback/closure handling. |
+| `runtime/reducers/effect-result.ts` | No bespoke completion-routing branches remain; registered behavior owns effect-gated transitions and delivery chaining. | Workspace setup/close and cleanup remain cross-cutting runtime mechanics. |
 | `runtime.ts` `createRun()` (~line 2565) | `step.id === "core.research"` (narrows `allowedOutcomes` to exclude `complete`) | A capability-shaping rule (research never hands off `complete`), adjacent to but distinct from `StepBehavior`; not in this stage's inventory. |
 | `runtime.ts` `validateEffect()` (~lines 2718–2740) | `snapshot.currentStep === "core.delivery"` / `"core.research"` / `"core.completed"` | Effect-legality exceptions (wiki-verify promoted at delivery/completion, research's workspace-setup-before-entry ordering) — a persistence/outbox invariant, not step business semantics. |
 | `runtime.ts` `validateFusionRouting()` (~line 3256) | `route.stepId === "fusion.plan"` | Routing-shape validation for the fusion fan-out, called only for the two fusion definition ids — a routing concern, not step business semantics. |
@@ -368,7 +375,10 @@ row):
 
 Stage A (`restructure-repo-for-agent-use`), stage B
 (`move-step-semantics-to-behavior-hooks`), and stage D
-(`derive-dashboard-actions-from-engine`) are complete. Remaining stage:
+(`derive-dashboard-actions-from-engine`) are complete. Completion
+centralization is also complete: authenticated agent and effect completion
+facts are passed to registered behavior hooks, whose constrained results are
+validated and applied by the runtime transaction.
 
 Stage C (`split-workflow-god-modules`) is also complete: `runtime.ts`,
 `definitions.ts`, and `cli.ts` are now re-export barrels over the module trees

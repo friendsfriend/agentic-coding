@@ -13,6 +13,11 @@ const WIKI_ROLE_ASSET: Readonly<Record<string, string>> = {
 };
 
 export const wikiBehavior: StepBehavior = {
+	onAgentComplete: ({ definitionId, outcome }) =>
+		outcome === "blocked" &&
+		["wiki", "wiki-comments", "research"].includes(definitionId)
+			? { transition: { outcome: "blocked" } }
+			: undefined,
 	roles: ({ snapshot }) => [wikiRole(snapshot.definition.id)],
 	candidateRoles: ({ definitionId }) => [wikiRole(definitionId)],
 	instructionAssetForRole: ({ role }) => WIKI_ROLE_ASSET[role],

@@ -1,6 +1,8 @@
 import type { StepBehavior } from "./types.ts";
 
 export const researchBehavior: StepBehavior = {
+	onAgentComplete: ({ outcome }) =>
+		outcome === "blocked" ? { transition: { outcome: "blocked" } } : undefined,
 	roles: () => ["researcher"],
 	candidateRoles: () => ["researcher"],
 	developerActions: () => [
@@ -9,6 +11,12 @@ export const researchBehavior: StepBehavior = {
 			label: "Ask researcher follow-up",
 			confirmation: "reason",
 			input: { schemaId: "core.research-follow-up", schemaVersion: 1 },
+		},
+		{
+			id: "request-research-wiki",
+			label: "Request wiki entry",
+			confirmation: "reason",
+			input: { schemaId: "core.research-wiki-request", schemaVersion: 1 },
 		},
 		{ id: "close-research", label: "Close research", confirmation: "confirm" },
 	],

@@ -1,8 +1,7 @@
 // The `effect.result` reducer: applies an effect-runner outcome to its
-// outbox row and, for the effect kinds that gate a transition
-// (workspace.setup, openspec.validate, delivery.commit/push,
-// workspace.close), advances the workflow. Moved verbatim out of
-// runtime.ts's `reduce()` dispatch (split-workflow-god-modules).
+// outbox row and delegates step-owned effect completion decisions to the
+// registered behavior. Workspace setup/close and cleanup remain runtime-wide
+// lifecycle mechanics.
 import type { Database } from "bun:sqlite";
 import fs from "node:fs";
 import path from "node:path";
@@ -12,7 +11,7 @@ import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
 } from "../../registry.ts";
-import { enqueue, enterStep, transition } from "../kernel.ts";
+import { applyCompletionResult, enqueue, enterStep } from "../kernel.ts";
 import { boundedError, type EffectRow, json } from "../store.ts";
 
 export function effectResult(
@@ -113,37 +112,25 @@ export function effectResult(
 		if (typeof data.branch === "string") snapshot.metadata.branch = data.branch;
 		enterStep(db, snapshot, definition, registry, now);
 	}
-	if (
-		command.outcome === "complete" &&
-		row.kind === "openspec.validate" &&
-		(snapshot.currentStep === "core.plan" ||
-			snapshot.currentStep === "fusion.consolidate")
-	)
-		transition(db, snapshot, definition, "complete", undefined, registry, now);
-	if (
-		command.outcome === "complete" &&
-		snapshot.currentStep === "core.delivery"
-	) {
-		if (row.kind === "delivery.commit")
-			enqueue(
-				db,
-				snapshot,
-				"delivery.push",
-				`delivery:${snapshot.workflowId}:push`,
-				{
-					workflowId: snapshot.workflowId,
-				},
-			);
-		if (row.kind === "delivery.push")
-			transition(
-				db,
-				snapshot,
-				definition,
-				"complete",
-				undefined,
-				registry,
-				now,
-			);
+	if (command.outcome === "complete") {
+		const step = registry.stepForDefinition(definition, snapshot.currentStep);
+		const completion = step.behavior?.onEffectComplete?.({
+			snapshot: structuredClone(snapshot),
+			effect: {
+				kind: row.kind,
+				payload: JSON.parse(row.payload_json),
+				data: command.data,
+			},
+		});
+		applyCompletionResult(
+			db,
+			snapshot,
+			definition,
+			step,
+			completion,
+			registry,
+			now,
+		);
 	}
 	if (command.outcome === "complete" && row.kind === "workspace.close")
 		enqueue(
