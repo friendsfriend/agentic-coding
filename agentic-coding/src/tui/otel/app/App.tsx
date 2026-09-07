@@ -17,11 +17,14 @@ import type { WikiReviewComment } from "../../../workflow/wiki";
 import { copyToClipboard } from "../../clipboard";
 import { App as DashApp } from "../../dash/App";
 import {
-	discoverProjects,
-	listWorkflows,
+	discoverProjectsAsync,
+	listWorkflowsAsync,
 	type WorkflowOverview,
 } from "../../dash/data";
-import { startWikiCommentWorkflowInProcess } from "../../dash/engine";
+import {
+	disposeExecutionCoordinator,
+	startWikiCommentWorkflowInProcess,
+} from "../../dash/engine";
 import { Home as DashHome } from "../../dash/Home";
 import { Header } from "../../dash/ui/Header";
 import { watchDirectories } from "../../dash/watchRefresh";
@@ -116,17 +119,62 @@ export function App(props: {
 	const [homeProjects, setHomeProjects] = createSignal<
 		Array<{ name: string; path: string; openspec: boolean }>
 	>([]);
+	const [homeError, setHomeError] = createSignal<string>();
+	const [homeRefreshing, setHomeRefreshing] = createSignal(false);
+	let homeLoadRunning = false;
+	let homeLoadQueued = false;
+	let homeDisposed = false;
+	let homeController: AbortController | undefined;
+	const loadHome = () => {
+		if (homeDisposed) return;
+		if (homeLoadRunning) {
+			homeLoadQueued = true;
+			return;
+		}
+		homeLoadRunning = true;
+		setHomeRefreshing(true);
+		homeController?.abort();
+		homeController = new AbortController();
+		void Promise.all([
+			listWorkflowsAsync(homeController.signal),
+			discoverProjectsAsync(homeController.signal),
+		])
+			.then(([items, projects]) => {
+				if (homeDisposed) return;
+				setHomeItems(items);
+				setHomeProjects(projects);
+				setHomeError(undefined);
+				setHomeLoading(false);
+			})
+			.catch((error) => {
+				if (!homeDisposed) {
+					setHomeError(error instanceof Error ? error.message : String(error));
+					setHomeLoading(false);
+				}
+			})
+			.finally(() => {
+				setHomeRefreshing(false);
+				homeLoadRunning = false;
+				if (homeLoadQueued && !homeDisposed) {
+					homeLoadQueued = false;
+					loadHome();
+				}
+			});
+	};
 	createEffect(() => {
 		if (props.dashboard?.mode !== "home") return;
-		const load = () => {
-			setHomeItems(listWorkflows());
-			setHomeProjects(discoverProjects());
-			setHomeLoading(false);
-		};
-		load();
+		loadHome();
 		// ponytail: 30s safety re-sync also discovers brand-new workflows.
-		const safety = setInterval(load, 30000);
-		onCleanup(() => clearInterval(safety));
+		const safety = setInterval(loadHome, 30000);
+		onCleanup(() => {
+			homeDisposed = true;
+			homeController?.abort();
+			for (const item of homeItems())
+				if (item.state.repository)
+					disposeExecutionCoordinator(item.state.repository);
+			disposeExecutionCoordinator(wikiWorkflowDataRoot());
+			clearInterval(safety);
+		});
 	});
 	createEffect(() => {
 		if (props.dashboard?.mode !== "home") return;
@@ -136,7 +184,7 @@ export function App(props: {
 				? join(wikiWorkflowDataRoot(), item.state.changeId)
 				: join(item.state.worktree, ".herdr-workflow", item.state.changeId),
 		);
-		const dispose = watchDirectories(dirs, () => setHomeItems(listWorkflows()));
+		const dispose = watchDirectories(dirs, loadHome);
 		onCleanup(dispose);
 	});
 	const [selectedListIndex, setSelectedListIndex] = createSignal(0);
@@ -270,7 +318,7 @@ export function App(props: {
 		comments: readonly WikiReviewComment[],
 	): Promise<string> {
 		const message = startWikiCommentWorkflowInProcess(comments);
-		setHomeItems(listWorkflows());
+		loadHome();
 		return message;
 	}
 
@@ -939,7 +987,9 @@ export function App(props: {
 								items={homeItems()}
 								loading={homeLoading()}
 								projects={homeProjects()}
-								refresh={() => setHomeItems(listWorkflows())}
+								error={homeError()}
+								refreshing={homeRefreshing()}
+								refresh={loadHome}
 							/>
 						) : (
 							<DashApp

@@ -6,6 +6,7 @@
 // side-effects for core.plan/fusion.consolidate. Moved verbatim out of
 // runtime.ts's `reduce()` dispatch (split-workflow-god-modules).
 import type { Database } from "bun:sqlite";
+import path from "node:path";
 import type { WorkflowCommand, WorkflowSnapshot } from "../../contracts.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
 import { planResult } from "../../definitions/contracts.ts";
@@ -13,15 +14,18 @@ import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
 } from "../../registry.ts";
+import {
+	type PreparedStepEvidence,
+	prepareStepEvidence,
+} from "../../steps/validation.ts";
 import { artifact, tokenMatches } from "../capability.ts";
-import { changedFilesIn, validateSourceBaseline } from "../evidence.ts";
+import { changedFilesIn, sourceContentFingerprint } from "../evidence.ts";
 import {
 	createRun,
 	enqueue,
 	expireSiblingRuns,
 	fusionDraftInputs,
 	fusionPlannerRoles,
-	stopRoundAgents,
 	transition,
 } from "../kernel.ts";
 import { ACTIVE_RUN, nowIso, type RunRow, runFromRow } from "../store.ts";
@@ -30,6 +34,8 @@ import { validateChangeId } from "../targets.ts";
 function validateTriageScope(
 	snapshot: WorkflowSnapshot,
 	output: { assignments: Array<{ role: string; files: string[] }> },
+	prepared?: PreparedHandoffEvidence,
+	currentChangedFiles?: readonly string[],
 ): void {
 	const allowed = new Set([
 		"quality-verifier",
@@ -38,7 +44,7 @@ function validateTriageScope(
 		"openspec-verifier",
 		"usability-verifier",
 	]);
-	const changed = new Set(changedFilesIn(snapshot));
+	const changed = new Set(currentChangedFiles ?? prepared?.changedFiles ?? []);
 	for (const assignment of output.assignments) {
 		if (
 			!allowed.has(assignment.role) ||
@@ -58,6 +64,14 @@ function validateTriageScope(
 	}
 }
 
+export interface PreparedHandoffEvidence {
+	artifactDigest?: string;
+	artifactOutput?: unknown;
+	changedFiles?: readonly string[];
+	sourceFingerprint?: string;
+	stepEvidence?: PreparedStepEvidence;
+}
+
 export function agentHandoff(
 	db: Database,
 	snapshot: WorkflowSnapshot,
@@ -65,6 +79,7 @@ export function agentHandoff(
 	command: Extract<WorkflowCommand, { type: "agent.handoff" }>,
 	registry: WorkflowRegistry,
 	now: () => Date,
+	prepared?: PreparedHandoffEvidence,
 ): { type: string; actor: unknown; data: unknown } {
 	const row = db
 		.query("SELECT * FROM workflow_runs WHERE id=?")
@@ -89,16 +104,36 @@ export function agentHandoff(
 			"unauthorized",
 			"invalid or expired run capability",
 		);
+	if (prepared?.sourceFingerprint) {
+		const currentFingerprint = sourceContentFingerprint(
+			snapshot.metadata.repository,
+			snapshot.metadata.wikiRoot,
+		);
+		if (currentFingerprint !== prepared.sourceFingerprint)
+			throw new WorkflowRuntimeError(
+				"source-isolation",
+				"source changed during handoff transaction",
+			);
+	}
 	let output: unknown;
 	let outputDigest: string | undefined;
 	if (command.outcome === "complete" && run.outputPath) {
-		const validated = artifact(run, command.artifact);
-		output = validated.output;
-		outputDigest = validated.digest;
+		if (!prepared?.artifactDigest || prepared.artifactOutput === undefined)
+			throw new WorkflowRuntimeError("artifact", "prepared artifact missing");
+		if (path.resolve(command.artifact ?? "") !== path.resolve(run.outputPath))
+			throw new WorkflowRuntimeError("artifact", "artifact path changed");
+		const finalArtifact = artifact(run, command.artifact);
+		if (finalArtifact.digest !== prepared.artifactDigest)
+			throw new WorkflowRuntimeError(
+				"artifact",
+				"artifact changed during handoff transaction",
+			);
+		output = finalArtifact.output;
+		outputDigest = finalArtifact.digest;
 	}
 	const step = registry.stepForDefinition(definition, run.stepId);
 	if (output !== undefined) output = step.output.parse(output);
-	if (snapshot.definition.id === "research") validateSourceBaseline(snapshot);
+
 	if (command.outcome === "complete") {
 		if (run.stepId === "core.plan" || run.stepId === "fusion.consolidate") {
 			// The planner owns change scope: it declares exactly one primary
@@ -123,12 +158,24 @@ export function agentHandoff(
 			validateChangeId(primary);
 			snapshot.metadata.changeId = primary;
 		}
-		step.behavior?.validateEvidence?.({ snapshot });
-		if (run.stepId === "core.wiki") validateSourceBaseline(snapshot);
+
+		if (prepared?.stepEvidence) {
+			const currentEvidence = prepareStepEvidence(snapshot);
+			if (
+				JSON.stringify(currentEvidence) !==
+				JSON.stringify(prepared.stepEvidence)
+			)
+				throw new WorkflowRuntimeError(
+					"entry-guard",
+					"step evidence changed during handoff transaction",
+				);
+		}
 		if (run.stepId === "core.triage")
 			validateTriageScope(
 				snapshot,
 				output as { assignments: Array<{ role: string; files: string[] }> },
+				prepared,
+				changedFilesIn(snapshot),
 			);
 	}
 	const completedAt = nowIso(now);
@@ -168,7 +215,6 @@ export function agentHandoff(
 		});
 		if (!snapshot.step.activeRunIds.length) {
 			if (snapshot.step.results.some((result) => result.critical > 0)) {
-				stopRoundAgents(db, snapshot, snapshot.step.attempt);
 				transition(
 					db,
 					snapshot,
@@ -195,7 +241,6 @@ export function agentHandoff(
 				snapshot.step.testRunStarted = true;
 				createRun(db, snapshot, step, "test-verifier", now);
 			} else {
-				stopRoundAgents(db, snapshot, snapshot.step.attempt);
 				transition(db, snapshot, definition, "pass", undefined, registry, now);
 			}
 		}
@@ -284,19 +329,6 @@ export function agentHandoff(
 			now,
 		);
 	}
-	if (
-		(run.stepId === "core.wiki" || run.stepId === "core.research") &&
-		run.handle
-	)
-		enqueue(
-			db,
-			snapshot,
-			"agent.stop",
-			`run:${run.id}:stop:${run.generation}`,
-			{
-				runId: run.id,
-			},
-		);
 	return {
 		type: "agent.handoff",
 		actor: { kind: "agent", runId: run.id, role: run.role },

@@ -127,6 +127,32 @@ export function authorizeExactRunCapability(
 	return run;
 }
 
+export function prepareHandoffArtifact(
+	repo: string,
+	command: {
+		runId: string;
+		generation: number;
+		token: string;
+		artifact?: string;
+	},
+	now: () => Date,
+): { output: unknown; digest: string } | undefined {
+	if (!command.artifact) return undefined;
+	const run = storeGetRun(repo, command.runId);
+	if (run.generation !== command.generation || !ACTIVE_RUN.has(run.status))
+		throw new WorkflowRuntimeError("stale-run", "run is stale or inactive");
+	if (
+		!run.capabilityHash ||
+		Date.parse(run.capabilityExpiresAt) <= now().getTime() ||
+		!tokenMatches(command.token, run.capabilityHash)
+	)
+		throw new WorkflowRuntimeError(
+			"unauthorized",
+			"invalid or expired run capability",
+		);
+	return artifact(run, command.artifact);
+}
+
 export function artifact(
 	run: WorkflowRun,
 	submitted?: string,
@@ -146,13 +172,34 @@ export function artifact(
 			"artifact",
 			"artifact escapes run directory",
 		);
-	const stat = fs.lstatSync(actual);
-	if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_ARTIFACT_BYTES)
+	let fd: number;
+	try {
+		fd = fs.openSync(actual, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+	} catch {
 		throw new WorkflowRuntimeError(
 			"artifact",
 			"artifact must be bounded regular non-symlink file",
 		);
-	const bytes = fs.readFileSync(actual);
+	}
+	let bytes: Buffer;
+	try {
+		const stat = fs.fstatSync(fd);
+		if (!stat.isFile())
+			throw new WorkflowRuntimeError(
+				"artifact",
+				"artifact must be bounded regular non-symlink file",
+			);
+		const buffer = Buffer.alloc(MAX_ARTIFACT_BYTES + 1);
+		const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+		if (bytesRead > MAX_ARTIFACT_BYTES)
+			throw new WorkflowRuntimeError(
+				"artifact",
+				"artifact must be bounded regular non-symlink file",
+			);
+		bytes = buffer.subarray(0, bytesRead);
+	} finally {
+		fs.closeSync(fd);
+	}
 	let envelope: unknown;
 	try {
 		envelope = JSON.parse(bytes.toString("utf8"));

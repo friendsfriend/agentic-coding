@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Herdr } from "../../herdr-client.ts";
 import {
+	CONTINUATION_WAIT_MS,
 	drainEffects,
 	listProjects,
 	engine as workflowEngineFactory,
@@ -28,15 +29,133 @@ import {
 } from "../../workflow/wiki.ts";
 import { credentialPromptBridge } from "./ui/CredentialsModal.tsx";
 
+class RepositoryExecutionCoordinator {
+	private running = false;
+	private queued = false;
+	private disposed = false;
+	private error: string | undefined;
+	private readonly workflowErrors = new Map<string, string>();
+	private readonly listeners = new Set<(workflowId: string) => void>();
+	private queuedWorkflowId: string | undefined;
+	private activeWorkflowId: string | undefined;
+	private controller: AbortController | undefined;
+
+	constructor(private readonly repo: string) {}
+
+	request(workflowId?: string): void {
+		if (this.disposed) return;
+		if (this.running) {
+			this.queued = true;
+			this.queuedWorkflowId = workflowId;
+			return;
+		}
+		this.running = true;
+		this.activeWorkflowId = workflowId;
+		this.workflowErrors.clear();
+		this.controller = new AbortController();
+		void drainEffects(
+			workflowEngineFactory(),
+			this.repo,
+			credentialPromptBridge(),
+			20,
+			CONTINUATION_WAIT_MS,
+			this.controller.signal,
+			(workflowId, message) => {
+				this.workflowErrors.set(workflowId, message);
+				for (const listener of this.listeners) listener(workflowId);
+			},
+		)
+			.then(() => {
+				if (!this.disposed) this.error = undefined;
+			})
+			.catch((error) => {
+				this.error = error instanceof Error ? error.message : String(error);
+				for (const listener of this.listeners)
+					listener(this.activeWorkflowId ?? "");
+			})
+			.finally(() => {
+				this.running = false;
+				if (this.queued && !this.disposed) {
+					this.queued = false;
+					const nextWorkflowId = this.queuedWorkflowId;
+					this.queuedWorkflowId = undefined;
+					this.request(nextWorkflowId);
+				}
+			});
+	}
+
+	onError(listener: (workflowId: string) => void): () => void {
+		this.listeners.add(listener);
+		return () => this.listeners.delete(listener);
+	}
+
+	lastError(workflowId?: string): string | undefined {
+		return (workflowId && this.workflowErrors.get(workflowId)) || this.error;
+	}
+
+	dispose(): void {
+		this.disposed = true;
+		this.controller?.abort();
+		this.queued = false;
+		this.queuedWorkflowId = undefined;
+	}
+}
+
+const coordinators = new Map<string, RepositoryExecutionCoordinator>();
+
+export function executionCoordinator(
+	repo: string,
+): RepositoryExecutionCoordinator {
+	let coordinator = coordinators.get(repo);
+	if (!coordinator) {
+		coordinator = new RepositoryExecutionCoordinator(repo);
+		coordinators.set(repo, coordinator);
+	}
+	return coordinator;
+}
+
+export function disposeExecutionCoordinator(repo: string): void {
+	coordinators.get(repo)?.dispose();
+	coordinators.delete(repo);
+}
+
+export function requestWorkflowExecution(
+	repo: string,
+	workflowId?: string,
+): void {
+	executionCoordinator(repo).request(workflowId);
+}
+
+export function onWorkflowExecutionError(
+	repo: string,
+	listener: (workflowId: string) => void,
+): () => void {
+	return executionCoordinator(repo).onError(listener);
+}
+
+export function workflowExecutionError(
+	repo: string,
+	workflowId?: string,
+): string | undefined {
+	return coordinators.get(repo)?.lastError(workflowId);
+}
+
 export function getWorkflowView(
 	repo: string,
 	workflowId: string,
 ): WorkflowView {
-	const engine = workflowEngineFactory();
-	void drainEffects(engine, repo, credentialPromptBridge()).catch(
-		() => undefined,
-	);
-	return engine.status(repo, workflowId);
+	const view = workflowEngineFactory().status(repo, workflowId);
+	const error = workflowExecutionError(repo, workflowId);
+	return error
+		? {
+				...view,
+				health: {
+					...view.health,
+					attention: [...view.health.attention, error],
+					diagnostic: error,
+				},
+			}
+		: view;
 }
 export function listWorkflowViews(repo: string): WorkflowView[] {
 	return workflowEngineFactory().list(repo);
@@ -55,13 +174,15 @@ export function repairWorkflow(
 	const view = engine.status(repo, workflowId);
 	if (view.revision !== revision)
 		throw new Error(`stale revision ${revision}; current ${view.revision}`);
-	return engine.dispatch(repo, {
+	const result = engine.dispatch(repo, {
 		type: "operator.repair",
 		workflowId: view.workflowId,
 		revision,
 		targetStep,
 		reason,
-	}).view;
+	});
+	requestWorkflowExecution(repo, workflowId);
+	return result.view;
 }
 export function answerWorkflowQuestion(
 	repo: string,
@@ -82,13 +203,15 @@ export function answerWorkflowQuestion(
 ): WorkflowView {
 	const workflow = workflowEngineFactory();
 	const view = workflow.status(repo, workflowId);
-	return workflow.dispatch(repo, {
+	const result = workflow.dispatch(repo, {
 		type: "developer.action",
 		workflowId: view.workflowId,
 		revision,
 		actionId: "answer-question",
 		input: "groupId" in answer ? answer : { questionId, ...answer },
-	}).view;
+	});
+	requestWorkflowExecution(repo, workflowId);
+	return result.view;
 }
 
 export async function runWorkflowAction(
@@ -115,7 +238,7 @@ export async function runWorkflowAction(
 		actionId,
 		input: parsed,
 	});
-	await drainEffects(engine, repo, credentialPromptBridge());
+	requestWorkflowExecution(repo, workflowId);
 	return JSON.stringify(engine.status(repo, workflowId));
 }
 /** Sentinel choice meaning "use existing global config defaults"; stripped
@@ -181,7 +304,7 @@ export async function startWorkflowInProcess(
 	});
 	const engine = workflowEngineFactory();
 	engine.start(prepared.input);
-	await drainEffects(engine, prepared.target, credentialPromptBridge());
+	requestWorkflowExecution(prepared.target, args.workflowId);
 	return `Workflow started: ${args.workflowId}`;
 }
 
@@ -200,9 +323,7 @@ export function startWikiCommentWorkflowInProcess(
 	});
 	const engine = workflowEngineFactory();
 	engine.start(prepared.input);
-	void drainEffects(engine, prepared.target, credentialPromptBridge()).catch(
-		() => undefined,
-	);
+	requestWorkflowExecution(prepared.target, sessionId);
 	return `Wiki review workflow started: ${sessionId}`;
 }
 function navigationPath(repo: string, workflowId: string): string {

@@ -5,6 +5,24 @@ Gives every workflow-managed agent a deterministic, collision-free identity and 
 
 ## Requirements
 
+### Requirement: Agent sessions last for workspace lifetime
+A successfully launched workflow-managed agent SHALL remain alive until its workspace closes. Completion, blocked or failed handoff, verification-round completion, run expiration, repair, migration, effect cancellation, and transition to another step SHALL revoke obsolete run ownership without closing the agent pane or stopping its session. A later run with same workflow, step, and role SHALL reuse that session and receive a complete new prompt with fresh run authority. Workspace closure is sole normal agent-session teardown path; legacy queued stop effects SHALL be harmless.
+
+#### Scenario: Completed verifier waits for later round
+- **WHEN** a verifier completes and verification later re-enters its role
+- **THEN** its original pane and session SHALL remain alive between rounds
+- **AND** engine SHALL re-prompt that session rather than spawn another agent or pane
+
+#### Scenario: Failure cleanup or repair retires a run
+- **WHEN** failure cleanup or repair expires an agent run
+- **THEN** its old capability SHALL become unusable without stopping its session
+- **AND** re-entering same workflow step and role SHALL deliver a fresh assignment to that session
+
+#### Scenario: Workspace closure tears down agents
+- **WHEN** workflow reaches `workspace.close`
+- **THEN** workspace closure SHALL tear down its managed agent sessions
+- **AND** no earlier run-lifecycle action SHALL enqueue agent-session teardown
+
 ### Requirement: Deterministic unique agent names
 Each workflow-managed agent SHALL have one canonical name derived from its workflow change ID, step, and role (plus round discriminator for grouped one-shot roles). The derivation SHALL be injective within the Herdr runtime: two different workflows, steps, or roles SHALL never map to the same live agent name. The discriminating identity (change + role) SHALL NOT be truncated away to satisfy runtime name limits.
 

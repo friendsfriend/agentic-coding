@@ -305,7 +305,7 @@ test("research workspace setup launches and prompts the researcher", async () =>
 			executable: "sh",
 			tools: ["read", "web_search"],
 			extensions: ["/tmp/research-extension.ts"],
-			readOnly: false,
+			readOnly: true,
 			capabilities: [
 				"interactive",
 				"prompt",
@@ -384,7 +384,7 @@ test("wiki run's assignment carries the researcher's full recorded handoff verba
 			executable: "sh",
 			tools: ["read"],
 			extensions: [],
-			readOnly: false,
+			readOnly: true,
 			capabilities: [
 				"interactive",
 				"prompt",
@@ -515,7 +515,7 @@ test("wiki run's assignment carries the researcher's full recorded handoff verba
 	}
 });
 
-test("runner drains workspace and agent effects, then stops stale run after repair", async () => {
+test("runner retains stale agent after repair", async () => {
 	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-effects-"));
 	try {
 		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
@@ -636,7 +636,7 @@ test("runner drains workspace and agent effects, then stops stale run after repa
 			reason: "test repair",
 		});
 		await new EffectRunner(repo, engine, handlers).drain();
-		expect(adapter.stops).toBe(1);
+		expect(adapter.stops).toBe(0);
 		expect(adapter.launches).toBe(2);
 		expect(engine.status(repo, "effects").status).toBe("active");
 	} finally {
@@ -1021,7 +1021,9 @@ test("launch retry recovers stable Herdr agent without duplicating launch, minti
 				run.id,
 				run.stepId,
 				run.role,
-				refreshedToken ?? "",
+				(refreshedToken ?? "")
+					.replace(/^'(.*)'$/, "$1")
+					.replaceAll("'\\''", "'"),
 			).id,
 		).toBe(run.id);
 	} finally {

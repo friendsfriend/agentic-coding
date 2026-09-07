@@ -13,7 +13,12 @@ export {
 	rolesForDefinition,
 	validateStart,
 } from "./cli/commands/start.ts";
-export { detachedDrainArgv, drainEffects } from "./cli/drain.ts";
+export {
+	CONTINUATION_WAIT_MS,
+	detachedDrainArgv,
+	drainEffects,
+	scheduleDrain,
+} from "./cli/drain.ts";
 export { runGit } from "./cli/git.ts";
 export { paneForRunFactory, verificationPosition } from "./cli/pane.ts";
 export { engine } from "./cli/registry.ts";

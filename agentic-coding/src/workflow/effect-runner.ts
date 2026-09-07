@@ -17,6 +17,7 @@ import type { StepDefinition, WorkflowRegistry } from "./registry.ts";
 import {
 	type ClaimedEffect,
 	changedFilesIn,
+	changedFilesInAsync,
 	isResearchWorkflowTarget,
 	isWikiWorkflowTarget,
 	researchWorkflowTarget,
@@ -53,9 +54,15 @@ export class EffectRunner {
 		private readonly engine: WorkflowEngine,
 		private readonly handlers: Partial<Record<EffectKind, EffectHandler>>,
 	) {}
-	async drain(limit = 20, leaseMs = 30_000): Promise<number> {
+	async drain(
+		limit = 20,
+		leaseMs = 30_000,
+		signal?: AbortSignal,
+		onFailure?: (workflowId: string, message: string) => void,
+	): Promise<number> {
 		let completed = 0;
 		for (let processed = 0; processed < limit; processed++) {
+			if (signal?.aborted) break;
 			// Claim immediately before execution. A serial runner must not reserve
 			// work that is still waiting behind an earlier, possibly slow effect.
 			const effect = this.engine.claimEffects(this.repo, 1, leaseMs)[0];
@@ -76,6 +83,9 @@ export class EffectRunner {
 			}
 
 			const controller = new AbortController();
+			const abort = () => controller.abort();
+			if (signal?.aborted) controller.abort();
+			else signal?.addEventListener("abort", abort, { once: true });
 			let lost = false;
 			const renewal = setInterval(
 				() => {
@@ -122,18 +132,24 @@ export class EffectRunner {
 					throw error;
 				}
 			} catch (error) {
+				if (controller.signal.aborted) {
+					await handler.cancel?.(effect);
+					continue;
+				}
 				if (lost || !this.engine.effectIsLive(this.repo, effect.id, lease)) {
 					await handler.cancel?.(effect);
 					continue;
 				}
 				try {
+					const message = String((error as Error).message ?? error);
 					this.engine.dispatch(this.repo, {
 						type: "effect.result",
 						effectId: effect.id,
 						lease,
 						outcome: effect.attempts < effect.maxAttempts ? "retry" : "failed",
-						data: String((error as Error).message ?? error),
+						data: message,
 					});
+					onFailure?.(effect.workflowId, message);
 				} catch (dispatchError) {
 					if (
 						!(dispatchError instanceof Error) ||
@@ -143,6 +159,7 @@ export class EffectRunner {
 				}
 			} finally {
 				clearInterval(renewal);
+				signal?.removeEventListener("abort", abort);
 			}
 		}
 		return completed;
@@ -265,17 +282,17 @@ export function agentEffectHandlers(
 					? await currentBranch(snapshot.metadata.repository, signal)
 					: (input.branch ?? snapshot.metadata.branch);
 				const worktree =
-					snapshot.metadata.worktree ??
-					(input.mode === "worktree"
+					input.mode === "worktree"
 						? await worktreeForBranch(
 								snapshot.metadata.repository,
 								branch ?? "",
 								signal,
 							)
-						: (await currentBranch(snapshot.metadata.repository, signal)) ===
-								branch
-							? snapshot.metadata.repository
-							: undefined);
+						: (snapshot.metadata.worktree ??
+							((await currentBranch(snapshot.metadata.repository, signal)) ===
+							branch
+								? snapshot.metadata.repository
+								: undefined));
 				const workspace =
 					snapshot.metadata.workspace ??
 					(await recoverWorkspaceAsync(
@@ -498,7 +515,7 @@ export function agentEffectHandlers(
 		},
 		"artifact.write": {
 			async observe(effect) {
-				const expected = renderedAssignment(
+				const expected = await renderedAssignmentAsync(
 					engine,
 					repo,
 					options.registry,
@@ -518,7 +535,7 @@ export function agentEffectHandlers(
 				}
 			},
 			async execute(effect) {
-				const expected = renderedAssignment(
+				const expected = await renderedAssignmentAsync(
 					engine,
 					repo,
 					options.registry,
@@ -574,7 +591,7 @@ export function agentEffectHandlers(
 					// capability is unavailable".
 					const token =
 						effect.runToken ?? engine.issueRunCapability(repo, run.id);
-					const expected = renderedAssignment(
+					const expected = await renderedAssignmentAsync(
 						engine,
 						repo,
 						options.registry,
@@ -626,11 +643,16 @@ export function agentEffectHandlers(
 				);
 				const token =
 					effect.runToken ?? engine.issueRunCapability(repo, run.id);
+				const changedFiles =
+					run.stepId === "core.triage"
+						? await changedFilesInAsync(snapshot)
+						: [];
 				const assignment = assignmentFor(
 					run,
 					snapshot,
 					token,
 					options.registry,
+					changedFiles,
 				);
 				const assetRoot = workflowAssets(
 					snapshot.metadata.worktree,
@@ -692,7 +714,11 @@ export function agentEffectHandlers(
 				try {
 					const handle = await adapter.launch(ctx);
 					if (!engine.effectIsLive(repo, effect.id, effect.lease ?? "")) {
-						await adapter.stop(handle);
+						try {
+							await adapter.stop(handle, signal);
+						} catch {
+							/* preserve cancellation; the next drain can retry cleanup */
+						}
 						return { cancelled: true };
 					}
 					return handle;
@@ -709,18 +735,6 @@ export function agentEffectHandlers(
 					}
 					throw error;
 				}
-			},
-			async cancel(effect, result) {
-				if (!result || typeof result !== "object" || !("paneId" in result))
-					return;
-				const run = engine.getRun(repo, runId(effect));
-				const adapter = options.adapters.get(run.profile.runtime);
-				if (adapter)
-					try {
-						await adapter.stop(result as AgentHandle);
-					} catch {
-						/* best effort cleanup after concurrent workflow closure */
-					}
 			},
 		},
 		"agent.prompt": {
@@ -739,38 +753,12 @@ export function agentEffectHandlers(
 				await adapter.prompt(run.handle, message, signal);
 				return { prompted: true };
 			},
-			async cancel(effect) {
-				const run = engine.getRun(repo, runId(effect));
-				if (run.handle)
-					try {
-						await options.adapters.get(run.profile.runtime)?.stop(run.handle);
-					} catch {
-						/* best effort cleanup after concurrent workflow closure */
-					}
-			},
 		},
+		// Legacy stop effects must drain safely, but agents now live until their
+		// workspace closes. New workflow paths never enqueue this effect.
 		"agent.stop": {
-			async observe(effect, signal) {
-				const run = engine.getRun(repo, runId(effect));
-				if (!run.handle) return true;
-				try {
-					const status = (
-						await options.adapters
-							.get(run.profile.runtime)
-							?.observe(run.handle, signal)
-					)?.status;
-					return status === "done" || status === "unknown";
-				} catch {
-					return true;
-				}
-			},
-			async execute(effect, signal) {
-				const run = engine.getRun(repo, runId(effect));
-				if (run.handle)
-					await options.adapters
-						.get(run.profile.runtime)
-						?.stop(run.handle, signal);
-				return { stopped: true };
+			async execute() {
+				return { retained: true };
 			},
 		},
 		"notification.show": {
@@ -971,10 +959,38 @@ export function agentEffectHandlers(
 					throw new Error(
 						"workflow execution settings adoption required before delivery",
 					);
+				const safeRemote =
+					/^[A-Za-z0-9._-]+$/.test(settings.remote ?? "") ||
+					/^(?:https?|ssh|git):\/\/[^\s]+$/.test(settings.remote ?? "") ||
+					/^git@[^\s:]+:[^\s]+$/.test(settings.remote ?? "");
+				if (
+					!safeRemote ||
+					settings.remote?.startsWith("ext::") ||
+					settings.remote?.startsWith("-") ||
+					settings.remote.includes("\0") ||
+					settings.remote.includes("\n") ||
+					settings.remote.includes("\r") ||
+					!snapshot.metadata.branch ||
+					snapshot.metadata.branch.startsWith("-") ||
+					snapshot.metadata.branch.includes("\0") ||
+					snapshot.metadata.branch.includes("\n") ||
+					snapshot.metadata.branch.includes("\r")
+				)
+					throw new Error("delivery remote and branch must be safe Git names");
 				await runGitWithCredentials(
 					snapshot.metadata.worktree,
-					["push", "--set-upstream", settings.remote, snapshot.metadata.branch],
-					{ prompt: options.credentialPrompt, signal },
+					[
+						"push",
+						"--set-upstream",
+						"--",
+						settings.remote,
+						snapshot.metadata.branch,
+					],
+					{
+						prompt: options.credentialPrompt,
+						signal,
+						env: { GIT_ALLOW_PROTOCOL: "https:ssh:git" },
+					},
 				);
 				return {
 					head: await git(
@@ -1515,7 +1531,49 @@ function renderedAssignment(
 		snapshotDefinition(snapshot, registry),
 		run.stepId,
 	);
-	const assignment = assignmentFor(run, snapshot, token, registry);
+	const assignment = assignmentFor(
+		run,
+		snapshot,
+		token,
+		registry,
+		run.stepId === "core.triage" ? changedFilesIn(snapshot) : [],
+	);
+	return {
+		run,
+		assignment,
+		rendered: renderAssignment(
+			step,
+			assignment,
+			`${workflowAssets(
+				snapshot.metadata.worktree,
+				snapshot.workflowId,
+				snapshot.definition.id === "wiki-comments"
+					? wikiWorkflowDataRoot()
+					: undefined,
+			)}/instructions`,
+		),
+	};
+}
+async function renderedAssignmentAsync(
+	engine: WorkflowEngine,
+	repo: string,
+	registry: WorkflowRegistry,
+	runId: string,
+	token: string,
+) {
+	const run = engine.getRun(repo, runId);
+	const snapshot = engine.getSnapshot(repo, run.workflowId);
+	const step = registry.stepForDefinition(
+		snapshotDefinition(snapshot, registry),
+		run.stepId,
+	);
+	const assignment = assignmentFor(
+		run,
+		snapshot,
+		token,
+		registry,
+		run.stepId === "core.triage" ? await changedFilesInAsync(snapshot) : [],
+	);
 	return {
 		run,
 		assignment,
@@ -1542,6 +1600,7 @@ function assignmentFor(
 	snapshot: ReturnType<WorkflowEngine["getSnapshot"]>,
 	token: string,
 	registry: WorkflowRegistry,
+	changedFiles: readonly string[] = [],
 ): Assignment {
 	const output =
 		run.outputPath && run.outputSchema
@@ -1562,7 +1621,7 @@ function assignmentFor(
 				).assignments?.find((item) => item.role === run.role) ??
 				snapshot.step.context)
 			: snapshot.step.context;
-	const changed = run.stepId === "core.triage" ? changedFilesIn(snapshot) : [];
+	const changed = run.stepId === "core.triage" ? changedFiles : [];
 	const dialogue = snapshot.developerDialogue.filter(
 		(item) => item.status !== "pending",
 	);

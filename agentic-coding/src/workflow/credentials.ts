@@ -133,7 +133,9 @@ export async function runGitWithCredentials(
 ): Promise<string> {
 	const shim = installAskpassShim();
 	const env: Record<string, string> = {
-		...process.env,
+		PATH: process.env.PATH ?? "/usr/bin:/bin",
+		...(process.env.HOME ? { HOME: process.env.HOME } : {}),
+		...(process.env.TMPDIR ? { TMPDIR: process.env.TMPDIR } : {}),
 		...(options.env ?? {}),
 		...ASKPASS_ENV,
 		SSH_ASKPASS: shim.shimPath,

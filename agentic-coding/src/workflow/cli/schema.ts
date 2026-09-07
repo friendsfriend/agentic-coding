@@ -6,6 +6,7 @@ import { flag } from "./args.ts";
 export const SUBCOMMANDS: readonly string[] = [
 	"start",
 	"status",
+	"drain",
 	"action",
 	"handoff",
 	"question",
@@ -21,6 +22,7 @@ export const SUBCOMMANDS: readonly string[] = [
 export const REQUIRED_FLAGS: Record<string, string[]> = {
 	start: ["workflow-id"],
 	status: ["repo", "workflow-id"],
+	drain: ["repo"],
 	action: ["repo", "workflow-id", "revision"],
 	repair: ["repo", "workflow-id", "revision", "step"],
 	repin: ["repo", "workflow-id"],
@@ -70,6 +72,7 @@ const FLAG_SCHEMA: Record<
 		positionals: [0, 0],
 	},
 	status: { values: ["repo", "workflow-id"], positionals: [0, 0] },
+	drain: { values: ["repo", "limit", "wait-ms"], positionals: [0, 0] },
 	action: {
 		values: ["repo", "workflow-id", "revision", "input"],
 		positionals: [1, 1],

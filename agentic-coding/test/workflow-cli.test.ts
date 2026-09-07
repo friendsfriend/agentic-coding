@@ -59,6 +59,7 @@ describe("breaking workflow CLI surface", () => {
 		expect(SUBCOMMANDS).toEqual([
 			"start",
 			"status",
+			"drain",
 			"action",
 			"handoff",
 			"question",
@@ -93,6 +94,7 @@ describe("breaking workflow CLI surface", () => {
 		]);
 		expect(REQUIRED_FLAGS.action).toEqual(["repo", "workflow-id", "revision"]);
 		expect(REQUIRED_FLAGS.status).toEqual(["repo", "workflow-id"]);
+		expect(REQUIRED_FLAGS.drain).toEqual(["repo"]);
 		expect(REQUIRED_FLAGS.repin).toEqual(["repo", "workflow-id"]);
 		expect(REQUIRED_FLAGS.question).toEqual(["description"]);
 		expect(REQUIRED_FLAGS["research-handoff"]).toEqual([
@@ -169,21 +171,12 @@ describe("breaking workflow CLI surface", () => {
 		expect(source.slice(1)).toEqual([
 			"/abs/src/cli.ts",
 			"workflow",
-			"status",
+			"drain",
 			"--repo",
 			"/repo",
-			"--workflow-id",
-			"c1",
 		]);
 		const compiled = cliTest.detachedDrainArgv(undefined, "/repo", "c1");
-		expect(compiled.slice(1)).toEqual([
-			"workflow",
-			"status",
-			"--repo",
-			"/repo",
-			"--workflow-id",
-			"c1",
-		]);
+		expect(compiled.slice(1)).toEqual(["workflow", "drain", "--repo", "/repo"]);
 		expect(compiled[0]).toBe(process.execPath);
 	});
 	test("verification position counts the run itself, not all pending siblings", () => {

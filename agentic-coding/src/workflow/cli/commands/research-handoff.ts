@@ -5,6 +5,7 @@
 import type { WorkflowEngine } from "../../runtime.ts";
 import { flag, parseInput, requireFlag } from "../args.ts";
 import { managedWorkflowTarget } from "../caller-environment.ts";
+import { scheduleDrain } from "../drain.ts";
 import { resolveHandoffIdentity } from "../identity.ts";
 
 export async function runResearchHandoff(
@@ -54,6 +55,7 @@ export async function runResearchHandoff(
 			noSourcesUsed,
 		},
 	});
+	scheduleDrain(target, 20);
 	console.log(
 		JSON.stringify(
 			workflowEngine.status(target, result.view.workflowId),

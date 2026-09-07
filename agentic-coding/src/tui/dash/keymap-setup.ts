@@ -40,40 +40,6 @@ export function setupKeymap(keymap: Keymap<Renderable, KeyEvent>) {
 					ctx.require("textEntry.active", Boolean(value));
 				},
 			}),
-			keymap.registerBindingFields({
-				context(value, ctx) {
-					ctx.attr("context", String(value));
-				},
-				category(value, ctx) {
-					ctx.attr("category", String(value));
-				},
-				footer(value, ctx) {
-					ctx.attr("footer", String(value));
-				},
-				discoverable(value, ctx) {
-					ctx.attr("discoverable", Boolean(value));
-				},
-			}),
-			keymap.registerCommandFields({
-				context(value, ctx) {
-					ctx.attr("context", String(value));
-				},
-				category(value, ctx) {
-					ctx.attr("category", String(value));
-				},
-				title(value, ctx) {
-					ctx.attr("title", String(value));
-				},
-				desc(value, ctx) {
-					ctx.attr("desc", String(value));
-				},
-				footer(value, ctx) {
-					ctx.attr("footer", String(value));
-				},
-				discoverable(value, ctx) {
-					ctx.attr("discoverable", Boolean(value));
-				},
-			}),
 		];
 		return () => {
 			for (const dispose of [...disposers].reverse()) dispose();

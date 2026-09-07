@@ -8,7 +8,7 @@ import { manageAgentExtension } from "../../agent-extensions.ts";
 import { loadConfig } from "../../effects.ts";
 import type { WorkflowEngine } from "../../runtime.ts";
 import { flag, positional, requireFlag } from "../args.ts";
-import { drainEffects } from "../drain.ts";
+import { scheduleDrain } from "../drain.ts";
 import { AGENT_EXTENSION_SUBCOMMANDS } from "../schema.ts";
 
 export function listProjects(): Array<{
@@ -71,7 +71,7 @@ export async function runRepair(
 		targetStep: flag(rest, "step"),
 		reason: flag(rest, "reason") ?? "",
 	});
-	await drainEffects(workflowEngine, repo);
+	scheduleDrain(repo);
 	console.log(
 		JSON.stringify(
 			workflowEngine.status(repo, requireFlag(rest, "workflow-id")),
@@ -108,7 +108,7 @@ export async function runMigrate(
 		targetVersion,
 		reason: requireFlag(rest, "reason"),
 	});
-	await drainEffects(workflowEngine, repo);
+	scheduleDrain(repo);
 	console.log(JSON.stringify(workflowEngine.status(repo, workflowId), null, 2));
 }
 
@@ -127,7 +127,7 @@ export async function runRepin(
 		workflowId: view.workflowId,
 		revision,
 	});
-	await drainEffects(workflowEngine, repo);
+	scheduleDrain(repo);
 	console.log(
 		JSON.stringify(
 			workflowEngine.status(repo, requireFlag(rest, "workflow-id")),

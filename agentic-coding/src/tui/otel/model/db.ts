@@ -32,8 +32,12 @@ interface LogRow {
 	ingested_at: string;
 }
 
+const MAX_TRACE_BYTES = 16 * 1024 * 1024;
+const MAX_TELEMETRY_SPANS = 50_000;
+
 export class TraceDb {
 	private db: Database;
+	private readonly ingesting = new Set<string>();
 	private ingestStmt: Statement;
 	private ingestMetricStmt: Statement;
 	private ingestLogStmt: Statement;
@@ -121,8 +125,9 @@ export class TraceDb {
 			| undefined;
 		if (known && known.file_mtime >= mtime && (known.parser_version ?? 1) >= 2)
 			return 0;
+		if (statSync(tracesFile).size > MAX_TRACE_BYTES) return 0;
 		const text = readFileSync(tracesFile, "utf8");
-		const spans = parseJsonl(text);
+		const spans = parseJsonl(text).slice(0, MAX_TELEMETRY_SPANS);
 		// Remove old traces for this change and re-ingest
 		this.db.run("DELETE FROM traces WHERE change_id=?", [changeId]);
 		const insert = this.db.transaction(() => {
@@ -191,10 +196,14 @@ export class TraceDb {
 	loadSpans(changeId?: string): SpanData[] {
 		const rows = changeId
 			? (this.db
-					.prepare("SELECT span FROM traces WHERE change_id=? ORDER BY id")
+					.prepare(
+						`SELECT span FROM traces WHERE change_id=? ORDER BY id LIMIT ${MAX_TELEMETRY_SPANS}`,
+					)
 					.all(changeId) as TraceRow[])
 			: (this.db
-					.prepare("SELECT span FROM traces ORDER BY id")
+					.prepare(
+						`SELECT span FROM traces ORDER BY id LIMIT ${MAX_TELEMETRY_SPANS}`,
+					)
 					.all() as TraceRow[]);
 		return rows.map((r) => JSON.parse(r.span) as SpanData);
 	}
@@ -231,6 +240,26 @@ export class TraceDb {
       GROUP BY w.change_id ORDER BY w.change_id
     `)
 			.all() as Array<{ changeId: string; path: string; spanCount: number }>;
+	}
+
+	async scanAllWorkspacesAsync(repoRoot: string): Promise<number> {
+		const workflowDir = join(repoRoot, ".herdr-workflow");
+		if (!existsSync(workflowDir)) return 0;
+		let total = 0;
+		try {
+			const entries = readdirSync(workflowDir, { withFileTypes: true });
+			for (const entry of entries) {
+				if (!entry.isDirectory()) continue;
+				await Bun.sleep(0);
+				total += this.ingestWorkspace(
+					join(workflowDir, entry.name),
+					entry.name,
+				);
+			}
+		} catch (e) {
+			console.error("scanAllWorkspaces error:", e);
+		}
+		return total;
 	}
 
 	scanAllWorkspaces(repoRoot: string): number {
@@ -280,24 +309,31 @@ export class TraceDb {
 						(known.parser_version ?? 1) >= 2
 					)
 						continue;
-					const text = readFileSync(tracesFile, "utf8");
-					const spans = parseJsonl(text);
-					this.db.run("DELETE FROM traces WHERE change_id=?", [entry.name]);
-					const insert = this.db.transaction(() => {
-						for (const span of spans) {
-							this.ingestStmt.run({
+					if (this.ingesting.has(entry.name)) continue;
+					if (statSync(tracesFile).size > MAX_TRACE_BYTES) continue;
+					this.ingesting.add(entry.name);
+					void (async () => {
+						const text = await Bun.file(tracesFile).text();
+						const spans = parseJsonl(text).slice(0, MAX_TELEMETRY_SPANS);
+						this.db.run("DELETE FROM traces WHERE change_id=?", [entry.name]);
+						const insert = this.db.transaction(() => {
+							for (const span of spans) {
+								this.ingestStmt.run({
+									$change_id: entry.name,
+									$span: JSON.stringify(span),
+								});
+							}
+							this.upsertWorkspaceStmt.run({
 								$change_id: entry.name,
-								$span: JSON.stringify(span),
+								$path: tracesFile,
+								$mtime: mtime,
 							});
-						}
-						this.upsertWorkspaceStmt.run({
-							$change_id: entry.name,
-							$path: tracesFile,
-							$mtime: mtime,
 						});
-					});
-					insert();
-					onNew(entry.name, spans);
+						insert();
+						onNew(entry.name, spans);
+					})()
+						.catch((error) => console.error("watchWorkspaces error:", error))
+						.finally(() => this.ingesting.delete(entry.name));
 				}
 			} catch (e) {
 				console.error("watchWorkspaces error:", e);

@@ -36,7 +36,6 @@ async function runStatus(
 	workflowEngine: WorkflowEngine,
 	repo: string,
 ): Promise<void> {
-	await drainEffects(workflowEngine, repo);
 	console.log(
 		JSON.stringify(
 			workflowEngine.status(repo, requireFlag(rest, "workflow-id")),
@@ -55,6 +54,42 @@ type CommandHandler = (
 const COMMAND_HANDLERS: Record<string, CommandHandler> = {
 	start: (rest, workflowEngine) => runStart(rest, workflowEngine),
 	status: runStatus,
+	drain: async (rest, workflowEngine, repo) => {
+		const limit = rest.includes("--limit")
+			? Number(requireFlag(rest, "limit"))
+			: 20;
+		const waitMs = rest.includes("--wait-ms")
+			? Number(requireFlag(rest, "wait-ms"))
+			: 0;
+		if (!Number.isInteger(limit) || limit < 1 || limit > 100)
+			throw new Error("drain: --limit must be an integer from 1 to 100");
+		if (!Number.isInteger(waitMs) || waitMs < 0 || waitMs > 120_000)
+			throw new Error("drain: --wait-ms must be an integer from 0 to 120000");
+		const completed = await drainEffects(
+			workflowEngine,
+			repo,
+			undefined,
+			limit,
+			waitMs,
+		);
+		const views = workflowEngine.list(repo);
+		const effects = views.flatMap((view) => view.effects);
+		console.log(
+			JSON.stringify({
+				repo,
+				completed,
+				limit,
+				waitMs,
+				pending: effects.filter((effect) => effect.status === "pending").length,
+				retryable: effects.filter((effect) => effect.status === "retry").length,
+				failed: effects.filter((effect) => effect.status === "failed").length,
+				pendingQuestions: views.reduce(
+					(total, view) => total + (view.pendingQuestions?.length ?? 0),
+					0,
+				),
+			}),
+		);
+	},
 	action: runAction,
 	question: (rest, workflowEngine) => runQuestion(rest, workflowEngine),
 	"research-handoff": (rest, workflowEngine) =>

@@ -10,7 +10,7 @@ import {
 	prepareWorkflowStart,
 } from "../../startup.ts";
 import { flag, requireFlag } from "../args.ts";
-import { drainEffects } from "../drain.ts";
+import { scheduleDrain } from "../drain.ts";
 
 export {
 	parseFusionProfiles,
@@ -49,7 +49,7 @@ export async function runStart(
 		fusionProfiles,
 	});
 	workflowEngine.start(prepared.input);
-	await drainEffects(workflowEngine, prepared.target);
+	scheduleDrain(prepared.target);
 	console.log(
 		JSON.stringify(
 			workflowEngine.status(prepared.target, prepared.input.workflowId),

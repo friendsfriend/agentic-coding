@@ -2,12 +2,13 @@
 // snapshot/run/effect read-write helpers every other runtime module builds
 // on. Also owns the small pure snapshot-structure invariants
 // (validateStructure/validateSnapshot/validateEffect/actions/requireRevision)
-// and the due-question-expiry read path (expireDueQuestions/getSnapshot):
-// none of these touch anything outside `registry` + already-open `db` state,
-// so they sit at the bottom of the dependency graph alongside row IO rather
-// than needing a home in a higher tier. Moved out of runtime.ts
+// and the observational snapshot read path. None of these touch anything
+// outside `registry` + already-open `db` state, so they sit at the bottom of
+// the dependency graph alongside row IO rather than needing a home in a higher
+// tier. Moved out of runtime.ts
 // (split-workflow-god-modules).
 import { Database } from "bun:sqlite";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type {
@@ -188,24 +189,65 @@ function guardedDatabase(
 		options.create === true,
 		options.readonly === true,
 	);
+	const links: string[] = [];
+	const sidecarGuards: number[] = [];
 	try {
 		const guardedStat = fs.fstatSync(guard);
+		// SQLite accepts a path, not a file descriptor. Open a private hard link
+		// to the descriptor-guarded inode so a canonical-path replacement cannot
+		// change the database SQLite actually opens. Link WAL sidecars as well.
+		const databasePath = `${file}.open-${process.pid}-${randomUUID()}`;
+		fs.linkSync(file, databasePath);
+		links.push(databasePath);
+		for (const suffix of ["-wal", "-shm"]) {
+			const sidecar = `${file}${suffix}`;
+			if (!fs.existsSync(sidecar)) continue;
+			const sidecarFd = fs.openSync(
+				sidecar,
+				fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0),
+			);
+			try {
+				const sidecarStat = fs.fstatSync(sidecarFd);
+				if (!sidecarStat.isFile())
+					throw new WorkflowRuntimeError(
+						"path-security",
+						"workflow store sidecar must be a regular file",
+					);
+				const linkedSidecar = `${databasePath}${suffix}`;
+				fs.linkSync(sidecar, linkedSidecar);
+				const linkedStat = fs.lstatSync(linkedSidecar);
+				if (
+					linkedStat.dev !== sidecarStat.dev ||
+					linkedStat.ino !== sidecarStat.ino ||
+					!linkedStat.isFile()
+				)
+					throw new WorkflowRuntimeError(
+						"path-security",
+						"workflow store sidecar changed while opening",
+					);
+				links.push(linkedSidecar);
+				sidecarGuards.push(sidecarFd);
+			} catch (error) {
+				fs.closeSync(sidecarFd);
+				throw error;
+			}
+		}
+		const linkedStat = fs.statSync(databasePath);
+		if (
+			linkedStat.dev !== guardedStat.dev ||
+			linkedStat.ino !== guardedStat.ino
+		)
+			throw new WorkflowRuntimeError(
+				"path-security",
+				"workflow store changed while opening",
+			);
 		const db = new Database(
-			`file:${process.platform === "darwin" ? "/dev/fd" : "/proc/self/fd"}/${guard}`,
+			databasePath,
 			options.readonly === true ? { readonly: true } : { create: true },
 		);
 		try {
 			db.query("PRAGMA schema_version").get();
 			if (options.readonly !== true) db.exec("PRAGMA journal_mode=MEMORY");
-			const openedStat = fs.fstatSync(guard);
-			if (
-				openedStat.dev !== guardedStat.dev ||
-				openedStat.ino !== guardedStat.ino
-			)
-				throw new WorkflowRuntimeError(
-					"path-security",
-					"workflow store changed while opening",
-				);
 			verifyCanonicalStorePath(repo, file);
 			const close = db.close.bind(db);
 			Object.defineProperty(db, "close", {
@@ -213,6 +255,8 @@ function guardedDatabase(
 					try {
 						close();
 					} finally {
+						for (const link of links) fs.rmSync(link, { force: true });
+						for (const fd of sidecarGuards) fs.closeSync(fd);
 						fs.closeSync(guard);
 					}
 				},
@@ -223,6 +267,14 @@ function guardedDatabase(
 			throw error;
 		}
 	} catch (error) {
+		for (const link of links) fs.rmSync(link, { force: true });
+		for (const fd of sidecarGuards) {
+			try {
+				fs.closeSync(fd);
+			} catch {
+				/* guard already closed */
+			}
+		}
 		try {
 			fs.closeSync(guard);
 		} catch {
@@ -856,15 +908,15 @@ export function initializeStore(repo: string): void {
 	}
 }
 
-export function openStore(repo: string): Database {
+function openStoreWithMode(repo: string, readonly: boolean): Database {
 	const file = canonicalStorePath(repo);
 	if (!fs.existsSync(file))
 		throw new WorkflowRuntimeError(
 			"migration-required",
 			"workflow store is absent; initialize the store before writing",
 		);
-	const db = guardedDatabase(repo, file, {});
-	db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=10000");
+	const db = guardedDatabase(repo, file, { readonly });
+	if (!readonly) db.exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=10000");
 	try {
 		verifyCanonicalStorePath(repo, file);
 		const version = pragmaVersion(db);
@@ -882,6 +934,16 @@ export function openStore(repo: string): Database {
 	}
 }
 
+export function openStore(repo: string): Database {
+	return openStoreWithMode(repo, false);
+}
+
+/** Open a validated store without taking SQLite's writer lock or running any
+ * schema/import work. Observation must use this boundary. */
+export function openReadStore(repo: string): Database {
+	return openStoreWithMode(repo, true);
+}
+
 export function observedStore(
 	repo: string,
 ): { version: number; legacyChangeIds: string[] } | undefined {
@@ -891,25 +953,7 @@ export function observedStore(
 	try {
 		verifyCanonicalStorePath(repo, file);
 		const version = pragmaVersion(db);
-		let legacyChangeIds: string[] = [];
-		if (tableExists(db, "workflows")) {
-			const legacyColumns = columns(db, "workflows");
-			if (legacyColumns.has("change_id")) {
-				try {
-					const query =
-						version === STORE_SCHEMA_VERSION &&
-						tableExists(db, "workflow_instances")
-							? "SELECT w.change_id FROM workflows w LEFT JOIN workflow_instances i ON i.change_id=w.change_id WHERE i.id IS NULL ORDER BY w.rowid"
-							: "SELECT change_id FROM workflows ORDER BY rowid";
-					legacyChangeIds = (
-						db.query(query).all() as Array<{ change_id: string }>
-					).map((row) => row.change_id);
-				} catch {
-					legacyChangeIds = [];
-				}
-			}
-		}
-		return { version, legacyChangeIds };
+		return { version, legacyChangeIds: [] };
 	} finally {
 		db.close();
 	}
@@ -1056,7 +1100,7 @@ export function writeSnapshot(db: Database, snapshot: WorkflowSnapshot): void {
 	);
 }
 export function getRun(repo: string, runId: string): WorkflowRun {
-	const db = openStore(repo);
+	const db = openReadStore(repo);
 	try {
 		const row = db
 			.query("SELECT * FROM workflow_runs WHERE id=?")
@@ -1077,7 +1121,7 @@ export function activeRunForRole(
 	stepId: string,
 	role: string,
 ): WorkflowRun {
-	const db = openStore(repo);
+	const db = openReadStore(repo);
 	try {
 		const row = db
 			.query(
@@ -1371,15 +1415,56 @@ export function expireDueQuestions(
 		throw error;
 	}
 }
+export function dueQuestionTimers(
+	repo: string,
+	now: Date,
+	limit: number,
+): Array<{ workflowId: string; questionId: string; timerNonce: string }> {
+	const db = openReadStore(repo);
+	try {
+		const result: Array<{
+			workflowId: string;
+			questionId: string;
+			timerNonce: string;
+		}> = [];
+		const rows = db
+			.query(`
+				SELECT i.id AS workflow_id,
+					json_extract(q.value, '$.id') AS question_id,
+					json_extract(q.value, '$.timerNonce') AS timer_nonce
+				FROM workflow_instances i, json_each(i.snapshot_json, '$.developerDialogue') q
+				WHERE json_extract(q.value, '$.status') = 'pending'
+					AND json_extract(q.value, '$.timerNonce') IS NOT NULL
+					AND json_extract(q.value, '$.expiresAt') <= ?
+				ORDER BY json_extract(q.value, '$.expiresAt')
+				LIMIT ?
+			`)
+			.all(now.toISOString(), limit) as Array<{
+			workflow_id: string;
+			question_id: string;
+			timer_nonce: string;
+		}>;
+		for (const row of rows) {
+			result.push({
+				workflowId: row.workflow_id,
+				questionId: row.question_id,
+				timerNonce: row.timer_nonce,
+			});
+		}
+		return result;
+	} finally {
+		db.close();
+	}
+}
+
 export function getSnapshot(
 	repo: string,
 	workflowId: string,
-	registry: WorkflowRegistry,
-	now: () => Date,
+	_registry: WorkflowRegistry,
+	_now: () => Date,
 ): WorkflowSnapshot {
-	const db = openStore(repo);
+	const db = openReadStore(repo);
 	try {
-		expireDueQuestions(db, workflowId, registry, now);
 		return parseSnapshot(JSON.parse(instance(db, workflowId).snapshot_json));
 	} finally {
 		db.close();

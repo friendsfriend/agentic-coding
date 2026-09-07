@@ -16,8 +16,7 @@ import type {
 } from "../../registry.ts";
 import { questionRun } from "../dialogue.ts";
 import { validateSourceBaseline } from "../evidence.ts";
-import { enqueue, expireRuns, transition } from "../kernel.ts";
-import { runs } from "../store.ts";
+import { expireRuns, transition } from "../kernel.ts";
 
 /** Record the active researcher run's structured handoff and, in the same
  * authenticated step, request the transition into wiki drafting. Reuses
@@ -25,8 +24,7 @@ import { runs } from "../store.ts";
  * dashboard action previously performed before that transition: an
  * invalid handoff or a failed check throws, leaves the researcher run
  * active, and performs no expiry or transition. Only a valid handoff that
- * passes every check expires the researcher run, stops its session, and
- * enters `core.wiki`. */
+ * passes every check expires the researcher run and enters `core.wiki`. */
 export function recordResearchHandoff(
 	db: Database,
 	snapshot: WorkflowSnapshot,
@@ -60,25 +58,11 @@ export function recordResearchHandoff(
 			"unavailable",
 			"research handoff requires a ready workspace",
 		);
-	const active = runs(db, snapshot.workflowId).filter((item) =>
-		snapshot.step.activeRunIds.includes(item.id),
-	);
 	const researchContext = {
 		task: snapshot.metadata.task ?? "",
 		handoff: handoff as unknown as JsonValue,
 	};
 	expireRuns(db, snapshot, now);
-	for (const item of active)
-		if (item.handle)
-			enqueue(
-				db,
-				snapshot,
-				"agent.stop",
-				`run:${item.id}:stop:${item.generation}`,
-				{
-					runId: item.id,
-				},
-			);
 	transition(
 		db,
 		snapshot,

@@ -18,6 +18,7 @@ import {
 	type WorkflowSnapshot,
 	type WorkflowView,
 } from "../contracts.ts";
+import { planResult } from "../definitions/contracts.ts";
 import { effectiveManifestPolicy } from "../definitions.ts";
 import {
 	childTrace,
@@ -29,12 +30,14 @@ import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
 } from "../registry.ts";
+import { prepareStepEvidence } from "../steps/validation.ts";
 import { ensureBundle, wikiRoot } from "../wiki.ts";
 import {
 	authorizeAgentCapability as capabilityAuthorizeAgentCapability,
 	authorizeExactRunCapability as capabilityAuthorizeExactRunCapability,
 	issueRunCapability as capabilityIssueRunCapability,
 	hashToken,
+	prepareHandoffArtifact,
 } from "./capability.ts";
 import type {
 	ClaimedEffect,
@@ -44,8 +47,10 @@ import type {
 	StartWorkflowInput,
 } from "./engine-types.ts";
 import {
+	changedFilesIn,
 	currentBranch,
 	sourceContentFingerprint,
+	validateSourceBaseline,
 	validateStartEvidence,
 	wikiBaselineFor,
 } from "./evidence.ts";
@@ -56,8 +61,15 @@ import {
 	validateFusionRouting,
 } from "./kernel.ts";
 import { migrateLegacy } from "./migration.ts";
-import { agentHandoff } from "./reducers/agent-handoff.ts";
-import { agentQuestion, expireQuestion } from "./reducers/agent-question.ts";
+import {
+	agentHandoff,
+	type PreparedHandoffEvidence,
+} from "./reducers/agent-handoff.ts";
+import {
+	agentQuestion,
+	expireQuestion,
+	expireQuestionTimer,
+} from "./reducers/agent-question.ts";
 import { developerAction } from "./reducers/developer-action.ts";
 import { effectResult } from "./reducers/effect-result.ts";
 import { migrate, repair, repin, resume } from "./reducers/repair.ts";
@@ -376,6 +388,98 @@ export class WorkflowEngine {
 			repo,
 			"workflowId" in command ? command.workflowId : undefined,
 		);
+		// Read and validate bounded agent evidence before opening the writer
+		// transaction. The reducer repeats the final integrity check after reload
+		// so replacement during the race window is rejected.
+		let preparedHandoff: PreparedHandoffEvidence | undefined;
+		if (command.type === "agent.handoff" && command.outcome === "complete") {
+			const preparedArtifact = prepareHandoffArtifact(repo, command, this.now);
+			const observedRun = storeGetRun(repo, command.runId);
+			const observed = storeGetSnapshot(
+				repo,
+				observedRun.workflowId,
+				this.registry,
+				this.now,
+			);
+			const evidenceStep = this.registry.stepForDefinition(
+				this.registry.definition(
+					observed.definition.id,
+					observed.definition.version,
+					observed.definition.digest,
+				),
+				observed.currentStep,
+			);
+			const evidenceSnapshot =
+				observed.currentStep === "core.plan" && preparedArtifact
+					? {
+							...observed,
+							metadata: {
+								...observed.metadata,
+								changeId: planResult.parse(preparedArtifact.output)
+									.primaryChangeId,
+							},
+						}
+					: observed;
+			const preparedStepEvidence = prepareStepEvidence(evidenceSnapshot);
+			if (evidenceStep.behavior?.validateEvidence)
+				evidenceStep.behavior.validateEvidence({
+					snapshot: evidenceSnapshot,
+					evidence: preparedStepEvidence,
+				});
+			const sourceBaselineFingerprint =
+				evidenceSnapshot.definition.id === "wiki" ||
+				evidenceSnapshot.definition.id === "research"
+					? validateSourceBaseline(evidenceSnapshot)
+					: undefined;
+			preparedHandoff = {
+				stepEvidence: preparedStepEvidence,
+				...(preparedArtifact
+					? {
+							artifactDigest: preparedArtifact.digest,
+							artifactOutput: preparedArtifact.output,
+						}
+					: {}),
+				...(observed.currentStep === "core.triage"
+					? { changedFiles: changedFilesIn(observed) }
+					: {}),
+			};
+			if (sourceBaselineFingerprint) {
+				preparedHandoff.sourceFingerprint = sourceBaselineFingerprint;
+				const finalSourceFingerprint = sourceContentFingerprint(
+					observed.metadata.repository,
+					observed.metadata.wikiRoot,
+				);
+				if (finalSourceFingerprint !== preparedHandoff.sourceFingerprint)
+					throw new WorkflowRuntimeError(
+						"source-isolation",
+						"source content changed during handoff preparation",
+					);
+			}
+			if (observed.currentStep === "core.triage") {
+				const finalChangedFiles = changedFilesIn(observed);
+				if (
+					JSON.stringify(finalChangedFiles) !==
+					JSON.stringify(preparedHandoff.changedFiles)
+				)
+					throw new WorkflowRuntimeError(
+						"triage",
+						"changed-file scope changed during handoff preparation",
+					);
+				preparedHandoff.changedFiles = finalChangedFiles;
+			}
+		}
+		if (command.type === "agent.handoff" && command.outcome === "complete") {
+			const finalArtifact = prepareHandoffArtifact(repo, command, this.now);
+			if (
+				preparedHandoff?.artifactDigest !== undefined &&
+				(!finalArtifact ||
+					finalArtifact.digest !== preparedHandoff.artifactDigest)
+			)
+				throw new WorkflowRuntimeError(
+					"artifact",
+					"artifact changed during final handoff binding",
+				);
+		}
 		const db = openStore(repo);
 		try {
 			db.exec("BEGIN IMMEDIATE");
@@ -415,7 +519,13 @@ export class WorkflowEngine {
 			const runList = runs(db, snapshot.workflowId);
 			if (!repin)
 				validateSnapshot(snapshot, definition, runList, this.registry);
-			const event = this.reduce(db, snapshot, definition, command);
+			const event = this.reduce(
+				db,
+				snapshot,
+				definition,
+				command,
+				preparedHandoff,
+			);
 			snapshot.revision += 1;
 			snapshot.metadata.updatedAt = nowIso(this.now);
 			validateSnapshot(
@@ -700,6 +810,7 @@ export class WorkflowEngine {
 		snapshot: WorkflowSnapshot,
 		definition: CompiledWorkflowDefinition,
 		command: WorkflowCommand,
+		preparedHandoff?: PreparedHandoffEvidence,
 	): { type: string; actor: unknown; data: unknown } {
 		if (command.type === "developer.action")
 			return developerAction(
@@ -714,6 +825,8 @@ export class WorkflowEngine {
 			return agentQuestion(db, snapshot, command, this.now);
 		if (command.type === "agent.question-expire")
 			return expireQuestion(db, snapshot, command, this.now);
+		if (command.type === "timer.question-expire")
+			return expireQuestionTimer(db, snapshot, command, this.now);
 		if (command.type === "agent.handoff")
 			return agentHandoff(
 				db,
@@ -722,6 +835,7 @@ export class WorkflowEngine {
 				command,
 				this.registry,
 				this.now,
+				preparedHandoff,
 			);
 		if (command.type === "agent.research-handoff")
 			return recordResearchHandoff(

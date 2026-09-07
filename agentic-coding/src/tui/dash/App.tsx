@@ -30,20 +30,22 @@ import {
 	type DeveloperReviewComment,
 	type DeveloperReviewFinding,
 	type FindingCounts,
-	focusAgent,
+	focusAgentAsync,
 	focusReturnWorkspace,
 	type LocalChange,
 	loadDashboard,
+	loadDashboardAsync,
 	loadDeveloperReviewFindings,
-	loadLocalChanges,
-	loadLocalDiff,
+	loadLocalChangesAsync,
+	loadLocalDiffAsync,
 	loadVerifierFindings,
 	loadVerifierReport,
-	loadWikiSnapshotChanges,
-	loadWikiSnapshotDiff,
-	openFindingInEditor,
-	openSpecArtifact,
+	loadWikiSnapshotChangesAsync,
+	loadWikiSnapshotDiffAsync,
+	openFindingInEditorAsync,
+	openSpecArtifactAsync,
 	openSpecArtifacts,
+	openSpecArtifactsAsync,
 	previewRepair,
 	type RequiredUserActionItem,
 	requiredUserActionFor,
@@ -59,6 +61,11 @@ import { DiffViewModal } from "./devenv-ui/components/DiffViewModal";
 import { GenericModal } from "./devenv-ui/components/GenericModal";
 import { MarkdownViewModal } from "./devenv-ui/components/MarkdownViewModal";
 import type { Discussion } from "./devenv-ui/types";
+import {
+	disposeExecutionCoordinator,
+	onWorkflowExecutionError,
+	requestWorkflowExecution,
+} from "./engine";
 import { notify } from "./notifications";
 import { movePanel, type PanelDirection } from "./panel-grid";
 import { applyTheme, loadThemeName, saveThemeName } from "./theme-settings";
@@ -284,7 +291,56 @@ export function App(props: {
 			},
 		};
 	};
-	const [data, setData] = createSignal<DashboardData>(load());
+	const initialData: DashboardData =
+		props.profile === "test" || props.testData
+			? load()
+			: {
+					state: {
+						workflowId: props.workflowId,
+						changeId: "",
+						phase: "loading",
+						stepId: "loading",
+						stepLabel: "Loading",
+						revision: 0,
+						status: "active",
+						health: { valid: false, attention: ["Loading observations…"] },
+						repository: props.repo,
+						worktree: props.repo,
+						branch: "",
+						workspace: "",
+						verificationRound: 0,
+						runs: [],
+						panes: {},
+						availableActions: [],
+					},
+					request: "Loading observations…",
+					proposal: "Loading observations…",
+					review: "Loading observations…",
+					reviewHistory: [],
+					agents: [],
+					updated: "",
+					health: { dirty: false, ahead: 0, behind: 0, branch: "" },
+					gitStatus: {
+						available: false,
+						changedFiles: 0,
+						addedFiles: 0,
+						deletedFiles: 0,
+						noUpstream: true,
+					},
+					age: "unknown",
+					events: [],
+					verifierTimeline: [],
+					costBreakdown: [],
+				};
+	const [data, setData] = createSignal<DashboardData>(initialData);
+	let refreshGeneration = 0;
+	let refreshRunning = false;
+	let refreshQueued = false;
+	let refreshDisposed = false;
+	let refreshController: AbortController | undefined;
+	let reviewController: AbortController | undefined;
+	let reviewDiffController: AbortController | undefined;
+	let reviewGeneration = 0;
 	// Feed the shell's global header from the dashboard's single data source.
 	createEffect(() => {
 		props.onHeader?.({
@@ -294,7 +350,9 @@ export function App(props: {
 			updated: data().updated,
 		});
 	});
-	const [_message, setMessage] = createSignal("");
+	const [message, setMessage] = createSignal("");
+	const [observing, setObserving] = createSignal(false);
+	const [reviewLoading, setReviewLoading] = createSignal(false);
 	let lastQuitAt = 0;
 	const [busy, setBusy] = createSignal(false);
 	// Dedicated review-finishing signal (in addition to the busy guard): scopes
@@ -305,7 +363,29 @@ export function App(props: {
 	const [activePanel, setActivePanel] = createSignal(0);
 	const [selectedAgent, setSelectedAgent] = createSignal(0);
 	const [selectedArtifact, setSelectedArtifact] = createSignal(0);
-	const artifacts = createMemo(() => openSpecArtifacts(data().state));
+	const [artifacts, setArtifacts] = createSignal<string[]>([]);
+	let artifactGeneration = 0;
+	let artifactController: AbortController | undefined;
+	createEffect(() => {
+		const generation = ++artifactGeneration;
+		artifactController?.abort();
+		artifactController = new AbortController();
+		if (props.profile === "test") {
+			setArtifacts(openSpecArtifacts(data().state));
+			return;
+		}
+		void openSpecArtifactsAsync(data().state, artifactController.signal)
+			.then((next) => {
+				if (generation === artifactGeneration) setArtifacts(next);
+			})
+			.catch((error) => {
+				if (
+					generation === artifactGeneration &&
+					!(error instanceof DOMException && error.name === "AbortError")
+				)
+					setMessage(error instanceof Error ? error.message : String(error));
+			});
+	});
 	const requiredUserAction = createMemo(() =>
 		requiredUserActionFor(
 			data().state.phase,
@@ -471,6 +551,18 @@ export function App(props: {
 				[item.id]: { kind: "custom", value },
 			}));
 	};
+	const hidePendingQuestions = (ids: string[]) => {
+		const hidden = new Set(ids);
+		setData((current) => ({
+			...current,
+			state: {
+				...current.state,
+				pendingQuestions: current.state.pendingQuestions?.filter(
+					(item) => !hidden.has(item.id),
+				),
+			},
+		}));
+	};
 	const submitQuestion = async (answer: {
 		kind: "option" | "custom" | "cancel";
 		value?: string;
@@ -496,6 +588,7 @@ export function App(props: {
 							kind: "cancel",
 						},
 					);
+				hidePendingQuestions(group.map((item) => item.id));
 				closeQuestion();
 				refresh();
 			} catch (error) {
@@ -556,6 +649,7 @@ export function App(props: {
 							})),
 						},
 					);
+				hidePendingQuestions(group.map((item) => item.id));
 				closeQuestion();
 				refresh();
 			} catch (error) {
@@ -577,6 +671,7 @@ export function App(props: {
 					question.id,
 					answer,
 				);
+			hidePendingQuestions([question.id]);
 			closeQuestion();
 			refresh();
 		} catch (error) {
@@ -821,7 +916,13 @@ export function App(props: {
 			props.keymap.setData("modal.active", "user-action");
 		} else props.keymap.setData("modal.active", "none");
 	};
-	const openDeveloperReview = () => {
+	const openDeveloperReview = async () => {
+		if (reviewLoading()) return;
+		setReviewLoading(true);
+		setMessage("Loading developer review…");
+		const generation = ++reviewGeneration;
+		reviewController?.abort();
+		reviewController = new AbortController();
 		try {
 			const changes =
 				props.profile === "test"
@@ -835,7 +936,12 @@ export function App(props: {
 								renamedFile: false,
 							},
 						]
-					: loadLocalChanges(props.repo, props.workflowId);
+					: await loadLocalChangesAsync(
+							props.repo,
+							props.workflowId,
+							reviewController.signal,
+						);
+			if (generation !== reviewGeneration) return;
 			const findings =
 				props.profile === "test"
 					? [
@@ -873,16 +979,28 @@ export function App(props: {
 			);
 		} catch (error) {
 			setMessage(error instanceof Error ? error.message : String(error));
+		} finally {
+			if (generation === reviewGeneration) {
+				setReviewLoading(false);
+				reviewController = undefined;
+			}
 		}
 	};
-	const openReviewDiff = () => {
+	const openReviewDiff = async () => {
 		const file = reviewVisibleChanges()[reviewChangeIndex()];
 		if (!file) return;
+		reviewDiffController?.abort();
+		reviewDiffController = new AbortController();
 		try {
 			setReviewDiff(
 				props.profile === "test"
 					? "diff --git a/src/example.ts b/src/example.ts\n@@ -1,2 +1,4 @@\n const value = 1;\n-old();\n+new();\n+reviewed();\n"
-					: loadLocalDiff(props.repo, props.workflowId, file),
+					: await loadLocalDiffAsync(
+							props.repo,
+							props.workflowId,
+							file,
+							reviewDiffController.signal,
+						),
 			);
 			setReviewLine(0);
 			setReviewView("diff");
@@ -1008,31 +1126,47 @@ export function App(props: {
 		} as Record<string, string>;
 		return demo[artifact] ?? `# ${artifact}\n\nDemo artifact content.`;
 	};
-	const openPlanReview = () => {
+	const openPlanReview = async () => {
+		const generation = ++reviewGeneration;
+		reviewDiffController?.abort();
+		reviewDiffController = new AbortController();
 		try {
 			const wikiReview = requiredUserAction()?.key === "wiki-review";
 			const changes: LocalChange[] = wikiReview
-				? loadWikiSnapshotChanges(props.repo, props.workflowId)
+				? await loadWikiSnapshotChangesAsync(
+						props.repo,
+						props.workflowId,
+						reviewDiffController.signal,
+					)
 				: props.profile === "test"
 					? demoPlanArtifacts()
-					: openSpecArtifacts(data().state).map((artifact) => {
-							let linesAdded = 0;
-							try {
-								linesAdded = openSpecArtifact(data().state, artifact).split(
-									/\r?\n/,
-								).length;
-							} catch {
-								/* line count falls back to 0 when the artifact is unreadable */
-							}
-							return {
-								newPath: artifact,
-								linesAdded,
-								linesDeleted: 0,
-								newFile: true,
-								deletedFile: false,
-								renamedFile: false,
-							};
-						});
+					: await Promise.all(
+							artifacts()
+								.slice(0, 200)
+								.map(async (artifact) => {
+									let linesAdded = 0;
+									try {
+										linesAdded = (
+											await openSpecArtifactAsync(
+												data().state,
+												artifact,
+												reviewDiffController?.signal,
+											)
+										).split(/\r?\n/).length;
+									} catch {
+										/* line count falls back to 0 when the artifact is unreadable */
+									}
+									return {
+										newPath: artifact,
+										linesAdded,
+										linesDeleted: 0,
+										newFile: true,
+										deletedFile: false,
+										renamedFile: false,
+									};
+								}),
+						);
+			if (generation !== reviewGeneration) return;
 			setReviewKind(wikiReview ? "wiki" : "plan");
 			setReviewChanges(changes);
 			setReviewChangeIndex(0);
@@ -1057,41 +1191,63 @@ export function App(props: {
 			setMessage(error instanceof Error ? error.message : String(error));
 		}
 	};
-	const openPlanMarkdown = () => {
+	const openPlanMarkdown = async () => {
 		const file = reviewVisibleChanges()[reviewChangeIndex()];
 		if (!file) return;
+		reviewDiffController?.abort();
+		reviewDiffController = new AbortController();
 		try {
-			setReviewDiff(
+			const content =
 				reviewKind() === "wiki"
-					? loadWikiSnapshotDiff(props.repo, props.workflowId, file.newPath)
+					? await loadWikiSnapshotDiffAsync(props.repo, props.workflowId, file)
 					: props.profile === "test"
 						? demoPlanContent(file.newPath)
-						: openSpecArtifact(data().state, file.newPath),
-			);
+						: await openSpecArtifactAsync(
+								data().state,
+								file.newPath,
+								reviewDiffController?.signal,
+							);
+			setReviewDiff(content);
 			setReviewLine(0);
 			setReviewView("diff");
 		} catch (error) {
 			setMessage(error instanceof Error ? error.message : String(error));
 		}
 	};
-	const navigateReviewFile = (direction: 1 | -1) => {
+	const navigateReviewFile = async (direction: 1 | -1) => {
 		const previous = reviewChangeIndex();
 		const total = reviewVisibleChanges().length;
 		if (!total) return;
 		const next = (previous + direction + total) % total;
 		const file = reviewVisibleChanges()[next];
 		if (!file) return;
+		reviewDiffController?.abort();
+		reviewDiffController = new AbortController();
 		try {
 			const content =
 				reviewKind() === "wiki"
-					? loadWikiSnapshotDiff(props.repo, props.workflowId, file.newPath)
+					? await loadWikiSnapshotDiffAsync(
+							props.repo,
+							props.workflowId,
+							file,
+							reviewDiffController.signal,
+						)
 					: reviewKind() === "plan"
 						? props.profile === "test"
 							? demoPlanContent(file.newPath)
-							: openSpecArtifact(data().state, file.newPath)
+							: await openSpecArtifactAsync(
+									data().state,
+									file.newPath,
+									reviewDiffController.signal,
+								)
 						: props.profile === "test"
 							? "diff --git a/src/example.ts b/src/example.ts\n@@ -1,2 +1,4 @@\n const value = 1;\n-old();\n+new();\n+reviewed();\n"
-							: loadLocalDiff(props.repo, props.workflowId, file);
+							: await loadLocalDiffAsync(
+									props.repo,
+									props.workflowId,
+									file,
+									reviewDiffController.signal,
+								);
 			setReviewChangeIndex(next);
 			setReviewVisualMode(false);
 			setReviewVisualStart(0);
@@ -1436,13 +1592,23 @@ export function App(props: {
 			setVerdictRenderMarkdown(true);
 			let content: string;
 			try {
-				content = openSpecArtifact(data().state, item.value);
+				content = await openSpecArtifactAsync(
+					data().state,
+					item.value,
+					reviewDiffController?.signal,
+				);
 			} catch (error) {
 				content = `Could not open ${item.value}: ${error instanceof Error ? error.message : String(error)}`;
 			}
 			setVerdict({ title: `OpenSpec · ${item.value}`, content });
 			setVerdictOffset(0);
 			props.keymap.setData("modal.active", "verdict");
+			return;
+		}
+		if (item.kind === "workflow" && item.value === "research-follow-up") {
+			setUserActionOpen(false);
+			setCompletedPicker(true);
+			props.keymap.setData("modal.active", "completed-actions");
 			return;
 		}
 		setUserActionOpen(false);
@@ -1470,32 +1636,98 @@ export function App(props: {
 		}
 	};
 	const refresh = () => {
-		try {
+		if (refreshDisposed) return;
+		if (props.profile === "test") {
 			setData(load());
-			setSelectedAgent((index) =>
-				Math.min(index, Math.max(0, data().agents.length - 1)),
-			);
-		} catch (error) {
-			setMessage(error instanceof Error ? error.message : String(error));
+			return;
 		}
+		refreshQueued = refreshRunning;
+		const generation = ++refreshGeneration;
+		if (refreshRunning) return;
+		refreshRunning = true;
+		setObserving(true);
+		refreshController?.abort();
+		refreshController = new AbortController();
+		void loadDashboardAsync(
+			props.repo,
+			props.workflowId,
+			refreshController.signal,
+		)
+			.then((next) => {
+				if (!refreshDisposed && generation === refreshGeneration) {
+					setObserving(false);
+					setMessage("");
+					setData(next);
+					setSelectedAgent((index) =>
+						Math.min(index, Math.max(0, next.agents.length - 1)),
+					);
+				}
+			})
+			.catch((error) => {
+				if (!refreshDisposed && generation === refreshGeneration) {
+					const message =
+						error instanceof Error ? error.message : String(error);
+					setObserving(false);
+					setMessage(message);
+					setData((current) => ({
+						...current,
+						state: {
+							...current.state,
+							health: {
+								...current.state.health,
+								attention: [message],
+								diagnostic: message,
+							},
+						},
+					}));
+				}
+			})
+			.finally(() => {
+				refreshRunning = false;
+				if (refreshQueued && !refreshDisposed) {
+					refreshQueued = false;
+					refresh();
+				}
+			});
 	};
+
+	createEffect(() => {
+		if (props.profile === "test") return;
+		const state = data().state;
+		const dirs =
+			state.definition?.id === "research"
+				? [join(wikiWorkflowDataRoot(), props.workflowId)]
+				: [
+						join(props.repo, ".herdr-workflow", props.workflowId),
+						join(state.worktree, ".herdr-workflow", props.workflowId),
+					];
+		const dispose = watchDirectories(dirs, refresh);
+		onCleanup(dispose);
+	});
 
 	onMount(() => {
 		// ponytail: 30s safety re-sync catches drift the watchers miss (e.g. a
-		// directory that didn't exist yet); file watches give near-instant refresh.
-		const dirs =
-			props.profile === "test"
-				? []
-				: data().state.definition?.id === "research"
-					? [join(wikiWorkflowDataRoot(), props.workflowId)]
-					: [
-							join(props.repo, ".herdr-workflow", props.workflowId),
-							join(data().state.worktree, ".herdr-workflow", props.workflowId),
-						];
-		const dispose = watchDirectories(dirs, refresh);
+		// directory that did not exist yet); file watches give near-instant refresh.
 		const safety = setInterval(refresh, 30000);
+		const disposeExecutionError =
+			props.profile === "test"
+				? undefined
+				: onWorkflowExecutionError(props.repo, (workflowId) => {
+						if (workflowId === props.workflowId) refresh();
+					});
+		if (props.profile !== "test")
+			requestWorkflowExecution(props.repo, props.workflowId);
+		refresh();
 		onCleanup(() => {
-			dispose();
+			refreshDisposed = true;
+			refreshController?.abort();
+			disposeExecutionError?.();
+			artifactGeneration++;
+			artifactController?.abort();
+			reviewGeneration++;
+			reviewController?.abort();
+			reviewDiffController?.abort();
+			disposeExecutionCoordinator(props.repo);
 			clearInterval(safety);
 		});
 	});
@@ -1543,11 +1775,12 @@ export function App(props: {
 			return;
 		}
 		if (name === "escape") {
+			setBusy(true);
 			try {
 				const workspace = (
 					props.profile === "test"
 						? data()
-						: loadDashboard(props.repo, props.workflowId)
+						: await loadDashboardAsync(props.repo, props.workflowId)
 				).state.returnWorkspace;
 				if (!workspace)
 					throw new Error(
@@ -1556,6 +1789,8 @@ export function App(props: {
 				focusReturnWorkspace(props.repo, props.workflowId, workspace);
 			} catch (error) {
 				setMessage(error instanceof Error ? error.message : String(error));
+			} finally {
+				setBusy(false);
 			}
 			return;
 		}
@@ -1660,12 +1895,22 @@ export function App(props: {
 				const artifact = artifacts()[selectedArtifact()];
 				if (artifact) {
 					setVerdictRenderMarkdown(true);
-					setVerdict({
-						title: `OpenSpec · ${artifact}`,
-						content: openSpecArtifact(data().state, artifact),
-					});
-					setVerdictOffset(0);
-					props.keymap.setData("modal.active", "verdict");
+					setMessage("Loading artifact…");
+					void openSpecArtifactAsync(
+						data().state,
+						artifact,
+						artifactController?.signal,
+					)
+						.then((content) => {
+							setVerdict({ title: `OpenSpec · ${artifact}`, content });
+							setVerdictOffset(0);
+							props.keymap.setData("modal.active", "verdict");
+						})
+						.catch((error) =>
+							setMessage(
+								error instanceof Error ? error.message : String(error),
+							),
+						);
 				}
 				return;
 			}
@@ -1675,7 +1920,7 @@ export function App(props: {
 				try {
 					const pane = data().state.panes[agent.role];
 					if (!pane) return;
-					focusAgent(data().state, pane);
+					await focusAgentAsync(data().state, pane);
 				} catch (error) {
 					setMessage(error instanceof Error ? error.message : String(error));
 				}
@@ -2389,19 +2634,19 @@ export function App(props: {
 						else if (key === "enter" || key === "return") {
 							const finding = items[selectedFinding()];
 							if (finding?.type === "finding") {
-								try {
-									openFindingInEditor(data().state, finding);
-								} catch (error) {
-									setVerdictReturnToFindings(true);
-									setVerdictRenderMarkdown(false);
-									setVerdict({
-										title: "Editor launch failed",
-										content:
-											error instanceof Error ? error.message : String(error),
-									});
-									setVerdictOffset(0);
-									props.keymap.setData("modal.active", "verdict");
-								}
+								void openFindingInEditorAsync(data().state, finding).catch(
+									(error) => {
+										setVerdictReturnToFindings(true);
+										setVerdictRenderMarkdown(false);
+										setVerdict({
+											title: "Editor launch failed",
+											content:
+												error instanceof Error ? error.message : String(error),
+										});
+										setVerdictOffset(0);
+										props.keymap.setData("modal.active", "verdict");
+									},
+								);
 							}
 						}
 						return true;
@@ -2629,6 +2874,15 @@ export function App(props: {
 							gap: 1,
 						}}
 					>
+						<Show when={observing()}>
+							<text fg={uiColors.textMuted}>Refreshing observations…</text>
+						</Show>
+						<Show when={message()}>
+							<text fg={uiColors.warning}>{message()}</text>
+						</Show>
+						<Show when={data().state.health.diagnostic}>
+							<text fg={uiColors.error}>{data().state.health.diagnostic}</text>
+						</Show>
 						<box
 							style={{
 								width: "100%",
@@ -3165,29 +3419,36 @@ export function App(props: {
 						setReviewCommentMode(false);
 						setReviewView("files");
 					}}
-					onNavigateFile={(direction) => {
+					onNavigateFile={async (direction) => {
 						const previous = reviewChangeIndex();
+						reviewDiffController?.abort();
+						reviewDiffController = new AbortController();
 						try {
 							const total = reviewVisibleChanges().length;
 							if (!total) return;
 							const next = (previous + direction + total) % total;
 							const file = reviewVisibleChanges()[next];
 							if (!file) return;
-							setReviewChangeIndex(next);
 							setReviewVisualMode(false);
 							setReviewVisualStart(0);
 							setReviewLine(0);
 							setReviewDiff(
 								reviewKind() === "wiki"
-									? loadWikiSnapshotDiff(
+									? await loadWikiSnapshotDiffAsync(
 											props.repo,
 											props.workflowId,
-											file.newPath,
+											file,
+											reviewDiffController?.signal,
 										)
 									: props.profile === "test"
 										? demoPlanContent(file.newPath)
-										: openSpecArtifact(data().state, file.newPath),
+										: await openSpecArtifactAsync(
+												data().state,
+												file.newPath,
+												reviewDiffController?.signal,
+											),
 							);
+							setReviewChangeIndex(next);
 						} catch (error) {
 							setReviewChangeIndex(previous);
 							setMessage(
@@ -3234,30 +3495,7 @@ export function App(props: {
 							setReviewCommentMode(false);
 							setReviewView("files");
 						}}
-						onNavigateFile={(direction) => {
-							const previous = reviewChangeIndex();
-							try {
-								const total = reviewVisibleChanges().length;
-								if (!total) return;
-								const next = (previous + direction + total) % total;
-								const file = reviewVisibleChanges()[next];
-								if (!file) return;
-								const diff =
-									props.profile === "test"
-										? "diff --git a/src/example.ts b/src/example.ts\n@@ -1,2 +1,4 @@\n const value = 1;\n-old();\n+new();\n+reviewed();\n"
-										: loadLocalDiff(props.repo, props.workflowId, file);
-								setReviewChangeIndex(next);
-								setReviewVisualMode(false);
-								setReviewVisualStart(0);
-								setReviewLine(0);
-								setReviewDiff(diff);
-							} catch (error) {
-								setReviewChangeIndex(previous);
-								setMessage(
-									error instanceof Error ? error.message : String(error),
-								);
-							}
-						}}
+						onNavigateFile={(direction) => void navigateReviewFile(direction)}
 					/>
 				)}
 			</Show>

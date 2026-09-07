@@ -42,6 +42,8 @@ export function Home(props: {
 	items: WorkflowOverview[];
 	loading: boolean;
 	projects: Array<{ name: string; path: string; openspec: boolean }>;
+	error?: string;
+	refreshing?: boolean;
 	refresh: () => void;
 }) {
 	const dimensions = useTerminalDimensions();
@@ -599,6 +601,12 @@ export function Home(props: {
 			onMouseUp={() => invokeGlobalSelectionMouseUpHandler()}
 		>
 			<Panel title="Workspaces" active style={{ flexGrow: 1, minHeight: 0 }}>
+				<Show when={props.refreshing}>
+					<text fg={uiColors.textMuted}>Refreshing observations…</text>
+				</Show>
+				<Show when={props.error}>
+					<text fg={uiColors.error}>Observation failed: {props.error}</text>
+				</Show>
 				<Show
 					when={loading()}
 					fallback={
@@ -606,9 +614,11 @@ export function Home(props: {
 							when={visibleItems().length > 0}
 							fallback={
 								<text fg={uiColors.textMuted}>
-									{items().length
-										? "No workflows match current filter"
-										: "No workflows found in configured project roots"}
+									{props.error
+										? `Observation failed: ${props.error}`
+										: items().length
+											? "No workflows match current filter"
+											: "No workflows found in configured project roots"}
 								</text>
 							}
 						>

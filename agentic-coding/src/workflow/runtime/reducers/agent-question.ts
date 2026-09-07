@@ -55,6 +55,7 @@ export function agentQuestion(
 			...(item.context === undefined ? {} : { context: item.context }),
 			options: item.options,
 			...(groupId === undefined ? {} : { groupId, itemIndex }),
+			timerNonce: randomUUID(),
 			status: "pending",
 			createdAt,
 			expiresAt,
@@ -75,6 +76,59 @@ export function agentQuestion(
 				? { questionId: questions[0]?.id }
 				: { groupId, questionIds: questions.map((question) => question.id) }),
 			role: run.role,
+		},
+	};
+}
+
+export function expireQuestionTimer(
+	_snapshotDb: Database,
+	snapshot: WorkflowSnapshot,
+	command: Extract<WorkflowCommand, { type: "timer.question-expire" }>,
+	now: () => Date,
+): { type: string; actor: unknown; data: unknown } {
+	if (snapshot.status === "completed" || snapshot.status === "closed")
+		throw new WorkflowRuntimeError(
+			"stale-question",
+			"terminal workflows do not accept question timers",
+		);
+	const question = snapshot.developerDialogue.find(
+		(item) => item.id === command.questionId,
+	);
+	if (question?.timerNonce !== command.timerNonce)
+		throw new WorkflowRuntimeError(
+			"unauthorized",
+			"question timer capability is invalid",
+		);
+	if (question?.status !== "pending")
+		throw new WorkflowRuntimeError(
+			"stale-question",
+			"question is no longer pending",
+		);
+	if (Date.parse(question.expiresAt) > now().getTime())
+		throw new WorkflowRuntimeError(
+			"stale-question",
+			"question has not expired",
+		);
+	const group = question.groupId
+		? snapshot.developerDialogue.filter(
+				(item) =>
+					item.groupId === question.groupId && item.status === "pending",
+			)
+		: [question];
+	const at = nowIso(now);
+	for (const item of group) {
+		item.status = "expired";
+		item.answeredAt = at;
+		item.answer = { kind: "cancel" };
+	}
+	return {
+		type: "developer.question.expired",
+		actor: { kind: "system" },
+		data: {
+			...(question.groupId
+				? { groupId: question.groupId }
+				: { questionId: question.id }),
+			outcome: "expired",
 		},
 	};
 }

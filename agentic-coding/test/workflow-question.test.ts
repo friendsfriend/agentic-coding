@@ -328,7 +328,8 @@ test("question capability rejects another run and expires after 24 hours", () =>
 		});
 		const question = created.snapshot.developerDialogue[0];
 		const questionId = question?.id;
-		if (!questionId) throw new Error("question id missing");
+		const timerNonce = question?.timerNonce;
+		if (!questionId || !timerNonce) throw new Error("question data missing");
 		expect(question?.expiresAt).toBe(
 			new Date(
 				new Date("2026-01-01T00:00:00Z").getTime() + QUESTION_WAIT_MS,
@@ -337,9 +338,18 @@ test("question capability rejects another run and expires after 24 hours", () =>
 		now(new Date("2026-01-01T23:59:59.999Z"));
 		expect(engine.status(repo, "question").pendingQuestions).toHaveLength(1);
 		now(new Date("2026-01-02T00:00:00.000Z"));
-		const expiredView = engine.status(repo, "question");
-		expect(expiredView.pendingQuestions).toHaveLength(0);
-		expect(expiredView.developerDialogue?.[0]?.status).toBe("expired");
+		const observedView = engine.status(repo, "question");
+		expect(observedView.pendingQuestions).toHaveLength(0);
+		expect(observedView.revision).toBe(created.snapshot.revision);
+		expect(observedView.developerDialogue?.[0]?.status).toBe("pending");
+		const expired = engine.dispatch(repo, {
+			type: "timer.question-expire",
+			workflowId: run.workflowId,
+			questionId,
+			timerNonce,
+		});
+		expect(expired.view.developerDialogue?.[0]?.status).toBe("expired");
+		const expiredView = expired.view;
 		expect(() =>
 			engine.dispatch(repo, {
 				type: "agent.question",

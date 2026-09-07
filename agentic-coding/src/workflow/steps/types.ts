@@ -18,6 +18,7 @@ export interface CandidateRolesContext {
 
 export interface ValidateEvidenceContext {
 	snapshot: WorkflowSnapshot;
+	evidence?: unknown;
 }
 
 export interface StepArrivalPrior {

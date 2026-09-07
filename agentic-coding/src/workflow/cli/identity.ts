@@ -102,7 +102,11 @@ export function resolveHandoffIdentity(
 			content
 				.split("\n")
 				.map((item) => item.split("=", 2) as [string, string])
-				.filter(([key, value]) => Boolean(key) && value !== undefined),
+				.filter(([key, value]) => Boolean(key) && value !== undefined)
+				.map(
+					([key, value]) =>
+						[key, value.replace(/^'|'$/g, "")] as [string, string],
+				),
 		);
 		if (values.get("HERDR_RUN_ID") !== current.id)
 			throw new Error("persistent agent run environment does not match run");

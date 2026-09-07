@@ -7,6 +7,7 @@ Not for agents. This is only for humans.
 * Implement Agent steered version of the workflow. Basically an orchestrator version of the workflow.
 * Automatic wiki commit + push if in git repo.
 * openspec panel shows all instead of only relevant changes / specs
+* Fix runtime calculation for agents that take multiple turns
 
 * Architecture improvements based on gpt 6 astra:
   * fix effect lease lifecycle (done)
@@ -18,4 +19,10 @@ Not for agents. This is only for humans.
   * contsolidate-tui-primitives
   * split-dashboard-responsibilities
   * enforce-source-layer-boundaries
+
+Effect switchover
+ * Effect foundation, schemas, errors, agent conventions.
+ * Transactional runtime migration.
+ * Runner and adapter migration.
+ * CLI/TUI cutover and legacy-code removal.
 

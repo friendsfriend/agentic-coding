@@ -36,6 +36,8 @@ function withWikiRoot<T>(root: string, operation: () => T): T {
 	}
 }
 
+const MAX_SOURCE_FILE_BYTES = 4 * 1024 * 1024;
+const MAX_SOURCE_LIST_BYTES = 8 * 1024 * 1024;
 function gitNullSeparated(repository: string, args: string[]): string[] {
 	const result = Bun.spawnSync(["git", "-C", repository, ...args], {
 		stdout: "pipe",
@@ -45,6 +47,11 @@ function gitNullSeparated(repository: string, args: string[]): string[] {
 		throw new WorkflowRuntimeError(
 			"source-isolation",
 			`unable to fingerprint Git content: ${result.stderr.toString().trim()}`,
+		);
+	if (result.stdout.byteLength > MAX_SOURCE_LIST_BYTES)
+		throw new WorkflowRuntimeError(
+			"source-isolation",
+			"source listing exceeds bounded observation size",
 		);
 	return result.stdout.toString().split("\0").filter(Boolean);
 }
@@ -120,10 +127,32 @@ export function sourceContentFingerprint(
 				const target = fs.readlinkSync(file);
 				hash.update(`symlink:${target.length}:${target}\0`);
 			} else if (stat.isFile()) {
-				const content = fs.readFileSync(file);
-				hash.update(`file:${content.length}:`);
-				hash.update(content);
-				hash.update("\0");
+				let fd: number | undefined;
+				try {
+					fd = fs.openSync(
+						file,
+						fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
+					);
+					const current = fs.fstatSync(fd);
+					if (!current.isFile() || current.size > MAX_SOURCE_FILE_BYTES)
+						throw new WorkflowRuntimeError(
+							"source-isolation",
+							`source file exceeds bounded observation size: ${relative}`,
+						);
+					const buffer = Buffer.alloc(MAX_SOURCE_FILE_BYTES + 1);
+					const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+					if (bytesRead > MAX_SOURCE_FILE_BYTES)
+						throw new WorkflowRuntimeError(
+							"source-isolation",
+							`source file exceeds bounded observation size: ${relative}`,
+						);
+					const content = buffer.subarray(0, bytesRead);
+					hash.update(`file:${content.length}:`);
+					hash.update(content);
+					hash.update("\0");
+				} finally {
+					if (fd !== undefined) fs.closeSync(fd);
+				}
 			} else hash.update(`mode:${stat.mode}\0`);
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -173,6 +202,36 @@ export function changedFilesIn(snapshot: WorkflowSnapshot): string[] {
 	);
 	for (const file of committed.stdout.toString().split("\n").filter(Boolean))
 		changed.add(file);
+	return [...changed].sort();
+}
+export async function changedFilesInAsync(
+	snapshot: WorkflowSnapshot,
+): Promise<string[]> {
+	const root = snapshot.metadata.worktree;
+	const runGit = async (args: string[]) => {
+		const proc = Bun.spawn(["git", "-C", root, ...args], {
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const stdout = await new Response(proc.stdout).text();
+		if ((await proc.exited) !== 0)
+			throw new Error("unable to inspect changed files");
+		return stdout;
+	};
+	const changed = new Set<string>();
+	for (const line of (
+		await runGit(["status", "--porcelain=v1", "-uall"])
+	).split("\n")) {
+		if (line.trim()) changed.add(line.slice(3));
+	}
+	for (const file of (
+		await runGit([
+			"diff",
+			"--name-only",
+			`${snapshot.metadata.baseCommit}..HEAD`,
+		])
+	).split("\n"))
+		if (file) changed.add(file);
 	return [...changed].sort();
 }
 export function currentBranch(repo: string): string | undefined {
@@ -266,30 +325,32 @@ export function wikiVerificationPayload(snapshot: WorkflowSnapshot): {
 		};
 	});
 }
-export function validateSourceBaseline(snapshot: WorkflowSnapshot): void {
+export function validateSourceBaseline(
+	snapshot: WorkflowSnapshot,
+): string | undefined {
 	if (
 		snapshot.definition.id !== "wiki" &&
 		snapshot.definition.id !== "research"
 	)
-		return;
+		return undefined;
 	if (snapshot.definition.id === "research" && !snapshot.metadata.repository)
-		return;
+		return undefined;
 	const baseline = snapshot.sourceBaseline?.fingerprint;
 	if (!baseline)
 		throw new WorkflowRuntimeError(
 			"source-isolation",
 			`${snapshot.definition.id} source baseline is missing`,
 		);
-	if (
-		sourceContentFingerprint(
-			snapshot.metadata.repository,
-			snapshot.metadata.wikiRoot,
-		) !== baseline
-	)
+	const fingerprint = sourceContentFingerprint(
+		snapshot.metadata.repository,
+		snapshot.metadata.wikiRoot,
+	);
+	if (fingerprint !== baseline)
 		throw new WorkflowRuntimeError(
 			"source-isolation",
 			"source repository changed during documentation or research run",
 		);
+	return fingerprint;
 }
 export function validateStartEvidence(
 	repository: string,
