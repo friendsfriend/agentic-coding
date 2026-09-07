@@ -137,14 +137,54 @@ export function developerAction(
 			`action unavailable: ${command.actionId}`,
 			snapshot.revision,
 		);
-	if (command.actionId === "close-research") {
+	if (command.actionId === "request-research-wiki") {
 		if (
 			snapshot.definition.id !== "research" ||
 			snapshot.currentStep !== "core.research"
 		)
 			throw new WorkflowRuntimeError(
 				"unavailable",
-				"close-research is only available while research is purely conversational (core.research)",
+				"request-research-wiki is only available while research is active",
+			);
+		validateSourceBaseline(snapshot);
+		const active = runs(db, snapshot.workflowId).filter((run) =>
+			snapshot.step.activeRunIds.includes(run.id),
+		);
+		expireRuns(db, snapshot, now);
+		for (const run of active)
+			if (run.handle)
+				enqueue(
+					db,
+					snapshot,
+					"agent.stop",
+					`run:${run.id}:stop:${run.generation}`,
+					{ runId: run.id },
+				);
+		transition(
+			db,
+			snapshot,
+			definition,
+			"request-wiki",
+			undefined,
+			registry,
+			now,
+		);
+		return {
+			type: "developer.action",
+			actor: { kind: "developer" },
+			data: { actionId: command.actionId },
+		};
+	}
+	if (command.actionId === "close-research") {
+		if (
+			snapshot.definition.id !== "research" ||
+			!["core.research", "core.wiki", "core.wiki-approval"].includes(
+				snapshot.currentStep,
+			)
+		)
+			throw new WorkflowRuntimeError(
+				"unavailable",
+				"close-research is only available while research is active",
 			);
 		validateSourceBaseline(snapshot);
 		const active = runs(db, snapshot.workflowId).filter((run) =>

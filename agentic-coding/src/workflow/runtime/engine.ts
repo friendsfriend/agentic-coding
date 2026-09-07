@@ -55,6 +55,7 @@ import {
 	freshStep,
 	validateFusionRouting,
 } from "./kernel.ts";
+import { migrateLegacy } from "./migration.ts";
 import { agentHandoff } from "./reducers/agent-handoff.ts";
 import { agentQuestion, expireQuestion } from "./reducers/agent-question.ts";
 import { developerAction } from "./reducers/developer-action.ts";
@@ -65,6 +66,7 @@ import {
 	type EffectRow,
 	effectFromRow,
 	type InstanceRow,
+	initializeStore,
 	instance,
 	json,
 	nowIso,
@@ -77,6 +79,7 @@ import {
 	getRun as storeGetRun,
 	getSnapshot as storeGetSnapshot,
 	renewEffect as storeRenewEffect,
+	tableExists,
 	validateEffect,
 	validateSnapshot,
 	writeSnapshot,
@@ -102,6 +105,43 @@ export class WorkflowEngine {
 		private readonly now: () => Date = () => new Date(),
 		private readonly onCommitted: (repository: string) => void = () => {},
 	) {}
+	/** Initialize the canonical store and, when addressed, import its legacy
+	 * workflow outside any command transaction. */
+	initialize(repo: string, workflowId?: string): void {
+		initializeStore(repo);
+		if (isWikiWorkflowTarget(repo) || isResearchWorkflowTarget(repo)) return;
+		const db = openStore(repo);
+		try {
+			if (!tableExists(db, "workflows")) return;
+			const ids = workflowId
+				? [workflowId]
+				: (
+						db.query("SELECT change_id FROM workflows").all() as Array<{
+							change_id: string;
+						}>
+					).map((row) => row.change_id);
+			for (const changeId of ids) {
+				if (
+					db
+						.query("SELECT 1 FROM workflow_instances WHERE id=?")
+						.get(changeId) ||
+					db
+						.query("SELECT 1 FROM workflow_instances WHERE change_id=?")
+						.get(changeId)
+				)
+					continue;
+				migrateLegacy(
+					db,
+					canonicalRepository(repo),
+					changeId,
+					this.registry,
+					this.now,
+				);
+			}
+		} finally {
+			db.close();
+		}
+	}
 	start(input: StartWorkflowInput): DispatchResult {
 		validateWorkflowId(input.workflowId);
 		// Resolved before the target-kind guard so the guard reads the pinned
@@ -152,7 +192,8 @@ export class WorkflowEngine {
 					item.stepId === definition.initial && item.role === "researcher",
 			);
 			if (
-				!route?.profile.capabilities.includes("read-only") ||
+				!route?.profile.readOnly ||
+				!route.profile.capabilities.includes("read-only") ||
 				route.profile.capabilities.includes("shell") ||
 				route.profile.capabilities.includes("edit")
 			)
@@ -259,6 +300,7 @@ export class WorkflowEngine {
 		validateSnapshot(snapshot, definition, [], this.registry);
 		const storeTarget =
 			wikiOnlyTarget || researchTarget ? input.repo : repository;
+		this.initialize(storeTarget);
 		const db = openStore(storeTarget);
 		try {
 			db.exec("BEGIN IMMEDIATE");
@@ -328,6 +370,12 @@ export class WorkflowEngine {
 	}
 	dispatch(repo: string, raw: unknown): DispatchResult {
 		const command = commandContract.parse(raw);
+		// Legacy domain import is a write operation and intentionally happens
+		// outside the command transaction. Observation never performs it.
+		this.initialize(
+			repo,
+			"workflowId" in command ? command.workflowId : undefined,
+		);
 		const db = openStore(repo);
 		try {
 			db.exec("BEGIN IMMEDIATE");
@@ -463,6 +511,7 @@ export class WorkflowEngine {
 		lease: string,
 		leaseMs = 30_000,
 	): boolean {
+		this.initialize(repo);
 		if (!Number.isFinite(leaseMs) || leaseMs <= 0)
 			throw new WorkflowRuntimeError(
 				"invalid-input",
@@ -471,6 +520,7 @@ export class WorkflowEngine {
 		return storeRenewEffect(repo, effectId, lease, leaseMs, this.now);
 	}
 	claimEffects(repo: string, limit = 10, leaseMs = 30_000): ClaimedEffect[] {
+		this.initialize(repo);
 		const db = openStore(repo);
 		const claimed: ClaimedEffect[] = [];
 		try {
@@ -555,6 +605,7 @@ export class WorkflowEngine {
 		}
 	}
 	issueRunCapability(repo: string, runId: string): string {
+		this.initialize(repo);
 		return capabilityIssueRunCapability(repo, runId);
 	}
 	list(repo: string): WorkflowView[] {
@@ -723,6 +774,19 @@ export class WorkflowEngine {
 			if (!row) throw new WorkflowRuntimeError("not-found", "effect not found");
 			return instance(db, row.workflow_id);
 		}
-		return instance(db, command.workflowId);
+		try {
+			return instance(db, command.workflowId);
+		} catch (error) {
+			if (
+				!(error instanceof WorkflowRuntimeError) ||
+				error.code !== "not-found"
+			)
+				throw error;
+			const row = db
+				.query("SELECT id FROM workflow_instances WHERE change_id=?")
+				.get(command.workflowId) as { id: string } | null;
+			if (!row) throw error;
+			return instance(db, row.id);
+		}
 	}
 }

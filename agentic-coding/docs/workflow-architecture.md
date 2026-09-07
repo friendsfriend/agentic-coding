@@ -20,6 +20,24 @@ importer listed above keeps importing the barrel path unchanged; the split is
 a pure internal reorganization with no behavior change (digests, exports, and
 the full test suite are unmodified oracles for that claim).
 
+### Store lifecycle
+
+`initializeStore()` is the only schema-writing boundary. It takes SQLite's
+migration lock, rereads `PRAGMA user_version`, and applies ordered native
+migrations atomically. Store versions 1–4 are supported: version 1 adds run
+ownership columns, version 2 adopts nullable workflow identity, version 3
+repairs rebuilt child foreign keys, and version 4 is the current validated
+schema. Unsupported future versions fail closed. Mutating engine entry points
+initialize before their command transaction and may then import legacy
+`workflows` rows. Status and list do not initialize or import: absent and old
+stores are presented as migration-required diagnostics. Back up persistent
+stores with SQLite's consistent backup mechanism before upgrades, and stop old
+schema writers while a migration is in progress. Migration commits are
+independent, so a later command rejection does not undo a successful schema
+transition. There are no automatic down migrations; rollback to an older
+binary requires a verified pre-upgrade backup or explicit support in that
+binary.
+
 ## Startup context and execution pins
 
 CLI, dashboard, research, and wiki-comment starts use `src/workflow/startup.ts`.

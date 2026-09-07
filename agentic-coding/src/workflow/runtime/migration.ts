@@ -22,7 +22,7 @@ import {
 	validateSnapshot,
 	writeSnapshot,
 } from "./store.ts";
-import { canonicalStorePath } from "./targets.ts";
+import { canonicalStorePath, validateChangeId } from "./targets.ts";
 
 function stableLegacy(raw: string): string {
 	try {
@@ -50,10 +50,44 @@ function stableLegacy(raw: string): string {
 		return raw;
 	}
 }
+function registeredWorktrees(repository: string): Set<string> {
+	const result = Bun.spawnSync(
+		["git", "-C", repository, "worktree", "list", "--porcelain"],
+		{ stdout: "pipe", stderr: "pipe" },
+	);
+	if (result.exitCode !== 0) return new Set();
+	return new Set(
+		result.stdout
+			.toString()
+			.split("\n")
+			.filter((line) => line.startsWith("worktree "))
+			.map((line) => fs.realpathSync(line.slice("worktree ".length))),
+	);
+}
+function safeLegacyWorktree(
+	repository: string,
+	raw: string | undefined,
+): string {
+	const repositoryRoot = fs.realpathSync(repository);
+	const candidate = fs.realpathSync(path.resolve(raw ?? repositoryRoot));
+	const stat = fs.statSync(candidate);
+	if (!stat.isDirectory())
+		throw new Error("legacy worktree is not a directory");
+	const relative = path.relative(repositoryRoot, candidate);
+	if (
+		relative === "" ||
+		(!relative.startsWith("..") && !path.isAbsolute(relative))
+	)
+		return candidate;
+	if (registeredWorktrees(repositoryRoot).has(candidate)) return candidate;
+	throw new Error("legacy worktree is outside the requested repository");
+}
+
 function legacyEvidence(
 	worktree: string,
 	changeId: string,
 ): WorkflowSnapshot["evidence"] {
+	const root = fs.realpathSync(worktree);
 	const files = [
 		path.join(worktree, ".herdr-workflow", changeId, "request.md"),
 		path.join(worktree, "openspec", "changes", changeId, "proposal.md"),
@@ -65,12 +99,16 @@ function legacyEvidence(
 			const stat = fs.lstatSync(file);
 			if (!stat.isFile() || stat.isSymbolicLink())
 				throw new Error(`unsafe legacy evidence: ${file}`);
+			const resolved = fs.realpathSync(file);
+			const relative = path.relative(root, resolved);
+			if (relative.startsWith("..") || path.isAbsolute(relative))
+				throw new Error(`unsafe legacy evidence: ${file}`);
 			return [
 				{
 					kind: path.basename(file),
-					path: file,
+					path: resolved,
 					digest: createHash("sha256")
-						.update(fs.readFileSync(file))
+						.update(fs.readFileSync(resolved))
 						.digest("hex"),
 				},
 			];
@@ -112,6 +150,19 @@ export function migrateLegacy(
 		.query("SELECT state FROM workflows WHERE change_id=?")
 		.get(changeId) as { state: string } | null;
 	if (!source) return;
+	try {
+		validateChangeId(changeId);
+	} catch (error) {
+		migrationDiagnostic(
+			db,
+			repository,
+			changeId,
+			`invalid legacy change id: ${boundedError(error)}`,
+			source.state,
+			now,
+		);
+		return;
+	}
 	let legacy: Record<string, unknown>;
 	try {
 		const value = JSON.parse(source.state);
@@ -129,10 +180,23 @@ export function migrateLegacy(
 		);
 		return;
 	}
-	const worktree =
-		typeof legacy.worktree === "string"
-			? path.resolve(legacy.worktree)
-			: repository;
+	let worktree: string;
+	try {
+		worktree = safeLegacyWorktree(
+			repository,
+			typeof legacy.worktree === "string" ? legacy.worktree : undefined,
+		);
+	} catch (error) {
+		migrationDiagnostic(
+			db,
+			repository,
+			changeId,
+			`legacy worktree invalid: ${boundedError(error)}`,
+			source.state,
+			now,
+		);
+		return;
+	}
 	const mirror = path.join(worktree, ".herdr-workflow", "herdr.db");
 	if (
 		path.resolve(mirror) !== path.resolve(canonicalStorePath(repository)) &&
@@ -324,6 +388,17 @@ export function migrateLegacy(
 	try {
 		validateSnapshot(snapshot, definition, [], registry);
 		db.exec("BEGIN IMMEDIATE");
+		// Recheck under the canonical writer lock. This makes concurrent
+		// importers idempotent instead of allowing two random workflow ids for
+		// one preserved legacy change.
+		if (
+			db
+				.query("SELECT 1 FROM workflow_instances WHERE change_id=?")
+				.get(changeId)
+		) {
+			db.exec("COMMIT");
+			return;
+		}
 		db.query(
 			"INSERT INTO workflow_instances VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
 		).run(

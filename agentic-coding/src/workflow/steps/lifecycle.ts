@@ -50,7 +50,16 @@ export const lifecycleBehaviors: Readonly<Record<string, StepBehavior>> = {
 		],
 	},
 	"core.wiki-approval": {
-		developerActions: () => [
+		developerActions: ({ snapshot }) => [
+			...(snapshot.definition.id === "research"
+				? [
+						{
+							id: "close-research",
+							label: "Close research",
+							confirmation: "confirm" as const,
+						},
+					]
+				: []),
 			{ id: "approve-wiki", label: "Approve wiki", confirmation: "confirm" },
 			{
 				id: "review-comments",

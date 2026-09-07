@@ -29,6 +29,7 @@ export function researchManifests(
 					"request-wiki",
 					"close-research",
 				],
+
 				"core.completed": ["close"],
 			},
 			edges: [

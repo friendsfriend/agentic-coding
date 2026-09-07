@@ -5,6 +5,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { WorkflowRuntimeError } from "../contracts.ts";
+import {
+	closeSecureDirectory,
+	openSecureDirectory,
+	openSecureFile,
+} from "../secure-fs.ts";
 import { wikiRoot } from "../wiki.ts";
 
 const WORKFLOW_ID = /^[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$/;
@@ -64,11 +69,72 @@ export function isWikiWorkflowTarget(repo: string): boolean {
 export function isResearchWorkflowTarget(repo: string): boolean {
 	return repo === RESEARCH_WORKFLOW_TARGET;
 }
-export function wikiWorkflowDataRoot(): string {
-	return path.join(path.dirname(wikiRoot()), ".agentic-coding-workflow");
+function rejectSymlinkComponents(base: string, target: string): void {
+	const relative = path.relative(base, target);
+	if (relative.startsWith("..") || path.isAbsolute(relative))
+		throw new WorkflowRuntimeError(
+			"path-security",
+			"workflow store path escapes its data root",
+		);
+	let current = base;
+	for (const component of relative.split(path.sep).filter(Boolean)) {
+		current = path.join(current, component);
+		try {
+			if (fs.lstatSync(current).isSymbolicLink())
+				throw new WorkflowRuntimeError(
+					"path-security",
+					`workflow store path contains a symlink: ${current}`,
+				);
+		} catch (error) {
+			if (error instanceof WorkflowRuntimeError) throw error;
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+	}
 }
+
+export function wikiWorkflowDataRoot(): string {
+	const root = fs.realpathSync(path.dirname(wikiRoot()));
+	const dataRoot = path.join(root, ".agentic-coding-workflow");
+	rejectSymlinkComponents(root, dataRoot);
+	return dataRoot;
+}
+export function guardStoreFile(
+	file: string,
+	create: boolean,
+	readonly = false,
+): number {
+	const parent = path.dirname(file);
+	const directory = openSecureDirectory(parent, path.dirname(parent));
+	try {
+		const flags =
+			(readonly ? fs.constants.O_RDONLY : fs.constants.O_RDWR) |
+			(create ? fs.constants.O_CREAT : 0) |
+			(fs.constants.O_NOFOLLOW ?? 0);
+		return openSecureFile(directory, path.basename(file), flags, 0o600);
+	} finally {
+		closeSecureDirectory(directory);
+	}
+}
+
+export function verifyCanonicalStorePath(repo: string, file: string): void {
+	if (canonicalStorePath(repo) !== file || fs.realpathSync(file) !== file)
+		throw new WorkflowRuntimeError(
+			"path-security",
+			"workflow store path changed while opening",
+		);
+}
+
 export function canonicalStorePath(repo: string): string {
-	return isWikiWorkflowTarget(repo) || isResearchWorkflowTarget(repo)
-		? path.join(wikiWorkflowDataRoot(), "herdr.db")
-		: path.join(canonicalRepository(repo), ".herdr-workflow", "herdr.db");
+	if (isWikiWorkflowTarget(repo) || isResearchWorkflowTarget(repo)) {
+		const root = wikiWorkflowDataRoot();
+		const file = path.join(root, "herdr.db");
+		rejectSymlinkComponents(root, file);
+		return file;
+	}
+	const repository = canonicalRepository(repo);
+	const root = path.join(repository, ".herdr-workflow");
+	const file = path.join(root, "herdr.db");
+	rejectSymlinkComponents(repository, root);
+	rejectSymlinkComponents(root, file);
+	return file;
 }
