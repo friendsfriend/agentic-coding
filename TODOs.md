@@ -12,8 +12,8 @@ Not for agents. This is only for humans.
   * fix effect lease lifecycle (done)
   * unify worfklow startup context (done)
   * version workflow behavior pins (done)
-  * version workflow migrations
-  * seperate workflow observation execution
+  * version workflow migrations (done)
+  * seperate workflow observation execution (done)
   * centralize step completion behavior
   * contsolidate-tui-primitives
   * split-dashboard-responsibilities
