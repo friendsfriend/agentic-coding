@@ -30,6 +30,7 @@ import type {
 import { fusionPlannerRoles as stepFusionPlannerRoles } from "../steps/planning.ts";
 import type {
 	ArriveResult,
+	CompletionResult,
 	StepArrivalPrior,
 	StepBehavior,
 } from "../steps/types.ts";
@@ -96,6 +97,183 @@ export function applyReduction(
 			JSON.parse(JSON.stringify(effect.payload)) as JsonValueType,
 		);
 	}
+}
+
+function completionJson(value: unknown, label: string): JsonValueType {
+	try {
+		return JSON.parse(JSON.stringify(value)) as JsonValueType;
+	} catch {
+		throw new WorkflowRuntimeError("reducer-contract", `${label} must be JSON`);
+	}
+}
+
+export function applyCompletionResult(
+	db: Database,
+	snapshot: WorkflowSnapshot,
+	definition: CompiledWorkflowDefinition,
+	step: Readonly<StepDefinition>,
+	result: CompletionResult | undefined,
+	registry: WorkflowRegistry,
+	now: () => Date,
+): void {
+	if (!result) return;
+	if (typeof result !== "object" || Array.isArray(result))
+		throw new WorkflowRuntimeError(
+			"reducer-contract",
+			"invalid completion result",
+		);
+	if (
+		(result.deferTransition !== undefined &&
+			typeof result.deferTransition !== "boolean") ||
+		(result.runs !== undefined && !Array.isArray(result.runs)) ||
+		(result.effects !== undefined && !Array.isArray(result.effects))
+	)
+		throw new WorkflowRuntimeError(
+			"reducer-contract",
+			"invalid completion fields",
+		);
+	if (result.metadata?.changeId !== undefined) {
+		if (typeof result.metadata.changeId !== "string")
+			throw new WorkflowRuntimeError("reducer-contract", "invalid change ID");
+		snapshot.metadata.changeId = result.metadata.changeId;
+	}
+	if (result.step) {
+		if (
+			(result.step.selectedRoles !== undefined &&
+				!Array.isArray(result.step.selectedRoles)) ||
+			(result.step.appendResults !== undefined &&
+				!Array.isArray(result.step.appendResults))
+		)
+			throw new WorkflowRuntimeError(
+				"reducer-contract",
+				"invalid step updates",
+			);
+		if (result.step.selectedRoles !== undefined) {
+			if (
+				result.step.selectedRoles.some((role) => typeof role !== "string") ||
+				new Set(result.step.selectedRoles).size !==
+					result.step.selectedRoles.length
+			)
+				throw new WorkflowRuntimeError(
+					"reducer-contract",
+					"invalid selected roles",
+				);
+			const destination = definition.edges.find(
+				(edge) =>
+					edge.from === snapshot.currentStep &&
+					edge.outcome === (result.transition?.outcome ?? "complete"),
+			)?.to;
+			if (!destination)
+				throw new WorkflowRuntimeError(
+					"reducer-contract",
+					"selected roles require a completion destination",
+				);
+			const destinationStep = registry.stepForDefinition(
+				definition,
+				destination,
+			);
+			const candidates = destinationStep.behavior?.candidateRoles?.({
+				definitionId: definition.id,
+				fusionPlannerCount: snapshot.routing.routes.filter(
+					(route) => route.stepId === "fusion.plan",
+				).length,
+			});
+			for (const role of result.step.selectedRoles) {
+				if (
+					!candidates?.includes(role) ||
+					!snapshot.routing.routes.some(
+						(route) =>
+							route.stepId === destination &&
+							(route.role === role || route.role === undefined),
+					)
+				)
+					throw new WorkflowRuntimeError(
+						"reducer-contract",
+						`selected role is not a pinned ${destination} route: ${role}`,
+					);
+			}
+			snapshot.step.selectedRoles = [...result.step.selectedRoles];
+		}
+		if (result.step.testRunStarted !== undefined) {
+			if (typeof result.step.testRunStarted !== "boolean")
+				throw new WorkflowRuntimeError(
+					"reducer-contract",
+					"invalid test-run flag",
+				);
+			snapshot.step.testRunStarted = result.step.testRunStarted;
+		}
+		for (const entry of result.step.appendResults ?? []) {
+			if (
+				typeof entry.runId !== "string" ||
+				typeof entry.role !== "string" ||
+				!Number.isInteger(entry.critical) ||
+				(entry.outputDigest !== undefined &&
+					typeof entry.outputDigest !== "string")
+			)
+				throw new WorkflowRuntimeError(
+					"reducer-contract",
+					"invalid step result",
+				);
+			snapshot.step.results.push({ ...entry });
+		}
+	}
+	const transitionRequest = result.transition;
+	if (transitionRequest) {
+		if (typeof transitionRequest.outcome !== "string")
+			throw new WorkflowRuntimeError("reducer-contract", "invalid transition");
+		if (transitionRequest.output !== undefined)
+			completionJson(transitionRequest.output, "transition output");
+		if (
+			!definition.edges.some(
+				(edge) =>
+					edge.from === snapshot.currentStep &&
+					edge.outcome === transitionRequest.outcome,
+			)
+		)
+			throw new WorkflowRuntimeError(
+				"reducer-contract",
+				`illegal transition from ${snapshot.currentStep}: ${transitionRequest.outcome}`,
+			);
+	}
+	const candidateRoles = step.behavior?.candidateRoles?.({
+		definitionId: definition.id,
+		fusionPlannerCount: snapshot.routing.routes.filter(
+			(route) => route.stepId === "fusion.plan",
+		).length,
+	});
+	for (const request of result.runs ?? []) {
+		if (
+			step.actor !== "agent" ||
+			typeof request.role !== "string" ||
+			(candidateRoles && !candidateRoles.includes(request.role))
+		)
+			throw new WorkflowRuntimeError("reducer-contract", "invalid run request");
+	}
+	for (const effect of result.effects ?? []) {
+		if (
+			!step.allowedEffects.includes(effect.kind) ||
+			typeof effect.idempotencyKey !== "string"
+		)
+			throw new WorkflowRuntimeError(
+				"reducer-contract",
+				"invalid effect request",
+			);
+		completionJson(effect.payload, "effect payload");
+	}
+	for (const request of result.runs ?? [])
+		createRun(db, snapshot, step, request.role, now);
+	for (const effect of result.effects ?? [])
+		enqueue(db, snapshot, effect.kind, effect.idempotencyKey, effect.payload);
+	if (transitionRequest)
+		transition(
+			db,
+			snapshot,
+			definition,
+			transitionRequest.outcome,
+			transitionRequest.output,
+			registry,
+			now,
+		);
 }
 
 export function createRun(

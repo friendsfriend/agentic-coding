@@ -271,6 +271,29 @@ test("independent initializer processes converge on one committed schema version
 	}
 });
 
+test("concurrent dashboard reads do not race SQLite sidecar files", async () => {
+	const root = repo();
+	try {
+		initializeStore(root);
+		const writer =
+			'import { openStore } from "./src/workflow/runtime/store.ts"; const db = openStore(process.argv[1]); for (let index = 0; index < 100; index++) db.exec("BEGIN IMMEDIATE; SELECT count(*) FROM workflow_instances; COMMIT"); db.close();';
+		const reader =
+			'import { openReadStore } from "./src/workflow/runtime/store.ts"; for (let index = 0; index < 100; index++) { const db = openReadStore(process.argv[1]); db.query("SELECT count(*) FROM workflow_instances").all(); db.close(); }';
+		const processes = [writer, reader, reader, reader].map((script) =>
+			Bun.spawn(["bun", "-e", script, root], {
+				cwd: process.cwd(),
+				stdout: "pipe",
+				stderr: "pipe",
+			}),
+		);
+		expect(
+			await Promise.all(processes.map((process) => process.exited)),
+		).toEqual([0, 0, 0, 0]);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("failed foreign-key migration preserves its version and recovers on restart", () => {
 	const root = repo();
 	try {

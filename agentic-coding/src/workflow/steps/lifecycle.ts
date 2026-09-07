@@ -1,6 +1,7 @@
 import type { StepBehavior } from "./types.ts";
 import {
 	type PreparedStepEvidence,
+	prepareStepEvidence,
 	validateArchiveEvidence,
 } from "./validation.ts";
 
@@ -65,6 +66,21 @@ export const lifecycleBehaviors: Readonly<Record<string, StepBehavior>> = {
 		producesWikiVerificationContext: true,
 	},
 	"core.delivery": {
+		onEffectComplete: ({ snapshot, effect }) => {
+			if (effect.kind === "delivery.commit")
+				return {
+					effects: [
+						{
+							kind: "delivery.push",
+							idempotencyKey: `delivery:${snapshot.workflowId}:push`,
+							payload: { workflowId: snapshot.workflowId },
+						},
+					],
+				};
+			if (effect.kind === "delivery.push")
+				return { transition: { outcome: "complete" } };
+			return undefined;
+		},
 		onEnter: ({ snapshot, enqueue }) => {
 			enqueue("delivery.commit", `delivery:${snapshot.workflowId}:commit`, {
 				workflowId: snapshot.workflowId,
@@ -99,8 +115,11 @@ export const lifecycleBehaviors: Readonly<Record<string, StepBehavior>> = {
 	"core.archive": {
 		roles: () => ["archive"],
 		candidateRoles: () => ["archive"],
-		validateEvidence: ({ evidence }) =>
-			validateArchiveEvidence(evidence as PreparedStepEvidence),
+		validateEvidence: ({ snapshot, evidence }) =>
+			validateArchiveEvidence(
+				(evidence as PreparedStepEvidence | undefined) ??
+					prepareStepEvidence(snapshot),
+			),
 		acceptsCommentsContext: true,
 	},
 };

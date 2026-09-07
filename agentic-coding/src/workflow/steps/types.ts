@@ -21,6 +21,47 @@ export interface ValidateEvidenceContext {
 	evidence?: unknown;
 }
 
+export interface CompletionEffect {
+	kind: EffectKind;
+	idempotencyKey: string;
+	payload: JsonValue;
+}
+
+export interface CompletionResult {
+	step?: {
+		selectedRoles?: readonly string[];
+		testRunStarted?: boolean;
+		appendResults?: readonly WorkflowSnapshot["step"]["results"][number][];
+	};
+	metadata?: { changeId?: string };
+	transition?: { outcome: string; output?: unknown };
+	deferTransition?: boolean;
+	runs?: readonly { role: string }[];
+	effects?: readonly CompletionEffect[];
+}
+
+export interface AgentCompletionContext {
+	snapshot: WorkflowSnapshot;
+	definitionId: string;
+	run: Pick<WorkflowRun, "id" | "role" | "stepId">;
+	outcome: string;
+	output?: unknown;
+	outputDigest?: string;
+	changedFiles?: readonly string[];
+	remainingActiveRunIds: readonly string[];
+	loopMaxAttempts?: number;
+	evidence: readonly WorkflowSnapshot["evidence"][number][];
+}
+
+export interface EffectCompletionContext {
+	snapshot: WorkflowSnapshot;
+	effect: {
+		kind: EffectKind;
+		payload: JsonValue;
+		data?: unknown;
+	};
+}
+
 export interface StepArrivalPrior {
 	attempt: number;
 	results: WorkflowSnapshot["step"]["results"];
@@ -94,6 +135,8 @@ export interface StepBehavior {
 	/** Entry-guard predicate run before a step's `complete` outcome is
 	 * accepted; throws `WorkflowRuntimeError("entry-guard", ...)` to reject. */
 	validateEvidence?(ctx: ValidateEvidenceContext): void;
+	onAgentComplete?(ctx: AgentCompletionContext): CompletionResult | undefined;
+	onEffectComplete?(ctx: EffectCompletionContext): CompletionResult | undefined;
 	/** Derives step-local state (attempt seeding, mode, preserved results,
 	 * selected roles, terminal status) for arrival at this step. Context
 	 * carry-over itself is resolved centrally — see `resolveStepContext`. */
