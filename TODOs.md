@@ -15,7 +15,7 @@ Not for agents. This is only for humans.
   * version workflow behavior pins (done)
   * version workflow migrations (done)
   * seperate workflow observation execution (done)
-  * centralize step completion behavior
+  * centralize step completion behavior (done)
   * contsolidate-tui-primitives
   * split-dashboard-responsibilities
   * enforce-source-layer-boundaries
