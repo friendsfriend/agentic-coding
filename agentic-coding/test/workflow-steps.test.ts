@@ -10993,14 +10993,18 @@ describe("workflow step behavior hooks (move-step-semantics-to-behavior-hooks)",
 				),
 			).toEqual(["approve-review", "review-comments"]);
 		});
-		test("core.research offers follow-up and close-research only while research is current", () => {
+		test("core.research offers follow-up, wiki request, and close-research only while research is current", () => {
 			expect(
 				ids(
 					stepBehavior("core.research").developerActions?.({
 						snapshot: snapshot("research"),
 					}) ?? [],
 				),
-			).toEqual(["research-follow-up", "close-research"]);
+			).toEqual([
+				"research-follow-up",
+				"request-research-wiki",
+				"close-research",
+			]);
 		});
 		test("core.completed offers create-pr except for the five close-only definitions", () => {
 			for (const definitionId of [

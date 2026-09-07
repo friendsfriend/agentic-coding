@@ -11,6 +11,11 @@ import {
 	wikiWorkflowDataRoot,
 } from "../runtime.ts";
 import {
+	closeSecureDirectory,
+	openSecureDirectory,
+	openSecureFile,
+} from "../secure-fs.ts";
+import {
 	type CallerEnvironment,
 	callerEnvironment,
 } from "./caller-environment.ts";
@@ -38,6 +43,10 @@ export function resolveHandoffIdentity(
 		throw new Error(
 			"handoff requires an exact launch-bound run environment and capability",
 		);
+	// Managed handoff/question commands are mutating entry points. Initialize
+	// before resolving the run so legacy stores can be imported explicitly,
+	// while ordinary status/list observation remains side-effect free.
+	workflowEngine.initialize(repo, workflowId);
 	const callerRun = workflowEngine.getRun(repo, runId);
 	let run = callerRun;
 	try {
@@ -67,19 +76,37 @@ export function resolveHandoffIdentity(
 		)
 			throw new Error("invalid or inactive run capability");
 		const currentSnapshot = workflowEngine.getSnapshot(repo, workflowId);
-		const envFile = path.join(
+		const runDirectory =
 			isWikiWorkflowTarget(repo) || isResearchWorkflowTarget(repo)
-				? path.join(wikiWorkflowDataRoot(), currentSnapshot.workflowId)
-				: path.join(repo, ".herdr-workflow"),
+				? path.join(wikiWorkflowDataRoot(), currentSnapshot.workflowId, "runs")
+				: path.join(repo, ".herdr-workflow");
+		const envFile = path.join(
+			runDirectory,
 			"runtime-bin",
 			current.id,
 			"run.env",
 		);
-		const line = fs
-			.readFileSync(envFile, "utf8")
-			.split("\n")
-			.find((item) => item.startsWith("HERDR_RUN_TOKEN="));
-		const refreshedToken = line?.slice("HERDR_RUN_TOKEN=".length);
+		const directory = openSecureDirectory(path.dirname(envFile), runDirectory);
+		let content: string;
+		try {
+			const fd = openSecureFile(directory, path.basename(envFile));
+			try {
+				content = fs.readFileSync(fd, "utf8");
+			} finally {
+				fs.closeSync(fd);
+			}
+		} finally {
+			closeSecureDirectory(directory);
+		}
+		const values = new Map(
+			content
+				.split("\n")
+				.map((item) => item.split("=", 2) as [string, string])
+				.filter(([key, value]) => Boolean(key) && value !== undefined),
+		);
+		if (values.get("HERDR_RUN_ID") !== current.id)
+			throw new Error("persistent agent run environment does not match run");
+		const refreshedToken = values.get("HERDR_RUN_TOKEN")?.replace(/^'|'$/g, "");
 		if (!refreshedToken)
 			throw new Error("persistent agent run capability is unavailable");
 		token = refreshedToken;

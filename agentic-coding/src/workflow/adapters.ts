@@ -7,6 +7,11 @@ import type {
 	ResolvedProfile,
 	RuntimeId,
 } from "./contracts.ts";
+import {
+	closeSecureDirectory,
+	openSecureDirectory,
+	writeAtomicPrivateFile,
+} from "./secure-fs.ts";
 
 export interface HerdrPort {
 	call(...args: string[]): unknown;
@@ -146,11 +151,23 @@ export class HerdrLifecycle {
 			ctx.assignment.runId,
 			"run.env",
 		);
-		fs.mkdirSync(path.dirname(envFile), { recursive: true });
-		const lines = Object.entries(ctx.environment)
-			.filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
-			.map(([key, value]) => `${key}=${shQuote(value)}`);
-		fs.writeFileSync(envFile, `${lines.join("\n")}\n`, { mode: 0o600 });
+		const directory = openSecureDirectory(
+			path.dirname(envFile),
+			ctx.runDirectory ?? ctx.cwd,
+		);
+		try {
+			const lines = Object.entries(ctx.environment)
+				.filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
+				.map(([key, value]) => `${key}=${shQuote(value)}`);
+			writeAtomicPrivateFile(
+				directory,
+				path.basename(envFile),
+				`${lines.join("\n")}\n`,
+				0o600,
+			);
+		} finally {
+			closeSecureDirectory(directory);
+		}
 		// pane run is asynchronous and waitForShell cannot tell the pre-injection
 		// shell from the exec'd one; a marker touched after sourcing proves the
 		// env landed before `agent start` inherits it.
@@ -281,7 +298,16 @@ export class PiAdapter extends BaseAdapter {
 		const args = ["--name", ctx.name, "--no-prompt-templates"];
 		if (ctx.profile.model) args.push("--model", ctx.profile.model);
 		if (ctx.profile.thinking) args.push("--thinking", ctx.profile.thinking);
-		if (ctx.assignment.stepId !== "core.research") {
+		if (ctx.assignment.stepId === "core.research") {
+			if (
+				!ctx.profile.readOnly ||
+				!ctx.profile.capabilities.includes("read-only") ||
+				ctx.profile.capabilities.includes("shell") ||
+				ctx.profile.capabilities.includes("edit")
+			)
+				throw new Error("research requires a read-only profile");
+			args.push("--tools", "read", "--no-extensions");
+		} else {
 			const tools = ctx.profile.tools;
 			if (tools.length) args.push("--tools", tools.join(","));
 			else if (
@@ -289,16 +315,15 @@ export class PiAdapter extends BaseAdapter {
 				ctx.profile.capabilities.includes("read-only")
 			)
 				args.push("--tools", "read");
-		}
-		if (
-			ctx.assignment.stepId !== "core.research" &&
-			(ctx.profile.readOnly ||
+			if (
+				ctx.profile.readOnly ||
 				ctx.profile.capabilities.includes("read-only") ||
-				ctx.profile.extensions.length === 0)
-		)
-			args.push("--no-extensions");
-		for (const extension of ctx.profile.extensions)
-			args.push("--extension", extension);
+				ctx.profile.extensions.length === 0
+			)
+				args.push("--no-extensions");
+			for (const extension of ctx.profile.extensions)
+				args.push("--extension", extension);
+		}
 		if (ctx.workflowExtensionPath)
 			args.push("--extension", ctx.workflowExtensionPath);
 		if (ctx.bridgePath) args.push("--extension", ctx.bridgePath);
@@ -319,30 +344,34 @@ export class OpenCodeAdapter extends BaseAdapter {
 	}
 }
 function isolatedOpenCode(ctx: LaunchContext): LaunchContext {
-	const directory = path.join(
-		ctx.runDirectory ?? path.join(ctx.cwd, ".herdr-workflow"),
-		"runtime-config",
-		ctx.assignment.runId,
+	const root = ctx.runDirectory ?? path.join(ctx.cwd, ".herdr-workflow");
+	const directory = path.join(root, "runtime-config", ctx.assignment.runId);
+	const directoryFd = openSecureDirectory(
+		directory,
+		ctx.runDirectory ?? ctx.cwd,
 	);
-	fs.mkdirSync(directory, { recursive: true });
-	fs.writeFileSync(
-		path.join(directory, "opencode.json"),
-		JSON.stringify(
-			{
-				permission:
-					ctx.assignment.stepId === "core.research" ||
-					!(
+	try {
+		writeAtomicPrivateFile(
+			directoryFd,
+			"opencode.json",
+			JSON.stringify(
+				{
+					permission:
+						ctx.assignment.stepId === "core.research" ||
 						ctx.profile.readOnly ||
 						ctx.profile.capabilities.includes("read-only")
-					)
-						? { edit: "allow", bash: "allow", read: "allow" }
-						: { edit: "deny", bash: "deny", read: "allow" },
-				plugin: ctx.bridgePath ? [ctx.bridgePath] : [],
-			},
-			null,
-			2,
-		),
-	);
+							? { edit: "deny", bash: "deny", read: "allow" }
+							: { edit: "allow", bash: "allow", read: "allow" },
+					plugin: ctx.bridgePath ? [ctx.bridgePath] : [],
+				},
+				null,
+				2,
+			),
+			0o600,
+		);
+	} finally {
+		closeSecureDirectory(directoryFd);
+	}
 	return {
 		...ctx,
 		environment: { ...ctx.environment, XDG_CONFIG_HOME: directory },
@@ -364,8 +393,10 @@ function withRuntimeLauncher(
 		"runtime-bin",
 		ctx.assignment.runId,
 	);
-	fs.mkdirSync(directory, { recursive: true });
-	const launcher = path.join(directory, name);
+	const directoryFd = openSecureDirectory(
+		directory,
+		ctx.runDirectory ?? ctx.cwd,
+	);
 	const environment = {
 		...ctx.environment,
 		PATH: `${directory}:${process.env.PATH ?? ""}`,
@@ -374,13 +405,11 @@ function withRuntimeLauncher(
 		.filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
 		.map(([key, value]) => `export ${key}=${shQuote(value)}`)
 		.join("\n");
-	const content = `#!/bin/sh\n${exports}\nexec ${JSON.stringify(target)} "$@"\n`;
-	if (
-		!fs.existsSync(launcher) ||
-		fs.readFileSync(launcher, "utf8") !== content
-	) {
-		fs.writeFileSync(launcher, content, { mode: 0o700 });
-		fs.chmodSync(launcher, 0o700);
+	const content = `#!/bin/sh\n${exports}\nexec ${shQuote(target)} "$@"\n`;
+	try {
+		writeAtomicPrivateFile(directoryFd, name, content, 0o700);
+	} finally {
+		closeSecureDirectory(directoryFd);
 	}
 	return { ...ctx, environment };
 }

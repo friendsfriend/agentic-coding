@@ -19,6 +19,7 @@ export {
 	sourceContentFingerprint,
 } from "./runtime/evidence.ts";
 export { fusionPlannerRoles } from "./runtime/kernel.ts";
+export { initializeStore, STORE_SCHEMA_VERSION } from "./runtime/store.ts";
 export {
 	canonicalRepository,
 	canonicalStorePath,

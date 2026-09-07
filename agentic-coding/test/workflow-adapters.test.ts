@@ -326,7 +326,7 @@ describe("profiles, assignments, and adapters", () => {
 			}
 		}
 	});
-	test("research Pi launch omits --tools and retains configured extensions", async () => {
+	test("research Pi launch forces read-only tools and suppresses configured extensions", async () => {
 		const fake = new FakeHerdr();
 		const adapter = new PiAdapter(new HerdrLifecycle(fake, async () => {}));
 		const current = assignment("core.research", { role: "researcher" });
@@ -353,14 +353,15 @@ describe("profiles, assignments, and adapters", () => {
 				(call) => call[0] === "agent" && call[1] === "start",
 			);
 			if (!start) throw new Error("expected agent start call");
-			expect(start).not.toContain("--no-extensions");
-			expect(start).toContain("/tmp/research-extension.ts");
-			expect(start).not.toContain("--tools");
+			expect(start).toContain("--no-extensions");
+			expect(start).not.toContain("/tmp/research-extension.ts");
+			expect(start).toContain("--tools");
+			expect(start).toContain("read");
 		} finally {
 			fs.rmSync(cwd, { recursive: true, force: true });
 		}
 	});
-	test("research OpenCode launch uses unrestricted permissions regardless of read-only profile", async () => {
+	test("research OpenCode launch enforces read-only permissions", async () => {
 		for (const [Adapter, runtime] of [
 			[OpenCodeAdapter, "opencode"],
 			[OpenCodeV2Adapter, "opencode-v2"],
@@ -399,8 +400,8 @@ describe("profiles, assignments, and adapters", () => {
 					),
 				) as { permission: Record<string, string> };
 				expect(config.permission).toEqual({
-					edit: "allow",
-					bash: "allow",
+					edit: "deny",
+					bash: "deny",
 					read: "allow",
 				});
 			} finally {

@@ -16,6 +16,16 @@ export const wikiBehavior: StepBehavior = {
 	roles: ({ snapshot }) => [wikiRole(snapshot.definition.id)],
 	candidateRoles: ({ definitionId }) => [wikiRole(definitionId)],
 	instructionAssetForRole: ({ role }) => WIKI_ROLE_ASSET[role],
+	developerActions: ({ snapshot }) =>
+		snapshot.definition.id === "research"
+			? [
+					{
+						id: "close-research",
+						label: "Close research",
+						confirmation: "confirm",
+					},
+				]
+			: [],
 	assignmentInputs: ({ run, snapshot }) => {
 		// The research-handoff wiki agent is a distinct role (research-wiki),
 		// not a conditional branch of the shared wiki role — see wiki-research.md.

@@ -10,6 +10,11 @@ export const researchBehavior: StepBehavior = {
 			confirmation: "reason",
 			input: { schemaId: "core.research-follow-up", schemaVersion: 1 },
 		},
+		{
+			id: "request-research-wiki",
+			label: "Request research wiki draft",
+			confirmation: "confirm",
+		},
 		{ id: "close-research", label: "Close research", confirmation: "confirm" },
 	],
 	assignmentInputs: ({ snapshot }) => ({

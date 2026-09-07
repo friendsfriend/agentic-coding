@@ -6,7 +6,6 @@ import type { WorkflowView } from "../contracts.ts";
 import { parseSnapshot, WorkflowRuntimeError } from "../contracts.ts";
 import type { WorkflowRegistry } from "../registry.ts";
 import type { MigrationPreview, RepairPreview } from "./engine-types.ts";
-import { migrateLegacy } from "./migration.ts";
 import {
 	ACTIVE_RUN,
 	actions,
@@ -14,12 +13,12 @@ import {
 	effects,
 	expireDueQuestions,
 	instance,
+	observedStore,
 	openStore,
 	runs,
-	tableExists,
+	STORE_SCHEMA_VERSION,
 	validateSnapshot,
 } from "./store.ts";
-import { canonicalRepository, isWikiWorkflowTarget } from "./targets.ts";
 
 export function diagnosticView(
 	changeId: string,
@@ -297,12 +296,34 @@ export function status(
 	registry: WorkflowRegistry,
 	now: () => Date,
 ): WorkflowView {
-	const db = openStore(repo);
+	const observed = observedStore(repo);
+	let db: Database;
 	try {
-		// Primary addressing is by the user-supplied workflow id (the row key).
-		// Fall back to the recorded change id so in-flight workflows started
-		// before the identity split remain addressable by the id they were
-		// started with, then to the legacy `workflows` table migration path.
+		db = openStore(repo);
+	} catch (error) {
+		if (
+			error instanceof WorkflowRuntimeError &&
+			["migration-required", "unsupported-version"].includes(error.code)
+		)
+			return diagnosticView(workflowId, error.message);
+		throw error;
+	}
+	try {
+		if (
+			observed?.version === STORE_SCHEMA_VERSION &&
+			observed.legacyChangeIds.includes(workflowId)
+		) {
+			const diagnostic = db
+				.query(
+					"SELECT diagnostic FROM workflow_migration_diagnostics WHERE change_id=?",
+				)
+				.get(workflowId) as { diagnostic: string } | null;
+			return diagnosticView(
+				workflowId,
+				diagnostic?.diagnostic ??
+					"workflow store has unimported legacy workflows; initialize the target before observing",
+			);
+		}
 		let row = db
 			.query("SELECT id FROM workflow_instances WHERE id=?")
 			.get(workflowId) as { id: string } | null;
@@ -310,13 +331,6 @@ export function status(
 			row = db
 				.query("SELECT id FROM workflow_instances WHERE change_id=?")
 				.get(workflowId) as { id: string } | null;
-		if (!row) {
-			if (!isWikiWorkflowTarget(repo))
-				migrateLegacy(db, canonicalRepository(repo), workflowId, registry, now);
-			row = db
-				.query("SELECT id FROM workflow_instances WHERE change_id=?")
-				.get(workflowId) as { id: string } | null;
-		}
 		if (!row) {
 			const diagnostic = db
 				.query(
@@ -341,25 +355,46 @@ export function list(
 	registry: WorkflowRegistry,
 	now: () => Date,
 ): WorkflowView[] {
-	const db = openStore(repo);
+	const observed = observedStore(repo);
+	if (!observed)
+		return [
+			diagnosticView(
+				"store",
+				"workflow store is absent; initialize the store before writing",
+			),
+		];
+	if (
+		observed.version === STORE_SCHEMA_VERSION &&
+		observed.legacyChangeIds.length
+	)
+		return observed.legacyChangeIds.map((id) =>
+			diagnosticView(
+				id,
+				"workflow store has unimported legacy workflows; initialize the target before observing",
+			),
+		);
+	if (observed.version !== STORE_SCHEMA_VERSION) {
+		const ids = observed.legacyChangeIds.length
+			? observed.legacyChangeIds
+			: ["store"];
+		const diagnostic =
+			observed.version > STORE_SCHEMA_VERSION
+				? `unsupported workflow store version: ${observed.version}`
+				: `workflow store requires initialization (version ${observed.version})`;
+		return ids.map((id) => diagnosticView(id, diagnostic));
+	}
+	let db: Database;
 	try {
-		if (tableExists(db, "workflows"))
-			for (const row of db
-				.query("SELECT change_id FROM workflows")
-				.all() as Array<{ change_id: string }>)
-				if (
-					!db
-						.query("SELECT 1 FROM workflow_instances WHERE change_id=?")
-						.get(row.change_id)
-				)
-					if (!isWikiWorkflowTarget(repo))
-						migrateLegacy(
-							db,
-							canonicalRepository(repo),
-							row.change_id,
-							registry,
-							now,
-						);
+		db = openStore(repo);
+	} catch (error) {
+		return [
+			diagnosticView(
+				"store",
+				error instanceof Error ? error.message : String(error),
+			),
+		];
+	}
+	try {
 		const views = (
 			db
 				.query("SELECT id FROM workflow_instances ORDER BY updated_at DESC")

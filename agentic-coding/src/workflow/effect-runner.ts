@@ -24,6 +24,11 @@ import {
 	wikiWorkflowDataRoot,
 	wikiWorkflowTarget,
 } from "./runtime.ts";
+import {
+	closeSecureDirectory,
+	openSecureDirectory,
+	writeAtomicPrivateFile,
+} from "./secure-fs.ts";
 import { stepBehavior } from "./steps/index.ts";
 import {
 	conceptPath,
@@ -520,14 +525,25 @@ export function agentEffectHandlers(
 					runId(effect),
 					"",
 				);
-				fs.mkdirSync(path.dirname(expected.run.assignmentPath), {
-					recursive: true,
-				});
-				const temporary = `${expected.run.assignmentPath}.${effect.id}.tmp`;
-				fs.writeFileSync(temporary, `${expected.rendered.prompt}\n`, {
-					mode: 0o600,
-				});
-				fs.renameSync(temporary, expected.run.assignmentPath);
+				const snapshot = engine.getSnapshot(repo, expected.run.workflowId);
+				const root =
+					snapshot.definition.id === "wiki-comments"
+						? wikiWorkflowDataRoot()
+						: snapshot.metadata.worktree;
+				const directory = openSecureDirectory(
+					path.dirname(expected.run.assignmentPath),
+					root,
+				);
+				try {
+					writeAtomicPrivateFile(
+						directory,
+						path.basename(expected.run.assignmentPath),
+						`${expected.rendered.prompt}\n`,
+						0o600,
+					);
+				} finally {
+					closeSecureDirectory(directory);
+				}
 				return {
 					path: expected.run.assignmentPath,
 					digest: expected.rendered.digest,
@@ -571,6 +587,9 @@ export function agentEffectHandlers(
 							: snapshot.metadata.worktree,
 						run.id,
 						expected.assignment.environment,
+						snapshot.definition.id === "wiki-comments"
+							? path.join(wikiWorkflowDataRoot(), snapshot.workflowId, "runs")
+							: undefined,
 					);
 					writeAgentEnvPointer(
 						snapshot.metadata.worktree,
@@ -1404,27 +1423,38 @@ export function resolveLiveAgent(
  * deterministically for every name shape. Written at launch and at every
  * reused-prompt delivery so the pointer never outlives its run.
  */
+function shellQuote(value: string): string {
+	return `'${value.replace(/'/g, `'\\''`)}'`;
+}
 function writeRunEnvironment(
 	worktree: string,
 	runId: string,
 	environment: Record<string, string>,
+	runDirectory?: string,
 ): void {
 	const envFile = path.join(
-		worktree,
-		".herdr-workflow",
+		runDirectory ?? path.join(worktree, ".herdr-workflow"),
 		"runtime-bin",
 		runId,
 		"run.env",
 	);
-	fs.mkdirSync(path.dirname(envFile), { recursive: true });
-	if (Object.values(environment).some((value) => /[\r\n]/.test(value)))
-		throw new Error("run environment values may not contain newlines");
-	const content = Object.entries(environment)
-		.map(([key, value]) => `${key}=${value}`)
-		.join("\n");
-	const temporary = `${envFile}.${process.pid}.tmp`;
-	fs.writeFileSync(temporary, `${content}\n`, { mode: 0o600 });
-	fs.renameSync(temporary, envFile);
+	const directory = openSecureDirectory(path.dirname(envFile), worktree);
+	try {
+		if (Object.values(environment).some((value) => /[\r\n]/.test(value)))
+			throw new Error("run environment values may not contain newlines");
+		const content = Object.entries(environment)
+			.filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
+			.map(([key, value]) => `${key}=${shellQuote(value)}`)
+			.join("\n");
+		writeAtomicPrivateFile(
+			directory,
+			path.basename(envFile),
+			`${content}\n`,
+			0o600,
+		);
+	} finally {
+		closeSecureDirectory(directory);
+	}
 }
 export function writeAgentEnvPointer(
 	worktree: string,
@@ -1439,19 +1469,21 @@ export function writeAgentEnvPointer(
 		"by-agent",
 		agentName,
 	);
-	fs.mkdirSync(path.dirname(pointer), { recursive: true });
-	const target = path.relative(
-		worktree,
-		path.join(
-			runDirectory ?? path.join(worktree, ".herdr-workflow"),
-			"runtime-bin",
-			runId,
-			"run.env",
-		),
-	);
-	const temporary = `${pointer}.${process.pid}.tmp`;
-	fs.writeFileSync(temporary, `${target}\n`, { mode: 0o600 });
-	fs.renameSync(temporary, pointer);
+	const directory = openSecureDirectory(path.dirname(pointer), worktree);
+	try {
+		const target = path.relative(
+			worktree,
+			path.join(
+				runDirectory ?? path.join(worktree, ".herdr-workflow"),
+				"runtime-bin",
+				runId,
+				"run.env",
+			),
+		);
+		writeAtomicPrivateFile(directory, agentName, `${target}\n`, 0o600);
+	} finally {
+		closeSecureDirectory(directory);
+	}
 }
 export const effectRunnerTest = {
 	canonicalAgentName,

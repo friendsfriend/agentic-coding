@@ -104,6 +104,7 @@ describe("transactional workflow runtime", () => {
 			const version = definitionVersionForPolicy(6);
 			const researchProfile: ResolvedProfile = {
 				...profile,
+				readOnly: true,
 				tools: ["read"],
 				capabilities: [
 					"interactive",
@@ -177,6 +178,7 @@ describe("transactional workflow runtime", () => {
 			const engine = new WorkflowEngine(registerBuiltins());
 			const researchProfile: ResolvedProfile = {
 				...profile,
+				readOnly: true,
 				// Even with a widened research tool surface (mutating tool names
 				// present, matching an unrestricted launch), source-isolation
 				// validation - not tool-name gating - must still catch a mutation.
@@ -273,6 +275,7 @@ describe("transactional workflow runtime", () => {
 			const engine = new WorkflowEngine(registerBuiltins());
 			const researchProfile: ResolvedProfile = {
 				...profile,
+				readOnly: true,
 				tools: ["read"],
 				capabilities: [
 					"interactive",
@@ -344,6 +347,7 @@ describe("transactional workflow runtime", () => {
 			const engine = new WorkflowEngine(registerBuiltins());
 			const researchProfile: ResolvedProfile = {
 				...profile,
+				readOnly: true,
 				tools: ["read"],
 				capabilities: [
 					"interactive",
@@ -401,19 +405,10 @@ describe("transactional workflow runtime", () => {
 				researcherSummary.id,
 			);
 			expect(researcher.allowedOutcomes).toEqual(["blocked", "failed"]);
-			// There is no developer dashboard trigger for wiki drafting: the
-			// action is not offered, and dispatching it is rejected outright.
-			expect(view.availableActions.map((action) => action.id)).not.toContain(
+			// Developer-requested wiki drafting is available while research is active.
+			expect(view.availableActions.map((action) => action.id)).toContain(
 				"request-research-wiki",
 			);
-			expect(() =>
-				engine.dispatch(researchWorkflowTarget(), {
-					type: "developer.action",
-					workflowId: started.snapshot.workflowId,
-					revision: view.revision,
-					actionId: "request-research-wiki",
-				}),
-			).toThrow(/action unavailable/);
 
 			const researcherToken = engine.issueRunCapability(
 				researchWorkflowTarget(),
@@ -476,19 +471,10 @@ describe("transactional workflow runtime", () => {
 				},
 			}).view;
 			expect(view.currentStep.id).toBe("core.wiki");
-			// close-research is no longer offered once the wiki step is entered:
-			// the wiki entry is now mandatory once drafting begins.
-			expect(view.availableActions.map((action) => action.id)).not.toContain(
+			// Developer closure remains available while the research wiki is active.
+			expect(view.availableActions.map((action) => action.id)).toContain(
 				"close-research",
 			);
-			expect(() =>
-				engine.dispatch(researchWorkflowTarget(), {
-					type: "developer.action",
-					workflowId: started.snapshot.workflowId,
-					revision: view.revision,
-					actionId: "close-research",
-				}),
-			).toThrow(/unavailable/);
 			expect(
 				engine.getRun(researchWorkflowTarget(), researcher.id).status,
 			).toBe("expired");
@@ -549,19 +535,10 @@ describe("transactional workflow runtime", () => {
 				artifact: wikiOutput,
 			}).view;
 			expect(view.currentStep.id).toBe("core.wiki-approval");
-			// close-research remains unavailable at wiki-approval: the developer
-			// must resolve the draft (approve or request changes) first.
-			expect(view.availableActions.map((action) => action.id)).not.toContain(
+			// Developer closure remains available while the draft awaits approval.
+			expect(view.availableActions.map((action) => action.id)).toContain(
 				"close-research",
 			);
-			expect(() =>
-				engine.dispatch(researchWorkflowTarget(), {
-					type: "developer.action",
-					workflowId: started.snapshot.workflowId,
-					revision: view.revision,
-					actionId: "close-research",
-				}),
-			).toThrow(/unavailable/);
 			view = engine.dispatch(researchWorkflowTarget(), {
 				type: "developer.action",
 				workflowId: started.snapshot.workflowId,
@@ -600,6 +577,7 @@ describe("transactional workflow runtime", () => {
 			const engine = new WorkflowEngine(registerBuiltins());
 			const researchProfile: ResolvedProfile = {
 				...profile,
+				readOnly: true,
 				tools: ["read"],
 				capabilities: [
 					"interactive",
@@ -904,6 +882,7 @@ describe("transactional workflow runtime", () => {
 			const engine = new WorkflowEngine(registerBuiltins());
 			const researchProfile: ResolvedProfile = {
 				...profile,
+				readOnly: true,
 				tools: ["read"],
 				capabilities: [
 					"interactive",
