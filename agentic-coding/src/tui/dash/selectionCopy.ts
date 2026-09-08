@@ -1,13 +1,3 @@
-export type SelectionMouseUpHandler = () => void | Promise<void>;
-let handler: SelectionMouseUpHandler | undefined;
-export function setGlobalSelectionMouseUpHandler(
-	next: SelectionMouseUpHandler | undefined,
-) {
-	handler = next;
-	return () => {
-		if (handler === next) handler = undefined;
-	};
-}
-export function invokeGlobalSelectionMouseUpHandler() {
-	void handler?.();
-}
+// Shared global selection mouse-up registry — single source:
+// src/tui/shared/selectionCopy.ts.
+export * from "../shared/selectionCopy";

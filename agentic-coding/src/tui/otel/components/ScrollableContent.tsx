@@ -1,28 +1,34 @@
 /** @jsxImportSource @opentui/solid */
-import type { ScrollBoxRenderable } from "@opentui/core";
-import type { JSX } from "solid-js";
+// Shared scroll primitive (src/tui/shared/ScrollableContent.tsx) with the
+// observability surface's legacy defaults: scrollboxes are not focus targets
+// and the scrollbar uses the muted text color for the thumb.
+import {
+	type ScrollableContentProps,
+	ScrollableContent as SharedScrollableContent,
+} from "../../shared/ScrollableContent";
 import { uiColors } from "../ui/colors";
 
-export function ScrollableContent(props: {
-	children?: JSX.Element;
-	onScrollBoxReady?: (scrollBox: ScrollBoxRenderable) => void;
-	style?: Record<string, unknown>;
-}) {
+const OTEL_SCROLLBAR_OPTIONS = {
+	showArrows: false,
+	trackOptions: {
+		get backgroundColor() {
+			return uiColors.bgSurface0;
+		},
+		get foregroundColor() {
+			return uiColors.textMuted;
+		},
+	},
+} as const;
+
+export function ScrollableContent(props: ScrollableContentProps) {
 	return (
-		<scrollbox
-			ref={(box: ScrollBoxRenderable) => props.onScrollBoxReady?.(box)}
-			focusable={false}
-			scrollY
-			scrollbarOptions={{
-				showArrows: false,
-				trackOptions: {
-					backgroundColor: uiColors.bgSurface0,
-					foregroundColor: uiColors.textMuted,
-				},
-			}}
-			style={{ flexGrow: 1, flexShrink: 1, minHeight: 0, ...props.style }}
-		>
-			{props.children}
-		</scrollbox>
+		<SharedScrollableContent
+			{...props}
+			focusable={props.focusable ?? false}
+			scrollbarOptions={props.scrollbarOptions ?? OTEL_SCROLLBAR_OPTIONS}
+		/>
 	);
 }
+
+export type { ScrollableContentProps } from "../../shared/ScrollableContent";
+export { allowsKeyboardAxis } from "../../shared/ScrollableContent";
