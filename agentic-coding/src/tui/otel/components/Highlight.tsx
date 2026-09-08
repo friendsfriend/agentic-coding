@@ -1,26 +1,19 @@
 /** @jsxImportSource @opentui/solid */
+// Shared highlight semantics (src/tui/shared/Highlight.tsx), with the
+// observability surface's legacy default: an unspecified or "primary"
+// highlight resolves to the theme primary instead of the shared text color.
+import {
+	type Highlight,
+	highlightColor as sharedHighlightColor,
+} from "../../shared/Highlight";
 import { uiColors } from "../ui/colors";
 
-export type Highlight =
-	| "primary"
-	| "secondary"
-	| "positive"
-	| "negative"
-	| "warning"
-	| "accent";
+export type { Highlight };
 
-export function highlightColor(value: Highlight = "primary") {
-	return value === "positive"
-		? uiColors.success
-		: value === "negative"
-			? uiColors.error
-			: value === "warning"
-				? uiColors.warning
-				: value === "secondary"
-					? uiColors.textMuted
-					: value === "accent"
-						? uiColors.accent
-						: uiColors.primary;
+export function highlightColor(value?: Highlight) {
+	return value === undefined || value === "primary"
+		? uiColors.primary
+		: sharedHighlightColor(value);
 }
 
 export function HighlightedText(props: {
