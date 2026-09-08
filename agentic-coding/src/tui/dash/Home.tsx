@@ -12,18 +12,18 @@ import {
 	Show,
 } from "solid-js";
 import { phase } from "../lifecycle";
+import { listPresetNames } from "./engine";
+import { notify } from "./notifications";
 import {
 	focusWorkflow,
 	herdrAvailable,
-	isStale,
-	listPresetNames,
 	notifyHerdrError,
 	startWorkflow,
-	type WorkflowOverview,
-} from "./data";
-import { notify } from "./notifications";
+} from "./observations";
+import { isStale } from "./projections";
 import { invokeGlobalSelectionMouseUpHandler } from "./selectionCopy";
 import { applyTheme, loadThemeName, saveThemeName } from "./theme-settings";
+import type { WorkflowOverview } from "./types";
 import { uiColors } from "./ui/colors";
 import { ErrorDialog } from "./ui/ErrorDialog";
 import { FilterModal } from "./ui/FilterModal";

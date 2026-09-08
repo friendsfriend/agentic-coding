@@ -17,15 +17,15 @@ import type { WikiReviewComment } from "../../../workflow/wiki";
 import { copyToClipboard } from "../../clipboard";
 import { App as DashApp } from "../../dash/App";
 import {
-	discoverProjectsAsync,
-	listWorkflowsAsync,
-	type WorkflowOverview,
-} from "../../dash/data";
-import {
 	disposeExecutionCoordinator,
 	startWikiCommentWorkflowInProcess,
 } from "../../dash/engine";
 import { Home as DashHome } from "../../dash/Home";
+import {
+	discoverProjectsAsync,
+	listWorkflowsAsync,
+} from "../../dash/observations";
+import type { WorkflowOverview } from "../../dash/types";
 import { Header } from "../../dash/ui/Header";
 import { watchDirectories } from "../../dash/watchRefresh";
 import { phase } from "../../lifecycle";

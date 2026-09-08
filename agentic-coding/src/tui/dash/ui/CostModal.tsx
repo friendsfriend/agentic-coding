@@ -3,7 +3,7 @@
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
 import { createEffect, Show } from "solid-js";
-import type { CostMessage, CostRow } from "../data";
+import type { CostMessage, CostRow } from "../types";
 import { uiColors } from "./colors";
 import { GenericModal } from "./GenericModal";
 import { ScrollableContent } from "./ScrollableContent";

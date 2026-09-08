@@ -21,7 +21,7 @@ Not for agents. This is only for humans.
   * centralize step completion behavior (done)
   * contsolidate-tui-primitives (done)
   * split-dashboard-responsibilities (done)
-  * enforce-source-layer-boundaries
+  * enforce-source-layer-boundaries (done)
 
 Effect switchover
  * Effect foundation, schemas, errors, agent conventions.
