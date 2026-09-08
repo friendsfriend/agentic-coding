@@ -20,7 +20,7 @@ Not for agents. This is only for humans.
   * seperate workflow observation execution (done)
   * centralize step completion behavior (done)
   * contsolidate-tui-primitives (done)
-  * split-dashboard-responsibilities
+  * split-dashboard-responsibilities (done)
   * enforce-source-layer-boundaries
 
 Effect switchover
