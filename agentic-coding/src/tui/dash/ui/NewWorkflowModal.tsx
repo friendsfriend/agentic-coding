@@ -14,9 +14,9 @@ import {
 	untrack,
 } from "solid-js";
 import { PUBLIC_WORKFLOW_CATALOG } from "../../../workflow/definitions";
-import { discoverChanges } from "../data";
 import { focusSoon } from "../devenv-ui/utils/focusSoon";
 import { PRESET_CONFIG_DEFAULTS } from "../engine";
+import { discoverChanges } from "../observations";
 import { uiColors } from "./colors";
 import { GenericModal } from "./GenericModal";
 import { ListViewModal } from "./ListViewModal";

@@ -15,17 +15,20 @@ if (surface === "__dashboard-observe") {
 		loadDashboard,
 		loadLocalChanges,
 		loadLocalDiff,
-	} = await import("./tui/dash/data.ts");
+	} = await import("./tui/dash/observations.ts");
 	try {
 		const observation = JSON.parse(
 			Buffer.from(rest[0] ?? "", "base64").toString("utf8"),
 		) as
 			| { kind: "workflows" }
 			| { kind: "projects" }
-			| { kind: "artifacts"; state: import("./tui/dash/data.ts").WorkflowState }
+			| {
+					kind: "artifacts";
+					state: import("./tui/dash/types.ts").WorkflowState;
+			  }
 			| {
 					kind: "artifact-content";
-					state: import("./tui/dash/data.ts").WorkflowState;
+					state: import("./tui/dash/types.ts").WorkflowState;
 					artifact: string;
 			  }
 			| { kind: "wiki-changes"; repo: string; workflowId: string }
@@ -33,7 +36,7 @@ if (surface === "__dashboard-observe") {
 					kind: "wiki-diff";
 					repo: string;
 					workflowId: string;
-					file: import("./tui/dash/data.ts").LocalChange;
+					file: import("./tui/dash/types.ts").LocalChange;
 			  }
 			| { kind: "dashboard"; repo: string; workflowId: string }
 			| { kind: "local-changes"; repo: string; workflowId: string }
@@ -41,7 +44,7 @@ if (surface === "__dashboard-observe") {
 					kind: "local-diff";
 					repo: string;
 					workflowId: string;
-					file: import("./tui/dash/data.ts").LocalChange;
+					file: import("./tui/dash/types.ts").LocalChange;
 			  };
 		const value =
 			observation.kind === "workflows"
@@ -49,21 +52,25 @@ if (surface === "__dashboard-observe") {
 				: observation.kind === "projects"
 					? discoverProjects()
 					: observation.kind === "artifacts"
-						? (await import("./tui/dash/data.ts")).openSpecArtifacts(
+						? (await import("./tui/dash/observations.ts")).openSpecArtifacts(
 								observation.state,
 							)
 						: observation.kind === "artifact-content"
-							? (await import("./tui/dash/data.ts")).openSpecArtifact(
+							? (await import("./tui/dash/observations.ts")).openSpecArtifact(
 									observation.state,
 									observation.artifact,
 								)
 							: observation.kind === "wiki-changes"
-								? (await import("./tui/dash/data.ts")).loadWikiSnapshotChanges(
+								? (
+										await import("./tui/dash/observations.ts")
+									).loadWikiSnapshotChanges(
 										observation.repo,
 										observation.workflowId,
 									)
 								: observation.kind === "wiki-diff"
-									? (await import("./tui/dash/data.ts")).loadWikiSnapshotDiff(
+									? (
+											await import("./tui/dash/observations.ts")
+										).loadWikiSnapshotDiff(
 											observation.repo,
 											observation.workflowId,
 											observation.file.newPath,

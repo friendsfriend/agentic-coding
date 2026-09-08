@@ -21,54 +21,49 @@ import type { DeveloperDialogueRecord } from "../../workflow/contracts";
 import { formatDuration } from "../../workflow/format";
 import { wikiWorkflowDataRoot } from "../../workflow/runtime";
 import { copyToClipboard } from "../clipboard";
-import {
-	type AgentUsageMetrics,
-	answerQuestion,
-	applyRepair,
-	approvalFor,
-	type DashboardData,
-	type DeveloperReviewComment,
-	type DeveloperReviewFinding,
-	type FindingCounts,
-	focusAgentAsync,
-	focusReturnWorkspace,
-	type LocalChange,
-	loadDashboard,
-	loadDashboardAsync,
-	loadDeveloperReviewFindings,
-	loadLocalChangesAsync,
-	loadLocalDiffAsync,
-	loadVerifierFindings,
-	loadVerifierReport,
-	loadWikiSnapshotChangesAsync,
-	loadWikiSnapshotDiffAsync,
-	openFindingInEditorAsync,
-	openSpecArtifactAsync,
-	openSpecArtifacts,
-	openSpecArtifactsAsync,
-	previewRepair,
-	type RequiredUserActionItem,
-	requiredUserActionFor,
-	runWorkflow,
-	saveDeveloperReview,
-	savePlanReview,
-	saveWikiReview,
-	testDashboard,
-	type WorkflowState,
-} from "./data";
+import { testDashboard } from "./demo";
 import { ChangedFilesView } from "./devenv-ui/components/ChangedFilesView";
 import { DiffViewModal } from "./devenv-ui/components/DiffViewModal";
 import { GenericModal } from "./devenv-ui/components/GenericModal";
 import { MarkdownViewModal } from "./devenv-ui/components/MarkdownViewModal";
-import type { Discussion } from "./devenv-ui/types";
 import {
 	disposeExecutionCoordinator,
 	onWorkflowExecutionError,
 	requestWorkflowExecution,
 } from "./engine";
 import { notify } from "./notifications";
+import {
+	answerQuestion,
+	applyRepair,
+	focusAgentAsync,
+	focusReturnWorkspace,
+	loadDashboard,
+	loadDashboardAsync,
+	loadVerifierFindings,
+	loadVerifierReport,
+	openFindingInEditorAsync,
+	openSpecArtifactAsync,
+	openSpecArtifacts,
+	openSpecArtifactsAsync,
+	previewRepair,
+	runWorkflow,
+} from "./observations";
 import { movePanel, type PanelDirection } from "./panel-grid";
+import {
+	agentMetricLine,
+	agentRuntimeModelLine,
+	approvalFor,
+	type PhaseStatusState,
+	phaseStatus,
+	requiredUserActionFor,
+} from "./projections";
+import { createReviewFeature } from "./review";
 import { applyTheme, loadThemeName, saveThemeName } from "./theme-settings";
+import type {
+	DashboardData,
+	FindingCounts,
+	RequiredUserActionItem,
+} from "./types";
 import { Badge } from "./ui/Badge";
 import { CostModal } from "./ui/CostModal";
 import {
@@ -93,102 +88,10 @@ import { getActiveThemeName, themeNames } from "./ui/theme";
 import { VerdictModal } from "./ui/VerdictModal";
 import { watchDirectories } from "./watchRefresh";
 
-/** Compact token count for the Agents panel metric line (1234 → 1.2k). */
-function formatTokens(count: number): string {
-	if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
-	if (count >= 1000) return `${(count / 1000).toFixed(1)}k`;
-	return String(count);
-}
-
-/** Compose the presentation-only runtime/model label used in agent rows. */
-export function agentRuntimeModelLine(
-	runtime: string | undefined,
-	model: string | undefined,
-): string | undefined {
-	const runtimeLabel = runtime
-		? runtime === "opencode-v2"
-			? "opencode2"
-			: runtime
-		: undefined;
-	return runtimeLabel && model
-		? `${runtimeLabel} · ${model}`
-		: runtimeLabel || model || undefined;
-}
-
-/** One compact, fixed-order metric line per agent: cost, tokens in→out, cache
- * hit rate (cache-read / total prompt input), duration, tokens/s. Undefined when
- * the role recorded no metrics so the panel can omit the line entirely instead
- * of showing zero placeholders that could be mistaken for measured values. */
-export function agentMetricLine(
-	metrics: AgentUsageMetrics | undefined,
-): string | undefined {
-	if (!metrics) return undefined;
-	const inputTokens = metrics.inputTokens;
-	const cacheReadTokens = metrics.cacheReadTokens;
-	const cacheWriteTokens = metrics.cacheWriteTokens;
-	let cacheRate: number | undefined;
-	if (
-		inputTokens !== undefined &&
-		cacheReadTokens !== undefined &&
-		cacheWriteTokens !== undefined &&
-		Number.isFinite(inputTokens) &&
-		Number.isFinite(cacheReadTokens) &&
-		Number.isFinite(cacheWriteTokens) &&
-		inputTokens >= 0 &&
-		cacheReadTokens >= 0 &&
-		cacheWriteTokens >= 0
-	) {
-		const totalPromptTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
-		if (Number.isFinite(totalPromptTokens) && totalPromptTokens > 0) {
-			const calculatedRate = (cacheReadTokens / totalPromptTokens) * 100;
-			if (
-				Number.isFinite(calculatedRate) &&
-				calculatedRate >= 0 &&
-				calculatedRate <= 100
-			)
-				cacheRate = Math.min(100, Math.max(0, calculatedRate));
-		}
-	}
-	const parts = [
-		...(metrics.cost !== undefined ? [`$${metrics.cost.toFixed(2)}`] : []),
-		...(metrics.inputTokens !== undefined || metrics.outputTokens !== undefined
-			? [
-					`tok ${formatTokens(inputTokens ?? 0)}→${formatTokens(metrics.outputTokens ?? 0)}`,
-				]
-			: []),
-		...(cacheRate !== undefined
-			? [
-					`${(cacheRate === 100 ? cacheRate : Math.floor(cacheRate * 10) / 10).toFixed(1)}%`,
-				]
-			: []),
-		...(metrics.durationSeconds !== undefined
-			? [formatDuration(metrics.durationSeconds)]
-			: []),
-		...(metrics.tokensPerSecond !== undefined
-			? [`${metrics.tokensPerSecond} tok/s`]
-			: []),
-	];
-	return parts.length > 0 ? parts.join(" · ") : undefined;
-}
-
-export type PhaseStatusState = Pick<
-	WorkflowState,
-	"phase" | "stepId" | "stepLabel" | "status"
-> & {
-	runs: Array<Pick<WorkflowState["runs"][number], "stepId" | "status">>;
-};
-
-export function phaseStatus(state: PhaseStatusState) {
-	const text = state.stepLabel ?? state.phase;
-	const terminal = ["completed", "closed"].includes(state.status);
-	const blocked =
-		state.status === "attention-required" &&
-		state.stepId !== undefined &&
-		state.runs.some(
-			(run) => run.stepId === state.stepId && run.status === "blocked",
-		);
-	return { text, working: !terminal, blocked };
-}
+export type { PhaseStatusState };
+// Projection helpers are owned by `projections.ts`; these narrow re-exports
+// keep the public dashboard root surface (and its renderer tests) stable.
+export { agentMetricLine, agentRuntimeModelLine, phaseStatus };
 
 export function PhaseStatus(props: { state: PhaseStatusState }) {
 	const status = createMemo(() => phaseStatus(props.state));
@@ -338,9 +241,6 @@ export function App(props: {
 	let refreshQueued = false;
 	let refreshDisposed = false;
 	let refreshController: AbortController | undefined;
-	let reviewController: AbortController | undefined;
-	let reviewDiffController: AbortController | undefined;
-	let reviewGeneration = 0;
 	// Feed the shell's global header from the dashboard's single data source.
 	createEffect(() => {
 		props.onHeader?.({
@@ -352,7 +252,6 @@ export function App(props: {
 	});
 	const [message, setMessage] = createSignal("");
 	const [observing, setObserving] = createSignal(false);
-	const [reviewLoading, setReviewLoading] = createSignal(false);
 	let lastQuitAt = 0;
 	const [busy, setBusy] = createSignal(false);
 	// Dedicated review-finishing signal (in addition to the busy guard): scopes
@@ -446,14 +345,6 @@ export function App(props: {
 	const [completedPicker, setCompletedPicker] = createSignal(false);
 	const [completedSelection, setCompletedSelection] = createSignal(0);
 	const [actionReason, setActionReason] = createSignal("");
-	const planRejectionReasons = [
-		"Needs more detail",
-		"Scope is not approved",
-		"Requires design changes",
-		"Reject proposal",
-	];
-	const [planRejectionOpen, setPlanRejectionOpen] = createSignal(false);
-	const [planRejectionSelection, setPlanRejectionSelection] = createSignal(0);
 	const [repairOpen, setRepairOpen] = createSignal(false);
 	const [repairTargets, setRepairTargets] = createSignal<
 		Array<{
@@ -691,790 +582,6 @@ export function App(props: {
 	);
 	const [themeQuery, setThemeQuery] = createSignal("");
 	const [themeFiltering, setThemeFiltering] = createSignal(false);
-	const [reviewOpen, setReviewOpen] = createSignal(false);
-	const [reviewKind, setReviewKind] = createSignal<
-		"developer" | "plan" | "wiki"
-	>("developer");
-	const [reviewView, setReviewView] = createSignal<"files" | "diff">("files");
-	const [reviewChanges, setReviewChanges] = createSignal<LocalChange[]>([]);
-	const [reviewChangeIndex, setReviewChangeIndex] = createSignal(0);
-	const [reviewLine, setReviewLine] = createSignal(0);
-	const [reviewDiff, setReviewDiff] = createSignal("");
-	const [reviewComments, setReviewComments] = createSignal<
-		DeveloperReviewComment[]
-	>([]);
-	const [reviewFindings, setReviewFindings] = createSignal<
-		DeveloperReviewFinding[]
-	>([]);
-	const [selectedReviewFindingIds, setSelectedReviewFindingIds] = createSignal<
-		Set<string>
-	>(new Set());
-	const [reviewCommentMode, setReviewCommentMode] = createSignal(false);
-	const [reviewCommentText, setReviewCommentText] = createSignal("");
-	const [reviewVisualMode, setReviewVisualMode] = createSignal(false);
-	const [reviewVisualStart, setReviewVisualStart] = createSignal(0);
-	const [reviewSourceRange, setReviewSourceRange] = createSignal<{
-		start?: number;
-		end?: number;
-	}>({});
-	const [reviewDiscussionLineIndices, setReviewDiscussionLineIndices] =
-		createSignal<number[]>([]);
-	const [reviewSelectableLineCount, setReviewSelectableLineCount] =
-		createSignal(0);
-	const [reviewSelectedLineFindingIds, setReviewSelectedLineFindingIds] =
-		createSignal<string[]>([]);
-	const [reviewSearchMode, setReviewSearchMode] = createSignal(false);
-	const [reviewSearchQuery, setReviewSearchQuery] = createSignal("");
-	const [reviewSplitView, setReviewSplitView] = createSignal<boolean | null>(
-		null,
-	);
-	const reviewVisibleChanges = createMemo(() => {
-		const query = reviewSearchQuery().toLowerCase();
-		if (!query) return reviewChanges();
-		return reviewChanges().filter((change) =>
-			[change.newPath, change.oldPath].some((path) =>
-				path?.toLowerCase().includes(query),
-			),
-		);
-	});
-	const reviewFile = () => reviewVisibleChanges()[reviewChangeIndex()];
-	const reviewChangeForView = (change: LocalChange, diff = "") => ({
-		old_path: change.oldPath ?? change.newPath,
-		new_path: change.newPath,
-		a_mode: "100644",
-		b_mode: "100644",
-		new_file: change.newFile,
-		renamed_file: change.renamedFile,
-		deleted_file: change.deletedFile,
-		diff,
-		lines_added: change.linesAdded,
-		lines_deleted: change.linesDeleted,
-		review_finding_count: reviewFindings().filter(
-			(finding) =>
-				finding.path === change.newPath || finding.path === change.oldPath,
-		).length,
-	});
-	const reviewChangesForView = createMemo(() =>
-		reviewVisibleChanges().map((change) => reviewChangeForView(change)),
-	);
-	// Lines available to the embedded ChangedFilesView list inside the popup:
-	// GenericModal chrome (padding top/bottom + title + help footer) = 4,
-	// ChangedFilesView chrome (stats header 2 + table header 1) = 3.
-	// Mirrors GenericModal's own height calc (Math.floor(height * 0.75)).
-	const reviewFilesAvailableLines = () =>
-		Math.max(
-			1,
-			Math.min(dimensions().height, Math.floor(dimensions().height * 0.75)) -
-				4 -
-				3,
-		);
-	const reviewDiffFile = createMemo(() => {
-		const file = reviewFile();
-		return file ? reviewChangeForView(file, reviewDiff()) : undefined;
-	});
-	const reviewDiscussions = createMemo<Discussion[]>(() => [
-		...reviewComments().map((comment, index) => {
-			const position = {
-				base_sha: "",
-				start_sha: "",
-				head_sha: "",
-				old_path: comment.filePath,
-				new_path: comment.filePath,
-				position_type: "text",
-				new_line: comment.line,
-			};
-			const note = {
-				id: index + 1,
-				type: "DiffNote",
-				body: comment.body,
-				author: {
-					id: 0,
-					username: "developer",
-					name: "Developer",
-					avatar_url: "",
-				},
-				created_at: new Date().toISOString(),
-				updated_at: "",
-				system: false,
-				resolvable: false,
-				resolved: false,
-				position,
-			};
-			return {
-				id: `local-${index}`,
-				individual_note: true,
-				notes: [note],
-				position,
-			};
-		}),
-		...reviewFindings()
-			.filter((finding) => finding.path)
-			.map((finding) => {
-				const position = {
-					base_sha: "",
-					start_sha: "",
-					head_sha: "",
-					old_path: finding.path ?? "",
-					new_path: finding.path ?? "",
-					position_type: "text",
-					new_line: finding.line ?? 1, // legacy artifacts may lack a line
-				};
-				const note = {
-					id: 10000 + reviewFindings().indexOf(finding),
-					type: "DiffNote",
-					body: `${finding.detail}${finding.fix ? ` Fix: ${finding.fix}` : ""}`,
-					author: {
-						id: 0,
-						username: "verifier",
-						name: "Verifier",
-						avatar_url: "",
-					},
-					created_at: new Date().toISOString(),
-					updated_at: "",
-					system: false,
-					resolvable: false,
-					resolved: selectedReviewFindingIds().has(finding.id),
-					position,
-				};
-				return {
-					id: `finding-${finding.id}`,
-					individual_note: true,
-					notes: [note],
-					position,
-					findingId: finding.originalId,
-					findingSeverity: finding.severity,
-				};
-			}),
-	]);
-	const currentReviewDiscussions = createMemo(() => {
-		const file = reviewFile()?.newPath;
-		if (!file) return [];
-		return reviewDiscussions().filter((discussion) => {
-			const position = discussion.position ?? discussion.notes?.[0]?.position;
-			return (
-				!position || position.new_path === file || position.old_path === file
-			);
-		});
-	});
-	const cycleReviewComments = (direction: 1 | -1) => {
-		const lines = reviewDiscussionLineIndices();
-		if (!lines.length) return;
-		const current = reviewLine();
-		const next =
-			direction > 0
-				? (lines.find((line) => line > current) ?? lines[0])
-				: ([...lines].reverse().find((line) => line < current) ?? lines.at(-1));
-		if (next !== undefined) setReviewLine(next);
-	};
-	const filteredThemes = () =>
-		themeNames.filter((name) => name.includes(themeQuery().toLowerCase()));
-	const [helpOffset, setHelpOffset] = createSignal(0);
-	const helpSections: HelpSection[] = [
-		{
-			title: "Navigation",
-			items: [
-				{ key: "Shift+J/K/H/L", description: "Move between panels" },
-				{ key: "j/k or ↑/↓", description: "Scroll focused panel" },
-				{ key: "Esc", description: "Return to dashboard workspace" },
-			],
-		},
-		{
-			title: "Actions",
-			items: [
-				{ key: "Enter", description: "Approve workflow gate" },
-				{ key: "Enter", description: "Focus selected agent (Agents panel)" },
-				{ key: "Shift+O", description: "Show safe repair guidance" },
-				{ key: "v", description: "View selected verification agent's result" },
-				{ key: "c", description: "View agent cost breakdown" },
-				{ key: "r", description: "Refresh dashboard" },
-				{ key: "q", description: "Quit" },
-				{ key: "?", description: "Open help" },
-			],
-		},
-	];
-	const helpMaxOffset = () =>
-		Math.max(
-			0,
-			helpSections.reduce(
-				(count, section) => count + section.items.length + 1,
-				0,
-			) - Math.max(5, Math.floor(dimensions().height * 0.78) - 5),
-		);
-	const verdictLines = createMemo(() =>
-		Math.max(4, Math.floor(dimensions().height * 0.75) - 5),
-	);
-	const closeVerdict = () => {
-		const restoreFindings = verdictReturnToFindings();
-		const restoreUserAction = verdictReturnToUserAction();
-		setVerdict(undefined);
-		setVerdictReturnToFindings(false);
-		setVerdictReturnToUserAction(false);
-		setVerdictRenderMarkdown(false);
-		if (restoreFindings) props.keymap.setData("modal.active", "findings");
-		else if (restoreUserAction) {
-			setUserActionOpen(true);
-			props.keymap.setData("modal.active", "user-action");
-		} else props.keymap.setData("modal.active", "none");
-	};
-	const openDeveloperReview = async () => {
-		if (reviewLoading()) return;
-		setReviewLoading(true);
-		setMessage("Loading developer review…");
-		const generation = ++reviewGeneration;
-		reviewController?.abort();
-		reviewController = new AbortController();
-		try {
-			const changes =
-				props.profile === "test"
-					? [
-							{
-								newPath: "src/example.ts",
-								linesAdded: 3,
-								linesDeleted: 1,
-								newFile: false,
-								deletedFile: false,
-								renamedFile: false,
-							},
-						]
-					: await loadLocalChangesAsync(
-							props.repo,
-							props.workflowId,
-							reviewController.signal,
-						);
-			if (generation !== reviewGeneration) return;
-			const findings =
-				props.profile === "test"
-					? [
-							{
-								id: "demo-run:demo-warning",
-								originalId: "demo-warning",
-								severity: "warning" as const,
-								path: "src/example.ts",
-								line: 2,
-								detail: "Prefer const for immutable value.",
-								fix: "Use const.",
-							},
-						]
-					: loadDeveloperReviewFindings(props.repo, props.workflowId);
-			setReviewChanges(changes);
-			setReviewChangeIndex(0);
-			setReviewLine(0);
-			setReviewComments([]);
-			setReviewVisualMode(false);
-			setReviewVisualStart(0);
-			setReviewSourceRange({});
-			setReviewDiscussionLineIndices([]);
-			setReviewSelectableLineCount(0);
-			setReviewSelectedLineFindingIds([]);
-			setReviewSearchMode(false);
-			setReviewSearchQuery("");
-			setReviewSplitView(null);
-			setReviewFindings(findings);
-			setSelectedReviewFindingIds(new Set<string>());
-			setReviewView("files");
-			setReviewOpen(true);
-			setReviewKind("developer");
-			queueMicrotask(() =>
-				props.keymap.setData("modal.active", "developer-review"),
-			);
-		} catch (error) {
-			setMessage(error instanceof Error ? error.message : String(error));
-		} finally {
-			if (generation === reviewGeneration) {
-				setReviewLoading(false);
-				reviewController = undefined;
-			}
-		}
-	};
-	const openReviewDiff = async () => {
-		const file = reviewVisibleChanges()[reviewChangeIndex()];
-		if (!file) return;
-		reviewDiffController?.abort();
-		reviewDiffController = new AbortController();
-		try {
-			setReviewDiff(
-				props.profile === "test"
-					? "diff --git a/src/example.ts b/src/example.ts\n@@ -1,2 +1,4 @@\n const value = 1;\n-old();\n+new();\n+reviewed();\n"
-					: await loadLocalDiffAsync(
-							props.repo,
-							props.workflowId,
-							file,
-							reviewDiffController.signal,
-						),
-			);
-			setReviewLine(0);
-			setReviewView("diff");
-		} catch (error) {
-			setMessage(error instanceof Error ? error.message : String(error));
-		}
-	};
-	const developerReviewPhase = () =>
-		requiredUserAction()?.key === "developer-review";
-	const finishDeveloperReview = async () => {
-		if (busy()) return;
-		// Finishing dispatches the workflow gate, so it is only meaningful while
-		// the workflow actually waits in the developer review phase.
-		if (!developerReviewPhase()) {
-			notify(
-				"Developer review can only be finished during the developer review phase",
-				"warning",
-			);
-			return;
-		}
-		setBusy(true);
-		setMessage("Finishing developer review…");
-		setReviewFinishing(true);
-		setReviewFinishingMessage(
-			"Saving comments and dispatching developer review…",
-		);
-		try {
-			// Yield one macrotask so the progress overlay paints before any
-			// synchronous save/dispatch work begins.
-			await new Promise((resolve) => setTimeout(resolve, 0));
-			const findingComments: DeveloperReviewComment[] = reviewFindings()
-				.filter((finding) => selectedReviewFindingIds().has(finding.id))
-				.map((finding) => ({
-					filePath: finding.path ?? "repository",
-					line: finding.line ?? 1,
-					body: `${finding.detail}${finding.fix ? ` Fix: ${finding.fix}` : ""}`,
-					findingId: finding.originalId,
-				}));
-			const comments = [...reviewComments(), ...findingComments];
-			if (props.profile !== "test") {
-				await saveDeveloperReview(props.repo, props.workflowId, comments);
-				const engineComments = comments.map((comment) => ({
-					comment: comment.body,
-					...(comment.filePath ? { file: comment.filePath } : {}),
-					...(comment.line ? { line: comment.line } : {}),
-					...(comment.startLine ? { startLine: comment.startLine } : {}),
-					...(comment.endLine ? { endLine: comment.endLine } : {}),
-					...(comment.findingId ? { findingId: comment.findingId } : {}),
-				}));
-				setMessage(
-					await runWorkflow(
-						comments.length ? "review-comments" : "approve-review",
-						props.repo,
-						props.workflowId,
-						data().state.revision,
-						comments.length
-							? JSON.stringify({ comments: engineComments })
-							: undefined,
-					),
-				);
-				refresh();
-			} else {
-				setMessage(
-					comments.length
-						? "Review comments sent to worker"
-						: "Developer review passed",
-				);
-			}
-		} catch (error) {
-			setMessage(error instanceof Error ? error.message : String(error));
-		} finally {
-			setReviewView("files");
-			setReviewOpen(false);
-			props.keymap.setData("modal.active", "none");
-			setBusy(false);
-			setReviewFinishing(false);
-		}
-	};
-	const demoPlanArtifacts = () => [
-		{
-			newPath: "proposal.md",
-			linesAdded: 4,
-			linesDeleted: 0,
-			newFile: true,
-			deletedFile: false,
-			renamedFile: false,
-		},
-		{
-			newPath: "design.md",
-			linesAdded: 6,
-			linesDeleted: 0,
-			newFile: true,
-			deletedFile: false,
-			renamedFile: false,
-		},
-		{
-			newPath: "tasks.md",
-			linesAdded: 5,
-			linesDeleted: 0,
-			newFile: true,
-			deletedFile: false,
-			renamedFile: false,
-		},
-		{
-			newPath: "specs/workflow-engine-runtime/spec.md",
-			linesAdded: 8,
-			linesDeleted: 0,
-			newFile: true,
-			deletedFile: false,
-			renamedFile: false,
-		},
-	];
-	const demoPlanContent = (artifact: string) => {
-		const demo = {
-			"proposal.md":
-				"# Proposal\n\nMake the plan review modal-based.\n\n## What changes\n- Artifact list popup.\n- Markdown review modal.",
-			"design.md":
-				"# Design\n\n## Context\n\nMirror the developer review gate.\n\n## Decisions\n\nD1: Engine comments outcome.\n\nD2: Planner review-fix mode.",
-			"tasks.md":
-				"# Tasks\n\n- [ ] Engine routing\n- [ ] Markdown modal\n- [ ] Planner instruction",
-			"specs/workflow-engine-runtime/spec.md":
-				"# Workflow engine runtime\n\n## ADDED Requirements\n\n### Requirement: Review comments route to the planner\n\nThe plan gate SHALL accept bounded review comments.\n\n#### Scenario: Comments return to planning\n\nWHEN the developer dispatches review-comments.\n\nTHEN the workflow transitions to planning with feedback.",
-		} as Record<string, string>;
-		return demo[artifact] ?? `# ${artifact}\n\nDemo artifact content.`;
-	};
-	const openPlanReview = async () => {
-		const generation = ++reviewGeneration;
-		reviewDiffController?.abort();
-		reviewDiffController = new AbortController();
-		try {
-			const wikiReview = requiredUserAction()?.key === "wiki-review";
-			const changes: LocalChange[] = wikiReview
-				? await loadWikiSnapshotChangesAsync(
-						props.repo,
-						props.workflowId,
-						reviewDiffController.signal,
-					)
-				: props.profile === "test"
-					? demoPlanArtifacts()
-					: await Promise.all(
-							artifacts()
-								.slice(0, 200)
-								.map(async (artifact) => {
-									let linesAdded = 0;
-									try {
-										linesAdded = (
-											await openSpecArtifactAsync(
-												data().state,
-												artifact,
-												reviewDiffController?.signal,
-											)
-										).split(/\r?\n/).length;
-									} catch {
-										/* line count falls back to 0 when the artifact is unreadable */
-									}
-									return {
-										newPath: artifact,
-										linesAdded,
-										linesDeleted: 0,
-										newFile: true,
-										deletedFile: false,
-										renamedFile: false,
-									};
-								}),
-						);
-			if (generation !== reviewGeneration) return;
-			setReviewKind(wikiReview ? "wiki" : "plan");
-			setReviewChanges(changes);
-			setReviewChangeIndex(0);
-			setReviewLine(0);
-			setReviewDiff("");
-			setReviewComments([]);
-			setReviewFindings([]);
-			setSelectedReviewFindingIds(new Set<string>());
-			setReviewVisualMode(false);
-			setReviewVisualStart(0);
-			setReviewSourceRange({});
-			setReviewDiscussionLineIndices([]);
-			setReviewSelectableLineCount(0);
-			setReviewSelectedLineFindingIds([]);
-			setReviewSearchMode(false);
-			setReviewSearchQuery("");
-			setReviewSplitView(null);
-			setReviewView("files");
-			setReviewOpen(true);
-			queueMicrotask(() => props.keymap.setData("modal.active", "plan-review"));
-		} catch (error) {
-			setMessage(error instanceof Error ? error.message : String(error));
-		}
-	};
-	const openPlanMarkdown = async () => {
-		const file = reviewVisibleChanges()[reviewChangeIndex()];
-		if (!file) return;
-		reviewDiffController?.abort();
-		reviewDiffController = new AbortController();
-		try {
-			const content =
-				reviewKind() === "wiki"
-					? await loadWikiSnapshotDiffAsync(props.repo, props.workflowId, file)
-					: props.profile === "test"
-						? demoPlanContent(file.newPath)
-						: await openSpecArtifactAsync(
-								data().state,
-								file.newPath,
-								reviewDiffController?.signal,
-							);
-			setReviewDiff(content);
-			setReviewLine(0);
-			setReviewView("diff");
-		} catch (error) {
-			setMessage(error instanceof Error ? error.message : String(error));
-		}
-	};
-	const navigateReviewFile = async (direction: 1 | -1) => {
-		const previous = reviewChangeIndex();
-		const total = reviewVisibleChanges().length;
-		if (!total) return;
-		const next = (previous + direction + total) % total;
-		const file = reviewVisibleChanges()[next];
-		if (!file) return;
-		reviewDiffController?.abort();
-		reviewDiffController = new AbortController();
-		try {
-			const content =
-				reviewKind() === "wiki"
-					? await loadWikiSnapshotDiffAsync(
-							props.repo,
-							props.workflowId,
-							file,
-							reviewDiffController.signal,
-						)
-					: reviewKind() === "plan"
-						? props.profile === "test"
-							? demoPlanContent(file.newPath)
-							: await openSpecArtifactAsync(
-									data().state,
-									file.newPath,
-									reviewDiffController.signal,
-								)
-						: props.profile === "test"
-							? "diff --git a/src/example.ts b/src/example.ts\n@@ -1,2 +1,4 @@\n const value = 1;\n-old();\n+new();\n+reviewed();\n"
-							: await loadLocalDiffAsync(
-									props.repo,
-									props.workflowId,
-									file,
-									reviewDiffController.signal,
-								);
-			setReviewChangeIndex(next);
-			setReviewVisualMode(false);
-			setReviewVisualStart(0);
-			setReviewLine(0);
-			setReviewDiff(content);
-		} catch (error) {
-			setReviewChangeIndex(previous);
-			setMessage(error instanceof Error ? error.message : String(error));
-		}
-	};
-	const finishPlanReview = async () => {
-		if (busy()) return;
-		const wikiReview = requiredUserAction()?.key === "wiki-review";
-		const saveReview = wikiReview ? saveWikiReview : savePlanReview;
-		setBusy(true);
-		setMessage(
-			wikiReview ? "Finishing wiki review…" : "Finishing plan review…",
-		);
-		setReviewFinishing(true);
-		setReviewFinishingMessage(
-			wikiReview
-				? "Saving comments and dispatching wiki review…"
-				: "Saving comments and dispatching plan review…",
-		);
-		try {
-			// Yield one macrotask so the progress overlay paints before any
-			// synchronous save/dispatch work begins.
-			await new Promise((resolve) => setTimeout(resolve, 0));
-			const comments = reviewComments();
-			if (props.profile !== "test") {
-				await saveReview(props.repo, props.workflowId, comments);
-				const engineComments = comments.map((comment) => ({
-					comment: comment.body,
-					...(comment.filePath ? { file: comment.filePath } : {}),
-					...(comment.line ? { line: comment.line } : {}),
-					...(comment.startLine ? { startLine: comment.startLine } : {}),
-					...(comment.endLine ? { endLine: comment.endLine } : {}),
-				}));
-				setMessage(
-					await runWorkflow(
-						comments.length
-							? "review-comments"
-							: wikiReview
-								? "approve-wiki"
-								: "approve-plan",
-						props.repo,
-						props.workflowId,
-						data().state.revision,
-						comments.length
-							? JSON.stringify({ comments: engineComments })
-							: undefined,
-					),
-				);
-				refresh();
-			} else {
-				if (comments.length) {
-					setMessage("Plan review comments sent to planner");
-				} else {
-					setDemoIndex((index) => (index + 1) % demoPhases.length);
-					setMessage("Plan approved");
-				}
-				refresh();
-			}
-		} catch (error) {
-			setMessage(error instanceof Error ? error.message : String(error));
-		} finally {
-			setReviewView("files");
-			setReviewOpen(false);
-			props.keymap.setData("modal.active", "none");
-			setBusy(false);
-			setReviewFinishing(false);
-		}
-	};
-	const openPlanRejection = () => {
-		setPlanRejectionSelection(0);
-		setPlanRejectionOpen(true);
-		queueMicrotask(() =>
-			props.keymap.setData("modal.active", "plan-rejection"),
-		);
-	};
-	const rejectPlan = async (reason: string) => {
-		if (busy()) return;
-		setBusy(true);
-		setMessage("Rejecting plan…");
-		try {
-			if (props.profile === "test") setMessage("Plan rejected");
-			else {
-				await runWorkflow(
-					"reject-plan",
-					props.repo,
-					props.workflowId,
-					data().state.revision,
-					JSON.stringify({ reason }),
-				);
-				refresh();
-			}
-		} catch (error) {
-			setMessage(error instanceof Error ? error.message : String(error));
-		} finally {
-			setPlanRejectionOpen(false);
-			setReviewOpen(false);
-			props.keymap.setData("modal.active", "none");
-			setBusy(false);
-		}
-	};
-	const handleReviewKey = (event: KeyEvent) => {
-		const key = event.name.toLowerCase();
-		if (reviewView() === "files" && reviewSearchMode()) {
-			if (key === "escape") {
-				setReviewSearchMode(false);
-				setReviewSearchQuery("");
-				setReviewChangeIndex(0);
-			} else if (key === "enter" || key === "return") {
-				setReviewSearchMode(false);
-			} else if (key === "backspace" || key === "delete") {
-				setReviewSearchQuery((query) => query.slice(0, -1));
-				setReviewChangeIndex(0);
-			} else if (
-				event.sequence &&
-				event.sequence.length === 1 &&
-				event.sequence >= " "
-			) {
-				setReviewSearchQuery((query) => query + event.sequence);
-				setReviewChangeIndex(0);
-			}
-			return true;
-		}
-		if (key === "escape") {
-			if (reviewView() === "diff") {
-				setReviewVisualMode(false);
-				setReviewView("files");
-			} else if (reviewSearchQuery()) {
-				setReviewSearchQuery("");
-				setReviewSearchMode(false);
-				setReviewChangeIndex(0);
-			} else {
-				setReviewOpen(false);
-				props.keymap.setData("modal.active", "none");
-			}
-		} else if (
-			key === "r" &&
-			reviewKind() === "plan" &&
-			reviewView() === "files"
-		) {
-			openPlanRejection();
-		} else if (key === "f" && !event.shift) {
-			if (reviewKind() === "plan" || reviewKind() === "wiki")
-				void finishPlanReview();
-			else void finishDeveloperReview();
-		} else if (
-			reviewView() === "files" &&
-			(key === "/" || event.sequence === "/")
-		) {
-			setReviewSearchMode(true);
-			setReviewSearchQuery("");
-			setReviewChangeIndex(0);
-		} else if (reviewView() === "files" && (key === "j" || key === "down"))
-			setReviewChangeIndex((index) =>
-				Math.min(Math.max(0, reviewVisibleChanges().length - 1), index + 1),
-			);
-		else if (reviewView() === "files" && (key === "k" || key === "up"))
-			setReviewChangeIndex((index) => Math.max(0, index - 1));
-		else if (
-			reviewView() === "files" &&
-			(key === "enter" || key === "return")
-		) {
-			if (reviewKind() === "plan" || reviewKind() === "wiki")
-				openPlanMarkdown();
-			else openReviewDiff();
-		} else if (reviewView() === "diff" && key === "v") {
-			if (reviewVisualMode()) setReviewVisualMode(false);
-			else {
-				setReviewVisualStart(reviewLine());
-				setReviewVisualMode(true);
-			}
-		} else if (reviewView() === "diff" && key === "n")
-			cycleReviewComments(event.shift ? -1 : 1);
-		else if (reviewView() === "diff" && (key === "[" || key === "]"))
-			navigateReviewFile(key === "]" ? 1 : -1);
-		else if (
-			reviewView() === "diff" &&
-			key === "s" &&
-			(reviewKind() === "developer" || reviewKind() === "wiki")
-		)
-			setReviewSplitView((split) =>
-				split === null ? dimensions().width < 160 : !split,
-			);
-		else if (reviewView() === "diff" && (key === "j" || key === "down"))
-			setReviewLine((line) =>
-				Math.min(Math.max(0, reviewSelectableLineCount() - 1), line + 1),
-			);
-		else if (reviewView() === "diff" && (key === "k" || key === "up"))
-			setReviewLine((line) => Math.max(0, line - 1));
-		else if (
-			reviewView() === "diff" &&
-			(key === "space" || key === " ") &&
-			reviewKind() === "developer"
-		) {
-			const ids = reviewSelectedLineFindingIds();
-			if (ids.length)
-				setSelectedReviewFindingIds((selected) => {
-					const next = new Set(selected);
-					const select = ids.some((id) => !next.has(id));
-					for (const id of ids) {
-						if (select) next.add(id);
-						else next.delete(id);
-					}
-					return next;
-				});
-		} else if (reviewView() === "diff" && key === "c") {
-			const selectedRange = reviewSourceRange();
-			if (
-				reviewKind() === "wiki" &&
-				(selectedRange.start === undefined || selectedRange.end === undefined)
-			) {
-				notify(
-					"Snapshot context is not commentable; select a current document line",
-					"warning",
-				);
-				return true;
-			}
-			setReviewCommentText("");
-			setReviewCommentMode(true);
-			props.keymap.setData("modal.active", "review-comment");
-		}
-		return true;
-	};
 	const gate = createMemo(() => {
 		if (props.profile === "test")
 			return {
@@ -1595,7 +702,7 @@ export function App(props: {
 				content = await openSpecArtifactAsync(
 					data().state,
 					item.value,
-					reviewDiffController?.signal,
+					reviewDiffSignal(),
 				);
 			} catch (error) {
 				content = `Could not open ${item.value}: ${error instanceof Error ? error.message : String(error)}`;
@@ -1691,6 +798,126 @@ export function App(props: {
 			});
 	};
 
+	// Review feature: plan/developer/wiki review state, drafts, and submission
+	// live in `review.ts` (cohesive dashboard-local ownership); the root wires
+	// its signals into keymap layers and rendering below.
+	const reviewFeature = createReviewFeature({
+		repo: props.repo,
+		workflowId: props.workflowId,
+		profile: props.profile,
+		setModalActive: (modal) => props.keymap.setData("modal.active", modal),
+		setMessage,
+		setBusy,
+		busy,
+		setReviewFinishing,
+		setReviewFinishingMessage,
+		refresh,
+		data,
+		requiredUserAction,
+		artifacts,
+		dimensions,
+		setDemoIndex,
+		demoPhases,
+	});
+	const {
+		reviewOpen,
+		setReviewOpen,
+		reviewKind,
+		reviewView,
+		setReviewView,
+		reviewChangeIndex,
+		reviewLine,
+		setReviewLine,
+		reviewDiff,
+		setReviewComments,
+		reviewCommentMode,
+		setReviewCommentMode,
+		reviewCommentText,
+		setReviewCommentText,
+		reviewVisualMode,
+		setReviewVisualMode,
+		reviewVisualStart,
+		reviewSourceRange,
+		setReviewSourceRange,
+		setReviewDiscussionLineIndices,
+		setReviewSelectableLineCount,
+		setReviewSelectedLineFindingIds,
+		reviewSearchMode,
+		reviewSearchQuery,
+		reviewSplitView,
+		planRejectionReasons,
+		planRejectionOpen,
+		setPlanRejectionOpen,
+		planRejectionSelection,
+		setPlanRejectionSelection,
+		reviewVisibleChanges,
+		reviewFile,
+		reviewChangesForView,
+		reviewFilesAvailableLines,
+		reviewDiffFile,
+		reviewDiscussions,
+		currentReviewDiscussions,
+		developerReviewPhase,
+		openDeveloperReview,
+		openPlanReview,
+		navigateReviewFile,
+		navigatePlanMarkdownFile,
+		rejectPlan,
+		handleReviewKey,
+		reviewDiffSignal,
+		dispose: reviewFeatureDispose,
+	} = reviewFeature;
+	const filteredThemes = () =>
+		themeNames.filter((name) => name.includes(themeQuery().toLowerCase()));
+	const [helpOffset, setHelpOffset] = createSignal(0);
+	const helpSections: HelpSection[] = [
+		{
+			title: "Navigation",
+			items: [
+				{ key: "Shift+J/K/H/L", description: "Move between panels" },
+				{ key: "j/k or ↑/↓", description: "Scroll focused panel" },
+				{ key: "Esc", description: "Return to dashboard workspace" },
+			],
+		},
+		{
+			title: "Actions",
+			items: [
+				{ key: "Enter", description: "Approve workflow gate" },
+				{ key: "Enter", description: "Focus selected agent (Agents panel)" },
+				{ key: "Shift+O", description: "Show safe repair guidance" },
+				{ key: "v", description: "View selected verification agent's result" },
+				{ key: "c", description: "View agent cost breakdown" },
+				{ key: "r", description: "Refresh dashboard" },
+				{ key: "q", description: "Quit" },
+				{ key: "?", description: "Open help" },
+			],
+		},
+	];
+	const helpMaxOffset = () =>
+		Math.max(
+			0,
+			helpSections.reduce(
+				(count, section) => count + section.items.length + 1,
+				0,
+			) - Math.max(5, Math.floor(dimensions().height * 0.78) - 5),
+		);
+	const verdictLines = createMemo(() =>
+		Math.max(4, Math.floor(dimensions().height * 0.75) - 5),
+	);
+	const closeVerdict = () => {
+		const restoreFindings = verdictReturnToFindings();
+		const restoreUserAction = verdictReturnToUserAction();
+		setVerdict(undefined);
+		setVerdictReturnToFindings(false);
+		setVerdictReturnToUserAction(false);
+		setVerdictRenderMarkdown(false);
+		if (restoreFindings) props.keymap.setData("modal.active", "findings");
+		else if (restoreUserAction) {
+			setUserActionOpen(true);
+			props.keymap.setData("modal.active", "user-action");
+		} else props.keymap.setData("modal.active", "none");
+	};
+
 	createEffect(() => {
 		if (props.profile === "test") return;
 		const state = data().state;
@@ -1724,9 +951,7 @@ export function App(props: {
 			disposeExecutionError?.();
 			artifactGeneration++;
 			artifactController?.abort();
-			reviewGeneration++;
-			reviewController?.abort();
-			reviewDiffController?.abort();
+			reviewFeatureDispose();
 			disposeExecutionCoordinator(props.repo);
 			clearInterval(safety);
 		});
@@ -3419,43 +2644,9 @@ export function App(props: {
 						setReviewCommentMode(false);
 						setReviewView("files");
 					}}
-					onNavigateFile={async (direction) => {
-						const previous = reviewChangeIndex();
-						reviewDiffController?.abort();
-						reviewDiffController = new AbortController();
-						try {
-							const total = reviewVisibleChanges().length;
-							if (!total) return;
-							const next = (previous + direction + total) % total;
-							const file = reviewVisibleChanges()[next];
-							if (!file) return;
-							setReviewVisualMode(false);
-							setReviewVisualStart(0);
-							setReviewLine(0);
-							setReviewDiff(
-								reviewKind() === "wiki"
-									? await loadWikiSnapshotDiffAsync(
-											props.repo,
-											props.workflowId,
-											file,
-											reviewDiffController?.signal,
-										)
-									: props.profile === "test"
-										? demoPlanContent(file.newPath)
-										: await openSpecArtifactAsync(
-												data().state,
-												file.newPath,
-												reviewDiffController?.signal,
-											),
-							);
-							setReviewChangeIndex(next);
-						} catch (error) {
-							setReviewChangeIndex(previous);
-							setMessage(
-								error instanceof Error ? error.message : String(error),
-							);
-						}
-					}}
+					onNavigateFile={(direction) =>
+						void navigatePlanMarkdownFile(direction)
+					}
 				/>
 			</Show>
 			<Show

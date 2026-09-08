@@ -3,10 +3,11 @@
 import type { KeyEvent } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
 import { createMemo, createSignal, onMount, Show } from "solid-js";
-import { type LocalChange, loadLocalChanges, loadLocalDiff } from "../data";
 import { ChangedFilesView } from "../devenv-ui/components/ChangedFilesView";
 import { DiffViewModal } from "../devenv-ui/components/DiffViewModal";
 import { GenericModal } from "../devenv-ui/components/GenericModal";
+import { loadLocalChanges, loadLocalDiff } from "../observations";
+import type { LocalChange } from "../types";
 
 /**
  * Shared changed-files list-to-diff interaction.

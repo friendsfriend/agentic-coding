@@ -16,13 +16,10 @@ import {
 	isWikiWorkflowTarget,
 } from "../workflow/runtime";
 import { copyToClipboard } from "./clipboard";
-import {
-	listWorkflowsAsync,
-	loadDashboardAsync,
-	testDashboard,
-} from "./dash/data";
+import { testDashboard } from "./dash/demo";
 import { setupKeymap } from "./dash/keymap-setup";
 import { notify } from "./dash/notifications";
+import { listWorkflowsAsync, loadDashboardAsync } from "./dash/observations";
 import { setGlobalSelectionMouseUpHandler } from "./dash/selectionCopy";
 import {
 	applyTheme as applyDashTheme,
