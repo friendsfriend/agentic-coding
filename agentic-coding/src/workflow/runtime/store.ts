@@ -896,9 +896,11 @@ export function openReadStore(repo: string): Database {
 	return openStoreWithMode(repo, true);
 }
 
-export function observedStore(
-	repo: string,
-): { version: number; legacyChangeIds: string[] } | undefined {
+export interface ObservedStore {
+	version: number;
+	legacyChangeIds: string[];
+}
+export function observedStore(repo: string): ObservedStore | undefined {
 	const file = canonicalStorePath(repo);
 	if (!fs.existsSync(file)) return undefined;
 	const db = guardedDatabase(repo, file, { readonly: true });

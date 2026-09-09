@@ -14,9 +14,16 @@ Version-matched official documentation:
 - Effect Schema union/optional/refinement: https://effect.website/docs/schema/type-schema
 - Effect Schema decoding (sync/async): https://effect.website/docs/schema/usage
 
-> **Scope of this phase.** Phase 1 (`adopt-workflow-effect-foundation`) owns
-> contract decoding and tagged failures only. The runtime, store, runner, CLI
-> and TUI are migrated in later roadmap phases; do not wrap them in Effect yet.
+> **Scope by phase.** Phase 1 (`adopt-workflow-effect-foundation`) owns
+> contract decoding and tagged failures. Phase 2
+> (`migrate-workflow-runtime-to-effect`) owns the workflow engine/store:
+> write/read operations are Effect programs with typed `WorkflowRuntimeError`
+> failures and concrete `WorkflowStore`/`WorkflowClock`/`WorkflowConfig`
+> service requirements, provided at the engine composition root via
+> `engineLayer` (`runtime/services.ts`). The `WorkflowEngine` class keeps its
+> historical synchronous signatures as an inventoried outer bridge;
+> `complete-workflow-effect-cutover` removes it. The runner, CLI and TUI are
+> migrated in phases 3–4; do not wrap them in Effect yet.
 > Pure graph/step/projection/formatting functions remain plain deterministic
 > TypeScript.
 
@@ -97,10 +104,11 @@ independent of the parser implementation.
 
 ## Services: only at a real production boundary, Layers at the root
 
-Phase 1 introduces no services. A service (and its Effect Layer) is added only
-when a later phase migrates an actual production boundary — and then only at a
-composition root, not scattered through domain code. Do not invent services
-for pure functions.
+Phase 1 introduces no services. Phase 2 adds exactly the concrete production
+boundaries the runtime migrates — `WorkflowStore`, `WorkflowClock`, and
+`WorkflowConfig` in `runtime/services.ts` — each assembled at the engine/startup
+composition root via `engineLayer` / `WorkflowConfigLive`; business modules
+never construct these dependencies and never wrap pure functions in services.
 
 ## Scopes: pure domain stays pure; native/Promise I/O belongs in adapters
 

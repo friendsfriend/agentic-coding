@@ -682,7 +682,7 @@ test("required user actions fall back to the legacy phase-derived set only when 
 	);
 	expect(
 		requiredUserActionFor("research")?.items.map((item) => item.label),
-	).toEqual(["Close research", "Not now"]);
+	).toEqual(["Ask researcher", "Close research", "Not now"]);
 	// close-clean is removed everywhere (design D2), including this fallback.
 	expect(
 		requiredUserActionFor("completed")?.items.map((item) => item.label),
@@ -737,6 +737,7 @@ test("required user actions for active research exclude any developer wiki-draft
 	);
 	expect(action?.key).toBe("research");
 	expect(action?.items.map((item) => item.label)).toEqual([
+		"Ask researcher",
 		"Close research",
 		"Not now",
 	]);
@@ -755,6 +756,7 @@ test("required user actions for active research exclude any developer wiki-draft
 		RESEARCH_ACTIONS,
 	);
 	expect(legacyAction?.items.map((item) => item.label)).toEqual([
+		"Ask researcher",
 		"Close research",
 		"Not now",
 	]);

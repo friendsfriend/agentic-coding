@@ -298,7 +298,7 @@ function repositoryConfigRoot(repository: string): string | undefined {
 
 /** Resolve config without changing cwd. `repository` is the only source of a
  * project overlay; omit it for the caller's legacy cwd-compatible behavior. */
-type ConfigOptions =
+export type ConfigOptions =
 	| string
 	| { repository?: string; repositoryIndependent?: boolean };
 

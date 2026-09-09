@@ -4,11 +4,19 @@
 // former private-method branch chain. Every reducer, and every leaf helper
 // (store/evidence/capability/dialogue/migration/view/kernel), is imported
 // rather than reimplemented here — this file is the residue once all of
-// that is moved out. Moved out of runtime.ts (split-workflow-god-modules).
-import type { Database } from "bun:sqlite";
+// that is moved out.
+//
+// Migrated to Effect (migrate-workflow-runtime-to-effect): each public
+// operation is an Effect program that requires the concrete `WorkflowStore`
+// and `WorkflowClock` services, provided at the engine composition root via
+// `engineLayer`. The class keeps its historical synchronous signatures so the
+// CLI, dashboard, drain runner, and focused tests compose the same operations
+// without a nested runtime; it is the inventoried outer runtime bridge that
+// phase 4 (`complete-workflow-effect-cutover`) removes.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { Cause, Chunk, Effect, Exit, Option } from "effect";
 import {
 	commandContract,
 	parseSnapshot,
@@ -73,18 +81,17 @@ import { developerAction } from "./reducers/developer-action.ts";
 import { effectResult } from "./reducers/effect-result.ts";
 import { migrate, repair, repin, resume } from "./reducers/repair.ts";
 import { recordResearchHandoff } from "./reducers/research-handoff.ts";
+import type { WorkflowClock } from "./services.ts";
+import { engineLayer, toRuntimeError, WorkflowStore } from "./services.ts";
 import { prepareStepEvidence } from "./step-evidence.ts";
 import {
 	type EffectRow,
 	effectFromRow,
 	type InstanceRow,
-	initializeStore,
 	instance,
 	json,
 	nowIso,
-	openStore,
 	payload,
-	rollback,
 	runs,
 	activeRunForRole as storeActiveRunForRole,
 	effectIsLive as storeEffectIsLive,
@@ -111,50 +118,431 @@ import {
 	status as viewStatus,
 } from "./view.ts";
 
+interface CommittedDispatch {
+	snapshot: WorkflowSnapshot;
+	event: { type: string; actor: unknown; data: unknown };
+}
+interface PreparedStart {
+	snapshot: WorkflowSnapshot;
+	storeTarget: string;
+	sameCheckout: boolean;
+}
+
 export class WorkflowEngine {
+	private readonly layer: ReturnType<typeof engineLayer>;
 	constructor(
 		readonly registry: WorkflowRegistry,
 		private readonly now: () => Date = () => new Date(),
 		private readonly onCommitted: (repository: string) => void = () => {},
-	) {}
+	) {
+		this.layer = engineLayer(now);
+	}
+	/** Run an Effect program synchronously at the engine composition boundary. */
+	/** Run an Effect program synchronously at the engine composition boundary and
+	 * surface its typed failure as the original `WorkflowRuntimeError` (or the
+	 * underlying defect) rather than an Effect `FiberFailure`. */
+	private run<A>(
+		effect: Effect.Effect<
+			A,
+			WorkflowRuntimeError,
+			WorkflowStore | WorkflowClock
+		>,
+	): A {
+		const exit = Effect.runSyncExit(effect.pipe(Effect.provide(this.layer)));
+		if (Exit.isSuccess(exit)) return exit.value;
+		const failure = Cause.failureOption(exit.cause);
+		if (Option.isSome(failure)) throw failure.value;
+		const firstDefect = Chunk.head(Cause.defects(exit.cause));
+		if (Option.isSome(firstDefect)) {
+			const defect = firstDefect.value;
+			if (defect instanceof WorkflowRuntimeError) throw defect;
+			throw toRuntimeError(defect);
+		}
+		throw new WorkflowRuntimeError("unavailable", Cause.pretty(exit.cause));
+	}
 	/** Initialize the canonical store and, when addressed, import its legacy
 	 * workflow outside any command transaction. */
 	initialize(repo: string, workflowId?: string): void {
-		initializeStore(repo);
-		if (isWikiWorkflowTarget(repo) || isResearchWorkflowTarget(repo)) return;
-		const db = openStore(repo);
-		try {
-			if (!tableExists(db, "workflows")) return;
-			const ids = workflowId
-				? [workflowId]
-				: (
-						db.query("SELECT change_id FROM workflows").all() as Array<{
-							change_id: string;
-						}>
-					).map((row) => row.change_id);
-			for (const changeId of ids) {
-				if (
-					db
-						.query("SELECT 1 FROM workflow_instances WHERE id=?")
-						.get(changeId) ||
-					db
-						.query("SELECT 1 FROM workflow_instances WHERE change_id=?")
-						.get(changeId)
-				)
-					continue;
-				migrateLegacy(
-					db,
-					canonicalRepository(repo),
-					changeId,
-					this.registry,
-					this.now,
-				);
-			}
-		} finally {
-			db.close();
-		}
+		this.run(this.initializeProgram(repo, workflowId));
+	}
+	private initializeProgram(
+		repo: string,
+		workflowId?: string,
+	): Effect.Effect<void, WorkflowRuntimeError, WorkflowStore> {
+		const self = this;
+		return Effect.gen(function* () {
+			const store = yield* WorkflowStore;
+			yield* store.initialize(repo);
+			if (isWikiWorkflowTarget(repo) || isResearchWorkflowTarget(repo)) return;
+			// Legacy import runs outside any command transaction: it owns its own
+			// SQLite transaction control and must not run inside the service's
+			// transaction primitive.
+			yield* store.write(repo, (db) => {
+				if (!tableExists(db, "workflows")) return;
+				const ids = workflowId
+					? [workflowId]
+					: (
+							db.query("SELECT change_id FROM workflows").all() as Array<{
+								change_id: string;
+							}>
+						).map((row) => row.change_id);
+				for (const changeId of ids) {
+					if (
+						db
+							.query("SELECT 1 FROM workflow_instances WHERE id=?")
+							.get(changeId) ||
+						db
+							.query("SELECT 1 FROM workflow_instances WHERE change_id=?")
+							.get(changeId)
+					)
+						continue;
+					migrateLegacy(
+						db,
+						canonicalRepository(repo),
+						changeId,
+						self.registry,
+						self.now,
+					);
+				}
+			});
+		});
 	}
 	start(input: StartWorkflowInput): DispatchResult {
+		const self = this;
+		return this.run(
+			Effect.gen(function* () {
+				const store = yield* WorkflowStore;
+				const prepared = yield* Effect.try({
+					try: () => self.resolveStart(input),
+					catch: toRuntimeError,
+				});
+				yield* self.initializeProgram(prepared.storeTarget);
+				const result = yield* store.transaction(prepared.storeTarget, (db) =>
+					self.commitStart(db, input, prepared.snapshot, prepared.sameCheckout),
+				);
+				self.telemetry(result, "workflow.started");
+				self.onCommitted(prepared.storeTarget);
+				return {
+					snapshot: result,
+					view: viewById(
+						prepared.storeTarget,
+						result.workflowId,
+						self.registry,
+						self.now,
+					),
+				};
+			}),
+		);
+	}
+	dispatch(repo: string, raw: unknown): DispatchResult {
+		const self = this;
+		return this.run(
+			Effect.gen(function* () {
+				const store = yield* WorkflowStore;
+				const command = yield* Effect.try({
+					try: () => commandContract.parse(raw),
+					catch: toRuntimeError,
+				});
+				// Legacy domain import is a write operation and intentionally happens
+				// outside the command transaction. Observation never performs it.
+				yield* self.initializeProgram(
+					repo,
+					"workflowId" in command ? command.workflowId : undefined,
+				);
+				// Read and validate bounded agent evidence before opening the writer
+				// transaction. The reducer repeats the final integrity check after
+				// reload so replacement during the race window is rejected.
+				let preparedHandoff: PreparedHandoffEvidence | undefined;
+				let handoffWorktree: string | undefined;
+				if (
+					command.type === "agent.handoff" &&
+					command.outcome === "complete"
+				) {
+					const prepared = yield* Effect.try({
+						try: () => self.prepareHandoff(repo, command),
+						catch: toRuntimeError,
+					});
+					preparedHandoff = prepared.preparedHandoff;
+					handoffWorktree = prepared.handoffWorktree;
+				}
+				if (
+					command.type === "agent.handoff" &&
+					command.outcome === "complete"
+				) {
+					yield* Effect.try({
+						try: () => {
+							const finalArtifact = prepareHandoffArtifact(
+								repo,
+								command,
+								self.now,
+								handoffWorktree,
+							);
+							if (
+								preparedHandoff?.artifactDigest !== undefined &&
+								(!finalArtifact ||
+									finalArtifact.digest !== preparedHandoff.artifactDigest)
+							)
+								throw new WorkflowRuntimeError(
+									"artifact",
+									"artifact changed during final handoff binding",
+								);
+						},
+						catch: toRuntimeError,
+					});
+				}
+				const committed = yield* Effect.catchAll(
+					store.transaction(repo, (db) =>
+						self.commitDispatch(db, command, preparedHandoff),
+					),
+					(error) =>
+						Effect.gen(function* () {
+							if (
+								error instanceof WorkflowRuntimeError &&
+								[
+									"unauthorized",
+									"stale-run",
+									"artifact",
+									"stale-effect",
+								].includes(error.code)
+							) {
+								const subject =
+									command.type === "agent.handoff"
+										? command.runId
+										: command.type === "effect.result"
+											? command.effectId
+											: command.type;
+								// The rejection audit is best-effort and runs separately from the
+								// workflow transaction's rollback; it never fails the command.
+								yield* Effect.catchAll(
+									store.transaction(repo, (db) => {
+										db.query(
+											"INSERT INTO workflow_security_audit VALUES (?,?,?,?,?,?)",
+										).run(
+											randomUUID(),
+											null,
+											command.type,
+											subject,
+											error.message.slice(0, 2048),
+											nowIso(self.now),
+										);
+									}),
+									() => Effect.void,
+								);
+							}
+							return yield* Effect.fail(error);
+						}),
+				);
+				// Post-commit scheduling/telemetry is separated from the committed
+				// command result: a continuation or notification failure here does not
+				// imply the durable mutation was rolled back.
+				self.telemetry(
+					committed.snapshot,
+					committed.event.type,
+					command.type === "agent.handoff" ||
+						command.type === "agent.question" ||
+						command.type === "agent.question-expire" ||
+						command.type === "agent.research-handoff"
+						? { runId: command.runId }
+						: command.type === "effect.result"
+							? { effectId: command.effectId }
+							: undefined,
+				);
+				self.onCommitted(
+					isWikiWorkflowTarget(repo) || isResearchWorkflowTarget(repo)
+						? wikiRoot(true)
+						: canonicalRepository(repo),
+				);
+				return {
+					snapshot: committed.snapshot,
+					view: viewById(
+						repo,
+						committed.snapshot.workflowId,
+						self.registry,
+						self.now,
+					),
+				};
+			}),
+		);
+	}
+	status(repo: string, workflowId: string): WorkflowView {
+		return this.run(
+			Effect.try({
+				try: () => viewStatus(repo, workflowId, this.registry, this.now),
+				catch: toRuntimeError,
+			}),
+		);
+	}
+	previewRepair(repo: string, workflowId: string): RepairPreview[] {
+		return this.run(
+			Effect.try({
+				try: () => viewPreviewRepair(repo, workflowId, this.registry),
+				catch: toRuntimeError,
+			}),
+		);
+	}
+	previewMigration(
+		repo: string,
+		workflowId: string,
+		targetVersion: number,
+	): MigrationPreview {
+		return this.run(
+			Effect.try({
+				try: () =>
+					viewPreviewMigration(repo, workflowId, targetVersion, this.registry),
+				catch: toRuntimeError,
+			}),
+		);
+	}
+	effectIsLive(repo: string, effectId: string, lease: string): boolean {
+		return this.run(
+			Effect.try({
+				try: () => storeEffectIsLive(repo, effectId, lease, this.now),
+				catch: toRuntimeError,
+			}),
+		);
+	}
+	renewEffect(
+		repo: string,
+		effectId: string,
+		lease: string,
+		leaseMs = 30_000,
+	): boolean {
+		const self = this;
+		return this.run(
+			Effect.gen(function* () {
+				if (!Number.isFinite(leaseMs) || leaseMs <= 0)
+					throw new WorkflowRuntimeError(
+						"invalid-input",
+						"lease duration must be positive",
+					);
+				yield* self.initializeProgram(repo);
+				return yield* Effect.try({
+					try: () => storeRenewEffect(repo, effectId, lease, leaseMs, self.now),
+					catch: toRuntimeError,
+				});
+			}),
+		);
+	}
+	claimEffects(repo: string, limit = 10, leaseMs = 30_000): ClaimedEffect[] {
+		const self = this;
+		return this.run(
+			Effect.gen(function* () {
+				const store = yield* WorkflowStore;
+				yield* self.initializeProgram(repo);
+				return yield* store.transaction(repo, (db) =>
+					self.commitClaim(db, limit, leaseMs),
+				);
+			}),
+		);
+	}
+	issueRunCapability(repo: string, runId: string): string {
+		const self = this;
+		return this.run(
+			Effect.gen(function* () {
+				yield* self.initializeProgram(repo);
+				return yield* Effect.try({
+					try: () => capabilityIssueRunCapability(repo, runId),
+					catch: toRuntimeError,
+				});
+			}),
+		);
+	}
+	list(repo: string): WorkflowView[] {
+		return this.run(
+			Effect.try({
+				try: () => viewList(repo, this.registry, this.now),
+				catch: toRuntimeError,
+			}),
+		);
+	}
+	getRun(repo: string, runId: string): WorkflowRun {
+		return this.run(
+			Effect.try({
+				try: () => storeGetRun(repo, runId),
+				catch: toRuntimeError,
+			}),
+		);
+	}
+	// See store.ts's `activeRunForRole` doc comment for why this resolves by
+	// (workflowId, stepId, role) rather than a client-supplied
+	// runId/generation/token.
+	activeRunForRole(
+		repo: string,
+		workflowId: string,
+		stepId: string,
+		role: string,
+	): WorkflowRun {
+		return this.run(
+			Effect.try({
+				try: () => storeActiveRunForRole(repo, workflowId, stepId, role),
+				catch: toRuntimeError,
+			}),
+		);
+	}
+	/** Validate the launch-bound capability for a role-scoped CLI operation. */
+	authorizeAgentCapability(
+		repo: string,
+		workflowId: string,
+		stepId: string,
+		role: string,
+		token: string,
+	): WorkflowRun {
+		return this.run(
+			Effect.try({
+				try: () =>
+					capabilityAuthorizeAgentCapability(
+						repo,
+						workflowId,
+						stepId,
+						role,
+						token,
+						this.registry,
+						this.now,
+					),
+				catch: toRuntimeError,
+			}),
+		);
+	}
+	/** Validate a capability against the exact run that issued it. This is used
+	 * by subprocess-facing commands; role-scoped lookup is intentionally not
+	 * sufficient because a child process must not select a sibling run. */
+	authorizeExactRunCapability(
+		repo: string,
+		workflowId: string,
+		runId: string,
+		stepId: string,
+		role: string,
+		token: string,
+	): WorkflowRun {
+		return this.run(
+			Effect.try({
+				try: () =>
+					capabilityAuthorizeExactRunCapability(
+						repo,
+						workflowId,
+						runId,
+						stepId,
+						role,
+						token,
+						this.registry,
+						this.now,
+					),
+				catch: toRuntimeError,
+			}),
+		);
+	}
+	getSnapshot(repo: string, workflowId: string): WorkflowSnapshot {
+		return this.run(
+			Effect.try({
+				try: () => storeGetSnapshot(repo, workflowId, this.registry, this.now),
+				catch: toRuntimeError,
+			}),
+		);
+	}
+
+	// ---- synchronous orchestration helpers (run inside Effect programs) ----
+
+	private resolveStart(input: StartWorkflowInput): PreparedStart {
 		validateWorkflowId(input.workflowId);
 		// Resolved before the target-kind guard so the guard reads the pinned
 		// definition's declared policy (design D1) instead of comparing
@@ -312,497 +700,323 @@ export class WorkflowEngine {
 		validateSnapshot(snapshot, definition, [], this.registry);
 		const storeTarget =
 			wikiOnlyTarget || researchTarget ? input.repo : repository;
-		this.initialize(storeTarget);
-		const db = openStore(storeTarget);
-		try {
-			db.exec("BEGIN IMMEDIATE");
-			if (
-				db
-					.query("SELECT 1 FROM workflow_instances WHERE id=?")
-					.get(input.workflowId)
-			)
-				throw new WorkflowRuntimeError(
-					"already-exists",
-					`workflow already exists: ${input.workflowId}`,
-				);
-			db.query(
-				"INSERT INTO workflow_instances VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-			).run(
-				workflowId,
-				startChangeId,
-				repository,
-				worktree,
-				definition.id,
-				definition.version,
-				definition.digest,
-				0,
-				snapshot.status,
-				snapshot.currentStep,
-				json(snapshot),
-				at,
-				at,
-			);
-			db.query("INSERT INTO workflow_events VALUES (?,?,?,?,?,?)").run(
-				workflowId,
-				0,
-				"workflow.started",
-				json({ kind: "developer" }),
-				json({ definition: snapshot.definition }),
-				at,
-			);
-			if (input.mode || wikiOnlyTarget || researchTarget)
-				enqueue(
-					db,
-					snapshot,
-					"workspace.setup",
-					`workspace:${workflowId}:setup`,
-					{
-						mode: input.mode ?? (researchTarget ? "research" : "wiki"),
-						sameCheckout,
-						branch: snapshot.metadata.branch,
-						baseCommit: snapshot.metadata.baseCommit,
-						...(wikiOnlyTarget ? { wikiRoot: worktree } : {}),
-					},
-				);
-			else enterStep(db, snapshot, definition, this.registry, this.now);
-			writeSnapshot(db, snapshot);
-			db.exec("COMMIT");
-		} catch (error) {
-			rollback(db);
-			throw error;
-		} finally {
-			db.close();
-		}
-		this.telemetry(snapshot, "workflow.started");
-		this.onCommitted(storeTarget);
-		return {
-			snapshot,
-			view: viewById(storeTarget, workflowId, this.registry, this.now),
-		};
+		return { snapshot, storeTarget, sameCheckout };
 	}
-	dispatch(repo: string, raw: unknown): DispatchResult {
-		const command = commandContract.parse(raw);
-		// Legacy domain import is a write operation and intentionally happens
-		// outside the command transaction. Observation never performs it.
-		this.initialize(
-			repo,
-			"workflowId" in command ? command.workflowId : undefined,
+
+	private commitStart(
+		db: import("bun:sqlite").Database,
+		input: StartWorkflowInput,
+		snapshot: WorkflowSnapshot,
+		sameCheckout: boolean,
+	): WorkflowSnapshot {
+		if (
+			db
+				.query("SELECT 1 FROM workflow_instances WHERE id=?")
+				.get(input.workflowId)
+		)
+			throw new WorkflowRuntimeError(
+				"already-exists",
+				`workflow already exists: ${input.workflowId}`,
+			);
+		// Sample the creation timestamp after the writer lock is acquired so the
+		// durable timestamps never reflect time spent waiting for it.
+		const at = nowIso(this.now);
+		snapshot.metadata.createdAt = at;
+		snapshot.metadata.updatedAt = at;
+		snapshot.metadata.stepEnteredAt = at;
+		db.query(
+			"INSERT INTO workflow_instances VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+		).run(
+			input.workflowId,
+			snapshot.metadata.changeId,
+			snapshot.metadata.repository,
+			snapshot.metadata.worktree,
+			snapshot.definition.id,
+			snapshot.definition.version,
+			snapshot.definition.digest,
+			0,
+			snapshot.status,
+			snapshot.currentStep,
+			json(snapshot),
+			at,
+			at,
 		);
-		// Read and validate bounded agent evidence before opening the writer
-		// transaction. The reducer repeats the final integrity check after reload
-		// so replacement during the race window is rejected.
-		let preparedHandoff: PreparedHandoffEvidence | undefined;
-		let handoffWorktree: string | undefined;
-		if (command.type === "agent.handoff" && command.outcome === "complete") {
-			const observedRun = storeGetRun(repo, command.runId);
-			const observed = storeGetSnapshot(
-				repo,
-				observedRun.workflowId,
-				this.registry,
-				this.now,
-			);
-			handoffWorktree =
-				observed.definition.id === "wiki-comments"
-					? wikiWorkflowDataRoot()
-					: observed.metadata.worktree;
-			const preparedArtifact = prepareHandoffArtifact(
-				repo,
-				command,
-				this.now,
-				handoffWorktree,
-			);
-			const evidenceStep = this.registry.stepForDefinition(
-				this.registry.definition(
-					observed.definition.id,
-					observed.definition.version,
-					observed.definition.digest,
-				),
-				observed.currentStep,
-			);
-			let evidenceSnapshot = observed;
-			if (
-				preparedArtifact &&
-				(observed.currentStep === "core.plan" ||
-					observed.currentStep === "fusion.consolidate")
-			) {
-				let primaryChangeId: string;
-				try {
-					primaryChangeId = planResult.parse(
-						preparedArtifact.output,
-					).primaryChangeId;
-				} catch (error) {
-					throw new WorkflowRuntimeError(
-						"entry-guard",
-						`plan output must declare a primary change id: ${String((error as Error).message)}`,
-					);
-				}
-				evidenceSnapshot = {
-					...observed,
-					metadata: { ...observed.metadata, changeId: primaryChangeId },
-				};
-			}
-			const preparedStepEvidence = prepareStepEvidence(evidenceSnapshot);
-			if (evidenceStep.behavior?.validateEvidence)
-				evidenceStep.behavior.validateEvidence({
-					snapshot: evidenceSnapshot,
-					evidence: preparedStepEvidence,
-				});
-			const sourceBaselineFingerprint =
-				evidenceSnapshot.definition.id === "wiki" ||
-				evidenceSnapshot.definition.id === "research"
-					? validateSourceBaseline(evidenceSnapshot)
-					: undefined;
-			preparedHandoff = {
-				stepEvidence: preparedStepEvidence,
-				...(preparedArtifact
-					? {
-							artifactDigest: preparedArtifact.digest,
-							artifactOutput: preparedArtifact.output,
-						}
-					: {}),
-				...(observed.currentStep === "core.triage"
-					? { changedFiles: changedFilesIn(observed) }
-					: {}),
-			};
-			if (sourceBaselineFingerprint) {
-				preparedHandoff.sourceFingerprint = sourceBaselineFingerprint;
-				const finalSourceFingerprint = sourceContentFingerprint(
-					observed.metadata.repository,
-					observed.metadata.wikiRoot,
-				);
-				if (finalSourceFingerprint !== preparedHandoff.sourceFingerprint)
-					throw new WorkflowRuntimeError(
-						"source-isolation",
-						"source content changed during handoff preparation",
-					);
-			}
-			if (observed.currentStep === "core.triage") {
-				const finalChangedFiles = changedFilesIn(observed);
-				if (
-					JSON.stringify(finalChangedFiles) !==
-					JSON.stringify(preparedHandoff.changedFiles)
-				)
-					throw new WorkflowRuntimeError(
-						"triage",
-						"changed-file scope changed during handoff preparation",
-					);
-				preparedHandoff.changedFiles = finalChangedFiles;
-			}
-		}
-		if (command.type === "agent.handoff" && command.outcome === "complete") {
-			const finalArtifact = prepareHandoffArtifact(
-				repo,
-				command,
-				this.now,
-				handoffWorktree,
-			);
-			if (
-				preparedHandoff?.artifactDigest !== undefined &&
-				(!finalArtifact ||
-					finalArtifact.digest !== preparedHandoff.artifactDigest)
-			)
-				throw new WorkflowRuntimeError(
-					"artifact",
-					"artifact changed during final handoff binding",
-				);
-		}
-		const db = openStore(repo);
-		try {
-			db.exec("BEGIN IMMEDIATE");
-			const located = this.locate(db, command);
-			const snapshot = parseSnapshot(JSON.parse(located.snapshot_json));
-			const repin =
-				command.type === "operator.repin" ||
-				(command.type === "developer.action" && command.actionId === "re-pin");
-			const migration = command.type === "operator.migrate";
-			const definition = repin
-				? this.registry.definition(
-						snapshot.definition.id,
-						snapshot.definition.version,
-					)
-				: this.registry.definition(
-						snapshot.definition.id,
-						snapshot.definition.version,
-						snapshot.definition.digest,
-					);
-			const targetDefinition = migration
-				? this.registry.definition(
-						snapshot.definition.id,
-						command.targetVersion,
-					)
-				: definition;
-			if (
-				repin &&
-				((snapshot.definition.stepRefs !== undefined &&
-					snapshot.definition.digest !== definition.digest) ||
-					JSON.stringify(snapshot.definition.stepRefs ?? null) !==
-						JSON.stringify(definition.stepRefs ?? null))
-			)
-				throw new WorkflowRuntimeError(
-					"pin-mismatch",
-					"semantic step pin changed; use validated migration instead of repin",
-				);
-			const runList = runs(db, snapshot.workflowId);
-			if (!repin)
-				validateSnapshot(snapshot, definition, runList, this.registry);
-			const event = this.reduce(
+		db.query("INSERT INTO workflow_events VALUES (?,?,?,?,?,?)").run(
+			input.workflowId,
+			0,
+			"workflow.started",
+			json({ kind: "developer" }),
+			json({ definition: snapshot.definition }),
+			at,
+		);
+		const definition = this.registry.definition(
+			snapshot.definition.id,
+			snapshot.definition.version,
+			snapshot.definition.digest,
+		);
+		const wikiOnlyTarget = isWikiWorkflowTarget(input.repo);
+		const researchTarget = isResearchWorkflowTarget(input.repo);
+		if (input.mode || wikiOnlyTarget || researchTarget)
+			enqueue(
 				db,
 				snapshot,
-				definition,
-				command,
-				preparedHandoff,
+				"workspace.setup",
+				`workspace:${input.workflowId}:setup`,
+				{
+					mode: input.mode ?? (researchTarget ? "research" : "wiki"),
+					sameCheckout,
+					branch: snapshot.metadata.branch,
+					baseCommit: snapshot.metadata.baseCommit,
+					...(wikiOnlyTarget ? { wikiRoot: snapshot.metadata.worktree } : {}),
+				},
 			);
-			snapshot.revision += 1;
-			snapshot.metadata.updatedAt = nowIso(this.now);
-			validateSnapshot(
-				snapshot,
-				targetDefinition,
-				runs(db, snapshot.workflowId),
-				this.registry,
-			);
-			writeSnapshot(db, snapshot);
-			db.query("INSERT INTO workflow_events VALUES (?,?,?,?,?,?)").run(
-				snapshot.workflowId,
-				snapshot.revision,
-				event.type,
-				json(event.actor),
-				json(event.data),
-				nowIso(this.now),
-			);
-			db.exec("COMMIT");
-			this.telemetry(
-				snapshot,
-				event.type,
-				command.type === "agent.handoff" ||
-					command.type === "agent.question" ||
-					command.type === "agent.question-expire" ||
-					command.type === "agent.research-handoff"
-					? { runId: command.runId }
-					: command.type === "effect.result"
-						? { effectId: command.effectId }
-						: undefined,
-			);
-			this.onCommitted(
-				isWikiWorkflowTarget(repo) || isResearchWorkflowTarget(repo)
-					? wikiRoot(true)
-					: canonicalRepository(repo),
-			);
-			return {
-				snapshot,
-				view: viewById(repo, snapshot.workflowId, this.registry, this.now),
-			};
-		} catch (error) {
-			rollback(db);
-			if (
-				error instanceof WorkflowRuntimeError &&
-				["unauthorized", "stale-run", "artifact", "stale-effect"].includes(
-					error.code,
-				)
-			) {
-				const subject =
-					command.type === "agent.handoff"
-						? command.runId
-						: command.type === "effect.result"
-							? command.effectId
-							: command.type;
-				try {
-					db.query(
-						"INSERT INTO workflow_security_audit VALUES (?,?,?,?,?,?)",
-					).run(
-						randomUUID(),
-						null,
-						command.type,
-						subject,
-						error.message.slice(0, 2048),
-						nowIso(this.now),
-					);
-				} catch {
-					/* bounded rejection audit is best effort */
-				}
+		else enterStep(db, snapshot, definition, this.registry, this.now);
+		writeSnapshot(db, snapshot);
+		return snapshot;
+	}
+
+	private prepareHandoff(
+		repo: string,
+		command: Extract<WorkflowCommand, { type: "agent.handoff" }>,
+	): { preparedHandoff: PreparedHandoffEvidence; handoffWorktree: string } {
+		const observedRun = storeGetRun(repo, command.runId);
+		const observed = storeGetSnapshot(
+			repo,
+			observedRun.workflowId,
+			this.registry,
+			this.now,
+		);
+		const handoffWorktree =
+			observed.definition.id === "wiki-comments"
+				? wikiWorkflowDataRoot()
+				: observed.metadata.worktree;
+		const preparedArtifact = prepareHandoffArtifact(
+			repo,
+			command,
+			this.now,
+			handoffWorktree,
+		);
+		const evidenceStep = this.registry.stepForDefinition(
+			this.registry.definition(
+				observed.definition.id,
+				observed.definition.version,
+				observed.definition.digest,
+			),
+			observed.currentStep,
+		);
+		let evidenceSnapshot = observed;
+		if (
+			preparedArtifact &&
+			(observed.currentStep === "core.plan" ||
+				observed.currentStep === "fusion.consolidate")
+		) {
+			let primaryChangeId: string;
+			try {
+				primaryChangeId = planResult.parse(
+					preparedArtifact.output,
+				).primaryChangeId;
+			} catch (error) {
+				throw new WorkflowRuntimeError(
+					"entry-guard",
+					`plan output must declare a primary change id: ${String((error as Error).message)}`,
+				);
 			}
-			throw error;
-		} finally {
-			db.close();
+			evidenceSnapshot = {
+				...observed,
+				metadata: { ...observed.metadata, changeId: primaryChangeId },
+			};
 		}
-	}
-	status(repo: string, workflowId: string): WorkflowView {
-		return viewStatus(repo, workflowId, this.registry, this.now);
-	}
-	previewRepair(repo: string, workflowId: string): RepairPreview[] {
-		return viewPreviewRepair(repo, workflowId, this.registry);
-	}
-	previewMigration(
-		repo: string,
-		workflowId: string,
-		targetVersion: number,
-	): MigrationPreview {
-		return viewPreviewMigration(repo, workflowId, targetVersion, this.registry);
-	}
-	effectIsLive(repo: string, effectId: string, lease: string): boolean {
-		return storeEffectIsLive(repo, effectId, lease, this.now);
-	}
-	renewEffect(
-		repo: string,
-		effectId: string,
-		lease: string,
-		leaseMs = 30_000,
-	): boolean {
-		this.initialize(repo);
-		if (!Number.isFinite(leaseMs) || leaseMs <= 0)
-			throw new WorkflowRuntimeError(
-				"invalid-input",
-				"lease duration must be positive",
+		const preparedStepEvidence = prepareStepEvidence(evidenceSnapshot);
+		if (evidenceStep.behavior?.validateEvidence)
+			evidenceStep.behavior.validateEvidence({
+				snapshot: evidenceSnapshot,
+				evidence: preparedStepEvidence,
+			});
+		const sourceBaselineFingerprint =
+			evidenceSnapshot.definition.id === "wiki" ||
+			evidenceSnapshot.definition.id === "research"
+				? validateSourceBaseline(evidenceSnapshot)
+				: undefined;
+		const preparedHandoff: PreparedHandoffEvidence = {
+			stepEvidence: preparedStepEvidence,
+			...(preparedArtifact
+				? {
+						artifactDigest: preparedArtifact.digest,
+						artifactOutput: preparedArtifact.output,
+					}
+				: {}),
+			...(observed.currentStep === "core.triage"
+				? { changedFiles: changedFilesIn(observed) }
+				: {}),
+		};
+		if (sourceBaselineFingerprint) {
+			preparedHandoff.sourceFingerprint = sourceBaselineFingerprint;
+			const finalSourceFingerprint = sourceContentFingerprint(
+				observed.metadata.repository,
+				observed.metadata.wikiRoot,
 			);
-		return storeRenewEffect(repo, effectId, lease, leaseMs, this.now);
+			if (finalSourceFingerprint !== preparedHandoff.sourceFingerprint)
+				throw new WorkflowRuntimeError(
+					"source-isolation",
+					"source content changed during handoff preparation",
+				);
+		}
+		if (observed.currentStep === "core.triage") {
+			const finalChangedFiles = changedFilesIn(observed);
+			if (
+				JSON.stringify(finalChangedFiles) !==
+				JSON.stringify(preparedHandoff.changedFiles)
+			)
+				throw new WorkflowRuntimeError(
+					"triage",
+					"changed-file scope changed during handoff preparation",
+				);
+			preparedHandoff.changedFiles = finalChangedFiles;
+		}
+		return { preparedHandoff, handoffWorktree };
 	}
-	claimEffects(repo: string, limit = 10, leaseMs = 30_000): ClaimedEffect[] {
-		this.initialize(repo);
-		const db = openStore(repo);
-		const claimed: ClaimedEffect[] = [];
-		try {
-			db.exec("BEGIN IMMEDIATE");
-			const at = this.now();
-			const rows = db
-				.query(
-					`SELECT * FROM workflow_outbox AS ready WHERE ((ready.status IN ('pending','retry') AND ready.attempts < ready.max_attempts AND (ready.next_attempt_at IS NULL OR ready.next_attempt_at<=?)) OR (ready.status='running' AND ready.lease_expires_at<=?)) AND NOT (ready.kind IN ('delivery.commit','delivery.push') AND EXISTS (SELECT 1 FROM workflow_outbox AS promotion WHERE promotion.workflow_id=ready.workflow_id AND promotion.kind='wiki.verify' AND promotion.status<>'completed')) ORDER BY ready.rowid LIMIT ?`,
+
+	private commitDispatch(
+		db: import("bun:sqlite").Database,
+		command: WorkflowCommand,
+		preparedHandoff?: PreparedHandoffEvidence,
+	): CommittedDispatch {
+		const located = this.locate(db, command);
+		const snapshot = parseSnapshot(JSON.parse(located.snapshot_json));
+		const repin =
+			command.type === "operator.repin" ||
+			(command.type === "developer.action" && command.actionId === "re-pin");
+		const migration = command.type === "operator.migrate";
+		const definition = repin
+			? this.registry.definition(
+					snapshot.definition.id,
+					snapshot.definition.version,
 				)
-				.all(at.toISOString(), at.toISOString(), limit) as EffectRow[];
-			for (const row of rows) {
-				const owner = instance(db, row.workflow_id);
-				const snapshot = parseSnapshot(JSON.parse(owner.snapshot_json));
-				const definition = this.registry.definition(
+			: this.registry.definition(
 					snapshot.definition.id,
 					snapshot.definition.version,
 					snapshot.definition.digest,
 				);
-				const runList = runs(db, snapshot.workflowId);
-				validateSnapshot(snapshot, definition, runList, this.registry);
-				validateEffect(row, snapshot, definition, runList, this.registry);
-				if (row.status === "running" && row.attempts >= row.max_attempts) {
-					const diagnostic = `effect ${row.kind} exhausted automatic attempts after lease expiry`;
-					db.query(
-						"UPDATE workflow_outbox SET status='failed', lease=NULL, lease_expires_at=NULL, last_error=? WHERE id=? AND status='running' AND lease_expires_at<=?",
-					).run(diagnostic, row.id, at.toISOString());
-					snapshot.revision += 1;
-					snapshot.status = "attention-required";
-					snapshot.attention = [diagnostic];
-					snapshot.metadata.updatedAt = at.toISOString();
-					validateSnapshot(snapshot, definition, runList, this.registry);
-					writeSnapshot(db, snapshot);
-					db.query("INSERT INTO workflow_events VALUES (?,?,?,?,?,?)").run(
-						snapshot.workflowId,
-						snapshot.revision,
-						"effect.exhausted",
-						json({ kind: "system", effectId: row.id }),
-						json({ effectId: row.id, kind: row.kind, diagnostic }),
-						at.toISOString(),
-					);
-					continue;
-				}
-				const lease = randomUUID();
-				const expires = new Date(at.getTime() + leaseMs).toISOString();
+		const targetDefinition = migration
+			? this.registry.definition(snapshot.definition.id, command.targetVersion)
+			: definition;
+		if (
+			repin &&
+			((snapshot.definition.stepRefs !== undefined &&
+				snapshot.definition.digest !== definition.digest) ||
+				JSON.stringify(snapshot.definition.stepRefs ?? null) !==
+					JSON.stringify(definition.stepRefs ?? null))
+		)
+			throw new WorkflowRuntimeError(
+				"pin-mismatch",
+				"semantic step pin changed; use validated migration instead of repin",
+			);
+		const runList = runs(db, snapshot.workflowId);
+		if (!repin) validateSnapshot(snapshot, definition, runList, this.registry);
+		const event = this.reduce(
+			db,
+			snapshot,
+			definition,
+			command,
+			preparedHandoff,
+		);
+		snapshot.revision += 1;
+		snapshot.metadata.updatedAt = nowIso(this.now);
+		validateSnapshot(
+			snapshot,
+			targetDefinition,
+			runs(db, snapshot.workflowId),
+			this.registry,
+		);
+		writeSnapshot(db, snapshot);
+		db.query("INSERT INTO workflow_events VALUES (?,?,?,?,?,?)").run(
+			snapshot.workflowId,
+			snapshot.revision,
+			event.type,
+			json(event.actor),
+			json(event.data),
+			nowIso(this.now),
+		);
+		return { snapshot, event };
+	}
+
+	private commitClaim(
+		db: import("bun:sqlite").Database,
+		limit: number,
+		leaseMs: number,
+	): ClaimedEffect[] {
+		const claimed: ClaimedEffect[] = [];
+		const at = this.now();
+		const rows = db
+			.query(
+				`SELECT * FROM workflow_outbox AS ready WHERE ((ready.status IN ('pending','retry') AND ready.attempts < ready.max_attempts AND (ready.next_attempt_at IS NULL OR ready.next_attempt_at<=?)) OR (ready.status='running' AND ready.lease_expires_at<=?)) AND NOT (ready.kind IN ('delivery.commit','delivery.push') AND EXISTS (SELECT 1 FROM workflow_outbox AS promotion WHERE promotion.workflow_id=ready.workflow_id AND promotion.kind='wiki.verify' AND promotion.status<>'completed')) ORDER BY ready.rowid LIMIT ?`,
+			)
+			.all(at.toISOString(), at.toISOString(), limit) as EffectRow[];
+		for (const row of rows) {
+			const owner = instance(db, row.workflow_id);
+			const snapshot = parseSnapshot(JSON.parse(owner.snapshot_json));
+			const definition = this.registry.definition(
+				snapshot.definition.id,
+				snapshot.definition.version,
+				snapshot.definition.digest,
+			);
+			const runList = runs(db, snapshot.workflowId);
+			validateSnapshot(snapshot, definition, runList, this.registry);
+			validateEffect(row, snapshot, definition, runList, this.registry);
+			if (row.status === "running" && row.attempts >= row.max_attempts) {
+				const diagnostic = `effect ${row.kind} exhausted automatic attempts after lease expiry`;
 				db.query(
-					"UPDATE workflow_outbox SET status='running', attempts=attempts+1, lease=?, lease_expires_at=? WHERE id=?",
-				).run(lease, expires, row.id);
-				const effect = {
-					...effectFromRow({
-						...row,
-						status: "running",
-						attempts: row.attempts + 1,
-						lease,
-						lease_expires_at: expires,
-					}),
-					lease,
-				} as ClaimedEffect;
-				if (effect.kind === "agent.launch") {
-					const runId = String(
-						(effect.payload as { runId?: string }).runId ?? "",
-					);
-					const run = runList.find((item) => item.id === runId);
-					if (!run)
-						throw new Error(`agent.launch references unknown run ${runId}`);
-					if (!run.capabilityHash) {
-						const token = randomBytes(32).toString("base64url");
-						db.query(
-							"UPDATE workflow_runs SET capability_hash=? WHERE id=? AND status IN ('pending','working')",
-						).run(hashToken(token), runId);
-						effect.runToken = token;
-					}
-				}
-				claimed.push(effect);
+					"UPDATE workflow_outbox SET status='failed', lease=NULL, lease_expires_at=NULL, last_error=? WHERE id=? AND status='running' AND lease_expires_at<=?",
+				).run(diagnostic, row.id, at.toISOString());
+				snapshot.revision += 1;
+				snapshot.status = "attention-required";
+				snapshot.attention = [diagnostic];
+				snapshot.metadata.updatedAt = at.toISOString();
+				validateSnapshot(snapshot, definition, runList, this.registry);
+				writeSnapshot(db, snapshot);
+				db.query("INSERT INTO workflow_events VALUES (?,?,?,?,?,?)").run(
+					snapshot.workflowId,
+					snapshot.revision,
+					"effect.exhausted",
+					json({ kind: "system", effectId: row.id }),
+					json({ effectId: row.id, kind: row.kind, diagnostic }),
+					at.toISOString(),
+				);
+				continue;
 			}
-			db.exec("COMMIT");
-			return claimed;
-		} catch (error) {
-			rollback(db);
-			throw error;
-		} finally {
-			db.close();
+			const lease = randomUUID();
+			const expires = new Date(at.getTime() + leaseMs).toISOString();
+			db.query(
+				"UPDATE workflow_outbox SET status='running', attempts=attempts+1, lease=?, lease_expires_at=? WHERE id=?",
+			).run(lease, expires, row.id);
+			const effect = {
+				...effectFromRow({
+					...row,
+					status: "running",
+					attempts: row.attempts + 1,
+					lease,
+					lease_expires_at: expires,
+				}),
+				lease,
+			} as ClaimedEffect;
+			if (effect.kind === "agent.launch") {
+				const runId = String(
+					(effect.payload as { runId?: string }).runId ?? "",
+				);
+				const run = runList.find((item) => item.id === runId);
+				if (!run)
+					throw new Error(`agent.launch references unknown run ${runId}`);
+				if (!run.capabilityHash) {
+					const token = randomBytes(32).toString("base64url");
+					db.query(
+						"UPDATE workflow_runs SET capability_hash=? WHERE id=? AND status IN ('pending','working')",
+					).run(hashToken(token), runId);
+					effect.runToken = token;
+				}
+			}
+			claimed.push(effect);
 		}
-	}
-	issueRunCapability(repo: string, runId: string): string {
-		this.initialize(repo);
-		return capabilityIssueRunCapability(repo, runId);
-	}
-	list(repo: string): WorkflowView[] {
-		return viewList(repo, this.registry, this.now);
-	}
-	getRun(repo: string, runId: string): WorkflowRun {
-		return storeGetRun(repo, runId);
-	}
-	// See store.ts's `activeRunForRole` doc comment for why this resolves by
-	// (workflowId, stepId, role) rather than a client-supplied
-	// runId/generation/token.
-	activeRunForRole(
-		repo: string,
-		workflowId: string,
-		stepId: string,
-		role: string,
-	): WorkflowRun {
-		return storeActiveRunForRole(repo, workflowId, stepId, role);
-	}
-	/** Validate the launch-bound capability for a role-scoped CLI operation. */
-	authorizeAgentCapability(
-		repo: string,
-		workflowId: string,
-		stepId: string,
-		role: string,
-		token: string,
-	): WorkflowRun {
-		return capabilityAuthorizeAgentCapability(
-			repo,
-			workflowId,
-			stepId,
-			role,
-			token,
-			this.registry,
-			this.now,
-		);
-	}
-	/** Validate a capability against the exact run that issued it. This is used
-	 * by subprocess-facing commands; role-scoped lookup is intentionally not
-	 * sufficient because a child process must not select a sibling run. */
-	authorizeExactRunCapability(
-		repo: string,
-		workflowId: string,
-		runId: string,
-		stepId: string,
-		role: string,
-		token: string,
-	): WorkflowRun {
-		return capabilityAuthorizeExactRunCapability(
-			repo,
-			workflowId,
-			runId,
-			stepId,
-			role,
-			token,
-			this.registry,
-			this.now,
-		);
-	}
-	getSnapshot(repo: string, workflowId: string): WorkflowSnapshot {
-		return storeGetSnapshot(repo, workflowId, this.registry, this.now);
+		return claimed;
 	}
 
 	private telemetry(
@@ -832,7 +1046,7 @@ export class WorkflowEngine {
 	}
 
 	private reduce(
-		db: Database,
+		db: import("bun:sqlite").Database,
 		snapshot: WorkflowSnapshot,
 		definition: CompiledWorkflowDefinition,
 		command: WorkflowCommand,
@@ -899,7 +1113,10 @@ export class WorkflowEngine {
 			return resume(db, snapshot, definition, command, this.registry, this.now);
 		throw new WorkflowRuntimeError("invalid-command", "unsupported command");
 	}
-	private locate(db: Database, command: WorkflowCommand): InstanceRow {
+	private locate(
+		db: import("bun:sqlite").Database,
+		command: WorkflowCommand,
+	): InstanceRow {
 		if (command.type === "agent.handoff") {
 			const row = db
 				.query("SELECT workflow_id FROM workflow_runs WHERE id=?")
