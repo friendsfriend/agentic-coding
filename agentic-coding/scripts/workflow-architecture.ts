@@ -52,6 +52,7 @@ export interface LayerException {
 
 const DOMAIN_FILES = [
 	"workflow/contracts.ts",
+	"workflow/schema.ts", // Effect Schema-backed contract decoding (pure, declarative); the contract facades delegate here
 	"workflow/format.ts",
 	"workflow/registry.ts",
 	"workflow/embedded.generated.ts",

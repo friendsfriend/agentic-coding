@@ -20,3 +20,13 @@ Rules of thumb:
 ## Workflow architecture
 
 See [`agentic-coding/docs/workflow-architecture.md`](agentic-coding/docs/workflow-architecture.md) for the workflow layer map and step checklist. Role knowledge belongs in `agentic-coding/src/workflow/steps/`; the engine, CLI, and dashboard must read registered step behavior rather than duplicate role tables.
+
+## Workflow Effect conventions
+
+The workflow layer is migrating toward Effect. The single guide for writing/editing workflow code is [`agentic-coding/docs/workflow-effect.md`](agentic-coding/docs/workflow-effect.md) (locked Effect 3.22.2; one idiom per operation/error/schema/service/scope/test boundary). The module/caller inventory and migration-only bridge list live in [`agentic-coding/docs/workflow-effect-migration.md`](agentic-coding/docs/workflow-effect-migration.md).
+
+Exceptions, stated explicitly:
+
+- **Pure domain stays plain TypeScript.** Graph/step/projection/formatting functions are not wrapped in Effect; do not add an `effect()` wrapper or service factory.
+- **Durable outbox vs Effect programs differ.** Outbox records and the engine's durable retries are not generic `Effect.retry`; only a genuine `infrastructure` failure is retryable through the outbox, never a defect.
+- **Native/Promise I/O belongs in boundary adapters** (`src/workflow/effects.ts`, `adapters.ts`), not a second orchestration style.

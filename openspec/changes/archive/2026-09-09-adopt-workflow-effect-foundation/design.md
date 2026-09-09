@@ -38,7 +38,7 @@ Create `docs/workflow-effect.md`, linked from root `AGENTS.md` and workflow READ
 
 State explicitly: outbox records and `Effect` programs are different concepts; durable retries are not generic `Effect.retry`; pure step behavior remains pure; no nested runtime execution; Promise/native I/O belongs in boundary adapters. Services are introduced only when a concrete production boundary is migrated, using Layers at composition roots rather than throughout domain code.
 
-Record a source inventory by module group in `docs/workflow-effect-migration.md`: contracts/definitions, store/kernel/reducers/security, startup/config/profiles, runner/adapters/credentials/wiki/assets, telemetry, CLI, and workflow-facing TUI/shared clients. Each entry names its owning phase, callers, pure/native boundary exceptions, and migration-only bridges. Record baseline outcomes for the two agent tasks in the roadmap. This is a small evaluation record, not a benchmark framework.
+Record a source inventory by module group in `docs/workflow-effect-migration.md`: contracts/definitions, store/kernel/reducers/security, startup/config/profiles, runner/adapters/credentials/wiki/assets, telemetry, CLI, and workflow-facing TUI/shared clients. Each entry names its owning phase, callers, pure/native boundary exceptions, and migration-only bridges. This is a small evaluation record, not a benchmark framework. Baseline and final comparison outcomes for the two agent tasks are evaluated in a separate change; their protocol/template live in `docs/workflow-effect-baseline.md`.
 
 ## Risks / Trade-offs
 
