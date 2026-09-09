@@ -13,6 +13,7 @@ import {
 	type StepDefinition,
 	WorkflowRegistry,
 } from "../src/workflow/registry.ts";
+import { prepareStepEvidence } from "../src/workflow/runtime/step-evidence.ts";
 import { runtimeTest } from "../src/workflow/runtime.ts";
 import {
 	assertStepBehaviorCoverage,
@@ -10885,7 +10886,10 @@ describe("workflow step behavior hooks (move-step-semantics-to-behavior-hooks)",
 			const snap = withMetadata("openspec-full", { worktree, changeId });
 			for (const stepId of ["core.plan", "fusion.consolidate"]) {
 				expect(() =>
-					stepBehavior(stepId).validateEvidence?.({ snapshot: snap }),
+					stepBehavior(stepId).validateEvidence?.({
+						snapshot: snap,
+						evidence: prepareStepEvidence(snap),
+					}),
 				).toThrow("planning artifact invalid: proposal.md");
 				writeChange(worktree, changeId, {
 					"proposal.md": "why",
@@ -10893,13 +10897,19 @@ describe("workflow step behavior hooks (move-step-semantics-to-behavior-hooks)",
 					"tasks.md": "- [ ] task",
 				});
 				expect(() =>
-					stepBehavior(stepId).validateEvidence?.({ snapshot: snap }),
+					stepBehavior(stepId).validateEvidence?.({
+						snapshot: snap,
+						evidence: prepareStepEvidence(snap),
+					}),
 				).toThrow("planning requires at least one OpenSpec scenario");
 				writeChange(worktree, changeId, {
 					"specs/x/spec.md": "#### Scenario: works\nok\n",
 				});
 				expect(() =>
-					stepBehavior(stepId).validateEvidence?.({ snapshot: snap }),
+					stepBehavior(stepId).validateEvidence?.({
+						snapshot: snap,
+						evidence: prepareStepEvidence(snap),
+					}),
 				).not.toThrow();
 				fs.rmSync(path.join(worktree, "openspec", "changes", changeId), {
 					recursive: true,
@@ -10919,6 +10929,7 @@ describe("workflow step behavior hooks (move-step-semantics-to-behavior-hooks)",
 			expect(() =>
 				stepBehavior("core.implementation").validateEvidence?.({
 					snapshot: openspecSnap,
+					evidence: prepareStepEvidence(openspecSnap),
 				}),
 			).toThrow("implementation requires completed OpenSpec tasks");
 			const noOpenspecSnap = withMetadata("no-openspec", {
@@ -10928,12 +10939,14 @@ describe("workflow step behavior hooks (move-step-semantics-to-behavior-hooks)",
 			expect(() =>
 				stepBehavior("core.implementation").validateEvidence?.({
 					snapshot: noOpenspecSnap,
+					evidence: prepareStepEvidence(noOpenspecSnap),
 				}),
 			).not.toThrow();
 			writeChange(worktree, changeId, { "tasks.md": "- [x] done\n" });
 			expect(() =>
 				stepBehavior("core.implementation").validateEvidence?.({
 					snapshot: openspecSnap,
+					evidence: prepareStepEvidence(openspecSnap),
 				}),
 			).not.toThrow();
 		});
@@ -10944,7 +10957,10 @@ describe("workflow step behavior hooks (move-step-semantics-to-behavior-hooks)",
 			const snap = withMetadata("openspec-full", { worktree, changeId });
 			writeChange(worktree, changeId, { "proposal.md": "why" });
 			expect(() =>
-				stepBehavior("core.archive").validateEvidence?.({ snapshot: snap }),
+				stepBehavior("core.archive").validateEvidence?.({
+					snapshot: snap,
+					evidence: prepareStepEvidence(snap),
+				}),
 			).toThrow("archive move not found");
 			fs.rmSync(path.join(worktree, "openspec", "changes", changeId), {
 				recursive: true,
@@ -10955,7 +10971,10 @@ describe("workflow step behavior hooks (move-step-semantics-to-behavior-hooks)",
 				{ recursive: true },
 			);
 			expect(() =>
-				stepBehavior("core.archive").validateEvidence?.({ snapshot: snap }),
+				stepBehavior("core.archive").validateEvidence?.({
+					snapshot: snap,
+					evidence: prepareStepEvidence(snap),
+				}),
 			).not.toThrow();
 		});
 	});

@@ -35,6 +35,15 @@
 			"formatter": {
 				"enabled": false
 			}
+		},
+		{
+			"includes": ["test/fixtures/source-layer-boundaries/**"],
+			"linter": {
+				"enabled": false
+			},
+			"formatter": {
+				"enabled": false
+			}
 		}
 	]
 }

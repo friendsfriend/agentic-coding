@@ -1,7 +1,6 @@
 import type { StepBehavior } from "./types.ts";
 import {
 	type PreparedStepEvidence,
-	prepareStepEvidence,
 	validateArchiveEvidence,
 } from "./validation.ts";
 
@@ -115,11 +114,8 @@ export const lifecycleBehaviors: Readonly<Record<string, StepBehavior>> = {
 	"core.archive": {
 		roles: () => ["archive"],
 		candidateRoles: () => ["archive"],
-		validateEvidence: ({ snapshot, evidence }) =>
-			validateArchiveEvidence(
-				(evidence as PreparedStepEvidence | undefined) ??
-					prepareStepEvidence(snapshot),
-			),
+		validateEvidence: ({ evidence }) =>
+			validateArchiveEvidence(evidence as PreparedStepEvidence),
 		acceptsCommentsContext: true,
 	},
 };

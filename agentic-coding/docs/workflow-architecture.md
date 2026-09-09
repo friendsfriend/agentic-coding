@@ -356,6 +356,119 @@ row):
   private method on `WorkflowEngine` in `engine.ts` instead of widening this
   contract.
 
+## Source-layer boundaries (enforced)
+
+`test/workflow-source-layer-boundaries.test.ts` is a runnable architecture
+check over all of `src/` (`.ts` and `.tsx`), backed by
+`scripts/workflow-module-graph.ts` (AST import scan) and
+`scripts/workflow-architecture.ts` (layer policy). It enforces the documented
+dependency direction below; the docs and the tests are the only surface — no
+runtime code depends on it.
+
+### Layer matrix
+
+| Layer | Paths | Owns |
+| --- | --- | --- |
+| **domain** (pure) | `workflow/steps/`, `workflow/definitions/`, `workflow/contracts.ts`, `workflow/format.ts`, `workflow/registry.ts`, `workflow/embedded.generated.ts`, `workflow/definitions.ts` | Pure step behavior, definitions, contracts, structural registry validation, and the generated instruction-asset data module. |
+| **runtime** | `workflow/runtime/`, `workflow/runtime.ts`, `workflow/effects.ts`, `workflow/effect-runner.ts`, `workflow/secure-fs.ts`, `workflow/paths.ts`, `workflow/assets.ts`, `workflow/assignment.ts`, `workflow/observability.ts`, `workflow/wiki.ts`, `workflow/adapters.ts`, `workflow/credentials.ts`, `workflow/profiles.ts`, `workflow/agent-extensions.ts` | Persistence, engine internals, effect execution, and external I/O services (git inspection, wiki data, adapters, credentials, agent-extension config). |
+| **application** | `workflow/startup.ts`, `workflow/operations.ts` | Shared orchestration both the CLI and the dashboard compose: startup/validation routing, the in-process engine factory, effect draining, and project listing (`operations.ts`). |
+| **cli** | `workflow/cli/`, `workflow/cli.ts` | Command parsing, dispatch (`run.ts`), command modules, and git/registry/pane helpers. |
+| **tui-feature** | `tui/dash/`, `tui/otel/` | Dashboard and observability feature implementations. |
+| **tui-shared** | `tui/shared/`, `tui/themes/`, `tui/clipboard.ts`, `tui/lifecycle.ts` | Shared presentation primitives and theme data. |
+| **tui-app** | remaining `tui/` files | TUI shell entrypoint (`index.tsx`) and lifecycle components. |
+| **root** | `cli.ts`, `herdr-client.ts` | Composition roots and foundational clients. |
+
+Allowed directions (anything else fails, **including type-only imports**):
+
+- `domain` → `domain`
+- `runtime` → `domain`, `runtime`, `root`
+- `application` → `domain`, `runtime`, `application`, `cli`, `root` — application
+  orchestration is the **only** layer allowed to compose CLI internals (git,
+  registry, pane); backend (`domain`/`runtime`) and TUI never see the CLI.
+- `cli` → `domain`, `runtime`, `application`, `cli`, `root`
+- `tui-feature` → `domain`, `runtime`, `application`, `root`, `tui-shared`, `tui-feature`
+  (the observability app composes the dashboard feature; features never import
+  CLI command modules or barrels)
+- `tui-shared` → `tui-shared`, `root`
+- `tui-app` → everything TUI plus typed engine views and application operations
+- `root` → anything
+
+The explicitly forbidden directions the tests pin with negative fixtures:
+dashboard/OTEL importing CLI orchestration (identifies `operations.ts` as the
+application boundary to use instead), backend importing presentation types,
+shared primitives importing feature implementations, and pure `domain`
+modules reaching anything outside `domain`.
+
+### Pure-domain guardrails
+
+`domain` modules may not depend — directly or transitively, type-only edges
+included — on persistence, external effects, filesystem/process/network I/O,
+presentation, or ambient clocks. The check reports the full dependency path to
+the first forbidden boundary. In guarded pure modules the check also rejects:
+
+- directly imported I/O builtins (`node:fs`, `node:fs/promises`,
+  `node:child_process`, `node:net`, `node:dgram`, `node:http`, `node:https`,
+  `node:tls`, `node:readline`, `node:tty`, `node:worker_threads`,
+  `node:sqlite`, `bun:ffi`, `bun:sqlite`); pure-safe builtins such as
+  `node:path` and `node:crypto` stay allowed;
+- recognized ambient I/O/clock globals with source locations: `fetch`,
+  `Bun.spawn`, `Bun.spawnSync`, `Bun.write`, `Bun.read`, `Bun.file`,
+  `process.cwd`, `process.chdir`, `process.exit`, `process.stdout`,
+  `process.stderr`, `process.stdin`, `Date.now`, `new Date()`;
+- computed module loading (`import(<expression>)` / `require(<expression>)`),
+  which escapes static resolution.
+
+A step hook using *supplied* typed validated evidence and an explicitly
+supplied timestamp passes. These are bounded static guardrails — they are not
+a sandbox and not a whole-program purity proof: aliased globals or arbitrary
+JavaScript runtime behavior can escape them.
+
+### Import forms covered
+
+The graph helper parses `.ts` and `.tsx` with the correct TypeScript
+`ScriptKind` and resolves extensionless specifiers, explicit extensions
+`.ts`/`.tsx`/`.json`, and `index.ts`/`index.tsx`/`index.json` directory
+targets. It collects static imports/re-exports, literal `import()` calls, and
+literal `require()` calls (property calls named `require` are ignored). Two
+views are maintained:
+
+- **runtime edges** (value imports/re-exports plus literal dynamic/require
+  targets) back the cycle and parent-barrel checks;
+- **all edges** (type-only references included) back the layer-ownership and
+  purity checks, so forbidden architectural type coupling fails without ever
+  synthesizing a false runtime cycle.
+
+External/builtin targets are distinguished from project-relative ones rather
+than dropped, and unresolved project-relative runtime targets fail with an
+actionable source/specifier diagnostic.
+
+### Exception policy
+
+`checkLayerOwnership`/`checkPureDomain` take an exact-edge allowlist keyed by
+`rel-from -> rel-to` with a reviewed rationale and a removal condition. There
+is **no wildcard or historical exemption**: unused entries fail
+(`exception:unused`), and a module with one approved entry that adds a
+different forbidden edge fails that new edge independently. The production
+allowlist is currently empty — the ownership fixes below were resolved through
+intended ownership rather than exemptions:
+
+- The dashboard's `tui/dash/engine.ts` imported `engine()`, `drainEffects()`,
+  `listProjects`, and `CONTINUATION_WAIT_MS` from `workflow/cli.ts`. Those
+  moved to a new application-operations module `src/workflow/operations.ts`;
+  CLI commands (`cli/run.ts`, `cli/commands/*`) and the dashboard both consume
+  it now.
+- Step behavior validated evidence by reading files itself
+  (`steps/validation.ts` → `secure-fs.ts`). The bounded evidence reader moved
+  to `runtime/step-evidence.ts`; `steps/validation.ts` now holds only the
+  `PreparedStepEvidence` type and pure validation predicates, and behavior
+  hooks consume the evidence the runtime prepares and passes in.
+
+Run the checks with:
+
+```bash
+cd agentic-coding && bun test test/workflow-source-layer-boundaries.test.ts test/workflow-module-import-cycles.test.ts test/workflow-module-exports.test.ts
+```
+
 ## Adding a step
 
 1. Add the versioned step contract and graph references in `definitions.ts`.

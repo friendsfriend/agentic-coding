@@ -4,6 +4,7 @@
 // cli.ts (split-workflow-god-modules).
 import fs from "node:fs";
 import path from "node:path";
+import { engine } from "../../operations.ts";
 import {
 	researchWorkflowTarget,
 	type WorkflowEngine,
@@ -22,7 +23,6 @@ import {
 } from "../../wiki.ts";
 import { flag, positionals } from "../args.ts";
 import { managedAgent } from "../caller-environment.ts";
-import { engine } from "../registry.ts";
 import { WIKI_SUBCOMMANDS } from "../schema.ts";
 
 function samePath(left: string, right: string): boolean {

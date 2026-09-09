@@ -2,14 +2,14 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Herdr } from "../../herdr-client.ts";
+import type { WorkflowView } from "../../workflow/contracts.ts";
+import { loadConfig } from "../../workflow/effects.ts";
 import {
 	CONTINUATION_WAIT_MS,
 	drainEffects,
 	listProjects,
 	engine as workflowEngineFactory,
-} from "../../workflow/cli.ts";
-import type { WorkflowView } from "../../workflow/contracts.ts";
-import { loadConfig } from "../../workflow/effects.ts";
+} from "../../workflow/operations.ts";
 import { parseAgentsConfig } from "../../workflow/profiles.ts";
 import {
 	canonicalStorePath,
