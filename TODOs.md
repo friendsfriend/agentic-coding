@@ -12,17 +12,6 @@ Not for agents. This is only for humans.
 * Write herdr plugin to control coloring of tabs based on agent activity
 * Tui errors dont use the notification system anymore
 
-* Architecture improvements based on gpt 6 astra:
-  * fix effect lease lifecycle (done)
-  * unify worfklow startup context (done)
-  * version workflow behavior pins (done)
-  * version workflow migrations (done)
-  * seperate workflow observation execution (done)
-  * centralize step completion behavior (done)
-  * contsolidate-tui-primitives (done)
-  * split-dashboard-responsibilities (done)
-  * enforce-source-layer-boundaries (done)
-
 Effect switchover
  * Effect foundation, schemas, errors, agent conventions.
  * Transactional runtime migration.
