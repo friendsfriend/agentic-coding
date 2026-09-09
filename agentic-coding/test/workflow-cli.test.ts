@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { Effect } from "effect";
 import type { AgentAdapter, LaunchContext } from "../src/workflow/adapters.ts";
+import { WorkflowApplication } from "../src/workflow/application.ts";
 import {
 	AGENT_EXTENSION_SUBCOMMANDS,
 	cliTest,
@@ -288,6 +289,23 @@ describe("breaking workflow CLI surface", () => {
 			expect(identity.generation).toBe(activeRun.generation);
 			expect(identity.outputPath).toBe(activeRun.outputPath);
 			expect(identity.token).toBe(process.env.HERDR_RUN_TOKEN);
+
+			// The migrated application-root path resolves the same identity on
+			// the CLI-invocation root (complete-workflow-effect-cutover): the
+			// auth gate runs its programs through the root-owned layer/clock.
+			const application = new WorkflowApplication();
+			try {
+				const rootIdentity = cliTest.resolveHandoffIdentity(
+					workflowEngine,
+					repo,
+					application,
+				);
+				expect(rootIdentity.runId).toBe(activeRun.id);
+				expect(rootIdentity.generation).toBe(activeRun.generation);
+				expect(rootIdentity.token).toBe(process.env.HERDR_RUN_TOKEN);
+			} finally {
+				application.dispose();
+			}
 
 			delete process.env.HERDR_STEP_ID;
 			expect(() =>

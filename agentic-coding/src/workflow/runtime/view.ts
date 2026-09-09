@@ -3,7 +3,7 @@
 // out of runtime.ts (split-workflow-god-modules).
 import type { Database } from "bun:sqlite";
 import type { WorkflowView } from "../contracts.ts";
-import { parseSnapshot, WorkflowRuntimeError } from "../contracts.ts";
+import { decodeSnapshot, WorkflowRuntimeError } from "../contracts.ts";
 import type { WorkflowRegistry } from "../registry.ts";
 import type { MigrationPreview, RepairPreview } from "./engine-types.ts";
 import {
@@ -80,7 +80,7 @@ export function view(
 	} | null;
 	try {
 		const row = instance(db, id);
-		const snapshot = parseSnapshot(JSON.parse(row.snapshot_json));
+		const snapshot = decodeSnapshot(JSON.parse(row.snapshot_json));
 		const definition = registry.definition(
 			snapshot.definition.id,
 			snapshot.definition.version,
@@ -188,7 +188,7 @@ export function view(
 		if (/pin mismatch/.test(diagnostic)) {
 			try {
 				const row = instance(db, id);
-				const snapshot = parseSnapshot(JSON.parse(row.snapshot_json));
+				const snapshot = decodeSnapshot(JSON.parse(row.snapshot_json));
 				return {
 					workflowId: snapshot.workflowId,
 					changeId: snapshot.metadata.changeId,
@@ -448,7 +448,7 @@ export function previewMigration(
 	const db = openReadStore(repo);
 	try {
 		const row = instance(db, workflowId);
-		const snapshot = parseSnapshot(JSON.parse(row.snapshot_json));
+		const snapshot = decodeSnapshot(JSON.parse(row.snapshot_json));
 		const current = registry.definition(
 			snapshot.definition.id,
 			snapshot.definition.version,
@@ -562,7 +562,7 @@ export function previewRepair(
 	const db = openReadStore(repo);
 	try {
 		const row = instance(db, workflowId);
-		const snapshot = parseSnapshot(JSON.parse(row.snapshot_json));
+		const snapshot = decodeSnapshot(JSON.parse(row.snapshot_json));
 		const definition = registry.definition(
 			snapshot.definition.id,
 			snapshot.definition.version,

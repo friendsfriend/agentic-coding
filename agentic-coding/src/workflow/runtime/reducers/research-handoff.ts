@@ -9,7 +9,7 @@ import type {
 	WorkflowSnapshot,
 } from "../../contracts.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
-import { researchHandoffContract } from "../../definitions.ts";
+import { decodeResearchHandoff } from "../../definitions.ts";
 import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
@@ -43,9 +43,9 @@ export function recordResearchHandoff(
 			"research handoff recording is only available to the active core.research researcher run",
 		);
 	const run = questionRun(db, snapshot, command, now);
-	let handoff: ReturnType<typeof researchHandoffContract.parse>;
+	let handoff: ReturnType<typeof decodeResearchHandoff>;
 	try {
-		handoff = researchHandoffContract.parse(command.handoff);
+		handoff = decodeResearchHandoff(command.handoff);
 	} catch (error) {
 		throw new WorkflowRuntimeError(
 			"invalid-command",

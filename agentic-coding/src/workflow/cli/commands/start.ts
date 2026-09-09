@@ -1,9 +1,11 @@
 // The `start` command: validates workflow-specific preconditions, resolves
 // role routing (including the openspec-fusion-full planner fan-out), and
 // starts the pinned workflow definition. Moved verbatim out of cli.ts
-// (split-workflow-god-modules).
+// (split-workflow-god-modules); migrated to run Effect programs at the
+// CLI-invocation application root (complete-workflow-effect-cutover, task 2.1).
 import fs from "node:fs";
 import path from "node:path";
+import type { WorkflowApplication } from "../../application.ts";
 import type { WorkflowEngine } from "../../runtime.ts";
 import {
 	parseFusionProfiles as parseStartupFusionProfiles,
@@ -11,6 +13,8 @@ import {
 } from "../../startup.ts";
 import { flag, requireFlag } from "../args.ts";
 import { scheduleDrain } from "../drain.ts";
+
+type App = WorkflowApplication;
 
 export {
 	parseFusionProfiles,
@@ -27,6 +31,7 @@ export function parseMode(value: string | undefined): "worktree" | "checkout" {
 export async function runStart(
 	rest: string[],
 	workflowEngine: WorkflowEngine,
+	application?: App,
 ): Promise<void> {
 	const definitionId = flag(rest, "workflow") ?? "openspec-full";
 	const research = definitionId === "research";
@@ -48,11 +53,20 @@ export async function runStart(
 		preset: flag(rest, "preset"),
 		fusionProfiles,
 	});
-	workflowEngine.start(prepared.input);
+	if (application)
+		application.runSync(workflowEngine.startEffect(prepared.input));
+	else workflowEngine.start(prepared.input);
 	scheduleDrain(prepared.target);
 	console.log(
 		JSON.stringify(
-			workflowEngine.status(prepared.target, prepared.input.workflowId),
+			application
+				? application.runSync(
+						workflowEngine.statusEffect(
+							prepared.target,
+							prepared.input.workflowId,
+						),
+					)
+				: workflowEngine.status(prepared.target, prepared.input.workflowId),
 			null,
 			2,
 		),

@@ -164,10 +164,11 @@ export class EffectRunner {
 		private readonly handlers: Partial<Record<EffectKind, EffectHandler>>,
 	) {}
 	/** Serial just-in-time claims with final lease validation, but the per-claim
-	 * machinery is now one Effect execution scope: a supervised renewal fiber
-	 * using the engine clock, interruption propagation to external work, typed
-	 * failure classification, and guaranteed scope cleanup. Returns the number
-	 * of effects completed during this drain. */
+	 * machinery is one Effect execution scope (supervised renewal fiber,
+	 * interruption propagation, typed failure classification, guaranteed scope
+	 * cleanup). The Promise facade remains only for test callers; production
+	 * drainers run `drainProgram` at the application boundary directly
+	 * (complete-workflow-effect-cutover, task 3.1). */
 	async drain(
 		limit = 20,
 		leaseMs = 30_000,
@@ -178,7 +179,9 @@ export class EffectRunner {
 			this.drainProgram(limit, leaseMs, signal, onFailure),
 		);
 	}
-	private drainProgram(
+	/** The Effect drain program: run it at the CLI/dashboard application root
+	 * instead of awaiting the Promise facade. */
+	drainProgram(
 		limit: number,
 		leaseMs: number,
 		signal?: AbortSignal,
@@ -1694,14 +1697,15 @@ export interface LiveAgent {
 	tabId?: string;
 	sessionId?: string;
 }
-/**
- * True when `paneId` currently hosts a live foreground agent. Callers that
- * pick a pane by screen position (not by resolved identity) must check this
- * before treating the pane as reusable, otherwise they can hand a brand-new
- * launch a pane that is still occupied by another run's process.
- */
-export function isPaneLive(herdr: HerdrPort, paneId: string): boolean {
-	return Boolean(getLiveAgent(herdr, paneId));
+/** Async pane-liveness probe used by the pane-allocation boundary at the
+ * application root (complete-workflow-effect-cutover, task 3.1): production
+ * callers await this instead of the removed synchronous herdr probe. */
+export async function isPaneLiveAsync(
+	herdr: HerdrPort,
+	paneId: string,
+	signal?: AbortSignal,
+): Promise<boolean> {
+	return Boolean(await getLiveAgentAsync(herdr, paneId, signal));
 }
 function getLiveAgent(herdr: HerdrPort, key: string): HerdrAgent | undefined {
 	try {

@@ -3,10 +3,13 @@
 // bundle (`cliTest`). Moved out of cli.ts (split-workflow-god-modules) —
 // every command's own logic now lives under `cli/commands/*.ts` and the
 // shared `cli/*.ts` helpers; this file only parses argv, resolves shared
-// context, and dispatches.
+// context, and dispatches. The CLI invocation owns one named application
+// layer (complete-workflow-effect-cutover, task 1): the engine facade
+// consumes the root-owned layer and the owner is disposed after the command.
+import { WorkflowApplication } from "../application.ts";
 import { loadConfig } from "../effects.ts";
-import { drainEffects, engine, listProjects } from "../operations.ts";
-import type { WorkflowEngine } from "../runtime.ts";
+import { drainEffects, listProjects } from "../operations.ts";
+import { WorkflowEngine } from "../runtime.ts";
 import { flag, positional, positionals, requireFlag } from "./args.ts";
 import type { CallerEnvironment } from "./caller-environment.ts";
 import {
@@ -28,16 +31,23 @@ import { detachedDrainArgv } from "./drain.ts";
 import { help } from "./help.ts";
 import { resolveHandoffIdentity } from "./identity.ts";
 import { verificationPosition } from "./pane.ts";
+import { registry } from "./registry.ts";
 import { required, SUBCOMMANDS, validateArgs } from "./schema.ts";
 
 async function runStatus(
 	rest: string[],
 	workflowEngine: WorkflowEngine,
 	repo: string,
+	application: WorkflowApplication,
 ): Promise<void> {
+	// Migrated caller (complete-workflow-effect-cutover, task 2.1): the read
+	// runs at the CLI-invocation application root instead of the facade's own
+	// nested runtime; the external JSON protocol is unchanged.
 	console.log(
 		JSON.stringify(
-			workflowEngine.status(repo, requireFlag(rest, "workflow-id")),
+			application.runSync(
+				workflowEngine.statusEffect(repo, requireFlag(rest, "workflow-id")),
+			),
 			null,
 			2,
 		),
@@ -48,12 +58,14 @@ type CommandHandler = (
 	rest: string[],
 	workflowEngine: WorkflowEngine,
 	repo: string,
+	application: WorkflowApplication,
 ) => Promise<void> | void;
 
 const COMMAND_HANDLERS: Record<string, CommandHandler> = {
-	start: (rest, workflowEngine) => runStart(rest, workflowEngine),
+	start: (rest, workflowEngine, _repo, application) =>
+		runStart(rest, workflowEngine, application),
 	status: runStatus,
-	drain: async (rest, workflowEngine, repo) => {
+	drain: async (rest, workflowEngine, repo, application) => {
 		const limit = rest.includes("--limit")
 			? Number(requireFlag(rest, "limit"))
 			: 20;
@@ -71,7 +83,7 @@ const COMMAND_HANDLERS: Record<string, CommandHandler> = {
 			limit,
 			waitMs,
 		);
-		const views = workflowEngine.list(repo);
+		const views = application.runSync(workflowEngine.listEffect(repo));
 		const effects = views.flatMap((view) => view.effects);
 		console.log(
 			JSON.stringify({
@@ -90,10 +102,12 @@ const COMMAND_HANDLERS: Record<string, CommandHandler> = {
 		);
 	},
 	action: runAction,
-	question: (rest, workflowEngine) => runQuestion(rest, workflowEngine),
-	"research-handoff": (rest, workflowEngine) =>
-		runResearchHandoff(rest, workflowEngine),
-	handoff: (rest, workflowEngine) => runHandoff(rest, workflowEngine),
+	question: (rest, workflowEngine, _repo, application) =>
+		runQuestion(rest, workflowEngine, application),
+	"research-handoff": (rest, workflowEngine, repo, application) =>
+		runResearchHandoff(rest, workflowEngine, repo, application),
+	handoff: (rest, workflowEngine, _repo, application) =>
+		runHandoff(rest, workflowEngine, application),
 	repair: runRepair,
 	repin: runRepin,
 	migrate: runMigrate,
@@ -114,11 +128,6 @@ export async function run(argv: string[]): Promise<void> {
 	}
 	validateArgs(command, rest);
 	required(command, rest);
-	if (command === "wiki") {
-		await runWiki(rest);
-		return;
-	}
-	const workflowEngine = engine();
 	if (command === "config") {
 		console.log(JSON.stringify(loadConfig(), null, 2));
 		return;
@@ -127,10 +136,28 @@ export async function run(argv: string[]): Promise<void> {
 		console.log(JSON.stringify(listProjects()));
 		return;
 	}
-	const repo = flag(rest, "repo") ?? process.cwd();
-	const handler = COMMAND_HANDLERS[command];
-	if (!handler) throw new Error(`unknown command: ${command}`);
-	await handler(rest, workflowEngine, repo);
+	// CLI-invocation owner: one application layer for this command's bounded
+	// lifetime, shared with the engine facade instead of a nested runtime.
+	// The `wiki` command's managed write gate also runs through this root.
+	const application = new WorkflowApplication();
+	try {
+		const workflowEngine = new WorkflowEngine(
+			registry,
+			application.clock,
+			undefined,
+			application.layerOf(),
+		);
+		if (command === "wiki") {
+			await runWiki(rest, application);
+			return;
+		}
+		const repo = flag(rest, "repo") ?? process.cwd();
+		const handler = COMMAND_HANDLERS[command];
+		if (!handler) throw new Error(`unknown command: ${command}`);
+		await handler(rest, workflowEngine, repo, application);
+	} finally {
+		application.dispose();
+	}
 }
 
 export const cliTest = {
@@ -145,10 +172,15 @@ export const cliTest = {
 	detachedDrainArgv,
 	verificationPosition,
 	validateQuestionTimeout,
-	resolveHandoffIdentity: (workflowEngine: WorkflowEngine, repo: string) =>
+	resolveHandoffIdentity: (
+		workflowEngine: WorkflowEngine,
+		repo: string,
+		application?: WorkflowApplication,
+	) =>
 		resolveHandoffIdentity(
 			workflowEngine,
 			repo,
+			application,
 			process.env as CallerEnvironment,
 		),
 };

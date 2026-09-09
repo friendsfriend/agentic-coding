@@ -6,7 +6,7 @@ import type { Database } from "bun:sqlite";
 import type { WorkflowRun, WorkflowSnapshot } from "../contracts.ts";
 import {
 	type DeveloperQuestionAnswer,
-	parseDeveloperQuestionAnswer,
+	decodeDeveloperQuestionAnswer,
 	WorkflowRuntimeError,
 } from "../contracts.ts";
 import { tokenMatches } from "./capability.ts";
@@ -73,7 +73,7 @@ export function answerQuestion(
 ): { type: string; actor: unknown; data: unknown } {
 	let answer: DeveloperQuestionAnswer;
 	try {
-		answer = parseDeveloperQuestionAnswer(raw);
+		answer = decodeDeveloperQuestionAnswer(raw);
 	} catch (error) {
 		throw new WorkflowRuntimeError(
 			"invalid-command",

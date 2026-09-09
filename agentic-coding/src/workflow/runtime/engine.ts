@@ -9,31 +9,28 @@
 // Migrated to Effect (migrate-workflow-runtime-to-effect): each public
 // operation is an Effect program that requires the concrete `WorkflowStore`
 // and `WorkflowClock` services, provided at the engine composition root via
-// `engineLayer`. The class keeps its historical synchronous signatures so the
-// CLI, dashboard, drain runner, and focused tests compose the same operations
-// without a nested runtime; it is the inventoried outer runtime bridge that
-// phase 4 (`complete-workflow-effect-cutover`) removes.
+// `engineLayer`. The class keeps its historical synchronous signatures as the
+// retained in-process boundary: the CLI, dashboard, drain runner, and focused
+// tests compose the same operations without a nested runtime, and the facade
+// consumes the root-owned application layer (complete-workflow-effect-cutover).
+// Every operation is also exposed as a public Effect program (`startEffect`, …)
+// for callers that run at the named application composition root directly.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { Cause, Chunk, Effect, Exit, Option } from "effect";
+import { Cause, Chunk, Effect, Exit, type Layer, Option } from "effect";
 import {
-	commandContract,
-	parseSnapshot,
+	decodeCommand,
+	decodeSnapshot,
 	type WorkflowCommand,
 	type WorkflowRun,
 	WorkflowRuntimeError,
 	type WorkflowSnapshot,
 	type WorkflowView,
 } from "../contracts.ts";
-import { planResult } from "../definitions/contracts.ts";
+import { decodePlanResult } from "../definitions/contracts.ts";
 import { effectiveManifestPolicy } from "../definitions.ts";
-import {
-	childTrace,
-	parseTraceparent,
-	TelemetrySink,
-	traceparent,
-} from "../observability.ts";
+import { childTrace, parseTraceparent, traceparent } from "../observability.ts";
 import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
@@ -82,7 +79,12 @@ import { effectResult } from "./reducers/effect-result.ts";
 import { migrate, repair, repin, resume } from "./reducers/repair.ts";
 import { recordResearchHandoff } from "./reducers/research-handoff.ts";
 import type { WorkflowClock } from "./services.ts";
-import { engineLayer, toRuntimeError, WorkflowStore } from "./services.ts";
+import {
+	engineLayer,
+	toRuntimeError,
+	WorkflowStore,
+	WorkflowTelemetry,
+} from "./services.ts";
 import { prepareStepEvidence } from "./step-evidence.ts";
 import {
 	type EffectRow,
@@ -134,8 +136,12 @@ export class WorkflowEngine {
 		readonly registry: WorkflowRegistry,
 		private readonly now: () => Date = () => new Date(),
 		private readonly onCommitted: (repository: string) => void = () => {},
+		layer?: Layer.Layer<
+			WorkflowStore | WorkflowClock | WorkflowTelemetry,
+			never
+		>,
 	) {
-		this.layer = engineLayer(now);
+		this.layer = layer ?? engineLayer(now);
 	}
 	/** Public live clock used for lease/expiry decisions — the same `now` that
 	 * builds the store/clock layer. The effect runner schedules supervised
@@ -150,7 +156,7 @@ export class WorkflowEngine {
 		effect: Effect.Effect<
 			A,
 			WorkflowRuntimeError,
-			WorkflowStore | WorkflowClock
+			WorkflowStore | WorkflowClock | WorkflowTelemetry
 		>,
 	): A {
 		const exit = Effect.runSyncExit(effect.pipe(Effect.provide(this.layer)));
@@ -168,7 +174,16 @@ export class WorkflowEngine {
 	/** Initialize the canonical store and, when addressed, import its legacy
 	 * workflow outside any command transaction. */
 	initialize(repo: string, workflowId?: string): void {
-		this.run(this.initializeProgram(repo, workflowId));
+		this.run(this.initializeEffect(repo, workflowId));
+	}
+	/** Effect program for initializing the canonical store (and importing a
+	 * legacy workflow when addressed); run at the named application
+	 * composition root (complete-workflow-effect-cutover, task 2.1). */
+	initializeEffect(
+		repo: string,
+		workflowId?: string,
+	): Effect.Effect<void, WorkflowRuntimeError, WorkflowStore> {
+		return this.initializeProgram(repo, workflowId);
 	}
 	private initializeProgram(
 		repo: string,
@@ -213,177 +228,200 @@ export class WorkflowEngine {
 		});
 	}
 	start(input: StartWorkflowInput): DispatchResult {
+		return this.run(this.startEffect(input));
+	}
+	/** Effect program for starting a workflow; run at the named application
+	 * composition root (complete-workflow-effect-cutover, task 2.1). */
+	startEffect(
+		input: StartWorkflowInput,
+	): Effect.Effect<
+		DispatchResult,
+		WorkflowRuntimeError,
+		WorkflowStore | WorkflowTelemetry
+	> {
 		const self = this;
-		return this.run(
-			Effect.gen(function* () {
-				const store = yield* WorkflowStore;
-				const prepared = yield* Effect.try({
-					try: () => self.resolveStart(input),
-					catch: toRuntimeError,
-				});
-				yield* self.initializeProgram(prepared.storeTarget);
-				const result = yield* store.transaction(prepared.storeTarget, (db) =>
-					self.commitStart(db, input, prepared.snapshot, prepared.sameCheckout),
-				);
-				self.telemetry(result, "workflow.started");
-				self.onCommitted(prepared.storeTarget);
-				return {
-					snapshot: result,
-					view: viewById(
-						prepared.storeTarget,
-						result.workflowId,
-						self.registry,
-						self.now,
-					),
-				};
-			}),
-		);
+		return Effect.gen(function* () {
+			const store = yield* WorkflowStore;
+			const prepared = yield* Effect.try({
+				try: () => self.resolveStart(input),
+				catch: toRuntimeError,
+			});
+			yield* self.initializeProgram(prepared.storeTarget);
+			const result = yield* store.transaction(prepared.storeTarget, (db) =>
+				self.commitStart(db, input, prepared.snapshot, prepared.sameCheckout),
+			);
+			yield* self.telemetryEffect(result, "workflow.started");
+			self.onCommitted(prepared.storeTarget);
+			return {
+				snapshot: result,
+				view: viewById(
+					prepared.storeTarget,
+					result.workflowId,
+					self.registry,
+					self.now,
+				),
+			};
+		});
 	}
 	dispatch(repo: string, raw: unknown): DispatchResult {
+		return this.run(this.dispatchEffect(repo, raw));
+	}
+	/** Effect program for dispatching a workflow command; run at the named
+	 * application composition root (complete-workflow-effect-cutover, task 2.1). */
+	dispatchEffect(
+		repo: string,
+		raw: unknown,
+	): Effect.Effect<
+		DispatchResult,
+		WorkflowRuntimeError,
+		WorkflowStore | WorkflowTelemetry
+	> {
 		const self = this;
-		return this.run(
-			Effect.gen(function* () {
-				const store = yield* WorkflowStore;
-				const command = yield* Effect.try({
-					try: () => commandContract.parse(raw),
+		return Effect.gen(function* () {
+			const store = yield* WorkflowStore;
+			const command = yield* Effect.try({
+				try: () => decodeCommand(raw),
+				catch: toRuntimeError,
+			});
+			// Legacy domain import is a write operation and intentionally happens
+			// outside the command transaction. Observation never performs it.
+			yield* self.initializeProgram(
+				repo,
+				"workflowId" in command ? command.workflowId : undefined,
+			);
+			// Read and validate bounded agent evidence before opening the writer
+			// transaction. The reducer repeats the final integrity check after
+			// reload so replacement during the race window is rejected.
+			let preparedHandoff: PreparedHandoffEvidence | undefined;
+			let handoffWorktree: string | undefined;
+			if (command.type === "agent.handoff" && command.outcome === "complete") {
+				const prepared = yield* Effect.try({
+					try: () => self.prepareHandoff(repo, command),
 					catch: toRuntimeError,
 				});
-				// Legacy domain import is a write operation and intentionally happens
-				// outside the command transaction. Observation never performs it.
-				yield* self.initializeProgram(
-					repo,
-					"workflowId" in command ? command.workflowId : undefined,
-				);
-				// Read and validate bounded agent evidence before opening the writer
-				// transaction. The reducer repeats the final integrity check after
-				// reload so replacement during the race window is rejected.
-				let preparedHandoff: PreparedHandoffEvidence | undefined;
-				let handoffWorktree: string | undefined;
-				if (
-					command.type === "agent.handoff" &&
-					command.outcome === "complete"
-				) {
-					const prepared = yield* Effect.try({
-						try: () => self.prepareHandoff(repo, command),
-						catch: toRuntimeError,
-					});
-					preparedHandoff = prepared.preparedHandoff;
-					handoffWorktree = prepared.handoffWorktree;
-				}
-				if (
-					command.type === "agent.handoff" &&
-					command.outcome === "complete"
-				) {
-					yield* Effect.try({
-						try: () => {
-							const finalArtifact = prepareHandoffArtifact(
-								repo,
-								command,
-								self.now,
-								handoffWorktree,
+				preparedHandoff = prepared.preparedHandoff;
+				handoffWorktree = prepared.handoffWorktree;
+			}
+			if (command.type === "agent.handoff" && command.outcome === "complete") {
+				yield* Effect.try({
+					try: () => {
+						const finalArtifact = prepareHandoffArtifact(
+							repo,
+							command,
+							self.now,
+							handoffWorktree,
+						);
+						if (
+							preparedHandoff?.artifactDigest !== undefined &&
+							(!finalArtifact ||
+								finalArtifact.digest !== preparedHandoff.artifactDigest)
+						)
+							throw new WorkflowRuntimeError(
+								"artifact",
+								"artifact changed during final handoff binding",
 							);
-							if (
-								preparedHandoff?.artifactDigest !== undefined &&
-								(!finalArtifact ||
-									finalArtifact.digest !== preparedHandoff.artifactDigest)
-							)
-								throw new WorkflowRuntimeError(
-									"artifact",
-									"artifact changed during final handoff binding",
-								);
-						},
-						catch: toRuntimeError,
-					});
-				}
-				const committed = yield* Effect.catchAll(
-					store.transaction(repo, (db) =>
-						self.commitDispatch(db, command, preparedHandoff),
-					),
-					(error) =>
-						Effect.gen(function* () {
-							if (
-								error instanceof WorkflowRuntimeError &&
-								[
-									"unauthorized",
-									"stale-run",
-									"artifact",
-									"stale-effect",
-								].includes(error.code)
-							) {
-								const subject =
-									command.type === "agent.handoff"
-										? command.runId
-										: command.type === "effect.result"
-											? command.effectId
-											: command.type;
-								// The rejection audit is best-effort and runs separately from the
-								// workflow transaction's rollback; it never fails the command.
-								yield* Effect.catchAll(
-									store.transaction(repo, (db) => {
-										db.query(
-											"INSERT INTO workflow_security_audit VALUES (?,?,?,?,?,?)",
-										).run(
-											randomUUID(),
-											null,
-											command.type,
-											subject,
-											error.message.slice(0, 2048),
-											nowIso(self.now),
-										);
-									}),
-									() => Effect.void,
-								);
-							}
-							return yield* Effect.fail(error);
-						}),
-				);
-				// Post-commit scheduling/telemetry is separated from the committed
-				// command result: a continuation or notification failure here does not
-				// imply the durable mutation was rolled back.
-				self.telemetry(
-					committed.snapshot,
-					committed.event.type,
-					command.type === "agent.handoff" ||
-						command.type === "agent.question" ||
-						command.type === "agent.question-expire" ||
-						command.type === "agent.research-handoff"
-						? { runId: command.runId }
-						: command.type === "effect.result"
-							? { effectId: command.effectId }
-							: undefined,
-				);
-				self.onCommitted(
-					isWikiWorkflowTarget(repo) || isResearchWorkflowTarget(repo)
-						? wikiRoot(true)
-						: canonicalRepository(repo),
-				);
-				return {
-					snapshot: committed.snapshot,
-					view: viewById(
-						repo,
-						committed.snapshot.workflowId,
-						self.registry,
-						self.now,
-					),
-				};
-			}),
-		);
+					},
+					catch: toRuntimeError,
+				});
+			}
+			const committed = yield* Effect.catchAll(
+				store.transaction(repo, (db) =>
+					self.commitDispatch(db, command, preparedHandoff),
+				),
+				(error) =>
+					Effect.gen(function* () {
+						if (
+							error instanceof WorkflowRuntimeError &&
+							[
+								"unauthorized",
+								"stale-run",
+								"artifact",
+								"stale-effect",
+							].includes(error.code)
+						) {
+							const subject =
+								command.type === "agent.handoff"
+									? command.runId
+									: command.type === "effect.result"
+										? command.effectId
+										: command.type;
+							// The rejection audit is best-effort and runs separately from the
+							// workflow transaction's rollback; it never fails the command.
+							yield* Effect.catchAll(
+								store.transaction(repo, (db) => {
+									db.query(
+										"INSERT INTO workflow_security_audit VALUES (?,?,?,?,?,?)",
+									).run(
+										randomUUID(),
+										null,
+										command.type,
+										subject,
+										error.message.slice(0, 2048),
+										nowIso(self.now),
+									);
+								}),
+								() => Effect.void,
+							);
+						}
+						return yield* Effect.fail(error);
+					}),
+			);
+			// Post-commit scheduling/telemetry is separated from the committed
+			// command result: a continuation or notification failure here does not
+			// imply the durable mutation was rolled back.
+			yield* self.telemetryEffect(
+				committed.snapshot,
+				committed.event.type,
+				command.type === "agent.handoff" ||
+					command.type === "agent.question" ||
+					command.type === "agent.question-expire" ||
+					command.type === "agent.research-handoff"
+					? { runId: command.runId }
+					: command.type === "effect.result"
+						? { effectId: command.effectId }
+						: undefined,
+			);
+			self.onCommitted(
+				isWikiWorkflowTarget(repo) || isResearchWorkflowTarget(repo)
+					? wikiRoot(true)
+					: canonicalRepository(repo),
+			);
+			return {
+				snapshot: committed.snapshot,
+				view: viewById(
+					repo,
+					committed.snapshot.workflowId,
+					self.registry,
+					self.now,
+				),
+			};
+		});
 	}
 	status(repo: string, workflowId: string): WorkflowView {
-		return this.run(
-			Effect.try({
-				try: () => viewStatus(repo, workflowId, this.registry, this.now),
-				catch: toRuntimeError,
-			}),
-		);
+		return this.run(this.statusEffect(repo, workflowId));
+	}
+	/** Effect program for reading a workflow view; run at the named
+	 * application composition root (complete-workflow-effect-cutover, task 2.1). */
+	statusEffect(
+		repo: string,
+		workflowId: string,
+	): Effect.Effect<WorkflowView, WorkflowRuntimeError, never> {
+		return Effect.try({
+			try: () => viewStatus(repo, workflowId, this.registry, this.now),
+			catch: toRuntimeError,
+		});
 	}
 	previewRepair(repo: string, workflowId: string): RepairPreview[] {
-		return this.run(
-			Effect.try({
-				try: () => viewPreviewRepair(repo, workflowId, this.registry),
-				catch: toRuntimeError,
-			}),
-		);
+		return this.run(this.previewRepairEffect(repo, workflowId));
+	}
+	previewRepairEffect(
+		repo: string,
+		workflowId: string,
+	): Effect.Effect<RepairPreview[], WorkflowRuntimeError, never> {
+		return Effect.try({
+			try: () => viewPreviewRepair(repo, workflowId, this.registry),
+			catch: toRuntimeError,
+		});
 	}
 	previewMigration(
 		repo: string,
@@ -391,20 +429,32 @@ export class WorkflowEngine {
 		targetVersion: number,
 	): MigrationPreview {
 		return this.run(
-			Effect.try({
-				try: () =>
-					viewPreviewMigration(repo, workflowId, targetVersion, this.registry),
-				catch: toRuntimeError,
-			}),
+			this.previewMigrationEffect(repo, workflowId, targetVersion),
 		);
 	}
+	previewMigrationEffect(
+		repo: string,
+		workflowId: string,
+		targetVersion: number,
+	): Effect.Effect<MigrationPreview, WorkflowRuntimeError, never> {
+		return Effect.try({
+			try: () =>
+				viewPreviewMigration(repo, workflowId, targetVersion, this.registry),
+			catch: toRuntimeError,
+		});
+	}
 	effectIsLive(repo: string, effectId: string, lease: string): boolean {
-		return this.run(
-			Effect.try({
-				try: () => storeEffectIsLive(repo, effectId, lease, this.now),
-				catch: toRuntimeError,
-			}),
-		);
+		return this.run(this.effectIsLiveEffect(repo, effectId, lease));
+	}
+	effectIsLiveEffect(
+		repo: string,
+		effectId: string,
+		lease: string,
+	): Effect.Effect<boolean, WorkflowRuntimeError, never> {
+		return Effect.try({
+			try: () => storeEffectIsLive(repo, effectId, lease, this.now),
+			catch: toRuntimeError,
+		});
 	}
 	renewEffect(
 		repo: string,
@@ -412,61 +462,85 @@ export class WorkflowEngine {
 		lease: string,
 		leaseMs = 30_000,
 	): boolean {
+		return this.run(this.renewEffectEffect(repo, effectId, lease, leaseMs));
+	}
+	renewEffectEffect(
+		repo: string,
+		effectId: string,
+		lease: string,
+		leaseMs = 30_000,
+	): Effect.Effect<boolean, WorkflowRuntimeError, WorkflowStore> {
 		const self = this;
-		return this.run(
-			Effect.gen(function* () {
-				if (!Number.isFinite(leaseMs) || leaseMs <= 0)
-					throw new WorkflowRuntimeError(
-						"invalid-input",
-						"lease duration must be positive",
-					);
-				yield* self.initializeProgram(repo);
-				return yield* Effect.try({
-					try: () => storeRenewEffect(repo, effectId, lease, leaseMs, self.now),
-					catch: toRuntimeError,
-				});
-			}),
-		);
+		return Effect.gen(function* () {
+			if (!Number.isFinite(leaseMs) || leaseMs <= 0)
+				throw new WorkflowRuntimeError(
+					"invalid-input",
+					"lease duration must be positive",
+				);
+			yield* self.initializeProgram(repo);
+			return yield* Effect.try({
+				try: () => storeRenewEffect(repo, effectId, lease, leaseMs, self.now),
+				catch: toRuntimeError,
+			});
+		});
 	}
 	claimEffects(repo: string, limit = 10, leaseMs = 30_000): ClaimedEffect[] {
+		return this.run(this.claimEffectsEffect(repo, limit, leaseMs));
+	}
+	claimEffectsEffect(
+		repo: string,
+		limit = 10,
+		leaseMs = 30_000,
+	): Effect.Effect<ClaimedEffect[], WorkflowRuntimeError, WorkflowStore> {
 		const self = this;
-		return this.run(
-			Effect.gen(function* () {
-				const store = yield* WorkflowStore;
-				yield* self.initializeProgram(repo);
-				return yield* store.transaction(repo, (db) =>
-					self.commitClaim(db, limit, leaseMs),
-				);
-			}),
-		);
+		return Effect.gen(function* () {
+			const store = yield* WorkflowStore;
+			yield* self.initializeProgram(repo);
+			return yield* store.transaction(repo, (db) =>
+				self.commitClaim(db, limit, leaseMs),
+			);
+		});
 	}
 	issueRunCapability(repo: string, runId: string): string {
+		return this.run(this.issueRunCapabilityEffect(repo, runId));
+	}
+	issueRunCapabilityEffect(
+		repo: string,
+		runId: string,
+	): Effect.Effect<string, WorkflowRuntimeError, WorkflowStore> {
 		const self = this;
-		return this.run(
-			Effect.gen(function* () {
-				yield* self.initializeProgram(repo);
-				return yield* Effect.try({
-					try: () => capabilityIssueRunCapability(repo, runId),
-					catch: toRuntimeError,
-				});
-			}),
-		);
+		return Effect.gen(function* () {
+			yield* self.initializeProgram(repo);
+			return yield* Effect.try({
+				try: () => capabilityIssueRunCapability(repo, runId),
+				catch: toRuntimeError,
+			});
+		});
 	}
 	list(repo: string): WorkflowView[] {
-		return this.run(
-			Effect.try({
-				try: () => viewList(repo, this.registry, this.now),
-				catch: toRuntimeError,
-			}),
-		);
+		return this.run(this.listEffect(repo));
+	}
+	/** Effect program for reading every workflow view; run at the named
+	 * application composition root (complete-workflow-effect-cutover, task 2.1). */
+	listEffect(
+		repo: string,
+	): Effect.Effect<WorkflowView[], WorkflowRuntimeError, never> {
+		return Effect.try({
+			try: () => viewList(repo, this.registry, this.now),
+			catch: toRuntimeError,
+		});
 	}
 	getRun(repo: string, runId: string): WorkflowRun {
-		return this.run(
-			Effect.try({
-				try: () => storeGetRun(repo, runId),
-				catch: toRuntimeError,
-			}),
-		);
+		return this.run(this.getRunEffect(repo, runId));
+	}
+	getRunEffect(
+		repo: string,
+		runId: string,
+	): Effect.Effect<WorkflowRun, WorkflowRuntimeError, never> {
+		return Effect.try({
+			try: () => storeGetRun(repo, runId),
+			catch: toRuntimeError,
+		});
 	}
 	// See store.ts's `activeRunForRole` doc comment for why this resolves by
 	// (workflowId, stepId, role) rather than a client-supplied
@@ -478,11 +552,19 @@ export class WorkflowEngine {
 		role: string,
 	): WorkflowRun {
 		return this.run(
-			Effect.try({
-				try: () => storeActiveRunForRole(repo, workflowId, stepId, role),
-				catch: toRuntimeError,
-			}),
+			this.activeRunForRoleEffect(repo, workflowId, stepId, role),
 		);
+	}
+	activeRunForRoleEffect(
+		repo: string,
+		workflowId: string,
+		stepId: string,
+		role: string,
+	): Effect.Effect<WorkflowRun, WorkflowRuntimeError, never> {
+		return Effect.try({
+			try: () => storeActiveRunForRole(repo, workflowId, stepId, role),
+			catch: toRuntimeError,
+		});
 	}
 	/** Validate the launch-bound capability for a role-scoped CLI operation. */
 	authorizeAgentCapability(
@@ -493,20 +575,35 @@ export class WorkflowEngine {
 		token: string,
 	): WorkflowRun {
 		return this.run(
-			Effect.try({
-				try: () =>
-					capabilityAuthorizeAgentCapability(
-						repo,
-						workflowId,
-						stepId,
-						role,
-						token,
-						this.registry,
-						this.now,
-					),
-				catch: toRuntimeError,
-			}),
+			this.authorizeAgentCapabilityEffect(
+				repo,
+				workflowId,
+				stepId,
+				role,
+				token,
+			),
 		);
+	}
+	authorizeAgentCapabilityEffect(
+		repo: string,
+		workflowId: string,
+		stepId: string,
+		role: string,
+		token: string,
+	): Effect.Effect<WorkflowRun, WorkflowRuntimeError, never> {
+		return Effect.try({
+			try: () =>
+				capabilityAuthorizeAgentCapability(
+					repo,
+					workflowId,
+					stepId,
+					role,
+					token,
+					this.registry,
+					this.now,
+				),
+			catch: toRuntimeError,
+		});
 	}
 	/** Validate a capability against the exact run that issued it. This is used
 	 * by subprocess-facing commands; role-scoped lookup is intentionally not
@@ -520,29 +617,50 @@ export class WorkflowEngine {
 		token: string,
 	): WorkflowRun {
 		return this.run(
-			Effect.try({
-				try: () =>
-					capabilityAuthorizeExactRunCapability(
-						repo,
-						workflowId,
-						runId,
-						stepId,
-						role,
-						token,
-						this.registry,
-						this.now,
-					),
-				catch: toRuntimeError,
-			}),
+			this.authorizeExactRunCapabilityEffect(
+				repo,
+				workflowId,
+				runId,
+				stepId,
+				role,
+				token,
+			),
 		);
 	}
+	authorizeExactRunCapabilityEffect(
+		repo: string,
+		workflowId: string,
+		runId: string,
+		stepId: string,
+		role: string,
+		token: string,
+	): Effect.Effect<WorkflowRun, WorkflowRuntimeError, never> {
+		return Effect.try({
+			try: () =>
+				capabilityAuthorizeExactRunCapability(
+					repo,
+					workflowId,
+					runId,
+					stepId,
+					role,
+					token,
+					this.registry,
+					this.now,
+				),
+			catch: toRuntimeError,
+		});
+	}
 	getSnapshot(repo: string, workflowId: string): WorkflowSnapshot {
-		return this.run(
-			Effect.try({
-				try: () => storeGetSnapshot(repo, workflowId, this.registry, this.now),
-				catch: toRuntimeError,
-			}),
-		);
+		return this.run(this.getSnapshotEffect(repo, workflowId));
+	}
+	getSnapshotEffect(
+		repo: string,
+		workflowId: string,
+	): Effect.Effect<WorkflowSnapshot, WorkflowRuntimeError, never> {
+		return Effect.try({
+			try: () => storeGetSnapshot(repo, workflowId, this.registry, this.now),
+			catch: toRuntimeError,
+		});
 	}
 
 	// ---- synchronous orchestration helpers (run inside Effect programs) ----
@@ -817,7 +935,7 @@ export class WorkflowEngine {
 		) {
 			let primaryChangeId: string;
 			try {
-				primaryChangeId = planResult.parse(
+				primaryChangeId = decodePlanResult(
 					preparedArtifact.output,
 				).primaryChangeId;
 			} catch (error) {
@@ -887,7 +1005,7 @@ export class WorkflowEngine {
 		preparedHandoff?: PreparedHandoffEvidence,
 	): CommittedDispatch {
 		const located = this.locate(db, command);
-		const snapshot = parseSnapshot(JSON.parse(located.snapshot_json));
+		const snapshot = decodeSnapshot(JSON.parse(located.snapshot_json));
 		const repin =
 			command.type === "operator.repin" ||
 			(command.type === "developer.action" && command.actionId === "re-pin");
@@ -959,7 +1077,7 @@ export class WorkflowEngine {
 			.all(at.toISOString(), at.toISOString(), limit) as EffectRow[];
 		for (const row of rows) {
 			const owner = instance(db, row.workflow_id);
-			const snapshot = parseSnapshot(JSON.parse(owner.snapshot_json));
+			const snapshot = decodeSnapshot(JSON.parse(owner.snapshot_json));
 			const definition = this.registry.definition(
 				snapshot.definition.id,
 				snapshot.definition.version,
@@ -1024,29 +1142,34 @@ export class WorkflowEngine {
 		return claimed;
 	}
 
-	private telemetry(
+	private telemetryEffect(
 		snapshot: WorkflowSnapshot,
 		event: string,
 		identity?: { runId?: string; effectId?: string },
-	): void {
-		const context = childTrace(parseTraceparent(process.env.TRACEPARENT));
-		new TelemetrySink(
-			snapshot.definition.id === "wiki-comments"
-				? path.join(wikiWorkflowDataRoot(), snapshot.workflowId)
-				: path.join(
-						snapshot.metadata.worktree,
-						".herdr-workflow",
-						snapshot.workflowId,
-					),
-		).emit({
-			schemaVersion: 1,
-			at: nowIso(this.now),
-			layer: "engine",
-			event,
-			workflowId: snapshot.workflowId,
-			stepId: snapshot.currentStep,
-			...identity,
-			traceparent: traceparent(context),
+	): Effect.Effect<void, never, WorkflowTelemetry> {
+		const self = this;
+		return Effect.gen(function* () {
+			const telemetry = yield* WorkflowTelemetry;
+			const context = childTrace(parseTraceparent(process.env.TRACEPARENT));
+			telemetry.emit(
+				snapshot.definition.id === "wiki-comments"
+					? path.join(wikiWorkflowDataRoot(), snapshot.workflowId)
+					: path.join(
+							snapshot.metadata.worktree,
+							".herdr-workflow",
+							snapshot.workflowId,
+						),
+				{
+					schemaVersion: 1,
+					at: nowIso(self.now),
+					layer: "engine",
+					event,
+					workflowId: snapshot.workflowId,
+					stepId: snapshot.currentStep,
+					...identity,
+					traceparent: traceparent(context),
+				},
+			);
 		});
 	}
 

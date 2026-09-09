@@ -1,31 +1,48 @@
 // The `research-handoff` command: records the structured research handoff
 // and transitions to wiki drafting in one authenticated step, restricted to
 // the active core.research researcher run. Moved verbatim out of cli.ts
-// (split-workflow-god-modules).
+// (split-workflow-god-modules); migrated to run Effect programs at the
+// CLI-invocation application root (complete-workflow-effect-cutover, task 2.1).
+import type { WorkflowApplication } from "../../application.ts";
 import type { WorkflowEngine } from "../../runtime.ts";
 import { flag, parseInput, requireFlag } from "../args.ts";
 import { managedWorkflowTarget } from "../caller-environment.ts";
 import { scheduleDrain } from "../drain.ts";
 import { resolveHandoffIdentity } from "../identity.ts";
 
+type App = WorkflowApplication;
+
 export async function runResearchHandoff(
 	rest: string[],
 	workflowEngine: WorkflowEngine,
+	_repo: string,
+	application?: App,
 ): Promise<void> {
 	const target = managedWorkflowTarget();
-	const identity = resolveHandoffIdentity(workflowEngine, target);
+	const identity = resolveHandoffIdentity(workflowEngine, target, application);
 	if (identity.stepId !== "core.research" || identity.role !== "researcher")
 		throw new Error(
 			"research-handoff is only available to the active core.research researcher run",
 		);
-	const run = workflowEngine.authorizeExactRunCapability(
-		target,
-		identity.workflowId,
-		identity.runId,
-		identity.stepId,
-		identity.role,
-		identity.token,
-	);
+	const run = application
+		? application.runSync(
+				workflowEngine.authorizeExactRunCapabilityEffect(
+					target,
+					identity.workflowId,
+					identity.runId,
+					identity.stepId,
+					identity.role,
+					identity.token,
+				),
+			)
+		: workflowEngine.authorizeExactRunCapability(
+				target,
+				identity.workflowId,
+				identity.runId,
+				identity.stepId,
+				identity.role,
+				identity.token,
+			);
 	const subject = requireFlag(rest, "subject");
 	const directivesFlag = requireFlag(rest, "directives");
 	const directives = parseInput(directivesFlag);
@@ -39,7 +56,7 @@ export async function runResearchHandoff(
 				.map((entry) => entry.trim())
 				.filter(Boolean)
 		: [];
-	const result = workflowEngine.dispatch(target, {
+	const command = {
 		type: "agent.research-handoff",
 		workflowId: run.workflowId,
 		runId: run.id,
@@ -54,11 +71,18 @@ export async function runResearchHandoff(
 			citations,
 			noSourcesUsed,
 		},
-	});
+	} as never;
+	if (application)
+		application.runSync(workflowEngine.dispatchEffect(target, command));
+	else workflowEngine.dispatch(target, command);
 	scheduleDrain(target, 20);
 	console.log(
 		JSON.stringify(
-			workflowEngine.status(target, result.view.workflowId),
+			application
+				? application.runSync(
+						workflowEngine.statusEffect(target, run.workflowId),
+					)
+				: workflowEngine.status(target, run.workflowId),
 			null,
 			2,
 		),

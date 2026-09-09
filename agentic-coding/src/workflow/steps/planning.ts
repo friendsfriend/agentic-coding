@@ -1,6 +1,6 @@
 import type { WorkflowRouting } from "../contracts.ts";
 import { WorkflowRuntimeError } from "../contracts.ts";
-import { planResult } from "../definitions/contracts.ts";
+import { decodePlanResult } from "../definitions/contracts.ts";
 import type { StepBehavior } from "./types.ts";
 import {
 	type PreparedStepEvidence,
@@ -19,7 +19,7 @@ const CHANGE_ID = /^[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$/;
 function primaryChangeId(output: unknown): string {
 	let primary: string;
 	try {
-		primary = planResult.parse(output).primaryChangeId;
+		primary = decodePlanResult(output).primaryChangeId;
 	} catch (error) {
 		throw new WorkflowRuntimeError(
 			"entry-guard",

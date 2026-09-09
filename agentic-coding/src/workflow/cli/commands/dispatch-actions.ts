@@ -1,13 +1,16 @@
 import { watch } from "node:fs";
 import path from "node:path";
+import type { WorkflowApplication } from "../../application.ts";
 import { drainEffects } from "../../operations.ts";
 // The developer-action, agent-handoff, and agent-question command branches:
 // `action`, `question`, and `handoff`. Moved verbatim out of cli.ts
-// (split-workflow-god-modules).
+// (split-workflow-god-modules); migrated to run Effect programs at the
+// CLI-invocation application root (complete-workflow-effect-cutover, task 2.1).
 import {
 	canonicalStorePath,
 	QUESTION_WAIT_MS,
 	type WorkflowEngine,
+	WorkflowRuntimeError,
 } from "../../runtime.ts";
 import {
 	flag,
@@ -18,6 +21,9 @@ import {
 } from "../args.ts";
 import { managedAgent, managedWorkflowTarget } from "../caller-environment.ts";
 import { scheduleDrain } from "../drain.ts";
+import { resolveHandoffIdentity } from "../identity.ts";
+
+type App = WorkflowApplication;
 
 async function waitForQuestionChange(
 	engine: WorkflowEngine,
@@ -53,8 +59,6 @@ async function waitForQuestionChange(
 	});
 }
 
-import { resolveHandoffIdentity } from "../identity.ts";
-
 export function validateQuestionTimeout(timeoutMs: number): void {
 	if (
 		!Number.isInteger(timeoutMs) ||
@@ -78,6 +82,7 @@ export async function runDeveloperQuestion(
 	inputOrDescription: DeveloperQuestionCliInput | string,
 	optionsOrTimeout: unknown = [],
 	timeoutMs = QUESTION_WAIT_MS,
+	application?: App,
 ): Promise<string> {
 	const input: DeveloperQuestionCliInput =
 		typeof inputOrDescription === "string"
@@ -90,16 +95,37 @@ export async function runDeveloperQuestion(
 	if (input.description === undefined && input.questions === undefined)
 		throw new Error("question requires --description or --questions");
 	validateQuestionTimeout(wait);
-	const identity = resolveHandoffIdentity(engineInstance, repo);
-	const run = engineInstance.authorizeExactRunCapability(
-		repo,
-		identity.workflowId,
-		identity.runId,
-		identity.stepId,
-		identity.role,
-		identity.token,
-	);
-	const created = engineInstance.dispatch(repo, {
+	const identity = resolveHandoffIdentity(engineInstance, repo, application);
+	const run = application
+		? application.runSync(
+				engineInstance.authorizeExactRunCapabilityEffect(
+					repo,
+					identity.workflowId,
+					identity.runId,
+					identity.stepId,
+					identity.role,
+					identity.token,
+				),
+			)
+		: engineInstance.authorizeExactRunCapability(
+				repo,
+				identity.workflowId,
+				identity.runId,
+				identity.stepId,
+				identity.role,
+				identity.token,
+			);
+	const read = (workflowId: string) =>
+		application
+			? application.runSync(engineInstance.getSnapshotEffect(repo, workflowId))
+			: engineInstance.getSnapshot(repo, workflowId);
+	const dispatch = (command: Record<string, unknown>) =>
+		application
+			? application.runSync(
+					engineInstance.dispatchEffect(repo, command as never),
+				)
+			: engineInstance.dispatch(repo, command as never);
+	const created = dispatch({
 		type: "agent.question",
 		workflowId: run.workflowId,
 		runId: run.id,
@@ -132,7 +158,7 @@ export async function runDeveloperQuestion(
 	process.on("SIGINT", interrupt);
 	try {
 		while (!interrupted && Date.now() < deadline) {
-			const snapshot = engineInstance.getSnapshot(repo, run.workflowId);
+			const snapshot = read(run.workflowId);
 			const dialogue = snapshot.developerDialogue;
 			const questions = questionIds.map((id) =>
 				dialogue.find((item) => item.id === id),
@@ -175,9 +201,9 @@ export async function runDeveloperQuestion(
 			wake = undefined;
 		}
 		if (interrupted) throw new Error("question wait interrupted");
-		const timedOutDialogue = engineInstance
-			.getSnapshot(repo, run.workflowId)
-			.developerDialogue.filter((item) => questionIds.includes(item.id));
+		const timedOutDialogue = read(run.workflowId).developerDialogue.filter(
+			(item) => questionIds.includes(item.id),
+		);
 		if (
 			timedOutDialogue.some(
 				(item) =>
@@ -196,27 +222,26 @@ export async function runDeveloperQuestion(
 			});
 		}
 		try {
-			engineInstance.dispatch(repo, {
+			dispatch({
 				type: "timer.question-expire",
 				workflowId: run.workflowId,
 				questionId: questionIds[0] ?? "",
 				timerNonce:
-					engineInstance
-						.getSnapshot(repo, run.workflowId)
-						.developerDialogue.find((item) => item.id === questionIds[0])
-						?.timerNonce ?? "",
+					read(run.workflowId).developerDialogue.find(
+						(item) => item.id === questionIds[0],
+					)?.timerNonce ?? "",
 			});
 		} catch (error) {
+			// Narrow suppression to the typed reducer failure instead of
+			// error-message text: a stuck-pending expiry must not be masked by
+			// an unrelated failure whose message happens to contain "expired".
 			if (
-				!(error instanceof Error) ||
-				!/no longer pending|expired/.test(error.message)
+				!(error instanceof WorkflowRuntimeError) ||
+				error.code !== "stale-question"
 			)
 				throw error;
 		}
-		const dialogue = engineInstance.getSnapshot(
-			repo,
-			run.workflowId,
-		).developerDialogue;
+		const dialogue = read(run.workflowId).developerDialogue;
 		const expired = questionIds.map((id) =>
 			dialogue.find((item) => item.id === id),
 		);
@@ -248,6 +273,7 @@ export async function runAction(
 	rest: string[],
 	workflowEngine: WorkflowEngine,
 	repo: string,
+	application?: App,
 ): Promise<void> {
 	if (managedAgent())
 		throw new Error(
@@ -260,27 +286,39 @@ export async function runAction(
 				? "action: unexpected positional argument"
 				: "action: ACTION_ID is required",
 		);
-	const view = workflowEngine.status(repo, requireFlag(rest, "workflow-id"));
-	workflowEngine.dispatch(repo, {
-		type: "developer.action",
-		workflowId: view.workflowId,
-		revision: Number(flag(rest, "revision")),
-		actionId: actions[0],
-		input: parseInput(flag(rest, "input")),
-	});
+	const status = (workflowId: string) =>
+		application
+			? application.runSync(workflowEngine.statusEffect(repo, workflowId))
+			: workflowEngine.status(repo, workflowId);
+	const view = status(requireFlag(rest, "workflow-id"));
+	if (application)
+		application.runSync(
+			workflowEngine.dispatchEffect(repo, {
+				type: "developer.action",
+				workflowId: view.workflowId,
+				revision: Number(flag(rest, "revision")),
+				actionId: actions[0],
+				input: parseInput(flag(rest, "input")),
+			}),
+		);
+	else
+		workflowEngine.dispatch(repo, {
+			type: "developer.action",
+			workflowId: view.workflowId,
+			revision: Number(flag(rest, "revision")),
+			actionId: actions[0],
+			input: parseInput(flag(rest, "input")),
+		});
 	scheduleDrain(repo);
 	console.log(
-		JSON.stringify(
-			workflowEngine.status(repo, requireFlag(rest, "workflow-id")),
-			null,
-			2,
-		),
+		JSON.stringify(status(requireFlag(rest, "workflow-id")), null, 2),
 	);
 }
 
 export async function runQuestion(
 	rest: string[],
 	workflowEngine: WorkflowEngine,
+	application?: App,
 ): Promise<void> {
 	if (!managedAgent())
 		throw new Error("question requires an authenticated managed agent");
@@ -310,6 +348,8 @@ export async function runQuestion(
 			managedWorkflowTarget(),
 			input,
 			timeoutMs,
+			QUESTION_WAIT_MS,
+			application,
 		),
 	);
 }
@@ -317,6 +357,7 @@ export async function runQuestion(
 export async function runHandoff(
 	rest: string[],
 	workflowEngine: WorkflowEngine,
+	application?: App,
 ): Promise<void> {
 	const outcome = flag(rest, "outcome");
 	if (
@@ -325,24 +366,33 @@ export async function runHandoff(
 	)
 		throw new Error("handoff: invalid --outcome");
 	const target = managedWorkflowTarget();
-	const identity = resolveHandoffIdentity(workflowEngine, target);
+	const identity = resolveHandoffIdentity(workflowEngine, target, application);
 	const artifact = identity.outputPath ?? flag(rest, "artifact");
-	const result = workflowEngine.dispatch(target, {
-		type: "agent.handoff",
-		runId: identity.runId,
-		generation: identity.generation,
-		token: identity.token,
-		outcome,
-		...(artifact ? { artifact } : {}),
-		...(flag(rest, "message") ? { message: flag(rest, "message") } : {}),
-	});
+	if (application)
+		application.runSync(
+			workflowEngine.dispatchEffect(target, {
+				type: "agent.handoff",
+				runId: identity.runId,
+				generation: identity.generation,
+				token: identity.token,
+				outcome,
+				...(artifact ? { artifact } : {}),
+				...(flag(rest, "message") ? { message: flag(rest, "message") } : {}),
+			}),
+		);
+	else
+		workflowEngine.dispatch(target, {
+			type: "agent.handoff",
+			runId: identity.runId,
+			generation: identity.generation,
+			token: identity.token,
+			outcome,
+			...(artifact ? { artifact } : {}),
+			...(flag(rest, "message") ? { message: flag(rest, "message") } : {}),
+		});
 	if (!rest.includes("--no-drain")) await drainEffects(workflowEngine, target);
 	else scheduleDrain(target);
 	console.log(
-		JSON.stringify(
-			workflowEngine.status(target, result.view.workflowId),
-			null,
-			2,
-		),
+		JSON.stringify(workflowEngine.status(target, identity.workflowId), null, 2),
 	);
 }

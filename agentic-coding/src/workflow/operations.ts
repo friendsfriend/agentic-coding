@@ -12,6 +12,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Effect } from "effect";
 import { Herdr } from "../herdr-client.ts";
 import {
 	type AgentAdapter,
@@ -20,6 +21,7 @@ import {
 	OpenCodeV2Adapter,
 	PiAdapter,
 } from "./adapters.ts";
+import type { WorkflowApplication } from "./application.ts";
 import { paneForRunFactory } from "./cli/pane.ts";
 import { registry } from "./cli/registry.ts";
 import type { CredentialPrompt } from "./credentials.ts";
@@ -30,9 +32,16 @@ export const CONTINUATION_WAIT_MS = 65_000;
 
 /** The `WorkflowEngine` factory built from the process-lifetime builtin
  * registry. CLI commands and the dashboard coordinator both start engines
- * through this boundary. */
-export function engine(): WorkflowEngine {
-	return new WorkflowEngine(registry);
+ * through this boundary; when a named application root is supplied the
+ * engine consumes its root-owned layer instead of building a nested runtime
+ * (complete-workflow-effect-cutover, task 1). */
+export function engine(application?: WorkflowApplication): WorkflowEngine {
+	return new WorkflowEngine(
+		registry,
+		application?.clock,
+		undefined,
+		application?.layerOf(),
+	);
 }
 
 /** Runs the effect-runner against every pending effect for a workflow
@@ -64,11 +73,17 @@ export async function drainEffects(
 	let completed = 0;
 	do {
 		if (signal?.aborted) break;
-		completed += await new EffectRunner(repo, workflowEngine, handlers).drain(
-			limit,
-			30_000,
-			signal,
-			onFailure,
+		// Drain through the Effect program directly (the Promise facade stays
+		// only for test callers); the CLI/dashboard callers run this within
+		// their owned application scope (complete-workflow-effect-cutover,
+		// task 3.1).
+		completed += await Effect.runPromise(
+			new EffectRunner(repo, workflowEngine, handlers).drainProgram(
+				limit,
+				30_000,
+				signal,
+				onFailure,
+			),
 		);
 		if (signal?.aborted) break;
 		expireDueQuestionTimers(workflowEngine, repo, limit);

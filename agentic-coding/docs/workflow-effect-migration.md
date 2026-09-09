@@ -34,15 +34,21 @@ The four roadmap phases and their owners:
 phase-1 compatibility bridges between the unmigrated engine callers and the
 single Schema implementation:
 
-| Exact symbol | Caller | Removal phase | Removal check |
+| Exact symbol | Caller | Removal phase | Status |
 | --- | --- | --- | --- |
-| `Contract.parse` on `commandContract` | `runtime/engine.ts:dispatch` | 4 | engine consumes the Schema-decoded command type directly |
-| `parseSnapshot` | `runtime/engine.ts`, `runtime/store.ts`, `runtime/view.ts` | 4 | store/view decode through the Schema snapshot contract |
-| `parseDeveloperQuestionAnswer` | `runtime/dialogue.ts`, `commandContract` | 4 | dialogue decodes through Schema |
-| `Contract.parse` on `researchHandoffContract` | `runtime/reducers/research-handoff.ts` | 4 | reducer decodes through Schema |
-| `Contract.parse` on `planResult`/`planDraft`/`triage`/`findings` | `runtime/engine.ts`, `steps/planning.ts` | 4 | steps/engine decode through Schema |
-| `EffectRunner.drain` Promise facade | `operations.ts` (`drainEffects`), CLI `drain` command | 4 | CLI/TUI drain through the Effect boundary directly |
-| `agentEffectHandlers` / `AdapterEffectOptions` | `operations.ts`, `cli/pane.ts` | 4 | CLI consumes registered handler coverage through the Effect boundary |
+| `Contract.parse` on `commandContract` | `runtime/engine.ts:dispatch` | 4 | **removed** — `decodeCommand` (engine decodes through Schema directly) |
+| `parseSnapshot` | `runtime/engine.ts`, `runtime/store.ts`, `runtime/view.ts` | 4 | **removed** — `decodeSnapshot` (store/view decode through the Schema snapshot contract) |
+| `parseDeveloperQuestionAnswer` | `runtime/dialogue.ts`, `commandContract` | 4 | **removed** — `decodeDeveloperQuestionAnswer` (dialogue decodes through Schema) |
+| `Contract.parse` on `researchHandoffContract` | `runtime/reducers/research-handoff.ts` | 4 | **removed** — `decodeResearchHandoff` (reducer decodes through Schema) |
+| `Contract.parse` on `planResult` | `runtime/engine.ts`, `steps/planning.ts` | 4 | **removed** — `decodePlanResult` (steps/engine decode through Schema); registered step contracts (`passthrough`/`empty`/`findings`/`triage`/`planDraft`) remain as pure contract identity descriptors |
+| `EffectRunner.drain` Promise facade | `operations.ts` (`drainEffects`), CLI `drain` command | 4 | **removed from production** — `drainEffects` runs `drainProgram` at the boundary; the Promise facade remains test-only |
+| `agentEffectHandlers` / `AdapterEffectOptions` | `operations.ts`, `cli/pane.ts` | 4 | **removed from production** — `pane.ts` uses `resolveLiveAgentAsync`/`isPaneLiveAsync`; the sync `isPaneLive` is deleted and sync `resolveLiveAgent` is retained test-only in the `effectRunnerTest` harness |
+
+> The remaining `Contract<T>` interface and the registered step contracts
+> (which double as step identity pins in the registry) are the pure contract
+> identity descriptors the design explicitly retains. The sync `getLiveAgent`
+> probe lives only behind `resolveLiveAgent` (test harness) and is never
+> reached from production.
 
 Every retained facade **delegates to Schema** via `decodeContract`; none is an
 independent validator. Pure contract identity descriptors (IDs/versions,
@@ -122,6 +128,86 @@ digests) are not migration shims and remain.
 (`EffectRunner.drain`), and `cli/pane.ts` still uses the sync
 `isPaneLive`/`resolveLiveAgent` helpers; the CLI/TUI composition boundary and
 `effects.ts` telemetry are phase-4 scope.
+
+## Phase-4 done (complete-workflow-effect-cutover)
+
+- **Named application composition root** (`src/workflow/application.ts`):
+  `applicationLayer(now)` composes the production store/clock/config services;
+  `WorkflowApplication` is the dashboard's one shared application runtime with
+  bounded disposal; `runCliProgram` is the CLI-invocation owner. The CLI
+  (`cli/run.ts`) routes each command through one application layer and
+  disposes it afterwards; the `WorkflowEngine` facade consumes the root-owned
+  layer instead of building a nested runtime of its own (task 1.2).
+- **Architecture guardrails** (`scripts/workflow-architecture.ts`):
+  `checkRuntimeBoundaries` rejects Effect runtime execution outside the named
+  composition roots (spec scenario "Service runs a nested runtime"), and
+  `checkObsoleteShims` registers the removed bridge symbols per former module
+  and rejects re-declarations/re-exports (and whole-bridge-module imports) so
+  a deleted facade cannot be silently reintroduced inside a still-live module.
+  Negative fixtures and
+  stale-exception detection are pinned in
+  `test/workflow-source-layer-boundaries.test.ts` (task 3.2).
+- **Caller cutover seam (task 2.1)**: the `WorkflowEngine` facade now exposes
+  every operation as a public Effect program (`startEffect`, `dispatchEffect`,
+  `statusEffect`, `listEffect`, `getRunEffect`, `getSnapshotEffect`,
+  `authorizeExactRunCapabilityEffect`, `authorizeAgentCapabilityEffect`,
+  `activeRunForRoleEffect`, `previewRepairEffect`, `previewMigrationEffect`,
+  `claimEffectsEffect`, `renewEffectEffect`, `effectIsLiveEffect`,
+  `issueRunCapabilityEffect`, `initializeEffect`), with the synchronous
+  methods delegating. CLI command modules (`run.ts` status/drain,
+  `identity.ts` handoff identity gate, `dispatch-actions.ts` action/question/
+  handoff, `misc.ts` repair/migrate/repin, `start.ts` start, `wiki.ts` write
+  gate, `research-handoff.ts`) run these programs through
+  `WorkflowApplication.runSync` at the CLI-invocation root, preserving the
+  external JSON protocol; pinned by `test/workflow-cli.test.ts` (unchanged)
+  and `test/workflow-application.test.ts`.
+- **Dashboard owns one application runtime (task 1/2.2)**: `tui/dash/engine.ts`
+  holds `dashboardApplication` — one `WorkflowApplication` shared by every
+  repository's `RepositoryExecutionCoordinator` (refresh/action/start/repair
+  reuse the same layer instead of a fresh engine per drain), released on
+  unmount via `disposeDashboardApplication` (`dash/App.tsx`,
+  `otel/app/App.tsx`). `operations.engine(application?)` builds the engine
+  facade over a root-owned layer.
+- **Telemetry service (task 2.4)**: engine programs now emit through the
+  `WorkflowTelemetry` service (`runtime/services.ts`) owned by the
+  application layer — bounded JSONL append in production, plus a bracketed
+  OTLP span-export capability sharing the fixed
+  `TELEMETRY_FLUSH_BUDGET_MS = 750` budget (`observability.ts`). The engine
+  service does not enable an OTLP export URL by default; the bracketed
+  exporter is exercised by `test/workflow-observability.test.ts` and used by
+  the agent-side embedded telemetry bridges. Envelope shape and
+  `traceparent` correlation are
+  preserved; export failure is observational and can never roll back or
+  replay a committed command, and no detached export keeps the process alive
+  beyond the budget.
+- **Agent recipes (task 4.1)**: the playbook (`docs/workflow-effect.md`) now
+  documents the locked production APIs and carries two production-backed,
+  type-checked recipes — a cancellable external handler with typed transient
+  failure (recovery/cancellation semantics + focused verification commands)
+  and a validated command with pure step behavior (where services live,
+  expected failures, verification commands).
+- **Migration-only bridge removal (task 3.1)**: the inventoried `Contract<T>`
+  facades are gone — `commandContract`, `parseSnapshot`,
+  `parseDeveloperQuestionAnswer`, `researchHandoffContract`, and `planResult`
+  were replaced by plain Schema-backed decode functions
+  (`decodeCommand`/`decodeSnapshot`/`decodeDeveloperQuestionAnswer`/
+  `decodeResearchHandoff`/`decodePlanResult`) at every caller (engine, store,
+  view, dialogue, reducers, planning). The `EffectRunner.drain` Promise
+  facade is production-removed (tests only), and `pane.ts` now uses the
+  async herdr probes (`resolveLiveAgentAsync`/`isPaneLiveAsync`); the sync
+  `isPaneLive` is deleted and sync `resolveLiveAgent` remains test-only.
+  The registered step contracts stay as pure contract identity descriptors.
+- **Inventory closure (task 3.3)**: every migration inventory row above is
+  marked resolved with explicit ownership; the retained `Contract<T>`
+  step-identity descriptors and the test-only `effectRunnerTest` harness are
+  the only non-migration surfaces, both documented. Internal barrel/symbol
+  changes were reviewed separately from the preserved CLI/JSON, snapshot/
+  digest, capability/security, and lifecycle fixtures.
+- **Agent guidance (task 4.1)**: playbook examples import production symbols
+  (`decodeCommand`/`decodeSnapshot`/…) with the removed facades reconciled.
+- **Baseline re-runs (task 4.2)**: recorded in the workflow task record; the
+  migration step reports regression/uncertainty explicitly when agent
+  samples are evaluated rather than merging generated patches.
 
 ## Contract characterization (task 1.3)
 

@@ -1,6 +1,5 @@
 import path from "node:path";
 import {
-	type Contract,
 	ContractFailure,
 	DeveloperQuestionAnswerSchema,
 	decodeContract,
@@ -555,51 +554,50 @@ export type WorkflowCommand =
 	  }
 	| { type: "operator.resume"; workflowId: string; revision: number };
 
-export const commandContract: Contract<WorkflowCommand> = {
-	id: "core.workflow-command",
-	version: 1,
-	parse(value: unknown): WorkflowCommand {
-		const command = decodeContract<WorkflowCommand>(
-			"core.workflow-command",
-			WorkflowCommandSchema,
-			value,
-		);
-		// Cross-field invariants (pure validation, design-permitted): a question
-		// command provides either a description or a questionnaire, never both,
-		// and a questionnaire carries no top-level context/options.
-		if (command.type === "agent.question") {
-			const hasDescription = command.description !== undefined;
-			const hasQuestions = command.questions !== undefined;
-			if (hasDescription === hasQuestions)
-				throw new ContractFailure("core.developer-question", [
-					{
-						path: "$.description",
-						message: "provide either description or questions, but not both",
-					},
-				]);
-			if (
-				hasQuestions &&
-				(command.options !== undefined || command.context !== undefined)
-			)
-				throw new ContractFailure("core.developer-question", [
-					{
-						path: "$.questions",
-						message: "questionnaires use per-item context and options",
-					},
-				]);
-		}
-		// The answer-question action's input is a developer-question answer.
+/** Schema-backed command decode (complete-workflow-effect-cutover, task 3.1):
+ * the migration-only `commandContract` facade is removed; callers decode
+ * through the Schema path directly. Cross-field invariants stay pure. */
+export function decodeCommand(value: unknown): WorkflowCommand {
+	const command = decodeContract<WorkflowCommand>(
+		"core.workflow-command",
+		WorkflowCommandSchema,
+		value,
+	);
+	// Cross-field invariants (pure validation, design-permitted): a question
+	// command provides either a description or a questionnaire, never both,
+	// and a questionnaire carries no top-level context/options.
+	if (command.type === "agent.question") {
+		const hasDescription = command.description !== undefined;
+		const hasQuestions = command.questions !== undefined;
+		if (hasDescription === hasQuestions)
+			throw new ContractFailure("core.developer-question", [
+				{
+					path: "$.description",
+					message: "provide either description or questions, but not both",
+				},
+			]);
 		if (
-			command.type === "developer.action" &&
-			command.actionId === "answer-question"
+			hasQuestions &&
+			(command.options !== undefined || command.context !== undefined)
 		)
-			return {
-				...command,
-				input: parseDeveloperQuestionAnswer(command.input),
-			};
-		return command;
-	},
-};
+			throw new ContractFailure("core.developer-question", [
+				{
+					path: "$.questions",
+					message: "questionnaires use per-item context and options",
+				},
+			]);
+	}
+	// The answer-question action's input is a developer-question answer.
+	if (
+		command.type === "developer.action" &&
+		command.actionId === "answer-question"
+	)
+		return {
+			...command,
+			input: decodeDeveloperQuestionAnswer(command.input),
+		};
+	return command;
+}
 
 export type DeveloperQuestionAnswer =
 	| {
@@ -619,7 +617,7 @@ export type DeveloperQuestionAnswer =
 				value: string;
 			}>;
 	  };
-export function parseDeveloperQuestionAnswer(
+export function decodeDeveloperQuestionAnswer(
 	value: unknown,
 ): DeveloperQuestionAnswer {
 	return decodeContract<DeveloperQuestionAnswer>(
@@ -628,7 +626,7 @@ export function parseDeveloperQuestionAnswer(
 		value,
 	);
 }
-export function parseSnapshot(value: unknown): WorkflowSnapshot {
+export function decodeSnapshot(value: unknown): WorkflowSnapshot {
 	const snapshot = decodeContract<WorkflowSnapshot>(
 		"core.workflow-snapshot",
 		WorkflowSnapshotSchema,

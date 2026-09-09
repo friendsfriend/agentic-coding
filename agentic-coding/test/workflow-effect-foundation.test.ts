@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import {
-	commandContract,
+	decodeCommand,
+	decodeDeveloperQuestionAnswer,
+	decodeSnapshot,
 	externalDiagnostic,
 	isRetryableFailure,
-	parseDeveloperQuestionAnswer,
-	parseSnapshot,
 	type WorkflowFailure,
 } from "../src/workflow/contracts.ts";
 
@@ -84,7 +84,7 @@ test("decodeContract strips raw received values so short secrets never leak", ()
 	const secret = "S3CRET-SHORT-1";
 	let contractFailure: unknown;
 	try {
-		commandContract.parse({
+		decodeCommand({
 			type: "agent.handoff",
 			runId: "r",
 			generation: 1,
@@ -109,7 +109,7 @@ test("decodeContract strips raw received values so short secrets never leak", ()
 
 	// A wrong-typed custom answer value must not embed the raw object either.
 	try {
-		parseDeveloperQuestionAnswer({
+		decodeDeveloperQuestionAnswer({
 			questionId: "q",
 			kind: "custom",
 			value: { buried: secret },
@@ -122,7 +122,7 @@ test("decodeContract strips raw received values so short secrets never leak", ()
 test("decode errors are field-localized with bounded messages", () => {
 	// QUALITY-002: per-issue path/message instead of a full union/schema dump.
 	expect(() =>
-		commandContract.parse({
+		decodeCommand({
 			type: "agent.question",
 			workflowId: "w",
 			runId: "r",
@@ -142,7 +142,7 @@ test("text bounds count UTF-8 bytes like the legacy parsers", () => {
 	expect(astral.length).toBe(128);
 	expect(Buffer.byteLength(astral, "utf8")).toBe(256);
 	expect(() =>
-		commandContract.parse({
+		decodeCommand({
 			type: "timer.question-expire",
 			workflowId: "w",
 			questionId: "q",
@@ -152,7 +152,7 @@ test("text bounds count UTF-8 bytes like the legacy parsers", () => {
 	// Exactly 128 UTF-8 bytes stays accepted.
 	const ascii = "a".repeat(128);
 	expect(() =>
-		commandContract.parse({
+		decodeCommand({
 			type: "timer.question-expire",
 			workflowId: "w",
 			questionId: "q",
@@ -164,7 +164,7 @@ test("text bounds count UTF-8 bytes like the legacy parsers", () => {
 test("snapshot round-trip preserves schema-declared and unknown keys", () => {
 	// QUALITY-004: unknown/forward-compat top-level and nested keys must survive
 	// the decode-rewrite cycle instead of being silently dropped.
-	const snapshot = parseSnapshot({
+	const snapshot = decodeSnapshot({
 		schemaVersion: 1,
 		workflowId: "w",
 		revision: 0,
@@ -208,7 +208,7 @@ test("requireText failures name the snapshot contract, not a field path", () => 
 	// QUALITY-003: an empty repository-relative path must surface as a
 	// core.workflow-snapshot contract failure.
 	expect(() =>
-		parseSnapshot({
+		decodeSnapshot({
 			schemaVersion: 1,
 			workflowId: "w",
 			revision: 0,
@@ -242,7 +242,7 @@ test("requireText failures name the snapshot contract, not a field path", () => 
 });
 
 test("schema-backed command and answer facades preserve acceptance behavior", () => {
-	const command = commandContract.parse({
+	const command = decodeCommand({
 		type: "operator.repair",
 		workflowId: "w",
 		revision: 3,
@@ -252,7 +252,7 @@ test("schema-backed command and answer facades preserve acceptance behavior", ()
 	if (command.type !== "operator.repair") throw new Error("unreachable");
 	expect(command.reason).toBe("");
 	expect(() =>
-		commandContract.parse({
+		decodeCommand({
 			type: "agent.question",
 			workflowId: "w",
 			runId: "r",
@@ -264,7 +264,7 @@ test("schema-backed command and answer facades preserve acceptance behavior", ()
 		}),
 	).toThrow(/either description or questions/);
 	expect(
-		parseDeveloperQuestionAnswer({
+		decodeDeveloperQuestionAnswer({
 			questionId: "q",
 			kind: "custom",
 			value: "line 1\nline 2",
@@ -273,7 +273,7 @@ test("schema-backed command and answer facades preserve acceptance behavior", ()
 });
 
 test("schema-backed snapshot decoding normalizes paths and keeps legacy default dialogue", () => {
-	const snapshot = parseSnapshot({
+	const snapshot = decodeSnapshot({
 		schemaVersion: 1,
 		workflowId: "w",
 		revision: 0,
@@ -306,7 +306,7 @@ test("schema-backed snapshot decoding normalizes paths and keeps legacy default 
 	expect(snapshot.developerDialogue).toEqual([]);
 	expect(snapshot.metadata.worktree).toBe(process.cwd());
 	expect(() =>
-		parseSnapshot({
+		decodeSnapshot({
 			schemaVersion: 2,
 			workflowId: "w",
 			revision: 0,

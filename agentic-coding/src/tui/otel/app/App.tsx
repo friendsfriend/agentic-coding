@@ -17,6 +17,7 @@ import type { WikiReviewComment } from "../../../workflow/wiki";
 import { copyToClipboard } from "../../clipboard";
 import { App as DashApp } from "../../dash/App";
 import {
+	disposeDashboardApplication,
 	disposeExecutionCoordinator,
 	startWikiCommentWorkflowInProcess,
 } from "../../dash/engine";
@@ -173,6 +174,9 @@ export function App(props: {
 				if (item.state.repository)
 					disposeExecutionCoordinator(item.state.repository);
 			disposeExecutionCoordinator(wikiWorkflowDataRoot());
+			// Dashboard unmount releases the single owned application runtime
+			// (complete-workflow-effect-cutover, task 1).
+			disposeDashboardApplication();
 			clearInterval(safety);
 		});
 	});

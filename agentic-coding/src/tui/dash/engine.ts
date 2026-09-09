@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Herdr } from "../../herdr-client.ts";
+import { WorkflowApplication } from "../../workflow/application.ts";
 import type { WorkflowView } from "../../workflow/contracts.ts";
 import { loadConfig } from "../../workflow/effects.ts";
 import {
@@ -11,6 +12,7 @@ import {
 	engine as workflowEngineFactory,
 } from "../../workflow/operations.ts";
 import { parseAgentsConfig } from "../../workflow/profiles.ts";
+import type { WorkflowEngine } from "../../workflow/runtime.ts";
 import {
 	canonicalStorePath,
 	researchWorkflowTarget,
@@ -39,8 +41,17 @@ class RepositoryExecutionCoordinator {
 	private queuedWorkflowId: string | undefined;
 	private activeWorkflowId: string | undefined;
 	private controller: AbortController | undefined;
+	/** One engine per repository, built from the dashboard-owned application
+	 * layer (complete-workflow-effect-cutover, task 1): refresh/action/start
+	 * reuse the same runtime instead of creating a fresh engine per drain. */
+	private readonly workflowEngine: WorkflowEngine;
 
-	constructor(private readonly repo: string) {}
+	constructor(
+		private readonly repo: string,
+		application: WorkflowApplication,
+	) {
+		this.workflowEngine = workflowEngineFactory(application);
+	}
 
 	request(workflowId?: string): void {
 		if (this.disposed) return;
@@ -54,7 +65,7 @@ class RepositoryExecutionCoordinator {
 		this.workflowErrors.clear();
 		this.controller = new AbortController();
 		void drainEffects(
-			workflowEngineFactory(),
+			this.workflowEngine,
 			this.repo,
 			credentialPromptBridge(),
 			20,
@@ -103,12 +114,23 @@ class RepositoryExecutionCoordinator {
 
 const coordinators = new Map<string, RepositoryExecutionCoordinator>();
 
+/** The dashboard's one application runtime (complete-workflow-effect-cutover,
+ * task 1): all repositories' execution coordinators share this layer, so
+ * refresh/action/start/repair never create a fresh runtime per operation.
+ * Release it on dashboard unmount via `disposeDashboardApplication`. */
+export const dashboardApplication = new WorkflowApplication();
+
+export function disposeDashboardApplication(): void {
+	dashboardApplication.dispose();
+}
+
 export function executionCoordinator(
 	repo: string,
+	application: WorkflowApplication = dashboardApplication,
 ): RepositoryExecutionCoordinator {
 	let coordinator = coordinators.get(repo);
 	if (!coordinator) {
-		coordinator = new RepositoryExecutionCoordinator(repo);
+		coordinator = new RepositoryExecutionCoordinator(repo, application);
 		coordinators.set(repo, coordinator);
 	}
 	return coordinator;
@@ -144,7 +166,10 @@ export function getWorkflowView(
 	repo: string,
 	workflowId: string,
 ): WorkflowView {
-	const view = workflowEngineFactory().status(repo, workflowId);
+	const view = workflowEngineFactory(dashboardApplication).status(
+		repo,
+		workflowId,
+	);
 	const error = workflowExecutionError(repo, workflowId);
 	return error
 		? {
@@ -158,10 +183,13 @@ export function getWorkflowView(
 		: view;
 }
 export function listWorkflowViews(repo: string): WorkflowView[] {
-	return workflowEngineFactory().list(repo);
+	return workflowEngineFactory(dashboardApplication).list(repo);
 }
 export function previewWorkflowRepair(repo: string, workflowId: string) {
-	return workflowEngineFactory().previewRepair(repo, workflowId);
+	return workflowEngineFactory(dashboardApplication).previewRepair(
+		repo,
+		workflowId,
+	);
 }
 export function repairWorkflow(
 	repo: string,
@@ -170,7 +198,7 @@ export function repairWorkflow(
 	targetStep: string,
 	reason = "",
 ) {
-	const engine = workflowEngineFactory();
+	const engine = workflowEngineFactory(dashboardApplication);
 	const view = engine.status(repo, workflowId);
 	if (view.revision !== revision)
 		throw new Error(`stale revision ${revision}; current ${view.revision}`);
@@ -201,7 +229,7 @@ export function answerWorkflowQuestion(
 		  }
 		| { groupId: string; kind: "cancel" },
 ): WorkflowView {
-	const workflow = workflowEngineFactory();
+	const workflow = workflowEngineFactory(dashboardApplication);
 	const view = workflow.status(repo, workflowId);
 	const result = workflow.dispatch(repo, {
 		type: "developer.action",
@@ -221,7 +249,7 @@ export async function runWorkflowAction(
 	revision: number,
 	input?: string,
 ): Promise<string> {
-	const engine = workflowEngineFactory();
+	const engine = workflowEngineFactory(dashboardApplication);
 	const view = engine.status(repo, workflowId);
 	let parsed: unknown;
 	if (input) {
@@ -302,7 +330,7 @@ export async function startWorkflowInProcess(
 		ticket: args.ticket,
 		preset: args.preset,
 	});
-	const engine = workflowEngineFactory();
+	const engine = workflowEngineFactory(dashboardApplication);
 	engine.start(prepared.input);
 	requestWorkflowExecution(prepared.target, args.workflowId);
 	return `Workflow started: ${args.workflowId}`;
@@ -321,7 +349,7 @@ export function startWikiCommentWorkflowInProcess(
 		task: "Address the submitted wiki review comments.",
 		context: { comments },
 	});
-	const engine = workflowEngineFactory();
+	const engine = workflowEngineFactory(dashboardApplication);
 	engine.start(prepared.input);
 	requestWorkflowExecution(prepared.target, sessionId);
 	return `Wiki review workflow started: ${sessionId}`;

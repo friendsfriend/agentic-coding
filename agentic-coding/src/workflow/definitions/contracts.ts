@@ -82,28 +82,28 @@ export interface ResearchHandoff {
 	noSourcesUsed: boolean;
 }
 const MAX_RESEARCH_HANDOFF_BYTES = 48 * 1024;
-export const researchHandoffContract: Contract<ResearchHandoff> = {
-	id: "core.research-handoff",
-	version: 1,
-	parse(value) {
-		const parsed = decodeContract(
-			"core.research-handoff",
-			ResearchHandoffSchema,
-			value,
-		) as ResearchHandoff;
-		if (
-			Buffer.byteLength(JSON.stringify(parsed), "utf8") >
-			MAX_RESEARCH_HANDOFF_BYTES
-		)
-			throw new ContractFailure("core.research-handoff", [
-				{
-					path: "$",
-					message: `handoff exceeds ${MAX_RESEARCH_HANDOFF_BYTES} bytes serialized`,
-				},
-			]);
-		return parsed;
-	},
-};
+/** Schema-backed research-handoff decode (complete-workflow-effect-cutover,
+ * task 3.1): the migration-only `researchHandoffContract` facade is removed;
+ * the reducer decodes through the Schema path directly, keeping the byte
+ * bound as pure validation. */
+export function decodeResearchHandoff(value: unknown): ResearchHandoff {
+	const parsed = decodeContract(
+		"core.research-handoff",
+		ResearchHandoffSchema,
+		value,
+	) as ResearchHandoff;
+	if (
+		Buffer.byteLength(JSON.stringify(parsed), "utf8") >
+		MAX_RESEARCH_HANDOFF_BYTES
+	)
+		throw new ContractFailure("core.research-handoff", [
+			{
+				path: "$",
+				message: `handoff exceeds ${MAX_RESEARCH_HANDOFF_BYTES} bytes serialized`,
+			},
+		]);
+	return parsed;
+}
 export const triage: Contract<{
 	roles: string[];
 	assignments: Array<{ role: string; reason: string; files: string[] }>;
@@ -192,22 +192,18 @@ export const planDraft: Contract<{
  * (which also validates the id shape and the declared change directory). The
  * remaining fields the planner emits for developer review are bounded but
  * optional, so single-pass and addressed retries keep their shape. */
-export const planResult: Contract<{
+export function decodePlanResult(value: unknown): {
 	primaryChangeId: string;
 	summary?: string;
 	artifacts?: string[];
 	risks?: string[];
 	openQuestions?: string[];
-}> = {
-	id: "core.plan-result",
-	version: 1,
-	parse(value) {
-		return decodeContract("core.plan-result", PlanResultSchema, value) as {
-			primaryChangeId: string;
-			summary?: string;
-			artifacts?: string[];
-			risks?: string[];
-			openQuestions?: string[];
-		};
-	},
-};
+} {
+	return decodeContract("core.plan-result", PlanResultSchema, value) as {
+		primaryChangeId: string;
+		summary?: string;
+		artifacts?: string[];
+		risks?: string[];
+		openQuestions?: string[];
+	};
+}

@@ -20,15 +20,42 @@ Version-matched official documentation:
 > write/read operations are Effect programs with typed `WorkflowRuntimeError`
 > failures and concrete `WorkflowStore`/`WorkflowClock`/`WorkflowConfig`
 > service requirements, provided at the engine composition root via
-> `engineLayer` (`runtime/services.ts`). The `WorkflowEngine` class keeps its
-> historical synchronous signatures as an inventoried outer bridge;
-> `complete-workflow-effect-cutover` removes it. The effect runner and its
+> `engineLayer` (`runtime/services.ts`). The `WorkflowEngine` class is the
+> retained in-process boundary: it keeps its historical synchronous signatures
+> so the CLI/dashboard/drain-runner/test surfaces compose the same operations
+> without a nested runtime, consumes the root-owned application layer, and
+> exposes every operation as a public Effect program for callers that run at
+> the named composition root directly. The effect runner and its
 > adapters (phase 3) are Effect-native: handlers are Effect operations, the
 > runner executes each claim in a scoped program with supervised lease
-> renewal and a typed failure policy. The CLI and TUI composition boundary
-> follows in phase 4.
+> renewal and a typed failure policy. Phase 4 owns the application
+> composition roots: `src/workflow/application.ts` is the single named root
+> where the production layer (`applicationLayer`) is composed and Effect
+> programs are run; the CLI invocation owns one application layer for its
+> bounded command lifetime, and the dashboard owns one shared application
+> runtime. Guarded services never run their own nested Effect runtime — the
+> architecture checker (`scripts/workflow-architecture.ts`) rejects runtime
+> execution outside the named composition roots.
 > Pure graph/step/projection/formatting functions remain plain deterministic
 > TypeScript.
+
+## Application composition roots (phase 4)
+
+`src/workflow/application.ts` is the named composition boundary:
+
+- `applicationLayer(now)` composes the production store, live clock, and
+  provenance-aware config services into one layer (`WorkflowConfig` |
+  `WorkflowStore` | `WorkflowClock`).
+- `WorkflowApplication` is the dashboard's one shared application runtime:
+  refresh/action/start/repair all run on the same instance
+  (`runSync`), repository execution and observation run as child scopes
+  through the store service's acquire/release, and `dispose()` performs
+  bounded shutdown finalization.
+- `runCliProgram(program, now)` is the CLI-invocation owner: one application
+  layer for a bounded command lifetime, disposed afterwards.
+- The engine facade consumes the root-owned layer (`new WorkflowEngine(
+  registry, clock, onCommitted, application.layerOf())`) instead of building
+  a nested runtime of its own.
 
 ## Operations: sequential typed effects
 
@@ -81,9 +108,13 @@ Recovery distinctions that must stay separate (spec `workflow-effect-conventions
 ## Schemas: one Effect Schema-backed implementation per contract
 
 `src/workflow/schema.ts` is the single source of truth for decoding command,
-snapshot, dialogue, and built-in step input/output data. The `Contract<T>`
-facades in `contracts.ts` / `definitions/contracts.ts` delegate to it via
-`decodeContract` — they are not second validators.
+snapshot, dialogue, and built-in step input/output data. Plain decode
+functions in `contracts.ts` / `definitions/contracts.ts` (`decodeCommand`,
+`decodeSnapshot`, `decodeDeveloperQuestionAnswer`, `decodeResearchHandoff`,
+`decodePlanResult`) delegate to it via `decodeContract`; the migration-only
+`Contract<T>` facades were removed in phase 4, so callers decode through
+Schema directly. (The registered step contracts in `definitions/steps.ts`
+retain `Contract<T>` objects only as pure contract identity descriptors.)
 
 ```ts
 import { Schema } from "effect";
@@ -99,9 +130,9 @@ const answer = decodeContract("core.developer-question", Answer, raw);
 ```
 
 Cross-field invariants and byte bounds that a single field schema cannot
-express stay as **pure validation functions** called by the facade (for
-example the "either description or questions" rule in
-`commandContract.parse`). Schema implementation metadata never enters durable
+express stay as **pure validation functions** called by the decode entry
+(for example the "either description or questions" rule in
+`decodeCommand`). Schema implementation metadata never enters durable
 pins or wire values; contract IDs/versions and definition/step digests are
 independent of the parser implementation.
 
@@ -171,10 +202,10 @@ rather than adding another test framework.
 
 ```ts
 import { expect, test } from "bun:test";
-import { commandContract } from "./contracts.ts";
+import { decodeCommand } from "./contracts.ts";
 
-test("command facade accepts an omitted reason as empty", () => {
-	const parsed = commandContract.parse({
+test("command decode accepts an omitted reason as empty", () => {
+	const parsed = decodeCommand({
 		type: "operator.repair",
 		workflowId: "w",
 		revision: 3,
@@ -183,6 +214,76 @@ test("command facade accepts an omitted reason as empty", () => {
 	expect(parsed.type === "operator.repair" ? parsed.reason : null).toBe("");
 });
 ```
+
+## Production-backed recipes (phase 4)
+
+Both recipes compile against production symbols and run with the locked
+Effect 3.22.2 — the focused verification commands are the same ones the
+workflow-owned test verifier runs against changed behavior.
+
+### Recipe 1: a cancellable external handler with typed transient failure
+
+External work (git, subprocess, network) belongs in an `EffectHandler` in
+`effect-runner.ts` (or a named adapter): the runner executes it inside one
+scope with supervised lease renewal, so the handler just observes `signal`
+and classifies failures explicitly on the way out.
+
+```ts
+import { Effect } from "effect";
+import { TransientFailure, PermanentFailure } from "./failures.ts";
+import type { EffectHandler } from "./effect-runner.ts";
+
+const handler: EffectHandler = {
+	execute: (effect, signal) => {
+		const repo =
+			typeof effect.payload === "object" && effect.payload !== null
+				? String((effect.payload as { repo?: unknown }).repo ?? process.cwd())
+				: process.cwd();
+		return runProcessEffect(["git", "-C", repo, "fetch"], { signal }).pipe(
+			// Confirmed infrastructure -> durable outbox retry budget.
+			Effect.mapError((failure) => new TransientFailure(failure.detail)),
+		);
+	},
+	// Lease-loss / stale-ownership is never a retryable condition.
+	cancel: (effect) =>
+		Effect.fail(new PermanentFailure(`cancel ${effect.id} not supported`)),
+};
+```
+
+Expected failures: `TransientFailure` requests the durable retry budget;
+`PermanentFailure` and validation go to attention immediately; interruption
+stops work without claiming completion. Never re-execute a mutating handler
+outside the runner's persisted attempt accounting. Focused verification:
+`bun test test/workflow-execution.test.ts` (policy/renewal/cancellation cases)
+and `bun test test/workflow-effects.test.ts`.
+
+### Recipe 2: a validated command with pure step behavior
+
+Commands decode through the Schema-backed path (`schema.ts` via
+`decodeContract`/facade), then reducers and step behavior stay pure: step
+hooks in `steps/*.ts` receive snapshot/evidence and return plain values — no
+services, no I/O, no runtime execution. Composition and I/O live at the
+named roots (`application.ts` + `workflow/cli/`), never inside a step.
+
+```ts
+import { Effect } from "effect";
+import { decodeCommand } from "./contracts.ts";
+
+export function validateCommandSurface(raw: unknown): string[] {
+	const parsed = decodeCommand(raw); // Schema decode + pure invariants
+	return parsed.type === "operator.repair" && parsed.workflowId
+		? [parsed.targetStep]
+		: [];
+}
+export const composed = Effect.sync(() => validateCommandSurface({}));
+```
+
+Expected failures: `ContractFailure`/`invalid-input` reject before any
+capability use or mutation; `stale-revision` maps to the typed rejection
+without message matching. Focused verification:
+`bun test test/workflow-effect-foundation.test.ts test/workflow-runtime.test.ts`,
+then `bun run type-check && bun run lint && bun run build` from
+`agentic-coding/`.
 
 ## The outer runtime boundary
 

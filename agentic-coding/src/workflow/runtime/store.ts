@@ -18,7 +18,7 @@ import type {
 	WorkflowRun,
 	WorkflowSnapshot,
 } from "../contracts.ts";
-import { parseSnapshot, WorkflowRuntimeError } from "../contracts.ts";
+import { decodeSnapshot, WorkflowRuntimeError } from "../contracts.ts";
 import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
@@ -1217,7 +1217,7 @@ export function validateSnapshot(
 	runs: WorkflowRun[],
 	registry: WorkflowRegistry,
 ): void {
-	parseSnapshot(JSON.parse(json(snapshot)));
+	decodeSnapshot(JSON.parse(json(snapshot)));
 	if (snapshot.definition.digest !== definition.digest)
 		throw new WorkflowRuntimeError(
 			"pin-mismatch",
@@ -1320,7 +1320,7 @@ export function expireDueQuestions(
 	db.exec("BEGIN IMMEDIATE");
 	try {
 		const row = instance(db, workflowId);
-		const snapshot = parseSnapshot(JSON.parse(row.snapshot_json));
+		const snapshot = decodeSnapshot(JSON.parse(row.snapshot_json));
 		const due = snapshot.developerDialogue.filter(
 			(item) =>
 				item.status === "pending" &&
@@ -1419,7 +1419,7 @@ export function getSnapshot(
 ): WorkflowSnapshot {
 	const db = openReadStore(repo);
 	try {
-		return parseSnapshot(JSON.parse(instance(db, workflowId).snapshot_json));
+		return decodeSnapshot(JSON.parse(instance(db, workflowId).snapshot_json));
 	} finally {
 		db.close();
 	}
