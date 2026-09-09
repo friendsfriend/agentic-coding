@@ -1,14 +1,20 @@
 import fs from "node:fs";
 import path from "node:path";
+import { Effect } from "effect";
 import { runGit } from "./cli/git.ts";
 import { registry as defaultRegistry } from "./cli/registry.ts";
-import type { WorkflowRouting } from "./contracts.ts";
+import type {
+	WorkflowExecutionSettings,
+	WorkflowRouting,
+	WorkflowRuntimeError,
+} from "./contracts.ts";
 import {
 	definitionVersionForBehaviorPins,
 	PUBLIC_WORKFLOW_CATALOG,
 	registerBuiltins,
 } from "./definitions.ts";
 import {
+	type ConfigOptions,
 	type ConfigProvenance,
 	executionSettings,
 	loadConfigWithProvenance,
@@ -26,6 +32,10 @@ import {
 	validatePresetCoverage,
 } from "./profiles.ts";
 import type { WorkflowRegistry } from "./registry.ts";
+import {
+	toRuntimeError,
+	WorkflowConfig as WorkflowConfigService,
+} from "./runtime/services.ts";
 import {
 	researchWorkflowTarget,
 	validateWorkflowId,
@@ -244,9 +254,18 @@ export function startRouting(
 	);
 }
 
-export function prepareWorkflowStart(
-	request: WorkflowStartRequest,
-): PreparedWorkflowStart {
+interface PreparedStartContext {
+	repo: string;
+	target: string;
+	independent: boolean;
+	options: ConfigOptions;
+	workflowId: string;
+}
+
+/** Stage 1 of shared startup: resolve the target repository/worktree and the
+ * config options used for the provenance-resolved load. Pure/sync; the Effect
+ * boundary loads the config through `WorkflowConfig`. */
+function startupContext(request: WorkflowStartRequest): PreparedStartContext {
 	if (
 		request.definitionId !== "wiki-comments" &&
 		!PUBLIC_WORKFLOW_CATALOG.some((item) => item.id === request.definitionId)
@@ -274,11 +293,27 @@ export function prepareWorkflowStart(
 			? wikiWorkflowTarget()
 			: repo;
 	const independent = wikiOnly || (research && !request.repositoryContext);
-	const resolved = loadConfigWithProvenance({
-		repository: independent ? undefined : repo,
-		repositoryIndependent: independent,
-	});
-	const config = resolved.config;
+	return {
+		repo,
+		target,
+		independent,
+		options: {
+			repository: independent ? undefined : repo,
+			repositoryIndependent: independent,
+		},
+		workflowId,
+	};
+}
+
+/** Stage 2 of shared startup: derive routing, profiles, preflight, and git
+ * evidence from the loaded config. Pure routing/profile helpers stay here. */
+function prepareFromContext(
+	request: WorkflowStartRequest,
+	ctx: PreparedStartContext,
+	config: WorkflowConfig,
+	provenance: ConfigProvenance,
+	settings: WorkflowExecutionSettings,
+): PreparedWorkflowStart {
 	const definitionVersion = definitionVersionForBehaviorPins(
 		config.workflow.max_verification_rounds,
 	);
@@ -299,51 +334,60 @@ export function prepareWorkflowStart(
 		request.preset,
 		request.fusionProfiles,
 	);
-	const finalRouting = research
-		? enforceResearchReadOnlyRouting(routing, definition.initial)
-		: routing;
+	const finalRouting =
+		request.definitionId === "research"
+			? enforceResearchReadOnlyRouting(routing, definition.initial)
+			: routing;
 	for (const route of finalRouting.routes)
 		preflightProfile(
 			route.profile,
 			registry.stepForDefinition(definition, route.stepId).requirements,
 		);
+	const wikiOnly =
+		request.definitionId === "wiki-comments" ||
+		ctx.target === wikiWorkflowTarget();
 	if (!wikiOnly)
-		validateStart(repo, workflowId, request.definitionId, request.task);
+		validateStart(ctx.repo, ctx.workflowId, request.definitionId, request.task);
 	const sameCheckout = [
 		"openspec-propose",
 		"openspec-fusion-propose",
 		"wiki",
 	].includes(request.definitionId);
+	const research = request.definitionId === "research";
 	if (!research && !wikiOnly && sameCheckout && request.mode !== "checkout")
 		throw new Error("repository-backed workflows require checkout mode");
 	const baseCommit =
 		research || wikiOnly
 			? ""
 			: sameCheckout
-				? runGit(repo, "rev-parse", "HEAD")
-				: runGit(repo, "rev-parse", `${config.workflow.base_branch}^{commit}`);
+				? runGit(ctx.repo, "rev-parse", "HEAD")
+				: runGit(
+						ctx.repo,
+						"rev-parse",
+						`${config.workflow.base_branch}^{commit}`,
+					);
 	if (!research && !wikiOnly && !sameCheckout)
-		runGit(repo, "remote", "get-url", config.workflow.remote);
+		runGit(ctx.repo, "remote", "get-url", config.workflow.remote);
 	const branch =
 		research || wikiOnly
 			? ""
 			: sameCheckout
-				? runGit(repo, "branch", "--show-current")
-				: `${config.workflow.branch_prefix}${workflowId}`;
+				? runGit(ctx.repo, "branch", "--show-current")
+				: `${config.workflow.branch_prefix}${ctx.workflowId}`;
 	if (!research && !wikiOnly && sameCheckout && !branch)
 		throw new Error(
 			"repository-backed workflows require a named current branch",
 		);
 	return {
 		config,
-		provenance: resolved.provenance,
-		target,
+		provenance,
+		target: ctx.target,
 		input: {
-			repo: target,
-			...(research && repo ? { repositoryContext: repo } : {}),
+			repo: ctx.target,
+			...(research && ctx.repo ? { repositoryContext: ctx.repo } : {}),
 			...(request.mode ? { mode: request.mode } : {}),
 			sameCheckout,
-			workflowId,
+			workflowId: ctx.workflowId,
 			definitionId: request.definitionId,
 			definitionVersion,
 			...(request.context
@@ -355,11 +399,60 @@ export function prepareWorkflowStart(
 				baseCommit,
 				...(request.task?.trim() ? { task: request.task.trim() } : {}),
 				...(request.ticket ? { ticket: request.ticket } : {}),
-				executionSettings: executionSettings(config, resolved.provenance),
+				executionSettings: settings,
 			},
 			routing: finalRouting,
 		},
 	};
+}
+
+export function prepareWorkflowStart(
+	request: WorkflowStartRequest,
+): PreparedWorkflowStart {
+	const ctx = startupContext(request);
+	const resolved = loadConfigWithProvenance(ctx.options);
+	return prepareFromContext(
+		request,
+		ctx,
+		resolved.config,
+		resolved.provenance,
+		executionSettings(resolved.config, resolved.provenance),
+	);
+}
+
+/** Shared Effect application preparation used by CLI and dashboard entry
+ * points: config provenance and execution settings resolve through the
+ * `WorkflowConfig` service; routing/profile decisions stay pure. */
+export function prepareWorkflowStartEffect(
+	request: WorkflowStartRequest,
+): Effect.Effect<
+	PreparedWorkflowStart,
+	WorkflowRuntimeError,
+	WorkflowConfigService
+> {
+	return Effect.gen(function* () {
+		const service = yield* WorkflowConfigService;
+		const ctx = yield* Effect.try({
+			try: () => startupContext(request),
+			catch: toRuntimeError,
+		});
+		const resolved = yield* service.load(ctx.options);
+		const settings = yield* service.executionSettingsOf(
+			resolved.config,
+			resolved.provenance,
+		);
+		return yield* Effect.try({
+			try: () =>
+				prepareFromContext(
+					request,
+					ctx,
+					resolved.config,
+					resolved.provenance,
+					settings,
+				),
+			catch: toRuntimeError,
+		});
+	});
 }
 
 export function startWorkflow(

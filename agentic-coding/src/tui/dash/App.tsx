@@ -1120,21 +1120,25 @@ export function App(props: {
 				const artifact = artifacts()[selectedArtifact()];
 				if (artifact) {
 					setVerdictRenderMarkdown(true);
-					setMessage("Loading artifact…");
+					setVerdict({
+						title: `OpenSpec · ${artifact}`,
+						content: "Loading artifact…",
+					});
+					setVerdictOffset(0);
+					props.keymap.setData("modal.active", "verdict");
 					void openSpecArtifactAsync(
 						data().state,
 						artifact,
 						artifactController?.signal,
 					)
-						.then((content) => {
-							setVerdict({ title: `OpenSpec · ${artifact}`, content });
-							setVerdictOffset(0);
-							props.keymap.setData("modal.active", "verdict");
-						})
+						.then((content) =>
+							setVerdict({ title: `OpenSpec · ${artifact}`, content }),
+						)
 						.catch((error) =>
-							setMessage(
-								error instanceof Error ? error.message : String(error),
-							),
+							setVerdict({
+								title: `OpenSpec · ${artifact}`,
+								content: `Could not open ${artifact}: ${error instanceof Error ? error.message : String(error)}`,
+							}),
 						);
 				}
 				return;
