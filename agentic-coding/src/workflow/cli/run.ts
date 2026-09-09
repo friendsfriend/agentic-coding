@@ -5,6 +5,7 @@
 // shared `cli/*.ts` helpers; this file only parses argv, resolves shared
 // context, and dispatches.
 import { loadConfig } from "../effects.ts";
+import { drainEffects, engine, listProjects } from "../operations.ts";
 import type { WorkflowEngine } from "../runtime.ts";
 import { flag, positional, positionals, requireFlag } from "./args.ts";
 import type { CallerEnvironment } from "./caller-environment.ts";
@@ -15,7 +16,6 @@ import {
 	validateQuestionTimeout,
 } from "./commands/dispatch-actions.ts";
 import {
-	listProjects,
 	runAgentExtension,
 	runMigrate,
 	runRepair,
@@ -24,11 +24,10 @@ import {
 import { runResearchHandoff } from "./commands/research-handoff.ts";
 import { parseMode, runStart } from "./commands/start.ts";
 import { runWiki } from "./commands/wiki.ts";
-import { detachedDrainArgv, drainEffects } from "./drain.ts";
+import { detachedDrainArgv } from "./drain.ts";
 import { help } from "./help.ts";
 import { resolveHandoffIdentity } from "./identity.ts";
 import { verificationPosition } from "./pane.ts";
-import { engine } from "./registry.ts";
 import { required, SUBCOMMANDS, validateArgs } from "./schema.ts";
 
 async function runStatus(

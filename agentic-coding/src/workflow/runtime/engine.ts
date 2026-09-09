@@ -30,7 +30,6 @@ import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
 } from "../registry.ts";
-import { prepareStepEvidence } from "../steps/validation.ts";
 import { ensureBundle, wikiRoot } from "../wiki.ts";
 import {
 	authorizeAgentCapability as capabilityAuthorizeAgentCapability,
@@ -74,6 +73,7 @@ import { developerAction } from "./reducers/developer-action.ts";
 import { effectResult } from "./reducers/effect-result.ts";
 import { migrate, repair, repin, resume } from "./reducers/repair.ts";
 import { recordResearchHandoff } from "./reducers/research-handoff.ts";
+import { prepareStepEvidence } from "./step-evidence.ts";
 import {
 	type EffectRow,
 	effectFromRow,

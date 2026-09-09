@@ -10,10 +10,7 @@ import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
 } from "../../registry.ts";
-import {
-	type PreparedStepEvidence,
-	prepareStepEvidence,
-} from "../../steps/validation.ts";
+import type { PreparedStepEvidence } from "../../steps/validation.ts";
 import { artifact, tokenMatches } from "../capability.ts";
 import { sourceContentFingerprint } from "../evidence.ts";
 import {
@@ -21,6 +18,7 @@ import {
 	expireSiblingRuns,
 	transition,
 } from "../kernel.ts";
+import { prepareStepEvidence } from "../step-evidence.ts";
 import { ACTIVE_RUN, nowIso, type RunRow, runFromRow } from "../store.ts";
 import { wikiWorkflowDataRoot } from "../targets.ts";
 

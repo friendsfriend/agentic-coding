@@ -1,0 +1,1 @@
+export const catalog = ["openspec-full", "wiki"] as const;

@@ -1,6 +1,6 @@
 import { watch } from "node:fs";
 import path from "node:path";
-
+import { drainEffects } from "../../operations.ts";
 // The developer-action, agent-handoff, and agent-question command branches:
 // `action`, `question`, and `handoff`. Moved verbatim out of cli.ts
 // (split-workflow-god-modules).
@@ -17,7 +17,7 @@ import {
 	requireFlag,
 } from "../args.ts";
 import { managedAgent, managedWorkflowTarget } from "../caller-environment.ts";
-import { drainEffects, scheduleDrain } from "../drain.ts";
+import { scheduleDrain } from "../drain.ts";
 
 async function waitForQuestionChange(
 	engine: WorkflowEngine,

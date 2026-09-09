@@ -4,18 +4,13 @@ import { planResult } from "../definitions/contracts.ts";
 import type { StepBehavior } from "./types.ts";
 import {
 	type PreparedStepEvidence,
-	prepareStepEvidence,
 	validatePlanningArtifacts,
 } from "./validation.ts";
 
 const validatePlanning = ({
-	snapshot,
 	evidence,
 }: Parameters<NonNullable<StepBehavior["validateEvidence"]>>[0]) =>
-	validatePlanningArtifacts(
-		(evidence as PreparedStepEvidence | undefined) ??
-			prepareStepEvidence(snapshot),
-	);
+	validatePlanningArtifacts(evidence as PreparedStepEvidence);
 
 const PLANNER_ROLE = /^planner-[1-5]$/;
 const plannerRoles = (count: number): string[] =>
