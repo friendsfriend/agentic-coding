@@ -1,5 +1,18 @@
 import path from "node:path";
+import {
+	type Contract,
+	ContractFailure,
+	DeveloperQuestionAnswerSchema,
+	decodeContract,
+	WorkflowCommandSchema,
+	WorkflowSnapshotSchema,
+} from "./schema.ts";
 
+export {
+	type Contract,
+	type ContractError,
+	ContractFailure,
+} from "./schema.ts";
 /** Shared with `src/workflow/steps/*.ts` so step behavior hooks can throw the
  * same engine error the runtime recognizes, without importing runtime.ts and
  * creating a cycle back through definitions.ts -> steps/index.ts. */
@@ -11,6 +24,100 @@ export class WorkflowRuntimeError extends Error {
 	) {
 		super(message);
 	}
+}
+
+/** External diagnostic codes that `WorkflowFailure` maps onto. These are the
+ * stable codes the workflow CLI and dashboard already expose; the typed
+ * failure union below keeps recovery distinctions (expected vs defect vs
+ * interruption) without a stringly-typed umbrella. */
+export type ExternalDiagnosticCode =
+	| "invalid-command"
+	| "invalid-input"
+	| "reducer-contract"
+	| "artifact"
+	| "unauthorized"
+	| "stale-run"
+	| "stale-effect"
+	| "pin-mismatch"
+	| "change-id"
+	| "entry-guard"
+	| "start-guard"
+	| "triage"
+	| "unavailable";
+
+/** Concrete tagged operational failures (adopt-workflow-effect-foundation,
+ * task 2.1). Each expected failure carries a stable external diagnostic code
+ * and a bounded, redacted message. Unexpected defects and interruption stay
+ * distinct from ordinary retryable failures so a generic error conversion
+ * cannot silently retry a defect. Secrets/raw input are never placed in the
+ * default `message`; `detail` is bounded and redacted. */
+export type WorkflowFailure =
+	| {
+			_tag: "invalid-input";
+			code: "invalid-command" | "reducer-contract" | "artifact";
+			message: string;
+	  }
+	| {
+			_tag: "validation";
+			code: "invalid-input";
+			message: string;
+			issues?: readonly { path: string; message: string }[];
+	  }
+	| { _tag: "unauthorized"; code: "unauthorized"; message: string }
+	| {
+			_tag: "stale-revision";
+			code: "stale-run";
+			message: string;
+			currentRevision: number;
+	  }
+	| { _tag: "stale-ownership"; code: "stale-effect"; message: string }
+	| {
+			_tag: "compatibility";
+			code:
+				| "pin-mismatch"
+				| "change-id"
+				| "entry-guard"
+				| "start-guard"
+				| "triage";
+			message: string;
+	  }
+	| { _tag: "infrastructure"; code: "unavailable"; message: string }
+	| { _tag: "defect"; message: string };
+
+/** Mask credential-shaped content so a secret that reaches a message before
+ * the slice bound is still not emitted verbatim (SEC-001 defense in depth;
+ * the primary fix removes raw received values at `decodeContract`). Keeps
+ * digest/hex identifiers intact — only values adjacent to secret key words
+ * (and `Bearer` tokens) are masked. Bare `key=`/`nonce=`/`hash=` labels are
+ * included so credential-shaped values are masked even without a secret
+ * keyword prefix. */
+function redactSecrets(message: string): string {
+	return message
+		.replace(
+			/(token|secret|password|credential|authorization|api[_-]?key|key|nonce|hash)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;]+)/gi,
+			"$1: <redacted>",
+		)
+		.replace(/\bBearer\s+\S+/gi, "Bearer <redacted>");
+}
+
+/** Map a typed failure to the bounded, redacted external diagnostic the CLI
+ * and dashboard surface. Never emits raw secrets or full input contents. */
+export function externalDiagnostic(failure: WorkflowFailure): {
+	code: string;
+	message: string;
+} {
+	return {
+		code: failure._tag === "defect" ? "unavailable" : failure.code,
+		message: redactSecrets(failure.message).slice(0, 2048),
+	};
+}
+
+/** True when a failure is a retryable, expected infrastructure/ownership
+ * condition rather than a programming defect or terminal validation error. */
+export function isRetryableFailure(
+	failure: WorkflowFailure,
+): failure is Extract<WorkflowFailure, { _tag: "infrastructure" }> {
+	return failure._tag === "infrastructure";
 }
 
 export type ActorKind = "agent" | "developer" | "system";
@@ -64,83 +171,6 @@ export type JsonValue =
 	| JsonPrimitive
 	| JsonValue[]
 	| { [key: string]: JsonValue };
-
-export interface ContractError {
-	path: string;
-	message: string;
-}
-export class ContractFailure extends Error {
-	constructor(
-		readonly contractId: string,
-		readonly issues: ContractError[],
-	) {
-		super(
-			`${contractId}: ${issues
-				.slice(0, 8)
-				.map((issue) => `${issue.path}: ${issue.message}`)
-				.join("; ")}`,
-		);
-	}
-}
-export interface Contract<T> {
-	readonly id: string;
-	readonly version: number;
-	parse(value: unknown): T;
-}
-
-function object(value: unknown, at: string): Record<string, unknown> {
-	if (!value || typeof value !== "object" || Array.isArray(value))
-		throw new ContractFailure(at, [{ path: at, message: "expected object" }]);
-	return value as Record<string, unknown>;
-}
-function text(value: unknown, at: string, max = 4096): string {
-	if (typeof value !== "string" || !value.trim() || value.length > max)
-		throw new ContractFailure(at, [
-			{ path: at, message: `expected non-empty string <= ${max} bytes` },
-		]);
-	return value;
-}
-function boundedText(value: unknown, at: string, max = 4096): string {
-	if (value === undefined || value === null) return "";
-	if (typeof value !== "string" || value.length > max)
-		throw new ContractFailure(at, [
-			{ path: at, message: `expected string <= ${max} bytes` },
-		]);
-	return value;
-}
-function integer(value: unknown, at: string, min = 0): number {
-	if (!Number.isInteger(value) || Number(value) < min)
-		throw new ContractFailure(at, [
-			{ path: at, message: `expected integer >= ${min}` },
-		]);
-	return Number(value);
-}
-function strings(value: unknown, at: string): string[] {
-	if (!Array.isArray(value) || value.some((item) => typeof item !== "string"))
-		throw new ContractFailure(at, [
-			{ path: at, message: "expected string array" },
-		]);
-	return value as string[];
-}
-function enumValue<const T extends readonly string[]>(
-	value: unknown,
-	at: string,
-	values: T,
-): T[number] {
-	if (typeof value !== "string" || !values.includes(value as T[number]))
-		throw new ContractFailure(at, [
-			{ path: at, message: `expected ${values.join("|")}` },
-		]);
-	return value as T[number];
-}
-export const validation = {
-	object,
-	text,
-	boundedText,
-	integer,
-	strings,
-	enumValue,
-};
 
 export interface DefinitionPin {
 	id: string;
@@ -529,24 +559,17 @@ export const commandContract: Contract<WorkflowCommand> = {
 	id: "core.workflow-command",
 	version: 1,
 	parse(value: unknown): WorkflowCommand {
-		const input = object(value, "$");
-		const type = text(input.type, "$.type", 64);
-		if (type === "developer.action") {
-			const actionId = text(input.actionId, "$.actionId");
-			return {
-				type,
-				workflowId: text(input.workflowId, "$.workflowId"),
-				revision: integer(input.revision, "$.revision"),
-				actionId,
-				input:
-					actionId === "answer-question"
-						? parseDeveloperQuestionAnswer(input.input)
-						: input.input,
-			};
-		}
-		if (type === "agent.question") {
-			const hasDescription = input.description !== undefined;
-			const hasQuestions = input.questions !== undefined;
+		const command = decodeContract<WorkflowCommand>(
+			"core.workflow-command",
+			WorkflowCommandSchema,
+			value,
+		);
+		// Cross-field invariants (pure validation, design-permitted): a question
+		// command provides either a description or a questionnaire, never both,
+		// and a questionnaire carries no top-level context/options.
+		if (command.type === "agent.question") {
+			const hasDescription = command.description !== undefined;
+			const hasQuestions = command.questions !== undefined;
 			if (hasDescription === hasQuestions)
 				throw new ContractFailure("core.developer-question", [
 					{
@@ -556,7 +579,7 @@ export const commandContract: Contract<WorkflowCommand> = {
 				]);
 			if (
 				hasQuestions &&
-				(input.options !== undefined || input.context !== undefined)
+				(command.options !== undefined || command.context !== undefined)
 			)
 				throw new ContractFailure("core.developer-question", [
 					{
@@ -564,165 +587,20 @@ export const commandContract: Contract<WorkflowCommand> = {
 						message: "questionnaires use per-item context and options",
 					},
 				]);
-			const questions = hasQuestions
-				? questionItems(input.questions)
-				: undefined;
-			return {
-				type,
-				workflowId: text(input.workflowId, "$.workflowId"),
-				runId: text(input.runId, "$.runId"),
-				stepId: text(input.stepId, "$.stepId"),
-				role: text(input.role, "$.role"),
-				token: text(input.token, "$.token", 1024),
-				...(hasDescription
-					? {
-							description: text(input.description, "$.description", 4096),
-							...(input.context === undefined
-								? {}
-								: { context: boundedText(input.context, "$.context", 4096) }),
-							options: questionOptions(input.options, "$.options"),
-						}
-					: { questions }),
-			};
 		}
-		if (type === "agent.question-expire")
+		// The answer-question action's input is a developer-question answer.
+		if (
+			command.type === "developer.action" &&
+			command.actionId === "answer-question"
+		)
 			return {
-				type,
-				workflowId: text(input.workflowId, "$.workflowId"),
-				questionId: text(input.questionId, "$.questionId"),
-				runId: text(input.runId, "$.runId"),
-				stepId: text(input.stepId, "$.stepId"),
-				role: text(input.role, "$.role"),
-				token: text(input.token, "$.token", 1024),
+				...command,
+				input: parseDeveloperQuestionAnswer(command.input),
 			};
-		if (type === "timer.question-expire")
-			return {
-				type,
-				workflowId: text(input.workflowId, "$.workflowId"),
-				questionId: text(input.questionId, "$.questionId"),
-				timerNonce: text(input.timerNonce, "$.timerNonce", 128),
-			};
-		if (type === "agent.handoff")
-			return {
-				type,
-				runId: text(input.runId, "$.runId"),
-				generation: integer(input.generation, "$.generation", 1),
-				token: text(input.token, "$.token", 1024),
-				outcome: enumValue(input.outcome, "$.outcome", [
-					"complete",
-					"blocked",
-					"failed",
-				]),
-				...(input.artifact === undefined
-					? {}
-					: { artifact: text(input.artifact, "$.artifact") }),
-				...(input.message === undefined
-					? {}
-					: { message: text(input.message, "$.message", 4096) }),
-			};
-		if (type === "agent.research-handoff")
-			return {
-				type,
-				workflowId: text(input.workflowId, "$.workflowId"),
-				runId: text(input.runId, "$.runId"),
-				stepId: text(input.stepId, "$.stepId"),
-				role: text(input.role, "$.role"),
-				token: text(input.token, "$.token", 1024),
-				handoff: input.handoff,
-			};
-		if (type === "effect.result")
-			return {
-				type,
-				effectId: text(input.effectId, "$.effectId"),
-				lease: text(input.lease, "$.lease"),
-				outcome: enumValue(input.outcome, "$.outcome", [
-					"complete",
-					"retry",
-					"failed",
-				]),
-				data: input.data,
-			};
-		if (type === "operator.repair")
-			return {
-				type,
-				workflowId: text(input.workflowId, "$.workflowId"),
-				revision: integer(input.revision, "$.revision"),
-				targetStep: text(input.targetStep, "$.targetStep"),
-				reason: boundedText(input.reason, "$.reason", 2048),
-			};
-		if (type === "operator.repin")
-			return {
-				type,
-				workflowId: text(input.workflowId, "$.workflowId"),
-				revision: integer(input.revision, "$.revision"),
-			};
-		if (type === "operator.migrate")
-			return {
-				type,
-				workflowId: text(input.workflowId, "$.workflowId"),
-				revision: integer(input.revision, "$.revision"),
-				targetVersion: integer(input.targetVersion, "$.targetVersion", 1),
-				reason: boundedText(input.reason, "$.reason", 2048),
-			};
-		if (type === "operator.resume")
-			return {
-				type,
-				workflowId: text(input.workflowId, "$.workflowId"),
-				revision: integer(input.revision, "$.revision"),
-			};
-		throw new ContractFailure("core.workflow-command", [
-			{ path: "$.type", message: "unknown command" },
-		]);
+		return command;
 	},
 };
 
-const MAX_QUESTIONNAIRE_ITEMS = 8;
-function questionItems(value: unknown): DeveloperQuestionItem[] {
-	if (
-		!Array.isArray(value) ||
-		value.length < 1 ||
-		value.length > MAX_QUESTIONNAIRE_ITEMS
-	)
-		throw new ContractFailure("core.developer-question", [
-			{
-				path: "$.questions",
-				message: `expected 1-${MAX_QUESTIONNAIRE_ITEMS} question items`,
-			},
-		]);
-	return value.map((entry, index) => {
-		const at = `$.questions[${index}]`;
-		const item = object(entry, at);
-		return {
-			description: text(item.description, `${at}.description`, 4096),
-			...(item.context === undefined
-				? {}
-				: { context: boundedText(item.context, `${at}.context`, 4096) }),
-			options: questionOptions(item.options, `${at}.options`),
-		};
-	});
-}
-function questionOptions(
-	value: unknown,
-	at: string,
-): DeveloperQuestionOption[] {
-	if (value === undefined) return [];
-	if (!Array.isArray(value) || value.length > 16)
-		throw new ContractFailure("core.developer-question", [
-			{ path: at, message: "expected at most 16 option objects" },
-		]);
-	const options = value.map((entry, index) => {
-		const item = object(entry, `${at}[${index}]`);
-		return {
-			label: text(item.label, `${at}[${index}].label`, 256),
-			value: text(item.value, `${at}[${index}].value`, 1024),
-		};
-	});
-	if (new Set(options.map((item) => item.value)).size !== options.length)
-		throw new ContractFailure("core.developer-question", [
-			{ path: at, message: "option values must be unique" },
-		]);
-	return options;
-}
 export type DeveloperQuestionAnswer =
 	| {
 			questionId: string;
@@ -744,534 +622,78 @@ export type DeveloperQuestionAnswer =
 export function parseDeveloperQuestionAnswer(
 	value: unknown,
 ): DeveloperQuestionAnswer {
-	const input = object(value, "$.input");
-	if (input.groupId !== undefined) {
-		const groupId = text(input.groupId, "$.input.groupId");
-		if (input.kind === "cancel") return { groupId, kind: "cancel" };
-		if (
-			!Array.isArray(input.responses) ||
-			input.responses.length < 1 ||
-			input.responses.length > MAX_QUESTIONNAIRE_ITEMS
-		)
-			throw new ContractFailure("core.developer-question", [
-				{
-					path: "$.input.responses",
-					message: `expected 1-${MAX_QUESTIONNAIRE_ITEMS} responses`,
-				},
-			]);
-		const responses = input.responses.map((entry, index) => {
-			const at = `$.input.responses[${index}]`;
-			const item = object(entry, at);
-			const kind = enumValue(item.kind, `${at}.kind`, ["option", "custom"]);
-			return {
-				questionId: text(item.questionId, `${at}.questionId`),
-				kind,
-				value: text(item.value, `${at}.value`, 8192),
-			};
-		});
-		if (
-			new Set(responses.map((item) => item.questionId)).size !==
-			responses.length
-		)
-			throw new ContractFailure("core.developer-question", [
-				{
-					path: "$.input.responses",
-					message: "response question IDs must be unique",
-				},
-			]);
-		return { groupId, responses };
-	}
-	const questionId = text(input.questionId, "$.input.questionId");
-	const kind = enumValue(input.kind, "$.input.kind", [
-		"option",
-		"custom",
-		"cancel",
-	]);
-	if (kind === "cancel") return { questionId, kind };
-	return { questionId, kind, value: text(input.value, "$.input.value", 8192) };
+	return decodeContract<DeveloperQuestionAnswer>(
+		"core.developer-question",
+		DeveloperQuestionAnswerSchema,
+		value,
+	);
 }
-function dialogue(value: unknown): DeveloperDialogueRecord[] {
-	if (value === undefined) return [];
-	if (!Array.isArray(value) || value.length > 100)
-		throw new ContractFailure("core.workflow-snapshot", [
-			{ path: "$.developerDialogue", message: "expected at most 100 records" },
-		]);
-	return value.map((entry, index) => {
-		const at = `$.developerDialogue[${index}]`;
-		const item = object(entry, at);
-		const status = enumValue(item.status, `${at}.status`, [
-			"pending",
-			"answered",
-			"cancelled",
-			"expired",
-		]);
-		const result: DeveloperDialogueRecord = {
-			id: text(item.id, `${at}.id`),
-			workflowId: text(item.workflowId, `${at}.workflowId`),
-			runId: text(item.runId, `${at}.runId`),
-			stepId: text(item.stepId, `${at}.stepId`),
-			role: text(item.role, `${at}.role`),
-			description: text(item.description, `${at}.description`, 4096),
-			...(item.context === undefined
-				? {}
-				: { context: boundedText(item.context, `${at}.context`, 4096) }),
-			options: questionOptions(item.options, `${at}.options`),
-			...(item.groupId === undefined
-				? {}
-				: { groupId: text(item.groupId, `${at}.groupId`) }),
-			...(item.timerNonce === undefined
-				? {}
-				: { timerNonce: text(item.timerNonce, `${at}.timerNonce`, 128) }),
-			...(item.itemIndex === undefined
-				? {}
-				: { itemIndex: integer(item.itemIndex, `${at}.itemIndex`) }),
-			status,
-			createdAt: text(item.createdAt, `${at}.createdAt`),
-			expiresAt: text(item.expiresAt, `${at}.expiresAt`),
-		};
-		if (item.answeredAt !== undefined)
-			result.answeredAt = text(item.answeredAt, `${at}.answeredAt`);
-		if (item.answer !== undefined) {
-			const answer = object(item.answer, `${at}.answer`);
-			const kind = enumValue(answer.kind, `${at}.answer.kind`, [
-				"option",
-				"custom",
-				"cancel",
-			]);
-			result.answer = {
-				kind,
-				...(kind === "cancel"
-					? {}
-					: { value: text(answer.value, `${at}.answer.value`, 8192) }),
-			};
-		}
-		if (status === "pending" && result.answer)
+export function parseSnapshot(value: unknown): WorkflowSnapshot {
+	const snapshot = decodeContract<WorkflowSnapshot>(
+		"core.workflow-snapshot",
+		WorkflowSnapshotSchema,
+		value,
+		// Preserve unknown keys through the read/rewrite cycle (QUALITY-004):
+		// legacy or forward-compat snapshot_json keys not declared in the schema
+		// must not be silently discarded when the engine decodes and rewrites
+		// the parsed object back to the store.
+		{ onExcessProperty: "preserve" },
+	);
+	// Repository-relative path normalization + cross-field invariants stay as
+	// pure validation (design-permitted): Effect Schema decodes the structure,
+	// these functions normalize/validate across fields without services.
+	const repoIndependent =
+		snapshot.definition.id === "wiki-comments" ||
+		snapshot.definition.id === "research";
+	const metadata: WorkflowSnapshot["metadata"] = { ...snapshot.metadata };
+	metadata.repository =
+		repoIndependent && metadata.repository === ""
+			? ""
+			: path.resolve(requireText(metadata.repository, "$.metadata.repository"));
+	metadata.worktree = path.resolve(
+		requireText(metadata.worktree, "$.metadata.worktree"),
+	);
+	metadata.branch =
+		repoIndependent && metadata.branch === ""
+			? ""
+			: requireText(metadata.branch, "$.metadata.branch");
+	metadata.baseBranch =
+		repoIndependent && metadata.baseBranch === ""
+			? ""
+			: requireText(metadata.baseBranch, "$.metadata.baseBranch");
+	metadata.baseCommit =
+		repoIndependent && metadata.baseCommit === ""
+			? ""
+			: requireText(metadata.baseCommit, "$.metadata.baseCommit");
+	if (metadata.wikiRoot !== undefined)
+		metadata.wikiRoot = path.resolve(metadata.wikiRoot);
+	const normalized: WorkflowSnapshot = { ...snapshot, metadata };
+	if (normalized.step.context !== undefined)
+		normalized.step.context = JSON.parse(
+			JSON.stringify(normalized.step.context),
+		) as JsonValue;
+	const dialogue = normalized.developerDialogue;
+	for (const item of dialogue) {
+		if (item.status === "pending" && item.answer)
 			throw new ContractFailure("core.workflow-snapshot", [
 				{
-					path: `${at}.answer`,
+					path: "$.developerDialogue",
 					message: "pending question cannot have answer",
 				},
 			]);
-		if (status !== "pending" && !result.answer)
+		if (item.status !== "pending" && !item.answer)
 			throw new ContractFailure("core.workflow-snapshot", [
-				{ path: `${at}.answer`, message: "resolved question requires answer" },
+				{
+					path: "$.developerDialogue",
+					message: "resolved question requires answer",
+				},
 			]);
-		return result;
-	});
-}
-
-function profile(value: unknown, at: string): ResolvedProfile {
-	const input = object(value, at);
-	const runtime = text(input.runtime, `${at}.runtime`, 64);
-	const capabilities = strings(
-		input.capabilities,
-		`${at}.capabilities`,
-	) as AdapterCapability[];
-	const allowed: AdapterCapability[] = [
-		"interactive",
-		"prompt",
-		"persistent-session",
-		"run-environment",
-		"observe",
-		"read-only",
-		"shell",
-		"edit",
-		"runtime-bridge",
-	];
-	if (capabilities.some((item) => !allowed.includes(item)))
-		throw new ContractFailure("core.agent-profile", [
-			{ path: `${at}.capabilities`, message: "unknown adapter capability" },
-		]);
-	if (typeof input.readOnly !== "boolean")
-		throw new ContractFailure("core.agent-profile", [
-			{ path: `${at}.readOnly`, message: "expected boolean" },
-		]);
-	return {
-		name: text(input.name, `${at}.name`),
-		runtime,
-		executable: text(input.executable, `${at}.executable`),
-		...(input.model === undefined
-			? {}
-			: { model: text(input.model, `${at}.model`) }),
-		...(input.agent === undefined
-			? {}
-			: { agent: text(input.agent, `${at}.agent`) }),
-		...(input.thinking === undefined
-			? {}
-			: { thinking: text(input.thinking, `${at}.thinking`) }),
-		tools: strings(input.tools, `${at}.tools`),
-		extensions: strings(input.extensions, `${at}.extensions`),
-		readOnly: input.readOnly,
-		capabilities,
-		digest: text(input.digest, `${at}.digest`),
-	};
-}
-
-function settingsPreview(
-	value: unknown,
-): NonNullable<WorkflowMetadata["executionSettingsPreview"]> {
-	const input = object(value, "$.metadata.executionSettingsPreview");
-	return {
-		settings: executionSettings(input.settings),
-		fingerprint: text(
-			input.fingerprint,
-			"$.metadata.executionSettingsPreview.fingerprint",
-			128,
-		),
-		revision: integer(
-			input.revision,
-			"$.metadata.executionSettingsPreview.revision",
-		),
-	};
-}
-
-function executionSettings(value: unknown): WorkflowExecutionSettings {
-	const input = object(value, "$.metadata.executionSettings");
-	const source = enumValue(
-		input.provenance &&
-			object(input.provenance, "$.metadata.executionSettings.provenance")
-				.source,
-		"$.metadata.executionSettings.provenance.source",
-		["default", "environment", "user", "legacy", "project"],
-	);
-	const files = strings(
-		object(input.provenance, "$.metadata.executionSettings.provenance").files,
-		"$.metadata.executionSettings.provenance.files",
-	);
-	return {
-		remote: text(input.remote, "$.metadata.executionSettings.remote", 256),
-		prTool:
-			input.prTool === null
-				? null
-				: text(input.prTool, "$.metadata.executionSettings.prTool", 4096),
-		provenance: { source, files },
-	};
-}
-
-export function parseSnapshot(value: unknown): WorkflowSnapshot {
-	const input = object(value, "$");
-	const definition = object(input.definition, "$.definition");
-	const metadata = object(input.metadata, "$.metadata");
-	const step = object(input.step, "$.step");
-	const routing = object(input.routing, "$.routing");
-	const snapshot: WorkflowSnapshot = {
-		schemaVersion: integer(input.schemaVersion, "$.schemaVersion", 1) as 1,
-		workflowId: text(input.workflowId, "$.workflowId"),
-		revision: integer(input.revision, "$.revision"),
-		definition: {
-			id: text(definition.id, "$.definition.id"),
-			version: integer(definition.version, "$.definition.version", 1),
-			digest: text(definition.digest, "$.definition.digest"),
-			stepRefs: (() => {
-				if (definition.stepRefs === undefined) return undefined;
-				if (!Array.isArray(definition.stepRefs))
-					throw new ContractFailure("$.definition.stepRefs", [
-						{ path: "$.definition.stepRefs", message: "expected array" },
-					]);
-				return definition.stepRefs.map((ref, index) => {
-					const item = object(ref, `$.definition.stepRefs[${index}]`);
-					return {
-						id: text(item.id, `$.definition.stepRefs[${index}].id`),
-						version: integer(
-							item.version,
-							`$.definition.stepRefs[${index}].version`,
-							1,
-						),
-						behaviorVersion: integer(
-							item.behaviorVersion,
-							`$.definition.stepRefs[${index}].behaviorVersion`,
-							1,
-						),
-					};
-				});
-			})(),
-		},
-		status: enumValue(input.status, "$.status", [
-			"active",
-			"paused",
-			"attention-required",
-			"completed",
-			"closed",
-		]),
-		currentStep: text(input.currentStep, "$.currentStep"),
-		step: {
-			attempt: integer(step.attempt, "$.step.attempt", 1),
-			...(step.mode === undefined
-				? {}
-				: {
-						mode: enumValue(step.mode, "$.step.mode", [
-							"apply",
-							"fix",
-							"review-fix",
-						]),
-					}),
-			activeRunIds: strings(step.activeRunIds, "$.step.activeRunIds"),
-			completedRunIds: strings(step.completedRunIds, "$.step.completedRunIds"),
-			selectedRoles: strings(step.selectedRoles, "$.step.selectedRoles"),
-			testRunStarted: (() => {
-				if (typeof step.testRunStarted !== "boolean")
-					throw new ContractFailure("core.workflow-snapshot", [
-						{ path: "$.step.testRunStarted", message: "expected boolean" },
-					]);
-				return step.testRunStarted;
-			})(),
-			...(step.context === undefined
-				? {}
-				: { context: JSON.parse(JSON.stringify(step.context)) as JsonValue }),
-			results: (() => {
-				if (!Array.isArray(step.results))
-					throw new ContractFailure("core.workflow-snapshot", [
-						{ path: "$.step.results", message: "expected array" },
-					]);
-				return step.results.map((entry, i) => {
-					const item = object(entry, `$.step.results[${i}]`);
-					return {
-						runId: text(item.runId, `$.step.results[${i}].runId`),
-						role: text(item.role, `$.step.results[${i}].role`),
-						critical: integer(item.critical, `$.step.results[${i}].critical`),
-						...(item.outputDigest === undefined
-							? {}
-							: {
-									outputDigest: text(
-										item.outputDigest,
-										`$.step.results[${i}].outputDigest`,
-									),
-								}),
-					};
-				});
-			})(),
-		},
-		metadata: {
-			repository:
-				(definition.id === "wiki-comments" || definition.id === "research") &&
-				metadata.repository === ""
-					? ""
-					: path.resolve(text(metadata.repository, "$.metadata.repository")),
-			worktree: path.resolve(text(metadata.worktree, "$.metadata.worktree")),
-			changeId: boundedText(metadata.changeId, "$.metadata.changeId"),
-			branch:
-				(definition.id === "wiki-comments" || definition.id === "research") &&
-				metadata.branch === ""
-					? ""
-					: text(metadata.branch, "$.metadata.branch"),
-			baseBranch:
-				(definition.id === "wiki-comments" || definition.id === "research") &&
-				metadata.baseBranch === ""
-					? ""
-					: text(metadata.baseBranch, "$.metadata.baseBranch"),
-			baseCommit:
-				(definition.id === "wiki-comments" || definition.id === "research") &&
-				metadata.baseCommit === ""
-					? ""
-					: text(metadata.baseCommit, "$.metadata.baseCommit"),
-			...(metadata.workspace === undefined
-				? {}
-				: { workspace: text(metadata.workspace, "$.metadata.workspace") }),
-			...(metadata.task === undefined
-				? {}
-				: { task: text(metadata.task, "$.metadata.task", 65536) }),
-			...(metadata.ticket === undefined
-				? {}
-				: { ticket: text(metadata.ticket, "$.metadata.ticket") }),
-			createdAt: text(metadata.createdAt, "$.metadata.createdAt"),
-			updatedAt: text(metadata.updatedAt, "$.metadata.updatedAt"),
-			stepEnteredAt: text(metadata.stepEnteredAt, "$.metadata.stepEnteredAt"),
-			...(metadata.wikiRoot === undefined
-				? {}
-				: {
-						wikiRoot: path.resolve(
-							text(metadata.wikiRoot, "$.metadata.wikiRoot"),
-						),
-					}),
-			...(metadata.executionSettings === undefined
-				? {}
-				: { executionSettings: executionSettings(metadata.executionSettings) }),
-			...(metadata.executionSettingsPreview === undefined
-				? {}
-				: {
-						executionSettingsPreview: settingsPreview(
-							metadata.executionSettingsPreview,
-						),
-					}),
-		},
-		routing: {
-			defaultProfile: text(routing.defaultProfile, "$.routing.defaultProfile"),
-			routes: (() => {
-				if (!Array.isArray(routing.routes))
-					throw new ContractFailure("core.workflow-snapshot", [
-						{ path: "$.routing.routes", message: "expected array" },
-					]);
-				return routing.routes.map((entry, i) => {
-					const item = object(entry, `$.routing.routes[${i}]`);
-					return {
-						stepId: text(item.stepId, `$.routing.routes[${i}].stepId`),
-						...(item.role === undefined
-							? {}
-							: { role: text(item.role, `$.routing.routes[${i}].role`) }),
-						profile: profile(item.profile, `$.routing.routes[${i}].profile`),
-					};
-				});
-			})(),
-		},
-		evidence: (() => {
-			if (!Array.isArray(input.evidence))
-				throw new ContractFailure("core.workflow-snapshot", [
-					{ path: "$.evidence", message: "expected array" },
-				]);
-			return input.evidence.map((entry, i) => {
-				const item = object(entry, `$.evidence[${i}]`);
-				return {
-					kind: text(item.kind, `$.evidence[${i}].kind`),
-					path: text(item.path, `$.evidence[${i}].path`),
-					digest: text(item.digest, `$.evidence[${i}].digest`),
-				};
-			});
-		})(),
-		loopCounts: (() => {
-			const counts = object(input.loopCounts, "$.loopCounts");
-			return Object.fromEntries(
-				Object.entries(counts).map(([key, value]) => [
-					key,
-					integer(value, `$.loopCounts.${key}`),
-				]),
-			);
-		})(),
-		attention: strings(input.attention, "$.attention"),
-		developerDialogue: dialogue(input.developerDialogue),
-		...(input.wikiBaseline && typeof input.wikiBaseline === "object"
-			? (() => {
-					const item = object(input.wikiBaseline, "$.wikiBaseline");
-					if (!Array.isArray(item.concepts))
-						throw new ContractFailure("core.workflow-snapshot", [
-							{ path: "$.wikiBaseline.concepts", message: "expected array" },
-						]);
-					return {
-						wikiBaseline: {
-							fingerprint: text(
-								item.fingerprint,
-								"$.wikiBaseline.fingerprint",
-								128,
-							),
-							concepts: item.concepts.map((entry, index) => {
-								const concept = object(
-									entry,
-									`$.wikiBaseline.concepts[${index}]`,
-								);
-								return {
-									id: text(concept.id, `$.wikiBaseline.concepts[${index}].id`),
-									digest: text(
-										concept.digest,
-										`$.wikiBaseline.concepts[${index}].digest`,
-										128,
-									),
-								};
-							}),
-						},
-					};
-				})()
-			: {}),
-		...(input.sourceBaseline && typeof input.sourceBaseline === "object"
-			? (() => {
-					const item = object(input.sourceBaseline, "$.sourceBaseline");
-					return {
-						sourceBaseline: {
-							fingerprint: text(
-								item.fingerprint,
-								"$.sourceBaseline.fingerprint",
-								128,
-							),
-						},
-					};
-				})()
-			: {}),
-		...(input.repaired && typeof input.repaired === "object"
-			? (() => {
-					const item = object(input.repaired, "$.repaired");
-					return {
-						repaired: {
-							reason: boundedText(item.reason, "$.repaired.reason"),
-							fromStep: text(item.fromStep, "$.repaired.fromStep"),
-							at: text(item.at, "$.repaired.at"),
-						},
-					};
-				})()
-			: {}),
-		...(input.migrated && typeof input.migrated === "object"
-			? (() => {
-					const item = object(input.migrated, "$.migrated");
-					const from = object(item.from, "$.migrated.from");
-					const to = object(item.to, "$.migrated.to");
-					const parsePin = (pin: Record<string, unknown>, at: string) => {
-						if (pin.stepRefs !== undefined && !Array.isArray(pin.stepRefs))
-							throw new ContractFailure(`${at}.stepRefs`, [
-								{ path: `${at}.stepRefs`, message: "expected array" },
-							]);
-						const parsed: {
-							id: string;
-							version: number;
-							digest: string;
-							stepRefs?: Array<{
-								id: string;
-								version: number;
-								behaviorVersion: number;
-							}>;
-						} = {
-							id: text(pin.id, `${at}.id`),
-							version: integer(pin.version, `${at}.version`, 1),
-							digest: text(pin.digest, `${at}.digest`),
-						};
-						if (Array.isArray(pin.stepRefs))
-							parsed.stepRefs = pin.stepRefs.map((ref, index) => {
-								const item = object(ref, `${at}.stepRefs[${index}]`);
-								return {
-									id: text(item.id, `${at}.stepRefs[${index}].id`),
-									version: integer(
-										item.version,
-										`${at}.stepRefs[${index}].version`,
-										1,
-									),
-									behaviorVersion: integer(
-										item.behaviorVersion,
-										`${at}.stepRefs[${index}].behaviorVersion`,
-										1,
-									),
-								};
-							});
-						return parsed;
-					};
-					return {
-						migrated: {
-							from: parsePin(from, "$.migrated.from"),
-							to: parsePin(to, "$.migrated.to"),
-							reason: boundedText(item.reason, "$.migrated.reason"),
-							at: text(item.at, "$.migrated.at"),
-						},
-					};
-				})()
-			: {}),
-	};
-	if (snapshot.schemaVersion !== 1)
-		throw new ContractFailure("core.workflow-snapshot", [
-			{ path: "$.schemaVersion", message: "expected 1" },
-		]);
-	if (
-		snapshot.status === "active" &&
-		["core.completed", "core.closed"].includes(snapshot.currentStep)
-	)
-		throw new ContractFailure("core.workflow-snapshot", [
-			{ path: "$.status", message: "terminal step cannot be active" },
-		]);
-	if (
-		new Set(snapshot.developerDialogue.map((item) => item.id)).size !==
-		snapshot.developerDialogue.length
-	)
+	}
+	if (new Set(dialogue.map((item) => item.id)).size !== dialogue.length)
 		throw new ContractFailure("core.workflow-snapshot", [
 			{ path: "$.developerDialogue", message: "duplicate question ID" },
 		]);
-	if (
-		Buffer.byteLength(JSON.stringify(snapshot.developerDialogue)) >
-		128 * 1024
-	)
+	if (Buffer.byteLength(JSON.stringify(dialogue)) > 128 * 1024)
 		throw new ContractFailure("core.workflow-snapshot", [
 			{
 				path: "$.developerDialogue",
@@ -1279,11 +701,27 @@ export function parseSnapshot(value: unknown): WorkflowSnapshot {
 			},
 		]);
 	if (
-		new Set(snapshot.step.activeRunIds).size !==
-		snapshot.step.activeRunIds.length
+		new Set(normalized.step.activeRunIds).size !==
+		normalized.step.activeRunIds.length
 	)
 		throw new ContractFailure("core.workflow-snapshot", [
 			{ path: "$.step.activeRunIds", message: "duplicate run ID" },
 		]);
-	return snapshot;
+	if (
+		normalized.status === "active" &&
+		["core.completed", "core.closed"].includes(normalized.currentStep)
+	)
+		throw new ContractFailure("core.workflow-snapshot", [
+			{ path: "$.status", message: "terminal step cannot be active" },
+		]);
+	return normalized;
+}
+
+/** Non-empty bounded string used by the snapshot path-normalization pass. */
+function requireText(value: string, at: string): string {
+	if (!value.trim())
+		throw new ContractFailure("core.workflow-snapshot", [
+			{ path: at, message: "expected non-empty string" },
+		]);
+	return value;
 }

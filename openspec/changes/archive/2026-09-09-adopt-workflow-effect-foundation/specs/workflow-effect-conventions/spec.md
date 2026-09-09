@@ -32,12 +32,18 @@ Effect-facing workflow operations SHALL expose concrete tagged expected failures
 Repository instructions SHALL link a workflow Effect playbook containing checked examples for operations, errors, schemas, services, scopes, and tests. The playbook SHALL distinguish durable outbox effects from Effect programs, preserve pure step behavior, and identify allowed native/Promise boundaries and outer runtime owners.
 
 #### Scenario: Agent adds an external handler
-- **WHEN** an agent follows repository instructions to add a workflow handler
+- **WHEN** the cumulative migration playbook is complete (the execution phase adds the runner/handler guidance where cancellation and cleanup land) and an agent follows repository instructions to add a workflow handler
 - **THEN** it SHALL find a production-backed example of typed failure handling, cancellation, cleanup, and a focused test
 - **AND** the guidance SHALL not require inventing a custom async or service framework
 
-### Requirement: Migration coverage and agent outcomes are recorded
-The migration SHALL maintain an explicit module/caller inventory with phase owners and migration-only bridge removal conditions. It SHALL record a baseline and final comparison for adding a cancellable handler and extending a validated command with pure step behavior, including model/version, prompts, supplied instructions, verification results, and human corrections.
+This scenario is an end-state trajectory for the cumulative playbook, not a
+phase-1 alone deliverable: the foundation phase provides the typed-failure,
+schema, and test idioms; the execution change owns the handler migration where
+the cancellable-handler example is added (consistent with how the agent-task
+baseline comparison is recorded in a separate evaluation change).
+
+### Requirement: Migration coverage is recorded with an owned inventory
+The migration SHALL maintain an explicit module/caller inventory with phase owners and migration-only bridge removal conditions. Baseline and final comparison for adding a cancellable handler and extending a validated command with pure step behavior (including model/version, prompts, supplied instructions, verification results, and human corrections) SHALL be recorded in a separate evaluation change following the protocol in `docs/workflow-effect-baseline.md`; this change records the protocol template only.
 
 #### Scenario: Temporary bridge is introduced
 - **WHEN** a migration phase retains a compatibility facade for an unmigrated caller
