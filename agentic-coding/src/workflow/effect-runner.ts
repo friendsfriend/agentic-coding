@@ -1,18 +1,33 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { Effect, Either } from "effect";
+import { decodeHerdrResult } from "../herdr-client.ts";
 import {
 	type AgentAdapter,
 	HerdrLifecycle,
 	type HerdrPort,
+	herdrCallEffect,
 	type LaunchContext,
 } from "./adapters.ts";
 import { workflowAssets } from "./assets.ts";
 import { renderAssignment } from "./assignment.ts";
-import type { AgentHandle, Assignment, EffectKind } from "./contracts.ts";
-import { type CredentialPrompt, runGitWithCredentials } from "./credentials.ts";
+import {
+	type AgentHandle,
+	type Assignment,
+	type EffectKind,
+	isRetryableFailure,
+	type WorkflowFailure,
+} from "./contracts.ts";
+import {
+	type CredentialPrompt,
+	runGitWithCredentialsEffect,
+} from "./credentials.ts";
 import { loadConfig } from "./effects.ts";
+import { PermanentFailure, TransientFailure } from "./failures.ts";
+import * as H from "./herdr-schema.ts";
 import { childTrace, parseTraceparent, traceparent } from "./observability.ts";
+import { runProcessEffect } from "./process.ts";
 import type { StepDefinition, WorkflowRegistry } from "./registry.ts";
 import {
 	type ClaimedEffect,
@@ -25,6 +40,9 @@ import {
 	wikiWorkflowDataRoot,
 	wikiWorkflowTarget,
 } from "./runtime.ts";
+
+export { PermanentFailure, TransientFailure };
+
 import {
 	closeSecureDirectory,
 	openSecureDirectory,
@@ -40,154 +58,423 @@ import {
 	wikiRoot,
 } from "./wiki.ts";
 
+// ---------------------------------------------------------------------------
+// Typed failure policy (migrate-workflow-execution-to-effect, task 1.3).
+// Every handler failure maps to exactly one class: only confirmed transient
+// (infrastructure) failures may request the durable outbox retry budget,
+// known permanent configuration/validation failures and defects enter
+// attention immediately, ownership loss never publishes a result under an old
+// lease, and interruption stops work without claiming completion. A failed
+// observation is never treated as confirmed absence that authorizes
+// re-execution.
+// ---------------------------------------------------------------------------
+export type FailureClass =
+	| "transient"
+	| "permanent"
+	| "ownership"
+	| "interrupted"
+	| "defect";
+
+function isWorkflowFailure(value: unknown): value is WorkflowFailure {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		"_tag" in value &&
+		typeof (value as { _tag: unknown })._tag === "string"
+	);
+}
+function isAbortError(error: unknown): boolean {
+	return (
+		error instanceof Error &&
+		(error.name === "AbortError" ||
+			error.message.includes("effect ownership was lost"))
+	);
+}
+function isOwnershipError(error: unknown): boolean {
+	return (
+		error instanceof Error &&
+		/lease is invalid|lease expired|stale-effect|effect ownership was lost/i.test(
+			error.message,
+		)
+	);
+}
+/** Classify a handler failure against the typed recovery policy. */
+export function classifyFailure(
+	error: unknown,
+	aborted: boolean,
+): FailureClass {
+	if (aborted || isAbortError(error)) return "interrupted";
+	if (error instanceof TransientFailure) return "transient";
+	if (error instanceof PermanentFailure) return "permanent";
+	if (isWorkflowFailure(error)) {
+		if (isRetryableFailure(error)) return "transient";
+		if (error._tag === "stale-ownership") return "ownership";
+		return "permanent";
+	}
+	if (isOwnershipError(error)) return "ownership";
+	// Unknown errors are surfaced conservatively: never treated as a generic
+	// retryable exception (an uncertain external completion or defect goes to
+	// attention instead of silently duplicating external work).
+	return "defect";
+}
+
+/** Wrap a native Promise boundary into the handler Error channel. */
+const p = <A>(run: () => Promise<A>): Effect.Effect<A, Error, never> =>
+	Effect.tryPromise({
+		try: run,
+		catch: (error) =>
+			error instanceof Error ? error : new Error(String(error)),
+	});
+
+/** Run a git subprocess through the bounded process service (`process.ts`). */
+const git = (
+	cwd: string,
+	args: string[],
+	signal?: AbortSignal,
+): Effect.Effect<string, Error, never> =>
+	runProcessEffect(["git", "-C", cwd, ...args], { signal }).pipe(
+		Effect.map((result) => result.stdout.trim()),
+		// Git subprocess failures are confirmed infrastructure conditions
+		// (concurrent locks, transient fs/network errors), so they request the
+		// durable retry budget rather than surfacing as defects.
+		Effect.mapError((failure) => new TransientFailure(failure.detail)),
+	);
+
 export interface EffectHandler {
 	observe?(
 		effect: ClaimedEffect,
 		signal?: AbortSignal,
-	): Promise<unknown | undefined>;
-	execute(effect: ClaimedEffect, signal?: AbortSignal): Promise<unknown>;
-	cancel?(effect: ClaimedEffect, result?: unknown): Promise<void>;
+	): Effect.Effect<unknown | undefined, Error>;
+	execute(
+		effect: ClaimedEffect,
+		signal?: AbortSignal,
+	): Effect.Effect<unknown, Error>;
+	cancel?(effect: ClaimedEffect, result?: unknown): Effect.Effect<void, Error>;
 }
+export type ClaimOutcome =
+	| { _tag: "completed" }
+	| { _tag: "skipped" }
+	| { _tag: "retried"; workflowId: string }
+	| { _tag: "failed"; workflowId: string };
+
 export class EffectRunner {
 	constructor(
 		private readonly repo: string,
 		private readonly engine: WorkflowEngine,
 		private readonly handlers: Partial<Record<EffectKind, EffectHandler>>,
 	) {}
+	/** Serial just-in-time claims with final lease validation, but the per-claim
+	 * machinery is now one Effect execution scope: a supervised renewal fiber
+	 * using the engine clock, interruption propagation to external work, typed
+	 * failure classification, and guaranteed scope cleanup. Returns the number
+	 * of effects completed during this drain. */
 	async drain(
 		limit = 20,
 		leaseMs = 30_000,
 		signal?: AbortSignal,
 		onFailure?: (workflowId: string, message: string) => void,
 	): Promise<number> {
-		let completed = 0;
-		for (let processed = 0; processed < limit; processed++) {
-			if (signal?.aborted) break;
-			// Claim immediately before execution. A serial runner must not reserve
-			// work that is still waiting behind an earlier, possibly slow effect.
-			const effect = this.engine.claimEffects(this.repo, 1, leaseMs)[0];
-			if (!effect) break;
-			const { lease } = effect;
-			if (!lease) throw new Error(`claimed effect ${effect.id} has no lease`);
-			if (!this.engine.effectIsLive(this.repo, effect.id, lease)) continue;
-			const handler = this.handlers[effect.kind];
-			if (!handler) {
-				this.engine.dispatch(this.repo, {
-					type: "effect.result",
-					effectId: effect.id,
-					lease,
-					outcome: "failed",
-					data: `no handler for ${effect.kind}`,
-				});
-				continue;
-			}
-
-			const controller = new AbortController();
-			const abort = () => controller.abort();
-			if (signal?.aborted) controller.abort();
-			else signal?.addEventListener("abort", abort, { once: true });
-			let lost = false;
-			const renewal = setInterval(
-				() => {
-					if (!this.engine.renewEffect(this.repo, effect.id, lease, leaseMs)) {
-						lost = true;
-						controller.abort();
-					}
-				},
-				Math.max(1, Math.floor(leaseMs / 3)),
-			);
-			try {
-				const observed = await handler.observe?.(effect, controller.signal);
-				if (lost || controller.signal.aborted) {
-					await handler.cancel?.(effect);
-					continue;
-				}
-				const data =
-					observed === undefined || observed === false
-						? await handler.execute(effect, controller.signal)
-						: observed === true
-							? { observed: true }
-							: observed;
-				if (lost || !this.engine.effectIsLive(this.repo, effect.id, lease)) {
-					await handler.cancel?.(effect, data);
-					continue;
-				}
-				try {
-					this.engine.dispatch(this.repo, {
+		return Effect.runPromise(
+			this.drainProgram(limit, leaseMs, signal, onFailure),
+		);
+	}
+	private drainProgram(
+		limit: number,
+		leaseMs: number,
+		signal?: AbortSignal,
+		onFailure?: (workflowId: string, message: string) => void,
+	): Effect.Effect<number, never, never> {
+		const self = this;
+		return Effect.gen(function* () {
+			let completed = 0;
+			for (let processed = 0; processed < limit; processed++) {
+				if (signal?.aborted) break;
+				// Claim immediately before execution. A serial runner must not
+				// reserve work that is still waiting behind an earlier, possibly
+				// slow effect.
+				const effect = self.engine.claimEffects(self.repo, 1, leaseMs)[0];
+				if (!effect) break;
+				const { lease } = effect;
+				if (!lease) throw new Error(`claimed effect ${effect.id} has no lease`);
+				if (!self.engine.effectIsLive(self.repo, effect.id, lease)) continue;
+				const handler = self.handlers[effect.kind];
+				if (!handler) {
+					self.engine.dispatch(self.repo, {
 						type: "effect.result",
 						effectId: effect.id,
 						lease,
-						outcome: "complete",
-						data,
+						outcome: "failed",
+						data: `no handler for ${effect.kind}`,
 					});
-					completed++;
-				} catch (error) {
+					continue;
+				}
+				const outcome = yield* self.runClaim(
+					effect,
+					handler,
+					leaseMs,
+					signal,
+					onFailure,
+				);
+				if (outcome._tag === "completed") completed++;
+			}
+			return completed;
+		});
+	}
+	/** Run one claimed effect inside an execution scope with supervised lease
+	 * renewal. Rejected/exceptional renewal interrupts external work; ordinary
+	 * successful scope exit does not tear down durable resources (workspaces,
+	 * adopted panes, launched agents), which belong to the workflow. */
+	private runClaim(
+		effect: ClaimedEffect,
+		handler: EffectHandler,
+		leaseMs: number,
+		signal?: AbortSignal,
+		onFailure?: (workflowId: string, message: string) => void,
+	): Effect.Effect<ClaimOutcome, never, never> {
+		const self = this;
+		return Effect.gen(function* () {
+			const lease = effect.lease ?? "";
+			const outcome = yield* Effect.scoped(
+				Effect.gen(function* () {
+					const state: { lost: boolean } = { lost: false };
+					const controller = new AbortController();
+					const abort = () => controller.abort();
+					if (signal?.aborted) controller.abort();
+					else signal?.addEventListener("abort", abort, { once: true });
+					// Supervised renewal: one fiber per claim at the engine-clock
+					// cadence. Rejected or exceptional renewal marks the lease lost
+					// and aborts external work; the failure never escapes as an
+					// unhandled timer error. The fiber is stopped at scope exit.
+					yield* Effect.forkScoped(
+						Effect.gen(function* () {
+							for (;;) {
+								yield* Effect.sleep(Math.max(1, Math.floor(leaseMs / 3)));
+								const live = yield* Effect.try({
+									try: () =>
+										self.engine.renewEffect(
+											self.repo,
+											effect.id,
+											lease,
+											leaseMs,
+										),
+									catch: (error) => error as Error,
+								});
+								if (!live) {
+									state.lost = true;
+									controller.abort();
+									return;
+								}
+							}
+						}).pipe(
+							Effect.catchAll(() =>
+								Effect.sync(() => {
+									state.lost = true;
+									controller.abort();
+								}),
+							),
+						),
+					);
+					yield* Effect.addFinalizer(() =>
+						Effect.sync(() => {
+							controller.abort();
+							signal?.removeEventListener("abort", abort);
+						}),
+					);
+					// Observation distinguishes confirmed completion from confirmed
+					// absence; an observation failure is never treated as absence.
+					// `catchAllDefect` converts sync throws inside Effect.gen handler
+					// bodies into the classified failure channel instead of letting
+					// them crash the fiber as defects.
+					const toFailure = (defect: unknown): Error =>
+						defect instanceof Error ? defect : new Error(String(defect));
+					let data: unknown;
+					if (handler.observe) {
+						const observed = yield* Effect.either(
+							handler
+								.observe(effect, controller.signal)
+								.pipe(
+									Effect.catchAllDefect((defect) =>
+										Effect.fail(toFailure(defect)),
+									),
+								),
+						);
+						if (Either.isLeft(observed)) {
+							if (state.lost || controller.signal.aborted) {
+								yield* self.cancelHandler(handler, effect, onFailure);
+								return { _tag: "skipped" } satisfies ClaimOutcome;
+							}
+							return yield* Effect.sync(() =>
+								self.recordFailure(effect, observed.left, onFailure),
+							);
+						}
+						if (state.lost || controller.signal.aborted) {
+							yield* self.cancelHandler(handler, effect, onFailure);
+							return { _tag: "skipped" } satisfies ClaimOutcome;
+						}
+						const observedValue = observed.right;
+						if (observedValue !== undefined && observedValue !== false) {
+							data =
+								observedValue === true ? { observed: true } : observedValue;
+						} else {
+							const executed = yield* Effect.either(
+								handler
+									.execute(effect, controller.signal)
+									.pipe(
+										Effect.catchAllDefect((defect) =>
+											Effect.fail(toFailure(defect)),
+										),
+									),
+							);
+							if (Either.isLeft(executed)) {
+								if (
+									state.lost ||
+									controller.signal.aborted ||
+									!self.engine.effectIsLive(self.repo, effect.id, lease)
+								) {
+									yield* self.cancelHandler(handler, effect, onFailure);
+									return { _tag: "skipped" } satisfies ClaimOutcome;
+								}
+								return yield* Effect.sync(() =>
+									self.recordFailure(effect, executed.left, onFailure),
+								);
+							}
+							data = executed.right;
+						}
+					} else {
+						const executed = yield* Effect.either(
+							handler
+								.execute(effect, controller.signal)
+								.pipe(
+									Effect.catchAllDefect((defect) =>
+										Effect.fail(toFailure(defect)),
+									),
+								),
+						);
+						if (Either.isLeft(executed)) {
+							if (
+								state.lost ||
+								controller.signal.aborted ||
+								!self.engine.effectIsLive(self.repo, effect.id, lease)
+							) {
+								yield* self.cancelHandler(handler, effect, onFailure);
+								return { _tag: "skipped" } satisfies ClaimOutcome;
+							}
+							return yield* Effect.sync(() =>
+								self.recordFailure(effect, executed.left, onFailure),
+							);
+						}
+						data = executed.right;
+					}
+					// Final lease validation: cancellation alone cannot close the
+					// race between a final remote call and lease replacement.
 					if (
-						error instanceof Error &&
-						error.message.includes("effect lease is invalid")
+						state.lost ||
+						!self.engine.effectIsLive(self.repo, effect.id, lease)
 					) {
-						await handler.cancel?.(effect, data);
-						continue;
+						yield* self.cancelHandler(handler, effect, onFailure, data);
+						return { _tag: "skipped" } satisfies ClaimOutcome;
 					}
-					throw error;
-				}
-			} catch (error) {
-				if (controller.signal.aborted) {
-					await handler.cancel?.(effect);
-					continue;
-				}
-				if (lost || !this.engine.effectIsLive(this.repo, effect.id, lease)) {
-					await handler.cancel?.(effect);
-					continue;
-				}
-				try {
-					const message = String((error as Error).message ?? error);
-					this.engine.dispatch(this.repo, {
-						type: "effect.result",
-						effectId: effect.id,
-						lease,
-						outcome: effect.attempts < effect.maxAttempts ? "retry" : "failed",
-						data: message,
-					});
-					onFailure?.(effect.workflowId, message);
-				} catch (dispatchError) {
-					if (
-						!(dispatchError instanceof Error) ||
-						!dispatchError.message.includes("effect lease is invalid")
-					)
-						throw dispatchError;
-				}
-			} finally {
-				clearInterval(renewal);
-				signal?.removeEventListener("abort", abort);
+					const published = yield* Effect.try({
+						try: () =>
+							self.engine.dispatch(self.repo, {
+								type: "effect.result",
+								effectId: effect.id,
+								lease,
+								outcome: "complete",
+								data,
+							}),
+						catch: (error) => error as Error,
+					}).pipe(Effect.either);
+					if (Either.isLeft(published)) {
+						// A lease-invalid dispatch means a successor owns the effect
+						// now; cancel owned work but never publish under the old lease.
+						const dispatchError = published.left;
+						if (
+							dispatchError instanceof Error &&
+							dispatchError.message.includes("effect lease is invalid")
+						) {
+							yield* self.cancelHandler(handler, effect, onFailure, data);
+							return { _tag: "skipped" } satisfies ClaimOutcome;
+						}
+						const message = String(
+							dispatchError instanceof Error
+								? dispatchError.message
+								: dispatchError,
+						);
+						onFailure?.(effect.workflowId, message);
+						return {
+							_tag: "failed",
+							workflowId: effect.workflowId,
+						} satisfies ClaimOutcome;
+					}
+					return { _tag: "completed" } satisfies ClaimOutcome;
+				}),
+			);
+			return outcome;
+		});
+	}
+	/** Best-effort scope cleanup that stays observable: a cancel failure is
+	 * reported but never replaces the outcome and never commits success. */
+	private cancelHandler(
+		handler: EffectHandler,
+		effect: ClaimedEffect,
+		onFailure?: (workflowId: string, message: string) => void,
+		result?: unknown,
+	): Effect.Effect<void, never, never> {
+		return Effect.gen(function* () {
+			if (!handler.cancel) return;
+			const outcome = yield* Effect.either(handler.cancel(effect, result));
+			if (Either.isLeft(outcome)) {
+				const message = String(
+					outcome.left instanceof Error ? outcome.left.message : outcome.left,
+				);
+				onFailure?.(effect.workflowId, `cancel cleanup failed: ${message}`);
 			}
+		});
+	}
+	/** Classify a live-lease execution failure and request the durable outbox
+	 * outcome: transient failures may retry, permanent/defect failures stop
+	 * immediately, and ownership/interruption never publish. */
+	private recordFailure(
+		effect: ClaimedEffect,
+		error: unknown,
+		onFailure?: (workflowId: string, message: string) => void,
+	): ClaimOutcome {
+		const message = error instanceof Error ? error.message : String(error);
+		const klass = classifyFailure(error, false);
+		if (klass === "ownership" || klass === "interrupted")
+			return { _tag: "skipped" };
+		const permanent = klass === "permanent" || klass === "defect";
+		// Persisted retry accounting stays in the outbox; the runner only
+		// classifies. Permanent failures stop earlier instead of consuming the
+		// full transient retry budget.
+		const outcome = permanent
+			? "failed"
+			: effect.attempts < effect.maxAttempts
+				? "retry"
+				: "failed";
+		try {
+			this.engine.dispatch(this.repo, {
+				type: "effect.result",
+				effectId: effect.id,
+				lease: effect.lease ?? "",
+				outcome,
+				data: message,
+			});
+		} catch (dispatchError) {
+			if (
+				!(dispatchError instanceof Error) ||
+				!dispatchError.message.includes("effect lease is invalid")
+			)
+				throw dispatchError;
 		}
-		return completed;
+		onFailure?.(effect.workflowId, message);
+		return outcome === "failed"
+			? { _tag: "failed", workflowId: effect.workflowId }
+			: { _tag: "retried", workflowId: effect.workflowId };
 	}
 }
-async function runProcess(
-	args: string[],
-	options: { cwd?: string; signal?: AbortSignal; timeoutMs?: number } = {},
-): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-	const proc = Bun.spawn(args, {
-		cwd: options.cwd,
-		stdout: "pipe",
-		stderr: "pipe",
-	});
-	const stdout = new Response(proc.stdout).text();
-	const stderr = new Response(proc.stderr).text();
-	const timeout = setTimeout(() => proc.kill(), options.timeoutMs ?? 120_000);
-	const abort = () => proc.kill();
-	if (options.signal?.aborted) proc.kill();
-	else options.signal?.addEventListener("abort", abort, { once: true });
-	try {
-		const exitCode = await proc.exited;
-		return { exitCode, stdout: await stdout, stderr: await stderr };
-	} finally {
-		clearTimeout(timeout);
-		options.signal?.removeEventListener("abort", abort);
-	}
-}
+
 async function herdrCall(
 	herdr: HerdrPort,
 	args: string[],
@@ -211,19 +498,6 @@ function pinnedWikiRoot(
 		throw new Error("wiki root does not match the pinned workflow wiki root");
 	return pinnedRoot;
 }
-async function withWikiRoot<T>(
-	root: string,
-	operation: () => T | Promise<T>,
-): Promise<T> {
-	const previous = process.env.HERDR_WIKI_DIR;
-	process.env.HERDR_WIKI_DIR = root;
-	try {
-		return await operation();
-	} finally {
-		if (previous === undefined) delete process.env.HERDR_WIKI_DIR;
-		else process.env.HERDR_WIKI_DIR = previous;
-	}
-}
 export interface AdapterEffectOptions {
 	registry: WorkflowRegistry;
 	adapters: Map<string, AgentAdapter>;
@@ -241,348 +515,398 @@ export function agentEffectHandlers(
 	const snapshotFor = (effect: ClaimedEffect) =>
 		engine.getSnapshot(repo, effect.workflowId);
 	const setupWorkspaces = new Map<string, string>();
-	const git = async (
-		cwd: string,
+	/** Herdr boundary failures are infrastructure-flavored (transient) unless
+	 * they are ownership losses, which must stay classified as ownership. */
+	const herdr = (
 		args: string[],
 		signal?: AbortSignal,
-	): Promise<string> => {
-		const result = await runProcess(["git", "-C", cwd, ...args], { signal });
-		if (result.exitCode !== 0)
-			throw new Error((result.stderr || result.stdout).trim());
-		return result.stdout.trim();
-	};
+	): Effect.Effect<unknown, Error, never> =>
+		herdrCallEffect(options.herdr, args, signal).pipe(
+			Effect.catchAll((error) =>
+				Effect.fail(
+					isOwnershipError(error) ? error : new TransientFailure(error.message),
+				),
+			),
+		);
+	const live = (effect: ClaimedEffect): boolean =>
+		engine.effectIsLive(repo, effect.id, effect.lease ?? "");
 	return {
 		"workspace.setup": {
-			async observe(effect, signal) {
-				const snapshot = snapshotFor(effect);
-				if (
-					isWikiWorkflowTarget(repo) ||
-					isResearchWorkflowTarget(repo) ||
-					snapshot.definition.id === "research"
-				) {
+			observe: (effect, signal) =>
+				Effect.gen(function* () {
+					const snapshot = snapshotFor(effect);
+					if (
+						isWikiWorkflowTarget(repo) ||
+						isResearchWorkflowTarget(repo) ||
+						snapshot.definition.id === "research"
+					) {
+						const workspace =
+							snapshot.metadata.workspace ??
+							(yield* p(() =>
+								recoverWorkspaceAsync(
+									options.herdr,
+									snapshot.workflowId,
+									signal,
+								),
+							));
+						return workspace &&
+							(yield* p(() =>
+								dashboardReadyAsync(options.herdr, workspace, signal),
+							))
+							? { workspace, worktree: snapshot.metadata.worktree, branch: "" }
+							: undefined;
+					}
+					const input = effect.payload as {
+						mode?: string;
+						branch?: string;
+						sameCheckout?: boolean;
+					};
+					const sameCheckout = input.sameCheckout === true;
+					const branch = sameCheckout
+						? yield* p(() =>
+								currentBranch(snapshot.metadata.repository, signal),
+							)
+						: (input.branch ?? snapshot.metadata.branch);
+					const worktree =
+						input.mode === "worktree"
+							? yield* p(() =>
+									worktreeForBranch(
+										snapshot.metadata.repository,
+										branch ?? "",
+										signal,
+									),
+								)
+							: (snapshot.metadata.worktree ??
+								((yield* p(() =>
+									currentBranch(snapshot.metadata.repository, signal),
+								)) === branch
+									? snapshot.metadata.repository
+									: undefined));
 					const workspace =
 						snapshot.metadata.workspace ??
-						(await recoverWorkspaceAsync(
-							options.herdr,
-							snapshot.workflowId,
-							signal,
+						(yield* p(() =>
+							recoverWorkspaceAsync(options.herdr, snapshot.workflowId, signal),
 						));
-					return workspace &&
-						(await dashboardReadyAsync(options.herdr, workspace, signal))
-						? { workspace, worktree: snapshot.metadata.worktree, branch: "" }
+					return worktree &&
+						workspace &&
+						(yield* p(() =>
+							dashboardReadyAsync(options.herdr, workspace, signal),
+						))
+						? { workspace, worktree, branch }
 						: undefined;
-				}
-				const input = effect.payload as {
-					mode?: string;
-					branch?: string;
-					sameCheckout?: boolean;
-				};
-				const sameCheckout = input.sameCheckout === true;
-				const branch = sameCheckout
-					? await currentBranch(snapshot.metadata.repository, signal)
-					: (input.branch ?? snapshot.metadata.branch);
-				const worktree =
-					input.mode === "worktree"
-						? await worktreeForBranch(
-								snapshot.metadata.repository,
-								branch ?? "",
-								signal,
-							)
-						: (snapshot.metadata.worktree ??
-							((await currentBranch(snapshot.metadata.repository, signal)) ===
-							branch
-								? snapshot.metadata.repository
-								: undefined));
-				const workspace =
-					snapshot.metadata.workspace ??
-					(await recoverWorkspaceAsync(
-						options.herdr,
-						snapshot.workflowId,
-						signal,
-					));
-				return worktree &&
-					workspace &&
-					(await dashboardReadyAsync(options.herdr, workspace, signal))
-					? { workspace, worktree, branch }
-					: undefined;
-			},
-			async execute(effect, signal) {
-				const snapshot = snapshotFor(effect);
-				if (
-					isWikiWorkflowTarget(repo) ||
-					isResearchWorkflowTarget(repo) ||
-					snapshot.definition.id === "research"
-				) {
-					let workspace =
-						snapshot.metadata.workspace ??
-						(await recoverWorkspaceAsync(
-							options.herdr,
-							snapshot.workflowId,
-							signal,
-						));
-					if (!workspace) {
-						if (!engine.effectIsLive(repo, effect.id, effect.lease ?? ""))
+				}),
+			execute: (effect, signal) =>
+				Effect.gen(function* () {
+					const snapshot = snapshotFor(effect);
+					if (
+						isWikiWorkflowTarget(repo) ||
+						isResearchWorkflowTarget(repo) ||
+						snapshot.definition.id === "research"
+					) {
+						let workspace =
+							snapshot.metadata.workspace ??
+							(yield* p(() =>
+								recoverWorkspaceAsync(
+									options.herdr,
+									snapshot.workflowId,
+									signal,
+								),
+							));
+						if (!workspace) {
+							if (!live(effect)) return { cancelled: true };
+							const created = decodeHerdrResult(
+								H.workspaceCreateResult,
+								yield* herdr(
+									[
+										"workspace",
+										"create",
+										"--cwd",
+										snapshot.metadata.worktree,
+										"--label",
+										snapshot.workflowId,
+									],
+									signal,
+								),
+							);
+							workspace = created.workspace?.workspace_id;
+						}
+						if (!workspace)
+							throw new TransientFailure(
+								"Herdr wiki workspace setup returned no workspace",
+							);
+						setupWorkspaces.set(effect.id, workspace);
+						if (!live(effect)) {
+							try {
+								options.herdr.call("workspace", "close", workspace);
+							} catch {
+								/* best effort cleanup for a concurrently closed workflow */
+							}
+							setupWorkspaces.delete(effect.id);
 							return { cancelled: true };
-						workspace = (
-							(await herdrCall(
+						}
+						yield* p(() =>
+							ensureWorkspaceTabs(
 								options.herdr,
+								workspace,
+								snapshot.metadata.worktree,
+								snapshot.workflowId,
+								isResearchWorkflowTarget(repo) ||
+									snapshot.definition.id === "research"
+									? researchWorkflowTarget()
+									: wikiWorkflowTarget(),
+								signal,
+							),
+						).pipe(
+							Effect.catchAll((error) =>
+								Effect.gen(function* () {
+									try {
+										options.herdr.call("workspace", "close", workspace);
+									} catch {
+										/* best effort cleanup after setup failure */
+									}
+									setupWorkspaces.delete(effect.id);
+									return yield* Effect.fail(error);
+								}),
+							),
+						);
+						if (!live(effect)) {
+							try {
+								options.herdr.call("workspace", "close", workspace);
+							} catch {
+								/* best effort cleanup for a concurrently closed workflow */
+							}
+							setupWorkspaces.delete(effect.id);
+							return { cancelled: true };
+						}
+						setupWorkspaces.delete(effect.id);
+						return {
+							workspace,
+							worktree: snapshot.metadata.worktree,
+							branch: "",
+						};
+					}
+					const input = effect.payload as {
+						mode?: string;
+						branch?: string;
+						baseCommit?: string;
+						sameCheckout?: boolean;
+					};
+					const sameCheckout = input.sameCheckout === true;
+					const branch = sameCheckout
+						? yield* p(() =>
+								currentBranch(snapshot.metadata.repository, signal),
+							)
+						: (input.branch ?? snapshot.metadata.branch);
+					if (!branch)
+						throw new PermanentFailure(
+							"workspace setup requires a named branch",
+						);
+					let worktree =
+						input.mode === "worktree" && !sameCheckout
+							? yield* p(() =>
+									worktreeForBranch(
+										snapshot.metadata.repository,
+										branch,
+										signal,
+									),
+								)
+							: snapshot.metadata.repository;
+					let workspace = yield* p(() =>
+						recoverWorkspaceAsync(options.herdr, snapshot.workflowId, signal),
+					);
+					if (input.mode === "worktree" && !worktree) {
+						const result = decodeHerdrResult(
+							H.worktreeCreateResult,
+							yield* herdr(
 								[
-									"workspace",
+									"worktree",
 									"create",
 									"--cwd",
-									snapshot.metadata.worktree,
+									snapshot.metadata.repository,
+									"--branch",
+									branch,
+									"--base",
+									input.baseCommit ?? snapshot.metadata.baseCommit,
 									"--label",
 									snapshot.workflowId,
+									"--no-focus",
 								],
 								signal,
-							)) as { workspace?: { workspace_id?: string } }
-						).workspace?.workspace_id;
-					}
-					if (!workspace)
-						throw new Error("Herdr wiki workspace setup returned no workspace");
-					setupWorkspaces.set(effect.id, workspace);
-					if (!engine.effectIsLive(repo, effect.id, effect.lease ?? "")) {
-						try {
-							options.herdr.call("workspace", "close", workspace);
-						} catch {
-							/* best effort cleanup for a concurrently closed workflow */
+							),
+						);
+						workspace = result.workspace?.workspace_id;
+						worktree = result.worktree?.path;
+						if (!workspace || !worktree)
+							throw new TransientFailure(
+								"Herdr worktree setup returned incomplete identity",
+							);
+					} else {
+						if (
+							!sameCheckout &&
+							input.mode !== "worktree" &&
+							(yield* p(() =>
+								currentBranch(snapshot.metadata.repository, signal),
+							)) !== branch
+						) {
+							const exists = yield* git(snapshot.metadata.repository, [
+								"branch",
+								"--list",
+								branch,
+							]);
+							yield* git(
+								snapshot.metadata.repository,
+								[
+									"switch",
+									...(exists.trim()
+										? [branch]
+										: [
+												"-c",
+												branch,
+												input.baseCommit ?? snapshot.metadata.baseCommit,
+											]),
+								],
+								signal,
+							);
 						}
-						setupWorkspaces.delete(effect.id);
-						return { cancelled: true };
+						if (!worktree)
+							throw new TransientFailure(
+								"workspace setup returned incomplete identity",
+							);
+						if (!workspace) {
+							const result = decodeHerdrResult(
+								H.workspaceCreateResult,
+								yield* herdr(
+									[
+										"workspace",
+										"create",
+										"--cwd",
+										worktree,
+										"--label",
+										snapshot.workflowId,
+									],
+									signal,
+								),
+							);
+							workspace = result.workspace?.workspace_id;
+						}
 					}
-					try {
-						await ensureWorkspaceTabs(
+					if (!workspace || !worktree)
+						throw new TransientFailure(
+							"workspace setup returned incomplete identity",
+						);
+					yield* p(() =>
+						ensureWorkspaceTabs(
 							options.herdr,
 							workspace,
-							snapshot.metadata.worktree,
+							worktree,
 							snapshot.workflowId,
-							isResearchWorkflowTarget(repo) ||
-								snapshot.definition.id === "research"
-								? researchWorkflowTarget()
-								: wikiWorkflowTarget(),
-						);
-					} catch (error) {
+							undefined,
+							signal,
+						),
+					);
+					return { workspace, worktree, branch };
+				}),
+			cancel: (effect, result) =>
+				Effect.sync(() => {
+					const resultWorkspace =
+						result && typeof result === "object" && "workspace" in result
+							? (result as { workspace?: unknown }).workspace
+							: undefined;
+					const workspace =
+						typeof resultWorkspace === "string"
+							? resultWorkspace
+							: setupWorkspaces.get(effect.id);
+					if (workspace) {
 						try {
 							options.herdr.call("workspace", "close", workspace);
 						} catch {
-							/* best effort cleanup after setup failure */
+							/* best effort cleanup after concurrent workflow closure */
 						}
-						setupWorkspaces.delete(effect.id);
-						throw error;
-					}
-					if (!engine.effectIsLive(repo, effect.id, effect.lease ?? "")) {
-						try {
-							options.herdr.call("workspace", "close", workspace);
-						} catch {
-							/* best effort cleanup for a concurrently closed workflow */
-						}
-						setupWorkspaces.delete(effect.id);
-						return { cancelled: true };
 					}
 					setupWorkspaces.delete(effect.id);
-					return {
-						workspace,
-						worktree: snapshot.metadata.worktree,
-						branch: "",
-					};
-				}
-				const input = effect.payload as {
-					mode?: string;
-					branch?: string;
-					baseCommit?: string;
-					sameCheckout?: boolean;
-				};
-				const sameCheckout = input.sameCheckout === true;
-				const branch = sameCheckout
-					? await currentBranch(snapshot.metadata.repository, signal)
-					: (input.branch ?? snapshot.metadata.branch);
-				if (!branch) throw new Error("workspace setup requires a named branch");
-				let worktree =
-					input.mode === "worktree" && !sameCheckout
-						? await worktreeForBranch(
-								snapshot.metadata.repository,
-								branch,
-								signal,
-							)
-						: snapshot.metadata.repository;
-				let workspace = await recoverWorkspaceAsync(
-					options.herdr,
-					snapshot.workflowId,
-					signal,
-				);
-				if (input.mode === "worktree" && !worktree) {
-					const result = (await herdrCall(
-						options.herdr,
-						[
-							"worktree",
-							"create",
-							"--cwd",
-							snapshot.metadata.repository,
-							"--branch",
-							branch,
-							"--base",
-							input.baseCommit ?? snapshot.metadata.baseCommit,
-							"--label",
-							snapshot.workflowId,
-							"--no-focus",
-						],
-						signal,
-					)) as {
-						workspace?: { workspace_id?: string };
-						worktree?: { path?: string };
-					};
-					workspace = result.workspace?.workspace_id;
-					worktree = result.worktree?.path;
-					if (!workspace || !worktree)
-						throw new Error(
-							"Herdr worktree setup returned incomplete identity",
-						);
-				} else {
-					if (
-						!sameCheckout &&
-						input.mode !== "worktree" &&
-						(await currentBranch(snapshot.metadata.repository, signal)) !==
-							branch
-					) {
-						const exists = await git(
-							snapshot.metadata.repository,
-							["branch", "--list", branch],
-							signal,
-						);
-						await git(
-							snapshot.metadata.repository,
-							[
-								"switch",
-								...(exists
-									? [branch]
-									: [
-											"-c",
-											branch,
-											input.baseCommit ?? snapshot.metadata.baseCommit,
-										]),
-							],
-							signal,
-						);
-					}
-					if (!worktree)
-						throw new Error("workspace setup returned incomplete identity");
-					if (!workspace) {
-						const result = (await herdrCall(
-							options.herdr,
-							[
-								"workspace",
-								"create",
-								"--cwd",
-								worktree,
-								"--label",
-								snapshot.workflowId,
-							],
-							signal,
-						)) as { workspace?: { workspace_id?: string } };
-						workspace = result.workspace?.workspace_id;
-					}
-				}
-				if (!workspace || !worktree)
-					throw new Error("workspace setup returned incomplete identity");
-				await ensureWorkspaceTabs(
-					options.herdr,
-					workspace,
-					worktree,
-					snapshot.workflowId,
-					undefined,
-					signal,
-				);
-				return { workspace, worktree, branch };
-			},
-			async cancel(effect, result) {
-				const resultWorkspace =
-					result && typeof result === "object" && "workspace" in result
-						? (result as { workspace?: unknown }).workspace
-						: undefined;
-				const workspace =
-					typeof resultWorkspace === "string"
-						? resultWorkspace
-						: setupWorkspaces.get(effect.id);
-				if (workspace) {
-					try {
-						options.herdr.call("workspace", "close", workspace);
-					} catch {
-						/* best effort cleanup after concurrent workflow closure */
-					}
-				}
-				setupWorkspaces.delete(effect.id);
-			},
+				}),
 		},
 		"artifact.write": {
-			async observe(effect) {
-				const expected = await renderedAssignmentAsync(
-					engine,
-					repo,
-					options.registry,
-					runId(effect),
-					"",
-				);
-				try {
-					return fs.readFileSync(expected.run.assignmentPath, "utf8") ===
-						`${expected.rendered.prompt}\n`
-						? {
-								path: expected.run.assignmentPath,
-								digest: expected.rendered.digest,
-							}
-						: undefined;
-				} catch {
-					return undefined;
-				}
-			},
-			async execute(effect) {
-				const expected = await renderedAssignmentAsync(
-					engine,
-					repo,
-					options.registry,
-					runId(effect),
-					"",
-				);
-				const snapshot = engine.getSnapshot(repo, expected.run.workflowId);
-				const root =
-					snapshot.definition.id === "wiki-comments"
-						? wikiWorkflowDataRoot()
-						: snapshot.metadata.worktree;
-				const directory = openSecureDirectory(
-					path.dirname(expected.run.assignmentPath),
-					root,
-				);
-				try {
-					writeAtomicPrivateFile(
-						directory,
-						path.basename(expected.run.assignmentPath),
-						`${expected.rendered.prompt}\n`,
-						0o600,
+			observe: (effect) =>
+				Effect.gen(function* () {
+					const expected = yield* p(() =>
+						renderedAssignmentAsync(
+							engine,
+							repo,
+							options.registry,
+							runId(effect),
+							"",
+						),
 					);
-				} finally {
-					closeSecureDirectory(directory);
-				}
-				return {
-					path: expected.run.assignmentPath,
-					digest: expected.rendered.digest,
-				};
-			},
+					try {
+						return fs.readFileSync(expected.run.assignmentPath, "utf8") ===
+							`${expected.rendered.prompt}\n`
+							? {
+									path: expected.run.assignmentPath,
+									digest: expected.rendered.digest,
+								}
+							: undefined;
+					} catch {
+						return undefined;
+					}
+				}),
+			execute: (effect) =>
+				Effect.gen(function* () {
+					const expected = yield* p(() =>
+						renderedAssignmentAsync(
+							engine,
+							repo,
+							options.registry,
+							runId(effect),
+							"",
+						),
+					);
+					const snapshot = engine.getSnapshot(repo, expected.run.workflowId);
+					const root =
+						snapshot.definition.id === "wiki-comments"
+							? wikiWorkflowDataRoot()
+							: snapshot.metadata.worktree;
+					const directory = openSecureDirectory(
+						path.dirname(expected.run.assignmentPath),
+						root,
+					);
+					try {
+						writeAtomicPrivateFile(
+							directory,
+							path.basename(expected.run.assignmentPath),
+							`${expected.rendered.prompt}\n`,
+							0o600,
+						);
+					} finally {
+						closeSecureDirectory(directory);
+					}
+					return {
+						path: expected.run.assignmentPath,
+						digest: expected.rendered.digest,
+					};
+				}),
 		},
 		"agent.launch": {
-			async observe(effect, signal) {
-				const run = engine.getRun(repo, runId(effect));
-				const snapshot = engine.getSnapshot(repo, run.workflowId);
-				const definition = snapshotDefinition(snapshot, options.registry);
-				const step = options.registry.stepForDefinition(definition, run.stepId);
-				const resolved = await resolveLiveAgentAsync(
-					options.herdr,
-					snapshot.workflowId,
-					snapshot.definition.id,
-					run,
-					signal,
-					step,
-				);
-				if (!resolved) return undefined;
-				try {
+			observe: (effect, signal) =>
+				Effect.gen(function* () {
+					const run = engine.getRun(repo, runId(effect));
+					const snapshot = engine.getSnapshot(repo, run.workflowId);
+					const definition = snapshotDefinition(snapshot, options.registry);
+					const step = options.registry.stepForDefinition(
+						definition,
+						run.stepId,
+					);
+					const resolved = yield* p(() =>
+						resolveLiveAgentAsync(
+							options.herdr,
+							snapshot.workflowId,
+							snapshot.definition.id,
+							run,
+							signal,
+							step,
+						),
+					);
+					if (!resolved) return undefined;
 					// A reused live pane completes this effect here, without ever
 					// reaching execute() below — mint a real capability the same
 					// way execute() does, or the run never gets one and every
@@ -591,38 +915,43 @@ export function agentEffectHandlers(
 					// capability is unavailable".
 					const token =
 						effect.runToken ?? engine.issueRunCapability(repo, run.id);
-					const expected = await renderedAssignmentAsync(
-						engine,
-						repo,
-						options.registry,
-						run.id,
-						token,
+					const expected = yield* p(() =>
+						renderedAssignmentAsync(
+							engine,
+							repo,
+							options.registry,
+							run.id,
+							token,
+						),
 					);
-					writeRunEnvironment(
-						snapshot.definition.id === "wiki-comments"
-							? path.join(wikiWorkflowDataRoot(), snapshot.workflowId, "runs")
-							: snapshot.metadata.worktree,
-						run.id,
-						expected.assignment.environment,
-						snapshot.definition.id === "wiki-comments"
-							? path.join(wikiWorkflowDataRoot(), snapshot.workflowId, "runs")
-							: undefined,
-					);
-					writeAgentEnvPointer(
-						snapshot.metadata.worktree,
-						resolved.name,
-						run.id,
-						snapshot.definition.id === "wiki-comments"
-							? path.join(wikiWorkflowDataRoot(), snapshot.workflowId, "runs")
-							: undefined,
-					);
-					if (!engine.effectIsLive(repo, effect.id, effect.lease ?? ""))
-						return undefined;
-					await herdrCall(
-						options.herdr,
+					yield* Effect.sync(() => {
+						writeRunEnvironment(
+							snapshot.definition.id === "wiki-comments"
+								? path.join(wikiWorkflowDataRoot(), snapshot.workflowId, "runs")
+								: snapshot.metadata.worktree,
+							run.id,
+							expected.assignment.environment,
+							snapshot.definition.id === "wiki-comments"
+								? path.join(wikiWorkflowDataRoot(), snapshot.workflowId, "runs")
+								: undefined,
+						);
+						writeAgentEnvPointer(
+							snapshot.metadata.worktree,
+							resolved.name,
+							run.id,
+							snapshot.definition.id === "wiki-comments"
+								? path.join(wikiWorkflowDataRoot(), snapshot.workflowId, "runs")
+								: undefined,
+						);
+					});
+					if (!live(effect)) return undefined;
+					yield* herdr(
 						["agent", "prompt", resolved.paneId, expected.rendered.prompt],
 						signal,
 					);
+					// An observation failure is never treated as confirmed absence:
+					// if reusing the live agent fails, surface it instead of
+					// authorizing a duplicate launch.
 					return {
 						runtime: run.profile.runtime,
 						name: resolved.name,
@@ -630,159 +959,162 @@ export function agentEffectHandlers(
 						...(resolved.tabId ? { tabId: resolved.tabId } : {}),
 						...(resolved.sessionId ? { sessionId: resolved.sessionId } : {}),
 					};
-				} catch {
-					return undefined;
-				}
-			},
-			async execute(effect, signal) {
-				const run = engine.getRun(repo, runId(effect));
-				const snapshot = engine.getSnapshot(repo, run.workflowId);
-				const step = options.registry.stepForDefinition(
-					snapshotDefinition(snapshot, options.registry),
-					run.stepId,
-				);
-				const token =
-					effect.runToken ?? engine.issueRunCapability(repo, run.id);
-				const changedFiles =
-					run.stepId === "core.triage"
-						? await changedFilesInAsync(snapshot)
-						: [];
-				const assignment = assignmentFor(
-					run,
-					snapshot,
-					token,
-					options.registry,
-					changedFiles,
-				);
-				const assetRoot = workflowAssets(
-					snapshot.metadata.worktree,
-					snapshot.workflowId,
-					snapshot.definition.id === "wiki-comments"
-						? wikiWorkflowDataRoot()
-						: undefined,
-				);
-				const rendered = renderAssignment(
-					step,
-					assignment,
-					`${assetRoot}/instructions`,
-				);
-				const adapter = options.adapters.get(run.profile.runtime);
-				if (!adapter)
-					throw new Error(`adapter unavailable: ${run.profile.runtime}`);
-				adapter.preflight(run.profile, step.requirements);
-				const name = canonicalAgentName(
-					snapshot.workflowId,
-					snapshot.definition.id,
-					run,
-					step,
-				);
-				// The telemetry bridge recovers the run env through this pointer, so it
-				// must exist before the agent process boots inside adapter.launch.
-				const runDirectory =
-					snapshot.definition.id === "wiki-comments"
-						? path.join(wikiWorkflowDataRoot(), snapshot.workflowId, "runs")
-						: undefined;
-				writeAgentEnvPointer(
-					snapshot.metadata.worktree,
-					name,
-					run.id,
-					runDirectory,
-				);
-				const pane = await options.paneForRun(run.id);
-				if (!engine.effectIsLive(repo, effect.id, effect.lease ?? ""))
-					return { cancelled: true };
-				const ctx: LaunchContext = {
-					profile: run.profile,
-					assignment,
-					rendered,
-					paneId: pane.paneId,
-					...(pane.tabId ? { tabId: pane.tabId } : {}),
-					cwd: snapshot.metadata.worktree,
-					...(runDirectory ? { runDirectory } : {}),
-					name,
-					environment: assignment.environment,
-					bridgePath:
-						run.profile.runtime === "pi"
-							? `${assetRoot}/bridges/pi-telemetry.ts`
-							: `${assetRoot}/bridges/${run.profile.runtime === "opencode-v2" ? "opencode-v2" : "opencode"}-telemetry.js`,
-					workflowExtensionPath:
-						run.profile.runtime === "pi"
-							? `${assetRoot}/extensions/developer-question.ts`
+				}),
+			execute: (effect, signal) =>
+				Effect.gen(function* () {
+					const run = engine.getRun(repo, runId(effect));
+					const snapshot = engine.getSnapshot(repo, run.workflowId);
+					const step = options.registry.stepForDefinition(
+						snapshotDefinition(snapshot, options.registry),
+						run.stepId,
+					);
+					const token =
+						effect.runToken ?? engine.issueRunCapability(repo, run.id);
+					const changedFiles =
+						run.stepId === "core.triage"
+							? yield* p(() => changedFilesInAsync(snapshot))
+							: [];
+					const assignment = assignmentFor(
+						run,
+						snapshot,
+						token,
+						options.registry,
+						changedFiles,
+					);
+					const assetRoot = workflowAssets(
+						snapshot.metadata.worktree,
+						snapshot.workflowId,
+						snapshot.definition.id === "wiki-comments"
+							? wikiWorkflowDataRoot()
 							: undefined,
-					signal,
-				};
-				try {
-					const handle = await adapter.launch(ctx);
-					if (!engine.effectIsLive(repo, effect.id, effect.lease ?? "")) {
+					);
+					const rendered = renderAssignment(
+						step,
+						assignment,
+						`${assetRoot}/instructions`,
+					);
+					const adapter = options.adapters.get(run.profile.runtime);
+					if (!adapter)
+						throw new PermanentFailure(
+							`adapter unavailable: ${run.profile.runtime}`,
+						);
+					adapter.preflight(run.profile, step.requirements);
+					const name = canonicalAgentName(
+						snapshot.workflowId,
+						snapshot.definition.id,
+						run,
+						step,
+					);
+					// The telemetry bridge recovers the run env through this pointer, so it
+					// must exist before the agent process boots inside adapter.launch.
+					const runDirectory =
+						snapshot.definition.id === "wiki-comments"
+							? path.join(wikiWorkflowDataRoot(), snapshot.workflowId, "runs")
+							: undefined;
+					yield* Effect.sync(() =>
+						writeAgentEnvPointer(
+							snapshot.metadata.worktree,
+							name,
+							run.id,
+							runDirectory,
+						),
+					);
+					const pane = yield* p(() => options.paneForRun(run.id));
+					if (!live(effect)) return { cancelled: true };
+					const ctx: LaunchContext = {
+						profile: run.profile,
+						assignment,
+						rendered,
+						paneId: pane.paneId,
+						...(pane.tabId ? { tabId: pane.tabId } : {}),
+						cwd: snapshot.metadata.worktree,
+						...(runDirectory ? { runDirectory } : {}),
+						name,
+						environment: assignment.environment,
+						bridgePath:
+							run.profile.runtime === "pi"
+								? `${assetRoot}/bridges/pi-telemetry.ts`
+								: `${assetRoot}/bridges/${run.profile.runtime === "opencode-v2" ? "opencode-v2" : "opencode"}-telemetry.js`,
+						workflowExtensionPath:
+							run.profile.runtime === "pi"
+								? `${assetRoot}/extensions/developer-question.ts`
+								: undefined,
+						signal,
+					};
+					const launchOutcome = yield* Effect.either(adapter.launch(ctx));
+					if (Either.isLeft(launchOutcome)) {
+						// Only close the pane when this launch call created it; a
+						// reused pane may still host another live agent, so a failed
+						// relaunch must never tear it down.
+						if (pane.owned === true) {
+							try {
+								options.herdr.call("pane", "close", pane.paneId);
+							} catch {
+								/* preserve original launch error */
+							}
+						}
+						return yield* Effect.fail(launchOutcome.left);
+					}
+					const handle = launchOutcome.right;
+					if (!live(effect)) {
 						try {
-							await adapter.stop(handle, signal);
+							yield* adapter.stop(handle, signal);
 						} catch {
 							/* preserve cancellation; the next drain can retry cleanup */
 						}
 						return { cancelled: true };
 					}
 					return handle;
-				} catch (error) {
-					// Only close the pane when this launch call created it; a
-					// reused pane may still host another live agent, so a failed
-					// relaunch must never tear it down.
-					if (pane.owned === true) {
-						try {
-							options.herdr.call("pane", "close", pane.paneId);
-						} catch {
-							/* preserve original launch error */
-						}
-					}
-					throw error;
-				}
-			},
+				}),
 		},
 		"agent.prompt": {
-			async execute(effect, signal) {
-				const run = engine.getRun(repo, runId(effect));
-				if (!run.handle)
-					throw new Error("agent prompt requires a live run handle");
-				const adapter = options.adapters.get(run.profile.runtime);
-				if (!adapter)
-					throw new Error(`adapter unavailable: ${run.profile.runtime}`);
-				const message = (effect.payload as { message?: unknown }).message;
-				if (typeof message !== "string" || !message.trim())
-					throw new Error("agent prompt requires a message");
-				if (!engine.effectIsLive(repo, effect.id, effect.lease ?? ""))
-					return { cancelled: true };
-				await adapter.prompt(run.handle, message, signal);
-				return { prompted: true };
-			},
+			execute: (effect, signal) =>
+				Effect.gen(function* () {
+					const run = engine.getRun(repo, runId(effect));
+					if (!run.handle)
+						throw new PermanentFailure(
+							"agent prompt requires a live run handle",
+						);
+					const adapter = options.adapters.get(run.profile.runtime);
+					if (!adapter)
+						throw new PermanentFailure(
+							`adapter unavailable: ${run.profile.runtime}`,
+						);
+					const message = (effect.payload as { message?: unknown }).message;
+					if (typeof message !== "string" || !message.trim())
+						throw new PermanentFailure("agent prompt requires a message");
+					if (!live(effect)) return { cancelled: true };
+					yield* adapter.prompt(run.handle, message, signal);
+					return { prompted: true };
+				}),
 		},
 		// Legacy stop effects must drain safely, but agents now live until their
 		// workspace closes. New workflow paths never enqueue this effect.
 		"agent.stop": {
-			async execute() {
-				return { retained: true };
-			},
+			execute: () => Effect.succeed({ retained: true }),
 		},
 		"notification.show": {
-			async execute(effect, signal) {
-				const body = effect.payload as { title?: string; body?: string };
-				await herdrCall(
-					options.herdr,
-					[
-						"notification",
-						"show",
-						body.title ?? "Workflow update",
-						"--body",
-						body.body ?? "",
-					],
-					signal,
-				);
-				return { shown: true };
-			},
+			execute: (effect, signal) =>
+				Effect.gen(function* () {
+					const body = effect.payload as { title?: string; body?: string };
+					yield* herdr(
+						[
+							"notification",
+							"show",
+							body.title ?? "Workflow update",
+							"--body",
+							body.body ?? "",
+						],
+						signal,
+					);
+					return { shown: true };
+				}),
 		},
 		"wiki.verify": {
-			async execute(effect) {
-				const snapshot = snapshotFor(effect);
-				const pinnedRoot = pinnedWikiRoot(snapshot);
-				return await withWikiRoot(pinnedRoot, async () => {
+			execute: (effect) =>
+				Effect.gen(function* () {
+					const snapshot = snapshotFor(effect);
+					const pinnedRoot = pinnedWikiRoot(snapshot);
 					const approved = effect.payload as {
 						concepts?: Array<{ id?: unknown; digest?: unknown }>;
 					};
@@ -812,14 +1144,17 @@ export function agentEffectHandlers(
 								: [],
 						);
 						const baseline = snapshot.wikiBaseline;
-						if (!baseline) throw new Error("wiki bundle baseline is missing");
+						if (!baseline)
+							throw new PermanentFailure("wiki bundle baseline is missing");
 						if (
 							wikiBundleFingerprint(pinnedRoot, requested) !==
 							baseline.fingerprint
 						)
-							throw new Error("wiki changed outside submitted comments");
+							throw new PermanentFailure(
+								"wiki changed outside submitted comments",
+							);
 						if (concepts.some((id) => !requested.has(id)))
-							throw new Error(
+							throw new PermanentFailure(
 								"wiki agent touched a concept outside submitted comments",
 							);
 						const baselineConcepts = new Map(
@@ -831,7 +1166,7 @@ export function agentEffectHandlers(
 									wikiConceptFingerprint(id, pinnedRoot) &&
 								!concepts.includes(id)
 							)
-								throw new Error(
+								throw new PermanentFailure(
 									"wiki target changed without an authenticated draft write",
 								);
 						concepts = concepts.filter((id) => requested.has(id));
@@ -842,17 +1177,22 @@ export function agentEffectHandlers(
 							concepts.length !== expected.length ||
 							concepts.some((id, index) => id !== expected[index])
 						)
-							throw new Error("wiki changed after developer approval");
+							throw new PermanentFailure(
+								"wiki changed after developer approval",
+							);
 						for (const item of approved.concepts) {
 							if (
 								typeof item.id !== "string" ||
 								typeof item.digest !== "string"
 							)
-								throw new Error("invalid approved wiki snapshot");
-							const content = fs.readFileSync(conceptPath(item.id), "utf8");
+								throw new PermanentFailure("invalid approved wiki snapshot");
+							const content = fs.readFileSync(
+								conceptPath(item.id, pinnedRoot),
+								"utf8",
+							);
 							const digest = createHash("sha256").update(content).digest("hex");
 							if (digest !== item.digest)
-								throw new Error(
+								throw new PermanentFailure(
 									`wiki changed after developer approval: ${item.id}`,
 								);
 							approvedContent.set(item.id, content);
@@ -862,275 +1202,296 @@ export function agentEffectHandlers(
 					const configured = loadConfig().wiki?.reviewer;
 					let reviewer = configured;
 					if (!reviewer) {
-						try {
-							reviewer = await git(snapshot.metadata.worktree, [
-								"config",
-								"user.email",
-							]);
-						} catch {
-							reviewer = undefined;
-						}
+						reviewer = yield* git(
+							snapshot.metadata.worktree,
+							["config", "user.email"],
+							undefined,
+						).pipe(Effect.catchAll(() => Effect.succeed("")));
 					}
 					const actor = reviewer?.startsWith("human:")
 						? reviewer
 						: `human:${reviewer || "developer"}`;
 					for (const concept of concepts)
-						verifyConcept(concept, actor, approvedContent.get(concept));
+						yield* Effect.sync(() =>
+							verifyConcept(
+								concept,
+								actor,
+								approvedContent.get(concept),
+								true,
+								pinnedRoot,
+							),
+						);
 					return { verified: concepts, actor };
-				});
-			},
+				}),
 		},
 		"openspec.validate": {
-			async execute(effect, signal) {
-				const snapshot = snapshotFor(effect);
-				const result = await runProcess(
-					["openspec", "validate", snapshot.metadata.changeId, "--strict"],
-					{ cwd: snapshot.metadata.worktree, signal },
-				);
-				if (result.exitCode !== 0)
-					throw new Error((result.stderr || result.stdout).trim());
-				return { validated: true };
-			},
+			execute: (effect, signal) =>
+				Effect.gen(function* () {
+					const snapshot = snapshotFor(effect);
+					yield* runProcessEffect(
+						["openspec", "validate", snapshot.metadata.changeId, "--strict"],
+						{ cwd: snapshot.metadata.worktree, signal },
+					).pipe(
+						Effect.mapError((failure) => new PermanentFailure(failure.detail)),
+					);
+					return { validated: true };
+				}),
 		},
 		"delivery.commit": {
-			async observe(effect, signal) {
-				const snapshot = snapshotFor(effect);
-				return (
-					(await git(
+			observe: (effect, signal) =>
+				Effect.gen(function* () {
+					const snapshot = snapshotFor(effect);
+					const status = yield* git(
 						snapshot.metadata.worktree,
 						["status", "--porcelain"],
 						signal,
-					)) === ""
-				);
-			},
-			async execute(effect, signal) {
-				const snapshot = snapshotFor(effect);
-				await git(snapshot.metadata.worktree, ["add", "-A"], signal);
-				if (
-					await git(
-						snapshot.metadata.worktree,
-						["diff", "--cached", "--name-only"],
-						signal,
-					)
-				)
-					await git(
-						snapshot.metadata.worktree,
-						[
-							"commit",
-							"-m",
-							`Apply ${snapshot.metadata.changeId || snapshot.workflowId}`,
-						],
-						signal,
 					);
-				return {
-					head: await git(
-						snapshot.metadata.worktree,
-						["rev-parse", "HEAD"],
-						signal,
-					),
-				};
-			},
-		},
-		"delivery.push": {
-			async observe(effect, signal) {
-				const snapshot = snapshotFor(effect);
-				if (!snapshot.metadata.executionSettings) return false;
-				try {
-					return (
-						(await git(
+					return status.trim() === "";
+				}),
+			execute: (effect, signal) =>
+				Effect.gen(function* () {
+					const snapshot = snapshotFor(effect);
+					yield* git(snapshot.metadata.worktree, ["add", "-A"], signal);
+					if (
+						yield* git(
 							snapshot.metadata.worktree,
-							["rev-parse", "@{upstream}"],
+							["diff", "--cached", "--name-only"],
 							signal,
-						)) ===
-						(await git(
+						)
+					)
+						yield* git(
+							snapshot.metadata.worktree,
+							[
+								"commit",
+								"-m",
+								`Apply ${snapshot.metadata.changeId || snapshot.workflowId}`,
+							],
+							signal,
+						);
+					return {
+						head: yield* git(
 							snapshot.metadata.worktree,
 							["rev-parse", "HEAD"],
 							signal,
-						))
-					);
-				} catch {
-					return false;
-				}
-			},
-			async execute(effect, signal) {
-				const snapshot = snapshotFor(effect);
-				const settings = snapshot.metadata.executionSettings;
-				if (!settings)
-					throw new Error(
-						"workflow execution settings adoption required before delivery",
-					);
-				const safeRemote =
-					/^[A-Za-z0-9._-]+$/.test(settings.remote ?? "") ||
-					/^(?:https?|ssh|git):\/\/[^\s]+$/.test(settings.remote ?? "") ||
-					/^git@[^\s:]+:[^\s]+$/.test(settings.remote ?? "");
-				if (
-					!safeRemote ||
-					settings.remote?.startsWith("ext::") ||
-					settings.remote?.startsWith("-") ||
-					settings.remote.includes("\0") ||
-					settings.remote.includes("\n") ||
-					settings.remote.includes("\r") ||
-					!snapshot.metadata.branch ||
-					snapshot.metadata.branch.startsWith("-") ||
-					snapshot.metadata.branch.includes("\0") ||
-					snapshot.metadata.branch.includes("\n") ||
-					snapshot.metadata.branch.includes("\r")
-				)
-					throw new Error("delivery remote and branch must be safe Git names");
-				await runGitWithCredentials(
-					snapshot.metadata.worktree,
-					[
-						"push",
-						"--set-upstream",
-						"--",
-						settings.remote,
-						snapshot.metadata.branch,
-					],
-					{
-						prompt: options.credentialPrompt,
+						),
+					};
+				}),
+		},
+		"delivery.push": {
+			observe: (effect, signal) =>
+				Effect.gen(function* () {
+					const snapshot = snapshotFor(effect);
+					if (!snapshot.metadata.executionSettings) return false;
+					// A missing upstream is confirmed absence of a push, not an
+					// observation failure: git rev-parse errors map to "not pushed".
+					const upstream = yield* git(
+						snapshot.metadata.worktree,
+						["rev-parse", "@{upstream}"],
 						signal,
-						env: { GIT_ALLOW_PROTOCOL: "https:ssh:git" },
-					},
-				);
-				return {
-					head: await git(
+					).pipe(Effect.either);
+					if (Either.isLeft(upstream)) return false;
+					const head = yield* git(
 						snapshot.metadata.worktree,
 						["rev-parse", "HEAD"],
 						signal,
-					),
-				};
-			},
+					).pipe(Effect.either);
+					if (Either.isLeft(head)) return false;
+					return upstream.right === head.right;
+				}),
+			execute: (effect, signal) =>
+				Effect.gen(function* () {
+					const snapshot = snapshotFor(effect);
+					const settings = snapshot.metadata.executionSettings;
+					if (!settings)
+						throw new PermanentFailure(
+							"workflow execution settings adoption required before delivery",
+						);
+					const safeRemote =
+						/^[A-Za-z0-9._-]+$/.test(settings.remote ?? "") ||
+						/^(?:https?|ssh|git):\/\/[^\s]+$/.test(settings.remote ?? "") ||
+						/^git@[^\s:]+:[^\s]+$/.test(settings.remote ?? "");
+					if (
+						!safeRemote ||
+						settings.remote?.startsWith("ext::") ||
+						settings.remote?.startsWith("-") ||
+						settings.remote.includes("\0") ||
+						settings.remote.includes("\n") ||
+						settings.remote.includes("\r") ||
+						!snapshot.metadata.branch ||
+						snapshot.metadata.branch.startsWith("-") ||
+						snapshot.metadata.branch.includes("\0") ||
+						snapshot.metadata.branch.includes("\n") ||
+						snapshot.metadata.branch.includes("\r")
+					)
+						throw new PermanentFailure(
+							"delivery remote and branch must be safe Git names",
+						);
+					yield* runGitWithCredentialsEffect(
+						snapshot.metadata.worktree,
+						[
+							"push",
+							"--set-upstream",
+							"--",
+							settings.remote,
+							snapshot.metadata.branch,
+						],
+						{
+							prompt: options.credentialPrompt,
+							signal,
+							env: { GIT_ALLOW_PROTOCOL: "https:ssh:git" },
+						},
+					);
+					return {
+						head: yield* git(
+							snapshot.metadata.worktree,
+							["rev-parse", "HEAD"],
+							signal,
+						),
+					};
+				}),
 		},
 		"pull-request.create": {
-			async observe(effect, signal) {
-				const snapshot = snapshotFor(effect);
-				const settings = snapshot.metadata.executionSettings;
-				const tool = settings?.prTool
-					? (Bun.which(settings.prTool) ?? settings.prTool)
-					: null;
-				if (!tool) return false;
-				const args =
-					tool.endsWith("/gh") || tool === "gh"
-						? ["pr", "view", snapshot.metadata.branch, "--json", "url"]
-						: ["mr", "view", snapshot.metadata.branch, "--output", "json"];
-				return (
-					(
-						await runProcess([tool, ...args], {
-							cwd: snapshot.metadata.worktree,
-							signal,
-						})
-					).exitCode === 0
-				);
-			},
-			async execute(effect, signal) {
-				const snapshot = snapshotFor(effect);
-				const settings = snapshot.metadata.executionSettings;
-				if (!settings)
-					throw new Error(
-						"workflow execution settings adoption required before PR creation",
+			observe: (effect, signal) =>
+				Effect.gen(function* () {
+					const snapshot = snapshotFor(effect);
+					const settings = snapshot.metadata.executionSettings;
+					const tool = settings?.prTool
+						? (Bun.which(settings.prTool) ?? settings.prTool)
+						: null;
+					if (!tool) return false;
+					const args =
+						tool.endsWith("/gh") || tool === "gh"
+							? ["pr", "view", snapshot.metadata.branch, "--json", "url"]
+							: ["mr", "view", snapshot.metadata.branch, "--output", "json"];
+					const outcome = yield* runProcessEffect([tool, ...args], {
+						cwd: snapshot.metadata.worktree,
+						signal,
+					}).pipe(Effect.either);
+					return !Either.isLeft(outcome) && outcome.right.exitCode === 0;
+				}),
+			execute: (effect, signal) =>
+				Effect.gen(function* () {
+					const snapshot = snapshotFor(effect);
+					const settings = snapshot.metadata.executionSettings;
+					if (!settings)
+						throw new PermanentFailure(
+							"workflow execution settings adoption required before PR creation",
+						);
+					const tool = settings.prTool
+						? (Bun.which(settings.prTool) ?? settings.prTool)
+						: null;
+					if (!tool)
+						throw new PermanentFailure(
+							"no configured PR executable (gh or glab)",
+						);
+					const args =
+						tool.endsWith("/gh") || tool === "gh"
+							? ["pr", "create", "--fill"]
+							: ["mr", "create", "--fill"];
+					const result = yield* runProcessEffect([tool, ...args], {
+						cwd: snapshot.metadata.worktree,
+						signal,
+					}).pipe(
+						Effect.mapError((failure) => new TransientFailure(failure.detail)),
 					);
-				const tool = settings.prTool
-					? (Bun.which(settings.prTool) ?? settings.prTool)
-					: null;
-				if (!tool) throw new Error("no configured PR executable (gh or glab)");
-				const args =
-					tool.endsWith("/gh") || tool === "gh"
-						? ["pr", "create", "--fill"]
-						: ["mr", "create", "--fill"];
-				const result = await runProcess([tool, ...args], {
-					cwd: snapshot.metadata.worktree,
-					signal,
-				});
-				if (result.exitCode !== 0)
-					throw new Error((result.stderr || result.stdout).trim());
-				return { url: result.stdout.trim() };
-			},
+					return { url: result.stdout.trim() };
+				}),
 		},
 		"workspace.close": {
-			async observe(effect, signal) {
-				const workspace = snapshotFor(effect).metadata.workspace;
-				if (!workspace) return true;
-				try {
-					const result = (await herdrCall(
-						options.herdr,
+			observe: (effect, signal) =>
+				Effect.gen(function* () {
+					const workspace = snapshotFor(effect).metadata.workspace;
+					if (!workspace) return true;
+					const outcome = yield* herdr(
 						["workspace", "get", workspace],
 						signal,
-					)) as { workspace?: { status?: string; closed_at?: string } };
+					).pipe(Effect.either);
+					if (Either.isLeft(outcome)) {
+						// Herdr reporting the workspace as unknown is confirmed
+						// absence (already closed), not a failed observation.
+						if (
+							/not found|unknown workspace/i.test(
+								String(outcome.left?.message ?? ""),
+							)
+						)
+							return true;
+						return yield* Effect.fail(outcome.left);
+					}
+					const result = decodeHerdrResult(H.workspaceGetResult, outcome.right);
 					return (
 						result.workspace?.status === "closed" ||
 						Boolean(result.workspace?.closed_at)
 					);
-				} catch (error) {
-					return /not found|unknown workspace/i.test(
-						String((error as Error).message),
-					);
-				}
-			},
-			async execute(effect, signal) {
-				const workspace = snapshotFor(effect).metadata.workspace;
-				if (workspace)
-					await herdrCall(
-						options.herdr,
-						["workspace", "close", workspace],
-						signal,
-					);
-				return { closed: true };
-			},
+				}),
+			execute: (effect, signal) =>
+				Effect.gen(function* () {
+					const workspace = snapshotFor(effect).metadata.workspace;
+					if (workspace)
+						yield* herdr(["workspace", "close", workspace], signal);
+					return { closed: true };
+				}),
 		},
 		"workspace.cleanup": {
-			async observe(effect) {
-				const snapshot = snapshotFor(effect);
-				if (
-					isWikiWorkflowTarget(repo) ||
-					isResearchWorkflowTarget(repo) ||
-					snapshot.definition.id === "research"
-				)
-					return true;
-				return (
-					snapshot.metadata.worktree === snapshot.metadata.repository ||
-					!fs.existsSync(snapshot.metadata.worktree)
-				);
-			},
-			async execute(effect, signal) {
-				const snapshot = snapshotFor(effect);
-				if (
-					isWikiWorkflowTarget(repo) ||
-					isResearchWorkflowTarget(repo) ||
-					snapshot.definition.id === "research"
-				)
-					return { cleaned: true };
-				if (snapshot.metadata.worktree !== snapshot.metadata.repository)
-					await git(
-						snapshot.metadata.repository,
-						["worktree", "remove", "--force", snapshot.metadata.worktree],
-						signal,
+			observe: (effect) =>
+				Effect.sync(() => {
+					const snapshot = snapshotFor(effect);
+					if (
+						isWikiWorkflowTarget(repo) ||
+						isResearchWorkflowTarget(repo) ||
+						snapshot.definition.id === "research"
+					)
+						return true;
+					return (
+						snapshot.metadata.worktree === snapshot.metadata.repository ||
+						!fs.existsSync(snapshot.metadata.worktree)
 					);
-				return { cleaned: true };
-			},
+				}),
+			execute: (effect, signal) =>
+				Effect.gen(function* () {
+					const snapshot = snapshotFor(effect);
+					if (
+						isWikiWorkflowTarget(repo) ||
+						isResearchWorkflowTarget(repo) ||
+						snapshot.definition.id === "research"
+					)
+						return { cleaned: true };
+					if (snapshot.metadata.worktree !== snapshot.metadata.repository)
+						yield* git(
+							snapshot.metadata.repository,
+							["worktree", "remove", "--force", snapshot.metadata.worktree],
+							signal,
+						);
+					return { cleaned: true };
+				}),
 		},
 	};
 }
+
 async function currentBranch(
 	repo: string,
 	signal?: AbortSignal,
 ): Promise<string | undefined> {
-	const result = await runProcess(
-		["git", "-C", repo, "branch", "--show-current"],
-		{ signal },
+	const result = await Effect.runPromise(
+		runProcessEffect(["git", "-C", repo, "branch", "--show-current"], {
+			signal,
+		}).pipe(Effect.either),
 	);
-	return result.exitCode === 0 ? result.stdout.trim() || undefined : undefined;
+	return !Either.isLeft(result) && result.right.exitCode === 0
+		? result.right.stdout.trim() || undefined
+		: undefined;
 }
 async function worktreeForBranch(
 	repo: string,
 	branch: string,
 	signal?: AbortSignal,
 ): Promise<string | undefined> {
-	const result = await runProcess(
-		["git", "-C", repo, "worktree", "list", "--porcelain"],
-		{ signal },
+	const result = await Effect.runPromise(
+		runProcessEffect(["git", "-C", repo, "worktree", "list", "--porcelain"], {
+			signal,
+		}).pipe(Effect.either),
 	);
-	if (result.exitCode !== 0) return undefined;
-	for (const block of result.stdout.trim().split(/\n\n+/)) {
+	if (Either.isLeft(result) || result.right.exitCode !== 0) return undefined;
+	for (const block of result.right.stdout.trim().split(/\n\n+/)) {
 		const lines = block.split("\n");
 		if (lines.includes(`branch refs/heads/${branch}`))
 			return lines.find((line) => line.startsWith("worktree "))?.slice(9);
@@ -1218,7 +1579,11 @@ async function ensureWorkspaceTabs(
 			: undefined;
 		if (!tab?.tab_id || !root)
 			throw new Error("workspace dashboard pane unavailable");
-		await new HerdrLifecycle(herdr, Bun.sleep, signal).waitForShell(root);
+		await Effect.runPromise(
+			new HerdrLifecycle(herdr, (ms) => Effect.sleep(ms), signal).waitForShell(
+				root,
+			),
+		);
 		await herdrCall(herdr, ["tab", "rename", tab.tab_id, "dashboard"], signal);
 		const command = [
 			"agentic-coding",

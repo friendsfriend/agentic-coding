@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { Effect, Either } from "effect";
+import { decodeHerdrResult } from "../herdr-client.ts";
 import type { RenderedAssignment } from "./assignment.ts";
 import type {
 	AgentHandle,
@@ -7,6 +9,7 @@ import type {
 	ResolvedProfile,
 	RuntimeId,
 } from "./contracts.ts";
+import * as H from "./herdr-schema.ts";
 import {
 	closeSecureDirectory,
 	openSecureDirectory,
@@ -39,17 +42,26 @@ export interface AgentObservation {
 	paneId: string;
 	sessionId?: string;
 }
+/** Workflow-facing agent lifecycle boundary (migrate-workflow-execution-to-effect
+ * task 2.2/3.1). Methods are Effect operations; the underlying Herdr CLI and
+ * subprocesses remain the foreign API boundary. Successfully launched agents,
+ * adopted panes, and created workspaces belong to the durable workflow and
+ * intentionally outlive a runner drain — nothing here tears them down on
+ * ordinary scope exit. */
 export interface AgentAdapter {
 	readonly id: RuntimeId;
 	preflight(profile: ResolvedProfile, requirements: readonly string[]): void;
-	launch(ctx: LaunchContext): Promise<AgentHandle>;
+	launch(ctx: LaunchContext): Effect.Effect<AgentHandle, Error>;
 	prompt(
 		handle: AgentHandle,
 		message: string,
 		signal?: AbortSignal,
-	): Promise<void>;
-	observe(handle: AgentHandle, signal?: AbortSignal): Promise<AgentObservation>;
-	stop(handle: AgentHandle, signal?: AbortSignal): Promise<void>;
+	): Effect.Effect<void, Error>;
+	observe(
+		handle: AgentHandle,
+		signal?: AbortSignal,
+	): Effect.Effect<AgentObservation, Error>;
+	stop(handle: AgentHandle, signal?: AbortSignal): Effect.Effect<void, Error>;
 }
 function agent(value: unknown): Record<string, unknown> {
 	if (!value || typeof value !== "object" || !("agent" in value))
@@ -84,182 +96,215 @@ const SHELL_NAMES = new Set([
 	"powershell",
 	"cmd",
 ]);
+/** Effect acquisition around the shared Herdr port: ownership loss aborts the
+ * underlying call, and Herdr failures surface as classified `Error`s. */
+export function herdrCallEffect(
+	herdr: HerdrPort,
+	args: string[],
+	signal?: AbortSignal,
+): Effect.Effect<unknown, Error> {
+	return Effect.tryPromise({
+		try: () =>
+			herdr.callAsync
+				? herdr.callAsync(args, signal)
+				: Promise.resolve(herdr.call(...args)),
+		catch: (error) =>
+			error instanceof Error ? error : new Error(String(error)),
+	});
+}
 export class HerdrLifecycle {
 	constructor(
 		private readonly herdr: HerdrPort,
-		private readonly sleep: (ms: number) => Promise<void> = Bun.sleep,
+		private readonly sleep: (ms: number) => Effect.Effect<void> = (ms) =>
+			Effect.sleep(ms),
 		private readonly signal?: AbortSignal,
 	) {}
-	private async call(args: string[], signal = this.signal): Promise<unknown> {
-		if (signal?.aborted) throw new Error("effect ownership was lost");
-		return this.herdr.callAsync
-			? this.herdr.callAsync(args, signal)
-			: this.herdr.call(...args);
+	private call(
+		args: string[],
+		signal = this.signal,
+	): Effect.Effect<unknown, Error> {
+		const herdr = this.herdr;
+		return Effect.gen(function* () {
+			if (signal?.aborted) throw new Error("effect ownership was lost");
+			return yield* herdrCallEffect(herdr, args, signal);
+		});
 	}
-	async waitForShell(paneId: string, signal = this.signal): Promise<void> {
-		for (let attempt = 0; attempt < 50; attempt++) {
-			const result = (await this.call(
-				["pane", "process-info", "--pane", paneId],
-				signal,
-			)) as {
-				process_info?: {
-					shell_pid?: number;
-					foreground_process_group_id?: number;
-					foreground_processes?: Array<{
-						name?: string;
-						argv?: string[];
-						pid?: number;
-					}>;
-				};
-			};
-			const info = result.process_info;
-			const foreground = info?.foreground_processes ?? [];
-			// Match Herdr's Linux/macOS available-shell check. Linux can report zsh
-			// alongside startup helpers; seeing zsh somewhere in that job is not ready.
-			const foregroundName = String(
-				foreground[0]?.name ?? foreground[0]?.argv?.[0] ?? "",
-			)
-				.split(/[\\/]/)
-				.at(-1)
-				?.replace(/^-/, "")
-				.replace(/\.exe$/, "")
-				.toLowerCase();
-			const shellIsForeground =
-				typeof info?.shell_pid === "number" &&
-				info.foreground_process_group_id === info.shell_pid &&
-				foreground.length === 1 &&
-				foreground[0]?.pid === info.shell_pid &&
-				SHELL_NAMES.has(foregroundName ?? "");
-			if (shellIsForeground) return;
-			await this.sleep(100);
-		}
-		throw new Error(`pane did not reach foreground shell: ${paneId}`);
+	waitForShell(
+		paneId: string,
+		signal = this.signal,
+	): Effect.Effect<void, Error> {
+		const self = this;
+		return Effect.gen(function* () {
+			for (let attempt = 0; attempt < 50; attempt++) {
+				const raw = yield* self.call(
+					["pane", "process-info", "--pane", paneId],
+					signal,
+				);
+				const result = decodeHerdrResult(H.processInfoResult, raw);
+				const info = result.process_info;
+				const foreground = info?.foreground_processes ?? [];
+				// Match Herdr's Linux/macOS available-shell check. Linux can report zsh
+				// alongside startup helpers; seeing zsh somewhere in that job is not ready.
+				const foregroundName = String(
+					foreground[0]?.name ?? foreground[0]?.argv?.[0] ?? "",
+				)
+					.split(/[\\/]/)
+					.at(-1)
+					?.replace(/^-/, "")
+					.replace(/\.exe$/, "")
+					.toLowerCase();
+				const shellIsForeground =
+					typeof info?.shell_pid === "number" &&
+					info.foreground_process_group_id === info.shell_pid &&
+					foreground.length === 1 &&
+					foreground[0]?.pid === info.shell_pid &&
+					SHELL_NAMES.has(foregroundName ?? "");
+				if (shellIsForeground) return;
+				yield* self.sleep(100);
+			}
+			throw new Error(`pane did not reach foreground shell: ${paneId}`);
+		});
 	}
-	async start(
+	start(
 		kind: "pi" | "opencode",
 		ctx: LaunchContext,
 		runtimeArgs: string[],
-	): Promise<AgentHandle> {
-		await this.waitForShell(ctx.paneId, ctx.signal);
-		// herdr 0.8.0 has no agent-level env flag and spawns agents through the pane
-		// shell, so the run environment must be injected into the pane first. Source
-		// a 0600 env file (secrets stay out of the terminal scrollback), then keep a
-		// shell alive with the exported vars for `agent start` to inherit.
-		const envFile = path.join(
-			ctx.runDirectory ?? path.join(ctx.cwd, ".herdr-workflow"),
-			"runtime-bin",
-			ctx.assignment.runId,
-			"run.env",
-		);
-		const directory = openSecureDirectory(
-			path.dirname(envFile),
-			ctx.runDirectory ?? ctx.cwd,
-		);
-		try {
-			const lines = Object.entries(ctx.environment)
-				.filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
-				.map(([key, value]) => `${key}=${shQuote(value)}`);
-			writeAtomicPrivateFile(
-				directory,
-				path.basename(envFile),
-				`${lines.join("\n")}\n`,
-				0o600,
+	): Effect.Effect<AgentHandle, Error> {
+		const self = this;
+		return Effect.gen(function* () {
+			yield* self.waitForShell(ctx.paneId, ctx.signal);
+			// herdr 0.8.0 has no agent-level env flag and spawns agents through the pane
+			// shell, so the run environment must be injected into the pane first. Source
+			// a 0600 env file (secrets stay out of the terminal scrollback), then keep a
+			// shell alive with the exported vars for `agent start` to inherit.
+			const envFile = path.join(
+				ctx.runDirectory ?? path.join(ctx.cwd, ".herdr-workflow"),
+				"runtime-bin",
+				ctx.assignment.runId,
+				"run.env",
 			);
-		} finally {
-			closeSecureDirectory(directory);
-		}
-		// pane run is asynchronous and waitForShell cannot tell the pre-injection
-		// shell from the exec'd one; a marker touched after sourcing proves the
-		// env landed before `agent start` inherits it.
-		const marker = `${envFile}.done`;
-		fs.rmSync(marker, { force: true });
-		await this.call(
-			[
-				"pane",
-				"run",
-				ctx.paneId,
-				`set -a; . ${shQuote(envFile)}; set +a; touch ${shQuote(marker)}; exec "${"$"}{SHELL:-sh}"`,
-			],
-			ctx.signal,
-		);
-		for (let attempt = 0; attempt < 50 && !fs.existsSync(marker); attempt++) {
-			if (ctx.signal?.aborted) throw new Error("effect ownership was lost");
-			await this.sleep(100);
-		}
-		if (!fs.existsSync(marker))
-			throw new Error(
-				`run environment injection did not land in pane: ${ctx.paneId}`,
+			const directory = openSecureDirectory(
+				path.dirname(envFile),
+				ctx.runDirectory ?? ctx.cwd,
 			);
-		await this.waitForShell(ctx.paneId, ctx.signal);
-		const invoke = () =>
-			this.call(
+			try {
+				const lines = Object.entries(ctx.environment)
+					.filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
+					.map(([key, value]) => `${key}=${shQuote(value)}`);
+				writeAtomicPrivateFile(
+					directory,
+					path.basename(envFile),
+					`${lines.join("\n")}\n`,
+					0o600,
+				);
+			} finally {
+				closeSecureDirectory(directory);
+			}
+			// pane run is asynchronous and waitForShell cannot tell the pre-injection
+			// shell from the exec'd one; a marker touched after sourcing proves the
+			// env landed before `agent start` inherits it.
+			const marker = `${envFile}.done`;
+			yield* Effect.sync(() => fs.rmSync(marker, { force: true }));
+			yield* self.call(
 				[
-					"agent",
-					"start",
-					ctx.name,
-					"--kind",
-					kind,
-					"--pane",
+					"pane",
+					"run",
 					ctx.paneId,
-					"--",
-					...runtimeArgs,
+					`set -a; . ${shQuote(envFile)}; set +a; touch ${shQuote(marker)}; exec "${"$"}{SHELL:-sh}"`,
 				],
 				ctx.signal,
 			);
-		let result: unknown;
-		try {
-			result = await invoke();
-		} catch (error) {
-			if (!String((error as Error).message).includes("not an available shell"))
-				throw error;
-			await this.sleep(250);
-			await this.waitForShell(ctx.paneId, ctx.signal);
-			result = await invoke();
-		}
-		const started = agent(result);
-		const paneId = String(started.pane_id ?? ctx.paneId);
-		const live = agent(await this.call(["agent", "get", paneId], ctx.signal));
-		if (String(live.pane_id) !== paneId)
-			throw new Error(`agent get mismatch for ${paneId}`);
-		await this.call(
-			["agent", "prompt", paneId, ctx.rendered.prompt],
-			ctx.signal,
-		);
-		return {
-			runtime: ctx.profile.runtime,
-			name: ctx.name,
-			paneId,
-			...(live.tab_id ? { tabId: String(live.tab_id) } : {}),
-			...(live.session_id ? { sessionId: String(live.session_id) } : {}),
-		};
+			for (let attempt = 0; attempt < 50 && !fs.existsSync(marker); attempt++) {
+				if (ctx.signal?.aborted) throw new Error("effect ownership was lost");
+				yield* self.sleep(100);
+			}
+			if (!fs.existsSync(marker))
+				throw new Error(
+					`run environment injection did not land in pane: ${ctx.paneId}`,
+				);
+			yield* self.waitForShell(ctx.paneId, ctx.signal);
+			const invoke = () =>
+				self.call(
+					[
+						"agent",
+						"start",
+						ctx.name,
+						"--kind",
+						kind,
+						"--pane",
+						ctx.paneId,
+						"--",
+						...runtimeArgs,
+					],
+					ctx.signal,
+				);
+			let invokeOutcome = yield* Effect.either(invoke());
+			if (
+				Either.isLeft(invokeOutcome) &&
+				String(invokeOutcome.left?.message ?? "").includes(
+					"not an available shell",
+				)
+			) {
+				yield* self.sleep(250);
+				yield* self.waitForShell(ctx.paneId, ctx.signal);
+				invokeOutcome = yield* Effect.either(invoke());
+			}
+			const result = Either.isLeft(invokeOutcome)
+				? yield* Effect.fail(invokeOutcome.left)
+				: invokeOutcome.right;
+			const started = agent(result);
+			const paneId = String(started.pane_id ?? ctx.paneId);
+			const live = agent(
+				yield* self.call(["agent", "get", paneId], ctx.signal),
+			);
+			if (String(live.pane_id) !== paneId)
+				throw new Error(`agent get mismatch for ${paneId}`);
+			yield* self.call(
+				["agent", "prompt", paneId, ctx.rendered.prompt],
+				ctx.signal,
+			);
+			return {
+				runtime: ctx.profile.runtime,
+				name: ctx.name,
+				paneId,
+				...(live.tab_id ? { tabId: String(live.tab_id) } : {}),
+				...(live.session_id ? { sessionId: String(live.session_id) } : {}),
+			};
+		});
 	}
-	async prompt(
+	prompt(
 		handle: AgentHandle,
 		message: string,
-		signal?: AbortSignal,
-	): Promise<void> {
-		agent(await this.call(["agent", "get", handle.paneId], signal));
-		await this.call(["agent", "prompt", handle.paneId, message], signal);
+		signal = this.signal,
+	): Effect.Effect<void, Error> {
+		const self = this;
+		return Effect.gen(function* () {
+			agent(yield* self.call(["agent", "get", handle.paneId], signal));
+			yield* self.call(["agent", "prompt", handle.paneId, message], signal);
+		});
 	}
-	async observe(
+	observe(
 		handle: AgentHandle,
-		signal?: AbortSignal,
-	): Promise<AgentObservation> {
-		const live = agent(
-			await this.call(["agent", "get", handle.paneId], signal),
-		);
-		const observed = String(live.agent_status ?? "unknown");
-		const status = ["idle", "working", "blocked", "done"].includes(observed)
-			? (observed as AgentObservation["status"])
-			: "unknown";
-		return {
-			status,
-			paneId: handle.paneId,
-			...(live.session_id ? { sessionId: String(live.session_id) } : {}),
-		};
+		signal = this.signal,
+	): Effect.Effect<AgentObservation, Error> {
+		const self = this;
+		return Effect.gen(function* () {
+			const live = agent(
+				yield* self.call(["agent", "get", handle.paneId], signal),
+			);
+			const observed = String(live.agent_status ?? "unknown");
+			const status = ["idle", "working", "blocked", "done"].includes(observed)
+				? (observed as AgentObservation["status"])
+				: "unknown";
+			return {
+				status,
+				paneId: handle.paneId,
+				...(live.session_id ? { sessionId: String(live.session_id) } : {}),
+			};
+		});
 	}
-	async stop(handle: AgentHandle, signal?: AbortSignal): Promise<void> {
-		await this.call(["pane", "close", handle.paneId], signal);
+	stop(handle: AgentHandle, signal = this.signal): Effect.Effect<void, Error> {
+		return this.call(["pane", "close", handle.paneId], signal);
 	}
 }
 abstract class BaseAdapter implements AgentAdapter {
@@ -281,7 +326,7 @@ abstract class BaseAdapter implements AgentAdapter {
 				`${this.id} lacks required policy: ${missing.join(", ")}`,
 			);
 	}
-	abstract launch(ctx: LaunchContext): Promise<AgentHandle>;
+	abstract launch(ctx: LaunchContext): Effect.Effect<AgentHandle, Error>;
 	prompt(handle: AgentHandle, message: string, signal?: AbortSignal) {
 		return this.lifecycle.prompt(handle, message, signal);
 	}
@@ -294,7 +339,7 @@ abstract class BaseAdapter implements AgentAdapter {
 }
 export class PiAdapter extends BaseAdapter {
 	readonly id = "pi" as const;
-	async launch(ctx: LaunchContext): Promise<AgentHandle> {
+	launch(ctx: LaunchContext): Effect.Effect<AgentHandle, Error> {
 		const args = ["--name", ctx.name, "--no-prompt-templates"];
 		if (ctx.profile.model) args.push("--model", ctx.profile.model);
 		if (ctx.profile.thinking) args.push("--thinking", ctx.profile.thinking);
@@ -332,7 +377,7 @@ export class PiAdapter extends BaseAdapter {
 }
 export class OpenCodeAdapter extends BaseAdapter {
 	readonly id = "opencode" as const;
-	async launch(ctx: LaunchContext): Promise<AgentHandle> {
+	launch(ctx: LaunchContext): Effect.Effect<AgentHandle, Error> {
 		const args: string[] = ["--auto"];
 		if (ctx.profile.model) args.push("--model", ctx.profile.model);
 		if (ctx.profile.agent) args.push("--agent", ctx.profile.agent);
@@ -416,7 +461,7 @@ function withRuntimeLauncher(
 
 export class OpenCodeV2Adapter extends BaseAdapter {
 	readonly id = "opencode-v2" as const;
-	async launch(ctx: LaunchContext): Promise<AgentHandle> {
+	launch(ctx: LaunchContext): Effect.Effect<AgentHandle, Error> {
 		const args: string[] = ["--auto"];
 		if (ctx.profile.model) args.push("--model", ctx.profile.model);
 		if (ctx.profile.agent) args.push("--agent", ctx.profile.agent);

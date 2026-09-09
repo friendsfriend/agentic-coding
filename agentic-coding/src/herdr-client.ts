@@ -1,6 +1,8 @@
 // Single shared Herdr CLI client: the one place that parses the `.result`
 // envelope, plus the one place pane-geometry/direction math lives. Consumed by
 // the workflow engine (launch/layout) and the dashboard (agent focus).
+import { Schema } from "effect";
+
 // biome-ignore lint/suspicious/noExplicitAny: untyped CLI JSON envelope, callers narrow fields
 export function runHerdr(args: string[]): any {
 	const result = Bun.spawnSync(["herdr", ...args], {
@@ -14,6 +16,28 @@ export function runHerdr(args: string[]): any {
 		throw new Error(`herdr ${args.join(" ")}: ${detail}`);
 	}
 	return stdout.trim() ? (JSON.parse(stdout).result ?? {}) : {};
+}
+
+export function parseHerdrResult(output: string): unknown {
+	return output.trim() ? (JSON.parse(output).result ?? {}) : {};
+}
+
+/** Decode an already-parsed `.result` envelope through an Effect Schema at the
+ * workflow-facing boundary (migrate-workflow-execution-to-effect, task 2.2).
+ * Failures surface as bounded plain `Error`s so the runner can classify them
+ * instead of treating a Herdr shape drift as a programming defect. */
+export function decodeHerdrResult<A>(
+	// biome-ignore lint/suspicious/noExplicitAny: Effect Schema generics don't line up with envelope shapes (readonly arrays, optional vs undefined); mirrored from schema.ts decodeContract.
+	schema: Schema.Schema<A, any, never>,
+	parsed: unknown,
+): A {
+	try {
+		return Schema.decodeUnknownSync(schema)(parsed);
+	} catch (error) {
+		throw new Error(
+			`herdr envelope did not match its schema: ${String(error instanceof Error ? error.message : error).slice(0, 512)}`,
+		);
+	}
 }
 
 export async function runHerdrAsync(
@@ -36,7 +60,7 @@ export async function runHerdrAsync(
 		const error = await stderr;
 		if (exitCode !== 0)
 			throw new Error(`herdr ${args.join(" ")}: ${(error || output).trim()}`);
-		return output.trim() ? (JSON.parse(output).result ?? {}) : {};
+		return parseHerdrResult(output);
 	} finally {
 		clearTimeout(timeout);
 		signal?.removeEventListener("abort", abort);

@@ -137,6 +137,11 @@ export class WorkflowEngine {
 	) {
 		this.layer = engineLayer(now);
 	}
+	/** Public live clock used for lease/expiry decisions — the same `now` that
+	 * builds the store/clock layer. The effect runner schedules supervised
+	 * lease renewal against this clock so execution and store share one time
+	 * source (migrate-workflow-execution-to-effect). */
+	readonly clock: () => Date = () => this.now();
 	/** Run an Effect program synchronously at the engine composition boundary. */
 	/** Run an Effect program synchronously at the engine composition boundary and
 	 * surface its typed failure as the original `WorkflowRuntimeError` (or the

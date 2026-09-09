@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Effect } from "effect";
 import {
 	HerdrLifecycle,
 	OpenCodeAdapter,
@@ -222,7 +223,7 @@ describe("profiles, assignments, and adapters", () => {
 			[OpenCodeV2Adapter, "opencode-v2"],
 		] as const) {
 			const fake = new FakeHerdr();
-			const lifecycle = new HerdrLifecycle(fake, async () => {});
+			const lifecycle = new HerdrLifecycle(fake, () => Effect.void);
 			const adapter = new Adapter(lifecycle);
 			const profile = baseProfile(runtime);
 			const step = registerBuiltins().step("core.verification");
@@ -230,17 +231,19 @@ describe("profiles, assignments, and adapters", () => {
 			const rendered = renderAssignment(step, current);
 			const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "adapter-"));
 			try {
-				const handle = await adapter.launch({
-					profile,
-					assignment: current,
-					rendered,
-					paneId: "pane",
-					cwd,
-					name: `agent-${runtime}`,
-					environment: current.environment,
-					bridgePath: "/tmp/bridge.ts",
-					workflowExtensionPath: "/tmp/developer-question.ts",
-				});
+				const handle = await Effect.runPromise(
+					adapter.launch({
+						profile,
+						assignment: current,
+						rendered,
+						paneId: "pane",
+						cwd,
+						name: `agent-${runtime}`,
+						environment: current.environment,
+						bridgePath: "/tmp/bridge.ts",
+						workflowExtensionPath: "/tmp/developer-question.ts",
+					}),
+				);
 				expect(handle.paneId).toBe("pane");
 				expect(fake.starts).toBe(2);
 				expect(
@@ -313,8 +316,10 @@ describe("profiles, assignments, and adapters", () => {
 				expect(launcher).toContain(process.execPath);
 				expect(launcher).toContain("export HERDR_WORKFLOW_ID=");
 				expect(launcher).toContain("export PATH=");
-				expect((await adapter.observe(handle)).status).toBe("idle");
-				await adapter.stop(handle);
+				expect((await Effect.runPromise(adapter.observe(handle))).status).toBe(
+					"idle",
+				);
+				await Effect.runPromise(adapter.stop(handle));
 				expect(
 					fake.calls.some(
 						(call) =>
@@ -328,7 +333,7 @@ describe("profiles, assignments, and adapters", () => {
 	});
 	test("research Pi launch forces read-only tools and suppresses configured extensions", async () => {
 		const fake = new FakeHerdr();
-		const adapter = new PiAdapter(new HerdrLifecycle(fake, async () => {}));
+		const adapter = new PiAdapter(new HerdrLifecycle(fake, () => Effect.void));
 		const current = assignment("core.research", { role: "researcher" });
 		const rendered = renderAssignment(
 			registerBuiltins().step("core.research"),
@@ -336,19 +341,21 @@ describe("profiles, assignments, and adapters", () => {
 		);
 		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "adapter-research-"));
 		try {
-			await adapter.launch({
-				profile: {
-					...baseProfile("pi"),
-					tools: ["read", "web_search", "bash", "edit", "write"],
-					extensions: ["/tmp/research-extension.ts"],
-				},
-				assignment: current,
-				rendered,
-				paneId: "pane",
-				cwd,
-				name: "agent-research",
-				environment: current.environment,
-			});
+			await Effect.runPromise(
+				adapter.launch({
+					profile: {
+						...baseProfile("pi"),
+						tools: ["read", "web_search", "bash", "edit", "write"],
+						extensions: ["/tmp/research-extension.ts"],
+					},
+					assignment: current,
+					rendered,
+					paneId: "pane",
+					cwd,
+					name: "agent-research",
+					environment: current.environment,
+				}),
+			);
 			const start = fake.calls.find(
 				(call) => call[0] === "agent" && call[1] === "start",
 			);
@@ -367,7 +374,7 @@ describe("profiles, assignments, and adapters", () => {
 			[OpenCodeV2Adapter, "opencode-v2"],
 		] as const) {
 			const fake = new FakeHerdr();
-			const adapter = new Adapter(new HerdrLifecycle(fake, async () => {}));
+			const adapter = new Adapter(new HerdrLifecycle(fake, () => Effect.void));
 			const current = assignment("core.research", { role: "researcher" });
 			const rendered = renderAssignment(
 				registerBuiltins().step("core.research"),
@@ -375,18 +382,20 @@ describe("profiles, assignments, and adapters", () => {
 			);
 			const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "adapter-research-"));
 			try {
-				await adapter.launch({
-					profile: {
-						...baseProfile(runtime),
-						tools: ["read", "web_search", "custom_tool"],
-					},
-					assignment: current,
-					rendered,
-					paneId: "pane",
-					cwd,
-					name: `agent-${runtime}`,
-					environment: current.environment,
-				});
+				await Effect.runPromise(
+					adapter.launch({
+						profile: {
+							...baseProfile(runtime),
+							tools: ["read", "web_search", "custom_tool"],
+						},
+						assignment: current,
+						rendered,
+						paneId: "pane",
+						cwd,
+						name: `agent-${runtime}`,
+						environment: current.environment,
+					}),
+				);
 				const config = JSON.parse(
 					fs.readFileSync(
 						path.join(
@@ -415,7 +424,7 @@ describe("profiles, assignments, and adapters", () => {
 			[OpenCodeV2Adapter, "opencode-v2"],
 		] as const) {
 			const fake = new FakeHerdr();
-			const adapter = new Adapter(new HerdrLifecycle(fake, async () => {}));
+			const adapter = new Adapter(new HerdrLifecycle(fake, () => Effect.void));
 			const current = assignment("core.verification");
 			const rendered = renderAssignment(
 				registerBuiltins().step("core.verification"),
@@ -423,15 +432,17 @@ describe("profiles, assignments, and adapters", () => {
 			);
 			const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "adapter-verify-"));
 			try {
-				await adapter.launch({
-					profile: baseProfile(runtime),
-					assignment: current,
-					rendered,
-					paneId: "pane",
-					cwd,
-					name: `agent-${runtime}`,
-					environment: current.environment,
-				});
+				await Effect.runPromise(
+					adapter.launch({
+						profile: baseProfile(runtime),
+						assignment: current,
+						rendered,
+						paneId: "pane",
+						cwd,
+						name: `agent-${runtime}`,
+						environment: current.environment,
+					}),
+				);
 				const config = JSON.parse(
 					fs.readFileSync(
 						path.join(
@@ -456,7 +467,7 @@ describe("profiles, assignments, and adapters", () => {
 	});
 	test("preflight rejects missing executable and capabilities", () => {
 		const adapter = new PiAdapter(
-			new HerdrLifecycle(new FakeHerdr(), async () => {}),
+			new HerdrLifecycle(new FakeHerdr(), () => Effect.void),
 		);
 		expect(() =>
 			adapter.preflight(

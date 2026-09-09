@@ -230,8 +230,7 @@ export function wikiRoot(ignoreEnvironment = false): string {
 	return path.resolve(expand(configured || "~/.config/agentic-coding/wiki"));
 }
 
-export function ensureBundle(): string {
-	const root = wikiRoot();
+export function ensureBundle(root = wikiRoot()): string {
 	fs.mkdirSync(root, { recursive: true });
 	const index = path.join(root, "index.md");
 	if (!fs.existsSync(index))
@@ -242,7 +241,7 @@ export function ensureBundle(): string {
 }
 
 /** Resolve a concept id to a path while preventing bundle escapes. */
-export function conceptPath(rel: string): string {
+export function conceptPath(rel: string, root = wikiRoot()): string {
 	if (!rel || path.isAbsolute(rel) || rel.split(/[\\/]/).includes(".."))
 		throw new Error("concept path must stay inside the wiki bundle");
 	const normalized = rel.replaceAll("\\", "/");
@@ -251,11 +250,14 @@ export function conceptPath(rel: string): string {
 		: `${normalized}.md`;
 	if (RESERVED.has(path.posix.basename(withExtension)))
 		throw new Error(`${path.posix.basename(withExtension)} is reserved`);
-	const root = path.resolve(ensureBundle());
-	const resolved = path.resolve(root, ...withExtension.split("/"));
-	if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`))
+	const resolvedRoot = path.resolve(ensureBundle(root));
+	const resolved = path.resolve(resolvedRoot, ...withExtension.split("/"));
+	if (
+		resolved !== resolvedRoot &&
+		!resolved.startsWith(`${resolvedRoot}${path.sep}`)
+	)
 		throw new Error("concept path must stay inside the wiki bundle");
-	let current = root;
+	let current = resolvedRoot;
 	for (const part of withExtension.split("/")) {
 		current = path.join(current, part);
 		try {
@@ -482,12 +484,12 @@ export function isStale(
 	);
 }
 
-function readPath(file: string): WikiConcept | undefined {
+function readPath(file: string, root = wikiRoot()): WikiConcept | undefined {
 	try {
 		const document = parseDocument(fs.readFileSync(file, "utf8"));
 		if (!checkConformance(document)) return undefined;
 		const id = path
-			.relative(ensureBundle(), file)
+			.relative(ensureBundle(root), file)
 			.split(path.sep)
 			.join("/")
 			.replace(/\.md$/, "");
@@ -522,9 +524,10 @@ function conceptFiles(root: string): string[] {
 
 export function listConcepts(
 	filters: { tag?: string; type?: string } = {},
+	root = wikiRoot(),
 ): WikiConcept[] {
-	const concepts = conceptFiles(ensureBundle()).flatMap((file) => {
-		const concept = readPath(file);
+	const concepts = conceptFiles(ensureBundle(root)).flatMap((file) => {
+		const concept = readPath(file, root);
 		return concept ? [concept] : [];
 	});
 	return concepts
@@ -539,9 +542,9 @@ export function listConcepts(
 		})
 		.sort((a, b) => a.id.localeCompare(b.id));
 }
-export function readConcept(id: string): WikiConcept {
-	const file = conceptPath(id);
-	const concept = readPath(file);
+export function readConcept(id: string, root = wikiRoot()): WikiConcept {
+	const file = conceptPath(id, root);
+	const concept = readPath(file, root);
 	if (!concept) throw new Error(`invalid or missing concept: ${id}`);
 	return concept;
 }
@@ -653,9 +656,10 @@ export function snapshotOnFirstTouch(
 	changeId: string,
 	concept: string,
 	baseDir = process.cwd(),
+	root = wikiRoot(),
 ): string {
 	const safeConcept = concept.replaceAll("\\", "/");
-	const source = conceptPath(safeConcept);
+	const source = conceptPath(safeConcept, root);
 	const destination = path.join(
 		snapshotRoot(changeId, baseDir),
 		`${safeConcept.replaceAll("/", path.sep)}.md`,
@@ -687,16 +691,20 @@ export function snapshotRead(
 	changeId: string,
 	concept: string,
 	baseDir = process.cwd(),
+	root = wikiRoot(),
 ): string | undefined {
-	const safeConcept = conceptPath(concept.replaceAll("\\", "/"));
+	const safeConcept = conceptPath(concept.replaceAll("\\", "/"), root);
 	const conceptId = path
-		.relative(wikiRoot(), safeConcept)
+		.relative(ensureBundle(root), safeConcept)
 		.split(path.sep)
 		.join("/")
 		.replace(/\.md$/, "");
-	const root = snapshotRoot(changeId, baseDir);
-	const file = path.join(root, `${conceptId.replaceAll("/", path.sep)}.md`);
-	if (!file.startsWith(`${root}${path.sep}`) || !fs.existsSync(file))
+	const snapshotDir = snapshotRoot(changeId, baseDir);
+	const file = path.join(
+		snapshotDir,
+		`${conceptId.replaceAll("/", path.sep)}.md`,
+	);
+	if (!file.startsWith(`${snapshotDir}${path.sep}`) || !fs.existsSync(file))
 		return undefined;
 	if (
 		file !==
@@ -715,9 +723,10 @@ export function snapshotRead(
 export function writeConcept(
 	concept: string,
 	input: WikiWriteInput,
+	root = wikiRoot(),
 ): WikiConcept {
 	validateProducerFields(input);
-	const file = conceptPath(concept);
+	const file = conceptPath(concept, root);
 	const existing = fs.existsSync(file)
 		? parseDocument(fs.readFileSync(file, "utf8"))
 		: undefined;
@@ -771,17 +780,18 @@ export function writeConcept(
 			changeFor(input) as string,
 			concept,
 			workflowSnapshotBase(),
+			root,
 		);
 	const body = input.body ?? existing?.body ?? "";
 	fs.mkdirSync(path.dirname(file), { recursive: true });
-	const realRoot = fs.realpathSync(wikiRoot());
+	const realRoot = fs.realpathSync(ensureBundle(root));
 	const realParent = fs.realpathSync(path.dirname(file));
 	if (
 		realParent !== realRoot &&
 		!realParent.startsWith(`${realRoot}${path.sep}`)
 	)
 		throw new Error("wiki path resolves outside the bundle");
-	conceptPath(concept);
+	conceptPath(concept, root);
 	const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
 	try {
 		fs.writeFileSync(temporary, renderDocument(frontmatter, body), {
@@ -794,7 +804,7 @@ export function writeConcept(
 		} catch {}
 		throw error;
 	}
-	return readConcept(concept);
+	return readConcept(concept, root);
 }
 
 export function verifyConcept(
@@ -802,9 +812,10 @@ export function verifyConcept(
 	verifyingActor: string,
 	validatedContent?: string,
 	promote = true,
+	root = wikiRoot(),
 ): WikiConcept {
 	actor(verifyingActor, "actor");
-	const file = conceptPath(concept);
+	const file = conceptPath(concept, root);
 	const content = validatedContent ?? fs.readFileSync(file, "utf8");
 	const current = parseDocument(content);
 	const verified = Array.isArray(current.frontmatter.verified)
@@ -846,7 +857,7 @@ export function verifyConcept(
 		} catch {}
 		throw error;
 	}
-	return readConcept(concept);
+	return readConcept(concept, root);
 }
 
 export function appendLog(dir: string, entry: string): string {
