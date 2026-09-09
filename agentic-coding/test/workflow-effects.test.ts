@@ -4,11 +4,8 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type {
-	AgentAdapter,
-	AgentObservation,
-	LaunchContext,
-} from "../src/workflow/adapters.ts";
+import { Effect, Either } from "effect";
+import type { AgentAdapter, LaunchContext } from "../src/workflow/adapters.ts";
 import { cliTest } from "../src/workflow/cli.ts";
 import type { AgentHandle } from "../src/workflow/contracts.ts";
 import {
@@ -19,6 +16,7 @@ import {
 	agentEffectHandlers,
 	EffectRunner,
 	effectRunnerTest,
+	TransientFailure,
 } from "../src/workflow/effect-runner.ts";
 import {
 	canonicalStorePath,
@@ -32,17 +30,28 @@ class Adapter implements AgentAdapter {
 	stops = 0;
 	context?: LaunchContext;
 	preflight() {}
-	async launch(ctx: LaunchContext): Promise<AgentHandle> {
+	launch(ctx: LaunchContext) {
 		this.launches++;
 		this.context = ctx;
-		return { runtime: "pi", name: ctx.name, paneId: ctx.paneId };
+		return Effect.succeed({
+			runtime: "pi" as const,
+			name: ctx.name,
+			paneId: ctx.paneId,
+		});
 	}
-	async prompt() {}
-	async observe(handle: AgentHandle): Promise<AgentObservation> {
-		return { status: "working", paneId: handle.paneId };
+	prompt() {
+		return Effect.void;
 	}
-	async stop() {
-		this.stops++;
+	observe(handle: AgentHandle) {
+		return Effect.succeed({
+			status: "working" as const,
+			paneId: handle.paneId,
+		});
+	}
+	stop() {
+		return Effect.sync(() => {
+			this.stops++;
+		});
 	}
 }
 
@@ -100,17 +109,21 @@ test("serial runner renews a slow effect and does not preclaim later work", asyn
 		let launchFailures = 0;
 		const runner = new EffectRunner(repo, engine, {
 			"artifact.write": {
-				async execute() {
-					executions++;
-					await Bun.sleep(350);
-					return { written: true };
-				},
+				execute: () =>
+					Effect.gen(function* () {
+						executions++;
+						yield* Effect.sleep(350);
+						return { written: true };
+					}),
 			},
 			"agent.launch": {
-				async execute() {
-					launchFailures++;
-					throw new Error("simulated long operation");
-				},
+				execute: () =>
+					Effect.gen(function* () {
+						launchFailures++;
+						return yield* Effect.fail(
+							new TransientFailure("simulated long operation"),
+						);
+					}),
 			},
 		});
 		expect(started.view.effects[0]?.kind).toBe("artifact.write");
@@ -190,20 +203,22 @@ test("runner cancels a lost effect and a successor can reclaim it", async () => 
 		const marker = path.join(repo, "effect-completed-before-crash");
 		const runner = new EffectRunner(repo, engine, {
 			"artifact.write": {
-				async execute(effect) {
-					fs.writeFileSync(marker, "done");
-					await Bun.sleep(25);
-					const db = new Database(canonicalStorePath(repo));
-					db.query(
-						"UPDATE workflow_outbox SET lease='successor', lease_expires_at='2000-01-01T00:00:00Z' WHERE id=?",
-					).run(effect.id);
-					db.close();
-					await Bun.sleep(50);
-					return { written: true };
-				},
-				async cancel() {
-					cancelled++;
-				},
+				execute: (effect) =>
+					Effect.gen(function* () {
+						fs.writeFileSync(marker, "done");
+						yield* Effect.sleep(25);
+						const db = new Database(canonicalStorePath(repo));
+						db.query(
+							"UPDATE workflow_outbox SET lease='successor', lease_expires_at='2000-01-01T00:00:00Z' WHERE id=?",
+						).run(effect.id);
+						db.close();
+						yield* Effect.sleep(50);
+						return { written: true };
+					}),
+				cancel: () =>
+					Effect.sync(() => {
+						cancelled++;
+					}),
 			},
 		});
 		await runner.drain(1, 100);
@@ -218,12 +233,12 @@ test("runner cancels a lost effect and a successor can reclaim it", async () => 
 		db.close();
 		const recovery = new EffectRunner(repo, engine, {
 			"artifact.write": {
-				async observe() {
-					return fs.existsSync(marker) ? { observed: true } : undefined;
-				},
-				async execute() {
-					throw new Error("recovery should observe existing completion");
-				},
+				observe: () =>
+					Effect.sync(() =>
+						fs.existsSync(marker) ? { observed: true } : undefined,
+					),
+				execute: () =>
+					Effect.fail(new Error("recovery should observe existing completion")),
 			},
 		});
 		await recovery.drain(1, 100);
@@ -254,31 +269,31 @@ test("runner cancels a lost effect and a successor can reclaim it", async () => 
 		fs.writeFileSync(marker, "done");
 		await new EffectRunner(repo, engine, {
 			"agent.launch": {
-				async execute() {
-					return {};
-				},
+				execute: () => Effect.succeed({}),
 			},
 		}).drain(1, 100);
 		let repaired = false;
 		const repairRunner = new EffectRunner(repo, engine, {
 			"artifact.write": {
-				async execute() {
-					await Bun.sleep(25);
-					const snapshot = engine.getSnapshot(repo, "repair-during-effect");
-					engine.dispatch(repo, {
-						type: "operator.repair",
-						workflowId: "repair-during-effect",
-						revision: snapshot.revision,
-						targetStep: "core.implementation",
-						reason: "lease test",
-					});
-					repaired = true;
-					await Bun.sleep(50);
-					return { written: true };
-				},
-				async cancel() {
-					cancelled++;
-				},
+				execute: () =>
+					Effect.gen(function* () {
+						yield* Effect.sleep(25);
+						const snapshot = engine.getSnapshot(repo, "repair-during-effect");
+						engine.dispatch(repo, {
+							type: "operator.repair",
+							workflowId: "repair-during-effect",
+							revision: snapshot.revision,
+							targetStep: "core.implementation",
+							reason: "lease test",
+						});
+						repaired = true;
+						yield* Effect.sleep(50);
+						return { written: true };
+					}),
+				cancel: () =>
+					Effect.sync(() => {
+						cancelled++;
+					}),
 			},
 		});
 		await repairRunner.drain(1, 100);
@@ -717,14 +732,18 @@ test("launch failure on a reused pane does not close it", async () => {
 		class FailingAdapter implements AgentAdapter {
 			readonly id = "pi" as const;
 			preflight() {}
-			async launch(): Promise<AgentHandle> {
-				throw new Error("launch exploded");
+			launch(): Effect.Effect<AgentHandle, Error> {
+				return Effect.fail(new Error("launch exploded"));
 			}
-			async prompt() {}
-			async observe(): Promise<AgentObservation> {
-				return { status: "working", paneId: "n/a" };
+			prompt() {
+				return Effect.void;
 			}
-			async stop() {}
+			observe() {
+				return Effect.succeed({ status: "working" as const, paneId: "n/a" });
+			}
+			stop() {
+				return Effect.void;
+			}
 		}
 		const handlers = agentEffectHandlers(repo, engine, {
 			registry,
@@ -741,7 +760,9 @@ test("launch failure on a reused pane does not close it", async () => {
 			.claimEffects(repo, 10)
 			.find((effect) => effect.kind === "workspace.setup");
 		if (!setup) throw new Error("expected workspace.setup effect");
-		const setupResult = await handlers["workspace.setup"]?.execute(setup);
+		const setupResult = await Effect.runPromise(
+			handlers["workspace.setup"]?.execute(setup) ?? Effect.never,
+		);
 		engine.dispatch(repo, {
 			type: "effect.result",
 			effectId: setup.id,
@@ -755,9 +776,11 @@ test("launch failure on a reused pane does not close it", async () => {
 		if (!launch) throw new Error("expected agent.launch effect");
 		const launchHandler = handlers["agent.launch"];
 		if (!launchHandler) throw new Error("missing agent.launch handler");
-		await expect(launchHandler.execute(launch)).rejects.toThrow(
-			"launch exploded",
+		const launched = await Effect.runPromise(
+			launchHandler.execute(launch).pipe(Effect.either),
 		);
+		if (!Either.isLeft(launched)) throw new Error("expected launch failure");
+		expect(launched.left.message).toContain("launch exploded");
 		expect(
 			calls.some((args) => args[0] === "pane" && args[1] === "close"),
 		).toBe(false);
@@ -839,14 +862,18 @@ test("launch failure on a newly created pane still cleans it up", async () => {
 		class FailingAdapter implements AgentAdapter {
 			readonly id = "pi" as const;
 			preflight() {}
-			async launch(): Promise<AgentHandle> {
-				throw new Error("launch exploded");
+			launch(): Effect.Effect<AgentHandle, Error> {
+				return Effect.fail(new Error("launch exploded"));
 			}
-			async prompt() {}
-			async observe(): Promise<AgentObservation> {
-				return { status: "working", paneId: "n/a" };
+			prompt() {
+				return Effect.void;
 			}
-			async stop() {}
+			observe() {
+				return Effect.succeed({ status: "working" as const, paneId: "n/a" });
+			}
+			stop() {
+				return Effect.void;
+			}
 		}
 		const handlers = agentEffectHandlers(repo, engine, {
 			registry,
@@ -876,9 +903,11 @@ test("launch failure on a newly created pane still cleans it up", async () => {
 		if (!launch) throw new Error("expected agent.launch effect");
 		const launchHandler = handlers["agent.launch"];
 		if (!launchHandler) throw new Error("missing agent.launch handler");
-		await expect(launchHandler.execute(launch)).rejects.toThrow(
-			"launch exploded",
+		const launched = await Effect.runPromise(
+			launchHandler.execute(launch).pipe(Effect.either),
 		);
+		if (!Either.isLeft(launched)) throw new Error("expected launch failure");
+		expect(launched.left.message).toContain("launch exploded");
 		expect(calls).toContainEqual(["pane", "close", "created-pane"]);
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
@@ -1113,11 +1142,13 @@ test("review-comment loop reuses the planner agent by stable name instead of lau
 		};
 		const adapter = new Adapter();
 		const originalLaunch = adapter.launch.bind(adapter);
-		adapter.launch = async (ctx) => {
-			const handle = await originalLaunch(ctx);
-			agentLive = true;
-			return { ...handle, paneId: "planner-pane" };
-		};
+		adapter.launch = (ctx) =>
+			originalLaunch(ctx).pipe(
+				Effect.map((handle) => {
+					agentLive = true;
+					return { ...handle, paneId: "planner-pane" };
+				}),
+			);
 		const handlers = agentEffectHandlers(repo, engine, {
 			registry,
 			adapters: new Map([["pi", adapter]]),
@@ -1510,7 +1541,9 @@ test("proposal workspace setup stays on the dirty current checkout", async () =>
 		});
 		const setup = engine.claimEffects(repo, 10)[0];
 		if (!setup) throw new Error("expected workspace setup effect");
-		const result = await handlers["workspace.setup"]?.execute(setup);
+		const result = await Effect.runPromise(
+			handlers["workspace.setup"]?.execute(setup) ?? Effect.never,
+		);
 		expect(result).toEqual({
 			workspace: "proposal-workspace",
 			worktree: fs.realpathSync(repo),
@@ -1533,9 +1566,13 @@ test("proposal workspace setup stays on the dirty current checkout", async () =>
 		const cleanup = handlers["workspace.cleanup"];
 		if (!close || !cleanup?.observe)
 			throw new Error("missing workspace handlers");
-		await close.execute(closeEffect);
-		expect(await cleanup.observe(closeEffect)).toBe(true);
-		expect(await cleanup.execute(closeEffect)).toEqual({ cleaned: true });
+		await Effect.runPromise(close.execute(closeEffect));
+		expect(
+			await Effect.runPromise(cleanup.observe(closeEffect) ?? Effect.never),
+		).toBe(true);
+		expect(await Effect.runPromise(cleanup.execute(closeEffect))).toEqual({
+			cleaned: true,
+		});
 		expect(calls).toContainEqual(["workspace", "close", "proposal-workspace"]);
 		expect(fs.existsSync(repo)).toBe(true);
 		expect(started.view.definition.id).toBe("openspec-propose");

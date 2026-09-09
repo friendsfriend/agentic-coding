@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Subprocess } from "bun";
+import { Effect } from "effect";
+import { PermanentFailure, TransientFailure } from "./failures.ts";
 
 export type CredentialPrompt = (prompt: string) => Promise<string>;
 
@@ -125,6 +127,31 @@ const ASKPASS_ENV: Record<string, string> = {
 	LC_ALL: "C",
 	LC_MESSAGES: "C",
 };
+
+/** Effect boundary over the askpass/FIFO git credential relay
+ * (migrate-workflow-execution-to-effect, task 2.3). The shim lifecycle is
+ * scoped to the operation: `runGitWithCredentials` installs the 0700 shim and
+ * FIFOs, cleans them up in its `finally`, and never retains answer values or
+ * writes them anywhere but the response FIFO. Failures are classified: a
+ * missing interactive prompt is a permanent configuration condition, everything
+ * else (remote aborts, process death, timeouts) is infrastructure. */
+export function runGitWithCredentialsEffect(
+	cwd: string,
+	args: string[],
+	options: RunGitWithCredentialsOptions = {},
+): Effect.Effect<string, Error, never> {
+	return Effect.tryPromise({
+		try: () => runGitWithCredentials(cwd, args, options),
+		catch: (error) => {
+			if (error instanceof Error) {
+				if (error.message.startsWith("git requested a credential"))
+					return new PermanentFailure(error.message);
+				return new TransientFailure(error.message);
+			}
+			return new Error(String(error));
+		},
+	});
+}
 
 export async function runGitWithCredentials(
 	cwd: string,

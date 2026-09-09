@@ -3,11 +3,8 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type {
-	AgentAdapter,
-	AgentObservation,
-	LaunchContext,
-} from "../src/workflow/adapters.ts";
+import { Effect } from "effect";
+import type { AgentAdapter, LaunchContext } from "../src/workflow/adapters.ts";
 import {
 	AGENT_EXTENSION_SUBCOMMANDS,
 	cliTest,
@@ -32,15 +29,26 @@ const openspecFullDigest = registerBuiltins().definition(
 
 class StubAdapter implements AgentAdapter {
 	readonly id = "pi" as const;
-	async launch(ctx: LaunchContext): Promise<AgentHandle> {
-		return { runtime: "pi", name: ctx.name, paneId: "pane" };
+	launch(ctx: LaunchContext) {
+		return Effect.succeed({
+			runtime: "pi" as const,
+			name: ctx.name,
+			paneId: "pane",
+		});
 	}
 	preflight() {}
-	async prompt() {}
-	async observe(handle: AgentHandle): Promise<AgentObservation> {
-		return { status: "working", paneId: handle.paneId };
+	prompt() {
+		return Effect.void;
 	}
-	async stop() {}
+	observe(handle: AgentHandle) {
+		return Effect.succeed({
+			status: "working" as const,
+			paneId: handle.paneId,
+		});
+	}
+	stop() {
+		return Effect.void;
+	}
 }
 function stubHerdr() {
 	return {

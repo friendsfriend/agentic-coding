@@ -22,8 +22,11 @@ Version-matched official documentation:
 > service requirements, provided at the engine composition root via
 > `engineLayer` (`runtime/services.ts`). The `WorkflowEngine` class keeps its
 > historical synchronous signatures as an inventoried outer bridge;
-> `complete-workflow-effect-cutover` removes it. The runner, CLI and TUI are
-> migrated in phases 3–4; do not wrap them in Effect yet.
+> `complete-workflow-effect-cutover` removes it. The effect runner and its
+> adapters (phase 3) are Effect-native: handlers are Effect operations, the
+> runner executes each claim in a scoped program with supervised lease
+> renewal and a typed failure policy. The CLI and TUI composition boundary
+> follows in phase 4.
 > Pure graph/step/projection/formatting functions remain plain deterministic
 > TypeScript.
 
@@ -122,6 +125,41 @@ never construct these dependencies and never wrap pure functions in services.
   and the workflow engine's durable retries are **not** generic
   `Effect.retry`. A transient infrastructure failure may be retried through
   the outbox; a defect must not be.
+
+## The runner's execution policy (phase 3)
+
+Every claimed effect runs inside one Effect execution scope with a supervised
+renewal fiber (engine-clock cadence, `engine.renewEffect`). Rejected or
+exceptional renewal marks the lease lost and aborts external work; renewal
+failures never escape as unhandled timer errors. Serial just-in-time claims
+and final lease validation are retained — cancellation alone cannot close the
+race between a final remote call and lease replacement, so durable token
+checks and reconciliation stay mandatory.
+
+Handler failures are classified into exactly one class (`classifyFailure` in
+`effect-runner.ts`):
+
+- `TransientFailure` / `WorkflowFailure._tag === "infrastructure"` — the only
+  classes that may request the durable outbox retry budget.
+- `PermanentFailure` / `validation` / `invalid-input` — attention immediately;
+  never consumes the transient retry budget.
+- `stale-ownership` / lease-loss markers — never publish under an old lease;
+  cancel owned work only under exact identity checks.
+- interruption — stops work without claiming completion.
+- anything else (`defect`) — surfaced conservatively, never treated as a
+  generic retryable exception. A failed observation is never treated as
+  confirmed absence either; re-execution happens only after observation
+  confirms the effect did not complete.
+
+Throw `TransientFailure` or `PermanentFailure` from a handler to classify it
+explicitly; `Effect.gen` converts sync throws into defects, which the runner
+re-classifies — prefer explicit classes at the boundary.
+
+Durable resources (workspaces, adopted panes, launched agents) belong to the
+workflow, not the runner scope: ordinary successful scope exit must not stop
+or tear them down. Ownership transfer and successor adoption follow the
+established protocol; cleanup after loss uses exact identity checks and never
+destroys resources adopted by a successor.
 
 ## Tests: use `bun:test`, drive Effect through it
 

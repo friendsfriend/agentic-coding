@@ -25,17 +25,6 @@ export function samePath(left: string, right: string): boolean {
 		return path.resolve(left) === path.resolve(right);
 	}
 }
-function withWikiRoot<T>(root: string, operation: () => T): T {
-	const previous = process.env.HERDR_WIKI_DIR;
-	process.env.HERDR_WIKI_DIR = root;
-	try {
-		return operation();
-	} finally {
-		if (previous === undefined) delete process.env.HERDR_WIKI_DIR;
-		else process.env.HERDR_WIKI_DIR = previous;
-	}
-}
-
 const MAX_SOURCE_FILE_BYTES = 4 * 1024 * 1024;
 const MAX_SOURCE_LIST_BYTES = 8 * 1024 * 1024;
 function gitNullSeparated(repository: string, args: string[]): string[] {
@@ -296,34 +285,34 @@ export function wikiVerificationPayload(snapshot: WorkflowSnapshot): {
 			"wiki-root",
 			"wiki root does not match the pinned workflow wiki root",
 		);
-	return withWikiRoot(pinnedRoot, () => {
-		const all = snapshotList(
-			// The wiki snapshot keys on the recorded change when one exists
-			// (openspec workflows) and on the workflow id otherwise (wiki-only
-			// and research workflows have no planner to record a change).
-			snapshot.metadata.changeId || snapshot.workflowId,
-			snapshot.definition.id === "wiki-comments" ||
-				snapshot.definition.id === "research"
-				? wikiWorkflowDataRoot()
-				: snapshot.metadata.worktree,
+	// Pinned root is passed explicitly to every wiki read; no process-wide
+	// environment mutation (migrate-workflow-execution-to-effect, task 3.3).
+	const all = snapshotList(
+		// The wiki snapshot keys on the recorded change when one exists
+		// (openspec workflows) and on the workflow id otherwise (wiki-only
+		// and research workflows have no planner to record a change).
+		snapshot.metadata.changeId || snapshot.workflowId,
+		snapshot.definition.id === "wiki-comments" ||
+			snapshot.definition.id === "research"
+			? wikiWorkflowDataRoot()
+			: snapshot.metadata.worktree,
+	);
+	const requested = wikiReviewConceptIds(snapshot);
+	if (requested && all.some((id) => !requested.has(id)))
+		throw new WorkflowRuntimeError(
+			"wiki-scope",
+			"wiki agent touched a concept outside submitted comments",
 		);
-		const requested = wikiReviewConceptIds(snapshot);
-		if (requested && all.some((id) => !requested.has(id)))
-			throw new WorkflowRuntimeError(
-				"wiki-scope",
-				"wiki agent touched a concept outside submitted comments",
-			);
-		return {
-			concepts: all
-				.filter((id) => !requested || requested.has(id))
-				.map((id) => ({
-					id,
-					digest: createHash("sha256")
-						.update(fs.readFileSync(conceptPath(id)))
-						.digest("hex"),
-				})),
-		};
-	});
+	return {
+		concepts: all
+			.filter((id) => !requested || requested.has(id))
+			.map((id) => ({
+				id,
+				digest: createHash("sha256")
+					.update(fs.readFileSync(conceptPath(id, pinnedRoot)))
+					.digest("hex"),
+			})),
+	};
 }
 export function validateSourceBaseline(
 	snapshot: WorkflowSnapshot,
