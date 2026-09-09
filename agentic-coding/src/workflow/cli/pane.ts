@@ -2,7 +2,7 @@
 // roles, split geometry for grouped triage/verification rounds. Moved
 // verbatim out of cli.ts (split-workflow-god-modules).
 import type { HerdrPort } from "../adapters.ts";
-import { isPaneLive, resolveLiveAgent } from "../effect-runner.ts";
+import { isPaneLiveAsync, resolveLiveAgentAsync } from "../effect-runner.ts";
 import type { WorkflowEngine } from "../runtime.ts";
 import { registry as defaultRegistry } from "./registry.ts";
 
@@ -44,11 +44,12 @@ export function paneForRunFactory(
 				?.roundScoped === true;
 		// Adopt any live agent's pane instead of spawning a duplicate; fall
 		// through to geometry or tab creation only when no agent resolves.
-		const resolved = resolveLiveAgent(
+		const resolved = await resolveLiveAgentAsync(
 			herdr,
 			snapshot.workflowId,
 			snapshot.definition.id,
 			run,
+			undefined,
 			stepRegistry.stepForDefinition(definition, run.stepId),
 		);
 		if (resolved) return { paneId: resolved.paneId, owned: false };
@@ -68,7 +69,9 @@ export function paneForRunFactory(
 			// Screen position alone doesn't mean the pane is free: a round-1
 			// verifier's pane can still sit at that position long after its own
 			// run finished, so any candidate must be confirmed idle before reuse.
-			const bottomPane = (anchor: string): string | undefined => {
+			const bottomPane = async (
+				anchor: string,
+			): Promise<string | undefined> => {
 				try {
 					const layout = herdr.call("pane", "layout", "--pane", anchor) as {
 						layout?: {
@@ -76,14 +79,17 @@ export function paneForRunFactory(
 						};
 					};
 					const panes = layout.layout?.panes ?? [];
-					return [...panes]
-						.filter(
-							(pane) =>
-								pane.pane_id !== anchor &&
-								pane.pane_id !== undefined &&
-								!isPaneLive(herdr, pane.pane_id),
+					const idle: Array<{ pane_id: string; y: number }> = [];
+					for (const pane of panes) {
+						if (
+							pane.pane_id === anchor ||
+							pane.pane_id === undefined ||
+							(await isPaneLiveAsync(herdr, pane.pane_id))
 						)
-						.sort((a, b) => (b.rect?.y ?? 0) - (a.rect?.y ?? 0))[0]?.pane_id;
+							continue;
+						idle.push({ pane_id: pane.pane_id, y: pane.rect?.y ?? 0 });
+					}
+					return idle.sort((a, b) => b.y - a.y)[0]?.pane_id;
 				} catch {
 					return undefined;
 				}
@@ -115,11 +121,12 @@ export function paneForRunFactory(
 				// canonical-name resolver as every other launch path.
 				const resolvedSiblings = new Map<string, string>();
 				for (const sibling of all) {
-					const resolved = resolveLiveAgent(
+					const resolved = await resolveLiveAgentAsync(
 						herdr,
 						snapshot.workflowId,
 						snapshot.definition.id,
 						sibling,
+						undefined,
 						stepRegistry.stepForDefinition(definition, sibling.stepId),
 					);
 					if (resolved) resolvedSiblings.set(sibling.id, resolved.paneId);
@@ -139,12 +146,12 @@ export function paneForRunFactory(
 						if (placed) return placed;
 					} else if (k === 3) {
 						// bottom full-width row was created with the second pane; reuse it, or create it now if the second launch was retried
-						const spare = bottomPane(anchor);
+						const spare = await bottomPane(anchor);
 						if (spare) return { paneId: spare, owned: false };
 						const placed = split(anchor, "down");
 						if (placed) return placed;
 					} else if (k === 4) {
-						const bottom = bottomPane(anchor);
+						const bottom = await bottomPane(anchor);
 						if (bottom) {
 							const placed = split(bottom, "right");
 							if (placed) return placed;
@@ -157,7 +164,7 @@ export function paneForRunFactory(
 							(nextSibling
 								? resolvedSiblings.get(nextSibling.id)
 								: undefined) ??
-							bottomPane(anchor) ??
+							(await bottomPane(anchor)) ??
 							anchor;
 						if (target) {
 							const placed = split(target, "down");

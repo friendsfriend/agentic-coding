@@ -4,6 +4,7 @@
 // cli.ts (split-workflow-god-modules).
 import fs from "node:fs";
 import path from "node:path";
+import type { WorkflowApplication } from "../application.ts";
 import {
 	isResearchWorkflowTarget,
 	isWikiWorkflowTarget,
@@ -23,6 +24,7 @@ import {
 export function resolveHandoffIdentity(
 	workflowEngine: WorkflowEngine,
 	repo: string,
+	application?: WorkflowApplication,
 	overrideEnvironment?: CallerEnvironment,
 ): {
 	runId: string;
@@ -45,37 +47,63 @@ export function resolveHandoffIdentity(
 		);
 	// Managed handoff/question commands are mutating entry points. Initialize
 	// before resolving the run so legacy stores can be imported explicitly,
-	// while ordinary status/list observation remains side-effect free.
-	workflowEngine.initialize(repo, workflowId);
-	const callerRun = workflowEngine.getRun(repo, runId);
+	// while ordinary status/list observation remains side-effect free. When an
+	// application root is supplied the run executes there (cutover seam).
+	if (application) {
+		application.runSync(workflowEngine.initializeEffect(repo, workflowId));
+	} else {
+		workflowEngine.initialize(repo, workflowId);
+	}
+	const callerRun = application
+		? application.runSync(workflowEngine.getRunEffect(repo, runId))
+		: workflowEngine.getRun(repo, runId);
 	let run = callerRun;
+	const authorize = (runIdArg: string, tokenArg: string) =>
+		application
+			? application.runSync(
+					workflowEngine.authorizeExactRunCapabilityEffect(
+						repo,
+						workflowId,
+						runIdArg,
+						stepId,
+						role,
+						tokenArg,
+					),
+				)
+			: workflowEngine.authorizeExactRunCapability(
+					repo,
+					workflowId,
+					runIdArg,
+					stepId,
+					role,
+					tokenArg,
+				);
 	try {
-		workflowEngine.authorizeExactRunCapability(
-			repo,
-			workflowId,
-			runId,
-			stepId,
-			role,
-			token ?? "",
-		);
-	} catch {
+		authorize(runId, token ?? "");
+	} catch (authorizationError) {
 		// Persistent agents keep the original environment when their pane is
 		// reused. Only adopt the current generation when the immutable caller
 		// run and current run resolve to the same live pane; never select by
 		// mutable role identity alone.
-		const current = workflowEngine.activeRunForRole(
-			repo,
-			workflowId,
-			stepId,
-			role,
-		);
+		const current = application
+			? application.runSync(
+					workflowEngine.activeRunForRoleEffect(repo, workflowId, stepId, role),
+				)
+			: workflowEngine.activeRunForRole(repo, workflowId, stepId, role);
 		if (
 			!callerRun.handle?.paneId ||
 			!current.handle?.paneId ||
 			callerRun.handle.paneId !== current.handle.paneId
 		)
-			throw new Error("invalid or inactive run capability");
-		const currentSnapshot = workflowEngine.getSnapshot(repo, workflowId);
+			// SEC: keep the original capability rejection as cause detail on
+			// this trust boundary so token-expiry vs pane-mismatch stays
+			// auditable instead of collapsing to one generic message.
+			throw new Error(
+				`invalid or inactive run capability (${(authorizationError as Error).message ?? String(authorizationError)})`,
+			);
+		const currentSnapshot = application
+			? application.runSync(workflowEngine.getSnapshotEffect(repo, workflowId))
+			: workflowEngine.getSnapshot(repo, workflowId);
 		const runDirectory =
 			isWikiWorkflowTarget(repo) || isResearchWorkflowTarget(repo)
 				? path.join(wikiWorkflowDataRoot(), currentSnapshot.workflowId, "runs")
@@ -114,14 +142,7 @@ export function resolveHandoffIdentity(
 		if (!refreshedToken)
 			throw new Error("persistent agent run capability is unavailable");
 		token = refreshedToken;
-		run = workflowEngine.authorizeExactRunCapability(
-			repo,
-			workflowId,
-			current.id,
-			stepId,
-			role,
-			refreshedToken,
-		);
+		run = authorize(current.id, refreshedToken);
 	}
 	return {
 		runId: run.id,

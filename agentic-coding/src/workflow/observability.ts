@@ -2,6 +2,12 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+/** The fixed telemetry export/shutdown flush budget (complete-workflow-
+ * effect-cutover, task 2.4): OTLP/JSONL exports never keep the application
+ * alive beyond this bound, and a failed export is observational — it can
+ * never roll back or replay a committed command. */
+export const TELEMETRY_FLUSH_BUDGET_MS = 750;
+
 export interface TraceContext {
 	traceId: string;
 	spanId: string;
@@ -63,7 +69,7 @@ export class TelemetrySink {
 				method: "POST",
 				headers: { "content-type": "application/json" },
 				body: JSON.stringify(envelope),
-				signal: AbortSignal.timeout(750),
+				signal: AbortSignal.timeout(TELEMETRY_FLUSH_BUDGET_MS),
 			}).catch(() => undefined);
 	}
 }

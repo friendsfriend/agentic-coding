@@ -27,6 +27,7 @@ import { DiffViewModal } from "./devenv-ui/components/DiffViewModal";
 import { GenericModal } from "./devenv-ui/components/GenericModal";
 import { MarkdownViewModal } from "./devenv-ui/components/MarkdownViewModal";
 import {
+	disposeDashboardApplication,
 	disposeExecutionCoordinator,
 	onWorkflowExecutionError,
 	requestWorkflowExecution,
@@ -953,6 +954,9 @@ export function App(props: {
 			artifactController?.abort();
 			reviewFeatureDispose();
 			disposeExecutionCoordinator(props.repo);
+			// Dashboard unmount releases the single owned application runtime
+			// (complete-workflow-effect-cutover, task 1).
+			disposeDashboardApplication();
 			clearInterval(safety);
 		});
 	});

@@ -9,7 +9,7 @@ export type {
 	ResearchHandoffDirective,
 	ResearchHandoffDirectiveIntent,
 } from "./definitions/contracts.ts";
-export { researchHandoffContract } from "./definitions/contracts.ts";
+export { decodeResearchHandoff } from "./definitions/contracts.ts";
 export { definitionVersionForPolicy } from "./definitions/edges.ts";
 export {
 	definitionVersionForBehaviorPins,

@@ -1,9 +1,12 @@
 // The `wiki` command and its subcommands (list/search/show/write/verify/
 // log), including the managed wiki/research-wiki write authorization gate
 // and the wiki-comments concept-scope restriction. Moved verbatim out of
-// cli.ts (split-workflow-god-modules).
+// cli.ts (split-workflow-god-modules); the managed write gate now runs at
+// the CLI-invocation application root (complete-workflow-effect-cutover,
+// task 2.1).
 import fs from "node:fs";
 import path from "node:path";
+import type { WorkflowApplication } from "../../application.ts";
 import { engine } from "../../operations.ts";
 import {
 	researchWorkflowTarget,
@@ -40,7 +43,9 @@ function wikiRole(): string | undefined {
  * differ only in drafting approach (agent-definitions/instructions), never
  * in write authorization or promotion rights. */
 const WIKI_WRITER_ROLES: readonly string[] = ["wiki", "research-wiki"];
-function authorizeWikiWriter(): ReturnType<WorkflowEngine["getSnapshot"]> {
+function authorizeWikiWriter(
+	application?: WorkflowApplication,
+): ReturnType<WorkflowEngine["getSnapshot"]> {
 	const workflowId = process.env.HERDR_WORKFLOW_ID;
 	const stepId = process.env.HERDR_STEP_ID;
 	const role = process.env.HERDR_ROLE;
@@ -53,20 +58,33 @@ function authorizeWikiWriter(): ReturnType<WorkflowEngine["getSnapshot"]> {
 		throw new Error(
 			"wiki write requires an authenticated managed wiki run (authenticated core.wiki run required)",
 		);
-	const workflowEngine = engine();
+	const workflowEngine = engine(application);
 	const target =
 		process.env.HERDR_WORKFLOW_TARGET === wikiWorkflowTarget() ||
 		process.env.HERDR_WORKFLOW_TARGET === researchWorkflowTarget()
 			? process.env.HERDR_WORKFLOW_TARGET
 			: process.cwd();
-	workflowEngine.authorizeAgentCapability(
-		target,
-		workflowId,
-		stepId,
-		role,
-		token,
-	);
-	const snapshot = workflowEngine.getSnapshot(target, workflowId);
+	if (application)
+		application.runSync(
+			workflowEngine.authorizeAgentCapabilityEffect(
+				target,
+				workflowId,
+				stepId,
+				role,
+				token,
+			),
+		);
+	else
+		workflowEngine.authorizeAgentCapability(
+			target,
+			workflowId,
+			stepId,
+			role,
+			token,
+		);
+	const snapshot = application
+		? application.runSync(workflowEngine.getSnapshotEffect(target, workflowId))
+		: workflowEngine.getSnapshot(target, workflowId);
 	if (
 		snapshot.currentStep !== "core.wiki" &&
 		snapshot.definition.id !== "research" &&
@@ -151,7 +169,10 @@ function wikiOutput(rest: string[], value: unknown): void {
 		JSON.stringify(value, null, rest.includes("--json") ? 2 : undefined),
 	);
 }
-export async function runWiki(rest: string[]): Promise<void> {
+export async function runWiki(
+	rest: string[],
+	application?: WorkflowApplication,
+): Promise<void> {
 	const [operation, ...terms] = positionals(rest);
 	if (
 		!operation ||
@@ -203,7 +224,7 @@ export async function runWiki(rest: string[]): Promise<void> {
 			throw new Error(`wiki write is not permitted for role ${role}`);
 		const authorizedSnapshot =
 			role && WIKI_WRITER_ROLES.includes(role)
-				? authorizeWikiWriter()
+				? authorizeWikiWriter(application)
 				: undefined;
 		const concept = flag(rest, "path");
 		const type = flag(rest, "type");

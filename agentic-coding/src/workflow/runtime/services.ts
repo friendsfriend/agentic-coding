@@ -22,6 +22,7 @@ import {
 	type ResolvedWorkflowConfig,
 	type WorkflowConfig as WorkflowConfigValue,
 } from "../effects.ts";
+import { type TelemetryEnvelope, TelemetrySink } from "../observability.ts";
 import {
 	initializeStore,
 	type ObservedStore,
@@ -185,6 +186,29 @@ export function WorkflowClockLive(
 /** Merge of the runtime's production store and a given clock. */
 export function engineLayer(
 	now: () => Date,
-): Layer.Layer<WorkflowStore | WorkflowClock, never> {
-	return Layer.merge(WorkflowStoreLive, WorkflowClockLive(now));
+): Layer.Layer<WorkflowStore | WorkflowClock | WorkflowTelemetry, never> {
+	return Layer.merge(
+		WorkflowStoreLive,
+		Layer.merge(WorkflowClockLive(now), WorkflowTelemetryLive),
+	);
 }
+
+/** Concrete workflow telemetry dependency: one bounded emission boundary for
+ * JSONL envelope writes (never raises) and bracketed OTLP export within the
+ * fixed `TELEMETRY_FLUSH_BUDGET_MS` budget (complete-workflow-effect-cutover,
+ * task 2.4). Emitting through the service keeps engine programs off raw
+ * filesystem/network I/O and guarantees export failure is observational — it
+ * never rolls back or re-plays a committed command. */
+export interface WorkflowTelemetryShape {
+	readonly emit: (directory: string, envelope: TelemetryEnvelope) => void;
+}
+
+export class WorkflowTelemetry extends Context.Tag(
+	"workflow/WorkflowTelemetry",
+)<WorkflowTelemetry, WorkflowTelemetryShape>() {}
+
+/** Production telemetry layer over the bounded JSONL/export sink. */
+export const WorkflowTelemetryLive: Layer.Layer<WorkflowTelemetry, never> =
+	Layer.succeed(WorkflowTelemetry, {
+		emit: (directory, envelope) => new TelemetrySink(directory).emit(envelope),
+	});

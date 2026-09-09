@@ -76,7 +76,11 @@ const RUNTIME_FILES = [
 	"workflow/profiles.ts",
 	"workflow/agent-extensions.ts",
 ];
-const APPLICATION_FILES = ["workflow/startup.ts", "workflow/operations.ts"];
+const APPLICATION_FILES = [
+	"workflow/startup.ts",
+	"workflow/operations.ts",
+	"workflow/application.ts", // named application composition root (CLI/dashboard), complete-workflow-effect-cutover task 1
+];
 const ROOT_FILES = ["cli.ts", "herdr-client.ts"];
 
 /** Classify a project-relative source path (posix separators). */
@@ -472,6 +476,190 @@ export function checkUnresolvedRuntimeTargets(
 export function findRuntimeCycle(root: string): string[] | null {
 	const cycle = findImportCycle(buildImportGraph(root));
 	return cycle ? cycle.map((file) => toPosix(path.relative(root, file))) : null;
+}
+
+/** Recognized Effect runtime-execution call patterns (complete-workflow-
+ * effect-cutover, task 3.2). A guarded workflow service must never spin up a
+ * nested Effect runtime; only the named application composition roots run
+ * programs. Forms: `Effect.runSync|runPromise|runFork|runSyncExit|
+ * runPromiseExit`, `Runtime.runSync|runPromise|runFork`, and the bare
+ * `runSync|runPromise|runFork` names re-exported from "effect". Calls like
+ * `application.runSync(...)` (the application boundary's own surface) are
+ * deliberately not flagged — the composition root owns program execution. */
+const RUNTIME_EXECUTION_NAMES = new Set([
+	"runSync",
+	"runPromise",
+	"runFork",
+	"runSyncExit",
+	"runPromiseExit",
+]);
+const RUNTIME_EXECUTION_RECEIVERS = new Set(["Effect", "Runtime"]);
+
+/** Locate recognized runtime-execution call sites in a source file. */
+function runtimeExecutionCalls(file: string): Array<{
+	line: number;
+	column: number;
+	label: string;
+}> {
+	const sourceText = fs.readFileSync(file, "utf8");
+	const sourceFile = ts.createSourceFile(
+		file,
+		sourceText,
+		ts.ScriptTarget.Latest,
+		true,
+		file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+	);
+	const found: Array<{ line: number; column: number; label: string }> = [];
+	const locate = (node: ts.Node) => {
+		const start = node.getStart(sourceFile);
+		const loc = sourceFile.getLineAndCharacterOfPosition(start);
+		return { line: loc.line + 1, column: loc.character + 1 };
+	};
+	const visit = (node: ts.Node): void => {
+		if (ts.isCallExpression(node)) {
+			const callee = node.expression;
+			if (
+				ts.isPropertyAccessExpression(callee) &&
+				RUNTIME_EXECUTION_NAMES.has(callee.name.text) &&
+				ts.isIdentifier(callee.expression) &&
+				RUNTIME_EXECUTION_RECEIVERS.has(callee.expression.text)
+			) {
+				found.push({
+					...locate(callee.name),
+					label: `${callee.expression.text}.${callee.name.text}`,
+				});
+			} else if (
+				ts.isIdentifier(callee) &&
+				RUNTIME_EXECUTION_NAMES.has(callee.text)
+			) {
+				found.push({ ...locate(callee), label: callee.text });
+			}
+		}
+		ts.forEachChild(node, visit);
+	};
+	for (const statement of sourceFile.statements) visit(statement);
+	return found;
+}
+
+/** Effect runtime execution must stay at named application composition roots
+ * (CLI invocation owner, dashboard application owner). A guarded workflow
+ * service running its own runtime is a nested-runtime violation (spec
+ * workflow-engine-runtime: "Service runs a nested runtime"). */
+export function checkRuntimeBoundaries(
+	root: string,
+	compositionRoots: ReadonlySet<string>,
+): ArchitectureIssue[] {
+	const analysis = buildSourceAnalysis(root);
+	const issues: ArchitectureIssue[] = [];
+	for (const file of analysis.keys()) {
+		const fileRel = toPosix(path.relative(root, file));
+		if (compositionRoots.has(fileRel)) continue;
+		for (const call of runtimeExecutionCalls(file)) {
+			issues.push({
+				file,
+				line: call.line,
+				column: call.column,
+				rule: "runtime:nested",
+				message: `${fileRel} invokes Effect runtime execution ${call.label} outside a named application composition root; run Effect programs only at the CLI/dashboard composition boundary`,
+			});
+		}
+	}
+	return issues;
+}
+
+/** Obsolete migration-only bridge symbols, keyed by the module that must
+ * never declare or re-export them, and whole bridge modules that must never
+ * be imported (spec workflow-engine-runtime: "Full workflow migration has
+ * no legacy orchestration path"). Symbol-level registration matters because
+ * the removals (commandContract, parseSnapshot, …) were symbols inside
+ * modules that still exist — a reintroduced facade symbol in a live module
+ * resolves to a live module, so only the declaration/re-export check can
+ * catch it. */
+export function checkObsoleteShims(
+	root: string,
+	obsolete: ReadonlyMap<string, readonly string[]>,
+): ArchitectureIssue[] {
+	if (obsolete.size === 0) return [];
+	const analysis = buildSourceAnalysis(root);
+	const issues: ArchitectureIssue[] = [];
+	const relativeOf = (target: string) => toPosix(path.relative(root, target));
+	for (const [moduleRel, symbols] of obsolete) {
+		const moduleFile = [...analysis.keys()].find(
+			(file) => relativeOf(file) === moduleRel,
+		);
+		if (!moduleFile) continue; // module already deleted; nothing to guard
+		const sourceText = fs.readFileSync(moduleFile, "utf8");
+		const sourceFile = ts.createSourceFile(
+			moduleFile,
+			sourceText,
+			ts.ScriptTarget.Latest,
+			true,
+			moduleFile.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+		);
+		const symbolSet = new Set(symbols);
+		const locate = (node: ts.Node) => {
+			const start = node.getStart(sourceFile);
+			const loc = sourceFile.getLineAndCharacterOfPosition(start);
+			return { line: loc.line + 1, column: loc.character + 1 };
+		};
+		const report = (name: string, node: ts.Node, kind: string) =>
+			issues.push({
+				file: moduleFile,
+				...locate(node),
+				rule: "shim:obsolete",
+				message: `${moduleRel} ${kind} obsolete migration bridge symbol ${name}; consume the Effect application boundary instead`,
+			});
+		const declared = (name: string) => symbolSet.has(name);
+		for (const statement of sourceFile.statements) {
+			const isExported =
+				ts.canHaveModifiers(statement) &&
+				ts
+					.getModifiers(statement)
+					?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword);
+			if (isExported) {
+				if (ts.isVariableStatement(statement)) {
+					for (const declaration of statement.declarationList.declarations) {
+						const name = declaration.name.getText(sourceFile);
+						if (declared(name)) report(name, statement, "declares exported");
+					}
+				}
+				if (
+					ts.isFunctionDeclaration(statement) &&
+					statement.name &&
+					declared(statement.name.text)
+				)
+					report(statement.name.text, statement, "declares exported");
+				if (
+					ts.isClassDeclaration(statement) &&
+					statement.name &&
+					declared(statement.name.text)
+				)
+					report(statement.name.text, statement, "declares exported");
+				if (
+					ts.isTypeAliasDeclaration(statement) &&
+					statement.name &&
+					declared(statement.name.text)
+				)
+					report(statement.name.text, statement, "declares type");
+				if (
+					ts.isInterfaceDeclaration(statement) &&
+					statement.name &&
+					declared(statement.name.text)
+				)
+					report(statement.name.text, statement, "declares interface");
+				if (ts.isExportDeclaration(statement) && statement.exportClause) {
+					const clause = statement.exportClause;
+					if (ts.isNamedExports(clause)) {
+						for (const element of clause.elements) {
+							if (declared(element.name.text))
+								report(element.name.text, element, "re-exports obsolete");
+						}
+					}
+				}
+			}
+		}
+	}
+	return issues;
 }
 
 /** Every exception entry must still match a currently-present source edge;

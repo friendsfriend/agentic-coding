@@ -7,12 +7,12 @@
 		"ResearchHandoffDirective",
 		"ResearchHandoffDirectiveIntent",
 		"WorkflowCatalogEntry",
+		"decodeResearchHandoff",
 		"definitionVersionForBehaviorPins",
 		"definitionVersionForManifestPolicy",
 		"definitionVersionForPolicy",
 		"effectiveManifestPolicy",
-		"registerBuiltins",
-		"researchHandoffContract"
+		"registerBuiltins"
 	],
 	"cli.ts": [
 		"AGENT_EXTENSION_SUBCOMMANDS",

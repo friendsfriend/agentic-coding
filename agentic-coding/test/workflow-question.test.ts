@@ -4,9 +4,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-	commandContract,
-	parseDeveloperQuestionAnswer,
-	parseSnapshot,
+	decodeCommand,
+	decodeDeveloperQuestionAnswer,
+	decodeSnapshot,
 	type ResolvedProfile,
 } from "../src/workflow/contracts.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
@@ -86,7 +86,7 @@ function setup() {
 }
 
 test("question contracts accept legacy snapshots and reject invalid answers", () => {
-	const snapshot = parseSnapshot({
+	const snapshot = decodeSnapshot({
 		schemaVersion: 1,
 		workflowId: "w",
 		revision: 0,
@@ -119,7 +119,7 @@ test("question contracts accept legacy snapshots and reject invalid answers", ()
 	});
 	expect(snapshot.developerDialogue).toEqual([]);
 	expect(() =>
-		commandContract.parse({
+		decodeCommand({
 			type: "agent.question",
 			workflowId: "w",
 			runId: "r",
@@ -136,7 +136,7 @@ test("question contracts accept legacy snapshots and reject invalid answers", ()
 });
 
 test("questionnaire contracts preserve order and require complete response sets", () => {
-	const command = commandContract.parse({
+	const command = decodeCommand({
 		type: "agent.question",
 		workflowId: "w",
 		runId: "r",
@@ -159,7 +159,7 @@ test("questionnaire contracts preserve order and require complete response sets"
 		"second",
 	]);
 	expect(
-		parseDeveloperQuestionAnswer({
+		decodeDeveloperQuestionAnswer({
 			groupId: "g",
 			responses: [
 				{ questionId: "a", kind: "option", value: "a" },
@@ -174,7 +174,7 @@ test("questionnaire contracts preserve order and require complete response sets"
 		],
 	});
 	expect(() =>
-		commandContract.parse({
+		decodeCommand({
 			type: "agent.question",
 			workflowId: "w",
 			runId: "r",

@@ -13,7 +13,7 @@ import type {
 	WorkflowRouting,
 	WorkflowView,
 } from "../src/workflow/contracts.ts";
-import { planResult } from "../src/workflow/definitions/contracts.ts";
+import { decodePlanResult } from "../src/workflow/definitions/contracts.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import { effectRunnerTest } from "../src/workflow/effect-runner.ts";
 import {
@@ -161,15 +161,15 @@ describe("planner-owned change identity (allow-planners-to-create-multiple-propo
 	});
 
 	test("plan-result contract requires the declared primary change id", () => {
-		expect(() => planResult.parse({ validated: true })).toThrow(
+		expect(() => decodePlanResult({ validated: true })).toThrow(
 			/primaryChangeId/,
 		);
-		expect(() => planResult.parse({})).toThrow(/primaryChangeId/);
-		expect(planResult.parse({ primaryChangeId: "primary" })).toEqual({
+		expect(() => decodePlanResult({})).toThrow(/primaryChangeId/);
+		expect(decodePlanResult({ primaryChangeId: "primary" })).toEqual({
 			primaryChangeId: "primary",
 		});
 		expect(
-			planResult.parse({
+			decodePlanResult({
 				primaryChangeId: "primary",
 				summary: "plan",
 				artifacts: ["a.md"],

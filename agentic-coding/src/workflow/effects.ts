@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { Herdr } from "../herdr-client.ts";
 import type { WorkflowExecutionSettings } from "./contracts.ts";
+import { TELEMETRY_FLUSH_BUDGET_MS } from "./observability.ts";
 
 export { Herdr };
 
@@ -112,7 +113,10 @@ export class TraceExporter implements Exporter {
 			],
 		};
 		const controller = new AbortController();
-		const timeout = setTimeout(() => controller.abort(), 750);
+		const timeout = setTimeout(
+			() => controller.abort(),
+			TELEMETRY_FLUSH_BUDGET_MS,
+		);
 		try {
 			await fetch(traceEndpoint(), {
 				method: "POST",

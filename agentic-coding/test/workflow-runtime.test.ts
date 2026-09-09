@@ -6,16 +6,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-	commandContract,
-	parseSnapshot,
+	decodeCommand,
+	decodeSnapshot,
 	type ResolvedProfile,
 	type WorkflowRouting,
 } from "../src/workflow/contracts.ts";
 import {
+	decodeResearchHandoff,
 	definitionVersionForBehaviorPins,
 	definitionVersionForPolicy,
 	registerBuiltins,
-	researchHandoffContract,
 } from "../src/workflow/definitions.ts";
 import {
 	canonicalStorePath,
@@ -727,7 +727,7 @@ describe("transactional workflow runtime", () => {
 	});
 	test("research handoff contract requires subject, at least one valid documentation directive, and either citations or an explicit no-sources statement", () => {
 		expect(() =>
-			researchHandoffContract.parse({
+			decodeResearchHandoff({
 				subject: "widget subsystem",
 				findings: "widgets are produced by the widget factory",
 				directives: [
@@ -743,7 +743,7 @@ describe("transactional workflow runtime", () => {
 			}),
 		).not.toThrow();
 		expect(() =>
-			researchHandoffContract.parse({
+			decodeResearchHandoff({
 				subject: "widget subsystem",
 				directives: [
 					{
@@ -792,8 +792,8 @@ describe("transactional workflow runtime", () => {
 				noSourcesUsed: false,
 			}, // no citations, not no-sources
 		])
-			expect(() => researchHandoffContract.parse(invalid)).toThrow();
-		const parsed = researchHandoffContract.parse({
+			expect(() => decodeResearchHandoff(invalid)).toThrow();
+		const parsed = decodeResearchHandoff({
 			subject: "widget subsystem",
 			canonicalTarget: "projects/demo/widget-subsystem",
 			directives: [
@@ -812,7 +812,7 @@ describe("transactional workflow runtime", () => {
 	test("research handoff contract bounds citation, directive, and claim counts and total serialized size", () => {
 		const directive = { target: "x", intent: "create" as const, claims: ["y"] };
 		expect(() =>
-			researchHandoffContract.parse({
+			decodeResearchHandoff({
 				subject: "x",
 				directives: [directive],
 				citations: Array.from({ length: 32 }, (_, index) => `source-${index}`),
@@ -820,7 +820,7 @@ describe("transactional workflow runtime", () => {
 			}),
 		).not.toThrow();
 		expect(() =>
-			researchHandoffContract.parse({
+			decodeResearchHandoff({
 				subject: "x",
 				directives: [directive],
 				citations: Array.from({ length: 33 }, (_, index) => `source-${index}`),
@@ -828,7 +828,7 @@ describe("transactional workflow runtime", () => {
 			}),
 		).toThrow(/at most 32 source citations/);
 		expect(() =>
-			researchHandoffContract.parse({
+			decodeResearchHandoff({
 				subject: "x",
 				directives: Array.from({ length: 16 }, (_, index) => ({
 					target: `x-${index}`,
@@ -839,7 +839,7 @@ describe("transactional workflow runtime", () => {
 			}),
 		).not.toThrow();
 		expect(() =>
-			researchHandoffContract.parse({
+			decodeResearchHandoff({
 				subject: "x",
 				directives: Array.from({ length: 17 }, (_, index) => ({
 					target: `x-${index}`,
@@ -850,7 +850,7 @@ describe("transactional workflow runtime", () => {
 			}),
 		).toThrow(/at most 16 documentation directives/);
 		expect(() =>
-			researchHandoffContract.parse({
+			decodeResearchHandoff({
 				subject: "x",
 				directives: [
 					{
@@ -863,7 +863,7 @@ describe("transactional workflow runtime", () => {
 			}),
 		).toThrow(/at most 16 claims/);
 		expect(() =>
-			researchHandoffContract.parse({
+			decodeResearchHandoff({
 				subject: "x",
 				findings: "y".repeat(16384),
 				directives: [directive],
@@ -1189,7 +1189,7 @@ describe("transactional workflow runtime", () => {
 			]) {
 				const malformed = structuredClone(snapshot);
 				mutate(malformed);
-				expect(() => parseSnapshot(malformed)).toThrow();
+				expect(() => decodeSnapshot(malformed)).toThrow();
 			}
 		} finally {
 			fs.rmSync(tmp, { recursive: true, force: true });
@@ -1520,7 +1520,7 @@ describe("transactional workflow runtime", () => {
 				},
 				routing: routing(),
 			});
-			const omitted = commandContract.parse({
+			const omitted = decodeCommand({
 				type: "operator.repair",
 				workflowId: started.view.workflowId,
 				revision: started.view.revision,
@@ -1532,7 +1532,7 @@ describe("transactional workflow runtime", () => {
 			expect(omitted.reason).toBe("");
 			const repaired = engine.dispatch(repo, { ...omitted });
 			expect(repaired.snapshot.repaired?.reason).toBe("");
-			const parsed = parseSnapshot({
+			const parsed = decodeSnapshot({
 				...repaired.snapshot,
 				repaired: {
 					...requireDefined(repaired.snapshot.repaired, "repaired metadata"),

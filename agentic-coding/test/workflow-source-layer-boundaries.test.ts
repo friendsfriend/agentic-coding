@@ -11,7 +11,9 @@ import {
 	type ArchitectureIssue,
 	checkExceptionUsage,
 	checkLayerOwnership,
+	checkObsoleteShims,
 	checkPureDomain,
+	checkRuntimeBoundaries,
 	checkUnresolvedRuntimeTargets,
 	findRuntimeCycle,
 	type LayerException,
@@ -57,6 +59,40 @@ describe("workflow source-layer boundaries (enforce-source-layer-boundaries)", (
 
 	test("src exception allowlist has no unused entries", () => {
 		expect(checkExceptionUsage(SRC_ROOT, NO_EXCEPTIONS)).toEqual([]);
+	});
+
+	test("src has no Effect runtime execution outside the named composition roots", () => {
+		// The synchronous engine facade, the effect runner, and the named
+		// application composition root are the runtime-execution points;
+		// operations.ts is the shared drain-execution boundary both the CLI and
+		// dashboard consume (its drain program requires no services and runs at
+		// the caller's owned scope). As the cutover removes the facades they
+		// leave the root list. Everything else must not run a nested runtime.
+		const roots = new Set([
+			"workflow/runtime/engine.ts",
+			"workflow/effect-runner.ts",
+			"workflow/application.ts",
+			"workflow/operations.ts",
+		]);
+		expect(checkRuntimeBoundaries(SRC_ROOT, roots)).toEqual([]);
+	});
+
+	test("src declares no obsolete migration-only bridge symbols", () => {
+		// Symbol-level registration: every bridge the cutover removed must not
+		// be declared or re-exported again in its former module, even though
+		// those modules still exist.
+		const obsolete = new Map<string, readonly string[]>([
+			[
+				"workflow/contracts.ts",
+				["commandContract", "parseSnapshot", "parseDeveloperQuestionAnswer"],
+			],
+			[
+				"workflow/definitions/contracts.ts",
+				["researchHandoffContract", "planResult"],
+			],
+			["workflow/effect-runner.ts", ["isPaneLive"]],
+		]);
+		expect(checkObsoleteShims(SRC_ROOT, obsolete)).toEqual([]);
 	});
 
 	test("a value import through a .tsx module that closes a runtime cycle fails with the source dependency path", () => {
@@ -210,11 +246,50 @@ describe("workflow source-layer boundaries (enforce-source-layer-boundaries)", (
 		expect(pure[0].message).not.toContain("persistence.ts");
 	});
 
+	test("a guarded service running a nested Effect runtime fails outside a composition root", () => {
+		const root = fixtureRoot("negative", "nested-runtime");
+		const roots = new Set(["workflow/cli/composition.ts"]);
+		const issues = checkRuntimeBoundaries(root, roots);
+		expect(issues).toHaveLength(1);
+		expect(rel(root, issues[0].file)).toBe("workflow/runtime/service.ts");
+		expect(issues[0].rule).toBe("runtime:nested");
+		expect(issues[0].message).toContain("Effect.runSync");
+		expect(issues[0].line).toBeGreaterThan(0);
+	});
+
+	test("a named composition root running Effect is not flagged", () => {
+		const root = fixtureRoot("negative", "nested-runtime");
+		const roots = new Set(["workflow/cli/composition.ts"]);
+		const issues = checkRuntimeBoundaries(root, roots);
+		expect(
+			issues.some(
+				(issue) =>
+					issue.rule === "runtime:nested" &&
+					rel(root, issue.file) === "workflow/cli/composition.ts",
+			),
+		).toBe(false);
+	});
+
+	test("a re-declared obsolete migration bridge symbol is rejected", () => {
+		const root = fixtureRoot("negative", "obsolete-shim");
+		const issues = checkObsoleteShims(
+			root,
+			new Map([["workflow/legacy-bridge.ts", ["drain"]]]),
+		);
+		expect(issues).toHaveLength(1);
+		expect(rel(root, issues[0].file)).toBe("workflow/legacy-bridge.ts");
+		expect(issues[0].rule).toBe("shim:obsolete");
+		expect(issues[0].message).toContain("declares exported");
+		expect(issues[0].message).toContain("drain");
+	});
+
 	test("positive fixtures pass every check (evidence/time inputs, application calls, type contracts, wrappers, composition)", () => {
 		const root = fixtureRoot("positive", "all");
 		expect(findRuntimeCycle(root)).toBeNull();
 		expect(checkUnresolvedRuntimeTargets(root)).toEqual([]);
 		expect(checkLayerOwnership(root, NO_EXCEPTIONS)).toEqual([]);
 		expect(checkPureDomain(root, NO_EXCEPTIONS)).toEqual([]);
+		expect(checkRuntimeBoundaries(root, new Set())).toEqual([]);
+		expect(checkObsoleteShims(root, new Map())).toEqual([]);
 	});
 });
