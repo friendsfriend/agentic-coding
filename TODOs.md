@@ -11,11 +11,3 @@ Not for agents. This is only for humans.
 * Use singular pane for verfication triage
 * Write herdr plugin to control coloring of tabs based on agent activity
 * Tui errors dont use the notification system anymore
-* Failing tests exist
-
-Effect switchover
- * Effect foundation, schemas, errors, agent conventions. (done)
- * Transactional runtime migration.
- * Runner and adapter migration.
- * CLI/TUI cutover and legacy-code removal.
-
