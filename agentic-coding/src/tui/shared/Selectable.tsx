@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import type { BoxRenderable, ScrollBoxRenderable } from "@opentui/core";
-import { createEffect, For, type JSX } from "solid-js";
+import { createEffect, For, type JSX, onCleanup } from "solid-js";
 import { type SCROLLBAR_OPTIONS, uiColors } from "./colors";
 import { ScrollableContent } from "./ScrollableContent";
 
@@ -83,19 +83,26 @@ export function SelectableList<T>(props: SelectableListProps<T>) {
 			}}
 		>
 			<For each={props.items}>
-				{(item, index) => (
-					<Selectable
-						ref={(card) => {
-							cards[index()] = card;
-						}}
-						height={props.itemHeight}
-						onMouseUp={() => props.onSelect?.(index())}
-						selected={index() === selectedIndex()}
-						backgroundColor={props.backgroundColor?.(item, index())}
-					>
-						{props.renderItem(item, index() === selectedIndex(), index())}
-					</Selectable>
-				)}
+				{(item, index) => {
+					// Drop the renderable reference when the row is disposed so a
+					// shrinking list never retains destroyed cards (memory leak).
+					onCleanup(() => {
+						cards[index()] = undefined;
+					});
+					return (
+						<Selectable
+							ref={(card) => {
+								cards[index()] = card;
+							}}
+							height={props.itemHeight}
+							onMouseUp={() => props.onSelect?.(index())}
+							selected={index() === selectedIndex()}
+							backgroundColor={props.backgroundColor?.(item, index())}
+						>
+							{props.renderItem(item, index() === selectedIndex(), index())}
+						</Selectable>
+					);
+				}}
 			</For>
 		</ScrollableContent>
 	);

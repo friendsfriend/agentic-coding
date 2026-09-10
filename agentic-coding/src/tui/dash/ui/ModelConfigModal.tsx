@@ -18,7 +18,9 @@ import {
 	parseAgentsConfig,
 	runtimeModels,
 } from "../../../workflow/profiles.ts";
+import { type ConsoleIssue, captureConsoleIssues } from "../consoleCapture";
 import { notify } from "../notifications";
+import { traceTui } from "../tracing";
 import { uiColors } from "./colors";
 import { GenericModal, type HelpEntry } from "./GenericModal";
 import { SelectableList } from "./Selectable";
@@ -678,8 +680,44 @@ export function ModelConfigModal(props: {
 		return true;
 	};
 
-	onMount(() => props.onKeyReady(handler));
-	onCleanup(() => props.onKeyReady(() => true));
+	/** Route warnings/errors emitted while the editor is open (e.g. a
+	 * library-detected memory leak) to OTEL and a warning toast instead of the
+	 * TUI console overlay. Free-form text never reaches a span. */
+	let reportingConsoleIssue = false;
+	const reportConsoleIssue = (issue: ConsoleIssue): void => {
+		if (reportingConsoleIssue) return;
+		reportingConsoleIssue = true;
+		try {
+			const leak = /leak|not be disposed|disposed/i.test(issue.message);
+			traceTui(
+				"tui.model_config.console",
+				{
+					surface: "model-config",
+					action: `console-${issue.level}`,
+					kind: leak ? "leak" : issue.level,
+				},
+				issue.level === "error" ? "error" : "ok",
+			);
+			notify(
+				issue.message
+					? `Agent configuration: ${issue.message}`
+					: "Agent configuration warning",
+				"warning",
+			);
+		} finally {
+			reportingConsoleIssue = false;
+		}
+	};
+	let disposeConsoleCapture: (() => void) | undefined;
+	onMount(() => {
+		disposeConsoleCapture = captureConsoleIssues(reportConsoleIssue);
+		props.onKeyReady(handler);
+	});
+	onCleanup(() => {
+		disposeConsoleCapture?.();
+		disposeConsoleCapture = undefined;
+		props.onKeyReady(() => true);
+	});
 
 	return (
 		<>

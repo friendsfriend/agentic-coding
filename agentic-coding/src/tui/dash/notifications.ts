@@ -1,4 +1,5 @@
 import { createSignal } from "solid-js";
+import { traceTui } from "./tracing";
 export type Notification = {
 	message: string;
 	type: "info" | "success" | "warning" | "error";
@@ -8,6 +9,13 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 export const activeNotification = notification;
 export function notify(message: string, type: Notification["type"] = "info") {
 	setNotification({ message, type });
+	// Every toast is telemetered, but the free-form message never reaches a span;
+	// only the bounded notification kind and surface do.
+	traceTui(
+		"tui.notification",
+		{ surface: "dash", action: "notify", kind: type },
+		type === "error" ? "error" : "ok",
+	);
 	clearTimeout(timer);
 	timer = setTimeout(
 		() => setNotification(undefined),
