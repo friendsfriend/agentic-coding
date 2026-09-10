@@ -2,8 +2,6 @@ Not for agents. This is only for humans.
 
 Fixes: 
 * Fix question option for worker -> Planner / consolidator
-* Fix minor ui stuff (Weird texts in new workflow modal)
-* All openspec files are shown in the openspec panel instead of only the newly created ones
 * Traces are not shown properly (new ones are missing)
 * Fix workflow tab name matching. Currently it fails to discover the agents due to the agent state glyphs
 * Some findings dont show up in the diff
