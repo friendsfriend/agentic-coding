@@ -3,10 +3,11 @@ Not for agents. This is only for humans.
 Fixes: 
 * Fix question option for worker -> Planner / consolidator
 * Traces are not shown properly (new ones are missing)
-* Fix workflow tab name matching. Currently it fails to discover the agents due to the agent state glyphs
 * Some findings dont show up in the diff
 * Findings cant be toggled with space
 * The agent status in the dashboard doenst work anymore
+* Keybind help overlaps if more than 2 rows
+* Use short descriptions for keybind help. Takes too much space. Keep the detailed one for the ? help modal
 
 Big ones:
 * Implement Agent steered version of the workflow. Basically an orchestrator version of the workflow.
@@ -17,5 +18,6 @@ Big ones:
 
 Small ones: 
 * Automatic wiki commit + push if in git repo.
+* Wiki should introduce source mechanism -> Each information should also give a source (either code file or url to source). This allows to recheck the information. Should be done when reading the wiki.
 * Give all agents their own tab. Multitab spawning always has issues for some reason
 

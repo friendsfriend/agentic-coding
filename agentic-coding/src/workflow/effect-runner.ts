@@ -49,6 +49,7 @@ import {
 	writeAtomicPrivateFile,
 } from "./secure-fs.ts";
 import { stepBehavior } from "./steps/index.ts";
+import { findAgentTabByBase } from "./tab-status.ts";
 import {
 	conceptPath,
 	snapshotList,
@@ -1546,7 +1547,9 @@ async function dashboardReadyAsync(
 			["tab", "list", "--workspace", workspace],
 			signal,
 		)) as { tabs?: Array<{ label?: string }> };
-		return (result.tabs ?? []).some((tab) => tab.label === "dashboard");
+		// Tab labels carry a status glyph, so match the base name rather than the
+		// raw label (the dashboard tab can acquire a glyph when a run shares it).
+		return findAgentTabByBase(result.tabs ?? [], "dashboard") !== undefined;
 	} catch {
 		return false;
 	}
@@ -1567,7 +1570,7 @@ async function ensureWorkspaceTabs(
 				signal,
 			)) as { tabs?: Array<{ tab_id?: string; label?: string }> }
 		).tabs ?? [];
-	if (!tabs.some((tab) => tab.label === "dashboard")) {
+	if (!findAgentTabByBase(tabs, "dashboard")) {
 		const panes =
 			(
 				(await herdrCall(
@@ -1602,7 +1605,7 @@ async function ensureWorkspaceTabs(
 	}
 	// Auxiliary git tab (lazygit): best-effort — the dashboard's Git panel
 	// recreates it on demand if this fails (e.g. lazygit not installed).
-	if (!tabs.some((tab) => tab.label === "git")) {
+	if (!findAgentTabByBase(tabs, "git")) {
 		try {
 			const result = (await herdrCall(
 				herdr,
@@ -1626,7 +1629,7 @@ async function ensureWorkspaceTabs(
 				herdr.call(
 					"tab",
 					"close",
-					tabs.find((tab) => tab.label === "git")?.tab_id ?? "",
+					findAgentTabByBase(tabs, "git")?.tab_id ?? "",
 				);
 			} catch {}
 		}

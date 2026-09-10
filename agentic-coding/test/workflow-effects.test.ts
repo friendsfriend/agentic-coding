@@ -659,6 +659,103 @@ test("runner retains stale agent after repair", async () => {
 	}
 });
 
+test("workspace setup recognizes a dashboard tab carrying a status glyph", async () => {
+	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-glyph-tab-"));
+	try {
+		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+		fs.writeFileSync(path.join(repo, "README.md"), "x\n");
+		execFileSync("git", ["add", "."], { cwd: repo });
+		execFileSync(
+			"git",
+			[
+				"-c",
+				"user.email=test@example.com",
+				"-c",
+				"user.name=Test",
+				"commit",
+				"-qm",
+				"base",
+			],
+			{ cwd: repo },
+		);
+		const registry = registerBuiltins();
+		const engine = new WorkflowEngine(registry);
+		const adapter = new Adapter();
+		engine.start({
+			repo,
+			mode: "checkout",
+			workflowId: "glyph-tab",
+			definitionId: "no-openspec",
+			metadata: {
+				branch: "feature/glyph-tab",
+				baseBranch: "main",
+				baseCommit: execFileSync("git", ["rev-parse", "HEAD"], {
+					cwd: repo,
+					encoding: "utf8",
+				}).trim(),
+				task: "task",
+			},
+			routing: {
+				defaultProfile: "pi",
+				routes: [
+					{
+						stepId: "core.implementation",
+						role: "worker",
+						profile: {
+							name: "pi",
+							runtime: "pi",
+							executable: "sh",
+							tools: [],
+							extensions: [],
+							readOnly: false,
+							capabilities: ["prompt", "run-environment", "observe"],
+							digest: "profile",
+						},
+					},
+				],
+				diversity: [],
+			},
+		});
+		const calls: string[][] = [];
+		const herdr = {
+			call(...args: string[]) {
+				calls.push(args);
+				if (args[0] === "tab" && args[1] === "list")
+					return { tabs: [{ tab_id: "dash-tab", label: "● dashboard" }] };
+				if (args[0] === "workspace" && args[1] === "create")
+					return { workspace: { workspace_id: "workspace" } };
+				if (args[0] === "tab" && args[1] === "create")
+					return { root_pane: { pane_id: "git-pane", tab_id: "git-tab" } };
+				if (args[0] === "pane" && args[1] === "run") return {};
+				throw new Error(`unexpected ${args.join(" ")}`);
+			},
+		};
+		const handlers = agentEffectHandlers(repo, engine, {
+			registry,
+			adapters: new Map([["pi", adapter]]),
+			herdr,
+			async paneForRun() {
+				return { paneId: "pane", owned: true };
+			},
+		});
+		await new EffectRunner(repo, engine, handlers).drain();
+		// The glyphed dashboard tab is recognized: no fallback pane scan and no
+		// clobbering rename of an unrelated tab.
+		expect(calls.some((args) => args[0] === "pane" && args[1] === "list")).toBe(
+			false,
+		);
+		expect(
+			calls.some(
+				(args) =>
+					args[0] === "tab" && args[1] === "rename" && args[2] === "dash-tab",
+			),
+		).toBe(false);
+		expect(engine.status(repo, "glyph-tab").workspace).toBe("workspace");
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
 test("launch failure on a reused pane does not close it", async () => {
 	const repo = fs.mkdtempSync(
 		path.join(os.tmpdir(), "workflow-launch-fail-reused-"),

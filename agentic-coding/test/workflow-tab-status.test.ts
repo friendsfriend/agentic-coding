@@ -3,7 +3,9 @@ import {
 	agentTabBaseLabel,
 	agentTabGlyph,
 	agentTabLabel,
+	agentTabMatchesBase,
 	aggregateAgentTabStatus,
+	findAgentTabByBase,
 } from "../src/workflow/tab-status.ts";
 
 describe("agent tab status glyphs", () => {
@@ -36,12 +38,33 @@ describe("agent tab status glyphs", () => {
 		);
 	});
 
-	test("base label strips exactly one known glyph prefix", () => {
+	test("base label strips every glyph prefix", () => {
 		expect(agentTabBaseLabel("● worker")).toBe("worker");
+		expect(agentTabBaseLabel("✓ verification")).toBe("verification");
+		expect(agentTabBaseLabel("■ dashboard")).toBe("dashboard");
 		expect(agentTabBaseLabel("verification")).toBe("verification");
 		expect(agentTabBaseLabel("dashboard")).toBe("dashboard");
-		// A second glyph is not part of the recovered base's prefix semantics.
-		expect(agentTabBaseLabel("● ● worker")).toBe("● worker");
+		// Stale prefixes accumulate across releases; every one is recovered.
+		expect(agentTabBaseLabel("● ● worker")).toBe("worker");
+		expect(agentTabBaseLabel("○ ● ✓ verification")).toBe("verification");
+	});
+
+	test("matches a tab label to its base regardless of the status glyph", () => {
+		expect(agentTabMatchesBase("● dashboard", "dashboard")).toBe(true);
+		expect(agentTabMatchesBase("dashboard", "dashboard")).toBe(true);
+		expect(agentTabMatchesBase("✓ dashboard", "git")).toBe(false);
+		expect(agentTabMatchesBase(undefined, "dashboard")).toBe(false);
+	});
+
+	test("finds the first tab whose base label matches", () => {
+		const tabs = [
+			{ tab_id: "t1", label: "● worker" },
+			{ tab_id: "t2", label: "○ dashboard" },
+			{ tab_id: "t3", label: "dashboard" },
+		];
+		expect(findAgentTabByBase(tabs, "dashboard")?.tab_id).toBe("t2");
+		expect(findAgentTabByBase(tabs, "worker")?.tab_id).toBe("t1");
+		expect(findAgentTabByBase(tabs, "git")).toBeUndefined();
 	});
 
 	test("aggregation keeps outstanding work ahead of terminal states", () => {

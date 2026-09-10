@@ -29,7 +29,10 @@ const TAB_STATUS_PRIORITY: Readonly<Record<RunStatus, number>> = {
 	expired: 0,
 };
 
-const KNOWN_GLYPHS = new Set(Object.values(TAB_STATUS_GLYPHS));
+/** Leading `<glyph> ` prefixes: a run of non-letter/non-number symbols followed
+ * by whitespace. Applied repeatedly so a label that accumulated stale prefixes
+ * still collapses to its role/group name. */
+const TAB_GLYPH_PREFIX = /^(?:[^\p{L}\p{N}\s]+\s+)+/u;
 
 /** The glyph for one run status. Unknown values fall back to the open glyph so
  * a tab always carries a stable single-cell indicator. */
@@ -56,11 +59,29 @@ export function agentTabLabel(base: string, status: string): string {
 	return `${agentTabGlyph(status)} ${base}`;
 }
 
-/** Remove a previously applied glyph prefix, recovering the role/group name so
- * reconciliation can re-render it idempotently. Labels without a known glyph
+/** Remove previously applied glyph prefixes, recovering the role/group name so
+ * reconciliation can re-render it idempotently. Labels without a glyph prefix
  * are returned unchanged. */
 export function agentTabBaseLabel(label: string): string {
-	const sep = label.indexOf(" ");
-	if (sep === 1 && KNOWN_GLYPHS.has(label[0])) return label.slice(2);
-	return label;
+	return label.replace(TAB_GLYPH_PREFIX, "");
+}
+
+/** Glyph-aware tab name comparison: true when a rendered label identifies the
+ * given role/group base, regardless of which status glyph precedes it. This is
+ * the single mechanism every Herdr tab-name lookup uses. */
+export function agentTabMatchesBase(
+	label: string | undefined,
+	base: string,
+): boolean {
+	return label !== undefined && agentTabBaseLabel(label) === base;
+}
+
+/** Find the first tab (out of a Herdr `tab list` result) whose base label is
+ * `base`, ignoring any leading status glyph. */
+export function findAgentTabByBase<T extends { label?: string }>(
+	tabs: Iterable<T>,
+	base: string,
+): T | undefined {
+	for (const tab of tabs) if (agentTabMatchesBase(tab.label, base)) return tab;
+	return undefined;
 }
