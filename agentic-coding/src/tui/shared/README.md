@@ -41,6 +41,14 @@ the primitive.
   — observability view-header row contracts (accessor props, auto-hide,
   always-shown result count; label-based filter/sort layout).
 
+## Conventions
+
+- Keybind help is footer-only. Shell tabs render it through
+  `otel/components/StatusBar.tsx`; dialogs through `HelpText` /
+  `formatHelpTextLines`. Feature views (tab bodies, panel headers, empty and
+  error states) must not print their own keybinding lists or single
+  "press key" prompts.
+
 ## Behavior notes
 
 - Consolidating the selection-copy registries made the single shared registry
