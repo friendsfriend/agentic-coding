@@ -19,7 +19,7 @@ The dash Agents panel SHALL display, for each agent, its total cost, input token
 
 ### Requirement: Metric derivation from telemetry
 
-Per-agent metrics SHALL be aggregated from the workflow's telemetry events attributed to the agent's role: cost as the summed event cost, tokens as summed input/output token counts, cache hit rate as cached-read tokens divided by the total prompt tokens (`cached-read + uncached input + cache-write`), duration from the first to last lifecycle/usage event of the role, and tokens/s as output tokens divided by active generation time. Cache-rate inputs SHALL be present, finite, and non-negative; the rendered cache rate SHALL be omitted when any cache-rate component is unavailable or the total prompt-token denominator is zero. A cache rate SHALL be rendered with one decimal place and SHALL distinguish any value below 100% from a full 100.0% hit rate.
+Per-agent metrics SHALL be aggregated from the workflow's telemetry events attributed to the agent's role: cost as the summed event cost, tokens as summed input/output token counts, cache hit rate as cached-read tokens divided by the total prompt tokens (`cached-read + uncached input + cache-write`), duration as the sum of the role's active turns, and tokens/s as output tokens divided by active generation time. An active turn opens on `runtime.started`/`pi_agent_start`, closes on the next `runtime.settled`/`pi_agent_end`/`pi_agent_settled`, and a still-open turn closes at the role's last observed event; idle gaps between turns SHALL NOT count toward duration. When a role records no lifecycle boundary events, duration SHALL fall back to the wall-clock first→last event span. Cache-rate inputs SHALL be present, finite, and non-negative; the rendered cache rate SHALL be omitted when any cache-rate component is unavailable or the total prompt-token denominator is zero. A cache rate SHALL be rendered with one decimal place and SHALL distinguish any value below 100% from a full 100.0% hit rate.
 
 #### Scenario: Multiple usage events
 
@@ -27,7 +27,7 @@ Per-agent metrics SHALL be aggregated from the workflow's telemetry events attri
 - **THEN** cost and token counts SHALL be totals across all events
 - **AND** cached-read, uncached-input, and cache-write tokens SHALL be totaled before calculating the cache-hit rate
 - **AND** the resulting cache-hit rate SHALL be `cached-read / (cached-read + uncached input + cache-write)` as a percentage from 0% through 100%, rendered to one decimal place
-- **AND** duration SHALL span from the earliest to the latest event for the current run
+- **AND** duration SHALL sum the role's active turns, excluding idle gaps between them
 
 #### Scenario: Cache writes are present
 
