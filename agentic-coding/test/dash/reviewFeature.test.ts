@@ -19,7 +19,7 @@ function context(
 		workflowId: "demo",
 		profile: "test",
 		setModalActive: () => {},
-		setMessage: () => {},
+		trace: () => {},
 		setBusy: () => {},
 		busy: () => false,
 		setReviewFinishing: () => {},

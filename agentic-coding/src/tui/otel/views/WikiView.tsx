@@ -48,6 +48,14 @@ type WikiLoadState =
 const printable = (event: KeyEvent): string =>
 	event.sequence && event.sequence.length === 1 ? event.sequence : "";
 
+// Module scope: the wiki comment editor runs with the shared keymap modal at
+// "none", so the observability shell's key-trace gate must be told when the
+// editor is accepting text to suppress per-character diagnostics.
+const [wikiCommentEntry, setWikiCommentEntry] = createSignal(false);
+/** True while the wiki comment editor is open (composition input must never
+ * reach a span). */
+export const wikiCommentEntryActive = () => wikiCommentEntry();
+
 /** Home-mode browser for the centralized OKF wiki and its temporary review. */
 export function WikiView(props: WikiViewProps) {
 	const [state, setState] = createSignal<WikiLoadState>({ kind: "loading" });
@@ -64,6 +72,8 @@ export function WikiView(props: WikiViewProps) {
 		start?: number;
 		end?: number;
 	}>({});
+	createEffect(() => setWikiCommentEntry(commentMode()));
+	onCleanup(() => setWikiCommentEntry(false));
 
 	const errorMessage = () => {
 		const current = state();
@@ -367,7 +377,7 @@ export function WikiView(props: WikiViewProps) {
 				"r",
 				"?",
 				"space",
-				..."abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_=+[]{};:\\|,.<>`~!@#$%^&*() "
+				..."abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_=+[]{};:\\|,.<>`~!@#$%^&*() \"'/ "
 					.split("")
 					.map((key) => (key === " " ? "space" : key)),
 			].map((key) => ({ key, cmd: "wiki-view.handle" })),

@@ -57,7 +57,13 @@ export interface ReviewFeatureContext {
 	/** Modal-layer switch on the App keymap (the feature owns review modal
 	 * activation but never the keymap itself). */
 	setModalActive: (modal: string) => void;
-	setMessage: (message: string) => void;
+	/** Bounded OTLP trace for an operational outcome that previously used the
+	 * dashboard inline message channel; never carries dynamic error text. */
+	trace: (
+		name: string,
+		attributes?: Record<string, unknown>,
+		outcome?: "ok" | "error",
+	) => void;
 	setBusy: (busy: boolean) => void;
 	busy: () => boolean;
 	setReviewFinishing: (finishing: boolean) => void;
@@ -177,7 +183,7 @@ export function createReviewFeature(
 		workflowId,
 		profile,
 		setModalActive,
-		setMessage,
+		trace,
 		setBusy,
 		busy,
 		setReviewFinishing,
@@ -190,6 +196,11 @@ export function createReviewFeature(
 		setDemoIndex,
 		demoPhases,
 	} = context;
+
+	/** Every former inline review message collapses into one bounded span whose
+	 * attributes are a stable action id plus the outcome. */
+	const traceReview = (action: string, outcome: "ok" | "error" = "ok") =>
+		trace("tui.dashboard.review", { surface: "dashboard", action }, outcome);
 
 	let reviewController: AbortController | undefined;
 	let reviewDiffController: AbortController | undefined;
@@ -382,7 +393,6 @@ export function createReviewFeature(
 	const openDeveloperReview = async () => {
 		if (reviewLoading()) return;
 		setReviewLoading(true);
-		setMessage("Loading developer review…");
 		const generation = ++reviewGeneration;
 		reviewController?.abort();
 		reviewController = new AbortController();
@@ -438,8 +448,9 @@ export function createReviewFeature(
 			setReviewOpen(true);
 			setReviewKind("developer");
 			queueMicrotask(() => setModalActive("developer-review"));
-		} catch (error) {
-			setMessage(error instanceof Error ? error.message : String(error));
+			traceReview("review-load");
+		} catch {
+			traceReview("review-load", "error");
 		} finally {
 			if (generation === reviewGeneration) {
 				setReviewLoading(false);
@@ -465,8 +476,8 @@ export function createReviewFeature(
 			);
 			setReviewLine(0);
 			setReviewView("diff");
-		} catch (error) {
-			setMessage(error instanceof Error ? error.message : String(error));
+		} catch {
+			traceReview("review-diff", "error");
 		}
 	};
 	const developerReviewPhase = () =>
@@ -483,7 +494,6 @@ export function createReviewFeature(
 			return;
 		}
 		setBusy(true);
-		setMessage("Finishing developer review…");
 		setReviewFinishing(true);
 		setReviewFinishingMessage(
 			"Saving comments and dispatching developer review…",
@@ -504,27 +514,22 @@ export function createReviewFeature(
 			if (profile !== "test") {
 				await saveDeveloperReview(repo, workflowId, comments);
 				const engineComments = reviewCommentsForEngine(comments, true);
-				setMessage(
-					await runWorkflow(
-						comments.length ? "review-comments" : "approve-review",
-						repo,
-						workflowId,
-						data().state.revision,
-						comments.length
-							? JSON.stringify({ comments: engineComments })
-							: undefined,
-					),
+				await runWorkflow(
+					comments.length ? "review-comments" : "approve-review",
+					repo,
+					workflowId,
+					data().state.revision,
+					comments.length
+						? JSON.stringify({ comments: engineComments })
+						: undefined,
 				);
+				traceReview(comments.length ? "review-comments" : "review-approved");
 				refresh();
 			} else {
-				setMessage(
-					comments.length
-						? "Review comments sent to worker"
-						: "Developer review passed",
-				);
+				traceReview(comments.length ? "review-comments" : "review-approved");
 			}
-		} catch (error) {
-			setMessage(error instanceof Error ? error.message : String(error));
+		} catch {
+			traceReview("review-finish", "error");
 		} finally {
 			setReviewView("files");
 			setReviewOpen(false);
@@ -641,8 +646,8 @@ export function createReviewFeature(
 			setReviewView("files");
 			setReviewOpen(true);
 			queueMicrotask(() => setModalActive("plan-review"));
-		} catch (error) {
-			setMessage(error instanceof Error ? error.message : String(error));
+		} catch {
+			traceReview("plan-review-open", "error");
 		}
 	};
 	const openPlanMarkdown = async () => {
@@ -664,8 +669,8 @@ export function createReviewFeature(
 			setReviewDiff(content);
 			setReviewLine(0);
 			setReviewView("diff");
-		} catch (error) {
-			setMessage(error instanceof Error ? error.message : String(error));
+		} catch {
+			traceReview("plan-markdown", "error");
 		}
 	};
 	const navigateReviewFile = async (direction: 1 | -1) => {
@@ -707,9 +712,9 @@ export function createReviewFeature(
 			setReviewVisualStart(0);
 			setReviewLine(0);
 			setReviewDiff(content);
-		} catch (error) {
+		} catch {
 			setReviewChangeIndex(previous);
-			setMessage(error instanceof Error ? error.message : String(error));
+			traceReview("review-navigate", "error");
 		}
 	};
 	const navigatePlanMarkdownFile = async (direction: 1 | -1) => {
@@ -742,9 +747,9 @@ export function createReviewFeature(
 							),
 			);
 			setReviewChangeIndex(next);
-		} catch (error) {
+		} catch {
 			setReviewChangeIndex(previous);
-			setMessage(error instanceof Error ? error.message : String(error));
+			traceReview("plan-markdown-navigate", "error");
 		}
 	};
 	const finishPlanReview = async () => {
@@ -752,9 +757,6 @@ export function createReviewFeature(
 		const wikiReview = requiredUserAction()?.key === "wiki-review";
 		const saveReview = wikiReview ? saveWikiReview : savePlanReview;
 		setBusy(true);
-		setMessage(
-			wikiReview ? "Finishing wiki review…" : "Finishing plan review…",
-		);
 		setReviewFinishing(true);
 		setReviewFinishingMessage(
 			wikiReview
@@ -769,33 +771,32 @@ export function createReviewFeature(
 			if (profile !== "test") {
 				await saveReview(repo, workflowId, comments);
 				const engineComments = reviewCommentsForEngine(comments);
-				setMessage(
-					await runWorkflow(
-						comments.length
-							? "review-comments"
-							: wikiReview
-								? "approve-wiki"
-								: "approve-plan",
-						repo,
-						workflowId,
-						data().state.revision,
-						comments.length
-							? JSON.stringify({ comments: engineComments })
-							: undefined,
-					),
+				await runWorkflow(
+					comments.length
+						? "review-comments"
+						: wikiReview
+							? "approve-wiki"
+							: "approve-plan",
+					repo,
+					workflowId,
+					data().state.revision,
+					comments.length
+						? JSON.stringify({ comments: engineComments })
+						: undefined,
 				);
+				traceReview(comments.length ? "review-comments" : "review-approved");
 				refresh();
 			} else {
 				if (comments.length) {
-					setMessage("Plan review comments sent to planner");
+					traceReview("review-comments");
 				} else {
 					setDemoIndex((index) => (index + 1) % demoPhases.length);
-					setMessage("Plan approved");
+					traceReview("review-approved");
 				}
 				refresh();
 			}
-		} catch (error) {
-			setMessage(error instanceof Error ? error.message : String(error));
+		} catch {
+			traceReview("review-finish", "error");
 		} finally {
 			setReviewView("files");
 			setReviewOpen(false);
@@ -812,9 +813,8 @@ export function createReviewFeature(
 	const rejectPlan = async (reason: string) => {
 		if (busy()) return;
 		setBusy(true);
-		setMessage("Rejecting plan…");
 		try {
-			if (profile === "test") setMessage("Plan rejected");
+			if (profile === "test") traceReview("plan-rejected");
 			else {
 				await runWorkflow(
 					"reject-plan",
@@ -823,10 +823,11 @@ export function createReviewFeature(
 					data().state.revision,
 					JSON.stringify({ reason }),
 				);
+				traceReview("plan-rejected");
 				refresh();
 			}
-		} catch (error) {
-			setMessage(error instanceof Error ? error.message : String(error));
+		} catch {
+			traceReview("plan-reject", "error");
 		} finally {
 			setPlanRejectionOpen(false);
 			setReviewOpen(false);

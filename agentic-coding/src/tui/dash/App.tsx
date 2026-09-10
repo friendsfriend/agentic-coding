@@ -60,6 +60,7 @@ import {
 } from "./projections";
 import { createReviewFeature } from "./review";
 import { applyTheme, loadThemeName, saveThemeName } from "./theme-settings";
+import { traceTui } from "./tracing";
 import type {
 	DashboardData,
 	FindingCounts,
@@ -251,8 +252,6 @@ export function App(props: {
 			updated: data().updated,
 		});
 	});
-	const [message, setMessage] = createSignal("");
-	const [observing, setObserving] = createSignal(false);
 	let lastQuitAt = 0;
 	const [busy, setBusy] = createSignal(false);
 	// Dedicated review-finishing signal (in addition to the busy guard): scopes
@@ -283,7 +282,11 @@ export function App(props: {
 					generation === artifactGeneration &&
 					!(error instanceof DOMException && error.name === "AbortError")
 				)
-					setMessage(error instanceof Error ? error.message : String(error));
+					traceTui(
+						"tui.dashboard.artifacts",
+						{ surface: "dashboard", action: "artifacts" },
+						"error",
+					);
 			});
 	});
 	const requiredUserAction = createMemo(() =>
@@ -462,7 +465,7 @@ export function App(props: {
 		const question = pendingQuestion();
 		if (!question || questionSubmitting()) return;
 		if (answer.kind === "custom" && !answer.value?.trim()) {
-			setMessage("Custom response cannot be empty");
+			notify("Custom response cannot be empty", "warning");
 			return;
 		}
 		const group = pendingQuestionGroup();
@@ -485,7 +488,11 @@ export function App(props: {
 				refresh();
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
-				setMessage(message);
+				traceTui(
+					"tui.dashboard.question",
+					{ surface: "dashboard", action: "question-cancel" },
+					"error",
+				);
 				if (/stale|revision|pending|expired/i.test(message)) refresh();
 			} finally {
 				setQuestionSubmitting(false);
@@ -520,7 +527,7 @@ export function App(props: {
 			if (
 				responses.some((response) => !response.kind || !response.value.trim())
 			) {
-				setMessage("Answer every question before submitting");
+				notify("Answer every question before submitting", "warning");
 				return;
 			}
 			answer = { kind: "custom", value: "" };
@@ -546,7 +553,11 @@ export function App(props: {
 				refresh();
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
-				setMessage(message);
+				traceTui(
+					"tui.dashboard.question",
+					{ surface: "dashboard", action: "question-group" },
+					"error",
+				);
 				if (/stale|revision|pending|expired/i.test(message)) refresh();
 			} finally {
 				setQuestionSubmitting(false);
@@ -568,7 +579,11 @@ export function App(props: {
 			refresh();
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			setMessage(message);
+			traceTui(
+				"tui.dashboard.question",
+				{ surface: "dashboard", action: "question" },
+				"error",
+			);
 			if (/stale|revision|pending|expired/i.test(message)) refresh();
 		} finally {
 			setQuestionSubmitting(false);
@@ -722,23 +737,27 @@ export function App(props: {
 		setUserActionOpen(false);
 		props.keymap.setData("modal.active", "none");
 		setBusy(true);
-		setMessage(`Running ${item.label}…`);
 		try {
 			if (props.profile === "test") {
 				setDemoIndex((index) => (index + 1) % demoPhases.length);
-				setMessage("Advanced dummy workflow");
 			} else
-				setMessage(
-					await runWorkflow(
-						workflowActionId(item.value),
-						props.repo,
-						props.workflowId,
-						data().state.revision,
-					),
+				await runWorkflow(
+					workflowActionId(item.value),
+					props.repo,
+					props.workflowId,
+					data().state.revision,
 				);
+			traceTui("tui.dashboard.action", {
+				surface: "dashboard",
+				action: workflowActionId(item.value),
+			});
 			refresh();
-		} catch (error) {
-			setMessage(error instanceof Error ? error.message : String(error));
+		} catch {
+			traceTui(
+				"tui.dashboard.action",
+				{ surface: "dashboard", action: workflowActionId(item.value) },
+				"error",
+			);
 		} finally {
 			setBusy(false);
 		}
@@ -747,13 +766,16 @@ export function App(props: {
 		if (refreshDisposed) return;
 		if (props.profile === "test") {
 			setData(load());
+			traceTui("tui.dashboard.refresh", {
+				surface: "dashboard",
+				action: "refresh",
+			});
 			return;
 		}
 		refreshQueued = refreshRunning;
 		const generation = ++refreshGeneration;
 		if (refreshRunning) return;
 		refreshRunning = true;
-		setObserving(true);
 		refreshController?.abort();
 		refreshController = new AbortController();
 		void loadDashboardAsync(
@@ -763,9 +785,11 @@ export function App(props: {
 		)
 			.then((next) => {
 				if (!refreshDisposed && generation === refreshGeneration) {
-					setObserving(false);
-					setMessage("");
 					setData(next);
+					traceTui("tui.dashboard.refresh", {
+						surface: "dashboard",
+						action: "refresh",
+					});
 					setSelectedAgent((index) =>
 						Math.min(index, Math.max(0, next.agents.length - 1)),
 					);
@@ -775,8 +799,11 @@ export function App(props: {
 				if (!refreshDisposed && generation === refreshGeneration) {
 					const message =
 						error instanceof Error ? error.message : String(error);
-					setObserving(false);
-					setMessage(message);
+					traceTui(
+						"tui.dashboard.refresh",
+						{ surface: "dashboard", action: "refresh" },
+						"error",
+					);
 					setData((current) => ({
 						...current,
 						state: {
@@ -807,7 +834,7 @@ export function App(props: {
 		workflowId: props.workflowId,
 		profile: props.profile,
 		setModalActive: (modal) => props.keymap.setData("modal.active", modal),
-		setMessage,
+		trace: traceTui,
 		setBusy,
 		busy,
 		setReviewFinishing,
@@ -962,22 +989,15 @@ export function App(props: {
 	});
 
 	const handleKey = async (key: KeyEvent) => {
-		const trace = (msg: string) => {
-			const target = process.env.AGENTIC_CODING_TRACE;
-			if (target) {
-				try {
-					require("node:fs").appendFileSync(
-						target,
-						`${Date.now()} dash ${msg}\n`,
-					);
-				} catch {
-					/* noop */
-				}
-			}
-		};
-		trace(
-			`key=${key.name} modal.active=${props.keymap.getData?.("modal.active")}`,
-		);
+		traceTui("tui.dashboard.key", {
+			surface: "dashboard",
+			action: "key",
+			key: key.name,
+			modal:
+				props.keymap.getData?.("modal.active") === undefined
+					? "none"
+					: String(props.keymap.getData?.("modal.active")),
+		});
 		if (busy()) return;
 		const name = key.name.toLowerCase();
 		if (name === "q" || (key.ctrl && name === "c")) {
@@ -1016,8 +1036,12 @@ export function App(props: {
 						"No dashboard workspace recorded. Open this workflow from the overview first.",
 					);
 				focusReturnWorkspace(props.repo, props.workflowId, workspace);
-			} catch (error) {
-				setMessage(error instanceof Error ? error.message : String(error));
+			} catch {
+				traceTui(
+					"tui.dashboard.action",
+					{ surface: "dashboard", action: "return-workspace" },
+					"error",
+				);
 			} finally {
 				setBusy(false);
 			}
@@ -1035,8 +1059,12 @@ export function App(props: {
 				setRepairSelection(0);
 				setRepairOpen(true);
 				props.keymap.setData("modal.active", "repair");
-			} catch (error) {
-				setMessage(error instanceof Error ? error.message : String(error));
+			} catch {
+				traceTui(
+					"tui.dashboard.action",
+					{ surface: "dashboard", action: "repair-preview" },
+					"error",
+				);
 			}
 			return;
 		}
@@ -1062,14 +1090,17 @@ export function App(props: {
 			if (!agent?.role.endsWith("verifier")) return;
 			try {
 				openVerifierResult(agent.role);
-			} catch (error) {
-				setMessage(error instanceof Error ? error.message : String(error));
+			} catch {
+				traceTui(
+					"tui.dashboard.action",
+					{ surface: "dashboard", action: "verifier-open" },
+					"error",
+				);
 			}
 			return;
 		}
 		if (name === "r") {
 			refresh();
-			setMessage("Refreshed");
 			return;
 		}
 		if (
@@ -1154,8 +1185,12 @@ export function App(props: {
 					const pane = data().state.panes[agent.role];
 					if (!pane) return;
 					await focusAgentAsync(data().state, pane);
-				} catch (error) {
-					setMessage(error instanceof Error ? error.message : String(error));
+				} catch {
+					traceTui(
+						"tui.dashboard.action",
+						{ surface: "dashboard", action: "focus-agent" },
+						"error",
+					);
 				}
 				return;
 			}
@@ -1180,24 +1215,28 @@ export function App(props: {
 				return;
 			}
 			setBusy(true);
-			setMessage(`Running ${approval.action}…`);
 			try {
 				if (props.profile === "test") {
 					setDemoIndex((index) => (index + 1) % demoPhases.length);
-					setMessage("Advanced dummy workflow");
 				} else {
-					setMessage(
-						await runWorkflow(
-							approval.action,
-							props.repo,
-							props.workflowId,
-							data().state.revision,
-						),
+					await runWorkflow(
+						approval.action,
+						props.repo,
+						props.workflowId,
+						data().state.revision,
 					);
 				}
+				traceTui("tui.dashboard.action", {
+					surface: "dashboard",
+					action: approval.action,
+				});
 				refresh();
-			} catch (error) {
-				setMessage(error instanceof Error ? error.message : String(error));
+			} catch {
+				traceTui(
+					"tui.dashboard.action",
+					{ surface: "dashboard", action: approval.action },
+					"error",
+				);
 			} finally {
 				setBusy(false);
 			}
@@ -1370,7 +1409,10 @@ export function App(props: {
 						const key = event.name.toLowerCase();
 						if (key === "escape") {
 							cancelCredential();
-							setMessage("Credential prompt cancelled");
+							traceTui("tui.dashboard.action", {
+								surface: "dashboard",
+								action: "credential-cancel",
+							});
 							return true;
 						}
 						if (key === "enter" || key === "return") {
@@ -1446,10 +1488,23 @@ export function App(props: {
 								setRepairOpen(false);
 								props.keymap.setData("modal.active", "none");
 								refresh();
-								setMessage(`Repaired to ${target.label}: phase retriggered`);
+								notify(
+									`Repaired to ${target.label}: phase retriggered`,
+									"success",
+								);
+								traceTui("tui.dashboard.action", {
+									surface: "dashboard",
+									action: "repair-apply",
+								});
 							} catch (error) {
-								setMessage(
+								notify(
 									error instanceof Error ? error.message : String(error),
+									"error",
+								);
+								traceTui(
+									"tui.dashboard.action",
+									{ surface: "dashboard", action: "repair-apply" },
+									"error",
 								);
 								refresh();
 							}
@@ -1505,13 +1560,12 @@ export function App(props: {
 							const action = completedActions()[completedSelection()];
 							if (!action) return true;
 							if (action.confirmation === "reason" && !actionReason().trim()) {
-								setMessage("Action reason is required");
+								notify("Action reason is required", "warning");
 								return true;
 							}
 							setCompletedPicker(false);
 							props.keymap.setData("modal.active", "none");
 							setBusy(true);
-							setMessage(`Running ${action.label}…`);
 							void runWorkflow(
 								action.command,
 								props.repo,
@@ -1525,10 +1579,17 @@ export function App(props: {
 										)
 									: undefined,
 							)
-								.then(setMessage)
-								.catch((error) =>
-									setMessage(
-										error instanceof Error ? error.message : String(error),
+								.then(() =>
+									traceTui("tui.dashboard.action", {
+										surface: "dashboard",
+										action: action.command,
+									}),
+								)
+								.catch(() =>
+									traceTui(
+										"tui.dashboard.action",
+										{ surface: "dashboard", action: action.command },
+										"error",
 									),
 								)
 								.finally(() => {
@@ -1715,7 +1776,7 @@ export function App(props: {
 									{ filePath: file.newPath, line, body, ...rangeComment },
 								]);
 							} else if (file)
-								setMessage("Could not map selected line to file line.");
+								notify("Could not map selected line to file line", "warning");
 							setReviewVisualMode(false);
 							setReviewCommentMode(false);
 							setReviewCommentText("");
@@ -2107,12 +2168,6 @@ export function App(props: {
 							gap: 1,
 						}}
 					>
-						<Show when={observing()}>
-							<text fg={uiColors.textMuted}>Refreshing observations…</text>
-						</Show>
-						<Show when={message()}>
-							<text fg={uiColors.warning}>{message()}</text>
-						</Show>
 						<Show when={data().state.health.diagnostic}>
 							<text fg={uiColors.error}>{data().state.health.diagnostic}</text>
 						</Show>

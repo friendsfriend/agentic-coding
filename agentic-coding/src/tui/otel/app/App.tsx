@@ -26,6 +26,7 @@ import {
 	discoverProjectsAsync,
 	listWorkflowsAsync,
 } from "../../dash/observations";
+import { isKeyTraceSuppressed, traceTui } from "../../dash/tracing";
 import type { WorkflowOverview } from "../../dash/types";
 import { Header } from "../../dash/ui/Header";
 import { watchDirectories } from "../../dash/watchRefresh";
@@ -57,7 +58,7 @@ import { SpanDetailView } from "../views/SpanDetailView";
 import { TopologyView } from "../views/TopologyView";
 import { TraceListView } from "../views/TraceListView";
 import { TraceTreeView } from "../views/TraceTreeView";
-import { WikiView } from "../views/WikiView";
+import { WikiView, wikiCommentEntryActive } from "../views/WikiView";
 import { createNavigation } from "./navigation";
 import { notify } from "./notifications";
 import {
@@ -121,7 +122,6 @@ export function App(props: {
 		Array<{ name: string; path: string; openspec: boolean }>
 	>([]);
 	const [homeError, setHomeError] = createSignal<string>();
-	const [homeRefreshing, setHomeRefreshing] = createSignal(false);
 	let homeLoadRunning = false;
 	let homeLoadQueued = false;
 	let homeDisposed = false;
@@ -133,7 +133,6 @@ export function App(props: {
 			return;
 		}
 		homeLoadRunning = true;
-		setHomeRefreshing(true);
 		homeController?.abort();
 		homeController = new AbortController();
 		void Promise.all([
@@ -146,15 +145,23 @@ export function App(props: {
 				setHomeProjects(projects);
 				setHomeError(undefined);
 				setHomeLoading(false);
+				traceTui("tui.overview.refresh", {
+					surface: "overview",
+					action: "refresh",
+				});
 			})
 			.catch((error) => {
 				if (!homeDisposed) {
 					setHomeError(error instanceof Error ? error.message : String(error));
 					setHomeLoading(false);
+					traceTui(
+						"tui.overview.refresh",
+						{ surface: "overview", action: "refresh" },
+						"error",
+					);
 				}
 			})
 			.finally(() => {
-				setHomeRefreshing(false);
 				homeLoadRunning = false;
 				if (homeLoadQueued && !homeDisposed) {
 					homeLoadQueued = false;
@@ -379,25 +386,33 @@ export function App(props: {
 	const handleKey = (event: KeyEvent) => {
 		const key = event.name.toLowerCase();
 		const ename = event.name;
-		const trace = (msg: string) => {
-			const target = process.env.AGENTIC_CODING_TRACE;
-			if (target) {
-				try {
-					require("node:fs").appendFileSync(
-						target,
-						`${Date.now()} otel ${msg}\n`,
-					);
-				} catch {
-					/* noop */
-				}
-			}
-		};
 		const traceDashModal = props.dashboard
 			? props.dashboard.keymap.getData?.("modal.active")
 			: "none";
-		trace(
-			`key=${key} ctrl=${!!event.ctrl} tab=${activeTab()} nav=${nav.modal()} dashModal=${traceDashModal}`,
-		);
+		// Keystrokes can be character entry (the embedded dashboard's
+		// passphrase/askpass prompt, or this pane's own search/filter fields);
+		// per-character input must never reach a span, so suppress the
+		// diagnostic in exactly those contexts.
+		if (
+			!isKeyTraceSuppressed({
+				anyModalOpen:
+					props.dashboard !== undefined &&
+					traceDashModal !== undefined &&
+					traceDashModal !== "none",
+				searchEntry: searchMode(),
+				filterEntry: nav.modal() === "theme" && themeFiltering(),
+				wikiCommentEntry: wikiCommentEntryActive(),
+			})
+		) {
+			traceTui("tui.observability.key", {
+				surface: "observability",
+				action: "key",
+				key: `${event.ctrl ? "ctrl+" : ""}${key}`,
+				view: activeTab(),
+				phase: nav.modal() ?? "none",
+				modal: traceDashModal,
+			});
+		}
 		// Lifecycle overlay (startup/shutdown modal) consumes keys; 'q' still works
 		// via the home keymap layer, which routes it to requestShutdown.
 		if (phase() === "starting" || phase() === "stopping") return;
@@ -992,7 +1007,6 @@ export function App(props: {
 								loading={homeLoading()}
 								projects={homeProjects()}
 								error={homeError()}
-								refreshing={homeRefreshing()}
 								refresh={loadHome}
 							/>
 						) : (

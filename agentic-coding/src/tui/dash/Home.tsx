@@ -23,6 +23,7 @@ import {
 import { isStale } from "./projections";
 import { invokeGlobalSelectionMouseUpHandler } from "./selectionCopy";
 import { applyTheme, loadThemeName, saveThemeName } from "./theme-settings";
+import { traceTui } from "./tracing";
 import type { WorkflowOverview } from "./types";
 import { uiColors } from "./ui/colors";
 import { ErrorDialog } from "./ui/ErrorDialog";
@@ -43,7 +44,6 @@ export function Home(props: {
 	loading: boolean;
 	projects: Array<{ name: string; path: string; openspec: boolean }>;
 	error?: string;
-	refreshing?: boolean;
 	refresh: () => void;
 }) {
 	const dimensions = useTerminalDimensions();
@@ -65,7 +65,6 @@ export function Home(props: {
 	const [modelConfig, setModelConfig] = createSignal(false);
 	const [modelConfigHandler, setModelConfigHandler] =
 		createSignal<(event: KeyEvent) => boolean>();
-	const [_message, setMessage] = createSignal("");
 	const [error, setError] = createSignal<{ title: string; message: string }>();
 	const [help, setHelp] = createSignal(false);
 	const [helpOffset, setHelpOffset] = createSignal(0);
@@ -201,22 +200,15 @@ export function Home(props: {
 		// is loaded/refreshed by the shell in the background.
 	});
 	const handleKey = (key: KeyEvent) => {
-		const trace = (msg: string) => {
-			const target = process.env.AGENTIC_CODING_TRACE;
-			if (target) {
-				try {
-					require("node:fs").appendFileSync(
-						target,
-						`${Date.now()} home ${msg}\n`,
-					);
-				} catch {
-					/* noop */
-				}
-			}
-		};
-		trace(
-			`key=${key.name} modal.active=${props.keymap.getData?.("modal.active")}`,
-		);
+		traceTui("tui.overview.key", {
+			surface: "overview",
+			action: "key",
+			key: key.name,
+			modal:
+				props.keymap.getData?.("modal.active") === undefined
+					? "none"
+					: String(props.keymap.getData?.("modal.active")),
+		});
 		const name = key.name.toLowerCase();
 		// Lifecycle overlay (startup/shutdown modal) consumes keys; 'q' stays live
 		// so startup can be cancelled (requestShutdown is idempotent).
@@ -601,9 +593,6 @@ export function Home(props: {
 			onMouseUp={() => invokeGlobalSelectionMouseUpHandler()}
 		>
 			<Panel title="Workspaces" active style={{ flexGrow: 1, minHeight: 0 }}>
-				<Show when={props.refreshing}>
-					<text fg={uiColors.textMuted}>Refreshing observations…</text>
-				</Show>
 				<Show when={props.error}>
 					<text fg={uiColors.error}>Observation failed: {props.error}</text>
 				</Show>
@@ -693,14 +682,15 @@ export function Home(props: {
 							showHerdrUnavailable();
 							return;
 						}
-						setMessage("Starting workflow…");
 						try {
-							setMessage(
-								await startWorkflow({
-									...input,
-									workflowType: input.workflowType ?? "openspec-full",
-								}),
-							);
+							await startWorkflow({
+								...input,
+								workflowType: input.workflowType ?? "openspec-full",
+							});
+							traceTui("tui.overview.start", {
+								surface: "overview",
+								action: "start",
+							});
 							setModal(false);
 							props.keymap.setData("modal.active", "none");
 							setModalHandler(undefined);
@@ -708,6 +698,11 @@ export function Home(props: {
 						} catch (error) {
 							const message =
 								error instanceof Error ? error.message : String(error);
+							traceTui(
+								"tui.overview.start",
+								{ surface: "overview", action: "start" },
+								"error",
+							);
 							showError(
 								"Workflow execution failed",
 								/permission denied \(publickey\)/i.test(message)

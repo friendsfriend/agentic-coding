@@ -40,7 +40,7 @@ function overview(): WorkflowOverview {
 	};
 }
 
-function TestHome(props: { items: WorkflowOverview[] }) {
+function TestHome(props: { items: WorkflowOverview[]; error?: string }) {
 	const renderer = useRenderer();
 	const keymap = createDefaultOpenTuiKeymap(renderer);
 	const dispose = keymap.registerLayerFields({
@@ -59,6 +59,7 @@ function TestHome(props: { items: WorkflowOverview[] }) {
 			items={props.items}
 			loading={false}
 			projects={[]}
+			error={props.error}
 			refresh={() => {}}
 		/>
 	);
@@ -99,5 +100,27 @@ test("G does not open changed files from the workspace overview", async () => {
 	t.mockInput.pressKey("g", { shift: true });
 	await t.flush();
 	expect(t.captureCharFrame()).not.toContain("Changed files ·");
+	t.renderer.destroy();
+});
+
+test("overview renders no transient refresh-status row", async () => {
+	const t = await testRender(() => <TestHome items={[overview()]} />, {
+		width: 120,
+		height: 40,
+	});
+	await t.flush();
+	const frame = t.captureCharFrame();
+	expect(frame).not.toContain("Refreshing observations…");
+	expect(frame).toContain("demo-change");
+	t.renderer.destroy();
+});
+
+test("overview observation failure stays visible as durable error text", async () => {
+	const t = await testRender(() => <TestHome items={[]} error="boom" />, {
+		width: 120,
+		height: 40,
+	});
+	await t.flush();
+	expect(t.captureCharFrame()).toContain("Observation failed: boom");
 	t.renderer.destroy();
 });
