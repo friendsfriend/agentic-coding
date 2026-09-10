@@ -52,6 +52,7 @@ import {
 	costMessages,
 	costSummary,
 	countVerifierFindings,
+	latestRunsByRole,
 } from "./projections";
 import type {
 	DashboardData,
@@ -592,17 +593,6 @@ function telemetryEvents(path: string): Array<Record<string, unknown>> {
 				return [];
 			}
 		});
-}
-function agentStatuses() {
-	try {
-		const agents = herdr.call("agent", "list").agents as Array<{
-			pane_id: string;
-			agent_status: string;
-		}>;
-		return new Map(agents.map((agent) => [agent.pane_id, agent.agent_status]));
-	} catch {
-		return new Map<string, string>();
-	}
 }
 
 function verifierFinding(value: unknown): VerifierFinding | undefined {
@@ -1195,7 +1185,7 @@ export function loadDashboard(repo: string, workflowId: string): DashboardData {
 		"changes",
 		state.changeId,
 	);
-	const statuses = agentStatuses();
+	const latestRuns = latestRunsByRole(state.runs);
 
 	const telemetry = telemetryEvents(join(workflowRoot, "telemetry.jsonl"));
 	const verifierRuns = state.runs.filter(
@@ -1278,27 +1268,29 @@ export function loadDashboard(repo: string, workflowId: string): DashboardData {
 		proposal: summary(join(changeRoot, "proposal.md")),
 		review: reviewHistory.at(-1) ?? "Not run",
 		reviewHistory,
+		// Agent status has one source: the persisted run status that also drives
+		// the Herdr tab-status glyphs (workflow/tab-status.ts, workflow/tab-sync.ts).
+		// The pane map keys the rows (App.tsx focuses `state.panes[role]`), and
+		// `latestRuns` is the same per-role projection `viewToDashboardState` used
+		// to build that map, so the list and the focus target can never disagree.
 		agents: Object.entries(state.panes)
 			.filter(([role]) => !["git", "dashboard"].includes(role))
-			.map(([role, pane]) => {
-				const run = [...state.runs]
-					.reverse()
-					.find((item) => item.role === role);
-				return {
-					role,
-					status:
-						statuses.get(pane) ??
-						(role === "planner" && state.stepId !== "core.plan"
-							? "closed"
-							: "not started"),
-					runtime: run?.runtime,
-					model: run?.model,
-					cost: costByRole.get(role)?.cost,
-					metrics: metricsByRole.get(role),
-					findingCounts: role.endsWith("verifier")
-						? verifierFindingCounts(state, role)
-						: undefined,
-				};
+			.flatMap(([role]) => {
+				const run = latestRuns.get(role);
+				if (!run) return [];
+				return [
+					{
+						role,
+						status: run.status,
+						runtime: run.runtime,
+						model: run.model,
+						cost: costByRole.get(role)?.cost,
+						metrics: metricsByRole.get(role),
+						findingCounts: role.endsWith("verifier")
+							? verifierFindingCounts(state, role)
+							: undefined,
+					},
+				];
 			}),
 		updated: new Date().toLocaleTimeString(),
 		health: {

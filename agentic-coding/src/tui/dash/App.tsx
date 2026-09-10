@@ -639,9 +639,12 @@ export function App(props: {
 		const action = actions[0];
 		if (action)
 			return { prompt: `Press Enter: ${action.label}`, action: action.id };
+		const workerStatus = data().agents.find(
+			(agent) => agent.role === "worker",
+		)?.status;
 		if (
 			data().state.phase === "fix" &&
-			data().agents.find((agent) => agent.role === "worker")?.status !== "idle"
+			(workerStatus === "pending" || workerStatus === "working")
 		)
 			return undefined;
 		return approvalFor(data().state.phase);
@@ -2435,11 +2438,13 @@ export function App(props: {
 										const highlight = () =>
 											agent.status === "working"
 												? "highlight2"
-												: agent.status === "done" || agent.status === "idle"
+												: agent.status === "completed"
 													? "positive"
 													: agent.status === "blocked"
 														? "warning"
-														: "secondary";
+														: agent.status === "failed"
+															? "negative"
+															: "secondary";
 										return (
 											<box
 												width="100%"

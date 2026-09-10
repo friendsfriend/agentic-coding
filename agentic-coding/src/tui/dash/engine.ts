@@ -29,6 +29,7 @@ import {
 	validateWikiReviewComments,
 	type WikiReviewComment,
 } from "../../workflow/wiki.ts";
+import { latestRunsByRole } from "./projections";
 import { credentialPromptBridge } from "./ui/CredentialsModal.tsx";
 
 class RepositoryExecutionCoordinator {
@@ -477,12 +478,7 @@ export function viewToDashboardState(view: WorkflowView) {
 	const currentVerifierRuns = verifierRuns.filter(
 		(run) => run.attempt === verificationRound,
 	);
-	const latestByRole = new Map<string, (typeof view.runs)[number]>();
-	for (const run of view.runs) {
-		const existing = latestByRole.get(run.role);
-		if (!existing || existing.attempt <= run.attempt)
-			latestByRole.set(run.role, run);
-	}
+	const latestByRole = latestRunsByRole(view.runs);
 	const panes = Object.fromEntries(
 		[...latestByRole.values()].flatMap((run) =>
 			run.paneId ? [[run.role, run.paneId]] : [],
