@@ -12,7 +12,8 @@ import {
 } from "solid-js";
 import { colors, uiColors } from "./colors";
 import { FilterStatusBar } from "./FilterStatusBar";
-import { type HelpEntry, HelpText } from "./HelpText";
+import { HelpText } from "./HelpText";
+import type { Keybind } from "./keybinds";
 import { SearchHeader } from "./SearchHeader";
 import { invokeGlobalSelectionMouseUpHandler } from "./selectionCopy";
 
@@ -132,9 +133,9 @@ export interface GenericModalProps {
 	/** Main content to render in the middle section */
 	children: JSX.Element;
 	/** Footer help entries (dashboard-style) */
-	help?: HelpEntry[];
+	help?: readonly Keybind[];
 	/** Footer help text: entries, or a string that wraps to the dialog width */
-	helpText?: string | HelpEntry[];
+	helpText?: string | readonly Keybind[];
 	/** Optional label above the content column */
 	fieldLabel?: string;
 	/** Optional summary table entries rendered beside the content */
@@ -239,7 +240,7 @@ export function GenericModal(props: GenericModalProps) {
 	const progressCharacter = (index: number) =>
 		index < progressEnd() ? "━" : index === progressEnd() ? "▸" : "─";
 
-	const helpEntries = (): HelpEntry[] | undefined =>
+	const helpEntries = (): readonly Keybind[] | undefined =>
 		props.help ??
 		(typeof props.helpText === "string" ? undefined : props.helpText);
 	const helpLines = () =>
@@ -444,3 +445,4 @@ export function GenericModal(props: GenericModalProps) {
 }
 
 export type { HelpEntry } from "./HelpText";
+export type { Keybind } from "./keybinds";

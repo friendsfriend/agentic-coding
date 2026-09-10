@@ -6,3 +6,8 @@ export {
 	HelpText,
 	type HelpTextProps,
 } from "../../../shared/HelpText";
+export type {
+	Keybind,
+	KeybindCatalog,
+	KeybindSection,
+} from "../../../shared/keybinds";

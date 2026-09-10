@@ -21,6 +21,7 @@ import type { DeveloperDialogueRecord } from "../../workflow/contracts";
 import { formatDuration } from "../../workflow/format";
 import { wikiWorkflowDataRoot } from "../../workflow/runtime";
 import { copyToClipboard } from "../clipboard";
+import { setActiveKeybindCatalog } from "../shared/keybinds";
 import { testDashboard } from "./demo";
 import { ChangedFilesView } from "./devenv-ui/components/ChangedFilesView";
 import { DiffViewModal } from "./devenv-ui/components/DiffViewModal";
@@ -37,6 +38,7 @@ import {
 	herdrEventMatchesWorkspace,
 	subscribeHerdrEvents,
 } from "./herdr-events";
+import { dashboardDetailKeybindCatalog, panelContext } from "./keybinds";
 import { notify } from "./notifications";
 import {
 	answerQuestion,
@@ -81,7 +83,7 @@ import { uiColors } from "./ui/colors";
 import { DeveloperQuestionModal } from "./ui/DeveloperQuestionModal";
 import { EventsModal } from "./ui/EventsModal";
 import { type FindingEvent, FindingsModal } from "./ui/FindingsModal";
-import { HelpModal, type HelpSection } from "./ui/HelpModal";
+import { HelpModal } from "./ui/HelpModal";
 import { HighlightedText } from "./ui/Highlight";
 import { Layout } from "./ui/Layout";
 import { ListViewModal } from "./ui/ListViewModal";
@@ -903,34 +905,21 @@ export function App(props: {
 	const filteredThemes = () =>
 		themeNames.filter((name) => name.includes(themeQuery().toLowerCase()));
 	const [helpOffset, setHelpOffset] = createSignal(0);
-	const helpSections: HelpSection[] = [
-		{
-			title: "Navigation",
-			items: [
-				{ key: "Shift+J/K/H/L", description: "Move between panels" },
-				{ key: "j/k or ↑/↓", description: "Scroll focused panel" },
-				{ key: "Esc", description: "Return to dashboard workspace" },
-			],
-		},
-		{
-			title: "Actions",
-			items: [
-				{ key: "Enter", description: "Approve workflow gate" },
-				{ key: "Enter", description: "Focus selected agent (Agents panel)" },
-				{ key: "Shift+O", description: "Show safe repair guidance" },
-				{ key: "v", description: "View selected verification agent's result" },
-				{ key: "c", description: "View agent cost breakdown" },
-				{ key: "r", description: "Refresh dashboard" },
-				{ key: "q", description: "Quit" },
-				{ key: "?", description: "Open help" },
-			],
-		},
-	];
+	const keybindCatalog = createMemo(() =>
+		dashboardDetailKeybindCatalog({
+			artifactsVisible: artifacts().length > 0,
+		}),
+	);
+	// The shell footer and `?` help read the active surface catalog from the
+	// shared store; the detail view publishes the panel-scoped catalog here.
+	createEffect(() =>
+		setActiveKeybindCatalog(keybindCatalog(), panelContext(activePanel())),
+	);
 	const helpMaxOffset = () =>
 		Math.max(
 			0,
-			helpSections.reduce(
-				(count, section) => count + section.items.length + 1,
+			keybindCatalog().reduce(
+				(count, section) => count + section.keybinds.length + 1,
 				0,
 			) - Math.max(5, Math.floor(dimensions().height * 0.78) - 5),
 		);
@@ -2611,7 +2600,6 @@ export function App(props: {
 			<Show when={help()}>
 				<HelpModal
 					title="Dashboard keybindings"
-					sections={helpSections}
 					offset={helpOffset()}
 					lines={Math.max(5, Math.floor(dimensions().height * 0.78) - 5)}
 				/>

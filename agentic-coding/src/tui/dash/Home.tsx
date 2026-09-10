@@ -12,7 +12,9 @@ import {
 	Show,
 } from "solid-js";
 import { phase } from "../lifecycle";
+import { setActiveKeybindCatalog } from "../shared/keybinds";
 import { listPresetNames } from "./engine";
+import { dashboardOverviewKeybindCatalog } from "./keybinds";
 import { notify } from "./notifications";
 import {
 	focusWorkflow,
@@ -28,7 +30,7 @@ import type { WorkflowOverview } from "./types";
 import { uiColors } from "./ui/colors";
 import { ErrorDialog } from "./ui/ErrorDialog";
 import { FilterModal } from "./ui/FilterModal";
-import { HelpModal, type HelpSection } from "./ui/HelpModal";
+import { HelpModal } from "./ui/HelpModal";
 import { ModelConfigModal } from "./ui/ModelConfigModal";
 import { NewWorkflowModal } from "./ui/NewWorkflowModal";
 import { NotificationOverlay } from "./ui/Notification";
@@ -153,30 +155,15 @@ export function Home(props: {
 			: item.state.definition?.id === "wiki"
 				? `documentation: ${item.agents.find((agent) => agent.role === "wiki")?.status ?? "not started"}`
 				: `${item.tasks[0]}/${item.tasks[1]} tasks · planner: ${item.agents.find((agent) => agent.role === "planner")?.status ?? "not started"}`;
-	const helpSections: HelpSection[] = [
-		{
-			title: "Navigation",
-			items: [{ key: "j/k or ↑/↓", description: "Select workspace" }],
-		},
-		{
-			title: "Actions",
-			items: [
-				{ key: "Enter", description: "Switch active workspace" },
-				{ key: "n", description: "New workflow" },
-				{ key: "m", description: "Agent configuration (profiles / presets)" },
-				{ key: "f", description: "Open filter modal" },
-				{ key: "o", description: "Open sort modal" },
-				{ key: "r", description: "Refresh" },
-				{ key: "q", description: "Quit" },
-				{ key: "?", description: "Open help" },
-			],
-		},
-	];
+	const keybindCatalog = dashboardOverviewKeybindCatalog();
+	// The shell footer and `?` help read the active surface catalog from the
+	// shared store; the workspace overview publishes its catalog here.
+	createEffect(() => setActiveKeybindCatalog(keybindCatalog));
 	const helpMaxOffset = () =>
 		Math.max(
 			0,
-			helpSections.reduce(
-				(count, section) => count + section.items.length + 1,
+			keybindCatalog.reduce(
+				(count, section) => count + section.keybinds.length + 1,
 				0,
 			) - Math.max(5, Math.floor(dimensions().height * 0.78) - 5),
 		);
@@ -727,7 +714,6 @@ export function Home(props: {
 			<Show when={help()}>
 				<HelpModal
 					title="Workspace overview keybindings"
-					sections={helpSections}
 					offset={helpOffset()}
 					lines={Math.max(5, Math.floor(dimensions().height * 0.78) - 5)}
 				/>

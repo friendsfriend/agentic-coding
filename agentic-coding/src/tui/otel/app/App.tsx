@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Renderable } from "@opentui/core";
 import { type KeyEvent, TextAttributes } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
-import { useRenderer } from "@opentui/solid";
+import { useRenderer, useTerminalDimensions } from "@opentui/solid";
 import {
 	createEffect,
 	createMemo,
@@ -31,6 +31,12 @@ import type { WorkflowOverview } from "../../dash/types";
 import { Header } from "../../dash/ui/Header";
 import { watchDirectories } from "../../dash/watchRefresh";
 import { phase } from "../../lifecycle";
+import { HelpModal } from "../../shared/HelpModal";
+import {
+	activeKeybindCatalog,
+	type KeybindSection,
+	setActiveKeybindCatalog,
+} from "../../shared/keybinds";
 import { Badge } from "../components/Badge";
 import { HighlightedText } from "../components/Highlight";
 import { NotificationOverlay } from "../components/Notification";
@@ -58,7 +64,12 @@ import { SpanDetailView } from "../views/SpanDetailView";
 import { TopologyView } from "../views/TopologyView";
 import { TraceListView } from "../views/TraceListView";
 import { TraceTreeView } from "../views/TraceTreeView";
-import { WikiView, wikiCommentEntryActive } from "../views/WikiView";
+import {
+	WikiView,
+	wikiCommentEntryActive,
+	wikiNoteActive,
+} from "../views/WikiView";
+import { observabilityKeybindCatalog } from "./keybinds";
 import { createNavigation } from "./navigation";
 import { notify } from "./notifications";
 import {
@@ -100,7 +111,19 @@ export function App(props: {
 	dashboard?: DashboardTab;
 }) {
 	const renderer = useRenderer();
+	const dimensions = useTerminalDimensions();
 	const nav = createNavigation();
+	const [helpOffset, setHelpOffset] = createSignal(0);
+	const helpLines = () =>
+		Math.max(5, Math.floor(dimensions().height * 0.78) - 5);
+	const helpMaxOffset = () =>
+		Math.max(
+			0,
+			activeKeybindCatalog().reduce(
+				(count, section) => count + section.keybinds.length + 1,
+				0,
+			) - helpLines(),
+		);
 	const [activeTab, setActiveTab] = createSignal<Tab>(
 		props.dashboard ? "workflow" : "traces",
 	);
@@ -469,6 +492,19 @@ export function App(props: {
 			return;
 		}
 
+		if (nav.modal() === "help") {
+			if (key === "escape") {
+				nav.popModal();
+				// Let the wiki view resume handling keys once the shell help closes.
+				if (activeTab() === "wiki")
+					props.dashboard?.keymap.setData("modal.active", "none");
+			} else if (key === "j" || key === "down")
+				setHelpOffset((value) => Math.min(helpMaxOffset(), value + 1));
+			else if (key === "k" || key === "up")
+				setHelpOffset((value) => Math.max(0, value - 1));
+			return;
+		}
+
 		// Tab switching (global, except when in a modal)
 		const ids = tabIds();
 		const isTab = ename === "Tab" || key === "tab" || key === "\t";
@@ -587,6 +623,14 @@ export function App(props: {
 					refresh();
 				}
 			}
+			return;
+		}
+
+		// Help (shell tabs): the `?` modal reads the active catalog. Ignore it
+		// while one of this tab's own modals (filter/sort/theme) owns the keys.
+		if (key === "?" && nav.modal() === "none") {
+			setHelpOffset(0);
+			nav.pushModal("help");
 			return;
 		}
 
@@ -728,12 +772,7 @@ export function App(props: {
 			setSortDraft(traceStore.sortCriteria_);
 			setSortIndex(0);
 			nav.pushModal("sort");
-		} else if (key === "?")
-			notify(
-				"j/k select · Enter trace · w workspaces · 1-4 tabs · q quit",
-				"info",
-			);
-		else if (key === "w") {
+		} else if (key === "w") {
 			switchWorkspace();
 			notify("All workspaces", "info");
 		} else if (nav.view() === "selection") {
@@ -864,72 +903,24 @@ export function App(props: {
 
 	const tabIds = () => tabs().map((tab) => tab.id);
 
-	const tabStatusBarKeybinds = () => {
-		switch (activeTab()) {
-			case "workflow":
-				return props.dashboard?.mode === "home"
-					? [
-							{ key: "Enter", action: "switch workspace" },
-							{ key: "n", action: "new workflow" },
-							{ key: "m", action: "agent config" },
-							{ key: "f", action: "filter" },
-							{ key: "o", action: "sort" },
-							{ key: "r", action: "refresh" },
-							{ key: "?", action: "help" },
-							{ key: "q", action: "quit" },
-						]
-					: [
-							{ key: "J/K", action: "switch panel" },
-							{ key: "j/k", action: "scroll focused panel" },
-							{ key: "r", action: "refresh" },
-							{ key: "q", action: "quit" },
-						];
-			case "wiki":
-				return [
-					{ key: "j/k", action: "select" },
-					{ key: "Enter", action: "open/expand" },
-					{ key: "c", action: "comment" },
-					{ key: "r", action: "refresh" },
-					{ key: "f", action: "finish review" },
-					{ key: `1-${tabIds().length}`, action: "tabs" },
-					{ key: "q", action: "quit" },
-				];
-			case "metrics":
-				return [
-					{ key: "j/k", action: "nav" },
-					{ key: "Enter", action: "detail" },
-					{ key: "Esc", action: "back" },
-					{ key: `1-${tabIds().length}`, action: "tabs" },
-					{ key: "q", action: "quit" },
-				];
-			case "logs":
-				return [
-					{ key: "j/k", action: "nav" },
-					{ key: "Enter", action: "detail" },
-					{ key: "/", action: "search" },
-					{ key: "Esc", action: "back" },
-					{ key: `1-${tabIds().length}`, action: "tabs" },
-					{ key: "q", action: "quit" },
-				];
-			case "topology":
-				return [
-					{ key: "j/k", action: "select" },
-					{ key: "Enter", action: "detail" },
-					{ key: "Esc", action: "back" },
-					{ key: `1-${tabIds().length}`, action: "tabs" },
-					{ key: "q", action: "quit" },
-				];
-			default:
-				return [
-					{ key: "j/k", action: "select" },
-					{ key: "Enter", action: "open trace" },
-					{ key: "/", action: "search" },
-					{ key: "Shift+F", action: "filter" },
-					{ key: `1-${tabIds().length}`, action: "tabs" },
-					{ key: "q", action: "quit" },
-				];
-		}
-	};
+	const tabKeybindCatalog = (): KeybindSection[] =>
+		observabilityKeybindCatalog({
+			tab: activeTab(),
+			view: nav.view(),
+			tabCount: tabIds().length,
+		});
+
+	// The shell footer and `?` help read the active surface catalog from the
+	// shared store. The dashboard (workflow tab) publishes its own catalog, so
+	// the shell skips it there instead of fighting for the store.
+	createEffect(() => {
+		if (props.dashboard && activeTab() === "workflow") return;
+		setActiveKeybindCatalog(
+			tabKeybindCatalog(),
+			// The wiki's note-only actions are footer-visible while a note is open.
+			activeTab() === "wiki" && wikiNoteActive() ? "note" : undefined,
+		);
+	});
 
 	return (
 		<box
@@ -1029,6 +1020,13 @@ export function App(props: {
 							submitting={wikiSubmitting()}
 							onSubmittingChange={setWikiSubmitting}
 							onClearComments={() => setWikiComments([])}
+							onHelp={() => {
+								setHelpOffset(0);
+								nav.pushModal("help");
+								// Park WikiView's keymap layer while the shell help is open so
+								// j/k/Esc reach the modal; restored when it closes.
+								props.dashboard?.keymap.setData("modal.active", "help");
+							}}
 						/>
 					)}
 					{activeTab() === "traces" && (
@@ -1145,30 +1143,7 @@ export function App(props: {
 
 				{/* Status bar — one global footer for all tabs; keybinds are tab-dependent. */}
 				<box style={{ height: 1 }} />
-				<StatusBar
-					keybinds={
-						activeTab() === "traces" && nav.view() === "selection"
-							? [
-									{ key: "j/k", action: "select" },
-									{ key: "Enter", action: "open trace" },
-									{ key: "/", action: "search" },
-									{ key: "Shift+F", action: "filter" },
-									{ key: "Shift+O", action: "sort" },
-									{ key: `1-${tabIds().length}`, action: "tabs" },
-									{ key: "q", action: "quit" },
-								]
-							: activeTab() === "traces" && nav.view() === "detail"
-								? [
-										{ key: "j/k", action: "span" },
-										{ key: "h/l", action: "collapse" },
-										{ key: "Enter", action: "details" },
-										{ key: "Esc", action: "back" },
-									]
-								: activeTab() === "traces" && nav.view() === "span"
-									? [{ key: "Esc", action: "back" }]
-									: tabStatusBarKeybinds()
-					}
-				/>
+				<StatusBar inset={props.dashboard ? 0 : 2} />
 			</box>
 			<NotificationOverlay />
 			{nav.modal() === "filter" && (
@@ -1190,6 +1165,13 @@ export function App(props: {
 					themes={filteredThemes}
 					query={themeQuery}
 					filtering={themeFiltering}
+				/>
+			)}
+			{nav.modal() === "help" && (
+				<HelpModal
+					title="Keybindings"
+					offset={helpOffset()}
+					lines={helpLines()}
 				/>
 			)}
 		</box>
