@@ -18,5 +18,6 @@ Big ones:
 
 Small ones: 
 * Automatic wiki commit + push if in git repo.
+* Wiki should introduce source mechanism -> Each information should also give a source (either code file or url to source). This allows to recheck the information. Should be done when reading the wiki.
 * Give all agents their own tab. Multitab spawning always has issues for some reason
 
