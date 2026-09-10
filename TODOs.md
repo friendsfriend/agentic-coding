@@ -8,5 +8,5 @@ Not for agents. This is only for humans.
 * Automatic wiki commit + push if in git repo.
 * openspec panel shows all instead of only relevant changes / specs
 * Fix runtime calculation for agents that take multiple turns
-* Use singular pane for verfication triage
 * Unify keybind help style
+* All openspec files are shown in the openspec panel instead of only the newly created ones

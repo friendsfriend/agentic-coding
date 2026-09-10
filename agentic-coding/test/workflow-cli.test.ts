@@ -581,6 +581,133 @@ describe("breaking workflow CLI surface", () => {
 		).toBe(false);
 	});
 
+	test("triage launches in its own tab labeled triage, not the verification group tab", async () => {
+		const snapshot = {
+			workflowId: "change",
+			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
+			definition: {
+				id: "openspec-full",
+				version: 1,
+				digest: openspecFullDigest,
+			},
+		};
+		const run = {
+			id: "triage-run",
+			workflowId: "wf",
+			stepId: "core.triage",
+			role: "triage",
+			attempt: 1,
+			status: "pending",
+		};
+		const fakeEngine = {
+			getRun: (_repo: string, id: string) => (id === run.id ? run : undefined),
+			getSnapshot: () => snapshot,
+			status: () => ({ runs: [run] }),
+		} as unknown as WorkflowEngine;
+		const calls: string[][] = [];
+		const herdr = {
+			call(...args: string[]) {
+				calls.push(args);
+				if (args[0] === "agent" && args[1] === "get")
+					throw new Error(`not found: ${args[2]}`);
+				if (args[0] === "tab" && args[1] === "create")
+					return {
+						root_pane: { pane_id: "triage-pane", tab_id: "triage-tab" },
+					};
+				return {};
+			},
+		};
+
+		expect(await paneForRunFactory(fakeEngine, "/repo", herdr)(run.id)).toEqual(
+			{
+				paneId: "triage-pane",
+				tabId: "triage-tab",
+				owned: true,
+			},
+		);
+		const created = calls.find(
+			(args) => args[0] === "tab" && args[1] === "create",
+		);
+		expect(created?.[created.indexOf("--label") + 1]).toBe("○ triage");
+	});
+
+	test("verifier round excludes triage so verifier geometry never anchors on the triage pane", async () => {
+		const snapshot = {
+			workflowId: "change",
+			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
+			definition: {
+				id: "openspec-full",
+				version: 1,
+				digest: openspecFullDigest,
+			},
+		};
+		const triage = {
+			id: "triage-run",
+			workflowId: "wf",
+			stepId: "core.triage",
+			role: "triage",
+			attempt: 1,
+			status: "working",
+		};
+		const verifier = {
+			id: "qv",
+			workflowId: "wf",
+			stepId: "core.verification",
+			role: "quality-verifier",
+			attempt: 1,
+			status: "pending",
+		};
+		const runs = [triage, verifier];
+		const fakeEngine = {
+			getRun: (_repo: string, id: string) =>
+				runs.find((item) => item.id === id),
+			getSnapshot: () => snapshot,
+			status: () => ({ runs }),
+		} as unknown as WorkflowEngine;
+		const triageCanonical = effectRunnerTest.canonicalAgentName(
+			"change",
+			"openspec-full",
+			{ stepId: triage.stepId, role: triage.role, id: triage.id },
+		);
+		const calls: string[][] = [];
+		const herdr = {
+			call(...args: string[]) {
+				calls.push(args);
+				if (args[0] === "agent" && args[1] === "get") {
+					if (args[2] === triageCanonical)
+						return {
+							agent: { pane_id: "triage-live", agent_status: "working" },
+						};
+					throw new Error(`not found: ${args[2]}`);
+				}
+				if (args[0] === "pane" && args[1] === "layout")
+					return {
+						layout: { panes: [{ pane_id: "triage-live", rect: { y: 0 } }] },
+					};
+				if (args[0] === "pane" && args[1] === "split")
+					return { pane: { pane_id: "split-pane", tab_id: "tab-split" } };
+				if (args[0] === "tab" && args[1] === "create")
+					return {
+						root_pane: { pane_id: "verif-pane", tab_id: "verif-tab" },
+					};
+				return {};
+			},
+		};
+
+		// The triage agent is live and, before pane groups, served as the split
+		// anchor for every verifier. A verifier now owns a separate tab instead.
+		expect(
+			await paneForRunFactory(fakeEngine, "/repo", herdr)(verifier.id),
+		).toEqual({ paneId: "verif-pane", tabId: "verif-tab", owned: true });
+		expect(
+			calls.some((args) => args[0] === "pane" && args[1] === "split"),
+		).toBe(false);
+		const created = calls.find(
+			(args) => args[0] === "tab" && args[1] === "create",
+		);
+		expect(created?.[created.indexOf("--label") + 1]).toBe("○ verification");
+	});
+
 	test("verification layout anchors on siblings confirmed live by canonical name, not stored pane ids", async () => {
 		const snapshot = {
 			workflowId: "change",

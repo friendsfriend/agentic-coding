@@ -4,8 +4,17 @@
 import type { HerdrPort } from "../adapters.ts";
 import { isPaneLiveAsync, resolveLiveAgentAsync } from "../effect-runner.ts";
 import type { WorkflowEngine } from "../runtime.ts";
+import type { StepBehavior } from "../steps/types.ts";
 import { agentTabLabel } from "../tab-status.ts";
 import { registry as defaultRegistry } from "./registry.ts";
+
+/** Tab/pane group a round-scoped step splits into. Runs share a tab only when
+ * their group matches; the default keeps legacy round-scoped steps grouped as
+ * `verification`. Returns undefined for ungrouped (persistent-role) steps. */
+function paneGroup(behavior: StepBehavior | undefined): string | undefined {
+	if (behavior?.roundScoped !== true) return undefined;
+	return behavior.paneGroup ?? "verification";
+}
 
 export function verificationPosition(
 	round: Array<{ id: string }>,
@@ -18,8 +27,9 @@ export function verificationPosition(
 /**
  * Allocates the pane a run launches into. Reuse-before-spawn is authoritative:
  * persistent roles adopt the live agent's resolved pane and a new tab is
- * created only when no live agent resolves; grouped triage/verification rounds
- * keep their split geometry but anchor on siblings confirmed live through the
+ * created only when no live agent resolves; grouped rounds keep their split
+ * geometry but only among runs in the same pane group (triage and verification
+ * each own a group), anchoring on siblings confirmed live through the
  * canonical-name resolver instead of raw stored pane ids.
  */
 export function paneForRunFactory(
@@ -40,9 +50,12 @@ export function paneForRunFactory(
 			snapshot.definition.version,
 			snapshot.definition.digest,
 		);
-		const roundScoped =
-			stepRegistry.stepForDefinition(definition, run.stepId).behavior
-				?.roundScoped === true;
+		const behavior = stepRegistry.stepForDefinition(
+			definition,
+			run.stepId,
+		).behavior;
+		const group = paneGroup(behavior);
+		const roundScoped = group !== undefined;
 		// Adopt any live agent's pane instead of spawning a duplicate; fall
 		// through to geometry or tab creation only when no agent resolves.
 		const resolved = await resolveLiveAgentAsync(
@@ -60,8 +73,9 @@ export function paneForRunFactory(
 				.runs.map((item) => workflowEngine.getRun(repo, item.id))
 				.filter(
 					(item) =>
-						stepRegistry.stepForDefinition(definition, item.stepId).behavior
-							?.roundScoped === true &&
+						paneGroup(
+							stepRegistry.stepForDefinition(definition, item.stepId).behavior,
+						) === group &&
 						item.attempt === run.attempt &&
 						!["expired", "failed"].includes(item.status),
 				); // rowid order = launch order; a createdAt/id tiebreak shuffles same-ms runs
@@ -175,10 +189,7 @@ export function paneForRunFactory(
 				}
 			}
 		}
-		const label = agentTabLabel(
-			roundScoped ? "verification" : run.role,
-			run.status,
-		);
+		const label = agentTabLabel(group ?? run.role, run.status);
 		const result = herdr.call(
 			"tab",
 			"create",

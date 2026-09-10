@@ -118,6 +118,8 @@ export const verificationBehaviors: Readonly<Record<string, StepBehavior>> = {
 			attempt: (snapshot.loopCounts["core.verification:round"] ?? 0) + 1,
 		}),
 		roundScoped: true,
+		// Triage owns its own tab; verifiers group separately (pane.ts).
+		paneGroup: "triage",
 	},
 	"core.verification": {
 		onAgentComplete: verificationCompletion,
@@ -145,5 +147,6 @@ export const verificationBehaviors: Readonly<Record<string, StepBehavior>> = {
 		},
 		carriesOutputContext: true,
 		roundScoped: true,
+		paneGroup: "verification",
 	},
 };

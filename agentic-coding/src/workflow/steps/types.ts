@@ -163,4 +163,8 @@ export interface StepBehavior {
 	/** Whether runs at this step are grouped/named per verification round
 	 * (see `effect-runner.ts`'s canonical/legacy agent naming). */
 	roundScoped?: boolean;
+	/** Tab/pane group a round-scoped step splits into. Runs at round-scoped
+	 * steps share a tab only when their groups match, so triage keeps its own
+	 * tab instead of anchoring verifier geometry. Defaults to `verification`. */
+	paneGroup?: string;
 }

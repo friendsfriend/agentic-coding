@@ -33,24 +33,30 @@ The workflow SHALL launch each new managed session and re-prompt each reused ses
 - **AND** engine SHALL NOT derive that identity from the per-run identifier
 - **AND** grouped triage/verifier roles SHALL keep the same identity for same role across rounds
 
-### Requirement: Verification roles share one tab
-The workflow SHALL group triage and all verifier roles in one tab while retaining one pane per role.
+### Requirement: Triage has its own tab and verifiers share one tab
+The workflow SHALL run triage in its own tab labeled `triage` and SHALL group all verifier roles in a separate tab labeled `verification`, retaining one pane per role and never anchoring verifier pane geometry on the triage pane.
 
-#### Scenario: First verification role creates group tab
-- **WHEN** triage is first verification role launched
-- **THEN** workflow SHALL create tab labeled `verification` and start triage in returned root pane
-- **AND** record tab ID as verification group tab
+#### Scenario: Triage creates its own tab
+- **WHEN** the triage run is launched
+- **THEN** workflow SHALL create a tab labeled `triage` and start triage in the returned root pane
+- **AND** record the tab ID as the triage tab
 
-#### Scenario: Additional verification roles split group tab
-- **GIVEN** live verification group tab exists
-- **WHEN** triage or verifier role starts
-- **THEN** workflow SHALL split a live sibling pane right and start role in returned shell pane
-- **AND** preserve sibling panes when replacing stale grouped agent
+#### Scenario: First verifier creates the verification tab
+- **WHEN** the first verifier role is launched in a round
+- **THEN** workflow SHALL create a tab labeled `verification` and start the verifier in the returned root pane
+- **AND** record the tab ID as the verification group tab
 
-#### Scenario: Closed verification tab is recreated
-- **GIVEN** recorded verification tab and panes are no longer live
-- **WHEN** next triage or verifier starts
-- **THEN** workflow SHALL create new tab instead of targeting stale tab ID
+#### Scenario: Additional verifier roles split the verification tab
+- **GIVEN** a live verification tab exists
+- **WHEN** another verifier role starts
+- **THEN** workflow SHALL split a live sibling verifier pane right and start the role in the returned shell pane
+- **AND** preserve sibling panes when replacing a stale grouped agent
+- **AND** SHALL NOT anchor verifier pane geometry on the triage pane
+
+#### Scenario: Closed triage or verification tab is recreated
+- **GIVEN** a recorded group tab and panes are no longer live
+- **WHEN** the next triage or verifier starts
+- **THEN** workflow SHALL create a new tab for that role's group instead of targeting a stale tab ID
 - **AND** SHALL reject any recorded group tab also owned by dashboard, git, worker, planner, recovery, or archive
 
 #### Scenario: Repair re-prompts without teardown
