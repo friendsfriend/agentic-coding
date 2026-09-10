@@ -10,4 +10,3 @@ Not for agents. This is only for humans.
 * Fix runtime calculation for agents that take multiple turns
 * Use singular pane for verfication triage
 * Write herdr plugin to control coloring of tabs based on agent activity
-* Tui errors dont use the notification system anymore

@@ -38,7 +38,11 @@ function artifactsFixture(count: number): DashboardData {
 }
 
 function TestDashboard(
-	props: { noUpstream?: boolean; artifacts?: number } = {},
+	props: {
+		noUpstream?: boolean;
+		artifacts?: number;
+		testData?: DashboardData;
+	} = {},
 ) {
 	const renderer = useRenderer();
 	const keymap = createDefaultOpenTuiKeymap(renderer);
@@ -85,7 +89,10 @@ function TestDashboard(
 			workflowId="demo"
 			profile="test"
 			testNoUpstream={props.noUpstream}
-			testData={props.artifacts ? artifactsFixture(props.artifacts) : undefined}
+			testData={
+				props.testData ??
+				(props.artifacts ? artifactsFixture(props.artifacts) : undefined)
+			}
 			keymap={keymap}
 		/>
 	);
@@ -423,5 +430,63 @@ test("developer review finish shows a finishing indicator before closing", async
 
 	await t.waitForFrame((frame) => !frame.includes("Finishing review"));
 	await t.waitForFrame((frame) => !frame.includes("Changed Files (1 files)"));
+	t.renderer.destroy();
+});
+
+test("transient action and refresh text never add a primary-layout row", async () => {
+	const t = await testRender(() => <TestDashboard />, {
+		width: 120,
+		height: 40,
+	});
+
+	// The plan review popup opens with no inline status rows above the panels.
+	const actionFrame = await t.waitForFrame((frame) =>
+		frame.includes("Plan review"),
+	);
+	expect(actionFrame).toContain("proposal.md");
+	expect(actionFrame).not.toContain("Running ");
+	expect(actionFrame).not.toContain("Refreshing observations…");
+	expect(actionFrame).not.toContain("Advanced dummy workflow");
+
+	// Finish the plan review (demo advances) and force an explicit refresh; the
+	// refresh indicator and outcome text must not appear as layout rows either.
+	t.mockInput.pressKey("f");
+	await t.waitForFrame((frame) => !frame.includes("Plan review"));
+	t.mockInput.pressKey("r");
+	await t.renderOnce();
+	const frame = t.captureCharFrame();
+	expect(frame).not.toContain("Refreshing observations…");
+	expect(frame).not.toContain("Refreshed");
+	expect(frame).not.toContain("Running ");
+	expect(frame).not.toContain("Advanced dummy workflow");
+	t.renderer.destroy();
+});
+
+test("durable health diagnostic stays visible without the message row", async () => {
+	const data = artifactsFixture(1);
+	const t = await testRender(
+		() => (
+			<TestDashboard
+				testData={{
+					...data,
+					state: {
+						...data.state,
+						health: {
+							...data.state.health,
+							diagnostic: "simulated durable engine diagnostic",
+						},
+					},
+				}}
+			/>
+		),
+		{ width: 120, height: 40 },
+	);
+	await t.waitForFrame((frame) =>
+		frame.includes("simulated durable engine diagnostic"),
+	);
+	const frame = t.captureCharFrame();
+	expect(frame).toContain("simulated durable engine diagnostic");
+	expect(frame).not.toContain("Refreshing observations…");
+	expect(frame).not.toContain("Advanced dummy workflow");
 	t.renderer.destroy();
 });

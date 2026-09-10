@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 // `agentic-coding` TUI entry — one process, one renderer. Modes:
 //   --home / manager   long-lived launcher: receiver on 4318 + workflow list + observability
-//   --repo P --workflow-id W  per-workflow dashboard pane: no receiver (manager owns it), file-based traces
+//   --repo P --workflow-id W  per-workflow dashboard pane: no receiver (manager owns it), best-effort OTLP traces
 //   --profile test     interactive dummy data
 //   --json             dump dashboard JSON and exit (headless/CI)
 
@@ -25,6 +25,7 @@ import {
 	applyTheme as applyDashTheme,
 	loadThemeName as loadDashThemeName,
 } from "./dash/theme-settings";
+import { traceTui } from "./dash/tracing";
 import {
 	buildSystemTheme,
 	captureTerminalColors,
@@ -283,40 +284,37 @@ export async function main(): Promise<void> {
 	globalThis.__renderer = renderer;
 
 	// Always catch async exceptions: an uncaught throw inside the input/render
-	// loops would otherwise kill key and mouse handling entirely. Log to stderr;
-	// AGENTIC_CODING_TRACE additionally captures them to a file.
-	const traceFile = process.env.AGENTIC_CODING_TRACE;
-	const append = (msg: string) => {
-		if (traceFile) {
-			try {
-				require("node:fs").appendFileSync(traceFile, `${Date.now()} ${msg}\n`);
-			} catch {
-				/* noop */
-			}
-		} else {
-			console.error(`[agentic-coding] ${msg}`);
-		}
-	};
-	process.on("uncaughtException", (error) =>
-		append(`UNCAUGHT: ${error?.stack ?? String(error)}`),
-	);
-	process.on("unhandledRejection", (reason) =>
-		append(`UNHANDLED_REJECTION: ${String(reason)}`),
-	);
+	// loops would otherwise kill key and mouse handling entirely. Report to
+	// stderr and route a bounded span to the same OTLP sink the rest of the TUI
+	// uses; there is no separate debug file.
+	process.on("uncaughtException", (error) => {
+		console.error(
+			`[agentic-coding] UNCAUGHT: ${error?.stack ?? String(error)}`,
+		);
+		traceTui(
+			"tui.process.uncaught_exception",
+			{ surface: "process", action: "uncaught-exception" },
+			"error",
+		);
+	});
+	process.on("unhandledRejection", (reason) => {
+		console.error(`[agentic-coding] UNHANDLED_REJECTION: ${String(reason)}`);
+		traceTui(
+			"tui.process.unhandled_rejection",
+			{ surface: "process", action: "unhandled-rejection" },
+			"error",
+		);
+	});
 	// Registered before the keymap: empirically, an extra early keypress listener
 	// changes input dispatch on some terminals (Ghostty+herdr). Kept while the
 	// interaction is investigated; harmless either way.
 	renderer.keyInput.on("keypress", () => {
 		/* noop */
 	});
-	if (traceFile) {
-		append("startup: renderer created");
-		const heartbeat = setInterval(() => append("alive"), 2000);
-		const cleanupTrace = () => {
-			clearInterval(heartbeat);
-		};
-		process.on("exit", cleanupTrace);
-	}
+	traceTui("tui.process.startup", {
+		surface: "process",
+		action: "renderer-created",
+	});
 
 	const cleanup = () => {
 		stack.grpcSidecar?.kill();
