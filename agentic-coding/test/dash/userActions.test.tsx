@@ -229,6 +229,69 @@ test("plan review popup appears and executes plan approval via finish", async ()
 	t.renderer.destroy();
 });
 
+test("developer review toggles a visible finding as to-fix with space", async () => {
+	const t = await testRender(() => <TestDashboard />, {
+		width: 120,
+		height: 40,
+	});
+
+	await t.waitForFrame((frame) => frame.includes("Plan review"));
+	t.mockInput.pressKey("f");
+	await t.waitForFrame((frame) => !frame.includes("Changed Files (4 files)"));
+	t.mockInput.pressEnter();
+	await t.waitForFrame((frame) => frame.includes("verify"));
+	t.mockInput.pressEnter();
+	await t.waitForFrame((frame) => frame.includes("Changed Files (1 files)"));
+	t.mockInput.pressEnter();
+	await t.waitForFrame((frame) => frame.includes("reviewed();"));
+
+	// Select the added line the first finding anchors to (new-side line 2).
+	for (let step = 0; step < 3; step++) t.mockInput.pressKey("j");
+	await t.renderOnce();
+	expect(t.captureCharFrame()).toContain("☐ FIX");
+
+	t.mockInput.pressKey(" ");
+	await t.renderOnce();
+	const toggled = t.captureCharFrame();
+	expect(toggled).toContain("☑ FIX");
+	expect(toggled).toContain("✓ Resolved");
+
+	t.mockInput.pressKey(" ");
+	await t.renderOnce();
+	expect(t.captureCharFrame()).toContain("☐ FIX");
+	t.renderer.destroy();
+});
+
+test("developer review shows a finding whose anchor line is outside the diff", async () => {
+	const t = await testRender(() => <TestDashboard />, {
+		width: 120,
+		height: 40,
+	});
+
+	await t.waitForFrame((frame) => frame.includes("Plan review"));
+	t.mockInput.pressKey("f");
+	await t.waitForFrame((frame) => !frame.includes("Changed Files (4 files)"));
+	t.mockInput.pressEnter();
+	await t.waitForFrame((frame) => frame.includes("verify"));
+	t.mockInput.pressEnter();
+	await t.waitForFrame((frame) => frame.includes("Changed Files (1 files)"));
+	t.mockInput.pressEnter();
+	await t.waitForFrame((frame) => frame.includes("reviewed();"));
+
+	// The second finding anchors to line 99, which no hunk covers: the diff
+	// modal injects a synthetic line so the finding still renders.
+	for (let step = 0; step < 5; step++) t.mockInput.pressKey("j");
+	await t.renderOnce();
+	const injected = t.captureCharFrame();
+	expect(injected).toContain("[finding]");
+	expect(injected).toContain("Helper is never used.");
+
+	t.mockInput.pressKey(" ");
+	await t.renderOnce();
+	expect(t.captureCharFrame()).toContain("☑ FIX");
+	t.renderer.destroy();
+});
+
 test("plan review exposes a bounded rejection action", async () => {
 	const t = await testRender(() => <TestDashboard />, {
 		width: 120,

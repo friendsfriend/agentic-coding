@@ -7,8 +7,10 @@ import { createRoot } from "solid-js";
 import { testDashboard } from "../../src/tui/dash/demo";
 import {
 	createReviewFeature,
+	FINDING_ANCHOR_PLACEHOLDER,
 	type ReviewFeatureContext,
 	reviewCommentsForEngine,
+	withFindingAnchorLines,
 } from "../../src/tui/dash/review";
 
 function context(
@@ -95,6 +97,114 @@ test("review comments build the same engine payload as before extraction", () =>
 			false,
 		),
 	).toEqual([{ comment: "n/a", file: "src/a.ts", line: 2 }]);
+});
+
+test("missing finding anchors are injected as synthetic diff lines", () => {
+	const diff =
+		"diff --git a/src/example.ts b/src/example.ts\n@@ -1,1 +1,1 @@\n-old();\n+new();\n";
+	const augmented = withFindingAnchorLines(diff, "src/example.ts", [
+		{
+			id: "run-1:Q-2",
+			originalId: "Q-2",
+			severity: "info",
+			path: "src/example.ts",
+			line: 99,
+			detail: "Helper is never used.",
+		},
+	]);
+	expect(augmented).toContain("@@ -99,1 +99,1 @@");
+	expect(augmented).toContain(`+${FINDING_ANCHOR_PLACEHOLDER}`);
+});
+
+test("visible anchors and other files are left untouched", () => {
+	const diff =
+		"diff --git a/src/example.ts b/src/example.ts\n@@ -1,1 +1,1 @@\n-old();\n+new();\n";
+	const visible = withFindingAnchorLines(diff, "src/example.ts", [
+		{
+			id: "run-1:Q-1",
+			originalId: "Q-1",
+			severity: "warning",
+			path: "src/example.ts",
+			line: 1,
+			detail: "Visible.",
+		},
+	]);
+	expect(visible).toBe(diff);
+	const otherFile = withFindingAnchorLines(diff, "src/example.ts", [
+		{
+			id: "run-1:Q-3",
+			originalId: "Q-3",
+			severity: "info",
+			path: "src/other.ts",
+			line: 99,
+			detail: "Other file.",
+		},
+	]);
+	expect(otherFile).toBe(diff);
+});
+
+test("pathless and old-path findings never inject a bare placeholder", () => {
+	const diff = "diff --git a/src/example.ts b/src/example.ts\n";
+	const pathless = withFindingAnchorLines(diff, "src/example.ts", [
+		{
+			id: "run-1:Q-1",
+			originalId: "Q-1",
+			severity: "warning",
+			line: 42,
+			detail: "General.",
+		},
+	]);
+	expect(pathless).toBe(diff);
+	const renamed = withFindingAnchorLines(diff, "src/new.ts", [
+		{
+			id: "run-1:Q-2",
+			originalId: "Q-2",
+			severity: "warning",
+			path: "src/old.ts",
+			line: 42,
+			detail: "Anchored to the old path.",
+		},
+	]);
+	expect(renamed).toBe(diff);
+});
+
+test("line-less findings anchor at line 1 like the discussion builder", () => {
+	const diff =
+		"diff --git a/src/example.ts b/src/example.ts\n@@ -2,1 +2,1 @@\n-old();\n+new();\n";
+	const augmented = withFindingAnchorLines(diff, "src/example.ts", [
+		{
+			id: "run-1:Q-1",
+			originalId: "Q-1",
+			severity: "info",
+			path: "src/example.ts",
+			detail: "Legacy finding without a line.",
+		},
+	]);
+	expect(augmented).toContain("@@ -1,1 +1,1 @@");
+	expect(augmented).toContain(`+${FINDING_ANCHOR_PLACEHOLDER}`);
+});
+
+test("findings on one missing anchor inject a single hunk", () => {
+	const diff = "diff --git a/src/example.ts b/src/example.ts\n";
+	const augmented = withFindingAnchorLines(diff, "src/example.ts", [
+		{
+			id: "run-1:Q-1",
+			originalId: "Q-1",
+			severity: "warning",
+			path: "src/example.ts",
+			line: 4,
+			detail: "First.",
+		},
+		{
+			id: "run-1:Q-2",
+			originalId: "Q-2",
+			severity: "info",
+			path: "src/example.ts",
+			line: 4,
+			detail: "Second.",
+		},
+	]);
+	expect(augmented.match(/@@ -4,1 \+4,1 @@/g)?.length).toBe(1);
 });
 
 test("feature dispose aborts in-flight review observation controllers", async () => {
