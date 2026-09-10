@@ -50,6 +50,69 @@ export function reviewCommentsForEngine(
 	}));
 }
 
+/** Placeholder content rendered for a finding anchor that no diff hunk covers;
+ * the finding detail itself is rendered by the inline thread. */
+export const FINDING_ANCHOR_PLACEHOLDER = "[finding]";
+
+/** New-side line numbers covered by a unified diff (added and context rows). */
+function diffNewLines(diff: string): Set<number> {
+	const present = new Set<number>();
+	let newLine = 0;
+	for (const line of diff.split("\n")) {
+		if (line.startsWith("--- ") || line.startsWith("+++ ")) continue;
+		if (line.startsWith("@@")) {
+			const match = line.match(/@@ -\d+,?\d* \+(\d+),?\d* @@/);
+			if (match) newLine = Number.parseInt(match[1] ?? "0", 10) - 1;
+			continue;
+		}
+		if (line.startsWith("+")) {
+			newLine++;
+			present.add(newLine);
+		} else if (line.startsWith(" ")) {
+			newLine++;
+			present.add(newLine);
+		}
+	}
+	return present;
+}
+
+/** Append a synthetic `+` hunk for every finding anchor line that the diff does
+ * not cover, so a finding whose line of evidence sits outside the visible
+ * changes still renders (treated like a diff change) instead of disappearing.
+ * Findings already anchored to a visible line are left untouched. Findings are
+ * anchored to the current file (`newPath`); a pathless finding is never
+ * injected because its discussion is dropped before rendering. Pure (diff text
+ * in, diff text out). */
+export function withFindingAnchorLines(
+	diff: string,
+	newPath: string,
+	findings: DeveloperReviewFinding[],
+): string {
+	if (!findings.length) return diff;
+	const present = diffNewLines(diff);
+	const missing = [
+		...new Set(
+			findings.flatMap((finding) => {
+				// Match the discussion builder's anchor: legacy findings without a
+				// line are anchored at new-side line 1.
+				const anchor = finding.line ?? 1;
+				return finding.path === newPath &&
+					Number.isInteger(anchor) &&
+					anchor > 0 &&
+					!present.has(anchor)
+					? [anchor]
+					: [];
+			}),
+		),
+	].sort((a, b) => a - b);
+	if (!missing.length) return diff;
+	const separator = diff && !diff.endsWith("\n") ? "\n" : "";
+	const hunks = missing.map(
+		(line) => `@@ -${line},1 +${line},1 @@\n+${FINDING_ANCHOR_PLACEHOLDER}`,
+	);
+	return `${diff}${separator}${hunks.join("\n")}\n`;
+}
+
 export interface ReviewFeatureContext {
 	repo: string;
 	workflowId: string;
@@ -294,7 +357,11 @@ export function createReviewFeature(
 		);
 	const reviewDiffFile = createMemo(() => {
 		const file = reviewFile();
-		return file ? reviewChangeForView(file, reviewDiff()) : undefined;
+		if (!file) return undefined;
+		return reviewChangeForView(
+			file,
+			withFindingAnchorLines(reviewDiff(), file.newPath, reviewFindings()),
+		);
 	});
 	const reviewDiscussions = createMemo<Discussion[]>(() => [
 		...reviewComments().map((comment, index) => {
@@ -365,7 +432,9 @@ export function createReviewFeature(
 					individual_note: true,
 					notes: [note],
 					position,
-					findingId: finding.originalId,
+					// UI finding identity is the unique composite id: the toggle set,
+					// resolved badge, and submission filter all key on `finding.id`.
+					findingId: finding.id,
 					findingSeverity: finding.severity,
 				};
 			}),
@@ -426,6 +495,17 @@ export function createReviewFeature(
 								line: 2,
 								detail: "Prefer const for immutable value.",
 								fix: "Use const.",
+							},
+							{
+								// Anchor outside every demo hunk: the diff view must inject a
+								// synthetic line so this finding still renders.
+								id: "demo-run:demo-info",
+								originalId: "demo-info",
+								severity: "info" as const,
+								path: "src/example.ts",
+								line: 99,
+								detail: "Helper is never used.",
+								fix: "Remove the dead helper.",
 							},
 						]
 					: loadDeveloperReviewFindings(repo, workflowId);

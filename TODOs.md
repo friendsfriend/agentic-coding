@@ -5,6 +5,7 @@ Fixes:
 * Traces are not shown properly (new ones are missing)
 * Some findings dont show up in the diff
 * Findings cant be toggled with space
+* Remove one column of space in the keybind help footer -> Saves 1 column per entry
 
 Big ones:
 * Implement Agent steered version of the workflow. Basically an orchestrator version of the workflow.
