@@ -17,6 +17,7 @@ a dashboard or observability feature module.
 | Selection rows/list | `Selectable.tsx` | `dash/ui/Selectable.tsx`, `otel/components/Selectable.tsx` |
 | Portaled modal framing | `GenericModal.tsx` | `dash/ui/GenericModal.tsx`, `dash/devenv-ui/components/GenericModal.tsx` |
 | Search header, filter/sort row, help text | `SearchHeader.tsx`, `FilterStatusBar.tsx`, `HelpText.tsx` | `dash/devenv-ui/components/*` |
+| Keybind contract, catalog store, `?` help modal | `keybinds.ts`, `HelpModal.tsx` | `dash/ui/HelpModal.tsx` |
 | Corner toast overlay | `Notification.tsx` | `dash/ui/Notification.tsx`, `otel/components/Notification.tsx` |
 
 Family entry points are thin re-exports/wrappers. Wrappers pin a family's
@@ -43,11 +44,14 @@ the primitive.
 
 ## Conventions
 
-- Keybind help is footer-only. Shell tabs render it through
-  `otel/components/StatusBar.tsx`; dialogs through `HelpText` /
-  `formatHelpTextLines`. Feature views (tab bodies, panel headers, empty and
-  error states) must not print their own keybinding lists or single
-  "press key" prompts.
+- Keybind help is data-driven and rendered by the footer plus the `?` help
+  modal. Every entry is a `Keybind` (`keybinds.ts`) declared once in a
+  per-surface catalog; the shell footer (`otel/components/StatusBar.tsx`)
+  renders the active catalog's special keys on as many rows as the terminal
+  width needs, the shared `?` help modal (`shared/HelpModal.tsx`) renders the
+  whole catalog, and dialogs render through `HelpText` / `formatHelpTextLines`.
+  Feature views (tab bodies, panel headers, empty and error states) must not
+  print their own keybinding lists or single "press key" prompts.
 
 ## Behavior notes
 

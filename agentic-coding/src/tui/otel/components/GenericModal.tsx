@@ -2,33 +2,18 @@
 import { RGBA, TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
 import type { JSX } from "solid-js";
+import { HelpText } from "../../shared/HelpText";
+import type { Keybind } from "../../shared/keybinds";
 import { uiColors } from "../ui/colors";
 import { FilterStatusBar } from "./FilterStatusBar";
 import { SearchHeader } from "./SearchHeader";
 
-export type HelpEntry = { key: string; action: string };
-
-function Help(props: { entries: HelpEntry[] }) {
-	return (
-		<box style={{ flexDirection: "row", height: 1 }}>
-			{props.entries.map((entry, index) => (
-				<text fg={uiColors.textMuted}>
-					<span
-						style={{ fg: uiColors.primary, attributes: TextAttributes.BOLD }}
-					>
-						{entry.key}
-					</span>
-					{` ${entry.action}${index < props.entries.length - 1 ? "  •  " : ""}`}
-				</text>
-			))}
-		</box>
-	);
-}
+export type HelpEntry = Keybind;
 
 export function GenericModal(props: {
 	title: string;
 	children: JSX.Element;
-	help: HelpEntry[];
+	help: readonly Keybind[];
 	widthPercent?: number;
 	heightPercent?: number;
 	filterSummary?: string;
@@ -86,7 +71,7 @@ export function GenericModal(props: {
 				>
 					{props.children}
 				</box>
-				<Help entries={props.help} />
+				<HelpText entries={props.help} />
 			</box>
 		</box>
 	);

@@ -37,6 +37,9 @@ export interface WikiViewProps {
 	submitting: boolean;
 	onSubmittingChange: (value: boolean) => void;
 	onClearComments: () => void;
+	/** Opens the shell's catalog help modal; `?` is handled here so comment
+	 * entry keeps receiving the character. */
+	onHelp?: () => void;
 }
 
 type WikiLoadState =
@@ -56,6 +59,13 @@ const [wikiCommentEntry, setWikiCommentEntry] = createSignal(false);
  * reach a span). */
 export const wikiCommentEntryActive = () => wikiCommentEntry();
 
+// Module scope: the shell reads this to publish the "note" footer context, so
+// note-only wiki actions appear in the footer while a note is open and stay
+// hidden in the tree state.
+const [wikiNoteOpen, setWikiNoteOpen] = createSignal(false);
+/** True while a wiki note is open. */
+export const wikiNoteActive = () => wikiNoteOpen();
+
 /** Home-mode browser for the centralized OKF wiki and its temporary review. */
 export function WikiView(props: WikiViewProps) {
 	const [state, setState] = createSignal<WikiLoadState>({ kind: "loading" });
@@ -74,6 +84,8 @@ export function WikiView(props: WikiViewProps) {
 	}>({});
 	createEffect(() => setWikiCommentEntry(commentMode()));
 	onCleanup(() => setWikiCommentEntry(false));
+	createEffect(() => setWikiNoteOpen(note() !== undefined));
+	onCleanup(() => setWikiNoteOpen(false));
 
 	const errorMessage = () => {
 		const current = state();
@@ -267,6 +279,10 @@ export function WikiView(props: WikiViewProps) {
 			}
 			return true;
 		}
+		if (key === "?") {
+			props.onHelp?.();
+			return true;
+		}
 		if (key === "f") {
 			void finish();
 			return true;
@@ -332,13 +348,6 @@ export function WikiView(props: WikiViewProps) {
 					return next;
 				});
 			else if (row) openNote(row.id);
-			return true;
-		}
-		if (key === "?") {
-			notify(
-				"j/k select · Enter open/expand · r refresh · f finish · q quit",
-				"info",
-			);
 			return true;
 		}
 		return true;

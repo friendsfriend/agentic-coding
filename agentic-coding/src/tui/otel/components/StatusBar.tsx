@@ -1,43 +1,60 @@
 /** @jsxImportSource @opentui/solid */
-import { TextAttributes } from "@opentui/core";
+import { useTerminalDimensions } from "@opentui/solid";
 import { For } from "solid-js";
+import { HelpText, wrapHelpEntries } from "../../shared/HelpText";
+import {
+	activeKeybindCatalog,
+	activeKeybindContext,
+	footerKeybinds,
+	type Keybind,
+} from "../../shared/keybinds";
 import { uiColors } from "../ui/colors";
 
-export type Keybind = { key: string; action: string };
-export function StatusBar(props: { prompt?: string; keybinds?: Keybind[] }) {
-	const keys = () => [
-		...(props.keybinds ?? [
-			{ key: "j/k", action: "nav" },
-			{ key: "Tab", action: "switch panel" },
-			{ key: "Enter", action: "select" },
-			{ key: "?", action: "help" },
-			{ key: "q", action: "quit" },
-		]),
-		{ key: "Shift+T", action: "theme" },
-	];
+export type { Keybind };
+
+/**
+ * Shell footer. Reads the active keybind catalog published by whichever
+ * surface owns the current footer (shell tab, workspace overview, or
+ * dashboard panel) and renders only its special keys, wrapped to the terminal
+ * width so long catalogs are not clipped.
+ */
+export function StatusBar(props: {
+	prompt?: string;
+	keybinds?: readonly Keybind[];
+	/** Horizontal inset already applied by the parent box (padding). */
+	inset?: number;
+}) {
+	const dimensions = useTerminalDimensions();
+	const keybinds = () =>
+		props.keybinds
+			? [...props.keybinds]
+			: footerKeybinds(activeKeybindCatalog(), activeKeybindContext());
+	// Leave room for this bar's padding, the parent's inset, and the prompt.
+	const maxWidth = () =>
+		Math.max(
+			1,
+			dimensions().width - 2 - (props.inset ?? 0) - (props.prompt?.length ?? 0),
+		);
+	const lines = () => wrapHelpEntries(keybinds(), maxWidth());
 	return (
 		<box
 			backgroundColor={uiColors.bgMantle}
 			style={{
 				width: "100%",
-				height: 1,
-				flexDirection: "row",
+				height: Math.max(1, lines().length),
+				flexDirection: "column",
 				paddingLeft: 1,
 				paddingRight: 1,
 			}}
 		>
-			<text fg={uiColors.textMuted}>{props.prompt ?? ""}</text>
-			<For each={keys()}>
-				{(item, index) => (
-					<text fg={uiColors.textMuted}>
-						<span
-							style={{ fg: uiColors.primary, attributes: TextAttributes.BOLD }}
-						>
-							{item.key}
-						</span>{" "}
-						{item.action}
-						{index() < keys().length - 1 ? "  •  " : ""}
-					</text>
+			<For each={lines()}>
+				{(line, index) => (
+					<box style={{ flexDirection: "row" }}>
+						{index() === 0 ? (
+							<text fg={uiColors.textMuted}>{props.prompt ?? ""}</text>
+						) : null}
+						<HelpText entries={line} />
+					</box>
 				)}
 			</For>
 		</box>

@@ -3,52 +3,35 @@
 import { TextAttributes } from "@opentui/core";
 import { For, type JSX } from "solid-js";
 import { uiColors } from "./colors";
+import type { Keybind } from "./keybinds";
 
-export interface HelpEntry {
-	/** Keybinding (e.g., "j/k", "Enter", "Ctrl+S") */
-	key: string;
-	/** Action description (e.g., "Navigate", "Select", "Save") */
-	action: string;
-}
+/** A help entry is a keybind; kept as an alias for existing imports. */
+export type HelpEntry = Keybind;
 
 export interface HelpTextProps {
-	/** Array of help entries to display */
-	entries: HelpEntry[];
-	/** Text color for actions (default: textMuted) */
-	textColor?: string;
-	/** Color for keybindings (default: primary) */
-	keyColor?: string;
-	/** Separator between entries (default: "  •  ") */
-	separator?: string;
+	/** Keybinds to display. The component owns colors and separation. */
+	entries: readonly Keybind[];
 }
 
 /**
  * HelpText Component - Displays formatted keybinding help text
  *
- * Provides consistent formatting for help text across all components.
- * Matches the style used in StatusBar component.
- *
- * Features:
- * - Keys displayed in bold with primary color
- * - Actions in muted text color
- * - Bullet separator between entries
- * - Customizable colors and separator
+ * Single footer renderer for every surface. Entries are pure data; colors and
+ * the bullet separator live here so callers cannot restyle individual keys.
  */
 export function HelpText(props: HelpTextProps): JSX.Element {
-	const textColor = () => props.textColor ?? uiColors.textMuted;
-	const keyColor = () => props.keyColor ?? uiColors.primary;
-	const separator = () => props.separator ?? "  •  ";
-
 	return (
-		<text style={{ fg: textColor() }}>
+		<text style={{ fg: uiColors.textMuted }}>
 			<For each={props.entries}>
 				{(entry, index) => (
 					<>
-						<span style={{ fg: keyColor(), attributes: TextAttributes.BOLD }}>
+						<span
+							style={{ fg: uiColors.primary, attributes: TextAttributes.BOLD }}
+						>
 							{entry.key}
 						</span>{" "}
 						{entry.action}
-						{index() < props.entries.length - 1 ? separator() : ""}
+						{index() < props.entries.length - 1 ? "  •  " : ""}
 					</>
 				)}
 			</For>
@@ -57,18 +40,53 @@ export function HelpText(props: HelpTextProps): JSX.Element {
 }
 
 /**
+ * Group keybinds into footer rows no wider than `maxWidth`, keeping each entry
+ * atomic so a key and its action are never split across lines.
+ */
+export function wrapHelpEntries(
+	entries: readonly Keybind[],
+	maxWidth: number,
+	separator: string = "  •  ",
+): Keybind[][] {
+	if (maxWidth <= 0) return entries.length ? [[entries[0]]] : [[]];
+
+	const lines: Keybind[][] = [];
+	let current: Keybind[] = [];
+	let currentLength = 0;
+
+	for (const entry of entries) {
+		const chunkLength = entry.key.length + 1 + entry.action.length;
+		const candidate =
+			current.length === 0
+				? chunkLength
+				: currentLength + separator.length + chunkLength;
+		if (current.length > 0 && candidate > maxWidth) {
+			lines.push(current);
+			current = [entry];
+			currentLength = chunkLength;
+		} else {
+			current.push(entry);
+			currentLength = candidate;
+		}
+	}
+
+	if (current.length) lines.push(current);
+	return lines.length ? lines : [[]];
+}
+
+/**
  * Helper function to create help text string from entries
  * Useful for components that need a plain string (e.g., GenericModal helpText prop)
  */
 export function formatHelpText(
-	entries: HelpEntry[],
+	entries: readonly Keybind[],
 	separator: string = "  •  ",
 ): string {
 	return entries.map((entry) => `${entry.key} ${entry.action}`).join(separator);
 }
 
 export function formatHelpTextLines(
-	entries: HelpEntry[],
+	entries: readonly Keybind[],
 	maxWidth: number,
 	separator: string = "  •  ",
 ): string[] {

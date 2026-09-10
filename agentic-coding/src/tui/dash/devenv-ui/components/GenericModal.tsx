@@ -8,6 +8,7 @@ import { GenericModal as SharedGenericModal } from "../../../shared/GenericModal
 
 export type { GenericModalProps } from "../../../shared/GenericModal";
 export type { HelpEntry } from "../../../shared/HelpText";
+export type { Keybind, KeybindSection } from "../../../shared/keybinds";
 
 export function GenericModal(props: GenericModalProps) {
 	return (

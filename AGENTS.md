@@ -33,10 +33,28 @@ Exceptions, stated explicitly:
 
 ## TUI keybind help
 
-Keybinding help lives in exactly one place per surface: the footer.
+Every keybind is declared once in a per-surface catalog and rendered from a
+single shared contract (`src/tui/shared/keybinds.ts`). Entries are plain data
+(`{ key, action, standard?, context? }`) — renderers own colors and separators,
+so a keybind can never smuggle in styling. The footer advertises only special
+keys (`standard` keys are hidden); the `?` help modal lists the whole catalog.
 
-- Shell/tab keybinds: `src/tui/otel/components/StatusBar.tsx`, fed by `tabStatusBarKeybinds()` in `src/tui/otel/app/App.tsx`.
-- Modal/dialog keybinds: the modal footer via `HelpText` / `formatHelpTextLines` (`src/tui/shared/HelpText.tsx`).
-- Dashboard overview/detail: the `?` help modal (`src/tui/dash/ui/HelpModal.tsx`).
+- Contract + reactive store: `src/tui/shared/keybinds.ts` (`Keybind`,
+  `KeybindSection`, `setActiveKeybindCatalog`).
+- Dashboard catalogs: `src/tui/dash/keybinds.ts` (overview + detail; detail
+  entries carry a panel `context` so the footer changes with the focused
+  panel).
+- Shell/tab catalog: `observabilityKeybindCatalog()` in
+  `src/tui/otel/app/keybinds.ts`, rendered by
+  `src/tui/otel/components/StatusBar.tsx` (wrapped to the terminal width).
+- `?` help: `src/tui/shared/HelpModal.tsx` renders the active catalog for both
+  the shell tabs and the dashboard overview/detail.
+- Modal/dialog footer: `HelpText` / `formatHelpTextLines`
+  (`src/tui/shared/HelpText.tsx`).
 
-Never print keybinding cheat sheets or "press X to …" instructions inside tab content, panel bodies, headers, or empty/error states. If a key is worth documenting, add it to the active footer/help surface instead — the footer already advertises the keys for the focused tab, so an inline list is redundant and drifts out of date.
+**When you add or change a keybind, update the owning catalog and then open the
+TUI to check the keybind help.** Confirm both the footer (special keys for the
+active surface/panel) and the `?` help modal (every keybind, standard included)
+list what you added, and mark pure navigation keys `standard: true` so they stay
+out of the footer. Never print keybinding cheat sheets or "press X to …"
+instructions inside tab content, panel bodies, headers, or empty/error states.
