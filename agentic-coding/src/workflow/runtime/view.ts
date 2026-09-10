@@ -156,6 +156,7 @@ export function view(
 				profile: run.profile.name,
 				...(run.profile.model ? { model: run.profile.model } : {}),
 				...(run.handle?.paneId ? { paneId: run.handle.paneId } : {}),
+				...(run.handle?.tabId ? { tabId: run.handle.tabId } : {}),
 				...(run.outputPath ? { outputPath: run.outputPath } : {}),
 				...(run.outputDigest ? { outputDigest: run.outputDigest } : {}),
 			})),

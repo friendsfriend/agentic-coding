@@ -519,6 +519,10 @@ describe("breaking workflow CLI surface", () => {
 		expect(
 			calls.filter((args) => args[0] === "tab" && args[1] === "create"),
 		).toHaveLength(1);
+		const created = calls.find(
+			(args) => args[0] === "tab" && args[1] === "create",
+		);
+		expect(created?.[created.indexOf("--label") + 1]).toBe("○ worker");
 	});
 
 	test("verifier runs reuse a live canonical-name pane before creating a tab", async () => {

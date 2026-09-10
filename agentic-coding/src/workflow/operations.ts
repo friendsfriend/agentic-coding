@@ -28,6 +28,7 @@ import type { CredentialPrompt } from "./credentials.ts";
 import { agentEffectHandlers, EffectRunner } from "./effect-runner.ts";
 import { loadConfig } from "./effects.ts";
 import { dueQuestionTimers, WorkflowEngine } from "./runtime.ts";
+import { syncAgentTabLabels } from "./tab-sync.ts";
 export const CONTINUATION_WAIT_MS = 65_000;
 
 /** The `WorkflowEngine` factory built from the process-lifetime builtin
@@ -90,6 +91,23 @@ export async function drainEffects(
 		if (Date.now() >= deadline) break;
 		await Bun.sleep(Math.min(DRAIN_POLL_MS, deadline - Date.now()));
 	} while (!signal?.aborted && Date.now() < deadline);
+	// Reflect run status transitions on the Herdr agent tabs. The engine owns
+	// the status, this boundary owns the transport, so the rename happens here
+	// after the effects that caused the transition have landed.
+	try {
+		for (const view of workflowEngine.list(repo)) {
+			if (!view.runs.some((run) => run.tabId)) continue;
+			await syncAgentTabLabels(
+				herdr,
+				workflowEngine,
+				repo,
+				view.workflowId,
+				signal,
+			);
+		}
+	} catch {
+		/* tab labels are presentation-only; never fail the drain for them */
+	}
 	return completed;
 }
 

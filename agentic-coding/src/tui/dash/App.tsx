@@ -30,8 +30,13 @@ import {
 	disposeDashboardApplication,
 	disposeExecutionCoordinator,
 	onWorkflowExecutionError,
+	onWorkflowExecutionSettled,
 	requestWorkflowExecution,
 } from "./engine";
+import {
+	herdrEventMatchesWorkspace,
+	subscribeHerdrEvents,
+} from "./herdr-events";
 import { notify } from "./notifications";
 import {
 	answerQuestion,
@@ -88,7 +93,7 @@ import { SelectableList } from "./ui/Selectable";
 import { ThemePickerModal } from "./ui/ThemePickerModal";
 import { getActiveThemeName, themeNames } from "./ui/theme";
 import { VerdictModal } from "./ui/VerdictModal";
-import { watchDirectories } from "./watchRefresh";
+import { debounce, watchDirectories } from "./watchRefresh";
 
 export type { PhaseStatusState };
 // Projection helpers are owned by `projections.ts`; these narrow re-exports
@@ -946,6 +951,13 @@ export function App(props: {
 		} else props.keymap.setData("modal.active", "none");
 	};
 
+	// A stable workspace key: the memo only notifies when the id actually
+	// changes, so the event subscription is not torn down on every refresh.
+	const workflowWorkspace = createMemo(() => data().state.workspace);
+
+	// File-backed state (artifacts, telemetry, the SQLite mirror) still changes
+	// from other processes, so keep the OS event watches; the Herdr subscription
+	// below adds agent/tab lifecycle pushes on top.
 	createEffect(() => {
 		if (props.profile === "test") return;
 		const state = data().state;
@@ -960,14 +972,35 @@ export function App(props: {
 		onCleanup(dispose);
 	});
 
+	createEffect(() => {
+		if (props.profile === "test") return;
+		const workspace = workflowWorkspace();
+		// Herdr is the source of truth for agent/tab lifecycle and re-publishes
+		// a short event backlog on connect; debounce so a burst is one reload.
+		const debounced = debounce(refresh, 200);
+		const dispose = subscribeHerdrEvents((event) => {
+			if (herdrEventMatchesWorkspace(event.data, workspace))
+				debounced.trigger();
+		});
+		onCleanup(() => {
+			debounced.cancel();
+			dispose();
+		});
+	});
+
 	onMount(() => {
-		// ponytail: 30s safety re-sync catches drift the watchers miss (e.g. a
-		// directory that did not exist yet); file watches give near-instant refresh.
-		const safety = setInterval(refresh, 30000);
 		const disposeExecutionError =
 			props.profile === "test"
 				? undefined
 				: onWorkflowExecutionError(props.repo, (workflowId) => {
+						if (workflowId === props.workflowId) refresh();
+					});
+		// A dashboard-initiated drain can change state without a Herdr event
+		// (developer transitions), so refresh when the coordinator settles.
+		const disposeExecutionSettled =
+			props.profile === "test"
+				? undefined
+				: onWorkflowExecutionSettled(props.repo, (workflowId) => {
 						if (workflowId === props.workflowId) refresh();
 					});
 		if (props.profile !== "test")
@@ -977,6 +1010,7 @@ export function App(props: {
 			refreshDisposed = true;
 			refreshController?.abort();
 			disposeExecutionError?.();
+			disposeExecutionSettled?.();
 			artifactGeneration++;
 			artifactController?.abort();
 			reviewFeatureDispose();
@@ -984,7 +1018,6 @@ export function App(props: {
 			// Dashboard unmount releases the single owned application runtime
 			// (complete-workflow-effect-cutover, task 1).
 			disposeDashboardApplication();
-			clearInterval(safety);
 		});
 	});
 

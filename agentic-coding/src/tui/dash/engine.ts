@@ -38,6 +38,7 @@ class RepositoryExecutionCoordinator {
 	private error: string | undefined;
 	private readonly workflowErrors = new Map<string, string>();
 	private readonly listeners = new Set<(workflowId: string) => void>();
+	private readonly settledListeners = new Set<(workflowId: string) => void>();
 	private queuedWorkflowId: string | undefined;
 	private activeWorkflowId: string | undefined;
 	private controller: AbortController | undefined;
@@ -78,6 +79,8 @@ class RepositoryExecutionCoordinator {
 		)
 			.then(() => {
 				if (!this.disposed) this.error = undefined;
+				for (const listener of this.settledListeners)
+					listener(this.activeWorkflowId ?? "");
 			})
 			.catch((error) => {
 				this.error = error instanceof Error ? error.message : String(error);
@@ -98,6 +101,11 @@ class RepositoryExecutionCoordinator {
 	onError(listener: (workflowId: string) => void): () => void {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);
+	}
+
+	onSettled(listener: (workflowId: string) => void): () => void {
+		this.settledListeners.add(listener);
+		return () => this.settledListeners.delete(listener);
 	}
 
 	lastError(workflowId?: string): string | undefined {
@@ -153,6 +161,16 @@ export function onWorkflowExecutionError(
 	listener: (workflowId: string) => void,
 ): () => void {
 	return executionCoordinator(repo).onError(listener);
+}
+
+/** Fires after a dashboard-initiated drain settles so the view refreshes even
+ * when the change produced no Herdr event (for example a developer-step
+ * transition). */
+export function onWorkflowExecutionSettled(
+	repo: string,
+	listener: (workflowId: string) => void,
+): () => void {
+	return executionCoordinator(repo).onSettled(listener);
 }
 
 export function workflowExecutionError(
