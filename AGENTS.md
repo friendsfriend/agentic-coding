@@ -30,3 +30,13 @@ Exceptions, stated explicitly:
 - **Pure domain stays plain TypeScript.** Graph/step/projection/formatting functions are not wrapped in Effect; do not add an `effect()` wrapper or service factory.
 - **Durable outbox vs Effect programs differ.** Outbox records and the engine's durable retries are not generic `Effect.retry`; only a genuine `infrastructure` failure is retryable through the outbox, never a defect.
 - **Native/Promise I/O belongs in boundary adapters** (`src/workflow/effects.ts`, `adapters.ts`), not a second orchestration style.
+
+## TUI keybind help
+
+Keybinding help lives in exactly one place per surface: the footer.
+
+- Shell/tab keybinds: `src/tui/otel/components/StatusBar.tsx`, fed by `tabStatusBarKeybinds()` in `src/tui/otel/app/App.tsx`.
+- Modal/dialog keybinds: the modal footer via `HelpText` / `formatHelpTextLines` (`src/tui/shared/HelpText.tsx`).
+- Dashboard overview/detail: the `?` help modal (`src/tui/dash/ui/HelpModal.tsx`).
+
+Never print keybinding cheat sheets or "press X to …" instructions inside tab content, panel bodies, headers, or empty/error states. If a key is worth documenting, add it to the active footer/help surface instead — the footer already advertises the keys for the focused tab, so an inline list is redundant and drifts out of date.

@@ -391,21 +391,14 @@ export function WikiView(props: WikiViewProps) {
 				<text fg={uiColors.textMuted}>Loading centralized wiki…</text>
 			</Show>
 			<Show when={state().kind === "empty"}>
-				<text fg={uiColors.textMuted}>
-					No readable wiki concepts found. Press r to refresh.
-				</text>
+				<text fg={uiColors.textMuted}>No readable wiki concepts found.</text>
 			</Show>
 			<Show when={state().kind === "error"}>
-				<text fg={uiColors.error}>
-					Wiki unavailable: {errorMessage()} · Press r to retry.
-				</text>
+				<text fg={uiColors.error}>Wiki unavailable: {errorMessage()}</text>
 			</Show>
 			<Show when={state().kind === "ready"}>
 				<box style={{ flexDirection: "row", flexGrow: 1, minHeight: 0 }}>
 					<box style={{ width: "100%", flexDirection: "column" }}>
-						<text fg={uiColors.textMuted}>
-							Wiki · Enter open/expand · c comment · f finish · r refresh
-						</text>
 						<ScrollableContent
 							onScrollBoxReady={(scrollBox) => {
 								treeScroll = scrollBox;
