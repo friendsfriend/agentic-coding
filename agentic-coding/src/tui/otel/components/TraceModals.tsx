@@ -193,7 +193,7 @@ export function SortModal(props: {
 			help={[
 				{ key: "j/k", action: "Select" },
 				{ key: "Space", action: "Mode" },
-				{ key: "Shift+J/K", action: "Priority" },
+				{ key: "J/K", action: "Priority" },
 				{ key: "Enter", action: "Apply" },
 				{ key: "Esc", action: "Cancel" },
 			]}

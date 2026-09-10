@@ -19,7 +19,7 @@ export function observabilityKeybindCatalog(options: {
 	view: View;
 	tabCount: number;
 }): KeybindSection[] {
-	const theme = { key: "Shift+T", action: "theme picker" };
+	const theme = { key: "T", action: "theme picker", short: "theme" };
 	const help = { key: "?", action: "help" };
 	const tabs = {
 		key: `1-${options.tabCount}`,
@@ -43,7 +43,7 @@ export function observabilityKeybindCatalog(options: {
 							{ key: "Esc/b", action: "back to traces", standard: true },
 						]
 					: [{ key: "Esc/b", action: "back to span tree", standard: true }];
-		// `/`, Shift+F, Shift+O and `w` are handled before the view branch, so
+		// `/`, `F`, `O` and `w` are handled before the view branch, so
 		// they stay live in the detail and span views too.
 		return [
 			{ title: "Navigation", keybinds: navigation },
@@ -51,9 +51,9 @@ export function observabilityKeybindCatalog(options: {
 				title: "Actions",
 				keybinds: [
 					{ key: "/", action: "search" },
-					{ key: "Shift+F", action: "filter" },
-					{ key: "Shift+O", action: "sort" },
-					{ key: "w", action: "all workspaces" },
+					{ key: "F", action: "filter" },
+					{ key: "O", action: "sort" },
+					{ key: "w", action: "all workspaces", short: "workspaces" },
 					theme,
 					help,
 					tabs,
@@ -83,14 +83,24 @@ export function observabilityKeybindCatalog(options: {
 					title: "Note actions",
 					keybinds: [
 						{ key: "c", action: "comment", context: "note" },
-						{ key: "v", action: "visual line selection", context: "note" },
-						{ key: "n/N", action: "next/previous note", context: "note" },
+						{
+							key: "v",
+							action: "visual line selection",
+							short: "visual",
+							context: "note",
+						},
+						{
+							key: "n/N",
+							action: "next/previous note",
+							short: "note",
+							context: "note",
+						},
 					],
 				},
 				{
 					title: "Actions",
 					keybinds: [
-						{ key: "f", action: "finish review" },
+						{ key: "f", action: "finish review", short: "finish" },
 						{ key: "r", action: "refresh" },
 						help,
 						tabs,

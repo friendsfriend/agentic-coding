@@ -85,6 +85,35 @@ test("shared modal keeps content reachable on a narrow terminal", async () => {
 	t.renderer.destroy();
 });
 
+test("shared modal wraps keybind help onto extra footer rows instead of clipping", async () => {
+	const t = await testRender(
+		() => (
+			<DashGenericModal
+				title="Wrapped"
+				widthPercent={0.4}
+				heightPercent={0.6}
+				help={[
+					{ key: "j/k", action: "Navigate" },
+					{ key: "Enter", action: "Open" },
+					{ key: "d", action: "Delete" },
+					{ key: "Esc", action: "Close" },
+				]}
+			>
+				<text>wrap body</text>
+			</DashGenericModal>
+		),
+		{ width: 60, height: 24 },
+	);
+	await t.flush();
+	const frame = t.captureCharFrame();
+	// Every help entry survives; the tail is not clipped off the first row.
+	expect(frame).toContain("j/k Navigate");
+	expect(frame).toContain("Enter Open");
+	expect(frame).toContain("d Delete");
+	expect(frame).toContain("Esc Close");
+	t.renderer.destroy();
+});
+
 test("both family ScrollableContent entry points delegate to the shared scrollbox", async () => {
 	const t = await testRender(
 		() => (

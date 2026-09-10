@@ -433,9 +433,7 @@ test("help documents directional panel navigation", async () => {
 	await dashboardReady(t);
 
 	t.mockInput.pressKey("?");
-	const helpFrame = await t.waitForFrame((frame) =>
-		frame.includes("Shift+J/K/H/L"),
-	);
+	const helpFrame = await t.waitForFrame((frame) => frame.includes("J/K/H/L"));
 	expect(helpFrame).toContain("Move between panels");
 	// In-panel scrolling stays documented alongside the new bindings.
 	expect(helpFrame).toContain("Scroll focused panel");

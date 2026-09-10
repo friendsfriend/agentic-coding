@@ -278,7 +278,7 @@ function DiscussionThread(props: {
  * Navigation (handled in parent):
  * - j/k or up/down: Navigate lines
  * - h/l and left/right: Scroll horizontally
- * - [/]/Shift+K/Shift+J: Navigate files
+ * - [/]/K/J: Navigate files
  * - ESC: Close modal
  */
 export function DiffViewModal(props: DiffViewModalProps) {

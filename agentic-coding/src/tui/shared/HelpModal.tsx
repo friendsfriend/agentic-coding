@@ -39,11 +39,15 @@ export function HelpModal(props: {
 				<For each={visible()}>
 					{(row) =>
 						"title" in row ? (
-							<text fg={uiColors.textPrimary} attributes={TextAttributes.BOLD}>
+							<text
+								fg={uiColors.textPrimary}
+								attributes={TextAttributes.BOLD}
+								flexShrink={0}
+							>
 								{row.title}
 							</text>
 						) : (
-							<box flexDirection="row" paddingLeft={1}>
+							<box flexDirection="row" paddingLeft={1} flexShrink={0}>
 								<text fg={uiColors.primary} attributes={TextAttributes.BOLD}>
 									{row.key.padEnd(14)}
 								</text>

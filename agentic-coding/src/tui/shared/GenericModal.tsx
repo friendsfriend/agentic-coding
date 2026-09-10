@@ -12,7 +12,7 @@ import {
 } from "solid-js";
 import { colors, uiColors } from "./colors";
 import { FilterStatusBar } from "./FilterStatusBar";
-import { HelpText } from "./HelpText";
+import { HelpText, wrapHelpEntries } from "./HelpText";
 import type { Keybind } from "./keybinds";
 import { SearchHeader } from "./SearchHeader";
 import { invokeGlobalSelectionMouseUpHandler } from "./selectionCopy";
@@ -240,13 +240,25 @@ export function GenericModal(props: GenericModalProps) {
 	const progressCharacter = (index: number) =>
 		index < progressEnd() ? "━" : index === progressEnd() ? "▸" : "─";
 
+	// Keybind-array help (dashboard-style): wrap entries so a long footer grows
+	// by a row instead of clipping the entries past the first wrapped line.
 	const helpEntries = (): readonly Keybind[] | undefined =>
 		props.help ??
 		(typeof props.helpText === "string" ? undefined : props.helpText);
-	const helpLines = () =>
+	const helpEntryLines = (): Keybind[][] | undefined => {
+		const entries = helpEntries();
+		return entries
+			? wrapHelpEntries(entries, Math.max(1, width() - 4))
+			: undefined;
+	};
+	// Legacy string help: wrapped to the dialog width as before.
+	const helpStringLines = (): string[] | undefined =>
 		typeof props.helpText === "string"
 			? wrapHelpText(props.helpText, Math.max(1, width() - 4))
-			: [""];
+			: undefined;
+	const footerHelpLineCount = () =>
+		helpEntryLines()?.length ?? helpStringLines()?.length ?? 1;
+	const helpLines = () => helpStringLines() ?? [""];
 	// Only an explicit searchMode (devenv live-search) shows the trailing
 	// input cursor; the legacy dash `search` prop maps to the display-only
 	// "/ <query>" header the removed dash SearchHeader rendered.
@@ -421,14 +433,16 @@ export function GenericModal(props: GenericModalProps) {
 						<box
 							style={{
 								width: "100%",
-								height: helpLines().length,
+								height: footerHelpLineCount(),
 								justifyContent: "flex-start",
 								flexDirection: "column",
 								flexShrink: 0,
 							}}
 						>
-							{helpEntries() ? (
-								<HelpText entries={helpEntries() ?? []} />
+							{helpEntryLines() ? (
+								<For each={helpEntryLines() ?? []}>
+									{(line) => <HelpText entries={line} />}
+								</For>
 							) : (
 								<For each={helpLines()}>
 									{(line) => (

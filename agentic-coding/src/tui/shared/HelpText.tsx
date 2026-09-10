@@ -3,7 +3,7 @@
 import { TextAttributes } from "@opentui/core";
 import { For, type JSX } from "solid-js";
 import { uiColors } from "./colors";
-import type { Keybind } from "./keybinds";
+import { type Keybind, keybindFooterLabel } from "./keybinds";
 
 /** A help entry is a keybind; kept as an alias for existing imports. */
 export type HelpEntry = Keybind;
@@ -30,7 +30,7 @@ export function HelpText(props: HelpTextProps): JSX.Element {
 						>
 							{entry.key}
 						</span>{" "}
-						{entry.action}
+						{keybindFooterLabel(entry)}
 						{index() < props.entries.length - 1 ? "  •  " : ""}
 					</>
 				)}
@@ -55,7 +55,7 @@ export function wrapHelpEntries(
 	let currentLength = 0;
 
 	for (const entry of entries) {
-		const chunkLength = entry.key.length + 1 + entry.action.length;
+		const chunkLength = entry.key.length + 1 + keybindFooterLabel(entry).length;
 		const candidate =
 			current.length === 0
 				? chunkLength
@@ -82,7 +82,9 @@ export function formatHelpText(
 	entries: readonly Keybind[],
 	separator: string = "  •  ",
 ): string {
-	return entries.map((entry) => `${entry.key} ${entry.action}`).join(separator);
+	return entries
+		.map((entry) => `${entry.key} ${keybindFooterLabel(entry)}`)
+		.join(separator);
 }
 
 export function formatHelpTextLines(
@@ -92,7 +94,9 @@ export function formatHelpTextLines(
 ): string[] {
 	if (maxWidth <= 0) return [""];
 
-	const chunks = entries.map((chunk) => `${chunk.key} ${chunk.action}`);
+	const chunks = entries.map(
+		(chunk) => `${chunk.key} ${keybindFooterLabel(chunk)}`,
+	);
 	const lines: string[] = [];
 	let current = "";
 
