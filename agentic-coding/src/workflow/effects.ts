@@ -282,19 +282,29 @@ export function executionSettings(
 	};
 }
 
+/** git common-dir lookups are stable for a repository and are re-run on every
+ * config read; the dashboard editor reads config many times per render, so the
+ * resolved root is cached per repository to avoid spawning `git rev-parse`
+ * repeatedly. Only successful lookups are cached so a repository created after
+ * the first miss is still picked up. */
+const repositoryRootCache = new Map<string, string>();
 function repositoryConfigRoot(repository: string): string | undefined {
+	const resolvedPath = path.resolve(repository);
+	const cached = repositoryRootCache.get(resolvedPath);
+	if (cached) return cached;
 	try {
 		const result = Bun.spawnSync(
-			["git", "-C", path.resolve(repository), "rev-parse", "--git-common-dir"],
+			["git", "-C", resolvedPath, "rev-parse", "--git-common-dir"],
 			{ stdout: "pipe", stderr: "ignore" },
 		);
 		if (result.exitCode !== 0) return undefined;
 		const common = result.stdout.toString().trim();
 		if (!common) return undefined;
-		const absolute = path.resolve(repository, common);
-		return path.basename(absolute) === ".git"
-			? path.dirname(absolute)
-			: absolute;
+		const absolute = path.resolve(resolvedPath, common);
+		const root =
+			path.basename(absolute) === ".git" ? path.dirname(absolute) : absolute;
+		repositoryRootCache.set(resolvedPath, root);
+		return root;
 	} catch {
 		return undefined;
 	}
