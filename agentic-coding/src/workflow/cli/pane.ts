@@ -4,6 +4,7 @@
 import type { HerdrPort } from "../adapters.ts";
 import { isPaneLiveAsync, resolveLiveAgentAsync } from "../effect-runner.ts";
 import type { WorkflowEngine } from "../runtime.ts";
+import { agentTabLabel } from "../tab-status.ts";
 import { registry as defaultRegistry } from "./registry.ts";
 
 export function verificationPosition(
@@ -174,7 +175,10 @@ export function paneForRunFactory(
 				}
 			}
 		}
-		const label = roundScoped ? "verification" : run.role;
+		const label = agentTabLabel(
+			roundScoped ? "verification" : run.role,
+			run.status,
+		);
 		const result = herdr.call(
 			"tab",
 			"create",

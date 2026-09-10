@@ -9,4 +9,4 @@ Not for agents. This is only for humans.
 * openspec panel shows all instead of only relevant changes / specs
 * Fix runtime calculation for agents that take multiple turns
 * Use singular pane for verfication triage
-* Write herdr plugin to control coloring of tabs based on agent activity
+* Unify keybind help style

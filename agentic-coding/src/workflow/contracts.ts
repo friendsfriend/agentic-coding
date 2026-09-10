@@ -451,6 +451,7 @@ export interface WorkflowView {
 		profile: string;
 		model?: string;
 		paneId?: string;
+		tabId?: string;
 		outputPath?: string;
 		outputDigest?: string;
 	}>;
