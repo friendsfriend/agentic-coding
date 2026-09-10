@@ -1389,7 +1389,13 @@ export function focusWorkspace(workspace: string) {
 	herdr.call("workspace", "focus", workspace);
 }
 
-function openSpecRoot(state: WorkflowState) {
+/** Root of the workflow's OpenSpec change directory, or `undefined` when the
+ * workflow owns no change. Workflows started without OpenSpec phases
+ * (`no-openspec`, `wiki`, `research`) never record a change id, so they must
+ * not fall back to `openspec/changes` — that would list every other change's
+ * archived artifacts in a panel the workflow gains nothing from. */
+function openSpecRoot(state: WorkflowState): string | undefined {
+	if (!state.changeId) return undefined;
 	const changes = join(state.worktree, "openspec", "changes");
 	const active = join(changes, state.changeId);
 	if (existsSync(active)) return active;
@@ -1404,16 +1410,18 @@ function openSpecRoot(state: WorkflowState) {
 	}
 }
 export function openSpecArtifacts(state: WorkflowState) {
+	const root = openSpecRoot(state);
+	if (root === undefined) return [];
 	try {
-		return Array.from(
-			new Bun.Glob("**/*.md").scanSync({ cwd: openSpecRoot(state) }),
-		).sort();
+		return Array.from(new Bun.Glob("**/*.md").scanSync({ cwd: root })).sort();
 	} catch {
 		return [];
 	}
 }
 export function openSpecArtifact(state: WorkflowState, artifact: string) {
-	const root = resolve(openSpecRoot(state));
+	const change = openSpecRoot(state);
+	if (change === undefined) throw new Error("workflow has no OpenSpec change");
+	const root = resolve(change);
 	if (
 		!artifact ||
 		isAbsolute(artifact) ||
