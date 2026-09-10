@@ -5,9 +5,6 @@ Fixes:
 * Traces are not shown properly (new ones are missing)
 * Some findings dont show up in the diff
 * Findings cant be toggled with space
-* The agent status in the dashboard doenst work anymore
-* Keybind help overlaps if more than 2 rows
-* Use short descriptions for keybind help. Takes too much space. Keep the detailed one for the ? help modal
 
 Big ones:
 * Implement Agent steered version of the workflow. Basically an orchestrator version of the workflow.
