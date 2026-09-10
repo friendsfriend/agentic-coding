@@ -35,12 +35,22 @@ Exceptions, stated explicitly:
 
 Every keybind is declared once in a per-surface catalog and rendered from a
 single shared contract (`src/tui/shared/keybinds.ts`). Entries are plain data
-(`{ key, action, standard?, context? }`) — renderers own colors and separators,
-so a keybind can never smuggle in styling. The footer advertises only special
-keys (`standard` keys are hidden); the `?` help modal lists the whole catalog.
+(`{ key, action, short?, standard?, context? }`) — renderers own colors and
+separators, so a keybind can never smuggle in styling. The footer advertises
+only special keys (`standard` keys are hidden); the `?` help modal lists the
+whole catalog.
+
+Label rules:
+
+- `short` is the compact one-word footer label (e.g. `filter`); the footer
+  shows `short ?? action`, while the `?` help modal and modals show the full
+  `action`. Use `short` whenever `action` is a phrase, not a single word.
+- A shifted letter is written as the uppercase letter, never as `Shift+<x>`:
+  `T` (theme), `J/K/H/L` (panels), `O` (sort). True modifier combos keep the
+  prefix (`Ctrl+Shift+C`, `Alt+Enter`).
 
 - Contract + reactive store: `src/tui/shared/keybinds.ts` (`Keybind`,
-  `KeybindSection`, `setActiveKeybindCatalog`).
+  `keybindFooterLabel`, `KeybindSection`, `setActiveKeybindCatalog`).
 - Dashboard catalogs: `src/tui/dash/keybinds.ts` (overview + detail; detail
   entries carry a panel `context` so the footer changes with the focused
   panel).

@@ -110,27 +110,49 @@ test("footer follows the focused detail panel and hides standard keys", async ()
 	);
 	await dashboardReady(t);
 
-	// Change panel: its gate action is advertised; standard scroll is not.
+	// Change panel: its compact gate label is advertised; standard scroll is not.
 	const change = t.captureCharFrame();
-	expect(change).toContain("Approve gate / review changed files");
+	expect(change).toContain("J/K/H/L panels");
+	expect(change).toContain("Enter approve");
 	expect(change).not.toContain("Scroll focused panel");
-	expect(change).toContain("Move between panels");
+	// The footer is the short view; the long action stays in `?` help.
+	expect(change).not.toContain("Approve gate / review changed files");
 
 	// Shift+J → OpenSpec panel: the footer swaps in the artifact action.
 	t.mockInput.pressKey("j", { shift: true });
 	await t.renderOnce();
-	await t.waitForFrame((frame) => frame.includes("Open selected artifact"));
+	await t.waitForFrame((frame) => frame.includes("Enter open"));
 	const openspec = t.captureCharFrame();
-	expect(openspec).not.toContain("Approve gate / review changed files");
+	expect(openspec).not.toContain("Enter approve");
 
 	// Shift+L → Agents panel: its own actions replace the OpenSpec action.
 	t.mockInput.pressKey("l", { shift: true });
 	await t.renderOnce();
-	const agents = await t.waitForFrame((frame) =>
-		frame.includes("Focus selected agent"),
+	const agents = await t.waitForFrame((frame) => frame.includes("Enter focus"));
+	expect(agents).toContain("v verifier");
+	expect(agents).not.toContain("Enter open");
+
+	t.renderer.destroy();
+});
+
+test("`?` help keeps the full descriptions the footer shortens", async () => {
+	const t = await testRender(
+		() => <TestDashboard testData={artifactsFixture(3)} />,
+		{ width: 140, height: 40 },
 	);
-	expect(agents).toContain("View selected verifier");
-	expect(agents).not.toContain("Open selected artifact");
+	await dashboardReady(t);
+
+	const footer = t.captureCharFrame();
+	expect(footer).toContain("Enter approve");
+	expect(footer).not.toContain("Approve gate / review changed files");
+
+	t.mockInput.pressKey("?");
+	const help = await t.waitForFrame((frame) =>
+		frame.includes("Dashboard keybindings"),
+	);
+	expect(help).toContain("Approve gate / review changed files");
+	expect(help).toContain("Move between panels");
+	expect(help).toContain("View selected verifier result");
 
 	t.renderer.destroy();
 });

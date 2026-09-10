@@ -92,6 +92,19 @@ describe("keybind catalog contract", () => {
 				line.map((kb) => `${kb.key} ${kb.action}`).join("  •  ").length,
 			).toBeLessThanOrEqual(24);
 	});
+
+	it("measures footer wrapping by the compact label, not the long action", () => {
+		const entries = [
+			{ key: "f", action: "Open filter modal", short: "filter" },
+			{ key: "o", action: "Open sort modal", short: "sort" },
+		];
+		// Long actions would need 41 columns; the short labels fit in 19.
+		const lines = wrapHelpEntries(entries, 20);
+		expect(lines).toHaveLength(1);
+		expect(lines[0].map((kb) => `${kb.key} ${kb.short}`).join("  •  ")).toBe(
+			"f filter  •  o sort",
+		);
+	});
 });
 
 test("help modal lists every keybind from the active catalog", async () => {
@@ -108,5 +121,46 @@ test("help modal lists every keybind from the active catalog", async () => {
 	expect(frame).toContain("Scroll focused panel");
 	expect(frame).toContain("Open selected artifact");
 	expect(frame).toContain("View selected verifier result");
+	t.renderer.destroy();
+});
+
+test("help modal rows keep their line instead of overlapping when they overflow", async () => {
+	const t = await testRender(
+		() => (
+			<HelpModal
+				title="Keybindings"
+				offset={0}
+				lines={40}
+				sections={[
+					{
+						title: "Navigation",
+						keybinds: [
+							{ key: "j/k", action: "select" },
+							{ key: "Enter", action: "open" },
+						],
+					},
+					{
+						title: "Actions",
+						keybinds: [
+							{ key: "f", action: "filter" },
+							{ key: "r", action: "refresh" },
+						],
+					},
+				]}
+			/>
+		),
+		// A 10-row terminal leaves a 3-row modal body, so a 6-row catalog must
+		// overflow. Shrinking rows compress onto each other (e.g. the title and
+		// "open" merge into "Actions openct") instead of being clipped, so the
+		// rows that do fit must stay intact and one per line.
+		{ width: 90, height: 10 },
+	);
+	await t.flush();
+	const frame = t.captureCharFrame();
+	// The last row that fits owns its line with key and action intact; the
+	// rows below it are clipped, not smeared over the visible ones.
+	expect(frame).toMatch(/Enter\s+open/);
+	expect(frame).toContain("Navigation");
+	expect(frame).not.toContain("Actions");
 	t.renderer.destroy();
 });

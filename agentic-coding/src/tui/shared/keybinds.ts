@@ -14,14 +14,32 @@ import { createSignal } from "solid-js";
  *   panel). The `?` help modal lists the entry regardless of context.
  */
 export interface Keybind {
-	/** Display label for the key combo, e.g. "Shift+J/K", "Enter", "/". */
+	/** Display label for the key combo, e.g. "J/K", "Enter", "/". */
 	key: string;
-	/** Short action description, e.g. "Move between panels". */
+	/**
+	 * Full action description. Footers without a `short` label and the `?` help
+	 * modal render this.
+	 */
 	action: string;
+	/**
+	 * Optional one-word label for footer surfaces (the main StatusBar and modal
+	 * footers via `HelpText`), which render `short ?? action`. The `?` help
+	 * modal always renders `action`, and shifted letters are written uppercase
+	 * (`T`, `J/K/H/L`), never `Shift+T`.
+	 */
+	short?: string;
 	/** Hide from footers (still shown in `?` help); defaults to false. */
 	standard?: boolean;
 	/** Footer context this entry belongs to; undefined means every context. */
 	context?: string;
+}
+
+/**
+ * Label a footer renders for an entry: the compact `short` when provided,
+ * otherwise the full `action`. The `?` help modal always renders `action`.
+ */
+export function keybindFooterLabel(keybind: Keybind): string {
+	return keybind.short ?? keybind.action;
 }
 
 export interface KeybindSection {

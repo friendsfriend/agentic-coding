@@ -31,14 +31,18 @@ export function dashboardOverviewKeybindCatalog(): KeybindSection[] {
 		{
 			title: "Actions",
 			keybinds: [
-				{ key: "Enter", action: "Switch active workspace" },
-				{ key: "n", action: "New workflow" },
-				{ key: "m", action: "Agent configuration (profiles / presets)" },
-				{ key: "f", action: "Open filter modal" },
-				{ key: "o", action: "Open sort modal" },
-				{ key: "Shift+T", action: "Theme picker" },
-				{ key: "r", action: "Refresh" },
-				{ key: "?", action: "Open help" },
+				{ key: "Enter", action: "Switch active workspace", short: "switch" },
+				{ key: "n", action: "New workflow", short: "new" },
+				{
+					key: "m",
+					action: "Agent configuration (profiles / presets)",
+					short: "config",
+				},
+				{ key: "f", action: "Open filter modal", short: "filter" },
+				{ key: "o", action: "Open sort modal", short: "sort" },
+				{ key: "T", action: "Theme picker", short: "theme" },
+				{ key: "r", action: "Refresh", short: "refresh" },
+				{ key: "?", action: "Open help", short: "help" },
 				{ key: "q", action: "Quit", standard: true },
 			],
 		},
@@ -57,13 +61,21 @@ export function dashboardDetailKeybindCatalog(options: {
 		{
 			title: "Navigation",
 			keybinds: [
-				{ key: "Shift+J/K/H/L", action: "Move between panels" },
+				{
+					key: "J/K/H/L",
+					action: "Move between panels",
+					short: "panels",
+				},
 				{
 					key: "j/k or ↑/↓",
 					action: "Scroll focused panel",
 					standard: true,
 				},
-				{ key: "Esc", action: "Return to dashboard workspace" },
+				{
+					key: "Esc",
+					action: "Return to dashboard workspace",
+					short: "back",
+				},
 			],
 		},
 		{
@@ -72,6 +84,7 @@ export function dashboardDetailKeybindCatalog(options: {
 				{
 					key: "Enter",
 					action: "Approve gate / review changed files",
+					short: "approve",
 					context: CHANGE_PANEL_CONTEXT,
 				},
 			],
@@ -84,6 +97,7 @@ export function dashboardDetailKeybindCatalog(options: {
 				{
 					key: "Enter",
 					action: "Open selected artifact",
+					short: "open",
 					context: OPENSPEC_PANEL_CONTEXT,
 				},
 			],
@@ -95,11 +109,13 @@ export function dashboardDetailKeybindCatalog(options: {
 				{
 					key: "Enter",
 					action: "Focus selected agent",
+					short: "focus",
 					context: AGENTS_PANEL_CONTEXT,
 				},
 				{
 					key: "v",
 					action: "View selected verifier result",
+					short: "verifier",
 					context: AGENTS_PANEL_CONTEXT,
 				},
 			],
@@ -107,12 +123,12 @@ export function dashboardDetailKeybindCatalog(options: {
 		{
 			title: "Global",
 			keybinds: [
-				{ key: "Shift+O", action: "Show safe repair guidance" },
-				{ key: "c", action: "View agent cost breakdown" },
-				{ key: "Shift+T", action: "Theme picker" },
+				{ key: "O", action: "Show safe repair guidance", short: "repair" },
+				{ key: "c", action: "View agent cost breakdown", short: "cost" },
+				{ key: "T", action: "Theme picker", short: "theme" },
 				{ key: "Ctrl+Shift+C", action: "Copy selection", standard: true },
-				{ key: "r", action: "Refresh dashboard" },
-				{ key: "?", action: "Open help" },
+				{ key: "r", action: "Refresh dashboard", short: "refresh" },
+				{ key: "?", action: "Open help", short: "help" },
 				{ key: "q", action: "Quit", standard: true },
 			],
 		},
