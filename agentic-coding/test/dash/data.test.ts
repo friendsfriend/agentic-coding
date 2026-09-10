@@ -964,6 +964,84 @@ test("agentMetrics sums usage events per role and prefers generation time for to
 	expect(worker?.tokensPerSecond).toBe(6);
 });
 
+test("agentMetrics sums active turns and excludes idle gaps between them", () => {
+	const metrics = agentMetrics([
+		{ event: "runtime.started", role: "worker", at: "2026-01-01T10:00:00Z" },
+		{
+			event: "runtime.usage",
+			role: "worker",
+			at: "2026-01-01T10:01:00Z",
+			outputTokens: 100,
+		},
+		{ event: "runtime.settled", role: "worker", at: "2026-01-01T10:02:00Z" },
+		// Four idle hours before the second turn.
+		{ event: "runtime.started", role: "worker", at: "2026-01-01T14:00:00Z" },
+		{
+			event: "runtime.usage",
+			role: "worker",
+			at: "2026-01-01T14:01:30Z",
+			outputTokens: 100,
+		},
+		{ event: "runtime.settled", role: "worker", at: "2026-01-01T14:02:00Z" },
+	]);
+	// 120s + 120s, not the 4h+ wall-clock first→last span.
+	expect(metrics.get("worker")?.durationSeconds).toBe(240);
+});
+
+test("agentMetrics closes an in-flight turn at the role's last event", () => {
+	const metrics = agentMetrics([
+		{ event: "runtime.started", role: "worker", at: "2026-01-01T10:00:00Z" },
+		{ event: "runtime.settled", role: "worker", at: "2026-01-01T10:01:00Z" },
+		// Second turn never settles; count it up to its last observed event.
+		{ event: "runtime.started", role: "worker", at: "2026-01-01T10:05:00Z" },
+		{
+			event: "runtime.usage",
+			role: "worker",
+			at: "2026-01-01T10:06:00Z",
+			outputTokens: 10,
+		},
+	]);
+	expect(metrics.get("worker")?.durationSeconds).toBe(120);
+});
+
+test("agentMetrics honors legacy pi_agent lifecycle boundaries", () => {
+	const metrics = agentMetrics([
+		{ event: "pi_agent_start", role: "worker", at: "2026-01-01T10:00:00Z" },
+		{
+			event: "model_usage",
+			role: "worker",
+			at: "2026-01-01T10:01:00Z",
+			outputTokens: 100,
+			durationMs: 10000,
+		},
+		{ event: "pi_agent_end", role: "worker", at: "2026-01-01T10:02:00Z" },
+		{ event: "pi_agent_settled", role: "worker", at: "2026-01-01T10:02:00Z" },
+		// Two idle hours before the second turn.
+		{ event: "pi_agent_start", role: "worker", at: "2026-01-01T12:00:00Z" },
+		{ event: "pi_agent_end", role: "worker", at: "2026-01-01T12:03:00Z" },
+	]);
+	// 120s + 180s, not the 3h wall-clock first→last span.
+	expect(metrics.get("worker")?.durationSeconds).toBe(300);
+});
+
+test("agentMetrics falls back to the wall-clock span without lifecycle events", () => {
+	const metrics = agentMetrics([
+		{
+			event: "model_usage",
+			role: "worker",
+			at: "2026-01-01T10:00:00Z",
+			outputTokens: 10,
+		},
+		{
+			event: "model_usage",
+			role: "worker",
+			at: "2026-01-01T10:05:00Z",
+			outputTokens: 10,
+		},
+	]);
+	expect(metrics.get("worker")?.durationSeconds).toBe(300);
+});
+
 test("agentMetrics retains complete cache inputs when cached reads exceed uncached input", () => {
 	const metrics = agentMetrics([
 		{

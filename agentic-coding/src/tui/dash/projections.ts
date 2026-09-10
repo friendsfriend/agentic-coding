@@ -15,6 +15,18 @@ import type {
 } from "./types";
 export const USAGE_EVENT_NAMES = new Set(["runtime.usage", "model_usage"]);
 
+/** Telemetry events that open/close an agent's active turn. `runtime.*` is the
+ * current pi bridge naming; `pi_agent_*` is kept for older telemetry files. */
+export const ACTIVE_START_EVENT_NAMES = new Set([
+	"runtime.started",
+	"pi_agent_start",
+]);
+export const ACTIVE_END_EVENT_NAMES = new Set([
+	"runtime.settled",
+	"pi_agent_end",
+	"pi_agent_settled",
+]);
+
 function isUsageEvent(event: Record<string, unknown>): boolean {
 	return USAGE_EVENT_NAMES.has(String(event.event));
 }
@@ -25,13 +37,40 @@ interface MetricAccumulator extends AgentUsageMetrics {
 	lastAt?: number;
 	hasUsage?: boolean;
 	cacheInputsComplete?: boolean;
+	activeBoundaries?: Array<{ at: number; start: boolean }>;
+}
+
+/** Sum the agent's active turn intervals, excluding the idle gaps between them.
+ * A turn opens on `runtime.started`/`pi_agent_start` and closes on the next
+ * `runtime.settled`/`pi_agent_end`/`pi_agent_settled`; a turn still in flight
+ * closes at the role's last observed event. Falls back to the wall-clock
+ * first→last span when the role recorded no lifecycle boundaries at all. */
+function activeDurationSeconds(
+	boundaries: Array<{ at: number; start: boolean }>,
+	fallbackSeconds: number | undefined,
+	lastAt: number | undefined,
+): number | undefined {
+	if (boundaries.length === 0) return fallbackSeconds;
+	let openAt: number | undefined;
+	let totalMs = 0;
+	for (const boundary of [...boundaries].sort((a, b) => a.at - b.at)) {
+		if (boundary.start) {
+			if (openAt === undefined) openAt = boundary.at;
+			continue;
+		}
+		if (openAt === undefined) continue;
+		totalMs += Math.max(0, boundary.at - openAt);
+		openAt = undefined;
+	}
+	if (openAt !== undefined) totalMs += Math.max(0, (lastAt ?? openAt) - openAt);
+	return Math.max(0, Math.round(totalMs / 1000));
 }
 
 /** Aggregate per-role agent metrics from a workflow's telemetry events:
- * summed cost/tokens/cache-read from usage events, wall-clock duration from
- * the role's first to last timestamped event (lifecycle or usage), and output
- * tokens per second preferring summed per-message generation time over the
- * wall-clock span. Roles without any metric are omitted from the result. */
+ * summed cost/tokens/cache-read from usage events, active runtime from the
+ * role's lifecycle turns (idle gaps between turns excluded), and output tokens
+ * per second preferring summed per-message generation time over the wall-clock
+ * span. Roles without any metric are omitted from the result. */
 export function agentMetrics(
 	events: Array<Record<string, unknown>>,
 ): Map<string, AgentUsageMetrics> {
@@ -45,6 +84,17 @@ export function agentMetrics(
 		if (Number.isFinite(at)) {
 			row.firstAt = row.firstAt === undefined ? at : Math.min(row.firstAt, at);
 			row.lastAt = row.lastAt === undefined ? at : Math.max(row.lastAt, at);
+			const name = String(event.event ?? "");
+			if (
+				ACTIVE_START_EVENT_NAMES.has(name) ||
+				ACTIVE_END_EVENT_NAMES.has(name)
+			) {
+				if (!row.activeBoundaries) row.activeBoundaries = [];
+				row.activeBoundaries.push({
+					at,
+					start: ACTIVE_START_EVENT_NAMES.has(name),
+				});
+			}
 		}
 		if (!isUsageEvent(event)) continue;
 		const cacheInputsComplete = [
@@ -80,12 +130,17 @@ export function agentMetrics(
 	}
 	const result = new Map<string, AgentUsageMetrics>();
 	for (const [role, row] of byRole) {
-		const durationSeconds =
+		const wallClockSeconds =
 			row.firstAt !== undefined &&
 			row.lastAt !== undefined &&
 			row.lastAt > row.firstAt
 				? Math.max(0, Math.round((row.lastAt - row.firstAt) / 1000))
 				: undefined;
+		const durationSeconds = activeDurationSeconds(
+			row.activeBoundaries ?? [],
+			wallClockSeconds,
+			row.lastAt,
+		);
 		const outputTokens = row.outputTokens ?? 0;
 		const generationSeconds = (row.generationMs ?? 0) / 1000;
 		const tokensPerSecond =
