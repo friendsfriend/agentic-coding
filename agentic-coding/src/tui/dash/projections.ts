@@ -27,6 +27,21 @@ export const ACTIVE_END_EVENT_NAMES = new Set([
 	"pi_agent_settled",
 ]);
 
+/** Latest run per role, selected by attempt. The one per-role run projection
+ * shared by the dashboard pane map (`viewToDashboardState`) and the agent list
+ * (`loadDashboard`), so every per-role lookup (status, runtime, focus pane)
+ * agrees on which run represents a role. */
+export function latestRunsByRole<T extends { role: string; attempt: number }>(
+	runs: Iterable<T>,
+): Map<string, T> {
+	const latest = new Map<string, T>();
+	for (const run of runs) {
+		const existing = latest.get(run.role);
+		if (!existing || existing.attempt <= run.attempt) latest.set(run.role, run);
+	}
+	return latest;
+}
+
 function isUsageEvent(event: Record<string, unknown>): boolean {
 	return USAGE_EVENT_NAMES.has(String(event.event));
 }

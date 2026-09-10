@@ -1,3 +1,4 @@
+import type { RunStatus } from "../../workflow/contracts.ts";
 import { agentMetrics } from "./projections";
 import type { DashboardData, FindingCounts } from "./types";
 
@@ -22,6 +23,13 @@ export function testDashboard(phase = "proposed"): DashboardData {
 		"closed",
 	].includes(phase);
 	const archived = ["completed", "closed"].includes(phase);
+	const verifierStatus: RunStatus =
+		phase === "verify" ? "working" : verified ? "completed" : "pending";
+	const testVerifierStatus: RunStatus = verified ? "completed" : "pending";
+	const archiveAgents: DashboardData["agents"] =
+		phase === "archive" || archived
+			? [{ role: "archive", status: archived ? "completed" : "working" }]
+			: [];
 	// Demo telemetry mirrors what the pi bridge emits: runtime lifecycle plus
 	// per-message usage rows carrying cache/duration/tok-s fields. Metrics are
 	// derived through the real aggregation so fixtures cannot drift from it.
@@ -163,7 +171,7 @@ export function testDashboard(phase = "proposed"): DashboardData {
 		agents: [
 			{
 				role: "planner",
-				status: applying ? "closed" : "idle",
+				status: applying ? "completed" : "working",
 				runtime: "pi",
 				model: "provider/planner",
 				cost: 0.08,
@@ -172,7 +180,7 @@ export function testDashboard(phase = "proposed"): DashboardData {
 			{
 				role: "worker",
 				status:
-					phase === "apply" ? "working" : applying ? "idle" : "not started",
+					phase === "apply" ? "working" : applying ? "completed" : "pending",
 				runtime: "opencode",
 				model: "provider/worker",
 				cost: 0.42,
@@ -189,23 +197,15 @@ export function testDashboard(phase = "proposed"): DashboardData {
 				role,
 				runtime: role === "security-verifier" ? "opencode-v2" : undefined,
 				model: role === "security-verifier" ? "provider/security" : undefined,
-				status:
-					phase === "verify" ? "working" : verified ? "done" : "not started",
+				status: verifierStatus,
 				metrics: demoMetrics.get(role),
 				findingCounts: demoFindingCounts[role],
 			})),
 			{
 				role: "test-verifier",
-				status:
-					phase === "verify"
-						? "not started"
-						: verified
-							? "done"
-							: "not started",
+				status: testVerifierStatus,
 			},
-			...(phase === "archive" || archived
-				? [{ role: "archive", status: archived ? "done" : "working" }]
-				: []),
+			...archiveAgents,
 		],
 		updated: new Date().toLocaleTimeString(),
 		health: {

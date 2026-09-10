@@ -2,7 +2,10 @@
  * review, and root wiring modules can reference the same typed data
  * without importing each other.
  */
-import type { DeveloperDialogueRecord } from "../../workflow/contracts.ts";
+import type {
+	DeveloperDialogueRecord,
+	RunStatus,
+} from "../../workflow/contracts.ts";
 
 export interface WorkflowState {
 	/** User-supplied workflow identifier; dashboards address workflows by it. */
@@ -38,7 +41,7 @@ export interface WorkflowState {
 		stepId: string;
 		role: string;
 		attempt: number;
-		status: string;
+		status: RunStatus;
 		runtime: string;
 		profile: string;
 		model?: string;
@@ -86,7 +89,7 @@ export interface WorkflowOverview {
 	// WorkflowOverview agents: role/status/model plus lifetime cost.
 	agents: Array<{
 		role: string;
-		status: string;
+		status: RunStatus;
 		runtime?: string;
 		model?: string;
 		cost?: number;
@@ -144,7 +147,7 @@ export interface DashboardData {
 	reviewHistory: string[];
 	agents: Array<{
 		role: string;
-		status: string;
+		status: RunStatus;
 		runtime?: string;
 		model?: string;
 		cost?: number;
