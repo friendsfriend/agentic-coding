@@ -1,7 +1,8 @@
 Not for agents. This is only for humans.
 
 Fixes: 
-* Placeholder finding lines dont show the comment related to the line
+* Still some of the errors appear inline in the tui instead of via the notification system / tracing
+* Improve test performance. Takes too long to execute
 
 Big ones:
 * Implement Agent steered version of the workflow. Basically an orchestrator version of the workflow.

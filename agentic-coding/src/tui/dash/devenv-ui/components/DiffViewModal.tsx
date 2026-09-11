@@ -930,10 +930,19 @@ export function DiffViewModal(props: DiffViewModalProps) {
 		const following = wrapperBox
 			.getChildren()
 			.find((child) => child.id === `${idPrefix}${next + 1}`);
-		if (following) scrollBox.scrollChildIntoView(following.id);
+		if (following) {
+			scrollBox.scrollChildIntoView(following.id);
+			// Keep selection visible without moving it during scrolling.
+			scrollBox.scrollChildIntoView(target.id);
+			return;
+		}
 
-		// Keep selection visible without moving it during scrolling.
+		// The last selectable line has no following line to anchor the scroll, so
+		// an inline thread below it (e.g. a synthetic finding-anchor line) would be
+		// clipped. Scroll the selection into view, then pin the viewport to the
+		// content bottom so the thread stays visible.
 		scrollBox.scrollChildIntoView(target.id);
+		scrollBox.scrollTop = scrollBox.scrollHeight;
 	});
 
 	// Extract file extension for syntax highlighting

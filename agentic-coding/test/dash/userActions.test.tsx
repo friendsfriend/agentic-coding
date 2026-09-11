@@ -143,6 +143,75 @@ test("wiki review diff renders Markdown and only maps current lines", async () =
 	t.renderer.destroy();
 });
 
+test("last finding anchor scrolls its inline comment into view", async () => {
+	const [selectedLine, setSelectedLine] = createSignal(0);
+	const body = Array.from(
+		{ length: 20 },
+		(_, index) => `+line ${index + 1}`,
+	).join("\n");
+	// The synthetic finding anchor is appended as the final diff hunk; the
+	// last selectable row's thread must stay visible instead of being clipped
+	// below the viewport.
+	const diff = `@@ -1,20 +1,20 @@\n${body}\n@@ -99,1 +99,1 @@\n+[finding]\n`;
+	const t = await testRender(
+		() => (
+			<DiffViewModal
+				filePath="src/example.ts"
+				diff={diff}
+				currentFileIndex={0}
+				totalFiles={1}
+				selectedLine={selectedLine()}
+				visualModeActive={false}
+				visualModeStart={0}
+				forceSplitView={false}
+				commentMode={false}
+				commentText=""
+				discussions={[
+					{
+						id: "finding-run:Q-1",
+						individual_note: true,
+						position: {
+							base_sha: "",
+							start_sha: "",
+							head_sha: "",
+							old_path: "src/example.ts",
+							new_path: "src/example.ts",
+							position_type: "text",
+							new_line: 99,
+						},
+						notes: [
+							{
+								id: 1,
+								type: "DiffNote",
+								body: "Helper is never used.",
+								author: { name: "Verifier" },
+								created_at: new Date().toISOString(),
+								updated_at: "",
+								system: false,
+								resolvable: false,
+								resolved: false,
+							},
+						],
+						findingId: "run:Q-1",
+						findingSeverity: "info",
+					},
+				]}
+				onSelectedLineChange={setSelectedLine}
+				onClose={() => {}}
+			/>
+		),
+		{ width: 100, height: 24 },
+	);
+	await t.flush();
+	// The last selectable row is the injected `[finding]` line (index 20).
+	setSelectedLine(20);
+	await t.flush();
+	const frame = t.captureCharFrame();
+	expect(frame).toContain("[finding]");
+	expect(frame).toContain("Helper is never used.");
+	t.renderer.destroy();
+});
+
 test("dismissed plan review stays closed during panel interactions", async () => {
 	const t = await testRender(() => <TestDashboard artifacts={5} />, {
 		width: 120,
