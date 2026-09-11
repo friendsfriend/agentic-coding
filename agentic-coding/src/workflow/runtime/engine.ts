@@ -31,11 +31,10 @@ import {
 import { decodePlanResult } from "../definitions/contracts.ts";
 import { effectiveManifestPolicy } from "../definitions.ts";
 import {
-	childTrace,
-	parseTraceparent,
 	redactTelemetryText,
 	telemetryEnvelope,
 	traceparent,
+	workflowTraceContext,
 } from "../observability.ts";
 import type {
 	CompiledWorkflowDefinition,
@@ -1604,7 +1603,7 @@ export class WorkflowEngine {
 		const self = this;
 		return Effect.gen(function* () {
 			const service = yield* WorkflowTelemetry;
-			const context = childTrace(parseTraceparent(process.env.TRACEPARENT));
+			const context = workflowTraceContext(snapshot.workflowId);
 			service.emit(
 				self.telemetryDirectory(snapshot),
 				telemetryEnvelope({

@@ -8,6 +8,7 @@ import {
 	parseTelemetryJsonl,
 	parseTelemetryLine,
 } from "../../src/tui/otel/model/parser";
+import { workflowTraceId } from "../../src/workflow/observability.ts";
 
 const TELEMETRY = [
 	'{"schemaVersion":1,"at":"2026-09-11T09:14:15.921Z","layer":"engine","event":"effect.result","workflowId":"wf-1","stepId":"core.implementation","role":"worker","outcome":"error","durationMs":250,"traceparent":"00-a3bc231c2fb909c7dc3fdf4a55f6aa7e-dd7779c4a8490e79-01"}',
@@ -118,6 +119,40 @@ describe("enriched telemetry payload ingest", () => {
 		);
 		expect(span.attributes.find((a) => a.key === "string.attr")?.value).toBe(
 			"x",
+		);
+	});
+
+	test("workflow traceparent keeps every layer in one workflow trace", () => {
+		const traceId = workflowTraceId("wf-group");
+		const traceparent = `00-${traceId}-${"a".repeat(16)}-01`;
+		const row = (fields: Record<string, unknown>) =>
+			JSON.stringify({
+				schemaVersion: 1,
+				at: "2026-09-11T10:00:00.000Z",
+				workflowId: "wf-group",
+				...fields,
+			});
+		const spans = parseTelemetryJsonl(
+			[
+				row({ layer: "engine", event: "effect.result", traceparent }),
+				row({ layer: "adapter", event: "agent.launch", traceparent }),
+				row({
+					layer: "runtime",
+					runtime: "pi",
+					event: "runtime.usage",
+					traceparent,
+					inputTokens: 7,
+				}),
+				// A record the emitter never stamped falls back to the same
+				// workflow-id digest, so it joins the workflow trace too.
+				row({ event: "legacy.event" }),
+			].join("\n"),
+		);
+		expect(spans).toHaveLength(4);
+		// The per-span trace id, not the viewer's workflow grouping, is what this
+		// test guards: every layer must carry the one workflow trace id (TELEM-001).
+		expect(new Set(spans.map((span) => span.traceId))).toEqual(
+			new Set([traceId]),
 		);
 	});
 });

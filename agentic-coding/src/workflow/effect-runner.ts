@@ -29,11 +29,10 @@ import { PermanentFailure, TransientFailure } from "./failures.ts";
 import * as H from "./herdr-schema.ts";
 import {
 	adapterTelemetryEnvelope,
-	childTrace,
-	parseTraceparent,
 	type TelemetryEnvelope,
 	TelemetrySink,
 	traceparent,
+	workflowTraceContext,
 } from "./observability.ts";
 import { runProcessEffect } from "./process.ts";
 import type { StepDefinition, WorkflowRegistry } from "./registry.ts";
@@ -740,6 +739,7 @@ export function agentEffectHandlers(
 					event: input.event,
 					at: new Date().toISOString(),
 					workflowId: snapshot.workflowId,
+					traceparent: traceparent(workflowTraceContext(snapshot.workflowId)),
 					stepId: run.stepId,
 					runId: run.id,
 					role: run.role,
@@ -2484,9 +2484,7 @@ function assignmentFor(
 				snapshot.definition.id === "research"
 					? `${wikiWorkflowDataRoot()}/${snapshot.workflowId}/telemetry.jsonl`
 					: `${snapshot.metadata.worktree}/.herdr-workflow/${snapshot.workflowId}/telemetry.jsonl`,
-			TRACEPARENT: traceparent(
-				childTrace(parseTraceparent(process.env.TRACEPARENT)),
-			),
+			TRACEPARENT: traceparent(workflowTraceContext(run.workflowId)),
 		},
 	};
 }
