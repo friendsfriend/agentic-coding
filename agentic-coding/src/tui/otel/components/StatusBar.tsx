@@ -1,7 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { useTerminalDimensions } from "@opentui/solid";
-import { For } from "solid-js";
-import { HelpText, wrapHelpEntries } from "../../shared/HelpText";
+import { HelpText } from "../../shared/HelpText";
 import {
 	activeKeybindCatalog,
 	activeKeybindContext,
@@ -12,51 +10,55 @@ import { uiColors } from "../ui/colors";
 
 export type { Keybind };
 
+/** Fallback right-anchored entry so `?` help is advertised on every surface. */
+const FALLBACK_HELP: Keybind = { key: "?", action: "help" };
+
 /**
  * Shell footer. Reads the active keybind catalog published by whichever
  * surface owns the current footer (shell tab, workspace overview, or
- * dashboard panel) and renders only its special keys, wrapped to the terminal
- * width so long catalogs are not clipped.
+ * dashboard panel). It stays exactly one row high: the special keybinds fill
+ * a left column that clips overflow, while `?` help is pinned to the right so
+ * it remains visible no matter how many keys precede it.
  */
 export function StatusBar(props: {
 	prompt?: string;
 	keybinds?: readonly Keybind[];
-	/** Horizontal inset already applied by the parent box (padding). */
-	inset?: number;
 }) {
-	const dimensions = useTerminalDimensions();
 	const keybinds = () =>
 		props.keybinds
 			? [...props.keybinds]
 			: footerKeybinds(activeKeybindCatalog(), activeKeybindContext());
-	// Leave room for this bar's padding, the parent's inset, and the prompt.
-	const maxWidth = () =>
-		Math.max(
-			1,
-			dimensions().width - 2 - (props.inset ?? 0) - (props.prompt?.length ?? 0),
-		);
-	const lines = () => wrapHelpEntries(keybinds(), maxWidth());
+	const help = () =>
+		keybinds().find((keybind) => keybind.key === "?") ?? FALLBACK_HELP;
+	const entries = () => keybinds().filter((keybind) => keybind.key !== "?");
 	return (
 		<box
 			backgroundColor={uiColors.bgMantle}
 			style={{
 				width: "100%",
-				height: Math.max(1, lines().length),
-				flexDirection: "column",
+				height: 1,
+				flexDirection: "row",
 				paddingLeft: 1,
 				paddingRight: 1,
 			}}
 		>
-			<For each={lines()}>
-				{(line, index) => (
-					<box style={{ flexDirection: "row" }}>
-						{index() === 0 ? (
-							<text fg={uiColors.textMuted}>{props.prompt ?? ""}</text>
-						) : null}
-						<HelpText entries={line} />
-					</box>
-				)}
-			</For>
+			<box
+				style={{
+					flexGrow: 1,
+					flexShrink: 1,
+					minWidth: 0,
+					overflow: "hidden",
+					flexDirection: "row",
+				}}
+			>
+				{props.prompt ? (
+					<text fg={uiColors.textMuted}>{props.prompt}</text>
+				) : null}
+				<HelpText entries={entries()} />
+			</box>
+			<box style={{ flexShrink: 0, marginLeft: 1 }}>
+				<HelpText entries={[help()]} />
+			</box>
 		</box>
 	);
 }

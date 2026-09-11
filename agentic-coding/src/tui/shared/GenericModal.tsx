@@ -106,7 +106,7 @@ function wrapHelpText(text: string, maxWidth: number): string[] {
 					.map((chunk) => chunk.trim())
 					.filter(Boolean)
 			: sourceLine.split(/\s+/).filter(Boolean);
-		const separator = sourceLine.includes("•") ? "  •  " : " ";
+		const separator = sourceLine.includes("•") ? " • " : " ";
 		let current = "";
 
 		for (const chunk of chunks) {

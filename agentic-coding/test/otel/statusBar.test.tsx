@@ -61,7 +61,7 @@ test("explicit keybinds override the active catalog", async () => {
 	t.renderer.destroy();
 });
 
-test("long footers wrap instead of clipping the tail entries", async () => {
+test("long footers stay one row and pin `?` help to the right", async () => {
 	setActiveKeybindCatalog([
 		{
 			title: "Actions",
@@ -78,50 +78,24 @@ test("long footers wrap instead of clipping the tail entries", async () => {
 	const t = await testRender(() => <StatusBar />, { width: 32, height: 8 });
 	await t.flush();
 	const frame = t.captureCharFrame();
-	// Both ends of the catalog survive; nothing is clipped off a single row.
-	expect(frame).toContain("Shift+J/K/H/L");
-	expect(frame).toContain("? help");
 	const populated = frame.split("\n").filter((line) => line.trim().length > 0);
-	expect(populated.length).toBeGreaterThan(1);
+	// A single row: overflow clips instead of growing the footer.
+	expect(populated).toHaveLength(1);
+	// `?` help is anchored to the right edge and survives the overflow.
+	expect(populated[0]?.trimEnd().endsWith("? help")).toBe(true);
+	// Entries pushed past the clipped left column are not rendered.
+	expect(frame).not.toContain("Shift+O");
 	t.renderer.destroy();
 });
 
-test("status bar honors a parent inset when wrapping", async () => {
-	const catalog: KeybindSection[] = [
-		{
-			title: "Actions",
-			keybinds: [
-				{ key: "ab", action: "cde" },
-				{ key: "fg", action: "hij" },
-				{ key: "kl", action: "mno" },
-			],
-		},
-	];
-	setActiveKeybindCatalog(catalog);
-
-	// inset 4 → 14 usable columns: all three entries wrap onto their own row.
-	const inset = await testRender(() => <StatusBar inset={4} />, {
-		width: 20,
-		height: 8,
-	});
-	await inset.flush();
-	const insetRows = inset
-		.captureCharFrame()
-		.split("\n")
-		.filter((line) => line.trim().length > 0);
-	expect(insetRows.length).toBe(3);
-	inset.renderer.destroy();
-
-	// No inset → 18 usable columns: the first two entries share a row.
-	const plain = await testRender(() => <StatusBar />, {
-		width: 20,
-		height: 8,
-	});
-	await plain.flush();
-	const plainRows = plain
-		.captureCharFrame()
-		.split("\n")
-		.filter((line) => line.trim().length > 0);
-	expect(plainRows.length).toBe(2);
-	plain.renderer.destroy();
+test("status bar advertises `?` help even when the catalog omits it", async () => {
+	setActiveKeybindCatalog([
+		{ title: "Actions", keybinds: [{ key: "x", action: "custom" }] },
+	]);
+	const t = await testRender(() => <StatusBar />, { width: 40, height: 3 });
+	await t.flush();
+	const frame = t.captureCharFrame();
+	expect(frame).toContain("x custom");
+	expect(frame.trimEnd().endsWith("? help")).toBe(true);
+	t.renderer.destroy();
 });
