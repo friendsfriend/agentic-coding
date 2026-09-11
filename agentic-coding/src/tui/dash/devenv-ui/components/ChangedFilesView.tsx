@@ -17,7 +17,6 @@ interface ChangedFilesViewProps {
 	selectedIndex: number;
 	onClose: () => void;
 	loading?: boolean;
-	error?: string;
 	searchMode?: boolean;
 	searchQuery?: string;
 	filterSummary?: string;
@@ -92,16 +91,7 @@ export function ChangedFilesView(props: ChangedFilesViewProps) {
 				/>
 			</Show>
 
-			{props.error && (
-				<CenteredState
-					message={props.error}
-					color={highlightColor("negative")}
-					bold
-				/>
-			)}
-
-			{/* Content */}
-			<Show when={!props.loading && !props.error}>
+			<Show when={!props.loading}>
 				{/* Header */}
 				<box
 					style={{

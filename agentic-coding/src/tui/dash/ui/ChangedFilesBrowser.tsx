@@ -3,6 +3,7 @@
 import type { KeyEvent } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
 import { createMemo, createSignal, onMount, Show } from "solid-js";
+import { showErrorModal } from "../../shared/errorModal";
 import { ChangedFilesView } from "../devenv-ui/components/ChangedFilesView";
 import { DiffViewModal } from "../devenv-ui/components/DiffViewModal";
 import { GenericModal } from "../devenv-ui/components/GenericModal";
@@ -29,7 +30,6 @@ export function ChangedFilesBrowser(props: {
 	const dimensions = useTerminalDimensions();
 	const [changes, setChanges] = createSignal<LocalChange[]>([]);
 	const [loading, setLoading] = createSignal(true);
-	const [error, setError] = createSignal<string>();
 	const [view, setView] = createSignal<"files" | "diff">("files");
 	const [index, setIndex] = createSignal(0);
 	const [line, setLine] = createSignal(0);
@@ -42,7 +42,10 @@ export function ChangedFilesBrowser(props: {
 		try {
 			setChanges(loadLocalChanges(props.repo, props.change));
 		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : String(cause));
+			showErrorModal(
+				"Changed files unavailable",
+				cause instanceof Error ? cause.message : String(cause),
+			);
 		} finally {
 			setLoading(false);
 		}
@@ -90,7 +93,10 @@ export function ChangedFilesBrowser(props: {
 			setLine(0);
 			setView("diff");
 		} catch (cause) {
-			setError(cause instanceof Error ? cause.message : String(cause));
+			showErrorModal(
+				"Changed files unavailable",
+				cause instanceof Error ? cause.message : String(cause),
+			);
 		}
 	};
 
@@ -172,7 +178,6 @@ export function ChangedFilesBrowser(props: {
 						searchMode={searchMode()}
 						searchQuery={searchQuery()}
 						loading={loading()}
-						error={error()}
 						availableLines={filesAvailableLines()}
 						onClose={props.onClose}
 					/>

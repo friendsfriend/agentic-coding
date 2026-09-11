@@ -24,6 +24,7 @@ import {
 } from "../../../workflow/wiki";
 import { MarkdownViewModal } from "../../dash/devenv-ui/components/MarkdownViewModal";
 import type { Discussion } from "../../dash/devenv-ui/types";
+import { showErrorModal } from "../../shared/errorModal";
 import { notify } from "../app/notifications";
 import { ScrollableContent } from "../components/ScrollableContent";
 import { uiColors } from "../ui/colors";
@@ -45,8 +46,7 @@ export interface WikiViewProps {
 type WikiLoadState =
 	| { kind: "loading" }
 	| { kind: "ready"; concepts: WikiConcept[]; tree: WikiTreeNode[] }
-	| { kind: "empty" }
-	| { kind: "error"; message: string };
+	| { kind: "empty" };
 
 const printable = (event: KeyEvent): string =>
 	event.sequence && event.sequence.length === 1 ? event.sequence : "";
@@ -87,10 +87,6 @@ export function WikiView(props: WikiViewProps) {
 	createEffect(() => setWikiNoteOpen(note() !== undefined));
 	onCleanup(() => setWikiNoteOpen(false));
 
-	const errorMessage = () => {
-		const current = state();
-		return current.kind === "error" ? current.message : "unknown error";
-	};
 	const rows = createMemo(() => {
 		const current = state();
 		return current.kind === "ready"
@@ -177,10 +173,11 @@ export function WikiView(props: WikiViewProps) {
 					: { kind: "empty" },
 			);
 		} catch (error) {
-			setState({
-				kind: "error",
-				message: error instanceof Error ? error.message : String(error),
-			});
+			showErrorModal(
+				"Wiki unavailable",
+				error instanceof Error ? error.message : String(error),
+			);
+			setState({ kind: "empty" });
 		}
 	};
 
@@ -401,9 +398,6 @@ export function WikiView(props: WikiViewProps) {
 			</Show>
 			<Show when={state().kind === "empty"}>
 				<text fg={uiColors.textMuted}>No readable wiki concepts found.</text>
-			</Show>
-			<Show when={state().kind === "error"}>
-				<text fg={uiColors.error}>Wiki unavailable: {errorMessage()}</text>
 			</Show>
 			<Show when={state().kind === "ready"}>
 				<box style={{ flexDirection: "row", flexGrow: 1, minHeight: 0 }}>

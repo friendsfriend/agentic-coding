@@ -21,6 +21,7 @@ import type { DeveloperDialogueRecord } from "../../workflow/contracts";
 import { formatDuration } from "../../workflow/format";
 import { wikiWorkflowDataRoot } from "../../workflow/runtime";
 import { copyToClipboard } from "../clipboard";
+import { activeErrorModal, showErrorModal } from "../shared/errorModal";
 import { setActiveKeybindCatalog } from "../shared/keybinds";
 import { ModalHelpOverlay } from "../shared/ModalHelpOverlay";
 import { handleModalHelpKey, modalHelpOpen } from "../shared/modalHelp";
@@ -252,6 +253,10 @@ export function App(props: {
 	let refreshQueued = false;
 	let refreshDisposed = false;
 	let refreshController: AbortController | undefined;
+	// The last observation failure surfaced in the error modal. A persistent
+	// failure must not reopen the modal on every refresh (watchDirectories
+	// refreshes on each workflow file change); clearing on success re-arms it.
+	let lastRefreshError: string | undefined;
 	// Feed the shell's global header from the dashboard's single data source.
 	createEffect(() => {
 		props.onHeader?.({
@@ -797,6 +802,7 @@ export function App(props: {
 		)
 			.then((next) => {
 				if (!refreshDisposed && generation === refreshGeneration) {
+					lastRefreshError = undefined;
 					setData(next);
 					traceTui("tui.dashboard.refresh", {
 						surface: "dashboard",
@@ -816,17 +822,10 @@ export function App(props: {
 						{ surface: "dashboard", action: "refresh" },
 						"error",
 					);
-					setData((current) => ({
-						...current,
-						state: {
-							...current.state,
-							health: {
-								...current.state.health,
-								attention: [message],
-								diagnostic: message,
-							},
-						},
-					}));
+					if (message !== lastRefreshError) {
+						lastRefreshError = message;
+						showErrorModal("Observation failed", message);
+					}
 				}
 			})
 			.finally(() => {
@@ -1296,7 +1295,7 @@ export function App(props: {
 	};
 	onMount(() => {
 		props.keymap.setData("app.view", "detail");
-		props.keymap.setData("modal.active", "none");
+		props.keymap.setData("modal.active", activeErrorModal() ? "error" : "none");
 		const disposeTheme = props.keymap.registerLayer({
 			name: "theme",
 			priority: 1100,
@@ -2139,6 +2138,33 @@ export function App(props: {
 			disposeVerdict();
 			dispose();
 		});
+		// Failure diagnostics the engine attaches to a workflow are surfaced once
+		// per distinct message through the global error modal instead of a
+		// persistent red line at the top of the Change panel.
+		let lastHealthDiagnostic: string | undefined;
+		createEffect(() => {
+			const diagnostic = data().state.health.diagnostic;
+			if (!diagnostic) {
+				lastHealthDiagnostic = undefined;
+				return;
+			}
+			if (diagnostic === lastHealthDiagnostic) return;
+			lastHealthDiagnostic = diagnostic;
+			showErrorModal("Invalid workflow state", diagnostic);
+		});
+		// Git status is best-effort: an unavailable worktree is a warning toast,
+		// deduped per diagnostic, not inline panel text.
+		let lastGitDiagnostic: string | undefined;
+		createEffect(() => {
+			const status = data().gitStatus;
+			if (status.available || !status.diagnostic) {
+				lastGitDiagnostic = undefined;
+				return;
+			}
+			if (status.diagnostic === lastGitDiagnostic) return;
+			lastGitDiagnostic = status.diagnostic;
+			notify(`Git status unavailable: ${status.diagnostic}`, "warning");
+		});
 		const anyModalOpen = () =>
 			!!(
 				credentialRequest() ||
@@ -2154,7 +2180,8 @@ export function App(props: {
 				questionOpen() ||
 				costOpen() ||
 				reviewOpen() ||
-				reviewCommentMode()
+				reviewCommentMode() ||
+				activeErrorModal() != null
 			);
 		// Self-heal: reconcile keymap modal data with real modal state.
 		createEffect(() => {
@@ -2253,9 +2280,6 @@ export function App(props: {
 							gap: 1,
 						}}
 					>
-						<Show when={data().state.health.diagnostic}>
-							<text fg={uiColors.error}>{data().state.health.diagnostic}</text>
-						</Show>
 						<box
 							style={{
 								width: "100%",
@@ -2291,16 +2315,7 @@ export function App(props: {
 											<PhaseStatus state={data().state} />
 										</box>
 										<text fg={uiColors.textMuted}>GIT STATUS</text>
-										<Show
-											when={data().gitStatus.available}
-											fallback={
-												<text fg={uiColors.warning}>
-													UNAVAILABLE ·{" "}
-													{data().gitStatus.diagnostic ??
-														"git status unavailable"}
-												</text>
-											}
-										>
+										<Show when={data().gitStatus.available}>
 											<Show when={data().gitStatus.branch}>
 												<box flexDirection="row" overflow="hidden">
 													<text
