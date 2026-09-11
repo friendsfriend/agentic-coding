@@ -457,13 +457,15 @@ test("wiki operations pin their root explicitly and overlap without environment 
 			type: "concept",
 			title: "Pinned A",
 			description: "root A concept",
-			body: "content a",
+			sources: [{ id: "code", resource: "src/workflow/wiki.ts" }],
+			body: "content a[^code]",
 		};
 		const inputB = {
 			type: "concept",
 			title: "Pinned B",
 			description: "root B concept",
-			body: "content b",
+			sources: [{ id: "code", resource: "src/workflow/wiki.ts" }],
+			body: "content b[^code]",
 		};
 		writeConcept("pinned/a", inputA, rootA);
 		writeConcept("pinned/b", inputB, rootB);

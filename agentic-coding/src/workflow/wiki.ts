@@ -26,6 +26,10 @@ export interface WikiConcept extends WikiDocument {
 	status: string;
 	trust: TrustTier;
 	stale: boolean;
+	/** 1-based body lines without an inline source citation. */
+	uncitedLines: number[];
+	/** Inline citation ids with no matching declared source. */
+	unknownCitations: string[];
 }
 export type TrustTier = "unverified" | "machine-confirmed" | "human-reviewed";
 export interface WikiSearchHit {
@@ -35,6 +39,8 @@ export interface WikiSearchHit {
 	status: string;
 	trust: TrustTier;
 	stale: boolean;
+	/** Number of body prose lines without an inline source citation. */
+	uncited: number;
 	snippet: string;
 	score: number;
 }
@@ -217,6 +223,166 @@ const ACTOR =
 const STATUS = new Set(["draft", "stable", "deprecated"]);
 const CHANGE_ID = /^[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$/;
 const TOMBSTONE = "<!-- okf tombstone: concept did not exist -->\n";
+
+/** A concept that has not been refreshed for this long is treated as outdated. */
+export const STALE_AFTER_DAYS = 14;
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** Inline citation marker `[^source-id]`; the id matches a declared source. */
+const CITATION = /\[\^([A-Za-z0-9][A-Za-z0-9._-]*)\]/g;
+const FENCE = /^\s{0,3}(?:```|~~~)/;
+const ATX_HEADING = /^\s{0,3}#{1,6}(?:\s|$)/;
+const SETEXT_UNDERLINE = /^\s{0,3}(?:=+|-+)\s*$/;
+const THEMATIC_BREAK = /^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/;
+const BLOCKQUOTE = /^\s{0,3}>/;
+
+/** A table delimiter row such as `| :--- | ---: |`, decided by splitting cells
+ * instead of a backtracking-prone regex over untrusted body lines. */
+function isTableSeparator(line: string): boolean {
+	const trimmed = line.trim();
+	if (!trimmed.includes("|")) return false;
+	const cells = trimmed.replace(/^\|/, "").replace(/\|$/, "").split("|");
+	return cells.every((cell) => /^:?-+:?$/.test(cell.trim()));
+}
+
+/** Coverage of a concept body's inline citations. `uncitedLines` are 1-based
+ * body line numbers for prose lines that carry no `[^id]` marker. */
+export interface WikiCitationReport {
+	cited: number;
+	total: number;
+	uncitedLines: number[];
+	citedIds: string[];
+}
+
+/** Markdown structure that is not a citable statement. */
+function isStructuralLine(line: string): boolean {
+	const trimmed = line.trim();
+	if (!trimmed) return true;
+	if (
+		ATX_HEADING.test(line) ||
+		SETEXT_UNDERLINE.test(line) ||
+		THEMATIC_BREAK.test(line) ||
+		BLOCKQUOTE.test(line)
+	)
+		return true;
+	return isTableSeparator(line);
+}
+
+/** Extract inline `[^id]` citations and report which prose lines lack one. */
+export function citationReport(body: string): WikiCitationReport {
+	const lines = body.replace(/\r\n?/g, "\n").split("\n");
+	const exempt = new Array<boolean>(lines.length).fill(false);
+	let inFence = false;
+	for (const [index, line] of lines.entries()) {
+		if (FENCE.test(line)) {
+			exempt[index] = true;
+			inFence = !inFence;
+			continue;
+		}
+		if (inFence || isStructuralLine(line)) exempt[index] = true;
+	}
+	// A setext heading is the text line directly above its underline.
+	for (let index = 1; index < lines.length; index++)
+		if (SETEXT_UNDERLINE.test(lines[index] ?? "")) exempt[index - 1] = true;
+	const uncitedLines: number[] = [];
+	const citedIds: string[] = [];
+	let total = 0;
+	for (const [index, line] of lines.entries()) {
+		if (exempt[index]) continue;
+		total += 1;
+		const ids = [...line.matchAll(CITATION)].flatMap((match) =>
+			match[1] ? [match[1]] : [],
+		);
+		if (ids.length) citedIds.push(...ids);
+		else uncitedLines.push(index + 1);
+	}
+	return {
+		cited: total - uncitedLines.length,
+		total,
+		uncitedLines,
+		citedIds,
+	};
+}
+
+function declaredSourceIds(frontmatter: WikiFrontmatter): Set<string> {
+	const values = Array.isArray(frontmatter.sources) ? frontmatter.sources : [];
+	const ids = new Set<string>();
+	for (const item of values) {
+		if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+		const id = (item as Record<string, unknown>).id;
+		if (typeof id === "string" && id.trim()) ids.add(id.trim());
+	}
+	return ids;
+}
+
+/** The freshness horizon for a write: `stale_after`, or the last update plus
+ * the two-week window when the field is absent. */
+export function defaultStaleAfter(now = new Date()): string {
+	return new Date(now.getTime() + STALE_AFTER_DAYS * DAY_MS).toISOString();
+}
+
+function isHttpUrl(value: unknown): value is string {
+	return typeof value === "string" && /^https?:\/\//i.test(value);
+}
+
+/** Stamp every URL source with the instant it was asserted/accessed. */
+function stampSourceAccess(sources: unknown, at: string): unknown[] {
+	return (Array.isArray(sources) ? sources : []).map((item) => {
+		if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+		const source = item as Record<string, unknown>;
+		return isHttpUrl(source.resource) ? { ...source, accessed: at } : source;
+	});
+}
+
+/** Enforce that a written concept carries identifiable sources and cites every
+ * prose line. */
+export function assertCitations(
+	frontmatter: WikiFrontmatter,
+	body: string,
+): void {
+	const sources = Array.isArray(frontmatter.sources) ? frontmatter.sources : [];
+	if (!sources.length) throw new Error("write requires at least one source");
+	for (const [index, item] of sources.entries()) {
+		const id =
+			item && typeof item === "object" && !Array.isArray(item)
+				? (item as Record<string, unknown>).id
+				: undefined;
+		if (typeof id !== "string" || !id.trim())
+			throw new Error(`sources[${index}] requires an id`);
+	}
+	const declared = declaredSourceIds(frontmatter);
+	const report = citationReport(body);
+	const unknown = [
+		...new Set(report.citedIds.filter((id) => !declared.has(id))),
+	];
+	if (unknown.length)
+		throw new Error(`citation has no matching source: ${unknown.join(", ")}`);
+	if (report.uncitedLines.length)
+		throw new Error(
+			`body line ${report.uncitedLines.slice(0, 5).join(", ")} requires a source citation`,
+		);
+}
+
+function freshness(frontmatter: WikiFrontmatter): number | undefined {
+	const candidates: number[] = [];
+	const generated = frontmatter.generated;
+	if (generated && typeof generated === "object" && !Array.isArray(generated)) {
+		const at = (generated as Record<string, unknown>).at;
+		if (typeof at === "string" && !Number.isNaN(Date.parse(at)))
+			candidates.push(Date.parse(at));
+	}
+	for (const list of [frontmatter.verified, frontmatter.sources]) {
+		if (!Array.isArray(list)) continue;
+		for (const item of list) {
+			if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+			const value =
+				(item as Record<string, unknown>).at ??
+				(item as Record<string, unknown>).accessed;
+			if (typeof value === "string" && !Number.isNaN(Date.parse(value)))
+				candidates.push(Date.parse(value));
+		}
+	}
+	return candidates.length ? Math.max(...candidates) : undefined;
+}
 
 function expand(value: string): string {
 	return value.replace(/^~(?=$|[\\/])/, os.homedir());
@@ -477,10 +643,18 @@ export function isStale(
 	now = new Date(),
 ): boolean {
 	const frontmatter = frontmatterOf(doc);
-	return (
+	const explicit =
 		typeof frontmatter.stale_after === "string" &&
-		!Number.isNaN(Date.parse(frontmatter.stale_after)) &&
-		now.getTime() >= Date.parse(frontmatter.stale_after)
+		!Number.isNaN(Date.parse(frontmatter.stale_after))
+			? Date.parse(frontmatter.stale_after)
+			: undefined;
+	if (explicit !== undefined) return now.getTime() >= explicit;
+	// A concept with no explicit horizon is outdated once its last update or
+	// source access is older than the two-week window.
+	const baseline = freshness(frontmatter);
+	return (
+		baseline !== undefined &&
+		now.getTime() >= baseline + STALE_AFTER_DAYS * DAY_MS
 	);
 }
 
@@ -493,6 +667,8 @@ function readPath(file: string, root = wikiRoot()): WikiConcept | undefined {
 			.split(path.sep)
 			.join("/")
 			.replace(/\.md$/, "");
+		const report = citationReport(document.body);
+		const declared = declaredSourceIds(document.frontmatter);
 		return {
 			...document,
 			id,
@@ -500,6 +676,10 @@ function readPath(file: string, root = wikiRoot()): WikiConcept | undefined {
 			status: effectiveStatus(document),
 			trust: trustTier(document),
 			stale: isStale(document),
+			uncitedLines: report.uncitedLines,
+			unknownCitations: [
+				...new Set(report.citedIds.filter((cited) => !declared.has(cited))),
+			],
 		};
 	} catch {
 		return undefined;
@@ -590,6 +770,7 @@ export function searchConcepts(terms: string[], limit = 20): WikiSearchHit[] {
 				status: concept.status,
 				trust: concept.trust,
 				stale: concept.stale,
+				uncited: concept.uncitedLines.length,
 				snippet: snippet(searchable, wanted),
 				score,
 			};
@@ -737,7 +918,10 @@ export function writeConcept(
 	delete frontmatter.body;
 	delete frontmatter.changeId;
 	delete frontmatter.generatedBy;
+	const body = input.body ?? existing?.body ?? "";
 	const changeId = changeFor(input);
+	const now = new Date();
+	const at = now.toISOString();
 	if (changeId) {
 		const sources = Array.isArray(frontmatter.sources)
 			? [...frontmatter.sources]
@@ -756,6 +940,12 @@ export function writeConcept(
 			});
 		frontmatter.sources = sources;
 	}
+	// URL evidence is timestamped on write, matching the concept's update time.
+	frontmatter.sources = stampSourceAccess(frontmatter.sources, at);
+	frontmatter.stale_after =
+		typeof input.stale_after === "string"
+			? input.stale_after
+			: defaultStaleAfter(now);
 	if (
 		existing?.frontmatter.verified !== undefined ||
 		["wiki", "research-wiki", "planner", "consolidator"].includes(
@@ -772,17 +962,12 @@ export function writeConcept(
 			(existing?.frontmatter.generated as Record<string, unknown> | undefined)
 				?.by ??
 			"process:herdr",
-		at: new Date().toISOString(),
+		at,
 	};
 	validateProducerFields(frontmatter as WikiWriteInput);
-	if (changeFor(input))
-		snapshotOnFirstTouch(
-			changeFor(input) as string,
-			concept,
-			workflowSnapshotBase(),
-			root,
-		);
-	const body = input.body ?? existing?.body ?? "";
+	assertCitations(frontmatter, body);
+	if (changeId)
+		snapshotOnFirstTouch(changeId, concept, workflowSnapshotBase(), root);
 	fs.mkdirSync(path.dirname(file), { recursive: true });
 	const realRoot = fs.realpathSync(ensureBundle(root));
 	const realParent = fs.realpathSync(path.dirname(file));
@@ -818,6 +1003,7 @@ export function verifyConcept(
 	const file = conceptPath(concept, root);
 	const content = validatedContent ?? fs.readFileSync(file, "utf8");
 	const current = parseDocument(content);
+	const now = new Date();
 	const verified = Array.isArray(current.frontmatter.verified)
 		? [...current.frontmatter.verified]
 		: current.frontmatter.verified
@@ -831,7 +1017,7 @@ export function verifyConcept(
 				(item as Record<string, unknown>).by === verifyingActor,
 		)
 	)
-		verified.push({ by: verifyingActor, at: new Date().toISOString() });
+		verified.push({ by: verifyingActor, at: now.toISOString() });
 	const generated =
 		current.frontmatter.generated &&
 		typeof current.frontmatter.generated === "object"
@@ -841,9 +1027,14 @@ export function verifyConcept(
 		...current.frontmatter,
 		verified,
 		status: promote ? "stable" : "draft",
-		generated: { ...generated, at: new Date().toISOString() },
+		stale_after: defaultStaleAfter(now),
+		generated: { ...generated, at: now.toISOString() },
 	};
 	validateProducerFields(frontmatter);
+	// Promotion is also a write: a fact may only be promoted once its sources
+	// are identifiable and every prose line cites one, closing the bypass where
+	// previously stored uncited content could be marked stable.
+	assertCitations(frontmatter, current.body);
 	fs.mkdirSync(path.dirname(file), { recursive: true });
 	const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
 	try {

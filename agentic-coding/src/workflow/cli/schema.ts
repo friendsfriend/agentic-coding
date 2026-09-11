@@ -128,6 +128,7 @@ const FLAG_SCHEMA: Record<
 			"body-file",
 			"tags",
 			"resource",
+			"sources",
 			"status",
 			"stale-after",
 			"source",
