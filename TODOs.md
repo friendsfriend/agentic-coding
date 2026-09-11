@@ -1,7 +1,6 @@
 Not for agents. This is only for humans.
 
 Fixes: 
-* Fix question option for worker -> Planner / consolidator
 * Traces are not shown properly (new ones are missing)
 * Some findings dont show up in the diff
 * Findings cant be toggled with space
