@@ -37,6 +37,7 @@ import {
 	type KeybindSection,
 	setActiveKeybindCatalog,
 } from "../../shared/keybinds";
+import { handleModalHelpKey, modalHelpOpen } from "../../shared/modalHelp";
 import { Badge } from "../components/Badge";
 import { HighlightedText } from "../components/Highlight";
 import { NotificationOverlay } from "../components/Notification";
@@ -439,6 +440,19 @@ export function App(props: {
 		// Lifecycle overlay (startup/shutdown modal) consumes keys; 'q' still works
 		// via the home keymap layer, which routes it to requestShutdown.
 		if (phase() === "starting" || phase() === "stopping") return;
+
+		// Modal `?` help: an open dialog advertises its own `?` entry and opens
+		// the shared HelpModal with that dialog's catalog. While it is open,
+		// j/k/Esc drive the overlay instead of the dialog underneath.
+		if (nav.modal() !== "none") {
+			if (modalHelpOpen()) {
+				handleModalHelpKey(key);
+				return;
+			}
+			if (key === "?" && handleModalHelpKey(key)) {
+				return;
+			}
+		}
 
 		// Global copy
 		if (

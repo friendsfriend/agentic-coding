@@ -726,6 +726,7 @@ export function ModelConfigModal(props: {
 					<GenericModal
 						title={`Delete ${confirm().kind}?`}
 						fieldLabel={confirm().name}
+						helpSections={false}
 						help={[
 							{ key: "y/Enter", action: "Confirm delete" },
 							{ key: "Esc/n", action: "Cancel" },
@@ -744,6 +745,7 @@ export function ModelConfigModal(props: {
 				<GenericModal
 					title="Model configuration"
 					fieldLabel="Manage"
+					helpSections={false}
 					help={[
 						{ key: "j/k", action: "Navigate" },
 						{ key: "Enter", action: "Open" },
@@ -785,6 +787,7 @@ export function ModelConfigModal(props: {
 								summary={summary()}
 								step={fieldIndex()}
 								total={Math.max(1, fields().length)}
+								helpSections={false}
 								help={editorHelp(f())}
 							>
 								<Show
@@ -826,6 +829,7 @@ export function ModelConfigModal(props: {
 				<GenericModal
 					title={view() === "profiles" ? "Agent profiles" : "Agent presets"}
 					fieldLabel="Entries"
+					helpSections={false}
 					help={[
 						{ key: "j/k", action: "Navigate" },
 						{ key: "Enter", action: "Edit / create" },

@@ -4,6 +4,7 @@ import { uiColors } from "./colors";
 import {
 	GenericModal,
 	type HelpEntry,
+	type KeybindSection,
 	type SummaryEntry,
 } from "./GenericModal";
 import { SelectableList } from "./Selectable";
@@ -15,6 +16,8 @@ export function ListViewModal<T>(props: {
 	selectedIndex: number;
 	renderItem: (item: T, selected: boolean) => JSX.Element;
 	help: HelpEntry[];
+	/** Forwarded to GenericModal: `false` suppresses the `?` help affordance. */
+	helpSections?: KeybindSection[] | false;
 	summary?: SummaryEntry[];
 	step?: number;
 	total?: number;
@@ -32,6 +35,7 @@ export function ListViewModal<T>(props: {
 			summary={props.summary}
 			search={props.filterActive ? (props.filterQuery ?? "") : undefined}
 			help={props.help}
+			helpSections={props.helpSections}
 			heightPercent={props.heightPercent ?? 0.6}
 		>
 			<Show

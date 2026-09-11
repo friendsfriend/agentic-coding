@@ -13,7 +13,12 @@ import {
 import { colors, uiColors } from "./colors";
 import { FilterStatusBar } from "./FilterStatusBar";
 import { HelpText, wrapHelpEntries } from "./HelpText";
-import type { Keybind } from "./keybinds";
+import type { Keybind, KeybindSection } from "./keybinds";
+import {
+	type ModalHelpRegistration,
+	registerModalHelp,
+	withModalHelpKeybind,
+} from "./modalHelp";
 import { SearchHeader } from "./SearchHeader";
 import { invokeGlobalSelectionMouseUpHandler } from "./selectionCopy";
 
@@ -136,6 +141,12 @@ export interface GenericModalProps {
 	help?: readonly Keybind[];
 	/** Footer help text: entries, or a string that wraps to the dialog width */
 	helpText?: string | readonly Keybind[];
+	/**
+	 * Catalog the modal's own `?` help shows. Defaults to one section built
+	 * from `help`/`helpText` entries; pass `false` to opt out (e.g. the help
+	 * modal itself, so it does not nest).
+	 */
+	helpSections?: KeybindSection[] | false;
 	/** Optional label above the content column */
 	fieldLabel?: string;
 	/** Optional summary table entries rendered beside the content */
@@ -245,8 +256,33 @@ export function GenericModal(props: GenericModalProps) {
 	const helpEntries = (): readonly Keybind[] | undefined =>
 		props.help ??
 		(typeof props.helpText === "string" ? undefined : props.helpText);
-	const helpEntryLines = (): Keybind[][] | undefined => {
+	// A modal that carries keybind help gets the same `? help` affordance as the
+	// shell footer: the entry is added automatically and `?` opens the shared
+	// HelpModal over the dialog. `helpSections: false` opts out (the help modal
+	// itself) so the overlay never nests.
+	const modalHelpEnabled = (): boolean =>
+		props.helpSections !== false &&
+		(props.helpSections !== undefined || (helpEntries()?.length ?? 0) > 0);
+	const modalHelpEntries = (): readonly Keybind[] | undefined => {
 		const entries = helpEntries();
+		if (!entries || !modalHelpEnabled()) return entries;
+		return withModalHelpKeybind(entries);
+	};
+	const modalHelpSections = (): KeybindSection[] => {
+		if (!modalHelpEnabled()) return [];
+		if (props.helpSections) return props.helpSections;
+		return [{ title: "Actions", keybinds: [...(modalHelpEntries() ?? [])] }];
+	};
+	const overlayHelpLines = (): number =>
+		Math.max(5, Math.floor(dimensions().height * 0.78) - 5);
+	const helpRegistration: ModalHelpRegistration = {
+		sections: modalHelpSections,
+		lines: overlayHelpLines,
+	};
+	if (props.helpSections !== false)
+		onCleanup(registerModalHelp(helpRegistration));
+	const helpEntryLines = (): Keybind[][] | undefined => {
+		const entries = modalHelpEntries();
 		return entries
 			? wrapHelpEntries(entries, Math.max(1, width() - 4))
 			: undefined;

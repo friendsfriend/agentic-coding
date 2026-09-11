@@ -124,3 +124,28 @@ test("overview observation failure stays visible as durable error text", async (
 	expect(t.captureCharFrame()).toContain("Observation failed: boom");
 	t.renderer.destroy();
 });
+
+test("`?` inside an overview dialog opens that dialog's own keybinds", async () => {
+	const t = await testRender(() => <TestHome items={[overview()]} />, {
+		width: 120,
+		height: 40,
+	});
+	await t.flush();
+
+	// `f` opens the filter dialog, which advertises `? help`.
+	t.mockInput.pressKey("f");
+	await t.waitForFrame((frame) => frame.includes("Filter"));
+	t.mockInput.pressKey("?");
+	const help = await t.waitForFrame((frame) => frame.includes("Keybindings"));
+	expect(help).toContain("Toggle");
+
+	// Esc closes the dialog's help and returns to the dialog itself.
+	t.mockInput.pressEscape();
+	await new Promise((resolve) => setTimeout(resolve, 80));
+	const closed = await t.waitForFrame(
+		(frame) => !frame.includes("Keybindings"),
+	);
+	expect(closed).toContain("Filter");
+
+	t.renderer.destroy();
+});

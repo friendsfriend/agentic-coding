@@ -13,6 +13,8 @@ import {
 } from "solid-js";
 import { phase } from "../lifecycle";
 import { setActiveKeybindCatalog } from "../shared/keybinds";
+import { ModalHelpOverlay } from "../shared/ModalHelpOverlay";
+import { handleModalHelpKey, modalHelpOpen } from "../shared/modalHelp";
 import { listPresetNames } from "./engine";
 import { dashboardOverviewKeybindCatalog } from "./keybinds";
 import { notify } from "./notifications";
@@ -262,6 +264,31 @@ export function Home(props: {
 			}
 		}
 	};
+	// The last surface modal that owned the keys before the modal's own `?` help
+	// opened, so Esc returns to it instead of dropping to the workspace list.
+	let modalHelpReturnModal: string | undefined;
+	/**
+	 * Route a key to the open modal's `?` help overlay. While it is open the
+	 * overlay owns j/k/Esc; otherwise `?` opens it when the mounted modal
+	 * published a help catalog. Returns true when the key was consumed.
+	 */
+	const routeModalHelp = (key: string): boolean => {
+		if (modalHelpOpen()) {
+			const handled = handleModalHelpKey(key);
+			if (handled && !modalHelpOpen()) {
+				props.keymap.setData("modal.active", modalHelpReturnModal ?? "none");
+				modalHelpReturnModal = undefined;
+			}
+			return handled;
+		}
+		if (key !== "?") return false;
+		if (!handleModalHelpKey(key)) return false;
+		modalHelpReturnModal = String(
+			props.keymap.getData?.("modal.active") ?? "none",
+		);
+		props.keymap.setData("modal.active", "help");
+		return true;
+	};
 	onMount(() => {
 		props.keymap.setData("app.view", "home");
 		props.keymap.setData("modal.active", "none");
@@ -321,6 +348,7 @@ export function Home(props: {
 					name: "theme.handle",
 					run: ({ event }) => {
 						const key = event.name.toLowerCase();
+						if (routeModalHelp(key)) return true;
 						if (key === "escape") {
 							setThemePicker(false);
 							props.keymap.setData("modal.active", "none");
@@ -341,7 +369,7 @@ export function Home(props: {
 					},
 				},
 			],
-			bindings: ["escape", "enter", "return", "j", "k", "up", "down"].map(
+			bindings: ["escape", "enter", "return", "j", "k", "up", "down", "?"].map(
 				(key) => ({ key, cmd: "theme.handle" }),
 			),
 		});
@@ -354,6 +382,9 @@ export function Home(props: {
 					name: "help.close",
 					run: ({ event }) => {
 						const key = event.name.toLowerCase();
+						// The modal's own `?` help rides the same layer; route it before
+						// the workspace overview help so Esc returns to the open dialog.
+						if (modalHelpOpen()) return routeModalHelp(key);
 						if (key === "escape") {
 							setHelp(false);
 							props.keymap.setData("modal.active", "none");
@@ -379,6 +410,7 @@ export function Home(props: {
 					name: "error.handle",
 					run: ({ event }) => {
 						const key = event.name.toLowerCase();
+						if (routeModalHelp(key)) return true;
 						if (key === "escape" || key === "enter" || key === "return") {
 							closeError();
 							return true;
@@ -395,7 +427,7 @@ export function Home(props: {
 					},
 				},
 			],
-			bindings: ["escape", "enter", "return", "j", "k", "up", "down"].map(
+			bindings: ["escape", "enter", "return", "j", "k", "up", "down", "?"].map(
 				(key) => ({ key, cmd: "error.handle" }),
 			),
 		});
@@ -408,6 +440,7 @@ export function Home(props: {
 					name: "filter.handle",
 					run: ({ event }) => {
 						const key = event.name.toLowerCase();
+						if (routeModalHelp(key)) return true;
 						if (key === "escape") {
 							setFilterModal(false);
 							props.keymap.setData("modal.active", "none");
@@ -468,6 +501,7 @@ export function Home(props: {
 				"left",
 				"right",
 				"space",
+				"?",
 			].map((key) => ({ key, cmd: "filter.handle" })),
 		});
 		const disposeSort = props.keymap.registerLayer({
@@ -479,6 +513,7 @@ export function Home(props: {
 					name: "sort.handle",
 					run: ({ event }) => {
 						const key = event.name.toLowerCase();
+						if (routeModalHelp(key)) return true;
 						if (key === "escape") {
 							setSortModal(false);
 							props.keymap.setData("modal.active", "none");
@@ -515,6 +550,7 @@ export function Home(props: {
 				"k",
 				"up",
 				"down",
+				"?",
 			].map((key) => ({ key, cmd: "sort.handle" })),
 		});
 		const disposeHome = props.keymap.registerLayer({
@@ -746,6 +782,8 @@ export function Home(props: {
 					/>
 				)}
 			</Show>
+			{/* The open dialog's own `?` help, above every dialog (error z1). */}
+			<ModalHelpOverlay zIndex={30} />
 		</box>
 	);
 }
