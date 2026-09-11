@@ -1143,7 +1143,7 @@ export function App(props: {
 
 				{/* Status bar — one global footer for all tabs; keybinds are tab-dependent. */}
 				<box style={{ height: 1 }} />
-				<StatusBar inset={props.dashboard ? 0 : 2} />
+				<StatusBar />
 			</box>
 			<NotificationOverlay />
 			{nav.modal() === "filter" && (

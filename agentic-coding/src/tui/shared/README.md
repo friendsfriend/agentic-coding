@@ -47,11 +47,13 @@ the primitive.
 - Keybind help is data-driven and rendered by the footer plus the `?` help
   modal. Every entry is a `Keybind` (`keybinds.ts`) declared once in a
   per-surface catalog; the shell footer (`otel/components/StatusBar.tsx`)
-  renders the active catalog's special keys on as many rows as the terminal
-  width needs, the shared `?` help modal (`shared/HelpModal.tsx`) renders the
-  whole catalog, and dialogs render through `HelpText` / `formatHelpTextLines`.
-  Feature views (tab bodies, panel headers, empty and error states) must not
-  print their own keybinding lists or single "press key" prompts.
+  stays one row high, clipping the special keys in its left column while
+  pinning `?` help to the right, the shared `?` help modal
+  (`shared/HelpModal.tsx`) renders the whole catalog, and dialogs render
+  through `HelpText` / `formatHelpTextLines` with a single space either side
+  of the `•` separator. Feature views (tab bodies, panel headers, empty and
+  error states) must not print their own keybinding lists or single "press
+  key" prompts.
 
 ## Behavior notes
 

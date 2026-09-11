@@ -89,7 +89,7 @@ describe("keybind catalog contract", () => {
 		expect(lines.flat()).toEqual(entries);
 		for (const line of lines)
 			expect(
-				line.map((kb) => `${kb.key} ${kb.action}`).join("  •  ").length,
+				line.map((kb) => `${kb.key} ${kb.action}`).join(" • ").length,
 			).toBeLessThanOrEqual(24);
 	});
 
@@ -101,8 +101,8 @@ describe("keybind catalog contract", () => {
 		// Long actions would need 41 columns; the short labels fit in 19.
 		const lines = wrapHelpEntries(entries, 20);
 		expect(lines).toHaveLength(1);
-		expect(lines[0].map((kb) => `${kb.key} ${kb.short}`).join("  •  ")).toBe(
-			"f filter  •  o sort",
+		expect(lines[0].map((kb) => `${kb.key} ${kb.short}`).join(" • ")).toBe(
+			"f filter • o sort",
 		);
 	});
 });

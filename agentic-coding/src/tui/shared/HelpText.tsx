@@ -18,6 +18,7 @@ export interface HelpTextProps {
  *
  * Single footer renderer for every surface. Entries are pure data; colors and
  * the bullet separator live here so callers cannot restyle individual keys.
+ * The separator keeps a single space either side of the bullet to save width.
  */
 export function HelpText(props: HelpTextProps): JSX.Element {
 	return (
@@ -31,7 +32,7 @@ export function HelpText(props: HelpTextProps): JSX.Element {
 							{entry.key}
 						</span>{" "}
 						{keybindFooterLabel(entry)}
-						{index() < props.entries.length - 1 ? "  •  " : ""}
+						{index() < props.entries.length - 1 ? " • " : ""}
 					</>
 				)}
 			</For>
@@ -46,7 +47,7 @@ export function HelpText(props: HelpTextProps): JSX.Element {
 export function wrapHelpEntries(
 	entries: readonly Keybind[],
 	maxWidth: number,
-	separator: string = "  •  ",
+	separator: string = " • ",
 ): Keybind[][] {
 	if (maxWidth <= 0) return entries.length ? [[entries[0]]] : [[]];
 
@@ -80,7 +81,7 @@ export function wrapHelpEntries(
  */
 export function formatHelpText(
 	entries: readonly Keybind[],
-	separator: string = "  •  ",
+	separator: string = " • ",
 ): string {
 	return entries
 		.map((entry) => `${entry.key} ${keybindFooterLabel(entry)}`)
@@ -90,7 +91,7 @@ export function formatHelpText(
 export function formatHelpTextLines(
 	entries: readonly Keybind[],
 	maxWidth: number,
-	separator: string = "  •  ",
+	separator: string = " • ",
 ): string[] {
 	if (maxWidth <= 0) return [""];
 
