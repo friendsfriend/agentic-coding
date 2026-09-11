@@ -18,15 +18,30 @@ export class TraceStore {
 		{ field: "name", mode: "none" },
 	];
 	private statusFilter: StatusFilter = "all";
+	private readonly listeners = new Set<() => void>();
 
 	constructor(initial: SpanData[] = []) {
 		this.spans = initial;
 		this.rebuild();
 	}
 
+	/** Subscribe to content changes (initial file load, live receiver pushes) so
+	 * mounted views can refresh; returns an unsubscribe function. */
+	onChange(listener: () => void): () => void {
+		this.listeners.add(listener);
+		return () => {
+			this.listeners.delete(listener);
+		};
+	}
+
+	private notify(): void {
+		for (const listener of this.listeners) listener();
+	}
+
 	loadFile(spans: SpanData[]): void {
 		this.spans = spans;
 		this.rebuild();
+		this.notify();
 	}
 
 	appendLine(line: string): boolean {
@@ -37,8 +52,10 @@ export class TraceStore {
 	}
 
 	pushBatch(spans: SpanData[]): void {
+		if (!spans.length) return;
 		this.spans.push(...spans);
 		this.filtered.push(...spans.filter((span) => this.matchesFilter(span)));
+		this.notify();
 	}
 
 	getRootSpans(): SpanData[] {
@@ -233,11 +250,13 @@ export class TraceStore {
 	applyFilter(query: string): void {
 		this.query = query.toLowerCase().trim();
 		this.rebuild();
+		this.notify();
 	}
 
 	setStatusFilter(status: StatusFilter): void {
 		this.statusFilter = status;
 		this.rebuild();
+		this.notify();
 	}
 
 	setSort(field: SortField): void {

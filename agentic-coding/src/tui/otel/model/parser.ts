@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { SpanData } from "./types";
 
 const id = (value: unknown, size: number) =>
@@ -103,6 +104,113 @@ export function parseJsonl(text: string): SpanData[] {
 	for (const line of text.split(/\r?\n/)) {
 		if (!line.trim()) continue;
 		const span = parseLine(line);
+		if (span) spans.push(span);
+	}
+	return spans;
+}
+
+const TRACEPARENT = /^00-([0-9a-f]{32})-([0-9a-f]{16})-[0-9a-f]{2}$/i;
+
+const digest = (text: string, size: number): string =>
+	createHash("sha256").update(text).digest("hex").slice(0, size);
+
+/** Convert one workflow telemetry envelope (`.herdr-workflow/<id>/telemetry.jsonl`,
+ * see `workflow/observability.ts`) into the span shape the trace views render.
+ * Envelopes are point events, so a span covers `durationMs` (when reported)
+ * ending at `at`; `traceparent` supplies the trace identity and `workflowId`
+ * becomes `herdr.change.id`, which is what groups spans by workflow. */
+export function parseTelemetryLine(
+	line: string,
+	index = 0,
+): SpanData | undefined {
+	let raw: unknown;
+	try {
+		raw = JSON.parse(line);
+	} catch {
+		return undefined;
+	}
+	if (!raw || typeof raw !== "object") return undefined;
+	const envelope = raw as Record<string, unknown>;
+	const event = typeof envelope.event === "string" ? envelope.event : undefined;
+	const workflowId =
+		typeof envelope.workflowId === "string" ? envelope.workflowId : undefined;
+	const at =
+		typeof envelope.at === "string" ? Date.parse(envelope.at) : Number.NaN;
+	if (!event || !Number.isFinite(at)) return undefined;
+	const layer = typeof envelope.layer === "string" ? envelope.layer : "engine";
+	const traceparent =
+		typeof envelope.traceparent === "string"
+			? TRACEPARENT.exec(envelope.traceparent)
+			: null;
+	// All events of one runtime run share the run's traceparent span id, so the
+	// span id must come from the envelope itself to stay unique per event.
+	const traceId = traceparent
+		? traceparent[1]?.toLowerCase()
+		: digest(`workflow:${workflowId ?? "unknown"}`, 32);
+	const spanId = digest(`${index}:${line}`, 16);
+	const durationMs =
+		typeof envelope.durationMs === "number" && envelope.durationMs > 0
+			? envelope.durationMs
+			: 0;
+	const attributes: Array<{
+		key: string;
+		value: string | number | boolean;
+	}> = [];
+	if (workflowId)
+		attributes.push({ key: "herdr.change.id", value: workflowId });
+	const stringFields: Array<[string, unknown]> = [
+		["herdr.role", envelope.role],
+		["herdr.run.id", envelope.runId],
+		["herdr.step.id", envelope.stepId],
+		["herdr.effect.id", envelope.effectId],
+		["herdr.profile", envelope.profile],
+		["herdr.message.id", envelope.messageId],
+		["herdr.outcome", envelope.outcome],
+	];
+	for (const [key, value] of stringFields)
+		if (typeof value === "string" && value) attributes.push({ key, value });
+	if (envelope.attributes && typeof envelope.attributes === "object")
+		for (const [key, value] of Object.entries(
+			envelope.attributes as Record<string, unknown>,
+		))
+			if (
+				typeof value === "string" ||
+				typeof value === "number" ||
+				typeof value === "boolean"
+			)
+				attributes.push({ key, value });
+	const runtime =
+		typeof envelope.runtime === "string" ? envelope.runtime : undefined;
+	const serviceName =
+		layer === "engine" ? "herdr-workflow" : (runtime ?? layer);
+	return {
+		traceId,
+		spanId,
+		parentSpanId: "",
+		name: event,
+		startTimeUnixNano: (
+			BigInt(Math.round(at - durationMs)) * 1_000_000n
+		).toString(),
+		endTimeUnixNano: (BigInt(Math.round(at)) * 1_000_000n).toString(),
+		status: {
+			code: envelope.outcome === "error" ? 2 : 0,
+			message: envelope.outcome === "error" ? "error" : undefined,
+		},
+		attributes,
+		resource: { attributes: [], droppedAttributesCount: 0 },
+		scope: { name: layer, version: "" },
+		serviceName,
+		kind: 0,
+	};
+}
+
+export function parseTelemetryJsonl(text: string): SpanData[] {
+	const spans: SpanData[] = [];
+	let index = 0;
+	for (const line of text.split(/\r?\n/)) {
+		if (!line.trim()) continue;
+		index += 1;
+		const span = parseTelemetryLine(line, index);
 		if (span) spans.push(span);
 	}
 	return spans;
