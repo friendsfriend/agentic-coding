@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -2062,5 +2063,192 @@ test("wiki delivery rejects a non-allowlisted remote before committing", async (
 		).toBe("base");
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("adapter baseline telemetry emits launch, delivery, stop, and failure", async () => {
+	const repo = fs.mkdtempSync(
+		path.join(os.tmpdir(), "workflow-adapter-telemetry-"),
+	);
+	try {
+		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+		fs.writeFileSync(path.join(repo, "README.md"), "x\n");
+		execFileSync("git", ["add", "."], { cwd: repo });
+		execFileSync(
+			"git",
+			[
+				"-c",
+				"user.email=test@example.com",
+				"-c",
+				"user.name=Test",
+				"commit",
+				"-qm",
+				"base",
+			],
+			{ cwd: repo },
+		);
+		const registry = registerBuiltins();
+		const engine = new WorkflowEngine(registry);
+		const started = engine.start({
+			repo,
+			workflowId: "adapter-telemetry",
+			definitionId: "no-openspec",
+			metadata: {
+				branch: "feature/x",
+				baseBranch: "main",
+				baseCommit: execFileSync("git", ["rev-parse", "HEAD"], {
+					cwd: repo,
+					encoding: "utf8",
+				}).trim(),
+				task: "task",
+			},
+			routing: {
+				defaultProfile: "pi",
+				routes: [
+					{
+						stepId: "core.implementation",
+						role: "worker",
+						profile: {
+							name: "pi",
+							runtime: "pi",
+							executable: "sh",
+							tools: [],
+							extensions: [],
+							readOnly: false,
+							capabilities: ["prompt", "run-environment", "observe"],
+							digest: "profile",
+						},
+					},
+				],
+				diversity: [],
+			},
+		});
+		const runSummary = started.view.runs[0];
+		if (!runSummary) throw new Error("expected a worker run");
+		const run = engine.getRun(repo, runSummary.id);
+		const envelopes: Array<Record<string, unknown>> = [];
+		let failLaunch = false;
+		const adapter: AgentAdapter = {
+			id: "pi" as const,
+			preflight() {},
+			launch() {
+				return failLaunch
+					? Effect.fail(new PermanentFailure("launch failed"))
+					: Effect.succeed({
+							runtime: "pi" as const,
+							name: "agent",
+							paneId: "pane",
+							sessionId: "session-1",
+						});
+			},
+			prompt() {
+				return Effect.void;
+			},
+			observe(handle) {
+				return Effect.succeed({
+					status: "working" as const,
+					paneId: handle.paneId,
+				});
+			},
+			stop() {
+				return Effect.void;
+			},
+		};
+		const handlers = agentEffectHandlers(repo, engine, {
+			registry,
+			adapters: new Map([["pi", adapter]]),
+			herdr: {
+				call() {
+					throw new Error("unexpected herdr call");
+				},
+			},
+			async paneForRun() {
+				return { paneId: "pane", owned: true };
+			},
+			telemetry: (_directory, envelope) => {
+				envelopes.push(envelope as unknown as Record<string, unknown>);
+			},
+		});
+		await new EffectRunner(repo, engine, handlers).drain();
+		expect(
+			envelopes.some(
+				(envelope) =>
+					envelope.event === "agent.launch.attempt" &&
+					envelope.layer === "adapter",
+			),
+		).toBe(true);
+		expect(
+			envelopes.some(
+				(envelope) =>
+					envelope.event === "agent.launch" && envelope.outcome === "ok",
+			),
+		).toBe(true);
+
+		const db = new Database(canonicalStorePath(repo));
+		const revision = (
+			db
+				.query("SELECT revision FROM workflow_instances WHERE id=?")
+				.get("adapter-telemetry") as { revision: number }
+		).revision;
+		const insert = (kind: string, key: string, payload: unknown) =>
+			db
+				.query("INSERT INTO workflow_outbox VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)")
+				.run(
+					randomUUID(),
+					"adapter-telemetry",
+					revision,
+					kind,
+					key,
+					JSON.stringify(payload),
+					"pending",
+					0,
+					4,
+					null,
+					null,
+					null,
+					null,
+				);
+		insert("agent.prompt", `prompt:${run.id}`, {
+			runId: run.id,
+			message: "hello",
+		});
+		insert("agent.stop", `stop:${run.id}`, { runId: run.id });
+		db.close();
+		await new EffectRunner(repo, engine, handlers).drain();
+		expect(
+			envelopes.some(
+				(envelope) =>
+					envelope.event === "agent.assignment.delivered" &&
+					envelope.outcome === "ok" &&
+					envelope.runId === run.id,
+			),
+		).toBe(true);
+		expect(
+			envelopes.some(
+				(envelope) =>
+					envelope.event === "agent.stop" && envelope.outcome === "ok",
+			),
+		).toBe(true);
+
+		const view = engine.status(repo, "adapter-telemetry");
+		engine.dispatch(repo, {
+			type: "operator.repair",
+			workflowId: view.workflowId,
+			revision: view.revision,
+			targetStep: "core.implementation",
+			reason: "test repair",
+		});
+		failLaunch = true;
+		await new EffectRunner(repo, engine, handlers).drain();
+		expect(
+			envelopes.some(
+				(envelope) =>
+					envelope.event === "agent.launch" &&
+					envelope.outcome === "error" &&
+					typeof envelope["herdr.error.class"] === "string",
+			),
+		).toBe(true);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
 	}
 });

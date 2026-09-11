@@ -22,7 +22,7 @@ Depends on `replace-workflow-project-discovery`. This is the frontend-first rele
 - Cleanup kills unrelated server → instance identity plus owned handles and negative collision tests.
 - Quit while lease renewal is active → cancellation/finalization tests preserve ownership and never publish stale results.
 - Embedded binary works only in checkout → smoke test from a temporary unrelated directory without source or Go compiler.
-- TUI suspend stalls in-process workflow timers → warn in this transitional release and do not mark process isolation complete; next change removes this limitation.
+- TUI suspension can stall in-process workflow timers if synchronous waits return → retain the shell's asynchronous foreground-tool waiting and test lease renewal during suspension; full process isolation remains the next change.
 
 ## Migration Plan
 

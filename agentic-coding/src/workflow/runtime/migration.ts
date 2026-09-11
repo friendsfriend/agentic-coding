@@ -138,18 +138,27 @@ export function migrationDiagnostic(
 	);
 }
 
+/** Telemetry payload for one legacy import: the migrated snapshot plus the
+ * migration facts the `legacy.migrated` event carries (task 2.10). */
+export interface LegacyMigrationTelemetry {
+	snapshot: WorkflowSnapshot;
+	sourceVersion: number;
+	phase: string;
+	workflowType: string;
+}
+
 export function migrateLegacy(
 	db: Database,
 	repository: string,
 	changeId: string,
 	registry: WorkflowRegistry,
 	now: () => Date,
-): void {
-	if (!tableExists(db, "workflows")) return;
+): LegacyMigrationTelemetry | undefined {
+	if (!tableExists(db, "workflows")) return undefined;
 	const source = db
 		.query("SELECT state FROM workflows WHERE change_id=?")
 		.get(changeId) as { state: string } | null;
-	if (!source) return;
+	if (!source) return undefined;
 	try {
 		validateChangeId(changeId);
 	} catch (error) {
@@ -161,7 +170,7 @@ export function migrateLegacy(
 			source.state,
 			now,
 		);
-		return;
+		return undefined;
 	}
 	let legacy: Record<string, unknown>;
 	try {
@@ -178,7 +187,7 @@ export function migrateLegacy(
 			source.state,
 			now,
 		);
-		return;
+		return undefined;
 	}
 	let worktree: string;
 	try {
@@ -195,7 +204,7 @@ export function migrateLegacy(
 			source.state,
 			now,
 		);
-		return;
+		return undefined;
 	}
 	const mirror = path.join(worktree, ".herdr-workflow", "herdr.db");
 	if (
@@ -221,7 +230,7 @@ export function migrateLegacy(
 							source.state,
 							now,
 						);
-						return;
+						return undefined;
 					}
 				}
 			} finally {
@@ -236,7 +245,7 @@ export function migrateLegacy(
 				source.state,
 				now,
 			);
-			return;
+			return undefined;
 		}
 	}
 	const phase = String(legacy.phase ?? "");
@@ -281,7 +290,7 @@ export function migrateLegacy(
 			source.state,
 			now,
 		);
-		return;
+		return undefined;
 	}
 	const at = nowIso(now);
 	const workflowId = randomUUID();
@@ -337,7 +346,7 @@ export function migrateLegacy(
 			source.state,
 			now,
 		);
-		return;
+		return undefined;
 	}
 	const snapshot: WorkflowSnapshot = {
 		schemaVersion: 1,
@@ -397,7 +406,7 @@ export function migrateLegacy(
 				.get(changeId)
 		) {
 			db.exec("COMMIT");
-			return;
+			return undefined;
 		}
 		db.query(
 			"INSERT INTO workflow_instances VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -431,6 +440,7 @@ export function migrateLegacy(
 			"DELETE FROM workflow_migration_diagnostics WHERE change_id=?",
 		).run(changeId);
 		db.exec("COMMIT");
+		return { snapshot, sourceVersion: 0, phase, workflowType };
 	} catch (error) {
 		rollback(db);
 		migrationDiagnostic(
@@ -441,5 +451,6 @@ export function migrateLegacy(
 			source.state,
 			now,
 		);
+		return undefined;
 	}
 }

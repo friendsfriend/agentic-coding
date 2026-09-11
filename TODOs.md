@@ -13,5 +13,4 @@ Big ones:
 Small ones: 
 * Give all agents their own tab. Multitab spawning always has issues for some reason
 * Improve agent steering based on recent runs (observability first)
-* tracing info is missing, no custom properties in tui. observability not good currently
 

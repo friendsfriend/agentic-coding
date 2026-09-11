@@ -28,6 +28,6 @@
 
 - [ ] 4.1 Route home/manager/dash entrypoints into the shared shell and remove competing root renderer paths.
 - [ ] 4.2 Test tab switches during drains, telemetry arrivals, active dialogs and pending review submissions.
-- [ ] 4.3 Verify external terminal utilities suspend/resume one renderer safely and do not leak input handlers.
+- [ ] 4.3 Replace foreground synchronous child waits with asynchronous spawn/wait and try/finally renderer restoration; test lease renewal/telemetry continue during external tools without leaked input handlers.
 - [ ] 4.4 Run feature-inventory journeys, narrow-terminal renderer tests and interactive footer/? help checks.
 - [ ] 4.5 Run combined verification and record frontend composition parity without claiming runtime port completion.

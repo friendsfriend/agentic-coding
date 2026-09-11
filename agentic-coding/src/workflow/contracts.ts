@@ -565,6 +565,8 @@ export type WorkflowCommand =
 			lease: string;
 			outcome: "complete" | "retry" | "failed";
 			data?: unknown;
+			/** Measured handler wall clock in milliseconds, for telemetry only. */
+			durationMs?: number;
 	  }
 	| {
 			type: "operator.repair";

@@ -14,18 +14,27 @@ type OtlpAttributeValue = {
 	doubleValue?: unknown;
 };
 
+/** Decode one OTLP attribute value, accepting numeric strings for `intValue`
+ * and `doubleValue` while keeping int, double, bool, and string distinct (D6). */
 const attrValue = (
 	item: OtlpAttributeValue | undefined,
-): string | number | boolean | undefined =>
-	typeof item?.stringValue === "string"
-		? item.stringValue
-		: typeof item?.boolValue === "boolean"
-			? item.boolValue
-			: item?.intValue !== undefined
-				? Number(item.intValue)
-				: typeof item?.doubleValue === "number"
-					? item.doubleValue
-					: undefined;
+): string | number | boolean | undefined => {
+	if (typeof item?.stringValue === "string") return item.stringValue;
+	if (typeof item?.boolValue === "boolean") return item.boolValue;
+	if (item?.intValue !== undefined) {
+		const value =
+			typeof item.intValue === "number" ? item.intValue : Number(item.intValue);
+		return Number.isFinite(value) ? value : undefined;
+	}
+	if (item?.doubleValue !== undefined) {
+		const value =
+			typeof item.doubleValue === "number"
+				? item.doubleValue
+				: Number(item.doubleValue);
+		return Number.isFinite(value) ? value : undefined;
+	}
+	return undefined;
+};
 
 function normalizeAttrs(
 	attrs: unknown,
@@ -111,6 +120,32 @@ export function parseJsonl(text: string): SpanData[] {
 
 const TRACEPARENT = /^00-([0-9a-f]{32})-([0-9a-f]{16})-[0-9a-f]{2}$/i;
 
+/** Envelope keys consumed structurally rather than mapped to an attribute. */
+const RESERVED_ENVELOPE_KEYS = new Set([
+	"schemaVersion",
+	"at",
+	"layer",
+	"event",
+	"durationMs",
+	"attributes",
+	"traceparent",
+]);
+/** Reserved identity keys and the existing `herdr.*` attribute names they keep
+ * so grouping, role filters, and dashboards do not regress (D5). */
+const RESERVED_IDENTITY: ReadonlyArray<readonly [string, string]> = [
+	["workflowId", "herdr.change.id"],
+	["role", "herdr.role"],
+	["runId", "herdr.run.id"],
+	["stepId", "herdr.step.id"],
+	["effectId", "herdr.effect.id"],
+	["profile", "herdr.profile"],
+	["messageId", "herdr.message.id"],
+	["sessionId", "herdr.session.id"],
+	["outcome", "herdr.outcome"],
+	["runtime", "herdr.runtime"],
+];
+const RESERVED_IDENTITY_KEYS = new Set(RESERVED_IDENTITY.map(([key]) => key));
+
 const digest = (text: string, size: number): string =>
 	createHash("sha256").update(text).digest("hex").slice(0, size);
 
@@ -156,19 +191,25 @@ export function parseTelemetryLine(
 		key: string;
 		value: string | number | boolean;
 	}> = [];
-	if (workflowId)
-		attributes.push({ key: "herdr.change.id", value: workflowId });
-	const stringFields: Array<[string, unknown]> = [
-		["herdr.role", envelope.role],
-		["herdr.run.id", envelope.runId],
-		["herdr.step.id", envelope.stepId],
-		["herdr.effect.id", envelope.effectId],
-		["herdr.profile", envelope.profile],
-		["herdr.message.id", envelope.messageId],
-		["herdr.outcome", envelope.outcome],
-	];
-	for (const [key, value] of stringFields)
-		if (typeof value === "string" && value) attributes.push({ key, value });
+	// Reserved identity keys keep their established `herdr.*` attribute names.
+	for (const [key, mapped] of RESERVED_IDENTITY) {
+		const value = envelope[key];
+		if (typeof value === "string" && value)
+			attributes.push({ key: mapped, value });
+	}
+	// Every non-reserved top-level scalar payload key becomes an attribute with
+	// its original key and scalar type, so a new bridge field needs no parser
+	// allowlist and legacy token/cost fields finally reach the viewer (D5/D6).
+	for (const [key, value] of Object.entries(envelope)) {
+		if (RESERVED_ENVELOPE_KEYS.has(key) || RESERVED_IDENTITY_KEYS.has(key))
+			continue;
+		if (
+			typeof value === "string" ||
+			typeof value === "number" ||
+			typeof value === "boolean"
+		)
+			attributes.push({ key, value });
+	}
 	if (envelope.attributes && typeof envelope.attributes === "object")
 		for (const [key, value] of Object.entries(
 			envelope.attributes as Record<string, unknown>,
