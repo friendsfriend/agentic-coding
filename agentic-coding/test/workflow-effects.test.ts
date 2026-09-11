@@ -20,6 +20,7 @@ import {
 	PermanentFailure,
 	TransientFailure,
 } from "../src/workflow/effect-runner.ts";
+import { workflowTraceId } from "../src/workflow/observability.ts";
 import {
 	canonicalStorePath,
 	researchWorkflowTarget,
@@ -2128,10 +2129,12 @@ test("adapter baseline telemetry emits launch, delivery, stop, and failure", asy
 		const run = engine.getRun(repo, runSummary.id);
 		const envelopes: Array<Record<string, unknown>> = [];
 		let failLaunch = false;
+		let launchEnvironment: Record<string, string> | undefined;
 		const adapter: AgentAdapter = {
 			id: "pi" as const,
 			preflight() {},
-			launch() {
+			launch(ctx: LaunchContext) {
+				launchEnvironment = ctx.environment;
 				return failLaunch
 					? Effect.fail(new PermanentFailure("launch failed"))
 					: Effect.succeed({
@@ -2183,6 +2186,17 @@ test("adapter baseline telemetry emits launch, delivery, stop, and failure", asy
 					envelope.event === "agent.launch" && envelope.outcome === "ok",
 			),
 		).toBe(true);
+		// Adapter events and the launched agent share one workflow trace, so a
+		// traceparent-based viewer groups the whole workflow into a single trace.
+		const workflowTrace = workflowTraceId("adapter-telemetry");
+		expect(envelopes.length).toBeGreaterThan(0);
+		expect(
+			envelopes.every(
+				(envelope) =>
+					String(envelope.traceparent).split("-")[1] === workflowTrace,
+			),
+		).toBe(true);
+		expect(launchEnvironment?.TRACEPARENT?.split("-")[1]).toBe(workflowTrace);
 
 		const db = new Database(canonicalStorePath(repo));
 		const revision = (

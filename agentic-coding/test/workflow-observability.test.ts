@@ -15,6 +15,8 @@ import {
 	TelemetrySink,
 	telemetryEnvelope,
 	traceparent,
+	workflowTraceContext,
+	workflowTraceId,
 } from "../src/workflow/observability.ts";
 
 test("W3C trace context propagates with new child identity", () => {
@@ -27,6 +29,21 @@ test("W3C trace context propagates with new child identity", () => {
 	expect(child.spanId).not.toBe(parent.spanId);
 	expect(parseTraceparent(traceparent(child))).toEqual(child);
 	expect(parseTraceparent("broken")).toBeUndefined();
+});
+
+test("workflow trace identity is stable per workflow and fresh per event", () => {
+	const first = workflowTraceContext("wf-1");
+	const second = workflowTraceContext("wf-1");
+	const other = workflowTraceContext("wf-2");
+	expect(first.traceId).toBe(workflowTraceId("wf-1"));
+	expect(first.traceId).toMatch(/^[0-9a-f]{32}$/);
+	// Every event of one workflow shares the trace id, so a traceparent-based
+	// viewer shows one trace per workflow instead of one per event.
+	expect(second.traceId).toBe(first.traceId);
+	expect(first.traceId).not.toBe(other.traceId);
+	// Individual events stay addressable through a fresh span id.
+	expect(first.spanId).not.toBe(second.spanId);
+	expect(parseTraceparent(traceparent(first))).toEqual(first);
 });
 test("runtime fields are bounded and content is local opt-in", () => {
 	expect(

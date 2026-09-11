@@ -10,6 +10,7 @@ import type {
 	WorkflowRouting,
 } from "../src/workflow/contracts.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
+import { workflowTraceId } from "../src/workflow/observability.ts";
 import { canonicalStorePath, WorkflowEngine } from "../src/workflow/runtime.ts";
 
 type TelemetryEvent = Record<string, string | number | boolean | undefined> & {
@@ -68,6 +69,13 @@ function requireEvent(events: TelemetryEvent[], name: string): TelemetryEvent {
 	const event = events.find((item) => item.event === name);
 	if (!event) throw new Error(`expected telemetry event ${name}`);
 	return event;
+}
+
+/** Trace id of an envelope's W3C traceparent, or undefined when absent. */
+function traceIdOf(event: TelemetryEvent): string | undefined {
+	const value = event.traceparent;
+	if (typeof value !== "string") return undefined;
+	return /^00-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}$/.exec(value)?.[1];
 }
 
 test("engine dispatch telemetry carries identity and payload fields", () => {
@@ -147,6 +155,11 @@ test("engine dispatch telemetry carries identity and payload fields", () => {
 			message: "needs help",
 		});
 		const events = readTelemetry(root, "telemetry-flow");
+		// Every engine event of one workflow shares the workflow trace id, so a
+		// traceparent-based viewer groups the workflow into one trace.
+		expect(new Set(events.map((item) => traceIdOf(item)))).toEqual(
+			new Set([workflowTraceId("telemetry-flow")]),
+		);
 		const handoff = requireEvent(events, "agent.handoff");
 		expect(handoff.runId).toBe(run.id);
 		expect(handoff.role).toBe("worker");

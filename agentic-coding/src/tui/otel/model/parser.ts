@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { workflowTraceId } from "../../../workflow/observability";
 import type { SpanData } from "./types";
 
 const id = (value: unknown, size: number) =>
@@ -152,8 +153,12 @@ const digest = (text: string, size: number): string =>
 /** Convert one workflow telemetry envelope (`.herdr-workflow/<id>/telemetry.jsonl`,
  * see `workflow/observability.ts`) into the span shape the trace views render.
  * Envelopes are point events, so a span covers `durationMs` (when reported)
- * ending at `at`; `traceparent` supplies the trace identity and `workflowId`
- * becomes `herdr.change.id`, which is what groups spans by workflow. */
+ * ending at `at`; `workflowId` becomes `herdr.change.id` (the viewer's grouping
+ * key) and emitters stamp a workflow-scoped `traceparent`, so the trace id is
+ * stable per workflow. Records without a traceparent fall back to the same
+ * workflow-id digest; records that omit or leave `workflowId` empty share the
+ * reserved `workflowTraceId("unknown")` trace rather than splitting into
+ * per-record traces. */
 export function parseTelemetryLine(
 	line: string,
 	index = 0,
@@ -178,10 +183,13 @@ export function parseTelemetryLine(
 			? TRACEPARENT.exec(envelope.traceparent)
 			: null;
 	// All events of one runtime run share the run's traceparent span id, so the
-	// span id must come from the envelope itself to stay unique per event.
+	// span id must come from the envelope itself to stay unique per event. The
+	// no-traceparent fallback reuses the emitter's workflow trace id, so legacy
+	// and unstamped records still join the workflow trace instead of re-deriving
+	// a possibly-divergent digest (QUAL-001).
 	const traceId = traceparent
 		? traceparent[1]?.toLowerCase()
-		: digest(`workflow:${workflowId ?? "unknown"}`, 32);
+		: workflowTraceId(workflowId || "unknown");
 	const spanId = digest(`${index}:${line}`, 16);
 	const durationMs =
 		typeof envelope.durationMs === "number" && envelope.durationMs > 0

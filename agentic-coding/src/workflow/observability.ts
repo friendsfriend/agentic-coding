@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -126,6 +126,32 @@ export function childTrace(parent?: TraceContext): TraceContext {
 		traceId: parent?.traceId ?? randomBytes(16).toString("hex"),
 		spanId: randomBytes(8).toString("hex"),
 		flags: parent?.flags ?? "01",
+	};
+}
+/** Deterministic W3C trace id for one workflow. Every engine, adapter, and
+ * runtime event of that workflow emits this trace id, so consumers that group
+ * by `traceparent` (and the JSONL parser's workflow fallback) show one trace
+ * per workflow instead of one trace per event. Deterministic rather than
+ * persisted so it survives a process restart with no state migration.
+ *
+ * `workflowId` is unique within one workflow store, which is the grouping scope
+ * the telemetry spec defines. A shared collector that receives several stores
+ * reusing the same id would merge those workflows into one trace; the id is the
+ * store-local workflow identity, not a globally unique key (QUAL-002). */
+export function workflowTraceId(workflowId: string): string {
+	return createHash("sha256")
+		.update(`workflow:${workflowId}`)
+		.digest("hex")
+		.slice(0, 32);
+}
+/** Child context inside a workflow trace: the stable workflow trace id plus a
+ * fresh span id, so individual events and runs stay addressable while grouping
+ * by workflow. */
+export function workflowTraceContext(workflowId: string): TraceContext {
+	return {
+		traceId: workflowTraceId(workflowId),
+		spanId: randomBytes(8).toString("hex"),
+		flags: "01",
 	};
 }
 export function traceparent(context: TraceContext): string {
