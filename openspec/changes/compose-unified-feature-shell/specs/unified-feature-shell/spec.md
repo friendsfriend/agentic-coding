@@ -48,6 +48,11 @@ Workflow execution coordinators, telemetry listeners/watchers and database lifet
 - **THEN** execution and lease renewal SHALL continue under the same root owner
 - **AND** showing Workflows again SHALL subscribe to authoritative state without duplicating execution
 
+#### Scenario: External tool temporarily owns terminal
+- **WHEN** the renderer is suspended while a foreground terminal utility runs
+- **THEN** asynchronous child waiting SHALL allow workflow lease renewal and telemetry processing to continue
+- **AND** renderer/input ownership SHALL be restored on success, failure or cancellation
+
 #### Scenario: Dispose application
 - **WHEN** the application owner is disposed
 - **THEN** owned services SHALL be cancelled/finalized once without disposing another application's resources

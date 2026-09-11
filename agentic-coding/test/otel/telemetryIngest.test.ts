@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TraceDb } from "../../src/tui/otel/model/db";
 import {
+	parseLine,
 	parseTelemetryJsonl,
 	parseTelemetryLine,
 } from "../../src/tui/otel/model/parser";
@@ -44,6 +45,80 @@ describe("telemetry envelope parsing", () => {
 		const spans = parseTelemetryJsonl(`${TELEMETRY}\nnot json\n{}`);
 		expect(spans).toHaveLength(2);
 		expect(spans[1]?.serviceName).toBe("pi");
+	});
+});
+
+describe("enriched telemetry payload ingest", () => {
+	const MIXED = [
+		// New engine event: reserved identity plus `herdr.*` numeric payload.
+		'{"schemaVersion":1,"at":"2026-09-11T10:00:00.000Z","layer":"engine","event":"agent.handoff","workflowId":"wf-9","runId":"run-9","role":"worker","profile":"pi","runtime":"pi","sessionId":"session-9","effectId":"effect-9","outcome":"ok","durationMs":12,"herdr.run.attempt":3,"herdr.evidence.count":0,"attributes":{"herdr.effect.kind":"agent.launch"}}',
+		// pi bridge event: top-level tokens and a numeric runtime attribute.
+		'{"schemaVersion":1,"at":"2026-09-11T10:00:01.000Z","layer":"runtime","runtime":"pi","event":"runtime.usage","workflowId":"wf-9","inputTokens":100,"outputTokens":20,"cost":0.5,"pi.tool.duration_ms":7.5,"pi.compaction.automatic":true}',
+		// Unknown event name must stay readable.
+		'{"schemaVersion":1,"at":"2026-09-11T10:00:02.000Z","layer":"engine","event":"workflow.rollup","workflowId":"wf-9","herdr.revision.count":4}',
+		// Legacy record without a layer.
+		'{"schemaVersion":1,"at":"2026-09-11T10:00:03.000Z","event":"legacy.event","workflowId":"wf-9"}',
+	].join("\n");
+
+	test("preserves scalar types, maps top-level fields, and keeps unknown names", () => {
+		const spans = parseTelemetryJsonl(MIXED);
+		expect(spans).toHaveLength(4);
+		const handoff = spans[0];
+		const usage = spans[1];
+		const rollup = spans[2];
+		const legacy = spans[3];
+		if (!handoff || !usage || !rollup || !legacy)
+			throw new Error("missing spans");
+		expect(
+			handoff.attributes.find((a) => a.key === "herdr.run.attempt")?.value,
+		).toBe(3);
+		expect(
+			handoff.attributes.find((a) => a.key === "herdr.session.id")?.value,
+		).toBe("session-9");
+		expect(
+			handoff.attributes.find((a) => a.key === "herdr.effect.kind")?.value,
+		).toBe("agent.launch");
+		expect(
+			typeof usage.attributes.find((a) => a.key === "inputTokens")?.value,
+		).toBe("number");
+		expect(
+			typeof usage.attributes.find((a) => a.key === "pi.tool.duration_ms")
+				?.value,
+		).toBe("number");
+		expect(
+			usage.attributes.find((a) => a.key === "pi.compaction.automatic")?.value,
+		).toBe(true);
+		expect(rollup.name).toBe("workflow.rollup");
+		expect(legacy.serviceName).toBe("herdr-workflow");
+	});
+
+	test("decodes numeric OTLP strings for int and double", () => {
+		const line = JSON.stringify({
+			traceId: "a".repeat(32),
+			spanId: "b".repeat(16),
+			name: "metric.span",
+			startTimeUnixNano: "1000000",
+			endTimeUnixNano: "2000000",
+			status: { code: 0 },
+			attributes: [
+				{ key: "int.attr", value: { intValue: "12" } },
+				{ key: "double.attr", value: { doubleValue: "1.5" } },
+				{ key: "bool.attr", value: { boolValue: true } },
+				{ key: "string.attr", value: { stringValue: "x" } },
+			],
+		});
+		const span = parseLine(line);
+		if (!span) throw new Error("expected a span");
+		expect(span.attributes.find((a) => a.key === "int.attr")?.value).toBe(12);
+		expect(span.attributes.find((a) => a.key === "double.attr")?.value).toBe(
+			1.5,
+		);
+		expect(span.attributes.find((a) => a.key === "bool.attr")?.value).toBe(
+			true,
+		);
+		expect(span.attributes.find((a) => a.key === "string.attr")?.value).toBe(
+			"x",
+		);
 	});
 });
 

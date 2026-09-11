@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: One distributable executable
-One executable SHALL contain the unified frontend, TypeScript workflow/telemetry code, embedded Go backend and required runtime assets. Normal launch SHALL NOT require the source repositories or an installed Go compiler. External domain tools SHALL remain documented dependencies.
+One executable SHALL contain the unified frontend, TypeScript workflow/telemetry code and required runtime assets. While production environment capabilities remain Go-owned, it SHALL also embed their Go backend. Normal launch SHALL NOT require the source repositories or an installed Go compiler. External domain tools SHALL remain documented dependencies.
 
 #### Scenario: Launch outside source checkout
 - **WHEN** the compiled artifact runs from an unrelated temporary directory with original checkouts unavailable
@@ -21,9 +21,9 @@ The executable SHALL preserve workflow verbs and home/manager/dash initial-route
 - **AND** local workflow data SHALL NOT be mislabeled as data from the attached server
 
 ### Requirement: Embedded helper ownership
-Embedded Go extraction SHALL use a private instance-owned location with safe permissions and cleanup. Optional gRPC support SHALL be launched as an internal mode of the same executable, bound to loopback by default and verified for actual supported protocol readiness.
+While an embedded Go backend is needed, extraction SHALL use a private instance-owned location with safe permissions and cleanup. During the mixed-runtime milestone, optional gRPC support SHALL use an internal mode of the same executable rather than a separate distributed binary. Receivers SHALL bind to loopback by default and pass actual supported protocol readiness; a later in-process implementation SHALL retain these guarantees.
 
 #### Scenario: Optional gRPC listener starts
 - **WHEN** gRPC telemetry is configured
 - **THEN** the application SHALL verify the supported service accepts a protocol request before marking it ready
-- **AND** shutdown SHALL terminate its owned internal-mode process and release the port
+- **AND** shutdown SHALL stop the listener, terminate any owned internal-mode helper process and release the port

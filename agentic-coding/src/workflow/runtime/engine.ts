@@ -30,7 +30,13 @@ import {
 } from "../contracts.ts";
 import { decodePlanResult } from "../definitions/contracts.ts";
 import { effectiveManifestPolicy } from "../definitions.ts";
-import { childTrace, parseTraceparent, traceparent } from "../observability.ts";
+import {
+	childTrace,
+	parseTraceparent,
+	redactTelemetryText,
+	telemetryEnvelope,
+	traceparent,
+} from "../observability.ts";
 import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
@@ -64,7 +70,7 @@ import {
 	freshStep,
 	validateFusionRouting,
 } from "./kernel.ts";
-import { migrateLegacy } from "./migration.ts";
+import { type LegacyMigrationTelemetry, migrateLegacy } from "./migration.ts";
 import { agentAnswer, agentAsk } from "./reducers/agent-consult.ts";
 import {
 	agentHandoff,
@@ -95,6 +101,7 @@ import {
 	json,
 	nowIso,
 	payload,
+	type RunRow,
 	runs,
 	activeRunForRole as storeActiveRunForRole,
 	effectIsLive as storeEffectIsLive,
@@ -124,11 +131,78 @@ import {
 interface CommittedDispatch {
 	snapshot: WorkflowSnapshot;
 	event: { type: string; actor: unknown; data: unknown };
+	/** Pre- and post-command status, resolved inside the commit transaction so
+	 * telemetry never re-reads the store (D1). */
+	statusBefore: WorkflowSnapshot["status"];
+	/** Identity and bounded payload resolved from the committed event data, the
+	 * snapshot, and the affected run/effect row. */
+	telemetry: CommittedTelemetry;
+}
+interface CommittedTelemetry {
+	runId?: string;
+	stepId?: string;
+	role?: string;
+	profile?: string;
+	runtime?: string;
+	sessionId?: string;
+	effectId?: string;
+	effectKind?: string;
+	attempt?: number;
+	outcome?: "ok" | "error";
+	durationMs?: number;
+	payload: Record<string, unknown>;
+	/** Present when the command made the workflow terminal: the payload of the
+	 * one best-effort `workflow.rollup` event (D2). */
+	rollupPayload?: Record<string, unknown>;
+}
+interface ExhaustedTelemetry {
+	snapshot: WorkflowSnapshot;
+	effectId: string;
+	kind: string;
+	attempts: number;
+	maxAttempts: number;
+	diagnostic: string;
+	rollup: Record<string, unknown>;
 }
 interface PreparedStart {
 	snapshot: WorkflowSnapshot;
 	storeTarget: string;
 	sameCheckout: boolean;
+}
+
+const TERMINAL_STATUSES = new Set([
+	"completed",
+	"closed",
+	"attention-required",
+]);
+const MAX_DIGEST_ATTRIBUTE = 16;
+
+/** Bounded error class: the store's own bounded-error text, never raw text from
+ * an untrusted provider. */
+function errorClass(value: unknown): string | undefined {
+	if (value === undefined || value === null) return undefined;
+	const text = typeof value === "string" ? value : String(value);
+	// Error text can originate from subprocess stderr or a remote URL; redact
+	// credential shapes before the value is exported (SEC-002).
+	const normalized = redactTelemetryText(text)
+		.replace(/\s+/g, " ")
+		.trim()
+		.slice(0, 160);
+	return normalized || undefined;
+}
+
+function truncatedDigest(value: unknown): string | undefined {
+	return typeof value === "string" && value
+		? value.slice(0, MAX_DIGEST_ATTRIBUTE)
+		: undefined;
+}
+
+/** Normalized action category: a parameterized action such as
+ * `retry-effect:<uuid>` reports its category without the variable identifier. */
+function normalizedActionId(value: unknown): string {
+	if (typeof value !== "string" || !value) return "unknown";
+	const separator = value.indexOf(":");
+	return separator > 0 ? value.slice(0, separator) : value;
 }
 
 export class WorkflowEngine {
@@ -183,13 +257,21 @@ export class WorkflowEngine {
 	initializeEffect(
 		repo: string,
 		workflowId?: string,
-	): Effect.Effect<void, WorkflowRuntimeError, WorkflowStore> {
+	): Effect.Effect<
+		void,
+		WorkflowRuntimeError,
+		WorkflowStore | WorkflowTelemetry
+	> {
 		return this.initializeProgram(repo, workflowId);
 	}
 	private initializeProgram(
 		repo: string,
 		workflowId?: string,
-	): Effect.Effect<void, WorkflowRuntimeError, WorkflowStore> {
+	): Effect.Effect<
+		void,
+		WorkflowRuntimeError,
+		WorkflowStore | WorkflowTelemetry
+	> {
 		const self = this;
 		return Effect.gen(function* () {
 			const store = yield* WorkflowStore;
@@ -198,8 +280,9 @@ export class WorkflowEngine {
 			// Legacy import runs outside any command transaction: it owns its own
 			// SQLite transaction control and must not run inside the service's
 			// transaction primitive.
-			yield* store.write(repo, (db) => {
-				if (!tableExists(db, "workflows")) return;
+			const migrated = yield* store.write(repo, (db) => {
+				const results: LegacyMigrationTelemetry[] = [];
+				if (!tableExists(db, "workflows")) return results;
 				const ids = workflowId
 					? [workflowId]
 					: (
@@ -217,15 +300,26 @@ export class WorkflowEngine {
 							.get(changeId)
 					)
 						continue;
-					migrateLegacy(
+					const item = migrateLegacy(
 						db,
 						canonicalRepository(repo),
 						changeId,
 						self.registry,
 						self.now,
 					);
+					if (item) results.push(item);
 				}
+				return results;
 			});
+			for (const item of migrated)
+				yield* self.telemetryEffect(item.snapshot, "legacy.migrated", {
+					stepId: item.snapshot.currentStep,
+					payload: {
+						"herdr.source.version": item.sourceVersion,
+						"herdr.migration.phase": item.phase,
+						"herdr.workflow.type": item.workflowType,
+					},
+				});
 		});
 	}
 	start(input: StartWorkflowInput): DispatchResult {
@@ -251,13 +345,16 @@ export class WorkflowEngine {
 			const result = yield* store.transaction(prepared.storeTarget, (db) =>
 				self.commitStart(db, input, prepared.snapshot, prepared.sameCheckout),
 			);
-			yield* self.telemetryEffect(result, "workflow.started");
+			yield* self.telemetryEffect(result.snapshot, "workflow.started", {
+				stepId: result.snapshot.currentStep,
+				payload: self.startTelemetryPayload(result.snapshot),
+			});
 			self.onCommitted(prepared.storeTarget);
 			return {
-				snapshot: result,
+				snapshot: result.snapshot,
 				view: viewById(
 					prepared.storeTarget,
-					result.workflowId,
+					result.snapshot.workflowId,
 					self.registry,
 					self.now,
 				),
@@ -373,15 +470,13 @@ export class WorkflowEngine {
 			yield* self.telemetryEffect(
 				committed.snapshot,
 				committed.event.type,
-				command.type === "agent.handoff" ||
-					command.type === "agent.question" ||
-					command.type === "agent.question-expire" ||
-					command.type === "agent.research-handoff"
-					? { runId: command.runId }
-					: command.type === "effect.result"
-						? { effectId: command.effectId }
-						: undefined,
+				committed.telemetry,
 			);
+			if (committed.telemetry.rollupPayload)
+				yield* self.telemetryEffect(committed.snapshot, "workflow.rollup", {
+					stepId: committed.snapshot.currentStep,
+					payload: committed.telemetry.rollupPayload,
+				});
 			self.onCommitted(
 				isWikiWorkflowTarget(repo) || isResearchWorkflowTarget(repo)
 					? wikiRoot(true)
@@ -470,7 +565,11 @@ export class WorkflowEngine {
 		effectId: string,
 		lease: string,
 		leaseMs = 30_000,
-	): Effect.Effect<boolean, WorkflowRuntimeError, WorkflowStore> {
+	): Effect.Effect<
+		boolean,
+		WorkflowRuntimeError,
+		WorkflowStore | WorkflowTelemetry
+	> {
 		const self = this;
 		return Effect.gen(function* () {
 			if (!Number.isFinite(leaseMs) || leaseMs <= 0)
@@ -492,14 +591,44 @@ export class WorkflowEngine {
 		repo: string,
 		limit = 10,
 		leaseMs = 30_000,
-	): Effect.Effect<ClaimedEffect[], WorkflowRuntimeError, WorkflowStore> {
+	): Effect.Effect<
+		ClaimedEffect[],
+		WorkflowRuntimeError,
+		WorkflowStore | WorkflowTelemetry
+	> {
 		const self = this;
 		return Effect.gen(function* () {
 			const store = yield* WorkflowStore;
 			yield* self.initializeProgram(repo);
-			return yield* store.transaction(repo, (db) =>
+			const result = yield* store.transaction(repo, (db) =>
 				self.commitClaim(db, limit, leaseMs),
 			);
+			// Several expired effects of one workflow can exhaust in a single
+			// claim; each still exports its own `effect.exhausted`, but the
+			// terminal `workflow.rollup` is emitted once per workflow (OPENSPEC-006).
+			const rolledUp = new Set<string>();
+			for (const item of result.exhausted) {
+				yield* self.telemetryEffect(item.snapshot, "effect.exhausted", {
+					effectId: item.effectId,
+					stepId: item.snapshot.currentStep,
+					attempt: item.attempts,
+					outcome: "error",
+					payload: {
+						"herdr.effect.kind": item.kind,
+						"herdr.effect.attempt": item.attempts,
+						"herdr.effect.max_attempts": item.maxAttempts,
+						"herdr.error.class": errorClass(item.diagnostic) ?? "exhausted",
+						"herdr.attention.count": item.snapshot.attention.length,
+					},
+				});
+				if (rolledUp.has(item.snapshot.workflowId)) continue;
+				rolledUp.add(item.snapshot.workflowId);
+				yield* self.telemetryEffect(item.snapshot, "workflow.rollup", {
+					stepId: item.snapshot.currentStep,
+					payload: item.rollup,
+				});
+			}
+			return result.claimed;
 		});
 	}
 	issueRunCapability(repo: string, runId: string): string {
@@ -508,7 +637,11 @@ export class WorkflowEngine {
 	issueRunCapabilityEffect(
 		repo: string,
 		runId: string,
-	): Effect.Effect<string, WorkflowRuntimeError, WorkflowStore> {
+	): Effect.Effect<
+		string,
+		WorkflowRuntimeError,
+		WorkflowStore | WorkflowTelemetry
+	> {
 		const self = this;
 		return Effect.gen(function* () {
 			yield* self.initializeProgram(repo);
@@ -832,7 +965,7 @@ export class WorkflowEngine {
 		input: StartWorkflowInput,
 		snapshot: WorkflowSnapshot,
 		sameCheckout: boolean,
-	): WorkflowSnapshot {
+	): { snapshot: WorkflowSnapshot; event: { type: string; data: unknown } } {
 		if (
 			db
 				.query("SELECT 1 FROM workflow_instances WHERE id=?")
@@ -865,12 +998,16 @@ export class WorkflowEngine {
 			at,
 			at,
 		);
+		const event = {
+			type: "workflow.started",
+			data: { definition: snapshot.definition },
+		};
 		db.query("INSERT INTO workflow_events VALUES (?,?,?,?,?,?)").run(
 			input.workflowId,
 			0,
-			"workflow.started",
+			event.type,
 			json({ kind: "developer" }),
-			json({ definition: snapshot.definition }),
+			json(event.data),
 			at,
 		);
 		const definition = this.registry.definition(
@@ -896,7 +1033,34 @@ export class WorkflowEngine {
 			);
 		else enterStep(db, snapshot, definition, this.registry, this.now);
 		writeSnapshot(db, snapshot);
-		return snapshot;
+		return { snapshot, event };
+	}
+
+	/** `workflow.started` payload: the definition identity and the bounded start
+	 * metadata the snapshot already carries (task 2.8). */
+	private startTelemetryPayload(
+		snapshot: WorkflowSnapshot,
+	): Record<string, unknown> {
+		const repository = snapshot.metadata.repository;
+		return {
+			"herdr.definition.id": snapshot.definition.id,
+			"herdr.definition.version": snapshot.definition.version,
+			// `workflowId` is already mapped to `herdr.change.id` by the parser, so
+			// the OpenSpec change id uses a distinct key to avoid a duplicate span
+			// attribute (QUAL-007).
+			...(snapshot.metadata.changeId
+				? { "herdr.metadata.change.id": snapshot.metadata.changeId }
+				: {}),
+			"herdr.repository.independent": !repository,
+			...(repository ? { "herdr.repository": path.basename(repository) } : {}),
+			"herdr.task.length": (snapshot.metadata.task ?? "").length,
+			...(snapshot.metadata.branch
+				? { "herdr.branch": snapshot.metadata.branch }
+				: {}),
+			...(snapshot.metadata.baseCommit
+				? { "herdr.base.commit": snapshot.metadata.baseCommit.slice(0, 40) }
+				: {}),
+		};
 	}
 
 	private prepareHandoff(
@@ -1037,6 +1201,8 @@ export class WorkflowEngine {
 			);
 		const runList = runs(db, snapshot.workflowId);
 		if (!repin) validateSnapshot(snapshot, definition, runList, this.registry);
+		const statusBefore = snapshot.status;
+		const stepBefore = snapshot.currentStep;
 		const event = this.reduce(
 			db,
 			snapshot,
@@ -1061,15 +1227,278 @@ export class WorkflowEngine {
 			json(event.data),
 			nowIso(this.now),
 		);
-		return { snapshot, event };
+		return {
+			snapshot,
+			event,
+			statusBefore,
+			telemetry: this.buildDispatchTelemetry(
+				db,
+				command,
+				event,
+				snapshot,
+				statusBefore,
+				stepBefore,
+				preparedHandoff,
+			),
+		};
+	}
+
+	/** Bounded identity and payload for one committed dispatch, resolved from
+	 * the event, the snapshot, and the affected run/effect row. Strictly
+	 * best-effort: an unresolvable field is omitted, never inferred, and this
+	 * function never throws (D2). */
+	private buildDispatchTelemetry(
+		db: import("bun:sqlite").Database,
+		command: WorkflowCommand,
+		event: { type: string; actor: unknown; data: unknown },
+		snapshot: WorkflowSnapshot,
+		statusBefore: WorkflowSnapshot["status"],
+		stepBefore: string,
+		preparedHandoff?: PreparedHandoffEvidence,
+	): CommittedTelemetry {
+		const telemetry: CommittedTelemetry = {
+			stepId: snapshot.currentStep,
+			payload: {
+				"herdr.revision": snapshot.revision,
+				"herdr.status": snapshot.status,
+			},
+		};
+		const runId =
+			"runId" in command && typeof command.runId === "string"
+				? command.runId
+				: undefined;
+		if (runId) {
+			const row = db
+				.query("SELECT * FROM workflow_runs WHERE id=?")
+				.get(runId) as RunRow | null;
+			if (row) {
+				telemetry.runId = row.id;
+				telemetry.stepId = row.step_id;
+				telemetry.role = row.role;
+				telemetry.attempt = row.attempt;
+				try {
+					const profile = JSON.parse(row.profile_json) as {
+						name?: string;
+						runtime?: string;
+					};
+					if (profile.name) telemetry.profile = profile.name;
+					if (profile.runtime) telemetry.runtime = profile.runtime;
+				} catch {
+					/* omit profile identity */
+				}
+				if (row.handle_json) {
+					try {
+						const handle = JSON.parse(row.handle_json) as {
+							sessionId?: string;
+						};
+						if (handle.sessionId) telemetry.sessionId = handle.sessionId;
+					} catch {
+						/* omit session identity */
+					}
+				}
+				if (row.created_at && row.completed_at) {
+					const wall =
+						Date.parse(row.completed_at) - Date.parse(row.created_at);
+					if (Number.isFinite(wall) && wall >= 0) telemetry.durationMs = wall;
+				}
+			}
+		} else if (command.type === "effect.result") {
+			telemetry.outcome = command.outcome === "complete" ? "ok" : "error";
+			if (command.durationMs !== undefined)
+				telemetry.durationMs = command.durationMs;
+			const row = db
+				.query("SELECT * FROM workflow_outbox WHERE id=?")
+				.get(command.effectId) as EffectRow | null;
+			if (row) {
+				telemetry.effectId = row.id;
+				telemetry.effectKind = row.kind;
+				telemetry.attempt = row.attempts;
+				telemetry.payload["herdr.effect.kind"] = row.kind;
+				telemetry.payload["herdr.effect.attempt"] = row.attempts;
+				telemetry.payload["herdr.effect.max_attempts"] = row.max_attempts;
+				const cls = row.last_error ? errorClass(row.last_error) : undefined;
+				if (cls) telemetry.payload["herdr.error.class"] = cls;
+			}
+		}
+		if (event.type === "agent.handoff") {
+			const data =
+				event.data && typeof event.data === "object"
+					? (event.data as { outcome?: string; outputDigest?: string })
+					: {};
+			const outcome = data.outcome ?? "unknown";
+			telemetry.payload["herdr.handoff.outcome"] = outcome;
+			telemetry.outcome =
+				outcome === "complete" || outcome === "blocked" ? "ok" : "error";
+			const digest = truncatedDigest(data.outputDigest);
+			if (digest) telemetry.payload["herdr.artifact.digest"] = digest;
+			if (preparedHandoff?.artifactOutput !== undefined)
+				telemetry.payload["herdr.artifact.bytes"] = Buffer.byteLength(
+					JSON.stringify(preparedHandoff.artifactOutput),
+				);
+			telemetry.payload["herdr.evidence.count"] = snapshot.evidence.length;
+			if (snapshot.step.results.length) {
+				let critical = 0;
+				for (const item of snapshot.step.results)
+					if (Number.isFinite(item.critical)) critical += item.critical;
+				telemetry.payload["herdr.findings.critical"] = critical;
+			}
+		}
+		if (event.type === "developer.action") {
+			const data =
+				event.data && typeof event.data === "object"
+					? (event.data as { actionId?: string })
+					: {};
+			telemetry.payload["herdr.action.id"] = normalizedActionId(data.actionId);
+			telemetry.payload["herdr.step.before"] = stepBefore;
+			telemetry.payload["herdr.step.after"] = snapshot.currentStep;
+		}
+		if (
+			event.type.startsWith("developer.question.") ||
+			event.type.startsWith("agent.question.")
+		)
+			this.applyQuestionTelemetry(telemetry, event, snapshot);
+		if (event.type === "research.handoff.recorded")
+			this.applyResearchHandoffTelemetry(telemetry, command);
+		if (command.type === "operator.repair") {
+			telemetry.payload["herdr.step.from"] = stepBefore;
+			telemetry.payload["herdr.step.to"] = snapshot.currentStep;
+			telemetry.payload["herdr.reason.length"] = command.reason.length;
+		}
+		if (command.type === "operator.migrate") {
+			// The reducer has already assigned the target pin, so the source
+			// version comes from the recorded migration fact (QUAL-005).
+			telemetry.payload["herdr.version.from"] =
+				snapshot.migrated?.from.version ?? command.targetVersion;
+			telemetry.payload["herdr.version.to"] = command.targetVersion;
+			telemetry.payload["herdr.reason.length"] = command.reason.length;
+		}
+		if (
+			command.type === "operator.repin" ||
+			(command.type === "developer.action" && command.actionId === "re-pin")
+		) {
+			const from = truncatedDigest(snapshot.repinned?.fromDigest);
+			if (from) telemetry.payload["herdr.digest.from"] = from;
+			telemetry.payload["herdr.digest.to"] = truncatedDigest(
+				snapshot.definition.digest,
+			);
+		}
+		if (
+			TERMINAL_STATUSES.has(snapshot.status) &&
+			!TERMINAL_STATUSES.has(statusBefore)
+		)
+			telemetry.rollupPayload = this.rollupPayload(db, snapshot);
+		return telemetry;
+	}
+
+	/** Question round-trip payload resolved from the dialogue record the reducer
+	 * just updated (task 2.6). */
+	private applyQuestionTelemetry(
+		telemetry: CommittedTelemetry,
+		event: { type: string; actor: unknown; data: unknown },
+		snapshot: WorkflowSnapshot,
+	): void {
+		const data =
+			event.data && typeof event.data === "object"
+				? (event.data as {
+						questionId?: string;
+						groupId?: string;
+						outcome?: string;
+					})
+				: {};
+		const first = data.questionId
+			? snapshot.developerDialogue.find((item) => item.id === data.questionId)
+			: snapshot.developerDialogue.find(
+					(item) => item.groupId === data.groupId,
+				);
+		const group = first?.groupId
+			? snapshot.developerDialogue.filter(
+					(item) => item.groupId === first.groupId,
+				)
+			: first
+				? [first]
+				: [];
+		if (!first) return;
+		telemetry.role = first.role;
+		telemetry.payload["herdr.question.id"] =
+			data.questionId ?? data.groupId ?? first.id;
+		telemetry.payload["herdr.asking.role"] = first.role;
+		telemetry.payload["herdr.option.count"] = group.reduce(
+			(total, item) => total + item.options.length,
+			0,
+		);
+		if (data.outcome) telemetry.payload["herdr.answer.outcome"] = data.outcome;
+		telemetry.payload["herdr.timeout"] = event.type.endsWith("expired");
+		const actor = event.actor as { kind?: string } | undefined;
+		if (actor?.kind) telemetry.payload["herdr.answered.by"] = actor.kind;
+		if (first.answeredAt) {
+			const wait = Date.parse(first.answeredAt) - Date.parse(first.createdAt);
+			if (Number.isFinite(wait) && wait >= 0) telemetry.durationMs = wait;
+		}
+		if (first.answer?.kind)
+			telemetry.payload["herdr.answer.kind"] = first.answer.kind;
+	}
+
+	/** Structured research handoff counts taken from the authenticated command
+	 * payload (task 2.8). */
+	private applyResearchHandoffTelemetry(
+		telemetry: CommittedTelemetry,
+		command: WorkflowCommand,
+	): void {
+		if (command.type !== "agent.research-handoff") return;
+		const handoff =
+			command.handoff && typeof command.handoff === "object"
+				? (command.handoff as {
+						directives?: unknown;
+						citations?: unknown;
+					})
+				: {};
+		telemetry.payload["herdr.directives.count"] = Array.isArray(
+			handoff.directives,
+		)
+			? handoff.directives.length
+			: 0;
+		telemetry.payload["herdr.citations.count"] = Array.isArray(
+			handoff.citations,
+		)
+			? handoff.citations.length
+			: 0;
+	}
+
+	/** One best-effort roll-up for the terminal transition (task 2.11). */
+	private rollupPayload(
+		db: import("bun:sqlite").Database,
+		snapshot: WorkflowSnapshot,
+	): Record<string, unknown> {
+		const totals = db
+			.query(
+				"SELECT COUNT(*) AS runs, COUNT(DISTINCT role) AS agents FROM workflow_runs WHERE workflow_id=?",
+			)
+			.get(snapshot.workflowId) as { runs: number; agents: number };
+		const attempts = db
+			.query(
+				"SELECT COALESCE(SUM(attempts),0) AS attempts FROM workflow_outbox WHERE workflow_id=?",
+			)
+			.get(snapshot.workflowId) as { attempts: number };
+		return {
+			"herdr.verification.rounds":
+				snapshot.loopCounts["core.verification:round"] ?? 0,
+			"herdr.revision.count": snapshot.revision,
+			"herdr.run.count": totals.runs,
+			"herdr.agent.count": totals.agents,
+			"herdr.questions.count": snapshot.developerDialogue.length,
+			"herdr.attention.count": snapshot.attention.length,
+			"herdr.effect.attempts": attempts.attempts,
+			"herdr.current.step": snapshot.currentStep,
+		};
 	}
 
 	private commitClaim(
 		db: import("bun:sqlite").Database,
 		limit: number,
 		leaseMs: number,
-	): ClaimedEffect[] {
+	): { claimed: ClaimedEffect[]; exhausted: ExhaustedTelemetry[] } {
 		const claimed: ClaimedEffect[] = [];
+		const exhausted: ExhaustedTelemetry[] = [];
 		const at = this.now();
 		const rows = db
 			.query(
@@ -1106,6 +1535,15 @@ export class WorkflowEngine {
 					json({ effectId: row.id, kind: row.kind, diagnostic }),
 					at.toISOString(),
 				);
+				exhausted.push({
+					snapshot: structuredClone(snapshot),
+					effectId: row.id,
+					kind: row.kind,
+					attempts: row.attempts,
+					maxAttempts: row.max_attempts,
+					diagnostic,
+					rollup: this.rollupPayload(db, snapshot),
+				});
 				continue;
 			}
 			const lease = randomUUID();
@@ -1140,36 +1578,68 @@ export class WorkflowEngine {
 			}
 			claimed.push(effect);
 		}
-		return claimed;
+		return { claimed, exhausted };
+	}
+
+	/** Telemetry sink directory for one workflow snapshot. */
+	private telemetryDirectory(snapshot: WorkflowSnapshot): string {
+		// Repository-independent workflows (wiki review and research) write their
+		// run env and bridge telemetry under the wiki data root; the engine must
+		// share that directory so engine and runtime events correlate (QUAL-008).
+		return snapshot.definition.id === "wiki-comments" ||
+			snapshot.definition.id === "research"
+			? path.join(wikiWorkflowDataRoot(), snapshot.workflowId)
+			: path.join(
+					snapshot.metadata.worktree,
+					".herdr-workflow",
+					snapshot.workflowId,
+				);
 	}
 
 	private telemetryEffect(
 		snapshot: WorkflowSnapshot,
 		event: string,
-		identity?: { runId?: string; effectId?: string },
+		telemetry?: CommittedTelemetry,
 	): Effect.Effect<void, never, WorkflowTelemetry> {
 		const self = this;
 		return Effect.gen(function* () {
-			const telemetry = yield* WorkflowTelemetry;
+			const service = yield* WorkflowTelemetry;
 			const context = childTrace(parseTraceparent(process.env.TRACEPARENT));
-			telemetry.emit(
-				snapshot.definition.id === "wiki-comments"
-					? path.join(wikiWorkflowDataRoot(), snapshot.workflowId)
-					: path.join(
-							snapshot.metadata.worktree,
-							".herdr-workflow",
-							snapshot.workflowId,
-						),
-				{
-					schemaVersion: 1,
-					at: nowIso(self.now),
+			service.emit(
+				self.telemetryDirectory(snapshot),
+				telemetryEnvelope({
 					layer: "engine",
 					event,
+					at: nowIso(self.now),
 					workflowId: snapshot.workflowId,
-					stepId: snapshot.currentStep,
-					...identity,
+					stepId: telemetry?.stepId ?? snapshot.currentStep,
+					...(telemetry?.runId ? { runId: telemetry.runId } : {}),
+					...(telemetry?.role ? { role: telemetry.role } : {}),
+					...(telemetry?.profile ? { profile: telemetry.profile } : {}),
+					...(telemetry?.runtime ? { runtime: telemetry.runtime } : {}),
+					...(telemetry?.sessionId ? { sessionId: telemetry.sessionId } : {}),
+					...(telemetry?.effectId ? { effectId: telemetry.effectId } : {}),
+					...(telemetry?.outcome ? { outcome: telemetry.outcome } : {}),
+					...(telemetry?.durationMs !== undefined
+						? { durationMs: telemetry.durationMs }
+						: {}),
 					traceparent: traceparent(context),
-				},
+					payload: {
+						"herdr.revision": snapshot.revision,
+						"herdr.status": snapshot.status,
+						...(telemetry?.effectKind
+							? { "herdr.effect.kind": telemetry.effectKind }
+							: {}),
+						// Only a resolved run has a run attempt; an effect's attempt count
+						// lives in `herdr.effect.attempt` and must not be reported as a run
+						// attempt (QUAL-006).
+						...(telemetry?.runId !== undefined &&
+						telemetry.attempt !== undefined
+							? { "herdr.run.attempt": telemetry.attempt }
+							: {}),
+						...(telemetry?.payload ?? {}),
+					},
+				}),
 			);
 		});
 	}

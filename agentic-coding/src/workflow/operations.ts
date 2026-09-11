@@ -27,6 +27,7 @@ import { registry } from "./cli/registry.ts";
 import type { CredentialPrompt } from "./credentials.ts";
 import { agentEffectHandlers, EffectRunner } from "./effect-runner.ts";
 import { loadConfig } from "./effects.ts";
+import { TelemetrySink } from "./observability.ts";
 import { dueQuestionTimers, WorkflowEngine } from "./runtime.ts";
 import { syncAgentTabLabels } from "./tab-sync.ts";
 export const CONTINUATION_WAIT_MS = 65_000;
@@ -69,6 +70,8 @@ export async function drainEffects(
 		herdr,
 		credentialPrompt,
 		paneForRun: paneForRunFactory(workflowEngine, repo, herdr),
+		telemetry: (directory, envelope) =>
+			new TelemetrySink(directory).emit(envelope),
 	});
 	const deadline = Date.now() + Math.max(0, waitMs);
 	let completed = 0;

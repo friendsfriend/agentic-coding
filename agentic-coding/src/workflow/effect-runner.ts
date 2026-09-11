@@ -18,6 +18,7 @@ import {
 	type EffectKind,
 	isRetryableFailure,
 	type WorkflowFailure,
+	type WorkflowSnapshot,
 } from "./contracts.ts";
 import {
 	type CredentialPrompt,
@@ -26,7 +27,14 @@ import {
 import { loadConfig } from "./effects.ts";
 import { PermanentFailure, TransientFailure } from "./failures.ts";
 import * as H from "./herdr-schema.ts";
-import { childTrace, parseTraceparent, traceparent } from "./observability.ts";
+import {
+	adapterTelemetryEnvelope,
+	childTrace,
+	parseTraceparent,
+	type TelemetryEnvelope,
+	TelemetrySink,
+	traceparent,
+} from "./observability.ts";
 import { runProcessEffect } from "./process.ts";
 import type { StepDefinition, WorkflowRegistry } from "./registry.ts";
 import {
@@ -240,6 +248,7 @@ export class EffectRunner {
 		const self = this;
 		return Effect.gen(function* () {
 			const lease = effect.lease ?? "";
+			const startedAt = Date.now();
 			const outcome = yield* Effect.scoped(
 				Effect.gen(function* () {
 					const state: { lost: boolean } = { lost: false };
@@ -310,7 +319,7 @@ export class EffectRunner {
 								return { _tag: "skipped" } satisfies ClaimOutcome;
 							}
 							return yield* Effect.sync(() =>
-								self.recordFailure(effect, observed.left, onFailure),
+								self.recordFailure(effect, observed.left, onFailure, startedAt),
 							);
 						}
 						if (state.lost || controller.signal.aborted) {
@@ -341,7 +350,12 @@ export class EffectRunner {
 									return { _tag: "skipped" } satisfies ClaimOutcome;
 								}
 								return yield* Effect.sync(() =>
-									self.recordFailure(effect, executed.left, onFailure),
+									self.recordFailure(
+										effect,
+										executed.left,
+										onFailure,
+										startedAt,
+									),
 								);
 							}
 							data = executed.right;
@@ -366,7 +380,7 @@ export class EffectRunner {
 								return { _tag: "skipped" } satisfies ClaimOutcome;
 							}
 							return yield* Effect.sync(() =>
-								self.recordFailure(effect, executed.left, onFailure),
+								self.recordFailure(effect, executed.left, onFailure, startedAt),
 							);
 						}
 						data = executed.right;
@@ -388,6 +402,7 @@ export class EffectRunner {
 								lease,
 								outcome: "complete",
 								data,
+								durationMs: Date.now() - startedAt,
 							}),
 						catch: (error) => error as Error,
 					}).pipe(Effect.either);
@@ -445,6 +460,7 @@ export class EffectRunner {
 		effect: ClaimedEffect,
 		error: unknown,
 		onFailure?: (workflowId: string, message: string) => void,
+		startedAt = Date.now(),
 	): ClaimOutcome {
 		const message = error instanceof Error ? error.message : String(error);
 		const klass = classifyFailure(error, false);
@@ -466,6 +482,7 @@ export class EffectRunner {
 				lease: effect.lease ?? "",
 				outcome,
 				data: message,
+				durationMs: Math.max(0, Date.now() - startedAt),
 			});
 		} catch (dispatchError) {
 			if (
@@ -649,6 +666,9 @@ export interface AdapterEffectOptions {
 	paneForRun(
 		runId: string,
 	): Promise<{ paneId: string; tabId?: string; owned: boolean }>;
+	/** Adapter-layer telemetry sink (D3). Defaults to the bounded JSONL sink so
+	 * the drain path needs no extra service. */
+	telemetry?: (directory: string, envelope: TelemetryEnvelope) => void;
 }
 export function agentEffectHandlers(
 	repo: string,
@@ -673,6 +693,75 @@ export function agentEffectHandlers(
 		);
 	const live = (effect: ClaimedEffect): boolean =>
 		engine.effectIsLive(repo, effect.id, effect.lease ?? "");
+	const telemetrySink: (
+		directory: string,
+		envelope: TelemetryEnvelope,
+	) => void =
+		options.telemetry ??
+		((directory, envelope) => new TelemetrySink(directory).emit(envelope));
+	const captureContent = (() => {
+		try {
+			return loadConfig().telemetry.capture_content === true;
+		} catch {
+			return false;
+		}
+	})();
+	/** Emit one adapter-layer baseline event; never throws and never mutates
+	 * workflow state (task 3.1–3.4). */
+	const emitAdapter = (
+		snapshot: WorkflowSnapshot,
+		run: {
+			id: string;
+			stepId: string;
+			role: string;
+			attempt: number;
+			profile: { name: string; runtime: string };
+			handle?: { sessionId?: string };
+		},
+		input: {
+			event: string;
+			effectId?: string;
+			outcome?: "ok" | "error";
+			durationMs?: number;
+			payload?: Record<string, unknown>;
+		},
+	): void => {
+		try {
+			telemetrySink(
+				snapshot.definition.id === "wiki-comments" ||
+					snapshot.definition.id === "research"
+					? path.join(wikiWorkflowDataRoot(), snapshot.workflowId)
+					: path.join(
+							snapshot.metadata.worktree,
+							".herdr-workflow",
+							snapshot.workflowId,
+						),
+				adapterTelemetryEnvelope({
+					event: input.event,
+					at: new Date().toISOString(),
+					workflowId: snapshot.workflowId,
+					stepId: run.stepId,
+					runId: run.id,
+					role: run.role,
+					profile: run.profile.name,
+					runtime: run.profile.runtime,
+					...(run.handle?.sessionId ? { sessionId: run.handle.sessionId } : {}),
+					...(input.effectId ? { effectId: input.effectId } : {}),
+					...(input.outcome ? { outcome: input.outcome } : {}),
+					...(input.durationMs !== undefined
+						? { durationMs: input.durationMs }
+						: {}),
+					payload: {
+						"herdr.run.attempt": run.attempt,
+						...(input.payload ?? {}),
+					},
+					captureContent,
+				}),
+			);
+		} catch {
+			/* telemetry is observational; never alter the workflow outcome */
+		}
+	};
 	return {
 		"workspace.setup": {
 			observe: (effect, signal) =>
@@ -1088,10 +1177,32 @@ export function agentEffectHandlers(
 						);
 					});
 					if (!live(effect)) return undefined;
+					const deliveryStartedAt = Date.now();
 					yield* herdr(
 						["agent", "prompt", resolved.paneId, expected.rendered.prompt],
 						signal,
 					);
+					yield* Effect.sync(() => {
+						emitAdapter(
+							snapshot,
+							{
+								...run,
+								handle: { sessionId: resolved.sessionId },
+							},
+							{
+								event: "agent.assignment.delivered",
+								effectId: effect.id,
+								outcome: "ok",
+								durationMs: Date.now() - deliveryStartedAt,
+								payload: { "herdr.delivery": "reused" },
+							},
+						);
+						emitAdapter(snapshot, run, {
+							event: "agent.launch",
+							effectId: effect.id,
+							outcome: "ok",
+						});
+					});
 					// An observation failure is never treated as confirmed absence:
 					// if reusing the live agent fails, surface it instead of
 					// authorizing a duplicate launch.
@@ -1111,6 +1222,11 @@ export function agentEffectHandlers(
 						snapshotDefinition(snapshot, options.registry),
 						run.stepId,
 					);
+					emitAdapter(snapshot, run, {
+						event: "agent.launch.attempt",
+						effectId: effect.id,
+					});
+					const launchStartedAt = Date.now();
 					const token =
 						effect.runToken ?? engine.issueRunCapability(repo, run.id);
 					const changedFiles =
@@ -1196,6 +1312,19 @@ export function agentEffectHandlers(
 								/* preserve original launch error */
 							}
 						}
+						const detail =
+							launchOutcome.left instanceof Error
+								? launchOutcome.left.message
+								: String(launchOutcome.left);
+						yield* Effect.sync(() =>
+							emitAdapter(snapshot, run, {
+								event: "agent.launch",
+								effectId: effect.id,
+								outcome: "error",
+								durationMs: Date.now() - launchStartedAt,
+								payload: { "herdr.error.class": detail.slice(0, 160) },
+							}),
+						);
 						return yield* Effect.fail(launchOutcome.left);
 					}
 					const handle = launchOutcome.right;
@@ -1205,8 +1334,29 @@ export function agentEffectHandlers(
 						} catch {
 							/* preserve cancellation; the next drain can retry cleanup */
 						}
+						yield* Effect.sync(() =>
+							emitAdapter(snapshot, run, {
+								event: "agent.launch",
+								effectId: effect.id,
+								outcome: "error",
+								durationMs: Date.now() - launchStartedAt,
+								payload: { "herdr.cancelled": true },
+							}),
+						);
 						return { cancelled: true };
 					}
+					yield* Effect.sync(() =>
+						emitAdapter(
+							snapshot,
+							{ ...run, handle },
+							{
+								event: "agent.launch",
+								effectId: effect.id,
+								outcome: "ok",
+								durationMs: Date.now() - launchStartedAt,
+							},
+						),
+					);
 					return handle;
 				}),
 		},
@@ -1248,7 +1398,34 @@ export function agentEffectHandlers(
 					if (typeof message !== "string" || !message.trim())
 						throw new PermanentFailure("agent prompt requires a message");
 					if (!live(effect)) return { cancelled: true };
-					yield* adapter.prompt(run.handle, message, signal);
+					const deliveredStartedAt = Date.now();
+					const promptOutcome = yield* Effect.either(
+						adapter.prompt(run.handle, message, signal),
+					);
+					if (Either.isLeft(promptOutcome)) {
+						const detail =
+							promptOutcome.left instanceof Error
+								? promptOutcome.left.message
+								: String(promptOutcome.left);
+						yield* Effect.sync(() =>
+							emitAdapter(snapshotFor(effect), run, {
+								event: "agent.error",
+								effectId: effect.id,
+								outcome: "error",
+								durationMs: Date.now() - deliveredStartedAt,
+								payload: { "herdr.error.class": detail.slice(0, 160) },
+							}),
+						);
+						return yield* Effect.fail(promptOutcome.left);
+					}
+					yield* Effect.sync(() =>
+						emitAdapter(snapshotFor(effect), run, {
+							event: "agent.assignment.delivered",
+							effectId: effect.id,
+							outcome: "ok",
+							durationMs: Date.now() - deliveredStartedAt,
+						}),
+					);
 					return {
 						prompted: true,
 						...(answerNonceHash === undefined ? {} : { answerNonceHash }),
@@ -1258,7 +1435,19 @@ export function agentEffectHandlers(
 		// Legacy stop effects must drain safely, but agents now live until their
 		// workspace closes. New workflow paths never enqueue this effect.
 		"agent.stop": {
-			execute: () => Effect.succeed({ retained: true }),
+			execute: (effect) =>
+				Effect.gen(function* () {
+					const run = engine.getRun(repo, runId(effect));
+					const snapshot = engine.getSnapshot(repo, run.workflowId);
+					yield* Effect.sync(() =>
+						emitAdapter(snapshot, run, {
+							event: "agent.stop",
+							effectId: effect.id,
+							outcome: "ok",
+						}),
+					);
+					return { retained: true };
+				}),
 		},
 		"notification.show": {
 			execute: (effect, signal) =>

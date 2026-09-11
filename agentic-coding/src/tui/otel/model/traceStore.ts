@@ -304,7 +304,11 @@ export class TraceStore {
 			span.traceId.includes(q) ||
 			span.name.toLowerCase().includes(q) ||
 			span.serviceName.toLowerCase().includes(q) ||
-			span.attributes.some((a) => String(a.value).toLowerCase().includes(q));
+			span.attributes.some(
+				(a) =>
+					a.key.toLowerCase().includes(q) ||
+					String(a.value).toLowerCase().includes(q),
+			);
 		const statusMatches =
 			this.statusFilter === "all" ||
 			(this.statusFilter === "success"

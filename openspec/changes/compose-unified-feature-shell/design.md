@@ -22,7 +22,7 @@ Depends on `unify-terminal-ui-primitives`. Current roots each own renderer setup
 - Dual key handlers trigger duplicate mutations → conflict/dispatch tests and remove old listener registrations before enabling a migrated feature.
 - Unmount loses draft or stops engine → separate view ownership from service ownership; test tab switching during active drain and review.
 - New header/sub-tabs consume terminal height → shared chrome measurements and renderer tests at narrow/short dimensions.
-- External terminal utilities block the Bun event loop → preserve current behavior at this stage; backend-process isolation is delivered by `expose-unified-bun-backend`.
+- External terminal utilities block the Bun event loop → replace foreground synchronous child waits with asynchronous spawn/wait while retaining renderer suspend/resume in try/finally. This keeps workflow lease renewal and telemetry responsive before full backend-process isolation in `expose-unified-bun-backend`.
 
 ## Migration Plan
 

@@ -960,9 +960,10 @@ describe("transactional workflow runtime", () => {
 					noSourcesUsed: true,
 				},
 			});
+			// Research engine telemetry shares the wiki data root with the adapter
+			// and runtime bridges so one run's events correlate (QUAL-008).
 			const telemetryPath = path.join(
 				wikiWorkflowDataRoot(),
-				".herdr-workflow",
 				"research-handoff-telemetry",
 				"telemetry.jsonl",
 			);

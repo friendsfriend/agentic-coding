@@ -326,6 +326,9 @@ const effectResultSchema = Schema.Struct({
 	lease: text(4096),
 	outcome: Schema.Literal("complete", "retry", "failed"),
 	data: Schema.Unknown,
+	/** Measured handler wall clock, reported on the exported telemetry event.
+	 * Optional so existing callers keep decoding unchanged. */
+	durationMs: Schema.optional(integer()),
 });
 const operatorRepairSchema = Schema.Struct({
 	type: Schema.Literal("operator.repair"),
