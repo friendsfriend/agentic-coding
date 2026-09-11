@@ -1,13 +1,20 @@
 import { WorkflowRuntimeError } from "../contracts.ts";
 import type { ArriveResult, StepBehavior } from "./types.ts";
 
-const VERIFIER_ROLES = [
+// Single source of truth for the core.verification role catalog: the engine's
+// selection validation, triage validation, and the dashboard preset editor all
+// read this list. Each role resolves the pinned asset named
+// `verification-<role without "-verifier">.md` (assignment.ts).
+export const VERIFIER_ROLES = [
 	"quality-verifier",
 	"security-verifier",
 	"performance-verifier",
 	"openspec-verifier",
 	"usability-verifier",
 	"test-verifier",
+	"concurrency-verifier",
+	"migration-verifier",
+	"test-quality-verifier",
 ] as const;
 const TRIAGE_ROLES = VERIFIER_ROLES.filter((role) => role !== "test-verifier");
 

@@ -785,6 +785,9 @@ describe("dashboard openspec-fusion-full start routing", () => {
 			["core.verification", "openspec-verifier", "d"],
 			["core.verification", "usability-verifier", "d"],
 			["core.verification", "test-verifier", "d"],
+			["core.verification", "concurrency-verifier", "d"],
+			["core.verification", "migration-verifier", "d"],
+			["core.verification", "test-quality-verifier", "d"],
 			["core.archive", "archive", "d"],
 		]);
 	});

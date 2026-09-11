@@ -486,6 +486,44 @@ cd agentic-coding && bun test test/workflow-source-layer-boundaries.test.ts test
 5. Add role parity and digest coverage, then run the focused workflow tests,
    type-check, format, lint, and build.
 
+## Adding a verifier role
+
+The `core.verification` role catalog is a single closed list, `VERIFIER_ROLES`
+in `src/workflow/steps/verification.ts`, exported as the source of truth for
+engine selection validation, triage validation, and the dashboard preset
+editor. Each registered role resolves exactly one pinned instruction asset by
+stripping its `-verifier` suffix: `<role>` → `verification-<role>.md`. Adding a
+role is additive — existing ids, asset names, and relative order stay fixed so
+in-flight workflows keep the behavior and assets they started with.
+
+1. Author `agent-definitions/instructions/verification-<role without
+   "-verifier">.md`, following the brevity and "concrete evidence only"
+   wording of its siblings; state the role's scope boundary (for example that
+   a review role never runs the complete suite).
+2. Add a row for the role to the role→remit table in
+   `agent-definitions/instructions/triage.md`, scoping it to the changed files
+   it covers.
+3. Append the role id to `VERIFIER_ROLES` in
+   `src/workflow/steps/verification.ts` before the derived `TRIAGE_ROLES`
+   filter; `test-verifier` is the only derived exclusion.
+4. Append `verification-<role>.md` to the `core.verification` asset list in
+   `src/workflow/definitions/steps.ts` in the same order.
+5. Regenerate the embedded definitions with `bun run build` (or
+   `bun run scripts/generate-embedded.ts`) and confirm
+   `AGENT_DEFINITION_VERSION` changed; never hand-edit
+   `src/workflow/embedded.generated.ts`.
+6. Consume the role only through the catalog: the dashboard preset editor
+   imports `VERIFIER_ROLES`, so no second role list is edited. Keep
+   `test-verifier` the sole engine-auto-launched verifier and the only owner
+   of the complete repository test suite.
+7. Update registered-catalog/instruction-digest tests and the definition
+   digest table, add a registration test that every catalog role resolves a
+   pinned asset, then run the focused workflow tests (`bun test
+   test/workflow-steps.test.ts test/workflow-registry.test.ts
+   test/workflow-model-config.test.ts test/dash/modelConfigModal.test.tsx`),
+   `bun run lint`, `bun run type-check`, and `bun run build` with zero
+   diagnostics.
+
 ## Planned follow-ups
 
 Stage A (`restructure-repo-for-agent-use`), stage B

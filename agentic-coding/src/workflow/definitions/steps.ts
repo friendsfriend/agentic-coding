@@ -33,6 +33,9 @@ const INSTRUCTION_BY_STEP: Record<string, string[]> = {
 		"verification-openspec.md",
 		"verification-usability.md",
 		"verification-test.md",
+		"verification-concurrency.md",
+		"verification-migration.md",
+		"verification-test-quality.md",
 	],
 	"core.wiki": [
 		"workflow-agent-protocol.md",

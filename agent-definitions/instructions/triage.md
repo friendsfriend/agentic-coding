@@ -14,6 +14,9 @@ Select the minimum verifier roles that cover the change:
 | openspec-verifier | Conformance to the approved proposal/design/tasks/spec |
 | usability-verifier | UI/UX surfaces, accessibility, interaction defects |
 | test-verifier | NEVER select: the engine auto-launches the full test suite after the selected verifiers pass |
+| concurrency-verifier | Introduced races, ordering assumptions, and reentrancy in shared mutable state |
+| migration-verifier | Persisted-state format/version compatibility, upgrade path, atomicity, and rollback |
+| test-quality-verifier | Test adequacy for the changed scope: real assertions that fail when the logic breaks (never the full suite) |
 
 Scope each selected role to the changed files it must see. `hunks` is optional; use it only to bound large files. Reuse unchanged prior PASS evidence from the run outputs listed in the inputs. Do not review code, run checks, or launch verifiers.
 

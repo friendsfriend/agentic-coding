@@ -2,13 +2,18 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { renderAssignment } from "../src/workflow/assignment.ts";
 import { rolesForDefinition } from "../src/workflow/cli.ts";
-import type { WorkflowSnapshot } from "../src/workflow/contracts.ts";
+import type {
+	Assignment,
+	WorkflowSnapshot,
+} from "../src/workflow/contracts.ts";
 import {
 	BUILTIN_CAPABILITIES,
 	BUILTIN_EFFECTS,
 	registerBuiltins,
 } from "../src/workflow/definitions.ts";
+import { AGENT_DEFINITIONS } from "../src/workflow/embedded.generated.ts";
 import {
 	type StepDefinition,
 	WorkflowRegistry,
@@ -20,6 +25,8 @@ import {
 	rolesForStep,
 	stepBehavior,
 } from "../src/workflow/steps/index.ts";
+import type { AgentCompletionContext } from "../src/workflow/steps/types.ts";
+import { VERIFIER_ROLES } from "../src/workflow/steps/verification.ts";
 
 const EXPECTED_DEFINITIONS: Array<{
 	id: string;
@@ -10663,6 +10670,9 @@ function expectedCandidateRoles(
 			...(definitionId === "no-openspec" ? [] : ["openspec-verifier"]),
 			"usability-verifier",
 			"test-verifier",
+			"concurrency-verifier",
+			"migration-verifier",
+			"test-quality-verifier",
 		];
 	if (stepId === "core.wiki")
 		return [definitionId === "research" ? "research-wiki" : "wiki"];
@@ -10713,6 +10723,43 @@ describe("workflow step behaviors", () => {
 						}),
 					);
 				}
+			}
+		}
+	});
+
+	test("every catalog verifier role resolves exactly one pinned role asset", () => {
+		const step = registerBuiltins().step("core.verification");
+		const assignmentFor = (role: string): Assignment => ({
+			protocolVersion: 1,
+			workflowId: "workflow",
+			runId: `run-${role}`,
+			generation: 1,
+			stepId: "core.verification",
+			role,
+			objective: "Review assigned files.",
+			interaction: "silent",
+			inputs: [],
+			permissions: ["read"],
+			checks: [],
+			allowedOutcomes: ["complete", "blocked", "failed"],
+			environment: {} as Assignment["environment"],
+		});
+		for (const role of VERIFIER_ROLES) {
+			const roleAsset = `verification-${role.replace(/-verifier$/, "")}.md`;
+			expect(
+				step.instructionAssets.filter((name) => name === roleAsset),
+			).toHaveLength(1);
+			const own = AGENT_DEFINITIONS[`instructions/${roleAsset}`];
+			expect(own).toBeDefined();
+			const prompt = renderAssignment(step, assignmentFor(role)).prompt;
+			expect(prompt).toContain((own ?? "").trim());
+			for (const other of VERIFIER_ROLES) {
+				if (other === role) continue;
+				const otherAsset = `verification-${other.replace(/-verifier$/, "")}.md`;
+				const otherContent =
+					AGENT_DEFINITIONS[`instructions/${otherAsset}`] ?? "";
+				expect(otherContent).not.toBe("");
+				expect(prompt).not.toContain(otherContent.trim());
 			}
 		}
 	});
@@ -11179,6 +11226,126 @@ describe("workflow step behavior hooks (move-step-semantics-to-behavior-hooks)",
 					{ stale: true },
 				),
 			).toBe("retry message");
+		});
+	});
+
+	describe("verifier role catalog and test-verifier ownership", () => {
+		function completionContext(
+			overrides: Partial<AgentCompletionContext>,
+		): AgentCompletionContext {
+			return {
+				snapshot: snapshot("openspec-full"),
+				definitionId: "openspec-full",
+				run: { id: "run", role: "triage", stepId: "core.triage" },
+				outcome: "complete",
+				remainingActiveRunIds: [],
+				evidence: [],
+				...overrides,
+			};
+		}
+		function completeStep(
+			stepId: string,
+			overrides: Partial<AgentCompletionContext>,
+		) {
+			const hook = stepBehavior(stepId).onAgentComplete;
+			if (!hook) throw new Error(`missing completion hook for ${stepId}`);
+			return hook(completionContext(overrides));
+		}
+		const plan = (role: string, files: string[]) => ({
+			roles: [role],
+			assignments: [{ role, reason: "reason", files }],
+		});
+
+		test("triage accepts each new role scoped to changed files", () => {
+			const changedFiles = ["src/a.ts", "src/b.ts"];
+			for (const role of [
+				"concurrency-verifier",
+				"migration-verifier",
+				"test-quality-verifier",
+			])
+				expect(() =>
+					completeStep("core.triage", {
+						output: plan(role, changedFiles),
+						changedFiles,
+					}),
+				).not.toThrow();
+		});
+
+		test("triage rejects unregistered, test, and mismatched role selections", () => {
+			const changedFiles = ["src/a.ts"];
+			expect(() =>
+				completeStep("core.triage", {
+					output: plan("unknown-verifier", changedFiles),
+					changedFiles,
+				}),
+			).toThrow(/invalid verifier role selection/);
+			expect(() =>
+				completeStep("core.triage", {
+					output: plan("test-verifier", changedFiles),
+					changedFiles,
+				}),
+			).toThrow(/invalid verifier role selection/);
+			expect(() =>
+				completeStep("core.triage", {
+					output: { roles: ["quality-verifier"], assignments: [] },
+					changedFiles,
+				}),
+			).toThrow(/invalid verifier role selection/);
+			expect(() =>
+				completeStep("core.triage", {
+					output: {
+						roles: [],
+						assignments: [
+							{
+								role: "quality-verifier",
+								reason: "reason",
+								files: changedFiles,
+							},
+						],
+					},
+					changedFiles,
+				}),
+			).toThrow(/invalid verifier role selection/);
+			expect(() =>
+				completeStep("core.triage", {
+					output: {
+						roles: ["quality-verifier", "quality-verifier"],
+						assignments: [
+							{
+								role: "quality-verifier",
+								reason: "reason",
+								files: changedFiles,
+							},
+						],
+					},
+					changedFiles,
+				}),
+			).toThrow(/invalid verifier role selection/);
+		});
+
+		test("test-quality-verifier does not replace the engine's test-verifier launch", () => {
+			const first = completeStep("core.verification", {
+				run: {
+					id: "run",
+					role: "test-quality-verifier",
+					stepId: "core.verification",
+				},
+				output: { critical: 0 },
+			});
+			expect(first?.deferTransition).toBe(true);
+			expect(first?.runs).toEqual([{ role: "test-verifier" }]);
+			expect(first?.step?.testRunStarted).toBe(true);
+			const alreadyRan = completeStep("core.verification", {
+				run: {
+					id: "run",
+					role: "test-quality-verifier",
+					stepId: "core.verification",
+				},
+				output: { critical: 0 },
+				snapshot: snapshot("openspec-full", ["test-quality-verifier"], true),
+			});
+			expect(alreadyRan?.runs).toBeUndefined();
+			expect(alreadyRan?.transition).toEqual({ outcome: "pass" });
 		});
 	});
 });

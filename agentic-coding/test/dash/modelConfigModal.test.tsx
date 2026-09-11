@@ -6,6 +6,7 @@ import path from "node:path";
 import { KeyEvent } from "@opentui/core";
 import { testRender } from "@opentui/solid";
 import { ModelConfigModal } from "../../src/tui/dash/ui/ModelConfigModal";
+import { VERIFIER_ROLES } from "../../src/workflow/steps/verification.ts";
 
 /** Prepend a stub bin providing an instant fake `pi --list-models` so the
  * editor's model enumeration never spawns the real runtime under load. */
@@ -273,8 +274,8 @@ test("preset editor persists fusion planner roles and consolidator step", async 
 		handler?.(key("j"));
 		handler?.(key("return"));
 		for (let i = 0; i < 3; i += 1) handler?.(key("return"));
-		// six verification roles stay (unset)
-		for (let i = 0; i < 6; i += 1) handler?.(key("return"));
+		// every verification role stays (unset)
+		for (let i = 0; i < 9; i += 1) handler?.(key("return"));
 		await t.flush();
 		const persisted = fs.readFileSync(
 			process.env.HERDR_WORKFLOW_CONFIG,
@@ -287,6 +288,52 @@ test("preset editor persists fusion planner roles and consolidator step", async 
 		// unset optional fields are never persisted as the literal sentinel
 		expect(persisted).not.toContain("(unset)");
 		expect(persisted).not.toMatch(/planner-[345]/);
+		t.renderer.destroy();
+	} finally {
+		delete process.env.HERDR_WORKFLOW_CONFIG;
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}, 20000);
+
+test("preset editor lists every registered verification role from the catalog", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "model-modal-test-"));
+	process.env.HERDR_WORKFLOW_CONFIG = path.join(dir, "config.toml");
+	fs.writeFileSync(
+		process.env.HERDR_WORKFLOW_CONFIG,
+		`[ui]\ntheme = "catppuccin"\n\n[agents]\ndefault_profile = "a"\n\n[agents.profiles.a]\nruntime = "pi"\n`,
+	);
+	let handler: ((event: KeyEvent) => boolean) | undefined;
+	try {
+		const t = await testRender(
+			() => (
+				<ModelConfigModal
+					onKeyReady={(h) => {
+						handler = h;
+					}}
+					onCancel={() => {}}
+				/>
+			),
+			{ width: 160, height: 30 },
+		);
+		await t.flush();
+		handler?.(key("down")); // menu -> Presets
+		handler?.(key("enter")); // open Presets list
+		await t.flush();
+		handler?.(key("enter")); // "(create new preset…)"
+		await t.flush();
+		expect(t.captureCharFrame()).toContain("Preset name");
+		for (const char of "role-coverage") handler?.(key(char));
+		handler?.(key("return"));
+		await t.flush();
+		handler?.(key("return")); // default profile stays (unset)
+		// five step fields + fusion.consolidate + five fusion planner roles
+		for (let i = 0; i < 11; i += 1) handler?.(key("return"));
+		await t.flush();
+		for (const role of VERIFIER_ROLES) {
+			expect(t.captureCharFrame()).toContain(`Verification ${role}`);
+			handler?.(key("return"));
+			await t.flush();
+		}
 		t.renderer.destroy();
 	} finally {
 		delete process.env.HERDR_WORKFLOW_CONFIG;
@@ -343,7 +390,7 @@ custom-role = "a"
 		await t.flush();
 		expect(t.captureCharFrame()).toContain("Agent configuration preset");
 		// accept every field unchanged through the full editor walk
-		for (let i = 0; i < 18; i += 1) handler?.(key("return"));
+		for (let i = 0; i < 21; i += 1) handler?.(key("return"));
 		await t.flush();
 		const persisted = fs.readFileSync(
 			process.env.HERDR_WORKFLOW_CONFIG,

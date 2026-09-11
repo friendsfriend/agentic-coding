@@ -1466,6 +1466,9 @@ test("canonical agent names are stable across generations and grouped rounds", (
 		"openspec-verifier",
 		"usability-verifier",
 		"test-verifier",
+		"concurrency-verifier",
+		"migration-verifier",
+		"test-quality-verifier",
 	];
 	const roundNames = roles.map((role) =>
 		name("core.verification", role, "12345678"),

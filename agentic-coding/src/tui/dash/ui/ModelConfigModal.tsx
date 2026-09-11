@@ -18,6 +18,7 @@ import {
 	parseAgentsConfig,
 	runtimeModels,
 } from "../../../workflow/profiles.ts";
+import { VERIFIER_ROLES } from "../../../workflow/steps/verification.ts";
 import { type ConsoleIssue, captureConsoleIssues } from "../consoleCapture";
 import { notify } from "../notifications";
 import { traceTui } from "../tracing";
@@ -45,14 +46,6 @@ const FUSION_PLAN_ROLES = [
 	"planner-3",
 	"planner-4",
 	"planner-5",
-];
-const VERIFICATION_ROLES = [
-	"quality-verifier",
-	"security-verifier",
-	"performance-verifier",
-	"openspec-verifier",
-	"usability-verifier",
-	"test-verifier",
 ];
 const THINKING_LEVELS = ["", "minimal", "low", "medium", "high"];
 const UNSET = "(unset)";
@@ -165,7 +158,7 @@ function presetFields(profileNames: string[]): EditorField[] {
 			kind: "choice" as const,
 			options,
 		})),
-		...VERIFICATION_ROLES.map((role) => ({
+		...VERIFIER_ROLES.map((role) => ({
 			key: `role:${role}`,
 			label: `Verification ${role}`,
 			kind: "choice" as const,
