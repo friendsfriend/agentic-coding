@@ -2,7 +2,6 @@ Not for agents. This is only for humans.
 
 Fixes: 
 * Still some of the errors appear inline in the tui instead of via the notification system / tracing
-* Improve test performance. Takes too long to execute
 
 Big ones:
 * Implement Agent steered version of the workflow. Basically an orchestrator version of the workflow.
@@ -10,6 +9,7 @@ Big ones:
 * Integrate devenv and this into one tui / system
   * Follow up: Make devenv apps also have the option to use the otel traces
 * Move the otel observability into a single tab with subviews for metrics, logs, traces and topology
+* Introduce performance verifier
 
 Small ones: 
 * Automatic wiki commit + push if in git repo.

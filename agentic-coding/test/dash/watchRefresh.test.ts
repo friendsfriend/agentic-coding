@@ -10,6 +10,22 @@ afterEach(() => {
 		rmSync(root, { recursive: true, force: true });
 });
 
+/** Poll until `condition` holds or the deadline passes, so fs.watch delivery
+ * is not asserted against a fixed sleep that parallel test load can outrun.
+ * `tick` re-triggers the watched write, since the watcher may only become
+ * active after the first write on a loaded machine. */
+async function waitUntil(
+	condition: () => boolean,
+	timeoutMs = 2_000,
+	tick?: () => void,
+): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline && !condition()) {
+		tick?.();
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+}
+
 test("debounce collapses rapid triggers into one call", async () => {
 	let calls = 0;
 	const debounced = debounce(() => calls++, 20);
@@ -44,8 +60,13 @@ test("watchDirectories fires onChange when a watched file changes, and skips mis
 		20,
 	);
 
-	writeFileSync(join(dir, "telemetry.jsonl"), '{"event":"start"}\n');
-	await new Promise((resolve) => setTimeout(resolve, 200));
+	const target = join(dir, "telemetry.jsonl");
+	writeFileSync(target, '{"event":"start"}\n');
+	await waitUntil(
+		() => calls >= 1,
+		2_000,
+		() => writeFileSync(target, `{"event":"tick"}\n`),
+	);
 
 	expect(calls).toBeGreaterThanOrEqual(1);
 	dispose();
