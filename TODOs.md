@@ -1,7 +1,6 @@
 Not for agents. This is only for humans.
 
 Fixes: 
-* Still some of the errors appear inline in the tui instead of via the notification system / tracing
 * tracing info is missing, no custom properties in tui. observability not good currently
 * Remove info notifation for new traces
 
