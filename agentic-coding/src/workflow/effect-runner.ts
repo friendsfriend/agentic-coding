@@ -496,6 +496,33 @@ function samePath(left: string, right: string): boolean {
 		return path.resolve(left) === path.resolve(right);
 	}
 }
+/** Git remote names/URLs and branch names become `git push` arguments; reject
+ * anything that could smuggle an option or a non-allowlisted transport
+ * (`ext::`) into the subprocess. */
+function isSafeGitRemote(value: string | undefined): value is string {
+	return (
+		typeof value === "string" &&
+		value.length > 0 &&
+		/^(?:[A-Za-z0-9._-]+|(?:https?|ssh|git):\/\/[^\s]+|git@[^\s:]+:[^\s]+)$/.test(
+			value,
+		) &&
+		!value.startsWith("ext::") &&
+		!value.startsWith("-") &&
+		!value.includes("\0") &&
+		!value.includes("\n") &&
+		!value.includes("\r")
+	);
+}
+function isSafeGitBranch(value: string | undefined): value is string {
+	return (
+		typeof value === "string" &&
+		value.length > 0 &&
+		!value.startsWith("-") &&
+		!value.includes("\0") &&
+		!value.includes("\n") &&
+		!value.includes("\r")
+	);
+}
 function pinnedWikiRoot(
 	snapshot: ReturnType<WorkflowEngine["getSnapshot"]>,
 ): string {
@@ -503,6 +530,116 @@ function pinnedWikiRoot(
 	if (!samePath(wikiRoot(), pinnedRoot))
 		throw new Error("wiki root does not match the pinned workflow wiki root");
 	return pinnedRoot;
+}
+/** Deliver the centralized wiki after promotion. The wiki is a standalone
+ * knowledge repository, so it is committed and pushed on its own current
+ * branch instead of the workflow's feature branch. A bundle that is not its
+ * own Git work tree, or has no remote to push to, still commits locally and
+ * skips the push rather than failing the approval. Operational workflow data
+ * shares the bundle root and is excluded from the delivery commit. */
+function commitAndPushWiki(
+	root: string,
+	message: string,
+	options: { prompt?: CredentialPrompt; signal?: AbortSignal } = {},
+): Effect.Effect<{ committed: boolean; pushed: boolean }, Error, never> {
+	const { prompt, signal } = options;
+	return Effect.gen(function* () {
+		// Only a bundle that is its own repository is delivered: a wiki nested
+		// in a larger work tree would commit and push the containing project.
+		const toplevel = yield* git(
+			root,
+			["rev-parse", "--show-toplevel"],
+			signal,
+		).pipe(Effect.either);
+		if (Either.isLeft(toplevel) || !samePath(toplevel.right, root))
+			return { committed: false, pushed: false };
+		// Resolve the delivery target before committing so an unsafe remote
+		// fails the promotion without leaving a stray local commit behind.
+		const branch = yield* git(
+			root,
+			["rev-parse", "--abbrev-ref", "HEAD"],
+			signal,
+		).pipe(Effect.either);
+		const branchName =
+			Either.isRight(branch) &&
+			isSafeGitBranch(branch.right) &&
+			branch.right !== "HEAD"
+				? branch.right
+				: undefined;
+		let remote: string | undefined;
+		let args: string[] = [];
+		if (branchName) {
+			const upstream = yield* git(
+				root,
+				["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+				signal,
+			).pipe(Effect.either);
+			if (Either.isRight(upstream) && upstream.right) {
+				// Resolve the tracked remote name (everything before the first `/`).
+				remote = upstream.right.includes("/")
+					? upstream.right.slice(0, upstream.right.indexOf("/"))
+					: upstream.right;
+				args = ["push"];
+			} else {
+				const remotes = yield* git(root, ["remote"], signal).pipe(
+					Effect.either,
+				);
+				const available =
+					Either.isRight(remotes) && remotes.right
+						? remotes.right
+								.split("\n")
+								.map((name) => name.trim())
+								.filter(Boolean)
+						: [];
+				remote = available.includes("origin")
+					? "origin"
+					: available.length === 1
+						? available[0]
+						: undefined;
+				if (remote) args = ["push", "--set-upstream", "--", remote, branchName];
+			}
+		}
+		if (remote) {
+			if (!isSafeGitRemote(remote))
+				throw new PermanentFailure("wiki remote must be a safe Git name");
+			const urls = yield* git(
+				root,
+				["remote", "get-url", "--all", remote],
+				signal,
+			).pipe(Effect.either);
+			const resolved =
+				Either.isRight(urls) && urls.right
+					? urls.right
+							.split("\n")
+							.map((url) => url.trim())
+							.filter(Boolean)
+					: [];
+			if (!resolved.length || !resolved.every(isSafeGitRemote))
+				throw new PermanentFailure("wiki remote must be a safe Git URL");
+		}
+		yield* git(
+			root,
+			["add", "-A", "--", ".", ":(exclude).herdr-workflow"],
+			signal,
+		);
+		const staged = yield* git(
+			root,
+			["diff", "--cached", "--name-only"],
+			signal,
+		);
+		let committed = false;
+		if (staged) {
+			yield* git(root, ["commit", "-m", message], signal);
+			committed = true;
+		}
+		if (!branchName || !remote) return { committed, pushed: false };
+		yield* runGitWithCredentialsEffect(root, args, {
+			prompt,
+			signal,
+			env: { GIT_ALLOW_PROTOCOL: "https:ssh:git" },
+		});
+		return { committed, pushed: true };
+	});
 }
 export interface AdapterEffectOptions {
 	registry: WorkflowRegistry;
@@ -1141,7 +1278,7 @@ export function agentEffectHandlers(
 				}),
 		},
 		"wiki.verify": {
-			execute: (effect) =>
+			execute: (effect, signal) =>
 				Effect.gen(function* () {
 					const snapshot = snapshotFor(effect);
 					const pinnedRoot = pinnedWikiRoot(snapshot);
@@ -1251,7 +1388,12 @@ export function agentEffectHandlers(
 								pinnedRoot,
 							),
 						);
-					return { verified: concepts, actor };
+					const delivery = yield* commitAndPushWiki(
+						pinnedRoot,
+						`Update wiki ${snapshot.metadata.changeId || snapshot.workflowId}`,
+						{ prompt: options.credentialPrompt, signal },
+					);
+					return { verified: concepts, actor, ...delivery };
 				}),
 		},
 		"openspec.validate": {
@@ -1336,22 +1478,9 @@ export function agentEffectHandlers(
 						throw new PermanentFailure(
 							"workflow execution settings adoption required before delivery",
 						);
-					const safeRemote =
-						/^[A-Za-z0-9._-]+$/.test(settings.remote ?? "") ||
-						/^(?:https?|ssh|git):\/\/[^\s]+$/.test(settings.remote ?? "") ||
-						/^git@[^\s:]+:[^\s]+$/.test(settings.remote ?? "");
 					if (
-						!safeRemote ||
-						settings.remote?.startsWith("ext::") ||
-						settings.remote?.startsWith("-") ||
-						settings.remote.includes("\0") ||
-						settings.remote.includes("\n") ||
-						settings.remote.includes("\r") ||
-						!snapshot.metadata.branch ||
-						snapshot.metadata.branch.startsWith("-") ||
-						snapshot.metadata.branch.includes("\0") ||
-						snapshot.metadata.branch.includes("\n") ||
-						snapshot.metadata.branch.includes("\r")
+						!isSafeGitRemote(settings.remote) ||
+						!isSafeGitBranch(snapshot.metadata.branch)
 					)
 						throw new PermanentFailure(
 							"delivery remote and branch must be safe Git names",
@@ -1901,6 +2030,7 @@ export function writeAgentEnvPointer(
 }
 export const effectRunnerTest = {
 	canonicalAgentName,
+	commitAndPushWiki,
 	legacyRunName,
 	resolveLiveAgent,
 	writeAgentEnvPointer,
