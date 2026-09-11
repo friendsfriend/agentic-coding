@@ -19,6 +19,7 @@ Workflow execution and telemetry still live beside the renderer, while environme
 ### Modified Capabilities
 
 - `agentic-coding-consolidation`: Update target surface map and migration invariant from in-process dashboard engine access to one server API.
+- `dashboard-engine-integration`: Replace direct engine/Herdr imports and dashboard-owned execution scopes with authenticated client operations and server-owned execution, preserving cancellation and command authority.
 
 ## Impact
 

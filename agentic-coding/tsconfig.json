@@ -13,6 +13,6 @@
 		"isolatedModules": true,
 		"noEmit": true
 	},
-	"include": ["src/**/*", "test/**/*"],
+	"include": ["src/**/*", "test/**/*", "scripts/test.ts"],
 	"exclude": ["test/fixtures/source-layer-boundaries/**/*"]
 }
