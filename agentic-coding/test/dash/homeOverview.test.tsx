@@ -7,6 +7,10 @@ import type { WorkflowOverview } from "../../src/tui/dash/data";
 import { Home } from "../../src/tui/dash/Home";
 import { resetNotifications } from "../../src/tui/dash/notifications";
 import { resetLifecycle } from "../../src/tui/lifecycle";
+import {
+	activeErrorModal,
+	resetErrorModal,
+} from "../../src/tui/shared/errorModal";
 
 // The notification signal and lifecycle phase are module-global; bun runs all
 // files in one process, so a toast or a "stopping" phase left by an earlier
@@ -15,6 +19,7 @@ import { resetLifecycle } from "../../src/tui/lifecycle";
 beforeEach(() => {
 	resetNotifications();
 	resetLifecycle();
+	resetErrorModal();
 });
 
 function overview(): WorkflowOverview {
@@ -40,7 +45,7 @@ function overview(): WorkflowOverview {
 	};
 }
 
-function TestHome(props: { items: WorkflowOverview[]; error?: string }) {
+function TestHome(props: { items: WorkflowOverview[] }) {
 	const renderer = useRenderer();
 	const keymap = createDefaultOpenTuiKeymap(renderer);
 	const dispose = keymap.registerLayerFields({
@@ -59,7 +64,6 @@ function TestHome(props: { items: WorkflowOverview[]; error?: string }) {
 			items={props.items}
 			loading={false}
 			projects={[]}
-			error={props.error}
 			refresh={() => {}}
 		/>
 	);
@@ -115,13 +119,52 @@ test("overview renders no transient refresh-status row", async () => {
 	t.renderer.destroy();
 });
 
-test("overview observation failure stays visible as durable error text", async () => {
-	const t = await testRender(() => <TestHome items={[]} error="boom" />, {
+test("overview leaves observation failures to the global error modal", async () => {
+	const t = await testRender(() => <TestHome items={[]} />, {
 		width: 120,
 		height: 40,
 	});
 	await t.flush();
-	expect(t.captureCharFrame()).toContain("Observation failed: boom");
+	const frame = t.captureCharFrame();
+	expect(frame).not.toContain("Observation failed");
+	expect(frame).toContain("No workflows found");
+	t.renderer.destroy();
+});
+
+test("invalid workflow rows mark INVALID without inlining the diagnostic", async () => {
+	const item = overview();
+	item.state.health = {
+		valid: false,
+		attention: ["engine says broken"],
+		diagnostic: "engine says broken",
+	};
+	const t = await testRender(() => <TestHome items={[item]} />, {
+		width: 120,
+		height: 40,
+	});
+	await t.flush();
+	const frame = t.captureCharFrame();
+	expect(frame).toContain("INVALID");
+	expect(frame).not.toContain("engine says broken");
+	t.renderer.destroy();
+});
+
+test("opening an invalid workflow reports its diagnostic through the error modal", async () => {
+	const item = overview();
+	item.state.health = {
+		valid: false,
+		attention: ["engine says broken"],
+		diagnostic: "engine says broken",
+	};
+	const t = await testRender(() => <TestHome items={[item]} />, {
+		width: 120,
+		height: 40,
+	});
+	await t.flush();
+	t.mockInput.pressEnter();
+	await t.flush();
+	expect(activeErrorModal()?.title).toBe("Invalid workflow state");
+	expect(activeErrorModal()?.message).toBe("engine says broken");
 	t.renderer.destroy();
 });
 

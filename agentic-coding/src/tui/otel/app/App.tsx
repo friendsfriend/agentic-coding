@@ -31,6 +31,12 @@ import type { WorkflowOverview } from "../../dash/types";
 import { Header } from "../../dash/ui/Header";
 import { watchDirectories } from "../../dash/watchRefresh";
 import { phase } from "../../lifecycle";
+import { ErrorModalOverlay } from "../../shared/ErrorModalOverlay";
+import {
+	activeErrorModal,
+	dismissErrorModal,
+	showErrorModal,
+} from "../../shared/errorModal";
 import { HelpModal } from "../../shared/HelpModal";
 import {
 	activeKeybindCatalog,
@@ -145,11 +151,13 @@ export function App(props: {
 	const [homeProjects, setHomeProjects] = createSignal<
 		Array<{ name: string; path: string; openspec: boolean }>
 	>([]);
-	const [homeError, setHomeError] = createSignal<string>();
 	let homeLoadRunning = false;
 	let homeLoadQueued = false;
 	let homeDisposed = false;
 	let homeController: AbortController | undefined;
+	// Last observation failure surfaced in the error modal; deduped so the 30s
+	// safety re-sync and directory events cannot reopen it for the same message.
+	let lastHomeError: string | undefined;
 	const loadHome = () => {
 		if (homeDisposed) return;
 		if (homeLoadRunning) {
@@ -165,9 +173,9 @@ export function App(props: {
 		])
 			.then(([items, projects]) => {
 				if (homeDisposed) return;
+				lastHomeError = undefined;
 				setHomeItems(items);
 				setHomeProjects(projects);
-				setHomeError(undefined);
 				setHomeLoading(false);
 				traceTui("tui.overview.refresh", {
 					surface: "overview",
@@ -176,7 +184,12 @@ export function App(props: {
 			})
 			.catch((error) => {
 				if (!homeDisposed) {
-					setHomeError(error instanceof Error ? error.message : String(error));
+					const message =
+						error instanceof Error ? error.message : String(error);
+					if (message !== lastHomeError) {
+						lastHomeError = message;
+						showErrorModal("Observation failed", message);
+					}
 					setHomeLoading(false);
 					traceTui(
 						"tui.overview.refresh",
@@ -414,6 +427,15 @@ export function App(props: {
 	const handleKey = (event: KeyEvent) => {
 		const key = event.name.toLowerCase();
 		const ename = event.name;
+		// A global error modal owns every tab: keep it up (and scrollable) until
+		// the user dismisses it, even on the observability tabs. The modal's own
+		// keymap layer only scrolls; dismissal lives here so the key is consumed
+		// once, before it can drive the tab underneath.
+		if (activeErrorModal()) {
+			if (key === "escape" || key === "enter" || key === "return")
+				dismissErrorModal();
+			return;
+		}
 		const traceDashModal = props.dashboard
 			? props.dashboard.keymap.getData?.("modal.active")
 			: "none";
@@ -1015,7 +1037,6 @@ export function App(props: {
 								items={homeItems()}
 								loading={homeLoading()}
 								projects={homeProjects()}
-								error={homeError()}
 								refresh={loadHome}
 							/>
 						) : (
@@ -1164,6 +1185,7 @@ export function App(props: {
 				<StatusBar />
 			</box>
 			<NotificationOverlay />
+			<ErrorModalOverlay keymap={props.dashboard?.keymap} />
 			{nav.modal() === "filter" && (
 				<FilterModal
 					pane={filterPane}

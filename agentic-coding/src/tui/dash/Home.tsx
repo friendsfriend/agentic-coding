@@ -12,6 +12,7 @@ import {
 	Show,
 } from "solid-js";
 import { phase } from "../lifecycle";
+import { activeErrorModal, showErrorModal } from "../shared/errorModal";
 import { setActiveKeybindCatalog } from "../shared/keybinds";
 import { ModalHelpOverlay } from "../shared/ModalHelpOverlay";
 import { handleModalHelpKey, modalHelpOpen } from "../shared/modalHelp";
@@ -30,7 +31,6 @@ import { applyTheme, loadThemeName, saveThemeName } from "./theme-settings";
 import { traceTui } from "./tracing";
 import type { WorkflowOverview } from "./types";
 import { uiColors } from "./ui/colors";
-import { ErrorDialog } from "./ui/ErrorDialog";
 import { FilterModal } from "./ui/FilterModal";
 import { HelpModal } from "./ui/HelpModal";
 import { ModelConfigModal } from "./ui/ModelConfigModal";
@@ -47,7 +47,6 @@ export function Home(props: {
 	items: WorkflowOverview[];
 	loading: boolean;
 	projects: Array<{ name: string; path: string; openspec: boolean }>;
-	error?: string;
 	refresh: () => void;
 }) {
 	const dimensions = useTerminalDimensions();
@@ -69,10 +68,8 @@ export function Home(props: {
 	const [modelConfig, setModelConfig] = createSignal(false);
 	const [modelConfigHandler, setModelConfigHandler] =
 		createSignal<(event: KeyEvent) => boolean>();
-	const [error, setError] = createSignal<{ title: string; message: string }>();
 	const [help, setHelp] = createSignal(false);
 	const [helpOffset, setHelpOffset] = createSignal(0);
-	let errorScroll: { scrollBy(dy: number): void } | undefined;
 	const [themePicker, setThemePicker] = createSignal(false);
 	const [themeIndex, setThemeIndex] = createSignal(
 		Math.max(0, themeNames.indexOf(loadThemeName())),
@@ -145,8 +142,6 @@ export function Home(props: {
 			Math.min(Math.max(0, index), Math.max(0, length - 1)),
 		);
 	});
-	const diagnostic = (value?: string) =>
-		value ? value.replace(/\s+/g, " ").slice(0, 96) : undefined;
 	const workflowProgress = (item: WorkflowOverview) =>
 		item.state.definition?.id === "research"
 			? item.state.stepId === "core.wiki"
@@ -169,13 +164,8 @@ export function Home(props: {
 				0,
 			) - Math.max(5, Math.floor(dimensions().height * 0.78) - 5),
 		);
-	const closeError = () => {
-		setError(undefined);
-		props.keymap.setData("modal.active", modal() ? "new-workflow" : "none");
-	};
 	const showError = (title: string, message: string) => {
-		setError({ title, message });
-		props.keymap.setData("modal.active", "error");
+		showErrorModal(title, message);
 	};
 	const showHerdrUnavailable = (
 		message = "Herdr executable was not found. Install Herdr or add it to PATH.",
@@ -291,7 +281,7 @@ export function Home(props: {
 	};
 	onMount(() => {
 		props.keymap.setData("app.view", "home");
-		props.keymap.setData("modal.active", "none");
+		props.keymap.setData("modal.active", activeErrorModal() ? "error" : "none");
 		const modalKeys = [
 			"escape",
 			"return",
@@ -400,36 +390,6 @@ export function Home(props: {
 				key,
 				cmd: "help.close",
 			})),
-		});
-		const disposeError = props.keymap.registerLayer({
-			name: "error",
-			priority: 1100,
-			activeModal: "error",
-			commands: [
-				{
-					name: "error.handle",
-					run: ({ event }) => {
-						const key = event.name.toLowerCase();
-						if (routeModalHelp(key)) return true;
-						if (key === "escape" || key === "enter" || key === "return") {
-							closeError();
-							return true;
-						}
-						if ((key === "j" || key === "down") && errorScroll) {
-							errorScroll.scrollBy(1);
-							return true;
-						}
-						if ((key === "k" || key === "up") && errorScroll) {
-							errorScroll.scrollBy(-1);
-							return true;
-						}
-						return true;
-					},
-				},
-			],
-			bindings: ["escape", "enter", "return", "j", "k", "up", "down", "?"].map(
-				(key) => ({ key, cmd: "error.handle" }),
-			),
 		});
 		const disposeFilter = props.keymap.registerLayer({
 			name: "filter",
@@ -589,7 +549,6 @@ export function Home(props: {
 			disposeModelConfig();
 			disposeTheme();
 			disposeHelp();
-			disposeError();
 			disposeFilter();
 			disposeSort();
 			disposeHome();
@@ -605,7 +564,7 @@ export function Home(props: {
 				help() ||
 				themePicker() ||
 				modelConfig() ||
-				error() != null;
+				activeErrorModal() != null;
 			if (!anyOpen) props.keymap.setData("modal.active", "none");
 		});
 	});
@@ -616,9 +575,6 @@ export function Home(props: {
 			onMouseUp={() => invokeGlobalSelectionMouseUpHandler()}
 		>
 			<Panel title="Workspaces" active style={{ flexGrow: 1, minHeight: 0 }}>
-				<Show when={props.error}>
-					<text fg={uiColors.error}>Observation failed: {props.error}</text>
-				</Show>
 				<Show
 					when={loading()}
 					fallback={
@@ -626,11 +582,9 @@ export function Home(props: {
 							when={visibleItems().length > 0}
 							fallback={
 								<text fg={uiColors.textMuted}>
-									{props.error
-										? `Observation failed: ${props.error}`
-										: items().length
-											? "No workflows match current filter"
-											: "No workflows found in configured project roots"}
+									{items().length
+										? "No workflows match current filter"
+										: "No workflows found in configured project roots"}
 								</text>
 							}
 						>
@@ -648,11 +602,8 @@ export function Home(props: {
 											<span style={{ fg: uiColors.primary }}>
 												{item.state.stepLabel ?? item.state.phase}
 											</span>
-											{diagnostic(item.state.health?.diagnostic) ? (
-												<span style={{ fg: uiColors.error }}>
-													{" "}
-													· INVALID: {diagnostic(item.state.health?.diagnostic)}
-												</span>
+											{item.state.health?.diagnostic ? (
+												<span style={{ fg: uiColors.error }}> · INVALID</span>
 											) : null}
 											{isStale(item.state, Date.now()) ? (
 												<span style={{ fg: uiColors.warning }}> · STALE</span>
@@ -769,18 +720,6 @@ export function Home(props: {
 					options={sortOptions}
 					direction={sortDirection()}
 				/>
-			</Show>
-			<Show when={error()}>
-				{(current) => (
-					<ErrorDialog
-						title={current().title}
-						message={current().message}
-						onClose={closeError}
-						onScrollBoxReady={(ref) => {
-							errorScroll = ref;
-						}}
-					/>
-				)}
 			</Show>
 			{/* The open dialog's own `?` help, above every dialog (error z1). */}
 			<ModalHelpOverlay zIndex={30} />

@@ -9,9 +9,14 @@ import { createSignal, onCleanup } from "solid-js";
 import { App } from "../../src/tui/dash/App";
 import { type DashboardData, testDashboard } from "../../src/tui/dash/data";
 import { DiffViewModal } from "../../src/tui/dash/devenv-ui/components/DiffViewModal";
+import {
+	activeErrorModal,
+	resetErrorModal,
+} from "../../src/tui/shared/errorModal";
 
 const roots: string[] = [];
 afterEach(() => {
+	resetErrorModal();
 	for (const root of roots.splice(0))
 		rmSync(root, { recursive: true, force: true });
 });
@@ -594,7 +599,7 @@ test("transient action and refresh text never add a primary-layout row", async (
 	t.renderer.destroy();
 });
 
-test("durable health diagnostic stays visible without the message row", async () => {
+test("engine health diagnostic routes to the global error modal", async () => {
 	const data = artifactsFixture(1);
 	const t = await testRender(
 		() => (
@@ -613,12 +618,14 @@ test("durable health diagnostic stays visible without the message row", async ()
 		),
 		{ width: 120, height: 40 },
 	);
-	await t.waitForFrame((frame) =>
-		frame.includes("simulated durable engine diagnostic"),
+	await Bun.sleep(0);
+	expect(activeErrorModal()?.title).toBe("Invalid workflow state");
+	expect(activeErrorModal()?.message).toBe(
+		"simulated durable engine diagnostic",
 	);
+	// The diagnostic no longer occupies a row in the Change panel.
 	const frame = t.captureCharFrame();
-	expect(frame).toContain("simulated durable engine diagnostic");
+	expect(frame).not.toContain("simulated durable engine diagnostic");
 	expect(frame).not.toContain("Refreshing observations…");
-	expect(frame).not.toContain("Advanced dummy workflow");
 	t.renderer.destroy();
 });
