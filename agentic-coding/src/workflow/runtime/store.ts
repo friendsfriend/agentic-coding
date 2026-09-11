@@ -1247,7 +1247,10 @@ export function validateEffect(
 			"invalid-state",
 			`unknown effect kind: ${row.kind}`,
 		);
-	const payload = JSON.parse(row.payload_json) as { runId?: unknown };
+	const payload = JSON.parse(row.payload_json) as {
+		runId?: unknown;
+		questionId?: unknown;
+	};
 	const allowed = registry
 		.stepForDefinition(definition, snapshot.currentStep)
 		.allowedEffects.includes(row.kind);
@@ -1290,11 +1293,24 @@ export function validateEffect(
 		);
 	if (["artifact.write", "agent.launch", "agent.prompt"].includes(row.kind)) {
 		const run = runs.find((item) => item.id === payload.runId);
+		// A peer-question prompt deliberately targets a completed run at a
+		// different step. It stays legal for as long as the addressed record
+		// exists, even after the question resolves: the execute handler re-checks
+		// the record and no-ops, so a resolved question can never abort a claim
+		// transaction by leaving its prompt row behind.
+		const consultTarget =
+			row.kind === "agent.prompt" &&
+			typeof payload.questionId === "string" &&
+			snapshot.developerDialogue.some(
+				(item) =>
+					item.id === payload.questionId && item.targetRunId === payload.runId,
+			);
 		if (
 			!run ||
-			!ACTIVE_RUN.has(run.status) ||
-			!snapshot.step.activeRunIds.includes(run.id) ||
-			run.stepId !== snapshot.currentStep
+			(!consultTarget &&
+				(!ACTIVE_RUN.has(run.status) ||
+					!snapshot.step.activeRunIds.includes(run.id) ||
+					run.stepId !== snapshot.currentStep))
 		)
 			throw new WorkflowRuntimeError(
 				"invalid-state",

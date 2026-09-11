@@ -280,6 +280,28 @@ const timerQuestionExpireSchema = Schema.Struct({
 	questionId: text(4096),
 	timerNonce: text(128),
 });
+const agentAskSchema = Schema.Struct({
+	type: Schema.Literal("agent.ask"),
+	workflowId: text(4096),
+	runId: text(4096),
+	stepId: text(4096),
+	role: text(4096),
+	token: text(1024),
+	targetRole: text(4096),
+	description: text(4096),
+	context: Schema.optionalWith(boundedText(4096), { exact: true }),
+	options: Schema.optionalWith(questionOptions, { exact: true }),
+});
+const agentAnswerSchema = Schema.Struct({
+	type: Schema.Literal("agent.answer"),
+	workflowId: text(4096),
+	runId: text(4096),
+	stepId: text(4096),
+	role: text(4096),
+	questionId: text(4096),
+	answerNonce: text(1024),
+	answer: text(8192),
+});
 const agentHandoffSchema = Schema.Struct({
 	type: Schema.Literal("agent.handoff"),
 	runId: text(4096),
@@ -340,6 +362,8 @@ export const WorkflowCommandSchema = Schema.Union(
 	developerActionSchema,
 	agentQuestionSchema,
 	agentQuestionExpireSchema,
+	agentAskSchema,
+	agentAnswerSchema,
 	timerQuestionExpireSchema,
 	agentHandoffSchema,
 	agentResearchHandoffSchema,
@@ -432,6 +456,9 @@ const dialogueRecordSchema = Schema.Struct({
 	options: questionOptions,
 	groupId: Schema.optionalWith(text(4096), { exact: true }),
 	timerNonce: Schema.optionalWith(text(128), { exact: true }),
+	targetRole: Schema.optionalWith(text(4096), { exact: true }),
+	targetRunId: Schema.optionalWith(text(4096), { exact: true }),
+	answerNonceHash: Schema.optionalWith(text(128), { exact: true }),
 	itemIndex: Schema.optionalWith(integer(), { exact: true }),
 	status: dialogueStatusSchema,
 	createdAt: text(4096),

@@ -286,6 +286,12 @@ export interface DeveloperDialogueRecord {
 	groupId?: string;
 	/** Secret binding for the internal timer that may expire this question. */
 	timerNonce?: string;
+	/** Present when the question is routed to a peer agent rather than the developer. */
+	targetRole?: string;
+	/** Completed peer run the question was delivered to; absent for developer questions. */
+	targetRunId?: string;
+	/** Secret binding for the peer agent's one-shot answer capability. */
+	answerNonceHash?: string;
 	itemIndex?: number;
 	status: DeveloperQuestionStatus;
 	createdAt: string;
@@ -506,6 +512,28 @@ export type WorkflowCommand =
 			stepId: string;
 			role: string;
 			token: string;
+	  }
+	| {
+			type: "agent.ask";
+			workflowId: string;
+			runId: string;
+			stepId: string;
+			role: string;
+			token: string;
+			targetRole: string;
+			description: string;
+			context?: string;
+			options?: readonly DeveloperQuestionOption[];
+	  }
+	| {
+			type: "agent.answer";
+			workflowId: string;
+			runId: string;
+			stepId: string;
+			role: string;
+			questionId: string;
+			answerNonce: string;
+			answer: string;
 	  }
 	| {
 			type: "timer.question-expire";

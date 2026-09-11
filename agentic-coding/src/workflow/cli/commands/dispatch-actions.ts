@@ -19,7 +19,11 @@ import {
 	positionals,
 	requireFlag,
 } from "../args.ts";
-import { managedAgent, managedWorkflowTarget } from "../caller-environment.ts";
+import {
+	callerEnvironment,
+	managedAgent,
+	managedWorkflowTarget,
+} from "../caller-environment.ts";
 import { scheduleDrain } from "../drain.ts";
 import { resolveHandoffIdentity } from "../identity.ts";
 
@@ -267,6 +271,164 @@ export async function runDeveloperQuestion(
 		process.off("SIGTERM", interrupt);
 		process.off("SIGINT", interrupt);
 	}
+}
+
+export async function runAgentAsk(
+	rest: string[],
+	workflowEngine: WorkflowEngine,
+	application?: App,
+): Promise<void> {
+	if (!managedAgent())
+		throw new Error("ask requires an authenticated managed agent");
+	const targetRole = requireFlag(rest, "role");
+	const description = requireFlag(rest, "description");
+	const timeout = flag(rest, "timeout");
+	const timeoutMs = timeout === undefined ? QUESTION_WAIT_MS : Number(timeout);
+	validateQuestionTimeout(timeoutMs);
+	const repo = managedWorkflowTarget();
+	const identity = resolveHandoffIdentity(workflowEngine, repo, application);
+	const context = flag(rest, "context");
+	const options = flag(rest, "options");
+	const read = (workflowId: string) =>
+		application
+			? application.runSync(workflowEngine.getSnapshotEffect(repo, workflowId))
+			: workflowEngine.getSnapshot(repo, workflowId);
+	const dispatch = (command: Record<string, unknown>) =>
+		application
+			? application.runSync(
+					workflowEngine.dispatchEffect(repo, command as never),
+				)
+			: workflowEngine.dispatch(repo, command as never);
+	const created = dispatch({
+		type: "agent.ask",
+		workflowId: identity.workflowId,
+		runId: identity.runId,
+		stepId: identity.stepId,
+		role: identity.role,
+		token: identity.token,
+		targetRole,
+		description,
+		...(context === undefined ? {} : { context }),
+		...(options === undefined ? {} : { options: parseInput(options) }),
+	});
+	const newest = created.snapshot.developerDialogue.at(-1);
+	if (!newest) throw new Error("question was not recorded");
+	const questionId = newest.id;
+	// Deliver the durable peer prompt before waiting on the answer.
+	await drainEffects(workflowEngine, repo);
+	const deadline = Date.now() + timeoutMs;
+	let interrupted = false;
+	let wake: (() => void) | undefined;
+	const interrupt = () => {
+		interrupted = true;
+		wake?.();
+	};
+	process.on("SIGTERM", interrupt);
+	process.on("SIGINT", interrupt);
+	try {
+		while (!interrupted && Date.now() < deadline) {
+			const snapshot = read(identity.workflowId);
+			const question = snapshot.developerDialogue.find(
+				(item) => item.id === questionId,
+			);
+			if (!question)
+				throw new Error("question disappeared from workflow state");
+			if (question.status !== "pending") {
+				console.log(JSON.stringify(question));
+				return;
+			}
+			await new Promise<void>((resolve) => {
+				wake = resolve;
+				void waitForQuestionChange(
+					workflowEngine,
+					repo,
+					identity.workflowId,
+					snapshot.revision,
+					deadline,
+					(done) => {
+						wake = done;
+					},
+				).then(resolve);
+			});
+			wake = undefined;
+		}
+		if (interrupted) throw new Error("question wait interrupted");
+		const pending = read(identity.workflowId).developerDialogue.find(
+			(item) => item.id === questionId,
+		);
+		// A bounded client wait that ends before the durable expiry leaves the
+		// question pending; only an actually elapsed durable expiry may be
+		// completed by the timer reducer.
+		if (
+			pending?.status === "pending" &&
+			Date.parse(pending.expiresAt) > Date.now()
+		) {
+			console.log(JSON.stringify(pending));
+			return;
+		}
+		if (pending?.status === "pending") {
+			try {
+				dispatch({
+					type: "timer.question-expire",
+					workflowId: identity.workflowId,
+					questionId,
+					timerNonce: pending.timerNonce ?? "",
+				});
+			} catch (error) {
+				if (
+					!(error instanceof WorkflowRuntimeError) ||
+					error.code !== "stale-question"
+				)
+					throw error;
+			}
+		}
+		console.log(
+			JSON.stringify(
+				read(identity.workflowId).developerDialogue.find(
+					(item) => item.id === questionId,
+				) ?? { id: questionId, status: "expired" },
+			),
+		);
+	} finally {
+		process.off("SIGTERM", interrupt);
+		process.off("SIGINT", interrupt);
+	}
+}
+
+export async function runAgentAnswer(
+	rest: string[],
+	workflowEngine: WorkflowEngine,
+	application?: App,
+): Promise<void> {
+	if (!managedAgent())
+		throw new Error("answer requires an authenticated managed agent");
+	const questionId = requireFlag(rest, "question-id");
+	const answer = requireFlag(rest, "answer");
+	const nonce = requireFlag(rest, "nonce");
+	const environment = callerEnvironment();
+	const workflowId = environment.HERDR_WORKFLOW_ID;
+	const runId = environment.HERDR_RUN_ID;
+	const stepId = environment.HERDR_STEP_ID;
+	const role = environment.HERDR_ROLE;
+	if (!workflowId || !runId || !stepId || !role)
+		throw new Error("answer requires an exact launch-bound run environment");
+	const target = managedWorkflowTarget();
+	const command = {
+		type: "agent.answer",
+		workflowId,
+		runId,
+		stepId,
+		role,
+		questionId,
+		answerNonce: nonce,
+		answer,
+	};
+	if (application)
+		application.runSync(
+			workflowEngine.dispatchEffect(target, command as never),
+		);
+	else workflowEngine.dispatch(target, command as never);
+	console.log(JSON.stringify({ questionId, status: "answered" }));
 }
 
 export async function runAction(

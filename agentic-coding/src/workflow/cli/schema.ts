@@ -10,6 +10,8 @@ export const SUBCOMMANDS: readonly string[] = [
 	"action",
 	"handoff",
 	"question",
+	"ask",
+	"answer",
 	"research-handoff",
 	"repair",
 	"repin",
@@ -29,6 +31,8 @@ export const REQUIRED_FLAGS: Record<string, string[]> = {
 	migrate: ["repo", "workflow-id", "revision", "target-version", "reason"],
 	handoff: ["outcome"],
 	question: ["description"],
+	ask: ["role", "description"],
+	answer: ["question-id", "answer", "nonce"],
 	"research-handoff": ["subject", "directives"],
 };
 export const AGENT_EXTENSION_SUBCOMMANDS = [
@@ -84,6 +88,14 @@ const FLAG_SCHEMA: Record<
 	},
 	question: {
 		values: ["description", "context", "options", "questions", "timeout"],
+		positionals: [0, 0],
+	},
+	ask: {
+		values: ["role", "description", "context", "options", "timeout"],
+		positionals: [0, 0],
+	},
+	answer: {
+		values: ["question-id", "answer", "nonce"],
 		positionals: [0, 0],
 	},
 	"research-handoff": {

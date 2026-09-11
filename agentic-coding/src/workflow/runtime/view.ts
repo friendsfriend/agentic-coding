@@ -22,7 +22,29 @@ import {
 function publicDialogue(
 	snapshot: NonNullable<WorkflowView["developerDialogue"]>,
 ): NonNullable<WorkflowView["developerDialogue"]> {
-	return snapshot.map(({ timerNonce: _timerNonce, ...question }) => question);
+	return snapshot.map(
+		({
+			timerNonce: _timerNonce,
+			answerNonceHash: _answerNonceHash,
+			targetRunId: _targetRunId,
+			...question
+		}) => question,
+	);
+}
+
+/** Pending questions the developer must answer. Peer-agent questions are
+ * delivered and answered by another agent, so they never open the developer
+ * modal even while they are pending. */
+function pendingDeveloperQuestions(
+	snapshot: NonNullable<WorkflowView["developerDialogue"]>,
+	now: () => Date,
+): NonNullable<WorkflowView["developerDialogue"]> {
+	return publicDialogue(snapshot).filter(
+		(item) =>
+			item.targetRole === undefined &&
+			item.status === "pending" &&
+			Date.parse(item.expiresAt) > now().getTime(),
+	);
 }
 
 export function diagnosticView(
@@ -177,10 +199,9 @@ export function view(
 			observations: [],
 			health: { valid: true, attention: snapshot.attention },
 			developerDialogue: publicDialogue(snapshot.developerDialogue ?? []),
-			pendingQuestions: publicDialogue(snapshot.developerDialogue ?? []).filter(
-				(item) =>
-					item.status === "pending" &&
-					Date.parse(item.expiresAt) > now().getTime(),
+			pendingQuestions: pendingDeveloperQuestions(
+				snapshot.developerDialogue ?? [],
+				now,
 			),
 			availableActions: [...availableActions, ...failedActions],
 		};
@@ -230,12 +251,9 @@ export function view(
 					observations: [],
 					health: { valid: false, attention: [diagnostic], diagnostic },
 					developerDialogue: publicDialogue(snapshot.developerDialogue ?? []),
-					pendingQuestions: publicDialogue(
+					pendingQuestions: pendingDeveloperQuestions(
 						snapshot.developerDialogue ?? [],
-					).filter(
-						(item) =>
-							item.status === "pending" &&
-							Date.parse(item.expiresAt) > now().getTime(),
+						now,
 					),
 					availableActions: [
 						{
