@@ -8,7 +8,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { parseJsonl } from "./parser";
+import { parseJsonl, parseTelemetryJsonl } from "./parser";
 import type { LogData, MetricData, SpanData } from "./types";
 
 interface TraceRow {
@@ -34,6 +34,35 @@ interface LogRow {
 
 const MAX_TRACE_BYTES = 16 * 1024 * 1024;
 const MAX_TELEMETRY_SPANS = 50_000;
+/** Bumped whenever the ingest parser changes so existing workspaces re-ingest. */
+const PARSER_VERSION = 3;
+
+interface TraceSource {
+	path: string;
+	parse: (text: string) => SpanData[];
+}
+
+/** Pick the span source for a workflow directory. The current engine only
+ * appends `telemetry.jsonl`, so a stale legacy `traces.jsonl` must not mask new
+ * events: when both exist the fresher file wins (telemetry breaks a tie), and
+ * a workspace with only one file uses it. */
+function workspaceTraceSource(herdrPath: string): TraceSource | undefined {
+	const legacyPath = join(herdrPath, "traces.jsonl");
+	const telemetryPath = join(herdrPath, "telemetry.jsonl");
+	const legacyExists = existsSync(legacyPath);
+	const telemetryExists = existsSync(telemetryPath);
+	if (legacyExists && telemetryExists) {
+		const legacyMtime = statSync(legacyPath).mtimeMs;
+		const telemetryMtime = statSync(telemetryPath).mtimeMs;
+		return telemetryMtime >= legacyMtime
+			? { path: telemetryPath, parse: parseTelemetryJsonl }
+			: { path: legacyPath, parse: parseJsonl };
+	}
+	if (telemetryExists)
+		return { path: telemetryPath, parse: parseTelemetryJsonl };
+	if (legacyExists) return { path: legacyPath, parse: parseJsonl };
+	return undefined;
+}
 
 export class TraceDb {
 	private db: Database;
@@ -101,7 +130,7 @@ export class TraceDb {
 			"INSERT INTO logs (change_id, log, ingested_at) VALUES ($change_id, $log, datetime('now'))",
 		);
 		this.upsertWorkspaceStmt = this.db.prepare(
-			"INSERT INTO workspace_files (change_id, path, file_mtime, parser_version) VALUES ($change_id, $path, $mtime, 2) ON CONFLICT(change_id) DO UPDATE SET path=$path, file_mtime=$mtime, parser_version=2",
+			`INSERT INTO workspace_files (change_id, path, file_mtime, parser_version) VALUES ($change_id, $path, $mtime, ${PARSER_VERSION}) ON CONFLICT(change_id) DO UPDATE SET path=$path, file_mtime=$mtime, parser_version=${PARSER_VERSION}`,
 		);
 	}
 
@@ -113,9 +142,9 @@ export class TraceDb {
 	}
 
 	ingestWorkspace(herdrPath: string, changeId: string): number {
-		const tracesFile = join(herdrPath, "traces.jsonl");
-		if (!existsSync(tracesFile)) return 0;
-		const mtime = Math.floor(statSync(tracesFile).mtimeMs);
+		const source = workspaceTraceSource(herdrPath);
+		if (!source) return 0;
+		const mtime = Math.floor(statSync(source.path).mtimeMs);
 		const known = this.db
 			.prepare(
 				"SELECT file_mtime, parser_version FROM workspace_files WHERE change_id=?",
@@ -123,11 +152,17 @@ export class TraceDb {
 			.get(changeId) as
 			| { file_mtime: number; parser_version?: number }
 			| undefined;
-		if (known && known.file_mtime >= mtime && (known.parser_version ?? 1) >= 2)
+		if (
+			known &&
+			known.file_mtime >= mtime &&
+			(known.parser_version ?? 1) >= PARSER_VERSION
+		)
 			return 0;
-		if (statSync(tracesFile).size > MAX_TRACE_BYTES) return 0;
-		const text = readFileSync(tracesFile, "utf8");
-		const spans = parseJsonl(text).slice(0, MAX_TELEMETRY_SPANS);
+		if (statSync(source.path).size > MAX_TRACE_BYTES) return 0;
+		const text = readFileSync(source.path, "utf8");
+		// Keep the trailing window: append-only telemetry must retain the newest
+		// events, matching the DB-level cap's recency intent.
+		const spans = source.parse(text).slice(-MAX_TELEMETRY_SPANS);
 		// Remove old traces for this change and re-ingest
 		this.db.run("DELETE FROM traces WHERE change_id=?", [changeId]);
 		const insert = this.db.transaction(() => {
@@ -139,7 +174,7 @@ export class TraceDb {
 			}
 			this.upsertWorkspaceStmt.run({
 				$change_id: changeId,
-				$path: tracesFile,
+				$path: source.path,
 				$mtime: mtime,
 			});
 		});
@@ -202,9 +237,12 @@ export class TraceDb {
 					.all(changeId) as TraceRow[])
 			: (this.db
 					.prepare(
-						`SELECT span FROM traces ORDER BY id LIMIT ${MAX_TELEMETRY_SPANS}`,
+						// Keep the most recently ingested spans when the global cap is hit,
+						// otherwise new workflows silently never load.
+						`SELECT span FROM traces ORDER BY id DESC LIMIT ${MAX_TELEMETRY_SPANS}`,
 					)
 					.all() as TraceRow[]);
+		if (!changeId) rows.reverse();
 		return rows.map((r) => JSON.parse(r.span) as SpanData);
 	}
 
@@ -293,9 +331,9 @@ export class TraceDb {
 				const entries = readdirSync(workflowDir, { withFileTypes: true });
 				for (const entry of entries) {
 					if (!entry.isDirectory()) continue;
-					const tracesFile = join(workflowDir, entry.name, "traces.jsonl");
-					if (!existsSync(tracesFile)) continue;
-					const mtime = Math.floor(statSync(tracesFile).mtimeMs);
+					const source = workspaceTraceSource(join(workflowDir, entry.name));
+					if (!source) continue;
+					const mtime = Math.floor(statSync(source.path).mtimeMs);
 					const known = this.db
 						.prepare(
 							"SELECT file_mtime, parser_version FROM workspace_files WHERE change_id=?",
@@ -306,15 +344,15 @@ export class TraceDb {
 					if (
 						known &&
 						known.file_mtime >= mtime &&
-						(known.parser_version ?? 1) >= 2
+						(known.parser_version ?? 1) >= PARSER_VERSION
 					)
 						continue;
 					if (this.ingesting.has(entry.name)) continue;
-					if (statSync(tracesFile).size > MAX_TRACE_BYTES) continue;
+					if (statSync(source.path).size > MAX_TRACE_BYTES) continue;
 					this.ingesting.add(entry.name);
 					void (async () => {
-						const text = await Bun.file(tracesFile).text();
-						const spans = parseJsonl(text).slice(0, MAX_TELEMETRY_SPANS);
+						const text = await Bun.file(source.path).text();
+						const spans = source.parse(text).slice(-MAX_TELEMETRY_SPANS);
 						this.db.run("DELETE FROM traces WHERE change_id=?", [entry.name]);
 						const insert = this.db.transaction(() => {
 							for (const span of spans) {
@@ -325,7 +363,7 @@ export class TraceDb {
 							}
 							this.upsertWorkspaceStmt.run({
 								$change_id: entry.name,
-								$path: tracesFile,
+								$path: source.path,
 								$mtime: mtime,
 							});
 						});

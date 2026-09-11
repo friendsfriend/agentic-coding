@@ -383,10 +383,14 @@ export function App(props: {
 			notify(`${changeId}: ${spans.length} new spans`, "info");
 		};
 		const stops = props.repos.map((r) => db.watchWorkspaces(r, onNew));
+		// The initial history load and live OTLP receiver pushes mutate the store
+		// directly (shell-owned), so refresh the mounted views on every change.
+		const unsubscribeTraceStore = traceStore.onChange(refresh);
 		// The TraceDb is owned by the shell (index.tsx) for the process lifetime;
 		// remounting this view must not close it. Only stop this view's watchers.
 		onCleanup(() => {
 			clearInterval(dailyPrune);
+			unsubscribeTraceStore();
 			stops.forEach((stop) => {
 				stop();
 			});
