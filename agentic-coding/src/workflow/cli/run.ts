@@ -14,6 +14,8 @@ import { flag, positional, positionals, requireFlag } from "./args.ts";
 import type { CallerEnvironment } from "./caller-environment.ts";
 import {
 	runAction,
+	runAgentAnswer,
+	runAgentAsk,
 	runHandoff,
 	runQuestion,
 	validateQuestionTimeout,
@@ -104,6 +106,10 @@ const COMMAND_HANDLERS: Record<string, CommandHandler> = {
 	action: runAction,
 	question: (rest, workflowEngine, _repo, application) =>
 		runQuestion(rest, workflowEngine, application),
+	ask: (rest, workflowEngine, _repo, application) =>
+		runAgentAsk(rest, workflowEngine, application),
+	answer: (rest, workflowEngine, _repo, application) =>
+		runAgentAnswer(rest, workflowEngine, application),
 	"research-handoff": (rest, workflowEngine, repo, application) =>
 		runResearchHandoff(rest, workflowEngine, repo, application),
 	handoff: (rest, workflowEngine, _repo, application) =>

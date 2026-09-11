@@ -72,6 +72,8 @@ describe("breaking workflow CLI surface", () => {
 			"action",
 			"handoff",
 			"question",
+			"ask",
+			"answer",
 			"research-handoff",
 			"repair",
 			"repin",

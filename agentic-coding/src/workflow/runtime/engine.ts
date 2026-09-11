@@ -65,6 +65,7 @@ import {
 	validateFusionRouting,
 } from "./kernel.ts";
 import { migrateLegacy } from "./migration.ts";
+import { agentAnswer, agentAsk } from "./reducers/agent-consult.ts";
 import {
 	agentHandoff,
 	type PreparedHandoffEvidence,
@@ -1191,6 +1192,10 @@ export class WorkflowEngine {
 			);
 		if (command.type === "agent.question")
 			return agentQuestion(db, snapshot, command, this.now);
+		if (command.type === "agent.ask")
+			return agentAsk(db, snapshot, command, this.now);
+		if (command.type === "agent.answer")
+			return agentAnswer(db, snapshot, command, this.now);
 		if (command.type === "agent.question-expire")
 			return expireQuestion(db, snapshot, command, this.now);
 		if (command.type === "timer.question-expire")

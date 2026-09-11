@@ -12,7 +12,7 @@ import type {
 	WorkflowRegistry,
 } from "../../registry.ts";
 import { applyCompletionResult, enqueue, enterStep } from "../kernel.ts";
-import { boundedError, type EffectRow, json } from "../store.ts";
+import { boundedError, type EffectRow, json, nowIso } from "../store.ts";
 
 export function effectResult(
 	db: Database,
@@ -49,6 +49,29 @@ export function effectResult(
 					"UPDATE workflow_runs SET handle_json=?, status='working' WHERE id=? AND status IN ('pending','working')",
 				).run(json(command.data), runId);
 		}
+		if (row.kind === "agent.prompt") {
+			// A delivered peer prompt reports the hash of the nonce it minted; the
+			// raw nonce only ever reached the addressed live session.
+			const payload = JSON.parse(row.payload_json) as {
+				questionId?: unknown;
+			};
+			const data =
+				command.data && typeof command.data === "object"
+					? (command.data as { answerNonceHash?: unknown })
+					: {};
+			if (
+				typeof payload.questionId === "string" &&
+				typeof data.answerNonceHash === "string"
+			) {
+				const question = snapshot.developerDialogue.find(
+					(item) =>
+						item.id === payload.questionId &&
+						item.targetRunId !== undefined &&
+						item.status === "pending",
+				);
+				if (question) question.answerNonceHash = data.answerNonceHash;
+			}
+		}
 	} else if (command.outcome === "retry" && row.attempts < row.max_attempts) {
 		const next = new Date(
 			now().getTime() + Math.min(60_000, 1000 * 2 ** row.attempts),
@@ -60,10 +83,29 @@ export function effectResult(
 		db.query(
 			"UPDATE workflow_outbox SET status='failed', lease=NULL, lease_expires_at=NULL, last_error=? WHERE id=?",
 		).run(boundedError(command.data), row.id);
-		snapshot.status = "attention-required";
-		snapshot.attention = [
-			`effect ${row.kind} failed: ${boundedError(command.data)}`,
-		];
+		// A failed peer-question prompt must resolve its dialogue record rather
+		// than brick the whole workflow: the asking agent gets a bounded expired
+		// answer and the workflow keeps running.
+		const payload = JSON.parse(row.payload_json) as { questionId?: unknown };
+		const peerQuestion =
+			row.kind === "agent.prompt" && typeof payload.questionId === "string"
+				? snapshot.developerDialogue.find(
+						(item) =>
+							item.id === payload.questionId &&
+							item.status === "pending" &&
+							item.targetRunId !== undefined,
+					)
+				: undefined;
+		if (peerQuestion) {
+			peerQuestion.status = "expired";
+			peerQuestion.answeredAt = nowIso(now);
+			peerQuestion.answer = { kind: "cancel" };
+		} else {
+			snapshot.status = "attention-required";
+			snapshot.attention = [
+				`effect ${row.kind} failed: ${boundedError(command.data)}`,
+			];
+		}
 	}
 	if (command.outcome === "complete" && row.kind === "workspace.setup") {
 		const data =
