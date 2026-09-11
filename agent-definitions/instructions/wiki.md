@@ -26,7 +26,18 @@ When updating, preserve the existing concept identifier, unrelated body content,
 
 ## Authoring OKF drafts
 
-Use the existing `agentic-coding workflow wiki write` operation for centralized wiki drafts only. The source repository remains read-only evidence throughout the run. Write valid UTF-8 Markdown with OKF v0.2-compatible YAML frontmatter and meaningful body content. Every authored concept must have a non-empty `type`, `title`, `description`, `sources` with source resources, and body-level claims supported by citations to those resources. Include the change resource automatically supplied by the CLI and cite concrete repository files or other evidence in the body. Preserve unknown frontmatter fields, update existing concepts in place when one is the intended subject, and do not create active near-duplicates. Mark workflow-authored concepts as `status: draft` with generated provenance.
+Use the existing `agentic-coding workflow wiki write` operation for centralized wiki drafts only. The source repository remains read-only evidence throughout the run. Write valid UTF-8 Markdown with OKF v0.2-compatible YAML frontmatter and meaningful body content. Every authored concept must have a non-empty `type`, `title`, `description`, and `sources`, and its body claims must be supported by those sources. Preserve unknown frontmatter fields, update existing concepts in place when one is the intended subject, and do not create active near-duplicates. Mark workflow-authored concepts as `status: draft` with generated provenance.
+
+### Cite every line
+
+Treat a concept like a short scientific paper: every statement you did not verify yourself must cite the evidence that supports it. Citations are line level, not concept level.
+
+- Declare evidence in frontmatter `sources`, one entry per item, each with a stable `id` and a `resource`. A resource may be a repository-relative code path, an `https://` URL, or user-provided evidence such as `human:developer` or `answer:<id>`; do not invent evidence you did not read.
+- Cite each body line inline with `[^<source-id>]`, appending every marker that line relies on. Multiple lines may cite the same source, and one line may cite several sources. A concept with no source or with an uncited prose line is rejected on write.
+- The only lines exempt from citing are blank lines, headings, fenced code blocks, thematic breaks, and table separator rows; code blocks and quoted source text are self-proving.
+- Pass the sources as a JSON list: `agentic-coding workflow wiki write --path <id> --type <T> --title <T> --description <D> --sources '[{"id":"code","resource":"src/foo.ts"},{"id":"spec","resource":"https://example.test/spec"}]' --body-file <body.md>`. Every inline id must match a declared source; an unknown id or an uncited line fails the write. Include the change resource automatically supplied by the CLI.
+- A URL source is stamped with an `accessed` timestamp automatically on write, alongside the concept's `generated.at` update time.
+- Every written concept is marked stale two weeks after its last update, and verification refreshes that horizon. Treat a stale concept as needing re-verification before you rely on it.
 
 Never set `status: stable`, add `verified` metadata, impersonate a human or verification actor, or invoke verification. Never run an archival command, modify OpenSpec archival state, or claim that documentation is human-verified. Human promotion happens only after developer approval through the engine-owned `wiki.verify` effect. A wiki run ends at approval/completion and has no implementation, archive, delivery, pull-request, or source-code phase.
 

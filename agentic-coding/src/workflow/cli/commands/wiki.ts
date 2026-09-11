@@ -24,7 +24,7 @@ import {
 	wikiRoot,
 	writeConcept,
 } from "../../wiki.ts";
-import { flag, positionals } from "../args.ts";
+import { flag, parseInput, positionals } from "../args.ts";
 import { managedAgent } from "../caller-environment.ts";
 import { WIKI_SUBCOMMANDS } from "../schema.ts";
 
@@ -232,7 +232,7 @@ export async function runWiki(
 		const description = flag(rest, "description");
 		if (!concept || !type || !title || !description)
 			throw new Error(
-				"wiki write requires --path, --type, --title, and --description; usage: wiki write --path ID --type T --title T --description D",
+				"wiki write requires --path, --type, --title, and --description; usage: wiki write --path ID --type T --title T --description D [--sources JSON]",
 			);
 		if (authorizedSnapshot?.definition.id === "wiki-comments") {
 			const context = authorizedSnapshot.step.context;
@@ -267,9 +267,21 @@ export async function runWiki(
 			throw new Error(
 				"stable or verified wiki metadata is granted only by the approval gate",
 			);
-		const resources = [flag(rest, "resource"), flag(rest, "source")].filter(
-			(value): value is string => Boolean(value),
-		);
+		const legacySource = flag(rest, "resource") ?? flag(rest, "source");
+		const sourcesFlag = flag(rest, "sources");
+		let sources: unknown[] | undefined;
+		if (sourcesFlag !== undefined) {
+			const parsed = parseInput(sourcesFlag);
+			if (!Array.isArray(parsed) || !parsed.length)
+				throw new Error(
+					"wiki write --sources must be a non-empty JSON list of { id, resource } entries",
+				);
+			sources = parsed;
+		}
+		if (legacySource !== undefined)
+			throw new Error(
+				"wiki write no longer accepts --source/--resource; pass keyed sources with --sources JSON so every inline citation resolves",
+			);
 		const bodyFile = flag(rest, "body-file");
 		const safeBodyFile = bodyFile
 			? safeWikiBodyFile(authorizedSnapshot, bodyFile)
@@ -288,9 +300,7 @@ export async function runWiki(
 								.filter(Boolean),
 						}
 					: {}),
-				...(resources.length
-					? { sources: resources.map((resource) => ({ resource })) }
-					: {}),
+				...(sources ? { sources } : {}),
 				status: role ? "draft" : requestedStatus,
 				...(flag(rest, "stale-after")
 					? { stale_after: flag(rest, "stale-after") }

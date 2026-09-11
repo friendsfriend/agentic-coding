@@ -6,13 +6,16 @@ import { run as runWorkflow } from "../src/workflow/cli.ts";
 import {
 	appendLog,
 	checkConformance,
+	citationReport,
 	conceptPath,
 	effectiveStatus,
 	ensureBundle,
 	isStale,
 	listConcepts,
 	parseDocument,
+	readConcept,
 	renderDocument,
+	STALE_AFTER_DAYS,
 	searchConcepts,
 	snapshotList,
 	snapshotOnFirstTouch,
@@ -24,15 +27,32 @@ import {
 
 let root = "";
 let cwd = "";
+const IDENTITY_KEYS = [
+	"HERDR_WORKFLOW_ID",
+	"HERDR_CHANGE_ID",
+	"HERDR_ROLE",
+	"HERDR_RUN_TOKEN",
+	"HERDR_STEP_ID",
+] as const;
+let savedIdentity: Record<string, string | undefined> = {};
 beforeEach(() => {
 	cwd = process.cwd();
 	root = fs.mkdtempSync(path.join(os.tmpdir(), "agentic-wiki-"));
+	savedIdentity = {};
+	for (const key of IDENTITY_KEYS) {
+		savedIdentity[key] = process.env[key];
+		delete process.env[key];
+	}
 	process.env.HERDR_WIKI_DIR = root;
 	process.chdir(root);
 });
 afterEach(() => {
 	process.chdir(cwd);
 	delete process.env.HERDR_WIKI_DIR;
+	for (const key of IDENTITY_KEYS) {
+		if (savedIdentity[key] === undefined) delete process.env[key];
+		else process.env[key] = savedIdentity[key];
+	}
 });
 
 describe("OKF wiki bundle", () => {
@@ -80,12 +100,14 @@ describe("OKF wiki bundle", () => {
 			status: "draft",
 			generatedBy: "herdr-planner/p",
 			changeId: "change",
+			body: "Important title claim.[^change]",
 		});
 		writeConcept("body", {
 			type: "concept",
 			title: "Other",
 			description: "desc",
-			body: "Important body",
+			sources: [{ id: "code", resource: "src/example.ts" }],
+			body: "Important body claim.[^code]",
 		});
 		expect(listConcepts({ tag: "one" }).map((item) => item.id)).toEqual([
 			"title",
@@ -104,6 +126,8 @@ describe("OKF wiki bundle", () => {
 			type: "concept",
 			title: "Old",
 			description: "d",
+			sources: [{ id: "code", resource: "src/example.ts" }],
+			body: "Old fact.[^code]",
 		});
 		snapshotOnFirstTouch("change", "existing");
 		writeConcept("existing", {
@@ -111,6 +135,7 @@ describe("OKF wiki bundle", () => {
 			title: "New",
 			description: "d",
 			changeId: "change",
+			body: "New fact.[^code]",
 		});
 		expect(snapshotList("change")).toEqual(["existing"]);
 		expect(snapshotRead("change", "existing")).toContain("Old");
@@ -132,6 +157,8 @@ describe("OKF wiki bundle", () => {
 			"Architecture",
 			"--description",
 			"Durable architecture facts",
+			"--sources",
+			'[{"id":"code","resource":"src/workflow/wiki.ts"}]',
 		];
 		const saved = {
 			workflow: process.env.HERDR_WORKFLOW_ID,
@@ -211,6 +238,143 @@ describe("OKF wiki bundle", () => {
 		const log = fs.readFileSync(path.join(root, "log.md"), "utf8");
 		expect(log.match(/^## \d{4}-\d{2}-\d{2}$/gm)).toHaveLength(1);
 		expect(log).toContain("- second");
+	});
+	test("write requires a source and a citation on every prose line", () => {
+		expect(() =>
+			writeConcept("uncited", {
+				type: "concept",
+				title: "T",
+				description: "d",
+				body: "claim without source",
+			}),
+		).toThrow(/at least one source/);
+
+		expect(() =>
+			writeConcept("uncited", {
+				type: "concept",
+				title: "T",
+				description: "d",
+				sources: [{ id: "code", resource: "src/example.ts" }],
+				body: "A claim.[^code]\nAnother claim.",
+			}),
+		).toThrow(/line 2 requires a source citation/);
+
+		expect(() =>
+			writeConcept("uncited", {
+				type: "concept",
+				title: "T",
+				description: "d",
+				sources: [{ id: "code", resource: "src/example.ts" }],
+				body: "A claim.[^missing]",
+			}),
+		).toThrow(/no matching source: missing/);
+
+		writeConcept("cited", {
+			type: "concept",
+			title: "T",
+			description: "d",
+			sources: [{ id: "code", resource: "src/example.ts" }],
+			body: "# Heading\n\nProse line.[^code]\n\n```ts\nconst x = 1;\n```\n\n- bullet one[^code]\n- bullet two[^code]\n",
+		});
+		expect(readConceptForTest("cited").frontmatter.stale_after).toBeTruthy();
+		expect(readConcept("cited").uncitedLines).toEqual([]);
+	});
+	test("stamps URL access and expires concepts after two weeks", () => {
+		const before = Date.now();
+		const concept = writeConcept("url", {
+			type: "concept",
+			title: "URL",
+			description: "d",
+			sources: [
+				{ id: "web", resource: "https://example.test/doc" },
+				{ id: "code", resource: "src/example.ts" },
+			],
+			body: "Web claim.[^web] Code claim.[^code]",
+		});
+		const sources = concept.frontmatter.sources as Array<
+			Record<string, unknown>
+		>;
+		const web = sources.find((source) => source.id === "web");
+		const code = sources.find((source) => source.id === "code");
+		expect(typeof web?.accessed).toBe("string");
+		expect(Date.parse(String(web?.accessed))).toBeGreaterThanOrEqual(
+			before - 1000,
+		);
+		expect(code?.accessed).toBeUndefined();
+		expect(concept.stale).toBe(false);
+		expect(
+			Date.parse(String(concept.frontmatter.stale_after)) -
+				Date.parse(String(web?.accessed)),
+		).toBe(STALE_AFTER_DAYS * 24 * 60 * 60 * 1000);
+
+		const legacy = parseDocument(
+			"---\ntype: concept\ntitle: T\ndescription: d\ngenerated: { by: process:herdr, at: 2000-01-01T00:00:00Z }\n---\nA claim.[^code]\n",
+		);
+		expect(isStale(legacy)).toBe(true);
+	});
+	test("reading an uncited concept stays permissive and reports coverage", () => {
+		fs.mkdirSync(path.join(root, "legacy"), { recursive: true });
+		fs.writeFileSync(
+			path.join(root, "legacy", "note.md"),
+			"---\ntype: concept\ntitle: Legacy\ndescription: d\n---\nA claim without a citation.\n",
+		);
+		expect(readConcept("legacy/note").uncitedLines).toEqual([1]);
+	});
+	test("exempts setext headings, blockquotes, and table separators", () => {
+		writeConcept("structural", {
+			type: "concept",
+			title: "T",
+			description: "d",
+			sources: [{ id: "code", resource: "src/example.ts" }],
+			body: "Setext title\n=====\n\n| a[^code] | b[^code] |\n| --- | --- |\n| one[^code] | two[^code] |\n\n> quoted source text\n\nProse line.[^code]\n",
+		});
+		expect(readConcept("structural").uncitedLines).toEqual([]);
+		expect(readConcept("structural").unknownCitations).toEqual([]);
+	});
+	test("rejects a source without a stable id", () => {
+		expect(() =>
+			writeConcept("no-id", {
+				type: "concept",
+				title: "T",
+				description: "d",
+				sources: [{ resource: "src/example.ts" }],
+				body: "",
+			}),
+		).toThrow(/sources\[0\] requires an id/);
+	});
+	test("refuses to promote a concept whose lines are not cited", () => {
+		fs.mkdirSync(path.join(root, "legacy"), { recursive: true });
+		fs.writeFileSync(
+			path.join(root, "legacy", "stub.md"),
+			"---\ntype: concept\ntitle: Stub\ndescription: d\ngenerated: { by: process:herdr, at: 2000-01-01T00:00:00Z }\n---\nUncited fact.\n",
+		);
+		expect(() => verifyConcept("legacy/stub", "process:herdr-archive")).toThrow(
+			/at least one source/,
+		);
+	});
+	test("scans a pathological table-like line in linear time", () => {
+		const started = performance.now();
+		const report = citationReport(`|${"-".repeat(200_000)}x`);
+		expect(report.uncitedLines).toEqual([1]);
+		expect(performance.now() - started).toBeLessThan(1000);
+	});
+	test("CLI rejects the removed --source flag", async () => {
+		await expect(
+			runWorkflow([
+				"wiki",
+				"write",
+				"--path",
+				"projects/demo/x",
+				"--type",
+				"concept",
+				"--title",
+				"T",
+				"--description",
+				"d",
+				"--source",
+				"src/x.ts",
+			]),
+		).rejects.toThrow(/--sources/);
 	});
 });
 
