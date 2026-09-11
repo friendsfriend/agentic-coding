@@ -2,6 +2,7 @@ Not for agents. This is only for humans.
 
 Fixes: 
 * Still some of the errors appear inline in the tui instead of via the notification system / tracing
+* Improve test performance. Takes too long to execute
 
 Big ones:
 * Implement Agent steered version of the workflow. Basically an orchestrator version of the workflow.
