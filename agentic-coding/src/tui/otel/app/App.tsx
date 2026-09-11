@@ -60,7 +60,7 @@ import type { LogStore } from "../model/logStore";
 import type { MetricStore } from "../model/metricStore";
 import type { TopologyStore } from "../model/topologyStore";
 import type { SortCriterion, TraceStore } from "../model/traceStore";
-import type { SpanData, TreeNode } from "../model/types";
+import type { TreeNode } from "../model/types";
 import { uiColors } from "../ui/colors";
 import { LogDetailView } from "../views/LogDetailView";
 import { LogsView } from "../views/LogsView";
@@ -387,13 +387,12 @@ export function App(props: {
 			notify(`Pruned ${removed} spans older than 30 days`, "info");
 		};
 		const dailyPrune = setInterval(prune, 86_400_000);
-		const onNew = (changeId: string, spans: SpanData[]) => {
+		const onNew = (changeId: string) => {
 			setWorkspaces(db.getWorkspaces());
 			if (!activeWorkspace() || activeWorkspace() === changeId) {
 				traceStore.loadFile(db.loadSpans(activeWorkspace()));
 				refresh();
 			}
-			notify(`${changeId}: ${spans.length} new spans`, "info");
 		};
 		const stops = props.repos.map((r) => db.watchWorkspaces(r, onNew));
 		// The initial history load and live OTLP receiver pushes mutate the store
