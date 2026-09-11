@@ -16,6 +16,7 @@ import {
 	agentEffectHandlers,
 	EffectRunner,
 	effectRunnerTest,
+	PermanentFailure,
 	TransientFailure,
 } from "../src/workflow/effect-runner.ts";
 import {
@@ -53,6 +54,42 @@ class Adapter implements AgentAdapter {
 			this.stops++;
 		});
 	}
+}
+
+/** `GIT_ALLOW_PROTOCOL=https:ssh:git` blocks real local-path pushes, so the
+ * wiki delivery push is observed through a `git` shim that records pushes and
+ * delegates every other subcommand to the real binary. */
+function installGitPushShim(): { log: string; restore: () => void } {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-git-shim-"));
+	const log = path.join(dir, "push.log");
+	const realGit = Bun.which("git");
+	if (!realGit) throw new Error("git is not available");
+	fs.writeFileSync(
+		path.join(dir, "git"),
+		[
+			"#!/bin/sh",
+			'case " $* " in',
+			'  *" push "*)',
+			`    printf '%s\\n' "$*" >> "${log}"`,
+			`    printf 'GIT_ALLOW_PROTOCOL=%s\\n' "$GIT_ALLOW_PROTOCOL" >> "${log}"`,
+			"    exit 0",
+			"    ;;",
+			"esac",
+			`exec "${realGit}" "$@"`,
+			"",
+		].join("\n"),
+		{ mode: 0o700 },
+	);
+	const previous = process.env.PATH;
+	process.env.PATH = `${dir}${path.delimiter}${previous ?? ""}`;
+	return {
+		log,
+		restore: () => {
+			if (previous === undefined) delete process.env.PATH;
+			else process.env.PATH = previous;
+			fs.rmSync(dir, { recursive: true, force: true });
+		},
+	};
 }
 
 test("serial runner renews a slow effect and does not preclaim later work", async () => {
@@ -1782,5 +1819,245 @@ test("workspace retry recovers stable branch and workspace identity", async () =
 		expect(adapter.launches).toBe(1);
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("wiki delivery commits and pushes the bundle on its current branch", async () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-wiki-git-"));
+	let shim: ReturnType<typeof installGitPushShim> | undefined;
+	try {
+		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+		execFileSync("git", ["config", "user.email", "wiki@example.com"], {
+			cwd: root,
+		});
+		execFileSync("git", ["config", "user.name", "Wiki"], { cwd: root });
+		fs.writeFileSync(
+			path.join(root, "index.md"),
+			'---\nokf_version: "0.2"\n---\n',
+		);
+		// Operational workflow state shares the bundle root but is never knowledge.
+		fs.mkdirSync(path.join(root, ".herdr-workflow", "w"), { recursive: true });
+		fs.writeFileSync(path.join(root, ".herdr-workflow", "w", "state"), "one\n");
+		execFileSync("git", ["add", "."], { cwd: root });
+		execFileSync("git", ["commit", "-qm", "base"], { cwd: root });
+		execFileSync(
+			"git",
+			["remote", "add", "origin", "https://example.invalid/wiki.git"],
+			{ cwd: root },
+		);
+		fs.writeFileSync(
+			path.join(root, "concept.md"),
+			"---\ntype: concept\ntitle: T\ndescription: d\n---\nfact\n",
+		);
+		fs.writeFileSync(path.join(root, ".herdr-workflow", "w", "state"), "two\n");
+		shim = installGitPushShim();
+		const result = await Effect.runPromise(
+			effectRunnerTest.commitAndPushWiki(root, "Update wiki test"),
+		);
+		expect(result).toEqual({ committed: true, pushed: true });
+		const message = execFileSync(
+			"git",
+			["-C", root, "log", "-1", "--pretty=%s"],
+			{ encoding: "utf8" },
+		).trim();
+		expect(message).toBe("Update wiki test");
+		const delivered = execFileSync(
+			"git",
+			["-C", root, "show", "--name-only", "--pretty=format:"],
+			{ encoding: "utf8" },
+		);
+		expect(delivered).toContain("concept.md");
+		expect(delivered).not.toContain(".herdr-workflow");
+		const log = fs.readFileSync(shim.log, "utf8");
+		expect(log).toContain("push --set-upstream -- origin main");
+		expect(log).toContain("GIT_ALLOW_PROTOCOL=https:ssh:git");
+	} finally {
+		shim?.restore();
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("wiki delivery pushes the tracked upstream without set-upstream", async () => {
+	const root = fs.mkdtempSync(
+		path.join(os.tmpdir(), "workflow-wiki-upstream-"),
+	);
+	let shim: ReturnType<typeof installGitPushShim> | undefined;
+	try {
+		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+		execFileSync("git", ["config", "user.email", "wiki@example.com"], {
+			cwd: root,
+		});
+		execFileSync("git", ["config", "user.name", "Wiki"], { cwd: root });
+		fs.writeFileSync(path.join(root, "index.md"), "base\n");
+		execFileSync("git", ["add", "."], { cwd: root });
+		execFileSync("git", ["commit", "-qm", "base"], { cwd: root });
+		execFileSync(
+			"git",
+			["remote", "add", "origin", "https://example.invalid/wiki.git"],
+			{ cwd: root },
+		);
+		execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], {
+			cwd: root,
+		});
+		execFileSync("git", ["config", "branch.main.remote", "origin"], {
+			cwd: root,
+		});
+		execFileSync("git", ["config", "branch.main.merge", "refs/heads/main"], {
+			cwd: root,
+		});
+		fs.writeFileSync(path.join(root, "concept.md"), "fact\n");
+		shim = installGitPushShim();
+		const result = await Effect.runPromise(
+			effectRunnerTest.commitAndPushWiki(root, "Update wiki"),
+		);
+		expect(result).toEqual({ committed: true, pushed: true });
+		const log = fs.readFileSync(shim.log, "utf8");
+		expect(log).toContain(" push");
+		expect(log).not.toContain("--set-upstream");
+	} finally {
+		shim?.restore();
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("wiki delivery skips bundles that are not Git work trees", async () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-wiki-plain-"));
+	try {
+		fs.writeFileSync(path.join(root, "concept.md"), "fact\n");
+		const result = await Effect.runPromise(
+			effectRunnerTest.commitAndPushWiki(root, "Update wiki"),
+		);
+		expect(result).toEqual({ committed: false, pushed: false });
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("wiki delivery commits without pushing when the bundle has no remote", async () => {
+	const root = fs.mkdtempSync(
+		path.join(os.tmpdir(), "workflow-wiki-noremote-"),
+	);
+	try {
+		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+		execFileSync("git", ["config", "user.email", "wiki@example.com"], {
+			cwd: root,
+		});
+		execFileSync("git", ["config", "user.name", "Wiki"], { cwd: root });
+		fs.writeFileSync(path.join(root, "concept.md"), "fact\n");
+		const result = await Effect.runPromise(
+			effectRunnerTest.commitAndPushWiki(root, "Update wiki"),
+		);
+		expect(result).toEqual({ committed: true, pushed: false });
+		expect(
+			execFileSync("git", ["-C", root, "log", "-1", "--pretty=%s"], {
+				encoding: "utf8",
+			}).trim(),
+		).toBe("Update wiki");
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("wiki delivery commits without pushing on a detached HEAD", async () => {
+	const root = fs.mkdtempSync(
+		path.join(os.tmpdir(), "workflow-wiki-detached-"),
+	);
+	try {
+		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+		execFileSync("git", ["config", "user.email", "wiki@example.com"], {
+			cwd: root,
+		});
+		execFileSync("git", ["config", "user.name", "Wiki"], { cwd: root });
+		fs.writeFileSync(path.join(root, "index.md"), "base\n");
+		execFileSync("git", ["add", "."], { cwd: root });
+		execFileSync("git", ["commit", "-qm", "base"], { cwd: root });
+		execFileSync(
+			"git",
+			["remote", "add", "origin", "https://example.invalid/wiki.git"],
+			{ cwd: root },
+		);
+		execFileSync("git", ["checkout", "-q", "--detach"], { cwd: root });
+		fs.writeFileSync(path.join(root, "concept.md"), "fact\n");
+		const result = await Effect.runPromise(
+			effectRunnerTest.commitAndPushWiki(root, "Update wiki"),
+		);
+		expect(result).toEqual({ committed: true, pushed: false });
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("wiki delivery skips a bundle nested in a larger repository", async () => {
+	const parent = fs.mkdtempSync(
+		path.join(os.tmpdir(), "workflow-wiki-parent-"),
+	);
+	const nested = path.join(parent, "wiki");
+	try {
+		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: parent });
+		execFileSync("git", ["config", "user.email", "wiki@example.com"], {
+			cwd: parent,
+		});
+		execFileSync("git", ["config", "user.name", "Wiki"], { cwd: parent });
+		fs.writeFileSync(path.join(parent, "index.md"), "base\n");
+		execFileSync("git", ["add", "."], { cwd: parent });
+		execFileSync("git", ["commit", "-qm", "base"], { cwd: parent });
+		fs.mkdirSync(nested, { recursive: true });
+		fs.writeFileSync(path.join(nested, "concept.md"), "fact\n");
+		const result = await Effect.runPromise(
+			effectRunnerTest.commitAndPushWiki(nested, "Update wiki"),
+		);
+		expect(result).toEqual({ committed: false, pushed: false });
+		expect(
+			execFileSync("git", ["-C", parent, "log", "-1", "--pretty=%s"], {
+				encoding: "utf8",
+			}).trim(),
+		).toBe("base");
+		expect(
+			execFileSync("git", ["-C", parent, "status", "--porcelain"], {
+				encoding: "utf8",
+			}),
+		).toContain("?? wiki/");
+	} finally {
+		fs.rmSync(parent, { recursive: true, force: true });
+	}
+});
+
+test("wiki delivery rejects a non-allowlisted remote before committing", async () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-wiki-ext-"));
+	try {
+		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+		execFileSync("git", ["config", "user.email", "wiki@example.com"], {
+			cwd: root,
+		});
+		execFileSync("git", ["config", "user.name", "Wiki"], { cwd: root });
+		fs.writeFileSync(path.join(root, "index.md"), "base\n");
+		execFileSync("git", ["add", "."], { cwd: root });
+		execFileSync("git", ["commit", "-qm", "base"], { cwd: root });
+		execFileSync(
+			"git",
+			["remote", "add", "origin", "ext::sh -c 'touch /tmp/pwned'"],
+			{ cwd: root },
+		);
+		fs.writeFileSync(path.join(root, "concept.md"), "fact\n");
+		const outcome = await Effect.runPromise(
+			effectRunnerTest.commitAndPushWiki(root, "Update wiki").pipe(
+				Effect.catchAllDefect((defect) =>
+					Effect.fail(
+						defect instanceof Error ? defect : new Error(String(defect)),
+					),
+				),
+				Effect.either,
+			),
+		);
+		expect(Either.isLeft(outcome)).toBe(true);
+		if (Either.isLeft(outcome))
+			expect(outcome.left).toBeInstanceOf(PermanentFailure);
+		expect(
+			execFileSync("git", ["-C", root, "log", "-1", "--pretty=%s"], {
+				encoding: "utf8",
+			}).trim(),
+		).toBe("base");
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
 	}
 });
