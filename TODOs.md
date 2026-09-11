@@ -1,8 +1,7 @@
 Not for agents. This is only for humans.
 
 Fixes: 
-* Traces are not shown properly (new ones are missing)
-* Some findings dont show up in the diff
+* Placeholder finding lines dont show the comment related to the line
 
 Big ones:
 * Implement Agent steered version of the workflow. Basically an orchestrator version of the workflow.
@@ -16,5 +15,4 @@ Small ones:
 * Wiki should introduce source mechanism -> Each information should also give a source (either code file or url to source). This allows to recheck the information. Should be done when reading the wiki.
 * Give all agents their own tab. Multitab spawning always has issues for some reason
 * Improve agent steering based on recent runs
-* Add ? help to modals
 
