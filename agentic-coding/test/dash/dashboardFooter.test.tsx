@@ -156,3 +156,31 @@ test("`?` help keeps the full descriptions the footer shortens", async () => {
 
 	t.renderer.destroy();
 });
+
+test("`?` inside a dialog opens that dialog's own keybinds", async () => {
+	const t = await testRender(
+		() => <TestDashboard testData={testDashboard()} />,
+		{
+			width: 140,
+			height: 40,
+		},
+	);
+	await dashboardReady(t);
+
+	// `c` opens the cost breakdown dialog, which advertises `? help`.
+	t.mockInput.pressKey("c");
+	await t.waitForFrame((frame) => frame.includes("Cost breakdown"));
+	t.mockInput.pressKey("?");
+	const help = await t.waitForFrame((frame) => frame.includes("Keybindings"));
+	expect(help).toContain("Message detail");
+
+	// Esc closes the dialog's help and returns to the dialog itself.
+	t.mockInput.pressEscape();
+	await new Promise((resolve) => setTimeout(resolve, 80));
+	const closed = await t.waitForFrame(
+		(frame) => !frame.includes("Keybindings"),
+	);
+	expect(closed).toContain("Cost breakdown");
+
+	t.renderer.destroy();
+});

@@ -348,6 +348,7 @@ export function NewWorkflowModal(props: {
 					summary={summary()}
 					step={0}
 					total={totalSteps()}
+					helpSections={false}
 					help={[
 						{ key: "Enter", action: "Next" },
 						{ key: "Esc", action: "Back" },
@@ -390,6 +391,7 @@ export function NewWorkflowModal(props: {
 									summary={summary()}
 									step={step()}
 									total={totalSteps()}
+									helpSections={false}
 									help={
 										field() === "task"
 											? [
@@ -457,6 +459,7 @@ export function NewWorkflowModal(props: {
 								filterActive={filtering() || filter().length > 0}
 								filterQuery={filter()}
 								itemHeight={field() === "workflowType" ? 2 : 1}
+								helpSections={false}
 								help={
 									filtering()
 										? [
@@ -513,6 +516,7 @@ export function NewWorkflowModal(props: {
 						summaryOnly
 						step={step()}
 						total={totalSteps()}
+						helpSections={false}
 						help={[
 							{ key: "Enter", action: "Create workflow" },
 							{ key: "Esc", action: "Back" },

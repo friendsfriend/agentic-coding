@@ -62,6 +62,7 @@ export function CredentialsModal(props: {
 				{ key: "Enter", action: "Submit" },
 				{ key: "Esc", action: "Cancel" },
 			]}
+			helpSections={false}
 		>
 			<box
 				width="100%"

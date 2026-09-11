@@ -17,6 +17,8 @@ export function HelpModal(props: {
 	lines: number;
 	/** Catalog override for tests; defaults to the active surface catalog. */
 	sections?: KeybindSection[];
+	/** Portal z-order when the help stacks above another modal. */
+	zIndex?: number;
 }) {
 	const sections = () => props.sections ?? activeKeybindCatalog();
 	const rows = () =>
@@ -30,10 +32,12 @@ export function HelpModal(props: {
 			title={props.title}
 			widthPercent={0.72}
 			heightPercent={0.78}
+			zIndex={props.zIndex}
 			help={[
 				{ key: "j/k", action: "Navigate" },
 				{ key: "Esc", action: "Close" },
 			]}
+			helpSections={false}
 		>
 			<box width="100%" flexDirection="column" overflow="hidden">
 				<For each={visible()}>

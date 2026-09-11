@@ -22,6 +22,8 @@ import { formatDuration } from "../../workflow/format";
 import { wikiWorkflowDataRoot } from "../../workflow/runtime";
 import { copyToClipboard } from "../clipboard";
 import { setActiveKeybindCatalog } from "../shared/keybinds";
+import { ModalHelpOverlay } from "../shared/ModalHelpOverlay";
+import { handleModalHelpKey, modalHelpOpen } from "../shared/modalHelp";
 import { testDashboard } from "./demo";
 import { ChangedFilesView } from "./devenv-ui/components/ChangedFilesView";
 import { DiffViewModal } from "./devenv-ui/components/DiffViewModal";
@@ -1267,6 +1269,31 @@ export function App(props: {
 			}
 		}
 	};
+	// The last surface modal that owned the keys before the modal's own `?` help
+	// opened, so Esc returns to it instead of dropping to the dashboard.
+	let modalHelpReturnModal: string | undefined;
+	/**
+	 * Route a key to the open modal's `?` help overlay. While it is open the
+	 * overlay owns j/k/Esc; otherwise `?` opens it when the mounted modal
+	 * published a help catalog. Returns true when the key was consumed.
+	 */
+	const routeModalHelp = (key: string): boolean => {
+		if (modalHelpOpen()) {
+			const handled = handleModalHelpKey(key);
+			if (handled && !modalHelpOpen()) {
+				props.keymap.setData("modal.active", modalHelpReturnModal ?? "none");
+				modalHelpReturnModal = undefined;
+			}
+			return handled;
+		}
+		if (key !== "?") return false;
+		if (!handleModalHelpKey(key)) return false;
+		modalHelpReturnModal = String(
+			props.keymap.getData?.("modal.active") ?? "none",
+		);
+		props.keymap.setData("modal.active", "help");
+		return true;
+	};
 	onMount(() => {
 		props.keymap.setData("app.view", "detail");
 		props.keymap.setData("modal.active", "none");
@@ -1279,6 +1306,9 @@ export function App(props: {
 					name: "theme.handle",
 					run: ({ event }) => {
 						const key = event.name.toLowerCase();
+						// `?` always opens the picker's own help; theme names never need a
+						// literal question mark in the filter.
+						if (routeModalHelp(key)) return true;
 						const items = filteredThemes();
 						if (key === "escape") {
 							if (themeFiltering()) {
@@ -1333,6 +1363,7 @@ export function App(props: {
 				"k",
 				"up",
 				"down",
+				"?",
 			].map((key) => ({ key, cmd: "theme.handle" })),
 		});
 		const disposeQuestion = props.keymap.registerLayer({
@@ -1346,6 +1377,9 @@ export function App(props: {
 						const question = pendingQuestion();
 						if (!question || questionSubmitting()) return true;
 						const key = event.name.toLowerCase();
+						// `?` opens the dialog's own help unless the custom textarea owns
+						// the keyboard (there it stays a literal question mark).
+						if (!questionCustom() && routeModalHelp(key)) return true;
 						const group = pendingQuestionGroup();
 						const current = group[questionTab()] ?? question;
 						const customIndex = current.options.length;
@@ -1490,6 +1524,7 @@ export function App(props: {
 					name: "repair.handle",
 					run: ({ event }) => {
 						const key = event.name.toLowerCase();
+						if (routeModalHelp(key)) return true;
 						if (key === "escape") {
 							setRepairOpen(false);
 							props.keymap.setData("modal.active", "none");
@@ -1538,7 +1573,7 @@ export function App(props: {
 					},
 				},
 			],
-			bindings: ["escape", "enter", "return", "j", "k", "up", "down"].map(
+			bindings: ["escape", "enter", "return", "j", "k", "up", "down", "?"].map(
 				(key) => ({ key, cmd: "repair.handle" }),
 			),
 		});
@@ -1649,6 +1684,7 @@ export function App(props: {
 					run: ({ event }) => {
 						if (busy()) return true;
 						const key = event.name.toLowerCase();
+						if (routeModalHelp(key)) return true;
 						const items = requiredUserAction()?.items ?? [];
 						if (key === "escape") {
 							setUserActionOpen(false);
@@ -1667,7 +1703,7 @@ export function App(props: {
 					},
 				},
 			],
-			bindings: ["escape", "enter", "return", "j", "k", "up", "down"].map(
+			bindings: ["escape", "enter", "return", "j", "k", "up", "down", "?"].map(
 				(key) => ({ key, cmd: "user-action.handle" }),
 			),
 		});
@@ -1681,6 +1717,7 @@ export function App(props: {
 					run: ({ event }) => {
 						if (busy()) return true;
 						const key = event.name.toLowerCase();
+						if (routeModalHelp(key)) return true;
 						if (key === "escape") {
 							if (costAgent()) {
 								setCostAgent(null);
@@ -1708,7 +1745,7 @@ export function App(props: {
 					},
 				},
 			],
-			bindings: ["escape", "enter", "return", "j", "k", "up", "down"].map(
+			bindings: ["escape", "enter", "return", "j", "k", "up", "down", "?"].map(
 				(key) => ({ key, cmd: "cost.handle" }),
 			),
 		});
@@ -1721,6 +1758,9 @@ export function App(props: {
 					name: "help.handle",
 					run: ({ event }) => {
 						const key = event.name.toLowerCase();
+						// The modal's own `?` help rides the same layer; route it before
+						// the dashboard help so Esc returns to the open dialog.
+						if (modalHelpOpen()) return routeModalHelp(key);
 						if (key === "escape") {
 							setHelp(false);
 							props.keymap.setData("modal.active", "none");
@@ -1746,6 +1786,7 @@ export function App(props: {
 					name: "events.handle",
 					run: ({ event }) => {
 						const key = event.name.toLowerCase();
+						if (routeModalHelp(key)) return true;
 						if (key === "escape") {
 							setEventsDetail(false);
 							props.keymap.setData("modal.active", "none");
@@ -1759,7 +1800,7 @@ export function App(props: {
 					},
 				},
 			],
-			bindings: ["escape", "j", "k", "up", "down"].map((key) => ({
+			bindings: ["escape", "j", "k", "up", "down", "?"].map((key) => ({
 				key,
 				cmd: "events.handle",
 			})),
@@ -1838,7 +1879,14 @@ export function App(props: {
 			commands: [
 				{
 					name: "developer-review.handle",
-					run: ({ event }) => handleReviewKey(event),
+					run: ({ event }) => {
+						const key = event.name.toLowerCase();
+						// `?` opens the review dialog's own help; its search field keeps
+						// `?` as a literal query character.
+						if (key === "?" && !reviewSearchMode() && routeModalHelp(key))
+							return true;
+						return handleReviewKey(event);
+					},
 				},
 			],
 			bindings: [
@@ -1875,6 +1923,7 @@ export function App(props: {
 					name: "plan-rejection.handle",
 					run: ({ event }) => {
 						const key = event.name.toLowerCase();
+						if (routeModalHelp(key)) return true;
 						if (key === "escape") {
 							setPlanRejectionOpen(false);
 							props.keymap.setData("modal.active", "plan-review");
@@ -1892,7 +1941,7 @@ export function App(props: {
 					},
 				},
 			],
-			bindings: ["escape", "enter", "return", "j", "k", "up", "down"].map(
+			bindings: ["escape", "enter", "return", "j", "k", "up", "down", "?"].map(
 				(key) => ({ key, cmd: "plan-rejection.handle" }),
 			),
 		});
@@ -1903,7 +1952,14 @@ export function App(props: {
 			commands: [
 				{
 					name: "plan-review.handle",
-					run: ({ event }) => handleReviewKey(event),
+					run: ({ event }) => {
+						const key = event.name.toLowerCase();
+						// `?` opens the review dialog's own help; its search field keeps
+						// `?` as a literal query character.
+						if (key === "?" && !reviewSearchMode() && routeModalHelp(key))
+							return true;
+						return handleReviewKey(event);
+					},
 				},
 			],
 			bindings: [
@@ -1938,6 +1994,7 @@ export function App(props: {
 					name: "findings.handle",
 					run: ({ event }) => {
 						const key = event.name.toLowerCase();
+						if (routeModalHelp(key)) return true;
 						const items = (findings()?.events ?? []).filter(
 							(item) => item.type !== "verdict",
 						);
@@ -1972,7 +2029,7 @@ export function App(props: {
 					},
 				},
 			],
-			bindings: ["escape", "enter", "return", "j", "k", "up", "down"].map(
+			bindings: ["escape", "enter", "return", "j", "k", "up", "down", "?"].map(
 				(key) => ({ key, cmd: "findings.handle" }),
 			),
 		});
@@ -1985,6 +2042,7 @@ export function App(props: {
 					name: "verdict.handle",
 					run: ({ event }) => {
 						const name = event.name.toLowerCase();
+						if (routeModalHelp(name)) return true;
 						const max = () => {
 							const width = Math.max(
 								40,
@@ -2017,10 +2075,12 @@ export function App(props: {
 					},
 				},
 			],
-			bindings: ["escape", "j", "k", "d", "u", "up", "down"].map((key) => ({
-				key,
-				cmd: "verdict.handle",
-			})),
+			bindings: ["escape", "j", "k", "d", "u", "up", "down", "?"].map(
+				(key) => ({
+					key,
+					cmd: "verdict.handle",
+				}),
+			),
 		});
 		const dispose = props.keymap.registerLayer({
 			name: "detail",
@@ -2560,6 +2620,7 @@ export function App(props: {
 					fieldLabel="Action"
 					items={completedActions().map((action) => action.label)}
 					selectedIndex={completedSelection()}
+					helpSections={false}
 					help={[
 						{ key: "j/k", action: "Navigate" },
 						{
@@ -2833,6 +2894,9 @@ export function App(props: {
 					message={reviewFinishingMessage()}
 				/>
 			</Show>
+			{/* The open dialog's own `?` help, above every dialog (question z20,
+			    credentials z10). */}
+			<ModalHelpOverlay zIndex={30} />
 		</box>
 	);
 }

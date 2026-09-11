@@ -105,16 +105,20 @@ test("`?` opens the catalog help modal on metrics/logs/topology tabs", async () 
 	db.close();
 });
 
-test("`?` does not replace an open traces filter modal", async () => {
+test("`?` opens the filter modal's own help over the dialog", async () => {
 	const { t, db } = await renderOtelApp();
 	t.mockInput.pressKey("f", { shift: true });
 	await t.waitForFrame((value) => value.includes("Filter"));
 	t.mockInput.pressKey("?");
-	await t.renderOnce();
-	await t.renderOnce();
-	const frame = t.captureCharFrame();
-	expect(frame).toContain("Filter");
-	expect(frame).not.toContain("Keybindings");
+	const frame = await t.waitForFrame((value) => value.includes("Keybindings"));
+	// The help lists the filter dialog's keybinds.
+	expect(frame).toContain("Apply");
+	await pressEscape(t);
+	const closed = await t.waitForFrame(
+		(value) => !value.includes("Keybindings"),
+	);
+	// Closing the help returns to the filter dialog underneath.
+	expect(closed).toContain("Filter");
 	t.renderer.destroy();
 	db.close();
 });

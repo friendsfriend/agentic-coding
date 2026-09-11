@@ -18,6 +18,7 @@ a dashboard or observability feature module.
 | Portaled modal framing | `GenericModal.tsx` | `dash/ui/GenericModal.tsx`, `dash/devenv-ui/components/GenericModal.tsx` |
 | Search header, filter/sort row, help text | `SearchHeader.tsx`, `FilterStatusBar.tsx`, `HelpText.tsx` | `dash/devenv-ui/components/*` |
 | Keybind contract, catalog store, `?` help modal | `keybinds.ts`, `HelpModal.tsx` | `dash/ui/HelpModal.tsx` |
+| Modal `?` help catalog + overlay | `modalHelp.ts`, `ModalHelpOverlay.tsx` | (surfaces render `ModalHelpOverlay`) |
 | Corner toast overlay | `Notification.tsx` | `dash/ui/Notification.tsx`, `otel/components/Notification.tsx` |
 
 Family entry points are thin re-exports/wrappers. Wrappers pin a family's
@@ -54,6 +55,16 @@ the primitive.
   of the `•` separator. Feature views (tab bodies, panel headers, empty and
   error states) must not print their own keybinding lists or single "press
   key" prompts.
+- Modals reuse the same contract: a dialog that passes keybind `help` gets a
+  `? help` entry appended to its footer and publishes its catalog through
+  `modalHelp.ts`. The owning surface routes `?`/`j`/`k`/`Esc` to
+  `handleModalHelpKey` and renders `ModalHelpOverlay`, which draws the shared
+  `HelpModal` above the dialog. Dialogs where `?` must stay a text key (or
+  that never route modal help) pass `helpSections={false}`, which suppresses
+  both the advertised `? help` entry and the catalog registration so the
+  footer never promises a dead key. The overlay lives beside `GenericModal`
+  (not inside it) so the modal shell and help modal do not form a runtime
+  import cycle.
 
 ## Behavior notes
 
