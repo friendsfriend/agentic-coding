@@ -4,15 +4,25 @@
 	"private": true,
 	"type": "module",
 	"packageManager": "bun@1.3.14",
+	"workspaces": [
+		"packages/devenv/*"
+	],
 	"bin": {
 		"agentic-coding": "./bin/agentic-coding"
 	},
 	"scripts": {
 		"test": "bun run scripts/test.ts",
+		"test:devenv": "bun test packages/devenv",
+		"test:server": "cd ../server && go test ./...",
+		"vet:server": "cd ../server && go vet ./...",
+		"verify": "bun run lint && bun run type-check && bun run test && bun run test:devenv && bun run test:server && bun run vet:server",
 		"type-check": "tsc --noEmit",
 		"lint": "biome check .",
 		"format": "biome format --write .",
 		"build": "bun run scripts/build.ts",
+		"build:devenv": "bun run packages/devenv/scripts/build.ts",
+		"build:devenv:single": "bun run packages/devenv/scripts/build.ts --single",
+		"dev:devenv": "bun run packages/devenv/cli/src/spawn.ts",
 		"dev:ui": "bun --preload ./node_modules/@opentui/solid/scripts/preload.js src/tui/index.tsx --home",
 		"dev:ui-dash": "bun --preload ./node_modules/@opentui/solid/scripts/preload.js src/tui/index.tsx"
 	},

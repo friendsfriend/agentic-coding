@@ -2,7 +2,7 @@
 	"compilerOptions": {
 		"target": "ESNext",
 		"module": "ESNext",
-		"lib": ["ESNext", "DOM"],
+		"lib": ["ESNext", "DOM", "DOM.Iterable"],
 		"moduleResolution": "bundler",
 		"allowImportingTsExtensions": true,
 		"jsx": "preserve",
@@ -10,9 +10,18 @@
 		"types": ["@types/bun"],
 		"strict": true,
 		"skipLibCheck": true,
+		"esModuleInterop": true,
+		"forceConsistentCasingInFileNames": true,
+		"resolveJsonModule": true,
 		"isolatedModules": true,
-		"noEmit": true
+		"noEmit": true,
+		"paths": {
+			"@devenv/cli": ["./packages/devenv/cli/src"],
+			"@devenv/ui": ["./packages/devenv/ui/src"],
+			"@devenv/core": ["./packages/devenv/core/src"],
+			"@devenv/types": ["./packages/devenv/types/src"]
+		}
 	},
-	"include": ["src/**/*", "test/**/*", "scripts/test.ts"],
+	"include": ["src/**/*", "test/**/*", "scripts/test.ts", "packages/**/*"],
 	"exclude": ["test/fixtures/source-layer-boundaries/**/*"]
 }

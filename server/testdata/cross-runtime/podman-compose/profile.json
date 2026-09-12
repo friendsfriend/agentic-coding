@@ -1,0 +1,1 @@
+{"name":"podman-compose-service","provider":"podman","producer":{"runtime":"docker","exports":[{"name":"db","protocol":"tcp","host":"db","port":5432,"strategy":"compose-service"}]},"consumer":{"runtime":"docker","provider":"podman","bindings":[{"name":"DATABASE_URL","export":"db","destination":"env"}]}}

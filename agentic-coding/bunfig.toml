@@ -1,5 +1,10 @@
 preload = ["@opentui/solid/preload"]
 
+[install]
+# Keep a single hoisted dependency graph so existing and imported code resolve
+# transitive packages (e.g. `marked` via `@opentui/core`) the same way.
+linker = "hoisted"
+
 [test]
 preload = ["@opentui/solid/preload"]
 # OpenTUI's test renderer uses process-global terminal state.

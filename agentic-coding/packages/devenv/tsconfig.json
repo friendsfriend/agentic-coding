@@ -1,0 +1,27 @@
+{
+	"compilerOptions": {
+		"target": "ESNext",
+		"module": "ESNext",
+		"lib": ["ESNext", "DOM", "DOM.Iterable"],
+		"moduleResolution": "bundler",
+		"allowImportingTsExtensions": true,
+		"jsx": "preserve",
+		"jsxImportSource": "@opentui/solid",
+		"types": ["@types/bun"],
+		"strict": true,
+		"esModuleInterop": true,
+		"skipLibCheck": true,
+		"forceConsistentCasingInFileNames": true,
+		"resolveJsonModule": true,
+		"isolatedModules": true,
+		"noEmit": true,
+		"paths": {
+			"@devenv/cli": ["./cli/src"],
+			"@devenv/ui": ["./ui/src"],
+			"@devenv/core": ["./core/src"],
+			"@devenv/types": ["./types/src"]
+		}
+	},
+	"include": ["cli/**/*", "core/**/*", "types/**/*", "ui/**/*", "scripts/**/*"],
+	"exclude": ["node_modules", "dist"]
+}
