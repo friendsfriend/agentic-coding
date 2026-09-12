@@ -1,0 +1,1 @@
+{"name":"kubernetes-service","provider":"podman","producer":{"runtime":"kubernetes","exports":[{"name":"db","protocol":"tcp","port":5432,"strategy":"kubernetes-service","resource":"postgres"}]},"consumer":{"runtime":"kubernetes","bindings":[{"name":"DATABASE_URL","export":"db","destination":"helm","valuePath":"database.url"}]}}

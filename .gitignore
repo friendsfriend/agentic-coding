@@ -2,5 +2,8 @@
 .herdr-workflow/
 agentic-coding/node_modules/
 agentic-coding/.pytest_cache/
+agentic-coding/packages/devenv/dist/
+agentic-coding/packages/devenv/server-binaries/
+agentic-coding/packages/devenv/node_modules/
 __pycache__/
 

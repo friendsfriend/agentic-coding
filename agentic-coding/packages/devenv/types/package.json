@@ -1,0 +1,7 @@
+{
+	"name": "@devenv/types",
+	"version": "0.12.7",
+	"type": "module",
+	"main": "./src/index.ts",
+	"types": "./src/index.ts"
+}

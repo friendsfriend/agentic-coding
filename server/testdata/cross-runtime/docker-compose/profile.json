@@ -1,0 +1,1 @@
+{"name":"docker-compose-service","provider":"docker","producer":{"runtime":"docker","exports":[{"name":"db","protocol":"tcp","host":"db","port":5432,"strategy":"compose-service"}]},"consumer":{"runtime":"docker","bindings":[{"name":"DATABASE_URL","export":"db","destination":"env"}]}}

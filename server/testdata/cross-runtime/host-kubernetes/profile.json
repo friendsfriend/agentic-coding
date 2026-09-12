@@ -1,0 +1,1 @@
+{"name":"host-to-kubernetes-port-forward","provider":"podman","producer":{"runtime":"kubernetes","exports":[{"name":"api","protocol":"http","port":3000,"localPort":33000,"strategy":"port-forward","resource":"svc/api"}]},"consumer":{"runtime":"shell","bindings":[{"name":"API_URL","export":"api","destination":"env"}]}}
