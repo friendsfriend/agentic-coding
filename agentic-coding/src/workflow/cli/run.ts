@@ -8,7 +8,11 @@
 // consumes the root-owned layer and the owner is disposed after the command.
 import { WorkflowApplication } from "../application.ts";
 import { loadConfig } from "../effects.ts";
-import { drainEffects, listProjects } from "../operations.ts";
+import {
+	disableWorkflowSidebar,
+	drainEffects,
+	listProjects,
+} from "../operations.ts";
 import { WorkflowEngine } from "../runtime.ts";
 import { flag, positional, positionals, requireFlag } from "./args.ts";
 import type { CallerEnvironment } from "./caller-environment.ts";
@@ -118,6 +122,13 @@ const COMMAND_HANDLERS: Record<string, CommandHandler> = {
 	repin: runRepin,
 	migrate: runMigrate,
 	"agent-extension": (rest) => runAgentExtension(rest),
+	sidebar: async (rest, workflowEngine, repo) => {
+		if (!flag(rest, "disable"))
+			throw new Error("sidebar: --disable is required");
+		console.log(
+			JSON.stringify(await disableWorkflowSidebar(repo, workflowEngine)),
+		);
+	},
 };
 
 export async function run(argv: string[]): Promise<void> {

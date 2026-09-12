@@ -18,6 +18,7 @@ import {
 	researchWorkflowTarget,
 	validateWorkflowId,
 } from "../../workflow/runtime.ts";
+import { SidebarPresentation } from "../../workflow/sidebar-observer.ts";
 import { prepareWorkflowStart } from "../../workflow/startup.ts";
 
 export {
@@ -203,6 +204,64 @@ export function getWorkflowView(
 }
 export function listWorkflowViews(repo: string): WorkflowView[] {
 	return workflowEngineFactory(dashboardApplication).list(repo);
+}
+
+/**
+ * Sidebar presentation owner (improve-herdr-workflow-sidebar): one
+ * application-scoped observer while any dashboard surface is alive. Callers
+ * register the repositories they cover; the owner starts on the first
+ * registration, reconciles on the bounded fallback interval, and releases its
+ * timers/transport only when the last registration goes away.
+ */
+const sidebarRepoProviders = new Set<() => readonly string[]>();
+let sidebarPresentation: SidebarPresentation | undefined;
+
+export function governedSidebarRepos(): string[] {
+	const repos = new Set<string>();
+	for (const provider of sidebarRepoProviders) {
+		try {
+			for (const repo of provider()) if (repo) repos.add(repo);
+		} catch {
+			/* a provider source that is unavailable contributes nothing */
+		}
+	}
+	return [...repos];
+}
+
+/** Register a repository source. Returns the disposer for that registration. */
+export function startSidebarPresentation(
+	provideRepos: () => readonly string[],
+): () => void {
+	sidebarRepoProviders.add(provideRepos);
+	if (!sidebarPresentation) {
+		sidebarPresentation = new SidebarPresentation({
+			herdr: new Herdr(),
+			views: () =>
+				governedSidebarRepos().flatMap((repo) => {
+					try {
+						return listWorkflowViews(repo);
+					} catch {
+						return [];
+					}
+				}),
+		});
+		// Disabled by default: nothing is installed or published unless the
+		// trusted user preference turns the integration on.
+		if (sidebarPresentation.enabled) sidebarPresentation.start();
+	}
+	return () => {
+		sidebarRepoProviders.delete(provideRepos);
+		if (sidebarRepoProviders.size === 0) {
+			sidebarPresentation?.dispose();
+			sidebarPresentation = undefined;
+		}
+	};
+}
+
+/** Reconcile after a dashboard-side mutation or a Herdr event. */
+export function reconcileSidebarPresentation(): void {
+	if (!sidebarPresentation?.enabled) return;
+	void sidebarPresentation.reconcile();
 }
 export function previewWorkflowRepair(repo: string, workflowId: string) {
 	return workflowEngineFactory(dashboardApplication).previewRepair(

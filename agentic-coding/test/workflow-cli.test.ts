@@ -82,6 +82,7 @@ describe("breaking workflow CLI surface", () => {
 			"config",
 			"agent-extension",
 			"wiki",
+			"sidebar",
 		]);
 		for (const removed of [
 			"planner",

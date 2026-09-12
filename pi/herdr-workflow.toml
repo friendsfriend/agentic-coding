@@ -20,3 +20,7 @@ capture_content = false
 [ui]
 theme = "catppuccin"
 selection_height = 10
+# Opt-in native Herdr sidebar cards for managed workflows and agents
+# (see docs/herdr-sidebar.md). User configuration only: a project overlay
+# cannot change this server-wide choice.
+herdr_sidebar = false

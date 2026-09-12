@@ -167,6 +167,10 @@ Agentic Coding keeps a centralized **Open Knowledge Format v0.2** bundle (see [t
 
 Use `agentic-coding workflow wiki list`, `search`, `show`, `write`, `verify`, and `log`. Search and read before writing, update an existing concept in place, and do not create active near-duplicates. Sequential planners and the consolidator can write drafts; archive verifies shipped knowledge. The wiki role may read repository evidence and write centralized wiki drafts only; it must not write source files. Reads expose status, trust tier, and staleness. Existing `repository/*` Agentic Coding drafts should move to the matching `projects/agentic-coding/*` identifier without verification; if a safe move is unavailable, retain the legacy record as explicitly deprecated and keep only the project-scoped replacement active. The wiki approval gate grants the human-reviewed tier only after developer approval; `[wiki] reviewer` configures the reviewer identity. OKF §3 recommends `git init` on the bundle for history. Changing pinned instructions or manifests may require `agentic-coding workflow repin` for in-flight workflows.
 
+## Herdr sidebar
+
+Optional native Herdr sidebar cards for managed workflows and agents: canonical project, workflow, type/phase, lifecycle role, live runtime status, an input-first Agents ordering, and a reversible opt-in. Disabled by default (`ui.herdr_sidebar`); the row configuration recipe, view-ownership semantics, observer lifetime, and rollback steps live in [`agentic-coding/docs/herdr-sidebar.md`](agentic-coding/docs/herdr-sidebar.md). The integration publishes display-only metadata through the shared Herdr boundary and never changes workflow stores, agent processes, native names, or topology.
+
 ## Development
 
 ```bash

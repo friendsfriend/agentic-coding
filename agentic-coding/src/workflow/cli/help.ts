@@ -3,7 +3,7 @@
 export function help(command?: string): void {
 	if (!command) {
 		console.log(
-			"Usage: agentic-coding workflow <command> [flags]\n\nCommands:\n  start            Start pinned workflow definition\n  status           Print observational workflow view\n  drain            Explicitly execute due workflow effects\n  action           Dispatch revision-bound engine action (including close-research)\n  handoff          Submit run-bound agent outcome\n  question         Ask the developer a bounded question\n  ask              Ask a completed peer agent a bounded question\n  answer           Answer a peer agent question (peer session only)\n  research-handoff Record structured handoff and start wiki drafting\n  repair           Repair to compatible step, retriggers phase\n  repin            Re-pin to current definition digest\n  migrate          Preview or apply a revision-bound semantic migration\n  projects         List configured projects\n  config           Print resolved configuration\n  agent-extension  Manage Pi agent extensions\n  wiki             Read/update OKF wiki; only the managed wiki or research-wiki role may write drafts; archive verifies",
+			"Usage: agentic-coding workflow <command> [flags]\n\nCommands:\n  start            Start pinned workflow definition\n  status           Print observational workflow view\n  drain            Explicitly execute due workflow effects\n  action           Dispatch revision-bound engine action (including close-research)\n  handoff          Submit run-bound agent outcome\n  question         Ask the developer a bounded question\n  ask              Ask a completed peer agent a bounded question\n  answer           Answer a peer agent question (peer session only)\n  research-handoff Record structured handoff and start wiki drafting\n  repair           Repair to compatible step, retriggers phase\n  repin            Re-pin to current definition digest\n  migrate          Preview or apply a revision-bound semantic migration\n  projects         List configured projects\n  config           Print resolved configuration\n  agent-extension  Manage Pi agent extensions\n  wiki             Read/update OKF wiki; only the managed wiki or research-wiki role may write drafts; archive verifies\n  sidebar          Clear this integration's owned Herdr sidebar metadata and custom view (--disable)",
 		);
 		return;
 	}
@@ -33,6 +33,8 @@ export function help(command?: string): void {
 		"agent-extension":
 			"agent-extension list|install SOURCE|install-local PATH [--profile NAME]",
 		wiki: "wiki list|search TERMS|show ID|write --path ID --type T --title T --description D|verify --path ID [--actor A]|log --entry TEXT [--path DIR]",
+		sidebar:
+			"sidebar --repo PATH --disable (clears only source agentic-coding tokens and the custom view; restore the saved Herdr row configuration manually)",
 	};
 	console.log(`Usage: agentic-coding workflow ${usage[command] ?? command}`);
 }

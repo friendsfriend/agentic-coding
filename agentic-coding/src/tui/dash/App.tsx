@@ -35,7 +35,9 @@ import {
 	disposeExecutionCoordinator,
 	onWorkflowExecutionError,
 	onWorkflowExecutionSettled,
+	reconcileSidebarPresentation,
 	requestWorkflowExecution,
+	startSidebarPresentation,
 } from "./engine";
 import {
 	herdrEventMatchesWorkspace,
@@ -972,8 +974,13 @@ export function App(props: {
 		// a short event backlog on connect; debounce so a burst is one reload.
 		const debounced = debounce(refresh, 200);
 		const dispose = subscribeHerdrEvents((event) => {
-			if (herdrEventMatchesWorkspace(event.data, workspace))
+			if (herdrEventMatchesWorkspace(event.data, workspace)) {
 				debounced.trigger();
+				// Runtime-only input changes (a blocked approval prompt) arrive as
+				// events without a workflow revision change, so reconcile the
+				// presentation from the live read too.
+				reconcileSidebarPresentation();
+			}
 		});
 		onCleanup(() => {
 			debounced.cancel();
@@ -998,12 +1005,17 @@ export function App(props: {
 					});
 		if (props.profile !== "test")
 			requestWorkflowExecution(props.repo, props.workflowId);
+		const stopSidebarPresentation =
+			props.profile === "test"
+				? undefined
+				: startSidebarPresentation(() => [props.repo]);
 		refresh();
 		onCleanup(() => {
 			refreshDisposed = true;
 			refreshController?.abort();
 			disposeExecutionError?.();
 			disposeExecutionSettled?.();
+			stopSidebarPresentation?.();
 			artifactGeneration++;
 			artifactController?.abort();
 			reviewFeatureDispose();

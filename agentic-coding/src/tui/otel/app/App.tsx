@@ -12,13 +12,17 @@ import {
 	onCleanup,
 	onMount,
 } from "solid-js";
-import { wikiWorkflowDataRoot } from "../../../workflow/runtime";
+import {
+	researchWorkflowTarget,
+	wikiWorkflowDataRoot,
+} from "../../../workflow/runtime";
 import type { WikiReviewComment } from "../../../workflow/wiki";
 import { copyToClipboard } from "../../clipboard";
 import { App as DashApp } from "../../dash/App";
 import {
 	disposeDashboardApplication,
 	disposeExecutionCoordinator,
+	startSidebarPresentation,
 	startWikiCommentWorkflowInProcess,
 } from "../../dash/engine";
 import { Home as DashHome } from "../../dash/Home";
@@ -158,6 +162,16 @@ export function App(props: {
 	// Last observation failure surfaced in the error modal; deduped so the 30s
 	// safety re-sync and directory events cannot reopen it for the same message.
 	let lastHomeError: string | undefined;
+	/** Stable repository source for the sidebar presentation owner: the same
+	 * closure identity across every home refresh, reading the current list
+	 * lazily, so the custom view is installed once per connection. */
+	const homeSidebarRepos = (): readonly string[] => [
+		...homeItems()
+			.map((item) => item.state.repository)
+			.filter(Boolean),
+		wikiWorkflowDataRoot(),
+		researchWorkflowTarget(),
+	];
 	const loadHome = () => {
 		if (homeDisposed) return;
 		if (homeLoadRunning) {
@@ -395,6 +409,11 @@ export function App(props: {
 			}
 		};
 		const stops = props.repos.map((r) => db.watchWorkspaces(r, onNew));
+		// The long-lived presentation owner: one stable registration per shell
+		// mount so sidebar cards are rebuilt from current views plus live Herdr
+		// reads, never re-registered (or its custom view reasserted) on refresh
+		// (improve-herdr-workflow-sidebar).
+		const stopSidebarPresentation = startSidebarPresentation(homeSidebarRepos);
 		// The initial history load and live OTLP receiver pushes mutate the store
 		// directly (shell-owned), so refresh the mounted views on every change.
 		const unsubscribeTraceStore = traceStore.onChange(refresh);
@@ -402,6 +421,7 @@ export function App(props: {
 		// remounting this view must not close it. Only stop this view's watchers.
 		onCleanup(() => {
 			clearInterval(dailyPrune);
+			stopSidebarPresentation();
 			unsubscribeTraceStore();
 			stops.forEach((stop) => {
 				stop();

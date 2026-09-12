@@ -426,6 +426,12 @@ export interface WorkflowActionView {
 	label: string;
 	input?: { schemaId: string; schemaVersion: number };
 	confirmation: "none" | "confirm" | "reason";
+	/** Presentation-only hint supplied by the registered action owner: this
+	 * action is a blocking human decision gate, so the workflow owes developer
+	 * input until it is answered. It never affects authorization, availability,
+	 * graph transitions, or execution policy — optional terminal/research
+	 * actions (close, create-pr, follow-ups) leave it unset. */
+	requiresInput?: boolean;
 }
 export interface WorkflowView {
 	workflowId: string;

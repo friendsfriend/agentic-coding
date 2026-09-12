@@ -228,7 +228,13 @@ export interface WorkflowConfig {
 	};
 	projects: { root: string; max_depth: number };
 	telemetry: { capture_content: boolean };
-	ui: { theme: string; selection_height: number };
+	ui: {
+		theme: string;
+		selection_height: number;
+		/** Trusted user-only opt-in for the native Herdr sidebar integration
+		 * (improve-herdr-workflow-sidebar); project overlays cannot change it. */
+		herdr_sidebar?: boolean;
+	};
 	wiki?: { root?: string; reviewer?: string };
 }
 
@@ -244,7 +250,7 @@ export const DEFAULT_CONFIG: WorkflowConfig = {
 	},
 	projects: { root: "~/development", max_depth: 3 },
 	telemetry: { capture_content: true },
-	ui: { theme: "catppuccin", selection_height: 10 },
+	ui: { theme: "catppuccin", selection_height: 10, herdr_sidebar: false },
 	wiki: { root: "~/.config/agentic-coding/wiki" },
 };
 
@@ -379,6 +385,33 @@ export function loadConfigWithProvenance(
 
 export function loadConfig(options?: ConfigOptions): WorkflowConfig {
 	return loadConfigWithProvenance(options).config;
+}
+
+/** The trusted user-owned configuration files, in load precedence order
+ * (canonical user config, then the legacy path). Project overlays and
+ * `HERDR_WORKFLOW_CONFIG` are deliberately excluded: the sidebar preference
+ * is server-wide in effect, so a repository must not be able to flip it. */
+export function userConfigPaths(home = os.homedir()): string[] {
+	return [
+		path.join(home, ".config", "agentic-coding", "config.toml"),
+		path.join(home, ".pi", "agent", "herdr-workflow.toml"),
+	];
+}
+
+/** `ui.herdr_sidebar`, default false (improve-herdr-workflow-sidebar). */
+export function herdrSidebarEnabled(home = os.homedir()): boolean {
+	for (const candidate of userConfigPaths(home)) {
+		try {
+			if (!fs.existsSync(candidate)) continue;
+			const parsed = Bun.TOML.parse(fs.readFileSync(candidate, "utf8")) as {
+				ui?: { herdr_sidebar?: unknown };
+			};
+			return parsed.ui?.herdr_sidebar === true;
+		} catch {
+			return false;
+		}
+	}
+	return false;
 }
 
 /** Resolve the config file that dashboard edits write back to (see

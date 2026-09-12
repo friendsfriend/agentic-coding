@@ -20,6 +20,7 @@ export const SUBCOMMANDS: readonly string[] = [
 	"config",
 	"agent-extension",
 	"wiki",
+	"sidebar",
 ] as const;
 export const REQUIRED_FLAGS: Record<string, string[]> = {
 	start: ["workflow-id"],
@@ -34,6 +35,7 @@ export const REQUIRED_FLAGS: Record<string, string[]> = {
 	ask: ["role", "description"],
 	answer: ["question-id", "answer", "nonce"],
 	"research-handoff": ["subject", "directives"],
+	sidebar: ["repo"],
 };
 export const AGENT_EXTENSION_SUBCOMMANDS = [
 	"list",
@@ -114,6 +116,7 @@ const FLAG_SCHEMA: Record<
 		booleans: ["confirm"],
 		positionals: [0, 0],
 	},
+	sidebar: { values: ["repo"], booleans: ["disable"], positionals: [0, 0] },
 	projects: { values: [], positionals: [0, 0] },
 	config: { values: [], positionals: [0, 0] },
 	"agent-extension": { values: ["profile"], positionals: [1, 2] },

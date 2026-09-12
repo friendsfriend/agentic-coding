@@ -57,6 +57,7 @@ const DOMAIN_FILES = [
 	"workflow/registry.ts",
 	"workflow/embedded.generated.ts",
 	"workflow/definitions.ts", // re-export barrel over definitions/*
+	"workflow/sidebar.ts", // pure Herdr sidebar projection: views + supplied observations -> display tokens and input ranks
 ];
 const RUNTIME_FILES = [
 	"workflow/effects.ts",
@@ -75,6 +76,8 @@ const RUNTIME_FILES = [
 	"workflow/credentials.ts",
 	"workflow/profiles.ts",
 	"workflow/agent-extensions.ts",
+	"workflow/sidebar-sync.ts", // bounded Herdr metadata/view publication boundary
+	"workflow/sidebar-observer.ts", // application-owned presentation lifecycle
 ];
 const APPLICATION_FILES = [
 	"workflow/startup.ts",

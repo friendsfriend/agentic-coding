@@ -15,6 +15,7 @@ export const workspaceRef = Schema.Struct({
 	label: Schema.optionalWith(Schema.String, { exact: true }),
 	name: Schema.optionalWith(Schema.String, { exact: true }),
 	status: Schema.optionalWith(Schema.String, { exact: true }),
+	agent_status: Schema.optionalWith(Schema.String, { exact: true }),
 	closed_at: Schema.optionalWith(Schema.String, { exact: true }),
 });
 
@@ -48,6 +49,24 @@ export const tabRef = Schema.Struct({
 export const paneRef = Schema.Struct({
 	pane_id: Schema.optionalWith(Schema.String, { exact: true }),
 	tab_id: Schema.optionalWith(Schema.String, { exact: true }),
+	workspace_id: Schema.optionalWith(Schema.String, { exact: true }),
+	/** Display-only live fields read by the sidebar projection. */
+	agent: Schema.optionalWith(Schema.String, { exact: true }),
+	agent_status: Schema.optionalWith(Schema.String, { exact: true }),
+	terminal_title_stripped: Schema.optionalWith(Schema.String, { exact: true }),
+	tab_label: Schema.optionalWith(Schema.String, { exact: true }),
+});
+
+export const agentRef = Schema.Struct({
+	pane_id: Schema.optionalWith(Schema.String, { exact: true }),
+	tab_id: Schema.optionalWith(Schema.String, { exact: true }),
+	workspace_id: Schema.optionalWith(Schema.String, { exact: true }),
+	agent: Schema.optionalWith(Schema.String, { exact: true }),
+	agent_status: Schema.optionalWith(Schema.String, { exact: true }),
+});
+
+export const agentListResult = Schema.Struct({
+	agents: Schema.optionalWith(Schema.Array(agentRef), { exact: true }),
 });
 
 export const tabListResult = Schema.Struct({

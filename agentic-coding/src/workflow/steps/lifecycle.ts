@@ -22,18 +22,25 @@ const CLOSE_ONLY_DEFINITIONS = [
 export const lifecycleBehaviors: Readonly<Record<string, StepBehavior>> = {
 	"core.plan-approval": {
 		developerActions: () => [
-			{ id: "approve-plan", label: "Approve plan", confirmation: "confirm" },
+			{
+				id: "approve-plan",
+				label: "Approve plan",
+				confirmation: "confirm",
+				requiresInput: true,
+			},
 			{
 				id: "review-comments",
 				label: "Request plan changes",
 				confirmation: "confirm",
 				input: REVIEW_COMMENTS_INPUT,
+				requiresInput: true,
 			},
 			{
 				id: "reject-plan",
 				label: "Reject plan",
 				confirmation: "reason",
 				input: { schemaId: "core.plan-rejection", schemaVersion: 1 },
+				requiresInput: true,
 			},
 		],
 	},
@@ -43,23 +50,31 @@ export const lifecycleBehaviors: Readonly<Record<string, StepBehavior>> = {
 				id: "approve-review",
 				label: "Approve change",
 				confirmation: "confirm",
+				requiresInput: true,
 			},
 			{
 				id: "review-comments",
 				label: "Request changes",
 				confirmation: "confirm",
 				input: REVIEW_COMMENTS_INPUT,
+				requiresInput: true,
 			},
 		],
 	},
 	"core.wiki-approval": {
 		developerActions: () => [
-			{ id: "approve-wiki", label: "Approve wiki", confirmation: "confirm" },
+			{
+				id: "approve-wiki",
+				label: "Approve wiki",
+				confirmation: "confirm",
+				requiresInput: true,
+			},
 			{
 				id: "review-comments",
 				label: "Request wiki changes",
 				confirmation: "confirm",
 				input: REVIEW_COMMENTS_INPUT,
+				requiresInput: true,
 			},
 		],
 		producesWikiVerificationContext: true,
