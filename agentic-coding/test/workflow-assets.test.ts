@@ -41,6 +41,13 @@ test("embedded workflow assets stay outside skill/plugin discovery", () => {
 	);
 });
 
+test("verification instructions require fresh findings", () => {
+	const verification = AGENT_DEFINITIONS["instructions/verification.md"];
+	expect(verification).toContain("Every verification run must inspect");
+	expect(verification).toContain("Treat prior findings as leads, not proof");
+	expect(verification).toContain("omit it when fixed");
+});
+
 test("embedded bridges carry the enriched payload hooks and dropped noise", () => {
 	const pi = AGENT_DEFINITIONS["bridges/pi-telemetry.ts"];
 	for (const hook of [
