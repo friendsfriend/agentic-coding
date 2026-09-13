@@ -73,7 +73,9 @@ export interface UnmanagedPane {
 	workspaceId: string;
 	label: string;
 	status: string;
-	/** Native tab label, shown on the second row when Herdr reports one. */
+	/** Native tab label. The fallback card always renders its second row;
+	 * `tabLabel` supplies it when Herdr reports one, otherwise the projection
+	 * falls back to `label`, so the row never depends on the live title. */
 	tabLabel?: string;
 }
 
@@ -102,7 +104,9 @@ export interface SidebarWorkspaceCard {
 	tokens: Record<string, string>;
 }
 
-/** A pane/workspace that previously carried managed tokens but no longer does. */
+/** A pane/workspace whose owned tokens must be cleared: either it dropped out
+ * of the managed publication entirely, or its card no longer sets a subset of
+ * the managed tokens (for example after falling back to a native card). */
 export interface SidebarClear {
 	targetId: string;
 	tokens: readonly string[];
@@ -111,7 +115,10 @@ export interface SidebarClear {
 export interface SidebarPublication {
 	panes: SidebarPaneCard[];
 	workspaces: SidebarWorkspaceCard[];
-	/** Managed targets that dropped out of the managed set this refresh. */
+	/** Owned tokens to clear this refresh. A target that dropped out of the
+	 * publication clears all owned tokens; a target that is still published
+	 * (for example an unmanaged native fallback) clears only the managed tokens
+	 * its current card no longer sets, so its live rows survive. */
 	clearedPanes: SidebarClear[];
 	clearedWorkspaces: SidebarClear[];
 }
@@ -129,7 +136,9 @@ export interface SidebarProjectionInput {
 	liveWorkspaceIds?: readonly string[];
 	/** Repository-independent target labels; absent means none. */
 	standalone?: readonly SidebarTargetClassification[];
-	/** Ids that carried managed tokens on the previous publication. */
+	/** Ids published by the previous refresh (managed cards and unmanaged
+	 * native fallbacks alike), so this refresh can clear the owned tokens it
+	 * no longer sets. */
 	managedPaneIds?: readonly string[];
 	managedWorkspaceIds?: readonly string[];
 	/** Panes that already owed runtime input before this read; a failed read
@@ -343,6 +352,31 @@ function workspaceTokens(input: {
 	};
 }
 
+/** Owned tokens to clear for targets published by an earlier refresh: every
+ * owned token for a target that dropped out of the publication, and only the
+ * tokens its current card no longer sets for one that is still published. */
+function stalePublishClears(
+	previousIds: readonly string[],
+	publishedTokens: ReadonlyMap<string, Record<string, string>>,
+	allTokens: readonly string[],
+	liveIds: ReadonlySet<string> | undefined,
+): SidebarClear[] {
+	const clears: SidebarClear[] = [];
+	const seen = new Set<string>();
+	for (const targetId of previousIds) {
+		if (seen.has(targetId)) continue;
+		seen.add(targetId);
+		if (!(liveIds?.has(targetId) ?? true)) continue;
+		const current = publishedTokens.get(targetId);
+		const tokens =
+			current === undefined
+				? [...allTokens]
+				: allTokens.filter((token) => !(token in current));
+		if (tokens.length > 0) clears.push({ targetId, tokens });
+	}
+	return clears;
+}
+
 interface WorkspaceCandidate {
 	workspaceId: string;
 	owed: boolean;
@@ -466,13 +500,12 @@ export function projectSidebar(
 			paneId: pane.paneId,
 			tokens: {
 				[t.project]: sidebarText(pane.label || pane.paneId),
-				...(pane.tabLabel
-					? {
-							[t.workflow]: sidebarText(
-								`${SIDEBAR_TREE_WORKFLOW} ${pane.tabLabel}`,
-							),
-						}
-					: {}),
+				// Always carry the workflow row (native tab label, else the pane
+				// label) so the fallback token set and card height never depend on
+				// whether the live terminal title currently equals the tab name.
+				[t.workflow]: sidebarText(
+					`${SIDEBAR_TREE_WORKFLOW} ${pane.tabLabel || pane.label || pane.paneId}`,
+				),
 				[t.status]: sidebarText(
 					`${SIDEBAR_TREE_LAST} ${pane.status || "unknown"}`,
 				),
@@ -487,35 +520,37 @@ export function projectSidebar(
 				[SIDEBAR_WORKSPACE_TOKENS.project]: sidebarText(
 					workspace.label || workspace.workspaceId,
 				),
-				// No invented workflow identity: the last row repeats the space's own
-				// live state so configured rows are not blank.
-				...(workspace.status
-					? {
-							[SIDEBAR_WORKSPACE_TOKENS.phase]: sidebarText(
-								`${SIDEBAR_TREE_LAST} ${workspace.status}`,
-							),
-						}
-					: {}),
+				// No invented workflow identity: the last row always carries the
+				// space's own live state, or an explicit unknown, so the fallback
+				// token set never depends on whether Herdr reports a status.
+				[SIDEBAR_WORKSPACE_TOKENS.phase]: sidebarText(
+					`${SIDEBAR_TREE_LAST} ${workspace.status || "unknown"}`,
+				),
 			},
 		});
 	}
 
-	const clearedPanes = (input.managedPaneIds ?? [])
-		.filter(
-			(paneId) =>
-				!managedPaneIds.has(paneId) && (livePaneIds?.has(paneId) ?? true),
-		)
-		.map((paneId) => ({ targetId: paneId, tokens: SIDEBAR_ALL_PANE_TOKENS }));
-	const clearedWorkspaces = (input.managedWorkspaceIds ?? [])
-		.filter(
-			(workspaceId) =>
-				!managedWorkspaceIds.has(workspaceId) &&
-				(liveWorkspaceIds?.has(workspaceId) ?? true),
-		)
-		.map((workspaceId) => ({
-			targetId: workspaceId,
-			tokens: SIDEBAR_ALL_WORKSPACE_TOKENS,
-		}));
+	// A target that is still published must keep the tokens this refresh set:
+	// only clear the owned tokens its current card does not carry. Clearing all
+	// of them would erase a live managed card and the native fallback rows of an
+	// unmanaged entry, which is what made those entries intermittently blank.
+	const publishedPaneTokens = new Map<string, Record<string, string>>();
+	for (const card of panes) publishedPaneTokens.set(card.paneId, card.tokens);
+	const publishedWorkspaceTokens = new Map<string, Record<string, string>>();
+	for (const card of workspaces)
+		publishedWorkspaceTokens.set(card.workspaceId, card.tokens);
+	const clearedPanes = stalePublishClears(
+		input.managedPaneIds ?? [],
+		publishedPaneTokens,
+		SIDEBAR_ALL_PANE_TOKENS,
+		livePaneIds,
+	);
+	const clearedWorkspaces = stalePublishClears(
+		input.managedWorkspaceIds ?? [],
+		publishedWorkspaceTokens,
+		SIDEBAR_ALL_WORKSPACE_TOKENS,
+		liveWorkspaceIds,
+	);
 
 	return { panes, workspaces, clearedPanes, clearedWorkspaces };
 }

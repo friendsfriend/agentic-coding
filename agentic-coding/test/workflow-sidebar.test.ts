@@ -482,6 +482,107 @@ describe("sidebar projection", () => {
 		});
 	});
 
+	test("a still-published fallback keeps its native rows and clears only stale managed tokens", () => {
+		const publication = projectSidebar({
+			views: [],
+			observations: [],
+			unmanagedPanes: [
+				{
+					paneId: "w9:p1",
+					workspaceId: "w9",
+					label: "zsh",
+					status: "working",
+				},
+			],
+			unmanagedWorkspaces: [{ workspaceId: "w9", label: "scratch-space" }],
+			livePaneIds: ["w9:p1"],
+			liveWorkspaceIds: ["w9"],
+			managedPaneIds: ["w9:p1"],
+			managedWorkspaceIds: ["w9"],
+		});
+		// The fallback rows survive a refresh that still publishes the target. The
+		// workflow row falls back to the pane label when no distinct tab name is
+		// supplied, so the token set never depends on the live title.
+		expect(publication.panes).toEqual([
+			{
+				paneId: "w9:p1",
+				tokens: {
+					[SIDEBAR_PANE_TOKENS.project]: "zsh",
+					[SIDEBAR_PANE_TOKENS.workflow]: "├─ zsh",
+					[SIDEBAR_PANE_TOKENS.status]: "└─ working",
+				},
+			},
+		]);
+		// Only the managed-only tokens the fallback no longer sets are cleared.
+		expect(publication.clearedPanes).toEqual([
+			{
+				targetId: "w9:p1",
+				tokens: ["ac_role_line", "ac_input_rank"],
+			},
+		]);
+		expect(publication.clearedWorkspaces).toEqual([
+			{
+				targetId: "w9",
+				tokens: ["ac_workflow_line", "ac_type_line"],
+			},
+		]);
+	});
+
+	test("an unmanaged fallback token set never depends on the live title", () => {
+		const withTabName = projectSidebar({
+			views: [],
+			observations: [],
+			unmanagedPanes: [
+				{
+					paneId: "w9:p1",
+					workspaceId: "w9",
+					label: "vim",
+					status: "working",
+					tabLabel: "scratch",
+				},
+			],
+			unmanagedWorkspaces: [{ workspaceId: "w9", label: "scratch-space" }],
+		});
+		// The live terminal title now equals the tab name, so readSidebarObservations
+		// would omit the tab label; the fallback rows must stay identical.
+		const titleEqualsTab = projectSidebar({
+			views: [],
+			observations: [],
+			unmanagedPanes: [
+				{
+					paneId: "w9:p1",
+					workspaceId: "w9",
+					label: "scratch",
+					status: "working",
+				},
+			],
+			unmanagedWorkspaces: [{ workspaceId: "w9", label: "scratch-space" }],
+		});
+		expect(Object.keys(withTabName.panes[0]?.tokens ?? {}).sort()).toEqual(
+			Object.keys(titleEqualsTab.panes[0]?.tokens ?? {}).sort(),
+		);
+		expect(titleEqualsTab.panes[0]?.tokens[SIDEBAR_PANE_TOKENS.workflow]).toBe(
+			"├─ scratch",
+		);
+		expect(
+			titleEqualsTab.workspaces[0]?.tokens[SIDEBAR_WORKSPACE_TOKENS.phase],
+		).toBe("└─ unknown");
+	});
+
+	test("a fully managed card clears nothing on the next refresh", () => {
+		const publication = projectSidebar({
+			views: [view({ workspace: "w1" })],
+			observations: [{ paneId: "w1:p1", status: "idle", fresh: true }],
+			unmanagedPanes: [],
+			livePaneIds: ["w1:p1"],
+			liveWorkspaceIds: ["w1"],
+			managedPaneIds: ["w1:p1"],
+			managedWorkspaceIds: ["w1"],
+		});
+		expect(publication.clearedPanes).toEqual([]);
+		expect(publication.clearedWorkspaces).toEqual([]);
+	});
+
 	test("clears obsolete managed tokens when an association disappears", () => {
 		const publication = projectSidebar({
 			views: [view({ workspace: "w1" })],
