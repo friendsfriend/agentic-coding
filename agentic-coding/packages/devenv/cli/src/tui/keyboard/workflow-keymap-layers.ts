@@ -250,6 +250,7 @@ export function registerWorkflowKeymapLayers(
 		keymap.registerLayer({
 			name: title,
 			priority: WORKFLOW_PRIORITY,
+			...(deps.ctx.embedded ? { shellFeature: "environments" } : {}),
 			shutdown: false,
 			activeModal: "none",
 			appViewMode: viewMode,
@@ -384,6 +385,7 @@ export function registerWorkflowKeymapLayers(
 			keymap.registerLayer({
 				name: title,
 				priority: WORKFLOW_PRIORITY + 20,
+				...(deps.ctx.embedded ? { shellFeature: "environments" } : {}),
 				shutdown: false,
 				activeModal: "none",
 				appViewMode: viewMode,
@@ -485,6 +487,7 @@ export function registerWorkflowKeymapLayers(
 		keymap.registerLayer({
 			name: "Worktree manager",
 			priority: WORKTREE_PRIORITY,
+			...(deps.ctx.embedded ? { shellFeature: "environments" } : {}),
 			shutdown: false,
 			activeModal: "none",
 			worktreeManager: true,

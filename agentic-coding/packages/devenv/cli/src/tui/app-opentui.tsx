@@ -89,16 +89,34 @@ import {
 	ModalOverlays,
 } from "./views";
 
-interface TUIAppProps {
+export interface TUIAppProps {
 	serverUrl: string;
 	managedServer?: import("../server-lifecycle").ManagedServer;
+	/** Render only the environment feature content (no devenv header/footer and
+	 * no fixed terminal dimensions) so the unified shell owns the chrome and the
+	 * single renderer. The shell is responsible for exit guards and shutdown. */
+	embedded?: boolean;
+	/** Embedded mode only: publish the environment's live command registrations
+	 * so the shell footer/help are projections of the real keymap metadata rather
+	 * than a hand-written summary (compose-unified-feature-shell task 3.6). */
+	onKeybindCatalog?: (sections: EnvironmentKeybindSections) => void;
+	/** Shell-active predicate. Inactive embedded instances retain view state but
+	 * must not overwrite shared keymap runtime data. */
+	active?: () => boolean;
+	/** Projects the local overlay state into the shell ModalHost. */
+	onModalChange?: (open: boolean) => void;
 }
+
+type EnvironmentKeybindSections = Array<{
+	title: string;
+	keybinds: Array<{ key: string; action: string }>;
+}>;
 
 interface StartTUIOptions {
 	managedServer?: import("../server-lifecycle").ManagedServer;
 }
 
-function TUIApp(props: TUIAppProps) {
+export function TUIApp(props: TUIAppProps) {
 	const dimensions = useTerminalDimensions();
 	const renderer = useRenderer();
 
@@ -201,9 +219,10 @@ function TUIApp(props: TUIAppProps) {
 	};
 
 	// --- Effects ---
-	setupLogEffects(logStore, client);
+	setupLogEffects(logStore, client, props.active);
 
 	createEffect(() => {
+		if (props.active && !props.active()) return;
 		if (!uiStore.runningTextEnabled()) return;
 		const runningTextInterval = setInterval(() => {
 			uiStore.setRunningTextOffset((prev) => prev + 1);
@@ -214,7 +233,31 @@ function TUIApp(props: TUIAppProps) {
 	/* selectedLine removed — no cursor line / visual mode */
 
 	// --- Initialization ---
-	onMount(() => {
+	let initialized = false;
+	let initializationInFlight = false;
+	let initController: AbortController | undefined;
+	let removeInitExitListener: (() => void) | undefined;
+	// Owner cleanup runs only when TUIApp is destroyed, not when active flips.
+	// A completed bootstrap/SSE controller therefore survives hide/show.
+	onCleanup(() => {
+		removeInitExitListener?.();
+		initController?.abort();
+	});
+	createEffect(() => {
+		// Keep the mounted feature cheap until the user first visits it. Abort an
+		// in-flight first visit if the shell hides it before bootstrap completes;
+		// once bootstrap succeeds, retain its controller/SSE subscription across
+		// later hide/show transitions.
+		if (props.active && !props.active()) return;
+		if (initialized || initializationInFlight) return;
+		initializationInFlight = true;
+		const controller = new AbortController();
+		initController = controller;
+		const exitSignal = getExitSignal();
+		const abortFromExit = () => controller.abort();
+		exitSignal.addEventListener("abort", abortFromExit, { once: true });
+		removeInitExitListener = () =>
+			exitSignal.removeEventListener("abort", abortFromExit);
 		void initializeApp({
 			client,
 			appStore,
@@ -222,8 +265,20 @@ function TUIApp(props: TUIAppProps) {
 			showError,
 			serverUrl: props.serverUrl,
 			refreshProviders: providerActions.refreshProviders,
-			abortSignal: getExitSignal(),
-		});
+			abortSignal: controller.signal,
+		})
+			.then(
+				() => {
+					if (initController === controller && !controller.signal.aborted)
+						initialized = true;
+				},
+				() => {
+					if (initController === controller) initialized = false;
+				},
+			)
+			.finally(() => {
+				if (initController === controller) initializationInFlight = false;
+			});
 	});
 
 	const shutdownDelay = (ms: number) =>
@@ -265,6 +320,10 @@ function TUIApp(props: TUIAppProps) {
 		await runWithTimeout(message, fn, timeoutMs);
 	};
 	onMount(() => {
+		// Embedded in the unified shell: the shell owns exit guards and process
+		// shutdown, so the imported environment app must not register competing
+		// handlers or stop a server it does not own.
+		if (props.embedded) return;
 		const unregisterExitGuard = registerExitGuard(() => {
 			const activeRuns = actionRunStore
 				.runs()
@@ -406,15 +465,27 @@ function TUIApp(props: TUIAppProps) {
 		launchPi,
 		getSelectableRows,
 		showError,
+		embedded: props.embedded,
+		active: props.active,
 	};
 
 	const keymap = useKeymap();
 	helpActions.setKeymap(keymap);
 	onCleanup(() => helpActions.setKeymap(undefined));
 	const [keymapVersion, setKeymapVersion] = createSignal(0);
-	syncKeymapRuntimeState(keymap, kbStores, () =>
-		setKeymapVersion((version) => version + 1),
+	syncKeymapRuntimeState(
+		keymap,
+		kbStores,
+		() => setKeymapVersion((version) => version + 1),
+		props.embedded ? props.active : undefined,
 	);
+	createEffect(() => {
+		if (!props.embedded || !props.onModalChange) return;
+		keymapVersion();
+		const active = props.active?.() ?? true;
+		const modal = String(keymap.getData?.("modal.active") ?? "none");
+		props.onModalChange(active && modal !== "none");
+	});
 	const footerKeybinds = createMemo(() => {
 		keymapVersion();
 		// Keymap state is external to Solid. Read panel signals here so StatusBar
@@ -429,6 +500,23 @@ function TUIApp(props: TUIAppProps) {
 		changeRequestStore.crDetailPanelIndex();
 		return helpActions.getKeybinds();
 	});
+	if (props.embedded && props.onKeybindCatalog) {
+		// Project the environment's live command registrations into the shell
+		// catalog so the shell footer and `?` help advertise real environment
+		// commands (task 3.6).
+		createEffect(() => {
+			const binds = footerKeybinds();
+			props.onKeybindCatalog?.([
+				{
+					title: "Environment",
+					keybinds: binds.map((bind) => ({
+						key: bind.key,
+						action: bind.action,
+					})),
+				},
+			]);
+		});
+	}
 	onMount(() => {
 		const disposeGlobalLayers = registerGlobalKeymapLayers(keymap, {
 			stores: kbStores,
@@ -498,6 +586,33 @@ function TUIApp(props: TUIAppProps) {
 		helpActions,
 		getSelectedApp,
 	};
+
+	if (props.embedded) {
+		return (
+			<box
+				width="100%"
+				height="100%"
+				flexDirection="column"
+				onMouseUp={utilActions.handleCopySelection}
+			>
+				<ContentRouter
+					stores={viewStores}
+					actions={viewActions}
+					columns={columns}
+					scriptColumns={scriptColumns}
+					dimensions={dimensions()}
+					runningTextEnabled={uiStore.runningTextEnabled()}
+					runningTextOffset={uiStore.runningTextOffset()}
+					getTabBorderColor={(tab) => getTabBorderColor(tab, appStore)}
+				/>
+				<ModalOverlays
+					stores={viewStores}
+					actions={viewActions}
+					dimensions={dimensions()}
+				/>
+			</box>
+		);
+	}
 
 	return (
 		<box

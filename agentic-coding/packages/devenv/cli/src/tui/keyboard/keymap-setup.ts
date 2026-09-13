@@ -81,6 +81,9 @@ export function setupDevenvKeymap(keymap: DevenvKeymap): () => void {
 				];
 			}),
 			keymap.registerLayerFields({
+				name(value, ctx) {
+					ctx.attr("name", normalizeText("name", value));
+				},
 				appViewMode(value, ctx) {
 					ctx.require("app.viewMode", normalizeText("appViewMode", value));
 				},

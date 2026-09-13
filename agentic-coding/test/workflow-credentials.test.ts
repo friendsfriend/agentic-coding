@@ -305,6 +305,9 @@ test("masking heuristic masks passphrases and passwords but not usernames", () =
 	).toBe(true);
 	expect(maskingFor("Password:")).toBe(true);
 	expect(maskingFor("Username for 'https://github.com':")).toBe(false);
+	expect(maskingFor("Enter passphrase for key '/keys/username-prod':")).toBe(
+		true,
+	);
 	expect(maskingFor("Enter PIN for 'yubikey':")).toBe(true);
 });
 

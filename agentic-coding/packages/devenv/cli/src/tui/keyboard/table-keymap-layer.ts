@@ -125,6 +125,7 @@ export function registerTableKeymapLayer(
 		keymap.registerLayer({
 			name: "Table/List",
 			priority: TABLE_PRIORITY,
+			...(deps.ctx.embedded ? { shellFeature: "environments" } : {}),
 			shutdown: false,
 			activeModal: "none",
 			appViewMode: "table",
@@ -246,6 +247,7 @@ export function registerTableKeymapLayer(
 			return keymap.registerLayer({
 				name: `Kubernetes Panel ${index + 1}`,
 				priority: KUBERNETES_PRIORITY + 20,
+				...(deps.ctx.embedded ? { shellFeature: "environments" } : {}),
 				shutdown: false,
 				activeModal: "none",
 				appViewMode: "table",
@@ -293,6 +295,7 @@ export function registerTableKeymapLayer(
 		keymap.registerLayer({
 			name: "Kubernetes Tab",
 			priority: KUBERNETES_PRIORITY,
+			...(deps.ctx.embedded ? { shellFeature: "environments" } : {}),
 			shutdown: false,
 			activeModal: "none",
 			appViewMode: "table",

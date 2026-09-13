@@ -6,6 +6,11 @@ import type { ActionRunStore } from "../stores/action-run-store";
 import type { AgentStore } from "../stores/agent-store";
 import type { AppStore } from "../stores/app-store";
 import type { UiStore } from "../stores/ui-store";
+import {
+	runForeground,
+	spawnAndWait,
+	withForegroundTerminal,
+} from "./foreground";
 import { formatDuration } from "./task-status-utils";
 
 const isTmuxSession = (): boolean => {
@@ -226,18 +231,11 @@ export function createUtilActions(
 				);
 				return;
 			}
-			const { spawnSync } =
-				require("node:child_process") as typeof import("child_process");
-			renderer.suspend();
-			try {
-				spawnSync(
-					envEditor,
-					lineNumber ? [`+${lineNumber}`, resolvedPath] : [resolvedPath],
-					{ stdio: "inherit", shell: false },
-				);
-			} finally {
-				renderer.resume();
-			}
+			void runForeground(
+				envEditor,
+				lineNumber ? [`+${lineNumber}`, resolvedPath] : [resolvedPath],
+				{ renderer },
+			);
 			return;
 		}
 		let editorCmd: string;
@@ -280,18 +278,10 @@ export function createUtilActions(
 			);
 			return;
 		}
-		const { spawnSync } =
-			require("node:child_process") as typeof import("child_process");
-		renderer.suspend();
-		try {
-			spawnSync("lazygit", [], {
-				stdio: "inherit",
-				shell: false,
-				cwd: app.localDirectoryPath,
-			});
-		} finally {
-			renderer.resume();
-		}
+		void runForeground("lazygit", [], {
+			renderer,
+			cwd: app.localDirectoryPath,
+		});
 	};
 
 	const launchLazygitBranchLog = (_branchName: string) => {
@@ -306,18 +296,10 @@ export function createUtilActions(
 			);
 			return;
 		}
-		const { spawnSync } =
-			require("node:child_process") as typeof import("child_process");
-		renderer.suspend();
-		try {
-			spawnSync("lazygit", ["log"], {
-				stdio: "inherit",
-				shell: false,
-				cwd: app.localDirectoryPath,
-			});
-		} finally {
-			renderer.resume();
-		}
+		void runForeground("lazygit", ["log"], {
+			renderer,
+			cwd: app.localDirectoryPath,
+		});
 	};
 
 	const launchK9s = () => {
@@ -328,14 +310,7 @@ export function createUtilActions(
 			spawnInTmuxWindow("k9s - kind-devenv", "k9s", args, cwd);
 			return;
 		}
-		const { spawnSync } =
-			require("node:child_process") as typeof import("child_process");
-		renderer.suspend();
-		try {
-			spawnSync("k9s", args, { stdio: "inherit", shell: false, cwd });
-		} finally {
-			renderer.resume();
-		}
+		void runForeground("k9s", args, { renderer, cwd });
 	};
 
 	const launchLazygitStatus = () => {
@@ -350,24 +325,16 @@ export function createUtilActions(
 			);
 			return;
 		}
-		const { spawnSync } =
-			require("node:child_process") as typeof import("child_process");
-		renderer.suspend();
-		try {
-			spawnSync("lazygit", ["status"], {
-				stdio: "inherit",
-				shell: false,
-				cwd: app.localDirectoryPath,
-			});
-		} finally {
-			renderer.resume();
-		}
+		void runForeground("lazygit", ["status"], {
+			renderer,
+			cwd: app.localDirectoryPath,
+		});
 	};
 
-	const runScriptInForeground = (
+	const runScriptInForeground = async (
 		app: TableRow | undefined,
 		taskArgs: string[] = [],
-	): boolean => {
+	): Promise<boolean> => {
 		if (app?.resourceType !== "script-file" || !app.scriptPath) {
 			getLogger().write(
 				"WARN",
@@ -391,38 +358,29 @@ export function createUtilActions(
 			return result.status === 0;
 		};
 
-		const pauseUntilKeypress = () => {
+		const pauseUntilKeypress = async () => {
 			try {
 				if (process.platform === "win32") {
-					spawnSync(
-						"powershell",
-						[
-							"-NoProfile",
-							"-Command",
-							'Write-Host ""; Write-Host -NoNewline "Press any key to continue..."; $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown"); Write-Host ""',
-						],
-						{ stdio: "inherit", shell: false },
-					);
+					await spawnAndWait("powershell", [
+						"-NoProfile",
+						"-Command",
+						'Write-Host ""; Write-Host -NoNewline "Press any key to continue..."; $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown"); Write-Host ""',
+					]);
 					return;
 				}
 
 				if (runWhich("bash")) {
-					spawnSync(
-						"bash",
-						[
-							"-lc",
-							'echo; read -r -n 1 -s -p "Press any key to continue..." _; echo',
-						],
-						{ stdio: "inherit", shell: false },
-					);
+					await spawnAndWait("bash", [
+						"-lc",
+						'echo; read -r -n 1 -s -p "Press any key to continue..." _; echo',
+					]);
 					return;
 				}
 
-				spawnSync(
-					"sh",
-					["-c", 'echo; printf "Press Enter to continue..."; read _; echo'],
-					{ stdio: "inherit", shell: false },
-				);
+				await spawnAndWait("sh", [
+					"-c",
+					'echo; printf "Press Enter to continue..."; read _; echo',
+				]);
 			} catch {
 				// ignore prompt failures and return to UI
 			}
@@ -616,13 +574,12 @@ export function createUtilActions(
 			`Task ${app.scriptRelativePath || app.displayName} running in foreground because TUI is not inside tmux`,
 		);
 		const taskStartMs = Date.now();
-		renderer.suspend();
-		try {
-			const result = spawnSync(cmd, cmdArgs, {
-				stdio: "inherit",
-				shell: false,
-				cwd,
-			});
+		// Shared serialized suspend/resume: only one foreground owner touches the
+		// terminal at a time (CONCURRENCY-001).
+		return withForegroundTerminal(renderer, async () => {
+			// Async wait keeps workflow lease renewal and telemetry processing
+			// alive while the foreground task owns the terminal (task 4.3).
+			const result = await spawnAndWait(cmd, cmdArgs, { cwd });
 			const taskDurationMs = Date.now() - taskStartMs;
 			if (result.error)
 				getLogger().write(
@@ -632,17 +589,16 @@ export function createUtilActions(
 			else
 				getLogger().write(
 					"INFO",
-					`Task ${app.scriptRelativePath || app.displayName} exited with ${result.status ?? 0}`,
+					`Task ${app.scriptRelativePath || app.displayName} exited with ${result.code ?? 0}`,
 				);
 
 			getLogger().write(
 				"INFO",
 				`Task duration: ${formatDuration(taskDurationMs)}`,
 			);
-			const failed = Boolean(result.error) || result.status !== 0;
+			const failed = Boolean(result.error) || result.code !== 0;
 			if (failed) {
-				const error =
-					result.error?.message ?? `exit code ${result.status ?? -1}`;
+				const error = result.error?.message ?? `exit code ${result.code ?? -1}`;
 				reportActionEvent("action.command.failed", {
 					runId,
 					stepId,
@@ -663,15 +619,14 @@ export function createUtilActions(
 				status: failed ? "failed" : "completed",
 			});
 
-			pauseUntilKeypress();
+			await pauseUntilKeypress();
 			return !result.error;
-		} finally {
-			renderer.resume();
-		}
+		});
 	};
 
-	const runSelectedScriptInForeground = (taskArgs: string[] = []) =>
-		runScriptInForeground(getSelectedApp(), taskArgs);
+	const runSelectedScriptInForeground = (taskArgs: string[] = []): void => {
+		void runScriptInForeground(getSelectedApp(), taskArgs);
+	};
 
 	const buildArgsFromParameterValues = (
 		values: Record<string, string>,
@@ -806,7 +761,7 @@ export function createUtilActions(
 				current,
 				currentScriptParameters,
 			);
-			const launched = runScriptInForeground(app, args);
+			const launched = await runScriptInForeground(app, args);
 			if (!launched) return;
 
 			if (scriptRelativePath) {
@@ -843,18 +798,10 @@ export function createUtilActions(
 			);
 			return;
 		}
-		const { spawnSync } =
-			require("node:child_process") as typeof import("child_process");
-		renderer.suspend();
-		try {
-			spawnSync("lazydocker", [], {
-				stdio: "inherit",
-				shell: false,
-				cwd: app.localDirectoryPath,
-			});
-		} finally {
-			renderer.resume();
-		}
+		void runForeground("lazydocker", [], {
+			renderer,
+			cwd: app.localDirectoryPath,
+		});
 	};
 
 	const openEditorPicker = (targetPath?: string) => {
@@ -879,9 +826,6 @@ export function createUtilActions(
 	const openInEditorWith = (editor: EditorChoice, targetPath?: string) => {
 		const resolvedPath = targetPath ?? getSelectedApp()?.localDirectoryPath;
 		if (!resolvedPath) return;
-		const { spawnSync } =
-			require("node:child_process") as typeof import("child_process");
-
 		if (editor === "nvim") {
 			if (isTmuxSession()) {
 				const app = getSelectedApp();
@@ -894,12 +838,7 @@ export function createUtilActions(
 				);
 				return;
 			}
-			renderer.suspend();
-			try {
-				spawnSync("nvim", [resolvedPath], { stdio: "inherit", shell: false });
-			} finally {
-				renderer.resume();
-			}
+			void runForeground("nvim", [resolvedPath], { renderer });
 			return;
 		}
 
@@ -1076,18 +1015,11 @@ export function createUtilActions(
 			}
 		}
 		appStore.resetViewStack("table");
-		const { spawnSync } =
-			require("node:child_process") as typeof import("child_process");
 		const args: string[] = [];
 		if (host.port && host.port !== 22) args.push("-p", String(host.port));
 		if (host.identityFile) args.push("-i", host.identityFile);
 		args.push(host.user ? `${host.user}@${host.alias}` : host.alias);
-		renderer.suspend();
-		try {
-			spawnSync("ssh", args, { stdio: "inherit", shell: false });
-		} finally {
-			renderer.resume();
-		}
+		await runForeground("ssh", args, { renderer });
 	};
 
 	const submitPassphrase = async () => {

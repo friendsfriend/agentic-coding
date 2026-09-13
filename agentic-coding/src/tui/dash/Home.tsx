@@ -44,6 +44,9 @@ import { getActiveThemeName, themeNames } from "./ui/theme";
 
 export function Home(props: {
 	keymap: Keymap<Renderable, KeyEvent>;
+	/** Set only when Home is mounted inside the unified shell. */
+	shellFeature?: "workflows";
+	active?: () => boolean;
 	items: WorkflowOverview[];
 	loading: boolean;
 	projects: Array<{ name: string; path: string; openspec: boolean }>;
@@ -83,6 +86,29 @@ export function Home(props: {
 	const [sortModal, setSortModal] = createSignal(false);
 	const [sortSelectedIndex, setSortSelectedIndex] = createSignal(0);
 	const [sortDirection, setSortDirection] = createSignal<"asc" | "desc">("asc");
+	createEffect(() => {
+		if (!props.active) return;
+		if (!props.active()) {
+			// Park Home's modal signals while hidden; their child components retain
+			// in-progress drafts. The shell owns no input for an inactive feature.
+			props.keymap.setData("modal.active", "none");
+			return;
+		}
+		const activeModal = modal()
+			? "new-workflow"
+			: modelConfig()
+				? "model-config"
+				: themePicker()
+					? "theme"
+					: help()
+						? "help"
+						: filterModal()
+							? "filter"
+							: sortModal()
+								? "sort"
+								: "none";
+		props.keymap.setData("modal.active", activeModal);
+	});
 	const filterParameters = ["Status", "Phase", "Agent"];
 	const filterValues = createMemo(() =>
 		filterParameters[filterSelectedParameter()] === "Status"
@@ -306,6 +332,7 @@ export function Home(props: {
 				.map((key) => (key === " " ? "space" : key)),
 		];
 		const disposeModal = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "new-workflow",
 			priority: 1000,
 			activeModal: "new-workflow",
@@ -318,6 +345,7 @@ export function Home(props: {
 			bindings: modalKeys.map((key) => ({ key, cmd: "new-workflow.handle" })),
 		});
 		const disposeModelConfig = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "model-config",
 			priority: 1000,
 			activeModal: "model-config",
@@ -330,6 +358,7 @@ export function Home(props: {
 			bindings: modalKeys.map((key) => ({ key, cmd: "model-config.handle" })),
 		});
 		const disposeTheme = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "theme-home",
 			priority: 1100,
 			activeModal: "theme",
@@ -364,6 +393,7 @@ export function Home(props: {
 			),
 		});
 		const disposeHelp = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "help",
 			priority: 1100,
 			activeModal: "help",
@@ -392,6 +422,7 @@ export function Home(props: {
 			})),
 		});
 		const disposeFilter = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "filter",
 			priority: 1100,
 			activeModal: "filter",
@@ -465,6 +496,7 @@ export function Home(props: {
 			].map((key) => ({ key, cmd: "filter.handle" })),
 		});
 		const disposeSort = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "sort",
 			priority: 1100,
 			activeModal: "sort",
@@ -514,6 +546,7 @@ export function Home(props: {
 			].map((key) => ({ key, cmd: "sort.handle" })),
 		});
 		const disposeHome = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "home",
 			priority: 100,
 			appView: "home",

@@ -20,59 +20,69 @@ export function registerGlobalKeymapLayers(
 ): () => void {
 	const disposers: Array<() => void> = [];
 
-	disposers.push(
-		keymap.acquireResource(ANY_KEY_PATTERN, () =>
-			keymap.registerSequencePattern({
-				name: "any",
-				match(event) {
-					return { value: event.name, display: event.name };
-				},
-				finalize(values) {
-					return values[0];
-				},
-			}),
-		),
-	);
+	// Embedded in the unified shell: the shell owns the global dispatcher and
+	// shutdown, so the unbounded any-key pattern and its shutdown guard are not
+	// registered here (they would need the shell to provide the shutdown field
+	// and a concrete continuation).
+	if (!deps.ctx.embedded) {
+		disposers.push(
+			keymap.acquireResource(ANY_KEY_PATTERN, () =>
+				keymap.registerSequencePattern({
+					name: "any",
+					match(event) {
+						return { value: event.name, display: event.name };
+					},
+					finalize(values) {
+						return values[0];
+					},
+				}),
+			),
+		);
+	}
 
 	const runGlobal = (event: KeyEvent) =>
 		handleGlobalKeys(event, deps.stores, deps.actions, deps.ctx);
 
-	disposers.push(
-		keymap.registerLayer({
-			name: "Shutdown Guard",
-			priority: SHUTDOWN_PRIORITY,
-			shutdown: true,
-			commands: [
-				{
-					name: "app.shutdown.consume",
-					context: "global",
-					category: "System",
-					title: "Shutdown guard",
-					desc: "Consume keyboard input while shutdown is active.",
-					discoverable: false,
-					run: () => true,
-				},
-			],
-			bindings: [
-				{ key: "{any}", cmd: "app.shutdown.consume", discoverable: false },
-				{ key: "?", cmd: "app.shutdown.consume", discoverable: false },
-				{ key: "q", cmd: "app.shutdown.consume", discoverable: false },
-				{ key: "ctrl+c", cmd: "app.shutdown.consume", discoverable: false },
-				{ key: "escape", cmd: "app.shutdown.consume", discoverable: false },
-				{ key: "ctrl+r", cmd: "app.shutdown.consume", discoverable: false },
-				{ key: "ctrl+/", cmd: "app.shutdown.consume", discoverable: false },
-				{ key: "/", cmd: "app.shutdown.consume", discoverable: false },
-				{ key: "meta+c", cmd: "app.shutdown.consume", discoverable: false },
-				{ key: "ctrl+v", cmd: "app.shutdown.consume", discoverable: false },
-				{ key: "meta+v", cmd: "app.shutdown.consume", discoverable: false },
-			],
-		}),
-	);
+	if (!deps.ctx.embedded) {
+		disposers.push(
+			keymap.registerLayer({
+				name: "Shutdown Guard",
+				priority: SHUTDOWN_PRIORITY,
+				...(deps.ctx.embedded ? { shellFeature: "environments" } : {}),
+				shutdown: true,
+				commands: [
+					{
+						name: "app.shutdown.consume",
+						context: "global",
+						category: "System",
+						title: "Shutdown guard",
+						desc: "Consume keyboard input while shutdown is active.",
+						discoverable: false,
+						run: () => true,
+					},
+				],
+				bindings: [
+					{ key: "{any}", cmd: "app.shutdown.consume", discoverable: false },
+					{ key: "?", cmd: "app.shutdown.consume", discoverable: false },
+					{ key: "q", cmd: "app.shutdown.consume", discoverable: false },
+					{ key: "ctrl+c", cmd: "app.shutdown.consume", discoverable: false },
+					{ key: "escape", cmd: "app.shutdown.consume", discoverable: false },
+					{ key: "ctrl+r", cmd: "app.shutdown.consume", discoverable: false },
+					{ key: "ctrl+/", cmd: "app.shutdown.consume", discoverable: false },
+					{ key: "/", cmd: "app.shutdown.consume", discoverable: false },
+					{ key: "meta+c", cmd: "app.shutdown.consume", discoverable: false },
+					{ key: "ctrl+v", cmd: "app.shutdown.consume", discoverable: false },
+					{ key: "meta+v", cmd: "app.shutdown.consume", discoverable: false },
+				],
+			}),
+		);
+	}
 
 	disposers.push(
 		keymap.registerLayer({
 			name: "Global",
 			priority: GLOBAL_PRIORITY,
+			...(deps.ctx.embedded ? { shellFeature: "environments" } : {}),
 			shutdown: false,
 			activeModal: "none",
 			commands: [
@@ -126,26 +136,32 @@ export function registerGlobalKeymapLayers(
 					discoverable: true,
 					run: ({ event }) => runGlobal(event),
 				},
-				{
-					name: "app.quit.q",
-					context: "global",
-					category: "System",
-					title: "Quit",
-					desc: "Press q twice to quit.",
-					footer: "q",
-					discoverable: true,
-					run: ({ event }) => runGlobal(event),
-				},
-				{
-					name: "app.quit.ctrl-c",
-					context: "global",
-					category: "System",
-					title: "Quit / copy",
-					desc: "Copy selection or press Ctrl+C twice to quit.",
-					footer: "Ctrl+C",
-					discoverable: true,
-					run: ({ event }) => runGlobal(event),
-				},
+				// Embedded in the unified shell: the shell owns process shutdown, so
+				// q/Ctrl+C must not reach this app's own exit path (USABILITY-004).
+				...(deps.ctx.embedded
+					? []
+					: [
+							{
+								name: "app.quit.q",
+								context: "global",
+								category: "System",
+								title: "Quit",
+								desc: "Press q twice to quit.",
+								footer: "q",
+								discoverable: true,
+								run: ({ event }: { event: KeyEvent }) => runGlobal(event),
+							},
+							{
+								name: "app.quit.ctrl-c",
+								context: "global",
+								category: "System",
+								title: "Quit / copy",
+								desc: "Copy selection or press Ctrl+C twice to quit.",
+								footer: "Ctrl+C",
+								discoverable: true,
+								run: ({ event }: { event: KeyEvent }) => runGlobal(event),
+							},
+						]),
 				{
 					name: "paste.route",
 					context: "global",
@@ -201,20 +217,24 @@ export function registerGlobalKeymapLayers(
 					category: "Clipboard",
 					footer: "Alt+C",
 				},
-				{
-					key: "q",
-					cmd: "app.quit.q",
-					context: "global",
-					category: "System",
-					footer: "q",
-				},
-				{
-					key: "ctrl+c",
-					cmd: "app.quit.ctrl-c",
-					context: "global",
-					category: "System",
-					footer: "Ctrl+C",
-				},
+				...(deps.ctx.embedded
+					? []
+					: [
+							{
+								key: "q",
+								cmd: "app.quit.q",
+								context: "global",
+								category: "System",
+								footer: "q",
+							},
+							{
+								key: "ctrl+c",
+								cmd: "app.quit.ctrl-c",
+								context: "global",
+								category: "System",
+								footer: "Ctrl+C",
+							},
+						]),
 				{
 					key: "ctrl+v",
 					cmd: "paste.route",

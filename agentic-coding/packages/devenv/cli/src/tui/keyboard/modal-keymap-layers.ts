@@ -217,6 +217,7 @@ export function registerModalKeymapLayers(
 	const disposers = modalLayers.map(({ modal, command, title, run }) =>
 		keymap.registerLayer({
 			name: title,
+			...(deps.ctx.embedded ? { shellFeature: "environments" } : {}),
 			priority:
 				deps.stores.logStore.logAiPromptMode?.() ||
 				deps.stores.logStore.logSearchMode?.()

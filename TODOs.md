@@ -3,6 +3,7 @@ Not for agents. This is only for humans.
 Fixes: 
 * Remove info notifation for new traces
 * The herdr sidebar is jumping and not fully renders items unrelated to agentic-coding workflows
+* Luna model doesnt recheck the issues when the worker changes something -> Prompt must be improved
 
 Big ones:
 * Implement Agent steered version of the workflow. Basically an orchestrator version of the workflow.
@@ -14,4 +15,5 @@ Big ones:
 Small ones: 
 * Give all agents their own tab. Multitab spawning always has issues for some reason
 * Improve agent steering based on recent runs (observability first)
+* Implement model profile overwrite
 

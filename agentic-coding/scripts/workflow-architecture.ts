@@ -83,6 +83,7 @@ const APPLICATION_FILES = [
 	"workflow/startup.ts",
 	"workflow/operations.ts",
 	"workflow/application.ts", // named application composition root (CLI/dashboard), complete-workflow-effect-cutover task 1
+	"workflow/execution-coordinator.ts", // root-owned repository execution coordinators + dashboard application runtime (compose-unified-feature-shell task 1.2); no TUI imports, credential prompt injected
 ];
 const ROOT_FILES = ["cli.ts", "herdr-client.ts"];
 

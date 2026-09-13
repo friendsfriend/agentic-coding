@@ -155,8 +155,10 @@ export function syncKeymapRuntimeState(
 	keymap: DevenvKeymap,
 	stores: Accessor<KeyboardStores> | KeyboardStores,
 	afterSync?: () => void,
+	enabled?: Accessor<boolean>,
 ): void {
 	createEffect(() => {
+		if (enabled && !enabled()) return;
 		const currentStores = typeof stores === "function" ? stores() : stores;
 		applyKeymapRuntimeSnapshot(keymap, getKeymapRuntimeSnapshot(currentStores));
 		afterSync?.();
