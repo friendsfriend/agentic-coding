@@ -5,7 +5,12 @@ import type { Subprocess } from "bun";
 import { Effect } from "effect";
 import { PermanentFailure, TransientFailure } from "./failures.ts";
 
-export type CredentialPrompt = (prompt: string) => Promise<string>;
+export type CredentialPrompt = (
+	prompt: string,
+	/** Aborted when the waiting command dies, so a serialized prompt owner can
+	 * drop an abandoned prompt instead of blocking later prompts behind it. */
+	signal?: AbortSignal,
+) => Promise<string>;
 
 export interface AskpassShim {
 	dir: string;
@@ -103,7 +108,10 @@ export function cleanupAskpassShim(shim: AskpassShim): void {
 
 /** Mask typed input unless the requested credential is a username. */
 export function maskingFor(prompt: string): boolean {
-	return !/username/i.test(prompt);
+	// Askpass prompt text is untrusted. Only Git's exact username prompt is safe
+	// to render unmasked; every other request, including a key path containing
+	// "username", is treated as a secret (SEC-003).
+	return !/^username for ['"].+['"]:\s*$/i.test(prompt.trim());
 }
 
 export function credentialFailureMessage(prompt: string): string {
@@ -188,7 +196,7 @@ export async function runGitWithCredentials(
 				throw new Error(credentialFailureMessage(promptText));
 			const answer = await promptForAnswer(options.prompt, promptText, proc);
 			if (answer === undefined) break;
-			await writeAnswer(shim, answer, proc.exitCode === null);
+			await writeAnswer(shim, answer, proc);
 		}
 		const exitCode = await proc.exited;
 		const stdout = await stdoutPromise;
@@ -251,27 +259,48 @@ async function promptForAnswer(
 	proc: Subprocess,
 ): Promise<string | undefined> {
 	// The command may die while the answer is awaited (askpass timeout, remote
-	// abort). Treat that like a cancel so the runner never hangs behind the UI.
+	// abort). Treat that like a cancel so the runner never hangs behind the UI,
+	// and propagate it as an abort so a serialized prompt queue releases the
+	// abandoned slot (CONCURRENCY-102).
+	const controller = new AbortController();
+	const onExit = () => controller.abort();
+	void proc.exited.then(onExit, onExit);
 	const answer = await Promise.race([
-		prompt(promptText).then((value) => value ?? ""),
+		prompt(promptText, controller.signal).then((value) => value ?? ""),
 		proc.exited.then(() => undefined),
 	]);
+	controller.abort();
 	return answer;
 }
 
 async function writeAnswer(
 	shim: AskpassShim,
 	answer: string,
-	callerAlive: boolean,
+	proc: Subprocess,
 ): Promise<void> {
-	// The shim blocks reading the response FIFO right after relaying its prompt;
-	// opening for writing rendezvous with it. If the caller already died the shim
-	// is gone too, so there is nothing to feed.
-	if (!callerAlive) return;
-	const fd = await fs.promises.open(shim.responseFifo, "w");
-	try {
-		await fd.writeFile(answer, "utf8");
-	} finally {
-		await fd.close();
+	// A blocking FIFO open can outlive both askpass and the subprocess. Open
+	// non-blocking instead; ENXIO means the reader has not rendezvoused (or has
+	// gone away), so retry briefly while the caller is alive (CONCURRENCY-001).
+	for (let attempt = 0; attempt < 20 && proc.exitCode === null; attempt += 1) {
+		try {
+			const fd = await fs.promises.open(
+				shim.responseFifo,
+				fs.constants.O_WRONLY | fs.constants.O_NONBLOCK,
+			);
+			try {
+				if (proc.exitCode === null) await fd.writeFile(answer, "utf8");
+				return;
+			} finally {
+				await fd.close();
+			}
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (proc.exitCode !== null) return;
+			if (code !== "ENXIO") throw error;
+			await Bun.sleep(10);
+		}
 	}
+	// Do not silently return with askpass blocked on the response FIFO. Throw so
+	// the caller's finally path kills the subprocess and removes the shim.
+	throw new Error("credential response reader unavailable");
 }

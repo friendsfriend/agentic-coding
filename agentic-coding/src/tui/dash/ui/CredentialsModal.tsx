@@ -14,6 +14,7 @@ export interface CredentialPromptRequest {
 }
 
 interface PendingCredentialRequest extends CredentialPromptRequest {
+	id: number;
 	resolve: (answer: string) => void;
 }
 
@@ -23,6 +24,7 @@ interface PendingCredentialRequest extends CredentialPromptRequest {
 const [pending, setPending] = createSignal<
 	PendingCredentialRequest | undefined
 >(undefined);
+let nextRequestId = 0;
 
 export function pendingCredentialRequest():
 	| PendingCredentialRequest
@@ -31,18 +33,32 @@ export function pendingCredentialRequest():
 }
 
 export function credentialPromptBridge(): CredentialPrompt {
-	return (prompt: string) =>
+	return (prompt: string, signal?: AbortSignal) =>
 		new Promise<string>((resolve) => {
+			if (signal?.aborted) {
+				resolve("");
+				return;
+			}
 			const previous = pending();
 			if (previous) previous.resolve("");
-			setPending({
+			let settled = false;
+			const request: PendingCredentialRequest = {
+				id: ++nextRequestId,
 				prompt,
 				mask: maskingFor(prompt),
 				resolve: (answer) => {
-					setPending(undefined);
+					if (settled) return;
+					settled = true;
+					signal?.removeEventListener("abort", abort);
+					// A stale modal may still hold this callback; never clear a newer
+					// credential request (SEC-001/CONCURRENCY-002).
+					if (pending() === request) setPending(undefined);
 					resolve(answer);
 				},
-			});
+			};
+			const abort = () => request.resolve("");
+			signal?.addEventListener("abort", abort, { once: true });
+			setPending(request);
 		});
 }
 
@@ -57,7 +73,7 @@ export function CredentialsModal(props: {
 			fieldLabel={props.prompt}
 			widthPercent={0.6}
 			heightPercent={0.35}
-			zIndex={10}
+			zIndex={30}
 			help={[
 				{ key: "Enter", action: "Submit" },
 				{ key: "Esc", action: "Cancel" },

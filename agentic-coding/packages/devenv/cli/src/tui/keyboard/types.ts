@@ -70,4 +70,9 @@ export interface KeyboardContext {
 	launchPi: (sessionPath: string | null) => void;
 	getSelectableRows: typeof import("@devenv/ui").getSelectableRows;
 	showError: UiStore["showError"];
+	/** Embedded in the unified shell: the shell owns process shutdown, so the
+	 * imported app must not bind q/Ctrl+C to its own exit path. */
+	embedded?: boolean;
+	/** Active shell feature predicate used by embedded keymap layers. */
+	active?: () => boolean;
 }

@@ -81,6 +81,28 @@ test("credentialPromptBridge resolves with the submitted answer and clears the p
 	expect(pendingCredentialRequest()).toBeUndefined();
 });
 
+test("credentialPromptBridge abort clears only its own pending request", async () => {
+	const bridge = credentialPromptBridge();
+	const controller = new AbortController();
+	const abandoned = bridge(
+		"Enter passphrase for key 'old':",
+		controller.signal,
+	);
+	const old = pendingCredentialRequest();
+	controller.abort();
+	await expect(abandoned).resolves.toBe("");
+	expect(pendingCredentialRequest()).toBeUndefined();
+
+	const next = bridge("Username for 'https://example.test':");
+	const request = pendingCredentialRequest();
+	expect(request?.id).not.toBe(old?.id);
+	// A stale callback cannot remove the newer request.
+	old?.resolve("old-secret");
+	expect(pendingCredentialRequest()?.id).toBe(request?.id);
+	request?.resolve("octocat");
+	await expect(next).resolves.toBe("octocat");
+});
+
 test("new workflow confirm summary has no Agent routing row", async () => {
 	let handler: ((event: KeyEvent) => boolean) | undefined;
 	const t = await testRender(

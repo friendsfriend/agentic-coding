@@ -25,19 +25,22 @@ import { activeErrorModal, showErrorModal } from "../shared/errorModal";
 import { setActiveKeybindCatalog } from "../shared/keybinds";
 import { ModalHelpOverlay } from "../shared/ModalHelpOverlay";
 import { handleModalHelpKey, modalHelpOpen } from "../shared/modalHelp";
+import {
+	createModalHost,
+	findModal,
+	registerFocusRestorer,
+	restoreFocus,
+} from "../shared/modalStack";
 import { testDashboard } from "./demo";
 import { ChangedFilesView } from "./devenv-ui/components/ChangedFilesView";
 import { DiffViewModal } from "./devenv-ui/components/DiffViewModal";
 import { GenericModal } from "./devenv-ui/components/GenericModal";
 import { MarkdownViewModal } from "./devenv-ui/components/MarkdownViewModal";
 import {
-	disposeDashboardApplication,
-	disposeExecutionCoordinator,
 	onWorkflowExecutionError,
 	onWorkflowExecutionSettled,
 	reconcileSidebarPresentation,
 	requestWorkflowExecution,
-	startSidebarPresentation,
 } from "./engine";
 import {
 	herdrEventMatchesWorkspace,
@@ -176,6 +179,9 @@ export function App(props: {
 	/** Test fixture override for rendering a custom dashboard (e.g. with artifacts). */
 	testData?: DashboardData;
 	keymap: Keymap<Renderable, KeyEvent>;
+	/** Set only when the dashboard is mounted inside the unified shell. */
+	shellFeature?: "workflows";
+	active?: () => boolean;
 	/** Push the workflow header context up to the shell's global header. */
 	onHeader?: (
 		header: import("../otel/app/App").WorkflowHeaderInfo | null,
@@ -360,12 +366,50 @@ export function App(props: {
 	const [verdictOffset, setVerdictOffset] = createSignal(0);
 	const [eventsDetail, setEventsDetail] = createSignal(false);
 	const [selectedEvent, setSelectedEvent] = createSignal(0);
-	const [help, setHelp] = createSignal(false);
-	const [themePicker, setThemePicker] = createSignal(false);
-	const [completedPicker, setCompletedPicker] = createSignal(false);
+	// Authoritative dashboard modal stack (compose-unified-feature-shell task
+	// 3.2/3.3): the shell-level dialogs are stack instances, so instance
+	// identity, top-overlay input ownership and close ordering have one owner
+	// instead of independent boolean signals.
+	type DashModal =
+		| "help"
+		| "theme"
+		| "completed-picker"
+		| "repair"
+		| "question"
+		| "cost"
+		| "review"
+		| "credentials";
+	const modalHost = createModalHost<DashModal>();
+	const modalOpen = (kind: DashModal) =>
+		modalHost.stack().some((entry) => entry.kind === kind);
+	const openModal = (kind: DashModal, restoreFocusTo?: string) =>
+		modalHost.push({ kind, restoreFocusTo });
+	const closeModal = (kind: DashModal) => {
+		const instance = findModal(modalHost.state(), kind);
+		if (!instance) return;
+		const wasTop = modalHost.top()?.id === instance.id;
+		modalHost.popById(instance.id);
+		// Removing a lower instance must not steal focus from the newer top
+		// overlay. Restore only the opener exposed by closing the top instance.
+		if (wasTop)
+			restoreFocus(modalHost.top()?.restoreFocusTo ?? instance.restoreFocusTo);
+	};
+	const help = () => modalOpen("help");
+	const setHelp = (open: boolean) =>
+		open ? openModal("help", "dashboard") : closeModal("help");
+	const themePicker = () => modalOpen("theme");
+	const setThemePicker = (open: boolean) =>
+		open ? openModal("theme", "dashboard") : closeModal("theme");
+	const completedPicker = () => modalOpen("completed-picker");
+	const setCompletedPicker = (open: boolean) =>
+		open
+			? openModal("completed-picker", "dashboard")
+			: closeModal("completed-picker");
 	const [completedSelection, setCompletedSelection] = createSignal(0);
 	const [actionReason, setActionReason] = createSignal("");
-	const [repairOpen, setRepairOpen] = createSignal(false);
+	const repairOpen = () => modalOpen("repair");
+	const setRepairOpen = (open: boolean) =>
+		open ? openModal("repair", "dashboard") : closeModal("repair");
 	const [repairTargets, setRepairTargets] = createSignal<
 		Array<{
 			targetStep: string;
@@ -381,6 +425,34 @@ export function App(props: {
 	// delivery drain runs while the dashboard is busy.
 	const credentialRequest = createMemo(() => pendingCredentialRequest());
 	const [credentialInput, setCredentialInput] = createSignal("");
+	let credentialRequestId: number | undefined;
+	let credentialModalRequestId: number | undefined;
+	createEffect(() => {
+		const request = credentialRequest();
+		if (props.active && !props.active()) {
+			credentialModalRequestId = undefined;
+			const stale = findModal(modalHost.state(), "credentials");
+			if (stale) modalHost.popById(stale.id);
+			return;
+		}
+		if (request && request.id !== credentialModalRequestId) {
+			modalHost.push({ kind: "credentials", restoreFocusTo: "dashboard" });
+			credentialModalRequestId = request.id;
+		} else if (!request) {
+			const current = findModal(modalHost.state(), "credentials");
+			if (current) modalHost.popById(current.id);
+			credentialModalRequestId = undefined;
+		}
+	});
+	createEffect(() => {
+		const nextId = credentialRequest()?.id;
+		if (nextId === credentialRequestId) return;
+		credentialRequestId = nextId;
+		// Never carry a passphrase from a superseded/cancelled request into the
+		// next prompt, especially when its answer is rendered unmasked (SEC-002).
+		setCredentialInput("");
+	});
+	onCleanup(() => setCredentialInput(""));
 	const pendingQuestion = createMemo(() => data().state.pendingQuestions?.[0]);
 	const pendingQuestionGroup = createMemo<DeveloperDialogueRecord[]>(() => {
 		const question = pendingQuestion();
@@ -392,7 +464,9 @@ export function App(props: {
 				: [question]
 		).sort((a, b) => (a.itemIndex ?? 0) - (b.itemIndex ?? 0));
 	});
-	const [questionOpen, setQuestionOpen] = createSignal(false);
+	const questionOpen = () => modalOpen("question");
+	const setQuestionOpen = (open: boolean) =>
+		open ? openModal("question", "dashboard") : closeModal("question");
 	const [questionTab, setQuestionTab] = createSignal(0);
 	const [questionPromptOffset, setQuestionPromptOffset] = createSignal(0);
 	const [questionSelection, setQuestionSelection] = createSignal(0);
@@ -605,7 +679,9 @@ export function App(props: {
 			setQuestionSubmitting(false);
 		}
 	};
-	const [costOpen, setCostOpen] = createSignal(false);
+	const costOpen = () => modalOpen("cost");
+	const setCostOpen = (open: boolean) =>
+		open ? openModal("cost", "dashboard") : closeModal("cost");
 	const [costSelection, setCostSelection] = createSignal(0);
 	const [costAgent, setCostAgent] = createSignal<string | null>(null);
 	const [costOffset, setCostOffset] = createSignal(0);
@@ -908,6 +984,45 @@ export function App(props: {
 		reviewDiffSignal,
 		dispose: reviewFeatureDispose,
 	} = reviewFeature;
+	createEffect(() => {
+		if (!props.active || props.active()) return;
+		// A hidden dashboard cannot leave a visible-but-unfocusable dialog behind
+		// when the shell switches features. Pending backend prompts remain pending
+		// and are re-presented when Workflows becomes active again.
+		const currentModalState = modalHost.state();
+		modalHost.set({ stack: [], nextSeq: currentModalState.nextSeq });
+		setCredentialInput("");
+		setQuestionOpen(false);
+		setUserActionOpen(false);
+		setEventsDetail(false);
+		setFindings(undefined);
+		setVerdict(undefined);
+		setCostOpen(false);
+		setPlanRejectionOpen(false);
+		setReviewOpen(false);
+		setReviewCommentMode(false);
+		props.keymap.setData("modal.active", "none");
+	});
+	let reviewModalOpen = false;
+	createEffect(() => {
+		const open = reviewOpen();
+		if (props.active && !props.active()) {
+			if (reviewModalOpen) {
+				const current = findModal(modalHost.state(), "review");
+				if (current) modalHost.popById(current.id);
+				reviewModalOpen = false;
+			}
+			return;
+		}
+		if (open && !reviewModalOpen) {
+			modalHost.push({ kind: "review", restoreFocusTo: "dashboard" });
+			reviewModalOpen = true;
+		} else if (!open && reviewModalOpen) {
+			const current = findModal(modalHost.state(), "review");
+			if (current) modalHost.popById(current.id);
+			reviewModalOpen = false;
+		}
+	});
 	const filteredThemes = () =>
 		themeNames.filter((name) => name.includes(themeQuery().toLowerCase()));
 	const [helpOffset, setHelpOffset] = createSignal(0);
@@ -955,6 +1070,7 @@ export function App(props: {
 	// below adds agent/tab lifecycle pushes on top.
 	createEffect(() => {
 		if (props.profile === "test") return;
+		if (props.active && !props.active()) return;
 		const state = data().state;
 		const dirs =
 			state.definition?.id === "research"
@@ -969,6 +1085,7 @@ export function App(props: {
 
 	createEffect(() => {
 		if (props.profile === "test") return;
+		if (props.active && !props.active()) return;
 		const workspace = workflowWorkspace();
 		// Herdr is the source of truth for agent/tab lifecycle and re-publishes
 		// a short event backlog on connect; debounce so a burst is one reload.
@@ -993,6 +1110,7 @@ export function App(props: {
 			props.profile === "test"
 				? undefined
 				: onWorkflowExecutionError(props.repo, (workflowId) => {
+						if (props.active && !props.active()) return;
 						if (workflowId === props.workflowId) refresh();
 					});
 		// A dashboard-initiated drain can change state without a Herdr event
@@ -1001,28 +1119,29 @@ export function App(props: {
 			props.profile === "test"
 				? undefined
 				: onWorkflowExecutionSettled(props.repo, (workflowId) => {
+						if (props.active && !props.active()) return;
 						if (workflowId === props.workflowId) refresh();
 					});
 		if (props.profile !== "test")
 			requestWorkflowExecution(props.repo, props.workflowId);
-		const stopSidebarPresentation =
-			props.profile === "test"
-				? undefined
-				: startSidebarPresentation(() => [props.repo]);
+		// The sidebar presentation, execution coordinator and shared application
+		// runtime are root-owned (task 1.2/1.3): hiding this feature view must
+		// not release them, so the shell owns their registration and disposal.
+		// Closing a dashboard overlay returns key ownership to the panel by
+		// clearing the parked modal state (task 3.1 focus restoration).
+		const disposeFocusRestorer = registerFocusRestorer("dashboard", () => {
+			props.keymap.setData("modal.active", "none");
+		});
 		refresh();
 		onCleanup(() => {
 			refreshDisposed = true;
 			refreshController?.abort();
 			disposeExecutionError?.();
 			disposeExecutionSettled?.();
-			stopSidebarPresentation?.();
 			artifactGeneration++;
 			artifactController?.abort();
 			reviewFeatureDispose();
-			disposeExecutionCoordinator(props.repo);
-			// Dashboard unmount releases the single owned application runtime
-			// (complete-workflow-effect-cutover, task 1).
-			disposeDashboardApplication();
+			disposeFocusRestorer();
 		});
 	});
 
@@ -1309,6 +1428,7 @@ export function App(props: {
 		props.keymap.setData("app.view", "detail");
 		props.keymap.setData("modal.active", activeErrorModal() ? "error" : "none");
 		const disposeTheme = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "theme",
 			priority: 1100,
 			activeModal: "theme",
@@ -1378,6 +1498,7 @@ export function App(props: {
 			].map((key) => ({ key, cmd: "theme.handle" })),
 		});
 		const disposeQuestion = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "developer-question",
 			priority: 1400,
 			activeModal: "developer-question",
@@ -1467,6 +1588,7 @@ export function App(props: {
 			].map((key) => ({ key, cmd: "developer-question.handle" })),
 		});
 		const disposeCredentials = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "credentials",
 			priority: 1300,
 			activeModal: "credentials",
@@ -1527,6 +1649,7 @@ export function App(props: {
 			].map((key) => ({ key, cmd: "credentials.handle" })),
 		});
 		const disposeRepair = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "repair",
 			priority: 1000,
 			activeModal: "repair",
@@ -1589,6 +1712,7 @@ export function App(props: {
 			),
 		});
 		const disposeCompletedPicker = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "completed-picker",
 			priority: 1000,
 			activeModal: "completed-picker",
@@ -1686,6 +1810,7 @@ export function App(props: {
 			].map((key) => ({ key, cmd: "completed-picker.handle" })),
 		});
 		const disposeUserAction = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "user-action",
 			priority: 1150,
 			activeModal: "user-action",
@@ -1719,6 +1844,7 @@ export function App(props: {
 			),
 		});
 		const disposeCost = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "cost",
 			priority: 1000,
 			activeModal: "cost",
@@ -1761,6 +1887,7 @@ export function App(props: {
 			),
 		});
 		const disposeHelp = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "help",
 			priority: 1000,
 			activeModal: "help",
@@ -1789,6 +1916,7 @@ export function App(props: {
 			})),
 		});
 		const disposeEvents = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "events",
 			priority: 1000,
 			activeModal: "events",
@@ -1817,6 +1945,7 @@ export function App(props: {
 			})),
 		});
 		const disposeReviewComment = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "review-comment",
 			priority: 1200,
 			activeModal: "review-comment",
@@ -1884,6 +2013,7 @@ export function App(props: {
 			})) satisfies readonly Binding[],
 		});
 		const disposeDeveloperReview = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "developer-review",
 			priority: 1100,
 			activeModal: "developer-review",
@@ -1926,6 +2056,7 @@ export function App(props: {
 			].map((key) => ({ key, cmd: "developer-review.handle" })),
 		});
 		const disposePlanRejection = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "plan-rejection",
 			priority: 1300,
 			activeModal: "plan-rejection",
@@ -1957,6 +2088,7 @@ export function App(props: {
 			),
 		});
 		const disposePlanReview = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "plan-review",
 			priority: 1100,
 			activeModal: "plan-review",
@@ -1997,6 +2129,7 @@ export function App(props: {
 			].map((key) => ({ key, cmd: "plan-review.handle" })),
 		});
 		const disposeFindings = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "findings",
 			priority: 1000,
 			activeModal: "findings",
@@ -2045,6 +2178,7 @@ export function App(props: {
 			),
 		});
 		const disposeVerdict = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "verdict",
 			priority: 1000,
 			activeModal: "verdict",
@@ -2094,6 +2228,7 @@ export function App(props: {
 			),
 		});
 		const dispose = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "detail",
 			priority: 100,
 			appView: "detail",
@@ -2203,6 +2338,7 @@ export function App(props: {
 		// switch the keymap to the non-busy-gated layer and restore the previous
 		// modal on resolution.
 		createEffect(() => {
+			if (props.active && !props.active()) return;
 			const request = credentialRequest();
 			const current = props.keymap.getData?.("modal.active");
 			if (request && current !== "credentials") {
@@ -2215,6 +2351,7 @@ export function App(props: {
 			}
 		});
 		createEffect(() => {
+			if (props.active && !props.active()) return;
 			const question = pendingQuestion();
 			if (question && question.id !== pendingQuestionId) {
 				pendingQuestionId = question.id;
@@ -2225,7 +2362,7 @@ export function App(props: {
 				setQuestionCustomText("");
 				setQuestionDrafts({});
 			}
-			if (question && !questionOpen()) {
+			if (question && !questionOpen() && !credentialRequest()) {
 				const current = props.keymap.getData?.("modal.active");
 				modalBeforeQuestion =
 					typeof current === "string" && current !== "none"
@@ -2239,6 +2376,7 @@ export function App(props: {
 			}
 		});
 		createEffect(() => {
+			if (props.active && !props.active()) return;
 			const action = requiredUserAction();
 			if (!action) {
 				promptedUserActionKey = undefined;
@@ -2740,7 +2878,13 @@ export function App(props: {
 					)}
 				/>
 			</Show>
-			<Show when={reviewOpen() && reviewView() === "files"}>
+			<Show
+				when={
+					reviewOpen() &&
+					modalHost.top()?.kind === "review" &&
+					reviewView() === "files"
+				}
+			>
 				<GenericModal
 					title={
 						reviewKind() === "plan"
@@ -2794,6 +2938,7 @@ export function App(props: {
 			<Show
 				when={
 					reviewOpen() &&
+					modalHost.top()?.kind === "review" &&
 					reviewView() === "diff" &&
 					reviewKind() === "plan" &&
 					reviewFile()
@@ -2829,6 +2974,7 @@ export function App(props: {
 			<Show
 				when={
 					reviewOpen() &&
+					modalHost.top()?.kind === "review" &&
 					reviewView() === "diff" &&
 					(reviewKind() === "developer" || reviewKind() === "wiki") &&
 					reviewDiffFile()
@@ -2886,7 +3032,7 @@ export function App(props: {
 					/>
 				)}
 			</Show>
-			<Show when={questionOpen() && pendingQuestion()}>
+			<Show when={questionOpen() && pendingQuestion() && !credentialRequest()}>
 				{(_question) => (
 					<DeveloperQuestionModal
 						questions={pendingQuestionGroup()}
@@ -2906,11 +3052,13 @@ export function App(props: {
 			</Show>
 			<Show when={credentialRequest()}>
 				{(request) => (
-					<CredentialsModal
-						prompt={request().prompt}
-						mask={request().mask}
-						value={credentialInput()}
-					/>
+					<Show when={modalHost.top()?.kind === "credentials"}>
+						<CredentialsModal
+							prompt={request().prompt}
+							mask={request().mask}
+							value={credentialInput()}
+						/>
+					</Show>
 				)}
 			</Show>
 			<Show when={reviewFinishing()}>

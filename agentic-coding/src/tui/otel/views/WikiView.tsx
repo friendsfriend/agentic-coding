@@ -31,6 +31,7 @@ import { uiColors } from "../ui/colors";
 
 export interface WikiViewProps {
 	keymap: Keymap<Renderable, KeyEvent>;
+	shellFeature?: "wiki";
 	comments: readonly WikiReviewComment[];
 	onAddComment: (comment: WikiReviewComment) => void;
 	onFinish: (comments: readonly WikiReviewComment[]) => Promise<string>;
@@ -353,6 +354,7 @@ export function WikiView(props: WikiViewProps) {
 	onMount(() => {
 		refresh();
 		const dispose = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "wiki" } : {}),
 			name: "wiki-view",
 			priority: 200,
 			appView: "home",

@@ -23,8 +23,10 @@ let logStreamAbortController: AbortController | null = null;
 export function setupLogEffects(
 	logStore: LogEffectStore,
 	client: DevEnvClient,
+	active: (() => boolean) | undefined = undefined,
 ) {
 	createEffect(() => {
+		if (active && !active()) return;
 		const params = logStore.logRefreshParams();
 		if (!params.type || !logStore.showLogModal()) return;
 

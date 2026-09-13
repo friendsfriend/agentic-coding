@@ -12,9 +12,15 @@ import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { KeymapProvider } from "@opentui/keymap/solid";
 import { render } from "@opentui/solid";
 import {
+	disposeAllExecutionCoordinators,
+	disposeDashboardApplication,
+	setCredentialPromptProvider,
+} from "../workflow/execution-coordinator";
+import {
 	isResearchWorkflowTarget,
 	isWikiWorkflowTarget,
 } from "../workflow/runtime";
+import { AppShell } from "./app/AppShell";
 import { copyToClipboard } from "./clipboard";
 import { testDashboard } from "./dash/demo";
 import { setupKeymap } from "./dash/keymap-setup";
@@ -27,6 +33,7 @@ import {
 	loadThemeName as loadDashThemeName,
 } from "./dash/theme-settings";
 import { traceTui } from "./dash/tracing";
+import { credentialPromptBridge } from "./dash/ui/CredentialsModal";
 import { applyCapturedSystemTheme } from "./dash/ui/terminal-colors";
 import {
 	beginShutdown,
@@ -40,7 +47,6 @@ import {
 	setStepError,
 } from "./lifecycle";
 import { LifecycleModal } from "./lifecycle/LifecycleModal";
-import { App as OtelApp } from "./otel/app/App";
 import { discoverProjectRepos, TraceDb } from "./otel/model/db";
 import { LogStore } from "./otel/model/logStore";
 import { MetricStore } from "./otel/model/metricStore";
@@ -68,6 +74,8 @@ const usage = `Usage: agentic-coding dash|home|manager [options]
   --statsd-port N          StatsD UDP port
   --demo-db                Use separate demo database with sample data
   --traces-only            Hide metrics/logs/topology tabs
+  --devenv-url URL         DevEnv environment server URL (default http://127.0.0.1:4050)
+  --devenv-port N          DevEnv environment server port (default 4050)
   --help                   Show this help`;
 
 function arg(name: string) {
@@ -224,6 +232,13 @@ export async function main(): Promise<void> {
 	const promInterval = intervalArg("--prom-interval", 15_000);
 	const statsdPort = portArg("--statsd-port");
 	const tracesOnly = process.argv.includes("--traces-only");
+	// Unified feature shell: always compose the imported Environments feature.
+	// Its managed lifecycle is change 5, so this change attaches to the devenv
+	// server URL (default 4050) and the feature reports its own connection state.
+	const devenvPort = portArg("--devenv-port");
+	const environments = {
+		serverUrl: arg("--devenv-url") ?? `http://127.0.0.1:${devenvPort ?? 4050}`,
+	};
 
 	const traceStore = new TraceStore();
 	const metricStore = new MetricStore();
@@ -344,6 +359,12 @@ export async function main(): Promise<void> {
 	});
 	const keymap = createDefaultOpenTuiKeymap(renderer);
 	const disposeKeymap = setupKeymap(keymap);
+	// Root-owned credential presenter: the execution coordinator no longer
+	// imports a TUI modal, so the process shell installs the bridge once and
+	// keeps it live while any feature (not just the dashboard tab) is shown.
+	const disposeCredentialPrompt = setCredentialPromptProvider(
+		credentialPromptBridge,
+	);
 	keymap.setData("app.view", home ? "home" : "detail");
 	keymap.setData("modal.active", "none");
 
@@ -359,7 +380,7 @@ export async function main(): Promise<void> {
 	await render(
 		() => (
 			<KeymapProvider keymap={keymap}>
-				<OtelApp
+				<AppShell
 					repos={repos}
 					db={db}
 					traceStore={traceStore}
@@ -367,6 +388,7 @@ export async function main(): Promise<void> {
 					logStore={logStore}
 					topologyStore={topologyStore}
 					tracesOnly={tracesOnly}
+					environments={environments}
 					dashboard={{
 						mode: home ? "home" : "dash",
 						repo: home ? undefined : repo,
@@ -385,7 +407,13 @@ export async function main(): Promise<void> {
 	void startServerStack(home);
 	await new Promise<void>((done) => renderer.once("destroy", done));
 	clearSelectionCopy();
+	disposeCredentialPrompt();
 	disposeKeymap();
+	// Root teardown: release every repository coordinator and the shared
+	// application runtime exactly once (task 1.2/1.3). Feature hide/show must
+	// never dispose them.
+	disposeAllExecutionCoordinators();
+	disposeDashboardApplication();
 
 	// ---- Server-stack start sequence ----
 	async function startServerStack(homeMode: boolean): Promise<void> {

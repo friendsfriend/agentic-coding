@@ -2,17 +2,24 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Herdr } from "../../herdr-client.ts";
-import { WorkflowApplication } from "../../workflow/application.ts";
 import type { WorkflowView } from "../../workflow/contracts.ts";
 import { loadConfig } from "../../workflow/effects.ts";
 import {
-	CONTINUATION_WAIT_MS,
-	drainEffects,
+	dashboardApplication,
+	disposeDashboardApplication,
+	disposeExecutionCoordinator,
+	executionCoordinator,
+	onWorkflowExecutionError,
+	onWorkflowExecutionSettled,
+	requestWorkflowExecution,
+	setCredentialPromptProvider,
+	workflowExecutionError,
+} from "../../workflow/execution-coordinator.ts";
+import {
 	listProjects,
 	engine as workflowEngineFactory,
 } from "../../workflow/operations.ts";
 import { parseAgentsConfig } from "../../workflow/profiles.ts";
-import type { WorkflowEngine } from "../../workflow/runtime.ts";
 import {
 	canonicalStorePath,
 	researchWorkflowTarget,
@@ -31,156 +38,22 @@ import {
 	type WikiReviewComment,
 } from "../../workflow/wiki.ts";
 import { latestRunsByRole } from "./projections";
-import { credentialPromptBridge } from "./ui/CredentialsModal.tsx";
 
-class RepositoryExecutionCoordinator {
-	private running = false;
-	private queued = false;
-	private disposed = false;
-	private error: string | undefined;
-	private readonly workflowErrors = new Map<string, string>();
-	private readonly listeners = new Set<(workflowId: string) => void>();
-	private readonly settledListeners = new Set<(workflowId: string) => void>();
-	private queuedWorkflowId: string | undefined;
-	private activeWorkflowId: string | undefined;
-	private controller: AbortController | undefined;
-	/** One engine per repository, built from the dashboard-owned application
-	 * layer (complete-workflow-effect-cutover, task 1): refresh/action/start
-	 * reuse the same runtime instead of creating a fresh engine per drain. */
-	private readonly workflowEngine: WorkflowEngine;
-
-	constructor(
-		private readonly repo: string,
-		application: WorkflowApplication,
-	) {
-		this.workflowEngine = workflowEngineFactory(application);
-	}
-
-	request(workflowId?: string): void {
-		if (this.disposed) return;
-		if (this.running) {
-			this.queued = true;
-			this.queuedWorkflowId = workflowId;
-			return;
-		}
-		this.running = true;
-		this.activeWorkflowId = workflowId;
-		this.workflowErrors.clear();
-		this.controller = new AbortController();
-		void drainEffects(
-			this.workflowEngine,
-			this.repo,
-			credentialPromptBridge(),
-			20,
-			CONTINUATION_WAIT_MS,
-			this.controller.signal,
-			(workflowId, message) => {
-				this.workflowErrors.set(workflowId, message);
-				for (const listener of this.listeners) listener(workflowId);
-			},
-		)
-			.then(() => {
-				if (!this.disposed) this.error = undefined;
-				for (const listener of this.settledListeners)
-					listener(this.activeWorkflowId ?? "");
-			})
-			.catch((error) => {
-				this.error = error instanceof Error ? error.message : String(error);
-				for (const listener of this.listeners)
-					listener(this.activeWorkflowId ?? "");
-			})
-			.finally(() => {
-				this.running = false;
-				if (this.queued && !this.disposed) {
-					this.queued = false;
-					const nextWorkflowId = this.queuedWorkflowId;
-					this.queuedWorkflowId = undefined;
-					this.request(nextWorkflowId);
-				}
-			});
-	}
-
-	onError(listener: (workflowId: string) => void): () => void {
-		this.listeners.add(listener);
-		return () => this.listeners.delete(listener);
-	}
-
-	onSettled(listener: (workflowId: string) => void): () => void {
-		this.settledListeners.add(listener);
-		return () => this.settledListeners.delete(listener);
-	}
-
-	lastError(workflowId?: string): string | undefined {
-		return (workflowId && this.workflowErrors.get(workflowId)) || this.error;
-	}
-
-	dispose(): void {
-		this.disposed = true;
-		this.controller?.abort();
-		this.queued = false;
-		this.queuedWorkflowId = undefined;
-	}
-}
-
-const coordinators = new Map<string, RepositoryExecutionCoordinator>();
-
-/** The dashboard's one application runtime (complete-workflow-effect-cutover,
- * task 1): all repositories' execution coordinators share this layer, so
- * refresh/action/start/repair never create a fresh runtime per operation.
- * Release it on dashboard unmount via `disposeDashboardApplication`. */
-export const dashboardApplication = new WorkflowApplication();
-
-export function disposeDashboardApplication(): void {
-	dashboardApplication.dispose();
-}
-
-export function executionCoordinator(
-	repo: string,
-	application: WorkflowApplication = dashboardApplication,
-): RepositoryExecutionCoordinator {
-	let coordinator = coordinators.get(repo);
-	if (!coordinator) {
-		coordinator = new RepositoryExecutionCoordinator(repo, application);
-		coordinators.set(repo, coordinator);
-	}
-	return coordinator;
-}
-
-export function disposeExecutionCoordinator(repo: string): void {
-	coordinators.get(repo)?.dispose();
-	coordinators.delete(repo);
-}
-
-export function requestWorkflowExecution(
-	repo: string,
-	workflowId?: string,
-): void {
-	executionCoordinator(repo).request(workflowId);
-}
-
-export function onWorkflowExecutionError(
-	repo: string,
-	listener: (workflowId: string) => void,
-): () => void {
-	return executionCoordinator(repo).onError(listener);
-}
-
-/** Fires after a dashboard-initiated drain settles so the view refreshes even
- * when the change produced no Herdr event (for example a developer-step
- * transition). */
-export function onWorkflowExecutionSettled(
-	repo: string,
-	listener: (workflowId: string) => void,
-): () => void {
-	return executionCoordinator(repo).onSettled(listener);
-}
-
-export function workflowExecutionError(
-	repo: string,
-	workflowId?: string,
-): string | undefined {
-	return coordinators.get(repo)?.lastError(workflowId);
-}
+// Repository execution coordination and the shared application runtime moved
+// to the root-owned `workflow/execution-coordinator.ts` (compose-unified-
+// feature-shell, task 1.2). Re-exported here so existing dashboard callers and
+// tests keep one import site while the backend-facing owner has no TUI imports.
+export {
+	dashboardApplication,
+	disposeDashboardApplication,
+	disposeExecutionCoordinator,
+	executionCoordinator,
+	onWorkflowExecutionError,
+	onWorkflowExecutionSettled,
+	requestWorkflowExecution,
+	setCredentialPromptProvider,
+	workflowExecutionError,
+};
 
 export function getWorkflowView(
 	repo: string,

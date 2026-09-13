@@ -2,12 +2,37 @@ import type { KeybindSection } from "../../shared/keybinds";
 import type { View } from "./navigation";
 
 export type OtelTab =
+	| "environments"
 	| "workflow"
 	| "wiki"
 	| "traces"
 	| "metrics"
 	| "logs"
 	| "topology";
+
+/**
+ * Footer/help catalog for the imported Environments feature. Its feature-local
+ * navigation is registered by the embedded devenv keymap layers; this catalog
+ * keeps the shell footer informative until those registrations are projected
+ * through the shared contract (compose-unified-feature-shell task 3.6).
+ */
+export function environmentsKeybindCatalog(tabCount = 4): KeybindSection[] {
+	return [
+		{
+			title: "Navigation",
+			keybinds: [
+				{ key: `1-${tabCount}`, action: "feature tabs", standard: true },
+			],
+		},
+		{
+			title: "Actions",
+			keybinds: [
+				{ key: "?", action: "help" },
+				{ key: "q", action: "quit", standard: true },
+			],
+		},
+	];
+}
 
 /**
  * Keybind catalog for the observability shell tabs. Standard navigation keys
