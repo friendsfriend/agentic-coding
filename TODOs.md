@@ -2,6 +2,7 @@ Not for agents. This is only for humans.
 
 Fixes: 
 * Remove info notifation for new traces
+* The herdr sidebar is jumping and not fully renders items unrelated to agentic-coding workflows
 
 Big ones:
 * Implement Agent steered version of the workflow. Basically an orchestrator version of the workflow.

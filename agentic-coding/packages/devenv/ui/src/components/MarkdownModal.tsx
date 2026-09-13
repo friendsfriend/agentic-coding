@@ -1,8 +1,8 @@
 /** @jsxImportSource @opentui/solid */
+// Shared markdown rendering — single source: src/tui/shared/MarkdownViewer.tsx.
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
-import { uiColors } from "../colors";
-import { getMarkdownSyntaxStyle } from "../markdownSyntax";
+import { MarkdownViewer } from "../../../../../src/tui/shared/MarkdownViewer";
 import { GenericModal } from "./GenericModal";
 import { formatHelpText } from "./HelpText";
 import { ScrollableContent } from "./ScrollableContent";
@@ -28,14 +28,7 @@ export function MarkdownModal(props: MarkdownModalProps) {
 			customHeader={props.hideTitle ? <box style={{ height: 0 }} /> : undefined}
 		>
 			<ScrollableContent axes={["y"]} onScrollBoxReady={props.onScrollBoxReady}>
-				<code
-					filetype="markdown"
-					content={props.content}
-					syntaxStyle={getMarkdownSyntaxStyle()}
-					drawUnstyledText={false}
-					fg={uiColors.textSecondary}
-					width={contentWidth()}
-				/>
+				<MarkdownViewer content={props.content} width={contentWidth()} />
 			</ScrollableContent>
 		</GenericModal>
 	);

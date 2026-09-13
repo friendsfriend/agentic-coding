@@ -1,8 +1,10 @@
 /** @jsxImportSource @opentui/solid */
 
-import { type ScrollBoxRenderable, SyntaxStyle } from "@opentui/core";
+import type { ScrollBoxRenderable } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
 import { createEffect, createMemo, For, Show } from "solid-js";
+import { MarkdownBlockView } from "../../shared/MarkdownViewer";
+import { getMarkdownSyntaxStyle } from "../../shared/markdownSyntax";
 import { parseMarkdownBlocks } from "../devenv-ui/markdownBlocks";
 import { uiColors } from "./colors";
 import { GenericModal } from "./GenericModal";
@@ -23,7 +25,6 @@ export function VerdictModal(props: {
 	const dimensions = useTerminalDimensions();
 	const contentWidth = () =>
 		Math.max(40, Math.floor(dimensions().width * 0.7) - 8);
-	const syntaxStyle = SyntaxStyle.create();
 	const blocks = createMemo(() =>
 		props.renderMarkdown ? parseMarkdownBlocks(props.content) : [],
 	);
@@ -50,7 +51,7 @@ export function VerdictModal(props: {
 						<code
 							filetype="markdown"
 							content={props.content}
-							syntaxStyle={syntaxStyle}
+							syntaxStyle={getMarkdownSyntaxStyle()}
 							fg={uiColors.textSecondary}
 							width={contentWidth()}
 						/>
@@ -67,9 +68,8 @@ export function VerdictModal(props: {
 											? `${String(block.startLine)}-${String(block.endLine)}`
 											: String(block.startLine)}
 									</text>
-									<markdown
-										content={block.source}
-										syntaxStyle={syntaxStyle}
+									<MarkdownBlockView
+										source={block.source}
 										fg={uiColors.textSecondary}
 										width={contentWidth()}
 										flexGrow={1}

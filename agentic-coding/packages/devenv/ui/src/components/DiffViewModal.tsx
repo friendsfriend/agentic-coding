@@ -5,6 +5,12 @@ import type { Discussion } from "@devenv/types";
 import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
 import { createEffect, createMemo, For, Show } from "solid-js";
+import {
+	buildSplitDiffLines,
+	type DiffLine,
+	parseDiffLines,
+	type SplitDiffLine,
+} from "../../../../../src/tui/shared/diffView";
 import { uiColors } from "../colors";
 import { GenericModal } from "./GenericModal";
 import { formatHelpTextLines } from "./HelpText";
@@ -34,21 +40,6 @@ interface DiffViewModalProps {
 	onNavigateFile?: (direction: 1 | -1) => void;
 	onScrollBoxReady?: (scrollBox: ScrollBoxRenderable) => void;
 	onReplyToDiscussion?: (discussionID: string, body: string) => Promise<void>; // NEW: Reply callback
-}
-
-interface DiffLine {
-	lineNumber: number; // Line number in the diff output
-	type: "added" | "removed" | "context" | "header";
-	content: string;
-	oldLineNum?: number; // Original line number (for removed/context)
-	newLineNum?: number; // New file line number (for added/context)
-}
-
-interface SplitDiffLine {
-	lineNumber: number; // Index in the split view
-	oldLine?: { lineNum?: number; content: string; type: "removed" | "context" };
-	newLine?: { lineNum?: number; content: string; type: "added" | "context" };
-	header?: string;
 }
 
 /**
@@ -87,86 +78,7 @@ export function DiffViewModal(props: DiffViewModalProps) {
 	const isCommentMode = createMemo(() => props.commentMode);
 
 	// Parse unified diff into individual lines
-	const parsedLines = createMemo((): DiffLine[] => {
-		const lines: DiffLine[] = [];
-		const diffLines = props.diff.split("\n");
-
-		let oldLineNum = 0;
-		let newLineNum = 0;
-		let lineNumber = 0;
-
-		for (const line of diffLines) {
-			lineNumber++;
-
-			// Skip diff header lines (---, +++, @@)
-			if (line.startsWith("---") || line.startsWith("+++")) {
-				lines.push({
-					lineNumber,
-					type: "header",
-					content: line,
-				});
-				continue;
-			}
-
-			// Hunk header (@@ -10,7 +10,7 @@)
-			if (line.startsWith("@@")) {
-				const match = line.match(/@@ -(\d+),?\d* \+(\d+),?\d* @@/);
-				if (match) {
-					oldLineNum = parseInt(match[1], 10) - 1;
-					newLineNum = parseInt(match[2], 10) - 1;
-				}
-				lines.push({
-					lineNumber,
-					type: "header",
-					content: line,
-				});
-				continue;
-			}
-
-			// Added line
-			if (line.startsWith("+")) {
-				newLineNum++;
-				lines.push({
-					lineNumber,
-					type: "added",
-					content: line.slice(1),
-					newLineNum,
-				});
-			}
-			// Removed line
-			else if (line.startsWith("-")) {
-				oldLineNum++;
-				lines.push({
-					lineNumber,
-					type: "removed",
-					content: line.slice(1),
-					oldLineNum,
-				});
-			}
-			// Context line
-			else if (line.startsWith(" ")) {
-				oldLineNum++;
-				newLineNum++;
-				lines.push({
-					lineNumber,
-					type: "context",
-					content: line.slice(1),
-					oldLineNum,
-					newLineNum,
-				});
-			}
-			// Other lines (e.g., "\ No newline at end of file")
-			else if (line.trim()) {
-				lines.push({
-					lineNumber,
-					type: "context",
-					content: line,
-				});
-			}
-		}
-
-		return lines;
-	});
+	const parsedLines = createMemo((): DiffLine[] => parseDiffLines(props.diff));
 
 	// Detect truly new/deleted files. Addition-only/deletion-only hunks in existing files still support split view.
 	const isFileAddedOrDeleted = createMemo(() => {
@@ -189,111 +101,9 @@ export function DiffViewModal(props: DiffViewModalProps) {
 	});
 
 	// Parse diff into split format (pairing old/new lines side-by-side)
-	const splitLines = createMemo((): SplitDiffLine[] => {
-		const lines: SplitDiffLine[] = [];
-		const parsed = parsedLines();
-		let lineNumber = 0;
-		let i = 0;
-
-		while (i < parsed.length) {
-			const line = parsed[i];
-
-			// Headers span both columns
-			if (line.type === "header") {
-				lines.push({
-					lineNumber: lineNumber++,
-					header: line.content,
-				});
-				i++;
-				continue;
-			}
-
-			// Context lines appear on both sides
-			if (line.type === "context") {
-				lines.push({
-					lineNumber: lineNumber++,
-					oldLine: {
-						lineNum: line.oldLineNum,
-						content: line.content,
-						type: "context",
-					},
-					newLine: {
-						lineNum: line.newLineNum,
-						content: line.content,
-						type: "context",
-					},
-				});
-				i++;
-				continue;
-			}
-
-			// Handle added/removed lines - try to pair them
-			if (line.type === "removed") {
-				// Look ahead for added lines to pair with
-				const removedLines: DiffLine[] = [line];
-				let j = i + 1;
-
-				// Collect consecutive removed lines
-				while (j < parsed.length && parsed[j].type === "removed") {
-					removedLines.push(parsed[j]);
-					j++;
-				}
-
-				// Collect consecutive added lines
-				const addedLines: DiffLine[] = [];
-				while (j < parsed.length && parsed[j].type === "added") {
-					addedLines.push(parsed[j]);
-					j++;
-				}
-
-				// Pair up removed and added lines
-				const maxLen = Math.max(removedLines.length, addedLines.length);
-				for (let k = 0; k < maxLen; k++) {
-					const removed = removedLines[k];
-					const added = addedLines[k];
-
-					lines.push({
-						lineNumber: lineNumber++,
-						oldLine: removed
-							? {
-									lineNum: removed.oldLineNum,
-									content: removed.content,
-									type: "removed",
-								}
-							: undefined,
-						newLine: added
-							? {
-									lineNum: added.newLineNum,
-									content: added.content,
-									type: "added",
-								}
-							: undefined,
-					});
-				}
-
-				i = j;
-				continue;
-			}
-
-			// Standalone added line (no corresponding removed line)
-			if (line.type === "added") {
-				lines.push({
-					lineNumber: lineNumber++,
-					newLine: {
-						lineNum: line.newLineNum,
-						content: line.content,
-						type: "added",
-					},
-				});
-				i++;
-				continue;
-			}
-
-			i++;
-		}
-
-		return lines;
-	});
+	const splitLines = createMemo((): SplitDiffLine[] =>
+		buildSplitDiffLines(parsedLines()),
+	);
 
 	// Filter out non-selectable lines (headers) - works for both unified and split
 	const selectableLines = createMemo(() => {

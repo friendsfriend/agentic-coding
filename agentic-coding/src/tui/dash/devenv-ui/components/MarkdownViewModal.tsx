@@ -1,11 +1,8 @@
 /** @jsxImportSource @opentui/solid */
-import {
-	type ScrollBoxRenderable,
-	SyntaxStyle,
-	TextAttributes,
-} from "@opentui/core";
+import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
 import { createEffect, createMemo, For, Show } from "solid-js";
+import { MarkdownBlockView } from "../../../shared/MarkdownViewer";
 import { uiColors } from "../colors";
 import {
 	blockSelectionToLines,
@@ -52,7 +49,6 @@ interface MarkdownViewModalProps {
  */
 export function MarkdownViewModal(props: MarkdownViewModalProps) {
 	const renderer = useRenderer();
-	const syntaxStyle = SyntaxStyle.create();
 
 	let scrollBox: ScrollBoxRenderable;
 
@@ -291,9 +287,8 @@ export function MarkdownViewModal(props: MarkdownViewModalProps) {
 										>
 											{lineLabel()}
 										</text>
-										<markdown
-											content={block.source}
-											syntaxStyle={syntaxStyle}
+										<MarkdownBlockView
+											source={block.source}
 											fg={fgColor()}
 											width={Math.max(20, Math.floor(renderer.width * 0.7))}
 											flexGrow={1}

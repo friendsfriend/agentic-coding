@@ -36,7 +36,7 @@ describe("terminalColorsToThemeColors", () => {
 		});
 	});
 
-	test("omits missing or invalid foreground, background, and palette", () => {
+	test("keeps palette slots by ANSI index and normalizes invalid entries", () => {
 		expect(
 			terminalColorsToThemeColors(
 				terminalColors({
@@ -48,7 +48,7 @@ describe("terminalColorsToThemeColors", () => {
 		).toEqual({
 			foreground: undefined,
 			background: undefined,
-			palette: ["#123456"],
+			palette: [undefined, undefined, "#123456"],
 		});
 	});
 

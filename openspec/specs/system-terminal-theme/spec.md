@@ -4,23 +4,22 @@
 TBD - created by archiving change system-terminal-theme. Update Purpose after archive.
 ## Requirements
 ### Requirement: Terminal color capture at startup
-
-The TUI SHALL query the controlling terminal for its configured colors — the 16 ANSI palette entries (codes 0–15) plus the default foreground and background — using standard OSC color queries (OSC 4, OSC 10, OSC 11) during interactive startup, before the persisted theme selection is applied. Capture SHALL be bounded by a timeout and SHALL restore the terminal input mode it changed.
+The TUI SHALL query the controlling terminal for its 16 ANSI palette entries and default foreground/background through the OpenTUI renderer palette API during interactive startup, before applying the persisted theme selection. Capture SHALL be bounded by a timeout and SHALL NOT install a competing manual terminal-input reader. Renderer-owned input handling SHALL remain valid after capture.
 
 #### Scenario: Terminal answers OSC color queries
-- **WHEN** the TUI starts in an interactive TTY session and the terminal replies to the OSC color queries within the timeout
-- **THEN** the captured ANSI palette and default foreground/background colors are parsed into concrete hex (`#rrggbb`) values
-- **AND** the terminal input mode in effect before capture is restored before the renderer is created
+- **WHEN** the TUI starts in an interactive TTY and the renderer palette query receives valid colors within the timeout
+- **THEN** the captured palette and foreground/background SHALL be normalized into concrete hex values
+- **AND** normal renderer input handling SHALL remain active without a second capture listener
 
 #### Scenario: Terminal does not answer within the timeout
-- **WHEN** the terminal does not reply to the OSC color queries within the timeout
-- **THEN** startup continues without blocking or hanging on terminal input
-- **AND** no system theme is registered
+- **WHEN** the palette query times out or fails
+- **THEN** startup SHALL continue without blocking terminal input
+- **AND** no captured system theme SHALL be registered
 
 #### Scenario: Non-interactive or headless run
-- **WHEN** the TUI runs without an interactive TTY (for example headless/`--json` mode)
-- **THEN** terminal color capture is skipped
-- **AND** no system theme is registered
+- **WHEN** the application runs without an interactive TTY, including headless/JSON commands
+- **THEN** terminal capture SHALL be skipped
+- **AND** no system theme SHALL be registered
 
 ### Requirement: System theme mapping
 

@@ -39,11 +39,12 @@ export function highlightColor(value?: Highlight) {
 			return uiColors.textPrimary;
 	}
 }
-export function HighlightedText(props: {
+export interface HighlightedTextProps {
 	text: string | number;
 	highlight?: Highlight;
 	attributes?: number;
-}) {
+}
+export function HighlightedText(props: HighlightedTextProps) {
 	return (
 		<text
 			fg={highlightColor(props.highlight)}

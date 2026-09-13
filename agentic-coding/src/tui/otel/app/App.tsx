@@ -47,6 +47,7 @@ import {
 	type KeybindSection,
 	setActiveKeybindCatalog,
 } from "../../shared/keybinds";
+import { ModalHelpOverlay } from "../../shared/ModalHelpOverlay";
 import { handleModalHelpKey, modalHelpOpen } from "../../shared/modalHelp";
 import { Badge } from "../components/Badge";
 import { HighlightedText } from "../components/Highlight";
@@ -1233,6 +1234,9 @@ export function App(props: {
 					lines={helpLines()}
 				/>
 			)}
+			{/* Shared portaled modals (e.g. the theme picker) publish a modal-help
+			    catalog; paint it at the shell root so `?` is not a dead key. */}
+			<ModalHelpOverlay zIndex={30} />
 		</box>
 	);
 }

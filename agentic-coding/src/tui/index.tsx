@@ -23,14 +23,11 @@ import { listWorkflowsAsync, loadDashboardAsync } from "./dash/observations";
 import { setGlobalSelectionMouseUpHandler } from "./dash/selectionCopy";
 import {
 	applyTheme as applyDashTheme,
+	loadCustomThemes,
 	loadThemeName as loadDashThemeName,
 } from "./dash/theme-settings";
 import { traceTui } from "./dash/tracing";
-import {
-	buildSystemTheme,
-	captureTerminalColors,
-} from "./dash/ui/terminal-colors";
-import { setSystemTheme } from "./dash/ui/theme";
+import { applyCapturedSystemTheme } from "./dash/ui/terminal-colors";
 import {
 	beginShutdown,
 	beginStartup,
@@ -267,13 +264,11 @@ export async function main(): Promise<void> {
 	const stack: ServerStack = { servers: [] };
 
 	// ---- Render app first; the startup modal covers the bootstrap below ----
-	// Capture the terminal's configured palette (OSC queries) so a persisted
-	// `system` theme selection resolves here, before the OpenTUI renderer takes
-	// over stdin. Capture is a no-op on non-TTY/headless runs; when it fails,
-	// no `system` entry is registered and the saved name falls back to default.
-	const systemTheme = await captureTerminalColors();
-	if (systemTheme.ok) setSystemTheme(buildSystemTheme(systemTheme.palette));
-	applyDashTheme(loadDashThemeName());
+	// Create the renderer first, then query it for the terminal palette through
+	// the renderer-owned palette API. Capture is bounded by a timeout; a
+	// headless/failed query leaves `system` unregistered, so the persisted name
+	// falls back to the default theme. Custom themes register before the
+	// persisted selection resolves so cross-family theme names stay valid.
 	process.env.FORCE_COLOR = "3";
 	const renderer = await createCliRenderer({
 		targetFps: 30,
@@ -282,6 +277,9 @@ export async function main(): Promise<void> {
 		exitSignals: [],
 	});
 	globalThis.__renderer = renderer;
+	loadCustomThemes();
+	await applyCapturedSystemTheme(renderer);
+	applyDashTheme(loadDashThemeName());
 
 	// Always catch async exceptions: an uncaught throw inside the input/render
 	// loops would otherwise kill key and mouse handling entirely. Report to
