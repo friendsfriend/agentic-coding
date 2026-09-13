@@ -1,9 +1,8 @@
 /** @jsxImportSource @opentui/solid */
+// Shared theme picker — single source: src/tui/shared/ThemePicker.tsx. The
+// dashboard keeps its display-only `/ <query>` header (no live cursor).
+import { ThemePicker } from "../../shared/ThemePicker";
 
-import { uiColors } from "./colors";
-import { GenericModal } from "./GenericModal";
-import { SelectableList } from "./Selectable";
-import { themeColorForTheme } from "./theme";
 export function ThemePickerModal(props: {
 	selected: number;
 	active: string;
@@ -12,44 +11,14 @@ export function ThemePickerModal(props: {
 	filtering: boolean;
 }) {
 	return (
-		<GenericModal
-			title="Theme Picker"
-			widthPercent={0.7}
-			heightPercent={0.75}
-			help={[
-				{ key: "j/k", action: "Navigate" },
-				{ key: "Enter", action: "Apply" },
-				{ key: "Esc", action: "Close" },
-			]}
-			search={props.filtering ? props.query : undefined}
-		>
-			<SelectableList
-				items={props.themes}
-				selectedIndex={props.selected}
-				renderItem={(name) => (
-					<box height={1} width="100%" flexDirection="row">
-						<text fg={uiColors.textPrimary}>
-							{name === props.active ? "✓ " : "  "}
-							{name.padEnd(28)}
-						</text>
-						<text fg={themeColorForTheme(name, "primary", uiColors.primary)}>
-							▬▬
-						</text>
-						<text fg={themeColorForTheme(name, "accent", uiColors.accent)}>
-							▬▬
-						</text>
-						<text fg={themeColorForTheme(name, "success", uiColors.success)}>
-							▬▬
-						</text>
-						<text fg={themeColorForTheme(name, "warning", uiColors.warning)}>
-							▬▬
-						</text>
-						<text fg={themeColorForTheme(name, "error", uiColors.error)}>
-							▬▬
-						</text>
-					</box>
-				)}
-			/>
-		</GenericModal>
+		<ThemePicker
+			selected={props.selected}
+			active={props.active}
+			themes={props.themes}
+			query={props.query}
+			filtering={props.filtering}
+			searchMode="display"
+			showFilterKeybind={false}
+		/>
 	);
 }

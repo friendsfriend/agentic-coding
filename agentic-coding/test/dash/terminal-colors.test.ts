@@ -1,223 +1,197 @@
-import { afterAll, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+	afterAll,
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+} from "bun:test";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { TerminalColors } from "@opentui/core";
 import {
+	loadCustomThemes,
 	loadThemeName,
 	saveThemeName,
+	themeSettingsPath,
 } from "../../src/tui/dash/theme-settings";
 import {
 	buildSystemTheme,
-	parseOscReply,
-	readTerminalPalette,
+	captureRendererPalette,
+	terminalColorsToThemeColors,
 } from "../../src/tui/dash/ui/terminal-colors";
 import {
 	setActiveThemeName,
+	setCustomThemes,
 	setSystemTheme,
 	themeColor,
 	themeColorForTheme,
 	themeNames,
 } from "../../src/tui/dash/ui/theme";
 
-/** Fake data source satisfying ByteSource; tests drive it with emit(). */
-class FakeSource {
-	private listeners = new Set<(chunk: Buffer) => void>();
-	removedListeners = 0;
-
-	on(event: "data", listener: (chunk: Buffer) => void): this {
-		if (event === "data") this.listeners.add(listener);
-		return this;
-	}
-
-	removeListener(event: "data", listener: (chunk: Buffer) => void): this {
-		if (event === "data") {
-			this.listeners.delete(listener);
-			this.removedListeners += 1;
-		}
-		return this;
-	}
-
-	emit(text: string) {
-		const chunk = Buffer.from(text, "latin1");
-		for (const listener of [...this.listeners]) listener(chunk);
-	}
-}
-
-const BEL = "\x07";
-const ST = "\x1b\\";
-const ansiReply = (index: number, rgb: string) =>
-	`\x1b]4;${index};rgb:${rgb}${BEL}`;
-const fgReply = (rgb: string) => `\x1b]10;rgb:${rgb}${BEL}`;
-const bgReply = (rgb: string) => `\x1b]11;rgb:${rgb}${BEL}`;
 const pad = (value: number) => value.toString(16).padStart(2, "0");
 
-/** All 18 expected replies; ANSI entry i is `#i_i_i_` (16-bit `iiff` channels). */
-const fullReplyStream = (prefix = "") =>
-	prefix +
-	Array.from({ length: 16 }, (_, i) =>
-		ansiReply(i, `${pad(i)}ff/${pad(i)}ff/${pad(i)}ff`),
-	).join("") +
-	fgReply("ffff/ffff/ffff") +
-	bgReply("0000/0000/0000");
+const terminalColors = (
+	overrides: Partial<TerminalColors> = {},
+): TerminalColors => ({
+	palette: Array.from(
+		{ length: 16 },
+		(_, idx) => `#${pad(idx)}${pad(idx)}${pad(idx)}`,
+	),
+	defaultForeground: "#aabbcc",
+	defaultBackground: "#112233",
+	cursorColor: null,
+	mouseForeground: null,
+	mouseBackground: null,
+	tekForeground: null,
+	tekBackground: null,
+	highlightBackground: null,
+	highlightForeground: null,
+	...overrides,
+});
 
-describe("parseOscReply", () => {
-	it("parses a BEL-terminated OSC 4 reply into the ANSI code and hex", () => {
-		expect(parseOscReply(`\x1b]4;3;rgb:8080/8080/8080${BEL}`)).toEqual({
-			osc: 4,
-			code: 3,
-			hex: "#808080",
-		});
-	});
+const capturePalette = {
+	ansi: [
+		"#000000",
+		"#800000",
+		"#008000",
+		"#808000",
+		"#000080",
+		"#800080",
+		"#008080",
+		"#c0c0c0",
+		"#808080",
+		"#ff0000",
+		"#00ff00",
+		"#ffff00",
+		"#0000ff",
+		"#ff00ff",
+		"#00ffff",
+		"#ffffff",
+	],
+	fg: "#ffffff",
+	bg: "#101010",
+};
 
-	it("tolerates the ST terminator", () => {
-		expect(parseOscReply(`\x1b]4;3;rgb:8080/8080/8080${ST}`)).toEqual({
-			osc: 4,
-			code: 3,
-			hex: "#808080",
+describe("terminalColorsToThemeColors", () => {
+	it("normalizes renderer colors and drops invalid entries", () => {
+		expect(terminalColorsToThemeColors(terminalColors())).toEqual({
+			foreground: "#aabbcc",
+			background: "#112233",
+			palette: Array.from(
+				{ length: 16 },
+				(_, idx) => `#${pad(idx)}${pad(idx)}${pad(idx)}`,
+			),
 		});
-	});
-
-	it("downscales 16-bit-per-channel values to #rrggbb", () => {
-		expect(parseOscReply(`\x1b]4;3;rgb:cd00/cd00/cd00${BEL}`)).toEqual({
-			osc: 4,
-			code: 3,
-			hex: "#cdcdcd",
+		expect(
+			terminalColorsToThemeColors(
+				terminalColors({
+					palette: [null, "not-a-color", "#123456"] as unknown as string[],
+					defaultForeground: null,
+					defaultBackground: null,
+				}),
+			),
+		).toEqual({
+			foreground: undefined,
+			background: undefined,
+			palette: [undefined, undefined, "#123456"],
 		});
-	});
-
-	it("accepts 8-bit-per-channel values", () => {
-		expect(parseOscReply(`\x1b]4;5;rgb:cd/cd/cd${BEL}`)).toEqual({
-			osc: 4,
-			code: 5,
-			hex: "#cdcdcd",
-		});
-	});
-
-	it("parses OSC 10 (fg) and OSC 11 (bg) replies", () => {
-		expect(parseOscReply(`\x1b]10;rgb:ffff/ffff/ffff${BEL}`)).toEqual({
-			osc: 10,
-			code: 10,
-			hex: "#ffffff",
-		});
-		expect(parseOscReply(`\x1b]11;rgb:0000/0000/0000${BEL}`)).toEqual({
-			osc: 11,
-			code: 11,
-			hex: "#000000",
-		});
-	});
-
-	it("handles rgba replies and uppercase hex", () => {
-		expect(parseOscReply(`\x1b]4;3;rgba:8080/8080/8080/ffff${BEL}`)).toEqual({
-			osc: 4,
-			code: 3,
-			hex: "#808080",
-		});
-		expect(parseOscReply(`\x1b]4;1;rgb:FF00/0000/0000${BEL}`)).toEqual({
-			osc: 4,
-			code: 1,
-			hex: "#ff0000",
-		});
-	});
-
-	it("returns null for malformed, partial, or non-color input", () => {
-		expect(parseOscReply("no osc here")).toBeNull();
-		expect(parseOscReply(`\x1b]4;3;rgb:8080/8080/8080`)).toBeNull();
-		expect(parseOscReply(`\x1b]4;3;nope${BEL}`)).toBeNull();
-		expect(parseOscReply(`\x1b]4;rgb:8080/8080/8080${BEL}`)).toBeNull();
-		expect(parseOscReply(`\x1b]5;3;rgb:8080/8080/8080${BEL}`)).toBeNull();
-		expect(parseOscReply(`\x1b]4;3;rgb:8/80/80${BEL}`)).toBeNull();
-		expect(parseOscReply(`\x1b]4;3;rgb:8080/8080${BEL}`)).toBeNull();
 	});
 });
 
-describe("readTerminalPalette", () => {
-	it("captures the palette when all replies arrive in one chunk", async () => {
-		const source = new FakeSource();
-		const promise = readTerminalPalette(source, 100);
-		source.emit(fullReplyStream());
-		const result = await promise;
-		expect(result.ok).toBe(true);
-		if (!result.ok) return;
-		expect(result.palette.fg).toBe("#ffffff");
-		expect(result.palette.bg).toBe("#000000");
-		expect(result.palette.ansi).toHaveLength(16);
-		expect(result.palette.ansi[0]).toBe("#000000");
-		expect(result.palette.ansi[10]).toBe("#0a0a0a");
-		expect(result.palette.ansi[11]).toBe("#0b0b0b");
-		expect(result.palette.ansi[15]).toBe("#0f0f0f");
-	});
-
-	it("assembles replies split across chunks and skips leading noise", async () => {
-		const source = new FakeSource();
-		const promise = readTerminalPalette(source, 100);
-		const stream = fullReplyStream("noise-bytes-before");
-		const splitAt = Math.floor(stream.length / 2);
-		source.emit(stream.slice(0, splitAt));
-		source.emit(stream.slice(splitAt));
-		const result = await promise;
-		expect(result).toEqual({
-			ok: true,
-			palette: {
-				ansi: Array.from(
-					{ length: 16 },
-					(_, i) => `#${pad(i)}${pad(i)}${pad(i)}`,
-				),
-				fg: "#ffffff",
-				bg: "#000000",
-			},
+describe("captureRendererPalette", () => {
+	it("captures a valid palette from the renderer palette API", async () => {
+		const result = await captureRendererPalette({
+			getPalette: async () => terminalColors(),
 		});
+		expect(result?.fg).toBe("#aabbcc");
+		expect(result?.bg).toBe("#112233");
+		expect(result?.ansi).toHaveLength(16);
 	});
 
-	it("times out with { ok: false } when the terminal never answers", async () => {
-		const source = new FakeSource();
-		const result = await readTerminalPalette(source, 20);
-		expect(result).toEqual({ ok: false });
-		expect(source.removedListeners).toBe(1);
+	it("keeps unanswered palette slots on their original ANSI index", async () => {
+		const result = await captureRendererPalette({
+			getPalette: async () =>
+				terminalColors({
+					palette: ["#111111", null, "#333333"] as unknown as string[],
+				}),
+		});
+		expect(result?.ansi).toHaveLength(16);
+		expect(result?.ansi[0]).toBe("#111111");
+		// Slot 1 was unanswered, so it falls back per index rather than shifting
+		// the captured slot 2 color down into it.
+		expect(result?.ansi[1]).toBe("#800000");
+		expect(result?.ansi[2]).toBe("#333333");
 	});
 
-	it("returns { ok: false } on timeout even with a partial palette", async () => {
-		const source = new FakeSource();
-		const promise = readTerminalPalette(source, 20);
-		source.emit(
-			ansiReply(0, "0100/0100/0100") + ansiReply(1, "0101/0101/0101"),
+	it("returns null when the renderer has no palette API (headless)", async () => {
+		expect(await captureRendererPalette({})).toBeNull();
+	});
+
+	it("returns null when the renderer query rejects", async () => {
+		expect(
+			await captureRendererPalette({
+				getPalette: async () => {
+					throw new Error("no tty");
+				},
+			}),
+		).toBeNull();
+	});
+
+	it("returns null when the query resolves without usable colors", async () => {
+		expect(
+			await captureRendererPalette({
+				getPalette: async () =>
+					terminalColors({
+						palette: [],
+						defaultForeground: null,
+						defaultBackground: null,
+					}),
+			}),
+		).toBeNull();
+		// The real renderer answers a headless/timed-out query with a 16-slot
+		// all-null palette, not an empty array: it must not register `system`
+		// from the hardcoded ANSI fallbacks.
+		expect(
+			await captureRendererPalette({
+				getPalette: async () =>
+					terminalColors({
+						palette: Array.from(
+							{ length: 16 },
+							() => null,
+						) as unknown as string[],
+						defaultForeground: null,
+						defaultBackground: null,
+					}),
+			}),
+		).toBeNull();
+	});
+
+	it("times out a hung query instead of blocking startup", async () => {
+		const result = await captureRendererPalette(
+			{ getPalette: () => new Promise<TerminalColors>(() => {}) },
+			10,
 		);
-		const result = await promise;
-		expect(result).toEqual({ ok: false });
+		expect(result).toBeNull();
 	});
 });
 
 describe("buildSystemTheme", () => {
-	const palette = {
-		ansi: [
-			"#000000",
-			"#800000",
-			"#008000",
-			"#808000",
-			"#000080",
-			"#800080",
-			"#008080",
-			"#c0c0c0",
-			"#808080",
-			"#ff0000",
-			"#00ff00",
-			"#ffff00",
-			"#0000ff",
-			"#ff00ff",
-			"#00ffff",
-			"#ffffff",
-		],
-		fg: "#ffffff",
-		bg: "#101010",
-	};
-
 	it("maps background and text from the default fg/bg", () => {
-		const theme = buildSystemTheme(palette);
+		const theme = buildSystemTheme(capturePalette);
 		expect(theme.theme.background).toBe("#101010");
 		expect(theme.theme.text).toBe("#ffffff");
 	});
 
 	it("maps semantic keys from the ANSI palette", () => {
-		const theme = buildSystemTheme(palette);
+		const theme = buildSystemTheme(capturePalette);
 		expect(theme.theme.error).toBe("#800000");
 		expect(theme.theme.success).toBe("#008000");
 		expect(theme.theme.warning).toBe("#808000");
@@ -229,7 +203,7 @@ describe("buildSystemTheme", () => {
 	});
 
 	it("derives surfaces and borders distinct from the background", () => {
-		const theme = buildSystemTheme(palette);
+		const theme = buildSystemTheme(capturePalette);
 		for (const key of [
 			"backgroundPanel",
 			"backgroundElement",
@@ -244,7 +218,7 @@ describe("buildSystemTheme", () => {
 	});
 
 	it("maps diff/markdown/syntax keys to captured-derived colors", () => {
-		const theme = buildSystemTheme(palette);
+		const theme = buildSystemTheme(capturePalette);
 		expect(theme.theme.diffAdded).toBe(theme.theme.success);
 		expect(theme.theme.diffRemoved).toBe(theme.theme.error);
 		expect(theme.theme.diffContext).toBe(theme.theme.textMuted);
@@ -254,7 +228,7 @@ describe("buildSystemTheme", () => {
 	});
 
 	it("covers every theme key with a concrete #rrggbb value", () => {
-		const theme = buildSystemTheme(palette);
+		const theme = buildSystemTheme(capturePalette);
 		const keys = Object.keys(theme.theme);
 		expect(keys.length).toBeGreaterThan(20);
 		for (const key of keys) {
@@ -265,11 +239,169 @@ describe("buildSystemTheme", () => {
 	});
 });
 
+describe("UI preferences", () => {
+	let dir: string;
+	let previousConfigDir: string | undefined;
+	let previousLegacy: string | undefined;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "ui-prefs-"));
+		previousConfigDir = process.env.DEVENV_CONFIG_DIR;
+		previousLegacy = process.env.HERDR_WORKFLOW_CONFIG;
+		process.env.DEVENV_CONFIG_DIR = dir;
+		delete process.env.HERDR_WORKFLOW_CONFIG;
+	});
+
+	afterEach(() => {
+		if (previousConfigDir === undefined) delete process.env.DEVENV_CONFIG_DIR;
+		else process.env.DEVENV_CONFIG_DIR = previousConfigDir;
+		if (previousLegacy === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
+		else process.env.HERDR_WORKFLOW_CONFIG = previousLegacy;
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("canonical selection takes precedence over the legacy file", () => {
+		writeFileSync(themeSettingsPath(), JSON.stringify({ theme: "nord" }));
+		const legacy = join(dir, "herdr-workflow.toml");
+		writeFileSync(legacy, '[ui]\ntheme = "dracula"\n');
+		process.env.HERDR_WORKFLOW_CONFIG = legacy;
+		expect(loadThemeName()).toBe("nord");
+	});
+
+	it("imports a valid legacy selection preserving unrelated keys", () => {
+		const canonical = join(dir, "tui.json");
+		writeFileSync(canonical, JSON.stringify({ fontSize: 13 }));
+		const legacy = join(dir, "herdr-workflow.toml");
+		writeFileSync(legacy, `[ui]\ntheme = "dracula"\n`);
+		process.env.HERDR_WORKFLOW_CONFIG = legacy;
+		expect(loadThemeName()).toBe("dracula");
+		expect(JSON.parse(String(readFileSync(canonical)))).toEqual({
+			fontSize: 13,
+			theme: "dracula",
+		});
+	});
+
+	it("defaults to catppuccin with no canonical or legacy selection", () => {
+		// Point the legacy path at a file that cannot exist so the assertion is
+		// independent of the developer's real ~/dotfiles config.
+		process.env.HERDR_WORKFLOW_CONFIG = join(dir, "missing-legacy.toml");
+		expect(loadThemeName()).toBe("catppuccin");
+	});
+
+	it("keeps a persisted system selection that is not captured yet", () => {
+		// `system` is only registered after a successful capture, but a saved
+		// selection must survive a capture failure instead of being replaced by
+		// the legacy file.
+		writeFileSync(themeSettingsPath(), JSON.stringify({ theme: "system" }));
+		const legacy = join(dir, "herdr-workflow.toml");
+		writeFileSync(legacy, '[ui]\ntheme = "dracula"\n');
+		process.env.HERDR_WORKFLOW_CONFIG = legacy;
+		expect(loadThemeName()).toBe("catppuccin");
+		expect(JSON.parse(String(readFileSync(themeSettingsPath())))).toEqual({
+			theme: "system",
+		});
+	});
+
+	it("ignores a legacy `theme` key outside the [ui] table", () => {
+		const legacy = join(dir, "herdr-workflow.toml");
+		writeFileSync(
+			legacy,
+			'[ui]\nfontSize = 12\n\n[workflow]\ntheme = "dracula"\n',
+		);
+		process.env.HERDR_WORKFLOW_CONFIG = legacy;
+		expect(loadThemeName()).toBe("catppuccin");
+	});
+
+	it("ignores a legacy `system` name that was never captured", () => {
+		const legacy = join(dir, "herdr-workflow.toml");
+		writeFileSync(legacy, '[ui]\ntheme = "system"\n');
+		process.env.HERDR_WORKFLOW_CONFIG = legacy;
+		expect(loadThemeName()).toBe("catppuccin");
+	});
+
+	it("saves atomically while preserving unrelated keys", () => {
+		writeFileSync(themeSettingsPath(), JSON.stringify({ keymap: "vim" }));
+		saveThemeName("nord");
+		expect(JSON.parse(String(readFileSync(themeSettingsPath())))).toEqual({
+			keymap: "vim",
+			theme: "nord",
+		});
+	});
+
+	it("rejects an invalid theme name without touching the saved file", () => {
+		writeFileSync(themeSettingsPath(), JSON.stringify({ theme: "nord" }));
+		expect(() => saveThemeName("not-a-theme")).toThrow();
+		expect(JSON.parse(String(readFileSync(themeSettingsPath())))).toEqual({
+			theme: "nord",
+		});
+	});
+
+	it("loads valid custom themes and rejects reserved or colliding names", () => {
+		const themes = join(dir, "themes");
+		mkdirSync(themes, { recursive: true });
+		writeFileSync(
+			join(themes, "my-theme.json"),
+			JSON.stringify({ theme: { text: "#ffffff" } }),
+		);
+		writeFileSync(
+			join(themes, "system.json"),
+			JSON.stringify({ theme: { text: "#000000" } }),
+		);
+		writeFileSync(
+			join(themes, "nord.json"),
+			JSON.stringify({ theme: { text: "#123456" } }),
+		);
+		// Names that exist on Object.prototype must still load: the duplicate
+		// check must test own keys, not the prototype chain.
+		writeFileSync(
+			join(themes, "constructor.json"),
+			JSON.stringify({ theme: { text: "#abcdef" } }),
+		);
+		writeFileSync(
+			join(themes, "toString.json"),
+			JSON.stringify({ theme: { text: "#fedcba" } }),
+		);
+		const loaded = loadCustomThemes();
+		expect(Object.keys(loaded).sort()).toEqual([
+			"constructor",
+			"my-theme",
+			"toString",
+		]);
+		expect(setActiveThemeName("my-theme")).toBe(true);
+		expect(setActiveThemeName("constructor")).toBe(true);
+		expect(themeColorForTheme("constructor", "text", "fallback")).toBe(
+			"#abcdef",
+		);
+		expect(themeColorForTheme("toString", "text", "fallback")).toBe("#fedcba");
+		// A colliding custom file never overwrites the bundled theme.
+		expect(themeNames).toContain("nord");
+		expect(themeColorForTheme("nord", "text", "fallback")).not.toBe("#123456");
+		setCustomThemes({});
+	});
+});
+
 describe("system theme registration", () => {
+	let dir: string;
+	let previousConfigDir: string | undefined;
+
 	const built = buildSystemTheme({
 		ansi: Array.from({ length: 16 }, (_, i) => `#${pad(i)}${pad(i)}${pad(i)}`),
 		fg: "#f0f0f0",
 		bg: "#101010",
+	});
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "system-theme-config-"));
+		previousConfigDir = process.env.DEVENV_CONFIG_DIR;
+		process.env.DEVENV_CONFIG_DIR = dir;
+	});
+
+	afterEach(() => {
+		setSystemTheme(undefined);
+		setActiveThemeName("catppuccin");
+		if (previousConfigDir === undefined) delete process.env.DEVENV_CONFIG_DIR;
+		else process.env.DEVENV_CONFIG_DIR = previousConfigDir;
+		rmSync(dir, { recursive: true, force: true });
 	});
 
 	afterAll(() => {
@@ -301,30 +433,9 @@ describe("system theme registration", () => {
 		);
 	});
 
-	it("falls back to the default theme when a saved `system` name has no captured theme", () => {
-		const dir = mkdtempSync(join(tmpdir(), "system-theme-config-"));
-		const file = join(dir, "herdr-workflow.toml");
-		writeFileSync(file, '[ui]\ntheme = "system"\n');
-		try {
-			process.env.HERDR_WORKFLOW_CONFIG = file;
-			expect(loadThemeName()).toBe("catppuccin");
-		} finally {
-			delete process.env.HERDR_WORKFLOW_CONFIG;
-			rmSync(dir, { recursive: true, force: true });
-		}
-	});
-
-	it("round-trips a saved `system` selection through persistence when registered", () => {
+	it("round-trips a saved `system` selection through persistence", () => {
 		setSystemTheme(built);
-		const dir = mkdtempSync(join(tmpdir(), "system-theme-config-"));
-		const file = join(dir, "herdr-workflow.toml");
-		try {
-			process.env.HERDR_WORKFLOW_CONFIG = file;
-			saveThemeName("system");
-			expect(loadThemeName()).toBe("system");
-		} finally {
-			delete process.env.HERDR_WORKFLOW_CONFIG;
-			rmSync(dir, { recursive: true, force: true });
-		}
+		saveThemeName("system");
+		expect(loadThemeName()).toBe("system");
 	});
 });

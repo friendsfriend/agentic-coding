@@ -107,7 +107,16 @@ export function isThemeJson(value: unknown): value is ThemeJson {
 
 export function setCustomThemes(themes: Record<string, ThemeJson>) {
 	for (const key of Object.keys(customThemeJson)) delete customThemeJson[key];
-	Object.assign(customThemeJson, themes);
+	for (const [key, value] of Object.entries(themes)) {
+		// Built-ins stay authoritative and `system` is reserved for a
+		// successful terminal capture; a colliding custom file never wins.
+		// `Object.hasOwn` (not `in`) so names on Object.prototype still load,
+		// and `__proto__` is skipped so the assignment cannot pollute the
+		// prototype instead of defining a theme entry.
+		if (key === "system" || key === "__proto__") continue;
+		if (Object.hasOwn(DEFAULT_THEME_JSON, key)) continue;
+		customThemeJson[key] = value;
+	}
 	syncThemeNames();
 }
 
