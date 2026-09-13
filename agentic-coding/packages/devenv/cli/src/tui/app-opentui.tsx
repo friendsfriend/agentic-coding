@@ -604,6 +604,7 @@ export function TUIApp(props: TUIAppProps) {
 					runningTextEnabled={uiStore.runningTextEnabled()}
 					runningTextOffset={uiStore.runningTextOffset()}
 					getTabBorderColor={(tab) => getTabBorderColor(tab, appStore)}
+					active={props.active}
 				/>
 				<ModalOverlays
 					stores={viewStores}

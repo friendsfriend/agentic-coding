@@ -108,7 +108,7 @@ export function NewWorkflowModal(props: {
 		workflowType: "Workflow type",
 		preset: "Agent preset",
 		ticket: "Ticket identifier optional",
-		change: "Workflow ID",
+		workflowId: "Workflow ID",
 		task: "Task required for wiki, research, and no OpenSpec",
 		mode: "Checkout mode",
 	};

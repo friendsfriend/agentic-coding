@@ -342,7 +342,11 @@ export function Home(props: {
 					run: ({ event }) => modalHandler()?.(event) ?? true,
 				},
 			],
-			bindings: modalKeys.map((key) => ({ key, cmd: "new-workflow.handle" })),
+			bindings: modalKeys.map((key) => ({
+				key,
+				cmd: "new-workflow.handle",
+				preventDefault: false,
+			})),
 		});
 		const disposeModelConfig = props.keymap.registerLayer({
 			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
@@ -355,7 +359,11 @@ export function Home(props: {
 					run: ({ event }) => modelConfigHandler()?.(event) ?? true,
 				},
 			],
-			bindings: modalKeys.map((key) => ({ key, cmd: "model-config.handle" })),
+			bindings: modalKeys.map((key) => ({
+				key,
+				cmd: "model-config.handle",
+				preventDefault: false,
+			})),
 		});
 		const disposeTheme = props.keymap.registerLayer({
 			...(props.shellFeature ? { shellFeature: "workflows" } : {}),

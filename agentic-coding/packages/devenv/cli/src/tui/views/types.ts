@@ -67,6 +67,7 @@ export interface ContentRouterProps {
 			| "kubernetes"
 			| "ui-test",
 	) => string;
+	active?: () => boolean;
 }
 
 export interface ModalOverlaysProps {

@@ -197,6 +197,7 @@ export function registerShellKeyLayer(
 			bindings: SHELL_KEYS.map((key) => ({
 				key,
 				cmd: "shell.dispatch",
+				preventDefault: false,
 			})),
 		}),
 	);

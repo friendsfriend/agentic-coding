@@ -759,12 +759,20 @@ export function ContentRouter(props: ContentRouterProps) {
 					/>
 				</Show>
 			)}
-			<Show when={appStore.loading()}>
+			<Show
+				when={
+					props.active
+						? props.active() && appStore.loading()
+						: appStore.loading()
+				}
+			>
 				<StartupSplash appStore={appStore} />
 			</Show>
 			<Show
 				when={
-					appStore.isShuttingDown() || appStore.shutdownState().phase !== "idle"
+					(props.active ? props.active() : true) &&
+					(appStore.isShuttingDown() ||
+						appStore.shutdownState().phase !== "idle")
 				}
 			>
 				<ShutdownSplash appStore={appStore} />

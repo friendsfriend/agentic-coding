@@ -1585,7 +1585,11 @@ export function App(props: {
 				..."abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,:;!?-_()/\\@#*+=[]{}~`'\"".split(
 					"",
 				),
-			].map((key) => ({ key, cmd: "developer-question.handle" })),
+			].map((key) => ({
+				key,
+				cmd: "developer-question.handle",
+				preventDefault: false,
+			})),
 		});
 		const disposeCredentials = props.keymap.registerLayer({
 			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
