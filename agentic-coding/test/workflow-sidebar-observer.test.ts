@@ -242,9 +242,10 @@ describe("sidebar presentation lifecycle (task 4.6)", () => {
 		expect(metadataCalls(calls)).toContain(
 			"workspace report-metadata w1 --source agentic-coding --token ac_project_line=◆ agentic-coding --token ac_workflow_line=├─ wf --token ac_type_line=│  openspec-full --token ac_phase_line=└─ Implementation",
 		);
-		// The agent card of the same space reflects only its own live state.
+		// The agent card of the same space reflects only its own live state. The
+		// fallback always carries the workflow row (here the pane label).
 		expect(metadataCalls(calls)).toContain(
-			"pane report-metadata w1:p1 --source agentic-coding --token ac_project_line=w1:p1 --token ac_status_line=└─ idle",
+			"pane report-metadata w1:p1 --source agentic-coding --token ac_project_line=w1:p1 --token ac_workflow_line=├─ w1:p1 --token ac_status_line=└─ idle",
 		);
 	});
 
@@ -310,6 +311,111 @@ describe("sidebar presentation lifecycle (task 4.6)", () => {
 			call.includes("--clear-token"),
 		);
 		expect(cleared.some((call) => call.includes("w1:p1"))).toBe(true);
+		presentation.dispose();
+	});
+
+	test("unmanaged fallback cards survive the next refresh", async () => {
+		const calls: RecordedCall[] = [];
+		const herdr: HerdrPort = {
+			call(...args: string[]) {
+				calls.push({ args });
+				if (args[0] === "agent" && args[1] === "list")
+					return {
+						agents: [{ pane_id: "w1:p1", agent: "pi", agent_status: "idle" }],
+					};
+				if (args[0] === "pane" && args[1] === "list")
+					return {
+						panes: [
+							{ pane_id: "w1:p1", workspace_id: "w1", agent_status: "idle" },
+							{
+								pane_id: "w9:p1",
+								workspace_id: "w9",
+								agent_status: "working",
+								terminal_title_stripped: "zsh",
+								tab_id: "w9:t9",
+							},
+						],
+					};
+				if (args[0] === "tab" && args[1] === "list")
+					return { tabs: [{ tab_id: "w9:t9", label: "scratch" }] };
+				if (args[0] === "workspace" && args[1] === "list")
+					return {
+						workspaces: [
+							{ workspace_id: "w1", label: "agentic-coding" },
+							{ workspace_id: "w9", label: "scratch-space" },
+						],
+					};
+				return {};
+			},
+		};
+		const presentation = new SidebarPresentation({
+			herdr,
+			views: () => [view({ workspace: "w1" })],
+		});
+		await presentation.reconcile();
+		await presentation.reconcile();
+		const unmanagedPaneCalls = metadataCalls(calls).filter((call) =>
+			call.includes("w9:p1"),
+		);
+		// The native fallback rows are published and never cleared afterwards.
+		expect(
+			unmanagedPaneCalls.some((call) => call.includes("ac_project_line=zsh")),
+		).toBe(true);
+		for (const call of unmanagedPaneCalls.filter((entry) =>
+			entry.includes("--clear-token"),
+		))
+			expect(call).not.toContain("ac_project_line");
+		for (const call of metadataCalls(calls).filter(
+			(entry) =>
+				entry.startsWith("workspace report-metadata w9") &&
+				entry.includes("--clear-token"),
+		))
+			expect(call).not.toContain("ac_project_line");
+		presentation.dispose();
+	});
+
+	test("a live title change never drops the unmanaged fallback workflow row", async () => {
+		let title = "vim";
+		const calls: RecordedCall[] = [];
+		const herdr: HerdrPort = {
+			call(...args: string[]) {
+				calls.push({ args });
+				if (args[0] === "agent" && args[1] === "list") return { agents: [] };
+				if (args[0] === "pane" && args[1] === "list")
+					return {
+						panes: [
+							{
+								pane_id: "w9:p1",
+								workspace_id: "w9",
+								agent_status: "working",
+								terminal_title_stripped: title,
+								tab_id: "w9:t9",
+							},
+						],
+					};
+				if (args[0] === "tab" && args[1] === "list")
+					return { tabs: [{ tab_id: "w9:t9", label: "scratch" }] };
+				return {};
+			},
+		};
+		const presentation = new SidebarPresentation({ herdr, views: () => [] });
+		await presentation.reconcile();
+		// The live title now equals the tab name, so the read omits the tab label;
+		// the fallback still renders the workflow row from the pane label.
+		title = "scratch";
+		await presentation.reconcile();
+		const paneCalls = metadataCalls(calls).filter((call) =>
+			call.includes("w9:p1"),
+		);
+		expect(
+			paneCalls.some((call) => call.includes("ac_workflow_line=├─ scratch")),
+		).toBe(true);
+		expect(
+			paneCalls.some(
+				(call) =>
+					call.includes("ac_workflow_line") && call.includes("--clear-token"),
+			),
+		).toBe(false);
 		presentation.dispose();
 	});
 
@@ -392,7 +498,13 @@ describe("sidebar presentation lifecycle (task 4.6)", () => {
 		expect(publication.panes.map((card) => card.paneId)).toEqual(["wG:p1"]);
 		// Nothing to publish or clear on a target that no longer exists.
 		expect(publication.workspaces).toEqual([
-			{ workspaceId: "wG", tokens: { ac_project_line: "agentic-coding" } },
+			{
+				workspaceId: "wG",
+				tokens: {
+					ac_project_line: "agentic-coding",
+					ac_phase_line: "└─ unknown",
+				},
+			},
 		]);
 		expect(publication.clearedPanes).toEqual([]);
 		expect(publication.clearedWorkspaces).toEqual([]);

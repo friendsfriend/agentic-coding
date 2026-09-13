@@ -325,8 +325,10 @@ export async function readSidebarObservations(
 			workspaceId: pane.workspace_id,
 			label,
 			status: pane.agent_status ?? "unknown",
-			// The tab name is only worth a row when it adds something the label
-			// does not already say (a bare terminal pane is named by its tab).
+			// Attach the native tab label only when it says something the resolved
+			// label does not; the projection always renders the second row (using
+			// this label or falling back to the pane label) so the fallback token
+			// set stays stable across live title changes.
 			...(tabLabel && tabLabel !== label ? { tabLabel } : {}),
 		});
 	}
