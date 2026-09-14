@@ -9,6 +9,7 @@ import {
 	dashboardTestHelpers,
 	isStale,
 	listWorkflows,
+	listWorkflowsFromCatalog,
 	loadLocalChanges,
 } from "../src/tui/dash/data.ts";
 import {
@@ -308,6 +309,12 @@ test("developer review reads authoritative workflow worktree and closed state is
 		expect(
 			listWorkflows(linked).some((item) => item.state.workflowId === "review"),
 		).toBe(true);
+		// Discovery no longer recurses into a parent directory: only an explicit
+		// canonical project root is read, so an unconfigured nested repository
+		// cannot appear automatically.
+		expect(
+			listWorkflows(root).some((item) => item.state.workflowId === "review"),
+		).toBe(false);
 		setReturnInProcess(repo, "review", "dashboard-workspace");
 		expect(
 			viewToDashboardState(
@@ -328,6 +335,92 @@ test("developer review reads authoritative workflow worktree and closed state is
 		fs.rmSync(root, { recursive: true, force: true });
 	}
 });
+test("catalog-backed history annotates the configured project ident", async () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "dashboard-catalog-"));
+	const repo = path.join(root, "repo");
+	fs.mkdirSync(repo);
+	const canonicalRepo = fs.realpathSync(repo);
+	const server = Bun.serve({
+		port: 0,
+		fetch: () =>
+			Response.json({
+				revision: "rev",
+				projects: [
+					{
+						ident: "configured-repo",
+						displayName: "Configured Repo",
+						kind: "app",
+						canonicalRoot: canonicalRepo,
+						activeCheckout: canonicalRepo,
+						available: true,
+						availability: "available",
+						capabilities: { openspec: false },
+					},
+				],
+			}),
+	});
+	try {
+		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+		fs.writeFileSync(path.join(repo, "README.md"), "base\n");
+		execFileSync("git", ["add", "."], { cwd: repo });
+		execFileSync(
+			"git",
+			[
+				"-c",
+				"user.email=test@example.com",
+				"-c",
+				"user.name=Test",
+				"commit",
+				"-qm",
+				"base",
+			],
+			{ cwd: repo },
+		);
+		const base = execFileSync("git", ["rev-parse", "HEAD"], {
+			cwd: repo,
+			encoding: "utf8",
+		}).trim();
+		const profile = {
+			name: "test",
+			runtime: "pi" as const,
+			executable: "sh",
+			tools: [],
+			extensions: [],
+			readOnly: false,
+			capabilities: ["prompt", "run-environment", "observe"] as const,
+			digest: "profile",
+		};
+		new WorkflowEngine(registerBuiltins()).start({
+			repo,
+			worktree: repo,
+			workflowId: "catalog-review",
+			definitionId: "no-openspec",
+			metadata: {
+				branch: "main",
+				baseBranch: "main",
+				baseCommit: base,
+				task: "task",
+			},
+			routing: {
+				defaultProfile: "test",
+				routes: [{ stepId: "core.implementation", role: "worker", profile }],
+				diversity: [],
+			},
+		});
+
+		const overviews = await listWorkflowsFromCatalog(
+			`http://127.0.0.1:${server.port}`,
+		);
+		const item = overviews.find(
+			(overview) => overview.state.workflowId === "catalog-review",
+		);
+		expect(item?.projectIdent).toBe("configured-repo");
+	} finally {
+		server.stop(true);
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("dashboard repair and actions use displayed revision", async () => {
 	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "dashboard-repair-"));
 	try {

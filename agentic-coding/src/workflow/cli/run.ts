@@ -150,7 +150,7 @@ export async function run(argv: string[]): Promise<void> {
 		return;
 	}
 	if (command === "projects") {
-		console.log(JSON.stringify(listProjects()));
+		console.log(JSON.stringify(await listProjects()));
 		return;
 	}
 	// CLI-invocation owner: one application layer for this command's bounded

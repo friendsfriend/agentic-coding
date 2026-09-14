@@ -15,11 +15,13 @@ import {
 	setCredentialPromptProvider,
 	workflowExecutionError,
 } from "../../workflow/execution-coordinator.ts";
-import {
-	listProjects,
-	engine as workflowEngineFactory,
-} from "../../workflow/operations.ts";
+import { engine as workflowEngineFactory } from "../../workflow/operations.ts";
 import { parseAgentsConfig } from "../../workflow/profiles.ts";
+import {
+	loadProjectCatalog,
+	type ProjectOption,
+	projectOptions,
+} from "../../workflow/project-catalog.ts";
 import {
 	canonicalStorePath,
 	researchWorkflowTarget,
@@ -405,12 +407,11 @@ export function setReturnInProcess(
 	);
 	fs.renameSync(temporary, file);
 }
-export function discoverProjectsInProcess(): Array<{
-	name: string;
-	path: string;
-	openspec: boolean;
-}> {
-	return listProjects();
+export async function discoverProjectsInProcess(): Promise<ProjectOption[]> {
+	// All configured projects, including unavailable ones, so the picker can
+	// show availability/detail diagnostics; the wizard refuses to start work on
+	// an unavailable project instead of silently omitting it.
+	return projectOptions(await loadProjectCatalog());
 }
 
 export function dashboardState(repo: string, workflowId: string) {

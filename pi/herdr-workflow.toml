@@ -10,10 +10,6 @@ base_branch = "origin/HEAD"
 [wiki]
 root = "~/.config/agentic-coding/wiki"
 
-[projects]
-root = "~/development"
-max_depth = 3
-
 [telemetry]
 capture_content = false
 

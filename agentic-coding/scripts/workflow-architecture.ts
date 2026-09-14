@@ -78,6 +78,7 @@ const RUNTIME_FILES = [
 	"workflow/agent-extensions.ts",
 	"workflow/sidebar-sync.ts", // bounded Herdr metadata/view publication boundary
 	"workflow/sidebar-observer.ts", // application-owned presentation lifecycle
+	"workflow/project-catalog.ts", // single asynchronous configured-project catalog client (HTTP + bounded headless invocation)
 ];
 const APPLICATION_FILES = [
 	"workflow/startup.ts",

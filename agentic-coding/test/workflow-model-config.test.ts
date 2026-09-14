@@ -330,10 +330,6 @@ base_branch = "origin/HEAD"
 theme = "catppuccin"
 selection_height = 10
 
-[projects]
-root = "~/development"
-max_depth = 3
-
 [agents]
 default_profile = "pi-a"
 
@@ -376,7 +372,6 @@ capture_content = true
 				base_branch: "origin/HEAD",
 			});
 			expect(reparsed.ui.theme).toBe("catppuccin");
-			expect(reparsed.projects.root).toBe("~/development");
 			expect(reparsed.telemetry.capture_content).toBe(true);
 			const agents = parseAgentsConfig(reparsed.agents);
 			expect(agents.default_profile).toBe("pi-a");

@@ -9,6 +9,7 @@ package state
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -144,6 +145,44 @@ func Open(dbDir string) (Store, error) {
 		return nil, fmt.Errorf("state: schema migration failed: %w", err)
 	}
 	return s, nil
+}
+
+// ErrReadOnlySchema reports that the read-only observation path cannot use the
+// database because it is missing or older than the current schema. The catalog
+// command fails loudly rather than silently projecting configured-only state
+// from a database it cannot read correctly.
+var ErrReadOnlySchema = errors.New("state: read-only observation requires a current schema")
+
+// OpenReadOnly opens an existing SQLite state database read-only without
+// creating, migrating or writing it. Unlike an `immutable=1` open it remains
+// WAL-aware, so it observes committed runtime state that has not yet been
+// checkpointed into the main database file, and it sets `query_only` so the
+// connection cannot write through. SQLite may still attach shared-memory/WAL
+// sidecars next to the database; the database file itself is never modified.
+// The database must exist and be at the current schema version; os.ErrNotExist
+// or ErrReadOnlySchema is returned otherwise so the caller can fall back or
+// fail cleanly.
+func OpenReadOnly(dbDir string) (Store, error) {
+	dbPath := filepath.Join(dbDir, "state.db")
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", "file:"+dbPath+"?mode=ro&_pragma=query_only(1)")
+	if err != nil {
+		return nil, fmt.Errorf("state: failed to open database read-only %q: %w", dbPath, err)
+	}
+	db.SetMaxOpenConns(1)
+
+	var version int
+	if err := db.QueryRow(`SELECT value FROM schema_meta WHERE key = 'version'`).Scan(&version); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("%w: cannot read schema version: %v", ErrReadOnlySchema, err)
+	}
+	if version < schemaVersion {
+		_ = db.Close()
+		return nil, fmt.Errorf("%w: database schema %d is older than %d", ErrReadOnlySchema, version, schemaVersion)
+	}
+	return &sqliteStore{db: db}, nil
 }
 
 // migrate applies all outstanding schema migrations in order.

@@ -1,9 +1,8 @@
 Not for agents. This is only for humans.
 
 Fixes: 
-* Remove info notifation for new traces
-* The herdr sidebar is jumping and not fully renders items unrelated to agentic-coding workflows
-* Luna model doesnt recheck the issues when the worker changes something -> Prompt must be improved
+* Observation failed: JSON Parse error: Unterminated string
+* Findings in the developer review dont show which reviewer marked the issue. Also it doesnt show a recommendation for a solution. It is just a text. I want it to have two parts: What is the issue? How can it be solved?
 
 Big ones:
 * Implement Agent steered version of the workflow. Basically an orchestrator version of the workflow.
@@ -15,5 +14,6 @@ Big ones:
 Small ones: 
 * Give all agents their own tab. Multitab spawning always has issues for some reason
 * Improve agent steering based on recent runs (observability first)
-* Implement model profile overwrite
+* Remove tabs from agentic-coding dash -> Not needed as it should only serve as a implementation dashboard
+* Think of a better UI concept for the two tab bars. Maybe breadcrumbs and a menu structure or so. 
 

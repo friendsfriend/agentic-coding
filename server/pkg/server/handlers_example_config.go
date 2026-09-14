@@ -28,6 +28,7 @@ func (s *Server) handleCreateExampleConfig(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	s.apps = s.services.AppManager().GetApps()
+	s.publishAppsSnapshot()
 	s.infraServices = s.services.AppManager().GetInfraServices()
 
 	respondJSON(w, map[string]bool{"ok": true}, http.StatusOK)

@@ -1,6 +1,8 @@
 package state
 
 import (
+	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -18,6 +20,80 @@ func openTemp(t *testing.T) Store {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	return s
+}
+
+// TestOpenReadOnlyDoesNotCreateOrMigrate verifies the bounded observation path:
+// a missing database is reported, not created.
+func TestOpenReadOnlyMissingDatabase(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := OpenReadOnly(dir); !os.IsNotExist(err) {
+		t.Fatalf("OpenReadOnly on missing db = %v, want os.ErrNotExist", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "state.db")); !os.IsNotExist(err) {
+		t.Fatalf("OpenReadOnly created a database file")
+	}
+}
+
+// TestOpenReadOnlyReadsCommittedWALState verifies the bounded observation path
+// is WAL-aware: a commit still living in the write-ahead log (writer still open,
+// no checkpoint) must be visible, not the last checkpointed snapshot.
+func TestOpenReadOnlyReadsCommittedWALState(t *testing.T) {
+	dir := t.TempDir()
+	writer, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer writer.Close()
+
+	if err := writer.SetAppState(AppState{Ident: "app", Branch: "old-branch", MainWorktreeBranch: "main"}); err != nil {
+		t.Fatalf("SetAppState old: %v", err)
+	}
+	// The writer keeps this committed snapshot in the WAL until a checkpoint.
+	if err := writer.SetAppState(AppState{
+		Ident:              "app",
+		Branch:             "new-branch",
+		ActiveWorktree:     "new-branch",
+		MainWorktreeBranch: "main",
+	}); err != nil {
+		t.Fatalf("SetAppState new: %v", err)
+	}
+
+	readOnly, err := OpenReadOnly(dir)
+	if err != nil {
+		t.Fatalf("OpenReadOnly: %v", err)
+	}
+	defer readOnly.Close()
+	got, err := readOnly.GetAppState("app")
+	if err != nil {
+		t.Fatalf("GetAppState: %v", err)
+	}
+	if got.Branch != "new-branch" || got.ActiveWorktree != "new-branch" {
+		t.Fatalf("read-only state is WAL-diverged (stale): %+v", got)
+	}
+}
+
+// TestOpenReadOnlyRejectsOlderSchema verifies the observation path distinguishes
+// an unmigrated/older database from a readable one instead of silently
+// projecting configured-only state.
+func TestOpenReadOnlyRejectsOlderSchema(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(dir, "state.db"))
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE app_state (ident TEXT PRIMARY KEY, branch TEXT, active_worktree TEXT)`); err != nil {
+		t.Fatalf("create v1 table: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO app_state (ident, branch, active_worktree) VALUES ('app', 'b', 'w')`); err != nil {
+		t.Fatalf("seed v1 row: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if _, err := OpenReadOnly(dir); !errors.Is(err, ErrReadOnlySchema) {
+		t.Fatalf("OpenReadOnly older schema = %v, want ErrReadOnlySchema", err)
+	}
 }
 
 // TestOpenCreatesFile verifies that Open creates the database file.

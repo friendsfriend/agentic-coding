@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -46,6 +47,16 @@ type Server struct {
 	actionCancels       map[string]context.CancelFunc
 	leaseMu             sync.Mutex
 	dependencyLeases    []state.DependencyLease
+
+	// Catalog revision/change notification: consumers diff on this instead of
+	// re-scanning configuration themselves.
+	catalogRevisionMu sync.RWMutex
+	catalogRevision   string
+
+	// appsSnapshot is an immutable copy of the last successfully loaded app
+	// list, published atomically for catalog reads so GET /api/projects never
+	// races a reload reassigning the live s.apps slice.
+	appsSnapshot atomic.Pointer[[]app.App]
 
 	// CR review sessions: token → session (created per review, cleaned up on stream close)
 	crSessions   map[string]*crReviewSession
@@ -152,6 +163,7 @@ func (s *Server) Start() error {
 	}
 	s.apps = s.services.AppManager().GetApps()
 	s.infraServices = s.services.AppManager().GetInfraServices()
+	s.publishAppsSnapshot()
 	if leases, err := s.services.StateStore().GetDependencyLeases(); err == nil {
 		s.dependencyLeases = leases
 	}
@@ -161,6 +173,8 @@ func (s *Server) Start() error {
 	}
 	s.services.BuildService().RecoverShellTmuxRuns(s.apps)
 	s.services.OperationsService().RecoverScriptInfrastructureRuns(s.infraServices)
+
+	s.publishCatalogRevision()
 
 	s.services.StatusManager().AddListener(s)
 	log.Printf("[INFO] Registered server as StatusManager listener for SSE broadcasts")
@@ -918,9 +932,19 @@ func (s *Server) OnStatusCleared(appIdent string) {
 
 func (s *Server) reloadAppConfig() {
 	if err := s.services.AppManager().LoadConfig(); err != nil {
+		// Reload is atomic in effect: keep the last good app snapshot (and its
+		// catalog revision) and report the failure instead of publishing a
+		// partially applied configuration.
 		log.Printf("[WARN] Failed to reload app config: %v", err)
+		s.BroadcastEvent(Event{
+			Type:       "catalog.error",
+			Properties: map[string]interface{}{"message": err.Error()},
+			Timestamp:  time.Now(),
+		})
+		return
 	}
 	s.apps = s.services.AppManager().GetApps()
+	s.publishAppsSnapshot()
 	s.infraServices = s.services.AppManager().GetInfraServices()
 	if err := s.rebuildActionDefinitions(); err != nil {
 		s.actionRegistryError = err
@@ -928,6 +952,43 @@ func (s *Server) reloadAppConfig() {
 	}
 	s.services.BuildService().RecoverShellTmuxRuns(s.apps)
 	s.services.OperationsService().RecoverScriptInfrastructureRuns(s.infraServices)
+	s.publishCatalogRevision()
+}
+
+// publishAppsSnapshot stores an immutable copy of the current app list for
+// race-free catalog reads. Callers must publish after every successful app-list
+// update (startup, reload, example-config generation).
+func (s *Server) publishAppsSnapshot() {
+	snapshot := append([]app.App(nil), s.apps...)
+	s.appsSnapshot.Store(&snapshot)
+}
+
+// publishCatalogRevision records the current catalog fingerprint and notifies
+// listeners when configured projects changed. A projection error (for example a
+// duplicate configured ident) is broadcast without replacing the last known
+// good revision, so a bad reload never looks like an empty catalog.
+func (s *Server) publishCatalogRevision() {
+	projects, err := s.catalogProjects()
+	if err != nil {
+		s.BroadcastEvent(Event{
+			Type:       "catalog.error",
+			Properties: map[string]interface{}{"message": err.Error()},
+			Timestamp:  time.Now(),
+		})
+		return
+	}
+	revision := app.CatalogRevision(projects)
+	s.catalogRevisionMu.Lock()
+	changed := s.catalogRevision != revision
+	s.catalogRevision = revision
+	s.catalogRevisionMu.Unlock()
+	if changed {
+		s.BroadcastEvent(Event{
+			Type:       "catalog.changed",
+			Properties: map[string]interface{}{"revision": revision},
+			Timestamp:  time.Now(),
+		})
+	}
 }
 
 func (s *Server) updateOrCreateRepoWithStatus(targetApp *app.App, callback func()) {

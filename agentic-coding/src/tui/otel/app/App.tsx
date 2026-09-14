@@ -13,6 +13,12 @@ import {
 	onCleanup,
 	onMount,
 } from "solid-js";
+import type { ProjectOption } from "../../../workflow/project-catalog";
+import {
+	fetchProjectCatalog,
+	projectCanonicalRoots,
+	syncCatalogWatchers,
+} from "../../../workflow/project-catalog";
 import {
 	researchWorkflowTarget,
 	wikiWorkflowDataRoot,
@@ -256,9 +262,7 @@ export function App(props: {
 	// the loading indicator again.
 	const [homeItems, setHomeItems] = createSignal<WorkflowOverview[]>([]);
 	const [homeLoading, setHomeLoading] = createSignal(true);
-	const [homeProjects, setHomeProjects] = createSignal<
-		Array<{ name: string; path: string; openspec: boolean }>
-	>([]);
+	const [homeProjects, setHomeProjects] = createSignal<ProjectOption[]>([]);
 	let homeLoadRunning = false;
 	let homeLoadQueued = false;
 	let homeDisposed = false;
@@ -522,7 +526,43 @@ export function App(props: {
 				refresh();
 			}
 		};
-		const stops = props.repos.map((r) => db.watchWorkspaces(r, onNew));
+		// Watch registrations are diffed by canonical root: a configured-project
+		// change adds or stops discovery watchers without touching histories or
+		// active workflows.
+		const watched = new Map<string, () => void>();
+		const applyCatalogRoots = (roots: string[]) =>
+			syncCatalogWatchers(watched, roots, (root) =>
+				db.watchWorkspaces(root, onNew),
+			);
+		// Explicit `--repo`/wiki/research roots are always watched; catalog
+		// canonical roots are added on top, so a catalog poll can never drop the
+		// watcher for a repository that is not a configured catalog project.
+		const applyRootsWithExplicit = (roots: string[]) =>
+			applyCatalogRoots([...props.repos, ...roots]);
+		applyRootsWithExplicit([]);
+		// The backend emits `catalog.changed`; polling its revision keeps the
+		// watcher set correct even when the event stream is not subscribed.
+		const catalogUrl = props.environments?.serverUrl;
+		let catalogDisposed = false;
+		const catalogController = new AbortController();
+		const refreshCatalogRoots = () => {
+			if (!catalogUrl || catalogDisposed) return;
+			void fetchProjectCatalog({
+				baseUrl: catalogUrl,
+				signal: catalogController.signal,
+			})
+				.then((catalog) => {
+					if (catalogDisposed) return;
+					applyRootsWithExplicit(projectCanonicalRoots(catalog));
+				})
+				.catch(() => {});
+		};
+		// Seed catalog watchers immediately after first paint; the interval keeps
+		// them in sync with configuration changes.
+		refreshCatalogRoots();
+		const catalogPoll = catalogUrl
+			? setInterval(refreshCatalogRoots, 15_000)
+			: undefined;
 		// The long-lived presentation owner: one stable registration per shell
 		// mount so sidebar cards are rebuilt from current views plus live Herdr
 		// reads, never re-registered (or its custom view reasserted) on refresh
@@ -546,13 +586,15 @@ export function App(props: {
 		// The TraceDb is owned by the shell (index.tsx) for the process lifetime;
 		// remounting this view must not close it. Only stop this view's watchers.
 		onCleanup(() => {
+			catalogDisposed = true;
+			catalogController.abort();
 			clearInterval(dailyPrune);
+			if (catalogPoll) clearInterval(catalogPoll);
+			for (const stop of watched.values()) stop();
+			watched.clear();
 			stopSidebarPresentation();
 			unsubscribeTraceStore();
 			for (const dispose of disposeFocusRestorers) dispose();
-			stops.forEach((stop) => {
-				stop();
-			});
 		});
 	});
 

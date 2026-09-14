@@ -120,7 +120,6 @@ describe("shared workflow startup", () => {
 					base_branch: "origin/HEAD",
 					pr_tool: "definitely-not-installed",
 				},
-				projects: { root: "~", max_depth: 1 },
 				telemetry: { capture_content: false },
 				ui: { theme: "x", selection_height: 1 },
 			},

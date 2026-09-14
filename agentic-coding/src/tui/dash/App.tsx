@@ -2417,6 +2417,20 @@ export function App(props: {
 			lastGitDiagnostic = status.diagnostic;
 			notify(`Git status unavailable: ${status.diagnostic}`, "warning");
 		});
+		// A workflow whose project was removed from configuration keeps its
+		// detail access; the catalog mismatch is surfaced once per message as an
+		// advisory toast without retargeting the pinned checkout.
+		let lastCatalogMismatch: string | undefined;
+		createEffect(() => {
+			const mismatch = data().catalogMismatch;
+			if (!mismatch) {
+				lastCatalogMismatch = undefined;
+				return;
+			}
+			if (mismatch === lastCatalogMismatch) return;
+			lastCatalogMismatch = mismatch;
+			notify(mismatch, "warning");
+		});
 		const anyModalOpen = () =>
 			!!(
 				credentialRequest() ||

@@ -15,6 +15,7 @@ type routeSpec struct {
 func (s *Server) routes() []routeSpec {
 	return []routeSpec{
 		{Domain: "app", Method: http.MethodGet, Path: "/api/apps", Handler: s.handleGetApps},
+		{Domain: "app", Method: http.MethodGet, Path: "/api/projects", Handler: s.handleGetProjects},
 		{Domain: "app", Method: http.MethodGet, Path: "/api/infra-services", Handler: s.handleGetInfraServices},
 		{Domain: "app", Method: http.MethodGet, Path: "/api/infra-services/{ident}/logs", Handler: s.handleInfraServiceLogs},
 		{Domain: "app", Method: http.MethodGet, Path: "/api/status", Handler: s.handleGetStatus},

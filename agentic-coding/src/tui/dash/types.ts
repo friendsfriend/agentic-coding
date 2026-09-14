@@ -87,6 +87,9 @@ export interface WorkflowOverview {
 	state: WorkflowState;
 	workspaceOpen: boolean;
 	tasks: [number, number];
+	/** Stable configured project ident resolved from the catalog, when the
+	 * workflow's repository is a configured project (environment cross-link). */
+	projectIdent?: string;
 	// WorkflowOverview agents: role/status/model plus lifetime cost.
 	agents: Array<{
 		role: string;
@@ -142,6 +145,11 @@ export interface FindingCounts {
 }
 export interface DashboardData {
 	state: WorkflowState;
+	/** Stable configured project ident for the repository, when configured. */
+	projectIdent?: string;
+	/** Set when a repository-backed workflow's project is absent from the
+	 * configured catalog; the detail stays usable and shows the mismatch. */
+	catalogMismatch?: string;
 	request: string;
 	proposal: string;
 	review: string;

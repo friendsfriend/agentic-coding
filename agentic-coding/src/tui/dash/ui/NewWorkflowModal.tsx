@@ -14,8 +14,10 @@ import {
 	untrack,
 } from "solid-js";
 import { PUBLIC_WORKFLOW_CATALOG } from "../../../workflow/definitions";
+import type { ProjectOption } from "../../../workflow/project-catalog";
 import { focusSoon } from "../devenv-ui/utils/focusSoon";
 import { PRESET_CONFIG_DEFAULTS } from "../engine";
+import { notify } from "../notifications";
 import { discoverChanges } from "../observations";
 import { uiColors } from "./colors";
 import { GenericModal } from "./GenericModal";
@@ -31,7 +33,7 @@ export type NewWorkflowInput = {
 	workflowType: string;
 	preset: string;
 };
-type Project = { name: string; path: string; openspec: boolean };
+type Project = ProjectOption;
 export function NewWorkflowModal(props: {
 	projects: Project[];
 	presets?: string[];
@@ -125,7 +127,12 @@ export function NewWorkflowModal(props: {
 		const f = field();
 		if (f === "repo")
 			return [
-				...projects().map((p) => `${p.openspec ? "●" : "○"} ${p.name}`),
+				...projects().map(
+					(p) =>
+						`${p.available === false ? "✗" : p.openspec ? "●" : "○"} ${p.name}${
+							p.available === false ? " — unavailable" : ""
+						}`,
+				),
 				`Current directory: ${process.cwd().split("/").pop()}`,
 				"Standalone research",
 				"Custom path…",
@@ -320,6 +327,17 @@ export function NewWorkflowModal(props: {
 			if (step() === 0 && selected() === projects().length + 2) {
 				setShowCustomRepo(true);
 				return true;
+			}
+			if (step() === 0) {
+				const project = projects()[selected()];
+				if (project && project.available === false) {
+					notify(
+						project.detail ??
+							`${project.name} is not available; clone it before starting work`,
+						"warning",
+					);
+					return true;
+				}
 			}
 			if (choice)
 				next(step() === 0 ? (projects()[selected()]?.path ?? "") : choice);
