@@ -14,4 +14,6 @@ Big ones:
 Small ones: 
 * Give all agents their own tab. Multitab spawning always has issues for some reason
 * Improve agent steering based on recent runs (observability first)
+* Remove tabs from agentic-coding dash -> Not needed as it should only serve as a implementation dashboard
+* Think of a better UI concept for the two tab bars. Maybe breadcrumbs and a menu structure or so. 
 
