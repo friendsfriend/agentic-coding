@@ -1,0 +1,27 @@
+{
+	"case": "mr-changes-no-diff-refs",
+	"note": "without a base_sha no positioned lines are produced, only the diff itself",
+	"responses": [
+		{
+			"match": "/merge_requests/9/changes",
+			"status": 200,
+			"body": "{\"changes\":[{\"old_path\":\"a.txt\",\"new_path\":\"a.txt\",\"a_mode\":\"100644\",\"b_mode\":\"100644\",\"new_file\":true,\"renamed_file\":false,\"deleted_file\":false,\"diff\":\"@@ -10,3 +10,3 @@\\n context\\n-removed\\n+added\\n more\"}],\"diff_refs\":{}}"
+		}
+	],
+	"call": {
+		"op": "getChangeRequestChanges",
+		"number": 9
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://gitlab.example.com/api/v4/projects/acme%2Fdevenv/merge_requests/9/changes",
+			"headers": {
+				"accept": "application/json",
+				"content-type": "",
+				"private-token": "fixture-token"
+			}
+		}
+	],
+	"value": "[{\"old_path\":\"a.txt\",\"new_path\":\"a.txt\",\"a_mode\":\"100644\",\"b_mode\":\"100644\",\"new_file\":true,\"renamed_file\":false,\"deleted_file\":false,\"diff\":\"@@ -10,3 +10,3 @@\\n context\\n-removed\\n+added\\n more\",\"lines_added\":1,\"lines_deleted\":1}]"
+}

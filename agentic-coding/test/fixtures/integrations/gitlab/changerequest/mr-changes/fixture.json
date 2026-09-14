@@ -1,0 +1,27 @@
+{
+	"case": "mr-changes",
+	"note": "changed files recompute their line stats from the diff and carry positioned diff lines with the GitLab line code",
+	"responses": [
+		{
+			"match": "/merge_requests/9/changes",
+			"status": 200,
+			"body": "{\"changes\":[{\"old_path\":\"src/login.ts\",\"new_path\":\"src/login.ts\",\"a_mode\":\"100644\",\"b_mode\":\"100644\",\"new_file\":false,\"renamed_file\":false,\"deleted_file\":false,\"diff\":\"@@ -10,3 +10,3 @@\\n context\\n-removed\\n+added\\n more\"},{\"old_path\":\"src/was.ts\",\"new_path\":\"src/moved.ts\",\"a_mode\":\"100644\",\"b_mode\":\"100644\",\"new_file\":false,\"renamed_file\":true,\"deleted_file\":false,\"diff\":\"\"}],\"diff_refs\":{\"base_sha\":\"def4567890abcdef7890abcdef7890abcdef7890\",\"head_sha\":\"abc1234567890abcdef7890abcdef7890abcdef\",\"start_sha\":\"def4567890abcdef7890abcdef7890abcdef7890\"}}"
+		}
+	],
+	"call": {
+		"op": "getChangeRequestChanges",
+		"number": 9
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://gitlab.example.com/api/v4/projects/acme%2Fdevenv/merge_requests/9/changes",
+			"headers": {
+				"accept": "application/json",
+				"content-type": "",
+				"private-token": "fixture-token"
+			}
+		}
+	],
+	"value": "[{\"old_path\":\"src/login.ts\",\"new_path\":\"src/login.ts\",\"a_mode\":\"100644\",\"b_mode\":\"100644\",\"new_file\":false,\"renamed_file\":false,\"deleted_file\":false,\"diff\":\"@@ -10,3 +10,3 @@\\n context\\n-removed\\n+added\\n more\",\"lines_added\":1,\"lines_deleted\":1,\"diff_lines\":[{\"line_code\":\"5c669b9719c6cb8927c5bf457ebeca4b47f90b8d\",\"type\":\"match\",\"old_line\":10,\"new_line\":10,\"text\":\" context\",\"rich_text\":\"\"},{\"line_code\":\"09ce5066e220d27b59038712bcee91b86d1d93ff\",\"type\":\"old\",\"old_line\":11,\"new_line\":null,\"text\":\"-removed\",\"rich_text\":\"\"},{\"line_code\":\"e9d9a55cf124db8e3ecbbe490e2f103720ec0650\",\"type\":\"new\",\"old_line\":null,\"new_line\":11,\"text\":\"+added\",\"rich_text\":\"\"},{\"line_code\":\"f4972b51b81dabc2b59670260d840065aa92f1ef\",\"type\":\"match\",\"old_line\":12,\"new_line\":12,\"text\":\" more\",\"rich_text\":\"\"}]},{\"old_path\":\"src/was.ts\",\"new_path\":\"src/moved.ts\",\"a_mode\":\"100644\",\"b_mode\":\"100644\",\"new_file\":false,\"renamed_file\":true,\"deleted_file\":false,\"diff\":\"\",\"lines_added\":0,\"lines_deleted\":0}]"
+}

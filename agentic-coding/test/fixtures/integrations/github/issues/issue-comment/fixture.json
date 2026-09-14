@@ -1,0 +1,29 @@
+{
+	"case": "issue-comment",
+	"note": "adding a comment posts the body and maps the created comment",
+	"responses": [
+		{
+			"match": "/issues/7/comments",
+			"status": 201,
+			"body": "{\"id\":21,\"body\":\"me too\",\"user\":{\"login\":\"hubot\"},\"created_at\":\"2026-01-04T03:04:05Z\",\"updated_at\":\"2026-01-04T03:04:05Z\"}"
+		}
+	],
+	"call": {
+		"op": "addComment",
+		"number": 7,
+		"body": "me too"
+	},
+	"requests": [
+		{
+			"method": "POST",
+			"url": "https://api.github.com/repos/acme/devenv/issues/7/comments",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": "application/json"
+			},
+			"body": "{\"body\":\"me too\"}"
+		}
+	],
+	"value": "{\"id\":21,\"body\":\"me too\",\"author\":{\"name\":\"hubot\",\"username\":\"hubot\"},\"created_at\":\"2026-01-04T03:04:05Z\",\"updated_at\":\"2026-01-04T03:04:05Z\",\"system\":false}"
+}

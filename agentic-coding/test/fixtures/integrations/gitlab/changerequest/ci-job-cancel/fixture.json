@@ -1,0 +1,27 @@
+{
+	"case": "ci-job-cancel",
+	"note": "a cancel expects 201",
+	"responses": [
+		{
+			"match": "/jobs/101/cancel",
+			"status": 201,
+			"body": "{\"id\":101}"
+		}
+	],
+	"call": {
+		"op": "cancelJob",
+		"number": 101
+	},
+	"requests": [
+		{
+			"method": "POST",
+			"url": "https://gitlab.example.com/api/v4/projects/acme%2Fdevenv/jobs/101/cancel",
+			"headers": {
+				"accept": "application/json",
+				"content-type": "",
+				"private-token": "fixture-token"
+			}
+		}
+	],
+	"value": "null"
+}

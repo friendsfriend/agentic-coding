@@ -1,0 +1,28 @@
+{
+	"case": "pr-unapprove-none",
+	"note": "unapproving without an own approval fails with the Go diagnostic instead of silently succeeding",
+	"responses": [
+		{
+			"match": "/pulls/9/reviews",
+			"status": 200,
+			"body": "[{\"id\":51,\"user\":{\"login\":\"hubot\"},\"state\":\"APPROVED\"}]"
+		}
+	],
+	"call": {
+		"op": "unapprove",
+		"number": 9
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/pulls/9/reviews?per_page=100",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		}
+	],
+	"error": true,
+	"message": "no APPROVED review found to dismiss"
+}

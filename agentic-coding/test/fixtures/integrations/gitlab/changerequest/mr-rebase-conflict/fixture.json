@@ -1,0 +1,28 @@
+{
+	"case": "mr-rebase-conflict",
+	"note": "a rebase already in progress reports the Go diagnostic",
+	"responses": [
+		{
+			"match": "/merge_requests/9/rebase",
+			"status": 409,
+			"body": "{}"
+		}
+	],
+	"call": {
+		"op": "rebase",
+		"number": 9
+	},
+	"requests": [
+		{
+			"method": "PUT",
+			"url": "https://gitlab.example.com/api/v4/projects/acme%2Fdevenv/merge_requests/9/rebase",
+			"headers": {
+				"accept": "application/json",
+				"content-type": "",
+				"private-token": "fixture-token"
+			}
+		}
+	],
+	"error": true,
+	"message": "rebase already in progress"
+}

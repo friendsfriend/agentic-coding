@@ -1,0 +1,27 @@
+{
+	"case": "ci-test-summary",
+	"note": "the test report is mapped onto the provider summary and a flexible system_output is normalized to a string",
+	"responses": [
+		{
+			"match": "/pipelines/77/test_report",
+			"status": 200,
+			"body": "{\"total_time\":12.5,\"total_count\":3,\"success_count\":1,\"failed_count\":1,\"skipped_count\":1,\"error_count\":0,\"test_suites\":[{\"name\":\"suite\",\"test_cases\":[{\"name\":\"passes\",\"classname\":\"com.example.Spec\",\"status\":\"success\",\"execution_time\":1.5,\"system_output\":\"ok\"},{\"name\":\"fails\",\"classname\":\"com.example.Spec\",\"status\":\"failed\",\"execution_time\":2.5,\"system_output\":{\"value\":\"boom\"},\"stack_trace\":\"trace\"}]}]}"
+		}
+	],
+	"call": {
+		"op": "getTestSummary",
+		"number": 77
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://gitlab.example.com/api/v4/projects/acme%2Fdevenv/pipelines/77/test_report",
+			"headers": {
+				"accept": "application/json",
+				"content-type": "",
+				"private-token": "fixture-token"
+			}
+		}
+	],
+	"value": "{\"total\":3,\"success\":1,\"failed\":1,\"skipped\":1,\"error\":0,\"test_suites\":[{\"name\":\"suite\",\"test_cases\":[{\"name\":\"passes\",\"classname\":\"com.example.Spec\",\"status\":\"success\",\"execution_time\":1.5,\"system_output\":\"ok\"},{\"name\":\"fails\",\"classname\":\"com.example.Spec\",\"status\":\"failed\",\"execution_time\":2.5,\"system_output\":\"boom\",\"stack_trace\":\"trace\"}]}]}"
+}

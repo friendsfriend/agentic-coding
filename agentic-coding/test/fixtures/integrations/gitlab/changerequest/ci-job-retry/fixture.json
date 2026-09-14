@@ -1,0 +1,27 @@
+{
+	"case": "ci-job-retry",
+	"note": "a retry expects 201 and reports the provider diagnostics otherwise",
+	"responses": [
+		{
+			"match": "/jobs/101/retry",
+			"status": 201,
+			"body": "{\"id\":102}"
+		}
+	],
+	"call": {
+		"op": "restartJob",
+		"number": 101
+	},
+	"requests": [
+		{
+			"method": "POST",
+			"url": "https://gitlab.example.com/api/v4/projects/acme%2Fdevenv/jobs/101/retry",
+			"headers": {
+				"accept": "application/json",
+				"content-type": "",
+				"private-token": "fixture-token"
+			}
+		}
+	],
+	"value": "null"
+}

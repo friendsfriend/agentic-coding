@@ -1,0 +1,31 @@
+{
+	"case": "issues-no-assignee",
+	"note": "the no-assignee scope becomes assignee_id=None and an unknown sort falls back to updated_at",
+	"responses": [
+		{
+			"match": "/issues?",
+			"status": 200,
+			"body": "[]"
+		}
+	],
+	"call": {
+		"op": "getIssues",
+		"scope": "no-assignee",
+		"state": "closed",
+		"sortBy": "unsupported",
+		"page": 1,
+		"perPage": 50
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://gitlab.example.com/api/v4/projects/acme%2Fdevenv/issues?assignee_id=None\u0026order_by=updated_at\u0026page=1\u0026per_page=50\u0026sort=desc\u0026state=closed",
+			"headers": {
+				"accept": "application/json",
+				"content-type": "",
+				"private-token": "fixture-token"
+			}
+		}
+	],
+	"value": "{\"items\":[],\"totalCount\":-1,\"totalPages\":-1,\"currentPage\":1,\"perPage\":50}"
+}

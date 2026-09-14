@@ -18,6 +18,12 @@ type CommandSpec struct {
 	DisplayArgs []string
 	Dir         string
 	Env         []string
+	// Execution identity of the step this command belongs to, set by the
+	// command handler. A runner that forwards the command (the temporary Bun
+	// Git adapter) preserves it so run/step/command accounting stays exact.
+	RunID     string
+	StepID    string
+	CommandID string
 }
 type CommandResult struct {
 	Stdout   string
@@ -88,6 +94,11 @@ func (h CommandHandler) Execute(ctx actiondef.StepContext, definition actiondef.
 	}
 	spec, err := commandSpec(step.Configuration)
 	if err == nil {
+		// Identity first: a forwarded command must carry it even when template
+		// resolution is what fails.
+		spec.RunID = string(ctx.RunID())
+		spec.StepID = string(definition.ID())
+		spec.CommandID = string(definition.ID()) + "-command-0"
 		spec.Args, err = resolveValueTemplates(ctx, spec.Args)
 		if err == nil {
 			spec.Env, err = resolveValueTemplates(ctx, spec.Env)

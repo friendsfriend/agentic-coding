@@ -1,0 +1,41 @@
+{
+	"case": "issue-comments-timeline-unavailable",
+	"note": "a timeline that cannot be read still returns the regular comments",
+	"responses": [
+		{
+			"match": "/issues/7/comments",
+			"status": 200,
+			"body": "[{\"id\":21,\"body\":\"me too\",\"user\":{\"login\":\"hubot\"},\"created_at\":\"2026-01-04T03:04:05Z\",\"updated_at\":\"2026-01-04T03:04:05Z\"}]"
+		},
+		{
+			"match": "/issues/7/timeline",
+			"status": 403,
+			"body": "{\"message\":\"Forbidden\"}"
+		}
+	],
+	"call": {
+		"op": "getIssueComments",
+		"number": 7
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/issues/7/comments?per_page=100",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		},
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/issues/7/timeline?per_page=100",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		}
+	],
+	"value": "{\"items\":[{\"id\":21,\"body\":\"me too\",\"author\":{\"name\":\"hubot\",\"username\":\"hubot\"},\"created_at\":\"2026-01-04T03:04:05Z\",\"updated_at\":\"2026-01-04T03:04:05Z\",\"system\":false}],\"totalCount\":-1,\"totalPages\":1,\"currentPage\":1,\"perPage\":100}"
+}

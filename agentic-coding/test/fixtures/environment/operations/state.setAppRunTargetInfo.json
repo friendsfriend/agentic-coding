@@ -1,0 +1,1 @@
+{"operation":"state.setAppRunTargetInfo","params":{"ident":"leased-app","info":{"runtime":"docker","launchMode":"compose","label":"local","profile":"dev","targetId":"app:local","sourcePath":"/srv/app","startedAt":"2024-03-04T05:06:07Z","display":"docker:local"}}}

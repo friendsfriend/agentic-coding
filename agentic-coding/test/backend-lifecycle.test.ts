@@ -60,6 +60,9 @@ interface Harness {
 	removed: string[];
 	/** Signals the port was busy with a foreign instance before spawn. */
 	readonly probes: BackendHealth[];
+	/** Options handed to each spawn, including the Bun-owned environment
+	 * authority in migrated mode. */
+	readonly spawnOptions: Array<Record<string, unknown>>;
 }
 
 function harness(options: {
@@ -72,6 +75,7 @@ function harness(options: {
 		spawned: 0,
 		removed: [],
 		probes: [],
+		spawnOptions: [],
 		layer: Layer.empty as unknown as Layer.Layer<BackendRuntime>,
 	};
 	let calls = 0;
@@ -83,7 +87,10 @@ function harness(options: {
 				return health;
 			}),
 		resolveBinary: () => Effect.succeed(BINARY),
-		spawnBackend: () => {
+		spawnBackend: (spawnOptions) => {
+			state.spawnOptions.push(
+				spawnOptions as unknown as Record<string, unknown>,
+			);
 			if (options.spawnFails)
 				return Effect.sync(() => {
 					state.spawned++;
@@ -102,6 +109,46 @@ function harness(options: {
 	state.layer = Layer.succeed(BackendRuntime, shape);
 	return state;
 }
+
+/** Health document for the instance the backend spawns, so readiness matches. */
+function readyProbe(instance: string) {
+	const identity = expectedIdentity(instance);
+	return () => ({
+		status: "ok",
+		instance,
+		homeDir: identity.homeDir,
+		configDir: identity.configDir,
+	});
+}
+
+test("migrated mode hands the child the Bun-owned environment authority", async () => {
+	const h = harness({ probe: readyProbe("abc123") });
+	const backend = await startOwnedBackend(
+		{
+			port: "4050",
+			instance: "abc123",
+			environment: { url: "http://127.0.0.1:4051", token: "bun-token" },
+		},
+		h.layer,
+	);
+	expect(backend.instance).toBe("abc123");
+	expect(h.spawnOptions[0]).toMatchObject({
+		environment: { url: "http://127.0.0.1:4051", token: "bun-token" },
+	});
+	// The child's own inbound token stays distinct from the Bun authority token.
+	expect(h.spawnOptions[0]?.token).not.toBe("bun-token");
+	await backend.stop();
+});
+
+test("legacy mode spawns no environment authority", async () => {
+	const h = harness({ probe: readyProbe("abc124") });
+	const backend = await startOwnedBackend(
+		{ port: "4050", instance: "abc124" },
+		h.layer,
+	);
+	expect(h.spawnOptions[0]?.environment).toBeUndefined();
+	await backend.stop();
+});
 
 test("health identity matching requires instance, home and config", () => {
 	const expected = expectedIdentity("abc123");

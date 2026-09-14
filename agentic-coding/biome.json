@@ -44,6 +44,30 @@
 			"formatter": {
 				"enabled": false
 			}
+		},
+		{
+			"includes": ["test/fixtures/environment/**"],
+			"linter": {
+				"enabled": false
+			},
+			"formatter": {
+				"enabled": false
+			},
+			"assist": {
+				"enabled": false
+			}
+		},
+		{
+			"includes": ["test/fixtures/integrations/**"],
+			"linter": {
+				"enabled": false
+			},
+			"formatter": {
+				"enabled": false
+			},
+			"assist": {
+				"enabled": false
+			}
 		}
 	]
 }

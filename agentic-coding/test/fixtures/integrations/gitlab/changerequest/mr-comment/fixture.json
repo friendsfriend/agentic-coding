@@ -1,0 +1,30 @@
+{
+	"case": "mr-comment",
+	"note": "an inline comment sends the position with the head/base/start SHAs and the line",
+	"responses": [
+		{
+			"match": "/merge_requests/9/discussions",
+			"status": 201,
+			"body": "{\"id\":\"abc\"}"
+		}
+	],
+	"call": {
+		"op": "createMrDiffComment",
+		"number": 9,
+		"body": "looks good",
+		"positioned": true
+	},
+	"requests": [
+		{
+			"method": "POST",
+			"url": "https://gitlab.example.com/api/v4/projects/acme%2Fdevenv/merge_requests/9/discussions",
+			"headers": {
+				"accept": "application/json",
+				"content-type": "application/json",
+				"private-token": "fixture-token"
+			},
+			"body": "{\"body\":\"looks good\",\"position\":{\"base_sha\":\"def4567890abcdef7890abcdef7890abcdef7890\",\"head_sha\":\"abc1234567890abcdef7890abcdef7890abcdef\",\"new_line\":12,\"new_path\":\"src/login.ts\",\"old_path\":\"src/login.ts\",\"position_type\":\"text\",\"start_sha\":\"def4567890abcdef7890abcdef7890abcdef7890\"}}"
+		}
+	],
+	"value": "null"
+}

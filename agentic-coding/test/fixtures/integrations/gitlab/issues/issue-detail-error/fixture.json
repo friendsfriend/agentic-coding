@@ -1,0 +1,28 @@
+{
+	"case": "issue-detail-error",
+	"note": "a provider error status becomes a bounded diagnostic",
+	"responses": [
+		{
+			"match": "/issues/7",
+			"status": 404,
+			"body": "{\"message\":\"404 Not Found\"}"
+		}
+	],
+	"call": {
+		"op": "getIssue",
+		"number": 7
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://gitlab.example.com/api/v4/projects/acme%2Fdevenv/issues/7",
+			"headers": {
+				"accept": "application/json",
+				"content-type": "",
+				"private-token": "fixture-token"
+			}
+		}
+	],
+	"error": true,
+	"message": "GitLab API error (status 404): {\"message\":\"404 Not Found\"}"
+}

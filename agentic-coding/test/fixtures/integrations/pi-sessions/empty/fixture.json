@@ -1,0 +1,12 @@
+{
+	"case": "empty",
+	"note": "an absent sessions directory is not an error",
+	"files": [
+		{
+			"path": "sessions/.keep",
+			"content": ""
+		}
+	],
+	"agents": [],
+	"piInPath": true
+}

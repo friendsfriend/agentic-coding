@@ -1,0 +1,137 @@
+{
+	"case": "issue-linked-crs",
+	"note": "linked change requests combine closing keywords and bare references from the body with timeline cross-references, in that order and without duplicates",
+	"responses": [
+		{
+			"match": "/repos/acme/devenv/issues/7",
+			"status": 200,
+			"body": "{\"id\":11,\"number\":7,\"title\":\"Broken login\",\"body\":\"Closes #3 and fixes acme/other#4\",\"state\":\"open\",\"html_url\":\"https://github.com/acme/devenv/issues/7\",\"user\":{\"login\":\"octo\"},\"labels\":[{\"name\":\"bug\"},{\"name\":\"p1\"}],\"assignees\":[{\"login\":\"octo\"}],\"milestone\":{\"title\":\"v1\"},\"created_at\":\"2026-01-02T03:04:05Z\",\"updated_at\":\"2026-01-03T03:04:05Z\"}"
+		},
+		{
+			"match": "/pulls/3",
+			"status": 200,
+			"body": "{\"id\":41,\"number\":9,\"title\":\"Fix login\",\"body\":\"Closes #3 and acme/other#4\",\"state\":\"open\",\"html_url\":\"https://github.com/acme/devenv/pull/9\",\"user\":{\"login\":\"octo\"},\"head\":{\"ref\":\"fix-login\",\"sha\":\"abc123\"},\"base\":{\"ref\":\"main\",\"sha\":\"def456\"},\"mergeable\":true,\"mergeable_state\":\"clean\",\"created_at\":\"2026-01-02T03:04:05Z\",\"updated_at\":\"2026-01-03T03:04:05Z\"}"
+		},
+		{
+			"match": "/pulls/4",
+			"status": 200,
+			"body": "{\"id\":41,\"number\":9,\"title\":\"Fix login\",\"body\":\"Closes #3 and acme/other#4\",\"state\":\"open\",\"html_url\":\"https://github.com/acme/devenv/pull/9\",\"user\":{\"login\":\"octo\"},\"head\":{\"ref\":\"fix-login\",\"sha\":\"abc123\"},\"base\":{\"ref\":\"main\",\"sha\":\"def456\"},\"mergeable\":true,\"mergeable_state\":\"clean\",\"created_at\":\"2026-01-02T03:04:05Z\",\"updated_at\":\"2026-01-03T03:04:05Z\"}"
+		},
+		{
+			"match": "/issues/7/timeline",
+			"status": 200,
+			"body": "[{\"id\":31,\"event\":\"commented\",\"actor\":{\"login\":\"hubot\"},\"created_at\":\"2026-01-04T03:04:05Z\",\"body\":\"me too\"},{\"id\":32,\"event\":\"labeled\",\"actor\":{\"login\":\"octo\"},\"created_at\":\"2026-01-05T03:04:05Z\",\"label\":{\"name\":\"bug\"}},{\"id\":33,\"event\":\"assigned\",\"actor\":{\"login\":\"octo\"},\"created_at\":\"2026-01-05T03:04:05Z\",\"assignee\":{\"login\":\"octo\"}},{\"id\":34,\"event\":\"renamed\",\"actor\":{\"login\":\"octo\"},\"created_at\":\"2026-01-05T03:04:05Z\",\"rename\":{\"from\":\"Old\",\"to\":\"New\"}},{\"id\":35,\"event\":\"cross-referenced\",\"actor\":{\"login\":\"octo\"},\"created_at\":\"2026-01-05T03:04:05Z\",\"source\":{\"type\":\"issue\",\"issue\":{\"number\":9,\"title\":\"PR nine\",\"pull_request\":{}}}},{\"id\":36,\"event\":\"closed\",\"actor\":{\"login\":\"octo\"},\"created_at\":\"2026-01-06T03:04:05Z\"}]"
+		},
+		{
+			"match": "/pulls/9",
+			"status": 200,
+			"body": "{\"id\":41,\"number\":9,\"title\":\"Fix login\",\"body\":\"Closes #3 and acme/other#4\",\"state\":\"open\",\"html_url\":\"https://github.com/acme/devenv/pull/9\",\"user\":{\"login\":\"octo\"},\"head\":{\"ref\":\"fix-login\",\"sha\":\"abc123\"},\"base\":{\"ref\":\"main\",\"sha\":\"def456\"},\"mergeable\":true,\"mergeable_state\":\"clean\",\"created_at\":\"2026-01-02T03:04:05Z\",\"updated_at\":\"2026-01-03T03:04:05Z\"}"
+		}
+	],
+	"call": {
+		"op": "getIssueLinkedChangeRequests",
+		"number": 7
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/issues/7",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		},
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/pulls/3",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		},
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/pulls/3/reviews?per_page=100",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		},
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/actions/runs?head_sha=abc123\u0026per_page=1",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		},
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/pulls/4",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		},
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/pulls/4/reviews?per_page=100",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		},
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/actions/runs?head_sha=abc123\u0026per_page=1",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		},
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/issues/7/timeline?per_page=100",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		},
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/pulls/9",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		},
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/pulls/9/reviews?per_page=100",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		},
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/actions/runs?head_sha=abc123\u0026per_page=1",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		}
+	],
+	"value": "[{\"id\":41,\"iid\":9,\"title\":\"Fix login\",\"description\":\"Closes #3 and acme/other#4\",\"source_branch\":\"fix-login\",\"target_branch\":\"main\",\"state\":\"opened\",\"web_url\":\"https://github.com/acme/devenv/pull/9\",\"created_at\":\"2026-01-02T03:04:05Z\",\"updated_at\":\"2026-01-03T03:04:05Z\",\"author\":{\"name\":\"octo\",\"username\":\"octo\"},\"merge_status\":\"can_be_merged\",\"detailed_merge_status\":\"clean\",\"draft\":false,\"work_in_progress\":false,\"has_conflicts\":false,\"blocking_discussions_resolved\":true,\"rebase_in_progress\":false,\"merge_error\":\"\"},{\"id\":41,\"iid\":9,\"title\":\"Fix login\",\"description\":\"Closes #3 and acme/other#4\",\"source_branch\":\"fix-login\",\"target_branch\":\"main\",\"state\":\"opened\",\"web_url\":\"https://github.com/acme/devenv/pull/9\",\"created_at\":\"2026-01-02T03:04:05Z\",\"updated_at\":\"2026-01-03T03:04:05Z\",\"author\":{\"name\":\"octo\",\"username\":\"octo\"},\"merge_status\":\"can_be_merged\",\"detailed_merge_status\":\"clean\",\"draft\":false,\"work_in_progress\":false,\"has_conflicts\":false,\"blocking_discussions_resolved\":true,\"rebase_in_progress\":false,\"merge_error\":\"\"},{\"id\":41,\"iid\":9,\"title\":\"Fix login\",\"description\":\"Closes #3 and acme/other#4\",\"source_branch\":\"fix-login\",\"target_branch\":\"main\",\"state\":\"opened\",\"web_url\":\"https://github.com/acme/devenv/pull/9\",\"created_at\":\"2026-01-02T03:04:05Z\",\"updated_at\":\"2026-01-03T03:04:05Z\",\"author\":{\"name\":\"octo\",\"username\":\"octo\"},\"merge_status\":\"can_be_merged\",\"detailed_merge_status\":\"clean\",\"draft\":false,\"work_in_progress\":false,\"has_conflicts\":false,\"blocking_discussions_resolved\":true,\"rebase_in_progress\":false,\"merge_error\":\"\"}]"
+}

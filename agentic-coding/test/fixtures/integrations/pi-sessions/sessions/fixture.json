@@ -1,0 +1,69 @@
+{
+	"case": "sessions",
+	"note": "sessions are grouped by the basename of their working directory, titles are truncated to 57 characters plus an ellipsis, and the timestamp is the creation and update time in milliseconds",
+	"files": [
+		{
+			"path": "sessions/-home-octo-projects-devenv/aaa.jsonl",
+			"content": "{\"type\":\"session\",\"timestamp\":\"2026-01-02T03:04:05.000Z\",\"cwd\":\"/home/octo/projects/devenv\"}\n{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Fix the login flow\"}]}}\n{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"working\"}]}}\n"
+		},
+		{
+			"path": "sessions/-home-octo-projects-devenv/bbb.jsonl",
+			"content": "{\"type\":\"session\",\"timestamp\":\"2026-02-03T04:05:06Z\",\"cwd\":\"/home/octo/projects/devenv\"}\n{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Please refactor the entire authentication subsystem so that it uses a single shared token store\"}]}}\n"
+		},
+		{
+			"path": "sessions/-home-octo-projects-other/ccc.jsonl",
+			"content": "{\"type\":\"session\",\"timestamp\":\"2026-03-04T05:06:07Z\",\"cwd\":\"/home/octo/projects/other\"}\n{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Line one\\n\\tline two   line three\"}]}}\n"
+		},
+		{
+			"path": "sessions/-home-octo-projects-other/ddd.jsonl",
+			"content": "{\"type\":\"session\",\"timestamp\":\"2026-04-05T06:07:08Z\",\"cwd\":\"/home/octo/projects/other\"}\n{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"no user message\"}]}}\n"
+		},
+		{
+			"path": "sessions/-home-octo-projects-other/notes.txt",
+			"content": "not a session\n"
+		},
+		{
+			"path": "sessions/-home-octo-projects-other/nested/deep.jsonl",
+			"content": "{\"type\":\"session\",\"timestamp\":\"2026-01-02T03:04:05.000Z\",\"cwd\":\"/home/octo/projects/devenv\"}\n{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Fix the login flow\"}]}}\n{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"working\"}]}}\n"
+		}
+	],
+	"agents": [
+		{
+			"name": "devenv",
+			"model": "",
+			"sessions": [
+				{
+					"id": "sessions/-home-octo-projects-devenv/aaa.jsonl",
+					"title": "Fix the login flow",
+					"timeCreated": 1767323045000,
+					"timeUpdated": 1767323045000
+				},
+				{
+					"id": "sessions/-home-octo-projects-devenv/bbb.jsonl",
+					"title": "Please refactor the entire authentication subsystem so th...",
+					"timeCreated": 1770091506000,
+					"timeUpdated": 1770091506000
+				}
+			]
+		},
+		{
+			"name": "other",
+			"model": "",
+			"sessions": [
+				{
+					"id": "sessions/-home-octo-projects-other/ccc.jsonl",
+					"title": "Line one line two line three",
+					"timeCreated": 1772600767000,
+					"timeUpdated": 1772600767000
+				},
+				{
+					"id": "sessions/-home-octo-projects-other/ddd.jsonl",
+					"title": "2026-04-05 06:07",
+					"timeCreated": 1775369228000,
+					"timeUpdated": 1775369228000
+				}
+			]
+		}
+	],
+	"piInPath": true
+}

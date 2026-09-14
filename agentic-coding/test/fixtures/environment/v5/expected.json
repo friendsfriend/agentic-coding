@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 5,
+  "apps": [
+    {
+      "ident": "run-target-app",
+      "branch": "main",
+      "activeWorktree": "",
+      "mainWorktreeBranch": "main",
+      "runTarget": {
+        "runtime": "docker",
+        "launchMode": "compose",
+        "label": "local",
+        "profile": "dev",
+        "targetId": "app:local",
+        "sourcePath": "/srv/app",
+        "startedAt": "2024-03-04T05:06:07Z",
+        "display": "docker:local"
+      }
+    }
+  ],
+  "scriptHistory": {},
+  "actionEvents": [
+    "{\"type\":\"action.run.started\",\"properties\":{\"runId\":\"run-1\",\"name\":\"build\"}}",
+    "{\"type\":\"action.command.output\",\"properties\":{\"runId\":\"run-1\",\"stepId\":\"step-1\",\"text\":\"line one\"}}",
+    "{\"type\":\"action.command.output\",\"properties\":{\"runId\":\"run-1\",\"stepId\":\"step-1\",\"text\":\"line two\"}}"
+  ],
+  "actionLogEvents": {},
+  "dependencyLeases": []
+}

@@ -1,0 +1,6 @@
+{
+  "ident": "beta",
+  "displayName": "Beta",
+  "repositoryPath": "https://example.com/team/beta.git",
+  "gitMode": "WORKTREE"
+}

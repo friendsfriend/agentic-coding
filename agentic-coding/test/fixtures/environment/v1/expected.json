@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "apps": [
+    {
+      "ident": "legacy-branch-app",
+      "branch": "release/1.0",
+      "activeWorktree": "feature/older",
+      "mainWorktreeBranch": "",
+      "runTarget": null
+    }
+  ],
+  "scriptHistory": {},
+  "actionEvents": [],
+  "actionLogEvents": {},
+  "dependencyLeases": []
+}

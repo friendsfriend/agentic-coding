@@ -1,0 +1,26 @@
+{
+	"case": "issue-repo-collaborators",
+	"note": "collaborators are flattened to logins",
+	"responses": [
+		{
+			"match": "/collaborators",
+			"status": 200,
+			"body": "[{\"login\":\"octo\"},{\"login\":\"hubot\"}]"
+		}
+	],
+	"call": {
+		"op": "getRepoCollaborators"
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/collaborators?per_page=100",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		}
+	],
+	"value": "[\"octo\",\"hubot\"]"
+}

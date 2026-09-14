@@ -1,0 +1,26 @@
+{
+	"case": "issue-repo-collaborators",
+	"note": "project members are flattened to usernames",
+	"responses": [
+		{
+			"match": "/members",
+			"status": 200,
+			"body": "[{\"name\":\"Octo\",\"username\":\"octo\"},{\"name\":\"Hubot\",\"username\":\"hubot\"}]"
+		}
+	],
+	"call": {
+		"op": "getRepoCollaborators"
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://gitlab.example.com/api/v4/projects/acme%2Fdevenv/members?per_page=100",
+			"headers": {
+				"accept": "application/json",
+				"content-type": "",
+				"private-token": "fixture-token"
+			}
+		}
+	],
+	"value": "[\"octo\",\"hubot\"]"
+}

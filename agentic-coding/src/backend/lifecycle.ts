@@ -23,7 +23,10 @@ import {
 
 export {
 	BackendStartupError,
+	type ChildEnvironment,
 	type OwnedBackend,
+	resolveConfigDir,
+	resolveDevenvHome,
 	type StartBackendOptions,
 } from "./managed-backend.ts";
 

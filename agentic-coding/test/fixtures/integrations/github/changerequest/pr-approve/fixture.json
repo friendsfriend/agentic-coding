@@ -1,0 +1,28 @@
+{
+	"case": "pr-approve",
+	"note": "approving posts an APPROVE review",
+	"responses": [
+		{
+			"match": "/pulls/9/reviews",
+			"status": 200,
+			"body": "{\"id\":54}"
+		}
+	],
+	"call": {
+		"op": "approve",
+		"number": 9
+	},
+	"requests": [
+		{
+			"method": "POST",
+			"url": "https://api.github.com/repos/acme/devenv/pulls/9/reviews",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": "application/json"
+			},
+			"body": "{\"event\":\"APPROVE\"}"
+		}
+	],
+	"value": "null"
+}

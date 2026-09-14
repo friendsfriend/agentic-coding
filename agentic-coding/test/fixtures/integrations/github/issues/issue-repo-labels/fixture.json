@@ -1,0 +1,26 @@
+{
+	"case": "issue-repo-labels",
+	"note": "repository labels are flattened to names",
+	"responses": [
+		{
+			"match": "/labels",
+			"status": 200,
+			"body": "[{\"name\":\"bug\"},{\"name\":\"p1\"}]"
+		}
+	],
+	"call": {
+		"op": "getRepoLabels"
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/labels?per_page=100",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		}
+	],
+	"value": "[\"bug\",\"p1\"]"
+}

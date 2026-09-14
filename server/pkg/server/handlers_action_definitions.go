@@ -12,6 +12,7 @@ import (
 
 	"github.com/friendsfriend/devenv/pkg/actionexec"
 	"github.com/friendsfriend/devenv/pkg/actionrun"
+	"github.com/friendsfriend/devenv/pkg/integrations"
 	"github.com/friendsfriend/devenv/pkg/resources"
 
 	"github.com/friendsfriend/devenv/pkg/app"
@@ -210,7 +211,14 @@ func (s *Server) startEngineDefinition(definition actiondef.Action, rawInputs ma
 	}
 	events := engineEventSink{projection: actionexec.ActionRunProjection{Registry: s.actionRuns}, server: s}
 	commands := engineCommandSink{server: s, runID: runID}
-	commandHandler := actionexec.CommandHandler{Runner: actionexec.OSCommandRunner{}, Events: commands}
+	// While Go owns action execution, a `git` step is forwarded to the Bun Git
+	// capability when the Bun owner advertises it; every other command runs
+	// locally. The action owner still records the command in its own run tree.
+	commandRunner := actionexec.CommandRunner(actionexec.OSCommandRunner{})
+	if client, ok := integrations.FromEnv(); ok {
+		commandRunner = integrations.ForwardingRunner{Client: client, Fallback: actionexec.OSCommandRunner{}}
+	}
+	commandHandler := actionexec.CommandHandler{Runner: commandRunner, Events: commands}
 	processHandler := actionexec.ProcessHandler{Store: s.actionProcesses, Events: commands}
 	runtimeCmd := docker.RuntimeCommand()
 	if string(definition.ActionRuntime) == "podman" {

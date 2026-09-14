@@ -1,0 +1,73 @@
+{
+	"case": "cr-linked-issues",
+	"note": "issues linked to a change request come from the change request body and exclude pull requests",
+	"responses": [
+		{
+			"match": "/pulls/9",
+			"status": 200,
+			"body": "{\"id\":41,\"number\":9,\"title\":\"Fix login\",\"body\":\"Closes #3 and acme/other#4\",\"state\":\"open\",\"html_url\":\"https://github.com/acme/devenv/pull/9\",\"user\":{\"login\":\"octo\"},\"head\":{\"ref\":\"fix-login\",\"sha\":\"abc123\"},\"base\":{\"ref\":\"main\",\"sha\":\"def456\"},\"mergeable\":true,\"mergeable_state\":\"clean\",\"created_at\":\"2026-01-02T03:04:05Z\",\"updated_at\":\"2026-01-03T03:04:05Z\"}"
+		},
+		{
+			"match": "/repos/acme/devenv/issues/3",
+			"status": 200,
+			"body": "{\"id\":11,\"number\":7,\"title\":\"Broken login\",\"body\":\"Closes #3 and fixes acme/other#4\",\"state\":\"open\",\"html_url\":\"https://github.com/acme/devenv/issues/7\",\"user\":{\"login\":\"octo\"},\"labels\":[{\"name\":\"bug\"},{\"name\":\"p1\"}],\"assignees\":[{\"login\":\"octo\"}],\"milestone\":{\"title\":\"v1\"},\"created_at\":\"2026-01-02T03:04:05Z\",\"updated_at\":\"2026-01-03T03:04:05Z\"}"
+		},
+		{
+			"match": "/repos/acme/devenv/issues/4",
+			"status": 200,
+			"body": "{\"id\":11,\"number\":7,\"title\":\"Broken login\",\"body\":\"Closes #3 and fixes acme/other#4\",\"state\":\"open\",\"html_url\":\"https://github.com/acme/devenv/issues/7\",\"user\":{\"login\":\"octo\"},\"labels\":[{\"name\":\"bug\"},{\"name\":\"p1\"}],\"assignees\":[{\"login\":\"octo\"}],\"milestone\":{\"title\":\"v1\"},\"created_at\":\"2026-01-02T03:04:05Z\",\"updated_at\":\"2026-01-03T03:04:05Z\"}"
+		}
+	],
+	"call": {
+		"op": "getChangeRequestLinkedIssues",
+		"number": 9
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/pulls/9",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		},
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/pulls/9/reviews?per_page=100",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		},
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/actions/runs?head_sha=abc123\u0026per_page=1",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		},
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/issues/3",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		},
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/issues/4",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		}
+	],
+	"value": "[{\"id\":11,\"iid\":7,\"title\":\"Broken login\",\"description\":\"Closes #3 and fixes acme/other#4\",\"state\":\"open\",\"web_url\":\"https://github.com/acme/devenv/issues/7\",\"author\":{\"name\":\"octo\",\"username\":\"octo\"},\"labels\":[\"bug\",\"p1\"],\"assignees\":[{\"name\":\"octo\",\"username\":\"octo\"}],\"milestone\":{\"title\":\"v1\"},\"created_at\":\"2026-01-02T03:04:05Z\",\"updated_at\":\"2026-01-03T03:04:05Z\"},{\"id\":11,\"iid\":7,\"title\":\"Broken login\",\"description\":\"Closes #3 and fixes acme/other#4\",\"state\":\"open\",\"web_url\":\"https://github.com/acme/devenv/issues/7\",\"author\":{\"name\":\"octo\",\"username\":\"octo\"},\"labels\":[\"bug\",\"p1\"],\"assignees\":[{\"name\":\"octo\",\"username\":\"octo\"}],\"milestone\":{\"title\":\"v1\"},\"created_at\":\"2026-01-02T03:04:05Z\",\"updated_at\":\"2026-01-03T03:04:05Z\"}]"
+}

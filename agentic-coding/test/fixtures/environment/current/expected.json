@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 7,
+  "apps": [
+    {
+      "ident": "leased-app",
+      "branch": "main",
+      "activeWorktree": "",
+      "mainWorktreeBranch": "",
+      "runTarget": null
+    }
+  ],
+  "scriptHistory": {},
+  "actionEvents": [
+    "{\"type\":\"action.run.started\",\"properties\":{\"runId\":\"run-B\",\"name\":\"deploy\"}}"
+  ],
+  "actionLogEvents": {
+    "run-A": [
+      "{\"type\":\"action.command.output\",\"properties\":{\"runId\":\"run-A\",\"stepId\":\"step-a\",\"text\":\"alpha\"}}",
+      "{\"type\":\"action.step.output\",\"properties\":{\"runId\":\"run-A\",\"stepId\":\"step-b\",\"text\":\"beta\"}}"
+    ],
+    "run-B": [
+      "{\"type\":\"action.command.output\",\"properties\":{\"runId\":\"run-B\",\"stepId\":\"step-c\",\"text\":\"gamma\"}}"
+    ]
+  },
+  "dependencyLeases": [
+    {
+      "targetId": "lease:cache",
+      "ownerRunId": "run-A",
+      "ownerApp": "leased-app",
+      "lifecycle": "owned",
+      "updatedAt": "2024-04-05T06:07:09Z"
+    },
+    {
+      "targetId": "lease:db",
+      "ownerRunId": "run-A",
+      "ownerApp": "leased-app",
+      "lifecycle": "owned",
+      "updatedAt": "2024-04-05T06:07:08Z"
+    }
+  ]
+}

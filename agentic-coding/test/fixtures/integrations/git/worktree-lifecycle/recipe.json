@@ -1,0 +1,122 @@
+{
+	"case": "worktree-lifecycle",
+	"note": "linked worktree creation, ownership protection and removal",
+	"app": {
+		"ident": "demo",
+		"repositoryPath": "{{remote}}",
+		"localDirectoryPath": "linked:feature",
+		"branch": "feature",
+		"mainWorktreeBranch": "main",
+		"activeWorktree": "feature"
+	},
+	"setup": [
+		{
+			"cwd": "remote",
+			"args": [
+				"init",
+				"-q",
+				"--bare",
+				"-b",
+				"main"
+			]
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"init",
+				"-q",
+				"-b",
+				"main"
+			]
+		},
+		{
+			"cwd": "primary",
+			"write": {
+				"README.md": "hello\n"
+			}
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"add",
+				"README.md"
+			]
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"commit",
+				"-q",
+				"-m",
+				"init"
+			]
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"remote",
+				"add",
+				"origin",
+				"{{remote}}"
+			]
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"push",
+				"-q",
+				"-u",
+				"origin",
+				"main"
+			]
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"branch",
+				"feature"
+			]
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"push",
+				"-q",
+				"origin",
+				"feature"
+			]
+		}
+	],
+	"operations": [
+		{
+			"op": "localBranches"
+		},
+		{
+			"op": "currentBranch"
+		},
+		{
+			"op": "status"
+		},
+		{
+			"op": "listWorktrees"
+		},
+		{
+			"op": "addWorktree",
+			"branch": "feature"
+		},
+		{
+			"op": "listWorktrees"
+		},
+		{
+			"op": "removeWorktree",
+			"branch": "feature"
+		},
+		{
+			"op": "removeWorktree",
+			"branch": "main"
+		},
+		{
+			"op": "listWorktrees"
+		}
+	]
+}

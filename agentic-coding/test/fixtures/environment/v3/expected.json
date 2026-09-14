@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 3,
+  "apps": [
+    {
+      "ident": "worktree-app",
+      "branch": "feature/two",
+      "activeWorktree": "feature/two",
+      "mainWorktreeBranch": "main",
+      "runTarget": null
+    }
+  ],
+  "scriptHistory": {
+    "scripts/build.sh": [
+      {
+        "target": "second"
+      },
+      {
+        "target": "first"
+      }
+    ],
+    "scripts/deploy.sh": [
+      {}
+    ]
+  },
+  "actionEvents": [],
+  "actionLogEvents": {},
+  "dependencyLeases": []
+}

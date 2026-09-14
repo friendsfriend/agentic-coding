@@ -61,10 +61,20 @@ There is no router/plugin framework.
 | POST | `/api/v1/telemetry/scan` | bun |
 | POST | `/api/v1/telemetry/prune` | bun |
 | POST | `/api/v1/credentials/respond` | bun |
+| GET/POST | `/api/v1/environment/private/*` | bun |
 | GET/POST | `/api/v1/environment/*` | go |
 
 Reads remain observational: the observation dispatcher only lists/reads/views and
 never initializes or migrates a store, expires a question or claims an effect.
+
+### Environment ownership
+
+`/api/v1/environment/private/state` is the bounded private operation envelope the
+remaining Go services use for environment state and configuration once Bun owns
+them (see [`environment-state-port.md`](environment-state-port.md)). It carries one
+logical operation per request — no SQL, table or column ever crosses the wire —
+and is served from Bun's own authority without an outbound request, so it cannot
+recurse back into the delegated Go child.
 
 ## Events
 
@@ -124,6 +134,13 @@ Implemented by this change:
 
 Not yet migrated (remaining backlog, kept explicit rather than silently dropped):
 
+- The environment-state/config port (`port-project-catalog-and-state-to-bun`) is
+  in progress: Bun owns `$DEVENV_HOME/db/state.db` and the configured environment
+  (definition files, catalog projection) by default, the Go child reaches both
+  through the bounded private operations and opens no database handle, and the
+  remaining Go-served environment routes (`/api/v1/environment/*`) are still
+  delegated until those services are ported. See
+  [`environment-state-port.md`](environment-state-port.md).
 - The remaining CLI admin/mutation commands (`action`, `repair`, `migrate`,
   `repin`, `agent-extension`, `sidebar`) and the `config` read run at the CLI's
   own in-process application boundary; the agent commands, reads and full-feature
@@ -139,3 +156,10 @@ the TUI/server stack through the owned resource registry so the Go child and Bun
 listener release in reverse order, then check out the pre-change revision. No
 schema, workflow pin, store migration or durable workflow data is changed by this
 transport extraction, so an older revision can read the same stores.
+
+For the environment-state ownership change the gate is stricter: the two
+generations are selected explicitly (`DEVENV_ENVIRONMENT_OWNER`, default `bun`,
+`go` to roll back) and never run as writers at once. An upgrade to an older
+schema leaves a verified `state.db.backup-v<N>` produced with `VACUUM INTO`, a
+newer schema fails closed without modification, and an interrupted migration is
+committed or rolled back as a whole — never a mix of both.

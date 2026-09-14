@@ -1,0 +1,136 @@
+{
+	"case": "remote-sync",
+	"note": "remote branch listing, fetch, pull and already-up-to-date push",
+	"app": {
+		"ident": "demo",
+		"repositoryPath": "{{remote}}",
+		"localDirectoryPath": "primary",
+		"branch": "main",
+		"mainWorktreeBranch": "main",
+		"activeWorktree": ""
+	},
+	"setup": [
+		{
+			"cwd": "remote",
+			"args": [
+				"init",
+				"-q",
+				"--bare",
+				"-b",
+				"main"
+			]
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"init",
+				"-q",
+				"-b",
+				"main"
+			]
+		},
+		{
+			"cwd": "primary",
+			"write": {
+				"README.md": "hello\n"
+			}
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"add",
+				"README.md"
+			]
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"commit",
+				"-q",
+				"-m",
+				"init"
+			]
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"remote",
+				"add",
+				"origin",
+				"{{remote}}"
+			]
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"push",
+				"-q",
+				"-u",
+				"origin",
+				"main"
+			]
+		},
+		{
+			"cwd": "other",
+			"args": [
+				"clone",
+				"-q",
+				"{{remote}}",
+				"."
+			]
+		},
+		{
+			"cwd": "other",
+			"write": {
+				"next.txt": "next\n"
+			}
+		},
+		{
+			"cwd": "other",
+			"args": [
+				"add",
+				"next.txt"
+			]
+		},
+		{
+			"cwd": "other",
+			"args": [
+				"commit",
+				"-q",
+				"-m",
+				"next"
+			]
+		},
+		{
+			"cwd": "other",
+			"args": [
+				"push",
+				"-q",
+				"origin",
+				"main"
+			]
+		}
+	],
+	"operations": [
+		{
+			"op": "remoteBranches",
+			"repoURL": "{{remote}}",
+			"value": "main"
+		},
+		{
+			"op": "fetch"
+		},
+		{
+			"op": "pull"
+		},
+		{
+			"op": "headFile",
+			"branch": "primary",
+			"value": "ref: refs/heads/main"
+		},
+		{
+			"op": "localBranches",
+			"value": "main"
+		}
+	]
+}

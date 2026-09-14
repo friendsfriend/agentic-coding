@@ -1,0 +1,1 @@
+{"operation":"manager.addApp","params":{"app":{"ident":"beta","displayName":"Beta","repositoryPath":"https://example.com/team/beta.git","appType":"APP","localDirectoryPath":"/home/devenv/beta/beta","branch":"main"}}}

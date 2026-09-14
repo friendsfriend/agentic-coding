@@ -1,0 +1,30 @@
+{
+	"case": "mr-comment-rejected",
+	"note": "a rejected comment reports the provider status and body",
+	"responses": [
+		{
+			"match": "/merge_requests/9/discussions",
+			"status": 400,
+			"body": "{\"message\":\"400 Bad Request\"}"
+		}
+	],
+	"call": {
+		"op": "createMrDiffComment",
+		"number": 9,
+		"body": "looks good"
+	},
+	"requests": [
+		{
+			"method": "POST",
+			"url": "https://gitlab.example.com/api/v4/projects/acme%2Fdevenv/merge_requests/9/discussions",
+			"headers": {
+				"accept": "application/json",
+				"content-type": "application/json",
+				"private-token": "fixture-token"
+			},
+			"body": "{\"body\":\"looks good\"}"
+		}
+	],
+	"error": true,
+	"message": "cannot create comment: {\"message\":\"400 Bad Request\"}"
+}

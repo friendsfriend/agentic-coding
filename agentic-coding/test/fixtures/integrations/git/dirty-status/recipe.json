@@ -1,0 +1,70 @@
+{
+	"case": "dirty-status",
+	"note": "working-tree status counts for added, changed and removed files",
+	"app": {
+		"ident": "demo",
+		"repositoryPath": "{{remote}}",
+		"localDirectoryPath": "primary",
+		"branch": "main",
+		"mainWorktreeBranch": "main",
+		"activeWorktree": ""
+	},
+	"setup": [
+		{
+			"cwd": "primary",
+			"args": [
+				"init",
+				"-q",
+				"-b",
+				"main"
+			]
+		},
+		{
+			"cwd": "primary",
+			"write": {
+				"change.txt": "one\n",
+				"gone.txt": "gone\n",
+				"keep.txt": "keep\n"
+			}
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"add",
+				"."
+			]
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"commit",
+				"-q",
+				"-m",
+				"init"
+			]
+		},
+		{
+			"cwd": "primary",
+			"write": {
+				"added.txt": "new\n",
+				"change.txt": "two\n"
+			}
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"rm",
+				"-q",
+				"gone.txt"
+			]
+		}
+	],
+	"operations": [
+		{
+			"op": "status"
+		},
+		{
+			"op": "currentBranch"
+		}
+	]
+}

@@ -1,0 +1,30 @@
+{
+	"case": "mr-list-skip-details",
+	"note": "skip-details avoids the per-item detail and approval reads",
+	"responses": [
+		{
+			"match": "/merge_requests?",
+			"status": 200,
+			"body": "[{\"id\":41,\"iid\":9,\"title\":\"Fix login\",\"description\":\"Closes #7\",\"source_branch\":\"fix-login\",\"target_branch\":\"develop\",\"state\":\"opened\",\"web_url\":\"https://gitlab.example.com/acme/devenv/-/merge_requests/9\",\"created_at\":\"2026-01-02T03:04:05.000Z\",\"updated_at\":\"2026-01-03T03:04:05.000Z\",\"author\":{\"name\":\"Octo\",\"username\":\"octo\"},\"head_pipeline\":{\"id\":77,\"status\":\"success\",\"web_url\":\"https://gitlab.example.com/acme/devenv/-/pipelines/77\"},\"merge_status\":\"can_be_merged\",\"detailed_merge_status\":\"mergeable\",\"draft\":false,\"work_in_progress\":false,\"has_conflicts\":false,\"blocking_discussions_resolved\":true,\"rebase_in_progress\":false,\"merge_error\":\"\"}]"
+		}
+	],
+	"call": {
+		"op": "getChangeRequestsWithOptions",
+		"state": "opened",
+		"page": 1,
+		"perPage": 50,
+		"skipDetails": true
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://gitlab.example.com/api/v4/projects/acme%2Fdevenv/merge_requests?order_by=updated_at\u0026page=1\u0026per_page=50\u0026sort=desc\u0026state=opened\u0026with_merge_status_recheck=true",
+			"headers": {
+				"accept": "application/json",
+				"content-type": "",
+				"private-token": "fixture-token"
+			}
+		}
+	],
+	"value": "{\"items\":[{\"id\":41,\"iid\":9,\"title\":\"Fix login\",\"description\":\"Closes #7\",\"source_branch\":\"fix-login\",\"target_branch\":\"develop\",\"state\":\"opened\",\"web_url\":\"https://gitlab.example.com/acme/devenv/-/merge_requests/9\",\"created_at\":\"2026-01-02T03:04:05Z\",\"updated_at\":\"2026-01-03T03:04:05Z\",\"author\":{\"name\":\"Octo\",\"username\":\"octo\"},\"head_pipeline\":{\"id\":77,\"status\":\"success\",\"web_url\":\"https://gitlab.example.com/acme/devenv/-/pipelines/77\"},\"merge_status\":\"can_be_merged\",\"detailed_merge_status\":\"mergeable\",\"draft\":false,\"work_in_progress\":false,\"has_conflicts\":false,\"blocking_discussions_resolved\":true,\"rebase_in_progress\":false,\"merge_error\":\"\"}],\"totalCount\":-1,\"totalPages\":-1,\"currentPage\":1,\"perPage\":50}"
+}

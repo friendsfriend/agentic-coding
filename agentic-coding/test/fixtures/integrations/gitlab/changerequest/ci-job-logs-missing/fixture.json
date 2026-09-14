@@ -1,0 +1,28 @@
+{
+	"case": "ci-job-logs-missing",
+	"note": "a missing trace reports the Go diagnostic",
+	"responses": [
+		{
+			"match": "/jobs/101/trace",
+			"status": 404,
+			"body": "{\"message\":\"404 Not Found\"}"
+		}
+	],
+	"call": {
+		"op": "getJobLogs",
+		"number": 101
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://gitlab.example.com/api/v4/projects/acme%2Fdevenv/jobs/101/trace",
+			"headers": {
+				"accept": "text/plain",
+				"content-type": "",
+				"private-token": "fixture-token"
+			}
+		}
+	],
+	"error": true,
+	"message": "job not found or logs not available"
+}

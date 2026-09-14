@@ -1,0 +1,26 @@
+{
+	"case": "search-malformed",
+	"note": "unparseable provider content fails the call instead of yielding a partial list",
+	"response": {
+		"status": 200,
+		"body": "{\"items\":[{\"name\":"
+	},
+	"call": {
+		"op": "search",
+		"query": "acme",
+		"limit": 20,
+		"error": true,
+		"message": "failed to parse search response: unexpected end of JSON input"
+	},
+	"request": {
+		"method": "GET",
+		"url": "https://api.github.com/search/repositories?per_page=20\u0026q=acme\u0026sort=updated",
+		"headers": {
+			"accept": "application/vnd.github+json",
+			"authorization": "Bearer fixture-token",
+			"content-type": "",
+			"user-agent": "devenv-cli",
+			"x-github-api-version": "2022-11-28"
+		}
+	}
+}

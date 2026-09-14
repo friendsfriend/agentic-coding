@@ -1,0 +1,37 @@
+{
+	"case": "load-credentials",
+	"note": "placeholder resolution, missing vars, invalid clear-text files and filename-derived names",
+	"input": {
+		".env": "DEVENV_PROVIDER_TEAM_USERNAME=octo\nDEVENV_PROVIDER_TEAM_TOKEN='tok en'\n",
+		"providers/anon.json": "{\n  \"type\": \"github\",\n  \"username\": \"${DEVENV_PROVIDER_ANON_USERNAME}\",\n  \"token\": \"${DEVENV_PROVIDER_ANON_TOKEN}\"\n}\n",
+		"providers/plain.json": "{\n  \"name\": \"plain\",\n  \"type\": \"github\",\n  \"username\": \"someone\",\n  \"token\": \"secret\"\n}\n",
+		"providers/team.json": "{\n  \"name\": \"team\",\n  \"type\": \"gitlab\",\n  \"username\": \"${DEVENV_PROVIDER_TEAM_USERNAME}\",\n  \"token\": \"${DEVENV_PROVIDER_TEAM_TOKEN}\"\n}\n"
+	},
+	"operations": [
+		{
+			"op": "load"
+		},
+		{
+			"op": "list"
+		},
+		{
+			"op": "invalid"
+		},
+		{
+			"op": "get",
+			"name": "team"
+		},
+		{
+			"op": "credentialsFor",
+			"name": "team"
+		},
+		{
+			"op": "credentialsFor",
+			"name": "plain"
+		},
+		{
+			"op": "credentialsFor",
+			"name": "missing"
+		}
+	]
+}

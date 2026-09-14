@@ -1,0 +1,27 @@
+{
+	"case": "ci-jobs",
+	"note": "workflow run jobs map onto the GitLab job shape with a duration only when both timestamps exist",
+	"responses": [
+		{
+			"match": "/actions/runs/77/jobs",
+			"status": 200,
+			"body": "{\"total_count\":3,\"jobs\":[{\"id\":101,\"name\":\"build\",\"status\":\"completed\",\"conclusion\":\"success\",\"started_at\":\"2026-01-02T03:04:05Z\",\"completed_at\":\"2026-01-02T03:06:05Z\",\"html_url\":\"https://github.com/acme/devenv/actions/runs/77/job/101\",\"run_id\":77},{\"id\":102,\"name\":\"test\",\"status\":\"in progress\",\"conclusion\":\"\",\"started_at\":\"2026-01-02T03:06:05Z\",\"completed_at\":\"0001-01-01T00:00:00Z\",\"html_url\":\"https://github.com/acme/devenv/actions/runs/77/job/102\",\"run_id\":77},{\"id\":103,\"name\":\"lint\",\"status\":\"queued\",\"conclusion\":\"\",\"started_at\":\"0001-01-01T00:00:00Z\",\"completed_at\":\"0001-01-01T00:00:00Z\",\"html_url\":\"https://github.com/acme/devenv/actions/runs/77/job/103\",\"run_id\":77}]}"
+		}
+	],
+	"call": {
+		"op": "getPipelineJobs",
+		"number": 77
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/actions/runs/77/jobs?per_page=100",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		}
+	],
+	"value": "[{\"id\":101,\"name\":\"build\",\"stage\":\"Default\",\"status\":\"success\",\"web_url\":\"https://github.com/acme/devenv/actions/runs/77/job/101\",\"started_at\":\"2026-01-02T03:04:05Z\",\"finished_at\":\"2026-01-02T03:06:05Z\",\"duration\":120,\"pipeline\":{\"id\":77}},{\"id\":102,\"name\":\"test\",\"stage\":\"Default\",\"status\":\"running\",\"web_url\":\"https://github.com/acme/devenv/actions/runs/77/job/102\",\"started_at\":\"2026-01-02T03:06:05Z\",\"finished_at\":\"0001-01-01T00:00:00Z\",\"pipeline\":{\"id\":77}},{\"id\":103,\"name\":\"lint\",\"stage\":\"Default\",\"status\":\"pending\",\"web_url\":\"https://github.com/acme/devenv/actions/runs/77/job/103\",\"started_at\":\"0001-01-01T00:00:00Z\",\"finished_at\":\"0001-01-01T00:00:00Z\",\"pipeline\":{\"id\":77}}]"
+}

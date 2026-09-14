@@ -1,0 +1,132 @@
+{
+	"case": "worktree-lifecycle",
+	"note": "linked worktree creation, ownership protection and removal",
+	"app": {
+		"ident": "demo",
+		"repositoryPath": "{{remote}}",
+		"localDirectoryPath": "linked:feature",
+		"branch": "feature",
+		"mainWorktreeBranch": "main",
+		"activeWorktree": "feature"
+	},
+	"setup": [
+		{
+			"cwd": "remote",
+			"args": [
+				"init",
+				"-q",
+				"--bare",
+				"-b",
+				"main"
+			]
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"init",
+				"-q",
+				"-b",
+				"main"
+			]
+		},
+		{
+			"cwd": "primary",
+			"write": {
+				"README.md": "hello\n"
+			}
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"add",
+				"README.md"
+			]
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"commit",
+				"-q",
+				"-m",
+				"init"
+			]
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"remote",
+				"add",
+				"origin",
+				"{{remote}}"
+			]
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"push",
+				"-q",
+				"-u",
+				"origin",
+				"main"
+			]
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"branch",
+				"feature"
+			]
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"push",
+				"-q",
+				"origin",
+				"feature"
+			]
+		}
+	],
+	"operations": [
+		{
+			"op": "localBranches",
+			"error": true,
+			"message": "failed to open repository: failed to open repository at {{root}}/demo/demo.feature: repository does not exist",
+			"libraryMessage": true
+		},
+		{
+			"op": "currentBranch"
+		},
+		{
+			"op": "status",
+			"value": "x"
+		},
+		{
+			"op": "listWorktrees",
+			"value": "main|demo/demo|true|false"
+		},
+		{
+			"op": "addWorktree",
+			"branch": "feature",
+			"value": "demo/demo.feature"
+		},
+		{
+			"op": "listWorktrees",
+			"value": "main|demo/demo|true|false;feature|demo/demo.feature|false|true"
+		},
+		{
+			"op": "removeWorktree",
+			"branch": "feature"
+		},
+		{
+			"op": "removeWorktree",
+			"branch": "main",
+			"error": true,
+			"message": "cannot remove the primary worktree (branch \"main\")"
+		},
+		{
+			"op": "listWorktrees",
+			"value": "main|demo/demo|true|false"
+		}
+	]
+}

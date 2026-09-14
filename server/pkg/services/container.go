@@ -136,14 +136,15 @@ func NewContainer() (Container, error) {
 		return nil, fmt.Errorf("failed to create home directory: %w", err)
 	}
 
-	// Open the SQLite state database at $DEVENV_HOME/db/state.db.
-	// Runtime state (current branch, active worktree) lives here, separate
-	// from the static configuration in configDir.
-	dbDir := filepath.Join(homeDir, "db")
-	stateStore, err := state.Open(dbDir)
+	// Environment state and configuration. Runtime state (current branch,
+	// active worktree) lives in $DEVENV_HOME/db/state.db, separate from the
+	// static configuration in configDir; in migrated mode Bun owns both and
+	// this process holds no writable handle of its own.
+	ownership, err := openEnvironment(homeDir, configDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open state database: %w", err)
+		return nil, err
 	}
+	stateStore, appManager := ownership.State, ownership.Manager
 
 	resourcesManager := resources.NewManager(configDir)
 	envFilePath := filepath.Join(configDir, ".env")
@@ -173,8 +174,6 @@ func NewContainer() (Container, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create container runtime client: %w", err)
 	}
-
-	appManager := app.NewManager(homeDir, configDir, stateStore)
 
 	authProvider := &multiAuthProvider{providers: providerStore, appManager: appManager}
 	gitRepo := git.NewRepository(authProvider)

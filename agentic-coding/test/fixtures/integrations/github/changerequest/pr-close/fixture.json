@@ -1,0 +1,28 @@
+{
+	"case": "pr-close",
+	"note": "closing a pull request patches its state",
+	"responses": [
+		{
+			"match": "/pulls/9",
+			"status": 200,
+			"body": "{}"
+		}
+	],
+	"call": {
+		"op": "close",
+		"number": 9
+	},
+	"requests": [
+		{
+			"method": "PATCH",
+			"url": "https://api.github.com/repos/acme/devenv/pulls/9",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": "application/json"
+			},
+			"body": "{\"state\":\"closed\"}"
+		}
+	],
+	"value": "null"
+}

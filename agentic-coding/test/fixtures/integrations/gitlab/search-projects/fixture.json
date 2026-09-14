@@ -1,0 +1,25 @@
+{
+	"case": "search-projects",
+	"note": "membership-scoped project search maps the provider payload and clamps the page size",
+	"response": {
+		"status": 200,
+		"body": "[{\"name\":\"devenv\",\"path_with_namespace\":\"acme/devenv\",\"http_url_to_repo\":\"https://gitlab.example.com/acme/devenv.git\",\"default_branch\":\"main\"},{\"name\":\"tools\",\"path_with_namespace\":\"acme/tools\",\"http_url_to_repo\":\"https://gitlab.example.com/acme/tools.git\",\"default_branch\":null}]"
+	},
+	"call": {
+		"op": "searchProjects",
+		"baseUrl": "https://gitlab.example.com",
+		"query": "acme",
+		"limit": 500,
+		"value": "[{\"name\":\"devenv\",\"fullPath\":\"acme/devenv\",\"httpUrl\":\"https://gitlab.example.com/acme/devenv.git\",\"defaultBranch\":\"main\"},{\"name\":\"tools\",\"fullPath\":\"acme/tools\",\"httpUrl\":\"https://gitlab.example.com/acme/tools.git\",\"defaultBranch\":\"\"}]"
+	},
+	"request": {
+		"method": "GET",
+		"url": "https://gitlab.example.com/api/v4/projects?membership=true\u0026order_by=last_activity_at\u0026per_page=100\u0026search=acme",
+		"headers": {
+			"accept": "application/json",
+			"content-type": "",
+			"private-token": "fixture-token",
+			"user-agent": "devenv-cli"
+		}
+	}
+}

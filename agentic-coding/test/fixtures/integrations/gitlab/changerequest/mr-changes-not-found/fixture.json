@@ -1,0 +1,28 @@
+{
+	"case": "mr-changes-not-found",
+	"note": "a missing change request reports the Go diagnostic",
+	"responses": [
+		{
+			"match": "/merge_requests/9/changes",
+			"status": 404,
+			"body": "{\"message\":\"404 Not Found\"}"
+		}
+	],
+	"call": {
+		"op": "getChangeRequestChanges",
+		"number": 9
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://gitlab.example.com/api/v4/projects/acme%2Fdevenv/merge_requests/9/changes",
+			"headers": {
+				"accept": "application/json",
+				"content-type": "",
+				"private-token": "fixture-token"
+			}
+		}
+	],
+	"error": true,
+	"message": "change request not found"
+}

@@ -54,6 +54,12 @@ export class BackendStopError extends Data.TaggedError("BackendStopError")<{
 	}
 }
 
+/** Bun-owned environment authority handed to the child in migrated mode. */
+export interface ChildEnvironment {
+	readonly url: string;
+	readonly token: string;
+}
+
 export interface BackendHealth {
 	status?: string;
 	homeDir?: string;
@@ -101,6 +107,13 @@ export interface BackendRuntimeShape {
 		/** Private instance capability the child requires on every non-health
 		 * route (expose-unified-bun-backend, task 1.3). */
 		token: string;
+		/** Bun-owned environment authority the child must call for state and
+		 * configuration (migrated mode). Absent means the child owns the
+		 * database itself. */
+		environment?: { readonly url: string; readonly token: string };
+		/** Bun address of the private Git operation adapter. Set only when the
+		 * Bun server owns the Git capability. */
+		integrations?: { readonly url: string; readonly token: string };
 	}) => Effect.Effect<BackendChild, BackendStartupError, BackendRuntime>;
 	/** Remove the private extraction directory an instance owned. */
 	readonly removeExtractionDir: (instance: string) => Effect.Effect<void>;
@@ -343,7 +356,15 @@ export const BackendRuntimeLive = Layer.succeed(BackendRuntime, {
 			return resolved;
 		}),
 
-	spawnBackend: ({ port, instance, binary, homeDir, token }) =>
+	spawnBackend: ({
+		port,
+		instance,
+		binary,
+		homeDir,
+		token,
+		environment,
+		integrations,
+	}) =>
 		Effect.gen(function* () {
 			const executable = yield* ensureExecutable(binary);
 			const logDir = path.join(homeDir, "logs");
@@ -358,7 +379,25 @@ export const BackendRuntimeLive = Layer.succeed(BackendRuntime, {
 				{
 					stdout: logFile.fd,
 					stderr: logFile.fd,
-					env: { ...process.env, DEVENV_INSTANCE_TOKEN: token },
+					env: {
+						...process.env,
+						DEVENV_INSTANCE_TOKEN: token,
+						...(environment
+							? {
+									DEVENV_ENVIRONMENT_URL: environment.url,
+									DEVENV_ENVIRONMENT_TOKEN: environment.token,
+								}
+							: {}),
+						// Only set when the Bun server actually owns the Git
+						// capability: otherwise the child must keep executing Git
+						// commands itself instead of forwarding to a 503.
+						...(integrations
+							? {
+									DEVENV_INTEGRATIONS_URL: integrations.url,
+									DEVENV_INTEGRATIONS_TOKEN: integrations.token,
+								}
+							: {}),
+					},
 				},
 			);
 			// The log handle belongs to the child, not to this effect.
@@ -399,6 +438,12 @@ export interface StartBackendOptions {
 	readonly instance?: string;
 	/** Private capability; generated when omitted. */
 	readonly token?: string;
+	/** Bun-owned environment authority the child must use for state and
+	 * configuration instead of opening the database itself. */
+	readonly environment?: ChildEnvironment;
+	/** Bun address of the private Git operation adapter, when Bun owns the Git
+	 * capability. */
+	readonly integrations?: ChildEnvironment;
 	/** Readiness poll attempts (500ms apart); overridable in tests. */
 	readonly readinessRetries?: number;
 	/** Bounded wait for the child to exit after SIGTERM/SIGKILL. */
@@ -481,6 +526,8 @@ export const acquireOwnedBackend = (
 				binary,
 				homeDir: expected.homeDir,
 				token,
+				...(options.environment ? { environment: options.environment } : {}),
+				...(options.integrations ? { integrations: options.integrations } : {}),
 			}),
 			(child) => stopOwnedChild(child, instance, options.stopTimeoutMs ?? 2000),
 		);

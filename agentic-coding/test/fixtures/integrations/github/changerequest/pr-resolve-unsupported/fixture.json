@@ -1,0 +1,12 @@
+{
+	"case": "pr-resolve-unsupported",
+	"note": "resolving a discussion is rejected with the Go diagnostic",
+	"responses": [],
+	"call": {
+		"op": "resolveDiscussion",
+		"number": 9
+	},
+	"requests": null,
+	"error": true,
+	"message": "resolving discussions is not supported on GitHub"
+}

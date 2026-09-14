@@ -1,0 +1,27 @@
+{
+	"case": "ci-pipelines",
+	"note": "pipelines are ordered by id descending and the limit is clamped",
+	"responses": [
+		{
+			"match": "/pipelines?",
+			"status": 200,
+			"body": "[{\"id\":77,\"iid\":12,\"project_id\":3,\"status\":\"success\",\"ref\":\"fix-login\",\"sha\":\"abc1234567890abcdef7890abcdef7890abcdef\",\"web_url\":\"https://gitlab.example.com/acme/devenv/-/pipelines/77\",\"created_at\":\"2026-01-02T03:04:05.000Z\",\"updated_at\":\"2026-01-02T03:05:05.000Z\",\"user\":{\"name\":\"Octo\",\"username\":\"octo\"},\"source\":\"push\"}]"
+		}
+	],
+	"call": {
+		"op": "getPipelines",
+		"number": 500
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://gitlab.example.com/api/v4/projects/acme%2Fdevenv/pipelines?order_by=id\u0026per_page=100\u0026sort=desc",
+			"headers": {
+				"accept": "application/json",
+				"content-type": "",
+				"private-token": "fixture-token"
+			}
+		}
+	],
+	"value": "[{\"id\":77,\"iid\":12,\"project_id\":3,\"status\":\"success\",\"ref\":\"fix-login\",\"sha\":\"abc1234567890abcdef7890abcdef7890abcdef\",\"web_url\":\"https://gitlab.example.com/acme/devenv/-/pipelines/77\",\"created_at\":\"2026-01-02T03:04:05Z\",\"updated_at\":\"2026-01-02T03:05:05Z\",\"user\":{\"name\":\"Octo\",\"username\":\"octo\"},\"source\":\"push\"}]"
+}

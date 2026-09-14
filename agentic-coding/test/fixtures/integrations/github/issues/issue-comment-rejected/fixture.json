@@ -1,0 +1,30 @@
+{
+	"case": "issue-comment-rejected",
+	"note": "a comment the provider rejects reports its status and body instead of a created comment",
+	"responses": [
+		{
+			"match": "/issues/7/comments",
+			"status": 422,
+			"body": "{\"message\":\"Validation Failed\"}"
+		}
+	],
+	"call": {
+		"op": "addComment",
+		"number": 7,
+		"body": "me too"
+	},
+	"requests": [
+		{
+			"method": "POST",
+			"url": "https://api.github.com/repos/acme/devenv/issues/7/comments",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": "application/json"
+			},
+			"body": "{\"body\":\"me too\"}"
+		}
+	],
+	"error": true,
+	"message": "GitHub API error (status 422): {\"message\":\"Validation Failed\"}"
+}

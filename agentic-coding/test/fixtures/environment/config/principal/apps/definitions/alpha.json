@@ -1,0 +1,11 @@
+{
+  "ident": "alpha",
+  "displayName": "Alpha App",
+  "repositoryPath": "git@example.com:team/alpha.git",
+  "containerBaseName": "alpha-container",
+  "sourceType": "gitlab",
+  "gitMode": "WORKTREE",
+  "branch": "leaked-runtime-branch",
+  "activeWorktree": "leaked-runtime-worktree",
+  "localDirectoryPath": "/leaked/runtime/path"
+}

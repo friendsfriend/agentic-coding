@@ -1,0 +1,33 @@
+{
+	"case": "pr-unapprove",
+	"note": "unapproving dismisses the newest approval of the authenticated user",
+	"responses": [
+		{
+			"match": "/pulls/9/reviews",
+			"status": 200,
+			"body": "[{\"id\":51,\"user\":{\"login\":\"hubot\"},\"state\":\"CHANGES_REQUESTED\"},{\"id\":52,\"user\":{\"login\":\"hubot\"},\"state\":\"APPROVED\"},{\"id\":53,\"user\":{\"login\":\"dependabot\"},\"state\":\"APPROVED\"}]"
+		},
+		{
+			"match": "/dismissals",
+			"status": 200,
+			"body": "{}"
+		}
+	],
+	"call": {
+		"op": "unapprove",
+		"number": 9
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/pulls/9/reviews?per_page=100",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		}
+	],
+	"error": true,
+	"message": "no APPROVED review found to dismiss"
+}

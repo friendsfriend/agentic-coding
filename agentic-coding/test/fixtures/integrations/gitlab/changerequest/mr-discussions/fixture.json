@@ -1,0 +1,27 @@
+{
+	"case": "mr-discussions",
+	"note": "discussion threads keep their notes, resolvable state and diff position",
+	"responses": [
+		{
+			"match": "/merge_requests/9/discussions",
+			"status": 200,
+			"body": "[{\"id\":\"abc\",\"individual_note\":false,\"notes\":[{\"id\":31,\"type\":\"DiffNote\",\"body\":\"root\",\"author\":{\"id\":1,\"username\":\"octo\",\"name\":\"Octo\",\"avatar_url\":\"\"},\"created_at\":\"2026-01-02T03:04:05.000Z\",\"updated_at\":\"2026-01-02T03:04:05.000Z\",\"system\":false,\"resolvable\":true,\"resolved\":false,\"position\":{\"base_sha\":\"def4567890abcdef7890abcdef7890abcdef7890\",\"start_sha\":\"def4567890abcdef7890abcdef7890abcdef7890\",\"head_sha\":\"abc1234567890abcdef7890abcdef7890abcdef\",\"old_path\":\"src/login.ts\",\"new_path\":\"src/login.ts\",\"position_type\":\"text\",\"new_line\":12}},{\"id\":32,\"type\":\"DiffNote\",\"body\":\"reply\",\"author\":{\"id\":2,\"username\":\"hubot\",\"name\":\"Hubot\",\"avatar_url\":\"\"},\"created_at\":\"2026-01-02T04:04:05.000Z\",\"updated_at\":\"2026-01-02T04:04:05.000Z\",\"system\":false,\"resolvable\":true,\"resolved\":true}]},{\"id\":\"def\",\"individual_note\":true,\"notes\":[{\"id\":33,\"type\":\"DiscussionNote\",\"body\":\"general\",\"author\":{\"id\":1,\"username\":\"octo\",\"name\":\"Octo\",\"avatar_url\":\"\"},\"created_at\":\"2026-01-02T05:04:05.000Z\",\"updated_at\":\"2026-01-02T05:04:05.000Z\",\"system\":false,\"resolvable\":false,\"resolved\":false}]}]"
+		}
+	],
+	"call": {
+		"op": "getMrDiscussions",
+		"number": 9
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://gitlab.example.com/api/v4/projects/acme%2Fdevenv/merge_requests/9/discussions",
+			"headers": {
+				"accept": "application/json",
+				"content-type": "",
+				"private-token": "fixture-token"
+			}
+		}
+	],
+	"value": "[{\"id\":\"abc\",\"individual_note\":false,\"notes\":[{\"id\":31,\"type\":\"DiffNote\",\"body\":\"root\",\"author\":{\"id\":1,\"username\":\"octo\",\"name\":\"Octo\",\"avatar_url\":\"\"},\"created_at\":\"2026-01-02T03:04:05Z\",\"updated_at\":\"2026-01-02T03:04:05Z\",\"system\":false,\"position\":{\"base_sha\":\"def4567890abcdef7890abcdef7890abcdef7890\",\"start_sha\":\"def4567890abcdef7890abcdef7890abcdef7890\",\"head_sha\":\"abc1234567890abcdef7890abcdef7890abcdef\",\"old_path\":\"src/login.ts\",\"new_path\":\"src/login.ts\",\"position_type\":\"text\",\"new_line\":12},\"resolvable\":true,\"resolved\":false},{\"id\":32,\"type\":\"DiffNote\",\"body\":\"reply\",\"author\":{\"id\":2,\"username\":\"hubot\",\"name\":\"Hubot\",\"avatar_url\":\"\"},\"created_at\":\"2026-01-02T04:04:05Z\",\"updated_at\":\"2026-01-02T04:04:05Z\",\"system\":false,\"resolvable\":true,\"resolved\":true}]},{\"id\":\"def\",\"individual_note\":true,\"notes\":[{\"id\":33,\"type\":\"DiscussionNote\",\"body\":\"general\",\"author\":{\"id\":1,\"username\":\"octo\",\"name\":\"Octo\",\"avatar_url\":\"\"},\"created_at\":\"2026-01-02T05:04:05Z\",\"updated_at\":\"2026-01-02T05:04:05Z\",\"system\":false,\"resolvable\":false,\"resolved\":false}]}]"
+}

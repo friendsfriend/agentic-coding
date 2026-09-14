@@ -38,7 +38,8 @@ export interface RouteOwnership {
 		| "telemetry"
 		| "events"
 		| "credentials"
-		| "environment";
+		| "environment"
+		| "integrations";
 }
 
 /** Static route ownership manifest (design decision 2): the server never
@@ -144,6 +145,12 @@ export const ROUTE_OWNERSHIP: readonly RouteOwnership[] = [
 		domain: "credentials",
 	},
 	{
+		method: "POST",
+		path: "/api/v1/environment/private/*",
+		owner: "bun",
+		domain: "environment",
+	},
+	{
 		method: "GET",
 		path: "/api/v1/environment/*",
 		owner: "go",
@@ -154,6 +161,15 @@ export const ROUTE_OWNERSHIP: readonly RouteOwnership[] = [
 		path: "/api/v1/environment/*",
 		owner: "go",
 		domain: "environment",
+	},
+	// Private Git operation adapter for the still-Go action owner
+	// (port-git-providers-and-ai-to-bun task 1.3). Bun serves it in-process and
+	// it performs no outbound request, so it cannot recurse into the child.
+	{
+		method: "POST",
+		path: "/api/v1/integrations/private/git-command",
+		owner: "bun",
+		domain: "integrations",
 	},
 ];
 

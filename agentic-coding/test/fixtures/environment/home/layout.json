@@ -1,0 +1,23 @@
+{
+  "description": "Managed-home layout for active-worktree resolution: primary worktrees, one existing linked worktree, one removed linked worktree and one app that was never cloned. Materialized into a temporary directory by the test (a checked-in .git directory would be an embedded repository).",
+  "dirs": [
+    "alpha/alpha/.git",
+    "alpha/alpha/.git/worktrees/feature-x",
+    "alpha/alpha.feature-x",
+    "beta/beta/.git",
+    "gamma/gamma/.git"
+  ],
+  "files": {
+    "alpha/alpha/.git/HEAD": "ref: refs/heads/main\n",
+    "alpha/alpha/.git/worktrees/feature-x/HEAD": "ref: refs/heads/feature/x\n",
+    "alpha/alpha.feature-x/.git": "gitdir: ../alpha/.git/worktrees/feature-x\n",
+    "beta/beta/.git/HEAD": "ref: refs/heads/main\n",
+    "gamma/gamma/.git/HEAD": "ref: refs/heads/trunk\n"
+  },
+  "cases": {
+    "alpha": "active worktree feature/x, linked directory exists -> linked checkout",
+    "beta": "active worktree feature/gone, linked directory removed -> primary fallback",
+    "gamma": "active worktree trunk equals the main worktree branch -> primary checkout",
+    "delta": "no runtime state row -> primary checkout"
+  }
+}

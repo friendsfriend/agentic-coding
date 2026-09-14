@@ -1,0 +1,27 @@
+{
+	"case": "pr-changes",
+	"note": "changed files keep added, removed and renamed identity and carry positioned diff lines with the Go line identity",
+	"responses": [
+		{
+			"match": "/pulls/9/files",
+			"status": 200,
+			"body": "[{\"filename\":\"src/login.ts\",\"status\":\"modified\",\"additions\":1,\"deletions\":1,\"patch\":\"@@ -10,3 +10,3 @@\\n context\\n-removed\\n+added\\n more\"},{\"filename\":\"src/new.ts\",\"status\":\"added\",\"additions\":2,\"deletions\":0,\"patch\":\"@@ -0,0 +1,2 @@\\n+one\\n+two\"},{\"filename\":\"src/old.ts\",\"status\":\"removed\",\"additions\":0,\"deletions\":1,\"patch\":\"@@ -1,1 +0,0 @@\\n-gone\"},{\"filename\":\"src/moved.ts\",\"previous_filename\":\"src/was.ts\",\"status\":\"renamed\",\"additions\":0,\"deletions\":0}]"
+		}
+	],
+	"call": {
+		"op": "getChangeRequestChanges",
+		"number": 9
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/pulls/9/files?per_page=100",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		}
+	],
+	"value": "[{\"old_path\":\"src/login.ts\",\"new_path\":\"src/login.ts\",\"a_mode\":\"100644\",\"b_mode\":\"100644\",\"new_file\":false,\"renamed_file\":false,\"deleted_file\":false,\"diff\":\"@@ -10,3 +10,3 @@\\n context\\n-removed\\n+added\\n more\",\"lines_added\":1,\"lines_deleted\":1,\"diff_lines\":[{\"line_code\":\"f5f85bcacefb562bb5c8d90a6ff89d03d1b119c5\",\"type\":\"match\",\"old_line\":10,\"new_line\":10,\"text\":\" context\",\"rich_text\":\"\"},{\"line_code\":\"45a3c24993811d2b3aa949150452ac6d2cd9508e\",\"type\":\"old\",\"old_line\":11,\"new_line\":null,\"text\":\"-removed\",\"rich_text\":\"\"},{\"line_code\":\"af167496f5804e4d384a03801c436fbaaf55711a\",\"type\":\"new\",\"old_line\":null,\"new_line\":11,\"text\":\"+added\",\"rich_text\":\"\"},{\"line_code\":\"d9182c78407bc9b219de7a9e481ae7acb71180fa\",\"type\":\"match\",\"old_line\":12,\"new_line\":12,\"text\":\" more\",\"rich_text\":\"\"}]},{\"old_path\":\"src/new.ts\",\"new_path\":\"src/new.ts\",\"a_mode\":\"100644\",\"b_mode\":\"100644\",\"new_file\":true,\"renamed_file\":false,\"deleted_file\":false,\"diff\":\"@@ -0,0 +1,2 @@\\n+one\\n+two\",\"lines_added\":2,\"lines_deleted\":0,\"diff_lines\":[{\"line_code\":\"99446e3a4e4fd82a0004f6f0ba4273181785333f\",\"type\":\"new\",\"old_line\":null,\"new_line\":1,\"text\":\"+one\",\"rich_text\":\"\"},{\"line_code\":\"92f249867307257ef433f7673f4b7bbb18bf38f3\",\"type\":\"new\",\"old_line\":null,\"new_line\":2,\"text\":\"+two\",\"rich_text\":\"\"}]},{\"old_path\":\"src/old.ts\",\"new_path\":\"src/old.ts\",\"a_mode\":\"100644\",\"b_mode\":\"100644\",\"new_file\":false,\"renamed_file\":false,\"deleted_file\":true,\"diff\":\"@@ -1,1 +0,0 @@\\n-gone\",\"lines_added\":0,\"lines_deleted\":1,\"diff_lines\":[{\"line_code\":\"5f82351ed1c4c8daeb2e61bc7c80103f1f5a1512\",\"type\":\"old\",\"old_line\":1,\"new_line\":null,\"text\":\"-gone\",\"rich_text\":\"\"}]},{\"old_path\":\"src/was.ts\",\"new_path\":\"src/moved.ts\",\"a_mode\":\"100644\",\"b_mode\":\"100644\",\"new_file\":false,\"renamed_file\":true,\"deleted_file\":false,\"diff\":\"\",\"lines_added\":0,\"lines_deleted\":0}]"
+}

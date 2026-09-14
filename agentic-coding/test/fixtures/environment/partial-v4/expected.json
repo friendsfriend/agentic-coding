@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 7,
+  "apps": [
+    {
+      "ident": "half-migrated-app",
+      "branch": "main",
+      "activeWorktree": "",
+      "mainWorktreeBranch": "main",
+      "runTarget": null
+    }
+  ],
+  "scriptHistory": {},
+  "actionEvents": [],
+  "actionLogEvents": {},
+  "dependencyLeases": [],
+  "note": "interrupted between the v4 ALTER statements and the version write"
+}

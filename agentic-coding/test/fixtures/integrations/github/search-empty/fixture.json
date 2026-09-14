@@ -1,0 +1,24 @@
+{
+	"case": "search-empty",
+	"note": "an empty result set stays an empty list, not an error",
+	"response": {
+		"status": 200,
+		"body": "{\"total_count\":0,\"items\":[]}"
+	},
+	"call": {
+		"op": "search",
+		"query": "nothing",
+		"value": "[]"
+	},
+	"request": {
+		"method": "GET",
+		"url": "https://api.github.com/search/repositories?per_page=20\u0026q=nothing\u0026sort=updated",
+		"headers": {
+			"accept": "application/vnd.github+json",
+			"authorization": "Bearer fixture-token",
+			"content-type": "",
+			"user-agent": "devenv-cli",
+			"x-github-api-version": "2022-11-28"
+		}
+	}
+}

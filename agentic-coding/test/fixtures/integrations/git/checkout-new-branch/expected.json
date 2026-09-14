@@ -1,0 +1,97 @@
+{
+	"case": "checkout-new-branch",
+	"note": "checkout of a branch that exists only on the remote creates a tracking branch",
+	"app": {
+		"ident": "demo",
+		"repositoryPath": "{{remote}}",
+		"localDirectoryPath": "primary",
+		"branch": "main",
+		"mainWorktreeBranch": "main",
+		"activeWorktree": ""
+	},
+	"setup": [
+		{
+			"cwd": "remote",
+			"args": [
+				"init",
+				"-q",
+				"--bare",
+				"-b",
+				"main"
+			]
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"init",
+				"-q",
+				"-b",
+				"main"
+			]
+		},
+		{
+			"cwd": "primary",
+			"write": {
+				"README.md": "hello\n"
+			}
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"add",
+				"README.md"
+			]
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"commit",
+				"-q",
+				"-m",
+				"init"
+			]
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"remote",
+				"add",
+				"origin",
+				"{{remote}}"
+			]
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"push",
+				"-q",
+				"-u",
+				"origin",
+				"main"
+			]
+		},
+		{
+			"cwd": "primary",
+			"args": [
+				"push",
+				"-q",
+				"origin",
+				"main:remote-only"
+			]
+		}
+	],
+	"operations": [
+		{
+			"op": "checkout",
+			"branch": "remote-only"
+		},
+		{
+			"op": "currentBranch",
+			"value": "remote-only"
+		},
+		{
+			"op": "localBranches",
+			"value": "main,remote-only"
+		}
+	]
+}

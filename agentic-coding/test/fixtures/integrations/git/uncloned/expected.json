@@ -1,0 +1,31 @@
+{
+	"case": "uncloned",
+	"note": "unmaterialized checkout reports the placeholder status and empty reads",
+	"app": {
+		"ident": "demo",
+		"repositoryPath": "{{remote}}",
+		"localDirectoryPath": "primary",
+		"branch": "main",
+		"mainWorktreeBranch": "main",
+		"activeWorktree": ""
+	},
+	"setup": [],
+	"operations": [
+		{
+			"op": "status",
+			"value": "x"
+		},
+		{
+			"op": "currentBranch"
+		},
+		{
+			"op": "localBranches",
+			"error": true,
+			"message": "failed to open repository: failed to open repository at {{root}}/demo/demo: repository does not exist",
+			"libraryMessage": true
+		},
+		{
+			"op": "listWorktrees"
+		}
+	]
+}

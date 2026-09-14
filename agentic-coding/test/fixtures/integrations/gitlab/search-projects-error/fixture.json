@@ -1,0 +1,26 @@
+{
+	"case": "search-projects-error",
+	"note": "a provider error status becomes a bounded diagnostic that names the status and body",
+	"response": {
+		"status": 401,
+		"body": "{\"message\":\"401 Unauthorized\"}"
+	},
+	"call": {
+		"op": "searchProjects",
+		"baseUrl": "https://gitlab.example.com",
+		"query": "acme",
+		"limit": 20,
+		"error": true,
+		"message": "GitLab API request failed with status 401: {\"message\":\"401 Unauthorized\"}"
+	},
+	"request": {
+		"method": "GET",
+		"url": "https://gitlab.example.com/api/v4/projects?membership=true\u0026order_by=last_activity_at\u0026per_page=20\u0026search=acme",
+		"headers": {
+			"accept": "application/json",
+			"content-type": "",
+			"private-token": "fixture-token",
+			"user-agent": "devenv-cli"
+		}
+	}
+}

@@ -8,8 +8,10 @@ import type { SignalRouter } from "../tui/otel/receiver/index.ts";
 import { createServerApp, type ServerApp } from "./app.ts";
 import { createInstanceAuthority } from "./auth.ts";
 import { CredentialRegistry } from "./credentials.ts";
+import type { EnvironmentAuthority } from "./environment/private-api.ts";
 import { EventBroker } from "./events.ts";
 import type { ServerOperations } from "./handlers.ts";
+import type { IntegrationServices } from "./integrations/routes.ts";
 import {
 	type OwnedTelemetryReceivers,
 	startTelemetryReceivers,
@@ -27,9 +29,10 @@ export interface StartWorkflowServerOptions {
 	readonly port?: number;
 	readonly hostname?: string;
 	readonly instance?: string;
-	/** Private Go listener to delegate unported environment routes to. */
-	readonly environmentBaseUrl?: string;
-	readonly environmentToken?: string;
+	/** Private Go listener to delegate unported environment routes to. A
+	 * resolver lets the server start before the child it will delegate to. */
+	readonly environmentBaseUrl?: string | (() => string | undefined);
+	readonly environmentToken?: string | (() => string | undefined);
 	readonly version?: string;
 	/** Override the application operations (transport tests). */
 	readonly operations?: ServerOperations;
@@ -46,8 +49,14 @@ export interface StartWorkflowServerOptions {
 	/** Sink the server's receivers route decoded signals into (the shell's live
 	 * view stores). Required when `receivers` is set. */
 	readonly signalSink?: SignalRouter;
+	/** Bun-owned environment state/catalog authority (migrated mode: the Bun
+	 * server is the sole environment-state writer and config authority). */
+	readonly environment?: EnvironmentAuthority;
 	/** Injected workflow refresh hub (transport tests). */
 	readonly hub?: WorkflowEventHub;
+	/** Bun-served legacy integration families (Git, providers, repository
+	 * search). When absent every legacy `/api/*` path is delegated to Go. */
+	readonly integrations?: IntegrationServices;
 }
 
 export interface OwnedWorkflowServer {
@@ -89,8 +98,10 @@ export async function startWorkflowServer(
 		...(options.environmentToken
 			? { environmentToken: options.environmentToken }
 			: {}),
+		...(options.environment ? { environment: options.environment } : {}),
 		...(options.version ? { version: options.version } : {}),
 		...(options.operations ? { operations: options.operations } : {}),
+		...(options.integrations ? { integrations: options.integrations } : {}),
 	});
 	const listener = Bun.serve({
 		hostname: options.hostname ?? "127.0.0.1",

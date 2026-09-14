@@ -1,0 +1,28 @@
+{
+	"case": "issue-detail-error",
+	"note": "a provider error status becomes a bounded diagnostic that names the status and body",
+	"responses": [
+		{
+			"match": "/repos/acme/devenv/issues/7",
+			"status": 404,
+			"body": "{\"message\":\"Not Found\"}"
+		}
+	],
+	"call": {
+		"op": "getIssue",
+		"number": 7
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/issues/7",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		}
+	],
+	"error": true,
+	"message": "GitHub API error (status 404): {\"message\":\"Not Found\"}"
+}

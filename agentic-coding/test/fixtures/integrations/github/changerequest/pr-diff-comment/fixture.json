@@ -1,0 +1,32 @@
+{
+	"case": "pr-diff-comment",
+	"note": "an inline comment sends the head commit, path, side and line derived from the position",
+	"responses": [
+		{
+			"match": "/pulls/9/comments",
+			"status": 201,
+			"body": "{\"id\":61}"
+		}
+	],
+	"call": {
+		"op": "createDiffComment",
+		"number": 9,
+		"body": "looks good",
+		"options": {
+			"positioned": true
+		}
+	},
+	"requests": [
+		{
+			"method": "POST",
+			"url": "https://api.github.com/repos/acme/devenv/pulls/9/comments",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": "application/json"
+			},
+			"body": "{\"body\":\"looks good\",\"commit_id\":\"abc123\",\"line\":12,\"path\":\"src/login.ts\",\"side\":\"RIGHT\"}"
+		}
+	],
+	"value": "null"
+}

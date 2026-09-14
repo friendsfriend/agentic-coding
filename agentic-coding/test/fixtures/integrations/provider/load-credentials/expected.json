@@ -1,0 +1,75 @@
+{
+	"case": "load-credentials",
+	"note": "placeholder resolution, missing vars, invalid clear-text files and filename-derived names",
+	"input": {
+		".env": "DEVENV_PROVIDER_TEAM_USERNAME=octo\nDEVENV_PROVIDER_TEAM_TOKEN='tok en'\n",
+		"providers/anon.json": "{\n  \"type\": \"github\",\n  \"username\": \"${DEVENV_PROVIDER_ANON_USERNAME}\",\n  \"token\": \"${DEVENV_PROVIDER_ANON_TOKEN}\"\n}\n",
+		"providers/plain.json": "{\n  \"name\": \"plain\",\n  \"type\": \"github\",\n  \"username\": \"someone\",\n  \"token\": \"secret\"\n}\n",
+		"providers/team.json": "{\n  \"name\": \"team\",\n  \"type\": \"gitlab\",\n  \"username\": \"${DEVENV_PROVIDER_TEAM_USERNAME}\",\n  \"token\": \"${DEVENV_PROVIDER_TEAM_TOKEN}\"\n}\n"
+	},
+	"operations": [
+		{
+			"op": "load"
+		},
+		{
+			"op": "list",
+			"list": [
+				{
+					"name": "anon",
+					"type": "github",
+					"username": "",
+					"missingVars": [
+						"DEVENV_PROVIDER_ANON_USERNAME",
+						"DEVENV_PROVIDER_ANON_TOKEN"
+					]
+				},
+				{
+					"name": "team",
+					"type": "gitlab",
+					"username": "octo",
+					"token": "tok en"
+				}
+			]
+		},
+		{
+			"op": "invalid",
+			"invalid": [
+				{
+					"name": "plain",
+					"type": "github",
+					"file": "plain.json",
+					"reason": "clear-text-credentials",
+					"message": "provider file plain.json contains clear-text username; move credentials to .env and use ${...} placeholders"
+				}
+			]
+		},
+		{
+			"op": "get",
+			"name": "team",
+			"list": [
+				{
+					"name": "team",
+					"type": "gitlab",
+					"username": "octo",
+					"token": "tok en"
+				}
+			]
+		},
+		{
+			"op": "credentialsFor",
+			"name": "team",
+			"value": "octo\u001ftok en",
+			"hasToken": true
+		},
+		{
+			"op": "credentialsFor",
+			"name": "plain",
+			"value": "\u001f"
+		},
+		{
+			"op": "credentialsFor",
+			"name": "missing",
+			"value": "\u001f"
+		}
+	]
+}

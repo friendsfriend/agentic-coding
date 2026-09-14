@@ -1,0 +1,36 @@
+{
+	"case": "issues-state-all",
+	"note": "state=all uses the list endpoint (search cannot express it), keeps the Link-header page count and reports an unknown total",
+	"responses": [
+		{
+			"match": "/repos/acme/devenv/issues?",
+			"status": 200,
+			"body": "[{\"id\":11,\"number\":7,\"title\":\"Broken login\",\"body\":\"Closes #3 and fixes acme/other#4\",\"state\":\"open\",\"html_url\":\"https://github.com/acme/devenv/issues/7\",\"user\":{\"login\":\"octo\"},\"labels\":[{\"name\":\"bug\"},{\"name\":\"p1\"}],\"assignees\":[{\"login\":\"octo\"}],\"milestone\":{\"title\":\"v1\"},\"created_at\":\"2026-01-02T03:04:05Z\",\"updated_at\":\"2026-01-03T03:04:05Z\"},{\"id\":12,\"number\":8,\"title\":\"A pull request\",\"pull_request\":{},\"created_at\":\"2026-01-02T03:04:05Z\",\"updated_at\":\"2026-01-02T03:04:05Z\"}]",
+			"headers": {
+				"Link": "\u003chttps://api.github.com/repos/acme/devenv/issues?page=3\u003e; rel=\"next\", \u003chttps://api.github.com/repos/acme/devenv/issues?page=5\u003e; rel=\"last\""
+			}
+		}
+	],
+	"call": {
+		"op": "getIssues",
+		"options": {
+			"state": "all",
+			"sortBy": "comments",
+			"sortDirection": "asc",
+			"page": 3,
+			"perPage": 10
+		}
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/issues?direction=asc\u0026page=3\u0026per_page=10\u0026sort=comments\u0026state=all",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		}
+	],
+	"value": "{\"items\":[{\"id\":11,\"iid\":7,\"title\":\"Broken login\",\"description\":\"Closes #3 and fixes acme/other#4\",\"state\":\"open\",\"web_url\":\"https://github.com/acme/devenv/issues/7\",\"author\":{\"name\":\"octo\",\"username\":\"octo\"},\"labels\":[\"bug\",\"p1\"],\"assignees\":[{\"name\":\"octo\",\"username\":\"octo\"}],\"milestone\":{\"title\":\"v1\"},\"created_at\":\"2026-01-02T03:04:05Z\",\"updated_at\":\"2026-01-03T03:04:05Z\"}],\"totalCount\":-1,\"totalPages\":5,\"currentPage\":3,\"perPage\":10}"
+}

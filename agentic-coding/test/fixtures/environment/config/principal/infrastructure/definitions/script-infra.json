@@ -1,0 +1,12 @@
+{
+  "displayName": "Script Infra",
+  "ident": "script-infra",
+  "type": "script",
+  "shellPath": "${CONFIG}/scripts/up.sh",
+  "cwd": "$CONFIG/work",
+  "logPath": "${CONFIG}/logs/script.log",
+  "defaultRunner": "shell",
+  "env": {
+    "DEVENV_SCRIPT": "1"
+  }
+}

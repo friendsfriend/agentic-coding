@@ -1,0 +1,41 @@
+{
+	"case": "mr-versions-fallback",
+	"note": "an unavailable versions endpoint falls back to the merge request diff_refs",
+	"responses": [
+		{
+			"match": "/merge_requests/9/versions",
+			"status": 404,
+			"body": "{\"message\":\"404 Not Found\"}"
+		},
+		{
+			"match": "/merge_requests/9",
+			"status": 200,
+			"body": "{\"diff_refs\":{\"base_sha\":\"def4567890abcdef7890abcdef7890abcdef7890\",\"head_sha\":\"abc1234567890abcdef7890abcdef7890abcdef\",\"start_sha\":\"def4567890abcdef7890abcdef7890abcdef7890\"}}"
+		}
+	],
+	"call": {
+		"op": "getMrVersions",
+		"number": 9
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://gitlab.example.com/api/v4/projects/acme%2Fdevenv/merge_requests/9/versions",
+			"headers": {
+				"accept": "application/json",
+				"content-type": "",
+				"private-token": "fixture-token"
+			}
+		},
+		{
+			"method": "GET",
+			"url": "https://gitlab.example.com/api/v4/projects/acme%2Fdevenv/merge_requests/9",
+			"headers": {
+				"accept": "application/json",
+				"content-type": "",
+				"private-token": "fixture-token"
+			}
+		}
+	],
+	"value": "[{\"base_commit_sha\":\"def4567890abcdef7890abcdef7890abcdef7890\",\"head_commit_sha\":\"abc1234567890abcdef7890abcdef7890abcdef\",\"start_commit_sha\":\"def4567890abcdef7890abcdef7890abcdef7890\"}]"
+}

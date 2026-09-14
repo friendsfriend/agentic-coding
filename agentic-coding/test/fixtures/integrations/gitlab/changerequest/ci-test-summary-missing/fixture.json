@@ -1,0 +1,27 @@
+{
+	"case": "ci-test-summary-missing",
+	"note": "a pipeline without a test report answers null instead of failing",
+	"responses": [
+		{
+			"match": "/pipelines/77/test_report",
+			"status": 404,
+			"body": "{\"message\":\"404 Not Found\"}"
+		}
+	],
+	"call": {
+		"op": "getTestSummary",
+		"number": 77
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://gitlab.example.com/api/v4/projects/acme%2Fdevenv/pipelines/77/test_report",
+			"headers": {
+				"accept": "application/json",
+				"content-type": "",
+				"private-token": "fixture-token"
+			}
+		}
+	],
+	"value": "null"
+}

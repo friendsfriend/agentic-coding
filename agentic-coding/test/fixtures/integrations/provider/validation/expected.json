@@ -1,0 +1,71 @@
+{
+	"case": "validation",
+	"note": "rejected saves keep the store unchanged and report a bounded diagnostic",
+	"input": {
+		".env": "DEVENV_PROVIDER_TEAM_USERNAME=octo\nDEVENV_PROVIDER_TEAM_TOKEN=tok\n",
+		"providers/team.json": "{\n  \"name\": \"team\",\n  \"type\": \"gitlab\",\n  \"username\": \"${DEVENV_PROVIDER_TEAM_USERNAME}\",\n  \"token\": \"${DEVENV_PROVIDER_TEAM_TOKEN}\"\n}\n"
+	},
+	"operations": [
+		{
+			"op": "load"
+		},
+		{
+			"op": "save",
+			"provider": {
+				"name": "x",
+				"type": "bitbucket",
+				"username": ""
+			},
+			"error": true,
+			"message": "provider type must be \"github\" or \"gitlab\", got \"bitbucket\""
+		},
+		{
+			"op": "save",
+			"provider": {
+				"name": "bad/name",
+				"type": "github",
+				"username": ""
+			},
+			"error": true,
+			"message": "provider name contains invalid characters"
+		},
+		{
+			"op": "save",
+			"provider": {
+				"name": "",
+				"type": "github",
+				"username": ""
+			},
+			"error": true,
+			"message": "provider name is required"
+		},
+		{
+			"op": "save",
+			"provider": {
+				"name": "team!",
+				"type": "github",
+				"username": "octo",
+				"token": "tok"
+			},
+			"error": true,
+			"message": "provider name \"team!\" collides with existing provider \"team\" for env credential keys"
+		},
+		{
+			"op": "delete",
+			"name": "absent",
+			"error": true,
+			"message": "provider \"absent\" not found"
+		},
+		{
+			"op": "list",
+			"list": [
+				{
+					"name": "team",
+					"type": "gitlab",
+					"username": "octo",
+					"token": "tok"
+				}
+			]
+		}
+	]
+}

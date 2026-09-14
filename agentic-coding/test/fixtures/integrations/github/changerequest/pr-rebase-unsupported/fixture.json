@@ -1,0 +1,12 @@
+{
+	"case": "pr-rebase-unsupported",
+	"note": "server-side rebase is rejected with the Go diagnostic",
+	"responses": [],
+	"call": {
+		"op": "rebase",
+		"number": 9
+	},
+	"requests": null,
+	"error": true,
+	"message": "server-side rebase is not supported on GitHub"
+}

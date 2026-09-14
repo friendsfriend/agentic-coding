@@ -20,9 +20,19 @@ import { createCliRenderer } from "@opentui/core";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { KeymapProvider } from "@opentui/keymap/solid";
 import { render } from "@opentui/solid";
-import { BackendStartupError, startOwnedBackend } from "../backend/lifecycle";
+import {
+	BackendStartupError,
+	resolveConfigDir,
+	resolveDevenvHome,
+	startOwnedBackend,
+} from "../backend/lifecycle";
 import { ownsEnvironmentBackend } from "../backend/ownership";
 import { backendClient, configureBackendClient } from "../server/client";
+import {
+	bunOwnsEnvironment,
+	createEnvironmentAuthority,
+} from "../server/environment/authority";
+import { createIntegrationServices } from "../server/integrations/services";
 import {
 	type OwnedWorkflowServer,
 	startWorkflowServer,
@@ -349,10 +359,16 @@ export async function main(): Promise<void> {
 
 	// The unified backend boundary: the TUI starts (and owns) the Bun workflow/
 	// telemetry server and reaches observations/mutations through the typed
-	// client instead of in-process or subprocess backend access. Started in
-	// `startServerStack` once the private Go child (and its token) is known.
+	// client instead of in-process or subprocess backend access. In migrated
+	// mode the same server also owns the environment state/catalog authority, so
+	// it is started before the Go child (which calls it for state and config).
 	let workflowServer: OwnedWorkflowServer | undefined;
 	let environmentToken: string | undefined;
+	let environmentUrl: string | undefined;
+	let integrations: ReturnType<typeof createIntegrationServices> | undefined;
+	let environmentAuthority:
+		| ReturnType<typeof createEnvironmentAuthority>
+		| undefined;
 
 	// ---- Render app first; the startup modal covers the bootstrap below ----
 	process.env.FORCE_COLOR = "3";
@@ -547,40 +563,50 @@ export async function main(): Promise<void> {
 			setStepActive(id);
 		};
 		try {
-			// 1. Owned environment backend (default/home/manager only).
-			if (ownsBackend) {
-				mark("go-backend");
-				const backend = await startOwnedBackend({
-					port: String(devenvPort),
-				});
-				environmentToken = backend.token;
-				acquireResource({
-					kind: "go-backend",
-					label: `environment backend :${backend.port}`,
-					step: "go-backend",
-					stop: () => backend.stop(),
-				});
-				traceTui("tui.process.startup", {
-					surface: "process",
-					action: "backend-ready",
-					instance: backend.instance,
-				});
-				delete process.env[BACKEND_STARTING_ENV];
-				setStepDone("go-backend");
-				await tick();
-				if (isShutdownRequested()) return;
-			}
-
-			// 2. Unified backend boundary: the Bun workflow/telemetry server owns
-			// observations and mutations and delegates environment routes to the
-			// private Go child. The TUI reaches it through the typed client; the
-			// `__dashboard-observe` subprocess protocol is gone (task 3.5). Test mode
-			// keeps the deterministic in-process demo path with no server.
+			// 1. Unified backend boundary: the Bun workflow/telemetry server owns
+			// observations and mutations and, in migrated mode, the environment
+			// state/catalog authority. It delegates the still-unported environment
+			// routes to the private Go child. The TUI reaches it through the typed
+			// client; the `__dashboard-observe` subprocess protocol is gone
+			// (task 3.5). Test mode keeps the deterministic in-process demo path
+			// with no server.
+			const bunOwns = bunOwnsEnvironment();
 			if (!isTest && !remoteAttach) {
 				mark("workflow-server");
+				if (ownsBackend && bunOwns) {
+					environmentAuthority = createEnvironmentAuthority({
+						homeDir: resolveDevenvHome(),
+						configDir: resolveConfigDir(),
+						logger: (message) =>
+							traceTui("tui.process.startup", {
+								surface: "process",
+								action: "environment-authority",
+								instance: message,
+							}),
+					});
+					// Git/provider families are served by Bun from the same
+					// configuration authority; the child forwards Git command steps
+					// here instead of running a second Git implementation.
+					integrations = createIntegrationServices({
+						manager: environmentAuthority.manager,
+						configDir: resolveConfigDir(),
+						logger: (message) =>
+							traceTui("tui.process.startup", {
+								surface: "process",
+								action: "integration-services",
+								instance: message,
+							}),
+					});
+				}
 				workflowServer = await startWorkflowServer({
-					environmentBaseUrl: devenvUrl,
-					...(environmentToken ? { environmentToken } : {}),
+					// The Go child may not exist yet (migrated mode starts Bun
+					// first); the resolver is read per delegated request.
+					environmentBaseUrl: () => environmentUrl,
+					environmentToken: () => environmentToken,
+					...(environmentAuthority
+						? { environment: environmentAuthority }
+						: {}),
+					...(integrations ? { integrations } : {}),
 					// The server owns telemetry persistence/retention; the TUI reads a
 					// snapshot through the typed client instead of opening SQLite.
 					ownTelemetry: !useDemoDb,
@@ -616,6 +642,20 @@ export async function main(): Promise<void> {
 				// so the headless CLI reads/writes through the typed boundary.
 				process.env.AGENTIC_WORKFLOW_URL = workflowServer.url;
 				process.env.AGENTIC_WORKFLOW_TOKEN = workflowServer.token;
+				// Route cutover (port-git-providers-and-ai-to-bun task 5.1): the
+				// migrated families are served by this server, so the environment
+				// client's transport is pointed at it. The path and query are
+				// preserved, unported families are delegated to the Go child by the
+				// same server, and clearing this variable rolls the client back to
+				// the child.
+				if (integrations) {
+					process.env.AGENTIC_DEVENV_FORWARD_URL = workflowServer.url;
+					traceTui("tui.process.startup", {
+						surface: "process",
+						action: "devenv-route-owner",
+						instance: `bun ${workflowServer.url}`,
+					});
+				}
 				acquireResource({
 					kind: "workflow-server",
 					label: `workflow server :${workflowServer.port}`,
@@ -623,6 +663,7 @@ export async function main(): Promise<void> {
 					stop: async () => {
 						delete process.env.AGENTIC_WORKFLOW_URL;
 						delete process.env.AGENTIC_WORKFLOW_TOKEN;
+						delete process.env.AGENTIC_DEVENV_FORWARD_URL;
 						await workflowServer?.stop();
 					},
 				});
@@ -635,6 +676,50 @@ export async function main(): Promise<void> {
 				const remote = backendClient();
 				if (remote && db instanceof RemoteTelemetryDb) db.setClient(remote);
 				setStepDone("workflow-server");
+				await tick();
+				if (isShutdownRequested()) return;
+			}
+
+			// 2. Owned environment backend (default/home/manager only). In migrated
+			// mode it starts after the Bun authority it now depends on: it opens no
+			// database handle and reaches state/configuration through the private
+			// operations.
+			if (ownsBackend) {
+				mark("go-backend");
+				const backend = await startOwnedBackend({
+					port: String(devenvPort),
+					...(bunOwns && workflowServer
+						? {
+								environment: {
+									url: workflowServer.url,
+									token: workflowServer.token,
+								},
+							}
+						: {}),
+					...(integrations && workflowServer
+						? {
+								integrations: {
+									url: workflowServer.url,
+									token: workflowServer.token,
+								},
+							}
+						: {}),
+				});
+				environmentToken = backend.token;
+				environmentUrl = backend.url;
+				acquireResource({
+					kind: "go-backend",
+					label: `environment backend :${backend.port}`,
+					step: "go-backend",
+					stop: () => backend.stop(),
+				});
+				traceTui("tui.process.startup", {
+					surface: "process",
+					action: "backend-ready",
+					instance: backend.instance,
+				});
+				delete process.env[BACKEND_STARTING_ENV];
+				setStepDone("go-backend");
 				await tick();
 				if (isShutdownRequested()) return;
 			}

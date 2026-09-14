@@ -1,0 +1,1 @@
+{"operation":"state.addScriptArgsHistory","params":{"maxEntries":50,"relativePath":"scripts/build.sh","values":{"target":"release"}}}

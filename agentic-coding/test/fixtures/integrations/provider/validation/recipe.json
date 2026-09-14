@@ -1,0 +1,53 @@
+{
+	"case": "validation",
+	"note": "rejected saves keep the store unchanged and report a bounded diagnostic",
+	"input": {
+		".env": "DEVENV_PROVIDER_TEAM_USERNAME=octo\nDEVENV_PROVIDER_TEAM_TOKEN=tok\n",
+		"providers/team.json": "{\n  \"name\": \"team\",\n  \"type\": \"gitlab\",\n  \"username\": \"${DEVENV_PROVIDER_TEAM_USERNAME}\",\n  \"token\": \"${DEVENV_PROVIDER_TEAM_TOKEN}\"\n}\n"
+	},
+	"operations": [
+		{
+			"op": "load"
+		},
+		{
+			"op": "save",
+			"provider": {
+				"name": "x",
+				"type": "bitbucket",
+				"username": ""
+			}
+		},
+		{
+			"op": "save",
+			"provider": {
+				"name": "bad/name",
+				"type": "github",
+				"username": ""
+			}
+		},
+		{
+			"op": "save",
+			"provider": {
+				"name": "",
+				"type": "github",
+				"username": ""
+			}
+		},
+		{
+			"op": "save",
+			"provider": {
+				"name": "team!",
+				"type": "github",
+				"username": "octo",
+				"token": "tok"
+			}
+		},
+		{
+			"op": "delete",
+			"name": "absent"
+		},
+		{
+			"op": "list"
+		}
+	]
+}

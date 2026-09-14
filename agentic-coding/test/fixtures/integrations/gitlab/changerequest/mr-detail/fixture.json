@@ -1,0 +1,41 @@
+{
+	"case": "mr-detail",
+	"note": "merge request detail maps the provider payload and attaches approvals",
+	"responses": [
+		{
+			"match": "/merge_requests/9",
+			"status": 200,
+			"body": "{\"id\":41,\"iid\":9,\"title\":\"Fix login\",\"description\":\"Closes #7\",\"source_branch\":\"fix-login\",\"target_branch\":\"develop\",\"state\":\"opened\",\"web_url\":\"https://gitlab.example.com/acme/devenv/-/merge_requests/9\",\"created_at\":\"2026-01-02T03:04:05.000Z\",\"updated_at\":\"2026-01-03T03:04:05.000Z\",\"author\":{\"name\":\"Octo\",\"username\":\"octo\"},\"head_pipeline\":{\"id\":77,\"status\":\"success\",\"web_url\":\"https://gitlab.example.com/acme/devenv/-/pipelines/77\"},\"merge_status\":\"can_be_merged\",\"detailed_merge_status\":\"mergeable\",\"draft\":false,\"work_in_progress\":false,\"has_conflicts\":false,\"blocking_discussions_resolved\":true,\"rebase_in_progress\":false,\"merge_error\":\"\"}"
+		},
+		{
+			"match": "/merge_requests/9/approvals",
+			"status": 200,
+			"body": "{\"approvals_required\":2,\"approvals_left\":1,\"approved_by\":[{\"user\":{\"name\":\"Hubot\",\"username\":\"hubot\"}}]}"
+		}
+	],
+	"call": {
+		"op": "getChangeRequest",
+		"number": 9
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://gitlab.example.com/api/v4/projects/acme%2Fdevenv/merge_requests/9",
+			"headers": {
+				"accept": "application/json",
+				"content-type": "",
+				"private-token": "fixture-token"
+			}
+		},
+		{
+			"method": "GET",
+			"url": "https://gitlab.example.com/api/v4/projects/acme%2Fdevenv/merge_requests/9/approvals",
+			"headers": {
+				"accept": "application/json",
+				"content-type": "",
+				"private-token": "fixture-token"
+			}
+		}
+	],
+	"value": "{\"id\":41,\"iid\":9,\"title\":\"Fix login\",\"description\":\"Closes #7\",\"source_branch\":\"fix-login\",\"target_branch\":\"develop\",\"state\":\"opened\",\"web_url\":\"https://gitlab.example.com/acme/devenv/-/merge_requests/9\",\"created_at\":\"2026-01-02T03:04:05Z\",\"updated_at\":\"2026-01-03T03:04:05Z\",\"author\":{\"name\":\"Octo\",\"username\":\"octo\"},\"head_pipeline\":{\"id\":77,\"status\":\"success\",\"web_url\":\"https://gitlab.example.com/acme/devenv/-/pipelines/77\"},\"merge_status\":\"can_be_merged\",\"detailed_merge_status\":\"mergeable\",\"draft\":false,\"work_in_progress\":false,\"has_conflicts\":false,\"blocking_discussions_resolved\":true,\"rebase_in_progress\":false,\"merge_error\":\"\",\"approvals\":{\"approvals_required\":2,\"approvals_left\":1,\"approved_by\":[{\"user\":{\"name\":\"Hubot\",\"username\":\"hubot\"}}]}}"
+}

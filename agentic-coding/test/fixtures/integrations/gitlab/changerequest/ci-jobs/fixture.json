@@ -1,0 +1,27 @@
+{
+	"case": "ci-jobs",
+	"note": "pipeline jobs keep the provider timestamps and durations",
+	"responses": [
+		{
+			"match": "/pipelines/77/jobs",
+			"status": 200,
+			"body": "[{\"id\":101,\"name\":\"build\",\"stage\":\"build\",\"status\":\"success\",\"web_url\":\"https://gitlab.example.com/acme/devenv/-/jobs/101\",\"created_at\":\"2026-01-02T03:04:05.000Z\",\"started_at\":\"2026-01-02T03:04:10.000Z\",\"finished_at\":\"2026-01-02T03:06:05.000Z\",\"duration\":115.5,\"queued_duration\":5.0,\"runner\":{\"id\":1,\"description\":\"shared\",\"name\":\"runner\"},\"pipeline\":{\"id\":77}}]"
+		}
+	],
+	"call": {
+		"op": "getPipelineJobs",
+		"number": 77
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://gitlab.example.com/api/v4/projects/acme%2Fdevenv/pipelines/77/jobs",
+			"headers": {
+				"accept": "application/json",
+				"content-type": "",
+				"private-token": "fixture-token"
+			}
+		}
+	],
+	"value": "[{\"id\":101,\"name\":\"build\",\"stage\":\"build\",\"status\":\"success\",\"web_url\":\"https://gitlab.example.com/acme/devenv/-/jobs/101\",\"created_at\":\"2026-01-02T03:04:05Z\",\"started_at\":\"2026-01-02T03:04:10Z\",\"finished_at\":\"2026-01-02T03:06:05Z\",\"duration\":115.5,\"queued_duration\":5,\"runner\":{\"id\":1,\"description\":\"shared\",\"name\":\"runner\"},\"pipeline\":{\"id\":77}}]"
+}

@@ -1,0 +1,25 @@
+{
+	"case": "search",
+	"note": "repository search maps the provider payload and clamps the requested page size",
+	"response": {
+		"status": 200,
+		"body": "{\"total_count\":2,\"items\":[{\"name\":\"devenv\",\"full_name\":\"acme/devenv\",\"clone_url\":\"https://github.com/acme/devenv.git\",\"default_branch\":\"main\"},{\"name\":\"tools\",\"full_name\":\"acme/tools\",\"clone_url\":\"https://github.com/acme/tools.git\",\"default_branch\":\"trunk\"}]}"
+	},
+	"call": {
+		"op": "search",
+		"query": "acme devenv",
+		"limit": 500,
+		"value": "[{\"name\":\"devenv\",\"fullPath\":\"acme/devenv\",\"httpUrl\":\"https://github.com/acme/devenv.git\",\"defaultBranch\":\"main\"},{\"name\":\"tools\",\"fullPath\":\"acme/tools\",\"httpUrl\":\"https://github.com/acme/tools.git\",\"defaultBranch\":\"trunk\"}]"
+	},
+	"request": {
+		"method": "GET",
+		"url": "https://api.github.com/search/repositories?per_page=100\u0026q=acme+devenv\u0026sort=updated",
+		"headers": {
+			"accept": "application/vnd.github+json",
+			"authorization": "Bearer fixture-token",
+			"content-type": "",
+			"user-agent": "devenv-cli",
+			"x-github-api-version": "2022-11-28"
+		}
+	}
+}

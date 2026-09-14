@@ -1,0 +1,32 @@
+{
+	"case": "pr-list-skip-details",
+	"note": "skip-details avoids the per-item approval and workflow-run reads",
+	"responses": [
+		{
+			"match": "/pulls?",
+			"status": 200,
+			"body": "[{\"id\":41,\"number\":9,\"title\":\"Fix login\",\"body\":\"Closes #3 and acme/other#4\",\"state\":\"open\",\"html_url\":\"https://github.com/acme/devenv/pull/9\",\"user\":{\"login\":\"octo\"},\"head\":{\"ref\":\"fix-login\",\"sha\":\"abc123\"},\"base\":{\"ref\":\"main\",\"sha\":\"def456\"},\"mergeable\":true,\"mergeable_state\":\"clean\",\"created_at\":\"2026-01-02T03:04:05Z\",\"updated_at\":\"2026-01-03T03:04:05Z\"}]"
+		}
+	],
+	"call": {
+		"op": "getChangeRequests",
+		"options": {
+			"state": "opened",
+			"page": 1,
+			"perPage": 50,
+			"skipDetails": true
+		}
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/pulls?direction=desc\u0026page=1\u0026per_page=50\u0026sort=updated\u0026state=open",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		}
+	],
+	"value": "{\"items\":[{\"id\":41,\"iid\":9,\"title\":\"Fix login\",\"description\":\"Closes #3 and acme/other#4\",\"source_branch\":\"fix-login\",\"target_branch\":\"main\",\"state\":\"opened\",\"web_url\":\"https://github.com/acme/devenv/pull/9\",\"created_at\":\"2026-01-02T03:04:05Z\",\"updated_at\":\"2026-01-03T03:04:05Z\",\"author\":{\"name\":\"octo\",\"username\":\"octo\"},\"merge_status\":\"can_be_merged\",\"detailed_merge_status\":\"clean\",\"draft\":false,\"work_in_progress\":false,\"has_conflicts\":false,\"blocking_discussions_resolved\":true,\"rebase_in_progress\":false,\"merge_error\":\"\"}],\"totalCount\":-1,\"totalPages\":1,\"currentPage\":1,\"perPage\":50}"
+}

@@ -1,0 +1,45 @@
+{
+	"case": "malformed",
+	"note": "a malformed line is skipped, a file without a session header is skipped and a session without a cwd falls back to the directory slug",
+	"files": [
+		{
+			"path": "sessions/-home-octo-projects-broken/bad.jsonl",
+			"content": "not json at all\n{\"type\":\"session\",\"timestamp\":\"2026-05-06T07:08:09Z\",\"cwd\":\"/home/octo/projects/broken\"}\n{\"type\":\"message\",\"message\":\n{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"survives a malformed line\"}]}}\n"
+		},
+		{
+			"path": "sessions/-home-octo-projects-broken/headerless.jsonl",
+			"content": "{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"no header here\"}]}}\n"
+		},
+		{
+			"path": "sessions/-slug-only/plain.jsonl",
+			"content": "{\"type\":\"session\",\"timestamp\":\"2026-06-07T08:09:10Z\"}\n{\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"cwd missing\"}]}}\n"
+		}
+	],
+	"agents": [
+		{
+			"name": "-slug-only",
+			"model": "",
+			"sessions": [
+				{
+					"id": "sessions/-slug-only/plain.jsonl",
+					"title": "cwd missing",
+					"timeCreated": 1780819750000,
+					"timeUpdated": 1780819750000
+				}
+			]
+		},
+		{
+			"name": "broken",
+			"model": "",
+			"sessions": [
+				{
+					"id": "sessions/-home-octo-projects-broken/bad.jsonl",
+					"title": "survives a malformed line",
+					"timeCreated": 1778051289000,
+					"timeUpdated": 1778051289000
+				}
+			]
+		}
+	],
+	"piInPath": true
+}

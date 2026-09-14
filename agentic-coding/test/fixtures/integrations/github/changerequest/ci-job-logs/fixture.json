@@ -1,0 +1,31 @@
+{
+	"case": "ci-job-logs",
+	"note": "job logs follow the provider redirect without the API credential",
+	"responses": [
+		{
+			"match": "/actions/jobs/101/logs",
+			"status": 302,
+			"body": "",
+			"headers": {
+				"Location": "http://127.0.0.1:64195/logs"
+			}
+		}
+	],
+	"redirectBody": "log line one\nlog line two\n",
+	"call": {
+		"op": "getJobLogs",
+		"number": 101
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/actions/jobs/101/logs",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		}
+	],
+	"value": "\"log line one\\nlog line two\\n\""
+}

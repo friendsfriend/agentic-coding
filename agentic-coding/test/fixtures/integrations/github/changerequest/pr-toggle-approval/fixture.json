@@ -1,0 +1,42 @@
+{
+	"case": "pr-toggle-approval",
+	"note": "toggling approves when the authenticated user has not approved yet",
+	"responses": [
+		{
+			"match": "/pulls/9/reviews",
+			"status": 200,
+			"body": "[{\"id\":51,\"user\":{\"login\":\"hubot\"},\"state\":\"APPROVED\"}]"
+		},
+		{
+			"match": "/pulls/9/reviews",
+			"status": 200,
+			"body": "{\"id\":54}"
+		}
+	],
+	"call": {
+		"op": "toggleApproval",
+		"number": 9
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/pulls/9/reviews?per_page=100",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		},
+		{
+			"method": "POST",
+			"url": "https://api.github.com/repos/acme/devenv/pulls/9/reviews",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": "application/json"
+			},
+			"body": "{\"event\":\"APPROVE\"}"
+		}
+	],
+	"value": "null"
+}

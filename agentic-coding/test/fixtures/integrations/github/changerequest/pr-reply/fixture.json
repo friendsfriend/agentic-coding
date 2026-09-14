@@ -1,0 +1,29 @@
+{
+	"case": "pr-reply",
+	"note": "a discussion reply sends in_reply_to with the root comment id",
+	"responses": [
+		{
+			"match": "/pulls/9/comments",
+			"status": 201,
+			"body": "{\"id\":62}"
+		}
+	],
+	"call": {
+		"op": "replyToDiscussion",
+		"number": 9,
+		"body": "thanks"
+	},
+	"requests": [
+		{
+			"method": "POST",
+			"url": "https://api.github.com/repos/acme/devenv/pulls/9/comments",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": "application/json"
+			},
+			"body": "{\"body\":\"thanks\",\"in_reply_to\":31}"
+		}
+	],
+	"value": "null"
+}

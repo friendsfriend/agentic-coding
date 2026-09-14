@@ -1,0 +1,30 @@
+{
+	"case": "issue-comment-rejected",
+	"note": "a note the provider rejects reports its status and body",
+	"responses": [
+		{
+			"match": "/issues/7/notes",
+			"status": 400,
+			"body": "{\"message\":\"400 Bad Request\"}"
+		}
+	],
+	"call": {
+		"op": "addComment",
+		"number": 7,
+		"body": "me too"
+	},
+	"requests": [
+		{
+			"method": "POST",
+			"url": "https://gitlab.example.com/api/v4/projects/acme%2Fdevenv/issues/7/notes",
+			"headers": {
+				"accept": "application/json",
+				"content-type": "application/json",
+				"private-token": "fixture-token"
+			},
+			"body": "{\"body\":\"me too\"}"
+		}
+	],
+	"error": true,
+	"message": "GitLab API error (status 400): {\"message\":\"400 Bad Request\"}"
+}

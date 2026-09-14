@@ -1,0 +1,27 @@
+{
+	"case": "mr-approve",
+	"note": "approving posts to the approve endpoint",
+	"responses": [
+		{
+			"match": "/merge_requests/9/approve",
+			"status": 201,
+			"body": "{}"
+		}
+	],
+	"call": {
+		"op": "approve",
+		"number": 9
+	},
+	"requests": [
+		{
+			"method": "POST",
+			"url": "https://gitlab.example.com/api/v4/projects/acme%2Fdevenv/merge_requests/9/approve",
+			"headers": {
+				"accept": "application/json",
+				"content-type": "",
+				"private-token": "fixture-token"
+			}
+		}
+	],
+	"value": "null"
+}

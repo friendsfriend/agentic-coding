@@ -1,0 +1,27 @@
+{
+	"case": "uncloned",
+	"note": "unmaterialized checkout reports the placeholder status and empty reads",
+	"app": {
+		"ident": "demo",
+		"repositoryPath": "{{remote}}",
+		"localDirectoryPath": "primary",
+		"branch": "main",
+		"mainWorktreeBranch": "main",
+		"activeWorktree": ""
+	},
+	"setup": [],
+	"operations": [
+		{
+			"op": "status"
+		},
+		{
+			"op": "currentBranch"
+		},
+		{
+			"op": "localBranches"
+		},
+		{
+			"op": "listWorktrees"
+		}
+	]
+}

@@ -1,0 +1,27 @@
+{
+	"case": "mr-versions",
+	"note": "the versions endpoint returns the provider's diff versions",
+	"responses": [
+		{
+			"match": "/merge_requests/9/versions",
+			"status": 200,
+			"body": "[{\"id\":1,\"head_commit_sha\":\"abc1234567890abcdef7890abcdef7890abcdef\",\"base_commit_sha\":\"def4567890abcdef7890abcdef7890abcdef7890\",\"start_commit_sha\":\"def4567890abcdef7890abcdef7890abcdef7890\",\"created_at\":\"2026-01-02T03:04:05.000Z\"}]"
+		}
+	],
+	"call": {
+		"op": "getMrVersions",
+		"number": 9
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://gitlab.example.com/api/v4/projects/acme%2Fdevenv/merge_requests/9/versions",
+			"headers": {
+				"accept": "application/json",
+				"content-type": "",
+				"private-token": "fixture-token"
+			}
+		}
+	],
+	"value": "[{\"base_commit_sha\":\"def4567890abcdef7890abcdef7890abcdef7890\",\"created_at\":\"2026-01-02T03:04:05.000Z\",\"head_commit_sha\":\"abc1234567890abcdef7890abcdef7890abcdef\",\"id\":1,\"start_commit_sha\":\"def4567890abcdef7890abcdef7890abcdef7890\"}]"
+}

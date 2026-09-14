@@ -1,0 +1,5 @@
+{
+  "displayName": "Beta App",
+  "repositoryPath": "https://example.com/team/beta.git",
+  "provider": "github"
+}

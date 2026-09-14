@@ -1,0 +1,12 @@
+{
+  "displayName": "Kubernetes Infra",
+  "ident": "k8s-infra",
+  "type": "kubernetes",
+  "cwd": "${CONFIG}/charts",
+  "kubernetes": {
+    "chartPath": "${CONFIG}/charts/app",
+    "values": [
+      "${CONFIG}/charts/values/local.yaml"
+    ]
+  }
+}

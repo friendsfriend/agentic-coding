@@ -1,0 +1,55 @@
+{
+	"case": "save-credentials",
+	"note": "credential writes go to the env file with placeholders in the provider file, and an empty token keeps the stored one",
+	"input": {
+		".env": "# keep me\nUNRELATED=1\nDEVENV_PROVIDER_TEAM_TOKEN=old\n",
+		"providers/team.json": "{\n  \"name\": \"team\",\n  \"type\": \"gitlab\",\n  \"username\": \"${DEVENV_PROVIDER_TEAM_USERNAME}\",\n  \"token\": \"${DEVENV_PROVIDER_TEAM_TOKEN}\"\n}\n"
+	},
+	"operations": [
+		{
+			"op": "load"
+		},
+		{
+			"op": "save",
+			"provider": {
+				"name": "team",
+				"type": "gitlab",
+				"username": "octo",
+				"token": "tok en"
+			}
+		},
+		{
+			"op": "readFile",
+			"path": "providers/team.json",
+			"value": "{\n  \"name\": \"team\",\n  \"type\": \"gitlab\",\n  \"username\": \"${DEVENV_PROVIDER_TEAM_USERNAME}\",\n  \"token\": \"${DEVENV_PROVIDER_TEAM_TOKEN}\"\n}"
+		},
+		{
+			"op": "readFile",
+			"path": ".env",
+			"value": "# keep me\nUNRELATED=1\nDEVENV_PROVIDER_TEAM_TOKEN='tok en'\nDEVENV_PROVIDER_TEAM_USERNAME=octo\n"
+		},
+		{
+			"op": "save",
+			"provider": {
+				"name": "team",
+				"type": "gitlab",
+				"username": "octo"
+			}
+		},
+		{
+			"op": "credentialsFor",
+			"name": "team",
+			"value": "octo\u001ftok en",
+			"hasToken": true
+		},
+		{
+			"op": "delete",
+			"name": "team"
+		},
+		{
+			"op": "readFile",
+			"path": ".env",
+			"value": "# keep me\nUNRELATED=1\n"
+		}
+	]
+}

@@ -1,0 +1,55 @@
+{
+	"case": "pr-discussions",
+	"note": "review threads keep replies attached to their root, issue comments become individual notes and timeline events become system notes without duplicating commented events",
+	"responses": [
+		{
+			"match": "/pulls/9/comments",
+			"status": 200,
+			"body": "[{\"id\":31,\"body\":\"root\",\"user\":{\"login\":\"octo\"},\"created_at\":\"2026-01-02T03:04:05Z\",\"updated_at\":\"2026-01-02T03:04:05Z\",\"path\":\"src/login.ts\",\"in_reply_to_id\":null},{\"id\":32,\"body\":\"reply\",\"user\":{\"login\":\"hubot\"},\"created_at\":\"2026-01-02T04:04:05Z\",\"updated_at\":\"2026-01-02T04:04:05Z\",\"path\":\"src/login.ts\",\"in_reply_to_id\":31}]"
+		},
+		{
+			"match": "/issues/9/comments",
+			"status": 200,
+			"body": "[{\"id\":21,\"body\":\"me too\",\"user\":{\"login\":\"hubot\"},\"created_at\":\"2026-01-04T03:04:05Z\",\"updated_at\":\"2026-01-04T03:04:05Z\"}]"
+		},
+		{
+			"match": "/issues/9/timeline",
+			"status": 200,
+			"body": "[{\"id\":31,\"event\":\"commented\",\"actor\":{\"login\":\"hubot\"},\"created_at\":\"2026-01-04T03:04:05Z\",\"body\":\"me too\"},{\"id\":32,\"event\":\"labeled\",\"actor\":{\"login\":\"octo\"},\"created_at\":\"2026-01-05T03:04:05Z\",\"label\":{\"name\":\"bug\"}},{\"id\":33,\"event\":\"assigned\",\"actor\":{\"login\":\"octo\"},\"created_at\":\"2026-01-05T03:04:05Z\",\"assignee\":{\"login\":\"octo\"}},{\"id\":34,\"event\":\"renamed\",\"actor\":{\"login\":\"octo\"},\"created_at\":\"2026-01-05T03:04:05Z\",\"rename\":{\"from\":\"Old\",\"to\":\"New\"}},{\"id\":35,\"event\":\"cross-referenced\",\"actor\":{\"login\":\"octo\"},\"created_at\":\"2026-01-05T03:04:05Z\",\"source\":{\"type\":\"issue\",\"issue\":{\"number\":9,\"title\":\"PR nine\",\"pull_request\":{}}}},{\"id\":36,\"event\":\"closed\",\"actor\":{\"login\":\"octo\"},\"created_at\":\"2026-01-06T03:04:05Z\"}]"
+		}
+	],
+	"call": {
+		"op": "getDiscussions",
+		"number": 9
+	},
+	"requests": [
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/pulls/9/comments?per_page=100",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		},
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/issues/9/comments?per_page=100",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		},
+		{
+			"method": "GET",
+			"url": "https://api.github.com/repos/acme/devenv/issues/9/timeline?per_page=100\u0026page=1",
+			"headers": {
+				"accept": "application/vnd.github+json",
+				"authorization": "Bearer fixture-token",
+				"content-type": ""
+			}
+		}
+	],
+	"value": "[{\"id\":\"31\",\"individual_note\":false,\"notes\":[{\"id\":31,\"type\":\"DiffNote\",\"body\":\"root\",\"author\":{\"id\":0,\"username\":\"octo\",\"name\":\"octo\",\"avatar_url\":\"\"},\"created_at\":\"2026-01-02T03:04:05Z\",\"updated_at\":\"2026-01-02T03:04:05Z\",\"system\":false,\"resolvable\":true,\"resolved\":false},{\"id\":32,\"type\":\"DiffNote\",\"body\":\"reply\",\"author\":{\"id\":0,\"username\":\"hubot\",\"name\":\"hubot\",\"avatar_url\":\"\"},\"created_at\":\"2026-01-02T04:04:05Z\",\"updated_at\":\"2026-01-02T04:04:05Z\",\"system\":false,\"resolvable\":true,\"resolved\":false}]},{\"id\":\"21\",\"individual_note\":true,\"notes\":[{\"id\":21,\"type\":\"DiscussionNote\",\"body\":\"me too\",\"author\":{\"id\":0,\"username\":\"hubot\",\"name\":\"hubot\",\"avatar_url\":\"\"},\"created_at\":\"2026-01-04T03:04:05Z\",\"updated_at\":\"2026-01-04T03:04:05Z\",\"system\":false,\"resolvable\":false,\"resolved\":false}]},{\"id\":\"timeline-31\",\"individual_note\":true,\"notes\":[{\"id\":31,\"type\":\"TimelineEvent\",\"body\":\"commented\",\"author\":{\"id\":0,\"username\":\"hubot\",\"name\":\"hubot\",\"avatar_url\":\"\"},\"created_at\":\"2026-01-04T03:04:05Z\",\"updated_at\":\"2026-01-04T03:04:05Z\",\"system\":true,\"resolvable\":false,\"resolved\":false}]},{\"id\":\"timeline-32\",\"individual_note\":true,\"notes\":[{\"id\":32,\"type\":\"TimelineEvent\",\"body\":\"added ~bug label\",\"author\":{\"id\":0,\"username\":\"octo\",\"name\":\"octo\",\"avatar_url\":\"\"},\"created_at\":\"2026-01-05T03:04:05Z\",\"updated_at\":\"2026-01-05T03:04:05Z\",\"system\":true,\"resolvable\":false,\"resolved\":false}]},{\"id\":\"timeline-33\",\"individual_note\":true,\"notes\":[{\"id\":33,\"type\":\"TimelineEvent\",\"body\":\"assigned to @octo\",\"author\":{\"id\":0,\"username\":\"octo\",\"name\":\"octo\",\"avatar_url\":\"\"},\"created_at\":\"2026-01-05T03:04:05Z\",\"updated_at\":\"2026-01-05T03:04:05Z\",\"system\":true,\"resolvable\":false,\"resolved\":false}]},{\"id\":\"timeline-34\",\"individual_note\":true,\"notes\":[{\"id\":34,\"type\":\"TimelineEvent\",\"body\":\"changed title from **Old** to **New**\",\"author\":{\"id\":0,\"username\":\"octo\",\"name\":\"octo\",\"avatar_url\":\"\"},\"created_at\":\"2026-01-05T03:04:05Z\",\"updated_at\":\"2026-01-05T03:04:05Z\",\"system\":true,\"resolvable\":false,\"resolved\":false}]},{\"id\":\"timeline-35\",\"individual_note\":true,\"notes\":[{\"id\":35,\"type\":\"TimelineEvent\",\"body\":\"mentioned in #9 PR nine\",\"author\":{\"id\":0,\"username\":\"octo\",\"name\":\"octo\",\"avatar_url\":\"\"},\"created_at\":\"2026-01-05T03:04:05Z\",\"updated_at\":\"2026-01-05T03:04:05Z\",\"system\":true,\"resolvable\":false,\"resolved\":false}]},{\"id\":\"timeline-36\",\"individual_note\":true,\"notes\":[{\"id\":36,\"type\":\"TimelineEvent\",\"body\":\"closed\",\"author\":{\"id\":0,\"username\":\"octo\",\"name\":\"octo\",\"avatar_url\":\"\"},\"created_at\":\"2026-01-06T03:04:05Z\",\"updated_at\":\"2026-01-06T03:04:05Z\",\"system\":true,\"resolvable\":false,\"resolved\":false}]}]"
+}
