@@ -2,23 +2,24 @@
 
 import type { KeyEvent } from "@opentui/core";
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
-import type { RuntimeId } from "../../../workflow/contracts.ts";
+import { backendClient } from "../../../server/client.ts";
 import {
-	conflictingAgentsFiles,
-	loadConfig,
-	loadConfigWithProvenance,
-	saveAgentsSection,
-} from "../../../workflow/effects.ts";
+	type AgentsMutation,
+	applyAgentsMutation,
+} from "../../../server/config.ts";
+import type { RuntimeId } from "../../../workflow/contracts.ts";
 import {
 	type AgentsConfig,
 	BUILTIN_PRESET_NAME,
 	clearModelCache,
-	type PresetConfig,
-	type ProfileConfig,
-	parseAgentsConfig,
 	runtimeModels,
 } from "../../../workflow/profiles.ts";
 import { VERIFIER_ROLES } from "../../../workflow/steps/verification.ts";
+import {
+	agentConfigEntry,
+	refreshAgentConfig,
+	reloadAgentConfigLocal,
+} from "../agent-config-cache";
 import { type ConsoleIssue, captureConsoleIssues } from "../consoleCapture";
 import { notify } from "../notifications";
 import { traceTui } from "../tracing";
@@ -184,31 +185,31 @@ export function ModelConfigModal(props: {
 	}>();
 	const [textValue, setTextValue] = createSignal("");
 	let lastReadError: string | undefined;
-	const reload = () => setVersion((value) => value + 1);
+	const reload = () => {
+		setVersion((value) => value + 1);
+		// Re-read through the cache (typed client when configured) so the view
+		// reflects the write without touching the config file itself.
+		void refreshAgentConfig(props.repository).then(() =>
+			setVersion((value) => value + 1),
+		);
+	};
 
 	const source = () => {
-		try {
-			return loadConfigWithProvenance({ repository: props.repository })
-				.provenance;
-		} catch {
-			return undefined;
-		}
+		version();
+		return agentConfigEntry(props.repository).provenance;
 	};
 	const agents = (): AgentsConfig | undefined => {
 		version();
-		try {
-			const config = loadConfig(props.repository);
-			const parsed = parseAgentsConfig(config.agents, config);
-			lastReadError = undefined;
-			return parsed;
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			if (lastReadError !== message) {
-				lastReadError = message;
-				notify(`Configuration could not be read: ${message}`, "error");
+		const entry = agentConfigEntry(props.repository);
+		if (entry.error) {
+			if (lastReadError !== entry.error) {
+				lastReadError = entry.error;
+				notify(`Configuration could not be read: ${entry.error}`, "error");
 			}
 			return undefined;
 		}
+		lastReadError = undefined;
+		return entry.agents;
 	};
 	const profileNames = () => Object.keys(agents()?.profiles ?? {}).sort();
 	const presetNames = () =>
@@ -378,69 +379,31 @@ export function ModelConfigModal(props: {
 	 * living only there cannot be removed via this target and would resurrect
 	 * at load time. */
 	const refuseOnConflict = (): boolean => {
-		try {
-			const conflicts = conflictingAgentsFiles(
-				undefined,
-				props.repository ?? process.cwd(),
-			);
-			if (!conflicts.length) return false;
-			notify(
-				`Not saved: [agents] is also defined in ${conflicts.join(", ")}; remove it there first so dashboard edits are not shadowed`,
-				"error",
-			);
-			return true;
-		} catch (error) {
-			notify(error instanceof Error ? error.message : String(error), "error");
+		const entry = agentConfigEntry(props.repository);
+		if (entry.error) {
+			notify(`Configuration could not be read: ${entry.error}`, "error");
 			return true;
 		}
+		const conflicts = entry.conflicts ?? [];
+		if (!conflicts.length) return false;
+		notify(
+			`Not saved: [agents] is also defined in ${conflicts.join(", ")}; remove it there first so dashboard edits are not shadowed`,
+			"error",
+		);
+		return true;
 	};
 
-	const finishEditor = (): void => {
-		const d = draft();
-		if (!d) return;
-		if (refuseOnConflict()) return;
-		if (!d.name.trim()) {
-			notify("Name is required", "error");
-			return;
-		}
-		if (d.name === BUILTIN_PRESET_NAME) {
-			notify("The use-default-model name is reserved", "error");
-			return;
-		}
-		try {
-			if (d.kind === "profile") saveProfile(d);
-			else savePreset(d);
-		} catch (error) {
-			notify(error instanceof Error ? error.message : String(error), "error");
-			return;
-		}
-		reload();
-		notify(
-			`${d.kind === "profile" ? "Profile" : "Preset"} ${d.name} saved`,
-			"success",
-		);
-		setDraft(undefined);
-		setView(d.kind === "profile" ? "profiles" : "presets");
-	};
-	const saveProfile = (d: ProfileDraft): void => {
-		const profile: ProfileConfig = {
+	const profileMutation = (d: ProfileDraft): AgentsMutation => ({
+		kind: "set-profile",
+		name: d.name,
+		profile: {
 			runtime: d.runtime,
 			...(d.model ? { model: d.model } : {}),
 			...(d.agent ? { agent: d.agent } : {}),
 			...(d.thinking ? { thinking: d.thinking } : {}),
-		};
-		saveAgentsSection((section) => {
-			if (section.profiles === undefined || section.profiles === null)
-				section.profiles = {};
-			else if (
-				typeof section.profiles !== "object" ||
-				Array.isArray(section.profiles)
-			)
-				throw new Error("agents.profiles must be a table of profiles");
-			(section.profiles as Record<string, unknown>)[d.name] = profile;
-		}, props.repository);
-	};
-	const savePreset = (d: PresetDraft): void => {
+		},
+	});
+	const presetMutation = (d: PresetDraft): AgentsMutation => {
 		const steps = Object.fromEntries(
 			Object.entries(d.steps).filter(([, value]) => value),
 		);
@@ -457,22 +420,67 @@ export function ModelConfigModal(props: {
 			roleTables["core.verification"] = verificationRoles;
 		if (Object.keys(fusionPlanRoles).length)
 			roleTables["fusion.plan"] = fusionPlanRoles;
-		const preset: PresetConfig = {
-			...(d.runtime ? { runtime: d.runtime } : {}),
-			...(d.defaultProfile ? { default_profile: d.defaultProfile } : {}),
-			...(Object.keys(steps).length ? { steps } : {}),
-			...(Object.keys(roleTables).length ? { roles: roleTables } : {}),
+		return {
+			kind: "set-preset",
+			name: d.name,
+			preset: {
+				...(d.runtime ? { runtime: d.runtime } : {}),
+				...(d.defaultProfile ? { default_profile: d.defaultProfile } : {}),
+				...(Object.keys(steps).length ? { steps } : {}),
+				...(Object.keys(roleTables).length ? { roles: roleTables } : {}),
+			},
 		};
-		saveAgentsSection((section) => {
-			if (section.presets === undefined || section.presets === null)
-				section.presets = {};
-			else if (
-				typeof section.presets !== "object" ||
-				Array.isArray(section.presets)
-			)
-				throw new Error("agents.presets must be a table of presets");
-			(section.presets as Record<string, unknown>)[d.name] = preset;
-		}, props.repository);
+	};
+	/** Apply an agent-config mutation through the typed client when a transport is
+	 * configured; the demo/test path applies it in-process. */
+	const commitAgents = (mutation: AgentsMutation, onDone: () => void): void => {
+		const client = backendClient();
+		if (client) {
+			void client
+				.saveAgents(mutation, props.repository)
+				.then(() => refreshAgentConfig(props.repository))
+				.then(onDone)
+				.catch((error) =>
+					notify(
+						error instanceof Error ? error.message : String(error),
+						"error",
+					),
+				);
+			return;
+		}
+		applyAgentsMutation(mutation, props.repository);
+		reloadAgentConfigLocal(props.repository);
+		onDone();
+	};
+	const finishEditor = (): void => {
+		const d = draft();
+		if (!d) return;
+		if (refuseOnConflict()) return;
+		if (!d.name.trim()) {
+			notify("Name is required", "error");
+			return;
+		}
+		if (d.name === BUILTIN_PRESET_NAME) {
+			notify("The use-default-model name is reserved", "error");
+			return;
+		}
+		const done = () => {
+			reload();
+			notify(
+				`${d.kind === "profile" ? "Profile" : "Preset"} ${d.name} saved`,
+				"success",
+			);
+			setDraft(undefined);
+			setView(d.kind === "profile" ? "profiles" : "presets");
+		};
+		try {
+			commitAgents(
+				d.kind === "profile" ? profileMutation(d) : presetMutation(d),
+				done,
+			);
+		} catch (error) {
+			notify(error instanceof Error ? error.message : String(error), "error");
+		}
 	};
 
 	const profileReferences = (agents: AgentsConfig, name: string): string[] => {
@@ -511,16 +519,13 @@ export function ModelConfigModal(props: {
 			return;
 		}
 		try {
-			saveAgentsSection((section) => {
-				if (section.profiles && typeof section.profiles === "object")
-					delete (section.profiles as Record<string, unknown>)[name];
-			}, props.repository);
+			commitAgents({ kind: "delete-profile", name }, () => {
+				reload();
+				notify(`Profile ${name} deleted`, "success");
+			});
 		} catch (error) {
 			notify(error instanceof Error ? error.message : String(error), "error");
-			return;
 		}
-		reload();
-		notify(`Profile ${name} deleted`, "success");
 	};
 	const deletePreset = (name: string): void => {
 		if (name === BUILTIN_PRESET_NAME) {
@@ -532,16 +537,13 @@ export function ModelConfigModal(props: {
 		}
 		if (refuseOnConflict()) return;
 		try {
-			saveAgentsSection((section) => {
-				if (section.presets && typeof section.presets === "object")
-					delete (section.presets as Record<string, unknown>)[name];
-			}, props.repository);
+			commitAgents({ kind: "delete-preset", name }, () => {
+				reload();
+				notify(`Preset ${name} deleted`, "success");
+			});
 		} catch (error) {
 			notify(error instanceof Error ? error.message : String(error), "error");
-			return;
 		}
-		reload();
-		notify(`Preset ${name} deleted`, "success");
 	};
 
 	const listItems = (): string[] => {
@@ -705,6 +707,10 @@ export function ModelConfigModal(props: {
 	onMount(() => {
 		disposeConsoleCapture = captureConsoleIssues(reportConsoleIssue);
 		props.onKeyReady(handler);
+		// Server-backed cache starts empty; load it through the typed client.
+		void refreshAgentConfig(props.repository).then(() =>
+			setVersion((value) => value + 1),
+		);
 	});
 	onCleanup(() => {
 		disposeConsoleCapture?.();

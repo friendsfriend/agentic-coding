@@ -17,6 +17,7 @@ import {
 	onMount,
 	Show,
 } from "solid-js";
+import { backendClient } from "../../server/client";
 import type { DeveloperDialogueRecord } from "../../workflow/contracts";
 import { formatDuration } from "../../workflow/format";
 import { wikiWorkflowDataRoot } from "../../workflow/runtime";
@@ -42,7 +43,6 @@ import {
 	onWorkflowExecutionSettled,
 	PRESET_CONFIG_DEFAULTS,
 	reconcileSidebarPresentation,
-	requestWorkflowExecution,
 	switchWorkflowPreset,
 } from "./engine";
 import {
@@ -58,13 +58,14 @@ import {
 	focusReturnWorkspace,
 	loadDashboard,
 	loadDashboardAsync,
-	loadVerifierFindings,
-	loadVerifierReport,
+	loadVerifierFindingsAsync,
+	loadVerifierReportAsync,
 	openFindingInEditorAsync,
 	openSpecArtifactAsync,
 	openSpecArtifacts,
 	openSpecArtifactsAsync,
-	previewRepair,
+	previewRepairAsync,
+	requestWorkflowExecutionAsync,
 	runWorkflow,
 } from "./observations";
 import { movePanel, type PanelDirection } from "./panel-grid";
@@ -345,14 +346,14 @@ export function App(props: {
 		events: FindingEvent[];
 	}>();
 	const [selectedFinding, setSelectedFinding] = createSignal(0);
-	const openVerifierResult = (role: string) => {
+	const openVerifierResult = async (role: string) => {
 		setVerdictReturnToFindings(false);
 		setVerdictReturnToUserAction(false);
 		setVerdictRenderMarkdown(false);
 		const parsed =
 			props.profile === "test"
 				? undefined
-				: loadVerifierFindings(props.repo, props.workflowId, role);
+				: await loadVerifierFindingsAsync(props.repo, props.workflowId, role);
 		if (parsed) {
 			setFindings(parsed);
 			setSelectedFinding(0);
@@ -365,7 +366,7 @@ export function App(props: {
 						title: `${role} · demo`,
 						content: "VERDICT: PASS\n\n## VALIDATION\nDemo verifier report.",
 					}
-				: loadVerifierReport(props.repo, props.workflowId, role),
+				: await loadVerifierReportAsync(props.repo, props.workflowId, role),
 		);
 		setVerdictOffset(0);
 		props.keymap.setData("modal.active", "verdict");
@@ -571,7 +572,7 @@ export function App(props: {
 			setQuestionSubmitting(true);
 			try {
 				if (props.profile !== "test")
-					answerQuestion(
+					await answerQuestion(
 						props.repo,
 						props.workflowId,
 						data().state.revision,
@@ -632,7 +633,7 @@ export function App(props: {
 			setQuestionSubmitting(true);
 			try {
 				if (props.profile !== "test")
-					answerQuestion(
+					await answerQuestion(
 						props.repo,
 						props.workflowId,
 						data().state.revision,
@@ -665,7 +666,7 @@ export function App(props: {
 		setQuestionSubmitting(true);
 		try {
 			if (props.profile !== "test")
-				answerQuestion(
+				await answerQuestion(
 					props.repo,
 					props.workflowId,
 					data().state.revision,
@@ -720,7 +721,7 @@ export function App(props: {
 		openModal("preset-switcher", "dashboard");
 		props.keymap.setData("modal.active", "preset-switcher");
 	};
-	const selectPreset = (preset: string | undefined) => {
+	const selectPreset = async (preset: string | undefined) => {
 		closePresetSwitcher();
 		setBusy(true);
 		try {
@@ -735,7 +736,7 @@ export function App(props: {
 					},
 				}));
 			} else
-				switchWorkflowPreset(
+				await switchWorkflowPreset(
 					props.repo,
 					props.workflowId,
 					data().state.revision,
@@ -1138,13 +1139,50 @@ export function App(props: {
 	// changes, so the event subscription is not torn down on every refresh.
 	const workflowWorkspace = createMemo(() => data().state.workspace);
 
-	// File-backed state (artifacts, telemetry, the SQLite mirror) still changes
-	// from other processes, so keep the OS event watches; the Herdr subscription
-	// below adds agent/tab lifecycle pushes on top.
+	// Refresh is driven by the server event stream when a transport is
+	// configured: the server owns the Herdr subscription and the execution
+	// coordinator listeners and publishes `workflow.updated`. A transport-less
+	// run (demo/tests) falls back to local file watches + the Herdr socket.
 	createEffect(() => {
 		if (props.profile === "test") return;
 		if (props.active && !props.active()) return;
 		const state = data().state;
+		const workspace = workflowWorkspace();
+		const debounced = debounce(() => {
+			refresh();
+			reconcileSidebarPresentation();
+		}, 200);
+		const client = backendClient();
+		if (client) {
+			const dispose = client.subscribe({
+				onEvent: (event) => {
+					const envelope = event as {
+						domain?: string;
+						resource?: string;
+						payload?: unknown;
+					};
+					if (envelope.domain !== "workflow") return;
+					if (envelope.resource && envelope.resource !== props.repo) return;
+					if (
+						!envelope.resource &&
+						envelope.payload &&
+						typeof envelope.payload === "object" &&
+						!herdrEventMatchesWorkspace(
+							envelope.payload as Record<string, unknown>,
+							workspace,
+						)
+					)
+						return;
+					debounced.trigger();
+				},
+				onResync: () => refresh(),
+			});
+			onCleanup(() => {
+				debounced.cancel();
+				dispose();
+			});
+			return;
+		}
 		const dirs =
 			state.definition?.id === "research"
 				? [join(wikiWorkflowDataRoot(), props.workflowId)]
@@ -1152,35 +1190,25 @@ export function App(props: {
 						join(props.repo, ".herdr-workflow", props.workflowId),
 						join(state.worktree, ".herdr-workflow", props.workflowId),
 					];
-		const dispose = watchDirectories(dirs, refresh);
-		onCleanup(dispose);
-	});
-
-	createEffect(() => {
-		if (props.profile === "test") return;
-		if (props.active && !props.active()) return;
-		const workspace = workflowWorkspace();
-		// Herdr is the source of truth for agent/tab lifecycle and re-publishes
-		// a short event backlog on connect; debounce so a burst is one reload.
-		const debounced = debounce(refresh, 200);
-		const dispose = subscribeHerdrEvents((event) => {
-			if (herdrEventMatchesWorkspace(event.data, workspace)) {
+		const disposeWatch = watchDirectories(dirs, refresh);
+		const disposeHerdr = subscribeHerdrEvents((event) => {
+			if (herdrEventMatchesWorkspace(event.data, workspace))
 				debounced.trigger();
-				// Runtime-only input changes (a blocked approval prompt) arrive as
-				// events without a workflow revision change, so reconcile the
-				// presentation from the live read too.
-				reconcileSidebarPresentation();
-			}
 		});
 		onCleanup(() => {
 			debounced.cancel();
-			dispose();
+			disposeWatch();
+			disposeHerdr();
 		});
 	});
 
 	onMount(() => {
+		// When a transport is configured the server owns the execution-settled
+		// listeners and publishes `workflow.updated`; only a transport-less run
+		// (demo/tests) listens to the in-process coordinator directly.
+		const localSettle = !backendClient();
 		const disposeExecutionError =
-			props.profile === "test"
+			props.profile === "test" || !localSettle
 				? undefined
 				: onWorkflowExecutionError(props.repo, (workflowId) => {
 						if (props.active && !props.active()) return;
@@ -1189,14 +1217,14 @@ export function App(props: {
 		// A dashboard-initiated drain can change state without a Herdr event
 		// (developer transitions), so refresh when the coordinator settles.
 		const disposeExecutionSettled =
-			props.profile === "test"
+			props.profile === "test" || !localSettle
 				? undefined
 				: onWorkflowExecutionSettled(props.repo, (workflowId) => {
 						if (props.active && !props.active()) return;
 						if (workflowId === props.workflowId) refresh();
 					});
 		if (props.profile !== "test")
-			requestWorkflowExecution(props.repo, props.workflowId);
+			void requestWorkflowExecutionAsync(props.repo, props.workflowId);
 		// The sidebar presentation, execution coordinator and shared application
 		// runtime are root-owned (task 1.2/1.3): hiding this feature view must
 		// not release them, so the shell owns their registration and disposal.
@@ -1284,18 +1312,22 @@ export function App(props: {
 			return;
 		}
 		if (name === "o" && key.shift) {
-			try {
-				setRepairTargets(previewRepair(props.repo, props.workflowId));
-				setRepairSelection(0);
-				setRepairOpen(true);
-				props.keymap.setData("modal.active", "repair");
-			} catch {
-				traceTui(
-					"tui.dashboard.action",
-					{ surface: "dashboard", action: "repair-preview" },
-					"error",
-				);
-			}
+			void (async () => {
+				try {
+					setRepairTargets(
+						await previewRepairAsync(props.repo, props.workflowId),
+					);
+					setRepairSelection(0);
+					setRepairOpen(true);
+					props.keymap.setData("modal.active", "repair");
+				} catch {
+					traceTui(
+						"tui.dashboard.action",
+						{ surface: "dashboard", action: "repair-preview" },
+						"error",
+					);
+				}
+			})();
 			return;
 		}
 		if (name === "?") {
@@ -1323,7 +1355,7 @@ export function App(props: {
 			const agent = data().agents[selectedAgent()];
 			if (!agent?.role.endsWith("verifier")) return;
 			try {
-				openVerifierResult(agent.role);
+				void openVerifierResult(agent.role);
 			} catch {
 				traceTui(
 					"tui.dashboard.action",
@@ -1752,37 +1784,38 @@ export function App(props: {
 						} else if (key === "enter" || key === "return") {
 							const target = repairTargets()[repairSelection()];
 							if (!target) return true;
-							try {
-								applyRepair(
-									props.repo,
-									props.workflowId,
-									data().state.revision,
-									target.targetStep,
-									"",
-								);
-								setRepairOpen(false);
-								props.keymap.setData("modal.active", "none");
-								refresh();
-								notify(
-									`Repaired to ${target.label}: phase retriggered`,
-									"success",
-								);
-								traceTui("tui.dashboard.action", {
-									surface: "dashboard",
-									action: "repair-apply",
+							void applyRepair(
+								props.repo,
+								props.workflowId,
+								data().state.revision,
+								target.targetStep,
+								"",
+							)
+								.then(() => {
+									setRepairOpen(false);
+									props.keymap.setData("modal.active", "none");
+									refresh();
+									notify(
+										`Repaired to ${target.label}: phase retriggered`,
+										"success",
+									);
+									traceTui("tui.dashboard.action", {
+										surface: "dashboard",
+										action: "repair-apply",
+									});
+								})
+								.catch((error) => {
+									notify(
+										error instanceof Error ? error.message : String(error),
+										"error",
+									);
+									traceTui(
+										"tui.dashboard.action",
+										{ surface: "dashboard", action: "repair-apply" },
+										"error",
+									);
+									refresh();
 								});
-							} catch (error) {
-								notify(
-									error instanceof Error ? error.message : String(error),
-									"error",
-								);
-								traceTui(
-									"tui.dashboard.action",
-									{ surface: "dashboard", action: "repair-apply" },
-									"error",
-								);
-								refresh();
-							}
 						}
 						return true;
 					},

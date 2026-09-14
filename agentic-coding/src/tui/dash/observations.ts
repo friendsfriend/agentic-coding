@@ -16,8 +16,8 @@ import {
 import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
 import { directionBetween, Herdr, type Rect } from "../../herdr-client.ts";
+import { backendClient } from "../../server/client.ts";
 import type { WorkflowView } from "../../workflow/contracts.ts";
 import {
 	fetchProjectCatalog,
@@ -48,6 +48,7 @@ import {
 	listWorkflowViews,
 	previewWorkflowRepair,
 	repairWorkflow,
+	requestWorkflowExecution,
 	runWorkflowAction,
 	setReturnInProcess,
 	startWorkflowInProcess,
@@ -76,7 +77,7 @@ import type {
 } from "./types";
 
 const herdr = new Herdr();
-type DashboardObservation =
+export type DashboardObservation =
 	| { kind: "dashboard"; repo: string; workflowId: string }
 	| { kind: "workflows" }
 	| { kind: "projects" }
@@ -90,73 +91,94 @@ type DashboardObservation =
 			repo: string;
 			workflowId: string;
 			file: LocalChange;
-	  };
+	  }
+	| {
+			kind: "verifier-findings";
+			repo: string;
+			workflowId: string;
+			role: string;
+	  }
+	| {
+			kind: "verifier-report";
+			repo: string;
+			workflowId: string;
+			role: string;
+	  }
+	| { kind: "developer-review-findings"; repo: string; workflowId: string }
+	| { kind: "repair-preview"; repo: string; workflowId: string }
+	| { kind: "changes"; repo: string };
 
-const MAX_OBSERVATION_BYTES = 8 * 1024 * 1024;
-async function readBounded(
-	stream: ReadableStream<Uint8Array>,
-): Promise<string> {
-	const reader = stream.getReader();
-	const chunks: Uint8Array[] = [];
-	let total = 0;
-	try {
-		for (;;) {
-			const part = await reader.read();
-			if (part.done) break;
-			total += part.value.byteLength;
-			if (total > MAX_OBSERVATION_BYTES)
-				throw new Error("dashboard observation response is too large");
-			chunks.push(part.value);
-		}
-	} finally {
-		reader.releaseLock();
+/** Run an observation in-process. This is the server-side dispatch the HTTP
+ * transport exposes (expose-unified-bun-backend, task 2.2): the TUI reaches it
+ * through the typed client, and a headless caller may run it directly with no
+ * transport. It only reads/renders — never initializes, migrates or mutates. */
+export async function runLocalObservation(
+	observation: DashboardObservation,
+	signal?: AbortSignal,
+): Promise<unknown> {
+	if (signal?.aborted)
+		throw new DOMException("observation cancelled", "AbortError");
+	switch (observation.kind) {
+		case "workflows":
+			return listWorkflowsFromCatalog();
+		case "projects":
+			return discoverProjects();
+		case "dashboard":
+			return loadDashboard(observation.repo, observation.workflowId);
+		case "artifacts":
+			return openSpecArtifacts(observation.state);
+		case "artifact-content":
+			return openSpecArtifact(observation.state, observation.artifact);
+		case "wiki-changes":
+			return loadWikiSnapshotChanges(observation.repo, observation.workflowId);
+		case "wiki-diff":
+			return loadWikiSnapshotDiff(
+				observation.repo,
+				observation.workflowId,
+				observation.file.newPath,
+			);
+		case "local-changes":
+			return loadLocalChanges(observation.repo, observation.workflowId);
+		case "local-diff":
+			return loadLocalDiff(
+				observation.repo,
+				observation.workflowId,
+				observation.file,
+			);
+		case "verifier-findings":
+			return loadVerifierFindings(
+				observation.repo,
+				observation.workflowId,
+				observation.role,
+			);
+		case "verifier-report":
+			return loadVerifierReport(
+				observation.repo,
+				observation.workflowId,
+				observation.role,
+			);
+		case "developer-review-findings":
+			return loadDeveloperReviewFindings(
+				observation.repo,
+				observation.workflowId,
+			);
+		case "repair-preview":
+			return previewWorkflowRepair(observation.repo, observation.workflowId);
+		case "changes":
+			return discoverChanges(observation.repo);
 	}
-	return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString(
-		"utf8",
-	);
 }
 
+/** Read through the typed backend client when one is configured; otherwise run
+ * the same dispatch in-process (headless/tests). The `__dashboard-observe`
+ * subprocess protocol is removed (task 3.5). */
 async function observeAsync<T>(
 	observation: DashboardObservation,
 	signal?: AbortSignal,
 ): Promise<T> {
-	if (signal?.aborted)
-		throw new DOMException("observation cancelled", "AbortError");
-	const encoded = Buffer.from(JSON.stringify(observation)).toString("base64");
-	const sourceEntry = fileURLToPath(new URL("../../cli.ts", import.meta.url));
-	const runningFromBun = process.execPath.split("/").pop() === "bun";
-	const args = runningFromBun
-		? [process.execPath, sourceEntry, "__dashboard-observe", encoded]
-		: [process.execPath, "__dashboard-observe", encoded];
-	const child = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
-	const abort = () => child.kill();
-	signal?.addEventListener("abort", abort, { once: true });
-	let timeout: ReturnType<typeof setTimeout> | undefined;
-	try {
-		const output = await Promise.race([
-			readBounded(child.stdout),
-			new Promise<never>((_, reject) => {
-				timeout = setTimeout(() => {
-					child.kill();
-					reject(new Error("dashboard observation timed out"));
-				}, 15_000);
-			}),
-		]);
-		await child.exited;
-		if (signal?.aborted)
-			throw new DOMException("observation cancelled", "AbortError");
-		const result = JSON.parse(output) as {
-			ok: boolean;
-			value?: T;
-			error?: string;
-		};
-		if (!result.ok) throw new Error(result.error ?? "observation failed");
-		return result.value as T;
-	} finally {
-		if (timeout) clearTimeout(timeout);
-		child.kill();
-		signal?.removeEventListener("abort", abort);
-	}
+	const client = backendClient();
+	if (client) return client.observe<T>(observation, signal);
+	return (await runLocalObservation(observation, signal)) as T;
 }
 
 function openWorkspaceIds(): Set<string> | undefined {
@@ -970,6 +992,72 @@ export function loadLocalDiffAsync(
 	return observeAsync({ kind: "local-diff", repo, workflowId, file }, signal);
 }
 
+/** Ask the server-owned execution coordinator to drain pending effects,
+ * through the typed API when a client is configured. */
+export async function requestWorkflowExecutionAsync(
+	repo: string,
+	workflowId?: string,
+): Promise<void> {
+	const client = backendClient();
+	if (client) return client.execute({ repo, workflowId });
+	requestWorkflowExecution(repo, workflowId);
+}
+
+/** Verifier findings/report read through the typed backend API. The server runs
+ * the same `dashboardState` projection; the dashboard no longer reads the
+ * worktree directly for the verdict modal. */
+export function loadVerifierFindingsAsync(
+	repo: string,
+	workflowId: string,
+	role: string,
+	signal?: AbortSignal,
+): Promise<ReturnType<typeof loadVerifierFindings>> {
+	return observeAsync(
+		{ kind: "verifier-findings", repo, workflowId, role },
+		signal,
+	);
+}
+
+export function loadVerifierReportAsync(
+	repo: string,
+	workflowId: string,
+	role: string,
+	signal?: AbortSignal,
+): Promise<ReturnType<typeof loadVerifierReport>> {
+	return observeAsync(
+		{ kind: "verifier-report", repo, workflowId, role },
+		signal,
+	);
+}
+
+export function loadDeveloperReviewFindingsAsync(
+	repo: string,
+	workflowId: string,
+	signal?: AbortSignal,
+): Promise<ReturnType<typeof loadDeveloperReviewFindings>> {
+	return observeAsync(
+		{ kind: "developer-review-findings", repo, workflowId },
+		signal,
+	);
+}
+
+/** Repair targets read through the typed backend API. */
+export function previewRepairAsync(
+	repo: string,
+	workflowId: string,
+	signal?: AbortSignal,
+): Promise<ReturnType<typeof previewWorkflowRepair>> {
+	return observeAsync({ kind: "repair-preview", repo, workflowId }, signal);
+}
+
+/** OpenSpec change ids read through the typed backend API. */
+export function discoverChangesAsync(
+	repo: string,
+	signal?: AbortSignal,
+): Promise<string[]> {
+	return observeAsync({ kind: "changes", repo }, signal);
+}
+
 function safeWorktreeRelative(worktree: string, value: string): string {
 	if (!value || isAbsolute(value) || value.split(/[\\/]/).includes(".."))
 		throw new Error("observation path must be worktree-relative");
@@ -1020,6 +1108,14 @@ export async function saveDeveloperReview(
 	workflowId: string,
 	comments: DeveloperReviewComment[],
 ) {
+	const client = backendClient();
+	if (client)
+		return client.saveReview({
+			repo,
+			workflowId,
+			kind: "developer",
+			comments,
+		});
 	const state = dashboardState(repo, workflowId) as WorkflowState;
 	const path = join(
 		state.worktree,
@@ -1037,6 +1133,9 @@ export async function savePlanReview(
 	workflowId: string,
 	comments: PlanReviewComment[],
 ) {
+	const client = backendClient();
+	if (client)
+		return client.saveReview({ repo, workflowId, kind: "plan", comments });
 	const state = dashboardState(repo, workflowId) as WorkflowState;
 	const path = join(
 		state.worktree,
@@ -1054,6 +1153,9 @@ export async function saveWikiReview(
 	workflowId: string,
 	comments: WikiReviewComment[],
 ) {
+	const client = backendClient();
+	if (client)
+		return client.saveReview({ repo, workflowId, kind: "wiki", comments });
 	const state = dashboardState(repo, workflowId) as WorkflowState;
 	const path = join(
 		state.worktree,
@@ -1656,23 +1758,29 @@ export async function startWorkflow(input: {
 			: input.repo.startsWith("~")
 				? resolve(input.repo.replace("~", homedir()))
 				: resolve(input.repo);
+	const client = backendClient();
+	if (client) return client.start({ ...input, repo });
 	return startWorkflowInProcess({ ...input, repo });
 }
-
 export function previewRepair(repo: string, workflowId: string) {
 	return previewWorkflowRepair(repo, workflowId);
 }
-export function applyRepair(
+/** Repair through the typed backend API; falls back to the in-process
+ * application when no server client is configured (test mode). */
+export async function applyRepair(
 	repo: string,
 	workflowId: string,
 	revision: number,
 	targetStep: string,
 	reason = "",
-) {
+): Promise<WorkflowView> {
+	const client = backendClient();
+	if (client)
+		return client.repair({ repo, workflowId, revision, targetStep, reason });
 	return repairWorkflow(repo, workflowId, revision, targetStep, reason);
 }
 
-export function answerQuestion(
+export async function answerQuestion(
 	repo: string,
 	workflowId: string,
 	revision: number,
@@ -1688,7 +1796,10 @@ export function answerQuestion(
 				}>;
 		  }
 		| { groupId: string; kind: "cancel" },
-) {
+): Promise<WorkflowView> {
+	const client = backendClient();
+	if (client)
+		return client.question({ repo, workflowId, revision, questionId, answer });
 	return answerWorkflowQuestion(repo, workflowId, revision, questionId, answer);
 }
 
@@ -1698,6 +1809,25 @@ export async function runWorkflow(
 	workflowId: string,
 	revision: number,
 	argument?: string,
-) {
+): Promise<string> {
+	const client = backendClient();
+	if (client) {
+		let input: unknown;
+		if (argument) {
+			try {
+				input = JSON.parse(argument);
+			} catch {
+				input = argument;
+			}
+		}
+		const view = await client.action({
+			repo,
+			workflowId,
+			revision,
+			actionId: action,
+			input,
+		});
+		return JSON.stringify(view);
+	}
 	return runWorkflowAction(action, repo, workflowId, revision, argument);
 }

@@ -3,10 +3,15 @@
 // the active core.research researcher run. Moved verbatim out of cli.ts
 // (split-workflow-god-modules); migrated to run Effect programs at the
 // CLI-invocation application root (complete-workflow-effect-cutover, task 2.1).
+
+import { backendClientFromEnv } from "../../../server/client.ts";
 import type { WorkflowApplication } from "../../application.ts";
 import type { WorkflowEngine } from "../../runtime.ts";
 import { flag, parseInput, requireFlag } from "../args.ts";
-import { managedWorkflowTarget } from "../caller-environment.ts";
+import {
+	callerEnvironment,
+	managedWorkflowTarget,
+} from "../caller-environment.ts";
 import { scheduleDrain } from "../drain.ts";
 import { resolveHandoffIdentity } from "../identity.ts";
 
@@ -19,6 +24,39 @@ export async function runResearchHandoff(
 	application?: App,
 ): Promise<void> {
 	const target = managedWorkflowTarget();
+	const subject = requireFlag(rest, "subject");
+	const directivesFlag = requireFlag(rest, "directives");
+	const directives = parseInput(directivesFlag);
+	const findingsText = flag(rest, "findings");
+	const canonicalTarget = flag(rest, "target");
+	const citationsFlag = flag(rest, "citations");
+	const noSourcesUsed = rest.includes("--no-sources");
+	const citations = citationsFlag
+		? citationsFlag
+				.split(",")
+				.map((entry) => entry.trim())
+				.filter(Boolean)
+		: [];
+	const handoff = {
+		subject,
+		...(canonicalTarget ? { canonicalTarget } : {}),
+		...(findingsText === undefined ? {} : { findings: findingsText }),
+		directives,
+		citations,
+		noSourcesUsed,
+	};
+	// Managed researcher across the transport: identity and capability are
+	// resolved and validated server-side.
+	const client = backendClientFromEnv();
+	if (client) {
+		const view = await client.researchHandoff({
+			repo: target,
+			environment: callerEnvironment(),
+			handoff,
+		});
+		console.log(JSON.stringify(view, null, 2));
+		return;
+	}
 	const identity = resolveHandoffIdentity(workflowEngine, target, application);
 	if (identity.stepId !== "core.research" || identity.role !== "researcher")
 		throw new Error(
@@ -43,19 +81,6 @@ export async function runResearchHandoff(
 				identity.role,
 				identity.token,
 			);
-	const subject = requireFlag(rest, "subject");
-	const directivesFlag = requireFlag(rest, "directives");
-	const directives = parseInput(directivesFlag);
-	const findingsText = flag(rest, "findings");
-	const canonicalTarget = flag(rest, "target");
-	const citationsFlag = flag(rest, "citations");
-	const noSourcesUsed = rest.includes("--no-sources");
-	const citations = citationsFlag
-		? citationsFlag
-				.split(",")
-				.map((entry) => entry.trim())
-				.filter(Boolean)
-		: [];
 	const command = {
 		type: "agent.research-handoff",
 		workflowId: run.workflowId,
@@ -63,14 +88,7 @@ export async function runResearchHandoff(
 		stepId: run.stepId,
 		role: run.role,
 		token: identity.token,
-		handoff: {
-			subject,
-			...(canonicalTarget ? { canonicalTarget } : {}),
-			...(findingsText === undefined ? {} : { findings: findingsText }),
-			directives,
-			citations,
-			noSourcesUsed,
-		},
+		handoff,
 	} as never;
 	if (application)
 		application.runSync(workflowEngine.dispatchEffect(target, command));

@@ -7,7 +7,7 @@ import { showErrorModal } from "../../shared/errorModal";
 import { ChangedFilesView } from "../devenv-ui/components/ChangedFilesView";
 import { DiffViewModal } from "../devenv-ui/components/DiffViewModal";
 import { GenericModal } from "../devenv-ui/components/GenericModal";
-import { loadLocalChanges, loadLocalDiff } from "../observations";
+import { loadLocalChangesAsync, loadLocalDiffAsync } from "../observations";
 import type { LocalChange } from "../types";
 
 /**
@@ -39,16 +39,18 @@ export function ChangedFilesBrowser(props: {
 	const [searchQuery, setSearchQuery] = createSignal("");
 
 	onMount(() => {
-		try {
-			setChanges(loadLocalChanges(props.repo, props.change));
-		} catch (cause) {
-			showErrorModal(
-				"Changed files unavailable",
-				cause instanceof Error ? cause.message : String(cause),
-			);
-		} finally {
-			setLoading(false);
-		}
+		void (async () => {
+			try {
+				setChanges(await loadLocalChangesAsync(props.repo, props.change));
+			} catch (cause) {
+				showErrorModal(
+					"Changed files unavailable",
+					cause instanceof Error ? cause.message : String(cause),
+				);
+			} finally {
+				setLoading(false);
+			}
+		})();
 	});
 
 	const visible = createMemo(() => {
@@ -85,11 +87,11 @@ export function ChangedFilesBrowser(props: {
 				3,
 		);
 
-	const openDiff = () => {
+	const openDiff = async () => {
 		const file = currentFile();
 		if (!file) return;
 		try {
-			setDiffText(loadLocalDiff(props.repo, props.change, file));
+			setDiffText(await loadLocalDiffAsync(props.repo, props.change, file));
 			setLine(0);
 			setView("diff");
 		} catch (cause) {
@@ -143,7 +145,7 @@ export function ChangedFilesBrowser(props: {
 		else if (view() === "files" && (key === "k" || key === "up"))
 			setIndex((current) => Math.max(0, current - 1));
 		else if (view() === "files" && (key === "enter" || key === "return"))
-			openDiff();
+			void openDiff();
 		else if (view() === "diff" && (key === "j" || key === "down"))
 			setLine((current) =>
 				Math.min(Math.max(0, selectableLineCount() - 1), current + 1),

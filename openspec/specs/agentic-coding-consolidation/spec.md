@@ -2,20 +2,18 @@
 
 ## Purpose
 TBD - created by archiving change architecture-checkup-round-1. Update Purpose after archive.
-
 ## Requirements
-
 ### Requirement: Target architecture — single `agentic-coding` binary
-The catalog SHALL define one TypeScript `agentic-coding` binary providing transactional workflow engine and dashboard/observability views, with dashboard importing engine in-process and managed agents using runtime-neutral handoff command.
+The catalog SHALL define one TypeScript `agentic-coding` executable with TUI and server modes, transactional workflow engine and environment/observability views. The dashboard SHALL consume a typed authenticated server API; the server SHALL invoke the workflow application in-process. Managed agents SHALL use the runtime-neutral handoff command with preserved capability checks. Unported environment services SHALL be explicitly private Go delegates during migration.
 
 #### Scenario: Reader reviews target surface map
-- **WHEN** developer opens target architecture
-- **THEN** it SHALL enumerate engine `agentic-coding workflow`, per-workflow dashboard `agentic-coding dash`, workflow list `agentic-coding home`, and launcher `agentic-coding manager`
-- **AND** dashboard SHALL import engine rather than spawn/reparse it
+- **WHEN** a developer opens the target architecture
+- **THEN** it SHALL enumerate default TUI, `server`, `attach`, `workflow`, `dash`, `home` and `manager` modes
+- **AND** dashboard actions SHALL cross the typed API rather than spawn/reparse workflow commands or import execution internals
 
 #### Scenario: Engine verbs enumerated
-- **WHEN** developer reviews engine surface
-- **THEN** catalog SHALL list `start`, `status`, `action`, `handoff`, `repair`, `projects`, `config`, and `agent-extension`
+- **WHEN** a developer reviews the engine surface
+- **THEN** the catalog SHALL list supported start/status/action/handoff/question/repair/projects/config/agent-extension/drain contracts
 - **AND** it SHALL identify old phase/role verbs as intentionally removed
 
 ### Requirement: CLI compatibility constraint
@@ -32,16 +30,16 @@ The target architecture SHALL permit breaking legacy agent-facing workflow CLI s
 - **AND** engine SHALL derive identity from run capability
 
 ### Requirement: Ranked migration backlog
-The catalog SHALL reflect workflow-state redesign as replacement for earlier parity-focused consolidation constraints and SHALL keep remaining architecture findings independently actionable.
+The catalog SHALL reflect the unified typed backend API as the current consolidation target while retaining independently actionable architecture findings and registered workflow semantics.
 
 #### Scenario: Reader reviews the backlog table
-- **WHEN** reader reviews consolidation target
-- **THEN** R1 SHALL require single binary, in-process dashboard, unified command runtime, typed view, and runtime-neutral agent handoff
-- **AND** it SHALL no longer require exact Python-era verb or raw state compatibility
+- **WHEN** a reader reviews consolidation target
+- **THEN** R1 SHALL require one executable, typed client/server boundary, unified server-side workflow command runtime, typed view and runtime-neutral agent handoff
+- **AND** it SHALL NOT require direct dashboard engine imports or exact Python-era verb/raw state compatibility
 
 #### Scenario: Each item is independently actionable
-- **WHEN** later change selects remaining backlog item
-- **THEN** catalog SHALL retain evidence and target invariant sufficient to implement independently
+- **WHEN** a later change selects a remaining backlog item
+- **THEN** the catalog SHALL retain evidence and target invariant sufficient to implement independently
 - **AND** no item SHALL require restoring removed legacy workflow compatibility
 
 ### Requirement: Contract-drift evidence (R1)
@@ -85,3 +83,4 @@ The catalog SHALL document the duplicated otel viewer code and the remaining low
 - **THEN** R6 SHALL name the trace-view modules duplicated between `agent-dash` and the standalone `otel-tui` project: `otel-tui.tsx`, `TraceBrowser`, `traces.ts`, `receiver`
 - **AND** R7 SHALL note the agent-name mismatch: Herdr agent name is truncated to 32 chars (`role_agent_name`) while pi `--name` uses the untruncated `{change}-{role}`
 - **AND** R8 SHALL name the legacy dead paths `startWorkflowWizard` and `pi_command` for removal
+

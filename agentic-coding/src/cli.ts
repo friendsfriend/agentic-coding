@@ -30,99 +30,25 @@ if (surface === "__grpc-sidecar") {
 	await runHeadlessServer(rest);
 } else if (surface === "attach") {
 	const url = rest[0];
-	if (!url) {
-		console.error("usage: agentic-coding attach <url>");
+	if (!url || url.startsWith("--")) {
+		console.error("usage: agentic-coding attach <url> [--token TOKEN]");
 		process.exit(2);
 	}
+	const tokenIndex = rest.indexOf("--token");
+	const token =
+		tokenIndex >= 0 ? rest[tokenIndex + 1] : process.env.AGENTIC_WORKFLOW_TOKEN;
 	const { main } = await import("./tui/index.tsx");
 	process.argv.push("--attach-url", url, "--home");
+	// With a capability, attach is a full-feature workflow/observability client
+	// of the remote unified server; without one it stays environment-only.
+	if (token) process.argv.push("--attach-token", token);
 	await main();
 } else if (surface === "__dashboard-observe") {
-	const {
-		discoverProjects,
-		listWorkflowsFromCatalog,
-		loadDashboard,
-		loadLocalChanges,
-		loadLocalDiff,
-	} = await import("./tui/dash/observations.ts");
-	try {
-		const observation = JSON.parse(
-			Buffer.from(rest[0] ?? "", "base64").toString("utf8"),
-		) as
-			| { kind: "workflows" }
-			| { kind: "projects" }
-			| {
-					kind: "artifacts";
-					state: import("./tui/dash/types.ts").WorkflowState;
-			  }
-			| {
-					kind: "artifact-content";
-					state: import("./tui/dash/types.ts").WorkflowState;
-					artifact: string;
-			  }
-			| { kind: "wiki-changes"; repo: string; workflowId: string }
-			| {
-					kind: "wiki-diff";
-					repo: string;
-					workflowId: string;
-					file: import("./tui/dash/types.ts").LocalChange;
-			  }
-			| { kind: "dashboard"; repo: string; workflowId: string }
-			| { kind: "local-changes"; repo: string; workflowId: string }
-			| {
-					kind: "local-diff";
-					repo: string;
-					workflowId: string;
-					file: import("./tui/dash/types.ts").LocalChange;
-			  };
-		const value =
-			observation.kind === "workflows"
-				? await listWorkflowsFromCatalog()
-				: observation.kind === "projects"
-					? await discoverProjects()
-					: observation.kind === "artifacts"
-						? (await import("./tui/dash/observations.ts")).openSpecArtifacts(
-								observation.state,
-							)
-						: observation.kind === "artifact-content"
-							? (await import("./tui/dash/observations.ts")).openSpecArtifact(
-									observation.state,
-									observation.artifact,
-								)
-							: observation.kind === "wiki-changes"
-								? (
-										await import("./tui/dash/observations.ts")
-									).loadWikiSnapshotChanges(
-										observation.repo,
-										observation.workflowId,
-									)
-								: observation.kind === "wiki-diff"
-									? (
-											await import("./tui/dash/observations.ts")
-										).loadWikiSnapshotDiff(
-											observation.repo,
-											observation.workflowId,
-											observation.file.newPath,
-										)
-									: observation.kind === "local-changes"
-										? loadLocalChanges(observation.repo, observation.workflowId)
-										: observation.kind === "local-diff"
-											? loadLocalDiff(
-													observation.repo,
-													observation.workflowId,
-													observation.file,
-												)
-											: loadDashboard(observation.repo, observation.workflowId);
-		console.log(JSON.stringify({ ok: true, value }));
-	} catch (error) {
-		console.log(
-			JSON.stringify({
-				ok: false,
-				error: error instanceof Error ? error.message : String(error),
-			}),
-		);
-		process.exitCode = 1;
-	}
+	// Removed: the TUI reaches observations through the typed backend client
+	// (expose-unified-bun-backend, task 3.5). Fail loudly rather than silently
+	// keeping a second transport alive.
+	console.error("__dashboard-observe was removed; use the typed backend API");
+	process.exit(2);
 } else if (surface === "--help" || surface === "-h" || surface === "help") {
 	console.log(
 		"Usage: agentic-coding [command] [args]\n\nCommands:\n  (none)     Unified shell (owned environment backend + workflows + observability).\n  workflow   Transactional workflow engine. Run `agentic-coding workflow --help`.\n  home       Unified shell, home route. `manager` is an alias.\n  dash       Per-workflow dashboard pane. `agentic-coding dash --repo PATH --workflow-id ID`\n  server     Start only the environment backend (headless).\n  attach     Attach the shell to a running environment backend: `agentic-coding attach URL`\n  devenv     Thin alias of this executable (spawn/attach/server).",

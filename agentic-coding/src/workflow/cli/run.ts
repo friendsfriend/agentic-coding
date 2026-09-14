@@ -6,6 +6,7 @@
 // context, and dispatches. The CLI invocation owns one named application
 // layer (complete-workflow-effect-cutover, task 1): the engine facade
 // consumes the root-owned layer and the owner is disposed after the command.
+import { backendClientFromEnv } from "../../server/client.ts";
 import { WorkflowApplication } from "../application.ts";
 import { loadConfig } from "../effects.ts";
 import {
@@ -46,14 +47,21 @@ async function runStatus(
 	repo: string,
 	application: WorkflowApplication,
 ): Promise<void> {
+	const workflowId = requireFlag(rest, "workflow-id");
+	// Headless read: a parent shell exports the authenticated server URL/token to
+	// its managed children, so the CLI reads the authoritative view through the
+	// typed client instead of opening the store itself.
+	const client = backendClientFromEnv();
+	if (client) {
+		console.log(JSON.stringify(await client.view(repo, workflowId), null, 2));
+		return;
+	}
 	// Migrated caller (complete-workflow-effect-cutover, task 2.1): the read
 	// runs at the CLI-invocation application root instead of the facade's own
 	// nested runtime; the external JSON protocol is unchanged.
 	console.log(
 		JSON.stringify(
-			application.runSync(
-				workflowEngine.statusEffect(repo, requireFlag(rest, "workflow-id")),
-			),
+			application.runSync(workflowEngine.statusEffect(repo, workflowId)),
 			null,
 			2,
 		),
@@ -150,7 +158,14 @@ export async function run(argv: string[]): Promise<void> {
 		return;
 	}
 	if (command === "projects") {
-		console.log(JSON.stringify(await listProjects()));
+		const client = backendClientFromEnv();
+		console.log(
+			JSON.stringify(
+				client
+					? await client.observe({ kind: "projects" })
+					: await listProjects(),
+			),
+		);
 		return;
 	}
 	// CLI-invocation owner: one application layer for this command's bounded

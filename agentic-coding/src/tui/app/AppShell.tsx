@@ -5,9 +5,9 @@
 // the imported Environments feature is supplied as a render hook so the
 // `tui-feature` layer never imports the shell.
 import { type DashboardTab, App as FeatureShell } from "../otel/app/App";
-import type { TraceDb } from "../otel/model/db";
 import type { LogStore } from "../otel/model/logStore";
 import type { MetricStore } from "../otel/model/metricStore";
+import type { TelemetryDb } from "../otel/model/telemetry-db";
 import type { TopologyStore } from "../otel/model/topologyStore";
 import type { TraceStore } from "../otel/model/traceStore";
 import type { KeybindSection } from "../shared/keybinds";
@@ -15,7 +15,7 @@ import { EnvironmentsFeature } from "./EnvironmentsFeature";
 
 export interface AppShellProps {
 	repos: string[];
-	db: TraceDb;
+	db: TelemetryDb;
 	traceStore: TraceStore;
 	metricStore: MetricStore;
 	logStore: LogStore;
@@ -27,6 +27,8 @@ export interface AppShellProps {
 	 * wiki surface only. `attached` marks a backend this process does not own. */
 	environments?: { serverUrl: string };
 	attached?: boolean;
+	/** Explicit attached-surface label rendered in the header. */
+	attachLabel?: string;
 }
 
 /** The one renderer entry for the unified feature shell. */
@@ -43,6 +45,7 @@ export function AppShell(props: AppShellProps) {
 			dashboard={props.dashboard}
 			environments={props.environments}
 			attached={props.attached}
+			attachLabel={props.attachLabel}
 			renderEnvironments={
 				props.environments
 					? (

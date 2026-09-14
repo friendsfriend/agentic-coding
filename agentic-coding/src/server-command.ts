@@ -1,8 +1,15 @@
-// `agentic-coding server` — headless environment backend. No renderer, no
-// observer: the same owned, identity-verified backend the unified shell starts,
-// held in the foreground until a signal releases it through the same Effect
-// scope (src/backend/lifecycle.ts). No lifecycle logic lives here.
-import { BackendStartupError, serveOwnedBackend } from "./backend/lifecycle.ts";
+// `agentic-coding server` — headless unified backend. The Bun workflow/
+// telemetry server owns the API and delegates unported environment routes to
+// the private Go child it spawns. No renderer, no observer.
+import {
+	BackendStartupError,
+	type OwnedBackend,
+	startOwnedBackend,
+} from "./backend/lifecycle.ts";
+import {
+	type OwnedWorkflowServer,
+	startWorkflowServer,
+} from "./server/lifecycle.ts";
 
 function arg(args: string[], ...flags: string[]): string | undefined {
 	for (let i = 0; i < args.length; i++) {
@@ -13,18 +20,21 @@ function arg(args: string[], ...flags: string[]): string | undefined {
 	return undefined;
 }
 
-export async function runHeadlessServer(args: string[]): Promise<void> {
-	const port = arg(args, "-p", "--port") ?? "4050";
-	const instance = arg(args, "--instance");
-	const numericPort = Number(port);
-	if (
-		!Number.isInteger(numericPort) ||
-		numericPort < 1 ||
-		numericPort > 65535
-	) {
-		console.error("--port requires a port from 1 to 65535");
+function port(args: string[], label: string, flags: string[]): number {
+	const raw = arg(args, ...flags);
+	if (raw === undefined) return label === "environment" ? 4050 : 4051;
+	const value = Number(raw);
+	if (!Number.isInteger(value) || value < 1 || value > 65535) {
+		console.error(`${flags.join("/")} requires a port from 1 to 65535`);
 		process.exit(1);
 	}
+	return value;
+}
+
+export async function runHeadlessServer(args: string[]): Promise<void> {
+	const environmentPort = port(args, "environment", ["-p", "--port"]);
+	const workflowPort = port(args, "workflow", ["--workflow-port"]);
+	const instance = arg(args, "--instance");
 
 	let release!: () => void;
 	const signal = new Promise<void>((resolve) => {
@@ -35,22 +45,33 @@ export async function runHeadlessServer(args: string[]): Promise<void> {
 	}
 	// A pending promise alone does not keep Bun's event loop alive, and the
 	// inherited-fd child holds no loop handle either: without this, the command
-	// would exit 0 immediately and orphan the backend it just spawned.
+	// would exit 0 immediately and orphan the backends it just spawned.
 	const keepAlive = setInterval(() => {}, 2 ** 30);
 
+	let environment: (OwnedBackend & { stop: () => Promise<void> }) | undefined;
+	let workflow: OwnedWorkflowServer | undefined;
 	try {
-		await serveOwnedBackend(
-			{
-				port: String(numericPort),
-				instance,
-				onReady: (backend) => {
-					process.stdout.write(
-						`environment backend ${backend.url} (instance ${backend.instance}, pid ${backend.pid ?? "?"})\n`,
-					);
-				},
-			},
-			signal,
+		environment = await startOwnedBackend({
+			port: String(environmentPort),
+			instance,
+		});
+		workflow = await startWorkflowServer({
+			port: workflowPort,
+			environmentBaseUrl: environment.url,
+			environmentToken: environment.token,
+			instance,
+			// The headless server owns telemetry persistence/retention.
+			ownTelemetry: true,
+		});
+		process.stdout.write(
+			`environment backend ${environment.url} (instance ${environment.instance}, pid ${
+				environment.pid ?? "?"
+			})\n`,
 		);
+		process.stdout.write(
+			`workflow server ${workflow.url} (instance ${workflow.instance})\n`,
+		);
+		await signal;
 	} catch (error) {
 		console.error(
 			error instanceof BackendStartupError
@@ -59,9 +80,11 @@ export async function runHeadlessServer(args: string[]): Promise<void> {
 					? error.message
 					: String(error),
 		);
-		process.exit(1);
+		process.exitCode = 1;
 	} finally {
 		clearInterval(keepAlive);
+		await workflow?.stop().catch(() => {});
+		await environment?.stop().catch(() => {});
 	}
-	process.exit(0);
+	process.exit(process.exitCode ?? 0);
 }

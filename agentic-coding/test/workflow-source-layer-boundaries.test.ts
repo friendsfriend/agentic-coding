@@ -15,6 +15,8 @@ import {
 	checkPureDomain,
 	checkRuntimeBoundaries,
 	checkUnresolvedRuntimeTargets,
+	checkViewBackendIsolation,
+	classifySourcePath,
 	findRuntimeCycle,
 	type LayerException,
 } from "../scripts/workflow-architecture.ts";
@@ -41,6 +43,33 @@ function messages(issues: ArchitectureIssue[]): string[] {
 describe("workflow source-layer boundaries (enforce-source-layer-boundaries)", () => {
 	test("src has no runtime import cycle (including .tsx, dynamic, require)", () => {
 		expect(findRuntimeCycle(SRC_ROOT)).toBeNull();
+	});
+
+	test("view components perform no direct backend I/O", () => {
+		expect(checkViewBackendIsolation(SRC_ROOT)).toEqual([]);
+	});
+
+	test("a view component importing a backend module fails with the specifier", () => {
+		const root = fixtureRoot("negative", "view-backend");
+		const issues = checkViewBackendIsolation(root);
+		expect(issues).toHaveLength(1);
+		expect(rel(root, issues[0].file)).toBe("tui/dash/Bad.tsx");
+		expect(issues[0].rule).toBe("view:backend-import");
+		expect(issues[0].message).toContain("workflow/effects.ts");
+	});
+
+	test("the unified backend transport/client modules are classified as root", () => {
+		for (const relPath of [
+			"server/protocol.ts",
+			"server/auth.ts",
+			"server/app.ts",
+			"server/client.ts",
+			"server/events.ts",
+			"server/credentials.ts",
+			"server/handlers.ts",
+			"server/lifecycle.ts",
+		])
+			expect(classifySourcePath(relPath)).toBe("root");
 	});
 
 	test("src satisfies the documented layer ownership matrix", () => {

@@ -16,6 +16,33 @@ import { TraceStore } from "../../src/tui/otel/model/traceStore";
 // the observability signal views under one Observability feature with sub-tabs
 // (compose-unified-feature-shell task 2.1/2.3/2.6). The environment body is
 // injected as a render hook so the test does not need the devenv backend.
+test("a full-feature attach labels its capabilities and omits Environments", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "unified-attach-"));
+	const db = new TraceDb(dir);
+	const t = await testRender(
+		() => (
+			<App
+				repos={["/demo"]}
+				db={db}
+				traceStore={new TraceStore()}
+				metricStore={new MetricStore()}
+				logStore={new LogStore()}
+				topologyStore={new TopologyStore()}
+				attached
+				attachLabel="attached http://host:4051 · workflow + observability · environment features unavailable"
+			/>
+		),
+		{ width: 140, height: 40 },
+	);
+	const frame = await t.waitForFrame((value) =>
+		value.includes("workflow + observability"),
+	);
+	expect(frame).toContain("environment features unavailable");
+	expect(frame).not.toContain("Environments");
+	t.renderer.destroy();
+	db.close();
+});
+
 async function renderUnifiedShell() {
 	const dir = mkdtempSync(join(tmpdir(), "unified-shell-"));
 	const db = new TraceDb(dir);
