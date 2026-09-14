@@ -2,6 +2,7 @@ Not for agents. This is only for humans.
 
 Fixes: 
 * Observation failed: JSON Parse error: Unterminated string
+* Findings in the developer review dont show which reviewer marked the issue. Also it doesnt show a recommendation for a solution. It is just a text. I want it to have two parts: What is the issue? How can it be solved?
 
 Big ones:
 * Implement Agent steered version of the workflow. Basically an orchestrator version of the workflow.
