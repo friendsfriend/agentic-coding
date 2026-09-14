@@ -15,6 +15,7 @@ import {
 	getProjectCatalog as requestProjectCatalog,
 } from "@devenv/core";
 import type { CatalogProject, ProjectCatalog } from "@devenv/types";
+import { withBackendExecutable } from "../backend/lifecycle.ts";
 
 export type { CatalogProject, ProjectCatalog };
 export { ProjectCatalogError };
@@ -25,6 +26,17 @@ const DEFAULT_BASE_URL = "http://127.0.0.1:4050";
  * compile (`go run`) or start a packaged binary; both must stay bounded so
  * shell startup and the CLI cannot hang on an unreachable backend. */
 export const BOUNDED_CATALOG_TIMEOUT_MS = 20_000;
+
+/**
+ * Set by the shell while it is starting the backend it owns. A read that lands
+ * in that window waits for the server instead of falling back to a bounded
+ * invocation (which would spawn a second backend for one read); consumers that
+ * never own a server leave it unset and fall back immediately.
+ */
+export const BACKEND_STARTING_ENV = "AGENTIC_DEVENV_STARTING";
+
+const READY_RETRY_MS = 250;
+const READY_RETRIES = 16;
 
 /** Resolve the devenv backend URL used for catalog reads. */
 export function resolveCatalogBaseUrl(explicit?: string): string {
@@ -60,11 +72,6 @@ export async function fetchProjectCatalog(
 	);
 }
 
-function serverBinaryName(): string {
-	const suffix = process.platform === "win32" ? ".exe" : "";
-	return `devenv-${process.platform}-${process.arch}${suffix}`;
-}
-
 function repoRoot(): string {
 	return path.resolve(import.meta.dir, "../../..");
 }
@@ -75,41 +82,19 @@ interface BoundedInvocation {
 }
 
 /**
- * Locate the bounded `catalog` invocation of the backend executable. Prefers
- * an explicit override, then the imported server binary, then a development
- * `go run` against the source tree.
+ * Source-tree location of the backend, if this process runs from a checkout.
+ * A checkout prefers its own sources so a stale packaged binary cannot serve an
+ * outdated catalog projection.
  */
-export function resolveBoundedCatalogInvocation(): BoundedInvocation {
-	const override = process.env.DEVENV_SERVER_BINARY;
-	if (override) return { command: [override, "catalog"] };
-
-	const root = repoRoot();
-	// Prefer the current source tree in development so a stale packaged binary
-	// cannot serve an outdated catalog projection.
-	const serverDir = path.join(root, "server");
-	if (fs.existsSync(path.join(serverDir, "main.go")))
-		return { command: ["go", "run", "main.go", "catalog"], cwd: serverDir };
-
-	const binariesDir = path.join(
-		root,
-		"agentic-coding",
-		"packages",
-		"devenv",
-		"server-binaries",
-	);
-	const binary = path.join(binariesDir, serverBinaryName());
-	if (fs.existsSync(binary)) return { command: [binary, "catalog"] };
-
-	throw new ProjectCatalogError(
-		"no devenv backend executable available for a bounded catalog invocation; set DEVENV_SERVER_BINARY",
-		{ retryable: false },
-	);
+function sourceServerDir(): string | undefined {
+	const serverDir = path.join(repoRoot(), "server");
+	return fs.existsSync(path.join(serverDir, "main.go")) ? serverDir : undefined;
 }
 
-async function runBoundedCatalog(
-	timeoutMs = BOUNDED_CATALOG_TIMEOUT_MS,
+async function spawnBoundedCatalog(
+	invocation: BoundedInvocation,
+	timeoutMs: number,
 ): Promise<ProjectCatalog> {
-	const invocation = resolveBoundedCatalogInvocation();
 	let stdout = "";
 	let stderr = "";
 	let exitCode = 1;
@@ -156,6 +141,37 @@ async function runBoundedCatalog(
 	}
 }
 
+async function runBoundedCatalog(
+	timeoutMs = BOUNDED_CATALOG_TIMEOUT_MS,
+): Promise<ProjectCatalog> {
+	// Explicit override wins, then a checkout's own sources, then the backend
+	// executable this installation ships (embedded, or dist/server/devenv). The
+	// last step is what makes a bounded catalog read work in a packaged
+	// executable that has no source tree at all.
+	const override = process.env.DEVENV_SERVER_BINARY;
+	if (override)
+		return spawnBoundedCatalog({ command: [override, "catalog"] }, timeoutMs);
+	const serverDir = sourceServerDir();
+	if (serverDir)
+		return spawnBoundedCatalog(
+			{ command: ["go", "run", "main.go", "catalog"], cwd: serverDir },
+			timeoutMs,
+		);
+	try {
+		return await withBackendExecutable((executable) =>
+			spawnBoundedCatalog({ command: [executable, "catalog"] }, timeoutMs),
+		);
+	} catch (error) {
+		if (error instanceof ProjectCatalogError) throw error;
+		throw new ProjectCatalogError(
+			`no environment backend executable available for a bounded catalog invocation: ${
+				error instanceof Error ? error.message : String(error)
+			}`,
+			{ retryable: false },
+		);
+	}
+}
+
 /**
  * Load the catalog for headless consumers: use the running managed server when
  * reachable, otherwise start a bounded read-only catalog invocation. This is
@@ -165,12 +181,20 @@ async function runBoundedCatalog(
 export async function loadProjectCatalog(
 	options: ProjectCatalogOptions = {},
 ): Promise<ProjectCatalog> {
-	try {
-		return await fetchProjectCatalog(options);
-	} catch (error) {
-		if (error instanceof ProjectCatalogError && !error.retryable) throw error;
-		if (options.signal?.aborted) throw error;
-		return runBoundedCatalog(options.timeoutMs);
+	const waitingForOwnedBackend =
+		process.env[BACKEND_STARTING_ENV] === "1" && !options.signal?.aborted;
+	const attempts = waitingForOwnedBackend ? READY_RETRIES : 0;
+	for (let attempt = 0; ; attempt++) {
+		try {
+			return await fetchProjectCatalog(options);
+		} catch (error) {
+			if (error instanceof ProjectCatalogError && !error.retryable) throw error;
+			if (options.signal?.aborted) throw error;
+			// A transport failure while our own backend is still binding is a
+			// readiness wait, not a missing-server case.
+			if (attempt >= attempts) return runBoundedCatalog(options.timeoutMs);
+			await new Promise((resolve) => setTimeout(resolve, READY_RETRY_MS));
+		}
 	}
 }
 

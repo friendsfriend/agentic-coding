@@ -28,7 +28,7 @@ intentionally left out, and how the imported code is built and verified.
 The import does **not** reference `~/devenv`, use a submodule, or check out a second
 source tree. The merged checkout is self-contained: with `~/devenv` unavailable,
 `bun install`, `bun run type-check`, `bun test packages/devenv` and
-`bun run build:devenv:single` resolve only imported source and declared dependencies.
+`bun run build` resolve only imported source and declared dependencies.
 
 ## Import manifest
 
@@ -39,7 +39,7 @@ source tree. The merged checkout is self-contained: with `~/devenv` unavailable,
 | `tui/packages/core/` | `agentic-coding/packages/devenv/core/` | API/SSE clients, logger, diff helpers, tests |
 | `tui/packages/types/` | `agentic-coding/packages/devenv/types/` | Shared domain types and labels, tests |
 | `tui/packages/ui/` | `agentic-coding/packages/devenv/ui/` | OpenTUI/Solid components, tests and snapshots |
-| `tui/scripts/build.ts` | `agentic-coding/packages/devenv/scripts/build.ts` | Binary builder, path resolution adapted to the flattened layout |
+| `tui/scripts/build.ts` | (removed by `unify-application-lifecycle-and-binary`) | Binary builder; packaging consolidated into `agentic-coding/scripts/build.ts` |
 | `scripts/set-version.ts`, `scripts/create-perf-config.ts` | `agentic-coding/packages/devenv/scripts/` | Upstream maintenance scripts |
 | `tui/tsconfig.json` | `agentic-coding/packages/devenv/tsconfig.json` | `paths`/`include` adapted to the flattened layout |
 | `LICENSE` | `agentic-coding/packages/devenv/LICENSE` | Retained upstream license text (see below) |
@@ -71,7 +71,9 @@ belong to other migration changes, or would create a second build/test graph:
 - Upstream per-package `bun.lock` and `tui/bunfig.toml` — the merged repository uses a
   single root `agentic-coding/bun.lock` and one `agentic-coding/bunfig.toml`.
 - Upstream root `build.ts` release wrapper and the `dist/tui/*` layout it produces —
-  its behavior is covered by the adapted `packages/devenv/scripts/build.ts`. The local
+  its behavior is covered by the repository's one build script (`scripts/build.ts`)
+  after `unify-application-lifecycle-and-binary` removed the intermediate
+  `packages/devenv/scripts/build.ts` builder. The local
   `install.sh` remains as reference only and is not wired to a script until the release
   pipeline changes. `install-remote.sh` was **removed** during the fix round: it fetched
   an unsigned release archive from the third-party `friendsfriend/devenv` repository
@@ -115,10 +117,10 @@ From `agentic-coding/`:
 
 | Command | Surface |
 | --- | --- |
-| `bun run dev:devenv` | devenv TUI (spawns the Go server via `go run`) |
+| `bun run dev:devenv` (removed) | devenv TUI (spawned the Go server via `go run`); superseded by the unified `agentic-coding` route |
 | `bun run dev:ui` / `bun run dev:ui-dash` | existing agentic-coding TUI |
 | `bun run build` | agentic-coding executable + gRPC sidecar |
-| `bun run build:devenv:single` | host-target devenv binary (`--single` semantics) |
+| `bun run build:devenv:single` (removed) | host-target devenv binary; superseded by the single `bun run build` artifact |
 | `bun run verify` | combined Bun lint/type-check/tests plus Go test/vet |
 
 ## License notice and redistribution gate
@@ -153,10 +155,10 @@ is modified, so no data migration or downgrade is involved.
 | Go tests | `cd server && go test ./...` | all packages `ok` |
 | Go vet | `cd server && go vet ./...` | exit 0 |
 | agentic-coding build | `bun run build` | executable + gRPC sidecar built |
-| devenv host build smoke | `bun run build:devenv:single` | `dist/devenv-darwin-arm64/bin/devenv` produced |
+| Host-target build smoke | `bun run build` | `dist/agentic-coding` produced, with the host Go backend embedded |
 
 Fix round (generation 2): the verifier findings were addressed and re-validated. Focused
 checks after the fixes: Kubernetes cluster summary contract tests, action-run-store
 debounce polling, `custom-fetch` URL-redaction tests, the Go secret-file and
 process-group tests, `go test ./...`, `go vet ./...`, `bun run verify` (exit 0),
-`bun run build` and `bun run build:devenv:single`.
+`bun run build` (single executable, host-target).

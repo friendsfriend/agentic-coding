@@ -3,6 +3,10 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"strconv"
+
+	"github.com/friendsfriend/devenv/pkg/version"
 )
 
 type routeSpec struct {
@@ -137,5 +141,15 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "homeDir": s.services.HomeDir()})
+	// identity proves ownership: the spawner compares instance/version/configDir
+	// against the child it started, so a listener on the configured port that
+	// belongs to anyone else is never adopted or terminated.
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":    "ok",
+		"homeDir":   s.services.HomeDir(),
+		"configDir": s.services.ConfigDir(),
+		"instance":  s.instance,
+		"version":   version.Version,
+		"pid":       strconv.Itoa(os.Getpid()),
+	})
 }

@@ -24,8 +24,9 @@ export interface AppShellProps {
 	dashboard?: DashboardTab;
 	/** When the environment backend is configured, the shell exposes the
 	 * Environments feature; absent, the shell keeps the workflow/observability/
-	 * wiki surface only. */
+	 * wiki surface only. `attached` marks a backend this process does not own. */
 	environments?: { serverUrl: string };
+	attached?: boolean;
 }
 
 /** The one renderer entry for the unified feature shell. */
@@ -41,6 +42,7 @@ export function AppShell(props: AppShellProps) {
 			tracesOnly={props.tracesOnly}
 			dashboard={props.dashboard}
 			environments={props.environments}
+			attached={props.attached}
 			renderEnvironments={
 				props.environments
 					? (

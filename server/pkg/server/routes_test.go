@@ -47,3 +47,20 @@ func TestRoutesHaveUniquePaths(t *testing.T) {
 		t.Fatalf("unexpected body: %s", res.Body.String())
 	}
 }
+
+func TestHealthReportsLaunchIdentity(t *testing.T) {
+	s := NewServerWithInstance(0, "instance-abc")
+	s.services = &stubServicesContainer{}
+	res := httptest.NewRecorder()
+	s.handleHealth(res, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+	body := res.Body.String()
+	for _, want := range []string{"\"status\":\"ok\"", "\"instance\":\"instance-abc\"", "\"configDir\":", "\"pid\":"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("health body missing %s: %s", want, body)
+		}
+	}
+	// A server started without an explicit identity still reports a non-empty one.
+	if fresh := NewServer(0); fresh.instance == "" {
+		t.Fatal("expected a generated instance id")
+	}
+}

@@ -83,6 +83,7 @@ func contains(s, substr string) bool {
 type Container interface {
 	Logger() logging.Logger
 	HomeDir() string
+	ConfigDir() string
 	ProviderStore() provider.Store
 	DockerClient() docker.Client
 	GitRepository() git.Repository
@@ -98,6 +99,7 @@ type Container interface {
 type container struct {
 	logger            logging.Logger
 	homeDir           string
+	configDir         string
 	providerStore     provider.Store
 	dockerClient      docker.Client
 	gitRepository     git.Repository
@@ -112,6 +114,7 @@ type container struct {
 
 func (c *container) Logger() logging.Logger                { return c.logger }
 func (c *container) HomeDir() string                       { return c.homeDir }
+func (c *container) ConfigDir() string                     { return c.configDir }
 func (c *container) ProviderStore() provider.Store         { return c.providerStore }
 func (c *container) DockerClient() docker.Client           { return c.dockerClient }
 func (c *container) GitRepository() git.Repository         { return c.gitRepository }
@@ -190,6 +193,7 @@ func NewContainer() (Container, error) {
 	return &container{
 		logger:            logger,
 		homeDir:           homeDir,
+		configDir:         configDir,
 		providerStore:     providerStore,
 		dockerClient:      dockerClient,
 		gitRepository:     gitRepo,

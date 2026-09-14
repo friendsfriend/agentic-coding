@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -27,7 +29,11 @@ import (
 )
 
 type Server struct {
-	port                int
+	port int
+	// instance is the random identity this launch was spawned with. Health
+	// reports it so the owning process can prove the listener it sees is the
+	// child it started, instead of inferring ownership from a port.
+	instance            string
 	services            services.Container
 	apps                []app.App
 	infraServices       []app.InfraService
@@ -135,9 +141,28 @@ func appResourceKind(a app.App) string {
 	return "app"
 }
 
+// newInstanceID returns a random per-launch identity for the server process.
+func newInstanceID() string {
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return "unidentified"
+	}
+	return hex.EncodeToString(buf)
+}
+
 func NewServer(port int) *Server {
+	return NewServerWithInstance(port, "")
+}
+
+// NewServerWithInstance builds a server that reports the given identity in
+// health responses; an empty instance gets a fresh random one.
+func NewServerWithInstance(port int, instance string) *Server {
+	if instance == "" {
+		instance = newInstanceID()
+	}
 	s := &Server{
 		port:              port,
+		instance:          instance,
 		listeners:         make(map[chan Event]bool),
 		opStatus:          make(map[string]*OperationStatus),
 		statusEventSig:    make(map[string]string),

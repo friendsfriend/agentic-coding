@@ -217,3 +217,32 @@ test("catalog watcher diff stops removed roots and keeps unchanged ones", () => 
 
 	for (const stop of watched.values()) stop();
 });
+
+test("a read during owned-backend startup waits for readiness instead of spawning", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "catalog-starting-"));
+	const { marker } = writeFakeCatalogBinary(dir, catalog);
+	// A server that is not ready yet, then answers: this is the window between
+	// the shell's first paint and its backend becoming ready.
+	let calls = 0;
+	const baseUrl = "http://127.0.0.1:4988";
+	const server = Bun.serve({
+		port: 4988,
+		fetch: () => {
+			calls += 1;
+			if (calls < 3) return new Response("starting", { status: 503 });
+			return new Response(JSON.stringify(catalog), {
+				headers: { "content-type": "application/json" },
+			});
+		},
+	});
+	process.env.AGENTIC_DEVENV_STARTING = "1";
+	try {
+		const result = await loadProjectCatalog({ baseUrl });
+		expect(result).toEqual(catalog);
+		// The owned backend was waited for; no second backend was spawned.
+		expect(fs.existsSync(marker)).toBe(false);
+	} finally {
+		delete process.env.AGENTIC_DEVENV_STARTING;
+		server.stop(true);
+	}
+});

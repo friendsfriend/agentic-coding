@@ -10,6 +10,17 @@ feature, subview, route, action, command or platform as migrated must update the
 "Intended owner" and "Migration status" columns here and attach acceptance evidence.
 Deleting a user-facing entrypoint is never evidence of preservation.
 
+## Frontend-first release milestone
+
+Change `unify-application-lifecycle-and-binary` is the frontend-first release
+milestone: the unified frontend now ships as **one artifact with one lifecycle
+owner**. Command routes (section 5) and the executable's packaging moved to
+`agentic-coding`; Go remains the owner of every HTTP route and action, and the
+backend is spawned and stopped as an owned child proved by instance identity
+(never by a listening port). Deferred to the backend-boundary change: porting
+the Go runtime and full-feature remote attachment. Details and the verification
+matrix: `docs/application-lifecycle.md`.
+
 Owners during change 1 are unchanged: Go still owns every HTTP route and action, the
 imported `@devenv/cli|core|types|ui` packages own the devenv TUI, and the
 agentic-coding workflow engine/CLI/TUI remains exactly as it was.
@@ -291,12 +302,21 @@ and readiness semantics live in `server/pkg/actiondef`, `server/pkg/actionregist
 
 ## 5. CLI modes
 
+All modes now belong to the single `agentic-coding` executable
+(`unify-application-lifecycle-and-binary`); `devenv` is a thin alias that maps
+onto them (`src/devenv-alias.ts`, `bin/devenv`,
+`packages/devenv/cli/src/spawn.ts`). Lifecycle contract and ownership rules:
+`docs/application-lifecycle.md`.
+
 | CLI | Mode | Behavior | Old owner | Intended owner | Evidence | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| devenv | `spawn` (default) | Start managed Go server on `--port` (default 4050) then OpenTUI frontend | devenv `cli` | unchanged (change 1) | source launch `bun run dev:devenv`, imported tests | imported |
-| devenv | `attach <url>` | Attach TUI to a running server without owning it | devenv `cli` | unchanged | `spawn.ts` | imported |
-| devenv | `server` | Start only the Go backend (embedded binary or `go run`) | devenv `cli` | unchanged | `server-lifecycle.ts` | imported |
-| agentic-coding | `workflow` / `dash` / `home` / `manager` | See section 1.1 | agentic-coding | unchanged | `test/workflow-cli.test.ts`, `test/workflow-dashboard.test.ts` | present, unmigrated |
+| agentic-coding | (no command) / `home` / `manager` | Unified shell with an owned, identity-verified Go backend | devenv `cli` + agentic-coding | `src/cli.ts` + `src/tui/index.tsx` | `test/lifecycle.test.ts`, `test/backend-lifecycle.test.ts` | migrated |
+| agentic-coding | `dash` | Per-workflow dashboard pane in the shared shell; owns no backend | agentic-coding | unchanged route, shared shell | `test/workflow-dashboard.test.ts`, `test/dash/*` | migrated |
+| agentic-coding | `attach URL` | Shell attached to a backend this process does not own; states environment-only scope and offers no remote workflow features | devenv `cli` | `src/cli.ts` + `src/backend/ownership.ts` | `test/backend-lifecycle.test.ts` | migrated |
+| agentic-coding | `server [--port N]` | Headless environment backend; one scoped Effect program, same finalizers | devenv `cli` | `src/server-command.ts` + `src/backend/lifecycle.ts` | packaged smoke run from a temporary directory | migrated |
+| devenv | `spawn` (default) / `attach` / `server` | Alias of the modes above (`spawn` carries `--port` to `--devenv-port`) | devenv `cli` | thin alias only | `src/devenv-alias.ts`, `bin/devenv` | migrated |
+| agentic-coding | `workflow` | Transactional workflow engine (verbs in 1.2) | agentic-coding | unchanged | `test/workflow-cli.test.ts` | present |
+| agentic-coding | `__dashboard-observe` / `__grpc-sidecar` | Internal modes of the same executable (no separately distributed sidecar binary) | agentic-coding + devenv `cli` | internal only | `test/lifecycle.test.ts`, `dist/agentic-coding` | migrated |
 
 ## 6. Configuration and data locations
 
@@ -316,11 +336,11 @@ change. Operator project reconciliation is a prerequisite for change 4, document
 
 | Platform target | Old owner | Intended owner | Evidence | Status |
 | --- | --- | --- | --- | --- |
-| `linux-arm64`, `linux-x64`, `linux-x64` baseline | devenv build script + Go | unchanged (change 1) | `packages/devenv/scripts/build.ts` targets; not built here | build target only |
-| `linux-arm64-musl`, `linux-x64-musl` (+ baseline) | devenv build script + Go | unchanged | `packages/devenv/scripts/build.ts` targets; not built here | build target only |
-| `darwin-arm64` | devenv build script + Go | unchanged | `bun run build:devenv:single` (this host) | built + smoke-checked |
-| `darwin-x64` (+ baseline) | devenv build script + Go | unchanged | `packages/devenv/scripts/build.ts` targets; not built here | build target only |
-| `win32-x64` (+ baseline) | devenv build script + Go | unchanged | `*_windows.go` paths; not built here | build target only, containment unsupported |
+| `linux-arm64`, `linux-x64`, `linux-x64` baseline | imported platform targets | unchanged (change 1) | not built here; packaging is consolidated into `scripts/build.ts` (host target only) | build target only |
+| `linux-arm64-musl`, `linux-x64-musl` (+ baseline) | imported platform targets | unchanged | not built here; packaging is consolidated into `scripts/build.ts` (host target only) | build target only |
+| `darwin-arm64` | unified build script + Go | `agentic-coding` host-target build (`scripts/build.ts`) | `bun run build` (host target) + packaged lifecycle smoke | built + smoke-checked |
+| `darwin-x64` (+ baseline) | imported platform targets | unchanged | not built here; packaging is consolidated into `scripts/build.ts` (host target only) | build target only |
+| `win32-x64` (+ baseline) | imported platform targets | unchanged | `*_windows.go` paths; not built here | build target only, containment unsupported |
 
 Only the host target is built and checked during local iteration. Platform coverage
 beyond the host is recorded as build targets, not tested support.
@@ -336,8 +356,11 @@ beyond the host is recorded as build targets, not tested support.
 | agentic-coding suite | `bun run test` (inside `verify`) | 0 fail |
 | Go tests | `cd server && go test ./...` | all packages `ok` |
 | Go vet | `cd server && go vet ./...` | exit 0 |
-| agentic-coding build | `bun run build` | executable + gRPC sidecar |
-| devenv host build | `bun run build:devenv:single` | `devenv-darwin-arm64/bin/devenv` produced |
+| agentic-coding build | `bun run build` | one host-target executable, embedded Go backend (no sidecar artifact) |
+| Packaged lifecycle smoke | run `dist/agentic-coding server --port N` from a temporary directory | identity-verified child ready outside any checkout; SIGTERM released the port and removed the private extraction directory |
+| Lifecycle/ownership suites | `bun test test/backend-lifecycle.test.ts test/lifecycle.test.ts` | 0 fail |
+| Full agentic-coding suite | `bun run test` | 114/114 files, 821 tests, 0 fail (the stale multi-exhaustion telemetry fixture left by `implement-preset-switcher` was corrected) |
+| Host-target build | `bun run build` | `dist/agentic-coding` with the host Go backend embedded |
 
 No real destructive environment action (container/kubernetes start-stop) was executed
 while establishing the baseline.

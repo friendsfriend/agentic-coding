@@ -91,7 +91,7 @@ import {
 
 export interface TUIAppProps {
 	serverUrl: string;
-	managedServer?: import("../server-lifecycle").ManagedServer;
+	managedServer?: { stop(timeoutMs?: number): Promise<void> };
 	/** Render only the environment feature content (no devenv header/footer and
 	 * no fixed terminal dimensions) so the unified shell owns the chrome and the
 	 * single renderer. The shell is responsible for exit guards and shutdown. */
@@ -113,7 +113,7 @@ type EnvironmentKeybindSections = Array<{
 }>;
 
 interface StartTUIOptions {
-	managedServer?: import("../server-lifecycle").ManagedServer;
+	managedServer?: { stop(timeoutMs?: number): Promise<void> };
 }
 
 export function TUIApp(props: TUIAppProps) {

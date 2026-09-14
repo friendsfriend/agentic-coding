@@ -73,6 +73,9 @@ describe("workflow source-layer boundaries (enforce-source-layer-boundaries)", (
 			"workflow/effect-runner.ts",
 			"workflow/application.ts",
 			"workflow/operations.ts",
+			// Named composition root for the owned environment backend: it owns the
+			// process scope that keeps the Go child's finalizers alive.
+			"backend/lifecycle.ts",
 		]);
 		expect(checkRuntimeBoundaries(SRC_ROOT, roots)).toEqual([]);
 	});

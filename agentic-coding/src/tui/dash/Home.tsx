@@ -12,7 +12,7 @@ import {
 	Show,
 } from "solid-js";
 import type { ProjectOption } from "../../workflow/project-catalog";
-import { phase } from "../lifecycle";
+import { phase, quitConfirmation, resolveQuitConfirmation } from "../lifecycle";
 import { activeErrorModal, showErrorModal } from "../shared/errorModal";
 import { setActiveKeybindCatalog } from "../shared/keybinds";
 import { ModalHelpOverlay } from "../shared/ModalHelpOverlay";
@@ -214,6 +214,15 @@ export function Home(props: {
 					: String(props.keymap.getData?.("modal.active")),
 		});
 		const name = key.name.toLowerCase();
+		// Interactive quit guard: while the shell asks whether to cancel running
+		// workflow work, only the answer keys are live.
+		if (quitConfirmation()) {
+			if (name === "y" || key.name === "Enter" || name === "return")
+				resolveQuitConfirmation(true);
+			else if (name === "n" || key.name === "Escape" || name === "escape")
+				resolveQuitConfirmation(false);
+			return;
+		}
 		// Lifecycle overlay (startup/shutdown modal) consumes keys; 'q' stays live
 		// so startup can be cancelled (requestShutdown is idempotent).
 		const lifecycleActive = phase() === "starting" || phase() === "stopping";

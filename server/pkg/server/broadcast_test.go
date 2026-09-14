@@ -90,6 +90,7 @@ func (c *stubServicesContainer) DockerClient() docker.Client           { return 
 func (c *stubServicesContainer) GitRepository() gitpkg.Repository      { return c.gitRepository }
 func (c *stubServicesContainer) Logger() logging.Logger                { return nil }
 func (c *stubServicesContainer) HomeDir() string                       { return "" }
+func (c *stubServicesContainer) ConfigDir() string                     { return "" }
 func (c *stubServicesContainer) ProviderStore() provider.Store         { return nil }
 func (c *stubServicesContainer) StatusManager() statuspkg.Manager      { return nil }
 func (c *stubServicesContainer) ResourcesManager() resources.Manager   { return nil }

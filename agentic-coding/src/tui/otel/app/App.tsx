@@ -12,6 +12,7 @@ import {
 	type JSX,
 	onCleanup,
 	onMount,
+	Show,
 } from "solid-js";
 import type { ProjectOption } from "../../../workflow/project-catalog";
 import {
@@ -43,7 +44,11 @@ import { isKeyTraceSuppressed, traceTui } from "../../dash/tracing";
 import type { WorkflowOverview } from "../../dash/types";
 import { Header } from "../../dash/ui/Header";
 import { watchDirectories } from "../../dash/watchRefresh";
-import { phase } from "../../lifecycle";
+import {
+	phase,
+	quitConfirmation,
+	resolveQuitConfirmation,
+} from "../../lifecycle";
 import { ErrorModalOverlay } from "../../shared/ErrorModalOverlay";
 import {
 	activeErrorModal,
@@ -154,6 +159,10 @@ export function App(props: {
 	tracesOnly?: boolean;
 	/** When set, the unified shell exposes the Environments feature. */
 	environments?: { serverUrl: string };
+	/** True when `environments.serverUrl` is a server this process does not own:
+	 * the shell states that explicitly and offers no remote workflow features,
+	 * so local workflow data can never be read as the attached server's. */
+	attached?: boolean;
 	/** Composition hook supplied by the shell root (src/tui/app) so this feature
 	 * layer never imports the tui-app shell (source-layer boundary). The shell
 	 * root passes a callback the embedded environment uses to publish its live
@@ -653,6 +662,13 @@ export function App(props: {
 		}
 		// Lifecycle overlay (startup/shutdown modal) consumes keys; 'q' still works
 		// via the home keymap layer, which routes it to requestShutdown.
+		// Interactive quit guard: while the shell asks whether to cancel running
+		// workflow work, only the answer keys are live.
+		if (quitConfirmation()) {
+			if (key === "y" || key === "Enter") resolveQuitConfirmation(true);
+			else if (key === "n" || key === "Escape") resolveQuitConfirmation(false);
+			return;
+		}
 		if (phase() === "starting" || phase() === "stopping") return;
 
 		// Modal `?` help: an open dialog advertises its own `?` entry and opens
@@ -1306,6 +1322,11 @@ export function App(props: {
 									AGENTIC CODING
 								</text>
 								<box style={{ flexGrow: 1 }} />
+								<Show when={props.attached}>
+									<text fg={uiColors.textMuted} attributes={TextAttributes.DIM}>
+										{`attached ${props.environments?.serverUrl ?? ""} · environment features only · remote workflow features unavailable`}
+									</text>
+								</Show>
 								<Badge text={activeTab()} highlight="accent" />
 							</box>
 						);

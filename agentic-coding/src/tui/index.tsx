@@ -1,21 +1,35 @@
 /** @jsxImportSource @opentui/solid */
-// `agentic-coding` TUI entry — one process, one renderer. Modes:
-//   --home / manager   long-lived launcher: receiver on 4318 + workflow list + observability
-//   --repo P --workflow-id W  per-workflow dashboard pane: no receiver (manager owns it), best-effort OTLP traces
-//   --profile test     interactive dummy data
-//   --json             dump dashboard JSON and exit (headless/CI)
+// `agentic-coding` TUI entry — one process, one renderer, one lifecycle owner.
+// Modes:
+//   (default) / --home / manager  unified shell: owned environment backend +
+//                                 workflow list + observability
+//   --repo P --workflow-id W      per-workflow dashboard pane: no receiver and
+//                                 no owned backend, best-effort OTLP traces
+//   --attach-url URL              attached shell: environment features of a
+//                                 server this process does not own
+//   --profile test                interactive dummy data
+//   --json                        dump dashboard JSON and exit (headless/CI)
+//
+// Every acquired part of the mixed-runtime stack (Go backend, workflow
+// application, telemetry receivers/collectors, renderer) is registered as an
+// owned handle in ./lifecycle and released in reverse acquisition order, so a
+// partial startup or a second quit can only stop what this process acquired.
 
-import { spawn } from "node:child_process";
-import { dirname, join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { createCliRenderer } from "@opentui/core";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { KeymapProvider } from "@opentui/keymap/solid";
 import { render } from "@opentui/solid";
+import { BackendStartupError, startOwnedBackend } from "../backend/lifecycle";
+import { ownsEnvironmentBackend } from "../backend/ownership";
 import {
+	activeWorkflowExecutions,
+	cancelActiveWorkflowExecutions,
 	disposeAllExecutionCoordinators,
 	disposeDashboardApplication,
 	setCredentialPromptProvider,
 } from "../workflow/execution-coordinator";
+import { BACKEND_STARTING_ENV } from "../workflow/project-catalog";
 import {
 	isResearchWorkflowTarget,
 	isWikiWorkflowTarget,
@@ -36,17 +50,22 @@ import { traceTui } from "./dash/tracing";
 import { credentialPromptBridge } from "./dash/ui/CredentialsModal";
 import { applyCapturedSystemTheme } from "./dash/ui/terminal-colors";
 import {
+	acquiredResources,
+	acquireResource,
 	beginShutdown,
 	beginStartup,
 	finishStartup,
 	isShutdownRequested,
+	registerActiveWork,
 	registerStopSequence,
+	releaseResources,
 	requestShutdown,
 	setStepActive,
 	setStepDone,
 	setStepError,
 } from "./lifecycle";
 import { LifecycleModal } from "./lifecycle/LifecycleModal";
+import { QuitConfirmModal } from "./lifecycle/QuitConfirmModal";
 import { discoverProjectRepos, TraceDb } from "./otel/model/db";
 import { LogStore } from "./otel/model/logStore";
 import { MetricStore } from "./otel/model/metricStore";
@@ -58,15 +77,24 @@ import {
 	startPrometheusScraper,
 	startStatsDListener,
 } from "./otel/receiver/index";
+import { createTraceServiceClient } from "./otel/receiver/otlp-grpc-proto";
 
-const usage = `Usage: agentic-coding dash|home|manager [options]
+const usage = `Usage: agentic-coding [command] [options]
+  (no command)             Unified shell (default): owned environment backend + workflows + observability
+  workflow                 Transactional workflow engine. Run \`agentic-coding workflow --help\`.
+  home | manager           Alias of the unified shell home route
+  dash                     Per-workflow dashboard pane (--repo PATH --workflow-id ID)
+  server                   Start only the environment backend (headless)
+  attach URL               Attach the shell to a running environment backend
+  devenv ...               Thin alias of this executable (devenv spawn/attach/server)
+
+Options:
   --repo PATH              Repository root (default: cwd)
   --workflow-id ID         Workflow id (dash mode)
-  --home / manager         Workflow list + observability (long-lived)
   --profile test           Interactive dummy data
   --json                   Dump dashboard JSON and exit
-  --http-port N            OTLP HTTP JSON port (default 4318 in home/manager mode)
-  --grpc-port N            OTLP gRPC port (sidecar)
+  --http-port N            OTLP HTTP JSON port (default 4318 in managed/home mode)
+  --grpc-port N            OTLP gRPC port
   --zipkin-port N          Zipkin HTTP port
   --datadog-port N         Datadog HTTP port
   --prom-target HOST:PORT  Prometheus scrape target(s)
@@ -74,8 +102,9 @@ const usage = `Usage: agentic-coding dash|home|manager [options]
   --statsd-port N          StatsD UDP port
   --demo-db                Use separate demo database with sample data
   --traces-only            Hide metrics/logs/topology tabs
-  --devenv-url URL         DevEnv environment server URL (default http://127.0.0.1:4050)
-  --devenv-port N          DevEnv environment server port (default 4050)
+  --devenv-url URL         Attach to an already running environment backend (no ownership)
+  --devenv-port N          Environment backend port (default 4050)
+  --attach-url URL         Attached shell mode
   --help                   Show this help`;
 
 function arg(name: string) {
@@ -108,61 +137,48 @@ const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 34));
 const sleep = (ms: number) =>
 	new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-/** Everything the stop sequence must reach; partially filled during startup. */
-export interface ServerStack {
-	servers: Array<{ stop: (closeActiveConnections?: boolean) => void }>;
-	grpcSidecar?: {
-		kill(): void;
-		once(event: string, listener: (...args: unknown[]) => void): unknown;
-	};
-	stopPrometheus?: () => void;
-	stopStatsD?: () => void;
-}
+/** Shutdown progress labels keyed by the resource step that owns the row. */
+const SHUTDOWN_STEP_LABELS: Record<string, string> = {
+	"workflow-application": "Cancelling workflow actions",
+	"go-backend": "Stopping environment backend",
+	telemetry: "Stopping telemetry receiver",
+	db: "Closing database",
+	renderer: "Restoring terminal",
+};
 
 /**
- * Stop the server stack and exit: HTTP receivers → gRPC sidecar (bounded wait
- * for exit) → Prometheus scraper → StatsD listener → db close → renderer
- * destroy → one paint tick → exit. Every component is optional, so a quit
- * during startup stops only what already started.
+ * Terminal-facing shutdown (quit key or signal): release every owned handle
+ * through the resource registry in reverse acquisition order, then destroy the
+ * renderer exactly once and exit. Only resources this process acquired get a
+ * progress row, so an attach or dashboard shell never claims to stop a stack it
+ * does not own. Runs after active workflow work was cancelled, so nothing here
+ * fabricates a workflow completion.
  */
-export async function stopServerStack(
-	stack: ServerStack,
-	db: { close(): void },
-	renderer: { destroy(): void },
+export async function stopOwnedStack(
 	exit: (code: number) => void = (code) => process.exit(code),
 ): Promise<void> {
-	beginShutdown([
-		{ id: "receiver", label: "Stopping telemetry receiver" },
-		{ id: "sidecar", label: "Stopping gRPC sidecar" },
-		{ id: "collectors", label: "Stopping metric collectors" },
-		{ id: "db", label: "Closing database" },
-	]);
-	setStepActive("receiver");
-	for (const server of stack.servers) server.stop(true);
-	setStepDone("receiver");
-	await tick();
-	setStepActive("sidecar");
-	if (stack.grpcSidecar) {
-		const exited = new Promise<void>((resolve) =>
-			stack.grpcSidecar?.once("exit", () => resolve()),
-		);
-		stack.grpcSidecar.kill();
-		await Promise.race([exited, sleep(2000)]);
+	const ordered: string[] = [];
+	for (const resource of [...acquiredResources()].reverse()) {
+		if (!ordered.includes(resource.step)) ordered.push(resource.step);
 	}
-	setStepDone("sidecar");
-	await tick();
-	setStepActive("collectors");
-	stack.stopPrometheus?.();
-	stack.stopStatsD?.();
-	setStepDone("collectors");
-	await tick();
-	setStepActive("db");
-	db.close();
-	setStepDone("db");
-	await tick();
-	renderer.destroy();
+	beginShutdown(
+		ordered.map((id) => ({
+			id,
+			label: SHUTDOWN_STEP_LABELS[id] ?? id,
+		})),
+	);
+	await releaseResources();
 	await tick();
 	exit(0);
+}
+
+export interface ShellMode {
+	home: boolean;
+	isTest: boolean;
+	/** Attached shell: the environment backend is someone else's process. */
+	attachUrl?: string;
+	repo: string;
+	workflowId: string;
 }
 
 export async function main(): Promise<void> {
@@ -172,14 +188,15 @@ export async function main(): Promise<void> {
 	}
 
 	const profile = arg("--profile");
+	const attachUrl = arg("--attach-url");
 	const home =
 		process.argv.includes("--home") || process.argv.includes("manager");
 	const isTest = profile === "test";
 	const repoArg = arg("--repo");
 	const workflowId = arg("--workflow-id");
-	if (!home && !isTest && (!repoArg || !workflowId)) {
+	if (!home && !isTest && !attachUrl && (!repoArg || !workflowId)) {
 		console.error(
-			"usage: agentic-coding home|manager\n       agentic-coding dash --repo PATH --workflow-id ID [--json]\n       agentic-coding dash --profile test [--json]",
+			"usage: agentic-coding\n       agentic-coding home|manager\n       agentic-coding dash --repo PATH --workflow-id ID [--json]\n       agentic-coding attach URL\n       agentic-coding dash --profile test [--json]",
 		);
 		process.exit(2);
 	}
@@ -191,19 +208,33 @@ export async function main(): Promise<void> {
 				? resolve(repoArg)
 				: "/demo";
 	const resolvedWorkflowId = workflowId ?? "demo-optional-realisation-date";
-	// Resolve the devenv backend before any observation subprocess can start
-	// (including `--json`). Explicit `--devenv-url`/`--devenv-port` win and the
-	// value is exported for child processes, so the shell's own catalog read and
-	// the child reads can never target different backends.
-	const devenvPort = portArg("--devenv-port");
+
+	// Resolve the environment backend before any observation subprocess can
+	// start (including `--json`). Explicit `--devenv-url`/`--attach-url` win and
+	// the value is exported for child processes, so the shell's own catalog read
+	// and the child reads can never target different backends. Only the managed
+	// (default/home) route owns a backend; an explicit URL means "attach".
+	const explicitUrl =
+		attachUrl ??
+		arg("--devenv-url") ??
+		process.env.AGENTIC_DEVENV_URL ??
+		process.env.DEVENV_URL;
+	const devenvPort = portArg("--devenv-port") ?? 4050;
+	const ownsBackend = ownsEnvironmentBackend({
+		attachUrl,
+		explicitUrl,
+		home,
+		isTest,
+		json: process.argv.includes("--json"),
+	});
 	const environments = {
-		serverUrl:
-			arg("--devenv-url") ??
-			process.env.AGENTIC_DEVENV_URL ??
-			process.env.DEVENV_URL ??
-			`http://127.0.0.1:${devenvPort ?? 4050}`,
+		serverUrl: explicitUrl ?? `http://127.0.0.1:${devenvPort}`,
 	};
 	process.env.AGENTIC_DEVENV_URL = environments.serverUrl;
+	// Tell catalog consumers (including the detached observation children) that
+	// this process is bringing the backend up, so a read in that window waits for
+	// readiness instead of spawning a second backend for one read.
+	if (ownsBackend) process.env[BACKEND_STARTING_ENV] = "1";
 	if (process.argv.includes("--json")) {
 		console.log(
 			JSON.stringify(
@@ -278,18 +309,10 @@ export async function main(): Promise<void> {
 		db = new TraceDb();
 	}
 
-	// Workflow and telemetry history are loaded after first paint by the server
-	// bootstrap below; the dashboard can render its loading state meanwhile.
-
-	/** Partial stack the stop sequence reaches; filled by startServerStack. */
-	const stack: ServerStack = { servers: [] };
+	/** The most recent phase of the bootstrap that must be unwound on failure. */
+	let activeStep = "workflow-application";
 
 	// ---- Render app first; the startup modal covers the bootstrap below ----
-	// Create the renderer first, then query it for the terminal palette through
-	// the renderer-owned palette API. Capture is bounded by a timeout; a
-	// headless/failed query leaves `system` unregistered, so the persisted name
-	// falls back to the default theme. Custom themes register before the
-	// persisted selection resolves so cross-family theme names stay valid.
 	process.env.FORCE_COLOR = "3";
 	const renderer = await createCliRenderer({
 		targetFps: 30,
@@ -298,6 +321,37 @@ export async function main(): Promise<void> {
 		exitSignals: [],
 	});
 	globalThis.__renderer = renderer;
+	// Acquisition order = release order reversed: renderer, db, backend,
+	// telemetry. The renderer is therefore destroyed last and the database
+	// closes after the backend that owns the store is gone.
+	acquireResource({
+		kind: "renderer",
+		label: "renderer",
+		step: "renderer",
+		stop: () => {
+			renderer.destroy();
+		},
+	});
+	acquireResource({
+		kind: "telemetry",
+		label: "trace database",
+		step: "db",
+		stop: () => {
+			db.close();
+		},
+	});
+	// Owned workflow application: cancelled and disposed before the backend it
+	// talks to goes away, so no drain is left publishing into a dead socket.
+	acquireResource({
+		kind: "workflow-application",
+		label: "workflow application",
+		step: "workflow-application",
+		stop: () => {
+			cancelActiveWorkflowExecutions();
+			disposeAllExecutionCoordinators();
+			disposeDashboardApplication();
+		},
+	});
 	loadCustomThemes();
 	await applyCapturedSystemTheme(renderer);
 	applyDashTheme(loadDashThemeName());
@@ -335,25 +389,26 @@ export async function main(): Promise<void> {
 		action: "renderer-created",
 	});
 
-	const cleanup = () => {
-		stack.grpcSidecar?.kill();
-		stack.stopPrometheus?.();
-		stack.stopStatsD?.();
-		db.close();
-		renderer.destroy();
-	};
-	if (home) {
-		registerStopSequence(() => stopServerStack(stack, db, renderer));
-		globalThis.__requestShutdown = requestShutdown;
-		process.on("SIGINT", requestShutdown);
-		process.on("SIGTERM", requestShutdown);
-		process.on("SIGHUP", requestShutdown);
-	} else {
-		// Dash/test mode: no receiver stack, keep the direct cleanup path.
-		process.on("SIGINT", cleanup);
-		process.on("SIGTERM", cleanup);
-		process.on("SIGHUP", cleanup);
-	}
+	// Owning modes run the one shutdown flow for keys and every signal. Dash
+	// (no owned stack) only releases its renderer/client resources.
+	registerStopSequence(() => stopOwnedStack());
+	globalThis.__requestShutdown = () => requestShutdown();
+	registerActiveWork({
+		describe: () => {
+			const active = activeWorkflowExecutions();
+			if (active.length === 0) return undefined;
+			return active.length === 1
+				? `A workflow action is still running in ${active[0]}.`
+				: `${active.length} workflow actions are still running.`;
+		},
+		cancel: () => cancelActiveWorkflowExecutions(),
+	});
+	/** Signals are noninteractive: cancel owned work and clean up without
+	 * waiting for a dialog that nobody may be able to answer. */
+	const signalShutdown = () => requestShutdown({ signal: true });
+	process.on("SIGINT", signalShutdown);
+	process.on("SIGTERM", signalShutdown);
+	process.on("SIGHUP", signalShutdown);
 
 	const clearSelectionCopy = setGlobalSelectionMouseUpHandler(() => {
 		const text = renderer.getSelection()?.getSelectedText();
@@ -375,12 +430,22 @@ export async function main(): Promise<void> {
 	keymap.setData("modal.active", "none");
 
 	if (home) {
-		beginStartup([
-			{ id: "history", label: "Loading workspace history" },
-			{ id: "receiver", label: "Starting telemetry receiver" },
-			{ id: "sidecar", label: "Starting gRPC sidecar" },
-			{ id: "collectors", label: "Starting metric collectors" },
-		]);
+		// Only components this route will actually own get a progress row.
+		const startupSteps = [
+			...(ownsBackend
+				? [{ id: "go-backend", label: "Starting environment backend" }]
+				: []),
+			{ id: "workflow-application", label: "Loading workspace history" },
+			...(httpPort ||
+			zipkinPort ||
+			datadogPort ||
+			grpcPort ||
+			promTargets.length > 0 ||
+			statsdPort
+				? [{ id: "telemetry", label: "Starting telemetry receiver" }]
+				: []),
+		];
+		beginStartup(startupSteps);
 	}
 
 	await render(
@@ -395,15 +460,21 @@ export async function main(): Promise<void> {
 					topologyStore={topologyStore}
 					tracesOnly={tracesOnly}
 					environments={environments}
-					dashboard={{
-						mode: home ? "home" : "dash",
-						repo: home ? undefined : repo,
-						change: home ? undefined : resolvedWorkflowId,
-						profile: isTest ? "test" : undefined,
-						keymap,
-					}}
+					attached={attachUrl !== undefined}
+					dashboard={
+						attachUrl
+							? undefined
+							: {
+									mode: home ? "home" : "dash",
+									repo: home ? undefined : repo,
+									change: home ? undefined : resolvedWorkflowId,
+									profile: isTest ? "test" : undefined,
+									keymap,
+								}
+					}
 				/>
 				<LifecycleModal />
+				<QuitConfirmModal />
 			</KeymapProvider>
 		),
 		renderer,
@@ -415,26 +486,42 @@ export async function main(): Promise<void> {
 	clearSelectionCopy();
 	disposeCredentialPrompt();
 	disposeKeymap();
-	// Root teardown: release every repository coordinator and the shared
-	// application runtime exactly once (task 1.2/1.3). Feature hide/show must
-	// never dispose them.
-	disposeAllExecutionCoordinators();
-	disposeDashboardApplication();
 
 	// ---- Server-stack start sequence ----
 	async function startServerStack(homeMode: boolean): Promise<void> {
 		await tick();
-		let activeStep = "history";
 		const mark = (id: string) => {
 			activeStep = id;
 			setStepActive(id);
 		};
 		try {
-			mark("history");
+			// 1. Owned environment backend (default/home/manager only).
+			if (ownsBackend) {
+				mark("go-backend");
+				const backend = await startOwnedBackend({
+					port: String(devenvPort),
+				});
+				acquireResource({
+					kind: "go-backend",
+					label: `environment backend :${backend.port}`,
+					step: "go-backend",
+					stop: () => backend.stop(),
+				});
+				traceTui("tui.process.startup", {
+					surface: "process",
+					action: "backend-ready",
+					instance: backend.instance,
+				});
+				delete process.env[BACKEND_STARTING_ENV];
+				setStepDone("go-backend");
+				await tick();
+				if (isShutdownRequested()) return;
+			}
+
+			// 2. Workflow history / catalog. Catalog discovery runs after first
+			// paint: an unreachable backend must not block the renderer.
+			mark("workflow-application");
 			if (!useDemoDb) {
-				// Catalog discovery runs after first paint: an unreachable backend
-				// must not block the renderer (the bounded fallback can take up to
-				// its timeout). Demo/test mode is backend-independent.
 				let catalogRoots: string[] = [];
 				if (!isTest) {
 					try {
@@ -456,11 +543,13 @@ export async function main(): Promise<void> {
 				loadedSpans = db.loadSpans();
 				traceStore.loadFile(loadedSpans);
 			}
-			setStepDone("history");
+			setStepDone("workflow-application");
 			await tick();
 			if (isShutdownRequested()) return;
 
-			mark("receiver");
+			// 3. Telemetry receivers (loopback by default), optional gRPC helper,
+			// then collectors — each acquired as an owned handle.
+			mark("telemetry");
 			if (httpPort || zipkinPort || datadogPort) {
 				const hostname = "127.0.0.1";
 				const ports: number[] = [];
@@ -474,63 +563,55 @@ export async function main(): Promise<void> {
 					ports.push(datadogPort);
 
 				for (const port of ports) {
-					stack.servers.push(
-						Bun.serve({
-							hostname,
-							port,
-							fetch: (request) =>
-								routeReceiverRequest(request, signalRouter) ??
-								new Response("not found", { status: 404 }),
-						}),
-					);
+					const server = Bun.serve({
+						hostname,
+						port,
+						fetch: (request) =>
+							routeReceiverRequest(request, signalRouter) ??
+							new Response("not found", { status: 404 }),
+					});
+					acquireResource({
+						kind: "telemetry",
+						label: `otlp receiver :${port}`,
+						step: "telemetry",
+						stop: () => {
+							server.stop(true);
+						},
+					});
 				}
 			}
-			setStepDone("receiver");
 			await tick();
 			if (isShutdownRequested()) return;
 
-			mark("sidecar");
 			if (grpcPort && httpPort) {
-				// Compiled binaries embed no source files; the sidecar is a second executable
-				// built next to this one. Source runs spawn the script via bun.
-				const compiled =
-					import.meta.url.includes("/$bunfs/") ||
-					import.meta.url.includes("B:/~BUN/");
-				const sidecarScript = compiled
-					? join(dirname(process.execPath), "agentic-coding-grpc-sidecar")
-					: new URL("./otel/receiver/otlp-grpc-sidecar.ts", import.meta.url)
-							.pathname;
-				const sidecar = spawn(
-					compiled ? sidecarScript : "bun",
-					[
-						sidecarScript,
-						"--port",
-						String(grpcPort),
-						"--forward",
-						`http://127.0.0.1:${httpPort}`,
-					],
-					{
-						stdio: ["ignore", "inherit", "inherit"],
-					},
-				);
-				sidecar.on("error", (error) =>
-					console.warn(`gRPC sidecar unavailable: ${error.message}`),
-				);
-				stack.grpcSidecar = sidecar;
+				const grpcSidecar = spawnGrpcSidecar(grpcPort, httpPort);
+				acquireResource({
+					kind: "telemetry",
+					label: `otlp gRPC helper :${grpcPort}`,
+					step: "telemetry",
+					stop: (timeoutMs) => stopGrpcSidecar(grpcSidecar, timeoutMs ?? 2000),
+				});
+				await waitForGrpcReady(grpcPort, grpcSidecar);
 			} else if (grpcPort) {
-				console.warn("gRPC sidecar requires --http-port");
+				console.warn("gRPC telemetry requires --http-port");
 			}
-			setStepDone("sidecar");
 			await tick();
 			if (isShutdownRequested()) return;
 
-			mark("collectors");
 			if (promTargets.length) {
-				stack.stopPrometheus = startPrometheusScraper(
+				const stopPrometheus = startPrometheusScraper(
 					promTargets,
 					promInterval,
 					signalRouter,
 				);
+				acquireResource({
+					kind: "telemetry",
+					label: "prometheus scraper",
+					step: "telemetry",
+					stop: () => {
+						stopPrometheus();
+					},
+				});
 			}
 			if (statsdPort) {
 				const statsd = startStatsDListener(
@@ -538,31 +619,111 @@ export async function main(): Promise<void> {
 					`statsd-${statsdPort}`,
 					signalRouter,
 				);
-				stack.stopStatsD = statsd.stop;
+				acquireResource({
+					kind: "telemetry",
+					label: `statsd listener :${statsdPort}`,
+					step: "telemetry",
+					stop: () => {
+						statsd.stop();
+					},
+				});
 			}
-			setStepDone("collectors");
+			setStepDone("telemetry");
 			await tick();
 			if (isShutdownRequested()) return;
 
 			// Build topology from the history loaded after first paint.
 			topologyStore.load(loadedSpans);
 			if (homeMode) finishStartup();
+			if (attachUrl) {
+				notify(
+					`Attached to ${attachUrl}: environment features only, remote workflow features are unavailable in this milestone`,
+					"info",
+				);
+			}
 		} catch (error) {
-			// Stop whatever already started so a failed bootstrap leaks no port or sidecar.
-			for (const server of stack.servers) server.stop(true);
-			stack.grpcSidecar?.kill();
-			stack.stopPrometheus?.();
-			stack.stopStatsD?.();
+			// Partial-startup rollback: release only what was acquired, then
+			// report. The message names the failure so a port conflict or an
+			// identity mismatch is actionable instead of a silent exit.
+			delete process.env[BACKEND_STARTING_ENV];
+			await releaseResources(1000);
+			const text =
+				error instanceof BackendStartupError ? error.message : String(error);
 			if (homeMode) {
-				setStepError(activeStep, String(error));
-				// Hold so the user sees the failure behind the modal, then exit.
-				await sleep(1000);
+				setStepError(activeStep, text);
+				await sleep(1500);
 			} else {
-				console.error(`Cannot start server stack: ${String(error)}`);
+				console.error(`Cannot start server stack: ${text}`);
 			}
 			process.exit(1);
 		}
 	}
+}
+
+/**
+ * The optional OTLP gRPC helper runs as an internal mode of this same
+ * executable (`__grpc-sidecar`), never as a separately distributed binary.
+ * Compiled binaries re-exec themselves; a source run re-execs the entry file.
+ */
+export function grpcSidecarArgv(grpcPort: number, httpPort: number): string[] {
+	const entry = Bun.main.startsWith("$bunfs") ? undefined : Bun.main;
+	return [
+		process.execPath,
+		...(entry ? [entry] : []),
+		"__grpc-sidecar",
+		"--port",
+		String(grpcPort),
+		"--forward",
+		`http://127.0.0.1:${httpPort}`,
+	];
+}
+
+function spawnGrpcSidecar(grpcPort: number, httpPort: number) {
+	const [command, ...args] = grpcSidecarArgv(grpcPort, httpPort);
+	return Bun.spawn([command, ...args], {
+		stdio: ["ignore", "inherit", "inherit"],
+	});
+}
+
+async function stopGrpcSidecar(
+	sidecar: ReturnType<typeof Bun.spawn>,
+	timeoutMs: number,
+): Promise<void> {
+	if (sidecar.exitCode !== null) return;
+	sidecar.kill();
+	await Promise.race([sidecar.exited, sleep(timeoutMs)]);
+}
+
+/**
+ * Readiness gate for the gRPC helper: aim a real TraceService export at the
+ * loopback address and require an answer, so a port that merely accepts a
+ * connection is not mistaken for a working service.
+ */
+async function waitForGrpcReady(
+	grpcPort: number,
+	sidecar: ReturnType<typeof Bun.spawn>,
+): Promise<void> {
+	for (let attempt = 0; attempt < 20; attempt++) {
+		if (sidecar.exitCode !== null) {
+			console.warn(
+				`gRPC helper exited before readiness (code ${sidecar.exitCode})`,
+			);
+			return;
+		}
+		const client = await createTraceServiceClient(`127.0.0.1:${grpcPort}`);
+		const answered = await new Promise<boolean>((resolve) => {
+			client.Export(
+				{ resourceSpans: [] },
+				{ deadline: Date.now() + 1000 },
+				() => resolve(true),
+			);
+			setTimeout(() => resolve(false), 1200);
+		});
+		client.close();
+		if (answered) return;
+		await sleep(100);
+	}
+	console.warn(`gRPC helper did not answer on 127.0.0.1:${grpcPort}`);
 }
 
 if (import.meta.main) {

@@ -260,17 +260,19 @@ test("multiple exhausted effects export one roll-up for the workflow", () => {
 				.query("SELECT revision FROM workflow_instances WHERE id=?")
 				.get("telemetry-multi-exhausted") as { revision: number }
 		).revision;
+		// The second exhausted effect must not be an `agent.stop` for this run:
+		// a stop is a durable barrier against its launch (preset switch), so a
+		// launch/stop pair blocks itself instead of exhausting in one claim. Both
+		// rows are independent so the exhaustion path handles two effects at once.
 		db.query(
 			"INSERT INTO workflow_outbox VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
 		).run(
 			randomUUID(),
 			"telemetry-multi-exhausted",
 			revision,
-			"agent.stop",
-			"stop-1",
-			JSON.stringify({
-				runId: (launch.payload as { runId?: string }).runId,
-			}),
+			"artifact.write",
+			"artifact-1",
+			JSON.stringify({ runId: (launch.payload as { runId?: string }).runId }),
 			"running",
 			4,
 			4,

@@ -212,6 +212,23 @@ class RepositoryExecutionCoordinator {
 		return (workflowId && this.workflowErrors.get(workflowId)) || this.error;
 	}
 
+	/** True while a drain/action pass owned by this repository is running. */
+	isActive(): boolean {
+		return this.running && !this.disposed;
+	}
+
+	/**
+	 * Domain cancellation: abort the in-flight pass and drop anything queued
+	 * behind it. Used by the owning shell's quit path, so quitting never
+	 * fabricates a completion or leaves a half-applied workflow transition.
+	 */
+	cancelActive(): void {
+		this.controller?.abort();
+		this.queued = false;
+		this.queuedWorkflowIds = [];
+		this.pendingSettleIds = [];
+	}
+
 	dispose(): void {
 		this.disposed = true;
 		this.controller?.abort();
@@ -238,6 +255,18 @@ export function executionCoordinator(
 export function disposeExecutionCoordinator(repo: string): void {
 	coordinators.get(repo)?.dispose();
 	coordinators.delete(repo);
+}
+
+/** Repositories with an owned drain/action pass still running. */
+export function activeWorkflowExecutions(): string[] {
+	return [...coordinators.entries()]
+		.filter(([, coordinator]) => coordinator.isActive())
+		.map(([repo]) => repo);
+}
+
+/** Bounded cancellation of every active drain/action pass (quit + signals). */
+export function cancelActiveWorkflowExecutions(): void {
+	for (const coordinator of coordinators.values()) coordinator.cancelActive();
 }
 
 /**
