@@ -120,6 +120,7 @@ import {
 	analyzeLogsWithAI,
 	analyzeLogsWithAIStream,
 } from "./logs-client";
+import { getProjectCatalog } from "./projects-client";
 import {
 	createProvider,
 	deleteProvider,
@@ -195,6 +196,11 @@ export class DevEnvClient {
 
 	getApps(): Promise<App[]> {
 		return getApps(this.deps);
+	}
+	getProjectCatalog(
+		signal?: AbortSignal,
+	): Promise<import("@devenv/types").ProjectCatalog> {
+		return getProjectCatalog(this.deps, signal);
 	}
 	createExampleConfig(): Promise<void> {
 		return createExampleConfig(this.deps);
@@ -831,4 +837,5 @@ export * from "./clipboard";
 export * from "./custom-fetch";
 export * from "./diff-utils";
 export * from "./logger";
+export * from "./projects-client";
 export type { FetchFunction };

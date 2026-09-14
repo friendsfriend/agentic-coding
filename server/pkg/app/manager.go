@@ -133,9 +133,17 @@ type Manager interface {
 	GetInfraServiceByIdent(ident string) (InfraService, bool)
 	// GetDisplayName returns the display name for an app or service given its ident.
 	GetDisplayName(ident string) string
+	// GetProjectCatalog projects the configured apps/libraries into the
+	// canonical discovery catalog, separating configured identity, canonical
+	// repository root and active checkout.
+	GetProjectCatalog() ([]Project, error)
 	// LoadConfig loads application configuration from disk and merges in
 	// runtime state from the SQLite database.
 	LoadConfig() error
+	// LoadCatalogConfig loads configuration for the read-only project catalog
+	// projection without refreshing branch state or backfilling runtime state,
+	// so a bounded catalog invocation never mutates the environment.
+	LoadCatalogConfig() error
 	// AddApp adds a new application to the configuration.
 	AddApp(newApp App) error
 	// RemoveApp removes an application from the configuration.
@@ -216,29 +224,45 @@ func (am *appManager) GetDisplayName(ident string) string {
 }
 
 func (am *appManager) LoadConfig() error {
+	return am.loadConfig(false)
+}
+
+// LoadCatalogConfig is the read-only configuration load used by the bounded
+// catalog invocation: it skips branch refresh and runtime-state backfill so
+// observation never mutates the environment.
+func (am *appManager) LoadCatalogConfig() error {
+	return am.loadConfig(true)
+}
+
+func (am *appManager) loadConfig(readOnly bool) error {
+	// Load every source before mutating in-memory state so a partial failure
+	// (for example the infra-service directory) leaves the previous snapshot
+	// intact and a failed reload can keep serving the last good configuration.
 	apps, err := am.loadAppsFromStorage()
 	if err != nil {
 		return err
 	}
-	am.apps = apps
-
 	infraServices, err := am.loadInfraServicesFromStorage()
 	if err != nil {
 		return err
 	}
+
+	am.apps = apps
 	if len(infraServices) > 0 {
 		am.infraServices = infraServices
 	}
 
 	// Overlay runtime state from the SQLite database (activeWorktree must be
 	// known before we resolve LocalDirectoryPath).
-	am.loadRuntimeState()
+	am.loadRuntimeState(readOnly)
 
 	for i := range am.apps {
 		am.apps[i].LocalDirectoryPath = am.resolveActiveWorktreePath(am.apps[i])
 	}
 
-	am.updateBranches()
+	if !readOnly {
+		am.updateBranches()
+	}
 
 	return nil
 }
@@ -252,7 +276,7 @@ func (am *appManager) LoadConfig() error {
 // the primary worktree's current branch from git and persist it, so that
 // resolveActiveWorktreePath can correctly distinguish the primary from a
 // linked worktree.
-func (am *appManager) loadRuntimeState() {
+func (am *appManager) loadRuntimeState(readOnly bool) {
 	if am.stateStore == nil {
 		return
 	}
@@ -277,7 +301,12 @@ func (am *appManager) loadRuntimeState() {
 
 		// Backfill for legacy apps: if an active worktree is set but
 		// MainWorktreeBranch was never persisted, resolve it now from git so
-		// that resolveActiveWorktreePath works correctly going forward.
+		// that resolveActiveWorktreePath works correctly going forward. The
+		// read-only catalog load skips the write and lets the primary worktree
+		// fallback apply instead.
+		if readOnly {
+			continue
+		}
 		if am.apps[i].ActiveWorktree != "" && am.apps[i].MainWorktreeBranch == "" {
 			if branch := am.primaryWorktreeBranch(ident); branch != "" {
 				am.apps[i].MainWorktreeBranch = branch

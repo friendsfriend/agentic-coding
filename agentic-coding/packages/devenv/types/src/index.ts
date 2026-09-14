@@ -3,6 +3,7 @@
 export * from "./action-definition";
 export * from "./action-labels";
 export * from "./action-run";
+export * from "./project-catalog";
 
 // Provider types
 export type ProviderType = "github" | "gitlab";

@@ -191,6 +191,19 @@ export async function main(): Promise<void> {
 				? resolve(repoArg)
 				: "/demo";
 	const resolvedWorkflowId = workflowId ?? "demo-optional-realisation-date";
+	// Resolve the devenv backend before any observation subprocess can start
+	// (including `--json`). Explicit `--devenv-url`/`--devenv-port` win and the
+	// value is exported for child processes, so the shell's own catalog read and
+	// the child reads can never target different backends.
+	const devenvPort = portArg("--devenv-port");
+	const environments = {
+		serverUrl:
+			arg("--devenv-url") ??
+			process.env.AGENTIC_DEVENV_URL ??
+			process.env.DEVENV_URL ??
+			`http://127.0.0.1:${devenvPort ?? 4050}`,
+	};
+	process.env.AGENTIC_DEVENV_URL = environments.serverUrl;
 	if (process.argv.includes("--json")) {
 		console.log(
 			JSON.stringify(
@@ -232,13 +245,6 @@ export async function main(): Promise<void> {
 	const promInterval = intervalArg("--prom-interval", 15_000);
 	const statsdPort = portArg("--statsd-port");
 	const tracesOnly = process.argv.includes("--traces-only");
-	// Unified feature shell: always compose the imported Environments feature.
-	// Its managed lifecycle is change 5, so this change attaches to the devenv
-	// server URL (default 4050) and the feature reports its own connection state.
-	const devenvPort = portArg("--devenv-port");
-	const environments = {
-		serverUrl: arg("--devenv-url") ?? `http://127.0.0.1:${devenvPort ?? 4050}`,
-	};
 
 	const traceStore = new TraceStore();
 	const metricStore = new MetricStore();
@@ -251,7 +257,7 @@ export async function main(): Promise<void> {
 		pushLogs: (logs: LogData[]) => logStore.pushBatch(logs),
 	};
 
-	const repos = Array.from(new Set([repo, ...discoverProjectRepos()]));
+	const explicitRepos = Array.from(new Set([repo]));
 	// Demo DB is async; non-demo construction is cheap. The scan/load itself
 	// happens in startServerStack (render-first so the startup modal shows).
 	let db: TraceDb;
@@ -381,7 +387,7 @@ export async function main(): Promise<void> {
 		() => (
 			<KeymapProvider keymap={keymap}>
 				<AppShell
-					repos={repos}
+					repos={explicitRepos}
 					db={db}
 					traceStore={traceStore}
 					metricStore={metricStore}
@@ -426,7 +432,26 @@ export async function main(): Promise<void> {
 		try {
 			mark("history");
 			if (!useDemoDb) {
-				for (const r of repos) await db.scanAllWorkspacesAsync(r);
+				// Catalog discovery runs after first paint: an unreachable backend
+				// must not block the renderer (the bounded fallback can take up to
+				// its timeout). Demo/test mode is backend-independent.
+				let catalogRoots: string[] = [];
+				if (!isTest) {
+					try {
+						catalogRoots = await discoverProjectRepos(environments.serverUrl);
+					} catch (error) {
+						notify(
+							`Project catalog unavailable: ${
+								error instanceof Error ? error.message : String(error)
+							}`,
+							"error",
+						);
+					}
+				}
+				const scanRoots = Array.from(
+					new Set([...explicitRepos, ...catalogRoots]),
+				);
+				for (const r of scanRoots) await db.scanAllWorkspacesAsync(r);
 				db.cleanupOlderThan();
 				loadedSpans = db.loadSpans();
 				traceStore.loadFile(loadedSpans);

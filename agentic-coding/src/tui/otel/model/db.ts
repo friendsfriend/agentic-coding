@@ -7,7 +7,11 @@ import {
 	statSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
+import {
+	loadProjectCatalog,
+	projectCanonicalRoots,
+} from "../../../workflow/project-catalog.ts";
 import { parseJsonl, parseTelemetryJsonl } from "./parser";
 import type { LogData, MetricData, SpanData } from "./types";
 
@@ -385,47 +389,12 @@ export class TraceDb {
 	}
 }
 
-/** Read the same `[projects]` root herdr-workflow uses (~/.pi/agent/herdr-workflow.toml), so a
- * single shared otel-tui instance discovers every repo's `.herdr-workflow/` — not just the one
- * it happened to be launched from. Best effort: returns [] if unconfigured or unreadable. */
-export function discoverProjectRepos(): string[] {
-	const configPath =
-		process.env.HERDR_WORKFLOW_CONFIG ||
-		join(homedir(), ".pi", "agent", "herdr-workflow.toml");
-	if (!existsSync(configPath)) return [];
-	let root: string, maxDepth: number;
-	try {
-		const cfg = Bun.TOML.parse(readFileSync(configPath, "utf8")) as {
-			projects?: { root?: unknown; max_depth?: unknown };
-		};
-		if (!cfg?.projects?.root) return [];
-		root = resolve(String(cfg.projects.root).replace(/^~/, homedir()));
-		maxDepth = Number(cfg.projects.max_depth ?? 3);
-	} catch {
-		return [];
-	}
-	if (!existsSync(root) || !statSync(root).isDirectory()) return [];
-	const repos: string[] = [];
-	const walk = (current: string, depth: number): void => {
-		if (existsSync(join(current, ".git"))) {
-			repos.push(current);
-			return;
-		}
-		if (depth >= maxDepth) return;
-		for (const entry of readdirSync(current, { withFileTypes: true })) {
-			if (
-				!entry.isDirectory() ||
-				entry.name.startsWith(".") ||
-				["node_modules", "build", "dist", "target"].includes(entry.name)
-			)
-				continue;
-			walk(join(current, entry.name), depth + 1);
-		}
-	};
-	try {
-		walk(root, 0);
-	} catch {
-		/* best effort */
-	}
-	return repos;
+/** Canonical project roots from the configured project catalog. Throws when
+ * the catalog is unavailable so callers can show a retryable discovery error
+ * instead of watching nothing as if the catalog were empty. */
+export async function discoverProjectRepos(
+	serverUrl?: string,
+): Promise<string[]> {
+	const catalog = await loadProjectCatalog({ baseUrl: serverUrl });
+	return projectCanonicalRoots(catalog);
 }

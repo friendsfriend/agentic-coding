@@ -11,7 +11,7 @@ const [surface, ...rest] = process.argv.slice(2);
 if (surface === "__dashboard-observe") {
 	const {
 		discoverProjects,
-		listWorkflows,
+		listWorkflowsFromCatalog,
 		loadDashboard,
 		loadLocalChanges,
 		loadLocalDiff,
@@ -48,9 +48,9 @@ if (surface === "__dashboard-observe") {
 			  };
 		const value =
 			observation.kind === "workflows"
-				? listWorkflows()
+				? await listWorkflowsFromCatalog()
 				: observation.kind === "projects"
-					? discoverProjects()
+					? await discoverProjects()
 					: observation.kind === "artifacts"
 						? (await import("./tui/dash/observations.ts")).openSpecArtifacts(
 								observation.state,

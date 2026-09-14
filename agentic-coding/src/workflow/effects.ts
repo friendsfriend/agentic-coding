@@ -226,7 +226,6 @@ export interface WorkflowConfig {
 		base_branch: string;
 		pr_tool?: string;
 	};
-	projects: { root: string; max_depth: number };
 	telemetry: { capture_content: boolean };
 	ui: {
 		theme: string;
@@ -248,7 +247,6 @@ export const DEFAULT_CONFIG: WorkflowConfig = {
 		branch_prefix: "feature/",
 		base_branch: "origin/HEAD",
 	},
-	projects: { root: "~/development", max_depth: 3 },
 	telemetry: { capture_content: true },
 	ui: { theme: "catppuccin", selection_height: 10, herdr_sidebar: false },
 	wiki: { root: "~/.config/agentic-coding/wiki" },

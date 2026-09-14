@@ -11,6 +11,7 @@ import {
 	onMount,
 	Show,
 } from "solid-js";
+import type { ProjectOption } from "../../workflow/project-catalog";
 import { phase } from "../lifecycle";
 import { activeErrorModal, showErrorModal } from "../shared/errorModal";
 import { setActiveKeybindCatalog } from "../shared/keybinds";
@@ -49,13 +50,11 @@ export function Home(props: {
 	active?: () => boolean;
 	items: WorkflowOverview[];
 	loading: boolean;
-	projects: Array<{ name: string; path: string; openspec: boolean }>;
+	projects: ProjectOption[];
 	refresh: () => void;
 }) {
 	const dimensions = useTerminalDimensions();
-	const [projects, setProjects] = createSignal<
-		Array<{ name: string; path: string; openspec: boolean }>
-	>([]);
+	const [projects, setProjects] = createSignal<ProjectOption[]>([]);
 	const [items, setItems] = createSignal<WorkflowOverview[]>([]);
 	const [loading, setLoading] = createSignal(true);
 	// The shell owns the workspace list (background load/refresh, survives tab
@@ -652,7 +651,11 @@ export function Home(props: {
 										</text>
 										<text fg={uiColors.textMuted}>
 											{item.state.definition?.label ?? "Workflow"} ·{" "}
-											{workflowProgress(item)} ·{" "}
+											{workflowProgress(item)}
+											{item.projectIdent
+												? ` · project ${item.projectIdent}`
+												: ""}{" "}
+											·{" "}
 											{
 												item.agents.filter(
 													(agent) =>

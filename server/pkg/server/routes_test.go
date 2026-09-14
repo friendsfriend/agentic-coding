@@ -28,7 +28,7 @@ func TestRoutesHaveUniquePaths(t *testing.T) {
 		seen[route.Path] = route
 	}
 
-	for _, path := range []string{"/api/health", "/api/apps", "/api/gitlab/merge-requests", "/api/github/pull-requests", "/api/action-registry/status"} {
+	for _, path := range []string{"/api/health", "/api/apps", "/api/projects", "/api/gitlab/merge-requests", "/api/github/pull-requests", "/api/action-registry/status"} {
 		if _, ok := seen[path]; !ok {
 			t.Fatalf("expected route %s", path)
 		}

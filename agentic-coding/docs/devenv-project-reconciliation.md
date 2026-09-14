@@ -64,3 +64,38 @@ cp -a "$DEVENV_CONFIG_DIR" "$DEVENV_CONFIG_DIR.backup-$(date +%Y%m%d%H%M%S)"
 Restore is a directory copy back after quitting the writers. Record every manual
 remap decision (old path/identity to new `ident`) in the change-4 task list so the
 parity inventory can mark project discovery as migrated with evidence.
+
+## Discovery cutover and rollback (change 4)
+
+Cutover replaces the three recursive discovery paths (`workflow/operations.ts`
+`listProjects`, `dash/observations.ts` `listWorkflows`/`discoverProjects`, and
+`otel/model/db.ts` `discoverProjectRepos`) with the backend catalog served by
+`GET /api/projects`. The catalog projects every configured app/library with its
+stable `ident`, display name, canonical Git repository root, active checkout,
+availability and OpenSpec capability; duplicate configured idents are rejected
+with a diagnostic. Canonical roots are resolved with Git common-directory
+semantics, so a linked worktree and its primary checkout share one canonical
+root and one history/watch registration.
+
+Cutover checklist after the operator checklist above is complete:
+
+1. Start the devenv backend and confirm `GET /api/projects` lists exactly the
+   reconciled inventory (no duplicate idents, every available project resolving
+   to the intended canonical root).
+2. Confirm workflow history, telemetry roots and `agentic-coding workflow
+   projects` agree with the catalog. `workflow projects` uses the running server
+   when reachable and otherwise starts a bounded `devenv catalog` invocation
+   (no pollers, container pruning, drains or database writes: the state DB is
+   opened read-only and WAL-aware, so SQLite may attach `-shm`/`-wal` sidecars
+   but the database and its committed state are never modified).
+3. Confirm the picker no longer offers unconfigured repositories and that an
+   unavailable (uncloned) project is visible in the catalog but not startable.
+
+Rollback restores the previous discovery code only. It never moves data: the
+catalog is a read-only projection of the configured apps/libraries and the
+existing `.herdr-workflow` stores. Restore the backed-up configuration/state
+directories if a definition edit must be reverted, then restart the backend.
+Removing a configured project stops new discovery watches for its canonical root
+but never deletes workflow history or terminates an active workflow; explicit
+`--repo` commands and the repository-independent wiki/research targets keep
+working independently of the catalog.

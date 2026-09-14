@@ -66,6 +66,45 @@ test("workflow type list offers openspec-fusion-full alongside existing choices"
 	t.renderer.destroy();
 });
 
+test("unavailable configured projects are shown but cannot be selected", async () => {
+	let handler: ((event: KeyEvent) => boolean) | undefined;
+	const completed: NewWorkflowInput[] = [];
+	const t = await testRender(
+		() => (
+			<NewWorkflowModal
+				projects={[
+					{
+						name: "Uncloned",
+						path: "/managed/uncloned",
+						openspec: false,
+						ident: "uncloned",
+						available: false,
+						availability: "missing",
+						detail: "checkout is not cloned",
+					},
+				]}
+				onKeyReady={(h) => {
+					handler = h;
+				}}
+				onCancel={() => {}}
+				onComplete={async (input) => {
+					completed.push(input);
+				}}
+			/>
+		),
+		{ width: 110, height: 30 },
+	);
+	await t.flush();
+	// The unavailable project stays visible with its diagnostic.
+	expect(t.captureCharFrame()).toContain("unavailable");
+	handler?.(key("enter"));
+	await t.flush();
+	// Selecting it must not advance to the workflow-type step.
+	expect(t.captureCharFrame()).not.toContain("Openspec apply");
+	expect(completed).toHaveLength(0);
+	t.renderer.destroy();
+});
+
 test("proposal choices submit their type, task, and fixed checkout mode", async () => {
 	for (const [offset, workflowType] of [
 		[4, "openspec-propose"],
@@ -130,7 +169,16 @@ test("openspec-apply omits the task step and submits no task", async () => {
 		const t = await testRender(
 			() => (
 				<NewWorkflowModal
-					projects={[{ name: "Fixture", path: repo, openspec: true }]}
+					projects={[
+						{
+							name: "Fixture",
+							path: repo,
+							openspec: true,
+							ident: "fixture",
+							available: true,
+							availability: "available",
+						},
+					]}
 					onKeyReady={(h) => {
 						handler = h;
 					}}

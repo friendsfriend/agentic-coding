@@ -20,6 +20,13 @@ import { fileURLToPath } from "node:url";
 import { directionBetween, Herdr, type Rect } from "../../herdr-client.ts";
 import type { WorkflowView } from "../../workflow/contracts.ts";
 import {
+	fetchProjectCatalog,
+	loadProjectCatalog,
+	type ProjectOption,
+	projectCanonicalRoots,
+	projectIdentForPath,
+} from "../../workflow/project-catalog.ts";
+import {
 	canonicalStorePath,
 	isResearchWorkflowTarget,
 	isWikiWorkflowTarget,
@@ -214,28 +221,9 @@ export function listWorkflows(...roots: string[]): WorkflowOverview[] {
 			} catch {}
 		}
 	};
-	const walk = (directory: string, depth: number) => {
-		if (depth > 4 || !existsSync(directory)) return;
-		if (existsSync(join(directory, ".git"))) {
-			addRepository(directory);
-			return;
-		}
-		let entries: import("node:fs").Dirent[];
-		try {
-			entries = readdirSync(directory, { withFileTypes: true });
-		} catch {
-			return;
-		}
-		for (const entry of entries)
-			if (
-				entry.isDirectory() &&
-				!entry.name.startsWith(".") &&
-				!["node_modules", "target", "dist", "build"].includes(entry.name)
-			)
-				walk(join(directory, entry.name), depth + 1);
-	};
-	if (!roots.length) roots = [join(homedir(), "development"), process.cwd()];
-	for (const root of roots) walk(root, 0);
+	// Explicit catalog roots only: the recursive development-root/cwd fallback
+	// is removed so an unconfigured repository can never appear automatically.
+	for (const root of roots) addRepository(root);
 	// UI-only wiki reviews live in the centralized target store rather than a
 	// Git repository, so include them in the same canonical home list.
 	addRepository(wikiWorkflowTarget());
@@ -251,9 +239,24 @@ export function listWorkflowsAsync(
 	return observeAsync<WorkflowOverview[]>({ kind: "workflows" }, signal);
 }
 
+/** Load workflow history from the canonical project catalog. Repository reads
+ * are de-duplicated by canonical root, so linked worktrees share history
+ * instead of duplicating it, and each overview is linked back to its stable
+ * configured project ident (the environment <-> workflow cross-link). */
+export async function listWorkflowsFromCatalog(
+	serverUrl?: string,
+): Promise<WorkflowOverview[]> {
+	const catalog = await loadProjectCatalog({ baseUrl: serverUrl });
+	const overviews = listWorkflows(...projectCanonicalRoots(catalog));
+	return overviews.map((overview) => ({
+		...overview,
+		projectIdent: projectIdentForPath(catalog, overview.state.repository),
+	}));
+}
+
 export function discoverProjectsAsync(
 	signal?: AbortSignal,
-): Promise<Array<{ name: string; path: string; openspec: boolean }>> {
+): Promise<ProjectOption[]> {
 	return observeAsync({ kind: "projects" }, signal);
 }
 
@@ -1147,30 +1150,56 @@ export function loadPlanReviewComments(
 	}
 }
 
-export function loadDashboardAsync(
+export async function loadDashboardAsync(
 	repo: string,
 	workflowId: string,
 	signal?: AbortSignal,
 ): Promise<DashboardData> {
-	return observeAsync<DashboardData>(
+	const dashboard = await observeAsync<DashboardData>(
 		{ kind: "dashboard", repo, workflowId },
 		signal,
-	).then((dashboard) => {
-		const error = workflowExecutionError(repo, workflowId);
-		if (!error) return dashboard;
-		return {
+	);
+	// Cross-link the detail to the configured catalog: annotate the stable
+	// project ident, and surface a catalog mismatch for a repository-backed
+	// workflow whose project was removed from configuration. Access is never
+	// affected and the pinned checkout is never retargeted.
+	let annotated = dashboard;
+	try {
+		const catalog = await fetchProjectCatalog({ signal });
+		const projectIdent = projectIdentForPath(
+			catalog,
+			dashboard.state.repository,
+		);
+		const repositoryBacked =
+			!isWikiWorkflowTarget(repo) &&
+			!isResearchWorkflowTarget(repo) &&
+			dashboard.state.definition?.id !== "research";
+		annotated = {
 			...dashboard,
-			state: {
-				...dashboard.state,
-				health: {
-					...dashboard.state.health,
-					valid: false,
-					attention: [...dashboard.state.health.attention, error],
-					diagnostic: error,
-				},
-			},
+			...(projectIdent ? { projectIdent } : {}),
+			...(repositoryBacked && !projectIdent
+				? {
+						catalogMismatch: `Repository ${dashboard.state.repository} is not in the configured project catalog`,
+					}
+				: {}),
 		};
-	});
+	} catch {
+		// Catalog unavailable: never claim a mismatch from a failed read.
+	}
+	const error = workflowExecutionError(repo, workflowId);
+	if (!error) return annotated;
+	return {
+		...annotated,
+		state: {
+			...annotated.state,
+			health: {
+				...annotated.state.health,
+				valid: false,
+				attention: [...annotated.state.health.attention, error],
+				diagnostic: error,
+			},
+		},
+	};
 }
 
 export function loadDashboard(repo: string, workflowId: string): DashboardData {
@@ -1595,16 +1624,10 @@ export function discoverChanges(repo: string): string[] {
 	}
 }
 
-export function discoverProjects(): Array<{
-	name: string;
-	path: string;
-	openspec: boolean;
-}> {
-	try {
-		return discoverProjectsInProcess();
-	} catch {
-		return [];
-	}
+export function discoverProjects(): Promise<ProjectOption[]> {
+	// Transport/configuration failures propagate so the picker shows a
+	// retryable discovery error instead of an empty success.
+	return discoverProjectsInProcess();
 }
 
 export function startWorkflowWizard() {
