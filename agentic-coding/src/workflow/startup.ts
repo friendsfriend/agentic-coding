@@ -399,6 +399,7 @@ function prepareFromContext(
 				baseCommit,
 				...(request.task?.trim() ? { task: request.task.trim() } : {}),
 				...(request.ticket ? { ticket: request.ticket } : {}),
+				...(request.preset ? { selectedPreset: request.preset } : {}),
 				executionSettings: settings,
 			},
 			routing: finalRouting,

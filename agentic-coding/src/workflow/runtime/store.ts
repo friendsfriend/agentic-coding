@@ -1092,6 +1092,24 @@ export function activeRunForRole(
 		db.close();
 	}
 }
+export function effectOwnsLease(
+	repo: string,
+	effectId: string,
+	lease: string,
+): boolean {
+	const db = openLeaseStore(repo);
+	try {
+		return Boolean(
+			db
+				.query(
+					"SELECT 1 FROM workflow_outbox WHERE id=? AND status='running' AND lease=?",
+				)
+				.get(effectId, lease),
+		);
+	} finally {
+		db.close();
+	}
+}
 export function effectIsLive(
 	repo: string,
 	effectId: string,
@@ -1103,7 +1121,7 @@ export function effectIsLive(
 		return Boolean(
 			db
 				.query(
-					"SELECT 1 FROM workflow_outbox WHERE id=? AND status='running' AND lease=? AND lease_expires_at>?",
+					"SELECT 1 FROM workflow_outbox WHERE id=? AND status='running' AND lease=? AND lease_expires_at>? AND COALESCE(json_extract(payload_json,'$.cancelRequested'),0)<>1",
 				)
 				.get(effectId, lease, nowIso(now)),
 		);
@@ -1112,6 +1130,20 @@ export function effectIsLive(
 	}
 }
 
+export function acknowledgeCancelledEffect(
+	repo: string,
+	effectId: string,
+	lease: string,
+): void {
+	const db = openLeaseStore(repo);
+	try {
+		db.query(
+			"UPDATE workflow_outbox SET status='expired',lease=NULL,lease_expires_at=NULL WHERE id=? AND status='running' AND lease=? AND COALESCE(json_extract(payload_json,'$.cancelRequested'),0)=1",
+		).run(effectId, lease);
+	} finally {
+		db.close();
+	}
+}
 export function renewEffect(
 	repo: string,
 	effectId: string,
@@ -1124,7 +1156,7 @@ export function renewEffect(
 		const at = now();
 		const result = db
 			.query(
-				"UPDATE workflow_outbox SET lease_expires_at=? WHERE id=? AND status='running' AND lease=? AND lease_expires_at>?",
+				"UPDATE workflow_outbox SET lease_expires_at=? WHERE id=? AND status='running' AND lease=? AND lease_expires_at>? AND COALESCE(json_extract(payload_json,'$.cancelRequested'),0)<>1",
 			)
 			.run(
 				new Date(at.getTime() + leaseMs).toISOString(),
@@ -1177,6 +1209,10 @@ export function validateStructure(
 		);
 	const byId = new Map(runs.map((run) => [run.id, run]));
 	for (const run of runs) {
+		// A preset switch intentionally changes the profile for future runs. Old
+		// completed/expired runs retain their original profile as historical
+		// evidence; only runs that can still execute must match current routing.
+		if (!ACTIVE_RUN.has(run.status)) continue;
 		const route = snapshot.routing.routes.find(
 			(item) =>
 				item.stepId === run.stepId &&
@@ -1250,6 +1286,7 @@ export function validateEffect(
 	const payload = JSON.parse(row.payload_json) as {
 		runId?: unknown;
 		questionId?: unknown;
+		cancelRequested?: unknown;
 	};
 	const allowed = registry
 		.stepForDefinition(definition, snapshot.currentStep)
@@ -1305,9 +1342,12 @@ export function validateEffect(
 				(item) =>
 					item.id === payload.questionId && item.targetRunId === payload.runId,
 			);
+		const cancelledLaunch =
+			row.kind === "agent.launch" && payload.cancelRequested === true;
 		if (
 			!run ||
 			(!consultTarget &&
+				!cancelledLaunch &&
 				(!ACTIVE_RUN.has(run.status) ||
 					!snapshot.step.activeRunIds.includes(run.id) ||
 					run.stepId !== snapshot.currentStep))

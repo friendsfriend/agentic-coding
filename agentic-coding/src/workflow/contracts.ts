@@ -251,6 +251,8 @@ export interface WorkflowMetadata {
 	stepEnteredAt: string;
 	/** Engine-pinned centralized wiki destination for workflows with core.wiki. */
 	wikiRoot?: string;
+	/** The preset selected for this workflow, when one was explicitly chosen. */
+	selectedPreset?: string;
 	/** Missing only on legacy snapshots; sensitive delivery effects must not guess. */
 	executionSettings?: WorkflowExecutionSettings;
 	executionSettingsPreview?: {
@@ -447,6 +449,8 @@ export interface WorkflowView {
 	task?: string;
 	createdAt: string;
 	updatedAt: string;
+	/** The selected agent preset, or absent when using configuration defaults. */
+	selectedPreset?: string;
 	currentStep: {
 		id: string;
 		label: string;

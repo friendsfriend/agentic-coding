@@ -193,6 +193,23 @@ export function answerWorkflowQuestion(
 	return result.view;
 }
 
+export function switchWorkflowPreset(
+	repo: string,
+	workflowId: string,
+	revision: number,
+	preset: string,
+): void {
+	const engine = workflowEngineFactory(dashboardApplication);
+	engine.dispatch(repo, {
+		type: "developer.action",
+		workflowId,
+		revision,
+		actionId: "switch-preset",
+		input: preset,
+	});
+	requestWorkflowExecution(repo, workflowId);
+}
+
 export async function runWorkflowAction(
 	actionId: string,
 	repo: string,
@@ -441,6 +458,7 @@ export function viewToDashboardState(view: WorkflowView) {
 		baseCommit: view.baseCommit,
 		createdAt: view.createdAt,
 		phaseStartedAt: view.currentStep.enteredAt,
+		...(view.selectedPreset ? { selectedPreset: view.selectedPreset } : {}),
 		panes,
 		runs: view.runs,
 		verificationRoles: currentVerifierRuns.map((run) => run.role),

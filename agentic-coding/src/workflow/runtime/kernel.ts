@@ -636,14 +636,24 @@ export function expireRuns(
 	snapshot: WorkflowSnapshot,
 	now: () => Date,
 	preserveSetup = false,
+	preserveRunningLaunches = false,
 ): void {
 	const runIds = [...snapshot.step.activeRunIds];
 	for (const id of runIds) {
 		db.query(
 			"UPDATE workflow_runs SET status='expired',capability_hash='',completed_at=? WHERE id=? AND status IN ('pending','working')",
 		).run(nowIso(now), id);
+		// A preset switch must retain a claimed launch row until its runner sees
+		// cancellation, so its stop barrier cannot race adapter.launch.
+		if (preserveRunningLaunches)
+			db.query(
+				"UPDATE workflow_outbox SET payload_json=json_set(payload_json,'$.cancelRequested',1) WHERE workflow_id=? AND status='running' AND kind='agent.launch' AND json_extract(payload_json,'$.runId')=?",
+			).run(snapshot.workflowId, id);
 		db.query(
-			"UPDATE workflow_outbox SET status='expired',lease=NULL,lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry','running') AND kind IN ('artifact.write','agent.launch','agent.prompt') AND json_extract(payload_json,'$.runId')=?",
+			"UPDATE workflow_outbox SET status='expired',lease=NULL,lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry','running') AND kind IN ('artifact.write','agent.prompt') AND json_extract(payload_json,'$.runId')=?",
+		).run(snapshot.workflowId, id);
+		db.query(
+			"UPDATE workflow_outbox SET status='expired',lease=NULL,lease_expires_at=NULL WHERE workflow_id=? AND status IN ('pending','retry') AND kind='agent.launch' AND json_extract(payload_json,'$.runId')=?",
 		).run(snapshot.workflowId, id);
 	}
 	if (snapshot.definition.id === "research" && !preserveSetup)

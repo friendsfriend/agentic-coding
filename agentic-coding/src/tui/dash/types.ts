@@ -29,6 +29,7 @@ export interface WorkflowState {
 	baseCommit?: string;
 	createdAt?: string;
 	phaseStartedAt?: string;
+	selectedPreset?: string;
 	prCreated?: boolean;
 	prUrl?: string | null;
 	ticketNumber?: string;

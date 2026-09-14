@@ -716,6 +716,7 @@ export const WorkflowSnapshotSchema = Schema.Struct({
 		createdAt: text(4096),
 		updatedAt: text(4096),
 		stepEnteredAt: text(4096),
+		selectedPreset: Schema.optionalWith(boundedText(4096), { exact: true }),
 		wikiRoot: Schema.optionalWith(text(4096), { exact: true }),
 		executionSettings: Schema.optionalWith(executionSettingsSchema, {
 			exact: true,

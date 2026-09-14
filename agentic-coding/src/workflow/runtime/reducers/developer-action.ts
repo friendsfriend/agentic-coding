@@ -12,6 +12,12 @@ import {
 	loadConfigWithProvenance,
 	settingsFingerprint,
 } from "../../effects.ts";
+import {
+	parseAgentsConfig,
+	preflightProfile,
+	resolvePreset,
+	resolveRouting,
+} from "../../profiles.ts";
 import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
@@ -24,6 +30,7 @@ import {
 	expireRuns,
 	freshStep,
 	transition,
+	validateFusionRouting,
 } from "../kernel.ts";
 import {
 	ACTIVE_RUN,
@@ -45,6 +52,72 @@ export function developerAction(
 	requireRevision(snapshot, command.revision);
 	if (command.actionId === "answer-question")
 		return answerQuestion(snapshot, command.input, now);
+	if (command.actionId === "switch-preset") {
+		const requested =
+			typeof command.input === "string"
+				? command.input.trim()
+				: command.input &&
+						typeof command.input === "object" &&
+						"preset" in command.input &&
+						typeof (command.input as { preset?: unknown }).preset === "string"
+					? (command.input as { preset: string }).preset.trim()
+					: "";
+		if (!requested || requested.length > 4096)
+			throw new WorkflowRuntimeError(
+				"invalid-command",
+				"switch-preset requires a bounded preset name",
+				snapshot.revision,
+			);
+		const selected = requested === "Config defaults" ? undefined : requested;
+		const config = loadConfigWithProvenance({
+			repository: snapshot.metadata.repository || undefined,
+			repositoryIndependent: !snapshot.metadata.repository,
+		}).config;
+		const agents = parseAgentsConfig(config.agents, config);
+		const preset = selected ? resolvePreset(agents, selected) : undefined;
+		const rolesByStep: Record<string, string[]> = {};
+		for (const route of snapshot.routing.routes) {
+			const roles = rolesByStep[route.stepId] ?? [];
+			rolesByStep[route.stepId] = roles;
+			if (route.role && !roles.includes(route.role)) roles.push(route.role);
+		}
+		const routing = resolveRouting(definition, rolesByStep, agents, preset);
+		if (definition.id.startsWith("openspec-fusion"))
+			validateFusionRouting(definition.id, routing);
+		const activeRuns = runs(db, snapshot.workflowId).filter(
+			(run) =>
+				snapshot.step.activeRunIds.includes(run.id) &&
+				ACTIVE_RUN.has(run.status),
+		);
+		for (const run of activeRuns)
+			enqueue(
+				db,
+				snapshot,
+				"agent.stop",
+				`run:${run.id}:preset-switch:${snapshot.revision + 1}`,
+				{ runId: run.id },
+			);
+		for (const route of routing.routes)
+			preflightProfile(
+				route.profile,
+				registry.stepForDefinition(definition, route.stepId).requirements,
+			);
+		snapshot.routing = routing;
+		if (selected) snapshot.metadata.selectedPreset = selected;
+		else delete snapshot.metadata.selectedPreset;
+		// Retire the old run and its launch/prompt effects, then enter the same
+		// step so its active roles are created with the newly selected profiles.
+		expireRuns(db, snapshot, now, false, true);
+		enterStep(db, snapshot, definition, registry, now);
+		return {
+			type: "developer.action",
+			actor: { kind: "developer" },
+			data: {
+				actionId: command.actionId,
+				preset: selected ?? "Config defaults",
+			},
+		};
+	}
 	if (command.actionId.startsWith("retry-effect:")) {
 		const id = command.actionId.slice(13);
 		const row = db

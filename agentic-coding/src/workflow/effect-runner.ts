@@ -1222,6 +1222,51 @@ export function agentEffectHandlers(
 						snapshotDefinition(snapshot, options.registry),
 						run.stepId,
 					);
+					if (
+						(effect.payload as { cancelRequested?: unknown })
+							.cancelRequested === true
+					) {
+						const ownsClaim = engine.effectOwnsLease(
+							repo,
+							effect.id,
+							effect.lease ?? "",
+						);
+						const resolved = ownsClaim
+							? yield* p(() =>
+									resolveLiveAgentAsync(
+										options.herdr,
+										snapshot.workflowId,
+										snapshot.definition.id,
+										run,
+										signal,
+										step,
+									),
+								)
+							: undefined;
+						if (
+							resolved &&
+							engine.effectOwnsLease(repo, effect.id, effect.lease ?? "")
+						) {
+							const adapter = options.adapters.get(run.profile.runtime);
+							if (!adapter)
+								throw new PermanentFailure(
+									`adapter unavailable: ${run.profile.runtime}`,
+								);
+							const handle: AgentHandle = {
+								...resolved,
+								runtime: run.profile.runtime,
+							};
+							yield* adapter.stop(handle, signal);
+						}
+						yield* Effect.sync(() =>
+							engine.acknowledgeCancelledEffect(
+								repo,
+								effect.id,
+								effect.lease ?? "",
+							),
+						);
+						return { cancelled: true };
+					}
 					emitAdapter(snapshot, run, {
 						event: "agent.launch.attempt",
 						effectId: effect.id,
@@ -1305,7 +1350,10 @@ export function agentEffectHandlers(
 						// Only close the pane when this launch call created it; a
 						// reused pane may still host another live agent, so a failed
 						// relaunch must never tear it down.
-						if (pane.owned === true) {
+						if (
+							pane.owned === true &&
+							engine.effectOwnsLease(repo, effect.id, effect.lease ?? "")
+						) {
 							try {
 								options.herdr.call("pane", "close", pane.paneId);
 							} catch {
@@ -1329,10 +1377,12 @@ export function agentEffectHandlers(
 					}
 					const handle = launchOutcome.right;
 					if (!live(effect)) {
-						try {
-							yield* adapter.stop(handle, signal);
-						} catch {
-							/* preserve cancellation; the next drain can retry cleanup */
+						if (engine.effectOwnsLease(repo, effect.id, effect.lease ?? "")) {
+							try {
+								yield* adapter.stop(handle, signal);
+							} catch {
+								/* preserve cancellation; the next drain can retry cleanup */
+							}
 						}
 						yield* Effect.sync(() =>
 							emitAdapter(snapshot, run, {
@@ -1358,6 +1408,77 @@ export function agentEffectHandlers(
 						),
 					);
 					return handle;
+				}),
+			cancel: (effect, result) =>
+				Effect.gen(function* () {
+					if (
+						(effect.payload as { cancelRequested?: unknown })
+							.cancelRequested !== true
+					)
+						return;
+					const run = engine.getRun(repo, runId(effect));
+					const snapshot = engine.getSnapshot(repo, run.workflowId);
+					const step = options.registry.stepForDefinition(
+						snapshotDefinition(snapshot, options.registry),
+						run.stepId,
+					);
+					const ownsClaim = engine.effectOwnsLease(
+						repo,
+						effect.id,
+						effect.lease ?? "",
+					);
+					if (!ownsClaim) return;
+					const candidate =
+						result && typeof result === "object"
+							? (result as Record<string, unknown>)
+							: undefined;
+					const resolved =
+						candidate &&
+						typeof candidate.name === "string" &&
+						typeof candidate.paneId === "string"
+							? {
+									runtime: run.profile.runtime,
+									name: candidate.name,
+									paneId: candidate.paneId,
+									...(typeof candidate.tabId === "string"
+										? { tabId: candidate.tabId }
+										: {}),
+									...(typeof candidate.sessionId === "string"
+										? { sessionId: candidate.sessionId }
+										: {}),
+								}
+							: ownsClaim
+								? yield* p(() =>
+										resolveLiveAgentAsync(
+											options.herdr,
+											snapshot.workflowId,
+											snapshot.definition.id,
+											run,
+											undefined,
+											step,
+										),
+									)
+								: undefined;
+					if (
+						resolved &&
+						engine.effectOwnsLease(repo, effect.id, effect.lease ?? "")
+					) {
+						const adapter = options.adapters.get(run.profile.runtime);
+						if (adapter) {
+							yield* adapter.stop(
+								"runtime" in resolved
+									? resolved
+									: { ...resolved, runtime: run.profile.runtime },
+							);
+						}
+					}
+					yield* Effect.sync(() =>
+						engine.acknowledgeCancelledEffect(
+							repo,
+							effect.id,
+							effect.lease ?? "",
+						),
+					);
 				}),
 		},
 		"agent.prompt": {
@@ -1432,13 +1553,42 @@ export function agentEffectHandlers(
 					};
 				}),
 		},
-		// Legacy stop effects must drain safely, but agents now live until their
-		// workspace closes. New workflow paths never enqueue this effect.
+		// Stop effects also cover launches that had not persisted a handle when
+		// preset switching retired their run; resolve those by canonical identity.
 		"agent.stop": {
-			execute: (effect) =>
+			execute: (effect, signal) =>
 				Effect.gen(function* () {
 					const run = engine.getRun(repo, runId(effect));
 					const snapshot = engine.getSnapshot(repo, run.workflowId);
+					const definition = snapshotDefinition(snapshot, options.registry);
+					const step = options.registry.stepForDefinition(
+						definition,
+						run.stepId,
+					);
+					const resolved =
+						run.handle ??
+						(yield* p(() =>
+							resolveLiveAgentAsync(
+								options.herdr,
+								snapshot.workflowId,
+								snapshot.definition.id,
+								run,
+								signal,
+								step,
+							),
+						));
+					if (resolved) {
+						const adapter = options.adapters.get(run.profile.runtime);
+						if (!adapter)
+							throw new PermanentFailure(
+								`adapter unavailable: ${run.profile.runtime}`,
+							);
+						const handle: AgentHandle =
+							"runtime" in resolved
+								? (resolved as AgentHandle)
+								: { ...resolved, runtime: run.profile.runtime };
+						yield* adapter.stop(handle, signal);
+					}
 					yield* Effect.sync(() =>
 						emitAdapter(snapshot, run, {
 							event: "agent.stop",
@@ -1446,7 +1596,7 @@ export function agentEffectHandlers(
 							outcome: "ok",
 						}),
 					);
-					return { retained: true };
+					return { stopped: Boolean(resolved) };
 				}),
 		},
 		"notification.show": {

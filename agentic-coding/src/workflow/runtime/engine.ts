@@ -102,8 +102,10 @@ import {
 	payload,
 	type RunRow,
 	runs,
+	acknowledgeCancelledEffect as storeAcknowledgeCancelledEffect,
 	activeRunForRole as storeActiveRunForRole,
 	effectIsLive as storeEffectIsLive,
+	effectOwnsLease as storeEffectOwnsLease,
 	getRun as storeGetRun,
 	getSnapshot as storeGetSnapshot,
 	renewEffect as storeRenewEffect,
@@ -537,6 +539,16 @@ export class WorkflowEngine {
 				viewPreviewMigration(repo, workflowId, targetVersion, this.registry),
 			catch: toRuntimeError,
 		});
+	}
+	acknowledgeCancelledEffect(
+		repo: string,
+		effectId: string,
+		lease: string,
+	): void {
+		storeAcknowledgeCancelledEffect(repo, effectId, lease);
+	}
+	effectOwnsLease(repo: string, effectId: string, lease: string): boolean {
+		return storeEffectOwnsLease(repo, effectId, lease);
 	}
 	effectIsLive(repo: string, effectId: string, lease: string): boolean {
 		return this.run(this.effectIsLiveEffect(repo, effectId, lease));
@@ -1499,9 +1511,11 @@ export class WorkflowEngine {
 		const claimed: ClaimedEffect[] = [];
 		const exhausted: ExhaustedTelemetry[] = [];
 		const at = this.now();
+		// Preset-switch stop effects are a durable barrier: a second drainer must
+		// not launch the replacement while the old canonical pane can still live.
 		const rows = db
 			.query(
-				`SELECT * FROM workflow_outbox AS ready WHERE ((ready.status IN ('pending','retry') AND ready.attempts < ready.max_attempts AND (ready.next_attempt_at IS NULL OR ready.next_attempt_at<=?)) OR (ready.status='running' AND ready.lease_expires_at<=?)) AND NOT (ready.kind IN ('delivery.commit','delivery.push') AND EXISTS (SELECT 1 FROM workflow_outbox AS promotion WHERE promotion.workflow_id=ready.workflow_id AND promotion.kind='wiki.verify' AND promotion.status<>'completed')) ORDER BY ready.rowid LIMIT ?`,
+				`SELECT * FROM workflow_outbox AS ready WHERE ((ready.status IN ('pending','retry') AND ready.attempts < ready.max_attempts AND (ready.next_attempt_at IS NULL OR ready.next_attempt_at<=?) AND NOT (ready.kind='agent.launch' AND COALESCE(json_extract(ready.payload_json,'$.cancelRequested'),0)=1)) OR (ready.status='running' AND ready.lease_expires_at<=?)) AND NOT (ready.kind IN ('delivery.commit','delivery.push') AND EXISTS (SELECT 1 FROM workflow_outbox AS promotion WHERE promotion.workflow_id=ready.workflow_id AND promotion.kind='wiki.verify' AND promotion.status<>'completed')) AND NOT (ready.kind='agent.launch' AND EXISTS (SELECT 1 FROM workflow_outbox AS stop WHERE stop.workflow_id=ready.workflow_id AND stop.kind='agent.stop' AND stop.status NOT IN ('completed','expired'))) AND NOT (ready.kind='agent.stop' AND EXISTS (SELECT 1 FROM workflow_outbox AS launch WHERE launch.workflow_id=ready.workflow_id AND launch.kind='agent.launch' AND launch.status='running' AND json_extract(launch.payload_json,'$.runId')=json_extract(ready.payload_json,'$.runId'))) ORDER BY ready.rowid LIMIT ?`,
 			)
 			.all(at.toISOString(), at.toISOString(), limit) as EffectRow[];
 		for (const row of rows) {
@@ -1515,7 +1529,15 @@ export class WorkflowEngine {
 			const runList = runs(db, snapshot.workflowId);
 			validateSnapshot(snapshot, definition, runList, this.registry);
 			validateEffect(row, snapshot, definition, runList, this.registry);
-			if (row.status === "running" && row.attempts >= row.max_attempts) {
+			const cancelledLaunch =
+				row.kind === "agent.launch" &&
+				(JSON.parse(row.payload_json) as { cancelRequested?: unknown })
+					.cancelRequested === true;
+			if (
+				row.status === "running" &&
+				row.attempts >= row.max_attempts &&
+				!cancelledLaunch
+			) {
 				const diagnostic = `effect ${row.kind} exhausted automatic attempts after lease expiry`;
 				db.query(
 					"UPDATE workflow_outbox SET status='failed', lease=NULL, lease_expires_at=NULL, last_error=? WHERE id=? AND status='running' AND lease_expires_at<=?",
