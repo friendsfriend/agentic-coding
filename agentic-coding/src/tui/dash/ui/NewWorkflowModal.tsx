@@ -13,12 +13,13 @@ import {
 	Show,
 	untrack,
 } from "solid-js";
+import { backendClient } from "../../../server/client";
 import { PUBLIC_WORKFLOW_CATALOG } from "../../../workflow/definitions";
 import type { ProjectOption } from "../../../workflow/project-catalog";
 import { focusSoon } from "../devenv-ui/utils/focusSoon";
 import { PRESET_CONFIG_DEFAULTS } from "../engine";
 import { notify } from "../notifications";
-import { discoverChanges } from "../observations";
+import { discoverChanges, discoverChangesAsync } from "../observations";
 import { uiColors } from "./colors";
 import { GenericModal } from "./GenericModal";
 import { ListViewModal } from "./ListViewModal";
@@ -63,6 +64,20 @@ export function NewWorkflowModal(props: {
 		props.projects.filter((project) =>
 			project.name.toLowerCase().includes(filter().toLowerCase()),
 		);
+
+	// OpenSpec change ids are fetched through the typed backend API; the
+	// completion list updates once the async read resolves.
+	const [availableChanges, setAvailableChanges] = createSignal<string[]>([]);
+	createEffect(() => {
+		const repo = values().repo;
+		const type = values().workflowType;
+		if (field() !== "workflowId" || type !== "openspec-apply") return;
+		const controller = new AbortController();
+		void discoverChangesAsync(repo, controller.signal)
+			.then((changes) => setAvailableChanges(changes))
+			.catch(() => setAvailableChanges([]));
+		onCleanup(() => controller.abort());
+	});
 
 	const isProposal = (type: string) =>
 		type === "openspec-propose" || type === "openspec-fusion-propose";
@@ -152,7 +167,10 @@ export function NewWorkflowModal(props: {
 			);
 		}
 		if (f === "workflowId" && values().workflowType === "openspec-apply")
-			return discoverChanges(values().repo);
+			// Demo/test mode has no transport; the API path uses the prefetched list.
+			return backendClient()
+				? availableChanges()
+				: discoverChanges(values().repo);
 		if (f === "mode")
 			return ["worktree", "checkout"].filter((item) =>
 				item.includes(filter().toLowerCase()),

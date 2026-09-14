@@ -98,6 +98,9 @@ export interface BackendRuntimeShape {
 		instance: string;
 		binary: ResolvedBinary;
 		homeDir: string;
+		/** Private instance capability the child requires on every non-health
+		 * route (expose-unified-bun-backend, task 1.3). */
+		token: string;
 	}) => Effect.Effect<BackendChild, BackendStartupError, BackendRuntime>;
 	/** Remove the private extraction directory an instance owned. */
 	readonly removeExtractionDir: (instance: string) => Effect.Effect<void>;
@@ -150,6 +153,13 @@ export function resolveDevenvHome(): string {
 /** Random per-launch identity. Web Crypto is a Bun global. */
 export function newInstanceId(): string {
 	return crypto.randomUUID().replaceAll("-", "");
+}
+
+/** Random per-launch private capability presented to the Go child. */
+export function newInstanceToken(): string {
+	return Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString(
+		"hex",
+	);
 }
 
 /** Private per-instance extraction directory (mode 0700). */
@@ -333,7 +343,7 @@ export const BackendRuntimeLive = Layer.succeed(BackendRuntime, {
 			return resolved;
 		}),
 
-	spawnBackend: ({ port, instance, binary, homeDir }) =>
+	spawnBackend: ({ port, instance, binary, homeDir, token }) =>
 		Effect.gen(function* () {
 			const executable = yield* ensureExecutable(binary);
 			const logDir = path.join(homeDir, "logs");
@@ -348,7 +358,7 @@ export const BackendRuntimeLive = Layer.succeed(BackendRuntime, {
 				{
 					stdout: logFile.fd,
 					stderr: logFile.fd,
-					env: process.env,
+					env: { ...process.env, DEVENV_INSTANCE_TOKEN: token },
 				},
 			);
 			// The log handle belongs to the child, not to this effect.
@@ -380,11 +390,15 @@ export interface OwnedBackend {
 	readonly url: string;
 	readonly instance: string;
 	readonly pid: number | undefined;
+	/** Private capability the child now requires on non-health routes. */
+	readonly token: string;
 }
 
 export interface StartBackendOptions {
 	readonly port: string;
 	readonly instance?: string;
+	/** Private capability; generated when omitted. */
+	readonly token?: string;
 	/** Readiness poll attempts (500ms apart); overridable in tests. */
 	readonly readinessRetries?: number;
 	/** Bounded wait for the child to exit after SIGTERM/SIGKILL. */
@@ -439,6 +453,7 @@ export const acquireOwnedBackend = (
 	Effect.gen(function* () {
 		const runtime = yield* BackendRuntime;
 		const instance = options.instance ?? newInstanceId();
+		const token = options.token ?? newInstanceToken();
 		const url = backendUrl(options.port);
 		const expected = expectedIdentity(instance);
 
@@ -465,6 +480,7 @@ export const acquireOwnedBackend = (
 				instance,
 				binary,
 				homeDir: expected.homeDir,
+				token,
 			}),
 			(child) => stopOwnedChild(child, instance, options.stopTimeoutMs ?? 2000),
 		);
@@ -502,5 +518,6 @@ export const acquireOwnedBackend = (
 			url,
 			instance,
 			pid: child.pid,
+			token,
 		} satisfies OwnedBackend;
 	});

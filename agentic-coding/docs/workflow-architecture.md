@@ -378,7 +378,7 @@ runtime code depends on it.
 | **tui-feature** | `tui/dash/`, `tui/otel/` | Dashboard and observability feature implementations. |
 | **tui-shared** | `tui/shared/`, `tui/themes/`, `tui/clipboard.ts`, `tui/lifecycle.ts` | Shared presentation primitives and theme data. |
 | **tui-app** | remaining `tui/` files | TUI shell entrypoint (`index.tsx`) and lifecycle components. |
-| **root** | `cli.ts`, `herdr-client.ts` | Composition roots and foundational clients. |
+| **root** | `cli.ts`, `herdr-client.ts`, `server-command.ts`, `server/` | Composition roots and foundational clients. `server/` is the unified Bun backend transport/client/build root (`expose-unified-bun-backend`): `protocol.ts` (contracts + route manifest), `auth.ts`, `app.ts`, `client.ts`, `events.ts`, `credentials.ts`, `handlers.ts`, `lifecycle.ts`. See [`docs/unified-backend-api.md`](unified-backend-api.md). |
 
 Allowed directions (anything else fails, **including type-only imports**):
 

@@ -88,9 +88,9 @@ import {
 	SortModal,
 	statusOptions,
 } from "../components/TraceModals";
-import type { TraceDb } from "../model/db";
 import type { LogStore } from "../model/logStore";
 import type { MetricStore } from "../model/metricStore";
+import type { TelemetryDb } from "../model/telemetry-db";
 import type { TopologyStore } from "../model/topologyStore";
 import type { SortCriterion, TraceStore } from "../model/traceStore";
 import type { TreeNode } from "../model/types";
@@ -151,7 +151,7 @@ export interface DashboardTab {
 
 export function App(props: {
 	repos: string[];
-	db: TraceDb;
+	db: TelemetryDb;
 	traceStore: TraceStore;
 	metricStore: MetricStore;
 	logStore: LogStore;
@@ -159,10 +159,11 @@ export function App(props: {
 	tracesOnly?: boolean;
 	/** When set, the unified shell exposes the Environments feature. */
 	environments?: { serverUrl: string };
-	/** True when `environments.serverUrl` is a server this process does not own:
-	 * the shell states that explicitly and offers no remote workflow features,
-	 * so local workflow data can never be read as the attached server's. */
+	/** True when the shell is attached to a server this process does not own:
+	 * the shell states the attached surface/capabilities explicitly. */
 	attached?: boolean;
+	/** Explicit attached-surface label (e.g. workflow + observability). */
+	attachLabel?: string;
 	/** Composition hook supplied by the shell root (src/tui/app) so this feature
 	 * layer never imports the tui-app shell (source-layer boundary). The shell
 	 * root passes a callback the embedded environment uses to publish its live
@@ -1324,7 +1325,8 @@ export function App(props: {
 								<box style={{ flexGrow: 1 }} />
 								<Show when={props.attached}>
 									<text fg={uiColors.textMuted} attributes={TextAttributes.DIM}>
-										{`attached ${props.environments?.serverUrl ?? ""} · environment features only · remote workflow features unavailable`}
+										{props.attachLabel ??
+											`attached ${props.environments?.serverUrl ?? ""} · environment features only · remote workflow features unavailable`}
 									</text>
 								</Show>
 								<Badge text={activeTab()} highlight="accent" />

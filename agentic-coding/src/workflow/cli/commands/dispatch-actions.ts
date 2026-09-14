@@ -1,6 +1,7 @@
 import { watch } from "node:fs";
 import path from "node:path";
 import { Herdr } from "../../../herdr-client.ts";
+import { backendClientFromEnv } from "../../../server/client.ts";
 import type { WorkflowApplication } from "../../application.ts";
 import { drainEffects, reconcileWorkflowSidebar } from "../../operations.ts";
 // The developer-action, agent-handoff, and agent-question command branches:
@@ -21,6 +22,7 @@ import {
 	requireFlag,
 } from "../args.ts";
 import {
+	type CallerEnvironment,
 	callerEnvironment,
 	managedAgent,
 	managedWorkflowTarget,
@@ -88,6 +90,10 @@ export async function runDeveloperQuestion(
 	optionsOrTimeout: unknown = [],
 	timeoutMs = QUESTION_WAIT_MS,
 	application?: App,
+	/** Caller environment forwarded across the transport (managed agents). */
+	environmentOverride?: CallerEnvironment,
+	/** Request-scoped interruption; absent for the CLI process-signal path. */
+	interruptSignal?: AbortSignal,
 ): Promise<string> {
 	const input: DeveloperQuestionCliInput =
 		typeof inputOrDescription === "string"
@@ -100,7 +106,12 @@ export async function runDeveloperQuestion(
 	if (input.description === undefined && input.questions === undefined)
 		throw new Error("question requires --description or --questions");
 	validateQuestionTimeout(wait);
-	const identity = resolveHandoffIdentity(engineInstance, repo, application);
+	const identity = resolveHandoffIdentity(
+		engineInstance,
+		repo,
+		application,
+		environmentOverride,
+	);
 	const run = application
 		? application.runSync(
 				engineInstance.authorizeExactRunCapabilityEffect(
@@ -158,14 +169,19 @@ export async function runDeveloperQuestion(
 	// end of the drain, so the pending input is visible while the agent waits
 	// (improve-herdr-workflow-sidebar). Best-effort and bounded.
 	await reconcileWorkflowSidebar(new Herdr(), engineInstance, repo);
-	let interrupted = false;
+	let interrupted = interruptSignal?.aborted ?? false;
 	let wake: (() => void) | undefined;
 	const interrupt = () => {
 		interrupted = true;
 		wake?.();
 	};
-	process.on("SIGTERM", interrupt);
-	process.on("SIGINT", interrupt);
+	// Transport callers pass the request signal; the CLI keeps process signals.
+	if (interruptSignal) {
+		interruptSignal.addEventListener("abort", interrupt, { once: true });
+	} else {
+		process.on("SIGTERM", interrupt);
+		process.on("SIGINT", interrupt);
+	}
 	try {
 		while (!interrupted && Date.now() < deadline) {
 			const snapshot = read(run.workflowId);
@@ -274,8 +290,12 @@ export async function runDeveloperQuestion(
 			})),
 		});
 	} finally {
-		process.off("SIGTERM", interrupt);
-		process.off("SIGINT", interrupt);
+		if (interruptSignal)
+			interruptSignal.removeEventListener("abort", interrupt);
+		else {
+			process.off("SIGTERM", interrupt);
+			process.off("SIGINT", interrupt);
+		}
 	}
 }
 
@@ -510,6 +530,21 @@ export async function runQuestion(
 	};
 	const timeout = flag(rest, "timeout");
 	const timeoutMs = timeout === undefined ? QUESTION_WAIT_MS : Number(timeout);
+	// Managed agent across the transport: forward the authenticated caller
+	// environment; the server resolves identity and the engine validates the
+	// run capability, bounded by the request signal.
+	const client = backendClientFromEnv();
+	if (client) {
+		console.log(
+			await client.agentQuestion({
+				repo: managedWorkflowTarget(),
+				environment: callerEnvironment(),
+				input,
+				timeoutMs,
+			}),
+		);
+		return;
+	}
 	console.log(
 		await runDeveloperQuestion(
 			workflowEngine,
@@ -534,6 +569,22 @@ export async function runHandoff(
 	)
 		throw new Error("handoff: invalid --outcome");
 	const target = managedWorkflowTarget();
+	// Managed agent across the transport: forward the authenticated caller
+	// environment and let the server resolve the run identity and validate the
+	// capability, so the CLI never opens the store itself.
+	const client = backendClientFromEnv();
+	if (client) {
+		const view = await client.agentHandoff({
+			repo: target,
+			environment: callerEnvironment(),
+			outcome: outcome as "complete" | "blocked" | "failed",
+			...(flag(rest, "artifact") ? { artifact: flag(rest, "artifact") } : {}),
+			...(flag(rest, "message") ? { message: flag(rest, "message") } : {}),
+			drain: !rest.includes("--no-drain"),
+		});
+		console.log(JSON.stringify(view, null, 2));
+		return;
+	}
 	const identity = resolveHandoffIdentity(workflowEngine, target, application);
 	const artifact = identity.outputPath ?? flag(rest, "artifact");
 	if (application)

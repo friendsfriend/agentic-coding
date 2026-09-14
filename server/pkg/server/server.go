@@ -3,11 +3,13 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	osExec "os/exec"
 	"os/signal"
@@ -228,7 +230,7 @@ func (s *Server) Start() error {
 	addr := fmt.Sprintf("127.0.0.1:%d", s.port)
 	log.Printf("Starting HTTP API server on %s", addr)
 
-	httpSrv := &http.Server{Addr: addr, Handler: s.loggingMiddleware(s.corsMiddleware(mux))}
+	httpSrv := &http.Server{Addr: addr, Handler: s.loggingMiddleware(s.instanceTokenMiddleware(s.corsMiddleware(mux)))}
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
@@ -507,11 +509,57 @@ func (s *Server) startReconciliationPoller() {
 
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		// No wildcard CORS: only a loopback browser origin is echoed. A browser
+		// on any other origin can neither read a response nor preflight a
+		// delegated mutation.
+		origin := r.Header.Get("Origin")
+		if origin != "" && isLoopbackOrigin(origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Instance-Token")
+		}
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// isLoopbackOrigin reports whether an Origin header names the local host.
+func isLoopbackOrigin(origin string) bool {
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	switch parsed.Hostname() {
+	case "127.0.0.1", "localhost", "::1":
+		return true
+	default:
+		return false
+	}
+}
+
+// instanceTokenMiddleware requires the per-instance capability the spawning
+// process generated (expose-unified-bun-backend, task 1.3): the private Go
+// listener is not authorized merely for binding loopback. `/api/health` stays
+// reachable so ownership/readiness is provable before a token is accepted;
+// when no token is configured (bare `go test`/development) the guard is off.
+func (s *Server) instanceTokenMiddleware(next http.Handler) http.Handler {
+	token := os.Getenv("DEVENV_INSTANCE_TOKEN")
+	if token == "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/health" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		supplied := r.Header.Get("X-Instance-Token")
+		if subtle.ConstantTimeCompare([]byte(supplied), []byte(token)) != 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid instance token"})
 			return
 		}
 		next.ServeHTTP(w, r)

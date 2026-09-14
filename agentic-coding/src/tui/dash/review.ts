@@ -11,7 +11,7 @@ import { createMemo, createSignal, type Setter } from "solid-js";
 import type { Discussion } from "./devenv-ui/types";
 import { notify } from "./notifications";
 import {
-	loadDeveloperReviewFindings,
+	loadDeveloperReviewFindingsAsync,
 	loadLocalChangesAsync,
 	loadLocalDiffAsync,
 	loadWikiSnapshotChangesAsync,
@@ -508,7 +508,11 @@ export function createReviewFeature(
 								fix: "Remove the dead helper.",
 							},
 						]
-					: loadDeveloperReviewFindings(repo, workflowId);
+					: await loadDeveloperReviewFindingsAsync(
+							repo,
+							workflowId,
+							reviewController.signal,
+						);
 			setReviewChanges(changes);
 			setReviewChangeIndex(0);
 			setReviewLine(0);

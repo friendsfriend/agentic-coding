@@ -86,7 +86,22 @@ const APPLICATION_FILES = [
 	"workflow/application.ts", // named application composition root (CLI/dashboard), complete-workflow-effect-cutover task 1
 	"workflow/execution-coordinator.ts", // root-owned repository execution coordinators + dashboard application runtime (compose-unified-feature-shell task 1.2); no TUI imports, credential prompt injected
 ];
-const ROOT_FILES = ["cli.ts", "herdr-client.ts"];
+const ROOT_FILES = [
+	"cli.ts",
+	"herdr-client.ts",
+	"server-command.ts",
+	// Unified Bun backend transport/client/build root (expose-unified-bun-backend):
+	// the server owns workflow/telemetry and delegates environment routes; the
+	// TUI/CLI reach it as a typed client, never through backend internals.
+	"server/protocol.ts",
+	"server/auth.ts",
+	"server/app.ts",
+	"server/client.ts",
+	"server/events.ts",
+	"server/credentials.ts",
+	"server/handlers.ts",
+	"server/lifecycle.ts",
+];
 
 /** Classify a project-relative source path (posix separators). */
 export function classifySourcePath(relPath: string): SourceLayer | null {
@@ -205,6 +220,63 @@ function layerMessage(
 		if (to === "tui-feature" || to === "tui-app" || to === "tui-shared")
 			return `workflow/backend module depends on TUI presentation ${toRel}; presentation must not be reached from backend code (type-only imports included)`;
 	return `${LAYER_LABELS[from]} module must not import ${toRel} (${LAYER_LABELS[to]})`;
+}
+
+/** View components must not reach backend I/O directly (expose-unified-bun-
+ * backend, task 3.5): feature `.tsx` components consume the typed client and
+ * let the observation/engine adapters own the transitional seam. Adapters
+ * (`.ts` modules such as `dash/observations.ts`, `dash/engine.ts`) are the
+ * bounded exception, not view components. */
+const VIEW_COMPONENT = /^tui\/(?:dash|otel)\/.*\.tsx$/;
+const FORBIDDEN_VIEW_IMPORTS = [
+	"workflow/effects.ts",
+	"workflow/execution-coordinator.ts",
+	"workflow/operations.ts",
+	"workflow/application.ts",
+	"workflow/startup.ts",
+];
+const FORBIDDEN_VIEW_BUILTINS = [
+	"bun:sqlite",
+	"bun:ffi",
+	"node:fs",
+	"node:fs/promises",
+	"node:child_process",
+];
+
+export function checkViewBackendIsolation(root: string): ArchitectureIssue[] {
+	const analysis = buildSourceAnalysis(root);
+	const issues: ArchitectureIssue[] = [];
+	for (const [file, module] of analysis) {
+		const fromRel = toPosix(path.relative(root, file));
+		if (!VIEW_COMPONENT.test(fromRel)) continue;
+		for (const edge of module.edges) {
+			if (FORBIDDEN_VIEW_BUILTINS.includes(edge.specifier)) {
+				issues.push({
+					file,
+					line: edge.line,
+					column: edge.column,
+					rule: "view:backend-builtin",
+					message: `${fromRel} imports backend I/O builtin '${edge.specifier}'; consume the typed client instead`,
+				});
+				continue;
+			}
+			if (!edge.specifier.startsWith(".") || !edge.resolved) continue;
+			const toRel = toPosix(path.relative(root, edge.resolved));
+			if (
+				!toRel.startsWith("backend/") &&
+				!FORBIDDEN_VIEW_IMPORTS.includes(toRel)
+			)
+				continue;
+			issues.push({
+				file,
+				line: edge.line,
+				column: edge.column,
+				rule: "view:backend-import",
+				message: `${fromRel} imports backend module ${toRel}; consume the typed client instead`,
+			});
+		}
+	}
+	return issues;
 }
 
 /** Layer-ownership violations across the whole tree, using every edge

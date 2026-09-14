@@ -12,8 +12,9 @@ import { createSignal } from "solid-js";
 export type LifecyclePhase = "idle" | "starting" | "running" | "stopping";
 export type StepStatus = "pending" | "active" | "done" | "error";
 
-/** Mixed-runtime milestone: one owner, four kinds of owned handle. */
+/** Mixed-runtime milestone: one owner, five kinds of owned handle. */
 export type OwnedResourceKind =
+	| "workflow-server"
 	| "workflow-application"
 	| "go-backend"
 	| "telemetry"

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Herdr } from "../../herdr-client.ts";
+import { backendClient } from "../../server/client.ts";
 import type { WorkflowView } from "../../workflow/contracts.ts";
 import { loadConfig } from "../../workflow/effects.ts";
 import {
@@ -195,12 +196,23 @@ export function answerWorkflowQuestion(
 	return result.view;
 }
 
-export function switchWorkflowPreset(
+export async function switchWorkflowPreset(
 	repo: string,
 	workflowId: string,
 	revision: number,
 	preset: string,
-): void {
+): Promise<void> {
+	const client = backendClient();
+	if (client) {
+		await client.action({
+			repo,
+			workflowId,
+			revision,
+			actionId: "switch-preset",
+			input: preset,
+		});
+		return;
+	}
 	const engine = workflowEngineFactory(dashboardApplication);
 	engine.dispatch(repo, {
 		type: "developer.action",

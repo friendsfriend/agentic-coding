@@ -22,6 +22,11 @@ import { KeymapProvider } from "@opentui/keymap/solid";
 import { render } from "@opentui/solid";
 import { BackendStartupError, startOwnedBackend } from "../backend/lifecycle";
 import { ownsEnvironmentBackend } from "../backend/ownership";
+import { backendClient, configureBackendClient } from "../server/client";
+import {
+	type OwnedWorkflowServer,
+	startWorkflowServer,
+} from "../server/lifecycle";
 import {
 	activeWorkflowExecutions,
 	cancelActiveWorkflowExecutions,
@@ -69,15 +74,11 @@ import { QuitConfirmModal } from "./lifecycle/QuitConfirmModal";
 import { discoverProjectRepos, TraceDb } from "./otel/model/db";
 import { LogStore } from "./otel/model/logStore";
 import { MetricStore } from "./otel/model/metricStore";
+import { RemoteTelemetryDb } from "./otel/model/remote-db";
+import type { TelemetryDb } from "./otel/model/telemetry-db";
 import { TopologyStore } from "./otel/model/topologyStore";
 import { TraceStore } from "./otel/model/traceStore";
 import type { LogData, MetricData, SpanData } from "./otel/model/types";
-import {
-	routeReceiverRequest,
-	startPrometheusScraper,
-	startStatsDListener,
-} from "./otel/receiver/index";
-import { createTraceServiceClient } from "./otel/receiver/otlp-grpc-proto";
 
 const usage = `Usage: agentic-coding [command] [options]
   (no command)             Unified shell (default): owned environment backend + workflows + observability
@@ -139,6 +140,7 @@ const sleep = (ms: number) =>
 
 /** Shutdown progress labels keyed by the resource step that owns the row. */
 const SHUTDOWN_STEP_LABELS: Record<string, string> = {
+	"workflow-server": "Stopping workflow server",
 	"workflow-application": "Cancelling workflow actions",
 	"go-backend": "Stopping environment backend",
 	telemetry: "Stopping telemetry receiver",
@@ -189,6 +191,11 @@ export async function main(): Promise<void> {
 
 	const profile = arg("--profile");
 	const attachUrl = arg("--attach-url");
+	// Full-feature attach: a capability for the remote unified server. Without
+	// one, attach stays environment-only (the predecessor milestone).
+	const attachToken =
+		arg("--attach-token") ?? process.env.AGENTIC_WORKFLOW_TOKEN;
+	const remoteAttach = Boolean(attachUrl && attachToken);
 	const home =
 		process.argv.includes("--home") || process.argv.includes("manager");
 	const isTest = profile === "test";
@@ -227,26 +234,50 @@ export async function main(): Promise<void> {
 		isTest,
 		json: process.argv.includes("--json"),
 	});
-	const environments = {
-		serverUrl: explicitUrl ?? `http://127.0.0.1:${devenvPort}`,
-	};
-	process.env.AGENTIC_DEVENV_URL = environments.serverUrl;
+	const environments = remoteAttach
+		? undefined
+		: { serverUrl: explicitUrl ?? `http://127.0.0.1:${devenvPort}` };
+	const devenvUrl =
+		environments?.serverUrl ?? explicitUrl ?? `http://127.0.0.1:${devenvPort}`;
+	process.env.AGENTIC_DEVENV_URL = devenvUrl;
+	// Full-feature attach talks to the remote unified server through the typed
+	// client; the private Go environment feature is unavailable remotely.
+	if (remoteAttach && attachUrl && attachToken)
+		configureBackendClient({
+			baseUrl: attachUrl,
+			token: attachToken,
+			ownerId: `attach-${process.pid}`,
+		});
 	// Tell catalog consumers (including the detached observation children) that
 	// this process is bringing the backend up, so a read in that window waits for
 	// readiness instead of spawning a second backend for one read.
 	if (ownsBackend) process.env[BACKEND_STARTING_ENV] = "1";
 	if (process.argv.includes("--json")) {
-		console.log(
-			JSON.stringify(
-				home
-					? await listWorkflowsAsync()
-					: isTest
-						? testDashboard()
-						: await loadDashboardAsync(repo, resolvedWorkflowId),
-				null,
-				2,
-			),
-		);
+		// Headless read path (task 3.4): read through the typed backend client by
+		// starting a short-lived in-process server, so `--json` exercises the same
+		// authenticated API as the interactive shell. Test mode stays in-process.
+		const jsonServer = isTest ? undefined : await startWorkflowServer({});
+		if (jsonServer)
+			configureBackendClient({
+				baseUrl: jsonServer.url,
+				token: jsonServer.token,
+				ownerId: `json-${process.pid}`,
+			});
+		try {
+			console.log(
+				JSON.stringify(
+					home
+						? await listWorkflowsAsync()
+						: isTest
+							? testDashboard()
+							: await loadDashboardAsync(repo, resolvedWorkflowId),
+					null,
+					2,
+				),
+			);
+		} finally {
+			await jsonServer?.stop();
+		}
 		process.exit(0);
 	}
 
@@ -291,7 +322,7 @@ export async function main(): Promise<void> {
 	const explicitRepos = Array.from(new Set([repo]));
 	// Demo DB is async; non-demo construction is cheap. The scan/load itself
 	// happens in startServerStack (render-first so the startup modal shows).
-	let db: TraceDb;
+	let db: TelemetryDb;
 	let loadedSpans: SpanData[] = [];
 	if (useDemoDb) {
 		const {
@@ -305,12 +336,23 @@ export async function main(): Promise<void> {
 		traceStore.loadFile(spans);
 		metricStore.load(metrics);
 		logStore.load(logs);
-	} else {
+	} else if (isTest) {
+		// Interactive demo keeps the local database (no server in test mode).
 		db = new TraceDb();
+	} else {
+		// Server-backed: the proxy is empty until the server snapshot loads below.
+		db = new RemoteTelemetryDb();
 	}
 
 	/** The most recent phase of the bootstrap that must be unwound on failure. */
 	let activeStep = "workflow-application";
+
+	// The unified backend boundary: the TUI starts (and owns) the Bun workflow/
+	// telemetry server and reaches observations/mutations through the typed
+	// client instead of in-process or subprocess backend access. Started in
+	// `startServerStack` once the private Go child (and its token) is known.
+	let workflowServer: OwnedWorkflowServer | undefined;
+	let environmentToken: string | undefined;
 
 	// ---- Render app first; the startup modal covers the bootstrap below ----
 	process.env.FORCE_COLOR = "3";
@@ -435,6 +477,9 @@ export async function main(): Promise<void> {
 			...(ownsBackend
 				? [{ id: "go-backend", label: "Starting environment backend" }]
 				: []),
+			...(isTest
+				? []
+				: [{ id: "workflow-server", label: "Starting workflow server" }]),
 			{ id: "workflow-application", label: "Loading workspace history" },
 			...(httpPort ||
 			zipkinPort ||
@@ -461,8 +506,15 @@ export async function main(): Promise<void> {
 					tracesOnly={tracesOnly}
 					environments={environments}
 					attached={attachUrl !== undefined}
+					attachLabel={
+						remoteAttach
+							? `attached ${attachUrl ?? ""} · workflow + observability · environment features unavailable`
+							: attachUrl
+								? `attached ${attachUrl} · environment features only · remote workflow features unavailable`
+								: undefined
+					}
 					dashboard={
-						attachUrl
+						attachUrl && !remoteAttach
 							? undefined
 							: {
 									mode: home ? "home" : "dash",
@@ -501,6 +553,7 @@ export async function main(): Promise<void> {
 				const backend = await startOwnedBackend({
 					port: String(devenvPort),
 				});
+				environmentToken = backend.token;
 				acquireResource({
 					kind: "go-backend",
 					label: `environment backend :${backend.port}`,
@@ -518,14 +571,82 @@ export async function main(): Promise<void> {
 				if (isShutdownRequested()) return;
 			}
 
-			// 2. Workflow history / catalog. Catalog discovery runs after first
+			// 2. Unified backend boundary: the Bun workflow/telemetry server owns
+			// observations and mutations and delegates environment routes to the
+			// private Go child. The TUI reaches it through the typed client; the
+			// `__dashboard-observe` subprocess protocol is gone (task 3.5). Test mode
+			// keeps the deterministic in-process demo path with no server.
+			if (!isTest && !remoteAttach) {
+				mark("workflow-server");
+				workflowServer = await startWorkflowServer({
+					environmentBaseUrl: devenvUrl,
+					...(environmentToken ? { environmentToken } : {}),
+					// The server owns telemetry persistence/retention; the TUI reads a
+					// snapshot through the typed client instead of opening SQLite.
+					ownTelemetry: !useDemoDb,
+					// The server also owns the telemetry receiver listeners; they route
+					// decoded signals into this shell's live view stores.
+					...(httpPort ||
+					zipkinPort ||
+					datadogPort ||
+					grpcPort ||
+					promTargets.length ||
+					statsdPort
+						? {
+								receivers: {
+									httpPort: httpPort ?? undefined,
+									zipkinPort: zipkinPort ?? undefined,
+									datadogPort: datadogPort ?? undefined,
+									grpcPort: grpcPort ?? undefined,
+									promTargets,
+									promIntervalMs: promInterval,
+									statsdPort: statsdPort ?? undefined,
+								},
+								signalSink: signalRouter,
+							}
+						: {}),
+				});
+				const configured = configureBackendClient({
+					baseUrl: workflowServer.url,
+					token: workflowServer.token,
+					ownerId: `tui-${process.pid}`,
+				});
+				if (db instanceof RemoteTelemetryDb) db.setClient(configured);
+				// Hand the authenticated server to managed child processes (agents),
+				// so the headless CLI reads/writes through the typed boundary.
+				process.env.AGENTIC_WORKFLOW_URL = workflowServer.url;
+				process.env.AGENTIC_WORKFLOW_TOKEN = workflowServer.token;
+				acquireResource({
+					kind: "workflow-server",
+					label: `workflow server :${workflowServer.port}`,
+					step: "workflow-server",
+					stop: async () => {
+						delete process.env.AGENTIC_WORKFLOW_URL;
+						delete process.env.AGENTIC_WORKFLOW_TOKEN;
+						await workflowServer?.stop();
+					},
+				});
+				setStepDone("workflow-server");
+				await tick();
+				if (isShutdownRequested()) return;
+			} else if (remoteAttach) {
+				// Full-feature attach: the client is already configured against the
+				// remote unified server; wire the remote telemetry proxy to it.
+				const remote = backendClient();
+				if (remote && db instanceof RemoteTelemetryDb) db.setClient(remote);
+				setStepDone("workflow-server");
+				await tick();
+				if (isShutdownRequested()) return;
+			}
+
+			// 3. Workflow history / catalog. Catalog discovery runs after first
 			// paint: an unreachable backend must not block the renderer.
 			mark("workflow-application");
 			if (!useDemoDb) {
 				let catalogRoots: string[] = [];
-				if (!isTest) {
+				if (!isTest && !remoteAttach) {
 					try {
-						catalogRoots = await discoverProjectRepos(environments.serverUrl);
+						catalogRoots = await discoverProjectRepos(devenvUrl);
 					} catch (error) {
 						notify(
 							`Project catalog unavailable: ${
@@ -538,8 +659,14 @@ export async function main(): Promise<void> {
 				const scanRoots = Array.from(
 					new Set([...explicitRepos, ...catalogRoots]),
 				);
-				for (const r of scanRoots) await db.scanAllWorkspacesAsync(r);
-				db.cleanupOlderThan();
+				if (remoteAttach && db instanceof RemoteTelemetryDb) {
+					// Remote history lives on the server; pull the snapshot instead of
+					// scanning a local path.
+					await db.refresh();
+				} else {
+					for (const r of scanRoots) await db.scanAllWorkspacesAsync(r);
+					db.cleanupOlderThan();
+				}
 				loadedSpans = db.loadSpans();
 				traceStore.loadFile(loadedSpans);
 			}
@@ -550,84 +677,11 @@ export async function main(): Promise<void> {
 			// 3. Telemetry receivers (loopback by default), optional gRPC helper,
 			// then collectors — each acquired as an owned handle.
 			mark("telemetry");
-			if (httpPort || zipkinPort || datadogPort) {
-				const hostname = "127.0.0.1";
-				const ports: number[] = [];
-				if (httpPort) ports.push(httpPort);
-				if (zipkinPort && zipkinPort !== httpPort) ports.push(zipkinPort);
-				if (
-					datadogPort &&
-					datadogPort !== httpPort &&
-					datadogPort !== zipkinPort
-				)
-					ports.push(datadogPort);
-
-				for (const port of ports) {
-					const server = Bun.serve({
-						hostname,
-						port,
-						fetch: (request) =>
-							routeReceiverRequest(request, signalRouter) ??
-							new Response("not found", { status: 404 }),
-					});
-					acquireResource({
-						kind: "telemetry",
-						label: `otlp receiver :${port}`,
-						step: "telemetry",
-						stop: () => {
-							server.stop(true);
-						},
-					});
-				}
-			}
+			// Receiver listeners are owned by the server composition root (started
+			// with the workflow server above) and route into this shell's stores via
+			// the injected sink; nothing is acquired here.
 			await tick();
 			if (isShutdownRequested()) return;
-
-			if (grpcPort && httpPort) {
-				const grpcSidecar = spawnGrpcSidecar(grpcPort, httpPort);
-				acquireResource({
-					kind: "telemetry",
-					label: `otlp gRPC helper :${grpcPort}`,
-					step: "telemetry",
-					stop: (timeoutMs) => stopGrpcSidecar(grpcSidecar, timeoutMs ?? 2000),
-				});
-				await waitForGrpcReady(grpcPort, grpcSidecar);
-			} else if (grpcPort) {
-				console.warn("gRPC telemetry requires --http-port");
-			}
-			await tick();
-			if (isShutdownRequested()) return;
-
-			if (promTargets.length) {
-				const stopPrometheus = startPrometheusScraper(
-					promTargets,
-					promInterval,
-					signalRouter,
-				);
-				acquireResource({
-					kind: "telemetry",
-					label: "prometheus scraper",
-					step: "telemetry",
-					stop: () => {
-						stopPrometheus();
-					},
-				});
-			}
-			if (statsdPort) {
-				const statsd = startStatsDListener(
-					statsdPort,
-					`statsd-${statsdPort}`,
-					signalRouter,
-				);
-				acquireResource({
-					kind: "telemetry",
-					label: `statsd listener :${statsdPort}`,
-					step: "telemetry",
-					stop: () => {
-						statsd.stop();
-					},
-				});
-			}
 			setStepDone("telemetry");
 			await tick();
 			if (isShutdownRequested()) return;
@@ -637,7 +691,9 @@ export async function main(): Promise<void> {
 			if (homeMode) finishStartup();
 			if (attachUrl) {
 				notify(
-					`Attached to ${attachUrl}: environment features only, remote workflow features are unavailable in this milestone`,
+					remoteAttach
+						? `Attached to ${attachUrl}: workflow + observability (environment features unavailable remotely)`
+						: `Attached to ${attachUrl}: environment features only, remote workflow features are unavailable in this milestone`,
 					"info",
 				);
 			}
@@ -658,72 +714,6 @@ export async function main(): Promise<void> {
 			process.exit(1);
 		}
 	}
-}
-
-/**
- * The optional OTLP gRPC helper runs as an internal mode of this same
- * executable (`__grpc-sidecar`), never as a separately distributed binary.
- * Compiled binaries re-exec themselves; a source run re-execs the entry file.
- */
-export function grpcSidecarArgv(grpcPort: number, httpPort: number): string[] {
-	const entry = Bun.main.startsWith("$bunfs") ? undefined : Bun.main;
-	return [
-		process.execPath,
-		...(entry ? [entry] : []),
-		"__grpc-sidecar",
-		"--port",
-		String(grpcPort),
-		"--forward",
-		`http://127.0.0.1:${httpPort}`,
-	];
-}
-
-function spawnGrpcSidecar(grpcPort: number, httpPort: number) {
-	const [command, ...args] = grpcSidecarArgv(grpcPort, httpPort);
-	return Bun.spawn([command, ...args], {
-		stdio: ["ignore", "inherit", "inherit"],
-	});
-}
-
-async function stopGrpcSidecar(
-	sidecar: ReturnType<typeof Bun.spawn>,
-	timeoutMs: number,
-): Promise<void> {
-	if (sidecar.exitCode !== null) return;
-	sidecar.kill();
-	await Promise.race([sidecar.exited, sleep(timeoutMs)]);
-}
-
-/**
- * Readiness gate for the gRPC helper: aim a real TraceService export at the
- * loopback address and require an answer, so a port that merely accepts a
- * connection is not mistaken for a working service.
- */
-async function waitForGrpcReady(
-	grpcPort: number,
-	sidecar: ReturnType<typeof Bun.spawn>,
-): Promise<void> {
-	for (let attempt = 0; attempt < 20; attempt++) {
-		if (sidecar.exitCode !== null) {
-			console.warn(
-				`gRPC helper exited before readiness (code ${sidecar.exitCode})`,
-			);
-			return;
-		}
-		const client = await createTraceServiceClient(`127.0.0.1:${grpcPort}`);
-		const answered = await new Promise<boolean>((resolve) => {
-			client.Export(
-				{ resourceSpans: [] },
-				{ deadline: Date.now() + 1000 },
-				() => resolve(true),
-			);
-			setTimeout(() => resolve(false), 1200);
-		});
-		client.close();
-		if (answered) return;
-		await sleep(100);
-	}
-	console.warn(`gRPC helper did not answer on 127.0.0.1:${grpcPort}`);
 }
 
 if (import.meta.main) {
