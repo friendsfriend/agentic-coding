@@ -158,6 +158,9 @@ export function view(
 				: {}),
 			createdAt: snapshot.metadata.createdAt,
 			updatedAt: snapshot.metadata.updatedAt,
+			...(snapshot.metadata.selectedPreset
+				? { selectedPreset: snapshot.metadata.selectedPreset }
+				: {}),
 			currentStep: {
 				id: snapshot.currentStep,
 				label: registry.stepForDefinition(definition, snapshot.currentStep)
@@ -233,6 +236,9 @@ export function view(
 						: {}),
 					createdAt: snapshot.metadata.createdAt,
 					updatedAt: snapshot.metadata.updatedAt,
+					...(snapshot.metadata.selectedPreset
+						? { selectedPreset: snapshot.metadata.selectedPreset }
+						: {}),
 					currentStep: {
 						id: snapshot.currentStep,
 						label: "Unavailable",

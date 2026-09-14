@@ -37,10 +37,13 @@ import { DiffViewModal } from "./devenv-ui/components/DiffViewModal";
 import { GenericModal } from "./devenv-ui/components/GenericModal";
 import { MarkdownViewModal } from "./devenv-ui/components/MarkdownViewModal";
 import {
+	listPresetNames,
 	onWorkflowExecutionError,
 	onWorkflowExecutionSettled,
+	PRESET_CONFIG_DEFAULTS,
 	reconcileSidebarPresentation,
 	requestWorkflowExecution,
+	switchWorkflowPreset,
 } from "./engine";
 import {
 	herdrEventMatchesWorkspace,
@@ -97,6 +100,10 @@ import { Layout } from "./ui/Layout";
 import { ListViewModal } from "./ui/ListViewModal";
 import { NotificationOverlay } from "./ui/Notification";
 import { Panel } from "./ui/Panel";
+import {
+	type PresetChoice,
+	PresetSwitcherModal,
+} from "./ui/PresetSwitcherModal";
 import { ProgressModal } from "./ui/ProgressModal";
 import { ScrollableContent } from "./ui/ScrollableContent";
 import { SelectableList } from "./ui/Selectable";
@@ -378,7 +385,8 @@ export function App(props: {
 		| "question"
 		| "cost"
 		| "review"
-		| "credentials";
+		| "credentials"
+		| "preset-switcher";
 	const modalHost = createModalHost<DashModal>();
 	const modalOpen = (kind: DashModal) =>
 		modalHost.stack().some((entry) => entry.kind === kind);
@@ -685,6 +693,71 @@ export function App(props: {
 	const [costSelection, setCostSelection] = createSignal(0);
 	const [costAgent, setCostAgent] = createSignal<string | null>(null);
 	const [costOffset, setCostOffset] = createSignal(0);
+	const [presetSwitcherHandler, setPresetSwitcherHandler] =
+		createSignal<(event: KeyEvent) => boolean>();
+	const [presetSwitcherChoices, setPresetSwitcherChoices] = createSignal<
+		PresetChoice[]
+	>([]);
+	const presetSwitcherOpen = () => modalOpen("preset-switcher");
+	const closePresetSwitcher = () => {
+		closeModal("preset-switcher");
+		props.keymap.setData("modal.active", "none");
+	};
+	const openPresetSwitcher = () => {
+		const current = data().state.selectedPreset;
+		let configured: string[] = [];
+		try {
+			configured = listPresetNames(data().state.repository);
+		} catch {
+			/* The picker still offers configuration defaults when config is unavailable. */
+		}
+		const names = new Set(configured);
+		if (current) names.add(current);
+		setPresetSwitcherChoices([
+			{ label: PRESET_CONFIG_DEFAULTS },
+			...[...names].map((name) => ({ label: name, value: name })),
+		]);
+		openModal("preset-switcher", "dashboard");
+		props.keymap.setData("modal.active", "preset-switcher");
+	};
+	const selectPreset = (preset: string | undefined) => {
+		closePresetSwitcher();
+		setBusy(true);
+		try {
+			if (props.profile === "test") {
+				setData((current) => ({
+					...current,
+					state: {
+						...current.state,
+						...(preset === undefined
+							? { selectedPreset: undefined }
+							: { selectedPreset: preset }),
+					},
+				}));
+			} else
+				switchWorkflowPreset(
+					props.repo,
+					props.workflowId,
+					data().state.revision,
+					preset ?? PRESET_CONFIG_DEFAULTS,
+				);
+			notify(
+				`Switched agent preset to ${preset ?? PRESET_CONFIG_DEFAULTS}; retriggering active agents`,
+				"success",
+			);
+			if (props.profile !== "test") refresh();
+		} catch (error) {
+			notify(error instanceof Error ? error.message : String(error), "error");
+			traceTui(
+				"tui.dashboard.action",
+				{ surface: "dashboard", action: "switch-preset" },
+				"error",
+			);
+			refresh();
+		} finally {
+			setBusy(false);
+		}
+	};
 	const [themeIndex, setThemeIndex] = createSignal(
 		Math.max(0, themeNames.indexOf(loadThemeName())),
 	);
@@ -1229,6 +1302,10 @@ export function App(props: {
 			setHelp(true);
 			setHelpOffset(0);
 			props.keymap.setData("modal.active", "help");
+			return;
+		}
+		if (name === "m") {
+			openPresetSwitcher();
 			return;
 		}
 		if (name === "c") {
@@ -1890,6 +1967,28 @@ export function App(props: {
 				(key) => ({ key, cmd: "cost.handle" }),
 			),
 		});
+		const disposePresetSwitcher = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
+			name: "preset-switcher",
+			priority: 1000,
+			activeModal: "preset-switcher",
+			commands: [
+				{
+					name: "preset-switcher.handle",
+					run: ({ event }) => {
+						if (routeModalHelp(event.name.toLowerCase())) return true;
+						return presetSwitcherHandler()?.(event) ?? true;
+					},
+				},
+			],
+			bindings: ["escape", "enter", "return", "j", "k", "up", "down", "?"].map(
+				(key) => ({
+					key,
+					cmd: "preset-switcher.handle",
+					preventDefault: false,
+				}),
+			),
+		});
 		const disposeHelp = props.keymap.registerLayer({
 			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "help",
@@ -2256,6 +2355,7 @@ export function App(props: {
 				"r",
 				"v",
 				"c",
+				"m",
 				"p",
 				"?",
 				"j",
@@ -2279,6 +2379,7 @@ export function App(props: {
 			disposeRepair();
 			disposeUserAction();
 			disposeCost();
+			disposePresetSwitcher();
 			disposeHelp();
 			disposeEvents();
 			disposeReviewComment();
@@ -2330,6 +2431,7 @@ export function App(props: {
 				userActionOpen() ||
 				questionOpen() ||
 				costOpen() ||
+				presetSwitcherOpen() ||
 				reviewOpen() ||
 				reviewCommentMode() ||
 				activeErrorModal() != null
@@ -3023,6 +3125,15 @@ export function App(props: {
 					selected={costSelection()}
 					agent={costAgent()}
 					offset={costOffset()}
+				/>
+			</Show>
+			<Show when={presetSwitcherOpen()}>
+				<PresetSwitcherModal
+					choices={presetSwitcherChoices()}
+					selected={data().state.selectedPreset}
+					onKeyReady={(handler) => setPresetSwitcherHandler(() => handler)}
+					onCancel={closePresetSwitcher}
+					onSelect={selectPreset}
 				/>
 			</Show>
 			<Show when={verdict()}>
