@@ -1,7 +1,7 @@
 // Unified Bun backend transport tests (expose-unified-bun-backend, task 1.5 /
 // 4.2). These exercise authorization, bounds, route ownership, event replay,
-// credential ownership and private Go delegation against a real loopback
-// server with injected operations, so no filesystem/Git/Herdr work happens.
+// credential ownership and retired delegation against a real loopback server
+// with injected operations, so no filesystem/Git/Herdr work happens.
 import { describe, expect, test } from "bun:test";
 import {
 	authorizeRequest,
@@ -57,14 +57,8 @@ function stubOperations(
 async function withServer<T>(
 	run: (server: Awaited<ReturnType<typeof startWorkflowServer>>) => Promise<T>,
 	operations: ServerOperations = stubOperations(),
-	environmentBaseUrl?: string,
 ): Promise<T> {
-	const server = await startWorkflowServer({
-		operations,
-		...(environmentBaseUrl
-			? { environmentBaseUrl, environmentToken: "private-token" }
-			: {}),
-	});
+	const server = await startWorkflowServer({ operations });
 	try {
 		return await run(server);
 	} finally {
@@ -82,13 +76,21 @@ function authed(
 }
 
 describe("server route ownership", () => {
-	test("static manifest resolves bun and private go routes", () => {
+	test("static manifest resolves the versioned surface and its private operations", () => {
 		expect(routeOwner("GET", "/api/v1/health")?.owner).toBe("bun");
 		expect(routeOwner("POST", "/api/v1/observe")?.owner).toBe("bun");
 		expect(routeOwner("GET", "/api/v1/events")?.owner).toBe("bun");
+		expect(routeOwner("POST", "/api/v1/environment/private/state")?.owner).toBe(
+			"bun",
+		);
+		// The delegated environment prefix and the retired Git bridge are gone:
+		// neither path is served by this process or any other.
 		expect(
-			routeOwner("POST", "/api/v1/environment/api/apps/create")?.owner,
-		).toBe("go");
+			routeOwner("POST", "/api/v1/environment/api/apps/create"),
+		).toBeUndefined();
+		expect(
+			routeOwner("POST", "/api/v1/integrations/private/git-command"),
+		).toBeUndefined();
 		expect(routeOwner("GET", "/api/v1/unknown")).toBeUndefined();
 	});
 
@@ -365,40 +367,18 @@ describe("credential interactions", () => {
 	});
 });
 
-describe("private Go delegation", () => {
-	test("forwards the instance token and returns the delegated response", async () => {
-		const go = Bun.serve({
-			hostname: "127.0.0.1",
-			port: 0,
-			fetch: (request) => {
-				const token = request.headers.get("x-instance-token");
-				return Response.json({
-					token,
-					path: new URL(request.url).pathname,
-				});
-			},
-		});
-		try {
-			await withServer(
-				async (server) => {
-					const response = await fetch(
-						`${server.url}/api/v1/environment/api/apps`,
-						authed(server),
-					);
-					expect(response.status).toBe(200);
-					const body = (await response.json()) as {
-						token: string;
-						path: string;
-					};
-					expect(body.path).toBe("/api/apps");
-					expect(body.token).toBe("private-token");
-				},
-				stubOperations(),
-				`http://127.0.0.1:${go.port}`,
+describe("retired delegation", () => {
+	test("the delegated environment prefix is gone, not forwarded", async () => {
+		await withServer(async (server) => {
+			const response = await fetch(
+				`${server.url}/api/v1/environment/api/apps`,
+				authed(server),
 			);
-		} finally {
-			go.stop(true);
-		}
+			// The mixed-runtime prefix used to be forwarded to the Go child. With
+			// that runtime retired the route does not exist, and the private
+			// environment operation is the only environment path that does.
+			expect(response.status).toBe(404);
+		});
 	});
 });
 

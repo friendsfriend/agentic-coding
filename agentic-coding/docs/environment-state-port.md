@@ -1,16 +1,17 @@
 # Environment state and configuration ownership
 
-`port-project-catalog-and-state-to-bun` moves the configured-environment
+`port-project-catalog-and-state-to-bun` moved the configured-environment
 authority (definition files, project catalog, `$DEVENV_HOME/db/state.db`) from
-the Go backend into `src/server/environment/`. Until the cutover completes, Go
-keeps its existing behavior and Bun consumes the same on-disk data.
+the Go backend into `src/server/environment/`. The mixed-runtime phases this
+document describes are history: the Go tree, its adapters and the owner switch
+are gone ([`go-retirement.md`](go-retirement.md)), and this process is the only
+environment owner.
 
 ## Predecessor
 
 `expose-unified-bun-backend` is implemented (archived, all tasks checked):
-`src/server/` owns workflow/telemetry and delegates `/api/v1/environment/*` to
-the private Go child, which is why this change can port the environment domain
-behind an unchanged route contract.
+`src/server/` owns workflow/telemetry, which is why this change could port the
+environment domain behind an unchanged contract.
 
 ## Writer inventory (Go, non-test)
 
@@ -70,51 +71,49 @@ cursor contracts depend on (`ageEventTimestampsToNow`).
   post-migration integrity check.
 - `src/server/environment/manager.ts` — definition loading/writing, runtime
   state overlay, explicit initialization backfill and branch refresh.
-- `src/server/environment/authority.ts` — composition root plus the ownership
-  switch (`DEVENV_ENVIRONMENT_OWNER`, default `bun`; `go` rolls back to the
-  previous single owner).
+- `src/server/environment/authority.ts` — composition root of the single
+  environment owner (the mixed-runtime `DEVENV_ENVIRONMENT_OWNER` switch was
+  removed with the Go backend).
 - `src/server/environment/private-api.ts` — the bounded private operation
   envelope (task 3.1): one logical operation per request, decoded against a
   closed literal set, no SQL/table/column on the wire, served in-process.
 
-## Mixed-runtime cutover (implemented)
+## Cutover (completed, single owner)
 
-- `POST /api/v1/environment/private/state` is served by Bun and reached by the
-  Go child through `server/pkg/environment` (`Client.Store()` /
-  `Client.Manager()`), which implement the existing `state.Store` and
-  `app.Manager` interfaces. No Go call site changed.
-- `pkg/services/openEnvironment` selects the owner: with
-  `DEVENV_ENVIRONMENT_URL` set, the Go process opens **no** database handle and
-  parses no configuration; without it, the previous owner is unchanged.
-- Startup order is Bun → Go in migrated mode (headless server and TUI), so the
-  Bun authority exists before the child that calls it; the delegation target is
-  resolved per request, which is what makes the order possible.
-- Go's `LoadConfig`/`LoadCatalogConfig` delegate to Bun and refresh the Go
-  snapshot from the same response, so a failed reload keeps the last good
-  catalog published.
+- `POST /api/v1/environment/private/state` is served in-process and carries one
+  logical operation per request (bounded, closed literal set, no SQL/table/
+  column on the wire). It remains the boundary the routes and tests use.
+- The Go-side client, the `openEnvironment` migrated branch and the
+  `DEVENV_ENVIRONMENT_URL`/`DEVENV_ENVIRONMENT_TOKEN` child variables are
+  deleted; there is no second writer to select.
+- `agentic-coding server` and the owned TUI route both create the authority
+  before the listener starts, so a request can never reach a server whose
+  configuration is not loaded.
+- A failed configuration reload keeps the last good catalog published
+  (`test/environment-config.test.ts`).
 
 ## Rollback gate
 
-- Roll back by stopping the stack and setting `DEVENV_ENVIRONMENT_OWNER=go`;
-  never run both generations as writers.
+- Rollback is a deliberate restore at a quiescent boundary: stop the server,
+  restore the previous release and, if that release writes an older schema, the
+  verified `state.db.backup-v<N>` it expects. Never run two releases as writers
+  over one database.
 - An upgrade from an older schema leaves `state.db.backup-v<N>` (consistent
   `VACUUM INTO`, written once per source version).
 - A newer schema fails closed without modification and without a backup.
 - An interrupted upgrade is either completed idempotently (missing columns are
   re-added) or rolled back as a whole; there is no partial migration.
 
-## Bridge removal inventory (for `retire-go-backend-and-migration-bridges`)
+## Bridge removal (completed by `retire-go-backend-and-migration-bridges`)
 
-Remove in the final cleanup, after the remaining Go environment routes are
-ported:
-
-- `server/pkg/environment/` (client, store and manager adapters) and the
-  `openEnvironment` migrated branch in `server/pkg/services/container.go`.
-- The `environment` option of `startOwnedBackend` plus the
-  `DEVENV_ENVIRONMENT_URL`/`DEVENV_ENVIRONMENT_TOKEN` child variables, and the
-  `environmentBaseUrl`/`environmentToken` delegation in `src/server/app.ts`
-  (which is the only reason the lazy resolvers exist).
-- The `DEVENV_ENVIRONMENT_OWNER` switch itself once the Go child is gone.
+- `server/pkg/environment/` (client, store and manager adapters), the
+  `openEnvironment` migrated branch and the whole Go tree are deleted.
+- The `DEVENV_ENVIRONMENT_URL`/`DEVENV_ENVIRONMENT_TOKEN` child variables, the
+  `environment`/`integrations` spawn options and the
+  `environmentBaseUrl`/`environmentToken` delegation in `src/server/app.ts` are
+  deleted.
+- The `DEVENV_ENVIRONMENT_OWNER` switch is deleted; `test/go-retirement.test.ts`
+  fails if any of these markers returns.
 
 ## Remaining in this change
 

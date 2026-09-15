@@ -14,9 +14,7 @@
 	"scripts": {
 		"test": "bun run scripts/test.ts",
 		"test:devenv": "bun test packages/devenv",
-		"test:server": "cd ../server && go test ./...",
-		"vet:server": "cd ../server && go vet ./...",
-		"verify": "bun run lint && bun run type-check && bun run test && bun run test:devenv && bun run test:server && bun run vet:server",
+		"verify": "bun run lint && bun run type-check && bun run test && bun run test:devenv && bun run build",
 		"type-check": "tsc --noEmit",
 		"lint": "biome check .",
 		"format": "biome format --write .",

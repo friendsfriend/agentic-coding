@@ -1,0 +1,453 @@
+{
+  "discovered": [
+    {
+      "name": "deploy.sh",
+      "relativePath": "deploy.sh",
+      "absolutePath": "{{ROOT}}/home/scripts/deploy.sh",
+      "directory": "{{ROOT}}/home/scripts",
+      "extension": ".sh",
+      "interpreter": "bash"
+    },
+    {
+      "name": "task.ps1",
+      "relativePath": "nested/deep/task.ps1",
+      "absolutePath": "{{ROOT}}/home/scripts/nested/deep/task.ps1",
+      "directory": "{{ROOT}}/home/scripts/nested/deep",
+      "extension": ".ps1",
+      "interpreter": "pwsh"
+    },
+    {
+      "name": "run.sh",
+      "relativePath": "nested/run.sh",
+      "absolutePath": "{{ROOT}}/home/scripts/nested/run.sh",
+      "directory": "{{ROOT}}/home/scripts/nested",
+      "extension": ".sh",
+      "interpreter": "sh"
+    },
+    {
+      "name": "bundle.js",
+      "relativePath": "tools/bundle.js",
+      "absolutePath": "{{ROOT}}/home/scripts/tools/bundle.js",
+      "directory": "{{ROOT}}/home/scripts/tools",
+      "extension": ".js",
+      "interpreter": "bun"
+    },
+    {
+      "name": "plain-executable",
+      "relativePath": "tools/plain-executable",
+      "absolutePath": "{{ROOT}}/home/scripts/tools/plain-executable",
+      "directory": "{{ROOT}}/home/scripts/tools",
+      "extension": ""
+    },
+    {
+      "name": "report.py",
+      "relativePath": "tools/report.py",
+      "absolutePath": "{{ROOT}}/home/scripts/tools/report.py",
+      "directory": "{{ROOT}}/home/scripts/tools",
+      "extension": ".py",
+      "interpreter": "python3"
+    },
+    {
+      "name": "secret.sh",
+      "relativePath": "tools/secret.sh",
+      "absolutePath": "{{ROOT}}/home/scripts/tools/secret.sh",
+      "directory": "{{ROOT}}/home/scripts/tools",
+      "extension": ".sh",
+      "interpreter": "zsh"
+    }
+  ],
+  "missingDir": [],
+  "targetPaths": [
+    {
+      "targetPath": "deploy",
+      "defaultExtension": ".sh",
+      "relativePath": "deploy.sh",
+      "absolutePath": "{{ROOT}}/home/scripts/deploy.sh"
+    },
+    {
+      "targetPath": "nested/task",
+      "defaultExtension": ".sh",
+      "relativePath": "nested/task.sh",
+      "absolutePath": "{{ROOT}}/home/scripts/nested/task.sh"
+    },
+    {
+      "targetPath": "nested\\task.ps1",
+      "defaultExtension": "",
+      "relativePath": "nested/task.ps1",
+      "absolutePath": "{{ROOT}}/home/scripts/nested/task.ps1"
+    },
+    {
+      "targetPath": "folder/sub/new",
+      "defaultExtension": ".ps1",
+      "relativePath": "folder/sub/new.ps1",
+      "absolutePath": "{{ROOT}}/home/scripts/folder/sub/new.ps1"
+    },
+    {
+      "targetPath": "new",
+      "defaultExtension": "ps1",
+      "relativePath": "new.ps1",
+      "absolutePath": "{{ROOT}}/home/scripts/new.ps1"
+    },
+    {
+      "targetPath": "",
+      "defaultExtension": ".sh",
+      "error": "target name/path is required"
+    },
+    {
+      "targetPath": "/absolute",
+      "defaultExtension": ".sh",
+      "error": "target name/path must be relative to scripts/"
+    },
+    {
+      "targetPath": "../escape",
+      "defaultExtension": ".sh",
+      "error": "target name/path cannot escape scripts/"
+    },
+    {
+      "targetPath": "..",
+      "defaultExtension": ".sh",
+      "error": "target name/path cannot escape scripts/"
+    },
+    {
+      "targetPath": ".",
+      "defaultExtension": ".sh",
+      "error": "target name/path is invalid"
+    },
+    {
+      "targetPath": "./deploy",
+      "defaultExtension": ".sh",
+      "relativePath": "deploy.sh",
+      "absolutePath": "{{ROOT}}/home/scripts/deploy.sh"
+    },
+    {
+      "targetPath": "a/../b",
+      "defaultExtension": ".sh",
+      "relativePath": "b.sh",
+      "absolutePath": "{{ROOT}}/home/scripts/b.sh"
+    }
+  ],
+  "sourcePaths": [
+    {
+      "sourcePath": "{{ROOT}}/home/scripts/deploy.sh"
+    },
+    {
+      "sourcePath": "{{ROOT}}/home/scripts/nested",
+      "error": "source script path must be a file"
+    },
+    {
+      "sourcePath": "{{ROOT}}/home/scripts/tools/plain-executable",
+      "error": "source script must have an extension"
+    },
+    {
+      "sourcePath": "{{ROOT}}/missing.sh",
+      "error": "source script path does not exist"
+    },
+    {
+      "sourcePath": "",
+      "error": "source script path is required"
+    }
+  ],
+  "mutations": [
+    {
+      "operation": "create",
+      "targetPath": "created",
+      "content": "#!/usr/bin/env sh\necho linked\n",
+      "relativePath": "created.sh",
+      "absolutePath": "{{ROOT}}/home/scripts/created.sh",
+      "written": "#!/usr/bin/env sh\necho linked\n"
+    },
+    {
+      "operation": "create",
+      "targetPath": "created",
+      "content": "#!/usr/bin/env sh\necho linked\n",
+      "error": "target script already exists"
+    },
+    {
+      "operation": "create",
+      "targetPath": "../escape",
+      "content": "#!/usr/bin/env sh\necho linked\n",
+      "error": "target name/path cannot escape scripts/"
+    },
+    {
+      "operation": "link",
+      "targetPath": "linked",
+      "sourcePath": "{{ROOT}}/home/external.sh",
+      "relativePath": "linked.sh",
+      "absolutePath": "{{ROOT}}/home/scripts/linked.sh",
+      "written": "#!/usr/bin/env sh\necho external\n",
+      "isLink": true
+    },
+    {
+      "operation": "link",
+      "targetPath": "linked",
+      "sourcePath": "{{ROOT}}/home/external.sh",
+      "error": "target script already exists"
+    },
+    {
+      "operation": "link",
+      "targetPath": "linked-missing",
+      "sourcePath": "{{ROOT}}/missing.sh",
+      "error": "source script path does not exist"
+    },
+    {
+      "operation": "delete",
+      "targetPath": "created",
+      "error": "script target does not exist"
+    },
+    {
+      "operation": "delete",
+      "targetPath": "tools/not-executable.sh",
+      "relativePath": "tools/not-executable.sh",
+      "absolutePath": "{{ROOT}}/home/scripts/tools/not-executable.sh"
+    },
+    {
+      "operation": "delete",
+      "targetPath": "nested",
+      "relativePath": "nested",
+      "absolutePath": "{{ROOT}}/home/scripts/nested"
+    },
+    {
+      "operation": "delete",
+      "targetPath": "missing",
+      "error": "script target does not exist"
+    }
+  ],
+  "shellActions": [
+    {
+      "name": "build-shell",
+      "ident": "api",
+      "action": "build",
+      "profile": "",
+      "command": "go build ./...",
+      "runtime": "shell",
+      "path": "{{ROOT}}/config/apps/build/api-build.sh",
+      "written": "#!/usr/bin/env sh\n# devenv:name=Build\n# devenv:mode=logged\nset -eu\n\ngo build ./...\n"
+    },
+    {
+      "name": "test-shell-default-command",
+      "ident": "api",
+      "action": "test",
+      "profile": "",
+      "command": "",
+      "runtime": "shell",
+      "path": "{{ROOT}}/config/apps/build/api-test.sh",
+      "written": "#!/usr/bin/env sh\n# devenv:name=Test\n# devenv:mode=logged\nset -eu\n\necho \"TODO: replace with your command\"\n"
+    },
+    {
+      "name": "run-shell-profile",
+      "ident": "api",
+      "action": "run",
+      "profile": "dev-server",
+      "command": "npm run dev",
+      "runtime": "shell",
+      "path": "{{ROOT}}/config/apps/run/api-dev-server.sh",
+      "written": "#!/usr/bin/env sh\n# devenv:name=dev-server\n# devenv:mode=tmux\nset -eu\n\nnpm run dev\n"
+    },
+    {
+      "name": "run-shell-invalid-profile",
+      "ident": "api",
+      "action": "run",
+      "profile": "bad profile",
+      "command": "npm run dev",
+      "runtime": "shell",
+      "error": "profile must contain only letters, numbers, underscores, and dashes"
+    },
+    {
+      "name": "run-powershell",
+      "ident": "api",
+      "action": "run",
+      "profile": "ps",
+      "command": "Write-Host hi",
+      "runtime": "powershell",
+      "path": "{{ROOT}}/config/apps/run/api-ps.ps1",
+      "written": "# devenv:name=ps\n# devenv:mode=tmux\n$ErrorActionPreference = \"Stop\"\nSet-StrictMode -Version Latest\n\nWrite-Host hi\n"
+    },
+    {
+      "name": "unsupported-action",
+      "ident": "api",
+      "action": "deploy",
+      "profile": "",
+      "command": "x",
+      "runtime": "shell",
+      "error": "unsupported shell action \"deploy\""
+    },
+    {
+      "name": "missing-ident",
+      "ident": "",
+      "action": "build",
+      "profile": "",
+      "command": "x",
+      "runtime": "shell",
+      "error": "app ident is required"
+    }
+  ],
+  "interpreters": {
+    "shebangs": [
+      {
+        "relativePath": "deploy.sh",
+        "interpreter": "bash",
+        "resolvedInterpreter": "bash"
+      },
+      {
+        "relativePath": "nested/deep/task.ps1",
+        "resolvedInterpreter": "pwsh"
+      },
+      {
+        "relativePath": "nested/run.sh",
+        "interpreter": "sh",
+        "resolvedInterpreter": "sh"
+      },
+      {
+        "relativePath": "tools/bundle.js",
+        "resolvedInterpreter": "bun"
+      },
+      {
+        "relativePath": "tools/plain-executable"
+      },
+      {
+        "relativePath": "tools/report.py",
+        "interpreter": "python3",
+        "resolvedInterpreter": "python3"
+      },
+      {
+        "relativePath": "tools/secret.sh",
+        "interpreter": "zsh",
+        "resolvedInterpreter": "zsh"
+      }
+    ],
+    "windowsMapping": [
+      {
+        "mapped": "bash",
+        "name": "bash"
+      },
+      {
+        "mapped": "sh",
+        "name": "sh"
+      },
+      {
+        "mapped": "zsh",
+        "name": "zsh"
+      },
+      {
+        "mapped": "python",
+        "name": "python"
+      },
+      {
+        "mapped": "python",
+        "name": "python3"
+      },
+      {
+        "mapped": "pwsh",
+        "name": "pwsh"
+      },
+      {
+        "mapped": "pwsh",
+        "name": "powershell"
+      },
+      {
+        "mapped": "bun",
+        "name": "bun"
+      },
+      {
+        "mapped": "node",
+        "name": "node"
+      },
+      {
+        "mapped": "deno",
+        "name": "deno"
+      },
+      {
+        "mapped": "ruby",
+        "name": "ruby"
+      },
+      {
+        "mapped": "perl",
+        "name": "perl"
+      },
+      {
+        "mapped": "lua",
+        "name": "lua"
+      },
+      {
+        "mapped": "R",
+        "name": "R"
+      },
+      {
+        "mapped": "julia",
+        "name": "julia"
+      },
+      {
+        "mapped": "nu",
+        "name": "nu"
+      },
+      {
+        "mapped": "rust-script",
+        "name": "rust-script"
+      },
+      {
+        "mapped": "dotnet",
+        "name": "dotnet"
+      },
+      {
+        "mapped": "weird-thing",
+        "name": "weird-thing"
+      }
+    ],
+    "windowsExt": {
+      ".bat": "",
+      ".cmd": "",
+      ".exe": "",
+      ".js": "bun",
+      ".ps1": "pwsh",
+      ".py": "python",
+      ".sh": "bash",
+      ".ts": "bun"
+    },
+    "recognized": [
+      {
+        "name": "bash",
+        "recognized": true
+      },
+      {
+        "name": "python3.12",
+        "recognized": true
+      },
+      {
+        "name": "pwsh",
+        "recognized": true
+      },
+      {
+        "name": "pwsh.exe",
+        "recognized": true
+      },
+      {
+        "name": "PWSh.EXE",
+        "recognized": false
+      },
+      {
+        "name": "ruby",
+        "recognized": true
+      },
+      {
+        "name": "lua",
+        "recognized": true
+      },
+      {
+        "name": "zsh",
+        "recognized": true
+      },
+      {
+        "name": "fish",
+        "recognized": false
+      },
+      {
+        "name": "unknown",
+        "recognized": false
+      },
+      {
+        "name": "",
+        "recognized": false
+      }
+    ]
+  }
+}

@@ -1,0 +1,61 @@
+[
+  {
+    "ident": "api",
+    "action": "build",
+    "runtime": "docker",
+    "value": "app/api/build/docker"
+  },
+  {
+    "ident": "api",
+    "action": "run",
+    "runtime": "docker",
+    "profile": "dev",
+    "value": "app/api/run/docker/dev"
+  },
+  {
+    "ident": "api",
+    "action": "run",
+    "runtime": "shell",
+    "value": "app/api/run/shell"
+  },
+  {
+    "ident": "api",
+    "action": "test",
+    "runtime": "systemshell",
+    "profile": "fast",
+    "value": "app/api/test/systemshell/fast"
+  },
+  {
+    "ident": "api",
+    "action": "run",
+    "runtime": "kubernetes",
+    "profile": "local",
+    "value": "app/api/run/kubernetes/local"
+  },
+  {
+    "ident": "my-app",
+    "action": "run",
+    "runtime": "powershell",
+    "profile": "ci",
+    "value": "app/my-app/run/powershell/ci"
+  },
+  {
+    "ident": "",
+    "action": "build",
+    "runtime": "docker",
+    "value": "build:docker"
+  },
+  {
+    "ident": "",
+    "action": "build",
+    "runtime": "docker",
+    "profile": "dev",
+    "value": "build:docker:dev"
+  },
+  {
+    "ident": "",
+    "action": "run",
+    "runtime": "shell",
+    "value": "run:shell"
+  }
+]

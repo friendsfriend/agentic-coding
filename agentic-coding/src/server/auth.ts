@@ -30,16 +30,16 @@ export interface InstanceAuthority {
 	readonly token: string;
 }
 
-/** A fresh per-instance identity + capability token. */
+/** A fresh per-instance identity + capability token. A caller that has already
+ * exported a capability (the shell hands one to its environment client before
+ * the listener exists) passes it in instead of receiving a second one. */
 export function createInstanceAuthority(
 	instance = crypto.randomUUID().replaceAll("-", ""),
+	token = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString(
+		"hex",
+	),
 ): InstanceAuthority {
-	return {
-		instance,
-		token: Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString(
-			"hex",
-		),
-	};
+	return { instance, token };
 }
 
 function constantTimeEqual(a: string, b: string): boolean {
@@ -68,6 +68,19 @@ export function isSessionAuthorizedRoute(
 	if (method.toUpperCase() !== "POST") return false;
 	const prefix = "/api/ai/cr-comment-callback/";
 	return pathname.startsWith(prefix) && pathname.length > prefix.length;
+}
+
+/**
+ * Routes answered without the instance token.
+ *
+ * `GET /api/health` is the liveness/identity probe every client, launcher and
+ * operator uses; it reports the instance id and the environment roots but no
+ * secret, exactly as the retired backend's health route did. It is a single
+ * exact path, not a prefix, so no other surface is reachable unauthenticated.
+ */
+export function isPublicRoute(method: string, pathname: string): boolean {
+	if (method.toUpperCase() !== "GET") return false;
+	return pathname === "/api/health";
 }
 
 /** `http://127.0.0.1:*`, `http://[::1]:*` and `localhost` are the only

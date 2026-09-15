@@ -1,0 +1,158 @@
+{
+  "metadata": [
+    {
+      "name": "array",
+      "output": "[{\"name\":\"env\",\"type\":\"enum\",\"required\":true,\"choices\":[\"dev\",\"prod\"],\"flag\":\"--env\"}]",
+      "params": [
+        {
+          "choices": [
+            "dev",
+            "prod"
+          ],
+          "flag": "--env",
+          "name": "env",
+          "required": true,
+          "type": "enum"
+        }
+      ]
+    },
+    {
+      "name": "empty",
+      "output": "",
+      "params": []
+    },
+    {
+      "name": "empty-array",
+      "output": "[]",
+      "params": []
+    },
+    {
+      "name": "invalid",
+      "output": "not json",
+      "params": []
+    },
+    {
+      "name": "null",
+      "output": "null",
+      "params": []
+    },
+    {
+      "name": "single",
+      "output": "{\"name\":\"target\",\"type\":\"string\"}",
+      "params": [
+        {
+          "name": "target",
+          "required": false,
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "unknown-field",
+      "output": "[{\"name\":\"x\",\"type\":\"string\",\"extra\":\"ignored\"}]",
+      "params": [
+        {
+          "name": "x",
+          "required": false,
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "wrapped",
+      "output": "{\"parameters\":[{\"name\":\"dry-run\",\"type\":\"bool\",\"required\":false,\"flag\":\"--dry-run\"}]}",
+      "params": [
+        {
+          "flag": "--dry-run",
+          "name": "dry-run",
+          "required": false,
+          "type": "bool"
+        }
+      ]
+    }
+  ],
+  "plans": [
+    {
+      "name": "unix-shebang",
+      "scriptPath": "{{ROOT}}/home/scripts/nested/run.sh",
+      "extraArgs": [
+        "--flag",
+        "value"
+      ],
+      "goos": "linux",
+      "command": "{{ROOT}}/home/scripts/nested/run.sh",
+      "args": [
+        "--flag",
+        "value"
+      ],
+      "workingDir": "{{ROOT}}/home/scripts/nested"
+    }
+  ],
+  "tree": [
+    {
+      "name": "nested",
+      "relativePath": "nested",
+      "absolutePath": "{{ROOT}}/home/scripts/nested",
+      "nodeType": "folder",
+      "children": [
+        {
+          "name": "deep",
+          "relativePath": "nested/deep",
+          "absolutePath": "{{ROOT}}/home/scripts/nested/deep",
+          "nodeType": "folder",
+          "children": [
+            {
+              "name": "task.ps1",
+              "relativePath": "nested/deep/task.ps1",
+              "absolutePath": "{{ROOT}}/home/scripts/nested/deep/task.ps1",
+              "nodeType": "script",
+              "interpreter": "pwsh"
+            }
+          ]
+        },
+        {
+          "name": "run.sh",
+          "relativePath": "nested/run.sh",
+          "absolutePath": "{{ROOT}}/home/scripts/nested/run.sh",
+          "nodeType": "script",
+          "interpreter": "sh"
+        }
+      ]
+    },
+    {
+      "name": "tools",
+      "relativePath": "tools",
+      "absolutePath": "{{ROOT}}/home/scripts/tools",
+      "nodeType": "folder",
+      "children": [
+        {
+          "name": "bundle.js",
+          "relativePath": "tools/bundle.js",
+          "absolutePath": "{{ROOT}}/home/scripts/tools/bundle.js",
+          "nodeType": "script",
+          "interpreter": "bun"
+        },
+        {
+          "name": "plain-executable",
+          "relativePath": "tools/plain-executable",
+          "absolutePath": "{{ROOT}}/home/scripts/tools/plain-executable",
+          "nodeType": "script"
+        },
+        {
+          "name": "report.py",
+          "relativePath": "tools/report.py",
+          "absolutePath": "{{ROOT}}/home/scripts/tools/report.py",
+          "nodeType": "script",
+          "interpreter": "python3"
+        }
+      ]
+    },
+    {
+      "name": "deploy.sh",
+      "relativePath": "deploy.sh",
+      "absolutePath": "{{ROOT}}/home/scripts/deploy.sh",
+      "nodeType": "script",
+      "interpreter": "bash"
+    }
+  ]
+}

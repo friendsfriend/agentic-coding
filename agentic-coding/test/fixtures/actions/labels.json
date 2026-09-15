@@ -1,0 +1,591 @@
+{
+  "stepLabels": [
+    {
+      "kind": "",
+      "fallback": "git symbolic-ref HEAD",
+      "label": "Git Symbolic-ref HEAD"
+    },
+    {
+      "kind": "unknown.kind",
+      "fallback": "helm list",
+      "label": "Helm List"
+    },
+    {
+      "kind": "",
+      "fallback": "   ",
+      "label": "Command"
+    },
+    {
+      "kind": "kubernetes.secret.delete|db-credentials",
+      "fallback": "fallback",
+      "label": "Delete secret db-credentials"
+    },
+    {
+      "kind": "kubernetes.port-forward|web",
+      "fallback": "fallback",
+      "label": "Port-forward web"
+    },
+    {
+      "kind": "kubernetes.secret.create",
+      "fallback": "fallback",
+      "label": "Create secret %!s(MISSING)",
+      "defect": "%s template with no args",
+      "note": "Go renders fmt's `%!s(MISSING)`; Bun substitutes nothing. Unreachable through a compiled definition."
+    },
+    {
+      "kind": "git.rev-parse",
+      "fallback": "fallback",
+      "label": "Get ref"
+    },
+    {
+      "kind": "git.fetch",
+      "fallback": "fallback",
+      "label": "Fetch"
+    },
+    {
+      "kind": "git.pull",
+      "fallback": "fallback",
+      "label": "Pull"
+    },
+    {
+      "kind": "git.push",
+      "fallback": "fallback",
+      "label": "Push"
+    },
+    {
+      "kind": "git.clone",
+      "fallback": "fallback",
+      "label": "Clone repository"
+    },
+    {
+      "kind": "git.status",
+      "fallback": "fallback",
+      "label": "Check status"
+    },
+    {
+      "kind": "git.branch.list",
+      "fallback": "fallback",
+      "label": "List branches"
+    },
+    {
+      "kind": "git.switch",
+      "fallback": "fallback",
+      "label": "Switch branch"
+    },
+    {
+      "kind": "git.worktree.list",
+      "fallback": "fallback",
+      "label": "List worktrees"
+    },
+    {
+      "kind": "git.worktree.remove",
+      "fallback": "fallback",
+      "label": "Remove worktree"
+    },
+    {
+      "kind": "git.worktree.prune",
+      "fallback": "fallback",
+      "label": "Prune worktrees"
+    },
+    {
+      "kind": "kubernetes.cluster.check",
+      "fallback": "fallback",
+      "label": "Check cluster"
+    },
+    {
+      "kind": "kubernetes.cluster.create",
+      "fallback": "fallback",
+      "label": "Create cluster"
+    },
+    {
+      "kind": "kubernetes.cluster.delete",
+      "fallback": "fallback",
+      "label": "Delete cluster"
+    },
+    {
+      "kind": "kubernetes.cluster.export",
+      "fallback": "fallback",
+      "label": "Export kubeconfig"
+    },
+    {
+      "kind": "kubernetes.helm.status",
+      "fallback": "fallback",
+      "label": "Check release"
+    },
+    {
+      "kind": "kubernetes.helm.uninstall",
+      "fallback": "fallback",
+      "label": "Uninstall release"
+    },
+    {
+      "kind": "kubernetes.helm.install",
+      "fallback": "fallback",
+      "label": "Install release"
+    },
+    {
+      "kind": "kubernetes.image.build",
+      "fallback": "fallback",
+      "label": "Build image"
+    },
+    {
+      "kind": "kubernetes.image.load",
+      "fallback": "fallback",
+      "label": "Load image into cluster"
+    },
+    {
+      "kind": "compose.start",
+      "fallback": "fallback",
+      "label": "Start containers"
+    },
+    {
+      "kind": "compose.stop",
+      "fallback": "fallback",
+      "label": "Stop containers"
+    },
+    {
+      "kind": "compose.build",
+      "fallback": "fallback",
+      "label": "Build containers"
+    },
+    {
+      "kind": "compose.pull",
+      "fallback": "fallback",
+      "label": "Pull container images"
+    },
+    {
+      "kind": "command.build",
+      "fallback": "fallback",
+      "label": "Run build command"
+    },
+    {
+      "kind": "command.test",
+      "fallback": "fallback",
+      "label": "Run test command"
+    },
+    {
+      "kind": "command.run",
+      "fallback": "fallback",
+      "label": "Run application command"
+    },
+    {
+      "kind": "command.start",
+      "fallback": "fallback",
+      "label": "Run start command"
+    },
+    {
+      "kind": "command.stop",
+      "fallback": "fallback",
+      "label": "Run stop command"
+    },
+    {
+      "kind": "command.execute",
+      "fallback": "fallback",
+      "label": "Run command"
+    }
+  ],
+  "gitCommandKinds": [
+    {
+      "args": "rev-parse --abbrev-ref HEAD",
+      "kind": "git.rev-parse"
+    },
+    {
+      "args": "fetch --force origin +refs/heads/*:refs/remotes/origin/*",
+      "kind": "git.fetch"
+    },
+    {
+      "args": "reset --hard origin/main",
+      "kind": "git.pull"
+    },
+    {
+      "args": "push origin",
+      "kind": "git.push"
+    },
+    {
+      "args": "clone --branch main repo dir",
+      "kind": "git.clone"
+    },
+    {
+      "args": "status --porcelain",
+      "kind": "git.status"
+    },
+    {
+      "args": "branch --list main",
+      "kind": "git.branch.list"
+    },
+    {
+      "args": "branch --remote --list origin/main",
+      "kind": "git.branch.list"
+    },
+    {
+      "args": "switch -c main --track origin/main",
+      "kind": "git.switch"
+    },
+    {
+      "args": "switch main",
+      "kind": "git.switch"
+    },
+    {
+      "args": "switch main --no-cd --yes",
+      "kind": "git.switch"
+    },
+    {
+      "args": "worktree list --porcelain",
+      "kind": "git.worktree.list"
+    },
+    {
+      "args": "worktree remove --force dir",
+      "kind": "git.worktree.remove"
+    },
+    {
+      "args": "worktree prune",
+      "kind": "git.worktree.prune"
+    },
+    {
+      "args": "remove main --yes",
+      "kind": "git.worktree.remove"
+    },
+    {
+      "args": "symbolic-ref HEAD",
+      "kind": ""
+    },
+    {
+      "args": "  fetch  ",
+      "kind": "git.fetch"
+    },
+    {
+      "args": "",
+      "kind": ""
+    }
+  ],
+  "commandKinds": [
+    {
+      "operation": "run",
+      "command": "podman-compose",
+      "args": [
+        "-p",
+        "devenv",
+        "--env-file",
+        "/tmp/.env",
+        "up",
+        "-d"
+      ],
+      "kind": "compose.start",
+      "label": "Start containers"
+    },
+    {
+      "operation": "stop",
+      "command": "docker-compose",
+      "args": [
+        "down"
+      ],
+      "kind": "compose.stop",
+      "label": "Stop containers"
+    },
+    {
+      "operation": "build",
+      "command": "docker",
+      "args": [
+        "compose",
+        "build"
+      ],
+      "kind": "compose.build",
+      "label": "Build containers"
+    },
+    {
+      "operation": "run",
+      "command": "podman",
+      "args": [
+        "compose",
+        "pull"
+      ],
+      "kind": "compose.pull",
+      "label": "Pull container images"
+    },
+    {
+      "operation": "run",
+      "command": "kind",
+      "args": [
+        "get",
+        "clusters"
+      ],
+      "kind": "kubernetes.cluster.check",
+      "label": "Check cluster"
+    },
+    {
+      "operation": "run",
+      "command": "kind",
+      "args": [
+        "create",
+        "cluster",
+        "--name",
+        "devenv"
+      ],
+      "kind": "kubernetes.cluster.create",
+      "label": "Create cluster"
+    },
+    {
+      "operation": "run",
+      "command": "kind",
+      "args": [
+        "export",
+        "kubeconfig",
+        "--name",
+        "devenv"
+      ],
+      "kind": "kubernetes.cluster.export",
+      "label": "Export kubeconfig"
+    },
+    {
+      "operation": "run",
+      "command": "helm",
+      "args": [
+        "--kube-context",
+        "kind-devenv",
+        "status",
+        "postgres-local"
+      ],
+      "kind": "kubernetes.helm.status",
+      "label": "Check release"
+    },
+    {
+      "operation": "run",
+      "command": "helm",
+      "args": [
+        "--kube-context",
+        "kind-devenv",
+        "install",
+        "postgres-local"
+      ],
+      "kind": "kubernetes.helm.install",
+      "label": "Install release"
+    },
+    {
+      "operation": "run",
+      "command": "helm",
+      "args": [
+        "--kube-context",
+        "kind-devenv",
+        "uninstall",
+        "postgres-local"
+      ],
+      "kind": "kubernetes.helm.uninstall",
+      "label": "Uninstall release"
+    },
+    {
+      "operation": "build",
+      "command": "sh",
+      "args": [
+        "/tmp/build.sh"
+      ],
+      "kind": "command.build",
+      "label": "Run build command"
+    },
+    {
+      "operation": "test",
+      "command": "sh",
+      "args": [
+        "/tmp/test.sh"
+      ],
+      "kind": "command.test",
+      "label": "Run test command"
+    },
+    {
+      "operation": "run",
+      "command": "sh",
+      "args": [
+        "/tmp/run.sh"
+      ],
+      "kind": "command.run",
+      "label": "Run application command"
+    },
+    {
+      "operation": "start",
+      "command": "sh",
+      "args": [
+        "/tmp/start.sh"
+      ],
+      "kind": "command.start",
+      "label": "Run start command"
+    },
+    {
+      "operation": "stop",
+      "command": "sh",
+      "args": [
+        "/tmp/stop.sh"
+      ],
+      "kind": "command.stop",
+      "label": "Run stop command"
+    },
+    {
+      "operation": "",
+      "command": "sh",
+      "args": [
+        "/tmp/run.sh"
+      ],
+      "kind": "command.execute",
+      "label": "Run command"
+    },
+    {
+      "operation": "other",
+      "command": "sh",
+      "args": [
+        "/tmp/run.sh"
+      ],
+      "kind": "command.execute",
+      "label": "Run command"
+    },
+    {
+      "operation": "run",
+      "command": "/usr/local/bin/kind",
+      "args": [
+        "delete",
+        "cluster"
+      ],
+      "kind": "kubernetes.cluster.delete",
+      "label": "Delete cluster"
+    },
+    {
+      "operation": "run",
+      "command": "helm",
+      "args": [
+        "upgrade",
+        "postgres-local"
+      ],
+      "kind": "kubernetes.helm.install",
+      "label": "Install release"
+    },
+    {
+      "operation": "run",
+      "command": "docker",
+      "args": [
+        "compose",
+        "up",
+        "-d"
+      ],
+      "kind": "compose.start",
+      "label": "Start containers"
+    },
+    {
+      "operation": "run",
+      "command": "docker-compose",
+      "args": [
+        "-f",
+        "/tmp/build",
+        "build"
+      ],
+      "kind": "compose.build",
+      "label": "Build containers"
+    }
+  ],
+  "actionKinds": [
+    {
+      "action": "git.pull",
+      "kind": "git"
+    },
+    {
+      "action": "git.push",
+      "kind": "git"
+    },
+    {
+      "action": "git.fetch",
+      "kind": "git"
+    },
+    {
+      "action": "git.worktree.create",
+      "kind": "worktree"
+    },
+    {
+      "action": "git.worktree.remove",
+      "kind": "worktree"
+    },
+    {
+      "action": "checkout",
+      "kind": "git"
+    },
+    {
+      "action": "pull",
+      "kind": "git"
+    },
+    {
+      "action": "push",
+      "kind": "git"
+    },
+    {
+      "action": "fetch",
+      "kind": "git"
+    },
+    {
+      "action": "kubernetes.cluster.create",
+      "kind": "kubernetes"
+    },
+    {
+      "action": "kubernetes.cluster.delete",
+      "kind": "kubernetes"
+    },
+    {
+      "action": "infra.start",
+      "kind": "infrastructure"
+    },
+    {
+      "action": "infrastructure.stop",
+      "kind": "infrastructure"
+    },
+    {
+      "action": "task.run",
+      "kind": "task"
+    },
+    {
+      "action": "script.run",
+      "kind": "task"
+    },
+    {
+      "action": "build",
+      "kind": "app"
+    },
+    {
+      "action": "test",
+      "kind": "app"
+    },
+    {
+      "action": "run",
+      "kind": "app"
+    },
+    {
+      "action": "start",
+      "kind": "app"
+    },
+    {
+      "action": "stop",
+      "kind": "app"
+    }
+  ],
+  "encoded": [
+    {
+      "kind": "git.fetch",
+      "fallback": "",
+      "label": "git.fetch"
+    },
+    {
+      "kind": "kubernetes.secret.delete|db-credentials",
+      "args": [
+        "db-credentials"
+      ],
+      "fallback": "",
+      "label": "kubernetes.secret.delete"
+    },
+    {
+      "kind": "kubernetes.port-forward|web|8080",
+      "args": [
+        "web",
+        "8080"
+      ],
+      "fallback": "",
+      "label": "kubernetes.port-forward"
+    },
+    {
+      "kind": "compose.build",
+      "fallback": "",
+      "label": "compose.build"
+    }
+  ]
+}

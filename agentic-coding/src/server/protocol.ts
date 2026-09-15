@@ -23,9 +23,10 @@ export const EVENT_REPLAY_CAPACITY = 512;
 /** Bounded credential interaction lifetime. */
 export const CREDENTIAL_TIMEOUT_MS = 120_000;
 
-/** Who owns a path. `bun` paths are served in-process; `go` paths are private
- * delegated environment capabilities during the migration. */
-export type RouteOwner = "bun" | "go";
+/** The retired mixed-runtime ownership values are gone: every versioned route is
+ * served by this process, and `app.ts` rejects anything the manifest does not
+ * cover. */
+export type RouteOwner = "bun";
 
 export interface RouteOwnership {
 	readonly method: "GET" | "POST";
@@ -149,27 +150,6 @@ export const ROUTE_OWNERSHIP: readonly RouteOwnership[] = [
 		path: "/api/v1/environment/private/*",
 		owner: "bun",
 		domain: "environment",
-	},
-	{
-		method: "GET",
-		path: "/api/v1/environment/*",
-		owner: "go",
-		domain: "environment",
-	},
-	{
-		method: "POST",
-		path: "/api/v1/environment/*",
-		owner: "go",
-		domain: "environment",
-	},
-	// Private Git operation adapter for the still-Go action owner
-	// (port-git-providers-and-ai-to-bun task 1.3). Bun serves it in-process and
-	// it performs no outbound request, so it cannot recurse into the child.
-	{
-		method: "POST",
-		path: "/api/v1/integrations/private/git-command",
-		owner: "bun",
-		domain: "integrations",
 	},
 ];
 

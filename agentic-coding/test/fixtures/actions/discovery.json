@@ -1,0 +1,862 @@
+{
+  "cases": [
+    {
+      "name": "shop-build",
+      "appIdent": "shop",
+      "action": "build",
+      "localDir": "{{ROOT}}/checkout",
+      "targets": [
+        {
+          "id": "app/shop/build/docker",
+          "action": "build",
+          "runtime": "docker",
+          "label": "Docker",
+          "sourcePath": "{{ROOT}}/config/apps/build/shop-build.Dockerfile"
+        },
+        {
+          "id": "app/shop/build/powershell",
+          "action": "build",
+          "runtime": "powershell",
+          "label": "PS build",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/config/apps/build/shop-build.ps1",
+          "command": "pwsh",
+          "args": [
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "{{ROOT}}/config/apps/build/shop-build.ps1"
+          ]
+        },
+        {
+          "id": "app/shop/build/shell",
+          "action": "build",
+          "runtime": "shell",
+          "label": "Custom build",
+          "launchMode": "tmux",
+          "sourcePath": "{{ROOT}}/config/apps/build/shop-build.sh",
+          "command": "sh",
+          "args": [
+            "{{ROOT}}/config/apps/build/shop-build.sh"
+          ]
+        },
+        {
+          "id": "app/shop/build/shell/cargo",
+          "action": "build",
+          "runtime": "shell",
+          "label": "cargo build (default for Cargo.toml)",
+          "profile": "cargo",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/checkout/Cargo.toml",
+          "command": "cargo",
+          "args": [
+            "build"
+          ]
+        },
+        {
+          "id": "app/shop/build/shell/go",
+          "action": "build",
+          "runtime": "shell",
+          "label": "go build (default for go.mod)",
+          "profile": "go",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/checkout/go.mod",
+          "command": "go",
+          "args": [
+            "build",
+            "./..."
+          ]
+        },
+        {
+          "id": "app/shop/build/shell/gradle",
+          "action": "build",
+          "runtime": "shell",
+          "label": "./gradlew build (default for Gradle)",
+          "profile": "gradle",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/checkout/gradlew",
+          "command": "./gradlew",
+          "args": [
+            "build"
+          ]
+        },
+        {
+          "id": "app/shop/build/shell/just",
+          "action": "build",
+          "runtime": "shell",
+          "label": "just build (default for justfile)",
+          "profile": "just",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/checkout/justfile",
+          "command": "just",
+          "args": [
+            "build"
+          ]
+        },
+        {
+          "id": "app/shop/build/shell/make",
+          "action": "build",
+          "runtime": "shell",
+          "label": "make build (default for Makefile)",
+          "profile": "make",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/checkout/Makefile",
+          "command": "make",
+          "args": [
+            "build"
+          ]
+        },
+        {
+          "id": "app/shop/build/shell/maven",
+          "action": "build",
+          "runtime": "shell",
+          "label": "mvn package (default for pom.xml)",
+          "profile": "maven",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/checkout/pom.xml",
+          "command": "mvn",
+          "args": [
+            "package"
+          ]
+        },
+        {
+          "id": "app/shop/build/shell/package-pnpm",
+          "action": "build",
+          "runtime": "shell",
+          "label": "pnpm build (default for package.json)",
+          "profile": "package-pnpm",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/checkout/package.json",
+          "command": "pnpm",
+          "args": [
+            "run",
+            "build"
+          ]
+        },
+        {
+          "id": "app/shop/build/shell/task",
+          "action": "build",
+          "runtime": "shell",
+          "label": "task build (default for Taskfile)",
+          "profile": "task",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/checkout/Taskfile.yml",
+          "command": "task",
+          "args": [
+            "build"
+          ]
+        },
+        {
+          "id": "app/shop/build/shell/uv",
+          "action": "build",
+          "runtime": "shell",
+          "label": "uv build (default for pyproject.toml)",
+          "profile": "uv",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/checkout/pyproject.toml",
+          "command": "uv",
+          "args": [
+            "build"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "shop-test",
+      "appIdent": "shop",
+      "action": "test",
+      "localDir": "{{ROOT}}/checkout",
+      "targets": [
+        {
+          "id": "app/shop/test/shell",
+          "action": "test",
+          "runtime": "shell",
+          "label": "Shell",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/config/apps/build/shop-test.sh",
+          "command": "sh",
+          "args": [
+            "{{ROOT}}/config/apps/build/shop-test.sh"
+          ]
+        },
+        {
+          "id": "app/shop/test/shell/cargo",
+          "action": "test",
+          "runtime": "shell",
+          "label": "cargo test (default for Cargo.toml)",
+          "profile": "cargo",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/checkout/Cargo.toml",
+          "command": "cargo",
+          "args": [
+            "test"
+          ]
+        },
+        {
+          "id": "app/shop/test/shell/go",
+          "action": "test",
+          "runtime": "shell",
+          "label": "go test (default for go.mod)",
+          "profile": "go",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/checkout/go.mod",
+          "command": "go",
+          "args": [
+            "test",
+            "./..."
+          ]
+        },
+        {
+          "id": "app/shop/test/shell/gradle",
+          "action": "test",
+          "runtime": "shell",
+          "label": "./gradlew test (default for Gradle)",
+          "profile": "gradle",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/checkout/gradlew",
+          "command": "./gradlew",
+          "args": [
+            "test"
+          ]
+        },
+        {
+          "id": "app/shop/test/shell/make",
+          "action": "test",
+          "runtime": "shell",
+          "label": "make test (default for Makefile)",
+          "profile": "make",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/checkout/Makefile",
+          "command": "make",
+          "args": [
+            "test"
+          ]
+        },
+        {
+          "id": "app/shop/test/shell/maven",
+          "action": "test",
+          "runtime": "shell",
+          "label": "mvn test (default for pom.xml)",
+          "profile": "maven",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/checkout/pom.xml",
+          "command": "mvn",
+          "args": [
+            "test"
+          ]
+        },
+        {
+          "id": "app/shop/test/shell/package-pnpm",
+          "action": "test",
+          "runtime": "shell",
+          "label": "pnpm test (default for package.json)",
+          "profile": "package-pnpm",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/checkout/package.json",
+          "command": "pnpm",
+          "args": [
+            "run",
+            "test"
+          ]
+        },
+        {
+          "id": "app/shop/test/shell/uv",
+          "action": "test",
+          "runtime": "shell",
+          "label": "uv run pytest (default for pyproject.toml)",
+          "profile": "uv",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/checkout/pyproject.toml",
+          "command": "uv",
+          "args": [
+            "run",
+            "pytest"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "shop-run",
+      "appIdent": "shop",
+      "action": "run",
+      "localDir": "{{ROOT}}/checkout",
+      "targets": [
+        {
+          "id": "app/shop/run/docker/default",
+          "action": "run",
+          "runtime": "docker",
+          "label": "default",
+          "sourcePath": "{{ROOT}}/config/apps/compose/shop-compose.yaml"
+        },
+        {
+          "id": "app/shop/run/docker/default",
+          "action": "run",
+          "runtime": "docker",
+          "label": "default",
+          "sourcePath": "{{ROOT}}/config/apps/compose/shop-compose.yml"
+        },
+        {
+          "id": "app/shop/run/docker/edge",
+          "action": "run",
+          "runtime": "docker",
+          "label": "edge",
+          "profile": "edge",
+          "sourcePath": "{{ROOT}}/config/apps/compose/shop-edge-compose.yml",
+          "requires": [
+            {
+              "runtime": "kubernetes",
+              "profile": "local",
+              "infra": "postgres"
+            }
+          ]
+        },
+        {
+          "id": "app/shop/run/kubernetes/local",
+          "action": "run",
+          "runtime": "kubernetes",
+          "label": "Kubernetes local",
+          "profile": "local",
+          "provider": "docker",
+          "sourcePath": "{{ROOT}}/checkout/chart",
+          "kubernetes": {
+            "chartPath": "{{ROOT}}/checkout/chart",
+            "clusterName": "devenv",
+            "contextName": "kind-devenv",
+            "namespace": "default",
+            "provider": "docker",
+            "release": "shop",
+            "sourcePath": "{{ROOT}}/checkout/chart",
+            "wait": {}
+          }
+        },
+        {
+          "id": "app/shop/run/powershell/dev",
+          "action": "run",
+          "runtime": "powershell",
+          "label": "dev",
+          "profile": "dev",
+          "launchMode": "tmux",
+          "sourcePath": "{{ROOT}}/config/apps/run/shop-dev.ps1",
+          "command": "pwsh",
+          "args": [
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "{{ROOT}}/config/apps/run/shop-dev.ps1"
+          ]
+        },
+        {
+          "id": "app/shop/run/shell/api",
+          "action": "run",
+          "runtime": "shell",
+          "label": "api",
+          "profile": "api",
+          "launchMode": "tmux",
+          "sourcePath": "{{ROOT}}/config/apps/run/shop-api.sh",
+          "command": "sh",
+          "args": [
+            "{{ROOT}}/config/apps/run/shop-api.sh"
+          ]
+        },
+        {
+          "id": "app/shop/run/shell/cargo",
+          "action": "run",
+          "runtime": "shell",
+          "label": "cargo run (default for Cargo.toml)",
+          "profile": "cargo",
+          "launchMode": "tmux",
+          "sourcePath": "{{ROOT}}/checkout/Cargo.toml",
+          "command": "cargo",
+          "args": [
+            "run"
+          ]
+        },
+        {
+          "id": "app/shop/run/shell/dev",
+          "action": "run",
+          "runtime": "shell",
+          "label": "Dev server",
+          "profile": "dev",
+          "launchMode": "tmux",
+          "sourcePath": "{{ROOT}}/config/apps/run/shop-dev.sh",
+          "command": "sh",
+          "args": [
+            "{{ROOT}}/config/apps/run/shop-dev.sh"
+          ],
+          "requires": [
+            {
+              "app": "db",
+              "runtime": "docker",
+              "profile": "default"
+            }
+          ]
+        },
+        {
+          "id": "app/shop/run/shell/go",
+          "action": "run",
+          "runtime": "shell",
+          "label": "go run . (default for go.mod)",
+          "profile": "go",
+          "launchMode": "tmux",
+          "sourcePath": "{{ROOT}}/checkout/go.mod",
+          "command": "go",
+          "args": [
+            "run",
+            "."
+          ]
+        },
+        {
+          "id": "app/shop/run/shell/gradle",
+          "action": "run",
+          "runtime": "shell",
+          "label": "./gradlew run (default for Gradle)",
+          "profile": "gradle",
+          "launchMode": "tmux",
+          "sourcePath": "{{ROOT}}/checkout/gradlew",
+          "command": "./gradlew",
+          "args": [
+            "run"
+          ]
+        },
+        {
+          "id": "app/shop/run/shell/package-pnpm",
+          "action": "run",
+          "runtime": "shell",
+          "label": "pnpm dev (default for package.json)",
+          "profile": "package-pnpm",
+          "launchMode": "tmux",
+          "sourcePath": "{{ROOT}}/checkout/package.json",
+          "command": "pnpm",
+          "args": [
+            "run",
+            "dev"
+          ]
+        },
+        {
+          "id": "app/shop/run/systemshell/api",
+          "action": "run",
+          "runtime": "systemshell",
+          "label": "System Shell api",
+          "profile": "api",
+          "launchMode": "tmux",
+          "sourcePath": "{{ROOT}}/config/apps/run/shop-api.sh",
+          "command": "sh",
+          "args": [
+            "{{ROOT}}/config/apps/run/shop-api.sh"
+          ]
+        },
+        {
+          "id": "app/shop/run/systemshell/dev",
+          "action": "run",
+          "runtime": "systemshell",
+          "label": "Dev server",
+          "profile": "dev",
+          "launchMode": "tmux",
+          "sourcePath": "{{ROOT}}/config/apps/run/shop-dev.sh",
+          "command": "sh",
+          "args": [
+            "{{ROOT}}/config/apps/run/shop-dev.sh"
+          ],
+          "requires": [
+            {
+              "app": "db",
+              "runtime": "docker",
+              "profile": "default"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "api-build",
+      "appIdent": "api",
+      "action": "build",
+      "localDir": "{{ROOT}}/checkout",
+      "targets": [
+        {
+          "id": "app/api/build/shell/cargo",
+          "action": "build",
+          "runtime": "shell",
+          "label": "cargo build (default for Cargo.toml)",
+          "profile": "cargo",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/checkout/Cargo.toml",
+          "command": "cargo",
+          "args": [
+            "build"
+          ]
+        },
+        {
+          "id": "app/api/build/shell/go",
+          "action": "build",
+          "runtime": "shell",
+          "label": "go build (default for go.mod)",
+          "profile": "go",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/checkout/go.mod",
+          "command": "go",
+          "args": [
+            "build",
+            "./..."
+          ]
+        },
+        {
+          "id": "app/api/build/shell/gradle",
+          "action": "build",
+          "runtime": "shell",
+          "label": "./gradlew build (default for Gradle)",
+          "profile": "gradle",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/checkout/gradlew",
+          "command": "./gradlew",
+          "args": [
+            "build"
+          ]
+        },
+        {
+          "id": "app/api/build/shell/just",
+          "action": "build",
+          "runtime": "shell",
+          "label": "just build (default for justfile)",
+          "profile": "just",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/checkout/justfile",
+          "command": "just",
+          "args": [
+            "build"
+          ]
+        },
+        {
+          "id": "app/api/build/shell/make",
+          "action": "build",
+          "runtime": "shell",
+          "label": "make build (default for Makefile)",
+          "profile": "make",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/checkout/Makefile",
+          "command": "make",
+          "args": [
+            "build"
+          ]
+        },
+        {
+          "id": "app/api/build/shell/maven",
+          "action": "build",
+          "runtime": "shell",
+          "label": "mvn package (default for pom.xml)",
+          "profile": "maven",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/checkout/pom.xml",
+          "command": "mvn",
+          "args": [
+            "package"
+          ]
+        },
+        {
+          "id": "app/api/build/shell/package-pnpm",
+          "action": "build",
+          "runtime": "shell",
+          "label": "pnpm build (default for package.json)",
+          "profile": "package-pnpm",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/checkout/package.json",
+          "command": "pnpm",
+          "args": [
+            "run",
+            "build"
+          ]
+        },
+        {
+          "id": "app/api/build/shell/task",
+          "action": "build",
+          "runtime": "shell",
+          "label": "task build (default for Taskfile)",
+          "profile": "task",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/checkout/Taskfile.yml",
+          "command": "task",
+          "args": [
+            "build"
+          ]
+        },
+        {
+          "id": "app/api/build/shell/uv",
+          "action": "build",
+          "runtime": "shell",
+          "label": "uv build (default for pyproject.toml)",
+          "profile": "uv",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/checkout/pyproject.toml",
+          "command": "uv",
+          "args": [
+            "build"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "api-run",
+      "appIdent": "api",
+      "action": "run",
+      "localDir": "{{ROOT}}/checkout",
+      "targets": [
+        {
+          "id": "app/api/run/kubernetes/local",
+          "action": "run",
+          "runtime": "kubernetes",
+          "label": "Kubernetes local",
+          "profile": "local",
+          "provider": "docker",
+          "sourcePath": "{{ROOT}}/checkout/chart",
+          "kubernetes": {
+            "chartPath": "{{ROOT}}/checkout/chart",
+            "clusterName": "devenv",
+            "contextName": "kind-devenv",
+            "namespace": "default",
+            "provider": "docker",
+            "release": "api",
+            "sourcePath": "{{ROOT}}/checkout/chart",
+            "wait": {}
+          }
+        },
+        {
+          "id": "app/api/run/kubernetes/staging",
+          "action": "run",
+          "runtime": "kubernetes",
+          "label": "Kubernetes staging",
+          "profile": "staging",
+          "provider": "podman",
+          "sourcePath": "{{ROOT}}/config/apps/k8s/api/devenv.k8s.json",
+          "requires": [
+            {
+              "runtime": "kubernetes",
+              "profile": "local",
+              "infra": "postgres"
+            }
+          ],
+          "kubernetes": {
+            "chartPath": "{{ROOT}}/checkout/helm",
+            "clusterName": "shop-cluster",
+            "contextName": "kind-shop-cluster",
+            "image": {
+              "pullPolicy": "Never",
+              "repository": "shop-api",
+              "tag": "latest",
+              "valuePaths": {
+                "pullPolicy": "image.pullPolicy",
+                "repository": "image.repository",
+                "tag": "image.tag"
+              }
+            },
+            "namespace": "apps",
+            "ports": [
+              {
+                "localPort": 8080,
+                "name": "web",
+                "remotePort": 80,
+                "resource": "service/api"
+              }
+            ],
+            "provider": "podman",
+            "release": "custom",
+            "secrets": [
+              {
+                "keys": [
+                  "DB_PASS"
+                ],
+                "name": "env"
+              }
+            ],
+            "sourcePath": "{{ROOT}}/config/apps/k8s/api/devenv.k8s.json",
+            "valuesFiles": [
+              "{{ROOT}}/config/apps/k8s/api/values.yaml"
+            ],
+            "wait": {
+              "timeout": "5m"
+            }
+          }
+        },
+        {
+          "id": "app/api/run/shell/cargo",
+          "action": "run",
+          "runtime": "shell",
+          "label": "cargo run (default for Cargo.toml)",
+          "profile": "cargo",
+          "launchMode": "tmux",
+          "sourcePath": "{{ROOT}}/checkout/Cargo.toml",
+          "command": "cargo",
+          "args": [
+            "run"
+          ]
+        },
+        {
+          "id": "app/api/run/shell/go",
+          "action": "run",
+          "runtime": "shell",
+          "label": "go run . (default for go.mod)",
+          "profile": "go",
+          "launchMode": "tmux",
+          "sourcePath": "{{ROOT}}/checkout/go.mod",
+          "command": "go",
+          "args": [
+            "run",
+            "."
+          ]
+        },
+        {
+          "id": "app/api/run/shell/gradle",
+          "action": "run",
+          "runtime": "shell",
+          "label": "./gradlew run (default for Gradle)",
+          "profile": "gradle",
+          "launchMode": "tmux",
+          "sourcePath": "{{ROOT}}/checkout/gradlew",
+          "command": "./gradlew",
+          "args": [
+            "run"
+          ]
+        },
+        {
+          "id": "app/api/run/shell/package-pnpm",
+          "action": "run",
+          "runtime": "shell",
+          "label": "pnpm dev (default for package.json)",
+          "profile": "package-pnpm",
+          "launchMode": "tmux",
+          "sourcePath": "{{ROOT}}/checkout/package.json",
+          "command": "pnpm",
+          "args": [
+            "run",
+            "dev"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "unknown-app-run",
+      "appIdent": "nobody",
+      "action": "run",
+      "localDir": "{{ROOT}}/checkout",
+      "targets": [
+        {
+          "id": "app/nobody/run/kubernetes/local",
+          "action": "run",
+          "runtime": "kubernetes",
+          "label": "Kubernetes local",
+          "profile": "local",
+          "provider": "docker",
+          "sourcePath": "{{ROOT}}/checkout/chart",
+          "kubernetes": {
+            "chartPath": "{{ROOT}}/checkout/chart",
+            "clusterName": "devenv",
+            "contextName": "kind-devenv",
+            "namespace": "default",
+            "provider": "docker",
+            "release": "nobody",
+            "sourcePath": "{{ROOT}}/checkout/chart",
+            "wait": {}
+          }
+        },
+        {
+          "id": "app/nobody/run/shell/cargo",
+          "action": "run",
+          "runtime": "shell",
+          "label": "cargo run (default for Cargo.toml)",
+          "profile": "cargo",
+          "launchMode": "tmux",
+          "sourcePath": "{{ROOT}}/checkout/Cargo.toml",
+          "command": "cargo",
+          "args": [
+            "run"
+          ]
+        },
+        {
+          "id": "app/nobody/run/shell/go",
+          "action": "run",
+          "runtime": "shell",
+          "label": "go run . (default for go.mod)",
+          "profile": "go",
+          "launchMode": "tmux",
+          "sourcePath": "{{ROOT}}/checkout/go.mod",
+          "command": "go",
+          "args": [
+            "run",
+            "."
+          ]
+        },
+        {
+          "id": "app/nobody/run/shell/gradle",
+          "action": "run",
+          "runtime": "shell",
+          "label": "./gradlew run (default for Gradle)",
+          "profile": "gradle",
+          "launchMode": "tmux",
+          "sourcePath": "{{ROOT}}/checkout/gradlew",
+          "command": "./gradlew",
+          "args": [
+            "run"
+          ]
+        },
+        {
+          "id": "app/nobody/run/shell/package-pnpm",
+          "action": "run",
+          "runtime": "shell",
+          "label": "pnpm dev (default for package.json)",
+          "profile": "package-pnpm",
+          "launchMode": "tmux",
+          "sourcePath": "{{ROOT}}/checkout/package.json",
+          "command": "pnpm",
+          "args": [
+            "run",
+            "dev"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "no-checkout-build",
+      "appIdent": "shop",
+      "action": "build",
+      "localDir": "",
+      "targets": [
+        {
+          "id": "app/shop/build/docker",
+          "action": "build",
+          "runtime": "docker",
+          "label": "Docker",
+          "sourcePath": "{{ROOT}}/config/apps/build/shop-build.Dockerfile"
+        },
+        {
+          "id": "app/shop/build/powershell",
+          "action": "build",
+          "runtime": "powershell",
+          "label": "PS build",
+          "launchMode": "logged",
+          "sourcePath": "{{ROOT}}/config/apps/build/shop-build.ps1",
+          "command": "pwsh",
+          "args": [
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "{{ROOT}}/config/apps/build/shop-build.ps1"
+          ]
+        },
+        {
+          "id": "app/shop/build/shell",
+          "action": "build",
+          "runtime": "shell",
+          "label": "Custom build",
+          "launchMode": "tmux",
+          "sourcePath": "{{ROOT}}/config/apps/build/shop-build.sh",
+          "command": "sh",
+          "args": [
+            "{{ROOT}}/config/apps/build/shop-build.sh"
+          ]
+        }
+      ]
+    }
+  ]
+}

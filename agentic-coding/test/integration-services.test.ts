@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { EnvironmentManager } from "../src/server/environment/manager.ts";
+import { EnvironmentStateStore } from "../src/server/environment/state-store.ts";
 import { ProviderStore } from "../src/server/integrations/provider-store.ts";
 import {
 	createIntegrationServices,
@@ -152,7 +153,11 @@ describe("integration service credentials", () => {
 		writeProviders(configDir);
 		const manager = new EnvironmentManager({ homeDir, configDir });
 		manager.loadConfig();
-		const services = createIntegrationServices({ manager, configDir });
+		const services = createIntegrationServices({
+			manager,
+			state: EnvironmentStateStore.open(path.join(homeDir, "db")),
+			configDir,
+		});
 		expect(services.apps.getApps()).toEqual([]);
 		expect(services.git.credentialConfig("https://github.com/x/y.git")).toEqual(
 			[

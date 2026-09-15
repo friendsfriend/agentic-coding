@@ -1,17 +1,18 @@
-// Bun transport composition for the unified backend (expose-unified-bun-backend,
-// task 2.1/2.4). One `fetch` handler owns routing, authorization, bounds,
-// event delivery and private Go delegation; the operation handlers behind it
-// are pure application calls. This module is transport-only: it never imports
-// presentation and never spawns a workflow subprocess.
+// Bun transport composition for the unified backend (single-Bun-application).
+// One `fetch` handler owns routing, authorization, bounds and event delivery;
+// the operation handlers behind it are pure application calls. This module is
+// transport-only: it never imports presentation and never spawns a second
+// runtime. Since the Go backend was retired there is no delegation: every route
+// is answered in this process or is 404.
 import {
 	AuthorizationError,
 	assertBoundedText,
 	authorizeRequest,
 	type InstanceAuthority,
+	isPublicRoute,
 	isSessionAuthorizedRoute,
 	originAllowed,
 	PayloadBoundError,
-	readBoundedBody,
 	readJsonBody,
 } from "./auth.ts";
 import type { CredentialRegistry } from "./credentials.ts";
@@ -23,12 +24,6 @@ import {
 } from "./environment/private-api.ts";
 import type { EventBroker } from "./events.ts";
 import { type ServerOperations, serverOperations } from "./handlers.ts";
-import {
-	decodeGitCommandRequest,
-	executeGitCommand,
-	IntegrationOperationError,
-	PRIVATE_GIT_COMMAND_PATH,
-} from "./integrations/private-api.ts";
 import {
 	handleLegacyRoute,
 	type IntegrationServices,
@@ -59,24 +54,15 @@ export interface ServerAppOptions {
 	readonly authority: InstanceAuthority;
 	readonly events: EventBroker;
 	readonly credentials: CredentialRegistry;
-	/** Private Go listener base URL (for delegated environment routes, which
-	 * stay Go-served until the remaining Go services are ported). A function is
-	 * resolved per request, so Bun can start before the child it delegates to
-	 * exists (migrated mode starts Bun first because the child needs Bun's
-	 * address). */
-	readonly environmentBaseUrl?: string | (() => string | undefined);
-	/** Private instance token presented to the Go listener. Resolved per
-	 * request like `environmentBaseUrl`. */
-	readonly environmentToken?: string | (() => string | undefined);
-	/** Bun-owned environment state/catalog authority (migrated mode). When set,
-	 * the bounded private operations are served in-process and the remaining Go
-	 * services have no writable SQLite handle of their own. */
+	/** Bun-owned environment state/catalog authority. When set, the bounded
+	 * private operations are served in-process. */
 	readonly environment?: EnvironmentAuthority;
 	readonly version?: string;
+	/** Environment root reported by the health route. */
+	readonly homeDir?: string;
+	readonly configDir?: string;
 	/** Test/clock override. */
 	readonly now?: () => Date;
-	/** Bounded response bytes for a delegated Go response. */
-	readonly maxDelegatedBytes?: number;
 	/** Override the application operations (transport tests). */
 	readonly operations?: ServerOperations;
 	/** Server-owned telemetry persistence/query operations. */
@@ -84,7 +70,7 @@ export interface ServerAppOptions {
 	/** Server-owned workflow refresh subscriptions. */
 	readonly hub?: WorkflowEventHub;
 	/** Bun-served legacy integration families (Git, providers, repository
-	 * search). When absent, every legacy `/api/*` path is delegated. */
+	 * search). When absent the legacy `/api/*` surface answers 503. */
 	readonly integrations?: IntegrationServices;
 }
 
@@ -98,8 +84,6 @@ export interface ServerApp {
 		ownerId: string,
 	): (prompt: string, signal?: AbortSignal) => Promise<string>;
 }
-
-const DEFAULT_DELEGATED_BYTES = 32 * 1024 * 1024;
 
 function json(value: unknown, status = 200): Response {
 	return new Response(JSON.stringify(value), {
@@ -129,7 +113,6 @@ function safeMessage(error: unknown): string {
 
 export function createServerApp(options: ServerAppOptions): ServerApp {
 	const { authority, events, credentials } = options;
-	const maxDelegated = options.maxDelegatedBytes ?? DEFAULT_DELEGATED_BYTES;
 	const operations = options.operations ?? serverOperations;
 	const telemetryWatchers = new Map<string, () => void>();
 
@@ -149,14 +132,18 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		// foreign origin never reaches a route (or a Go mutation) at all.
 		if (!originAllowed(request.headers.get("origin")))
 			return errorResponse(403, "origin", "untrusted origin");
-		// The review callback authorizes with its own path capability; every
-		// other route needs the instance bearer token.
+		// The review callback authorizes with its own path capability and the
+		// liveness probe is public (no secret in it); every other route needs the
+		// instance bearer token.
 		if (!isSessionAuthorizedRoute(request.method, url.pathname)) {
-			try {
-				authorizeRequest(request, authority);
-			} catch (error) {
-				const status = error instanceof AuthorizationError ? error.status : 401;
-				return errorResponse(status, "unauthorized", safeMessage(error));
+			if (!isPublicRoute(request.method, url.pathname)) {
+				try {
+					authorizeRequest(request, authority);
+				} catch (error) {
+					const status =
+						error instanceof AuthorizationError ? error.status : 401;
+					return errorResponse(status, "unauthorized", safeMessage(error));
+				}
 			}
 		}
 
@@ -437,16 +424,11 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		if (method === "POST" && path === ENVIRONMENT_OPERATION_PATH)
 			return environmentOperation(request);
 
-		if (method === "POST" && path === PRIVATE_GIT_COMMAND_PATH)
-			return gitCommandOperation(request);
-
-		if (path.startsWith("/api/v1/environment/"))
-			return delegateToEnvironment(request, url);
-
-		// The legacy devenv surface: a Bun-owned family is served in-process, and
-		// every other legacy path is delegated to the private Go child so the
-		// clients keep one base URL while ownership moves family by family.
+		// The legacy devenv surface, served by the same process. `/api/health` is
+		// the liveness/identity probe every client and launcher uses, so it answers
+		// here instead of being a special case in another runtime.
 		if (path.startsWith("/api/") && !path.startsWith("/api/v1/")) {
+			if (method === "GET" && path === "/api/health") return health();
 			if (options.integrations) {
 				const handled = await handleLegacyRoute(
 					options.integrations,
@@ -455,11 +437,27 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 				);
 				if (handled) return handled;
 			}
-			return delegateLegacy(request, url);
+			return errorResponse(404, "not-found", "unknown route");
 		}
 
 		return errorResponse(404, "not-found", "unknown route");
 	};
+
+	/** Instance identity for clients and for `attach` readiness. The instance id
+	 * and the environment roots are what distinguish this process from any other
+	 * server on the same loopback port. */
+	const health = (): Response =>
+		json({
+			status: "ok",
+			apiVersion: SERVER_API_VERSION,
+			instance: authority.instance,
+			version: options.version ?? null,
+			pid: process.pid,
+			homeDir: options.homeDir ?? null,
+			configDir: options.configDir ?? null,
+			sequence: events.currentSequence,
+			at: (options.now?.() ?? new Date()).toISOString(),
+		});
 
 	/** SSE stream: bounded replay first, then live events. A cursor outside the
 	 * retained window emits `resync` and the client must fetch a snapshot. */
@@ -537,137 +535,6 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 				return errorResponse(error.status, error.code, safeMessage(error));
 			throw error;
 		}
-	};
-
-	/** Private Go delegation: strip the version prefix, forward the method,
-	 * path, query and bounded body, and relay a bounded response. */
-	const delegateToEnvironment = async (
-		request: Request,
-		url: URL,
-	): Promise<Response> => {
-		const environmentBaseUrl =
-			typeof options.environmentBaseUrl === "function"
-				? options.environmentBaseUrl()
-				: options.environmentBaseUrl;
-		if (!environmentBaseUrl)
-			return errorResponse(
-				503,
-				"environment-unavailable",
-				"no private environment backend is attached",
-			);
-		const suffix = url.pathname.slice("/api/v1/environment".length);
-		const target = new URL(suffix, environmentBaseUrl);
-		target.search = url.search;
-		const headers = new Headers();
-		const contentType = request.headers.get("content-type");
-		if (contentType) headers.set("content-type", contentType);
-		headers.set("accept", request.headers.get("accept") ?? "application/json");
-		const environmentToken =
-			typeof options.environmentToken === "function"
-				? options.environmentToken()
-				: options.environmentToken;
-		if (environmentToken) headers.set("x-instance-token", environmentToken);
-		const body =
-			request.method === "GET" || request.method === "HEAD"
-				? undefined
-				: (await readBoundedBody(request, MAX_REQUEST_BYTES)) || undefined;
-		const response = await fetch(target, {
-			method: request.method,
-			headers,
-			body,
-			signal: request.signal,
-		});
-		const buffer = await response.arrayBuffer();
-		if (buffer.byteLength > maxDelegated)
-			return errorResponse(
-				502,
-				"environment-response-too-large",
-				"delegated response exceeded the bound",
-			);
-		return new Response(buffer, {
-			status: response.status,
-			headers: {
-				"content-type":
-					response.headers.get("content-type") ?? "application/json",
-				"cache-control": "no-store",
-			},
-		});
-	};
-
-	/** Private Git operation for the still-Go action owner: Bun executes one
-	 * argv, the Go owner records the result. No outbound request, so it can
-	 * never recurse into the delegated child. */
-	const gitCommandOperation = async (request: Request): Promise<Response> => {
-		const integrations = options.integrations;
-		if (!integrations)
-			return errorResponse(
-				503,
-				"integrations-unavailable",
-				"this server does not own the Git capability",
-			);
-		try {
-			const decoded = decodeGitCommandRequest(
-				await readJsonBody(request, 256 * 1024),
-			);
-			const value = await executeGitCommand(
-				{ git: integrations.git },
-				decoded,
-				request.signal,
-			);
-			return json({ ok: true, value });
-		} catch (error) {
-			if (error instanceof IntegrationOperationError)
-				return errorResponse(error.status, error.code, safeMessage(error));
-			throw error;
-		}
-	};
-
-	/** Legacy delegation: the child serves the same path, so nothing is
-	 * rewritten. The response body is streamed, because this surface carries
-	 * server-sent event streams that must not be buffered. */
-	const delegateLegacy = async (
-		request: Request,
-		url: URL,
-	): Promise<Response> => {
-		const environmentBaseUrl =
-			typeof options.environmentBaseUrl === "function"
-				? options.environmentBaseUrl()
-				: options.environmentBaseUrl;
-		if (!environmentBaseUrl)
-			return errorResponse(
-				503,
-				"environment-unavailable",
-				"no private environment backend is attached",
-			);
-		const target = new URL(url.pathname, environmentBaseUrl);
-		target.search = url.search;
-		const headers = new Headers();
-		const contentType = request.headers.get("content-type");
-		if (contentType) headers.set("content-type", contentType);
-		headers.set("accept", request.headers.get("accept") ?? "application/json");
-		const environmentToken =
-			typeof options.environmentToken === "function"
-				? options.environmentToken()
-				: options.environmentToken;
-		if (environmentToken) headers.set("x-instance-token", environmentToken);
-		const body =
-			request.method === "GET" || request.method === "HEAD"
-				? undefined
-				: (await readBoundedBody(request, MAX_REQUEST_BYTES)) || undefined;
-		const response = await fetch(target, {
-			method: request.method,
-			headers,
-			body,
-			signal: request.signal,
-		});
-		return new Response(response.body, {
-			status: response.status,
-			headers: {
-				"content-type":
-					response.headers.get("content-type") ?? "application/json",
-				"cache-control": "no-store",
-			},
-		});
 	};
 
 	return {

@@ -1,0 +1,3740 @@
+{
+  "stableIds": [
+    {
+      "parts": [
+        "app",
+        "api",
+        "action",
+        "build",
+        "default"
+      ],
+      "value": "app/api/action/build/default"
+    },
+    {
+      "parts": [
+        "app",
+        "api",
+        "action",
+        "run",
+        "docker",
+        "default"
+      ],
+      "value": "app/api/action/run/docker/default"
+    },
+    {
+      "parts": [
+        "infra",
+        "postgres",
+        "action",
+        "start",
+        "shell",
+        "default"
+      ],
+      "value": "infra/postgres/action/start/shell/default"
+    },
+    {
+      "parts": [
+        "kubernetes",
+        "local",
+        "action",
+        "create",
+        "docker",
+        "default"
+      ],
+      "value": "kubernetes/local/action/create/docker/default"
+    },
+    {
+      "parts": [
+        "/app/api/",
+        "//step//"
+      ],
+      "value": "app/api/step"
+    },
+    {
+      "parts": [
+        "app",
+        "",
+        "  ",
+        "action"
+      ],
+      "value": "app/action"
+    },
+    {
+      "parts": [],
+      "value": ""
+    },
+    {
+      "parts": [
+        "single"
+      ],
+      "value": "single"
+    }
+  ],
+  "compiled": [
+    {
+      "name": "git-actions",
+      "actions": [
+        {
+          "id": "app/api/action/pull/git/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "pull",
+          "runtime": "git",
+          "label": "Pull",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/pull/git/default/step/root",
+            "kind": "composite",
+            "label": "Pull",
+            "children": [
+              {
+                "id": "app/api/action/pull/git/default/step/get-ref",
+                "kind": "command",
+                "label": "Get ref",
+                "produces": [
+                  {
+                    "key": "git.branch",
+                    "type": "string",
+                    "scope": "action",
+                    "visibility": "internal"
+                  }
+                ],
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "rev-parse",
+                    "--abbrev-ref",
+                    "HEAD"
+                  ],
+                  "captureStdout": "git.branch",
+                  "captureType": "string",
+                  "command": "git",
+                  "dir": "/home/devenv/apps/api"
+                }
+              },
+              {
+                "id": "app/api/action/pull/git/default/step/fetch",
+                "kind": "command",
+                "label": "Fetch",
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "fetch",
+                    "--force",
+                    "origin",
+                    "+refs/heads/*:refs/remotes/origin/*"
+                  ],
+                  "command": "git",
+                  "dir": "/home/devenv/apps/api"
+                }
+              },
+              {
+                "id": "app/api/action/pull/git/default/step/pull",
+                "kind": "command",
+                "label": "Pull",
+                "consumes": [
+                  {
+                    "key": "git.branch",
+                    "type": "string",
+                    "scope": "action",
+                    "visibility": "internal",
+                    "required": true
+                  }
+                ],
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "reset",
+                    "--hard",
+                    "origin/${git.branch}"
+                  ],
+                  "command": "git",
+                  "dir": "/home/devenv/apps/api"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/fetch/git/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "fetch",
+          "runtime": "git",
+          "label": "Fetch",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/fetch/git/default/step/root",
+            "kind": "composite",
+            "label": "Fetch",
+            "children": [
+              {
+                "id": "app/api/action/fetch/git/default/step/fetch",
+                "kind": "command",
+                "label": "Fetch",
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "fetch",
+                    "--force",
+                    "origin",
+                    "+refs/heads/*:refs/remotes/origin/*"
+                  ],
+                  "command": "git",
+                  "dir": "/home/devenv/apps/api"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/push/git/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "push",
+          "runtime": "git",
+          "label": "Push",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/push/git/default/step/root",
+            "kind": "composite",
+            "label": "Push",
+            "children": [
+              {
+                "id": "app/api/action/push/git/default/step/push",
+                "kind": "command",
+                "label": "Push",
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "push",
+                    "origin",
+                    "HEAD"
+                  ],
+                  "command": "git",
+                  "dir": "/home/devenv/apps/api"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/branches/git/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "branches",
+          "runtime": "git",
+          "label": "List branches",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/branches/git/default/step/root",
+            "kind": "composite",
+            "label": "List branches",
+            "children": [
+              {
+                "id": "app/api/action/branches/git/default/step/branches",
+                "kind": "command",
+                "label": "List branches",
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "branch",
+                    "--all",
+                    "--format=%(refname:short)"
+                  ],
+                  "command": "git",
+                  "dir": "/home/devenv/apps/api"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/checkout/git/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "checkout",
+          "runtime": "git",
+          "label": "Checkout branch",
+          "inputs": [
+            {
+              "key": "branch",
+              "type": "string",
+              "scope": "action",
+              "visibility": "public",
+              "required": true,
+              "label": "Branch"
+            }
+          ],
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/checkout/git/default/step/root",
+            "kind": "composite",
+            "label": "Checkout branch",
+            "children": [
+              {
+                "id": "app/api/action/checkout/git/default/step/checkout",
+                "kind": "command",
+                "label": "Checkout branch",
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "switch",
+                    "${branch}"
+                  ],
+                  "command": "git",
+                  "dir": "/home/devenv/apps/api"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/worktree-list/git/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "worktree-list",
+          "runtime": "git",
+          "label": "List worktrees",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/worktree-list/git/default/step/root",
+            "kind": "composite",
+            "label": "List worktrees",
+            "children": [
+              {
+                "id": "app/api/action/worktree-list/git/default/step/worktree-list",
+                "kind": "command",
+                "label": "List worktrees",
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "worktree",
+                    "list",
+                    "--porcelain"
+                  ],
+                  "command": "git",
+                  "dir": "/home/devenv/apps/api"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/worktree-add/git/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "worktree-add",
+          "runtime": "git",
+          "label": "Add worktree",
+          "inputs": [
+            {
+              "key": "branch",
+              "type": "string",
+              "scope": "action",
+              "visibility": "public",
+              "required": true,
+              "label": "Branch"
+            },
+            {
+              "key": "path",
+              "type": "path",
+              "scope": "action",
+              "visibility": "internal",
+              "required": true,
+              "label": "Path"
+            }
+          ],
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/worktree-add/git/default/step/root",
+            "kind": "composite",
+            "label": "Add worktree",
+            "children": [
+              {
+                "id": "app/api/action/worktree-add/git/default/step/worktree-add",
+                "kind": "command",
+                "label": "Add worktree",
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "worktree",
+                    "add",
+                    "${path}",
+                    "${branch}"
+                  ],
+                  "command": "git",
+                  "dir": "/home/devenv/apps/api"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/worktree-remove/git/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "worktree-remove",
+          "runtime": "git",
+          "label": "Remove worktree",
+          "inputs": [
+            {
+              "key": "path",
+              "type": "path",
+              "scope": "action",
+              "visibility": "internal",
+              "required": true,
+              "label": "Path"
+            }
+          ],
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/worktree-remove/git/default/step/root",
+            "kind": "composite",
+            "label": "Remove worktree",
+            "children": [
+              {
+                "id": "app/api/action/worktree-remove/git/default/step/worktree-remove",
+                "kind": "command",
+                "label": "Remove worktree",
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "worktree",
+                    "remove",
+                    "${path}"
+                  ],
+                  "command": "git",
+                  "dir": "/home/devenv/apps/api"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "git-action-without-checkout",
+      "actions": [
+        {
+          "id": "app/api/action/pull/git/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "pull",
+          "runtime": "git",
+          "label": "Pull",
+          "inputs": null,
+          "availability": {
+            "available": false,
+            "reason": "checkout required"
+          },
+          "root": {
+            "id": "app/api/action/pull/git/default/step/root",
+            "kind": "composite",
+            "label": "Pull",
+            "children": [
+              {
+                "id": "app/api/action/pull/git/default/step/get-ref",
+                "kind": "command",
+                "label": "Get ref",
+                "produces": [
+                  {
+                    "key": "git.branch",
+                    "type": "string",
+                    "scope": "action",
+                    "visibility": "internal"
+                  }
+                ],
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "rev-parse",
+                    "--abbrev-ref",
+                    "HEAD"
+                  ],
+                  "captureStdout": "git.branch",
+                  "captureType": "string",
+                  "command": "git",
+                  "dir": ""
+                }
+              },
+              {
+                "id": "app/api/action/pull/git/default/step/fetch",
+                "kind": "command",
+                "label": "Fetch",
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "fetch",
+                    "--force",
+                    "origin",
+                    "+refs/heads/*:refs/remotes/origin/*"
+                  ],
+                  "command": "git",
+                  "dir": ""
+                }
+              },
+              {
+                "id": "app/api/action/pull/git/default/step/pull",
+                "kind": "command",
+                "label": "Pull",
+                "consumes": [
+                  {
+                    "key": "git.branch",
+                    "type": "string",
+                    "scope": "action",
+                    "visibility": "internal",
+                    "required": true
+                  }
+                ],
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "reset",
+                    "--hard",
+                    "origin/${git.branch}"
+                  ],
+                  "command": "git",
+                  "dir": ""
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/fetch/git/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "fetch",
+          "runtime": "git",
+          "label": "Fetch",
+          "inputs": null,
+          "availability": {
+            "available": false,
+            "reason": "checkout required"
+          },
+          "root": {
+            "id": "app/api/action/fetch/git/default/step/root",
+            "kind": "composite",
+            "label": "Fetch",
+            "children": [
+              {
+                "id": "app/api/action/fetch/git/default/step/fetch",
+                "kind": "command",
+                "label": "Fetch",
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "fetch",
+                    "--force",
+                    "origin",
+                    "+refs/heads/*:refs/remotes/origin/*"
+                  ],
+                  "command": "git",
+                  "dir": ""
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/push/git/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "push",
+          "runtime": "git",
+          "label": "Push",
+          "inputs": null,
+          "availability": {
+            "available": false,
+            "reason": "checkout required"
+          },
+          "root": {
+            "id": "app/api/action/push/git/default/step/root",
+            "kind": "composite",
+            "label": "Push",
+            "children": [
+              {
+                "id": "app/api/action/push/git/default/step/push",
+                "kind": "command",
+                "label": "Push",
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "push",
+                    "origin",
+                    "HEAD"
+                  ],
+                  "command": "git",
+                  "dir": ""
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/branches/git/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "branches",
+          "runtime": "git",
+          "label": "List branches",
+          "inputs": null,
+          "availability": {
+            "available": false,
+            "reason": "checkout required"
+          },
+          "root": {
+            "id": "app/api/action/branches/git/default/step/root",
+            "kind": "composite",
+            "label": "List branches",
+            "children": [
+              {
+                "id": "app/api/action/branches/git/default/step/branches",
+                "kind": "command",
+                "label": "List branches",
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "branch",
+                    "--all",
+                    "--format=%(refname:short)"
+                  ],
+                  "command": "git",
+                  "dir": ""
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/checkout/git/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "checkout",
+          "runtime": "git",
+          "label": "Checkout branch",
+          "inputs": [
+            {
+              "key": "branch",
+              "type": "string",
+              "scope": "action",
+              "visibility": "public",
+              "required": true,
+              "label": "Branch"
+            }
+          ],
+          "availability": {
+            "available": false,
+            "reason": "checkout required"
+          },
+          "root": {
+            "id": "app/api/action/checkout/git/default/step/root",
+            "kind": "composite",
+            "label": "Checkout branch",
+            "children": [
+              {
+                "id": "app/api/action/checkout/git/default/step/checkout",
+                "kind": "command",
+                "label": "Checkout branch",
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "switch",
+                    "${branch}"
+                  ],
+                  "command": "git",
+                  "dir": ""
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/worktree-list/git/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "worktree-list",
+          "runtime": "git",
+          "label": "List worktrees",
+          "inputs": null,
+          "availability": {
+            "available": false,
+            "reason": "checkout required"
+          },
+          "root": {
+            "id": "app/api/action/worktree-list/git/default/step/root",
+            "kind": "composite",
+            "label": "List worktrees",
+            "children": [
+              {
+                "id": "app/api/action/worktree-list/git/default/step/worktree-list",
+                "kind": "command",
+                "label": "List worktrees",
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "worktree",
+                    "list",
+                    "--porcelain"
+                  ],
+                  "command": "git",
+                  "dir": ""
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/worktree-add/git/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "worktree-add",
+          "runtime": "git",
+          "label": "Add worktree",
+          "inputs": [
+            {
+              "key": "branch",
+              "type": "string",
+              "scope": "action",
+              "visibility": "public",
+              "required": true,
+              "label": "Branch"
+            },
+            {
+              "key": "path",
+              "type": "path",
+              "scope": "action",
+              "visibility": "internal",
+              "required": true,
+              "label": "Path"
+            }
+          ],
+          "availability": {
+            "available": false,
+            "reason": "checkout required"
+          },
+          "root": {
+            "id": "app/api/action/worktree-add/git/default/step/root",
+            "kind": "composite",
+            "label": "Add worktree",
+            "children": [
+              {
+                "id": "app/api/action/worktree-add/git/default/step/worktree-add",
+                "kind": "command",
+                "label": "Add worktree",
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "worktree",
+                    "add",
+                    "${path}",
+                    "${branch}"
+                  ],
+                  "command": "git",
+                  "dir": ""
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/worktree-remove/git/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "worktree-remove",
+          "runtime": "git",
+          "label": "Remove worktree",
+          "inputs": [
+            {
+              "key": "path",
+              "type": "path",
+              "scope": "action",
+              "visibility": "internal",
+              "required": true,
+              "label": "Path"
+            }
+          ],
+          "availability": {
+            "available": false,
+            "reason": "checkout required"
+          },
+          "root": {
+            "id": "app/api/action/worktree-remove/git/default/step/root",
+            "kind": "composite",
+            "label": "Remove worktree",
+            "children": [
+              {
+                "id": "app/api/action/worktree-remove/git/default/step/worktree-remove",
+                "kind": "command",
+                "label": "Remove worktree",
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "worktree",
+                    "remove",
+                    "${path}"
+                  ],
+                  "command": "git",
+                  "dir": ""
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "git-action-without-ident",
+      "actions": [
+        {
+          "id": "app/action/pull/git/default",
+          "owner": {
+            "kind": "app",
+            "id": ""
+          },
+          "type": "pull",
+          "runtime": "git",
+          "label": "Pull",
+          "inputs": null,
+          "availability": {
+            "available": false,
+            "reason": "checkout required"
+          },
+          "root": {
+            "id": "app/action/pull/git/default/step/root",
+            "kind": "composite",
+            "label": "Pull",
+            "children": [
+              {
+                "id": "app/action/pull/git/default/step/get-ref",
+                "kind": "command",
+                "label": "Get ref",
+                "produces": [
+                  {
+                    "key": "git.branch",
+                    "type": "string",
+                    "scope": "action",
+                    "visibility": "internal"
+                  }
+                ],
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "rev-parse",
+                    "--abbrev-ref",
+                    "HEAD"
+                  ],
+                  "captureStdout": "git.branch",
+                  "captureType": "string",
+                  "command": "git",
+                  "dir": ""
+                }
+              },
+              {
+                "id": "app/action/pull/git/default/step/fetch",
+                "kind": "command",
+                "label": "Fetch",
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "fetch",
+                    "--force",
+                    "origin",
+                    "+refs/heads/*:refs/remotes/origin/*"
+                  ],
+                  "command": "git",
+                  "dir": ""
+                }
+              },
+              {
+                "id": "app/action/pull/git/default/step/pull",
+                "kind": "command",
+                "label": "Pull",
+                "consumes": [
+                  {
+                    "key": "git.branch",
+                    "type": "string",
+                    "scope": "action",
+                    "visibility": "internal",
+                    "required": true
+                  }
+                ],
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "reset",
+                    "--hard",
+                    "origin/${git.branch}"
+                  ],
+                  "command": "git",
+                  "dir": ""
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/action/fetch/git/default",
+          "owner": {
+            "kind": "app",
+            "id": ""
+          },
+          "type": "fetch",
+          "runtime": "git",
+          "label": "Fetch",
+          "inputs": null,
+          "availability": {
+            "available": false,
+            "reason": "checkout required"
+          },
+          "root": {
+            "id": "app/action/fetch/git/default/step/root",
+            "kind": "composite",
+            "label": "Fetch",
+            "children": [
+              {
+                "id": "app/action/fetch/git/default/step/fetch",
+                "kind": "command",
+                "label": "Fetch",
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "fetch",
+                    "--force",
+                    "origin",
+                    "+refs/heads/*:refs/remotes/origin/*"
+                  ],
+                  "command": "git",
+                  "dir": ""
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/action/push/git/default",
+          "owner": {
+            "kind": "app",
+            "id": ""
+          },
+          "type": "push",
+          "runtime": "git",
+          "label": "Push",
+          "inputs": null,
+          "availability": {
+            "available": false,
+            "reason": "checkout required"
+          },
+          "root": {
+            "id": "app/action/push/git/default/step/root",
+            "kind": "composite",
+            "label": "Push",
+            "children": [
+              {
+                "id": "app/action/push/git/default/step/push",
+                "kind": "command",
+                "label": "Push",
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "push",
+                    "origin",
+                    "HEAD"
+                  ],
+                  "command": "git",
+                  "dir": ""
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/action/branches/git/default",
+          "owner": {
+            "kind": "app",
+            "id": ""
+          },
+          "type": "branches",
+          "runtime": "git",
+          "label": "List branches",
+          "inputs": null,
+          "availability": {
+            "available": false,
+            "reason": "checkout required"
+          },
+          "root": {
+            "id": "app/action/branches/git/default/step/root",
+            "kind": "composite",
+            "label": "List branches",
+            "children": [
+              {
+                "id": "app/action/branches/git/default/step/branches",
+                "kind": "command",
+                "label": "List branches",
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "branch",
+                    "--all",
+                    "--format=%(refname:short)"
+                  ],
+                  "command": "git",
+                  "dir": ""
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/action/checkout/git/default",
+          "owner": {
+            "kind": "app",
+            "id": ""
+          },
+          "type": "checkout",
+          "runtime": "git",
+          "label": "Checkout branch",
+          "inputs": [
+            {
+              "key": "branch",
+              "type": "string",
+              "scope": "action",
+              "visibility": "public",
+              "required": true,
+              "label": "Branch"
+            }
+          ],
+          "availability": {
+            "available": false,
+            "reason": "checkout required"
+          },
+          "root": {
+            "id": "app/action/checkout/git/default/step/root",
+            "kind": "composite",
+            "label": "Checkout branch",
+            "children": [
+              {
+                "id": "app/action/checkout/git/default/step/checkout",
+                "kind": "command",
+                "label": "Checkout branch",
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "switch",
+                    "${branch}"
+                  ],
+                  "command": "git",
+                  "dir": ""
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/action/worktree-list/git/default",
+          "owner": {
+            "kind": "app",
+            "id": ""
+          },
+          "type": "worktree-list",
+          "runtime": "git",
+          "label": "List worktrees",
+          "inputs": null,
+          "availability": {
+            "available": false,
+            "reason": "checkout required"
+          },
+          "root": {
+            "id": "app/action/worktree-list/git/default/step/root",
+            "kind": "composite",
+            "label": "List worktrees",
+            "children": [
+              {
+                "id": "app/action/worktree-list/git/default/step/worktree-list",
+                "kind": "command",
+                "label": "List worktrees",
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "worktree",
+                    "list",
+                    "--porcelain"
+                  ],
+                  "command": "git",
+                  "dir": ""
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/action/worktree-add/git/default",
+          "owner": {
+            "kind": "app",
+            "id": ""
+          },
+          "type": "worktree-add",
+          "runtime": "git",
+          "label": "Add worktree",
+          "inputs": [
+            {
+              "key": "branch",
+              "type": "string",
+              "scope": "action",
+              "visibility": "public",
+              "required": true,
+              "label": "Branch"
+            },
+            {
+              "key": "path",
+              "type": "path",
+              "scope": "action",
+              "visibility": "internal",
+              "required": true,
+              "label": "Path"
+            }
+          ],
+          "availability": {
+            "available": false,
+            "reason": "checkout required"
+          },
+          "root": {
+            "id": "app/action/worktree-add/git/default/step/root",
+            "kind": "composite",
+            "label": "Add worktree",
+            "children": [
+              {
+                "id": "app/action/worktree-add/git/default/step/worktree-add",
+                "kind": "command",
+                "label": "Add worktree",
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "worktree",
+                    "add",
+                    "${path}",
+                    "${branch}"
+                  ],
+                  "command": "git",
+                  "dir": ""
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/action/worktree-remove/git/default",
+          "owner": {
+            "kind": "app",
+            "id": ""
+          },
+          "type": "worktree-remove",
+          "runtime": "git",
+          "label": "Remove worktree",
+          "inputs": [
+            {
+              "key": "path",
+              "type": "path",
+              "scope": "action",
+              "visibility": "internal",
+              "required": true,
+              "label": "Path"
+            }
+          ],
+          "availability": {
+            "available": false,
+            "reason": "checkout required"
+          },
+          "root": {
+            "id": "app/action/worktree-remove/git/default/step/root",
+            "kind": "composite",
+            "label": "Remove worktree",
+            "children": [
+              {
+                "id": "app/action/worktree-remove/git/default/step/worktree-remove",
+                "kind": "command",
+                "label": "Remove worktree",
+                "handler": "git",
+                "configuration": {
+                  "args": [
+                    "worktree",
+                    "remove",
+                    "${path}"
+                  ],
+                  "command": "git",
+                  "dir": ""
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "docker-lifecycle-default-profile",
+      "actions": [
+        {
+          "id": "app/api/action/stop/docker/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "stop",
+          "runtime": "docker",
+          "label": "Stop (docker)",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/stop/docker/default/step/root",
+            "kind": "composite",
+            "label": "Stop",
+            "children": [
+              {
+                "id": "app/api/action/stop/docker/default/step/stop/0",
+                "kind": "command",
+                "label": "Stop",
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "-f",
+                    "/home/devenv/apps/api/docker-compose.yml",
+                    "down"
+                  ],
+                  "command": "docker-compose",
+                  "dir": "/home/devenv/apps/api"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/restart/docker/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "restart",
+          "runtime": "docker",
+          "label": "Restart (docker)",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/restart/docker/default/step/root",
+            "kind": "composite",
+            "label": "Restart",
+            "children": [
+              {
+                "id": "app/api/action/restart/docker/default/step/restart/0",
+                "kind": "command",
+                "label": "Restart",
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "-f",
+                    "/home/devenv/apps/api/docker-compose.yml",
+                    "down"
+                  ],
+                  "command": "docker-compose",
+                  "dir": "/home/devenv/apps/api"
+                }
+              },
+              {
+                "id": "app/api/action/restart/docker/default/step/restart/1",
+                "kind": "command",
+                "label": "Restart",
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "-f",
+                    "/home/devenv/apps/api/docker-compose.yml",
+                    "up",
+                    "-d"
+                  ],
+                  "command": "docker-compose",
+                  "dir": "/home/devenv/apps/api"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/stop/podman/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "stop",
+          "runtime": "podman",
+          "label": "Stop (podman)",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/stop/podman/default/step/root",
+            "kind": "composite",
+            "label": "Stop",
+            "children": [
+              {
+                "id": "app/api/action/stop/podman/default/step/stop/0",
+                "kind": "command",
+                "label": "Stop",
+                "handler": "podman",
+                "configuration": {
+                  "args": [
+                    "-f",
+                    "/home/devenv/apps/api/docker-compose.yml",
+                    "down"
+                  ],
+                  "command": "podman-compose",
+                  "dir": "/home/devenv/apps/api"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/restart/podman/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "restart",
+          "runtime": "podman",
+          "label": "Restart (podman)",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/restart/podman/default/step/root",
+            "kind": "composite",
+            "label": "Restart",
+            "children": [
+              {
+                "id": "app/api/action/restart/podman/default/step/restart/0",
+                "kind": "command",
+                "label": "Restart",
+                "handler": "podman",
+                "configuration": {
+                  "args": [
+                    "-f",
+                    "/home/devenv/apps/api/docker-compose.yml",
+                    "down"
+                  ],
+                  "command": "podman-compose",
+                  "dir": "/home/devenv/apps/api"
+                }
+              },
+              {
+                "id": "app/api/action/restart/podman/default/step/restart/1",
+                "kind": "command",
+                "label": "Restart",
+                "handler": "podman",
+                "configuration": {
+                  "args": [
+                    "-f",
+                    "/home/devenv/apps/api/docker-compose.yml",
+                    "up",
+                    "-d"
+                  ],
+                  "command": "podman-compose",
+                  "dir": "/home/devenv/apps/api"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "docker-lifecycle-named-profile",
+      "actions": [
+        {
+          "id": "app/api/action/stop/docker/dev",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "stop",
+          "runtime": "docker",
+          "label": "Stop (docker)",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/stop/docker/dev/step/root",
+            "kind": "composite",
+            "label": "Stop",
+            "children": [
+              {
+                "id": "app/api/action/stop/docker/dev/step/stop/0",
+                "kind": "command",
+                "label": "Stop",
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "-f",
+                    "/home/devenv/apps/api/docker-compose.yml",
+                    "--profile",
+                    "dev",
+                    "down"
+                  ],
+                  "command": "docker-compose",
+                  "dir": "/home/devenv/apps/api"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/restart/docker/dev",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "restart",
+          "runtime": "docker",
+          "label": "Restart (docker)",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/restart/docker/dev/step/root",
+            "kind": "composite",
+            "label": "Restart",
+            "children": [
+              {
+                "id": "app/api/action/restart/docker/dev/step/restart/0",
+                "kind": "command",
+                "label": "Restart",
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "-f",
+                    "/home/devenv/apps/api/docker-compose.yml",
+                    "--profile",
+                    "dev",
+                    "down"
+                  ],
+                  "command": "docker-compose",
+                  "dir": "/home/devenv/apps/api"
+                }
+              },
+              {
+                "id": "app/api/action/restart/docker/dev/step/restart/1",
+                "kind": "command",
+                "label": "Restart",
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "-f",
+                    "/home/devenv/apps/api/docker-compose.yml",
+                    "--profile",
+                    "dev",
+                    "up",
+                    "-d"
+                  ],
+                  "command": "docker-compose",
+                  "dir": "/home/devenv/apps/api"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/stop/podman/dev",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "stop",
+          "runtime": "podman",
+          "label": "Stop (podman)",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/stop/podman/dev/step/root",
+            "kind": "composite",
+            "label": "Stop",
+            "children": [
+              {
+                "id": "app/api/action/stop/podman/dev/step/stop/0",
+                "kind": "command",
+                "label": "Stop",
+                "handler": "podman",
+                "configuration": {
+                  "args": [
+                    "-f",
+                    "/home/devenv/apps/api/docker-compose.yml",
+                    "--profile",
+                    "dev",
+                    "down"
+                  ],
+                  "command": "podman-compose",
+                  "dir": "/home/devenv/apps/api"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/restart/podman/dev",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "restart",
+          "runtime": "podman",
+          "label": "Restart (podman)",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/restart/podman/dev/step/root",
+            "kind": "composite",
+            "label": "Restart",
+            "children": [
+              {
+                "id": "app/api/action/restart/podman/dev/step/restart/0",
+                "kind": "command",
+                "label": "Restart",
+                "handler": "podman",
+                "configuration": {
+                  "args": [
+                    "-f",
+                    "/home/devenv/apps/api/docker-compose.yml",
+                    "--profile",
+                    "dev",
+                    "down"
+                  ],
+                  "command": "podman-compose",
+                  "dir": "/home/devenv/apps/api"
+                }
+              },
+              {
+                "id": "app/api/action/restart/podman/dev/step/restart/1",
+                "kind": "command",
+                "label": "Restart",
+                "handler": "podman",
+                "configuration": {
+                  "args": [
+                    "-f",
+                    "/home/devenv/apps/api/docker-compose.yml",
+                    "--profile",
+                    "dev",
+                    "up",
+                    "-d"
+                  ],
+                  "command": "podman-compose",
+                  "dir": "/home/devenv/apps/api"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "kubernetes-lifecycle-default-profile",
+      "actions": [
+        {
+          "id": "app/api/action/stop/kubernetes/local",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "stop",
+          "runtime": "kubernetes",
+          "label": "Stop",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/stop/kubernetes/local/step/root",
+            "kind": "composite",
+            "label": "Stop",
+            "children": [
+              {
+                "id": "app/api/action/stop/kubernetes/local/step/stop/0",
+                "kind": "command",
+                "label": "Uninstall Helm release",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "--kube-context",
+                    "kind-devenv",
+                    "uninstall",
+                    "api-local",
+                    "--namespace",
+                    "api",
+                    "--ignore-not-found"
+                  ],
+                  "command": "helm"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/restart/kubernetes/local",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "restart",
+          "runtime": "kubernetes",
+          "label": "Restart",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/restart/kubernetes/local/step/root",
+            "kind": "composite",
+            "label": "Restart",
+            "children": [
+              {
+                "id": "app/api/action/restart/kubernetes/local/step/restart/0",
+                "kind": "command",
+                "label": "Uninstall Helm release",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "--kube-context",
+                    "kind-devenv",
+                    "uninstall",
+                    "api-local",
+                    "--namespace",
+                    "api",
+                    "--ignore-not-found"
+                  ],
+                  "command": "helm"
+                }
+              },
+              {
+                "id": "app/api/action/restart/kubernetes/local/step/restart/1",
+                "kind": "command",
+                "label": "Install Helm release",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "--kube-context",
+                    "kind-devenv",
+                    "upgrade",
+                    "--install",
+                    "api-local",
+                    "/home/devenv/apps/api/chart",
+                    "--namespace",
+                    "api",
+                    "--values",
+                    "/home/devenv/apps/api/chart/values.yaml"
+                  ],
+                  "command": "helm"
+                }
+              },
+              {
+                "id": "app/api/action/restart/kubernetes/local/step/restart/2",
+                "kind": "readiness",
+                "label": "Wait for workloads",
+                "handler": "kubernetes",
+                "configuration": {
+                  "context": "kind-devenv",
+                  "namespace": "api",
+                  "probe": "kubernetes",
+                  "resource": "api-local",
+                  "timeout": ""
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "kubernetes-lifecycle-named-profile",
+      "actions": [
+        {
+          "id": "app/api/action/stop/kubernetes/preview",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "stop",
+          "runtime": "kubernetes",
+          "label": "Stop",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/stop/kubernetes/preview/step/root",
+            "kind": "composite",
+            "label": "Stop",
+            "children": [
+              {
+                "id": "app/api/action/stop/kubernetes/preview/step/stop/0",
+                "kind": "command",
+                "label": "Uninstall Helm release",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "--kube-context",
+                    "kind-devenv",
+                    "uninstall",
+                    "api-local",
+                    "--namespace",
+                    "api",
+                    "--ignore-not-found"
+                  ],
+                  "command": "helm"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/restart/kubernetes/preview",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "restart",
+          "runtime": "kubernetes",
+          "label": "Restart",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/restart/kubernetes/preview/step/root",
+            "kind": "composite",
+            "label": "Restart",
+            "children": [
+              {
+                "id": "app/api/action/restart/kubernetes/preview/step/restart/0",
+                "kind": "command",
+                "label": "Uninstall Helm release",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "--kube-context",
+                    "kind-devenv",
+                    "uninstall",
+                    "api-local",
+                    "--namespace",
+                    "api",
+                    "--ignore-not-found"
+                  ],
+                  "command": "helm"
+                }
+              },
+              {
+                "id": "app/api/action/restart/kubernetes/preview/step/restart/1",
+                "kind": "command",
+                "label": "Install Helm release",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "--kube-context",
+                    "kind-devenv",
+                    "upgrade",
+                    "--install",
+                    "api-local",
+                    "/home/devenv/apps/api/chart",
+                    "--namespace",
+                    "api",
+                    "--values",
+                    "/home/devenv/apps/api/chart/values.yaml"
+                  ],
+                  "command": "helm"
+                }
+              },
+              {
+                "id": "app/api/action/restart/kubernetes/preview/step/restart/2",
+                "kind": "readiness",
+                "label": "Wait for workloads",
+                "handler": "kubernetes",
+                "configuration": {
+                  "context": "kind-devenv",
+                  "namespace": "api",
+                  "probe": "kubernetes",
+                  "resource": "api-local",
+                  "timeout": ""
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "kubernetes-lifecycle-unmatched-target",
+      "actions": []
+    },
+    {
+      "name": "kubernetes-cluster-all-tools",
+      "actions": [
+        {
+          "id": "kubernetes/local/action/status/docker/default",
+          "owner": {
+            "kind": "kubernetes",
+            "id": "local"
+          },
+          "type": "status",
+          "runtime": "docker",
+          "label": "Check cluster",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "kubernetes/local/action/status/docker/default/step/root",
+            "kind": "composite",
+            "label": "Check cluster",
+            "children": [
+              {
+                "id": "kubernetes/local/action/status/docker/default/step/status/0",
+                "kind": "command",
+                "label": "Check cluster",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "get",
+                    "kubeconfig",
+                    "--name",
+                    "devenv"
+                  ],
+                  "command": "kind"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "kubernetes/local/action/create/docker/default",
+          "owner": {
+            "kind": "kubernetes",
+            "id": "local"
+          },
+          "type": "create",
+          "runtime": "docker",
+          "label": "Create cluster",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "kubernetes/local/action/create/docker/default/step/root",
+            "kind": "composite",
+            "label": "Create cluster",
+            "children": [
+              {
+                "id": "kubernetes/local/action/create/docker/default/step/create/0",
+                "kind": "command",
+                "label": "Create cluster",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "create",
+                    "cluster",
+                    "--name",
+                    "devenv"
+                  ],
+                  "command": "kind"
+                }
+              },
+              {
+                "id": "kubernetes/local/action/create/docker/default/step/create/1",
+                "kind": "command",
+                "label": "Export kubeconfig",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "export",
+                    "kubeconfig",
+                    "--name",
+                    "devenv",
+                    "--kubeconfig",
+                    "{{HOME}}/.kube/config"
+                  ],
+                  "command": "kind"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "kubernetes/local/action/delete/docker/default",
+          "owner": {
+            "kind": "kubernetes",
+            "id": "local"
+          },
+          "type": "delete",
+          "runtime": "docker",
+          "label": "Delete cluster",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "kubernetes/local/action/delete/docker/default/step/root",
+            "kind": "composite",
+            "label": "Delete cluster",
+            "children": [
+              {
+                "id": "kubernetes/local/action/delete/docker/default/step/delete/0",
+                "kind": "command",
+                "label": "Delete cluster",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "delete",
+                    "cluster",
+                    "--name",
+                    "devenv"
+                  ],
+                  "command": "kind"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "kubernetes/local/action/recreate/docker/default",
+          "owner": {
+            "kind": "kubernetes",
+            "id": "local"
+          },
+          "type": "recreate",
+          "runtime": "docker",
+          "label": "Recreate cluster",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "kubernetes/local/action/recreate/docker/default/step/root",
+            "kind": "composite",
+            "label": "Recreate cluster",
+            "children": [
+              {
+                "id": "kubernetes/local/action/recreate/docker/default/step/recreate/0",
+                "kind": "command",
+                "label": "Delete cluster",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "delete",
+                    "cluster",
+                    "--name",
+                    "devenv"
+                  ],
+                  "command": "kind"
+                }
+              },
+              {
+                "id": "kubernetes/local/action/recreate/docker/default/step/recreate/1",
+                "kind": "command",
+                "label": "Create cluster",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "create",
+                    "cluster",
+                    "--name",
+                    "devenv"
+                  ],
+                  "command": "kind"
+                }
+              },
+              {
+                "id": "kubernetes/local/action/recreate/docker/default/step/recreate/2",
+                "kind": "command",
+                "label": "Export kubeconfig",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "export",
+                    "kubeconfig",
+                    "--name",
+                    "devenv",
+                    "--kubeconfig",
+                    "{{HOME}}/.kube/config"
+                  ],
+                  "command": "kind"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "kubernetes/local/action/export-kubeconfig/docker/default",
+          "owner": {
+            "kind": "kubernetes",
+            "id": "local"
+          },
+          "type": "export-kubeconfig",
+          "runtime": "docker",
+          "label": "Export kubeconfig",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "kubernetes/local/action/export-kubeconfig/docker/default/step/root",
+            "kind": "composite",
+            "label": "Export kubeconfig",
+            "children": [
+              {
+                "id": "kubernetes/local/action/export-kubeconfig/docker/default/step/export-kubeconfig/0",
+                "kind": "command",
+                "label": "Export kubeconfig",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "export",
+                    "kubeconfig",
+                    "--name",
+                    "devenv",
+                    "--kubeconfig",
+                    "{{HOME}}/.kube/config"
+                  ],
+                  "command": "kind"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "kubernetes/local/action/status/podman/default",
+          "owner": {
+            "kind": "kubernetes",
+            "id": "local"
+          },
+          "type": "status",
+          "runtime": "podman",
+          "label": "Check cluster (podman)",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "kubernetes/local/action/status/podman/default/step/root",
+            "kind": "composite",
+            "label": "Check cluster (podman)",
+            "children": [
+              {
+                "id": "kubernetes/local/action/status/podman/default/step/status/0",
+                "kind": "command",
+                "label": "Check cluster",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "get",
+                    "kubeconfig",
+                    "--name",
+                    "devenv"
+                  ],
+                  "command": "kind",
+                  "env": [
+                    "KIND_EXPERIMENTAL_PROVIDER=podman"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "kubernetes/local/action/create/podman/default",
+          "owner": {
+            "kind": "kubernetes",
+            "id": "local"
+          },
+          "type": "create",
+          "runtime": "podman",
+          "label": "Create cluster (podman)",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "kubernetes/local/action/create/podman/default/step/root",
+            "kind": "composite",
+            "label": "Create cluster (podman)",
+            "children": [
+              {
+                "id": "kubernetes/local/action/create/podman/default/step/create/0",
+                "kind": "command",
+                "label": "Create cluster",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "create",
+                    "cluster",
+                    "--name",
+                    "devenv"
+                  ],
+                  "command": "kind",
+                  "env": [
+                    "KIND_EXPERIMENTAL_PROVIDER=podman"
+                  ]
+                }
+              },
+              {
+                "id": "kubernetes/local/action/create/podman/default/step/create/1",
+                "kind": "command",
+                "label": "Export kubeconfig",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "export",
+                    "kubeconfig",
+                    "--name",
+                    "devenv",
+                    "--kubeconfig",
+                    "{{HOME}}/.kube/config"
+                  ],
+                  "command": "kind",
+                  "env": [
+                    "KIND_EXPERIMENTAL_PROVIDER=podman"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "kubernetes/local/action/delete/podman/default",
+          "owner": {
+            "kind": "kubernetes",
+            "id": "local"
+          },
+          "type": "delete",
+          "runtime": "podman",
+          "label": "Delete cluster (podman)",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "kubernetes/local/action/delete/podman/default/step/root",
+            "kind": "composite",
+            "label": "Delete cluster (podman)",
+            "children": [
+              {
+                "id": "kubernetes/local/action/delete/podman/default/step/delete/0",
+                "kind": "command",
+                "label": "Delete cluster",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "delete",
+                    "cluster",
+                    "--name",
+                    "devenv"
+                  ],
+                  "command": "kind",
+                  "env": [
+                    "KIND_EXPERIMENTAL_PROVIDER=podman"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "kubernetes/local/action/recreate/podman/default",
+          "owner": {
+            "kind": "kubernetes",
+            "id": "local"
+          },
+          "type": "recreate",
+          "runtime": "podman",
+          "label": "Recreate cluster (podman)",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "kubernetes/local/action/recreate/podman/default/step/root",
+            "kind": "composite",
+            "label": "Recreate cluster (podman)",
+            "children": [
+              {
+                "id": "kubernetes/local/action/recreate/podman/default/step/recreate/0",
+                "kind": "command",
+                "label": "Delete cluster",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "delete",
+                    "cluster",
+                    "--name",
+                    "devenv"
+                  ],
+                  "command": "kind",
+                  "env": [
+                    "KIND_EXPERIMENTAL_PROVIDER=podman"
+                  ]
+                }
+              },
+              {
+                "id": "kubernetes/local/action/recreate/podman/default/step/recreate/1",
+                "kind": "command",
+                "label": "Create cluster",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "create",
+                    "cluster",
+                    "--name",
+                    "devenv"
+                  ],
+                  "command": "kind",
+                  "env": [
+                    "KIND_EXPERIMENTAL_PROVIDER=podman"
+                  ]
+                }
+              },
+              {
+                "id": "kubernetes/local/action/recreate/podman/default/step/recreate/2",
+                "kind": "command",
+                "label": "Export kubeconfig",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "export",
+                    "kubeconfig",
+                    "--name",
+                    "devenv",
+                    "--kubeconfig",
+                    "{{HOME}}/.kube/config"
+                  ],
+                  "command": "kind",
+                  "env": [
+                    "KIND_EXPERIMENTAL_PROVIDER=podman"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "kubernetes/local/action/export-kubeconfig/podman/default",
+          "owner": {
+            "kind": "kubernetes",
+            "id": "local"
+          },
+          "type": "export-kubeconfig",
+          "runtime": "podman",
+          "label": "Export kubeconfig (podman)",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "kubernetes/local/action/export-kubeconfig/podman/default/step/root",
+            "kind": "composite",
+            "label": "Export kubeconfig (podman)",
+            "children": [
+              {
+                "id": "kubernetes/local/action/export-kubeconfig/podman/default/step/export-kubeconfig/0",
+                "kind": "command",
+                "label": "Export kubeconfig",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "export",
+                    "kubeconfig",
+                    "--name",
+                    "devenv",
+                    "--kubeconfig",
+                    "{{HOME}}/.kube/config"
+                  ],
+                  "command": "kind",
+                  "env": [
+                    "KIND_EXPERIMENTAL_PROVIDER=podman"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "kubernetes-cluster-no-tools",
+      "actions": []
+    },
+    {
+      "name": "infrastructure-docker",
+      "actions": [
+        {
+          "id": "infra/postgres/action/start/docker/default",
+          "owner": {
+            "kind": "infrastructure",
+            "id": "postgres"
+          },
+          "type": "start",
+          "runtime": "docker",
+          "label": "Default",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "infra/postgres/action/start/docker/default/step/root",
+            "kind": "composite",
+            "label": "Start Postgres",
+            "children": [
+              {
+                "id": "infra/postgres/action/start/docker/default/step/start",
+                "kind": "operation",
+                "label": "Start Postgres",
+                "handler": "docker",
+                "configuration": {
+                  "args": null,
+                  "cwd": "",
+                  "defaultRunner": "",
+                  "ident": "postgres",
+                  "kubernetes": null,
+                  "powerShellPath": "",
+                  "runner": "docker",
+                  "shellPath": "",
+                  "type": "docker"
+                }
+              },
+              {
+                "id": "infra/postgres/action/start/docker/default/step/readiness",
+                "kind": "readiness",
+                "label": "Wait for readiness",
+                "handler": "docker",
+                "configuration": {
+                  "args": null,
+                  "cwd": "",
+                  "defaultRunner": "",
+                  "ident": "postgres",
+                  "kubernetes": null,
+                  "powerShellPath": "",
+                  "shellPath": "",
+                  "type": "docker"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "infra/postgres/action/stop/docker/default",
+          "owner": {
+            "kind": "infrastructure",
+            "id": "postgres"
+          },
+          "type": "stop",
+          "runtime": "docker",
+          "label": "Stop",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "infra/postgres/action/stop/docker/default/step/root",
+            "kind": "composite",
+            "label": "Stop Postgres",
+            "children": [
+              {
+                "id": "infra/postgres/action/stop/docker/default/step/stop",
+                "kind": "operation",
+                "label": "Terminate Postgres",
+                "handler": "docker",
+                "configuration": {
+                  "args": null,
+                  "cwd": "",
+                  "defaultRunner": "",
+                  "ident": "postgres",
+                  "kubernetes": null,
+                  "powerShellPath": "",
+                  "shellPath": "",
+                  "type": "docker"
+                }
+              },
+              {
+                "id": "infra/postgres/action/stop/docker/default/step/verify",
+                "kind": "operation",
+                "label": "Verify stopped",
+                "handler": "docker",
+                "configuration": {
+                  "args": null,
+                  "cwd": "",
+                  "defaultRunner": "",
+                  "ident": "postgres",
+                  "kubernetes": null,
+                  "powerShellPath": "",
+                  "shellPath": "",
+                  "type": "docker"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "infrastructure-script-shell",
+      "actions": [
+        {
+          "id": "infra/worker/action/start/shell/default",
+          "owner": {
+            "kind": "infrastructure",
+            "id": "worker"
+          },
+          "type": "start",
+          "runtime": "shell",
+          "label": "Shell",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "infra/worker/action/start/shell/default/step/root",
+            "kind": "composite",
+            "label": "Start Worker",
+            "children": [
+              {
+                "id": "infra/worker/action/start/shell/default/step/start",
+                "kind": "process",
+                "label": "Start Worker",
+                "handler": "script",
+                "configuration": {
+                  "args": [
+                    "/home/devenv/infra/worker.sh",
+                    "--verbose"
+                  ],
+                  "command": "/bin/sh",
+                  "cwd": "/home/devenv/infra",
+                  "defaultRunner": "shell",
+                  "dir": "/home/devenv/infra",
+                  "env": [
+                    "WORKER_MODE=dev"
+                  ],
+                  "handleKey": "worker",
+                  "ident": "worker",
+                  "kubernetes": null,
+                  "logPath": "/home/devenv/logs/worker.log",
+                  "powerShellPath": "/home/devenv/infra/worker.ps1",
+                  "runner": "shell",
+                  "shellPath": "/home/devenv/infra/worker.sh",
+                  "type": "script"
+                }
+              },
+              {
+                "id": "infra/worker/action/start/shell/default/step/readiness",
+                "kind": "readiness",
+                "label": "Wait for readiness",
+                "handler": "script",
+                "configuration": {
+                  "probe": "process",
+                  "processStepId": "worker",
+                  "stabilizationMs": 1000
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "infra/worker/action/stop/script/default",
+          "owner": {
+            "kind": "infrastructure",
+            "id": "worker"
+          },
+          "type": "stop",
+          "runtime": "script",
+          "label": "Stop",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "infra/worker/action/stop/script/default/step/root",
+            "kind": "composite",
+            "label": "Stop Worker",
+            "children": [
+              {
+                "id": "infra/worker/action/stop/script/default/step/stop",
+                "kind": "operation",
+                "label": "Terminate Worker",
+                "handler": "script",
+                "configuration": {
+                  "args": [
+                    "--verbose"
+                  ],
+                  "cwd": "/home/devenv/infra",
+                  "defaultRunner": "shell",
+                  "ident": "worker",
+                  "kubernetes": null,
+                  "powerShellPath": "/home/devenv/infra/worker.ps1",
+                  "shellPath": "/home/devenv/infra/worker.sh",
+                  "type": "script"
+                }
+              },
+              {
+                "id": "infra/worker/action/stop/script/default/step/verify",
+                "kind": "operation",
+                "label": "Verify stopped",
+                "handler": "script",
+                "configuration": {
+                  "args": [
+                    "--verbose"
+                  ],
+                  "cwd": "/home/devenv/infra",
+                  "defaultRunner": "shell",
+                  "ident": "worker",
+                  "kubernetes": null,
+                  "powerShellPath": "/home/devenv/infra/worker.ps1",
+                  "shellPath": "/home/devenv/infra/worker.sh",
+                  "type": "script"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "infrastructure-script-powershell",
+      "actions": [
+        {
+          "id": "infra/worker/action/start/powershell/default",
+          "owner": {
+            "kind": "infrastructure",
+            "id": "worker"
+          },
+          "type": "start",
+          "runtime": "powershell",
+          "label": "PowerShell",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "infra/worker/action/start/powershell/default/step/root",
+            "kind": "composite",
+            "label": "Start Worker",
+            "children": [
+              {
+                "id": "infra/worker/action/start/powershell/default/step/start",
+                "kind": "process",
+                "label": "Start Worker",
+                "handler": "script",
+                "configuration": {
+                  "args": [
+                    "-File",
+                    "/home/devenv/infra/worker.ps1",
+                    "--verbose"
+                  ],
+                  "command": "pwsh",
+                  "cwd": "/home/devenv/infra",
+                  "defaultRunner": "powershell",
+                  "dir": "/home/devenv/infra",
+                  "env": [
+                    "WORKER_MODE=dev"
+                  ],
+                  "handleKey": "worker",
+                  "ident": "worker",
+                  "kubernetes": null,
+                  "logPath": "/home/devenv/logs/worker.log",
+                  "powerShellPath": "/home/devenv/infra/worker.ps1",
+                  "runner": "powershell",
+                  "shellPath": "/home/devenv/infra/worker.sh",
+                  "type": "script"
+                }
+              },
+              {
+                "id": "infra/worker/action/start/powershell/default/step/readiness",
+                "kind": "readiness",
+                "label": "Wait for readiness",
+                "handler": "script",
+                "configuration": {
+                  "probe": "process",
+                  "processStepId": "worker",
+                  "stabilizationMs": 1000
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "infra/worker/action/stop/script/default",
+          "owner": {
+            "kind": "infrastructure",
+            "id": "worker"
+          },
+          "type": "stop",
+          "runtime": "script",
+          "label": "Stop",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "infra/worker/action/stop/script/default/step/root",
+            "kind": "composite",
+            "label": "Stop Worker",
+            "children": [
+              {
+                "id": "infra/worker/action/stop/script/default/step/stop",
+                "kind": "operation",
+                "label": "Terminate Worker",
+                "handler": "script",
+                "configuration": {
+                  "args": [
+                    "--verbose"
+                  ],
+                  "cwd": "/home/devenv/infra",
+                  "defaultRunner": "powershell",
+                  "ident": "worker",
+                  "kubernetes": null,
+                  "powerShellPath": "/home/devenv/infra/worker.ps1",
+                  "shellPath": "/home/devenv/infra/worker.sh",
+                  "type": "script"
+                }
+              },
+              {
+                "id": "infra/worker/action/stop/script/default/step/verify",
+                "kind": "operation",
+                "label": "Verify stopped",
+                "handler": "script",
+                "configuration": {
+                  "args": [
+                    "--verbose"
+                  ],
+                  "cwd": "/home/devenv/infra",
+                  "defaultRunner": "powershell",
+                  "ident": "worker",
+                  "kubernetes": null,
+                  "powerShellPath": "/home/devenv/infra/worker.ps1",
+                  "shellPath": "/home/devenv/infra/worker.sh",
+                  "type": "script"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "infrastructure-kubernetes",
+      "actions": [
+        {
+          "id": "infra/redis/action/start/kubernetes/default",
+          "owner": {
+            "kind": "infrastructure",
+            "id": "redis"
+          },
+          "type": "start",
+          "runtime": "kubernetes",
+          "label": "Default",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "infra/redis/action/start/kubernetes/default/step/root",
+            "kind": "composite",
+            "label": "Start Redis",
+            "children": [
+              {
+                "id": "infra/redis/action/start/kubernetes/default/step/ensure-cluster",
+                "kind": "command",
+                "label": "Ensure cluster",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "-c",
+                    "kind export kubeconfig --name devenv 2\u003e/dev/null || (kind create cluster --name devenv \u0026\u0026 kind export kubeconfig --name devenv)"
+                  ],
+                  "command": "sh"
+                }
+              },
+              {
+                "id": "infra/redis/action/start/kubernetes/default/step/create-namespace",
+                "kind": "command",
+                "label": "Create namespace",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "-c",
+                    "kubectl --context kind-devenv create namespace redis --dry-run=client -o yaml | kubectl --context kind-devenv apply -f -"
+                  ],
+                  "command": "sh"
+                }
+              },
+              {
+                "id": "infra/redis/action/start/kubernetes/default/step/helm-install",
+                "kind": "command",
+                "label": "Install Helm release",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "--kube-context",
+                    "kind-devenv",
+                    "upgrade",
+                    "--install",
+                    "redis-local",
+                    "/home/devenv/infra/redis",
+                    "--namespace",
+                    "redis",
+                    "--values",
+                    "/home/devenv/infra/redis/values.yaml"
+                  ],
+                  "command": "helm"
+                }
+              },
+              {
+                "id": "infra/redis/action/start/kubernetes/default/step/readiness",
+                "kind": "readiness",
+                "label": "Wait for readiness",
+                "handler": "kubernetes",
+                "configuration": {
+                  "context": "kind-devenv",
+                  "namespace": "redis",
+                  "probe": "kubernetes",
+                  "resource": "redis-local",
+                  "timeout": "10m"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "infra/redis/action/stop/kubernetes/default",
+          "owner": {
+            "kind": "infrastructure",
+            "id": "redis"
+          },
+          "type": "stop",
+          "runtime": "kubernetes",
+          "label": "Stop",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "infra/redis/action/stop/kubernetes/default/step/root",
+            "kind": "composite",
+            "label": "Stop Redis",
+            "children": [
+              {
+                "id": "infra/redis/action/stop/kubernetes/default/step/helm-uninstall",
+                "kind": "command",
+                "label": "Uninstall Helm release",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "--kube-context",
+                    "kind-devenv",
+                    "uninstall",
+                    "redis-local",
+                    "--namespace",
+                    "redis"
+                  ],
+                  "command": "helm"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "operation",
+      "actions": [
+        {
+          "id": "kubernetes/local/action/stop/kubernetes/default",
+          "owner": {
+            "kind": "kubernetes",
+            "id": "local"
+          },
+          "type": "stop",
+          "runtime": "kubernetes",
+          "label": "Stop",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "kubernetes/local/action/stop/kubernetes/default/step/root",
+            "kind": "composite",
+            "label": "Stop",
+            "children": [
+              {
+                "id": "kubernetes/local/action/stop/kubernetes/default/step/kubernetes/0",
+                "kind": "command",
+                "label": "Stop",
+                "handler": "kubernetes"
+              },
+              {
+                "id": "kubernetes/local/action/stop/kubernetes/default/step/kubernetes/1",
+                "kind": "cleanup",
+                "label": "Stop",
+                "handler": "kubernetes"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "validation": [
+    {
+      "name": "valid",
+      "action": {
+        "id": "app/api/action/build/docker/default",
+        "owner": {
+          "kind": "app",
+          "id": "api"
+        },
+        "type": "build",
+        "runtime": "docker",
+        "label": "Build",
+        "inputs": null,
+        "availability": {
+          "available": true
+        },
+        "root": {
+          "id": "app/api/action/build/docker/default/step/root",
+          "kind": "composite",
+          "label": "Build",
+          "children": [
+            {
+              "id": "app/api/action/build/docker/default/step/build",
+              "kind": "command",
+              "label": "Build image",
+              "produces": [
+                {
+                  "key": "image.build",
+                  "type": "image-ref",
+                  "scope": "action",
+                  "visibility": "public"
+                }
+              ],
+              "configuration": {
+                "args": [
+                  "build",
+                  "."
+                ],
+                "command": "docker"
+              }
+            }
+          ]
+        }
+      },
+      "handlers": [
+        "command",
+        "process",
+        "readiness",
+        "operation",
+        "cleanup"
+      ]
+    },
+    {
+      "name": "action-id-required",
+      "action": {
+        "id": "",
+        "owner": {
+          "kind": "app",
+          "id": "api"
+        },
+        "type": "build",
+        "runtime": "docker",
+        "label": "Build",
+        "inputs": null,
+        "availability": {
+          "available": true
+        },
+        "root": {
+          "id": "app/api/action/build/docker/default/step/root",
+          "kind": "composite",
+          "label": "Build",
+          "children": [
+            {
+              "id": "app/api/action/build/docker/default/step/build",
+              "kind": "command",
+              "label": "Build image",
+              "produces": [
+                {
+                  "key": "image.build",
+                  "type": "image-ref",
+                  "scope": "action",
+                  "visibility": "public"
+                }
+              ],
+              "configuration": {
+                "args": [
+                  "build",
+                  "."
+                ],
+                "command": "docker"
+              }
+            }
+          ]
+        }
+      },
+      "handlers": [
+        "command",
+        "process",
+        "readiness",
+        "operation",
+        "cleanup"
+      ],
+      "error": "action id is required"
+    },
+    {
+      "name": "owner-id-required",
+      "action": {
+        "id": "app/api/action/build/docker/default",
+        "owner": {
+          "kind": "app",
+          "id": ""
+        },
+        "type": "build",
+        "runtime": "docker",
+        "label": "Build",
+        "inputs": null,
+        "availability": {
+          "available": true
+        },
+        "root": {
+          "id": "app/api/action/build/docker/default/step/root",
+          "kind": "composite",
+          "label": "Build",
+          "children": [
+            {
+              "id": "app/api/action/build/docker/default/step/build",
+              "kind": "command",
+              "label": "Build image",
+              "produces": [
+                {
+                  "key": "image.build",
+                  "type": "image-ref",
+                  "scope": "action",
+                  "visibility": "public"
+                }
+              ],
+              "configuration": {
+                "args": [
+                  "build",
+                  "."
+                ],
+                "command": "docker"
+              }
+            }
+          ]
+        }
+      },
+      "handlers": [
+        "command",
+        "process",
+        "readiness",
+        "operation",
+        "cleanup"
+      ],
+      "error": "action app/api/action/build/docker/default: owner id is required"
+    },
+    {
+      "name": "root-step-empty",
+      "action": {
+        "id": "app/api/action/build/docker/default",
+        "owner": {
+          "kind": "app",
+          "id": "api"
+        },
+        "type": "build",
+        "runtime": "docker",
+        "label": "Build",
+        "inputs": null,
+        "availability": {
+          "available": true
+        },
+        "root": {
+          "id": "",
+          "kind": "",
+          "label": ""
+        }
+      },
+      "handlers": [
+        "command",
+        "process",
+        "readiness",
+        "operation",
+        "cleanup"
+      ],
+      "error": "action app/api/action/build/docker/default: step id is required"
+    },
+    {
+      "name": "input-key-and-type-required",
+      "action": {
+        "id": "app/api/action/build/docker/default",
+        "owner": {
+          "kind": "app",
+          "id": "api"
+        },
+        "type": "build",
+        "runtime": "docker",
+        "label": "Build",
+        "inputs": [
+          {
+            "key": "branch",
+            "type": "",
+            "scope": "",
+            "visibility": ""
+          }
+        ],
+        "availability": {
+          "available": true
+        },
+        "root": {
+          "id": "app/api/action/build/docker/default/step/root",
+          "kind": "composite",
+          "label": "Build",
+          "children": [
+            {
+              "id": "app/api/action/build/docker/default/step/build",
+              "kind": "command",
+              "label": "Build image",
+              "produces": [
+                {
+                  "key": "image.build",
+                  "type": "image-ref",
+                  "scope": "action",
+                  "visibility": "public"
+                }
+              ],
+              "configuration": {
+                "args": [
+                  "build",
+                  "."
+                ],
+                "command": "docker"
+              }
+            }
+          ]
+        }
+      },
+      "handlers": [
+        "command",
+        "process",
+        "readiness",
+        "operation",
+        "cleanup"
+      ],
+      "error": "action app/api/action/build/docker/default: input key and type are required"
+    },
+    {
+      "name": "duplicate-input",
+      "action": {
+        "id": "app/api/action/build/docker/default",
+        "owner": {
+          "kind": "app",
+          "id": "api"
+        },
+        "type": "build",
+        "runtime": "docker",
+        "label": "Build",
+        "inputs": [
+          {
+            "key": "branch",
+            "type": "string",
+            "scope": "",
+            "visibility": ""
+          },
+          {
+            "key": "branch",
+            "type": "string",
+            "scope": "",
+            "visibility": ""
+          }
+        ],
+        "availability": {
+          "available": true
+        },
+        "root": {
+          "id": "app/api/action/build/docker/default/step/root",
+          "kind": "composite",
+          "label": "Build",
+          "children": [
+            {
+              "id": "app/api/action/build/docker/default/step/build",
+              "kind": "command",
+              "label": "Build image",
+              "produces": [
+                {
+                  "key": "image.build",
+                  "type": "image-ref",
+                  "scope": "action",
+                  "visibility": "public"
+                }
+              ],
+              "configuration": {
+                "args": [
+                  "build",
+                  "."
+                ],
+                "command": "docker"
+              }
+            }
+          ]
+        }
+      },
+      "handlers": [
+        "command",
+        "process",
+        "readiness",
+        "operation",
+        "cleanup"
+      ],
+      "error": "action app/api/action/build/docker/default: duplicate input branch"
+    },
+    {
+      "name": "step-id-required",
+      "action": {
+        "id": "app/api/action/build/docker/default",
+        "owner": {
+          "kind": "app",
+          "id": "api"
+        },
+        "type": "build",
+        "runtime": "docker",
+        "label": "Build",
+        "inputs": null,
+        "availability": {
+          "available": true
+        },
+        "root": {
+          "id": "app/api/action/build/docker/default/step/root",
+          "kind": "composite",
+          "label": "Build",
+          "children": [
+            {
+              "id": "",
+              "kind": "command",
+              "label": "Build image",
+              "produces": [
+                {
+                  "key": "image.build",
+                  "type": "image-ref",
+                  "scope": "action",
+                  "visibility": "public"
+                }
+              ],
+              "configuration": {
+                "args": [
+                  "build",
+                  "."
+                ],
+                "command": "docker"
+              }
+            }
+          ]
+        }
+      },
+      "handlers": [
+        "command",
+        "process",
+        "readiness",
+        "operation",
+        "cleanup"
+      ],
+      "error": "action app/api/action/build/docker/default: step id is required"
+    },
+    {
+      "name": "duplicate-step-id",
+      "action": {
+        "id": "app/api/action/build/docker/default",
+        "owner": {
+          "kind": "app",
+          "id": "api"
+        },
+        "type": "build",
+        "runtime": "docker",
+        "label": "Build",
+        "inputs": null,
+        "availability": {
+          "available": true
+        },
+        "root": {
+          "id": "app/api/action/build/docker/default/step/root",
+          "kind": "composite",
+          "label": "Build",
+          "children": [
+            {
+              "id": "app/api/action/build/docker/default/step/build",
+              "kind": "command",
+              "label": "Build image",
+              "produces": [
+                {
+                  "key": "image.build",
+                  "type": "image-ref",
+                  "scope": "action",
+                  "visibility": "public"
+                }
+              ],
+              "configuration": {
+                "args": [
+                  "build",
+                  "."
+                ],
+                "command": "docker"
+              }
+            },
+            {
+              "id": "app/api/action/build/docker/default/step/build",
+              "kind": "command",
+              "label": "Duplicate"
+            }
+          ]
+        }
+      },
+      "handlers": [
+        "command",
+        "process",
+        "readiness",
+        "operation",
+        "cleanup"
+      ],
+      "error": "action app/api/action/build/docker/default: duplicate step id app/api/action/build/docker/default/step/build"
+    },
+    {
+      "name": "kind-required",
+      "action": {
+        "id": "app/api/action/build/docker/default",
+        "owner": {
+          "kind": "app",
+          "id": "api"
+        },
+        "type": "build",
+        "runtime": "docker",
+        "label": "Build",
+        "inputs": null,
+        "availability": {
+          "available": true
+        },
+        "root": {
+          "id": "app/api/action/build/docker/default/step/root",
+          "kind": "composite",
+          "label": "Build",
+          "children": [
+            {
+              "id": "app/api/action/build/docker/default/step/build",
+              "kind": "",
+              "label": "Build image",
+              "produces": [
+                {
+                  "key": "image.build",
+                  "type": "image-ref",
+                  "scope": "action",
+                  "visibility": "public"
+                }
+              ],
+              "configuration": {
+                "args": [
+                  "build",
+                  "."
+                ],
+                "command": "docker"
+              }
+            }
+          ]
+        }
+      },
+      "handlers": [
+        "command",
+        "process",
+        "readiness",
+        "operation",
+        "cleanup"
+      ],
+      "error": "step app/api/action/build/docker/default/step/build: kind is required"
+    },
+    {
+      "name": "handler-missing",
+      "action": {
+        "id": "app/api/action/build/docker/default",
+        "owner": {
+          "kind": "app",
+          "id": "api"
+        },
+        "type": "build",
+        "runtime": "docker",
+        "label": "Build",
+        "inputs": null,
+        "availability": {
+          "available": true
+        },
+        "root": {
+          "id": "app/api/action/build/docker/default/step/root",
+          "kind": "composite",
+          "label": "Build",
+          "children": [
+            {
+              "id": "app/api/action/build/docker/default/step/build",
+              "kind": "unsupported",
+              "label": "Build image",
+              "produces": [
+                {
+                  "key": "image.build",
+                  "type": "image-ref",
+                  "scope": "action",
+                  "visibility": "public"
+                }
+              ],
+              "configuration": {
+                "args": [
+                  "build",
+                  "."
+                ],
+                "command": "docker"
+              }
+            }
+          ]
+        }
+      },
+      "handlers": [
+        "command",
+        "process",
+        "readiness",
+        "operation",
+        "cleanup"
+      ],
+      "error": "step app/api/action/build/docker/default/step/build: no handler for kind unsupported"
+    },
+    {
+      "name": "missing-producer",
+      "action": {
+        "id": "app/api/action/build/docker/default",
+        "owner": {
+          "kind": "app",
+          "id": "api"
+        },
+        "type": "build",
+        "runtime": "docker",
+        "label": "Build",
+        "inputs": null,
+        "availability": {
+          "available": true
+        },
+        "root": {
+          "id": "app/api/action/build/docker/default/step/root",
+          "kind": "composite",
+          "label": "Build",
+          "children": [
+            {
+              "id": "app/api/action/build/docker/default/step/build",
+              "kind": "command",
+              "label": "Build image",
+              "consumes": [
+                {
+                  "key": "chart.path",
+                  "type": "path",
+                  "scope": "action",
+                  "visibility": "internal",
+                  "required": true
+                }
+              ],
+              "produces": [
+                {
+                  "key": "image.build",
+                  "type": "image-ref",
+                  "scope": "action",
+                  "visibility": "public"
+                }
+              ],
+              "configuration": {
+                "args": [
+                  "build",
+                  "."
+                ],
+                "command": "docker"
+              }
+            }
+          ]
+        }
+      },
+      "handlers": [
+        "command",
+        "process",
+        "readiness",
+        "operation",
+        "cleanup"
+      ],
+      "error": "step app/api/action/build/docker/default/step/build: missing producer for chart.path"
+    },
+    {
+      "name": "optional-input-without-producer",
+      "action": {
+        "id": "app/api/action/build/docker/default",
+        "owner": {
+          "kind": "app",
+          "id": "api"
+        },
+        "type": "build",
+        "runtime": "docker",
+        "label": "Build",
+        "inputs": null,
+        "availability": {
+          "available": true
+        },
+        "root": {
+          "id": "app/api/action/build/docker/default/step/root",
+          "kind": "composite",
+          "label": "Build",
+          "children": [
+            {
+              "id": "app/api/action/build/docker/default/step/build",
+              "kind": "command",
+              "label": "Build image",
+              "consumes": [
+                {
+                  "key": "chart.path",
+                  "type": "path",
+                  "scope": "action",
+                  "visibility": "internal"
+                }
+              ],
+              "produces": [
+                {
+                  "key": "image.build",
+                  "type": "image-ref",
+                  "scope": "action",
+                  "visibility": "public"
+                }
+              ],
+              "configuration": {
+                "args": [
+                  "build",
+                  "."
+                ],
+                "command": "docker"
+              }
+            }
+          ]
+        }
+      },
+      "handlers": [
+        "command",
+        "process",
+        "readiness",
+        "operation",
+        "cleanup"
+      ]
+    },
+    {
+      "name": "type-mismatch",
+      "action": {
+        "id": "app/api/action/build/docker/default",
+        "owner": {
+          "kind": "app",
+          "id": "api"
+        },
+        "type": "build",
+        "runtime": "docker",
+        "label": "Build",
+        "inputs": [
+          {
+            "key": "image.ref",
+            "type": "path",
+            "scope": "action",
+            "visibility": "internal"
+          }
+        ],
+        "availability": {
+          "available": true
+        },
+        "root": {
+          "id": "app/api/action/build/docker/default/step/root",
+          "kind": "composite",
+          "label": "Build",
+          "children": [
+            {
+              "id": "app/api/action/build/docker/default/step/build",
+              "kind": "command",
+              "label": "Build image",
+              "consumes": [
+                {
+                  "key": "image.ref",
+                  "type": "image-ref",
+                  "scope": "action",
+                  "visibility": "internal",
+                  "required": true
+                }
+              ],
+              "produces": [
+                {
+                  "key": "image.build",
+                  "type": "image-ref",
+                  "scope": "action",
+                  "visibility": "public"
+                }
+              ],
+              "configuration": {
+                "args": [
+                  "build",
+                  "."
+                ],
+                "command": "docker"
+              }
+            }
+          ]
+        }
+      },
+      "handlers": [
+        "command",
+        "process",
+        "readiness",
+        "operation",
+        "cleanup"
+      ],
+      "error": "step app/api/action/build/docker/default/step/build: value image.ref type path does not match image-ref"
+    },
+    {
+      "name": "duplicate-output",
+      "action": {
+        "id": "app/api/action/build/docker/default",
+        "owner": {
+          "kind": "app",
+          "id": "api"
+        },
+        "type": "build",
+        "runtime": "docker",
+        "label": "Build",
+        "inputs": [
+          {
+            "key": "image.build",
+            "type": "image-ref",
+            "scope": "action",
+            "visibility": "public"
+          }
+        ],
+        "availability": {
+          "available": true
+        },
+        "root": {
+          "id": "app/api/action/build/docker/default/step/root",
+          "kind": "composite",
+          "label": "Build",
+          "children": [
+            {
+              "id": "app/api/action/build/docker/default/step/build",
+              "kind": "command",
+              "label": "Build image",
+              "produces": [
+                {
+                  "key": "image.build",
+                  "type": "image-ref",
+                  "scope": "action",
+                  "visibility": "public"
+                }
+              ],
+              "configuration": {
+                "args": [
+                  "build",
+                  "."
+                ],
+                "command": "docker"
+              }
+            }
+          ]
+        }
+      },
+      "handlers": [
+        "command",
+        "process",
+        "readiness",
+        "operation",
+        "cleanup"
+      ],
+      "error": "step app/api/action/build/docker/default/step/build: duplicate output image.build previously image-ref"
+    },
+    {
+      "name": "secret-cannot-become-public",
+      "action": {
+        "id": "app/api/action/build/docker/default",
+        "owner": {
+          "kind": "app",
+          "id": "api"
+        },
+        "type": "build",
+        "runtime": "docker",
+        "label": "Build",
+        "inputs": [
+          {
+            "key": "image.build",
+            "type": "image-ref",
+            "scope": "action",
+            "visibility": "secret"
+          }
+        ],
+        "availability": {
+          "available": true
+        },
+        "root": {
+          "id": "app/api/action/build/docker/default/step/root",
+          "kind": "composite",
+          "label": "Build",
+          "children": [
+            {
+              "id": "app/api/action/build/docker/default/step/build",
+              "kind": "command",
+              "label": "Build image",
+              "produces": [
+                {
+                  "key": "image.build",
+                  "type": "image-ref",
+                  "scope": "step",
+                  "visibility": "public"
+                }
+              ],
+              "configuration": {
+                "args": [
+                  "build",
+                  "."
+                ],
+                "command": "docker"
+              }
+            }
+          ]
+        }
+      },
+      "handlers": [
+        "command",
+        "process",
+        "readiness",
+        "operation",
+        "cleanup"
+      ],
+      "error": "step app/api/action/build/docker/default/step/build: secret value image.build cannot become public"
+    },
+    {
+      "name": "step-scoped-output-allowed",
+      "action": {
+        "id": "app/api/action/build/docker/default",
+        "owner": {
+          "kind": "app",
+          "id": "api"
+        },
+        "type": "build",
+        "runtime": "docker",
+        "label": "Build",
+        "inputs": [
+          {
+            "key": "image.build",
+            "type": "image-ref",
+            "scope": "action",
+            "visibility": "public"
+          }
+        ],
+        "availability": {
+          "available": true
+        },
+        "root": {
+          "id": "app/api/action/build/docker/default/step/root",
+          "kind": "composite",
+          "label": "Build",
+          "children": [
+            {
+              "id": "app/api/action/build/docker/default/step/build",
+              "kind": "command",
+              "label": "Build image",
+              "produces": [
+                {
+                  "key": "image.build",
+                  "type": "image-ref",
+                  "scope": "step",
+                  "visibility": "public"
+                }
+              ],
+              "configuration": {
+                "args": [
+                  "build",
+                  "."
+                ],
+                "command": "docker"
+              }
+            }
+          ]
+        }
+      },
+      "handlers": [
+        "command",
+        "process",
+        "readiness",
+        "operation",
+        "cleanup"
+      ]
+    }
+  ]
+}

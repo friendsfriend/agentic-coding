@@ -20,23 +20,17 @@ import { createCliRenderer } from "@opentui/core";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { KeymapProvider } from "@opentui/keymap/solid";
 import { render } from "@opentui/solid";
-import {
-	BackendStartupError,
-	resolveConfigDir,
-	resolveDevenvHome,
-	startOwnedBackend,
-} from "../backend/lifecycle";
+import { resolveConfigDir, resolveDevenvHome } from "../backend/home";
 import { ownsEnvironmentBackend } from "../backend/ownership";
+import { createInstanceAuthority } from "../server/auth";
 import { backendClient, configureBackendClient } from "../server/client";
-import {
-	bunOwnsEnvironment,
-	createEnvironmentAuthority,
-} from "../server/environment/authority";
+import { createEnvironmentAuthority } from "../server/environment/authority";
 import { createIntegrationServices } from "../server/integrations/services";
 import {
 	type OwnedWorkflowServer,
 	startWorkflowServer,
 } from "../server/lifecycle";
+import { APP_VERSION } from "../version";
 import {
 	activeWorkflowExecutions,
 	cancelActiveWorkflowExecutions,
@@ -150,9 +144,8 @@ const sleep = (ms: number) =>
 
 /** Shutdown progress labels keyed by the resource step that owns the row. */
 const SHUTDOWN_STEP_LABELS: Record<string, string> = {
-	"workflow-server": "Stopping workflow server",
+	"workflow-server": "Stopping unified server",
 	"workflow-application": "Cancelling workflow actions",
-	"go-backend": "Stopping environment backend",
 	telemetry: "Stopping telemetry receiver",
 	db: "Closing database",
 	renderer: "Restoring terminal",
@@ -226,10 +219,10 @@ export async function main(): Promise<void> {
 				: "/demo";
 	const resolvedWorkflowId = workflowId ?? "demo-optional-realisation-date";
 
-	// Resolve the environment backend before any observation subprocess can
-	// start (including `--json`). Explicit `--devenv-url`/`--attach-url` win and
-	// the value is exported for child processes, so the shell's own catalog read
-	// and the child reads can never target different backends. Only the managed
+	// Resolve the backend address before any observation subprocess can start
+	// (including `--json`). Explicit `--devenv-url`/`--attach-url` win and the
+	// value is exported for child processes, so the shell's own catalog read and
+	// the child reads can never target different backends. Only the managed
 	// (default/home) route owns a backend; an explicit URL means "attach".
 	const explicitUrl =
 		attachUrl ??
@@ -244,14 +237,37 @@ export async function main(): Promise<void> {
 		isTest,
 		json: process.argv.includes("--json"),
 	});
-	const environments = remoteAttach
-		? undefined
-		: { serverUrl: explicitUrl ?? `http://127.0.0.1:${devenvPort}` };
-	const devenvUrl =
-		environments?.serverUrl ?? explicitUrl ?? `http://127.0.0.1:${devenvPort}`;
-	process.env.AGENTIC_DEVENV_URL = devenvUrl;
+	// The owned route binds one server at the environment address every client
+	// already defaults to, and derives its capability before the first paint so
+	// no request is made with a capability that does not exist yet.
+	const ownedAuthority = ownsBackend ? createInstanceAuthority() : undefined;
+	// The environment surface is offered when this route owns it (home binds the
+	// one server at the environment address) or when the operator named one
+	// explicitly. Dash owns no environment authority, so it must not point the
+	// feature (or its catalog poll) at whatever happens to listen on the default
+	// port — that could be a different install.
+	const environmentSurfaceUrl =
+		explicitUrl ?? (ownsBackend ? `http://127.0.0.1:${devenvPort}` : undefined);
+	const environments =
+		remoteAttach || !environmentSurfaceUrl
+			? undefined
+			: { serverUrl: environmentSurfaceUrl };
+	// One server serves every surface, so an attached shell's environment address
+	// is the attached server itself, not this machine's default port. An empty
+	// value tells catalog consumers (and the child processes that inherit it)
+	// that this route owns no environment surface: the read is a bounded
+	// read-only invocation rather than a guess at another install's port.
+	process.env.AGENTIC_DEVENV_URL = environmentSurfaceUrl ?? "";
+	if (ownedAuthority) {
+		process.env.AGENTIC_WORKFLOW_TOKEN = ownedAuthority.token;
+		process.env.AGENTIC_DEVENV_TOKEN = ownedAuthority.token;
+	} else if (remoteAttach && attachToken) {
+		// The attached server's capability also authorizes the environment
+		// surface it serves.
+		process.env.AGENTIC_DEVENV_TOKEN = attachToken;
+	}
 	// Full-feature attach talks to the remote unified server through the typed
-	// client; the private Go environment feature is unavailable remotely.
+	// client.
 	if (remoteAttach && attachUrl && attachToken)
 		configureBackendClient({
 			baseUrl: attachUrl,
@@ -357,14 +373,12 @@ export async function main(): Promise<void> {
 	/** The most recent phase of the bootstrap that must be unwound on failure. */
 	let activeStep = "workflow-application";
 
-	// The unified backend boundary: the TUI starts (and owns) the Bun workflow/
-	// telemetry server and reaches observations/mutations through the typed
-	// client instead of in-process or subprocess backend access. In migrated
-	// mode the same server also owns the environment state/catalog authority, so
-	// it is started before the Go child (which calls it for state and config).
+	// The unified backend boundary: the TUI starts (and owns) the one Bun server
+	// and reaches observations/mutations through the typed client instead of
+	// in-process or subprocess backend access. On the managed route the same
+	// listener also owns the environment state/catalog authority and the legacy
+	// devenv surface.
 	let workflowServer: OwnedWorkflowServer | undefined;
-	let environmentToken: string | undefined;
-	let environmentUrl: string | undefined;
 	let integrations: ReturnType<typeof createIntegrationServices> | undefined;
 	let environmentAuthority:
 		| ReturnType<typeof createEnvironmentAuthority>
@@ -490,12 +504,9 @@ export async function main(): Promise<void> {
 	if (home) {
 		// Only components this route will actually own get a progress row.
 		const startupSteps = [
-			...(ownsBackend
-				? [{ id: "go-backend", label: "Starting environment backend" }]
-				: []),
 			...(isTest
 				? []
-				: [{ id: "workflow-server", label: "Starting workflow server" }]),
+				: [{ id: "workflow-server", label: "Starting unified server" }]),
 			{ id: "workflow-application", label: "Loading workspace history" },
 			...(httpPort ||
 			zipkinPort ||
@@ -563,17 +574,14 @@ export async function main(): Promise<void> {
 			setStepActive(id);
 		};
 		try {
-			// 1. Unified backend boundary: the Bun workflow/telemetry server owns
-			// observations and mutations and, in migrated mode, the environment
-			// state/catalog authority. It delegates the still-unported environment
-			// routes to the private Go child. The TUI reaches it through the typed
-			// client; the `__dashboard-observe` subprocess protocol is gone
-			// (task 3.5). Test mode keeps the deterministic in-process demo path
-			// with no server.
-			const bunOwns = bunOwnsEnvironment();
+			// 1. The one server. This process owns the workflow/observation API and,
+			// on the managed route, the environment state/catalog authority plus the
+			// whole legacy devenv surface — one listener at the environment address,
+			// so no client needs a second base URL and no companion runtime exists.
+			// Test mode keeps the deterministic in-process demo path with no server.
 			if (!isTest && !remoteAttach) {
 				mark("workflow-server");
-				if (ownsBackend && bunOwns) {
+				if (ownsBackend) {
 					environmentAuthority = createEnvironmentAuthority({
 						homeDir: resolveDevenvHome(),
 						configDir: resolveConfigDir(),
@@ -584,12 +592,13 @@ export async function main(): Promise<void> {
 								instance: message,
 							}),
 					});
-					// Git/provider families are served by Bun from the same
-					// configuration authority; the child forwards Git command steps
-					// here instead of running a second Git implementation.
+					// Git/provider families and the action/runtime engine are served from
+					// the same configuration authority this server owns.
 					integrations = createIntegrationServices({
 						manager: environmentAuthority.manager,
+						state: environmentAuthority.state,
 						configDir: resolveConfigDir(),
+						homeDir: resolveDevenvHome(),
 						logger: (message) =>
 							traceTui("tui.process.startup", {
 								surface: "process",
@@ -599,10 +608,18 @@ export async function main(): Promise<void> {
 					});
 				}
 				workflowServer = await startWorkflowServer({
-					// The Go child may not exist yet (migrated mode starts Bun
-					// first); the resolver is read per delegated request.
-					environmentBaseUrl: () => environmentUrl,
-					environmentToken: () => environmentToken,
+					version: APP_VERSION,
+					// The owned route binds the environment address every client already
+					// defaults to; the other routes take an ephemeral port.
+					...(ownedAuthority
+						? {
+								port: devenvPort,
+								instance: ownedAuthority.instance,
+								token: ownedAuthority.token,
+							}
+						: {}),
+					homeDir: resolveDevenvHome(),
+					configDir: resolveConfigDir(),
 					...(environmentAuthority
 						? { environment: environmentAuthority }
 						: {}),
@@ -638,35 +655,27 @@ export async function main(): Promise<void> {
 					ownerId: `tui-${process.pid}`,
 				});
 				if (db instanceof RemoteTelemetryDb) db.setClient(configured);
-				// Hand the authenticated server to managed child processes (agents),
-				// so the headless CLI reads/writes through the typed boundary.
+				// Hand the authenticated server to managed child processes (agents), so
+				// the headless CLI reads/writes through the typed boundary.
 				process.env.AGENTIC_WORKFLOW_URL = workflowServer.url;
 				process.env.AGENTIC_WORKFLOW_TOKEN = workflowServer.token;
-				// Route cutover (port-git-providers-and-ai-to-bun task 5.1): the
-				// migrated families are served by this server, so the environment
-				// client's transport is pointed at it. The path and query are
-				// preserved, unported families are delegated to the Go child by the
-				// same server, and clearing this variable rolls the client back to
-				// the child.
-				if (integrations) {
-					process.env.AGENTIC_DEVENV_FORWARD_URL = workflowServer.url;
-					traceTui("tui.process.startup", {
-						surface: "process",
-						action: "devenv-route-owner",
-						instance: `bun ${workflowServer.url}`,
-					});
-				}
+				// The environment client's capability for this process's own server. On
+				// the owned route the server and the environment surface are the same
+				// process, so both point at one address. An attached environment server
+				// keeps the operator-supplied capability.
+				if (ownsBackend)
+					process.env.AGENTIC_DEVENV_TOKEN = workflowServer.token;
 				acquireResource({
 					kind: "workflow-server",
-					label: `workflow server :${workflowServer.port}`,
+					label: `unified server :${workflowServer.port}`,
 					step: "workflow-server",
 					stop: async () => {
 						delete process.env.AGENTIC_WORKFLOW_URL;
 						delete process.env.AGENTIC_WORKFLOW_TOKEN;
-						delete process.env.AGENTIC_DEVENV_FORWARD_URL;
 						await workflowServer?.stop();
 					},
 				});
+				delete process.env[BACKEND_STARTING_ENV];
 				setStepDone("workflow-server");
 				await tick();
 				if (isShutdownRequested()) return;
@@ -680,58 +689,14 @@ export async function main(): Promise<void> {
 				if (isShutdownRequested()) return;
 			}
 
-			// 2. Owned environment backend (default/home/manager only). In migrated
-			// mode it starts after the Bun authority it now depends on: it opens no
-			// database handle and reaches state/configuration through the private
-			// operations.
-			if (ownsBackend) {
-				mark("go-backend");
-				const backend = await startOwnedBackend({
-					port: String(devenvPort),
-					...(bunOwns && workflowServer
-						? {
-								environment: {
-									url: workflowServer.url,
-									token: workflowServer.token,
-								},
-							}
-						: {}),
-					...(integrations && workflowServer
-						? {
-								integrations: {
-									url: workflowServer.url,
-									token: workflowServer.token,
-								},
-							}
-						: {}),
-				});
-				environmentToken = backend.token;
-				environmentUrl = backend.url;
-				acquireResource({
-					kind: "go-backend",
-					label: `environment backend :${backend.port}`,
-					step: "go-backend",
-					stop: () => backend.stop(),
-				});
-				traceTui("tui.process.startup", {
-					surface: "process",
-					action: "backend-ready",
-					instance: backend.instance,
-				});
-				delete process.env[BACKEND_STARTING_ENV];
-				setStepDone("go-backend");
-				await tick();
-				if (isShutdownRequested()) return;
-			}
-
-			// 3. Workflow history / catalog. Catalog discovery runs after first
+			// 2. Workflow history / catalog. Catalog discovery runs after first
 			// paint: an unreachable backend must not block the renderer.
 			mark("workflow-application");
 			if (!useDemoDb) {
 				let catalogRoots: string[] = [];
 				if (!isTest && !remoteAttach) {
 					try {
-						catalogRoots = await discoverProjectRepos(devenvUrl);
+						catalogRoots = await discoverProjectRepos(environmentSurfaceUrl);
 					} catch (error) {
 						notify(
 							`Project catalog unavailable: ${
@@ -788,8 +753,7 @@ export async function main(): Promise<void> {
 			// identity mismatch is actionable instead of a silent exit.
 			delete process.env[BACKEND_STARTING_ENV];
 			await releaseResources(1000);
-			const text =
-				error instanceof BackendStartupError ? error.message : String(error);
+			const text = error instanceof Error ? error.message : String(error);
 			if (homeMode) {
 				setStepError(activeStep, text);
 				await sleep(1500);

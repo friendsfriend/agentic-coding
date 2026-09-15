@@ -1,24 +1,15 @@
-// Private Git operation adapter and Bun-served legacy integration families
-// (`port-git-providers-and-ai-to-bun`, tasks 1.3, 2.1-2.5).
+// The Git command boundary and the legacy integration families this process
+// serves (port-git-providers-and-ai-to-bun, tasks 2.1-2.5; bridge removal in
+// retire-go-backend-and-migration-bridges task 2.3).
 //
-// The adapter is the temporary bridge the still-Go action owner uses; these
-// tests pin its bounded envelope, its real command execution, its cancellation
-// behavior, and the fact that it never delegates back to the Go child.
+// These tests pin real argv execution through the one Git implementation, the
+// credential redaction that keeps a token out of a recorded command, and the
+// static manifest that names every legacy route this process answers.
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createServerApp } from "../src/server/app.ts";
-import { createInstanceAuthority } from "../src/server/auth.ts";
-import { CredentialRegistry } from "../src/server/credentials.ts";
-import { EventBroker } from "../src/server/events.ts";
 import { GitRepository } from "../src/server/integrations/git-repository.ts";
-import {
-	decodeGitCommandRequest,
-	executeGitCommand,
-	MAX_GIT_ARGS,
-	PRIVATE_GIT_COMMAND_PATH,
-} from "../src/server/integrations/private-api.ts";
 import { ProviderStore } from "../src/server/integrations/provider-store.ts";
 import {
 	handleLegacyRoute,
@@ -26,7 +17,6 @@ import {
 	LEGACY_ROUTE_OWNERSHIP,
 	legacyRouteMatch,
 } from "../src/server/integrations/routes.ts";
-import { ROUTE_OWNERSHIP } from "../src/server/protocol.ts";
 
 function tempRepo(): string {
 	const dir = fs.realpathSync(
@@ -67,173 +57,31 @@ function services(
 	};
 }
 
-describe("private Git operation adapter", () => {
-	test("is a bun-owned private route in the static manifest", () => {
-		const route = ROUTE_OWNERSHIP.find(
-			(candidate) => candidate.path === PRIVATE_GIT_COMMAND_PATH,
-		);
-		expect(route?.owner).toBe("bun");
-		expect(route?.domain).toBe("integrations");
-	});
-
-	test("executes argv and echoes the run/step/command identity", async () => {
+describe("the Git command boundary", () => {
+	test("an argv invocation reports its exit code and output", () => {
 		const repo = tempRepo();
-		const outcome = await executeGitCommand(
-			{ git: new GitRepository() },
-			{
-				operation: "git.command",
-				runId: "run-1",
-				stepId: "step-1",
-				commandId: "command-1",
-				directory: repo,
-				args: ["rev-parse", "--abbrev-ref", "HEAD"],
-			},
-		);
-		expect(outcome.runId).toBe("run-1");
-		expect(outcome.stepId).toBe("step-1");
-		expect(outcome.commandId).toBe("command-1");
-		expect(outcome.stdout.trim()).toBe("main");
-		expect(outcome.exitCode).toBe(0);
-		expect(outcome.cancelled).toBe(false);
-		expect(outcome.truncated).toBe(false);
+		const git = new GitRepository();
+		const result = git.run(repo, ["rev-parse", "--abbrev-ref", "HEAD"]);
+		expect(result.stdout.trim()).toBe("main");
+		expect(result.exitCode).toBe(0);
+
+		const failed = git.run(repo, ["rev-parse", "--verify", "does-not-exist"]);
+		expect(failed.exitCode).not.toBe(0);
+		expect(failed.stderr.length).toBeGreaterThan(0);
 	});
 
-	test("reports a failing argv with its exit code instead of throwing", async () => {
-		const repo = tempRepo();
-		const outcome = await executeGitCommand(
-			{ git: new GitRepository() },
-			{
-				operation: "git.command",
-				runId: "run-2",
-				stepId: "step-2",
-				commandId: "command-2",
-				directory: repo,
-				args: ["rev-parse", "--verify", "does-not-exist"],
-			},
-		);
-		expect(outcome.exitCode).not.toBe(0);
-		expect(outcome.stderr.length).toBeGreaterThan(0);
-	});
-
-	test("cancellation kills the child and reports it as cancelled", async () => {
-		const repo = tempRepo();
-		const controller = new AbortController();
-		// `hash-object --stdin` blocks until stdin closes, so the child is still
-		// running when the originating request is aborted.
-		const pending = executeGitCommand(
-			{ git: new GitRepository() },
-			{
-				operation: "git.command",
-				runId: "run-3",
-				stepId: "step-3",
-				commandId: "command-3",
-				directory: repo,
-				args: ["hash-object", "--stdin"],
-			},
-			controller.signal,
-		);
-		await Bun.sleep(50);
-		controller.abort();
-		await expect(pending).rejects.toThrow("was cancelled");
-	});
-
-	test("rejects an unknown field, a control character and an oversized argv", () => {
-		const repo = tempRepo();
-		const base = {
-			operation: "git.command" as const,
-			runId: "r",
-			stepId: "s",
-			commandId: "c",
-			directory: repo,
-		};
-		expect(() =>
-			decodeGitCommandRequest({ ...base, args: ["status"], extra: 1 }),
-		).toThrow();
-		expect(() =>
-			decodeGitCommandRequest({ ...base, args: ["status\n--short"] }),
-		).toThrow();
-		expect(() =>
-			decodeGitCommandRequest({
-				...base,
-				args: Array(MAX_GIT_ARGS + 1).fill("status"),
-			}),
-		).toThrow();
-		expect(() =>
-			decodeGitCommandRequest({ ...base, args: ["status"] }),
-		).not.toThrow();
-	});
-
-	test("the HTTP envelope is bounded and never reaches the delegated child", async () => {
-		const repo = tempRepo();
-		const delegated = 0;
-		const authority = createInstanceAuthority("inst-private");
-		const app = createServerApp({
-			authority,
-			events: new EventBroker(authority.instance),
-			credentials: new CredentialRegistry(),
-			integrations: services(),
-			environmentBaseUrl: "http://127.0.0.1:1",
-			environmentToken: "private",
-		});
-		const post = (body: unknown) =>
-			app.fetch(
-				new Request(`http://127.0.0.1${PRIVATE_GIT_COMMAND_PATH}`, {
-					method: "POST",
-					headers: {
-						authorization: `Bearer ${authority.token}`,
-						"content-type": "application/json",
-					},
-					body: JSON.stringify(body),
-				}),
-			);
-		const ok = await post({
-			operation: "git.command",
-			runId: "run-9",
-			stepId: "step-9",
-			commandId: "command-9",
-			directory: repo,
-			args: ["rev-parse", "--abbrev-ref", "HEAD"],
-		});
-		expect(ok.status).toBe(200);
-		const body = (await ok.json()) as {
-			value: { stdout: string; commandId: string };
-		};
-		expect(body.value.stdout.trim()).toBe("main");
-		expect(body.value.commandId).toBe("command-9");
-		// A dead delegation target proves the private path performs no outbound
-		// request: it could never have answered from the child.
-		expect(delegated).toBe(0);
-		const excess = await post({
-			operation: "git.command",
-			runId: "r",
-			stepId: "s",
-			commandId: "c",
-			directory: repo,
-			args: ["status"],
-			sql: "select 1",
-		});
-		expect(excess.status).toBe(400);
-	});
-
-	test("a credential header never appears in the recorded command", async () => {
+	test("a credential header never appears in the recorded command", () => {
 		const repo = tempRepo();
 		const git = new GitRepository({
 			auth: () => ({ username: "octo", token: "s3cret" }),
 		});
-		const outcome = await executeGitCommand(
-			{ git },
-			{
-				operation: "git.command",
-				runId: "run-4",
-				stepId: "step-4",
-				commandId: "command-4",
-				directory: repo,
-				args: ["ls-remote", "--heads", repo],
-				repositoryUrl: repo,
-			},
-		);
-		expect(outcome.command.includes("s3cret")).toBe(false);
-		expect(outcome.command.includes("http.extraheader=<redacted>")).toBe(true);
+		// The credential header is passed to the child (that is what makes the
+		// remote call work) but must never appear in the recorded command.
+		const config = git.credentialConfig(repo);
+		expect(config).toHaveLength(1);
+		const result = git.run(repo, ["ls-remote", "--heads", repo], config);
+		expect(result.command.includes("s3cret")).toBe(false);
+		expect(result.command.includes("http.extraheader=<redacted>")).toBe(true);
 	});
 });
 
@@ -244,7 +92,7 @@ describe("legacy route ownership", () => {
 			const key = `${route.method} ${route.path}`;
 			expect(seen.has(key)).toBe(false);
 			seen.add(key);
-			expect(["bun", "go"]).toContain(route.owner);
+			expect(route.owner).toBe("bun");
 		}
 		const families = new Set(LEGACY_ROUTE_OWNERSHIP.map((r) => r.family));
 		for (const family of [
@@ -274,14 +122,51 @@ describe("legacy route ownership", () => {
 		expect(legacyRouteMatch("GET", "/api/gitlab/issues")?.route.owner).toBe(
 			"bun",
 		);
-		expect(legacyRouteMatch("GET", "/api/scripts")?.route.owner).toBe("go");
+		// Every family belongs to this process: the action/script families and the
+		// legacy event stream (`port-action-execution-to-bun`), the app, docker and
+		// kubernetes families (`port-environment-runtimes-to-bun`), and the
+		// identity probe that used to report the retired child.
+		expect(legacyRouteMatch("GET", "/api/scripts")?.route.owner).toBe("bun");
+		expect(legacyRouteMatch("GET", "/api/action-runs")?.route.owner).toBe(
+			undefined,
+		);
+		expect(legacyRouteMatch("POST", "/api/action-runs")?.route.owner).toBe(
+			"bun",
+		);
+		expect(legacyRouteMatch("GET", "/api/actions/history")?.route.owner).toBe(
+			"bun",
+		);
+		expect(legacyRouteMatch("GET", "/api/events")?.route.owner).toBe("bun");
+		expect(legacyRouteMatch("GET", "/api/apps/demo/actions")?.route.owner).toBe(
+			"bun",
+		);
+		expect(legacyRouteMatch("GET", "/api/docker/logs")?.route.owner).toBe(
+			"bun",
+		);
+		expect(legacyRouteMatch("POST", "/api/docker/restart")?.route.owner).toBe(
+			"bun",
+		);
+		expect(
+			legacyRouteMatch("GET", "/api/kubernetes/cluster")?.route.owner,
+		).toBe("bun");
+		expect(
+			legacyRouteMatch("POST", "/api/kubernetes/cluster/refresh")?.route.owner,
+		).toBe("bun");
+		expect(legacyRouteMatch("GET", "/api/status")?.route.owner).toBe("bun");
+		expect(legacyRouteMatch("GET", "/api/apps")?.route.owner).toBe("bun");
+		expect(
+			legacyRouteMatch("DELETE", "/api/apps/demo/delete")?.route.owner,
+		).toBe("bun");
+		expect(legacyRouteMatch("POST", "/api/example-config")?.route.owner).toBe(
+			"bun",
+		);
 		expect(legacyRouteMatch("GET", "/api/pi-sessions")?.route.owner).toBe(
 			"bun",
 		);
 		expect(
 			legacyRouteMatch("POST", "/api/ai/cr-review-stream")?.route.owner,
 		).toBe("bun");
-		expect(legacyRouteMatch("GET", "/api/health")?.route.owner).toBe("go");
+		expect(legacyRouteMatch("GET", "/api/health")?.route.owner).toBe("bun");
 		expect(legacyRouteMatch("GET", "/api/unknown")).toBeUndefined();
 	});
 });
@@ -514,10 +399,24 @@ describe("Bun-served integration families", () => {
 		});
 	});
 
-	test("a Go-owned family is not served by the Bun handler", async () => {
-		const url = new URL("http://127.0.0.1/api/scripts?appIdent=demo");
-		expect(
-			await handleLegacyRoute(services(), new Request(url), url),
-		).toBeUndefined();
+	test("the identity probe is served by this process", async () => {
+		// `/api/health` used to be delegated; the retirement moved it in-process,
+		// and the app's health route answers it before the family switch runs.
+		const url = new URL("http://127.0.0.1/api/health");
+		expect(await handleLegacyRoute(services(), new Request(url), url)).toBe(
+			undefined,
+		);
+	});
+
+	test("a runtime route without an attached capability fails instead of delegating", async () => {
+		const url = new URL("http://127.0.0.1/api/docker/logs?containerID=abc");
+		const response = await handleLegacyRoute(services(), new Request(url), url);
+		expect(response?.status).toBe(503);
+	});
+
+	test("an action route without an attached engine fails instead of delegating", async () => {
+		const url = new URL("http://127.0.0.1/api/actions/history");
+		const response = await handleLegacyRoute(services(), new Request(url), url);
+		expect(response?.status).toBe(503);
 	});
 });

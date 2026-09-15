@@ -1,11 +1,18 @@
-// Legacy devenv `/api/*` route ownership and the Bun-served integration
-// families (`port-git-providers-and-ai-to-bun`, tasks 2.1-2.4, 5.1).
+// Legacy devenv `/api/*` surface and the Bun-served integration families.
 //
-// One static manifest names the owner of every legacy route family: `bun`
-// entries are served in-process here, everything else is delegated to the
-// private Go child by `app.ts`. There is no router framework and no per-request
-// owner guessing, so a family can only move by editing the manifest.
+// One static manifest names every legacy route family this process serves.
+// There is no router framework and no per-request owner guessing: a request
+// either matches a row here (and is handled in-process), matches one of the
+// app-level routes, or is a 404. Rows used to carry a `bun`/`go` owner while the
+// runtime was being ported; with the Go backend retired there is one runtime,
+// and the manifest is the complete contract.
+import { handleActionRoute } from "../actions/routes.ts";
 import { readJsonBody } from "../auth.ts";
+import { handleAppRoute } from "../runtime/app-routes.ts";
+import {
+	handleRuntimeRoute,
+	type RuntimeRouteServices,
+} from "../runtime/routes.ts";
 import { handleAiRoute } from "./ai-routes.ts";
 import { GitError, type GitRepository } from "./git-repository.ts";
 import { GitHubClient } from "./github-client.ts";
@@ -20,7 +27,7 @@ import {
 } from "./provider-store.ts";
 import type { ProviderSearchResult } from "./search-result.ts";
 
-export type LegacyRouteOwner = "bun" | "go";
+export type LegacyRouteOwner = "bun";
 
 export interface LegacyRoute {
 	readonly family: string;
@@ -30,10 +37,7 @@ export interface LegacyRoute {
 	readonly owner: LegacyRouteOwner;
 }
 
-/** Owner of each legacy route family. Families that no slice has ported yet
- * stay `go` and are delegated; `port-environment-runtimes-to-bun` and
- * `port-action-execution-to-bun` own the app/actions/docker/kubernetes/scripts
- * rows. */
+/** Every route this process serves on the legacy surface. */
 export const LEGACY_ROUTE_OWNERSHIP: readonly LegacyRoute[] = [
 	// git
 	{ family: "git", method: "GET", path: "/api/git/branches", owner: "bun" },
@@ -65,122 +69,122 @@ export const LEGACY_ROUTE_OWNERSHIP: readonly LegacyRoute[] = [
 	// repos
 	{ family: "repos", method: "POST", path: "/api/repos/search", owner: "bun" },
 	{ family: "repos", method: "GET", path: "/api/repos/branches", owner: "bun" },
-	// app
-	{ family: "app", method: "GET", path: "/api/apps", owner: "go" },
-	{ family: "app", method: "GET", path: "/api/projects", owner: "go" },
-	{ family: "app", method: "GET", path: "/api/infra-services", owner: "go" },
+	// app (`port-environment-runtimes-to-bun`)
+	{ family: "app", method: "GET", path: "/api/apps", owner: "bun" },
+	{ family: "app", method: "GET", path: "/api/projects", owner: "bun" },
+	{ family: "app", method: "GET", path: "/api/infra-services", owner: "bun" },
 	{
 		family: "app",
 		method: "GET",
 		path: "/api/infra-services/{ident}/logs",
-		owner: "go",
+		owner: "bun",
 	},
-	{ family: "app", method: "GET", path: "/api/status", owner: "go" },
+	{ family: "app", method: "GET", path: "/api/status", owner: "bun" },
 	{
 		family: "app",
 		method: "GET",
 		path: "/api/apps/{ident}/docker",
-		owner: "go",
+		owner: "bun",
 	},
-	{ family: "app", method: "GET", path: "/api/apps/{ident}/git", owner: "go" },
+	{ family: "app", method: "GET", path: "/api/apps/{ident}/git", owner: "bun" },
 	{
 		family: "app",
 		method: "GET",
 		path: "/api/apps/{ident}/profiles",
-		owner: "go",
+		owner: "bun",
 	},
-	{ family: "app", method: "POST", path: "/api/apps/create", owner: "go" },
-	{ family: "app", method: "POST", path: "/api/example-config", owner: "go" },
+	{ family: "app", method: "POST", path: "/api/apps/create", owner: "bun" },
+	{ family: "app", method: "POST", path: "/api/example-config", owner: "bun" },
 	{
 		family: "app",
 		method: "DELETE",
 		path: "/api/apps/{ident}/delete",
-		owner: "go",
+		owner: "bun",
 	},
 	// actions
 	{
 		family: "actions",
 		method: "GET",
 		path: "/api/apps/{ident}/actions",
-		owner: "go",
+		owner: "bun",
 	},
 	{
 		family: "actions",
 		method: "GET",
 		path: "/api/action-definition",
-		owner: "go",
+		owner: "bun",
 	},
 	{
 		family: "actions",
 		method: "GET",
 		path: "/api/action-registry/status",
-		owner: "go",
+		owner: "bun",
 	},
-	{ family: "actions", method: "POST", path: "/api/action-runs", owner: "go" },
+	{ family: "actions", method: "POST", path: "/api/action-runs", owner: "bun" },
 	{
 		family: "actions",
 		method: "POST",
 		path: "/api/actions/cancel",
-		owner: "go",
+		owner: "bun",
 	},
 	{
 		family: "actions",
 		method: "GET",
 		path: "/api/actions/history",
-		owner: "go",
+		owner: "bun",
 	},
-	{ family: "actions", method: "GET", path: "/api/actions/logs", owner: "go" },
+	{ family: "actions", method: "GET", path: "/api/actions/logs", owner: "bun" },
 	{
 		family: "actions",
 		method: "POST",
 		path: "/api/actions/events",
-		owner: "go",
+		owner: "bun",
 	},
 	{
 		family: "actions",
 		method: "GET",
 		path: "/api/actions/shell-script",
-		owner: "go",
+		owner: "bun",
 	},
-	// docker / kubernetes
-	{ family: "docker", method: "POST", path: "/api/docker/start", owner: "go" },
-	{ family: "docker", method: "POST", path: "/api/docker/stop", owner: "go" },
+	// docker / kubernetes (`port-environment-runtimes-to-bun`)
+	{ family: "docker", method: "POST", path: "/api/docker/start", owner: "bun" },
+	{ family: "docker", method: "POST", path: "/api/docker/stop", owner: "bun" },
 	{
 		family: "docker",
 		method: "POST",
 		path: "/api/docker/restart",
-		owner: "go",
+		owner: "bun",
 	},
-	{ family: "docker", method: "GET", path: "/api/docker/logs", owner: "go" },
+	{ family: "docker", method: "GET", path: "/api/docker/logs", owner: "bun" },
 	{
 		family: "docker",
 		method: "GET",
 		path: "/api/docker/logs/stream",
-		owner: "go",
+		owner: "bun",
 	},
 	{
 		family: "docker",
 		method: "GET",
 		path: "/api/docker/stats/stream",
-		owner: "go",
+		owner: "bun",
 	},
 	{
 		family: "kubernetes",
 		method: "GET",
 		path: "/api/kubernetes/logs",
-		owner: "go",
+		owner: "bun",
 	},
 	{
 		family: "kubernetes",
 		method: "GET",
 		path: "/api/kubernetes/cluster",
-		owner: "go",
+		owner: "bun",
 	},
 	{
 		family: "kubernetes",
 		method: "POST",
 		path: "/api/kubernetes/cluster/refresh",
-		owner: "go",
+		owner: "bun",
 	},
 	// github
 	{
@@ -495,34 +499,47 @@ export const LEGACY_ROUTE_OWNERSHIP: readonly LegacyRoute[] = [
 	},
 	// system
 	{ family: "system", method: "GET", path: "/api/pi-sessions", owner: "bun" },
-	{ family: "system", method: "GET", path: "/api/events", owner: "go" },
-	{ family: "system", method: "GET", path: "/api/health", owner: "go" },
+	// The action view is fed by this stream, so the family that owns actions owns
+	// it. `/api/health` answers in `app.ts` before this family switch runs
+	// (the identity probe is public); the manifest still declares it so the
+	// surface is complete in one place.
+	{ family: "system", method: "GET", path: "/api/events", owner: "bun" },
+	{ family: "system", method: "GET", path: "/api/health", owner: "bun" },
 	// scripts
-	{ family: "scripts", method: "GET", path: "/api/scripts", owner: "go" },
+	{ family: "scripts", method: "GET", path: "/api/scripts", owner: "bun" },
+	// The Go mux declares only GET, but the handler requires POST and the devenv
+	// client posts here to execute a script; the manifest follows the real
+	// contract, like the AI stream routes.
+	{ family: "scripts", method: "POST", path: "/api/scripts", owner: "bun" },
 	{
 		family: "scripts",
 		method: "POST",
 		path: "/api/scripts/create",
-		owner: "go",
+		owner: "bun",
 	},
-	{ family: "scripts", method: "POST", path: "/api/scripts/link", owner: "go" },
+	{
+		family: "scripts",
+		method: "POST",
+		path: "/api/scripts/link",
+		owner: "bun",
+	},
 	{
 		family: "scripts",
 		method: "DELETE",
 		path: "/api/scripts/delete",
-		owner: "go",
+		owner: "bun",
 	},
 	{
 		family: "scripts",
 		method: "GET",
 		path: "/api/scripts/history",
-		owner: "go",
+		owner: "bun",
 	},
 	{
 		family: "scripts",
 		method: "GET",
 		path: "/api/scripts/metadata",
-		owner: "go",
+		owner: "bun",
 	},
 ];
 
@@ -623,6 +640,12 @@ export interface IntegrationServices {
 	/** Injectable for fixture tests; defaults to global fetch. */
 	readonly fetch?: typeof fetch;
 	readonly logger?: (message: string) => void;
+	/** The environment-action engine: definitions, runs, scripts and `/api/events`. */
+	readonly actions?: import("../actions/routes.ts").ActionRouteContext;
+	/** Container and Kubernetes capabilities (`docker`/`kubernetes` families). */
+	readonly runtime?: RuntimeRouteServices;
+	/** The application/infrastructure family (`app` rows). */
+	readonly appFamily?: import("../runtime/app-routes.ts").AppFamilyServices;
 }
 
 /** Serve one Bun-owned legacy route, or `undefined` when the path belongs to
@@ -651,8 +674,37 @@ export async function handleLegacyRoute(
 		case "gitlab":
 			return handleGitLabRoute(services, request, url);
 		case "ai":
-		case "system":
 			return handleAiRoute(services, request, url);
+		case "system": {
+			if (url.pathname === "/api/events") {
+				if (!services.actions) {
+					return legacyError(503, "action engine is not attached");
+				}
+				return handleActionRoute(services.actions, request, url);
+			}
+			return handleAiRoute(services, request, url);
+		}
+		case "actions":
+		case "scripts":
+			if (!services.actions) {
+				return legacyError(503, "action engine is not attached");
+			}
+			return handleActionRoute(services.actions, request, url);
+		case "app": {
+			if (!services.appFamily) {
+				return legacyError(503, "app capability is not attached");
+			}
+			const handled = await handleAppRoute(services.appFamily, request, url);
+			return handled ?? legacyError(404, "Not found");
+		}
+		case "docker":
+		case "kubernetes": {
+			if (!services.runtime) {
+				return legacyError(503, "runtime capability is not attached");
+			}
+			const handled = await handleRuntimeRoute(services.runtime, request, url);
+			return handled ?? legacyError(404, "Not found");
+		}
 		default:
 			return undefined;
 	}

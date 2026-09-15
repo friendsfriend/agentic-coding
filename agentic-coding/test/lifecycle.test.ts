@@ -72,10 +72,12 @@ test("releaseResources stops acquired handles in reverse order, once", async () 
 	};
 	acquireResource(resource("renderer", "renderer", push("renderer")));
 	acquireResource(resource("telemetry", "db", push("db")));
-	acquireResource(resource("go-backend", "go-backend", push("backend")));
+	acquireResource(
+		resource("workflow-server", "workflow-server", push("workflow-server")),
+	);
 	acquireResource(resource("telemetry", "telemetry", push("receiver")));
 	beginShutdown([
-		{ id: "go-backend", label: "backend" },
+		{ id: "workflow-server", label: "workflow-server" },
 		{ id: "telemetry", label: "telemetry" },
 		{ id: "db", label: "db" },
 		{ id: "renderer", label: "renderer" },
@@ -83,7 +85,7 @@ test("releaseResources stops acquired handles in reverse order, once", async () 
 
 	await releaseResources();
 	await releaseResources();
-	expect(order).toEqual(["receiver", "backend", "db", "renderer"]);
+	expect(order).toEqual(["receiver", "workflow-server", "db", "renderer"]);
 	expect(acquiredResources()).toHaveLength(0);
 	expect(steps().every((step) => step.status === "done")).toBe(true);
 });
@@ -98,7 +100,7 @@ test("a failing handle does not skip the remaining releases", async () => {
 		}),
 	);
 	acquireResource(
-		resource("go-backend", "go-backend", () => {
+		resource("workflow-server", "workflow-server", () => {
 			throw new Error("child already gone");
 		}),
 	);
@@ -128,7 +130,7 @@ test("stopOwnedStack releases only acquired handles and exits once", async () =>
 	});
 	expect(stopped).toEqual(["renderer"]);
 	expect(exitCode).toBe(0);
-	// Only the owned renderer gets a progress row: no go-backend/telemetry row
+	// Only the owned renderer gets a progress row: no backend/telemetry row
 	// is claimed for a stack this process never acquired.
 	expect(steps().map((step) => step.id)).toEqual(["renderer"]);
 	resetLifecycle();

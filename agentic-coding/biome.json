@@ -28,6 +28,18 @@
 	},
 	"overrides": [
 		{
+			"includes": ["src/server/environment/example-config.ts"],
+			"linter": {
+				"enabled": false
+			},
+			"formatter": {
+				"enabled": false
+			},
+			"assist": {
+				"enabled": false
+			}
+		},
+		{
 			"includes": ["src/workflow/embedded.generated.ts"],
 			"linter": {
 				"enabled": false
@@ -59,6 +71,18 @@
 		},
 		{
 			"includes": ["test/fixtures/integrations/**"],
+			"linter": {
+				"enabled": false
+			},
+			"formatter": {
+				"enabled": false
+			},
+			"assist": {
+				"enabled": false
+			}
+		},
+		{
+			"includes": ["test/fixtures/actions/**"],
 			"linter": {
 				"enabled": false
 			},

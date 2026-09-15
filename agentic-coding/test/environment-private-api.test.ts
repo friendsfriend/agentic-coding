@@ -1,17 +1,13 @@
-// Bun-owned private environment operations (port-project-catalog-and-state-to-bun,
-// tasks 3.1, 3.3). The remaining Go services reach the store and the config
-// authority through this bounded operation envelope instead of a writable
-// SQLite handle, so these tests assert the contract the Go client depends on:
-// authorization, bounds, one logical operation per request and no recursion
-// back into the delegated Go child.
+// Private environment operations (port-project-catalog-and-state-to-bun, tasks
+// 3.1, 3.3), retained after the Go client was retired: the bounded operation
+// envelope is now the server's own in-process state/config boundary, so these
+// tests assert the contract the routes depend on — authorization, bounds, one
+// logical operation per request and no recursion into a second runtime.
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-	bunOwnsEnvironment,
-	createEnvironmentAuthority,
-} from "../src/server/environment/authority.ts";
+import { createEnvironmentAuthority } from "../src/server/environment/authority.ts";
 import {
 	ENVIRONMENT_OPERATION_PATH,
 	EnvironmentOperationError,
@@ -71,14 +67,14 @@ function operation(operation: string, params: unknown = {}) {
 }
 
 describe("environment operation contract", () => {
-	test("the manifest keeps the private path separate from delegated Go routes", () => {
+	test("the manifest covers the private path and no delegated prefix", () => {
 		expect(routeOwner("POST", ENVIRONMENT_OPERATION_PATH)?.owner).toBe("bun");
-		expect(routeOwner("POST", "/api/v1/environment/api/apps")?.owner).toBe(
-			"go",
-		);
-		expect(routeOwner("GET", "/api/v1/environment/api/projects")?.owner).toBe(
-			"go",
-		);
+		// The public delegated prefix is gone: a request that used to be
+		// forwarded to the child now matches nothing and is a 404.
+		expect(routeOwner("POST", "/api/v1/environment/api/apps")).toBeUndefined();
+		expect(
+			routeOwner("GET", "/api/v1/environment/api/projects"),
+		).toBeUndefined();
 	});
 
 	test("one logical operation per request, decoded against a bounded schema", () => {
@@ -291,25 +287,22 @@ describe("environment operation contract", () => {
 });
 
 describe("rollback and ownership preconditions", () => {
-	test("Bun owns the environment by default and Go ownership is an explicit opt-out", () => {
-		expect(bunOwnsEnvironment({} as NodeJS.ProcessEnv)).toBe(true);
-		expect(
-			bunOwnsEnvironment({
-				DEVENV_ENVIRONMENT_OWNER: "bun",
-			} as NodeJS.ProcessEnv),
-		).toBe(true);
-		// The rollback switch: the previous single-owner generation, and never
-		// both at once (the Go child then opens the database itself).
-		expect(
-			bunOwnsEnvironment({
-				DEVENV_ENVIRONMENT_OWNER: "go",
-			} as NodeJS.ProcessEnv),
-		).toBe(false);
-		expect(
-			bunOwnsEnvironment({
-				DEVENV_ENVIRONMENT_OWNER: " GO ",
-			} as unknown as NodeJS.ProcessEnv),
-		).toBe(false);
+	test("this process is the only environment owner", async () => {
+		// The mixed-runtime owner switch is gone with the Go backend: there is no
+		// second generation to select, and a rollback is a deliberate restore of a
+		// verified pre-upgrade database instead of a runtime fallback. The marker
+		// only survives in the comment that records why it was removed.
+		const authoritySource = await Bun.file(
+			path.join(
+				import.meta.dir,
+				"..",
+				"src",
+				"server",
+				"environment",
+				"authority.ts",
+			),
+		).text();
+		expect(authoritySource).not.toMatch(/bunOwnsEnvironment|process\.env\./);
 	});
 
 	test("a newer schema fails closed and leaves the verified backup untouched", async () => {

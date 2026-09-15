@@ -1,0 +1,2488 @@
+{
+  "targets": [
+    {
+      "id": "app/api/run/docker",
+      "action": "run",
+      "runtime": "docker",
+      "label": "Run",
+      "env": {
+        "API_ENV": "dev",
+        "LOG_LEVEL": "debug"
+      },
+      "sourcePath": "{{ROOT}}/apps/api/docker-compose.yml",
+      "workingDir": "{{ROOT}}/apps/api",
+      "requires": [
+        {
+          "app": "db",
+          "runtime": "docker",
+          "profile": "default"
+        }
+      ]
+    },
+    {
+      "id": "app/api/build/docker",
+      "action": "build",
+      "runtime": "docker",
+      "label": "Build",
+      "sourcePath": "{{ROOT}}/apps/api/Dockerfile",
+      "workingDir": "{{ROOT}}/apps/api",
+      "requires": [
+        {
+          "infra": "postgres"
+        }
+      ]
+    },
+    {
+      "id": "app/api/test/docker",
+      "action": "test",
+      "runtime": "docker",
+      "label": "Test",
+      "sourcePath": "{{ROOT}}/apps/api/Dockerfile",
+      "workingDir": "{{ROOT}}/apps/api",
+      "requires": [
+        {
+          "app": "worker",
+          "runtime": "shell",
+          "profile": "default",
+          "lifecycle": "external"
+        }
+      ]
+    },
+    {
+      "id": "app/api/run/shell",
+      "action": "run",
+      "runtime": "shell",
+      "label": "Run",
+      "launchMode": "tmux",
+      "sourcePath": "{{ROOT}}/apps/api/run.sh",
+      "workingDir": "{{ROOT}}/apps/api",
+      "command": "sh",
+      "args": [
+        "run.sh",
+        "--watch"
+      ]
+    },
+    {
+      "id": "app/api/run/systemshell",
+      "action": "run",
+      "runtime": "systemshell",
+      "label": "Run",
+      "sourcePath": "{{ROOT}}/apps/api/run.sh",
+      "command": "sh",
+      "args": [
+        "run.sh"
+      ]
+    },
+    {
+      "id": "app/api/run/powershell",
+      "action": "run",
+      "runtime": "powershell",
+      "label": "Run",
+      "sourcePath": "{{ROOT}}/apps/api/task.ps1",
+      "command": "pwsh",
+      "args": [
+        "-File",
+        "task.ps1"
+      ]
+    },
+    {
+      "id": "app/api/run/kubernetes",
+      "action": "run",
+      "runtime": "kubernetes",
+      "label": "Run",
+      "profile": "local",
+      "provider": "docker",
+      "sourcePath": "{{ROOT}}/apps/api/chart/Chart.yaml",
+      "workingDir": "{{ROOT}}/apps/api",
+      "kubernetes": {
+        "provider": "docker",
+        "clusterName": "api-local",
+        "contextName": "kind-api-local",
+        "chartPath": "{{ROOT}}/apps/api/chart",
+        "release": "api-local",
+        "namespace": "api",
+        "valuesFiles": [
+          "{{ROOT}}/apps/api/chart/values.yaml"
+        ],
+        "image": {
+          "repository": "devenv-api",
+          "tag": "latest",
+          "pullPolicy": "Never",
+          "valuePaths": {
+            "repository": "image.repository",
+            "tag": "image.tag",
+            "pullPolicy": "image.pullPolicy"
+          }
+        },
+        "secrets": [
+          {
+            "name": "api-credentials",
+            "keys": [
+              "token"
+            ]
+          }
+        ],
+        "ports": [
+          {
+            "name": "web",
+            "resource": "service/api",
+            "localPort": 8080,
+            "remotePort": 80
+          }
+        ],
+        "wait": {
+          "timeout": "5m"
+        },
+        "exports": [
+          {
+            "name": "api",
+            "protocol": "http",
+            "port": 8080,
+            "strategy": "port-forward",
+            "localPort": 8080
+          },
+          {
+            "name": "cluster-api",
+            "protocol": "http",
+            "port": 80,
+            "strategy": "kubernetes-service",
+            "resource": "api"
+          }
+        ],
+        "bindings": [
+          {
+            "name": "DATABASE_URL",
+            "dependency": "postgres",
+            "export": "postgres",
+            "destination": "env"
+          }
+        ],
+        "sourcePath": ""
+      }
+    },
+    {
+      "id": "app/api/build/shell",
+      "action": "build",
+      "runtime": "shell",
+      "label": "Build",
+      "sourcePath": "{{ROOT}}/apps/api/run.sh",
+      "workingDir": "{{ROOT}}/apps/api",
+      "command": "sh",
+      "args": [
+        "build.sh"
+      ]
+    },
+    {
+      "id": "app/db/run/docker",
+      "action": "run",
+      "runtime": "docker",
+      "label": "Run",
+      "sourcePath": "{{ROOT}}/infra/postgres/docker-compose.yml"
+    },
+    {
+      "id": "app/api/run/deps",
+      "action": "run",
+      "runtime": "docker",
+      "label": "Run",
+      "sourcePath": "{{ROOT}}/apps/api/docker-compose.yml",
+      "requires": [
+        {
+          "infra": "cache"
+        },
+        {
+          "app": "worker",
+          "runtime": "shell",
+          "profile": "default",
+          "lifecycle": "external"
+        }
+      ]
+    },
+    {
+      "id": "app/api/run/tmux",
+      "action": "run",
+      "runtime": "shell",
+      "label": "Docker",
+      "sourcePath": "{{ROOT}}/apps/api/run.sh",
+      "command": "sh",
+      "args": [
+        "run.sh"
+      ],
+      "exports": [
+        {
+          "name": "svc",
+          "protocol": "http",
+          "host": "0.0.0.0",
+          "port": 3000,
+          "strategy": "host-published"
+        }
+      ],
+      "bindings": [
+        {
+          "name": "CACHE_URL",
+          "export": "cache",
+          "destination": "env"
+        }
+      ]
+    }
+  ],
+  "resolver": [
+    {
+      "refKey": "[\"db\",\"\",\"docker\",\"default\",\"\"]",
+      "appIdent": "db",
+      "targetIndex": 8
+    }
+  ],
+  "groups": [
+    {
+      "name": "docker-run-all-tools",
+      "mode": "container-all-tools",
+      "target": {
+        "id": "app/api/run/docker",
+        "action": "run",
+        "runtime": "docker",
+        "label": "Run",
+        "env": {
+          "API_ENV": "dev",
+          "LOG_LEVEL": "debug"
+        },
+        "sourcePath": "{{ROOT}}/apps/api/docker-compose.yml",
+        "workingDir": "{{ROOT}}/apps/api",
+        "requires": [
+          {
+            "app": "db",
+            "runtime": "docker",
+            "profile": "default"
+          }
+        ]
+      },
+      "actions": [
+        {
+          "id": "app/api/action/run/docker/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "run",
+          "runtime": "docker",
+          "label": "Run",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/run/docker/default/step/root",
+            "kind": "composite",
+            "label": "Run: Run",
+            "children": [
+              {
+                "id": "app/api/action/run/docker/default/step/dependency/0/db/docker/default",
+                "executionKey": "dependency/db/docker/default",
+                "kind": "composite",
+                "label": "Start dependency: db/docker/default",
+                "children": [
+                  {
+                    "id": "app/api/action/run/docker/default/step/dependency/0/db/docker/default/start",
+                    "kind": "command",
+                    "label": "Start application: db",
+                    "handler": "docker",
+                    "configuration": {
+                      "args": [
+                        "-f",
+                        "{{ROOT}}/infra/postgres/docker-compose.yml",
+                        "up",
+                        "-d"
+                      ],
+                      "command": "docker-compose",
+                      "dir": "{{ROOT}}/apps/api"
+                    }
+                  },
+                  {
+                    "id": "app/api/action/run/docker/default/step/dependency/0/db/docker/default/readiness",
+                    "kind": "readiness",
+                    "label": "Wait for readiness",
+                    "handler": "dependency",
+                    "configuration": {
+                      "dependency": {
+                        "app": "db",
+                        "runtime": "docker",
+                        "profile": "default"
+                      },
+                      "lifecycle": "shared"
+                    }
+                  }
+                ],
+                "configuration": {
+                  "dependencyTarget": "db/docker/default",
+                  "lifecycle": "shared"
+                }
+              },
+              {
+                "id": "app/api/action/run/docker/default/step/execute",
+                "kind": "command",
+                "label": "Run",
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "-f",
+                    "{{ROOT}}/apps/api/docker-compose.yml",
+                    "up",
+                    "-d"
+                  ],
+                  "command": "docker-compose",
+                  "dir": "{{ROOT}}/apps/api",
+                  "env": [
+                    "API_ENV=dev",
+                    "LOG_LEVEL=debug"
+                  ]
+                }
+              },
+              {
+                "id": "app/api/action/run/docker/default/step/readiness",
+                "kind": "readiness",
+                "label": "Wait for containers",
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "-f",
+                    "{{ROOT}}/apps/api/docker-compose.yml"
+                  ],
+                  "command": "docker-compose",
+                  "probe": "compose",
+                  "stabilizationMs": 3000
+                }
+              },
+              {
+                "id": "app/api/action/run/docker/default/step/diagnostics",
+                "kind": "operation",
+                "label": "Inspect failed containers",
+                "condition": "on-failure",
+                "failurePolicy": "always-run",
+                "handler": "docker"
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/run/podman/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "run",
+          "runtime": "podman",
+          "label": "Run",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/run/podman/default/step/root",
+            "kind": "composite",
+            "label": "Run: Run",
+            "children": [
+              {
+                "id": "app/api/action/run/podman/default/step/dependency/0/db/docker/default",
+                "executionKey": "dependency/db/docker/default",
+                "kind": "composite",
+                "label": "Start dependency: db/docker/default",
+                "children": [
+                  {
+                    "id": "app/api/action/run/podman/default/step/dependency/0/db/docker/default/start",
+                    "kind": "command",
+                    "label": "Start application: db",
+                    "handler": "podman",
+                    "configuration": {
+                      "args": [
+                        "-f",
+                        "{{ROOT}}/infra/postgres/docker-compose.yml",
+                        "up",
+                        "-d"
+                      ],
+                      "command": "podman-compose",
+                      "dir": "{{ROOT}}/apps/api"
+                    }
+                  },
+                  {
+                    "id": "app/api/action/run/podman/default/step/dependency/0/db/docker/default/readiness",
+                    "kind": "readiness",
+                    "label": "Wait for readiness",
+                    "handler": "dependency",
+                    "configuration": {
+                      "dependency": {
+                        "app": "db",
+                        "runtime": "docker",
+                        "profile": "default"
+                      },
+                      "lifecycle": "shared"
+                    }
+                  }
+                ],
+                "configuration": {
+                  "dependencyTarget": "db/docker/default",
+                  "lifecycle": "shared"
+                }
+              },
+              {
+                "id": "app/api/action/run/podman/default/step/execute",
+                "kind": "command",
+                "label": "Run",
+                "handler": "podman",
+                "configuration": {
+                  "args": [
+                    "-f",
+                    "{{ROOT}}/apps/api/docker-compose.yml",
+                    "up",
+                    "-d"
+                  ],
+                  "command": "podman-compose",
+                  "dir": "{{ROOT}}/apps/api",
+                  "env": [
+                    "API_ENV=dev",
+                    "LOG_LEVEL=debug"
+                  ]
+                }
+              },
+              {
+                "id": "app/api/action/run/podman/default/step/readiness",
+                "kind": "readiness",
+                "label": "Wait for containers",
+                "handler": "podman",
+                "configuration": {
+                  "args": [
+                    "-f",
+                    "{{ROOT}}/apps/api/docker-compose.yml"
+                  ],
+                  "command": "podman-compose",
+                  "probe": "compose",
+                  "stabilizationMs": 3000
+                }
+              },
+              {
+                "id": "app/api/action/run/podman/default/step/diagnostics",
+                "kind": "operation",
+                "label": "Inspect failed containers",
+                "condition": "on-failure",
+                "failurePolicy": "always-run",
+                "handler": "podman"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "docker-run-limited-tools",
+      "mode": "container-limited",
+      "target": {
+        "id": "app/api/run/docker",
+        "action": "run",
+        "runtime": "docker",
+        "label": "Run",
+        "env": {
+          "API_ENV": "dev",
+          "LOG_LEVEL": "debug"
+        },
+        "sourcePath": "{{ROOT}}/apps/api/docker-compose.yml",
+        "workingDir": "{{ROOT}}/apps/api",
+        "requires": [
+          {
+            "app": "db",
+            "runtime": "docker",
+            "profile": "default"
+          }
+        ]
+      },
+      "actions": [
+        {
+          "id": "app/api/action/run/docker/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "run",
+          "runtime": "docker",
+          "label": "Run",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/run/docker/default/step/root",
+            "kind": "composite",
+            "label": "Run: Run",
+            "children": [
+              {
+                "id": "app/api/action/run/docker/default/step/dependency/0/db/docker/default",
+                "executionKey": "dependency/db/docker/default",
+                "kind": "composite",
+                "label": "Start dependency: db/docker/default",
+                "children": [
+                  {
+                    "id": "app/api/action/run/docker/default/step/dependency/0/db/docker/default/start",
+                    "kind": "command",
+                    "label": "Start application: db",
+                    "handler": "docker",
+                    "configuration": {
+                      "args": [
+                        "-f",
+                        "{{ROOT}}/infra/postgres/docker-compose.yml",
+                        "up",
+                        "-d"
+                      ],
+                      "command": "docker-compose",
+                      "dir": "{{ROOT}}/apps/api"
+                    }
+                  },
+                  {
+                    "id": "app/api/action/run/docker/default/step/dependency/0/db/docker/default/readiness",
+                    "kind": "readiness",
+                    "label": "Wait for readiness",
+                    "handler": "dependency",
+                    "configuration": {
+                      "dependency": {
+                        "app": "db",
+                        "runtime": "docker",
+                        "profile": "default"
+                      },
+                      "lifecycle": "shared"
+                    }
+                  }
+                ],
+                "configuration": {
+                  "dependencyTarget": "db/docker/default",
+                  "lifecycle": "shared"
+                }
+              },
+              {
+                "id": "app/api/action/run/docker/default/step/execute",
+                "kind": "command",
+                "label": "Run",
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "-f",
+                    "{{ROOT}}/apps/api/docker-compose.yml",
+                    "up",
+                    "-d"
+                  ],
+                  "command": "docker-compose",
+                  "dir": "{{ROOT}}/apps/api",
+                  "env": [
+                    "API_ENV=dev",
+                    "LOG_LEVEL=debug"
+                  ]
+                }
+              },
+              {
+                "id": "app/api/action/run/docker/default/step/readiness",
+                "kind": "readiness",
+                "label": "Wait for containers",
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "-f",
+                    "{{ROOT}}/apps/api/docker-compose.yml"
+                  ],
+                  "command": "docker-compose",
+                  "probe": "compose",
+                  "stabilizationMs": 3000
+                }
+              },
+              {
+                "id": "app/api/action/run/docker/default/step/diagnostics",
+                "kind": "operation",
+                "label": "Inspect failed containers",
+                "condition": "on-failure",
+                "failurePolicy": "always-run",
+                "handler": "docker"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "docker-build-all-tools",
+      "mode": "container-all-tools",
+      "target": {
+        "id": "app/api/build/docker",
+        "action": "build",
+        "runtime": "docker",
+        "label": "Build",
+        "sourcePath": "{{ROOT}}/apps/api/Dockerfile",
+        "workingDir": "{{ROOT}}/apps/api",
+        "requires": [
+          {
+            "infra": "postgres"
+          }
+        ]
+      },
+      "actions": [
+        {
+          "id": "app/api/action/build/docker/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "build",
+          "runtime": "docker",
+          "label": "Build",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/build/docker/default/step/root",
+            "kind": "composite",
+            "label": "Build: Build",
+            "children": [
+              {
+                "id": "app/api/action/build/docker/default/step/prepare-build-context",
+                "kind": "command",
+                "label": "Prepare build context",
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "-c",
+                    "ls -1A {{ROOT}}/home/.config/devenv/templates/ \u003e {{ROOT}}/tmp/devenv-templates-api-app/api/action/build/docker/default 2\u003e/dev/null; cp -r {{ROOT}}/home/.config/devenv/templates/. . 2\u003e/dev/null; true"
+                  ],
+                  "command": "sh",
+                  "dir": "{{ROOT}}/apps/api"
+                }
+              },
+              {
+                "id": "app/api/action/build/docker/default/step/build-image",
+                "kind": "command",
+                "label": "Build image",
+                "produces": [
+                  {
+                    "key": "image.ref",
+                    "type": "image-ref",
+                    "scope": "action",
+                    "visibility": "public"
+                  }
+                ],
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "build",
+                    "-f",
+                    "{{ROOT}}/apps/api/Dockerfile",
+                    "-t",
+                    "devenv-api:latest",
+                    "."
+                  ],
+                  "command": "docker",
+                  "dir": "{{ROOT}}/apps/api",
+                  "setValues": {
+                    "image.ref": "devenv-api:latest"
+                  }
+                }
+              },
+              {
+                "id": "app/api/action/build/docker/default/step/cleanup-build-context",
+                "kind": "command",
+                "label": "Clean up build context",
+                "failurePolicy": "always-run",
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "-c",
+                    "if [ -f {{ROOT}}/tmp/devenv-templates-api-app/api/action/build/docker/default ]; then xargs -I{} rm -rf \"{}\" \u003c {{ROOT}}/tmp/devenv-templates-api-app/api/action/build/docker/default 2\u003e/dev/null; rm -f {{ROOT}}/tmp/devenv-templates-api-app/api/action/build/docker/default; fi"
+                  ],
+                  "command": "sh",
+                  "dir": "{{ROOT}}/apps/api"
+                }
+              },
+              {
+                "id": "app/api/action/build/docker/default/step/prune-old-images",
+                "kind": "command",
+                "label": "Prune old images",
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "-c",
+                    "docker builder prune -f \u0026\u0026 docker image prune -f \u0026\u0026 docker volume prune -f"
+                  ],
+                  "command": "sh",
+                  "dir": "{{ROOT}}/apps/api"
+                }
+              },
+              {
+                "id": "app/api/action/build/docker/default/step/inspect-artifacts",
+                "kind": "command",
+                "label": "Inspect artifacts",
+                "consumes": [
+                  {
+                    "key": "image.ref",
+                    "type": "image-ref",
+                    "scope": "action",
+                    "visibility": "public",
+                    "required": true
+                  }
+                ],
+                "produces": [
+                  {
+                    "key": "artifact.path",
+                    "type": "path",
+                    "scope": "action",
+                    "visibility": "internal"
+                  }
+                ],
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "inspect",
+                    "--format",
+                    "{{json .Config.Labels}}",
+                    "${image.ref}"
+                  ],
+                  "captureJSONLabel": "devenv.artifacts",
+                  "captureKey": "artifact.path",
+                  "command": "docker"
+                }
+              },
+              {
+                "id": "app/api/action/build/docker/default/step/create-extractor",
+                "kind": "command",
+                "label": "Create artifact extractor",
+                "consumes": [
+                  {
+                    "key": "image.ref",
+                    "type": "image-ref",
+                    "scope": "action",
+                    "visibility": "public",
+                    "required": true
+                  }
+                ],
+                "produces": [
+                  {
+                    "key": "artifact.container.id",
+                    "type": "container-id",
+                    "scope": "action",
+                    "visibility": "ephemeral"
+                  }
+                ],
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "create",
+                    "${image.ref}"
+                  ],
+                  "captureStdout": "artifact.container.id",
+                  "captureType": "container-id",
+                  "command": "docker"
+                }
+              },
+              {
+                "id": "app/api/action/build/docker/default/step/copy-artifacts",
+                "kind": "command",
+                "label": "Copy artifacts",
+                "consumes": [
+                  {
+                    "key": "artifact.container.id",
+                    "type": "container-id",
+                    "scope": "action",
+                    "visibility": "ephemeral",
+                    "required": true
+                  },
+                  {
+                    "key": "artifact.path",
+                    "type": "path",
+                    "scope": "action",
+                    "visibility": "internal",
+                    "required": true
+                  }
+                ],
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "cp",
+                    "${artifact.container.id}:${artifact.path}",
+                    "."
+                  ],
+                  "command": "docker",
+                  "dir": "{{ROOT}}/apps/api"
+                }
+              },
+              {
+                "id": "app/api/action/build/docker/default/step/remove-extractor",
+                "kind": "cleanup",
+                "label": "Remove artifact extractor",
+                "failurePolicy": "always-run",
+                "consumes": [
+                  {
+                    "key": "artifact.container.id",
+                    "type": "container-id",
+                    "scope": "action",
+                    "visibility": "ephemeral",
+                    "required": true
+                  }
+                ],
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "rm",
+                    "${artifact.container.id}"
+                  ],
+                  "command": "docker"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/build/podman/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "build",
+          "runtime": "podman",
+          "label": "Build",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/build/podman/default/step/root",
+            "kind": "composite",
+            "label": "Build: Build",
+            "children": [
+              {
+                "id": "app/api/action/build/podman/default/step/prepare-build-context",
+                "kind": "command",
+                "label": "Prepare build context",
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "-c",
+                    "ls -1A {{ROOT}}/home/.config/devenv/templates/ \u003e {{ROOT}}/tmp/devenv-templates-api-app/api/action/build/podman/default 2\u003e/dev/null; cp -r {{ROOT}}/home/.config/devenv/templates/. . 2\u003e/dev/null; true"
+                  ],
+                  "command": "sh",
+                  "dir": "{{ROOT}}/apps/api"
+                }
+              },
+              {
+                "id": "app/api/action/build/podman/default/step/build-image",
+                "kind": "command",
+                "label": "Build image",
+                "produces": [
+                  {
+                    "key": "image.ref",
+                    "type": "image-ref",
+                    "scope": "action",
+                    "visibility": "public"
+                  }
+                ],
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "build",
+                    "-f",
+                    "{{ROOT}}/apps/api/Dockerfile",
+                    "-t",
+                    "devenv-api:latest",
+                    "."
+                  ],
+                  "command": "podman",
+                  "dir": "{{ROOT}}/apps/api",
+                  "setValues": {
+                    "image.ref": "devenv-api:latest"
+                  }
+                }
+              },
+              {
+                "id": "app/api/action/build/podman/default/step/cleanup-build-context",
+                "kind": "command",
+                "label": "Clean up build context",
+                "failurePolicy": "always-run",
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "-c",
+                    "if [ -f {{ROOT}}/tmp/devenv-templates-api-app/api/action/build/podman/default ]; then xargs -I{} rm -rf \"{}\" \u003c {{ROOT}}/tmp/devenv-templates-api-app/api/action/build/podman/default 2\u003e/dev/null; rm -f {{ROOT}}/tmp/devenv-templates-api-app/api/action/build/podman/default; fi"
+                  ],
+                  "command": "sh",
+                  "dir": "{{ROOT}}/apps/api"
+                }
+              },
+              {
+                "id": "app/api/action/build/podman/default/step/prune-old-images",
+                "kind": "command",
+                "label": "Prune old images",
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "-c",
+                    "podman image prune -f \u0026\u0026 podman volume prune -f"
+                  ],
+                  "command": "sh",
+                  "dir": "{{ROOT}}/apps/api"
+                }
+              },
+              {
+                "id": "app/api/action/build/podman/default/step/inspect-artifacts",
+                "kind": "command",
+                "label": "Inspect artifacts",
+                "consumes": [
+                  {
+                    "key": "image.ref",
+                    "type": "image-ref",
+                    "scope": "action",
+                    "visibility": "public",
+                    "required": true
+                  }
+                ],
+                "produces": [
+                  {
+                    "key": "artifact.path",
+                    "type": "path",
+                    "scope": "action",
+                    "visibility": "internal"
+                  }
+                ],
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "inspect",
+                    "--format",
+                    "{{json .Config.Labels}}",
+                    "${image.ref}"
+                  ],
+                  "captureJSONLabel": "devenv.artifacts",
+                  "captureKey": "artifact.path",
+                  "command": "podman"
+                }
+              },
+              {
+                "id": "app/api/action/build/podman/default/step/create-extractor",
+                "kind": "command",
+                "label": "Create artifact extractor",
+                "consumes": [
+                  {
+                    "key": "image.ref",
+                    "type": "image-ref",
+                    "scope": "action",
+                    "visibility": "public",
+                    "required": true
+                  }
+                ],
+                "produces": [
+                  {
+                    "key": "artifact.container.id",
+                    "type": "container-id",
+                    "scope": "action",
+                    "visibility": "ephemeral"
+                  }
+                ],
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "create",
+                    "${image.ref}"
+                  ],
+                  "captureStdout": "artifact.container.id",
+                  "captureType": "container-id",
+                  "command": "podman"
+                }
+              },
+              {
+                "id": "app/api/action/build/podman/default/step/copy-artifacts",
+                "kind": "command",
+                "label": "Copy artifacts",
+                "consumes": [
+                  {
+                    "key": "artifact.container.id",
+                    "type": "container-id",
+                    "scope": "action",
+                    "visibility": "ephemeral",
+                    "required": true
+                  },
+                  {
+                    "key": "artifact.path",
+                    "type": "path",
+                    "scope": "action",
+                    "visibility": "internal",
+                    "required": true
+                  }
+                ],
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "cp",
+                    "${artifact.container.id}:${artifact.path}",
+                    "."
+                  ],
+                  "command": "podman",
+                  "dir": "{{ROOT}}/apps/api"
+                }
+              },
+              {
+                "id": "app/api/action/build/podman/default/step/remove-extractor",
+                "kind": "cleanup",
+                "label": "Remove artifact extractor",
+                "failurePolicy": "always-run",
+                "consumes": [
+                  {
+                    "key": "artifact.container.id",
+                    "type": "container-id",
+                    "scope": "action",
+                    "visibility": "ephemeral",
+                    "required": true
+                  }
+                ],
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "rm",
+                    "${artifact.container.id}"
+                  ],
+                  "command": "podman"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "docker-test-all-tools",
+      "mode": "container-all-tools",
+      "target": {
+        "id": "app/api/test/docker",
+        "action": "test",
+        "runtime": "docker",
+        "label": "Test",
+        "sourcePath": "{{ROOT}}/apps/api/Dockerfile",
+        "workingDir": "{{ROOT}}/apps/api",
+        "requires": [
+          {
+            "app": "worker",
+            "runtime": "shell",
+            "profile": "default",
+            "lifecycle": "external"
+          }
+        ]
+      },
+      "actions": [
+        {
+          "id": "app/api/action/test/docker/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "test",
+          "runtime": "docker",
+          "label": "Test",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/test/docker/default/step/root",
+            "kind": "composite",
+            "label": "Test: Test",
+            "children": [
+              {
+                "id": "app/api/action/test/docker/default/step/prepare-build-context",
+                "kind": "command",
+                "label": "Prepare build context",
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "-c",
+                    "ls -1A {{ROOT}}/home/.config/devenv/templates/ \u003e {{ROOT}}/tmp/devenv-templates-api-app/api/action/test/docker/default 2\u003e/dev/null; cp -r {{ROOT}}/home/.config/devenv/templates/. . 2\u003e/dev/null; true"
+                  ],
+                  "command": "sh",
+                  "dir": "{{ROOT}}/apps/api"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/test/podman/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "test",
+          "runtime": "podman",
+          "label": "Test",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/test/podman/default/step/root",
+            "kind": "composite",
+            "label": "Test: Test",
+            "children": [
+              {
+                "id": "app/api/action/test/podman/default/step/prepare-build-context",
+                "kind": "command",
+                "label": "Prepare build context",
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "-c",
+                    "ls -1A {{ROOT}}/home/.config/devenv/templates/ \u003e {{ROOT}}/tmp/devenv-templates-api-app/api/action/test/podman/default 2\u003e/dev/null; cp -r {{ROOT}}/home/.config/devenv/templates/. . 2\u003e/dev/null; true"
+                  ],
+                  "command": "sh",
+                  "dir": "{{ROOT}}/apps/api"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "shell-run-all-tools",
+      "mode": "container-all-tools",
+      "target": {
+        "id": "app/api/run/shell",
+        "action": "run",
+        "runtime": "shell",
+        "label": "Run",
+        "launchMode": "tmux",
+        "sourcePath": "{{ROOT}}/apps/api/run.sh",
+        "workingDir": "{{ROOT}}/apps/api",
+        "command": "sh",
+        "args": [
+          "run.sh",
+          "--watch"
+        ]
+      },
+      "actions": [
+        {
+          "id": "app/api/action/run/tmux/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "run",
+          "runtime": "tmux",
+          "label": "Tmux Run",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/run/tmux/default/step/root",
+            "kind": "composite",
+            "label": "Run: Tmux Run",
+            "children": [
+              {
+                "id": "app/api/action/run/tmux/default/step/execute",
+                "kind": "command",
+                "label": "Run",
+                "handler": "tmux",
+                "configuration": {
+                  "args": [
+                    "new-window",
+                    "-P",
+                    "-F",
+                    "#{window_id}",
+                    "-n",
+                    "Run",
+                    "-c",
+                    "{{ROOT}}/apps/api",
+                    "sh",
+                    "-c",
+                    "sh run.sh --watch; echo; printf 'Press Enter to close this window...'; read"
+                  ],
+                  "command": "tmux"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/run/command-shell/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "run",
+          "runtime": "command-shell",
+          "label": "Shell Run",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/run/command-shell/default/step/root",
+            "kind": "composite",
+            "label": "Run: Run",
+            "children": [
+              {
+                "id": "app/api/action/run/command-shell/default/step/execute",
+                "kind": "command",
+                "label": "Run",
+                "handler": "command-shell",
+                "configuration": {
+                  "args": [
+                    "run.sh",
+                    "--watch"
+                  ],
+                  "command": "sh",
+                  "launchMode": "tmux",
+                  "profile": "",
+                  "requires": null,
+                  "targetId": "app/api/run/shell"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "systemshell-run-all-tools",
+      "mode": "container-all-tools",
+      "target": {
+        "id": "app/api/run/systemshell",
+        "action": "run",
+        "runtime": "systemshell",
+        "label": "Run",
+        "sourcePath": "{{ROOT}}/apps/api/run.sh",
+        "command": "sh",
+        "args": [
+          "run.sh"
+        ]
+      },
+      "actions": [
+        {
+          "id": "app/api/action/run/tmux/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "run",
+          "runtime": "tmux",
+          "label": "Tmux Run",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/run/tmux/default/step/root",
+            "kind": "composite",
+            "label": "Run: Tmux Run",
+            "children": [
+              {
+                "id": "app/api/action/run/tmux/default/step/execute",
+                "kind": "command",
+                "label": "Run",
+                "handler": "tmux",
+                "configuration": {
+                  "args": [
+                    "new-window",
+                    "-P",
+                    "-F",
+                    "#{window_id}",
+                    "-n",
+                    "Run",
+                    "-c",
+                    "{{ROOT}}/apps/api",
+                    "sh",
+                    "-c",
+                    "sh run.sh; echo; printf 'Press Enter to close this window...'; read"
+                  ],
+                  "command": "tmux"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/run/command-systemshell/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "run",
+          "runtime": "command-systemshell",
+          "label": "Shell Run",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/run/command-systemshell/default/step/root",
+            "kind": "composite",
+            "label": "Run: Run",
+            "children": [
+              {
+                "id": "app/api/action/run/command-systemshell/default/step/execute",
+                "kind": "command",
+                "label": "Run",
+                "handler": "command-systemshell",
+                "configuration": {
+                  "args": [
+                    "run.sh"
+                  ],
+                  "command": "sh",
+                  "launchMode": "",
+                  "profile": "",
+                  "requires": null,
+                  "targetId": "app/api/run/systemshell"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "powershell-run-all-tools",
+      "mode": "container-all-tools",
+      "target": {
+        "id": "app/api/run/powershell",
+        "action": "run",
+        "runtime": "powershell",
+        "label": "Run",
+        "sourcePath": "{{ROOT}}/apps/api/task.ps1",
+        "command": "pwsh",
+        "args": [
+          "-File",
+          "task.ps1"
+        ]
+      },
+      "actions": [
+        {
+          "id": "app/api/action/run/tmux/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "run",
+          "runtime": "tmux",
+          "label": "Tmux Run",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/run/tmux/default/step/root",
+            "kind": "composite",
+            "label": "Run: Tmux Run",
+            "children": [
+              {
+                "id": "app/api/action/run/tmux/default/step/execute",
+                "kind": "command",
+                "label": "Run",
+                "handler": "tmux",
+                "configuration": {
+                  "args": [
+                    "new-window",
+                    "-P",
+                    "-F",
+                    "#{window_id}",
+                    "-n",
+                    "Run",
+                    "-c",
+                    "{{ROOT}}/apps/api",
+                    "sh",
+                    "-c",
+                    "pwsh -File task.ps1; echo; printf 'Press Enter to close this window...'; read"
+                  ],
+                  "command": "tmux"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/run/command-powershell/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "run",
+          "runtime": "command-powershell",
+          "label": "Shell Run",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/run/command-powershell/default/step/root",
+            "kind": "composite",
+            "label": "Run: Run",
+            "children": [
+              {
+                "id": "app/api/action/run/command-powershell/default/step/execute",
+                "kind": "command",
+                "label": "Run",
+                "handler": "command-powershell",
+                "configuration": {
+                  "args": [
+                    "-File",
+                    "task.ps1"
+                  ],
+                  "command": "pwsh",
+                  "launchMode": "",
+                  "profile": "",
+                  "requires": null,
+                  "targetId": "app/api/run/powershell"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "kubernetes-run-all-tools",
+      "mode": "container-all-tools",
+      "target": {
+        "id": "app/api/run/kubernetes",
+        "action": "run",
+        "runtime": "kubernetes",
+        "label": "Run",
+        "profile": "local",
+        "provider": "docker",
+        "sourcePath": "{{ROOT}}/apps/api/chart/Chart.yaml",
+        "workingDir": "{{ROOT}}/apps/api",
+        "kubernetes": {
+          "provider": "docker",
+          "clusterName": "api-local",
+          "contextName": "kind-api-local",
+          "chartPath": "{{ROOT}}/apps/api/chart",
+          "release": "api-local",
+          "namespace": "api",
+          "valuesFiles": [
+            "{{ROOT}}/apps/api/chart/values.yaml"
+          ],
+          "image": {
+            "repository": "devenv-api",
+            "tag": "latest",
+            "pullPolicy": "Never",
+            "valuePaths": {
+              "repository": "image.repository",
+              "tag": "image.tag",
+              "pullPolicy": "image.pullPolicy"
+            }
+          },
+          "secrets": [
+            {
+              "name": "api-credentials",
+              "keys": [
+                "token"
+              ]
+            }
+          ],
+          "ports": [
+            {
+              "name": "web",
+              "resource": "service/api",
+              "localPort": 8080,
+              "remotePort": 80
+            }
+          ],
+          "wait": {
+            "timeout": "5m"
+          },
+          "exports": [
+            {
+              "name": "api",
+              "protocol": "http",
+              "port": 8080,
+              "strategy": "port-forward",
+              "localPort": 8080
+            },
+            {
+              "name": "cluster-api",
+              "protocol": "http",
+              "port": 80,
+              "strategy": "kubernetes-service",
+              "resource": "api"
+            }
+          ],
+          "bindings": [
+            {
+              "name": "DATABASE_URL",
+              "dependency": "postgres",
+              "export": "postgres",
+              "destination": "env"
+            }
+          ],
+          "sourcePath": ""
+        }
+      },
+      "actions": [
+        {
+          "id": "app/api/action/run/docker/local",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "run",
+          "runtime": "docker",
+          "label": "Run",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/run/docker/local/step/root",
+            "kind": "composite",
+            "label": "Run: Run",
+            "children": [
+              {
+                "id": "app/api/action/run/docker/local/step/ensure-cluster",
+                "kind": "command",
+                "label": "Ensure cluster",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "-c",
+                    "kind export kubeconfig --name api-local 2\u003e/dev/null || (kind create cluster --name api-local \u0026\u0026 kind export kubeconfig --name api-local)"
+                  ],
+                  "command": "sh"
+                }
+              },
+              {
+                "id": "app/api/action/run/docker/local/step/check-image",
+                "kind": "command",
+                "label": "Check image availability",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "-c",
+                    "docker image exists devenv-api:latest"
+                  ],
+                  "command": "sh"
+                }
+              },
+              {
+                "id": "app/api/action/run/docker/local/step/load-image",
+                "kind": "command",
+                "label": "Load image",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "-c",
+                    "docker save devenv-api:latest -o /tmp/devenv-image-app-api-action-run-docker-local.tar \u0026\u0026 kind load image-archive /tmp/devenv-image-app-api-action-run-docker-local.tar --name api-local"
+                  ],
+                  "command": "sh"
+                }
+              },
+              {
+                "id": "app/api/action/run/docker/local/step/secret-0-delete",
+                "kind": "command",
+                "label": "Delete secret",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "--context",
+                    "kind-api-local",
+                    "delete",
+                    "secret",
+                    "api-credentials",
+                    "--namespace",
+                    "api",
+                    "--ignore-not-found"
+                  ],
+                  "command": "kubectl"
+                }
+              },
+              {
+                "id": "app/api/action/run/docker/local/step/secret-0-create",
+                "kind": "command",
+                "label": "Create secret",
+                "produces": [
+                  {
+                    "key": "secret.api-credentials",
+                    "type": "secret-handle",
+                    "scope": "action",
+                    "visibility": "secret"
+                  }
+                ],
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "--context",
+                    "kind-api-local",
+                    "create",
+                    "secret",
+                    "generic",
+                    "api-credentials",
+                    "--namespace",
+                    "api"
+                  ],
+                  "command": "kubectl",
+                  "displayArgs": [
+                    "create",
+                    "secret",
+                    "generic",
+                    "api-credentials",
+                    "[REDACTED]"
+                  ]
+                }
+              },
+              {
+                "id": "app/api/action/run/docker/local/step/create-namespace",
+                "kind": "command",
+                "label": "Create namespace",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "-c",
+                    "kubectl --context kind-api-local create namespace api --dry-run=client -o yaml | kubectl --context kind-api-local apply -f -"
+                  ],
+                  "command": "sh",
+                  "displayArgs": [
+                    "Ensure namespace api exists"
+                  ]
+                }
+              },
+              {
+                "id": "app/api/action/run/docker/local/step/helm-install",
+                "kind": "command",
+                "label": "Install Helm release",
+                "produces": [
+                  {
+                    "key": "helm.release.app/api/action/run/docker/local",
+                    "type": "helm-release",
+                    "scope": "action",
+                    "visibility": "public"
+                  }
+                ],
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "--kube-context",
+                    "kind-api-local",
+                    "upgrade",
+                    "--install",
+                    "api-local",
+                    "{{ROOT}}/apps/api/chart",
+                    "--namespace",
+                    "api",
+                    "--values",
+                    "{{ROOT}}/apps/api/chart/values.yaml",
+                    "--set",
+                    "image.repository=devenv-api",
+                    "--set",
+                    "image.tag=latest",
+                    "--set",
+                    "image.pullPolicy=Never"
+                  ],
+                  "command": "helm",
+                  "setValues": {
+                    "helm.release.app/api/action/run/docker/local": "api-local"
+                  }
+                }
+              },
+              {
+                "id": "app/api/action/run/docker/local/step/readiness",
+                "kind": "readiness",
+                "label": "Wait for workloads",
+                "produces": [
+                  {
+                    "key": "endpoint.api",
+                    "type": "endpoint",
+                    "scope": "action",
+                    "visibility": "public"
+                  },
+                  {
+                    "key": "endpoint.cluster-api",
+                    "type": "endpoint",
+                    "scope": "action",
+                    "visibility": "public"
+                  }
+                ],
+                "handler": "kubernetes",
+                "configuration": {
+                  "context": "kind-api-local",
+                  "endpointExports": [
+                    {
+                      "name": "api",
+                      "protocol": "http",
+                      "host": "127.0.0.1",
+                      "port": 8080
+                    },
+                    {
+                      "name": "cluster-api",
+                      "protocol": "http",
+                      "host": "api.api.svc.cluster.local",
+                      "port": 80
+                    }
+                  ],
+                  "namespace": "api",
+                  "probe": "kubernetes",
+                  "resource": "api-local",
+                  "timeout": "5m"
+                }
+              },
+              {
+                "id": "app/api/action/run/docker/local/step/diagnostics",
+                "kind": "operation",
+                "label": "Collect workload diagnostics",
+                "condition": "on-failure",
+                "failurePolicy": "always-run",
+                "handler": "kubernetes"
+              },
+              {
+                "id": "app/api/action/run/docker/local/step/cleanup-failed-release",
+                "kind": "cleanup",
+                "label": "Clean up failed release",
+                "condition": "on-failure",
+                "failurePolicy": "always-run",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "--kube-context",
+                    "kind-api-local",
+                    "uninstall",
+                    "${helm.release.app/api/action/run/docker/local}",
+                    "--namespace",
+                    "api"
+                  ],
+                  "command": "helm"
+                }
+              },
+              {
+                "id": "app/api/action/run/docker/local/step/port-forward-0",
+                "kind": "process",
+                "label": "Start port forward",
+                "handler": "kubernetes",
+                "configuration": {
+                  "args": [
+                    "--context",
+                    "kind-api-local",
+                    "port-forward",
+                    "--namespace",
+                    "api",
+                    "service/api",
+                    "8080:80"
+                  ],
+                  "command": "kubectl"
+                }
+              },
+              {
+                "id": "app/api/action/run/docker/local/step/port-forward-readiness-0",
+                "kind": "readiness",
+                "label": "Wait for port forward",
+                "handler": "kubernetes",
+                "configuration": {
+                  "processStepId": "app/api/action/run/docker/local/step/port-forward-0",
+                  "stabilizationMs": 1000
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "shell-build-all-tools",
+      "mode": "container-all-tools",
+      "target": {
+        "id": "app/api/build/shell",
+        "action": "build",
+        "runtime": "shell",
+        "label": "Build",
+        "sourcePath": "{{ROOT}}/apps/api/run.sh",
+        "workingDir": "{{ROOT}}/apps/api",
+        "command": "sh",
+        "args": [
+          "build.sh"
+        ]
+      },
+      "actions": [
+        {
+          "id": "app/api/action/build/tmux/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "build",
+          "runtime": "tmux",
+          "label": "Tmux Build",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/build/tmux/default/step/root",
+            "kind": "composite",
+            "label": "Build: Tmux Build",
+            "children": [
+              {
+                "id": "app/api/action/build/tmux/default/step/execute",
+                "kind": "command",
+                "label": "Build",
+                "handler": "tmux",
+                "configuration": {
+                  "args": [
+                    "new-window",
+                    "-P",
+                    "-F",
+                    "#{window_id}",
+                    "-n",
+                    "Build",
+                    "-c",
+                    "{{ROOT}}/apps/api",
+                    "sh",
+                    "-c",
+                    "sh build.sh; echo; printf 'Press Enter to close this window...'; read"
+                  ],
+                  "command": "tmux"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/build/command-shell/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "build",
+          "runtime": "command-shell",
+          "label": "Shell Build",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/build/command-shell/default/step/root",
+            "kind": "composite",
+            "label": "Build: Build",
+            "children": [
+              {
+                "id": "app/api/action/build/command-shell/default/step/execute",
+                "kind": "command",
+                "label": "Build",
+                "handler": "command-shell",
+                "configuration": {
+                  "args": [
+                    "build.sh"
+                  ],
+                  "command": "sh",
+                  "dir": "{{ROOT}}/apps/api",
+                  "launchMode": "",
+                  "profile": "",
+                  "requires": null,
+                  "targetId": "app/api/build/shell"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "dependency-outcomes-all-tools",
+      "mode": "container-all-tools",
+      "target": {
+        "id": "app/api/run/deps",
+        "action": "run",
+        "runtime": "docker",
+        "label": "Run",
+        "sourcePath": "{{ROOT}}/apps/api/docker-compose.yml",
+        "requires": [
+          {
+            "infra": "cache"
+          },
+          {
+            "app": "worker",
+            "runtime": "shell",
+            "profile": "default",
+            "lifecycle": "external"
+          }
+        ]
+      },
+      "actions": [
+        {
+          "id": "app/api/action/run/docker/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "run",
+          "runtime": "docker",
+          "label": "Run",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/run/docker/default/step/root",
+            "kind": "composite",
+            "label": "Run: Run",
+            "children": [
+              {
+                "id": "app/api/action/run/docker/default/step/dependency/0/cache",
+                "executionKey": "dependency/cache",
+                "kind": "composite",
+                "label": "Start dependency: cache",
+                "children": [
+                  {
+                    "id": "app/api/action/run/docker/default/step/dependency/0/cache/start",
+                    "kind": "operation",
+                    "label": "Start dependency",
+                    "handler": "infrastructure",
+                    "configuration": {
+                      "dependency": {
+                        "infra": "cache"
+                      }
+                    }
+                  },
+                  {
+                    "id": "app/api/action/run/docker/default/step/dependency/0/cache/readiness",
+                    "kind": "readiness",
+                    "label": "Wait for readiness",
+                    "handler": "dependency",
+                    "configuration": {
+                      "dependency": {
+                        "infra": "cache"
+                      },
+                      "lifecycle": "shared"
+                    }
+                  }
+                ],
+                "configuration": {
+                  "dependencyTarget": "cache",
+                  "lifecycle": "shared"
+                }
+              },
+              {
+                "id": "app/api/action/run/docker/default/step/dependency/1/worker/shell/default",
+                "executionKey": "dependency/worker/shell/default",
+                "kind": "composite",
+                "label": "Start dependency: worker/shell/default",
+                "children": [
+                  {
+                    "id": "app/api/action/run/docker/default/step/dependency/1/worker/shell/default/readiness",
+                    "kind": "readiness",
+                    "label": "Wait for readiness",
+                    "handler": "dependency",
+                    "configuration": {
+                      "dependency": {
+                        "app": "worker",
+                        "runtime": "shell",
+                        "profile": "default",
+                        "lifecycle": "external"
+                      },
+                      "lifecycle": "external"
+                    }
+                  }
+                ],
+                "configuration": {
+                  "dependencyTarget": "worker/shell/default",
+                  "lifecycle": "external"
+                }
+              },
+              {
+                "id": "app/api/action/run/docker/default/step/execute",
+                "kind": "command",
+                "label": "Run",
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "-f",
+                    "{{ROOT}}/apps/api/docker-compose.yml",
+                    "up",
+                    "-d"
+                  ],
+                  "command": "docker-compose",
+                  "dir": "{{ROOT}}/apps/api"
+                }
+              },
+              {
+                "id": "app/api/action/run/docker/default/step/readiness",
+                "kind": "readiness",
+                "label": "Wait for containers",
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "-f",
+                    "{{ROOT}}/apps/api/docker-compose.yml"
+                  ],
+                  "command": "docker-compose",
+                  "probe": "compose",
+                  "stabilizationMs": 3000
+                }
+              },
+              {
+                "id": "app/api/action/run/docker/default/step/diagnostics",
+                "kind": "operation",
+                "label": "Inspect failed containers",
+                "condition": "on-failure",
+                "failurePolicy": "always-run",
+                "handler": "docker"
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/run/podman/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "run",
+          "runtime": "podman",
+          "label": "Run",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/run/podman/default/step/root",
+            "kind": "composite",
+            "label": "Run: Run",
+            "children": [
+              {
+                "id": "app/api/action/run/podman/default/step/dependency/0/cache",
+                "executionKey": "dependency/cache",
+                "kind": "composite",
+                "label": "Start dependency: cache",
+                "children": [
+                  {
+                    "id": "app/api/action/run/podman/default/step/dependency/0/cache/start",
+                    "kind": "operation",
+                    "label": "Start dependency",
+                    "handler": "infrastructure",
+                    "configuration": {
+                      "dependency": {
+                        "infra": "cache"
+                      }
+                    }
+                  },
+                  {
+                    "id": "app/api/action/run/podman/default/step/dependency/0/cache/readiness",
+                    "kind": "readiness",
+                    "label": "Wait for readiness",
+                    "handler": "dependency",
+                    "configuration": {
+                      "dependency": {
+                        "infra": "cache"
+                      },
+                      "lifecycle": "shared"
+                    }
+                  }
+                ],
+                "configuration": {
+                  "dependencyTarget": "cache",
+                  "lifecycle": "shared"
+                }
+              },
+              {
+                "id": "app/api/action/run/podman/default/step/dependency/1/worker/shell/default",
+                "executionKey": "dependency/worker/shell/default",
+                "kind": "composite",
+                "label": "Start dependency: worker/shell/default",
+                "children": [
+                  {
+                    "id": "app/api/action/run/podman/default/step/dependency/1/worker/shell/default/readiness",
+                    "kind": "readiness",
+                    "label": "Wait for readiness",
+                    "handler": "dependency",
+                    "configuration": {
+                      "dependency": {
+                        "app": "worker",
+                        "runtime": "shell",
+                        "profile": "default",
+                        "lifecycle": "external"
+                      },
+                      "lifecycle": "external"
+                    }
+                  }
+                ],
+                "configuration": {
+                  "dependencyTarget": "worker/shell/default",
+                  "lifecycle": "external"
+                }
+              },
+              {
+                "id": "app/api/action/run/podman/default/step/execute",
+                "kind": "command",
+                "label": "Run",
+                "handler": "podman",
+                "configuration": {
+                  "args": [
+                    "-f",
+                    "{{ROOT}}/apps/api/docker-compose.yml",
+                    "up",
+                    "-d"
+                  ],
+                  "command": "podman-compose",
+                  "dir": "{{ROOT}}/apps/api"
+                }
+              },
+              {
+                "id": "app/api/action/run/podman/default/step/readiness",
+                "kind": "readiness",
+                "label": "Wait for containers",
+                "handler": "podman",
+                "configuration": {
+                  "args": [
+                    "-f",
+                    "{{ROOT}}/apps/api/docker-compose.yml"
+                  ],
+                  "command": "podman-compose",
+                  "probe": "compose",
+                  "stabilizationMs": 3000
+                }
+              },
+              {
+                "id": "app/api/action/run/podman/default/step/diagnostics",
+                "kind": "operation",
+                "label": "Inspect failed containers",
+                "condition": "on-failure",
+                "failurePolicy": "always-run",
+                "handler": "podman"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "endpoint-binding-all-tools",
+      "mode": "container-all-tools",
+      "target": {
+        "id": "app/api/run/tmux",
+        "action": "run",
+        "runtime": "shell",
+        "label": "Docker",
+        "sourcePath": "{{ROOT}}/apps/api/run.sh",
+        "command": "sh",
+        "args": [
+          "run.sh"
+        ],
+        "exports": [
+          {
+            "name": "svc",
+            "protocol": "http",
+            "host": "0.0.0.0",
+            "port": 3000,
+            "strategy": "host-published"
+          }
+        ],
+        "bindings": [
+          {
+            "name": "CACHE_URL",
+            "export": "cache",
+            "destination": "env"
+          }
+        ]
+      },
+      "actions": [
+        {
+          "id": "app/api/action/run/tmux/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "run",
+          "runtime": "tmux",
+          "label": "Tmux Docker",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/run/tmux/default/step/root",
+            "kind": "composite",
+            "label": "Run: Tmux Docker",
+            "children": [
+              {
+                "id": "app/api/action/run/tmux/default/step/execute",
+                "kind": "command",
+                "label": "Docker",
+                "handler": "tmux",
+                "configuration": {
+                  "args": [
+                    "new-window",
+                    "-P",
+                    "-F",
+                    "#{window_id}",
+                    "-n",
+                    "Docker",
+                    "-c",
+                    "{{ROOT}}/apps/api",
+                    "sh",
+                    "-c",
+                    "sh run.sh; echo; printf 'Press Enter to close this window...'; read"
+                  ],
+                  "command": "tmux"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/run/command-shell/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "run",
+          "runtime": "command-shell",
+          "label": "Shell Docker",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/run/command-shell/default/step/root",
+            "kind": "composite",
+            "label": "Run: Docker",
+            "children": [
+              {
+                "id": "app/api/action/run/command-shell/default/step/execute",
+                "kind": "command",
+                "label": "Docker",
+                "produces": [
+                  {
+                    "key": "endpoint.svc",
+                    "type": "endpoint",
+                    "scope": "action",
+                    "visibility": "public"
+                  }
+                ],
+                "handler": "command-shell",
+                "configuration": {
+                  "args": [
+                    "run.sh"
+                  ],
+                  "command": "sh",
+                  "endpointExports": [
+                    {
+                      "name": "svc",
+                      "protocol": "http",
+                      "host": "0.0.0.0",
+                      "port": 3000
+                    }
+                  ],
+                  "env": [
+                    "CACHE_URL=${endpoint.cache}"
+                  ],
+                  "launchMode": "",
+                  "profile": "",
+                  "requires": null,
+                  "targetId": "app/api/run/tmux"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "endpoint-binding-limited-tools",
+      "mode": "container-limited",
+      "target": {
+        "id": "app/api/run/tmux",
+        "action": "run",
+        "runtime": "shell",
+        "label": "Docker",
+        "sourcePath": "{{ROOT}}/apps/api/run.sh",
+        "command": "sh",
+        "args": [
+          "run.sh"
+        ],
+        "exports": [
+          {
+            "name": "svc",
+            "protocol": "http",
+            "host": "0.0.0.0",
+            "port": 3000,
+            "strategy": "host-published"
+          }
+        ],
+        "bindings": [
+          {
+            "name": "CACHE_URL",
+            "export": "cache",
+            "destination": "env"
+          }
+        ]
+      },
+      "actions": [
+        {
+          "id": "app/api/action/run/tmux/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "run",
+          "runtime": "tmux",
+          "label": "Tmux Docker",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/run/tmux/default/step/root",
+            "kind": "composite",
+            "label": "Run: Tmux Docker",
+            "children": [
+              {
+                "id": "app/api/action/run/tmux/default/step/execute",
+                "kind": "command",
+                "label": "Docker",
+                "handler": "tmux",
+                "configuration": {
+                  "args": [
+                    "new-window",
+                    "-P",
+                    "-F",
+                    "#{window_id}",
+                    "-n",
+                    "Docker",
+                    "-c",
+                    "{{ROOT}}/apps/api",
+                    "sh",
+                    "-c",
+                    "sh run.sh; echo; printf 'Press Enter to close this window...'; read"
+                  ],
+                  "command": "tmux"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "app/api/action/run/command-shell/default",
+          "owner": {
+            "kind": "app",
+            "id": "api"
+          },
+          "type": "run",
+          "runtime": "command-shell",
+          "label": "Shell Docker",
+          "inputs": null,
+          "availability": {
+            "available": true
+          },
+          "root": {
+            "id": "app/api/action/run/command-shell/default/step/root",
+            "kind": "composite",
+            "label": "Run: Docker",
+            "children": [
+              {
+                "id": "app/api/action/run/command-shell/default/step/execute",
+                "kind": "command",
+                "label": "Docker",
+                "produces": [
+                  {
+                    "key": "endpoint.svc",
+                    "type": "endpoint",
+                    "scope": "action",
+                    "visibility": "public"
+                  }
+                ],
+                "handler": "command-shell",
+                "configuration": {
+                  "args": [
+                    "run.sh"
+                  ],
+                  "command": "sh",
+                  "endpointExports": [
+                    {
+                      "name": "svc",
+                      "protocol": "http",
+                      "host": "0.0.0.0",
+                      "port": 3000
+                    }
+                  ],
+                  "env": [
+                    "CACHE_URL=${endpoint.cache}"
+                  ],
+                  "launchMode": "",
+                  "profile": "",
+                  "requires": null,
+                  "targetId": "app/api/run/tmux"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "missing-source-graph",
+      "mode": "graph",
+      "target": {
+        "id": "app/missing/run/docker",
+        "action": "run",
+        "runtime": "docker",
+        "label": "Run",
+        "sourcePath": "{{ROOT}}/apps/missing/docker-compose.yml"
+      },
+      "actions": [
+        {
+          "id": "app/missing/action/run/docker/default",
+          "owner": {
+            "kind": "app",
+            "id": "missing"
+          },
+          "type": "run",
+          "runtime": "docker",
+          "label": "Run",
+          "inputs": null,
+          "availability": {
+            "available": false,
+            "reason": "required source unavailable: {{ROOT}}/apps/missing/docker-compose.yml"
+          },
+          "root": {
+            "id": "app/missing/action/run/docker/default/step/root",
+            "kind": "composite",
+            "label": "Run: Run",
+            "children": [
+              {
+                "id": "app/missing/action/run/docker/default/step/execute",
+                "kind": "command",
+                "label": "Run",
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "-f",
+                    "{{ROOT}}/apps/missing/docker-compose.yml",
+                    "up",
+                    "-d"
+                  ],
+                  "command": "docker-compose",
+                  "dir": "{{ROOT}}/apps/api"
+                }
+              },
+              {
+                "id": "app/missing/action/run/docker/default/step/readiness",
+                "kind": "readiness",
+                "label": "Wait for containers",
+                "handler": "docker",
+                "configuration": {
+                  "args": [
+                    "-f",
+                    "{{ROOT}}/apps/missing/docker-compose.yml"
+                  ],
+                  "command": "docker-compose",
+                  "probe": "compose",
+                  "stabilizationMs": 3000
+                }
+              },
+              {
+                "id": "app/missing/action/run/docker/default/step/diagnostics",
+                "kind": "operation",
+                "label": "Inspect failed containers",
+                "condition": "on-failure",
+                "failurePolicy": "always-run",
+                "handler": "docker"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -12,18 +12,17 @@ Deleting a user-facing entrypoint is never evidence of preservation.
 
 ## Frontend-first release milestone
 
-Change `unify-application-lifecycle-and-binary` is the frontend-first release
-milestone: the unified frontend now ships as **one artifact with one lifecycle
+Change `unify-application-lifecycle-and-binary` was the frontend-first release
+milestone: the unified frontend ships as **one artifact with one lifecycle
 owner**. Command routes (section 5) and the executable's packaging moved to
-`agentic-coding`; Go remains the owner of every HTTP route and action, and the
-backend is spawned and stopped as an owned child proved by instance identity
-(never by a listening port). Deferred to the backend-boundary change: porting
-the Go runtime and full-feature remote attachment. Details and the verification
-matrix: `docs/application-lifecycle.md`.
-
-Owners during change 1 are unchanged: Go still owns every HTTP route and action, the
-imported `@devenv/cli|core|types|ui` packages own the devenv TUI, and the
-agentic-coding workflow engine/CLI/TUI remains exactly as it was.
+`agentic-coding`. The backend ownership described in the paragraphs below is
+historical: the Go runtime was ported and then deleted by
+`retire-go-backend-and-migration-bridges`, and the one Bun process now serves
+every HTTP route and action. Sections 1-4 keep the imported route table as the
+provenance record; the "Owner during change 1" and "Migration status" columns
+read as of that change, and the current owner is stated in
+[`go-retirement.md`](go-retirement.md) and
+[`unified-backend-api.md`](unified-backend-api.md).
 
 ## 1. Agentic-coding surfaces
 
@@ -41,7 +40,7 @@ reachable and covered.
 | `agentic-coding dash` | Per-workflow dashboard TUI (`--repo --workflow-id`, `--profile test`, `--json`) | agentic-coding | unchanged | `test/workflow-dashboard.test.ts`, `test/dash/*` | present, unmigrated |
 | `agentic-coding home` | Workflow list + observability TUI (long-lived) | agentic-coding | unchanged | `test/otel/*`, `test/workflow-observability.test.ts` | present, unmigrated |
 | `agentic-coding manager` | Alias for `home` (Herdr manager launch) | agentic-coding | unchanged | `test/herdr-client.test.ts` | present, unmigrated |
-| `__dashboard-observe` | Internal JSON observation bridge for the dashboard | agentic-coding | unchanged | `test/workflow-dashboard.test.ts` | present, unmigrated |
+| `__dashboard-observe` | Internal JSON observation bridge for the dashboard — **removed**; the typed backend client replaced it | agentic-coding | removed | `test/backend-lifecycle.test.ts`, `test/server-api.test.ts` | removed |
 
 ### 1.2 Workflow CLI verbs
 
@@ -310,13 +309,13 @@ onto them (`src/devenv-alias.ts`, `bin/devenv`,
 
 | CLI | Mode | Behavior | Old owner | Intended owner | Evidence | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| agentic-coding | (no command) / `home` / `manager` | Unified shell with an owned, identity-verified Go backend | devenv `cli` + agentic-coding | `src/cli.ts` + `src/tui/index.tsx` | `test/lifecycle.test.ts`, `test/backend-lifecycle.test.ts` | migrated |
+| agentic-coding | (no command) / `home` / `manager` | Unified shell with the one Bun server it starts in-process | devenv `cli` + agentic-coding | `src/cli.ts` + `src/tui/index.tsx` | `test/lifecycle.test.ts`, `test/backend-lifecycle.test.ts` | migrated |
 | agentic-coding | `dash` | Per-workflow dashboard pane in the shared shell; owns no backend | agentic-coding | unchanged route, shared shell | `test/workflow-dashboard.test.ts`, `test/dash/*` | migrated |
-| agentic-coding | `attach URL` | Shell attached to a backend this process does not own; states environment-only scope and offers no remote workflow features | devenv `cli` | `src/cli.ts` + `src/backend/ownership.ts` | `test/backend-lifecycle.test.ts` | migrated |
-| agentic-coding | `server [--port N]` | Headless environment backend; one scoped Effect program, same finalizers | devenv `cli` | `src/server-command.ts` + `src/backend/lifecycle.ts` | packaged smoke run from a temporary directory | migrated |
+| agentic-coding | `attach URL [--token]` | Shell attached to a server this process does not own; the capability comes from `--token`/`AGENTIC_WORKFLOW_TOKEN` | devenv `cli` | `src/cli.ts` + `src/backend/ownership.ts` | `test/backend-lifecycle.test.ts` | migrated |
+| agentic-coding | `server [--port N]` | Headless unified server (workflow + environment + integrations + telemetry) in one process | devenv `cli` | `src/server-command.ts` | packaged smoke run from a temporary directory | migrated |
 | devenv | `spawn` (default) / `attach` / `server` | Alias of the modes above (`spawn` carries `--port` to `--devenv-port`) | devenv `cli` | thin alias only | `src/devenv-alias.ts`, `bin/devenv` | migrated |
 | agentic-coding | `workflow` | Transactional workflow engine (verbs in 1.2) | agentic-coding | unchanged | `test/workflow-cli.test.ts` | present |
-| agentic-coding | `__dashboard-observe` / `__grpc-sidecar` | Internal modes of the same executable (no separately distributed sidecar binary) | agentic-coding + devenv `cli` | internal only | `test/lifecycle.test.ts`, `dist/agentic-coding` | migrated |
+| agentic-coding | `__catalog` | Internal mode of the same executable: bounded read-only catalog projection | agentic-coding + devenv `cli` | internal only | `test/workflow-project-catalog.test.ts`, `dist/agentic-coding` | migrated |
 
 ## 6. Configuration and data locations
 
@@ -349,32 +348,31 @@ beyond the host is recorded as build targets, not tested support.
 
 | Check | Command | Result |
 | --- | --- | --- |
-| Combined verification | `bun run verify` | exit 0 (lint, type-check, both Bun suites, Go test/vet) |
+| Combined verification | `bun run verify` | exit 0 (lint, type-check, both Bun suites, build) |
 | Lint (both apps) | `bun run lint` | 696 files, zero diagnostics |
 | Type-check (both apps) | `bun run type-check` | clean |
 | Imported TUI suite | `bun test packages/devenv` | 0 fail |
 | agentic-coding suite | `bun run test` (inside `verify`) | 0 fail |
-| Go tests | `cd server && go test ./...` | all packages `ok` |
-| Go vet | `cd server && go vet ./...` | exit 0 |
-| agentic-coding build | `bun run build` | one host-target executable, embedded Go backend (no sidecar artifact) |
-| Packaged lifecycle smoke | run `dist/agentic-coding server --port N` from a temporary directory | identity-verified child ready outside any checkout; SIGTERM released the port and removed the private extraction directory |
+| Go tests / vet | — | command removed with the Go tree |
 | Lifecycle/ownership suites | `bun test test/backend-lifecycle.test.ts test/lifecycle.test.ts` | 0 fail |
 | Full agentic-coding suite | `bun run test` | 114/114 files, 821 tests, 0 fail (the stale multi-exhaustion telemetry fixture left by `implement-preset-switcher` was corrected) |
-| Host-target build | `bun run build` | `dist/agentic-coding` with the host Go backend embedded |
+| Host-target build | `bun run build` | `dist/agentic-coding`, self-contained (no embedded backend) |
 
 No real destructive environment action (container/kubernetes start-stop) was executed
 while establishing the baseline.
 
 ## 9. Known gaps and out-of-scope
 
-- Go remains the authoritative owner of all routes and actions; this change only
-  imports it.
+- ~~Go remains the authoritative owner of all routes and actions~~ — resolved:
+  the Go backend is deleted and every route/action is served by the one Bun
+  process ([`go-retirement.md`](go-retirement.md)).
 - `install.sh` still describes the pre-merge `dist/tui/<platform>/bin` release layout
   and is not wired to a script. `install-remote.sh` was removed during the import
   because it fetched an unsigned release from a third-party repository and stripped
   the macOS quarantine attribute (see the fix-round security dispositions).
-- Provider/network integrations (GitHub, GitLab, AI) are validated by their Go tests
-  rather than live provider calls.
+- Provider/network integrations (GitHub, GitLab, AI) are validated by the
+  retained Go-created fixtures and injected fetches rather than live provider
+  calls.
 - Redistribution remains gated on reconciling the retained MIT `LICENSE` text against
   the `PROPRIETARY` package metadata (see `devenv-import.md`).
 

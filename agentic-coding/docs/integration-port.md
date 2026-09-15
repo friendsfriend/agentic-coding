@@ -1,42 +1,40 @@
 # Git, provider and AI integration port
 
-`port-git-providers-and-ai-to-bun` moves the Git/provider/GitHub/GitLab/CI and
+`port-git-providers-and-ai-to-bun` moved the Git/provider/GitHub/GitLab/CI and
 AI/session backend surface from the Go child into the Bun server, one route
-family at a time, with Go-created fixtures as the parity evidence. The Bun
-server becomes the single front door for the legacy devenv `/api/*` surface;
-families that are not ported yet are delegated to the private Go child exactly
-like `/api/v1/environment/*` is today (see
-[`unified-backend-api.md`](unified-backend-api.md)).
+family at a time, with Go-created fixtures as the parity evidence. This process
+is now the single front door for the whole legacy devenv `/api/*` surface. (The
+`go` owner column and the delegation this document used to describe are gone;
+see [`go-retirement.md`](go-retirement.md).)
 
 ## Prerequisite
 
-`port-project-catalog-and-state-to-bun` is implemented and archived: Bun owns
-`$DEVENV_HOME/db/state.db` and the configured environment (definition files,
-catalog projection) by default, and the Go child reaches both through the
-bounded private operations in `src/server/environment/private-api.ts`. This
-port builds on that authority: a Git/provider route resolves its app through
-the Bun catalog instead of a Go `AppManager` lookup.
+`port-project-catalog-and-state-to-bun` is implemented and archived: this
+process owns `$DEVENV_HOME/db/state.db` and the configured environment
+(definition files, catalog projection), and the bounded private operations in
+`src/server/environment/private-api.ts` expose them to the same process. A
+Git/provider route resolves its app through that catalog rather than a
+re-implemented lookup.
 
-## Route ownership manifest
+## Route manifest
 
-`LEGACY_ROUTE_OWNERSHIP` in `src/server/integrations/protocol.ts` is the static
-manifest for the legacy surface. `bun` entries are served in-process; every
-other `/api/*` path is delegated to the private Go child. There is no router
-framework and no per-request owner guessing.
+`LEGACY_ROUTE_OWNERSHIP` in `src/server/integrations/routes.ts` is the static
+manifest for the legacy surface; every entry is served in-process, and a path in
+no entry is a 404. There is no router framework and no per-request owner
+guessing.
 
-| Family | Routes | Owner | Task |
-| --- | --- | --- | --- |
-| git | `GET /api/git/branches`, `GET/POST/PATCH/DELETE /api/git/worktrees` | bun | 2.2–2.4 |
-| providers | `GET/POST /api/providers`, `GET/PUT/DELETE /api/providers/{name}` | bun | 2.1 |
-| repos | `POST /api/repos/search`, `GET /api/repos/branches` | bun | 2.1 |
-| github | 24 routes under `/api/github/*` | bun | 3.1–3.4 |
-| gitlab | 30 routes under `/api/gitlab/*` | bun | 3.5–3.8 |
-| ai | `POST /api/ai/analyze-logs`, `POST /api/ai/analyze-logs-stream`, `POST /api/ai/cr-review-stream`, `POST /api/ai/cr-comment-callback/{token}` | bun | 4.1–4.4 |
-| system | `GET /api/pi-sessions` | bun | 4.1 |
-| app | `/api/apps*`, `/api/projects`, `/api/status`, `/api/infra-services*`, `/api/example-config` | go | `port-environment-runtimes-to-bun` |
-| actions | `/api/action-runs`, `/api/actions/*`, `/api/apps/{ident}/actions`, `/api/action-definition`, `/api/action-registry/status` | go | `port-action-execution-to-bun` |
-| docker / kubernetes | `/api/docker/*`, `/api/kubernetes/*` | go | `port-environment-runtimes-to-bun` |
-| scripts | `/api/scripts*` | go | `port-action-execution-to-bun` |
+| Family | Routes | Served by |
+| --- | --- | --- |
+| git | `GET /api/git/branches`, `GET/POST/PATCH/DELETE /api/git/worktrees` | this process |
+| providers | `GET/POST /api/providers`, `GET/PUT/DELETE /api/providers/{name}` | this process |
+| repos | `POST /api/repos/search`, `GET /api/repos/branches` | this process |
+| github | 24 routes under `/api/github/*` | this process |
+| gitlab | 30 routes under `/api/gitlab/*` | this process |
+| ai | `POST /api/ai/analyze-logs`, `POST /api/ai/analyze-logs-stream`, `POST /api/ai/cr-review-stream`, `POST /api/ai/cr-comment-callback/{token}` | this process |
+| system | `GET /api/pi-sessions`, `GET /api/events`, `GET /api/health` | this process |
+| app | `/api/apps*`, `/api/projects`, `/api/status`, `/api/infra-services*`, `/api/example-config` | this process |
+| actions / scripts | `/api/action-runs`, `/api/actions/*`, `/api/scripts*`, `/api/apps/{ident}/actions`, `/api/action-definition`, `/api/action-registry/status` | this process |
+| docker / kubernetes | `/api/docker/*`, `/api/kubernetes/*` | this process |
 
 `/api/apps/{ident}/git` (branch + status) and `/api/apps/{ident}` reads use the
 Git capability but belong to the app family; they switch with that family and
@@ -166,62 +164,55 @@ deliberate parity decision rather than an oversight — a reviewer who wants a
 stricter rule should tighten it in `credentialsFor`
 (`src/server/integrations/services.ts`) and in the Go provider at the same time.
 
-## Private Git operation adapter
+## Private Git operation adapter (retired)
 
-`POST /api/v1/integrations/private/git-command` is the bounded envelope the Go
-action owner uses while it still owns action execution. It carries exactly one
-Git argv invocation plus the run/step/command identity the Go run tree records,
-never SQL, a shell string or a provider credential. Bun executes the argv
-through the same safe boundary the Bun Git service uses, forwards cancellation
-and returns the real stdout/stderr/exit code. It performs no outbound HTTP
-request, so it cannot recurse back into the delegated Go child. The adapter is
-removed by `port-action-execution-to-bun` task 4.3.
+`POST /api/v1/integrations/private/git-command` was the bounded envelope the Go
+action owner used while it still owned action execution. With the Go runtime
+retired the endpoint is gone; the Git capability has exactly one implementation
+and one caller path (`GitRepository`), and the credential-redaction property it
+pinned is asserted directly in `test/integration-private-api.test.ts`. See
+[`go-retirement.md`](go-retirement.md).
 
 ## Evidence
 
-- `server/pkg/integrations/fixtures_test.go` generates the Go-created fixtures
-  under `agentic-coding/test/fixtures/integrations/` (regenerate with
-  `DEVENV_INTEGRATION_FIXTURE_DIR=<repo>/agentic-coding/test/fixtures/integrations go test ./pkg/integrations -run TestWriteIntegrationFixtures`).
-- `test/integration-git-providers.test.ts` asserts Bun reproduces them.
+- The Go-created fixtures under `agentic-coding/test/fixtures/integrations/` are
+  retained as portable golden data (see
+  [`go-retirement.md`](go-retirement.md) §Fixture preservation); they are no
+  longer regenerated, because the generator lived in the deleted Go tree.
+- `test/integration-git-providers.test.ts` asserts this process reproduces them.
 - Parity is fixture- or isolated-test-system based. No mutation is ever
   replayed against both runtimes to compare answers.
 
 ## Verification and cutover
 
-- **Combined verification:** `biome check`, `tsc --noEmit`, `bun test`,
-  `test:devenv`, `go test ./...` and `go vet ./...`. The only failing Bun test is
-  the pre-existing `test/otel/shellHelp.test.tsx` "`?` opens the catalog help
-  modal on the wiki tab" timeout, which reproduces on a pristine tree.
+- **Combined verification:** `biome check`, `tsc --noEmit`, `bun test` and
+  `test:devenv`. The only failing Bun test is the pre-existing
+  `test/otel/shellHelp.test.tsx` "`?` opens the catalog help modal on the wiki
+  tab" timeout, which reproduces on a pristine tree. (`go test`/`go vet` are gone
+  with the tree.)
 - **Cutover:** `test/integration-cutover.test.ts` runs the **unchanged** devenv
-  client (`@devenv/core`) against the unified Bun server with a stub Go child and
-  proves that provider/repository-search, issue, change-request, CI and Pi-session
-  journeys are answered by Bun, that an unported family (`/api/apps`) is delegated
-  to the child, that no request is ever seen by both runtimes, and that clearing
-  `AGENTIC_DEVENV_FORWARD_URL` rolls the client back to the child.
+  client (`@devenv/core`) against the unified server and proves that
+  provider/repository-search, issue, change-request, CI, Pi-session and health
+  journeys are answered in this process, and that a family with no attached
+  capability fails here instead of being answered elsewhere.
 - **Packaged smoke:** the built `dist/agentic-coding server` starts outside the
-  source tree with a temporary `DEVENV_HOME`/`DEVENV_CONFIG_DIR`, the Go child
-  answers `/api/health` with the identity of the instance that was started, and
-  the Bun server answers `401` without the instance capability on both a
-  Bun-owned (`/api/providers`) and a delegated (`/api/apps`) legacy route — so the
-  authorization boundary holds on the real artifact.
+  source tree with a temporary `DEVENV_HOME`/`DEVENV_CONFIG_DIR` and no Go
+  toolchain, answers `/api/health` with its own identity, serves `/api/projects`
+  with the catalog envelope, and answers `401` without the instance capability —
+  so the authorization boundary holds on the real artifact. Recorded in
+  [`go-retirement.md`](go-retirement.md) §Packaged acceptance.
 - **Unavailable live-provider coverage:** every provider fixture replays recorded
   responses through an injected `fetch`; no live GitHub/GitLab account, no real
   `pi` session and no interactive terminal journey is exercised here. Those are
   the test-verifier's scope, and they need credentials this port must not require.
-- **Remaining Go owners:** the `app`, `actions`, `docker`, `kubernetes`, `scripts`
-  families and `/api/events` + `/api/health` are still Go-served (see the manifest
-  table above) and belong to `port-action-execution-to-bun` and
-  `port-environment-runtimes-to-bun`. The private Git operation adapter is still
-  Go-called and is removed by `port-action-execution-to-bun` task 4.3.
+- **Remaining owners:** none. Every legacy family and every versioned route is
+  served by this process.
 
 ## Rollback
 
-Route ownership is a manifest entry per family, and the client cutover is one
-environment variable. Rolling back means clearing `AGENTIC_DEVENV_FORWARD_URL`
-(the environment client's transport returns to its own base URL, i.e. the Go
-child) and, if a family's ownership itself must move back, restoring the `go`
-owner for that family in `LEGACY_ROUTE_OWNERSHIP` after in-flight requests have
-settled. The Go child still serves every family, so the rollback needs no
-restart of a route implementation, and the private Git adapter is additive. No
-provider credential, worktree pin, workflow pin or durable state is rewritten by
-the cutover.
+There is no per-family owner to flip and no forwarding hook to clear: one
+process serves every family. Rolling back is a deliberate artifact swap — stop
+the server at a quiescent boundary, run the previous release — and it needs the
+verified pre-upgrade database only if that release's environment schema is
+older. No provider credential, worktree pin, workflow pin or durable state is
+rewritten by this cleanup.

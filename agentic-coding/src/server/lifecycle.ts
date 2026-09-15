@@ -1,7 +1,8 @@
-// Named composition root for the unified Bun workflow/telemetry server
-// (expose-unified-bun-backend, task 2.1). The same executable runs the TUI or
-// this server: the server owns the workflow application/observations, the
-// event broker, credential interactions and the private Go delegation. Native
+// Named composition root for the unified Bun workflow/telemetry/environment
+// server (single-Bun-application): the same executable runs the TUI or this
+// server, and one process owns the workflow application, observations, the
+// event broker, credential interactions, the environment state/catalog
+// authority, the legacy devenv surface and the telemetry receivers. Native
 // Bun/Promise I/O lives here; operation handlers stay transport-agnostic.
 
 import type { SignalRouter } from "../tui/otel/receiver/index.ts";
@@ -25,15 +26,22 @@ import { type TelemetryOperations, TelemetryService } from "./telemetry.ts";
 
 export const DEFAULT_WORKFLOW_SERVER_PORT = 4051;
 
+/** Default port of the unified server's public surface (the devenv environment
+ * address clients have always used). */
+export const DEFAULT_ENVIRONMENT_PORT = 4050;
+
 export interface StartWorkflowServerOptions {
 	readonly port?: number;
 	readonly hostname?: string;
 	readonly instance?: string;
-	/** Private Go listener to delegate unported environment routes to. A
-	 * resolver lets the server start before the child it will delegate to. */
-	readonly environmentBaseUrl?: string | (() => string | undefined);
-	readonly environmentToken?: string | (() => string | undefined);
+	/** Instance capability. Generated when omitted; the shell passes the token it
+	 * already exported to the environment client, so no window exists where a
+	 * client request cannot authenticate. */
+	readonly token?: string;
 	readonly version?: string;
+	/** Environment roots reported by the health route. */
+	readonly homeDir?: string;
+	readonly configDir?: string;
 	/** Override the application operations (transport tests). */
 	readonly operations?: ServerOperations;
 	/** Injected telemetry operations (transport tests). */
@@ -55,7 +63,7 @@ export interface StartWorkflowServerOptions {
 	/** Injected workflow refresh hub (transport tests). */
 	readonly hub?: WorkflowEventHub;
 	/** Bun-served legacy integration families (Git, providers, repository
-	 * search). When absent every legacy `/api/*` path is delegated to Go. */
+	 * search): the whole legacy `/api/*` surface. */
 	readonly integrations?: IntegrationServices;
 }
 
@@ -74,7 +82,7 @@ export interface OwnedWorkflowServer {
 export async function startWorkflowServer(
 	options: StartWorkflowServerOptions = {},
 ): Promise<OwnedWorkflowServer> {
-	const authority = createInstanceAuthority(options.instance);
+	const authority = createInstanceAuthority(options.instance, options.token);
 	const events = new EventBroker(authority.instance);
 	const credentials = new CredentialRegistry();
 	const ownedTelemetry = options.telemetry
@@ -91,13 +99,13 @@ export async function startWorkflowServer(
 		events,
 		credentials,
 		hub,
+		...((options.homeDir ?? options.configDir)
+			? {
+					...(options.homeDir ? { homeDir: options.homeDir } : {}),
+					...(options.configDir ? { configDir: options.configDir } : {}),
+				}
+			: {}),
 		...(telemetry ? { telemetry } : {}),
-		...(options.environmentBaseUrl
-			? { environmentBaseUrl: options.environmentBaseUrl }
-			: {}),
-		...(options.environmentToken
-			? { environmentToken: options.environmentToken }
-			: {}),
 		...(options.environment ? { environment: options.environment } : {}),
 		...(options.version ? { version: options.version } : {}),
 		...(options.operations ? { operations: options.operations } : {}),

@@ -27,19 +27,11 @@ export function environmentStateDir(homeDir: string): string {
 }
 
 /**
- * Who owns the environment state. Bun owns it by default; `DEVENV_ENVIRONMENT_OWNER=go`
- * keeps the previous single-owner generation for one release, for a deliberate
- * rollback. The two generations never run as writers at the same time: in
- * migrated mode the Go child opens no database handle and reaches state/catalog
- * through the private operations only.
+ * Open the environment authority and publish its first snapshot. This is the
+ * single environment state/config owner: the mixed-runtime rollback switch
+ * (`DEVENV_ENVIRONMENT_OWNER=go`) is gone with the Go backend, and a rollback
+ * is a deliberate restore of a verified pre-upgrade database.
  */
-export function bunOwnsEnvironment(
-	env: NodeJS.ProcessEnv = process.env,
-): boolean {
-	return (env.DEVENV_ENVIRONMENT_OWNER ?? "bun").trim().toLowerCase() !== "go";
-}
-
-/** Open the Bun-owned authority and publish its first snapshot. */
 export function createEnvironmentAuthority(
 	options: EnvironmentAuthorityOptions,
 ): EnvironmentAuthority {

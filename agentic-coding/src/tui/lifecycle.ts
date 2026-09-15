@@ -2,7 +2,7 @@
 // (index.tsx) drives the store and components (Home, otel App, LifecycleModal)
 // only read it. One store covers both the startup and shutdown progress flows,
 // and it also owns the process-lifetime resource handles: every component of
-// the mixed-runtime stack (Go backend, workflow application, telemetry
+// the stack (the unified server, workflow application, telemetry
 // receivers/collectors, renderer) is acquired through `acquireResource` and
 // released in reverse order by `releaseResources`. Nothing infers ownership
 // from a listening port, so a partially started stack can only ever stop what
@@ -12,11 +12,10 @@ import { createSignal } from "solid-js";
 export type LifecyclePhase = "idle" | "starting" | "running" | "stopping";
 export type StepStatus = "pending" | "active" | "done" | "error";
 
-/** Mixed-runtime milestone: one owner, five kinds of owned handle. */
+/** One owner, four kinds of owned handle. */
 export type OwnedResourceKind =
 	| "workflow-server"
 	| "workflow-application"
-	| "go-backend"
 	| "telemetry"
 	| "renderer";
 

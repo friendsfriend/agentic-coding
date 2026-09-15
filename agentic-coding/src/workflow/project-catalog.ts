@@ -7,7 +7,6 @@
 //   • a valid catalog (possibly empty — a valid configuration state),
 //   • a non-retryable configuration error (for example duplicate idents),
 //   • a retryable transport/server failure.
-import fs from "node:fs";
 import path from "node:path";
 import {
 	createCustomFetch,
@@ -15,16 +14,14 @@ import {
 	getProjectCatalog as requestProjectCatalog,
 } from "@devenv/core";
 import type { CatalogProject, ProjectCatalog } from "@devenv/types";
-import { withBackendExecutable } from "../backend/lifecycle.ts";
 
 export type { CatalogProject, ProjectCatalog };
 export { ProjectCatalogError };
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:4050";
 
-/** Upper bound for a bounded catalog invocation. The headless fallback may
- * compile (`go run`) or start a packaged binary; both must stay bounded so
- * shell startup and the CLI cannot hang on an unreachable backend. */
+/** Upper bound for a bounded catalog invocation: a second start of this same
+ * executable must stay bounded, so shell startup and the CLI cannot hang. */
 export const BOUNDED_CATALOG_TIMEOUT_MS = 20_000;
 
 /**
@@ -38,14 +35,19 @@ export const BACKEND_STARTING_ENV = "AGENTIC_DEVENV_STARTING";
 const READY_RETRY_MS = 250;
 const READY_RETRIES = 16;
 
-/** Resolve the devenv backend URL used for catalog reads. */
+/**
+ * Resolve the server URL used for catalog reads.
+ *
+ * An empty result means "this process has no environment server to ask" — the
+ * shell exports that for a route that owns no environment surface (dash, test,
+ * headless reads), so a catalog read goes straight to the bounded read-only
+ * invocation instead of guessing the default port, where another install could
+ * be listening.
+ */
 export function resolveCatalogBaseUrl(explicit?: string): string {
-	return (
-		explicit ??
-		process.env.AGENTIC_DEVENV_URL ??
-		process.env.DEVENV_URL ??
-		DEFAULT_BASE_URL
-	);
+	const resolved = explicit ?? process.env.AGENTIC_DEVENV_URL;
+	if (resolved !== undefined) return resolved;
+	return process.env.DEVENV_URL ?? DEFAULT_BASE_URL;
 }
 
 export interface ProjectCatalogOptions {
@@ -72,26 +74,35 @@ export async function fetchProjectCatalog(
 	);
 }
 
-function repoRoot(): string {
-	return path.resolve(import.meta.dir, "../../..");
-}
-
 interface BoundedInvocation {
 	command: string[];
 	cwd?: string;
 }
 
 /**
- * Source-tree location of the backend, if this process runs from a checkout.
- * A checkout prefers its own sources so a stale packaged binary cannot serve an
- * outdated catalog projection.
+ * Bounded read-only catalog invocation of *this* executable
+ * (`agentic-coding __catalog`), which builds the same environment authority a
+ * running server uses and prints the projection as JSON.
+ *
+ * A compiled binary re-execs itself with the internal mode as its argument; a
+ * source run re-execs this package's CLI entry (never `Bun.main`, which is
+ * whatever file the host process happened to start).
  */
-function sourceServerDir(): string | undefined {
-	const serverDir = path.join(repoRoot(), "server");
-	return fs.existsSync(path.join(serverDir, "main.go")) ? serverDir : undefined;
+function boundedCatalogArgv(): string[] {
+	const compiled =
+		Bun.main.startsWith("$bunfs") ||
+		process.execPath.endsWith("agentic-coding");
+	if (compiled) return [process.execPath, "__catalog"];
+	return [
+		process.execPath,
+		path.resolve(import.meta.dir, "..", "cli.ts"),
+		"__catalog",
+	];
 }
 
-async function spawnBoundedCatalog(
+/** Run one bounded catalog command and parse its JSON. Exported so the bounded
+ * invocation's failure/timeout classification is testable without a server. */
+export async function spawnBoundedCatalog(
 	invocation: BoundedInvocation,
 	timeoutMs: number,
 ): Promise<ProjectCatalog> {
@@ -102,6 +113,10 @@ async function spawnBoundedCatalog(
 	try {
 		const result = Bun.spawnSync(invocation.command, {
 			cwd: invocation.cwd,
+			// Pass the environment explicitly: the child must see the roots this
+			// process resolved (and any test/operator override), not a copy taken
+			// before this process started.
+			env: { ...process.env },
 			stdout: "pipe",
 			stderr: "pipe",
 			timeout: timeoutMs,
@@ -144,43 +159,25 @@ async function spawnBoundedCatalog(
 async function runBoundedCatalog(
 	timeoutMs = BOUNDED_CATALOG_TIMEOUT_MS,
 ): Promise<ProjectCatalog> {
-	// Explicit override wins, then a checkout's own sources, then the backend
-	// executable this installation ships (embedded, or dist/server/devenv). The
-	// last step is what makes a bounded catalog read work in a packaged
-	// executable that has no source tree at all.
-	const override = process.env.DEVENV_SERVER_BINARY;
-	if (override)
-		return spawnBoundedCatalog({ command: [override, "catalog"] }, timeoutMs);
-	const serverDir = sourceServerDir();
-	if (serverDir)
-		return spawnBoundedCatalog(
-			{ command: ["go", "run", "main.go", "catalog"], cwd: serverDir },
-			timeoutMs,
-		);
-	try {
-		return await withBackendExecutable((executable) =>
-			spawnBoundedCatalog({ command: [executable, "catalog"] }, timeoutMs),
-		);
-	} catch (error) {
-		if (error instanceof ProjectCatalogError) throw error;
-		throw new ProjectCatalogError(
-			`no environment backend executable available for a bounded catalog invocation: ${
-				error instanceof Error ? error.message : String(error)
-			}`,
-			{ retryable: false },
-		);
-	}
+	// Outside a running server the catalog is read by a bounded invocation of
+	// this same executable: one implementation of the projection, no second
+	// runtime and no compiler in the loop.
+	return spawnBoundedCatalog({ command: boundedCatalogArgv() }, timeoutMs);
 }
 
+/** Available canonical repository roots, de-duplicated and stable-sorted. */
 /**
- * Load the catalog for headless consumers: use the running managed server when
- * reachable, otherwise start a bounded read-only catalog invocation. This is
- * the canonical backend in both cases — configuration is never re-parsed into
- * a second discovery implementation.
+ * Load the catalog for headless consumers: use the running server when
+ * reachable, otherwise start a bounded read-only catalog invocation of this
+ * same executable. This is the canonical backend in both cases — configuration
+ * is never re-parsed into a second discovery implementation.
  */
 export async function loadProjectCatalog(
 	options: ProjectCatalogOptions = {},
 ): Promise<ProjectCatalog> {
+	// No address to ask: this process owns no environment surface.
+	if (resolveCatalogBaseUrl(options.baseUrl) === "")
+		return runBoundedCatalog(options.timeoutMs);
 	const waitingForOwnedBackend =
 		process.env[BACKEND_STARTING_ENV] === "1" && !options.signal?.aborted;
 	const attempts = waitingForOwnedBackend ? READY_RETRIES : 0;

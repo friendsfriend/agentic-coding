@@ -1,8 +1,8 @@
 # Application lifecycle and distribution
 
-Status: `unify-application-lifecycle-and-binary` (frontend-first release
-milestone). One executable, one lifecycle owner, identity-proved backend
-ownership.
+Status: `retire-go-backend-and-migration-bridges`. One executable, one lifecycle
+owner, one Bun backend process. The identity-proved Go child that this document
+used to describe is gone; see [`go-retirement.md`](go-retirement.md).
 
 ## One executable, compatible commands
 
@@ -22,31 +22,33 @@ command surface and one lifecycle implementation.
 | `agentic-coding workflow ...` | Transactional workflow engine | no |
 | `devenv [spawn] / devenv attach / devenv server` | Alias of the modes above | same as mapped mode |
 
-Internal modes (`__dashboard-observe`, `__grpc-sidecar`) are implementation
-details of this executable and are not part of the product surface. Removed
-phase-specific workflow verbs are not reintroduced.
+Internal modes (`__catalog`; the retired `__dashboard-observe` and
+`__grpc-sidecar`) are implementation details of this executable and are not part
+of the product surface. Removed phase-specific workflow verbs are not
+reintroduced.
 
 `agentic-coding` runs `--devenv-url URL` (or `AGENTIC_DEVENV_URL`/`DEVENV_URL`)
 as an explicit attach: an explicit URL always means "someone else owns this
-backend", so the process never stops it.
+server", so the process never stops it. The unified server authenticates every
+surface, so an attached shell needs a capability: `--token` /
+`AGENTIC_WORKFLOW_TOKEN` (full feature) or `AGENTIC_DEVENV_TOKEN` (environment
+surface).
 
-## Ownership is identity, not a port
+## Ownership is the process that started the listener
 
-`src/backend/managed-backend.ts` spawns the Go backend with a random instance
-id and only accepts readiness when `/api/health` reports **all** of:
+The managed route starts the one server in this process and owns it: there is no
+child to identify, no extraction directory and no second runtime to reconcile.
+An explicit `--devenv-url`/`attach` URL means another process owns the listener,
+so this one never stops it. `GET /api/health` still reports the instance id and
+the effective `homeDir` (`DEVENV_HOME` resolution) and `configDir`
+(`DEVENV_CONFIG_DIR` resolution), which is how an operator confirms which
+install a listener belongs to.
 
-- `status: "ok"`,
-- the instance id this process generated,
-- the effective `homeDir` (`DEVENV_HOME` resolution) and `configDir`
-  (`DEVENV_CONFIG_DIR` resolution) this process resolved.
+Consequences:
 
-Consequences (spec `tui-server-lifecycle`: "Backend identity proves
-ownership"):
-
-- A port served by an unrelated or different-instance backend fails startup
-  with `port-conflict` and a pointer to attach explicitly. Nothing signals that
-  listener's PID.
-- `lsof`/listener-PID ownership and termination were removed entirely; a
+- A port already in use fails startup (`Bun.serve` refuses the bind) and the
+  startup modal reports it; nothing signals another process.
+- `lsof`/listener-PID ownership and termination stay removed entirely; a
   listening port never authorizes killing a process.
 - Health answering with the wrong identity fails readiness as
   `identity-mismatch` and cleans up only the child this process spawned.
@@ -97,13 +99,11 @@ not own, and attach never stops the attached server.
 
 Headless consumers (the workflow CLI, dashboard observation children) read the
 configured-project catalog over HTTP and, when no server answers, fall back to a
-bounded one-shot `catalog` invocation of the same backend executable:
-`DEVENV_SERVER_BINARY` override, then the checkout's own sources, then the
-backend this installation ships (embedded binary, `dist/server/devenv`, or a
-source-tree build of it). The packaged route resolves the executable through the
-same launcher the managed start uses, so a compiled artifact can always answer a
-bounded read; an embedded extraction is private to that one call and removed
-afterwards.
+bounded one-shot `__catalog` invocation of this same executable
+(`[this executable] __catalog`). It opens the environment authority in its
+read-only mode and prints the catalog envelope, so the projection has exactly
+one implementation and a packaged artifact can always answer a bounded read
+without a compiler or a second runtime.
 
 While this process is starting the backend **it** owns, it exports
 `AGENTIC_DEVENV_STARTING=1` so a read that lands in that window waits for
@@ -118,29 +118,29 @@ flag is cleared the moment readiness is established, or when startup fails.
 - generated instructions (`scripts/generate-embedded.ts`) and the imported
   guides, both bundled (no source-relative path at runtime),
 - the OpenTUI parser worker/native assets (`OTUI_TREE_SITTER_WORKER_PATH`),
-- the OTLP protocol definition shared by the internal gRPC helper mode and the
-  parent's readiness probe,
-- the host Go backend, embedded as base64, extracted at runtime into a private
-  per-instance directory (`drwx------`, binary `0700`, removed after the child
-  stops or a failed extraction).
+- the OTLP protocol definition used by the in-process gRPC TraceService.
 
-One version source: the root `package.json`, also injected into the Go backend
-with `-ldflags -X`, so executable, TUI and backend agree. Only the host target is built and smoke-tested in this milestone;
-cross-platform artifacts are not produced, and the previous second (devenv)
-builder script was removed so packaging cannot drift between two implementations.
+One version source: the root `package.json` (`src/version.ts`), reported by the
+executable, the TUI and the headless server. Only the host target is built and
+smoke-tested; cross-platform artifacts are not produced, and the previous second
+(devenv) builder script was removed so packaging cannot drift between two
+implementations.
 
-The optional gRPC telemetry helper is the `__grpc-sidecar` internal mode of
-this executable — there is no separately distributed sidecar binary. It binds
-`127.0.0.1` and readiness is proved by a real TraceService export, not by a port
-accepting a connection; shutdown stops the helper and releases the port.
+The optional OTLP gRPC receiver is an in-process listener of the server
+(`src/tui/otel/receiver/otlp-grpc.ts`) — no helper process, no separately
+distributed binary. It binds `127.0.0.1`, decodes a real ExportTraceService
+request into the same span sink the OTLP HTTP receiver uses, reports an
+undecodable export as `INVALID_ARGUMENT` instead of acknowledging it, and
+releases the port on shutdown.
 
 ## Verification
 
 | Check | Evidence |
 | --- | --- |
-| Identity/ownership, rollback, bounded stop, unresponsive child | `bun test test/backend-lifecycle.test.ts` |
+| Ownership policy, alias surface, port collision, health identity | `bun test test/backend-lifecycle.test.ts` |
 | Owned-handle release order, quit guard, signal path, no-owner routes | `bun test test/lifecycle.test.ts` |
-| Backend health identity | `cd server && go test ./pkg/server/` |
+| No Go runtime/bridge/helper process can return | `bun test test/go-retirement.test.ts` |
+| In-process gRPC protocol, loopback bind, shutdown | `bun test test/telemetry-grpc.test.ts` |
 | Layering / no nested Effect runtime outside the named roots | `bun test test/workflow-source-layer-boundaries.test.ts` |
-| Packaged artifact outside the source tree (no Go compiler, no checkout paths) | `bun run build` then run `dist/agentic-coding server --port N` from a temporary directory |
+| Packaged artifact outside the source tree (no Go toolchain, no checkout paths) | `bun run build`, then run `dist/agentic-coding server --port N` from a temporary directory with a `PATH` that has no `go` |
 | Combined verification | `bun run verify` |
