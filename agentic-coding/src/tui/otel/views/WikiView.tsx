@@ -300,6 +300,10 @@ export function WikiView(props: WikiViewProps) {
 			props.onHelp?.();
 			return true;
 		}
+		// Nothing of the wiki's own is open: the list page yields Escape to the
+		// shell's structural up-step instead of consuming it (an open note closes
+		// below, and a comment is cancelled above).
+		if (key === "escape" && !currentNote) return false;
 		if (key === "f") {
 			void finish();
 			return true;

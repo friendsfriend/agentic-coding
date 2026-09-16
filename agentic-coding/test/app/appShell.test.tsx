@@ -13,6 +13,7 @@ import { MetricStore } from "../../src/tui/otel/model/metricStore";
 import { TopologyStore } from "../../src/tui/otel/model/topologyStore";
 import { TraceStore } from "../../src/tui/otel/model/traceStore";
 import {
+	advance,
 	crumb,
 	jumpTo,
 	pressEscapeAndSettle,
@@ -282,6 +283,43 @@ test("a hidden feature body does not consume the visible page's keys", async () 
 	const frame = t.captureCharFrame();
 	expect(frame).not.toContain("ENV-BODY");
 	expect(frame).toContain("Libraries");
+	t.renderer.destroy();
+	db.close();
+});
+
+test("Escape steps up from every wiki level", async () => {
+	const { t, db } = await renderHomeShell();
+	const crumbOfFrame = (frame: string): string =>
+		frame
+			.split("\n")
+			.find((line) => line.includes("›"))
+			?.trim() ?? "";
+	const expectCrumb = async (want: string) => {
+		expect(await renderUntil(t, (frame) => crumbOfFrame(frame) === want)).toBe(
+			true,
+		);
+	};
+	// Jump straight to the destination: Home lists Environments first here, so
+	// the cursor position is not what this test is about.
+	await jumpTo(t, "wiki");
+	await expectCrumb("Home › Wiki");
+
+	// The list page has nothing of its own to close, so it yields Escape to the
+	// shell's structural up-step instead of swallowing it.
+	await pressEscape(t, (frame) => !frame.includes("›"));
+	expect(crumb(t)).toBe("");
+
+	// A note closes first, then the list steps up again.
+	await jumpTo(t, "wiki");
+	await expectCrumb("Home › Wiki");
+	// The list row is the file; the note page names the concept.
+	await advance(t, 8);
+	expect(t.captureCharFrame()).toContain("demo.md");
+	t.mockInput.pressEnter();
+	await expectCrumb("Home › Wiki › demo");
+	await pressEscape(t, (frame) => crumbOfFrame(frame) === "Home › Wiki");
+	await pressEscape(t, (frame) => !frame.includes("›"));
+	expect(crumb(t)).toBe("");
 	t.renderer.destroy();
 	db.close();
 });

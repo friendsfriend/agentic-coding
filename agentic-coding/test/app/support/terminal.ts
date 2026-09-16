@@ -26,6 +26,18 @@ export async function renderUntil(
 }
 
 /**
+ * Let real async work (a body's data load, an effect chain) finish before
+ * asserting: `renderOnce()` alone can spin ahead of a promise the body awaits,
+ * so each tick waits a little wall-clock time and then paints.
+ */
+export async function advance(t: Test, ticks = 6, waitMs = 60): Promise<void> {
+	for (let index = 0; index < ticks; index += 1) {
+		await new Promise((resolve) => setTimeout(resolve, waitMs));
+		await t.renderOnce();
+	}
+}
+
+/**
  * Press Escape and let the input parser flush it (a lone ESC byte is only
  * delivered after a short delay), then settle the resulting frame.
  */

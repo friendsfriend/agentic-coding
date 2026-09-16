@@ -18,9 +18,11 @@ Small ones:
 * Think of a better UI concept for the two tab bars. Maybe breadcrumbs and a menu structure or so. 
 
 
-General: 
+UI Rework / Devenv union: 
 * Review tests and add guardrails on what tests to write (in progress)
 * Test everything
 * Embed breadcrumbs in header (spec created)
 * Change behavior of page navigation to jump up one page using esc (spec created)
+* Spacing between footer and header unified to 1 space
+    * Adding an app doenst work in the applications view
 

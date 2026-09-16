@@ -1,13 +1,16 @@
 /** @jsxImportSource @opentui/solid */
 // Embedded environment body inside the real shell: the page journey the
-// environment feature drives (Home → Environments → Applications → resource).
+// environment feature drives (Home → Environments → Applications → resource)
+// and the first-start dialog an unconfigured installation shows there.
 //
 // The devenv body takes its category and view from the shell route and reports
-// its own moves back, so two failures used to hide here: Escape closing the
+// its own moves back, so failures used to hide here: Escape closing the
 // resource view was immediately reopened by the route request the route still
-// named, and the category page's Enter was claimed by the environment's table
-// layer (whose runtime state still matched the last page the body was shown on)
-// instead of opening the Applications destination.
+// named, the category page's Enter was claimed by the environment's table layer
+// (whose runtime state still matched the last page the body was shown on)
+// instead of opening the Applications destination, and the shell's mirrored
+// dialog entry overwrote the body's own `modal.active` name, leaving the
+// first-start dialog with no active key layer at all.
 import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,9 +27,7 @@ import { LogStore } from "../../src/tui/otel/model/logStore";
 import { MetricStore } from "../../src/tui/otel/model/metricStore";
 import { TopologyStore } from "../../src/tui/otel/model/topologyStore";
 import { TraceStore } from "../../src/tui/otel/model/traceStore";
-import { renderUntil } from "./support/terminal";
-
-type Test = Awaited<ReturnType<typeof renderShell>>["t"];
+import { advance, renderUntil } from "./support/terminal";
 
 const json = (value: unknown) =>
 	new Response(JSON.stringify(value), {
@@ -51,16 +52,18 @@ const APPS = [
 	},
 ];
 
-const RESPONSES: Readonly<Record<string, unknown>> = {
+const responses = (
+	apps: readonly (typeof APPS)[number][],
+): Readonly<Record<string, unknown>> => ({
 	"/api/health": { status: "ok" },
 	"/api/action-registry/status": {
 		available: true,
 		actionsCount: 0,
 		version: "1",
 	},
-	"/api/apps": { apps: APPS },
+	"/api/apps": { apps },
 	"/api/status": {
-		statuses: APPS.map((app) => ({
+		statuses: apps.map((app) => ({
 			ident: app.ident,
 			resourceKind: "app",
 			branch: "main",
@@ -71,9 +74,9 @@ const RESPONSES: Readonly<Record<string, unknown>> = {
 	"/api/projects": [],
 	"/api/infra-services": { services: [] },
 	"/api/scripts": { items: [] },
-	"/api/providers": { providers: [] },
+	"/api/providers": [],
 	"/api/actions/history": [],
-};
+});
 
 let restoreFetch: (() => void) | undefined;
 
@@ -82,8 +85,11 @@ afterEach(() => {
 	restoreFetch = undefined;
 });
 
-/** Serve the environment body's startup reads, so the journey runs offline. */
-function stubEnvironmentServer(): void {
+/** Serve the environment body's startup reads, so the journeys run offline. */
+function stubEnvironmentServer(
+	apps: readonly (typeof APPS)[number][] = APPS,
+): void {
+	const table = responses(apps);
 	const original = globalThis.fetch;
 	globalThis.fetch = (async (input: RequestInfo | URL) => {
 		const url = new URL(String(input));
@@ -96,7 +102,7 @@ function stubEnvironmentServer(): void {
 				}),
 				{ headers: { "content-type": "text/event-stream" } },
 			);
-		if (url.pathname in RESPONSES) return json(RESPONSES[url.pathname]);
+		if (url.pathname in table) return json(table[url.pathname]);
 		if (url.pathname.endsWith("/git"))
 			return json({ branch: "main", status: "clean" });
 		if (url.pathname.endsWith("/actions")) return json({ items: [] });
@@ -108,14 +114,6 @@ function stubEnvironmentServer(): void {
 	restoreFetch = () => {
 		globalThis.fetch = original;
 	};
-}
-
-/** Let the body's async startup chain and its effects settle. */
-async function settle(t: Test, ticks = 20): Promise<void> {
-	for (let index = 0; index < ticks; index += 1) {
-		await new Promise((resolve) => setTimeout(resolve, 80));
-		await t.renderOnce();
-	}
 }
 
 async function renderShell() {
@@ -162,7 +160,7 @@ async function renderShell() {
 		{ width: 140, height: 40 },
 	);
 	await renderUntil(t, (frame) => frame.includes("›"));
-	await settle(t, 12);
+	await advance(t, 12, 80);
 	return { t, db };
 }
 
@@ -171,7 +169,7 @@ test("the environment page journey keeps one hierarchy step per key", async () =
 	const { t, db } = await renderShell();
 	const expectCrumb = async (want: string) => {
 		await renderUntil(t, (frame) => crumbOf(frame) === want, 10);
-		await settle(t, 4);
+		await advance(t, 4);
 		expect(crumbOf(t.captureCharFrame())).toBe(want);
 	};
 	const pressEscapeUp = async () => {
@@ -222,6 +220,54 @@ test("the environment page journey keeps one hierarchy step per key", async () =
 		await expectCrumb("Home › Environments");
 		t.mockInput.pressEnter();
 		await expectCrumb("Home › Environments › Libraries");
+	} finally {
+		t.renderer.destroy();
+		db.close();
+	}
+}, 30_000);
+
+test("the first-start dialog keeps its keys on an unconfigured install", async () => {
+	stubEnvironmentServer([]);
+	const { t, db } = await renderShell();
+	const dialogVisible = () =>
+		t.captureCharFrame().includes("Welcome to DevEnv");
+	const pressEscapeKey = async () => {
+		t.mockInput.pressEscape();
+		await new Promise((resolve) => setTimeout(resolve, 150));
+		await advance(t, 6);
+	};
+	const openApplications = async () => {
+		await renderUntil(t, (frame) => crumbOf(frame) === "Home › Environments");
+		await advance(t, 4);
+		t.mockInput.pressEnter();
+		await renderUntil(
+			t,
+			(frame) => crumbOf(frame) === "Home › Environments › Applications",
+		);
+		await advance(t, 10);
+	};
+
+	try {
+		// An unconfigured installation offers its first steps over the empty
+		// application list.
+		t.mockInput.pressEnter();
+		await openApplications();
+		expect(dialogVisible()).toBe(true);
+
+		// A shell overlay parks the body's layers and hands the dialog back when
+		// it closes: the dialog still owns Escape instead of the shell.
+		t.mockInput.pressKey("p", { ctrl: true });
+		await renderUntil(t, (frame) => frame.includes("Locations"));
+		await pressEscapeKey();
+		expect(t.captureCharFrame()).not.toContain("Locations");
+		expect(dialogVisible()).toBe(true);
+
+		// Escape closes the dialog without leaving the page.
+		await pressEscapeKey();
+		expect(dialogVisible()).toBe(false);
+		expect(crumbOf(t.captureCharFrame())).toBe(
+			"Home › Environments › Applications",
+		);
 	} finally {
 		t.renderer.destroy();
 		db.close();

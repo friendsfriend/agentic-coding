@@ -108,7 +108,7 @@ export function observabilityKeybindCatalog(options: {
 						{ key: "Enter", action: "open or expand", standard: true },
 						{
 							key: "Esc",
-							action: "close note / cancel comment",
+							action: "cancel comment, close note, then parent page",
 							standard: true,
 						},
 					],

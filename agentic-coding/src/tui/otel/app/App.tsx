@@ -313,23 +313,31 @@ export function App(props: {
 	};
 	// A shell overlay owns input: while one is on top the feature keymap layers
 	// are parked through the shared `modal.active` field, so typing in the
-	// location picker cannot reach a dashboard or environment binding. On close
-	// the field returns to "none" only if this shell wrote it, so a feature's own
-	// modal state is never clobbered.
+	// location picker cannot reach a dashboard or environment binding. The field
+	// names a *feature* dialog, so the shell remembers what it held before taking
+	// it and puts it back afterwards — a feature dialog opened under a shell
+	// overlay keeps the layer that handles its keys. The mirrored `environment`
+	// entry never writes the field: it stands for the feature's own dialog, which
+	// reports its real name through the same field.
 	let shellModalField: string | undefined;
+	let shellModalSaved = "none";
 	createEffect(() => {
 		const keymap = props.dashboard?.keymap;
 		const modal = nav.modal();
 		if (!keymap) return;
-		if (modal === "none") {
+		if (modal === "none" || modal === "environment") {
 			if (
 				shellModalField &&
 				keymap.getData?.("modal.active") === shellModalField
-			)
-				keymap.setData("modal.active", "none");
+			) {
+				keymap.setData("modal.active", shellModalSaved);
+			}
 			shellModalField = undefined;
+			shellModalSaved = "none";
 			return;
 		}
+		if (!shellModalField)
+			shellModalSaved = String(keymap.getData?.("modal.active") ?? "none");
 		shellModalField = modal;
 		keymap.setData("modal.active", modal);
 	});
