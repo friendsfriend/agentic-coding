@@ -37,7 +37,7 @@ reachable and covered.
 | Surface | Behavior | Old owner | Intended owner | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
 | `agentic-coding workflow` | Transactional workflow engine CLI (see verbs below) | agentic-coding | unchanged (change 1) | `test/workflow-cli.test.ts`, `bun run test` | present, unmigrated |
-| `agentic-coding dash` | Per-workflow dashboard TUI (`--repo --workflow-id`, `--profile test`, `--json`) | agentic-coding | unchanged | `test/workflow-dashboard.test.ts`, `test/dash/*` | present, unmigrated |
+| `agentic-coding dash` | Per-workflow dashboard TUI, dashboard-only presentation (`--repo --workflow-id`, `--profile test`, `--json`) | agentic-coding | unchanged | `test/workflow-dashboard.test.ts`, `test/app/dashboardRoot.test.tsx`, `test/dash/*` | present, unmigrated |
 | `agentic-coding home` | Workflow list + observability TUI (long-lived) | agentic-coding | unchanged | `test/otel/*`, `test/workflow-observability.test.ts` | present, unmigrated |
 | `agentic-coding manager` | Alias for `home` (Herdr manager launch) | agentic-coding | unchanged | `test/herdr-client.test.ts` | present, unmigrated |
 | `__dashboard-observe` | Internal JSON observation bridge for the dashboard — **removed**; the typed backend client replaced it | agentic-coding | removed | `test/backend-lifecycle.test.ts`, `test/server-api.test.ts` | removed |
@@ -68,7 +68,7 @@ reachable and covered.
 
 | Surface | Views/panels | Old owner | Intended owner | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
-| Dashboard (`dash`) | Overview, detail, artifacts, wiki changes/diff, local changes/diff, review, telemetry, project/workflow pickers | agentic-coding | change 3 integrates into one shell | `test/workflow-dashboard.test.ts`, `test/dash/*` | present, unmigrated |
+| Dashboard (`dash`) | Overview, detail, artifacts, wiki changes/diff, local changes/diff, review, telemetry, project/workflow pickers | agentic-coding | dashboard-only root for `dash` (no shell navigation); change 3 integrates into one shell | `test/workflow-dashboard.test.ts`, `test/app/dashboardRoot.test.tsx`, `test/dash/*` | present, unmigrated |
 | Observability shell (`otel`) | Selection, Detail, Span views; Logs, Metrics, Topology, Wiki views; filter/sort/theme/help modals | agentic-coding | change 3 integrates into one shell | `test/otel/*`, `test/tui-tracing.test.ts` | present, unmigrated |
 | Workflow lifecycle modals | Start/confirm/create, agent presets/profiles, execution environment, review | agentic-coding | unchanged | `test/lifecycleModal.test.tsx`, `test/lifecycle.test.ts` | present, unmigrated |
 | Herdr sidebar provider | Owned sidebar metadata and custom view | agentic-coding | unchanged | `test/herdr-client.test.ts`, `test/workflow-sidebar*.test.ts` | present, unmigrated |
@@ -310,7 +310,7 @@ onto them (`src/devenv-alias.ts`, `bin/devenv`,
 | CLI | Mode | Behavior | Old owner | Intended owner | Evidence | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | agentic-coding | (no command) / `home` / `manager` | Unified shell with the one Bun server it starts in-process | devenv `cli` + agentic-coding | `src/cli.ts` + `src/tui/index.tsx` | `test/lifecycle.test.ts`, `test/backend-lifecycle.test.ts` | migrated |
-| agentic-coding | `dash` | Per-workflow dashboard pane in the shared shell; owns no backend | agentic-coding | unchanged route, shared shell | `test/workflow-dashboard.test.ts`, `test/dash/*` | migrated |
+| agentic-coding | `dash` | Dashboard-only presentation of one explicit workflow target; no application navigation, no owned backend | agentic-coding | unchanged route, dashboard-only root (`src/tui/app/DashboardRoot.tsx`) | `test/app/dashboardRoot.test.tsx`, `test/workflow-dashboard.test.ts`, `test/dash/*` | migrated |
 | agentic-coding | `attach URL [--token]` | Shell attached to a server this process does not own; the capability comes from `--token`/`AGENTIC_WORKFLOW_TOKEN` | devenv `cli` | `src/cli.ts` + `src/backend/ownership.ts` | `test/backend-lifecycle.test.ts` | migrated |
 | agentic-coding | `server [--port N]` | Headless unified server (workflow + environment + integrations + telemetry) in one process | devenv `cli` | `src/server-command.ts` | packaged smoke run from a temporary directory | migrated |
 | devenv | `spawn` (default) / `attach` / `server` | Alias of the modes above (`spawn` carries `--port` to `--devenv-port`) | devenv `cli` | thin alias only | `src/devenv-alias.ts`, `bin/devenv` | migrated |

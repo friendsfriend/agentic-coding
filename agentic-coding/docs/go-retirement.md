@@ -145,7 +145,7 @@ temporary `DEVENV_HOME`/`DEVENV_CONFIG_DIR` and the Go toolchain unavailable.
 | `dist/agentic-coding home --devenv-port N` (pty) | renders the unified shell, binds the one server at `N`, no child process; `SIGTERM` releases the port |
 | `dist/agentic-coding home --http-port N --grpc-port M` (pty) | OTLP HTTP export `{"partialSuccess":{}}`; the gRPC port accepts a real `ExportTraceService` export; `$DEVENV_HOME/db/state.db` created |
 | `dist/agentic-coding attach URL --token T` (pty) | renders the attached shell; catalog reads answer `200` from the attached server (no 401) |
-| `dist/agentic-coding dash --repo … --workflow-id …` (pty) | renders the dashboard pane; zero requests to the default environment port, catalog reads served by the bounded read-only invocation |
+| `dist/agentic-coding dash --repo … --workflow-id …` (pty) | renders the dashboard-only presentation (no tab row, breadcrumb, picker or observability body); zero requests to the default environment port, catalog reads served by the bounded read-only invocation |
 | `devenv` symlinked to the packaged executable | `devenv server --port N` starts the same unified server; an unknown verb reports the unified dispatcher error |
 | `dist/agentic-coding attach URL` (no capability) | exits `2` with "attach requires the server capability: pass --token TOKEN" |
 | second `server` on an occupied port | exits `1` with Bun's "Failed to start server. Is port N in use?"; the running server keeps serving |

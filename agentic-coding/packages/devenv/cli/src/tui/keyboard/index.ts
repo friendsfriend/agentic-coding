@@ -28,6 +28,7 @@ export {
 export { handlePaste } from "./paste-handler";
 export { registerTableKeymapLayer } from "./table-keymap-layer";
 export type {
+	EnvironmentLaunchTarget,
 	KeyboardActions,
 	KeyboardContext,
 	KeyboardStores,

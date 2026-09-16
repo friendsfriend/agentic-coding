@@ -157,6 +157,24 @@ export function registerWorkflowKeymapLayers(
 		}
 		return false;
 	};
+	/**
+	 * Contextual workflow launch (launch-workflows-from-project-and-wiki-pages,
+	 * task 1.3): the resource page reports the configured identity it already
+	 * renders. The unified shell owns form and start boundary; without a shell
+	 * reporter there is no action to advertise, so the key stays unbound.
+	 */
+	const startWorkflow = deps.ctx.startWorkflow;
+	const runAppDetailLaunch = () => {
+		if (!startWorkflow) return false;
+		const project = deps.stores.appDetailStore.appDetailApp();
+		if (!project?.ident) return false;
+		startWorkflow({
+			ident: project.ident,
+			name: project.displayName,
+			repository: project.repositoryPath,
+		});
+		return true;
+	};
 
 	const layers = [
 		{
@@ -268,6 +286,43 @@ export function registerWorkflowKeymapLayers(
 			bindings: bindAll(command, viewMode),
 		}),
 	);
+
+	if (startWorkflow) {
+		// Discoverable so the shell footer and `?` help advertise the contextual
+		// launch on the resource page it belongs to.
+		disposers.push(
+			keymap.registerLayer({
+				name: "App detail: start workflow",
+				priority: WORKFLOW_PRIORITY + 10,
+				...(deps.ctx.embedded ? { shellFeature: "environments" } : {}),
+				shutdown: false,
+				activeModal: "none",
+				appViewMode: "appDetail",
+				commands: [
+					{
+						name: "app-detail.start-workflow",
+						context: "appDetail",
+						category: "Workflow",
+						title: "Start workflow",
+						desc: "Start a workflow for this configured application or library.",
+						footer: "start workflow",
+						discoverable: true,
+						run: () => runAppDetailLaunch(),
+					},
+				],
+				bindings: [
+					{
+						key: "w",
+						cmd: "app-detail.start-workflow",
+						context: "appDetail",
+						category: "Workflow",
+						footer: "start workflow",
+						discoverable: true,
+					},
+				],
+			}),
+		);
+	}
 
 	const panelLayers = [
 		{

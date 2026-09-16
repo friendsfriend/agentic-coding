@@ -305,7 +305,7 @@ export async function rebuildDefinitions(
 ): Promise<ActionSnapshot> {
 	const tools = services.tools
 		? await services.tools()
-		: checkToolAvailability();
+		: await checkToolAvailability();
 	const apps = services.apps.getApps();
 	const resolver = targetResolver(
 		apps,

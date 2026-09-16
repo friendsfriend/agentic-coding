@@ -10,6 +10,9 @@ export interface AgentConfigEntry {
 	agents?: AgentsConfig;
 	provenance?: ReturnType<typeof loadAgentConfig>["provenance"];
 	conflicts?: string[];
+	/** Revision of the effective agents section this entry was read from; the
+	 * editor sends it back so a write from another client is detected. */
+	revision?: string;
 	error?: string;
 }
 
@@ -61,6 +64,7 @@ export async function refreshAgentConfig(
 			agents: value.agents as AgentsConfig,
 			provenance: value.provenance as AgentConfigEntry["provenance"],
 			conflicts: value.conflicts,
+			...(value.revision ? { revision: value.revision } : {}),
 		};
 		cache.set(key(repository), entry);
 		return entry;

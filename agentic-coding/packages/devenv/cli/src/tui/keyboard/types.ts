@@ -75,4 +75,20 @@ export interface KeyboardContext {
 	embedded?: boolean;
 	/** Active shell feature predicate used by embedded keymap layers. */
 	active?: () => boolean;
+	/**
+	 * Contextual workflow launch (launch-workflows-from-project-and-wiki-pages,
+	 * task 1.3): the unified shell owns the creation form and the start
+	 * boundary, so the environment feature only reports the selected project's
+	 * canonical identity. Absent when the environment runs standalone, in which
+	 * case no start-workflow action is advertised.
+	 */
+	startWorkflow?: (target: EnvironmentLaunchTarget) => void;
+}
+
+/** Canonical identity of the configured application/library a launch targets. */
+export interface EnvironmentLaunchTarget {
+	/** Stable configured project identity (environment `App.ident`). */
+	ident: string;
+	name: string;
+	repository: string;
 }

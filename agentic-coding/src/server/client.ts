@@ -239,9 +239,11 @@ export class BackendClient {
 	async saveAgents(
 		mutation: AgentsMutation,
 		repository?: string,
+		expectedRevision?: string,
 	): Promise<void> {
 		await this.request("POST", "/api/v1/config/agents", {
 			repository,
+			...(expectedRevision ? { expectedRevision } : {}),
 			mutation,
 		});
 	}
@@ -250,6 +252,7 @@ export class BackendClient {
 		agents: unknown;
 		provenance: unknown;
 		conflicts: string[];
+		revision?: string;
 	}> {
 		const query = repository
 			? `?repository=${encodeURIComponent(repository)}`
@@ -258,7 +261,12 @@ export class BackendClient {
 			"GET",
 			`/api/v1/config/agents${query}`,
 			undefined,
-		)) as { agents: unknown; provenance: unknown; conflicts: string[] };
+		)) as {
+			agents: unknown;
+			provenance: unknown;
+			conflicts: string[];
+			revision?: string;
+		};
 	}
 
 	async telemetrySnapshot(changeId?: string): Promise<{

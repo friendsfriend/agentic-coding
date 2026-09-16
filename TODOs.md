@@ -21,4 +21,12 @@ Small ones:
 General: 
 * Review tests and add guardrails on what tests to write
 * Test everything
+* Fix startup performance and failure (devenv discovery)
+* Embed breadcrumbs in header
+* Change behavior of page navigation to jump up one page using esc
+
+Next proposals:
+* isolate-workflow-dashboard-mode
+* unify-json-configuration-directory
+
 

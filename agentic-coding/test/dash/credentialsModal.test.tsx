@@ -108,7 +108,7 @@ test("new workflow confirm summary has no Agent routing row", async () => {
 	const t = await testRender(
 		() => (
 			<NewWorkflowModal
-				projects={[]}
+				context={{ kind: "independent" }}
 				onKeyReady={(h) => {
 					handler = h;
 				}}
@@ -119,14 +119,13 @@ test("new workflow confirm summary has no Agent routing row", async () => {
 		{ width: 110, height: 30 },
 	);
 	await t.flush();
-	// Drive through repo -> workflow type -> agent preset -> ticket -> change -> task -> mode.
-	handler?.(key("enter")); // repo: Current Directory
-	handler?.(key("enter")); // workflow type: standard
+	// Drive through workflow type -> agent preset -> ticket -> change -> task.
+	handler?.(key("enter")); // workflow type: research
+	handler?.(key("enter")); // agent preset: (config defaults)
 	handler?.(key("enter")); // agent preset: (config defaults)
 	t.mockInput.pressEnter(); // ticket: optional, advance
 	t.mockInput.pressEnter(); // change: advance
-	t.mockInput.pressEnter({ meta: true }); // task: Alt+Enter advances
-	handler?.(key("enter")); // mode: worktree
+	t.mockInput.pressEnter({ meta: true }); // task: Alt+Enter advances to confirm
 	await t.flush();
 	const frame = t.captureCharFrame();
 	expect(frame).toContain("Confirm workflow");

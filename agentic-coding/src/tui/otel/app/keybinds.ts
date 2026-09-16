@@ -127,6 +127,11 @@ export function observabilityKeybindCatalog(options: {
 				{
 					title: "Actions",
 					keybinds: [
+						{
+							key: "w",
+							action: "new independent research workflow",
+							short: "new workflow",
+						},
 						{ key: "f", action: "finish review", short: "finish" },
 						{ key: "r", action: "refresh" },
 						parent,

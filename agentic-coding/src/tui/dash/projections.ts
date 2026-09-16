@@ -236,22 +236,6 @@ export function phaseAgeHours(
 	return Math.max(0, Math.floor(age));
 }
 
-/** True when a workflow has sat in a non-terminal phase longer than the threshold. */
-export function isStale(
-	state: {
-		phase: string;
-		status?: string;
-		phaseStartedAt?: string;
-		createdAt?: string;
-	},
-	now: number,
-	thresholdHours = 6,
-): boolean {
-	if (state.status === "completed" || state.status === "closed") return false;
-	const at = state.phaseStartedAt ?? state.createdAt;
-	if (!at) return false;
-	return (now - Date.parse(at)) / 3_600_000 > thresholdHours;
-}
 export function countVerifierFindings(
 	findings: Array<Pick<VerifierFinding, "severity">>,
 ): FindingCounts {

@@ -17,33 +17,19 @@ export function panelContext(panel: number): string {
 }
 
 /**
- * Workspace overview (`Home`) catalog. Standard navigation keys are marked so
- * the footer advertises only the special actions; `?` shows the full catalog.
+ * Contextual workflow launch (`launch-workflows-from-project-and-wiki-pages`).
+ * Published while the creation form is open, so the footer and `?` help name
+ * what the form is doing instead of the page behind it.
  */
-export function dashboardOverviewKeybindCatalog(): KeybindSection[] {
+export function workflowLaunchKeybindCatalog(): KeybindSection[] {
 	return [
 		{
-			title: "Navigation",
+			title: "Create workflow",
 			keybinds: [
-				{ key: "j/k or ↑/↓", action: "Select workspace", standard: true },
-			],
-		},
-		{
-			title: "Actions",
-			keybinds: [
-				{ key: "Enter", action: "Switch active workspace", short: "switch" },
-				{ key: "n", action: "New workflow", short: "new" },
-				{
-					key: "m",
-					action: "Agent configuration (profiles / presets)",
-					short: "config",
-				},
-				{ key: "f", action: "Open filter modal", short: "filter" },
-				{ key: "o", action: "Open sort modal", short: "sort" },
-				{ key: "T", action: "Theme picker", short: "theme" },
-				{ key: "r", action: "Refresh", short: "refresh" },
-				{ key: "?", action: "Open help", short: "help" },
-				{ key: "q", action: "Quit", standard: true },
+				{ key: "j/k", action: "Move in list", short: "move" },
+				{ key: "Enter", action: "Select / create", short: "select" },
+				{ key: "/", action: "Filter list", short: "filter" },
+				{ key: "Esc", action: "Back / cancel", short: "back" },
 			],
 		},
 	];

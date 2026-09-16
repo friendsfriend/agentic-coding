@@ -226,7 +226,7 @@ export function saveAgents(request: AgentsMutationRequest): void {
 		)
 	)
 		throw new Error("unknown agents mutation");
-	applyAgentsMutation(mutation, request.repository);
+	applyAgentsMutation(mutation, request.repository, request.expectedRevision);
 }
 
 /** Read the effective agents config server-side (no view reads the file). */
@@ -235,7 +235,6 @@ export function loadAgents(
 ): ReturnType<typeof loadAgentConfig> {
 	return loadAgentConfig(repository);
 }
-
 /** Managed-agent developer question: resolve identity server-side, dispatch and
  * wait (bounded by the request signal) for the answer. */
 export function agentQuestion(

@@ -7,14 +7,14 @@
 // The `info` probe matters as much as the lookup: an installed docker binary
 // whose daemon is unreachable cannot run a compose file, and reporting it as
 // available would compile an action that fails at execution time.
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import type { ToolSet } from "./targets.ts";
 
 export interface ToolProbe {
 	/** Resolves a binary on PATH, as `exec.LookPath` does. */
 	lookPath(name: string): string | undefined;
 	/** Whether a container runtime's daemon answers `info` within two seconds. */
-	daemonReachable(name: string): boolean;
+	daemonReachable(name: string): boolean | Promise<boolean>;
 }
 
 export function defaultToolProbe(): ToolProbe {
@@ -23,28 +23,31 @@ export function defaultToolProbe(): ToolProbe {
 			const found = Bun.which(name);
 			return found === null ? undefined : found;
 		},
-		daemonReachable: (name) => {
-			try {
-				const result = spawnSync(name, ["info"], {
-					timeout: 2000,
-					stdio: "ignore",
-				});
-				return result.status === 0;
-			} catch {
-				return false;
-			}
-		},
+		daemonReachable: (name) =>
+			new Promise<boolean>((resolve) => {
+				execFile(
+					name,
+					["info"],
+					{ timeout: 2000, killSignal: "SIGKILL" },
+					(error) => resolve(error === null),
+				);
+			}),
 	};
 }
 
 /** Probes for the tools whose presence decides which action variants exist. */
-export function checkToolAvailability(
+export async function checkToolAvailability(
 	probe: ToolProbe = defaultToolProbe(),
-): ToolSet {
+): Promise<ToolSet> {
 	const has = (name: string): boolean => probe.lookPath(name) !== undefined;
+	const [docker, podman] = await Promise.all(
+		["docker", "podman"].map(
+			(name) => has(name) && probe.daemonReachable(name),
+		),
+	);
 	return {
-		docker: has("docker") && probe.daemonReachable("docker"),
-		podman: has("podman") && probe.daemonReachable("podman"),
+		docker,
+		podman,
 		dockerCompose: has("docker-compose") || has("docker"),
 		podmanCompose: has("podman-compose"),
 		tmux: has("tmux"),

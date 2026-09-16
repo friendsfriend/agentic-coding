@@ -1,17 +1,14 @@
-/** Task 3.2 focused coverage: dashboard action success, dashboard action
- * failure, and overview/TUI key diagnostics all emit bounded OTLP spans with
- * the right outcome while dynamic input/error text is absent. Transport is
- * mocked so real spans can be asserted; the dashboard/overview harness mirrors
- * the other dash render tests. */
+/** Task 3.2 focused coverage: dashboard action success and dashboard action
+ * failure emit bounded OTLP spans with the right outcome while dynamic
+ * input/error text is absent. Transport is mocked so real spans can be
+ * asserted; the dashboard harness mirrors the other dash render tests. */
 /** @jsxImportSource @opentui/solid */
 import { afterEach, expect, test } from "bun:test";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
 import { onCleanup } from "solid-js";
 import { App } from "../../src/tui/dash/App";
-import type { WorkflowOverview } from "../../src/tui/dash/data";
 import { type DashboardData, testDashboard } from "../../src/tui/dash/data";
-import { Home } from "../../src/tui/dash/Home";
 
 type RecordedSpan = {
 	name: string;
@@ -98,53 +95,6 @@ function TestDashboard(props: { testData?: DashboardData } = {}) {
 			profile="test"
 			testData={props.testData}
 			keymap={keymap}
-		/>
-	);
-}
-
-function overview(): WorkflowOverview {
-	return {
-		state: {
-			workflowId: "demo-change",
-			changeId: "demo-change",
-			phase: "implement",
-			revision: 0,
-			status: "active",
-			health: { valid: true, attention: [] },
-			repository: "/demo/repo",
-			worktree: "/demo/repo",
-			branch: "demo",
-			workspace: "demo",
-			verificationRound: 0,
-			runs: [],
-			panes: {},
-		},
-		workspaceOpen: true,
-		tasks: [1, 2],
-		agents: [],
-	};
-}
-
-function TestHome(props: { items: WorkflowOverview[] }) {
-	const renderer = useRenderer();
-	const keymap = createDefaultOpenTuiKeymap(renderer);
-	const dispose = keymap.registerLayerFields({
-		name() {},
-		appView(value, ctx) {
-			ctx.require("app.view", String(value));
-		},
-		activeModal(value, ctx) {
-			ctx.require("modal.active", String(value));
-		},
-	});
-	onCleanup(dispose);
-	return (
-		<Home
-			keymap={keymap}
-			items={props.items}
-			loading={false}
-			projects={[]}
-			refresh={() => {}}
 		/>
 	);
 }
@@ -239,27 +189,5 @@ test("dashboard return-workspace failure traces an ERROR span without error text
 	expect(attribute(failed, "tui.outcome")).toBe("error");
 	expect(attribute(failed, "tui.surface")).toBe("dashboard");
 	expect(JSON.stringify(failed ?? {})).not.toContain("No dashboard workspace");
-	t.renderer.destroy();
-});
-
-test("overview key diagnostic traces a bounded span", async () => {
-	installCapture();
-	const t = await testRender(() => <TestHome items={[overview()]} />, {
-		width: 120,
-		height: 40,
-	});
-	await t.flush();
-
-	t.mockInput.pressKey("?");
-	await t.renderOnce();
-
-	expect(
-		spans.some(
-			(span) =>
-				span.name === "tui.overview.key" &&
-				attribute(span, "tui.surface") === "overview" &&
-				attribute(span, "tui.key") === "?",
-		),
-	).toBe(true);
 	t.renderer.destroy();
 });

@@ -11,7 +11,12 @@
 // Pure data and pure functions: no renderer, no stores, no `effect()` wrapper.
 import { createSignal } from "solid-js";
 
-/** The four top-level features of the unified shell. */
+/**
+ * Top-level features of the unified shell. `workflows` no longer owns a Home
+ * destination (launch-workflows-from-project-and-wiki-pages): it names the
+ * Herdr-launched per-workflow dashboard pane only, which sits outside the full
+ * application's page hierarchy.
+ */
 export type FeatureId = "environments" | "workflows" | "observability" | "wiki";
 
 /** Base view of a resource page (its own detail view). */
@@ -19,6 +24,12 @@ export const RESOURCE_BASE_VIEW = "detail";
 
 export type PageId =
 	| "home"
+	| "settings"
+	| "settings.appearance"
+	| "settings.agents"
+	| "settings.providers"
+	| "settings.projects"
+	| "settings.backend"
 	| "environments"
 	| "environments.applications"
 	| "environments.libraries"
@@ -38,7 +49,6 @@ export type PageId =
 	| "observability.topology.service"
 	| "wiki"
 	| "wiki.note"
-	| "workflows"
 	| "workflows.detail";
 
 /** A location: page identity + required resource identity + typed params. */
@@ -60,6 +70,54 @@ export interface PageDef {
 	picker?: boolean;
 	/** Page requires a resource identity to render. */
 	requiresResource?: boolean;
+}
+
+/** Settings sections, in listing order (centralize-application-settings). */
+export const SETTINGS_SECTIONS = [
+	"appearance",
+	"agents",
+	"providers",
+	"projects",
+	"backend",
+] as const;
+export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
+
+/** Human labels for the Settings sections, in listing order. */
+export const SETTINGS_SECTION_LABELS: Readonly<
+	Record<SettingsSection, string>
+> = {
+	appearance: "Appearance",
+	agents: "Agent models/presets",
+	providers: "Providers/credentials",
+	projects: "Projects/environments",
+	backend: "Backend/telemetry",
+};
+
+/** One-line description of what each Settings section edits and where. */
+export const SETTINGS_SECTION_DESCRIPTIONS: Readonly<
+	Record<SettingsSection, string>
+> = {
+	appearance: "Theme and client-local UI preferences",
+	agents: "Agent profiles, configuration presets and routing",
+	providers: "Git providers and protected credentials",
+	projects: "Configured applications, libraries and environments",
+	backend: "Server ownership, telemetry receivers and retention",
+};
+
+/** The page identity of one Settings section. */
+export function settingsSectionPage(section: SettingsSection): PageId {
+	return `settings.${section}` as PageId;
+}
+
+/** The Settings section a page renders, or undefined for any other page. */
+export function settingsSectionOfPage(
+	page: PageId,
+): SettingsSection | undefined {
+	if (!page.startsWith("settings.")) return undefined;
+	const section = page.slice("settings.".length) as SettingsSection;
+	return (SETTINGS_SECTIONS as readonly string[]).includes(section)
+		? section
+		: undefined;
 }
 
 /** Environment categories, in picker order. */
@@ -116,6 +174,38 @@ const environmentsParent = (route: Route): Route => {
 /** The page catalog. Every page's parent chain terminates at `home`. */
 export const PAGES: Readonly<Record<PageId, PageDef>> = {
 	home: { label: "Home" },
+	// Settings is a Home destination: one configuration surface for every
+	// supported application setting (centralize-application-settings).
+	settings: {
+		label: "Settings",
+		parent: () => ({ page: "home" }),
+		picker: true,
+	},
+	"settings.appearance": {
+		label: SETTINGS_SECTION_LABELS.appearance,
+		parent: () => ({ page: "settings" }),
+		picker: true,
+	},
+	"settings.agents": {
+		label: SETTINGS_SECTION_LABELS.agents,
+		parent: () => ({ page: "settings" }),
+		picker: true,
+	},
+	"settings.providers": {
+		label: SETTINGS_SECTION_LABELS.providers,
+		parent: () => ({ page: "settings" }),
+		picker: true,
+	},
+	"settings.projects": {
+		label: SETTINGS_SECTION_LABELS.projects,
+		parent: () => ({ page: "settings" }),
+		picker: true,
+	},
+	"settings.backend": {
+		label: SETTINGS_SECTION_LABELS.backend,
+		parent: () => ({ page: "settings" }),
+		picker: true,
+	},
 	environments: {
 		label: "Environments",
 		feature: "environments",
@@ -235,16 +325,13 @@ export const PAGES: Readonly<Record<PageId, PageDef>> = {
 		parent: () => ({ page: "wiki" }),
 		requiresResource: true,
 	},
-	workflows: {
-		label: "Workflows",
-		feature: "workflows",
-		parent: () => ({ page: "home" }),
-		picker: true,
-	},
+	// The per-workflow dashboard pane (Herdr-launched `dash` mode). Not a
+	// destination: no workflow list, history or reopen route reaches it, and the
+	// location picker never offers it.
 	"workflows.detail": {
 		label: "Workflow",
 		feature: "workflows",
-		parent: () => ({ page: "workflows" }),
+		parent: () => ({ page: "home" }),
 		requiresResource: true,
 	},
 };
@@ -312,7 +399,7 @@ export function isSameLocation(a: Route, b: Route): boolean {
 /** Root location of each feature. */
 export const FEATURE_ROOTS: Readonly<Record<FeatureId, Route>> = {
 	environments: { page: "environments" },
-	workflows: { page: "workflows" },
+	workflows: { page: "workflows.detail" },
 	observability: { page: "observability" },
 	wiki: { page: "wiki" },
 };
@@ -353,6 +440,20 @@ export function breadcrumb(route: Route): Route[] {
 		cursor = parentRoute(cursor);
 	}
 	return chain;
+}
+
+/**
+ * Project-scoped Settings route: a configured application/library ID selects the
+ * scope of the same page, so a shortcut never infers a repository from cwd.
+ */
+export function settingsRoute(
+	section: SettingsSection,
+	projectIdent?: string,
+): Route {
+	return {
+		page: settingsSectionPage(section),
+		...(projectIdent ? { resourceId: projectIdent } : {}),
+	};
 }
 
 /** Searchable destinations: one entry per registered picker page. */

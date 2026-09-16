@@ -17,7 +17,6 @@ import {
 	costSummary,
 	countVerifierFindings,
 	type DeveloperReviewComment,
-	isStale,
 	loadDashboard,
 	loadLocalChanges,
 	loadLocalDiff,
@@ -1373,25 +1372,4 @@ test("demo dashboard exposes cost breakdown", () => {
 	expect(dashboard.agents.find((agent) => agent.role === "worker")?.cost).toBe(
 		0.42,
 	);
-});
-
-test("isStale flags long-running non-terminal phases", () => {
-	const now = Date.parse("2026-01-01T12:00:00Z");
-	expect(
-		isStale({ phase: "verify", phaseStartedAt: "2026-01-01T06:01:00Z" }, now),
-	).toBe(false);
-	expect(
-		isStale({ phase: "verify", phaseStartedAt: "2026-01-01T05:59:00Z" }, now),
-	).toBe(true);
-	expect(
-		isStale(
-			{
-				phase: "verify",
-				status: "completed",
-				phaseStartedAt: "2026-01-01T00:00:00Z",
-			},
-			now,
-		),
-	).toBe(false);
-	expect(isStale({ phase: "verify" }, now)).toBe(false);
 });

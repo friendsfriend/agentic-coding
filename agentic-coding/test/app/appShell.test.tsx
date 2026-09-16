@@ -140,7 +140,9 @@ test("the default full-application entry opens Home with its destinations", asyn
 	expect(frame).toContain("Environments");
 	expect(frame).toContain("Observability");
 	expect(frame).toContain("Wiki");
-	expect(frame).toContain("Workflows");
+	expect(frame).toContain("Settings");
+	// Workflow creation is contextual: Home offers no Workflows destination.
+	expect(frame).not.toContain("Workflows");
 	expect(frame).not.toContain("ENVIRONMENTS-BODY");
 	t.renderer.destroy();
 	db.close();

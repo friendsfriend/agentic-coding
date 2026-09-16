@@ -74,6 +74,7 @@ function recordingOperations(calls: Calls): ServerOperations {
 			agents: { profiles: {} },
 			provenance: { source: "default", files: [] },
 			conflicts: [],
+			revision: "stub-revision",
 		}),
 		agentQuestion: async () => "answer",
 		researchHandoff: async () => view,

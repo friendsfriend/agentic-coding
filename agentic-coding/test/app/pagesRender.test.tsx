@@ -22,6 +22,7 @@ const SURFACE = {
 	tracesOnly: false,
 	workflows: true,
 	wiki: true,
+	settings: true,
 };
 
 test("home renders its destinations and opens the selected one", async () => {

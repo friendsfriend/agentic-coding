@@ -9,7 +9,6 @@ import { readFileSync } from "node:fs";
 import {
 	approvalFor,
 	countVerifierFindings,
-	isStale,
 	phaseAgeHours,
 	phaseStatus,
 	requiredUserActionFor,
@@ -69,13 +68,6 @@ test("projections are deterministic: identical inputs yield identical outputs", 
 			now,
 		),
 	).toBe(4);
-	expect(
-		isStale(
-			{ phase: "verify", phaseStartedAt: "2026-01-01T00:30:00Z" },
-			now,
-			6,
-		),
-	).toBe(true);
 
 	expect(
 		countVerifierFindings([

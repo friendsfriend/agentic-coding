@@ -184,6 +184,10 @@ export function ModelConfigModal(props: {
 		name: string;
 	}>();
 	const [textValue, setTextValue] = createSignal("");
+	// Revision of the agents section the open editor loaded. Saving names it so a
+	// concurrent write from another client is refused instead of overwritten
+	// (centralize-application-settings, task 2.3).
+	const [editorRevision, setEditorRevision] = createSignal<string>();
 	let lastReadError: string | undefined;
 	const reload = () => {
 		setVersion((value) => value + 1);
@@ -260,6 +264,7 @@ export function ModelConfigModal(props: {
 		startEditor();
 	};
 	const startEditor = () => {
+		setEditorRevision(agentConfigEntry(props.repository).revision);
 		setFieldIndex(0);
 		syncFieldValue();
 		setView("editor");
@@ -437,18 +442,21 @@ export function ModelConfigModal(props: {
 		const client = backendClient();
 		if (client) {
 			void client
-				.saveAgents(mutation, props.repository)
+				.saveAgents(mutation, props.repository, editorRevision())
 				.then(() => refreshAgentConfig(props.repository))
 				.then(onDone)
-				.catch((error) =>
+				.catch((error) => {
 					notify(
 						error instanceof Error ? error.message : String(error),
 						"error",
-					),
-				);
+					);
+					// Another client wrote first: re-read so the next save names the
+					// byte-for-byte current revision and the unsaved draft stays valid.
+					reload();
+				});
 			return;
 		}
-		applyAgentsMutation(mutation, props.repository);
+		applyAgentsMutation(mutation, props.repository, editorRevision());
 		reloadAgentConfigLocal(props.repository);
 		onDone();
 	};

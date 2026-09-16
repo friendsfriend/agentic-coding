@@ -3,8 +3,8 @@ import { describe, expect, it, test } from "bun:test";
 import { testRender } from "@opentui/solid";
 import {
 	dashboardDetailKeybindCatalog,
-	dashboardOverviewKeybindCatalog,
 	panelContext,
+	workflowLaunchKeybindCatalog,
 } from "../../src/tui/dash/keybinds";
 import { HelpModal } from "../../src/tui/dash/ui/HelpModal";
 import { wrapHelpEntries } from "../../src/tui/shared/HelpText";
@@ -61,12 +61,14 @@ describe("keybind catalog contract", () => {
 		).toBe(false);
 	});
 
-	it("overview footer keeps only special actions", () => {
-		const footer = footerKeybinds(dashboardOverviewKeybindCatalog());
+	it("the contextual creation footer names the form's own actions", () => {
+		const footer = footerKeybinds(workflowLaunchKeybindCatalog());
 		const actions = footer.map((keybind) => keybind.action);
-		expect(actions).toContain("New workflow");
-		expect(actions).not.toContain("Select workspace");
-		expect(actions).not.toContain("Quit");
+		expect(actions).toContain("Select / create");
+		expect(actions).toContain("Filter list");
+		// No workflow-browser actions survive anywhere in the catalog.
+		expect(actions).not.toContain("New workflow");
+		expect(actions).not.toContain("Switch active workspace");
 	});
 
 	it("specialKeybinds never mutates its input", () => {

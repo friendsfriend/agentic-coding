@@ -12,7 +12,8 @@ export type Modal =
 	| "theme"
 	| "help"
 	| "environment"
-	| "locations";
+	| "locations"
+	| "new-workflow";
 
 export function createNavigation() {
 	const modals = createModalHost<Modal>();

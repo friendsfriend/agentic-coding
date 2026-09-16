@@ -50,7 +50,6 @@ import {
 	repairWorkflow,
 	requestWorkflowExecution,
 	runWorkflowAction,
-	setReturnInProcess,
 	startWorkflowInProcess,
 	viewToDashboardState,
 	workflowExecutionError,
@@ -1477,29 +1476,6 @@ export function availableModels(): string[] {
 	return [...new Set(models)];
 }
 
-export function herdrAvailable() {
-	return Bun.which("herdr") !== null;
-}
-
-export function notifyHerdrError(message: string) {
-	if (!herdrAvailable()) return false;
-	return (
-		Bun.spawnSync(
-			[
-				"herdr",
-				"notification",
-				"show",
-				"Workflow execution failed",
-				"--body",
-				message,
-				"--sound",
-				"request",
-			],
-			{ stdout: "ignore", stderr: "ignore" },
-		).exitCode === 0
-	);
-}
-
 export function focusReturnWorkspace(
 	repo: string,
 	workflowId: string,
@@ -1696,23 +1672,6 @@ export function focusAgent(state: WorkflowState, pane: string) {
 	throw new Error("could not reach agent pane");
 }
 
-export function focusWorkflow(workflow: WorkflowOverview) {
-	const state = workflow.state;
-	if (
-		isWikiWorkflowTarget(state.repository) ||
-		!state.repository ||
-		state.definition?.id === "research"
-	) {
-		focusWorkspace(state.workspace);
-		return;
-	}
-	const returnWorkspace = process.env.HERDR_WORKSPACE_ID;
-	if (!returnWorkspace)
-		throw new Error("Dashboard is not running inside a Herdr workspace.");
-	setReturnInProcess(state.repository, state.workflowId, returnWorkspace);
-	focusWorkspace(state.workspace);
-}
-
 export function discoverChanges(repo: string): string[] {
 	const changesDir = join(repo, "openspec", "changes");
 	if (!existsSync(changesDir)) return [];
@@ -1730,17 +1689,6 @@ export function discoverProjects(): Promise<ProjectOption[]> {
 	// Transport/configuration failures propagate so the picker shows a
 	// retryable discovery error instead of an empty success.
 	return discoverProjectsInProcess();
-}
-
-export function startWorkflowWizard() {
-	const script = `read -r -p 'Repository path: ' repo; read -r -p 'Ticket identifier (optional): ' ticket; read -r -p 'Workflow ID: ' id; read -r -p 'Task: ' task; read -r -p 'Mode (worktree/checkout): ' mode; args=(start --repo "$repo" --workflow-id "$id" --task "$task" --mode "\${mode:-worktree}"); if [[ -n "$ticket" ]]; then args+=(--ticket "$ticket"); fi; herdr-workflow "\${args[@]}"`;
-	return (
-		Bun.spawnSync(["bash", "-lc", script], {
-			stdin: "inherit",
-			stdout: "inherit",
-			stderr: "inherit",
-		}).exitCode === 0
-	);
 }
 
 export async function startWorkflow(input: {

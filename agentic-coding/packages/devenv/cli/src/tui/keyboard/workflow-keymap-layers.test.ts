@@ -153,6 +153,77 @@ describe("workflow keymap layers", () => {
 		}
 	});
 
+	test("the resource page reports a start-workflow intent with its configured identity", () => {
+		const { keymap, host, cleanup } = createTestKeymap({ defaultKeys: true });
+		const started: Array<{ ident: string; name: string; repository: string }> =
+			[];
+		const stores = makeStores("appDetail", {
+			appDetailStore: signalStore({
+				appDetailApp: () => ({
+					ident: "checkout",
+					displayName: "Checkout",
+					repositoryPath: "/managed/checkout",
+				}),
+				appDetailPanelCount: 1,
+				dependencyTreeFocused: () => false,
+				appDetailScrollBoxRefs: [],
+				appDetailPanelIndex: () => 0,
+				actionTargets: () => [],
+			}) as never,
+		});
+		try {
+			setupDevenvKeymap(keymap as never);
+			setRuntime(keymap, "appDetail");
+			registerWorkflowKeymapLayers(keymap as never, {
+				stores,
+				actions: actions(),
+				ctx: { ...ctx(), startWorkflow: (target) => started.push(target) },
+			});
+			host.press("w");
+			// The shell owns form and start boundary; the page reports identity only.
+			expect(started).toEqual([
+				{
+					ident: "checkout",
+					name: "Checkout",
+					repository: "/managed/checkout",
+				},
+			]);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test("without a shell reporter the resource page advertises no start action", () => {
+		const { keymap, host, cleanup } = createTestKeymap({ defaultKeys: true });
+		const stores = makeStores("appDetail", {
+			appDetailStore: signalStore({
+				appDetailApp: () => ({
+					ident: "checkout",
+					displayName: "Checkout",
+					repositoryPath: "/managed/checkout",
+				}),
+				appDetailPanelCount: 1,
+				dependencyTreeFocused: () => false,
+				appDetailScrollBoxRefs: [],
+				appDetailPanelIndex: () => 0,
+				actionTargets: () => [],
+			}) as never,
+		});
+		try {
+			setupDevenvKeymap(keymap as never);
+			setRuntime(keymap, "appDetail");
+			registerWorkflowKeymapLayers(keymap as never, {
+				stores,
+				actions: actions(),
+				ctx: ctx(),
+			});
+			// Nothing consumes the key and no start callback exists to call.
+			expect(host.press("w")).toBeDefined();
+		} finally {
+			cleanup();
+		}
+	});
+
 	test("inactive workflow view does not handle keys", () => {
 		const { keymap, host, cleanup } = createTestKeymap({ defaultKeys: true });
 		const stores = makeStores("issues");

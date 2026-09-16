@@ -29,6 +29,13 @@ export interface EnvironmentsFeatureProps {
 			keybinds: Array<{ key: string; action: string }>;
 		}>,
 	) => void;
+	/** Contextual workflow launch: the shell owns form and start boundary, so the
+	 * resource page only reports the configured identity it renders. */
+	onStartWorkflow?: (target: {
+		ident: string;
+		name: string;
+		repository: string;
+	}) => void;
 	active?: () => boolean;
 	onModalChange?: (open: boolean) => void;
 }
@@ -42,6 +49,9 @@ export function EnvironmentsFeature(props: EnvironmentsFeatureProps) {
 			active={props.active}
 			onModalChange={props.onModalChange}
 			destination={props.destination?.()}
+			{...(props.onStartWorkflow
+				? { onStartWorkflow: props.onStartWorkflow }
+				: {})}
 		/>
 	);
 }

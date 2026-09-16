@@ -22,21 +22,26 @@ import {
 
 // Home, category pages, breadcrumbs and the location picker
 // (replace-nested-tabs-with-page-navigation, task 2.1).
+//
+// The full application offers exactly Environments, Observability, Wiki and
+// Settings: workflow creation is contextual and there is no Workflows
+// destination, list, history or reopen entry
+// (launch-workflows-from-project-and-wiki-pages, task 2.4).
 
 const FULL_SURFACE = {
 	environments: true,
 	tracesOnly: false,
-	workflows: true,
 	wiki: true,
+	settings: true,
 };
 
 describe("home and category destinations", () => {
-	test("home offers Environments, Observability, Wiki and the temporary workflow page", () => {
+	test("home offers exactly Environments, Observability, Wiki and Settings", () => {
 		expect(homeDestinations(FULL_SURFACE).map((entry) => entry.label)).toEqual([
 			"Environments",
 			"Observability",
 			"Wiki",
-			"Workflows",
+			"Settings",
 		]);
 	});
 
@@ -44,13 +49,13 @@ describe("home and category destinations", () => {
 		const entries = homeDestinations({
 			environments: false,
 			tracesOnly: false,
-			workflows: true,
 			wiki: true,
+			settings: true,
 		});
 		expect(entries.map((entry) => entry.id)).toEqual([
 			"observability",
 			"wiki",
-			"workflows",
+			"settings",
 		]);
 	});
 
@@ -72,8 +77,8 @@ describe("home and category destinations", () => {
 		const restricted = observabilityDestinations({
 			environments: true,
 			tracesOnly: true,
-			workflows: true,
 			wiki: true,
+			settings: true,
 		});
 		expect(restricted.map((entry) => entry.id)).toEqual([
 			"observability.traces",
@@ -81,8 +86,8 @@ describe("home and category destinations", () => {
 		const picker = pickerEntries({
 			environments: true,
 			tracesOnly: true,
-			workflows: true,
 			wiki: true,
+			settings: true,
 		});
 		expect(picker.some((entry) => entry.id === "observability.metrics")).toBe(
 			false,
@@ -96,8 +101,10 @@ describe("home and category destinations", () => {
 		expect(
 			filterPickerEntries(entries, "metr").map((entry) => entry.id),
 		).toEqual([
-			// The label match outranks the category whose description mentions it.
+			// The label match outranks the description-only matches; the requested
+			// order stays stable within a rank.
 			"observability.metrics",
+			"settings.backend",
 			"observability",
 		]);
 		expect(
@@ -106,9 +113,18 @@ describe("home and category destinations", () => {
 			// The category page outranks Environments, which only describes it.
 			"environments.applications",
 			"environments",
+			// Settings describes its project section with the same word.
+			"settings.projects",
 		]);
 		expect(filterPickerEntries(entries, "  ")).toHaveLength(entries.length);
 		expect(filterPickerEntries(entries, "nothing-here")).toEqual([]);
+	});
+
+	test("no workflow list, history or reopen destination is offered anywhere", () => {
+		const entries = pickerEntries(FULL_SURFACE);
+		for (const entry of entries)
+			expect(entry.id.startsWith("workflows")).toBe(false);
+		expect(entries.some((entry) => entry.label === "Workflows")).toBe(false);
 	});
 
 	test("in-memory identities can be added without a global resource scan", () => {

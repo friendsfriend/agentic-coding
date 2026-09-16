@@ -4,7 +4,7 @@
 TBD - created by archiving change replace-workflow-project-discovery. Update Purpose after archive.
 ## Requirements
 ### Requirement: Configured apps and libraries are discovery authority
-Project discovery SHALL use the backend's configured app/library catalog for workflow creation, workflow history, telemetry roots and CLI project listing. Recursive root/cwd/development-directory scanning and legacy TOML discovery SHALL NOT remain as fallbacks. Catalog observation SHALL NOT clone repositories or launch operational pollers/actions.
+Project discovery SHALL use the backend's configured app/library catalog for contextual workflow creation, telemetry roots and CLI project listing; retained non-UI history consumers SHALL use the same catalog without requiring a TUI workflow list. Recursive root/cwd/development-directory scanning and legacy TOML discovery SHALL NOT remain as fallbacks. Catalog observation SHALL NOT clone repositories or launch operational pollers/actions.
 
 #### Scenario: Unconfigured repository exists nearby
 - **WHEN** an unconfigured Git repository exists under the current directory or old discovery root
@@ -41,11 +41,11 @@ Consumers SHALL refresh from catalog changes and adjust watchers by canonical ro
 - **AND** explicit workflow detail SHALL retain access and show the catalog mismatch without retargeting the workflow
 
 ### Requirement: Standalone targets and explicit CLI targeting remain supported
-Centralized wiki/research workflows SHALL remain discoverable outside the project catalog. Explicit authenticated CLI repository targeting SHALL remain supported independently of automatic discovery.
+Independent wiki/research creation SHALL remain available from Wiki outside the project catalog without a workflow discovery/list surface. Repository-bound research/wiki creation in the full application SHALL originate from the relevant application/library page. Explicit authenticated CLI repository targeting SHALL remain supported independently of automatic discovery.
 
 #### Scenario: Catalog is empty
 - **WHEN** no apps or libraries are configured
-- **THEN** standalone wiki/research workflows SHALL remain accessible
+- **THEN** independent wiki/research creation SHALL remain accessible from Wiki
 - **AND** empty project state SHALL NOT be treated as a discovery transport failure
 
 ### Requirement: Cutover requires manual project reconciliation

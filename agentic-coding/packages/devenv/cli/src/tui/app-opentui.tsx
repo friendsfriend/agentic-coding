@@ -56,6 +56,7 @@ import {
 	setExitRenderer,
 } from "./exit";
 import {
+	type EnvironmentLaunchTarget,
 	handlePaste,
 	type KeyboardActions,
 	type KeyboardContext,
@@ -118,6 +119,13 @@ export interface TUIAppProps {
 	 * exactly one side is authoritative for each direction.
 	 */
 	destination?: EnvironmentDestination;
+	/**
+	 * Contextual workflow launch (launch-workflows-from-project-and-wiki-pages,
+	 * task 1.3): the unified shell owns the creation form and the start
+	 * boundary. The feature reports the selected project's canonical identity
+	 * and nothing else, so it never duplicates start or Herdr handoff logic.
+	 */
+	onStartWorkflow?: (target: EnvironmentLaunchTarget) => void;
 }
 
 export interface EnvironmentDestination {
@@ -535,6 +543,7 @@ export function TUIApp(props: TUIAppProps) {
 		showError,
 		embedded: props.embedded,
 		active: props.active,
+		...(props.onStartWorkflow ? { startWorkflow: props.onStartWorkflow } : {}),
 	};
 
 	const keymap = useKeymap();

@@ -3,15 +3,14 @@
 ## Purpose
 
 Defines how the dashboard displays an OpenSpec artifact opened from the OpenSpec panel (the "plan panel"), so proposal, design, tasks, and delta-spec Markdown appears as formatted terminal output rather than raw highlighted source.
-
 ## Requirements
-
 ### Requirement: OpenSpec artifact view renders formatted Markdown
-When the user opens an OpenSpec artifact from the dashboard OpenSpec panel, the dashboard SHALL render the artifact's content as block-level Markdown—rendering the whole document so multi-line constructs (lists, tables, block quotes, fenced code blocks) render as formatted blocks—rather than as raw source with Markdown delimiter characters shown as ordinary document text. The view SHALL remain scrollable and dismissable.
+When a workflow-operation review opens OpenSpec artifact content, the dashboard SHALL render the artifact's content as block-level Markdown—rendering the whole document so multi-line constructs (lists, tables, block quotes, fenced code blocks) render as formatted blocks—rather than as raw source with Markdown delimiter characters shown as ordinary document text. The view SHALL remain scrollable and dismissable. Artifacts SHALL be reached through the dashboard's own workflow-scoped artifact panel or an operational review: dash SHALL NOT mount the full application's artifact routes or artifact drill-down navigation.
 
-#### Scenario: Open an artifact from the OpenSpec panel
-- **WHEN** the user selects an OpenSpec artifact in the OpenSpec panel and opens it
+#### Scenario: Review opens artifact content
+- **WHEN** a required workflow review opens an OpenSpec artifact
 - **THEN** the artifact opens in a scrollable view that renders its Markdown as formatted terminal output, with headings, lists, and fenced code blocks presented as formatted blocks
+- **AND** no application page or artifact drill-down route SHALL open in its place
 
 #### Scenario: Multi-line constructs render as blocks
 - **WHEN** the opened artifact contains a list, table, block quote, or fenced code block
@@ -31,3 +30,4 @@ The dashboard SHALL apply formatted Markdown rendering only to the OpenSpec arti
 #### Scenario: Tasks list popup is unchanged
 - **WHEN** the user opens the Tasks list popup
 - **THEN** its content is presented as the existing task list, without Markdown block rendering applied to it
+

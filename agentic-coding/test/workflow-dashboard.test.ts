@@ -7,7 +7,6 @@ import os from "node:os";
 import path from "node:path";
 import {
 	dashboardTestHelpers,
-	isStale,
 	listWorkflows,
 	listWorkflowsFromCatalog,
 	loadLocalChanges,
@@ -321,16 +320,6 @@ test("developer review reads authoritative workflow worktree and closed state is
 				new WorkflowEngine(registerBuiltins()).status(repo, "review"),
 			).returnWorkspace,
 		).toBeUndefined();
-		expect(
-			isStale(
-				{
-					phase: "core.closed",
-					status: "closed",
-					createdAt: "2000-01-01T00:00:00Z",
-				},
-				Date.now(),
-			),
-		).toBe(false);
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });
 	}

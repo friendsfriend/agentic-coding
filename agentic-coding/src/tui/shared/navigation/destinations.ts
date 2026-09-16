@@ -10,6 +10,10 @@ import {
 	OBSERVABILITY_VIEWS,
 	type PageId,
 	type Route,
+	SETTINGS_SECTION_DESCRIPTIONS,
+	SETTINGS_SECTION_LABELS,
+	SETTINGS_SECTIONS,
+	settingsSectionPage,
 } from "../routes";
 
 /** Which surfaces the running shell actually renders. */
@@ -18,10 +22,11 @@ export interface DestinationSurface {
 	environments: boolean;
 	/** Telemetry restrictions hide metrics/logs/topology everywhere. */
 	tracesOnly: boolean;
-	/** The temporary workflow entry (contextual launch and Settings replace it). */
-	workflows: boolean;
 	/** The Wiki body is rendered (home mode): repository-independent review. */
 	wiki: boolean;
+	/** The shell owns configuration: Home exposes Settings
+	 * (centralize-application-settings). */
+	settings: boolean;
 }
 
 export interface DestinationEntry {
@@ -92,16 +97,32 @@ export function homeDestinations(
 			route: { page: "wiki" },
 		});
 	}
-	if (surface.workflows) {
+	// Workflow creation is contextual (application/library resource pages) or
+	// independent (Wiki): there is no Workflows destination, list, history or
+	// reopen entry anywhere in the full application
+	// (launch-workflows-from-project-and-wiki-pages).
+	if (surface.settings) {
 		entries.push({
-			id: "workflows",
-			label: "Workflows",
-			description: "Temporary workflow home until contextual launch lands",
+			id: "settings",
+			label: "Settings",
+			description:
+				"Appearance, agent models, providers, projects and backend configuration",
 			group: "Destinations",
-			route: { page: "workflows" },
+			route: { page: "settings" },
 		});
 	}
 	return entries;
+}
+
+/** Child destinations of the Settings landing page. */
+export function settingsDestinations(): DestinationEntry[] {
+	return SETTINGS_SECTIONS.map((section) => ({
+		id: `settings.${section}`,
+		label: SETTINGS_SECTION_LABELS[section],
+		description: SETTINGS_SECTION_DESCRIPTIONS[section],
+		group: "Settings",
+		route: { page: settingsSectionPage(section) },
+	}));
 }
 
 /** Child destinations of the Environments category page. */
@@ -154,6 +175,7 @@ export function pickerEntries(
 		...homeDestinations(surface),
 		...(surface.environments ? environmentDestinations() : []),
 		...observabilityDestinations(surface),
+		...(surface.settings ? settingsDestinations() : []),
 		...extra,
 	];
 	return entries.map(({ id, label, description, group, route }) => ({

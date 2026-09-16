@@ -336,6 +336,10 @@ export const agentHandoffRequestSchema = Schema.Struct({
  * applier, which rejects unknown kinds and malformed profile/preset tables. */
 export const agentsMutationRequestSchema = Schema.Struct({
 	repository: Schema.optional(Schema.String),
+	/** Revision the client read before editing; the server refuses a write when
+	 * the effective agents section changed since (centralize-application-
+	 * settings, task 2.3). Omitted by callers that do not track a revision. */
+	expectedRevision: Schema.optional(Schema.String),
 	mutation: Schema.Unknown,
 });
 

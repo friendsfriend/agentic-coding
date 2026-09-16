@@ -41,11 +41,11 @@ When a workflow starts with a selected custom preset, the system SHALL verify ev
 - **THEN** workflow startup SHALL use `use-default-model` for that step before any agent launches
 
 ### Requirement: Preset management via home dashboard
-The agentic-coding home dashboard SHALL allow users to create, edit, and delete custom presets and custom agent profiles. A profile editor SHALL offer execution environment selection (`pi`, `opencode`, `opencode-v2`), model selection from the models available for the chosen environment, and an optional agent name where the runtime supports one. A preset editor SHALL let the user define the profile for all workflow steps and verification roles. Changes SHALL be persisted to the resolved agents configuration file, and the dashboard SHALL report any read or write failure to the user.
+The Settings agent models/presets page SHALL allow users to create, edit, and delete custom presets and custom agent profiles. A profile editor SHALL offer execution environment selection (`pi`, `opencode`, `opencode-v2`), model selection from the models available for the chosen environment, and an optional agent name where the runtime supports one. A preset editor SHALL let the user define the profile for all workflow steps and verification roles. Changes SHALL be persisted to the resolved agents configuration file, and Settings SHALL report any read or write failure to the user.
 
 #### Scenario: User creates a profile
 - **WHEN** the user completes the profile editor with execution environment, optional model, and optional agent name
-- **THEN** the profile SHALL appear in the dashboard custom profile list and in persisted config
+- **THEN** the profile SHALL appear in Settings custom profile list and in persisted config
 - **AND** no global default profile SHALL be created
 
 #### Scenario: Model list reflects execution environment
@@ -60,16 +60,16 @@ The agentic-coding home dashboard SHALL allow users to create, edit, and delete 
 - **WHEN** the user changes step assignments in a custom preset editor and confirms
 - **THEN** the persisted preset SHALL reflect the new assignments for subsequent workflow starts
 
-#### Scenario: Dashboard saves on Linux
-- **WHEN** a user creates, edits, or deletes a custom profile or preset from the dashboard on Linux
+#### Scenario: Settings saves on Linux
+- **WHEN** a user creates, edits, or deletes a custom profile or preset from Settings on Linux
 - **THEN** the change SHALL be written to the same effective agents configuration source used for subsequent workflow starts
-- **OR** the dashboard SHALL show the configuration error and leave the existing source unchanged
+- **OR** Settings SHALL show the configuration error and leave the existing source unchanged
 
 ### Requirement: Plan-fusion preset assignments
-The dashboard preset editor SHALL allow a preset to assign profiles independently to `fusion.plan` roles `planner-1` through `planner-5` and to the `fusion.consolidate` step, while preserving the existing preset routing format and arbitrary role tables.
+The Settings preset editor SHALL allow a preset to assign profiles independently to `fusion.plan` roles `planner-1` through `planner-5` and to the `fusion.consolidate` step, while preserving the existing preset routing format and arbitrary role tables.
 
 #### Scenario: User configures fusion planner profiles
-- **WHEN** a user edits a preset from the model configuration modal
+- **WHEN** a user edits a preset from the Settings model configuration editor
 - **THEN** the editor SHALL offer planner-1 through planner-5 assignments and a fusion consolidator assignment
 - **AND** confirming the editor SHALL persist non-empty assignments under the corresponding `roles.fusion.plan` and `steps.fusion.consolidate` entries
 
@@ -79,7 +79,7 @@ The dashboard preset editor SHALL allow a preset to assign profiles independentl
 - **AND** unset optional fusion fields SHALL not be persisted as the literal `(unset)` value
 
 ### Requirement: Preset-based plan-fusion routing
-A dashboard-started `plan-fusion` workflow SHALL resolve its planner and consolidator profiles using the selected preset's existing precedence rules, with per-planner role assignments taking precedence over step assignments and preset defaults.
+A contextually started `plan-fusion` workflow SHALL resolve its planner and consolidator profiles using the selected preset's existing precedence rules, with per-planner role assignments taking precedence over step assignments and preset defaults.
 
 #### Scenario: Planner role overrides are honored
 - **WHEN** a selected preset assigns distinct profiles to `fusion.plan.planner-1` through `fusion.plan.planner-N` and assigns or can resolve `fusion.consolidate`
@@ -92,7 +92,7 @@ A dashboard-started `plan-fusion` workflow SHALL resolve its planner and consoli
 
 ### Requirement: Catalog-driven verification role list in preset editor
 
-The dashboard preset editor's verification-role assignments SHALL be derived from the workflow engine's registered verifier role catalog rather than from a dashboard-local list of role names.
+The Settings preset editor's verification-role assignments SHALL be derived from the workflow engine's registered verifier role catalog rather than from a UI-local list of role names.
 
 #### Scenario: Editor renders the registered roles
 - **WHEN** a user opens the stored-preset editor on the role-assignment field

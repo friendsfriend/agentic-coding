@@ -1,4 +1,7 @@
 /** @jsxImportSource @opentui/solid */
+// Contextual creation form (launch-workflows-from-project-and-wiki-pages,
+// tasks 1.2/3.1/3.2): the launch context is immutable, so the form never asks
+// for a repository, a custom path or an independent target.
 import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -28,15 +31,21 @@ function key(
 	});
 }
 
-test("workflow type list offers openspec-fusion-full alongside existing choices", async () => {
-	let handler: ((event: KeyEvent) => boolean) | undefined;
+const PROJECT = {
+	kind: "project",
+	ident: "fixture",
+	name: "Fixture",
+	repository: "/managed/fixture",
+} as const;
+
+const INDEPENDENT = { kind: "independent" } as const;
+
+test("a project context offers every registry workflow type without asking for a repository", async () => {
 	const t = await testRender(
 		() => (
 			<NewWorkflowModal
-				projects={[]}
-				onKeyReady={(h) => {
-					handler = h;
-				}}
+				context={PROJECT}
+				onKeyReady={() => {}}
 				onCancel={() => {}}
 				onComplete={async () => {}}
 			/>
@@ -44,9 +53,12 @@ test("workflow type list offers openspec-fusion-full alongside existing choices"
 		{ width: 110, height: 50 },
 	);
 	await t.flush();
-	handler?.(key("enter")); // repo: Current directory -> workflow type list
-	await t.flush();
 	const frame = t.captureCharFrame();
+	// The target is the page's project, named once, never chosen.
+	expect(frame).toContain("Fixture");
+	expect(frame).not.toContain("Custom path");
+	expect(frame).not.toContain("Standalone research");
+	expect(frame).not.toContain("Current directory");
 	expect(frame).toContain("Openspec");
 	expect(frame).toContain("Openspec apply");
 	expect(frame).toContain("No OpenSpec");
@@ -55,34 +67,17 @@ test("workflow type list offers openspec-fusion-full alongside existing choices"
 	expect(frame).toContain("Openspec fusion propose");
 	expect(frame).toContain("Wiki");
 	expect(frame).toContain("Research");
-	expect(frame).toContain("Standard openspec flow");
-	expect(frame).toContain("Openspec flow with reduced apply");
-	expect(frame).toContain("Workflow for repositories");
-	expect(frame).toContain("Openspec fusion flow");
-	expect(frame).toContain("Openspec fusion workflow");
-	expect(frame).toContain("Wiki workflow used");
 	expect(frame).not.toContain("Wiki Comments");
-	expect(frame).not.toMatch(/\([^)]*\)/);
 	t.renderer.destroy();
 });
 
-test("unavailable configured projects are shown but cannot be selected", async () => {
+test("an independent Wiki context offers a target-compatible research type only", async () => {
 	let handler: ((event: KeyEvent) => boolean) | undefined;
 	const completed: NewWorkflowInput[] = [];
 	const t = await testRender(
 		() => (
 			<NewWorkflowModal
-				projects={[
-					{
-						name: "Uncloned",
-						path: "/managed/uncloned",
-						openspec: false,
-						ident: "uncloned",
-						available: false,
-						availability: "missing",
-						detail: "checkout is not cloned",
-					},
-				]}
+				context={INDEPENDENT}
 				onKeyReady={(h) => {
 					handler = h;
 				}}
@@ -92,16 +87,31 @@ test("unavailable configured projects are shown but cannot be selected", async (
 				}}
 			/>
 		),
-		{ width: 110, height: 30 },
+		{ width: 110, height: 40 },
 	);
 	await t.flush();
-	// The unavailable project stays visible with its diagnostic.
-	expect(t.captureCharFrame()).toContain("unavailable");
-	handler?.(key("enter"));
+	const frame = t.captureCharFrame();
+	expect(frame).toContain("Independent (");
+	expect(frame).toContain("Research");
+	// Repository-bound types and every repository selector are absent.
+	expect(frame).not.toContain("Openspec");
+	expect(frame).not.toContain("Custom path");
+	expect(frame).not.toContain("Standalone research");
+	handler?.(key("enter")); // workflow type: research
+	handler?.(key("enter")); // agent preset: (config defaults)
+	t.mockInput.pressEnter(); // ticket: optional
+	t.mockInput.pressEnter(); // workflow id
 	await t.flush();
-	// Selecting it must not advance to the workflow-type step.
-	expect(t.captureCharFrame()).not.toContain("Openspec apply");
-	expect(completed).toHaveLength(0);
+	for (const character of "Survey the wiki") t.mockInput.pressKey(character);
+	t.mockInput.pressEnter({ meta: true }); // task -> confirm
+	handler?.(key("enter")); // create workflow
+	await t.flush();
+	expect(completed).toHaveLength(1);
+	expect(completed[0]).toMatchObject({
+		workflowType: "research",
+		repo: "",
+		task: "Survey the wiki",
+	});
 	t.renderer.destroy();
 });
 
@@ -115,7 +125,7 @@ test("proposal choices submit their type, task, and fixed checkout mode", async 
 		const t = await testRender(
 			() => (
 				<NewWorkflowModal
-					projects={[]}
+					context={PROJECT}
 					onKeyReady={(h) => {
 						handler = h;
 					}}
@@ -127,8 +137,6 @@ test("proposal choices submit their type, task, and fixed checkout mode", async 
 			),
 			{ width: 110, height: 30 },
 		);
-		await t.flush();
-		handler?.(key("enter")); // repo: Current Directory
 		await t.flush();
 		for (let index = 0; index < offset; index++) handler?.(key("j"));
 		handler?.(key("enter")); // proposal workflow type
@@ -153,6 +161,7 @@ test("proposal choices submit their type, task, and fixed checkout mode", async 
 			workflowType,
 			task: "Draft only",
 			mode: "checkout",
+			repo: PROJECT.repository,
 		});
 		t.renderer.destroy();
 	}
@@ -169,16 +178,12 @@ test("openspec-apply omits the task step and submits no task", async () => {
 		const t = await testRender(
 			() => (
 				<NewWorkflowModal
-					projects={[
-						{
-							name: "Fixture",
-							path: repo,
-							openspec: true,
-							ident: "fixture",
-							available: true,
-							availability: "available",
-						},
-					]}
+					context={{
+						kind: "project",
+						ident: "fixture",
+						name: "Fixture",
+						repository: repo,
+					}}
 					onKeyReady={(h) => {
 						handler = h;
 					}}
@@ -190,8 +195,6 @@ test("openspec-apply omits the task step and submits no task", async () => {
 			),
 			{ width: 110, height: 30 },
 		);
-		await t.flush();
-		handler?.(key("enter")); // repo: Fixture -> workflow type list
 		await t.flush();
 		handler?.(key("j")); // standard -> openspec-apply
 		handler?.(key("enter")); // select openspec-apply
@@ -217,7 +220,7 @@ test("selecting openspec-fusion-full submits workflowType openspec-fusion-full",
 	const t = await testRender(
 		() => (
 			<NewWorkflowModal
-				projects={[]}
+				context={PROJECT}
 				onKeyReady={(h) => {
 					handler = h;
 				}}
@@ -229,8 +232,6 @@ test("selecting openspec-fusion-full submits workflowType openspec-fusion-full",
 		),
 		{ width: 160, height: 30 },
 	);
-	await t.flush();
-	handler?.(key("enter")); // repo: Current Directory
 	await t.flush();
 	handler?.(key("j")); // standard -> openspec-apply
 	handler?.(key("j")); // openspec-apply -> quick
@@ -270,7 +271,7 @@ test("creation indicator renders before completion and clears after it settles",
 	const t = await testRender(
 		() => (
 			<NewWorkflowModal
-				projects={[]}
+				context={PROJECT}
 				onKeyReady={(h) => {
 					handler = h;
 				}}
@@ -285,8 +286,6 @@ test("creation indicator renders before completion and clears after it settles",
 		{ width: 110, height: 30 },
 	);
 	await t.flush();
-	handler?.(key("enter")); // repo: Current Directory
-	await t.flush();
 	handler?.(key("enter")); // workflow type: standard
 	handler?.(key("enter")); // preset: (config defaults)
 	t.mockInput.pressEnter(); // ticket: optional
@@ -297,16 +296,14 @@ test("creation indicator renders before completion and clears after it settles",
 	handler?.(key("enter")); // mode: worktree -> confirm
 	await t.flush();
 	expect(t.captureCharFrame()).toContain("Confirm workflow");
-
-	handler?.(key("return")); // create workflow
-	// The progress modal must be visible while the completion callback is
-	// still in flight (deferred via an unresolved promise).
-	const creatingFrame = await t.waitForFrame((frame) =>
-		frame.includes("Starting workspace"),
-	);
-	expect(creatingFrame).toContain("Creating workflow");
-	expect(resolveComplete).toBeDefined();
+	handler?.(key("return"));
+	await t.flush();
+	// The pending indicator is up, and a second Enter cannot submit twice.
+	expect(t.captureCharFrame()).toContain("Starting workspace and agents");
+	handler?.(key("return"));
+	await t.flush();
 	resolveComplete?.();
-	await t.waitForFrame((frame) => !frame.includes("Creating workflow"));
+	await t.flush();
+	expect(t.captureCharFrame()).not.toContain("Starting workspace and agents");
 	t.renderer.destroy();
 });

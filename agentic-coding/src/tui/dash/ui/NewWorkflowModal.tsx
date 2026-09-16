@@ -15,32 +15,45 @@ import {
 } from "solid-js";
 import { backendClient } from "../../../server/client";
 import { PUBLIC_WORKFLOW_CATALOG } from "../../../workflow/definitions";
-import type { ProjectOption } from "../../../workflow/project-catalog";
 import { focusSoon } from "../devenv-ui/utils/focusSoon";
 import { PRESET_CONFIG_DEFAULTS } from "../engine";
-import { notify } from "../notifications";
+import type { WorkflowLaunchContext, WorkflowLaunchInput } from "../launch";
+import { workflowTypesForContext } from "../launch";
 import { discoverChanges, discoverChangesAsync } from "../observations";
 import { uiColors } from "./colors";
 import { GenericModal } from "./GenericModal";
 import { ListViewModal } from "./ListViewModal";
 import { ProgressModal } from "./ProgressModal";
 
-export type NewWorkflowInput = {
-	repo: string;
-	ticket: string;
-	workflowId: string;
-	task?: string;
-	mode: string;
-	workflowType: string;
-	preset: string;
-};
-type Project = ProjectOption;
+/** Types whose task is a required field; everything else (openspec-apply)
+ * selects an existing change instead. */
+const TASK_TYPES = new Set([
+	"openspec-full",
+	"quick",
+	"openspec-fusion-full",
+	"openspec-propose",
+	"openspec-fusion-propose",
+	"wiki",
+	"research",
+	"no-openspec",
+]);
+
+export type NewWorkflowInput = WorkflowLaunchInput;
+
+/**
+ * Contextual creation form (launch-workflows-from-project-and-wiki-pages,
+ * task 1.2). The launch context is immutable and comes from the page the user
+ * started on, so the form has no repository, custom-path or standalone-target
+ * selector at all: it keeps the workflow type, preset, ticket, workflow-id,
+ * task and checkout options. Supported types come from the workflow registry
+ * catalog; the context only restricts the permitted target set.
+ */
 export function NewWorkflowModal(props: {
-	projects: Project[];
+	context: WorkflowLaunchContext;
 	presets?: string[];
 	presetsForRepository?: (repository: string) => string[];
 	onCancel: () => void;
-	onComplete: (input: NewWorkflowInput) => Promise<void>;
+	onComplete: (input: WorkflowLaunchInput) => Promise<void>;
 	onKeyReady: (handler: (key: KeyEvent) => boolean) => void;
 }) {
 	const [step, setStep] = createSignal(0);
@@ -48,22 +61,19 @@ export function NewWorkflowModal(props: {
 	const [selected, setSelected] = createSignal(0);
 	const [filter, setFilter] = createSignal("");
 	const [filtering, setFiltering] = createSignal(false);
-	const [values, setValues] = createSignal<NewWorkflowInput>({
-		repo: "",
+	const repository = () =>
+		props.context.kind === "project" ? props.context.repository : "";
+	const [values, setValues] = createSignal<WorkflowLaunchInput>({
+		repo: repository(),
 		ticket: "",
 		workflowId: "",
 		mode: "",
-		workflowType: "openspec-full",
+		workflowType:
+			props.context.kind === "independent" ? "research" : "openspec-full",
 		preset: PRESET_CONFIG_DEFAULTS,
 	});
-	const [showCustomRepo, setShowCustomRepo] = createSignal(false);
-	const [standaloneSelected, setStandaloneSelected] = createSignal(false);
 	let currentInput: InputRenderable | undefined;
 	let taskInput: TextareaRenderable | undefined;
-	const projects = () =>
-		props.projects.filter((project) =>
-			project.name.toLowerCase().includes(filter().toLowerCase()),
-		);
 
 	// OpenSpec change ids are fetched through the typed backend API; the
 	// completion list updates once the async read resolves.
@@ -83,45 +93,31 @@ export function NewWorkflowModal(props: {
 		type === "openspec-propose" || type === "openspec-fusion-propose";
 	const isRepositoryBacked = (type: string) =>
 		isProposal(type) || type === "wiki";
-	const fields = (): (keyof NewWorkflowInput)[] => {
-		const base: (keyof NewWorkflowInput)[] = [
-			"repo",
+	/** Context-restricted type set; `undefined` means the whole registry. */
+	const allowedTypes = () => workflowTypesForContext(props.context);
+	const workflowTypeChoices = () => {
+		const allowed = allowedTypes();
+		return (
+			PUBLIC_WORKFLOW_CATALOG.map((item) => item.alias ?? item.id) as string[]
+		).filter((choice) => !allowed || allowed.includes(choice));
+	};
+	const fields = (): (keyof WorkflowLaunchInput)[] => {
+		const head: (keyof WorkflowLaunchInput)[] = [
 			"workflowType",
 			"preset",
 			"ticket",
 			"workflowId",
-			"mode",
 		];
-		if (
-			[
-				"openspec-full",
-				"quick",
-				"openspec-fusion-full",
-				"openspec-propose",
-				"openspec-fusion-propose",
-				"wiki",
-				"research",
-				"no-openspec",
-			].includes(values().workflowType)
-		) {
-			return [
-				"repo",
-				"workflowType",
-				"preset",
-				"ticket",
-				"workflowId",
-				"task",
-				...(isRepositoryBacked(values().workflowType) ||
-				values().workflowType === "research"
-					? []
-					: (["mode"] as const)),
-			];
-		}
-		return base;
+		if (!TASK_TYPES.has(values().workflowType)) return [...head, "mode"];
+		// Repository-backed workflows and independent research own their checkout
+		// behavior, so only the remaining types show the explicit choice.
+		return isRepositoryBacked(values().workflowType) ||
+			values().workflowType === "research"
+			? [...head, "task"]
+			: [...head, "task", "mode"];
 	};
 
 	const fieldLabels: Record<string, string> = {
-		repo: "Repository",
 		workflowType: "Workflow type",
 		preset: "Agent preset",
 		ticket: "Ticket identifier optional",
@@ -130,9 +126,6 @@ export function NewWorkflowModal(props: {
 		mode: "Checkout mode",
 	};
 
-	const workflowTypeChoices = PUBLIC_WORKFLOW_CATALOG.map(
-		(item) => item.alias ?? item.id,
-	);
 	const workflowTypeEntry = (choice: string) =>
 		PUBLIC_WORKFLOW_CATALOG.find(
 			(item) => item.id === choice || item.alias === choice,
@@ -140,24 +133,10 @@ export function NewWorkflowModal(props: {
 
 	const choices = (): string[] => {
 		const f = field();
-		if (f === "repo")
-			return [
-				...projects().map(
-					(p) =>
-						`${p.available === false ? "✗" : p.openspec ? "●" : "○"} ${p.name}${
-							p.available === false ? " — unavailable" : ""
-						}`,
-				),
-				`Current directory: ${process.cwd().split("/").pop()}`,
-				"Standalone research",
-				"Custom path…",
-			];
 		if (f === "workflowType")
-			return standaloneSelected()
-				? ["research"]
-				: workflowTypeChoices.filter((item) =>
-						item.includes(filter().toLowerCase()),
-					);
+			return workflowTypeChoices().filter((item) =>
+				item.includes(filter().toLowerCase()),
+			);
 		if (f === "preset") {
 			const presets = props.presetsForRepository
 				? props.presetsForRepository(values().repo)
@@ -181,7 +160,6 @@ export function NewWorkflowModal(props: {
 	const listStep = () => {
 		const f = field();
 		return (
-			f === "repo" ||
 			f === "workflowType" ||
 			f === "preset" ||
 			(f === "workflowId" && values().workflowType === "openspec-apply") ||
@@ -196,11 +174,17 @@ export function NewWorkflowModal(props: {
 		) || Boolean(values().task?.trim());
 	const totalSteps = () => fields().length + 1;
 	const field = () => fields()[step()];
-	const summary = () =>
-		fields().map((key) => ({
+	const targetSummary = () =>
+		props.context.kind === "project"
+			? { label: "Project", value: props.context.name }
+			: { label: "Target", value: "Independent (no repository)" };
+	const summary = () => [
+		targetSummary(),
+		...fields().map((key) => ({
 			label: fieldLabels[key],
 			value: values()[key] || "—",
-		}));
+		})),
+	];
 
 	const updateCurrent = (value: string) => {
 		const key = field();
@@ -219,13 +203,9 @@ export function NewWorkflowModal(props: {
 	const next = (value: string) => {
 		const key = field();
 		if (!key) return;
-		const standaloneResearch =
-			key === "repo" && value === "Standalone research";
-		if (key === "repo") setStandaloneSelected(standaloneResearch);
 		setValues((current) => ({
 			...current,
-			[key]: standaloneResearch ? "" : value,
-			...(standaloneResearch ? { workflowType: "research" } : {}),
+			[key]: value,
 			...(key === "workflowType" && isRepositoryBacked(value)
 				? { mode: "checkout" }
 				: {}),
@@ -252,15 +232,6 @@ export function NewWorkflowModal(props: {
 	const handler = (key: KeyEvent) => {
 		if (creating()) return true;
 		const name = key.name.toLowerCase();
-		if (showCustomRepo()) {
-			// The focused input owns insertion, deletion, cursor movement, paste,
-			// and submit. Only handle the wizard-level escape here.
-			if (name === "escape") {
-				setShowCustomRepo(false);
-				return true;
-			}
-			return false;
-		}
 		if (name === "escape") {
 			// Esc while filtering first dismisses the filter, keeping the wizard
 			// step; a second Esc navigates back.
@@ -333,32 +304,7 @@ export function NewWorkflowModal(props: {
 		}
 		if (name === "return" || name === "enter") {
 			const choice = items[selected()];
-			if (!choice) return true;
-			if (step() === 0 && selected() === projects().length) {
-				next(process.cwd());
-				return true;
-			}
-			if (step() === 0 && selected() === projects().length + 1) {
-				next("Standalone research");
-				return true;
-			}
-			if (step() === 0 && selected() === projects().length + 2) {
-				setShowCustomRepo(true);
-				return true;
-			}
-			if (step() === 0) {
-				const project = projects()[selected()];
-				if (project && project.available === false) {
-					notify(
-						project.detail ??
-							`${project.name} is not available; clone it before starting work`,
-						"warning",
-					);
-					return true;
-				}
-			}
-			if (choice)
-				next(step() === 0 ? (projects()[selected()]?.path ?? "") : choice);
+			if (choice) next(choice);
 			return true;
 		}
 		return true;
@@ -376,43 +322,6 @@ export function NewWorkflowModal(props: {
 		<>
 			<Show when={creating()}>
 				<ProgressModal message="Starting workspace and agents…" />
-			</Show>
-			<Show when={!creating() && showCustomRepo()}>
-				<GenericModal
-					title="New workflow"
-					fieldLabel="Custom repository path"
-					summary={summary()}
-					step={0}
-					total={totalSteps()}
-					helpSections={false}
-					help={[
-						{ key: "Enter", action: "Next" },
-						{ key: "Esc", action: "Back" },
-					]}
-				>
-					<input
-						ref={currentInput}
-						focused
-						value={values().repo}
-						placeholder="/absolute/path/to/repo"
-						onInput={(v: string) =>
-							setValues((current) => ({ ...current, repo: v }))
-						}
-						onSubmit={() => {
-							setShowCustomRepo(false);
-							setStep(1);
-							setSelected(0);
-							setFilter("");
-							setFiltering(false);
-						}}
-						onKeyDown={(event: KeyEvent) => {
-							if (event.name.toLowerCase() === "escape")
-								setShowCustomRepo(false);
-						}}
-						focusedBackgroundColor={uiColors.bgBase}
-						focusedTextColor={uiColors.textPrimary}
-					/>
-				</GenericModal>
 			</Show>
 			<Show when={!creating()}>
 				<Show

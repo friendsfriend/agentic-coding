@@ -14,7 +14,10 @@ import {
 	onMount,
 	Show,
 } from "solid-js";
-import type { ProjectOption } from "../../../workflow/project-catalog";
+import {
+	type AgentsConfig,
+	BUILTIN_PRESET_NAME,
+} from "../../../workflow/profiles";
 import {
 	fetchProjectCatalog,
 	projectCanonicalRoots,
@@ -26,30 +29,51 @@ import {
 } from "../../../workflow/runtime";
 import type { WikiReviewComment } from "../../../workflow/wiki";
 import { copyToClipboard } from "../../clipboard";
-import { App as DashApp } from "../../dash/App";
 import {
+	agentConfigEntry,
+	refreshAgentConfig,
+} from "../../dash/agent-config-cache";
+import {
+	listPresetNames,
 	startSidebarPresentation,
 	startWikiCommentWorkflowInProcess,
 } from "../../dash/engine";
-import { Home as DashHome } from "../../dash/Home";
+import { workflowLaunchKeybindCatalog } from "../../dash/keybinds";
 import {
 	registerShellFeatureField,
 	registerShellKeyLayer,
 	registerShellOverlayLayer,
 } from "../../dash/keymap-setup";
 import {
-	discoverProjectsAsync,
-	listWorkflowsAsync,
-} from "../../dash/observations";
+	launchContextError,
+	launchRepositoryAvailable,
+	launchWorkflow,
+	type WorkflowLaunchContext,
+	type WorkflowLaunchInput,
+	watchAcceptedHandoff,
+} from "../../dash/launch";
 import { isKeyTraceSuppressed, traceTui } from "../../dash/tracing";
-import type { WorkflowOverview } from "../../dash/types";
-import { Header } from "../../dash/ui/Header";
-import { watchDirectories } from "../../dash/watchRefresh";
+import { NewWorkflowModal } from "../../dash/ui/NewWorkflowModal";
 import {
 	phase,
 	quitConfirmation,
 	resolveQuitConfirmation,
 } from "../../lifecycle";
+import { resolveBackendSettings } from "../../settings/backend-info";
+import {
+	type SettingsContext,
+	type SettingsItem,
+	settingsItems,
+} from "../../settings/items";
+import { SettingsAgentEditor } from "../../settings/SettingsAgentEditor";
+import { SettingsSectionView } from "../../settings/SettingsSectionView";
+import {
+	refreshSettingsProjects,
+	refreshSettingsProviders,
+	settingsKeybindCatalog,
+	settingsProjects,
+	settingsProviders,
+} from "../../settings/state";
 import { ErrorModalOverlay } from "../../shared/ErrorModalOverlay";
 import {
 	activeErrorModal,
@@ -82,9 +106,11 @@ import {
 	homeDestinations,
 	observabilityDestinations,
 	pickerEntries,
+	settingsDestinations,
 } from "../../shared/navigation/destinations";
 import { destinationPageKeybindCatalog } from "../../shared/navigation/keybinds";
 import { LocationPicker } from "../../shared/navigation/LocationPicker";
+import { configDir, themeSettingsPath } from "../../shared/preferences";
 import {
 	breadcrumb,
 	createPageNavigation,
@@ -96,6 +122,10 @@ import {
 	type Route,
 	resolveAvailable,
 	routeKey,
+	SETTINGS_SECTION_DESCRIPTIONS,
+	SETTINGS_SECTION_LABELS,
+	type SettingsSection,
+	settingsSectionOfPage,
 } from "../../shared/routes";
 import { Badge } from "../components/Badge";
 import { HighlightedText } from "../components/Highlight";
@@ -145,6 +175,9 @@ const SHELL_OWNED_OVERLAYS = new Set([
 	"theme",
 	"filter",
 	"sort",
+	// Contextual workflow creation: the shell owns the form and its start
+	// boundary, so its keys are routed through the one shell dispatcher.
+	"new-workflow",
 ]);
 
 type Tab =
@@ -158,11 +191,31 @@ type Tab =
 	| "topology";
 type Workspace = { changeId: string; path: string; spanCount: number };
 
-export interface WorkflowHeaderInfo {
-	change: string;
-	phase: string;
-	branch: string;
-	updated: string;
+/**
+ * Read-only routing view for the Settings agent section: the agent settings a
+ * preset editor does not own (default profile, per-step routes, role routes and
+ * definition defaults) are shown with their effective value instead of being
+ * silently unreachable (centralize-application-settings, task 2.2).
+ */
+function agentRoutingEntries(
+	agents: AgentsConfig,
+): Array<{ label: string; value: string }> {
+	const entries: Array<{ label: string; value: string }> = [
+		{
+			label: "Default profile",
+			value: agents.default_profile ?? "(unset)",
+		},
+	];
+	for (const [step, profile] of Object.entries(agents.routes ?? {}))
+		entries.push({ label: `Route ${step}`, value: profile });
+	for (const [step, roles] of Object.entries(agents.role_routes ?? {}))
+		for (const [role, profile] of Object.entries(roles))
+			entries.push({ label: `Role route ${step}.${role}`, value: profile });
+	for (const [definition, profile] of Object.entries(
+		agents.definition_defaults ?? {},
+	))
+		entries.push({ label: `Definition default ${definition}`, value: profile });
+	return entries;
 }
 
 /**
@@ -179,13 +232,29 @@ export interface EnvironmentDestination {
 	}) => void;
 }
 
+/**
+ * Contextual launch request reported by the environment resource page
+ * (launch-workflows-from-project-and-wiki-pages, task 1.3). The page names the
+ * canonical configured identity; the shell owns the creation form and the
+ * start boundary, so the environment feature never starts a workflow itself.
+ */
+export interface EnvironmentLaunchRequest {
+	/** Stable configured project identity (environment `app.ident`). */
+	ident: string;
+	name: string;
+	repository: string;
+}
+
+/**
+ * Shell keymap/host context. `mode` distinguishes the full application (Home,
+ * Wiki, Settings) from a shell that only hosts the dashboard keymap and the
+ * Settings surface while attaching. The per-workflow dashboard pane is no
+ * longer mounted here: `agentic-coding dash` renders its own root
+ * (isolate-workflow-dashboard-mode, task 2.4).
+ */
 export interface DashboardTab {
 	mode: "home" | "dash";
-	repo?: string;
-	change?: string;
-	profile?: string;
 	keymap: Keymap<Renderable, KeyEvent>;
-	/** Workflow header context pushed up from the dashboard tab content. */
 }
 
 export function App(props: {
@@ -212,8 +281,9 @@ export function App(props: {
 		active: () => boolean,
 		onModalChange: (open: boolean) => void,
 		destination: () => EnvironmentDestination | undefined,
+		onStartWorkflow: (project: EnvironmentLaunchRequest) => void,
 	) => JSX.Element;
-	/** When set, a Workflow tab is prepended that renders the dashboard. */
+	/** Keymap/host context; see `DashboardTab`. */
 	dashboard?: DashboardTab;
 }) {
 	const renderer = useRenderer();
@@ -233,18 +303,14 @@ export function App(props: {
 	// Page route authority (replace-nested-tabs-with-page-navigation, task 2.3):
 	// one typed location, structural parents and chronological Back replace the
 	// per-feature stacks and single cross-feature origin.
-	const initialRoute: Route = props.dashboard
-		? props.dashboard.mode === "dash"
-			? {
-					page: "workflows.detail",
-					resourceId: props.dashboard.change,
-				}
-			: // Home is the default full-application entry (task 2.4): the workflow
-				// page stays reachable from it until contextual launch and Settings land.
+	const initialRoute: Route =
+		props.dashboard?.mode === "home"
+			? // The full application enters Home (task 2.4); the per-workflow
+				// dashboard is reached by `dash`, not by a shell route.
 				{ page: "home" }
-		: props.environments
-			? { page: "environments" }
-			: { page: "observability.traces" };
+			: props.environments
+				? { page: "environments" }
+				: { page: "observability.traces" };
 	const pages = createPageNavigation(createRouterState(initialRoute));
 	const currentPage = () => pages.current().page;
 	const activeFeature = (): FeatureId | undefined => pages.feature();
@@ -307,6 +373,9 @@ export function App(props: {
 	const activeTab = (): Tab => {
 		const page = currentPage();
 		if (page === "home") return "home";
+		// Settings is chrome, not a feature body: its pages must not leave a
+		// hidden observability body rendering behind them.
+		if (page.startsWith("settings")) return "home";
 		if (page.startsWith("environments")) return "environments";
 		if (page.startsWith("workflows")) return "workflow";
 		if (page.startsWith("wiki")) return "wiki";
@@ -383,14 +452,18 @@ export function App(props: {
 	const surface = (): DestinationSurface => ({
 		environments: Boolean(props.environments),
 		tracesOnly: Boolean(props.tracesOnly),
-		workflows: Boolean(props.dashboard),
 		wiki: props.dashboard?.mode === "home",
+		// Settings owns the shared keymap the profile/preset editor needs, so the
+		// surface that renders it is the one that has a dashboard-mounted shell.
+		settings: Boolean(props.dashboard),
 	});
 	/** Home and the two category pages are destination lists; other pages are not. */
 	const destinationEntries = (): DestinationEntry[] | undefined => {
 		switch (currentPage()) {
 			case "home":
 				return homeDestinations(surface());
+			case "settings":
+				return settingsDestinations();
 			case "environments":
 				return environmentDestinations();
 			case "observability":
@@ -403,6 +476,8 @@ export function App(props: {
 		switch (currentPage()) {
 			case "home":
 				return "Home";
+			case "settings":
+				return "Settings";
 			case "environments":
 				return "Environments";
 			default:
@@ -438,10 +513,169 @@ export function App(props: {
 		}
 		return false;
 	};
-	// Workflow header context pushed up from the dashboard tab content (single source
-	// of truth; the dashboard polls, the shell renders). Null in home mode / before data.
-	const [workflowHeader, setWorkflowHeader] =
-		createSignal<WorkflowHeaderInfo | null>(null);
+
+	// ---- Settings sections (centralize-application-settings) ----
+	// One snapshot of the values a section shows; every source is resolved here
+	// (route scope, agent config cache, client preferences, server reads) so the
+	// item builders stay pure and testable.
+	const [settingsAgentVersion, setSettingsAgentVersion] = createSignal(0);
+	const [settingsAgentEditor, setSettingsAgentEditor] = createSignal(false);
+	const settingsSection = (): SettingsSection | undefined =>
+		settingsSectionOfPage(currentPage());
+	/** Stable configured project id of a project-scoped Settings page. */
+	const settingsProjectIdent = (): string | undefined =>
+		settingsSection() ? pages.current().resourceId : undefined;
+	/** Repository the project-scoped agent settings resolve from. */
+	const settingsAgentRepository = (): string | undefined => {
+		const ident = settingsProjectIdent();
+		if (!ident) return undefined;
+		return settingsProjects().projects.find(
+			(project) => project.ident === ident,
+		)?.repository;
+	};
+	const settingsContext = (): SettingsContext => {
+		// Re-read the agent cache after a refresh; the cache itself is not reactive.
+		settingsAgentVersion();
+		const repository = settingsAgentRepository();
+		const entry = agentConfigEntry(repository);
+		const agents = entry.agents;
+		return {
+			themes: themeNames,
+			activeTheme: getActiveThemeName(),
+			clientSettingsPath: themeSettingsPath(),
+			customThemeDir: join(configDir(), "themes"),
+			section: settingsSection() ?? "appearance",
+			agents: {
+				scope: settingsProjectIdent() ? "project" : "user",
+				...(settingsProjectIdent()
+					? { projectIdent: settingsProjectIdent() }
+					: {}),
+				...(repository ? { repository } : {}),
+				...(entry.provenance?.source
+					? { source: entry.provenance.source }
+					: {}),
+				files: entry.provenance?.files ?? [],
+				conflicts: entry.conflicts ?? [],
+				...(entry.error ? { error: entry.error } : {}),
+				profiles: Object.entries(agents?.profiles ?? {}).map(
+					([name, profile]) => ({
+						name,
+						value: [profile.runtime, profile.model].filter(Boolean).join(" · "),
+					}),
+				),
+				presets: Object.entries(agents?.presets ?? {})
+					.filter(([name]) => name !== BUILTIN_PRESET_NAME)
+					.map(([name, preset]) => ({
+						name,
+						value: `${Object.keys(preset.steps ?? {}).length} steps`,
+					})),
+				routing: agents ? agentRoutingEntries(agents) : [],
+			},
+			providers: settingsProviders(),
+			projects: settingsProjects(),
+			backend: {
+				values: resolveBackendSettings({
+					serverUrl: props.environments?.serverUrl,
+					owned: Boolean(props.environments && !props.attached),
+					attached: Boolean(props.attached),
+				}),
+			},
+		};
+	};
+	const settingsSectionItems = (): SettingsItem[] | undefined => {
+		if (!settingsSection()) return undefined;
+		return settingsItems(settingsContext(), settingsProjectIdent());
+	};
+	// Reads follow the visible section; an unavailable server stays a section
+	// error with a retry rather than a local write.
+	createEffect(() => {
+		const page = currentPage();
+		if (!page.startsWith("settings")) return;
+		const section = settingsSectionOfPage(page);
+		const ident = pages.current().resourceId;
+		if (section === "providers")
+			void refreshSettingsProviders(props.environments?.serverUrl);
+		if (section === "projects" || (section === "agents" && ident))
+			void refreshSettingsProjects(props.environments?.serverUrl);
+	});
+	createEffect(() => {
+		if (settingsSection() !== "agents") return;
+		const repository = settingsAgentRepository();
+		void refreshAgentConfig(repository).then(() =>
+			setSettingsAgentVersion((value) => value + 1),
+		);
+	});
+	// Leaving Settings closes the shared editor: its keymap layer is registered
+	// by the editor itself, so a hidden page must not keep it mounted.
+	createEffect(() => {
+		if (!currentPage().startsWith("settings")) setSettingsAgentEditor(false);
+	});
+	const settingsIndex = (): number =>
+		pages.viewState<number>(pages.current()) ?? 0;
+	const setSettingsIndex = (index: number): void => {
+		pages.setViewState(pages.current(), index);
+	};
+	const activateSettingsItem = (item: SettingsItem | undefined): void => {
+		if (!item) return;
+		switch (item.action.kind) {
+			case "none":
+				return;
+			case "theme-picker":
+				// Reuse the shared picker (search, live preview, save on selection)
+				// rather than a second theme list inside Settings.
+				setThemeIndex(Math.max(0, themeNames.indexOf(getActiveThemeName())));
+				setThemeQuery("");
+				setThemeFiltering(false);
+				nav.pushModal("theme", "home");
+				return;
+			case "retry":
+				void refreshSettingsProviders(props.environments?.serverUrl);
+				void refreshSettingsProjects(props.environments?.serverUrl);
+				return;
+			case "open-agents": {
+				const ident = settingsProjectIdent();
+				if (ident && !settingsAgentRepository()) {
+					notify(
+						`Project ${ident} is not in the connected server's catalog; refusing to edit a local fallback configuration`,
+						"error",
+					);
+					return;
+				}
+				setSettingsAgentEditor(true);
+				return;
+			}
+			case "navigate":
+				pages.navigate(item.action.route);
+				return;
+		}
+	};
+	const handleSettingsKey = (key: string, shifted: boolean): boolean => {
+		const items = settingsSectionItems();
+		if (!items) return false;
+		if (shifted && key === "r") {
+			void refreshSettingsProviders(props.environments?.serverUrl);
+			void refreshSettingsProjects(props.environments?.serverUrl);
+			void refreshAgentConfig(settingsAgentRepository()).then(() =>
+				setSettingsAgentVersion((value) => value + 1),
+			);
+			notify("Settings reloaded", "info");
+			return true;
+		}
+		const last = Math.max(0, items.length - 1);
+		if (key === "j" || key === "down") {
+			setSettingsIndex(Math.min(last, settingsIndex() + 1));
+			return true;
+		}
+		if (key === "k" || key === "up") {
+			setSettingsIndex(Math.max(0, settingsIndex() - 1));
+			return true;
+		}
+		if (key === "enter" || key === "return") {
+			activateSettingsItem(items[settingsIndex()]);
+			return true;
+		}
+		return false;
+	};
 	// Review comments deliberately live above the conditional tab content so
 	// closing a note or switching tabs cannot discard the in-memory session.
 	const [wikiComments, setWikiComments] = createSignal<WikiReviewComment[]>([]);
@@ -452,102 +686,103 @@ export function App(props: {
 		KeybindSection[] | undefined
 	>();
 
-	// Home mode: the shell owns the workspace list — loaded in the background at
-	// startup and kept fresh, so visiting the Workflow tab never reloads or shows
-	// the loading indicator again.
-	const [homeItems, setHomeItems] = createSignal<WorkflowOverview[]>([]);
-	const [homeLoading, setHomeLoading] = createSignal(true);
-	const [homeProjects, setHomeProjects] = createSignal<ProjectOption[]>([]);
-	let homeLoadRunning = false;
-	let homeLoadQueued = false;
-	let homeDisposed = false;
-	let homeController: AbortController | undefined;
-	// Last observation failure surfaced in the error modal; deduped so the 30s
-	// safety re-sync and directory events cannot reopen it for the same message.
-	let lastHomeError: string | undefined;
+	// ---- Contextual workflow launch (launch-workflows-from-project-and-wiki-pages) ----
+	// Workflow creation belongs to the page that owns the target: an
+	// application/library resource page carries the configured project identity,
+	// Wiki carries repository-independent research. The shell owns the creation
+	// form and the start boundary; the resource page only reports the intent.
+	// There is no workflow list, history, reopen or launcher surface anywhere.
+	const [launchContext, setLaunchContext] =
+		createSignal<WorkflowLaunchContext | null>(null);
+	const [launchHandler, setLaunchHandler] = createSignal<
+		((event: KeyEvent) => boolean) | undefined
+	>();
+	let launchPending = false;
+	let disposeHandoffWatch: (() => void) | undefined;
+	onCleanup(() => disposeHandoffWatch?.());
+	/**
+	 * Configured catalog roots kept current by the same catalog poll that keeps
+	 * the discovery watchers correct. The Herdr sidebar presentation reads this
+	 * live set instead of a TUI workflow list.
+	 */
+	const [catalogRoots, setCatalogRoots] = createSignal<string[]>([]);
 	/** Stable repository source for the sidebar presentation owner: the same
-	 * closure identity across every home refresh, reading the current list
-	 * lazily, so the custom view is installed once per connection. */
-	const homeSidebarRepos = (): readonly string[] => [
-		...(props.dashboard?.repo ? [props.dashboard.repo] : []),
-		...homeItems()
-			.map((item) => item.state.repository)
-			.filter(Boolean),
+	 * closure identity across every refresh, reading the current set lazily, so
+	 * the custom view is installed once per connection. */
+	const sidebarRepos = (): readonly string[] => [
+		...props.repos,
+		...catalogRoots(),
 		wikiWorkflowDataRoot(),
 		researchWorkflowTarget(),
 	];
-	const loadHome = () => {
-		if (homeDisposed) return;
-		if (homeLoadRunning) {
-			homeLoadQueued = true;
+	const openLaunch = (context: WorkflowLaunchContext): void => {
+		const problem = launchContextError(context);
+		if (problem) {
+			notify(problem, "warning");
 			return;
 		}
-		homeLoadRunning = true;
-		homeController?.abort();
-		homeController = new AbortController();
-		void Promise.all([
-			listWorkflowsAsync(homeController.signal),
-			discoverProjectsAsync(homeController.signal),
-		])
-			.then(([items, projects]) => {
-				if (homeDisposed) return;
-				lastHomeError = undefined;
-				setHomeItems(items);
-				setHomeProjects(projects);
-				setHomeLoading(false);
-				traceTui("tui.overview.refresh", {
-					surface: "overview",
-					action: "refresh",
-				});
-			})
-			.catch((error) => {
-				if (!homeDisposed) {
-					const message =
-						error instanceof Error ? error.message : String(error);
-					if (message !== lastHomeError) {
-						lastHomeError = message;
-						showErrorModal("Observation failed", message);
-					}
-					setHomeLoading(false);
-					traceTui(
-						"tui.overview.refresh",
-						{ surface: "overview", action: "refresh" },
-						"error",
-					);
-				}
-			})
-			.finally(() => {
-				homeLoadRunning = false;
-				if (homeLoadQueued && !homeDisposed) {
-					homeLoadQueued = false;
-					loadHome();
-				}
-			});
+		if (!launchRepositoryAvailable(context)) {
+			notify(
+				context.kind === "project"
+					? `Project ${context.name} is not available; clone or reconfigure it before starting work`
+					: "The standalone research target is unavailable",
+				"error",
+			);
+			return;
+		}
+		setLaunchContext(context);
+		nav.pushModal("new-workflow", routeKey(pages.current()));
 	};
-	createEffect(() => {
-		if (props.dashboard?.mode !== "home") return;
-		loadHome();
-		// ponytail: 30s safety re-sync also discovers brand-new workflows.
-		const safety = setInterval(loadHome, 30000);
-		onCleanup(() => {
-			homeDisposed = true;
-			homeController?.abort();
-			// Execution coordinators and the shared application runtime are
-			// root-owned; only the shell's teardown disposes them (task 1.2/1.3).
-			clearInterval(safety);
-		});
-	});
-	createEffect(() => {
-		if (props.dashboard?.mode !== "home") return;
-		const dirs = homeItems().map((item) =>
-			item.state.definition?.id === "wiki-comments" ||
-			item.state.definition?.id === "research"
-				? join(wikiWorkflowDataRoot(), item.state.changeId)
-				: join(item.state.worktree, ".herdr-workflow", item.state.changeId),
-		);
-		const dispose = watchDirectories(dirs, loadHome);
-		onCleanup(dispose);
-	});
+	const closeLaunch = (): void => {
+		setLaunchHandler(undefined);
+		setLaunchContext(null);
+		if (nav.modal() === "new-workflow") nav.popModal();
+	};
+	/**
+	 * Submit through the existing typed start boundary. A rejected start created
+	 * nothing and is reported as such; an accepted workflow hands its workspace
+	 * to the existing Herdr orchestration while this application stays on the
+	 * page it started from, and a later handoff failure is reported by identity
+	 * rather than by submitting a second workflow.
+	 */
+	const submitLaunch = async (input: WorkflowLaunchInput): Promise<void> => {
+		if (launchPending) return;
+		launchPending = true;
+		try {
+			const outcome = await launchWorkflow(input);
+			closeLaunch();
+			if (outcome.kind === "rejected") {
+				traceTui(
+					"tui.workflow.launch",
+					{ surface: "launch", action: "start" },
+					"error",
+				);
+				notify(`Workflow start rejected: ${outcome.message}`, "error");
+				return;
+			}
+			if (outcome.kind === "uncertain") {
+				showErrorModal(
+					"Workflow start outcome unknown",
+					`${outcome.message}\nThe request failed before an answer arrived, so a workflow may exist. Check the Herdr workspace list instead of starting it again.`,
+				);
+				return;
+			}
+			traceTui("tui.workflow.launch", { surface: "launch", action: "start" });
+			notify(outcome.message, "success");
+			disposeHandoffWatch?.();
+			disposeHandoffWatch = watchAcceptedHandoff(
+				input.repo,
+				outcome.workflowId,
+				(message) =>
+					notify(
+						`Workflow ${outcome.workflowId} was accepted but its workspace handoff failed: ${message}. Repair it from its Herdr dashboard; it is not started again here.`,
+						"error",
+					),
+			);
+		} finally {
+			launchPending = false;
+		}
+	};
 	const [selectedListIndex, setSelectedListIndex] = createSignal(0);
 	const [selectedTraceId, setSelectedTraceId] = createSignal<string>();
 	const [treeRoots, setTreeRoots] = createSignal<TreeNode[]>([]);
@@ -782,9 +1017,8 @@ export function App(props: {
 	async function finishWikiReview(
 		comments: readonly WikiReviewComment[],
 	): Promise<string> {
-		const message = startWikiCommentWorkflowInProcess(comments);
-		loadHome();
-		return message;
+		// Repository-independent wiki review keeps its existing start boundary.
+		return startWikiCommentWorkflowInProcess(comments);
 	}
 
 	onMount(() => {
@@ -832,7 +1066,9 @@ export function App(props: {
 			})
 				.then((catalog) => {
 					if (catalogDisposed) return;
-					applyRootsWithExplicit(projectCanonicalRoots(catalog));
+					const roots = projectCanonicalRoots(catalog);
+					applyRootsWithExplicit(roots);
+					setCatalogRoots(roots);
 				})
 				.catch(() => {});
 		};
@@ -846,7 +1082,7 @@ export function App(props: {
 		// mount so sidebar cards are rebuilt from current views plus live Herdr
 		// reads, never re-registered (or its custom view reasserted) on refresh
 		// (improve-herdr-workflow-sidebar).
-		const stopSidebarPresentation = startSidebarPresentation(homeSidebarRepos);
+		const stopSidebarPresentation = startSidebarPresentation(sidebarRepos);
 		// The initial history load and live OTLP receiver pushes mutate the store
 		// directly (shell-owned), so refresh the mounted views on every change.
 		const unsubscribeTraceStore = traceStore.onChange(refresh);
@@ -953,6 +1189,21 @@ export function App(props: {
 			if (key === "?" && handleModalHelpKey(key)) {
 				return;
 			}
+		}
+
+		// The contextual creation form owns input while it is open. The shell
+		// routes every key to the mounted form's own handler and never falls
+		// through to the page behind it.
+		if (nav.modal() === "new-workflow") {
+			const handler = launchHandler();
+			if (!handler) {
+				if (key === "escape") closeLaunch();
+				return;
+			}
+			// A form step that edits text returns false so the native editor keeps
+			// the character; the overlay binding never prevents the default.
+			handler(event);
+			return;
 		}
 
 		// The location picker owns input while it is on top: search, select, jump.
@@ -1198,6 +1449,16 @@ export function App(props: {
 		// Destination pages (Home and the category pages) own their cursor. Only
 		// those three pages have entries, and only while no overlay is on top.
 		if (nav.modal() === "none" && !focusCrumb() && handleDestinationKey(key))
+			return;
+
+		// Settings section pages own their cursor the same way (j/k/Enter and the
+		// explicit reload); the shared editor dialog owns its keys through its own
+		// keymap layer while it is open.
+		if (
+			nav.modal() === "none" &&
+			!focusCrumb() &&
+			handleSettingsKey(key, event.shift)
+		)
 			return;
 
 		// The embedded environment feature owns its keys; do not fall through to
@@ -1587,13 +1848,24 @@ export function App(props: {
 	// shared store. The dashboard (workflow tab) publishes its own catalog, so
 	// the shell skips it there instead of fighting for the store.
 	createEffect(() => {
+		// The contextual creation form currently owns input, so the footer and `?`
+		// describe what it is doing rather than the page behind it.
+		if (nav.modal() === "new-workflow") {
+			setActiveKeybindCatalog(workflowLaunchKeybindCatalog());
+			return;
+		}
 		// Destination pages publish their own catalog: the shell feature bodies
-		// (dashboard, environments) publish theirs while visible.
+		// (environments) publish theirs while visible.
 		if (destinationEntries()) {
 			setActiveKeybindCatalog(destinationPageKeybindCatalog());
 			return;
 		}
-		if (props.dashboard && activeTab() === "workflow") return;
+		// Settings sections publish their own catalog: the destination catalog
+		// describes a list of pages, which a section is not.
+		if (settingsSection()) {
+			setActiveKeybindCatalog(settingsKeybindCatalog());
+			return;
+		}
 		setActiveKeybindCatalog(
 			props.environments && currentPage().startsWith("environments.")
 				? (environmentCatalog() ?? environmentsKeybindCatalog())
@@ -1626,15 +1898,7 @@ export function App(props: {
 					style={{ width: "100%", flexDirection: "column" }}
 				>
 					{(() => {
-						const header = workflowHeader();
-						return header ? (
-							<Header
-								change={header.change}
-								phase={header.phase}
-								branch={header.branch}
-								updated={header.updated}
-							/>
-						) : (
+						return (
 							<box
 								style={{
 									height: 1,
@@ -1696,6 +1960,20 @@ export function App(props: {
 							/>
 						) : null;
 					})()}
+					{/* Settings sections: one list of effective values per section. */}
+					{(() => {
+						const section = settingsSection();
+						const items = settingsSectionItems();
+						return section && items ? (
+							<SettingsSectionView
+								title={SETTINGS_SECTION_LABELS[section]}
+								description={SETTINGS_SECTION_DESCRIPTIONS[section]}
+								items={items}
+								selectedIndex={settingsIndex()}
+								onSelectIndex={setSettingsIndex}
+							/>
+						) : null;
+					})()}
 					{/* Feature bodies stay mounted while hidden: switching shell tabs must
 					 * preserve live environment/workflow drafts, selections and subscriptions. */}
 					{props.renderEnvironments && (
@@ -1707,6 +1985,11 @@ export function App(props: {
 								setEnvironmentCatalog,
 								() => currentPage().startsWith("environments."),
 								(open) => {
+									// While a shell-owned overlay is on top the shell owns input,
+									// so the feature's own modal report is not authoritative:
+									// mirroring it here would stack the two overlays and leave the
+									// top one without a key handler.
+									if (SHELL_OWNED_OVERLAYS.has(nav.modal())) return;
 									if (open && activeFeature() === "environments") {
 										if (nav.modal() !== "environment")
 											nav.pushModal("environment", "environments");
@@ -1715,37 +1998,13 @@ export function App(props: {
 									}
 								},
 								environmentDestination,
-							)}
-						</box>
-					)}
-					{props.dashboard && (
-						<box
-							visible={
-								currentPage() === "workflows" ||
-								currentPage() === "workflows.detail"
-							}
-							style={{ flexGrow: 1, minHeight: 0 }}
-						>
-							{props.dashboard.mode === "home" ? (
-								<DashHome
-									keymap={props.dashboard.keymap}
-									shellFeature="workflows"
-									active={() => activeFeature() === "workflows"}
-									items={homeItems()}
-									loading={homeLoading()}
-									projects={homeProjects()}
-									refresh={loadHome}
-								/>
-							) : (
-								<DashApp
-									repo={props.dashboard.repo ?? ""}
-									workflowId={props.dashboard.change ?? ""}
-									profile={props.dashboard.profile as "test" | undefined}
-									keymap={props.dashboard.keymap}
-									shellFeature="workflows"
-									active={() => activeFeature() === "workflows"}
-									onHeader={setWorkflowHeader}
-								/>
+								(project) =>
+									openLaunch({
+										kind: "project",
+										ident: project.ident,
+										name: project.name,
+										repository: project.repository,
+									}),
 							)}
 						</box>
 					)}
@@ -1777,6 +2036,9 @@ export function App(props: {
 									})
 								}
 								onCloseNote={() => pages.back()}
+								// Repository-independent research starts from Wiki, the only
+								// full-application entry for work that has no project.
+								onStartWorkflow={() => openLaunch({ kind: "independent" })}
 								onHelp={() => {
 									setHelpOffset(0);
 									// The shell modal effect parks WikiView's keymap layer while
@@ -1966,6 +2228,27 @@ export function App(props: {
 					title="Keybindings"
 					offset={helpOffset()}
 					lines={helpLines()}
+				/>
+			)}
+			{/* The shared profile/preset editor, owned by Settings (task 2.1). */}
+			{settingsAgentEditor() && props.dashboard && (
+				<SettingsAgentEditor
+					keymap={props.dashboard.keymap}
+					{...(settingsAgentRepository()
+						? { repository: settingsAgentRepository() }
+						: {})}
+					onClose={() => setSettingsAgentEditor(false)}
+				/>
+			)}
+			{/* Contextual workflow creation: one form for a configured project
+			    (application/library page) or independent Wiki work. */}
+			{nav.modal() === "new-workflow" && launchContext() && (
+				<NewWorkflowModal
+					context={launchContext() as WorkflowLaunchContext}
+					presetsForRepository={listPresetNames}
+					onKeyReady={(handler) => setLaunchHandler(() => handler)}
+					onCancel={closeLaunch}
+					onComplete={submitLaunch}
 				/>
 			)}
 			{/* Shared portaled modals (e.g. the theme picker) publish a modal-help

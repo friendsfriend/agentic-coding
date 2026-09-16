@@ -228,7 +228,9 @@ describe("page routes: identity and reactive wrapper", () => {
 			routeKey(resourceRoute("applications", "b")),
 		);
 		expect(isSameLocation({ page: "wiki" }, { page: "wiki" })).toBe(true);
-		expect(isSameLocation({ page: "wiki" }, { page: "workflows" })).toBe(false);
+		expect(isSameLocation({ page: "wiki" }, { page: "observability" })).toBe(
+			false,
+		);
 	});
 
 	test("the reactive wrapper exposes navigate, back and parent", () => {

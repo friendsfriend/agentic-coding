@@ -411,3 +411,59 @@ custom-role = "a"
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
 }, 20000);
+
+test("a save refuses to overwrite a configuration another client changed", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "model-modal-test-"));
+	process.env.HERDR_WORKFLOW_CONFIG = path.join(dir, "config.toml");
+	fs.writeFileSync(
+		process.env.HERDR_WORKFLOW_CONFIG,
+		'[agents]\ndefault_profile = "a"\n\n[agents.profiles.a]\nruntime = "pi"\n',
+	);
+	let handler: ((event: KeyEvent) => boolean) | undefined;
+	let restorePath: () => void = () => {};
+	try {
+		const t = await testRender(
+			() => (
+				<ModelConfigModal
+					onKeyReady={(h) => {
+						handler = h;
+					}}
+					onCancel={() => {}}
+				/>
+			),
+			{ width: 100, height: 30 },
+		);
+		restorePath = stubPiOnPath(dir);
+		await t.flush();
+		handler?.(key("enter")); // Profiles
+		await t.flush();
+		handler?.(key("enter")); // edit profile "a"
+		await t.flush();
+		expect(t.captureCharFrame()).toContain("Profile name");
+
+		// Another client adds a profile after this editor loaded its revision.
+		fs.appendFileSync(
+			process.env.HERDR_WORKFLOW_CONFIG,
+			'\n[agents.profiles.other]\nruntime = "opencode"\n',
+		);
+
+		// Walk the editor to the end: the save is refused, the other client's
+		// change survives and the unsaved draft is not silently applied.
+		for (let step = 0; step < 4; step += 1) {
+			handler?.(key("return"));
+			await t.flush();
+		}
+		const persisted = fs.readFileSync(
+			process.env.HERDR_WORKFLOW_CONFIG,
+			"utf8",
+		);
+		expect(persisted).toContain("[agents.profiles.other]");
+		expect(persisted).toMatch(/other\]\nruntime = "opencode"/);
+		expect(persisted).not.toContain("b\n");
+		t.renderer.destroy();
+	} finally {
+		restorePath();
+		delete process.env.HERDR_WORKFLOW_CONFIG;
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}, 20000);

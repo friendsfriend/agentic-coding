@@ -13,6 +13,7 @@ import type { EnvironmentAuthority } from "./environment/private-api.ts";
 import { EventBroker } from "./events.ts";
 import type { ServerOperations } from "./handlers.ts";
 import type { IntegrationServices } from "./integrations/routes.ts";
+import { rebuildActionDefinitions } from "./integrations/services.ts";
 import {
 	type OwnedTelemetryReceivers,
 	startTelemetryReceivers,
@@ -82,6 +83,12 @@ export interface OwnedWorkflowServer {
 export async function startWorkflowServer(
 	options: StartWorkflowServerOptions = {},
 ): Promise<OwnedWorkflowServer> {
+	// Both the TUI-owned and headless server need a published registry before
+	// clients start polling readiness. Compile before acquiring server resources.
+	const actions = options.integrations?.actions;
+	if (actions && actions.registry.snapshot().version === 0) {
+		await rebuildActionDefinitions(actions);
+	}
 	const authority = createInstanceAuthority(options.instance, options.token);
 	const events = new EventBroker(authority.instance);
 	const credentials = new CredentialRegistry();

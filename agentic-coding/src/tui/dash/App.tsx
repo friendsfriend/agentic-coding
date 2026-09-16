@@ -93,7 +93,6 @@ import {
 } from "./ui/CredentialsModal";
 import { uiColors } from "./ui/colors";
 import { DeveloperQuestionModal } from "./ui/DeveloperQuestionModal";
-import { EventsModal } from "./ui/EventsModal";
 import { type FindingEvent, FindingsModal } from "./ui/FindingsModal";
 import { HelpModal } from "./ui/HelpModal";
 import { HighlightedText } from "./ui/Highlight";
@@ -178,6 +177,14 @@ function FindingCountSummary(props: {
 	);
 }
 
+/** Header context derived from the dashboard's single data source. */
+export interface WorkflowHeaderInfo {
+	change: string;
+	phase: string;
+	branch: string;
+	updated: string;
+}
+
 export function App(props: {
 	repo: string;
 	workflowId: string;
@@ -190,10 +197,8 @@ export function App(props: {
 	/** Set only when the dashboard is mounted inside the unified shell. */
 	shellFeature?: "workflows";
 	active?: () => boolean;
-	/** Push the workflow header context up to the shell's global header. */
-	onHeader?: (
-		header: import("../otel/app/App").WorkflowHeaderInfo | null,
-	) => void;
+	/** Push the workflow header context up to the composition root's header. */
+	onHeader?: (header: WorkflowHeaderInfo | null) => void;
 }) {
 	const renderer = useRenderer();
 	const dimensions = useTerminalDimensions();
@@ -372,8 +377,6 @@ export function App(props: {
 		props.keymap.setData("modal.active", "verdict");
 	};
 	const [verdictOffset, setVerdictOffset] = createSignal(0);
-	const [eventsDetail, setEventsDetail] = createSignal(false);
-	const [selectedEvent, setSelectedEvent] = createSignal(0);
 	// Authoritative dashboard modal stack (compose-unified-feature-shell task
 	// 3.2/3.3): the shell-level dialogs are stack instances, so instance
 	// identity, top-overlay input ownership and close ordering have one owner
@@ -1068,7 +1071,6 @@ export function App(props: {
 		setCredentialInput("");
 		setQuestionOpen(false);
 		setUserActionOpen(false);
-		setEventsDetail(false);
 		setFindings(undefined);
 		setVerdict(undefined);
 		setCostOpen(false);
@@ -2051,35 +2053,6 @@ export function App(props: {
 				cmd: "help.handle",
 			})),
 		});
-		const disposeEvents = props.keymap.registerLayer({
-			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
-			name: "events",
-			priority: 1000,
-			activeModal: "events",
-			commands: [
-				{
-					name: "events.handle",
-					run: ({ event }) => {
-						const key = event.name.toLowerCase();
-						if (routeModalHelp(key)) return true;
-						if (key === "escape") {
-							setEventsDetail(false);
-							props.keymap.setData("modal.active", "none");
-						} else if (key === "j" || key === "down")
-							setSelectedEvent((value) =>
-								Math.min(data().events.length - 1, value + 1),
-							);
-						else if (key === "k" || key === "up")
-							setSelectedEvent((value) => Math.max(0, value - 1));
-						return true;
-					},
-				},
-			],
-			bindings: ["escape", "j", "k", "up", "down", "?"].map((key) => ({
-				key,
-				cmd: "events.handle",
-			})),
-		});
 		const disposeReviewComment = props.keymap.registerLayer({
 			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "review-comment",
@@ -2414,7 +2387,6 @@ export function App(props: {
 			disposeCost();
 			disposePresetSwitcher();
 			disposeHelp();
-			disposeEvents();
 			disposeReviewComment();
 			disposeDeveloperReview();
 			disposePlanRejection();
@@ -2469,7 +2441,6 @@ export function App(props: {
 				credentialRequest() ||
 				verdict() ||
 				findings() ||
-				eventsDetail() ||
 				help() ||
 				themePicker() ||
 				completedPicker() ||
@@ -2996,12 +2967,6 @@ export function App(props: {
 					themes={filteredThemes()}
 					query={themeQuery()}
 					filtering={themeFiltering()}
-				/>
-			</Show>
-			<Show when={eventsDetail()}>
-				<EventsModal
-					events={[...data().events].reverse()}
-					selected={selectedEvent()}
 				/>
 			</Show>
 			<Show when={findings()}>

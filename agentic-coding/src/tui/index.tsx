@@ -2,9 +2,11 @@
 // `agentic-coding` TUI entry — one process, one renderer, one lifecycle owner.
 // Modes:
 //   (default) / --home / manager  unified shell: owned environment backend +
-//                                 workflow list + observability
-//   --repo P --workflow-id W      per-workflow dashboard pane: no receiver and
-//                                 no owned backend, best-effort OTLP traces
+//                                 contextual workflow launch + observability
+//   --repo P --workflow-id W      per-workflow dashboard pane: the dashboard-only
+//                                 presentation root (no application navigation,
+//                                 no receiver, no owned backend), best-effort
+//                                 OTLP traces
 //   --attach-url URL              attached shell: environment features of a
 //                                 server this process does not own
 //   --profile test                interactive dummy data
@@ -15,6 +17,7 @@
 // owned handle in ./lifecycle and released in reverse acquisition order, so a
 // partial startup or a second quit can only stop what this process acquired.
 
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { createCliRenderer } from "@opentui/core";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
@@ -44,6 +47,7 @@ import {
 	isWikiWorkflowTarget,
 } from "../workflow/runtime";
 import { AppShell } from "./app/AppShell";
+import { DashboardRoot } from "./app/DashboardRoot";
 import { copyToClipboard } from "./clipboard";
 import { testDashboard } from "./dash/demo";
 import { setupKeymap } from "./dash/keymap-setup";
@@ -85,17 +89,17 @@ import { TraceStore } from "./otel/model/traceStore";
 import type { LogData, MetricData, SpanData } from "./otel/model/types";
 
 const usage = `Usage: agentic-coding [command] [options]
-  (no command)             Unified shell (default): owned environment backend + workflows + observability
+  (no command)             Unified shell (default): owned environment backend + contextual workflow launch + observability
   workflow                 Transactional workflow engine. Run \`agentic-coding workflow --help\`.
   home | manager           Alias of the unified shell home route
-  dash                     Per-workflow dashboard pane (--repo PATH --workflow-id ID)
+  dash                     Workflow dashboard for one explicit target, without application navigation (--repo PATH --workflow-id ID)
   server                   Start only the environment backend (headless)
   attach URL               Attach the shell to a running environment backend
   devenv ...               Thin alias of this executable (devenv spawn/attach/server)
 
 Options:
   --repo PATH              Repository root (default: cwd)
-  --workflow-id ID         Workflow id (dash mode)
+  --workflow-id ID         Workflow id (dash target; required in dash mode)
   --profile test           Interactive dummy data
   --json                   Dump dashboard JSON and exit
   --http-port N            OTLP HTTP JSON port (default 4318 in managed/home mode)
@@ -186,6 +190,19 @@ export interface ShellMode {
 	workflowId: string;
 }
 
+/**
+ * `dash` presentation mode: one explicitly targeted workflow, rendered by the
+ * dashboard-only root. It is not a route inside the feature shell, so no tab
+ * row, breadcrumb, location picker, Home/Settings page or observability body
+ * is composed for it (isolate-workflow-dashboard-mode, task 1.2).
+ */
+function isDashboardMode(options: {
+	home: boolean;
+	attachUrl?: string;
+}): boolean {
+	return !options.home && !options.attachUrl;
+}
+
 export async function main(): Promise<void> {
 	if (process.argv.includes("--help") || process.argv.includes("-h")) {
 		console.log(usage);
@@ -218,6 +235,23 @@ export async function main(): Promise<void> {
 				? resolve(repoArg)
 				: "/demo";
 	const resolvedWorkflowId = workflowId ?? "demo-optional-realisation-date";
+	// Presentation mode of this process: `dash` renders the dashboard-only root
+	// for one explicit target, everything else composes the feature shell.
+	const dashOnly = isDashboardMode({ home, attachUrl });
+	// Identity resolution is explicit and bounded: a local target that is not a
+	// repository fails here, before any resource is acquired, instead of
+	// degrading into Home or a workflow picker. Research/wiki standalone targets
+	// resolve without a filesystem check.
+	const standaloneTarget = Boolean(
+		repoArg &&
+			(isResearchWorkflowTarget(repoArg) || isWikiWorkflowTarget(repoArg)),
+	);
+	if (dashOnly && !isTest && !standaloneTarget && !existsSync(repo)) {
+		console.error(
+			`dashboard target repository does not exist: ${repo}\nusage: agentic-coding dash --repo PATH --workflow-id ID`,
+		);
+		process.exit(2);
+	}
 
 	// Resolve the backend address before any observation subprocess can start
 	// (including `--json`). Explicit `--devenv-url`/`--attach-url` win and the
@@ -523,36 +557,46 @@ export async function main(): Promise<void> {
 	await render(
 		() => (
 			<KeymapProvider keymap={keymap}>
-				<AppShell
-					repos={explicitRepos}
-					db={db}
-					traceStore={traceStore}
-					metricStore={metricStore}
-					logStore={logStore}
-					topologyStore={topologyStore}
-					tracesOnly={tracesOnly}
-					environments={environments}
-					attached={attachUrl !== undefined}
-					attachLabel={
-						remoteAttach
-							? `attached ${attachUrl ?? ""} · workflow + observability · environment features unavailable`
-							: attachUrl
-								? `attached ${attachUrl} · environment features only · remote workflow features unavailable`
-								: undefined
-					}
-					dashboard={
-						attachUrl && !remoteAttach
-							? undefined
-							: {
-									mode: home ? "home" : "dash",
-									repo: home ? undefined : repo,
-									change: home ? undefined : resolvedWorkflowId,
-									profile: isTest ? "test" : undefined,
-									keymap,
-								}
-					}
-				/>
-				<LifecycleModal />
+				{dashOnly ? (
+					// Dashboard-only presentation (isolate-workflow-dashboard-mode): the
+					// shared dashboard component directly, never the feature shell.
+					<DashboardRoot
+						repo={repo}
+						workflowId={resolvedWorkflowId}
+						profile={isTest ? "test" : undefined}
+						keymap={keymap}
+					/>
+				) : (
+					<>
+						<AppShell
+							repos={explicitRepos}
+							db={db}
+							traceStore={traceStore}
+							metricStore={metricStore}
+							logStore={logStore}
+							topologyStore={topologyStore}
+							tracesOnly={tracesOnly}
+							environments={environments}
+							attached={attachUrl !== undefined}
+							attachLabel={
+								remoteAttach
+									? `attached ${attachUrl ?? ""} · workflow + observability · environment features unavailable`
+									: attachUrl
+										? `attached ${attachUrl} · environment features only · remote workflow features unavailable`
+										: undefined
+							}
+							dashboard={
+								attachUrl && !remoteAttach
+									? undefined
+									: {
+											mode: home ? "home" : "dash",
+											keymap,
+										}
+							}
+						/>
+						<LifecycleModal />
+					</>
+				)}
 				<QuitConfirmModal />
 			</KeymapProvider>
 		),

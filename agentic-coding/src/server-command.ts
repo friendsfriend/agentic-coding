@@ -7,10 +7,7 @@
 import { resolveConfigDir, resolveDevenvHome } from "./backend/home.ts";
 import { recordCommandlessRun } from "./server/actions/routes.ts";
 import { createEnvironmentAuthority } from "./server/environment/authority.ts";
-import {
-	createIntegrationServices,
-	rebuildActionDefinitions,
-} from "./server/integrations/services.ts";
+import { createIntegrationServices } from "./server/integrations/services.ts";
 import {
 	DEFAULT_ENVIRONMENT_PORT,
 	type OwnedWorkflowServer,
@@ -189,11 +186,6 @@ export async function runHeadlessServer(args: string[]): Promise<void> {
 				logger: (message) => process.stderr.write(`${message}\n`),
 			});
 		}
-		// The definition snapshot is compiled once at startup from the configured
-		// environment; the status route reports a failure.
-		if (integrations.actions)
-			await rebuildActionDefinitions(integrations.actions);
-
 		workflow = await startWorkflowServer({
 			port: serverPort,
 			instance,

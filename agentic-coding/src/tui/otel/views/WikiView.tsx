@@ -35,6 +35,13 @@ export interface WikiViewProps {
 	comments: readonly WikiReviewComment[];
 	onAddComment: (comment: WikiReviewComment) => void;
 	onFinish: (comments: readonly WikiReviewComment[]) => Promise<string>;
+	/**
+	 * Repository-independent research/wiki creation
+	 * (launch-workflows-from-project-and-wiki-pages, task 1.4): the shell owns
+	 * the creation form, so Wiki only reports the intent. Wiki never offers
+	 * repository selection or repository-bound work.
+	 */
+	onStartWorkflow?: () => void;
 	/** Owned by the shell so the submission guard survives tab unmounts. */
 	submitting: boolean;
 	onSubmittingChange: (value: boolean) => void;
@@ -297,6 +304,12 @@ export function WikiView(props: WikiViewProps) {
 			void finish();
 			return true;
 		}
+		if (key === "w") {
+			// Independent research/wiki creation; submission of existing review
+			// comments keeps its own action above.
+			props.onStartWorkflow?.();
+			return true;
+		}
 		if (key === "q") {
 			globalThis.__requestShutdown?.();
 			return true;
@@ -394,6 +407,7 @@ export function WikiView(props: WikiViewProps) {
 				"n",
 				"N",
 				"f",
+				"w",
 				"r",
 				"?",
 				"space",

@@ -15,7 +15,7 @@ command surface and one lifecycle implementation.
 | --- | --- | --- |
 | `agentic-coding` (no command) | Unified shell, home route | yes (managed) |
 | `agentic-coding home` / `manager` | Unified shell, home route | yes (managed) |
-| `agentic-coding dash [--repo --workflow-id]` | Per-workflow dashboard pane in the shared shell | no |
+| `agentic-coding dash [--repo --workflow-id]` | Dashboard-only presentation of one explicit workflow target (no tabs, breadcrumbs, picker, Home/Settings or observability) | no |
 | `agentic-coding dash --profile test` / `--json` | Dummy data / headless read | no |
 | `agentic-coding attach URL` | Shell attached to a running environment backend | no |
 | `agentic-coding server [--port N]` | Headless environment backend, foreground | yes (managed, headless) |
@@ -93,7 +93,10 @@ One flow for the quit key and for SIGINT/SIGTERM/SIGHUP (`requestShutdown`):
 
 `stopOwnedStack` only writes progress rows for handles the process actually
 acquired, so dashboard and attach shells never claim to stop a stack they do
-not own, and attach never stops the attached server.
+not own, and attach never stops the attached server. The dashboard-only root
+composes no backend at all: it acquires no server or coordinator handle, so its
+exit can only release the renderer and client resources the process entry
+already registered.
 
 ## Bounded backend reads (no server running)
 
