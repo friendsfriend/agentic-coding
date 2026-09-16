@@ -4,7 +4,7 @@
 TBD - created by archiving change unify-terminal-ui-primitives. Update Purpose after archive.
 ## Requirements
 ### Requirement: One UI preference authority
-All feature surfaces SHALL share one local UI preferences adapter and active theme store. The adapter SHALL use `$DEVENV_CONFIG_DIR/tui.json`, defaulting to `~/.config/devenv/tui.json`, and SHALL keep workflow execution configuration separate.
+All feature surfaces SHALL share one local UI preferences adapter and active theme store. The adapter SHALL use `tui.json` under the shared canonical configuration root, defaulting to `~/.config/agentic-coding/tui.json`, and SHALL keep workflow execution configuration separate.
 
 #### Scenario: Existing selection takes precedence
 - **WHEN** canonical UI preferences already contain a valid theme and legacy workflow preferences differ
@@ -12,8 +12,8 @@ All feature surfaces SHALL share one local UI preferences adapter and active the
 - **AND** startup SHALL NOT overwrite either source file merely to read the selection
 
 #### Scenario: Legacy theme is imported
-- **WHEN** no canonical selection exists and a valid legacy agentic-coding selection is available
-- **THEN** the adapter SHALL import that selection without losing unrelated canonical preference keys
+- **WHEN** no canonical selection exists and explicit migration finds a valid legacy UI selection
+- **THEN** the explicit migration SHALL import that selection without losing unrelated canonical preference keys
 - **AND** subsequent saves SHALL use the canonical file atomically
 
 ### Requirement: Theme assets and custom names have one registry

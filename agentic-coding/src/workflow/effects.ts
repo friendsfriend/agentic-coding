@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { assertNoPendingMigration, resolveConfigRoot } from "../config-root.ts";
 import { Herdr } from "../herdr-client.ts";
 import type { WorkflowExecutionSettings } from "./contracts.ts";
 import { TELEMETRY_FLUSH_BUDGET_MS } from "./observability.ts";
@@ -130,73 +131,72 @@ export class TraceExporter implements Exporter {
 	}
 }
 
-function tomlKey(key: string): string {
-	return /^[A-Za-z0-9_-]+$/.test(key) ? key : JSON.stringify(key);
-}
-function tomlValue(value: unknown): string {
-	if (typeof value === "string") return JSON.stringify(value);
-	if (typeof value === "number" || typeof value === "boolean")
-		return String(value);
-	if (value instanceof Date) return value.toISOString();
-	if (Array.isArray(value)) {
-		if (value.every((item) => !item || typeof item !== "object"))
-			return `[${value.map(tomlValue).join(", ")}]`;
-		return JSON.stringify(value);
-	}
-	if (value && typeof value === "object")
-		return `{ ${Object.entries(value)
-			.map(([key, item]) => `${tomlKey(key)} = ${tomlValue(item)}`)
-			.join(", ")} }`;
-	throw new Error(`unsupported TOML value: ${String(value)}`);
-}
-function stringifyToml(document: Record<string, unknown>): string {
-	const lines: string[] = [];
-	const isTable = (value: unknown): value is Record<string, unknown> =>
-		Boolean(
-			value &&
-				typeof value === "object" &&
-				!Array.isArray(value) &&
-				!(value instanceof Date),
-		);
-	const writeTable = (table: Record<string, unknown>, prefix: string) => {
-		const entries = Object.entries(table);
-		// TOML keeps current table scope after a child table header. Emit parent
-		// scalars first or they are parsed as fields of the last child table.
-		for (const [key, value] of entries)
-			if (
-				!isTable(value) &&
-				!(
-					Array.isArray(value) &&
-					value.every((item) => item && typeof item === "object")
-				)
-			)
-				lines.push(`${tomlKey(key)} = ${tomlValue(value)}`);
-		for (const [key, value] of entries) {
-			if (
-				Array.isArray(value) &&
-				value.every((item) => item && typeof item === "object")
-			) {
-				for (const item of value) {
-					lines.push(`\n[[${prefix ? `${prefix}.` : ""}${tomlKey(key)}]]`);
-					writeTable(item as Record<string, unknown>, "");
-				}
-			} else if (isTable(value)) {
-				const name = prefix ? `${prefix}.${tomlKey(key)}` : tomlKey(key);
-				lines.push(`\n[${name}]`);
-				writeTable(value, name);
-			}
-		}
-	};
-	writeTable(document, "");
-	return `${lines.join("\n").replace(/^\n/, "")}\n`;
+/** Canonical global workflow configuration file under the resolved root. */
+export const WORKFLOW_CONFIG_FILE = "config.json";
+/** Repository overlay. JSON is the only writable form. */
+export const PROJECT_OVERLAY_FILE = "herdr-workflow.json";
+/** Read-only repository overlay compatibility input; edits need conversion. */
+export const LEGACY_PROJECT_OVERLAY_FILE = "herdr-workflow.toml";
+/** Legacy user-level workflow configuration basename under `~/.pi/agent`. */
+export const LEGACY_USER_CONFIG_FILE = "herdr-workflow.toml";
+/** Pre-migration canonical file name; inactive once `config.json` exists. */
+export const LEGACY_WORKFLOW_CONFIG_FILE = "config.toml";
+
+/** Read-only compatibility diagnostic. Value-free: it names files and never the
+ * configuration values they hold. */
+function configDiagnostic(message: string): void {
+	process.stderr.write(`[config] ${message}\n`);
 }
 
-function deepMerge<T extends object>(base: T, overlay: unknown): T {
+function configFormat(file: string): "json" | "toml" {
+	return file.endsWith(".json") ? "json" : "toml";
+}
+
+/**
+ * Parse a configuration document by extension. JSON is strict and must be an
+ * object; TOML is a read-only compatibility input. The error names the file so
+ * a broken configuration is attributable.
+ */
+export function parseConfigDocument(
+	file: string,
+	raw: string,
+): Record<string, unknown> {
+	if (configFormat(file) === "json") {
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(raw);
+		} catch (error) {
+			throw new Error(
+				`failed to parse config ${file}: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+		if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed))
+			throw new Error(`failed to parse config ${file}: expected a JSON object`);
+		return parsed as Record<string, unknown>;
+	}
+	return Bun.TOML.parse(raw) as Record<string, unknown>;
+}
+
+/** Read a configuration document without changing cwd. A missing file is empty,
+ * an unparseable file throws. */
+export function readConfigDocument(file: string): Record<string, unknown> {
+	if (!fs.existsSync(file)) return {};
+	return parseConfigDocument(file, fs.readFileSync(file, "utf8"));
+}
+
+export function deepMergeConfig<T extends object>(
+	base: T,
+	overlay: unknown,
+): T {
+	return deepMerge(base, overlay);
+}
+
+export function deepMerge<T extends object>(base: T, overlay: unknown): T {
 	const merged = structuredClone(base) as Record<string, unknown>;
 	if (!overlay || typeof overlay !== "object" || Array.isArray(overlay))
 		return merged as T;
 	for (const [key, value] of Object.entries(overlay)) {
-		// TOML tables can carry a literal "__proto__" key; merging it would
+		// A literal "__proto__" key in a configuration file would otherwise
 		// replace the merged object's prototype with attacker-controlled data.
 		if (key === "__proto__" || key === "constructor" || key === "prototype")
 			continue;
@@ -255,6 +255,9 @@ export const DEFAULT_CONFIG: WorkflowConfig = {
 export interface ConfigProvenance {
 	source: "default" | "environment" | "user" | "legacy" | "project";
 	files: readonly string[];
+	/** Legacy sources left in place but not read because a higher-precedence
+	 * format is active. Reported, never merged (Settings migration state). */
+	inactiveFiles?: readonly string[];
 	repository?: string;
 }
 
@@ -330,53 +333,90 @@ export function loadConfigWithProvenance(
 		return {
 			config: deepMerge(
 				structuredClone(DEFAULT_CONFIG),
-				Bun.TOML.parse(fs.readFileSync(envPath, "utf8")) as WorkflowConfig,
+				readConfigDocument(envPath),
 			),
 			provenance: { source: "environment", files: [envPath] },
 		};
 	}
-	const candidates = [
-		path.join(os.homedir(), ".config", "agentic-coding", "config.toml"),
-		path.join(os.homedir(), ".pi", "agent", "herdr-workflow.toml"),
-	];
-	const file = candidates.find((candidate) => fs.existsSync(candidate));
+	const configRoot = resolveConfigRoot();
+	// An interrupted migration leaves a known partial snapshot on disk; refuse it
+	// rather than read a mixed state.
+	assertNoPendingMigration(configRoot);
+	const canonical = path.join(configRoot, WORKFLOW_CONFIG_FILE);
+	const legacyCanonical = path.join(configRoot, LEGACY_WORKFLOW_CONFIG_FILE);
+	const legacyUser = path.join(
+		os.homedir(),
+		".pi",
+		"agent",
+		LEGACY_USER_CONFIG_FILE,
+	);
+	// JSON wins at the root scope. A leftover pre-migration `config.toml` is an
+	// inactive source to report, never a second authority to merge.
+	const file = [canonical, legacyCanonical, legacyUser].find((candidate) =>
+		fs.existsSync(candidate),
+	);
+	const inactiveFiles: string[] = [];
+	if (fs.existsSync(canonical) && fs.existsSync(legacyCanonical)) {
+		inactiveFiles.push(legacyCanonical);
+		configDiagnostic(
+			`${legacyCanonical} is inactive: ${WORKFLOW_CONFIG_FILE} is the active workflow configuration`,
+		);
+	}
 	let cfg = deepMerge(
 		structuredClone(DEFAULT_CONFIG),
-		file ? Bun.TOML.parse(fs.readFileSync(file, "utf8")) : {},
+		file ? readConfigDocument(file) : {},
 	);
-	const root = normalized.repositoryIndependent
+	const projectRoot = normalized.repositoryIndependent
 		? undefined
 		: (repositoryConfigRoot(normalized.repository ?? process.cwd()) ??
 			(normalized.repository
 				? path.resolve(normalized.repository)
 				: process.cwd()));
-	const projectConfig = root
-		? path.join(root, ".pi", "herdr-workflow.toml")
+	const projectJson = projectRoot
+		? path.join(projectRoot, ".pi", PROJECT_OVERLAY_FILE)
 		: undefined;
-	if (projectConfig && fs.existsSync(projectConfig)) {
-		cfg = deepMerge(
-			cfg,
-			Bun.TOML.parse(fs.readFileSync(projectConfig, "utf8")),
+	const projectToml = projectRoot
+		? path.join(projectRoot, ".pi", LEGACY_PROJECT_OVERLAY_FILE)
+		: undefined;
+	// Two formats at one repository scope would make the effective configuration
+	// depend on an implicit merge order, so it is refused instead of guessed.
+	if (
+		projectJson &&
+		projectToml &&
+		fs.existsSync(projectJson) &&
+		fs.existsSync(projectToml)
+	)
+		throw new Error(
+			`${projectRoot} supplies both ${PROJECT_OVERLAY_FILE} and ${LEGACY_PROJECT_OVERLAY_FILE}; keep one format (convert the TOML overlay explicitly) rather than relying on an implicit merge`,
 		);
+	const projectConfig =
+		projectJson && fs.existsSync(projectJson)
+			? projectJson
+			: projectToml && fs.existsSync(projectToml)
+				? projectToml
+				: undefined;
+	if (projectConfig) {
+		if (configFormat(projectConfig) === "toml")
+			configDiagnostic(
+				`${projectConfig} is a legacy TOML overlay; it is read for compatibility but edits require an explicit conversion to ${PROJECT_OVERLAY_FILE}`,
+			);
+		cfg = deepMerge(cfg, readConfigDocument(projectConfig));
 	}
+	const baseSource: ConfigProvenance["source"] = file
+		? file === canonical
+			? "user"
+			: "legacy"
+		: "default";
 	return {
 		config: cfg,
 		provenance: {
-			source:
-				projectConfig && fs.existsSync(projectConfig)
-					? "project"
-					: file
-						? file === candidates[0]
-							? "user"
-							: "legacy"
-						: "default",
+			source: projectConfig ? "project" : baseSource,
 			files: [
 				...(file ? [file] : []),
-				...(projectConfig && fs.existsSync(projectConfig)
-					? [projectConfig]
-					: []),
+				...(projectConfig ? [projectConfig] : []),
 			],
-			...(root ? { repository: root } : {}),
+			...(inactiveFiles.length ? { inactiveFiles } : {}),
+			...(projectRoot ? { repository: projectRoot } : {}),
 		},
 	};
 }
@@ -386,22 +426,33 @@ export function loadConfig(options?: ConfigOptions): WorkflowConfig {
 }
 
 /** The trusted user-owned configuration files, in load precedence order
- * (canonical user config, then the legacy path). Project overlays and
- * `HERDR_WORKFLOW_CONFIG` are deliberately excluded: the sidebar preference
- * is server-wide in effect, so a repository must not be able to flip it. */
-export function userConfigPaths(home = os.homedir()): string[] {
+ * (canonical user config under the resolved root, then the legacy path).
+ * Project overlays and `HERDR_WORKFLOW_CONFIG` are deliberately excluded: the
+ * sidebar preference is server-wide in effect, so a repository must not be
+ * able to flip it. `root`/`home` stay injectable so the precedence is testable
+ * without touching the process environment. */
+export function userConfigPaths(
+	home = os.homedir(),
+	root: string = resolveConfigRoot(),
+): string[] {
 	return [
-		path.join(home, ".config", "agentic-coding", "config.toml"),
-		path.join(home, ".pi", "agent", "herdr-workflow.toml"),
+		path.join(root, WORKFLOW_CONFIG_FILE),
+		path.join(root, LEGACY_WORKFLOW_CONFIG_FILE),
+		path.join(home, ".pi", "agent", LEGACY_USER_CONFIG_FILE),
 	];
 }
 
-/** `ui.herdr_sidebar`, default false (improve-herdr-workflow-sidebar). */
-export function herdrSidebarEnabled(home = os.homedir()): boolean {
-	for (const candidate of userConfigPaths(home)) {
+/** `ui.herdr_sidebar`, default false (improve-herdr-workflow-sidebar). The
+ * canonical root is an independent input from `home` (the legacy `~/.pi` path
+ * lives outside it), so both are injected rather than derived from one another. */
+export function herdrSidebarEnabled(
+	home = os.homedir(),
+	root: string = resolveConfigRoot(),
+): boolean {
+	for (const candidate of userConfigPaths(home, root)) {
 		try {
 			if (!fs.existsSync(candidate)) continue;
-			const parsed = Bun.TOML.parse(fs.readFileSync(candidate, "utf8")) as {
+			const parsed = readConfigDocument(candidate) as {
 				ui?: { herdr_sidebar?: unknown };
 			};
 			return parsed.ui?.herdr_sidebar === true;
@@ -429,28 +480,39 @@ export function agentsConfigPath(repository?: string): string {
  * are silently shadowed at load time:
  * 1. HERDR_WORKFLOW_CONFIG replaces the whole config (loadConfig skips the
  *    project overlay for it), so it always wins.
- * 2. The winning base file is the FIRST EXISTING of canonical user > legacy —
+ * 2. The winning base file is the FIRST EXISTING of canonical `config.json` >
+ *    legacy `config.toml` > legacy `~/.pi/agent/herdr-workflow.toml` —
  *    mirroring loadConfig's candidates.find; lower-priority base files are
  *    never read when a higher one exists.
- * 3. A project file supplying [agents] deep-merges over that base, so it is
+ * 3. A project overlay supplying [agents] deep-merges over that base, so it is
  *    the target whenever it exists with an agents section.
  * 4. Otherwise the winning base file is the target (created if none exists),
- *    preferring the canonical user config path. */
+ *    preferring the canonical JSON config path.
+ * A resolved `.toml` target is a read-only compatibility input: every caller
+ * writes JSON only, and saveAgentsSection refuses a TOML target so a legacy
+ * file can never be silently rewritten or shadowed. */
 export function selectAgentsConfigPath(
 	envPath: string | undefined,
 	home: string,
 	cwd: string,
+	root: string = resolveConfigRoot(),
 ): string {
 	if (envPath) return envPath;
 	const baseCandidates = [
-		path.join(home, ".config", "agentic-coding", "config.toml"),
-		path.join(home, ".pi", "agent", "herdr-workflow.toml"),
+		path.join(root, WORKFLOW_CONFIG_FILE),
+		path.join(root, LEGACY_WORKFLOW_CONFIG_FILE),
+		path.join(home, ".pi", "agent", LEGACY_USER_CONFIG_FILE),
 	];
-	const project = path.join(cwd, ".pi", "herdr-workflow.toml");
-	if (fs.existsSync(project) && "agents" in readToml(project)) return project;
+	const projectJson = path.join(cwd, ".pi", PROJECT_OVERLAY_FILE);
+	const projectToml = path.join(cwd, ".pi", LEGACY_PROJECT_OVERLAY_FILE);
+	if (fs.existsSync(projectJson) && "agents" in readConfigDocument(projectJson))
+		return projectJson;
+	if (fs.existsSync(projectToml) && "agents" in readConfigDocument(projectToml))
+		return projectToml;
 	const base = baseCandidates.find((candidate) => fs.existsSync(candidate));
 	if (base) return base;
-	if (fs.existsSync(project)) return project;
+	if (fs.existsSync(projectJson)) return projectJson;
+	if (fs.existsSync(projectToml)) return projectToml;
 	return baseCandidates[0];
 }
 /** Existing base config files that also supply an [agents] section while the
@@ -461,24 +523,27 @@ export function selectAgentsConfigPath(
 export function conflictingAgentsFiles(
 	home: string = os.homedir(),
 	cwd: string = process.cwd(),
+	root: string = resolveConfigRoot(),
 ): string[] {
-	const target = selectAgentsConfigPath(undefined, home, cwd);
-	if (target !== path.join(cwd, ".pi", "herdr-workflow.toml")) return [];
+	const target = selectAgentsConfigPath(undefined, home, cwd, root);
+	const projectOverlays = [
+		path.join(cwd, ".pi", PROJECT_OVERLAY_FILE),
+		path.join(cwd, ".pi", LEGACY_PROJECT_OVERLAY_FILE),
+	];
+	if (!projectOverlays.includes(target)) return [];
 	return [
-		path.join(home, ".config", "agentic-coding", "config.toml"),
-		path.join(home, ".pi", "agent", "herdr-workflow.toml"),
+		path.join(root, WORKFLOW_CONFIG_FILE),
+		path.join(root, LEGACY_WORKFLOW_CONFIG_FILE),
+		path.join(home, ".pi", "agent", LEGACY_USER_CONFIG_FILE),
 	].filter(
-		(candidate) => fs.existsSync(candidate) && "agents" in readToml(candidate),
+		(candidate) =>
+			fs.existsSync(candidate) && "agents" in readConfigDocument(candidate),
 	);
 }
-export function readToml(file: string): Record<string, unknown> {
-	return fs.existsSync(file)
-		? (Bun.TOML.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>)
-		: {};
-}
-/** Read-modify-write the config file backing the agents section. The whole
- * file is rewritten with the local TOML serializer; hand comments in managed
- * files are not preserved (accepted trade-off, documented in the modal help). */
+/** Read-modify-write the JSON config file backing the agents section. Unknown
+ * keys are preserved as read; JSON has no comments to lose. A legacy TOML
+ * target is refused rather than converted silently, so an existing user file is
+ * never rewritten in a different format behind the operator's back. */
 export function saveAgentsSection(
 	mutate: (agents: Record<string, unknown>) => void,
 	repository?: string,
@@ -492,7 +557,11 @@ export function saveAgentsSection(
 			`[agents] is also defined in ${conflicts.join(", ")}; edit the layered sources separately`,
 		);
 	const file = agentsConfigPath(repository);
-	const document = readToml(file);
+	if (configFormat(file) === "toml")
+		throw new Error(
+			`${file} is a legacy TOML configuration read for compatibility; run \`agentic-coding config migrate\` (or convert the file explicitly) before editing it`,
+		);
+	const document = readConfigDocument(file);
 	if (
 		!document.agents ||
 		typeof document.agents !== "object" ||
@@ -500,7 +569,7 @@ export function saveAgentsSection(
 	)
 		document.agents = {};
 	mutate(document.agents as Record<string, unknown>);
-	const contents = stringifyToml(document);
+	const contents = `${JSON.stringify(document, null, 2)}\n`;
 	fs.mkdirSync(path.dirname(file), { recursive: true });
 	// Rename a temporary file so a failed serialization or write cannot leave a
 	// truncated config. Resolve symlinks before renaming so the dashboard keeps

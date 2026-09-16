@@ -11,7 +11,7 @@ Before using git integrations, add at least one provider:
 3. Select the provider type (GitHub or GitLab)
 4. Enter a name, username, and personal access token (PAT)
 
-Provider credentials are stored in `~/.config/devenv/.env`; `providers/NAME.json` stores metadata plus `${...}` placeholders for username/token. Clear-text credentials in provider JSON are blocked and shown as invalid in the TUI until migrated or edited.
+Provider credentials are stored in `~/.config/agentic-coding/.env`; `providers/NAME.json` stores metadata plus `${...}` placeholders for username/token. Clear-text credentials in provider JSON are blocked and shown as invalid in the TUI until migrated or edited.
 
 ## 2. Change request browsing
 

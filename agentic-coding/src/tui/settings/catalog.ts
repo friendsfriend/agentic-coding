@@ -18,7 +18,7 @@ import {
 
 /** Where a setting is edited and where its value actually lives. */
 export type SettingsScope =
-	/** Client-local UI preference: `$DEVENV_CONFIG_DIR/tui.json`. */
+	/** Client-local UI preference: `$AGENTIC_CODING_CONFIG_DIR/tui.json`. */
 	| "client"
 	/** User-level configuration (no project selected). */
 	| "user"
@@ -66,7 +66,7 @@ export const SETTINGS_INVENTORY: readonly SettingsInventoryEntry[] = [
 		label: "Active theme",
 		owner: "src/tui/shared/preferences.ts",
 		scope: "client",
-		storage: "$DEVENV_CONFIG_DIR/tui.json · theme",
+		storage: "$AGENTIC_CODING_CONFIG_DIR/tui.json · theme",
 		secret: false,
 		effect: "immediate",
 		editable: true,
@@ -78,7 +78,7 @@ export const SETTINGS_INVENTORY: readonly SettingsInventoryEntry[] = [
 		label: "Custom themes",
 		owner: "src/tui/shared/preferences.ts",
 		scope: "client",
-		storage: "$DEVENV_CONFIG_DIR/themes/*.json",
+		storage: "$AGENTIC_CODING_CONFIG_DIR/themes/*.json",
 		secret: false,
 		effect: "restart",
 		editable: false,
@@ -136,7 +136,8 @@ export const SETTINGS_INVENTORY: readonly SettingsInventoryEntry[] = [
 		label: "Git providers",
 		owner: "server integration families (/api/providers)",
 		scope: "server",
-		storage: "$DEVENV_CONFIG_DIR/providers · served by the connected server",
+		storage:
+			"$AGENTIC_CODING_CONFIG_DIR/providers · served by the connected server",
 		secret: true,
 		effect: "immediate",
 		editable: true,
@@ -162,7 +163,8 @@ export const SETTINGS_INVENTORY: readonly SettingsInventoryEntry[] = [
 		label: "Applications and libraries",
 		owner: "src/server/environment/authority.ts",
 		scope: "server",
-		storage: "$DEVENV_CONFIG_DIR/apps/**.toml (projected catalog)",
+		storage:
+			"$AGENTIC_CODING_CONFIG_DIR/{apps,libraries}/definitions/*.json (projected catalog)",
 		secret: false,
 		effect: "immediate",
 		editable: true,
@@ -174,7 +176,7 @@ export const SETTINGS_INVENTORY: readonly SettingsInventoryEntry[] = [
 		label: "Scripts and infrastructure",
 		owner: "src/server/environment/authority.ts",
 		scope: "server",
-		storage: "$DEVENV_CONFIG_DIR/{scripts,infra}",
+		storage: "$AGENTIC_CODING_CONFIG_DIR/{infrastructure,apps,libraries}",
 		secret: false,
 		effect: "immediate",
 		editable: true,
@@ -200,7 +202,8 @@ export const SETTINGS_INVENTORY: readonly SettingsInventoryEntry[] = [
 		label: "Configuration directory",
 		owner: "src/backend/home.ts",
 		scope: "server",
-		storage: "DEVENV_CONFIG_DIR (default ~/.config/devenv)",
+		storage:
+			"$AGENTIC_CODING_CONFIG_DIR (or AGENTIC_CODING_CONFIG_DIR; default ~/.config/agentic-coding)",
 		secret: false,
 		effect: "restart",
 		editable: false,

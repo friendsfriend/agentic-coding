@@ -37,37 +37,41 @@ else
   runtime=${HERDR_LIVE_RUNTIME_EXECUTABLE:-pi}
 fi
 
-config="$root/config.toml"
-cat > "$config" <<TOML
-[agents]
-default_profile = "smoke"
-[agents.profiles.smoke]
-runtime = "pi"
-executable = "$runtime"
-capabilities = ["prompt", "run-environment", "observe"]
-[agents.profiles.smoke-review]
-runtime = "pi"
-executable = "$runtime"
-capabilities = ["prompt", "run-environment", "observe"]
-read_only = true
-[agents.routes]
-"core.triage" = "smoke-review"
-"core.verification" = "smoke-review"
-"core.archive" = "smoke-review"
-[workflow]
-max_verification_rounds = 6
-remote = "origin"
-branch_prefix = "feature/"
-base_branch = "main"
-[projects]
-root = "/tmp"
-max_depth = 1
-[telemetry]
-capture_content = false
-[ui]
-theme = "catppuccin"
-selection_height = 10
-TOML
+config="$root/config.json"
+cat > "$config" <<JSON
+{
+  "agents": {
+    "default_profile": "smoke",
+    "profiles": {
+      "smoke": {
+        "runtime": "pi",
+        "executable": "$runtime",
+        "capabilities": ["prompt", "run-environment", "observe"]
+      },
+      "smoke-review": {
+        "runtime": "pi",
+        "executable": "$runtime",
+        "capabilities": ["prompt", "run-environment", "observe"],
+        "read_only": true
+      }
+    },
+    "routes": {
+      "core.triage": "smoke-review",
+      "core.verification": "smoke-review",
+      "core.archive": "smoke-review"
+    }
+  },
+  "workflow": {
+    "max_verification_rounds": 6,
+    "remote": "origin",
+    "branch_prefix": "feature/",
+    "base_branch": "main"
+  },
+  "projects": { "root": "/tmp", "max_depth": 1 },
+  "telemetry": { "capture_content": false },
+  "ui": { "theme": "catppuccin", "selection_height": 10 }
+}
+JSON
 
 wf() { PATH="${runtime_path}${PATH}" HERDR_WORKFLOW_CONFIG="$config" agentic-coding workflow "$@"; }
 wf --help | grep -q 'agent-extension'

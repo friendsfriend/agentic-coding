@@ -4,7 +4,7 @@ Libraries use the same definition schema as apps, but their type is derived from
 
 ## 1. Create the library definition
 
-Create a JSON file at `~/.config/devenv/libraries/definitions/IDENT.json`:
+Create a JSON file at `~/.config/agentic-coding/libraries/definitions/IDENT.json`:
 
 ```json
 {
@@ -26,7 +26,7 @@ Libraries do **not** support running containers or container logs since they are
 
 ## 2. Build Dockerfile
 
-Place at `~/.config/devenv/apps/build/IDENT-build.Dockerfile`:
+Place at `~/.config/agentic-coding/apps/build/IDENT-build.Dockerfile`:
 
 ```dockerfile
 FROM golang:1.26-bookworm AS build
@@ -39,7 +39,7 @@ RUN CGO_ENABLED=0 go build -o bin/my-lib .
 
 ## 3. Test Dockerfile
 
-Place at `~/.config/devenv/apps/build/IDENT-test.Dockerfile`:
+Place at `~/.config/agentic-coding/apps/build/IDENT-test.Dockerfile`:
 
 ```dockerfile
 FROM golang:1.26-bookworm

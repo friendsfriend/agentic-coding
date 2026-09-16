@@ -15,7 +15,7 @@ $DEVENV_CONFIG_DIR/themes/<theme-name>.json
 Default path:
 
 ```text
-~/.config/devenv/themes/<theme-name>.json
+~/.config/agentic-coding/themes/<theme-name>.json
 ```
 
 Restart DevEnv after adding or editing files. Open picker with `T`.
@@ -62,7 +62,7 @@ Restart DevEnv after adding or editing files. Open picker with `T`.
 Filename becomes picker name:
 
 ```text
-~/.config/devenv/themes/my-theme.json → my-theme
+~/.config/agentic-coding/themes/my-theme.json → my-theme
 ```
 
 Custom names can override built-in theme names.
@@ -105,13 +105,13 @@ Markdown/syntax fields from OpenCode themes are accepted and kept for compatibil
 1. Create directory:
 
 ```bash
-mkdir -p ~/.config/devenv/themes
+mkdir -p ~/.config/agentic-coding/themes
 ```
 
 2. Save JSON:
 
 ```bash
-$EDITOR ~/.config/devenv/themes/my-theme.json
+$EDITOR ~/.config/agentic-coding/themes/my-theme.json
 ```
 
 3. Restart DevEnv.
@@ -122,5 +122,5 @@ $EDITOR ~/.config/devenv/themes/my-theme.json
 Selected theme persists in:
 
 ```text
-~/.config/devenv/tui.json
+~/.config/agentic-coding/tui.json
 ```

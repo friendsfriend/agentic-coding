@@ -777,7 +777,7 @@ export function ModelConfigModal(props: {
 							{source()?.files.length ? ` (${source()?.files.join(", ")})` : ""}
 						</text>
 						<text fg={uiColors.textMuted}>
-							Saving rewrites the managed config file; comments in it are not
+							Saving rewrites the managed JSON config file; unrelated keys are
 							preserved.
 						</text>
 					</box>

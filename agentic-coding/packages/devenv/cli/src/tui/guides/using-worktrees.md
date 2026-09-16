@@ -30,7 +30,7 @@ wt config shell install   # enables automatic directory switching
 
 ## 3. Enable worktree mode
 
-Set `"gitMode": "WORKTREE"` in the repository definition JSON at `~/.config/devenv/apps/definitions/IDENT.json` or `~/.config/devenv/libraries/definitions/IDENT.json`.
+Set `"gitMode": "WORKTREE"` in the repository definition JSON at `~/.config/agentic-coding/apps/definitions/IDENT.json` or `~/.config/agentic-coding/libraries/definitions/IDENT.json`.
 
 Repositories added through the TUI use single-checkout branch mode by default. To enable worktrees for those repositories, edit the definition JSON and restart DevEnv.
 

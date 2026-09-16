@@ -88,8 +88,8 @@ describe("shared workflow startup", () => {
 		fs.mkdirSync(project, { recursive: true });
 		const file = path.join(project, "herdr-workflow.toml");
 		fs.writeFileSync(file, '[workflow]\nremote = "project-remote"\n');
-		const envFile = path.join(repo, "selected-config.toml");
-		fs.writeFileSync(envFile, "[agents]\n");
+		const envFile = path.join(repo, "selected-config.json");
+		fs.writeFileSync(envFile, '{ "agents": {} }\n');
 		const previous = process.env.HERDR_WORKFLOW_CONFIG;
 		try {
 			delete process.env.HERDR_WORKFLOW_CONFIG;

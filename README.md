@@ -16,20 +16,16 @@ Installer never installs agent runtimes, providers, or credentials. Configure Gi
 ./scripts/install.sh
 ```
 
-Configuration installs at `~/.config/agentic-coding/config.toml`. The shipped [`pi/herdr-workflow.toml`](pi/herdr-workflow.toml) is a portable defaults template and provides only the model-agnostic `use-default-model` preset. Custom profiles, routes, and presets belong in the user configuration at that location (or in an explicitly supplied project configuration).
+Configuration installs at `~/.config/agentic-coding/config.json`. The shipped [`pi/herdr-workflow.json`](pi/herdr-workflow.json) is a portable defaults template and provides only the model-agnostic `use-default-model` preset. Custom profiles, routes, and presets belong in the user configuration at that location (or in an explicitly supplied project configuration). All other application configuration (`.env`, `providers/`, `tui.json`, `themes/`, `apps/`, `libraries/`, `infrastructure/`) lives in the same directory; `AGENTIC_CODING_CONFIG_DIR` overrides it, and `DEVENV_CONFIG_DIR` still selects that one root as a deprecated alias.
 
-For an existing installation, migrate the current configuration before updating this checkout or running the installer. If the user config is still the repository symlink, materialize it as a regular file so its current profiles and presets remain user-owned:
+For an existing installation, preview and then apply the configuration migration. It is explicit, previews by default, keeps a protected backup of every original file and never relocates runtime data (checkouts, databases, logs, the knowledge wiki):
 
 ```bash
-config="$HOME/.config/agentic-coding/config.toml"
-tmp="$config.migration.tmp"
-if [[ -L "$config" ]]; then
-  cp -L "$config" "$tmp" && mv "$tmp" "$config"
-fi
-test -f "$config" && test ! -L "$config"
+agentic-coding config migrate            # dry run, prints the plan
+agentic-coding config migrate --apply    # needs stopped writers
 ```
 
-After this one-time migration, update the checkout and run `./scripts/install.sh`. Installation copies the defaults only when the user config is missing and never overwrites an existing file or symlink.
+Migration converts `config.toml` to `config.json`, moves the legacy `~/.config/devenv` configuration into the canonical root, and leaves legacy sources in place as inactive files. Run it before updating this checkout or running the installer.
 
 > New engine migrates recognized legacy workflows on first access. Legacy rows/files remain preserved, but old engine must not resume workflow after new revisions/effects exist. Restore recorded pre-migration repository/worktree backup before binary rollback.
 
@@ -127,21 +123,28 @@ Engine derives workflow, role, generation, output schema, and successor from run
 ### Agent configuration presets
 
 Named presets bundle a full step/role → profile routing into the committable
-agents config (`[agents.presets]` in `config.toml` or project
-`.pi/herdr-workflow.toml`), so switching between agent/model strategies no
-longer requires rewriting routes. `use-default-model` is always available as
+agents config (`agents.presets` in `config.json` or the project
+`.pi/herdr-workflow.json` overlay), so switching between agent/model strategies
+no longer requires rewriting routes. `use-default-model` is always available as
 an immutable built-in choice; only custom profiles and presets are persisted by
 the dashboard:
 
-```toml
-[agents.presets.frontier-plan]
-description = "Frontier planning, cheap workers"
-default_profile = "pi-cheap"          # fallback for unrouted steps
-[agents.presets.frontier-plan.steps]
-"core.plan" = "pi-planner"
-"core.implementation" = "oc-worker"
-[agents.presets.frontier-plan.roles."core.verification"]
-quality-verifier = "pi-review"
+```json
+{
+  "agents": {
+    "presets": {
+      "frontier-plan": {
+        "description": "Frontier planning, cheap workers",
+        "default_profile": "pi-cheap",
+        "steps": {
+          "core.plan": "pi-planner",
+          "core.implementation": "oc-worker"
+        },
+        "roles": { "core.verification": { "quality-verifier": "pi-review" } }
+      }
+    }
+  }
+}
 ```
 
 Select a preset per workflow start via the new-workflow modal's **Agent
@@ -149,12 +152,14 @@ preset** step or `agentic-coding workflow start --preset <name>`; selection is
 per start and never rewrites global defaults. Resolution order: preset role →
 preset step → preset default → existing chain. Profiles and presets can be
 created, edited, and deleted from the home dashboard's model configuration
-modal (`m`); edits are written back to the config file that supplied the
-agents section. Because project-level `.pi/herdr-workflow.toml` is merged over
+modal (`m`); edits are written back to the JSON config file that supplied the
+agents section. A legacy `.pi/herdr-workflow.toml` overlay is read for
+compatibility but must be converted before it can be edited. Because
+project-level `.pi/herdr-workflow.json` is merged over
 the user config, a committed agent configuration is trusted and executed as
 code: profile `executable`, `model`, `tools`, and preset routes from a cloned
 repository are honored by workflow starts. Only commit agent config you
-control, and review `.pi/herdr-workflow.toml` when cloning untrusted
+control, and review `.pi/herdr-workflow.json` when cloning untrusted
 repositories. At startup every routed profile's model is validated against
 its runtime's model enumeration (`pi --list-models`, `<exe> models`); an
 unknown model fails startup before any agent launches.

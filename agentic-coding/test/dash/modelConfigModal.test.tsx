@@ -40,10 +40,10 @@ function key(name: string): KeyEvent {
 
 test("model config modal shows profile and preset lists with help entry", async () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "model-modal-test-"));
-	process.env.HERDR_WORKFLOW_CONFIG = path.join(dir, "config.toml");
+	process.env.HERDR_WORKFLOW_CONFIG = path.join(dir, "config.json");
 	fs.writeFileSync(
 		process.env.HERDR_WORKFLOW_CONFIG,
-		'[ui]\ntheme = "catppuccin"\n',
+		'{"ui":{"theme":"catppuccin"}}\n',
 	);
 	let handler: ((event: KeyEvent) => boolean) | undefined;
 	try {
@@ -63,7 +63,7 @@ test("model config modal shows profile and preset lists with help entry", async 
 		expect(frame).toContain("Model configuration");
 		expect(frame).toContain("Profiles");
 		expect(frame).toContain("Presets");
-		expect(frame).toContain("comments in it are not preserved");
+		expect(frame).toContain("unrelated keys are");
 		handler?.(key("enter")); // open Profiles list
 		await t.flush();
 		frame = t.captureCharFrame();
@@ -86,10 +86,10 @@ test("model config modal shows profile and preset lists with help entry", async 
 
 test("profile editor walks name -> runtime -> model fields", async () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "model-modal-test-"));
-	process.env.HERDR_WORKFLOW_CONFIG = path.join(dir, "config.toml");
+	process.env.HERDR_WORKFLOW_CONFIG = path.join(dir, "config.json");
 	fs.writeFileSync(
 		process.env.HERDR_WORKFLOW_CONFIG,
-		'[ui]\ntheme = "catppuccin"\n',
+		'{"ui":{"theme":"catppuccin"}}\n',
 	);
 	let handler: ((event: KeyEvent) => boolean) | undefined;
 	let restorePath: () => void = () => {};
@@ -147,10 +147,10 @@ test("profile editor walks name -> runtime -> model fields", async () => {
 
 test("deleting a profile requires explicit confirmation", async () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "model-modal-test-"));
-	process.env.HERDR_WORKFLOW_CONFIG = path.join(dir, "config.toml");
+	process.env.HERDR_WORKFLOW_CONFIG = path.join(dir, "config.json");
 	fs.writeFileSync(
 		process.env.HERDR_WORKFLOW_CONFIG,
-		'[agents]\ndefault_profile = "doomed"\n\n[agents.profiles.doomed]\nruntime = "pi"\n\n[agents.profiles.free]\nruntime = "opencode"\n\n[agents.profiles.preset-used]\nruntime = "pi"\n\n[agents.presets.some]\ndefault_profile = "doomed"\n[agents.presets.some.steps]\n"core.plan" = "preset-used"\n',
+		'{"agents":{"default_profile":"doomed","profiles":{"doomed":{"runtime":"pi"},"free":{"runtime":"opencode"},"preset-used":{"runtime":"pi"}},"presets":{"some":{"default_profile":"doomed","steps":{"core.plan":"preset-used"}}}}}\n',
 	);
 	let handler: ((event: KeyEvent) => boolean) | undefined;
 	try {
@@ -188,7 +188,7 @@ test("deleting a profile requires explicit confirmation", async () => {
 		expect(frame).not.toContain("Delete profile?");
 		expect(
 			fs.readFileSync(process.env.HERDR_WORKFLOW_CONFIG, "utf8"),
-		).toContain("[agents.profiles.doomed]");
+		).toContain('"doomed"');
 		// an unreferenced profile deletes after confirmation
 		handler?.(key("j")); // -> free
 		handler?.(key("d"));
@@ -197,7 +197,7 @@ test("deleting a profile requires explicit confirmation", async () => {
 		await t.flush();
 		expect(
 			fs.readFileSync(process.env.HERDR_WORKFLOW_CONFIG, "utf8"),
-		).not.toContain("[agents.profiles.free]");
+		).not.toContain('"free"');
 		// listIndex still points where "free" was: now "preset-used". A profile
 		// referenced by any preset is refused with an error.
 		handler?.(key("d"));
@@ -210,12 +210,8 @@ test("deleting a profile requires explicit confirmation", async () => {
 			process.env.HERDR_WORKFLOW_CONFIG,
 			"utf8",
 		);
-		expect(persistedAfterPresetRefusal).toContain(
-			"[agents.profiles.preset-used]",
-		);
-		expect(persistedAfterPresetRefusal).toContain(
-			'"core.plan" = "preset-used"',
-		);
+		expect(persistedAfterPresetRefusal).toContain('"preset-used"');
+		expect(persistedAfterPresetRefusal).toContain('"core.plan": "preset-used"');
 		t.renderer.destroy();
 	} finally {
 		delete process.env.HERDR_WORKFLOW_CONFIG;
@@ -225,10 +221,20 @@ test("deleting a profile requires explicit confirmation", async () => {
 
 test("preset editor persists fusion planner roles and consolidator step", async () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "model-modal-test-"));
-	process.env.HERDR_WORKFLOW_CONFIG = path.join(dir, "config.toml");
+	process.env.HERDR_WORKFLOW_CONFIG = path.join(dir, "config.json");
 	fs.writeFileSync(
 		process.env.HERDR_WORKFLOW_CONFIG,
-		`[ui]\ntheme = "catppuccin"\n\n[agents]\ndefault_profile = "a"\n\n[agents.profiles.a]\nruntime = "pi"\n\n[agents.profiles.b]\nruntime = "pi"\n`,
+		`${JSON.stringify(
+			{
+				ui: { theme: "catppuccin" },
+				agents: {
+					default_profile: "a",
+					profiles: { a: { runtime: "pi" }, b: { runtime: "pi" } },
+				},
+			},
+			null,
+			2,
+		)}\n`,
 	);
 	let handler: ((event: KeyEvent) => boolean) | undefined;
 	try {
@@ -282,9 +288,9 @@ test("preset editor persists fusion planner roles and consolidator step", async 
 			"utf8",
 		);
 		expect(persisted).toContain("fusion-preset");
-		expect(persisted).toMatch(/planner-1 = "a"/);
-		expect(persisted).toMatch(/planner-2 = "b"/);
-		expect(persisted).toMatch(/"fusion.consolidate" = "a"/);
+		expect(persisted).toMatch(/"planner-1": "a"/);
+		expect(persisted).toMatch(/"planner-2": "b"/);
+		expect(persisted).toMatch(/"fusion.consolidate": "a"/);
 		// unset optional fields are never persisted as the literal sentinel
 		expect(persisted).not.toContain("(unset)");
 		expect(persisted).not.toMatch(/planner-[345]/);
@@ -297,10 +303,20 @@ test("preset editor persists fusion planner roles and consolidator step", async 
 
 test("preset editor lists every registered verification role from the catalog", async () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "model-modal-test-"));
-	process.env.HERDR_WORKFLOW_CONFIG = path.join(dir, "config.toml");
+	process.env.HERDR_WORKFLOW_CONFIG = path.join(dir, "config.json");
 	fs.writeFileSync(
 		process.env.HERDR_WORKFLOW_CONFIG,
-		`[ui]\ntheme = "catppuccin"\n\n[agents]\ndefault_profile = "a"\n\n[agents.profiles.a]\nruntime = "pi"\n`,
+		`${JSON.stringify(
+			{
+				ui: { theme: "catppuccin" },
+				agents: {
+					default_profile: "a",
+					profiles: { a: { runtime: "pi" } },
+				},
+			},
+			null,
+			2,
+		)}\n`,
 	);
 	let handler: ((event: KeyEvent) => boolean) | undefined;
 	try {
@@ -343,31 +359,29 @@ test("preset editor lists every registered verification role from the catalog", 
 
 test("editing an existing preset preserves role tables outside the edited fields", async () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "model-modal-test-"));
-	process.env.HERDR_WORKFLOW_CONFIG = path.join(dir, "config.toml");
+	process.env.HERDR_WORKFLOW_CONFIG = path.join(dir, "config.json");
 	fs.writeFileSync(
 		process.env.HERDR_WORKFLOW_CONFIG,
-		`[ui]
-theme = "catppuccin"
-
-[agents]
-default_profile = "a"
-
-[agents.profiles.a]
-runtime = "pi"
-
-[agents.profiles.b]
-runtime = "pi"
-
-[agents.presets.existing.steps]
-"core.plan" = "a"
-"core.implementation" = "b"
-
-[agents.presets.existing.roles."core.verification"]
-quality-verifier = "b"
-
-[agents.presets.existing.roles."custom.step"]
-custom-role = "a"
-`,
+		`${JSON.stringify(
+			{
+				ui: { theme: "catppuccin" },
+				agents: {
+					default_profile: "a",
+					profiles: { a: { runtime: "pi" }, b: { runtime: "pi" } },
+					presets: {
+						existing: {
+							steps: { "core.plan": "a", "core.implementation": "b" },
+							roles: {
+								"core.verification": { "quality-verifier": "b" },
+								"custom.step": { "custom-role": "a" },
+							},
+						},
+					},
+				},
+			},
+			null,
+			2,
+		)}\n`,
 	);
 	let handler: ((event: KeyEvent) => boolean) | undefined;
 	try {
@@ -396,12 +410,12 @@ custom-role = "a"
 			process.env.HERDR_WORKFLOW_CONFIG,
 			"utf8",
 		);
-		expect(persisted).toContain('"core.plan" = "a"');
-		expect(persisted).toContain('"core.implementation" = "b"');
-		expect(persisted).toContain('quality-verifier = "b"');
+		expect(persisted).toContain('"core.plan": "a"');
+		expect(persisted).toContain('"core.implementation": "b"');
+		expect(persisted).toContain('"quality-verifier": "b"');
 		// arbitrary role tables survive verbatim
 		expect(persisted).toContain('"custom.step"');
-		expect(persisted).toContain('custom-role = "a"');
+		expect(persisted).toContain('"custom-role": "a"');
 		expect(persisted).not.toContain("(unset)");
 		// untouched fusion fields are not introduced by the save
 		expect(persisted).not.toContain("fusion");
@@ -414,7 +428,7 @@ custom-role = "a"
 
 test("a save refuses to overwrite a configuration another client changed", async () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "model-modal-test-"));
-	process.env.HERDR_WORKFLOW_CONFIG = path.join(dir, "config.toml");
+	process.env.HERDR_WORKFLOW_CONFIG = path.join(dir, "config.json");
 	fs.writeFileSync(
 		process.env.HERDR_WORKFLOW_CONFIG,
 		'[agents]\ndefault_profile = "a"\n\n[agents.profiles.a]\nruntime = "pi"\n',

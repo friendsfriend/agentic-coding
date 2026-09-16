@@ -88,6 +88,9 @@ const APPLICATION_FILES = [
 ];
 const ROOT_FILES = [
 	"cli.ts",
+	"config-command.ts", // `agentic-coding config` surface: explicit preview/apply/resume/rollback
+	"config-migration.ts", // explicit configuration migration (root layer: reads runtime config loaders)
+	"config-root.ts", // one configuration-root resolver shared by runtime, TUI-shared and TUI-feature layers
 	"herdr-client.ts",
 	"server-command.ts",
 	// Unified Bun backend transport/client/build root (expose-unified-bun-backend):

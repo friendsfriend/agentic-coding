@@ -203,9 +203,10 @@ describe("home, config and environment precedence", () => {
 		try {
 			delete process.env.DEVENV_HOME;
 			delete process.env.DEVENV_CONFIG_DIR;
-			// No config-dir override: the documented ~/.config/devenv fallback.
+			delete process.env.AGENTIC_CODING_CONFIG_DIR;
+			// No config-dir override: the documented canonical root fallback.
 			expect(resolveConfigDir()).toBe(
-				path.join(os.homedir(), ".config", "devenv"),
+				path.join(os.homedir(), ".config", "agentic-coding"),
 			);
 
 			withTempDir("env-config-", (dir) => {

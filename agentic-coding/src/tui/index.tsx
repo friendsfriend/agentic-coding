@@ -758,7 +758,11 @@ export async function main(): Promise<void> {
 					// scanning a local path.
 					await db.refresh();
 				} else {
-					for (const r of scanRoots) await db.scanAllWorkspacesAsync(r);
+					if (db instanceof RemoteTelemetryDb) {
+						await db.scanRepositories(scanRoots);
+					} else {
+						for (const r of scanRoots) await db.scanAllWorkspacesAsync(r);
+					}
 					db.cleanupOlderThan();
 				}
 				loadedSpans = db.loadSpans();

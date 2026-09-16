@@ -55,6 +55,9 @@ export interface AgentStatus {
 	/** Effective source and the files it was resolved from. */
 	source?: string;
 	files: readonly string[];
+	/** Legacy sources left in place but not read, because a canonical JSON file
+	 * wins at this scope. Reported so the operator can finish the migration. */
+	inactiveFiles?: readonly string[];
 	conflicts: string[];
 	error?: string;
 	profiles: Array<{ name: string; value: string }>;
@@ -102,9 +105,9 @@ export interface BackendSnapshot {
 export interface SettingsContext {
 	themes: string[];
 	activeTheme: string;
-	/** `$DEVENV_CONFIG_DIR/tui.json`, the client-local preference file. */
+	/** `$AGENTIC_CODING_CONFIG_DIR/tui.json`, the client-local preference file. */
 	clientSettingsPath: string;
-	/** `$DEVENV_CONFIG_DIR/themes`, loaded at startup. */
+	/** `$AGENTIC_CODING_CONFIG_DIR/themes`, loaded at startup. */
 	customThemeDir: string;
 	/** The Settings page this snapshot is rendered for. */
 	section: SettingsSection;
@@ -194,6 +197,22 @@ function agentItems(context: SettingsContext): SettingsItem[] {
 			editable: true,
 			action: { kind: "navigate", route: settingsRoute("agents") },
 		});
+	}
+	if (agents.inactiveFiles?.length) {
+		for (const file of agents.inactiveFiles) {
+			items.push({
+				id: `agents.inactive.${file}`,
+				label: "Inactive legacy configuration",
+				value: file,
+				detail: detailFor(
+					agents.scope,
+					`${file} is read-only compatibility input; JSON is the active format`,
+					"next-start",
+				),
+				editable: false,
+				action: { kind: "none" },
+			});
+		}
 	}
 	if (agents.error) {
 		items.push({

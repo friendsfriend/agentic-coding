@@ -1,43 +1,45 @@
 // Environment home/configuration resolution (moved out of the retired
 // managed-Go-backend boundary). Pure path resolution: the one executable and
 // every subprocess it starts resolve the same directories through this module.
-import fs from "node:fs";
+//
+// The root `.env` is read through the one shared contract (`src/env-file.ts`,
+// unify-json-configuration-directory task 3.1); this module no longer carries a
+// second parser.
 import os from "node:os";
 import path from "node:path";
+import {
+	configRootEnv,
+	ROOT_SELECTING_ENV_KEYS,
+	resolveConfigRoot,
+	warnRootSelectingKeyInEnvFile,
+} from "../config-root.ts";
+import { expandEnvHome, loadEnvFile } from "../env-file.ts";
 
-function parseEnvFile(filePath: string): Record<string, string> {
-	try {
-		const content = fs.readFileSync(filePath, "utf8");
-		const vars: Record<string, string> = {};
-		for (const raw of content.split("\n")) {
-			const line = raw.trim();
-			if (!line || line.startsWith("#")) continue;
-			const stripped = line.replace(/^export\s+/, "");
-			const eq = stripped.indexOf("=");
-			if (eq === -1) continue;
-			const key = stripped.slice(0, eq).trim();
-			let value = stripped
-				.slice(eq + 1)
-				.trim()
-				.replace(/^["']|["']$/g, "");
-			value = value.replace(/\$\{HOME\}|\$HOME/g, os.homedir());
-			if (key) vars[key] = value;
-		}
-		return vars;
-	} catch {
-		return {};
-	}
+/** The one configuration root every global consumer shares. */
+export function resolveConfigDir(explicit?: string): string {
+	return resolveConfigRoot(explicit);
 }
 
-export function resolveConfigDir(): string {
-	if (process.env.DEVENV_CONFIG_DIR) return process.env.DEVENV_CONFIG_DIR;
-	return path.join(os.homedir(), ".config", "devenv");
+/** Environment fragment that makes an application subprocess resolve the same
+ * configuration root as this process. */
+export function configDirEnv(
+	root = resolveConfigRoot(),
+): Record<string, string> {
+	return configRootEnv(root);
 }
 
+/** Resolve the managed runtime home: `DEVENV_HOME`, then `DEVENV_HOME` in the
+ * selected root's `.env` (with its bootstrap `$HOME` expansion), then
+ * `~/devenv`. This is the runtime location, not the configuration root. */
 export function resolveDevenvHome(): string {
 	if (process.env.DEVENV_HOME) return process.env.DEVENV_HOME;
-	const configDir = resolveConfigDir();
-	const envVars = parseEnvFile(path.join(configDir, ".env"));
-	if (envVars.DEVENV_HOME) return envVars.DEVENV_HOME;
+	const envVars = loadEnvFile(path.join(resolveConfigDir(), ".env"));
+	// A root `.env` must not select the root that contains it.
+	for (const key of ROOT_SELECTING_ENV_KEYS) {
+		if (envVars.delete(key)) warnRootSelectingKeyInEnvFile(key);
+	}
+	const configured = envVars.get("DEVENV_HOME");
+	if (configured !== undefined && configured !== "")
+		return expandEnvHome(configured);
 	return path.join(os.homedir(), "devenv");
 }

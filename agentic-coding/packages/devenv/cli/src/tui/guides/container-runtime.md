@@ -5,7 +5,7 @@ DevEnv supports Docker and Podman for Docker-based app and infrastructure featur
 Set the runtime in your local config `.env` file:
 
 ```bash
-# ~/.config/devenv/.env
+# ~/.config/agentic-coding/.env
 DEVENV_CONTAINER_RUNTIME=docker
 ```
 
@@ -19,7 +19,7 @@ Do not commit `.env`; runtime choice is machine-local.
 2. Configure DevEnv:
 
 ```bash
-cat >> ~/.config/devenv/.env <<'EOF'
+cat >> ~/.config/agentic-coding/.env <<'EOF'
 DEVENV_CONTAINER_RUNTIME=docker
 EOF
 ```
@@ -47,7 +47,7 @@ systemctl --user start podman.socket
 2. Configure DevEnv:
 
 ```bash
-cat >> ~/.config/devenv/.env <<'EOF'
+cat >> ~/.config/agentic-coding/.env <<'EOF'
 DEVENV_CONTAINER_RUNTIME=podman
 EOF
 ```

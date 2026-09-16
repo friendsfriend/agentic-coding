@@ -4,7 +4,7 @@
 Provide a built-in model-agnostic workflow choice with a configurable harness, so installations run agents without shipping provider-specific model configuration.
 ## Requirements
 ### Requirement: Built-in use-default-model preset
-The system SHALL expose `use-default-model` as the only built-in agent preset when the effective configuration has no custom configuration. The repository-provided `pi/herdr-workflow.toml` SHALL contain only this model-agnostic agent default and portable application defaults; it SHALL NOT contain machine-specific profiles or custom presets. The built-in preset configuration SHALL select one supported harness (`pi`, `opencode`, or `opencode-v2`) and SHALL not configure a model. Selecting it, or starting with no custom routing configured, SHALL route agent work through the configured harness without a model so that the harness selects its own default model.
+The system SHALL expose `use-default-model` as the only built-in agent preset when the effective configuration has no custom configuration. The repository-provided `pi/herdr-workflow.json` SHALL contain only this model-agnostic agent default and portable application defaults; it SHALL NOT contain machine-specific profiles or custom presets. The built-in preset configuration SHALL select one supported harness (`pi`, `opencode`, or `opencode-v2`) and SHALL not configure a model. Selecting it, or starting with no custom routing configured, SHALL route agent work through the configured harness without a model so that the harness selects its own default model.
 
 #### Scenario: Workflow starts with the built-in preset
 - **WHEN** a user starts a supported workflow with `use-default-model`

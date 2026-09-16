@@ -286,12 +286,21 @@ describe("agent configuration presets", () => {
 });
 
 describe("agents section write-back", () => {
-	test("parent scalar fields stay in parent table after child edits", () => {
+	test("parent scalar fields survive child edits", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "config-parent-fields-"));
-		const file = path.join(dir, "config.toml");
+		const file = path.join(dir, "config.json");
 		fs.writeFileSync(
 			file,
-			`[agents.profiles.pi-a]\nruntime = "pi"\n\n[agents.presets.base]\ndefault_profile = "pi-a"\n`,
+			`${JSON.stringify(
+				{
+					agents: {
+						profiles: { "pi-a": { runtime: "pi" } },
+						presets: { base: { default_profile: "pi-a" } },
+					},
+				},
+				null,
+				2,
+			)}\n`,
 		);
 		process.env.HERDR_WORKFLOW_CONFIG = file;
 		try {
@@ -299,12 +308,8 @@ describe("agents section write-back", () => {
 				section.default_profile = "pi-a";
 			});
 			const agents = parseAgentsConfig(
-				(
-					Bun.TOML.parse(fs.readFileSync(file, "utf8")) as Record<
-						string,
-						unknown
-					>
-				).agents,
+				(JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>)
+					.agents,
 			);
 			expect(agents.default_profile).toBe("pi-a");
 			expect(agents.profiles["pi-a"]?.runtime).toBe("pi");
@@ -317,37 +322,34 @@ describe("agents section write-back", () => {
 
 	test("round-trip preserves profiles, presets, routes, and unrelated sections", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "config-write-"));
-		const file = path.join(dir, "config.toml");
+		const file = path.join(dir, "config.json");
 		fs.writeFileSync(
 			file,
-			`[workflow]
-max_verification_rounds = 6
-remote = "origin"
-branch_prefix = "feature/"
-base_branch = "origin/HEAD"
-
-[ui]
-theme = "catppuccin"
-selection_height = 10
-
-[agents]
-default_profile = "pi-a"
-
-[agents.profiles.pi-a]
-runtime = "pi"
-model = "a/b"
-
-[agents.routes]
-"core.plan" = "pi-a"
-
-[agents.presets.base]
-default_profile = "pi-a"
-[agents.presets.base.steps]
-"core.plan" = "pi-a"
-
-[telemetry]
-capture_content = true
-`,
+			`${JSON.stringify(
+				{
+					workflow: {
+						max_verification_rounds: 6,
+						remote: "origin",
+						branch_prefix: "feature/",
+						base_branch: "origin/HEAD",
+					},
+					ui: { theme: "catppuccin", selection_height: 10 },
+					agents: {
+						default_profile: "pi-a",
+						profiles: { "pi-a": { runtime: "pi", model: "a/b" } },
+						routes: { "core.plan": "pi-a" },
+						presets: {
+							base: {
+								default_profile: "pi-a",
+								steps: { "core.plan": "pi-a" },
+							},
+						},
+					},
+					telemetry: { capture_content: true },
+				},
+				null,
+				2,
+			)}\n`,
 		);
 		process.env.HERDR_WORKFLOW_CONFIG = file;
 		try {
@@ -361,7 +363,7 @@ capture_content = true
 					steps: { "core.archive": "pi-a" },
 				};
 			});
-			const reparsed = Bun.TOML.parse(fs.readFileSync(file, "utf8")) as Record<
+			const reparsed = JSON.parse(fs.readFileSync(file, "utf8")) as Record<
 				string,
 				Record<string, unknown>
 			>;
@@ -388,7 +390,7 @@ capture_content = true
 			});
 			const afterDelete = parseAgentsConfig(
 				(
-					Bun.TOML.parse(fs.readFileSync(file, "utf8")) as Record<
+					JSON.parse(fs.readFileSync(file, "utf8")) as Record<
 						string,
 						Record<string, unknown>
 					>
@@ -406,10 +408,12 @@ capture_content = true
 describe("config merge hardening", () => {
 	test("loadConfig ignores literal __proto__ keys from config files", async () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "proto-merge-"));
-		const file = path.join(dir, "config.toml");
+		const file = path.join(dir, "config.json");
+		// A raw JSON literal: an object literal `__proto__` key would set the
+		// prototype instead of producing the hostile own property under test.
 		fs.writeFileSync(
 			file,
-			'[__proto__]\nisAdmin = true\n\n[workflow]\nmax_verification_rounds = 6\nremote = "origin"\nbranch_prefix = "feature/"\nbase_branch = "origin/HEAD"\n',
+			'{"__proto__":{"isAdmin":true},"workflow":{"max_verification_rounds":6,"remote":"origin","branch_prefix":"feature/","base_branch":"origin/HEAD"}}\n',
 		);
 		process.env.HERDR_WORKFLOW_CONFIG = file;
 		try {
@@ -426,6 +430,16 @@ describe("config merge hardening", () => {
 });
 
 describe("write-back target selection", () => {
+	// The canonical configuration root is an independent resolver input; these
+	// fixtures model it inside the fixture home.
+	const rootFor = (home: string) =>
+		path.join(home, ".config", "agentic-coding");
+	const selectTarget = (
+		envPath: string | undefined,
+		home: string,
+		cwd: string,
+	) => selectAgentsConfigPath(envPath, home, cwd, rootFor(home));
+
 	test("agentsConfigPath prefers files that actually supply [agents]", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "config-target-"));
 		const home = path.join(dir, "home");
@@ -438,61 +452,80 @@ describe("write-back target selection", () => {
 				home,
 				".config",
 				"agentic-coding",
-				"config.toml",
+				"config.json",
 			);
-			fs.writeFileSync(noAgents, '[ui]\ntheme = "catppuccin"\n');
-			const legacy = path.join(home, ".pi", "agent", "herdr-workflow.toml");
-			fs.mkdirSync(path.dirname(legacy), { recursive: true });
-			fs.writeFileSync(legacy, '[ui]\ntheme = "legacy"\n');
-			const projectFile = path.join(dir, "repo", ".pi", "herdr-workflow.toml");
+			fs.writeFileSync(noAgents, '{ "ui": { "theme": "catppuccin" } }\n');
+			const projectFile = path.join(dir, "repo", ".pi", "herdr-workflow.json");
 
-			// nothing exists -> user config path is created on save
-			expect(
-				selectAgentsConfigPath(undefined, path.join(dir, "none"), dir),
-			).toBe(
-				path.join(dir, "none", ".config", "agentic-coding", "config.toml"),
+			// nothing exists -> canonical JSON config path is created on save
+			expect(selectTarget(undefined, path.join(dir, "none"), dir)).toBe(
+				path.join(dir, "none", ".config", "agentic-coding", "config.json"),
 			);
 			// no candidate defines agents -> highest-priority existing file
-			expect(selectAgentsConfigPath(undefined, home, dir)).toBe(noAgents);
+			expect(selectTarget(undefined, home, dir)).toBe(noAgents);
 			// project file defines agents and outranks them all despite merge order
-			fs.writeFileSync(projectFile, '[agents]\ndefault_profile = "p"\n');
-			expect(
-				selectAgentsConfigPath(undefined, home, path.join(dir, "repo")),
-			).toBe(projectFile);
+			fs.writeFileSync(
+				projectFile,
+				'{ "agents": { "default_profile": "p" } }\n',
+			);
+			expect(selectTarget(undefined, home, path.join(dir, "repo"))).toBe(
+				projectFile,
+			);
 			// when BOTH base and project define [agents], project wins at load
 			// precedence (deep-merged over base), so it is the write-back target
-			fs.appendFileSync(noAgents, '[agents]\ndefault_profile = "base"\n');
-			expect(
-				selectAgentsConfigPath(undefined, home, path.join(dir, "repo")),
-			).toBe(projectFile);
+			fs.writeFileSync(
+				noAgents,
+				'{ "agents": { "default_profile": "base" } }\n',
+			);
+			expect(selectTarget(undefined, home, path.join(dir, "repo"))).toBe(
+				projectFile,
+			);
 			// base defines agents but project does not supply one -> base is target
 			fs.rmSync(projectFile);
-			expect(selectAgentsConfigPath(undefined, home, dir)).toBe(noAgents);
+			expect(selectTarget(undefined, home, dir)).toBe(noAgents);
 			// QUALITY-001 regression: legacy supplies [agents] while the winning
-			// base (canonical user config) does not — loadConfig never reads the
+			// base (canonical JSON config) does not — loadConfig never reads the
 			// legacy file in that setup, so edits must go to the canonical file
 			const legacyFile = path.join(home, ".pi", "agent", "herdr-workflow.toml");
 			fs.mkdirSync(path.dirname(legacyFile), { recursive: true });
 			fs.writeFileSync(legacyFile, '[agents]\ndefault_profile = "legacy"\n');
-			expect(selectAgentsConfigPath(undefined, home, dir)).toBe(noAgents);
+			expect(selectTarget(undefined, home, dir)).toBe(noAgents);
+			// A legacy TOML overlay supplying [agents] is still the effective
+			// source, so it is selected — and then refused by the writer.
+			const legacyOverlay = path.join(
+				dir,
+				"repo",
+				".pi",
+				"herdr-workflow.toml",
+			);
+			fs.writeFileSync(legacyOverlay, '[agents]\ndefault_profile = "p"\n');
+			expect(selectTarget(undefined, home, path.join(dir, "repo"))).toBe(
+				legacyOverlay,
+			);
+			fs.rmSync(legacyOverlay);
 			// explicit env always wins
 			expect(
-				selectAgentsConfigPath(
-					"/custom/config.toml",
-					home,
-					path.join(dir, "repo"),
-				),
-			).toBe("/custom/config.toml");
+				selectTarget("/custom/config.json", home, path.join(dir, "repo")),
+			).toBe("/custom/config.json");
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
 	});
 	test("saveAgentsSection writes back to the resolved target file", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "config-save-"));
-		const file = path.join(dir, "config.toml");
+		const file = path.join(dir, "config.json");
 		fs.writeFileSync(
 			file,
-			'[agents]\ndefault_profile = "p"\n\n[agents.profiles.p]\nruntime = "pi"\n',
+			`${JSON.stringify(
+				{
+					agents: {
+						default_profile: "p",
+						profiles: { p: { runtime: "pi" } },
+					},
+				},
+				null,
+				2,
+			)}\n`,
 		);
 		process.env.HERDR_WORKFLOW_CONFIG = file;
 		try {
@@ -501,7 +534,7 @@ describe("write-back target selection", () => {
 					extra: { default_profile: "p" },
 				};
 			});
-			const reparsed = Bun.TOML.parse(fs.readFileSync(file, "utf8")) as Record<
+			const reparsed = JSON.parse(fs.readFileSync(file, "utf8")) as Record<
 				string,
 				Record<string, unknown>
 			>;
@@ -512,9 +545,31 @@ describe("write-back target selection", () => {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	test("a legacy TOML write target is refused, never silently converted", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "config-toml-refuse-"));
+		const file = path.join(dir, "config.toml");
+		fs.writeFileSync(file, '[agents]\ndefault_profile = "p"\n');
+		process.env.HERDR_WORKFLOW_CONFIG = file;
+		try {
+			expect(agentsConfigPath()).toBe(file);
+			expect(() => saveAgentsSection(() => {})).toThrow(
+				/legacy TOML configuration read for compatibility/,
+			);
+			expect(fs.readFileSync(file, "utf8")).toBe(
+				'[agents]\ndefault_profile = "p"\n',
+			);
+		} finally {
+			delete process.env.HERDR_WORKFLOW_CONFIG;
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("config source conflicts", () => {
+	const rootFor = (home: string) =>
+		path.join(home, ".config", "agentic-coding");
+
 	test("conflictingAgentsFiles flags base suppliers under a project target", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "config-conflict-"));
 		try {
@@ -523,24 +578,29 @@ describe("config source conflicts", () => {
 				recursive: true,
 			});
 			fs.writeFileSync(
-				path.join(home, ".config", "agentic-coding", "config.toml"),
-				'[agents]\ndefault_profile = "base"\n',
+				path.join(home, ".config", "agentic-coding", "config.json"),
+				'{ "agents": { "default_profile": "base" } }\n',
 			);
 			fs.mkdirSync(path.join(dir, "repo", ".pi"), { recursive: true });
-			const projectFile = path.join(dir, "repo", ".pi", "herdr-workflow.toml");
-			fs.writeFileSync(projectFile, '[agents]\ndefault_profile = "p"\n');
+			const projectFile = path.join(dir, "repo", ".pi", "herdr-workflow.json");
+			fs.writeFileSync(
+				projectFile,
+				'{ "agents": { "default_profile": "p" } }\n',
+			);
 			// project target + base supplying [agents] -> base-only deletes resurrect
-			expect(conflictingAgentsFiles(home, path.join(dir, "repo"))).toEqual([
-				path.join(home, ".config", "agentic-coding", "config.toml"),
-			]);
+			expect(
+				conflictingAgentsFiles(home, path.join(dir, "repo"), rootFor(home)),
+			).toEqual([path.join(home, ".config", "agentic-coding", "config.json")]);
 			// base without [agents] -> no conflict
 			fs.writeFileSync(
-				path.join(home, ".config", "agentic-coding", "config.toml"),
-				'[ui]\ntheme = "x"\n',
+				path.join(home, ".config", "agentic-coding", "config.json"),
+				'{ "ui": { "theme": "x" } }\n',
 			);
-			expect(conflictingAgentsFiles(home, path.join(dir, "repo"))).toEqual([]);
+			expect(
+				conflictingAgentsFiles(home, path.join(dir, "repo"), rootFor(home)),
+			).toEqual([]);
 			// non-project targets never conflict
-			expect(conflictingAgentsFiles(home, dir)).toEqual([]);
+			expect(conflictingAgentsFiles(home, dir, rootFor(home))).toEqual([]);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
@@ -556,8 +616,8 @@ describe("config source conflicts", () => {
 			);
 			fs.mkdirSync(path.join(dir, "repo", ".pi"), { recursive: true });
 			fs.writeFileSync(
-				path.join(dir, "repo", ".pi", "herdr-workflow.toml"),
-				'[workflow]\nremote = "project-origin"\n',
+				path.join(dir, "repo", ".pi", "herdr-workflow.json"),
+				'{ "workflow": { "remote": "project-origin" } }\n',
 			);
 			process.env.HERDR_WORKFLOW_CONFIG = envFile;
 			process.chdir(path.join(dir, "repo"));

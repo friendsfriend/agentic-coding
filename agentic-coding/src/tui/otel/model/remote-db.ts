@@ -32,6 +32,7 @@ export class RemoteTelemetryDb implements TelemetryDb {
 	private snapshot: Snapshot = EMPTY_SNAPSHOT;
 	private readonly watchers = new Map<string, Set<Watcher>>();
 	private unsubscribe?: () => void;
+	private scansInFlight = 0;
 
 	/** Bind the authenticated transport once the shell has configured it. */
 	setClient(client: BackendClient): void {
@@ -54,7 +55,9 @@ export class RemoteTelemetryDb implements TelemetryDb {
 	/** Fetch the authoritative snapshot and notify watchers when it changed. */
 	async refresh(): Promise<void> {
 		const client = this.client;
-		if (!client) return;
+		// Scan events arrive for each repository; the batch refreshes once after
+		// all scans finish instead of transferring the full history N times.
+		if (!client || this.scansInFlight > 0) return;
 		const next = (await client.telemetrySnapshot()) as Snapshot;
 		const changed =
 			next.spans.length !== this.snapshot.spans.length ||
@@ -104,11 +107,23 @@ export class RemoteTelemetryDb implements TelemetryDb {
 	}
 
 	async scanAllWorkspacesAsync(repoRoot: string): Promise<number> {
+		return this.scanRepositories([repoRoot]);
+	}
+
+	async scanRepositories(repoRoots: readonly string[]): Promise<number> {
 		const client = this.client;
 		if (!client) return 0;
-		const scanned = await client.telemetryScan(repoRoot);
-		await this.refresh();
-		return scanned;
+		this.scansInFlight++;
+		try {
+			let scanned = 0;
+			for (const root of new Set(repoRoots)) {
+				scanned += await client.telemetryScan(root);
+			}
+			return scanned;
+		} finally {
+			this.scansInFlight--;
+			await this.refresh();
+		}
 	}
 
 	watchWorkspaces(

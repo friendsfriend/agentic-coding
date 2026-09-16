@@ -1,0 +1,26 @@
+{
+  "agents": {
+    "presets": {
+      "use-default-model": {
+        "runtime": "pi"
+      }
+    }
+  },
+  "workflow": {
+    "max_verification_rounds": 20,
+    "remote": "origin",
+    "branch_prefix": "feature/",
+    "base_branch": "origin/HEAD"
+  },
+  "wiki": {
+    "root": "~/.config/agentic-coding/wiki"
+  },
+  "telemetry": {
+    "capture_content": false
+  },
+  "ui": {
+    "theme": "catppuccin",
+    "selection_height": 10,
+    "herdr_sidebar": false
+  }
+}

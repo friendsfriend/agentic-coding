@@ -2,6 +2,7 @@
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveConfigRoot } from "../config-root.ts";
 
 export const AGENT_DIR = path.join(os.homedir(), ".pi", "agent");
 
@@ -30,6 +31,10 @@ export const AGENT_DEF_DIR =
 		? MATERIALIZED_AGENT_DEF_DIR
 		: path.resolve(path.dirname(here), "..", "..", "..", "agent-definitions"));
 
+// The workflow configuration file lives under the shared configuration root
+// (unify-json-configuration-directory, task 2.1) and is JSON
+// (task 2.2). `HERDR_WORKFLOW_CONFIG` stays an explicit full replacement and may
+// still name a legacy TOML file, which is read for compatibility only.
 export const CONFIG =
 	process.env.HERDR_WORKFLOW_CONFIG ||
-	path.join(os.homedir(), ".config", "agentic-coding", "config.toml");
+	path.join(resolveConfigRoot(), "config.json");

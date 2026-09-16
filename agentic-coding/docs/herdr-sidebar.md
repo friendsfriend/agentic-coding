@@ -22,13 +22,16 @@ state, agent processes, or Herdr topology.
 ## Enable it
 
 The preference is trusted user configuration only — a project
-`.pi/herdr-workflow.toml` cannot turn the integration on or off for other
+`.pi/herdr-workflow.json` cannot turn the integration on or off for other
 workspaces.
 
-```toml
-# ~/.config/agentic-coding/config.toml
-[ui]
-herdr_sidebar = true
+```json
+// ~/.config/agentic-coding/config.json
+{
+  "ui": {
+    "herdr_sidebar": true
+  }
+}
 ```
 
 Default is `false`. Nothing is published or installed while it is off.

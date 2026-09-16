@@ -4,7 +4,7 @@ Infrastructure services (databases, message queues, caches, local native daemons
 
 ## 1. Create the service definition
 
-Create a JSON file at `~/.config/devenv/infrastructure/definitions/IDENT.json`:
+Create a JSON file at `~/.config/agentic-coding/infrastructure/definitions/IDENT.json`:
 
 ```json
 {
@@ -22,7 +22,7 @@ Docker services may omit `type`; DevEnv treats them as `"docker"`.
 
 ## 2. Create the Compose file
 
-Place a Docker Compose file at `~/.config/devenv/infrastructure/compose/IDENT.yml`:
+Place a Docker Compose file at `~/.config/agentic-coding/infrastructure/compose/IDENT.yml`:
 
 ```yaml
 services:

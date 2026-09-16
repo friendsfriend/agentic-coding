@@ -46,10 +46,10 @@ import {
 import { startRouting } from "../src/workflow/startup.ts";
 
 /** Write one config file and point the resolution at it for the test body. */
-function withConfig<T>(content: string, run: () => T): T {
+function withConfig<T>(content: object, run: () => T): T {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "settings-config-"));
-	const file = path.join(dir, "config.toml");
-	fs.writeFileSync(file, content);
+	const file = path.join(dir, "config.json");
+	fs.writeFileSync(file, `${JSON.stringify(content, null, 2)}\n`);
 	process.env.HERDR_WORKFLOW_CONFIG = file;
 	try {
 		return run();
@@ -59,26 +59,96 @@ function withConfig<T>(content: string, run: () => T): T {
 	}
 }
 
-const BASE_CONFIG = `[agents]
-default_profile = "a"
+const BASE_CONFIG = {
+	agents: {
+		default_profile: "a",
+		profiles: { a: { runtime: "pi" }, b: { runtime: "pi" } },
+		presets: {
+			p: {
+				default_profile: "a",
+				steps: { "core.plan": "a" },
+				roles: { "custom.step": { "custom-role": "b" } },
+			},
+		},
+	},
+};
 
-[agents.profiles.a]
-runtime = "pi"
-
-[agents.profiles.b]
-runtime = "pi"
-
-[agents.presets.p]
-default_profile = "a"
-
-[agents.presets.p.steps]
-"core.plan" = "a"
-
-[agents.presets.p.roles."custom.step"]
-custom-role = "b"
-`;
+/** Rewrite the active test config as JSON (the format every write uses). */
+function updateConfig(
+	file: string,
+	mutate: (doc: Record<string, unknown>) => void,
+) {
+	const document = JSON.parse(fs.readFileSync(file, "utf8")) as Record<
+		string,
+		unknown
+	>;
+	mutate(document);
+	fs.writeFileSync(file, `${JSON.stringify(document, null, 2)}\n`);
+}
 
 describe("settings inventory", () => {
+	test("a leftover legacy configuration is surfaced as an inactive source", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "settings-legacy-"));
+		try {
+			const root = path.join(dir, "agentic-coding");
+			fs.mkdirSync(root, { recursive: true });
+			fs.writeFileSync(
+				path.join(root, "config.toml"),
+				'[agents]\ndefault_profile = "legacy"\n',
+			);
+			fs.writeFileSync(
+				path.join(root, "config.json"),
+				`${JSON.stringify({
+					agents: {
+						default_profile: "current",
+						profiles: { current: { runtime: "pi" } },
+					},
+				})}\n`,
+			);
+			process.env.AGENTIC_CODING_CONFIG_DIR = root;
+			try {
+				const resolved = loadAgentConfig();
+				// The canonical JSON wins and the leftover TOML is reported, not merged.
+				expect(resolved.agents.default_profile).toBe("current");
+				expect(resolved.provenance.source).toBe("user");
+				expect(resolved.provenance.inactiveFiles).toEqual([
+					path.join(root, "config.toml"),
+				]);
+
+				const items = settingsItems({
+					themes: ["catppuccin"],
+					activeTheme: "catppuccin",
+					clientSettingsPath: "/tmp/tui.json",
+					customThemeDir: "/tmp/themes",
+					section: "agents",
+					agents: {
+						scope: "user",
+						source: resolved.provenance.source,
+						files: resolved.provenance.files,
+						inactiveFiles: resolved.provenance.inactiveFiles,
+						conflicts: [],
+						profiles: [],
+						presets: [],
+						routing: [],
+					},
+					providers: { state: "ready", providers: [] },
+					projects: { state: "ready", revision: "r", projects: [] },
+					backend: { values: [] },
+				});
+				const inactive = items.find((item) =>
+					item.id.startsWith("agents.inactive."),
+				);
+				expect(inactive?.value).toBe(path.join(root, "config.toml"));
+				expect(inactive?.detail).toContain("read-only compatibility");
+				expect(inactive?.editable).toBe(false);
+			} finally {
+				delete process.env.AGENTIC_CODING_CONFIG_DIR;
+			}
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	test("every supported setting has a destination, a scope and a source", () => {
 		expect(inventoryGaps()).toEqual([]);
 		for (const section of SETTINGS_SECTIONS) {
@@ -110,7 +180,12 @@ describe("agents configuration revision", () => {
 			expect(revision).toBe(agentConfigRevision());
 
 			// Another client changes the agents section after the editor loaded it.
-			fs.appendFileSync(file, '\n[agents.profiles.c]\nruntime = "opencode"\n');
+			updateConfig(file, (document) => {
+				const agents = document.agents as Record<string, unknown>;
+				(agents.profiles as Record<string, unknown>).c = {
+					runtime: "opencode",
+				};
+			});
 
 			expect(() =>
 				applyAgentsMutation(
@@ -120,7 +195,7 @@ describe("agents configuration revision", () => {
 				),
 			).toThrow(/changed since it was loaded/);
 			// The other client's change is still there: nothing was overwritten.
-			expect(fs.readFileSync(file, "utf8")).toContain("[agents.profiles.c]");
+			expect(fs.readFileSync(file, "utf8")).toContain('"c"');
 
 			// Re-reading and naming the current revision succeeds.
 			const current = loadAgentConfig().revision;
@@ -139,7 +214,9 @@ describe("agents configuration revision", () => {
 		withConfig(BASE_CONFIG, () => {
 			const file = process.env.HERDR_WORKFLOW_CONFIG as string;
 			const before = loadAgentConfig().revision;
-			fs.appendFileSync(file, "\n[workflow]\nmax_verification_rounds = 9\n");
+			updateConfig(file, (document) => {
+				document.workflow = { max_verification_rounds: 9 };
+			});
 			expect(loadAgentConfig().revision).toBe(before);
 			// A caller that never tracks a revision may still write.
 			applyAgentsMutation(
@@ -367,8 +444,8 @@ describe("section items surface every inventoried setting", () => {
 					{
 						id: "backend.config-dir",
 						label: "Configuration directory",
-						value: "/home/u/.config/devenv",
-						source: "default (~/.config/devenv)",
+						value: "/home/u/.config/agentic-coding",
+						source: "default (~/.config/agentic-coding)",
 						effect: "restart",
 						secret: false,
 					},

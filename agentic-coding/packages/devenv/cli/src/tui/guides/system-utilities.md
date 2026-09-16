@@ -58,7 +58,7 @@ sudo apt install podman
 sudo dnf install podman
 ```
 
-**DevEnv usage:** Container lifecycle (start, stop, restart), log streaming, stats, build targets, Docker Compose operations. Set runtime via `DEVENV_CONTAINER_RUNTIME` in `~/.config/devenv/.env`.
+**DevEnv usage:** Container lifecycle (start, stop, restart), log streaming, stats, build targets, Docker Compose operations. Set runtime via `DEVENV_CONTAINER_RUNTIME` in `~/.config/agentic-coding/.env`.
 
 See [Container Runtime Guide](container-runtime.md) for configuration details.
 

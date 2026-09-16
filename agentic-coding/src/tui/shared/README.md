@@ -91,7 +91,8 @@ that the theme store is one instance across surfaces.
 ## Behavior notes
 
 - One theme registry and one preference adapter: the canonical file is
-  `$DEVENV_CONFIG_DIR/tui.json` (default `~/.config/devenv/tui.json`). A
+  `$AGENTIC_CODING_CONFIG_DIR/tui.json` (default
+  `~/.config/agentic-coding/tui.json`). A
   missing canonical selection imports the legacy agentic-coding `[ui] theme`
   once, preserving unrelated keys; writes are atomic and a failed save leaves
   the previous file intact. `system` is reserved for a successful renderer

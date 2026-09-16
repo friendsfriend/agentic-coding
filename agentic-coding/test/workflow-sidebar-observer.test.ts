@@ -162,17 +162,22 @@ function tempHome(
 }
 
 describe("sidebar opt-in configuration (task 4.1)", () => {
+	// The canonical configuration root is an independent resolver input; these
+	// fixtures model it inside the fixture home.
+	const rootFor = (home: string) =>
+		path.join(home, ".config", "agentic-coding");
+	const sidebarEnabled = (home: string) =>
+		herdrSidebarEnabled(home, rootFor(home));
+
 	test("defaults to disabled", () => {
 		expect(DEFAULT_CONFIG.ui.herdr_sidebar).toBe(false);
-		expect(herdrSidebarEnabled(tempHome(undefined))).toBe(false);
-		expect(herdrSidebarEnabled(tempHome('[ui]\ntheme = "dark"\n'))).toBe(false);
+		expect(sidebarEnabled(tempHome(undefined))).toBe(false);
+		expect(sidebarEnabled(tempHome('[ui]\ntheme = "dark"\n'))).toBe(false);
 	});
 
 	test("the trusted user preference enables it", () => {
-		expect(herdrSidebarEnabled(tempHome("[ui]\nherdr_sidebar = true\n"))).toBe(
-			true,
-		);
-		expect(herdrSidebarEnabled(tempHome("[ui]\nherdr_sidebar = false\n"))).toBe(
+		expect(sidebarEnabled(tempHome("[ui]\nherdr_sidebar = true\n"))).toBe(true);
+		expect(sidebarEnabled(tempHome("[ui]\nherdr_sidebar = false\n"))).toBe(
 			false,
 		);
 	});
@@ -185,14 +190,14 @@ describe("sidebar opt-in configuration (task 4.1)", () => {
 			path.join(project, "herdr-workflow.toml"),
 			"[ui]\nherdr_sidebar = true\n",
 		);
-		expect(herdrSidebarEnabled(home)).toBe(false);
+		expect(sidebarEnabled(home)).toBe(false);
 		// The env-selected whole-config replacement is equally out of scope.
 		expect(process.env.HERDR_WORKFLOW_CONFIG).toBeUndefined();
 	});
 
 	test("existing user configuration stays untouched", () => {
 		const home = tempHome('[workflow]\nremote = "upstream"\n');
-		expect(herdrSidebarEnabled(home)).toBe(false);
+		expect(sidebarEnabled(home)).toBe(false);
 		expect(
 			fs.readFileSync(
 				path.join(home, ".config", "agentic-coding", "config.toml"),

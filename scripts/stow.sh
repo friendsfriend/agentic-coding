@@ -8,7 +8,7 @@ link_tree() {
     local -a files=() conflicts=()
 
     while IFS= read -r -d '' path; do
-        [[ "$path" == "$source/herdr-workflow.toml" ]] || files+=("$path")
+        [[ "$path" == "$source/herdr-workflow.json" ]] || files+=("$path")
     done < <(find "$source" \( -type f -o -type l \) -print0)
 
     while IFS= read -r -d '' path; do
@@ -39,15 +39,32 @@ link_tree "$root/pi" "$HOME/.pi/agent"
 link_tree "$root/opencode" "$HOME/.config/opencode"
 
 # Remove the legacy template link without touching other user-owned files.
-legacy_template_link="$HOME/.pi/agent/herdr-workflow.toml"
-if [[ -L "$legacy_template_link" && "$(readlink "$legacy_template_link")" == "$root/pi/herdr-workflow.toml" ]]; then
-    rm "$legacy_template_link"
-fi
+for legacy_template in herdr-workflow.toml herdr-workflow.json; do
+    legacy_template_link="$HOME/.pi/agent/$legacy_template"
+    if [[ -L "$legacy_template_link" && "$(readlink "$legacy_template_link")" == "$root/pi/$legacy_template" ]]; then
+        rm "$legacy_template_link"
+    fi
+done
 
-# Initialize the XDG config once; user-owned files and symlinks win.
-config_dest="$HOME/.config/agentic-coding/config.toml"
+# Initialize the JSON config once. Fresh defaults are copied only when nothing
+# applicable exists: an existing target (regular file or symlink), or any legacy
+# user configuration that fresh defaults would silently shadow, requires
+# explicit migration instead.
+config_dest="$HOME/.config/agentic-coding/config.json"
+legacy_configs=(
+    "$HOME/.config/agentic-coding/config.toml"
+    "$HOME/.pi/agent/herdr-workflow.toml"
+)
 if [[ ! -e "$config_dest" && ! -L "$config_dest" ]]; then
-    cp "$root/pi/herdr-workflow.toml" "$config_dest"
+    legacy_present=""
+    for legacy in "${legacy_configs[@]}"; do
+        [[ -e "$legacy" || -L "$legacy" ]] && legacy_present="$legacy"
+    done
+    if [[ -n "$legacy_present" ]]; then
+        printf 'Existing configuration found at %s; keeping it and skipping fresh defaults.\nRun `agentic-coding config migrate` to convert it to %s.\n' "$legacy_present" "$config_dest" >&2
+    else
+        cp "$root/pi/herdr-workflow.json" "$config_dest"
+    fi
 fi
 
 # Remove stale herdr agent definition symlinks from global pi discovery

@@ -16,7 +16,7 @@ application/library id (`resourceId`) as its stable project scope.
 
 | Scope | Meaning |
 | --- | --- |
-| `client` | This client only: `$DEVENV_CONFIG_DIR/tui.json` (default `~/.config/devenv/tui.json`). |
+| `client` | This client only: `$AGENTIC_CODING_CONFIG_DIR/tui.json` (default `~/.config/agentic-coding/tui.json`). |
 | `user` | User-level configuration (no project selected). |
 | `project` | Project-scoped configuration, selected by a configured application/library id. |
 | `server` | Owned by the connected server process and its configuration directory. |
@@ -29,17 +29,17 @@ unavailable or unauthorized server is a section error with a retry.
 
 | Setting | Section | Owner | Scope | Storage | Secret | Effect | Editable |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Active theme | Appearance | `src/tui/shared/preferences.ts` | client | `$DEVENV_CONFIG_DIR/tui.json` · `theme` | no | immediate | yes (shared theme picker) |
-| Custom themes | Appearance | `src/tui/shared/preferences.ts` | client | `$DEVENV_CONFIG_DIR/themes/*.json` | no | restart | no (file-only; loaded at startup) |
+| Active theme | Appearance | `src/tui/shared/preferences.ts` | client | `$AGENTIC_CODING_CONFIG_DIR/tui.json` · `theme` | no | immediate | yes (shared theme picker) |
+| Custom themes | Appearance | `src/tui/shared/preferences.ts` | client | `$AGENTIC_CODING_CONFIG_DIR/themes/*.json` | no | restart | no (file-only; loaded at startup) |
 | Agent profiles | Agent models/presets | `src/server/config.ts` | user / project | `[agents.profiles]` in the layered workflow config | no | next workflow start | yes (shared profile/preset editor) |
 | Configuration presets | Agent models/presets | `src/server/config.ts` | user / project | `[agents.presets]` in the layered workflow config | no | next workflow start | yes (shared profile/preset editor) |
 | Routing and definition defaults | Agent models/presets | `src/workflow/profiles.ts` | user | `[agents]` `default_profile`, `routes`, `role_routes`, `definition_defaults` | no | next workflow start | no (no bounded editor; shown read-only with its source) |
-| Git providers | Providers/credentials | server integration families (`/api/providers`) | server | `$DEVENV_CONFIG_DIR/providers` served by the connected server | yes | immediate | yes (edited in Environments) |
+| Git providers | Providers/credentials | server integration families (`/api/providers`) | server | `$AGENTIC_CODING_CONFIG_DIR/providers` served by the connected server | yes | immediate | yes (edited in Environments) |
 | Provider credentials | Providers/credentials | `src/workflow/credentials.ts`, `src/server/credentials.ts` | server | protected credential store; single-owner ephemeral prompts | yes | immediate | no (status only) |
-| Applications and libraries | Projects/environments | `src/server/environment/authority.ts` | server | `$DEVENV_CONFIG_DIR/apps/**.toml` (projected catalog) | no | immediate | yes (through Settings project scope / Environments) |
-| Scripts and infrastructure | Projects/environments | `src/server/environment/authority.ts` | server | `$DEVENV_CONFIG_DIR/{scripts,infra}` | no | immediate | yes (edited in Environments) |
+| Applications and libraries | Projects/environments | `src/server/environment/authority.ts` | server | `$AGENTIC_CODING_CONFIG_DIR/{apps,libraries}/definitions/*.json` (projected catalog) | no | immediate | yes (through Settings project scope / Environments) |
+| Scripts and infrastructure | Projects/environments | `src/server/environment/authority.ts` | server | `$AGENTIC_CODING_CONFIG_DIR/{scripts,infra}` | no | immediate | yes (edited in Environments) |
 | Backend endpoint and ownership | Backend/telemetry | `src/tui/index.tsx`, `src/server/lifecycle.ts` | server | `AGENTIC_DEVENV_URL` / `AGENTIC_WORKFLOW_URL` and the instance capability | yes | restart | no (start-time decision) |
-| Configuration directory | Backend/telemetry | `src/backend/home.ts` | server | `DEVENV_CONFIG_DIR` (default `~/.config/devenv`) | no | restart | no |
+| Configuration directory | Backend/telemetry | `src/backend/home.ts` | server | `AGENTIC_CODING_CONFIG_DIR` (default `~/.config/agentic-coding`) | no | restart | no |
 | Telemetry receiver ports | Backend/telemetry | `src/server/receivers.ts` | server | `--http-port`, `--grpc-port`, `--zipkin-port`, `--datadog-port`, `--statsd-port` | no | restart | no (read-only override) |
 | Prometheus scrape targets | Backend/telemetry | `src/tui/otel/receiver/index.ts` | server | `--prom-target`, `--prom-interval` | no | restart | no (read-only override) |
 | Telemetry persistence and retention | Backend/telemetry | `src/server/telemetry.ts` | server | server-owned telemetry database | no | restart | no (server-owned) |

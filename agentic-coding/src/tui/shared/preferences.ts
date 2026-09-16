@@ -1,5 +1,7 @@
 // One local UI preferences adapter for every feature surface. The canonical
-// file is `$DEVENV_CONFIG_DIR/tui.json` (default `~/.config/devenv/tui.json`).
+// file is `<config root>/tui.json`, where the root comes from the shared
+// resolver: `AGENTIC_CODING_CONFIG_DIR`, then the deprecated
+// `DEVENV_CONFIG_DIR`, then `~/.config/agentic-coding`.
 // A canonical `theme` value always wins, even when it is not currently
 // registered; only a canonical file with no `theme` key imports the legacy
 // agentic-coding `[ui] theme` selection, once. Unrelated canonical keys are
@@ -9,6 +11,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveConfigRoot } from "../../config-root.ts";
 import {
 	isThemeJson,
 	setActiveThemeName,
@@ -19,10 +22,7 @@ import {
 
 /** Directory that owns `tui.json` and the custom `themes/` folder. */
 export function configDir(): string {
-	return (
-		process.env.DEVENV_CONFIG_DIR ||
-		path.join(os.homedir(), ".config", "devenv")
-	);
+	return resolveConfigRoot();
 }
 
 /** Canonical local UI preferences file. */

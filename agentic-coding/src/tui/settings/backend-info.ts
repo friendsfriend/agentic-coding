@@ -7,8 +7,7 @@
 //
 // Pure: takes the environment and argv so a test can resolve them without a
 // running shell.
-import os from "node:os";
-import path from "node:path";
+import { configRootFrom } from "../../config-root";
 import type { SettingsEffect } from "./catalog";
 
 export interface BackendSettingValue {
@@ -48,17 +47,12 @@ export function flagValue(
 	return undefined;
 }
 
-/** The local UI preferences directory, resolved the way preferences.ts does. */
+/** The local UI preferences directory: the shared configuration root. */
 export function resolvedConfigDir(env: NodeJS.ProcessEnv = process.env): {
 	path: string;
 	source: string;
 } {
-	if (env.DEVENV_CONFIG_DIR)
-		return { path: env.DEVENV_CONFIG_DIR, source: "DEVENV_CONFIG_DIR" };
-	return {
-		path: path.join(os.homedir(), ".config", "devenv"),
-		source: "default (~/.config/devenv)",
-	};
+	return configRootFrom(env);
 }
 
 export interface BackendContext {

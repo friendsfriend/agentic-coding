@@ -6,8 +6,8 @@ This guide walks through defining a new repository in DevEnv. Repositories can a
 
 Create a JSON file in one of these locations:
 
-- Application: `~/.config/devenv/apps/definitions/IDENT.json`
-- Library: `~/.config/devenv/libraries/definitions/IDENT.json`
+- Application: `~/.config/agentic-coding/apps/definitions/IDENT.json`
+- Library: `~/.config/agentic-coding/libraries/definitions/IDENT.json`
 
 The definition shape is the same; location determines destination/type:
 
@@ -35,10 +35,10 @@ Key fields:
 
 Place build and test Dockerfiles next to the selected destination:
 
-- Application: `~/.config/devenv/apps/build/IDENT-build.Dockerfile`
-- Application: `~/.config/devenv/apps/build/IDENT-test.Dockerfile`
-- Library: `~/.config/devenv/libraries/build/IDENT-build.Dockerfile`
-- Library: `~/.config/devenv/libraries/build/IDENT-test.Dockerfile`
+- Application: `~/.config/agentic-coding/apps/build/IDENT-build.Dockerfile`
+- Application: `~/.config/agentic-coding/apps/build/IDENT-test.Dockerfile`
+- Library: `~/.config/agentic-coding/libraries/build/IDENT-build.Dockerfile`
+- Library: `~/.config/agentic-coding/libraries/build/IDENT-test.Dockerfile`
 
 **Build Dockerfile** produces a runnable image and can extract artifacts. Use `LABEL devenv.artifacts="PATH"` to declare build output:
 
@@ -72,7 +72,7 @@ RUN go test ./...
 For applications, create a Docker Compose file for running the app:
 
 ```
-~/.config/devenv/apps/compose/IDENT-compose.yml
+~/.config/agentic-coding/apps/compose/IDENT-compose.yml
 ```
 
 Libraries normally use build/test workflows and do not need compose run targets.
@@ -95,9 +95,9 @@ For profile variants, use `IDENT-PROFILE-compose.yml` (e.g., `my-service-staging
 
 Shell actions live next to Docker resources and can coexist with them:
 
-- Application build/test: `~/.config/devenv/apps/build/IDENT-build.sh`, `~/.config/devenv/apps/build/IDENT-test.sh`
-- Application run profile: `~/.config/devenv/apps/run/IDENT-PROFILE.sh`
-- Library build/test: `~/.config/devenv/libraries/build/IDENT-build.sh`, `~/.config/devenv/libraries/build/IDENT-test.sh`
+- Application build/test: `~/.config/agentic-coding/apps/build/IDENT-build.sh`, `~/.config/agentic-coding/apps/build/IDENT-test.sh`
+- Application run profile: `~/.config/agentic-coding/apps/run/IDENT-PROFILE.sh`
+- Library build/test: `~/.config/agentic-coding/libraries/build/IDENT-build.sh`, `~/.config/agentic-coding/libraries/build/IDENT-test.sh`
 
 Example run profile:
 
@@ -110,7 +110,7 @@ set -eu
 bun run dev
 ```
 
-PowerShell run profiles use `~/.config/devenv/apps/run/IDENT-PROFILE.ps1` and support the same metadata comments.
+PowerShell run profiles use `~/.config/agentic-coding/apps/run/IDENT-PROFILE.ps1` and support the same metadata comments.
 
 `systemshell` is a portable run runtime: DevEnv uses `.ps1` on Windows and `.sh` on macOS/Linux. It is strict: missing platform script fails instead of falling back. Docker `dev`, shell `dev`, PowerShell `dev`, and systemshell `dev` are separate targets.
 

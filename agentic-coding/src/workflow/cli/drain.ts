@@ -4,6 +4,8 @@
 // application-operations boundary, src/workflow/operations.ts,
 // enforce-source-layer-boundaries). Moved verbatim out of cli.ts
 // (split-workflow-god-modules).
+
+import { CONFIG_ROOT_VAR, resolveConfigRoot } from "../../config-root.ts";
 import { CONTINUATION_WAIT_MS } from "../operations.ts";
 
 export function detachedDrainArgv(
@@ -45,11 +47,17 @@ export function scheduleDrain(
 		"HERDR_WORKFLOW_CONFIG",
 		"HERDR_WIKI_DIR",
 	];
-	const env = Object.fromEntries(
-		safeKeys.flatMap((key) =>
-			process.env[key] === undefined ? [] : [[key, process.env[key] as string]],
+	// The detached drain resolves the same configuration root as its parent.
+	const env = {
+		...Object.fromEntries(
+			safeKeys.flatMap((key) =>
+				process.env[key] === undefined
+					? []
+					: [[key, process.env[key] as string]],
+			),
 		),
-	);
+		[CONFIG_ROOT_VAR]: resolveConfigRoot(),
+	};
 	const child = Bun.spawn(argv, {
 		detached: true,
 		stdio: ["ignore", "ignore", "ignore"],

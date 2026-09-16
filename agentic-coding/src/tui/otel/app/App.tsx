@@ -555,6 +555,9 @@ export function App(props: {
 					? { source: entry.provenance.source }
 					: {}),
 				files: entry.provenance?.files ?? [],
+				...(entry.provenance?.inactiveFiles?.length
+					? { inactiveFiles: entry.provenance.inactiveFiles }
+					: {}),
 				conflicts: entry.conflicts ?? [],
 				...(entry.error ? { error: entry.error } : {}),
 				profiles: Object.entries(agents?.profiles ?? {}).map(

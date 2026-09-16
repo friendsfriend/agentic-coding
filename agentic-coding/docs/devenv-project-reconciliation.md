@@ -11,7 +11,8 @@ import or in the workflow engine moves data automatically.
 The merged repository has two ways a project can be identified:
 
 - **Devenv configured projects** — app/library/script definitions under
-  `$DEVENV_CONFIG_DIR` (default `~/.config/devenv`) with a stable `ident`.
+  `$AGENTIC_CODING_CONFIG_DIR` (default `~/.config/agentic-coding`) with a stable
+  `ident`.
 - **agentic-coding workflow projects** — workflow history, telemetry and worktree
   pins that reference an absolute checkout path.
 
@@ -21,8 +22,9 @@ silently attaches to a stale path or loses its history.
 ## Operator checklist
 
 1. **Inventory configured projects.** List the intended configured project IDs
-   (`ident`) and their managed repository locations from the devenv config
-   (`~/.config/devenv/{apps,libraries}`), including feature-specific definitions.
+   (`ident`) and their managed repository locations from the configured
+   environment root (`~/.config/agentic-coding/{apps,libraries}`), including
+   feature-specific definitions.
 2. **Confirm the mapping.** For each agentic-coding workflow project, decide which
    configured `ident` (if any) it maps to. Record unmatched entries; do not delete
    them.

@@ -5,10 +5,9 @@ Bun owns the canonical environment configuration (app/library/infrastructure
 definitions and the project catalog) and the environment SQLite state, while the
 remaining Go services reach both through bounded private typed operations during
 the staged runtime migration.
-
 ## Requirements
 ### Requirement: Bun owns canonical environment configuration
-Bun SHALL provide app/library/infrastructure loading, catalog projection and runtime path resolution with compatible configuration precedence, stable identities and validation. Runtime state SHALL remain separate from static configuration files.
+Bun SHALL provide app/library/infrastructure loading, catalog projection and runtime path resolution with compatible configuration precedence, stable identities and validation. Environment configuration SHALL use the shared canonical root, defaulting to `~/.config/agentic-coding`, preserving its JSON definition layout and `.env` credential references. Runtime state SHALL remain separate from static configuration files and SHALL NOT relocate as a side effect of configuration migration.
 
 #### Scenario: Active worktree is missing
 - **WHEN** a configured active linked worktree no longer exists
@@ -50,3 +49,4 @@ Writer cutover SHALL stop old writers, take a consistent SQLite backup and initi
 - **WHEN** startup interrupts schema initialization
 - **THEN** reopening SHALL yield a supported committed schema or a safe failure, not partial migration
 - **AND** a verified pre-upgrade backup SHALL remain available for deliberate rollback
+

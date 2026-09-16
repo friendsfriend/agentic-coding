@@ -3,14 +3,21 @@
 // provider definition file: the file keeps `${...}` placeholders and the value
 // lives in the config `.env`, which is why a clear-text file is reported as
 // invalid rather than loaded.
+//
+// Reference resolution happens on the parsed document, field by field
+// (unify-json-configuration-directory, task 3.2). Substituting into the raw JSON
+// text first — the behavior this replaced — corrupts the document whenever a
+// secret contains a quote, a backslash or a newline.
 import fs from "node:fs";
 import path from "node:path";
 import {
+	type EnvReferenceScope,
+	envReferenceName,
 	loadEnvFile,
 	removeEnvFileKeys,
-	substituteVarsWithWarnings,
+	resolveEnvReference,
 	upsertEnvFile,
-} from "./env-file.ts";
+} from "../../env-file.ts";
 
 export const PROVIDER_TYPE_GITHUB = "github";
 export const PROVIDER_TYPE_GITLAB = "gitlab";
@@ -64,8 +71,12 @@ export class ProviderStore {
 	 */
 	load(): void {
 		fs.mkdirSync(this.dir, { recursive: true, mode: 0o755 });
-		const envVars =
-			this.envFilePath === "" ? undefined : loadEnvFile(this.envFilePath);
+		const scope: EnvReferenceScope = {
+			fileVars:
+				this.envFilePath === ""
+					? new Map<string, string>()
+					: loadEnvFile(this.envFilePath),
+		};
 
 		let entries: fs.Dirent[];
 		try {
@@ -88,6 +99,7 @@ export class ProviderStore {
 					`failed to read provider file ${entry.name}: ${message(error)}`,
 				);
 			}
+			// Parse before resolving: a secret must never be spliced into JSON source.
 			const parsed = parseProviderFile(entry.name, raw);
 			const clearText = clearTextCredentialError(entry.name, parsed);
 			if (clearText !== null) {
@@ -102,22 +114,14 @@ export class ProviderStore {
 				continue;
 			}
 
-			let content = raw;
-			let missingVars: string[] = [];
-			if (envVars) {
-				const substituted = substituteVarsWithWarnings(content, envVars);
-				content = substituted.text;
-				missingVars = substituted.missing;
-			}
-			const resolved = parseProviderFile(entry.name, content);
-			let username = text(resolved.username);
-			let token = text(resolved.token);
-			if (isEnvPlaceholder(username)) username = "";
-			if (isEnvPlaceholder(token)) token = "";
-			const name = text(resolved.name) || entry.name.slice(0, -".json".length);
+			const { username, token, missingVars } = resolveProviderCredentials(
+				parsed,
+				scope,
+			);
+			const name = text(parsed.name) || entry.name.slice(0, -".json".length);
 			providers.set(name, {
 				name,
-				type: text(resolved.type),
+				type: text(parsed.type),
 				username,
 				token,
 				missingVars,
@@ -159,14 +163,30 @@ export class ProviderStore {
 					`provider name ${quote(provider.name)} collides with existing provider ${quote(name)} for env credential keys`,
 				);
 		}
-		const toWrite = { ...provider };
-		if (toWrite.token === "") {
-			const existing = this.providers.get(provider.name);
-			if (existing) toWrite.token = existing.token;
+		// Only credentials the operator actually supplied are written to the root
+		// `.env`. An empty field keeps whatever the file already references, so a
+		// value resolved from the process environment is never materialized into
+		// `.env` by an unrelated edit.
+		const supplied = new Map<string, string>();
+		if (this.envFilePath !== "") {
+			const keys = providerCredentialEnvKeys(provider.name);
+			if (provider.username !== "") supplied.set(keys[0], provider.username);
+			if (provider.token !== "") supplied.set(keys[1], provider.token);
 		}
-		this.providers.set(toWrite.name, toWrite);
-		this.invalid.delete(toWrite.name);
-		this.saveProviderFile(toWrite);
+		const stable = { ...provider };
+		if (supplied.size === 0) {
+			const existing = this.providers.get(provider.name);
+			if (existing) {
+				stable.username = existing.username;
+				stable.token = existing.token;
+			}
+		} else if (stable.token === "") {
+			const existing = this.providers.get(provider.name);
+			if (existing) stable.token = existing.token;
+		}
+		this.providers.set(stable.name, stable);
+		this.invalid.delete(stable.name);
+		this.saveProviderFile(stable, supplied);
 	}
 
 	delete(name: string): void {
@@ -205,28 +225,41 @@ export class ProviderStore {
 		return { username: provider.username, token: provider.token };
 	}
 
-	private saveProviderFile(provider: Provider): void {
+	private saveProviderFile(
+		provider: Provider,
+		supplied: ReadonlyMap<string, string>,
+	): void {
 		fs.mkdirSync(this.dir, { recursive: true, mode: 0o755 });
+		const filePath = path.join(this.dir, `${provider.name}.json`);
 		let toWrite = provider;
 		if (this.envFilePath !== "") {
 			const keys = providerCredentialEnvKeys(provider.name);
-			try {
-				upsertEnvFile(
-					this.envFilePath,
-					new Map([
-						[keys[0], provider.username],
-						[keys[1], provider.token],
-					]),
-				);
-			} catch (error) {
-				throw new ProviderStoreError(
-					`failed to write provider credentials to env file: ${message(error)}`,
-				);
+			if (supplied.size > 0) {
+				try {
+					upsertEnvFile(this.envFilePath, supplied);
+				} catch (error) {
+					throw new ProviderStoreError(
+						`failed to write provider credentials to env file: ${message(error)}`,
+					);
+				}
 			}
+			// The file always keeps references; a field the operator did not supply
+			// keeps the reference it already had.
+			const previous = fs.existsSync(filePath)
+				? parseProviderFile(provider.name, fs.readFileSync(filePath, "utf8"))
+				: {};
+			const previousUsername = text(previous.username);
+			const previousToken = text(previous.token);
 			toWrite = {
 				...provider,
-				username: `\${${keys[0]}}`,
-				token: `\${${keys[1]}}`,
+				username:
+					!supplied.has(keys[0]) && isEnvPlaceholder(previousUsername)
+						? previousUsername
+						: `\${${keys[0]}}`,
+				token:
+					!supplied.has(keys[1]) && isEnvPlaceholder(previousToken)
+						? previousToken
+						: `\${${keys[1]}}`,
 			};
 		}
 		// Field order and 2-space indentation match the Go encoding so a
@@ -239,7 +272,6 @@ export class ProviderStore {
 		};
 		if (toWrite.missingVars.length > 0)
 			payload.missing_vars = toWrite.missingVars;
-		const filePath = path.join(this.dir, `${provider.name}.json`);
 		fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), {
 			mode: 0o600,
 		});
@@ -266,6 +298,37 @@ export function sanitizeProviderEnvName(name: string): string {
 		}
 	}
 	return out.replace(/^_+|_+$/g, "");
+}
+
+/**
+ * Resolve the reference-capable fields of one provider file. Only a
+ * whole-value `${VAR}` reference is resolved; a literal is never a credential
+ * here (clear-text values were already reported invalid), and a non-string
+ * field is not coerced into one. A missing name is reported by name only — the
+ * resolved value is never logged, stored or returned in an error.
+ */
+function resolveProviderCredentials(
+	parsed: RawProviderFile,
+	scope: EnvReferenceScope,
+): { username: string; token: string; missingVars: string[] } {
+	const missing = new Set<string>();
+	const resolve = (value: unknown): string => {
+		const literal = text(value);
+		if (literal === "") return "";
+		const name = envReferenceName(literal);
+		if (name === undefined) return literal;
+		const resolved = resolveEnvReference(name, scope);
+		if (resolved === undefined) {
+			missing.add(name);
+			return "";
+		}
+		return resolved;
+	};
+	return {
+		username: resolve(parsed.username),
+		token: resolve(parsed.token),
+		missingVars: [...missing],
+	};
 }
 
 function parseProviderFile(fileName: string, raw: string): RawProviderFile {

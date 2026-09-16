@@ -154,30 +154,26 @@ The scripts area SHALL be protected by repository verifier policy so changed ins
 - **AND** it SHALL remove repository-managed stale symlinks for the repository-local stow installation verifier policy when encountered
 
 ### Requirement: User configuration is initialized by copy
-The installation flow SHALL initialize `~/.config/agentic-coding/config.toml` by copying the repository's `pi/herdr-workflow.toml` defaults as a regular file only when the destination path does not already exist. It SHALL NOT create a symlink for this configuration and SHALL NOT overwrite or replace an existing user configuration path, including an existing regular file or symlink.
+The installation flow SHALL initialize `config.json` under the shared canonical configuration root, defaulting to `~/.config/agentic-coding`, from the portable `pi/herdr-workflow.json` defaults as a regular file only when no existing target or applicable legacy configuration would be overwritten or shadowed. It SHALL NOT create a configuration symlink or replace an existing regular file or symlink. Applicable legacy configuration SHALL require explicit migration rather than silent copying of fresh defaults.
 
 #### Scenario: Fresh installation copies defaults
-- **WHEN** the installation flow runs and `~/.config/agentic-coding/config.toml` does not exist
-- **THEN** it SHALL create the parent directory if needed
-- **AND** it SHALL copy `pi/herdr-workflow.toml` to the destination as a regular file
-- **AND** the destination SHALL not be a symlink
+- **WHEN** no existing canonical or applicable legacy configuration exists
+- **THEN** installation SHALL create the parent directory if needed and copy portable JSON defaults as a regular file
+- **AND** it SHALL NOT include machine-specific profiles, presets or credentials
 
 #### Scenario: Existing user configuration is preserved
-- **WHEN** the installation flow runs and `~/.config/agentic-coding/config.toml` already exists with user-specific profiles or presets
-- **THEN** it SHALL leave that file's contents and file type unchanged
-- **AND** it SHALL not copy repository defaults over it
+- **WHEN** existing JSON or legacy user configuration contains user profiles or presets
+- **THEN** installation SHALL preserve it and SHALL NOT shadow it with fresh defaults
 
 #### Scenario: Existing configuration path is a symlink
-- **WHEN** the installation flow runs and `~/.config/agentic-coding/config.toml` is already a symlink
-- **THEN** it SHALL not replace, retarget, or overwrite the symlink
-- **AND** it SHALL not create a new repository-backed symlink for the configuration
+- **WHEN** the target configuration path is a symlink
+- **THEN** installation SHALL NOT replace, retarget or overwrite it and SHALL identify any migration needed
 
 ### Requirement: Existing machine-specific configuration is migrated before source reduction
-The change rollout SHALL materialize the current repository-backed configuration into `~/.config/agentic-coding/config.toml` as a regular user-owned file before removing machine-specific profiles and presets from `pi/herdr-workflow.toml`. The migration SHALL preserve the current profiles and presets and SHALL not add a copy of those definitions to any repository artifact.
+Any migration of machine-specific configuration from repository-backed or legacy files SHALL preserve its effective profiles/presets in a regular user-owned canonical JSON file through explicit validated migration before reducing its source template. Known credential values SHALL move into protected `.env` storage with references in JSON. Original source data SHALL remain in protected backups and SHALL NOT be copied into repository artifacts.
 
 #### Scenario: Current presets are retained during migration
-- **WHEN** the current configuration contains model profiles and presets supplied by the repository-backed configuration
-- **AND** the configuration is copied to the user location before the repository template is reduced
-- **THEN** the user configuration SHALL remain a regular file containing those profiles and presets
-- **AND** the reduced repository template SHALL contain only defaults
+- **WHEN** legacy configuration contains machine-specific profiles and presets
+- **THEN** explicit migration SHALL preserve their effective values in user-owned JSON before source reduction
+- **AND** portable repository defaults SHALL remain model-agnostic and secret-free
 

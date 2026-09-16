@@ -232,6 +232,55 @@ test("the agents section states its scope and opens the shared editor without a 
 	db.close();
 });
 
+test("an inactive legacy configuration is surfaced with migration guidance", async () => {
+	const root = mkdtempSync(join(tmpdir(), "settings-inactive-"));
+	const previousEnv = {
+		root: process.env.AGENTIC_CODING_CONFIG_DIR,
+		workflow: process.env.HERDR_WORKFLOW_CONFIG,
+	};
+	try {
+		writeFileSync(
+			join(root, "config.toml"),
+			'[agents]\ndefault_profile = "legacy"\n',
+		);
+		writeFileSync(
+			join(root, "config.json"),
+			`${JSON.stringify({
+				agents: {
+					default_profile: "pi-a",
+					profiles: { "pi-a": { runtime: "pi", model: "stub/stub-model" } },
+				},
+			})}\n`,
+		);
+		process.env.AGENTIC_CODING_CONFIG_DIR = root;
+		delete process.env.HERDR_WORKFLOW_CONFIG;
+
+		const { t, db } = await renderHomeShell();
+		expect(await openSection(t, 1, "Profiles and presets")).toBe(true);
+		const frame = t.captureCharFrame();
+		// The canonical JSON is the active source and the leftover TOML is reported.
+		expect(frame).toContain("Inactive legacy configuration");
+		expect(frame).toContain(join(root, "config.toml"));
+		// The detail line wraps in the frame, so the parts are asserted separately.
+		expect(frame).toContain("read-only");
+		expect(frame).toContain("compatibility input");
+		expect(frame).toContain("JSON is the active format");
+		expect(frame).toContain("pi-a");
+		// The keybind footer is unchanged by the new CLI command (no new keybind).
+		expect(frame).toContain("? help");
+		t.renderer.destroy();
+		db.close();
+	} finally {
+		if (previousEnv.root === undefined)
+			delete process.env.AGENTIC_CODING_CONFIG_DIR;
+		else process.env.AGENTIC_CODING_CONFIG_DIR = previousEnv.root;
+		if (previousEnv.workflow === undefined)
+			delete process.env.HERDR_WORKFLOW_CONFIG;
+		else process.env.HERDR_WORKFLOW_CONFIG = previousEnv.workflow;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("the backend section reports restart-required read-only overrides", async () => {
 	const { t, db } = await renderHomeShell();
 	expect(await openSection(t, 4, "Backend endpoint")).toBe(true);

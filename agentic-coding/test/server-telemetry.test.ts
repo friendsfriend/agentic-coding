@@ -159,6 +159,54 @@ describe("server-owned telemetry", () => {
 		}
 	});
 
+	test("startup scans repositories with one snapshot, including scan events and empty catalogs", async () => {
+		const calls: string[] = [];
+		const db = new RemoteTelemetryDb();
+		const telemetry: TelemetryOperations = {
+			snapshot: () => {
+				calls.push("snapshot");
+				return {
+					workspaces: [],
+					spansByChange: {},
+					spans: [],
+					metrics: [],
+					logs: [],
+				};
+			},
+			scan: async (repo) => {
+				calls.push(`scan:${repo}`);
+				// A live telemetry event during scanning must not trigger another
+				// full history download. The final snapshot includes its data.
+				await db.refresh();
+				if (repo === "/broken") throw new Error("scan failed");
+				return 3;
+			},
+			prune: () => 0,
+		};
+		const server = await startWorkflowServer({ telemetry });
+		try {
+			db.setClient(
+				new BackendClient({
+					baseUrl: server.url,
+					token: server.token,
+					ownerId: "test-owner",
+				}),
+			);
+			expect(await db.scanRepositories(["/one", "/two", "/one"])).toBe(6);
+			expect(calls).toEqual(["scan:/one", "scan:/two", "snapshot"]);
+			calls.length = 0;
+			expect(await db.scanRepositories([])).toBe(0);
+			expect(calls).toEqual(["snapshot"]);
+			calls.length = 0;
+			await expect(db.scanRepositories(["/broken"])).rejects.toThrow();
+			await db.refresh();
+			expect(calls).toEqual(["scan:/broken", "snapshot", "snapshot"]);
+		} finally {
+			db.close();
+			await server.stop();
+		}
+	});
+
 	test("the remote proxy reads the server snapshot and notifies watchers", async () => {
 		const repo = fakeRepo();
 		const server = await startWorkflowServer({ telemetryDbPath: tempDir() });

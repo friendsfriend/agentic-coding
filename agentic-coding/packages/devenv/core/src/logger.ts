@@ -1,11 +1,12 @@
-import {
-	appendFileSync,
-	mkdirSync,
-	readFileSync,
-	writeFileSync,
-} from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
+import {
+	configRootFrom,
+	ROOT_SELECTING_ENV_KEYS,
+	warnRootSelectingKeyInEnvFile,
+} from "../../../../src/config-root.ts";
+import { expandEnvHome, loadEnvFile } from "../../../../src/env-file.ts";
 
 type FatalCleanupCallback = () => void;
 
@@ -28,39 +29,22 @@ function runFatalCleanup(): void {
 	}
 }
 
-// Parse a .env file and return key-value pairs (no shell export required).
-function parseEnvFile(filePath: string): Record<string, string> {
-	try {
-		const content = readFileSync(filePath, "utf8");
-		const vars: Record<string, string> = {};
-		for (const raw of content.split("\n")) {
-			const line = raw.trim();
-			if (!line || line.startsWith("#")) continue;
-			const stripped = line.replace(/^export\s+/, "");
-			const eq = stripped.indexOf("=");
-			if (eq === -1) continue;
-			const key = stripped.slice(0, eq).trim();
-			let value = stripped
-				.slice(eq + 1)
-				.trim()
-				.replace(/^["']|["']$/g, "");
-			value = value.replace(/\$\{HOME\}|\$HOME/g, os.homedir());
-			if (key) vars[key] = value;
-		}
-		return vars;
-	} catch {
-		return {};
-	}
-}
-
 // Resolve the devenv home directory.
-// Priority: DEVENV_HOME env var → DEVENV_HOME in ~/.config/devenv/.env → ~/devenv fallback.
+// Priority: DEVENV_HOME env var → DEVENV_HOME in `<config root>/.env` → ~/devenv
+// fallback. The config root comes from the shared resolver and the `.env` from
+// the one shared contract, so the logger logs beside the same configuration the
+// rest of the application reads.
 function resolveDevenvHome(): string {
 	if (process.env.DEVENV_HOME) return process.env.DEVENV_HOME;
-	const configDir =
-		process.env.DEVENV_CONFIG_DIR || join(os.homedir(), ".config", "devenv");
-	const vars = parseEnvFile(join(configDir, ".env"));
-	if (vars.DEVENV_HOME) return vars.DEVENV_HOME;
+	const configDir = configRootFrom(process.env).path;
+	const vars = loadEnvFile(join(configDir, ".env"));
+	// A root `.env` must not select the root that contains it.
+	for (const key of ROOT_SELECTING_ENV_KEYS) {
+		if (vars.delete(key)) warnRootSelectingKeyInEnvFile(key);
+	}
+	const configured = vars.get("DEVENV_HOME");
+	if (configured !== undefined && configured !== "")
+		return expandEnvHome(configured);
 	return join(os.homedir(), "devenv");
 }
 
