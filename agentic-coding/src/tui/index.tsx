@@ -441,6 +441,9 @@ export async function main(): Promise<void> {
 	const renderer = await createCliRenderer({
 		targetFps: 30,
 		exitOnCtrlC: false,
+		// Fatal process errors are routed to the shared error modal below; do not
+		// open OpenTUI's raw console over application content.
+		openConsoleOnError: false,
 		useKittyKeyboard: {},
 		exitSignals: [],
 	});
@@ -481,13 +484,13 @@ export async function main(): Promise<void> {
 	applyDashTheme(loadDashThemeName());
 
 	// Always catch async exceptions: an uncaught throw inside the input/render
-	// loops would otherwise kill key and mouse handling entirely. Report to
-	// stderr and route a bounded span to the same OTLP sink the rest of the TUI
-	// uses; there is no separate debug file.
+	// loops would otherwise kill key and mouse handling entirely. Show fatal
+	// failures in the shared modal and route a bounded span to the same OTLP sink
+	// the rest of the TUI uses; raw process output must not overwrite the UI.
+	const fatalMessage = (error: unknown): string =>
+		error instanceof Error ? (error.stack ?? error.message) : String(error);
 	process.on("uncaughtException", (error) => {
-		console.error(
-			`[agentic-coding] UNCAUGHT: ${error?.stack ?? String(error)}`,
-		);
+		showErrorModal("Fatal error", fatalMessage(error));
 		traceTui(
 			"tui.process.uncaught_exception",
 			{ surface: "process", action: "uncaught-exception" },
@@ -495,7 +498,7 @@ export async function main(): Promise<void> {
 		);
 	});
 	process.on("unhandledRejection", (reason) => {
-		console.error(`[agentic-coding] UNHANDLED_REJECTION: ${String(reason)}`);
+		showErrorModal("Fatal error", fatalMessage(reason));
 		traceTui(
 			"tui.process.unhandled_rejection",
 			{ surface: "process", action: "unhandled-rejection" },

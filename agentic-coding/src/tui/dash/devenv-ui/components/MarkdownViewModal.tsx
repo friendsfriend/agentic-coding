@@ -33,6 +33,13 @@ interface MarkdownViewModalProps {
 	onClose: () => void;
 	onNavigateFile?: (direction: 1 | -1) => void;
 	onScrollBoxReady?: (scrollBox: ScrollBoxRenderable) => void;
+	/**
+	 * Render as a page instead of a dialog (the shell's wiki note page): the
+	 * view fills the host's content area — no centered dialog box, no backdrop
+	 * and no footer hint row, because the host chrome already carries the page
+	 * name and the shell footer the keybinds.
+	 */
+	page?: boolean;
 }
 
 /**
@@ -121,15 +128,15 @@ export function MarkdownViewModal(props: MarkdownViewModalProps) {
 	};
 
 	createEffect(() => {
-		const blocks = parsedBlocks();
-		const commentIndices = blocks.flatMap((block, index) => {
+		const blockList = parsedBlocks();
+		const commentIndices = blockList.flatMap((block, index) => {
 			return getCommentsForBlock(block).length ? [index] : [];
 		});
 		props.onDiscussionLineIndicesChange?.(commentIndices);
-		props.onSelectableLineCountChange?.(blocks.length);
+		props.onSelectableLineCountChange?.(blockList.length);
 
 		const range = blockSelectionToLines(
-			blocks,
+			blockList,
 			props.visualModeActive ? props.visualModeStart : props.selectedLine,
 			props.selectedLine,
 		);
@@ -139,12 +146,12 @@ export function MarkdownViewModal(props: MarkdownViewModalProps) {
 		const next = props.selectedLine;
 
 		// Wrap around if out of bounds
-		if (next >= blocks.length && blocks.length > 0) {
+		if (next >= blockList.length && blockList.length > 0) {
 			props.onSelectedLineChange(0);
 			return;
 		}
-		if (next < 0 && blocks.length > 0) {
-			props.onSelectedLineChange(blocks.length - 1);
+		if (next < 0 && blockList.length > 0) {
+			props.onSelectedLineChange(blockList.length - 1);
 			return;
 		}
 
@@ -227,6 +234,230 @@ export function MarkdownViewModal(props: MarkdownViewModalProps) {
 		</box>
 	);
 
+	const blocks = () => (
+		<ScrollableContent
+			axes={["x", "y"]}
+			keyboardAxes={["x"]}
+			onScrollBoxReady={(r) => {
+				scrollBox = r;
+				props.onScrollBoxReady?.(r);
+			}}
+		>
+			<box paddingLeft={props.page ? 0 : 2} paddingRight={props.page ? 0 : 2}>
+				<For each={parsedBlocks()}>
+					{(block, index) => {
+						const isSelected = () => index() === props.selectedLine;
+						const isInSelection = () => isInVisualSelection(index());
+
+						const bgColor = () => {
+							if (isSelected()) return uiColors.primary;
+							if (isInSelection()) return uiColors.bgSurface2;
+							return uiColors.bgBase;
+						};
+
+						const fgColor = () => {
+							if (isSelected()) return uiColors.bgBase;
+							if (isInSelection()) return uiColors.textPrimary;
+							return uiColors.textPrimary;
+						};
+
+						const lineLabel = () =>
+							block.endLine > block.startLine
+								? `${String(block.startLine)}-${String(block.endLine)}`
+								: String(block.startLine);
+
+						return (
+							<>
+								<box
+									id={`block-${index()}`}
+									flexDirection="row"
+									backgroundColor={bgColor()}
+									paddingLeft={1}
+									paddingRight={1}
+									onMouseUp={() => {
+										props.onSelectedLineChange(index());
+									}}
+								>
+									<text
+										fg={isSelected() ? uiColors.bgBase : uiColors.textMuted}
+										flexShrink={0}
+										width={8}
+									>
+										{lineLabel()}
+									</text>
+									<MarkdownBlockView
+										source={block.source}
+										fg={fgColor()}
+										width={Math.max(20, Math.floor(renderer.width * 0.7))}
+										flexGrow={1}
+									/>
+								</box>
+
+								{/* Render inline comments for this block */}
+								<Show when={getCommentsForBlock(block).length > 0}>
+									<For each={getCommentsForBlock(block)}>
+										{(discussion) => {
+											const _notesCount = discussion.notes.length;
+
+											return (
+												<box
+													flexDirection="column"
+													backgroundColor={uiColors.bgBase}
+													paddingTop={1}
+													paddingBottom={1}
+													paddingLeft={8}
+													paddingRight={2}
+												>
+													<box flexDirection="row" gap={2} marginBottom={0.5}>
+														<Show when={discussion.notes[0].resolved}>
+															<text
+																fg={uiColors.success}
+																attributes={TextAttributes.BOLD}
+															>
+																✓ Resolved
+															</text>
+														</Show>
+														<Show when={!discussion.notes[0].resolved}>
+															<text
+																fg={uiColors.warning}
+																attributes={TextAttributes.BOLD}
+															>
+																● Open
+															</text>
+														</Show>
+													</box>
+
+													<box flexDirection="column">
+														<For each={discussion.notes}>
+															{(note, noteIndex) => {
+																const isLastNote = () =>
+																	noteIndex() === discussion.notes.length - 1;
+																return (
+																	<box
+																		style={{
+																			width: "100%",
+																			flexDirection: "row",
+																			flexShrink: 0,
+																		}}
+																	>
+																		<box
+																			style={{
+																				width: 4,
+																				flexDirection: "column",
+																				alignItems: "center",
+																				flexShrink: 0,
+																			}}
+																		>
+																			<box
+																				style={{
+																					width: 3,
+																					height: 1,
+																					justifyContent: "center",
+																					alignItems: "center",
+																				}}
+																			>
+																				<text fg={uiColors.primary}>●</text>
+																			</box>
+																			<Show when={!isLastNote()}>
+																				<box
+																					style={{
+																						width: 1,
+																						flexGrow: 1,
+																						flexDirection: "column",
+																					}}
+																				>
+																					{(() => {
+																						const bodyLength =
+																							note.body?.length || 0;
+																						const lines = Math.max(
+																							3,
+																							Math.ceil(bodyLength / 80) + 2,
+																						);
+																						return Array(lines)
+																							.fill(null)
+																							.map((_, _i) => (
+																								<text fg={uiColors.bgSurface1}>
+																									│
+																								</text>
+																							));
+																					})()}
+																				</box>
+																			</Show>
+																		</box>
+
+																		<box
+																			style={{
+																				flexGrow: 1,
+																				flexDirection: "column",
+																				paddingLeft: 1,
+																				paddingBottom: 1.5,
+																			}}
+																		>
+																			<box flexDirection="row" gap={1}>
+																				<text
+																					fg={uiColors.textPrimary}
+																					attributes={TextAttributes.BOLD}
+																				>
+																					{note.author?.name || "Unknown"}
+																				</text>
+																				<text fg={uiColors.textMuted}>
+																					{formatTimestamp(note.created_at)}
+																				</text>
+																			</box>
+																			<box
+																				style={{
+																					width: "100%",
+																					marginTop: 0.5,
+																				}}
+																			>
+																				<text fg={uiColors.textSecondary}>
+																					{note.body || "(no content)"}
+																				</text>
+																			</box>
+																		</box>
+																	</box>
+																);
+															}}
+														</For>
+													</box>
+												</box>
+											);
+										}}
+									</For>
+								</Show>
+
+								{/* Show comment input inline after the selected block */}
+								{isCommentMode() && isSelected() ? (
+									<box
+										flexDirection="row"
+										alignItems="center"
+										gap={1}
+										backgroundColor={uiColors.bgBase}
+										paddingLeft={1}
+										paddingRight={1}
+										flexGrow={1}
+									>
+										<text fg={uiColors.textPrimary}>
+											{String(props.commentText || "Comment here...")}█
+										</text>
+									</box>
+								) : null}
+							</>
+						);
+					}}
+				</For>
+			</box>
+		</ScrollableContent>
+	);
+
+	if (props.page)
+		return (
+			<box style={{ width: "100%", height: "100%", flexDirection: "column" }}>
+				{customHeader()}
+				{blocks()}
+			</box>
+		);
+
 	return (
 		<GenericModal
 			title="" // Not used, using custom header instead
@@ -237,221 +468,7 @@ export function MarkdownViewModal(props: MarkdownViewModalProps) {
 			customFooter={customFooter()}
 			onBackdropClick={props.onClose}
 		>
-			<ScrollableContent
-				axes={["x", "y"]}
-				keyboardAxes={["x"]}
-				onScrollBoxReady={(r) => {
-					scrollBox = r;
-					props.onScrollBoxReady?.(r);
-				}}
-			>
-				<box paddingLeft={2} paddingRight={2}>
-					<For each={parsedBlocks()}>
-						{(block, index) => {
-							const isSelected = () => index() === props.selectedLine;
-							const isInSelection = () => isInVisualSelection(index());
-
-							const bgColor = () => {
-								if (isSelected()) return uiColors.primary;
-								if (isInSelection()) return uiColors.bgSurface2;
-								return uiColors.bgBase;
-							};
-
-							const fgColor = () => {
-								if (isSelected()) return uiColors.bgBase;
-								if (isInSelection()) return uiColors.textPrimary;
-								return uiColors.textPrimary;
-							};
-
-							const lineLabel = () =>
-								block.endLine > block.startLine
-									? `${String(block.startLine)}-${String(block.endLine)}`
-									: String(block.startLine);
-
-							return (
-								<>
-									<box
-										id={`block-${index()}`}
-										flexDirection="row"
-										backgroundColor={bgColor()}
-										paddingLeft={1}
-										paddingRight={1}
-										onMouseUp={() => {
-											props.onSelectedLineChange(index());
-										}}
-									>
-										<text
-											fg={isSelected() ? uiColors.bgBase : uiColors.textMuted}
-											flexShrink={0}
-											width={8}
-										>
-											{lineLabel()}
-										</text>
-										<MarkdownBlockView
-											source={block.source}
-											fg={fgColor()}
-											width={Math.max(20, Math.floor(renderer.width * 0.7))}
-											flexGrow={1}
-										/>
-									</box>
-
-									{/* Render inline comments for this block */}
-									<Show when={getCommentsForBlock(block).length > 0}>
-										<For each={getCommentsForBlock(block)}>
-											{(discussion) => {
-												const _notesCount = discussion.notes.length;
-
-												return (
-													<box
-														flexDirection="column"
-														backgroundColor={uiColors.bgBase}
-														paddingTop={1}
-														paddingBottom={1}
-														paddingLeft={8}
-														paddingRight={2}
-													>
-														<box flexDirection="row" gap={2} marginBottom={0.5}>
-															<Show when={discussion.notes[0].resolved}>
-																<text
-																	fg={uiColors.success}
-																	attributes={TextAttributes.BOLD}
-																>
-																	✓ Resolved
-																</text>
-															</Show>
-															<Show when={!discussion.notes[0].resolved}>
-																<text
-																	fg={uiColors.warning}
-																	attributes={TextAttributes.BOLD}
-																>
-																	● Open
-																</text>
-															</Show>
-														</box>
-
-														<box flexDirection="column">
-															<For each={discussion.notes}>
-																{(note, noteIndex) => {
-																	const isLastNote = () =>
-																		noteIndex() === discussion.notes.length - 1;
-																	return (
-																		<box
-																			style={{
-																				width: "100%",
-																				flexDirection: "row",
-																				flexShrink: 0,
-																			}}
-																		>
-																			<box
-																				style={{
-																					width: 4,
-																					flexDirection: "column",
-																					alignItems: "center",
-																					flexShrink: 0,
-																				}}
-																			>
-																				<box
-																					style={{
-																						width: 3,
-																						height: 1,
-																						justifyContent: "center",
-																						alignItems: "center",
-																					}}
-																				>
-																					<text fg={uiColors.primary}>●</text>
-																				</box>
-																				<Show when={!isLastNote()}>
-																					<box
-																						style={{
-																							width: 1,
-																							flexGrow: 1,
-																							flexDirection: "column",
-																						}}
-																					>
-																						{(() => {
-																							const bodyLength =
-																								note.body?.length || 0;
-																							const lines = Math.max(
-																								3,
-																								Math.ceil(bodyLength / 80) + 2,
-																							);
-																							return Array(lines)
-																								.fill(null)
-																								.map((_, _i) => (
-																									<text
-																										fg={uiColors.bgSurface1}
-																									>
-																										│
-																									</text>
-																								));
-																						})()}
-																					</box>
-																				</Show>
-																			</box>
-
-																			<box
-																				style={{
-																					flexGrow: 1,
-																					flexDirection: "column",
-																					paddingLeft: 1,
-																					paddingBottom: 1.5,
-																				}}
-																			>
-																				<box flexDirection="row" gap={1}>
-																					<text
-																						fg={uiColors.textPrimary}
-																						attributes={TextAttributes.BOLD}
-																					>
-																						{note.author?.name || "Unknown"}
-																					</text>
-																					<text fg={uiColors.textMuted}>
-																						{formatTimestamp(note.created_at)}
-																					</text>
-																				</box>
-																				<box
-																					style={{
-																						width: "100%",
-																						marginTop: 0.5,
-																					}}
-																				>
-																					<text fg={uiColors.textSecondary}>
-																						{note.body || "(no content)"}
-																					</text>
-																				</box>
-																			</box>
-																		</box>
-																	);
-																}}
-															</For>
-														</box>
-													</box>
-												);
-											}}
-										</For>
-									</Show>
-
-									{/* Show comment input inline after the selected block */}
-									{isCommentMode() && isSelected() ? (
-										<box
-											flexDirection="row"
-											alignItems="center"
-											gap={1}
-											backgroundColor={uiColors.bgBase}
-											paddingLeft={1}
-											paddingRight={1}
-											flexGrow={1}
-										>
-											<text fg={uiColors.textPrimary}>
-												{String(props.commentText || "Comment here...")}█
-											</text>
-										</box>
-									) : null}
-								</>
-							);
-						}}
-					</For>
-				</box>
-			</ScrollableContent>
+			{blocks()}
 		</GenericModal>
 	);
 }

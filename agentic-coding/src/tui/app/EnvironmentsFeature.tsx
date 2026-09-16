@@ -9,12 +9,13 @@ import { createEffect, onCleanup } from "solid-js";
 import { TUIApp } from "../../../packages/devenv/cli/src/tui/app-opentui";
 
 /**
- * Chrome the page shell renders around this body: the logo bar and the
- * breadcrumb row in `otel/app/App.tsx`. The shell owns both, so the embedded
- * feature reserves exactly these rows and suppresses the identity rows the
- * breadcrumb already names.
+ * Rows the page shell renders around this body: the logo bar, the breadcrumb
+ * row, the blank row above and below the content and the footer, all in
+ * `otel/app/App.tsx`. The shell owns every one of them (`gaps`), so the
+ * embedded feature reserves exactly these rows, suppresses the identity rows
+ * the breadcrumb already names, and draws no outer blank row of its own.
  */
-const SHELL_CHROME_LINES = 2;
+const SHELL_CHROME_LINES = 5;
 
 export interface EnvironmentsFeatureProps {
 	serverUrl: string;
@@ -56,7 +57,11 @@ export function EnvironmentsFeature(props: EnvironmentsFeatureProps) {
 	// identity rows and their line budget, and clearing it on cleanup restores
 	// standalone behavior for any later mount.
 	createEffect(() => {
-		publishHostChrome({ lines: SHELL_CHROME_LINES, namesPage: true });
+		publishHostChrome({
+			lines: SHELL_CHROME_LINES,
+			namesPage: true,
+			gaps: true,
+		});
 		onCleanup(() => publishHostChrome(undefined));
 	});
 	return (

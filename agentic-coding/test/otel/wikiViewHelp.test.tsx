@@ -7,6 +7,7 @@ import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
 import { createSignal, onCleanup } from "solid-js";
 import { WikiView } from "../../src/tui/otel/views/WikiView";
+import { advance } from "../app/support/terminal";
 
 // `?` is owned by WikiView: it opens the shell help in the tree/note state but
 // must reach the comment editor while a comment is being typed.
@@ -83,11 +84,16 @@ test("`?` opens help in the wiki tree but types into an open comment", async () 
 	// Open the note, enter comment mode, then type `?`: the character goes to
 	// the comment, not to the help modal.
 	t.mockInput.pressEnter();
-	await t.waitForFrame((frame) => frame.includes("c Comment"));
+	// The note is a page now: its content identifies it (the shell footer, not a
+	// body row, carries the note keybinds).
+	// The note is a page now; a real tick lets the markdown body render before
+	// the comment row is typed into.
+	await advance(t, 8);
+	expect(t.captureCharFrame()).toContain("Body text.");
 	t.mockInput.pressKey("c");
-	await t.renderOnce();
+	await advance(t, 3);
 	t.mockInput.pressKey("?");
-	await t.renderOnce();
+	await advance(t, 3);
 	expect(onHelp).toHaveBeenCalledTimes(1);
 	expect(t.captureCharFrame()).toContain("?█");
 	t.renderer.destroy();

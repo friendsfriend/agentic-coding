@@ -36,8 +36,6 @@ export function DestinationPage(props: DestinationPageProps) {
 				width: "100%",
 				height: "100%",
 				flexDirection: "column",
-				paddingLeft: 1,
-				paddingRight: 1,
 			}}
 		>
 			<Show
@@ -57,13 +55,7 @@ export function DestinationPage(props: DestinationPageProps) {
 					itemHeight={itemHeight()}
 					focusable={false}
 					renderItem={(entry, selected) => (
-						<box
-							style={{
-								flexDirection: "column",
-								paddingLeft: 2,
-								paddingRight: 2,
-							}}
-						>
+						<box style={{ flexDirection: "column" }}>
 							<text
 								fg={selected ? uiColors.primary : uiColors.textPrimary}
 								attributes={selected ? TextAttributes.BOLD : undefined}

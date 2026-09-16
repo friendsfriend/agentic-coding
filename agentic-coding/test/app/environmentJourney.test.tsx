@@ -186,6 +186,18 @@ test("the environment page journey keeps one hierarchy step per key", async () =
 		t.mockInput.pressEnter();
 		await expectCrumb("Home › Environments › Applications › shop");
 
+		// The hosted body draws no outer gutter of its own: the shell chrome owns
+		// the blank row above and below the content, so the page keeps exactly one.
+		{
+			const rows = t.captureCharFrame().split("\n");
+			const footer = rows.reduce(
+				(acc, line, index) => (line.slice(0, 90).trim() ? index : acc),
+				0,
+			);
+			expect((rows[2] ?? "").trim()).toBe("");
+			expect((rows[footer - 1] ?? "").slice(0, 90).trim()).toBe("");
+		}
+
 		// Escape closes the resource view; the route follows the body instead of
 		// reopening the view it still names.
 		await pressEscapeUp();

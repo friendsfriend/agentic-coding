@@ -53,6 +53,9 @@ export function DashboardRoot(props: DashboardRootProps) {
 					/>
 				)}
 			</Show>
+			{/* The one blank row between the header and the panels, matching every
+			    page of the full application. */}
+			<box style={{ height: 1, flexShrink: 0 }} />
 			<box style={{ flexGrow: 1, minHeight: 0 }}>
 				<DashApp
 					repo={props.repo}
@@ -62,7 +65,7 @@ export function DashboardRoot(props: DashboardRootProps) {
 					onHeader={setHeader}
 				/>
 			</box>
-			<box style={{ height: 1 }} />
+			<box style={{ height: 1, flexShrink: 0 }} />
 			<StatusBar />
 			<ErrorModalOverlay keymap={props.keymap} />
 			<QuitConfirmModal />

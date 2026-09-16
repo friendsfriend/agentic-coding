@@ -121,6 +121,10 @@ export async function startWorkflowServer(
 	const listener = Bun.serve({
 		hostname: options.hostname ?? "127.0.0.1",
 		port: options.port ?? 0,
+		// Event-stream and long-running workflow requests can be quiet for more
+		// than Bun's ten-second default. Without this, Bun logs a timeout directly
+		// into the TUI instead of letting clients handle the closed request.
+		idleTimeout: 0,
 		fetch: (request) => app.fetch(request),
 	});
 	const ownedReceivers: OwnedTelemetryReceivers | undefined =

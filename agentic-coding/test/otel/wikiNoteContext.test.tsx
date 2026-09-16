@@ -17,6 +17,7 @@ import {
 	activeKeybindContext,
 	footerKeybinds,
 } from "../../src/tui/shared/keybinds";
+import { advance } from "../app/support/terminal";
 
 // The shell must publish the wiki "note" footer context while a note is open so
 // the note-only actions appear in the footer; in the tree state they stay out.
@@ -102,7 +103,11 @@ test("wiki note actions appear in the footer only while a note is open", async (
 
 	// Open the note: the shell publishes the "note" context.
 	t.mockInput.pressEnter();
-	await t.waitForFrame((frame) => frame.includes("c Comment"));
+	// The note is a page now: its content identifies it (the shell footer, not a
+	// body row, carries the note keybinds). A real tick lets the markdown body
+	// finish rendering, which `renderOnce()` alone can outrun.
+	await advance(t, 8);
+	expect(t.captureCharFrame()).toContain("Body text.");
 	expect(activeKeybindContext()).toBe("note");
 	expect(footerActions()).toContain("visual line selection");
 	expect(footerActions()).toContain("next/previous note");

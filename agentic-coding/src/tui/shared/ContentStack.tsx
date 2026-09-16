@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
-import { For, type JSX } from "solid-js";
+import { For, type JSX, Show } from "solid-js";
 import { uiColors } from "./colors";
+import { hostOwnsGaps } from "./hostChrome";
 
 export interface ContentFrameProps {
 	children: JSX.Element;
@@ -32,15 +33,24 @@ const spacer = (height: number) => (
 	<box style={{ width: "100%", height, flexShrink: 0 }} />
 );
 
+/**
+ * The blank rows around a view's content. A host that renders the chrome
+ * around the body (the unified shell) also renders these two rows, so the
+ * view's outer gutters stand down and every page keeps exactly one blank row
+ * above and below its content. Gaps *between* items are never affected.
+ */
+const outerGap = (gap: number | undefined): number =>
+	hostOwnsGaps() ? 0 : (gap ?? 1);
+
 export function ContentFrame(props: ContentFrameProps) {
-	const gap = () => props.gap ?? 1;
+	const gap = () => outerGap(props.gap);
 
 	return (
 		<box
 			backgroundColor={uiColors.bgBase}
 			style={{ width: "100%", height: "100%", flexDirection: "column" }}
 		>
-			{spacer(gap())}
+			<Show when={gap() > 0}>{spacer(gap())}</Show>
 			<box
 				style={{
 					width: "100%",
@@ -51,7 +61,7 @@ export function ContentFrame(props: ContentFrameProps) {
 			>
 				{props.children}
 			</box>
-			{spacer(gap())}
+			<Show when={gap() > 0}>{spacer(gap())}</Show>
 		</box>
 	);
 }
@@ -81,21 +91,28 @@ export function ContentPanel(props: ContentPanelProps) {
 }
 
 export function ContentStack(props: ContentStackProps) {
+	// Items are separated by `gap`; the rows around the whole stack are the
+	// host's when it renders them.
 	const gap = () => props.gap ?? 1;
+	const edge = () => outerGap(props.gap);
+	const lastIndex = () => props.items.length - 1;
 
 	return (
 		<box
 			backgroundColor={uiColors.bgBase}
 			style={{ width: "100%", height: "100%", flexDirection: "column" }}
 		>
-			{spacer(gap())}
+			<Show when={edge() > 0}>{spacer(edge())}</Show>
 			<For each={props.items}>
-				{(item) => (
-					<>
-						{item}
-						{spacer(gap())}
-					</>
-				)}
+				{(item, index) => {
+					const trailing = () => (index() < lastIndex() ? gap() : edge());
+					return (
+						<>
+							{item}
+							<Show when={trailing() > 0}>{spacer(trailing())}</Show>
+						</>
+					);
+				}}
 			</For>
 		</box>
 	);

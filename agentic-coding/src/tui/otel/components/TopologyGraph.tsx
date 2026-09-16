@@ -38,7 +38,6 @@ export function TopologyGraph(props: {
 					minWidth: Math.max(60, layers().length * (cardWidth + 3)),
 					height: graphHeight(),
 					flexDirection: "row",
-					padding: 1,
 				}}
 			>
 				<For each={layers()}>

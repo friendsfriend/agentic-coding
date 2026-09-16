@@ -21,8 +21,7 @@ Small ones:
 UI Rework / Devenv union: 
 * Review tests and add guardrails on what tests to write (in progress)
 * Test everything
-* Embed breadcrumbs in header (spec created)
-* Change behavior of page navigation to jump up one page using esc (spec created)
-* Spacing between footer and header unified to 1 space
-    * Adding an app doenst work in the applications view
+* Menu doenst handle scrolling properly.
+* Environment menu always reopens the last view
+* Linux: Migrate config once
 

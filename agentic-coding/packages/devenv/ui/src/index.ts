@@ -244,11 +244,13 @@ export { WorktreeManagerModal } from "./components/WorktreeManagerModal";
 export { getMarkdownSyntaxStyle } from "./markdownSyntax";
 // Page-chrome gate: an identity row renders only while the host chrome does not
 // already name the page, and the host's chrome height replaces the standalone
-// reservation.
+// reservation. `hostOwnsGaps` is the same contract for the blank rows around
+// the body.
 export type { HostChrome } from "./pageChrome";
 export {
 	hostChromeLines,
 	hostNamesPage,
+	hostOwnsGaps,
 	publishHostChrome,
 } from "./pageChrome";
 export type { SelectionMouseUpHandler } from "./selectionCopy";

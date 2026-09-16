@@ -477,6 +477,13 @@ export function App(props: {
 				return undefined;
 		}
 	};
+	/**
+	 * A destination list is a page of its own: the feature body behind it stays
+	 * hidden, so a category page never renders two pages stacked (which used to
+	 * push the header row off the screen).
+	 */
+	const showsDestinationList = (): boolean =>
+		destinationEntries() !== undefined;
 	// Selection lives in route-keyed view state, so returning to a page restores
 	// the cursor instead of resetting it (task 3.2).
 	const destinationIndex = (): number =>
@@ -2021,7 +2028,6 @@ export function App(props: {
 					width: "100%",
 					height: "100%",
 					flexDirection: "column",
-					padding: props.dashboard ? 0 : 1,
 					gap: 0,
 				}}
 			>
@@ -2069,6 +2075,8 @@ export function App(props: {
 					}}
 					onNavigate={(route) => pages.navigate(route)}
 				/>
+				{/* The one blank row between the header and every page's content. */}
+				<box style={{ height: 1, flexShrink: 0 }} />
 
 				{/* Tab content */}
 				<box
@@ -2173,7 +2181,7 @@ export function App(props: {
 							/>
 						</box>
 					)}
-					{activeTab() === "traces" && (
+					{!showsDestinationList() && activeTab() === "traces" && (
 						<>
 							{traceView() === "selection" && (
 								<TraceListView
@@ -2222,7 +2230,7 @@ export function App(props: {
 							{traceView() === "span" && <SpanDetailView node={selectedSpan} />}
 						</>
 					)}
-					{activeTab() === "metrics" && (
+					{!showsDestinationList() && activeTab() === "metrics" && (
 						<>
 							{currentPage() !== "observability.metrics.detail" && (
 								<MetricsView
@@ -2252,7 +2260,7 @@ export function App(props: {
 							})()}
 						</>
 					)}
-					{activeTab() === "logs" && (
+					{!showsDestinationList() && activeTab() === "logs" && (
 						<>
 							{currentPage() !== "observability.logs.detail" && (
 								<LogsView
@@ -2279,7 +2287,7 @@ export function App(props: {
 							})()}
 						</>
 					)}
-					{activeTab() === "topology" && (
+					{!showsDestinationList() && activeTab() === "topology" && (
 						<>
 							{currentPage() !== "observability.topology.service" && (
 								<TopologyView
@@ -2305,8 +2313,9 @@ export function App(props: {
 					)}
 				</box>
 
-				{/* Status bar — one global footer for all tabs; keybinds are tab-dependent. */}
-				<box style={{ height: 1 }} />
+				{/* Status bar — one global footer for all tabs; keybinds are tab-dependent.
+				    The blank row above it belongs to the chrome, never to a page. */}
+				<box style={{ height: 1, flexShrink: 0 }} />
 				<StatusBar />
 			</box>
 			<NotificationOverlay />

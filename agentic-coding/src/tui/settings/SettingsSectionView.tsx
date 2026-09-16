@@ -29,8 +29,6 @@ export function SettingsSectionView(props: SettingsSectionViewProps) {
 				width: "100%",
 				height: "100%",
 				flexDirection: "column",
-				paddingLeft: 1,
-				paddingRight: 1,
 			}}
 		>
 			<Show
@@ -50,14 +48,7 @@ export function SettingsSectionView(props: SettingsSectionViewProps) {
 					itemHeight={3}
 					focusable={false}
 					renderItem={(item, selected) => (
-						<box
-							style={{
-								flexDirection: "column",
-								paddingLeft: 2,
-								paddingRight: 2,
-								height: 3,
-							}}
-						>
+						<box style={{ flexDirection: "column", height: 3 }}>
 							<box style={{ flexDirection: "row" }}>
 								<text
 									fg={selected ? uiColors.primary : uiColors.textPrimary}

@@ -431,7 +431,10 @@ export function WikiView(props: WikiViewProps) {
 			<Show when={state().kind === "empty"}>
 				<text fg={uiColors.textMuted}>No readable wiki concepts found.</text>
 			</Show>
-			<Show when={state().kind === "ready"}>
+			{/* The note is a page of its own: while one is open the tree list is
+			    not rendered behind it, exactly like a category page renders no
+			    feature body. */}
+			<Show when={state().kind === "ready" && !note()}>
 				<box style={{ flexDirection: "row", flexGrow: 1, minHeight: 0 }}>
 					<box style={{ width: "100%", flexDirection: "column" }}>
 						<ScrollableContent
@@ -476,6 +479,7 @@ export function WikiView(props: WikiViewProps) {
 			<Show when={note()}>
 				{(current) => (
 					<MarkdownViewModal
+						page
 						filePath={current().id}
 						content={renderDocument(current().frontmatter, current().body)}
 						currentFileIndex={Math.max(0, notePosition())}

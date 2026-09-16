@@ -7,6 +7,7 @@ import {
 	ContentStack,
 	DiscussionsView,
 	HelpView,
+	hostOwnsGaps,
 	InfrastructureTable,
 	IssueDetailView,
 	IssueView,
@@ -56,14 +57,17 @@ export function ContentRouter(props: ContentRouterProps) {
 		void dockerActions.refreshKubernetesCluster();
 	});
 
-	// ContentStack adds one-line top and bottom gutters around table.
-	const TABLE_VIEW_GUTTERS = 2;
-	// The host's chrome rows (the shell's logo bar + breadcrumb, or the
-	// standalone feature's own header/footer) are not this body's to render.
+	// ContentStack adds one-line top and bottom gutters around the table. A host
+	// that draws those two rows itself (the unified shell) owns them, so the
+	// budget must not reserve them twice.
+	const tableGutters = () => (hostOwnsGaps() ? 0 : 2);
+	// The host's chrome rows (the shell's logo bar, breadcrumb, gap rows and
+	// footer, or the standalone feature's own header/footer) are not this body's
+	// to render.
 	const chromeLines = () => props.chromeLines ?? LAYOUT_CHROME_LINES;
 	const availableTableLines = Math.max(
 		1,
-		props.dimensions.height - chromeLines() - TABLE_VIEW_GUTTERS,
+		props.dimensions.height - chromeLines() - tableGutters(),
 	);
 	const tableColumns = () =>
 		appStore.activeTab() === "scripts"
