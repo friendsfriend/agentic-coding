@@ -74,3 +74,30 @@ export interface TraceSummary {
 	spanCount: number;
 	agents: string[];
 }
+
+/** One trace-list entry as the telemetry database aggregates it: a workflow
+ * (change id) with its span count, time range, error count and agent roles. The
+ * list is paged from the database, so this row — not the loaded spans — is the
+ * trace list's source of truth. Nanosecond timestamps stay strings because they
+ * exceed the exact integer range of a JS number. */
+/** Trace-list page size; the observability view and the database default agree. */
+export const TRACE_PAGE_SIZE = 50;
+/** Spans the service graph is built from when the topology view is opened. */
+export const RECENT_SPAN_LIMIT = 3_000;
+
+export interface TraceSummaryRow {
+	changeId: string;
+	spanCount: number;
+	errorCount: number;
+	startNanos: string;
+	endNanos: string;
+	agents: string[];
+}
+
+/** One page of trace rows plus the total the filter matches. */
+export interface TraceSummaryPage {
+	items: TraceSummaryRow[];
+	total: number;
+	page: number;
+	perPage: number;
+}

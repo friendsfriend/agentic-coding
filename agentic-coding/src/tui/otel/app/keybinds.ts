@@ -59,6 +59,13 @@ export function observabilityKeybindCatalog(options: {
 				? [
 						{ key: "j/k or ↑/↓", action: "select trace", standard: true },
 						{ key: "Enter", action: "open trace", standard: true },
+						// The list is paged: one page of newest-first traces is read at a
+						// time, so older traces need an explicit page step.
+						{
+							key: "[ / ]",
+							action: "older or newer trace page",
+							short: "page",
+						},
 					]
 				: options.view === "detail"
 					? [

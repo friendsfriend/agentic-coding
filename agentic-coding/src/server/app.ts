@@ -41,6 +41,9 @@ import {
 	SERVER_API_VERSION,
 	telemetryPruneRequestSchema,
 	telemetryScanRequestSchema,
+	telemetrySpansRequestSchema,
+	telemetryTracesRequestSchema,
+	telemetryWatchRequestSchema,
 	workflowActionRequestSchema,
 	workflowExecuteRequestSchema,
 	workflowQuestionRequestSchema,
@@ -115,6 +118,21 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 	const { authority, events, credentials } = options;
 	const operations = options.operations ?? serverOperations;
 	const telemetryWatchers = new Map<string, () => void>();
+
+	/** One server-owned file watcher per repository, registered on first use
+	 * (scan or the explicit watch route) and announced on the event stream so
+	 * clients refresh from the API instead of polling workspace files. */
+	const registerTelemetryWatch = (repo: string): void => {
+		if (!options.telemetry?.watch || telemetryWatchers.has(repo)) return;
+		const unwatch = options.telemetry.watch(repo, () => {
+			events.publish({
+				domain: "telemetry",
+				kind: "telemetry.updated",
+				resource: repo,
+			});
+		});
+		telemetryWatchers.set(repo, unwatch);
+	};
 
 	const handle = async (request: Request): Promise<Response> => {
 		let url: URL;
@@ -358,18 +376,66 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		if (method === "GET" && path === "/api/v1/events")
 			return eventStream(request, url);
 
-		if (method === "GET" && path === "/api/v1/telemetry/snapshot") {
+		if (method === "GET" && path === "/api/v1/telemetry/workspaces") {
 			if (!options.telemetry)
 				return errorResponse(
 					503,
 					"telemetry-unavailable",
 					"no telemetry service",
 				);
-			const changeId = url.searchParams.get("changeId");
 			return json({
 				ok: true,
-				value: options.telemetry.snapshot(changeId ?? undefined),
+				value: { workspaces: options.telemetry.workspaces() },
 			});
+		}
+
+		if (method === "POST" && path === "/api/v1/telemetry/traces") {
+			if (!options.telemetry)
+				return errorResponse(
+					503,
+					"telemetry-unavailable",
+					"no telemetry service",
+				);
+			const decoded = decodeRequest(
+				"server.telemetry.traces",
+				telemetryTracesRequestSchema,
+				await readJsonBody(request, 64 * 1024),
+			);
+			return json({ ok: true, value: options.telemetry.summaries(decoded) });
+		}
+
+		if (method === "POST" && path === "/api/v1/telemetry/spans") {
+			if (!options.telemetry)
+				return errorResponse(
+					503,
+					"telemetry-unavailable",
+					"no telemetry service",
+				);
+			const decoded = decodeRequest(
+				"server.telemetry.spans",
+				telemetrySpansRequestSchema,
+				await readJsonBody(request, 64 * 1024),
+			);
+			const spans = decoded.changeId
+				? options.telemetry.traceSpans(decoded.changeId)
+				: options.telemetry.recentSpans(decoded.limit);
+			return json({ ok: true, value: { spans } });
+		}
+
+		if (method === "POST" && path === "/api/v1/telemetry/watch") {
+			if (!options.telemetry)
+				return errorResponse(
+					503,
+					"telemetry-unavailable",
+					"no telemetry service",
+				);
+			const decoded = decodeRequest(
+				"server.telemetry.watch",
+				telemetryWatchRequestSchema,
+				await readJsonBody(request, 64 * 1024),
+			);
+			registerTelemetryWatch(decoded.repo);
+			return json({ ok: true, value: { watched: true } });
 		}
 
 		if (method === "POST" && path === "/api/v1/telemetry/scan") {
@@ -387,16 +453,7 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			const scanned = await options.telemetry.scan(decoded.repo);
 			// Server-owned file watcher: new workspace telemetry is announced on the
 			// event stream so clients refresh from the API instead of polling files.
-			if (options.telemetry.watch && !telemetryWatchers.has(decoded.repo)) {
-				const unwatch = options.telemetry.watch(decoded.repo, () => {
-					events.publish({
-						domain: "telemetry",
-						kind: "telemetry.updated",
-						resource: decoded.repo,
-					});
-				});
-				telemetryWatchers.set(decoded.repo, unwatch);
-			}
+			registerTelemetryWatch(decoded.repo);
 			events.publish({
 				domain: "telemetry",
 				kind: "telemetry.scan",

@@ -25,6 +25,7 @@ import { KeymapProvider } from "@opentui/keymap/solid";
 import { render } from "@opentui/solid";
 import { resolveConfigDir, resolveDevenvHome } from "../backend/home";
 import { ownsEnvironmentBackend } from "../backend/ownership";
+import { setConfigDiagnosticSink } from "../config-root";
 import { createInstanceAuthority } from "../server/auth";
 import { backendClient, configureBackendClient } from "../server/client";
 import { createEnvironmentAuthority } from "../server/environment/authority";
@@ -79,6 +80,7 @@ import {
 } from "./lifecycle";
 import { LifecycleModal } from "./lifecycle/LifecycleModal";
 import { QuitConfirmModal } from "./lifecycle/QuitConfirmModal";
+import { notify as notifyShell } from "./otel/app/notifications";
 import { discoverProjectRepos, TraceDb } from "./otel/model/db";
 import { LogStore } from "./otel/model/logStore";
 import { MetricStore } from "./otel/model/metricStore";
@@ -87,6 +89,7 @@ import type { TelemetryDb } from "./otel/model/telemetry-db";
 import { TopologyStore } from "./otel/model/topologyStore";
 import { TraceStore } from "./otel/model/traceStore";
 import type { LogData, MetricData, SpanData } from "./otel/model/types";
+import { showErrorModal } from "./shared/errorModal";
 
 const usage = `Usage: agentic-coding [command] [options]
   (no command)             Unified shell (default): owned environment backend + contextual workflow launch + observability
@@ -238,6 +241,21 @@ export async function main(): Promise<void> {
 	// Presentation mode of this process: `dash` renders the dashboard-only root
 	// for one explicit target, everything else composes the feature shell.
 	const dashOnly = isDashboardMode({ home, attachUrl });
+	// Configuration diagnostics go to the mounted surface instead of raw stderr,
+	// which would print into the OpenTUI render. A failed load opens the global
+	// error dialog; warnings become toasts, reported once per distinct message
+	// because a configuration load runs again for every request.
+	const reportedConfigWarnings = new Set<string>();
+	const surfaceNotify = dashOnly ? notify : notifyShell;
+	setConfigDiagnosticSink((message, kind) => {
+		if (kind === "error") {
+			showErrorModal("Configuration error", message);
+			return;
+		}
+		if (reportedConfigWarnings.has(message)) return;
+		reportedConfigWarnings.add(message);
+		surfaceNotify(message, "warning");
+	});
 	// Identity resolution is explicit and bounded: a local target that is not a
 	// repository fails here, before any resource is acquired, instead of
 	// degrading into Home or a workflow picker. Research/wiki standalone targets
@@ -382,8 +400,9 @@ export async function main(): Promise<void> {
 	const explicitRepos = Array.from(new Set([repo]));
 	// Demo DB is async; non-demo construction is cheap. The scan/load itself
 	// happens in startServerStack (render-first so the startup modal shows).
+	// Demo DB is async; non-demo construction is cheap. Telemetry history is read
+	// lazily by the observability feature, so nothing here loads spans.
 	let db: TelemetryDb;
-	let loadedSpans: SpanData[] = [];
 	if (useDemoDb) {
 		const {
 			db: demoDb,
@@ -392,7 +411,6 @@ export async function main(): Promise<void> {
 			logs,
 		} = await import("./otel/model/demoDb").then((m) => m.createDemoDb());
 		db = demoDb;
-		loadedSpans = spans;
 		traceStore.loadFile(spans);
 		metricStore.load(metrics);
 		logStore.load(logs);
@@ -541,7 +559,6 @@ export async function main(): Promise<void> {
 			...(isTest
 				? []
 				: [{ id: "workflow-server", label: "Starting unified server" }]),
-			{ id: "workflow-application", label: "Loading workspace history" },
 			...(httpPort ||
 			zipkinPort ||
 			datadogPort ||
@@ -609,6 +626,30 @@ export async function main(): Promise<void> {
 	clearSelectionCopy();
 	disposeCredentialPrompt();
 	disposeKeymap();
+
+	/** Watch every repository this shell reads telemetry from, so the server
+	 * announces new workspace telemetry instead of this process polling files.
+	 * Catalog discovery stays off the startup path: an unreachable backend must
+	 * not hold the shell, and the traces view waits for data anyway. */
+	async function registerTelemetryRepositories(): Promise<void> {
+		try {
+			const catalogRoots =
+				isTest || remoteAttach
+					? []
+					: await discoverProjectRepos(environmentSurfaceUrl);
+			await db.watchRepositories(
+				Array.from(new Set([...explicitRepos, ...catalogRoots])),
+			);
+			await db.refreshWorkspaces();
+		} catch (error) {
+			notify(
+				`Telemetry repositories unavailable: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+				"warning",
+			);
+		}
+	}
 
 	// ---- Server-stack start sequence ----
 	async function startServerStack(homeMode: boolean): Promise<void> {
@@ -733,44 +774,14 @@ export async function main(): Promise<void> {
 				if (isShutdownRequested()) return;
 			}
 
-			// 2. Workflow history / catalog. Catalog discovery runs after first
-			// paint: an unreachable backend must not block the renderer.
-			mark("workflow-application");
+			// 2. Telemetry repositories. Boot announces where new telemetry
+			// appears instead of reading history: the observability feature reads
+			// one page when it is opened, so nothing here blocks the shell.
 			if (!useDemoDb) {
-				let catalogRoots: string[] = [];
-				if (!isTest && !remoteAttach) {
-					try {
-						catalogRoots = await discoverProjectRepos(environmentSurfaceUrl);
-					} catch (error) {
-						notify(
-							`Project catalog unavailable: ${
-								error instanceof Error ? error.message : String(error)
-							}`,
-							"error",
-						);
-					}
-				}
-				const scanRoots = Array.from(
-					new Set([...explicitRepos, ...catalogRoots]),
-				);
-				if (remoteAttach && db instanceof RemoteTelemetryDb) {
-					// Remote history lives on the server; pull the snapshot instead of
-					// scanning a local path.
-					await db.refresh();
-				} else {
-					if (db instanceof RemoteTelemetryDb) {
-						await db.scanRepositories(scanRoots);
-					} else {
-						for (const r of scanRoots) await db.scanAllWorkspacesAsync(r);
-					}
-					db.cleanupOlderThan();
-				}
-				loadedSpans = db.loadSpans();
-				traceStore.loadFile(loadedSpans);
+				void registerTelemetryRepositories();
+				await tick();
+				if (isShutdownRequested()) return;
 			}
-			setStepDone("workflow-application");
-			await tick();
-			if (isShutdownRequested()) return;
 
 			// 3. Telemetry receivers (loopback by default), optional gRPC helper,
 			// then collectors — each acquired as an owned handle.
@@ -784,8 +795,6 @@ export async function main(): Promise<void> {
 			await tick();
 			if (isShutdownRequested()) return;
 
-			// Build topology from the history loaded after first paint.
-			topologyStore.load(loadedSpans);
 			if (homeMode) finishStartup();
 			if (attachUrl) {
 				notify(

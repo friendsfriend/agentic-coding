@@ -5,6 +5,7 @@
 //
 // The client deliberately imports nothing from the TUI feature tree, so the
 // observation module can depend on it without forming a cycle.
+import type { TraceSummaryPage } from "../tui/otel/model/types.ts";
 import type { WorkflowView } from "../workflow/contracts.ts";
 import type { AgentsMutation } from "./config.ts";
 import type { ObservationRequest } from "./protocol.ts";
@@ -269,25 +270,52 @@ export class BackendClient {
 		};
 	}
 
-	async telemetrySnapshot(changeId?: string): Promise<{
-		workspaces: Array<{ changeId: string; path: string; spanCount: number }>;
-		spansByChange: Record<string, unknown[]>;
-		spans: unknown[];
-		metrics: unknown[];
-		logs: unknown[];
-	}> {
-		const query = changeId ? `?changeId=${encodeURIComponent(changeId)}` : "";
-		return (await this.request(
+	async telemetryWorkspaces(): Promise<
+		Array<{ changeId: string; path: string; spanCount: number }>
+	> {
+		const value = (await this.request(
 			"GET",
-			`/api/v1/telemetry/snapshot${query}`,
+			"/api/v1/telemetry/workspaces",
 			undefined,
 		)) as {
 			workspaces: Array<{ changeId: string; path: string; spanCount: number }>;
-			spansByChange: Record<string, unknown[]>;
-			spans: unknown[];
-			metrics: unknown[];
-			logs: unknown[];
 		};
+		return value.workspaces;
+	}
+
+	/** One page of the trace list (workflows, newest first). */
+	async telemetryTraces(options: {
+		page?: number;
+		perPage?: number;
+		changeId?: string;
+	}): Promise<TraceSummaryPage> {
+		return (await this.request(
+			"POST",
+			"/api/v1/telemetry/traces",
+			options,
+		)) as TraceSummaryPage;
+	}
+
+	/** Bounded span read: one workflow's spans, or the newest spans overall
+	 * (`limit`) when no workflow is named. */
+	async telemetrySpans(options: {
+		changeId?: string;
+		limit?: number;
+	}): Promise<unknown[]> {
+		const value = (await this.request(
+			"POST",
+			"/api/v1/telemetry/spans",
+			options,
+		)) as {
+			spans: unknown[];
+		};
+		return value.spans;
+	}
+
+	/** Register the server-owned workspace watcher for a repository without
+	 * scanning it: boot announces changes instead of ingesting the history. */
+	async telemetryWatch(repo: string): Promise<void> {
+		await this.request("POST", "/api/v1/telemetry/watch", { repo });
 	}
 
 	async telemetryScan(repo: string): Promise<number> {

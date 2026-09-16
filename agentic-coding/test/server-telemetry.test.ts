@@ -1,6 +1,7 @@
 // Server-owned telemetry boundary tests (expose-unified-bun-backend, task 2.3):
-// the server scans workspaces into its own SQLite database and serves typed
-// snapshot/scan/prune queries; the client never opens the database.
+// the server scans workspaces into its own SQLite database and serves the paged
+// trace list, per-workflow span reads, workspaces, watch and prune over the
+// authenticated API; the client never opens the database.
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -37,7 +38,7 @@ function fakeRepo(): string {
 }
 
 describe("server-owned telemetry", () => {
-	test("scans a workspace into the server database and serves a snapshot", async () => {
+	test("scans a workspace into the server database and serves a trace page", async () => {
 		const repo = fakeRepo();
 		const server = await startWorkflowServer({ telemetryDbPath: tempDir() });
 		try {
@@ -48,11 +49,17 @@ describe("server-owned telemetry", () => {
 			});
 			const scanned = await client.telemetryScan(repo);
 			expect(scanned).toBeGreaterThan(0);
-			const snapshot = await client.telemetrySnapshot();
-			expect(snapshot.workspaces.some((item) => item.changeId === "wf-1")).toBe(
-				true,
-			);
-			expect(snapshot.spans.length).toBeGreaterThan(0);
+			const workspaces = await client.telemetryWorkspaces();
+			expect(workspaces.some((item) => item.changeId === "wf-1")).toBe(true);
+			// The list is one page of aggregated rows, and spans follow per workflow.
+			const page = await client.telemetryTraces({ page: 1, perPage: 10 });
+			expect(page.total).toBe(1);
+			expect(page.items[0]?.changeId).toBe("wf-1");
+			expect(page.items[0]?.spanCount).toBeGreaterThan(0);
+			const spans = await client.telemetrySpans({ changeId: "wf-1" });
+			expect(spans.length).toBeGreaterThan(0);
+			const recent = await client.telemetrySpans({ limit: 10 });
+			expect(recent.length).toBeGreaterThan(0);
 			expect(await client.telemetryPrune(30)).toBeGreaterThanOrEqual(0);
 		} finally {
 			await server.stop();
@@ -62,7 +69,7 @@ describe("server-owned telemetry", () => {
 	test("telemetry routes require the instance capability", async () => {
 		const server = await startWorkflowServer({ telemetryDbPath: tempDir() });
 		try {
-			const denied = await fetch(`${server.url}/api/v1/telemetry/snapshot`);
+			const denied = await fetch(`${server.url}/api/v1/telemetry/workspaces`);
 			expect(denied.status).toBe(401);
 		} finally {
 			await server.stop();
@@ -72,9 +79,12 @@ describe("server-owned telemetry", () => {
 	test("telemetry routes report 503 when the server owns no telemetry service", async () => {
 		const server = await startWorkflowServer({});
 		try {
-			const response = await fetch(`${server.url}/api/v1/telemetry/snapshot`, {
-				headers: { authorization: `Bearer ${server.token}` },
-			});
+			const response = await fetch(
+				`${server.url}/api/v1/telemetry/workspaces`,
+				{
+					headers: { authorization: `Bearer ${server.token}` },
+				},
+			);
 			expect(response.status).toBe(503);
 		} finally {
 			await server.stop();
@@ -128,13 +138,10 @@ describe("server-owned telemetry", () => {
 	test("an injected telemetry service receives scan and prune calls", async () => {
 		const calls: string[] = [];
 		const telemetry: TelemetryOperations = {
-			snapshot: () => ({
-				workspaces: [],
-				spansByChange: {},
-				spans: [],
-				metrics: [],
-				logs: [],
-			}),
+			summaries: () => ({ items: [], total: 0, page: 1, perPage: 50 }),
+			workspaces: () => [],
+			traceSpans: () => [],
+			recentSpans: () => [],
 			scan: async (repo) => {
 				calls.push(`scan:${repo}`);
 				return 3;
@@ -159,25 +166,25 @@ describe("server-owned telemetry", () => {
 		}
 	});
 
-	test("startup scans repositories with one snapshot, including scan events and empty catalogs", async () => {
+	test("scanning a repository refreshes the cached workspace list and invites a re-read", async () => {
+		const repo = fakeRepo();
 		const calls: string[] = [];
-		const db = new RemoteTelemetryDb();
 		const telemetry: TelemetryOperations = {
-			snapshot: () => {
-				calls.push("snapshot");
-				return {
-					workspaces: [],
-					spansByChange: {},
-					spans: [],
-					metrics: [],
-					logs: [],
-				};
+			summaries: () => {
+				calls.push("summaries");
+				return { items: [], total: 0, page: 1, perPage: 50 };
 			},
+			workspaces: () => [
+				{
+					changeId: "wf-1",
+					path: `${repo}/.herdr-workflow/wf-1`,
+					spanCount: 3,
+				},
+			],
+			traceSpans: () => [],
+			recentSpans: () => [],
 			scan: async (repo) => {
 				calls.push(`scan:${repo}`);
-				// A live telemetry event during scanning must not trigger another
-				// full history download. The final snapshot includes its data.
-				await db.refresh();
 				if (repo === "/broken") throw new Error("scan failed");
 				return 3;
 			},
@@ -185,6 +192,7 @@ describe("server-owned telemetry", () => {
 		};
 		const server = await startWorkflowServer({ telemetry });
 		try {
+			const db = new RemoteTelemetryDb();
 			db.setClient(
 				new BackendClient({
 					baseUrl: server.url,
@@ -192,22 +200,30 @@ describe("server-owned telemetry", () => {
 					ownerId: "test-owner",
 				}),
 			);
+			let changes = 0;
+			const unsubscribe = db.onChange(() => {
+				changes += 1;
+			});
+			// One scan per distinct root — no repeated history download.
 			expect(await db.scanRepositories(["/one", "/two", "/one"])).toBe(6);
-			expect(calls).toEqual(["scan:/one", "scan:/two", "snapshot"]);
+
+			expect(calls).toEqual(["scan:/one", "scan:/two"]);
+			calls.length = 0;
+			expect(db.getWorkspaces().map((item) => item.changeId)).toEqual(["wf-1"]);
+			expect(changes).toBeGreaterThan(0);
 			calls.length = 0;
 			expect(await db.scanRepositories([])).toBe(0);
-			expect(calls).toEqual(["snapshot"]);
-			calls.length = 0;
+			expect(calls).toEqual([]);
 			await expect(db.scanRepositories(["/broken"])).rejects.toThrow();
-			await db.refresh();
-			expect(calls).toEqual(["scan:/broken", "snapshot", "snapshot"]);
-		} finally {
+			expect(calls).toEqual(["scan:/broken"]);
+			unsubscribe();
 			db.close();
+		} finally {
 			await server.stop();
 		}
 	});
 
-	test("the remote proxy reads the server snapshot and notifies watchers", async () => {
+	test("the remote proxy reads pages and spans on demand and notifies watchers", async () => {
 		const repo = fakeRepo();
 		const server = await startWorkflowServer({ telemetryDbPath: tempDir() });
 		try {
@@ -218,16 +234,19 @@ describe("server-owned telemetry", () => {
 			});
 			const db = new RemoteTelemetryDb();
 			db.setClient(client);
-			const notified: string[] = [];
-			const unwatch = db.watchWorkspaces(repo, (changeId) => {
-				notified.push(changeId);
-			});
-			await db.scanAllWorkspacesAsync(repo);
+			const changes: string[] = [];
+			const unsubscribe = db.onChange(() => changes.push("changed"));
+			// Boot announces the repository without ingesting it: the page read is
+			// what pulls data, and only for the page the view shows.
+			await db.watchRepositories([repo]);
+			await db.scanRepositories([repo]);
 			expect(db.getWorkspaces().map((item) => item.changeId)).toContain("wf-1");
-			expect(db.loadSpans("wf-1").length).toBeGreaterThan(0);
-			expect(db.loadSpans().length).toBeGreaterThan(0);
-			expect(notified).toContain("wf-1");
-			unwatch();
+			const page = await db.fetchTracePage({ page: 1, perPage: 10 });
+			expect(page.items.map((item) => item.changeId)).toEqual(["wf-1"]);
+			expect((await db.fetchTraceSpans("wf-1")).length).toBeGreaterThan(0);
+			expect((await db.fetchRecentSpans(10)).length).toBeGreaterThan(0);
+			expect(changes.length).toBeGreaterThan(0);
+			unsubscribe();
 			db.close();
 		} finally {
 			await server.stop();

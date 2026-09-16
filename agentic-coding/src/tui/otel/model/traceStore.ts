@@ -1,5 +1,12 @@
 import { parseLine } from "./parser";
-import type { SpanData, TraceSummary, TreeNode } from "./types";
+import {
+	type SpanData,
+	TRACE_PAGE_SIZE,
+	type TraceSummary,
+	type TraceSummaryPage,
+	type TraceSummaryRow,
+	type TreeNode,
+} from "./types";
 
 export type SortField = "received" | "latency" | "name" | "service";
 export type SortDir = "asc" | "desc";
@@ -7,9 +14,28 @@ export type SortMode = SortDir | "none";
 export type SortCriterion = { field: SortField; mode: SortMode };
 export type StatusFilter = "all" | "error" | "success";
 
+/** Page bookkeeping of the list the store currently holds. */
+interface PageState {
+	page: number;
+	perPage: number;
+	total: number;
+}
+
 export class TraceStore {
+	/** Spans of the trace the view has open (span tree and span detail). */
 	private spans: SpanData[] = [];
-	private filtered: SpanData[] = [];
+	/** Trace-list entries: either one page read from the telemetry database or,
+	 * in local/demo mode, the grouping of a loaded span file. */
+	private summaries: TraceSummary[] = [];
+	/** True while the list is derived from a locally loaded span file (demo and
+	 * test shells): live pushes extend it. A paged list is owned by the database
+	 * and is refreshed by re-reading the page. */
+	private listIsLocal = false;
+	private pageState: PageState = {
+		page: 1,
+		perPage: TRACE_PAGE_SIZE,
+		total: 0,
+	};
 	private query = "";
 	private sortCriteria: SortCriterion[] = [
 		{ field: "received", mode: "desc" },
@@ -21,8 +47,7 @@ export class TraceStore {
 	private readonly listeners = new Set<() => void>();
 
 	constructor(initial: SpanData[] = []) {
-		this.spans = initial;
-		this.rebuild();
+		if (initial.length) this.loadFile(initial);
 	}
 
 	/** Subscribe to content changes (initial file load, live receiver pushes) so
@@ -38,10 +63,51 @@ export class TraceStore {
 		for (const listener of this.listeners) listener();
 	}
 
+	/** Local/demo mode: load a span file and derive the list from it. */
 	loadFile(spans: SpanData[]): void {
 		this.spans = spans;
-		this.rebuild();
+		this.summaries = this.groupSummaries(spans);
+		this.listIsLocal = true;
+		this.pageState = {
+			page: 1,
+			perPage: TRACE_PAGE_SIZE,
+			total: this.summaries.length,
+		};
 		this.notify();
+	}
+
+	/** Server mode: replace the list with one page of trace rows. The rows are
+	 * the list's source of truth — nothing is derived from loaded spans. */
+	setSummaryPage(next: TraceSummaryPage): void {
+		this.summaries = next.items
+			.map((row) => this.summaryFromRow(row))
+			.filter((summary): summary is TraceSummary => summary !== undefined);
+		this.listIsLocal = false;
+		this.pageState = {
+			page: next.page,
+			perPage: next.perPage,
+			total: next.total,
+		};
+		this.notify();
+	}
+
+	/** Spans of the trace now shown in the tree (fetched per trace). */
+	setTraceSpans(spans: SpanData[]): void {
+		this.spans = spans;
+		this.notify();
+	}
+
+	get page_(): number {
+		return this.pageState.page;
+	}
+	get totalPages_(): number {
+		return Math.max(
+			1,
+			Math.ceil(this.pageState.total / this.pageState.perPage),
+		);
+	}
+	get totalTraces_(): number {
+		return this.pageState.total;
 	}
 
 	appendLine(line: string): boolean {
@@ -54,19 +120,26 @@ export class TraceStore {
 	pushBatch(spans: SpanData[]): void {
 		if (!spans.length) return;
 		this.spans.push(...spans);
-		this.filtered.push(...spans.filter((span) => this.matchesFilter(span)));
+		// A locally loaded list is derived from the spans it holds; a paged list is
+		// owned by the database and only the page read changes it.
+		if (this.listIsLocal) this.summaries = this.groupSummaries(this.spans);
 		this.notify();
 	}
 
+	/** Whether the list is derived from locally loaded spans (no page reads). */
+	get listIsLocal_(): boolean {
+		return this.listIsLocal;
+	}
+
 	getRootSpans(): SpanData[] {
-		const parents = new Set(this.filtered.map((s) => s.spanId));
-		return this.filtered.filter(
+		const parents = new Set(this.spans.map((s) => s.spanId));
+		return this.spans.filter(
 			(s) => !s.parentSpanId || !parents.has(s.parentSpanId),
 		);
 	}
 
 	getTraceSpans(traceId: string): SpanData[] {
-		return this.filtered.filter((s) => s.traceId === traceId);
+		return this.spans.filter((s) => s.traceId === traceId);
 	}
 
 	private attribute(span: SpanData, key: string): string | undefined {
@@ -140,7 +213,7 @@ export class TraceStore {
 	}
 
 	getSpanTree(workspace: string): TreeNode[] {
-		const spans = this.filtered.filter(
+		const spans = this.spans.filter(
 			(span) => this.workspace(span) === workspace,
 		);
 		if (!spans.length) return [];
@@ -184,9 +257,42 @@ export class TraceStore {
 		];
 	}
 
+	/** The list's rows: the loaded page filtered and sorted in memory. */
 	getTraceSummaries(): TraceSummary[] {
+		return this.sortSummaries(this.filteredSummaries());
+	}
+
+	/** One trace-list entry from a database row. Every number comes from the
+	 * aggregation; the span-shaped root exists for the list's label and
+	 * attributes (change id and agent roles). */
+	private summaryFromRow(row: TraceSummaryRow): TraceSummary | undefined {
+		const startTime = BigInt(row.startNanos);
+		const endTime = BigInt(row.endNanos);
+		const root = this.virtualSpan(
+			`workflow: ${row.changeId}`,
+			[],
+			row.changeId,
+			row.agents[0],
+		);
+		root.startTimeUnixNano = row.startNanos;
+		root.endTimeUnixNano = row.endNanos;
+		root.status = { code: row.errorCount > 0 ? 2 : 0 };
+		return {
+			traceId: row.changeId,
+			rootSpans: [root],
+			startTime,
+			endTime,
+			durationMs: Math.max(0, Number((endTime - startTime) / 1_000_000n)),
+			errorCount: row.errorCount,
+			spanCount: row.spanCount,
+			agents: row.agents,
+		};
+	}
+
+	/** Local/demo mode: group a loaded span file into trace-list entries. */
+	private groupSummaries(spans: readonly SpanData[]): TraceSummary[] {
 		const grouped = new Map<string, SpanData[]>();
-		for (const span of this.filtered) {
+		for (const span of spans) {
 			const workspace = this.workspace(span);
 			const entries = grouped.get(workspace) ?? [];
 			entries.push(span);
@@ -226,7 +332,16 @@ export class TraceStore {
 				],
 			});
 		}
-		return summaries.sort((a, b) => {
+		return summaries;
+	}
+
+	/** The page rows matching the query and the status filter. */
+	private filteredSummaries(): TraceSummary[] {
+		return this.summaries.filter((summary) => this.matchesFilter(summary));
+	}
+
+	private sortSummaries(summaries: TraceSummary[]): TraceSummary[] {
+		return [...summaries].sort((a, b) => {
 			for (const criterion of this.sortCriteria) {
 				if (criterion.mode === "none") continue;
 				const cmp =
@@ -249,13 +364,11 @@ export class TraceStore {
 
 	applyFilter(query: string): void {
 		this.query = query.toLowerCase().trim();
-		this.rebuild();
 		this.notify();
 	}
 
 	setStatusFilter(status: StatusFilter): void {
 		this.statusFilter = status;
-		this.rebuild();
 		this.notify();
 	}
 
@@ -290,34 +403,37 @@ export class TraceStore {
 	get filterQuery_(): string {
 		return this.query;
 	}
+	/** Spans of the trace the view has open. */
 	get spanCount_(): number {
 		return this.spans.length;
 	}
+	/** Trace entries the filter matches on the loaded page. */
 	get filteredCount_(): number {
-		return this.filtered.length;
+		return this.filteredSummaries().length;
 	}
 
-	private matchesFilter(span: SpanData): boolean {
+	/** A trace-list entry matches on what the list shows: the workflow id, its
+	 * service, its agents and the status the aggregation counted. */
+	private matchesFilter(summary: TraceSummary): boolean {
 		const q = this.query;
+		const root = summary.rootSpans[0];
 		const textMatches =
 			!q ||
-			span.traceId.includes(q) ||
-			span.name.toLowerCase().includes(q) ||
-			span.serviceName.toLowerCase().includes(q) ||
-			span.attributes.some(
-				(a) =>
-					a.key.toLowerCase().includes(q) ||
-					String(a.value).toLowerCase().includes(q),
-			);
+			summary.traceId.toLowerCase().includes(q) ||
+			summary.agents.some((agent) => agent.toLowerCase().includes(q)) ||
+			(root?.name.toLowerCase().includes(q) ?? false) ||
+			(root?.serviceName.toLowerCase().includes(q) ?? false) ||
+			(root?.attributes.some(
+				(attribute) =>
+					attribute.key.toLowerCase().includes(q) ||
+					String(attribute.value).toLowerCase().includes(q),
+			) ??
+				false);
 		const statusMatches =
 			this.statusFilter === "all" ||
 			(this.statusFilter === "success"
-				? span.status.code === 0
-				: span.status.code !== 0);
+				? summary.errorCount === 0
+				: summary.errorCount > 0);
 		return textMatches && statusMatches;
-	}
-
-	private rebuild(): void {
-		this.filtered = this.spans.filter((span) => this.matchesFilter(span));
 	}
 }

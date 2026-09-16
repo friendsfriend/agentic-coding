@@ -123,7 +123,25 @@ export const ROUTE_OWNERSHIP: readonly RouteOwnership[] = [
 	{ method: "GET", path: "/api/v1/events", owner: "bun", domain: "events" },
 	{
 		method: "GET",
-		path: "/api/v1/telemetry/snapshot",
+		path: "/api/v1/telemetry/workspaces",
+		owner: "bun",
+		domain: "telemetry",
+	},
+	{
+		method: "POST",
+		path: "/api/v1/telemetry/traces",
+		owner: "bun",
+		domain: "telemetry",
+	},
+	{
+		method: "POST",
+		path: "/api/v1/telemetry/spans",
+		owner: "bun",
+		domain: "telemetry",
+	},
+	{
+		method: "POST",
+		path: "/api/v1/telemetry/watch",
 		owner: "bun",
 		domain: "telemetry",
 	},
@@ -317,6 +335,24 @@ export const telemetryScanRequestSchema = Schema.Struct({
 
 export const telemetryPruneRequestSchema = Schema.Struct({
 	days: Schema.optional(Schema.Number),
+});
+
+/** One page of the trace list: entries are workflows, newest first. */
+export const telemetryTracesRequestSchema = Schema.Struct({
+	page: Schema.optional(Schema.Number),
+	perPage: Schema.optional(Schema.Number),
+	changeId: Schema.optional(Schema.String),
+});
+
+/** Span reads are bounded: either one workflow's spans or the newest spans
+ * (the service graph), never the whole history. */
+export const telemetrySpansRequestSchema = Schema.Struct({
+	changeId: Schema.optional(Schema.String),
+	limit: Schema.optional(Schema.Number),
+});
+
+export const telemetryWatchRequestSchema = Schema.Struct({
+	repo: Schema.String,
 });
 
 /** Managed-agent handoff across the transport (task 1.4/3.4): the CLI forwards

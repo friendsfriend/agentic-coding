@@ -61,7 +61,10 @@ surface. Every row is served in this process; a path in neither manifest is a
 | POST | `/api/v1/config/agents` | bun |
 | GET | `/api/v1/config/agents` | bun |
 | GET | `/api/v1/events` | bun |
-| GET | `/api/v1/telemetry/snapshot` | bun |
+| GET | `/api/v1/telemetry/workspaces` | bun |
+| POST | `/api/v1/telemetry/traces` | bun |
+| POST | `/api/v1/telemetry/spans` | bun |
+| POST | `/api/v1/telemetry/watch` | bun |
 | POST | `/api/v1/telemetry/scan` | bun |
 | POST | `/api/v1/telemetry/prune` | bun |
 | POST | `/api/v1/credentials/respond` | bun |
@@ -131,8 +134,11 @@ Implemented by this change:
 - Dashboard reads/mutations (observations, actions, repair, questions, review
   saves, execution trigger) through the typed client.
 - Server-owned telemetry persistence: SQLite database, workspace scanning,
-  retention and file watcher (`src/server/telemetry.ts`) with typed
-  snapshot/scan/prune endpoints; the TUI reads via `RemoteTelemetryDb`.
+  retention and file watcher (`src/server/telemetry.ts`) with typed paged
+  trace-list, per-workflow span, workspaces, watch, scan and prune endpoints;
+  the TUI reads via `RemoteTelemetryDb`. The list is one page of aggregated
+  rows (indexed start/end/status/role columns, backfilled once) and a trace's
+  spans are fetched when it opens, so no request ships the whole history.
 - Server-owned telemetry receivers: OTLP/Zipkin/Datadog HTTP listeners, the
   in-process OTLP gRPC TraceService, the Prometheus scraper and the StatsD
   listener (`src/server/receivers.ts`) route decoded signals into a

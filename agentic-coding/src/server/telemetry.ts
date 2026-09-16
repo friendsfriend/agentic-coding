@@ -3,11 +3,16 @@
 // database, workspace scanning and retention; the TUI reads through the typed
 // client instead of opening the database or watching workspace files.
 //
-// The service is transport-agnostic: `app.ts` exposes `snapshot`/`scan`/`prune`
-// over the authenticated API, and the composition root decides when it is
-// created and closed.
+// The service is transport-agnostic: `app.ts` exposes the paged trace list,
+// per-workflow span reads, workspaces, scan/watch and prune over the
+// authenticated API, and the composition root decides when it is created and
+// closed.
 import { TraceDb } from "../tui/otel/model/db.ts";
-import type { LogData, MetricData, SpanData } from "../tui/otel/model/types.ts";
+import {
+	RECENT_SPAN_LIMIT,
+	type SpanData,
+	type TraceSummaryPage,
+} from "../tui/otel/model/types.ts";
 
 export interface TelemetryWorkspace {
 	readonly changeId: string;
@@ -15,18 +20,19 @@ export interface TelemetryWorkspace {
 	readonly spanCount: number;
 }
 
-export interface TelemetrySnapshot {
-	readonly workspaces: TelemetryWorkspace[];
-	/** Spans for every workspace, keyed by change id (for per-workspace views). */
-	readonly spansByChange: Record<string, SpanData[]>;
-	readonly spans: SpanData[];
-	readonly metrics: MetricData[];
-	readonly logs: LogData[];
-}
-
-/** Query/retention surface the server exposes over the API. */
+/** Query/retention surface the server exposes over the API. The trace list is
+ * paged (one entry per workflow, newest first) and spans are fetched per
+ * workflow, so no request ships the whole history. */
 export interface TelemetryOperations {
-	snapshot(changeId?: string): TelemetrySnapshot;
+	summaries(options?: {
+		page?: number;
+		perPage?: number;
+		changeId?: string;
+	}): TraceSummaryPage;
+	workspaces(): TelemetryWorkspace[];
+	traceSpans(changeId: string): SpanData[];
+	/** Newest spans across workflows, for the service graph. */
+	recentSpans(limit?: number): SpanData[];
 	scan(repo: string): Promise<number>;
 	prune(days?: number): number;
 	/** Watch a repository's workspace files server-side; `onChange` fires after
@@ -42,18 +48,22 @@ export class TelemetryService implements TelemetryOperations {
 		this.db = new TraceDb(dbPath);
 	}
 
-	snapshot(changeId?: string): TelemetrySnapshot {
-		const workspaces = this.db.getWorkspaces();
-		const spansByChange: Record<string, SpanData[]> = {};
-		for (const workspace of workspaces)
-			spansByChange[workspace.changeId] = this.db.loadSpans(workspace.changeId);
-		return {
-			workspaces,
-			spansByChange,
-			spans: this.db.loadSpans(changeId),
-			metrics: this.db.loadMetrics(changeId),
-			logs: this.db.loadLogs(changeId),
-		};
+	summaries(
+		options: { page?: number; perPage?: number; changeId?: string } = {},
+	): TraceSummaryPage {
+		return this.db.listTraceSummaries(options);
+	}
+
+	workspaces(): TelemetryWorkspace[] {
+		return this.db.getWorkspaces();
+	}
+
+	traceSpans(changeId: string): SpanData[] {
+		return this.db.loadSpans(changeId);
+	}
+
+	recentSpans(limit = RECENT_SPAN_LIMIT): SpanData[] {
+		return this.db.recentSpans(limit);
 	}
 
 	async scan(repo: string): Promise<number> {

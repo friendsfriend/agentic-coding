@@ -19,8 +19,8 @@ Small ones:
 
 
 General: 
-* Review tests and add guardrails on what tests to write
+* Review tests and add guardrails on what tests to write (in progress)
 * Test everything
-* Embed breadcrumbs in header
-* Change behavior of page navigation to jump up one page using esc
+* Embed breadcrumbs in header (spec created)
+* Change behavior of page navigation to jump up one page using esc (spec created)
 

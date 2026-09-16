@@ -26,6 +26,10 @@ export function TraceListView(props: {
 	searchMode: () => boolean;
 	searchQuery: () => string;
 	resultCount: () => number;
+	/** Trace-list paging: `[`/`K` and `]`/`J` move between pages. */
+	page: () => number;
+	totalPages: () => number;
+	loading: () => boolean;
 }) {
 	return (
 		<box flexDirection="column" width="100%" height="100%">
@@ -36,6 +40,12 @@ export function TraceListView(props: {
 			>
 				<text fg={uiColors.textMuted} attributes={TextAttributes.BOLD}>
 					Traces
+				</text>
+				<text fg={uiColors.textMuted}>
+					{" "}
+					{props.loading()
+						? "loading…"
+						: `page ${props.page()}/${props.totalPages()}`}
 				</text>
 			</SearchHeader>
 			{props.summaries().length > 0 && (
@@ -92,7 +102,7 @@ export function TraceListView(props: {
 			{props.summaries().length === 0 && (
 				<box paddingLeft={1}>
 					<text fg={uiColors.textMuted}>
-						No traces loaded — waiting for data
+						{props.loading() ? "Loading traces…" : "No traces on this page"}
 					</text>
 				</box>
 			)}

@@ -13,7 +13,15 @@ import {
 	projectCanonicalRoots,
 } from "../../../workflow/project-catalog.ts";
 import { parseJsonl, parseTelemetryJsonl } from "./parser";
-import type { LogData, MetricData, SpanData } from "./types";
+import {
+	type LogData,
+	type MetricData,
+	RECENT_SPAN_LIMIT,
+	type SpanData,
+	TRACE_PAGE_SIZE,
+	type TraceSummaryPage,
+	type TraceSummaryRow,
+} from "./types";
 
 interface TraceRow {
 	id: number;
@@ -37,6 +45,9 @@ interface LogRow {
 }
 
 const MAX_TRACE_BYTES = 16 * 1024 * 1024;
+/** Upper bound a caller may ask for in one trace-list page. */
+const MAX_TRACE_LIST_PER_PAGE = 500;
+
 const MAX_TELEMETRY_SPANS = 50_000;
 /** Bumped whenever the ingest parser changes so existing workspaces re-ingest. */
 const PARSER_VERSION = 3;
@@ -68,6 +79,36 @@ function workspaceTraceSource(herdrPath: string): TraceSource | undefined {
 	return undefined;
 }
 
+/** The aggregated trace-list columns for one ingested span. A malformed span
+ * document must not abort a whole workspace ingest, so anything unreadable
+ * contributes NULL columns and the row stays visible as raw telemetry. */
+function traceColumns(span: unknown): Record<string, string | number | null> {
+	const record = span as {
+		startTimeUnixNano?: unknown;
+		endTimeUnixNano?: unknown;
+		status?: { code?: unknown };
+		attributes?: unknown;
+	};
+	const nanos = (value: unknown) =>
+		typeof value === "string" && /^\d+$/.test(value) ? value : null;
+	let role: string | null = null;
+	if (Array.isArray(record?.attributes)) {
+		for (const attribute of record.attributes) {
+			const entry = attribute as { key?: unknown; value?: unknown };
+			if (entry?.key === "herdr.role" && typeof entry.value === "string")
+				role = entry.value;
+		}
+	}
+	return {
+		$span: JSON.stringify(span),
+		$start_nanos: nanos(record?.startTimeUnixNano),
+		$end_nanos: nanos(record?.endTimeUnixNano),
+		$status_code:
+			typeof record?.status?.code === "number" ? record.status.code : null,
+		$role: role,
+	};
+}
+
 export class TraceDb {
 	private db: Database;
 	private readonly ingesting = new Set<string>();
@@ -75,6 +116,8 @@ export class TraceDb {
 	private ingestMetricStmt: Statement;
 	private ingestLogStmt: Statement;
 	private upsertWorkspaceStmt: Statement;
+	private readonly listeners = new Set<() => void>();
+	private readonly watchedRepos = new Map<string, () => void>();
 
 	constructor(dbPath?: string) {
 		const dir = dbPath ?? join(homedir(), ".config", "otel-tui");
@@ -89,6 +132,29 @@ export class TraceDb {
 		this.db.run(
 			`CREATE INDEX IF NOT EXISTS idx_traces_change ON traces(change_id)`,
 		);
+		// Aggregated list columns. The trace list is paged and ordered by start
+		// time, which a `json_extract` over every span row cannot do within a
+		// request budget, so the fields the aggregation needs are materialized at
+		// ingest and indexed. Existing rows are backfilled once below.
+		for (const column of [
+			"start_nanos INTEGER",
+			"end_nanos INTEGER",
+			"status_code INTEGER",
+			"role TEXT",
+		]) {
+			try {
+				this.db.run(`ALTER TABLE traces ADD COLUMN ${column}`);
+			} catch (error) {
+				if (!String(error).includes("duplicate column name")) throw error;
+			}
+		}
+		this.db.run(
+			`CREATE INDEX IF NOT EXISTS idx_traces_start ON traces(start_nanos)`,
+		);
+		this.db.run(
+			`CREATE INDEX IF NOT EXISTS idx_traces_change_start ON traces(change_id, start_nanos)`,
+		);
+		this.backfillTraceColumns();
 		this.db.run(`CREATE TABLE IF NOT EXISTS workspace_files (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       change_id TEXT UNIQUE NOT NULL,
@@ -125,7 +191,8 @@ export class TraceDb {
 			`CREATE INDEX IF NOT EXISTS idx_logs_trace ON logs(json_extract(log, '$.traceId'))`,
 		);
 		this.ingestStmt = this.db.prepare(
-			"INSERT INTO traces (change_id, span, ingested_at) VALUES ($change_id, $span, datetime('now'))",
+			`INSERT INTO traces (change_id, span, start_nanos, end_nanos, status_code, role, ingested_at)
+       VALUES ($change_id, $span, $start_nanos, $end_nanos, $status_code, $role, datetime('now'))`,
 		);
 		this.ingestMetricStmt = this.db.prepare(
 			"INSERT INTO metrics (change_id, metric, ingested_at) VALUES ($change_id, $metric, datetime('now'))",
@@ -138,11 +205,159 @@ export class TraceDb {
 		);
 	}
 
+	/** One-time materialization of the aggregated columns for rows ingested
+	 * before they existed. Batched and transactional, so an interrupted run
+	 * resumes at the next batch instead of starting over. */
+	private backfillTraceColumns(): void {
+		const pending = this.db
+			.query("SELECT COUNT(*) count FROM traces WHERE start_nanos IS NULL")
+			.get() as { count: number };
+		if (!pending.count) return;
+		const update = this.db.prepare(
+			"UPDATE traces SET start_nanos=$start_nanos, end_nanos=$end_nanos, status_code=$status_code, role=$role WHERE id=$id",
+		);
+		for (;;) {
+			const rows = this.db
+				.query(
+					"SELECT id, span FROM traces WHERE start_nanos IS NULL LIMIT 5000",
+				)
+				.all() as Array<{ id: number; span: string }>;
+			if (!rows.length) return;
+			const batch = this.db.transaction(() => {
+				for (const row of rows) {
+					const { $span, ...columns } = traceColumns(JSON.parse(row.span));
+					void $span;
+					update.run({ $id: row.id, ...columns });
+				}
+			});
+			batch();
+		}
+	}
+
+	/** One page of trace summaries — one entry per workflow (change id), newest
+	 * first — plus the total the filter matches. This is the trace list's source
+	 * of truth: the view never derives its rows from loaded span sets. */
+	listTraceSummaries(
+		options: { page?: number; perPage?: number; changeId?: string } = {},
+	): TraceSummaryPage {
+		const perPage = Math.max(
+			1,
+			Math.min(options.perPage ?? TRACE_PAGE_SIZE, MAX_TRACE_LIST_PER_PAGE),
+		);
+		const page = Math.max(1, Math.floor(options.page ?? 1));
+		const filter = options.changeId ? " WHERE change_id = $change_id" : "";
+		const params: Record<string, string> = {};
+		if (options.changeId) params.$change_id = options.changeId;
+		const total = (
+			this.db
+				.query(`SELECT COUNT(DISTINCT change_id) count FROM traces${filter}`)
+				.get(params) as { count: number }
+		).count;
+		const rows = this.db
+			.query(
+				`SELECT change_id changeId,
+                COUNT(*) spanCount,
+                SUM(CASE WHEN status_code = 2 THEN 1 ELSE 0 END) errorCount,
+                CAST(MIN(start_nanos) AS TEXT) startNanos,
+                CAST(MAX(end_nanos) AS TEXT) endNanos,
+                GROUP_CONCAT(DISTINCT role) roles
+         FROM traces${filter}
+         GROUP BY change_id
+         ORDER BY MIN(start_nanos) DESC, change_id DESC
+         LIMIT $limit OFFSET $offset`,
+			)
+			.all({
+				...params,
+				$limit: perPage,
+				$offset: (page - 1) * perPage,
+			}) as Array<{
+			changeId: string;
+			spanCount: number;
+			errorCount: number | null;
+			startNanos: string | null;
+			endNanos: string | null;
+			roles: string | null;
+		}>;
+		const items: TraceSummaryRow[] = rows.map((row) => ({
+			changeId: row.changeId,
+			spanCount: row.spanCount,
+			errorCount: row.errorCount ?? 0,
+			startNanos: row.startNanos ?? "0",
+			endNanos: row.endNanos ?? "0",
+			agents: row.roles ? row.roles.split(",").filter(Boolean) : [],
+		}));
+		return { items, total, page, perPage };
+	}
+
+	/** The newest spans across every workflow, in chronological order. Bounded
+	 * on purpose: it feeds the service graph when the topology view is opened,
+	 * which needs recent edges rather than the whole history. */
+	recentSpans(limit = RECENT_SPAN_LIMIT): SpanData[] {
+		const rows = this.db
+			.query(
+				`SELECT span FROM traces WHERE start_nanos IS NOT NULL ORDER BY start_nanos DESC LIMIT $limit`,
+			)
+			.all({
+				$limit: Math.max(1, Math.min(limit, MAX_TELEMETRY_SPANS)),
+			}) as Array<{ span: string }>;
+		return rows.reverse().map((row) => JSON.parse(row.span) as SpanData);
+	}
+
+	/** Paged trace-list read (the `TelemetryDb` surface). */
+	async fetchTracePage(options: {
+		page: number;
+		perPage: number;
+		changeId?: string;
+	}): Promise<TraceSummaryPage> {
+		return this.listTraceSummaries(options);
+	}
+
+	async fetchTraceSpans(changeId: string): Promise<SpanData[]> {
+		return this.loadSpans(changeId);
+	}
+
+	async fetchRecentSpans(limit = RECENT_SPAN_LIMIT): Promise<SpanData[]> {
+		return this.recentSpans(limit);
+	}
+
+	async refreshWorkspaces(): Promise<
+		Array<{
+			changeId: string;
+			path: string;
+			spanCount: number;
+		}>
+	> {
+		return this.getWorkspaces();
+	}
+
+	async scanRepositories(roots: readonly string[]): Promise<number> {
+		let scanned = 0;
+		for (const root of new Set(roots))
+			scanned += await this.scanAllWorkspacesAsync(root);
+		return scanned;
+	}
+
+	async watchRepositories(roots: readonly string[]): Promise<void> {
+		for (const root of new Set(roots)) {
+			if (this.watchedRepos.has(root)) continue;
+			const unwatch = this.watchWorkspaces(root, () => this.notifyChange());
+			this.watchedRepos.set(root, unwatch);
+		}
+	}
+
+	onChange(listener: () => void): () => void {
+		this.listeners.add(listener);
+		return () => {
+			this.listeners.delete(listener);
+		};
+	}
+
+	private notifyChange(): void {
+		for (const listener of this.listeners) listener();
+	}
+
 	ingestSpan(changeId: string, span: unknown): void {
-		this.ingestStmt.run({
-			$change_id: changeId,
-			$span: JSON.stringify(span),
-		});
+		this.ingestStmt.run({ $change_id: changeId, ...traceColumns(span) });
 	}
 
 	ingestWorkspace(herdrPath: string, changeId: string): number {
@@ -171,10 +386,7 @@ export class TraceDb {
 		this.db.run("DELETE FROM traces WHERE change_id=?", [changeId]);
 		const insert = this.db.transaction(() => {
 			for (const span of spans) {
-				this.ingestStmt.run({
-					$change_id: changeId,
-					$span: JSON.stringify(span),
-				});
+				this.ingestStmt.run({ $change_id: changeId, ...traceColumns(span) });
 			}
 			this.upsertWorkspaceStmt.run({
 				$change_id: changeId,
@@ -362,7 +574,7 @@ export class TraceDb {
 							for (const span of spans) {
 								this.ingestStmt.run({
 									$change_id: entry.name,
-									$span: JSON.stringify(span),
+									...traceColumns(span),
 								});
 							}
 							this.upsertWorkspaceStmt.run({
@@ -385,6 +597,9 @@ export class TraceDb {
 	}
 
 	close() {
+		for (const unwatch of this.watchedRepos.values()) unwatch();
+		this.watchedRepos.clear();
+		this.listeners.clear();
 		this.db.close();
 	}
 }

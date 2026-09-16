@@ -56,10 +56,11 @@ Consequences:
 ## Startup
 
 `State: idle → starting → running | stopping` (`src/tui/lifecycle.ts`), with one
-row per component this route actually owns (`go-backend`,
-`workflow-application`/history, `telemetry`). The renderer is created first so
-progress is visible before expensive bootstrap, and input is gated while
-`starting`: only quit stays live.
+row per component this route actually owns (`go-backend`, `telemetry`). The
+renderer is created first so progress is visible before expensive bootstrap, and
+input is gated while `starting`: only quit stays live. Telemetry history is not
+part of a row: boot only registers the workspace watchers, and the observability
+feature reads one page of trace rows when it is opened.
 
 Every acquired component is registered as an owned handle
 (`acquireResource`) in acquisition order. Acquisition order is

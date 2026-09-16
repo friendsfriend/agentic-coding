@@ -1,149 +1,154 @@
 // Server-backed telemetry database (expose-unified-bun-backend, task 2.3).
-// The server owns the SQLite database and workspace scanning; this proxy keeps
-// the small synchronous read surface the OTEL views already use and refreshes
-// its cache from the authenticated API. It never opens the database or watches
-// workspace files itself.
+// The server owns the SQLite database, workspace scanning and retention; this
+// proxy reads through the authenticated API. It never opens the database or
+// watches workspace files itself.
+//
+// Reads are paged (one page of trace rows at a time) and spans are fetched per
+// workflow, so no request ships the whole history and opening observability
+// costs one page instead of a full telemetry download.
 import type { BackendClient } from "../../../server/client.ts";
-import type { TelemetryDb } from "./telemetry-db.ts";
-import type { LogData, MetricData, SpanData } from "./types.ts";
-
-interface Snapshot {
-	workspaces: Array<{ changeId: string; path: string; spanCount: number }>;
-	spansByChange: Record<string, SpanData[]>;
-	spans: SpanData[];
-	metrics: MetricData[];
-	logs: LogData[];
-}
-
-const EMPTY_SNAPSHOT: Snapshot = {
-	workspaces: [],
-	spansByChange: {},
-	spans: [],
-	metrics: [],
-	logs: [],
-};
-
-interface Watcher {
-	cb: (changeId: string, spans: SpanData[]) => void;
-}
+import type { TelemetryDb, TelemetryWorkspace } from "./telemetry-db.ts";
+import {
+	RECENT_SPAN_LIMIT,
+	type SpanData,
+	type TraceSummaryPage,
+} from "./types.ts";
 
 export class RemoteTelemetryDb implements TelemetryDb {
 	private client?: BackendClient;
-	private snapshot: Snapshot = EMPTY_SNAPSHOT;
-	private readonly watchers = new Map<string, Set<Watcher>>();
+	private workspaces: TelemetryWorkspace[] = [];
+	private readonly listeners = new Set<() => void>();
+	private readonly watched = new Set<string>();
 	private unsubscribe?: () => void;
-	private scansInFlight = 0;
 
 	/** Bind the authenticated transport once the shell has configured it. */
 	setClient(client: BackendClient): void {
 		this.client = client;
 	}
 
-	/** Subscribe to server telemetry events once, so new workspace spans are
-	 * pulled from the API instead of the client watching files. */
-	private ensureSubscription(): void {
-		if (this.unsubscribe || !this.client) return;
-		this.unsubscribe = this.client.subscribe({
-			onEvent: (event) => {
-				const domain = (event as { domain?: string }).domain;
-				if (domain === "telemetry") void this.refresh().catch(() => {});
-			},
-			onResync: () => void this.refresh().catch(() => {}),
-		});
+	getWorkspaces(): TelemetryWorkspace[] {
+		return this.workspaces;
 	}
 
-	/** Fetch the authoritative snapshot and notify watchers when it changed. */
-	async refresh(): Promise<void> {
-		const client = this.client;
-		// Scan events arrive for each repository; the batch refreshes once after
-		// all scans finish instead of transferring the full history N times.
-		if (!client || this.scansInFlight > 0) return;
-		const next = (await client.telemetrySnapshot()) as Snapshot;
+	async refreshWorkspaces(): Promise<TelemetryWorkspace[]> {
+		const previous = this.workspaces;
+		const next = await this.readWorkspaces();
 		const changed =
-			next.spans.length !== this.snapshot.spans.length ||
-			JSON.stringify(next.workspaces) !==
-				JSON.stringify(this.snapshot.workspaces);
-		this.snapshot = next;
-		if (!changed) return;
-		for (const watcher of this.watchers.values())
-			for (const watcherEntry of watcher)
-				for (const workspace of next.workspaces)
-					watcherEntry.cb(
-						workspace.changeId,
-						next.spansByChange[workspace.changeId] ?? [],
-					);
+			next.length !== previous.length ||
+			next.some(
+				(workspace, index) =>
+					workspace.changeId !== previous[index]?.changeId ||
+					workspace.spanCount !== previous[index]?.spanCount,
+			);
+		if (changed) this.notify();
+		return next;
 	}
 
-	getWorkspaces(): Array<{
-		changeId: string;
-		path: string;
-		spanCount: number;
-	}> {
-		return this.snapshot.workspaces;
+	private async readWorkspaces(): Promise<TelemetryWorkspace[]> {
+		const client = this.client;
+		if (!client) return this.workspaces;
+		this.workspaces =
+			(await client.telemetryWorkspaces()) as TelemetryWorkspace[];
+		return this.workspaces;
 	}
 
-	loadSpans(changeId?: string): SpanData[] {
-		return changeId
-			? (this.snapshot.spansByChange[changeId] ?? [])
-			: this.snapshot.spans;
+	fetchTracePage(options: {
+		page: number;
+		perPage: number;
+		changeId?: string;
+	}): Promise<TraceSummaryPage> {
+		return this.requireClient().telemetryTraces(
+			options,
+		) as Promise<TraceSummaryPage>;
 	}
 
-	loadMetrics(): MetricData[] {
-		return this.snapshot.metrics;
+	async fetchTraceSpans(changeId: string): Promise<SpanData[]> {
+		const spans = (await this.requireClient().telemetrySpans({
+			changeId,
+		})) as SpanData[];
+		return spans;
 	}
 
-	loadLogs(): LogData[] {
-		return this.snapshot.logs;
+	async fetchRecentSpans(limit = RECENT_SPAN_LIMIT): Promise<SpanData[]> {
+		return (await this.requireClient().telemetrySpans({ limit })) as SpanData[];
+	}
+
+	async watchRepositories(roots: readonly string[]): Promise<void> {
+		const client = this.client;
+		if (!client) return;
+		// The server owns one watcher per repository; registering is idempotent
+		// there, and this set keeps a second shell from asking twice.
+		for (const root of new Set(roots)) {
+			if (this.watched.has(root)) continue;
+			this.watched.add(root);
+			try {
+				await client.telemetryWatch(root);
+			} catch {
+				// A repository the server cannot watch is not a startup failure: the
+				// paged read still sees whatever was ingested.
+				this.watched.delete(root);
+			}
+		}
+		this.ensureSubscription();
+	}
+
+	async scanRepositories(roots: readonly string[]): Promise<number> {
+		const client = this.client;
+		if (!client) return 0;
+		let scanned = 0;
+		for (const root of new Set(roots))
+			scanned += await client.telemetryScan(root);
+		await this.refreshWorkspaces();
+		return scanned;
+	}
+
+	onChange(listener: () => void): () => void {
+		this.listeners.add(listener);
+		this.ensureSubscription();
+		return () => {
+			this.listeners.delete(listener);
+		};
 	}
 
 	/** Retention is server-owned; this returns 0 because the removal count is
 	 * only available asynchronously. The following refresh reflects the result. */
-	cleanupOlderThan(): number {
+	cleanupOlderThan(days?: number): number {
 		void this.client
-			?.telemetryPrune()
-			.then(() => this.refresh())
+			?.telemetryPrune(days)
+			.then(() => this.refreshWorkspaces())
 			.catch(() => {});
 		return 0;
-	}
-
-	async scanAllWorkspacesAsync(repoRoot: string): Promise<number> {
-		return this.scanRepositories([repoRoot]);
-	}
-
-	async scanRepositories(repoRoots: readonly string[]): Promise<number> {
-		const client = this.client;
-		if (!client) return 0;
-		this.scansInFlight++;
-		try {
-			let scanned = 0;
-			for (const root of new Set(repoRoots)) {
-				scanned += await client.telemetryScan(root);
-			}
-			return scanned;
-		} finally {
-			this.scansInFlight--;
-			await this.refresh();
-		}
-	}
-
-	watchWorkspaces(
-		repoRoot: string,
-		onNew: (changeId: string, spans: SpanData[]) => void,
-	): () => void {
-		const watcher: Watcher = { cb: onNew };
-		const set = this.watchers.get(repoRoot) ?? new Set<Watcher>();
-		set.add(watcher);
-		this.watchers.set(repoRoot, set);
-		this.ensureSubscription();
-		return () => {
-			set.delete(watcher);
-			if (set.size === 0) this.watchers.delete(repoRoot);
-		};
 	}
 
 	close(): void {
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
-		this.watchers.clear();
+		this.listeners.clear();
+		this.watched.clear();
+	}
+
+	private requireClient(): BackendClient {
+		if (!this.client) throw new Error("telemetry client is not configured yet");
+		return this.client;
+	}
+
+	private notify(): void {
+		for (const listener of this.listeners) listener();
+	}
+
+	/** Subscribe to server telemetry events once: the server announces ingested
+	 * workspace telemetry, so the shell refreshes its page from the API instead
+	 * of watching workspace files. */
+	private ensureSubscription(): void {
+		if (this.unsubscribe || !this.listeners.size || !this.client) return;
+		this.unsubscribe = this.client.subscribe({
+			onEvent: (event) => {
+				// Any telemetry event can change the page content, not just the
+				// workspace index, so notify unconditionally after re-reading it.
+				if ((event as { domain?: string }).domain === "telemetry")
+					void this.readWorkspaces().then(() => this.notify());
+			},
+			onResync: () => void this.readWorkspaces().then(() => this.notify()),
+		});
 	}
 }

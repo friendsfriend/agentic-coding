@@ -4,7 +4,11 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { assertNoPendingMigration, resolveConfigRoot } from "../config-root.ts";
+import {
+	assertNoPendingMigration,
+	configDiagnostic,
+	resolveConfigRoot,
+} from "../config-root.ts";
 import { Herdr } from "../herdr-client.ts";
 import type { WorkflowExecutionSettings } from "./contracts.ts";
 import { TELEMETRY_FLUSH_BUDGET_MS } from "./observability.ts";
@@ -141,12 +145,6 @@ export const LEGACY_PROJECT_OVERLAY_FILE = "herdr-workflow.toml";
 export const LEGACY_USER_CONFIG_FILE = "herdr-workflow.toml";
 /** Pre-migration canonical file name; inactive once `config.json` exists. */
 export const LEGACY_WORKFLOW_CONFIG_FILE = "config.toml";
-
-/** Read-only compatibility diagnostic. Value-free: it names files and never the
- * configuration values they hold. */
-function configDiagnostic(message: string): void {
-	process.stderr.write(`[config] ${message}\n`);
-}
 
 function configFormat(file: string): "json" | "toml" {
 	return file.endsWith(".json") ? "json" : "toml";
@@ -324,6 +322,24 @@ export type ConfigOptions =
 	| { repository?: string; repositoryIndependent?: boolean };
 
 export function loadConfigWithProvenance(
+	options: ConfigOptions = {},
+): ResolvedWorkflowConfig {
+	try {
+		return resolveConfigWithProvenance(options);
+	} catch (error) {
+		// A configuration load that throws is an error, not a compatibility
+		// notice: report it to the same sink and let it keep propagating, so the
+		// surface can show a blocking dialog and the caller's error contract is
+		// unchanged.
+		configDiagnostic(
+			error instanceof Error ? error.message : String(error),
+			"error",
+		);
+		throw error;
+	}
+}
+
+function resolveConfigWithProvenance(
 	options: ConfigOptions = {},
 ): ResolvedWorkflowConfig {
 	const normalized =

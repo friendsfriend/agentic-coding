@@ -21,7 +21,6 @@ import {
 import {
 	fetchProjectCatalog,
 	projectCanonicalRoots,
-	syncCatalogWatchers,
 } from "../../../workflow/project-catalog";
 import {
 	researchWorkflowTarget,
@@ -142,7 +141,11 @@ import type { MetricStore } from "../model/metricStore";
 import type { TelemetryDb } from "../model/telemetry-db";
 import type { TopologyStore } from "../model/topologyStore";
 import type { SortCriterion, TraceStore } from "../model/traceStore";
-import type { LogData as OTelLogData, TreeNode } from "../model/types";
+import {
+	type LogData as OTelLogData,
+	TRACE_PAGE_SIZE,
+	type TreeNode,
+} from "../model/types";
 import { uiColors } from "../ui/colors";
 import { LogDetailView } from "../views/LogDetailView";
 import { LogsView } from "../views/LogsView";
@@ -793,6 +796,12 @@ export function App(props: {
 	const [selectedSpan, setSelectedSpan] = createSignal<TreeNode>();
 	const [activeWorkspace, setActiveWorkspace] = createSignal<string>();
 	const [workspaces, setWorkspaces] = createSignal<Workspace[]>([]);
+	/** Trace-list paging: the list is read one page at a time, on demand. */
+	const [listPage, setListPage] = createSignal(1);
+	const [listTotalPages, setListTotalPages] = createSignal(1);
+	const [tracesLoading, setTracesLoading] = createSignal(false);
+	const [tracesLoaded, setTracesLoaded] = createSignal(false);
+	const [topologyLoaded, setTopologyLoaded] = createSignal(false);
 	const [_spanCount, setSpanCount] = createSignal(0);
 	const [filteredCount, setFilteredCount] = createSignal(0);
 	const [themeIndex, setThemeIndex] = createSignal(
@@ -837,7 +846,6 @@ export function App(props: {
 	const logStore = props.logStore;
 	const topologyStore = props.topologyStore;
 
-	setWorkspaces(db.getWorkspaces());
 	setSpanCount(traceStore.spanCount_);
 	setFilteredCount(traceStore.filteredCount_);
 
@@ -868,11 +876,28 @@ export function App(props: {
 	function selectTrace(index: number) {
 		const trace = summaries()[index];
 		if (!trace) return;
-		openTrace(trace.traceId);
+		void openTrace(trace.traceId);
 	}
 
-	/** Open a trace by identity: the route names it, the data follows. */
-	function openTrace(traceId: string): void {
+	/** Spans of one trace: the store already holds them in local/demo mode, and
+	 * a server-backed store fetches them on demand (the list only carries the
+	 * aggregation, never the spans). */
+	async function ensureTraceSpans(traceId: string): Promise<void> {
+		if (traceStore.getTraceSpans(traceId).length) return;
+		traceStore.setTraceSpans(await db.fetchTraceSpans(traceId));
+	}
+
+	/** Open a trace by identity: the route names it, its spans follow. */
+	async function openTrace(traceId: string): Promise<void> {
+		try {
+			await ensureTraceSpans(traceId);
+		} catch (error) {
+			notify(
+				`Trace unavailable: ${error instanceof Error ? error.message : String(error)}`,
+				"error",
+			);
+			return;
+		}
 		const roots = traceStore.getSpanTree(traceId);
 		const index = summaries().findIndex(
 			(summary) => summary.traceId === traceId,
@@ -883,6 +908,71 @@ export function App(props: {
 		setTreeIndex(0);
 		setSelectedSpan(roots[0]);
 		pages.navigate({ page: "observability.traces.tree", resourceId: traceId });
+	}
+
+	/** Repositories this shell reads telemetry from. */
+	const telemetryRoots = (): string[] =>
+		Array.from(new Set([...props.repos, ...catalogRoots()]));
+
+	/** Read one page of the trace list. `scan` ingests workspace files the
+	 * watchers have not seen yet and is used by the first read only. */
+	async function loadTracePage(
+		page: number,
+		options?: { scan?: boolean },
+	): Promise<void> {
+		setTracesLoading(true);
+		try {
+			if (options?.scan) {
+				await db.scanRepositories(telemetryRoots());
+				await db.refreshWorkspaces();
+				setWorkspaces(db.getWorkspaces());
+				// Retention runs with the first read instead of at boot, so a shell
+				// that never opens observability pays for neither.
+				db.cleanupOlderThan();
+			}
+			const result = await db.fetchTracePage({
+				page,
+				perPage: TRACE_PAGE_SIZE,
+				changeId: activeWorkspace(),
+			});
+			setListPage(result.page);
+			setListTotalPages(Math.max(1, Math.ceil(result.total / result.perPage)));
+			setSelectedListIndex(0);
+			traceStore.setSummaryPage(result);
+			setTracesLoaded(true);
+			refresh();
+		} catch (error) {
+			notify(
+				`Traces unavailable: ${error instanceof Error ? error.message : String(error)}`,
+				"error",
+			);
+		} finally {
+			setTracesLoading(false);
+		}
+	}
+
+	/** Page the trace list. Page 1 is the newest; paging walks back in history
+	 * and is bounded by the total the database reports. */
+	async function pageTraces(delta: number): Promise<void> {
+		const target = listPage() + delta;
+		if (target < 1 || target > listTotalPages()) return;
+		await loadTracePage(target);
+		notify(`Traces page ${target}/${listTotalPages()}`, "info");
+	}
+
+	/** The service graph is built from a bounded set of recent spans, read when
+	 * the topology view is opened. */
+	async function loadTopology(): Promise<void> {
+		setTopologyLoaded(true);
+		try {
+			topologyStore.load(await db.fetchRecentSpans());
+			refresh();
+		} catch (error) {
+			notify(
+				`Topology unavailable: ${error instanceof Error ? error.message : String(error)}`,
+				"error",
+			);
+		}
 	}
 
 	/** Index of the selected trace in the current ordering (ordering may change). */
@@ -903,7 +993,7 @@ export function App(props: {
 			case "observability.traces.tree":
 			case "observability.traces.tree.span": {
 				const traceId = route.resourceId ?? route.params?.traceId;
-				if (traceId && traceId !== selectedTraceId()) openTrace(traceId);
+				if (traceId && traceId !== selectedTraceId()) void openTrace(traceId);
 				break;
 			}
 			case "observability.metrics.detail": {
@@ -934,10 +1024,21 @@ export function App(props: {
 	const routeAvailable = (route: Route): boolean => {
 		switch (route.page) {
 			case "observability.traces.tree":
-			case "observability.traces.tree.span":
-				return summaries().some(
-					(summary) => summary.traceId === route.resourceId,
+			case "observability.traces.tree.span": {
+				// A trace is available while its spans are in the store or while it is
+				// still on the loaded page: a trace that retention or a page read
+				// dropped falls back to the list instead of showing a stale tree.
+				const traceId = route.resourceId;
+				// Both sources are read before combining so this availability check
+				// keeps tracking the store: a shortened expression would stop the route
+				// effect from re-running when the store drops the trace.
+				const onPage = summaries().some(
+					(summary) => summary.traceId === traceId,
 				);
+				const loaded =
+					traceId !== undefined && traceStore.getTraceSpans(traceId).length > 0;
+				return traceId === undefined || loaded || onPage;
+			}
 			case "observability.metrics.detail":
 				return metricStore
 					.getStreams()
@@ -960,6 +1061,20 @@ export function App(props: {
 
 	/** The log records of the current view (shared by the list and resolution). */
 	const logs = (): OTelLogData[] => logStore.getLogs();
+
+	// Lazy observability: the trace list is read when it is first shown, never at
+	// startup, and the first read ingests workspace files the watchers have not
+	// seen yet. The service graph is read the same way when its view opens.
+	createEffect(() => {
+		const page = currentPage();
+		if (!page.startsWith("observability")) return;
+		// A locally loaded list (demo/test shell) is authoritative for its store and
+		// is not replaced by a database page read.
+		if (!tracesLoaded() && !tracesLoading() && !traceStore.listIsLocal_)
+			void loadTracePage(1, { scan: true });
+		if (!topologyLoaded() && page.startsWith("observability.topology"))
+			void loadTopology();
+	});
 
 	createEffect(() => {
 		const route = pages.current();
@@ -1008,13 +1123,12 @@ export function App(props: {
 
 	function switchWorkspace(changeId?: string) {
 		setActiveWorkspace(changeId);
-		traceStore.loadFile(db.loadSpans(changeId));
 		setSelectedListIndex(0);
 		setSelectedTraceId(undefined);
 		setTreeRoots([]);
 		setSelectedSpan(undefined);
 		pages.navigate({ page: "observability.traces" });
-		refresh();
+		void loadTracePage(1);
 	}
 
 	async function finishWikiReview(
@@ -1026,36 +1140,37 @@ export function App(props: {
 
 	onMount(() => {
 		const prune = () => {
-			const removed = db.cleanupOlderThan();
-			if (!removed) return;
-			setWorkspaces(db.getWorkspaces());
-			traceStore.loadFile(db.loadSpans(activeWorkspace()));
-			setSelectedListIndex(0);
-			refresh();
-			notify(`Pruned ${removed} spans older than 30 days`, "info");
+			db.cleanupOlderThan();
 		};
 		const dailyPrune = setInterval(prune, 86_400_000);
-		const onNew = (changeId: string) => {
+		// New telemetry is announced by the owner; the mounted views re-read the
+		// page they show instead of holding the whole history in memory.
+		const reloadTelemetry = async () => {
 			setWorkspaces(db.getWorkspaces());
-			if (!activeWorkspace() || activeWorkspace() === changeId) {
-				traceStore.loadFile(db.loadSpans(activeWorkspace()));
-				refresh();
+			if (!tracesLoaded()) return;
+			const openTraceId = selectedTraceId();
+			if (openTraceId) {
+				try {
+					traceStore.setTraceSpans(await db.fetchTraceSpans(openTraceId));
+				} catch {
+					// A trace that vanished between reads keeps the last view.
+				}
 			}
+			await loadTracePage(listPage());
 		};
-		// Watch registrations are diffed by canonical root: a configured-project
-		// change adds or stops discovery watchers without touching histories or
-		// active workflows.
-		const watched = new Map<string, () => void>();
-		const applyCatalogRoots = (roots: string[]) =>
-			syncCatalogWatchers(watched, roots, (root) =>
-				db.watchWorkspaces(root, onNew),
+		const unsubscribeTelemetry = db.onChange(() => void reloadTelemetry());
+		// Watch registrations follow the canonical roots: a configured-project
+		// change adds discovery watchers without touching histories or active
+		// workflows (a removed project keeps its watcher until the server stops).
+		const applyCatalogRoots = (roots: string[]) => {
+			void db.watchRepositories(
+				Array.from(new Set([...props.repos, ...roots])),
 			);
+		};
 		// Explicit `--repo`/wiki/research roots are always watched; catalog
 		// canonical roots are added on top, so a catalog poll can never drop the
 		// watcher for a repository that is not a configured catalog project.
-		const applyRootsWithExplicit = (roots: string[]) =>
-			applyCatalogRoots([...props.repos, ...roots]);
-		applyRootsWithExplicit([]);
+		applyCatalogRoots([]);
 		// The backend emits `catalog.changed`; polling its revision keeps the
 		// watcher set correct even when the event stream is not subscribed.
 		const catalogUrl = props.environments?.serverUrl;
@@ -1070,8 +1185,8 @@ export function App(props: {
 				.then((catalog) => {
 					if (catalogDisposed) return;
 					const roots = projectCanonicalRoots(catalog);
-					applyRootsWithExplicit(roots);
 					setCatalogRoots(roots);
+					applyCatalogRoots(roots);
 				})
 				.catch(() => {});
 		};
@@ -1107,9 +1222,8 @@ export function App(props: {
 			catalogDisposed = true;
 			catalogController.abort();
 			clearInterval(dailyPrune);
+			unsubscribeTelemetry();
 			if (catalogPoll) clearInterval(catalogPoll);
-			for (const stop of watched.values()) stop();
-			watched.clear();
 			stopSidebarPresentation();
 			unsubscribeTraceStore();
 			for (const dispose of disposeFocusRestorers) dispose();
@@ -1614,6 +1728,8 @@ export function App(props: {
 				setSelectedListIndex((i) => Math.min(summaries().length - 1, i + 1));
 			else if (key === "k" || key === "up")
 				setSelectedListIndex((i) => Math.max(0, i - 1));
+			else if (key === "]" || key === "J") void pageTraces(1);
+			else if (key === "[" || key === "K") void pageTraces(-1);
 			else if (key === "enter" || key === "return")
 				selectTrace(selectedListIndex());
 		} else {
@@ -2060,6 +2176,9 @@ export function App(props: {
 									searchMode={searchMode}
 									searchQuery={searchQuery}
 									resultCount={filteredCount}
+									page={listPage}
+									totalPages={listTotalPages}
+									loading={tracesLoading}
 									onSelect={selectTrace}
 								/>
 							)}
