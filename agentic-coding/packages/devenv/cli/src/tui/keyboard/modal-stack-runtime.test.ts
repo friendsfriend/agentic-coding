@@ -24,7 +24,10 @@ const stores = (
 			showCommentModal: () => Boolean(open.comment),
 		}),
 		providerStore: signalStore(),
-		uiStore: signalStore(),
+		uiStore: signalStore({
+			showMarkdownModal: () => Boolean(open.markdown),
+			showConfirmDialog: () => Boolean(open.confirm),
+		}),
 		agentStore: signalStore(),
 		appDetailStore: signalStore(),
 	}) as unknown as KeyboardStores;
@@ -42,5 +45,35 @@ describe("modal stack runtime", () => {
 		]);
 		expect(getActiveModalName(stores(appStore, { diff: true }))).toBe("diff");
 		expect(appStore.modalStack().map((route) => route.name)).toEqual(["diff"]);
+	});
+
+	test("a dialog opened from a dialog is on top, whatever the kind order", () => {
+		const appStore = createAppStore();
+		// `markdown` ranks above `confirm` in the fixed flag list; a confirm opened
+		// *from* the markdown modal must still own the top of the stack, so the
+		// first Escape closes confirm and the next closes markdown.
+		const markdown = stores(appStore, { markdown: true });
+		expect(getActiveModalName(markdown)).toBe("markdown");
+		const child = stores(appStore, { markdown: true, confirm: true });
+		expect(getActiveModalName(child)).toBe("confirm");
+		expect(appStore.modalStack().map((route) => route.name)).toEqual([
+			"markdown",
+			"confirm",
+		]);
+		// Closing the child reveals the parent as the active dialog again.
+		expect(getActiveModalName(markdown)).toBe("markdown");
+		expect(appStore.modalStack().map((route) => route.name)).toEqual([
+			"markdown",
+		]);
+	});
+
+	test("the parent flag cannot take the key back from the child on top", () => {
+		const appStore = createAppStore();
+		// `handleGlobalKeys` dispatches the modal the runtime reports first, so the
+		// parent's higher rank in the fixed order cannot win while the child is on
+		// top: the reported name is the child's.
+		const open = stores(appStore, { markdown: true, confirm: true });
+		expect(getActiveModalName(open)).toBe("confirm");
+		expect(getActiveModalName(open)).not.toBe("markdown");
 	});
 });

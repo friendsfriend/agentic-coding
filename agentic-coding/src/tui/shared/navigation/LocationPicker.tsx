@@ -9,7 +9,10 @@ import { GenericModal } from "../GenericModal";
 import type { Route } from "../routes";
 import { Selectable } from "../Selectable";
 import { type DestinationEntry, filterPickerEntries } from "./destinations";
-import { locationPickerKeybindCatalog } from "./keybinds";
+import {
+	locationPickerFooterKeybinds,
+	locationPickerKeybindCatalog,
+} from "./keybinds";
 
 export interface LocationPickerProps {
 	entries: DestinationEntry[];
@@ -28,6 +31,7 @@ export function LocationPicker(props: LocationPickerProps) {
 	return (
 		<GenericModal
 			title="Locations"
+			help={locationPickerFooterKeybinds()}
 			helpSections={locationPickerKeybindCatalog()}
 			widthPercent={0.6}
 			heightPercent={0.6}
@@ -35,9 +39,6 @@ export function LocationPicker(props: LocationPickerProps) {
 			searchResultCount={matches().length}
 			onBackdropClick={props.onClose}
 			stopDialogClick
-			customFooter={
-				<text fg={uiColors.textMuted}>Enter opens · Esc closes</text>
-			}
 		>
 			<box style={{ flexDirection: "column", width: "100%", height: "100%" }}>
 				<Show

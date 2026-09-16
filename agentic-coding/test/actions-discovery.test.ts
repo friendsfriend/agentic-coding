@@ -166,12 +166,6 @@ function shape(target: ActionTarget | FixtureTarget): Record<string, unknown> {
 	return out;
 }
 
-function caseNamed(name: string): DiscoveryCase {
-	const found = fixture.cases.find((c) => c.name === name);
-	if (!found) throw new Error(`missing fixture case ${name}`);
-	return found;
-}
-
 describe("discovery", () => {
 	for (const scenario of fixture.cases) {
 		test(`${scenario.name} matches the targets Go discovered`, () => {
@@ -460,10 +454,5 @@ describe("fixture coverage", () => {
 		expect(runtimes).toEqual(
 			new Set(["docker", "shell", "powershell", "systemshell", "kubernetes"]),
 		);
-	});
-
-	test("caseNamed reports a missing case", () => {
-		expect(() => caseNamed("nope")).toThrow("missing fixture case nope");
-		expect(caseNamed("shop-run").action).toBe("run");
 	});
 });

@@ -4,7 +4,7 @@
 TBD - created by archiving change consolidate-tui-primitives. Update Purpose after archive.
 ## Requirements
 ### Requirement: Shared terminal primitive ownership
-Equivalent modal framing, panel framing, scrolling, theme-access, search/filter headers, list presentation, semantic highlighting, badge rendering, notification presentation, viewer rendering and selection behavior across environment, workflow, wiki and observability surfaces SHALL have one shared implementation per equivalent primitive. Feature-specific content and wrappers SHALL retain intentional behavior differences without a universal options schema. Shared implementations SHALL NOT import feature modules or backend clients.
+Equivalent modal framing, panel framing, scrolling, theme-access, search/filter headers, list presentation, semantic highlighting, badge rendering, notification presentation, viewer rendering and selection behavior across environment, workflow, wiki and observability surfaces SHALL have one shared implementation per equivalent primitive. Feature-specific content and wrappers SHALL retain intentional behavior differences without a universal options schema. Shared implementations SHALL NOT import feature modules or backend clients. A shared header or list primitive SHALL render an identity label only while the surrounding chrome does not already name that page, and no shared primitive SHALL carry keybind hint text; keybind discovery SHALL come from the command catalog projections.
 
 #### Scenario: Equivalent consumers use a primitive
 - **WHEN** environment, workflow, wiki or observability consumers need equivalent primitive behavior
@@ -19,6 +19,16 @@ Equivalent modal framing, panel framing, scrolling, theme-access, search/filter 
 #### Scenario: Temporary wrapper reaches its last caller
 - **WHEN** every caller of a compatibility wrapper has migrated
 - **THEN** the obsolete wrapper and superseded implementation SHALL be removed
+
+#### Scenario: Identity label with and without surrounding chrome
+- **WHEN** the same list or detail primitive renders under page chrome that names the page
+- **THEN** its identity label SHALL be omitted while its data columns stay
+- **AND** rendered without such chrome it SHALL keep its identity label
+
+#### Scenario: Keys are not advertised in a primitive
+- **WHEN** a consumer needs to tell the user which keys accept, cancel or navigate
+- **THEN** the keys SHALL be projected from the registered command catalog into the footer or the shared help/modal footer
+- **AND** the primitive SHALL NOT paint a bespoke key hint row
 
 ### Requirement: Primitive consolidation preserves terminal behavior
 Shared primitive migration SHALL preserve existing rendering and interaction contracts for each migrated consumer, including focus, keyboard ownership, stacking, scroll behavior, selection copy, live theme changes, cleanup and feature-specific review payload anchors. Representative consumers from every affected family SHALL be checked at the OpenTUI renderer boundary before their duplicate implementations are deleted.

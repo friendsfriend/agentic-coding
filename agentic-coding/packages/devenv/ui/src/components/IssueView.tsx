@@ -4,6 +4,7 @@ import type { Issue, IssueScope } from "@devenv/types";
 import { TextAttributes } from "@opentui/core";
 import { createMemo, Show } from "solid-js";
 import { uiColors } from "../colors";
+import { hostChromeLines, hostNamesPage } from "../pageChrome";
 import { formatShortDate, getIssueStateColor } from "../statusUtils";
 import { CenteredState } from "./CenteredState";
 import { ContentPanel } from "./ContentStack";
@@ -48,7 +49,7 @@ export function IssueView(props: IssueViewProps) {
 	//   Top/bottom spacers + summary header    = 3
 	const hasFilterStatus = () => !!props.filterSummary || !!props.sortSummary;
 	const reservedLines = () =>
-		LAYOUT_CHROME_LINES + 3 + (hasFilterStatus() ? 1 : 0);
+		hostChromeLines(LAYOUT_CHROME_LINES) + 3 + (hasFilterStatus() ? 1 : 0);
 
 	const stateColor = () => {
 		const s = props.state || "open";
@@ -106,7 +107,9 @@ export function IssueView(props: IssueViewProps) {
 					searchQuery={props.searchQuery}
 				>
 					<box style={{ width: "100%", flexDirection: "row" }}>
-						<text fg={uiColors.textPrimary}>Issues</text>
+						<Show when={!hostNamesPage()}>
+							<text fg={uiColors.textPrimary}>Issues</text>
+						</Show>
 						<box style={{ width: "auto", flexDirection: "row", gap: 1 }}>
 							<Show when={props.scope && props.scope !== "all"}>
 								<text

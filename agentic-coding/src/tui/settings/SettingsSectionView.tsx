@@ -11,14 +11,16 @@ import { SelectableList } from "../shared/Selectable";
 import type { SettingsItem } from "./items";
 
 export interface SettingsSectionViewProps {
-	title: string;
-	/** Section description, e.g. the scope this section writes to. */
-	description: string;
 	items: SettingsItem[];
 	selectedIndex: number;
 	onSelectIndex: (index: number) => void;
 }
 
+/**
+ * One Settings section's list. The section name lives in the shell chrome (the
+ * breadcrumb and the destination row that opened it), so the page renders no
+ * title, description or spacer row of its own.
+ */
 export function SettingsSectionView(props: SettingsSectionViewProps) {
 	return (
 		<box
@@ -31,15 +33,6 @@ export function SettingsSectionView(props: SettingsSectionViewProps) {
 				paddingRight: 1,
 			}}
 		>
-			<box style={{ flexDirection: "column", flexShrink: 0, height: 1 }}>
-				<text fg={uiColors.textPrimary} attributes={TextAttributes.BOLD}>
-					{props.title}
-				</text>
-			</box>
-			<box style={{ flexDirection: "column", flexShrink: 0, height: 1 }}>
-				<text fg={uiColors.textMuted}>{props.description}</text>
-			</box>
-			<box style={{ height: 1, flexShrink: 0 }} />
 			<Show
 				when={props.items.length > 0}
 				fallback={

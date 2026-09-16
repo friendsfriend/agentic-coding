@@ -2,6 +2,7 @@
 
 import type { ChangeRequest, Issue } from "@devenv/types";
 import { Show } from "solid-js";
+import { hostChromeLines, hostNamesPage } from "../pageChrome";
 import { formatShortDate, getIssueStateColor } from "../statusUtils";
 import { CenteredState } from "./CenteredState";
 import { ContentPanel } from "./ContentStack";
@@ -36,7 +37,7 @@ interface ReferencesViewProps {
  * ReferencesView Component — Full-screen sub-view of combined references (issues + CRs).
  */
 export function ReferencesView(props: ReferencesViewProps) {
-	const reservedLines = () => LAYOUT_CHROME_LINES + 3 + 1;
+	const reservedLines = () => hostChromeLines(LAYOUT_CHROME_LINES) + 3 + 1;
 
 	const typeLabel = (ref: RefItem) => (ref.type === "cr" ? "CR" : "Issue");
 	const typeHighlight = (ref: RefItem) =>
@@ -89,7 +90,9 @@ export function ReferencesView(props: ReferencesViewProps) {
 				<box style={{ width: "100%", flexDirection: "column" }}>
 					<SearchHeader>
 						<box style={{ width: "100%", flexDirection: "row" }}>
-							<HighlightedText text="References" highlight="primary" />
+							<Show when={!hostNamesPage()}>
+								<HighlightedText text="References" highlight="primary" />
+							</Show>
 							<box style={{ width: "auto", marginLeft: "auto" }}>
 								<HighlightedText text={countSummary()} highlight="secondary" />
 							</box>

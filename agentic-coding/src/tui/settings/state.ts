@@ -6,7 +6,10 @@
 // open. Reads never fall back to a local configuration file, so an unavailable
 // server stays a retryable section error.
 import { createSignal } from "solid-js";
-import type { KeybindSection } from "../shared/keybinds";
+import {
+	type KeybindSection,
+	PAGE_NAVIGATION_KEYBINDS,
+} from "../shared/keybinds";
 import type { ProjectSnapshot, ProviderSnapshot } from "./items";
 import { readProjectStatus, readProviderStatus } from "./server-config";
 
@@ -101,13 +104,7 @@ export function settingsKeybindCatalog(): KeybindSection[] {
 			keybinds: [
 				{ key: "j/k or ↑/↓", action: "select setting", standard: true },
 				{ key: "Enter", action: "activate setting", standard: true },
-				{ key: "Esc", action: "back", standard: true },
-				{
-					key: "Alt+Up",
-					action: "parent page",
-					short: "parent",
-					standard: true,
-				},
+				...PAGE_NAVIGATION_KEYBINDS,
 			],
 		},
 		{

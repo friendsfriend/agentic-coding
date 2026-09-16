@@ -42,6 +42,32 @@ export async function pressEscapeAndSettle(
 	return renderUntil(t, expected);
 }
 
+/** `Ctrl+O`: chronological Back. */
+export async function pressBack(
+	t: Test,
+	expected?: string | ((frame: string) => boolean),
+): Promise<boolean> {
+	t.mockInput.pressKey("o", { ctrl: true });
+	if (!expected) {
+		await t.renderOnce();
+		return true;
+	}
+	return renderUntil(t, expected);
+}
+
+/** `Alt+Left`: chronological Back on a terminal without the kitty protocol. */
+export async function pressAltLeft(
+	t: Test,
+	expected?: string | ((frame: string) => boolean),
+): Promise<boolean> {
+	t.mockInput.pressArrow("left", { meta: true });
+	if (!expected) {
+		await t.renderOnce();
+		return true;
+	}
+	return renderUntil(t, expected);
+}
+
 /** Type a query into the location picker and open the top match. */
 export async function jumpTo(t: Test, query: string): Promise<void> {
 	t.mockInput.pressKey("p", { ctrl: true });

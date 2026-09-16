@@ -12,7 +12,12 @@ import { LogStore } from "../../src/tui/otel/model/logStore";
 import { MetricStore } from "../../src/tui/otel/model/metricStore";
 import { TopologyStore } from "../../src/tui/otel/model/topologyStore";
 import { TraceStore } from "../../src/tui/otel/model/traceStore";
-import { pressEscapeAndSettle, renderUntil } from "./support/terminal";
+import {
+	crumb,
+	jumpTo,
+	pressEscapeAndSettle,
+	renderUntil,
+} from "./support/terminal";
 
 // The unified shell renders one renderer with page-based chrome
 // (replace-nested-tabs-with-page-navigation, tasks 2.1/2.4): Home lists the
@@ -294,6 +299,30 @@ test("an open modal owns input across page-navigation keys", async () => {
 		value.includes("Applications"),
 	);
 	expect(closed).not.toContain("Keybindings");
+	t.renderer.destroy();
+	db.close();
+});
+
+test("a modal opened from a modal closes one level per Escape", async () => {
+	const { t, db } = await renderUnifiedShell();
+	await t.waitForFrame((value) => value.includes("Applications"));
+	// The traces list owns the filter modal (Shift+F); the location picker opens
+	// on top of it, so the picker owns Escape and the filter stays open.
+	await jumpTo(t, "traces");
+	t.mockInput.pressKey("f", { shift: true });
+	expect(await renderUntil(t, "Filter")).toBe(true);
+	t.mockInput.pressKey("p", { ctrl: true });
+	expect(await renderUntil(t, "Locations")).toBe(true);
+
+	await pressEscape(t, (frame) => !frame.includes("Locations"));
+	expect(t.captureCharFrame()).not.toContain("Locations");
+	// The parent dialog is still there, and the page never moved.
+	expect(await renderUntil(t, "Filter")).toBe(true);
+	expect(crumb(t)).toContain("Traces");
+
+	await pressEscape(t, (frame) => !frame.includes("Filter"));
+	expect(t.captureCharFrame()).not.toContain("Filter");
+	expect(crumb(t)).toContain("Traces");
 	t.renderer.destroy();
 	db.close();
 });

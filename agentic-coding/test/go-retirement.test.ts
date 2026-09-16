@@ -63,8 +63,8 @@ describe("retired runtime and bridges", () => {
 		const shell = await Bun.file(
 			path.join(ROOT, "src", "tui", "index.tsx"),
 		).text();
-		// One owned server: no second spawn, no cross-runtime forwarding hook.
-		expect(shell).not.toContain("startOwnedBackend");
+		// One owned server: no cross-runtime forwarding hook. (`startOwnedBackend`
+		// itself is covered by the source-wide retirement walk above.)
 		expect(shell).not.toContain("AGENTIC_DEVENV_FORWARD_URL");
 		expect(shell).not.toContain("go-backend");
 		const lifecycle = await Bun.file(
@@ -79,9 +79,9 @@ describe("retired runtime and bridges", () => {
 		).text();
 		expect(receivers).not.toContain("Bun.spawn");
 		expect(receivers).not.toContain("grpc-sidecar");
-		// The retired internal mode is not reachable from the dispatcher either.
-		const cli = await Bun.file(path.join(ROOT, "src", "cli.ts")).text();
-		expect(cli).not.toContain("__grpc-sidecar");
+		// The retired internal mode is unreachable from any entry point: the
+		// source-wide retirement walk above rejects `__grpc-sidecar` anywhere under
+		// src/, and the sidecar module itself must not exist.
 		expect(
 			fs.existsSync(
 				path.join(

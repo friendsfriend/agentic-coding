@@ -11,6 +11,7 @@ import { useTerminalDimensions } from "@opentui/solid";
 import { createMemo, For, Show } from "solid-js";
 import { uiColors } from "../colors";
 import { getMarkdownSyntaxStyle } from "../markdownSyntax";
+import { hostChromeLines, hostNamesPage } from "../pageChrome";
 import { containsHtml, gitlabHtmlToMarkdown } from "../utils/gitlabHtml";
 import { calculateVisibleItems } from "../utils/virtualScroll";
 import { Badge } from "./Badge";
@@ -224,7 +225,7 @@ export function TimelineView(props: TimelineViewProps) {
 
 	// Virtual scrolling
 	const visibleItems = createMemo(() => {
-		const RESERVED_LINES = LAYOUT_CHROME_LINES + 2 + 2;
+		const RESERVED_LINES = hostChromeLines(LAYOUT_CHROME_LINES) + 2 + 2;
 		const visibleHeight = dimensions().height - RESERVED_LINES;
 		const items = sortedItems();
 		const itemHeights = sortedItemHeights();
@@ -484,14 +485,16 @@ export function TimelineView(props: TimelineViewProps) {
 				{/* Header */}
 				<SearchHeader>
 					<box style={{ width: "100%", flexDirection: "row" }}>
-						<HighlightedText
-							text={
-								props.title ||
-								(props.isIssueTimeline ? "Timeline" : "Discussions")
-							}
-							highlight="primary"
-							attributes={TextAttributes.BOLD}
-						/>
+						<Show when={!hostNamesPage()}>
+							<HighlightedText
+								text={
+									props.title ||
+									(props.isIssueTimeline ? "Timeline" : "Discussions")
+								}
+								highlight="primary"
+								attributes={TextAttributes.BOLD}
+							/>
+						</Show>
 						<Show when={props.showOnlyComments}>
 							<HighlightedText text=" [comments only]" highlight="highlight" />
 						</Show>

@@ -204,6 +204,13 @@ const SHELL_KEYS: string[] = [
 		// cycling. Explicit so a feature layer still owns whatever it registers.
 		"ctrl+p",
 		"alt+up",
+		// Chronological history: Ctrl+O/Ctrl+I are the vim jump-list pair and
+		// Alt+Left/Alt+Right the equivalents that work on every terminal (a
+		// terminal without the kitty keyboard protocol reports Ctrl+I as Tab).
+		"ctrl+o",
+		"ctrl+i",
+		"alt+left",
+		"alt+right",
 	],
 ];
 

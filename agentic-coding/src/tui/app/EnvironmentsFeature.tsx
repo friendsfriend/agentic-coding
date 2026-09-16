@@ -3,7 +3,18 @@
 // task 2.3). The imported devenv environment content is mounted in `embedded`
 // mode: it shares the shell's single renderer and keymap provider, and does not
 // own the terminal dimensions, header/footer, exit guard or shutdown sequence.
+
+import { publishHostChrome } from "@devenv/ui";
+import { createEffect, onCleanup } from "solid-js";
 import { TUIApp } from "../../../packages/devenv/cli/src/tui/app-opentui";
+
+/**
+ * Chrome the page shell renders around this body: the logo bar and the
+ * breadcrumb row in `otel/app/App.tsx`. The shell owns both, so the embedded
+ * feature reserves exactly these rows and suppresses the identity rows the
+ * breadcrumb already names.
+ */
+const SHELL_CHROME_LINES = 2;
 
 export interface EnvironmentsFeatureProps {
 	serverUrl: string;
@@ -41,10 +52,18 @@ export interface EnvironmentsFeatureProps {
 }
 
 export function EnvironmentsFeature(props: EnvironmentsFeatureProps) {
+	// Publish the surrounding chrome once: the ui-package views read it for their
+	// identity rows and their line budget, and clearing it on cleanup restores
+	// standalone behavior for any later mount.
+	createEffect(() => {
+		publishHostChrome({ lines: SHELL_CHROME_LINES, namesPage: true });
+		onCleanup(() => publishHostChrome(undefined));
+	});
 	return (
 		<TUIApp
 			serverUrl={props.serverUrl}
 			embedded
+			chromeLines={SHELL_CHROME_LINES}
 			onKeybindCatalog={props.onKeybindCatalog}
 			active={props.active}
 			onModalChange={props.onModalChange}

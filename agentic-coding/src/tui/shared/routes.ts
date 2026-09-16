@@ -364,6 +364,30 @@ export function resourceRoute(
 	};
 }
 
+/** Longest resource identity a breadcrumb segment renders before it clips. */
+export const RESOURCE_LABEL_LIMIT = 24;
+
+/** Clip a resource identity so one long id cannot push the row past the width. */
+export function boundedIdentity(identity: string): string {
+	return identity.length <= RESOURCE_LABEL_LIMIT
+		? identity
+		: `${identity.slice(0, RESOURCE_LABEL_LIMIT - 1)}…`;
+}
+
+/**
+ * Pages named by the resource they render, not by a page title: the breadcrumb
+ * segment carries the identity and the page renders no separate title row.
+ */
+const RESOURCE_NAMED_PAGES: ReadonlySet<PageId> = new Set([
+	"environments.resource",
+	"observability.traces.tree",
+	"observability.traces.tree.span",
+	"observability.metrics.detail",
+	"observability.logs.detail",
+	"wiki.note",
+	"workflows.detail",
+]);
+
 export function pageLabel(route: Route): string {
 	if (route.page === "environments.resource") {
 		const view = route.params?.view;
@@ -371,9 +395,10 @@ export function pageLabel(route: Route): string {
 			const last = view.slice(view.lastIndexOf(".") + 1);
 			return VIEW_LABELS[last] ?? last;
 		}
-		// The resource root is named by the identity it renders.
-		return route.resourceId ?? PAGES[route.page].label;
 	}
+	// A resource page is named by the identity it renders.
+	if (RESOURCE_NAMED_PAGES.has(route.page) && route.resourceId)
+		return boundedIdentity(route.resourceId);
 	return PAGES[route.page].label;
 }
 
@@ -467,12 +492,14 @@ export interface RouterState {
 	current: Route;
 	/** Prior locations, oldest first. Back pops the last entry. */
 	history: Route[];
+	/** Locations left by Back, oldest first. Forward pops the last entry. */
+	forward: Route[];
 	/** Route-keyed view state, preserved independently of page visibility. */
 	viewState: Record<string, unknown>;
 }
 
 export function createRouterState(current: Route): RouterState {
-	return { current, history: [], viewState: {} };
+	return { current, history: [], forward: [], viewState: {} };
 }
 
 export function currentRoute(state: RouterState): Route {
@@ -485,7 +512,8 @@ export function canGoBack(state: RouterState): boolean {
 
 /**
  * Navigate to a location. Records the previous location in history unless it is
- * the same location (re-entering where you already are is not a move).
+ * the same location (re-entering where you already are is not a move). A new
+ * move invalidates the forward branch, as in a vim jump list.
  */
 export function navigate(state: RouterState, route: Route): RouterState {
 	if (isSameLocation(state.current, route)) return { ...state, current: route };
@@ -493,6 +521,7 @@ export function navigate(state: RouterState, route: Route): RouterState {
 		...state,
 		current: route,
 		history: [...state.history, state.current],
+		forward: [],
 	};
 }
 
@@ -509,7 +538,8 @@ export function replace(state: RouterState, route: Route): RouterState {
 
 /**
  * Go Back in chronological order. Home has no parent and history never
- * fabricates an entry, so at the first location this is a no-op.
+ * fabricates an entry, so at the first location this is a no-op. The location
+ * left behind is remembered for Forward.
  */
 export function back(state: RouterState): RouterState {
 	const previous = state.history.at(-1);
@@ -518,6 +548,27 @@ export function back(state: RouterState): RouterState {
 		...state,
 		current: previous,
 		history: state.history.slice(0, -1),
+		forward: [...state.forward, state.current],
+	};
+}
+
+/** Whether Back has left a location that Forward can restore. */
+export function canGoForward(state: RouterState): boolean {
+	return state.forward.length > 0;
+}
+
+/**
+ * Go Forward in chronological order: restore the location the last Back left,
+ * recording the current one in history so Back returns to it again.
+ */
+export function forward(state: RouterState): RouterState {
+	const next = state.forward.at(-1);
+	if (!next) return state;
+	return {
+		...state,
+		current: next,
+		history: [...state.history, state.current],
+		forward: state.forward.slice(0, -1),
 	};
 }
 
@@ -582,10 +633,12 @@ export function createPageNavigation(initial: RouterState) {
 		current: () => state().current,
 		feature: () => featureOf(state().current),
 		canBack: () => canGoBack(state()),
+		canForward: () => canGoForward(state()),
 		remembered: (feature: FeatureId) => rememberedRoute(state(), feature),
 		navigate: (route: Route) => setState((s) => navigate(s, route)),
 		replace: (route: Route) => setState((s) => replace(s, route)),
 		back: () => setState((s) => back(s)),
+		forward: () => setState((s) => forward(s)),
 		goToParent: () => setState((s) => goToParent(s)),
 		resolve: (route: Route, isAvailable: (route: Route) => boolean) =>
 			setState((s) => navigate(s, resolveAvailable(route, isAvailable).route)),

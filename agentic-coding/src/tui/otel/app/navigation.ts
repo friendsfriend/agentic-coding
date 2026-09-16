@@ -15,6 +15,26 @@ export type Modal =
 	| "locations"
 	| "new-workflow";
 
+/**
+ * Overlay kinds the shell handler itself owns. `environment` is deliberately
+ * absent: the embedded feature renders that dialog and reports its own close.
+ */
+const SHELL_OWNED_OVERLAY_NAMES: readonly Modal[] = [
+	"locations",
+	"help",
+	"theme",
+	"filter",
+	"sort",
+	// Contextual workflow creation: the shell owns the form and its start
+	// boundary, so its keys are routed through the one shell dispatcher.
+	"new-workflow",
+];
+
+/** Whether the current overlay kind is one the shell handler owns. */
+export function isShellOwnedOverlay(kind: string): kind is Modal {
+	return (SHELL_OWNED_OVERLAY_NAMES as readonly string[]).includes(kind);
+}
+
 export function createNavigation() {
 	const modals = createModalHost<Modal>();
 	return {
@@ -29,13 +49,18 @@ export function createNavigation() {
 			modals.pop();
 			restoreFocus(closing?.restoreFocusTo);
 		},
-		/** Close the top overlay. Returns false when no overlay owns input, so
-		 * the caller can fall through to navigation. */
+		/**
+		 * Close the top shell-owned overlay. Returns false when no shell overlay owns
+		 * input, so the caller can fall through to navigation. A feature-owned entry
+		 * (the mirrored `environment` dialog) is never popped here: its own report
+		 * closes it, and popping the mirror would desync the two.
+		 */
 		esc: () => {
-			if (!modals.ownsInput()) return false;
-			const closing = modals.top();
+			const top = modals.top();
+			if (!modals.ownsInput() || !top) return false;
+			if (!isShellOwnedOverlay(top.kind)) return false;
 			modals.pop();
-			restoreFocus(closing?.restoreFocusTo);
+			restoreFocus(top.restoreFocusTo);
 			return true;
 		},
 	};

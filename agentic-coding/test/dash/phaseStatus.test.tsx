@@ -30,8 +30,10 @@ test("blocked current phase keeps the phase label and renders a separate indicat
 		),
 		{ width: 80, height: 3 },
 	);
-	await t.renderOnce();
-	const frame = t.captureCharFrame();
+	// A single renderOnce() can capture a frame before the renderer composites it
+	// under the test pool (observed: 1 intermittent failure in 179 files), so wait
+	// for the content the assertions below need — same contract, no weakened check.
+	const frame = await t.waitForFrame((value) => value.includes("BLOCKED"));
 	expect(frame).toContain("Implementation");
 	expect(frame).toContain("BLOCKED");
 	t.renderer.destroy();

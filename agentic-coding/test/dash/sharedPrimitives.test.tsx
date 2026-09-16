@@ -335,3 +335,58 @@ test("summary modals keep content and the summary table reachable on a narrow te
 	expect(frame).toContain("apply");
 	t.renderer.destroy();
 });
+
+/** Row of the dialog's first content line in a captured frame. */
+function titleRowOf(frame: string, title: string): number {
+	return frame.split("\n").findIndex((line) => line.includes(title));
+}
+
+test("dashboard modal stays terminal-centered beneath offset shell chrome", async () => {
+	// Regression for dashboard-modal-centering (dash modals draw an absolute
+	// overlay sized to the terminal, so the overlay must anchor at the renderer
+	// root — what <Portal> does — not at the tab-content box the dashboard
+	// renders in, offset by header + tab bar + status bar).
+	const dialog = () => (
+		<DashGenericModal
+			title="Centered dialog"
+			widthPercent={0.5}
+			heightPercent={0.5}
+			help={[]}
+		>
+			<text>dialog body</text>
+		</DashGenericModal>
+	);
+	// 80x24 with a 0.5 height dialog (12 rows): the dialog box starts at
+	// (24 - 12) / 2 = 6, so its first content row is 7.
+	const centeredRow = 7;
+	// What a content-relative placement would produce: the 3 chrome rows leave
+	// a 21-row content box starting at row 2.
+	const contentRelativeRow = 2 + (21 - 12) / 2 + 1;
+	expect(contentRelativeRow).not.toBe(centeredRow);
+
+	const withChrome = await testRender(
+		() => (
+			<box style={{ width: "100%", height: "100%", flexDirection: "column" }}>
+				<box style={{ height: 1, flexShrink: 0 }} />
+				<box style={{ height: 1, flexShrink: 0 }} />
+				<box style={{ flexGrow: 1, flexShrink: 1 }}>{dialog()}</box>
+				<box style={{ height: 1, flexShrink: 0 }} />
+			</box>
+		),
+		{ width: 80, height: 24 },
+	);
+	await withChrome.flush();
+	expect(titleRowOf(withChrome.captureCharFrame(), "Centered dialog")).toBe(
+		centeredRow,
+	);
+	withChrome.renderer.destroy();
+
+	// Without shell chrome the same dialog lands on the same row: placement
+	// follows the terminal, not the surrounding layout.
+	const withoutChrome = await testRender(dialog, { width: 80, height: 24 });
+	await withoutChrome.flush();
+	expect(titleRowOf(withoutChrome.captureCharFrame(), "Centered dialog")).toBe(
+		centeredRow,
+	);
+	withoutChrome.renderer.destroy();
+});

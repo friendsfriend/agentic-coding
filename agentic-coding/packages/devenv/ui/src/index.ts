@@ -240,9 +240,17 @@ export type { WorkItemCardProps } from "./components/WorkItemCard";
 export { WorkItemCard } from "./components/WorkItemCard";
 export type { WorktreeManagerModalProps } from "./components/WorktreeManagerModal";
 export { WorktreeManagerModal } from "./components/WorktreeManagerModal";
-
 // Export markdown syntax style helper
 export { getMarkdownSyntaxStyle } from "./markdownSyntax";
+// Page-chrome gate: an identity row renders only while the host chrome does not
+// already name the page, and the host's chrome height replaces the standalone
+// reservation.
+export type { HostChrome } from "./pageChrome";
+export {
+	hostChromeLines,
+	hostNamesPage,
+	publishHostChrome,
+} from "./pageChrome";
 export type { SelectionMouseUpHandler } from "./selectionCopy";
 export { setGlobalSelectionMouseUpHandler } from "./selectionCopy";
 export type { StatusStyle } from "./statusUtils";

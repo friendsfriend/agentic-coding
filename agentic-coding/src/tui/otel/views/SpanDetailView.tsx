@@ -1,5 +1,3 @@
-/** @jsxImportSource @opentui/solid */
-import { TextAttributes } from "@opentui/core";
 import { HighlightedText } from "../components/Highlight";
 import { ScrollableContent } from "../components/ScrollableContent";
 import { SearchHeader } from "../components/SearchHeader";
@@ -23,12 +21,6 @@ export function SpanDetailView(props: { node: () => TreeNode | undefined }) {
 	const node = () => props.node();
 	return (
 		<box style={{ width: "100%", height: "100%", flexDirection: "column" }}>
-			<SearchHeader>
-				<HighlightedText
-					text={node()?.span.name ?? "Span"}
-					attributes={TextAttributes.BOLD}
-				/>
-			</SearchHeader>
 			<box height={1} flexShrink={0} paddingLeft={1}>
 				<text fg={uiColors.textMuted}>
 					{(() => {

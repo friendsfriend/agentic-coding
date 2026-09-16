@@ -1,6 +1,6 @@
 import type { KeyEvent, Renderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
-import { handleTableKeys } from "./table-keys";
+import { handleTableKeys, tableYieldsEscape } from "./table-keys";
 import type { KeyboardActions, KeyboardContext, KeyboardStores } from "./types";
 
 export interface TableKeymapLayerDeps {
@@ -121,6 +121,17 @@ export function registerTableKeymapLayer(
 		);
 	};
 
+	// Escape must be able to *yield* to the shell at the feature's navigation
+	// root, and an async command cannot report "not handled" back to the keymap
+	// in time. The root case is therefore decided synchronously; everything the
+	// feature does own (overlays, search, a deeper view mode) stays in the one
+	// table handler.
+	const runTableEscape = (event: KeyEvent): boolean => {
+		if (tableYieldsEscape(deps.stores)) return false;
+		void runTable(event);
+		return true;
+	};
+
 	const disposers = [
 		keymap.registerLayer({
 			name: "Table/List",
@@ -138,6 +149,15 @@ export function registerTableKeymapLayer(
 					desc: "Handle table and list navigation, selection, search, filter, sort, and row actions.",
 					discoverable: false,
 					run: ({ event }) => runTable(event),
+				},
+				{
+					name: "table.escape",
+					context: "table",
+					category: "Table",
+					title: "Escape/back",
+					desc: "Clear search, close an overlay or leave one view level; at the root it yields to the shell.",
+					discoverable: false,
+					run: ({ event }) => runTableEscape(event),
 				},
 				{
 					name: "table.tab.previous",
@@ -201,11 +221,19 @@ export function registerTableKeymapLayer(
 							key !== "F" &&
 							key !== "O" &&
 							key !== "L" &&
-							key !== "shift+tab",
+							key !== "shift+tab" &&
+							key !== "escape",
 					),
 					"table.handle",
 					"Table",
 				),
+				{
+					key: "escape",
+					cmd: "table.escape",
+					context: "table",
+					category: "Table",
+					discoverable: false,
+				},
 				{
 					key: "shift+tab",
 					cmd: "table.tab.previous",

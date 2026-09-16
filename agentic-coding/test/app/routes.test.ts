@@ -3,10 +3,12 @@ import {
 	back,
 	breadcrumb,
 	canGoBack,
+	canGoForward,
 	createPageNavigation,
 	createRouterState,
 	currentRoute,
 	dropViewState,
+	forward,
 	isSameLocation,
 	navigate,
 	PAGES,
@@ -231,6 +233,46 @@ describe("page routes: identity and reactive wrapper", () => {
 		expect(isSameLocation({ page: "wiki" }, { page: "observability" })).toBe(
 			false,
 		);
+	});
+
+	test("forward restores what Back left, and a new move clears it", () => {
+		const traces = { page: "observability.traces" as const };
+		const wiki = { page: "wiki" as const };
+		const applications = { page: "environments.applications" as const };
+		let state = createRouterState(traces);
+		state = navigate(state, wiki);
+		state = back(state);
+		expect(canGoForward(state)).toBe(true);
+		state = forward(state);
+		expect(currentRoute(state)).toEqual(wiki);
+		expect(canGoForward(state)).toBe(false);
+		// Back again returns to traces, and a fresh move discards the branch.
+		state = back(state);
+		expect(canGoForward(state)).toBe(true);
+		state = navigate(state, applications);
+		expect(canGoForward(state)).toBe(false);
+		expect(forward(state)).toBe(state);
+	});
+
+	test("back and forward cross feature boundaries in both directions", () => {
+		const applications = { page: "environments.applications" as const };
+		const trace = {
+			page: "observability.traces.tree" as const,
+			resourceId: "trace-4",
+		};
+		const note = { page: "wiki.note" as const, resourceId: "adr-7" };
+		let state = createRouterState({ page: "home" });
+		state = navigate(state, applications);
+		state = navigate(state, trace);
+		state = navigate(state, note);
+		state = back(state);
+		state = back(state);
+		expect(currentRoute(state)).toEqual(applications);
+		state = forward(state);
+		expect(currentRoute(state)).toEqual(trace);
+		state = forward(state);
+		expect(currentRoute(state)).toEqual(note);
+		expect(canGoForward(state)).toBe(false);
 	});
 
 	test("the reactive wrapper exposes navigate, back and parent", () => {

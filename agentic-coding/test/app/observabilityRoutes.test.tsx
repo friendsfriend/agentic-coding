@@ -11,7 +11,12 @@ import { LogStore } from "../../src/tui/otel/model/logStore";
 import { MetricStore } from "../../src/tui/otel/model/metricStore";
 import { TopologyStore } from "../../src/tui/otel/model/topologyStore";
 import { TraceStore } from "../../src/tui/otel/model/traceStore";
-import { jumpTo, pressEscapeAndSettle, renderUntil } from "./support/terminal";
+import {
+	jumpTo,
+	pressBack,
+	pressEscapeAndSettle,
+	renderUntil,
+} from "./support/terminal";
 
 // Observability list/detail/span navigation on the shared route authority
 // (replace-nested-tabs-with-page-navigation, task 2.3): the shell reports the
@@ -83,10 +88,11 @@ test("Back unwinds a cross-domain hop to the earlier trace tree", async () => {
 	await jumpTo(t, "metrics");
 	t.mockInput.pressEnter();
 	expect(await renderUntil(t, "Data points")).toBe(true);
-	// Back unwinds the metric page, then the metrics list, then the trace tree.
-	await pressEscapeAndSettle(t, (frame) => !frame.includes("Data points"));
+	// Chronological Back unwinds the metric page, then the metrics list, then the
+	// trace tree (Escape is the structural up-step instead).
+	await pressBack(t, (frame) => !frame.includes("Data points"));
 	expect(t.captureCharFrame()).not.toContain("Data points");
-	await pressEscapeAndSettle(t, (frame) => frame.includes("Span tree"));
+	await pressBack(t, (frame) => frame.includes("Span tree"));
 	expect(t.captureCharFrame()).toContain("Span tree");
 	t.renderer.destroy();
 	db.close();

@@ -21,6 +21,27 @@ import type {
  * - Table search mode (type query, clear)
  * - Main table navigation (switch with j/k/tab, app operations, view launchers)
  */
+
+/**
+ * Whether Escape at the table/list level belongs to the host shell.
+ *
+ * `handleTableKeys` is async, so it can never report "not handled" back to the
+ * keymap dispatch chain in time; the keymap therefore decides the yield
+ * synchronously here before routing Escape into the handler. True only when
+ * nothing the feature owns is open (no overlay, no search) and the feature's
+ * own view stack is at its root: the shell then performs the page hierarchy
+ * step for the category page this body belongs to.
+ */
+export function tableYieldsEscape(stores: KeyboardStores): boolean {
+	const { appStore, uiStore } = stores;
+	if (uiStore.showBranchSelector()) return false;
+	if (appStore.showTableFilterModal()) return false;
+	if (appStore.showTableSortModal()) return false;
+	if (appStore.tableSearchMode()) return false;
+	if (appStore.tableSearchQuery()) return false;
+	return !appStore.canGoBack();
+}
+
 export async function handleTableKeys(
 	event: KeyboardEvent,
 	stores: KeyboardStores,
@@ -517,9 +538,14 @@ export async function handleTableKeys(
 				// Clear active search on first Esc
 				appStore.setTableSearchQuery("");
 				appStore.setSelectedIndex(0);
-			} else {
-				appStore.resetViewStack("table");
+				break;
 			}
+			// At the table root the feature yields Escape instead of swallowing it:
+			// deeper view modes are handled above, the Global layer's `escape`
+			// binding falls through, and the shell performs the page hierarchy
+			// step for the category page this body belongs to.
+			if (!appStore.canGoBack()) return false;
+			appStore.resetViewStack("table");
 			break;
 		case "tab":
 		case "\t":

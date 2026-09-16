@@ -13,9 +13,6 @@ import { SelectableList } from "../Selectable";
 import type { DestinationEntry } from "./destinations";
 
 export interface DestinationPageProps {
-	title: string;
-	/** Optional one-line description under the title. */
-	description?: string;
 	entries: DestinationEntry[];
 	selectedIndex: number;
 	onSelectIndex: (index: number) => void;
@@ -24,6 +21,11 @@ export interface DestinationPageProps {
 	emptyMessage?: string;
 }
 
+/**
+ * A destination list page. The page renders no title or description row: the
+ * shell chrome names the location, and keybind hints belong to the footer and
+ * the `?` help modal, never to a page body.
+ */
 export function DestinationPage(props: DestinationPageProps) {
 	const dimensions = useTerminalDimensions();
 	const itemHeight = () => (dimensions().width < 80 ? 2 : 2);
@@ -38,17 +40,6 @@ export function DestinationPage(props: DestinationPageProps) {
 				paddingRight: 1,
 			}}
 		>
-			<box style={{ flexDirection: "column", flexShrink: 0, height: 1 }}>
-				<text fg={uiColors.textPrimary} attributes={TextAttributes.BOLD}>
-					{props.title}
-				</text>
-			</box>
-			<Show when={props.description}>
-				<box style={{ flexDirection: "column", flexShrink: 0, height: 1 }}>
-					<text fg={uiColors.textMuted}>{props.description}</text>
-				</box>
-			</Show>
-			<box style={{ height: 1, flexShrink: 0 }} />
 			<Show
 				when={props.entries.length > 0}
 				fallback={
@@ -88,26 +79,6 @@ export function DestinationPage(props: DestinationPageProps) {
 			</Show>
 		</box>
 	);
-}
-
-/** Home: the four destinations (Environments, Observability, Wiki, bridge). */
-export function HomePage(
-	props: Omit<DestinationPageProps, "title" | "description">,
-) {
-	return (
-		<DestinationPage
-			{...props}
-			title="Home"
-			description="Choose a destination. Ctrl+P jumps anywhere."
-		/>
-	);
-}
-
-/** Category page: the child destinations of a feature. */
-export function CategoryPage(
-	props: Omit<DestinationPageProps, "description"> & { description?: string },
-) {
-	return <DestinationPage {...props} />;
 }
 
 export type { DestinationEntry, Route };

@@ -10,22 +10,15 @@ import { uiColors } from "../ui/colors";
 export function LogDetailView(props: {
 	store: LogStore;
 	index: number;
-	onBack: () => void;
 	onTraceLink?: (traceId: string) => void;
 }) {
 	const log = createMemo(() => props.store.getLogs()[props.index]);
 
 	return (
 		<box style={{ width: "100%", height: "100%", flexDirection: "column" }}>
-			<SearchHeader>
-				<HighlightedText
-					text={`${log()?.severity ?? "UNKNOWN"}: ${log()?.body.slice(0, 60) ?? ""}`}
-					attributes={TextAttributes.BOLD}
-				/>
-			</SearchHeader>
 			<box height={1} flexShrink={0} paddingLeft={1}>
 				<text fg={uiColors.textMuted}>
-					{log()?.serviceName} ·{" "}
+					{log()?.severity ?? "UNKNOWN"} · {log()?.serviceName} ·{" "}
 					{log()?.timeUnixNano
 						? new Date(
 								Number(BigInt(log()?.timeUnixNano) / 1_000_000n),

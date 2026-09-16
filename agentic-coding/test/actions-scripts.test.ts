@@ -123,17 +123,6 @@ const raw = fs.readFileSync(
 const fixture: ScriptFixture = JSON.parse(raw.replaceAll("{{ROOT}}", root));
 const scriptsDirectory = scriptsDir(path.join(root, "home"));
 
-/** The fixture records absent optional fields as `undefined`. */
-function shape(value: Record<string, unknown>): Record<string, unknown> {
-	const out: Record<string, unknown> = {};
-	for (const key of Object.keys(value).sort()) {
-		const entry = value[key];
-		if (entry === undefined || entry === null) continue;
-		out[key] = entry;
-	}
-	return out;
-}
-
 describe("discovery", () => {
 	test("finds exactly the Go-discovered scripts, sorted by relative path", () => {
 		const discovered = discoverScripts(scriptsDirectory, { platform: "linux" });
@@ -414,12 +403,5 @@ describe("fixture coverage", () => {
 		expect(
 			fixture.mutations.filter((c) => c.error !== undefined).length,
 		).toBeGreaterThan(3);
-	});
-
-	test("the shape helper drops absent fields only", () => {
-		expect(shape({ a: 1, b: undefined, c: null, d: "" })).toEqual({
-			a: 1,
-			d: "",
-		});
 	});
 });

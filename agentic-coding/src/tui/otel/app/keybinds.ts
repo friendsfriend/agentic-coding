@@ -1,4 +1,7 @@
-import type { KeybindSection } from "../../shared/keybinds";
+import {
+	type KeybindSection,
+	PAGE_NAVIGATION_KEYBINDS,
+} from "../../shared/keybinds";
 
 /** Traces-local view: list, span tree or span detail. */
 export type View = "selection" | "detail" | "span";
@@ -24,7 +27,7 @@ export function environmentsKeybindCatalog(): KeybindSection[] {
 			title: "Navigation",
 			keybinds: [
 				{ key: "Ctrl+P", action: "locations", short: "locations" },
-				{ key: "Alt+Up", action: "parent page", short: "parent" },
+				...PAGE_NAVIGATION_KEYBINDS,
 			],
 		},
 		{
@@ -48,9 +51,9 @@ export function observabilityKeybindCatalog(options: {
 }): KeybindSection[] {
 	const theme = { key: "T", action: "theme picker", short: "theme" };
 	const help = { key: "?", action: "help" };
-	// One location picker and one structural parent; destinations are pages now,
-	// so no tab-order or number key belongs in the footer or the help.
-	const parent = { key: "Alt+Up", action: "parent page", short: "parent" };
+	// One location picker, one structural parent (Escape/Alt+Up) and the
+	// chronological Back/Forward pair; destinations are pages now, so no
+	// tab-order or number key belongs in the footer or the help.
 	const locations = { key: "Ctrl+P", action: "locations", short: "locations" };
 	const quit = { key: "q", action: "quit", standard: true };
 	if (options.tab === "traces") {
@@ -73,9 +76,9 @@ export function observabilityKeybindCatalog(options: {
 							{ key: "h/l", action: "collapse or expand", standard: true },
 							{ key: "g/G", action: "first or last span", standard: true },
 							{ key: "Enter", action: "span details", standard: true },
-							{ key: "Esc/b", action: "back to traces", standard: true },
+							...PAGE_NAVIGATION_KEYBINDS,
 						]
-					: [{ key: "Esc/b", action: "back to span tree", standard: true }];
+					: [...PAGE_NAVIGATION_KEYBINDS];
 		// `/`, `F`, `O` and `w` are handled before the view branch, so
 		// they stay live in the detail and span views too.
 		return [
@@ -88,7 +91,6 @@ export function observabilityKeybindCatalog(options: {
 					{ key: "O", action: "sort" },
 					{ key: "w", action: "all workspaces", short: "workspaces" },
 					theme,
-					parent,
 					locations,
 					help,
 					quit,
@@ -141,7 +143,6 @@ export function observabilityKeybindCatalog(options: {
 						},
 						{ key: "f", action: "finish review", short: "finish" },
 						{ key: "r", action: "refresh" },
-						parent,
 						locations,
 						help,
 						quit,
@@ -155,12 +156,12 @@ export function observabilityKeybindCatalog(options: {
 					keybinds: [
 						{ key: "j/k or ↑/↓", action: "select metric", standard: true },
 						{ key: "Enter", action: "detail", standard: true },
-						{ key: "Esc", action: "back", standard: true },
+						...PAGE_NAVIGATION_KEYBINDS,
 					],
 				},
 				{
 					title: "Actions",
-					keybinds: [theme, parent, locations, help, quit],
+					keybinds: [theme, locations, help, quit],
 				},
 			];
 		case "logs":
@@ -170,7 +171,7 @@ export function observabilityKeybindCatalog(options: {
 					keybinds: [
 						{ key: "j/k or ↑/↓", action: "select log", standard: true },
 						{ key: "Enter", action: "detail", standard: true },
-						{ key: "Esc", action: "back", standard: true },
+						...PAGE_NAVIGATION_KEYBINDS,
 					],
 				},
 				{
@@ -178,7 +179,6 @@ export function observabilityKeybindCatalog(options: {
 					keybinds: [
 						{ key: "/", action: "search" },
 						theme,
-						parent,
 						locations,
 						help,
 						quit,
@@ -192,12 +192,12 @@ export function observabilityKeybindCatalog(options: {
 					keybinds: [
 						{ key: "j/k or ↑/↓", action: "select service", standard: true },
 						{ key: "Enter", action: "detail", standard: true },
-						{ key: "Esc", action: "back", standard: true },
+						...PAGE_NAVIGATION_KEYBINDS,
 					],
 				},
 				{
 					title: "Actions",
-					keybinds: [theme, parent, locations, help, quit],
+					keybinds: [theme, locations, help, quit],
 				},
 			];
 		default:

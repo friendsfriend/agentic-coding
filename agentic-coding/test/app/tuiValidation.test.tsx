@@ -143,15 +143,18 @@ test("the footer advertises special keys and the help lists the whole catalog", 
 		lines.find((line) => line.includes("Ctrl+P")) ?? lines.at(-2) ?? "";
 	// Special keys only: navigation keys stay out of the footer.
 	expect(footer).toContain("Ctrl+P");
-	expect(footer).toContain("Alt+Up");
 	expect(footer).toContain("?");
 	const footerActions = footerKeybinds(
 		activeKeybindCatalog(),
 		activeKeybindContext(),
 	).map((keybind) => keybind.action);
 	expect(footerActions).toContain("locations");
-	expect(footerActions).toContain("parent page");
 	expect(footerActions).not.toContain("select destination");
+	// Parent, Back and Forward are navigation, so the footer leaves them to the
+	// `?` help modal.
+	expect(footerActions).not.toContain("parent page");
+	expect(footerActions).not.toContain("back");
+	expect(footerActions).not.toContain("forward");
 
 	t.mockInput.pressKey("?");
 	const help = await t.waitForFrame((value) => value.includes("Keybindings"));
@@ -160,6 +163,8 @@ test("the footer advertises special keys and the help lists the whole catalog", 
 	expect(help).toContain("open destination");
 	expect(help).toContain("locations");
 	expect(help).toContain("parent page");
+	expect(help).toContain("back");
+	expect(help).toContain("forward");
 	const catalog = catalogKeybinds(activeKeybindCatalog()).map(
 		(keybind) => keybind.action,
 	);

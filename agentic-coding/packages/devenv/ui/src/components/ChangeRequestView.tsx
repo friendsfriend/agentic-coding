@@ -3,6 +3,7 @@
 import type { ChangeRequest } from "@devenv/types";
 import { TextAttributes } from "@opentui/core";
 import { createMemo, Show } from "solid-js";
+import { hostChromeLines, hostNamesPage } from "../pageChrome";
 import { formatShortDate, getIssueStateColor } from "../statusUtils";
 import { CenteredState } from "./CenteredState";
 import { ContentPanel } from "./ContentStack";
@@ -46,7 +47,7 @@ export function ChangeRequestView(props: ChangeRequestViewProps) {
 	//   Top/bottom spacers + summary header    = 3
 	const hasFilterStatus = () => !!props.filterSummary || !!props.sortSummary;
 	const reservedLines = () =>
-		LAYOUT_CHROME_LINES + 3 + (hasFilterStatus() ? 1 : 0);
+		hostChromeLines(LAYOUT_CHROME_LINES) + 3 + (hasFilterStatus() ? 1 : 0);
 
 	const getMergeStatusText = (cr: ChangeRequest) => {
 		if (cr.has_conflicts) return { text: "✗", fg: highlightColor("negative") };
@@ -123,7 +124,9 @@ export function ChangeRequestView(props: ChangeRequestViewProps) {
 					searchQuery={props.searchQuery}
 				>
 					<box style={{ width: "100%", flexDirection: "row" }}>
-						<HighlightedText text="Change requests" highlight="primary" />
+						<Show when={!hostNamesPage()}>
+							<HighlightedText text="Change requests" highlight="primary" />
+						</Show>
 						<box style={{ width: "auto", flexDirection: "row", gap: 1 }}>
 							<HighlightedText
 								text={`[${props.state ?? "opened"}]`}

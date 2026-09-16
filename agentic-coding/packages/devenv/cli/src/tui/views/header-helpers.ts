@@ -117,7 +117,6 @@ export function getHeaderInfo(deps: HeaderSubtitleDeps): HeaderInfo {
 		return {
 			title: "Error",
 			context: headerText(appStore.error(), 90),
-			right: "? help",
 			severity: "error",
 		};
 	}
@@ -131,13 +130,14 @@ export function getHeaderInfo(deps: HeaderSubtitleDeps): HeaderInfo {
 	}
 	if (view === "help") {
 		const helpData = helpActions.getHelpContent(appStore.helpAllContexts());
+		const helpQuery = appStore.helpSearchQuery();
 		return {
 			title: "Help",
 			context: appStore.helpActiveTab(),
 			detail: helpData.title,
-			right: appStore.helpSearchQuery()
-				? `Search: ${appStore.helpSearchQuery()}`
-				: "? close",
+			// The keybind that closes help lives in the footer catalog (and in the
+			// `?` help modal); the header carries data only.
+			...(helpQuery ? { right: `Search: ${helpQuery}` } : {}),
 		};
 	}
 	if (view === "providers") {

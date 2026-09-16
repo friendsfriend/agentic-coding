@@ -1,5 +1,3 @@
-/** @jsxImportSource @opentui/solid */
-import { TextAttributes } from "@opentui/core";
 import { createMemo, For } from "solid-js";
 import { AutoscalingSparkline } from "../components/AutoscalingSparkline";
 import { HighlightedText } from "../components/Highlight";
@@ -14,7 +12,6 @@ export function MetricDetailView(props: {
 	store: MetricStore;
 	name: string;
 	serviceName: string;
-	onBack: () => void;
 }) {
 	const stream = createMemo(() =>
 		props.store.getStream(props.name, props.serviceName),
@@ -26,9 +23,6 @@ export function MetricDetailView(props: {
 
 	return (
 		<box style={{ width: "100%", height: "100%", flexDirection: "column" }}>
-			<SearchHeader>
-				<HighlightedText text={props.name} attributes={TextAttributes.BOLD} />
-			</SearchHeader>
 			<box height={1} flexShrink={0} paddingLeft={1}>
 				<text fg={uiColors.textMuted}>
 					{props.serviceName} · {stream()?.type} · {stream()?.unit || "no unit"}

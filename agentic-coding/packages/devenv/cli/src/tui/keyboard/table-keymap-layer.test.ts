@@ -222,6 +222,90 @@ describe("table keymap layer", () => {
 		}
 	});
 
+	test("escape at the table root is yielded instead of swallowed", () => {
+		const { keymap, host, cleanup } = createTestKeymap({ defaultKeys: true });
+		let popped = 0;
+		const stores = makeStores({
+			canGoBack: () => false,
+			resetViewStack: () => {
+				popped += 1;
+			},
+		});
+		let shellHandled = 0;
+		// The fixture starts with a query typed; the root case has none.
+		stores.appStore.setTableSearchQuery("");
+		try {
+			setupDevenvKeymap(keymap as never);
+			setRuntime(keymap);
+			registerTableKeymapLayer(keymap as never, {
+				stores,
+				actions: actions(),
+				ctx: ctx(),
+			});
+			// Stand-in for the shell's lowest-priority layer: the key reaches it
+			// only when the table layer does not consume the Escape.
+			keymap.registerLayer({
+				name: "Shell stand-in",
+				priority: 1,
+				commands: [
+					{
+						name: "test.shell.escape",
+						context: "global",
+						run: () => {
+							shellHandled += 1;
+							return true;
+						},
+					},
+				],
+				bindings: [{ key: "escape", cmd: "test.shell.escape" }],
+			});
+			host.press("escape");
+			expect(popped).toBe(0);
+			expect(shellHandled).toBe(1);
+
+			// An active search still clears first and keeps the key.
+			stores.appStore.setTableSearchQuery("checkout");
+			host.press("escape");
+			expect(stores.appStore.tableSearchQuery()).toBe("");
+			expect(shellHandled).toBe(1);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test("escape in a deeper view mode still pops one level", async () => {
+		let popped = 0;
+		const stores = makeStores({
+			canGoBack: () => true,
+			resetViewStack: () => {
+				popped += 1;
+			},
+		});
+		stores.appStore.setTableSearchQuery("");
+		expect(
+			await handleTableKeys(
+				{ name: "escape" } as never,
+				stores,
+				actions(),
+				ctx(),
+			),
+		).toBe(true);
+		expect(popped).toBe(1);
+
+		// At the root the same key is not consumed, so the shell can step up a
+		// page from the category body.
+		const root = makeStores({ canGoBack: () => false });
+		root.appStore.setTableSearchQuery("");
+		expect(
+			await handleTableKeys(
+				{ name: "escape" } as never,
+				root,
+				actions(),
+				ctx(),
+			),
+		).toBe(false);
+	});
+
 	test("kubernetes actions gate on active tab", () => {
 		const { keymap, host, cleanup } = createTestKeymap({ defaultKeys: true });
 		let refreshed = 0;

@@ -130,6 +130,18 @@ describe("server-owned telemetry", () => {
 			});
 			expect(response.ok).toBe(true);
 			expect(spans.length).toBeGreaterThan(0);
+
+			// The receiver owns the payload-size limit: a body over its 5 MB cap is
+			// rejected with 413 and never reaches the sink.
+			const accepted = spans.length;
+			const oversized = await fetch(`http://127.0.0.1:${port}/v1/traces`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: "x".repeat(5_100_000),
+			});
+			expect(oversized.status).toBe(413);
+			expect(await oversized.text()).toContain("payload too large");
+			expect(spans.length).toBe(accepted);
 		} finally {
 			await receivers.stop();
 		}

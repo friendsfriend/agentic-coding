@@ -48,8 +48,8 @@ export function Header(props: HeaderProps) {
 	const accent = () => colorForSeverity(props.severity);
 	const primaryDetail = () => formatDetail(props.details?.[0], props.context);
 	const secondaryDetail = () => formatDetail(props.details?.[1], props.detail);
-	const helpText = () =>
-		props.version ? `v${props.version} · ? help` : "? help";
+	const rightText = () =>
+		props.right ?? (props.version ? `v${props.version}` : "");
 	const rightWidth = () =>
 		Math.min(
 			RIGHT_WIDTH,
@@ -122,7 +122,7 @@ export function Header(props: HeaderProps) {
 				<box style={{ flexGrow: 1 }} />
 				<box style={{ width: rightWidth() }}>
 					<RunningText
-						text={helpText()}
+						text={rightText()}
 						width={rightWidth()}
 						align="right"
 						fg={highlightColor("secondary")}

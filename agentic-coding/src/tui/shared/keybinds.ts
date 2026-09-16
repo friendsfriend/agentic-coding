@@ -8,7 +8,7 @@ import { createSignal } from "solid-js";
  * without coupling it to a particular footer:
  *
  * - `standard`: universally understood navigation (j/k, arrows, Enter select,
- *   Esc back, Tab, q). Footers advertise only special keys; the `?` help modal
+ *   Esc up, Tab, q). Footers advertise only special keys; the `?` help modal
  *   lists every keybind, standard ones included.
  * - `context`: footer-only visibility scope (e.g. the focused dashboard
  *   panel). The `?` help modal lists the entry regardless of context.
@@ -54,7 +54,32 @@ export function catalogKeybinds(catalog: KeybindCatalog): Keybind[] {
 	return catalog.flatMap((section) => section.keybinds);
 }
 
-/** Drop the standard navigation keys every user already knows. */
+/**
+ * Drop the standard navigation keys every user already knows. */
+/**
+ * The parent/back/forward navigation set every page surface advertises
+ * (hierarchical-tui-navigation): Escape is the structural up-step (`Alt+Up` is
+ * the alias), Back and Forward are the chronological pair on the vim jump-list
+ * keys with terminal-independent `Alt` arrow equivalents. All entries are
+ * standard navigation, so the footer stays free for special actions and the
+ * `?` help modal documents them.
+ */
+export const PAGE_NAVIGATION_KEYBINDS: readonly Keybind[] = [
+	{ key: "Esc/Alt+Up", action: "parent page", short: "parent", standard: true },
+	{
+		key: "Ctrl+O/Alt+Left",
+		action: "back",
+		short: "back",
+		standard: true,
+	},
+	{
+		key: "Ctrl+I/Alt+Right",
+		action: "forward",
+		short: "forward",
+		standard: true,
+	},
+];
+
 export function specialKeybinds(keybinds: readonly Keybind[]): Keybind[] {
 	return keybinds.filter((keybind) => !keybind.standard);
 }

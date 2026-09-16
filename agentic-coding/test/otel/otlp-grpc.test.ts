@@ -79,8 +79,10 @@ describe("OTLP normalizer", () => {
 		expect(logs).toEqual([]);
 	});
 
-	it("handles oversized payload gracefully", () => {
-		// Just verify the normalizer doesn't crash on malformed data
+	it("refuses nullish spans", () => {
+		// Nullish input, not a size-limit case: the receiver's byte cap lives in
+		// the HTTP boundary (see the oversized-payload check in
+		// server-telemetry.test.ts).
 		const result = normalizeOtlpSpan(null);
 		expect(result).toBeUndefined();
 		const result2 = normalizeOtlpSpan(undefined);

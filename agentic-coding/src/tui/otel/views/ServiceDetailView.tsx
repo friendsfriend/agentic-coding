@@ -23,9 +23,6 @@ export function ServiceDetailView(props: { store: TopologyStore; id: string }) {
 			<SearchHeader>
 				<HighlightedText text={props.id} highlight="primary" />
 			</SearchHeader>
-			<box height={1} flexShrink={0} paddingLeft={1}>
-				<text fg={uiColors.textMuted}>Service details</text>
-			</box>
 			<ScrollableContent>
 				<For each={rows()}>
 					{([label, value]) => (

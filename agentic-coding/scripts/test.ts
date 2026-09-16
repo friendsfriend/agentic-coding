@@ -71,6 +71,17 @@ function reportedTests(output: string): number | null {
 	return match ? Number(match[1]) : null;
 }
 
+/** Skipped cases reported by the same summary block. Bun omits the line when
+ * nothing was skipped, so `null` means "none reported" — except that a summary
+ * with no recognizable block at all is a different (unparsed) problem, which
+ * `reportedTests` already flags. Runtime smoke fixtures report skipped
+ * prerequisites this way; an unexecuted check must never be counted as a
+ * passing one. */
+function reportedSkips(output: string): number {
+	const match = output.match(/^\s*(\d+) skip(?:ped)?\s*$/m);
+	return match ? Number(match[1]) : 0;
+}
+
 const explicit = Bun.argv.slice(2);
 
 // Focused runs stay single-process (fast startup, direct file/flag arguments)
@@ -102,6 +113,7 @@ const failures: Array<{ file: string; output: string }> = [];
 let tests = 0;
 let unparsed = 0;
 let passed = 0;
+let skipped = 0;
 const startedAt = performance.now();
 
 async function runFile(file: string): Promise<void> {
@@ -129,6 +141,7 @@ async function runFile(file: string): Promise<void> {
 	const count = reportedTests(output);
 	if (count === null) unparsed++;
 	else tests += count;
+	skipped += reportedSkips(output);
 	if (code === 0) {
 		passed++;
 		console.log(`ok   ${file} (${elapsed}ms)`);
@@ -155,7 +168,7 @@ for (const failure of failures) {
 const seconds = ((performance.now() - startedAt) / 1000).toFixed(2);
 const parts = [
 	`${passed}/${files.length} test files`,
-	`${tests} tests in ${seconds}s`,
+	`${tests - skipped} executed tests (${skipped} skipped) in ${seconds}s`,
 ];
 if (failures.length > 0) parts.push(`${failures.length} failed`);
 if (unparsed > 0) parts.push(`${unparsed} files with unparseable counts`);

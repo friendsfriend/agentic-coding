@@ -38,11 +38,7 @@ export function TraceListView(props: {
 				searchQuery={props.searchQuery}
 				resultCount={props.resultCount}
 			>
-				<text fg={uiColors.textMuted} attributes={TextAttributes.BOLD}>
-					Traces
-				</text>
 				<text fg={uiColors.textMuted}>
-					{" "}
 					{props.loading()
 						? "loading…"
 						: `page ${props.page()}/${props.totalPages()}`}

@@ -24,9 +24,7 @@ export function LogsView(props: {
 	return (
 		<box flexDirection="column" width="100%" height="100%">
 			<SearchHeader>
-				<text fg={uiColors.textMuted} attributes={TextAttributes.BOLD}>
-					Logs ({props.store.filteredCount_})
-				</text>
+				<text fg={uiColors.textMuted}>({props.store.filteredCount_})</text>
 			</SearchHeader>
 			{logs().length > 0 && (
 				<SelectableList

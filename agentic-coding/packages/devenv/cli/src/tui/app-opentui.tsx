@@ -102,6 +102,9 @@ export interface TUIAppProps {
 	 * no fixed terminal dimensions) so the unified shell owns the chrome and the
 	 * single renderer. The shell is responsible for exit guards and shutdown. */
 	embedded?: boolean;
+	/** Chrome rows the host renders around this body. Embedded: the shell's logo
+	 * bar + breadcrumb. Absent: this feature's own header/footer. */
+	chromeLines?: number;
 	/** Embedded mode only: publish the environment's live command registrations
 	 * so the shell footer/help are projections of the real keymap metadata rather
 	 * than a hand-written summary (compose-unified-feature-shell task 3.6). */
@@ -678,6 +681,9 @@ export function TUIApp(props: TUIAppProps) {
 					columns={columns}
 					scriptColumns={scriptColumns}
 					dimensions={dimensions()}
+					{...(props.chromeLines !== undefined
+						? { chromeLines: props.chromeLines }
+						: {})}
 					runningTextEnabled={uiStore.runningTextEnabled()}
 					runningTextOffset={uiStore.runningTextOffset()}
 					getTabBorderColor={(tab) => getTabBorderColor(tab, appStore)}

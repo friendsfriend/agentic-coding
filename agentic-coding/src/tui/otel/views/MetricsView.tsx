@@ -1,5 +1,3 @@
-/** @jsxImportSource @opentui/solid */
-import { TextAttributes } from "@opentui/core";
 import { createMemo, For } from "solid-js";
 import { AutoscalingSparkline } from "../components/AutoscalingSparkline";
 import { HighlightedText } from "../components/Highlight";
@@ -26,9 +24,7 @@ export function MetricsView(props: {
 	return (
 		<box flexDirection="column" width="100%" height="100%">
 			<SearchHeader>
-				<text fg={uiColors.textMuted} attributes={TextAttributes.BOLD}>
-					Metrics ({props.store.filteredCount_})
-				</text>
+				<text fg={uiColors.textMuted}>({props.store.filteredCount_})</text>
 			</SearchHeader>
 			{streams().length > 0 && (
 				<ScrollableContent>

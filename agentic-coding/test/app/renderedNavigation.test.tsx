@@ -16,6 +16,7 @@ import type { KeybindSection } from "../../src/tui/shared/keybinds";
 import {
 	crumb,
 	jumpTo as jumpToDestination,
+	pressBack,
 	pressEscapeAndSettle,
 	renderUntil,
 } from "./support/terminal";
@@ -127,9 +128,65 @@ test("cross-domain Back restores the originating application page", async () => 
 	expect(t.captureCharFrame()).toContain("Span tree");
 	expect(crumb(t)).toContain("Observability › Traces");
 
-	// Back restores the application page, not the observability list.
-	await pressEscapeAndSettle(t);
+	// Chronological Back restores the application page, not the observability
+	// list (Escape would take the structural up-step to the trace list).
+	await pressBack(t);
 	expect(crumb(t)).toContain("Home › Environments › Applications");
+	t.renderer.destroy();
+	db.close();
+});
+
+/** The breadcrumb row of a captured frame, trimmed; "" when there is none. */
+const crumbOf = (frame: string): string =>
+	frame
+		.split("\n")
+		.find((line) => line.includes("›"))
+		?.trim() ?? "";
+
+/** Frame predicate: the breadcrumb is exactly `value`. */
+const crumbIs = (value: string) => (frame: string) => crumbOf(frame) === value;
+
+test("Escape steps one structural level per press and is a no-op at Home", async () => {
+	const { t, db } = await renderShell();
+	t.mockInput.pressEnter();
+	expect(
+		await renderUntil(t, crumbIs("Home › Environments › Applications")),
+	).toBe(true);
+
+	// One level per press: Applications → Environments → Home.
+	expect(await pressEscapeAndSettle(t, crumbIs("Home › Environments"))).toBe(
+		true,
+	);
+	expect(crumb(t)).toBe("Home › Environments");
+	// Home is a single segment, so the row carries no separator at all.
+	expect(await pressEscapeAndSettle(t, crumbIs(""))).toBe(true);
+	expect(t.captureCharFrame()).toContain("Home");
+
+	// Escape at Home changes nothing and never quits.
+	const atHome = t.captureCharFrame();
+	await pressEscapeAndSettle(t);
+	expect(t.captureCharFrame()).toBe(atHome);
+	expect(await renderUntil(t, "Environments")).toBe(true);
+	t.renderer.destroy();
+	db.close();
+});
+
+test("Escape inside an open modal closes only the modal", async () => {
+	const { t, db } = await renderShell();
+	t.mockInput.pressKey("t", { shift: true });
+	await t.waitForFrame((frame) => frame.includes("Theme Picker"), {
+		maxPasses: 80,
+	});
+	const page = crumb(t);
+
+	t.mockInput.pressEscape();
+	await new Promise((resolve) => setTimeout(resolve, 80));
+	await t.waitForFrame((frame) => !frame.includes("Theme Picker"), {
+		maxPasses: 80,
+	});
+	expect(t.captureCharFrame()).not.toContain("Theme Picker");
+	// The page underneath is untouched: the modal owned the key completely.
+	expect(crumb(t)).toBe(page);
 	t.renderer.destroy();
 	db.close();
 });

@@ -4,6 +4,7 @@ import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
 import { createMemo, For, type JSX, Show } from "solid-js";
 import { uiColors } from "../colors";
+import { hostNamesPage } from "../pageChrome";
 import { focusSoon } from "../utils/focusSoon";
 import { GenericModal } from "./GenericModal";
 import { formatHelpText } from "./HelpText";
@@ -116,9 +117,11 @@ export function HelpView(props: HelpViewProps): JSX.Element {
 						resultCount={hasMatches() ? filteredSections().length : 0}
 					>
 						<box style={{ width: "100%", flexDirection: "row" }}>
-							<text fg={uiColors.primary} attributes={TextAttributes.BOLD}>
-								Help
-							</text>
+							<Show when={!hostNamesPage()}>
+								<text fg={uiColors.primary} attributes={TextAttributes.BOLD}>
+									Help
+								</text>
+							</Show>
 							<text fg={uiColors.textMuted}>{` — ${props.viewTitle}`}</text>
 						</box>
 					</SearchHeader>

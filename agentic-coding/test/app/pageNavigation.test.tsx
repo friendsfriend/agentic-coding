@@ -160,9 +160,11 @@ test("Tab traverses page-local focus regions instead of destinations", async () 
 	t.mockInput.pressEnter();
 	await t.renderOnce();
 	await t.renderOnce();
-	// Home renders without a separator (it has no ancestor) and shows its list.
+	// Home renders without a separator (it has no ancestor) and shows its list,
+	// which carries no title, description or hint row of its own.
 	const frame = t.captureCharFrame();
-	expect(frame).toContain("Choose a destination");
+	expect(frame).toContain("Environments");
+	expect(frame).not.toContain("Choose a destination");
 	expect(frame).not.toContain("ENV-BODY");
 	t.renderer.destroy();
 	db.close();

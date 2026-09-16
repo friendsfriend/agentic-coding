@@ -56,6 +56,12 @@ export interface ContentRouterProps {
 	columns: TableColumn[];
 	scriptColumns: TableColumn[];
 	dimensions: { width: number; height: number };
+	/**
+	 * Chrome rows the host renders around this body. Standalone `devenv` renders
+	 * its own header/footer ({@link LAYOUT_CHROME_LINES}); the embedded feature
+	 * body renders none and reserves the shell's chrome height instead.
+	 */
+	chromeLines?: number;
 	runningTextEnabled?: boolean;
 	runningTextOffset?: number;
 	getTabBorderColor: (

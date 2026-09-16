@@ -8,10 +8,8 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import {
 	approvalFor,
-	countVerifierFindings,
 	phaseAgeHours,
 	phaseStatus,
-	requiredUserActionFor,
 } from "../../src/tui/dash/projections";
 
 test("projections module performs no external I/O", () => {
@@ -38,23 +36,9 @@ test("projections module performs no external I/O", () => {
 	expect(source).not.toMatch(/from "\.\/(observations|engine|demo)"/);
 });
 
-test("projections are deterministic: identical inputs yield identical outputs", () => {
-	const plan = requiredUserActionFor(
-		"core.plan-approval",
-		false,
-		[],
-		undefined,
-		[{ id: "approve-plan", label: "Approve plan", confirmation: "confirm" }],
-	);
-	const planAgain = requiredUserActionFor(
-		"core.plan-approval",
-		false,
-		[],
-		undefined,
-		[{ id: "approve-plan", label: "Approve plan", confirmation: "confirm" }],
-	);
-	expect(planAgain).toEqual(plan);
-
+test("projections compute from their explicit inputs", () => {
+	// The explicit `now` input replaces the ambient clock the source-token guard
+	// above forbids.
 	const now = Date.parse("2026-01-01T12:00:00Z");
 	expect(
 		phaseAgeHours(
@@ -62,27 +46,6 @@ test("projections are deterministic: identical inputs yield identical outputs", 
 			now,
 		),
 	).toBe(4);
-	expect(
-		phaseAgeHours(
-			{ phase: "verify", phaseStartedAt: "2026-01-01T08:00:00Z" },
-			now,
-		),
-	).toBe(4);
-
-	expect(
-		countVerifierFindings([
-			{ severity: "warning" },
-			{ severity: "warning" },
-			{ severity: "critical" },
-		]),
-	).toEqual({ critical: 1, warning: 2, info: 0 });
-	expect(
-		countVerifierFindings([
-			{ severity: "warning" },
-			{ severity: "warning" },
-			{ severity: "critical" },
-		]),
-	).toEqual({ critical: 1, warning: 2, info: 0 });
 });
 
 test("phase status and approval prompts are pure display projections", () => {

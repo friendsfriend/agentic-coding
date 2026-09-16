@@ -4,6 +4,7 @@ import type { Job } from "@devenv/types";
 import { TextAttributes } from "@opentui/core";
 import { createMemo, For, Show } from "solid-js";
 import { uiColors } from "../colors";
+import { hostChromeLines } from "../pageChrome";
 import { Badge } from "./Badge";
 import { CenteredState } from "./CenteredState";
 import { ContentPanel } from "./ContentStack";
@@ -100,7 +101,7 @@ export function JobsDetailView(props: JobsDetailViewProps) {
 	//                                   Total  = 9
 	const hasFilterStatus = () => !!props.filterSummary || !!props.sortSummary;
 	const reservedLines = () =>
-		LAYOUT_CHROME_LINES + 3 + 1 + (hasFilterStatus() ? 1 : 0);
+		hostChromeLines(LAYOUT_CHROME_LINES) + 3 + 1 + (hasFilterStatus() ? 1 : 0);
 	const jobStatusHighlight = (status: string) => {
 		switch (status.toLowerCase()) {
 			case "success":

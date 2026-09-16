@@ -96,7 +96,7 @@ import {
 	registerFocusRestorer,
 } from "../../shared/modalStack";
 import { BreadcrumbRow } from "../../shared/navigation/BreadcrumbRow";
-import { CategoryPage } from "../../shared/navigation/DestinationPage";
+import { DestinationPage } from "../../shared/navigation/DestinationPage";
 import {
 	type DestinationEntry,
 	type DestinationSurface,
@@ -121,8 +121,6 @@ import {
 	type Route,
 	resolveAvailable,
 	routeKey,
-	SETTINGS_SECTION_DESCRIPTIONS,
-	SETTINGS_SECTION_LABELS,
 	type SettingsSection,
 	settingsSectionOfPage,
 } from "../../shared/routes";
@@ -161,7 +159,7 @@ import {
 	environmentsKeybindCatalog,
 	observabilityKeybindCatalog,
 } from "./keybinds";
-import { createNavigation } from "./navigation";
+import { createNavigation, isShellOwnedOverlay } from "./navigation";
 import { notify } from "./notifications";
 import {
 	applyTheme,
@@ -170,18 +168,6 @@ import {
 	saveThemeName,
 	themeNames,
 } from "./theme";
-
-/** Shell overlay kinds whose keys the shell handler itself owns. */
-const SHELL_OWNED_OVERLAYS = new Set([
-	"locations",
-	"help",
-	"theme",
-	"filter",
-	"sort",
-	// Contextual workflow creation: the shell owns the form and its start
-	// boundary, so its keys are routed through the one shell dispatcher.
-	"new-workflow",
-]);
 
 type Tab =
 	| "home"
@@ -473,18 +459,6 @@ export function App(props: {
 				return observabilityDestinations(surface());
 			default:
 				return undefined;
-		}
-	};
-	const destinationTitle = (): string => {
-		switch (currentPage()) {
-			case "home":
-				return "Home";
-			case "settings":
-				return "Settings";
-			case "environments":
-				return "Environments";
-			default:
-				return "Observability";
 		}
 	};
 	// Selection lives in route-keyed view state, so returning to a page restores
@@ -1244,6 +1218,67 @@ export function App(props: {
 		renderer.clearSelection();
 	};
 
+	/**
+	 * One ordered Escape ladder (design.md §1): levels are evaluated
+	 * innermost-first and the first level that consumes the key stops the
+	 * ladder. Level 1 (the global error modal) is handled before this runs
+	 * because that overlay consumes every key, not just Escape.
+	 */
+	const handleEscape = (event: KeyEvent, key: string): boolean => {
+		if (key !== "escape") return false;
+		// 2. Quit confirmation: Escape answers "no".
+		if (quitConfirmation()) {
+			resolveQuitConfirmation(false);
+			return true;
+		}
+		// 3. Modal `?` help over a dialog: closes the help overlay only.
+		if (modalHelpOpen()) {
+			handleModalHelpKey(key);
+			return true;
+		}
+		// 4. Contextual workflow creation: the mounted form steps back one step
+		// and cancels on its first step; without a form the request is dropped.
+		if (nav.modal() === "new-workflow") {
+			const handler = launchHandler();
+			if (handler) handler(event);
+			else closeLaunch();
+			return true;
+		}
+		// 5. Top shell modal: its own inner level first (the theme filter), then
+		// the modal itself. Feature-owned dialogs are excluded: their own keymap
+		// layer (higher priority) handles Escape and reports the close itself.
+		if (nav.modal() === "theme" && themeFiltering()) {
+			setThemeFiltering(false);
+			setThemeQuery("");
+			setThemeIndex(0);
+			return true;
+		}
+		if (isShellOwnedOverlay(nav.modal()) && nav.esc()) return true;
+		// 6. Breadcrumb focus returns to the page body.
+		if (nav.modal() === "none" && focusCrumb()) {
+			setFocusRegion("content");
+			setCrumbIndex(-1);
+			return true;
+		}
+		// 7. Text-input mode cancels the input and restores the previous query.
+		if (nav.modal() === "none" && searchMode()) {
+			if (activeTab() === "logs") {
+				logStore.setFilter("");
+				setLogFilterQuery("");
+			} else {
+				traceStore.applyFilter(searchPrevious);
+				setSearchQuery(searchPrevious);
+				refresh();
+			}
+			setSearchMode(false);
+			return true;
+		}
+		// 8. Page hierarchy: the structural Parent step, a no-op at Home. An
+		// overlay that reaches this point keeps the key rather than navigating.
+		if (nav.modal() === "none") pages.goToParent();
+		return true;
+	};
+
 	const handleKey = (event: KeyEvent) => {
 		const key = event.name.toLowerCase();
 		const ename = event.name;
@@ -1295,6 +1330,9 @@ export function App(props: {
 		}
 		if (phase() === "starting" || phase() === "stopping") return;
 
+		// The one Escape ladder owns every Escape press from here on.
+		if (handleEscape(event, key)) return;
+
 		// Modal `?` help: an open dialog advertises its own `?` entry and opens
 		// the shared HelpModal with that dialog's catalog. While it is open,
 		// j/k/Esc drive the overlay instead of the dialog underneath.
@@ -1313,10 +1351,7 @@ export function App(props: {
 		// through to the page behind it.
 		if (nav.modal() === "new-workflow") {
 			const handler = launchHandler();
-			if (!handler) {
-				if (key === "escape") closeLaunch();
-				return;
-			}
+			if (!handler) return;
 			// A form step that edits text returns false so the native editor keeps
 			// the character; the overlay binding never prevents the default.
 			handler(event);
@@ -1327,7 +1362,7 @@ export function App(props: {
 		if (nav.modal() === "locations") {
 			const matches = pickerMatches();
 			const last = Math.max(0, matches.length - 1);
-			if (key === "escape" || (event.ctrl && key === "p")) {
+			if (event.ctrl && key === "p") {
 				nav.popModal();
 			} else if (key === "backspace" || key === "delete") {
 				setPickerQuery((query) => query.slice(0, -1));
@@ -1364,13 +1399,7 @@ export function App(props: {
 
 		if (nav.modal() === "theme") {
 			const items = filteredThemes();
-			if (key === "escape") {
-				if (themeFiltering()) {
-					setThemeFiltering(false);
-					setThemeQuery("");
-					setThemeIndex(0);
-				} else nav.popModal();
-			} else if (key === "/") {
+			if (key === "/") {
 				setThemeFiltering(true);
 				setThemeQuery("");
 				setThemeIndex(0);
@@ -1406,10 +1435,7 @@ export function App(props: {
 		}
 
 		if (nav.modal() === "help") {
-			if (key === "escape") {
-				// Closing restores the parked feature layer through the modal effect.
-				nav.popModal();
-			} else if (key === "j" || key === "down")
+			if (key === "j" || key === "down")
 				setHelpOffset((value) => Math.min(helpMaxOffset(), value + 1));
 			else if (key === "k" || key === "up")
 				setHelpOffset((value) => Math.max(0, value - 1));
@@ -1443,11 +1469,17 @@ export function App(props: {
 					pages.navigate(route);
 				return;
 			}
-			if (key === "escape") {
-				setFocusRegion("content");
-				setCrumbIndex(-1);
-				return;
-			}
+		}
+
+		// Chronological history (vim jump list): Ctrl+O / Alt+Left Back,
+		// Ctrl+I / Alt+Right Forward. Page-local focus stays on Tab/Shift+Tab.
+		if ((event.ctrl && key === "o") || (event.option && key === "left")) {
+			pages.back();
+			return;
+		}
+		if ((event.ctrl && key === "i") || (event.option && key === "right")) {
+			pages.forward();
+			return;
 		}
 
 		// No global destination cycling and no numeric dispatch: destinations are
@@ -1455,10 +1487,11 @@ export function App(props: {
 		// Shift+Tab traverse this page's focus regions only.
 		const activeFeatureId = (): string =>
 			props.environments ? (activeFeature() ?? activeTab()) : activeTab();
+		// Tab cycles page-local focus. Ctrl+I is Forward (bound above) and is
+		// deliberately no longer folded into this branch.
 		const isTab = ename === "Tab" || key === "tab" || key === "\t";
-		const isCtrlTab = event.ctrl && key === "i"; // Ctrl+I = Tab in many terminals
-		const tabForward = (isTab || isCtrlTab) && !event.shift;
-		const tabBack = (isTab || isCtrlTab) && event.shift;
+		const tabForward = isTab && !event.shift;
+		const tabBack = isTab && event.shift;
 		if (
 			nav.modal() === "none" &&
 			(tabForward || tabBack) &&
@@ -1495,16 +1528,6 @@ export function App(props: {
 			return;
 		}
 
-		// Escape: the top overlay first, then chronological Back. Escape at Home
-		// is a no-op (Home has no parent and quitting stays explicit).
-		if (key === "escape") {
-			if (nav.esc()) return;
-			if (pages.canBack()) {
-				pages.back();
-				return;
-			}
-		}
-
 		if (event.shift && key === "t" && nav.modal() === "none") {
 			setThemeIndex(Math.max(0, themeNames.indexOf(getActiveThemeName())));
 			setThemeQuery("");
@@ -1515,17 +1538,7 @@ export function App(props: {
 
 		// Search mode keeps the query editable; Tab belongs to the input.
 		if (searchMode()) {
-			if (key === "escape") {
-				if (activeTab() === "logs") {
-					logStore.setFilter("");
-					setLogFilterQuery("");
-				} else {
-					traceStore.applyFilter(searchPrevious);
-					setSearchQuery(searchPrevious);
-					refresh();
-				}
-				setSearchMode(false);
-			} else if (key === "backspace") {
+			if (key === "backspace") {
 				if (activeTab() === "logs") {
 					const q = logFilterQuery().slice(0, -1);
 					setLogFilterQuery(q);
@@ -1734,8 +1747,7 @@ export function App(props: {
 				selectTrace(selectedListIndex());
 		} else {
 			const items = flatTree();
-			if (key === "escape" || key === "b") pages.back();
-			else if (key === "j" || key === "down") {
+			if (key === "j" || key === "down") {
 				const i = Math.min(items.length - 1, treeIndex() + 1);
 				setTreeIndex(i);
 				setSelectedSpan(items[i]?.node);
@@ -1770,10 +1782,7 @@ export function App(props: {
 
 	// ---- Metric tab keys ----
 	function handleMetricsKey(_event: KeyEvent, key: string) {
-		if (currentPage() === "observability.metrics.detail") {
-			if (key === "escape" || key === "b") pages.back();
-			return;
-		}
+		if (currentPage() === "observability.metrics.detail") return;
 		const streams = metricStore.getStreams();
 		if (key === "j" || key === "down")
 			setSelectedMetricIndex((i) => Math.min(streams.length - 1, i + 1));
@@ -1797,10 +1806,7 @@ export function App(props: {
 
 	// ---- Log tab keys ----
 	function handleLogsKey(_event: KeyEvent, key: string) {
-		if (currentPage() === "observability.logs.detail") {
-			if (key === "escape" || key === "b") pages.back();
-			return;
-		}
+		if (currentPage() === "observability.logs.detail") return;
 		const logs = logStore.getLogs();
 		if (key === "j" || key === "down")
 			setSelectedLogIndex((i) => Math.min(logs.length - 1, i + 1));
@@ -1823,10 +1829,7 @@ export function App(props: {
 
 	// ---- Topology tab keys ----
 	function handleTopologyKey(_event: KeyEvent, key: string) {
-		if (currentPage() === "observability.topology.service") {
-			if (key === "escape" || key === "b") pages.back();
-			return;
-		}
+		if (currentPage() === "observability.topology.service") return;
 		const ids = topologyStore.getLayout().map((node) => node.id);
 		const current = Math.max(0, ids.indexOf(selectedTopologyService() ?? ""));
 		if (key === "j" || key === "down")
@@ -1857,7 +1860,7 @@ export function App(props: {
 		// the environment feature's own dialogs stay with the environment layer.
 		createEffect(() => {
 			const kind = nav.modal();
-			if (!SHELL_OWNED_OVERLAYS.has(kind)) return;
+			if (!isShellOwnedOverlay(kind)) return;
 			onCleanup(registerShellOverlayLayer(shellKeymap, handleKey));
 		});
 	} else {
@@ -2065,13 +2068,7 @@ export function App(props: {
 					{(() => {
 						const entries = destinationEntries();
 						return entries ? (
-							<CategoryPage
-								title={destinationTitle()}
-								description={
-									currentPage() === "home"
-										? "Choose a destination. Ctrl+P jumps anywhere."
-										: undefined
-								}
+							<DestinationPage
 								entries={entries}
 								selectedIndex={destinationIndex()}
 								onSelectIndex={setDestinationIndex}
@@ -2085,8 +2082,6 @@ export function App(props: {
 						const items = settingsSectionItems();
 						return section && items ? (
 							<SettingsSectionView
-								title={SETTINGS_SECTION_LABELS[section]}
-								description={SETTINGS_SECTION_DESCRIPTIONS[section]}
 								items={items}
 								selectedIndex={settingsIndex()}
 								onSelectIndex={setSettingsIndex}
@@ -2108,7 +2103,7 @@ export function App(props: {
 									// so the feature's own modal report is not authoritative:
 									// mirroring it here would stack the two overlays and leave the
 									// top one without a key handler.
-									if (SHELL_OWNED_OVERLAYS.has(nav.modal())) return;
+									if (isShellOwnedOverlay(nav.modal())) return;
 									if (open && activeFeature() === "environments") {
 										if (nav.modal() !== "environment")
 											nav.pushModal("environment", "environments");
@@ -2154,7 +2149,7 @@ export function App(props: {
 										resourceId: conceptId,
 									})
 								}
-								onCloseNote={() => pages.back()}
+								onCloseNote={() => pages.goToParent()}
 								// Repository-independent research starts from Wiki, the only
 								// full-application entry for work that has no project.
 								onStartWorkflow={() => openLaunch({ kind: "independent" })}
@@ -2241,7 +2236,6 @@ export function App(props: {
 										store={metricStore}
 										name={selected.name}
 										serviceName={selected.serviceName}
-										onBack={() => pages.back()}
 									/>
 								) : null;
 							})()}
@@ -2269,11 +2263,7 @@ export function App(props: {
 								const idx = selectedLog();
 								return currentPage() === "observability.logs.detail" &&
 									idx !== undefined ? (
-									<LogDetailView
-										store={logStore}
-										index={idx}
-										onBack={() => pages.back()}
-									/>
+									<LogDetailView store={logStore} index={idx} />
 								) : null;
 							})()}
 						</>

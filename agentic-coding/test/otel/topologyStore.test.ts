@@ -50,14 +50,30 @@ describe("TopologyStore", () => {
 		expect(services[0]?.childIds).toEqual([]);
 	});
 
-	it("detects cycles gracefully", () => {
+	it("assigns both services of a genuine cycle to layer 0", () => {
+		// Each service's span is parented by a span of the other, so no service is
+		// root-like and the layered walk has no starting point.
 		const spanA = makeSpan("a", "svcA");
-		// spanB has parentSpanId pointing to spanA, but both are same svc — no cycle between services
-		makeSpan("b", "svcA", spanA.spanId);
+		const spanB = makeSpan("b", "svcB", spanA.spanId);
+		spanA.parentSpanId = spanB.spanId;
 		const store = new TopologyStore();
-		store.load([spanA]);
-		const services = store.getServices();
-		expect(services).toHaveLength(1);
+		store.load([spanA, spanB]);
+		expect(store.getEdges()).toEqual([
+			{ source: "svcA", target: "svcB", spanCount: 1 },
+			{ source: "svcB", target: "svcA", spanCount: 1 },
+		]);
+		const layout = store.getLayout();
+		expect(layout.map((node) => node.layer)).toEqual([0, 0]);
+		expect(layout.map((node) => node.id).sort()).toEqual(["svcA", "svcB"]);
+	});
+
+	it("a same-service parent link is not a service edge", () => {
+		const parent = makeSpan("outer", "svcA");
+		const child = makeSpan("inner", "svcA", parent.spanId);
+		const store = new TopologyStore();
+		store.load([parent, child]);
+		expect(store.getEdges()).toEqual([]);
+		expect(store.getServices()).toHaveLength(1);
 	});
 
 	it("generates adjacency list", () => {

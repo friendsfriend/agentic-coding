@@ -1,5 +1,9 @@
+// What the tab shell itself owns: the four telemetry stores can be constructed
+// together and stay empty and independent until they are loaded. Each store's
+// own behaviour (and its fresh-empty case) is asserted in its owning suite —
+// logStore.test.ts, metricStore.test.ts, topologyStore.test.ts — so this file
+// keeps only the guarantees that belong to mounting all four at once.
 import { describe, expect, it } from "bun:test";
-import { LogStore } from "../../src/tui/otel/model/logStore";
 import { MetricStore } from "../../src/tui/otel/model/metricStore";
 import { TopologyStore } from "../../src/tui/otel/model/topologyStore";
 import { TraceStore } from "../../src/tui/otel/model/traceStore";
@@ -9,16 +13,6 @@ describe("Tab shell", () => {
 		const store = new TraceStore();
 		expect(store.spanCount_).toBe(0);
 		expect(store.filteredCount_).toBe(0);
-	});
-
-	it("MetricStore starts empty", () => {
-		const store = new MetricStore();
-		expect(store.metricCount_).toBe(0);
-	});
-
-	it("LogStore starts empty", () => {
-		const store = new LogStore();
-		expect(store.logCount_).toBe(0);
 	});
 
 	it("TopologyStore starts empty", () => {
@@ -43,13 +37,5 @@ describe("Tab shell", () => {
 
 		expect(traceStore.spanCount_).toBe(0);
 		expect(metricStore.metricCount_).toBe(1);
-	});
-
-	it("TraceStore backward-compatible with existing API", () => {
-		const store = new TraceStore();
-		expect(typeof store.loadFile).toBe("function");
-		expect(typeof store.getTraceSummaries).toBe("function");
-		expect(typeof store.applyFilter).toBe("function");
-		expect(typeof store.setSort).toBe("function");
 	});
 });

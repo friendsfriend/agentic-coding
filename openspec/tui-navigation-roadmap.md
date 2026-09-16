@@ -39,7 +39,7 @@ All artifacts are planning documents. Unchecked tasks mean implementation has no
 
 Do not present the temporary workflow page as the final design. Ship the full redesign only when all four changes pass their checks and no temporary entry survives. Record feature/route, supported-setting and workflow-type/target parity inventories; explicitly record the approved removal of workflow browsing and unrelated standalone dash navigation.
 
-Verify full journeys: Home → application/library → Start workflow → Herdr dashboard; Wiki → independent start and comment review; Settings with local versus attached-server ownership; observability drill-down and cross-domain Back versus Parent; dashboard-only input isolation; owned/attached exit behavior. Check actual TUI footer and complete `?` help at narrow/wide widths, plus relevant tests, type-check and zero-diagnostic lint.
+Verify full journeys: Home → application/library → Start workflow → Herdr dashboard; Wiki → independent start and comment review; Settings with local versus attached-server ownership; observability drill-down and cross-domain Back versus Parent; dashboard-only input isolation; owned/attached exit behavior. Navigation is Escape (with `Alt+Up`) = Parent, `Ctrl+O`/`Alt+Left` = Back, `Ctrl+I`/`Alt+Right` = Forward. Check actual TUI footer and complete `?` help at narrow/wide widths, plus relevant tests, type-check and zero-diagnostic lint.
 
 ## Boundaries and concurrent work
 

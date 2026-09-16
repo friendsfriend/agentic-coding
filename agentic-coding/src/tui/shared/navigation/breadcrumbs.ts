@@ -33,6 +33,32 @@ export function breadcrumbWidth(
 	return labels + SEPARATOR.length * Math.max(0, segments.length - 1);
 }
 
+function clipLabel(label: string, max: number): string {
+	if (max <= 0) return "";
+	if (label.length <= max) return label;
+	return max === 1 ? "…" : `${label.slice(0, max - 1)}…`;
+}
+
+/**
+ * Clip the current location's label until the row fits `width`. The current
+ * segment is the one that names a resource, so it is the one that yields rather
+ * than the ancestors or the row overflowing.
+ */
+function fitRow(
+	segments: BreadcrumbSegment[],
+	width: number,
+): BreadcrumbSegment[] {
+	if (segments.length === 0) return segments;
+	const lastIndex = segments.length - 1;
+	const last = segments[lastIndex];
+	const overflow = breadcrumbWidth(segments) - width;
+	if (overflow <= 0) return segments;
+	return [
+		...segments.slice(0, lastIndex),
+		{ ...last, label: clipLabel(last.label, last.label.length - overflow) },
+	];
+}
+
 /**
  * Lay out the ancestor chain for `width` columns. `focusedIndex` indexes the
  * logical chain (not the rendered segments); when it points inside a collapsed
@@ -51,7 +77,7 @@ export function breadcrumbSegments(
 			focused: index === focusedIndex,
 		}));
 	if (width <= 0 || routes.length === 0) return [];
-	if (routes.length === 1) return full();
+	if (routes.length === 1) return fitRow(full(), width);
 	if (breadcrumbWidth(full()) <= width) return full();
 
 	// Collapse the middle: keep the first and last ancestor, represent the rest
@@ -74,7 +100,7 @@ export function breadcrumbSegments(
 			focused: focusedIndex === last,
 		},
 	];
-	return segments;
+	return fitRow(segments, width);
 }
 
 /** Which segments a left/right cursor move can land on. */

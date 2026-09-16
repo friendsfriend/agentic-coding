@@ -4,6 +4,7 @@ import type { TableRow } from "@devenv/types";
 import { TextAttributes } from "@opentui/core";
 import { For, type JSX, Show } from "solid-js";
 import { uiColors } from "../colors";
+import { hostChromeLines, hostNamesPage } from "../pageChrome";
 import {
 	formatRuntimeStatus,
 	getGitStatusStyle,
@@ -296,7 +297,7 @@ function WorkItemTable<T = string>(
 
 	// Legacy reserved-lines path (fallback when no availableLines is given).
 	const reservedLines = () => {
-		let lines = LAYOUT_CHROME_LINES + 1;
+		let lines = hostChromeLines(LAYOUT_CHROME_LINES) + 1;
 		if (props.showBorder !== false) lines += 2;
 		if (props.tabs && props.tabs.length > 0) lines += 3;
 		if (props.filterSummary || props.sortSummary) lines += 1;
@@ -362,9 +363,11 @@ function WorkItemTable<T = string>(
 				resultCount={props.apps.length}
 			>
 				<box style={{ width: "100%", flexDirection: "row" }}>
-					<text fg={uiColors.textPrimary} attributes={TextAttributes.BOLD}>
-						{activeTabLabel()}
-					</text>
+					<Show when={!hostNamesPage()}>
+						<text fg={uiColors.textPrimary} attributes={TextAttributes.BOLD}>
+							{activeTabLabel()}
+						</text>
+					</Show>
 					<box
 						style={{
 							width: "auto",

@@ -1,15 +1,18 @@
-// Import-cycle guard for split-workflow-god-modules (design D5): no module
+// Parent-barrel guard for split-workflow-god-modules (design D5): no module
 // under runtime/, definitions/, or cli/ may import its own parent barrel
 // (runtime.ts, definitions.ts, cli.ts) — that shape is the specific cycle
 // `barrel -> submodule -> barrel`, which Bun's ESM loader surfaces as
 // undefined-at-module-init rather than a clear error. Passes trivially
 // before the split, since those directories do not exist yet.
+//
+// The runtime-cycle scan for this subtree lives in
+// test/workflow-source-layer-boundaries.test.ts ("src has no runtime import
+// cycle"), which runs the same graph builder and cycle finder over `src` and
+// therefore covers every `src/workflow` file. This suite owns the distinct
+// parent-barrel rule, which holds whether or not the edge forms a cycle.
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
-import {
-	buildImportGraph,
-	findImportCycle,
-} from "../scripts/workflow-module-graph.ts";
+import { buildImportGraph } from "../scripts/workflow-module-graph.ts";
 
 const WORKFLOW_ROOT = path.join(import.meta.dir, "..", "src", "workflow");
 // Each split family's own barrel — a submodule may freely import a
@@ -26,12 +29,6 @@ const FAMILY_BARRELS: ReadonlyArray<{ prefix: string; barrel: string }> = [
 }));
 
 describe("workflow module import cycles (split-workflow-god-modules)", () => {
-	test("src/workflow has no import cycle", () => {
-		const graph = buildImportGraph(WORKFLOW_ROOT);
-		const cycle = findImportCycle(graph);
-		expect(cycle).toBeNull();
-	});
-
 	test("no split submodule imports its parent barrel", () => {
 		const graph = buildImportGraph(WORKFLOW_ROOT);
 		const offenders: string[] = [];

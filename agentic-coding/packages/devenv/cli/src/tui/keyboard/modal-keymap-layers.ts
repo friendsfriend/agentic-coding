@@ -171,6 +171,16 @@ export function registerModalKeymapLayers(
 			run: runDiff,
 		},
 		{
+			// The comment dialog sits on top of the diff modal and its keys are
+			// handled by the same handler, which checks the comment state first.
+			// Without this layer no layer matched `activeModal: "comment"` and the
+			// key reached the shell instead of the dialog.
+			modal: "comment",
+			command: "modal.comment.handle",
+			title: "Comment modal",
+			run: runDiff,
+		},
+		{
 			modal: "log",
 			command: "modal.log.handle",
 			title: "Log modal",

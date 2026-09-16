@@ -22,32 +22,60 @@ const stringOr = (value: unknown, fallback: string): string =>
 			fallback,
 	);
 
-export function getOpenModalNames(stores: KeyboardStores): string[] {
+/** Dialog kinds and whether each is currently open, in probe order. */
+function modalProbes(stores: KeyboardStores): Array<[string, boolean]> {
 	const { appStore, uiStore, logStore, changeRequestStore, providerStore } =
 		stores;
 	return [
-		bool(uiStore.showErrorDialog) && "error",
-		bool(uiStore.showConfirmDialog) && "confirm",
-		bool(uiStore.showMarkdownModal) && "markdown",
-		bool(uiStore.showThemePicker) && "theme-picker",
-		bool(uiStore.showProfilePicker) && "profile-picker",
-		bool(uiStore.showActionTargetPicker) && "action-target-picker",
-		bool(providerStore.showAddRepositoryModal) && "add-repository",
-		bool(providerStore.showConnectProviderModal) && "connect-provider",
-		bool(changeRequestStore.showDiffModal) && "diff",
-		bool(changeRequestStore.showCommentModal) && "comment",
-		bool(logStore.showLogModal) && "log",
-		bool(
-			(uiStore as unknown as { showEditorPicker?: unknown }).showEditorPicker,
-		) && "editor-picker",
-		bool(uiStore.showTaskAddModal) && "task-add",
-		bool(uiStore.showTaskArgsModal) && "task-args",
-		bool(uiStore.showPassphraseModal) && "passphrase",
-		bool(uiStore.showCreateBranchModal) && "branch",
-		bool(appStore.showFirstSteps) && "first-steps",
-		(appStore.modalStack?.() ?? []).some((route) => route.name === "actions") &&
+		["error", bool(uiStore.showErrorDialog)],
+		["confirm", bool(uiStore.showConfirmDialog)],
+		["markdown", bool(uiStore.showMarkdownModal)],
+		["theme-picker", bool(uiStore.showThemePicker)],
+		["profile-picker", bool(uiStore.showProfilePicker)],
+		["action-target-picker", bool(uiStore.showActionTargetPicker)],
+		["add-repository", bool(providerStore.showAddRepositoryModal)],
+		["connect-provider", bool(providerStore.showConnectProviderModal)],
+		["diff", bool(changeRequestStore.showDiffModal)],
+		["comment", bool(changeRequestStore.showCommentModal)],
+		["log", bool(logStore.showLogModal)],
+		[
+			"editor-picker",
+			bool(
+				(uiStore as unknown as { showEditorPicker?: unknown }).showEditorPicker,
+			),
+		],
+		["task-add", bool(uiStore.showTaskAddModal)],
+		["task-args", bool(uiStore.showTaskArgsModal)],
+		["passphrase", bool(uiStore.showPassphraseModal)],
+		["branch", bool(uiStore.showCreateBranchModal)],
+		["first-steps", bool(appStore.showFirstSteps)],
+		[
 			"actions",
-	].filter((name): name is string => typeof name === "string");
+			(appStore.modalStack?.() ?? []).some((route) => route.name === "actions"),
+		],
+	];
+}
+
+/**
+ * Open dialog names in dialog *open* order (design.md §4), which is what makes
+ * the newest dialog own Escape. The probes above only report whether a dialog is
+ * open, so the order is remembered across calls: names that became true are
+ * appended, names that became false are dropped.
+ *
+ * ponytail: two dialogs whose flags flip within one sync tick are ordered by
+ * probe order, not by the instant they opened. Split the tick (or pass the open
+ * order in) only if that ever matters.
+ */
+let openModalOrder: string[] = [];
+
+export function getOpenModalNames(stores: KeyboardStores): string[] {
+	const open = modalProbes(stores)
+		.filter(([, isOpen]) => isOpen)
+		.map(([name]) => name);
+	const stillOpen = new Set(open);
+	const kept = openModalOrder.filter((name) => stillOpen.has(name));
+	openModalOrder = [...kept, ...open.filter((name) => !kept.includes(name))];
+	return [...openModalOrder];
 }
 
 export function getActiveModalName(stores: KeyboardStores): string {

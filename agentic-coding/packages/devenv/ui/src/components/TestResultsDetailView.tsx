@@ -4,6 +4,7 @@ import type { TestCase, TestSuite } from "@devenv/types";
 import { TextAttributes } from "@opentui/core";
 import { createMemo, Show } from "solid-js";
 import { uiColors } from "../colors";
+import { hostChromeLines, hostNamesPage } from "../pageChrome";
 import { Badge } from "./Badge";
 import { CenteredState } from "./CenteredState";
 import { ContentPanel } from "./ContentStack";
@@ -86,7 +87,12 @@ export function TestResultsDetailView(props: TestResultsDetailViewProps) {
 	//                                     Total  = 13
 	const hasFilterStatus = () => !!props.filterSummary || !!props.sortSummary;
 	const reservedLines = () =>
-		LAYOUT_CHROME_LINES + 2 + 2 + 2 + 1 + (hasFilterStatus() ? 1 : 0);
+		hostChromeLines(LAYOUT_CHROME_LINES) +
+		2 +
+		2 +
+		2 +
+		1 +
+		(hasFilterStatus() ? 1 : 0);
 
 	// Format execution time
 	const formatTime = (seconds: number) => {
@@ -99,13 +105,15 @@ export function TestResultsDetailView(props: TestResultsDetailViewProps) {
 	return (
 		<ContentPanel>
 			{/* Header */}
-			<box style={{ width: "100%", height: 1, marginBottom: 1 }}>
-				<HighlightedText
-					text="Test Results"
-					highlight="primary"
-					attributes={TextAttributes.BOLD}
-				/>
-			</box>
+			<Show when={!hostNamesPage()}>
+				<box style={{ width: "100%", height: 1, marginBottom: 1 }}>
+					<HighlightedText
+						text="Test Results"
+						highlight="primary"
+						attributes={TextAttributes.BOLD}
+					/>
+				</box>
+			</Show>
 
 			<Show when={props.loading}>
 				<CenteredState

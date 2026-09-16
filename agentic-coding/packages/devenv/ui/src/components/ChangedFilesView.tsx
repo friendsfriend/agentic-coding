@@ -4,6 +4,7 @@ import type { ChangeRequestChange } from "@devenv/types";
 import { TextAttributes } from "@opentui/core";
 import { createMemo, Show } from "solid-js";
 import { uiColors } from "../colors";
+import { hostChromeLines, hostNamesPage } from "../pageChrome";
 import { Badge } from "./Badge";
 import { CenteredState } from "./CenteredState";
 import { ContentPanel } from "./ContentStack";
@@ -72,7 +73,8 @@ export function ChangedFilesView(props: ChangedFilesViewProps) {
 	//   Own header rows (title + stats)        = 2
 	//   Table header row                       = 1
 	//                                   Total  = 11
-	const reservedLines = () => LAYOUT_CHROME_LINES + 2 + 2 + 1 + 1;
+	const reservedLines = () =>
+		hostChromeLines(LAYOUT_CHROME_LINES) + 2 + 2 + 1 + 1;
 
 	return (
 		<ContentPanel>
@@ -104,11 +106,21 @@ export function ChangedFilesView(props: ChangedFilesViewProps) {
 						paddingRight: 1,
 					}}
 				>
-					<HighlightedText
-						text={`Changed Files (${totalStats().totalFiles} files)`}
-						highlight="primary"
-						attributes={TextAttributes.BOLD}
-					/>
+					<box style={{ flexDirection: "row" }}>
+						<Show when={!hostNamesPage()}>
+							<HighlightedText
+								text="Changed Files"
+								highlight="primary"
+								attributes={TextAttributes.BOLD}
+							/>
+							<text> </text>
+						</Show>
+						<HighlightedText
+							text={`(${totalStats().totalFiles} files)`}
+							highlight="primary"
+							attributes={TextAttributes.BOLD}
+						/>
+					</box>
 					<text fg={highlightColor("secondary")}>
 						<span style={{ fg: highlightColor("positive") }}>
 							+{totalStats().totalAdded}
