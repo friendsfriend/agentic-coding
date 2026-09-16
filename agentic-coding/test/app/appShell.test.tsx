@@ -1,21 +1,48 @@
 /** @jsxImportSource @opentui/solid */
-import { expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { testRender } from "@opentui/solid";
-import { createSignal, onMount } from "solid-js";
+import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
+import { testRender, useRenderer } from "@opentui/solid";
+import { createSignal, onCleanup, onMount } from "solid-js";
 import { App } from "../../src/tui/otel/app/App";
 import { TraceDb } from "../../src/tui/otel/model/db";
 import { LogStore } from "../../src/tui/otel/model/logStore";
 import { MetricStore } from "../../src/tui/otel/model/metricStore";
 import { TopologyStore } from "../../src/tui/otel/model/topologyStore";
 import { TraceStore } from "../../src/tui/otel/model/traceStore";
+import { pressEscapeAndSettle, renderUntil } from "./support/terminal";
 
-// The unified shell must expose Environments as a top-level feature and group
-// the observability signal views under one Observability feature with sub-tabs
-// (compose-unified-feature-shell task 2.1/2.3/2.6). The environment body is
-// injected as a render hook so the test does not need the devenv backend.
+// The unified shell renders one renderer with page-based chrome
+// (replace-nested-tabs-with-page-navigation, tasks 2.1/2.4): Home lists the
+// destinations, a category page lists its children, and the feature body mounts
+// at the destination the route names. The environment body is injected as a
+// render hook so the test does not need the devenv backend.
+
+// Home mode mounts the Wiki body, which reads a wiki root; give it a readable
+// concept so it never opens the global error modal (that overlay owns input
+// until it is dismissed and would swallow the keys these tests send).
+const previousWikiRoot = process.env.HERDR_WIKI_DIR;
+let wikiRoot: string;
+
+beforeEach(() => {
+	wikiRoot = mkdtempSync(join(tmpdir(), "unified-shell-wiki-"));
+	process.env.HERDR_WIKI_DIR = wikiRoot;
+	writeFileSync(
+		join(wikiRoot, "demo.md"),
+		"---\ntype: concept\ntitle: Demo\ndescription: demo concept\nstatus: stable\n---\n\n# Demo\n\nBody text.\n",
+	);
+});
+
+afterEach(() => {
+	if (previousWikiRoot === undefined) delete process.env.HERDR_WIKI_DIR;
+	else process.env.HERDR_WIKI_DIR = previousWikiRoot;
+	rmSync(wikiRoot, { recursive: true, force: true });
+});
+
+const pressEscape = pressEscapeAndSettle;
+
 test("a full-feature attach labels its capabilities and omits Environments", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "unified-attach-"));
 	const db = new TraceDb(dir);
@@ -65,49 +92,98 @@ async function renderUnifiedShell() {
 	return { t, db };
 }
 
-test("the unified shell exposes Environments as a top-level feature", async () => {
-	const { t, db } = await renderUnifiedShell();
-	const frame = await t.waitForFrame((value) =>
-		value.includes("ENVIRONMENTS-BODY"),
+/** Home mode: the entry is the Home page, so Wiki and the workflow page exist. */
+async function renderHomeShell() {
+	const dir = mkdtempSync(join(tmpdir(), "unified-home-"));
+	const db = new TraceDb(dir);
+	const t = await testRender(
+		() => {
+			const renderer = useRenderer();
+			const keymap = createDefaultOpenTuiKeymap(renderer);
+			const dispose = keymap.registerLayerFields({
+				appView(value, ctx) {
+					ctx.require("app.view", String(value));
+				},
+				activeModal(value, ctx) {
+					ctx.require("modal.active", String(value));
+				},
+				textEntry(value, ctx) {
+					ctx.require("textEntry.active", Boolean(value));
+				},
+			});
+			keymap.setData("app.view", "home");
+			keymap.setData("modal.active", "none");
+			onCleanup(dispose);
+			return (
+				<App
+					repos={["/demo"]}
+					db={db}
+					traceStore={new TraceStore()}
+					metricStore={new MetricStore()}
+					logStore={new LogStore()}
+					topologyStore={new TopologyStore()}
+					environments={{ serverUrl: "http://127.0.0.1:4050" }}
+					renderEnvironments={() => <text>ENVIRONMENTS-BODY</text>}
+					dashboard={{ mode: "home", keymap }}
+				/>
+			);
+		},
+		{ width: 140, height: 40 },
 	);
+	await t.renderOnce();
+	return { t, db };
+}
+
+test("the default full-application entry opens Home with its destinations", async () => {
+	const { t, db } = await renderHomeShell();
+	const frame = await t.waitForFrame((value) => value.includes("Home"));
 	expect(frame).toContain("Environments");
 	expect(frame).toContain("Observability");
-	t.renderer.destroy();
-	db.close();
-});
-
-test("selecting Observability shows its traces/metrics/logs/topology sub-tabs", async () => {
-	const { t, db } = await renderUnifiedShell();
-	await t.waitForFrame((value) => value.includes("ENVIRONMENTS-BODY"));
-	// Number keys address the shell tab list; "2" selects the first
-	// observability sub-view (environments, traces, metrics, logs, topology).
-	t.mockInput.pressKey("2");
-	const frame = await t.waitForFrame(
-		(value) => value.includes("Metrics") && value.includes("Traces"),
-	);
-	expect(frame).toContain("Topology");
+	expect(frame).toContain("Wiki");
+	expect(frame).toContain("Workflows");
 	expect(frame).not.toContain("ENVIRONMENTS-BODY");
 	t.renderer.destroy();
 	db.close();
 });
 
-test("number keys select the visible Observability sub-tabs", async () => {
+test("a destination opens its category page and then the feature body", async () => {
 	const { t, db } = await renderUnifiedShell();
-	await t.waitForFrame((value) => value.includes("ENVIRONMENTS-BODY"));
-	// The feature row occupies 1-2; while Observability is visible its sub-row
-	// follows: 3=Traces, 4=Metrics, 5=Logs, 6=Topology.
-	t.mockInput.pressKey("2");
-	await t.waitForFrame((value) => value.includes("Metrics"));
-	t.mockInput.pressKey("4");
+	// The shell without a dashboard starts on Environments.
+	const page = await t.waitForFrame((value) => value.includes("Applications"));
+	expect(page).toContain("Libraries");
+	expect(page).toContain("Kubernetes");
+	expect(page).toContain("Home › Environments");
+	expect(page).not.toContain("ENVIRONMENTS-BODY");
+
+	// Enter opens the first category destination and mounts the body.
+	t.mockInput.pressEnter();
 	const frame = await t.waitForFrame((value) =>
-		value.includes("No metrics loaded"),
+		value.includes("ENVIRONMENTS-BODY"),
 	);
-	expect(frame).toContain("Metrics");
+	expect(frame).toContain("Home › Environments › Applications");
 	t.renderer.destroy();
 	db.close();
 });
 
-test("switching features keeps the live Environments body mounted", async () => {
+test("a category page lists the enabled observability destinations", async () => {
+	const { t, db } = await renderHomeShell();
+	await t.waitForFrame((value) => value.includes("Home"));
+	// Home lists Observability second (Environments is first).
+	t.mockInput.pressKey("j");
+	await t.renderOnce();
+	t.mockInput.pressEnter();
+	const page = await t.waitForFrame((value) => value.includes("Topology"));
+	expect(page).toContain("Traces");
+	expect(page).toContain("Metrics");
+	expect(page).toContain("Logs");
+	expect(page).toContain("Home › Observability");
+	// No shell or nested navigation tab row is part of the page.
+	expect(page).not.toMatch(/\d-\d/);
+	t.renderer.destroy();
+	db.close();
+});
+
+test("switching destinations keeps the live Environments body mounted", async () => {
 	let mounts = 0;
 	const dir = mkdtempSync(join(tmpdir(), "unified-shell-state-"));
 	const db = new TraceDb(dir);
@@ -128,15 +204,14 @@ test("switching features keeps the live Environments body mounted", async () => 
 		),
 		{ width: 120, height: 40 },
 	);
-	await t.waitForFrame((value) => value.includes("draft: retained"));
+	t.mockInput.pressEnter();
+	expect(await renderUntil(t, "draft: retained")).toBe(true);
 	expect(mounts).toBe(1);
-	t.mockInput.pressKey("2");
-	await t.waitForFrame((value) => value.includes("Metrics"));
-	t.mockInput.pressKey("1");
-	const frame = await t.waitForFrame((value) =>
-		value.includes("draft: retained"),
-	);
-	expect(frame).toContain("draft: retained");
+	await pressEscape(t, (frame) => frame.includes("Libraries"));
+	const frame = t.captureCharFrame();
+	expect(frame).toContain("Home › Environments");
+	expect(frame).toContain("Libraries");
+	expect(frame).not.toContain("draft: retained");
 	expect(mounts).toBe(1);
 	t.renderer.destroy();
 	db.close();
@@ -166,16 +241,16 @@ test("the feature shell renders at a narrow terminal size", async () => {
 		),
 		{ width: 60, height: 20 },
 	);
-	const frame = await t.waitForFrame(
-		(value) =>
-			value.includes("Environments") && value.includes("Observability"),
-	);
-	expect(frame).toContain("ENVIRONMENTS-BODY");
+	const frame = await t.waitForFrame((value) => value.includes("Applications"));
+	// The breadcrumb stays one line and never overflows the narrow terminal.
+	const crumb = frame.split("\n").find((line) => line.includes("›"));
+	expect(crumb).toBeDefined();
+	expect(crumb?.trimEnd().length).toBeLessThanOrEqual(60);
 	t.renderer.destroy();
 	db.close();
 });
 
-test("hidden environment keymap layers do not consume visible feature keys", async () => {
+test("a hidden feature body does not consume the visible page's keys", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "unified-shell-keymap-"));
 	const db = new TraceDb(dir);
 	const t = await testRender(
@@ -193,37 +268,30 @@ test("hidden environment keymap layers do not consume visible feature keys", asy
 		),
 		{ width: 120, height: 40 },
 	);
-	await t.waitForFrame((value) => value.includes("ENV-BODY"));
-	// Switch to Observability
-	t.mockInput.pressKey("2");
-	await t.waitForFrame((value) => value.includes("Metrics"));
-	// Send keys on Observability
+	await t.waitForFrame((value) => value.includes("Applications"));
+	// The destination cursor moves with j, and the environment body stays hidden.
 	t.mockInput.pressKey("j");
 	await t.renderOnce();
-	expect(t.captureCharFrame()).toContain("Metrics");
+	const frame = t.captureCharFrame();
+	expect(frame).not.toContain("ENV-BODY");
+	expect(frame).toContain("Libraries");
 	t.renderer.destroy();
 	db.close();
 });
 
-test("an open modal owns input across tab-switch keys", async () => {
+test("an open modal owns input across page-navigation keys", async () => {
 	const { t, db } = await renderUnifiedShell();
-	await t.waitForFrame((value) => value.includes("ENVIRONMENTS-BODY"));
-	// Open help, then try to switch features with a number key. The top overlay
-	// must keep input; the Environments body must not be replaced.
+	await t.waitForFrame((value) => value.includes("Applications"));
 	t.mockInput.pressKey("?");
 	await t.waitForFrame((value) => value.includes("Keybindings"));
-	t.mockInput.pressKey("2");
+	t.mockInput.pressKey("j");
 	await t.renderOnce();
-	// The help overlay still owns input; the feature did not switch underneath.
 	expect(t.captureCharFrame()).toContain("Keybindings");
-	// Close the overlay, then prove the Environments body is still the active
-	// feature: if the number key had switched tabs, this would show traces.
-	t.mockInput.pressKey("\u001b");
-	await new Promise((resolve) => setTimeout(resolve, 80));
+	await pressEscape(t);
 	const closed = await t.waitForFrame((value) =>
-		value.includes("ENVIRONMENTS-BODY"),
+		value.includes("Applications"),
 	);
-	expect(closed).toContain("Environments");
+	expect(closed).not.toContain("Keybindings");
 	t.renderer.destroy();
 	db.close();
 });

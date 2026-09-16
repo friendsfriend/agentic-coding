@@ -4,10 +4,10 @@
 TBD - created by archiving change compose-unified-feature-shell. Update Purpose after archive.
 ## Requirements
 ### Requirement: One feature-preserving terminal shell
-The application SHALL render Environments, Workflows, Observability and Wiki under one OpenTUI renderer with shared chrome. All feature-inventory capabilities from both applications SHALL remain reachable, including environment sub-tabs, providers/issues/change requests/CI, agent utilities, workflow reviews/questions/configuration and telemetry detail views.
+The full application SHALL render environment, workflow, observability and Wiki capabilities under one OpenTUI renderer with shared page-based chrome rather than navigation tab bars. Existing operational capabilities SHALL remain reachable, including environment categories, providers/issues/change requests/CI, agent utilities, workflow reviews/questions/configuration and telemetry detail views. The existing workflow entry SHALL remain a temporary page until contextual launch and centralized Settings replace it.
 
 #### Scenario: User moves between domains
-- **WHEN** a user opens workflow detail from an environment and later opens telemetry
+- **WHEN** a user opens telemetry from an environment and later returns
 - **THEN** navigation SHALL occur inside the same renderer without starting another TUI root
 - **AND** returning SHALL restore the relevant route identity, selection and draft state
 
@@ -37,7 +37,7 @@ A single OpenTUI keymap SHALL own application dispatch. Per-surface command regi
 - **AND** one user action SHALL NOT be dispatched by both raw input and keymap handlers
 
 ### Requirement: Preserve feature-specific panel navigation
-Shared panel framing SHALL preserve workflow directional grid movement, rendered-panel filtering and in-panel scroll semantics. Tab/Shift+Tab SHALL remain shell tab navigation rather than workflow panel movement.
+Shared panel framing SHALL preserve workflow directional grid movement, rendered-panel filtering and in-panel scroll semantics. Tab/Shift+Tab SHALL traverse page-local focus regions rather than switch shell destinations.
 
 #### Scenario: OpenSpec panel is absent
 - **WHEN** no artifacts render and the user moves workflow panel focus
@@ -46,10 +46,10 @@ Shared panel framing SHALL preserve workflow directional grid movement, rendered
 ### Requirement: Services outlive feature visibility
 Workflow execution coordinators, telemetry listeners/watchers and database lifetimes SHALL be owned by the application root independently of feature visibility. Feature rendering SHALL NOT create additional execution coordinators or claim durable effects.
 
-#### Scenario: Switch tabs during workflow execution
-- **WHEN** the user hides Workflows while an execution pass is active
+#### Scenario: Change page during workflow execution
+- **WHEN** the user leaves a workflow view while an execution pass is active
 - **THEN** execution and lease renewal SHALL continue under the same root owner
-- **AND** showing Workflows again SHALL subscribe to authoritative state without duplicating execution
+- **AND** showing that view again SHALL subscribe to authoritative state without duplicating execution
 
 #### Scenario: External tool temporarily owns terminal
 - **WHEN** the renderer is suspended while a foreground terminal utility runs

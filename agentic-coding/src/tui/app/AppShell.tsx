@@ -52,12 +52,24 @@ export function AppShell(props: AppShellProps) {
 							onCatalog: (catalog: KeybindSection[]) => void,
 							active: () => boolean,
 							onModalChange: (open: boolean) => void,
+							destination: () =>
+								| {
+										category?: string;
+										view?: string;
+										onChange?: (destination: {
+											category: string;
+											view: string;
+											resourceId?: string;
+										}) => void;
+								  }
+								| undefined,
 						) => (
 							<EnvironmentsFeature
 								serverUrl={props.environments?.serverUrl ?? ""}
 								onKeybindCatalog={onCatalog}
 								active={active}
 								onModalChange={onModalChange}
+								destination={destination}
 							/>
 						)
 					: undefined

@@ -7,6 +7,20 @@ import { TUIApp } from "../../../packages/devenv/cli/src/tui/app-opentui";
 
 export interface EnvironmentsFeatureProps {
 	serverUrl: string;
+	/** Shell route authority: the destination the page shell is showing, and the
+	 * report of the feature's own destination changes (task 2.2). Structural
+	 * typing keeps the shell layer free of an environment package import. */
+	destination?: () =>
+		| {
+				category?: string;
+				view?: string;
+				onChange?: (destination: {
+					category: string;
+					view: string;
+					resourceId?: string;
+				}) => void;
+		  }
+		| undefined;
 	/** Embedded mode publishes the environment's live command registrations so
 	 * the shell footer/help project the real keymap metadata (task 3.6). */
 	onKeybindCatalog?: (
@@ -27,6 +41,7 @@ export function EnvironmentsFeature(props: EnvironmentsFeatureProps) {
 			onKeybindCatalog={props.onKeybindCatalog}
 			active={props.active}
 			onModalChange={props.onModalChange}
+			destination={props.destination?.()}
 		/>
 	);
 }

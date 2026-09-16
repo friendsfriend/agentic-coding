@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
-import { onCleanup } from "solid-js";
+import { createSignal, onCleanup } from "solid-js";
 import { WikiView } from "../../src/tui/otel/views/WikiView";
 
 // `?` is owned by WikiView: it opens the shell help in the tree/note state but
@@ -33,6 +33,8 @@ function writeConcept(id: string): void {
 }
 
 function TestWiki(props: { onHelp: () => void }) {
+	// The shell owns the note identity; this host mirrors it with a signal.
+	const [noteId, setNoteId] = createSignal<string | undefined>();
 	const keymap = createDefaultOpenTuiKeymap(useRenderer());
 	const dispose = keymap.registerLayerFields({
 		name() {},
@@ -55,6 +57,9 @@ function TestWiki(props: { onHelp: () => void }) {
 			submitting={false}
 			onSubmittingChange={() => {}}
 			onClearComments={() => {}}
+			noteId={noteId()}
+			onOpenNote={setNoteId}
+			onCloseNote={() => setNoteId(undefined)}
 			onHelp={props.onHelp}
 		/>
 	);

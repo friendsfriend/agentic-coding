@@ -39,6 +39,11 @@ import {
 	initializeApp,
 } from "./actions";
 import { createColumns, createScriptColumns } from "./columns";
+import {
+	requestedCategory,
+	viewModeForPath,
+	viewPathForMode,
+} from "./destination-sync";
 import { setupLogEffects } from "./effects/log-effects";
 import {
 	abortExitSignal,
@@ -105,6 +110,28 @@ export interface TUIAppProps {
 	active?: () => boolean;
 	/** Projects the local overlay state into the shell ModalHost. */
 	onModalChange?: (open: boolean) => void;
+	/**
+	 * Shell route authority (replace-nested-tabs-with-page-navigation, task 2.2).
+	 * When the page shell embeds this feature, the destination it is showing
+	 * comes from the route instead of an inner navigation tab row: the shell
+	 * requests a category/view and the feature reports its own changes back, so
+	 * exactly one side is authoritative for each direction.
+	 */
+	destination?: EnvironmentDestination;
+}
+
+export interface EnvironmentDestination {
+	/** Category page the shell route names (undefined: no request). */
+	category?: string;
+	/** View path inside the resource page ("changeRequestDetail.jobs", …). */
+	view?: string;
+	/** The feature reports a destination change back to the shell route. */
+	onChange?: (destination: {
+		category: string;
+		view: string;
+		/** Resource identity the view renders, when it has one. */
+		resourceId?: string;
+	}) => void;
 }
 
 type EnvironmentKeybindSections = Array<{
@@ -427,6 +454,47 @@ export function TUIApp(props: TUIAppProps) {
 		});
 		onCleanup(unregister);
 		onCleanup(unregisterExitGuard);
+	});
+
+	// --- Shell route ↔ destination sync (embedded page shell) ---
+	// The route names a category and a view path; the store owns the data and the
+	// per-tab state. Writing only on a difference keeps the two authorities from
+	// fighting, and a shell Back therefore restores the view it left.
+	createEffect(() => {
+		const destination = props.destination;
+		if (!destination) return;
+		const category = requestedCategory(
+			destination.category,
+			appStore.tableTabs().map((tab) => tab.id),
+		);
+		if (category && category !== appStore.activeTab()) {
+			appStore.setActiveTab(category);
+			appStore.setSelectedIndex(0);
+			appStore.setTableSearchQuery("");
+			appStore.setTableSearchMode(false);
+			if (category === "scripts") void appActions.loadScripts();
+		}
+		const requestedView = destination.view;
+		if (requestedView === undefined) return;
+		const wanted = viewModeForPath(requestedView);
+		if (wanted !== appStore.viewMode()) appStore.resetViewStack(wanted);
+	});
+	// The feature reports where it went (a table selection opening the detail
+	// view, a CR detail opening its jobs, …) so the route follows the same
+	// operations the mouse and keys perform.
+	createEffect(() => {
+		const destination = props.destination;
+		if (!destination?.onChange) return;
+		const category = appStore.activeTab();
+		const mode = appStore.viewMode();
+		const view = viewPathForMode(mode);
+		const resourceId =
+			mode === "appDetail" ? appDetailStore.appDetailApp()?.ident : undefined;
+		destination.onChange({
+			category,
+			view,
+			...(resourceId !== undefined ? { resourceId } : {}),
+		});
 	});
 
 	// --- Columns ---

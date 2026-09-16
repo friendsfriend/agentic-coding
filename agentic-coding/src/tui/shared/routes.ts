@@ -1,180 +1,496 @@
-// Typed shell routing for the unified feature shell
-// (compose-unified-feature-shell, task 2.2). A route carries the feature, the
-// feature-local view/panel, the required resource identity the view renders,
-// and an opaque feature-local selection/draft payload. Feature stacks preserve
-// history and drafts while a feature is hidden, and a cross-feature navigation
-// records its origin so `back()` can return to the exact originating resource.
+// Typed page routing for the unified feature shell
+// (replace-nested-tabs-with-page-navigation, task 1.2).
 //
-// The reducers are framework-agnostic (pure data) so they can be unit-tested
-// without a renderer. `createFeatureNavigation` adds a Solid-reactive wrapper
-// for the shell component.
+// One location model replaces per-feature stacks plus a single cross-feature
+// origin. A route is a typed page identity (plus an optional resource identity
+// and typed params); the structural parent of a page is derived from the page
+// catalog, never from history; Back is chronological across every feature
+// boundary; and per-route view state (selection, filters, drafts) is keyed by
+// route identity so returning to a page restores it.
+//
+// Pure data and pure functions: no renderer, no stores, no `effect()` wrapper.
 import { createSignal } from "solid-js";
 
 /** The four top-level features of the unified shell. */
 export type FeatureId = "environments" | "workflows" | "observability" | "wiki";
 
-/** A route identity: feature + view + required resource + preserved payload. */
-export interface FeatureRoute {
-	feature: FeatureId;
-	/** Feature-local view or panel discriminator (e.g. "detail", "traces"). */
-	view: string;
-	/** Required resource identity for a detail route; absent for list roots. */
+/** Base view of a resource page (its own detail view). */
+export const RESOURCE_BASE_VIEW = "detail";
+
+export type PageId =
+	| "home"
+	| "environments"
+	| "environments.applications"
+	| "environments.libraries"
+	| "environments.infrastructure"
+	| "environments.scripts"
+	| "environments.kubernetes"
+	| "environments.resource"
+	| "observability"
+	| "observability.traces"
+	| "observability.traces.tree"
+	| "observability.traces.tree.span"
+	| "observability.metrics"
+	| "observability.metrics.detail"
+	| "observability.logs"
+	| "observability.logs.detail"
+	| "observability.topology"
+	| "observability.topology.service"
+	| "wiki"
+	| "wiki.note"
+	| "workflows"
+	| "workflows.detail";
+
+/** A location: page identity + required resource identity + typed params. */
+export interface Route {
+	page: PageId;
+	/** Identity the page renders (application id, trace id, concept id, …). */
 	resourceId?: string;
-	/** Opaque feature-local selection/search/draft, preserved across hide/show. */
-	payload?: unknown;
+	/** Page-local discriminators (resource kind, nested view path, …). */
+	params?: Readonly<Record<string, string>>;
 }
 
-/** Where the user came from before a cross-feature navigation. */
-export interface RouteOrigin {
-	feature: FeatureId;
-	route: FeatureRoute;
+export interface PageDef {
+	label: string;
+	/** Owning feature; absent for chrome pages that own no service body. */
+	feature?: FeatureId;
+	/** Structural parent. Derived from the catalog, never from history. */
+	parent?: (route: Route) => Route | undefined;
+	/** Destination is listed in the location picker. */
+	picker?: boolean;
+	/** Page requires a resource identity to render. */
+	requiresResource?: boolean;
 }
 
-export interface FeatureRouterState {
-	active: FeatureId;
-	/** Per-feature view stack; index 0 is the feature root. Never empty. */
-	stacks: Record<FeatureId, FeatureRoute[]>;
-	origin?: RouteOrigin;
+/** Environment categories, in picker order. */
+export const ENVIRONMENT_CATEGORIES = [
+	"applications",
+	"libraries",
+	"infrastructure",
+	"scripts",
+	"kubernetes",
+] as const;
+export type EnvironmentCategory = (typeof ENVIRONMENT_CATEGORIES)[number];
+
+/** Observability destinations, in picker order. */
+export const OBSERVABILITY_VIEWS = [
+	"traces",
+	"metrics",
+	"logs",
+	"topology",
+] as const;
+
+/** Human labels for nested resource view paths (mirrors `appStore.viewMode`). */
+export const VIEW_LABELS: Readonly<Record<string, string>> = {
+	detail: "Detail",
+	appDetail: "Detail",
+	actions: "Actions",
+	issues: "Issues",
+	issueDetail: "Issue",
+	issueTimeline: "Timeline",
+	references: "References",
+	changeRequests: "Change requests",
+	changeRequestDetail: "Change request",
+	changeRequestLinkedIssues: "Linked issues",
+	changedFiles: "Changed files",
+	discussionsView: "Discussions",
+	testResults: "Test results",
+	jobs: "Jobs",
+	logs: "Logs",
+	providers: "Providers",
+	sshPicker: "SSH targets",
+	agentView: "Agent",
+};
+
+const environmentsParent = (route: Route): Route => {
+	const view = route.params?.view ?? RESOURCE_BASE_VIEW;
+	const parentView = viewParent(view);
+	if (parentView)
+		return { ...route, params: { ...route.params, view: parentView } };
+	const kind = route.params?.kind;
+	return kind && isEnvironmentCategory(kind)
+		? { page: `environments.${kind}` }
+		: { page: "environments" };
+};
+
+/** The page catalog. Every page's parent chain terminates at `home`. */
+export const PAGES: Readonly<Record<PageId, PageDef>> = {
+	home: { label: "Home" },
+	environments: {
+		label: "Environments",
+		feature: "environments",
+		parent: () => ({ page: "home" }),
+		picker: true,
+	},
+	"environments.applications": {
+		label: "Applications",
+		feature: "environments",
+		parent: () => ({ page: "environments" }),
+		picker: true,
+	},
+	"environments.libraries": {
+		label: "Libraries",
+		feature: "environments",
+		parent: () => ({ page: "environments" }),
+		picker: true,
+	},
+	"environments.infrastructure": {
+		label: "Infrastructure",
+		feature: "environments",
+		parent: () => ({ page: "environments" }),
+		picker: true,
+	},
+	"environments.scripts": {
+		label: "Scripts",
+		feature: "environments",
+		parent: () => ({ page: "environments" }),
+		picker: true,
+	},
+	"environments.kubernetes": {
+		label: "Kubernetes",
+		feature: "environments",
+		parent: () => ({ page: "environments" }),
+		picker: true,
+	},
+	"environments.resource": {
+		label: "Resource",
+		feature: "environments",
+		parent: environmentsParent,
+		requiresResource: true,
+	},
+	observability: {
+		label: "Observability",
+		feature: "observability",
+		parent: () => ({ page: "home" }),
+		picker: true,
+	},
+	"observability.traces": {
+		label: "Traces",
+		feature: "observability",
+		parent: () => ({ page: "observability" }),
+		picker: true,
+	},
+	"observability.traces.tree": {
+		label: "Trace",
+		feature: "observability",
+		// The tree identity lives in the route's resourceId; the list page is a
+		// different location and must not inherit the tree's params.
+		parent: () => ({ page: "observability.traces" }),
+		requiresResource: true,
+	},
+	"observability.traces.tree.span": {
+		label: "Span",
+		feature: "observability",
+		parent: (route) => ({
+			page: "observability.traces.tree",
+			resourceId: route.params?.traceId,
+		}),
+		requiresResource: true,
+	},
+	"observability.metrics": {
+		label: "Metrics",
+		feature: "observability",
+		parent: () => ({ page: "observability" }),
+		picker: true,
+	},
+	"observability.metrics.detail": {
+		label: "Metric",
+		feature: "observability",
+		parent: () => ({ page: "observability.metrics" }),
+		requiresResource: true,
+	},
+	"observability.logs": {
+		label: "Logs",
+		feature: "observability",
+		parent: () => ({ page: "observability" }),
+		picker: true,
+	},
+	"observability.logs.detail": {
+		label: "Log",
+		feature: "observability",
+		parent: () => ({ page: "observability.logs" }),
+		requiresResource: true,
+	},
+	"observability.topology": {
+		label: "Topology",
+		feature: "observability",
+		parent: () => ({ page: "observability" }),
+		picker: true,
+	},
+	"observability.topology.service": {
+		label: "Service",
+		feature: "observability",
+		parent: () => ({ page: "observability.topology" }),
+		requiresResource: true,
+	},
+	wiki: {
+		label: "Wiki",
+		feature: "wiki",
+		parent: () => ({ page: "home" }),
+		picker: true,
+	},
+	"wiki.note": {
+		label: "Note",
+		feature: "wiki",
+		parent: () => ({ page: "wiki" }),
+		requiresResource: true,
+	},
+	workflows: {
+		label: "Workflows",
+		feature: "workflows",
+		parent: () => ({ page: "home" }),
+		picker: true,
+	},
+	"workflows.detail": {
+		label: "Workflow",
+		feature: "workflows",
+		parent: () => ({ page: "workflows" }),
+		requiresResource: true,
+	},
+};
+
+export function isEnvironmentCategory(
+	value: string,
+): value is EnvironmentCategory {
+	return (ENVIRONMENT_CATEGORIES as readonly string[]).includes(value);
 }
 
-function isSameRoute(a: FeatureRoute, b: FeatureRoute): boolean {
-	return (
-		a.feature === b.feature &&
-		a.view === b.view &&
-		a.resourceId === b.resourceId
-	);
+/** Drop the last segment of a nested view path; undefined at the base view. */
+export function viewParent(view: string): string | undefined {
+	if (view === RESOURCE_BASE_VIEW) return undefined;
+	const index = view.lastIndexOf(".");
+	if (index === -1) return RESOURCE_BASE_VIEW;
+	return view.slice(0, index);
 }
 
-export function createFeatureRouterState(
-	active: FeatureId,
-	root: FeatureRoute,
-): FeatureRouterState {
-	const stacks = {
-		environments: [rootFor("environments")],
-		workflows: [rootFor("workflows")],
-		observability: [rootFor("observability")],
-		wiki: [rootFor("wiki")],
-	} satisfies Record<FeatureId, FeatureRoute[]>;
-	stacks[active] = [root];
-	return { active, stacks };
+/** A resource page (environment application/library or an observability detail). */
+export function resourceRoute(
+	kind: EnvironmentCategory,
+	resourceId: string,
+	view: string = RESOURCE_BASE_VIEW,
+	extra?: Readonly<Record<string, string>>,
+): Route {
+	return {
+		page: "environments.resource",
+		resourceId,
+		params: { kind, view, ...extra },
+	};
 }
 
-function rootFor(feature: FeatureId): FeatureRoute {
-	switch (feature) {
-		case "environments":
-			return { feature, view: "applications" };
-		case "workflows":
-			return { feature, view: "home" };
-		case "observability":
-			return { feature, view: "traces" };
-		case "wiki":
-			return { feature, view: "browse" };
+export function pageLabel(route: Route): string {
+	if (route.page === "environments.resource") {
+		const view = route.params?.view;
+		if (view && view !== RESOURCE_BASE_VIEW) {
+			const last = view.slice(view.lastIndexOf(".") + 1);
+			return VIEW_LABELS[last] ?? last;
+		}
+		// The resource root is named by the identity it renders.
+		return route.resourceId ?? PAGES[route.page].label;
 	}
+	return PAGES[route.page].label;
 }
 
-/** The route the active feature is currently showing. */
-export function currentRoute(state: FeatureRouterState): FeatureRoute {
-	const stack = state.stacks[state.active];
-	const route = stack[stack.length - 1];
-	if (!route) throw new Error("feature router stack must never be empty");
-	return route;
+export function featureOf(route: Route): FeatureId | undefined {
+	return PAGES[route.page].feature;
+}
+
+/** Stable identity of a location: page + resource + ordered params. */
+export function routeKey(route: Route): string {
+	const params = route.params
+		? Object.entries(route.params)
+				.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+				.map(([key, value]) => `${key}=${value}`)
+				.join(",")
+		: "";
+	return `${route.page}|${route.resourceId ?? ""}|${params}`;
+}
+
+export function isSameLocation(a: Route, b: Route): boolean {
+	return routeKey(a) === routeKey(b);
+}
+
+/** Root location of each feature. */
+export const FEATURE_ROOTS: Readonly<Record<FeatureId, Route>> = {
+	environments: { page: "environments" },
+	workflows: { page: "workflows" },
+	observability: { page: "observability" },
+	wiki: { page: "wiki" },
+};
+
+export function featureRoot(feature: FeatureId): Route {
+	return FEATURE_ROOTS[feature];
 }
 
 /**
- * Navigate. A route in the active feature pushes onto that feature's stack (or
- * replaces an identical top). A route in another feature records the current
- * route as origin, activates the target feature, and pushes the route there.
+ * Last visited location of a feature, or its root when it was never visited.
+ * Switching to a feature resumes where it was left; the location is remembered
+ * from the route itself, so nothing about it is stored separately.
  */
-export function navigate(
-	state: FeatureRouterState,
-	route: FeatureRoute,
-): FeatureRouterState {
-	const stack = state.stacks[route.feature];
-	const top = stack[stack.length - 1];
-	const nextStack =
-		top && isSameRoute(top, route)
-			? [...stack.slice(0, -1), route]
-			: [...stack, route];
-	const stacks = { ...state.stacks, [route.feature]: nextStack };
-	if (route.feature === state.active) {
-		return { ...state, stacks };
+export function rememberedRoute(state: RouterState, feature: FeatureId): Route {
+	const locations = state.current
+		? [...state.history, state.current]
+		: state.history;
+	for (let index = locations.length - 1; index >= 0; index -= 1) {
+		const route = locations[index];
+		if (featureOf(route) === feature) return route;
 	}
+	return featureRoot(feature);
+}
+
+/** Structural parent page of a route; undefined at Home. */
+export function parentRoute(route: Route): Route | undefined {
+	return PAGES[route.page].parent?.(route);
+}
+
+/** Root-first ancestor chain including the route itself. */
+export function breadcrumb(route: Route): Route[] {
+	const chain: Route[] = [];
+	let cursor: Route | undefined = route;
+	const seen = new Set<string>();
+	while (cursor && !seen.has(routeKey(cursor))) {
+		chain.unshift(cursor);
+		seen.add(routeKey(cursor));
+		cursor = parentRoute(cursor);
+	}
+	return chain;
+}
+
+/** Searchable destinations: one entry per registered picker page. */
+export function pickerDestinations(): Array<{ page: PageId; label: string }> {
+	return (Object.keys(PAGES) as PageId[])
+		.filter((page) => PAGES[page].picker)
+		.map((page) => ({ page, label: PAGES[page].label }));
+}
+
+export interface RouterState {
+	current: Route;
+	/** Prior locations, oldest first. Back pops the last entry. */
+	history: Route[];
+	/** Route-keyed view state, preserved independently of page visibility. */
+	viewState: Record<string, unknown>;
+}
+
+export function createRouterState(current: Route): RouterState {
+	return { current, history: [], viewState: {} };
+}
+
+export function currentRoute(state: RouterState): Route {
+	return state.current;
+}
+
+export function canGoBack(state: RouterState): boolean {
+	return state.history.length > 0;
+}
+
+/**
+ * Navigate to a location. Records the previous location in history unless it is
+ * the same location (re-entering where you already are is not a move).
+ */
+export function navigate(state: RouterState, route: Route): RouterState {
+	if (isSameLocation(state.current, route)) return { ...state, current: route };
 	return {
-		active: route.feature,
-		stacks,
-		origin: { feature: state.active, route: currentRoute(state) },
+		...state,
+		current: route,
+		history: [...state.history, state.current],
 	};
 }
 
 /**
- * Switch the active feature without recording history: the target feature
- * resumes at whatever route it last showed (its stack is preserved), so drafts
- * and selections survive a hide/show cycle.
+ * Replace the current location without recording history: used when a requested
+ * resource turned out to be unavailable, so the fallback ancestor does not
+ * become a second history entry (Back would otherwise return to the dead
+ * identity).
  */
-export function switchFeature(
-	state: FeatureRouterState,
-	feature: FeatureId,
-): FeatureRouterState {
-	if (feature === state.active) return state;
-	return { ...state, active: feature };
+export function replace(state: RouterState, route: Route): RouterState {
+	if (isSameLocation(state.current, route)) return state;
+	return { ...state, current: route };
 }
 
 /**
- * Replace the top route of `route.feature` without recording history or
- * growing the stack. Sibling navigation (observability sub-tabs, in-feature
- * panel changes) uses this so `back()` walks history, not every sibling.
+ * Go Back in chronological order. Home has no parent and history never
+ * fabricates an entry, so at the first location this is a no-op.
  */
-export function setRoute(
-	state: FeatureRouterState,
-	route: FeatureRoute,
-): FeatureRouterState {
-	const stack = state.stacks[route.feature];
-	const next = stack.length === 0 ? [route] : [...stack.slice(0, -1), route];
-	return { ...state, stacks: { ...state.stacks, [route.feature]: next } };
+export function back(state: RouterState): RouterState {
+	const previous = state.history.at(-1);
+	if (!previous) return state;
+	return {
+		...state,
+		current: previous,
+		history: state.history.slice(0, -1),
+	};
+}
+
+/** Open the structural parent of the current location (never history). */
+export function goToParent(state: RouterState): RouterState {
+	const parent = parentRoute(state.current);
+	return parent ? navigate(state, parent) : state;
+}
+
+export interface Resolution {
+	route: Route;
+	/** The requested route that was unavailable, when a fallback applied. */
+	unavailable?: Route;
 }
 
 /**
- * Go back. Pops the active feature's own stack when it has history; otherwise
- * restores the recorded cross-feature origin. Returns the unchanged state when
- * there is nowhere to go.
+ * Resolve a requested location against availability. A missing resource falls
+ * back to the nearest valid structural ancestor and reports the request, so the
+ * caller can surface a diagnostic without substituting another identity.
  */
-export function back(state: FeatureRouterState): FeatureRouterState {
-	const stack = state.stacks[state.active];
-	if (stack.length > 1) {
-		return {
-			...state,
-			stacks: { ...state.stacks, [state.active]: stack.slice(0, -1) },
-		};
+export function resolveAvailable(
+	route: Route,
+	isAvailable: (route: Route) => boolean,
+): Resolution {
+	if (isAvailable(route)) return { route };
+	let cursor = parentRoute(route);
+	while (cursor) {
+		if (isAvailable(cursor)) return { route: cursor, unavailable: route };
+		cursor = parentRoute(cursor);
 	}
-	if (state.origin) {
-		return {
-			active: state.origin.feature,
-			stacks: state.stacks,
-			origin: undefined,
-		};
-	}
-	return state;
+	return { route, unavailable: route };
 }
 
-/** Drop the recorded origin without navigating (used when the shell closes the
- * cross-feature flow explicitly rather than via `back`). */
-export function clearOrigin(state: FeatureRouterState): FeatureRouterState {
-	return state.origin === undefined ? state : { ...state, origin: undefined };
+export function setViewState<T>(
+	state: RouterState,
+	route: Route,
+	value: T,
+): RouterState {
+	return {
+		...state,
+		viewState: { ...state.viewState, [routeKey(route)]: value },
+	};
 }
 
-/** Solid-reactive shell router: the component reads `route()`/`active()` and
- * dispatches `navigate`/`switchFeature`/`back`. */
-export function createFeatureNavigation(initial: FeatureRouterState) {
+export function viewState<T>(state: RouterState, route: Route): T | undefined {
+	return state.viewState[routeKey(route)] as T | undefined;
+}
+
+/** Drop the state of one location (e.g. a deleted resource). */
+export function dropViewState(state: RouterState, route: Route): RouterState {
+	const key = routeKey(route);
+	if (!(key in state.viewState)) return state;
+	const { [key]: _dropped, ...rest } = state.viewState;
+	return { ...state, viewState: rest };
+}
+
+/** Solid-reactive wrapper: components read `current()` and dispatch operations. */
+export function createPageNavigation(initial: RouterState) {
 	const [state, setState] = createSignal(initial);
 	return {
 		state,
-		active: () => state().active,
-		route: () => currentRoute(state()),
-		navigate: (route: FeatureRoute) => setState((s) => navigate(s, route)),
-		setRoute: (route: FeatureRoute) => setState((s) => setRoute(s, route)),
-		switchFeature: (feature: FeatureId) =>
-			setState((s) => switchFeature(s, feature)),
+		current: () => state().current,
+		feature: () => featureOf(state().current),
+		canBack: () => canGoBack(state()),
+		remembered: (feature: FeatureId) => rememberedRoute(state(), feature),
+		navigate: (route: Route) => setState((s) => navigate(s, route)),
+		replace: (route: Route) => setState((s) => replace(s, route)),
 		back: () => setState((s) => back(s)),
-		clearOrigin: () => setState((s) => clearOrigin(s)),
+		goToParent: () => setState((s) => goToParent(s)),
+		resolve: (route: Route, isAvailable: (route: Route) => boolean) =>
+			setState((s) => navigate(s, resolveAvailable(route, isAvailable).route)),
+		viewState: <T>(route: Route): T | undefined => viewState<T>(state(), route),
+		setViewState: <T>(route: Route, value: T) =>
+			setState((s) => setViewState(s, route, value)),
+		dropViewState: (route: Route) => setState((s) => dropViewState(s, route)),
 	};
 }

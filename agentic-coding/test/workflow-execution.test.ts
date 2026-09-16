@@ -196,7 +196,7 @@ test("known permanent failures stop immediately instead of consuming the retry b
 				execute: () => Effect.succeed({}),
 			},
 		});
-		await runner.drain(1, 100);
+		await runner.drain(1, 5_000);
 		const view = engine.status(repo, started.view.workflowId);
 		const effect = view.effects.find((item) => item.kind === "artifact.write");
 		expect(effect?.status).toBe("failed");

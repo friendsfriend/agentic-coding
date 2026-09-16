@@ -1,5 +1,7 @@
 import type { KeybindSection } from "../../shared/keybinds";
-import type { View } from "./navigation";
+
+/** Traces-local view: list, span tree or span detail. */
+export type View = "selection" | "detail" | "span";
 
 export type OtelTab =
 	| "environments"
@@ -16,12 +18,13 @@ export type OtelTab =
  * keeps the shell footer informative until those registrations are projected
  * through the shared contract (compose-unified-feature-shell task 3.6).
  */
-export function environmentsKeybindCatalog(tabCount = 4): KeybindSection[] {
+export function environmentsKeybindCatalog(): KeybindSection[] {
 	return [
 		{
 			title: "Navigation",
 			keybinds: [
-				{ key: `1-${tabCount}`, action: "feature tabs", standard: true },
+				{ key: "Ctrl+P", action: "locations", short: "locations" },
+				{ key: "Alt+Up", action: "parent page", short: "parent" },
 			],
 		},
 		{
@@ -42,15 +45,13 @@ export function environmentsKeybindCatalog(tabCount = 4): KeybindSection[] {
 export function observabilityKeybindCatalog(options: {
 	tab: OtelTab;
 	view: View;
-	tabCount: number;
 }): KeybindSection[] {
 	const theme = { key: "T", action: "theme picker", short: "theme" };
 	const help = { key: "?", action: "help" };
-	const tabs = {
-		key: `1-${options.tabCount}`,
-		action: "tabs",
-		standard: true,
-	};
+	// One location picker and one structural parent; destinations are pages now,
+	// so no tab-order or number key belongs in the footer or the help.
+	const parent = { key: "Alt+Up", action: "parent page", short: "parent" };
+	const locations = { key: "Ctrl+P", action: "locations", short: "locations" };
 	const quit = { key: "q", action: "quit", standard: true };
 	if (options.tab === "traces") {
 		const navigation =
@@ -80,8 +81,9 @@ export function observabilityKeybindCatalog(options: {
 					{ key: "O", action: "sort" },
 					{ key: "w", action: "all workspaces", short: "workspaces" },
 					theme,
+					parent,
+					locations,
 					help,
-					tabs,
 					quit,
 				],
 			},
@@ -127,8 +129,9 @@ export function observabilityKeybindCatalog(options: {
 					keybinds: [
 						{ key: "f", action: "finish review", short: "finish" },
 						{ key: "r", action: "refresh" },
+						parent,
+						locations,
 						help,
-						tabs,
 						quit,
 					],
 				},
@@ -143,7 +146,10 @@ export function observabilityKeybindCatalog(options: {
 						{ key: "Esc", action: "back", standard: true },
 					],
 				},
-				{ title: "Actions", keybinds: [theme, help, tabs, quit] },
+				{
+					title: "Actions",
+					keybinds: [theme, parent, locations, help, quit],
+				},
 			];
 		case "logs":
 			return [
@@ -157,7 +163,14 @@ export function observabilityKeybindCatalog(options: {
 				},
 				{
 					title: "Actions",
-					keybinds: [{ key: "/", action: "search" }, theme, help, tabs, quit],
+					keybinds: [
+						{ key: "/", action: "search" },
+						theme,
+						parent,
+						locations,
+						help,
+						quit,
+					],
 				},
 			];
 		case "topology":
@@ -170,7 +183,10 @@ export function observabilityKeybindCatalog(options: {
 						{ key: "Esc", action: "back", standard: true },
 					],
 				},
-				{ title: "Actions", keybinds: [theme, help, tabs, quit] },
+				{
+					title: "Actions",
+					keybinds: [theme, parent, locations, help, quit],
+				},
 			];
 		default:
 			return [];

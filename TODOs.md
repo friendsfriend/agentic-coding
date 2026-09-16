@@ -17,3 +17,8 @@ Small ones:
 * Remove tabs from agentic-coding dash -> Not needed as it should only serve as a implementation dashboard
 * Think of a better UI concept for the two tab bars. Maybe breadcrumbs and a menu structure or so. 
 
+
+General: 
+* Review tests and add guardrails on what tests to write
+* Test everything
+

@@ -4,7 +4,6 @@ import { isDownKey, isUpKey } from "./nav-keys";
 import {
 	isNextPanelKey,
 	isPrevPanelKey,
-	isReverseTabKey,
 	nextPanelIndex,
 	prevPanelIndex,
 } from "./panel-keys";
@@ -524,50 +523,11 @@ export async function handleTableKeys(
 			break;
 		case "tab":
 		case "\t":
-			appStore.setActiveTab((tab) => {
-				const tabs = appStore.tableTabs().map((item) => item.id);
-				const current = Math.max(0, tabs.indexOf(tab));
-				const offset = isReverseTabKey(event) ? -1 : 1;
-				return (
-					tabs[(current + offset + tabs.length) % tabs.length] ?? "applications"
-				);
-			});
-			appStore.setSelectedIndex(0); // Reset selection when switching tabs
-			appStore.setTableSearchQuery("");
-			appStore.setTableSearchMode(false);
-			if (appStore.activeTab() === "scripts") void appActions.loadScripts();
-			break;
-		case "1":
-			appStore.setActiveTab("applications");
-			appStore.setSelectedIndex(0);
-			appStore.setTableSearchQuery("");
-			appStore.setTableSearchMode(false);
-			break;
-		case "2":
-			appStore.setActiveTab("infrastructure");
-			appStore.setSelectedIndex(0);
-			appStore.setTableSearchQuery("");
-			appStore.setTableSearchMode(false);
-			break;
-		case "3":
-			appStore.setActiveTab("libraries");
-			appStore.setSelectedIndex(0);
-			appStore.setTableSearchQuery("");
-			appStore.setTableSearchMode(false);
-			break;
-		case "4":
-			appStore.setActiveTab("scripts");
-			appStore.setSelectedIndex(0);
-			appStore.setTableSearchQuery("");
-			appStore.setTableSearchMode(false);
-			void appActions.loadScripts();
-			break;
-		case "5":
-			appStore.setActiveTab("kubernetes");
-			appStore.setKubernetesPanelIndex(0);
-			appStore.setSelectedIndex(0);
-			appStore.setTableSearchQuery("");
-			appStore.setTableSearchMode(false);
+			// Categories are pages now (replace-nested-tabs-with-page-navigation,
+			// task 2.2): Tab belongs to the page shell, which owns this body with a
+			// single focus region, so it neither cycles categories here nor resolves
+			// to a destination. The shell page list, breadcrumb and location picker
+			// are the ways between categories.
 			break;
 		case "down":
 		case "Down":

@@ -212,13 +212,29 @@ export class EffectRunner {
 				if (!self.engine.effectIsLive(self.repo, effect.id, lease)) continue;
 				const handler = self.handlers[effect.kind];
 				if (!handler) {
-					self.engine.dispatch(self.repo, {
-						type: "effect.result",
-						effectId: effect.id,
-						lease,
-						outcome: "failed",
-						data: `no handler for ${effect.kind}`,
-					});
+					// A missing handler is a permanent failure for this effect. The dispatch
+					// can still lose the lease to a successor (the drain's claim is not the
+					// only owner of the row), and a lost lease is a classified skip here:
+					// letting `stale-effect` escape the drain program would surface as a
+					// fiber defect that kills the whole drain rather than this one effect.
+					yield* Effect.try({
+						try: () =>
+							self.engine.dispatch(self.repo, {
+								type: "effect.result",
+								effectId: effect.id,
+								lease,
+								outcome: "failed",
+								data: `no handler for ${effect.kind}`,
+							}),
+						catch: (error) => error as Error,
+					}).pipe(
+						Effect.catchAll((error) =>
+							Effect.sync(() => {
+								if (error.message.includes("effect lease is invalid")) return;
+								onFailure?.(effect.workflowId, error.message);
+							}),
+						),
+					);
 					continue;
 				}
 				const outcome = yield* self.runClaim(

@@ -42,6 +42,15 @@ export interface WikiViewProps {
 	/** Opens the shell's catalog help modal; `?` is handled here so comment
 	 * entry keeps receiving the character. */
 	onHelp?: () => void;
+	/**
+	 * Route-owned note identity (replace-nested-tabs-with-page-navigation, task
+	 * 2.3): the shell's route authority owns which note is open, so Back,
+	 * breadcrumbs and the location picker address it like any other page.
+	 * `undefined` shows the tree.
+	 */
+	noteId?: string;
+	onOpenNote: (conceptId: string) => void;
+	onCloseNote: () => void;
 }
 
 type WikiLoadState =
@@ -60,19 +69,11 @@ const [wikiCommentEntry, setWikiCommentEntry] = createSignal(false);
  * reach a span). */
 export const wikiCommentEntryActive = () => wikiCommentEntry();
 
-// Module scope: the shell reads this to publish the "note" footer context, so
-// note-only wiki actions appear in the footer while a note is open and stay
-// hidden in the tree state.
-const [wikiNoteOpen, setWikiNoteOpen] = createSignal(false);
-/** True while a wiki note is open. */
-export const wikiNoteActive = () => wikiNoteOpen();
-
 /** Home-mode browser for the centralized OKF wiki and its temporary review. */
 export function WikiView(props: WikiViewProps) {
 	const [state, setState] = createSignal<WikiLoadState>({ kind: "loading" });
 	const [selected, setSelected] = createSignal(0);
 	const [expanded, setExpanded] = createSignal<Set<string>>(new Set());
-	const [note, setNote] = createSignal<WikiConcept>();
 	const [noteIndex, setNoteIndex] = createSignal(0);
 	const [selectedLine, setSelectedLine] = createSignal(0);
 	const [visualStart, setVisualStart] = createSignal(0);
@@ -85,8 +86,38 @@ export function WikiView(props: WikiViewProps) {
 	}>({});
 	createEffect(() => setWikiCommentEntry(commentMode()));
 	onCleanup(() => setWikiCommentEntry(false));
-	createEffect(() => setWikiNoteOpen(note() !== undefined));
-	onCleanup(() => setWikiNoteOpen(false));
+
+	/** The open note is the route's identity, loaded for display. */
+	const note = createMemo<WikiConcept | undefined>(() => {
+		const id = props.noteId;
+		if (!id) return undefined;
+		try {
+			return readConcept(id);
+		} catch (error) {
+			notify(
+				`Wiki note is unavailable: ${error instanceof Error ? error.message : String(error)}`,
+				"warning",
+			);
+			return undefined;
+		}
+	});
+	// Entering a note starts a fresh per-note draft; the review session itself
+	// (comments) lives in the shell and survives page changes.
+	createEffect(() => {
+		const id = props.noteId;
+		if (id === undefined) return;
+		setNoteIndex(
+			Math.max(
+				0,
+				concepts().findIndex((item) => item.id === id),
+			),
+		);
+		setSelectedLine(0);
+		setVisualMode(false);
+		setCommentMode(false);
+		setCommentText("");
+		setSourceRange({});
+	});
 
 	const rows = createMemo(() => {
 		const current = state();
@@ -183,26 +214,7 @@ export function WikiView(props: WikiViewProps) {
 	};
 
 	const openNote = (conceptId: string) => {
-		try {
-			const loaded = readConcept(conceptId);
-			setNote(loaded);
-			setNoteIndex(
-				Math.max(
-					0,
-					concepts().findIndex((item) => item.id === conceptId),
-				),
-			);
-			setSelectedLine(0);
-			setVisualMode(false);
-			setCommentMode(false);
-			setCommentText("");
-			setSourceRange({});
-		} catch (error) {
-			notify(
-				`Wiki note is unavailable: ${error instanceof Error ? error.message : String(error)}`,
-				"warning",
-			);
-		}
+		props.onOpenNote(conceptId);
 	};
 
 	const navigateNote = (direction: 1 | -1) => {
@@ -226,7 +238,7 @@ export function WikiView(props: WikiViewProps) {
 			notify(message, "success");
 			props.onClearComments();
 			props.onSubmittingChange(false);
-			setNote(undefined);
+			props.onCloseNote();
 		} catch (error) {
 			props.onSubmittingChange(false);
 			notify(
@@ -291,7 +303,7 @@ export function WikiView(props: WikiViewProps) {
 		}
 		if (currentNote) {
 			if (key === "escape") {
-				setNote(undefined);
+				props.onCloseNote();
 				setVisualMode(false);
 				return true;
 			}
@@ -460,7 +472,7 @@ export function WikiView(props: WikiViewProps) {
 						onSelectedSourceRangeChange={(start, end) =>
 							setSourceRange({ start, end })
 						}
-						onClose={() => setNote(undefined)}
+						onClose={() => props.onCloseNote()}
 						onNavigateFile={navigateNote}
 					/>
 				)}

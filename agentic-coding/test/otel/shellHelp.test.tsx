@@ -90,11 +90,37 @@ test("`?` opens the catalog help modal on the traces tab", async () => {
 	db.close();
 });
 
+/** Jump to a destination through the location picker (Ctrl+P, no number keys). */
+async function jumpTo(
+	t: {
+		mockInput: {
+			pressKey: (key: string, modifiers?: object) => void;
+			pressEscape: () => void;
+			pressEnter: () => void;
+		};
+		renderOnce: () => Promise<void>;
+	},
+	query: string,
+) {
+	// A background observation failure raises the global error modal, which owns
+	// input until dismissed; clear it before opening the picker.
+	t.mockInput.pressEscape();
+	await new Promise((resolve) => setTimeout(resolve, 80));
+	t.mockInput.pressKey("p", { ctrl: true });
+	await t.renderOnce();
+	for (const character of query) {
+		t.mockInput.pressKey(character);
+		await t.renderOnce();
+	}
+	t.mockInput.pressEnter();
+	await t.renderOnce();
+}
+
 test("`?` opens the catalog help modal on metrics/logs/topology tabs", async () => {
 	const { t, db } = await renderOtelApp();
-	// traces → metrics (tab 2).
-	t.mockInput.pressKey("2");
-	await t.renderOnce();
+	// Jump straight to Metrics through the location picker.
+	await jumpTo(t, "metrics");
+	await t.waitForFrame((value) => value.includes("Metrics"));
 	t.mockInput.pressKey("?");
 	const frame = await t.waitForFrame((value) => value.includes("Keybindings"));
 	expect(frame).toContain("select metric");
@@ -125,10 +151,8 @@ test("`?` opens the filter modal's own help over the dialog", async () => {
 
 test("`?` opens the catalog help modal on the wiki tab", async () => {
 	const { t, db } = await renderHomeApp();
-	// workflow → wiki (tab 2).
-	t.mockInput.pressKey("2");
-	await t.renderOnce();
-	await t.renderOnce();
+	await jumpTo(t, "wiki");
+	await t.waitForFrame((value) => value.includes("Wiki"));
 	t.mockInput.pressKey("?");
 	const frame = await t.waitForFrame((value) => value.includes("Keybindings"));
 	expect(frame).toContain("visual line selection");

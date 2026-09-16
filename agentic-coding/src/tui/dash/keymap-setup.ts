@@ -19,6 +19,41 @@ export function registerShellFeatureField(
 	);
 }
 
+/**
+ * Register the shell's own dialog handling as the top key layer while one of
+ * its overlays is open (replace-nested-tabs-with-page-navigation, task 3.1).
+ * Overlay precedence is then a property of the registration, not of every
+ * feature layer's own modal filter: a typed character in the location picker
+ * cannot reach a dashboard or environment binding.
+ */
+export function registerShellOverlayLayer(
+	keymap: Keymap<Renderable, KeyEvent>,
+	handler: (event: KeyEvent) => void,
+): () => void {
+	const resource = Symbol("agent-shell:overlay-layer");
+	return keymap.acquireResource(resource, () =>
+		keymap.registerLayer({
+			name: "Agent Shell Overlay",
+			priority: 2000,
+			commands: [
+				{
+					name: "shell.overlay.dispatch",
+					context: "global",
+					run: ({ event }) => {
+						handler(event);
+						return true;
+					},
+				},
+			],
+			bindings: SHELL_KEYS.map((key) => ({
+				key,
+				cmd: "shell.overlay.dispatch",
+				preventDefault: false,
+			})),
+		}),
+	);
+}
+
 export function setupKeymap(keymap: Keymap<Renderable, KeyEvent>) {
 	const resource = Symbol("agent-dash:keymap");
 	return keymap.acquireResource(resource, () => {
@@ -164,6 +199,11 @@ const SHELL_KEYS: string[] = [
 		"return",
 		"backspace",
 		"delete",
+		// Page navigation bindings (replace-nested-tabs-with-page-navigation, task
+		// 3.1): one location picker and one structural parent, no destination
+		// cycling. Explicit so a feature layer still owns whatever it registers.
+		"ctrl+p",
+		"alt+up",
 	],
 ];
 

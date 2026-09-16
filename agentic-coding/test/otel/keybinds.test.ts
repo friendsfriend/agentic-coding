@@ -7,7 +7,7 @@ const actions = (options: Parameters<typeof observabilityKeybindCatalog>[0]) =>
 
 describe("observability shell keybind catalog", () => {
 	it("advertises the wiki actions WikiView implements", () => {
-		const wiki = actions({ tab: "wiki", view: "selection", tabCount: 2 });
+		const wiki = actions({ tab: "wiki", view: "selection" });
 		expect(wiki).toContain("comment");
 		expect(wiki).toContain("visual line selection");
 		expect(wiki).toContain("next/previous note");
@@ -19,20 +19,20 @@ describe("observability shell keybind catalog", () => {
 	it("does not advertise the theme picker on the wiki tab", () => {
 		// The shell returns before its Shift+T handler on the wiki tab and
 		// WikiView consumes the key, so theme is a no-op there.
-		const wiki = actions({ tab: "wiki", view: "selection", tabCount: 2 });
+		const wiki = actions({ tab: "wiki", view: "selection" });
 		expect(wiki).not.toContain("theme picker");
 	});
 
 	it("gives every shell tab a special `?` help entry so the footer is never empty", () => {
 		for (const tab of ["wiki", "metrics", "logs", "topology"] as const) {
 			const footer = footerKeybinds(
-				observabilityKeybindCatalog({ tab, view: "selection", tabCount: 5 }),
+				observabilityKeybindCatalog({ tab, view: "selection" }),
 			);
 			expect(footer.map((kb) => kb.action)).toContain("help");
 		}
 		for (const view of ["selection", "detail", "span"] as const) {
 			const footer = footerKeybinds(
-				observabilityKeybindCatalog({ tab: "traces", view, tabCount: 5 }),
+				observabilityKeybindCatalog({ tab: "traces", view }),
 			);
 			expect(footer.length).toBeGreaterThan(0);
 		}
@@ -42,7 +42,6 @@ describe("observability shell keybind catalog", () => {
 		const catalog = observabilityKeybindCatalog({
 			tab: "traces",
 			view: "selection",
-			tabCount: 5,
 		});
 		const all = catalogKeybinds(catalog).map((kb) => kb.action);
 		const footer = footerKeybinds(catalog).map((kb) => kb.action);
@@ -53,7 +52,7 @@ describe("observability shell keybind catalog", () => {
 
 	it("advertises the view-independent traces keys in the detail and span views", () => {
 		for (const view of ["detail", "span"] as const) {
-			const viewActions = actions({ tab: "traces", view, tabCount: 5 });
+			const viewActions = actions({ tab: "traces", view });
 			expect(viewActions).toContain("search");
 			expect(viewActions).toContain("filter");
 			expect(viewActions).toContain("sort");
@@ -66,7 +65,6 @@ describe("observability shell keybind catalog", () => {
 			observabilityKeybindCatalog({
 				tab: "wiki",
 				view: "selection",
-				tabCount: 2,
 			}),
 		).find((kb) => kb.key === "Esc");
 		expect(wiki?.standard).toBe(true);
@@ -76,7 +74,6 @@ describe("observability shell keybind catalog", () => {
 		const catalog = observabilityKeybindCatalog({
 			tab: "wiki",
 			view: "selection",
-			tabCount: 2,
 		});
 		const treeFooter = footerKeybinds(catalog).map((kb) => kb.action);
 		expect(treeFooter).not.toContain("visual line selection");

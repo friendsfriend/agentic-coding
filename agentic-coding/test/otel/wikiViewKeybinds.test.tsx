@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
-import { onCleanup } from "solid-js";
+import { createSignal, onCleanup } from "solid-js";
 import { WikiView } from "../../src/tui/otel/views/WikiView";
 
 /** The wiki tab used to print its own keybind cheat sheet in the content area
@@ -36,6 +36,8 @@ function writeConcept(id: string): void {
 }
 
 function TestWiki() {
+	// The shell owns the note identity; this host mirrors it with a signal.
+	const [noteId, setNoteId] = createSignal<string | undefined>();
 	const keymap = createDefaultOpenTuiKeymap(useRenderer());
 	const dispose = keymap.registerLayerFields({
 		name() {},
@@ -56,6 +58,9 @@ function TestWiki() {
 			submitting={false}
 			onSubmittingChange={() => {}}
 			onClearComments={() => {}}
+			noteId={noteId()}
+			onOpenNote={setNoteId}
+			onCloseNote={() => setNoteId(undefined)}
 		/>
 	);
 }

@@ -188,6 +188,84 @@ test("serial runner renews a slow effect and does not preclaim later work", asyn
 	}
 });
 
+test("a lease lost while dispatching an unhandled effect is classified, not fatal", async () => {
+	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-no-handler-"));
+	try {
+		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+		fs.writeFileSync(path.join(repo, "README.md"), "x\n");
+		execFileSync("git", ["add", "."], { cwd: repo });
+		execFileSync(
+			"git",
+			[
+				"-c",
+				"user.email=test@example.com",
+				"-c",
+				"user.name=Test",
+				"commit",
+				"-qm",
+				"base",
+			],
+			{ cwd: repo },
+		);
+		const registry = registerBuiltins();
+		// The clock advances on every read, so the drain's claim (leaseMs = 1) is
+		// already expired by the time it dispatches the "no handler" outcome. That
+		// is the same stale-effect the live runner hits when a lease is genuinely
+		// stolen, without depending on machine load.
+		let reads = 0;
+		const base = Date.now();
+		const engine = new WorkflowEngine(registry, () => {
+			reads += 1;
+			return new Date(base + reads);
+		});
+		const profile = {
+			name: "test",
+			runtime: "pi" as const,
+			executable: "sh",
+			tools: [],
+			extensions: [],
+			readOnly: false,
+			capabilities: ["prompt", "run-environment", "observe"] as const,
+			digest: "test-profile",
+		};
+		engine.start({
+			repo,
+			workflowId: "no-handler-lease",
+			definitionId: "no-openspec",
+			metadata: {
+				branch: "main",
+				baseBranch: "main",
+				baseCommit: execFileSync("git", ["rev-parse", "HEAD"], {
+					cwd: repo,
+					encoding: "utf8",
+				}).trim(),
+				task: "task",
+			},
+			routing: {
+				defaultProfile: profile.name,
+				routes: [{ stepId: "core.implementation", role: "worker", profile }],
+			},
+		});
+		const failures: string[] = [];
+		// No handlers at all: the only path is the "no handler" classification.
+		const drained = await new EffectRunner(repo, engine, {}).drain(
+			1,
+			2,
+			undefined,
+			(workflowId) => failures.push(workflowId),
+		);
+		// The drain program survives (a stale dispatch used to escape as a defect)
+		// and the effect is left to its successor rather than published as failed.
+		expect(drained).toBe(0);
+		expect(failures).toEqual([]);
+		expect(engine.status(repo, "no-handler-lease").effects[0]?.status).not.toBe(
+			"failed",
+		);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
 test("runner cancels a lost effect and a successor can reclaim it", async () => {
 	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-lease-loss-"));
 	try {
@@ -260,9 +338,9 @@ test("runner cancels a lost effect and a successor can reclaim it", async () => 
 					}),
 			},
 		});
-		await runner.drain(1, 100);
+		await runner.drain(1, 5_000);
 		expect(cancelled).toBe(1);
-		const successor = engine.claimEffects(repo, 1, 100);
+		const successor = engine.claimEffects(repo, 1, 5_000);
 		expect(successor).toHaveLength(1);
 		expect(successor[0]?.lease).not.toBe("successor");
 		const db = new Database(canonicalStorePath(repo));
@@ -280,7 +358,7 @@ test("runner cancels a lost effect and a successor can reclaim it", async () => 
 					Effect.fail(new Error("recovery should observe existing completion")),
 			},
 		});
-		await recovery.drain(1, 100);
+		await recovery.drain(1, 5_000);
 		expect(
 			engine
 				.status(repo, "lease-loss")
@@ -310,7 +388,7 @@ test("runner cancels a lost effect and a successor can reclaim it", async () => 
 			"agent.launch": {
 				execute: () => Effect.succeed({}),
 			},
-		}).drain(1, 100);
+		}).drain(1, 5_000);
 		let repaired = false;
 		const repairRunner = new EffectRunner(repo, engine, {
 			"artifact.write": {
@@ -335,7 +413,7 @@ test("runner cancels a lost effect and a successor can reclaim it", async () => 
 					}),
 			},
 		});
-		await repairRunner.drain(1, 100);
+		await repairRunner.drain(1, 5_000);
 		expect(repaired).toBe(true);
 		expect(cancelled).toBe(2);
 	} finally {

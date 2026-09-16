@@ -1,0 +1,45 @@
+// Keybind catalogs for the page-based shell chrome
+// (replace-nested-tabs-with-page-navigation, task 2.1). Declared once here and
+// rendered by the shared footer/help contract; renderers own colors and
+// separators, so no entry carries styling.
+import type { KeybindSection } from "../keybinds";
+
+/** Home/category destinations list: pick a destination, no tab order. */
+export function destinationPageKeybindCatalog(): KeybindSection[] {
+	return [
+		{
+			title: "Navigation",
+			keybinds: [
+				{ key: "j/k or ↑/↓", action: "select destination", standard: true },
+				{ key: "Enter", action: "open destination", standard: true },
+				{ key: "Esc", action: "back", standard: true },
+			],
+		},
+		{
+			title: "Actions",
+			keybinds: [
+				{ key: "Ctrl+P", action: "locations", short: "locations" },
+				{ key: "Alt+Up", action: "parent page", short: "parent" },
+				{ key: "?", action: "help" },
+				{ key: "T", action: "theme picker", short: "theme" },
+				{ key: "q", action: "quit", standard: true },
+			],
+		},
+	];
+}
+
+/** Location picker: search and jump. */
+export function locationPickerKeybindCatalog(): KeybindSection[] {
+	return [
+		{
+			title: "Navigation",
+			keybinds: [
+				{ key: "type", action: "search locations", standard: true },
+				{ key: "↑/↓", action: "select location", standard: true },
+				{ key: "Enter", action: "go to location", standard: true },
+				{ key: "Esc", action: "close picker", standard: true },
+			],
+		},
+		{ title: "Actions", keybinds: [{ key: "?", action: "help" }] },
+	];
+}

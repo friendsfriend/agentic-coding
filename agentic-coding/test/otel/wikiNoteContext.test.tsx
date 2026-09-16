@@ -86,8 +86,13 @@ const footerActions = () =>
 
 test("wiki note actions appear in the footer only while a note is open", async () => {
 	const { t, db } = await renderHomeApp();
-	// workflow → wiki (tab 2).
-	t.mockInput.pressKey("2");
+	// Home → Wiki through the location picker (no destination cycling).
+	t.mockInput.pressKey("p", { ctrl: true });
+	for (const character of "wiki") {
+		t.mockInput.pressKey(character);
+		await t.renderOnce();
+	}
+	t.mockInput.pressEnter();
 	await t.waitForFrame((frame) => frame.includes("demo.md"));
 
 	// Tree state: note-only actions stay out of the footer.

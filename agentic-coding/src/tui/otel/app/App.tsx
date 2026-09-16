@@ -35,6 +35,7 @@ import { Home as DashHome } from "../../dash/Home";
 import {
 	registerShellFeatureField,
 	registerShellKeyLayer,
+	registerShellOverlayLayer,
 } from "../../dash/keymap-setup";
 import {
 	discoverProjectsAsync,
@@ -71,17 +72,35 @@ import {
 	createModalStackState,
 	registerFocusRestorer,
 } from "../../shared/modalStack";
+import { BreadcrumbRow } from "../../shared/navigation/BreadcrumbRow";
+import { CategoryPage } from "../../shared/navigation/DestinationPage";
 import {
-	createFeatureNavigation,
-	createFeatureRouterState,
+	type DestinationEntry,
+	type DestinationSurface,
+	environmentDestinations,
+	filterPickerEntries,
+	homeDestinations,
+	observabilityDestinations,
+	pickerEntries,
+} from "../../shared/navigation/destinations";
+import { destinationPageKeybindCatalog } from "../../shared/navigation/keybinds";
+import { LocationPicker } from "../../shared/navigation/LocationPicker";
+import {
+	breadcrumb,
+	createPageNavigation,
+	createRouterState,
 	type FeatureId,
-	type FeatureRoute,
+	type PageId,
+	pageLabel,
+	RESOURCE_BASE_VIEW,
+	type Route,
+	resolveAvailable,
+	routeKey,
 } from "../../shared/routes";
 import { Badge } from "../components/Badge";
 import { HighlightedText } from "../components/Highlight";
 import { NotificationOverlay } from "../components/Notification";
 import { StatusBar } from "../components/StatusBar";
-import { TabBar } from "../components/TabBar";
 import { ThemePickerModal } from "../components/ThemePickerModal";
 import {
 	FilterModal,
@@ -93,7 +112,7 @@ import type { MetricStore } from "../model/metricStore";
 import type { TelemetryDb } from "../model/telemetry-db";
 import type { TopologyStore } from "../model/topologyStore";
 import type { SortCriterion, TraceStore } from "../model/traceStore";
-import type { TreeNode } from "../model/types";
+import type { LogData as OTelLogData, TreeNode } from "../model/types";
 import { uiColors } from "../ui/colors";
 import { LogDetailView } from "../views/LogDetailView";
 import { LogsView } from "../views/LogsView";
@@ -104,11 +123,7 @@ import { SpanDetailView } from "../views/SpanDetailView";
 import { TopologyView } from "../views/TopologyView";
 import { TraceListView } from "../views/TraceListView";
 import { TraceTreeView } from "../views/TraceTreeView";
-import {
-	WikiView,
-	wikiCommentEntryActive,
-	wikiNoteActive,
-} from "../views/WikiView";
+import { WikiView, wikiCommentEntryActive } from "../views/WikiView";
 import {
 	environmentsKeybindCatalog,
 	observabilityKeybindCatalog,
@@ -123,7 +138,17 @@ import {
 	themeNames,
 } from "./theme";
 
+/** Shell overlay kinds whose keys the shell handler itself owns. */
+const SHELL_OWNED_OVERLAYS = new Set([
+	"locations",
+	"help",
+	"theme",
+	"filter",
+	"sort",
+]);
+
 type Tab =
+	| "home"
 	| "environments"
 	| "workflow"
 	| "wiki"
@@ -138,6 +163,20 @@ export interface WorkflowHeaderInfo {
 	phase: string;
 	branch: string;
 	updated: string;
+}
+
+/**
+ * Shell route authority handed to the embedded environment feature (task 2.2):
+ * structurally typed so this layer never imports the environment package.
+ */
+export interface EnvironmentDestination {
+	category?: string;
+	view?: string;
+	onChange?: (destination: {
+		category: string;
+		view: string;
+		resourceId?: string;
+	}) => void;
 }
 
 export interface DashboardTab {
@@ -172,6 +211,7 @@ export function App(props: {
 		onCatalog: (catalog: KeybindSection[]) => void,
 		active: () => boolean,
 		onModalChange: (open: boolean) => void,
+		destination: () => EnvironmentDestination | undefined,
 	) => JSX.Element;
 	/** When set, a Workflow tab is prepended that renders the dashboard. */
 	dashboard?: DashboardTab;
@@ -190,27 +230,70 @@ export function App(props: {
 				0,
 			) - helpLines(),
 		);
-	// Typed feature router (compose-unified-feature-shell task 2.2): the shell's
-	// active feature, per-feature history and cross-feature origin live here
-	// instead of a flat signal, so `back()` restores the originating resource.
-	const initialFeature: FeatureId = props.dashboard
-		? "workflows"
-		: props.environments
-			? "environments"
-			: "observability";
-	const initialRoot: FeatureRoute =
-		initialFeature === "workflows"
+	// Page route authority (replace-nested-tabs-with-page-navigation, task 2.3):
+	// one typed location, structural parents and chronological Back replace the
+	// per-feature stacks and single cross-feature origin.
+	const initialRoute: Route = props.dashboard
+		? props.dashboard.mode === "dash"
 			? {
-					feature: "workflows",
-					view: props.dashboard?.mode === "dash" ? "detail" : "home",
+					page: "workflows.detail",
+					resourceId: props.dashboard.change,
 				}
-			: initialFeature === "environments"
-				? { feature: "environments", view: "applications" }
-				: { feature: "observability", view: "traces" };
-	const router = createFeatureNavigation(
-		createFeatureRouterState(initialFeature, initialRoot),
-	);
-	const activeFeature = (): FeatureId => router.active();
+			: // Home is the default full-application entry (task 2.4): the workflow
+				// page stays reachable from it until contextual launch and Settings land.
+				{ page: "home" }
+		: props.environments
+			? { page: "environments" }
+			: { page: "observability.traces" };
+	const pages = createPageNavigation(createRouterState(initialRoute));
+	const currentPage = () => pages.current().page;
+	const activeFeature = (): FeatureId | undefined => pages.feature();
+	/** Which body owns the terminal for a page: overlays belong to one body. */
+	const bodyOwner = (page: string): string => {
+		if (page.startsWith("environments")) return "environments";
+		if (page.startsWith("workflows")) return "workflows";
+		if (page.startsWith("wiki")) return "wiki";
+		if (page.startsWith("observability")) return "observability";
+		return "home";
+	};
+	// A shell overlay owns input: while one is on top the feature keymap layers
+	// are parked through the shared `modal.active` field, so typing in the
+	// location picker cannot reach a dashboard or environment binding. On close
+	// the field returns to "none" only if this shell wrote it, so a feature's own
+	// modal state is never clobbered.
+	let shellModalField: string | undefined;
+	createEffect(() => {
+		const keymap = props.dashboard?.keymap;
+		const modal = nav.modal();
+		if (!keymap) return;
+		if (modal === "none") {
+			if (
+				shellModalField &&
+				keymap.getData?.("modal.active") === shellModalField
+			)
+				keymap.setData("modal.active", "none");
+			shellModalField = undefined;
+			return;
+		}
+		shellModalField = modal;
+		keymap.setData("modal.active", modal);
+	});
+
+	// A feature-local overlay cannot remain the input owner after its body is
+	// hidden, so moving to a page owned by another body clears the shell overlay
+	// host, the shared modal-help state and the dashboard modal field atomically
+	// (USABILITY-001).
+	let lastOwner = bodyOwner(currentPage());
+	createEffect(() => {
+		const owner = bodyOwner(currentPage());
+		if (owner === lastOwner) return;
+		lastOwner = owner;
+		nav.modalStack.set(
+			createModalStackState<"filter" | "sort" | "theme" | "help">(),
+		);
+		closeModalHelp();
+		props.dashboard?.keymap.setData("modal.active", "none");
+	});
 	const disposeShellFeatureField = props.dashboard
 		? registerShellFeatureField(props.dashboard.keymap)
 		: undefined;
@@ -218,40 +301,142 @@ export function App(props: {
 	createEffect(() => {
 		props.dashboard?.keymap.setData("shell.feature", activeFeature());
 	});
-	// The legacy flat tab is a projection of the active route identity so the
-	// existing observability content keeps one switch surface.
+	// The legacy flat tab is a projection of the current page identity so the
+	// existing observability content keeps one switch surface while the tab rows
+	// are still rendered (they are removed in task 3.1).
 	const activeTab = (): Tab => {
-		switch (router.route().feature) {
+		const page = currentPage();
+		if (page === "home") return "home";
+		if (page.startsWith("environments")) return "environments";
+		if (page.startsWith("workflows")) return "workflow";
+		if (page.startsWith("wiki")) return "wiki";
+		if (page.includes("metrics")) return "metrics";
+		if (page.includes("logs")) return "logs";
+		if (page.includes("topology")) return "topology";
+		return "traces";
+	};
+	/** Traces-local view projected from the route, not from a second stack. */
+	const traceView = (): "selection" | "detail" | "span" => {
+		if (currentPage() === "observability.traces.tree") return "detail";
+		if (currentPage() === "observability.traces.tree.span") return "span";
+		return "selection";
+	};
+	/**
+	 * The environment store calls the resource root view "appDetail"; the route
+	 * calls it the base view so its children nest under the resource identity.
+	 */
+	const featureView = (view: string | undefined): string | undefined =>
+		view === undefined
+			? undefined
+			: view === "appDetail"
+				? RESOURCE_BASE_VIEW
+				: view;
+	const routeView = (view: string): string =>
+		view === "" || view === RESOURCE_BASE_VIEW ? "appDetail" : view;
+
+	/**
+	 * Destination projection for the embedded environment feature: the route
+	 * names the category and the nested view, and the feature reports its own
+	 * destination changes back so one side is authoritative per direction.
+	 */
+	const environmentDestination = (): EnvironmentDestination | undefined => {
+		const route = pages.current();
+		if (!route.page.startsWith("environments")) return {};
+		const onCategoryPage = route.page === "environments";
+		return {
+			...(onCategoryPage
+				? {}
+				: {
+						category:
+							route.page === "environments.resource"
+								? route.params?.kind
+								: route.page.split(".")[1],
+					}),
+			// A category page requests no view; only a resource page names one, so
+			// the feature keeps its own table view there.
+			view:
+				route.params?.view === undefined
+					? undefined
+					: routeView(route.params.view),
+			onChange: ({ category, view, resourceId }) => {
+				// The category page is a shell destination list, not a feature
+				// destination: while it is shown the feature reports where it happens
+				// to sit, which is not a move the user made.
+				if (currentPage() === "environments") return;
+				if (!currentPage().startsWith("environments")) return;
+				if (!view) {
+					const page = `environments.${category}` as PageId;
+					if (currentPage() !== page) pages.navigate({ page });
+					return;
+				}
+				const next: Route = {
+					page: "environments.resource",
+					...(resourceId !== undefined ? { resourceId } : {}),
+					params: { kind: category, view: featureView(view) ?? view },
+				};
+				if (routeKey(next) !== routeKey(pages.current())) pages.navigate(next);
+			},
+		};
+	};
+
+	/** Which destinations this shell instance actually renders. */
+	const surface = (): DestinationSurface => ({
+		environments: Boolean(props.environments),
+		tracesOnly: Boolean(props.tracesOnly),
+		workflows: Boolean(props.dashboard),
+		wiki: props.dashboard?.mode === "home",
+	});
+	/** Home and the two category pages are destination lists; other pages are not. */
+	const destinationEntries = (): DestinationEntry[] | undefined => {
+		switch (currentPage()) {
+			case "home":
+				return homeDestinations(surface());
 			case "environments":
-				return "environments";
-			case "workflows":
-				return "workflow";
-			case "wiki":
-				return "wiki";
-			default: {
-				const view = router.route().view;
-				return view === "metrics" || view === "logs" || view === "topology"
-					? view
-					: "traces";
-			}
+				return environmentDestinations();
+			case "observability":
+				return observabilityDestinations(surface());
+			default:
+				return undefined;
 		}
 	};
-	// The observability feature's remembered sub-tab (its preserved stack top).
-	const observabilityTab = (): "traces" | "metrics" | "logs" | "topology" => {
-		const view = router.state().stacks.observability.at(-1)?.view;
-		return view === "metrics" || view === "logs" || view === "topology"
-			? view
-			: "traces";
+	const destinationTitle = (): string => {
+		switch (currentPage()) {
+			case "home":
+				return "Home";
+			case "environments":
+				return "Environments";
+			default:
+				return "Observability";
+		}
 	};
-	const routeForFeature = (feature: FeatureId): FeatureRoute => {
-		if (feature === "environments") return { feature, view: "applications" };
-		if (feature === "workflows")
-			return {
-				feature,
-				view: props.dashboard?.mode === "dash" ? "detail" : "home",
-			};
-		if (feature === "wiki") return { feature, view: "browse" };
-		return { feature, view: observabilityTab() };
+	// Selection lives in route-keyed view state, so returning to a page restores
+	// the cursor instead of resetting it (task 3.2).
+	const destinationIndex = (): number =>
+		pages.viewState<number>(pages.current()) ?? 0;
+	const setDestinationIndex = (index: number): void => {
+		pages.setViewState(pages.current(), index);
+	};
+	const openDestination = (entry: DestinationEntry): void => {
+		pages.navigate(entry.route);
+	};
+	const handleDestinationKey = (key: string): boolean => {
+		const entries = destinationEntries();
+		if (!entries) return false;
+		const last = Math.max(0, entries.length - 1);
+		if (key === "j" || key === "down") {
+			setDestinationIndex(Math.min(last, destinationIndex() + 1));
+			return true;
+		}
+		if (key === "k" || key === "up") {
+			setDestinationIndex(Math.max(0, destinationIndex() - 1));
+			return true;
+		}
+		if (key === "enter" || key === "return") {
+			const entry = entries[destinationIndex()];
+			if (entry) openDestination(entry);
+			return true;
+		}
+		return false;
 	};
 	// Workflow header context pushed up from the dashboard tab content (single source
 	// of truth; the dashboard polls, the shell renders). Null in home mode / before data.
@@ -364,7 +549,7 @@ export function App(props: {
 		onCleanup(dispose);
 	});
 	const [selectedListIndex, setSelectedListIndex] = createSignal(0);
-	const [_selectedTraceId, setSelectedTraceId] = createSignal<string>();
+	const [selectedTraceId, setSelectedTraceId] = createSignal<string>();
 	const [treeRoots, setTreeRoots] = createSignal<TreeNode[]>([]);
 	const [treeIndex, setTreeIndex] = createSignal(0);
 	const [selectedSpan, setSelectedSpan] = createSignal<TreeNode>();
@@ -445,13 +630,117 @@ export function App(props: {
 	function selectTrace(index: number) {
 		const trace = summaries()[index];
 		if (!trace) return;
-		setSelectedListIndex(index);
-		setSelectedTraceId(trace.traceId);
-		const roots = traceStore.getSpanTree(trace.traceId);
+		openTrace(trace.traceId);
+	}
+
+	/** Open a trace by identity: the route names it, the data follows. */
+	function openTrace(traceId: string): void {
+		const roots = traceStore.getSpanTree(traceId);
+		const index = summaries().findIndex(
+			(summary) => summary.traceId === traceId,
+		);
+		setSelectedListIndex(index < 0 ? 0 : index);
+		setSelectedTraceId(traceId);
 		setTreeRoots(roots);
 		setTreeIndex(0);
 		setSelectedSpan(roots[0]);
-		nav.pushView("detail");
+		pages.navigate({ page: "observability.traces.tree", resourceId: traceId });
+	}
+
+	/** Index of the selected trace in the current ordering (ordering may change). */
+	const selectedTraceIndex = (): number => {
+		const id = selectedTraceId();
+		if (!id) return selectedListIndex();
+		const index = summaries().findIndex((summary) => summary.traceId === id);
+		return index < 0 ? selectedListIndex() : index;
+	};
+
+	// ---- Route → data and unavailable-resource fallback (task 3.2) ----
+	/**
+	 * A resource page loads the identity its route names, so a direct jump and a
+	 * Back restore the same content instead of whatever was selected before.
+	 */
+	const applyRouteData = (route: Route): void => {
+		switch (route.page) {
+			case "observability.traces.tree":
+			case "observability.traces.tree.span": {
+				const traceId = route.resourceId ?? route.params?.traceId;
+				if (traceId && traceId !== selectedTraceId()) openTrace(traceId);
+				break;
+			}
+			case "observability.metrics.detail": {
+				const name = route.resourceId;
+				const serviceName = route.params?.service ?? "";
+				if (name && selectedMetric()?.name !== name)
+					setSelectedMetric({ name, serviceName });
+				break;
+			}
+			case "observability.logs.detail": {
+				const index = logs().findIndex(
+					(log) => logRouteIdentity(log) === route.resourceId,
+				);
+				if (index >= 0) setSelectedLog(index);
+				break;
+			}
+			case "observability.topology.service": {
+				const id = route.resourceId;
+				if (id && topologyDetail() !== id) setTopologyDetail(id);
+				break;
+			}
+			default:
+				break;
+		}
+	};
+
+	/** Whether a requested location still has the resource it names. */
+	const routeAvailable = (route: Route): boolean => {
+		switch (route.page) {
+			case "observability.traces.tree":
+			case "observability.traces.tree.span":
+				return summaries().some(
+					(summary) => summary.traceId === route.resourceId,
+				);
+			case "observability.metrics.detail":
+				return metricStore
+					.getStreams()
+					.some(
+						(stream) =>
+							stream.name === route.resourceId &&
+							(!route.params?.service ||
+								stream.serviceName === route.params?.service),
+					);
+			case "observability.logs.detail":
+				return logs().some((log) => logRouteIdentity(log) === route.resourceId);
+			case "observability.topology.service":
+				return topologyStore
+					.getLayout()
+					.some((node) => node.id === route.resourceId);
+			default:
+				return true;
+		}
+	};
+
+	/** The log records of the current view (shared by the list and resolution). */
+	const logs = (): OTelLogData[] => logStore.getLogs();
+
+	createEffect(() => {
+		const route = pages.current();
+		const resolution = resolveAvailable(route, routeAvailable);
+		if (resolution.unavailable) {
+			notify(
+				`${pageLabel(resolution.unavailable)} is no longer available`,
+				"warning",
+			);
+			pages.dropViewState(resolution.unavailable);
+			pages.replace(resolution.route);
+			return;
+		}
+		applyRouteData(route);
+	});
+
+	/** Stable log identity for a route: the record's own fields, not its row. */
+	function logRouteIdentity(log: OTelLogData): string {
+		return `${log.timeUnixNano}|${log.serviceName}|${log.spanId ?? log.traceId ?? ""}`;
 	}
 
 	function selectTree(path: number[]) {
@@ -486,7 +775,7 @@ export function App(props: {
 		setSelectedTraceId(undefined);
 		setTreeRoots([]);
 		setSelectedSpan(undefined);
-		nav.popView();
+		pages.navigate({ page: "observability.traces" });
 		refresh();
 	}
 
@@ -496,26 +785,6 @@ export function App(props: {
 		const message = startWikiCommentWorkflowInProcess(comments);
 		loadHome();
 		return message;
-	}
-
-	function featureForTab(tab: Tab): FeatureId {
-		if (tab === "environments") return "environments";
-		if (tab === "workflow") return "workflows";
-		if (tab === "wiki") return "wiki";
-		return "observability";
-	}
-
-	function switchTab(tab: Tab) {
-		const feature = featureForTab(tab);
-		if (feature === "observability") {
-			// Sub-tabs are siblings: replace the observability route rather than
-			// growing per-feature history with every signal tab.
-			router.setRoute({ feature, view: tab });
-		} else {
-			router.switchFeature(feature);
-		}
-		nav.popView();
-		// Topology data already loaded in index.tsx; no reload needed
 	}
 
 	onMount(() => {
@@ -625,6 +894,7 @@ export function App(props: {
 	const handleKey = (event: KeyEvent) => {
 		const key = event.name.toLowerCase();
 		const ename = event.name;
+
 		// A global error modal owns every tab: keep it up (and scrollable) until
 		// the user dismisses it, even on the observability tabs. The modal's own
 		// keymap layer only scrolls; dismissal lives here so the key is consumed
@@ -685,6 +955,36 @@ export function App(props: {
 			}
 		}
 
+		// The location picker owns input while it is on top: search, select, jump.
+		if (nav.modal() === "locations") {
+			const matches = pickerMatches();
+			const last = Math.max(0, matches.length - 1);
+			if (key === "escape" || (event.ctrl && key === "p")) {
+				nav.popModal();
+			} else if (key === "backspace" || key === "delete") {
+				setPickerQuery((query) => query.slice(0, -1));
+				setPickerIndex(0);
+			} else if (key === "down") {
+				// The picker is a search box: typing wins, so only the arrow keys
+				// move the cursor (a destination name may contain j or k).
+				setPickerIndex((index) => Math.min(last, index + 1));
+			} else if (key === "up") {
+				setPickerIndex((index) => Math.max(0, index - 1));
+			} else if (key === "enter" || key === "return") {
+				const entry = matches[pickerIndex()];
+				nav.popModal();
+				if (entry) pages.navigate(entry.route);
+			} else if (!event.ctrl && !event.meta) {
+				// A search box accepts spaces: the key event names them "space".
+				const typed = key === "space" ? " " : key;
+				if (typed.length === 1) {
+					setPickerQuery((query) => query + typed);
+					setPickerIndex(0);
+				}
+			}
+			return;
+		}
+
 		// Global copy
 		if (
 			(event.meta && key === "c") ||
@@ -739,10 +1039,8 @@ export function App(props: {
 
 		if (nav.modal() === "help") {
 			if (key === "escape") {
+				// Closing restores the parked feature layer through the modal effect.
 				nav.popModal();
-				// Let the wiki view resume handling keys once the shell help closes.
-				if (activeTab() === "wiki")
-					props.dashboard?.keymap.setData("modal.active", "none");
 			} else if (key === "j" || key === "down")
 				setHelpOffset((value) => Math.min(helpMaxOffset(), value + 1));
 			else if (key === "k" || key === "up")
@@ -750,63 +1048,70 @@ export function App(props: {
 			return;
 		}
 
-		// Tab switching (global, except when in a modal). In the unified shell the
-		// keys address the rendered rows: features for Tab/`t`, and features first
-		// then the visible observability sub-row for number keys.
-		const featureIds: string[] = props.environments
-			? featureTabs().map((feature) => feature.id)
-			: tabIds();
-		const activeFeatureId = (): string =>
-			props.environments ? activeFeature() : activeTab();
-		const selectById = (id: string | undefined) => {
-			if (!id) return;
-			if (!props.environments) {
-				switchTab(id as Tab);
+		// Breadcrumb focus: h/l walk the ancestor chain, Enter opens one.
+		if (nav.modal() === "none" && focusCrumb()) {
+			const chain = ancestors();
+			const last = Math.max(0, chain.length - 1);
+			const current = Math.min(last, Math.max(0, crumbFocusedIndex()));
+			if (key === "h" || key === "left") {
+				setCrumbIndex(Math.max(0, current - 1));
 				return;
 			}
-			if (observabilityTabs().some((tab) => tab.id === id))
-				switchTab(id as Tab);
-			else selectFeature(id as FeatureId);
-		};
-		const numberIds: string[] =
-			props.environments && activeFeature() === "observability"
-				? [...featureIds, ...observabilityTabs().map((tab) => tab.id)]
-				: featureIds;
-		const isTab = ename === "Tab" || key === "tab" || key === "\t";
-		const isCtrlTab = event.ctrl && key === "i"; // Ctrl+I = Tab in many terminals
-		const tabForward = (isTab || isCtrlTab) && !event.shift;
-		const tabBack = (isTab || isCtrlTab) && event.shift;
-		const dashModal = props.dashboard
-			? props.dashboard.keymap.getData?.("modal.active")
-			: "none";
-		if (
-			nav.modal() === "none" &&
-			(!props.dashboard || dashModal === "none" || dashModal === undefined)
-		) {
-			if (key === "t" && !event.ctrl && !event.meta && !event.shift) {
-				const current = featureIds.indexOf(activeFeatureId());
-				selectById(featureIds[(current + 1) % featureIds.length]);
+			if (key === "l" || key === "right") {
+				setCrumbIndex(Math.min(last, current + 1));
 				return;
 			}
-			if (/^[1-9]$/.test(key)) {
-				selectById(numberIds[Number(key) - 1]);
+			if (key === "j" || key === "down") {
+				setCrumbIndex(Math.min(last, current + 1));
 				return;
 			}
-			if (tabBack) {
-				const current = featureIds.indexOf(activeFeatureId());
-				selectById(
-					featureIds[(current - 1 + featureIds.length) % featureIds.length],
-				);
+			if (key === "k" || key === "up") {
+				setCrumbIndex(Math.max(0, current - 1));
 				return;
 			}
-			if (tabForward) {
-				const current = featureIds.indexOf(activeFeatureId());
-				selectById(featureIds[(current + 1) % featureIds.length]);
+			if (key === "enter" || key === "return") {
+				const route = chain[current];
+				if (route && routeKey(route) !== routeKey(pages.current()))
+					pages.navigate(route);
+				return;
+			}
+			if (key === "escape") {
+				setFocusRegion("content");
+				setCrumbIndex(-1);
 				return;
 			}
 		}
 
-		// Dashboard keys are handled by its own keymap (runs before this handler).
+		// No global destination cycling and no numeric dispatch: destinations are
+		// pages reached from Home, the breadcrumb or the location picker. Tab and
+		// Shift+Tab traverse this page's focus regions only.
+		const activeFeatureId = (): string =>
+			props.environments ? (activeFeature() ?? activeTab()) : activeTab();
+		const isTab = ename === "Tab" || key === "tab" || key === "\t";
+		const isCtrlTab = event.ctrl && key === "i"; // Ctrl+I = Tab in many terminals
+		const tabForward = (isTab || isCtrlTab) && !event.shift;
+		const tabBack = (isTab || isCtrlTab) && event.shift;
+		if (
+			nav.modal() === "none" &&
+			(tabForward || tabBack) &&
+			pageFocusRegions().length > 1
+		) {
+			cycleFocusRegion(tabBack ? -1 : 1);
+			return;
+		}
+
+		// Ctrl+P opens the one location picker from anywhere on the shell.
+		if (event.ctrl && key === "p") {
+			openLocationPicker();
+			return;
+		}
+		// Alt+Up opens the structural parent of the current page.
+		if (event.option && key === "up") {
+			pages.goToParent();
+			return;
+		}
+
+		// Dashboard and wiki bodies own their keys through their own keymap layers.
 		if (activeTab() === "workflow" || activeTab() === "wiki") return;
 
 		// Quit (global)
@@ -822,11 +1127,12 @@ export function App(props: {
 			return;
 		}
 
-		// Escape / back: modal or view history first, then the cross-feature origin.
+		// Escape: the top overlay first, then chronological Back. Escape at Home
+		// is a no-op (Home has no parent and quitting stays explicit).
 		if (key === "escape") {
 			if (nav.esc()) return;
-			if (router.state().origin) {
-				router.back();
+			if (pages.canBack()) {
+				pages.back();
 				return;
 			}
 		}
@@ -839,23 +1145,8 @@ export function App(props: {
 			return;
 		}
 
-		// Search mode (shared across tabs)
+		// Search mode keeps the query editable; Tab belongs to the input.
 		if (searchMode()) {
-			// Tab key should switch tabs even in search mode
-			if (tabForward) {
-				const current = featureIds.indexOf(activeFeatureId());
-				setSearchMode(false);
-				selectById(featureIds[(current + 1) % featureIds.length]);
-				return;
-			}
-			if (tabBack) {
-				const current = featureIds.indexOf(activeFeatureId());
-				setSearchMode(false);
-				selectById(
-					featureIds[(current - 1 + featureIds.length) % featureIds.length],
-				);
-				return;
-			}
 			if (key === "escape") {
 				if (activeTab() === "logs") {
 					logStore.setFilter("");
@@ -903,6 +1194,11 @@ export function App(props: {
 			nav.pushModal("help", activeFeatureId());
 			return;
 		}
+
+		// Destination pages (Home and the category pages) own their cursor. Only
+		// those three pages have entries, and only while no overlay is on top.
+		if (nav.modal() === "none" && !focusCrumb() && handleDestinationKey(key))
+			return;
 
 		// The embedded environment feature owns its keys; do not fall through to
 		// the traces handlers below (which would move the hidden trace selection).
@@ -1049,7 +1345,7 @@ export function App(props: {
 		} else if (key === "w") {
 			switchWorkspace();
 			notify("All workspaces", "info");
-		} else if (nav.view() === "selection") {
+		} else if (traceView() === "selection") {
 			if (key === "j" || key === "down")
 				setSelectedListIndex((i) => Math.min(summaries().length - 1, i + 1));
 			else if (key === "k" || key === "up")
@@ -1058,7 +1354,7 @@ export function App(props: {
 				selectTrace(selectedListIndex());
 		} else {
 			const items = flatTree();
-			if (key === "escape" || key === "b") nav.popView();
+			if (key === "escape" || key === "b") pages.back();
 			else if (key === "j" || key === "down") {
 				const i = Math.min(items.length - 1, treeIndex() + 1);
 				setTreeIndex(i);
@@ -1081,15 +1377,21 @@ export function App(props: {
 				const item = items[treeIndex()];
 				if (item) setNodeExpanded(item.path, true);
 			} else if (key === "enter" || key === "return") {
-				if (selectedSpan()) nav.pushView("span");
+				const span = selectedSpan();
+				if (span)
+					pages.navigate({
+						page: "observability.traces.tree.span",
+						resourceId: `${span.span.traceId}:${span.span.spanId}`,
+						params: { traceId: span.span.traceId },
+					});
 			}
 		}
 	};
 
 	// ---- Metric tab keys ----
 	function handleMetricsKey(_event: KeyEvent, key: string) {
-		if (selectedMetric()) {
-			if (key === "escape" || key === "b") setSelectedMetric(undefined);
+		if (currentPage() === "observability.metrics.detail") {
+			if (key === "escape" || key === "b") pages.back();
 			return;
 		}
 		const streams = metricStore.getStreams();
@@ -1099,18 +1401,24 @@ export function App(props: {
 			setSelectedMetricIndex((i) => Math.max(0, i - 1));
 		else if (key === "enter" || key === "return") {
 			const stream = streams[selectedMetricIndex()];
-			if (stream)
+			if (stream) {
 				setSelectedMetric({
 					name: stream.name,
 					serviceName: stream.serviceName,
 				});
+				pages.navigate({
+					page: "observability.metrics.detail",
+					resourceId: stream.name,
+					params: { service: stream.serviceName },
+				});
+			}
 		}
 	}
 
 	// ---- Log tab keys ----
 	function handleLogsKey(_event: KeyEvent, key: string) {
-		if (selectedLog() !== undefined) {
-			if (key === "escape" || key === "b") setSelectedLog(undefined);
+		if (currentPage() === "observability.logs.detail") {
+			if (key === "escape" || key === "b") pages.back();
 			return;
 		}
 		const logs = logStore.getLogs();
@@ -1119,7 +1427,14 @@ export function App(props: {
 		else if (key === "k" || key === "up")
 			setSelectedLogIndex((i) => Math.max(0, i - 1));
 		else if (key === "enter" || key === "return") {
-			if (logs[selectedLogIndex()]) setSelectedLog(selectedLogIndex());
+			const log = logs[selectedLogIndex()];
+			if (log) {
+				setSelectedLog(selectedLogIndex());
+				pages.navigate({
+					page: "observability.logs.detail",
+					resourceId: logRouteIdentity(log),
+				});
+			}
 		} else if (key === "/") {
 			setLogFilterQuery("");
 			setSearchMode(true);
@@ -1128,8 +1443,8 @@ export function App(props: {
 
 	// ---- Topology tab keys ----
 	function handleTopologyKey(_event: KeyEvent, key: string) {
-		if (topologyDetail()) {
-			if (key === "escape" || key === "b") setTopologyDetail(undefined);
+		if (currentPage() === "observability.topology.service") {
+			if (key === "escape" || key === "b") pages.back();
 			return;
 		}
 		const ids = topologyStore.getLayout().map((node) => node.id);
@@ -1140,7 +1455,13 @@ export function App(props: {
 			setSelectedTopologyService(ids[Math.max(0, current - 1)]);
 		else if (key === "enter" || key === "return") {
 			const id = selectedTopologyService() ?? ids[0];
-			if (id) setTopologyDetail(id);
+			if (id) {
+				setTopologyDetail(id);
+				pages.navigate({
+					page: "observability.topology.service",
+					resourceId: id,
+				});
+			}
 		}
 	}
 
@@ -1152,126 +1473,133 @@ export function App(props: {
 	if (shellKeymap) {
 		const disposeShellKeyLayer = registerShellKeyLayer(shellKeymap, handleKey);
 		onCleanup(disposeShellKeyLayer);
+		// Shell-owned overlays take input precedence over every feature layer;
+		// the environment feature's own dialogs stay with the environment layer.
+		createEffect(() => {
+			const kind = nav.modal();
+			if (!SHELL_OWNED_OVERLAYS.has(kind)) return;
+			onCleanup(registerShellOverlayLayer(shellKeymap, handleKey));
+		});
 	} else {
 		renderer.keyInput.on("keypress", handleKey);
 		onCleanup(() => renderer.keyInput.off("keypress", handleKey));
 	}
 
-	/** Single source of truth for displayed and selectable tab order. */
-	const tabs = () => {
-		const all: Array<{ id: Tab; label: string; count?: number }> = [];
-		if (props.environments)
-			all.push({ id: "environments", label: "Environments" });
-		if (props.dashboard)
-			all.push({
-				id: "workflow",
-				label: props.dashboard.mode === "home" ? "Workflows" : "Workflow",
-			});
-		if (props.dashboard?.mode === "home")
-			all.push({ id: "wiki", label: "Wiki" });
-		all.push(
-			{ id: "traces", label: "Traces", count: filteredCount() },
-			{ id: "metrics", label: "Metrics", count: metricStore.filteredCount_ },
-			{ id: "logs", label: "Logs", count: logStore.filteredCount_ },
-			{
-				id: "topology",
-				label: "Topology",
-				count: topologyStore.getServices().length,
-			},
+	// Page-local focus regions. Tab/Shift+Tab move between these only; a feature
+	// body that owns its own focus handling such as the embedded environment
+	// surface or the dashboard contributes a single region, so the shell never
+	// steals Tab from it.
+	const pageFocusRegions = (): Array<"breadcrumb" | "content"> => {
+		if (currentPage().startsWith("environments.")) return ["content"];
+		if (activeTab() === "workflow" || activeTab() === "wiki")
+			return ["content"];
+		return ["breadcrumb", "content"];
+	};
+	const [focusRegion, setFocusRegion] = createSignal<"breadcrumb" | "content">(
+		"content",
+	);
+	const focusCrumb = () => focusRegion() === "breadcrumb";
+	const cycleFocusRegion = (delta: number): void => {
+		const regions = pageFocusRegions();
+		const current = Math.max(0, regions.indexOf(focusRegion()));
+		setFocusRegion(
+			regions[(current + delta + regions.length) % regions.length],
 		);
-		return props.tracesOnly
-			? all.filter(
-					(tab) =>
-						tab.id === "workflow" || tab.id === "wiki" || tab.id === "traces",
-				)
-			: all;
 	};
+	// Breadcrumb cursor over the logical ancestor chain; the last ancestor (the
+	// current location) is where it rests until the user moves it.
+	const ancestors = () => breadcrumb(pages.current());
+	const [crumbIndex, setCrumbIndex] = createSignal(-1);
+	const crumbFocusedIndex = (): number =>
+		crumbIndex() >= 0 ? crumbIndex() : ancestors().length - 1;
 
-	// Top-level feature tabs of the unified shell. Observability is one feature
-	// whose sub-views (traces/metrics/logs/topology) render as a second row and
-	// keep their own last-selected sub-tab (spec: one discoverable shell).
-	const featureTabs = (): Array<{ id: FeatureId; label: string }> => {
-		const all: Array<{ id: FeatureId; label: string }> = [];
-		if (props.environments)
-			all.push({ id: "environments", label: "Environments" });
-		if (props.dashboard)
-			all.push({
-				id: "workflows",
-				label: props.dashboard.mode === "home" ? "Workflows" : "Workflow",
-			});
-		all.push({ id: "observability", label: "Observability" });
-		if (props.dashboard?.mode === "home")
-			all.push({ id: "wiki", label: "Wiki" });
-		return all;
-	};
-	const observabilityTabs = (): Array<{
-		id: "traces" | "metrics" | "logs" | "topology";
-		label: string;
-		count?: number;
-	}> => {
-		const all = [
-			{ id: "traces" as const, label: "Traces", count: filteredCount() },
-			{
-				id: "metrics" as const,
-				label: "Metrics",
-				count: metricStore.filteredCount_,
-			},
-			{ id: "logs" as const, label: "Logs", count: logStore.filteredCount_ },
-			{
-				id: "topology" as const,
-				label: "Topology",
-				count: topologyStore.getServices().length,
-			},
-		];
-		return props.tracesOnly ? all.filter((tab) => tab.id === "traces") : all;
-	};
-	const selectFeature = (feature: FeatureId) => {
-		// A feature-local overlay cannot remain the input owner after its body is
-		// hidden. Clear the shared modal state and shell modal stack atomically
-		// before changing the route (USABILITY-001).
-		nav.modalStack.set(
-			createModalStackState<"filter" | "sort" | "theme" | "help">(),
+	// One location picker, opened from anywhere (Ctrl+P), over in-memory
+	// destinations only.
+	const [pickerQuery, setPickerQuery] = createSignal("");
+	const [pickerIndex, setPickerIndex] = createSignal(0);
+	const pickerMatches = (): DestinationEntry[] =>
+		filterPickerEntries(
+			pickerEntries(surface(), pickerEntriesForPage()),
+			pickerQuery(),
 		);
-		closeModalHelp();
-		props.dashboard?.keymap.setData("modal.active", "none");
-		// Resume the feature's preserved stack and record the current route as
-		// origin so `back()` can restore the originating resource (task 2.2).
-		const top =
-			router.state().stacks[feature].at(-1) ?? routeForFeature(feature);
-		router.navigate(top);
-		nav.popView();
+	const openLocationPicker = (): void => {
+		setPickerQuery("");
+		setPickerIndex(0);
+		nav.pushModal("locations", routeKey(pages.current()));
 	};
+	/**
+	 * In-memory identities the picker may offer: the resources this shell has
+	 * already loaded, never a repository or global index scan. Capped: the
+	 * picker is a jump list, not a catalogue of everything on disk.
+	 */
+	const resourceEntries = (): DestinationEntry[] => {
+		const entries: DestinationEntry[] = [];
+		for (const summary of summaries().slice(0, 20)) {
+			entries.push({
+				id: `trace:${summary.traceId}`,
+				label: summary.traceId,
+				description: "Loaded trace",
+				group: "Traces",
+				route: {
+					page: "observability.traces.tree",
+					resourceId: summary.traceId,
+				},
+			});
+		}
+		for (const stream of metricStore.getStreams().slice(0, 20)) {
+			entries.push({
+				id: `metric:${stream.serviceName}:${stream.name}`,
+				label: stream.name,
+				description: stream.serviceName,
+				group: "Metrics",
+				route: {
+					page: "observability.metrics.detail",
+					resourceId: stream.name,
+					params: { service: stream.serviceName },
+				},
+			});
+		}
+		for (const node of topologyStore.getLayout().slice(0, 20)) {
+			entries.push({
+				id: `service:${node.id}`,
+				label: node.id,
+				description: "Topology service",
+				group: "Topology",
+				route: {
+					page: "observability.topology.service",
+					resourceId: node.id,
+				},
+			});
+		}
+		return entries;
+	};
+	const pickerEntriesForPage = (): DestinationEntry[] => resourceEntries();
 
-	const tabIds = () => tabs().map((tab) => tab.id);
-
-	// Number of keys the active rendered row advertises: features only, or
-	// features plus the observability sub-row while it is shown.
-	const shellTabCount = (): number =>
-		props.environments
-			? activeFeature() === "observability"
-				? featureTabs().length + observabilityTabs().length
-				: featureTabs().length
-			: tabIds().length;
-
-	const tabKeybindCatalog = (): KeybindSection[] =>
-		observabilityKeybindCatalog({
-			tab: activeTab(),
-			view: nav.view(),
-			tabCount: shellTabCount(),
+	const tabKeybindCatalog = (): KeybindSection[] => {
+		const tab = activeTab();
+		return observabilityKeybindCatalog({
+			tab: tab === "home" ? "traces" : tab,
+			view: traceView(),
 		});
+	};
 
 	// The shell footer and `?` help read the active surface catalog from the
 	// shared store. The dashboard (workflow tab) publishes its own catalog, so
 	// the shell skips it there instead of fighting for the store.
 	createEffect(() => {
+		// Destination pages publish their own catalog: the shell feature bodies
+		// (dashboard, environments) publish theirs while visible.
+		if (destinationEntries()) {
+			setActiveKeybindCatalog(destinationPageKeybindCatalog());
+			return;
+		}
 		if (props.dashboard && activeTab() === "workflow") return;
 		setActiveKeybindCatalog(
-			activeTab() === "environments" && props.environments
-				? (environmentCatalog() ??
-						environmentsKeybindCatalog(featureTabs().length))
+			props.environments && currentPage().startsWith("environments.")
+				? (environmentCatalog() ?? environmentsKeybindCatalog())
 				: tabKeybindCatalog(),
 			// The wiki's note-only actions are footer-visible while a note is open.
-			activeTab() === "wiki" && wikiNoteActive() ? "note" : undefined,
+			currentPage() === "wiki.note" ? "note" : undefined,
 		);
 	});
 
@@ -1334,47 +1662,50 @@ export function App(props: {
 						);
 					})()}
 				</box>
-				<box style={{ height: 1 }} />
-				{props.environments ? (
-					<box style={{ flexDirection: "column", flexShrink: 0 }}>
-						<TabBar
-							tabs={featureTabs()}
-							activeId={activeFeature()}
-							onSelect={(id) => selectFeature(id as FeatureId)}
-						/>
-						{activeFeature() === "observability" && (
-							<TabBar
-								tabs={observabilityTabs()}
-								activeId={activeTab()}
-								onSelect={(id) => switchTab(id as Tab)}
-							/>
-						)}
-					</box>
-				) : (
-					(!props.tracesOnly || props.dashboard?.mode === "home") && (
-						<TabBar
-							tabs={tabs()}
-							activeId={activeTab()}
-							onSelect={(id) => switchTab(id as Tab)}
-						/>
-					)
-				)}
+				{/* One bounded breadcrumb row from structural ancestors (never history). */}
+				<BreadcrumbRow
+					ancestors={ancestors()}
+					focusedIndex={crumbFocusedIndex()}
+					onSelectIndex={(index) => {
+						setFocusRegion("breadcrumb");
+						setCrumbIndex(index);
+					}}
+					onNavigate={(route) => pages.navigate(route)}
+				/>
 
 				{/* Tab content */}
 				<box
 					backgroundColor={uiColors.bgBase}
 					style={{ flexGrow: 1, minHeight: 0, flexDirection: "column" }}
 				>
+					{/* Destination pages: Home and the category pages. */}
+					{(() => {
+						const entries = destinationEntries();
+						return entries ? (
+							<CategoryPage
+								title={destinationTitle()}
+								description={
+									currentPage() === "home"
+										? "Choose a destination. Ctrl+P jumps anywhere."
+										: undefined
+								}
+								entries={entries}
+								selectedIndex={destinationIndex()}
+								onSelectIndex={setDestinationIndex}
+								onOpen={openDestination}
+							/>
+						) : null;
+					})()}
 					{/* Feature bodies stay mounted while hidden: switching shell tabs must
 					 * preserve live environment/workflow drafts, selections and subscriptions. */}
 					{props.renderEnvironments && (
 						<box
-							visible={activeTab() === "environments"}
+							visible={currentPage().startsWith("environments.")}
 							style={{ flexGrow: 1, minHeight: 0 }}
 						>
 							{props.renderEnvironments(
 								setEnvironmentCatalog,
-								() => activeFeature() === "environments",
+								() => currentPage().startsWith("environments."),
 								(open) => {
 									if (open && activeFeature() === "environments") {
 										if (nav.modal() !== "environment")
@@ -1383,12 +1714,16 @@ export function App(props: {
 										nav.popModal();
 									}
 								},
+								environmentDestination,
 							)}
 						</box>
 					)}
 					{props.dashboard && (
 						<box
-							visible={activeTab() === "workflow"}
+							visible={
+								currentPage() === "workflows" ||
+								currentPage() === "workflows.detail"
+							}
 							style={{ flexGrow: 1, minHeight: 0 }}
 						>
 							{props.dashboard.mode === "home" ? (
@@ -1430,29 +1765,40 @@ export function App(props: {
 								submitting={wikiSubmitting()}
 								onSubmittingChange={setWikiSubmitting}
 								onClearComments={() => setWikiComments([])}
+								noteId={
+									currentPage() === "wiki.note"
+										? pages.current().resourceId
+										: undefined
+								}
+								onOpenNote={(conceptId) =>
+									pages.navigate({
+										page: "wiki.note",
+										resourceId: conceptId,
+									})
+								}
+								onCloseNote={() => pages.back()}
 								onHelp={() => {
 									setHelpOffset(0);
+									// The shell modal effect parks WikiView's keymap layer while
+									// the help overlay is open, so j/k/Esc reach the modal.
 									nav.pushModal("help", "wiki");
-									// Park WikiView's keymap layer while the shell help is open so
-									// j/k/Esc reach the modal; restored when it closes.
-									props.dashboard?.keymap.setData("modal.active", "help");
 								}}
 							/>
 						</box>
 					)}
 					{activeTab() === "traces" && (
 						<>
-							{nav.view() === "selection" && (
+							{traceView() === "selection" && (
 								<TraceListView
 									summaries={summaries}
-									selectedIndex={selectedListIndex}
+									selectedIndex={selectedTraceIndex}
 									searchMode={searchMode}
 									searchQuery={searchQuery}
 									resultCount={filteredCount}
 									onSelect={selectTrace}
 								/>
 							)}
-							{nav.view() === "detail" && (
+							{traceView() === "detail" && (
 								<box
 									style={{ flexGrow: 1, minHeight: 0, flexDirection: "column" }}
 								>
@@ -1483,29 +1829,35 @@ export function App(props: {
 									</box>
 								</box>
 							)}
-							{nav.view() === "span" && <SpanDetailView node={selectedSpan} />}
+							{traceView() === "span" && <SpanDetailView node={selectedSpan} />}
 						</>
 					)}
 					{activeTab() === "metrics" && (
 						<>
-							{!selectedMetric() && (
+							{currentPage() !== "observability.metrics.detail" && (
 								<MetricsView
 									store={metricStore}
 									selectedIndex={selectedMetricIndex}
 									onSelectIndex={setSelectedMetricIndex}
-									onOpen={(name, serviceName) =>
-										setSelectedMetric({ name, serviceName })
-									}
+									onOpen={(name, serviceName) => {
+										setSelectedMetric({ name, serviceName });
+										pages.navigate({
+											page: "observability.metrics.detail",
+											resourceId: name,
+											params: { service: serviceName },
+										});
+									}}
 								/>
 							)}
 							{(() => {
 								const selected = selectedMetric();
-								return selected ? (
+								return currentPage() === "observability.metrics.detail" &&
+									selected ? (
 									<MetricDetailView
 										store={metricStore}
 										name={selected.name}
 										serviceName={selected.serviceName}
-										onBack={() => setSelectedMetric(undefined)}
+										onBack={() => pages.back()}
 									/>
 								) : null;
 							})()}
@@ -1513,21 +1865,30 @@ export function App(props: {
 					)}
 					{activeTab() === "logs" && (
 						<>
-							{selectedLog() === undefined && (
+							{currentPage() !== "observability.logs.detail" && (
 								<LogsView
 									store={logStore}
 									selectedIndex={selectedLogIndex}
 									onSelectIndex={setSelectedLogIndex}
-									onOpen={setSelectedLog}
+									onOpen={(index) => {
+										setSelectedLog(index);
+										const log = logStore.getLogs()[index];
+										if (log)
+											pages.navigate({
+												page: "observability.logs.detail",
+												resourceId: logRouteIdentity(log),
+											});
+									}}
 								/>
 							)}
 							{(() => {
 								const idx = selectedLog();
-								return idx !== undefined ? (
+								return currentPage() === "observability.logs.detail" &&
+									idx !== undefined ? (
 									<LogDetailView
 										store={logStore}
 										index={idx}
-										onBack={() => setSelectedLog(undefined)}
+										onBack={() => pages.back()}
 									/>
 								) : null;
 							})()}
@@ -1535,16 +1896,23 @@ export function App(props: {
 					)}
 					{activeTab() === "topology" && (
 						<>
-							{!topologyDetail() && (
+							{currentPage() !== "observability.topology.service" && (
 								<TopologyView
 									store={topologyStore}
 									selectedService={selectedTopologyService}
-									onSelect={setSelectedTopologyService}
+									onSelect={(id) => {
+										setSelectedTopologyService(id);
+										pages.navigate({
+											page: "observability.topology.service",
+											resourceId: id,
+										});
+									}}
 								/>
 							)}
 							{(() => {
 								const id = topologyDetail();
-								return id ? (
+								return currentPage() === "observability.topology.service" &&
+									id ? (
 									<ServiceDetailView store={topologyStore} id={id} />
 								) : null;
 							})()}
@@ -1577,6 +1945,20 @@ export function App(props: {
 					themes={filteredThemes}
 					query={themeQuery}
 					filtering={themeFiltering}
+				/>
+			)}
+			{nav.modal() === "locations" && (
+				<LocationPicker
+					entries={pickerEntries(surface(), pickerEntriesForPage())}
+					query={pickerQuery()}
+					selectedIndex={pickerIndex()}
+					onQueryChange={setPickerQuery}
+					onSelectIndex={setPickerIndex}
+					onAccept={(route) => {
+						nav.popModal();
+						pages.navigate(route);
+					}}
+					onClose={() => nav.popModal()}
 				/>
 			)}
 			{nav.modal() === "help" && (

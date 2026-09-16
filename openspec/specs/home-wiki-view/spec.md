@@ -4,22 +4,19 @@
 TBD - created by archiving change introduce-wiki-view. Update Purpose after archive.
 ## Requirements
 ### Requirement: Wiki tab is available in the home shell
-The home shell SHALL expose a Wiki tab as a peer of the Workflows and observability tabs, and SHALL derive tab cycling, direct selection, and status-bar help from the same ordered tab list. The Wiki tab SHALL be available in home mode without requiring a repository, workflow change, or telemetry data.
+The full application SHALL expose Wiki as a repository-independent Home destination and location-picker entry rather than a tab. Wiki SHALL remain available without workflow selection or telemetry data; telemetry visibility restrictions SHALL NOT hide it. Page commands and contextual help SHALL derive from the shared command catalog.
 
-#### Scenario: Home shell shows Wiki tab
-- **WHEN** the main application is started in home mode
-- **THEN** the tab bar contains a `Wiki` tab alongside `Workflows` and the enabled observability tabs
-- **AND** selecting or cycling to `Wiki` renders the wiki view without a repository or workflow selection
+#### Scenario: Home shell shows Wiki destination
+- **WHEN** the main application starts in home mode
+- **THEN** Home SHALL offer Wiki and selecting it SHALL open the wiki view without repository selection
 
-#### Scenario: Wiki remains available when observability tabs are hidden
-- **WHEN** home mode is started with `--traces-only`
-- **THEN** the shell hides only the configured observability tabs
-- **AND** the `Wiki` tab remains selectable beside the remaining home tabs
+#### Scenario: Wiki remains available when observability views are restricted
+- **WHEN** home mode starts with `--traces-only`
+- **THEN** Wiki SHALL remain reachable through Home and the location picker
 
-#### Scenario: Wiki tab navigation is consistent
-- **WHEN** the user cycles tabs or uses a direct tab shortcut from the Wiki view
-- **THEN** the shell selects the corresponding tab from the displayed tab order
-- **AND** the status bar describes the bindings for the currently displayed tab order
+#### Scenario: Wiki navigation is consistent
+- **WHEN** the user leaves Wiki through Back, Parent or the location picker
+- **THEN** the shared router SHALL perform the transition and the footer SHALL describe the current page rather than a tab order
 
 ### Requirement: Wiki concepts render as a navigable file tree
 The Wiki view SHALL read the centralized bundle through the existing wiki read API and SHALL render concept identifiers as a hierarchical tree of directory and Markdown concept rows. Rows SHALL be sorted deterministically, directory rows SHALL be expandable/collapsible, and reserved bundle files SHALL not appear as concepts.
@@ -81,7 +78,7 @@ The note modal SHALL allow the user to create comments anchored to a current-doc
 - **AND** the range is rendered as one review anchor
 
 #### Scenario: Unsubmitted comments are not persisted
-- **WHEN** the user adds comments and closes the note modal or changes tabs without pressing `f`
+- **WHEN** the user adds comments and closes the note modal or changes pages without pressing `f`
 - **THEN** the comments remain only in the active in-memory review session
 - **AND** no comment file or wiki concept is written
 
@@ -91,7 +88,7 @@ The note modal SHALL allow the user to create comments anchored to a current-doc
 - **AND** no empty comment is added
 
 ### Requirement: Wiki review controls are discoverable
-The Wiki view and note modal SHALL expose context-sensitive help for tree navigation, note opening, line navigation, commenting, returning, refreshing, and finishing a review. `f` SHALL be reserved for finishing the current wiki review rather than changing tabs or applying an unrelated home action while a note modal is active.
+The Wiki view and note modal SHALL expose context-sensitive help for tree navigation, note opening, line navigation, commenting, returning, refreshing, and finishing a review. `f` SHALL be reserved for finishing the current wiki review rather than changing pages or applying an unrelated home action while a note modal is active.
 
 #### Scenario: Note help lists comment controls
 - **WHEN** the note modal is open

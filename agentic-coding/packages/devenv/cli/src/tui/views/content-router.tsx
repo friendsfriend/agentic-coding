@@ -21,8 +21,7 @@ import {
 	TimelineView,
 	uiColors,
 } from "@devenv/ui";
-import { TextAttributes } from "@opentui/core";
-import { createEffect, For, Show } from "solid-js";
+import { createEffect, Show } from "solid-js";
 import { guides as allGuides, getGuide } from "../guides";
 import { ActionsView } from "./actions-view";
 import { ShutdownSplash } from "./shutdown-splash";
@@ -59,13 +58,9 @@ export function ContentRouter(props: ContentRouterProps) {
 
 	// ContentStack adds one-line top and bottom gutters around table.
 	const TABLE_VIEW_GUTTERS = 2;
-	const TAB_BAR_LINES = 3;
 	const availableTableLines = Math.max(
 		1,
-		props.dimensions.height -
-			LAYOUT_CHROME_LINES -
-			TABLE_VIEW_GUTTERS -
-			TAB_BAR_LINES,
+		props.dimensions.height - LAYOUT_CHROME_LINES - TABLE_VIEW_GUTTERS,
 	);
 	const tableColumns = () =>
 		appStore.activeTab() === "scripts"
@@ -612,53 +607,6 @@ export function ContentRouter(props: ContentRouterProps) {
 									overflow: "hidden",
 								}}
 							>
-								<Show when={appStore.tableTabs().length > 0}>
-									<box
-										backgroundColor={uiColors.bgBase}
-										style={{
-											width: "100%",
-											flexDirection: "row",
-											gap: 1,
-										}}
-									>
-										<For each={appStore.tableTabs()}>
-											{(tab) => {
-												const isActive = () => appStore.activeTab() === tab.id;
-												return (
-													<box
-														backgroundColor={
-															isActive()
-																? uiColors.bgSurface0
-																: uiColors.bgMantle
-														}
-														onMouseUp={() => appStore.setActiveTab(tab.id)}
-														style={{
-															paddingLeft: 2,
-															paddingRight: 2,
-															height: 3,
-															alignItems: "center",
-															justifyContent: "center",
-														}}
-													>
-														<text
-															fg={
-																isActive()
-																	? uiColors.primary
-																	: uiColors.textMuted
-															}
-															attributes={
-																isActive() ? TextAttributes.BOLD : undefined
-															}
-														>
-															{tab.label}
-															{tab.count !== undefined ? ` (${tab.count})` : ""}
-														</text>
-													</box>
-												);
-											}}
-										</For>
-									</box>
-								</Show>
 								<Show
 									when={appStore.activeTab() === "ui-test"}
 									fallback={

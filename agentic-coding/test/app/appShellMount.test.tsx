@@ -61,15 +61,31 @@ test("AppShell mounts the embedded Environments feature without keymap errors", 
 			},
 			{ width: 120, height: 40 },
 		);
-		// Wait for the embedded environment body (its own sub-tab row), which the
-		// shell feature row cannot produce.
-		const frame = await t.waitForFrame((value) =>
-			value.includes("Infrastructure (0)"),
-		);
-		expect(frame).toContain("Observability");
-		// The embedded app projected its live command registrations into the shell
-		// footer (task 3.6).
+		// The entry is the Environments category page; opening a category mounts
+		// the embedded environment body (its own table views), which the shell's
+		// destination list cannot produce.
+		for (let pass = 0; pass < 6; pass += 1) await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("Kubernetes");
+		t.mockInput.pressEnter();
+		for (let pass = 0; pass < 6; pass += 1) await t.renderOnce();
+		const frame = t.captureCharFrame();
+		expect(frame).toContain("Home › Environments › Applications");
+		// The embedded body owns the content area without an inner navigation tab
+		// row, and projected its live command registrations into the shell footer.
+		expect(frame).not.toContain("Applications (0)");
 		expect(frame).toContain("T Theme");
+
+		// A destination jump through the location picker drives the embedded
+		// feature's category from the route (no inner tab row involved).
+		t.mockInput.pressKey("p", { ctrl: true });
+		for (let pass = 0; pass < 3; pass += 1) await t.renderOnce();
+		for (const character of "libraries") {
+			t.mockInput.pressKey(character);
+			await t.renderOnce();
+		}
+		t.mockInput.pressEnter();
+		for (let pass = 0; pass < 6; pass += 1) await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("Home › Environments › Libraries");
 		t.renderer.destroy();
 	} finally {
 		console.error = originalError;
