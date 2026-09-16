@@ -24,4 +24,5 @@ UI Rework / Devenv union:
 * Menu doenst handle scrolling properly.
 * Environment menu always reopens the last view
 * Linux: Migrate config once
+* Devenv feature keybinds fully missing
 
