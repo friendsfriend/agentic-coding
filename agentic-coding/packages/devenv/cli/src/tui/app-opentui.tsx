@@ -469,11 +469,24 @@ export function TUIApp(props: TUIAppProps) {
 
 	// --- Shell route ↔ destination sync (embedded page shell) ---
 	// The route names a category and a view path; the store owns the data and the
-	// per-tab state. Writing only on a difference keeps the two authorities from
-	// fighting, and a shell Back therefore restores the view it left.
+	// per-tab state. Only a *changed* request is applied: the feature reports its
+	// own moves back to the route, so re-applying the request the route still
+	// names would reopen the view Escape just closed (the route has not caught up
+	// with the report yet). A shell Back to a different view therefore still
+	// restores it, while a feature-side step is left standing.
+	//
+	// ponytail: the request is compared as category+view, so a route that changes
+	// only the resource identity at the same view applies nothing. The route
+	// carries the identity of the *view* here, not of the resource it renders
+	// (`openAppDetail` names the selection), so this is the whole of what the
+	// route can ask for today.
+	let appliedRequest: string | undefined;
 	createEffect(() => {
 		const destination = props.destination;
 		if (!destination) return;
+		const request = `${destination.category ?? ""}|${destination.view ?? ""}`;
+		if (request === appliedRequest) return;
+		appliedRequest = request;
 		const category = requestedCategory(
 			destination.category,
 			appStore.tableTabs().map((tab) => tab.id),

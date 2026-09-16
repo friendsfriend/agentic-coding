@@ -51,7 +51,7 @@ export function observabilityKeybindCatalog(options: {
 }): KeybindSection[] {
 	const theme = { key: "T", action: "theme picker", short: "theme" };
 	const help = { key: "?", action: "help" };
-	// One location picker, one structural parent (Escape/Alt+Up) and the
+	// One location picker, one structural parent (Escape) and the
 	// chronological Back/Forward pair; destinations are pages now, so no
 	// tab-order or number key belongs in the footer or the help.
 	const locations = { key: "Ctrl+P", action: "locations", short: "locations" };

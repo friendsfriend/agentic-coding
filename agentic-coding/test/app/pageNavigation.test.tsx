@@ -22,7 +22,7 @@ import { pressEscapeAndSettle } from "./support/terminal";
 
 // Page-local input (replace-nested-tabs-with-page-navigation, task 3.1): Tab
 // traverses focus regions instead of destinations, Ctrl+P opens the one
-// location picker, Alt+Up opens the structural parent, and no numeric or `t`
+// location picker, Escape opens the structural parent, and no numeric or `t`
 // cycling remains.
 
 type Test = Awaited<ReturnType<typeof renderShell>>["t"];
@@ -145,6 +145,41 @@ test("Parent and picker are advertised on the page surfaces", async () => {
 	expect(frame).toContain("parent page");
 	expect(frame).toContain("locations");
 	expect(frame).not.toContain("feature tabs");
+	t.renderer.destroy();
+	db.close();
+});
+
+test("the retired Alt+Up alias opens no parent and is advertised nowhere", async () => {
+	// Escape is the only structural up-step: `Alt+Up` was dropped from the
+	// catalogs, so no footer, `?` help or keymap layer may offer it again.
+	for (const catalog of [
+		destinationPageKeybindCatalog(),
+		observabilityKeybindCatalog({ tab: "metrics", view: "selection" }),
+		environmentsKeybindCatalog(),
+	]) {
+		for (const keybind of catalogKeybinds(catalog)) {
+			expect(keybind.key.toLowerCase()).not.toContain("alt+up");
+		}
+	}
+
+	const { t, db } = await renderShell({ home: true });
+	t.mockInput.pressEnter();
+	await t.renderOnce();
+	await t.renderOnce();
+	// Home mode mounts no environment backend, so Observability is the first
+	// destination; any body page proves the same point.
+	expect(crumb(t)).toContain("Home › Observability");
+
+	t.mockInput.pressKey("up", { meta: true });
+	await t.renderOnce();
+	await t.renderOnce();
+	expect(crumb(t)).toContain("Home › Observability");
+
+	await pressEscape(
+		t,
+		(frame) => !frame.split("\n").some((line) => line.includes("›")),
+	);
+	expect(crumb(t)).toBe("");
 	t.renderer.destroy();
 	db.close();
 });

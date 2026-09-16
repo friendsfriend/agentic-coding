@@ -58,14 +58,14 @@ export function catalogKeybinds(catalog: KeybindCatalog): Keybind[] {
  * Drop the standard navigation keys every user already knows. */
 /**
  * The parent/back/forward navigation set every page surface advertises
- * (hierarchical-tui-navigation): Escape is the structural up-step (`Alt+Up` is
- * the alias), Back and Forward are the chronological pair on the vim jump-list
- * keys with terminal-independent `Alt` arrow equivalents. All entries are
- * standard navigation, so the footer stays free for special actions and the
- * `?` help modal documents them.
+ * (hierarchical-tui-navigation): Escape is the structural up-step, Back and
+ * Forward are the chronological pair on the vim jump-list keys with
+ * terminal-independent `Alt` arrow equivalents. All entries are standard
+ * navigation, so the footer stays free for special actions and the `?` help
+ * modal documents them.
  */
 export const PAGE_NAVIGATION_KEYBINDS: readonly Keybind[] = [
-	{ key: "Esc/Alt+Up", action: "parent page", short: "parent", standard: true },
+	{ key: "Esc", action: "parent page", short: "parent", standard: true },
 	{
 		key: "Ctrl+O/Alt+Left",
 		action: "back",

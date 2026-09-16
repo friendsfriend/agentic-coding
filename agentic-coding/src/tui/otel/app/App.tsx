@@ -353,8 +353,16 @@ export function App(props: {
 		? registerShellFeatureField(props.dashboard.keymap)
 		: undefined;
 	onCleanup(() => disposeShellFeatureField?.());
+	// The feature whose *body* owns input on the current page. A shell-rendered
+	// destination list (Home, a category page) belongs to no feature body even
+	// when the catalog attributes the page to a feature for breadcrumbs and
+	// history, so a feature layer never claims the keys of the list the shell is
+	// showing — the shell's own Enter/Escape would go dead behind it.
 	createEffect(() => {
-		props.dashboard?.keymap.setData("shell.feature", activeFeature());
+		props.dashboard?.keymap.setData(
+			"shell.feature",
+			destinationEntries() ? undefined : activeFeature(),
+		);
 	});
 	// The legacy flat tab is a projection of the current page identity so the
 	// existing observability content keeps one switch surface while the tab rows
@@ -1504,11 +1512,6 @@ export function App(props: {
 		// Ctrl+P opens the one location picker from anywhere on the shell.
 		if (event.ctrl && key === "p") {
 			openLocationPicker();
-			return;
-		}
-		// Alt+Up opens the structural parent of the current page.
-		if (event.option && key === "up") {
-			pages.goToParent();
 			return;
 		}
 

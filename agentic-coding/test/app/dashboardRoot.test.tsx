@@ -80,8 +80,8 @@ test("shell-only keys and clicks invoke no navigation handler", async () => {
 	const t = await testRender(() => <TestRoot />, { width: 140, height: 40 });
 	await dashboardReady(t);
 
-	// Former shell shortcuts: location picker (Ctrl+P), structural parent
-	// (Alt/⌥+Up, delivered as meta) and focus-region cycling (Tab).
+	// Former shell shortcuts: location picker (Ctrl+P), the retired structural
+	// parent alias (Alt/⌥+Up, delivered as meta) and focus-region cycling (Tab).
 	t.mockInput.pressKey("p", { ctrl: true });
 	await t.renderOnce();
 	t.mockInput.pressKey("up", { meta: true });

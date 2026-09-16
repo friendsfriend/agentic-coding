@@ -200,10 +200,10 @@ const SHELL_KEYS: string[] = [
 		"backspace",
 		"delete",
 		// Page navigation bindings (replace-nested-tabs-with-page-navigation, task
-		// 3.1): one location picker and one structural parent, no destination
-		// cycling. Explicit so a feature layer still owns whatever it registers.
+		// 3.1): one location picker and one structural parent (`Esc`, no
+		// alternate binding), no destination cycling. Explicit so a feature layer
+		// still owns whatever it registers.
 		"ctrl+p",
-		"alt+up",
 		// Chronological history: Ctrl+O/Ctrl+I are the vim jump-list pair and
 		// Alt+Left/Alt+Right the equivalents that work on every terminal (a
 		// terminal without the kitty keyboard protocol reports Ctrl+I as Tab).
