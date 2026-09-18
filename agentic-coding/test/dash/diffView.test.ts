@@ -1,8 +1,5 @@
 import { expect, test } from "bun:test";
-import {
-	buildSplitDiffLines,
-	parseDiffLines,
-} from "../../src/tui/shared/diffView";
+import { buildSplitDiffLines, parseDiffLines } from "@ui";
 
 const DIFF = [
 	"--- a/file.ts",

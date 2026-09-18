@@ -76,6 +76,21 @@ const responses = (
 	"/api/scripts": { items: [] },
 	"/api/providers": [],
 	"/api/actions/history": [],
+	// The Kubernetes category reads its cluster status on mount. Without a stub
+	// the read 404s, the body raises its error dialog and that dialog owns input —
+	// the journey would then be testing the dialog, not the page.
+	"/api/kubernetes/cluster": {
+		clusterName: "stub",
+		contextName: "stub",
+		provider: "docker",
+		exists: false,
+		reachable: false,
+		state: "unknown",
+		nodes: [],
+		namespaces: [],
+		pods: { total: 0, running: 0, pending: 0, failed: 0 },
+		releases: [],
+	},
 });
 
 let restoreFetch: (() => void) | undefined;

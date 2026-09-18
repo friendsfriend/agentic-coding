@@ -1,9 +1,9 @@
 /** @jsxImportSource @opentui/solid */
+
+import { ScrollableContent, uiColors } from "@ui";
 import { createMemo, Show } from "solid-js";
-import { ScrollableContent } from "../components/ScrollableContent";
 import { TopologyGraph } from "../components/TopologyGraph";
 import type { TopologyStore } from "../model/topologyStore";
-import { uiColors } from "../ui/colors";
 
 export function TopologyView(props: {
 	store: TopologyStore;
@@ -35,7 +35,7 @@ export function TopologyView(props: {
 				<Show
 					when={!degraded()}
 					fallback={
-						<ScrollableContent>
+						<ScrollableContent focusable={false}>
 							{adjacency().map((line) => (
 								<box height={1} paddingLeft={1}>
 									<text fg={uiColors.textSecondary}>{line}</text>

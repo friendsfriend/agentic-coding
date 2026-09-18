@@ -11,8 +11,8 @@ import type {
 	ScriptVisibleRow,
 	TableRow,
 } from "@devenv/types";
-import type { TableTab } from "@devenv/ui";
-import { runtimeState } from "@devenv/ui";
+import type { TableTab } from "@ui";
+import { runtimeState } from "@ui";
 
 export type ViewMode =
 	| "table"

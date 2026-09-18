@@ -2,7 +2,7 @@
 // Shared corner toast rendering (src/tui/shared/Notification.tsx) fed by the
 // observability notification store.
 
-import { NotificationOverlay as SharedNotificationOverlay } from "../../shared/Notification";
+import { NotificationOverlay as SharedNotificationOverlay } from "@ui";
 import { activeNotification } from "../app/notifications";
 
 export function NotificationOverlay() {

@@ -5,6 +5,7 @@
 // the active tab. Renders nothing when the lifecycle phase is idle/running.
 import { RGBA, TextAttributes } from "@opentui/core";
 import { Portal, useTerminalDimensions } from "@opentui/solid";
+import { colors, uiColors } from "@ui";
 import {
 	createEffect,
 	createMemo,
@@ -13,7 +14,6 @@ import {
 	onCleanup,
 	Show,
 } from "solid-js";
-import { colors, uiColors } from "../dash/ui/colors";
 import { message, phase, steps } from "../lifecycle";
 
 const mixHex = (from: string, to: string, amount: number) => {

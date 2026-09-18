@@ -9,7 +9,7 @@ import type {
 	ChangeRequest,
 	ContainerStats,
 } from "@devenv/types";
-import type { AppDetailKind, DependencyNode } from "@devenv/ui";
+import type { AppDetailKind, DependencyNode } from "@ui";
 
 export function createAppDetailStore() {
 	const [appDetailApp, setAppDetailApp] = createSignal<App | undefined>(

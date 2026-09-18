@@ -1,11 +1,13 @@
 /** @jsxImportSource @opentui/solid */
 import { TextAttributes } from "@opentui/core";
+import {
+	HighlightedText,
+	ScrollableContent,
+	SearchHeader,
+	uiColors,
+} from "@ui";
 import { createMemo, For } from "solid-js";
-import { HighlightedText } from "../components/Highlight";
-import { ScrollableContent } from "../components/ScrollableContent";
-import { SearchHeader } from "../components/SearchHeader";
 import type { LogStore } from "../model/logStore";
-import { uiColors } from "../ui/colors";
 
 export function LogDetailView(props: {
 	store: LogStore;
@@ -66,7 +68,7 @@ export function LogDetailView(props: {
 			<SearchHeader>
 				<HighlightedText text="Attributes" highlight="secondary" />
 			</SearchHeader>
-			<ScrollableContent>
+			<ScrollableContent focusable={false}>
 				<For each={log()?.attributes ?? []}>
 					{(attr) => (
 						<box

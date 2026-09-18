@@ -5,7 +5,7 @@ import type {
 	SshHost,
 	WorktreeInfo,
 } from "@devenv/types";
-import type { BranchInfo, EditorOption } from "@devenv/ui";
+import type { BranchInfo, EditorOption } from "@ui";
 import { createMemo, createSignal } from "solid-js";
 
 export type NotificationType = "info" | "success" | "warning" | "error";

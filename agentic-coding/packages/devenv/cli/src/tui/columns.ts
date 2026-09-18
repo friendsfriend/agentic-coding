@@ -1,5 +1,5 @@
 import type { TableRow } from "@devenv/types";
-import { getGitStatusStyle, type TableColumn } from "@devenv/ui";
+import { getGitStatusStyle, type TableColumn } from "@ui";
 
 function getProviderIcon(app: TableRow): string {
 	if (app.rowKind !== "app") return "";

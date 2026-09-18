@@ -17,6 +17,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TerminalColors } from "@opentui/core";
 import {
+	setActiveThemeName,
+	setCustomThemes,
+	setSystemTheme,
+	themeColor,
+	themeColorForTheme,
+	themeNames,
+} from "@ui";
+import {
 	loadCustomThemes,
 	loadThemeName,
 	saveThemeName,
@@ -27,14 +35,6 @@ import {
 	captureRendererPalette,
 	terminalColorsToThemeColors,
 } from "../../src/tui/dash/ui/terminal-colors";
-import {
-	setActiveThemeName,
-	setCustomThemes,
-	setSystemTheme,
-	themeColor,
-	themeColorForTheme,
-	themeNames,
-} from "../../src/tui/dash/ui/theme";
 
 const pad = (value: number) => value.toString(16).padStart(2, "0");
 

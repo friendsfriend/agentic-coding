@@ -7,8 +7,8 @@
  * Solid ownership: the factory runs under the App owner, and `dispose()` is
  * wired into App's unmount cleanup. */
 import type { KeyEvent } from "@opentui/core";
+import type { Discussion } from "@ui";
 import { createMemo, createSignal, type Setter } from "solid-js";
-import type { Discussion } from "./devenv-ui/types";
 import { notify } from "./notifications";
 import {
 	loadDeveloperReviewFindingsAsync,

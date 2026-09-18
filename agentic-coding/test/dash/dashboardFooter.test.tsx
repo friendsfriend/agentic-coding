@@ -5,10 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
+import { StatusBar } from "@ui";
 import { onCleanup } from "solid-js";
 import { App as DashApp } from "../../src/tui/dash/App";
 import { type DashboardData, testDashboard } from "../../src/tui/dash/data";
-import { StatusBar } from "../../src/tui/otel/components/StatusBar";
 
 // The shell footer reads the catalog the dashboard detail view publishes. This
 // drives it through the real panel grid to prove the footer changes with the

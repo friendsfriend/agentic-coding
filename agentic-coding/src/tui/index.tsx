@@ -23,6 +23,7 @@ import { createCliRenderer } from "@opentui/core";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { KeymapProvider } from "@opentui/keymap/solid";
 import { render } from "@opentui/solid";
+import { setGlobalSelectionMouseUpHandler, showErrorModal } from "@ui";
 import { resolveConfigDir, resolveDevenvHome } from "../backend/home";
 import { ownsEnvironmentBackend } from "../backend/ownership";
 import { setConfigDiagnosticSink } from "../config-root";
@@ -52,9 +53,7 @@ import { DashboardRoot } from "./app/DashboardRoot";
 import { copyToClipboard } from "./clipboard";
 import { testDashboard } from "./dash/demo";
 import { setupKeymap } from "./dash/keymap-setup";
-import { notify } from "./dash/notifications";
 import { listWorkflowsAsync, loadDashboardAsync } from "./dash/observations";
-import { setGlobalSelectionMouseUpHandler } from "./dash/selectionCopy";
 import {
 	applyTheme as applyDashTheme,
 	loadCustomThemes,
@@ -80,7 +79,7 @@ import {
 } from "./lifecycle";
 import { LifecycleModal } from "./lifecycle/LifecycleModal";
 import { QuitConfirmModal } from "./lifecycle/QuitConfirmModal";
-import { notify as notifyShell } from "./otel/app/notifications";
+import { notify, notify as notifyShell } from "./otel/app/notifications";
 import { discoverProjectRepos, TraceDb } from "./otel/model/db";
 import { LogStore } from "./otel/model/logStore";
 import { MetricStore } from "./otel/model/metricStore";
@@ -89,7 +88,6 @@ import type { TelemetryDb } from "./otel/model/telemetry-db";
 import { TopologyStore } from "./otel/model/topologyStore";
 import { TraceStore } from "./otel/model/traceStore";
 import type { LogData, MetricData, SpanData } from "./otel/model/types";
-import { showErrorModal } from "./shared/errorModal";
 
 const usage = `Usage: agentic-coding [command] [options]
   (no command)             Unified shell (default): owned environment backend + contextual workflow launch + observability

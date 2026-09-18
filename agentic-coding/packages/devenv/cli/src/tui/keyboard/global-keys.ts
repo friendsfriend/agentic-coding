@@ -1,4 +1,4 @@
-import { themeNames } from "@devenv/ui";
+import { themeNames } from "@ui";
 import { getGuide } from "../guides";
 import { applyTheme, saveThemeName } from "../theme-settings";
 

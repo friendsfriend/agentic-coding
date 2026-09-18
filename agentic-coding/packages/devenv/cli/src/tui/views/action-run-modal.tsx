@@ -1,4 +1,6 @@
 import { actionRunDisplayLabel } from "@devenv/types";
+/** @jsxImportSource @opentui/solid */
+import { TextAttributes } from "@opentui/core";
 import {
 	Badge,
 	formatProfileLabel,
@@ -10,9 +12,7 @@ import {
 	statusAnimationIntentForText,
 	statusAnimationModel,
 	uiColors,
-} from "@devenv/ui";
-/** @jsxImportSource @opentui/solid */
-import { TextAttributes } from "@opentui/core";
+} from "@ui";
 import {
 	createEffect,
 	createMemo,

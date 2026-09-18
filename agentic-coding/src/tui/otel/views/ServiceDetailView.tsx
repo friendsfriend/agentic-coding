@@ -1,10 +1,13 @@
 /** @jsxImportSource @opentui/solid */
+
+import {
+	HighlightedText,
+	ScrollableContent,
+	SearchHeader,
+	uiColors,
+} from "@ui";
 import { createMemo, For } from "solid-js";
-import { HighlightedText } from "../components/Highlight";
-import { ScrollableContent } from "../components/ScrollableContent";
-import { SearchHeader } from "../components/SearchHeader";
 import type { TopologyStore } from "../model/topologyStore";
-import { uiColors } from "../ui/colors";
 
 export function ServiceDetailView(props: { store: TopologyStore; id: string }) {
 	const service = createMemo(() =>
@@ -21,9 +24,9 @@ export function ServiceDetailView(props: { store: TopologyStore; id: string }) {
 	return (
 		<box width="100%" height="100%" flexDirection="column">
 			<SearchHeader>
-				<HighlightedText text={props.id} highlight="primary" />
+				<HighlightedText text={props.id} highlight="highlight" />
 			</SearchHeader>
-			<ScrollableContent>
+			<ScrollableContent focusable={false}>
 				<For each={rows()}>
 					{([label, value]) => (
 						<box

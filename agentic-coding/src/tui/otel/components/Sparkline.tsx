@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { uiColors } from "../ui/colors";
+import { uiColors } from "@ui";
 
 const blocks = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 

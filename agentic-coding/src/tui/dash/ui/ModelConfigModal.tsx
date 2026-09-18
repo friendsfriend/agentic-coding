@@ -1,6 +1,13 @@
 /** @jsxImportSource @opentui/solid */
 
 import type { KeyEvent } from "@opentui/core";
+import type { HelpEntry } from "@ui";
+import {
+	GenericModal,
+	SelectableList,
+	uiColors,
+	useModalContentLines,
+} from "@ui";
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { backendClient } from "../../../server/client.ts";
 import {
@@ -15,7 +22,6 @@ import {
 	runtimeModels,
 } from "../../../workflow/profiles.ts";
 import { VERIFIER_ROLES } from "../../../workflow/steps/verification.ts";
-import { useModalContentLines } from "../../shared/GenericModal";
 import {
 	agentConfigEntry,
 	refreshAgentConfig,
@@ -24,9 +30,6 @@ import {
 import { type ConsoleIssue, captureConsoleIssues } from "../consoleCapture";
 import { notify } from "../notifications";
 import { traceTui } from "../tracing";
-import { uiColors } from "./colors";
-import { GenericModal, type HelpEntry } from "./GenericModal";
-import { SelectableList } from "./Selectable";
 
 const RUNTIMES = ["pi", "opencode", "opencode-v2"] as const;
 const RUNTIME_EXECUTABLES: Record<string, string> = {

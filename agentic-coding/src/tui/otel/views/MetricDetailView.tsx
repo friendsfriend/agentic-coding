@@ -1,10 +1,12 @@
+import {
+	HighlightedText,
+	ScrollableContent,
+	SearchHeader,
+	uiColors,
+} from "@ui";
 import { createMemo, For } from "solid-js";
 import { AutoscalingSparkline } from "../components/AutoscalingSparkline";
-import { HighlightedText } from "../components/Highlight";
-import { ScrollableContent } from "../components/ScrollableContent";
-import { SearchHeader } from "../components/SearchHeader";
 import type { MetricStore } from "../model/metricStore";
-import { uiColors } from "../ui/colors";
 
 const barChars = ["░", "▒", "▓", "█"];
 
@@ -117,7 +119,7 @@ export function MetricDetailView(props: {
 			<SearchHeader>
 				<HighlightedText text="Data points" highlight="secondary" />
 			</SearchHeader>
-			<ScrollableContent>
+			<ScrollableContent focusable={false}>
 				<For each={stream()?.dataPoints ?? []}>
 					{(dp, index) => (
 						<box

@@ -53,7 +53,7 @@ const targetedActions = new Set(["run", "start", "build", "test"]);
  * action type + target when no title is available.
  *
  * `formatProfileLabel` is injected rather than imported to avoid a
- * types -> ui dependency cycle (formatProfileLabel lives in @devenv/ui).
+ * types -> ui dependency cycle (formatProfileLabel lives in @ui).
  */
 export function actionRunDisplayLabel(
 	run: Pick<

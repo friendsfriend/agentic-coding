@@ -5,6 +5,30 @@ import { type KeyEvent, TextAttributes } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
 import { useRenderer, useTerminalDimensions } from "@opentui/solid";
 import {
+	activeErrorModal,
+	activeKeybindCatalog,
+	activeKeybindContext,
+	Badge,
+	catalogKeybinds,
+	closeModalHelp,
+	createModalStackState,
+	dismissErrorModal,
+	ErrorModalOverlay,
+	footerKeybinds,
+	HelpModal,
+	HighlightedText,
+	handleModalHelpKey,
+	type KeybindSection,
+	ModalHelpOverlay,
+	modalHelpOpen,
+	registerFocusRestorer,
+	StatusBar,
+	setActiveKeybindCatalog,
+	showErrorModal,
+	ThemePickerModal,
+	uiColors,
+} from "@ui";
+import {
 	createEffect,
 	createMemo,
 	createSignal,
@@ -72,31 +96,6 @@ import {
 	settingsProjects,
 	settingsProviders,
 } from "../../settings/state";
-import { ErrorModalOverlay } from "../../shared/ErrorModalOverlay";
-import {
-	activeErrorModal,
-	dismissErrorModal,
-	showErrorModal,
-} from "../../shared/errorModal";
-import { HelpModal } from "../../shared/HelpModal";
-import {
-	activeKeybindCatalog,
-	activeKeybindContext,
-	catalogKeybinds,
-	footerKeybinds,
-	type KeybindSection,
-	setActiveKeybindCatalog,
-} from "../../shared/keybinds";
-import { ModalHelpOverlay } from "../../shared/ModalHelpOverlay";
-import {
-	closeModalHelp,
-	handleModalHelpKey,
-	modalHelpOpen,
-} from "../../shared/modalHelp";
-import {
-	createModalStackState,
-	registerFocusRestorer,
-} from "../../shared/modalStack";
 import { BreadcrumbRow } from "../../shared/navigation/BreadcrumbRow";
 import { DestinationPage } from "../../shared/navigation/DestinationPage";
 import {
@@ -126,11 +125,7 @@ import {
 	type SettingsSection,
 	settingsSectionOfPage,
 } from "../../shared/routes";
-import { Badge } from "../components/Badge";
-import { HighlightedText } from "../components/Highlight";
 import { NotificationOverlay } from "../components/Notification";
-import { StatusBar } from "../components/StatusBar";
-import { ThemePickerModal } from "../components/ThemePickerModal";
 import {
 	FilterModal,
 	SortModal,
@@ -146,7 +141,6 @@ import {
 	TRACE_PAGE_SIZE,
 	type TreeNode,
 } from "../model/types";
-import { uiColors } from "../ui/colors";
 import { LogDetailView } from "../views/LogDetailView";
 import { LogsView } from "../views/LogsView";
 import { MetricDetailView } from "../views/MetricDetailView";
@@ -162,7 +156,7 @@ import {
 	observabilityKeybindCatalog,
 } from "./keybinds";
 import { createNavigation, isShellOwnedOverlay } from "./navigation";
-import { notify } from "./notifications";
+import { activeNotification, notify } from "./notifications";
 import {
 	applyTheme,
 	getActiveThemeName,
@@ -2422,7 +2416,7 @@ export function App(props: {
 				<box style={{ height: 1, flexShrink: 0 }} />
 				<StatusBar />
 			</box>
-			<NotificationOverlay />
+			<NotificationOverlay active={activeNotification} />
 			<ErrorModalOverlay keymap={props.dashboard?.keymap} />
 			{nav.modal() === "filter" && (
 				<FilterModal

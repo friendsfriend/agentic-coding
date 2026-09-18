@@ -1,5 +1,5 @@
 // Positive fixture: a feature wrapper that composes shared primitives.
-import { GenericModal } from "../../shared/GenericModal.tsx";
+import { GenericModal } from "@ui";
 
 export function Modal(): unknown {
 	return GenericModal;

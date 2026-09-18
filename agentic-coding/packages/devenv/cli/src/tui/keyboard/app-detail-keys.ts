@@ -1,4 +1,4 @@
-import type { DependencyNode } from "@devenv/ui";
+import type { DependencyNode } from "@ui";
 import type { AppDetailStore, AppStore } from "../stores";
 import { isDownKey, isUpKey } from "./nav-keys";
 import {

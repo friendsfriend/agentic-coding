@@ -5,10 +5,9 @@
 // declining returns to the shell. Noninteractive signals never render this
 // (see `requestShutdown({ signal: true })`).
 import { TextAttributes } from "@opentui/core";
+import { GenericModal, uiColors } from "@ui";
 import { Show } from "solid-js";
 import { quitConfirmation } from "../lifecycle";
-import { uiColors } from "../shared/colors";
-import { GenericModal } from "../shared/GenericModal";
 
 export function QuitConfirmModal() {
 	return (

@@ -1,12 +1,15 @@
 /** @jsxImportSource @opentui/solid */
-import { For } from "solid-js";
+
+import type { FilterParameterOption, SortParameterOption } from "@ui";
+import {
+	FilterModal as SharedFilterModal,
+	SortModal as SharedSortModal,
+} from "@ui";
 import type {
 	SortCriterion,
 	SortField,
 	StatusFilter,
 } from "../model/traceStore";
-import { uiColors } from "../ui/colors";
-import { GenericModal } from "./GenericModal";
 
 const sortFields: Array<{ field: SortField; label: string }> = [
 	{ field: "received", label: "Received time" },
@@ -35,145 +38,38 @@ export function FilterModal(props: {
 		...props.workspaces(),
 	];
 	const isStatus = () => props.criterion() === 0;
-	const selectedValue = () =>
-		isStatus() ? props.statusIndex() : props.workspaceIndex();
-	const criteria = () => [
-		`Status (${statusOptions[props.statusIndex()]?.label ?? "All"})`,
-		`Workspace (${workspaceValues()[props.workspaceIndex()]?.changeId ?? "all"})`,
-	];
+	const statusParameter = (): FilterParameterOption => ({
+		key: "status",
+		label: `Status (${statusOptions[props.statusIndex()]?.label ?? "All"})`,
+		values: statusOptions.map((option) => ({
+			value: option.value,
+			label: option.label,
+		})),
+	});
+	const workspaceParameter = (): FilterParameterOption => ({
+		key: "workspace",
+		label: `Workspace (${workspaceValues()[props.workspaceIndex()]?.changeId ?? "all"})`,
+		values: workspaceValues().map((workspace) => ({
+			value: workspace.changeId,
+			label:
+				workspace.changeId === "all"
+					? "all workspaces"
+					: `${workspace.changeId} (${workspace.spanCount})`,
+		})),
+	});
 	return (
-		<GenericModal
-			title="Filter"
-			widthPercent={0.7}
-			heightPercent={0.65}
-			help={[
-				{ key: "h/l", action: "Focus" },
-				{ key: "j/k", action: "Move" },
-				{ key: "Enter", action: "Apply" },
-				{ key: "x", action: "Reset" },
-				{ key: "Esc", action: "Cancel" },
-			]}
-		>
-			<box
-				style={{ width: "100%", height: "100%", flexDirection: "row", gap: 2 }}
-			>
-				<box style={{ width: "35%", flexDirection: "column" }}>
-					<text
-						fg={
-							props.pane() === "criteria"
-								? uiColors.primary
-								: uiColors.textPrimary
-						}
-					>
-						Criteria
-					</text>
-					<For each={criteria()}>
-						{(criterion, index) => (
-							<box
-								height={1}
-								backgroundColor={
-									index() === props.criterion()
-										? uiColors.bgSurface1
-										: uiColors.bgMantle
-								}
-								style={{ paddingLeft: 1 }}
-							>
-								<text
-									fg={
-										index() === props.criterion()
-											? uiColors.primary
-											: uiColors.textSecondary
-									}
-								>
-									{criterion}
-								</text>
-							</box>
-						)}
-					</For>
-				</box>
-				<box style={{ width: "65%", flexDirection: "column" }}>
-					<text
-						fg={
-							props.pane() === "values"
-								? uiColors.primary
-								: uiColors.textPrimary
-						}
-					>
-						{isStatus() ? "Status" : "Workspace"}
-					</text>
-					{isStatus() ? (
-						<For each={statusOptions}>
-							{(option, index) => (
-								<box
-									height={1}
-									backgroundColor={
-										index() === selectedValue()
-											? uiColors.bgSurface1
-											: uiColors.bgMantle
-									}
-									style={{ flexDirection: "row", paddingLeft: 1 }}
-								>
-									<text
-										fg={
-											index() === selectedValue()
-												? uiColors.success
-												: uiColors.textMuted
-										}
-									>
-										{index() === selectedValue() ? "● " : "○ "}
-									</text>
-									<text
-										fg={
-											index() === selectedValue()
-												? uiColors.textPrimary
-												: uiColors.textSecondary
-										}
-									>
-										{option.label}
-									</text>
-								</box>
-							)}
-						</For>
-					) : (
-						<For each={workspaceValues()}>
-							{(workspace, index) => (
-								<box
-									height={1}
-									backgroundColor={
-										index() === selectedValue()
-											? uiColors.bgSurface1
-											: uiColors.bgMantle
-									}
-									style={{ flexDirection: "row", paddingLeft: 1 }}
-								>
-									<text
-										fg={
-											index() === selectedValue()
-												? uiColors.success
-												: uiColors.textMuted
-										}
-									>
-										{index() === selectedValue() ? "● " : "○ "}
-									</text>
-									<text
-										fg={
-											index() === selectedValue()
-												? uiColors.textPrimary
-												: uiColors.textSecondary
-										}
-									>
-										{workspace.changeId}
-										{workspace.changeId === "all"
-											? " workspaces"
-											: ` (${workspace.spanCount})`}
-									</text>
-								</box>
-							)}
-						</For>
-					)}
-				</box>
-			</box>
-		</GenericModal>
+		<SharedFilterModal
+			// The shell marks the row under the cursor; its value is applied on Enter.
+			mark="cursor"
+			parameterHeading="Criteria"
+			focusedPane={props.pane() === "criteria" ? "parameter" : "value"}
+			selectedParameterIndex={props.criterion()}
+			selectedValueIndex={
+				isStatus() ? props.statusIndex() : props.workspaceIndex()
+			}
+			parameters={[statusParameter(), workspaceParameter()]}
+			activeFilters={{}}
+		/>
 	);
 }
 
@@ -181,69 +77,19 @@ export function SortModal(props: {
 	selected: () => number;
 	criteria: () => SortCriterion[];
 }) {
-	const label = (field: SortCriterion["field"]) =>
-		sortFields.find((item) => item.field === field)?.label ?? field;
-	const mode = (value: SortCriterion["mode"]) =>
-		value === "asc" ? "↑ ASC" : value === "desc" ? "↓ DESC" : "— NONE";
+	const parameters = (): SortParameterOption[] =>
+		props.criteria().map((criterion) => ({
+			key: criterion.field,
+			label:
+				sortFields.find((item) => item.field === criterion.field)?.label ??
+				criterion.field,
+			direction: criterion.mode,
+		}));
 	return (
-		<GenericModal
-			title="Order / Sort"
-			widthPercent={0.6}
-			heightPercent={0.55}
-			help={[
-				{ key: "j/k", action: "Select" },
-				{ key: "Space", action: "Mode" },
-				{ key: "J/K", action: "Priority" },
-				{ key: "Enter", action: "Apply" },
-				{ key: "Esc", action: "Cancel" },
-			]}
-		>
-			<box style={{ width: "100%", flexDirection: "column", paddingTop: 1 }}>
-				<box height={1} flexDirection="row" paddingLeft={1}>
-					<box width={5}>
-						<text fg={uiColors.textPrimary}>Prio</text>
-					</box>
-					<box style={{ width: "60%" }}>
-						<text fg={uiColors.textPrimary}>Parameter</text>
-					</box>
-					<text fg={uiColors.textPrimary}>Mode</text>
-				</box>
-				<For each={props.criteria()}>
-					{(item, index) => (
-						<box
-							height={1}
-							backgroundColor={
-								index() === props.selected()
-									? uiColors.bgSurface1
-									: uiColors.bgMantle
-							}
-							style={{ flexDirection: "row", paddingLeft: 1 }}
-						>
-							<box width={5}>
-								<text fg={uiColors.textMuted}>{index() + 1}</text>
-							</box>
-							<box style={{ width: "60%" }}>
-								<text
-									fg={
-										index() === props.selected()
-											? uiColors.textPrimary
-											: uiColors.textSecondary
-									}
-								>
-									{label(item.field)}
-								</text>
-							</box>
-							<text
-								fg={
-									item.mode === "none" ? uiColors.textMuted : uiColors.primary
-								}
-							>
-								{mode(item.mode)}
-							</text>
-						</box>
-					)}
-				</For>
-			</box>
-		</GenericModal>
+		<SharedSortModal
+			selectedIndex={props.selected()}
+			parameters={parameters()}
+			directionLabels={{ asc: "↑ ASC", desc: "↓ DESC", none: "— NONE" }}
+		/>
 	);
 }

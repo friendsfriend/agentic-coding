@@ -9,13 +9,11 @@
 // subscriptions and lifecycle ownership are unchanged.
 import type { KeyEvent, Renderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
+import { ErrorModalOverlay, StatusBar, uiColors } from "@ui";
 import { createSignal, Show } from "solid-js";
 import { App as DashApp, type WorkflowHeaderInfo } from "../dash/App";
 import { Header } from "../dash/ui/Header";
 import { QuitConfirmModal } from "../lifecycle/QuitConfirmModal";
-import { StatusBar } from "../otel/components/StatusBar";
-import { uiColors } from "../otel/ui/colors";
-import { ErrorModalOverlay } from "../shared/ErrorModalOverlay";
 
 export interface DashboardRootProps {
 	repo: string;

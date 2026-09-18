@@ -1,5 +1,5 @@
 import type { App, InfraService } from "@devenv/types";
-import { runtimeState, uiColors } from "@devenv/ui";
+import { runtimeState, uiColors } from "@ui";
 import type { HelpActions } from "../actions";
 import type {
 	AppDetailStore,

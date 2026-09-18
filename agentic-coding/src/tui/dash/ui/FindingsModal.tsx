@@ -1,11 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 
 import { TextAttributes } from "@opentui/core";
+import { Badge, GenericModal, SelectableList, uiColors } from "@ui";
 import { For, Show } from "solid-js";
-import { Badge } from "./Badge";
-import { uiColors } from "./colors";
-import { GenericModal } from "./GenericModal";
-import { SelectableList } from "./Selectable";
 
 export type FindingEvent = {
 	type: string;
@@ -55,7 +52,6 @@ export function FindingsModal(props: {
 					<box
 						width="100%"
 						flexDirection="column"
-						paddingLeft={1}
 						paddingRight={1}
 						marginBottom={1}
 					>

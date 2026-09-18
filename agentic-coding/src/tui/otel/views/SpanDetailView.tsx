@@ -1,8 +1,10 @@
-import { HighlightedText } from "../components/Highlight";
-import { ScrollableContent } from "../components/ScrollableContent";
-import { SearchHeader } from "../components/SearchHeader";
+import {
+	HighlightedText,
+	ScrollableContent,
+	SearchHeader,
+	uiColors,
+} from "@ui";
 import type { TreeNode } from "../model/types";
-import { uiColors } from "../ui/colors";
 
 const duration = (node: TreeNode) =>
 	`${Math.max(0, Number((BigInt(node.span.endTimeUnixNano) - BigInt(node.span.startTimeUnixNano)) / 1_000_000n))}ms`;
@@ -34,7 +36,7 @@ export function SpanDetailView(props: { node: () => TreeNode | undefined }) {
 			<SearchHeader>
 				<HighlightedText text="Attributes" highlight="secondary" />
 			</SearchHeader>
-			<ScrollableContent>
+			<ScrollableContent focusable={false}>
 				{(node()?.span.attributes ?? []).map((attribute) => (
 					<box
 						height={1}

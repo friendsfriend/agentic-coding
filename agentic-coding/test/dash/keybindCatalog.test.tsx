@@ -2,18 +2,18 @@
 import { describe, expect, it, test } from "bun:test";
 import { testRender } from "@opentui/solid";
 import {
+	catalogKeybinds,
+	footerKeybinds,
+	HelpModal,
+	setActiveKeybindCatalog,
+	specialKeybinds,
+	wrapHelpEntries,
+} from "@ui";
+import {
 	dashboardDetailKeybindCatalog,
 	panelContext,
 	workflowLaunchKeybindCatalog,
 } from "../../src/tui/dash/keybinds";
-import { HelpModal } from "../../src/tui/dash/ui/HelpModal";
-import { wrapHelpEntries } from "../../src/tui/shared/HelpText";
-import {
-	catalogKeybinds,
-	footerKeybinds,
-	setActiveKeybindCatalog,
-	specialKeybinds,
-} from "../../src/tui/shared/keybinds";
 
 describe("keybind catalog contract", () => {
 	it("hides standard keys from footers but keeps them in the catalog", () => {

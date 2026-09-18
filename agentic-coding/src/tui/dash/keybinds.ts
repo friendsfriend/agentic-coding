@@ -1,5 +1,5 @@
-import { hostKeybind } from "../shared/hostKeys";
-import type { KeybindSection } from "../shared/keybinds";
+import type { KeybindSection } from "@ui";
+import { hostKeybind } from "../../../packages/devenv/cli/src/tui/keyboard/host-keys";
 import { AGENTS_PANEL, OPENSPEC_PANEL } from "./panel-grid";
 
 /**

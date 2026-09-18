@@ -1,5 +1,5 @@
-import { formatProfileLabel } from "@devenv/ui";
 import type { KeyEvent } from "@opentui/core";
+import { formatProfileLabel } from "@ui";
 import type { DockerActions } from "../actions";
 import type { UiStore } from "../stores";
 import type { ActionRunStore } from "../stores/action-run-store";

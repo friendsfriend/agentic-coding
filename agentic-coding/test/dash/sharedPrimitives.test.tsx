@@ -1,15 +1,17 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, spyOn, test } from "bun:test";
 import { testRender } from "@opentui/solid";
+import {
+	GenericModal as DashGenericModal,
+	ScrollableContent as DashScrollableContent,
+	SelectableList as DashSelectableList,
+	GenericModal as DevenvGenericModal,
+	ScrollableContent as DevenvScrollableContent,
+	ScrollableContent as OtelScrollableContent,
+	SelectableList as OtelSelectableList,
+	setGlobalSelectionMouseUpHandler,
+} from "@ui";
 import { createSignal } from "solid-js";
-import { GenericModal as DevenvGenericModal } from "../../src/tui/dash/devenv-ui/components/GenericModal";
-import { ScrollableContent as DevenvScrollableContent } from "../../src/tui/dash/devenv-ui/components/ScrollableContent";
-import { setGlobalSelectionMouseUpHandler } from "../../src/tui/dash/selectionCopy";
-import { GenericModal as DashGenericModal } from "../../src/tui/dash/ui/GenericModal";
-import { ScrollableContent as DashScrollableContent } from "../../src/tui/dash/ui/ScrollableContent";
-import { SelectableList as DashSelectableList } from "../../src/tui/dash/ui/Selectable";
-import { ScrollableContent as OtelScrollableContent } from "../../src/tui/otel/components/ScrollableContent";
-import { SelectableList as OtelSelectableList } from "../../src/tui/otel/components/Selectable";
 
 // Renderer characterizations for the consolidated tui-shared-primitives:
 // every family entry point delegates to the shared implementations under

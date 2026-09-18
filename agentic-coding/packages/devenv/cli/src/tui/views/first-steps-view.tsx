@@ -1,5 +1,5 @@
-import { Badge, formatHelpText, GenericModal, uiColors } from "@devenv/ui";
 import { TextAttributes } from "@opentui/core";
+import { Badge, formatHelpText, GenericModal, uiColors } from "@ui";
 import { Show } from "solid-js";
 import type { AppStore, ProviderStore } from "../stores";
 

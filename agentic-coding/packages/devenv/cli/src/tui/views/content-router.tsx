@@ -21,7 +21,7 @@ import {
 	TestResultsDetailView,
 	TimelineView,
 	uiColors,
-} from "@devenv/ui";
+} from "@ui";
 import { createEffect, Show } from "solid-js";
 import { guides as allGuides, getGuide } from "../guides";
 import { ActionsView } from "./actions-view";

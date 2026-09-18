@@ -3,18 +3,18 @@
 // plus src/tui/shared/terminal-theme.ts for renderer palette capture/mapping.
 import type { TerminalColors } from "@opentui/core";
 import {
+	buildSystemTheme,
+	setSystemTheme,
+	type TerminalThemeColors,
+	terminalColorsToThemeColors,
+	toCapturedPalette,
+} from "@ui";
+import {
 	applyTheme,
 	loadCustomThemes,
 	loadThemeName,
 	saveThemeName,
 } from "../../../../../src/tui/shared/preferences";
-import {
-	buildSystemTheme,
-	type TerminalThemeColors,
-	terminalColorsToThemeColors,
-	toCapturedPalette,
-} from "../../../../../src/tui/shared/terminal-theme";
-import { setSystemTheme } from "../../../../../src/tui/shared/theme";
 
 export type { TerminalThemeColors };
 export {

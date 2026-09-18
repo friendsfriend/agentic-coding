@@ -1,8 +1,9 @@
-import { hostDiagnosticsKeybind, hostKeybind } from "../../shared/hostKeys";
 import {
+	hostDiagnosticsKeybind,
 	type KeybindSection,
 	PAGE_NAVIGATION_KEYBINDS,
-} from "../../shared/keybinds";
+} from "@ui";
+import { hostKeybind } from "../../../../packages/devenv/cli/src/tui/keyboard/host-keys";
 
 /** Traces-local view: list, span tree or span detail. */
 export type View = "selection" | "detail" | "span";

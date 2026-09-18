@@ -2,12 +2,9 @@
 
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
+import { GenericModal, ScrollableContent, SelectableList, uiColors } from "@ui";
 import { createEffect, Show } from "solid-js";
 import type { CostMessage, CostRow } from "../types";
-import { uiColors } from "./colors";
-import { GenericModal } from "./GenericModal";
-import { ScrollableContent } from "./ScrollableContent";
-import { SelectableList } from "./Selectable";
 
 export type CostBreakdownRow = Omit<CostRow, "messages"> & {
 	messages: CostMessage[];
@@ -98,13 +95,7 @@ export function CostModal(props: {
 						items={props.rows}
 						selectedIndex={props.selected}
 						renderItem={(row, selected) => (
-							<box
-								width="100%"
-								height={1}
-								flexDirection="row"
-								paddingLeft={1}
-								paddingRight={1}
-							>
+							<box width="100%" height={1} flexDirection="row" paddingRight={1}>
 								<text
 									fg={selected ? uiColors.primary : uiColors.textPrimary}
 									width={22}

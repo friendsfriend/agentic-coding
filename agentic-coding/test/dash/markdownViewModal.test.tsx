@@ -1,8 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test";
 import { testRender } from "@opentui/solid";
-import { MarkdownViewModal } from "../../src/tui/dash/devenv-ui/components/MarkdownViewModal";
-import type { Discussion } from "../../src/tui/dash/devenv-ui/types";
+import type { Discussion } from "@ui";
+import { MarkdownReviewView } from "@ui";
 
 const ARTIFACT = `# Proposal
 
@@ -46,7 +46,7 @@ async function waitForRealFrame(
 test("markdown modal renders whole-document blocks without source delimiters", async () => {
 	const t = await testRender(
 		() => (
-			<MarkdownViewModal
+			<MarkdownReviewView
 				filePath="proposal.md"
 				content={ARTIFACT}
 				currentFileIndex={0}
@@ -88,7 +88,7 @@ test("selecting a block anchors comments to its source-line range", async () => 
 	};
 	const t = await testRender(
 		() => (
-			<MarkdownViewModal
+			<MarkdownReviewView
 				filePath="proposal.md"
 				content={ARTIFACT}
 				currentFileIndex={0}
@@ -117,7 +117,7 @@ test("visual range maps to the outer block source-line range", async () => {
 	let captured: { start?: number; end?: number } = {};
 	const t = await testRender(
 		() => (
-			<MarkdownViewModal
+			<MarkdownReviewView
 				filePath="proposal.md"
 				content={ARTIFACT}
 				currentFileIndex={0}
@@ -173,7 +173,7 @@ test("comment threads render inline under their block and cycle indices include 
 	};
 	const t = await testRender(
 		() => (
-			<MarkdownViewModal
+			<MarkdownReviewView
 				filePath="proposal.md"
 				content={ARTIFACT}
 				currentFileIndex={0}

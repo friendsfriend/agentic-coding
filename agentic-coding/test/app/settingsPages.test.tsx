@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
+import { activeKeybindCatalog, themeNames } from "@ui";
 import { onCleanup } from "solid-js";
 import { App } from "../../src/tui/otel/app/App";
 import { TraceDb } from "../../src/tui/otel/model/db";
@@ -12,8 +13,6 @@ import { LogStore } from "../../src/tui/otel/model/logStore";
 import { MetricStore } from "../../src/tui/otel/model/metricStore";
 import { TopologyStore } from "../../src/tui/otel/model/topologyStore";
 import { TraceStore } from "../../src/tui/otel/model/traceStore";
-import { activeKeybindCatalog } from "../../src/tui/shared/keybinds";
-import { themeNames } from "../../src/tui/shared/theme";
 import { renderUntil } from "./support/terminal";
 
 // Settings as a Home destination (centralize-application-settings, tasks 1.2,

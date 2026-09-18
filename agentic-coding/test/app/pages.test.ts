@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { footerKeybinds } from "../../src/tui/shared/keybinds";
+import { footerKeybinds } from "@ui";
 import {
 	breadcrumbSegments,
 	breadcrumbWidth,

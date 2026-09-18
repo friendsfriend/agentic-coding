@@ -1,12 +1,9 @@
 /** @jsxImportSource @opentui/solid */
 import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
+import { hostBodyLines, SearchHeader, SelectableList, uiColors } from "@ui";
 import { createMemo } from "solid-js";
-import { hostBodyLines } from "../../shared/hostChrome";
-import { SearchHeader } from "../components/SearchHeader";
-import { SelectableList } from "../components/Selectable";
 import type { LogStore } from "../model/logStore";
-import { uiColors } from "../ui/colors";
 
 const severityColor = (sev: string) => {
 	if (sev === "ERROR" || sev === "FATAL") return uiColors.error;

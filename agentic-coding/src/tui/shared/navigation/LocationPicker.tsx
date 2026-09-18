@@ -3,12 +3,10 @@
 // It reuses the existing modal framing, selection list and search header rather
 // than introducing a second overlay style: a bounded, searchable list of known
 // destinations that jumps straight to a page.
+
+import { Card, GenericModal, ScrollableList, uiColors } from "@ui";
 import { createMemo, Show } from "solid-js";
-import { uiColors } from "../colors";
-import { GenericModal } from "../GenericModal";
 import type { Route } from "../routes";
-import { ScrollableList } from "../ScrollableList";
-import { Selectable } from "../Selectable";
 import { type DestinationEntry, filterPickerEntries } from "./destinations";
 import {
 	locationPickerFooterKeybinds,
@@ -56,33 +54,24 @@ export function LocationPicker(props: LocationPickerProps) {
 						estimatedItemHeight={2}
 						showScrollIndicator={false}
 						renderItem={(entry, isSelected, index) => (
-							<Selectable
+							<Card
 								height={2}
 								selected={isSelected()}
+								title={entry.label}
 								onMouseUp={() => {
 									props.onSelectIndex(index);
 									props.onAccept(entry.route);
 								}}
-							>
-								<box
-									style={{
-										flexDirection: "column",
-										paddingLeft: 2,
-										paddingRight: 2,
-									}}
-								>
-									<text
-										fg={isSelected() ? uiColors.primary : uiColors.textPrimary}
-									>
-										{entry.label}
-									</text>
-									<Show when={entry.description}>
-										<text fg={uiColors.textMuted}>
-											{entry.group} · {entry.description}
-										</text>
-									</Show>
-								</box>
-							</Selectable>
+								cells={
+									entry.description
+										? [
+												<text fg={uiColors.textMuted}>
+													{entry.group} · {entry.description}
+												</text>,
+											]
+										: undefined
+								}
+							/>
 						)}
 					/>
 				</Show>

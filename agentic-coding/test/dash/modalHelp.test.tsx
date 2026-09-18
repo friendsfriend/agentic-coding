@@ -2,15 +2,15 @@
 import { expect, test } from "bun:test";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
-import { onCleanup } from "solid-js";
-import { GenericModal } from "../../src/tui/dash/ui/GenericModal";
-import { ModalHelpOverlay } from "../../src/tui/shared/ModalHelpOverlay";
 import {
 	activeModalHelp,
+	GenericModal,
 	handleModalHelpKey,
+	ModalHelpOverlay,
 	modalHelpOpen,
 	withModalHelpKeybind,
-} from "../../src/tui/shared/modalHelp";
+} from "@ui";
+import { onCleanup } from "solid-js";
 
 function keyLayer(props: { onKey?: (key: string) => boolean }) {
 	const renderer = useRenderer();

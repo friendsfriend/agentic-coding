@@ -10,7 +10,7 @@ import {
 	restoreFocus,
 	restoreFocusTarget,
 	topModal,
-} from "../../src/tui/shared/modalStack";
+} from "@ui";
 
 type Kind = "help" | "review" | "theme";
 

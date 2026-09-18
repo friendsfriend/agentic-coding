@@ -1,10 +1,12 @@
+import {
+	HighlightedText,
+	ScrollableContent,
+	SearchHeader,
+	uiColors,
+} from "@ui";
 import { createMemo, For } from "solid-js";
 import { AutoscalingSparkline } from "../components/AutoscalingSparkline";
-import { HighlightedText } from "../components/Highlight";
-import { ScrollableContent } from "../components/ScrollableContent";
-import { SearchHeader } from "../components/SearchHeader";
 import type { MetricStore } from "../model/metricStore";
-import { uiColors } from "../ui/colors";
 
 const metricColor = (type: string) =>
 	type === "histogram"
@@ -27,7 +29,7 @@ export function MetricsView(props: {
 				<text fg={uiColors.textMuted}>({props.store.filteredCount_})</text>
 			</SearchHeader>
 			{streams().length > 0 && (
-				<ScrollableContent>
+				<ScrollableContent focusable={false}>
 					<For each={streams()}>
 						{(stream, index) => {
 							const selected = () => index() === props.selectedIndex();
@@ -65,7 +67,7 @@ export function MetricsView(props: {
 											<box width="60%" flexShrink={0} overflow="hidden">
 												<HighlightedText
 													text={stream.name}
-													highlight={selected() ? "primary" : "secondary"}
+													highlight={selected() ? "highlight" : "secondary"}
 												/>
 											</box>
 											<box width="40%" flexShrink={0} overflow="hidden">

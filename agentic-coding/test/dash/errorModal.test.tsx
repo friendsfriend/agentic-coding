@@ -4,14 +4,14 @@ import { beforeEach, expect, test } from "bun:test";
 import type { KeyEvent } from "@opentui/core";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
-import { onCleanup, onMount } from "solid-js";
-import { ErrorModalOverlay } from "../../src/tui/shared/ErrorModalOverlay";
 import {
 	activeErrorModal,
 	dismissErrorModal,
+	ErrorModalOverlay,
 	resetErrorModal,
 	showErrorModal,
-} from "../../src/tui/shared/errorModal";
+} from "@ui";
+import { onCleanup, onMount } from "solid-js";
 
 // The error-modal signal is module-global; bun runs all files in one process,
 // so clear it before every render.

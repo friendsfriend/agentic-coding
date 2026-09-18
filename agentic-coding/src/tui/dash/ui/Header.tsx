@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { TextAttributes } from "@opentui/core";
-import { uiColors } from "./colors";
+import { uiColors } from "@ui";
 
 type DashboardHeaderProps = {
 	change: string;
@@ -8,24 +8,12 @@ type DashboardHeaderProps = {
 	branch: string;
 	updated: string;
 };
-type PanelHeaderProps = { title: string; accent?: string; active?: boolean };
-
-export function Header(props: DashboardHeaderProps | PanelHeaderProps) {
-	if ("title" in props)
-		return (
-			<box style={{ height: 1, paddingLeft: 1 }}>
-				<text
-					fg={
-						props.active
-							? (props.accent ?? uiColors.primary)
-							: uiColors.textPrimary
-					}
-					attributes={TextAttributes.BOLD}
-				>
-					{props.title}
-				</text>
-			</box>
-		);
+/**
+ * The dashboard's own branded app header (standalone `--home` mode). The env
+ * surface's generic header lives in the framework (`@ui`); this one is the
+ * dashboard's chrome, so it stays with the dashboard.
+ */
+export function Header(props: DashboardHeaderProps) {
 	return (
 		<box
 			backgroundColor={uiColors.bgMantle}

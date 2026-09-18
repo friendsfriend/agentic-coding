@@ -1,8 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test";
 import { testRender } from "@opentui/solid";
-import { ErrorDialog } from "../../src/tui/dash/ui/ErrorDialog";
-import { GenericModal } from "../../src/tui/dash/ui/GenericModal";
+import { ErrorDialog, GenericModal } from "@ui";
 
 test("error dialog renders above an existing modal", async () => {
 	const t = await testRender(

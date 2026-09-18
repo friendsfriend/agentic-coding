@@ -4,14 +4,10 @@
 // destinations, not a tab row, and the row chrome comes from the shell's
 // breadcrumb. Selection state is controlled by the caller so it can live in
 // route-keyed view state and survive leaving and returning.
-import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
+import { Card, hostBodyLines, ScrollableList, uiColors } from "@ui";
 import { Show } from "solid-js";
-import { uiColors } from "../colors";
-import { hostBodyLines } from "../hostChrome";
 import type { Route } from "../routes";
-import { ScrollableList } from "../ScrollableList";
-import { Selectable } from "../Selectable";
 import type { DestinationEntry } from "./destinations";
 
 export interface DestinationPageProps {
@@ -57,23 +53,17 @@ export function DestinationPage(props: DestinationPageProps) {
 					estimatedItemHeight={itemHeight}
 					showScrollIndicator={false}
 					renderItem={(entry, isSelected, index) => (
-						<Selectable
+						<Card
 							height={itemHeight}
 							selected={isSelected()}
 							onMouseUp={() => props.onSelectIndex(index)}
-						>
-							<box style={{ flexDirection: "column" }}>
-								<text
-									fg={isSelected() ? uiColors.primary : uiColors.textPrimary}
-									attributes={isSelected() ? TextAttributes.BOLD : undefined}
-								>
-									{entry.label}
-								</text>
-								<Show when={entry.description}>
-									<text fg={uiColors.textMuted}>{entry.description}</text>
-								</Show>
-							</box>
-						</Selectable>
+							title={entry.label}
+							cells={
+								entry.description
+									? [<text fg={uiColors.textMuted}>{entry.description}</text>]
+									: undefined
+							}
+						/>
 					)}
 				/>
 			</Show>

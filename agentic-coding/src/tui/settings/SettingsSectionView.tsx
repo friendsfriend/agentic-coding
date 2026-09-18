@@ -4,13 +4,15 @@
 // line, and a row that cannot be edited here is marked read-only instead of
 // looking like an editable control. Selection is controlled by the shell so it
 // lives in route-keyed view state and survives leaving and returning.
-import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
+import {
+	Card,
+	hostChromeLines,
+	LAYOUT_CHROME_LINES,
+	ScrollableList,
+	uiColors,
+} from "@ui";
 import { Show } from "solid-js";
-import { uiColors } from "../shared/colors";
-import { hostChromeLines } from "../shared/hostChrome";
-import { LAYOUT_CHROME_LINES, ScrollableList } from "../shared/ScrollableList";
-import { Selectable } from "../shared/Selectable";
 import type { SettingsItem } from "./items";
 
 export interface SettingsSectionViewProps {
@@ -24,6 +26,13 @@ export interface SettingsSectionViewProps {
  * breadcrumb and the destination row that opened it), so the page renders no
  * title, description or spacer row of its own.
  */
+/** Card title: the setting, why it is not editable, and its effective value. */
+function itemTitle(item: SettingsItem): string {
+	const readonly = item.editable ? "" : " · read-only";
+	const value = item.value ? ` — ${item.value}` : "";
+	return `${item.label}${readonly}${value}`;
+}
+
 export function SettingsSectionView(props: SettingsSectionViewProps) {
 	// A windowed list, not a scroll box: the shell's chrome already says where the
 	// page is, so the section only needs to know how many rows it may paint. The
@@ -56,25 +65,12 @@ export function SettingsSectionView(props: SettingsSectionViewProps) {
 					estimatedItemHeight={3}
 					showScrollIndicator={false}
 					renderItem={(item, isSelected) => (
-						<Selectable height={3} selected={isSelected()}>
-							<box style={{ flexDirection: "column", height: 3 }}>
-								<box style={{ flexDirection: "row" }}>
-									<text
-										fg={isSelected() ? uiColors.primary : uiColors.textPrimary}
-										attributes={isSelected() ? TextAttributes.BOLD : undefined}
-									>
-										{item.label}
-									</text>
-									<Show when={!item.editable}>
-										<text fg={uiColors.textMuted}> · read-only</text>
-									</Show>
-									<Show when={item.value}>
-										<text fg={uiColors.textSecondary}> — {item.value}</text>
-									</Show>
-								</box>
-								<text fg={uiColors.textMuted}>{item.detail}</text>
-							</box>
-						</Selectable>
+						<Card
+							height={3}
+							selected={isSelected()}
+							title={itemTitle(item)}
+							cells={[<text fg={uiColors.textMuted}>{item.detail}</text>]}
+						/>
 					)}
 				/>
 			</Show>

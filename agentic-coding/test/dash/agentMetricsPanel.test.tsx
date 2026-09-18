@@ -60,6 +60,12 @@ test("agents panel renders compact bounded metric lines per agent", async () => 
 		height: 40,
 	});
 	await t.waitForFrame((frame) => frame.includes("Agents"));
+	// The demo fixture opens its review as a dialog over the dashboard, and a
+	// dialog owns the area it covers — the agents column sits behind it. Close it
+	// first so the panel's own rendering is what is being asserted.
+	expect(t.captureCharFrame()).toContain("Plan review");
+	t.mockInput.pressEscape();
+	await t.waitForFrame((frame) => !frame.includes("Plan review"));
 	const frame = t.captureCharFrame();
 	expect(frame).toContain("pi · provider/planner");
 	expect(frame).toContain("opencode · provider/worker");

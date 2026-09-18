@@ -1,3 +1,4 @@
+import { RGBA, TextAttributes } from "@opentui/core";
 import {
 	ActionTargetPickerView,
 	AddRepositoryModal,
@@ -11,7 +12,7 @@ import {
 	ConfirmDialog,
 	ConnectProviderModal,
 	CrAiReviewOverlay,
-	DiffViewModal,
+	DiffReviewView,
 	EditorPickerView,
 	ErrorDialog,
 	FilterModal,
@@ -31,8 +32,7 @@ import {
 	themeNames,
 	uiColors,
 	WorktreeManagerModal,
-} from "@devenv/ui";
-import { RGBA, TextAttributes } from "@opentui/core";
+} from "@ui";
 import { Show } from "solid-js";
 import { guides as allGuides, getGuide } from "../guides";
 import { ActionRunModal } from "./action-run-modal";
@@ -578,7 +578,7 @@ export function ModalOverlays(props: ModalOverlaysProps) {
 					changeRequestStore.currentDiffFile()
 				}
 			>
-				<DiffViewModal
+				<DiffReviewView
 					filePath={
 						changeRequestStore.currentDiffFile()?.new_path ||
 						changeRequestStore.currentDiffFile()?.old_path ||

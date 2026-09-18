@@ -10,6 +10,36 @@ import {
 import type { Binding, Keymap } from "@opentui/keymap";
 import { useRenderer, useTerminalDimensions } from "@opentui/solid";
 import {
+	activeErrorModal,
+	Badge,
+	ChangedFilesView,
+	createModalHost,
+	DiffReviewView as DiffViewModal,
+	findModal,
+	GenericModal,
+	getActiveThemeName,
+	HelpModal,
+	HighlightedText,
+	handleModalHelpKey,
+	Layout,
+	ListViewModal,
+	MarkdownReviewView as MarkdownViewModal,
+	ModalHelpOverlay,
+	modalHelpOpen,
+	Panel,
+	ProgressModal,
+	registerFocusRestorer,
+	restoreFocus,
+	ScrollableContent,
+	SelectableList,
+	setActiveKeybindCatalog,
+	showErrorModal,
+	ThemePickerModal,
+	themeNames,
+	uiColors,
+	VerdictModal,
+} from "@ui";
+import {
 	createEffect,
 	createMemo,
 	createSignal,
@@ -22,21 +52,7 @@ import type { DeveloperDialogueRecord } from "../../workflow/contracts";
 import { formatDuration } from "../../workflow/format";
 import { wikiWorkflowDataRoot } from "../../workflow/runtime";
 import { copyToClipboard } from "../clipboard";
-import { activeErrorModal, showErrorModal } from "../shared/errorModal";
-import { setActiveKeybindCatalog } from "../shared/keybinds";
-import { ModalHelpOverlay } from "../shared/ModalHelpOverlay";
-import { handleModalHelpKey, modalHelpOpen } from "../shared/modalHelp";
-import {
-	createModalHost,
-	findModal,
-	registerFocusRestorer,
-	restoreFocus,
-} from "../shared/modalStack";
 import { testDashboard } from "./demo";
-import { ChangedFilesView } from "./devenv-ui/components/ChangedFilesView";
-import { DiffViewModal } from "./devenv-ui/components/DiffViewModal";
-import { GenericModal } from "./devenv-ui/components/GenericModal";
-import { MarkdownViewModal } from "./devenv-ui/components/MarkdownViewModal";
 import {
 	listPresetNames,
 	onWorkflowExecutionError,
@@ -85,31 +101,18 @@ import type {
 	FindingCounts,
 	RequiredUserActionItem,
 } from "./types";
-import { Badge } from "./ui/Badge";
 import { CostModal } from "./ui/CostModal";
 import {
 	CredentialsModal,
 	pendingCredentialRequest,
 } from "./ui/CredentialsModal";
-import { uiColors } from "./ui/colors";
 import { DeveloperQuestionModal } from "./ui/DeveloperQuestionModal";
 import { type FindingEvent, FindingsModal } from "./ui/FindingsModal";
-import { HelpModal } from "./ui/HelpModal";
-import { HighlightedText } from "./ui/Highlight";
-import { Layout } from "./ui/Layout";
-import { ListViewModal } from "./ui/ListViewModal";
 import { NotificationOverlay } from "./ui/Notification";
-import { Panel } from "./ui/Panel";
 import {
 	type PresetChoice,
 	PresetSwitcherModal,
 } from "./ui/PresetSwitcherModal";
-import { ProgressModal } from "./ui/ProgressModal";
-import { ScrollableContent } from "./ui/ScrollableContent";
-import { SelectableList } from "./ui/Selectable";
-import { ThemePickerModal } from "./ui/ThemePickerModal";
-import { getActiveThemeName, themeNames } from "./ui/theme";
-import { VerdictModal } from "./ui/VerdictModal";
 import { debounce, watchDirectories } from "./watchRefresh";
 
 export type { PhaseStatusState };
@@ -128,12 +131,7 @@ export function PhaseStatus(props: { state: PhaseStatusState }) {
 				animation={status().working ? "aurora" : "static"}
 			/>
 			<Show when={status().blocked}>
-				<Badge
-					text="BLOCKED"
-					appearance="badge"
-					highlight="warning"
-					animation="static"
-				/>
+				<Badge text="BLOCKED" appearance="badge" highlight="warning" />
 			</Show>
 		</box>
 	);
@@ -2741,7 +2739,7 @@ export function App(props: {
 												activePanel() === 6 ? selectedArtifact() : -1
 											}
 											renderItem={(artifact, selected) => (
-												<box height={1} paddingLeft={1}>
+												<box height={1}>
 													<text
 														fg={
 															selected
@@ -2805,7 +2803,6 @@ export function App(props: {
 													(agent.findingCounts ? findingSummaryRows() : 0)
 												}
 												flexDirection="column"
-												paddingLeft={1}
 												paddingRight={1}
 											>
 												<box width="100%" height={1} flexDirection="row">
@@ -2886,6 +2883,7 @@ export function App(props: {
 			/>
 			<Show when={repairOpen()}>
 				<ListViewModal
+					sizing="cap"
 					title={`Repair r${data().state.revision} · ENTER repairs`}
 					fieldLabel="Compatible target"
 					items={repairTargets().map(
@@ -2898,8 +2896,8 @@ export function App(props: {
 						{ key: "Enter", action: "Repair" },
 						{ key: "Esc", action: "Cancel" },
 					]}
-					renderItem={(item, selected) => (
-						<text fg={selected ? uiColors.primary : uiColors.textSecondary}>
+					renderItem={(item, isSelected) => (
+						<text fg={isSelected() ? uiColors.primary : uiColors.textSecondary}>
 							{item}
 						</text>
 					)}
@@ -2925,8 +2923,8 @@ export function App(props: {
 						{ key: "Enter", action: "Run" },
 						{ key: "Esc", action: "Cancel" },
 					]}
-					renderItem={(item, selected) => (
-						<text fg={selected ? uiColors.primary : uiColors.textSecondary}>
+					renderItem={(item, isSelected) => (
+						<text fg={isSelected() ? uiColors.primary : uiColors.textSecondary}>
 							{item}
 						</text>
 					)}
@@ -2944,10 +2942,10 @@ export function App(props: {
 						{ key: "Enter", action: "Start" },
 						{ key: "Esc", action: "Not now" },
 					]}
-					renderItem={(item, selected) => (
+					renderItem={(item, isSelected) => (
 						<text
-							fg={selected ? uiColors.warning : uiColors.textSecondary}
-							attributes={selected ? TextAttributes.BOLD : 0}
+							fg={isSelected() ? uiColors.warning : uiColors.textSecondary}
+							attributes={isSelected() ? TextAttributes.BOLD : 0}
 						>
 							{item.label}
 						</text>
@@ -2991,8 +2989,8 @@ export function App(props: {
 						{ key: "Enter", action: "Reject plan" },
 						{ key: "Esc", action: "Cancel" },
 					]}
-					renderItem={(item, selected) => (
-						<text fg={selected ? uiColors.warning : uiColors.textSecondary}>
+					renderItem={(item, isSelected) => (
+						<text fg={isSelected() ? uiColors.warning : uiColors.textSecondary}>
 							{item}
 						</text>
 					)}
@@ -3043,6 +3041,7 @@ export function App(props: {
 					}}
 				>
 					<ChangedFilesView
+						findings
 						changes={reviewChangesForView()}
 						selectedIndex={reviewChangeIndex()}
 						searchMode={reviewSearchMode()}

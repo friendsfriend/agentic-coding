@@ -2,13 +2,15 @@
 // (replace-nested-tabs-with-page-navigation, task 2.1). Declared once here and
 // rendered by the shared footer/help contract; renderers own colors and
 // separators, so no entry carries styling.
-import { hostDiagnosticsKeybind, hostKeybind } from "../hostKeys";
+
 import {
 	footerKeybinds,
+	hostDiagnosticsKeybind,
+	hostKeybind,
 	type Keybind,
 	type KeybindSection,
 	PAGE_NAVIGATION_KEYBINDS,
-} from "../keybinds";
+} from "@ui";
 
 /** Home/category destinations list: pick a destination, no tab order. */
 export function destinationPageKeybindCatalog(): KeybindSection[] {

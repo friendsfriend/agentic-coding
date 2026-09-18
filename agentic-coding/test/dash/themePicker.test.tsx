@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test";
 import { testRender } from "@opentui/solid";
-import { ThemePicker } from "../../src/tui/shared/ThemePicker";
+import { ThemePicker } from "@ui";
 
 const THEMES = ["catppuccin", "nord", "tokyonight", "dracula"];
 

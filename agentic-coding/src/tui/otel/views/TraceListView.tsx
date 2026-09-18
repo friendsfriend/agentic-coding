@@ -1,13 +1,15 @@
 /** @jsxImportSource @opentui/solid */
 import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
-import { hostBodyLines } from "../../shared/hostChrome";
-import { Badge } from "../components/Badge";
-import { HighlightedText } from "../components/Highlight";
-import { SearchHeader } from "../components/SearchHeader";
-import { SelectableList } from "../components/Selectable";
+import {
+	Badge,
+	HighlightedText,
+	hostBodyLines,
+	SearchHeader,
+	SelectableList,
+	uiColors,
+} from "@ui";
 import type { TraceSummary } from "../model/types";
-import { uiColors } from "../ui/colors";
 
 const duration = (ms: number) =>
 	ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
@@ -70,7 +72,7 @@ export function TraceListView(props: {
 								<box height={1} flexDirection="row">
 									<HighlightedText
 										text={workspace}
-										highlight={selected ? "primary" : "secondary"}
+										highlight={selected ? "highlight" : "secondary"}
 										attributes={TextAttributes.BOLD}
 									/>
 									<text fg={uiColors.textMuted}>

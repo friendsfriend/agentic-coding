@@ -4,6 +4,12 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { testRender } from "@opentui/solid";
+import {
+	activeKeybindCatalog,
+	activeKeybindContext,
+	catalogKeybinds,
+	footerKeybinds,
+} from "@ui";
 import { App } from "../../src/tui/otel/app/App";
 import { resetNotifications } from "../../src/tui/otel/app/notifications";
 import { TraceDb } from "../../src/tui/otel/model/db";
@@ -11,12 +17,6 @@ import { LogStore } from "../../src/tui/otel/model/logStore";
 import { MetricStore } from "../../src/tui/otel/model/metricStore";
 import { TopologyStore } from "../../src/tui/otel/model/topologyStore";
 import { TraceStore } from "../../src/tui/otel/model/traceStore";
-import {
-	activeKeybindCatalog,
-	activeKeybindContext,
-	catalogKeybinds,
-	footerKeybinds,
-} from "../../src/tui/shared/keybinds";
 import { renderUntil } from "./support/terminal";
 
 // Terminal-size and input-surface validation for the page shell

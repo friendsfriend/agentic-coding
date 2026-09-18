@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test";
 import { testRender } from "@opentui/solid";
-import { Layout } from "../../src/tui/dash/ui/Layout";
+import { Layout } from "@ui";
 
 const WIDTH = 40;
 const HEIGHT = 10;

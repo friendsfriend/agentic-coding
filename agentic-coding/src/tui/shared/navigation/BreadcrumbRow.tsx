@@ -6,8 +6,8 @@
 // readable.
 import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
+import { uiColors } from "@ui";
 import { For, Show } from "solid-js";
-import { uiColors } from "../colors";
 import type { Route } from "../routes";
 import { BREADCRUMB_SEPARATOR, breadcrumbSegments } from "./breadcrumbs";
 

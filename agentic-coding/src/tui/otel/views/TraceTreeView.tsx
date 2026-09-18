@@ -1,11 +1,9 @@
 /** @jsxImportSource @opentui/solid */
 import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
+import { HighlightedText, Selectable, uiColors } from "@ui";
 import { createMemo, For } from "solid-js";
-import { HighlightedText } from "../components/Highlight";
-import { Selectable } from "../components/Selectable";
 import type { TreeNode } from "../model/types";
-import { uiColors } from "../ui/colors";
 
 const durationMs = (node: TreeNode) =>
 	Math.max(
@@ -201,7 +199,7 @@ export function TraceTreeView(props: {
 											</box>
 											<HighlightedText
 												text={node.span.name}
-												highlight={selected() ? "primary" : "secondary"}
+												highlight={selected() ? "highlight" : "secondary"}
 												attributes={selected() ? TextAttributes.BOLD : 0}
 											/>
 										</box>

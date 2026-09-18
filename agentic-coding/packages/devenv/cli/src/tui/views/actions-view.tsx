@@ -3,7 +3,7 @@ import {
 	type Highlight,
 	statusAnimationIntentForText,
 	statusAnimationModel,
-} from "@devenv/ui";
+} from "@ui";
 import { For, Show } from "solid-js";
 import type { ActionRunStore } from "../stores/action-run-store";
 

@@ -10,6 +10,7 @@
         "@opentui/core": "0.4.2",
         "@opentui/keymap": "0.4.2",
         "@opentui/solid": "0.4.2",
+        "@ui": "workspace:*",
         "effect": "3.22.2",
         "marked": "^17.0.1",
         "solid-js": "^1.9.12",
@@ -29,7 +30,6 @@
       "dependencies": {
         "@devenv/core": "workspace:*",
         "@devenv/types": "workspace:*",
-        "@devenv/ui": "workspace:*",
         "@opentui/core": "0.4.2",
         "@opentui/solid": "0.4.2",
         "commander": "^14.0.3",
@@ -50,13 +50,13 @@
       "name": "@devenv/types",
       "version": "0.12.7",
     },
-    "packages/devenv/ui": {
-      "name": "@devenv/ui",
+    "packages/ui": {
+      "name": "@ui",
       "version": "0.12.7",
       "dependencies": {
-        "@devenv/core": "workspace:*",
         "@devenv/types": "workspace:*",
         "@opentui/core": "0.4.2",
+        "@opentui/keymap": "0.4.2",
         "@opentui/solid": "0.4.2",
         "solid-js": "^1.9.12",
       },
@@ -145,8 +145,6 @@
 
     "@devenv/types": ["@devenv/types@workspace:packages/devenv/types"],
 
-    "@devenv/ui": ["@devenv/ui@workspace:packages/devenv/ui"],
-
     "@grpc/grpc-js": ["@grpc/grpc-js@1.14.4", "", { "dependencies": { "@grpc/proto-loader": "^0.8.0", "@js-sdsl/ordered-map": "^4.4.2" } }, "sha512-k9Dj3DV/itK9D06Y8f190Qgop7/Ui+D0njFV3LHMPwPT75DpXLQohE9Wmz0QElrJnzsjB7KPWiKJbOl7IPDArQ=="],
 
     "@grpc/proto-loader": ["@grpc/proto-loader@0.8.1", "", { "dependencies": { "lodash.camelcase": "^4.3.0", "long": "^5.0.0", "protobufjs": "^7.5.5", "yargs": "^17.7.2" }, "bin": { "proto-loader-gen-types": "build/bin/proto-loader-gen-types.js" } }, "sha512-wtF6h+DY6M3YaDBPAmvuuA6jV8Sif9MjtOI5euKFWRgCDl5PeDpPsHR9u2l6St5ceY8AZgoNDww5+HvEsXFsGg=="],
@@ -206,6 +204,8 @@
     "@types/bun": ["@types/bun@1.4.0", "", { "dependencies": { "bun-types": "1.4.0" } }, "sha512-K+lZULY23vRgK/CfTjFIV+tyifaNdSMlPh9j+6mQ/cLfpOznLyAuzgV/JQysyECpkBQLVMSyvjlr2fBUSA9wFQ=="],
 
     "@types/node": ["@types/node@25.9.6", "", { "dependencies": { "undici-types": ">=7.24.0 <7.24.7" } }, "sha512-JR6Q/PV5DKFvjrGFVqQJdeG0qvsqQQLDa3TzFrqVwhqRXqwNaxPo2KYCtCQXpOdIulCouKwT7a6in9nFthBAzw=="],
+
+    "@ui": ["@ui@workspace:packages/ui"],
 
     "ansi-regex": ["ansi-regex@6.3.0", "", {}, "sha512-WpDfL7NO6j7tH88IDBNVdUJxDh9nmCteAVW9dsep846XdwF4naCBK+/tGLX3KJgcpgMRXCFlTM2hKGoK9FsdrQ=="],
 

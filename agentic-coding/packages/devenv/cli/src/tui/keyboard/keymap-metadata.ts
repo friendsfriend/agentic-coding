@@ -1,5 +1,5 @@
-import type { HelpSection } from "@devenv/ui";
 import type { Keymap, KeymapEvent } from "@opentui/keymap";
+import type { HelpSection } from "@ui";
 import { KEYBINDS, type KeybindDef } from "./registry";
 
 export interface FooterKeybind {

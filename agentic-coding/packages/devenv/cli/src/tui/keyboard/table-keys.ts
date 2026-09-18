@@ -1,4 +1,4 @@
-import { themeNames } from "@devenv/ui";
+import { themeNames } from "@ui";
 import { handleAppDetailKeys } from "./app-detail-keys";
 import { isDownKey, isUpKey } from "./nav-keys";
 import {

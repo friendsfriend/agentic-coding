@@ -1,8 +1,5 @@
 import { expect, test } from "bun:test";
-import {
-	blockSelectionToLines,
-	parseMarkdownBlocks,
-} from "../../src/tui/dash/devenv-ui/markdownBlocks";
+import { blockSelectionToLines, parseMarkdownBlocks } from "@ui";
 
 test("parses top-level blocks with exact source-line ranges", () => {
 	const doc = `# Heading

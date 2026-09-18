@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { themeColorForTheme, themeNames } from "../../src/tui/otel/ui/theme";
+import { themeColorForTheme, themeNames } from "@ui";
 
 describe("theme picker colors", () => {
 	it("returns each theme swatch color and a fallback for unknown themes", () => {

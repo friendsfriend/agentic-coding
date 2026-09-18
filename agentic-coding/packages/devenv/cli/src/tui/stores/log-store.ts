@@ -1,4 +1,4 @@
-import { stripAnsi } from "@devenv/ui";
+import { stripAnsi } from "@ui";
 import { createMemo, createSignal } from "solid-js";
 
 export function createLogStore() {

@@ -1,3 +1,5 @@
+/** @jsxImportSource @opentui/solid */
+import { TextAttributes } from "@opentui/core";
 import {
 	AnimatedStatusText,
 	Badge,
@@ -5,9 +7,7 @@ import {
 	HighlightedText,
 	statusAnimationIntentForText,
 	uiColors,
-} from "@devenv/ui";
-/** @jsxImportSource @opentui/solid */
-import { TextAttributes } from "@opentui/core";
+} from "@ui";
 import { For, Show } from "solid-js";
 
 export type ProgressSplashStepStatus =

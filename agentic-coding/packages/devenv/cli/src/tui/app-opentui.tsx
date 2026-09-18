@@ -1,12 +1,5 @@
 import { createClient, getLogger, registerFatalCleanup } from "@devenv/core";
 import type { App } from "@devenv/types";
-import {
-	getSelectableRows,
-	Header,
-	Layout,
-	StatusBar,
-	setGlobalSelectionMouseUpHandler,
-} from "@devenv/ui";
 import { createCliRenderer } from "@opentui/core";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { KeymapProvider, useKeymap } from "@opentui/keymap/solid";
@@ -16,6 +9,13 @@ import {
 	useRenderer,
 	useTerminalDimensions,
 } from "@opentui/solid";
+import {
+	getSelectableRows,
+	Header,
+	Layout,
+	StatusBar,
+	setGlobalSelectionMouseUpHandler,
+} from "@ui";
 import {
 	createEffect,
 	createMemo,
@@ -91,7 +91,6 @@ import {
 	ContentRouter,
 	getHeaderInfo,
 	getTabBorderColor,
-	getTabName,
 	ModalOverlays,
 } from "./views";
 
@@ -731,6 +730,7 @@ export function TUIApp(props: TUIAppProps) {
 			onMouseUp={utilActions.handleCopySelection}
 		>
 			<Layout
+				footerLines={3}
 				header={
 					<Header
 						{...getHeaderInfo(headerDeps)}
@@ -753,31 +753,7 @@ export function TUIApp(props: TUIAppProps) {
 				}
 				footer={
 					<StatusBar
-						left={
-							appStore.activeTab() === "ui-test"
-								? "UI Test"
-								: `${getTabName(appStore.activeTab())}: ${appStore.filteredApps().length}`
-						}
-						center={
-							appStore.viewMode() === "providers"
-								? "Providers"
-								: appStore.viewMode() === "jobs"
-									? `Pipeline #${changeRequestStore.currentPipelineId() || "N/A"} \u2022 ${changeRequestStore.jobs().length} jobs`
-									: appStore.viewMode() === "changeRequestDetail"
-										? `Branch: ${appStore.filteredApps()[appStore.selectedIndex()]?.branch || "unknown"}`
-										: appStore.viewMode() === "changeRequests"
-											? `Branch: ${appStore.filteredApps()[appStore.selectedIndex()]?.branch || "unknown"}`
-											: appStore.viewMode() !== "table"
-												? "Viewing Logs"
-												: appStore.liveUpdatesActive()
-													? `Last update: ${appStore.lastUpdateTime() ? `${appStore.lastUpdateTime()?.toLocaleTimeString()}` : ""}`
-													: ""
-						}
-						right={
-							appStore.viewMode() === "table"
-								? `Selected: ${appStore.selectedIndex() + 1}/${appStore.filteredApps().length}`
-								: ""
-						}
+						lines={3}
 						keybinds={footerKeybinds()}
 						runningTextEnabled={uiStore.runningTextEnabled()}
 						runningTextOffset={uiStore.runningTextOffset()}

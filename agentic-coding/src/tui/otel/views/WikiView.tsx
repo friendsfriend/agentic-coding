@@ -2,6 +2,15 @@
 import type { KeyEvent, Renderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
 import { useTerminalDimensions } from "@opentui/solid";
+import type { Discussion } from "@ui";
+import {
+	hostBodyLines,
+	MarkdownReviewView as MarkdownViewModal,
+	ScrollableList,
+	Selectable,
+	showErrorModal,
+	uiColors,
+} from "@ui";
 import {
 	createEffect,
 	createMemo,
@@ -22,14 +31,7 @@ import {
 	readConcept,
 	renderDocument,
 } from "../../../workflow/wiki";
-import { MarkdownViewModal } from "../../dash/devenv-ui/components/MarkdownViewModal";
-import type { Discussion } from "../../dash/devenv-ui/types";
-import { showErrorModal } from "../../shared/errorModal";
-import { hostBodyLines } from "../../shared/hostChrome";
-import { ScrollableList } from "../../shared/ScrollableList";
-import { Selectable } from "../../shared/Selectable";
 import { notify } from "../app/notifications";
-import { uiColors } from "../ui/colors";
 
 export interface WikiViewProps {
 	keymap: Keymap<Renderable, KeyEvent>;
@@ -445,7 +447,7 @@ export function WikiView(props: WikiViewProps) {
 									selected={isSelected()}
 									onMouseUp={() => setSelected(index)}
 								>
-									<box height={1} paddingLeft={1}>
+									<box height={1}>
 										<text fg={uiColors.textPrimary}>
 											{"  ".repeat(row.depth)}
 											{row.kind === "directory"

@@ -4,7 +4,7 @@
 // mode: it shares the shell's single renderer and keymap provider, and does not
 // own the terminal dimensions, header/footer, exit guard or shutdown sequence.
 
-import { publishHostChrome } from "@devenv/ui";
+import { publishHostChrome } from "@ui";
 import { createEffect, onCleanup } from "solid-js";
 import { TUIApp } from "../../../packages/devenv/cli/src/tui/app-opentui";
 

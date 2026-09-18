@@ -1,86 +1,64 @@
 import { expect, test } from "bun:test";
-import { colors as devenvColors } from "../../packages/devenv/ui/src/colors";
 import {
 	AnimatedStatusText as DevenvAnimatedStatusText,
-	statusAnimationModel as devenvStatusAnimationModel,
-} from "../../packages/devenv/ui/src/components/AnimatedStatusText";
-import {
+	Badge as DevenvBadge,
+	CenteredState as DevenvCenteredState,
+	ContentPanel as DevenvContentPanel,
+	FilterStatusBar as DevenvFilterStatusBar,
+	GridLayout as DevenvGridLayout,
+	HelpText as DevenvHelpText,
+	HighlightedText as DevenvHighlightedText,
+	InlineProgressAnimation as DevenvInlineProgressAnimation,
+	LogView as DevenvLogView,
+	MatchedText as DevenvMatchedText,
+	ScrollableContent as DevenvScrollableContent,
+	ScrollableList as DevenvScrollableList,
+	SearchHeader as DevenvSearchHeader,
+	parseMarkdownBlocks as dashParseMarkdownBlocks,
 	auroraColor as devenvAuroraColor,
+	calculateVisibleItems as devenvCalculateVisibleItems,
+	colors as devenvColors,
 	createAuroraPalette as devenvCreateAuroraPalette,
 	createTonePalette as devenvCreateTonePalette,
 	DEFAULT_ANIMATION_HIGHLIGHTS as devenvDefaultAnimationHighlights,
-} from "../../packages/devenv/ui/src/components/animationColors";
-import { Badge as DevenvBadge } from "../../packages/devenv/ui/src/components/Badge";
-import { CenteredState as DevenvCenteredState } from "../../packages/devenv/ui/src/components/CenteredState";
-import {
-	ContentPanel as DevenvContentPanel,
-	GridLayout as DevenvGridLayout,
-} from "../../packages/devenv/ui/src/components/ContentStack";
-import { FilterStatusBar as DevenvFilterStatusBar } from "../../packages/devenv/ui/src/components/FilterStatusBar";
-import { HelpText as DevenvHelpText } from "../../packages/devenv/ui/src/components/HelpText";
-import { HighlightedText as DevenvHighlightedText } from "../../packages/devenv/ui/src/components/Highlight";
-import {
-	InlineProgressAnimation as DevenvInlineProgressAnimation,
 	DEFAULT_INLINE_PROGRESS_HIGHLIGHTS as devenvDefaultInlineProgressHighlights,
-} from "../../packages/devenv/ui/src/components/InlineProgressAnimation";
-import { LogView as DevenvLogView } from "../../packages/devenv/ui/src/components/LogView";
-import { MatchedText as DevenvMatchedText } from "../../packages/devenv/ui/src/components/MatchedText";
-import { ScrollableContent as DevenvScrollableContent } from "../../packages/devenv/ui/src/components/ScrollableContent";
-import { ScrollableList as DevenvScrollableList } from "../../packages/devenv/ui/src/components/ScrollableList";
-import { SearchHeader as DevenvSearchHeader } from "../../packages/devenv/ui/src/components/SearchHeader";
-import { getMarkdownSyntaxStyle as devenvGetMarkdownSyntaxStyle } from "../../packages/devenv/ui/src/markdownSyntax";
-import {
-	invokeGlobalSelectionMouseUpHandler as devenvInvokeSelectionMouseUpHandler,
-	setGlobalSelectionMouseUpHandler as devenvSetSelectionMouseUpHandler,
-} from "../../packages/devenv/ui/src/selectionCopy";
-import {
+	focusSoon as devenvFocusSoon,
 	getActiveThemeName as devenvGetActiveThemeName,
+	getMarkdownSyntaxStyle as devenvGetMarkdownSyntaxStyle,
+	invokeGlobalSelectionMouseUpHandler as devenvInvokeSelectionMouseUpHandler,
 	setActiveThemeName as devenvSetActiveThemeName,
+	setGlobalSelectionMouseUpHandler as devenvSetSelectionMouseUpHandler,
+	statusAnimationModel as devenvStatusAnimationModel,
 	themeColor as devenvThemeColor,
-} from "../../packages/devenv/ui/src/theme";
-import { focusSoon as devenvFocusSoon } from "../../packages/devenv/ui/src/utils/focusSoon";
-import { calculateVisibleItems as devenvCalculateVisibleItems } from "../../packages/devenv/ui/src/utils/virtualScroll";
-import { parseMarkdownBlocks as dashParseMarkdownBlocks } from "../../src/tui/dash/devenv-ui/markdownBlocks";
-import {
 	AnimatedStatusText as SharedAnimatedStatusText,
-	statusAnimationModel as sharedStatusAnimationModel,
-} from "../../src/tui/shared/AnimatedStatusText";
-import {
+	Badge as SharedBadge,
+	CenteredState as SharedCenteredState,
+	ContentPanel as SharedContentPanel,
+	FilterStatusBar as SharedFilterStatusBar,
+	GridLayout as SharedGridLayout,
+	HelpText as SharedHelpText,
+	HighlightedText as SharedHighlightedText,
+	InlineProgressAnimation as SharedInlineProgressAnimation,
+	LogView as SharedLogView,
+	MatchedText as SharedMatchedText,
+	ScrollableContent as SharedScrollableContent,
+	ScrollableList as SharedScrollableList,
+	SearchHeader as SharedSearchHeader,
 	auroraColor as sharedAuroraColor,
+	colors as sharedColors,
 	createAuroraPalette as sharedCreateAuroraPalette,
 	createTonePalette as sharedCreateTonePalette,
 	DEFAULT_ANIMATION_HIGHLIGHTS as sharedDefaultAnimationHighlights,
-} from "../../src/tui/shared/animationColors";
-import { Badge as SharedBadge } from "../../src/tui/shared/Badge";
-import { CenteredState as SharedCenteredState } from "../../src/tui/shared/CenteredState";
-import {
-	ContentPanel as SharedContentPanel,
-	GridLayout as SharedGridLayout,
-} from "../../src/tui/shared/ContentStack";
-import { colors as sharedColors } from "../../src/tui/shared/colors";
-import { FilterStatusBar as SharedFilterStatusBar } from "../../src/tui/shared/FilterStatusBar";
-import { HelpText as SharedHelpText } from "../../src/tui/shared/HelpText";
-import { HighlightedText as SharedHighlightedText } from "../../src/tui/shared/Highlight";
-import {
-	InlineProgressAnimation as SharedInlineProgressAnimation,
 	DEFAULT_INLINE_PROGRESS_HIGHLIGHTS as sharedDefaultInlineProgressHighlights,
-} from "../../src/tui/shared/InlineProgressAnimation";
-import { LogView as SharedLogView } from "../../src/tui/shared/LogView";
-import { MatchedText as SharedMatchedText } from "../../src/tui/shared/MatchedText";
-import { parseMarkdownBlocks as sharedParseMarkdownBlocks } from "../../src/tui/shared/markdownBlocks";
-import { getMarkdownSyntaxStyle as sharedGetMarkdownSyntaxStyle } from "../../src/tui/shared/markdownSyntax";
-import { ScrollableContent as SharedScrollableContent } from "../../src/tui/shared/ScrollableContent";
-import { ScrollableList as SharedScrollableList } from "../../src/tui/shared/ScrollableList";
-import { SearchHeader as SharedSearchHeader } from "../../src/tui/shared/SearchHeader";
-import {
-	invokeGlobalSelectionMouseUpHandler as sharedInvokeSelectionMouseUpHandler,
-	setGlobalSelectionMouseUpHandler as sharedSetSelectionMouseUpHandler,
-} from "../../src/tui/shared/selectionCopy";
-import {
 	getActiveThemeName as sharedGetActiveThemeName,
+	getMarkdownSyntaxStyle as sharedGetMarkdownSyntaxStyle,
+	invokeGlobalSelectionMouseUpHandler as sharedInvokeSelectionMouseUpHandler,
+	parseMarkdownBlocks as sharedParseMarkdownBlocks,
 	setActiveThemeName as sharedSetActiveThemeName,
+	setGlobalSelectionMouseUpHandler as sharedSetSelectionMouseUpHandler,
+	statusAnimationModel as sharedStatusAnimationModel,
 	themeColor as sharedThemeColor,
-} from "../../src/tui/shared/theme";
+} from "@ui";
 import { focusSoon as sharedFocusSoon } from "../../src/tui/shared/utils/focusSoon";
 import { calculateVisibleItems as sharedCalculateVisibleItems } from "../../src/tui/shared/utils/virtualScroll";
 

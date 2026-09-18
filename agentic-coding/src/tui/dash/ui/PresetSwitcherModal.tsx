@@ -1,10 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 
 import type { KeyEvent } from "@opentui/core";
+import { GenericModal, SelectableList, uiColors } from "@ui";
 import { createSignal, onCleanup, onMount } from "solid-js";
-import { uiColors } from "./colors";
-import { GenericModal } from "./GenericModal";
-import { SelectableList } from "./Selectable";
 
 export interface PresetChoice {
 	label: string;

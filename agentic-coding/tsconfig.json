@@ -16,8 +16,9 @@
 		"isolatedModules": true,
 		"noEmit": true,
 		"paths": {
+			"@ui": ["./packages/ui/src"],
+			"@ui/*": ["./packages/ui/src/*"],
 			"@devenv/cli": ["./packages/devenv/cli/src"],
-			"@devenv/ui": ["./packages/devenv/ui/src"],
 			"@devenv/core": ["./packages/devenv/core/src"],
 			"@devenv/types": ["./packages/devenv/types/src"]
 		}

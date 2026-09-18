@@ -1,18 +1,18 @@
 /** @jsxImportSource @opentui/solid */
 import { RGBA, TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
-import { type JSX, onCleanup } from "solid-js";
-import { HelpText } from "../../shared/HelpText";
-import type { Keybind, KeybindSection } from "../../shared/keybinds";
-import { ModalHelpOverlay } from "../../shared/ModalHelpOverlay";
+import type { Keybind, KeybindSection } from "@ui";
 import {
+	FilterStatusBar,
+	HelpText,
+	ModalHelpOverlay,
 	type ModalHelpRegistration,
 	registerModalHelp,
+	SearchHeader,
+	uiColors,
 	withModalHelpKeybind,
-} from "../../shared/modalHelp";
-import { uiColors } from "../ui/colors";
-import { FilterStatusBar } from "./FilterStatusBar";
-import { SearchHeader } from "./SearchHeader";
+} from "@ui";
+import { type JSX, onCleanup } from "solid-js";
 
 export type HelpEntry = Keybind;
 

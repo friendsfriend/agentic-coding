@@ -1,9 +1,5 @@
 import type { Provider, ProviderType, RepoSearchResult } from "@devenv/types";
-import type {
-	AddRepositoryStep,
-	ConnectProviderStep,
-	FindRepoMode,
-} from "@devenv/ui";
+import type { AddRepositoryStep, ConnectProviderStep, FindRepoMode } from "@ui";
 import { createSignal } from "solid-js";
 
 export function createProviderStore() {

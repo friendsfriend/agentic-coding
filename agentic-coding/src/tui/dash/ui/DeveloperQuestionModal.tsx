@@ -3,13 +3,15 @@
 import type { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
 import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
+import {
+	focusSoon,
+	GenericModal,
+	ScrollableContent,
+	SelectableList,
+	uiColors,
+} from "@ui";
 import { createEffect, Show, untrack } from "solid-js";
 import type { DeveloperDialogueRecord } from "../../../workflow/contracts";
-import { focusSoon } from "../devenv-ui/utils/focusSoon";
-import { uiColors } from "./colors";
-import { GenericModal } from "./GenericModal";
-import { ScrollableContent } from "./ScrollableContent";
-import { SelectableList } from "./Selectable";
 
 export function DeveloperQuestionModal(props: {
 	questions: DeveloperDialogueRecord[];

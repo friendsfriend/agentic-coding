@@ -11,14 +11,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveConfigRoot } from "../../config-root.ts";
 import {
 	isThemeJson,
 	setActiveThemeName,
 	setCustomThemes,
 	type ThemeJson,
 	themeNames,
-} from "./theme";
+} from "@ui";
+import { resolveConfigRoot } from "../../config-root.ts";
 
 /** Directory that owns `tui.json` and the custom `themes/` folder. */
 export function configDir(): string {

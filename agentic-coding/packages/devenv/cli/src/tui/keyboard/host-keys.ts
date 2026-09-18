@@ -7,4 +7,4 @@ export {
 	HOST_KEYBINDS,
 	hostKeybind,
 	hostOwnedKeys,
-} from "../../../../../../src/tui/shared/hostKeys";
+} from "@ui";

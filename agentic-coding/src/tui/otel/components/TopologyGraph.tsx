@@ -1,10 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import { TextAttributes } from "@opentui/core";
+import { HighlightedText, ScrollableContent, uiColors } from "@ui";
 import { createMemo, For } from "solid-js";
 import type { LayoutNode } from "../model/topologyStore";
-import { uiColors } from "../ui/colors";
-import { HighlightedText } from "./Highlight";
-import { ScrollableContent } from "./ScrollableContent";
 
 const cardWidth = 24;
 const cardHeight = 3;
@@ -32,7 +30,7 @@ export function TopologyGraph(props: {
 		);
 
 	return (
-		<ScrollableContent>
+		<ScrollableContent focusable={false}>
 			<box
 				style={{
 					minWidth: Math.max(60, layers().length * (cardWidth + 3)),
@@ -87,7 +85,7 @@ export function TopologyGraph(props: {
 												<box paddingLeft={2} paddingRight={1} overflow="hidden">
 													<HighlightedText
 														text={ln.id}
-														highlight={selected() ? "primary" : "secondary"}
+														highlight={selected() ? "highlight" : "secondary"}
 														attributes={TextAttributes.BOLD}
 													/>
 												</box>

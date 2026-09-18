@@ -6,6 +6,13 @@ import type {
 	TextareaRenderable,
 } from "@opentui/core";
 import {
+	focusSoon,
+	GenericModal,
+	ListViewModal,
+	ProgressModal,
+	uiColors,
+} from "@ui";
+import {
 	createEffect,
 	createSignal,
 	onCleanup,
@@ -15,15 +22,10 @@ import {
 } from "solid-js";
 import { backendClient } from "../../../server/client";
 import { PUBLIC_WORKFLOW_CATALOG } from "../../../workflow/definitions";
-import { focusSoon } from "../devenv-ui/utils/focusSoon";
 import { PRESET_CONFIG_DEFAULTS } from "../engine";
 import type { WorkflowLaunchContext, WorkflowLaunchInput } from "../launch";
 import { workflowTypesForContext } from "../launch";
 import { discoverChanges, discoverChangesAsync } from "../observations";
-import { uiColors } from "./colors";
-import { GenericModal } from "./GenericModal";
-import { ListViewModal } from "./ListViewModal";
-import { ProgressModal } from "./ProgressModal";
 
 /** Types whose task is a required field; everything else (openspec-apply)
  * selects an existing change instead. */
@@ -394,6 +396,7 @@ export function NewWorkflowModal(props: {
 							}
 						>
 							<ListViewModal
+								sizing="cap"
 								title="New workflow"
 								fieldLabel={fieldLabels[field()]}
 								summary={summary()}
@@ -420,11 +423,14 @@ export function NewWorkflowModal(props: {
 												{ key: "Esc", action: "Back" },
 											]
 								}
-								renderItem={(item, active) => {
+								renderItem={(item, isActive) => {
+									const active = isActive;
 									if (field() !== "workflowType")
 										return (
 											<text
-												fg={active ? uiColors.primary : uiColors.textSecondary}
+												fg={
+													active() ? uiColors.primary : uiColors.textSecondary
+												}
 											>
 												{item}
 											</text>
@@ -441,7 +447,9 @@ export function NewWorkflowModal(props: {
 											<text
 												height={1}
 												flexShrink={0}
-												fg={active ? uiColors.primary : uiColors.textSecondary}
+												fg={
+													active() ? uiColors.primary : uiColors.textSecondary
+												}
 											>
 												{workflow?.label ?? item}
 											</text>

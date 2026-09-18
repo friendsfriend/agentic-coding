@@ -1,4 +1,4 @@
-import type { TableColumn } from "@devenv/ui";
+import type { TableColumn } from "@ui";
 import type {
 	AgentActions,
 	AppActions,

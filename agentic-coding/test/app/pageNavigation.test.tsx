@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
+import { catalogKeybinds } from "@ui";
 import { onCleanup } from "solid-js";
 import { App } from "../../src/tui/otel/app/App";
 import {
@@ -16,7 +17,6 @@ import { LogStore } from "../../src/tui/otel/model/logStore";
 import { MetricStore } from "../../src/tui/otel/model/metricStore";
 import { TopologyStore } from "../../src/tui/otel/model/topologyStore";
 import { TraceStore } from "../../src/tui/otel/model/traceStore";
-import { catalogKeybinds } from "../../src/tui/shared/keybinds";
 import { destinationPageKeybindCatalog } from "../../src/tui/shared/navigation/keybinds";
 import { pressEscapeAndSettle } from "./support/terminal";
 

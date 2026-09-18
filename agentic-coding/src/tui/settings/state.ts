@@ -5,11 +5,9 @@
 // from the connected server and whether the shared profile/preset editor is
 // open. Reads never fall back to a local configuration file, so an unavailable
 // server stays a retryable section error.
+
+import { type KeybindSection, PAGE_NAVIGATION_KEYBINDS } from "@ui";
 import { createSignal } from "solid-js";
-import {
-	type KeybindSection,
-	PAGE_NAVIGATION_KEYBINDS,
-} from "../shared/keybinds";
 import type { ProjectSnapshot, ProviderSnapshot } from "./items";
 import { readProjectStatus, readProviderStatus } from "./server-config";
 

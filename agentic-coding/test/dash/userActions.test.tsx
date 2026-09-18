@@ -5,14 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
+import { activeErrorModal, DiffReviewView, resetErrorModal } from "@ui";
 import { createSignal, onCleanup } from "solid-js";
 import { App } from "../../src/tui/dash/App";
 import { type DashboardData, testDashboard } from "../../src/tui/dash/data";
-import { DiffViewModal } from "../../src/tui/dash/devenv-ui/components/DiffViewModal";
-import {
-	activeErrorModal,
-	resetErrorModal,
-} from "../../src/tui/shared/errorModal";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -109,7 +105,7 @@ test("wiki review diff renders Markdown and only maps current lines", async () =
 	let selectedEnd: number | undefined;
 	const t = await testRender(
 		() => (
-			<DiffViewModal
+			<DiffReviewView
 				filePath="projects/demo/wiki.md"
 				diff={
 					"--- a/projects/demo/wiki.md\n+++ b/projects/demo/wiki.md\n@@ -1,2 +1,2 @@\n-# Old title\n+# New title\n"
@@ -160,7 +156,7 @@ test("last finding anchor scrolls its inline comment into view", async () => {
 	const diff = `@@ -1,20 +1,20 @@\n${body}\n@@ -99,1 +99,1 @@\n+[finding]\n`;
 	const t = await testRender(
 		() => (
-			<DiffViewModal
+			<DiffReviewView
 				filePath="src/example.ts"
 				diff={diff}
 				currentFileIndex={0}

@@ -11,11 +11,7 @@ import type {
 	ResourceKind,
 	RuntimeStatus,
 } from "@devenv/types";
-import {
-	buildDependencyTree,
-	type DependencyNode,
-	runtimeState,
-} from "@devenv/ui";
+import { buildDependencyTree, type DependencyNode, runtimeState } from "@ui";
 import { batch } from "solid-js";
 import { exitApp } from "../exit";
 import type { ActionRunStore } from "../stores/action-run-store";
