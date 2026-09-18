@@ -1,5 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { TextAttributes } from "@opentui/core";
+import { useTerminalDimensions } from "@opentui/solid";
+import { hostBodyLines } from "../../shared/hostChrome";
 import { Badge } from "../components/Badge";
 import { HighlightedText } from "../components/Highlight";
 import { SearchHeader } from "../components/SearchHeader";
@@ -31,6 +33,9 @@ export function TraceListView(props: {
 	totalPages: () => number;
 	loading: () => boolean;
 }) {
+	const size = useTerminalDimensions();
+	// The view's own search header takes one row above the list.
+	const listLines = () => Math.max(1, hostBodyLines(size().height) - 1);
 	return (
 		<box flexDirection="column" width="100%" height="100%">
 			<SearchHeader
@@ -47,6 +52,7 @@ export function TraceListView(props: {
 			{props.summaries().length > 0 && (
 				<SelectableList
 					items={props.summaries()}
+					availableLines={listLines()}
 					selectedIndex={props.selectedIndex}
 					onSelect={props.onSelect}
 					renderItem={(summary, selected) => {

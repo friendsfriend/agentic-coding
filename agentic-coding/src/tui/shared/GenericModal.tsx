@@ -2,6 +2,7 @@
 import { RGBA, TextAttributes } from "@opentui/core";
 import { Portal, useTerminalDimensions } from "@opentui/solid";
 import {
+	createContext,
 	createEffect,
 	createSignal,
 	For,
@@ -9,6 +10,7 @@ import {
 	onCleanup,
 	Show,
 	untrack,
+	useContext,
 } from "solid-js";
 import { colors, uiColors } from "./colors";
 import { FilterStatusBar } from "./FilterStatusBar";
@@ -21,6 +23,21 @@ import {
 } from "./modalHelp";
 import { SearchHeader } from "./SearchHeader";
 import { invokeGlobalSelectionMouseUpHandler } from "./selectionCopy";
+
+/**
+ * Lines a modal's children may paint for themselves, published by the dialog
+ * that owns the geometry. A windowed list reads it instead of guessing, so a
+ * modal's list never renders rows the dialog would clip — the cursor would then
+ * sit outside the visible window.
+ */
+const ModalContentLinesContext = createContext<(() => number) | undefined>(
+	undefined,
+);
+
+/** Content lines of the enclosing dialog, when there is one. */
+export function useModalContentLines(): (() => number) | undefined {
+	return useContext(ModalContentLinesContext);
+}
 
 export interface SummaryEntry {
 	label: string;
@@ -210,6 +227,21 @@ export function GenericModal(props: GenericModalProps) {
 			props.heightLines ??
 				Math.floor(dimensions().height * (props.heightPercent ?? 0.7)),
 		);
+	/**
+	 * Lines the dialog leaves for its content: dialog height minus the chrome it
+	 * always draws (padding top/bottom, the header row, the progress row when
+	 * present, a field label, and the wrapped help footer).
+	 */
+	const contentLines = () =>
+		Math.max(
+			1,
+			height() -
+				2 /* padding */ -
+				(props.hideHeader ? 0 : 1) /* header */ -
+				(props.step === undefined ? 0 : 1) /* progress */ -
+				(props.fieldLabel ? 1 : 0) -
+				footerHelpLineCount(),
+		);
 	const progressWidth = () => Math.max(1, width() - 4);
 	/** Width the summary table may occupy beside the content column; shrinks
 	 * on narrow terminals and becomes 0 (stacked below content) when the
@@ -324,173 +356,178 @@ export function GenericModal(props: GenericModalProps) {
 	);
 
 	return (
-		<Portal
-			ref={(el) => {
-				const portal = el as { position?: string; zIndex?: number };
-				portal.position = "absolute";
-				if (props.zIndex !== undefined) portal.zIndex = props.zIndex;
-			}}
-		>
-			<box
-				position="absolute"
-				top={0}
-				left={0}
-				width={dimensions().width}
-				height={dimensions().height}
-				flexDirection="column"
-				justifyContent="center"
-				alignItems="center"
-				backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
-				onMouseUp={() => props.onBackdropClick?.()}
+		<ModalContentLinesContext.Provider value={contentLines}>
+			<Portal
+				ref={(el) => {
+					const portal = el as { position?: string; zIndex?: number };
+					portal.position = "absolute";
+					if (props.zIndex !== undefined) portal.zIndex = props.zIndex;
+				}}
 			>
 				<box
-					backgroundColor={hexToRgba(uiColors.bgMantle, props.dialogAlpha ?? 1)}
-					onMouseUp={(e) => {
-						invokeGlobalSelectionMouseUpHandler();
-						if (props.stopDialogClick) e.stopPropagation();
-					}}
-					width={width()}
-					height={height()}
+					position="absolute"
+					top={0}
+					left={0}
+					width={dimensions().width}
+					height={dimensions().height}
 					flexDirection="column"
-					paddingTop={1}
-					paddingBottom={1}
-					paddingLeft={2}
-					paddingRight={2}
+					justifyContent="center"
+					alignItems="center"
+					backgroundColor={RGBA.fromValues(0, 0, 0, 0.35)}
+					onMouseUp={() => props.onBackdropClick?.()}
 				>
-					{!props.hideHeader &&
-						(props.customHeader ? props.customHeader : headerContent())}
-					{props.step !== undefined && (
-						<box width="100%" height={1}>
-							<text>
-								<For
-									each={Array.from(
-										{ length: progressWidth() },
-										(_, index) => index,
-									)}
-								>
-									{(index) => (
-										<span
-											style={{
-												fg:
-													index <= progressEnd()
-														? progressColor(
-																index / Math.max(1, progressWidth() - 1),
-															)
-														: uiColors.textMuted,
-											}}
-										>
-											{progressCharacter(index)}
-										</span>
-									)}
-								</For>
-							</text>
-						</box>
-					)}
-					<FilterStatusBar
-						filterSummary={props.filterSummary}
-						sortSummary={props.sortSummary}
-					/>
-					<Show
-						when={props.summaryOnly}
-						fallback={
-							<box
-								width="100%"
-								flexDirection="column"
-								flexGrow={1}
-								flexShrink={1}
-								minHeight={0}
-								overflow="hidden"
-							>
+					<box
+						backgroundColor={hexToRgba(
+							uiColors.bgMantle,
+							props.dialogAlpha ?? 1,
+						)}
+						onMouseUp={(e) => {
+							invokeGlobalSelectionMouseUpHandler();
+							if (props.stopDialogClick) e.stopPropagation();
+						}}
+						width={width()}
+						height={height()}
+						flexDirection="column"
+						paddingTop={1}
+						paddingBottom={1}
+						paddingLeft={2}
+						paddingRight={2}
+					>
+						{!props.hideHeader &&
+							(props.customHeader ? props.customHeader : headerContent())}
+						{props.step !== undefined && (
+							<box width="100%" height={1}>
+								<text>
+									<For
+										each={Array.from(
+											{ length: progressWidth() },
+											(_, index) => index,
+										)}
+									>
+										{(index) => (
+											<span
+												style={{
+													fg:
+														index <= progressEnd()
+															? progressColor(
+																	index / Math.max(1, progressWidth() - 1),
+																)
+															: uiColors.textMuted,
+												}}
+											>
+												{progressCharacter(index)}
+											</span>
+										)}
+									</For>
+								</text>
+							</box>
+						)}
+						<FilterStatusBar
+							filterSummary={props.filterSummary}
+							sortSummary={props.sortSummary}
+						/>
+						<Show
+							when={props.summaryOnly}
+							fallback={
 								<box
 									width="100%"
-									flexDirection="row"
+									flexDirection="column"
 									flexGrow={1}
 									flexShrink={1}
 									minHeight={0}
 									overflow="hidden"
 								>
 									<box
-										flexDirection="column"
+										width="100%"
+										flexDirection="row"
 										flexGrow={1}
 										flexShrink={1}
-										minWidth={0}
+										minHeight={0}
 										overflow="hidden"
 									>
-										<Show when={props.fieldLabel}>
-											<box width="100%" height={1} flexShrink={0}>
-												<text
-													fg={uiColors.textPrimary}
-													attributes={TextAttributes.BOLD}
-												>
-													{props.fieldLabel}
-												</text>
-											</box>
-										</Show>
 										<box
-											style={{
-												width: "100%",
-												flexDirection: "column",
-												flexGrow: 1,
-												flexShrink: 1,
-												minHeight: 0,
-												overflow: "hidden",
-											}}
+											flexDirection="column"
+											flexGrow={1}
+											flexShrink={1}
+											minWidth={0}
+											overflow="hidden"
 										>
-											{props.children}
+											<Show when={props.fieldLabel}>
+												<box width="100%" height={1} flexShrink={0}>
+													<text
+														fg={uiColors.textPrimary}
+														attributes={TextAttributes.BOLD}
+													>
+														{props.fieldLabel}
+													</text>
+												</box>
+											</Show>
+											<box
+												style={{
+													width: "100%",
+													flexDirection: "column",
+													flexGrow: 1,
+													flexShrink: 1,
+													minHeight: 0,
+													overflow: "hidden",
+												}}
+											>
+												{props.children}
+											</box>
 										</box>
+										{props.summary?.length && !stackSummary() ? (
+											<SummaryTable
+												entries={props.summary}
+												width={tableWidth()}
+											/>
+										) : null}
 									</box>
-									{props.summary?.length && !stackSummary() ? (
-										<SummaryTable
-											entries={props.summary}
-											width={tableWidth()}
-										/>
+									{stackSummary() ? (
+										<box
+											width="100%"
+											flexShrink={0}
+											flexDirection="column"
+											overflow="hidden"
+										>
+											<SummaryTable entries={props.summary ?? []} full />
+										</box>
 									) : null}
 								</box>
-								{stackSummary() ? (
-									<box
-										width="100%"
-										flexShrink={0}
-										flexDirection="column"
-										overflow="hidden"
-									>
-										<SummaryTable entries={props.summary ?? []} full />
-									</box>
-								) : null}
-							</box>
-						}
-					>
-						<box width="100%" flexGrow={1} flexDirection="column">
-							<SummaryTable entries={props.summary ?? []} full />
-						</box>
-					</Show>
-					{props.customFooter ? (
-						props.customFooter
-					) : (
-						<box
-							style={{
-								width: "100%",
-								height: footerHelpLineCount(),
-								justifyContent: "flex-start",
-								flexDirection: "column",
-								flexShrink: 0,
-							}}
+							}
 						>
-							{helpEntryLines() ? (
-								<For each={helpEntryLines() ?? []}>
-									{(line) => <HelpText entries={line} />}
-								</For>
-							) : (
-								<For each={helpLines()}>
-									{(line) => (
-										<text style={{ fg: uiColors.textSecondary }}>{line}</text>
-									)}
-								</For>
-							)}
-						</box>
-					)}
+							<box width="100%" flexGrow={1} flexDirection="column">
+								<SummaryTable entries={props.summary ?? []} full />
+							</box>
+						</Show>
+						{props.customFooter ? (
+							props.customFooter
+						) : (
+							<box
+								style={{
+									width: "100%",
+									height: footerHelpLineCount(),
+									justifyContent: "flex-start",
+									flexDirection: "column",
+									flexShrink: 0,
+								}}
+							>
+								{helpEntryLines() ? (
+									<For each={helpEntryLines() ?? []}>
+										{(line) => <HelpText entries={line} />}
+									</For>
+								) : (
+									<For each={helpLines()}>
+										{(line) => (
+											<text style={{ fg: uiColors.textSecondary }}>{line}</text>
+										)}
+									</For>
+								)}
+							</box>
+						)}
+					</box>
 				</box>
-			</box>
-		</Portal>
+			</Portal>
+		</ModalContentLinesContext.Provider>
 	);
 }
 

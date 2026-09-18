@@ -4,6 +4,7 @@ import { useTerminalDimensions } from "@opentui/solid";
 import { createMemo, For, type JSX, Show } from "solid-js";
 import { AnimatedStatusText } from "./AnimatedStatusText";
 import { uiColors } from "./colors";
+import { useModalContentLines } from "./GenericModal";
 import { focusSoon } from "./utils/focusSoon";
 import { calculateVisibleItems } from "./utils/virtualScroll";
 
@@ -230,7 +231,6 @@ export interface ScrollableListProps<T> {
  */
 export function ScrollableList<T>(props: ScrollableListProps<T>): JSX.Element {
 	const dimensions = useTerminalDimensions();
-
 	const hasFilterBar = () => !!props.filterPlaceholder;
 	const showIndicator = () =>
 		props.showScrollIndicator !== false && props.items.length > 0;
@@ -240,15 +240,18 @@ export function ScrollableList<T>(props: ScrollableListProps<T>): JSX.Element {
 	 * (via reservedLines / availableLines) and internal chrome (filter bar +
 	 * scroll indicator).
 	 */
-	const listAreaLines = createMemo(() => {
-		const base =
-			props.availableLines !== undefined
-				? props.availableLines
-				: Math.max(1, dimensions().height - (props.reservedLines ?? 0));
+	// Inside a dialog the dialog knows the budget; a full-page list passes its own
+	// (`availableLines`) or reserves the host chrome (`reservedLines`).
+	const modalLines = useModalContentLines();
+	const budgetLines = () =>
+		props.availableLines ??
+		modalLines?.() ??
+		Math.max(1, dimensions().height - (props.reservedLines ?? 0));
 
+	const listAreaLines = createMemo(() => {
 		const filterLines = hasFilterBar() ? FILTER_BAR_LINES : 0;
 		const indicatorLines = showIndicator() ? SCROLL_INDICATOR_LINES : 0;
-		return Math.max(1, base - filterLines - indicatorLines);
+		return Math.max(1, budgetLines() - filterLines - indicatorLines);
 	});
 
 	const maxVisibleUniformItems = createMemo(() =>

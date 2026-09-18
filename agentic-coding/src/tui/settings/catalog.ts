@@ -63,7 +63,7 @@ export const SETTINGS_INVENTORY: readonly SettingsInventoryEntry[] = [
 	{
 		id: "appearance.theme",
 		section: "appearance",
-		label: "Active theme",
+		label: "Theme",
 		owner: "src/tui/shared/preferences.ts",
 		scope: "client",
 		storage: "$AGENTIC_CODING_CONFIG_DIR/tui.json · theme",
@@ -71,19 +71,6 @@ export const SETTINGS_INVENTORY: readonly SettingsInventoryEntry[] = [
 		effect: "immediate",
 		editable: true,
 		items: ["appearance."],
-	},
-	{
-		id: "appearance.custom-themes",
-		section: "appearance",
-		label: "Custom themes",
-		owner: "src/tui/shared/preferences.ts",
-		scope: "client",
-		storage: "$AGENTIC_CODING_CONFIG_DIR/themes/*.json",
-		secret: false,
-		effect: "restart",
-		editable: false,
-		items: ["appearance.custom-themes"],
-		note: "Files are loaded at startup; add or edit a theme file and restart.",
 	},
 	{
 		id: "agents.profiles",

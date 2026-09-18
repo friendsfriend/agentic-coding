@@ -98,9 +98,10 @@ test("every page keeps one blank row above and below its content", async () => {
 		expectChromeSpacing(t, "menu");
 		expect(row(t, 3)).toContain("Observability");
 		// No page-level inset: the row itself may indent its own content, but the
-		// page never pushes it in by more than the selection indicator column.
+		// page never pushes it in by more than the row's own selection indicator
+		// strip (two columns, matching the work-item rows).
 		const menuRow = row(t, 3);
-		expect(menuRow.length - menuRow.trimStart().length).toBeLessThanOrEqual(1);
+		expect(menuRow.length - menuRow.trimStart().length).toBeLessThanOrEqual(2);
 
 		// A full-height list: the last log line stays inside the content area.
 		await jumpTo(t, "logs");

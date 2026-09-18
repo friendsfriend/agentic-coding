@@ -168,10 +168,17 @@ export function getKeymapRuntimeSnapshot(
 export function applyKeymapRuntimeSnapshot(
 	keymap: DevenvKeymap,
 	snapshot: KeymapRuntimeSnapshot,
+	/** Embedded in the unified shell: the environment owns its own modal field,
+	 * so a dashboard or wiki dialog opening behind this body cannot park every
+	 * environment layer (`modal.active` has several writers). */
+	embedded = false,
 ): void {
 	keymap.setData("app.viewMode", snapshot.viewMode);
 	keymap.setData("app.activeTab", snapshot.activeTab);
-	keymap.setData("modal.active", snapshot.activeModal);
+	keymap.setData(
+		embedded ? "modal.active.environments" : "modal.active",
+		snapshot.activeModal,
+	);
 	keymap.setData("textEntry.active", snapshot.textEntryActive);
 	keymap.setData("shutdown.active", snapshot.shutdownActive);
 	keymap.setData("focus.panel", snapshot.focusedPanel);
@@ -184,11 +191,16 @@ export function syncKeymapRuntimeState(
 	stores: Accessor<KeyboardStores> | KeyboardStores,
 	afterSync?: () => void,
 	enabled?: Accessor<boolean>,
+	embedded = false,
 ): void {
 	createEffect(() => {
 		if (enabled && !enabled()) return;
 		const currentStores = typeof stores === "function" ? stores() : stores;
-		applyKeymapRuntimeSnapshot(keymap, getKeymapRuntimeSnapshot(currentStores));
+		applyKeymapRuntimeSnapshot(
+			keymap,
+			getKeymapRuntimeSnapshot(currentStores),
+			embedded,
+		);
 		afterSync?.();
 	});
 }

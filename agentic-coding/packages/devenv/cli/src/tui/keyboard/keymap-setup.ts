@@ -90,8 +90,11 @@ export function setupDevenvKeymap(keymap: DevenvKeymap): () => void {
 				activeTab(value, ctx) {
 					ctx.require("app.activeTab", normalizeText("activeTab", value));
 				},
-				activeModal(value, ctx) {
-					ctx.require("modal.active", normalizeText("activeModal", value));
+				// The environment's own modal field. Standalone this reads the
+				// plain key; embedded the host points it at the environment's
+				// namespaced key so another body's dialog state cannot park it.
+				envModal(value, ctx) {
+					ctx.require("modal.active", normalizeText("envModal", value));
 				},
 				textEntry(value, ctx) {
 					ctx.require("textEntry.active", normalizeBoolean("textEntry", value));

@@ -270,7 +270,7 @@ export function registerWorkflowKeymapLayers(
 			priority: WORKFLOW_PRIORITY,
 			...(deps.ctx.embedded ? { shellFeature: "environments" } : {}),
 			shutdown: false,
-			activeModal: "none",
+			envModal: "none",
 			appViewMode: viewMode,
 			commands: [
 				{
@@ -296,7 +296,7 @@ export function registerWorkflowKeymapLayers(
 				priority: WORKFLOW_PRIORITY + 10,
 				...(deps.ctx.embedded ? { shellFeature: "environments" } : {}),
 				shutdown: false,
-				activeModal: "none",
+				envModal: "none",
 				appViewMode: "appDetail",
 				commands: [
 					{
@@ -442,7 +442,7 @@ export function registerWorkflowKeymapLayers(
 				priority: WORKFLOW_PRIORITY + 20,
 				...(deps.ctx.embedded ? { shellFeature: "environments" } : {}),
 				shutdown: false,
-				activeModal: "none",
+				envModal: "none",
 				appViewMode: viewMode,
 				focusedPanel,
 				commands: [
@@ -544,7 +544,7 @@ export function registerWorkflowKeymapLayers(
 			priority: WORKTREE_PRIORITY,
 			...(deps.ctx.embedded ? { shellFeature: "environments" } : {}),
 			shutdown: false,
-			activeModal: "none",
+			envModal: "none",
 			worktreeManager: true,
 			commands: [
 				{

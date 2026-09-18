@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { createTestKeymap } from "@opentui/keymap/testing";
+import { hostOwnedKeys } from "./host-keys";
 import { applyKeymapRuntimeSnapshot } from "./keymap-runtime";
 import { setupDevenvKeymap } from "./keymap-setup";
+import { contextBindingNames } from "./registry";
 import { registerTableKeymapLayer } from "./table-keymap-layer";
 import { handleTableKeys } from "./table-keys";
 import type { KeyboardActions, KeyboardContext, KeyboardStores } from "./types";
@@ -334,5 +336,70 @@ describe("table keymap layer", () => {
 		} finally {
 			cleanup();
 		}
+	});
+});
+
+describe("table keybind registry agreement", () => {
+	// The registry (`registry.ts`) is the single source for the footer and `?`
+	// help. It drifted from the keymap: `+`, `-`, `A`, `H`, `c`, `f`, `t`, … were
+	// advertised and dead, which reads as "the keybindings do not work".
+	const boundKeys = (embedded: boolean): Set<string> => {
+		const { keymap, cleanup } = createTestKeymap({ defaultKeys: true });
+		try {
+			setupDevenvKeymap(keymap as never);
+			setRuntime(keymap);
+			registerTableKeymapLayer(keymap as never, {
+				stores: makeStores(),
+				actions: actions(),
+				ctx: { ...ctx(), embedded },
+			});
+			return new Set(
+				keymap
+					.getCommandBindings({
+						commands: [
+							"table.handle",
+							"table.escape",
+							"table.tab.previous",
+							"table.search.open",
+							"table.filter.open",
+							"table.sort.open",
+							"actions.toggle",
+						],
+						visibility: "active",
+					})
+					.values()
+					.flatMap((bindings) =>
+						bindings.map((binding) =>
+							binding.sequence
+								.map((part) => part.display.toLowerCase())
+								.join("+"),
+						),
+					),
+			);
+		} finally {
+			cleanup();
+		}
+	};
+
+	/** `Alt+C` copies the selection and the global layer owns it for every view. */
+	const notThisLayer = new Set(["alt+c"]);
+
+	test("every registry key for this context is bound", () => {
+		const bound = boundKeys(false);
+		const missing = contextBindingNames("table")
+			.filter((name) => !notThisLayer.has(name))
+			.filter((name) => !bound.has(name.toLowerCase()));
+		expect(missing).toEqual([]);
+	});
+
+	test("embedded keeps the host-owned keys (quit) for the shell", () => {
+		const bound = boundKeys(true);
+		expect(bound.has("q")).toBe(false);
+		// Everything else still binds, so the feature's own table keeps working.
+		const missing = contextBindingNames("table")
+			.filter((name) => !notThisLayer.has(name))
+			.filter((name) => !hostOwnedKeys(true).has(name))
+			.filter((name) => !bound.has(name.toLowerCase()));
+		expect(missing).toEqual([]);
 	});
 });

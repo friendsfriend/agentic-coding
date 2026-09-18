@@ -219,7 +219,19 @@ export function createHelpActions(
 		const activeKeymapBinds = keymap
 			? filterFooterKeybinds(getActiveFooterKeybindsFromKeymap(keymap))
 			: [];
-		if (activeKeymapBinds.length > 0) return activeKeymapBinds;
+		// The live keymap projection only carries bindings registered with a footer
+		// label; the table's own keys (`+`, `-`, `c`, `f`, `t`, `s`, `x`, …) are not,
+		// so they left the footer as soon as a dialog closed. The registry is the
+		// single source for what a view advertises, so its entries for the current
+		// view always take part.
+		if (activeKeymapBinds.length > 0) {
+			const merged = [...activeKeymapBinds];
+			for (const entry of getFooterKeybindsForContext(appStore.viewMode())) {
+				if (merged.some((existing) => existing.key === entry.key)) continue;
+				merged.push(entry);
+			}
+			return merged;
+		}
 
 		// Modal state overrides — these depend on runtime state, not registry
 		if (uiStore.showPassphraseModal())

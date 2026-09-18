@@ -43,6 +43,21 @@ export function hostNamesPage(): boolean {
 	return hostChrome()?.namesPage ?? false;
 }
 
+/** Chrome lines a body may assume when no host published its own. */
+const DEFAULT_HOST_CHROME_LINES = 5;
+
+/**
+ * Rows a host-owned body may paint: terminal height minus the host chrome and
+ * the blank row between chrome and body. Full-page lists reserve this so their
+ * window never renders rows the shell would clip.
+ */
+export function hostBodyLines(terminalHeight: number): number {
+	return Math.max(
+		1,
+		terminalHeight - hostChromeLines(DEFAULT_HOST_CHROME_LINES) - 1,
+	);
+}
+
 /** True while the host draws the blank rows above and below the body. */
 export function hostOwnsGaps(): boolean {
 	return hostChrome()?.gaps === true;

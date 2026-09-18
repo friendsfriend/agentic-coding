@@ -49,6 +49,7 @@ export function FindingsModal(props: {
 			</box>
 			<SelectableList
 				items={findings()}
+				estimatedItemHeight={3}
 				selectedIndex={props.selected}
 				renderItem={(event) => (
 					<box

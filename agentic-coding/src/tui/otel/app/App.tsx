@@ -1,6 +1,5 @@
 /** @jsxImportSource @opentui/solid */
 
-import { join } from "node:path";
 import type { Renderable } from "@opentui/core";
 import { type KeyEvent, TextAttributes } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
@@ -82,6 +81,9 @@ import {
 import { HelpModal } from "../../shared/HelpModal";
 import {
 	activeKeybindCatalog,
+	activeKeybindContext,
+	catalogKeybinds,
+	footerKeybinds,
 	type KeybindSection,
 	setActiveKeybindCatalog,
 } from "../../shared/keybinds";
@@ -109,7 +111,7 @@ import {
 } from "../../shared/navigation/destinations";
 import { destinationPageKeybindCatalog } from "../../shared/navigation/keybinds";
 import { LocationPicker } from "../../shared/navigation/LocationPicker";
-import { configDir, themeSettingsPath } from "../../shared/preferences";
+import { themeSettingsPath } from "../../shared/preferences";
 import {
 	breadcrumb,
 	createPageNavigation,
@@ -543,7 +545,6 @@ export function App(props: {
 			themes: themeNames,
 			activeTheme: getActiveThemeName(),
 			clientSettingsPath: themeSettingsPath(),
-			customThemeDir: join(configDir(), "themes"),
 			section: settingsSection() ?? "appearance",
 			agents: {
 				scope: settingsProjectIdent() ? "project" : "user",
@@ -1201,6 +1202,21 @@ export function App(props: {
 		// The initial history load and live OTLP receiver pushes mutate the store
 		// directly (shell-owned), so refresh the mounted views on every change.
 		const unsubscribeTraceStore = traceStore.onChange(refresh);
+		// Raw input recording for the `Alt+D` diagnostics report: the keymap layers
+		// consume most keys before the shell dispatcher sees them, so the report has
+		// to record what the terminal delivered, not what reached this handler.
+		const recordKey = (event: KeyEvent) => {
+			lastKeyText = describeKey(event);
+			recentKeys.push(lastKeyText);
+			if (recentKeys.length > 8) recentKeys.shift();
+		};
+		// The keymap's pre-dispatch hook: a plain renderer listener misses every key
+		// a feature layer consumes (those stop propagation), which is exactly the
+		// set the report has to show.
+		const disposeKeyRecording = props.dashboard
+			? props.dashboard.keymap.intercept("key", (ctx) => recordKey(ctx.event))
+			: undefined;
+		renderer.keyInput.on("keypress", recordKey);
 		// Focus restoration (task 3.1): when an overlay closes, return key
 		// ownership to the underlying view by clearing the parked modal state.
 		const disposeFocusRestorers = [
@@ -1210,6 +1226,11 @@ export function App(props: {
 			"wiki",
 		].map((id) =>
 			registerFocusRestorer(id, () => {
+				// The embedded environment names its own dialog through the same
+				// field and the shell's modal mirror already restores the value it
+				// parked, so clearing the field here would strip a still-open
+				// environment dialog of the layer that handles its keys.
+				if (id === "environments") return;
 				props.dashboard?.keymap.setData("modal.active", "none");
 			}),
 		);
@@ -1222,6 +1243,8 @@ export function App(props: {
 			unsubscribeTelemetry();
 			if (catalogPoll) clearInterval(catalogPoll);
 			stopSidebarPresentation();
+			renderer.keyInput.off("keypress", recordKey);
+			disposeKeyRecording?.();
 			unsubscribeTraceStore();
 			for (const dispose of disposeFocusRestorers) dispose();
 		});
@@ -1302,6 +1325,69 @@ export function App(props: {
 		return true;
 	};
 
+	/** Last keys the shell dispatcher saw, for the diagnostics report: the raw
+	 * event as the terminal delivered it, so a key that never matches a binding
+	 * (a different layout, a terminal that reports another name) is visible. */
+	let lastKeyText = "none";
+	const recentKeys: string[] = [];
+	const describeKey = (event: KeyEvent): string => {
+		const modifiers = [
+			event.ctrl ? "ctrl" : "",
+			event.meta ? "alt" : "",
+			event.shift ? "shift" : "",
+		]
+			.filter(Boolean)
+			.join("+");
+		const sequence = (event as KeyEvent & { sequence?: string }).sequence;
+		const raw =
+			sequence === undefined ? "" : ` seq=${JSON.stringify(sequence)}`;
+		return `${modifiers ? `${modifiers}+` : ""}${event.name}${raw}`;
+	};
+
+	/**
+	 * Live keymap ownership for the `Ctrl+Shift+D` report: which page the shell
+	 * thinks it shows, which body owns it, and the fields every feature layer
+	 * gates on — plus whether the environment's own layers currently match.
+	 * Support tooling: a surface whose keys "do nothing" can be told apart from a
+	 * dead keyboard without a rebuild.
+	 */
+	const keybindDiagnostics = (event: KeyEvent): string => {
+		const keymap = props.dashboard?.keymap;
+		const field = (name: string): string => {
+			const value = keymap?.getData?.(name);
+			return value === undefined ? "unset" : JSON.stringify(value);
+		};
+		const bindings = (command: string): number =>
+			keymap
+				?.getCommandBindings({ commands: [command], visibility: "active" })
+				.get(command)?.length ?? 0;
+		return [
+			// The keys the terminal delivered come first: they are what a
+			// screenshot must show, and the fields below explain the rest.
+			`key                       ${describeKey(event)}`,
+			`previous key              ${lastKeyText}`,
+			`last keys                 ${recentKeys.length ? recentKeys.join(" | ") : "none"}`,
+			`env table bindings        ${bindings("table.handle")}`,
+			`env modal bindings        ${bindings("modal.first-steps.handle")}`,
+			`page                      ${currentPage()}`,
+			`feature                   ${String(activeFeature() ?? "none")}`,
+			`shell.feature             ${field("shell.feature")}`,
+			`app.viewMode              ${field("app.viewMode")}`,
+			`app.activeTab             ${field("app.activeTab")}`,
+			`modal.active              ${field("modal.active")}`,
+			`modal.active.environments ${field("modal.active.environments")}`,
+			`textEntry.active          ${field("textEntry.active")}`,
+			// Footer projection detail: which catalog the shell footer reads.
+			`footer catalog            ${catalogKeybinds(activeKeybindCatalog()).length} entries, context ${String(activeKeybindContext() ?? "none")} / footer ${footerKeybinds(activeKeybindCatalog(), activeKeybindContext()).length}`,
+			`footer keys               ${footerKeybinds(
+				activeKeybindCatalog(),
+				activeKeybindContext(),
+			)
+				.map((keybind) => keybind.key)
+				.join(", ")}`,
+		].join("\n");
+	};
+
 	const handleKey = (event: KeyEvent) => {
 		const key = event.name.toLowerCase();
 		const ename = event.name;
@@ -1313,6 +1399,13 @@ export function App(props: {
 		if (activeErrorModal()) {
 			if (key === "escape" || key === "enter" || key === "return")
 				dismissErrorModal();
+			return;
+		}
+		// Support tool: report the fields every feature layer gates on, so "nothing
+		// responds on this surface" can be told apart from "the keyboard is dead"
+		// without rebuilding. Stays until dismissed like any other modal.
+		if (event.meta && key === "d") {
+			showErrorModal("Keybind diagnostics", keybindDiagnostics(event));
 			return;
 		}
 		const traceDashModal = props.dashboard
@@ -1365,6 +1458,17 @@ export function App(props: {
 				return;
 			}
 			if (key === "?" && handleModalHelpKey(key)) {
+				return;
+			}
+			// A feature-owned dialog publishes no shell-registered catalog, so the
+			// automatic entry cannot open anything: `?` still opens the shared help
+			// over it (the surface catalog it renders is the one the feature
+			// publishes), exactly like the shell's own overlays.
+			if (key === "?" && !isShellOwnedOverlay(nav.modal())) {
+				setHelpOffset(0);
+				// The feature id only: the `activeFeatureId` helper is declared
+				// further down this handler and is not initialized yet here.
+				nav.pushModal("help", activeFeature() ?? activeTab());
 				return;
 			}
 		}

@@ -8,8 +8,10 @@ import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
 import { Show } from "solid-js";
 import { uiColors } from "../colors";
+import { hostBodyLines } from "../hostChrome";
 import type { Route } from "../routes";
-import { SelectableList } from "../Selectable";
+import { ScrollableList } from "../ScrollableList";
+import { Selectable } from "../Selectable";
 import type { DestinationEntry } from "./destinations";
 
 export interface DestinationPageProps {
@@ -28,7 +30,7 @@ export interface DestinationPageProps {
  */
 export function DestinationPage(props: DestinationPageProps) {
 	const dimensions = useTerminalDimensions();
-	const itemHeight = () => (dimensions().width < 80 ? 2 : 2);
+	const itemHeight = 2;
 	return (
 		<box
 			backgroundColor={uiColors.bgBase}
@@ -48,24 +50,30 @@ export function DestinationPage(props: DestinationPageProps) {
 					</box>
 				}
 			>
-				<SelectableList
+				<ScrollableList
 					items={props.entries}
 					selectedIndex={props.selectedIndex}
-					onSelect={props.onSelectIndex}
-					itemHeight={itemHeight()}
-					focusable={false}
-					renderItem={(entry, selected) => (
-						<box style={{ flexDirection: "column" }}>
-							<text
-								fg={selected ? uiColors.primary : uiColors.textPrimary}
-								attributes={selected ? TextAttributes.BOLD : undefined}
-							>
-								{entry.label}
-							</text>
-							<Show when={entry.description}>
-								<text fg={uiColors.textMuted}>{entry.description}</text>
-							</Show>
-						</box>
+					availableLines={hostBodyLines(dimensions().height)}
+					estimatedItemHeight={itemHeight}
+					showScrollIndicator={false}
+					renderItem={(entry, isSelected, index) => (
+						<Selectable
+							height={itemHeight}
+							selected={isSelected()}
+							onMouseUp={() => props.onSelectIndex(index)}
+						>
+							<box style={{ flexDirection: "column" }}>
+								<text
+									fg={isSelected() ? uiColors.primary : uiColors.textPrimary}
+									attributes={isSelected() ? TextAttributes.BOLD : undefined}
+								>
+									{entry.label}
+								</text>
+								<Show when={entry.description}>
+									<text fg={uiColors.textMuted}>{entry.description}</text>
+								</Show>
+							</box>
+						</Selectable>
 					)}
 				/>
 			</Show>

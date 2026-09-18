@@ -15,6 +15,7 @@ import {
 	runtimeModels,
 } from "../../../workflow/profiles.ts";
 import { VERIFIER_ROLES } from "../../../workflow/steps/verification.ts";
+import { useModalContentLines } from "../../shared/GenericModal";
 import {
 	agentConfigEntry,
 	refreshAgentConfig,
@@ -172,6 +173,14 @@ export function ModelConfigModal(props: {
 	onKeyReady: (handler: (key: KeyEvent) => boolean) => void;
 	repository?: string;
 }) {
+	/**
+	 * Rows the menu list may paint. The dialog's content area also holds the two
+	 * source note lines below the list, and the "Manage" field label above it,
+	 * so the list takes what is left. `useModalContentLines` reports the area the
+	 * enclosing dialog resolved.
+	 */
+	const menuLines = () => Math.max(2, (modalContentLines?.() ?? 8) - 3);
+	const modalContentLines = useModalContentLines();
 	const [view, setView] = createSignal<View>("menu");
 	const [menuIndex, setMenuIndex] = createSignal(0);
 	const [listIndex, setListIndex] = createSignal(0);
@@ -762,6 +771,7 @@ export function ModelConfigModal(props: {
 					<box width="100%" height="100%" flexDirection="column">
 						<SelectableList
 							items={["Profiles", "Presets"]}
+							availableLines={menuLines()}
 							selectedIndex={menuIndex()}
 							renderItem={(item, active) => (
 								<text fg={active ? uiColors.primary : uiColors.textSecondary}>

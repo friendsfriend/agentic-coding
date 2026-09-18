@@ -29,8 +29,7 @@ unavailable or unauthorized server is a section error with a retry.
 
 | Setting | Section | Owner | Scope | Storage | Secret | Effect | Editable |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Active theme | Appearance | `src/tui/shared/preferences.ts` | client | `$AGENTIC_CODING_CONFIG_DIR/tui.json` · `theme` | no | immediate | yes (shared theme picker) |
-| Custom themes | Appearance | `src/tui/shared/preferences.ts` | client | `$AGENTIC_CODING_CONFIG_DIR/themes/*.json` | no | restart | no (file-only; loaded at startup) |
+| Theme | Appearance | `src/tui/shared/preferences.ts` | client | `$AGENTIC_CODING_CONFIG_DIR/tui.json` · `theme` | no | immediate | yes (shared theme picker) |
 | Agent profiles | Agent models/presets | `src/server/config.ts` | user / project | `[agents.profiles]` in the layered workflow config | no | next workflow start | yes (shared profile/preset editor) |
 | Configuration presets | Agent models/presets | `src/server/config.ts` | user / project | `[agents.presets]` in the layered workflow config | no | next workflow start | yes (shared profile/preset editor) |
 | Routing and definition defaults | Agent models/presets | `src/workflow/profiles.ts` | user | `[agents]` `default_profile`, `routes`, `role_routes`, `definition_defaults` | no | next workflow start | no (no bounded editor; shown read-only with its source) |

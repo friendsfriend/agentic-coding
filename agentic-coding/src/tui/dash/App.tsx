@@ -2736,6 +2736,7 @@ export function App(props: {
 									>
 										<SelectableList
 											items={artifacts()}
+											availableLines={Math.min(artifacts().length, 5)}
 											selectedIndex={
 												activePanel() === 6 ? selectedArtifact() : -1
 											}
@@ -2770,6 +2771,7 @@ export function App(props: {
 							>
 								<SelectableList
 									items={data().agents}
+									estimatedItemHeight={4}
 									selectedIndex={activePanel() === 1 ? selectedAgent() : -1}
 									renderItem={(agent, _selected) => {
 										const timeline = () =>

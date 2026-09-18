@@ -107,8 +107,6 @@ export interface SettingsContext {
 	activeTheme: string;
 	/** `$AGENTIC_CODING_CONFIG_DIR/tui.json`, the client-local preference file. */
 	clientSettingsPath: string;
-	/** `$AGENTIC_CODING_CONFIG_DIR/themes`, loaded at startup. */
-	customThemeDir: string;
 	/** The Settings page this snapshot is rendered for. */
 	section: SettingsSection;
 	agents: AgentStatus;
@@ -137,29 +135,11 @@ function appearanceItems(context: SettingsContext): SettingsItem[] {
 	return [
 		{
 			id: "appearance.theme",
-			label: "Active theme",
+			label: "Theme",
 			value: context.activeTheme,
-			detail: `${inventoryDetail("appearance.theme")} · ${context.clientSettingsPath}`,
+			detail: "Changes the colorscheme of the application",
 			editable: true,
 			action: { kind: "theme-picker" },
-		},
-		{
-			id: "appearance.theme-picker",
-			label: "Choose a theme…",
-			value: `${context.themes.length} available`,
-			detail: `reuses the theme picker · ${context.clientSettingsPath}`,
-			editable: true,
-			action: { kind: "theme-picker" },
-		},
-		{
-			id: "appearance.custom-themes",
-			label: "Custom themes (files)",
-			value: context.customThemeDir,
-			detail: `${inventoryDetail(
-				"appearance.custom-themes",
-			)} · add or edit a theme file and restart`,
-			editable: false,
-			action: { kind: "none" },
 		},
 	];
 }

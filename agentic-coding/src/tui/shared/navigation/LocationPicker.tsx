@@ -3,10 +3,11 @@
 // It reuses the existing modal framing, selection list and search header rather
 // than introducing a second overlay style: a bounded, searchable list of known
 // destinations that jumps straight to a page.
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import { uiColors } from "../colors";
 import { GenericModal } from "../GenericModal";
 import type { Route } from "../routes";
+import { ScrollableList } from "../ScrollableList";
 import { Selectable } from "../Selectable";
 import { type DestinationEntry, filterPickerEntries } from "./destinations";
 import {
@@ -49,39 +50,41 @@ export function LocationPicker(props: LocationPickerProps) {
 						</box>
 					}
 				>
-					<For each={matches()}>
-						{(entry, index) => {
-							const selected = () => index() === props.selectedIndex;
-							return (
-								<Selectable
-									selected={selected()}
-									onMouseUp={() => {
-										props.onSelectIndex(index());
-										props.onAccept(entry.route);
+					<ScrollableList
+						items={matches()}
+						selectedIndex={props.selectedIndex}
+						estimatedItemHeight={2}
+						showScrollIndicator={false}
+						renderItem={(entry, isSelected, index) => (
+							<Selectable
+								height={2}
+								selected={isSelected()}
+								onMouseUp={() => {
+									props.onSelectIndex(index);
+									props.onAccept(entry.route);
+								}}
+							>
+								<box
+									style={{
+										flexDirection: "column",
+										paddingLeft: 2,
+										paddingRight: 2,
 									}}
 								>
-									<box
-										style={{
-											flexDirection: "column",
-											paddingLeft: 2,
-											paddingRight: 2,
-										}}
+									<text
+										fg={isSelected() ? uiColors.primary : uiColors.textPrimary}
 									>
-										<text
-											fg={selected() ? uiColors.primary : uiColors.textPrimary}
-										>
-											{entry.label}
+										{entry.label}
+									</text>
+									<Show when={entry.description}>
+										<text fg={uiColors.textMuted}>
+											{entry.group} · {entry.description}
 										</text>
-										<Show when={entry.description}>
-											<text fg={uiColors.textMuted}>
-												{entry.group} · {entry.description}
-											</text>
-										</Show>
-									</box>
-								</Selectable>
-							);
-						}}
-					</For>
+									</Show>
+								</box>
+							</Selectable>
+						)}
+					/>
 				</Show>
 			</box>
 		</GenericModal>

@@ -1,6 +1,16 @@
 import { describe, expect, it } from "bun:test";
 import { observabilityKeybindCatalog } from "../../src/tui/otel/app/keybinds";
-import { catalogKeybinds, footerKeybinds } from "../../src/tui/shared/keybinds";
+import {
+	catalogKeybinds,
+	footerKeybinds,
+	keybindFooterLabel,
+} from "../../src/tui/shared/keybinds";
+
+/** The label a footer surface actually renders for an entry. */
+const footerLabels = (
+	...args: Parameters<typeof observabilityKeybindCatalog>
+): string[] =>
+	footerKeybinds(observabilityKeybindCatalog(...args)).map(keybindFooterLabel);
 
 const actions = (options: Parameters<typeof observabilityKeybindCatalog>[0]) =>
 	catalogKeybinds(observabilityKeybindCatalog(options)).map((kb) => kb.action);
@@ -13,7 +23,7 @@ describe("observability shell keybind catalog", () => {
 		expect(wiki).toContain("next/previous note");
 		expect(wiki).toContain("finish review");
 		expect(wiki).toContain("refresh");
-		expect(wiki).toContain("help");
+		expect(wiki).toContain("Open help");
 	});
 
 	it("does not advertise the theme picker on the wiki tab", () => {
@@ -28,7 +38,7 @@ describe("observability shell keybind catalog", () => {
 			const footer = footerKeybinds(
 				observabilityKeybindCatalog({ tab, view: "selection" }),
 			);
-			expect(footer.map((kb) => kb.action)).toContain("help");
+			expect(footer.map(keybindFooterLabel)).toContain("help");
 		}
 		for (const view of ["selection", "detail", "span"] as const) {
 			const footer = footerKeybinds(
@@ -44,10 +54,12 @@ describe("observability shell keybind catalog", () => {
 			view: "selection",
 		});
 		const all = catalogKeybinds(catalog).map((kb) => kb.action);
-		const footer = footerKeybinds(catalog).map((kb) => kb.action);
+		const footer = footerKeybinds(catalog).map(keybindFooterLabel);
 		expect(all).toContain("select trace");
 		expect(footer).not.toContain("select trace");
-		expect(footer).toContain("help");
+		expect(footerLabels({ tab: "traces", view: "selection" })).toContain(
+			"help",
+		);
 	});
 
 	it("advertises the view-independent traces keys in the detail and span views", () => {

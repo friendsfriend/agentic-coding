@@ -506,6 +506,15 @@ export function TUIApp(props: TUIAppProps) {
 	// The feature reports where it went (a table selection opening the detail
 	// view, a CR detail opening its jobs, …) so the route follows the same
 	// operations the mouse and keys perform.
+	//
+	// A report is a *move*, so only a changed destination is reported. The store
+	// changes for reasons that are not a move — closing a detail clears its
+	// resource, the shell applying a route request lands after this effect has
+	// already been scheduled — and re-reporting the destination the store still
+	// holds would navigate the shell away from the page the user just chose (the
+	// category list made it visible: Enter on a highlighted destination opened
+	// the first one, and a picker jump fell back to the previous category).
+	let reportedDestination: string | undefined;
 	createEffect(() => {
 		const destination = props.destination;
 		if (!destination?.onChange) return;
@@ -514,6 +523,9 @@ export function TUIApp(props: TUIAppProps) {
 		const view = viewPathForMode(mode);
 		const resourceId =
 			mode === "appDetail" ? appDetailStore.appDetailApp()?.ident : undefined;
+		const identity = `${category}|${view}|${resourceId ?? ""}`;
+		if (identity === reportedDestination) return;
+		reportedDestination = identity;
 		destination.onChange({
 			category,
 			view,
@@ -571,6 +583,7 @@ export function TUIApp(props: TUIAppProps) {
 		kbStores,
 		() => setKeymapVersion((version) => version + 1),
 		props.embedded ? props.active : undefined,
+		Boolean(props.embedded),
 	);
 	createEffect(() => {
 		if (!props.embedded || !props.onModalChange) return;

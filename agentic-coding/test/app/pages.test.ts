@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { footerKeybinds } from "../../src/tui/shared/keybinds";
 import {
 	breadcrumbSegments,
 	breadcrumbWidth,
@@ -210,9 +211,18 @@ describe("page keybind catalogs", () => {
 		expect(keys).toContain("Ctrl+P");
 		expect(keys).toContain("?");
 		expect(keys.some((key) => /^[0-9]/.test(key))).toBe(false);
-		// Navigation stays in the catalog but out of the footer.
+		// Pure navigation stays in the catalog but out of the footer; the page's own
+		// action (`Enter` opens the highlighted destination) is advertised, so a
+		// destination page never looks like it has no keys left.
 		const navigation = catalog[0].keybinds;
-		expect(navigation.every((keybind) => keybind.standard)).toBe(true);
+		expect(
+			navigation
+				.filter((keybind) => keybind.action !== "open destination")
+				.every((keybind) => keybind.standard),
+		).toBe(true);
+		expect(footerKeybinds(catalog).map((keybind) => keybind.action)).toContain(
+			"open destination",
+		);
 	});
 
 	test("the picker catalog documents search, open and close", () => {

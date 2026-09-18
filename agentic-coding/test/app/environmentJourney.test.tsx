@@ -27,7 +27,7 @@ import { LogStore } from "../../src/tui/otel/model/logStore";
 import { MetricStore } from "../../src/tui/otel/model/metricStore";
 import { TopologyStore } from "../../src/tui/otel/model/topologyStore";
 import { TraceStore } from "../../src/tui/otel/model/traceStore";
-import { advance, renderUntil } from "./support/terminal";
+import { advance, pressEscapeAndSettle, renderUntil } from "./support/terminal";
 
 const json = (value: unknown) =>
 	new Response(JSON.stringify(value), {
@@ -118,10 +118,12 @@ function stubEnvironmentServer(
 
 async function renderShell() {
 	const db = new TraceDb(mkdtempSync(join(tmpdir(), "environment-journey-")));
+	let shellKeymap: ReturnType<typeof createDefaultOpenTuiKeymap> | undefined;
 	const t = await testRender(
 		() => {
 			const renderer = useRenderer();
 			const keymap = createDefaultOpenTuiKeymap(renderer);
+			shellKeymap = keymap;
 			const disposeShell = setupKeymap(keymap);
 			keymap.setData("app.view", "home");
 			keymap.setData("modal.active", "none");
@@ -161,7 +163,14 @@ async function renderShell() {
 	);
 	await renderUntil(t, (frame) => frame.includes("›"));
 	await advance(t, 12, 80);
-	return { t, db };
+	return {
+		t,
+		db,
+		keymap: () => {
+			if (!shellKeymap) throw new Error("shell keymap is not mounted");
+			return shellKeymap;
+		},
+	};
 }
 
 test("the environment page journey keeps one hierarchy step per key", async () => {
@@ -285,3 +294,220 @@ test("the first-start dialog keeps its keys on an unconfigured install", async (
 		db.close();
 	}
 }, 30_000);
+
+test("every environment category opens from the list cursor and keeps the shell keys", async () => {
+	stubEnvironmentServer();
+	const { t, db, keymap } = await renderShell();
+	const activeTab = (): unknown => keymap().getData?.("app.activeTab");
+	const categories = [
+		"Applications",
+		"Libraries",
+		"Infrastructure",
+		"Scripts",
+		"Kubernetes",
+	];
+	try {
+		// Home → Environments: the category list, whose cursor is the only
+		// keyboard way into the five environment destinations.
+		t.mockInput.pressEnter();
+		await renderUntil(t, (frame) => crumbOf(frame) === "Home › Environments");
+		await advance(t, 6);
+
+		for (const [index, label] of categories.entries()) {
+			// The list cursor is remembered per page, so walk back to its first row
+			// before counting down to the wanted one.
+			for (let step = 0; step < 6; step += 1) {
+				t.mockInput.pressKey("k");
+				await advance(t, 2);
+			}
+			for (let step = 0; step < index; step += 1) {
+				t.mockInput.pressKey("j");
+				await advance(t, 2);
+			}
+			t.mockInput.pressEnter();
+			const page = `Home › Environments › ${label}`;
+			await renderUntil(t, (frame) => crumbOf(frame) === page, 30);
+			await advance(t, 8);
+			// The cursor's row is the page that opens, and the body is told which
+			// category it is showing (a stale report used to drag the shell back to
+			// the previous category).
+			expect(crumbOf(t.captureCharFrame())).toBe(page);
+			expect(activeTab()).toBe(label.toLowerCase());
+
+			// The shell owns its globals on this page: `?` is the shared help
+			// catalog (the body does not open its own help page over it) and
+			// Ctrl+P the one location picker.
+			t.mockInput.pressKey("?");
+			await renderUntil(t, (frame) => frame.includes("Keybindings"), 20);
+			expect(t.captureCharFrame()).toContain("Keybindings");
+			await pressEscapeAndSettle(t, (frame) => !frame.includes("Keybindings"));
+			t.mockInput.pressKey("p", { ctrl: true });
+			await renderUntil(t, (frame) => frame.includes("Locations"), 20);
+			expect(t.captureCharFrame()).toContain("Locations");
+			await pressEscapeAndSettle(t, (frame) => !frame.includes("Locations"));
+			await advance(t, 4);
+
+			// Back to the list for the next category.
+			await pressEscapeAndSettle(
+				t,
+				(frame) => crumbOf(frame) === "Home › Environments",
+			);
+			await advance(t, 6);
+		}
+	} finally {
+		t.renderer.destroy();
+		db.close();
+	}
+}, 60_000);
+
+test("an empty environment keeps the shell keys over its first-start dialog", async () => {
+	// No configured entries: the body's first-start dialog is open over the empty
+	// table, and the feature's own dialog layers must not take the shell's globals
+	// (`?` help and Ctrl+P locations) for the whole surface.
+	stubEnvironmentServer([]);
+	const { t, db } = await renderShell();
+	const dialogVisible = () =>
+		t.captureCharFrame().includes("Welcome to DevEnv");
+	try {
+		t.mockInput.pressEnter();
+		await renderUntil(t, (frame) => crumbOf(frame) === "Home › Environments");
+		await advance(t, 6);
+		t.mockInput.pressEnter();
+		await renderUntil(
+			t,
+			(frame) => crumbOf(frame) === "Home › Environments › Applications",
+		);
+		await advance(t, 10);
+		console.log(
+			`DIALOG frame:\n` +
+				t
+					.captureCharFrame()
+					.split("\n")
+					.slice(0, 14)
+					.map(
+						(line, index) =>
+							`${index + 1}:${JSON.stringify(line.slice(0, 80))}`,
+					)
+					.join("\n"),
+		);
+		expect(dialogVisible()).toBe(true);
+
+		// `?` is the shared help catalog, not the environment's own help page: the
+		// page must not move and the dialog comes back when the overlay closes.
+		t.mockInput.pressKey("?");
+		await renderUntil(t, (frame) => frame.includes("Keybindings"), 20);
+		expect(crumbOf(t.captureCharFrame())).toBe(
+			"Home › Environments › Applications",
+		);
+		await pressEscapeAndSettle(t, (frame) => !frame.includes("Keybindings"));
+		expect(dialogVisible()).toBe(true);
+
+		// The one location picker works over the dialog too.
+		t.mockInput.pressKey("p", { ctrl: true });
+		await renderUntil(t, (frame) => frame.includes("Locations"), 20);
+		expect(t.captureCharFrame()).toContain("Locations");
+		await pressEscapeAndSettle(t, (frame) => !frame.includes("Locations"));
+		expect(dialogVisible()).toBe(true);
+
+		// Escape still closes the dialog without leaving the page.
+		await pressEscapeAndSettle(
+			t,
+			(frame) => !frame.includes("Welcome to DevEnv"),
+		);
+		expect(crumbOf(t.captureCharFrame())).toBe(
+			"Home › Environments › Applications",
+		);
+	} finally {
+		t.renderer.destroy();
+		db.close();
+	}
+}, 60_000);
+
+test("a hidden body's modal state cannot park the environment dialog", async () => {
+	// The dashboard and the wiki write the shared `modal.active` field while
+	// their body is hidden behind the environment page, and every environment
+	// layer requires it to be "none". With one shared field that write parked the
+	// whole feature: the dialog went inert, Escape stepped the page up instead of
+	// dismissing it, and the surface looked like it had no keybindings left. The
+	// environment owns its own field now, so a foreign write is inert.
+	stubEnvironmentServer([]);
+	const { t, db, keymap } = await renderShell();
+	const dialogVisible = () =>
+		t.captureCharFrame().includes("Welcome to DevEnv");
+	try {
+		t.mockInput.pressEnter();
+		await renderUntil(t, (frame) => crumbOf(frame) === "Home › Environments");
+		await advance(t, 6);
+		t.mockInput.pressEnter();
+		await renderUntil(
+			t,
+			(frame) => crumbOf(frame) === "Home › Environments › Applications",
+		);
+		await advance(t, 8);
+		expect(dialogVisible()).toBe(true);
+		expect(keymap().getData?.("modal.active.environments")).toBe("first-steps");
+
+		// A hidden body writes its own modal field.
+		keymap().setData("modal.active", "none");
+		await advance(t, 6);
+
+		// The dialog still owns its keys: Enter opens the selected step.
+		t.mockInput.pressEnter();
+		await renderUntil(t, (frame) => frame.includes("Add Provider"), 20);
+		expect(t.captureCharFrame()).toContain("Add Provider");
+
+		// Escape closes that step and returns to the dialog, without leaving the
+		// page.
+		await pressEscapeAndSettle(t, (frame) =>
+			frame.includes("Welcome to DevEnv"),
+		);
+		expect(dialogVisible()).toBe(true);
+		expect(crumbOf(t.captureCharFrame())).toBe(
+			"Home › Environments › Applications",
+		);
+
+		// And the dialog itself still closes on Escape.
+		await pressEscapeAndSettle(
+			t,
+			(frame) => !frame.includes("Welcome to DevEnv"),
+		);
+		expect(dialogVisible()).toBe(false);
+		expect(crumbOf(t.captureCharFrame())).toBe(
+			"Home › Environments › Applications",
+		);
+	} finally {
+		t.renderer.destroy();
+		db.close();
+	}
+}, 60_000);
+
+test("the keybind diagnostics report the live keymap state on an environment page", async () => {
+	// Support tooling, and the check for this whole class of bug: the shell must
+	// answer on an environment page even though the body owns the keyboard, and
+	// the report names every field the feature layers gate on.
+	stubEnvironmentServer();
+	const { t, db } = await renderShell();
+	try {
+		t.mockInput.pressEnter();
+		await renderUntil(t, (frame) => crumbOf(frame) === "Home › Environments");
+		await advance(t, 6);
+		t.mockInput.pressEnter();
+		await renderUntil(
+			t,
+			(frame) => crumbOf(frame) === "Home › Environments › Applications",
+		);
+		await advance(t, 8);
+
+		t.mockInput.pressKey("d", { meta: true });
+		await renderUntil(t, (frame) => frame.includes("Keybind diagnostics"), 20);
+		const frame = t.captureCharFrame();
+		expect(frame).toContain("Keybind diagnostics");
+		expect(frame).toContain("shell.feature");
+		expect(frame).toContain('"environments"');
+		expect(frame).toContain("modal.active.environments");
+		expect(frame).toContain("env table bindings");
+	} finally {
+		t.renderer.destroy();
+		db.close();
+	}
+}, 60_000);

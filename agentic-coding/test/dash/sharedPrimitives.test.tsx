@@ -145,10 +145,11 @@ test("SelectableList keeps the selection in view for plain-value and accessor co
 	const items = Array.from({ length: 40 }, (_, i) => `Item ${i}`);
 	const t = await testRender(
 		() => (
-			<box flexDirection="column" width={40} height={8}>
+			<box flexDirection="column" width={40} height={12}>
 				<DashSelectableList
 					items={items}
 					selectedIndex={dashSelected()}
+					availableLines={8}
 					renderItem={(item, active) => (
 						<text fg={active ? "red" : undefined}>
 							d {active ? ">" : " "} {item}
@@ -160,6 +161,7 @@ test("SelectableList keeps the selection in view for plain-value and accessor co
 				<OtelSelectableList
 					items={items}
 					selectedIndex={otelSelected}
+					availableLines={3}
 					renderItem={(item, active) => (
 						<text fg={active ? "red" : undefined}>
 							o {active ? ">" : " "} {item}

@@ -1,11 +1,11 @@
 /** @jsxImportSource @opentui/solid */
-import type { KeyEvent, Renderable, ScrollBoxRenderable } from "@opentui/core";
+import type { KeyEvent, Renderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
+import { useTerminalDimensions } from "@opentui/solid";
 import {
 	createEffect,
 	createMemo,
 	createSignal,
-	For,
 	onCleanup,
 	onMount,
 	Show,
@@ -25,8 +25,10 @@ import {
 import { MarkdownViewModal } from "../../dash/devenv-ui/components/MarkdownViewModal";
 import type { Discussion } from "../../dash/devenv-ui/types";
 import { showErrorModal } from "../../shared/errorModal";
+import { hostBodyLines } from "../../shared/hostChrome";
+import { ScrollableList } from "../../shared/ScrollableList";
+import { Selectable } from "../../shared/Selectable";
 import { notify } from "../app/notifications";
-import { ScrollableContent } from "../components/ScrollableContent";
 import { uiColors } from "../ui/colors";
 
 export interface WikiViewProps {
@@ -78,6 +80,7 @@ export const wikiCommentEntryActive = () => wikiCommentEntry();
 
 /** Home-mode browser for the centralized OKF wiki and its temporary review. */
 export function WikiView(props: WikiViewProps) {
+	const size = useTerminalDimensions();
 	const [state, setState] = createSignal<WikiLoadState>({ kind: "loading" });
 	const [selected, setSelected] = createSignal(0);
 	const [expanded, setExpanded] = createSignal<Set<string>>(new Set());
@@ -131,13 +134,6 @@ export function WikiView(props: WikiViewProps) {
 		return current.kind === "ready"
 			? flattenWikiTree(current.tree, expanded())
 			: [];
-	});
-	let treeScroll: ScrollBoxRenderable | undefined;
-	createEffect(() => {
-		const index = selected();
-		rows();
-		const child = treeScroll?.getChildren()[0]?.getChildren()[index];
-		if (child) treeScroll?.scrollChildIntoView(child.id);
 	});
 	const concepts = createMemo<WikiConcept[]>(() => {
 		const current = state();
@@ -437,30 +433,20 @@ export function WikiView(props: WikiViewProps) {
 			<Show when={state().kind === "ready" && !note()}>
 				<box style={{ flexDirection: "row", flexGrow: 1, minHeight: 0 }}>
 					<box style={{ width: "100%", flexDirection: "column" }}>
-						<ScrollableContent
-							onScrollBoxReady={(scrollBox) => {
-								treeScroll = scrollBox;
-							}}
-						>
-							<For each={rows()}>
-								{(row, index) => (
-									<box
-										height={1}
-										paddingLeft={1}
-										backgroundColor={
-											index() === selected()
-												? uiColors.primary
-												: uiColors.bgBase
-										}
-										onMouseUp={() => setSelected(index())}
-									>
-										<text
-											fg={
-												index() === selected()
-													? uiColors.bgBase
-													: uiColors.textPrimary
-											}
-										>
+						<ScrollableList
+							items={rows()}
+							selectedIndex={selected()}
+							availableLines={hostBodyLines(size().height)}
+							estimatedItemHeight={1}
+							showScrollIndicator={false}
+							renderItem={(row, isSelected, index) => (
+								<Selectable
+									height={1}
+									selected={isSelected()}
+									onMouseUp={() => setSelected(index)}
+								>
+									<box height={1} paddingLeft={1}>
+										<text fg={uiColors.textPrimary}>
 											{"  ".repeat(row.depth)}
 											{row.kind === "directory"
 												? expanded().has(row.id)
@@ -470,9 +456,9 @@ export function WikiView(props: WikiViewProps) {
 											{row.label}
 										</text>
 									</box>
-								)}
-							</For>
-						</ScrollableContent>
+								</Selectable>
+							)}
+						/>
 					</box>
 				</box>
 			</Show>

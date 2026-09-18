@@ -1,6 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import { TextAttributes } from "@opentui/core";
+import { useTerminalDimensions } from "@opentui/solid";
 import { createMemo } from "solid-js";
+import { hostBodyLines } from "../../shared/hostChrome";
 import { SearchHeader } from "../components/SearchHeader";
 import { SelectableList } from "../components/Selectable";
 import type { LogStore } from "../model/logStore";
@@ -19,7 +21,10 @@ export function LogsView(props: {
 	onSelectIndex: (index: number) => void;
 	onOpen: (index: number) => void;
 }) {
+	const size = useTerminalDimensions();
 	const logs = createMemo(() => props.store.getLogs());
+	// The view's own search header takes one row above the list.
+	const listLines = () => Math.max(1, hostBodyLines(size().height) - 1);
 
 	return (
 		<box flexDirection="column" width="100%" height="100%">
@@ -29,6 +34,7 @@ export function LogsView(props: {
 			{logs().length > 0 && (
 				<SelectableList
 					items={logs()}
+					availableLines={listLines()}
 					selectedIndex={props.selectedIndex}
 					renderItem={(log) => (
 						<box

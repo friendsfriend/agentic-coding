@@ -119,7 +119,6 @@ describe("settings inventory", () => {
 					themes: ["catppuccin"],
 					activeTheme: "catppuccin",
 					clientSettingsPath: "/tmp/tui.json",
-					customThemeDir: "/tmp/themes",
 					section: "agents",
 					agents: {
 						scope: "user",
@@ -385,7 +384,6 @@ describe("section items surface every inventoried setting", () => {
 			themes: ["catppuccin", "dracula"],
 			activeTheme: "catppuccin",
 			clientSettingsPath: "/tmp/tui.json",
-			customThemeDir: "/tmp/themes",
 			section,
 			agents: {
 				scope: "project",

@@ -2020,6 +2020,53 @@ const FOOTER_LABELS = new Map<string, string>([
 	["Close", "Close"],
 ]);
 
+/** Display key → keymap binding name (`Ctrl+P` → `ctrl+p`, `↑` → `up`, …). */
+const BINDING_NAMES: Readonly<Record<string, string>> = {
+	"\u2191": "up",
+	"\u2193": "down",
+	"\u2190": "left",
+	"\u2192": "right",
+	Enter: "enter",
+	Esc: "escape",
+	Tab: "tab",
+	"Shift+Tab": "shift+tab",
+	Space: "space",
+};
+
+export function bindingName(display: string): string {
+	const trimmed = display.trim();
+	const mapped = BINDING_NAMES[trimmed];
+	if (mapped) return mapped;
+	if (trimmed.startsWith("Ctrl+"))
+		return `ctrl+${trimmed.slice(5).toLowerCase()}`;
+	if (trimmed.startsWith("Alt+"))
+		return `alt+${trimmed.slice(4).toLowerCase()}`;
+	if (trimmed.startsWith("Shift+") && trimmed.length === 7)
+		return trimmed.slice(6).toUpperCase();
+	return trimmed;
+}
+
+/**
+ * Binding names the registry declares for one view context, deduplicated.
+ * Layers bind from here so a keybind the footer and `?` help advertise (or the
+ * handler implements) can never be missing from the keymap; a registry entry
+ * with several alternatives (`↑`, `k`) contributes every one of them.
+ */
+export function contextBindingNames(context: string): string[] {
+	const names = new Set<string>();
+	for (const def of KEYBINDS) {
+		if (def.context !== context) continue;
+		for (const key of def.keys) {
+			// "j/k" and "↑/↓" style pairs list alternatives in one entry.
+			for (const part of key.split("/")) {
+				const name = bindingName(part);
+				if (name) names.add(name);
+			}
+		}
+	}
+	return [...names];
+}
+
 function fallbackFooterDescription(description: string): string {
 	return description
 		.replace(/\s*\([^)]*\)/g, "")

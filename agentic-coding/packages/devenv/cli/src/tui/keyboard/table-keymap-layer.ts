@@ -1,5 +1,7 @@
 import type { KeyEvent, Renderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
+import { hostOwnedKeys } from "./host-keys";
+import { contextBindingNames } from "./registry";
 import { handleTableKeys, tableYieldsEscape } from "./table-keys";
 import type { KeyboardActions, KeyboardContext, KeyboardStores } from "./types";
 
@@ -11,6 +13,22 @@ export interface TableKeymapLayerDeps {
 
 const TABLE_PRIORITY = 100;
 const KUBERNETES_PRIORITY = 120;
+
+/** Keys the table handler implements but that no view context declares, plus
+ * the structural navigation every list needs. */
+const STRUCTURAL_KEYS = [
+	"up",
+	"down",
+	"left",
+	"right",
+	"space",
+	"backspace",
+	"delete",
+	"ctrl+d",
+	"ctrl+u",
+	"ctrl+n",
+	"tab",
+] as const;
 
 const TABLE_KEYS = [
 	"tab",
@@ -67,6 +85,15 @@ const TABLE_KEYS = [
 	"ctrl+n",
 	"ctrl+p",
 	"ctrl+r",
+	// Everything the registry declares for this context: the footer and `?` help
+	// render those entries, so the keymap must bind them (the hand-written list
+	// drifted — `+`, `-`, `A`, `H`, `c`, `f`, `t`, … were advertised and dead).
+	...contextBindingNames("table").filter(
+		// `Alt+C` copies the selection and belongs to the global layer, which is
+		// registered above this one for every view.
+		(key) => key !== "alt+c",
+	),
+	...STRUCTURAL_KEYS,
 ] as const;
 
 const KUBERNETES_KEYS = [
@@ -132,13 +159,17 @@ export function registerTableKeymapLayer(
 		return true;
 	};
 
+	// Keys the host shell owns on every page, so its own bindings stay reachable
+	// while this body is shown (see `hostOwnedKeys`).
+	const shellOwnedKeys = hostOwnedKeys(deps.ctx.embedded);
+
 	const disposers = [
 		keymap.registerLayer({
 			name: "Table/List",
 			priority: TABLE_PRIORITY,
 			...(deps.ctx.embedded ? { shellFeature: "environments" } : {}),
 			shutdown: false,
-			activeModal: "none",
+			envModal: "none",
 			appViewMode: "table",
 			commands: [
 				{
@@ -222,7 +253,8 @@ export function registerTableKeymapLayer(
 							key !== "O" &&
 							key !== "L" &&
 							key !== "shift+tab" &&
-							key !== "escape",
+							key !== "escape" &&
+							!shellOwnedKeys.has(key),
 					),
 					"table.handle",
 					"Table",
@@ -277,7 +309,7 @@ export function registerTableKeymapLayer(
 				priority: KUBERNETES_PRIORITY + 20,
 				...(deps.ctx.embedded ? { shellFeature: "environments" } : {}),
 				shutdown: false,
-				activeModal: "none",
+				envModal: "none",
 				appViewMode: "table",
 				activeTab: "kubernetes",
 				focusedPanel: `kubernetes:${index}`,
@@ -325,7 +357,7 @@ export function registerTableKeymapLayer(
 			priority: KUBERNETES_PRIORITY,
 			...(deps.ctx.embedded ? { shellFeature: "environments" } : {}),
 			shutdown: false,
-			activeModal: "none",
+			envModal: "none",
 			appViewMode: "table",
 			activeTab: "kubernetes",
 			commands: [

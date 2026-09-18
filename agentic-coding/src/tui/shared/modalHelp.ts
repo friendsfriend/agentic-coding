@@ -1,4 +1,5 @@
 import { createSignal } from "solid-js";
+import { hostKeybind } from "./hostKeys";
 import type { Keybind, KeybindSection } from "./keybinds";
 
 /**
@@ -6,11 +7,7 @@ import type { Keybind, KeybindSection } from "./keybinds";
  * the shell/panel footers advertise help, and the shared `HelpModal` renders
  * the modal's keybind catalog when it is pressed.
  */
-export const MODAL_HELP_KEYBIND: Keybind = {
-	key: "?",
-	action: "Open help",
-	short: "help",
-};
+export const MODAL_HELP_KEYBIND: Keybind = hostKeybind("?");
 
 /**
  * Copy `entries`, appending the automatic `?` help entry when the modal does

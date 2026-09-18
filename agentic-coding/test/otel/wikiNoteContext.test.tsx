@@ -99,7 +99,7 @@ test("wiki note actions appear in the footer only while a note is open", async (
 	// Tree state: note-only actions stay out of the footer.
 	expect(activeKeybindContext()).toBeUndefined();
 	expect(footerActions()).not.toContain("visual line selection");
-	expect(footerActions()).toContain("help");
+	expect(footerActions()).toContain("Open help");
 
 	// Open the note: the shell publishes the "note" context.
 	t.mockInput.pressEnter();

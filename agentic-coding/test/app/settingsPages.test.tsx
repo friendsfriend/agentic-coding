@@ -184,14 +184,11 @@ test("the appearance section states the client-local scope and opens the shared 
 	const { t, db } = await renderHomeShell();
 	expect(await openSection(t, 0, "Appearance")).toBe(true);
 	const frame = t.captureCharFrame();
-	// Effective value with the file that owns it, and the read-only entry
-	// explained instead of shown as a control.
-	expect(frame).toContain("Active theme");
-	expect(frame).toContain("this client");
-	expect(frame).toContain("tui.json");
+	// One item: the effective theme, described in terms of what it changes. The
+	// source/scope inventory lives in the settings inventory, not in the body.
+	expect(frame).toContain("Theme");
 	expect(frame).toContain("catppuccin");
-	expect(frame).toContain("Custom themes (files)");
-	expect(frame).toContain("read-only");
+	expect(frame).toContain("Changes the colorscheme of the application");
 
 	// Enter reuses the shared theme picker; saving there writes the client-local
 	// preference file.
@@ -353,8 +350,8 @@ test("a narrow terminal keeps the section readable and publishes its catalog", a
 	const frame = t.captureCharFrame();
 	// The section body stays bounded and readable at a narrow width.
 	expect(frame).toContain("Appearance");
-	expect(frame).toContain("this client");
-	expect(frame).toContain("Custom themes");
+	expect(frame).toContain("Theme");
+	expect(frame).toContain("catppuccin");
 	// The footer advertises the section's special keys, and the catalog the `?`
 	// help modal renders is the settings catalog (standard keys included).
 	expect(frame).toContain("Ctrl+P");
@@ -366,6 +363,51 @@ test("a narrow terminal keeps the section readable and publishes its catalog", a
 	expect(actions).toContain("activate setting");
 	expect(actions).toContain("reload server settings");
 	expect(actions).toContain("locations");
+	t.renderer.destroy();
+	db.close();
+});
+
+test("a long section keeps the cursor row in view while scrolling", async () => {
+	const profiles = Array.from(
+		{ length: 20 },
+		(_, i) =>
+			`[agents.profiles.p${i}]\nruntime = "pi"\nmodel = "stub/model-${i}"\n`,
+	).join("\n");
+	writeFileSync(
+		workflowConfig,
+		`[agents]\ndefault_profile = "p0"\n\n${profiles}`,
+	);
+	const { t, db } = await renderHomeShell(120, 20);
+	expect(await openSection(t, 1, "Profiles and presets")).toBe(true);
+	const body = () =>
+		t
+			.captureCharFrame()
+			.split("\n")
+			.map((line) => line.trim())
+			.filter((line) => line.length > 0)
+			.slice(0, -1);
+	const opened = body();
+	// Row 0 is the header, row 1 the breadcrumb, row 2 the first list row.
+	expect(opened[2]).toContain("Scope");
+
+	// Every step keeps the row the cursor is on inside the window, and the
+	// window only moves when it has to.
+	const rows = ["Scope", "Profiles and presets…"];
+	for (let index = 0; index < 20; index += 1) rows.push(`Profile p${index}`);
+	for (let step = 0; step < 14; step += 1) {
+		t.mockInput.pressKey("j");
+		await t.renderOnce();
+		expect(body().some((line) => line.startsWith(rows[step + 1] ?? ""))).toBe(
+			true,
+		);
+	}
+
+	// Coming back lands on the first row again, not a drifted window.
+	for (let step = 0; step < 14; step += 1) {
+		t.mockInput.pressKey("k");
+		await t.renderOnce();
+	}
+	expect(body()).toEqual(opened);
 	t.renderer.destroy();
 	db.close();
 });

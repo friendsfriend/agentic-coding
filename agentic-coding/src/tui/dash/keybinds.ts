@@ -1,3 +1,4 @@
+import { hostKeybind } from "../shared/hostKeys";
 import type { KeybindSection } from "../shared/keybinds";
 import { AGENTS_PANEL, OPENSPEC_PANEL } from "./panel-grid";
 
@@ -115,8 +116,8 @@ export function dashboardDetailKeybindCatalog(options: {
 				{ key: "T", action: "Theme picker", short: "theme" },
 				{ key: "Ctrl+Shift+C", action: "Copy selection", standard: true },
 				{ key: "r", action: "Refresh dashboard", short: "refresh" },
-				{ key: "?", action: "Open help", short: "help" },
-				{ key: "q", action: "Quit", standard: true },
+				hostKeybind("?"),
+				hostKeybind("q"),
 			],
 		},
 	);

@@ -1,6 +1,7 @@
 import type { KeyEvent, Renderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
 import { handleGlobalKeys } from "./global-keys";
+import { hostOwnedKeys } from "./host-keys";
 import { routePastedText } from "./paste-handler";
 import type { KeyboardActions, KeyboardContext, KeyboardStores } from "./types";
 
@@ -84,7 +85,7 @@ export function registerGlobalKeymapLayers(
 			priority: GLOBAL_PRIORITY,
 			...(deps.ctx.embedded ? { shellFeature: "environments" } : {}),
 			shutdown: false,
-			activeModal: "none",
+			envModal: "none",
 			commands: [
 				{
 					name: "help.open",
@@ -180,13 +181,21 @@ export function registerGlobalKeymapLayers(
 				},
 			],
 			bindings: [
-				{
-					key: "?",
-					cmd: "help.open",
-					context: "global",
-					category: "Help",
-					footer: "?",
-				},
+				// Embedded in the shell the `?` help modal belongs to the host: the shell
+				// renders the active catalog over whatever is open (and the environment
+				// publishes its own commands into it), so this body must not open its own
+				// help page on top of the environment surface.
+				...(hostOwnedKeys(deps.ctx.embedded).has("?")
+					? []
+					: [
+							{
+								key: "?",
+								cmd: "help.open",
+								context: "global",
+								category: "Help",
+								footer: "?",
+							},
+						]),
 				{
 					key: "ctrl+/",
 					cmd: "console.toggle",

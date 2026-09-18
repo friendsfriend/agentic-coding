@@ -5,6 +5,7 @@ import { handleAddRepositoryModalKeys } from "./add-repository-modal-keys";
 import { handleConnectProviderModalKeys } from "./connect-provider-modal-keys";
 import { handleDiffModalKeys } from "./diff-modal-keys";
 import { handleGlobalKeys } from "./global-keys";
+import { hostOwnedKeys } from "./host-keys";
 import { handleLogModalKeys } from "./log-modal-keys";
 import { handleMiscModalKeys } from "./misc-modal-keys";
 import { handleTableKeys } from "./table-keys";
@@ -109,6 +110,12 @@ export function registerModalKeymapLayers(
 		);
 	};
 
+	// While one of these dialogs is open the feature owns the keyboard, but the
+	// shell's own globals stay with the shell: an embedded feature must not route
+	// `?` to its own help page (the shell renders the shared catalog over the
+	// open dialog) or swallow the location picker.
+	const hostKeys = hostOwnedKeys(deps.ctx.embedded);
+
 	const modalLayers = [
 		{
 			modal: "error",
@@ -173,7 +180,7 @@ export function registerModalKeymapLayers(
 		{
 			// The comment dialog sits on top of the diff modal and its keys are
 			// handled by the same handler, which checks the comment state first.
-			// Without this layer no layer matched `activeModal: "comment"` and the
+			// Without this layer no layer matched `envModal: "comment"` and the
 			// key reached the shell instead of the dialog.
 			modal: "comment",
 			command: "modal.comment.handle",
@@ -234,7 +241,7 @@ export function registerModalKeymapLayers(
 					? TEXT_ENTRY_PRIORITY
 					: MODAL_PRIORITY,
 			shutdown: false,
-			activeModal: modal,
+			envModal: modal,
 			commands: [
 				{
 					name: command,
@@ -246,7 +253,9 @@ export function registerModalKeymapLayers(
 					run: ({ event }) => run(event),
 				},
 			],
-			bindings: bindingsFor(command),
+			bindings: bindingsFor(command).filter(
+				(binding) => !hostKeys.has(binding.key),
+			),
 		}),
 	);
 

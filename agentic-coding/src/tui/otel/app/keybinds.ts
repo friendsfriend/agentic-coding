@@ -1,3 +1,4 @@
+import { hostDiagnosticsKeybind, hostKeybind } from "../../shared/hostKeys";
 import {
 	type KeybindSection,
 	PAGE_NAVIGATION_KEYBINDS,
@@ -25,17 +26,11 @@ export function environmentsKeybindCatalog(): KeybindSection[] {
 	return [
 		{
 			title: "Navigation",
-			keybinds: [
-				{ key: "Ctrl+P", action: "locations", short: "locations" },
-				...PAGE_NAVIGATION_KEYBINDS,
-			],
+			keybinds: [hostKeybind("ctrl+p"), ...PAGE_NAVIGATION_KEYBINDS],
 		},
 		{
 			title: "Actions",
-			keybinds: [
-				{ key: "?", action: "help" },
-				{ key: "q", action: "quit", standard: true },
-			],
+			keybinds: [hostKeybind("?"), hostDiagnosticsKeybind(), hostKeybind("q")],
 		},
 	];
 }
@@ -50,12 +45,12 @@ export function observabilityKeybindCatalog(options: {
 	view: View;
 }): KeybindSection[] {
 	const theme = { key: "T", action: "theme picker", short: "theme" };
-	const help = { key: "?", action: "help" };
+	const help = hostKeybind("?");
 	// One location picker, one structural parent (Escape) and the
 	// chronological Back/Forward pair; destinations are pages now, so no
 	// tab-order or number key belongs in the footer or the help.
-	const locations = { key: "Ctrl+P", action: "locations", short: "locations" };
-	const quit = { key: "q", action: "quit", standard: true };
+	const locations = hostKeybind("ctrl+p");
+	const quit = hostKeybind("q");
 	if (options.tab === "traces") {
 		const navigation =
 			options.view === "selection"

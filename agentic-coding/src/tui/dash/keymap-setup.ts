@@ -1,6 +1,7 @@
 import type { KeyEvent, Renderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
 import { registerBaseLayoutFallback } from "@opentui/keymap/addons/opentui";
+import { HOST_KEY_BINDINGS } from "../shared/hostKeys";
 
 const SHELL_FEATURE_RESOURCE = Symbol("agent-shell:feature-field");
 
@@ -88,6 +89,13 @@ export function setupKeymap(keymap: Keymap<Renderable, KeyEvent>) {
 				},
 				activeModal(value, ctx) {
 					ctx.require("modal.active", String(value));
+				},
+				// The environment feature owns its dialog state on its own key: the
+				// dashboard and wiki write `modal.active` while their body is hidden,
+				// and a shared field left every environment layer parked (all of them
+				// require "none"), which read as "the keybindings are gone".
+				envModal(value, ctx) {
+					ctx.require("modal.active.environments", String(value));
 				},
 				textEntry(value, ctx) {
 					ctx.require("textEntry.active", Boolean(value));
@@ -186,7 +194,6 @@ const SHELL_KEYS: string[] = [
 		'"',
 		"'",
 		"/",
-		"?",
 		"space",
 		"escape",
 		"tab",
@@ -199,11 +206,6 @@ const SHELL_KEYS: string[] = [
 		"return",
 		"backspace",
 		"delete",
-		// Page navigation bindings (replace-nested-tabs-with-page-navigation, task
-		// 3.1): one location picker and one structural parent (`Esc`, no
-		// alternate binding), no destination cycling. Explicit so a feature layer
-		// still owns whatever it registers.
-		"ctrl+p",
 		// Chronological history: Ctrl+O/Ctrl+I are the vim jump-list pair and
 		// Alt+Left/Alt+Right the equivalents that work on every terminal (a
 		// terminal without the kitty keyboard protocol reports Ctrl+I as Tab).
@@ -212,6 +214,11 @@ const SHELL_KEYS: string[] = [
 		"alt+left",
 		"alt+right",
 	],
+	// The keys the shell owns on *every* surface, including over a feature body
+	// or one of its dialogs, come from the one registry
+	// (`shared/hostKeys.ts`) — the same declaration the feature layers exclude
+	// from and the footer/help catalogs render.
+	...HOST_KEY_BINDINGS,
 ];
 
 /**

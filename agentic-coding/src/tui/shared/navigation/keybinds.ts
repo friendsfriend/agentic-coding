@@ -2,6 +2,7 @@
 // (replace-nested-tabs-with-page-navigation, task 2.1). Declared once here and
 // rendered by the shared footer/help contract; renderers own colors and
 // separators, so no entry carries styling.
+import { hostDiagnosticsKeybind, hostKeybind } from "../hostKeys";
 import {
 	footerKeybinds,
 	type Keybind,
@@ -16,17 +17,21 @@ export function destinationPageKeybindCatalog(): KeybindSection[] {
 			title: "Navigation",
 			keybinds: [
 				{ key: "j/k or ↑/↓", action: "select destination", standard: true },
-				{ key: "Enter", action: "open destination", standard: true },
+				// The page's own action, so the footer advertises it: a list page whose
+				// every key is "standard" looks like it has none left (the environment
+				// category list was exactly that).
+				{ key: "Enter", action: "open destination", short: "open" },
 				...PAGE_NAVIGATION_KEYBINDS,
 			],
 		},
 		{
 			title: "Actions",
 			keybinds: [
-				{ key: "Ctrl+P", action: "locations", short: "locations" },
-				{ key: "?", action: "help" },
+				hostKeybind("ctrl+p"),
+				hostKeybind("?"),
+				hostDiagnosticsKeybind(),
 				{ key: "T", action: "theme picker", short: "theme" },
-				{ key: "q", action: "quit", standard: true },
+				hostKeybind("q"),
 			],
 		},
 	];
@@ -44,7 +49,7 @@ export function locationPickerKeybindCatalog(): KeybindSection[] {
 				{ key: "Esc", action: "close picker", standard: true },
 			],
 		},
-		{ title: "Actions", keybinds: [{ key: "?", action: "help" }] },
+		{ title: "Actions", keybinds: [hostKeybind("?")] },
 	];
 }
 
