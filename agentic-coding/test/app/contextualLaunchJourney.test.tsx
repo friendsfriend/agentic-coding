@@ -297,6 +297,31 @@ test("Home starts a workflow in the working directory or a path the user enters"
 	expect(form).toContain("Repository");
 	expect(form).toContain(process.cwd());
 	expect(form).not.toContain("Openspec apply");
+	// Accepting the prefilled working directory opens the workflow-type list.
+	t.mockInput.pressEnter();
+	const types = await t.waitForFrame((value) =>
+		value.includes("Openspec apply"),
+	);
+	expect(types).toMatch(/Workflow type\s+openspec-full/);
+	// Selecting a type opens the preset list. The editor that owned the
+	// repository path is removed from the tree here, and OpenTUI blurs only on
+	// destroy: without an explicit blur it kept receiving keys and wrote its path
+	// into the field the form was showing (the preset), so it must stay bound to
+	// its own field and release the keyboard.
+	t.mockInput.pressEnter();
+	const presets = await t.waitForFrame((value) =>
+		value.includes("Config defaults"),
+	);
+	expect(presets).toContain("Agent preset");
+	expect(presets).toMatch(/Workflow type\s+openspec-full/);
+	expect(presets).not.toMatch(/Agent preset\s+\/home\//);
+	// The preset is a real choice: selecting one records it, never the path.
+	t.mockInput.pressEnter();
+	await t.flush();
+	await t.renderOnce();
+	const selected = t.captureCharFrame();
+	expect(selected).toMatch(/Agent preset\s+Config/);
+	expect(selected).not.toMatch(/Agent preset\s+\/home\//);
 	// The form steps back to the page it was opened from.
 	await pressEscapeAndSettle(t, (value) => value.includes("New workflow"));
 	expect(t.captureCharFrame()).toContain("Home");

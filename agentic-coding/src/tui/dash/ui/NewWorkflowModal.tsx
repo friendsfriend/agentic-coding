@@ -200,14 +200,22 @@ export function NewWorkflowModal(props: {
 		})),
 	];
 
-	const updateCurrent = (value: string) => {
-		const key = field();
-		if (!key) return;
+	/** One field's editor value, addressed by the field it renders rather than
+	 * by the current step, so a leaked key can never write another field. */
+	const updateField = (key: keyof WorkflowLaunchInput, value: string) => {
 		setValues((current) => ({ ...current, [key]: value }));
+	};
+	/** Leaving a text step: OpenTUI removes a portaled editor without destroying
+	 * it, and a removed-but-focused editor keeps receiving keys and writing into
+	 * whatever step is current. Blurring it first ends its key subscription. */
+	const blurEditors = () => {
+		currentInput?.blur();
+		taskInput?.blur();
 	};
 	const back = () => {
 		if (step() === 0) props.onCancel();
 		else {
+			blurEditors();
 			setStep((i) => Math.max(0, i - 1));
 			setSelected(0);
 			setFilter("");
@@ -217,6 +225,7 @@ export function NewWorkflowModal(props: {
 	const next = (value: string) => {
 		const key = field();
 		if (!key) return;
+		blurEditors();
 		setValues((current) => ({
 			...current,
 			[key]: value,
@@ -367,21 +376,27 @@ export function NewWorkflowModal(props: {
 									<Show
 										when={field() === "task"}
 										fallback={
-											<input
-												ref={currentInput}
-												focused
-												value={(values()[field()] as string) || ""}
-												placeholder={field() === "ticket" ? "optional" : ""}
-												onInput={updateCurrent}
-												onSubmit={() =>
-													next(currentInput?.value ?? values()[field()] ?? "")
-												}
-												onKeyDown={(event: KeyEvent) => {
-													if (event.name.toLowerCase() === "escape") back();
-												}}
-												focusedBackgroundColor={uiColors.bgBase}
-												focusedTextColor={uiColors.textPrimary}
-											/>
+											// Keyed by field: each text step owns its editor instance, so its
+											// value and callbacks stay bound to the field it was created for.
+											<Show when={field()} keyed>
+												{(key) => (
+													<input
+														ref={currentInput}
+														focused
+														value={(values()[key] as string) || ""}
+														placeholder={key === "ticket" ? "optional" : ""}
+														onInput={(value: string) => updateField(key, value)}
+														onSubmit={() =>
+															next(currentInput?.value ?? values()[key] ?? "")
+														}
+														onKeyDown={(event: KeyEvent) => {
+															if (event.name.toLowerCase() === "escape") back();
+														}}
+														focusedBackgroundColor={uiColors.bgBase}
+														focusedTextColor={uiColors.textPrimary}
+													/>
+												)}
+											</Show>
 										}
 									>
 										<textarea
@@ -395,7 +410,7 @@ export function NewWorkflowModal(props: {
 											initialValue={untrack(() => values().task || "")}
 											wrapMode="word"
 											onContentChange={() =>
-												updateCurrent(taskInput?.plainText ?? "")
+												updateField("task", taskInput?.plainText ?? "")
 											}
 											onSubmit={() =>
 												next(taskInput?.plainText ?? values().task ?? "")
