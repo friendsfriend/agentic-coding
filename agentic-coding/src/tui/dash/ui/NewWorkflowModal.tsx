@@ -67,7 +67,11 @@ export function NewWorkflowModal(props: {
 	const [filter, setFilter] = createSignal("");
 	const [filtering, setFiltering] = createSignal(false);
 	const repository = () =>
-		props.context.kind === "project" ? props.context.repository : "";
+		props.context.kind === "project" || props.context.kind === "path"
+			? props.context.repository
+			: "";
+	/** Home's entry: the target is a directory this form lets the user edit. */
+	const pathTarget = () => props.context.kind === "path";
 	const [values, setValues] = createSignal<WorkflowLaunchInput>({
 		repo: repository(),
 		ticket: "",
@@ -108,6 +112,7 @@ export function NewWorkflowModal(props: {
 	};
 	const fields = (): (keyof WorkflowLaunchInput)[] => {
 		const head: (keyof WorkflowLaunchInput)[] = [
+			...(pathTarget() ? (["repo"] as const) : []),
 			"workflowType",
 			"preset",
 			"ticket",
@@ -123,6 +128,7 @@ export function NewWorkflowModal(props: {
 	};
 
 	const fieldLabels: Record<string, string> = {
+		repo: "Repository path",
 		workflowType: "Workflow type",
 		preset: "Agent preset",
 		ticket: "Ticket identifier optional",
@@ -183,7 +189,9 @@ export function NewWorkflowModal(props: {
 	const targetSummary = () =>
 		props.context.kind === "project"
 			? { label: "Project", value: props.context.name }
-			: { label: "Target", value: "Independent (no repository)" };
+			: props.context.kind === "path"
+				? { label: "Repository", value: values().repo || "—" }
+				: { label: "Target", value: "Independent (no repository)" };
 	const summary = () => [
 		targetSummary(),
 		...fields().map((key) => ({

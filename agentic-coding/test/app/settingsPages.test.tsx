@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
-import { activeKeybindCatalog, themeNames } from "@ui";
+import { activeKeybindCatalog, resetErrorModal, themeNames } from "@ui";
 import { onCleanup } from "solid-js";
 import { TraceDb } from "../../src/server/telemetry-db";
 import { App } from "../../src/tui/otel/app/App.tsx";
@@ -31,6 +31,9 @@ let workflowConfig: string;
 let wikiRoot: string;
 
 beforeEach(() => {
+	// The error-modal signal is module-global; a dialog left open by another
+	// file would own input and swallow this suite's keys.
+	resetErrorModal();
 	configDir = mkdtempSync(join(tmpdir(), "settings-pages-config-"));
 	workflowConfig = join(configDir, "herdr-workflow.toml");
 	wikiRoot = mkdtempSync(join(tmpdir(), "settings-pages-wiki-"));
@@ -131,17 +134,20 @@ async function settleBackgroundErrors(
 	await t.renderOnce();
 }
 
-/** Home destinations end with Settings: open it from the Home page. */
+/** Home lists Environments, Observability, Wiki, Settings, New workflow:
+ * open Settings from the Home page. */
 async function openSettings(
 	t: Awaited<ReturnType<typeof renderHomeShell>>["t"],
 ) {
 	await t.waitForFrame((frame) => frame.includes("Home"));
-	for (let index = 0; index < 4; index += 1) {
+	for (let index = 0; index < 3; index += 1) {
 		t.mockInput.pressKey("j");
 		await t.renderOnce();
 	}
 	t.mockInput.pressEnter();
-	return renderUntil(t, (frame) => frame.includes("Appearance"));
+	// The Home row's description also contains "Appearance", so wait for the
+	// settings location itself before the caller captures a frame.
+	return renderUntil(t, (frame) => frame.includes("Home › Settings"));
 }
 
 /** Open one Settings section by its landing-page position. */

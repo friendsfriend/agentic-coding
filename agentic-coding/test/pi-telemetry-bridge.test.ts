@@ -323,3 +323,154 @@ test("embedded bridge bundle contains the pointer-based recovery", async () => {
 	expect(source).toContain("by-agent");
 	expect(source).not.toMatch(/8-char suffix|startsWith\(runId8\)/);
 });
+
+// ── Session content capture (explicit telemetry opt-in) ──────────────────────
+
+/** Load a fresh bridge copy with the capture opt-in in its environment. */
+async function loadCaptureBridge(
+	repo: string,
+	capture: boolean,
+): Promise<Map<string, (event: unknown, ctx?: unknown) => void>> {
+	const module = path.join(repo, `bridge-content-${capture ? "on" : "off"}.ts`);
+	fs.copyFileSync(
+		path.resolve(
+			import.meta.dir,
+			"../../agent-definitions/bridges/pi-telemetry.ts",
+		),
+		module,
+	);
+	const handlers = new Map<string, (event: unknown, ctx?: unknown) => void>();
+	const pi = {
+		on: (event: string, handler: (event: unknown, ctx?: unknown) => void) => {
+			handlers.set(event, handler);
+		},
+	};
+	const bridge = await import(module);
+	bridge.default(pi);
+	return handlers;
+}
+
+const CONTENT_CTX = {
+	model: { id: "model-a", provider: "provider-a" },
+	sessionManager: { getSessionId: () => "session-1" },
+};
+
+function contentEnvelopes(file: string): Array<Record<string, unknown>> {
+	return fs
+		.readFileSync(file, "utf8")
+		.trim()
+		.split("\n")
+		.filter((line) => line.trim())
+		.map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+for (const capture of [true, false] as const) {
+	test(`pi telemetry bridge ${capture ? "captures" : "omits"} session content`, async () => {
+		const repo = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-content-"));
+		const telemetryPath = path.join(repo, "telemetry.jsonl");
+		const saved = {
+			path: process.env.HERDR_TELEMETRY_PATH,
+			capture: process.env.HERDR_CAPTURE_CONTENT,
+		};
+		process.env.HERDR_TELEMETRY_PATH = telemetryPath;
+		if (capture) process.env.HERDR_CAPTURE_CONTENT = "1";
+		else delete process.env.HERDR_CAPTURE_CONTENT;
+		try {
+			const handlers = await loadCaptureBridge(repo, capture);
+			handlers.get("message_end")?.(
+				{ message: { role: "user", content: "Fix the failing test" } },
+				CONTENT_CTX,
+			);
+			handlers.get("message_end")?.(
+				{
+					message: {
+						role: "assistant",
+						content: [{ type: "text", text: "I will look at the parser." }],
+						usage: { input: 10, output: 5, cost: { total: 0.01 } },
+					},
+				},
+				CONTENT_CTX,
+			);
+			handlers.get("tool_execution_start")?.(
+				{
+					toolCallId: "call-1",
+					toolName: "bash",
+					args: { command: "bun test" },
+				},
+				CONTENT_CTX,
+			);
+			handlers.get("tool_execution_end")?.(
+				{
+					toolCallId: "call-1",
+					toolName: "bash",
+					isError: false,
+					result: "all green",
+				},
+				CONTENT_CTX,
+			);
+			// A credential and an over-long result: redaction happens before the
+			// cap, so a truncated payload never carries the secret's head.
+			handlers.get("tool_execution_end")?.(
+				{
+					toolCallId: "call-2",
+					toolName: "bash",
+					isError: false,
+					result: { output: `sk-${"a".repeat(40)} ${"x".repeat(9000)}` },
+				},
+				CONTENT_CTX,
+			);
+
+			const events = contentEnvelopes(telemetryPath);
+			const contentKeys = events.flatMap((event) =>
+				Object.keys(event).filter((key) => key.startsWith("herdr.content.")),
+			);
+			if (!capture) {
+				expect(contentKeys).toEqual([]);
+				return;
+			}
+			const user = events.find(
+				(event) =>
+					event.event === "runtime.message" &&
+					event["pi.message.role"] === "user",
+			);
+			expect(user?.["herdr.content.input"]).toBe("Fix the failing test");
+			const assistant = events.find(
+				(event) =>
+					event.event === "runtime.message" &&
+					event["pi.message.role"] === "assistant",
+			);
+			expect(assistant?.["herdr.content.output"]).toBe(
+				"I will look at the parser.",
+			);
+			const start = events.find(
+				(event) => event.event === "runtime.tool_start",
+			);
+			expect(start?.["pi.tool.name"]).toBe("bash");
+			expect(start?.["herdr.content.tool_input"]).toBe(
+				JSON.stringify({ command: "bun test" }),
+			);
+			const tool = events.find(
+				(event) =>
+					event.event === "runtime.tool" &&
+					event["pi.tool.call_id"] === "call-1",
+			);
+			expect(tool?.["herdr.content.tool_output"]).toBe("all green");
+			const truncated = events.find(
+				(event) =>
+					event.event === "runtime.tool" &&
+					event["pi.tool.call_id"] === "call-2",
+			);
+			const output = String(truncated?.["herdr.content.tool_output"]);
+			expect(output).toHaveLength(8192);
+			expect(output).toContain("[REDACTED]");
+			expect(output).not.toContain("sk-");
+			expect(truncated?.["pi.content.truncated"]).toBe(true);
+		} finally {
+			if (saved.path === undefined) delete process.env.HERDR_TELEMETRY_PATH;
+			else process.env.HERDR_TELEMETRY_PATH = saved.path;
+			if (saved.capture === undefined) delete process.env.HERDR_CAPTURE_CONTENT;
+			else process.env.HERDR_CAPTURE_CONTENT = saved.capture;
+			fs.rmSync(repo, { recursive: true, force: true });
+		}
+	});
+}

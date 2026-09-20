@@ -358,4 +358,43 @@ describe("planner-owned change identity (allow-planners-to-create-multiple-propo
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
 	});
+
+	test("session content capture reaches the run environment only when opted in", () => {
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "plan-content-capture-"));
+		try {
+			const repo = repository(path.join(tmp, "repo"));
+			const engine = new WorkflowEngine(registerBuiltins());
+			const view = engine.start({
+				repo,
+				workflowId: "content-capture",
+				definitionId: "openspec-full",
+				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
+				routing: routing(),
+			}).view;
+			const registry = registerBuiltins();
+			const run = runForRole(view, "planner");
+			// Off by default: the bridges stay metadata-only without the opt-in.
+			const off = effectRunnerTest.renderedAssignment(
+				engine,
+				repo,
+				registry,
+				run.id,
+				"token",
+			).assignment;
+			expect(off.environment.HERDR_CAPTURE_CONTENT).toBeUndefined();
+			// The same flag the engine uses for its own payloads is forwarded to the
+			// run environment the runtime bridges read.
+			const on = effectRunnerTest.renderedAssignment(
+				engine,
+				repo,
+				registry,
+				run.id,
+				"token",
+				true,
+			).assignment;
+			expect(on.environment.HERDR_CAPTURE_CONTENT).toBe("1");
+		} finally {
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
 });

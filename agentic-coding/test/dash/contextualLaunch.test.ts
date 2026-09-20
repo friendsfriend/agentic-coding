@@ -113,6 +113,24 @@ test("an independent launch carries an empty repository and no project identity"
 	expect(launchRepositoryAvailable(context)).toBe(true);
 });
 
+// ── Home launches any directory, outside the configured projects ──────────────
+
+test("a path context targets its directory and may offer every repository type", () => {
+	const root = mkdtempSync(join(tmpdir(), "launch-path-"));
+	const context: WorkflowLaunchContext = { kind: "path", repository: root };
+	expect(launchContextError(context)).toBeUndefined();
+	expect(launchRepositoryAvailable(context)).toBe(true);
+	expect(workflowTypesForContext(context)).toBeUndefined();
+	expect(
+		launchRepositoryAvailable({ kind: "path", repository: "/nonexistent/dir" }),
+	).toBe(false);
+});
+
+test("a path context without a directory is blocked with an actionable error", () => {
+	const problem = launchContextError({ kind: "path", repository: "  " });
+	expect(problem).toContain("enter a directory");
+});
+
 // ── Task 3.3: accepted, rejected and uncertain starts stay distinct ──────────
 
 test("an accepted start names the workflow it created", async () => {

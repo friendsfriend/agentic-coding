@@ -94,3 +94,26 @@ test("embedded bridges carry the enriched payload hooks and dropped noise", () =
 			expect(source).toContain(marker);
 	}
 });
+
+test("embedded bridges capture session content only behind the opt-in", () => {
+	const pi = AGENT_DEFINITIONS["bridges/pi-telemetry.ts"];
+	expect(pi).toContain("HERDR_CAPTURE_CONTENT");
+	expect(pi).toContain("herdr.content.input");
+	expect(pi).toContain("herdr.content.output");
+	expect(pi).toContain("herdr.content.tool_input");
+	expect(pi).toContain("herdr.content.tool_output");
+	expect(pi).toContain("'runtime.tool_start'");
+	expect(pi).toContain("pi.content.truncated");
+	expect(pi).toContain("CONTENT_LIMIT = 8192");
+	for (const bridge of [
+		"bridges/opencode-telemetry.js",
+		"bridges/opencode-v2-telemetry.js",
+	]) {
+		const source = AGENT_DEFINITIONS[bridge];
+		expect(source).toContain("HERDR_CAPTURE_CONTENT");
+		expect(source).toContain("herdr.content.tool_input");
+		expect(source).toContain("herdr.content.tool_output");
+		expect(source).toContain("oc.content.truncated");
+		expect(source).toContain("CONTENT_LIMIT = 8192");
+	}
+});

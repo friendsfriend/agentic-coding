@@ -1084,6 +1084,7 @@ export function agentEffectHandlers(
 							options.registry,
 							runId(effect),
 							"",
+							captureContent,
 						),
 					);
 					try {
@@ -1107,6 +1108,7 @@ export function agentEffectHandlers(
 							options.registry,
 							runId(effect),
 							"",
+							captureContent,
 						),
 					);
 					const snapshot = engine.getSnapshot(repo, expected.run.workflowId);
@@ -1170,6 +1172,7 @@ export function agentEffectHandlers(
 							options.registry,
 							run.id,
 							token,
+							captureContent,
 						),
 					);
 					yield* Effect.sync(() => {
@@ -1300,6 +1303,7 @@ export function agentEffectHandlers(
 						token,
 						options.registry,
 						changedFiles,
+						captureContent,
 					);
 					const assetRoot = workflowAssets(
 						snapshot.metadata.worktree,
@@ -2407,6 +2411,7 @@ function renderedAssignment(
 	registry: WorkflowRegistry,
 	runId: string,
 	token: string,
+	captureContent = false,
 ) {
 	const run = engine.getRun(repo, runId);
 	const snapshot = engine.getSnapshot(repo, run.workflowId);
@@ -2420,6 +2425,7 @@ function renderedAssignment(
 		token,
 		registry,
 		run.stepId === "core.triage" ? changedFilesIn(snapshot) : [],
+		captureContent,
 	);
 	return {
 		run,
@@ -2443,6 +2449,7 @@ async function renderedAssignmentAsync(
 	registry: WorkflowRegistry,
 	runId: string,
 	token: string,
+	captureContent = false,
 ) {
 	const run = engine.getRun(repo, runId);
 	const snapshot = engine.getSnapshot(repo, run.workflowId);
@@ -2456,6 +2463,7 @@ async function renderedAssignmentAsync(
 		token,
 		registry,
 		run.stepId === "core.triage" ? await changedFilesInAsync(snapshot) : [],
+		captureContent,
 	);
 	return {
 		run,
@@ -2484,6 +2492,7 @@ function assignmentFor(
 	token: string,
 	registry: WorkflowRegistry,
 	changedFiles: readonly string[] = [],
+	captureContent = false,
 ): Assignment {
 	const output =
 		run.outputPath && run.outputSchema
@@ -2645,6 +2654,10 @@ function assignmentFor(
 						? "research://standalone"
 						: snapshot.metadata.repository,
 			HERDR_RUNTIME: run.profile.runtime,
+			// Session content capture is the same explicit opt-in the engine uses for
+			// its own payloads; the runtime bridges read it from the run environment
+			// instead of re-reading the config (SEC-001).
+			...(captureContent ? { HERDR_CAPTURE_CONTENT: "1" } : {}),
 			HERDR_TELEMETRY_PATH:
 				snapshot.definition.id === "wiki-comments" ||
 				snapshot.definition.id === "research"

@@ -249,23 +249,57 @@ test("failed starts open blocking errors and keep the completed form retryable",
 	db.close();
 });
 
-test("Home never offers a workflow list, history or reopen destination", async () => {
+test("Home offers the workflow action but never a workflow list, history or reopen destination", async () => {
 	const { t, db } = await renderHomeShell();
 	const frame = await t.waitForFrame((value) => value.includes("Settings"));
 	expect(frame).toContain("Environments");
 	expect(frame).toContain("Observability");
 	expect(frame).toContain("Wiki");
+	// The one top-level launch entry: starting new work, not browsing existing
+	// workflows.
+	expect(frame).toContain("New workflow");
+	expect(frame).toContain(
+		"Start a workflow in the working directory or a path you enter",
+	);
 	expect(frame).not.toContain("Workflows");
 	expect(frame).not.toContain("workspace");
 
-	// The one location picker does not offer one either.
+	// The one location picker offers pages only, never the action entry.
 	t.mockInput.pressKey("p", { ctrl: true });
 	for (const character of "workfl") {
 		t.mockInput.pressKey(character);
 		await t.renderOnce();
 	}
 	const picker = t.captureCharFrame();
+	// The picker's own results list jumps to pages; the action entry behind it
+	// stays a Home row, never a picker destination.
+	expect(picker).toContain("/workfl (1 results)");
 	expect(picker).not.toContain("Workflows");
+	t.renderer.destroy();
+	db.close();
+});
+
+test("Home starts a workflow in the working directory or a path the user enters", async () => {
+	const { t, db } = await renderHomeShell();
+	await t.waitForFrame((value) => value.includes("Settings"));
+	// Home order is Environments, Observability, Wiki, Settings, New workflow.
+	for (let index = 0; index < 4; index += 1) {
+		t.mockInput.pressKey("j");
+		await t.renderOnce();
+	}
+	t.mockInput.pressEnter();
+	const form = await t.waitForFrame((value) =>
+		value.includes("Repository path"),
+	);
+	// The working directory is the prefill; the field is editable, so another
+	// path is one step away without a second target selector. The opening Enter
+	// must not submit the prefilled step, so the form is still on it.
+	expect(form).toContain("Repository");
+	expect(form).toContain(process.cwd());
+	expect(form).not.toContain("Openspec apply");
+	// The form steps back to the page it was opened from.
+	await pressEscapeAndSettle(t, (value) => value.includes("New workflow"));
+	expect(t.captureCharFrame()).toContain("Home");
 	t.renderer.destroy();
 	db.close();
 });

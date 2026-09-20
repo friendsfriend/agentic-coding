@@ -237,6 +237,111 @@ for (const name of [
 			fs.rmSync(repo, { recursive: true, force: true });
 		}
 	});
+
+	test(`${name} captures session content only under the opt-in`, async () => {
+		const repo = fs.mkdtempSync(
+			path.join(os.tmpdir(), `bridge-${name}-content-`),
+		);
+		const telemetryPath = path.join(repo, "telemetry.jsonl");
+		const saved = {
+			path: process.env.HERDR_TELEMETRY_PATH,
+			capture: process.env.HERDR_CAPTURE_CONTENT,
+		};
+		process.env.HERDR_TELEMETRY_PATH = telemetryPath;
+		process.env.HERDR_CAPTURE_CONTENT = "1";
+		try {
+			const emit = await loadHandler(name, repo);
+			const part = (value: Record<string, unknown>) =>
+				emit({
+					event: {
+						type: "message.part.updated",
+						properties: { part: { sessionID: "s-1", ...value } },
+					},
+				});
+			// Roles are learned from the message rows: a text part only knows its
+			// message id.
+			await emit({
+				event: {
+					type: "message.updated",
+					properties: { info: { id: "m-1", role: "assistant" } },
+				},
+			});
+			await emit({
+				event: {
+					type: "message.updated",
+					properties: { info: { id: "m-0", role: "user" } },
+				},
+			});
+			await part({ type: "text", id: "p-0", messageID: "m-0", text: "fix it" });
+			// Streaming update: no end time yet, so no content is captured.
+			await part({
+				type: "text",
+				id: "p-1",
+				messageID: "m-1",
+				text: "partial",
+			});
+			await part({
+				type: "text",
+				id: "p-1",
+				messageID: "m-1",
+				text: "partial answer",
+				time: { start: 1, end: 2 },
+			});
+			await part({
+				type: "tool",
+				tool: "bash",
+				callID: "c-1",
+				state: {
+					status: "running",
+					input: { command: "ls" },
+					time: { start: 1 },
+				},
+			});
+			const completed = {
+				type: "tool",
+				tool: "bash",
+				callID: "c-1",
+				state: {
+					status: "completed",
+					input: { command: "ls" },
+					output: "file.txt",
+					time: { start: 1, end: 2 },
+				},
+			};
+			await part(completed);
+			// A repeated update must not repeat the captured payload.
+			await part(completed);
+
+			const events = readEnvelopes(telemetryPath);
+			const user = events.find(
+				(e) =>
+					e.event === "runtime.part_length" && e["oc.message.role"] === "user",
+			);
+			expect(user?.["herdr.content.input"]).toBe("fix it");
+			const assistant = events.filter(
+				(e) =>
+					e.event === "runtime.part_length" &&
+					e["oc.message.role"] === "assistant" &&
+					e["herdr.content.output"],
+			);
+			expect(assistant).toHaveLength(1);
+			expect(assistant[0]?.["herdr.content.output"]).toBe("partial answer");
+			const inputs = events.filter((e) => e["herdr.content.tool_input"]);
+			expect(inputs).toHaveLength(1);
+			expect(inputs[0]?.["herdr.content.tool_input"]).toBe(
+				JSON.stringify({ command: "ls" }),
+			);
+			const outputs = events.filter((e) => e["herdr.content.tool_output"]);
+			expect(outputs).toHaveLength(1);
+			expect(outputs[0]?.["herdr.content.tool_output"]).toBe("file.txt");
+		} finally {
+			if (saved.path === undefined) delete process.env.HERDR_TELEMETRY_PATH;
+			else process.env.HERDR_TELEMETRY_PATH = saved.path;
+			if (saved.capture === undefined) delete process.env.HERDR_CAPTURE_CONTENT;
+			else process.env.HERDR_CAPTURE_CONTENT = saved.capture;
+			fs.rmSync(repo, { recursive: true, force: true });
+		}
+	});
 }
 
 test("the two opencode bridge variants stay at parity", () => {

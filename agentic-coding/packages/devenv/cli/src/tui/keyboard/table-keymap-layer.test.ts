@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createTestKeymap } from "@opentui/keymap/testing";
 import { hostOwnedKeys } from "./host-keys.ts";
+import { getActiveFooterKeybindsFromKeymap } from "./keymap-metadata.ts";
 import { applyKeymapRuntimeSnapshot } from "./keymap-runtime.ts";
 import { setupDevenvKeymap } from "./keymap-setup.ts";
 import { contextBindingNames } from "./registry.ts";
@@ -50,6 +51,7 @@ const ctx = (): KeyboardContext =>
 
 function makeStores(
 	appOverrides: Record<string, unknown> = {},
+	uiOverrides: Record<string, unknown> = {},
 ): KeyboardStores {
 	let searchMode = false;
 	let searchQuery = "old";
@@ -90,7 +92,7 @@ function makeStores(
 		logStore: signalStore(),
 		changeRequestStore: signalStore(),
 		providerStore: signalStore(),
-		uiStore: signalStore({ activeThemeName: () => "default" }),
+		uiStore: signalStore({ activeThemeName: () => "default", ...uiOverrides }),
 		agentStore: signalStore(),
 		appDetailStore: signalStore(),
 	} as unknown as KeyboardStores;
@@ -310,6 +312,107 @@ describe("table keymap layer", () => {
 				ctx(),
 			),
 		).toBe(false);
+	});
+
+	test("w starts a workflow for the selected application and W opens the worktree manager", () => {
+		const { keymap, host, cleanup } = createTestKeymap({ defaultKeys: true });
+		const started: Array<{ ident: string; name: string; repository: string }> =
+			[];
+		let worktreeManager = false;
+		const stores = makeStores(
+			{ tableFilteredApps: () => [{ ident: "checkout" }] },
+			{
+				setShowWorktreeManagerModal: (open: boolean) => {
+					worktreeManager = open;
+				},
+			},
+		);
+		try {
+			setupDevenvKeymap(keymap as never);
+			setRuntime(keymap);
+			registerTableKeymapLayer(keymap as never, {
+				stores,
+				actions: actions(),
+				ctx: {
+					...ctx(),
+					getSelectedApp: () => ({
+						ident: "checkout",
+						displayName: "Checkout",
+						repositoryPath: "/managed/checkout",
+					}),
+					client: { listWorktrees: () => Promise.resolve([]) },
+					startWorkflow: (target: {
+						ident: string;
+						name: string;
+						repository: string;
+					}) => started.push(target),
+				} as unknown as KeyboardContext,
+			});
+			host.press("w");
+			expect(started).toEqual([
+				{
+					ident: "checkout",
+					name: "Checkout",
+					repository: "/managed/checkout",
+				},
+			]);
+			host.press("w", { shift: true });
+			expect(worktreeManager).toBe(true);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test("w reports no start on tabs whose rows are not applications or libraries", async () => {
+		const started: unknown[] = [];
+		const stores = makeStores({
+			activeTab: () => "infrastructure",
+			tableFilteredApps: () => [{ ident: "postgres" }],
+		});
+		await handleTableKeys(
+			{ name: "w", sequence: "w" } as never,
+			stores,
+			actions(),
+			{
+				...ctx(),
+				getSelectedApp: () => ({
+					ident: "postgres",
+					displayName: "Postgres",
+					repositoryPath: "/managed/postgres",
+				}),
+				startWorkflow: (target: unknown) => started.push(target),
+			} as unknown as KeyboardContext,
+		);
+		expect(started).toEqual([]);
+	});
+
+	test("start workflow is advertised on applications and libraries only", () => {
+		const { keymap, cleanup } = createTestKeymap({ defaultKeys: true });
+		try {
+			setupDevenvKeymap(keymap as never);
+			registerTableKeymapLayer(keymap as never, {
+				stores: makeStores(),
+				actions: actions(),
+				ctx: {
+					...ctx(),
+					startWorkflow: () => {},
+				} as unknown as KeyboardContext,
+			});
+			const advertised = () =>
+				getActiveFooterKeybindsFromKeymap(keymap as never).some(
+					(entry) => entry.key === "w" && entry.action === "Start workflow",
+				);
+			setRuntime(keymap, "applications");
+			expect(advertised()).toBe(true);
+			setRuntime(keymap, "libraries");
+			expect(advertised()).toBe(true);
+			setRuntime(keymap, "infrastructure");
+			expect(advertised()).toBe(false);
+			setRuntime(keymap, "scripts");
+			expect(advertised()).toBe(false);
+		} finally {
+			cleanup();
+		}
 	});
 
 	test("kubernetes actions gate on active tab", () => {

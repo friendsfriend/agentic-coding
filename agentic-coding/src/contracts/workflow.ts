@@ -402,6 +402,9 @@ export interface Assignment {
 				 * planning, where the planner chooses the change id(s). */
 				HERDR_CHANGE_ID?: string;
 				HERDR_WORKFLOW_TARGET?: string;
+				/** Session content capture opt-in, forwarded from
+				 * `telemetry.capture_content`; absent when capture is off. */
+				HERDR_CAPTURE_CONTENT?: string;
 			}>
 	>;
 }

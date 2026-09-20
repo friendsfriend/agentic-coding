@@ -18,9 +18,10 @@ import {
 } from "./live.ts";
 
 /**
- * Immutable launch context of the creation form. It replaces the former
- * repository/custom-path/standalone selectors: the target is decided by where
- * the user started, never by a second choice inside the form.
+ * Launch context of the creation form. The target is decided by where the user
+ * started: a configured application/library page, Wiki (repository-independent
+ * work), or Home's workflow entry, which prefills the working directory and
+ * lets the user confirm or replace it with another path.
  */
 export type WorkflowLaunchContext =
 	/** Configured application/library: canonical identity already selected. */
@@ -33,6 +34,8 @@ export type WorkflowLaunchContext =
 			/** Canonical repository root the backend revalidates at submission. */
 			repository: string;
 	  }
+	/** Home: any directory, prefilled with the working directory. */
+	| { kind: "path"; repository: string }
 	/** Wiki: repository-independent research/wiki work. */
 	| { kind: "independent" };
 
@@ -57,10 +60,10 @@ export type LaunchOutcome =
 
 const STARTED = /^Workflow started:\s*(\S+)\s*$/;
 
-/** Workflow types a launch context may offer. Repository-bound research and
- * wiki work belongs on the resource page; an independent Wiki launch offers
- * repository-independent research only. `wiki` itself is repository-backed
- * (it edits a checkout), so it is not an independent target. */
+/** Workflow types a launch context may offer. A repository target (configured
+ * project or path) may offer the whole registry; an independent Wiki launch
+ * offers repository-independent research only. `wiki` itself is repository-
+ * backed (it edits a checkout), so it is not an independent target. */
 export function workflowTypesForContext(
 	context: WorkflowLaunchContext,
 ): string[] | undefined {
@@ -78,7 +81,9 @@ export function launchContextError(
 ): string | undefined {
 	if (context.kind === "independent") return undefined;
 	if (!context.repository?.trim())
-		return `Project ${context.name} has no repository path; configure the application or library before starting work`;
+		return context.kind === "project"
+			? `Project ${context.name} has no repository path; configure the application or library before starting work`
+			: "No repository path given; enter a directory to start the workflow in";
 	return undefined;
 }
 

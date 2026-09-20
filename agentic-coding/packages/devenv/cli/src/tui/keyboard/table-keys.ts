@@ -691,7 +691,22 @@ export async function handleTableKeys(
 				gitActions.openBranchSelector();
 			break;
 		case "w": {
-			// Worktree manager (lowercase w)
+			// Start workflow for the selected application/library. The unified
+			// shell owns form and start boundary; without a reporter there is no
+			// start action to report, so the key stays unbound here.
+			const tab = appStore.activeTab();
+			if (tab !== "applications" && tab !== "libraries") break;
+			const project = getSelectedApp();
+			if (project && ctx.startWorkflow)
+				ctx.startWorkflow({
+					ident: project.ident,
+					name: project.displayName,
+					repository: project.repositoryPath,
+				});
+			break;
+		}
+		case "W": {
+			// Worktree manager (uppercase W / Shift+W)
 			if (appStore.activeTab() !== "scripts" && appList.length > 0) {
 				const app = getSelectedApp();
 				if (app) {

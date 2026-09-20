@@ -16,16 +16,23 @@ catalog). The code is authoritative.
 ## Home destinations
 
 Home offers exactly **Environments**, **Observability**, **Wiki** and
-**Settings**. Settings moves ahead of workflow creation in the migration so
-removing the workflow page can never strand configuration.
+**Settings**, plus the **New workflow** action. The action is the one launch
+that is not tied to a page: it opens the creation form for a directory outside
+the configured projects, prefilled with the working directory and editable to
+any other path. It is an in-place action, never a page or a location-picker
+destination, so Home still has no workflow list, history or browser.
 
 ## Where work is created
 
 | Target | Entry point | Workflow types |
 | --- | --- | --- |
-| Configured application or library | The resource page's `w` (Start workflow) | The whole `PUBLIC_WORKFLOW_CATALOG` (openspec family, no-openspec, repository-bound wiki, repository-bound research) |
+| Configured application or library | The Applications/Libraries list's `w` (Start workflow) and the resource page's `w` (Start workflow) | The whole `PUBLIC_WORKFLOW_CATALOG` (openspec family, no-openspec, repository-bound wiki, repository-bound research) |
+| Any directory outside the configured projects | Home's **New workflow** action (working directory or entered path) | The whole `PUBLIC_WORKFLOW_CATALOG` |
 | Wiki | The Wiki page's `w` (New workflow) | `research` only, with no repository context |
 | Wiki comments | The Wiki page's `f` (Finish review) | The `wiki-comments` review workflow, unchanged |
+
+The environment list moves the worktree manager to `W` (Shift+W) so `w` starts
+work for the highlighted row.
 
 Repository-related research and wiki work therefore launches from
 application/library pages; Wiki launches repository-independent work only. This
@@ -35,12 +42,14 @@ that mentions repositories.
 ## The launch context
 
 `WorkflowLaunchContext` is immutable: `{kind: "project", ident, name,
-repository}` or `{kind: "independent"}`. The creation form has **no**
-repository, custom-path or standalone-target selector — only workflow type,
-agent preset, ticket, workflow id, task and (where the target allows a choice)
-the checkout mode. Types come from `PUBLIC_WORKFLOW_CATALOG`; the context only
-restricts the permitted set, so role/workflow tables are never duplicated in
-the TUI.
+repository}`, `{kind: "path", repository}` or `{kind: "independent"}`. The
+creation form has **no** repository, custom-path or standalone-target selector —
+only workflow type, agent preset, ticket, workflow id, task and (where the
+target allows a choice) the checkout mode. The `path` context is the one
+exception: it shows its `repository` as an editable first step, so the working
+directory stays a confirmation instead of a silent default. Types come from
+`PUBLIC_WORKFLOW_CATALOG`; the context only restricts the permitted set, so
+role/workflow tables are never duplicated in the TUI.
 
 Availability and capability are resolved from the configured catalog:
 
@@ -88,5 +97,8 @@ stored workflows.
   `test/app/contextualLaunchJourney.test.tsx`, `test/app/pages.test.ts`.
 - `packages/devenv/cli/src/tui/keyboard/workflow-keymap-layers.test.ts` — the
   resource page reports its configured identity and advertises the action in
-  the footer/`?` catalog.
+  the footer/`?` catalog as `w`.
+- `packages/devenv/cli/src/tui/keyboard/table-keymap-layer.test.ts` — the
+  list's `w` reports the selected application/library, `W` opens the worktree
+  manager, and the start action is advertised on Applications/Libraries only.
 - `bun run type-check`, `bun run lint`, `openspec validate --strict`.

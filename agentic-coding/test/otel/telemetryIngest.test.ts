@@ -42,6 +42,32 @@ describe("telemetry envelope parsing", () => {
 		expect(span.spanId).not.toBe("dd7779c4a8490e79");
 	});
 
+	test("session content keys reach the span as custom attributes", () => {
+		const line = JSON.stringify({
+			schemaVersion: 1,
+			at: "2026-09-11T10:00:05.000Z",
+			layer: "runtime",
+			runtime: "pi",
+			event: "runtime.tool",
+			workflowId: "wf-9",
+			role: "worker",
+			"pi.tool.name": "bash",
+			"herdr.content.tool_input": JSON.stringify({ command: "bun test" }),
+			"herdr.content.tool_output": "all green",
+		});
+		const span = parseTelemetryLine(line, 1);
+		expect(span?.attributes.find((a) => a.key === "pi.tool.name")?.value).toBe(
+			"bash",
+		);
+		expect(
+			span?.attributes.find((a) => a.key === "herdr.content.tool_input")?.value,
+		).toBe(JSON.stringify({ command: "bun test" }));
+		expect(
+			span?.attributes.find((a) => a.key === "herdr.content.tool_output")
+				?.value,
+		).toBe("all green");
+	});
+
 	test("skips malformed lines and non-envelopes", () => {
 		const spans = parseTelemetryJsonl(`${TELEMETRY}\nnot json\n{}`);
 		expect(spans).toHaveLength(2);

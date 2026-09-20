@@ -43,6 +43,15 @@ recoverRunEnv();
 const output = process.env.HERDR_TELEMETRY_PATH;
 const SECRET_PATTERN = /(-----BEGIN[\s\S]*?-----END[^\n]*|sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|github_pat_[A-Za-z0-9_]{20,}|HERDR_RUN_TOKEN=[^\s]+)/g;
 function redact(text: string): string { return text.replace(SECRET_PATTERN, '[REDACTED]') }
+
+// Session content (user/assistant text, tool arguments and results) is the
+// explicit telemetry opt-in the engine forwards to this run's environment.
+// Without it every event stays metadata-only: no prompt, model text, tool
+// argument or tool result ever reaches the envelope (SEC-001).
+const captureContent = process.env.HERDR_CAPTURE_CONTENT === '1';
+/** Per-field cap for captured content, matching the engine's
+ * TELEMETRY_ATTRIBUTE_LIMIT so bridge and engine bound content the same way. */
+const CONTENT_LIMIT = 8192;
 function emit(event: string, fields: Record<string, unknown> = {}) {
   const envelope = { schemaVersion: 1, at: new Date().toISOString(), layer: 'runtime', runtime: 'pi', event, workflowId: process.env.HERDR_WORKFLOW_ID, runId: process.env.HERDR_RUN_ID, stepId: process.env.HERDR_STEP_ID, role: process.env.HERDR_ROLE, profile: process.env.HERDR_PROFILE, traceparent: process.env.TRACEPARENT, ...fields };
   if (output) try { mkdirSync(dirname(output), { recursive: true }); appendFileSync(output, JSON.stringify(envelope) + '\n'); } catch { /* observational */ }
@@ -53,6 +62,46 @@ function emit(event: string, fields: Record<string, unknown> = {}) {
 function bounded(value: unknown, max = 256): string | undefined {
   if (typeof value !== 'string' || !value) return undefined;
   return redact(value).slice(0, max);
+}
+/** One bounded content value: redacted, capped, and flagged when the cap cut
+ * it. Objects (tool args, tool results) are serialized, so a captured value is
+ * always a single attribute string. */
+function boundedContent(value: unknown): { text: string; truncated?: true } | undefined {
+  if (value === undefined || value === null) return undefined;
+  let text: string;
+  if (typeof value === 'string') text = value;
+  else {
+    try { text = JSON.stringify(value) ?? ''; } catch { return undefined; }
+  }
+  if (!text) return undefined;
+  const safe = redact(text);
+  if (!safe) return undefined;
+  return safe.length > CONTENT_LIMIT
+    ? { text: safe.slice(0, CONTENT_LIMIT), truncated: true }
+    : { text: safe };
+}
+/** Content attributes for one bounded value; empty unless capture is on and the
+ * value has text, so a disabled capture adds no keys at all. */
+function contentAttributes(key: string, value: unknown): Record<string, string | boolean> {
+  if (!captureContent) return {};
+  const boundedValue = boundedContent(value);
+  if (!boundedValue) return {};
+  return {
+    [key]: boundedValue.text,
+    ...(boundedValue.truncated ? { 'pi.content.truncated': true } : {}),
+  };
+}
+/** Text parts of a user or assistant message; tool results are the tool
+ * events' payload, never a second message row. */
+function messageText(message: unknown): string | undefined {
+  const content = (message as { content?: unknown } | undefined)?.content;
+  if (typeof content === 'string') return content || undefined;
+  if (!Array.isArray(content)) return undefined;
+  const text = content
+    .filter((part) => (part as { type?: unknown } | undefined)?.type === 'text')
+    .map((part) => String((part as { text?: unknown }).text ?? ''))
+    .join('');
+  return text || undefined;
 }
 function integer(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -151,11 +200,21 @@ export default function bridge(pi: ExtensionAPI) {
   });
   // Streaming updates never produce telemetry rows (task 4.8): only the start
   // and end of a tool execution are wired.
-  pi.on('tool_execution_start', (event: ToolExecutionStartEvent, _ctx) => {
+  pi.on('tool_execution_start', (event: ToolExecutionStartEvent, ctx) => {
+    const name = typeof event.toolName === 'string' ? event.toolName : undefined;
     toolStarts.set(event.toolCallId, {
-      ...(typeof event.toolName === 'string' ? { name: event.toolName } : {}),
+      ...(name ? { name } : {}),
       ...(byteSize(event.args) !== undefined ? { argumentBytes: byteSize(event.args) } : {}),
       startedAt: Date.now(),
+    });
+    // The call itself is part of the transcript: the start row carries the
+    // (bounded) arguments, the end row the (bounded) result. Streaming updates
+    // stay unwired (task 4.8).
+    emit('runtime.tool_start', {
+      ...identity(ctx),
+      ...(name ? { 'pi.tool.name': name } : {}),
+      ...(event.toolCallId ? { 'pi.tool.call_id': event.toolCallId } : {}),
+      ...contentAttributes('herdr.content.tool_input', event.args),
     });
   });
   pi.on('tool_execution_end', (event: ToolExecutionEndEvent, ctx) => {
@@ -176,8 +235,9 @@ export default function bridge(pi: ExtensionAPI) {
       ...(duration !== undefined ? { 'pi.tool.duration_ms': duration } : {}),
       ...(start?.argumentBytes !== undefined ? { 'pi.tool.argument_bytes': start.argumentBytes } : {}),
       ...(resultBytes !== undefined ? { 'pi.tool.result_bytes': resultBytes } : {}),
-      // The tool result is content; classify only that the tool failed. Never
-      // fall back to result/tool output text (SEC-001).
+      // The result text is captured only under the explicit opt-in; the error
+      // class never derives from it (SEC-001).
+      ...contentAttributes('herdr.content.tool_output', event.result),
       ...(isError ? { 'pi.error.class': 'tool_error' } : {}),
     });
   });
@@ -248,7 +308,23 @@ export default function bridge(pi: ExtensionAPI) {
   });
   pi.on('message_end', (event: MessageEndEvent, ctx) => {
     const message = event.message;
-    if (message?.role !== 'assistant') return;
+    const role = message?.role;
+    // Transcript: the user prompt and the assistant reply, each as its own row
+    // so the conversation is reconstructable without repeating the whole
+    // history per provider call. Tool results belong to the tool events.
+    if (role === 'user' || role === 'assistant') {
+      const attributes = contentAttributes(
+        role === 'user' ? 'herdr.content.input' : 'herdr.content.output',
+        messageText(message),
+      );
+      if (Object.keys(attributes).length)
+        emit('runtime.message', {
+          ...identity(ctx),
+          'pi.message.role': role,
+          ...attributes,
+        });
+    }
+    if (role !== 'assistant') return;
     const usage = message.usage;
     if (!usage) return;
     const durationMs = assistantStartedAt !== undefined ? Math.max(0, Date.now() - assistantStartedAt) : undefined;

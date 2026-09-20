@@ -60,7 +60,7 @@ export function LocationPicker(props: LocationPickerProps) {
 								title={entry.label}
 								onMouseUp={() => {
 									props.onSelectIndex(index);
-									props.onAccept(entry.route);
+									if (entry.route) props.onAccept(entry.route);
 								}}
 								cells={
 									entry.description

@@ -358,7 +358,15 @@ test("every environment category opens from the list cursor and keeps the shell 
 			// Ctrl+P the one location picker.
 			t.mockInput.pressKey("?");
 			await renderUntil(t, (frame) => frame.includes("Keybindings"), 20);
-			expect(t.captureCharFrame()).toContain("Keybindings");
+			const help = t.captureCharFrame();
+			expect(help).toContain("Keybindings");
+			// `w` starts work for the highlighted row where the rows are startable
+			// applications/libraries, and nowhere else.
+			if (label === "Applications" || label === "Libraries") {
+				expect(help).toContain("Start workflow");
+			} else {
+				expect(help).not.toContain("Start workflow");
+			}
 			await pressEscapeAndSettle(t, (frame) => !frame.includes("Keybindings"));
 			t.mockInput.pressKey("p", { ctrl: true });
 			await renderUntil(t, (frame) => frame.includes("Locations"), 20);

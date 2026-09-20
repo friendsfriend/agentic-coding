@@ -258,12 +258,16 @@ const RAW_KEYBINDS: KeybindDef[] = [
 		category: "Actions",
 	},
 	{
-		keys: ["w"],
+		keys: ["W"],
 		description: "Open worktree manager",
 		footerDescription: "Worktrees",
 		context: "table",
 		category: "Actions",
 	},
+	// `w` (Start workflow) is not listed here: only the unified shell can start
+	// a workflow, and it registers the binding itself when it hosts this table
+	// (`table-keymap-layer.ts`), so the footer never advertises a dead key in a
+	// standalone environment run.
 	{
 		keys: ["+"],
 		description: "Add repository or task",

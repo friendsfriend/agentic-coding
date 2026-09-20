@@ -17,6 +17,8 @@ export interface TableKeymapLayerDeps {
 
 const TABLE_PRIORITY = 100;
 const KUBERNETES_PRIORITY = 120;
+/** Above the table handler: list-row workflow launch owns `w` where offered. */
+const START_WORKFLOW_PRIORITY = TABLE_PRIORITY + 10;
 
 /** Keys the table handler implements but that no view context declares, plus
  * the structural navigation every list needs. */
@@ -76,6 +78,7 @@ const TABLE_KEYS = [
 	"e",
 	"n",
 	"w",
+	"W",
 	"i",
 	"T",
 	"1",
@@ -167,7 +170,51 @@ export function registerTableKeymapLayer(
 	// while this body is shown (see `hostOwnedKeys`).
 	const shellOwnedKeys = hostOwnedKeys(deps.ctx.embedded);
 
+	/**
+	 * Contextual workflow launch from the list (`w`): the shell owns form and
+	 * start boundary, so the selected row only reports its configured identity.
+	 * One layer per category keeps the footer and `?` help honest — the key is
+	 * advertised exactly where the row carries a startable application/library.
+	 */
+	const startWorkflowLayers = deps.ctx.startWorkflow
+		? (["applications", "libraries"] as const).map((tab) => {
+				const command = `table.${tab}.start-workflow`;
+				return keymap.registerLayer({
+					name: `Table: start workflow (${tab})`,
+					priority: START_WORKFLOW_PRIORITY,
+					...(deps.ctx.embedded ? { shellFeature: "environments" } : {}),
+					shutdown: false,
+					envModal: "none",
+					appViewMode: "table",
+					activeTab: tab,
+					commands: [
+						{
+							name: command,
+							context: "table",
+							category: "Workflow",
+							title: "Start workflow",
+							desc: "Start a workflow for the selected application or library.",
+							footer: "w",
+							discoverable: true,
+							run: ({ event }) => runTable(event),
+						},
+					],
+					bindings: [
+						{
+							key: "w",
+							cmd: command,
+							context: "table",
+							category: "Workflow",
+							footer: "w",
+							discoverable: true,
+						},
+					],
+				});
+			})
+		: [];
+
 	const disposers = [
+		...startWorkflowLayers,
 		keymap.registerLayer({
 			name: "Table/List",
 			priority: TABLE_PRIORITY,

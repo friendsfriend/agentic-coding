@@ -25,6 +25,35 @@ function bounded(value, max) {
 	if (typeof value !== "string" || !value) return undefined;
 	return value.replace(SECRET_PATTERN, "[REDACTED]").slice(0, max || 256);
 }
+// Session content capture is the explicit telemetry opt-in the engine forwards
+// to this run's environment (see pi-telemetry.ts): without it every event stays
+// metadata-only and no prompt, model text, tool argument or tool result leaves
+// the process.
+const captureContent = process.env.HERDR_CAPTURE_CONTENT === "1";
+/** Per-field cap for captured content, matching the engine's
+ * TELEMETRY_ATTRIBUTE_LIMIT so bridge and engine bound content the same way. */
+const CONTENT_LIMIT = 8192;
+/** One bounded content value: redacted, capped, and flagged when the cap cut
+ * it. Objects (tool args, tool results) are serialized, so a captured value is
+ * always a single attribute string. */
+function boundedContent(value) {
+	if (value === undefined || value === null) return undefined;
+	let text;
+	if (typeof value === "string") text = value;
+	else {
+		try {
+			text = JSON.stringify(value) || "";
+		} catch {
+			return undefined;
+		}
+	}
+	if (!text) return undefined;
+	const safe = text.replace(SECRET_PATTERN, "[REDACTED]");
+	if (!safe) return undefined;
+	return safe.length > CONTENT_LIMIT
+		? { text: safe.slice(0, CONTENT_LIMIT), truncated: true }
+		: { text: safe };
+}
 function integer(value) {
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
@@ -95,6 +124,10 @@ function isNoise(type) {
 	);
 }
 const permissionAskedAt = new Map();
+/** Message id -> role, so a text part can be classified as user or assistant. */
+const messageRoles = new Map();
+/** Tool call ids whose input/output content was already emitted. */
+const toolContentSent = new Set();
 let stepStartedAt;
 function partOf(properties) {
 	return (properties && properties.part) || properties || {};
@@ -161,6 +194,21 @@ function handlePart(type, properties) {
 		const outputBytes = byteSize(state.output);
 		const failed = state.status === "error" || state.error !== undefined;
 		const classification = failed ? errorClass(state.error) : undefined;
+		// Content is attached once per call: the arguments on the first update
+		// that carries them, the result on the terminal update. Part updates
+		// stream, so without the marker one call would repeat its payload.
+		const callId = bounded(part.callID || part.id, 128);
+		const inputContent =
+			captureContent && callId && !toolContentSent.has(`in:${callId}`)
+				? boundedContent(state.input)
+				: undefined;
+		if (inputContent) toolContentSent.add(`in:${callId}`);
+		const terminal = state.status === "completed" || state.status === "error" || failed;
+		const outputContent =
+			captureContent && callId && terminal && !toolContentSent.has(`out:${callId}`)
+				? boundedContent(state.output !== undefined ? state.output : state.error)
+				: undefined;
+		if (outputContent) toolContentSent.add(`out:${callId}`);
 		emit("runtime.tool", {
 			...identity(properties),
 			...(bounded(part.tool, 128) ? { "oc.tool.name": bounded(part.tool, 128) } : {}),
@@ -169,6 +217,11 @@ function handlePart(type, properties) {
 			...(duration !== undefined ? { "oc.tool.duration_ms": duration } : {}),
 			...(inputBytes !== undefined ? { "oc.tool.input_bytes": inputBytes } : {}),
 			...(outputBytes !== undefined ? { "oc.tool.output_bytes": outputBytes } : {}),
+			...(inputContent ? { "herdr.content.tool_input": inputContent.text } : {}),
+			...(outputContent ? { "herdr.content.tool_output": outputContent.text } : {}),
+			...((inputContent && inputContent.truncated) || (outputContent && outputContent.truncated)
+				? { "oc.content.truncated": true }
+				: {}),
 			...(classification ? { "oc.error.class": classification } : {}),
 			...(failed ? { outcome: "error" } : {}),
 		});
@@ -176,10 +229,28 @@ function handlePart(type, properties) {
 	}
 	if (partType === "text" || partType === "reasoning") {
 		const length = typeof part.text === "string" ? part.text.length : integer(part.length);
+		// Assistant/user text is the transcript; reasoning is never sent to the
+		// model, so only text parts can carry content. A text part is complete
+		// once its end time is set (user parts are complete on arrival); streaming
+		// updates keep their length-only row.
+		const role = part.messageID ? messageRoles.get(part.messageID) : undefined;
+		const complete =
+			partType === "text" && !part.synthetic && !part.ignored && role !== undefined &&
+			(role === "user" || integer(part.time && part.time.end) !== undefined);
+		const content = complete ? boundedContent(part.text) : undefined;
 		emit("runtime.part_length", {
 			...identity(properties),
 			"oc.part.type": partType,
 			...(length !== undefined ? { "oc.part.length": length } : {}),
+			...(role ? { "oc.message.role": role } : {}),
+			...(content
+				? {
+						...(role === "user"
+							? { "herdr.content.input": content.text }
+							: { "herdr.content.output": content.text }),
+						...(content.truncated ? { "oc.content.truncated": true } : {}),
+					}
+				: {}),
 		});
 		return;
 	}
@@ -298,7 +369,17 @@ module.exports = async () => ({
 		if (type === "permission.asked" || type === "permission.requested" || type === "permission.replied") return handlePermission(type, properties);
 		if (type === "todo.updated") return handleTodos(properties);
 		if (type === "session.diff") return handleDiff(properties);
-		if (type === "message.updated") return emit("runtime.message", identity(properties));
+		if (type === "message.updated") {
+			// Roles are learned here because a later text part carries only its
+			// message id; without a known role the part never claims content.
+			const info = (properties && properties.info) || properties || {};
+			if (typeof info.id === "string" && (info.role === "user" || info.role === "assistant"))
+				messageRoles.set(info.id, info.role);
+			return emit("runtime.message", {
+				...identity(properties),
+				...(bounded(info.role, 32) ? { "oc.message.role": bounded(info.role, 32) } : {}),
+			});
+		}
 		emit(`runtime.${type}`, identity(properties));
 	},
 });

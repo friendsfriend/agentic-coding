@@ -116,6 +116,7 @@ import {
 	environmentDestinations,
 	filterPickerEntries,
 	homeDestinations,
+	homeLaunchEntry,
 	observabilityDestinations,
 	pickerEntries,
 	settingsDestinations,
@@ -462,7 +463,14 @@ export function App(props: {
 	const destinationEntries = (): DestinationEntry[] | undefined => {
 		switch (currentPage()) {
 			case "home":
-				return homeDestinations(surface());
+				// Home adds the one launch that is not tied to a page: a workflow in
+				// the working directory (or a path the user enters in the form).
+				return [
+					...homeDestinations(surface()),
+					homeLaunchEntry(() =>
+						openLaunch({ kind: "path", repository: process.cwd() }),
+					),
+				];
 			case "settings":
 				return settingsDestinations();
 			case "environments":
@@ -488,7 +496,11 @@ export function App(props: {
 		pages.setViewState(pages.current(), index);
 	};
 	const openDestination = (entry: DestinationEntry): void => {
-		pages.navigate(entry.route);
+		if (entry.action) {
+			entry.action();
+			return;
+		}
+		if (entry.route) pages.navigate(entry.route);
 	};
 	const handleDestinationKey = (key: string): boolean => {
 		const entries = destinationEntries();
@@ -687,9 +699,10 @@ export function App(props: {
 	// ---- Contextual workflow launch (launch-workflows-from-project-and-wiki-pages) ----
 	// Workflow creation belongs to the page that owns the target: an
 	// application/library resource page carries the configured project identity,
-	// Wiki carries repository-independent research. The shell owns the creation
-	// form and the start boundary; the resource page only reports the intent.
-	// There is no workflow list, history, reopen or launcher surface anywhere.
+	// Wiki carries repository-independent research, and Home's "New workflow"
+	// entry carries the working directory (editable to any other path). The shell
+	// owns the creation form and the start boundary; every entry point only
+	// reports the intent. There is no workflow list, history or reopen surface.
 	const [launchContext, setLaunchContext] =
 		createSignal<WorkflowLaunchContext | null>(null);
 	const [launchHandler, setLaunchHandler] = createSignal<
@@ -723,13 +736,22 @@ export function App(props: {
 			notify(
 				context.kind === "project"
 					? `Project ${context.name} is not available; clone or reconfigure it before starting work`
-					: "The standalone research target is unavailable",
+					: context.kind === "path"
+						? `Directory ${context.repository} is not available`
+						: "The standalone research target is unavailable",
 				"error",
 			);
 			return;
 		}
-		setLaunchContext(context);
-		nav.pushModal("new-workflow", routeKey(pages.current()));
+		const origin = routeKey(pages.current());
+		// Mount the form after the key that opened it has finished dispatching: a
+		// native editor mounted inside the dispatch receives that same Enter and
+		// would submit its prefilled step immediately. Every launch entry (Home's
+		// action, the list's `w`, Wiki's `w`) keeps its first step this way.
+		queueMicrotask(() => {
+			setLaunchContext(context);
+			nav.pushModal("new-workflow", origin);
+		});
 	};
 	const closeLaunch = (): void => {
 		setLaunchHandler(undefined);
@@ -1497,7 +1519,7 @@ export function App(props: {
 			} else if (key === "enter" || key === "return") {
 				const entry = matches[pickerIndex()];
 				nav.popModal();
-				if (entry) pages.navigate(entry.route);
+				if (entry?.route) pages.navigate(entry.route);
 			} else if (!event.ctrl && !event.meta) {
 				// A search box accepts spaces: the key event names them "space".
 				const typed = key === "space" ? " " : key;

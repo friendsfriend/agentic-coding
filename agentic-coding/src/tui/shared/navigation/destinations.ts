@@ -37,7 +37,14 @@ export interface DestinationEntry {
 	description?: string;
 	/** Group heading in the picker. */
 	group: string;
-	route: Route;
+	/** Location the entry opens; absent for an in-place `action` entry. */
+	route?: Route;
+	/**
+	 * In-place action instead of navigation: the one Home entry that opens the
+	 * shell's workflow form rather than a page. Pickers never carry these (an
+	 * action has no location to jump to).
+	 */
+	action?: () => void;
 }
 
 const CATEGORY_LABELS: Readonly<Record<string, string>> = {
@@ -98,8 +105,9 @@ export function homeDestinations(
 		});
 	}
 	// Workflow creation is contextual (application/library resource pages) or
-	// independent (Wiki): there is no Workflows destination, list, history or
-	// reopen entry anywhere in the full application
+	// independent (Wiki), plus Home's "New workflow" action for a path outside
+	// the configured projects: there is no Workflows list, history or reopen
+	// entry anywhere in the full application
 	// (launch-workflows-from-project-and-wiki-pages).
 	if (surface.settings) {
 		entries.push({
@@ -163,6 +171,23 @@ export function categoryDestinations(
 }
 
 /**
+ * Home's workflow-creation action: the one launch that is not tied to a page,
+ * so the label and description live here with the other destinations while the
+ * shell owns the form it opens. Appended by the shell, never offered by the
+ * location picker.
+ */
+export function homeLaunchEntry(open: () => void): DestinationEntry {
+	return {
+		id: "workflow.new",
+		label: "New workflow",
+		description:
+			"Start a workflow in the working directory or a path you enter",
+		group: "Destinations",
+		action: open,
+	};
+}
+
+/**
  * Location-picker entries: every registered destination plus in-memory
  * identities the caller supplies (recent resources, ancestors, siblings). The
  * catalog never scans a repository or invents a global resource index.
@@ -178,13 +203,15 @@ export function pickerEntries(
 		...(surface.settings ? settingsDestinations() : []),
 		...extra,
 	];
-	return entries.map(({ id, label, description, group, route }) => ({
-		id,
-		label,
-		description,
-		group,
-		route,
-	}));
+	return entries
+		.filter((entry) => entry.route !== undefined)
+		.map(({ id, label, description, group, route }) => ({
+			id,
+			label,
+			description,
+			group,
+			route,
+		}));
 }
 
 /**

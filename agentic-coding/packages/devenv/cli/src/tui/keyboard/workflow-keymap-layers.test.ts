@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createTestKeymap } from "@opentui/keymap/testing";
+import { getActiveFooterKeybindsFromKeymap } from "./keymap-metadata.ts";
 import { applyKeymapRuntimeSnapshot } from "./keymap-runtime.ts";
 import { setupDevenvKeymap } from "./keymap-setup.ts";
 import type {
@@ -192,6 +193,42 @@ describe("workflow keymap layers", () => {
 					repository: "/managed/checkout",
 				},
 			]);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test("the resource page advertises start workflow as `w Start workflow`", () => {
+		const { keymap, cleanup } = createTestKeymap({ defaultKeys: true });
+		const stores = makeStores("appDetail", {
+			appDetailStore: signalStore({
+				appDetailApp: () => ({
+					ident: "checkout",
+					displayName: "Checkout",
+					repositoryPath: "/managed/checkout",
+				}),
+				appDetailPanelCount: 1,
+				dependencyTreeFocused: () => false,
+				appDetailScrollBoxRefs: [],
+				appDetailPanelIndex: () => 0,
+				actionTargets: () => [],
+			}) as never,
+		});
+		try {
+			setupDevenvKeymap(keymap as never);
+			setRuntime(keymap, "appDetail");
+			registerWorkflowKeymapLayers(keymap as never, {
+				stores,
+				actions: actions(),
+				ctx: { ...ctx(), startWorkflow: () => {} },
+			});
+			// The footer label is the keycap, never a description: the command title
+			// is the action, exactly as every other discoverable binding.
+			expect(
+				getActiveFooterKeybindsFromKeymap(keymap as never).find(
+					(entry) => entry.action === "Start workflow",
+				),
+			).toEqual({ key: "w", action: "Start workflow" });
 		} finally {
 			cleanup();
 		}

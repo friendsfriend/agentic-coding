@@ -97,7 +97,10 @@ Consumers of the root: `src/server-command.ts` (`resolveConfigDir` +
   is exercised by the provider fields until a workflow field is inventoried.
 - **`.env` bootstrap**: `DEVENV_HOME` only (read by `resolveDevenvHome`).
 - **Runtime env forwarding**: telemetry bridges receive `HERDR_*` identity,
-  `OTEL_EXPORTER_OTLP_*`, `HERDR_TELEMETRY_PATH` — never resolved secrets.
+  `OTEL_EXPORTER_OTLP_*`, `HERDR_TELEMETRY_PATH`, and `HERDR_CAPTURE_CONTENT`
+  (the `telemetry.capture_content` opt-in for session content, see
+  [`agent-session-telemetry.md`](agent-session-telemetry.md)) — never resolved
+  secrets.
 - **Askpass shim** (`src/workflow/credentials.ts`): ephemeral, single-owner,
   FIFO-relayed prompt answers; never persisted. **Task 3.4 keeps this as-is.**
 - **`CredentialRegistry`** (`src/server/credentials.ts`): ephemeral server-side

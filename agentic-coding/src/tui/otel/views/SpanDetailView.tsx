@@ -1,3 +1,4 @@
+import { TextAttributes } from "@opentui/core";
 import {
 	HighlightedText,
 	ScrollableContent,
@@ -19,6 +20,23 @@ const title = (key: string) =>
 					? "Tool output"
 					: key;
 
+/** Captured session content: rendered wrapped, not as one clipped row, because
+ * the whole point of the capture is reading the prompt, command or output. */
+const CONTENT_PREFIX = "herdr.content.";
+
+/** JSON payloads (tool arguments and results) are indented so a command and
+ * its output stay readable; plain text is shown as captured. */
+export function prettyContent(value: unknown): string {
+	const text = String(value);
+	const trimmed = text.trim();
+	if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return text;
+	try {
+		return JSON.stringify(JSON.parse(trimmed), null, 2);
+	} catch {
+		return text;
+	}
+}
+
 export function SpanDetailView(props: { node: () => TreeNode | undefined }) {
 	const node = () => props.node();
 	return (
@@ -37,22 +55,40 @@ export function SpanDetailView(props: { node: () => TreeNode | undefined }) {
 				<HighlightedText text="Attributes" highlight="secondary" />
 			</SearchHeader>
 			<ScrollableContent focusable={false}>
-				{(node()?.span.attributes ?? []).map((attribute) => (
-					<box
-						height={1}
-						flexShrink={0}
-						flexDirection="row"
-						paddingLeft={1}
-						paddingRight={1}
-					>
-						<box style={{ width: 24, flexShrink: 0 }} overflow="hidden">
-							<text fg={uiColors.primary}>{title(attribute.key)}</text>
+				{(node()?.span.attributes ?? []).map((attribute) =>
+					attribute.key.startsWith(CONTENT_PREFIX) ? (
+						<box
+							flexShrink={0}
+							flexDirection="column"
+							paddingLeft={1}
+							paddingRight={1}
+						>
+							<text fg={uiColors.primary} attributes={TextAttributes.BOLD}>
+								{title(attribute.key)}
+							</text>
+							<text fg={uiColors.textSecondary} wrapMode="word">
+								{prettyContent(attribute.value)}
+							</text>
 						</box>
-						<box style={{ flexGrow: 1, minWidth: 0 }} overflow="hidden">
-							<text fg={uiColors.textSecondary}>{String(attribute.value)}</text>
+					) : (
+						<box
+							height={1}
+							flexShrink={0}
+							flexDirection="row"
+							paddingLeft={1}
+							paddingRight={1}
+						>
+							<box style={{ width: 24, flexShrink: 0 }} overflow="hidden">
+								<text fg={uiColors.primary}>{title(attribute.key)}</text>
+							</box>
+							<box style={{ flexGrow: 1, minWidth: 0 }} overflow="hidden">
+								<text fg={uiColors.textSecondary}>
+									{String(attribute.value)}
+								</text>
+							</box>
 						</box>
-					</box>
-				))}
+					),
+				)}
 			</ScrollableContent>
 		</box>
 	);

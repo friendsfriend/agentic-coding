@@ -40,6 +40,39 @@ const PROJECT = {
 
 const INDEPENDENT = { kind: "independent" } as const;
 
+const PATH = { kind: "path", repository: "/working/dir" } as const;
+
+test("a path context prefills the working directory and lets the user replace it", async () => {
+	const t = await testRender(
+		() => (
+			<NewWorkflowModal
+				context={PATH}
+				onKeyReady={() => {}}
+				onCancel={() => {}}
+				onComplete={async () => {}}
+			/>
+		),
+		{ width: 110, height: 40 },
+	);
+	await t.flush();
+	const first = t.captureCharFrame();
+	// The target is a directory, prefilled with the working directory.
+	expect(first).toContain("Repository");
+	expect(first).toContain("/working/dir");
+	expect(first).toContain("Repository path");
+	// The native editor owns the field: clear the prefill and enter another path.
+	for (let index = 0; index < "/working/dir".length; index += 1)
+		t.mockInput.pressBackspace();
+	for (const character of "/custom/repo") t.mockInput.pressKey(character);
+	t.mockInput.pressEnter();
+	await t.flush();
+	const next = t.captureCharFrame();
+	expect(next).toContain("Repository");
+	expect(next).toContain("/custom/repo");
+	expect(next).toContain("Workflow type");
+	t.renderer.destroy();
+});
+
 test("a project context offers every registry workflow type without asking for a repository", async () => {
 	const t = await testRender(
 		() => (

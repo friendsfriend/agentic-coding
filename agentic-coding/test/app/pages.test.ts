@@ -8,6 +8,7 @@ import {
 	categoryDestinations,
 	filterPickerEntries,
 	homeDestinations,
+	homeLaunchEntry,
 	observabilityDestinations,
 	pickerEntries,
 } from "../../src/tui/shared/navigation/destinations.ts";
@@ -27,10 +28,10 @@ import {
 // Home, category pages, breadcrumbs and the location picker
 // (replace-nested-tabs-with-page-navigation, task 2.1).
 //
-// The full application offers exactly Environments, Observability, Wiki and
-// Settings: workflow creation is contextual and there is no Workflows
-// destination, list, history or reopen entry
-// (launch-workflows-from-project-and-wiki-pages, task 2.4).
+// Home offers Environments, Observability, Wiki and Settings, plus the
+// "New workflow" action (working directory or a path the user enters): workflow
+// creation is contextual and there is no Workflows destination, list, history
+// or reopen entry (launch-workflows-from-project-and-wiki-pages, task 2.4).
 
 const FULL_SURFACE = {
 	environments: true,
@@ -47,6 +48,24 @@ describe("home and category destinations", () => {
 			"Wiki",
 			"Settings",
 		]);
+	});
+
+	test("Home's workflow action is an in-place action, never a picker page", () => {
+		let opened = 0;
+		const entry = homeLaunchEntry(() => {
+			opened += 1;
+		});
+		expect(entry.id).toBe("workflow.new");
+		expect(entry.label).toBe("New workflow");
+		expect(entry.route).toBeUndefined();
+		entry.action?.();
+		expect(opened).toBe(1);
+		// The location picker jumps to pages, so the action entry never leaks in.
+		expect(
+			pickerEntries(FULL_SURFACE, [entry]).some(
+				(candidate) => candidate.id === "workflow.new",
+			),
+		).toBe(false);
 	});
 
 	test("a surface without the environment backend omits Environments only", () => {
