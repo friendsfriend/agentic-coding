@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { TextAttributes } from "@opentui/core";
-import { SearchHeader } from "@ui";
 import type { JSX } from "solid-js";
+import { SearchHeader } from "../components/SearchHeader";
 import { uiColors } from "../theme/colors";
 
 export interface DetailSectionProps {

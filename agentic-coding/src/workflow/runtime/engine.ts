@@ -21,13 +21,12 @@ import path from "node:path";
 import { Cause, Chunk, Effect, Exit, type Layer, Option } from "effect";
 import {
 	decodeCommand,
-	decodeSnapshot,
 	type WorkflowCommand,
 	type WorkflowRun,
-	WorkflowRuntimeError,
 	type WorkflowSnapshot,
 	type WorkflowView,
-} from "../contracts.ts";
+} from "../../contracts/workflow.ts";
+import { decodeSnapshot, WorkflowRuntimeError } from "../contracts.ts";
 import { decodePlanResult } from "../definitions/contracts.ts";
 import { effectiveManifestPolicy } from "../definitions.ts";
 import {
@@ -1515,17 +1514,27 @@ export class WorkflowEngine {
 		// not launch the replacement while the old canonical pane can still live.
 		const rows = db
 			.query(
-				`SELECT * FROM workflow_outbox AS ready WHERE ((ready.status IN ('pending','retry') AND ready.attempts < ready.max_attempts AND (ready.next_attempt_at IS NULL OR ready.next_attempt_at<=?) AND NOT (ready.kind='agent.launch' AND COALESCE(json_extract(ready.payload_json,'$.cancelRequested'),0)=1)) OR (ready.status='running' AND ready.lease_expires_at<=?)) AND NOT (ready.kind IN ('delivery.commit','delivery.push') AND EXISTS (SELECT 1 FROM workflow_outbox AS promotion WHERE promotion.workflow_id=ready.workflow_id AND promotion.kind='wiki.verify' AND promotion.status<>'completed')) AND NOT (ready.kind='agent.launch' AND EXISTS (SELECT 1 FROM workflow_outbox AS stop WHERE stop.workflow_id=ready.workflow_id AND stop.kind='agent.stop' AND stop.status NOT IN ('completed','expired'))) AND NOT (ready.kind='agent.stop' AND EXISTS (SELECT 1 FROM workflow_outbox AS launch WHERE launch.workflow_id=ready.workflow_id AND launch.kind='agent.launch' AND launch.status='running' AND json_extract(launch.payload_json,'$.runId')=json_extract(ready.payload_json,'$.runId'))) ORDER BY ready.rowid LIMIT ?`,
+				`SELECT * FROM workflow_outbox AS ready WHERE ((ready.status IN ('pending','retry') AND ready.attempts < ready.max_attempts AND (ready.next_attempt_at IS NULL OR ready.next_attempt_at<=?) AND NOT (ready.kind='agent.launch' AND COALESCE(json_extract(ready.payload_json,'$.cancelRequested'),0)=1)) OR (ready.status='running' AND ready.lease_expires_at<=?)) AND NOT (ready.kind IN ('delivery.commit','delivery.push') AND EXISTS (SELECT 1 FROM workflow_outbox AS promotion WHERE promotion.workflow_id=ready.workflow_id AND promotion.kind='wiki.verify' AND promotion.status<>'completed')) AND NOT (ready.kind='agent.launch' AND EXISTS (SELECT 1 FROM workflow_outbox AS stop WHERE stop.workflow_id=ready.workflow_id AND stop.kind='agent.stop' AND stop.status NOT IN ('completed','expired'))) AND NOT (ready.kind='agent.stop' AND EXISTS (SELECT 1 FROM workflow_outbox AS launch WHERE launch.workflow_id=ready.workflow_id AND launch.kind='agent.launch' AND launch.status='running' AND json_extract(launch.payload_json,'$.runId')=json_extract(ready.payload_json,'$.runId'))) ORDER BY ready.rowid`,
 			)
-			.all(at.toISOString(), at.toISOString(), limit) as EffectRow[];
+			.all(at.toISOString(), at.toISOString()) as EffectRow[];
 		for (const row of rows) {
+			if (claimed.length + exhausted.length >= limit) break;
 			const owner = instance(db, row.workflow_id);
 			const snapshot = decodeSnapshot(JSON.parse(owner.snapshot_json));
-			const definition = this.registry.definition(
-				snapshot.definition.id,
-				snapshot.definition.version,
-				snapshot.definition.digest,
-			);
+			let definition: CompiledWorkflowDefinition;
+			try {
+				definition = this.registry.definition(
+					snapshot.definition.id,
+					snapshot.definition.version,
+					snapshot.definition.digest,
+				);
+			} catch (error) {
+				// A stale workflow remains repairable through operator.repin, but its
+				// old outbox row must not block every newer workflow in this store.
+				if (String(error).includes("workflow definition pin mismatch"))
+					continue;
+				throw error;
+			}
 			const runList = runs(db, snapshot.workflowId);
 			validateSnapshot(snapshot, definition, runList, this.registry);
 			validateEffect(row, snapshot, definition, runList, this.registry);

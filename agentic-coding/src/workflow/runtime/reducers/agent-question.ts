@@ -9,7 +9,7 @@ import type {
 	DeveloperQuestionItem,
 	WorkflowCommand,
 	WorkflowSnapshot,
-} from "../../contracts.ts";
+} from "../../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
 import {
 	MAX_DEVELOPER_DIALOGUE_RECORDS,

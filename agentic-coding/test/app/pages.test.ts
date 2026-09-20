@@ -3,23 +3,26 @@ import { footerKeybinds } from "@ui";
 import {
 	breadcrumbSegments,
 	breadcrumbWidth,
-} from "../../src/tui/shared/navigation/breadcrumbs";
+} from "../../src/tui/shared/navigation/breadcrumbs.ts";
 import {
 	categoryDestinations,
 	filterPickerEntries,
 	homeDestinations,
 	observabilityDestinations,
 	pickerEntries,
-} from "../../src/tui/shared/navigation/destinations";
+} from "../../src/tui/shared/navigation/destinations.ts";
 import {
 	destinationPageKeybindCatalog,
 	locationPickerKeybindCatalog,
-} from "../../src/tui/shared/navigation/keybinds";
+} from "../../src/tui/shared/navigation/keybinds.ts";
 import {
 	breadcrumb,
+	PAGES,
+	type PageId,
+	pageLabel,
 	type Route,
 	resourceRoute,
-} from "../../src/tui/shared/routes";
+} from "../../src/tui/shared/routes.ts";
 
 // Home, category pages, breadcrumbs and the location picker
 // (replace-nested-tabs-with-page-navigation, task 2.1).
@@ -231,5 +234,58 @@ describe("page keybind catalogs", () => {
 		);
 		expect(keys).toContain("go to location");
 		expect(keys).toContain("close picker");
+	});
+});
+
+describe("every routed page has a definition and a label", () => {
+	test("the route table covers every page id", () => {
+		// A page that exists in the router but not in the table would render an
+		// undefined label; the list is the router's own union.
+		const ids: PageId[] = [
+			"home",
+			"settings",
+			"settings.appearance",
+			"settings.agents",
+			"settings.providers",
+			"settings.projects",
+			"settings.backend",
+			"environments",
+			"environments.applications",
+			"environments.libraries",
+			"environments.infrastructure",
+			"environments.scripts",
+			"environments.kubernetes",
+			"environments.resource",
+			"observability",
+			"observability.traces",
+			"observability.traces.tree",
+			"observability.traces.tree.span",
+			"observability.metrics",
+			"observability.metrics.detail",
+			"observability.logs",
+			"observability.logs.detail",
+			"observability.topology",
+			"observability.topology.service",
+			"wiki",
+			"wiki.note",
+			"workflows.detail",
+		];
+		for (const page of ids) {
+			expect(PAGES[page]).toBeDefined();
+			expect(pageLabel({ page })).toBeTruthy();
+		}
+		// every page with a table entry is one of the routed ids
+		for (const page of Object.keys(PAGES))
+			expect(ids).toContain(page as PageId);
+	});
+
+	test("there is no workflow list, history or reopen destination", () => {
+		// Workflow creation is contextual (launch-workflows-from-project-and-wiki-
+		// pages, task 2.4): the only workflow page is the detail route, so the
+		// route split has no list view to extract.
+		const pages = Object.keys(PAGES).filter((page) =>
+			page.startsWith("workflows"),
+		);
+		expect(pages).toEqual(["workflows.detail"]);
 	});
 });

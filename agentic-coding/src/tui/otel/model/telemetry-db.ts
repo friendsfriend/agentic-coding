@@ -6,7 +6,10 @@
 // The trace list is paged and spans are fetched per workflow, so opening the
 // observability feature reads one page plus one workflow's spans instead of the
 // whole history.
-import type { SpanData, TraceSummaryPage } from "./types.ts";
+import type {
+	SpanData,
+	TraceSummaryPage,
+} from "../../../contracts/telemetry.ts";
 
 export interface TelemetryWorkspace {
 	changeId: string;

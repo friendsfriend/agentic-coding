@@ -1,4 +1,4 @@
-import type { ClientDeps } from "./client-types";
+import type { ClientDeps } from "./client-types.ts";
 
 export async function createExampleConfig(deps: ClientDeps): Promise<void> {
 	const response = await deps.fetchFn(`${deps.baseUrl}/api/example-config`, {

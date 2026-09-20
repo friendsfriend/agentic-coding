@@ -19,7 +19,7 @@ import type {
 	WorkflowRouting,
 	WorkflowRun,
 	WorkflowSnapshot,
-} from "../contracts.ts";
+} from "../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../contracts.ts";
 import type {
 	CompiledWorkflowDefinition,

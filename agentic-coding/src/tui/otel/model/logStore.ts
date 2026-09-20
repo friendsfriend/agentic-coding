@@ -1,4 +1,4 @@
-import type { LogData } from "./types";
+import type { LogData } from "../../../contracts/telemetry.ts";
 
 export type LogSeverity =
 	| "TRACE"

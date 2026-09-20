@@ -18,6 +18,11 @@ export function definitionVersionForBehaviorPins(rounds: number): number {
 	return rounds + 300;
 }
 
+/** Research definitions that grant the selected profile's normal tool access. */
+export function definitionVersionForResearchTools(rounds: number): number {
+	return rounds + 400;
+}
+
 const MANIFEST_POLICY: Readonly<Record<string, WorkflowManifestPolicy>> = {
 	"openspec-full": {
 		targetKind: "repository",
@@ -74,6 +79,18 @@ export function withManifestPolicy(
 	const policy = MANIFEST_POLICY[manifest.id];
 	if (!policy) throw new Error(`missing manifest policy for ${manifest.id}`);
 	return { ...manifest, policy };
+}
+
+export function withFullToolResearchPolicy(
+	manifest: WorkflowManifest,
+): WorkflowManifest {
+	const withPolicy = withManifestPolicy(manifest);
+	const policy = withPolicy.policy;
+	if (!policy) throw new Error("research manifest policy is missing");
+	return {
+		...withPolicy,
+		policy: { ...policy, requiresReadOnlyResearcher: false },
+	};
 }
 
 /** A pre-policy definition version has no `policy` block (adding one would

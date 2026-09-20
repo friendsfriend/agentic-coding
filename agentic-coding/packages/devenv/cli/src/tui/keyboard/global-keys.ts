@@ -1,15 +1,15 @@
 import { themeNames } from "@ui";
-import { getGuide } from "../guides";
-import { applyTheme, saveThemeName } from "../theme-settings";
+import { getGuide } from "../guides/index.ts";
+import { applyTheme, saveThemeName } from "../theme-settings.ts";
 
-import { isDownKey, isUpKey } from "./nav-keys";
-import { routePastedText } from "./paste-handler";
+import { isDownKey, isUpKey } from "./nav-keys.ts";
+import { routePastedText } from "./paste-handler.ts";
 import type {
 	KeyboardActions,
 	KeyboardContext,
 	KeyboardEvent,
 	KeyboardStores,
-} from "./types";
+} from "./types.ts";
 
 /**
  * Handles global keys that apply regardless of view mode:

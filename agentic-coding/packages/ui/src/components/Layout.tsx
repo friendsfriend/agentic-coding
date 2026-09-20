@@ -2,6 +2,7 @@
 // Application shell: a fixed header band, the content, and a fixed footer band.
 // The env surface reserves two header and three footer lines, the dashboard one
 // and one, so both pass their own line counts instead of owning a layout copy.
+
 import type { JSX } from "solid-js";
 import { invokeGlobalSelectionMouseUpHandler } from "./selectionCopy";
 

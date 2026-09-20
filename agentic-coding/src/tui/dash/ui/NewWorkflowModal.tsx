@@ -20,12 +20,15 @@ import {
 	Show,
 	untrack,
 } from "solid-js";
-import { backendClient } from "../../../server/client";
-import { PUBLIC_WORKFLOW_CATALOG } from "../../../workflow/definitions";
-import { PRESET_CONFIG_DEFAULTS } from "../engine";
-import type { WorkflowLaunchContext, WorkflowLaunchInput } from "../launch";
-import { workflowTypesForContext } from "../launch";
-import { discoverChanges, discoverChangesAsync } from "../observations";
+import { gatewayOrUndefined } from "../../data/index.ts";
+import { discoverChanges } from "../../data/workflow.ts";
+import type { WorkflowLaunchContext, WorkflowLaunchInput } from "../launch.ts";
+import { workflowTypesForContext } from "../launch.ts";
+import {
+	discoverChangesLocal,
+	PRESET_CONFIG_DEFAULTS,
+	PUBLIC_WORKFLOW_CATALOG,
+} from "../live.ts";
 
 /** Types whose task is a required field; everything else (openspec-apply)
  * selects an existing change instead. */
@@ -85,8 +88,8 @@ export function NewWorkflowModal(props: {
 		const type = values().workflowType;
 		if (field() !== "workflowId" || type !== "openspec-apply") return;
 		const controller = new AbortController();
-		void discoverChangesAsync(repo, controller.signal)
-			.then((changes) => setAvailableChanges(changes))
+		void discoverChanges(repo, controller.signal)
+			.then((changes) => setAvailableChanges(changes ?? []))
 			.catch(() => setAvailableChanges([]));
 		onCleanup(() => controller.abort());
 	});
@@ -148,10 +151,11 @@ export function NewWorkflowModal(props: {
 			);
 		}
 		if (f === "workflowId" && values().workflowType === "openspec-apply")
-			// Demo/test mode has no transport; the API path uses the prefetched list.
-			return backendClient()
+			// With a gateway configured the prefetched list (read through the data
+			// layer) is the source; a transport-less run reads the checkout.
+			return gatewayOrUndefined()
 				? availableChanges()
-				: discoverChanges(values().repo);
+				: discoverChangesLocal(values().repo);
 		if (f === "mode")
 			return ["worktree", "checkout"].filter((item) =>
 				item.includes(filter().toLowerCase()),

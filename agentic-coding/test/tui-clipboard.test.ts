@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import * as childProcess from "node:child_process";
-import { copyToClipboard } from "../src/tui/clipboard";
+import { copyToClipboard } from "../src/tui/clipboard.ts";
 
 type ExecCall = { command: string; args: string[]; input?: string };
 

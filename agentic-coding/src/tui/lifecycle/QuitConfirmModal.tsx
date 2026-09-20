@@ -7,7 +7,7 @@
 import { TextAttributes } from "@opentui/core";
 import { GenericModal, uiColors } from "@ui";
 import { Show } from "solid-js";
-import { quitConfirmation } from "../lifecycle";
+import { quitConfirmation } from "../lifecycle.ts";
 
 export function QuitConfirmModal() {
 	return (

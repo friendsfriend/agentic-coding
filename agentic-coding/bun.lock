@@ -54,7 +54,6 @@
       "name": "@ui",
       "version": "0.12.7",
       "dependencies": {
-        "@devenv/types": "workspace:*",
         "@opentui/core": "0.4.2",
         "@opentui/keymap": "0.4.2",
         "@opentui/solid": "0.4.2",

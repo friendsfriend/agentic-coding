@@ -8,109 +8,137 @@
  * (reviews, providers, clusters, change requests, …). One implementation per
  * component; different behaviour is a prop, never a fork.
  */
-export * from "./components/AnimatedStatusText";
-export * from "./components/Badge";
-export * from "./components/Card";
-export * from "./components/CenteredState";
-export * from "./components/ChangedFilesView";
-export * from "./components/ContentStack";
-export * from "./components/diffView";
-export * from "./components/ErrorDialog";
-export * from "./components/ErrorModalOverlay";
-export * from "./components/errorModal";
-export * from "./components/FilterModal";
-export * from "./components/FilterStatusBar";
-export * from "./components/GenericModal";
-export * from "./components/Header";
-export * from "./components/HelpModal";
-export * from "./components/HelpText";
-export * from "./components/Highlight";
-export * from "./components/hostChrome";
-export * from "./components/hostKeys";
-export * from "./components/InlineProgressAnimation";
-export * from "./components/keybinds";
-export * from "./components/Layout";
-export * from "./components/ListViewModal";
-export * from "./components/LogView";
-export * from "./components/MarkdownViewer";
-export * from "./components/MatchedText";
-export * from "./components/ModalHelpOverlay";
-export * from "./components/markdownBlocks";
-export * from "./components/markdownSyntax";
-export * from "./components/modalHelp";
-export * from "./components/modalStack";
-export * from "./components/Notification";
-export * from "./components/Panel";
-export * from "./components/ProgressModal";
-export * from "./components/RunningText";
-export * from "./components/ScrollableContent";
-export * from "./components/ScrollableList";
-export * from "./components/SearchHeader";
-export * from "./components/Selectable";
-export * from "./components/SortModal";
-export * from "./components/StatusBar";
+
+export * from "@ui";
+export * from "@ui";
+export * from "@ui";
+export * from "@ui";
+export * from "./components/AnimatedStatusText.tsx";
+export * from "./components/Badge.tsx";
+export * from "./components/Card.tsx";
+export * from "./components/CenteredState.tsx";
+export * from "./components/ChangedFilesView.tsx";
+export * from "./components/ContentStack.tsx";
+export * from "./components/diffView.ts";
+export * from "./components/ErrorDialog.tsx";
+export * from "./components/ErrorModalOverlay.tsx";
+export * from "./components/errorModal.ts";
+export * from "./components/FilterModal.tsx";
+export * from "./components/FilterStatusBar.tsx";
+export * from "./components/GenericModal.tsx";
+export * from "./components/Header.tsx";
+export * from "./components/HelpModal.tsx";
+export * from "./components/HelpText.tsx";
+export * from "./components/Highlight.tsx";
+export * from "./components/hostChrome.ts";
+export * from "./components/hostKeys.ts";
+export * from "./components/InlineProgressAnimation.tsx";
+export * from "./components/keybinds.ts";
+export * from "./components/Layout.tsx";
+export * from "./components/ListViewModal.tsx";
+export * from "./components/LogView.tsx";
+export * from "./components/MarkdownViewer.tsx";
+export * from "./components/MatchedText.tsx";
+export * from "./components/ModalHelpOverlay.tsx";
+export * from "./components/markdownBlocks.ts";
+export * from "./components/markdownSyntax.ts";
+export * from "./components/modalHelp.ts";
+export * from "./components/modalStack.ts";
+export * from "./components/Notification.tsx";
+export * from "./components/Panel.tsx";
+export * from "./components/ProgressModal.tsx";
+export * from "./components/RunningText.tsx";
+export * from "./components/ScrollableContent.tsx";
+export * from "./components/ScrollableList.tsx";
+export * from "./components/SearchHeader.tsx";
+export * from "./components/Selectable.tsx";
+export * from "./components/SortModal.tsx";
+export * from "./components/StatusBar.tsx";
 export * from "./components/selectionCopy";
-export * from "./components/Text";
-export * from "./components/ThemePicker";
-export * from "./components/ThemePickerModal";
+export * from "./components/Text.tsx";
+export * from "./components/ThemePicker.tsx";
+export * from "./components/ThemePickerModal.tsx";
 export * from "./components/utils/focusSoon";
-export * from "./components/utils/gitlabHtml";
+export * from "./components/utils/gitlabHtml.ts";
 export * from "./components/utils/virtualScroll";
-export * from "./components/VerdictModal";
-export * from "./theme/animationColors";
-export * from "./theme/colors";
+export * from "./components/VerdictModal.tsx";
+export * from "./theme/animationColors.ts";
+export * from "./theme/colors.ts";
 export * from "./theme/terminal-theme";
 export * from "./theme/theme";
-export * from "./views/ActionTargetPickerView";
-export * from "./views/AddRepositoryModal";
-export * from "./views/AgentSpaceView";
-export * from "./views/AppDetailView";
-export * from "./views/AssigneePickerModal";
-export * from "./views/annotations";
-export * from "./views/ansiToStyledText";
-export * from "./views/BranchCreateModal";
-export * from "./views/BranchSelectorView";
-export * from "./views/ChangeRequestDetailView";
-export * from "./views/ChangeRequestView";
-export * from "./views/CloseReasonModal";
-export * from "./views/CommentModal";
-export * from "./views/ConfirmDialog";
-export * from "./views/ConnectProviderModal";
-export * from "./views/CrAiReviewOverlay";
-export * from "./views/DependencyTreeView";
-export * from "./views/DetailSection";
-export * from "./views/DiffReviewView";
-export * from "./views/DiscussionsView";
-export * from "./views/EditorPickerView";
-export * from "./views/HelpView";
-export * from "./views/IssueDetailView";
-export * from "./views/IssueScopeModal";
-export * from "./views/IssueView";
-export * from "./views/JobsDetailView";
-export * from "./views/KubernetesClusterView";
-export * from "./views/LabelPickerModal";
-export * from "./views/LogAiOverlay";
-export * from "./views/LogModal";
-export * from "./views/MarkdownModal";
-export * from "./views/MarkdownReviewView";
-export * from "./views/ModalTabs";
-export * from "./views/PassphraseModal";
-export * from "./views/ProfilePickerView";
-export * from "./views/ProgressAnimationDemo";
-export * from "./views/PropertiesList";
-export * from "./views/ProvidersView";
-export * from "./views/ReferencesView";
-export * from "./views/ResourceTimelineCharts";
-export * from "./views/SshHostPickerView";
-export * from "./views/statusUtils";
-export * from "./views/Table";
-export * from "./views/TaskAddModal";
-export * from "./views/TaskArgsModal";
-export * from "./views/TestDetailModal";
-export * from "./views/TestResultsDetailView";
-export * from "./views/TextTransitionAnimation";
-export * from "./views/ThemePickerView";
-export * from "./views/TimelineView";
-export * from "./views/types";
-export * from "./views/WorkItemCard";
-export * from "./views/WorktreeManagerModal";
+export type {
+	ActionTarget,
+	AgentGroup,
+	AgentSessionInfo,
+	App,
+	ChangeRequest,
+	DependencyRef,
+	Issue,
+	IssueComment,
+	IssueScope,
+	Job,
+	KubernetesClusterStatus,
+	Provider,
+	ProviderType,
+	RuntimeState,
+	RuntimeStatus,
+	ScriptParameter,
+	SshHost,
+	TableRow,
+	TestCase,
+	TestSuite,
+	WorktreeInfo,
+} from "./types.ts";
+export * from "./views/ActionTargetPickerView.tsx";
+export * from "./views/AddRepositoryModal.tsx";
+export * from "./views/AgentSpaceView.tsx";
+export * from "./views/AppDetailView.tsx";
+export * from "./views/AssigneePickerModal.tsx";
+export * from "./views/annotations.tsx";
+export * from "./views/ansiToStyledText.ts";
+export * from "./views/BranchCreateModal.tsx";
+export * from "./views/BranchSelectorView.tsx";
+export * from "./views/ChangeRequestDetailView.tsx";
+export * from "./views/ChangeRequestView.tsx";
+export * from "./views/CloseReasonModal.tsx";
+export * from "./views/CommentModal.tsx";
+export * from "./views/ConfirmDialog.tsx";
+export * from "./views/ConnectProviderModal.tsx";
+export * from "./views/CrAiReviewOverlay.tsx";
+export * from "./views/DependencyTreeView.tsx";
+export * from "./views/DetailSection.tsx";
+export * from "./views/DiffReviewView.tsx";
+export * from "./views/DiscussionsView.tsx";
+export * from "./views/EditorPickerView.tsx";
+export * from "./views/HelpView.tsx";
+export * from "./views/IssueDetailView.tsx";
+export * from "./views/IssueScopeModal.tsx";
+export * from "./views/IssueView.tsx";
+export * from "./views/JobsDetailView.tsx";
+export * from "./views/KubernetesClusterView.tsx";
+export * from "./views/LabelPickerModal.tsx";
+export * from "./views/LogAiOverlay.tsx";
+export * from "./views/LogModal.tsx";
+export * from "./views/MarkdownModal.tsx";
+export * from "./views/MarkdownReviewView.tsx";
+export * from "./views/ModalTabs.tsx";
+export * from "./views/PassphraseModal.tsx";
+export * from "./views/ProfilePickerView.tsx";
+export * from "./views/ProgressAnimationDemo.tsx";
+export * from "./views/PropertiesList.tsx";
+export * from "./views/ProvidersView.tsx";
+export * from "./views/ReferencesView.tsx";
+export * from "./views/ResourceTimelineCharts.tsx";
+export * from "./views/SshHostPickerView.tsx";
+export * from "./views/statusUtils.ts";
+export * from "./views/Table.tsx";
+export * from "./views/TaskAddModal.tsx";
+export * from "./views/TaskArgsModal.tsx";
+export * from "./views/TestDetailModal.tsx";
+export * from "./views/TestResultsDetailView.tsx";
+export * from "./views/TextTransitionAnimation.tsx";
+export * from "./views/ThemePickerView.tsx";
+export * from "./views/TimelineView.tsx";
+export * from "./views/types.ts";
+export * from "./views/WorkItemCard.tsx";
+export * from "./views/WorktreeManagerModal.tsx";

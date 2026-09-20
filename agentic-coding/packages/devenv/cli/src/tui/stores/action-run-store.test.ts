@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createActionRunStore } from "./action-run-store";
+import { createActionRunStore } from "./action-run-store.ts";
 
 /** Poll for the debounced store flush instead of sleeping a fixed interval, so
  * a loaded machine cannot make the stdout/stderr assertions flake. */

@@ -11,14 +11,14 @@ import {
 	resourceRoute,
 	type SettingsSection,
 	settingsRoute,
-} from "../shared/routes";
+} from "../shared/routes.ts";
 import {
 	effectLabel,
 	inventoryEntry,
 	type SettingsEffect,
 	type SettingsScope,
 	scopeLabel,
-} from "./catalog";
+} from "./catalog.ts";
 
 /** What activating an item does. Navigation is returned, never performed. */
 export type SettingsAction =

@@ -1,5 +1,9 @@
-import { isDownKey, isUpKey } from "./nav-keys";
-import type { KeyboardActions, KeyboardEvent, KeyboardStores } from "./types";
+import { isDownKey, isUpKey } from "./nav-keys.ts";
+import type {
+	KeyboardActions,
+	KeyboardEvent,
+	KeyboardStores,
+} from "./types.ts";
 /**
  * Handles keyboard events for the Add Repository modal wizard flow:
  * selectProvider → selectDestination → findRepo → repositoryName → selectBranch → confirm

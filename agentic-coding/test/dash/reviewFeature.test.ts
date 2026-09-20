@@ -4,14 +4,14 @@
  * outlive its owning component. */
 import { expect, test } from "bun:test";
 import { createRoot } from "solid-js";
-import { testDashboard } from "../../src/tui/dash/demo";
+import { testDashboard } from "../../src/tui/dash/demo.ts";
 import {
 	createReviewFeature,
 	FINDING_ANCHOR_PLACEHOLDER,
 	type ReviewFeatureContext,
 	reviewCommentsForEngine,
 	withFindingAnchorLines,
-} from "../../src/tui/dash/review";
+} from "../../src/tui/dash/review.ts";
 
 function context(
 	overrides: Partial<ReviewFeatureContext> = {},

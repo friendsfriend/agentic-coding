@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { parsePrometheusText } from "../../src/tui/otel/receiver/prometheus";
+import { parsePrometheusText } from "../../src/server/receivers/prometheus";
 
 describe("Prometheus parser", () => {
 	it("parses gauge metric", () => {

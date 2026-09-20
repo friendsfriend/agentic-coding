@@ -1,12 +1,12 @@
 import { getLogger } from "@devenv/core";
-import { computeInitialSplitView } from "./diff-modal-utils";
-import { isDownKey, isUpKey } from "./nav-keys";
+import { computeInitialSplitView } from "./diff-modal-utils.ts";
+import { isDownKey, isUpKey } from "./nav-keys.ts";
 import type {
 	KeyboardActions,
 	KeyboardContext,
 	KeyboardEvent,
 	KeyboardStores,
-} from "./types";
+} from "./types.ts";
 /**
  * Handles keyboard events for the Changed Files view:
  * - Search mode (type query, clear)

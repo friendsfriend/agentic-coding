@@ -3,16 +3,14 @@
 // Self-contained, snapshot-in/snapshot-out, needing only the clock. Moved
 // verbatim out of runtime.ts (split-workflow-god-modules).
 import type { Database } from "bun:sqlite";
-import type {
-	DeveloperDialogueRecord,
-	WorkflowRun,
-	WorkflowSnapshot,
-} from "../contracts.ts";
 import {
+	type DeveloperDialogueRecord,
 	type DeveloperQuestionAnswer,
 	decodeDeveloperQuestionAnswer,
-	WorkflowRuntimeError,
-} from "../contracts.ts";
+	type WorkflowRun,
+	type WorkflowSnapshot,
+} from "../../contracts/workflow.ts";
+import { WorkflowRuntimeError } from "../contracts.ts";
 import { tokenMatches } from "./capability.ts";
 import { ACTIVE_RUN, nowIso, type RunRow, runFromRow } from "./store.ts";
 

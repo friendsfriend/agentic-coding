@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { MetricStore } from "../../src/tui/otel/model/metricStore";
-import type { MetricData } from "../../src/tui/otel/model/types";
+import type { MetricData } from "../../src/contracts/telemetry.ts";
+import { MetricStore } from "../../src/tui/otel/model/metricStore.ts";
 
 function makeMetric(
 	name: string,

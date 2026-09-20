@@ -9,7 +9,7 @@
 import type { KeyEvent, Renderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
 import { createSignal, onCleanup, onMount } from "solid-js";
-import { ModelConfigModal } from "../dash/ui/ModelConfigModal";
+import { ModelConfigModal } from "../dash/ui/ModelConfigModal.tsx";
 
 /** Keys the editor dialog owns while it is open. */
 const MODAL_KEYS = [

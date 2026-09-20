@@ -5,7 +5,7 @@
 // document through `MarkdownViewer`. Both use the theme-cached syntax style,
 // so a live theme change restyles markdown everywhere.
 import { uiColors } from "../theme/colors";
-import { getMarkdownSyntaxStyle } from "./markdownSyntax";
+import { getMarkdownSyntaxStyle } from "./markdownSyntax.ts";
 
 export interface MarkdownViewerProps {
 	/** Whole-document markdown source. */

@@ -1,5 +1,18 @@
 /** @jsxImportSource @opentui/solid */
 
+import { TextAttributes } from "@opentui/core";
+import { useTerminalDimensions } from "@opentui/solid";
+import { createMemo, For, Show } from "solid-js";
+import { ContentFrame } from "../components/ContentStack";
+import { HighlightedText } from "../components/Highlight";
+import { getMarkdownSyntaxStyle } from "../components/markdownSyntax.ts";
+import { RunningText } from "../components/RunningText";
+import { ScrollableContent } from "../components/ScrollableContent";
+import {
+	containsHtml,
+	gitlabHtmlToMarkdown,
+} from "../components/utils/gitlabHtml.ts";
+import { uiColors } from "../theme/colors";
 import type {
 	ChangeRequest,
 	ChangeRequestChange,
@@ -7,28 +20,13 @@ import type {
 	Issue,
 	Job,
 	TestSummary,
-} from "@devenv/types";
-import { TextAttributes } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/solid";
-import {
-	ContentFrame,
-	HighlightedText,
-	RunningText,
-	ScrollableContent,
-} from "@ui";
-import { createMemo, For, Show } from "solid-js";
-import { getMarkdownSyntaxStyle } from "../components/markdownSyntax";
-import {
-	containsHtml,
-	gitlabHtmlToMarkdown,
-} from "../components/utils/gitlabHtml";
-import { uiColors } from "../theme/colors";
-import { DetailSection } from "./DetailSection";
+} from "../types";
+import { DetailSection } from "./DetailSection.tsx";
 import {
 	PropertiesList,
 	type PropertyRow,
 	propertyBadges,
-} from "./PropertiesList";
+} from "./PropertiesList.tsx";
 
 interface ChangeRequestDetailViewProps {
 	changeRequest: ChangeRequest;

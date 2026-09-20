@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { redactUrl } from "./custom-fetch";
+import { redactUrl } from "./custom-fetch.ts";
 
 describe("redactUrl", () => {
 	test("drops query strings that may carry credentials", () => {

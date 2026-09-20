@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
 	normalizeStatsDMetrics,
 	parseStatsDLine,
-} from "../../src/tui/otel/receiver/statsd";
+} from "../../src/server/receivers/statsd";
 
 describe("StatsD parser", () => {
 	it("parses gauge metric", () => {

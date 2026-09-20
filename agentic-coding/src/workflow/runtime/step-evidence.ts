@@ -6,7 +6,7 @@
 // calls `prepareStepEvidence` and passes it into `validateEvidence`).
 import fs from "node:fs";
 import path from "node:path";
-import type { WorkflowSnapshot } from "../contracts.ts";
+import type { WorkflowSnapshot } from "../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../contracts.ts";
 import {
 	openSecureDirectory,

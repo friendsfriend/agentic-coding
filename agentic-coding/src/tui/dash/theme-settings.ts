@@ -8,4 +8,4 @@ export {
 	saveThemeName,
 	themeSettingsPath,
 	writeSettingsAtomically,
-} from "../shared/preferences";
+} from "../shared/preferences.ts";

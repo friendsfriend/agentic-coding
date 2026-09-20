@@ -4,7 +4,7 @@ import {
 	actionModalHelpText,
 	actionNodeAnimationEnabled,
 	actionNodeStep,
-} from "./action-run-modal";
+} from "./action-run-modal.tsx";
 
 const gitPull: ActionRun = {
 	id: "pull-1",

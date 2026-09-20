@@ -1,9 +1,9 @@
 /** @jsxImportSource @opentui/solid */
-import type { AppStore, StartupPhase } from "../stores";
+import type { AppStore, StartupPhase } from "../stores/index.ts";
 import {
 	ProgressSplash,
 	type ProgressSplashStepStatus,
-} from "./progress-splash";
+} from "./progress-splash.tsx";
 
 interface StartupSplashProps {
 	appStore: AppStore;

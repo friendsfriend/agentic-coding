@@ -3,7 +3,7 @@ import {
 	normalizeDatadogLogs,
 	normalizeDatadogSeries,
 	normalizeDatadogSpans,
-} from "../../src/tui/otel/receiver/datadog";
+} from "../../src/server/receivers/datadog";
 
 describe("Datadog normalizer", () => {
 	describe("traces", () => {

@@ -1,11 +1,11 @@
 /** @jsxImportSource @opentui/solid */
-import type { AppStore } from "../stores";
+import type { AppStore } from "../stores/index.ts";
 import {
 	getShutdownPhaseStatus,
 	SHUTDOWN_PHASE_LABELS,
 	SHUTDOWN_PHASE_ORDER,
-} from "../stores";
-import { ProgressSplash } from "./progress-splash";
+} from "../stores/index.ts";
+import { ProgressSplash } from "./progress-splash.tsx";
 
 interface ShutdownSplashProps {
 	appStore: AppStore;

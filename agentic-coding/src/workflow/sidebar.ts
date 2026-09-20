@@ -5,7 +5,7 @@
 // No TUI imports, clock reads, or I/O belong here — the caller supplies the
 // current time, the observations, and the target classification, and the
 // publication adapters (sidebar-sync.ts) own every write.
-import type { WorkflowView } from "./contracts.ts";
+import type { WorkflowView } from "../contracts/workflow.ts";
 
 /** Metadata source id. Owns every `ac_` token; nothing else may clear them. */
 export const SIDEBAR_SOURCE = "agentic-coding";

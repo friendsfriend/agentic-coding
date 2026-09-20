@@ -1,25 +1,29 @@
 /** @jsxImportSource @opentui/solid */
 
+import { TextAttributes } from "@opentui/core";
+import { For, Show } from "solid-js";
+import { ContentFrame } from "../components/ContentStack";
+import { ScrollableContent } from "../components/ScrollableContent";
+import { uiColors } from "../theme/colors";
 import type {
 	ActionTarget,
 	App,
 	ChangeRequest,
 	ContainerStats,
 	ExecutionHandle,
-} from "@devenv/types";
-import { TextAttributes } from "@opentui/core";
-import { ContentFrame, ScrollableContent } from "@ui";
-import { For, Show } from "solid-js";
-import { uiColors } from "../theme/colors";
-import { type DependencyNode, DependencyTreeView } from "./DependencyTreeView";
-import { DetailSection } from "./DetailSection";
+} from "../types";
+import {
+	type DependencyNode,
+	DependencyTreeView,
+} from "./DependencyTreeView.tsx";
+import { DetailSection } from "./DetailSection.tsx";
 import {
 	PropertiesList,
 	type PropertyRow,
 	propertyBadges,
-} from "./PropertiesList";
-import { ResourceTimelineCharts } from "./ResourceTimelineCharts";
-import { runtimeState, runtimeStatusText } from "./statusUtils";
+} from "./PropertiesList.tsx";
+import { ResourceTimelineCharts } from "./ResourceTimelineCharts.tsx";
+import { runtimeState, runtimeStatusText } from "./statusUtils.ts";
 
 export type AppDetailKind = "app" | "library" | "infra";
 

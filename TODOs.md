@@ -25,4 +25,5 @@ UI Rework / Devenv union:
 * Environment menu always reopens the last view
 * Linux: Migrate config once
 * Devenv feature keybinds fully missing
+* Introduce log that logs all toast notifications and error modal contents
 

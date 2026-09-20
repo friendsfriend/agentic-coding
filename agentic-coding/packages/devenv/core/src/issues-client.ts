@@ -5,8 +5,8 @@ import type {
 	IssueListResult,
 	IssueScope,
 } from "@devenv/types";
-import type { ClientDeps } from "./client-types";
-import { handleFetchError } from "./error-handler";
+import type { ClientDeps } from "./client-types.ts";
+import { handleFetchError } from "./error-handler.ts";
 
 /**
  * Get issues for a specific app with scope filter and pagination.

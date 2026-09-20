@@ -11,7 +11,7 @@ import {
 	uiColors,
 } from "@ui";
 import { createEffect, Show, untrack } from "solid-js";
-import type { DeveloperDialogueRecord } from "../../../workflow/contracts";
+import type { DeveloperDialogueRecord } from "../../../contracts/workflow.ts";
 
 export function DeveloperQuestionModal(props: {
 	questions: DeveloperDialogueRecord[];

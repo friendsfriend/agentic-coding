@@ -6,10 +6,11 @@
 // optional inputs. Pass `query` for a filtered list's active search so matches
 // are marked; pass `highlight` for the semantic colour when there is no match
 // styling. Callers with raw colours pass `fg` instead.
+
 import { For } from "solid-js";
 import { uiColors } from "../theme/colors";
-import type { Highlight } from "./Highlight";
-import { highlightColor } from "./Highlight";
+import type { Highlight } from "./Highlight.tsx";
+import { highlightColor } from "./Highlight.tsx";
 
 /** Split `text` into matched/unmatched segments for `query` (case-insensitive). */
 export function splitMatches(

@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
+import type { Contract } from "../contracts/decode.ts";
 import type {
 	ActorKind,
 	AdapterCapability,
-	Contract,
 	EffectKind,
 	WorkflowSnapshot,
-} from "./contracts.ts";
+} from "../contracts/workflow.ts";
 import type { StepBehavior } from "./steps/types.ts";
 
 export type { StepBehavior } from "./steps/types.ts";

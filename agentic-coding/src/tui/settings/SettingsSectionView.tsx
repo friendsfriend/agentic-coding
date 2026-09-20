@@ -13,7 +13,7 @@ import {
 	uiColors,
 } from "@ui";
 import { Show } from "solid-js";
-import type { SettingsItem } from "./items";
+import type { SettingsItem } from "./items.ts";
 
 export interface SettingsSectionViewProps {
 	items: SettingsItem[];

@@ -3,7 +3,7 @@ import {
 	runForeground,
 	spawnAndWait,
 	withForegroundTerminal,
-} from "../../packages/devenv/cli/src/tui/actions/foreground";
+} from "../../packages/devenv/cli/src/tui/actions/foreground.ts";
 
 function fakeRenderer() {
 	const calls: string[] = [];

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { catalogKeybinds, footerKeybinds, keybindFooterLabel } from "@ui";
-import { observabilityKeybindCatalog } from "../../src/tui/otel/app/keybinds";
+import { observabilityKeybindCatalog } from "../../src/tui/otel/app/keybinds.ts";
 
 /** The label a footer surface actually renders for an entry. */
 const footerLabels = (

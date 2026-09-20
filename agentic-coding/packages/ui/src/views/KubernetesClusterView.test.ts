@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { KubernetesClusterStatus } from "@devenv/types";
-import { kubernetesClusterSummaryLines } from "./KubernetesClusterView";
+import type { KubernetesClusterStatus } from "../types";
+import { kubernetesClusterSummaryLines } from "./KubernetesClusterView.tsx";
 
 const base: KubernetesClusterStatus = {
 	clusterName: "devenv",

@@ -13,11 +13,11 @@ import type {
 } from "@devenv/types";
 import { buildDependencyTree, type DependencyNode, runtimeState } from "@ui";
 import { batch } from "solid-js";
-import { exitApp } from "../exit";
-import type { ActionRunStore } from "../stores/action-run-store";
-import type { AppDetailStore } from "../stores/app-detail-store";
-import type { AppStore } from "../stores/app-store";
-import type { UiStore } from "../stores/ui-store";
+import { exitApp } from "../exit.ts";
+import type { ActionRunStore } from "../stores/action-run-store.ts";
+import type { AppDetailStore } from "../stores/app-detail-store.ts";
+import type { AppStore } from "../stores/app-store.ts";
+import type { UiStore } from "../stores/ui-store.ts";
 
 function actionDefinitionTarget(definition: ActionDefinition): ActionTarget {
 	const execute = definition.root.children?.[0];

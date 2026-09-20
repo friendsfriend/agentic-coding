@@ -8,8 +8,8 @@
 
 import { type KeybindSection, PAGE_NAVIGATION_KEYBINDS } from "@ui";
 import { createSignal } from "solid-js";
-import type { ProjectSnapshot, ProviderSnapshot } from "./items";
-import { readProjectStatus, readProviderStatus } from "./server-config";
+import type { ProjectSnapshot, ProviderSnapshot } from "./items.ts";
+import { readProjectStatus, readProviderStatus } from "./server-config.ts";
 
 const [providerSnapshot, setProviderSnapshot] = createSignal<ProviderSnapshot>({
 	state: "loading",

@@ -3,14 +3,14 @@ import {
 	allContextHelpSectionsFromKeymap,
 	getActiveFooterKeybindsFromKeymap,
 	helpSectionsFromKeymap,
-} from "../keyboard/keymap-metadata";
-import type { DevenvKeymap } from "../keyboard/keymap-setup";
-import { KEYBINDS } from "../keyboard/registry";
-import type { AppStore } from "../stores/app-store";
-import type { ChangeRequestStore } from "../stores/cr-store";
-import type { IssueStore } from "../stores/issue-store";
-import type { LogStore } from "../stores/log-store";
-import type { UiStore } from "../stores/ui-store";
+} from "../keyboard/keymap-metadata.ts";
+import type { DevenvKeymap } from "../keyboard/keymap-setup.ts";
+import { KEYBINDS } from "../keyboard/registry.ts";
+import type { AppStore } from "../stores/app-store.ts";
+import type { ChangeRequestStore } from "../stores/cr-store.ts";
+import type { IssueStore } from "../stores/issue-store.ts";
+import type { LogStore } from "../stores/log-store.ts";
+import type { UiStore } from "../stores/ui-store.ts";
 
 const COMMON_NAVIGATION_ITEMS: HelpSection["items"] = [
 	{ key: "j/k, ↑/↓", description: "Move selection or scroll one line" },

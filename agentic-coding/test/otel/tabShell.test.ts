@@ -4,9 +4,9 @@
 // logStore.test.ts, metricStore.test.ts, topologyStore.test.ts — so this file
 // keeps only the guarantees that belong to mounting all four at once.
 import { describe, expect, it } from "bun:test";
-import { MetricStore } from "../../src/tui/otel/model/metricStore";
-import { TopologyStore } from "../../src/tui/otel/model/topologyStore";
-import { TraceStore } from "../../src/tui/otel/model/traceStore";
+import { MetricStore } from "../../src/tui/otel/model/metricStore.ts";
+import { TopologyStore } from "../../src/tui/otel/model/topologyStore.ts";
+import { TraceStore } from "../../src/tui/otel/model/traceStore.ts";
 
 describe("Tab shell", () => {
 	it("TraceStore starts empty", () => {

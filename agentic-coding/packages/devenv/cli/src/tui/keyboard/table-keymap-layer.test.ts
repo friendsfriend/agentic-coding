@@ -1,12 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { createTestKeymap } from "@opentui/keymap/testing";
-import { hostOwnedKeys } from "./host-keys";
-import { applyKeymapRuntimeSnapshot } from "./keymap-runtime";
-import { setupDevenvKeymap } from "./keymap-setup";
-import { contextBindingNames } from "./registry";
-import { registerTableKeymapLayer } from "./table-keymap-layer";
-import { handleTableKeys } from "./table-keys";
-import type { KeyboardActions, KeyboardContext, KeyboardStores } from "./types";
+import { hostOwnedKeys } from "./host-keys.ts";
+import { applyKeymapRuntimeSnapshot } from "./keymap-runtime.ts";
+import { setupDevenvKeymap } from "./keymap-setup.ts";
+import { contextBindingNames } from "./registry.ts";
+import { registerTableKeymapLayer } from "./table-keymap-layer.ts";
+import { handleTableKeys } from "./table-keys.ts";
+import type {
+	KeyboardActions,
+	KeyboardContext,
+	KeyboardStores,
+} from "./types.ts";
 
 type TestKeymap = ReturnType<typeof createTestKeymap>["keymap"];
 

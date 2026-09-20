@@ -14,7 +14,7 @@ import {
 	SETTINGS_SECTION_LABELS,
 	SETTINGS_SECTIONS,
 	settingsSectionPage,
-} from "../routes";
+} from "../routes.ts";
 
 /** Which surfaces the running shell actually renders. */
 export interface DestinationSurface {

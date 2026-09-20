@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isDiffFileAddedOrDeleted } from "./diff-utils";
+import { isDiffFileAddedOrDeleted } from "./diff-utils.ts";
 
 describe("isDiffFileAddedOrDeleted", () => {
 	test("does not treat addition-only hunk in existing file as new file", () => {

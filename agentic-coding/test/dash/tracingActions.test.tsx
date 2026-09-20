@@ -7,8 +7,9 @@ import { afterEach, expect, test } from "bun:test";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
 import { onCleanup } from "solid-js";
-import { App } from "../../src/tui/dash/App";
-import { type DashboardData, testDashboard } from "../../src/tui/dash/data";
+import type { DashboardData } from "../../src/contracts/workflow";
+import { App } from "../../src/tui/dash/App.tsx";
+import { testDashboard } from "../../src/tui/dash/demo.ts";
 
 type RecordedSpan = {
 	name: string;

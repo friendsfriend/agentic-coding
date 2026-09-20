@@ -4,6 +4,29 @@
 // transport-only: it never imports presentation and never spawns a second
 // runtime. Since the Go backend was retired there is no delegation: every route
 // is answered in this process or is 404.
+
+import type {
+	AgentHandoffRequest,
+	AgentQuestionRequest,
+	AgentResearchHandoffRequest,
+	AgentsMutationRequest,
+	ReviewSaveRequest,
+	WorkflowActionRequest,
+	WorkflowExecuteRequest,
+	WorkflowQuestionRequest,
+	WorkflowRepairRequest,
+	WorkflowStartRequest,
+} from "../contracts/actions.ts";
+import type { CredentialRespondRequest } from "../contracts/credential.ts";
+import type { ObserveRequest } from "../contracts/environment.ts";
+import type {
+	TelemetryPruneRequest,
+	TelemetryScanRequest,
+	TelemetrySpansRequest,
+	TelemetryTracesRequest,
+	TelemetryWatchRequest,
+} from "../contracts/telemetry.ts";
+import { WorkflowRuntimeError } from "../workflow/contracts.ts";
 import {
 	AuthorizationError,
 	assertBoundedText,
@@ -29,26 +52,9 @@ import {
 	type IntegrationServices,
 } from "./integrations/routes.ts";
 import {
-	agentHandoffRequestSchema,
-	agentQuestionRequestSchema,
-	agentResearchHandoffRequestSchema,
-	agentsMutationRequestSchema,
-	credentialRespondSchema,
-	decodeRequest,
+	decodeRouteRequest,
 	MAX_REQUEST_BYTES,
-	observeRequestSchema,
-	reviewSaveRequestSchema,
 	SERVER_API_VERSION,
-	telemetryPruneRequestSchema,
-	telemetryScanRequestSchema,
-	telemetrySpansRequestSchema,
-	telemetryTracesRequestSchema,
-	telemetryWatchRequestSchema,
-	workflowActionRequestSchema,
-	workflowExecuteRequestSchema,
-	workflowQuestionRequestSchema,
-	workflowRepairRequestSchema,
-	workflowStartRequestSchema,
 } from "./protocol.ts";
 import type { WorkflowEventHub } from "./subscriptions.ts";
 import type { TelemetryOperations } from "./telemetry.ts";
@@ -81,6 +87,11 @@ export interface ServerApp {
 	readonly authority: InstanceAuthority;
 	readonly events: EventBroker;
 	readonly credentials: CredentialRegistry;
+	/** The application operations and telemetry service this server serves.
+	 * Exposed so the composition root can build an in-process gateway over the
+	 * *same* instances instead of opening a socket to itself. */
+	readonly operations: ServerOperations;
+	readonly telemetry?: TelemetryOperations;
 	fetch(request: Request): Promise<Response>;
 	/** A `CredentialPrompt`-compatible function bound to one client owner. */
 	credentialPrompt(
@@ -168,7 +179,11 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		try {
 			return await route(request, url);
 		} catch (error) {
+			// An engine failure keeps its own code (a stale revision must not
+			// degrade into "bad-request"); anything else is a malformed request.
 			const message = safeMessage(error);
+			if (error instanceof WorkflowRuntimeError)
+				return errorResponse(409, error.code, message);
 			return errorResponse(400, "bad-request", message);
 		}
 	};
@@ -190,9 +205,8 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 
 		if (method === "POST" && path === "/api/v1/observe") {
 			const body = await readJsonBody(request);
-			const decoded = decodeRequest(
-				"server.observe",
-				observeRequestSchema,
+			const decoded = decodeRouteRequest<ObserveRequest>(
+				"/api/v1/observe",
 				body,
 			);
 			const value = await operations.runObservation(decoded.observation);
@@ -208,9 +222,8 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		}
 
 		if (method === "POST" && path === "/api/v1/workflow/action") {
-			const decoded = decodeRequest(
-				"server.workflow.action",
-				workflowActionRequestSchema,
+			const decoded = decodeRouteRequest<WorkflowActionRequest>(
+				"/api/v1/workflow/action",
 				await readJsonBody(request),
 			);
 			const value = operations.action(decoded);
@@ -224,9 +237,8 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		}
 
 		if (method === "POST" && path === "/api/v1/workflow/start") {
-			const decoded = decodeRequest(
-				"server.workflow.start",
-				workflowStartRequestSchema,
+			const decoded = decodeRouteRequest<WorkflowStartRequest>(
+				"/api/v1/workflow/start",
 				await readJsonBody(request),
 			);
 			const value = await operations.start(decoded);
@@ -239,9 +251,8 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		}
 
 		if (method === "POST" && path === "/api/v1/workflow/repair") {
-			const decoded = decodeRequest(
-				"server.workflow.repair",
-				workflowRepairRequestSchema,
+			const decoded = decodeRouteRequest<WorkflowRepairRequest>(
+				"/api/v1/workflow/repair",
 				await readJsonBody(request),
 			);
 			const value = operations.repair(decoded);
@@ -255,9 +266,8 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		}
 
 		if (method === "POST" && path === "/api/v1/workflow/question") {
-			const decoded = decodeRequest(
-				"server.workflow.question",
-				workflowQuestionRequestSchema,
+			const decoded = decodeRouteRequest<WorkflowQuestionRequest>(
+				"/api/v1/workflow/question",
 				await readJsonBody(request),
 			);
 			const value = operations.question(decoded);
@@ -271,9 +281,8 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		}
 
 		if (method === "POST" && path === "/api/v1/workflow/review-save") {
-			const decoded = decodeRequest(
-				"server.workflow.review-save",
-				reviewSaveRequestSchema,
+			const decoded = decodeRouteRequest<ReviewSaveRequest>(
+				"/api/v1/workflow/review-save",
 				await readJsonBody(request),
 			);
 			await operations.saveReview(decoded);
@@ -286,9 +295,8 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		}
 
 		if (method === "POST" && path === "/api/v1/workflow/execute") {
-			const decoded = decodeRequest(
-				"server.workflow.execute",
-				workflowExecuteRequestSchema,
+			const decoded = decodeRouteRequest<WorkflowExecuteRequest>(
+				"/api/v1/workflow/execute",
 				await readJsonBody(request),
 			);
 			options.hub?.watchRepo(decoded.repo);
@@ -297,9 +305,8 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		}
 
 		if (method === "POST" && path === "/api/v1/agent/handoff") {
-			const decoded = decodeRequest(
-				"server.agent.handoff",
-				agentHandoffRequestSchema,
+			const decoded = decodeRouteRequest<AgentHandoffRequest>(
+				"/api/v1/agent/handoff",
 				await readJsonBody(request),
 			);
 			options.hub?.watchRepo(decoded.repo);
@@ -314,9 +321,8 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		}
 
 		if (method === "POST" && path === "/api/v1/agent/question") {
-			const decoded = decodeRequest(
-				"server.agent.question",
-				agentQuestionRequestSchema,
+			const decoded = decodeRouteRequest<AgentQuestionRequest>(
+				"/api/v1/agent/question",
 				await readJsonBody(request),
 			);
 			options.hub?.watchRepo(decoded.repo);
@@ -325,9 +331,8 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		}
 
 		if (method === "POST" && path === "/api/v1/agent/research-handoff") {
-			const decoded = decodeRequest(
-				"server.agent.research-handoff",
-				agentResearchHandoffRequestSchema,
+			const decoded = decodeRouteRequest<AgentResearchHandoffRequest>(
+				"/api/v1/agent/research-handoff",
 				await readJsonBody(request),
 			);
 			options.hub?.watchRepo(decoded.repo);
@@ -342,9 +347,8 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		}
 
 		if (method === "POST" && path === "/api/v1/config/agents") {
-			const decoded = decodeRequest(
-				"server.config.agents",
-				agentsMutationRequestSchema,
+			const decoded = decodeRouteRequest<AgentsMutationRequest>(
+				"/api/v1/config/agents",
 				await readJsonBody(request),
 			);
 			operations.saveAgents(decoded);
@@ -358,9 +362,8 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		}
 
 		if (method === "POST" && path === "/api/v1/credentials/respond") {
-			const decoded = decodeRequest(
-				"server.credentials.respond",
-				credentialRespondSchema,
+			const decoded = decodeRouteRequest<CredentialRespondRequest>(
+				"/api/v1/credentials/respond",
 				await readJsonBody(request, 64 * 1024),
 			);
 			const outcome = credentials.respond(
@@ -396,9 +399,8 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 					"telemetry-unavailable",
 					"no telemetry service",
 				);
-			const decoded = decodeRequest(
-				"server.telemetry.traces",
-				telemetryTracesRequestSchema,
+			const decoded = decodeRouteRequest<TelemetryTracesRequest>(
+				"/api/v1/telemetry/traces",
 				await readJsonBody(request, 64 * 1024),
 			);
 			return json({ ok: true, value: options.telemetry.summaries(decoded) });
@@ -411,9 +413,8 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 					"telemetry-unavailable",
 					"no telemetry service",
 				);
-			const decoded = decodeRequest(
-				"server.telemetry.spans",
-				telemetrySpansRequestSchema,
+			const decoded = decodeRouteRequest<TelemetrySpansRequest>(
+				"/api/v1/telemetry/spans",
 				await readJsonBody(request, 64 * 1024),
 			);
 			const spans = decoded.changeId
@@ -429,9 +430,8 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 					"telemetry-unavailable",
 					"no telemetry service",
 				);
-			const decoded = decodeRequest(
-				"server.telemetry.watch",
-				telemetryWatchRequestSchema,
+			const decoded = decodeRouteRequest<TelemetryWatchRequest>(
+				"/api/v1/telemetry/watch",
 				await readJsonBody(request, 64 * 1024),
 			);
 			registerTelemetryWatch(decoded.repo);
@@ -445,9 +445,8 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 					"telemetry-unavailable",
 					"no telemetry service",
 				);
-			const decoded = decodeRequest(
-				"server.telemetry.scan",
-				telemetryScanRequestSchema,
+			const decoded = decodeRouteRequest<TelemetryScanRequest>(
+				"/api/v1/telemetry/scan",
 				await readJsonBody(request, 64 * 1024),
 			);
 			const scanned = await options.telemetry.scan(decoded.repo);
@@ -469,9 +468,8 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 					"telemetry-unavailable",
 					"no telemetry service",
 				);
-			const decoded = decodeRequest(
-				"server.telemetry.prune",
-				telemetryPruneRequestSchema,
+			const decoded = decodeRouteRequest<TelemetryPruneRequest>(
+				"/api/v1/telemetry/prune",
 				await readJsonBody(request, 64 * 1024),
 			);
 			const removed = options.telemetry.prune(decoded.days);
@@ -598,6 +596,8 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		authority,
 		events,
 		credentials,
+		operations,
+		telemetry: options.telemetry,
 		fetch: handle,
 		credentialPrompt: (ownerId) => async (prompt, signal) => {
 			const answer = credentials.request(ownerId, signal);

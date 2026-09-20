@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
-import type { ClientDeps } from "./client-types";
+import type { ClientDeps } from "./client-types.ts";
 import {
 	createKubernetesCluster,
 	deleteKubernetesCluster,
 	getKubernetesClusterStatus,
-} from "./docker-client";
+} from "./docker-client.ts";
 
 function deps(response: Response): ClientDeps {
 	const fetchMock = (async () => response) as unknown as typeof fetch;

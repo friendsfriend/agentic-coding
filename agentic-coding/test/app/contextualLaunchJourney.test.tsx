@@ -11,18 +11,26 @@ import { join } from "node:path";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
 import {
+	activeErrorModal,
 	activeKeybindCatalog,
 	activeKeybindContext,
+	dismissErrorModal,
 	footerKeybinds,
+	resetErrorModal,
 } from "@ui";
 import { onCleanup } from "solid-js";
-import { App } from "../../src/tui/otel/app/App";
-import { TraceDb } from "../../src/tui/otel/model/db";
-import { LogStore } from "../../src/tui/otel/model/logStore";
-import { MetricStore } from "../../src/tui/otel/model/metricStore";
-import { TopologyStore } from "../../src/tui/otel/model/topologyStore";
-import { TraceStore } from "../../src/tui/otel/model/traceStore";
-import { pressEscapeAndSettle } from "./support/terminal";
+import {
+	clearBackendClient,
+	configureBackendClient,
+} from "../../src/server/client.ts";
+import { TraceDb } from "../../src/server/telemetry-db";
+import { clearGateway, configureGateway } from "../../src/tui/data/index.ts";
+import { App } from "../../src/tui/otel/app/App.tsx";
+import { LogStore } from "../../src/tui/otel/model/logStore.ts";
+import { MetricStore } from "../../src/tui/otel/model/metricStore.ts";
+import { TopologyStore } from "../../src/tui/otel/model/topologyStore.ts";
+import { TraceStore } from "../../src/tui/otel/model/traceStore.ts";
+import { pressEscapeAndSettle } from "./support/terminal.ts";
 
 /** Footer labels of the surface that currently owns input. */
 const footerActions = () =>
@@ -33,9 +41,14 @@ const footerActions = () =>
 // The Wiki body reads a wiki root; give it a readable concept so it never opens
 // the global error modal, which would own input.
 const previousWikiRoot = process.env.HERDR_WIKI_DIR;
+const originalFetch = globalThis.fetch;
 let wikiRoot: string;
 
 beforeEach(() => {
+	clearBackendClient();
+	clearGateway();
+	resetErrorModal();
+	globalThis.fetch = originalFetch;
 	wikiRoot = mkdtempSync(join(tmpdir(), "launch-journey-wiki-"));
 	process.env.HERDR_WIKI_DIR = wikiRoot;
 	writeFileSync(
@@ -45,6 +58,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	clearBackendClient();
+	// a gateway installed by one test must not leak into the next file
+	clearGateway();
+	resetErrorModal();
+	globalThis.fetch = originalFetch;
 	if (previousWikiRoot === undefined) delete process.env.HERDR_WIKI_DIR;
 	else process.env.HERDR_WIKI_DIR = previousWikiRoot;
 	rmSync(wikiRoot, { recursive: true, force: true });
@@ -137,6 +155,96 @@ test("Wiki starts repository-independent work and cancelling starts nothing", as
 	const back = t.captureCharFrame();
 	expect(back).toContain("Home › Wiki");
 	expect(back).toContain("demo.md");
+	t.renderer.destroy();
+	db.close();
+});
+
+test("failed starts open blocking errors and keep the completed form retryable", async () => {
+	const { t, db } = await renderHomeShell();
+	await t.waitForFrame((value) => value.includes("Settings"));
+	t.mockInput.pressKey("j");
+	t.mockInput.pressKey("j");
+	t.mockInput.pressEnter();
+	await t.waitForFrame((value) => value.includes("demo.md"));
+	t.mockInput.pressKey("w");
+	await t.waitForFrame((value) => value.includes("Independent ("));
+
+	t.mockInput.pressEnter(); // research
+	await t.renderOnce();
+	t.mockInput.pressEnter(); // config defaults
+	await t.renderOnce();
+	t.mockInput.pressEnter(); // optional ticket
+	await t.renderOnce();
+	for (const character of "retryable-start") t.mockInput.pressKey(character);
+	t.mockInput.pressEnter();
+	await t.renderOnce();
+	for (const character of "Check launch failure")
+		t.mockInput.pressKey(character);
+	t.mockInput.pressEnter({ meta: true });
+	await t.waitForFrame((value) => value.includes("Confirm workflow"));
+
+	let starts = 0;
+	configureGateway(
+		configureBackendClient({
+			baseUrl: "http://127.0.0.1:1",
+			token: "test",
+			ownerId: "test",
+		}),
+	);
+	globalThis.fetch = (async (request) => {
+		if (!String(request).includes("/api/v1/workflow/start"))
+			return new Response(null, { status: 200 });
+		starts++;
+		const rejected = starts === 1;
+		return Response.json(
+			{
+				ok: false,
+				error: {
+					code: rejected ? "invalid-profile" : "internal",
+					message: rejected
+						? "selected model is gone"
+						: "backend stopped responding",
+				},
+			},
+			{ status: rejected ? 400 : 500 },
+		);
+	}) as typeof fetch;
+
+	t.mockInput.pressEnter();
+	await Bun.sleep(20);
+	const failed = await t.waitForFrame((value) =>
+		value.includes("selected model is gone"),
+	);
+	expect(failed).toContain("Workflow start failed");
+	expect(activeErrorModal()?.message).toBe("selected model is gone");
+	expect(starts).toBe(1);
+
+	dismissErrorModal();
+	await t.flush();
+	const retry = await t.waitForFrame(
+		(value) =>
+			value.includes("Confirm workflow") &&
+			!value.includes("selected model is gone"),
+	);
+	expect(retry).toContain("retryable-start");
+
+	t.mockInput.pressEnter();
+	await Bun.sleep(20);
+	const uncertain = await t.waitForFrame((value) =>
+		value.includes("backend stopped responding"),
+	);
+	expect(uncertain).toContain("Workflow start outcome unknown");
+	expect(starts).toBe(2);
+
+	dismissErrorModal();
+	await t.flush();
+	const stillOpen = await t.waitForFrame(
+		(value) =>
+			value.includes("Confirm workflow") &&
+			!value.includes("backend stopped responding"),
+	);
+	expect(stillOpen).toContain("retryable-start");
+
 	t.renderer.destroy();
 	db.close();
 });

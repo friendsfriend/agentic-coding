@@ -7,13 +7,13 @@ import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
 import { activeKeybindCatalog, themeNames } from "@ui";
 import { onCleanup } from "solid-js";
-import { App } from "../../src/tui/otel/app/App";
-import { TraceDb } from "../../src/tui/otel/model/db";
-import { LogStore } from "../../src/tui/otel/model/logStore";
-import { MetricStore } from "../../src/tui/otel/model/metricStore";
-import { TopologyStore } from "../../src/tui/otel/model/topologyStore";
-import { TraceStore } from "../../src/tui/otel/model/traceStore";
-import { renderUntil } from "./support/terminal";
+import { TraceDb } from "../../src/server/telemetry-db";
+import { App } from "../../src/tui/otel/app/App.tsx";
+import { LogStore } from "../../src/tui/otel/model/logStore.ts";
+import { MetricStore } from "../../src/tui/otel/model/metricStore.ts";
+import { TopologyStore } from "../../src/tui/otel/model/topologyStore.ts";
+import { TraceStore } from "../../src/tui/otel/model/traceStore.ts";
+import { renderUntil } from "./support/terminal.ts";
 
 // Settings as a Home destination (centralize-application-settings, tasks 1.2,
 // 2.1, 2.2, 3.3). Rendered checks: the landing lists every section, a section

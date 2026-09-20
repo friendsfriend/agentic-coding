@@ -6,9 +6,9 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveConfigDir, resolveDevenvHome } from "../src/backend/home";
-import { ownsEnvironmentBackend } from "../src/backend/ownership";
-import { startWorkflowServer } from "../src/server/lifecycle";
+import { resolveConfigDir, resolveDevenvHome } from "../src/backend/home.ts";
+import { ownsEnvironmentBackend } from "../src/backend/ownership.ts";
+import { startWorkflowServer } from "../src/server/lifecycle.ts";
 
 test("only the managed home route owns a server; attach and dash never do", () => {
 	const base = { home: true, isTest: false, json: false };

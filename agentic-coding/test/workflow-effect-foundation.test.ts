@@ -2,11 +2,11 @@ import { expect, test } from "bun:test";
 import {
 	decodeCommand,
 	decodeDeveloperQuestionAnswer,
-	decodeSnapshot,
 	externalDiagnostic,
 	isRetryableFailure,
 	type WorkflowFailure,
-} from "../src/workflow/contracts.ts";
+} from "../src/contracts/workflow.ts";
+import { decodeSnapshot } from "../src/workflow/contracts.ts";
 
 test("tagged failures expose stale-revision and validation distinctions", () => {
 	const stale: WorkflowFailure = {

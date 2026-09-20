@@ -4,7 +4,7 @@ import {
 	decodeOtlpMetrics,
 	decodeOtlpTraces,
 	normalizeOtlpSpan,
-} from "../../src/tui/otel/receiver/otlp";
+} from "../../src/server/receivers/otlp";
 
 describe("OTLP normalizer", () => {
 	it("normalizes a valid span", () => {

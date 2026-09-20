@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { createDockerActions, operationProgressLabel } from "./docker-actions";
+import {
+	createDockerActions,
+	operationProgressLabel,
+} from "./docker-actions.ts";
 
 type DockerActionStore = Parameters<typeof createDockerActions>[0];
 type DockerActionUiStore = Parameters<typeof createDockerActions>[1];

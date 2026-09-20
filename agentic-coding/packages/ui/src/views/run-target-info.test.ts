@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import type { App, TableRow } from "@devenv/types";
-import { appRunTargetDetailRows } from "./AppDetailView";
-import { appRunTargetRightMetadata } from "./Table";
+import type { App, TableRow } from "../types";
+import { appRunTargetDetailRows } from "./AppDetailView.tsx";
+import { appRunTargetRightMetadata } from "./Table.tsx";
 
 const baseApp: App = {
 	ident: "app",

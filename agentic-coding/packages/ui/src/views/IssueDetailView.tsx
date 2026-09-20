@@ -1,29 +1,27 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { ChangeRequest, Issue, IssueComment } from "@devenv/types";
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
-import {
-	AnimatedStatusText,
-	ContentFrame,
-	highlightForIndex,
-	RunningText,
-	ScrollableContent,
-} from "@ui";
 import { For, Show } from "solid-js";
-import { getMarkdownSyntaxStyle } from "../components/markdownSyntax";
+import { AnimatedStatusText } from "../components/AnimatedStatusText";
+import { ContentFrame } from "../components/ContentStack";
+import { highlightForIndex } from "../components/Highlight";
+import { getMarkdownSyntaxStyle } from "../components/markdownSyntax.ts";
+import { RunningText } from "../components/RunningText";
+import { ScrollableContent } from "../components/ScrollableContent";
 import {
 	containsHtml,
 	gitlabHtmlToMarkdown,
-} from "../components/utils/gitlabHtml";
+} from "../components/utils/gitlabHtml.ts";
 import { uiColors } from "../theme/colors";
-import { DetailSection } from "./DetailSection";
+import type { ChangeRequest, Issue, IssueComment } from "../types";
+import { DetailSection } from "./DetailSection.tsx";
 import {
 	PropertiesList,
 	type PropertyRow,
 	propertyBadges,
-} from "./PropertiesList";
+} from "./PropertiesList.tsx";
 
 type RefItem =
 	| { type: "cr"; data: ChangeRequest }

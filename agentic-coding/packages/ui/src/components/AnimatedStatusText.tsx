@@ -1,9 +1,9 @@
 /** @jsxImportSource @opentui/solid */
-import type { Highlight } from "./Highlight";
+import type { Highlight } from "./Highlight.tsx";
 import {
 	InlineProgressAnimation,
 	type InlineProgressHighlights,
-} from "./InlineProgressAnimation";
+} from "./InlineProgressAnimation.tsx";
 
 export type StatusAnimationIntent =
 	| "start"

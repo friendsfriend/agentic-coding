@@ -3,7 +3,7 @@ import {
 	statusAnimationIntentForOperation,
 	statusAnimationIntentForText,
 	statusAnimationModel,
-} from "../components/AnimatedStatusText";
+} from "../components/AnimatedStatusText.tsx";
 
 describe("operation status animation model", () => {
 	test("uses semantic action tones across application, library, and infrastructure operations", () => {

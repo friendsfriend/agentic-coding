@@ -13,15 +13,15 @@ import {
 	useContext,
 } from "solid-js";
 import { colors, uiColors } from "../theme/colors";
-import { FilterStatusBar } from "./FilterStatusBar";
-import { HelpText, wrapHelpEntries } from "./HelpText";
-import type { Keybind, KeybindSection } from "./keybinds";
+import { FilterStatusBar } from "./FilterStatusBar.tsx";
+import { HelpText, wrapHelpEntries } from "./HelpText.tsx";
+import type { Keybind, KeybindSection } from "./keybinds.ts";
 import {
 	type ModalHelpRegistration,
 	registerModalHelp,
 	withModalHelpKeybind,
-} from "./modalHelp";
-import { SearchHeader } from "./SearchHeader";
+} from "./modalHelp.ts";
+import { SearchHeader } from "./SearchHeader.tsx";
 import { invokeGlobalSelectionMouseUpHandler } from "./selectionCopy";
 
 /**

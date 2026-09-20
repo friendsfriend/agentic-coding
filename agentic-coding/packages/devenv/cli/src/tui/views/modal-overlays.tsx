@@ -34,10 +34,10 @@ import {
 	WorktreeManagerModal,
 } from "@ui";
 import { Show } from "solid-js";
-import { guides as allGuides, getGuide } from "../guides";
-import { ActionRunModal } from "./action-run-modal";
-import { FirstStepsView } from "./first-steps-view";
-import type { ModalOverlaysProps } from "./types";
+import { guides as allGuides, getGuide } from "../guides/index.ts";
+import { ActionRunModal } from "./action-run-modal.tsx";
+import { FirstStepsView } from "./first-steps-view.tsx";
+import type { ModalOverlaysProps } from "./types.ts";
 
 export function ModalOverlays(props: ModalOverlaysProps) {
 	const {

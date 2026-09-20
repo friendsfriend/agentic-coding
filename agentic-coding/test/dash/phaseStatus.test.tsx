@@ -5,7 +5,7 @@ import {
 	PhaseStatus,
 	type PhaseStatusState,
 	phaseStatus,
-} from "../../src/tui/dash/App";
+} from "../../src/tui/dash/App.tsx";
 
 function state(overrides: Partial<PhaseStatusState> = {}): PhaseStatusState {
 	return {

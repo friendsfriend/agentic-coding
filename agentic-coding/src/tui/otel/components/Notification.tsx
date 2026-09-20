@@ -3,7 +3,7 @@
 // observability notification store.
 
 import { NotificationOverlay as SharedNotificationOverlay } from "@ui";
-import { activeNotification } from "../app/notifications";
+import { activeNotification } from "../app/notifications.ts";
 
 export function NotificationOverlay() {
 	return <SharedNotificationOverlay active={activeNotification} />;

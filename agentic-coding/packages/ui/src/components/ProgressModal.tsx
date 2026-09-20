@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 
 import { uiColors } from "../theme/colors";
-import { GenericModal } from "./GenericModal";
+import { GenericModal } from "./GenericModal.tsx";
 
 export function ProgressModal(props: { title?: string; message: string }) {
 	return (

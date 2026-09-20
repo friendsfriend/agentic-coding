@@ -1,6 +1,6 @@
 import { createSignal } from "solid-js";
-import { hostKeybind } from "./hostKeys";
-import type { Keybind, KeybindSection } from "./keybinds";
+import { hostKeybind } from "./hostKeys.ts";
+import type { Keybind, KeybindSection } from "./keybinds.ts";
 
 /**
  * Automatic `?` help entry for modal footers. Modals advertise it exactly like

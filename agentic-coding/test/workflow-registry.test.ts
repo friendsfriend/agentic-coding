@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import type { WorkflowSnapshot } from "../src/contracts/workflow.ts";
 import { rolesForDefinition } from "../src/workflow/cli.ts";
-import type { WorkflowSnapshot } from "../src/workflow/contracts.ts";
 import {
 	BUILTIN_CAPABILITIES,
 	BUILTIN_EFFECTS,
@@ -566,14 +566,15 @@ describe("workflow registry", () => {
 			const registry = registerBuiltins();
 			// The manifest-policy tier is `definitionVersionForManifestPolicy`
 			// (rounds + 200) for rounds 1..20 — versions 201..220. The newer
-			// behavior-pin tier (rounds + 300) also carries the policy block —
-			// versions 301..320. Every other registered version predates it.
+			// behavior-pin tier (rounds + 300) and full-tool research tier
+			// (rounds + 400) also carry policy blocks.
 			const policyBearing = registry
 				.definitions()
 				.filter(
 					(definition) =>
 						(definition.version >= 201 && definition.version <= 220) ||
-						(definition.version >= 301 && definition.version <= 320),
+						(definition.version >= 301 && definition.version <= 320) ||
+						(definition.version >= 401 && definition.version <= 420),
 				);
 			expect(policyBearing.length).toBeGreaterThan(0);
 			for (const definition of policyBearing)
@@ -587,7 +588,8 @@ describe("workflow registry", () => {
 				.filter(
 					(definition) =>
 						(definition.version < 201 || definition.version > 220) &&
-						(definition.version < 301 || definition.version > 320),
+						(definition.version < 301 || definition.version > 320) &&
+						(definition.version < 401 || definition.version > 420),
 				))
 				expect(definition.policy).toBeUndefined();
 		});

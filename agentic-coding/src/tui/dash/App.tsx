@@ -1,43 +1,23 @@
 /** @jsxImportSource @opentui/solid */
 
 import { join } from "node:path";
-import {
-	type KeyEvent,
-	type Renderable,
-	type ScrollBoxRenderable,
-	TextAttributes,
-} from "@opentui/core";
+import type { KeyEvent, Renderable, ScrollBoxRenderable } from "@opentui/core";
 import type { Binding, Keymap } from "@opentui/keymap";
 import { useRenderer, useTerminalDimensions } from "@opentui/solid";
 import {
 	activeErrorModal,
-	Badge,
-	ChangedFilesView,
 	createModalHost,
-	DiffReviewView as DiffViewModal,
 	findModal,
-	GenericModal,
 	getActiveThemeName,
-	HelpModal,
-	HighlightedText,
 	handleModalHelpKey,
 	Layout,
-	ListViewModal,
-	MarkdownReviewView as MarkdownViewModal,
-	ModalHelpOverlay,
 	modalHelpOpen,
-	Panel,
-	ProgressModal,
 	registerFocusRestorer,
 	restoreFocus,
-	ScrollableContent,
-	SelectableList,
 	setActiveKeybindCatalog,
 	showErrorModal,
-	ThemePickerModal,
 	themeNames,
 	uiColors,
-	VerdictModal,
 } from "@ui";
 import {
 	createEffect,
@@ -47,44 +27,48 @@ import {
 	onMount,
 	Show,
 } from "solid-js";
-import { backendClient } from "../../server/client";
-import type { DeveloperDialogueRecord } from "../../workflow/contracts";
-import { formatDuration } from "../../workflow/format";
-import { wikiWorkflowDataRoot } from "../../workflow/runtime";
-import { copyToClipboard } from "../clipboard";
-import { testDashboard } from "./demo";
-import {
-	listPresetNames,
-	onWorkflowExecutionError,
-	onWorkflowExecutionSettled,
-	PRESET_CONFIG_DEFAULTS,
-	reconcileSidebarPresentation,
-	switchWorkflowPreset,
-} from "./engine";
-import {
-	herdrEventMatchesWorkspace,
-	subscribeHerdrEvents,
-} from "./herdr-events";
-import { dashboardDetailKeybindCatalog, panelContext } from "./keybinds";
-import { notify } from "./notifications";
+import type { RequiredUserActionItem } from "../../contracts/actions.ts";
+import type { DashboardData } from "../../contracts/workflow";
+import type { DeveloperDialogueRecord } from "../../contracts/workflow.ts";
+
+import { wikiWorkflowDataRoot } from "../../workflow/runtime.ts";
+import { loadArtifact, loadArtifacts } from "../data/git.ts";
+import { gatewayOrUndefined } from "../data/index.ts";
 import {
 	answerQuestion,
 	applyRepair,
+	loadDashboard,
+	loadVerifierFindings,
+	loadVerifierReport,
+	previewRepair,
+	requestExecution,
+	runWorkflow,
+} from "../data/workflow.ts";
+import { testDashboard } from "./demo.ts";
+import { createDashboardKeyHandler } from "./handlers/keys.ts";
+import { dashboardDetailKeybindCatalog, panelContext } from "./keybinds.ts";
+import {
 	focusAgentAsync,
 	focusReturnWorkspace,
-	loadDashboard,
-	loadDashboardAsync,
-	loadVerifierFindingsAsync,
-	loadVerifierReportAsync,
+	herdrEventMatchesWorkspace,
+	listPresetNames,
+	onWorkflowExecutionError,
+	onWorkflowExecutionSettled,
 	openFindingInEditorAsync,
-	openSpecArtifactAsync,
+	openSpecArtifact,
 	openSpecArtifacts,
-	openSpecArtifactsAsync,
-	previewRepairAsync,
-	requestWorkflowExecutionAsync,
-	runWorkflow,
-} from "./observations";
-import { movePanel, type PanelDirection } from "./panel-grid";
+	PRESET_CONFIG_DEFAULTS,
+	reconcileSidebarPresentation,
+	serverOwnsExecutionEvents,
+	subscribeDataEvents,
+	subscribeHerdrEvents,
+	switchWorkflowPreset,
+} from "./live.ts";
+import { Overlays } from "./modals/Overlays.tsx";
+import { notify } from "./notifications.ts";
+import { AgentsPanel } from "./panels/AgentsPanel.tsx";
+import { ChangePanel } from "./panels/ChangePanel.tsx";
+import { OpenSpecPanel } from "./panels/OpenSpecPanel.tsx";
 import {
 	agentMetricLine,
 	agentRuntimeModelLine,
@@ -92,88 +76,26 @@ import {
 	type PhaseStatusState,
 	phaseStatus,
 	requiredUserActionFor,
-} from "./projections";
-import { createReviewFeature } from "./review";
-import { applyTheme, loadThemeName, saveThemeName } from "./theme-settings";
-import { traceTui } from "./tracing";
-import type {
-	DashboardData,
-	FindingCounts,
-	RequiredUserActionItem,
-} from "./types";
-import { CostModal } from "./ui/CostModal";
+} from "./projections.ts";
+import { createReviewFeature } from "./review.ts";
+import { DialogueRoute } from "./routes/DialogueRoute.tsx";
+import { ReviewRoute } from "./routes/ReviewRoute.tsx";
 import {
-	CredentialsModal,
-	pendingCredentialRequest,
-} from "./ui/CredentialsModal";
-import { DeveloperQuestionModal } from "./ui/DeveloperQuestionModal";
-import { type FindingEvent, FindingsModal } from "./ui/FindingsModal";
-import { NotificationOverlay } from "./ui/Notification";
-import {
-	type PresetChoice,
-	PresetSwitcherModal,
-} from "./ui/PresetSwitcherModal";
-import { debounce, watchDirectories } from "./watchRefresh";
+	createDialogueState,
+	createOverlayState,
+	createPanelState,
+} from "./state.ts";
+import { applyTheme, loadThemeName, saveThemeName } from "./theme-settings.ts";
+import { traceTui } from "./tracing.ts";
+import { pendingCredentialRequest } from "./ui/CredentialsModal.tsx";
+import type { FindingEvent } from "./ui/FindingsModal.tsx";
+import { debounce, watchDirectories } from "./watchRefresh.ts";
 
+export { PhaseStatus } from "./ui/PhaseStatus.tsx";
 export type { PhaseStatusState };
 // Projection helpers are owned by `projections.ts`; these narrow re-exports
 // keep the public dashboard root surface (and its renderer tests) stable.
 export { agentMetricLine, agentRuntimeModelLine, phaseStatus };
-
-export function PhaseStatus(props: { state: PhaseStatusState }) {
-	const status = createMemo(() => phaseStatus(props.state));
-	return (
-		<box flexDirection="row" gap={1}>
-			<Badge
-				text={status().text}
-				appearance="badge"
-				highlight={status().working ? "highlight2" : "secondary"}
-				animation={status().working ? "aurora" : "static"}
-			/>
-			<Show when={status().blocked}>
-				<Badge text="BLOCKED" appearance="badge" highlight="warning" />
-			</Show>
-		</box>
-	);
-}
-
-function FindingCountSummary(props: {
-	counts: FindingCounts;
-	compact: boolean;
-}) {
-	const entries = () => (
-		<>
-			<text fg={uiColors.error}>critical {props.counts.critical}</text>
-			<text fg={uiColors.textMuted}> · </text>
-			<text fg={uiColors.warning}>warning {props.counts.warning}</text>
-			<text fg={uiColors.textMuted}> · </text>
-			<text fg={uiColors.info}>info {props.counts.info}</text>
-		</>
-	);
-	return props.compact ? (
-		<box
-			width="100%"
-			minWidth={0}
-			height={3}
-			flexDirection="column"
-			overflow="hidden"
-		>
-			<text fg={uiColors.error}>critical {props.counts.critical}</text>
-			<text fg={uiColors.warning}>warning {props.counts.warning}</text>
-			<text fg={uiColors.info}>info {props.counts.info}</text>
-		</box>
-	) : (
-		<box
-			width="100%"
-			minWidth={0}
-			height={1}
-			flexDirection="row"
-			overflow="hidden"
-		>
-			{entries()}
-		</box>
-	);
-}
 
 /** Header context derived from the dashboard's single data source. */
 export interface WorkflowHeaderInfo {
@@ -209,9 +131,10 @@ export function App(props: {
 		"completed",
 	] as const;
 	const [demoIndex, setDemoIndex] = createSignal(0);
+	/** Synchronous seed for the first frame: the test/demo data, or the inline
+	 * placeholder below. Real data arrives from `tui/data` (the cache is
+	 * reactive, so the refresh lands without a second render path). */
 	const load = () => {
-		if (props.profile !== "test")
-			return loadDashboard(props.repo, props.workflowId);
 		if (props.testData) return props.testData;
 		const dashboard = testDashboard(demoPhases[demoIndex()]);
 		if (!props.testNoUpstream) return dashboard;
@@ -227,7 +150,7 @@ export function App(props: {
 	};
 	const initialData: DashboardData =
 		props.profile === "test" || props.testData
-			? load()
+			? (load() as DashboardData)
 			: {
 					state: {
 						workflowId: props.workflowId,
@@ -285,17 +208,22 @@ export function App(props: {
 			updated: data().updated,
 		});
 	});
-	let lastQuitAt = 0;
+	const _lastQuitAt = 0;
 	const [busy, setBusy] = createSignal(false);
 	// Dedicated review-finishing signal (in addition to the busy guard): scopes
 	// the progress overlay to review finishes instead of every busy action.
 	const [reviewFinishing, setReviewFinishing] = createSignal(false);
 	const [reviewFinishingMessage, setReviewFinishingMessage] = createSignal("");
 	let changeScroll: ScrollBoxRenderable | undefined;
-	const [activePanel, setActivePanel] = createSignal(0);
-	const [selectedAgent, setSelectedAgent] = createSignal(0);
-	const [selectedArtifact, setSelectedArtifact] = createSignal(0);
-	const [artifacts, setArtifacts] = createSignal<string[]>([]);
+	const panels = createPanelState();
+	const activePanel = panels.active;
+	const setActivePanel = panels.setActive;
+	const selectedAgent = panels.agent;
+	const setSelectedAgent = panels.setAgent;
+	const selectedArtifact = panels.artifact;
+	const setSelectedArtifact = panels.setArtifact;
+	const artifacts = panels.artifacts;
+	const setArtifacts = panels.setArtifacts;
 	let artifactGeneration = 0;
 	let artifactController: AbortController | undefined;
 	createEffect(() => {
@@ -306,9 +234,9 @@ export function App(props: {
 			setArtifacts(openSpecArtifacts(data().state));
 			return;
 		}
-		void openSpecArtifactsAsync(data().state, artifactController.signal)
+		void loadArtifacts(data().state, artifactController.signal)
 			.then((next) => {
-				if (generation === artifactGeneration) setArtifacts(next);
+				if (next && generation === artifactGeneration) setArtifacts(next);
 			})
 			.catch((error) => {
 				if (
@@ -332,31 +260,61 @@ export function App(props: {
 		),
 	);
 	const [userActionOpen, setUserActionOpen] = createSignal(false);
-	const [userActionSelection, setUserActionSelection] = createSignal(0);
 	let promptedUserActionKey: string | undefined;
-	const [verdict, setVerdict] = createSignal<{
-		title: string;
-		content: string;
-	}>();
-	const [verdictReturnToFindings, setVerdictReturnToFindings] =
-		createSignal(false);
-	const [verdictReturnToUserAction, setVerdictReturnToUserAction] =
-		createSignal(false);
 	// Opt-in Markdown rendering for the OpenSpec artifact view only (D5).
-	const [verdictRenderMarkdown, setVerdictRenderMarkdown] = createSignal(false);
-	const [findings, setFindings] = createSignal<{
-		title: string;
-		events: FindingEvent[];
-	}>();
-	const [selectedFinding, setSelectedFinding] = createSignal(0);
+	const overlays = createOverlayState({
+		themeIndex: Math.max(0, themeNames.indexOf(loadThemeName())),
+	});
+	const verdict = overlays.verdict;
+	const setVerdict = overlays.setVerdict;
+	const _verdictOffset = overlays.verdictOffset;
+	const setVerdictOffset = overlays.setVerdictOffset;
+	const verdictReturnToFindings = overlays.verdictReturnToFindings;
+	const setVerdictReturnToFindings = overlays.setVerdictReturnToFindings;
+	const verdictReturnToUserAction = overlays.verdictReturnToUserAction;
+	const setVerdictReturnToUserAction = overlays.setVerdictReturnToUserAction;
+	const _verdictRenderMarkdown = overlays.verdictRenderMarkdown;
+	const setVerdictRenderMarkdown = overlays.setVerdictRenderMarkdown;
+	const findings = overlays.findings;
+	const setFindings = overlays.setFindings;
+	const selectedFinding = overlays.selectedFinding;
+	const setSelectedFinding = overlays.setSelectedFinding;
+	const repairTargets = overlays.repairTargets;
+	const setRepairTargets = overlays.setRepairTargets;
+	const repairSelection = overlays.repairSelection;
+	const setRepairSelection = overlays.setRepairSelection;
+	const completedSelection = overlays.completedSelection;
+	const setCompletedSelection = overlays.setCompletedSelection;
+	const actionReason = overlays.actionReason;
+	const setActionReason = overlays.setActionReason;
+	const userActionSelection = overlays.userActionSelection;
+	const setUserActionSelection = overlays.setUserActionSelection;
+	const _helpOffset = overlays.helpOffset;
+	const setHelpOffset = overlays.setHelpOffset;
+	const themeIndex = overlays.themeIndex;
+	const setThemeIndex = overlays.setThemeIndex;
+	const themeQuery = overlays.themeQuery;
+	const setThemeQuery = overlays.setThemeQuery;
+	const themeFiltering = overlays.themeFiltering;
+	const setThemeFiltering = overlays.setThemeFiltering;
+	const costSelection = overlays.costSelection;
+	const setCostSelection = overlays.setCostSelection;
+	const costAgent = overlays.costAgent;
+	const setCostAgent = overlays.setCostAgent;
+	const _costOffset = overlays.costOffset;
+	const setCostOffset = overlays.setCostOffset;
+	const presetSwitcherHandler = overlays.presetSwitcherHandler;
+	const setPresetSwitcherHandler = overlays.setPresetSwitcherHandler;
+	const presetSwitcherChoices = overlays.presetSwitcherChoices;
+	const setPresetSwitcherChoices = overlays.setPresetSwitcherChoices;
 	const openVerifierResult = async (role: string) => {
 		setVerdictReturnToFindings(false);
 		setVerdictReturnToUserAction(false);
 		setVerdictRenderMarkdown(false);
-		const parsed =
+		const parsed: { title: string; events: FindingEvent[] } | undefined =
 			props.profile === "test"
 				? undefined
-				: await loadVerifierFindingsAsync(props.repo, props.workflowId, role);
+				: await loadVerifierFindings(props.repo, props.workflowId, role);
 		if (parsed) {
 			setFindings(parsed);
 			setSelectedFinding(0);
@@ -369,12 +327,11 @@ export function App(props: {
 						title: `${role} · demo`,
 						content: "VERDICT: PASS\n\n## VALIDATION\nDemo verifier report.",
 					}
-				: await loadVerifierReportAsync(props.repo, props.workflowId, role),
+				: await loadVerifierReport(props.repo, props.workflowId, role),
 		);
 		setVerdictOffset(0);
 		props.keymap.setData("modal.active", "verdict");
 	};
-	const [verdictOffset, setVerdictOffset] = createSignal(0);
 	// Authoritative dashboard modal stack (compose-unified-feature-shell task
 	// 3.2/3.3): the shell-level dialogs are stack instances, so instance
 	// identity, top-overlay input ownership and close ordering have one owner
@@ -415,20 +372,9 @@ export function App(props: {
 		open
 			? openModal("completed-picker", "dashboard")
 			: closeModal("completed-picker");
-	const [completedSelection, setCompletedSelection] = createSignal(0);
-	const [actionReason, setActionReason] = createSignal("");
 	const repairOpen = () => modalOpen("repair");
 	const setRepairOpen = (open: boolean) =>
 		open ? openModal("repair", "dashboard") : closeModal("repair");
-	const [repairTargets, setRepairTargets] = createSignal<
-		Array<{
-			targetStep: string;
-			label: string;
-			expiresRuns: string[];
-			retainedEvidence: string[];
-		}>
-	>([]);
-	const [repairSelection, setRepairSelection] = createSignal(0);
 	// On-demand credential popup (askpass bridge): `pendingCredentialRequest()`
 	// is set by the in-process effect runner while a git command awaits an SSH
 	// passphrase. The popup keymap layer must not be gated on busy() because the
@@ -477,15 +423,21 @@ export function App(props: {
 	const questionOpen = () => modalOpen("question");
 	const setQuestionOpen = (open: boolean) =>
 		open ? openModal("question", "dashboard") : closeModal("question");
-	const [questionTab, setQuestionTab] = createSignal(0);
-	const [questionPromptOffset, setQuestionPromptOffset] = createSignal(0);
-	const [questionSelection, setQuestionSelection] = createSignal(0);
-	const [questionCustom, setQuestionCustom] = createSignal(false);
-	const [questionCustomText, setQuestionCustomText] = createSignal("");
-	const [questionDrafts, setQuestionDrafts] = createSignal<
-		Record<string, { kind: "option" | "custom"; value: string }>
-	>({});
-	const [questionSubmitting, setQuestionSubmitting] = createSignal(false);
+	const dialogue = createDialogueState();
+	const questionTab = dialogue.tab;
+	const setQuestionTab = dialogue.setTab;
+	const _questionPromptOffset = dialogue.promptOffset;
+	const setQuestionPromptOffset = dialogue.setPromptOffset;
+	const questionSelection = dialogue.selection;
+	const setQuestionSelection = dialogue.setSelection;
+	const questionCustom = dialogue.custom;
+	const setQuestionCustom = dialogue.setCustom;
+	const questionCustomText = dialogue.customText;
+	const setQuestionCustomText = dialogue.setCustomText;
+	const questionDrafts = dialogue.drafts;
+	const setQuestionDrafts = dialogue.setDrafts;
+	const questionSubmitting = dialogue.submitting;
+	const setQuestionSubmitting = dialogue.setSubmitting;
 	let modalBeforeCredential: string | undefined;
 	let modalBeforeQuestion: string | undefined;
 	let pendingQuestionId: string | undefined;
@@ -692,14 +644,6 @@ export function App(props: {
 	const costOpen = () => modalOpen("cost");
 	const setCostOpen = (open: boolean) =>
 		open ? openModal("cost", "dashboard") : closeModal("cost");
-	const [costSelection, setCostSelection] = createSignal(0);
-	const [costAgent, setCostAgent] = createSignal<string | null>(null);
-	const [costOffset, setCostOffset] = createSignal(0);
-	const [presetSwitcherHandler, setPresetSwitcherHandler] =
-		createSignal<(event: KeyEvent) => boolean>();
-	const [presetSwitcherChoices, setPresetSwitcherChoices] = createSignal<
-		PresetChoice[]
-	>([]);
 	const presetSwitcherOpen = () => modalOpen("preset-switcher");
 	const closePresetSwitcher = () => {
 		closeModal("preset-switcher");
@@ -760,11 +704,6 @@ export function App(props: {
 			setBusy(false);
 		}
 	};
-	const [themeIndex, setThemeIndex] = createSignal(
-		Math.max(0, themeNames.indexOf(loadThemeName())),
-	);
-	const [themeQuery, setThemeQuery] = createSignal("");
-	const [themeFiltering, setThemeFiltering] = createSignal(false);
 	const gate = createMemo(() => {
 		if (props.profile === "test")
 			return {
@@ -885,11 +824,15 @@ export function App(props: {
 			setVerdictRenderMarkdown(true);
 			let content: string;
 			try {
-				content = await openSpecArtifactAsync(
-					data().state,
-					item.value,
-					reviewDiffSignal(),
-				);
+				// With a gateway the read goes through the data layer; a
+				// transport-less run (demo/test) reads the checkout directly.
+				content = gatewayOrUndefined()
+					? ((await loadArtifact(
+							data().state,
+							item.value,
+							reviewDiffSignal(),
+						)) ?? "")
+					: openSpecArtifact(data().state, item.value);
 			} catch (error) {
 				content = `Could not open ${item.value}: ${error instanceof Error ? error.message : String(error)}`;
 			}
@@ -948,13 +891,9 @@ export function App(props: {
 		refreshRunning = true;
 		refreshController?.abort();
 		refreshController = new AbortController();
-		void loadDashboardAsync(
-			props.repo,
-			props.workflowId,
-			refreshController.signal,
-		)
+		void loadDashboard(props.repo, props.workflowId, refreshController.signal)
 			.then((next) => {
-				if (!refreshDisposed && generation === refreshGeneration) {
+				if (next && !refreshDisposed && generation === refreshGeneration) {
 					lastRefreshError = undefined;
 					setData(next);
 					traceTui("tui.dashboard.refresh", {
@@ -1012,51 +951,29 @@ export function App(props: {
 		demoPhases,
 	});
 	const {
-		reviewOpen,
 		setReviewOpen,
-		reviewKind,
-		reviewView,
-		setReviewView,
-		reviewChangeIndex,
-		reviewLine,
-		setReviewLine,
-		reviewDiff,
 		setReviewComments,
-		reviewCommentMode,
 		setReviewCommentMode,
-		reviewCommentText,
 		setReviewCommentText,
-		reviewVisualMode,
 		setReviewVisualMode,
-		reviewVisualStart,
-		reviewSourceRange,
-		setReviewSourceRange,
-		setReviewDiscussionLineIndices,
-		setReviewSelectableLineCount,
-		setReviewSelectedLineFindingIds,
-		reviewSearchMode,
-		reviewSearchQuery,
-		reviewSplitView,
 		planRejectionReasons,
 		planRejectionOpen,
 		setPlanRejectionOpen,
 		planRejectionSelection,
 		setPlanRejectionSelection,
-		reviewVisibleChanges,
-		reviewFile,
-		reviewChangesForView,
-		reviewFilesAvailableLines,
-		reviewDiffFile,
-		reviewDiscussions,
-		currentReviewDiscussions,
-		developerReviewPhase,
 		openDeveloperReview,
 		openPlanReview,
-		navigateReviewFile,
-		navigatePlanMarkdownFile,
 		rejectPlan,
 		handleReviewKey,
 		reviewDiffSignal,
+		reviewVisibleChanges,
+		reviewSourceRange,
+		reviewCommentText,
+		reviewSearchMode,
+		reviewCommentMode,
+		reviewChangeIndex,
+		reviewKind,
+		reviewOpen,
 		dispose: reviewFeatureDispose,
 	} = reviewFeature;
 	createEffect(() => {
@@ -1099,7 +1016,6 @@ export function App(props: {
 	});
 	const filteredThemes = () =>
 		themeNames.filter((name) => name.includes(themeQuery().toLowerCase()));
-	const [helpOffset, setHelpOffset] = createSignal(0);
 	const keybindCatalog = createMemo(() =>
 		dashboardDetailKeybindCatalog({
 			artifactsVisible: artifacts().length > 0,
@@ -1152,23 +1068,19 @@ export function App(props: {
 			refresh();
 			reconcileSidebarPresentation();
 		}, 200);
-		const client = backendClient();
-		if (client) {
-			const dispose = client.subscribe({
+		if (serverOwnsExecutionEvents()) {
+			// Attached: the server owns execution and Herdr, and publishes
+			// `workflow.updated`; the data layer applies each envelope to the cache.
+			const dispose = subscribeDataEvents({
 				onEvent: (event) => {
-					const envelope = event as {
-						domain?: string;
-						resource?: string;
-						payload?: unknown;
-					};
-					if (envelope.domain !== "workflow") return;
-					if (envelope.resource && envelope.resource !== props.repo) return;
+					if (event.domain !== "workflow") return;
+					if (event.resource && event.resource !== props.repo) return;
 					if (
-						!envelope.resource &&
-						envelope.payload &&
-						typeof envelope.payload === "object" &&
+						!event.resource &&
+						event.payload &&
+						typeof event.payload === "object" &&
 						!herdrEventMatchesWorkspace(
-							envelope.payload as Record<string, unknown>,
+							event.payload as Record<string, unknown>,
 							workspace,
 						)
 					)
@@ -1191,10 +1103,15 @@ export function App(props: {
 						join(state.worktree, ".herdr-workflow", props.workflowId),
 					];
 		const disposeWatch = watchDirectories(dirs, refresh);
-		const disposeHerdr = subscribeHerdrEvents((event) => {
-			if (herdrEventMatchesWorkspace(event.data, workspace))
-				debounced.trigger();
-		});
+		// When a transport is configured the server owns the Herdr socket
+		// subscription and publishes `workflow.updated`; a transport-less run
+		// (demo/tests) still watches the socket in-process.
+		const disposeHerdr = serverOwnsExecutionEvents()
+			? () => {}
+			: subscribeHerdrEvents((event) => {
+					if (herdrEventMatchesWorkspace(event.data, workspace))
+						debounced.trigger();
+				});
 		onCleanup(() => {
 			debounced.cancel();
 			disposeWatch();
@@ -1206,7 +1123,7 @@ export function App(props: {
 		// When a transport is configured the server owns the execution-settled
 		// listeners and publishes `workflow.updated`; only a transport-less run
 		// (demo/tests) listens to the in-process coordinator directly.
-		const localSettle = !backendClient();
+		const localSettle = !serverOwnsExecutionEvents();
 		const disposeExecutionError =
 			props.profile === "test" || !localSettle
 				? undefined
@@ -1224,7 +1141,7 @@ export function App(props: {
 						if (workflowId === props.workflowId) refresh();
 					});
 		if (props.profile !== "test")
-			void requestWorkflowExecutionAsync(props.repo, props.workflowId);
+			void requestExecution(props.repo, props.workflowId);
 		// The sidebar presentation, execution coordinator and shared application
 		// runtime are root-owned (task 1.2/1.3): hiding this feature view must
 		// not release them, so the shell owns their registration and disposal.
@@ -1246,268 +1163,6 @@ export function App(props: {
 		});
 	});
 
-	const handleKey = async (key: KeyEvent) => {
-		traceTui("tui.dashboard.key", {
-			surface: "dashboard",
-			action: "key",
-			key: key.name,
-			modal:
-				props.keymap.getData?.("modal.active") === undefined
-					? "none"
-					: String(props.keymap.getData?.("modal.active")),
-		});
-		if (busy()) return;
-		const name = key.name.toLowerCase();
-		if (name === "q" || (key.ctrl && name === "c")) {
-			const selection = renderer.getSelection()?.getSelectedText();
-			if (key.ctrl && selection) {
-				if (copyToClipboard(selection)) notify("Selection copied", "success");
-				else notify("Copy failed", "error");
-				return;
-			}
-			const now = Date.now();
-			if (now - lastQuitAt < 1000) renderer.destroy();
-			else {
-				lastQuitAt = now;
-				notify(`If you want to quit press ${key.ctrl ? "Ctrl+C" : "q"} again`);
-			}
-			return;
-		}
-		if (key.meta && name === "c") {
-			const selection = renderer.getSelection()?.getSelectedText();
-			if (selection) {
-				if (copyToClipboard(selection)) notify("Selection copied", "success");
-				else notify("Copy failed", "error");
-			} else notify("No selection to copy", "warning");
-			return;
-		}
-		if (name === "escape") {
-			setBusy(true);
-			try {
-				const workspace = (
-					props.profile === "test"
-						? data()
-						: await loadDashboardAsync(props.repo, props.workflowId)
-				).state.returnWorkspace;
-				if (!workspace)
-					throw new Error(
-						"No dashboard workspace recorded. Open this workflow from the overview first.",
-					);
-				focusReturnWorkspace(props.repo, props.workflowId, workspace);
-			} catch {
-				traceTui(
-					"tui.dashboard.action",
-					{ surface: "dashboard", action: "return-workspace" },
-					"error",
-				);
-			} finally {
-				setBusy(false);
-			}
-			return;
-		}
-		if (name === "t" && key.shift) {
-			applyTheme(themeNames[themeIndex()]);
-			setThemePicker(true);
-			props.keymap.setData("modal.active", "theme");
-			return;
-		}
-		if (name === "o" && key.shift) {
-			void (async () => {
-				try {
-					setRepairTargets(
-						await previewRepairAsync(props.repo, props.workflowId),
-					);
-					setRepairSelection(0);
-					setRepairOpen(true);
-					props.keymap.setData("modal.active", "repair");
-				} catch {
-					traceTui(
-						"tui.dashboard.action",
-						{ surface: "dashboard", action: "repair-preview" },
-						"error",
-					);
-				}
-			})();
-			return;
-		}
-		if (name === "?") {
-			setHelp(true);
-			setHelpOffset(0);
-			props.keymap.setData("modal.active", "help");
-			return;
-		}
-		if (name === "m") {
-			openPresetSwitcher();
-			return;
-		}
-		if (name === "c") {
-			setCostAgent(null);
-			setCostSelection(0);
-			setCostOffset(0);
-			setCostOpen(true);
-			props.keymap.setData("modal.active", "cost");
-			return;
-		}
-
-		if (name === "v" && activePanel() === 1) {
-			// Silent no-op for non-verification agents: only verifier roles have
-			// results to show.
-			const agent = data().agents[selectedAgent()];
-			if (!agent?.role.endsWith("verifier")) return;
-			try {
-				void openVerifierResult(agent.role);
-			} catch {
-				traceTui(
-					"tui.dashboard.action",
-					{ surface: "dashboard", action: "verifier-open" },
-					"error",
-				);
-			}
-			return;
-		}
-		if (name === "r") {
-			refresh();
-			return;
-		}
-		if (
-			(name === "j" && key.shift) ||
-			(name === "k" && key.shift) ||
-			(name === "h" && key.shift) ||
-			(name === "l" && key.shift)
-		) {
-			const direction: PanelDirection =
-				name === "j"
-					? "down"
-					: name === "k"
-						? "up"
-						: name === "h"
-							? "left"
-							: "right";
-			setActivePanel((panel) =>
-				movePanel(panel, direction, {
-					artifactsVisible: artifacts().length > 0,
-				}),
-			);
-			return;
-		}
-		if (name === "down" || name === "j") {
-			if (activePanel() === 0) changeScroll?.scrollBy(1);
-			else if (activePanel() === 1)
-				setSelectedAgent((index) =>
-					Math.min(data().agents.length - 1, index + 1),
-				);
-			else if (activePanel() === 6)
-				setSelectedArtifact((index) =>
-					Math.min(Math.max(0, artifacts().length - 1), index + 1),
-				);
-			return;
-		}
-		if (name === "up" || name === "k") {
-			if (activePanel() === 0) changeScroll?.scrollBy(-1);
-			else if (activePanel() === 1)
-				setSelectedAgent((index) => Math.max(0, index - 1));
-			else if (activePanel() === 6)
-				setSelectedArtifact((index) => Math.max(0, index - 1));
-			return;
-		}
-		if (name === "enter" || name === "return") {
-			// openRequiredUserAction is the sole gate for reopening a review popup
-			// on Enter: once its promptedUserActionKey/activePanel guard has
-			// dismissed one, Enter falls through to whatever the focused panel
-			// does instead of force-reopening it (previously a `core.*` stepId
-			// check bypassed that guard for engine-driven views only).
-			if (openRequiredUserAction()) return;
-			if (activePanel() === 6) {
-				const artifact = artifacts()[selectedArtifact()];
-				if (artifact) {
-					setVerdictRenderMarkdown(true);
-					setVerdict({
-						title: `OpenSpec · ${artifact}`,
-						content: "Loading artifact…",
-					});
-					setVerdictOffset(0);
-					props.keymap.setData("modal.active", "verdict");
-					void openSpecArtifactAsync(
-						data().state,
-						artifact,
-						artifactController?.signal,
-					)
-						.then((content) =>
-							setVerdict({ title: `OpenSpec · ${artifact}`, content }),
-						)
-						.catch((error) =>
-							setVerdict({
-								title: `OpenSpec · ${artifact}`,
-								content: `Could not open ${artifact}: ${error instanceof Error ? error.message : String(error)}`,
-							}),
-						);
-				}
-				return;
-			}
-			if (activePanel() === 1) {
-				const agent = data().agents[selectedAgent()];
-				if (!agent) return;
-				try {
-					const pane = data().state.panes[agent.role];
-					if (!pane) return;
-					await focusAgentAsync(data().state, pane);
-				} catch {
-					traceTui(
-						"tui.dashboard.action",
-						{ surface: "dashboard", action: "focus-agent" },
-						"error",
-					);
-				}
-				return;
-			}
-			const approval = gate();
-			if (!approval) return;
-			if (approval.action === "review") {
-				openDeveloperReview();
-				return;
-			}
-			if (
-				approval.action === "plan-review" ||
-				approval.action === "wiki-review"
-			) {
-				openPlanReview();
-				return;
-			}
-			if (approval.action === "completed-actions") {
-				setCompletedPicker(true);
-				setCompletedSelection(0);
-				setActionReason("");
-				props.keymap.setData("modal.active", "completed-picker");
-				return;
-			}
-			setBusy(true);
-			try {
-				if (props.profile === "test") {
-					setDemoIndex((index) => (index + 1) % demoPhases.length);
-				} else {
-					await runWorkflow(
-						approval.action,
-						props.repo,
-						props.workflowId,
-						data().state.revision,
-					);
-				}
-				traceTui("tui.dashboard.action", {
-					surface: "dashboard",
-					action: approval.action,
-				});
-				refresh();
-			} catch {
-				traceTui(
-					"tui.dashboard.action",
-					{ surface: "dashboard", action: approval.action },
-					"error",
-				);
-			} finally {
-				setBusy(false);
-			}
-		}
-	};
 	// The last surface modal that owned the keys before the modal's own `?` help
 	// opened, so Esc returns to it instead of dropping to the dashboard.
 	let modalHelpReturnModal: string | undefined;
@@ -1533,6 +1188,113 @@ export function App(props: {
 		props.keymap.setData("modal.active", "help");
 		return true;
 	};
+	const handleKey = createDashboardKeyHandler({
+		keymap: props.keymap,
+		renderer,
+		busy,
+		activePanel,
+		setActivePanel,
+		selectedAgent,
+		setSelectedAgent,
+		selectedArtifact,
+		setSelectedArtifact,
+		artifacts,
+		data,
+		setData,
+		dimensions,
+		notify,
+		trace: traceTui,
+		routeModalHelp,
+		props,
+		refresh,
+		scrollChangePanel: (lines) => changeScroll?.scrollBy(lines),
+		artifactSignal: () => artifactController?.signal,
+		userActionPrompt: () => promptedUserActionKey,
+		setUserActionPrompt: (key) => {
+			promptedUserActionKey = key;
+		},
+		setBusy,
+		setDemoIndex,
+		demoPhases,
+		themeIndex,
+		gate,
+		help,
+		setHelp,
+		applyTheme,
+		themeNames,
+		loadDashboard,
+		focusReturnWorkspace,
+		focusAgentAsync,
+		openFindingInEditor: async (path, line) =>
+			openFindingInEditorAsync(
+				data().state,
+				{ path, line },
+				artifactController?.signal,
+			),
+		openDeveloperReview,
+		openPlanReview,
+		openVerifierResult,
+		openRequiredUserAction,
+		openPresetSwitcher,
+		openCost: () => setCostOpen(true),
+		openReview: (kind) =>
+			kind === "plan" ? openPlanReview() : openDeveloperReview(),
+		openUserAction: () => setUserActionOpen(true),
+		readArtifact: async (state, artifact) =>
+			gatewayOrUndefined()
+				? ((await loadArtifact(state, artifact, artifactController?.signal)) ??
+					"")
+				: openSpecArtifact(state, artifact),
+		openSpecArtifact,
+		openSpecArtifacts,
+		openArtifact: async (artifact) => {
+			const read = await loadArtifact(
+				data().state,
+				artifact,
+				artifactController?.signal,
+			);
+			setVerdict({ title: `OpenSpec · ${artifact}`, content: read ?? "" });
+		},
+		switchWorkflowPreset,
+		runWorkflow,
+		applyRepair,
+		answerQuestion,
+		previewRepair,
+		requestExecution,
+		verdictLines,
+		requiredUserAction,
+		completedActions,
+		completedInputHint,
+		planRejectionReasons,
+		setThemePicker,
+		setRepairOpen,
+		setRepairTargets,
+		setRepairSelection,
+		setCompletedPicker,
+		setCompletedSelection,
+		setActionReason,
+		setCostOpen,
+		setCostSelection,
+		setCostAgent,
+		setCostOffset,
+		setHelpOffset,
+		setVerdict,
+		setVerdictOffset,
+		setVerdictRenderMarkdown,
+		setVerdictReturnToFindings,
+		setVerdictReturnToUserAction,
+		setFindings,
+		setSelectedFinding,
+		findings,
+		verdict,
+		setPresetSwitcherHandler,
+		setPresetSwitcherChoices,
+		setReviewOpen,
+		reviewFeature,
+		setQuestionOpen,
+		setUserActionOpen,
+		setArtifacts,
+	});
 	onMount(() => {
 		props.keymap.setData("app.view", "detail");
 		props.keymap.setData("modal.active", activeErrorModal() ? "error" : "none");
@@ -2569,637 +2331,133 @@ export function App(props: {
 								flexDirection="column"
 								gap={1}
 							>
-								<Panel
-									title={`Change (${data().age} ago)`}
-									accent={uiColors.primary}
+								<ChangePanel
+									data={data()}
 									active={activePanel() === 0}
-									style={{ width: "100%", flexGrow: 1, minHeight: 0 }}
-								>
-									<ScrollableContent
-										onScrollBoxReady={(box) => {
-											changeScroll = box;
-										}}
-									>
-										<box flexDirection="row">
-											<box width={7}>
-												<text fg={uiColors.textMuted}>STATUS</text>
-											</box>
-											<PhaseStatus state={data().state} />
-										</box>
-										<text fg={uiColors.textMuted}>GIT STATUS</text>
-										<Show when={data().gitStatus.available}>
-											<Show when={data().gitStatus.branch}>
-												<box flexDirection="row" overflow="hidden">
-													<text
-														fg={uiColors.success}
-														flexShrink={0}
-														wrapMode="none"
-													>
-														+{data().gitStatus.addedFiles}
-													</text>
-													<text
-														fg={uiColors.warning}
-														flexShrink={0}
-														wrapMode="none"
-													>
-														*{data().gitStatus.changedFiles}
-													</text>
-													<text
-														fg={uiColors.error}
-														flexShrink={0}
-														wrapMode="none"
-													>
-														-{data().gitStatus.deletedFiles}{" "}
-													</text>
-													<Show
-														when={!data().gitStatus.noUpstream}
-														fallback={
-															<text
-																fg={uiColors.textMuted}
-																flexShrink={0}
-																wrapMode="none"
-															>
-																
-															</text>
-														}
-													>
-														<text
-															fg={uiColors.success}
-															flexShrink={0}
-															wrapMode="none"
-														>
-															↑{data().gitStatus.ahead}{" "}
-														</text>
-														<text
-															fg={uiColors.success}
-															flexShrink={0}
-															wrapMode="none"
-														>
-															↓{data().gitStatus.behind}
-														</text>
-													</Show>
-													<text
-														fg={uiColors.textSecondary}
-														flexShrink={0}
-														wrapMode="none"
-													>
-														{" "}
-														{data().gitStatus.branch}
-													</text>
-												</box>
-											</Show>
-										</Show>
-										<Show when={data().state.definition}>
-											{(definition) => (
-												<box flexDirection="row">
-													<box width={7}>
-														<text fg={uiColors.textMuted}>FLOW</text>
-													</box>
-													<text fg={uiColors.textSecondary}>
-														{definition().label} · v{definition().version}
-													</text>
-												</box>
-											)}
-										</Show>
-										<Show when={data().state.ticketNumber}>
-											<box flexDirection="row">
-												<box width={7}>
-													<text fg={uiColors.textMuted}>TICKET</text>
-												</box>
-												<HighlightedText
-													text={data().state.ticketNumber ?? ""}
-													highlight="highlight"
-												/>
-											</box>
-										</Show>
-										<Show when={data().state.planQuality}>
-											{(plan) => (
-												<box flexDirection="row">
-													<box width={7}>
-														<text fg={uiColors.textMuted}>PLAN</text>
-													</box>
-													<Badge
-														text={plan().passed ? "PASS" : "FAIL"}
-														highlight={plan().passed ? "positive" : "negative"}
-													/>
-													<text fg={uiColors.textSecondary}>
-														{" "}
-														{plan().specFiles} specs · {plan().taskCount} tasks
-													</text>
-												</box>
-											)}
-										</Show>
-										<Show when={data().state.verificationTier}>
-											{(tier) => {
-												const roles = () =>
-													data().state.verificationRoles ?? [];
-												const completed = () =>
-													roles().filter(
-														(role) => data().state.verificationResults?.[role],
-													).length;
-												return (
-													<box flexDirection="row">
-														<box width={7}>
-															<text fg={uiColors.textMuted}>VERIFY</text>
-														</box>
-														<Badge
-															text={tier().toUpperCase()}
-															highlight="highlight2"
-														/>
-														<text fg={uiColors.textSecondary}>
-															{" "}
-															{completed()}/{roles().length} reviews · round{" "}
-															{data().state.verificationRound}
-														</text>
-													</box>
-												);
-											}}
-										</Show>
-										<text fg={uiColors.textMuted}>REQUEST</text>
-										<box paddingLeft={1}>
-											<text fg={uiColors.textPrimary}>{data().request}</text>
-										</box>
-									</ScrollableContent>
-								</Panel>
-								<Show when={artifacts().length > 0}>
-									<Panel
-										title="OpenSpec"
-										accent={uiColors.accent}
-										active={activePanel() === 6}
-										style={{
-											width: "100%",
-											height: Math.min(artifacts().length, 5) + 1,
-											flexShrink: 0,
-										}}
-									>
-										<SelectableList
-											items={artifacts()}
-											availableLines={Math.min(artifacts().length, 5)}
-											selectedIndex={
-												activePanel() === 6 ? selectedArtifact() : -1
-											}
-											renderItem={(artifact, selected) => (
-												<box height={1}>
-													<text
-														fg={
-															selected
-																? uiColors.textPrimary
-																: uiColors.textSecondary
-														}
-														attributes={selected ? TextAttributes.BOLD : 0}
-													>
-														{artifact}
-													</text>
-												</box>
-											)}
-										/>
-									</Panel>
-								</Show>
-							</box>
-							<Panel
-								title="Agents"
-								accent={uiColors.accent}
-								active={activePanel() === 1}
-								style={{
-									flexGrow: 1,
-									flexBasis: 0,
-									minWidth: 0,
-									height: "100%",
-								}}
-							>
-								<SelectableList
-									items={data().agents}
-									estimatedItemHeight={4}
-									selectedIndex={activePanel() === 1 ? selectedAgent() : -1}
-									renderItem={(agent, _selected) => {
-										const timeline = () =>
-											data().verifierTimeline.find(
-												(item) => item.role === agent.role,
-											);
-										const metricsLine = () => agentMetricLine(agent.metrics);
-										const runtimeModelLine = () =>
-											agentRuntimeModelLine(
-												agent.runtime,
-												timeline()?.model ?? agent.model,
-											);
-										const findingSummaryRows = () =>
-											dimensions().width < 90 ? 3 : 1;
-										const highlight = () =>
-											agent.status === "working"
-												? "highlight2"
-												: agent.status === "completed"
-													? "positive"
-													: agent.status === "blocked"
-														? "warning"
-														: agent.status === "failed"
-															? "negative"
-															: "secondary";
-										return (
-											<box
-												width="100%"
-												height={
-													2 +
-													(metricsLine() ? 1 : 0) +
-													(agent.findingCounts ? findingSummaryRows() : 0)
-												}
-												flexDirection="column"
-												paddingRight={1}
-											>
-												<box width="100%" height={1} flexDirection="row">
-													<box flexGrow={1} minWidth={0} overflow="hidden">
-														<text
-															fg={uiColors.textPrimary}
-															attributes={TextAttributes.BOLD}
-														>
-															{agent.role}
-														</text>
-													</box>
-													<Badge
-														text={agent.status}
-														appearance="text"
-														highlight={highlight()}
-														animation={
-															agent.status === "working" ? "aurora" : "static"
-														}
-														attributes={TextAttributes.BOLD}
-														transitionKey={agent.role}
-													/>
-												</box>
-												<box width="100%" height={1} flexDirection="row">
-													<box flexGrow={1} minWidth={0} overflow="hidden">
-														<text fg={uiColors.textMuted}>
-															{runtimeModelLine() ??
-																(timeline()
-																	? "default"
-																	: agent.role.endsWith("verifier")
-																		? "Awaiting verification run"
-																		: "Interactive workflow agent")}
-														</text>
-													</box>
-													<Show when={timeline()}>
-														{(entry) => {
-															const duration = entry().durationSeconds;
-															return (
-																<text
-																	fg={
-																		entry().status === "PASS"
-																			? uiColors.success
-																			: entry().status === "FAIL"
-																				? uiColors.error
-																				: uiColors.warning
-																	}
-																>
-																	{entry().status}
-																	{duration !== undefined
-																		? ` · ${formatDuration(duration)}`
-																		: ""}
-																	{entry().fallback ? " · fallback" : ""}
-																</text>
-															);
-														}}
-													</Show>
-												</box>
-												<Show when={agent.findingCounts}>
-													{(counts) => (
-														<FindingCountSummary
-															counts={counts()}
-															compact={findingSummaryRows() === 3}
-														/>
-													)}
-												</Show>
-												<Show when={metricsLine()}>
-													<box width="100%" height={1} overflow="hidden">
-														<text fg={uiColors.textMuted}>{metricsLine()}</text>
-													</box>
-												</Show>
-											</box>
-										);
+									onScrollBoxReady={(box) => {
+										changeScroll = box as ScrollBoxRenderable;
 									}}
 								/>
-							</Panel>
+								<Show when={artifacts().length > 0}>
+									<OpenSpecPanel
+										artifacts={artifacts()}
+										active={activePanel() === 6}
+										selectedIndex={selectedArtifact()}
+									/>
+								</Show>
+							</box>
+							<AgentsPanel
+								data={data()}
+								active={activePanel() === 1}
+								selectedIndex={selectedAgent()}
+								narrow={dimensions().width < 90}
+							/>
 						</box>
 					</box>
 				}
 			/>
-			<Show when={repairOpen()}>
-				<ListViewModal
-					sizing="cap"
-					title={`Repair r${data().state.revision} · ENTER repairs`}
-					fieldLabel="Compatible target"
-					items={repairTargets().map(
-						(target) =>
-							`${target.label} · expire [${target.expiresRuns.slice(0, 4).join(", ") || "none"}${target.expiresRuns.length > 4 ? ", …" : ""}] · retain [${target.retainedEvidence.slice(0, 4).join(", ") || "none"}${target.retainedEvidence.length > 4 ? ", …" : ""}]`,
-					)}
-					selectedIndex={repairSelection()}
-					help={[
-						{ key: "j/k", action: "Target" },
-						{ key: "Enter", action: "Repair" },
-						{ key: "Esc", action: "Cancel" },
-					]}
-					renderItem={(item, isSelected) => (
-						<text fg={isSelected() ? uiColors.primary : uiColors.textSecondary}>
-							{item}
-						</text>
-					)}
-				/>
-			</Show>
-			<Show when={completedPicker()}>
-				<ListViewModal
-					title={`Choose workflow action · ${actionReason() || completedInputHint()}`}
-					fieldLabel="Action"
-					items={completedActions().map((action) => action.label)}
-					selectedIndex={completedSelection()}
-					helpSections={false}
-					help={[
-						{ key: "j/k", action: "Navigate" },
-						{
-							key: "type",
-							action:
-								completedActions()[completedSelection()]?.command ===
-								"research-follow-up"
-									? "Follow-up question"
-									: "Reason when required",
-						},
-						{ key: "Enter", action: "Run" },
-						{ key: "Esc", action: "Cancel" },
-					]}
-					renderItem={(item, isSelected) => (
-						<text fg={isSelected() ? uiColors.primary : uiColors.textSecondary}>
-							{item}
-						</text>
-					)}
-				/>
-			</Show>
-			<Show when={userActionOpen() && requiredUserAction()}>
-				<ListViewModal
-					title={`⚠ ${requiredUserAction()?.title}`}
-					fieldLabel={requiredUserAction()?.prompt}
-					items={requiredUserAction()?.items ?? []}
-					selectedIndex={userActionSelection()}
-					heightPercent={0.5}
-					help={[
-						{ key: "j/k", action: "Navigate" },
-						{ key: "Enter", action: "Start" },
-						{ key: "Esc", action: "Not now" },
-					]}
-					renderItem={(item, isSelected) => (
-						<text
-							fg={isSelected() ? uiColors.warning : uiColors.textSecondary}
-							attributes={isSelected() ? TextAttributes.BOLD : 0}
-						>
-							{item.label}
-						</text>
-					)}
-				/>
-			</Show>
-			<Show when={help()}>
-				<HelpModal
-					title="Dashboard keybindings"
-					offset={helpOffset()}
-					lines={Math.max(5, Math.floor(dimensions().height * 0.78) - 5)}
-				/>
-			</Show>
-			<NotificationOverlay />
-			<Show when={themePicker()}>
-				<ThemePickerModal
-					selected={themeIndex()}
-					active={getActiveThemeName()}
-					themes={filteredThemes()}
-					query={themeQuery()}
-					filtering={themeFiltering()}
-				/>
-			</Show>
-			<Show when={findings()}>
-				{(result) => (
-					<FindingsModal
-						title={result().title}
-						events={result().events}
-						selected={selectedFinding()}
-					/>
-				)}
-			</Show>
-			<Show when={planRejectionOpen()}>
-				<ListViewModal
-					title="Reject plan"
-					fieldLabel="Choose a rejection reason"
-					items={planRejectionReasons}
-					selectedIndex={planRejectionSelection()}
-					help={[
-						{ key: "j/k", action: "Navigate" },
-						{ key: "Enter", action: "Reject plan" },
-						{ key: "Esc", action: "Cancel" },
-					]}
-					renderItem={(item, isSelected) => (
-						<text fg={isSelected() ? uiColors.warning : uiColors.textSecondary}>
-							{item}
-						</text>
-					)}
-				/>
-			</Show>
-			<Show
-				when={
-					reviewOpen() &&
-					modalHost.top()?.kind === "review" &&
-					reviewView() === "files"
+			<Overlays
+				state={overlays}
+				pickerHint={completedInputHint()}
+				repair={
+					repairOpen()
+						? {
+								revision: data().state.revision,
+								items: repairTargets().map(
+									(target) =>
+										`${target.label} · expire [${target.expiresRuns.slice(0, 4).join(", ") || "none"}${target.expiresRuns.length > 4 ? ", …" : ""}] · retain [${target.retainedEvidence.slice(0, 4).join(", ") || "none"}${target.retainedEvidence.length > 4 ? ", …" : ""}]`,
+								),
+							}
+						: undefined
 				}
-			>
-				<GenericModal
-					title={
-						reviewKind() === "plan"
-							? "Plan review"
-							: reviewKind() === "wiki"
-								? "Wiki review"
-								: (requiredUserAction()?.title ?? "Developer review")
-					}
-					widthPercent={0.9}
-					heightPercent={0.75}
-					helpText={[
-						{ key: "j/k", action: "Navigate" },
-						{
-							key: "Enter",
-							action:
-								reviewKind() === "plan"
-									? "Open artifact"
-									: reviewKind() === "wiki"
-										? "Open document"
-										: "Open diff",
-						},
-						{ key: "/", action: "Search files" },
-						...(reviewKind() === "plan" ||
-						reviewKind() === "wiki" ||
-						developerReviewPhase()
-							? [{ key: "f", action: "Finish review" }]
-							: []),
-						...(reviewKind() === "plan"
-							? [{ key: "r", action: "Reject plan" }]
-							: []),
-						{ key: "Esc", action: "Postpone" },
-					]}
-					onBackdropClick={() => {
-						setReviewOpen(false);
-						props.keymap.setData("modal.active", "none");
-					}}
-				>
-					<ChangedFilesView
-						findings
-						changes={reviewChangesForView()}
-						selectedIndex={reviewChangeIndex()}
-						searchMode={reviewSearchMode()}
-						searchQuery={reviewSearchQuery()}
-						availableLines={reviewFilesAvailableLines()}
-						onClose={() => {
-							setReviewOpen(false);
-							props.keymap.setData("modal.active", "none");
-						}}
-					/>
-				</GenericModal>
-			</Show>
-			<Show
-				when={
-					reviewOpen() &&
-					modalHost.top()?.kind === "review" &&
-					reviewView() === "diff" &&
-					reviewKind() === "plan" &&
-					reviewFile()
+				completedPicker={
+					completedPicker()
+						? {
+								items: completedActions().map((action) => action.label),
+								reason: actionReason(),
+								followUp:
+									completedActions()[completedSelection()]?.command ===
+									"research-follow-up",
+							}
+						: undefined
 				}
-			>
-				<MarkdownViewModal
-					filePath={reviewFile()?.newPath ?? ""}
-					content={reviewDiff()}
-					currentFileIndex={reviewChangeIndex()}
-					totalFiles={reviewVisibleChanges().length}
-					selectedLine={reviewLine()}
-					visualModeActive={reviewVisualMode()}
-					visualModeStart={reviewVisualStart()}
-					commentMode={reviewCommentMode()}
-					commentText={reviewCommentText()}
-					discussions={currentReviewDiscussions()}
-					onSelectedLineChange={setReviewLine}
-					onSelectedSourceRangeChange={(start, end) =>
-						setReviewSourceRange({ start, end })
-					}
-					onDiscussionLineIndicesChange={setReviewDiscussionLineIndices}
-					onSelectableLineCountChange={setReviewSelectableLineCount}
-					onClose={() => {
-						setReviewVisualMode(false);
-						setReviewCommentMode(false);
-						setReviewView("files");
-					}}
-					onNavigateFile={(direction) =>
-						void navigatePlanMarkdownFile(direction)
-					}
-				/>
-			</Show>
-			<Show
-				when={
-					reviewOpen() &&
-					modalHost.top()?.kind === "review" &&
-					reviewView() === "diff" &&
-					(reviewKind() === "developer" || reviewKind() === "wiki") &&
-					reviewDiffFile()
+				userAction={
+					userActionOpen() && requiredUserAction()
+						? {
+								title: requiredUserAction()?.title ?? "",
+								prompt: requiredUserAction()?.prompt ?? "",
+								items: requiredUserAction()?.items ?? [],
+							}
+						: undefined
 				}
-			>
-				{(file) => (
-					<DiffViewModal
-						filePath={file().new_path}
-						diff={file().diff}
-						currentFileIndex={reviewChangeIndex()}
-						totalFiles={reviewVisibleChanges().length}
-						selectedLine={reviewLine()}
-						visualModeActive={reviewVisualMode()}
-						visualModeStart={reviewVisualStart()}
-						forceSplitView={reviewSplitView()}
-						isNewFile={file().new_file}
-						isDeletedFile={file().deleted_file}
-						currentSideOnly={reviewKind() === "wiki"}
-						renderMarkdown={reviewKind() === "wiki"}
-						commentMode={reviewCommentMode()}
-						commentText={reviewCommentText()}
-						discussions={reviewDiscussions()}
-						onSelectedLineChange={setReviewLine}
-						onSelectedSourceRangeChange={(start, end) =>
-							setReviewSourceRange({ start, end })
-						}
-						onDiscussionLineIndicesChange={setReviewDiscussionLineIndices}
-						onSelectableLineCountChange={setReviewSelectableLineCount}
-						onSelectedFindingIdsChange={setReviewSelectedLineFindingIds}
-						onClose={() => {
-							setReviewVisualMode(false);
-							setReviewCommentMode(false);
-							setReviewView("files");
-						}}
-						onNavigateFile={(direction) => void navigateReviewFile(direction)}
-					/>
-				)}
-			</Show>
-			<Show when={costOpen()}>
-				<CostModal
-					rows={data().costBreakdown}
-					selected={costSelection()}
-					agent={costAgent()}
-					offset={costOffset()}
-				/>
-			</Show>
-			<Show when={presetSwitcherOpen()}>
-				<PresetSwitcherModal
-					choices={presetSwitcherChoices()}
-					selected={data().state.selectedPreset}
-					onKeyReady={(handler) => setPresetSwitcherHandler(() => handler)}
-					onCancel={closePresetSwitcher}
-					onSelect={selectPreset}
-				/>
-			</Show>
-			<Show when={verdict()}>
-				{(report) => (
-					<VerdictModal
-						title={report().title}
-						content={report().content}
-						offset={verdictOffset()}
-						lines={verdictLines()}
-						renderMarkdown={verdictRenderMarkdown()}
-					/>
-				)}
-			</Show>
-			<Show when={questionOpen() && pendingQuestion() && !credentialRequest()}>
-				{(_question) => (
-					<DeveloperQuestionModal
-						questions={pendingQuestionGroup()}
-						activeIndex={questionTab()}
-						promptOffset={questionPromptOffset()}
-						selected={questionSelection()}
-						custom={questionCustom()}
-						customText={questionCustomText()}
-						responseState={pendingQuestionGroup().map((item) =>
-							questionDrafts()[item.id]?.value.trim()
-								? "answered"
-								: "unanswered",
-						)}
-						onCustomTextChange={updateQuestionCustomText}
-					/>
-				)}
-			</Show>
-			<Show when={credentialRequest()}>
-				{(request) => (
-					<Show when={modalHost.top()?.kind === "credentials"}>
-						<CredentialsModal
-							prompt={request().prompt}
-							mask={request().mask}
-							value={credentialInput()}
-						/>
-					</Show>
-				)}
-			</Show>
-			<Show when={reviewFinishing()}>
-				{/* Stacks above the still-open review popup; cleared in the finish
-				    handlers' existing finally cleanup. */}
-				<ProgressModal
-					title="Finishing review"
-					message={reviewFinishingMessage()}
-				/>
-			</Show>
-			{/* The open dialog's own `?` help, above every dialog (question z20,
-			    credentials z10). */}
-			<ModalHelpOverlay zIndex={30} />
+				helpLines={
+					help() ? Math.max(5, Math.floor(dimensions().height * 0.78) - 5) : 0
+				}
+				theme={
+					themePicker()
+						? {
+								active: getActiveThemeName(),
+								themes: filteredThemes(),
+							}
+						: undefined
+				}
+				findings={
+					findings()
+						? {
+								title: findings()?.title ?? "",
+								events: [...(findings()?.events ?? [])],
+							}
+						: undefined
+				}
+				planRejection={
+					planRejectionOpen()
+						? {
+								reasons: planRejectionReasons,
+								selected: planRejectionSelection(),
+							}
+						: undefined
+				}
+				cost={costOpen() ? { rows: data().costBreakdown } : undefined}
+				presetSwitcher={
+					presetSwitcherOpen()
+						? {
+								choices: presetSwitcherChoices(),
+								selectedPreset: data().state.selectedPreset,
+								onKeyReady: (handler) =>
+									setPresetSwitcherHandler(() => handler),
+								onCancel: closePresetSwitcher,
+								onSelect: (preset) => void selectPreset(preset),
+							}
+						: undefined
+				}
+				verdict={
+					verdict()
+						? {
+								title: verdict()?.title ?? "",
+								content: verdict()?.content ?? "",
+								lines: verdictLines(),
+							}
+						: undefined
+				}
+			/>
+			<ReviewRoute
+				feature={reviewFeature}
+				modalTop={() => modalHost.top()?.kind}
+				setModalActive={(modal: string) =>
+					props.keymap.setData("modal.active", modal)
+				}
+				fallbackTitle={requiredUserAction()?.title}
+			/>
+			<DialogueRoute
+				dialogue={dialogue}
+				pendingGroup={pendingQuestionGroup()}
+				credential={credentialRequest()}
+				credentialInput={credentialInput()}
+				modalTop={() => modalHost.top()?.kind}
+				finishing={reviewFinishing()}
+				finishingMessage={reviewFinishingMessage()}
+				onCustomTextChange={updateQuestionCustomText}
+			/>
 		</box>
 	);
 }

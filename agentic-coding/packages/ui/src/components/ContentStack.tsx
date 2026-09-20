@@ -1,7 +1,8 @@
 /** @jsxImportSource @opentui/solid */
+
 import { For, type JSX, Show } from "solid-js";
 import { uiColors } from "../theme/colors";
-import { hostOwnsGaps } from "./hostChrome";
+import { hostOwnsGaps } from "./hostChrome.ts";
 
 export interface ContentFrameProps {
 	children: JSX.Element;

@@ -2,7 +2,7 @@
 // run/effect projection into `WorkflowView`. Read path only. Moved verbatim
 // out of runtime.ts (split-workflow-god-modules).
 import type { Database } from "bun:sqlite";
-import type { WorkflowView } from "../contracts.ts";
+import type { WorkflowView } from "../../contracts/workflow.ts";
 import { decodeSnapshot, WorkflowRuntimeError } from "../contracts.ts";
 import type { WorkflowRegistry } from "../registry.ts";
 import type { MigrationPreview, RepairPreview } from "./engine-types.ts";

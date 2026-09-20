@@ -10,7 +10,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createClient } from "../packages/devenv/core/src/index";
+import { createClient } from "../packages/devenv/core/src/index.ts";
 import type { InfraService } from "../src/server/actions/targets.ts";
 import type { App } from "../src/server/environment/config.ts";
 import {

@@ -8,7 +8,7 @@ import path from "node:path";
 import type {
 	ResolvedProfile,
 	WorkflowRouting,
-} from "../src/workflow/contracts.ts";
+} from "../src/contracts/workflow.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import { workflowTraceId } from "../src/workflow/observability.ts";
 import { canonicalStorePath, WorkflowEngine } from "../src/workflow/runtime.ts";

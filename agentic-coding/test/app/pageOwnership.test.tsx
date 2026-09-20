@@ -4,20 +4,20 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { testRender } from "@opentui/solid";
-import { runForeground } from "../../packages/devenv/cli/src/tui/actions/foreground";
-import { App } from "../../src/tui/otel/app/App";
-import { TraceDb } from "../../src/tui/otel/model/db";
-import { createDemoDb } from "../../src/tui/otel/model/demoDb";
-import { LogStore } from "../../src/tui/otel/model/logStore";
-import { MetricStore } from "../../src/tui/otel/model/metricStore";
-import { TopologyStore } from "../../src/tui/otel/model/topologyStore";
-import { TraceStore } from "../../src/tui/otel/model/traceStore";
+import { runForeground } from "../../packages/devenv/cli/src/tui/actions/foreground.ts";
+import { TraceDb } from "../../src/server/telemetry-db";
+import { App } from "../../src/tui/otel/app/App.tsx";
+import { createDemoDb } from "../../src/tui/otel/model/demoDb.ts";
+import { LogStore } from "../../src/tui/otel/model/logStore.ts";
+import { MetricStore } from "../../src/tui/otel/model/metricStore.ts";
+import { TopologyStore } from "../../src/tui/otel/model/topologyStore.ts";
+import { TraceStore } from "../../src/tui/otel/model/traceStore.ts";
 import {
 	activeWorkflowExecutions,
 	disposeExecutionCoordinator,
 	executionCoordinator,
-} from "../../src/workflow/execution-coordinator";
-import { pressEscapeAndSettle, renderUntil } from "./support/terminal";
+} from "../../src/workflow/execution-coordinator.ts";
+import { pressEscapeAndSettle, renderUntil } from "./support/terminal.ts";
 
 // Page visibility never changes service ownership
 // (replace-nested-tabs-with-page-navigation, task 3.3): navigating between

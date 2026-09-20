@@ -3,7 +3,7 @@ import {
 	type KeybindSection,
 	PAGE_NAVIGATION_KEYBINDS,
 } from "@ui";
-import { hostKeybind } from "../../../../packages/devenv/cli/src/tui/keyboard/host-keys";
+import { hostKeybind } from "../../../../packages/devenv/cli/src/tui/keyboard/host-keys.ts";
 
 /** Traces-local view: list, span tree or span detail. */
 export type View = "selection" | "detail" | "span";

@@ -6,7 +6,7 @@
 
 import { publishHostChrome } from "@ui";
 import { createEffect, onCleanup } from "solid-js";
-import { TUIApp } from "../../../packages/devenv/cli/src/tui/app-opentui";
+import { TUIApp } from "../../../packages/devenv/cli/src/tui/app-opentui.tsx";
 
 /**
  * Rows the page shell renders around this body: the logo bar, the breadcrumb

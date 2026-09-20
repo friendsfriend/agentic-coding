@@ -7,8 +7,8 @@
 //
 // Pure: takes the environment and argv so a test can resolve them without a
 // running shell.
-import { configRootFrom } from "../../config-root";
-import type { SettingsEffect } from "./catalog";
+import { configRootFrom } from "../../config-root.ts";
+import type { SettingsEffect } from "./catalog.ts";
 
 export interface BackendSettingValue {
 	/** Inventory id this value belongs to. */

@@ -13,7 +13,7 @@ import {
 	dashboardDetailKeybindCatalog,
 	panelContext,
 	workflowLaunchKeybindCatalog,
-} from "../../src/tui/dash/keybinds";
+} from "../../src/tui/dash/keybinds.ts";
 
 describe("keybind catalog contract", () => {
 	it("hides standard keys from footers but keeps them in the catalog", () => {

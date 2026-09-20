@@ -5,7 +5,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { JsonValue, WorkflowSnapshot } from "../contracts.ts";
+import type { JsonValue, WorkflowSnapshot } from "../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../contracts.ts";
 import {
 	conceptPath,

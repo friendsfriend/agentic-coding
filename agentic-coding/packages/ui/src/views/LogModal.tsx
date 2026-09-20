@@ -3,17 +3,15 @@
 import type { TextChunk } from "@opentui/core";
 import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
-import {
-	GenericModal,
-	highlightColor,
-	ScrollableContent,
-	SearchHeader,
-} from "@ui";
 import { createMemo, For, type JSX, Show } from "solid-js";
-import { formatHelpText } from "../components/HelpText";
+import { GenericModal } from "../components/GenericModal";
+import { formatHelpText } from "../components/HelpText.tsx";
+import { highlightColor } from "../components/Highlight";
+import { ScrollableContent } from "../components/ScrollableContent";
+import { SearchHeader } from "../components/SearchHeader";
 import { uiColors } from "../theme/colors";
-import { ansiToStyledText, stripAnsi } from "./ansiToStyledText";
-import { LogAiOverlay } from "./LogAiOverlay";
+import { ansiToStyledText, stripAnsi } from "./ansiToStyledText.ts";
+import { LogAiOverlay } from "./LogAiOverlay.tsx";
 
 export interface LogModalProps {
 	/** Modal title / header label (e.g. "Container Logs: my-app (auto-refresh: 10s)") */

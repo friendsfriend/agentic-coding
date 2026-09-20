@@ -6,15 +6,12 @@
 // `? help` stays off unless a caller explicitly wires it: advertising it would
 // promise a key the host cannot route.
 
-import type { GenericModalProps } from "@ui";
-import { GenericModal as SharedGenericModal } from "@ui";
+import {
+	type GenericModalProps,
+	GenericModal as SharedGenericModal,
+} from "../components/GenericModal";
 
-export type {
-	GenericModalProps,
-	HelpEntry,
-	Keybind,
-	KeybindSection,
-} from "@ui";
+export type { GenericModalProps } from "../components/GenericModal.tsx";
 
 export function GenericModal(props: GenericModalProps) {
 	return (

@@ -1,6 +1,6 @@
-import type { RuntimeState, RuntimeStatus } from "@devenv/types";
-import { highlightColor } from "../components/Highlight";
+import { highlightColor } from "../components/Highlight.tsx";
 import { uiColors } from "../theme/colors";
+import type { RuntimeState, RuntimeStatus } from "../types";
 
 /**
  * Status styling utilities matching the Go TUI implementation

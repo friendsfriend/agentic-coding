@@ -8,7 +8,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { WorkflowRun } from "../contracts.ts";
+import type { WorkflowRun } from "../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../contracts.ts";
 import type { WorkflowRegistry } from "../registry.ts";
 import {

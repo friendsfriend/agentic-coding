@@ -1,22 +1,21 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { TestCase, TestSuite } from "@devenv/types";
 import { TextAttributes } from "@opentui/core";
-import {
-	Badge,
-	CenteredState,
-	ContentPanel,
-	FilterStatusBar,
-	HighlightedText,
-	highlightColor,
-	LAYOUT_CHROME_LINES,
-	MatchedText,
-	ScrollableList,
-	SearchHeader,
-} from "@ui";
 import { createMemo, Show } from "solid-js";
-import { hostChromeLines, hostNamesPage } from "../components/hostChrome";
+import { Badge } from "../components/Badge";
+import { CenteredState } from "../components/CenteredState";
+import { ContentPanel } from "../components/ContentStack";
+import { FilterStatusBar } from "../components/FilterStatusBar";
+import { HighlightedText, highlightColor } from "../components/Highlight";
+import { hostChromeLines, hostNamesPage } from "../components/hostChrome.ts";
+import { MatchedText } from "../components/MatchedText";
+import {
+	LAYOUT_CHROME_LINES,
+	ScrollableList,
+} from "../components/ScrollableList";
+import { SearchHeader } from "../components/SearchHeader";
 import { uiColors } from "../theme/colors";
+import type { TestCase, TestSuite } from "../types";
 
 interface TestResultsDetailViewProps {
 	testSuites?: TestSuite[];

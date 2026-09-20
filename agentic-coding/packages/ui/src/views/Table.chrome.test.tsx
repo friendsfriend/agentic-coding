@@ -1,9 +1,9 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test";
-import type { TableRow } from "@devenv/types";
 import { testRender } from "@opentui/solid";
-import { publishHostChrome } from "../components/hostChrome";
-import { Table, type TableColumn } from "./Table";
+import { publishHostChrome } from "../components/hostChrome.ts";
+import type { TableRow } from "../types";
+import { Table, type TableColumn } from "./Table.tsx";
 
 // Embedded versus standalone layout (compose-unified-feature-shell chrome
 // budget): the feature must not reserve the header/footer rows the shell

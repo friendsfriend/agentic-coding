@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 
 import { uiColors } from "../theme/colors";
-import { Text } from "./Text";
+import { Text } from "./Text.tsx";
 
 export type Highlight =
 	| "primary"

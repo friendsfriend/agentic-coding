@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
-import { loadAssignments } from "./agent-extensions.ts";
 import type {
 	AdapterCapability,
 	ResolvedProfile,
 	RuntimeId,
 	WorkflowRouting,
-} from "./contracts.ts";
+} from "../contracts/workflow.ts";
+import { loadAssignments } from "./agent-extensions.ts";
 import type { CompiledWorkflowDefinition } from "./registry.ts";
 import { stableJson } from "./registry.ts";
 
@@ -469,48 +469,6 @@ export function assertModelAvailable(profile: ResolvedProfile): void {
 	throw new Error(
 		`profile ${profile.name}: unknown model ${profile.model} for runtime ${profile.runtime} (${suffix})`,
 	);
-}
-export function validateResearchRepositoryProfile(
-	profile: ResolvedProfile,
-): ResolvedProfile {
-	const capabilities = [
-		...new Set([
-			...profile.capabilities.filter(
-				(capability) => capability !== "shell" && capability !== "edit",
-			),
-			"read-only" as const,
-		]),
-	];
-	const unsigned = {
-		...profile,
-		tools: Object.freeze([...profile.tools]),
-		readOnly: true,
-		capabilities: Object.freeze(capabilities),
-		extensions: Object.freeze([...profile.extensions]),
-	};
-	return Object.freeze({
-		...unsigned,
-		digest: createHash("sha256").update(stableJson(unsigned)).digest("hex"),
-	});
-}
-/** `entryStepId` is the target definition's `initial` step (the research
- * definition's entry point is `core.research`) — passed by the caller instead
- * of hardcoded here, so this stays free of any `core.*`/`fusion.*` literal. */
-export function enforceResearchReadOnlyRouting(
-	routing: WorkflowRouting,
-	entryStepId: string,
-): WorkflowRouting {
-	return {
-		...routing,
-		routes: routing.routes.map((route) =>
-			route.stepId === entryStepId && route.role === "researcher"
-				? {
-						...route,
-						profile: validateResearchRepositoryProfile(route.profile),
-					}
-				: route,
-		),
-	};
 }
 export function validateProfileRequirements(
 	profile: ResolvedProfile,

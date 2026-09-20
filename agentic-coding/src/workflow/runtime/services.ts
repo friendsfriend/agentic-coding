@@ -10,10 +10,8 @@
 // (no `yield*`, await, sleep, retry, or nested runtime execution inside the callback).
 import type { Database } from "bun:sqlite";
 import { Context, Effect, Layer } from "effect";
-import {
-	type WorkflowExecutionSettings,
-	WorkflowRuntimeError,
-} from "../contracts.ts";
+import type { WorkflowExecutionSettings } from "../../contracts/workflow.ts";
+import { WorkflowRuntimeError } from "../contracts.ts";
 import {
 	type ConfigOptions,
 	type ConfigProvenance,

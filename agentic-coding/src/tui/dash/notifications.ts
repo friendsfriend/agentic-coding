@@ -1,5 +1,5 @@
 import { createSignal } from "solid-js";
-import { traceTui } from "./tracing";
+import { traceTui } from "./tracing.ts";
 export type Notification = {
 	message: string;
 	type: "info" | "success" | "warning" | "error";

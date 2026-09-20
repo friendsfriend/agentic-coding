@@ -8,7 +8,6 @@
 		"@opentui/core": "0.4.2",
 		"@opentui/keymap": "0.4.2",
 		"@opentui/solid": "0.4.2",
-		"solid-js": "^1.9.12",
-		"@devenv/types": "workspace:*"
+		"solid-js": "^1.9.12"
 	}
 }

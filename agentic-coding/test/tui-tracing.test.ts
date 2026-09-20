@@ -2,7 +2,7 @@
 // span identity/shape, allowlisted safe attributes, ERROR status, bounded
 // values, and non-throwing export failures.
 import { afterEach, expect, test } from "bun:test";
-import { isKeyTraceSuppressed, traceTui } from "../src/tui/dash/tracing";
+import { isKeyTraceSuppressed, traceTui } from "../src/tui/dash/tracing.ts";
 
 type CapturedSpan = {
 	traceId: string;

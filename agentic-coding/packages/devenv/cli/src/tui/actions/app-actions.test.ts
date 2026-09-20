@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 import type { AppStatus } from "@devenv/types";
-import { createActionRunStore } from "../stores/action-run-store";
-import { createAppDetailStore } from "../stores/app-detail-store";
-import { createAppStore } from "../stores/app-store";
-import { createAppActions, handleActionStarted } from "./app-actions";
+import { createActionRunStore } from "../stores/action-run-store.ts";
+import { createAppDetailStore } from "../stores/app-detail-store.ts";
+import { createAppStore } from "../stores/app-store.ts";
+import { createAppActions, handleActionStarted } from "./app-actions.ts";
 
 test("action trigger opens actions view", () => {
 	const store = createActionRunStore();

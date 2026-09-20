@@ -2,12 +2,12 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { renderAssignment } from "../src/workflow/assignment.ts";
-import { rolesForDefinition } from "../src/workflow/cli.ts";
 import type {
 	Assignment,
 	WorkflowSnapshot,
-} from "../src/workflow/contracts.ts";
+} from "../src/contracts/workflow.ts";
+import { renderAssignment } from "../src/workflow/assignment.ts";
+import { rolesForDefinition } from "../src/workflow/cli.ts";
 import {
 	BUILTIN_CAPABILITIES,
 	BUILTIN_EFFECTS,

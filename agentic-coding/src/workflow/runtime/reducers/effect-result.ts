@@ -5,7 +5,10 @@
 import type { Database } from "bun:sqlite";
 import fs from "node:fs";
 import path from "node:path";
-import type { WorkflowCommand, WorkflowSnapshot } from "../../contracts.ts";
+import type {
+	WorkflowCommand,
+	WorkflowSnapshot,
+} from "../../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
 import type {
 	CompiledWorkflowDefinition,

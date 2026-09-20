@@ -11,7 +11,7 @@ import type {
 	PipelineActions,
 	ProviderActions,
 	UtilActions,
-} from "../actions";
+} from "../actions/index.ts";
 import type {
 	ActionRunStore,
 	AgentStore,
@@ -22,7 +22,7 @@ import type {
 	LogStore,
 	ProviderStore,
 	UiStore,
-} from "../stores";
+} from "../stores/index.ts";
 
 export interface KeyboardEvent {
 	name?: string;

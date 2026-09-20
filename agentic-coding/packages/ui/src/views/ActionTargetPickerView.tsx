@@ -1,10 +1,10 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { ActionTarget } from "@devenv/types";
 import { TextAttributes } from "@opentui/core";
-import { ListViewModal } from "@ui";
-import { formatHelpText } from "../components/HelpText";
+import { formatHelpText } from "../components/HelpText.tsx";
+import { ListViewModal } from "../components/ListViewModal";
 import { uiColors } from "../theme/colors";
+import type { ActionTarget } from "../types";
 
 export interface ActionTargetPickerProps {
 	title?: string;

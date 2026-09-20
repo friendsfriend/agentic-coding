@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ActionRun } from "@devenv/types";
-import { actionRunDisplayLabel, actionTypeLabel } from "./action-labels";
+import { actionRunDisplayLabel, actionTypeLabel } from "./action-labels.ts";
 
 const formatProfileLabel = (profile?: string) =>
 	profile?.trim() || "default (no profile)";

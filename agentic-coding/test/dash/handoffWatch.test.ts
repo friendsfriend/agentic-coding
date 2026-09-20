@@ -7,7 +7,7 @@
 // the listener contract itself is asserted; `launch` is imported dynamically
 // because `mock.module` must be installed before the module graph loads.
 import { expect, mock, test } from "bun:test";
-import * as realCoordinator from "../../src/workflow/execution-coordinator";
+import * as realCoordinator from "../../src/workflow/execution-coordinator.ts";
 
 test("the in-process watch reports only the accepted workflow, once", async () => {
 	let listener: ((workflowId: string) => void) | undefined;

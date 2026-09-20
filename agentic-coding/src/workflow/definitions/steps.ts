@@ -4,7 +4,7 @@
 // `registerBuiltins`. Moved verbatim out of definitions.ts
 // (split-workflow-god-modules).
 import { createHash } from "node:crypto";
-import type { WorkflowSnapshot } from "../contracts.ts";
+import type { WorkflowSnapshot } from "../../contracts/workflow.ts";
 import { AGENT_DEFINITIONS } from "../embedded.generated.ts";
 import type { Reduction, StepDefinition, StepReference } from "../registry.ts";
 import { stepBehavior } from "../steps/index.ts";

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { Assignment } from "./contracts.ts";
+import type { Assignment } from "../contracts/workflow.ts";
 import { AGENT_DEF_DIR } from "./paths.ts";
 import type { StepDefinition } from "./registry.ts";
 

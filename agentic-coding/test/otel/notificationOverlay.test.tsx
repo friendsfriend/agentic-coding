@@ -5,7 +5,7 @@ import { NotificationOverlay } from "@ui";
 import {
 	activeNotification,
 	notify,
-} from "../../src/tui/otel/app/notifications";
+} from "../../src/tui/otel/app/notifications.ts";
 
 // Regression test: NotificationOverlay previously read activeNotification()
 // directly in the component body instead of through a reactive primitive

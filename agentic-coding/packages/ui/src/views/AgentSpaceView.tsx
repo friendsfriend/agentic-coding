@@ -1,11 +1,13 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { AgentGroup, AgentSessionInfo } from "@devenv/types";
 import { TextAttributes } from "@opentui/core";
-import { highlightColor, ListViewModal, MatchedText } from "@ui";
 import { createMemo } from "solid-js";
-import { formatHelpText } from "../components/HelpText";
+import { formatHelpText } from "../components/HelpText.tsx";
+import { highlightColor } from "../components/Highlight";
+import { ListViewModal } from "../components/ListViewModal";
+import { MatchedText } from "../components/MatchedText";
 import { uiColors } from "../theme/colors";
+import type { AgentGroup, AgentSessionInfo } from "../types";
 
 export interface AgentSpaceViewProps {
 	piAgentGroups: AgentGroup[];

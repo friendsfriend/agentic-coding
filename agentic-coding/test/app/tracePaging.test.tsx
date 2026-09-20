@@ -4,21 +4,21 @@
 // `[`/`]` move between pages, and a trace's spans are fetched when it opens.
 import { expect, test } from "bun:test";
 import { testRender } from "@opentui/solid";
-import { App } from "../../src/tui/otel/app/App";
-import { LogStore } from "../../src/tui/otel/model/logStore";
-import { MetricStore } from "../../src/tui/otel/model/metricStore";
-import type {
-	TelemetryDb,
-	TelemetryWorkspace,
-} from "../../src/tui/otel/model/telemetry-db";
-import { TopologyStore } from "../../src/tui/otel/model/topologyStore";
-import { TraceStore } from "../../src/tui/otel/model/traceStore";
 import type {
 	SpanData,
 	TraceSummaryPage,
 	TraceSummaryRow,
-} from "../../src/tui/otel/model/types";
-import { jumpTo, renderUntil } from "./support/terminal";
+} from "../../src/contracts/telemetry.ts";
+import { App } from "../../src/tui/otel/app/App.tsx";
+import { LogStore } from "../../src/tui/otel/model/logStore.ts";
+import { MetricStore } from "../../src/tui/otel/model/metricStore.ts";
+import type {
+	TelemetryDb,
+	TelemetryWorkspace,
+} from "../../src/tui/otel/model/telemetry-db.ts";
+import { TopologyStore } from "../../src/tui/otel/model/topologyStore.ts";
+import { TraceStore } from "../../src/tui/otel/model/traceStore.ts";
+import { jumpTo, renderUntil } from "./support/terminal.ts";
 
 /** Three workflows, two per page, newest first. */
 const ROWS: TraceSummaryRow[] = [

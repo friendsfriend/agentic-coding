@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 
 import { uiColors } from "../theme/colors";
-import { HighlightedText } from "./Highlight";
+import { HighlightedText } from "./Highlight.tsx";
 
 export interface FilterStatusBarProps {
 	filterSummary?: string;

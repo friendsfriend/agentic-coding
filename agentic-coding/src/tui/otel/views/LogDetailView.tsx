@@ -7,7 +7,7 @@ import {
 	uiColors,
 } from "@ui";
 import { createMemo, For } from "solid-js";
-import type { LogStore } from "../model/logStore";
+import type { LogStore } from "../model/logStore.ts";
 
 export function LogDetailView(props: {
 	store: LogStore;

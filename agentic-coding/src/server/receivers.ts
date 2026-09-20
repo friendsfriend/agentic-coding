@@ -4,13 +4,13 @@
 // root and route decoded signals to an injected sink. The shell owns the sink
 // (its live view stores); the server owns the listeners and their bounded
 // shutdown. Every listener, gRPC included, runs in this one process.
-import type { SignalRouter } from "../tui/otel/receiver/index.ts";
+import type { SignalRouter } from "./receivers/index";
 import {
 	routeReceiverRequest,
 	startPrometheusScraper,
 	startStatsDListener,
-} from "../tui/otel/receiver/index.ts";
-import { startOtlpGrpcReceiver } from "../tui/otel/receiver/otlp-grpc.ts";
+} from "./receivers/index";
+import { startOtlpGrpcReceiver } from "./receivers/otlp-grpc";
 
 export interface TelemetryReceiverConfig {
 	readonly httpPort?: number;

@@ -5,7 +5,6 @@
 // authority, the legacy devenv surface and the telemetry receivers. Native
 // Bun/Promise I/O lives here; operation handlers stay transport-agnostic.
 
-import type { SignalRouter } from "../tui/otel/receiver/index.ts";
 import { createServerApp, type ServerApp } from "./app.ts";
 import { createInstanceAuthority } from "./auth.ts";
 import { CredentialRegistry } from "./credentials.ts";
@@ -14,6 +13,7 @@ import { EventBroker } from "./events.ts";
 import type { ServerOperations } from "./handlers.ts";
 import type { IntegrationServices } from "./integrations/routes.ts";
 import { rebuildActionDefinitions } from "./integrations/services.ts";
+import type { SignalRouter } from "./receivers/index";
 import {
 	type OwnedTelemetryReceivers,
 	startTelemetryReceivers,
@@ -74,6 +74,11 @@ export interface OwnedWorkflowServer {
 	readonly instance: string;
 	readonly token: string;
 	readonly app: ServerApp;
+	/** The application operations and telemetry service this server serves, so
+	 * the composition root can build an in-process gateway over the same
+	 * instances instead of opening a socket to itself. */
+	readonly operations: ServerOperations;
+	readonly telemetry?: TelemetryOperations;
 	stop(): Promise<void>;
 }
 
@@ -140,6 +145,8 @@ export async function startWorkflowServer(
 		instance: authority.instance,
 		token: authority.token,
 		app,
+		operations: app.operations,
+		...(app.telemetry ? { telemetry: app.telemetry } : {}),
 		stop: async () => {
 			if (stopped) return;
 			stopped = true;

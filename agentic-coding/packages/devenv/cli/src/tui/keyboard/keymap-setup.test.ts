@@ -2,15 +2,15 @@ import { describe, expect, test } from "bun:test";
 import {
 	applyKeymapRuntimeSnapshot,
 	getFocusedPanelName,
-} from "./keymap-runtime";
-import { setupDevenvKeymap } from "./keymap-setup";
+} from "./keymap-runtime.ts";
+import { setupDevenvKeymap } from "./keymap-setup.ts";
 import {
 	activeKeyStrings,
 	createKeyboardTestHarness,
 	dispatchKey,
 	expectActiveKeys,
 	expectCommandNames,
-} from "./keymap-test-helpers";
+} from "./keymap-test-helpers.ts";
 
 describe("keymap foundation", () => {
 	test("registers app activation and metadata fields", () => {

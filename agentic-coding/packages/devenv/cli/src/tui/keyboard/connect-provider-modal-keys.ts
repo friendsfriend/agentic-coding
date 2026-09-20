@@ -1,6 +1,10 @@
 import type { ProviderType } from "@devenv/types";
-import { isDownKey, isUpKey } from "./nav-keys";
-import type { KeyboardActions, KeyboardEvent, KeyboardStores } from "./types";
+import { isDownKey, isUpKey } from "./nav-keys.ts";
+import type {
+	KeyboardActions,
+	KeyboardEvent,
+	KeyboardStores,
+} from "./types.ts";
 /**
  * Handles keyboard events for the Connect Provider modal:
  * selectProvider → name → username → token → save

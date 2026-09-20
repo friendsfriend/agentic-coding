@@ -14,7 +14,7 @@ import {
 	onCleanup,
 	Show,
 } from "solid-js";
-import { message, phase, steps } from "../lifecycle";
+import { message, phase, steps } from "../lifecycle.ts";
 
 const mixHex = (from: string, to: string, amount: number) => {
 	const channel = (hex: string, offset: number) =>

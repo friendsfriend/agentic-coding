@@ -4,13 +4,13 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { testRender } from "@opentui/solid";
-import { App } from "../../src/tui/otel/app/App";
-import { TraceDb } from "../../src/tui/otel/model/db";
-import { LogStore } from "../../src/tui/otel/model/logStore";
-import { MetricStore } from "../../src/tui/otel/model/metricStore";
-import { TopologyStore } from "../../src/tui/otel/model/topologyStore";
-import { TraceStore } from "../../src/tui/otel/model/traceStore";
-import type { SpanData } from "../../src/tui/otel/model/types";
+import type { SpanData } from "../../src/contracts/telemetry.ts";
+import { TraceDb } from "../../src/server/telemetry-db";
+import { App } from "../../src/tui/otel/app/App.tsx";
+import { LogStore } from "../../src/tui/otel/model/logStore.ts";
+import { MetricStore } from "../../src/tui/otel/model/metricStore.ts";
+import { TopologyStore } from "../../src/tui/otel/model/topologyStore.ts";
+import { TraceStore } from "../../src/tui/otel/model/traceStore.ts";
 
 function span(workspace: string, id: string): SpanData {
 	return {

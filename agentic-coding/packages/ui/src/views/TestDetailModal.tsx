@@ -1,12 +1,14 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { TestCase } from "@devenv/types";
 import { TextAttributes } from "@opentui/core";
-import { Badge, GenericModal, SearchHeader } from "@ui";
 import { createMemo, Show } from "solid-js";
-import { HelpText } from "../components/HelpText";
+import { Badge } from "../components/Badge";
+import { GenericModal } from "../components/GenericModal";
+import { HelpText } from "../components/HelpText.tsx";
+import { SearchHeader } from "../components/SearchHeader";
 import { uiColors } from "../theme/colors";
-import { PropertiesList, type PropertyRow } from "./PropertiesList";
+import type { TestCase } from "../types";
+import { PropertiesList, type PropertyRow } from "./PropertiesList.tsx";
 
 interface TestDetailModalProps {
 	test: TestCase & { suiteName?: string };

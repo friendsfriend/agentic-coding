@@ -13,7 +13,7 @@ import {
 	backendClient,
 	clearBackendClient,
 	configureBackendClient,
-} from "../../src/server/client";
+} from "../../src/server/client.ts";
 import {
 	launchContextError,
 	launchRepositoryAvailable,
@@ -21,22 +21,26 @@ import {
 	type WorkflowLaunchContext,
 	watchAcceptedHandoff,
 	workflowTypesForContext,
-} from "../../src/tui/dash/launch";
-import { PUBLIC_WORKFLOW_CATALOG } from "../../src/workflow/definitions";
+} from "../../src/tui/dash/launch.ts";
+import { clearGateway, configureGateway } from "../../src/tui/data/index.ts";
+import { PUBLIC_WORKFLOW_CATALOG } from "../../src/workflow/definitions.ts";
 
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
 	globalThis.fetch = originalFetch;
 	clearBackendClient();
+	clearGateway();
 });
 
 function useBackend(responder: () => Promise<Response>): void {
-	configureBackendClient({
-		baseUrl: "http://127.0.0.1:1",
-		token: "t",
-		ownerId: "test",
-	});
+	configureGateway(
+		configureBackendClient({
+			baseUrl: "http://127.0.0.1:1",
+			token: "t",
+			ownerId: "test",
+		}),
+	);
 	globalThis.fetch = (() => responder()) as unknown as typeof fetch;
 }
 

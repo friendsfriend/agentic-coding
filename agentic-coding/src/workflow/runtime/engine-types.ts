@@ -7,7 +7,7 @@ import type {
 	WorkflowEffect,
 	WorkflowSnapshot,
 	WorkflowView,
-} from "../contracts.ts";
+} from "../../contracts/workflow.ts";
 
 export interface StartWorkflowInput {
 	/** Canonical repository path, WIKI_WORKFLOW_TARGET, or RESEARCH_WORKFLOW_TARGET. */

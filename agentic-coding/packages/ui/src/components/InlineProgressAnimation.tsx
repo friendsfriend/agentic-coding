@@ -12,9 +12,9 @@ import {
 	createAuroraPalette,
 	createTonePalette,
 	DEFAULT_ANIMATION_HIGHLIGHTS,
-} from "../theme/animationColors";
+} from "../theme/animationColors.ts";
 import { uiColors } from "../theme/colors";
-import type { Highlight } from "./Highlight";
+import type { Highlight } from "./Highlight.tsx";
 
 export type InlineProgressHighlights = AnimationHighlights;
 export const DEFAULT_INLINE_PROGRESS_HIGHLIGHTS = DEFAULT_ANIMATION_HIGHLIGHTS;

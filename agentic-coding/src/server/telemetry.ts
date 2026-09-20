@@ -7,12 +7,13 @@
 // per-workflow span reads, workspaces, scan/watch and prune over the
 // authenticated API, and the composition root decides when it is created and
 // closed.
-import { TraceDb } from "../tui/otel/model/db.ts";
+
 import {
 	RECENT_SPAN_LIMIT,
 	type SpanData,
 	type TraceSummaryPage,
-} from "../tui/otel/model/types.ts";
+} from "../contracts/telemetry.ts";
+import { TraceDb } from "./telemetry-db";
 
 export interface TelemetryWorkspace {
 	readonly changeId: string;

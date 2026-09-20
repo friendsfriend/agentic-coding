@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
 import { onCleanup } from "solid-js";
-import { setupKeymap } from "../../src/tui/dash/keymap-setup";
+import { setupKeymap } from "../../src/tui/dash/keymap-setup.ts";
 
 function TestKeymap(props: { errors: string[] }) {
 	const keymap = createDefaultOpenTuiKeymap(useRenderer());

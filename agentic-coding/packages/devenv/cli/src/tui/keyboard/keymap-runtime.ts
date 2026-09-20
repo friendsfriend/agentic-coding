@@ -1,7 +1,7 @@
 import type { Accessor } from "solid-js";
 import { createEffect } from "solid-js";
-import type { DevenvKeymap } from "./keymap-setup";
-import type { KeyboardStores } from "./types";
+import type { DevenvKeymap } from "./keymap-setup.ts";
+import type { KeyboardStores } from "./types.ts";
 
 export interface KeymapRuntimeSnapshot {
 	viewMode: string;

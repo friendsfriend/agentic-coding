@@ -6,12 +6,12 @@
 
 import { Card, GenericModal, ScrollableList, uiColors } from "@ui";
 import { createMemo, Show } from "solid-js";
-import type { Route } from "../routes";
-import { type DestinationEntry, filterPickerEntries } from "./destinations";
+import type { Route } from "../routes.ts";
+import { type DestinationEntry, filterPickerEntries } from "./destinations.ts";
 import {
 	locationPickerFooterKeybinds,
 	locationPickerKeybindCatalog,
-} from "./keybinds";
+} from "./keybinds.ts";
 
 export interface LocationPickerProps {
 	entries: DestinationEntry[];

@@ -2,20 +2,20 @@
 import { expect, test } from "bun:test";
 import { testRender } from "@opentui/solid";
 import { createSignal } from "solid-js";
-import { BreadcrumbRow } from "../../src/tui/shared/navigation/BreadcrumbRow";
-import { DestinationPage } from "../../src/tui/shared/navigation/DestinationPage";
+import { BreadcrumbRow } from "../../src/tui/shared/navigation/BreadcrumbRow.tsx";
+import { DestinationPage } from "../../src/tui/shared/navigation/DestinationPage.tsx";
 import {
 	filterPickerEntries,
 	homeDestinations,
 	observabilityDestinations,
-} from "../../src/tui/shared/navigation/destinations";
-import { LocationPicker } from "../../src/tui/shared/navigation/LocationPicker";
+} from "../../src/tui/shared/navigation/destinations.ts";
+import { LocationPicker } from "../../src/tui/shared/navigation/LocationPicker.tsx";
 import {
 	breadcrumb,
 	pageLabel,
 	RESOURCE_LABEL_LIMIT,
 	type Route,
-} from "../../src/tui/shared/routes";
+} from "../../src/tui/shared/routes.ts";
 
 // Rendered navigation checks for the page chrome
 // (replace-nested-tabs-with-page-navigation, task 2.1/4.1). These assert what

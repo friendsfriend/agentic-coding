@@ -2,12 +2,12 @@
 import { describe, expect, test } from "bun:test";
 import { TextAttributes } from "@opentui/core";
 import { testRender } from "@opentui/solid";
-import type { Highlight } from "@ui";
-import { Header } from "@ui";
+import { Header } from "../components/Header";
+import type { Highlight } from "../components/Highlight";
 import {
 	DEFAULT_INLINE_PROGRESS_HIGHLIGHTS,
 	InlineProgressAnimation,
-} from "../components/InlineProgressAnimation";
+} from "../components/InlineProgressAnimation.tsx";
 
 const logo = ["D", "Ξ", "V"];
 

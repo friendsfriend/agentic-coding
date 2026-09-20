@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { ActionRun } from "@devenv/types";
-import { actionTreeCopyText } from "./action-run-copy";
+import { actionTreeCopyText } from "./action-run-copy.ts";
 
 test("copies action node with complete descendant tree and command logs", () => {
 	const run: ActionRun = {

@@ -9,10 +9,13 @@
 // pure cross-field / byte-bound checks and output-shape projections the design
 // permits, never a second validator.
 import path from "node:path";
-import type { Contract, JsonValue } from "../contracts.ts";
-import { ContractFailure } from "../contracts.ts";
 import {
+	type Contract,
+	ContractFailure,
 	decodeContract,
+} from "../../contracts/decode.ts";
+import type { JsonValue } from "../../contracts/workflow.ts";
+import {
 	FindingsInputSchema,
 	PlanDraftSchema,
 	PlanResultSchema,

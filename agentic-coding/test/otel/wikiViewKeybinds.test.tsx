@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
 import { createSignal, onCleanup } from "solid-js";
-import { WikiView } from "../../src/tui/otel/views/WikiView";
+import { WikiView } from "../../src/tui/otel/views/WikiView.tsx";
 
 /** The wiki tab used to print its own keybind cheat sheet in the content area
  * ("Wiki · Enter open/expand · c comment · f finish · r refresh") and repeat

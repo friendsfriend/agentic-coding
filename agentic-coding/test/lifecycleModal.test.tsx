@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { testRender } from "@opentui/solid";
+import { LifecycleModal } from "../src/tui/lifecycle/LifecycleModal.tsx";
 import {
 	beginShutdown,
 	beginStartup,
@@ -7,8 +8,7 @@ import {
 	resetLifecycle,
 	setStepActive,
 	setStepDone,
-} from "../src/tui/lifecycle";
-import { LifecycleModal } from "../src/tui/lifecycle/LifecycleModal";
+} from "../src/tui/lifecycle.ts";
 
 // Renderer-level lifecycle modal test (pattern: test/dash/modalCentering.test.ts).
 // The modal is a Portal overlay anchored at the renderer root; it must be

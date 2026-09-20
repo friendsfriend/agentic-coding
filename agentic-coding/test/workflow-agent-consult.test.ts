@@ -4,11 +4,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Effect } from "effect";
-import type { AgentAdapter } from "../src/workflow/adapters.ts";
 import type {
 	AgentHandle,
 	ResolvedProfile,
-} from "../src/workflow/contracts.ts";
+} from "../src/contracts/workflow.ts";
+import type { AgentAdapter } from "../src/workflow/adapters.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import { agentEffectHandlers } from "../src/workflow/effect-runner.ts";
 import { runtimeTest, WorkflowEngine } from "../src/workflow/runtime.ts";

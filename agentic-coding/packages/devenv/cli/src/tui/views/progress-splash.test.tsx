@@ -1,9 +1,9 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test";
 import { testRender } from "@opentui/solid";
-import type { AppStore, ShutdownState, StartupState } from "../stores";
-import { ShutdownSplash } from "./shutdown-splash";
-import { StartupSplash } from "./startup-splash";
+import type { AppStore, ShutdownState, StartupState } from "../stores/index.ts";
+import { ShutdownSplash } from "./shutdown-splash.tsx";
+import { StartupSplash } from "./startup-splash.tsx";
 
 const makeStore = (startup: StartupState, shutdown: ShutdownState): AppStore =>
 	({

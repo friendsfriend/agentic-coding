@@ -7,7 +7,7 @@ import {
 	uiColors,
 } from "@ui";
 import { createMemo, For } from "solid-js";
-import type { TopologyStore } from "../model/topologyStore";
+import type { TopologyStore } from "../model/topologyStore.ts";
 
 export function ServiceDetailView(props: { store: TopologyStore; id: string }) {
 	const service = createMemo(() =>

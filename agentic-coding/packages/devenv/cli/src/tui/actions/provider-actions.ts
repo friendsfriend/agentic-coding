@@ -1,8 +1,8 @@
 import type { DevEnvClient } from "@devenv/core";
 import type { CreateAppRequest } from "@devenv/types";
-import type { AppStore } from "../stores/app-store";
-import type { ProviderStore } from "../stores/provider-store";
-import type { NotificationType } from "../stores/ui-store";
+import type { AppStore } from "../stores/app-store.ts";
+import type { ProviderStore } from "../stores/provider-store.ts";
+import type { NotificationType } from "../stores/ui-store.ts";
 
 export function createProviderActions(
 	appStore: AppStore,

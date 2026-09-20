@@ -6,19 +6,19 @@ import { join } from "node:path";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
 import { createSignal, onCleanup, onMount } from "solid-js";
-import { App } from "../../src/tui/otel/app/App";
-import { TraceDb } from "../../src/tui/otel/model/db";
-import { LogStore } from "../../src/tui/otel/model/logStore";
-import { MetricStore } from "../../src/tui/otel/model/metricStore";
-import { TopologyStore } from "../../src/tui/otel/model/topologyStore";
-import { TraceStore } from "../../src/tui/otel/model/traceStore";
+import { TraceDb } from "../../src/server/telemetry-db";
+import { App } from "../../src/tui/otel/app/App.tsx";
+import { LogStore } from "../../src/tui/otel/model/logStore.ts";
+import { MetricStore } from "../../src/tui/otel/model/metricStore.ts";
+import { TopologyStore } from "../../src/tui/otel/model/topologyStore.ts";
+import { TraceStore } from "../../src/tui/otel/model/traceStore.ts";
 import {
 	advance,
 	crumb,
 	jumpTo,
 	pressEscapeAndSettle,
 	renderUntil,
-} from "./support/terminal";
+} from "./support/terminal.ts";
 
 // The unified shell renders one renderer with page-based chrome
 // (replace-nested-tabs-with-page-navigation, tasks 2.1/2.4): Home lists the

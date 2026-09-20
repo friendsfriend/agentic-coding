@@ -2,8 +2,8 @@
 import type { KeyEvent, Renderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
 import { createEffect, onCleanup, onMount, Show } from "solid-js";
-import { ErrorDialog } from "./ErrorDialog";
-import { activeErrorModal, dismissErrorModal } from "./errorModal";
+import { ErrorDialog } from "./ErrorDialog.tsx";
+import { activeErrorModal, dismissErrorModal } from "./errorModal.ts";
 
 /**
  * Global error-modal overlay. Rendered once by the shell so an error raised by

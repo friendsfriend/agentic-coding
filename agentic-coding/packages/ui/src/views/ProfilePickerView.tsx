@@ -1,7 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import { TextAttributes } from "@opentui/core";
-import { highlightColor, ListViewModal } from "@ui";
-import { formatHelpText } from "../components/HelpText";
+import { formatHelpText } from "../components/HelpText.tsx";
+import { highlightColor } from "../components/Highlight";
+import { ListViewModal } from "../components/ListViewModal";
 import { uiColors } from "../theme/colors";
 
 export const formatProfileLabel = (profile?: string) =>

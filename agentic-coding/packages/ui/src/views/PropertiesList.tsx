@@ -1,8 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 import { TextAttributes } from "@opentui/core";
-import type { Highlight } from "@ui";
-import { Badge, HighlightedText, highlightColor } from "@ui";
 import { For, type JSXElement, Show } from "solid-js";
+import { Badge } from "../components/Badge";
+import {
+	type Highlight,
+	HighlightedText,
+	highlightColor,
+} from "../components/Highlight";
 import { uiColors } from "../theme/colors";
 
 export type PropertyHighlight = Highlight;

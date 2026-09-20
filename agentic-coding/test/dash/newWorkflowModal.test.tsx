@@ -11,7 +11,7 @@ import { testRender } from "@opentui/solid";
 import {
 	type NewWorkflowInput,
 	NewWorkflowModal,
-} from "../../src/tui/dash/ui/NewWorkflowModal";
+} from "../../src/tui/dash/ui/NewWorkflowModal.tsx";
 
 function key(
 	name: string,

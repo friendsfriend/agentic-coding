@@ -6,13 +6,14 @@
 // Reads are paged (one page of trace rows at a time) and spans are fetched per
 // workflow, so no request ships the whole history and opening observability
 // costs one page instead of a full telemetry download.
-import type { BackendClient } from "../../../server/client.ts";
-import type { TelemetryDb, TelemetryWorkspace } from "./telemetry-db.ts";
+
 import {
 	RECENT_SPAN_LIMIT,
 	type SpanData,
 	type TraceSummaryPage,
-} from "./types.ts";
+} from "../../../contracts/telemetry.ts";
+import type { BackendClient } from "../../../server/client.ts";
+import type { TelemetryDb, TelemetryWorkspace } from "./telemetry-db.ts";
 
 export class RemoteTelemetryDb implements TelemetryDb {
 	private client?: BackendClient;

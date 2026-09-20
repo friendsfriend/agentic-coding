@@ -9,8 +9,8 @@ import {
 	configDiagnostic,
 	resolveConfigRoot,
 } from "../config-root.ts";
+import type { WorkflowExecutionSettings } from "../contracts/workflow.ts";
 import { Herdr } from "../herdr-client.ts";
-import type { WorkflowExecutionSettings } from "./contracts.ts";
 import { TELEMETRY_FLUSH_BUDGET_MS } from "./observability.ts";
 
 export { Herdr };

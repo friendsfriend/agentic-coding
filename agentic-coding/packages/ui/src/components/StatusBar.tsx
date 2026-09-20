@@ -9,14 +9,14 @@ import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
 import { createMemo, Show } from "solid-js";
 import { uiColors } from "../theme/colors";
-import { HelpText } from "./HelpText";
-import type { Keybind } from "./keybinds";
+import { HelpText } from "./HelpText.tsx";
+import type { Keybind } from "./keybinds.ts";
 import {
 	activeKeybindCatalog,
 	activeKeybindContext,
 	footerKeybinds,
-} from "./keybinds";
-import { RunningText } from "./RunningText";
+} from "./keybinds.ts";
+import { RunningText } from "./RunningText.tsx";
 
 export type { Keybind };
 

@@ -1,11 +1,11 @@
-import { isNextRelatedKey, isPreviousRelatedKey } from "./horizontal-scroll";
-import { isDownKey, isLeftKey, isRightKey, isUpKey } from "./nav-keys";
+import { isNextRelatedKey, isPreviousRelatedKey } from "./horizontal-scroll.ts";
+import { isDownKey, isLeftKey, isRightKey, isUpKey } from "./nav-keys.ts";
 import type {
 	KeyboardActions,
 	KeyboardContext,
 	KeyboardEvent,
 	KeyboardStores,
-} from "./types";
+} from "./types.ts";
 
 export async function handleIssueListKeys(
 	event: KeyboardEvent,

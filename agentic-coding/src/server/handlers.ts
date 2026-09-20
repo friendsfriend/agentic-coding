@@ -9,31 +9,27 @@
 // Reads stay observational: every handler here only lists/reads/views and never
 // initializes or migrates a store, expires a question or claims an effect.
 import type { Schema } from "effect";
-import {
-	answerWorkflowQuestion,
-	dashboardApplication,
-	getWorkflowView,
-	listWorkflowViews,
-	repairWorkflow,
-	requestWorkflowExecution,
-	runWorkflowAction,
-	startWorkflowInProcess,
-} from "../tui/dash/engine.ts";
-import type { DashboardObservation } from "../tui/dash/observations.ts";
-import {
-	runLocalObservation,
-	saveDeveloperReview,
-	savePlanReview,
-	saveWikiReview,
-} from "../tui/dash/observations.ts";
+import type {
+	agentHandoffRequestSchema,
+	agentQuestionRequestSchema,
+	agentResearchHandoffRequestSchema,
+	agentsMutationRequestSchema,
+	reviewSaveRequestSchema,
+	workflowActionRequestSchema,
+	workflowExecuteRequestSchema,
+	workflowQuestionRequestSchema,
+	workflowRepairRequestSchema,
+	workflowStartRequestSchema,
+} from "../contracts/actions.ts";
+import type { ObservationRequest } from "../contracts/environment.ts";
 import type {
 	DeveloperReviewComment,
 	PlanReviewComment,
 	WikiReviewComment,
-} from "../tui/dash/types.ts";
+} from "../contracts/workflow";
+import type { WorkflowView } from "../contracts/workflow.ts";
 import { runDeveloperQuestion } from "../workflow/cli/commands/dispatch-actions.ts";
 import { resolveHandoffIdentity } from "../workflow/cli/identity.ts";
-import type { WorkflowView } from "../workflow/contracts.ts";
 import {
 	drainEffects,
 	engine as workflowEngineFactory,
@@ -44,19 +40,23 @@ import {
 	applyAgentsMutation,
 	loadAgentConfig,
 } from "./config.ts";
-import type {
-	agentHandoffRequestSchema,
-	agentQuestionRequestSchema,
-	agentResearchHandoffRequestSchema,
-	agentsMutationRequestSchema,
-	ObservationRequest,
-	reviewSaveRequestSchema,
-	workflowActionRequestSchema,
-	workflowExecuteRequestSchema,
-	workflowQuestionRequestSchema,
-	workflowRepairRequestSchema,
-	workflowStartRequestSchema,
-} from "./protocol.ts";
+import {
+	answerWorkflowQuestion,
+	dashboardApplication,
+	getWorkflowView,
+	listWorkflowViews,
+	repairWorkflow,
+	requestWorkflowExecution,
+	runWorkflowAction,
+	startWorkflowInProcess,
+} from "./operations/engine.ts";
+import type { DashboardObservation } from "./operations/observations.ts";
+import {
+	runLocalObservation,
+	saveDeveloperReview,
+	savePlanReview,
+	saveWikiReview,
+} from "./operations/observations.ts";
 
 type ActionRequest = Schema.Schema.Type<typeof workflowActionRequestSchema>;
 type StartRequest = Schema.Schema.Type<typeof workflowStartRequestSchema>;

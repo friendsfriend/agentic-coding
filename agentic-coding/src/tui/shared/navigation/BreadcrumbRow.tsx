@@ -8,8 +8,8 @@ import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
 import { uiColors } from "@ui";
 import { For, Show } from "solid-js";
-import type { Route } from "../routes";
-import { BREADCRUMB_SEPARATOR, breadcrumbSegments } from "./breadcrumbs";
+import type { Route } from "../routes.ts";
+import { BREADCRUMB_SEPARATOR, breadcrumbSegments } from "./breadcrumbs.ts";
 
 export interface BreadcrumbRowProps {
 	/** Structural ancestors, root first, current location last. */

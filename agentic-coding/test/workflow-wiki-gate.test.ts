@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { requiredUserActionFor } from "../src/tui/dash/data.ts";
+import { requiredUserActionFor } from "../src/tui/dash/projections.ts";
+
 import {
 	definitionVersionForPolicy,
 	registerBuiltins,

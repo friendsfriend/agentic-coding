@@ -1,12 +1,12 @@
 import type { App, InfraService } from "@devenv/types";
 import { runtimeState, uiColors } from "@ui";
-import type { HelpActions } from "../actions";
+import type { HelpActions } from "../actions/index.ts";
 import type {
 	AppDetailStore,
 	AppStore,
 	ChangeRequestStore,
 	IssueStore,
-} from "../stores";
+} from "../stores/index.ts";
 
 export type TabType =
 	| "applications"

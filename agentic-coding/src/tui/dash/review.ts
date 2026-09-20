@@ -9,26 +9,26 @@
 import type { KeyEvent } from "@opentui/core";
 import type { Discussion } from "@ui";
 import { createMemo, createSignal, type Setter } from "solid-js";
-import { notify } from "./notifications";
-import {
-	loadDeveloperReviewFindingsAsync,
-	loadLocalChangesAsync,
-	loadLocalDiffAsync,
-	loadWikiSnapshotChangesAsync,
-	loadWikiSnapshotDiffAsync,
-	openSpecArtifactAsync,
-	runWorkflow,
-	saveDeveloperReview,
-	savePlanReview,
-	saveWikiReview,
-} from "./observations";
+import type { RequiredUserAction } from "../../contracts/actions.ts";
+import type { LocalChange } from "../../contracts/integration.ts";
 import type {
 	DashboardData,
 	DeveloperReviewComment,
 	DeveloperReviewFinding,
-	LocalChange,
-	RequiredUserAction,
-} from "./types";
+} from "../../contracts/workflow.ts";
+import {
+	loadArtifactOrEmpty,
+	loadLocalChangesOrEmpty,
+	loadLocalDiffOrEmpty,
+	loadReviewFindings,
+	loadWikiChangesOrEmpty,
+	loadWikiDiffOrEmpty,
+	runWorkflow,
+	saveDeveloperReview,
+	savePlanReview,
+	saveWikiReview,
+} from "../data/review.ts";
+import { notify } from "./notifications";
 
 /** Build the engine `review-comments` payload from draft comments. Plan and
  * wiki reviews carry file/line/range; developer reviews additionally carry the
@@ -478,7 +478,7 @@ export function createReviewFeature(
 								renamedFile: false,
 							},
 						]
-					: await loadLocalChangesAsync(
+					: await loadLocalChangesOrEmpty(
 							repo,
 							workflowId,
 							reviewController.signal,
@@ -508,11 +508,7 @@ export function createReviewFeature(
 								fix: "Remove the dead helper.",
 							},
 						]
-					: await loadDeveloperReviewFindingsAsync(
-							repo,
-							workflowId,
-							reviewController.signal,
-						);
+					: await loadReviewFindings(repo, workflowId, reviewController.signal);
 			setReviewChanges(changes);
 			setReviewChangeIndex(0);
 			setReviewLine(0);
@@ -551,7 +547,7 @@ export function createReviewFeature(
 			setReviewDiff(
 				profile === "test"
 					? "diff --git a/src/example.ts b/src/example.ts\n@@ -1,2 +1,4 @@\n const value = 1;\n-old();\n+new();\n+reviewed();\n"
-					: await loadLocalDiffAsync(
+					: await loadLocalDiffOrEmpty(
 							repo,
 							workflowId,
 							file,
@@ -676,7 +672,7 @@ export function createReviewFeature(
 		try {
 			const wikiReview = requiredUserAction()?.key === "wiki-review";
 			const changes: LocalChange[] = wikiReview
-				? await loadWikiSnapshotChangesAsync(
+				? await loadWikiChangesOrEmpty(
 						repo,
 						workflowId,
 						reviewDiffController.signal,
@@ -690,7 +686,7 @@ export function createReviewFeature(
 									let linesAdded = 0;
 									try {
 										linesAdded = (
-											await openSpecArtifactAsync(
+											await loadArtifactOrEmpty(
 												data().state,
 												artifact,
 												reviewDiffController?.signal,
@@ -742,10 +738,10 @@ export function createReviewFeature(
 		try {
 			const content =
 				reviewKind() === "wiki"
-					? await loadWikiSnapshotDiffAsync(repo, workflowId, file)
+					? await loadWikiDiffOrEmpty(repo, workflowId, file)
 					: profile === "test"
 						? demoPlanContent(file.newPath)
-						: await openSpecArtifactAsync(
+						: await loadArtifactOrEmpty(
 								data().state,
 								file.newPath,
 								reviewDiffController?.signal,
@@ -769,7 +765,7 @@ export function createReviewFeature(
 		try {
 			const content =
 				reviewKind() === "wiki"
-					? await loadWikiSnapshotDiffAsync(
+					? await loadWikiDiffOrEmpty(
 							repo,
 							workflowId,
 							file,
@@ -778,14 +774,14 @@ export function createReviewFeature(
 					: reviewKind() === "plan"
 						? profile === "test"
 							? demoPlanContent(file.newPath)
-							: await openSpecArtifactAsync(
+							: await loadArtifactOrEmpty(
 									data().state,
 									file.newPath,
 									reviewDiffController.signal,
 								)
 						: profile === "test"
 							? "diff --git a/src/example.ts b/src/example.ts\n@@ -1,2 +1,4 @@\n const value = 1;\n-old();\n+new();\n+reviewed();\n"
-							: await loadLocalDiffAsync(
+							: await loadLocalDiffOrEmpty(
 									repo,
 									workflowId,
 									file,
@@ -816,7 +812,7 @@ export function createReviewFeature(
 			setReviewLine(0);
 			setReviewDiff(
 				reviewKind() === "wiki"
-					? await loadWikiSnapshotDiffAsync(
+					? await loadWikiDiffOrEmpty(
 							repo,
 							workflowId,
 							file,
@@ -824,7 +820,7 @@ export function createReviewFeature(
 						)
 					: profile === "test"
 						? demoPlanContent(file.newPath)
-						: await openSpecArtifactAsync(
+						: await loadArtifactOrEmpty(
 								data().state,
 								file.newPath,
 								reviewDiffController?.signal,

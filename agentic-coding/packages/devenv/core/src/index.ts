@@ -15,7 +15,7 @@ import type {
 	RepoSearchResult,
 	ServerEvent,
 } from "@devenv/types";
-import { getPiSessions } from "./agent-client";
+import { getPiSessions } from "./agent-client.ts";
 import {
 	createApp,
 	deleteApp,
@@ -30,7 +30,7 @@ import {
 	getProfiles,
 	getStatus,
 	startActionRun,
-} from "./apps-client";
+} from "./apps-client.ts";
 import {
 	cancelJob,
 	getJobLogs,
@@ -38,8 +38,8 @@ import {
 	getTestSummary,
 	retryJob,
 	streamJobLogs,
-} from "./ci-client";
-import type { ClientDeps, FetchFunction } from "./client-types";
+} from "./ci-client.ts";
+import type { ClientDeps, FetchFunction } from "./client-types.ts";
 import {
 	approveChangeRequest,
 	createCRComment,
@@ -53,8 +53,8 @@ import {
 	resolveDiscussion,
 	toggleCRApproval,
 	unapproveChangeRequest,
-} from "./cr-client";
-import { createCustomFetch, createCustomFetchWithSSE } from "./custom-fetch";
+} from "./cr-client.ts";
+import { createCustomFetch, createCustomFetchWithSSE } from "./custom-fetch.ts";
 import {
 	buildApp,
 	cancelAction,
@@ -78,15 +78,15 @@ import {
 	streamContainerLogs,
 	streamContainerStats,
 	testApp,
-} from "./docker-client";
+} from "./docker-client.ts";
 import {
 	getActionHistory,
 	getActionLogs,
 	health,
 	reportActionEvent,
 	subscribeToEvents,
-} from "./events-client";
-import { createExampleConfig } from "./example-config-client";
+} from "./events-client.ts";
+import { createExampleConfig } from "./example-config-client.ts";
 import {
 	createWorktree,
 	getBranches,
@@ -98,7 +98,7 @@ import {
 	listWorktrees,
 	removeWorktree,
 	switchWorktree,
-} from "./git-client";
+} from "./git-client.ts";
 import {
 	addIssueComment,
 	closeIssue,
@@ -114,21 +114,21 @@ import {
 	reopenIssue,
 	setIssueAssignee,
 	setIssueLabels,
-} from "./issues-client";
+} from "./issues-client.ts";
 import {
 	analyzeCRWithAIStream,
 	analyzeLogsWithAI,
 	analyzeLogsWithAIStream,
-} from "./logs-client";
-import { getProjectCatalog } from "./projects-client";
+} from "./logs-client.ts";
+import { getProjectCatalog } from "./projects-client.ts";
 import {
 	createProvider,
 	deleteProvider,
 	getProvider,
 	getProviders,
 	updateProvider,
-} from "./provider-client";
-import { getRepoBranches, searchRepos } from "./repos-client";
+} from "./provider-client.ts";
+import { getRepoBranches, searchRepos } from "./repos-client.ts";
 import {
 	addScriptArgsHistory,
 	createScript,
@@ -138,7 +138,7 @@ import {
 	getScriptMetadata,
 	getScripts,
 	linkScript,
-} from "./scripts-client";
+} from "./scripts-client.ts";
 
 function createFetch(): FetchFunction {
 	console.error(
@@ -833,9 +833,9 @@ export function createClient(
 }
 
 export * from "@devenv/types";
-export * from "./clipboard";
-export * from "./custom-fetch";
-export * from "./diff-utils";
-export * from "./logger";
-export * from "./projects-client";
+export * from "./clipboard.ts";
+export * from "./custom-fetch.ts";
+export * from "./diff-utils.ts";
+export * from "./logger.ts";
+export * from "./projects-client.ts";
 export type { FetchFunction };

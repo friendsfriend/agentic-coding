@@ -5,7 +5,7 @@ import {
 	statusAnimationModel,
 } from "@ui";
 import { For, Show } from "solid-js";
-import type { ActionRunStore } from "../stores/action-run-store";
+import type { ActionRunStore } from "../stores/action-run-store.ts";
 
 export function ActionsView(props: { store: ActionRunStore }) {
 	const focused = () =>

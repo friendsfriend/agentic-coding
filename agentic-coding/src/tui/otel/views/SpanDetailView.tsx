@@ -4,7 +4,7 @@ import {
 	SearchHeader,
 	uiColors,
 } from "@ui";
-import type { TreeNode } from "../model/types";
+import type { TreeNode } from "../../../contracts/telemetry.ts";
 
 const duration = (node: TreeNode) =>
 	`${Math.max(0, Number((BigInt(node.span.endTimeUnixNano) - BigInt(node.span.startTimeUnixNano)) / 1_000_000n))}ms`;

@@ -1,21 +1,20 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { ChangeRequest } from "@devenv/types";
 import { TextAttributes } from "@opentui/core";
+import { createMemo, Show } from "solid-js";
+import { CenteredState } from "../components/CenteredState";
+import { ContentPanel } from "../components/ContentStack";
+import { FilterStatusBar } from "../components/FilterStatusBar";
+import { HighlightedText, highlightColor } from "../components/Highlight";
+import { hostChromeLines, hostNamesPage } from "../components/hostChrome.ts";
 import {
-	CenteredState,
-	ContentPanel,
-	FilterStatusBar,
-	HighlightedText,
-	highlightColor,
 	LAYOUT_CHROME_LINES,
 	ScrollableList,
-	SearchHeader,
-} from "@ui";
-import { createMemo, Show } from "solid-js";
-import { hostChromeLines, hostNamesPage } from "../components/hostChrome";
-import { formatShortDate, getIssueStateColor } from "./statusUtils";
-import { WorkItemCard } from "./WorkItemCard";
+} from "../components/ScrollableList";
+import { SearchHeader } from "../components/SearchHeader";
+import type { ChangeRequest } from "../types";
+import { formatShortDate, getIssueStateColor } from "./statusUtils.ts";
+import { WorkItemCard } from "./WorkItemCard.tsx";
 
 interface ChangeRequestViewProps {
 	changeRequests: ChangeRequest[];

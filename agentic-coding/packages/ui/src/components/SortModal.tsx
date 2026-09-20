@@ -3,7 +3,7 @@
 import { TextAttributes } from "@opentui/core";
 import { For } from "solid-js";
 import { uiColors } from "../theme/colors";
-import { GenericModal } from "./GenericModal";
+import { GenericModal } from "./GenericModal.tsx";
 
 export type SortDirection = "asc" | "desc" | "none";
 

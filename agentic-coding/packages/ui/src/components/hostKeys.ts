@@ -1,4 +1,4 @@
-import type { Keybind } from "./keybinds";
+import type { Keybind } from "./keybinds.ts";
 
 /**
  * The host shell's own key bindings: the keys the shell owns on **every**

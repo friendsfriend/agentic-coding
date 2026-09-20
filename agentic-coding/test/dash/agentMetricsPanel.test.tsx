@@ -7,7 +7,7 @@ import {
 	App,
 	agentMetricLine,
 	agentRuntimeModelLine,
-} from "../../src/tui/dash/App";
+} from "../../src/tui/dash/App.tsx";
 
 // Renders the demo dashboard (profile="test") so the Agents panel exercises
 // populated, partial, and metric-less agent rows from testDashboard fixtures.

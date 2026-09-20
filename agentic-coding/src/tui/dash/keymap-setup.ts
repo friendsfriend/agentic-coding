@@ -1,7 +1,7 @@
 import type { KeyEvent, Renderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
 import { registerBaseLayoutFallback } from "@opentui/keymap/addons/opentui";
-import { HOST_KEY_BINDINGS } from "../../../packages/devenv/cli/src/tui/keyboard/host-keys";
+import { HOST_KEY_BINDINGS } from "../../../packages/devenv/cli/src/tui/keyboard/host-keys.ts";
 
 const SHELL_FEATURE_RESOURCE = Symbol("agent-shell:feature-field");
 

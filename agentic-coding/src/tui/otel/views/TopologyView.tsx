@@ -2,8 +2,8 @@
 
 import { ScrollableContent, uiColors } from "@ui";
 import { createMemo, Show } from "solid-js";
-import { TopologyGraph } from "../components/TopologyGraph";
-import type { TopologyStore } from "../model/topologyStore";
+import { TopologyGraph } from "../components/TopologyGraph.tsx";
+import type { TopologyStore } from "../model/topologyStore.ts";
 
 export function TopologyView(props: {
 	store: TopologyStore;

@@ -1,12 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { ProviderType } from "@devenv/types";
 import { TextAttributes } from "@opentui/core";
-import { GenericModal } from "@ui";
 import { Show } from "solid-js";
-import { formatHelpText } from "../components/HelpText";
+import { GenericModal } from "../components/GenericModal";
+import { formatHelpText } from "../components/HelpText.tsx";
 import { uiColors } from "../theme/colors";
-import { PropertiesList, propertyBadges } from "./PropertiesList";
+import type { ProviderType } from "../types";
+import { PropertiesList, propertyBadges } from "./PropertiesList.tsx";
 
 export type ConnectProviderStep =
 	| "selectProvider"

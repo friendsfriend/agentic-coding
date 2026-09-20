@@ -5,8 +5,8 @@ import type { TestRendererSetup } from "@opentui/core/testing";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
 import { onCleanup } from "solid-js";
-import { App } from "../../src/tui/dash/App";
-import { resetNotifications } from "../../src/tui/dash/notifications";
+import { App } from "../../src/tui/dash/App.tsx";
+import { resetNotifications } from "../../src/tui/dash/notifications.ts";
 
 // The notification signal is module-global; bun runs all files in one
 // process, so a toast left by an earlier file would bleed into this one.

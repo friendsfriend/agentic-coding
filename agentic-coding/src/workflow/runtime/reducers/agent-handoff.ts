@@ -4,7 +4,10 @@
 // in `src/workflow/steps`; this reducer owns authentication and bookkeeping.
 import type { Database } from "bun:sqlite";
 import path from "node:path";
-import type { WorkflowCommand, WorkflowSnapshot } from "../../contracts.ts";
+import type {
+	WorkflowCommand,
+	WorkflowSnapshot,
+} from "../../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
 import type {
 	CompiledWorkflowDefinition,

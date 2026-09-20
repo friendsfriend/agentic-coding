@@ -7,8 +7,8 @@ import { testRender } from "@opentui/solid";
 import {
 	activeNotification,
 	resetNotifications,
-} from "../../src/tui/dash/notifications";
-import { ModelConfigModal } from "../../src/tui/dash/ui/ModelConfigModal";
+} from "../../src/tui/dash/notifications.ts";
+import { ModelConfigModal } from "../../src/tui/dash/ui/ModelConfigModal.tsx";
 
 type CapturedSpan = {
 	name: string;

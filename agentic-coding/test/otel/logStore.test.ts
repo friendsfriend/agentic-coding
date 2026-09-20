@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { LogStore } from "../../src/tui/otel/model/logStore";
-import type { LogData } from "../../src/tui/otel/model/types";
+import type { LogData } from "../../src/contracts/telemetry.ts";
+import { LogStore } from "../../src/tui/otel/model/logStore.ts";
 
 function makeLog(
 	body: string,

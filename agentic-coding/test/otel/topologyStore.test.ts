@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { TopologyStore } from "../../src/tui/otel/model/topologyStore";
-import type { SpanData } from "../../src/tui/otel/model/types";
+import type { SpanData } from "../../src/contracts/telemetry.ts";
+import { TopologyStore } from "../../src/tui/otel/model/topologyStore.ts";
 
 function makeSpan(name: string, svc: string, parentSpanId?: string): SpanData {
 	return {

@@ -23,45 +23,55 @@ import { createCliRenderer } from "@opentui/core";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { KeymapProvider } from "@opentui/keymap/solid";
 import { render } from "@opentui/solid";
-import { setGlobalSelectionMouseUpHandler, showErrorModal } from "@ui";
-import { resolveConfigDir, resolveDevenvHome } from "../backend/home";
-import { ownsEnvironmentBackend } from "../backend/ownership";
-import { setConfigDiagnosticSink } from "../config-root";
-import { createInstanceAuthority } from "../server/auth";
-import { backendClient, configureBackendClient } from "../server/client";
-import { createEnvironmentAuthority } from "../server/environment/authority";
-import { createIntegrationServices } from "../server/integrations/services";
+import {
+	applyCapturedSystemTheme,
+	setGlobalSelectionMouseUpHandler,
+	showErrorModal,
+} from "@ui";
+import { resolveConfigDir, resolveDevenvHome } from "../backend/home.ts";
+import { ownsEnvironmentBackend } from "../backend/ownership.ts";
+import { setConfigDiagnosticSink } from "../config-root.ts";
+import type { LogData, MetricData, SpanData } from "../contracts/telemetry.ts";
+import { createInstanceAuthority } from "../server/auth.ts";
+import { backendClient, configureBackendClient } from "../server/client.ts";
+import { createEnvironmentAuthority } from "../server/environment/authority.ts";
+import { createIntegrationServices } from "../server/integrations/services.ts";
 import {
 	type OwnedWorkflowServer,
 	startWorkflowServer,
-} from "../server/lifecycle";
-import { APP_VERSION } from "../version";
+} from "../server/lifecycle.ts";
+import { discoverProjectRepos, TraceDb } from "../server/telemetry-db";
+import { APP_VERSION } from "../version.ts";
 import {
 	activeWorkflowExecutions,
 	cancelActiveWorkflowExecutions,
 	disposeAllExecutionCoordinators,
 	disposeDashboardApplication,
 	setCredentialPromptProvider,
-} from "../workflow/execution-coordinator";
-import { BACKEND_STARTING_ENV } from "../workflow/project-catalog";
+} from "../workflow/execution-coordinator.ts";
+import { BACKEND_STARTING_ENV } from "../workflow/project-catalog.ts";
 import {
 	isResearchWorkflowTarget,
 	isWikiWorkflowTarget,
-} from "../workflow/runtime";
-import { AppShell } from "./app/AppShell";
-import { DashboardRoot } from "./app/DashboardRoot";
-import { copyToClipboard } from "./clipboard";
-import { testDashboard } from "./dash/demo";
-import { setupKeymap } from "./dash/keymap-setup";
-import { listWorkflowsAsync, loadDashboardAsync } from "./dash/observations";
+} from "../workflow/runtime.ts";
+import { AppShell } from "./app/AppShell.tsx";
+import { DashboardRoot } from "./app/DashboardRoot.tsx";
+import { copyToClipboard } from "./clipboard.ts";
+import { CompositionProviders } from "./context/composition.tsx";
+import { inProcessGateway } from "./context/engine-gateway.ts";
+import { testDashboard } from "./dash/demo.ts";
+import { setupKeymap } from "./dash/keymap-setup.ts";
 import {
 	applyTheme as applyDashTheme,
 	loadCustomThemes,
 	loadThemeName as loadDashThemeName,
-} from "./dash/theme-settings";
-import { traceTui } from "./dash/tracing";
-import { credentialPromptBridge } from "./dash/ui/CredentialsModal";
-import { applyCapturedSystemTheme } from "./dash/ui/terminal-colors";
+} from "./dash/theme-settings.ts";
+import { traceTui } from "./dash/tracing.ts";
+import { credentialPromptBridge } from "./dash/ui/CredentialsModal.tsx";
+import { configureGateway, gatewayOrUndefined } from "./data/index.ts";
+import { loadDashboard, loadOverviews } from "./data/workflow.ts";
+import { LifecycleModal } from "./lifecycle/LifecycleModal.tsx";
+import { QuitConfirmModal } from "./lifecycle/QuitConfirmModal.tsx";
 import {
 	acquiredResources,
 	acquireResource,
@@ -76,18 +86,14 @@ import {
 	setStepActive,
 	setStepDone,
 	setStepError,
-} from "./lifecycle";
-import { LifecycleModal } from "./lifecycle/LifecycleModal";
-import { QuitConfirmModal } from "./lifecycle/QuitConfirmModal";
-import { notify, notify as notifyShell } from "./otel/app/notifications";
-import { discoverProjectRepos, TraceDb } from "./otel/model/db";
-import { LogStore } from "./otel/model/logStore";
-import { MetricStore } from "./otel/model/metricStore";
-import { RemoteTelemetryDb } from "./otel/model/remote-db";
-import type { TelemetryDb } from "./otel/model/telemetry-db";
-import { TopologyStore } from "./otel/model/topologyStore";
-import { TraceStore } from "./otel/model/traceStore";
-import type { LogData, MetricData, SpanData } from "./otel/model/types";
+} from "./lifecycle.ts";
+import { notify, notify as notifyShell } from "./otel/app/notifications.ts";
+import { LogStore } from "./otel/model/logStore.ts";
+import { MetricStore } from "./otel/model/metricStore.ts";
+import { RemoteTelemetryDb } from "./otel/model/remote-db.ts";
+import type { TelemetryDb } from "./otel/model/telemetry-db.ts";
+import { TopologyStore } from "./otel/model/topologyStore.ts";
+import { TraceStore } from "./otel/model/traceStore.ts";
 
 const usage = `Usage: agentic-coding [command] [options]
   (no command)             Unified shell (default): owned environment backend + contextual workflow launch + observability
@@ -319,11 +325,13 @@ export async function main(): Promise<void> {
 	// Full-feature attach talks to the remote unified server through the typed
 	// client.
 	if (remoteAttach && attachUrl && attachToken)
-		configureBackendClient({
-			baseUrl: attachUrl,
-			token: attachToken,
-			ownerId: `attach-${process.pid}`,
-		});
+		configureGateway(
+			configureBackendClient({
+				baseUrl: attachUrl,
+				token: attachToken,
+				ownerId: `attach-${process.pid}`,
+			}),
+		);
 	// Tell catalog consumers (including the detached observation children) that
 	// this process is bringing the backend up, so a read in that window waits for
 	// readiness instead of spawning a second backend for one read.
@@ -334,19 +342,21 @@ export async function main(): Promise<void> {
 		// authenticated API as the interactive shell. Test mode stays in-process.
 		const jsonServer = isTest ? undefined : await startWorkflowServer({});
 		if (jsonServer)
-			configureBackendClient({
-				baseUrl: jsonServer.url,
-				token: jsonServer.token,
-				ownerId: `json-${process.pid}`,
-			});
+			configureGateway(
+				configureBackendClient({
+					baseUrl: jsonServer.url,
+					token: jsonServer.token,
+					ownerId: `json-${process.pid}`,
+				}),
+			);
 		try {
 			console.log(
 				JSON.stringify(
 					home
-						? await listWorkflowsAsync()
+						? await loadOverviews()
 						: isTest
 							? testDashboard()
-							: await loadDashboardAsync(repo, resolvedWorkflowId),
+							: await loadDashboard(repo, resolvedWorkflowId),
 					null,
 					2,
 				),
@@ -575,47 +585,49 @@ export async function main(): Promise<void> {
 	await render(
 		() => (
 			<KeymapProvider keymap={keymap}>
-				{dashOnly ? (
-					// Dashboard-only presentation (isolate-workflow-dashboard-mode): the
-					// shared dashboard component directly, never the feature shell.
-					<DashboardRoot
-						repo={repo}
-						workflowId={resolvedWorkflowId}
-						profile={isTest ? "test" : undefined}
-						keymap={keymap}
-					/>
-				) : (
-					<>
-						<AppShell
-							repos={explicitRepos}
-							db={db}
-							traceStore={traceStore}
-							metricStore={metricStore}
-							logStore={logStore}
-							topologyStore={topologyStore}
-							tracesOnly={tracesOnly}
-							environments={environments}
-							attached={attachUrl !== undefined}
-							attachLabel={
-								remoteAttach
-									? `attached ${attachUrl ?? ""} · workflow + observability · environment features unavailable`
-									: attachUrl
-										? `attached ${attachUrl} · environment features only · remote workflow features unavailable`
-										: undefined
-							}
-							dashboard={
-								attachUrl && !remoteAttach
-									? undefined
-									: {
-											mode: home ? "home" : "dash",
-											keymap,
-										}
-							}
+				<CompositionProviders gateway={gatewayOrUndefined()}>
+					{dashOnly ? (
+						// Dashboard-only presentation (isolate-workflow-dashboard-mode): the
+						// shared dashboard component directly, never the feature shell.
+						<DashboardRoot
+							repo={repo}
+							workflowId={resolvedWorkflowId}
+							profile={isTest ? "test" : undefined}
+							keymap={keymap}
 						/>
-						<LifecycleModal />
-					</>
-				)}
-				<QuitConfirmModal />
+					) : (
+						<>
+							<AppShell
+								repos={explicitRepos}
+								db={db}
+								traceStore={traceStore}
+								metricStore={metricStore}
+								logStore={logStore}
+								topologyStore={topologyStore}
+								tracesOnly={tracesOnly}
+								environments={environments}
+								attached={attachUrl !== undefined}
+								attachLabel={
+									remoteAttach
+										? `attached ${attachUrl ?? ""} · workflow + observability · environment features unavailable`
+										: attachUrl
+											? `attached ${attachUrl} · environment features only · remote workflow features unavailable`
+											: undefined
+								}
+								dashboard={
+									attachUrl && !remoteAttach
+										? undefined
+										: {
+												mode: home ? "home" : "dash",
+												keymap,
+											}
+								}
+							/>
+							<LifecycleModal />
+						</>
+					)}
+					<QuitConfirmModal />
+				</CompositionProviders>
 			</KeymapProvider>
 		),
 		renderer,
@@ -740,6 +752,18 @@ export async function main(): Promise<void> {
 					token: workflowServer.token,
 					ownerId: `tui-${process.pid}`,
 				});
+				// Data reads go through the port. This process owns the server, so
+				// the in-process adapter serves them over the same operation,
+				// telemetry, credential and event instances the routes use —
+				// attached runs install the HTTP client instead.
+				if (workflowServer.telemetry)
+					configureGateway(
+						inProcessGateway({
+							operations: workflowServer.operations,
+							telemetry: workflowServer.telemetry,
+							app: workflowServer.app,
+						}),
+					);
 				if (db instanceof RemoteTelemetryDb) db.setClient(configured);
 				// Hand the authenticated server to managed child processes (agents), so
 				// the headless CLI reads/writes through the typed boundary.

@@ -2,9 +2,9 @@
 import { useTerminalDimensions } from "@opentui/solid";
 import type { JSX } from "solid-js";
 import { uiColors } from "../theme/colors";
-import { useModalContentLines } from "./GenericModal";
-import { hostBodyLines } from "./hostChrome";
-import { ScrollableList } from "./ScrollableList";
+import { useModalContentLines } from "./GenericModal.tsx";
+import { hostBodyLines } from "./hostChrome.ts";
+import { ScrollableList } from "./ScrollableList.tsx";
 
 /** A value or a reactive getter for it; both dash (plain values) and
  * observability (accessors) callers are supported by read(). */

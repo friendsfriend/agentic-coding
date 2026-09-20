@@ -5,8 +5,9 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openSpecArtifacts, testDashboard } from "../../src/tui/dash/data";
-import type { WorkflowState } from "../../src/tui/dash/types";
+import type { WorkflowState } from "../../src/contracts/workflow";
+import { openSpecArtifacts } from "../../src/server/operations/observations.ts";
+import { testDashboard } from "../../src/tui/dash/demo.ts";
 
 const roots: string[] = [];
 afterEach(() => {

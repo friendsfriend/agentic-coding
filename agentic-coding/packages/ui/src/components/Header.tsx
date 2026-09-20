@@ -2,12 +2,12 @@
 import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
 import { colors, uiColors } from "../theme/colors";
-import { highlightColor } from "./Highlight";
+import { highlightColor } from "./Highlight.tsx";
 import {
 	InlineProgressAnimation,
 	type InlineProgressHighlights,
-} from "./InlineProgressAnimation";
-import { RunningText } from "./RunningText";
+} from "./InlineProgressAnimation.tsx";
+import { RunningText } from "./RunningText.tsx";
 
 export type HeaderDetail = Record<string, string | number | undefined | null>;
 

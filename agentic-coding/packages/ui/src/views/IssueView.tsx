@@ -1,21 +1,21 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { Issue, IssueScope } from "@devenv/types";
 import { TextAttributes } from "@opentui/core";
+import { createMemo, Show } from "solid-js";
+import { CenteredState } from "../components/CenteredState";
+import { ContentPanel } from "../components/ContentStack";
+import { FilterStatusBar } from "../components/FilterStatusBar";
+import { highlightForIndex } from "../components/Highlight";
+import { hostChromeLines, hostNamesPage } from "../components/hostChrome.ts";
 import {
-	CenteredState,
-	ContentPanel,
-	FilterStatusBar,
-	highlightForIndex,
 	LAYOUT_CHROME_LINES,
 	ScrollableList,
-	SearchHeader,
-} from "@ui";
-import { createMemo, Show } from "solid-js";
-import { hostChromeLines, hostNamesPage } from "../components/hostChrome";
+} from "../components/ScrollableList";
+import { SearchHeader } from "../components/SearchHeader";
 import { uiColors } from "../theme/colors";
-import { formatShortDate, getIssueStateColor } from "./statusUtils";
-import { WorkItemCard } from "./WorkItemCard";
+import type { Issue, IssueScope } from "../types";
+import { formatShortDate, getIssueStateColor } from "./statusUtils.ts";
+import { WorkItemCard } from "./WorkItemCard.tsx";
 
 interface IssueViewProps {
 	issues: Issue[];

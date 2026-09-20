@@ -1,11 +1,11 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { ScriptParameter } from "@devenv/types";
 import { TextAttributes } from "@opentui/core";
-import { GenericModal } from "@ui";
 import { For } from "solid-js";
-import { formatHelpText } from "../components/HelpText";
+import { GenericModal } from "../components/GenericModal";
+import { formatHelpText } from "../components/HelpText.tsx";
 import { uiColors } from "../theme/colors";
+import type { ScriptParameter } from "../types";
 
 export interface TaskArgsModalProps {
 	taskName: string;

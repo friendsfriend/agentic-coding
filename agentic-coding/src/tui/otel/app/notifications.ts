@@ -1,5 +1,5 @@
 import { createSignal } from "solid-js";
-import { traceTui } from "../../dash/tracing";
+import { traceTui } from "../../dash/tracing.ts";
 
 export type NotificationType = "info" | "success" | "warning" | "error";
 type NotificationItem = { message: string; type: NotificationType };

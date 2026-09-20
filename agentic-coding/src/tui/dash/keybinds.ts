@@ -1,6 +1,6 @@
 import type { KeybindSection } from "@ui";
-import { hostKeybind } from "../../../packages/devenv/cli/src/tui/keyboard/host-keys";
-import { AGENTS_PANEL, OPENSPEC_PANEL } from "./panel-grid";
+import { hostKeybind } from "../../../packages/devenv/cli/src/tui/keyboard/host-keys.ts";
+import { AGENTS_PANEL, OPENSPEC_PANEL } from "./panel-grid.ts";
 
 /**
  * Footer contexts for the dashboard detail panels. `Keybind.context` entries

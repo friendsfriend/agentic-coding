@@ -20,7 +20,7 @@ import {
 	routeKey,
 	setViewState,
 	viewState,
-} from "../../src/tui/shared/routes";
+} from "../../src/tui/shared/routes.ts";
 
 // Page routing (replace-nested-tabs-with-page-navigation, task 1.2): typed
 // identities, structural parents, chronological Back across any number of

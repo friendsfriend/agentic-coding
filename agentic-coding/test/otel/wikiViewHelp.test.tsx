@@ -6,8 +6,8 @@ import { join } from "node:path";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
 import { createSignal, onCleanup } from "solid-js";
-import { WikiView } from "../../src/tui/otel/views/WikiView";
-import { advance } from "../app/support/terminal";
+import { WikiView } from "../../src/tui/otel/views/WikiView.tsx";
+import { advance } from "../app/support/terminal.ts";
 
 // `?` is owned by WikiView: it opens the shell help in the tree/note state but
 // must reach the comment editor while a comment is being typed.

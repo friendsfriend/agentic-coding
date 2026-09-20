@@ -1,11 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 
 import { TextAttributes } from "@opentui/core";
-import { GenericModal, MatchedText } from "@ui";
 import { Show } from "solid-js";
-import { formatHelpText } from "../components/HelpText";
+import { GenericModal } from "../components/GenericModal";
+import { formatHelpText } from "../components/HelpText.tsx";
+import { MatchedText } from "../components/MatchedText";
 import { uiColors } from "../theme/colors";
-import { PropertiesList, propertyBadges } from "./PropertiesList";
+import { PropertiesList, propertyBadges } from "./PropertiesList.tsx";
 
 export type AddRepositoryStep =
 	| "selectProvider"

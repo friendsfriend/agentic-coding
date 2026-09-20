@@ -1,8 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 
 import { uiColors } from "../theme/colors";
-import { GenericModal } from "./GenericModal";
-import { ScrollableContent } from "./ScrollableContent";
+import { GenericModal } from "./GenericModal.tsx";
+import { ScrollableContent } from "./ScrollableContent.tsx";
 
 export function ErrorDialog(props: {
 	title: string;

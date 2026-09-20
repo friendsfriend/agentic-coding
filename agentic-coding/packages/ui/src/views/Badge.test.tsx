@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test";
 import { testRender } from "@opentui/solid";
-import { Badge } from "../components/Badge";
+import { Badge } from "../components/Badge.tsx";
 
 describe("Badge", () => {
 	test("renders through the animated badge surface", async () => {

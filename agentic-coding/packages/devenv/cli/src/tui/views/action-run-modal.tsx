@@ -24,7 +24,7 @@ import {
 import type {
 	ActionRunStore,
 	ActionTreeNode,
-} from "../stores/action-run-store";
+} from "../stores/action-run-store.ts";
 
 export function actionModalHelpText(focusedPanel: 0 | 1) {
 	return focusedPanel === 0

@@ -11,32 +11,41 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { DeveloperReviewComment } from "../../src/contracts/workflow";
+import type { WorkflowState } from "../../src/contracts/workflow.ts";
+import {
+	startArgs,
+	viewToDashboardState,
+} from "../../src/server/operations/engine.ts";
+import {
+	loadDashboard,
+	loadLocalChanges,
+	loadLocalDiff,
+	loadPlanReviewComments,
+	saveDeveloperReview,
+	savePlanReview,
+	verifierFindingCounts,
+	worktreeGitStatus,
+} from "../../src/server/operations/observations.ts";
+import { testDashboard } from "../../src/tui/dash/demo.ts";
+import { requiredUserActionFor } from "../../src/tui/dash/projections.ts";
+import type { HerdrPort } from "../../src/workflow/adapters.ts";
+import { registerBuiltins } from "../../src/workflow/definitions.ts";
 import {
 	agentMetrics,
 	costMessages,
 	costSummary,
 	countVerifierFindings,
-	type DeveloperReviewComment,
-	loadDashboard,
-	loadLocalChanges,
-	loadLocalDiff,
-	loadPlanReviewComments,
-	requiredUserActionFor,
-	saveDeveloperReview,
-	savePlanReview,
-	testDashboard,
-	verifierFindingCounts,
-	worktreeGitStatus,
-} from "../../src/tui/dash/data";
-import { startArgs, viewToDashboardState } from "../../src/tui/dash/engine";
-import type { HerdrPort } from "../../src/workflow/adapters";
-import { registerBuiltins } from "../../src/workflow/definitions";
-import { canonicalStorePath, WorkflowEngine } from "../../src/workflow/runtime";
+} from "../../src/workflow/run-projections.ts";
+import {
+	canonicalStorePath,
+	WorkflowEngine,
+} from "../../src/workflow/runtime.ts";
 import {
 	agentTabLabel,
 	aggregateAgentTabStatus,
-} from "../../src/workflow/tab-status";
-import { syncAgentTabLabels } from "../../src/workflow/tab-sync";
+} from "../../src/workflow/tab-status.ts";
+import { syncAgentTabLabels } from "../../src/workflow/tab-sync.ts";
 
 function requireChange<T extends { newPath: string }>(
 	changes: T[],
@@ -1303,7 +1312,7 @@ test("verifier finding counts require a valid current-round committed result", (
 				outputDigest: createHash("sha256").update(output).digest("hex"),
 			},
 		],
-	} as import("../../src/tui/dash/data").WorkflowState;
+	} as WorkflowState;
 
 	expect(verifierFindingCounts(state, "quality-verifier")).toEqual({
 		critical: 0,

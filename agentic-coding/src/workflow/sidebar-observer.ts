@@ -7,8 +7,9 @@
 // view once per connection. Observation owners stay separate from effect
 // execution: nothing here drains the outbox, claims effects, or touches agent
 // processes, and every failure is presentation-only.
+
+import type { WorkflowView } from "../contracts/workflow.ts";
 import type { HerdrPort } from "./adapters.ts";
-import type { WorkflowView } from "./contracts.ts";
 import { herdrSidebarEnabled } from "./effects.ts";
 import {
 	projectSidebar,

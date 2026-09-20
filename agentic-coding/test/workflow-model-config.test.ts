@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fusionPlannerCount, startRouting } from "../src/tui/dash/engine.ts";
+import {
+	fusionPlannerCount,
+	startRouting,
+} from "../src/server/operations/engine.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import {
 	agentsConfigPath,
@@ -637,7 +640,7 @@ describe("config source conflicts", () => {
 describe("start argument threading", () => {
 	test("startArgs threads the selected preset into workflow start", async () => {
 		const { PRESET_CONFIG_DEFAULTS, startArgs } = await import(
-			"../src/tui/dash/engine.ts"
+			"../src/server/operations/engine.ts"
 		);
 		expect(
 			startArgs({ repo: "/r", ticket: "", workflowId: "c", mode: "worktree" })

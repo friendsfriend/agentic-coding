@@ -1,27 +1,29 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { TableRow } from "@devenv/types";
 import { TextAttributes } from "@opentui/core";
+import { For, type JSX, Show } from "solid-js";
 import {
-	CenteredState,
-	FilterStatusBar,
-	HighlightedText,
-	LAYOUT_CHROME_LINES,
-	ScrollableList,
-	SearchHeader,
 	statusAnimationIntentForOperation,
 	statusAnimationIntentForText,
-} from "@ui";
-import { For, type JSX, Show } from "solid-js";
-import { hostChromeLines, hostNamesPage } from "../components/hostChrome";
+} from "../components/AnimatedStatusText";
+import { CenteredState } from "../components/CenteredState";
+import { FilterStatusBar } from "../components/FilterStatusBar";
+import { HighlightedText } from "../components/Highlight";
+import { hostChromeLines, hostNamesPage } from "../components/hostChrome.ts";
+import {
+	LAYOUT_CHROME_LINES,
+	ScrollableList,
+} from "../components/ScrollableList";
+import { SearchHeader } from "../components/SearchHeader";
 import { uiColors } from "../theme/colors";
+import type { TableRow } from "../types";
 import {
 	formatRuntimeStatus,
 	getGitStatusStyle,
 	getStatusStyle,
 	runtimeState,
-} from "./statusUtils";
-import { WorkItemCard } from "./WorkItemCard";
+} from "./statusUtils.ts";
+import { WorkItemCard } from "./WorkItemCard.tsx";
 
 export interface TableColumn {
 	key: string;

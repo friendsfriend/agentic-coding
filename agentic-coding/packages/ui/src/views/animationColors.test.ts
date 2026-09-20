@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { RGBA } from "@opentui/core";
-import { createTonePalette, highlightColor } from "@ui";
+import { highlightColor } from "../components/Highlight";
+import { createTonePalette } from "../theme/animationColors";
 
 describe("animation colors", () => {
 	test("semantic tones pass through theme-neutral foreground", () => {

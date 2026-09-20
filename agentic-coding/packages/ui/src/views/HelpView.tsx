@@ -2,22 +2,20 @@
 
 import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
-import {
-	GenericModal,
-	HighlightedText,
-	MatchedText,
-	RunningText,
-	ScrollableContent,
-	ScrollableList,
-	SearchHeader,
-} from "@ui";
 import { createMemo, For, type JSX, Show } from "solid-js";
-import { formatHelpText } from "../components/HelpText";
-import { hostNamesPage } from "../components/hostChrome";
+import { GenericModal } from "../components/GenericModal";
+import { formatHelpText } from "../components/HelpText.tsx";
+import { HighlightedText } from "../components/Highlight";
+import { hostNamesPage } from "../components/hostChrome.ts";
+import { MatchedText } from "../components/MatchedText";
+import { RunningText } from "../components/RunningText";
+import { ScrollableContent } from "../components/ScrollableContent";
+import { ScrollableList } from "../components/ScrollableList";
+import { SearchHeader } from "../components/SearchHeader";
 import { focusSoon } from "../components/utils/focusSoon";
 import { uiColors } from "../theme/colors";
-import { ModalTabs } from "./ModalTabs";
-import { WorkItemCard } from "./WorkItemCard";
+import { ModalTabs } from "./ModalTabs.tsx";
+import { WorkItemCard } from "./WorkItemCard.tsx";
 
 export interface HelpSection {
 	title: string;

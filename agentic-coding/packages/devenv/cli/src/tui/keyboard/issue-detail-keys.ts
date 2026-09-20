@@ -1,16 +1,16 @@
-import { isDownKey, isUpKey } from "./nav-keys";
+import { isDownKey, isUpKey } from "./nav-keys.ts";
 import {
 	isNextPanelKey,
 	isPrevPanelKey,
 	nextPanelIndex,
 	prevPanelIndex,
-} from "./panel-keys";
+} from "./panel-keys.ts";
 import type {
 	KeyboardActions,
 	KeyboardContext,
 	KeyboardEvent,
 	KeyboardStores,
-} from "./types";
+} from "./types.ts";
 
 export async function handleIssueDetailKeys(
 	event: KeyboardEvent,

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { KeyEvent } from "@opentui/core";
 import { testRender } from "@opentui/solid";
-import { ModelConfigModal } from "../../src/tui/dash/ui/ModelConfigModal";
+import { ModelConfigModal } from "../../src/tui/dash/ui/ModelConfigModal.tsx";
 import { VERIFIER_ROLES } from "../../src/workflow/steps/verification.ts";
 
 /** Prepend a stub bin providing an instant fake `pi --list-models` so the

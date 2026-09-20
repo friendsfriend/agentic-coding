@@ -6,9 +6,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Effect, Either } from "effect";
+import type { AgentHandle } from "../src/contracts/workflow.ts";
 import type { AgentAdapter, LaunchContext } from "../src/workflow/adapters.ts";
 import { cliTest } from "../src/workflow/cli.ts";
-import type { AgentHandle } from "../src/workflow/contracts.ts";
 import {
 	definitionVersionForPolicy,
 	registerBuiltins,

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { stopOwnedStack } from "../src/tui/index";
+import { stopOwnedStack } from "../src/tui/index.tsx";
 import {
 	acquiredResources,
 	acquireResource,
@@ -22,7 +22,7 @@ import {
 	setStepDone,
 	setStepError,
 	steps,
-} from "../src/tui/lifecycle";
+} from "../src/tui/lifecycle.ts";
 
 function resource(
 	kind: OwnedResource["kind"],

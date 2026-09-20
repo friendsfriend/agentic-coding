@@ -1,9 +1,13 @@
 import type { KeyEvent, Renderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
-import { handleGlobalKeys } from "./global-keys";
-import { hostOwnedKeys } from "./host-keys";
-import { routePastedText } from "./paste-handler";
-import type { KeyboardActions, KeyboardContext, KeyboardStores } from "./types";
+import { handleGlobalKeys } from "./global-keys.ts";
+import { hostOwnedKeys } from "./host-keys.ts";
+import { routePastedText } from "./paste-handler.ts";
+import type {
+	KeyboardActions,
+	KeyboardContext,
+	KeyboardStores,
+} from "./types.ts";
 
 export interface GlobalKeymapLayerDeps {
 	stores: KeyboardStores;

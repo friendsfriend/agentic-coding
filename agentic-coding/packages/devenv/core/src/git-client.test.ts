@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import type { ClientDeps } from "./client-types";
-import { gitCheckout, gitFetch, gitPull, gitPush } from "./git-client";
+import type { ClientDeps } from "./client-types.ts";
+import { gitCheckout, gitFetch, gitPull, gitPush } from "./git-client.ts";
 
 test("mutating git actions start stable backend action ids", async () => {
 	const requests: Array<{

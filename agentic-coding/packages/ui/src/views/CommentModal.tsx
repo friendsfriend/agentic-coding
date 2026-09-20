@@ -1,8 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 
-import { GenericModal } from "@ui";
 import { Show } from "solid-js";
-import { formatHelpText } from "../components/HelpText";
+import { GenericModal } from "../components/GenericModal";
+import { formatHelpText } from "../components/HelpText.tsx";
 import { uiColors } from "../theme/colors";
 
 export interface CommentModalProps {

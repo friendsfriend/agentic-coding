@@ -7,8 +7,8 @@
 import { useTerminalDimensions } from "@opentui/solid";
 import { Card, hostBodyLines, ScrollableList, uiColors } from "@ui";
 import { Show } from "solid-js";
-import type { Route } from "../routes";
-import type { DestinationEntry } from "./destinations";
+import type { Route } from "../routes.ts";
+import type { DestinationEntry } from "./destinations.ts";
 
 export interface DestinationPageProps {
 	entries: DestinationEntry[];

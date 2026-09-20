@@ -1,9 +1,13 @@
 import type { KeyEvent, Renderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
-import { hostOwnedKeys } from "./host-keys";
-import { contextBindingNames } from "./registry";
-import { handleTableKeys, tableYieldsEscape } from "./table-keys";
-import type { KeyboardActions, KeyboardContext, KeyboardStores } from "./types";
+import { hostOwnedKeys } from "./host-keys.ts";
+import { contextBindingNames } from "./registry.ts";
+import { handleTableKeys, tableYieldsEscape } from "./table-keys.ts";
+import type {
+	KeyboardActions,
+	KeyboardContext,
+	KeyboardStores,
+} from "./types.ts";
 
 export interface TableKeymapLayerDeps {
 	stores: KeyboardStores;

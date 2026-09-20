@@ -1,21 +1,20 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { Job } from "@devenv/types";
 import { TextAttributes } from "@opentui/core";
-import {
-	Badge,
-	CenteredState,
-	ContentPanel,
-	HighlightedText,
-	highlightColor,
-	LAYOUT_CHROME_LINES,
-	MatchedText,
-	ScrollableList,
-	SearchHeader,
-} from "@ui";
 import { createMemo, For, Show } from "solid-js";
-import { hostChromeLines } from "../components/hostChrome";
+import { Badge } from "../components/Badge";
+import { CenteredState } from "../components/CenteredState";
+import { ContentPanel } from "../components/ContentStack";
+import { HighlightedText, highlightColor } from "../components/Highlight";
+import { hostChromeLines } from "../components/hostChrome.ts";
+import { MatchedText } from "../components/MatchedText";
+import {
+	LAYOUT_CHROME_LINES,
+	ScrollableList,
+} from "../components/ScrollableList";
+import { SearchHeader } from "../components/SearchHeader";
 import { uiColors } from "../theme/colors";
+import type { Job } from "../types";
 
 interface JobsDetailViewProps {
 	jobs: Job[];

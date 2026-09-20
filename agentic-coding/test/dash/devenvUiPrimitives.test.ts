@@ -59,8 +59,8 @@ import {
 	statusAnimationModel as sharedStatusAnimationModel,
 	themeColor as sharedThemeColor,
 } from "@ui";
-import { focusSoon as sharedFocusSoon } from "../../src/tui/shared/utils/focusSoon";
-import { calculateVisibleItems as sharedCalculateVisibleItems } from "../../src/tui/shared/utils/virtualScroll";
+import { focusSoon as sharedFocusSoon } from "../../packages/ui/src/components/utils/focusSoon";
+import { calculateVisibleItems as sharedCalculateVisibleItems } from "../../packages/ui/src/components/utils/virtualScroll";
 
 // Each environment (devenv) primitive entry point must be the same function
 // object as the shared implementation — a re-export, not a second copy. This

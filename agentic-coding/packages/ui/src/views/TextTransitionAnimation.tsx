@@ -6,8 +6,7 @@ import {
 	TextAttributes,
 } from "@opentui/core";
 import { useTimeline } from "@opentui/solid";
-import type { Highlight } from "@ui";
-import { highlightColor } from "@ui";
+import { type Highlight, highlightColor } from "../components/Highlight";
 import { uiColors } from "../theme/colors";
 
 export interface TextTransitionAnimationProps {

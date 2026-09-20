@@ -7,8 +7,8 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { WorkflowView } from "../src/contracts/workflow.ts";
 import type { HerdrPort } from "../src/workflow/adapters.ts";
-import type { WorkflowView } from "../src/workflow/contracts.ts";
 import {
 	DEFAULT_CONFIG,
 	herdrSidebarEnabled,

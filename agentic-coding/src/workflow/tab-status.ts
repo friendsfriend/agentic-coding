@@ -5,7 +5,7 @@
 // done (`✓`), blocked (`■`), failed (`✗`), expired (`·`). Grouped roles
 // (verification) share one tab, so multiple runs on the same tab collapse to
 // the most urgent status before the label is rendered.
-import type { RunStatus } from "./contracts.ts";
+import type { RunStatus } from "../contracts/workflow.ts";
 
 /** A status plus the single-cell glyph rendered ahead of the tab name. */
 export const TAB_STATUS_GLYPHS: Readonly<Record<RunStatus, string>> = {

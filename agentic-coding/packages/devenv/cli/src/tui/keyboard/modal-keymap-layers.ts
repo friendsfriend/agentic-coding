@@ -1,15 +1,19 @@
 import type { KeyEvent, Renderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
-import { handleActionsKeys } from "./actions-keys";
-import { handleAddRepositoryModalKeys } from "./add-repository-modal-keys";
-import { handleConnectProviderModalKeys } from "./connect-provider-modal-keys";
-import { handleDiffModalKeys } from "./diff-modal-keys";
-import { handleGlobalKeys } from "./global-keys";
-import { hostOwnedKeys } from "./host-keys";
-import { handleLogModalKeys } from "./log-modal-keys";
-import { handleMiscModalKeys } from "./misc-modal-keys";
-import { handleTableKeys } from "./table-keys";
-import type { KeyboardActions, KeyboardContext, KeyboardStores } from "./types";
+import { handleActionsKeys } from "./actions-keys.ts";
+import { handleAddRepositoryModalKeys } from "./add-repository-modal-keys.ts";
+import { handleConnectProviderModalKeys } from "./connect-provider-modal-keys.ts";
+import { handleDiffModalKeys } from "./diff-modal-keys.ts";
+import { handleGlobalKeys } from "./global-keys.ts";
+import { hostOwnedKeys } from "./host-keys.ts";
+import { handleLogModalKeys } from "./log-modal-keys.ts";
+import { handleMiscModalKeys } from "./misc-modal-keys.ts";
+import { handleTableKeys } from "./table-keys.ts";
+import type {
+	KeyboardActions,
+	KeyboardContext,
+	KeyboardStores,
+} from "./types.ts";
 
 export interface ModalKeymapLayerDeps {
 	stores: KeyboardStores;

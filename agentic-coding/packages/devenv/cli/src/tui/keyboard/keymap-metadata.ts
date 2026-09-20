@@ -1,6 +1,6 @@
 import type { Keymap, KeymapEvent } from "@opentui/keymap";
 import type { HelpSection } from "@ui";
-import { KEYBINDS, type KeybindDef } from "./registry";
+import { KEYBINDS, type KeybindDef } from "./registry.ts";
 
 export interface FooterKeybind {
 	key: string;

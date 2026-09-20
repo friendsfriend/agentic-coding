@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 
-import { GenericModal } from "@ui";
-import { formatHelpText } from "../components/HelpText";
+import { GenericModal } from "../components/GenericModal";
+import { formatHelpText } from "../components/HelpText.tsx";
 import { uiColors } from "../theme/colors";
 
 export interface TaskAddModalProps {

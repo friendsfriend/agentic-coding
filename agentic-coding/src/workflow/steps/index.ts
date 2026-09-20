@@ -1,4 +1,4 @@
-import type { WorkflowSnapshot } from "../contracts.ts";
+import type { WorkflowSnapshot } from "../../contracts/workflow.ts";
 import { implementationBehavior } from "./implementation.ts";
 import { lifecycleBehaviors } from "./lifecycle.ts";
 import { planningBehaviors } from "./planning.ts";

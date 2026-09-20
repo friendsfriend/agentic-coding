@@ -3,7 +3,7 @@
 // dashboard notification store.
 
 import { NotificationOverlay as SharedNotificationOverlay } from "@ui";
-import { activeNotification } from "../notifications";
+import { activeNotification } from "../notifications.ts";
 
 export function NotificationOverlay() {
 	return <SharedNotificationOverlay active={activeNotification} />;

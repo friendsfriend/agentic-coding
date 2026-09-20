@@ -23,11 +23,11 @@ import {
 	uiColors,
 } from "@ui";
 import { createEffect, Show } from "solid-js";
-import { guides as allGuides, getGuide } from "../guides";
-import { ActionsView } from "./actions-view";
-import { ShutdownSplash } from "./shutdown-splash";
-import { StartupSplash } from "./startup-splash";
-import type { ContentRouterProps } from "./types";
+import { guides as allGuides, getGuide } from "../guides/index.ts";
+import { ActionsView } from "./actions-view.tsx";
+import { ShutdownSplash } from "./shutdown-splash.tsx";
+import { StartupSplash } from "./startup-splash.tsx";
+import type { ContentRouterProps } from "./types.ts";
 
 export function ContentRouter(props: ContentRouterProps) {
 	const {

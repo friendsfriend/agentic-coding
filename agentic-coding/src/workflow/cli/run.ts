@@ -1,3 +1,4 @@
+import { Schema } from "effect";
 // The command-name lookup table that replaces the former `run(argv)` branch
 // chain, plus the process entrypoint (`main`) and the test-only helper
 // bundle (`cliTest`). Moved out of cli.ts (split-workflow-god-modules) —
@@ -162,7 +163,7 @@ export async function run(argv: string[]): Promise<void> {
 		console.log(
 			JSON.stringify(
 				client
-					? await client.observe({ kind: "projects" })
+					? await client.observe({ kind: "projects" }, Schema.Unknown)
 					: await listProjects(),
 			),
 		);

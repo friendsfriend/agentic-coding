@@ -3,12 +3,13 @@
 // repository's execution coordinator, and publishes `workflow.updated` on the
 // event stream. Dashboards refresh from that stream instead of opening a local
 // Herdr socket or watching store files.
-import { subscribeHerdrEvents } from "../tui/dash/herdr-events.ts";
+
 import {
 	onWorkflowExecutionError,
 	onWorkflowExecutionSettled,
 } from "../workflow/execution-coordinator.ts";
 import type { EventBroker } from "./events.ts";
+import { subscribeHerdrEvents } from "./herdr-events";
 
 export interface WorkflowEventHub {
 	/** Register the execution-coordinator listeners for one repository. */

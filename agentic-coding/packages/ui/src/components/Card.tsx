@@ -10,7 +10,7 @@
 import { TextAttributes } from "@opentui/core";
 import { For, type JSX, Show } from "solid-js";
 import { uiColors } from "../theme/colors";
-import { Selectable } from "./Selectable";
+import { Selectable } from "./Selectable.tsx";
 
 export interface CardProps {
 	/** User-defined cell content. `columns` decides the grid shape (2×2, 2×3, …). */

@@ -5,7 +5,7 @@ import {
 	SHUTDOWN_PHASE_ORDER,
 	type ShutdownState,
 	uiTestTabEnabled,
-} from "./app-store";
+} from "./app-store.ts";
 
 const state = (
 	phase: ShutdownState["phase"],

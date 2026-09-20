@@ -1,4 +1,4 @@
-import { getLogger } from "./logger";
+import { getLogger } from "./logger.ts";
 
 /**
  * Custom fetch that uses native fetch (works in separate process)

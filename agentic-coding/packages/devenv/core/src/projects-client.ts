@@ -1,5 +1,5 @@
 import type { ProjectCatalog } from "@devenv/types";
-import type { ClientDeps } from "./client-types";
+import type { ClientDeps } from "./client-types.ts";
 
 /**
  * Failure fetching the configured-project catalog. `retryable` is true for

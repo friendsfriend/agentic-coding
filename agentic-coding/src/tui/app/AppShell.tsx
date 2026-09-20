@@ -6,13 +6,13 @@
 // `tui-feature` layer never imports the shell.
 
 import type { KeybindSection } from "@ui";
-import { type DashboardTab, App as FeatureShell } from "../otel/app/App";
-import type { LogStore } from "../otel/model/logStore";
-import type { MetricStore } from "../otel/model/metricStore";
-import type { TelemetryDb } from "../otel/model/telemetry-db";
-import type { TopologyStore } from "../otel/model/topologyStore";
-import type { TraceStore } from "../otel/model/traceStore";
-import { EnvironmentsFeature } from "./EnvironmentsFeature";
+import { type DashboardTab, App as FeatureShell } from "../otel/app/App.tsx";
+import type { LogStore } from "../otel/model/logStore.ts";
+import type { MetricStore } from "../otel/model/metricStore.ts";
+import type { TelemetryDb } from "../otel/model/telemetry-db.ts";
+import type { TopologyStore } from "../otel/model/topologyStore.ts";
+import type { TraceStore } from "../otel/model/traceStore.ts";
+import { EnvironmentsFeature } from "./EnvironmentsFeature.tsx";
 
 export interface AppShellProps {
 	repos: string[];

@@ -14,7 +14,7 @@ import {
 	loadCustomThemes,
 	loadThemeName,
 	saveThemeName,
-} from "../../../../../src/tui/shared/preferences";
+} from "../../../../../src/tui/shared/preferences.ts";
 
 export type { TerminalThemeColors };
 export {

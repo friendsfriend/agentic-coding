@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { configureOpenTuiConsoleEnv } from "./startup-env";
+import { configureOpenTuiConsoleEnv } from "./startup-env.ts";
 
 describe("configureOpenTuiConsoleEnv", () => {
 	test("disables OpenTUI console capture by default", () => {

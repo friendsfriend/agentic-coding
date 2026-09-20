@@ -7,13 +7,13 @@ import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { KeymapProvider } from "@opentui/keymap/solid";
 import { testRender, useRenderer } from "@opentui/solid";
 import { onCleanup } from "solid-js";
-import { AppShell } from "../../src/tui/app/AppShell";
-import { setupKeymap } from "../../src/tui/dash/keymap-setup";
-import { TraceDb } from "../../src/tui/otel/model/db";
-import { LogStore } from "../../src/tui/otel/model/logStore";
-import { MetricStore } from "../../src/tui/otel/model/metricStore";
-import { TopologyStore } from "../../src/tui/otel/model/topologyStore";
-import { TraceStore } from "../../src/tui/otel/model/traceStore";
+import { TraceDb } from "../../src/server/telemetry-db";
+import { AppShell } from "../../src/tui/app/AppShell.tsx";
+import { setupKeymap } from "../../src/tui/dash/keymap-setup.ts";
+import { LogStore } from "../../src/tui/otel/model/logStore.ts";
+import { MetricStore } from "../../src/tui/otel/model/metricStore.ts";
+import { TopologyStore } from "../../src/tui/otel/model/topologyStore.ts";
+import { TraceStore } from "../../src/tui/otel/model/traceStore.ts";
 
 // TQ-005/TQ-101: the composition root must actually mount the embedded
 // environment feature (shared renderer/keymap, no devenv header/footer), and

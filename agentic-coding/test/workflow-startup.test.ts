@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { WorkflowExecutionSettings } from "../src/workflow/contracts.ts";
+import type { WorkflowExecutionSettings } from "../src/contracts/workflow.ts";
 import {
 	executionSettings,
 	loadConfigWithProvenance,
@@ -75,6 +75,18 @@ describe("shared workflow startup", () => {
 					definitionId: "research",
 				}),
 			).toThrow(/research workflow requires non-empty task/);
+			const research = prepareWorkflowStart({
+				workflowId: "research-tools",
+				definitionId: "research",
+				task: "research with all runtime tools",
+			});
+			const researcher = research.input.routing.routes.find(
+				(route) => route.role === "researcher",
+			)?.profile;
+			expect(research.input.definitionVersion).toBeGreaterThanOrEqual(401);
+			expect(researcher?.readOnly).toBe(false);
+			expect(researcher?.capabilities).toContain("shell");
+			expect(researcher?.capabilities).toContain("edit");
 		} finally {
 			if (previous === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
 			else process.env.HERDR_WORKFLOW_CONFIG = previous;

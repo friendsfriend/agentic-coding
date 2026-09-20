@@ -1,5 +1,5 @@
 import { RGBA } from "@opentui/core";
-import { type Highlight, highlightColor } from "../components/Highlight";
+import { type Highlight, highlightColor } from "../components/Highlight.tsx";
 
 export type AnimationHighlights = readonly [Highlight, Highlight, Highlight];
 

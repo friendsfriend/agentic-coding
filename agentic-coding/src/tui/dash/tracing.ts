@@ -13,8 +13,8 @@
  * those keys, per-character key diagnostics must be context-gated via
  * `isKeyTraceSuppressed` while passphrase prompts, search, or filters could be
  * receiving input, and non-printable values are filtered below. */
-import { TraceExporter } from "../../workflow/effects";
-import { childTrace } from "../../workflow/observability";
+import { TraceExporter } from "../../workflow/effects.ts";
+import { childTrace } from "../../workflow/observability.ts";
 
 export type TuiTraceOutcome = "ok" | "error";
 

@@ -9,7 +9,7 @@ import {
 	SelectableList,
 	uiColors,
 } from "@ui";
-import type { TraceSummary } from "../model/types";
+import type { TraceSummary } from "../../../contracts/telemetry.ts";
 
 const duration = (ms: number) =>
 	ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;

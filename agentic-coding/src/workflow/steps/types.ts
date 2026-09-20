@@ -4,7 +4,7 @@ import type {
 	WorkflowActionView,
 	WorkflowRun,
 	WorkflowSnapshot,
-} from "../contracts.ts";
+} from "../../contracts/workflow.ts";
 import type { WorkflowEdge } from "../registry.ts";
 
 export interface StepRolesContext {

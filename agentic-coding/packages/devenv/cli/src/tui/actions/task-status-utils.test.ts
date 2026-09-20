@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatDuration, formatTaskArgsSummary } from "./task-status-utils";
+import { formatDuration, formatTaskArgsSummary } from "./task-status-utils.ts";
 
 describe("formatTaskArgsSummary", () => {
 	test("returns empty string for empty args", () => {

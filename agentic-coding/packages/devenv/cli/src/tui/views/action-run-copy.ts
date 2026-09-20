@@ -1,6 +1,6 @@
 import type { ActionCommand, ActionRun, ActionStep } from "@devenv/types";
 import { actionRunDisplayLabel } from "@devenv/types";
-import type { ActionTreeNode } from "../stores/action-run-store";
+import type { ActionTreeNode } from "../stores/action-run-store.ts";
 
 const statusIcon = (status: string) =>
 	status === "completed"

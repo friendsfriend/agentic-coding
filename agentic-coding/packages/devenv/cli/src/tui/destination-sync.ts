@@ -5,7 +5,7 @@
 // per-tab state. These are the pure translations between a route's destination
 // and the store's `activeTab`/`viewMode`, so the two authorities cannot grow
 // separate tables of their own.
-import type { TabType, ViewMode } from "./stores";
+import type { TabType, ViewMode } from "./stores/index.ts";
 
 /** View modes that live under the change-request detail page. */
 const CHANGE_REQUEST_CHILD_VIEWS: Readonly<Record<string, string>> = {

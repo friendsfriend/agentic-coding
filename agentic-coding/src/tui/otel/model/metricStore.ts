@@ -1,4 +1,4 @@
-import type { MetricData } from "./types";
+import type { MetricData } from "../../../contracts/telemetry.ts";
 
 export type MetricSortKey = "name" | "type" | "service" | "unit";
 

@@ -1,11 +1,11 @@
-import { guides as allGuides } from "../guides";
-import { isDownKey, isEnterKey, isUpKey } from "./nav-keys";
+import { guides as allGuides } from "../guides/index.ts";
+import { isDownKey, isEnterKey, isUpKey } from "./nav-keys.ts";
 import type {
 	KeyboardActions,
 	KeyboardContext,
 	KeyboardEvent,
 	KeyboardStores,
-} from "./types";
+} from "./types.ts";
 /**
  * Handles keyboard events for miscellaneous modals and views:
  * - Passphrase modal (ESC to cancel, Enter to submit, text input)

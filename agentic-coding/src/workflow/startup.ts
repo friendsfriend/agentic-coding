@@ -1,13 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Effect } from "effect";
-import { runGit } from "./cli/git.ts";
-import { registry as defaultRegistry } from "./cli/registry.ts";
 import type {
 	WorkflowExecutionSettings,
 	WorkflowRouting,
-	WorkflowRuntimeError,
-} from "./contracts.ts";
+} from "../contracts/workflow.ts";
+import { runGit } from "./cli/git.ts";
+import { registry as defaultRegistry } from "./cli/registry.ts";
+import type { WorkflowRuntimeError } from "./contracts.ts";
+import { definitionVersionForResearchTools } from "./definitions/manifest-policy.ts";
 import {
 	definitionVersionForBehaviorPins,
 	PUBLIC_WORKFLOW_CATALOG,
@@ -22,7 +23,6 @@ import {
 } from "./effects.ts";
 import {
 	type AgentsConfig,
-	enforceResearchReadOnlyRouting,
 	parseAgentsConfig,
 	preflightProfile,
 	type RoutingPreset,
@@ -314,9 +314,14 @@ function prepareFromContext(
 	provenance: ConfigProvenance,
 	settings: WorkflowExecutionSettings,
 ): PreparedWorkflowStart {
-	const definitionVersion = definitionVersionForBehaviorPins(
-		config.workflow.max_verification_rounds,
-	);
+	const definitionVersion =
+		request.definitionId === "research"
+			? definitionVersionForResearchTools(
+					config.workflow.max_verification_rounds,
+				)
+			: definitionVersionForBehaviorPins(
+					config.workflow.max_verification_rounds,
+				);
 	const registry = registerBuiltins(
 		undefined,
 		config.workflow.max_verification_rounds,
@@ -334,11 +339,7 @@ function prepareFromContext(
 		request.preset,
 		request.fusionProfiles,
 	);
-	const finalRouting =
-		request.definitionId === "research"
-			? enforceResearchReadOnlyRouting(routing, definition.initial)
-			: routing;
-	for (const route of finalRouting.routes)
+	for (const route of routing.routes)
 		preflightProfile(
 			route.profile,
 			registry.stepForDefinition(definition, route.stepId).requirements,
@@ -402,7 +403,7 @@ function prepareFromContext(
 				...(request.preset ? { selectedPreset: request.preset } : {}),
 				executionSettings: settings,
 			},
-			routing: finalRouting,
+			routing,
 		},
 	};
 }

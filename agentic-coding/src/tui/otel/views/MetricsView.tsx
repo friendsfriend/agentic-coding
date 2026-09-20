@@ -5,8 +5,8 @@ import {
 	uiColors,
 } from "@ui";
 import { createMemo, For } from "solid-js";
-import { AutoscalingSparkline } from "../components/AutoscalingSparkline";
-import type { MetricStore } from "../model/metricStore";
+import { AutoscalingSparkline } from "../components/AutoscalingSparkline.tsx";
+import type { MetricStore } from "../model/metricStore.ts";
 
 const metricColor = (type: string) =>
 	type === "histogram"

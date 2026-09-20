@@ -5,12 +5,13 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { WorkflowCommand } from "../src/contracts/workflow.ts";
 import {
 	decodeCommand,
-	decodeSnapshot,
 	type ResolvedProfile,
 	type WorkflowRouting,
-} from "../src/workflow/contracts.ts";
+} from "../src/contracts/workflow.ts";
+import { decodeSnapshot } from "../src/workflow/contracts.ts";
 import {
 	decodeResearchHandoff,
 	definitionVersionForBehaviorPins,
@@ -1526,10 +1527,7 @@ describe("transactional workflow runtime", () => {
 				workflowId: started.view.workflowId,
 				revision: started.view.revision,
 				targetStep: "core.implementation",
-			}) as Extract<
-				import("../src/workflow/contracts.ts").WorkflowCommand,
-				{ type: "operator.repair" }
-			>;
+			}) as Extract<WorkflowCommand, { type: "operator.repair" }>;
 			expect(omitted.reason).toBe("");
 			const repaired = engine.dispatch(repo, { ...omitted });
 			expect(repaired.snapshot.repaired?.reason).toBe("");
@@ -2294,6 +2292,71 @@ describe("transactional workflow runtime", () => {
 					.claimEffects(repo, 100)
 					.some((effect) => effect.kind === "agent.stop"),
 			).toBe(false);
+		} finally {
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+	test("a stale pinned effect does not block ready sibling workflows", () => {
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "workflow-stale-outbox-"),
+		);
+		try {
+			const repo = repository(path.join(tmp, "repo"));
+			fs.writeFileSync(path.join(repo, ".gitignore"), ".herdr-workflow/\n");
+			execFileSync("git", ["add", ".gitignore"], { cwd: repo });
+			execFileSync("git", ["commit", "-qm", "ignore workflow state"], {
+				cwd: repo,
+			});
+			const engine = new WorkflowEngine(registerBuiltins());
+			const metadata = {
+				branch: "main",
+				baseBranch: "main",
+				baseCommit: execFileSync("git", ["rev-parse", "HEAD"], {
+					cwd: repo,
+					encoding: "utf8",
+				}).trim(),
+				task: "task",
+			};
+			engine.start({
+				repo,
+				workflowId: "stale-outbox",
+				definitionId: "no-openspec",
+				metadata,
+				routing: routing(),
+			});
+			const db = new Database(canonicalStorePath(repo));
+			const row = db
+				.query(
+					"SELECT snapshot_json FROM workflow_instances WHERE id='stale-outbox'",
+				)
+				.get() as { snapshot_json: string };
+			const snapshot = JSON.parse(row.snapshot_json);
+			snapshot.definition.digest =
+				"deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+			db.query("UPDATE workflow_instances SET snapshot_json=? WHERE id=?").run(
+				JSON.stringify(snapshot),
+				"stale-outbox",
+			);
+			db.close();
+			engine.start({
+				repo,
+				workflowId: "current-outbox",
+				definitionId: "no-openspec",
+				metadata,
+				routing: routing(),
+			});
+
+			const claimed = engine.claimEffects(repo, 1);
+			expect(claimed).toHaveLength(1);
+			expect(claimed[0]?.workflowId).toBe("current-outbox");
+			const verify = new Database(canonicalStorePath(repo));
+			const staleEffect = verify
+				.query(
+					"SELECT status FROM workflow_outbox WHERE workflow_id='stale-outbox'",
+				)
+				.get() as { status: string };
+			expect(staleEffect.status).toBe("pending");
+			verify.close();
 		} finally {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}

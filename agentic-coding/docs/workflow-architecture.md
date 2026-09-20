@@ -197,11 +197,12 @@ this precedence and the self-loop case directly via the exported
 `WorkflowManifest.policy` (`registry.ts`) is a declarative replacement for the
 engine's former `isWikiWorkflowTarget` / `isResearchWorkflowTarget` /
 definition-id checks *at workflow start time*: `targetKind`
-(`repository` | `wiki` | `research`), `checkoutRequired`, and
+(`repository` | `wiki` | `research`), `checkoutRequired`, and historical
 `requiresReadOnlyResearcher`. `WorkflowRegistry.registerWorkflow` validates it
 (unknown target kind, or a contradictory combination such as
 `requiresReadOnlyResearcher` outside the `research` target) and names the
-manifest in the rejection.
+manifest in the rejection. Current research definitions set that flag false;
+older pinned definitions retain their original read-only policy and digest.
 
 **The rule:** adding a field to an existing registered manifest changes its
 digest, because `CompiledWorkflowDefinition.digest` is computed over the whole
@@ -258,7 +259,7 @@ blast radius to the named functions:
 | `runtime.ts` `validateEffect()` (~lines 2718–2740) | `snapshot.currentStep === "core.delivery"` / `"core.research"` / `"core.completed"` | Effect-legality exceptions (wiki-verify promoted at delivery/completion, research's workspace-setup-before-entry ordering) — a persistence/outbox invariant, not step business semantics. |
 | `runtime.ts` `validateFusionRouting()` (~line 3256) | `route.stepId === "fusion.plan"` | Routing-shape validation for the fusion fan-out, called only for the two fusion definition ids — a routing concern, not step business semantics. |
 | `effect-runner.ts` `assignmentFor` (`core.triage` changed-files line) | `run.stepId === "core.triage"` | Needs `changedFilesIn`, a `runtime.ts`-resident git-status walker; moving it means either splitting `runtime.ts` (stage C's job) or duplicating a non-trivial recursive helper. Recorded out of scope per design D5. |
-| `adapters.ts` (`ctx.assignment.stepId !== "core.research"`, ×3) | launch-context tool/extension selection | Needs adapter launch context, not `{snapshot, run}`; not named in this stage's design inventory. |
+| `adapters.ts` | No research-specific tool or permission branch remains; researcher profiles receive the same configured runtime tools as other roles. | Adapter launch policy follows the resolved profile. |
 | `cli.ts` `authorizeWikiWriter`, research-handoff restriction | `stepId === "core.wiki"`, `"core.research"` | Capability/authorization boundaries — this stage's non-goals explicitly exclude capability handling changes. |
 | `registry.ts`, `cli.ts` `rolesForDefinition` (`fusion.plan` empty-candidate exemption) | `id === "fusion.plan"` | A registration-time structural invariant (which step may have zero catalog-time candidates), not step business semantics. |
 | `contracts.ts` `parseSnapshot()` (~line 1061) | `snapshot.status === "active"` combined with `["core.completed", "core.closed"].includes(snapshot.currentStep)` (rejects an `active` status at a terminal step) | A schema-level snapshot invariant enforced while deserializing/validating persisted JSON, before any `StepBehavior` lookup is possible from the raw input; a data-shape guard, not step business semantics. |
@@ -272,13 +273,10 @@ different axis from this stage's goal and were miscategorized in an earlier
 draft of this table.
 
 `effect-runner.ts`'s `roundScoped`, `assignmentFor`'s research/wiki
-objective/permissions/checks branches, `assignment.ts`'s wiki-role asset map
-and research handoff note, and `profiles.ts`'s
-`enforceResearchReadOnlyRouting` are the branches this stage *did* move —
-they now read `StepBehavior.roundScoped`, `assignmentInputs`,
-`instructionAssetForRole`, `handoffNote`, and the caller-supplied
-`definition.initial` (instead of a hardcoded `"core.research"`),
-respectively.
+objective/permissions/checks branches, and `assignment.ts`'s wiki-role asset map
+and research handoff note are the branches this stage *did* move — they now read
+`StepBehavior.roundScoped`, `assignmentInputs`, `instructionAssetForRole`, and
+`handoffNote`, respectively.
 
 ## Module map (after split-workflow-god-modules)
 

@@ -1,6 +1,6 @@
-import type { RunStatus } from "../../workflow/contracts.ts";
-import { agentMetrics } from "./projections";
-import type { DashboardData, FindingCounts } from "./types";
+import type { DashboardData, FindingCounts } from "../../contracts/workflow";
+import type { RunStatus } from "../../contracts/workflow.ts";
+import { agentMetrics } from "../../workflow/run-projections";
 
 /** Demo dashboard fixture for `--profile test` renders and characterizations.
  * Kept out of the live observation/projection modules so the "dashboard"

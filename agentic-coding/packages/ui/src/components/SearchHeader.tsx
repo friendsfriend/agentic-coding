@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/solid */
+
 import type { JSX } from "solid-js";
 import { colors, uiColors } from "../theme/colors";
 

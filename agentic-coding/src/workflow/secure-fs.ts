@@ -53,21 +53,31 @@ function errnoMessage(operation: string, name: string): Error {
 	return new Error(`${operation} failed for secure path component: ${name}`);
 }
 
+function cString(value: string): Buffer {
+	if (value.includes("\0")) throw new Error("secure path contains a NUL byte");
+	return Buffer.from(`${value}\0`);
+}
+
 function openAt(directory: number, name: string, flags: number): number {
-	const fd = libc.symbols.openat(directory, name, flags);
+	const fd = libc.symbols.openat(directory, cString(name), flags);
 	if (fd < 0) throw errnoMessage("openat", name);
 	return fd;
 }
 
 function openChild(parent: number, name: string, create: boolean): number {
+	const encodedName = cString(name);
 	let fd = libc.symbols.openat(
 		parent,
-		name,
+		encodedName,
 		O_RDONLY | O_NOFOLLOW | O_DIRECTORY,
 	);
 	if (fd < 0 && create) {
-		libc.symbols.mkdirat(parent, name, 0o700);
-		fd = libc.symbols.openat(parent, name, O_RDONLY | O_NOFOLLOW | O_DIRECTORY);
+		libc.symbols.mkdirat(parent, encodedName, 0o700);
+		fd = libc.symbols.openat(
+			parent,
+			encodedName,
+			O_RDONLY | O_NOFOLLOW | O_DIRECTORY,
+		);
 	}
 	if (fd < 0) throw errnoMessage("openat", name);
 	const stat = fs.fstatSync(fd);
@@ -257,8 +267,16 @@ export function writeAtomicPrivateFile(
 	} finally {
 		fs.closeSync(fd);
 	}
-	if (libc.symbols.renameat(directory, temporary, directory, name) < 0) {
-		libc.symbols.unlinkat(directory, temporary, 0);
+	const encodedTemporary = cString(temporary);
+	if (
+		libc.symbols.renameat(
+			directory,
+			encodedTemporary,
+			directory,
+			cString(name),
+		) < 0
+	) {
+		libc.symbols.unlinkat(directory, encodedTemporary, 0);
 		throw errnoMessage("renameat", name);
 	}
 }

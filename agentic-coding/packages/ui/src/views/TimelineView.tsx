@@ -1,32 +1,32 @@
 /** @jsxImportSource @opentui/solid */
 
+import { TextAttributes } from "@opentui/core";
+import { useTerminalDimensions } from "@opentui/solid";
+import { createMemo, For, Show } from "solid-js";
+import { Badge } from "../components/Badge";
+import { ContentPanel } from "../components/ContentStack";
+import { FilterStatusBar } from "../components/FilterStatusBar";
+import {
+	type Highlight,
+	HighlightedText,
+	highlightColor,
+} from "../components/Highlight";
+import { hostChromeLines, hostNamesPage } from "../components/hostChrome.ts";
+import { getMarkdownSyntaxStyle } from "../components/markdownSyntax.ts";
+import { LAYOUT_CHROME_LINES } from "../components/ScrollableList";
+import { SearchHeader } from "../components/SearchHeader";
+import {
+	containsHtml,
+	gitlabHtmlToMarkdown,
+} from "../components/utils/gitlabHtml.ts";
+import { calculateVisibleItems } from "../components/utils/virtualScroll";
+import { uiColors } from "../theme/colors";
 import type {
 	ChangeRequestChange,
 	Discussion,
 	IssueComment,
 	NotePosition,
-} from "@devenv/types";
-import { TextAttributes } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/solid";
-import type { Highlight } from "@ui";
-import {
-	Badge,
-	ContentPanel,
-	FilterStatusBar,
-	HighlightedText,
-	highlightColor,
-	LAYOUT_CHROME_LINES,
-	SearchHeader,
-} from "@ui";
-import { createMemo, For, Show } from "solid-js";
-import { hostChromeLines, hostNamesPage } from "../components/hostChrome";
-import { getMarkdownSyntaxStyle } from "../components/markdownSyntax";
-import {
-	containsHtml,
-	gitlabHtmlToMarkdown,
-} from "../components/utils/gitlabHtml";
-import { calculateVisibleItems } from "../components/utils/virtualScroll";
-import { uiColors } from "../theme/colors";
+} from "../types";
 
 // ── Normalized timeline item shared by CR discussions and issue comments ──
 

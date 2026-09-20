@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { HERDR_DASHBOARD_EVENTS } from "../../src/contracts/integration.ts";
 import {
-	HERDR_DASHBOARD_EVENTS,
 	herdrEventMatchesWorkspace,
 	herdrEventRequest,
 	parseHerdrEventLines,
-} from "../../src/tui/dash/herdr-events";
+} from "../../src/server/herdr-events.ts";
 
 describe("herdr dashboard event subscription", () => {
 	test("request subscribes to every low-frequency lifecycle event", () => {

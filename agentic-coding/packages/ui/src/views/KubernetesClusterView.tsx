@@ -1,21 +1,18 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { KubernetesClusterStatus } from "@devenv/types";
-import {
-	AnimatedStatusText,
-	HighlightedText,
-	highlightColor,
-	ScrollableContent,
-	SearchHeader,
-} from "@ui";
 import { For, type JSX, Show } from "solid-js";
+import { AnimatedStatusText } from "../components/AnimatedStatusText";
+import { HighlightedText, highlightColor } from "../components/Highlight";
+import { ScrollableContent } from "../components/ScrollableContent";
+import { SearchHeader } from "../components/SearchHeader";
 import { uiColors } from "../theme/colors";
+import type { KubernetesClusterStatus } from "../types";
 import {
 	PropertiesList,
 	type PropertyRow,
 	propertyBadges,
-} from "./PropertiesList";
-import { ResourceTimelineCharts } from "./ResourceTimelineCharts";
+} from "./PropertiesList.tsx";
+import { ResourceTimelineCharts } from "./ResourceTimelineCharts.tsx";
 
 export interface KubernetesClusterViewProps {
 	status?: KubernetesClusterStatus | null;

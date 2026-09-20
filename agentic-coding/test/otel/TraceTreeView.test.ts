@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { treeWindow } from "../../src/tui/otel/views/TraceTreeView";
+import { treeWindow } from "../../src/tui/otel/views/TraceTreeView.tsx";
 
 describe("treeWindow", () => {
 	it("keeps selection visible while rendering one viewport", () => {

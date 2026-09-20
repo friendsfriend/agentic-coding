@@ -7,8 +7,9 @@ import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
 import { activeErrorModal, DiffReviewView, resetErrorModal } from "@ui";
 import { createSignal, onCleanup } from "solid-js";
-import { App } from "../../src/tui/dash/App";
-import { type DashboardData, testDashboard } from "../../src/tui/dash/data";
+import type { DashboardData } from "../../src/contracts/workflow";
+import { App } from "../../src/tui/dash/App.tsx";
+import { testDashboard } from "../../src/tui/dash/demo.ts";
 
 const roots: string[] = [];
 afterEach(() => {

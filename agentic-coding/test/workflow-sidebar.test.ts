@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import type {
 	DeveloperDialogueRecord,
 	WorkflowView,
-} from "../src/workflow/contracts.ts";
+} from "../src/contracts/workflow.ts";
 import {
 	agentViewSetParams,
 	INPUT_RANK_NONE,

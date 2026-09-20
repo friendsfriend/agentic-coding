@@ -2,10 +2,7 @@
 import { TextAttributes } from "@opentui/core";
 import { GenericModal, uiColors } from "@ui";
 import { createSignal } from "solid-js";
-import {
-	type CredentialPrompt,
-	maskingFor,
-} from "../../../workflow/credentials.ts";
+import { type CredentialPrompt, maskingFor } from "../../data/agents.ts";
 
 export interface CredentialPromptRequest {
 	prompt: string;

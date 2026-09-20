@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { createAppStore } from "../stores/app-store";
-import { getActiveModalName } from "./keymap-runtime";
-import type { KeyboardStores } from "./types";
+import { createAppStore } from "../stores/app-store.ts";
+import { getActiveModalName } from "./keymap-runtime.ts";
+import type { KeyboardStores } from "./types.ts";
 
 const signalStore = (overrides: Record<string, unknown> = {}) =>
 	new Proxy(overrides, {

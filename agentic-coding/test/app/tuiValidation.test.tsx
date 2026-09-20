@@ -10,14 +10,14 @@ import {
 	catalogKeybinds,
 	footerKeybinds,
 } from "@ui";
-import { App } from "../../src/tui/otel/app/App";
-import { resetNotifications } from "../../src/tui/otel/app/notifications";
-import { TraceDb } from "../../src/tui/otel/model/db";
-import { LogStore } from "../../src/tui/otel/model/logStore";
-import { MetricStore } from "../../src/tui/otel/model/metricStore";
-import { TopologyStore } from "../../src/tui/otel/model/topologyStore";
-import { TraceStore } from "../../src/tui/otel/model/traceStore";
-import { renderUntil } from "./support/terminal";
+import { TraceDb } from "../../src/server/telemetry-db";
+import { App } from "../../src/tui/otel/app/App.tsx";
+import { resetNotifications } from "../../src/tui/otel/app/notifications.ts";
+import { LogStore } from "../../src/tui/otel/model/logStore.ts";
+import { MetricStore } from "../../src/tui/otel/model/metricStore.ts";
+import { TopologyStore } from "../../src/tui/otel/model/topologyStore.ts";
+import { TraceStore } from "../../src/tui/otel/model/traceStore.ts";
+import { renderUntil } from "./support/terminal.ts";
 
 // Terminal-size and input-surface validation for the page shell
 // (replace-nested-tabs-with-page-navigation, task 4.2). The interactive TUI

@@ -1,8 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test";
 import { testRender } from "@opentui/solid";
-import { DeveloperQuestionModal } from "../../src/tui/dash/ui/DeveloperQuestionModal";
-import type { DeveloperDialogueRecord } from "../../src/workflow/contracts";
+import type { DeveloperDialogueRecord } from "../../src/contracts/workflow.ts";
+import { DeveloperQuestionModal } from "../../src/tui/dash/ui/DeveloperQuestionModal.tsx";
 
 function question(id: string, description: string): DeveloperDialogueRecord {
 	return {

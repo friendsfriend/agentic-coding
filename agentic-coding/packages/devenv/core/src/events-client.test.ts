@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import type { ClientDeps } from "./client-types";
-import { getActionHistory, getActionLogs } from "./events-client";
+import type { ClientDeps } from "./client-types.ts";
+import { getActionHistory, getActionLogs } from "./events-client.ts";
 
 test("getActionHistory requests only older history when asked", async () => {
 	let url = "";

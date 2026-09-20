@@ -5,7 +5,10 @@
 // verbatim out of runtime.ts's `reduce()` dispatch
 // (split-workflow-god-modules).
 import type { Database } from "bun:sqlite";
-import type { WorkflowCommand, WorkflowSnapshot } from "../../contracts.ts";
+import type {
+	WorkflowCommand,
+	WorkflowSnapshot,
+} from "../../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
 import {
 	executionSettings,

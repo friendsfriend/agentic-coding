@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
-import type { ChangeRequestChange, Discussion } from "@devenv/types";
-import { TimelineView, toTimelineItems } from "./TimelineView";
+import type { ChangeRequestChange, Discussion } from "../types";
+import { TimelineView, toTimelineItems } from "./TimelineView.tsx";
 
 interface DiscussionsViewProps {
 	discussions: Discussion[];

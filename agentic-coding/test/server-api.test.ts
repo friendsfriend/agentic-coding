@@ -2,7 +2,10 @@
 // 4.2). These exercise authorization, bounds, route ownership, event replay,
 // credential ownership and retired delegation against a real loopback server
 // with injected operations, so no filesystem/Git/Herdr work happens.
+
 import { describe, expect, test } from "bun:test";
+import { Schema } from "effect";
+import type { WorkflowView } from "../src/contracts/workflow.ts";
 import {
 	authorizeRequest,
 	createInstanceAuthority,
@@ -20,12 +23,33 @@ import {
 	routeOwner,
 } from "../src/server/protocol.ts";
 import { run } from "../src/workflow/cli.ts";
-import type { WorkflowView } from "../src/workflow/contracts.ts";
 
+/** A minimal but contract-shaped view: the client decodes every response, so a
+ * fixture missing a required field is a real (and now detected) server bug. */
 const stubView = {
 	workflowId: "wf-1",
+	changeId: "",
 	revision: 3,
+	definition: { id: "core", version: 1, digest: "d", label: "Core" },
 	status: "active",
+	repository: "/repo",
+	worktree: "/repo",
+	branch: "main",
+	baseCommit: "abc",
+	createdAt: "2026-01-01T00:00:00.000Z",
+	updatedAt: "2026-01-01T00:00:00.000Z",
+	currentStep: {
+		id: "core.plan",
+		label: "Plan",
+		attempt: 1,
+		enteredAt: "2026-01-01T00:00:00.000Z",
+	},
+	runs: [],
+	routing: {},
+	effects: [],
+	observations: [],
+	health: { valid: true, attention: [] },
+	availableActions: [],
 } as unknown as WorkflowView;
 
 function stubOperations(
@@ -553,10 +577,10 @@ describe("agent config mutations", () => {
 					token: server.token,
 					ownerId: "tui-1",
 				});
-				await client.saveAgents(
-					{ kind: "delete-preset", name: "legacy" },
-					"/repo",
-				);
+				await client.saveAgents({
+					repository: "/repo",
+					mutation: { kind: "delete-preset", name: "legacy" },
+				});
 				expect(seen).toMatchObject({
 					repository: "/repo",
 					mutation: { kind: "delete-preset", name: "legacy" },
@@ -721,9 +745,10 @@ describe("typed client", () => {
 				token: server.token,
 				ownerId: "owner-a",
 			});
-			const observed = await client.observe<{ echoed: string }>({
-				kind: "projects",
-			});
+			const observed = await client.observe<{ echoed: string }>(
+				{ kind: "projects" },
+				Schema.Struct({ echoed: Schema.String }),
+			);
 			expect(observed.echoed).toBe("projects");
 			const view = await client.action({
 				repo: "/repo",

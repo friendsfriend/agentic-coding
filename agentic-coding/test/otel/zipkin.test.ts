@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { normalizeZipkinSpans } from "../../src/tui/otel/receiver/zipkin";
+import { normalizeZipkinSpans } from "../../src/server/receivers/zipkin";
 
 describe("Zipkin normalizer", () => {
 	it("normalizes a Zipkin v2 span", () => {

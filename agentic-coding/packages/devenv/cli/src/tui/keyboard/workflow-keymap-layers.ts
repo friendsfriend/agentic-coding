@@ -1,19 +1,23 @@
 import type { KeyEvent, Renderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
-import { handleActionsKeys } from "./actions-keys";
-import { handleAppDetailKeys } from "./app-detail-keys";
-import { handleChangedFilesKeys } from "./changed-files-keys";
-import { handleCrDetailKeys } from "./cr-detail-keys";
-import { handleCrListKeys } from "./cr-list-keys";
-import { handleDiscussionsKeys } from "./discussions-keys";
-import { handleIssueDetailKeys } from "./issue-detail-keys";
-import { handleIssueListKeys } from "./issue-list-keys";
-import { handleIssueTimelineKeys } from "./issue-timeline-keys";
-import { handleJobsKeys } from "./jobs-keys";
-import { handleReferencesKeys } from "./references-keys";
-import { handleTestResultsKeys } from "./test-results-keys";
-import type { KeyboardActions, KeyboardContext, KeyboardStores } from "./types";
-import { handleWorktreeManagerKeys } from "./worktree-manager-keys";
+import { handleActionsKeys } from "./actions-keys.ts";
+import { handleAppDetailKeys } from "./app-detail-keys.ts";
+import { handleChangedFilesKeys } from "./changed-files-keys.ts";
+import { handleCrDetailKeys } from "./cr-detail-keys.ts";
+import { handleCrListKeys } from "./cr-list-keys.ts";
+import { handleDiscussionsKeys } from "./discussions-keys.ts";
+import { handleIssueDetailKeys } from "./issue-detail-keys.ts";
+import { handleIssueListKeys } from "./issue-list-keys.ts";
+import { handleIssueTimelineKeys } from "./issue-timeline-keys.ts";
+import { handleJobsKeys } from "./jobs-keys.ts";
+import { handleReferencesKeys } from "./references-keys.ts";
+import { handleTestResultsKeys } from "./test-results-keys.ts";
+import type {
+	KeyboardActions,
+	KeyboardContext,
+	KeyboardStores,
+} from "./types.ts";
+import { handleWorktreeManagerKeys } from "./worktree-manager-keys.ts";
 
 export interface WorkflowKeymapLayerDeps {
 	stores: KeyboardStores;

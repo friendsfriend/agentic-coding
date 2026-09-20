@@ -14,7 +14,7 @@ import {
 	SETTINGS_SECTIONS,
 	type SettingsSection,
 	settingsSectionPage,
-} from "../shared/routes";
+} from "../shared/routes.ts";
 
 /** Where a setting is edited and where its value actually lives. */
 export type SettingsScope =

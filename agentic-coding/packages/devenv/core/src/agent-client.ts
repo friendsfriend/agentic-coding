@@ -1,6 +1,6 @@
 import type { AgentGroup } from "@devenv/types";
-import type { ClientDeps } from "./client-types";
-import { handleFetchError } from "./error-handler";
+import type { ClientDeps } from "./client-types.ts";
+import { handleFetchError } from "./error-handler.ts";
 
 export async function getPiSessions(deps: ClientDeps): Promise<AgentGroup[]> {
 	const response = await deps.fetchFn(`${deps.baseUrl}/api/pi-sessions`);

@@ -5,14 +5,14 @@ import {
 	nextPanelIndex,
 	prevPanelIndex,
 } from "./";
-import { handleHorizontalScrollKey } from "./horizontal-scroll";
-import { isDownKey, isUpKey } from "./nav-keys";
+import { handleHorizontalScrollKey } from "./horizontal-scroll.ts";
+import { isDownKey, isUpKey } from "./nav-keys.ts";
 import type {
 	KeyboardActions,
 	KeyboardContext,
 	KeyboardEvent,
 	KeyboardStores,
-} from "./types";
+} from "./types.ts";
 
 /**
  * Handles keyboard events for the CR detail view.

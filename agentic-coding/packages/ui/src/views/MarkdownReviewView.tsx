@@ -2,19 +2,19 @@
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
 import { createEffect, createMemo, For, Show } from "solid-js";
-import { GenericModal } from "../components/GenericModal";
-import { formatHelpTextLines } from "../components/HelpText";
-import { MarkdownBlockView } from "../components/MarkdownViewer";
+import { GenericModal } from "../components/GenericModal.tsx";
+import { formatHelpTextLines } from "../components/HelpText.tsx";
+import { MarkdownBlockView } from "../components/MarkdownViewer.tsx";
 import {
 	blockSelectionToLines,
 	type MarkdownBlock,
 	parseMarkdownBlocks,
-} from "../components/markdownBlocks";
-import { ScrollableContent } from "../components/ScrollableContent";
-import { SearchHeader } from "../components/SearchHeader";
+} from "../components/markdownBlocks.ts";
+import { ScrollableContent } from "../components/ScrollableContent.tsx";
+import { SearchHeader } from "../components/SearchHeader.tsx";
 import { uiColors } from "../theme/colors";
-import { DiscussionThread, formatTimestamp } from "./annotations";
-import type { Discussion } from "./types";
+import { DiscussionThread, formatTimestamp } from "./annotations.tsx";
+import type { Discussion } from "./types.ts";
 
 export interface MarkdownReviewViewProps {
 	filePath: string;

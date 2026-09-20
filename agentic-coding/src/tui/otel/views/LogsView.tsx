@@ -3,7 +3,7 @@ import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
 import { hostBodyLines, SearchHeader, SelectableList, uiColors } from "@ui";
 import { createMemo } from "solid-js";
-import type { LogStore } from "../model/logStore";
+import type { LogStore } from "../model/logStore.ts";
 
 const severityColor = (sev: string) => {
 	if (sev === "ERROR" || sev === "FATAL") return uiColors.error;

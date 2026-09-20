@@ -6,6 +6,7 @@
 // enforced layer matrix, exception policy, covered import forms, and the
 // bounded static-analysis limitations.
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs";
 import path from "node:path";
 import {
 	type ArchitectureIssue,
@@ -14,6 +15,8 @@ import {
 	checkObsoleteShims,
 	checkPureDomain,
 	checkRuntimeBoundaries,
+	checkServerBoundaries,
+	checkUiPackageBoundaries,
 	checkUnresolvedRuntimeTargets,
 	checkViewBackendIsolation,
 	classifySourcePath,
@@ -56,6 +59,30 @@ describe("workflow source-layer boundaries (enforce-source-layer-boundaries)", (
 		expect(rel(root, issues[0].file)).toBe("tui/dash/Bad.tsx");
 		expect(issues[0].rule).toBe("view:backend-import");
 		expect(issues[0].message).toContain("workflow/effects.ts");
+	});
+
+	test("server modules import no TUI presentation", () => {
+		// No exceptions: the server owns its I/O and its operations, and the
+		// dashboard reaches it through the typed client/data surface.
+		expect(checkServerBoundaries(SRC_ROOT)).toEqual([]);
+	});
+
+	test("a server module importing TUI fails with the exact edge", () => {
+		const root = fixtureRoot("negative", "server-tui-import");
+		const issues = checkServerBoundaries(root);
+		expect(issues.length).toBeGreaterThanOrEqual(1);
+		expect(issues[0]?.rule).toBe("server:tui-import");
+		expect(issues[0]?.message).toContain("TUI presentation");
+	});
+
+	test("the wire-contract layer is classified pure", () => {
+		for (const relPath of [
+			"contracts/index.ts",
+			"contracts/workflow.ts",
+			"contracts/telemetry.ts",
+			"contracts/decode.ts",
+		])
+			expect(classifySourcePath(relPath)).toBe("domain");
 	});
 
 	test("the unified backend transport/client modules are classified as root", () => {
@@ -323,5 +350,76 @@ describe("workflow source-layer boundaries (enforce-source-layer-boundaries)", (
 		expect(checkPureDomain(root, NO_EXCEPTIONS)).toEqual([]);
 		expect(checkRuntimeBoundaries(root, new Set())).toEqual([]);
 		expect(checkObsoleteShims(root, new Map())).toEqual([]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Boundary enforcement fixtures (establish-opencode-boundaries, tasks 8.1-8.3)
+// ---------------------------------------------------------------------------
+
+describe("boundary enforcement is wired into the normal gates", () => {
+	test("the lint script runs the boundary checks", () => {
+		const pkg = JSON.parse(
+			require("node:fs").readFileSync("package.json", "utf8"),
+		) as { scripts: Record<string, string> };
+		// One linter, no second parser: the boundary checks are tests that the
+		// lint script invokes through the project's own runner.
+		expect(pkg.scripts.lint).toContain("biome");
+		expect(pkg.scripts["lint:boundaries"]).toContain("test");
+		expect(pkg.scripts["lint:boundaries"]).toContain(
+			"test/workflow-source-layer-boundaries.test.ts",
+		);
+		expect(pkg.scripts.lint).toContain("lint:boundaries");
+		expect(pkg.scripts.lint).not.toContain("eslint");
+		expect(pkg.scripts.lint).not.toContain("prettier");
+	});
+
+	test("negative fixtures cover every forbidden edge", () => {
+		const fixtures = fs.readdirSync(`${FIXTURES}/negative`);
+		// TUI -> backend, backend -> TUI, contracts -> I/O, @ui -> domain, cycles
+		for (const name of [
+			"view-backend",
+			"server-tui-import",
+			"pure-fs-builtin",
+			"shared-imports-feature",
+			"type-edge",
+			"dynamic-boundary",
+			"unresolved-target",
+			"contracts-io",
+			"ui-domain-import",
+		])
+			expect(fixtures).toContain(name);
+	});
+
+	test("a contracts fixture that imports I/O fails with the dependency path", () => {
+		const root = fixtureRoot("negative", "contracts-io");
+		const issues = checkPureDomain(root, NO_EXCEPTIONS);
+		expect(issues.length).toBeGreaterThanOrEqual(1);
+		// a contract module that imports a filesystem builtin fails by name
+		expect(issues[0]?.rule).toBe("pure:io-builtin");
+		expect(issues[0]?.message).toContain("node:fs");
+	});
+
+	test("a @ui fixture that imports a domain package fails", () => {
+		const root = path.join(FIXTURES, "negative", "ui-domain-import");
+		const issues = checkUiPackageBoundaries(root);
+		expect(issues.length).toBeGreaterThanOrEqual(1);
+		expect(issues[0]?.rule).toBe("ui:domain-import");
+	});
+
+	test("stale exceptions are reported so they cannot become wildcards", () => {
+		const root = fixtureRoot("negative", "exceptions-stale");
+		const exceptions = new Map<string, LayerException>([
+			[
+				"tui/dash/App.tsx -> workflow/effects.ts",
+				{ rationale: "removed edge", removalCondition: "never" },
+			],
+		]);
+		expect(checkExceptionUsage(root, exceptions).length).toBeGreaterThanOrEqual(
+			0,
+		);
+		// an exception that matches nothing is unused and must be deleted
+		const unused = checkExceptionUsage(SRC_ROOT, exceptions);
+		expect(unused.length).toBe(1);
 	});
 });

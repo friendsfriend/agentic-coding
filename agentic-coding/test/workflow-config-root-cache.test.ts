@@ -6,7 +6,7 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadConfigWithProvenance } from "../src/workflow/effects";
+import { loadConfigWithProvenance } from "../src/workflow/effects.ts";
 
 const roots: string[] = [];
 afterEach(() => {

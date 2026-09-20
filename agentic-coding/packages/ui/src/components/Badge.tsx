@@ -21,9 +21,9 @@ import {
 	createAuroraPalette,
 	createTonePalette,
 	DEFAULT_ANIMATION_HIGHLIGHTS,
-} from "../theme/animationColors";
+} from "../theme/animationColors.ts";
 import { uiColors } from "../theme/colors";
-import { type Highlight, highlightColor } from "./Highlight";
+import { type Highlight, highlightColor } from "./Highlight.tsx";
 
 export interface BadgeProps {
 	text: string | number;

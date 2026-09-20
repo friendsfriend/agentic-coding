@@ -15,11 +15,11 @@
 import { useTerminalDimensions } from "@opentui/solid";
 import { createMemo, type JSX } from "solid-js";
 import { uiColors } from "../theme/colors";
-import type { SummaryEntry } from "./GenericModal";
-import { GenericModal } from "./GenericModal";
-import { formatHelpTextLines, wrapHelpEntries } from "./HelpText";
-import type { Keybind, KeybindSection } from "./keybinds";
-import { ScrollableList } from "./ScrollableList";
+import type { SummaryEntry } from "./GenericModal.tsx";
+import { GenericModal } from "./GenericModal.tsx";
+import { formatHelpTextLines, wrapHelpEntries } from "./HelpText.tsx";
+import type { Keybind, KeybindSection } from "./keybinds.ts";
+import { ScrollableList } from "./ScrollableList.tsx";
 
 export type ListViewModalSizing = "content" | "cap";
 

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { createActionRunStore } from "../stores/action-run-store";
-import { handleActionsKeys } from "./actions-keys";
+import { createActionRunStore } from "../stores/action-run-store.ts";
+import { handleActionsKeys } from "./actions-keys.ts";
 
 type ActionsKeyEvent = Parameters<typeof handleActionsKeys>[0];
 type ActionsAppStore = Parameters<typeof handleActionsKeys>[2];

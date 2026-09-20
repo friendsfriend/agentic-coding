@@ -4,8 +4,8 @@ import {
 	allContextHelpSectionsFromKeymap,
 	getActiveFooterKeybindsFromKeymap,
 	helpSectionsFromKeymap,
-} from "./keymap-metadata";
-import { setupDevenvKeymap } from "./keymap-setup";
+} from "./keymap-metadata.ts";
+import { setupDevenvKeymap } from "./keymap-setup.ts";
 
 describe("keymap metadata projection", () => {
 	test("footer entries come from active keymap metadata", () => {

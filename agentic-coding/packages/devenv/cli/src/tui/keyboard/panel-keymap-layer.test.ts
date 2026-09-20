@@ -1,10 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { createTestKeymap } from "@opentui/keymap/testing";
-import { applyKeymapRuntimeSnapshot } from "./keymap-runtime";
-import { setupDevenvKeymap } from "./keymap-setup";
-import { registerTableKeymapLayer } from "./table-keymap-layer";
-import type { KeyboardActions, KeyboardContext, KeyboardStores } from "./types";
-import { registerWorkflowKeymapLayers } from "./workflow-keymap-layers";
+import { applyKeymapRuntimeSnapshot } from "./keymap-runtime.ts";
+import { setupDevenvKeymap } from "./keymap-setup.ts";
+import { registerTableKeymapLayer } from "./table-keymap-layer.ts";
+import type {
+	KeyboardActions,
+	KeyboardContext,
+	KeyboardStores,
+} from "./types.ts";
+import { registerWorkflowKeymapLayers } from "./workflow-keymap-layers.ts";
 
 type TestKeymap = ReturnType<typeof createTestKeymap>["keymap"];
 

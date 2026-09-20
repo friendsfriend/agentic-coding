@@ -1,4 +1,4 @@
-import type { WorkflowRouting } from "../contracts.ts";
+import type { WorkflowRouting } from "../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../contracts.ts";
 import { decodePlanResult } from "../definitions/contracts.ts";
 import type { StepBehavior } from "./types.ts";

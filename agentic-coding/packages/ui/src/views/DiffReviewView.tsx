@@ -11,24 +11,24 @@
 import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
 import { createEffect, createMemo, For, Show } from "solid-js";
-import type { SplitDiffLine } from "../components/diffView";
+import type { SplitDiffLine } from "../components/diffView.ts";
 import {
 	buildSplitDiffLines,
 	type DiffLine,
 	parseDiffLines,
-} from "../components/diffView";
-import { GenericModal } from "../components/GenericModal";
-import { formatHelpTextLines } from "../components/HelpText";
-import { MarkdownBlockView } from "../components/MarkdownViewer";
+} from "../components/diffView.ts";
+import { GenericModal } from "../components/GenericModal.tsx";
+import { formatHelpTextLines } from "../components/HelpText.tsx";
+import { MarkdownBlockView } from "../components/MarkdownViewer.tsx";
 import {
 	type MarkdownBlock,
 	parseMarkdownBlocks,
-} from "../components/markdownBlocks";
-import { ScrollableContent } from "../components/ScrollableContent";
-import { SearchHeader } from "../components/SearchHeader";
+} from "../components/markdownBlocks.ts";
+import { ScrollableContent } from "../components/ScrollableContent.tsx";
+import { SearchHeader } from "../components/SearchHeader.tsx";
 import { uiColors } from "../theme/colors";
-import { DiscussionThread, ReplyAffordance } from "./annotations";
-import type { Discussion } from "./types";
+import { DiscussionThread, ReplyAffordance } from "./annotations.tsx";
+import type { Discussion } from "./types.ts";
 
 /** True for a whole-file add or delete (the diff has no old/new side). */
 export function isDiffFileAddedOrDeleted(diff: string): boolean {

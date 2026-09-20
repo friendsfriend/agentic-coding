@@ -6,7 +6,7 @@ import { expect, test } from "bun:test";
 import {
 	captureConsoleIssues,
 	formatConsoleIssue,
-} from "../../src/tui/dash/consoleCapture";
+} from "../../src/tui/dash/consoleCapture.ts";
 
 test("formatConsoleIssue flattens arguments and bounds the message", () => {
 	expect(formatConsoleIssue(["a", new Error("b"), { c: 1 }])).toBe(

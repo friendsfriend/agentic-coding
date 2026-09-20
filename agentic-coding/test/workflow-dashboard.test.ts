@@ -5,20 +5,20 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-	dashboardTestHelpers,
-	listWorkflows,
-	listWorkflowsFromCatalog,
-	loadLocalChanges,
-} from "../src/tui/dash/data.ts";
+import type { WorkflowView } from "../src/contracts/workflow.ts";
 import {
 	previewWorkflowRepair,
 	repairWorkflow,
 	runWorkflowAction,
 	setReturnInProcess,
 	viewToDashboardState,
-} from "../src/tui/dash/engine.ts";
-import type { WorkflowView } from "../src/workflow/contracts.ts";
+} from "../src/server/operations/engine.ts";
+import {
+	dashboardTestHelpers,
+	listWorkflows,
+	listWorkflowsFromCatalog,
+	loadLocalChanges,
+} from "../src/server/operations/observations.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import { canonicalStorePath, WorkflowEngine } from "../src/workflow/runtime.ts";
 

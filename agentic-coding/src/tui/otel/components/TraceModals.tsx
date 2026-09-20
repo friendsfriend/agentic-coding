@@ -9,7 +9,7 @@ import type {
 	SortCriterion,
 	SortField,
 	StatusFilter,
-} from "../model/traceStore";
+} from "../model/traceStore.ts";
 
 const sortFields: Array<{ field: SortField; label: string }> = [
 	{ field: "received", label: "Received time" },

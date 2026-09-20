@@ -4,7 +4,7 @@
 // Full-page use renders inside `ContentPanel` and reserves the host chrome; an
 // embedding dialog passes `availableLines` (the dialog's content rows), which
 // drops the panel chrome and sizes the list to the dialog instead.
-import type { ChangeRequestChange } from "@devenv/types";
+import type { ChangeRequestChange } from "../types";
 
 /** The shell's review rows carry a finding count the env type does not declare. */
 type ReviewChange = ChangeRequestChange & { review_finding_count?: number };
@@ -12,15 +12,15 @@ type ReviewChange = ChangeRequestChange & { review_finding_count?: number };
 import { TextAttributes } from "@opentui/core";
 import { createMemo, Show } from "solid-js";
 import { uiColors } from "../theme/colors";
-import { Badge } from "./Badge";
-import { CenteredState } from "./CenteredState";
-import { ContentPanel } from "./ContentStack";
-import { FilterStatusBar } from "./FilterStatusBar";
-import { HighlightedText, highlightColor } from "./Highlight";
-import { hostChromeLines, hostNamesPage } from "./hostChrome";
-import { MatchedText } from "./MatchedText";
-import { LAYOUT_CHROME_LINES, ScrollableList } from "./ScrollableList";
-import { SearchHeader } from "./SearchHeader";
+import { Badge } from "./Badge.tsx";
+import { CenteredState } from "./CenteredState.tsx";
+import { ContentPanel } from "./ContentStack.tsx";
+import { FilterStatusBar } from "./FilterStatusBar.tsx";
+import { HighlightedText, highlightColor } from "./Highlight.tsx";
+import { hostChromeLines, hostNamesPage } from "./hostChrome.ts";
+import { MatchedText } from "./MatchedText.tsx";
+import { LAYOUT_CHROME_LINES, ScrollableList } from "./ScrollableList.tsx";
+import { SearchHeader } from "./SearchHeader.tsx";
 
 export interface ChangedFilesViewProps {
 	changes: ReviewChange[];

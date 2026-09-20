@@ -3,7 +3,7 @@ import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
 import { HighlightedText, Selectable, uiColors } from "@ui";
 import { createMemo, For } from "solid-js";
-import type { TreeNode } from "../model/types";
+import type { TreeNode } from "../../../contracts/telemetry.ts";
 
 const durationMs = (node: TreeNode) =>
 	Math.max(

@@ -8,7 +8,7 @@
 import { TextAttributes } from "@opentui/core";
 import { For, Show } from "solid-js";
 import { uiColors } from "../theme/colors";
-import type { Discussion } from "./types";
+import type { Discussion } from "./types.ts";
 
 export function ReplyAffordance(props: { active: boolean; text: string }) {
 	return (

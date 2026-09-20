@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { debounce, watchDirectories } from "../../src/tui/dash/watchRefresh";
+import { debounce, watchDirectories } from "../../src/tui/dash/watchRefresh.ts";
 
 const roots: string[] = [];
 afterEach(() => {

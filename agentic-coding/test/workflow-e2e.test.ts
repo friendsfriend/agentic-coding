@@ -7,7 +7,7 @@ import type {
 	ResolvedProfile,
 	WorkflowRouting,
 	WorkflowView,
-} from "../src/workflow/contracts.ts";
+} from "../src/contracts/workflow.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import { WorkflowEngine } from "../src/workflow/runtime.ts";
 

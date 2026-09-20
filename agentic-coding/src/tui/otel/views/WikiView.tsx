@@ -19,19 +19,17 @@ import {
 	onMount,
 	Show,
 } from "solid-js";
-import type {
-	WikiConcept,
-	WikiReviewComment,
-	WikiTreeNode,
-} from "../../../workflow/wiki";
 import {
 	buildWikiTree,
 	flattenWikiTree,
 	listConcepts,
 	readConcept,
 	renderDocument,
-} from "../../../workflow/wiki";
-import { notify } from "../app/notifications";
+	type WikiConcept,
+	type WikiReviewComment,
+	type WikiTreeNode,
+} from "../../data/wiki.ts";
+import { notify } from "../app/notifications.ts";
 
 export interface WikiViewProps {
 	keymap: Keymap<Renderable, KeyEvent>;

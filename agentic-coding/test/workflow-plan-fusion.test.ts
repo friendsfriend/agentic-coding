@@ -4,12 +4,13 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { parseFusionProfiles } from "../src/workflow/cli.ts";
 import type {
 	ResolvedProfile,
+	WorkflowCommand,
 	WorkflowRouting,
 	WorkflowView,
-} from "../src/workflow/contracts.ts";
+} from "../src/contracts/workflow.ts";
+import { parseFusionProfiles } from "../src/workflow/cli.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import { effectRunnerTest } from "../src/workflow/effect-runner.ts";
 import { AGENT_DEFINITIONS } from "../src/workflow/embedded.generated.ts";
@@ -125,10 +126,7 @@ function handoffCommand(
 	role: string,
 	payload: Record<string, unknown>,
 	cache: ReturnType<typeof tokenCache>,
-): Extract<
-	import("../src/workflow/contracts.ts").WorkflowCommand,
-	{ type: "agent.handoff" }
-> {
+): Extract<WorkflowCommand, { type: "agent.handoff" }> {
 	const summary = requireDefined(
 		view.runs.find(
 			(run) => run.role === role && ["pending", "working"].includes(run.status),

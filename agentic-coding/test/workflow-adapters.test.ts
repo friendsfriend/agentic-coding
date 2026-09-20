@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Effect } from "effect";
+import type { Assignment, ResolvedProfile } from "../src/contracts/workflow.ts";
 import {
 	HerdrLifecycle,
 	OpenCodeAdapter,
@@ -10,13 +11,11 @@ import {
 	PiAdapter,
 } from "../src/workflow/adapters.ts";
 import { renderAssignment } from "../src/workflow/assignment.ts";
-import type { Assignment, ResolvedProfile } from "../src/workflow/contracts.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import {
 	parseAgentsConfig,
 	profileFor,
 	resolveRouting,
-	validateResearchRepositoryProfile,
 } from "../src/workflow/profiles.ts";
 
 class FakeHerdr {
@@ -141,20 +140,6 @@ describe("profiles, assignments, and adapters", () => {
 			config,
 		);
 		expect(routing.routes).toHaveLength(2);
-	});
-	test("research normalization preserves configured tools and extensions", () => {
-		const profile = {
-			...baseProfile("pi"),
-			tools: ["read", "web_search"],
-			extensions: ["/tmp/research-extension.ts"],
-			capabilities: ["prompt", "shell", "edit"] as const,
-		};
-		const normalized = validateResearchRepositoryProfile(profile);
-		expect(normalized.tools).toEqual(["read", "web_search"]);
-		expect(normalized.extensions).toEqual(["/tmp/research-extension.ts"]);
-		expect(normalized.capabilities).toEqual(["prompt", "read-only"]);
-		expect(normalized.readOnly).toBe(true);
-		expect(normalized.digest).not.toBe(profile.digest);
 	});
 	test("renderer pins assets, bounds prompt, and uses generic handoff only", () => {
 		const step = registerBuiltins().step("core.verification");
@@ -331,7 +316,7 @@ describe("profiles, assignments, and adapters", () => {
 			}
 		}
 	});
-	test("research Pi launch forces read-only tools and suppresses configured extensions", async () => {
+	test("research Pi launch keeps the profile's full tool access", async () => {
 		const fake = new FakeHerdr();
 		const adapter = new PiAdapter(new HerdrLifecycle(fake, () => Effect.void));
 		const current = assignment("core.research", { role: "researcher" });
@@ -345,8 +330,10 @@ describe("profiles, assignments, and adapters", () => {
 				adapter.launch({
 					profile: {
 						...baseProfile("pi"),
-						tools: ["read", "web_search", "bash", "edit", "write"],
+						tools: [],
 						extensions: ["/tmp/research-extension.ts"],
+						readOnly: false,
+						capabilities: ["prompt", "shell", "edit"],
 					},
 					assignment: current,
 					rendered,
@@ -360,15 +347,14 @@ describe("profiles, assignments, and adapters", () => {
 				(call) => call[0] === "agent" && call[1] === "start",
 			);
 			if (!start) throw new Error("expected agent start call");
-			expect(start).toContain("--no-extensions");
-			expect(start).not.toContain("/tmp/research-extension.ts");
-			expect(start).toContain("--tools");
-			expect(start).toContain("read");
+			expect(start).not.toContain("--tools");
+			expect(start).not.toContain("--no-extensions");
+			expect(start).toContain("/tmp/research-extension.ts");
 		} finally {
 			fs.rmSync(cwd, { recursive: true, force: true });
 		}
 	});
-	test("research OpenCode launch enforces read-only permissions", async () => {
+	test("research OpenCode launch keeps full permissions", async () => {
 		for (const [Adapter, runtime] of [
 			[OpenCodeAdapter, "opencode"],
 			[OpenCodeV2Adapter, "opencode-v2"],
@@ -387,6 +373,8 @@ describe("profiles, assignments, and adapters", () => {
 						profile: {
 							...baseProfile(runtime),
 							tools: ["read", "web_search", "custom_tool"],
+							readOnly: false,
+							capabilities: ["prompt", "shell", "edit"],
 						},
 						assignment: current,
 						rendered,
@@ -409,8 +397,8 @@ describe("profiles, assignments, and adapters", () => {
 					),
 				) as { permission: Record<string, string> };
 				expect(config.permission).toEqual({
-					edit: "deny",
-					bash: "deny",
+					edit: "allow",
+					bash: "allow",
 					read: "allow",
 				});
 			} finally {

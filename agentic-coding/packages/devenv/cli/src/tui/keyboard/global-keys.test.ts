@@ -4,14 +4,14 @@ import {
 	exitApp,
 	registerGracefulShutdownHandler,
 	setExitRenderer,
-} from "../exit";
-import { handleGlobalKeys } from "./global-keys";
+} from "../exit.ts";
+import { handleGlobalKeys } from "./global-keys.ts";
 import type {
 	KeyboardActions,
 	KeyboardContext,
 	KeyboardEvent,
 	KeyboardStores,
-} from "./types";
+} from "./types.ts";
 
 const signalStore = (overrides: Record<string, unknown> = {}) =>
 	new Proxy(overrides, {

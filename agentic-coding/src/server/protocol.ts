@@ -1,15 +1,29 @@
-// Wire contracts for the unified Bun backend API (expose-unified-bun-backend,
-// task 1.2). The server is the single owner of workflow application scopes,
-// observations, telemetry and (later) event delivery; the TUI and CLI are
-// typed clients.
-//
-// Every request/response shape is an Effect Schema, decoded through the same
-// `decodeContract` helper the workflow layer uses, so a malformed or
-// over-broad payload fails as a bounded structured error rather than reaching
-// an operation. Secrets and capability tokens travel in headers, never in a
-// body, query string or log line.
-import { Schema } from "effect";
-import { decodeContract } from "../workflow/schema.ts";
+import type { Schema } from "effect";
+import {
+	agentHandoffRequestSchema,
+	agentQuestionRequestSchema,
+	agentResearchHandoffRequestSchema,
+	agentsMutationRequestSchema,
+	reviewSaveRequestSchema,
+	workflowActionRequestSchema,
+	workflowExecuteRequestSchema,
+	workflowQuestionRequestSchema,
+	workflowRepairRequestSchema,
+	workflowStartRequestSchema,
+} from "../contracts/actions.ts";
+import { credentialRespondSchema } from "../contracts/credential.ts";
+import { decodeContract } from "../contracts/decode.ts";
+import {
+	type ObservationRequest,
+	observeRequestSchema,
+} from "../contracts/environment.ts";
+import {
+	telemetryPruneRequestSchema,
+	telemetryScanRequestSchema,
+	telemetrySpansRequestSchema,
+	telemetryTracesRequestSchema,
+	telemetryWatchRequestSchema,
+} from "../contracts/telemetry.ts";
 
 /** Bumped whenever a breaking wire change lands; clients send it back. */
 export const SERVER_API_VERSION = "v1";
@@ -28,19 +42,27 @@ export const CREDENTIAL_TIMEOUT_MS = 120_000;
  * cover. */
 export type RouteOwner = "bun";
 
+/** Ownership domains a route (or an observation kind) can belong to. */
+export const ROUTE_DOMAINS = [
+	"health",
+	"observe",
+	"workflow",
+	"telemetry",
+	"events",
+	"credentials",
+	"environment",
+	"integrations",
+	"git",
+	"wiki",
+	"herdr",
+] as const;
+export type RouteDomain = (typeof ROUTE_DOMAINS)[number];
+
 export interface RouteOwnership {
 	readonly method: "GET" | "POST";
 	readonly path: string;
 	readonly owner: RouteOwner;
-	readonly domain:
-		| "health"
-		| "observe"
-		| "workflow"
-		| "telemetry"
-		| "events"
-		| "credentials"
-		| "environment"
-		| "integrations";
+	readonly domain: RouteDomain;
 }
 
 /** Static route ownership manifest (design decision 2): the server never
@@ -188,212 +210,143 @@ export function routeOwner(
 }
 
 // ---------------------------------------------------------------------------
-// Request/response schemas
+// Request-schema manifest
 // ---------------------------------------------------------------------------
+// The route's request contract lives here, not at the call site: a route whose
+// body is not decoded through a contract schema cannot be registered, and a
+// test can assert the manifest and the served routes agree.
 
-const observedState = Schema.Unknown;
-const localChange = Schema.Struct({
-	oldPath: Schema.optional(Schema.String),
-	newPath: Schema.String,
-	linesAdded: Schema.Number,
-	linesDeleted: Schema.Number,
-	newFile: Schema.Boolean,
-	deletedFile: Schema.Boolean,
-	renamedFile: Schema.Boolean,
-});
+export interface RouteRequestSchema {
+	readonly path: string;
+	/** Contract id used in decode diagnostics. */
+	readonly schemaId: string;
+	// biome-ignore lint/suspicious/noExplicitAny: Effect Schema generics don't line up with domain types; mirror decodeContract.
+	readonly schema: Schema.Schema<any, any, never>;
+}
 
-const observationSchema = Schema.Union(
-	Schema.Struct({ kind: Schema.Literal("workflows") }),
-	Schema.Struct({ kind: Schema.Literal("projects") }),
-	Schema.Struct({
-		kind: Schema.Literal("dashboard"),
-		repo: Schema.String,
-		workflowId: Schema.String,
-	}),
-	Schema.Struct({
-		kind: Schema.Literal("artifacts"),
-		state: observedState,
-	}),
-	Schema.Struct({
-		kind: Schema.Literal("artifact-content"),
-		state: observedState,
-		artifact: Schema.String,
-	}),
-	Schema.Struct({
-		kind: Schema.Literal("wiki-changes"),
-		repo: Schema.String,
-		workflowId: Schema.String,
-	}),
-	Schema.Struct({
-		kind: Schema.Literal("wiki-diff"),
-		repo: Schema.String,
-		workflowId: Schema.String,
-		file: localChange,
-	}),
-	Schema.Struct({
-		kind: Schema.Literal("local-changes"),
-		repo: Schema.String,
-		workflowId: Schema.String,
-	}),
-	Schema.Struct({
-		kind: Schema.Literal("local-diff"),
-		repo: Schema.String,
-		workflowId: Schema.String,
-		file: localChange,
-	}),
-	Schema.Struct({
-		kind: Schema.Literal("verifier-findings"),
-		repo: Schema.String,
-		workflowId: Schema.String,
-		role: Schema.String,
-	}),
-	Schema.Struct({
-		kind: Schema.Literal("verifier-report"),
-		repo: Schema.String,
-		workflowId: Schema.String,
-		role: Schema.String,
-	}),
-	Schema.Struct({
-		kind: Schema.Literal("developer-review-findings"),
-		repo: Schema.String,
-		workflowId: Schema.String,
-	}),
-	Schema.Struct({
-		kind: Schema.Literal("repair-preview"),
-		repo: Schema.String,
-		workflowId: Schema.String,
-	}),
-	Schema.Struct({ kind: Schema.Literal("changes"), repo: Schema.String }),
-);
+export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
+	{
+		path: "/api/v1/observe",
+		schemaId: "server.observe",
+		schema: observeRequestSchema,
+	},
+	{
+		path: "/api/v1/workflow/action",
+		schemaId: "server.workflow.action",
+		schema: workflowActionRequestSchema,
+	},
+	{
+		path: "/api/v1/workflow/start",
+		schemaId: "server.workflow.start",
+		schema: workflowStartRequestSchema,
+	},
+	{
+		path: "/api/v1/workflow/repair",
+		schemaId: "server.workflow.repair",
+		schema: workflowRepairRequestSchema,
+	},
+	{
+		path: "/api/v1/workflow/question",
+		schemaId: "server.workflow.question",
+		schema: workflowQuestionRequestSchema,
+	},
+	{
+		path: "/api/v1/workflow/review-save",
+		schemaId: "server.workflow.review-save",
+		schema: reviewSaveRequestSchema,
+	},
+	{
+		path: "/api/v1/workflow/execute",
+		schemaId: "server.workflow.execute",
+		schema: workflowExecuteRequestSchema,
+	},
+	{
+		path: "/api/v1/agent/handoff",
+		schemaId: "server.agent.handoff",
+		schema: agentHandoffRequestSchema,
+	},
+	{
+		path: "/api/v1/agent/question",
+		schemaId: "server.agent.question",
+		schema: agentQuestionRequestSchema,
+	},
+	{
+		path: "/api/v1/agent/research-handoff",
+		schemaId: "server.agent.research-handoff",
+		schema: agentResearchHandoffRequestSchema,
+	},
+	{
+		path: "/api/v1/config/agents",
+		schemaId: "server.config.agents",
+		schema: agentsMutationRequestSchema,
+	},
+	{
+		path: "/api/v1/credentials/respond",
+		schemaId: "server.credentials.respond",
+		schema: credentialRespondSchema,
+	},
+	{
+		path: "/api/v1/telemetry/traces",
+		schemaId: "server.telemetry.traces",
+		schema: telemetryTracesRequestSchema,
+	},
+	{
+		path: "/api/v1/telemetry/spans",
+		schemaId: "server.telemetry.spans",
+		schema: telemetrySpansRequestSchema,
+	},
+	{
+		path: "/api/v1/telemetry/watch",
+		schemaId: "server.telemetry.watch",
+		schema: telemetryWatchRequestSchema,
+	},
+	{
+		path: "/api/v1/telemetry/scan",
+		schemaId: "server.telemetry.scan",
+		schema: telemetryScanRequestSchema,
+	},
+	{
+		path: "/api/v1/telemetry/prune",
+		schemaId: "server.telemetry.prune",
+		schema: telemetryPruneRequestSchema,
+	},
+];
 
-export type ObservationRequest = typeof observationSchema.Type;
+/** Decode a route body through the schema the manifest declares for it. */
+export function decodeRouteRequest<T>(path: string, value: unknown): T {
+	const route = ROUTE_REQUESTS.find((entry) => entry.path === path);
+	if (!route) throw new Error(`no request contract registered for ${path}`);
+	return decodeRequest<T>(route.schemaId, route.schema, value);
+}
 
-export const observeRequestSchema = Schema.Struct({
-	observation: observationSchema,
-});
+// ---------------------------------------------------------------------------
+// Observation ownership
+// ---------------------------------------------------------------------------
+// Git, wiki and Herdr reads travel as observation kinds on the versioned
+// observe route; each kind names the ownership domain it belongs to, so a
+// domain cannot be served without appearing in the manifest.
 
-export const workflowViewRequestSchema = Schema.Struct({
-	repo: Schema.String,
-	workflowId: Schema.String,
-});
+export interface ObservationOwnership {
+	readonly kind: ObservationRequest["kind"];
+	readonly domain: RouteDomain;
+}
 
-export const workflowActionRequestSchema = Schema.Struct({
-	repo: Schema.String,
-	workflowId: Schema.String,
-	revision: Schema.Number,
-	actionId: Schema.String,
-	input: Schema.optional(Schema.Unknown),
-});
-
-export const workflowStartRequestSchema = Schema.Struct({
-	repo: Schema.String,
-	ticket: Schema.optional(Schema.String),
-	workflowId: Schema.String,
-	task: Schema.optional(Schema.String),
-	mode: Schema.String,
-	workflowType: Schema.optional(Schema.String),
-	preset: Schema.optional(Schema.String),
-});
-
-export const workflowRepairRequestSchema = Schema.Struct({
-	repo: Schema.String,
-	workflowId: Schema.String,
-	revision: Schema.Number,
-	targetStep: Schema.String,
-	reason: Schema.optional(Schema.String),
-});
-
-export const workflowQuestionRequestSchema = Schema.Struct({
-	repo: Schema.String,
-	workflowId: Schema.String,
-	revision: Schema.Number,
-	questionId: Schema.String,
-	answer: Schema.Unknown,
-});
-
-export const credentialRespondSchema = Schema.Struct({
-	ownerId: Schema.String,
-	interactionId: Schema.String,
-	value: Schema.String,
-});
-
-export const reviewSaveRequestSchema = Schema.Struct({
-	repo: Schema.String,
-	workflowId: Schema.String,
-	kind: Schema.Literal("developer", "plan", "wiki"),
-	comments: Schema.Array(Schema.Unknown),
-});
-
-export const workflowExecuteRequestSchema = Schema.Struct({
-	repo: Schema.String,
-	workflowId: Schema.optional(Schema.String),
-});
-
-export const telemetryScanRequestSchema = Schema.Struct({
-	repo: Schema.String,
-});
-
-export const telemetryPruneRequestSchema = Schema.Struct({
-	days: Schema.optional(Schema.Number),
-});
-
-/** One page of the trace list: entries are workflows, newest first. */
-export const telemetryTracesRequestSchema = Schema.Struct({
-	page: Schema.optional(Schema.Number),
-	perPage: Schema.optional(Schema.Number),
-	changeId: Schema.optional(Schema.String),
-});
-
-/** Span reads are bounded: either one workflow's spans or the newest spans
- * (the service graph), never the whole history. */
-export const telemetrySpansRequestSchema = Schema.Struct({
-	changeId: Schema.optional(Schema.String),
-	limit: Schema.optional(Schema.Number),
-});
-
-export const telemetryWatchRequestSchema = Schema.Struct({
-	repo: Schema.String,
-});
-
-/** Managed-agent handoff across the transport (task 1.4/3.4): the CLI forwards
- * its authenticated caller environment and run capability; the server resolves
- * the run identity and the engine independently validates the capability, so
- * the instance session and the agent run remain distinct authorities. */
-export const agentHandoffRequestSchema = Schema.Struct({
-	repo: Schema.String,
-	environment: Schema.Record({ key: Schema.String, value: Schema.String }),
-	outcome: Schema.Literal("complete", "blocked", "failed"),
-	artifact: Schema.optional(Schema.String),
-	message: Schema.optional(Schema.String),
-	drain: Schema.optional(Schema.Boolean),
-});
-
-/** Agent-config mutation: the payload is validated by the typed mutation
- * applier, which rejects unknown kinds and malformed profile/preset tables. */
-export const agentsMutationRequestSchema = Schema.Struct({
-	repository: Schema.optional(Schema.String),
-	/** Revision the client read before editing; the server refuses a write when
-	 * the effective agents section changed since (centralize-application-
-	 * settings, task 2.3). Omitted by callers that do not track a revision. */
-	expectedRevision: Schema.optional(Schema.String),
-	mutation: Schema.Unknown,
-});
-
-/** Managed-agent developer question across the transport. The request signal
- * bounds the wait; the engine validates the run capability. */
-export const agentQuestionRequestSchema = Schema.Struct({
-	repo: Schema.String,
-	environment: Schema.Record({ key: Schema.String, value: Schema.String }),
-	input: Schema.Unknown,
-	timeoutMs: Schema.optional(Schema.Number),
-});
-
-/** Managed researcher structured handoff across the transport. */
-export const agentResearchHandoffRequestSchema = Schema.Struct({
-	repo: Schema.String,
-	environment: Schema.Record({ key: Schema.String, value: Schema.String }),
-	handoff: Schema.Unknown,
-});
+export const OBSERVATION_OWNERSHIP: readonly ObservationOwnership[] = [
+	{ kind: "workflows", domain: "workflow" },
+	{ kind: "projects", domain: "environment" },
+	{ kind: "dashboard", domain: "workflow" },
+	{ kind: "artifacts", domain: "workflow" },
+	{ kind: "artifact-content", domain: "workflow" },
+	{ kind: "wiki-changes", domain: "wiki" },
+	{ kind: "wiki-diff", domain: "wiki" },
+	{ kind: "local-changes", domain: "git" },
+	{ kind: "local-diff", domain: "git" },
+	{ kind: "changes", domain: "git" },
+	{ kind: "verifier-findings", domain: "workflow" },
+	{ kind: "verifier-report", domain: "workflow" },
+	{ kind: "developer-review-findings", domain: "workflow" },
+	{ kind: "repair-preview", domain: "workflow" },
+];
 
 /** Decode a request body through its schema, throwing `ContractFailure`.
  * `onExcessProperty: error` keeps an unknown field from being silently

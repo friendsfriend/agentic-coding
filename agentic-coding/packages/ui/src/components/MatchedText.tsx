@@ -2,9 +2,9 @@
 // Compatibility wrapper: `Text` owns the implementation (semantic colour plus
 // search-match marking). Kept so existing call sites keep working while they
 // migrate to `Text` directly.
-import { Text } from "./Text";
+import { Text } from "./Text.tsx";
 
-export { splitMatches } from "./Text";
+export { splitMatches } from "./Text.tsx";
 
 export interface MatchedTextProps {
 	text: string;

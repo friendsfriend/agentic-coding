@@ -8,12 +8,14 @@
 // refused start apart from a workflow that was durably accepted and then failed
 // its Herdr handoff — without ever submitting a second workflow.
 import { existsSync } from "node:fs";
-import { BackendClientError, backendClient } from "../../server/client";
+import { BackendClientError } from "../../server/client.ts";
+import { gatewayOrUndefined } from "../data/index.ts";
+import { startWorkflow } from "../data/workflow.ts";
 import {
 	onWorkflowExecutionError,
+	serverOwnsExecutionEvents,
 	workflowExecutionError,
-} from "../../workflow/execution-coordinator";
-import { startWorkflow } from "./observations";
+} from "./live.ts";
 
 /**
  * Immutable launch context of the creation form. It replaces the former
@@ -96,8 +98,13 @@ export async function launchWorkflow(
 ): Promise<LaunchOutcome> {
 	try {
 		const message = await startWorkflow({
-			...input,
-			workflowType: input.workflowType,
+			repo: input.repo,
+			workflowId: input.workflowId,
+			mode: input.mode,
+			...(input.ticket ? { ticket: input.ticket } : {}),
+			...(input.task ? { task: input.task } : {}),
+			...(input.workflowType ? { workflowType: input.workflowType } : {}),
+			...(input.preset ? { preset: input.preset } : {}),
 		});
 		const workflowId = STARTED.exec(message)?.[1];
 		if (workflowId) return { kind: "accepted", workflowId, message };
@@ -113,7 +120,7 @@ export async function launchWorkflow(
 			return error.status < 500
 				? { kind: "rejected", message }
 				: { kind: "uncertain", message };
-		return backendClient()
+		return serverOwnsExecutionEvents()
 			? { kind: "uncertain", message }
 			: { kind: "rejected", message };
 	}
@@ -146,8 +153,8 @@ export function watchAcceptedHandoff(
 	workflowId: string,
 	onFailure: (message: string) => void,
 ): () => void {
-	const client = backendClient();
-	if (!client) {
+	const gateway = gatewayOrUndefined();
+	if (!gateway) {
 		// Managed/test route: the execution coordinator lives in this process.
 		return onWorkflowExecutionError(repo, (failedId) => {
 			if (failedId !== workflowId) return;
@@ -158,12 +165,11 @@ export function watchAcceptedHandoff(
 		});
 	}
 	let done = false;
-	const subscription = client.subscribe({
+	const subscription = gateway.subscribe({
 		onEvent: (event) => {
 			if (done) return;
-			const envelope = event as { resource?: string; runId?: string };
-			if (envelope.resource !== repo || envelope.runId !== workflowId) return;
-			void client
+			if (event.resource !== repo || event.runId !== workflowId) return;
+			void gateway
 				.view(repo, workflowId)
 				.then((view) => {
 					if (done || view.status !== "attention-required") return;

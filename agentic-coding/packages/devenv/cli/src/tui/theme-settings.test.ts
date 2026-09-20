@@ -3,7 +3,7 @@ import type { TerminalColors } from "@opentui/core";
 import {
 	loadRendererThemeColors,
 	terminalColorsToThemeColors,
-} from "./theme-settings";
+} from "./theme-settings.ts";
 
 const terminalColors = (
 	overrides: Partial<TerminalColors> = {},

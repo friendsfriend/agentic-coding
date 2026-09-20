@@ -1,11 +1,13 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { SshHost } from "@devenv/types";
 import { TextAttributes } from "@opentui/core";
-import { highlightColor, ListViewModal, MatchedText } from "@ui";
 import { createMemo, Show } from "solid-js";
-import { formatHelpText } from "../components/HelpText";
+import { formatHelpText } from "../components/HelpText.tsx";
+import { highlightColor } from "../components/Highlight";
+import { ListViewModal } from "../components/ListViewModal";
+import { MatchedText } from "../components/MatchedText";
 import { uiColors } from "../theme/colors";
+import type { SshHost } from "../types";
 
 export interface SshHostPickerViewProps {
 	hosts: SshHost[];

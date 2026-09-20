@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { formatHelpText, formatHelpTextLines } from "../components/HelpText";
+import {
+	formatHelpText,
+	formatHelpTextLines,
+} from "../components/HelpText.tsx";
 
 const entries = [
 	{ key: "j/k", action: "Nav" },

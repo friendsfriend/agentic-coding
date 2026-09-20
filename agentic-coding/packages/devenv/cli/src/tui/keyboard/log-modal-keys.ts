@@ -1,12 +1,12 @@
-import { handleHorizontalScrollKey } from "./horizontal-scroll";
+import { handleHorizontalScrollKey } from "./horizontal-scroll.ts";
 
-import { isDownKey, isUpKey } from "./nav-keys";
+import { isDownKey, isUpKey } from "./nav-keys.ts";
 import type {
 	KeyboardActions,
 	KeyboardContext,
 	KeyboardEvent,
 	KeyboardStores,
-} from "./types";
+} from "./types.ts";
 /**
  * Handles keyboard events for the Log modal:
  * - AI prompt mode (type prompt, submit, dismiss)

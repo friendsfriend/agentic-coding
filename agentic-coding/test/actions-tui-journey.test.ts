@@ -12,7 +12,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createActionRunStore } from "../packages/devenv/cli/src/tui/stores/action-run-store";
+import { createActionRunStore } from "../packages/devenv/cli/src/tui/stores/action-run-store.ts";
 import {
 	type ActionRouteContext,
 	type ActionRouteServices,

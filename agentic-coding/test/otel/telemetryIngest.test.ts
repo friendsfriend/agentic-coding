@@ -2,12 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { TraceDb } from "../../src/tui/otel/model/db";
+import { TraceDb } from "../../src/server/telemetry-db";
 import {
 	parseLine,
 	parseTelemetryJsonl,
 	parseTelemetryLine,
-} from "../../src/tui/otel/model/parser";
+} from "../../src/server/telemetry-parser";
 import { workflowTraceId } from "../../src/workflow/observability.ts";
 
 const TELEMETRY = [

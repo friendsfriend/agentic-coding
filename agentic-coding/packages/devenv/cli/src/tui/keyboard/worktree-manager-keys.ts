@@ -1,10 +1,10 @@
-import { isDownKey, isUpKey } from "./nav-keys";
+import { isDownKey, isUpKey } from "./nav-keys.ts";
 import type {
 	KeyboardActions,
 	KeyboardContext,
 	KeyboardEvent,
 	KeyboardStores,
-} from "./types";
+} from "./types.ts";
 /**
  * Handles keyboard events for the Worktree Manager modal.
  * Consumes all events while the modal is open.

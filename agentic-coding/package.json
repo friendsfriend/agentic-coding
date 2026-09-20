@@ -17,11 +17,12 @@
 		"test:devenv": "bun test packages/devenv",
 		"verify": "bun run lint && bun run type-check && bun run test && bun run test:devenv && bun run build",
 		"type-check": "tsc --noEmit",
-		"lint": "biome check .",
+		"lint": "biome check . && bun run lint:boundaries",
 		"format": "biome format --write .",
 		"build": "bun run scripts/build.ts",
 		"dev:ui": "bun --preload ./node_modules/@opentui/solid/scripts/preload.js src/tui/index.tsx --home",
-		"dev:ui-dash": "bun --preload ./node_modules/@opentui/solid/scripts/preload.js src/tui/index.tsx"
+		"dev:ui-dash": "bun --preload ./node_modules/@opentui/solid/scripts/preload.js src/tui/index.tsx",
+		"lint:boundaries": "bun test test/workflow-source-layer-boundaries.test.ts test/contracts/boundaries.test.ts test/data/boundaries.test.ts test/dash/viewIsolation.test.ts test/ui/packageBoundaries.test.ts"
 	},
 	"dependencies": {
 		"@grpc/grpc-js": "^1.14.4",

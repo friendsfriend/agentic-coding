@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { runningTextFrame } from "../components/RunningText";
+import { runningTextFrame } from "../components/RunningText.tsx";
 
 describe("runningTextFrame", () => {
 	test("keeps left alignment behavior by default", () => {

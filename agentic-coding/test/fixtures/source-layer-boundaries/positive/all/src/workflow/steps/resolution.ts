@@ -3,8 +3,8 @@
 // modules may import pure-safe builtins (node:path/node:crypto) but not I/O
 // builtins.
 import path from "node:path";
-import type { Snapshot } from "../contracts";
-import { catalog } from "../definitions";
+import type { Snapshot } from "../contracts.ts"
+import { catalog } from "../definitions/index.ts"
 
 export function resolution(input: string): string {
 	return path.join(catalog[0], input);

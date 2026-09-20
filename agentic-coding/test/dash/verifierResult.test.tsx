@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
 import { onCleanup } from "solid-js";
-import { App } from "../../src/tui/dash/App";
+import { App } from "../../src/tui/dash/App.tsx";
 
 function TestDashboard() {
 	const renderer = useRenderer();

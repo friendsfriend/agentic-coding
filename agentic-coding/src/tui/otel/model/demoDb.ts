@@ -1,7 +1,11 @@
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { TraceDb } from "./db";
-import type { LogData, MetricData, SpanData } from "./types";
+import type {
+	LogData,
+	MetricData,
+	SpanData,
+} from "../../../contracts/telemetry.ts";
+import { TraceDb } from "../../../server/telemetry-db";
 
 function hex(size: number): string {
 	let s = "";

@@ -5,11 +5,11 @@ import { afterEach, expect, test } from "bun:test";
 import {
 	notify as dashNotify,
 	resetNotifications as resetDash,
-} from "../../src/tui/dash/notifications";
+} from "../../src/tui/dash/notifications.ts";
 import {
 	notify as otelNotify,
 	resetNotifications as resetOtel,
-} from "../../src/tui/otel/app/notifications";
+} from "../../src/tui/otel/app/notifications.ts";
 
 type CapturedSpan = {
 	name: string;

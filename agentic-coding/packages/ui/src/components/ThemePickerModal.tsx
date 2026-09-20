@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 // Theme picker overlay — one implementation for every surface. The picker itself
 // is `ThemePicker`; this binds it to a surface's selection/query accessors.
-import { ThemePicker } from "./ThemePicker";
+import { ThemePicker } from "./ThemePicker.tsx";
 
 /** A plain value or a getter, so surfaces that keep state in accessors and
  * surfaces that pass values share one picker. */

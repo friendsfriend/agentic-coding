@@ -1,7 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 import { TextAttributes } from "@opentui/core";
-import { GenericModal, SearchHeader } from "@ui";
-import { formatHelpText } from "../components/HelpText";
+import { GenericModal } from "../components/GenericModal";
+import { formatHelpText } from "../components/HelpText.tsx";
+import { SearchHeader } from "../components/SearchHeader";
 import { uiColors } from "../theme/colors";
 
 export interface ErrorDialogProps {

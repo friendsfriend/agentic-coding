@@ -1,12 +1,12 @@
 import type { KeyEvent } from "@opentui/core";
 import { formatProfileLabel } from "@ui";
-import type { DockerActions } from "../actions";
-import type { UiStore } from "../stores";
-import type { ActionRunStore } from "../stores/action-run-store";
-import type { AppStore } from "../stores/app-store";
-import { actionTreeCopyText } from "../views/action-run-copy";
-import { copyText } from "./global-keys";
-import { isDownKey, isUpKey } from "./nav-keys";
+import type { DockerActions } from "../actions/index.ts";
+import type { ActionRunStore } from "../stores/action-run-store.ts";
+import type { AppStore } from "../stores/app-store.ts";
+import type { UiStore } from "../stores/index.ts";
+import { actionTreeCopyText } from "../views/action-run-copy.ts";
+import { copyText } from "./global-keys.ts";
+import { isDownKey, isUpKey } from "./nav-keys.ts";
 
 const shiftedDown = (event: KeyEvent) =>
 	event.name === "J" ||

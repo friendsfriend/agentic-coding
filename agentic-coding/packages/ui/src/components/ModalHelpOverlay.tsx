@@ -1,7 +1,11 @@
 /** @jsxImportSource @opentui/solid */
 import { Show } from "solid-js";
-import { HelpModal } from "./HelpModal";
-import { activeModalHelp, modalHelpOffset, modalHelpOpen } from "./modalHelp";
+import { HelpModal } from "./HelpModal.tsx";
+import {
+	activeModalHelp,
+	modalHelpOffset,
+	modalHelpOpen,
+} from "./modalHelp.ts";
 
 /**
  * The open modal's own `?` help, reused from the shared HelpModal. Rendered by

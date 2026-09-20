@@ -13,7 +13,7 @@ import type {
 	DeveloperDialogueRecord,
 	WorkflowCommand,
 	WorkflowSnapshot,
-} from "../../contracts.ts";
+} from "../../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
 import { tokenMatches } from "../capability.ts";
 import {

@@ -1,4 +1,4 @@
-import type { KeyboardEvent } from "./types";
+import type { KeyboardEvent } from "./types.ts";
 
 export const isDownKey = (event: KeyboardEvent) =>
 	!event.shift &&

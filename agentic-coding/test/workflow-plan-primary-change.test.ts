@@ -12,7 +12,7 @@ import type {
 	ResolvedProfile,
 	WorkflowRouting,
 	WorkflowView,
-} from "../src/workflow/contracts.ts";
+} from "../src/contracts/workflow.ts";
 import { decodePlanResult } from "../src/workflow/definitions/contracts.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import { effectRunnerTest } from "../src/workflow/effect-runner.ts";

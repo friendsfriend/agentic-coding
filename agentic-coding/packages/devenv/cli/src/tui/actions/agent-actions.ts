@@ -1,7 +1,7 @@
 import type { DevEnvClient } from "@devenv/core";
 import { getLogger } from "@devenv/core";
-import type { AgentStore } from "../stores/agent-store";
-import type { AppStore } from "../stores/app-store";
+import type { AgentStore } from "../stores/agent-store.ts";
+import type { AppStore } from "../stores/app-store.ts";
 
 export function createAgentActions(
 	appStore: AppStore,

@@ -2,7 +2,7 @@
 import { TextAttributes } from "@opentui/core";
 import { HighlightedText, ScrollableContent, uiColors } from "@ui";
 import { createMemo, For } from "solid-js";
-import type { LayoutNode } from "../model/topologyStore";
+import type { LayoutNode } from "../model/topologyStore.ts";
 
 const cardWidth = 24;
 const cardHeight = 3;

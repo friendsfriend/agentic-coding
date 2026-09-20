@@ -11,10 +11,10 @@ import { join } from "node:path";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
 import { onCleanup } from "solid-js";
-import { DashboardRoot } from "../../src/tui/app/DashboardRoot";
-import { setupKeymap } from "../../src/tui/dash/keymap-setup";
-import { acquiredResources, resetResources } from "../../src/tui/lifecycle";
-import { renderUntil } from "./support/terminal";
+import { DashboardRoot } from "../../src/tui/app/DashboardRoot.tsx";
+import { setupKeymap } from "../../src/tui/dash/keymap-setup.ts";
+import { acquiredResources, resetResources } from "../../src/tui/lifecycle.ts";
+import { renderUntil } from "./support/terminal.ts";
 
 type Test = Awaited<ReturnType<typeof testRender>>;
 

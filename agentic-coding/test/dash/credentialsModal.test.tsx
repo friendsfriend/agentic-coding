@@ -6,8 +6,8 @@ import {
 	CredentialsModal,
 	credentialPromptBridge,
 	pendingCredentialRequest,
-} from "../../src/tui/dash/ui/CredentialsModal";
-import { NewWorkflowModal } from "../../src/tui/dash/ui/NewWorkflowModal";
+} from "../../src/tui/dash/ui/CredentialsModal.tsx";
+import { NewWorkflowModal } from "../../src/tui/dash/ui/NewWorkflowModal.tsx";
 
 function key(
 	name: string,

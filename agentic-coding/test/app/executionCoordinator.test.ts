@@ -9,7 +9,7 @@ import {
 	disposeExecutionCoordinator,
 	executionCoordinator,
 	setCredentialPromptProvider,
-} from "../../src/workflow/execution-coordinator";
+} from "../../src/workflow/execution-coordinator.ts";
 
 // The composition-unified shell must keep repository execution coordination
 // alive across feature hide/show and only release it when the root disposes it

@@ -1,10 +1,10 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { WorktreeInfo } from "@devenv/types";
 import { TextAttributes } from "@opentui/core";
-import { ListViewModal } from "@ui";
-import { formatHelpText } from "../components/HelpText";
+import { formatHelpText } from "../components/HelpText.tsx";
+import { ListViewModal } from "../components/ListViewModal";
 import { uiColors } from "../theme/colors";
+import type { WorktreeInfo } from "../types";
 
 export interface WorktreeManagerModalProps {
 	appName: string;

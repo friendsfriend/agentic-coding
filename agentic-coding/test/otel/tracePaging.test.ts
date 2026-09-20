@@ -7,8 +7,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { TraceDb } from "../../src/tui/otel/model/db";
-import type { SpanData } from "../../src/tui/otel/model/types";
+import type { SpanData } from "../../src/contracts/telemetry.ts";
+import { TraceDb } from "../../src/server/telemetry-db";
 
 const dirs: string[] = [];
 function tempDir(): string {

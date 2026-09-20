@@ -6,7 +6,7 @@ import {
 	OPENSPEC_PANEL,
 	type PanelDirection,
 	type PanelId,
-} from "../../src/tui/dash/panel-grid";
+} from "../../src/tui/dash/panel-grid.ts";
 
 type Row = Record<PanelDirection, PanelId>;
 

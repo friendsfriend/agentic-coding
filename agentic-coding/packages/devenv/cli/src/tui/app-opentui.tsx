@@ -23,7 +23,7 @@ import {
 	onCleanup,
 	onMount,
 } from "solid-js";
-import { APP_VERSION } from "../version";
+import { APP_VERSION } from "../version.ts";
 import {
 	createAgentActions,
 	createAppActions,
@@ -37,14 +37,14 @@ import {
 	createProviderActions,
 	createUtilActions,
 	initializeApp,
-} from "./actions";
-import { createColumns, createScriptColumns } from "./columns";
+} from "./actions/index.ts";
+import { createColumns, createScriptColumns } from "./columns.ts";
 import {
 	requestedCategory,
 	viewModeForPath,
 	viewPathForMode,
-} from "./destination-sync";
-import { setupLogEffects } from "./effects/log-effects";
+} from "./destination-sync.ts";
+import { setupLogEffects } from "./effects/log-effects.ts";
 import {
 	abortExitSignal,
 	confirmExitApp,
@@ -54,7 +54,7 @@ import {
 	registerExitGuard,
 	registerGracefulShutdownHandler,
 	setExitRenderer,
-} from "./exit";
+} from "./exit.ts";
 import {
 	type EnvironmentLaunchTarget,
 	handlePaste,
@@ -67,7 +67,7 @@ import {
 	registerWorkflowKeymapLayers,
 	setupDevenvKeymap,
 	syncKeymapRuntimeState,
-} from "./keyboard";
+} from "./keyboard/index.ts";
 import {
 	createActionRunStore,
 	createAgentStore,
@@ -78,21 +78,21 @@ import {
 	createLogStore,
 	createProviderStore,
 	createUiStore,
-} from "./stores";
+} from "./stores/index.ts";
 import {
 	applyTheme,
 	loadCustomThemes,
 	loadRendererThemeColors,
 	loadSystemTheme,
 	loadThemeName,
-} from "./theme-settings";
-import type { ViewActions, ViewStores } from "./views";
+} from "./theme-settings.ts";
+import type { ViewActions, ViewStores } from "./views/index.ts";
 import {
 	ContentRouter,
 	getHeaderInfo,
 	getTabBorderColor,
 	ModalOverlays,
-} from "./views";
+} from "./views/index.ts";
 
 export interface TUIAppProps {
 	serverUrl: string;

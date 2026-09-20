@@ -1,5 +1,5 @@
 import type { ScrollBoxRenderable } from "@opentui/core";
-import type { KeyboardEvent } from "./types";
+import type { KeyboardEvent } from "./types.ts";
 
 function isHorizontalScrollLeftKey(event: KeyboardEvent): boolean {
 	return (

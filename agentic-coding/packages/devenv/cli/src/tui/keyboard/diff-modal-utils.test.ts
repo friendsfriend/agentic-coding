@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { computeInitialSplitView } from "./diff-modal-utils";
+import { computeInitialSplitView } from "./diff-modal-utils.ts";
 
 describe("computeInitialSplitView", () => {
 	test("allows split by width for addition-only hunks in existing files", () => {

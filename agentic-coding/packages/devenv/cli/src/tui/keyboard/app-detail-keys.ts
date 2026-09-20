@@ -1,13 +1,13 @@
 import type { DependencyNode } from "@ui";
-import type { AppDetailStore, AppStore } from "../stores";
-import { isDownKey, isUpKey } from "./nav-keys";
+import type { AppDetailStore, AppStore } from "../stores/index.ts";
+import { isDownKey, isUpKey } from "./nav-keys.ts";
 import {
 	isNextPanelKey,
 	isPrevPanelKey,
 	nextPanelIndex,
 	prevPanelIndex,
-} from "./panel-keys";
-import type { KeyboardEvent } from "./types";
+} from "./panel-keys.ts";
+import type { KeyboardEvent } from "./types.ts";
 
 /**
  * Flatten visible tree nodes to compute flat index count and find node at index.

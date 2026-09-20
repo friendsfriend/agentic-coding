@@ -1,4 +1,4 @@
-import type { KeyboardEvent } from "./types";
+import type { KeyboardEvent } from "./types.ts";
 
 export const isNextPanelKey = (event: KeyboardEvent) =>
 	event.sequence === "J" || (event.name === "j" && event.shift);

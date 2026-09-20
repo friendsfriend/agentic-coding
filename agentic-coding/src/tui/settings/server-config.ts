@@ -9,7 +9,7 @@
 // `hasToken` and never requested, returned or rendered.
 import { createCustomFetch } from "@devenv/core";
 import type { CatalogProject } from "@devenv/types";
-import { fetchProjectCatalog } from "../../workflow/project-catalog";
+import { loadProjectCatalog } from "../data/workflow.ts";
 
 export interface ProviderStatus {
 	name: string;
@@ -65,6 +65,7 @@ export async function readProviderStatus(
 export async function readProjectStatus(
 	options: { baseUrl?: string; signal?: AbortSignal } = {},
 ): Promise<ProjectStatusSnapshot> {
-	const catalog = await fetchProjectCatalog(options);
+	const catalog = await loadProjectCatalog(options.signal);
+	if (!catalog) throw new Error("project catalog read was superseded");
 	return { revision: catalog.revision, projects: catalog.projects };
 }

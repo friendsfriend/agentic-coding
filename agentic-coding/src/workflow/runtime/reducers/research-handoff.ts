@@ -7,7 +7,7 @@ import type {
 	JsonValue,
 	WorkflowCommand,
 	WorkflowSnapshot,
-} from "../../contracts.ts";
+} from "../../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
 import { decodeResearchHandoff } from "../../definitions.ts";
 import type {

@@ -1,6 +1,6 @@
 import type { DevEnvClient } from "@devenv/core";
-import type { AppStore } from "../stores/app-store";
-import type { LogStore } from "../stores/log-store";
+import type { AppStore } from "../stores/app-store.ts";
+import type { LogStore } from "../stores/log-store.ts";
 
 let logStreamAbortController: AbortController | null = null;
 

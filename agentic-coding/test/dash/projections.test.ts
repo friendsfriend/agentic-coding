@@ -10,7 +10,7 @@ import {
 	approvalFor,
 	phaseAgeHours,
 	phaseStatus,
-} from "../../src/tui/dash/projections";
+} from "../../src/tui/dash/projections.ts";
 
 test("projections module performs no external I/O", () => {
 	const source = readFileSync(

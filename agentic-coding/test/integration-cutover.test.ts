@@ -13,8 +13,8 @@ import path from "node:path";
 import {
 	createCustomFetch,
 	environmentToken,
-} from "../packages/devenv/core/src/custom-fetch";
-import { createClient } from "../packages/devenv/core/src/index";
+} from "../packages/devenv/core/src/custom-fetch.ts";
+import { createClient } from "../packages/devenv/core/src/index.ts";
 import { GitRepository } from "../src/server/integrations/git-repository.ts";
 import { ProviderStore } from "../src/server/integrations/provider-store.ts";
 import type { IntegrationServices } from "../src/server/integrations/routes.ts";

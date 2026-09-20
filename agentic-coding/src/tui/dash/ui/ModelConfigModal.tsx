@@ -9,27 +9,28 @@ import {
 	useModalContentLines,
 } from "@ui";
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
-import { backendClient } from "../../../server/client.ts";
-import {
-	type AgentsMutation,
-	applyAgentsMutation,
-} from "../../../server/config.ts";
-import type { RuntimeId } from "../../../workflow/contracts.ts";
+import type { RuntimeId } from "../../../contracts/workflow.ts";
 import {
 	type AgentsConfig,
 	BUILTIN_PRESET_NAME,
-	clearModelCache,
-	runtimeModels,
 } from "../../../workflow/profiles.ts";
 import { VERIFIER_ROLES } from "../../../workflow/steps/verification.ts";
+import {
+	type AgentsMutation,
+	applyAgentsMutation,
+	clearModelCache,
+	runtimeModels,
+	saveAgentConfig,
+} from "../../data/agents.ts";
+import { gatewayOrUndefined } from "../../data/index.ts";
 import {
 	agentConfigEntry,
 	refreshAgentConfig,
 	reloadAgentConfigLocal,
-} from "../agent-config-cache";
-import { type ConsoleIssue, captureConsoleIssues } from "../consoleCapture";
-import { notify } from "../notifications";
-import { traceTui } from "../tracing";
+} from "../agent-config-cache.ts";
+import { type ConsoleIssue, captureConsoleIssues } from "../consoleCapture.ts";
+import { notify } from "../notifications.ts";
+import { traceTui } from "../tracing.ts";
 
 const RUNTIMES = ["pi", "opencode", "opencode-v2"] as const;
 const RUNTIME_EXECUTABLES: Record<string, string> = {
@@ -451,10 +452,12 @@ export function ModelConfigModal(props: {
 	/** Apply an agent-config mutation through the typed client when a transport is
 	 * configured; the demo/test path applies it in-process. */
 	const commitAgents = (mutation: AgentsMutation, onDone: () => void): void => {
-		const client = backendClient();
-		if (client) {
-			void client
-				.saveAgents(mutation, props.repository, editorRevision())
+		if (gatewayOrUndefined()) {
+			void saveAgentConfig({
+				repository: props.repository,
+				expectedRevision: editorRevision(),
+				mutation,
+			})
 				.then(() => refreshAgentConfig(props.repository))
 				.then(onDone)
 				.catch((error) => {

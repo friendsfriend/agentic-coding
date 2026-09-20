@@ -4,7 +4,10 @@
 // tier (design D1). Moved out of definitions.ts (split-workflow-god-modules)
 // — the per-family manifest construction now lives under
 // `definitions/graphs/*.ts`; this file only combines and registers.
-import type { AdapterCapability, EffectKind } from "../contracts.ts";
+import type {
+	AdapterCapability,
+	EffectKind,
+} from "../../contracts/workflow.ts";
 import { type WorkflowManifest, WorkflowRegistry } from "../registry.ts";
 import { assertStepBehaviorCoverage } from "../steps/index.ts";
 import { definitionVersionForPolicy } from "./edges.ts";
@@ -16,6 +19,8 @@ import { wikiManifests } from "./graphs/wiki.ts";
 import {
 	definitionVersionForBehaviorPins,
 	definitionVersionForManifestPolicy,
+	definitionVersionForResearchTools,
+	withFullToolResearchPolicy,
 	withManifestPolicy,
 } from "./manifest-policy.ts";
 import { exactStepReferences, WORKFLOW_STEPS } from "./steps.ts";
@@ -114,6 +119,20 @@ export function registerBuiltins(
 		const version = definitionVersionForBehaviorPins(rounds);
 		for (const definition of manifests(rounds, version, true)) {
 			const pinnedBase = withManifestPolicy(definition);
+			const pinned: WorkflowManifest = {
+				...pinnedBase,
+				stepRefs: exactStepReferences(pinnedBase.steps),
+			};
+			assertStepBehaviorCoverage(pinned.steps);
+			registry.registerWorkflow(pinned);
+		}
+	}
+	// Research tool policy changed independently. Keep every earlier version
+	// byte-compatible while new research starts use the selected profile as-is.
+	for (const rounds of Array.from({ length: 20 }, (_, index) => index + 1)) {
+		const version = definitionVersionForResearchTools(rounds);
+		for (const definition of researchManifests(version, true)) {
+			const pinnedBase = withFullToolResearchPolicy(definition);
 			const pinned: WorkflowManifest = {
 				...pinnedBase,
 				stepRefs: exactStepReferences(pinnedBase.steps),

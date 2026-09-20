@@ -1,16 +1,18 @@
 /** @jsxImportSource @opentui/solid */
 import { useTimeline } from "@opentui/solid";
+import { createSignal, For } from "solid-js";
 import {
 	AnimatedStatusText,
-	Badge,
-	InlineProgressAnimation,
-	type InlineProgressHighlights,
 	type StatusAnimationIntent,
 	statusAnimationModel,
-} from "@ui";
-import { createSignal, For } from "solid-js";
+} from "../components/AnimatedStatusText";
+import { Badge } from "../components/Badge";
+import {
+	InlineProgressAnimation,
+	type InlineProgressHighlights,
+} from "../components/InlineProgressAnimation";
 import { uiColors } from "../theme/colors";
-import { TextTransitionAnimation } from "./TextTransitionAnimation";
+import { TextTransitionAnimation } from "./TextTransitionAnimation.tsx";
 
 const palettes: Array<{ name: string; highlights: InlineProgressHighlights }> =
 	[

@@ -3,15 +3,15 @@ import {
 	handleHorizontalScrollKey,
 	isNextRelatedKey,
 	isPreviousRelatedKey,
-} from "./horizontal-scroll";
+} from "./horizontal-scroll.ts";
 
-import { isDownKey, isUpKey } from "./nav-keys";
+import { isDownKey, isUpKey } from "./nav-keys.ts";
 import type {
 	KeyboardActions,
 	KeyboardContext,
 	KeyboardEvent,
 	KeyboardStores,
-} from "./types";
+} from "./types.ts";
 /**
  * Handles keyboard events for the Diff modal:
  * - Comment modal (on top of diff)

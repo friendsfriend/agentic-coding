@@ -20,6 +20,7 @@ import {
 	buildImportGraph,
 	buildSourceAnalysis,
 	findImportCycle,
+	resolveRelative,
 } from "./workflow-module-graph.ts";
 
 export type SourceLayer =
@@ -29,6 +30,8 @@ export type SourceLayer =
 	| "cli"
 	| "tui-feature"
 	| "tui-shared"
+	| "tui-data"
+	| "tui-context"
 	| "tui-app"
 	| "root";
 
@@ -58,6 +61,7 @@ const DOMAIN_FILES = [
 	"workflow/embedded.generated.ts",
 	"workflow/definitions.ts", // re-export barrel over definitions/*
 	"workflow/sidebar.ts", // pure Herdr sidebar projection: views + supplied observations -> display tokens and input ranks
+	"workflow/run-projections.ts", // pure run projections shared by the dashboard, server operations and gateway
 ];
 const RUNTIME_FILES = [
 	"workflow/effects.ts",
@@ -109,6 +113,9 @@ const ROOT_FILES = [
 /** Classify a project-relative source path (posix separators). */
 export function classifySourcePath(relPath: string): SourceLayer | null {
 	if (DOMAIN_FILES.includes(relPath)) return "domain";
+	// The wire-contract layer is pure by construction: types and Effect
+	// Schemas only, so every layer may import it and it may import no layer.
+	if (relPath.startsWith("contracts/")) return "domain";
 	if (
 		relPath.startsWith("workflow/steps/") ||
 		relPath.startsWith("workflow/definitions/")
@@ -131,6 +138,11 @@ export function classifySourcePath(relPath: string): SourceLayer | null {
 		relPath.startsWith("tui/settings/")
 	)
 		return "tui-feature";
+	// The dashboard data layer: the only place feature code reads server data.
+	// It depends on the gateway port and the contract layer, never on a feature.
+	if (relPath.startsWith("tui/data/")) return "tui-data";
+	// Composition seams (providers + shell app actions) features consume.
+	if (relPath.startsWith("tui/context/")) return "tui-context";
 	if (
 		relPath.startsWith("tui/shared/") ||
 		relPath.startsWith("tui/themes/") ||
@@ -170,7 +182,22 @@ export const ALLOWED_TARGETS: Readonly<
 		"application",
 		"root",
 		"tui-shared",
+		"tui-data",
+		"tui-context",
 		"tui-feature",
+	]),
+	// Shared data layer: reads through the gateway port, so it may use the
+	// contract layer and the application runtime, but no feature or shell code.
+	"tui-data": new Set(["domain", "runtime", "application", "root", "tui-data"]),
+	// These seams compose the runtime for the feature tree; they reach the
+	// server and workflow layers on the features' behalf.
+	"tui-context": new Set([
+		"domain",
+		"runtime",
+		"application",
+		"root",
+		"tui-data",
+		"tui-context",
 	]),
 	"tui-shared": new Set(["tui-shared", "root"]),
 	"tui-app": new Set([
@@ -179,6 +206,8 @@ export const ALLOWED_TARGETS: Readonly<
 		"application",
 		"root",
 		"tui-shared",
+		"tui-data",
+		"tui-context",
 		"tui-feature",
 		"tui-app",
 	]),
@@ -200,6 +229,8 @@ export const LAYER_LABELS: Readonly<Record<SourceLayer, string>> = {
 	application: "application operations",
 	cli: "CLI",
 	"tui-feature": "TUI feature",
+	"tui-data": "dashboard data layer",
+	"tui-context": "composition seam",
 	"tui-shared": "shared TUI primitive",
 	"tui-app": "TUI shell",
 	root: "root",
@@ -249,6 +280,93 @@ const FORBIDDEN_VIEW_BUILTINS = [
 	"node:fs/promises",
 	"node:child_process",
 ];
+
+/** Backend modules (server/CLI/application) must never reach TUI presentation,
+ * type-only imports included. The layer matrix already forbids it for
+ * domain/runtime/application/cli; the server transport is classified as root
+ * (it composes the process), so it needs its own explicit check. */
+export function checkServerBoundaries(
+	root: string,
+	exceptions: ReadonlyMap<string, LayerException> = new Map(),
+): ArchitectureIssue[] {
+	const analysis = buildSourceAnalysis(root);
+	const issues: ArchitectureIssue[] = [];
+	for (const [file, module] of analysis) {
+		const fromRel = toPosix(path.relative(root, file));
+		if (!fromRel.startsWith("server/")) continue;
+		for (const edge of module.edges) {
+			// an unresolved relative specifier still names the file it intends
+			const intended = edge.resolved
+				? edge.resolved
+				: edge.specifier.startsWith(".")
+					? (resolveRelative(file, edge.specifier) ??
+						path.resolve(path.dirname(file), edge.specifier))
+					: null;
+			const target = intended
+				? toPosix(path.relative(root, intended))
+				: edge.specifier;
+			if (edge.specifier === "@ui" || edge.specifier.startsWith("@ui/")) {
+				issues.push({
+					file,
+					line: edge.line,
+					column: edge.column,
+					rule: "server:tui-import",
+					message: `server module imports TUI presentation (${edge.specifier}); the backend may depend only on contracts, workflow and application modules`,
+				});
+				continue;
+			}
+			if (!intended) continue;
+			const layer = classifySourcePath(target);
+			const isTui =
+				layer === "tui-feature" ||
+				layer === "tui-shared" ||
+				layer === "tui-app";
+			if (!isTui) continue;
+			if (exceptions.has(`${fromRel} -> ${target}`)) continue;
+			issues.push({
+				file,
+				line: edge.line,
+				column: edge.column,
+				rule: "server:tui-import",
+				message: `server module imports TUI presentation (${target}); the backend may depend only on contracts, workflow and application modules`,
+			});
+		}
+	}
+	return issues;
+}
+
+/** The presentational package must not depend on an application, domain,
+ * server or workflow module (establish-opencode-boundaries, tasks 7.2/8.1).
+ * `root` is the package root (a fixture root in tests). */
+export function checkUiPackageBoundaries(root: string): ArchitectureIssue[] {
+	const analysis = buildSourceAnalysis(root);
+	const issues: ArchitectureIssue[] = [];
+	for (const [file, module] of analysis) {
+		const fromRel = toPosix(path.relative(root, file));
+		if (!fromRel.startsWith("src/") && !fromRel.startsWith("packages/ui/"))
+			continue;
+		for (const edge of module.edges) {
+			const target = edge.resolved
+				? toPosix(path.relative(root, edge.resolved))
+				: edge.specifier;
+			const isDomain =
+				edge.specifier.startsWith("@devenv/") ||
+				target.includes("/src/server/") ||
+				target.includes("/src/workflow/") ||
+				target.includes("/src/contracts/") ||
+				target.includes("/src/tui/");
+			if (!isDomain) continue;
+			issues.push({
+				file,
+				line: edge.line,
+				column: edge.column,
+				rule: "ui:domain-import",
+				message: `presentational package imports application code (${target}); the framework owns its structural props and receives them from the surface`,
+			});
+		}
+	}
+	return issues;
+}
 
 export function checkViewBackendIsolation(root: string): ArchitectureIssue[] {
 	const analysis = buildSourceAnalysis(root);

@@ -1,7 +1,7 @@
 import type { DevEnvClient } from "@devenv/core";
 import type { Job } from "@devenv/types";
-import type { AppStore } from "../stores/app-store";
-import type { ChangeRequestStore } from "../stores/cr-store";
+import type { AppStore } from "../stores/app-store.ts";
+import type { ChangeRequestStore } from "../stores/cr-store.ts";
 
 export function createPipelineActions(
 	appStore: AppStore,

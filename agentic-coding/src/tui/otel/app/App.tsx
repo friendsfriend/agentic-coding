@@ -15,6 +15,7 @@ import {
 	dismissErrorModal,
 	ErrorModalOverlay,
 	footerKeybinds,
+	getActiveThemeName,
 	HelpModal,
 	HighlightedText,
 	handleModalHelpKey,
@@ -26,6 +27,7 @@ import {
 	setActiveKeybindCatalog,
 	showErrorModal,
 	ThemePickerModal,
+	themeNames,
 	uiColors,
 } from "@ui";
 import {
@@ -38,34 +40,38 @@ import {
 	Show,
 } from "solid-js";
 import {
+	type LogData as OTelLogData,
+	TRACE_PAGE_SIZE,
+	type TreeNode,
+} from "../../../contracts/telemetry.ts";
+import {
 	type AgentsConfig,
 	BUILTIN_PRESET_NAME,
-} from "../../../workflow/profiles";
+} from "../../../workflow/profiles.ts";
 import {
 	fetchProjectCatalog,
 	projectCanonicalRoots,
-} from "../../../workflow/project-catalog";
+} from "../../../workflow/project-catalog.ts";
 import {
 	researchWorkflowTarget,
 	wikiWorkflowDataRoot,
-} from "../../../workflow/runtime";
-import type { WikiReviewComment } from "../../../workflow/wiki";
-import { copyToClipboard } from "../../clipboard";
-import {
-	agentConfigEntry,
-	refreshAgentConfig,
-} from "../../dash/agent-config-cache";
+} from "../../../workflow/runtime.ts";
+import { copyToClipboard } from "../../clipboard.ts";
 import {
 	listPresetNames,
 	startSidebarPresentation,
 	startWikiCommentWorkflowInProcess,
-} from "../../dash/engine";
-import { workflowLaunchKeybindCatalog } from "../../dash/keybinds";
+} from "../../context/app-actions.ts";
+import {
+	agentConfigEntry,
+	refreshAgentConfig,
+} from "../../dash/agent-config-cache.ts";
+import { workflowLaunchKeybindCatalog } from "../../dash/keybinds.ts";
 import {
 	registerShellFeatureField,
 	registerShellKeyLayer,
 	registerShellOverlayLayer,
-} from "../../dash/keymap-setup";
+} from "../../dash/keymap-setup.ts";
 import {
 	launchContextError,
 	launchRepositoryAvailable,
@@ -73,31 +79,37 @@ import {
 	type WorkflowLaunchContext,
 	type WorkflowLaunchInput,
 	watchAcceptedHandoff,
-} from "../../dash/launch";
-import { isKeyTraceSuppressed, traceTui } from "../../dash/tracing";
-import { NewWorkflowModal } from "../../dash/ui/NewWorkflowModal";
+} from "../../dash/launch.ts";
+import {
+	applyTheme,
+	loadThemeName,
+	saveThemeName,
+} from "../../dash/theme-settings.ts";
+import { isKeyTraceSuppressed, traceTui } from "../../dash/tracing.ts";
+import { NewWorkflowModal } from "../../dash/ui/NewWorkflowModal.tsx";
+import type { WikiReviewComment } from "../../data/wiki.ts";
 import {
 	phase,
 	quitConfirmation,
 	resolveQuitConfirmation,
-} from "../../lifecycle";
-import { resolveBackendSettings } from "../../settings/backend-info";
+} from "../../lifecycle.ts";
+import { resolveBackendSettings } from "../../settings/backend-info.ts";
 import {
 	type SettingsContext,
 	type SettingsItem,
 	settingsItems,
-} from "../../settings/items";
-import { SettingsAgentEditor } from "../../settings/SettingsAgentEditor";
-import { SettingsSectionView } from "../../settings/SettingsSectionView";
+} from "../../settings/items.ts";
+import { SettingsAgentEditor } from "../../settings/SettingsAgentEditor.tsx";
+import { SettingsSectionView } from "../../settings/SettingsSectionView.tsx";
 import {
 	refreshSettingsProjects,
 	refreshSettingsProviders,
 	settingsKeybindCatalog,
 	settingsProjects,
 	settingsProviders,
-} from "../../settings/state";
-import { BreadcrumbRow } from "../../shared/navigation/BreadcrumbRow";
-import { DestinationPage } from "../../shared/navigation/DestinationPage";
+} from "../../settings/state.ts";
+import { BreadcrumbRow } from "../../shared/navigation/BreadcrumbRow.tsx";
+import { DestinationPage } from "../../shared/navigation/DestinationPage.tsx";
 import {
 	type DestinationEntry,
 	type DestinationSurface,
@@ -107,10 +119,10 @@ import {
 	observabilityDestinations,
 	pickerEntries,
 	settingsDestinations,
-} from "../../shared/navigation/destinations";
-import { destinationPageKeybindCatalog } from "../../shared/navigation/keybinds";
-import { LocationPicker } from "../../shared/navigation/LocationPicker";
-import { themeSettingsPath } from "../../shared/preferences";
+} from "../../shared/navigation/destinations.ts";
+import { destinationPageKeybindCatalog } from "../../shared/navigation/keybinds.ts";
+import { LocationPicker } from "../../shared/navigation/LocationPicker.tsx";
+import { themeSettingsPath } from "../../shared/preferences.ts";
 import {
 	breadcrumb,
 	createPageNavigation,
@@ -124,46 +136,34 @@ import {
 	routeKey,
 	type SettingsSection,
 	settingsSectionOfPage,
-} from "../../shared/routes";
-import { NotificationOverlay } from "../components/Notification";
+} from "../../shared/routes.ts";
+import { NotificationOverlay } from "../components/Notification.tsx";
 import {
 	FilterModal,
 	SortModal,
 	statusOptions,
-} from "../components/TraceModals";
-import type { LogStore } from "../model/logStore";
-import type { MetricStore } from "../model/metricStore";
-import type { TelemetryDb } from "../model/telemetry-db";
-import type { TopologyStore } from "../model/topologyStore";
-import type { SortCriterion, TraceStore } from "../model/traceStore";
-import {
-	type LogData as OTelLogData,
-	TRACE_PAGE_SIZE,
-	type TreeNode,
-} from "../model/types";
-import { LogDetailView } from "../views/LogDetailView";
-import { LogsView } from "../views/LogsView";
-import { MetricDetailView } from "../views/MetricDetailView";
-import { MetricsView } from "../views/MetricsView";
-import { ServiceDetailView } from "../views/ServiceDetailView";
-import { SpanDetailView } from "../views/SpanDetailView";
-import { TopologyView } from "../views/TopologyView";
-import { TraceListView } from "../views/TraceListView";
-import { TraceTreeView } from "../views/TraceTreeView";
-import { WikiView, wikiCommentEntryActive } from "../views/WikiView";
+} from "../components/TraceModals.tsx";
+import type { LogStore } from "../model/logStore.ts";
+import type { MetricStore } from "../model/metricStore.ts";
+import type { TelemetryDb } from "../model/telemetry-db.ts";
+import type { TopologyStore } from "../model/topologyStore.ts";
+import type { SortCriterion, TraceStore } from "../model/traceStore.ts";
+import { LogDetailView } from "../views/LogDetailView.tsx";
+import { LogsView } from "../views/LogsView.tsx";
+import { MetricDetailView } from "../views/MetricDetailView.tsx";
+import { MetricsView } from "../views/MetricsView.tsx";
+import { ServiceDetailView } from "../views/ServiceDetailView.tsx";
+import { SpanDetailView } from "../views/SpanDetailView.tsx";
+import { TopologyView } from "../views/TopologyView.tsx";
+import { TraceListView } from "../views/TraceListView.tsx";
+import { TraceTreeView } from "../views/TraceTreeView.tsx";
+import { WikiView, wikiCommentEntryActive } from "../views/WikiView.tsx";
 import {
 	environmentsKeybindCatalog,
 	observabilityKeybindCatalog,
-} from "./keybinds";
-import { createNavigation, isShellOwnedOverlay } from "./navigation";
-import { activeNotification, notify } from "./notifications";
-import {
-	applyTheme,
-	getActiveThemeName,
-	loadThemeName,
-	saveThemeName,
-	themeNames,
-} from "./theme";
+} from "./keybinds.ts";
+import { createNavigation, isShellOwnedOverlay } from "./navigation.ts";
+import { activeNotification, notify } from "./notifications.ts";
 
 type Tab =
 	| "home"
@@ -748,14 +748,13 @@ export function App(props: {
 		launchPending = true;
 		try {
 			const outcome = await launchWorkflow(input);
-			closeLaunch();
 			if (outcome.kind === "rejected") {
 				traceTui(
 					"tui.workflow.launch",
 					{ surface: "launch", action: "start" },
 					"error",
 				);
-				notify(`Workflow start rejected: ${outcome.message}`, "error");
+				showErrorModal("Workflow start failed", outcome.message);
 				return;
 			}
 			if (outcome.kind === "uncertain") {
@@ -765,6 +764,7 @@ export function App(props: {
 				);
 				return;
 			}
+			closeLaunch();
 			traceTui("tui.workflow.launch", { surface: "launch", action: "start" });
 			notify(outcome.message, "success");
 			disposeHandoffWatch?.();

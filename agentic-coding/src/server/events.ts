@@ -4,20 +4,8 @@
 // never allowed to block mutation execution. When a reconnect cursor falls
 // outside the retained window the server requires snapshot resynchronization
 // instead of silently continuing from a gap.
+import type { EventEnvelope } from "../contracts/environment.ts";
 import { EVENT_REPLAY_CAPACITY } from "./protocol.ts";
-
-export interface EventEnvelope {
-	readonly instance: string;
-	/** Monotonic per-instance sequence; gaps are detectable. */
-	readonly sequence: number;
-	readonly domain: string;
-	readonly kind: string;
-	readonly resource?: string;
-	readonly runId?: string;
-	readonly revision?: number;
-	readonly at: string;
-	readonly payload: unknown;
-}
 
 export interface PublishInput {
 	readonly domain: string;

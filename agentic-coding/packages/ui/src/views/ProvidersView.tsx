@@ -1,11 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { Provider } from "@devenv/types";
 import { TextAttributes } from "@opentui/core";
-import { CenteredState, GenericModal } from "@ui";
 import { For, Show } from "solid-js";
-import { formatHelpText } from "../components/HelpText";
+import { CenteredState } from "../components/CenteredState";
+import { GenericModal } from "../components/GenericModal";
+import { formatHelpText } from "../components/HelpText.tsx";
 import { uiColors } from "../theme/colors";
+import type { Provider } from "../types";
 
 interface ProvidersViewProps {
 	providers: Provider[];

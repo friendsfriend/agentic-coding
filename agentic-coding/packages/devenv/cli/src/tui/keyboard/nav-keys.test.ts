@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { isNextRelatedKey, isPreviousRelatedKey } from "./horizontal-scroll";
+import { isNextRelatedKey, isPreviousRelatedKey } from "./horizontal-scroll.ts";
 import {
 	isDownKey,
 	isEnterKey,
 	isLeftKey,
 	isRightKey,
 	isUpKey,
-} from "./nav-keys";
-import type { KeyboardEvent } from "./types";
+} from "./nav-keys.ts";
+import type { KeyboardEvent } from "./types.ts";
 
 const key = (name: string, sequence = name, shift = false): KeyboardEvent =>
 	({ name, sequence, shift }) as KeyboardEvent;

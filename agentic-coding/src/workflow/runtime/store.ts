@@ -17,7 +17,7 @@ import type {
 	WorkflowEffect,
 	WorkflowRun,
 	WorkflowSnapshot,
-} from "../contracts.ts";
+} from "../../contracts/workflow.ts";
 import { decodeSnapshot, WorkflowRuntimeError } from "../contracts.ts";
 import type {
 	CompiledWorkflowDefinition,
@@ -193,7 +193,7 @@ function guardedDatabase(
 		// Keep SQLite on descriptor's stable inode. Hard-link aliases make SQLite
 		// race journal/shared-memory files on macOS (`SQLITE_IOERR_VNODE`).
 		const db = new Database(
-			`file:${process.platform === "darwin" ? "/dev/fd" : "/proc/self/fd"}/${guard}`,
+			`${process.platform === "darwin" ? "/dev/fd" : "/proc/self/fd"}/${guard}`,
 			options.readonly === true ? { readonly: true } : { create: true },
 		);
 		try {

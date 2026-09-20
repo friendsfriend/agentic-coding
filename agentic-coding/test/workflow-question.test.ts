@@ -6,9 +6,9 @@ import path from "node:path";
 import {
 	decodeCommand,
 	decodeDeveloperQuestionAnswer,
-	decodeSnapshot,
 	type ResolvedProfile,
-} from "../src/workflow/contracts.ts";
+} from "../src/contracts/workflow.ts";
+import { decodeSnapshot } from "../src/workflow/contracts.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import { QUESTION_WAIT_MS, WorkflowEngine } from "../src/workflow/runtime.ts";
 

@@ -9,9 +9,9 @@
 // advertised gRPC support ingested nothing. The sink assertion below is what
 // makes that class of bug impossible to reintroduce.
 import { expect, test } from "bun:test";
-import type { SpanData } from "../src/tui/otel/model/types";
-import { startOtlpGrpcReceiver } from "../src/tui/otel/receiver/otlp-grpc.ts";
-import { createTraceServiceClient } from "../src/tui/otel/receiver/otlp-grpc-proto.ts";
+import type { SpanData } from "../src/contracts/telemetry.ts";
+import { startOtlpGrpcReceiver } from "../src/server/receivers/otlp-grpc";
+import { createTraceServiceClient } from "../src/server/receivers/otlp-grpc-proto";
 
 function freePort(): number {
 	const server = Bun.serve({ port: 0, fetch: () => new Response("") });

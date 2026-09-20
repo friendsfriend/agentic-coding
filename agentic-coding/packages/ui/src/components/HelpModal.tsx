@@ -2,8 +2,8 @@
 import { TextAttributes } from "@opentui/core";
 import { For } from "solid-js";
 import { uiColors } from "../theme/colors";
-import { GenericModal } from "./GenericModal";
-import { activeKeybindCatalog, type KeybindSection } from "./keybinds";
+import { GenericModal } from "./GenericModal.tsx";
+import { activeKeybindCatalog, type KeybindSection } from "./keybinds.ts";
 
 /**
  * Shared `?` help modal: renders the active surface's full keybind catalog

@@ -1,4 +1,3 @@
-import { parseLine } from "./parser";
 import {
 	type SpanData,
 	TRACE_PAGE_SIZE,
@@ -6,7 +5,8 @@ import {
 	type TraceSummaryPage,
 	type TraceSummaryRow,
 	type TreeNode,
-} from "./types";
+} from "../../../contracts/telemetry.ts";
+import { parseLine } from "../../../server/telemetry-parser";
 
 export type SortField = "received" | "latency" | "name" | "service";
 export type SortDir = "asc" | "desc";

@@ -1,5 +1,5 @@
 import type { PasteEvent } from "@opentui/core";
-import type { ProviderStore } from "../stores";
+import type { ProviderStore } from "../stores/index.ts";
 
 export function routePastedText(
 	text: string,

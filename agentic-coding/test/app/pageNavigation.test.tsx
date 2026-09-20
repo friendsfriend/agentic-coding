@@ -7,18 +7,18 @@ import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
 import { catalogKeybinds } from "@ui";
 import { onCleanup } from "solid-js";
-import { App } from "../../src/tui/otel/app/App";
+import { TraceDb } from "../../src/server/telemetry-db";
+import { App } from "../../src/tui/otel/app/App.tsx";
 import {
 	environmentsKeybindCatalog,
 	observabilityKeybindCatalog,
-} from "../../src/tui/otel/app/keybinds";
-import { TraceDb } from "../../src/tui/otel/model/db";
-import { LogStore } from "../../src/tui/otel/model/logStore";
-import { MetricStore } from "../../src/tui/otel/model/metricStore";
-import { TopologyStore } from "../../src/tui/otel/model/topologyStore";
-import { TraceStore } from "../../src/tui/otel/model/traceStore";
-import { destinationPageKeybindCatalog } from "../../src/tui/shared/navigation/keybinds";
-import { pressEscapeAndSettle } from "./support/terminal";
+} from "../../src/tui/otel/app/keybinds.ts";
+import { LogStore } from "../../src/tui/otel/model/logStore.ts";
+import { MetricStore } from "../../src/tui/otel/model/metricStore.ts";
+import { TopologyStore } from "../../src/tui/otel/model/topologyStore.ts";
+import { TraceStore } from "../../src/tui/otel/model/traceStore.ts";
+import { destinationPageKeybindCatalog } from "../../src/tui/shared/navigation/keybinds.ts";
+import { pressEscapeAndSettle } from "./support/terminal.ts";
 
 // Page-local input (replace-nested-tabs-with-page-navigation, task 3.1): Tab
 // traverses focus regions instead of destinations, Ctrl+P opens the one

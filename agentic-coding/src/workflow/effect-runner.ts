@@ -2,6 +2,14 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Effect, Either } from "effect";
+import {
+	type AgentHandle,
+	type Assignment,
+	type EffectKind,
+	isRetryableFailure,
+	type WorkflowFailure,
+	type WorkflowSnapshot,
+} from "../contracts/workflow.ts";
 import { decodeHerdrResult } from "../herdr-client.ts";
 import {
 	type AgentAdapter,
@@ -12,14 +20,6 @@ import {
 } from "./adapters.ts";
 import { workflowAssets } from "./assets.ts";
 import { renderAssignment } from "./assignment.ts";
-import {
-	type AgentHandle,
-	type Assignment,
-	type EffectKind,
-	isRetryableFailure,
-	type WorkflowFailure,
-	type WorkflowSnapshot,
-} from "./contracts.ts";
 import {
 	type CredentialPrompt,
 	runGitWithCredentialsEffect,

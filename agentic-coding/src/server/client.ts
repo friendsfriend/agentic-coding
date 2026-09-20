@@ -5,10 +5,38 @@
 //
 // The client deliberately imports nothing from the TUI feature tree, so the
 // observation module can depend on it without forming a cycle.
-import type { TraceSummaryPage } from "../tui/otel/model/types.ts";
-import type { WorkflowView } from "../workflow/contracts.ts";
-import type { AgentsMutation } from "./config.ts";
-import type { ObservationRequest } from "./protocol.ts";
+import type { Schema } from "effect";
+import {
+	type AgentsListResponse,
+	type AgentsMutationRequest,
+	agentsListResponseSchema,
+} from "../contracts/actions.ts";
+import type { CredentialRespondRequest } from "../contracts/credential.ts";
+import { ContractFailure, decodeContract } from "../contracts/decode.ts";
+import {
+	type ConnectionState,
+	type EventEnvelope,
+	type ObservationRequest,
+	wireEnvelopeSchema,
+} from "../contracts/environment.ts";
+import type {
+	DashboardGateway,
+	GatewayEventHandlers,
+} from "../contracts/gateway.ts";
+import {
+	type TraceSummaryPage,
+	telemetryCountSchema,
+	telemetryRemovedSchema,
+	telemetrySpansSchema,
+	telemetryWorkspacesSchema,
+	traceSummaryPageSchema,
+} from "../contracts/telemetry.ts";
+import {
+	type WorkflowView,
+	workflowIdResponseSchema,
+	workflowViewListSchema,
+	workflowViewSchema,
+} from "../contracts/workflow.ts";
 import { SERVER_API_VERSION } from "./protocol.ts";
 
 export interface BackendClientConfig {
@@ -27,20 +55,50 @@ export class BackendClientError extends Error {
 	}
 }
 
-export interface DomainEventHandler {
-	onEvent(event: unknown): void;
-	onResync(reason: string): void;
-}
-
-export class BackendClient {
+export class BackendClient implements DashboardGateway {
+	readonly kind = "http" as const;
 	readonly baseUrl: string;
 	readonly token: string;
 	readonly ownerId: string;
+	private state: ConnectionState = "closed";
+	private readonly stateListeners = new Set<(state: ConnectionState) => void>();
+
+	connectionState(): ConnectionState {
+		return this.state;
+	}
+
+	private setState(state: ConnectionState): void {
+		if (this.state === state) return;
+		this.state = state;
+		for (const listener of this.stateListeners) listener(state);
+	}
 
 	constructor(config: BackendClientConfig) {
 		this.baseUrl = config.baseUrl.replace(/\/$/, "");
 		this.token = config.token;
 		this.ownerId = config.ownerId;
+	}
+
+	/** Decode one response value with its contract schema. A malformed body is
+	 * an `invalid-response` failure, never a value the caller has to re-check. */
+	private decode<T>(
+		id: string,
+		// biome-ignore lint/suspicious/noExplicitAny: Effect Schema generics don't line up with domain types; mirror decodeContract.
+		schema: Schema.Schema<any, any, never>,
+		value: unknown,
+		status = 200,
+	): T {
+		try {
+			return decodeContract<T>(id, schema, value);
+		} catch (error) {
+			if (error instanceof ContractFailure)
+				throw new BackendClientError(
+					status,
+					"invalid-response",
+					`backend returned an invalid ${id} payload (${error.message})`,
+				);
+			throw error;
+		}
 	}
 
 	private headers(json: boolean): Headers {
@@ -58,12 +116,21 @@ export class BackendClient {
 		body: unknown,
 		signal?: AbortSignal,
 	): Promise<unknown> {
-		const response = await fetch(`${this.baseUrl}${path}`, {
-			method,
-			headers: this.headers(body !== undefined),
-			body: body === undefined ? undefined : JSON.stringify(body),
-			...(signal ? { signal } : {}),
-		});
+		let response: Response;
+		try {
+			response = await fetch(`${this.baseUrl}${path}`, {
+				method,
+				headers: this.headers(body !== undefined),
+				body: body === undefined ? undefined : JSON.stringify(body),
+				...(signal ? { signal } : {}),
+			});
+		} catch (error) {
+			// A cancelled call reports one stable error shape regardless of what
+			// the runtime threw, so both adapters behave identically (task 3.6).
+			if (signal?.aborted)
+				throw new DOMException("operation cancelled", "AbortError");
+			throw error;
+		}
 		const text = await response.text();
 		let parsed: unknown;
 		try {
@@ -86,44 +153,83 @@ export class BackendClient {
 					`backend rejected the request (${response.status})`,
 			);
 		}
-		if (
-			parsed &&
-			typeof parsed === "object" &&
-			"ok" in parsed &&
-			(parsed as { ok: boolean }).ok === true
-		)
-			return (parsed as unknown as { value: unknown }).value;
-		return parsed;
+		// Every JSON response is an envelope: decode it, so a body that is
+		// neither a value nor a structured error fails here.
+		try {
+			const envelope = decodeContract<{ ok: boolean; value?: unknown }>(
+				"core.wire-envelope",
+				wireEnvelopeSchema,
+				parsed,
+			);
+			if (!envelope.ok) {
+				// a 2xx response that carries a failure envelope is an error, not
+				// an absent value
+				const failure = (
+					envelope as { error?: { code?: string; message?: string } }
+				).error;
+				throw new BackendClientError(
+					response.status,
+					failure?.code ?? "request-failed",
+					failure?.message ?? "backend reported a failure",
+				);
+			}
+			return envelope.value;
+		} catch (error) {
+			if (error instanceof ContractFailure)
+				throw new BackendClientError(
+					response.status,
+					"invalid-response",
+					`backend returned a malformed envelope (${error.message})`,
+				);
+			throw error;
+		}
 	}
 
+	/** Observations return a kind-specific value; the caller owns the schema
+	 * (the data layer passes the contract schema for the kind it asked for). */
 	async observe<T>(
 		observation: ObservationRequest,
+		// biome-ignore lint/suspicious/noExplicitAny: Effect Schema generics don't line up with domain types; mirror decodeContract.
+		schema: Schema.Schema<any, any, never>,
 		signal?: AbortSignal,
 	): Promise<T> {
-		return (await this.request(
-			"POST",
-			"/api/v1/observe",
-			{ observation },
-			signal,
-		)) as T;
+		return this.decode<T>(
+			`core.observation.${observation.kind}`,
+			schema,
+			await this.request("POST", "/api/v1/observe", { observation }, signal),
+		);
 	}
 
-	async listViews(repo: string): Promise<WorkflowView[]> {
+	async listViews(repo: string, signal?: AbortSignal): Promise<WorkflowView[]> {
 		const query = new URLSearchParams({ repo, list: "1" });
-		return (await this.request(
-			"GET",
-			`/api/v1/workflow/view?${query}`,
-			undefined,
-		)) as WorkflowView[];
+		return this.decode<WorkflowView[]>(
+			"core.workflow-view-list",
+			workflowViewListSchema,
+			await this.request(
+				"GET",
+				`/api/v1/workflow/view?${query}`,
+				undefined,
+				signal,
+			),
+		);
 	}
 
-	async view(repo: string, workflowId: string): Promise<WorkflowView> {
+	async view(
+		repo: string,
+		workflowId: string,
+		signal?: AbortSignal,
+	): Promise<WorkflowView> {
 		const query = new URLSearchParams({ repo, workflowId });
-		return (await this.request(
-			"GET",
-			`/api/v1/workflow/view?${query}`,
-			undefined,
-		)) as WorkflowView;
+		return this.decode<WorkflowView>(
+			"core.workflow-view",
+			workflowViewSchema,
+			await this.request(
+				"GET",
+				`/api/v1/workflow/view?${query}`,
+				undefined,
+				signal,
+			),
+		);
 	}
 
 	async action(request: {
@@ -133,11 +239,11 @@ export class BackendClient {
 		actionId: string;
 		input?: unknown;
 	}): Promise<WorkflowView> {
-		return (await this.request(
-			"POST",
-			"/api/v1/workflow/action",
-			request,
-		)) as WorkflowView;
+		return this.decode<WorkflowView>(
+			"core.workflow-view",
+			workflowViewSchema,
+			await this.request("POST", "/api/v1/workflow/action", request),
+		);
 	}
 
 	async start(request: {
@@ -149,11 +255,11 @@ export class BackendClient {
 		workflowType?: string;
 		preset?: string;
 	}): Promise<string> {
-		return (await this.request(
-			"POST",
-			"/api/v1/workflow/start",
-			request,
-		)) as string;
+		return this.decode<string>(
+			"core.workflow-id",
+			workflowIdResponseSchema,
+			await this.request("POST", "/api/v1/workflow/start", request),
+		);
 	}
 
 	async repair(request: {
@@ -163,11 +269,11 @@ export class BackendClient {
 		targetStep: string;
 		reason?: string;
 	}): Promise<WorkflowView> {
-		return (await this.request(
-			"POST",
-			"/api/v1/workflow/repair",
-			request,
-		)) as WorkflowView;
+		return this.decode<WorkflowView>(
+			"core.workflow-view",
+			workflowViewSchema,
+			await this.request("POST", "/api/v1/workflow/repair", request),
+		);
 	}
 
 	async question(request: {
@@ -177,11 +283,11 @@ export class BackendClient {
 		questionId: string;
 		answer: unknown;
 	}): Promise<WorkflowView> {
-		return (await this.request(
-			"POST",
-			"/api/v1/workflow/question",
-			request,
-		)) as WorkflowView;
+		return this.decode<WorkflowView>(
+			"core.workflow-view",
+			workflowViewSchema,
+			await this.request("POST", "/api/v1/workflow/question", request),
+		);
 	}
 
 	async saveReview(request: {
@@ -205,24 +311,27 @@ export class BackendClient {
 		message?: string;
 		drain?: boolean;
 	}): Promise<WorkflowView> {
-		return (await this.request(
-			"POST",
-			"/api/v1/agent/handoff",
-			request,
-		)) as WorkflowView;
+		return this.decode<WorkflowView>(
+			"core.workflow-view",
+			workflowViewSchema,
+			await this.request("POST", "/api/v1/agent/handoff", request),
+		);
 	}
 
-	async agentQuestion(request: {
-		repo: string;
-		environment: Record<string, string>;
-		input: unknown;
-		timeoutMs?: number;
-	}): Promise<string> {
-		return (await this.request(
-			"POST",
-			"/api/v1/agent/question",
-			request,
-		)) as string;
+	async agentQuestion(
+		request: {
+			repo: string;
+			environment: Record<string, string>;
+			input: unknown;
+			timeoutMs?: number;
+		},
+		signal?: AbortSignal,
+	): Promise<string> {
+		return this.decode<string>(
+			"core.workflow-id",
+			workflowIdResponseSchema,
+			await this.request("POST", "/api/v1/agent/question", request, signal),
+		);
 	}
 
 	async researchHandoff(request: {
@@ -230,56 +339,38 @@ export class BackendClient {
 		environment: Record<string, string>;
 		handoff: unknown;
 	}): Promise<WorkflowView> {
-		return (await this.request(
-			"POST",
-			"/api/v1/agent/research-handoff",
-			request,
-		)) as WorkflowView;
+		return this.decode<WorkflowView>(
+			"core.workflow-view",
+			workflowViewSchema,
+			await this.request("POST", "/api/v1/agent/research-handoff", request),
+		);
 	}
 
-	async saveAgents(
-		mutation: AgentsMutation,
-		repository?: string,
-		expectedRevision?: string,
-	): Promise<void> {
-		await this.request("POST", "/api/v1/config/agents", {
-			repository,
-			...(expectedRevision ? { expectedRevision } : {}),
-			mutation,
-		});
+	async saveAgents(request: AgentsMutationRequest): Promise<void> {
+		await this.request("POST", "/api/v1/config/agents", request);
 	}
 
-	async loadAgents(repository?: string): Promise<{
-		agents: unknown;
-		provenance: unknown;
-		conflicts: string[];
-		revision?: string;
-	}> {
+	async loadAgents(repository?: string): Promise<AgentsListResponse> {
 		const query = repository
 			? `?repository=${encodeURIComponent(repository)}`
 			: "";
-		return (await this.request(
-			"GET",
-			`/api/v1/config/agents${query}`,
-			undefined,
-		)) as {
-			agents: unknown;
-			provenance: unknown;
-			conflicts: string[];
-			revision?: string;
-		};
+		return this.decode(
+			"core.agents-list",
+			agentsListResponseSchema,
+			await this.request("GET", `/api/v1/config/agents${query}`, undefined),
+		);
 	}
 
 	async telemetryWorkspaces(): Promise<
 		Array<{ changeId: string; path: string; spanCount: number }>
 	> {
-		const value = (await this.request(
-			"GET",
-			"/api/v1/telemetry/workspaces",
-			undefined,
-		)) as {
+		const value = this.decode<{
 			workspaces: Array<{ changeId: string; path: string; spanCount: number }>;
-		};
+		}>(
+			"core.telemetry-workspaces",
+			telemetryWorkspacesSchema,
+			await this.request("GET", "/api/v1/telemetry/workspaces", undefined),
+		);
 		return value.workspaces;
 	}
 
@@ -289,11 +380,11 @@ export class BackendClient {
 		perPage?: number;
 		changeId?: string;
 	}): Promise<TraceSummaryPage> {
-		return (await this.request(
-			"POST",
-			"/api/v1/telemetry/traces",
-			options,
-		)) as TraceSummaryPage;
+		return this.decode<TraceSummaryPage>(
+			"core.telemetry-traces",
+			traceSummaryPageSchema,
+			await this.request("POST", "/api/v1/telemetry/traces", options),
+		);
 	}
 
 	/** Bounded span read: one workflow's spans, or the newest spans overall
@@ -302,13 +393,11 @@ export class BackendClient {
 		changeId?: string;
 		limit?: number;
 	}): Promise<unknown[]> {
-		const value = (await this.request(
-			"POST",
-			"/api/v1/telemetry/spans",
-			options,
-		)) as {
-			spans: unknown[];
-		};
+		const value = this.decode<{ spans: unknown[] }>(
+			"core.telemetry-spans",
+			telemetrySpansSchema,
+			await this.request("POST", "/api/v1/telemetry/spans", options),
+		);
 		return value.spans;
 	}
 
@@ -319,31 +408,34 @@ export class BackendClient {
 	}
 
 	async telemetryScan(repo: string): Promise<number> {
-		const value = (await this.request("POST", "/api/v1/telemetry/scan", {
-			repo,
-		})) as { scanned: number };
+		const value = this.decode<{ scanned: number }>(
+			"core.telemetry-scan",
+			telemetryCountSchema,
+			await this.request("POST", "/api/v1/telemetry/scan", { repo }),
+		);
 		return value.scanned;
 	}
 
 	async telemetryPrune(days?: number): Promise<number> {
-		const value = (await this.request("POST", "/api/v1/telemetry/prune", {
-			days,
-		})) as { removed: number };
+		const value = this.decode<{ removed: number }>(
+			"core.telemetry-prune",
+			telemetryRemovedSchema,
+			await this.request("POST", "/api/v1/telemetry/prune", { days }),
+		);
 		return value.removed;
 	}
 
-	async respondCredential(interactionId: string, value: string): Promise<void> {
+	async respondCredential(request: CredentialRespondRequest): Promise<void> {
 		await this.request("POST", "/api/v1/credentials/respond", {
-			ownerId: this.ownerId,
-			interactionId,
-			value,
+			...request,
+			ownerId: request.ownerId || this.ownerId,
 		});
 	}
 
 	/** Subscribe to the bounded event stream. Returns an unsubscribe function;
 	 * a `resync` event tells the caller to fetch an authoritative snapshot. */
 	subscribe(
-		handlers: DomainEventHandler,
+		handlers: GatewayEventHandlers,
 		cursor?: number,
 		signal?: AbortSignal,
 	): () => void {
@@ -351,6 +443,8 @@ export class BackendClient {
 		const localAbort = () => controller.abort();
 		signal?.addEventListener("abort", localAbort, { once: true });
 		const query = cursor === undefined ? "" : `?cursor=${cursor}`;
+		this.setState("connecting");
+		this.stateListeners.add(handlers.onConnectionChange ?? (() => {}));
 		void (async () => {
 			try {
 				const response = await fetch(`${this.baseUrl}/api/v1/events${query}`, {
@@ -363,6 +457,7 @@ export class BackendClient {
 						"event-stream",
 						`event stream unavailable (${response.status})`,
 					);
+				this.setState("open");
 				const reader = response.body.getReader();
 				const decoder = new TextDecoder();
 				let buffer = "";
@@ -384,16 +479,20 @@ export class BackendClient {
 							handlers.onResync(
 								(data as { reason?: string }).reason ?? "resync required",
 							);
-						else if (event === "domain") handlers.onEvent(data);
+						else if (event === "domain")
+							handlers.onEvent(data as EventEnvelope);
 					}
 				}
 			} catch {
 				/* stream closed: the caller's reconnect policy owns recovery */
+				if (!controller.signal.aborted) this.setState("reconnecting");
 			}
 		})();
 		return () => {
 			signal?.removeEventListener("abort", localAbort);
 			controller.abort();
+			this.stateListeners.delete(handlers.onConnectionChange ?? (() => {}));
+			this.setState("closed");
 		};
 	}
 }

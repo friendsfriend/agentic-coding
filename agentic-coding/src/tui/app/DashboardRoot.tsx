@@ -11,9 +11,9 @@ import type { KeyEvent, Renderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
 import { ErrorModalOverlay, StatusBar, uiColors } from "@ui";
 import { createSignal, Show } from "solid-js";
-import { App as DashApp, type WorkflowHeaderInfo } from "../dash/App";
-import { Header } from "../dash/ui/Header";
-import { QuitConfirmModal } from "../lifecycle/QuitConfirmModal";
+import { App as DashApp, type WorkflowHeaderInfo } from "../dash/App.tsx";
+import { Header } from "../dash/ui/Header.tsx";
+import { QuitConfirmModal } from "../lifecycle/QuitConfirmModal.tsx";
 
 export interface DashboardRootProps {
 	repo: string;

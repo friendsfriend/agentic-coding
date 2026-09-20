@@ -1,11 +1,11 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { ActionTarget, DependencyRef } from "@devenv/types";
 import { TextAttributes } from "@opentui/core";
-import type { Highlight } from "@ui";
-import { AnimatedStatusText, highlightColor } from "@ui";
 import { createMemo, For, Show } from "solid-js";
+import { AnimatedStatusText } from "../components/AnimatedStatusText";
+import { type Highlight, highlightColor } from "../components/Highlight";
 import { uiColors } from "../theme/colors";
+import type { ActionTarget, DependencyRef } from "../types";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 

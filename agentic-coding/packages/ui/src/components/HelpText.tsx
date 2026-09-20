@@ -3,7 +3,7 @@
 import { TextAttributes } from "@opentui/core";
 import { For, type JSX } from "solid-js";
 import { uiColors } from "../theme/colors";
-import { type Keybind, keybindFooterLabel } from "./keybinds";
+import { type Keybind, keybindFooterLabel } from "./keybinds.ts";
 
 /** A help entry is a keybind; kept as an alias for existing imports. */
 export type HelpEntry = Keybind;

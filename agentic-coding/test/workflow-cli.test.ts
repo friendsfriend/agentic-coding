@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Effect } from "effect";
+import type { AgentHandle } from "../src/contracts/workflow.ts";
 import type { AgentAdapter, LaunchContext } from "../src/workflow/adapters.ts";
 import { WorkflowApplication } from "../src/workflow/application.ts";
 import {
@@ -14,7 +15,6 @@ import {
 	run,
 	SUBCOMMANDS,
 } from "../src/workflow/cli.ts";
-import type { AgentHandle } from "../src/workflow/contracts.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import {
 	agentEffectHandlers,

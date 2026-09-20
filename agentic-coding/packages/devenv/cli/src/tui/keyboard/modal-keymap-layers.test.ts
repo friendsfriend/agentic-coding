@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { createTestKeymap } from "@opentui/keymap/testing";
-import { applyKeymapRuntimeSnapshot } from "./keymap-runtime";
-import { setupDevenvKeymap } from "./keymap-setup";
-import { registerModalKeymapLayers } from "./modal-keymap-layers";
-import type { KeyboardActions, KeyboardContext, KeyboardStores } from "./types";
+import { applyKeymapRuntimeSnapshot } from "./keymap-runtime.ts";
+import { setupDevenvKeymap } from "./keymap-setup.ts";
+import { registerModalKeymapLayers } from "./modal-keymap-layers.ts";
+import type {
+	KeyboardActions,
+	KeyboardContext,
+	KeyboardStores,
+} from "./types.ts";
 
 type TestKeymap = ReturnType<typeof createTestKeymap>["keymap"];
 

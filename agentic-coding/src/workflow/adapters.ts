@@ -1,14 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Effect, Either } from "effect";
-import { decodeHerdrResult } from "../herdr-client.ts";
-import type { RenderedAssignment } from "./assignment.ts";
 import type {
 	AgentHandle,
 	Assignment,
 	ResolvedProfile,
 	RuntimeId,
-} from "./contracts.ts";
+} from "../contracts/workflow.ts";
+import { decodeHerdrResult } from "../herdr-client.ts";
+import type { RenderedAssignment } from "./assignment.ts";
 import * as H from "./herdr-schema.ts";
 import {
 	closeSecureDirectory,
@@ -343,32 +343,21 @@ export class PiAdapter extends BaseAdapter {
 		const args = ["--name", ctx.name, "--no-prompt-templates"];
 		if (ctx.profile.model) args.push("--model", ctx.profile.model);
 		if (ctx.profile.thinking) args.push("--thinking", ctx.profile.thinking);
-		if (ctx.assignment.stepId === "core.research") {
-			if (
-				!ctx.profile.readOnly ||
-				!ctx.profile.capabilities.includes("read-only") ||
-				ctx.profile.capabilities.includes("shell") ||
-				ctx.profile.capabilities.includes("edit")
-			)
-				throw new Error("research requires a read-only profile");
-			args.push("--tools", "read", "--no-extensions");
-		} else {
-			const tools = ctx.profile.tools;
-			if (tools.length) args.push("--tools", tools.join(","));
-			else if (
-				ctx.profile.readOnly ||
-				ctx.profile.capabilities.includes("read-only")
-			)
-				args.push("--tools", "read");
-			if (
-				ctx.profile.readOnly ||
-				ctx.profile.capabilities.includes("read-only") ||
-				ctx.profile.extensions.length === 0
-			)
-				args.push("--no-extensions");
-			for (const extension of ctx.profile.extensions)
-				args.push("--extension", extension);
-		}
+		const tools = ctx.profile.tools;
+		if (tools.length) args.push("--tools", tools.join(","));
+		else if (
+			ctx.profile.readOnly ||
+			ctx.profile.capabilities.includes("read-only")
+		)
+			args.push("--tools", "read");
+		if (
+			ctx.profile.readOnly ||
+			ctx.profile.capabilities.includes("read-only") ||
+			ctx.profile.extensions.length === 0
+		)
+			args.push("--no-extensions");
+		for (const extension of ctx.profile.extensions)
+			args.push("--extension", extension);
 		if (ctx.workflowExtensionPath)
 			args.push("--extension", ctx.workflowExtensionPath);
 		if (ctx.bridgePath) args.push("--extension", ctx.bridgePath);
@@ -402,7 +391,6 @@ function isolatedOpenCode(ctx: LaunchContext): LaunchContext {
 			JSON.stringify(
 				{
 					permission:
-						ctx.assignment.stepId === "core.research" ||
 						ctx.profile.readOnly ||
 						ctx.profile.capabilities.includes("read-only")
 							? { edit: "deny", bash: "deny", read: "allow" }

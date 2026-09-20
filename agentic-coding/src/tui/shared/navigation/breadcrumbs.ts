@@ -6,7 +6,7 @@
 // ancestors into a single `…` segment while the current location stays visible
 // and the focused ancestor is always readable (so keyboard access to a hidden
 // ancestor works without horizontal overflow).
-import { pageLabel, type Route } from "../routes";
+import { pageLabel, type Route } from "../routes.ts";
 
 export interface BreadcrumbSegment {
 	label: string;

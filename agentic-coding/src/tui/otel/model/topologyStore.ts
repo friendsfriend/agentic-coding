@@ -1,4 +1,4 @@
-import type { ServiceNode, SpanData } from "./types";
+import type { ServiceNode, SpanData } from "../../../contracts/telemetry.ts";
 
 export interface Edge {
 	source: string;

@@ -4,11 +4,11 @@ import type { ScrollBoxRenderable } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
 import { createEffect, createMemo, For, Show } from "solid-js";
 import { uiColors } from "../theme/colors";
-import { GenericModal } from "./GenericModal";
-import { MarkdownBlockView } from "./MarkdownViewer";
-import { parseMarkdownBlocks } from "./markdownBlocks";
-import { getMarkdownSyntaxStyle } from "./markdownSyntax";
-import { ScrollableContent } from "./ScrollableContent";
+import { GenericModal } from "./GenericModal.tsx";
+import { MarkdownBlockView } from "./MarkdownViewer.tsx";
+import { parseMarkdownBlocks } from "./markdownBlocks.ts";
+import { getMarkdownSyntaxStyle } from "./markdownSyntax.ts";
+import { ScrollableContent } from "./ScrollableContent.tsx";
 
 export function VerdictModal(props: {
 	title: string;

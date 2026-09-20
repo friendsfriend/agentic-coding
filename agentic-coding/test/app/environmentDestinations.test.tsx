@@ -6,12 +6,12 @@ import {
 	requestedCategory,
 	viewModeForPath,
 	viewPathForMode,
-} from "../../packages/devenv/cli/src/tui/destination-sync";
+} from "../../packages/devenv/cli/src/tui/destination-sync.ts";
 import {
 	createAppDetailStore,
 	createAppStore,
 	type TabType,
-} from "../../packages/devenv/cli/src/tui/stores";
+} from "../../packages/devenv/cli/src/tui/stores/index.ts";
 
 // Environments destination pages
 // (replace-nested-tabs-with-page-navigation, task 2.2): the embedded feature

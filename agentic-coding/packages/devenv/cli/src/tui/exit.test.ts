@@ -6,7 +6,7 @@ import {
 	registerExitGuard,
 	registerGracefulShutdownHandler,
 	setExitRenderer,
-} from "./exit";
+} from "./exit.ts";
 
 afterEach(() => {
 	__resetExitForTests();

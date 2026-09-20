@@ -1,7 +1,7 @@
 import { getLogger } from "@devenv/core";
-import { detectOptionalUtilities } from "../startup-utility-detection";
-import type { AppStore } from "../stores";
-import type { AppActions } from "./app-actions";
+import { detectOptionalUtilities } from "../startup-utility-detection.ts";
+import type { AppStore } from "../stores/index.ts";
+import type { AppActions } from "./app-actions.ts";
 
 async function waitForActionRegistry(
 	client: ReturnType<typeof import("@devenv/core").createClient>,

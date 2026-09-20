@@ -2,15 +2,15 @@
 
 import { TextAttributes } from "@opentui/core";
 import { useTerminalDimensions } from "@opentui/solid";
-import type { Highlight } from "@ui";
+import { createMemo, For, type JSXElement, Show } from "solid-js";
 import {
-	Badge,
-	MatchedText,
-	RunningText,
 	type StatusAnimationIntent,
 	statusAnimationModel,
-} from "@ui";
-import { createMemo, For, type JSXElement, Show } from "solid-js";
+} from "../components/AnimatedStatusText";
+import { Badge } from "../components/Badge";
+import type { Highlight } from "../components/Highlight";
+import { MatchedText } from "../components/MatchedText";
+import { RunningText } from "../components/RunningText";
 import { uiColors } from "../theme/colors";
 
 export interface WorkItemCardProps {

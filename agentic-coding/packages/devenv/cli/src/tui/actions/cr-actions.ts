@@ -1,8 +1,8 @@
 import type { DevEnvClient } from "@devenv/core";
 import { getLogger } from "@devenv/core";
-import type { AppStore } from "../stores/app-store";
-import type { ChangeRequestStore } from "../stores/cr-store";
-import type { UiStore } from "../stores/ui-store";
+import type { AppStore } from "../stores/app-store.ts";
+import type { ChangeRequestStore } from "../stores/cr-store.ts";
+import type { UiStore } from "../stores/ui-store.ts";
 
 const AI_ATTRIBUTION_HEADER = `> 🤖 *This review was generated automatically by AI. Please verify all suggestions before acting on them.*
 

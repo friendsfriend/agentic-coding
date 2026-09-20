@@ -6,8 +6,8 @@ import type {
 	AppAction,
 	InfraService,
 } from "@devenv/types";
-import type { AppStore } from "../stores/app-store";
-import type { UiStore } from "../stores/ui-store";
+import type { AppStore } from "../stores/app-store.ts";
+import type { UiStore } from "../stores/ui-store.ts";
 
 export function operationProgressLabel(
 	action: AppAction | "start" | "stop" | "restart",

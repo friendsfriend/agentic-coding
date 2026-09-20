@@ -1,7 +1,7 @@
 import type { DevEnvClient } from "@devenv/core";
 import { getLogger } from "@devenv/core";
-import type { AppStore } from "../stores/app-store";
-import type { UiStore } from "../stores/ui-store";
+import type { AppStore } from "../stores/app-store.ts";
+import type { UiStore } from "../stores/ui-store.ts";
 
 export function createGitActions(
 	appStore: AppStore,

@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test";
 import { testRender } from "@opentui/solid";
-import { ProgressAnimationDemo } from "./ProgressAnimationDemo";
+import { ProgressAnimationDemo } from "./ProgressAnimationDemo.tsx";
 
 describe("ProgressAnimationDemo", () => {
 	test("shows Aurora, operation colors, badges, and wipe transitions", async () => {

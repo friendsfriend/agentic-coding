@@ -3,10 +3,10 @@
 import { useTerminalDimensions } from "@opentui/solid";
 import { createMemo, For, type JSX, Show } from "solid-js";
 import { uiColors } from "../theme/colors";
-import { AnimatedStatusText } from "./AnimatedStatusText";
-import { useModalContentLines } from "./GenericModal";
-import { focusSoon } from "./utils/focusSoon";
-import { calculateVisibleItems } from "./utils/virtualScroll";
+import { AnimatedStatusText } from "./AnimatedStatusText.tsx";
+import { useModalContentLines } from "./GenericModal.tsx";
+import { focusSoon } from "./utils/focusSoon.ts";
+import { calculateVisibleItems } from "./utils/virtualScroll.ts";
 
 // ─── Layout constants ────────────────────────────────────────────────────────
 

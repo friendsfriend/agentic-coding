@@ -3,9 +3,9 @@ import { useTerminalDimensions } from "@opentui/solid";
 import { createMemo, For } from "solid-js";
 import { uiColors } from "../theme/colors";
 import { themeColorForTheme, themeNames } from "../theme/theme";
-import { GenericModal } from "./GenericModal";
-import { formatHelpText } from "./HelpText";
-import { highlightColor } from "./Highlight";
+import { GenericModal } from "./GenericModal.tsx";
+import { formatHelpText } from "./HelpText.tsx";
+import { highlightColor } from "./Highlight.tsx";
 
 /** A prop that may be a plain value or a Solid accessor. */
 export type Readable<T> = T | (() => T);
