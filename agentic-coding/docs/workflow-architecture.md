@@ -27,10 +27,16 @@ migration lock, rereads `PRAGMA user_version`, and applies ordered native
 migrations atomically. Store versions 1–4 are supported: version 1 adds run
 ownership columns, version 2 adopts nullable workflow identity, version 3
 repairs rebuilt child foreign keys, and version 4 is the current validated
-schema. Unsupported future versions fail closed. Mutating engine entry points
-initialize before their command transaction and may then import legacy
-`workflows` rows. Status and list do not initialize or import: absent and old
-stores are presented as migration-required diagnostics. The explicit drain
+schema. Unsupported future versions fail closed. An unversioned store is
+classified by shape: the canonical tables, columns, indexes, foreign keys and
+statement structure must match a known version, while a table this build does
+not know is stepped over when it is empty (another feature or build may share
+the file without versioning it) and fails closed when it holds rows — unknown
+data is never migrated over. Statement text is compared structurally, so a
+legacy DDL written with different spacing is the same schema, not drift.
+Mutating engine entry points initialize before their command transaction and
+may then import legacy `workflows` rows. Status and list do not initialize or
+import: absent and old stores are presented as migration-required diagnostics. The explicit drain
 command accepts bounded `--limit` and `--wait-ms` values for retry progress
 without disguising execution as observation. Back up persistent stores with
 SQLite's consistent backup mechanism before upgrades, and stop old schema

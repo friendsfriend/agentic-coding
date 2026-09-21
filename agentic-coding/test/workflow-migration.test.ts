@@ -246,6 +246,65 @@ test("unknown unversioned schemas and future versions fail closed", () => {
 	}
 });
 
+test("a store another build touched still opens: empty orphan tables are stepped over", () => {
+	const root = repo();
+	try {
+		initializeStore(root);
+		const db = new Database(canonicalStorePath(root));
+		// The shape a newer build (or another feature) can leave behind on a
+		// store it never versioned: its own table, plus the legacy mirror written
+		// with different spacing than this build's DDL. Neither may block a start
+		// while the canonical schema validates.
+		db.exec(
+			"CREATE TABLE workflows (change_id TEXT PRIMARY KEY, state TEXT NOT NULL)",
+		);
+		db.query("INSERT INTO workflows VALUES (?,?)").run(
+			"change-1",
+			JSON.stringify({ changeId: "change-1", phase: "closed" }),
+		);
+		db.exec(
+			"CREATE TABLE workflow_operator_sessions(id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE, actor TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, revoked_at TEXT, repository TEXT NOT NULL DEFAULT '', scope_json TEXT NOT NULL DEFAULT '[]')",
+		);
+		db.exec("PRAGMA user_version=0");
+		db.close();
+
+		initializeStore(root);
+		const check = new Database(canonicalStorePath(root));
+		expect(check.query("PRAGMA user_version").get()).toEqual({
+			user_version: STORE_SCHEMA_VERSION,
+		});
+		// The legacy rows and the foreign table are left exactly as they were.
+		expect(check.query("SELECT COUNT(*) count FROM workflows").get()).toEqual({
+			count: 1,
+		});
+		expect(
+			check
+				.query("SELECT COUNT(*) count FROM workflow_operator_sessions")
+				.get(),
+		).toEqual({ count: 0 });
+		check.close();
+
+		// A populated orphan is data this build cannot interpret: fail closed and
+		// leave the store untouched.
+		const populated = new Database(canonicalStorePath(root));
+		populated.exec(
+			"INSERT INTO workflow_operator_sessions(id,token_hash,actor,created_at,expires_at,repository,scope_json) VALUES ('s-1','hash','operator','2026-01-01T00:00:00.000Z','2027-01-01T00:00:00.000Z','','[]')",
+		);
+		populated.exec("PRAGMA user_version=0");
+		populated.close();
+		expect(() => initializeStore(root)).toThrow(
+			/unsupported unversioned store tables: workflow_operator_sessions/,
+		);
+		const unchanged = new Database(canonicalStorePath(root));
+		expect(unchanged.query("PRAGMA user_version").get()).toEqual({
+			user_version: 0,
+		});
+		unchanged.close();
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("independent initializer processes converge on one committed schema version", async () => {
 	const root = repo();
 	try {

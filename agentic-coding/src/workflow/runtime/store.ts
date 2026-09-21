@@ -264,17 +264,40 @@ function tableNames(db: Database): Set<string> {
 			.filter((name) => !name.startsWith("sqlite_")),
 	);
 }
+/** Whether an unknown table holds any row. The identifier comes from
+ * `sqlite_master`, so it is quoted defensively. */
+function tableHasRows(db: Database, table: string): boolean {
+	const identifier = `"${table.replace(/"/g, '""')}"`;
+	return Boolean(db.query(`SELECT 1 FROM ${identifier} LIMIT 1`).get());
+}
 function tableSql(db: Database, table: string): string {
 	return (
 		(
-			db
-				.query("SELECT sql FROM sqlite_master WHERE type='table' AND name=?")
-				.get(table) as { sql?: string } | null
-		)?.sql ?? ""
-	)
-		.replace(/["`]/g, "")
-		.replace(/\s+/g, " ")
-		.toUpperCase();
+			(
+				db
+					.query("SELECT sql FROM sqlite_master WHERE type='table' AND name=?")
+					.get(table) as { sql?: string } | null
+			)?.sql ?? ""
+		)
+			.replace(/["`]/g, "")
+			.replace(/\s+/g, " ")
+			// SQLite stores the statement text as it was written, so two identical
+			// schemas differ only in spacing. Compare structure, not formatting:
+			// collapse whitespace around the punctuation every DDL form shares.
+			.replace(/\s*([(),])\s*/g, "$1")
+			.toUpperCase()
+	);
+}
+/** Tables this build does not know but can safely step over: not part of the
+ * canonical schema and holding no rows, so no migration can misread them. Only
+ * a store that already carries the canonical schema can step over anything — a
+ * file without it is not this build's store, whatever else it contains. */
+function ignorableTables(db: Database, names: Set<string>): Set<string> {
+	if (REQUIRED_TABLES.some((table) => !names.has(table))) return new Set();
+	const allowed = new Set([...REQUIRED_TABLES, "workflows"]);
+	return new Set(
+		[...names].filter((name) => !allowed.has(name) && !tableHasRows(db, name)),
+	);
 }
 function validateCanonicalShape(db: Database, allowHistorical = false): void {
 	const instanceSql = tableSql(db, "workflow_instances");
@@ -313,6 +336,17 @@ function validateCanonicalShape(db: Database, allowHistorical = false): void {
 			}));
 		const actualObjects = objects(db);
 		const expectedObjects = objects(reference);
+		// An empty table from another feature (or another build) is not part of
+		// the schema under validation, so neither it nor its indexes take part in
+		// the object comparison. A table with rows stays in and fails the set
+		// comparison below.
+		const ignored = ignorableTables(
+			db,
+			new Set(actualObjects.map((object) => object.tbl_name)),
+		);
+		const compared = actualObjects.filter(
+			(object) => !ignored.has(object.tbl_name),
+		);
 		const legacyObject = actualObjects.find(
 			(object) => object.type === "table" && object.name === "workflows",
 		);
@@ -327,7 +361,7 @@ function validateCanonicalShape(db: Database, allowHistorical = false): void {
 			);
 		const objectKey = (object: ReturnType<typeof objects>[number]) =>
 			`${object.type}:${object.name}`;
-		const actualKeys = actualObjects.map(objectKey);
+		const actualKeys = compared.map(objectKey);
 		const expectedKeys = expectedObjects.map(objectKey);
 		if (legacyObject && !expectedKeys.includes("table:workflows"))
 			expectedKeys.push("table:workflows");
@@ -615,11 +649,22 @@ function classifyUnversioned(db: Database): number {
 	const names = tableNames(db);
 	const allowed = new Set([...REQUIRED_TABLES, "workflows"]);
 	const unknown = [...names].filter((name) => !allowed.has(name));
-	if (unknown.length)
-		throw new WorkflowRuntimeError(
-			"migration-required",
-			`unsupported unversioned store tables: ${unknown.join(", ")}`,
-		);
+	const ignorable = ignorableTables(db, names);
+	if (unknown.length) {
+		// An unversioned store may carry tables this build does not know: another
+		// feature (or another build) can share the file without versioning it.
+		// Empty orphans are harmless — the canonical tables are still validated
+		// strictly below, and nothing here touches the extra table — so they are
+		// left in place instead of blocking every start. A table that holds rows
+		// fails closed: its data belongs to a schema this build cannot interpret
+		// and no migration may silently carry it forward.
+		const populated = unknown.filter((name) => !ignorable.has(name));
+		if (populated.length)
+			throw new WorkflowRuntimeError(
+				"migration-required",
+				`unsupported unversioned store tables: ${populated.join(", ")}`,
+			);
+	}
 	if (names.size === 0) return 0;
 	if (names.size === 1 && names.has("workflows")) {
 		const legacyColumns = columns(db, "workflows");
