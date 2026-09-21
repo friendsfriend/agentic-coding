@@ -18,6 +18,7 @@ import {
 	isRecognizedInterpreter,
 	linkScriptFile,
 	mapShebangToWindows,
+	powerShellCommand,
 	readInterpreterFromShebang,
 	readShebang,
 	resolveScriptTargetPath,
@@ -225,6 +226,16 @@ describe("interpreter selection", () => {
 		for (const c of fixture.interpreters.recognized) {
 			expect(isRecognizedInterpreter(c.name)).toBe(c.recognized);
 		}
+	});
+
+	test("resolves PowerShell from the installed package", () => {
+		const installed = powerShellCommand((name) => {
+			expect(name).toBe("pwsh");
+			return "/usr/bin/pwsh";
+		});
+		expect(installed).toBe("pwsh");
+		// Without the package installed, Windows PowerShell is the fallback.
+		expect(powerShellCommand(() => undefined)).toBe("powershell");
 	});
 });
 

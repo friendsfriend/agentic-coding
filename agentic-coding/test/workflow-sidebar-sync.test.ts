@@ -321,7 +321,10 @@ describe("sidebar socket view transport", () => {
 	test("a missing socket path fails fast without spawning anything", async () => {
 		await expect(
 			installSidebarView({
-				socketPath: path.join(fs.mkdtempSync(os.tmpdir()), "gone.sock"),
+				socketPath: path.join(
+					fs.mkdtempSync(path.join(os.tmpdir(), "sidebar-missing-")),
+					"gone.sock",
+				),
 			}),
 		).rejects.toThrow();
 		await expect(installSidebarView({ socketPath: "" })).rejects.toThrow(

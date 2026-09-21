@@ -175,6 +175,10 @@ describe("discovery", () => {
 				action: scenario.action,
 				configDir: path.join(root, "config"),
 				platform: "linux",
+				// The fixture was captured where `pwsh` is installed, and the
+				// resolver reads the host PATH. Pin it here; the installed-package
+				// lookup itself is validated in `test/actions-scripts.test.ts`.
+				powerShell: () => "pwsh",
 			});
 			expect(targets.map(shape)).toEqual(scenario.targets.map(shape));
 		});
