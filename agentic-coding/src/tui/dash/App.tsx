@@ -2139,6 +2139,8 @@ export function App(props: {
 				"q",
 				"ctrl+c",
 				"meta+c",
+				"y",
+				"n",
 				"shift+t",
 				"shift+r",
 				"shift+o",

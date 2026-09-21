@@ -9,6 +9,11 @@ import type { KeyEvent, Renderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
 import type { DashboardData } from "../../../contracts/workflow.ts";
 import { copyToClipboard } from "../../clipboard.ts";
+import {
+	quitConfirmation,
+	requestShutdown,
+	resolveQuitConfirmation,
+} from "../../lifecycle.ts";
 import { movePanel, type PanelDirection } from "../panel-grid.ts";
 
 /** The route props the handler reads. */
@@ -278,8 +283,14 @@ export function createDashboardKeyHandler(
 					? "none"
 					: String(props.keymap.getData?.("modal.active")),
 		});
-		if (busy()) return;
 		const name = key.name.toLowerCase();
+		if (quitConfirmation()) {
+			if (name === "y" || name === "enter" || name === "return")
+				resolveQuitConfirmation(true);
+			else if (name === "n" || name === "escape")
+				resolveQuitConfirmation(false);
+			return;
+		}
 		if (name === "q" || (key.ctrl && name === "c")) {
 			const selection = renderer.getSelection()?.getSelectedText();
 			if (key.ctrl && selection) {
@@ -288,13 +299,14 @@ export function createDashboardKeyHandler(
 				return;
 			}
 			const now = Date.now();
-			if (now - lastQuitAt < 1000) renderer.destroy();
+			if (now - lastQuitAt < 1000) requestShutdown();
 			else {
 				lastQuitAt = now;
 				notify(`If you want to quit press ${key.ctrl ? "Ctrl+C" : "q"} again`);
 			}
 			return;
 		}
+		if (busy()) return;
 		if (key.meta && name === "c") {
 			const selection = renderer.getSelection()?.getSelectedText();
 			if (selection) {
