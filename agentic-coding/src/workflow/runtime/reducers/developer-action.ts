@@ -16,6 +16,7 @@ import {
 	settingsFingerprint,
 } from "../../effects.ts";
 import {
+	enforceReadOnlySteps,
 	parseAgentsConfig,
 	preflightProfile,
 	resolvePreset,
@@ -84,7 +85,10 @@ export function developerAction(
 			rolesByStep[route.stepId] = roles;
 			if (route.role && !roles.includes(route.role)) roles.push(route.role);
 		}
-		const routing = resolveRouting(definition, rolesByStep, agents, preset);
+		const routing = enforceReadOnlySteps(
+			resolveRouting(definition, rolesByStep, agents, preset),
+			(stepId) => registry.stepForDefinition(definition, stepId).requirements,
+		);
 		if (definition.id.startsWith("openspec-fusion"))
 			validateFusionRouting(definition.id, routing);
 		const activeRuns = runs(db, snapshot.workflowId).filter(

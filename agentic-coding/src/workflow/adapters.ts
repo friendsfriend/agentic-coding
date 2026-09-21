@@ -393,7 +393,10 @@ function isolatedOpenCode(ctx: LaunchContext): LaunchContext {
 					permission:
 						ctx.profile.readOnly ||
 						ctx.profile.capabilities.includes("read-only")
-							? { edit: "deny", bash: "deny", read: "allow" }
+							? // Read-only means no repository edits; bash stays allowed because
+								// focused checks and the `agentic-coding workflow handoff` CLI
+								// run through it (same contract as pi's `read,bash`).
+								{ edit: "deny", bash: "allow", read: "allow" }
 							: { edit: "allow", bash: "allow", read: "allow" },
 					plugin: ctx.bridgePath ? [ctx.bridgePath] : [],
 				},

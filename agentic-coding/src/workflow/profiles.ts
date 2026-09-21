@@ -346,6 +346,59 @@ export function profileFor(
 		name === BUILTIN_PRESET_NAME ? preset?.runtime : undefined,
 	);
 }
+/** Tools a read-only run must never be handed; the adapters translate the
+ * resolved profile into the runtime's own allowlist / permission block. */
+const MUTATING_TOOLS = new Set(["edit", "write", "multi_edit", "multiedit"]);
+/** Pi's read-only pair: `read` for evidence and `bash` for the focused checks
+ * and the `agentic-coding workflow handoff` CLI, both of which run through it. */
+const READ_ONLY_PI_TOOLS = ["read", "bash"];
+/** Read-only launch policy for a step that declares the `read-only`
+ * requirement (`core.verification`): no edit/write tools and no shell/edit
+ * capability, so the adapter launches the runtime without them (pi `--tools`,
+ * opencode permission block). `bash` deliberately stays: verifiers must run
+ * focused checks and dispatch their own handoff through it. */
+export function asReadOnlyProfile(profile: ResolvedProfile): ResolvedProfile {
+	const capabilities = [
+		...new Set([
+			...profile.capabilities.filter(
+				(capability) => capability !== "shell" && capability !== "edit",
+			),
+			"read-only" as const,
+		]),
+	];
+	const tools = profile.tools.filter(
+		(tool) => !MUTATING_TOOLS.has(tool.toLowerCase()),
+	);
+	const unsigned = {
+		...profile,
+		readOnly: true,
+		capabilities: Object.freeze(capabilities),
+		tools: Object.freeze(
+			profile.runtime === "pi" && !tools.length ? READ_ONLY_PI_TOOLS : tools,
+		),
+	};
+	return Object.freeze({
+		...unsigned,
+		digest: createHash("sha256").update(stableJson(unsigned)).digest("hex"),
+	});
+}
+/** Apply every read-only step's declared policy to its routed profiles, before
+ * the routing is pinned and preflighted. `requirementsFor` is the caller's
+ * already-resolved step lookup (the registry owns step semantics), so this
+ * stays free of step-identity literals. */
+export function enforceReadOnlySteps(
+	routing: WorkflowRouting,
+	requirementsFor: (stepId: string) => readonly AdapterCapability[],
+): WorkflowRouting {
+	return {
+		...routing,
+		routes: routing.routes.map((route) =>
+			requirementsFor(route.stepId).includes("read-only")
+				? { ...route, profile: asReadOnlyProfile(route.profile) }
+				: route,
+		),
+	};
+}
 export function resolveRouting(
 	definition: CompiledWorkflowDefinition,
 	rolesByStep: Record<string, string[]>,
@@ -474,10 +527,11 @@ export function validateProfileRequirements(
 	profile: ResolvedProfile,
 	requirements: readonly AdapterCapability[],
 ): void {
-	// read-only is vestigial: kept in pinned step definitions for digest stability,
-	// never enforced (all agents must be able to write outputs and hand off).
+	// `core.verification` declares `read-only`; routing applies that policy to
+	// its profiles (`enforceReadOnlySteps`) before preflight, so a writable
+	// verifier profile fails closed here instead of launching read-write.
 	const missing = requirements.filter(
-		(item) => item !== "read-only" && !profile.capabilities.includes(item),
+		(item) => !profile.capabilities.includes(item),
 	);
 	if (missing.length)
 		throw new Error(

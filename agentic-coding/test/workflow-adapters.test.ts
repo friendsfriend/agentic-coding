@@ -17,6 +17,7 @@ import {
 	profileFor,
 	resolveRouting,
 } from "../src/workflow/profiles.ts";
+import { startRouting } from "../src/workflow/startup.ts";
 
 class FakeHerdr {
 	calls: string[][] = [];
@@ -406,7 +407,7 @@ describe("profiles, assignments, and adapters", () => {
 			}
 		}
 	});
-	test("non-research OpenCode launch keeps deny-by-default permissions for read-only profiles", async () => {
+	test("non-research OpenCode launch denies edits but keeps bash for read-only profiles", async () => {
 		for (const [Adapter, runtime] of [
 			[OpenCodeAdapter, "opencode"],
 			[OpenCodeV2Adapter, "opencode-v2"],
@@ -443,14 +444,96 @@ describe("profiles, assignments, and adapters", () => {
 						"utf8",
 					),
 				) as { permission: Record<string, string> };
+				// Read-only denies edits only: focused checks and the handoff CLI
+				// (`agentic-coding workflow handoff`) run through bash.
 				expect(config.permission).toEqual({
 					edit: "deny",
-					bash: "deny",
+					bash: "allow",
 					read: "allow",
 				});
 			} finally {
 				fs.rmSync(cwd, { recursive: true, force: true });
 			}
+		}
+	});
+	test("verification routes are pinned read-only with no edit/write tools", () => {
+		const registry = registerBuiltins();
+		const definition = registry.definition("openspec-full", 1);
+		// Realistic user config: profiles carry no tools/capabilities, so they
+		// resolve writable (shell + edit) and must be narrowed by the step policy.
+		const agents = parseAgentsConfig({
+			default_profile: "flash",
+			profiles: { flash: { runtime: "pi", model: "provider/model" } },
+		});
+		const routing = startRouting(
+			"openspec-full",
+			undefined,
+			definition,
+			registry,
+			agents,
+		);
+		const verifier = routing.routes.find(
+			(route) => route.stepId === "core.verification",
+		);
+		if (!verifier) throw new Error("expected a verification route");
+		expect(verifier.profile.readOnly).toBe(true);
+		expect(verifier.profile.tools).toEqual(["read", "bash"]);
+		expect(verifier.profile.capabilities).toContain("read-only");
+		expect(verifier.profile.capabilities).not.toContain("edit");
+		expect(verifier.profile.capabilities).not.toContain("shell");
+		const worker = routing.routes.find(
+			(route) => route.stepId === "core.implementation",
+		);
+		expect(worker?.profile.readOnly).toBe(false);
+	});
+	test("verification Pi launch allows read+bash and no extensions", async () => {
+		const registry = registerBuiltins();
+		const definition = registry.definition("openspec-full", 1);
+		const agents = parseAgentsConfig({
+			default_profile: "flash",
+			profiles: { flash: { runtime: "pi", model: "provider/model" } },
+		});
+		const routing = startRouting(
+			"openspec-full",
+			undefined,
+			definition,
+			registry,
+			agents,
+		);
+		const profile = routing.routes.find(
+			(route) => route.stepId === "core.verification",
+		)?.profile;
+		if (!profile) throw new Error("expected a verification route");
+		const fake = new FakeHerdr();
+		const adapter = new PiAdapter(new HerdrLifecycle(fake, () => Effect.void));
+		const current = assignment("core.verification");
+		const rendered = renderAssignment(
+			registerBuiltins().step("core.verification"),
+			current,
+		);
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "adapter-verify-pi-"));
+		try {
+			await Effect.runPromise(
+				adapter.launch({
+					profile,
+					assignment: current,
+					rendered,
+					paneId: "pane",
+					cwd,
+					name: "agent-verify",
+					environment: current.environment,
+				}),
+			);
+			const start = fake.calls.find(
+				(call) => call[0] === "agent" && call[1] === "start",
+			);
+			if (!start) throw new Error("expected agent start call");
+			expect(start[start.indexOf("--tools") + 1]).toBe("read,bash");
+			expect(start).toContain("--no-extensions");
+			expect(start).not.toContain("edit");
+			expect(start).not.toContain("write");
+		} finally {
+			fs.rmSync(cwd, { recursive: true, force: true });
 		}
 	});
 	test("preflight rejects missing executable and capabilities", () => {

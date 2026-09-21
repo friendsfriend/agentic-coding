@@ -23,6 +23,7 @@ import {
 } from "./effects.ts";
 import {
 	type AgentsConfig,
+	enforceReadOnlySteps,
 	parseAgentsConfig,
 	preflightProfile,
 	type RoutingPreset,
@@ -209,7 +210,10 @@ function resolveRoutingForStart(
 	);
 	if (preset)
 		validatePresetCoverage(preset, definition, Object.keys(roles), agents);
-	const routing = resolveRouting(definition, roles, agents, preset);
+	const routing = enforceReadOnlySteps(
+		resolveRouting(definition, roles, agents, preset),
+		(stepId) => registry.stepForDefinition(definition, stepId).requirements,
+	);
 	if (fusionProfiles) {
 		for (const [index, name] of fusionProfiles.entries()) {
 			const route = routing.routes.find(

@@ -500,6 +500,16 @@ stripping its `-verifier` suffix: `<role>` → `verification-<role>.md`. Adding 
 role is additive — existing ids, asset names, and relative order stay fixed so
 in-flight workflows keep the behavior and assets they started with.
 
+`core.verification` is the one step declaring the `read-only` requirement, and
+routing enforces it: `enforceReadOnlySteps` (`src/workflow/profiles.ts`) runs in
+both routing paths (`startup.ts`'s `resolveRoutingForStart` and the
+`switch-preset` reducer) and rewrites every `core.verification` route into a
+read-only profile — no `edit`/`write` tools, no `shell`/`edit` capability —
+before the routing is pinned or preflighted. A verifier therefore launches with
+pi's `--tools read,bash --no-extensions` (or opencode's `edit: deny` permission
+block), and its assignment renders `read repository`. `bash` stays on purpose:
+focused checks and the `agentic-coding workflow handoff` CLI run through it.
+
 1. Author `agent-definitions/instructions/verification-<role without
    "-verifier">.md`, following the brevity and "concrete evidence only"
    wording of its siblings; state the role's scope boundary (for example that

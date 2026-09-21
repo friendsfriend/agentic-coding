@@ -178,6 +178,21 @@ type Tab =
 type Workspace = { changeId: string; path: string; spanCount: number };
 
 /**
+ * The trace identity a span route belongs to. The route names its span as
+ * `<traceId>:<spanId>` in the resource id (that composite is what breadcrumbs
+ * and history preserve), while the trace identity itself is carried in the
+ * route's params — the same identity the tree route and the trace list use.
+ * Resolving it from the params keeps Back and direct jumps on the same trace
+ * instead of treating the composite as a trace id.
+ */
+function stripSpanSuffix(resourceId: string | undefined): string | undefined {
+	if (resourceId === undefined) return undefined;
+	const separator = resourceId.lastIndexOf(":");
+	// A bare identity (no `:spanId` suffix) is already the trace id.
+	return separator > 0 ? resourceId.slice(0, separator) : resourceId;
+}
+
+/**
  * Read-only routing view for the Settings agent section: the agent settings a
  * preset editor does not own (default profile, per-step routes, role routes and
  * definition defaults) are shown with their effective value instead of being
@@ -1006,7 +1021,13 @@ export function App(props: {
 		switch (route.page) {
 			case "observability.traces.tree":
 			case "observability.traces.tree.span": {
-				const traceId = route.resourceId ?? route.params?.traceId;
+				// A span route names its span (`<traceId>:<spanId>`) in the resource
+				// id; the trace identity lives in the route's params, and the cached
+				// traces are keyed by that identity, never by the composite.
+				const traceId =
+					route.page === "observability.traces.tree.span"
+						? (route.params?.traceId ?? stripSpanSuffix(route.resourceId))
+						: route.resourceId;
 				if (traceId && traceId !== selectedTraceId()) void openTrace(traceId);
 				break;
 			}
@@ -1039,10 +1060,13 @@ export function App(props: {
 		switch (route.page) {
 			case "observability.traces.tree":
 			case "observability.traces.tree.span": {
-				// A trace is available while its spans are in the store or while it is
-				// still on the loaded page: a trace that retention or a page read
-				// dropped falls back to the list instead of showing a stale tree.
-				const traceId = route.resourceId;
+				// A span route names its span (`<traceId>:<spanId>`) in the resource
+				// id; the trace identity lives in the route's params, never in the
+				// composite resource id.
+				const traceId =
+					route.page === "observability.traces.tree.span"
+						? (route.params?.traceId ?? stripSpanSuffix(route.resourceId))
+						: route.resourceId;
 				// Both sources are read before combining so this availability check
 				// keeps tracking the store: a shortened expression would stop the route
 				// effect from re-running when the store drops the trace.
@@ -1908,11 +1932,15 @@ export function App(props: {
 				if (item) setNodeExpanded(item.path, true);
 			} else if (key === "enter" || key === "return") {
 				const span = selectedSpan();
-				if (span)
+				// The open trace's identity (the change id that keys the tree and
+				// the span fetch), not the span's own trace id: a span route must
+				// resolve back to the same trace the tree is showing.
+				const traceId = selectedTraceId();
+				if (span && traceId)
 					pages.navigate({
 						page: "observability.traces.tree.span",
-						resourceId: `${span.span.traceId}:${span.span.spanId}`,
-						params: { traceId: span.span.traceId },
+						resourceId: `${traceId}:${span.span.spanId}`,
+						params: { traceId },
 					});
 			}
 		}
