@@ -1,11 +1,36 @@
-// Event-driven refresh trigger for the dashboard's file-backed workflow state
-// (telemetry.jsonl / state.json) — replaces the fixed 5s
-// re-spawn poll. Debounces bursts of file events into a single refresh call.
+// Dashboard refresh triggers. Push stays primary: file/event watchers
+// (telemetry.jsonl / state.json) debounce bursts into a single refresh call.
+// A low-frequency safety resync re-reads authoritative state on a timer so a
+// dropped or missed backend event cannot leave the view stale forever.
 import { type FSWatcher, watch } from "node:fs";
 
 export interface DebouncedTrigger {
 	trigger(): void;
 	cancel(): void;
+}
+
+/** Cadence for the dashboard's safety resync. A dropped backend event is
+ * recovered by the next tick; push events still refresh immediately. */
+export const SAFETY_RESYNC_MS = 5_000;
+
+/** Start a periodic safety resync and return a disposer. Pure timer wiring —
+ * no I/O — so it is unit-testable with a short interval. */
+export function startPeriodicResync(
+	onResync: () => void,
+	intervalMs = SAFETY_RESYNC_MS,
+): () => void {
+	const timer = setInterval(onResync, intervalMs);
+	return () => clearInterval(timer);
+}
+
+/** The dashboard's safety resync: a periodic *forced* refresh. Push events stay
+ * primary; this only exists so a dropped update cannot leave the view stale.
+ * `refresh(force)` bypasses the cache when force is true. */
+export function startSafetyResync(
+	refresh: (force: boolean) => void,
+	intervalMs = SAFETY_RESYNC_MS,
+): () => void {
+	return startPeriodicResync(() => refresh(true), intervalMs);
 }
 
 /** Collapse rapid successive calls into one `fn()` invocation after `delayMs`

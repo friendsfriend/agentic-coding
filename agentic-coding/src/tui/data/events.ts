@@ -6,13 +6,14 @@
 // gateway port and the cache, nothing else.
 import type { EventEnvelope } from "../../contracts/environment.ts";
 import type { GatewayEventHandlers } from "../../contracts/gateway.ts";
-import { cache, gatewayOrUndefined } from "./index.ts";
+import { cache, gatewayOrUndefined, gatewayReady } from "./index.ts";
 
 /** True when a transport is configured: the server owns the execution listeners
  * and publishes `workflow.updated`, so the shell must not subscribe to the
- * in-process coordinator itself. */
+ * in-process coordinator itself. Reactive: an effect that branches on this
+ * re-runs when the composition root installs the gateway after first paint. */
 export function serverOwnsExecutionEvents(): boolean {
-	return gatewayOrUndefined() !== undefined;
+	return gatewayReady();
 }
 
 /** Subscribe through the gateway, applying each envelope to the cache. */

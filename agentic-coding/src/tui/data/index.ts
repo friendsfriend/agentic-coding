@@ -16,16 +16,30 @@ import type { DashboardGateway } from "../../contracts/gateway.ts";
 
 let configured: DashboardGateway | undefined;
 
+// Reactive gateway readiness: feature effects that choose a transport branch
+// (server push subscription vs local file watches) track this so they re-run
+// when the composition root installs the gateway after first paint.
+const [gatewayConfigured, setGatewayConfigured] = createSignal(false);
+
 /** Install the gateway for this process (composition root). */
 export function configureGateway(gateway: DashboardGateway): DashboardGateway {
 	configured = gateway;
+	setGatewayConfigured(true);
 	cache.clear();
 	return gateway;
 }
 
 export function clearGateway(): void {
 	configured = undefined;
+	setGatewayConfigured(false);
 	cache.clear();
+}
+
+/** Reactive gateway readiness (see the signal note above). Reading it outside a
+ * tracking scope returns the current value; inside an effect it is a
+ * dependency. */
+export function gatewayReady(): boolean {
+	return gatewayConfigured();
 }
 
 /** The active gateway. Throws when the composition root forgot to install one:

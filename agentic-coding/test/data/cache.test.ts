@@ -30,6 +30,17 @@ describe("data cache", () => {
 		expect(await cache.load("workflow:/repo:wf-1", loader)).toBe("value-2");
 	});
 
+	test("a refresh read bypasses a fresh cached value", async () => {
+		const cache = new DataCache();
+		let calls = 0;
+		const loader = async () => `value-${++calls}`;
+		expect(await cache.load("dashboard:/repo:wf-1", loader)).toBe("value-1");
+		expect(await cache.load("dashboard:/repo:wf-1", loader)).toBe("value-1");
+		expect(
+			await cache.load("dashboard:/repo:wf-1", loader, { refresh: true }),
+		).toBe("value-2");
+	});
+
 	test("a read at a new revision replaces the cached value", async () => {
 		const cache = new DataCache();
 		const loader = async () => "v";

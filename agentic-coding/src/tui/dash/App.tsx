@@ -26,6 +26,7 @@ import {
 	onCleanup,
 	onMount,
 	Show,
+	untrack,
 } from "solid-js";
 import type { RequiredUserActionItem } from "../../contracts/actions.ts";
 import type { DashboardData } from "../../contracts/workflow";
@@ -91,7 +92,11 @@ import { applyTheme, loadThemeName, saveThemeName } from "./theme-settings.ts";
 import { traceTui } from "./tracing.ts";
 import { pendingCredentialRequest } from "./ui/CredentialsModal.tsx";
 import type { FindingEvent } from "./ui/FindingsModal.tsx";
-import { debounce, watchDirectories } from "./watchRefresh.ts";
+import {
+	debounce,
+	startSafetyResync,
+	watchDirectories,
+} from "./watchRefresh.ts";
 
 export { PhaseStatus } from "./ui/PhaseStatus.tsx";
 export type { PhaseStatusState };
@@ -196,6 +201,9 @@ export function App(props: {
 	let refreshRunning = false;
 	let dashboardLoaded = false;
 	let refreshQueued = false;
+	// A queued refresh must keep the force flag: a safety resync that arrives
+	// while a read is in flight still has to bypass the cache when it runs.
+	let refreshForceQueued = false;
 	let refreshDisposed = false;
 	let refreshController: AbortController | undefined;
 	// The last observation failure surfaced in the error modal. A persistent
@@ -878,7 +886,7 @@ export function App(props: {
 			setBusy(false);
 		}
 	};
-	const refresh = () => {
+	const refresh = (force = false) => {
 		if (refreshDisposed) return;
 		if (props.profile === "test") {
 			setData(load());
@@ -888,13 +896,23 @@ export function App(props: {
 			});
 			return;
 		}
-		refreshQueued = refreshRunning;
+		if (refreshRunning) {
+			refreshQueued = true;
+			refreshForceQueued = refreshForceQueued || force;
+			return;
+		}
+		refreshQueued = false;
+		refreshForceQueued = false;
+		// Bump the generation only when a read actually starts. Bumping for a
+		// merely queued refresh would discard the in-flight read's result, and the
+		// periodic safety resync would then starve the view on a slow backend.
 		const generation = ++refreshGeneration;
-		if (refreshRunning) return;
 		refreshRunning = true;
 		refreshController?.abort();
 		refreshController = new AbortController();
-		void loadDashboard(props.repo, props.workflowId, refreshController.signal)
+		void loadDashboard(props.repo, props.workflowId, refreshController.signal, {
+			refresh: force,
+		})
 			.then((next) => {
 				if (next && !refreshDisposed && generation === refreshGeneration) {
 					dashboardLoaded = true;
@@ -920,7 +938,11 @@ export function App(props: {
 					);
 					if (message !== lastRefreshError) {
 						lastRefreshError = message;
-						showErrorModal("Observation failed", message);
+						// A background safety resync must not pop a blocking modal every
+						// few seconds on a flapping backend; a toast is enough for a poll
+						// the user did not trigger. Explicit refreshes keep the modal.
+						if (force) notify(`Observation failed: ${message}`, "error");
+						else showErrorModal("Observation failed", message);
 					}
 				}
 			})
@@ -928,7 +950,9 @@ export function App(props: {
 				refreshRunning = false;
 				if (refreshQueued && !refreshDisposed) {
 					refreshQueued = false;
-					refresh();
+					const queuedForce = refreshForceQueued;
+					refreshForceQueued = false;
+					refresh(queuedForce);
 				}
 			});
 	};
@@ -1063,10 +1087,14 @@ export function App(props: {
 	// configured: the server owns the Herdr subscription and the execution
 	// coordinator listeners and publishes `workflow.updated`. A transport-less
 	// run (demo/tests) falls back to local file watches + the Herdr socket.
+	// The effect depends only on the active flag and the workspace key: reading
+	// `data()` untracked keeps the subscription and its safety timer alive
+	// across refreshes instead of tearing them down on every `setData` (which
+	// would open an event-loss window).
 	createEffect(() => {
 		if (props.profile === "test") return;
 		if (props.active && !props.active()) return;
-		const state = data().state;
+		const state = untrack(() => data().state);
 		const workspace = workflowWorkspace();
 		const debounced = debounce(() => {
 			refresh();
@@ -1091,11 +1119,15 @@ export function App(props: {
 						return;
 					debounced.trigger();
 				},
-				onResync: () => refresh(),
+				onResync: () => refresh(true),
 			});
+			// Safety resync: even with push events, a dropped/missed update must not
+			// leave the view stale forever. A forced read bypasses the cache.
+			const disposeResync = startSafetyResync(refresh);
 			onCleanup(() => {
 				debounced.cancel();
 				dispose();
+				disposeResync();
 			});
 			return;
 		}
@@ -1116,10 +1148,12 @@ export function App(props: {
 					if (herdrEventMatchesWorkspace(event.data, workspace))
 						debounced.trigger();
 				});
+		const disposeResync = startSafetyResync(refresh);
 		onCleanup(() => {
 			debounced.cancel();
 			disposeWatch();
 			disposeHerdr();
+			disposeResync();
 		});
 	});
 

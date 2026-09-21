@@ -198,11 +198,15 @@ export async function loadDashboardSeed(
 	};
 }
 
-/** The dashboard projection for one workflow (server-composed read). */
+/** The dashboard projection for one workflow (server-composed read).
+ * `refresh: true` bypasses the cache for an authoritative re-read — the
+ * periodic safety resync uses it so a dropped backend event cannot leave the
+ * view stale. */
 export async function loadDashboard(
 	repo: string,
 	workflowId: string,
 	signal?: Signal,
+	options: { readonly refresh?: boolean } = {},
 ): Promise<DashboardData | undefined> {
 	return cache.load(
 		dashboardKey(repo, workflowId),
@@ -214,6 +218,7 @@ export async function loadDashboard(
 			),
 		{
 			signal,
+			...(options.refresh ? { refresh: true } : {}),
 		},
 	);
 }
