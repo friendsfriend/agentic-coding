@@ -6,6 +6,7 @@
 
 import {
 	onWorkflowExecutionError,
+	onWorkflowExecutionProgress,
 	onWorkflowExecutionSettled,
 } from "../workflow/execution-coordinator.ts";
 import type { EventBroker } from "./events.ts";
@@ -42,6 +43,7 @@ export function startWorkflowEventHub(events: EventBroker): WorkflowEventHub {
 			if (watched.has(repo)) return;
 			watched.add(repo);
 			disposers.push(
+				onWorkflowExecutionProgress(repo, () => publish(repo)),
 				onWorkflowExecutionSettled(repo, (workflowId) =>
 					publish(repo, workflowId),
 				),

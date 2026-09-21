@@ -204,6 +204,10 @@ export async function runHeadlessServer(args: string[]): Promise<void> {
 		// default environment port, which is nobody in a clean install.
 		process.env.AGENTIC_DEVENV_URL = workflow.url;
 		process.env.AGENTIC_DEVENV_TOKEN = workflow.token;
+		// Workflow effects can spawn a dashboard pane from this headless owner;
+		// give that child the same authenticated transport handoff as agents.
+		process.env.AGENTIC_WORKFLOW_URL = workflow.url;
+		process.env.AGENTIC_WORKFLOW_TOKEN = workflow.token;
 		process.stdout.write(
 			`unified server ${workflow.url} (instance ${workflow.instance}, pid ${process.pid})\n`,
 		);
@@ -217,6 +221,8 @@ export async function runHeadlessServer(args: string[]): Promise<void> {
 		console.error(error instanceof Error ? error.message : String(error));
 		process.exitCode = 1;
 	} finally {
+		delete process.env.AGENTIC_WORKFLOW_URL;
+		delete process.env.AGENTIC_WORKFLOW_TOKEN;
 		clearInterval(keepAlive);
 		runtimeServices?.stop();
 		await workflow?.stop().catch(() => {});

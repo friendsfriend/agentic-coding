@@ -1,24 +1,20 @@
 /** @jsxImportSource @opentui/solid */
 
 import { beforeEach, expect, test } from "bun:test";
-import type { KeyEvent } from "@opentui/core";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
 import {
 	activeErrorModal,
-	dismissErrorModal,
 	ErrorModalOverlay,
 	resetErrorModal,
 	showErrorModal,
 } from "@ui";
-import { onCleanup, onMount } from "solid-js";
+import { onCleanup } from "solid-js";
 
 // The error-modal signal is module-global; bun runs all files in one process,
 // so clear it before every render.
 beforeEach(() => resetErrorModal());
 
-/** ErrorModalOverlay plus the shell's dismissal handler (the overlay itself
- * only scrolls; the shell consumes the dismissal key). */
 function Harness() {
 	const renderer = useRenderer();
 	const keymap = createDefaultOpenTuiKeymap(renderer);
@@ -32,18 +28,6 @@ function Harness() {
 		},
 	});
 	onCleanup(dispose);
-	onMount(() => {
-		const shell = (event: KeyEvent) => {
-			const key = event.name.toLowerCase();
-			if (activeErrorModal()) {
-				if (key === "escape" || key === "enter" || key === "return")
-					dismissErrorModal();
-				return;
-			}
-		};
-		renderer.keyInput.on("keypress", shell);
-		onCleanup(() => renderer.keyInput.off("keypress", shell));
-	});
 	return <ErrorModalOverlay keymap={keymap} />;
 }
 

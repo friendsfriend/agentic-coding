@@ -64,6 +64,7 @@ export async function drainEffects(
 	waitMs = 0,
 	signal?: AbortSignal,
 	onFailure?: (workflowId: string, message: string) => void,
+	onProgress?: () => void,
 ): Promise<number> {
 	const herdr = new Herdr();
 	const lifecycle = new HerdrLifecycle(herdr);
@@ -95,6 +96,7 @@ export async function drainEffects(
 				30_000,
 				signal,
 				onFailure,
+				onProgress,
 			),
 		);
 		if (signal?.aborted) break;

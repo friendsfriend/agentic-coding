@@ -38,6 +38,7 @@ import {
 	answerQuestion,
 	applyRepair,
 	loadDashboard,
+	loadDashboardSeed,
 	loadVerifierFindings,
 	loadVerifierReport,
 	previewRepair,
@@ -53,6 +54,7 @@ import {
 	herdrEventMatchesWorkspace,
 	listPresetNames,
 	onWorkflowExecutionError,
+	onWorkflowExecutionProgress,
 	onWorkflowExecutionSettled,
 	openFindingInEditorAsync,
 	openSpecArtifact,
@@ -192,6 +194,7 @@ export function App(props: {
 	const [data, setData] = createSignal<DashboardData>(initialData);
 	let refreshGeneration = 0;
 	let refreshRunning = false;
+	let dashboardLoaded = false;
 	let refreshQueued = false;
 	let refreshDisposed = false;
 	let refreshController: AbortController | undefined;
@@ -894,6 +897,7 @@ export function App(props: {
 		void loadDashboard(props.repo, props.workflowId, refreshController.signal)
 			.then((next) => {
 				if (next && !refreshDisposed && generation === refreshGeneration) {
+					dashboardLoaded = true;
 					lastRefreshError = undefined;
 					setData(next);
 					traceTui("tui.dashboard.refresh", {
@@ -1140,8 +1144,27 @@ export function App(props: {
 						if (props.active && !props.active()) return;
 						if (workflowId === props.workflowId) refresh();
 					});
-		if (props.profile !== "test")
+		const disposeExecutionProgress =
+			props.profile === "test" || !localSettle
+				? undefined
+				: onWorkflowExecutionProgress(props.repo, () => {
+						if (props.active && !props.active()) return;
+						refresh();
+					});
+		if (props.profile !== "test") {
+			const seedController = new AbortController();
+			void loadDashboardSeed(
+				props.repo,
+				props.workflowId,
+				seedController.signal,
+			)
+				.then((seed) => {
+					if (seed && !refreshDisposed && !dashboardLoaded) setData(seed);
+				})
+				.catch(() => undefined);
+			onCleanup(() => seedController.abort());
 			void requestExecution(props.repo, props.workflowId);
+		}
 		// The sidebar presentation, execution coordinator and shared application
 		// runtime are root-owned (task 1.2/1.3): hiding this feature view must
 		// not release them, so the shell owns their registration and disposal.
@@ -1155,6 +1178,7 @@ export function App(props: {
 			refreshDisposed = true;
 			refreshController?.abort();
 			disposeExecutionError?.();
+			disposeExecutionProgress?.();
 			disposeExecutionSettled?.();
 			artifactGeneration++;
 			artifactController?.abort();

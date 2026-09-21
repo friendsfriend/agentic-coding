@@ -15,8 +15,9 @@ const read = <T,>(value: Value<T> | undefined, fallback: T): T =>
 /**
  * Row chrome for a selectable list, matching the devenv work-item rows (issues,
  * change requests) and the modal list rows: a two-column accent strip that is
- * only painted while the row is selected, and the selected surface behind it.
- * Rows pad themselves, so callers keep control of their own indentation.
+ * only painted while the row is selected, one empty column between it and the
+ * content, and the selected surface behind both. Rows pad themselves, so
+ * callers keep control of their own indentation.
  */
 export function Selectable(props: {
 	selected: boolean;
@@ -50,6 +51,9 @@ export function Selectable(props: {
 						: background()
 				}
 			/>
+			{/* One empty column between the accent strip and the content, so the
+			    selection block never sits flush against the text. */}
+			<box width={1} height="100%" flexShrink={0} />
 			<box flexGrow={1} minWidth={0} flexDirection="column">
 				{props.children}
 			</box>

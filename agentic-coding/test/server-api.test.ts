@@ -286,6 +286,10 @@ describe("observation and workflow endpoints", () => {
 			const body = (await response.json()) as { value: { revision: number } };
 			expect(body.value.revision).toBe(4);
 			expect(server.app.events.currentSequence).toBe(before + 1);
+			expect(server.app.events.replay(before).events[0]).toMatchObject({
+				resource: "/repo",
+				runId: "wf-1",
+			});
 		});
 	});
 
