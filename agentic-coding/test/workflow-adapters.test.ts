@@ -477,7 +477,12 @@ describe("profiles, assignments, and adapters", () => {
 		);
 		if (!verifier) throw new Error("expected a verification route");
 		expect(verifier.profile.readOnly).toBe(true);
-		expect(verifier.profile.tools).toEqual(["read", "bash"]);
+		expect(verifier.profile.tools).toEqual([
+			"read",
+			"bash",
+			"developer_question",
+			"agent_ask",
+		]);
 		expect(verifier.profile.capabilities).toContain("read-only");
 		expect(verifier.profile.capabilities).not.toContain("edit");
 		expect(verifier.profile.capabilities).not.toContain("shell");
@@ -486,7 +491,7 @@ describe("profiles, assignments, and adapters", () => {
 		);
 		expect(worker?.profile.readOnly).toBe(false);
 	});
-	test("verification Pi launch allows read+bash and no extensions", async () => {
+	test("verification Pi launch keeps bash and the question tools, no extensions", async () => {
 		const registry = registerBuiltins();
 		const definition = registry.definition("openspec-full", 1);
 		const agents = parseAgentsConfig({
@@ -528,7 +533,9 @@ describe("profiles, assignments, and adapters", () => {
 				(call) => call[0] === "agent" && call[1] === "start",
 			);
 			if (!start) throw new Error("expected agent start call");
-			expect(start[start.indexOf("--tools") + 1]).toBe("read,bash");
+			expect(start[start.indexOf("--tools") + 1]).toBe(
+				"read,bash,developer_question,agent_ask",
+			);
 			expect(start).toContain("--no-extensions");
 			expect(start).not.toContain("edit");
 			expect(start).not.toContain("write");

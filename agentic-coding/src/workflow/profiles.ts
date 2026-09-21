@@ -349,14 +349,18 @@ export function profileFor(
 /** Tools a read-only run must never be handed; the adapters translate the
  * resolved profile into the runtime's own allowlist / permission block. */
 const MUTATING_TOOLS = new Set(["edit", "write", "multi_edit", "multiedit"]);
-/** Pi's read-only pair: `read` for evidence and `bash` for the focused checks
- * and the `agentic-coding workflow handoff` CLI, both of which run through it. */
-const READ_ONLY_PI_TOOLS = ["read", "bash"];
+/** Pi's read-only surface: `read` for evidence, `bash` for the focused checks
+ * and the `agentic-coding workflow handoff` CLI, plus the two injected
+ * workflow-extension conversation tools the pinned protocol names and a
+ * verifier may need (`developer_question`, `agent_ask`). None of them edit the
+ * repository; `write`/`edit` stay excluded. */
+const READ_ONLY_PI_TOOLS = ["read", "bash", "developer_question", "agent_ask"];
 /** Read-only launch policy for a step that declares the `read-only`
  * requirement (`core.verification`): no edit/write tools and no shell/edit
  * capability, so the adapter launches the runtime without them (pi `--tools`,
- * opencode permission block). `bash` deliberately stays: verifiers must run
- * focused checks and dispatch their own handoff through it. */
+ * opencode permission block). `bash` and the workflow-extension question tools
+ * deliberately stay: verifiers must run focused checks, ask the developer, and
+ * dispatch their own handoff. */
 export function asReadOnlyProfile(profile: ResolvedProfile): ResolvedProfile {
 	const capabilities = [
 		...new Set([
@@ -366,16 +370,21 @@ export function asReadOnlyProfile(profile: ResolvedProfile): ResolvedProfile {
 			"read-only" as const,
 		]),
 	];
-	const tools = profile.tools.filter(
+	const declared = profile.tools.filter(
 		(tool) => !MUTATING_TOOLS.has(tool.toLowerCase()),
 	);
+	// pi's `--tools` is a strict allowlist over built-in *and* extension tools,
+	// so a declared list would otherwise hide `developer_question`/`agent_ask`
+	// (or drop bash, the handoff path) from a verifier.
+	const tools =
+		profile.runtime === "pi"
+			? [...new Set([...declared, ...READ_ONLY_PI_TOOLS])]
+			: declared;
 	const unsigned = {
 		...profile,
 		readOnly: true,
 		capabilities: Object.freeze(capabilities),
-		tools: Object.freeze(
-			profile.runtime === "pi" && !tools.length ? READ_ONLY_PI_TOOLS : tools,
-		),
+		tools: Object.freeze(tools),
 	};
 	return Object.freeze({
 		...unsigned,

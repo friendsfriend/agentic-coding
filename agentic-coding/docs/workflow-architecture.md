@@ -508,7 +508,10 @@ read-only profile — no `edit`/`write` tools, no `shell`/`edit` capability —
 before the routing is pinned or preflighted. A verifier therefore launches with
 pi's `--tools read,bash --no-extensions` (or opencode's `edit: deny` permission
 block), and its assignment renders `read repository`. `bash` stays on purpose:
-focused checks and the `agentic-coding workflow handoff` CLI run through it.
+focused checks and the `agentic-coding workflow handoff` CLI run through it;
+pi's list is `read,bash,developer_question,agent_ask`, because `--tools` is a
+strict allowlist over extension tools too and the injected developer/peer
+question tools must survive it.
 
 1. Author `agent-definitions/instructions/verification-<role without
    "-verifier">.md`, following the brevity and "concrete evidence only"
