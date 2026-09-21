@@ -280,6 +280,8 @@ export function MarkdownReviewView(props: MarkdownReviewViewProps) {
 												discussion={discussion}
 												outdated={false}
 												collapsed={false}
+												selected={isSelected()}
+												range={isInSelection()}
 												formatTimestamp={formatTimestamp}
 												paddingLeft={8}
 											/>

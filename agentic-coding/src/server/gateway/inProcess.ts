@@ -217,7 +217,17 @@ export function createInProcessGateway(
 			const onAbort = () => controller.abort();
 			signal?.addEventListener("abort", onAbort, { once: true });
 			try {
-				return await operations.agentQuestion(request, controller.signal);
+				return await operations.agentQuestion(
+					request,
+					controller.signal,
+					(workflowId, revision) =>
+						publishWorkflow(
+							"workflow.question",
+							request.repo,
+							workflowId,
+							revision,
+						),
+				);
 			} finally {
 				signal?.removeEventListener("abort", onAbort);
 			}

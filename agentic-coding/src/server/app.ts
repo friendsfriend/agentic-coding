@@ -332,7 +332,18 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 				await readJsonBody(request),
 			);
 			options.hub?.watchRepo(decoded.repo);
-			const value = await operations.agentQuestion(decoded, request.signal);
+			const value = await operations.agentQuestion(
+				decoded,
+				request.signal,
+				(workflowId, revision) =>
+					events.publish({
+						domain: "workflow",
+						kind: "workflow.question",
+						resource: decoded.repo,
+						runId: workflowId,
+						revision,
+					}),
+			);
 			return json({ ok: true, value });
 		}
 

@@ -94,6 +94,8 @@ export async function runDeveloperQuestion(
 	environmentOverride?: CallerEnvironment,
 	/** Request-scoped interruption; absent for the CLI process-signal path. */
 	interruptSignal?: AbortSignal,
+	/** Notify a server-owned dashboard as soon as question is committed. */
+	onCreated?: (workflowId: string, revision: number) => void,
 ): Promise<string> {
 	const input: DeveloperQuestionCliInput =
 		typeof inputOrDescription === "string"
@@ -155,6 +157,7 @@ export async function runDeveloperQuestion(
 		...(input.options === undefined ? {} : { options: input.options }),
 		...(input.questions === undefined ? {} : { questions: input.questions }),
 	});
+	onCreated?.(created.snapshot.workflowId, created.snapshot.revision);
 	const newest = created.snapshot.developerDialogue.at(-1);
 	if (!newest) throw new Error("question was not recorded");
 	const groupId = newest.groupId;

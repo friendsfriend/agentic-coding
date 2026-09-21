@@ -28,7 +28,11 @@ import { ScrollableContent } from "../components/ScrollableContent.tsx";
 import { SearchHeader } from "../components/SearchHeader.tsx";
 import { SelectionMarker } from "../components/SelectionMarker.tsx";
 import { uiColors } from "../theme/colors";
-import { DiscussionThread, ReplyAffordance } from "./annotations.tsx";
+import {
+	DiscussionThread,
+	MarkedThread,
+	ReplyAffordance,
+} from "./annotations.tsx";
 import type { Discussion } from "./types.ts";
 
 /** True for a whole-file add or delete (the diff has no old/new side). */
@@ -886,12 +890,586 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 																const notesCount = discussion.notes.length;
 
 																return (
+																	<MarkedThread
+																		selected={isSelected()}
+																		range={isInSelection()}
+																	>
+																		<box
+																			flexDirection="column"
+																			paddingTop={1}
+																			paddingBottom={1}
+																			paddingLeft={9} // 12 - 3 marker columns
+																			paddingRight={2}
+																		>
+																			{/* Header row with status badges */}
+																			<box
+																				flexDirection="row"
+																				gap={2}
+																				marginBottom={0.5}
+																			>
+																				<Show when={discussion.findingId}>
+																					<text
+																						fg={
+																							discussion.notes[0].resolved
+																								? uiColors.success
+																								: uiColors.warning
+																						}
+																						attributes={TextAttributes.BOLD}
+																					>
+																						{discussion.notes[0].resolved
+																							? "☑ FIX"
+																							: "☐ FIX"}
+																					</text>
+																				</Show>
+																				<Show when={isOutdated}>
+																					<text
+																						fg={uiColors.warning}
+																						attributes={TextAttributes.BOLD}
+																					>
+																						⚠ OUTDATED
+																					</text>
+																				</Show>
+																				<Show
+																					when={discussion.notes[0].resolved}
+																				>
+																					<text
+																						fg={uiColors.success}
+																						attributes={TextAttributes.BOLD}
+																					>
+																						✓ Resolved
+																					</text>
+																				</Show>
+																				<Show
+																					when={
+																						!discussion.notes[0].resolved &&
+																						!isOutdated
+																					}
+																				>
+																					<text
+																						fg={uiColors.warning}
+																						attributes={TextAttributes.BOLD}
+																					>
+																						● Open
+																					</text>
+																				</Show>
+																			</box>
+
+																			{/* Conversation Messages with Timeline */}
+																			<Show when={!threadIsCollapsed()}>
+																				<box flexDirection="column">
+																					<For each={discussion.notes}>
+																						{(note, noteIndex) => {
+																							const isLastNote = () =>
+																								noteIndex() ===
+																								discussion.notes.length - 1;
+																							return (
+																								<box
+																									style={{
+																										width: "100%",
+																										flexDirection: "row",
+																										flexShrink: 0,
+																									}}
+																								>
+																									{/* Timeline Column */}
+																									<box
+																										style={{
+																											width: 4,
+																											flexDirection: "column",
+																											alignItems: "center",
+																											flexShrink: 0,
+																										}}
+																									>
+																										{/* Node */}
+																										<box
+																											style={{
+																												width: 3,
+																												height: 1,
+																												justifyContent:
+																													"center",
+																												alignItems: "center",
+																											}}
+																										>
+																											<text
+																												fg={uiColors.primary}
+																											>
+																												●
+																											</text>
+																										</box>
+
+																										{/* Vertical line */}
+																										<Show when={!isLastNote()}>
+																											<box
+																												style={{
+																													width: 1,
+																													flexGrow: 1,
+																													flexDirection:
+																														"column",
+																												}}
+																											>
+																												{/* Calculate approximate lines needed based on message length */}
+																												{(() => {
+																													const bodyLength =
+																														note.body?.length ||
+																														0;
+																													const lines =
+																														Math.max(
+																															3,
+																															Math.ceil(
+																																bodyLength / 80,
+																															) + 2,
+																														);
+																													return Array(lines)
+																														.fill(null)
+																														.map((_, _i) => (
+																															<text
+																																fg={
+																																	uiColors.bgSurface1
+																																}
+																															>
+																																│
+																															</text>
+																														));
+																												})()}
+																											</box>
+																										</Show>
+																									</box>
+
+																									{/* Message Content */}
+																									<box
+																										style={{
+																											flexGrow: 1,
+																											flexDirection: "column",
+																											paddingLeft: 1,
+																											paddingBottom: 1.5,
+																										}}
+																									>
+																										{/* Message Header: Author + Time */}
+																										<box
+																											flexDirection="row"
+																											gap={1}
+																										>
+																											<text
+																												fg={
+																													uiColors.textPrimary
+																												}
+																												attributes={
+																													TextAttributes.BOLD
+																												}
+																											>
+																												{note.author?.name ||
+																													"Unknown"}
+																											</text>
+																											<text
+																												fg={uiColors.textMuted}
+																											>
+																												{formatTimestamp(
+																													note.created_at,
+																												)}
+																											</text>
+																										</box>
+
+																										{/* Message Body */}
+																										<box
+																											style={{
+																												width: "100%",
+																												marginTop: 0.5,
+																											}}
+																										>
+																											<text
+																												fg={
+																													uiColors.textSecondary
+																												}
+																											>
+																												{note.body ||
+																													"(no content)"}
+																											</text>
+																										</box>
+																									</box>
+																								</box>
+																							);
+																						}}
+																					</For>
+																				</box>
+																			</Show>
+
+																			{/* Collapsed state - show expand button */}
+																			<Show when={threadIsCollapsed()}>
+																				<box
+																					flexDirection="row"
+																					gap={1}
+																					alignItems="center"
+																					marginBottom={1}
+																				>
+																					<text
+																						fg={uiColors.textPrimary}
+																						attributes={TextAttributes.BOLD}
+																					>
+																						{discussion.notes[0].author?.name ||
+																							"Unknown"}
+																					</text>
+																					<text fg={uiColors.textMuted}>
+																						{formatTimestamp(
+																							discussion.notes[0].created_at,
+																						)}
+																					</text>
+																					<text
+																						fg={uiColors.borderHighlight}
+																						attributes={TextAttributes.BOLD}
+																					>
+																						[t] Show {notesCount}{" "}
+																						{notesCount === 1
+																							? "message"
+																							: "messages"}
+																					</text>
+																				</box>
+																			</Show>
+																			{/* Reply affordance: the same mechanism as the comment composer. */}
+																			<Show
+																				when={
+																					props.onReplyToDiscussion !==
+																					undefined
+																				}
+																			>
+																				<ReplyAffordance
+																					active={
+																						props.replyModeDiscussionId ===
+																						discussion.id
+																					}
+																					text={props.replyText ?? ""}
+																				/>
+																			</Show>
+																		</box>
+																	</MarkedThread>
+																);
+															}}
+														</For>
+													</Show>
+
+													{/* Show comment input inline after the selected line */}
+													{isCommentMode() && isSelected() ? (
+														<box
+															flexDirection="row"
+															alignItems="center"
+															gap={1}
+															backgroundColor={uiColors.bgBase}
+															paddingLeft={1}
+															paddingRight={1}
+															flexGrow={1}
+														>
+															<text fg={uiColors.textPrimary}>
+																{String(props.commentText || "Comment here...")}
+																█
+															</text>
+														</box>
+													) : null}
+												</>
+											);
+										}}
+									</For>
+								</box>
+							}
+						>
+							{/* MARKDOWN UNIFIED VIEW: whole-document blocks on the current
+								    side; removed rows stay per-row red units. */}
+							<box paddingLeft={2} paddingRight={2}>
+								<For each={parsedLines()}>
+									{(line) => {
+										// Headers span the diff and are never selectable.
+										if (line.type === "header") {
+											return (
+												<box paddingTop={0.5} paddingBottom={0.5}>
+													<text fg={uiColors.borderHighlight}>
+														{line.content}
+													</text>
+												</box>
+											);
+										}
+										const mdRows = markdownUnits();
+										const unitIndex = mdRows.firstRowToUnit.get(
+											line.lineNumber,
+										);
+										if (unitIndex === undefined) return null;
+										const unit = mdRows.units[unitIndex];
+										if (!unit) return null;
+										const isSelected = () => unitIndex === props.selectedLine;
+										const isInSelection = () => isInVisualSelection(unitIndex);
+										const isBlock = unit.kind === "block";
+										// Selection is marked by the left-edge block, never by a background
+										// fill, so the diff tint of every unit stays visible.
+										const bgColor = () => {
+											if (isBlock)
+												return unit.status === "added"
+													? uiColors.diffAddedBg
+													: uiColors.diffContextBg;
+											return uiColors.diffRemovedBg;
+										};
+										const fgColor = () => {
+											if (isBlock)
+												return unit.status === "added"
+													? uiColors.diffAdded
+													: uiColors.diffContext;
+											return uiColors.diffRemoved;
+										};
+										const gutterLabel = () => {
+											if (!isBlock) return String(unit.line.oldLineNum ?? "");
+											const start =
+												unit.fileStart !== undefined
+													? String(unit.fileStart)
+													: "";
+											return unit.fileEnd !== undefined &&
+												unit.fileEnd !== unit.fileStart
+												? `${start}-${String(unit.fileEnd)}`
+												: start;
+										};
+										const sign = () =>
+											!isBlock ? "-" : unit.status === "added" ? "+" : " ";
+										const comments = () => getCommentsForUnit(unit);
+										return (
+											<>
+												<box
+													id={`block-${unitIndex}`}
+													flexDirection="row"
+													backgroundColor={bgColor()}
+													paddingRight={1}
+													onMouseUp={() => {
+														props.onSelectedLineChange(unitIndex);
+													}}
+												>
+													<SelectionMarker
+														selected={isSelected()}
+														range={isInSelection()}
+													/>
+													<text
+														fg={uiColors.textMuted}
+														flexShrink={0}
+														width={10}
+													>
+														{gutterLabel()}
+													</text>
+													<text fg={fgColor()} flexShrink={0} width={2}>
+														{sign()}
+													</text>
+													{isBlock ? (
+														<MarkdownBlockView
+															source={unit.block.source}
+															fg={fgColor()}
+															width={Math.max(
+																20,
+																Math.floor(renderer.width * 0.6),
+															)}
+															flexGrow={1}
+														/>
+													) : (
+														<text fg={fgColor()} flexGrow={1}>
+															{unit.line.content}
+														</text>
+													)}
+												</box>
+
+												<Show when={comments().length > 0}>
+													<For each={comments()}>
+														{(discussion) => (
+															<DiscussionThread
+																discussion={discussion}
+																outdated={isCommentOutdated(discussion)}
+																collapsed={isCollapsed(discussion.id)}
+																selected={isSelected()}
+																range={isInSelection()}
+																formatTimestamp={formatTimestamp}
+																paddingLeft={10}
+																repliesEnabled={
+																	props.onReplyToDiscussion !== undefined
+																}
+																replyActive={
+																	props.replyModeDiscussionId === discussion.id
+																}
+																{...(props.replyText !== undefined
+																	? { replyText: props.replyText }
+																	: {})}
+															/>
+														)}
+													</For>
+												</Show>
+
+												{isCommentMode() && isSelected() ? (
+													<box
+														flexDirection="row"
+														alignItems="center"
+														gap={1}
+														backgroundColor={uiColors.bgBase}
+														paddingLeft={1}
+														paddingRight={1}
+														flexGrow={1}
+													>
+														<text fg={uiColors.textPrimary}>
+															{String(props.commentText || "Comment here...")}█
+														</text>
+													</box>
+												) : null}
+											</>
+										);
+									}}
+								</For>
+							</box>
+						</Show>
+					}
+				>
+					{/* SPLIT VIEW */}
+					<Show
+						when={props.renderMarkdown}
+						fallback={
+							<box paddingLeft={2} paddingRight={2}>
+								<For each={splitLines()}>
+									{(line) => {
+										// Calculate this line's index in the selectable lines array
+										const selectableIndex = selectableLines().findIndex(
+											(l) => l.lineNumber === line.lineNumber,
+										);
+
+										// Headers span both columns
+										if (line.header) {
+											return (
+												<box paddingTop={0.5} paddingBottom={0.5}>
+													<text fg={uiColors.borderHighlight}>
+														{line.header}
+													</text>
+												</box>
+											);
+										}
+
+										// REACTIVE: Check if this line is selected
+										const isSelected = () =>
+											selectableIndex === props.selectedLine;
+										const findingComments = () =>
+											getCommentsForSplitLine(line).filter(
+												(discussion) => discussion.findingId,
+											);
+
+										// REACTIVE: Check if line is in visual selection range
+										const isInSelection = () =>
+											isInVisualSelection(selectableIndex);
+
+										return (
+											<>
+												<box
+													id={`line-${selectableIndex}`}
+													flexDirection="row"
+													backgroundColor={uiColors.diffContextBg}
+													onMouseUp={() => {
+														if (selectableIndex >= 0) {
+															props.onSelectedLineChange(selectableIndex);
+														}
+													}}
+												>
+													<SelectionMarker
+														selected={isSelected()}
+														range={isInSelection()}
+													/>
+													{/* LEFT PANEL (OLD/REMOVED) */}
+													<box
+														flexDirection="row"
+														width="50%"
+														paddingLeft={1}
+														paddingRight={1}
+														backgroundColor={
+															line.oldLine?.type === "removed"
+																? uiColors.diffRemovedBg
+																: uiColors.diffContextBg
+														}
+													>
+														<text
+															fg={uiColors.textMuted}
+															flexShrink={0}
+															width={5}
+														>
+															{line.oldLine?.lineNum
+																? String(line.oldLine.lineNum)
+																: ""}
+														</text>
+														<text
+															fg={
+																line.oldLine?.type === "removed"
+																	? uiColors.diffRemoved
+																	: uiColors.diffContext
+															}
+															flexGrow={1}
+														>
+															{line.oldLine?.content || ""}
+														</text>
+													</box>
+
+													{/* RIGHT PANEL (NEW/ADDED) */}
+													<box
+														flexDirection="row"
+														width="50%"
+														paddingLeft={1}
+														paddingRight={1}
+														backgroundColor={
+															line.newLine?.type === "added"
+																? uiColors.diffAddedBg
+																: uiColors.diffContextBg
+														}
+													>
+														<text
+															fg={uiColors.textMuted}
+															flexShrink={0}
+															width={5}
+														>
+															{line.newLine?.lineNum
+																? String(line.newLine.lineNum)
+																: ""}
+														</text>
+														<text
+															fg={
+																line.newLine?.type === "added"
+																	? uiColors.diffAdded
+																	: uiColors.diffContext
+															}
+															flexGrow={1}
+														>
+															{line.newLine?.content || ""}
+														</text>
+														<Show when={findingComments().length > 0}>
+															<text
+																fg={
+																	findingComments().some(
+																		(discussion) =>
+																			discussion.notes[0].resolved,
+																	)
+																		? uiColors.success
+																		: uiColors.warning
+																}
+																attributes={TextAttributes.BOLD}
+															>
+																{findingComments().some(
+																	(discussion) => discussion.notes[0].resolved,
+																)
+																	? "☑"
+																	: "☐"}
+															</text>
+														</Show>
+													</box>
+												</box>
+
+												{/* Render inline comments for this line - Timeline style */}
+												<Show when={getCommentsForSplitLine(line).length > 0}>
+													<For each={getCommentsForSplitLine(line)}>
+														{(discussion) => {
+															const isOutdated = isCommentOutdated(discussion);
+															const threadIsCollapsed = () =>
+																isCollapsed(discussion.id);
+															const notesCount = discussion.notes.length;
+
+															return (
+																<MarkedThread
+																	selected={isSelected()}
+																	range={isInSelection()}
+																>
 																	<box
 																		flexDirection="column"
-																		backgroundColor={uiColors.bgBase}
 																		paddingTop={1}
 																		paddingBottom={1}
-																		paddingLeft={12} // Indent from line numbers
+																		paddingLeft={3} // 6 - 3 marker columns
 																		paddingRight={2}
 																	>
 																		{/* Header row with status badges */}
@@ -1107,557 +1685,8 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 																				</text>
 																			</box>
 																		</Show>
-																		{/* Reply affordance: the same mechanism as the comment composer. */}
-																		<Show
-																			when={
-																				props.onReplyToDiscussion !== undefined
-																			}
-																		>
-																			<ReplyAffordance
-																				active={
-																					props.replyModeDiscussionId ===
-																					discussion.id
-																				}
-																				text={props.replyText ?? ""}
-																			/>
-																		</Show>
 																	</box>
-																);
-															}}
-														</For>
-													</Show>
-
-													{/* Show comment input inline after the selected line */}
-													{isCommentMode() && isSelected() ? (
-														<box
-															flexDirection="row"
-															alignItems="center"
-															gap={1}
-															backgroundColor={uiColors.bgBase}
-															paddingLeft={1}
-															paddingRight={1}
-															flexGrow={1}
-														>
-															<text fg={uiColors.textPrimary}>
-																{String(props.commentText || "Comment here...")}
-																█
-															</text>
-														</box>
-													) : null}
-												</>
-											);
-										}}
-									</For>
-								</box>
-							}
-						>
-							{/* MARKDOWN UNIFIED VIEW: whole-document blocks on the current
-								    side; removed rows stay per-row red units. */}
-							<box paddingLeft={2} paddingRight={2}>
-								<For each={parsedLines()}>
-									{(line) => {
-										// Headers span the diff and are never selectable.
-										if (line.type === "header") {
-											return (
-												<box paddingTop={0.5} paddingBottom={0.5}>
-													<text fg={uiColors.borderHighlight}>
-														{line.content}
-													</text>
-												</box>
-											);
-										}
-										const mdRows = markdownUnits();
-										const unitIndex = mdRows.firstRowToUnit.get(
-											line.lineNumber,
-										);
-										if (unitIndex === undefined) return null;
-										const unit = mdRows.units[unitIndex];
-										if (!unit) return null;
-										const isSelected = () => unitIndex === props.selectedLine;
-										const isInSelection = () => isInVisualSelection(unitIndex);
-										const isBlock = unit.kind === "block";
-										// Selection is marked by the left-edge block, never by a background
-										// fill, so the diff tint of every unit stays visible.
-										const bgColor = () => {
-											if (isBlock)
-												return unit.status === "added"
-													? uiColors.diffAddedBg
-													: uiColors.diffContextBg;
-											return uiColors.diffRemovedBg;
-										};
-										const fgColor = () => {
-											if (isBlock)
-												return unit.status === "added"
-													? uiColors.diffAdded
-													: uiColors.diffContext;
-											return uiColors.diffRemoved;
-										};
-										const gutterLabel = () => {
-											if (!isBlock) return String(unit.line.oldLineNum ?? "");
-											const start =
-												unit.fileStart !== undefined
-													? String(unit.fileStart)
-													: "";
-											return unit.fileEnd !== undefined &&
-												unit.fileEnd !== unit.fileStart
-												? `${start}-${String(unit.fileEnd)}`
-												: start;
-										};
-										const sign = () =>
-											!isBlock ? "-" : unit.status === "added" ? "+" : " ";
-										const comments = () => getCommentsForUnit(unit);
-										return (
-											<>
-												<box
-													id={`block-${unitIndex}`}
-													flexDirection="row"
-													backgroundColor={bgColor()}
-													paddingRight={1}
-													onMouseUp={() => {
-														props.onSelectedLineChange(unitIndex);
-													}}
-												>
-													<SelectionMarker
-														selected={isSelected()}
-														range={isInSelection()}
-													/>
-													<text
-														fg={uiColors.textMuted}
-														flexShrink={0}
-														width={10}
-													>
-														{gutterLabel()}
-													</text>
-													<text fg={fgColor()} flexShrink={0} width={2}>
-														{sign()}
-													</text>
-													{isBlock ? (
-														<MarkdownBlockView
-															source={unit.block.source}
-															fg={fgColor()}
-															width={Math.max(
-																20,
-																Math.floor(renderer.width * 0.6),
-															)}
-															flexGrow={1}
-														/>
-													) : (
-														<text fg={fgColor()} flexGrow={1}>
-															{unit.line.content}
-														</text>
-													)}
-												</box>
-
-												<Show when={comments().length > 0}>
-													<For each={comments()}>
-														{(discussion) => (
-															<DiscussionThread
-																discussion={discussion}
-																outdated={isCommentOutdated(discussion)}
-																collapsed={isCollapsed(discussion.id)}
-																formatTimestamp={formatTimestamp}
-																paddingLeft={10}
-																repliesEnabled={
-																	props.onReplyToDiscussion !== undefined
-																}
-																replyActive={
-																	props.replyModeDiscussionId === discussion.id
-																}
-																{...(props.replyText !== undefined
-																	? { replyText: props.replyText }
-																	: {})}
-															/>
-														)}
-													</For>
-												</Show>
-
-												{isCommentMode() && isSelected() ? (
-													<box
-														flexDirection="row"
-														alignItems="center"
-														gap={1}
-														backgroundColor={uiColors.bgBase}
-														paddingLeft={1}
-														paddingRight={1}
-														flexGrow={1}
-													>
-														<text fg={uiColors.textPrimary}>
-															{String(props.commentText || "Comment here...")}█
-														</text>
-													</box>
-												) : null}
-											</>
-										);
-									}}
-								</For>
-							</box>
-						</Show>
-					}
-				>
-					{/* SPLIT VIEW */}
-					<Show
-						when={props.renderMarkdown}
-						fallback={
-							<box paddingLeft={2} paddingRight={2}>
-								<For each={splitLines()}>
-									{(line) => {
-										// Calculate this line's index in the selectable lines array
-										const selectableIndex = selectableLines().findIndex(
-											(l) => l.lineNumber === line.lineNumber,
-										);
-
-										// Headers span both columns
-										if (line.header) {
-											return (
-												<box paddingTop={0.5} paddingBottom={0.5}>
-													<text fg={uiColors.borderHighlight}>
-														{line.header}
-													</text>
-												</box>
-											);
-										}
-
-										// REACTIVE: Check if this line is selected
-										const isSelected = () =>
-											selectableIndex === props.selectedLine;
-										const findingComments = () =>
-											getCommentsForSplitLine(line).filter(
-												(discussion) => discussion.findingId,
-											);
-
-										// REACTIVE: Check if line is in visual selection range
-										const isInSelection = () =>
-											isInVisualSelection(selectableIndex);
-
-										return (
-											<>
-												<box
-													id={`line-${selectableIndex}`}
-													flexDirection="row"
-													backgroundColor={uiColors.diffContextBg}
-													onMouseUp={() => {
-														if (selectableIndex >= 0) {
-															props.onSelectedLineChange(selectableIndex);
-														}
-													}}
-												>
-													<SelectionMarker
-														selected={isSelected()}
-														range={isInSelection()}
-													/>
-													{/* LEFT PANEL (OLD/REMOVED) */}
-													<box
-														flexDirection="row"
-														width="50%"
-														paddingLeft={1}
-														paddingRight={1}
-														backgroundColor={
-															line.oldLine?.type === "removed"
-																? uiColors.diffRemovedBg
-																: uiColors.diffContextBg
-														}
-													>
-														<text
-															fg={uiColors.textMuted}
-															flexShrink={0}
-															width={5}
-														>
-															{line.oldLine?.lineNum
-																? String(line.oldLine.lineNum)
-																: ""}
-														</text>
-														<text
-															fg={
-																line.oldLine?.type === "removed"
-																	? uiColors.diffRemoved
-																	: uiColors.diffContext
-															}
-															flexGrow={1}
-														>
-															{line.oldLine?.content || ""}
-														</text>
-													</box>
-
-													{/* RIGHT PANEL (NEW/ADDED) */}
-													<box
-														flexDirection="row"
-														width="50%"
-														paddingLeft={1}
-														paddingRight={1}
-														backgroundColor={
-															line.newLine?.type === "added"
-																? uiColors.diffAddedBg
-																: uiColors.diffContextBg
-														}
-													>
-														<text
-															fg={uiColors.textMuted}
-															flexShrink={0}
-															width={5}
-														>
-															{line.newLine?.lineNum
-																? String(line.newLine.lineNum)
-																: ""}
-														</text>
-														<text
-															fg={
-																line.newLine?.type === "added"
-																	? uiColors.diffAdded
-																	: uiColors.diffContext
-															}
-															flexGrow={1}
-														>
-															{line.newLine?.content || ""}
-														</text>
-														<Show when={findingComments().length > 0}>
-															<text
-																fg={
-																	findingComments().some(
-																		(discussion) =>
-																			discussion.notes[0].resolved,
-																	)
-																		? uiColors.success
-																		: uiColors.warning
-																}
-																attributes={TextAttributes.BOLD}
-															>
-																{findingComments().some(
-																	(discussion) => discussion.notes[0].resolved,
-																)
-																	? "☑"
-																	: "☐"}
-															</text>
-														</Show>
-													</box>
-												</box>
-
-												{/* Render inline comments for this line - Timeline style */}
-												<Show when={getCommentsForSplitLine(line).length > 0}>
-													<For each={getCommentsForSplitLine(line)}>
-														{(discussion) => {
-															const isOutdated = isCommentOutdated(discussion);
-															const threadIsCollapsed = () =>
-																isCollapsed(discussion.id);
-															const notesCount = discussion.notes.length;
-
-															return (
-																<box
-																	flexDirection="column"
-																	backgroundColor={uiColors.bgBase}
-																	paddingTop={1}
-																	paddingBottom={1}
-																	paddingLeft={6} // Indent from edge
-																	paddingRight={2}
-																>
-																	{/* Header row with status badges */}
-																	<box
-																		flexDirection="row"
-																		gap={2}
-																		marginBottom={0.5}
-																	>
-																		<Show when={discussion.findingId}>
-																			<text
-																				fg={
-																					discussion.notes[0].resolved
-																						? uiColors.success
-																						: uiColors.warning
-																				}
-																				attributes={TextAttributes.BOLD}
-																			>
-																				{discussion.notes[0].resolved
-																					? "☑ FIX"
-																					: "☐ FIX"}
-																			</text>
-																		</Show>
-																		<Show when={isOutdated}>
-																			<text
-																				fg={uiColors.warning}
-																				attributes={TextAttributes.BOLD}
-																			>
-																				⚠ OUTDATED
-																			</text>
-																		</Show>
-																		<Show when={discussion.notes[0].resolved}>
-																			<text
-																				fg={uiColors.success}
-																				attributes={TextAttributes.BOLD}
-																			>
-																				✓ Resolved
-																			</text>
-																		</Show>
-																		<Show
-																			when={
-																				!discussion.notes[0].resolved &&
-																				!isOutdated
-																			}
-																		>
-																			<text
-																				fg={uiColors.warning}
-																				attributes={TextAttributes.BOLD}
-																			>
-																				● Open
-																			</text>
-																		</Show>
-																	</box>
-
-																	{/* Conversation Messages with Timeline */}
-																	<Show when={!threadIsCollapsed()}>
-																		<box flexDirection="column">
-																			<For each={discussion.notes}>
-																				{(note, noteIndex) => {
-																					const isLastNote = () =>
-																						noteIndex() ===
-																						discussion.notes.length - 1;
-																					return (
-																						<box
-																							style={{
-																								width: "100%",
-																								flexDirection: "row",
-																								flexShrink: 0,
-																							}}
-																						>
-																							{/* Timeline Column */}
-																							<box
-																								style={{
-																									width: 4,
-																									flexDirection: "column",
-																									alignItems: "center",
-																									flexShrink: 0,
-																								}}
-																							>
-																								{/* Node */}
-																								<box
-																									style={{
-																										width: 3,
-																										height: 1,
-																										justifyContent: "center",
-																										alignItems: "center",
-																									}}
-																								>
-																									<text fg={uiColors.primary}>
-																										●
-																									</text>
-																								</box>
-
-																								{/* Vertical line */}
-																								<Show when={!isLastNote()}>
-																									<box
-																										style={{
-																											width: 1,
-																											flexGrow: 1,
-																											flexDirection: "column",
-																										}}
-																									>
-																										{/* Calculate approximate lines needed based on message length */}
-																										{(() => {
-																											const bodyLength =
-																												note.body?.length || 0;
-																											const lines = Math.max(
-																												3,
-																												Math.ceil(
-																													bodyLength / 80,
-																												) + 2,
-																											);
-																											return Array(lines)
-																												.fill(null)
-																												.map((_, _i) => (
-																													<text
-																														fg={
-																															uiColors.bgSurface1
-																														}
-																													>
-																														│
-																													</text>
-																												));
-																										})()}
-																									</box>
-																								</Show>
-																							</box>
-
-																							{/* Message Content */}
-																							<box
-																								style={{
-																									flexGrow: 1,
-																									flexDirection: "column",
-																									paddingLeft: 1,
-																									paddingBottom: 1.5,
-																								}}
-																							>
-																								{/* Message Header: Author + Time */}
-																								<box
-																									flexDirection="row"
-																									gap={1}
-																								>
-																									<text
-																										fg={uiColors.textPrimary}
-																										attributes={
-																											TextAttributes.BOLD
-																										}
-																									>
-																										{note.author?.name ||
-																											"Unknown"}
-																									</text>
-																									<text fg={uiColors.textMuted}>
-																										{formatTimestamp(
-																											note.created_at,
-																										)}
-																									</text>
-																								</box>
-
-																								{/* Message Body */}
-																								<box
-																									style={{
-																										width: "100%",
-																										marginTop: 0.5,
-																									}}
-																								>
-																									<text
-																										fg={uiColors.textSecondary}
-																									>
-																										{note.body ||
-																											"(no content)"}
-																									</text>
-																								</box>
-																							</box>
-																						</box>
-																					);
-																				}}
-																			</For>
-																		</box>
-																	</Show>
-
-																	{/* Collapsed state - show expand button */}
-																	<Show when={threadIsCollapsed()}>
-																		<box
-																			flexDirection="row"
-																			gap={1}
-																			alignItems="center"
-																			marginBottom={1}
-																		>
-																			<text
-																				fg={uiColors.textPrimary}
-																				attributes={TextAttributes.BOLD}
-																			>
-																				{discussion.notes[0].author?.name ||
-																					"Unknown"}
-																			</text>
-																			<text fg={uiColors.textMuted}>
-																				{formatTimestamp(
-																					discussion.notes[0].created_at,
-																				)}
-																			</text>
-																			<text
-																				fg={uiColors.borderHighlight}
-																				attributes={TextAttributes.BOLD}
-																			>
-																				[t] Show {notesCount}{" "}
-																				{notesCount === 1
-																					? "message"
-																					: "messages"}
-																			</text>
-																		</box>
-																	</Show>
-																</box>
+																</MarkedThread>
 															);
 														}}
 													</For>
@@ -1807,6 +1836,8 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 																	discussion={discussion}
 																	outdated={isCommentOutdated(discussion)}
 																	collapsed={isCollapsed(discussion.id)}
+																	selected={isSelected()}
+																	range={isInSelection()}
 																	formatTimestamp={formatTimestamp}
 																	paddingLeft={6}
 																	repliesEnabled={

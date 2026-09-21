@@ -600,32 +600,50 @@ describe("agent config mutations", () => {
 });
 
 describe("agent question", () => {
-	test("forwards the environment and returns the answer", async () => {
+	test("forwards the environment and publishes question creation", async () => {
 		let seen: unknown;
 		await withServer(
 			async (server) => {
-				const client = new BackendClient({
-					baseUrl: server.url,
-					token: server.token,
-					ownerId: "agent-1",
-				});
-				const answer = await client.agentQuestion({
-					repo: "/repo",
-					environment: { HERDR_RUN_ID: "run-1" },
-					input: { description: "Which?" },
-					timeoutMs: 1000,
-				});
-				expect(answer).toBe("answer");
-				expect(seen).toMatchObject({
-					repo: "/repo",
-					environment: { HERDR_RUN_ID: "run-1" },
-					input: { description: "Which?" },
-					timeoutMs: 1000,
-				});
+				const events: unknown[] = [];
+				const subscription = server.app.events.open({}, (event) =>
+					events.push(event),
+				);
+				try {
+					const client = new BackendClient({
+						baseUrl: server.url,
+						token: server.token,
+						ownerId: "agent-1",
+					});
+					const answer = await client.agentQuestion({
+						repo: "/repo",
+						environment: { HERDR_RUN_ID: "run-1" },
+						input: { description: "Which?" },
+						timeoutMs: 1000,
+					});
+					expect(answer).toBe("answer");
+					expect(seen).toMatchObject({
+						repo: "/repo",
+						environment: { HERDR_RUN_ID: "run-1" },
+						input: { description: "Which?" },
+						timeoutMs: 1000,
+					});
+					expect(events).toContainEqual(
+						expect.objectContaining({
+							domain: "workflow",
+							kind: "workflow.question",
+							resource: "/repo",
+							runId: "wf-1",
+							revision: 4,
+						}),
+					);
+				} finally {
+					subscription.unsubscribe();
+				}
 			},
 			stubOperations({
-				agentQuestion: async (request) => {
+				agentQuestion: async (request, _signal, onCreated) => {
 					seen = request;
+					onCreated?.("wf-1", 4);
 					return "answer";
 				},
 			}),

@@ -93,6 +93,7 @@ export interface ServerOperations {
 	agentQuestion(
 		request: AgentQuestionRequest,
 		signal: AbortSignal,
+		onCreated?: (workflowId: string, revision: number) => void,
 	): Promise<string>;
 	researchHandoff(request: AgentResearchHandoffRequest): Promise<WorkflowView>;
 }
@@ -240,6 +241,7 @@ export function loadAgents(
 export function agentQuestion(
 	request: AgentQuestionRequest,
 	signal: AbortSignal,
+	onCreated?: (workflowId: string, revision: number) => void,
 ): Promise<string> {
 	const engine = workflowEngineFactory(dashboardApplication);
 	return runDeveloperQuestion(
@@ -251,6 +253,7 @@ export function agentQuestion(
 		dashboardApplication,
 		request.environment,
 		signal,
+		onCreated,
 	);
 }
 
