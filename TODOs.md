@@ -26,6 +26,4 @@ UI Rework / Devenv union:
 * Dont show wiki frontmatter by default. Remove it from the markdown view and only make it show on pressing f. then show only the frontmatter in separate popup
 * Render one line of space between paragraphs in wiki markdown view (not frontmatter)
 * Also mark the comment if it is on the same line as the selected line
-* Status updates in dash dont arrive
-* the double q and ctrl + c still doesnt work in dash mode
 * Introduce phase based telemetry grouping (tree view)
