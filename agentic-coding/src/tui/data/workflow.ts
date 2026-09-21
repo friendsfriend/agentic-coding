@@ -73,6 +73,131 @@ export async function loadView(
 	);
 }
 
+/** Fast first paint from the cheap workflow view; full observations follow. */
+export async function loadDashboardSeed(
+	repo: string,
+	workflowId: string,
+	signal?: Signal,
+): Promise<DashboardData | undefined> {
+	const view = await loadView(repo, workflowId, signal);
+	if (!view) return undefined;
+	const verifierRuns = view.runs.filter(
+		(run) => run.stepId === "core.verification",
+	);
+	const verificationRound = Math.max(
+		0,
+		...verifierRuns.map((run) => run.attempt),
+	);
+	const currentVerifierRuns = verifierRuns.filter(
+		(run) => run.attempt === verificationRound,
+	);
+	const latest = new Map<string, (typeof view.runs)[number]>();
+	for (const run of view.runs) {
+		const existing = latest.get(run.role);
+		if (!existing || existing.attempt <= run.attempt) latest.set(run.role, run);
+	}
+	const state = {
+		workflowId: view.workflowId,
+		changeId: view.changeId,
+		phase: view.currentStep.id,
+		stepId: view.currentStep.id,
+		stepLabel: view.currentStep.label,
+		revision: view.revision,
+		definition: view.definition,
+		status: view.status,
+		health: view.health,
+		developerDialogue: view.developerDialogue ?? [],
+		pendingQuestions: view.pendingQuestions ?? [],
+		availableActions: view.availableActions,
+		repository: view.repository,
+		worktree: view.worktree,
+		branch: view.branch,
+		task: view.task,
+		workspace: view.workspace ?? "",
+		verificationRound,
+		baseCommit: view.baseCommit,
+		createdAt: view.createdAt,
+		phaseStartedAt: view.currentStep.enteredAt,
+		...(view.selectedPreset ? { selectedPreset: view.selectedPreset } : {}),
+		panes: Object.fromEntries(
+			[...latest.values()].flatMap((run) =>
+				run.paneId ? [[run.role, run.paneId]] : [],
+			),
+		),
+		runs: view.runs,
+		verificationRoles: currentVerifierRuns.map((run) => run.role),
+		verificationModels: Object.fromEntries(
+			currentVerifierRuns.flatMap((run) =>
+				run.model ? [[run.role, run.model]] : [],
+			),
+		),
+	};
+	const verifierTimeline = state.runs
+		.filter(
+			(run) =>
+				run.stepId === "core.verification" &&
+				run.attempt === state.verificationRound,
+		)
+		.map((run) => ({
+			role: run.role,
+			status:
+				run.status === "completed"
+					? "PASS"
+					: run.status === "working" || run.status === "pending"
+						? "RUN"
+						: "FAIL",
+			rawStatus: run.status,
+			model: run.model,
+			providerErrors: 0,
+			fallback: false,
+		}));
+	const now = Date.now();
+	const createdAt = Date.parse(view.createdAt);
+	const updatedAt = Date.parse(view.updatedAt);
+	return {
+		state,
+		request: view.task?.trim() || "No request recorded",
+		proposal: "Loading proposal…",
+		review: "Not run",
+		reviewHistory: [],
+		agents: [...latest].flatMap(([role, run]) =>
+			["git", "dashboard"].includes(role)
+				? []
+				: [
+						{
+							role,
+							status: run.status,
+							runtime: run.runtime,
+							model: run.model,
+						},
+					],
+		),
+		updated: Number.isNaN(updatedAt)
+			? ""
+			: new Date(updatedAt).toLocaleTimeString(),
+		health: {
+			dirty: false,
+			ahead: 0,
+			behind: 0,
+			branch: view.branch,
+		},
+		gitStatus: {
+			available: false,
+			branch: view.branch,
+			changedFiles: 0,
+			addedFiles: 0,
+			deletedFiles: 0,
+			noUpstream: true,
+		},
+		age: Number.isNaN(createdAt)
+			? "unknown"
+			: `${Math.max(0, Math.floor((now - createdAt) / 3600000))}h`,
+		events: [],
+		verifierTimeline,
+		costBreakdown: [],
+	};
+}
+
 /** The dashboard projection for one workflow (server-composed read). */
 export async function loadDashboard(
 	repo: string,

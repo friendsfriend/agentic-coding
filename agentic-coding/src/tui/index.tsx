@@ -222,7 +222,6 @@ export async function main(): Promise<void> {
 	// one, attach stays environment-only (the predecessor milestone).
 	const attachToken =
 		arg("--attach-token") ?? process.env.AGENTIC_WORKFLOW_TOKEN;
-	const remoteAttach = Boolean(attachUrl && attachToken);
 	const home =
 		process.argv.includes("--home") || process.argv.includes("manager");
 	const isTest = profile === "test";
@@ -245,6 +244,12 @@ export async function main(): Promise<void> {
 	// Presentation mode of this process: `dash` renders the dashboard-only root
 	// for one explicit target, everything else composes the feature shell.
 	const dashOnly = isDashboardMode({ home, attachUrl });
+	// A dashboard pane is a client of its parent shell's workflow server. Herdr
+	// starts it as a separate process, so use the explicit handoff environment
+	// instead of falling through to the transport-less path.
+	const workflowAttachUrl =
+		attachUrl ?? (dashOnly ? process.env.AGENTIC_WORKFLOW_URL : undefined);
+	const remoteAttach = Boolean(workflowAttachUrl && attachToken);
 	// Configuration diagnostics go to the mounted surface instead of raw stderr,
 	// which would print into the OpenTUI render. A failed load opens the global
 	// error dialog; warnings become toasts, reported once per distinct message
@@ -324,10 +329,10 @@ export async function main(): Promise<void> {
 	}
 	// Full-feature attach talks to the remote unified server through the typed
 	// client.
-	if (remoteAttach && attachUrl && attachToken)
+	if (remoteAttach && workflowAttachUrl && attachToken)
 		configureGateway(
 			configureBackendClient({
-				baseUrl: attachUrl,
+				baseUrl: workflowAttachUrl,
 				token: attachToken,
 				ownerId: `attach-${process.pid}`,
 			}),

@@ -127,6 +127,7 @@ class RepositoryExecutionCoordinator {
 	private readonly workflowErrors = new Map<string, string>();
 	private readonly listeners = new Set<(workflowId: string) => void>();
 	private readonly settledListeners = new Set<(workflowId: string) => void>();
+	private readonly progressListeners = new Set<() => void>();
 	/** Every workflow id coalesced into the next drain, in request order. */
 	private queuedWorkflowIds: Array<string | undefined> = [];
 	/** Ids coalesced while a drain was in flight; carried onto the drain that
@@ -176,6 +177,9 @@ class RepositoryExecutionCoordinator {
 				this.workflowErrors.set(workflowId, message);
 				for (const listener of this.listeners) listener(workflowId);
 			},
+			() => {
+				for (const listener of this.progressListeners) listener();
+			},
 		)
 			.then(() => {
 				if (!this.disposed) this.error = undefined;
@@ -206,6 +210,11 @@ class RepositoryExecutionCoordinator {
 	onSettled(listener: (workflowId: string) => void): () => void {
 		this.settledListeners.add(listener);
 		return () => this.settledListeners.delete(listener);
+	}
+
+	onProgress(listener: () => void): () => void {
+		this.progressListeners.add(listener);
+		return () => this.progressListeners.delete(listener);
 	}
 
 	lastError(workflowId?: string): string | undefined {
@@ -300,6 +309,15 @@ export function onWorkflowExecutionSettled(
 	listener: (workflowId: string) => void,
 ): () => void {
 	return executionCoordinator(repo).onSettled(listener);
+}
+
+/** Fires after each committed effect, without waiting for continuation polling
+ * to finish. Consumers use this for prompt dashboard refreshes. */
+export function onWorkflowExecutionProgress(
+	repo: string,
+	listener: () => void,
+): () => void {
+	return executionCoordinator(repo).onProgress(listener);
 }
 
 export function workflowExecutionError(

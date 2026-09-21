@@ -14,6 +14,7 @@ export {
 export {
 	listPresetNames,
 	onWorkflowExecutionError,
+	onWorkflowExecutionProgress,
 	onWorkflowExecutionSettled,
 	PRESET_CONFIG_DEFAULTS,
 	reconcileSidebarPresentation,

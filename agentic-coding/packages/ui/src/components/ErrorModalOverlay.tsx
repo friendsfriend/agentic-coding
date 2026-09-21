@@ -10,9 +10,8 @@ import { activeErrorModal, dismissErrorModal } from "./errorModal.ts";
  * any surface (dashboard detail, workspace overview, wiki, changed files) is
  * shown above every tab, not just the surface that produced it. Owns the
  * `modal.active = "error"` keymap handoff and j/k scrolling; Esc/Enter
- * dismissal is owned by the shell's key handler so the dismissal key is
- * consumed exactly once and never drives the tab underneath. Surfaces only
- * call `showErrorModal`.
+ * dismiss the overlay without reaching the tab underneath. Surfaces only call
+ * `showErrorModal`.
  */
 export function ErrorModalOverlay(props: {
 	keymap?: Keymap<Renderable, KeyEvent>;
@@ -55,6 +54,10 @@ export function ErrorModalOverlay(props: {
 					name: "error-modal.handle",
 					run: ({ event }) => {
 						const key = event.name.toLowerCase();
+						if (key === "escape" || key === "enter" || key === "return") {
+							dismissErrorModal();
+							return true;
+						}
 						if (key === "j" || key === "down") {
 							scrollBox?.scrollBy(1);
 							return true;
@@ -67,10 +70,12 @@ export function ErrorModalOverlay(props: {
 					},
 				},
 			],
-			bindings: ["j", "k", "up", "down"].map((key) => ({
-				key,
-				cmd: "error-modal.handle",
-			})),
+			bindings: ["escape", "enter", "return", "j", "k", "up", "down"].map(
+				(key) => ({
+					key,
+					cmd: "error-modal.handle",
+				}),
+			),
 		});
 		onCleanup(dispose);
 	});

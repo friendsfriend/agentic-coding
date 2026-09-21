@@ -63,6 +63,20 @@ export function createInProcessGateway(
 ): DashboardGateway {
 	const { operations, telemetry, credentials, events } = options;
 	const abortError = options.abortError ?? defaultAbortError;
+	const publishWorkflow = (
+		kind: string,
+		repo: string,
+		workflowId?: string,
+		revision?: number,
+	): void => {
+		events.publish({
+			domain: "workflow",
+			kind,
+			resource: repo,
+			...(workflowId ? { runId: workflowId } : {}),
+			...(revision !== undefined ? { revision } : {}),
+		});
+	};
 
 	/** Await a value but reject as soon as the caller aborts. */
 	const withSignal = <T>(
@@ -137,19 +151,42 @@ export function createInProcessGateway(
 
 		// -- mutations: the operations own revision guards and re-reads --------
 		async action(request: WorkflowActionRequest): Promise<WorkflowView> {
-			return operations.action(request);
+			const view = operations.action(request);
+			publishWorkflow(
+				"workflow.action",
+				request.repo,
+				request.workflowId,
+				request.revision,
+			);
+			return view;
 		},
 
 		async start(request: WorkflowStartRequest): Promise<string> {
-			return operations.start(request);
+			const workflowId = await operations.start(request);
+			publishWorkflow("workflow.start", request.repo, workflowId);
+			return workflowId;
 		},
 
 		async repair(request: WorkflowRepairRequest): Promise<WorkflowView> {
-			return operations.repair(request);
+			const view = operations.repair(request);
+			publishWorkflow(
+				"workflow.repair",
+				request.repo,
+				request.workflowId,
+				request.revision,
+			);
+			return view;
 		},
 
 		async question(request: WorkflowQuestionRequest): Promise<WorkflowView> {
-			return operations.question(request);
+			const view = operations.question(request);
+			publishWorkflow(
+				"workflow.question",
+				request.repo,
+				request.workflowId,
+				request.revision,
+			);
+			return view;
 		},
 
 		async execute(request: WorkflowExecuteRequest): Promise<void> {
@@ -157,11 +194,19 @@ export function createInProcessGateway(
 		},
 
 		async saveReview(request: ReviewSaveRequest): Promise<void> {
-			return operations.saveReview(request);
+			await operations.saveReview(request);
+			publishWorkflow("workflow.review-save", request.repo, request.workflowId);
 		},
 
 		async agentHandoff(request: AgentHandoffRequest): Promise<WorkflowView> {
-			return operations.handoff(request);
+			const view = await operations.handoff(request);
+			publishWorkflow(
+				"workflow.handoff",
+				request.repo,
+				view.workflowId,
+				view.revision,
+			);
+			return view;
 		},
 
 		async agentQuestion(
@@ -181,7 +226,14 @@ export function createInProcessGateway(
 		async researchHandoff(
 			request: AgentResearchHandoffRequest,
 		): Promise<WorkflowView> {
-			return operations.researchHandoff(request);
+			const view = await operations.researchHandoff(request);
+			publishWorkflow(
+				"workflow.research-handoff",
+				request.repo,
+				view.workflowId,
+				view.revision,
+			);
+			return view;
 		},
 
 		async saveAgents(request: AgentsMutationRequest): Promise<void> {

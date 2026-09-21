@@ -230,7 +230,8 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			events.publish({
 				domain: "workflow",
 				kind: "workflow.action",
-				resource: decoded.workflowId,
+				resource: decoded.repo,
+				runId: decoded.workflowId,
 				revision: decoded.revision,
 			});
 			return json({ ok: true, value });
@@ -245,7 +246,8 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			events.publish({
 				domain: "workflow",
 				kind: "workflow.start",
-				resource: decoded.workflowId,
+				resource: decoded.repo,
+				runId: decoded.workflowId,
 			});
 			return json({ ok: true, value });
 		}
@@ -259,7 +261,8 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			events.publish({
 				domain: "workflow",
 				kind: "workflow.repair",
-				resource: decoded.workflowId,
+				resource: decoded.repo,
+				runId: decoded.workflowId,
 				revision: decoded.revision,
 			});
 			return json({ ok: true, value });
@@ -274,7 +277,8 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			events.publish({
 				domain: "workflow",
 				kind: "workflow.question",
-				resource: decoded.workflowId,
+				resource: decoded.repo,
+				runId: decoded.workflowId,
 				revision: decoded.revision,
 			});
 			return json({ ok: true, value });
@@ -289,7 +293,8 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			events.publish({
 				domain: "workflow",
 				kind: "workflow.review-save",
-				resource: decoded.workflowId,
+				resource: decoded.repo,
+				runId: decoded.workflowId,
 			});
 			return json({ ok: true, value: null });
 		}
@@ -314,7 +319,8 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			events.publish({
 				domain: "workflow",
 				kind: "workflow.handoff",
-				resource: value.workflowId,
+				resource: decoded.repo,
+				runId: value.workflowId,
 				revision: value.revision,
 			});
 			return json({ ok: true, value });
@@ -340,7 +346,8 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			events.publish({
 				domain: "workflow",
 				kind: "workflow.research-handoff",
-				resource: value.workflowId,
+				resource: decoded.repo,
+				runId: value.workflowId,
 				revision: value.revision,
 			});
 			return json({ ok: true, value });

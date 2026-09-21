@@ -14,6 +14,7 @@ import { clearGateway, configureGateway } from "../src/tui/data/index.ts";
 import {
 	answerQuestion,
 	applyRepair,
+	loadDashboardSeed,
 	loadVerifierFindings,
 	loadVerifierReport,
 	requestExecution,
@@ -36,6 +37,7 @@ const view = {
 	baseCommit: "abc",
 	createdAt: "2026-01-01T00:00:00.000Z",
 	updatedAt: "2026-01-01T00:00:00.000Z",
+	task: "instant task",
 	currentStep: {
 		id: "core.plan",
 		label: "Plan",
@@ -127,6 +129,9 @@ describe("dashboard mutations cross the typed backend API", () => {
 					ownerId: "test-owner",
 				}),
 			);
+			const seed = await loadDashboardSeed("/repo", "wf-1");
+			expect(seed?.request).toBe("instant task");
+			expect(seed?.state.stepLabel).toBe("Plan");
 			await applyRepair("/repo", "wf-1", 3, "core.implementation", "why");
 			await answerQuestion("/repo", "wf-1", 4, "q-1", {
 				kind: "option",

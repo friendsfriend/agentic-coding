@@ -196,6 +196,7 @@ export class EffectRunner {
 		leaseMs: number,
 		signal?: AbortSignal,
 		onFailure?: (workflowId: string, message: string) => void,
+		onProgress?: () => void,
 	): Effect.Effect<number, never, never> {
 		const self = this;
 		return Effect.gen(function* () {
@@ -244,7 +245,10 @@ export class EffectRunner {
 					signal,
 					onFailure,
 				);
-				if (outcome._tag === "completed") completed++;
+				if (outcome._tag === "completed") {
+					completed++;
+					onProgress?.();
+				}
 			}
 			return completed;
 		});
@@ -2068,6 +2072,35 @@ async function dashboardReadyAsync(
 		return false;
 	}
 }
+function writeDashboardHandoff(worktree: string, workflowId: string): string {
+	const url = process.env.AGENTIC_WORKFLOW_URL;
+	const token = process.env.AGENTIC_WORKFLOW_TOKEN;
+	if (!url || !token) return "";
+
+	const envFile = path.join(
+		worktree,
+		".herdr-workflow",
+		workflowId,
+		"dashboard.env",
+	);
+	const directory = openSecureDirectory(path.dirname(envFile), worktree);
+	try {
+		writeAtomicPrivateFile(
+			directory,
+			path.basename(envFile),
+			[
+				`AGENTIC_WORKFLOW_URL=${Bun.$.escape(url)}`,
+				`AGENTIC_WORKFLOW_TOKEN=${Bun.$.escape(token)}`,
+				"",
+			].join("\n"),
+			0o600,
+		);
+	} finally {
+		closeSecureDirectory(directory);
+	}
+	return `set -a; . ${Bun.$.escape(envFile)}; set +a; `;
+}
+
 async function ensureWorkspaceTabs(
 	herdr: HerdrPort,
 	workspace: string,
@@ -2106,15 +2139,18 @@ async function ensureWorkspaceTabs(
 		);
 		await herdrCall(herdr, ["tab", "rename", tab.tab_id, "dashboard"], signal);
 		const command = [
-			"agentic-coding",
-			"dash",
-			"--repo",
-			dashboardRepo,
-			"--workflow-id",
-			workflowId,
-		]
-			.map((value) => Bun.$.escape(value))
-			.join(" ");
+			writeDashboardHandoff(worktree, workflowId),
+			[
+				"agentic-coding",
+				"dash",
+				"--repo",
+				dashboardRepo,
+				"--workflow-id",
+				workflowId,
+			]
+				.map((value) => Bun.$.escape(value))
+				.join(" "),
+		].join("");
 		await herdrCall(herdr, ["pane", "run", root, command], signal);
 	}
 	// Auxiliary git tab (lazygit): best-effort — the dashboard's Git panel
