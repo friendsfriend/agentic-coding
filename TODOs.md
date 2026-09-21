@@ -26,4 +26,3 @@ UI Rework / Devenv union:
 * Dont show wiki frontmatter by default. Remove it from the markdown view and only make it show on pressing f. then show only the frontmatter in separate popup
 * Render one line of space between paragraphs in wiki markdown view (not frontmatter)
 * Introduce phase based telemetry grouping (tree view)
-* fix failing tests
