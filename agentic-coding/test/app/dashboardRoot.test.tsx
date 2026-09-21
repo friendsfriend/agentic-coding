@@ -13,7 +13,13 @@ import { testRender, useRenderer } from "@opentui/solid";
 import { onCleanup } from "solid-js";
 import { DashboardRoot } from "../../src/tui/app/DashboardRoot.tsx";
 import { setupKeymap } from "../../src/tui/dash/keymap-setup.ts";
-import { acquiredResources, resetResources } from "../../src/tui/lifecycle.ts";
+import {
+	acquiredResources,
+	isShutdownRequested,
+	registerStopSequence,
+	resetLifecycle,
+	resetResources,
+} from "../../src/tui/lifecycle.ts";
 import { renderUntil } from "./support/terminal.ts";
 
 type Test = Awaited<ReturnType<typeof testRender>>;
@@ -22,6 +28,7 @@ const roots: string[] = [];
 afterEach(() => {
 	for (const root of roots.splice(0))
 		rmSync(root, { recursive: true, force: true });
+	resetLifecycle();
 	resetResources();
 });
 
@@ -164,6 +171,49 @@ test("the dashboard root owns no server, coordinator or shutdown resources", asy
 	expect(acquiredResources()).toEqual([]);
 	t.renderer.destroy();
 	expect(acquiredResources()).toEqual([]);
+});
+
+test("double `q` quits the dashboard-only root", async () => {
+	resetLifecycle();
+	let stops = 0;
+	registerStopSequence(async () => {
+		stops += 1;
+	});
+	const t = await testRender(() => <TestRoot />, { width: 140, height: 40 });
+	await dashboardReady(t);
+
+	t.mockInput.pressKey("q");
+	await t.renderOnce();
+	// The first press only arms the quit; the dashboard is still running.
+	expect(isShutdownRequested()).toBe(false);
+
+	t.mockInput.pressKey("q");
+	await t.renderOnce();
+	expect(isShutdownRequested()).toBe(true);
+	expect(stops).toBe(1);
+
+	t.renderer.destroy();
+});
+
+test("double Ctrl+C quits the dashboard-only root", async () => {
+	resetLifecycle();
+	let stops = 0;
+	registerStopSequence(async () => {
+		stops += 1;
+	});
+	const t = await testRender(() => <TestRoot />, { width: 140, height: 40 });
+	await dashboardReady(t);
+
+	t.mockInput.pressKey("c", { ctrl: true });
+	await t.renderOnce();
+	expect(isShutdownRequested()).toBe(false);
+
+	t.mockInput.pressKey("c", { ctrl: true });
+	await t.renderOnce();
+	expect(isShutdownRequested()).toBe(true);
+	expect(stops).toBe(1);
+
+	t.renderer.destroy();
 });
 
 test("a missing target repository is a bounded error, not a Home fallback", async () => {

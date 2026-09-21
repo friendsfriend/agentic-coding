@@ -188,6 +188,10 @@ export interface DashboardKeyContext {
 export function createDashboardKeyHandler(
 	context: DashboardKeyContext,
 ): (key: KeyEvent) => Promise<void> {
+	// Double-tap quit state must outlive a single key event: declared inside the
+	// returned handler it reset on every press, so the second `q`/Ctrl+C never saw
+	// the first one and the dashboard could not be quit.
+	let lastQuitAt = 0;
 	return async (key: KeyEvent) => {
 		const {
 			renderer,
@@ -273,7 +277,6 @@ export function createDashboardKeyHandler(
 		const _openRequiredUserActionResult = () =>
 			context.openRequiredUserAction();
 		const _openPresetSwitcherInternal2 = context.openPresetSwitcher;
-		let lastQuitAt = 0;
 		traceTui("tui.dashboard.key", {
 			surface: "dashboard",
 			action: "key",

@@ -219,7 +219,6 @@ export function App(props: {
 			updated: data().updated,
 		});
 	});
-	const _lastQuitAt = 0;
 	const [busy, setBusy] = createSignal(false);
 	// Dedicated review-finishing signal (in addition to the busy guard): scopes
 	// the progress overlay to review finishes instead of every busy action.

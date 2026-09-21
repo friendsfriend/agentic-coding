@@ -28,3 +28,4 @@ UI Rework / Devenv union:
 * Also mark the comment if it is on the same line as the selected line
 * Status updates in dash dont arrive
 * the double q and ctrl + c still doesnt work in dash mode
+* Introduce phase based telemetry grouping (tree view)
