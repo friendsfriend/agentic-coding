@@ -52,6 +52,7 @@ export * from "./components/ScrollableContent.tsx";
 export * from "./components/ScrollableList.tsx";
 export * from "./components/SearchHeader.tsx";
 export * from "./components/Selectable.tsx";
+export * from "./components/SelectionMarker.tsx";
 export * from "./components/SortModal.tsx";
 export * from "./components/StatusBar.tsx";
 export * from "./components/selectionCopy";

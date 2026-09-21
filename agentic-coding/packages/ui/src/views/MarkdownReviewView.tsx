@@ -12,6 +12,7 @@ import {
 } from "../components/markdownBlocks.ts";
 import { ScrollableContent } from "../components/ScrollableContent.tsx";
 import { SearchHeader } from "../components/SearchHeader.tsx";
+import { SelectionMarker } from "../components/SelectionMarker.tsx";
 import { uiColors } from "../theme/colors";
 import { DiscussionThread, formatTimestamp } from "./annotations.tsx";
 import type { Discussion } from "./types.ts";
@@ -233,17 +234,12 @@ export function MarkdownReviewView(props: MarkdownReviewViewProps) {
 						const isSelected = () => index() === props.selectedLine;
 						const isInSelection = () => isInVisualSelection(index());
 
-						const bgColor = () => {
-							if (isSelected()) return uiColors.primary;
-							if (isInSelection()) return uiColors.bgSurface2;
-							return uiColors.bgBase;
-						};
+						// Selection is marked by the left-edge block (`SelectionMarker`),
+						// never by a full-row background fill, so the page background
+						// stays constant while the marker moves.
+						const bgColor = () => uiColors.bgBase;
 
-						const fgColor = () => {
-							if (isSelected()) return uiColors.bgBase;
-							if (isInSelection()) return uiColors.textPrimary;
-							return uiColors.textPrimary;
-						};
+						const fgColor = () => uiColors.textPrimary;
 
 						const lineLabel = () =>
 							block.endLine > block.startLine
@@ -256,17 +252,16 @@ export function MarkdownReviewView(props: MarkdownReviewViewProps) {
 									id={`block-${index()}`}
 									flexDirection="row"
 									backgroundColor={bgColor()}
-									paddingLeft={1}
 									paddingRight={1}
 									onMouseUp={() => {
 										props.onSelectedLineChange(index());
 									}}
 								>
-									<text
-										fg={isSelected() ? uiColors.bgBase : uiColors.textMuted}
-										flexShrink={0}
-										width={8}
-									>
+									<SelectionMarker
+										selected={isSelected()}
+										range={isInSelection()}
+									/>
+									<text fg={uiColors.textMuted} flexShrink={0} width={8}>
 										{lineLabel()}
 									</text>
 									<MarkdownBlockView

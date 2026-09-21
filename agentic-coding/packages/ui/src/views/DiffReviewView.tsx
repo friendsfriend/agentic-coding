@@ -26,6 +26,7 @@ import {
 } from "../components/markdownBlocks.ts";
 import { ScrollableContent } from "../components/ScrollableContent.tsx";
 import { SearchHeader } from "../components/SearchHeader.tsx";
+import { SelectionMarker } from "../components/SelectionMarker.tsx";
 import { uiColors } from "../theme/colors";
 import { DiscussionThread, ReplyAffordance } from "./annotations.tsx";
 import type { Discussion } from "./types.ts";
@@ -749,43 +750,31 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 											const isInSelection = () =>
 												isInVisualSelection(selectableIndex);
 
-											// Background color based on line type and selection.
+											// Selection is marked by the left-edge block (`SelectionMarker`),
+											// never by a full-row background fill, so the diff tint always
+											// stays visible.
 											const bgColor = () => {
-												// Current cursor line - brightest highlight
-												if (isSelected()) return uiColors.primary;
-
-												// Lines in visual selection - dimmer highlight
-												if (isInSelection()) return uiColors.bgSurface2;
-
-												// Diff line backgrounds.
 												switch (line.type) {
 													case "added":
-														return uiColors.diffAddedBg; // #24312b (subtle green tint)
+														return uiColors.diffAddedBg; // subtle green tint
 													case "removed":
-														return uiColors.diffRemovedBg; // #3c2a32 (subtle red tint)
+														return uiColors.diffRemovedBg; // subtle red tint
 													case "context":
-														return uiColors.diffContextBg; // #181825 (mantle)
+														return uiColors.diffContextBg; // mantle
 													default:
 														return uiColors.bgBase;
 												}
 											};
 
-											// Foreground color based on line type and selection.
+											// Diff text colors; selection never recolors the diff itself.
 											const fgColor = () => {
-												// Cursor line: dark text for high contrast on bright blue
-												if (isSelected()) return uiColors.bgBase;
-
-												// Visual selection: bright text for contrast on dim gray background
-												if (isInSelection()) return uiColors.textPrimary; // #cdd6f4 (bright)
-
-												// Diff text colors.
 												switch (line.type) {
 													case "added":
-														return uiColors.diffAdded; // #a6e3a1 (green)
+														return uiColors.diffAdded; // green
 													case "removed":
-														return uiColors.diffRemoved; // #f38ba8 (red)
+														return uiColors.diffRemoved; // red
 													case "context":
-														return uiColors.diffContext; // #9399b2 (overlay2)
+														return uiColors.diffContext; // overlay2
 													default:
 														return uiColors.textPrimary;
 												}
@@ -793,22 +782,6 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 
 											// Sign color (+ or -)
 											const signColor = () => {
-												// Cursor line: dark text
-												if (isSelected()) return uiColors.bgBase;
-
-												// Visual selection: keep original diff colors for readability
-												if (isInSelection()) {
-													switch (line.type) {
-														case "added":
-															return uiColors.diffAdded; // Green
-														case "removed":
-															return uiColors.diffRemoved; // Red
-														default:
-															return uiColors.textMuted;
-													}
-												}
-
-												// Normal: diff colors
 												switch (line.type) {
 													case "added":
 														return uiColors.diffAdded; // Green
@@ -852,7 +825,6 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 														id={`line-${selectableIndex}`}
 														flexDirection="row"
 														backgroundColor={bgColor()}
-														paddingLeft={1}
 														paddingRight={1}
 														onMouseUp={() => {
 															if (selectableIndex >= 0) {
@@ -860,15 +832,13 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 															}
 														}}
 													>
+														<SelectionMarker
+															selected={isSelected()}
+															range={isInSelection()}
+														/>
 														{/* Line numbers */}
 														<text
-															fg={
-																isSelected()
-																	? uiColors.bgBase
-																	: isInSelection()
-																		? uiColors.textMuted
-																		: uiColors.textMuted
-															}
+															fg={uiColors.textMuted}
 															flexShrink={0}
 															width={10}
 														>
@@ -1206,9 +1176,9 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 										const isSelected = () => unitIndex === props.selectedLine;
 										const isInSelection = () => isInVisualSelection(unitIndex);
 										const isBlock = unit.kind === "block";
+										// Selection is marked by the left-edge block, never by a background
+										// fill, so the diff tint of every unit stays visible.
 										const bgColor = () => {
-											if (isSelected()) return uiColors.primary;
-											if (isInSelection()) return uiColors.bgSurface2;
 											if (isBlock)
 												return unit.status === "added"
 													? uiColors.diffAddedBg
@@ -1216,8 +1186,6 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 											return uiColors.diffRemovedBg;
 										};
 										const fgColor = () => {
-											if (isSelected()) return uiColors.bgBase;
-											if (isInSelection()) return uiColors.textPrimary;
 											if (isBlock)
 												return unit.status === "added"
 													? uiColors.diffAdded
@@ -1244,18 +1212,17 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 													id={`block-${unitIndex}`}
 													flexDirection="row"
 													backgroundColor={bgColor()}
-													paddingLeft={1}
 													paddingRight={1}
 													onMouseUp={() => {
 														props.onSelectedLineChange(unitIndex);
 													}}
 												>
+													<SelectionMarker
+														selected={isSelected()}
+														range={isInSelection()}
+													/>
 													<text
-														fg={
-															isSelected()
-																? uiColors.bgBase
-																: uiColors.textMuted
-														}
+														fg={uiColors.textMuted}
 														flexShrink={0}
 														width={10}
 													>
@@ -1367,19 +1334,17 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 												<box
 													id={`line-${selectableIndex}`}
 													flexDirection="row"
-													backgroundColor={
-														isSelected()
-															? uiColors.primary
-															: isInSelection()
-																? uiColors.bgSurface2
-																: uiColors.diffContextBg
-													}
+													backgroundColor={uiColors.diffContextBg}
 													onMouseUp={() => {
 														if (selectableIndex >= 0) {
 															props.onSelectedLineChange(selectableIndex);
 														}
 													}}
 												>
+													<SelectionMarker
+														selected={isSelected()}
+														range={isInSelection()}
+													/>
 													{/* LEFT PANEL (OLD/REMOVED) */}
 													<box
 														flexDirection="row"
@@ -1388,24 +1353,12 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 														paddingRight={1}
 														backgroundColor={
 															line.oldLine?.type === "removed"
-																? isSelected()
-																	? uiColors.primary
-																	: isInSelection()
-																		? uiColors.bgSurface2
-																		: uiColors.diffRemovedBg
-																: isSelected()
-																	? uiColors.primary
-																	: isInSelection()
-																		? uiColors.bgSurface2
-																		: uiColors.diffContextBg
+																? uiColors.diffRemovedBg
+																: uiColors.diffContextBg
 														}
 													>
 														<text
-															fg={
-																isSelected()
-																	? uiColors.bgBase
-																	: uiColors.textMuted
-															}
+															fg={uiColors.textMuted}
 															flexShrink={0}
 															width={5}
 														>
@@ -1415,11 +1368,9 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 														</text>
 														<text
 															fg={
-																isSelected()
-																	? uiColors.bgBase
-																	: line.oldLine?.type === "removed"
-																		? uiColors.diffRemoved
-																		: uiColors.diffContext
+																line.oldLine?.type === "removed"
+																	? uiColors.diffRemoved
+																	: uiColors.diffContext
 															}
 															flexGrow={1}
 														>
@@ -1435,24 +1386,12 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 														paddingRight={1}
 														backgroundColor={
 															line.newLine?.type === "added"
-																? isSelected()
-																	? uiColors.primary
-																	: isInSelection()
-																		? uiColors.bgSurface2
-																		: uiColors.diffAddedBg
-																: isSelected()
-																	? uiColors.primary
-																	: isInSelection()
-																		? uiColors.bgSurface2
-																		: uiColors.diffContextBg
+																? uiColors.diffAddedBg
+																: uiColors.diffContextBg
 														}
 													>
 														<text
-															fg={
-																isSelected()
-																	? uiColors.bgBase
-																	: uiColors.textMuted
-															}
+															fg={uiColors.textMuted}
 															flexShrink={0}
 															width={5}
 														>
@@ -1462,11 +1401,9 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 														</text>
 														<text
 															fg={
-																isSelected()
-																	? uiColors.bgBase
-																	: line.newLine?.type === "added"
-																		? uiColors.diffAdded
-																		: uiColors.diffContext
+																line.newLine?.type === "added"
+																	? uiColors.diffAdded
+																	: uiColors.diffContext
 															}
 															flexGrow={1}
 														>
@@ -1829,26 +1766,21 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 														id={`block-${index}`}
 														flexDirection="row"
 														backgroundColor={
-															isSelected()
-																? uiColors.primary
-																: isInSelection()
-																	? uiColors.bgSurface2
-																	: added
-																		? uiColors.diffAddedBg
-																		: uiColors.diffContextBg
+															added
+																? uiColors.diffAddedBg
+																: uiColors.diffContextBg
 														}
-														paddingLeft={1}
 														paddingRight={1}
 														onMouseUp={() =>
 															props.onSelectedLineChange(index())
 														}
 													>
+														<SelectionMarker
+															selected={isSelected()}
+															range={isInSelection()}
+														/>
 														<text
-															fg={
-																isSelected()
-																	? uiColors.bgBase
-																	: uiColors.textMuted
-															}
+															fg={uiColors.textMuted}
 															flexShrink={0}
 															width={5}
 														>
@@ -1857,13 +1789,9 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 														<MarkdownBlockView
 															source={block.source}
 															fg={
-																isSelected()
-																	? uiColors.bgBase
-																	: isInSelection()
-																		? uiColors.textPrimary
-																		: added
-																			? uiColors.diffAdded
-																			: uiColors.diffContext
+																added
+																	? uiColors.diffAdded
+																	: uiColors.diffContext
 															}
 															width={Math.max(
 																1,
