@@ -14,6 +14,37 @@ export type SortMode = SortDir | "none";
 export type SortCriterion = { field: SortField; mode: SortMode };
 export type StatusFilter = "all" | "error" | "success";
 
+/** Telemetry event families the trace tree groups under one category node. The
+ * family is the segment before the first dot of the event name; the engine,
+ * adapter, and runtime bridges all follow `<family>.<event>`. `agent` and
+ * `runtime` events are the agent's own execution telemetry, so they share the
+ * `agent` category, whose children are grouped by role. Anything unmapped keeps
+ * its family name. */
+const CATEGORY_BY_FAMILY: Readonly<Record<string, string>> = {
+	agent: "agent",
+	runtime: "agent",
+	workflow: "workflow",
+	effect: "workflow",
+	step: "workflow",
+	developer: "developer",
+	git: "git operation",
+	research: "research",
+	wiki: "wiki",
+	openspec: "openspec",
+	verification: "verification",
+	migration: "migration",
+};
+
+/** Category of one telemetry event name (e.g. `runtime.tool` -> `agent`). */
+export function telemetryCategory(event: string): string {
+	const family = event.split(".")[0] ?? event;
+	return CATEGORY_BY_FAMILY[family] ?? family;
+}
+
+/** Chronological order of tree nodes by the first span they cover. */
+const byStart = (a: TreeNode, b: TreeNode): number =>
+	Number(BigInt(a.span.startTimeUnixNano) - BigInt(b.span.startTimeUnixNano));
+
 /** Page bookkeeping of the list the store currently holds. */
 interface PageState {
 	page: number;
@@ -172,7 +203,9 @@ export class TraceStore {
 		);
 		return {
 			traceId: workspace,
-			spanId: `virtual-${name}-${role ?? workspace}`,
+			// Groups are disjoint, so the first member's span id keeps every
+			// phase/category/role node addressable even when two groups share a name.
+			spanId: `virtual-${name}-${first?.spanId ?? role ?? workspace}`,
 			parentSpanId: "",
 			name,
 			startTimeUnixNano: first?.startTimeUnixNano ?? "0",
@@ -212,11 +245,103 @@ export class TraceStore {
 		return build("", depth);
 	}
 
-	getSpanTree(workspace: string): TreeNode[] {
-		const spans = this.spans.filter(
-			(span) => this.workspace(span) === workspace,
-		);
-		if (!spans.length) return [];
+	/** Children of a phase (or of the root when a trace has no phases): one node
+	 * per event category, in first-span order. The agent category nests the
+	 * per-role groups; every other category nests its span tree. */
+	private categoryNodes(
+		spans: SpanData[],
+		workspace: string,
+		depth: number,
+	): TreeNode[] {
+		const byCategory = new Map<string, SpanData[]>();
+		for (const span of spans) {
+			const category = telemetryCategory(span.name);
+			const bucket = byCategory.get(category) ?? [];
+			bucket.push(span);
+			byCategory.set(category, bucket);
+		}
+		return [...byCategory.entries()]
+			.map(([category, categorySpans]) => ({
+				span: this.virtualSpan(category, categorySpans, workspace),
+				depth,
+				expanded: true,
+				children:
+					category === "agent"
+						? this.agentNodes(categorySpans, workspace, depth + 1)
+						: this.tree(categorySpans, depth + 1),
+			}))
+			.sort(byStart);
+	}
+
+	/** Children of the agent category: one group per role the agent events
+	 * report, plus any role-less agent events as their own tree. Roles come from
+	 * every agent event, not only a legacy `agent.operation` span, so the
+	 * grouping works for real engine, adapter, and runtime telemetry. */
+	private agentNodes(
+		spans: SpanData[],
+		workspace: string,
+		depth: number,
+	): TreeNode[] {
+		const roles = [
+			...new Set(
+				spans
+					.map((span) => this.attribute(span, "herdr.role"))
+					.filter((role): role is string => !!role),
+			),
+		];
+		const claimed = new Set<string>();
+		const groups: TreeNode[] = [];
+		for (const role of roles) {
+			const roleSpans = spans.filter(
+				(span) => this.attribute(span, "herdr.role") === role,
+			);
+			roleSpans.forEach((span) => {
+				claimed.add(span.spanId);
+			});
+			groups.push({
+				span: this.virtualSpan(role, roleSpans, workspace, role),
+				depth,
+				expanded: true,
+				children: this.tree(roleSpans, depth + 1),
+			});
+		}
+		const remaining = spans.filter((span) => !claimed.has(span.spanId));
+		return [...groups, ...this.tree(remaining, depth)].sort(byStart);
+	}
+
+	/** One node per lifecycle phase (`herdr.step.id`), in first-span order and
+	 * labelled with the raw step id. */
+	private phaseNodes(
+		spans: SpanData[],
+		workspace: string,
+		depth: number,
+	): TreeNode[] {
+		const byPhase = new Map<string, SpanData[]>();
+		for (const span of spans) {
+			const phase = this.attribute(span, "herdr.step.id");
+			if (!phase) continue;
+			const bucket = byPhase.get(phase) ?? [];
+			bucket.push(span);
+			byPhase.set(phase, bucket);
+		}
+		return [...byPhase.entries()]
+			.map(([phase, phaseSpans]) => ({
+				span: this.virtualSpan(phase, phaseSpans, workspace),
+				depth,
+				expanded: true,
+				children: this.categoryNodes(phaseSpans, workspace, depth + 1),
+			}))
+			.sort(byStart);
+	}
+
+	/** Role groups discovered from legacy `agent.operation` spans plus the
+	 * remaining span tree. Kept for demo and legacy traces that carry no
+	 * `herdr.step.id`; phased telemetry uses the category grouping instead. */
+	private legacyNodes(
+		spans: SpanData[],
+		workspace: string,
+		depth: number,
+	): TreeNode[] {
 		const agentRoles = [
 			...new Set(
 				spans
@@ -225,8 +350,8 @@ export class TraceStore {
 					.filter((role): role is string => !!role),
 			),
 		];
-		const groups: TreeNode[] = [];
 		const claimed = new Set<string>();
+		const groups: TreeNode[] = [];
 		for (const role of agentRoles) {
 			const agentSpans = spans.filter(
 				(span) => this.attribute(span, "herdr.role") === role,
@@ -236,23 +361,50 @@ export class TraceStore {
 			});
 			groups.push({
 				span: this.virtualSpan(`${role} agent`, agentSpans, workspace, role),
-				depth: 1,
+				depth,
 				expanded: true,
-				children: this.tree(agentSpans, 2),
+				children: this.tree(agentSpans, depth + 1),
 			});
 		}
 		const workflowSpans = spans.filter((span) => !claimed.has(span.spanId));
+		return [...this.tree(workflowSpans, depth), ...groups].sort(byStart);
+	}
+
+	/** Span tree for one workflow: the workflow root, one node per lifecycle
+	 * phase (`herdr.step.id`), then the event categories inside each phase, with
+	 * the agent category grouped by role. Events that report no phase stay
+	 * directly under the root so they are never dropped; a trace with no phases
+	 * at all keeps the legacy role-group shape. */
+	getSpanTree(workspace: string): TreeNode[] {
+		const spans = this.spans.filter(
+			(span) => this.workspace(span) === workspace,
+		);
+		if (!spans.length) return [];
 		const root = this.virtualSpan(`workflow: ${workspace}`, spans, workspace);
+		const phased = spans.filter((span) =>
+			this.attribute(span, "herdr.step.id"),
+		);
+		if (!phased.length)
+			return [
+				{
+					span: root,
+					depth: 0,
+					expanded: true,
+					children: this.legacyNodes(spans, workspace, 1),
+				},
+			];
+		const unphased = spans.filter(
+			(span) => !this.attribute(span, "herdr.step.id"),
+		);
 		return [
 			{
 				span: root,
 				depth: 0,
 				expanded: true,
-				children: [...this.tree(workflowSpans, 1), ...groups].sort((a, b) =>
-					Number(
-						BigInt(a.span.startTimeUnixNano) - BigInt(b.span.startTimeUnixNano),
-					),
-				),
+				children: [
+					...this.categoryNodes(unphased, workspace, 1),
+					...this.phaseNodes(phased, workspace, 1),
+				].sort(byStart),
 			},
 		];
 	}
