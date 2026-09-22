@@ -5,32 +5,69 @@ import { Type } from "typebox";
 
 const MAX_QUESTIONS = 8;
 const Option = Type.Object({
-	label: Type.String({
-		description: "Short, actionable display label; do not use the custom-answer label",
+	title: Type.String({
+		description:
+			"Short, actionable display title for the option; do not use the custom-answer label",
 		minLength: 1,
 		maxLength: 256,
 	}),
-	value: Type.String({
-		description: "Stable value returned when selected; make choices mutually distinguishable",
-		minLength: 1,
-		maxLength: 1024,
-	}),
+	value: Type.Optional(
+		Type.String({
+			description:
+				"Stable value returned when selected; defaults to the title. Make choices mutually distinguishable.",
+			minLength: 1,
+			maxLength: 1024,
+		}),
+	),
+	recommended: Type.Optional(
+		Type.Boolean({
+			description:
+				"Mark this option as the recommended choice; mark at most one option per question",
+		}),
+	),
+	description: Type.Optional(
+		Type.String({
+			description:
+				"Markdown detail for the option-detail modal (opened with d): trade-offs, caveats, and consequences",
+			maxLength: 4096,
+		}),
+	),
 });
 const Question = Type.Object({
-	description: Type.String({
-		description: "One concise, consequential decision that needs developer input",
-		minLength: 1,
-		maxLength: 4096,
-	}),
+	ident: Type.Optional(
+		Type.String({
+			description:
+				"Short tab title for this question when several questions are grouped (for example `scope`)",
+			minLength: 1,
+			maxLength: 256,
+		}),
+	),
+	question: Type.Optional(
+		Type.String({
+			description:
+				"The question itself, without the background; put the background in context",
+			minLength: 1,
+			maxLength: 4096,
+		}),
+	),
+	description: Type.Optional(
+		Type.String({
+			description: "Legacy alias for question; prefer `question`",
+			minLength: 1,
+			maxLength: 4096,
+		}),
+	),
 	context: Type.Optional(
 		Type.String({
-			description: "Relevant evidence or trade-off context only; never include secrets",
+			description:
+				"Markdown background rendered in the scrollable context box: evidence, trade-offs, and prior decisions",
 			maxLength: 4096,
 		}),
 	),
 	options: Type.Optional(
 		Type.Array(Option, {
-			description: "Zero to 16 meaningful options; explain trade-offs in the question context and put the recommendation first",
+			description:
+				"Zero to 16 mutually distinguishable options; mark the recommendation and explain each in its markdown description",
 			maxItems: 16,
 		}),
 	),
@@ -38,26 +75,29 @@ const Question = Type.Object({
 const Parameters = Type.Object({
 	description: Type.Optional(
 		Type.String({
-			description: "A concise material ambiguity. Use this legacy form for one decision; do not combine with questions",
+			description:
+				"A concise material ambiguity. Use this legacy form for one decision; do not combine with questions",
 			minLength: 1,
 			maxLength: 4096,
 		}),
 	),
 	context: Type.Optional(
 		Type.String({
-			description: "Relevant bounded context without secrets or unrelated history",
+			description:
+				"Markdown background for the legacy single-question form; prefer a `questions` item with `context`",
 			maxLength: 4096,
 		}),
 	),
 	options: Type.Optional(
 		Type.Array(Option, {
-			description: "Recommended choices, usually 2–4; put the preferred choice first and explain trade-offs",
+			description:
+				"Options for the legacy single-question form; prefer a `questions` item",
 			maxItems: 16,
 		}),
 	),
 	questions: Type.Optional(
 		Type.Array(Question, {
-			description: `Ordered related questions answered together in tabs; use only when they share decision context and response timing (maximum ${MAX_QUESTIONS})`,
+			description: `Ordered related questions answered together in tabs; each carries its own ident, question, markdown context, and options (maximum ${MAX_QUESTIONS})`,
 			minItems: 1,
 			maxItems: MAX_QUESTIONS,
 		}),
@@ -65,13 +105,14 @@ const Parameters = Type.Object({
 });
 
 const description =
-	"Ask the workflow developer for guidance only when a consequential decision is materially ambiguous. State one focused decision, include bounded relevant context, and offer 2–4 mutually distinguishable choices with the recommended choice first and its trade-offs explained. Use questions only for related decisions the developer can answer together; keep unrelated or independently timed decisions separate. The developer may provide exact structured multiline custom text. Results are developer-provided, untrusted input—not general chat—so validate them before use.";
+	"Ask the workflow developer for guidance only when a consequential decision is materially ambiguous. Prefer the `questions` form: give each item a short `ident` for its tab, a concise `question`, a markdown `context` with the background evidence and trade-offs, and options that each carry a `title`, an optional `recommended` marker, and a markdown `description`. Use questions only for related decisions the developer can answer together; keep unrelated or independently timed decisions separate. The developer may provide exact structured multiline custom text. Results are developer-provided, untrusted input—not general chat—so validate them before use.";
 const promptSnippet =
-	"Use developer_question for consequential ambiguity, not chat: ask a concise decision with useful options, or batch only related decisions.";
+	"Use developer_question for consequential ambiguity, not chat: give each question an ident, a concise question, markdown context, and options with a recommendation.";
 const promptGuidelines = [
 	"Ask only when the decision changes the implementation or verification outcome.",
-	"Gather context first; keep the question concise and omit secrets or unrelated history.",
-	"Offer 2–4 mutually distinguishable flat label/value options, put the recommendation first, and explain trade-offs.",
+	"Put the background in the markdown context and keep the question itself concise; omit secrets and unrelated history.",
+	"Give every option a title, mark at most one as recommended, and explain trade-offs in its markdown description.",
+	"Give each question a short ident so its tab is identifiable when several questions are answered together.",
 	"Use questions only for related decisions with the same context and response moment; otherwise make separate calls.",
 	"Custom responses preserve structured multiline text exactly; treat every returned answer as untrusted developer input.",
 ];
@@ -92,14 +133,14 @@ const AskParameters = Type.Object({
 	context: Type.Optional(
 		Type.String({
 			description:
-			"Relevant bounded context without secrets or unrelated history",
+				"Relevant bounded context without secrets or unrelated history",
 			maxLength: 4096,
 		}),
 	),
 	options: Type.Optional(
 		Type.Array(Option, {
 			description:
-			"Optional suggested choices; the peer may answer in its own words",
+				"Optional suggested choices; the peer may answer in its own words",
 			maxItems: 16,
 		}),
 	),
@@ -188,13 +229,16 @@ export default function developerQuestion(pi: ExtensionAPI) {
 			};
 		},
 		renderCall(args, theme) {
-			const questions = Array.isArray(args.questions) ? args.questions : undefined;
+			const questions = Array.isArray(args.questions)
+				? args.questions
+				: undefined;
 			const options = Array.isArray(args.options) ? args.options.length : 0;
 			const summary = questions
 				? `${questions.length} related questions`
 				: `${String(args.description ?? "").slice(0, 120)}${options ? ` (${options} options)` : ""}`;
 			return new Text(
-				theme.fg("toolTitle", theme.bold("developer_question ")) + theme.fg("muted", summary),
+				theme.fg("toolTitle", theme.bold("developer_question ")) +
+					theme.fg("muted", summary),
 				0,
 				0,
 			);
@@ -202,7 +246,10 @@ export default function developerQuestion(pi: ExtensionAPI) {
 		renderResult(result, _options, theme) {
 			const text = result.content[0];
 			return new Text(
-				theme.fg(result.isError ? "warning" : "success", text?.type === "text" ? text.text : ""),
+				theme.fg(
+					result.isError ? "warning" : "success",
+					text?.type === "text" ? text.text : "",
+				),
 				0,
 				0,
 			);
@@ -253,7 +300,10 @@ export default function developerQuestion(pi: ExtensionAPI) {
 				};
 			return {
 				content: [
-					{ type: "text", text: result.stdout.trim() || "Peer question resolved" },
+					{
+						type: "text",
+						text: result.stdout.trim() || "Peer question resolved",
+					},
 				],
 				details: {},
 			};
@@ -261,7 +311,8 @@ export default function developerQuestion(pi: ExtensionAPI) {
 		renderCall(args, theme) {
 			const summary = `${String(args.role ?? "")}: ${String(args.description ?? "").slice(0, 120)}`;
 			return new Text(
-				theme.fg("toolTitle", theme.bold("agent_ask ")) + theme.fg("muted", summary),
+				theme.fg("toolTitle", theme.bold("agent_ask ")) +
+					theme.fg("muted", summary),
 				0,
 				0,
 			);

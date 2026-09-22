@@ -4,15 +4,17 @@
 // (split-workflow-god-modules).
 import type { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
-import type {
-	DeveloperDialogueRecord,
-	DeveloperQuestionItem,
-	WorkflowCommand,
-	WorkflowSnapshot,
+import {
+	type DeveloperDialogueRecord,
+	type DeveloperQuestionItem,
+	resolveDeveloperQuestionOption,
+	type WorkflowCommand,
+	type WorkflowSnapshot,
 } from "../../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
 import {
 	MAX_DEVELOPER_DIALOGUE_RECORDS,
+	MAX_DIALOGUE_BYTES,
 	QUESTION_WAIT_MS,
 	questionRun,
 } from "../dialogue.ts";
@@ -27,7 +29,9 @@ export function agentQuestion(
 	const run = questionRun(db, snapshot, command, now);
 	const items: readonly DeveloperQuestionItem[] = command.questions ?? [
 		{
-			description: command.description ?? "",
+			...(command.description === undefined
+				? {}
+				: { description: command.description }),
 			...(command.context === undefined ? {} : { context: command.context }),
 			options: command.options ?? [],
 		},
@@ -51,9 +55,10 @@ export function agentQuestion(
 			runId: run.id,
 			stepId: run.stepId,
 			role: run.role,
-			description: item.description,
+			description: item.question ?? item.description ?? "",
+			...(item.ident === undefined ? {} : { ident: item.ident }),
 			...(item.context === undefined ? {} : { context: item.context }),
-			options: item.options,
+			options: item.options.map(resolveDeveloperQuestionOption),
 			...(groupId === undefined ? {} : { groupId, itemIndex }),
 			timerNonce: randomUUID(),
 			status: "pending",
@@ -62,7 +67,7 @@ export function agentQuestion(
 		}),
 	);
 	const nextDialogue = [...snapshot.developerDialogue, ...questions];
-	if (Buffer.byteLength(JSON.stringify(nextDialogue)) > 128 * 1024)
+	if (Buffer.byteLength(JSON.stringify(nextDialogue)) > MAX_DIALOGUE_BYTES)
 		throw new WorkflowRuntimeError(
 			"dialogue-bounds",
 			"developer dialogue content limit reached; shorten the question or options",

@@ -6,12 +6,22 @@ import { useTerminalDimensions } from "@opentui/solid";
 import {
 	focusSoon,
 	GenericModal,
+	MarkdownViewer,
 	ScrollableContent,
 	SelectableList,
 	uiColors,
 } from "@ui";
 import { createEffect, Show, untrack } from "solid-js";
-import type { DeveloperDialogueRecord } from "../../../contracts/workflow.ts";
+import {
+	type DeveloperDialogueRecord,
+	resolveDeveloperQuestionOption,
+} from "../../../contracts/workflow.ts";
+
+interface OptionRow {
+	label: string;
+	recommended: boolean;
+	hasDetail: boolean;
+}
 
 export function DeveloperQuestionModal(props: {
 	questions: DeveloperDialogueRecord[];
@@ -26,29 +36,60 @@ export function DeveloperQuestionModal(props: {
 	const question = () =>
 		props.questions[props.activeIndex] ?? props.questions[0];
 	let textarea: TextareaRenderable | undefined;
-	let promptScroll: ScrollBoxRenderable | undefined;
+	let contextScroll: ScrollBoxRenderable | undefined;
 	const dimensions = useTerminalDimensions();
 	const compact = () => dimensions().height < 18;
 	const extremeCompact = () => dimensions().height < 12;
-	const availableHeight = () =>
-		Math.max(2, Math.floor(dimensions().height * 0.72) - 10);
-	const promptHeight = () =>
+	// Content budget: the modal's own height minus its fixed chrome (padding,
+	// header, field label, footer). The context, question, and option list then
+	// share what is left, so the question is never pushed out of the dialog by a
+	// greedy option list.
+	const contentBudget = () =>
+		Math.max(
+			3,
+			Math.min(
+				dimensions().height,
+				Math.floor(dimensions().height * (compact() ? 1 : 0.72)),
+			) - 5,
+		);
+	const fixedBudget = () => (extremeCompact() ? 3 : 6);
+	const contextHeight = () =>
 		extremeCompact()
 			? 1
-			: Math.max(1, Math.min(6, Math.floor(availableHeight() * 0.35)));
+			: Math.max(
+					1,
+					Math.min(8, Math.floor((contentBudget() - fixedBudget()) * 0.5)),
+				);
+	const optionLines = () =>
+		extremeCompact()
+			? 1
+			: Math.max(
+					1,
+					Math.min(8, contentBudget() - fixedBudget() - contextHeight()),
+				);
 	const editorHeight = () =>
 		extremeCompact()
 			? 1
-			: Math.max(1, Math.min(6, availableHeight() - promptHeight() - 3));
+			: Math.max(1, Math.min(6, contentBudget() - contextHeight() - 4));
+	const contextWidth = () =>
+		Math.max(20, Math.floor(dimensions().width * 0.78) - 8);
 	const tinyHelp = () => dimensions().width < 60;
 	const compactHelp = () => compact() || dimensions().width * 0.78 < 95;
-	createEffect(() => promptScroll?.scrollTo(props.promptOffset));
-	const items = () => [
-		...(question()?.options ?? []).map((option) => option.label),
-		"Custom response…",
+	createEffect(() => contextScroll?.scrollTo(props.promptOffset));
+	const options = () => question()?.options ?? [];
+	const rows = (): OptionRow[] => [
+		...options().map((option) => {
+			const resolved = resolveDeveloperQuestionOption(option);
+			return {
+				label: resolved.label,
+				recommended: resolved.recommended === true,
+				hasDetail: Boolean(resolved.description?.trim()),
+			};
+		}),
+		{ label: "Custom response…", recommended: false, hasDetail: false },
 	];
-	const shortLabel = (description: string) => {
-		const label = description.replace(/\s+/g, " ").trim();
+	const shortLabel = (item: DeveloperDialogueRecord) => {
+		const label = (item.ident ?? item.description).replace(/\s+/g, " ").trim();
 		return label.length > 16 ? `${label.slice(0, 16)}…` : label;
 	};
 	const tabHeader = () => {
@@ -64,7 +105,7 @@ export function DeveloperQuestionModal(props: {
 			.slice(start, start + count)
 			.map((item, offset) => {
 				const index = start + offset;
-				return `${index === props.activeIndex ? ">" : " "}[${index + 1} ${shortLabel(item.description)} ${props.responseState[index] === "answered" ? "✓" : "·"}]`;
+				return `${index === props.activeIndex ? ">" : " "}[${index + 1} ${shortLabel(item)} ${props.responseState[index] === "answered" ? "✓" : "·"}]`;
 			});
 		return `${start > 0 ? "… " : ""}${tabs.join(" ")}${start + count < props.questions.length ? " …" : ""}`;
 	};
@@ -90,7 +131,7 @@ export function DeveloperQuestionModal(props: {
 							: [
 									{ key: "Enter", action: "New line" },
 									{ key: "Alt+Enter", action: "Advance / submit" },
-									{ key: "Ctrl+PgUp/Dn", action: "Scroll prompt" },
+									{ key: "Ctrl+PgUp/Dn", action: "Scroll context" },
 									{ key: "Esc", action: "Cancel" },
 								]
 					: tinyHelp()
@@ -100,15 +141,20 @@ export function DeveloperQuestionModal(props: {
 							]
 						: compactHelp()
 							? [
+									{ key: "Tab", action: "Next question" },
+									{ key: "Shift+Tab", action: "Previous question" },
 									{ key: "↑↓", action: "Choose" },
-									{ key: "Enter", action: "Select" },
+									{ key: "↵", action: "Select" },
+									{ key: "d", action: "Option detail" },
 									{ key: "Esc", action: "Cancel" },
 								]
 							: [
 									{ key: "Tab", action: "Next question" },
-									{ key: "PgUp/PgDn", action: "Scroll prompt" },
+									{ key: "Shift+Tab", action: "Previous question" },
+									{ key: "PgUp/PgDn", action: "Scroll context" },
 									{ key: "↑↓", action: "Choose" },
-									{ key: "Enter", action: "Select" },
+									{ key: "d", action: "Option detail" },
+									{ key: "Alt+Enter", action: "Confirm" },
 									{ key: "Esc", action: "Cancel" },
 								]
 			}
@@ -124,52 +170,68 @@ export function DeveloperQuestionModal(props: {
 				<Show when={question()} fallback={<box />}>
 					{(item) => (
 						<>
-							<ScrollableContent
-								onScrollBoxReady={(scrollbox) => {
-									promptScroll = scrollbox;
-								}}
-								style={{
-									height: promptHeight(),
-									maxHeight: promptHeight(),
-									flexGrow: 0,
-								}}
+							{/* Markdown context box: the background the developer needs to
+							    answer confidently, scrollable on its own. */}
+							<Show
+								when={item().context?.trim()}
+								fallback={<box style={{ height: 0 }} />}
 							>
-								<box flexDirection="column">
-									<text
-										fg={uiColors.textPrimary}
-										attributes={TextAttributes.BOLD}
+								{(context) => (
+									<ScrollableContent
+										onScrollBoxReady={(scrollbox) => {
+											contextScroll = scrollbox;
+										}}
+										style={{
+											height: contextHeight(),
+											maxHeight: contextHeight(),
+											flexGrow: 0,
+										}}
 									>
-										{item().description}
-									</text>
-									<Show when={!compact()} fallback={<box />}>
-										<box>
-											<text fg={uiColors.textMuted}>
-												Requester: {item().role} · {item().stepId}
-											</text>
-										</box>
-									</Show>
-									<Show when={item().context} fallback={<box />}>
-										{(context) => (
-											<box>
-												<text fg={uiColors.textSecondary}>
-													Context: {context()}
-												</text>
-											</box>
-										)}
-									</Show>
-								</box>
-							</ScrollableContent>
+										<MarkdownViewer
+											content={context()}
+											width={contextWidth()}
+										/>
+									</ScrollableContent>
+								)}
+							</Show>
+							{/* The question itself, separated from its background. */}
+							<box width="100%" flexDirection="column">
+								<text
+									fg={uiColors.textPrimary}
+									attributes={TextAttributes.BOLD}
+								>
+									{item().description}
+								</text>
+								<Show when={!compact()} fallback={<box />}>
+									<box>
+										<text fg={uiColors.textMuted}>
+											Requester: {item().role} · {item().stepId}
+										</text>
+									</box>
+								</Show>
+							</box>
 							<box width="100%" flexDirection="column">
 								<Show
 									when={props.custom}
 									fallback={
-										<box width="100%">
+										<box width="100%" height={optionLines()} overflow="hidden">
 											<SelectableList
-												items={items()}
+												items={rows()}
 												selectedIndex={props.selected}
-												renderItem={(value) => (
+												availableLines={optionLines()}
+												renderItem={(row) => (
 													<box paddingLeft={1} height={1}>
-														<text fg={uiColors.textPrimary}>{value}</text>
+														<text
+															fg={
+																row.recommended
+																	? uiColors.highlight
+																	: uiColors.textPrimary
+															}
+														>
+															{row.recommended ? "★ " : "  "}
+															{row.label}
+															{row.hasDetail ? "  (d)" : ""}
+														</text>
 													</box>
 												)}
 											/>

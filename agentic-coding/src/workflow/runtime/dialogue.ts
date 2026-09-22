@@ -16,6 +16,23 @@ import { ACTIVE_RUN, nowIso, type RunRow, runFromRow } from "./store.ts";
 
 export const MAX_DEVELOPER_DIALOGUE_RECORDS = 100;
 export const QUESTION_WAIT_MS = 24 * 60 * 60_000;
+/** Aggregate content bound the persisted dialogue must stay under. */
+export const MAX_DIALOGUE_BYTES = 128 * 1024;
+
+/** Reject a write that would push the persisted dialogue past its content
+ * bound. Answer values are bounded per item, but a questionnaire plus its
+ * answers can still overflow the aggregate; failing here with an actionable
+ * diagnostic beats the opaque snapshot-decode rollback that would otherwise
+ * discard the answer and leave the question pending. */
+export function assertDialogueContentBound(
+	dialogue: readonly DeveloperDialogueRecord[],
+): void {
+	if (Buffer.byteLength(JSON.stringify(dialogue)) > MAX_DIALOGUE_BYTES)
+		throw new WorkflowRuntimeError(
+			"dialogue-bounds",
+			"developer dialogue content limit reached; shorten the response",
+		);
+}
 
 /** Render the prompt delivered to a peer agent's live session. The asker's
  * question, context, and options are untrusted agent-supplied content, so they
@@ -185,6 +202,7 @@ export function answerQuestion(
 			item.answeredAt = at;
 			item.answer = { kind: response.kind, value: response.value };
 		}
+		assertDialogueContentBound(snapshot.developerDialogue);
 		return {
 			type: "developer.question.answered",
 			actor: { kind: "developer" },
@@ -237,6 +255,8 @@ export function answerQuestion(
 		kind: answer.kind,
 		...(answer.value === undefined ? {} : { value: answer.value }),
 	};
+	if (answer.kind !== "cancel")
+		assertDialogueContentBound(snapshot.developerDialogue);
 	return {
 		type: "developer.question.answered",
 		actor: { kind: "developer" },

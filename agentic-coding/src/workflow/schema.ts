@@ -105,6 +105,7 @@ const dialogueRecordSchema = Schema.Struct({
 	runId: text(4096),
 	stepId: text(4096),
 	role: text(4096),
+	ident: Schema.optionalWith(text(256), { exact: true }),
 	description: text(4096),
 	context: Schema.optionalWith(boundedText(4096), { exact: true }),
 	options: questionOptions,

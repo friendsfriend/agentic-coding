@@ -30,7 +30,10 @@ import {
 } from "solid-js";
 import type { RequiredUserActionItem } from "../../contracts/actions.ts";
 import type { DashboardData } from "../../contracts/workflow";
-import type { DeveloperDialogueRecord } from "../../contracts/workflow.ts";
+import {
+	type DeveloperDialogueRecord,
+	resolveDeveloperQuestionOption,
+} from "../../contracts/workflow.ts";
 
 import { wikiWorkflowDataRoot } from "../../workflow/runtime.ts";
 import { loadArtifact, loadArtifacts } from "../data/git.ts";
@@ -448,6 +451,9 @@ export function App(props: {
 	const setQuestionDrafts = dialogue.setDrafts;
 	const questionSubmitting = dialogue.submitting;
 	const setQuestionSubmitting = dialogue.setSubmitting;
+	const questionOptionDetail = dialogue.optionDetail;
+	const setQuestionOptionDetail = dialogue.setOptionDetail;
+	const setQuestionDetailOffset = dialogue.setDetailOffset;
 	let modalBeforeCredential: string | undefined;
 	let modalBeforeQuestion: string | undefined;
 	let pendingQuestionId: string | undefined;
@@ -470,6 +476,8 @@ export function App(props: {
 		setQuestionCustom(false);
 		setQuestionCustomText("");
 		setQuestionDrafts({});
+		setQuestionOptionDetail(undefined);
+		setQuestionDetailOffset(0);
 		props.keymap.setData("modal.active", modalBeforeQuestion ?? "none");
 		modalBeforeQuestion = undefined;
 	};
@@ -480,6 +488,8 @@ export function App(props: {
 		const draft = questionDrafts()[item.id];
 		setQuestionTab(index);
 		setQuestionPromptOffset(0);
+		setQuestionOptionDetail(undefined);
+		setQuestionDetailOffset(0);
 		if (draft?.kind === "option") {
 			const selected = item.options.findIndex(
 				(option) => option.value === draft.value,
@@ -1437,12 +1447,27 @@ export function App(props: {
 						const question = pendingQuestion();
 						if (!question || questionSubmitting()) return true;
 						const key = event.name.toLowerCase();
+						// The option-detail markdown modal owns the keyboard while open:
+						// `d`/Esc close it, scroll keys page its scrollbox, and nothing
+						// reaches the question underneath.
+						if (questionOptionDetail()) {
+							if (key === "escape" || key === "d")
+								setQuestionOptionDetail(undefined);
+							else if (key === "pageup" || key === "k" || key === "up")
+								setQuestionDetailOffset((offset) => Math.max(0, offset - 3));
+							else if (key === "pagedown" || key === "j" || key === "down")
+								setQuestionDetailOffset((offset) => offset + 3);
+							return true;
+						}
 						// `?` opens the dialog's own help unless the custom textarea owns
 						// the keyboard (there it stays a literal question mark).
 						if (!questionCustom() && routeModalHelp(key)) return true;
 						const group = pendingQuestionGroup();
 						const current = group[questionTab()] ?? question;
 						const customIndex = current.options.length;
+						const altEnter =
+							(key === "enter" || key === "return") &&
+							(event.meta || event.option);
 						if (key === "escape") {
 							void submitQuestion(
 								question.groupId && group.length > 1
@@ -1464,12 +1489,24 @@ export function App(props: {
 						} else if (questionCustom()) {
 							// The focused textarea owns plain Enter, insertion, deletion,
 							// cursor movement, and paste. Alt+Enter is the explicit advance.
-							if ((key === "enter" || key === "return") && event.meta)
+							if (altEnter)
 								void submitQuestion({
 									kind: "custom",
 									value: questionCustomText(),
 								});
 							else return false;
+						} else if (key === "d" && !event.meta && !event.ctrl) {
+							const option = current.options[questionSelection()];
+							if (option) {
+								const resolved = resolveDeveloperQuestionOption(option);
+								if (resolved.description?.trim()) {
+									setQuestionDetailOffset(0);
+									setQuestionOptionDetail({
+										title: resolved.label,
+										content: resolved.description,
+									});
+								}
+							}
 						} else if (key === "j" || key === "down")
 							setQuestionSelection((index) => Math.min(customIndex, index + 1));
 						else if (key === "k" || key === "up")
@@ -1483,7 +1520,10 @@ export function App(props: {
 							} else {
 								const option = current.options[questionSelection()];
 								if (option)
-									void submitQuestion({ kind: "option", value: option.value });
+									void submitQuestion({
+										kind: "option",
+										value: resolveDeveloperQuestionOption(option).value,
+									});
 							}
 						}
 						return true;
@@ -1505,6 +1545,7 @@ export function App(props: {
 				"up",
 				"down",
 				"tab",
+				"shift+tab",
 				"pageup",
 				"pagedown",
 				"backspace",
@@ -2304,6 +2345,8 @@ export function App(props: {
 				setQuestionCustom(false);
 				setQuestionCustomText("");
 				setQuestionDrafts({});
+				setQuestionOptionDetail(undefined);
+				setQuestionDetailOffset(0);
 			}
 			if (question && !questionOpen() && !credentialRequest()) {
 				const current = props.keymap.getData?.("modal.active");

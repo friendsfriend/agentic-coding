@@ -80,8 +80,20 @@ export interface DialogueState {
 	readonly setDrafts: Setter<Record<string, DialogueDraft>>;
 	readonly submitting: () => boolean;
 	readonly setSubmitting: Setter<boolean>;
+	/** Markdown detail of the option opened with `d`, if any. */
+	readonly optionDetail: () => OptionDetail | undefined;
+	readonly setOptionDetail: Setter<OptionDetail | undefined>;
+	/** Scroll offset of the option-detail markdown modal. */
+	readonly detailOffset: () => number;
+	readonly setDetailOffset: Setter<number>;
 	/** Reset the form when the answerable question changes. */
 	readonly reset: () => void;
+}
+
+/** The option-detail markdown modal's title and body. */
+export interface OptionDetail {
+	readonly title: string;
+	readonly content: string;
 }
 
 export function createDialogueState(): DialogueState {
@@ -92,6 +104,10 @@ export function createDialogueState(): DialogueState {
 	const [customText, setCustomText] = createSignal("");
 	const [drafts, setDrafts] = createSignal<Record<string, DialogueDraft>>({});
 	const [submitting, setSubmitting] = createSignal(false);
+	const [optionDetail, setOptionDetail] = createSignal<
+		OptionDetail | undefined
+	>(undefined);
+	const [detailOffset, setDetailOffset] = createSignal(0);
 	return {
 		tab,
 		setTab,
@@ -107,6 +123,10 @@ export function createDialogueState(): DialogueState {
 		setDrafts,
 		submitting,
 		setSubmitting,
+		optionDetail,
+		setOptionDetail,
+		detailOffset,
+		setDetailOffset,
 		reset: () => {
 			setTab(0);
 			setPromptOffset(0);
@@ -114,6 +134,8 @@ export function createDialogueState(): DialogueState {
 			setCustom(false);
 			setCustomText("");
 			setSubmitting(false);
+			setOptionDetail(undefined);
+			setDetailOffset(0);
 		},
 	};
 }
