@@ -22,29 +22,3 @@ UI Rework:
     * Remove scope option
 * Build proper provider settings ui for github and gitlab git providers
     * No proper ui has been built yet
-* Rework repair modal. Remove ids. Only desired phase is relevant for user
-
-
-
-Plan for developer question UI (Demo Iwan):
-
-I want to improve the UI and the mechanism for the developer question tooling. 
-Currently the context is usually not enough for me to understand the issue.
-I often feel not in the loop enough to answer the questions confidently.
-
-Therefore I want to introduce a more detailed and context driven developer question tool. 
-The tool should require the following inputs:
-* Who asks the question
-* List of:
-    * Question ident (short title for the tab in case of multiple questions)
-    * Question (Just the question part)
-    * Context description (Markdown text with information about the background)
-    * Selectable options (title, recommendation y/n, detailed description in markdown format)
-
-The UI then should show a modal containing 1 tab for each question (navigatable with tab and shift + tab -> backwards)
-The question should then be displayed as a scrollable markdown rendered context box on the top
-question in the middle
-selectable options with recommendation marker in the bottom. (d shows the markdown information for the option in a separate markdown modal)
-alt + enter to confirm finished inputs
-
-
