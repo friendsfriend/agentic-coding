@@ -71,6 +71,14 @@ function agent(value: unknown): Record<string, unknown> {
 		throw new Error("Herdr returned invalid agent");
 	return item as Record<string, unknown>;
 }
+/** Agent state from an `agent get` envelope, empty when it cannot be read. */
+function agentStatus(value: unknown): string {
+	try {
+		return String(agent(value).agent_status ?? "");
+	} catch {
+		return "";
+	}
+}
 function requireExecutable(executable: string): string {
 	const resolved = path.isAbsolute(executable)
 		? executable
@@ -113,6 +121,11 @@ export function herdrCallEffect(
 	});
 }
 export class HerdrLifecycle {
+	/** How many launch-prompt submissions one launch may take, and how long each
+	 * submission is watched for before it counts as dropped. */
+	static readonly PROMPT_SUBMIT_ATTEMPTS = 3;
+	static readonly PROMPT_CONFIRM_POLLS = 24;
+	static readonly PROMPT_CONFIRM_INTERVAL_MS = 500;
 	constructor(
 		private readonly herdr: HerdrPort,
 		private readonly sleep: (ms: number) => Effect.Effect<void> = (ms) =>
@@ -259,10 +272,7 @@ export class HerdrLifecycle {
 			);
 			if (String(live.pane_id) !== paneId)
 				throw new Error(`agent get mismatch for ${paneId}`);
-			yield* self.call(
-				["agent", "prompt", paneId, ctx.rendered.prompt],
-				ctx.signal,
-			);
+			yield* self.submitLaunchPrompt(paneId, ctx.rendered.prompt, ctx.signal);
 			return {
 				runtime: ctx.profile.runtime,
 				name: ctx.name,
@@ -270,6 +280,61 @@ export class HerdrLifecycle {
 				...(live.tab_id ? { tabId: String(live.tab_id) } : {}),
 				...(live.session_id ? { sessionId: String(live.session_id) } : {}),
 			};
+		});
+	}
+	/** Deliver the launch prompt and confirm the runtime left idle for it. Herdr
+	 * reports a known runtime as ready through an idle fallback the moment its
+	 * process appears, so `agent start` can return while the runtime is still
+	 * booting and a prompt submitted into that window is dropped without any
+	 * error. The run would then stay parked on a live, unprompted agent, so the
+	 * submission is confirmed by the agent leaving idle and re-submitted while it
+	 * never does. A submission that was only partially consumed (text landed, the
+	 * submit key did not) is re-sent on top of the retained text; clearing it
+	 * would need per-runtime input semantics this boundary deliberately avoids. */
+	private submitLaunchPrompt(
+		paneId: string,
+		prompt: string,
+		signal?: AbortSignal,
+	): Effect.Effect<void, Error> {
+		const self = this;
+		return Effect.gen(function* () {
+			for (
+				let attempt = 0;
+				attempt < HerdrLifecycle.PROMPT_SUBMIT_ATTEMPTS;
+				attempt++
+			) {
+				yield* self.call(["agent", "prompt", paneId, prompt], signal);
+				if (yield* self.promptTookEffect(paneId, signal)) return;
+			}
+			return yield* Effect.fail(
+				new Error(`agent did not start on its launch prompt: ${paneId}`),
+			);
+		});
+	}
+	/** Watch the agent through the same boundary the engine observes it, so a
+	 * prompt that did land is never submitted twice. An unreadable state counts
+	 * as unconfirmed: a launch may retry, a duplicated assignment may not. */
+	private promptTookEffect(
+		paneId: string,
+		signal?: AbortSignal,
+	): Effect.Effect<boolean> {
+		const self = this;
+		return Effect.gen(function* () {
+			for (
+				let attempt = 0;
+				attempt < HerdrLifecycle.PROMPT_CONFIRM_POLLS;
+				attempt++
+			) {
+				yield* self.sleep(HerdrLifecycle.PROMPT_CONFIRM_INTERVAL_MS);
+				const observed = yield* Effect.either(
+					self.call(["agent", "get", paneId], signal),
+				);
+				if (Either.isLeft(observed)) return false;
+				const status = agentStatus(observed.right);
+				if (status === "") return false;
+				if (status !== "idle") return true;
+			}
+			return false;
 		});
 	}
 	prompt(

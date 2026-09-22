@@ -22,6 +22,16 @@ import { startRouting } from "../src/workflow/startup.ts";
 class FakeHerdr {
 	calls: string[][] = [];
 	starts = 0;
+	/** Leading launch prompts herdr accepts while the runtime still boots: the
+	 * submission never reaches the agent, which therefore stays idle. */
+	droppedPrompts = 0;
+	private submissions = 0;
+	private working = new Set<string>();
+	prompts(): string[][] {
+		return this.calls.filter(
+			(call) => call[0] === "agent" && call[1] === "prompt",
+		);
+	}
 	call(...args: string[]): unknown {
 		this.calls.push(args);
 		if (args[0] === "pane" && args[1] === "process-info")
@@ -49,9 +59,18 @@ class FakeHerdr {
 				},
 			};
 		}
+		if (args[0] === "agent" && args[1] === "prompt") {
+			this.submissions++;
+			if (this.submissions > this.droppedPrompts)
+				this.working.add(String(args[2]));
+		}
 		if (args[0] === "agent" && args[1] === "get")
 			return {
-				agent: { pane_id: args[2], tab_id: "tab", agent_status: "idle" },
+				agent: {
+					pane_id: args[2],
+					tab_id: "tab",
+					agent_status: this.working.has(String(args[2])) ? "working" : "idle",
+				},
 			};
 		return {};
 	}
@@ -303,7 +322,7 @@ describe("profiles, assignments, and adapters", () => {
 				expect(launcher).toContain("export HERDR_WORKFLOW_ID=");
 				expect(launcher).toContain("export PATH=");
 				expect((await Effect.runPromise(adapter.observe(handle))).status).toBe(
-					"idle",
+					"working",
 				);
 				await Effect.runPromise(adapter.stop(handle));
 				expect(
@@ -315,6 +334,66 @@ describe("profiles, assignments, and adapters", () => {
 			} finally {
 				fs.rmSync(cwd, { recursive: true, force: true });
 			}
+		}
+	});
+	test("a launch prompt dropped while the runtime boots is re-submitted", async () => {
+		const fake = new FakeHerdr();
+		fake.droppedPrompts = 1;
+		const adapter = new PiAdapter(new HerdrLifecycle(fake, () => Effect.void));
+		const current = assignment();
+		const rendered = renderAssignment(
+			registerBuiltins().step("core.verification"),
+			current,
+		);
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "adapter-boot-race-"));
+		try {
+			const handle = await Effect.runPromise(
+				adapter.launch({
+					profile: baseProfile("pi"),
+					assignment: current,
+					rendered,
+					paneId: "pane",
+					cwd,
+					name: "agent-boot-race",
+					environment: current.environment,
+				}),
+			);
+			expect(handle.paneId).toBe("pane");
+			expect(fake.prompts().map((call) => call[3])).toEqual([
+				rendered.prompt,
+				rendered.prompt,
+			]);
+		} finally {
+			fs.rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+	test("a launch prompt that never reaches the agent fails the launch", async () => {
+		const fake = new FakeHerdr();
+		fake.droppedPrompts = 3;
+		const adapter = new PiAdapter(new HerdrLifecycle(fake, () => Effect.void));
+		const current = assignment();
+		const rendered = renderAssignment(
+			registerBuiltins().step("core.verification"),
+			current,
+		);
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "adapter-lost-prompt-"));
+		try {
+			await expect(
+				Effect.runPromise(
+					adapter.launch({
+						profile: baseProfile("pi"),
+						assignment: current,
+						rendered,
+						paneId: "pane",
+						cwd,
+						name: "agent-lost-prompt",
+						environment: current.environment,
+					}),
+				),
+			).rejects.toThrow("agent did not start on its launch prompt");
+			expect(fake.prompts()).toHaveLength(3);
+		} finally {
+			fs.rmSync(cwd, { recursive: true, force: true });
 		}
 	});
 	test("research Pi launch keeps the profile's full tool access", async () => {
