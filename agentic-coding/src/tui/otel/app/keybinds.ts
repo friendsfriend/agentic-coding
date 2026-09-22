@@ -116,6 +116,12 @@ export function observabilityKeybindCatalog(options: {
 					keybinds: [
 						{ key: "c", action: "comment", context: "note" },
 						{
+							key: "F",
+							action: "show frontmatter",
+							short: "frontmatter",
+							context: "note",
+						},
+						{
 							key: "v",
 							action: "visual line selection",
 							short: "visual",

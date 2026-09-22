@@ -112,6 +112,7 @@ test("wiki note actions appear in the footer only while a note is open", async (
 	expect(footerActions()).toContain("visual line selection");
 	expect(footerActions()).toContain("next/previous note");
 	expect(footerActions()).toContain("comment");
+	expect(footerActions()).toContain("show frontmatter");
 
 	t.renderer.destroy();
 	db.close();

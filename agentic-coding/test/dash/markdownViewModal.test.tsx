@@ -203,3 +203,41 @@ test("comment threads render inline under their block and cycle indices include 
 	expect(commentIndices).toEqual([3]);
 	t.renderer.destroy();
 });
+
+async function renderWithSpacing(blockSpacing: boolean): Promise<string> {
+	const t = await testRender(
+		() => (
+			<MarkdownReviewView
+				filePath="proposal.md"
+				content={ARTIFACT}
+				blockSpacing={blockSpacing}
+				currentFileIndex={0}
+				totalFiles={1}
+				selectedLine={0}
+				visualModeActive={false}
+				visualModeStart={0}
+				commentMode={false}
+				commentText=""
+				onSelectedLineChange={() => {}}
+				onSelectedSourceRangeChange={() => {}}
+				onClose={() => {}}
+			/>
+		),
+		{ width: 120, height: 40 },
+	);
+	const frame = await waitForRealFrame(t, (value) =>
+		value.includes("item two"),
+	);
+	t.renderer.destroy();
+	return frame;
+}
+
+test("blockSpacing adds a blank line between blocks", async () => {
+	const rowOf = (frame: string, text: string) =>
+		frame.split("\n").findIndex((line) => line.includes(text));
+	const compact = await renderWithSpacing(false);
+	const spaced = await renderWithSpacing(true);
+	// "item two" sits in the fourth block, so three inter-block gaps push it
+	// three rows further down than the compact layout.
+	expect(rowOf(spaced, "item two")).toBe(rowOf(compact, "item two") + 3);
+});
