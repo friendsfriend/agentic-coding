@@ -24,6 +24,24 @@ export const statusOptions: Array<{ value: StatusFilter; label: string }> = [
 	{ value: "success", label: "Success" },
 ];
 
+/** Human labels for the span (event) types a developer filters on. Every other
+ * event name keeps its raw name, so an unknown telemetry event stays
+ * filterable without a label catalog entry. */
+const SPAN_TYPE_LABELS: Record<string, string> = {
+	"runtime.tool": "Tool calls",
+	"runtime.tool_start": "Tool starts",
+	"runtime.message": "LLM messages",
+	"runtime.turn": "Model turns",
+	"runtime.turn_started": "Turn starts",
+	"runtime.provider_response": "Provider responses",
+	"runtime.usage": "Token usage",
+	"runtime.compaction": "Compaction",
+	"runtime.model_selected": "Model selection",
+	"agent.operation": "Agent operation",
+	"agent.handoff": "Agent handoff",
+};
+const spanTypeLabel = (name: string) => SPAN_TYPE_LABELS[name] ?? name;
+
 type Workspace = { changeId: string; spanCount: number };
 
 export function FilterModal(props: {
@@ -31,13 +49,17 @@ export function FilterModal(props: {
 	criterion: () => number;
 	statusIndex: () => number;
 	workspaceIndex: () => number;
+	spanTypeIndex: () => number;
 	workspaces: () => Workspace[];
+	spanTypes: () => string[];
 }) {
 	const workspaceValues = () => [
 		{ changeId: "all", spanCount: 0 },
 		...props.workspaces(),
 	];
+	const spanTypeValues = () => ["all", ...props.spanTypes()];
 	const isStatus = () => props.criterion() === 0;
+	const isWorkspace = () => props.criterion() === 1;
 	const statusParameter = (): FilterParameterOption => ({
 		key: "status",
 		label: `Status (${statusOptions[props.statusIndex()]?.label ?? "All"})`,
@@ -57,6 +79,17 @@ export function FilterModal(props: {
 					: `${workspace.changeId} (${workspace.spanCount})`,
 		})),
 	});
+	const spanTypeParameter = (): FilterParameterOption => {
+		const current = spanTypeValues()[props.spanTypeIndex()] ?? "all";
+		return {
+			key: "spanType",
+			label: `Span type (${current === "all" ? "all" : spanTypeLabel(current)})`,
+			values: spanTypeValues().map((name) => ({
+				value: name,
+				label: name === "all" ? "all span types" : spanTypeLabel(name),
+			})),
+		};
+	};
 	return (
 		<SharedFilterModal
 			// The shell marks the row under the cursor; its value is applied on Enter.
@@ -65,9 +98,17 @@ export function FilterModal(props: {
 			focusedPane={props.pane() === "criteria" ? "parameter" : "value"}
 			selectedParameterIndex={props.criterion()}
 			selectedValueIndex={
-				isStatus() ? props.statusIndex() : props.workspaceIndex()
+				isStatus()
+					? props.statusIndex()
+					: isWorkspace()
+						? props.workspaceIndex()
+						: props.spanTypeIndex()
 			}
-			parameters={[statusParameter(), workspaceParameter()]}
+			parameters={[
+				statusParameter(),
+				workspaceParameter(),
+				spanTypeParameter(),
+			]}
 			activeFilters={{}}
 		/>
 	);

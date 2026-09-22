@@ -84,6 +84,7 @@ function workspaceTraceSource(herdrPath: string): TraceSource | undefined {
  * contributes NULL columns and the row stays visible as raw telemetry. */
 function traceColumns(span: unknown): Record<string, string | number | null> {
 	const record = span as {
+		name?: unknown;
 		startTimeUnixNano?: unknown;
 		endTimeUnixNano?: unknown;
 		status?: { code?: unknown };
@@ -101,12 +102,32 @@ function traceColumns(span: unknown): Record<string, string | number | null> {
 	}
 	return {
 		$span: JSON.stringify(span),
+		$name: typeof record?.name === "string" ? record.name : null,
 		$start_nanos: nanos(record?.startTimeUnixNano),
 		$end_nanos: nanos(record?.endTimeUnixNano),
 		$status_code:
 			typeof record?.status?.code === "number" ? record.status.code : null,
 		$role: role,
 	};
+}
+
+/** Decode the trace-list aggregation's JSON array of distinct span names,
+ * tolerating the `null` entries JSON aggregation leaves for rows without a
+ * name. A JSON array is used instead of a delimiter-joined string because span
+ * names are arbitrary strings that may contain any separator. */
+function parseSpanNames(value: string | null): string[] {
+	if (!value) return [];
+	try {
+		const parsed: unknown = JSON.parse(value);
+		if (!Array.isArray(parsed)) return [];
+		return [
+			...new Set(
+				parsed.filter((name): name is string => typeof name === "string"),
+			),
+		];
+	} catch {
+		return [];
+	}
 }
 
 export class TraceDb {
@@ -141,6 +162,7 @@ export class TraceDb {
 			"end_nanos INTEGER",
 			"status_code INTEGER",
 			"role TEXT",
+			"name TEXT",
 		]) {
 			try {
 				this.db.run(`ALTER TABLE traces ADD COLUMN ${column}`);
@@ -191,8 +213,8 @@ export class TraceDb {
 			`CREATE INDEX IF NOT EXISTS idx_logs_trace ON logs(json_extract(log, '$.traceId'))`,
 		);
 		this.ingestStmt = this.db.prepare(
-			`INSERT INTO traces (change_id, span, start_nanos, end_nanos, status_code, role, ingested_at)
-       VALUES ($change_id, $span, $start_nanos, $end_nanos, $status_code, $role, datetime('now'))`,
+			`INSERT INTO traces (change_id, span, name, start_nanos, end_nanos, status_code, role, ingested_at)
+       VALUES ($change_id, $span, $name, $start_nanos, $end_nanos, $status_code, $role, datetime('now'))`,
 		);
 		this.ingestMetricStmt = this.db.prepare(
 			"INSERT INTO metrics (change_id, metric, ingested_at) VALUES ($change_id, $metric, datetime('now'))",
@@ -206,23 +228,33 @@ export class TraceDb {
 	}
 
 	/** One-time materialization of the aggregated columns for rows ingested
-	 * before they existed. Batched and transactional, so an interrupted run
-	 * resumes at the next batch instead of starting over. */
+	 * before they existed. Batched and transactional, and advanced by row id, so
+	 * an interrupted run resumes at the next batch and a malformed span that
+	 * cannot be materialized is processed once instead of re-selected forever. */
 	private backfillTraceColumns(): void {
-		const pending = this.db
-			.query("SELECT COUNT(*) count FROM traces WHERE start_nanos IS NULL")
-			.get() as { count: number };
-		if (!pending.count) return;
+		// Mirror `traceColumns`: a row needs backfill when a materialized column
+		// is missing and the span JSON carries a value the writer accepts.
+		// `json_type(..., '$.name') = 'text'` is exactly the string the writer
+		// materializes, so a non-string name is left as raw telemetry and cannot
+		// trap the loop. Matching `id > $lastId` also makes termination hold for
+		// the pre-existing `start_nanos IS NULL` clause when a malformed span has
+		// no valid start time.
+		const needsBackfill =
+			"start_nanos IS NULL OR (name IS NULL AND json_type(span, '$.name') = 'text')";
 		const update = this.db.prepare(
-			"UPDATE traces SET start_nanos=$start_nanos, end_nanos=$end_nanos, status_code=$status_code, role=$role WHERE id=$id",
+			"UPDATE traces SET start_nanos=$start_nanos, end_nanos=$end_nanos, status_code=$status_code, role=$role, name=$name WHERE id=$id",
 		);
+		let lastId = 0;
 		for (;;) {
 			const rows = this.db
 				.query(
-					"SELECT id, span FROM traces WHERE start_nanos IS NULL LIMIT 5000",
+					`SELECT id, span FROM traces
+           WHERE id > $lastId AND (${needsBackfill})
+           ORDER BY id LIMIT 5000`,
 				)
-				.all() as Array<{ id: number; span: string }>;
+				.all({ $lastId: lastId }) as Array<{ id: number; span: string }>;
 			if (!rows.length) return;
+			lastId = rows[rows.length - 1]?.id ?? lastId;
 			const batch = this.db.transaction(() => {
 				for (const row of rows) {
 					const { $span, ...columns } = traceColumns(JSON.parse(row.span));
@@ -260,7 +292,8 @@ export class TraceDb {
                 SUM(CASE WHEN status_code = 2 THEN 1 ELSE 0 END) errorCount,
                 CAST(MIN(start_nanos) AS TEXT) startNanos,
                 CAST(MAX(end_nanos) AS TEXT) endNanos,
-                GROUP_CONCAT(DISTINCT role) roles
+                GROUP_CONCAT(DISTINCT role) roles,
+                json_group_array(DISTINCT name) spanNames
          FROM traces${filter}
          GROUP BY change_id
          ORDER BY MIN(start_nanos) DESC, change_id DESC
@@ -277,6 +310,7 @@ export class TraceDb {
 			startNanos: string | null;
 			endNanos: string | null;
 			roles: string | null;
+			spanNames: string | null;
 		}>;
 		const items: TraceSummaryRow[] = rows.map((row) => ({
 			changeId: row.changeId,
@@ -285,6 +319,7 @@ export class TraceDb {
 			startNanos: row.startNanos ?? "0",
 			endNanos: row.endNanos ?? "0",
 			agents: row.roles ? row.roles.split(",").filter(Boolean) : [],
+			spanNames: parseSpanNames(row.spanNames),
 		}));
 		return { items, total, page, perPage };
 	}

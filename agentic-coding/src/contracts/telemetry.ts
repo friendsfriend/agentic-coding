@@ -78,13 +78,16 @@ export interface TraceSummary {
 	errorCount: number;
 	spanCount: number;
 	agents: string[];
+	/** Distinct span (event) names the workflow contains, so the list can filter
+	 * and search by span type without loading every span. */
+	spanNames: string[];
 }
 
 /** One trace-list entry as the telemetry database aggregates it: a workflow
- * (change id) with its span count, time range, error count and agent roles. The
- * list is paged from the database, so this row — not the loaded spans — is the
- * trace list's source of truth. Nanosecond timestamps stay strings because they
- * exceed the exact integer range of a JS number. */
+ * (change id) with its span count, time range, error count, agent roles and
+ * span names. The list is paged from the database, so this row — not the loaded
+ * spans — is the trace list's source of truth. Nanosecond timestamps stay
+ * strings because they exceed the exact integer range of a JS number. */
 /** Trace-list page size; the observability view and the database default agree. */
 export const TRACE_PAGE_SIZE = 50;
 /** Spans the service graph is built from when the topology view is opened. */
@@ -97,6 +100,7 @@ export interface TraceSummaryRow {
 	startNanos: string;
 	endNanos: string;
 	agents: string[];
+	spanNames: string[];
 }
 
 /** One page of trace rows plus the total the filter matches. */
@@ -152,6 +156,7 @@ export const traceSummaryPageSchema = Schema.Struct({
 			startNanos: Schema.String,
 			endNanos: Schema.String,
 			agents: Schema.Array(Schema.String),
+			spanNames: Schema.Array(Schema.String),
 		}),
 	),
 	total: Schema.Number,

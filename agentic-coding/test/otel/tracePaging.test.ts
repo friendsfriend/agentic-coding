@@ -27,12 +27,13 @@ function span(options: {
 	startNanos: string;
 	status?: number;
 	role?: string;
+	name?: string;
 }): SpanData {
 	return {
 		traceId: `trace-${options.changeId}`,
 		spanId: `${options.changeId}-${options.startNanos}`.padEnd(16, "0"),
 		parentSpanId: "",
-		name: "effect.result",
+		name: options.name ?? "effect.result",
 		startTimeUnixNano: options.startNanos,
 		endTimeUnixNano: String(BigInt(options.startNanos) + 1_000_000n),
 		status: { code: options.status ?? 0 },
@@ -58,6 +59,7 @@ function seed(db: TraceDb): void {
 			startNanos: "5000000000",
 			status: 2,
 			role: "worker",
+			name: "runtime.tool",
 		}),
 	);
 	db.ingestSpan(
@@ -78,6 +80,11 @@ describe("paged trace summaries", () => {
 			expect(page.items[0]?.spanCount).toBe(2);
 			expect(page.items[0]?.errorCount).toBe(1);
 			expect(page.items[0]?.agents).toEqual(["worker", "planner"]);
+			// Distinct span names materialize for the span-type filter.
+			expect(page.items[0]?.spanNames.sort()).toEqual([
+				"effect.result",
+				"runtime.tool",
+			]);
 			// Nanosecond timestamps stay exact strings.
 			expect(page.items[0]?.startNanos).toBe("5000000000");
 			expect(page.items[0]?.endNanos).toBe("6001000000");
@@ -113,6 +120,69 @@ describe("paged trace summaries", () => {
 			]);
 		} finally {
 			db.close();
+		}
+	});
+
+	test("keeps a span name containing a comma intact in the aggregation", () => {
+		const db = new TraceDb(tempDir());
+		try {
+			db.ingestSpan(
+				"alpha",
+				span({
+					changeId: "alpha",
+					startNanos: "1000000000",
+					name: "SELECT a, b FROM t",
+				}),
+			);
+			const page = db.listTraceSummaries({ perPage: 10 });
+			expect(page.items[0]?.spanNames).toEqual(["SELECT a, b FROM t"]);
+		} finally {
+			db.close();
+		}
+	});
+
+	test("does not trap the backfill on a span whose JSON name is not a string", () => {
+		const dir = tempDir();
+		const db = new TraceDb(dir);
+		// A malformed span: the name is a number, so the writer materializes no
+		// name. The backfill predicate must not re-select the row forever.
+		db.ingestSpan("gamma", {
+			...span({ changeId: "gamma", startNanos: "9000000000" }),
+			name: 42,
+		});
+		db.close();
+
+		// Reopening runs the backfill; a non-terminating predicate hangs here.
+		const reopened = new TraceDb(dir);
+		try {
+			const page = reopened.listTraceSummaries({ perPage: 10 });
+			expect(page.items).toHaveLength(1);
+			expect(page.items[0]?.spanNames).toEqual([]);
+		} finally {
+			reopened.close();
+		}
+	});
+
+	test("backfills the materialized span name for rows that predate the column", () => {
+		const dir = tempDir();
+		const db = new TraceDb(dir);
+		seed(db);
+		db.close();
+
+		// Simulate a database whose rows were ingested before the `name` column:
+		// the spans are there, the materialized name is not. The timestamp
+		// columns stay populated, so only the name-specific clause can catch it.
+		const raw = new Database(join(dir, "traces.sqlite"));
+		raw.run("UPDATE traces SET name=NULL");
+		raw.close();
+
+		const reopened = new TraceDb(dir);
+		try {
+			const page = reopened.listTraceSummaries({ perPage: 10 });
+			const beta = page.items.find((item) => item.changeId === "beta");
+			expect(beta?.spanNames.sort()).toEqual(["effect.result", "runtime.tool"]);
+		} finally {
+			reopened.close();
 		}
 	});
 
