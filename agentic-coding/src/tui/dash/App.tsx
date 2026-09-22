@@ -2509,6 +2509,7 @@ export function App(props: {
 			/>
 			<DialogueRoute
 				dialogue={dialogue}
+				open={questionOpen()}
 				pendingGroup={pendingQuestionGroup()}
 				credential={credentialRequest()}
 				credentialInput={credentialInput()}

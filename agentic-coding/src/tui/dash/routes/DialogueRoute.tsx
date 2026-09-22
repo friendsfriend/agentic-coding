@@ -14,6 +14,8 @@ import { DeveloperQuestionModal } from "../ui/DeveloperQuestionModal.tsx";
 
 export interface DialogueRouteProps {
 	readonly dialogue: DialogueState;
+	/** Whether the question dialog owns an entry in the shell modal host. */
+	readonly open: boolean;
 	/** The question group awaiting an answer, if any. */
 	readonly pendingGroup: readonly DeveloperDialogueRecord[];
 	/** Credential prompt from the backend, if one is pending. */
@@ -30,7 +32,7 @@ export function DialogueRoute(props: DialogueRouteProps) {
 	const dialogue = () => props.dialogue;
 	return (
 		<>
-			<Show when={dialogue().open() && props.pendingGroup.length > 0}>
+			<Show when={props.open && props.pendingGroup.length > 0}>
 				{(_group) => (
 					<DeveloperQuestionModal
 						questions={[...props.pendingGroup]}
