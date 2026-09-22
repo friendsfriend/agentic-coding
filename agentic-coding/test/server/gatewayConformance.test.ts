@@ -336,3 +336,43 @@ describe("in-process gateway over the real server operations", () => {
 		expect(view.health.attention.length).toBeGreaterThan(0);
 	});
 });
+
+describe("in-process gateway refresh registration", () => {
+	// The HTTP routes register a repository with the server-owned workflow
+	// event hub before executing; the in-process adapter must do the same so the
+	// dashboard receives `workflow.updated` for execution progress instead of
+	// only recovering on the periodic safety resync (dashboard status staleness).
+	test("execution and mutations register the repository with the workflow event hub", async () => {
+		const repos: string[] = [];
+		const gateway = createInProcessGateway({
+			operations: stubOperations({ applied: [] }),
+			telemetry: stubTelemetry,
+			credentials: new CredentialRegistry(),
+			events: new EventBroker("conformance-hub"),
+			hub: {
+				watchRepo: (repo: string) => repos.push(repo),
+				stop: () => {},
+			},
+		});
+		await gateway.execute({ repo: "/repo", workflowId: "wf-1" });
+		await gateway.action({
+			repo: "/repo",
+			workflowId: "wf-1",
+			revision: 3,
+			actionId: "approve",
+		});
+		expect(repos).toEqual(["/repo", "/repo"]);
+	});
+
+	test("a missing hub leaves the in-process adapter usable", async () => {
+		const gateway = createInProcessGateway({
+			operations: stubOperations({ applied: [] }),
+			telemetry: stubTelemetry,
+			credentials: new CredentialRegistry(),
+			events: new EventBroker("conformance-nohub"),
+		});
+		await expect(
+			gateway.execute({ repo: "/repo", workflowId: "wf-1" }),
+		).resolves.toBeUndefined();
+	});
+});
