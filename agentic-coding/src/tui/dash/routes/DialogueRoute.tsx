@@ -5,8 +5,9 @@
  * overlay. Props-in: the dialogue state, the pending question group and the
  * credential request come from the routes that own them; answering is a
  * callback. */
-import { ModalHelpOverlay, ProgressModal } from "@ui";
-import { Show } from "solid-js";
+import type { ScrollBoxRenderable } from "@opentui/core";
+import { MarkdownModal, ModalHelpOverlay, ProgressModal } from "@ui";
+import { createEffect, Show } from "solid-js";
 import type { DeveloperDialogueRecord } from "../../../contracts/workflow.ts";
 import type { DialogueState } from "../state.ts";
 import { CredentialsModal } from "../ui/CredentialsModal.tsx";
@@ -30,6 +31,8 @@ export interface DialogueRouteProps {
 
 export function DialogueRoute(props: DialogueRouteProps) {
 	const dialogue = () => props.dialogue;
+	let detailScroll: ScrollBoxRenderable | undefined;
+	createEffect(() => detailScroll?.scrollTo(dialogue().detailOffset()));
 	return (
 		<>
 			<Show when={props.open && props.pendingGroup.length > 0}>
@@ -47,6 +50,18 @@ export function DialogueRoute(props: DialogueRouteProps) {
 								: "unanswered",
 						)}
 						onCustomTextChange={props.onCustomTextChange}
+					/>
+				)}
+			</Show>
+			<Show when={props.open && dialogue().optionDetail()}>
+				{(detail) => (
+					<MarkdownModal
+						title={detail().title}
+						content={detail().content}
+						zIndex={25}
+						onScrollBoxReady={(scrollbox) => {
+							detailScroll = scrollbox;
+						}}
 					/>
 				)}
 			</Show>

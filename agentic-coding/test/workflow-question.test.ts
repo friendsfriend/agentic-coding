@@ -116,8 +116,29 @@ test("question contracts accept legacy snapshots and reject invalid answers", ()
 		evidence: [],
 		loopCounts: {},
 		attention: [],
+		// State written by an earlier schema of this feature may carry more than
+		// one recommendation; persisted-record decode must stay permissive so
+		// that state can still be loaded, answered, and repaired.
+		developerDialogue: [
+			{
+				id: "legacy-question",
+				workflowId: "w",
+				runId: "r",
+				stepId: "core.implementation",
+				role: "worker",
+				description: "legacy question",
+				options: [
+					{ label: "A", value: "a", recommended: true },
+					{ label: "B", value: "b", recommended: true },
+				],
+				status: "pending",
+				createdAt: "x",
+				expiresAt: "2099-01-01T00:00:00.000Z",
+			},
+		],
 	});
-	expect(snapshot.developerDialogue).toEqual([]);
+	expect(snapshot.developerDialogue).toHaveLength(1);
+	expect(snapshot.developerDialogue[0]?.options).toHaveLength(2);
 	expect(() =>
 		decodeCommand({
 			type: "agent.question",
@@ -250,6 +271,129 @@ test("questionnaires persist and answer all items atomically", () => {
 		expect(
 			answered.view.developerDialogue?.map((item) => item.answer?.value),
 		).toEqual(["json", "line 1\nline 2"]);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("rich question items normalize ident, question, context, and option metadata", () => {
+	const { repo, engine, run, token } = setup();
+	try {
+		const created = engine.dispatch(repo, {
+			type: "agent.question",
+			workflowId: run.workflowId,
+			runId: run.id,
+			stepId: run.stepId,
+			role: run.role,
+			token,
+			questions: [
+				{
+					ident: "scope",
+					question: "Which scope?",
+					context: "## Background\n\nEvidence.",
+					options: [
+						{
+							title: "Narrow",
+							value: "narrow",
+							recommended: true,
+							description: "**Narrow** keeps it small.",
+						},
+						{ title: "Wide" },
+					],
+				},
+			],
+		});
+		const item = created.snapshot.developerDialogue[0];
+		expect(item?.ident).toBe("scope");
+		expect(item?.description).toBe("Which scope?");
+		expect(item?.context).toContain("Background");
+		expect(item?.options).toEqual([
+			{
+				label: "Narrow",
+				value: "narrow",
+				recommended: true,
+				description: "**Narrow** keeps it small.",
+			},
+			{ label: "Wide", value: "Wide" },
+		]);
+		expect(() =>
+			decodeCommand({
+				type: "agent.question",
+				workflowId: "w",
+				runId: "r",
+				stepId: "core.implementation",
+				role: "worker",
+				token: "t",
+				description: "choose",
+				options: [{ recommended: true }],
+			}),
+		).toThrow();
+		expect(() =>
+			decodeCommand({
+				type: "agent.question",
+				workflowId: "w",
+				runId: "r",
+				stepId: "core.implementation",
+				role: "worker",
+				token: "t",
+				description: "choose",
+				options: [
+					{ title: "A", value: "a", recommended: true },
+					{ title: "B", value: "b", recommended: true },
+				],
+			}),
+		).toThrow(/at most one recommended/);
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("an answer that would overflow the dialogue bound is rejected without losing the question", () => {
+	const { repo, engine, run, token } = setup();
+	try {
+		const identity = {
+			workflowId: run.workflowId,
+			runId: run.id,
+			stepId: run.stepId,
+			role: run.role,
+			token,
+		};
+		// Max-size questions stay under the create-time bound; max-size custom
+		// answers then push the aggregate past it, which must fail with an
+		// actionable diagnostic instead of the opaque snapshot-decode rollback.
+		const created = engine.dispatch(repo, {
+			type: "agent.question",
+			...identity,
+			questions: Array.from({ length: 8 }, (_, index) => ({
+				ident: `q${index}`,
+				question: "q".repeat(4096),
+				context: "c".repeat(4096),
+				options: [],
+			})),
+		});
+		const groupId = created.snapshot.developerDialogue[0]?.groupId;
+		if (!groupId) throw new Error("questionnaire metadata missing");
+		const before = engine.getSnapshot(repo, run.workflowId);
+		expect(() =>
+			engine.dispatch(repo, {
+				type: "developer.action",
+				workflowId: run.workflowId,
+				revision: created.snapshot.revision,
+				actionId: "answer-question",
+				input: {
+					groupId,
+					responses: created.snapshot.developerDialogue.map((item) => ({
+						questionId: item.id,
+						kind: "custom" as const,
+						value: "y".repeat(8000),
+					})),
+				},
+			}),
+		).toThrow(/content limit/);
+		expect(engine.getSnapshot(repo, run.workflowId).revision).toBe(
+			before.revision,
+		);
+		expect(engine.status(repo, "question").pendingQuestions).toHaveLength(8);
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
 	}

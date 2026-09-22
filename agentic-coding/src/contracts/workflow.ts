@@ -249,11 +249,49 @@ export type DeveloperQuestionStatus =
 	| "cancelled"
 	| "expired";
 export interface DeveloperQuestionOption {
+	/** Display title for the option; legacy payloads use `label`. */
+	title?: string;
+	/** Legacy display label; retained so existing payloads keep decoding. */
+	label?: string;
+	/** Stable value returned when the option is selected; defaults to the title. */
+	value?: string;
+	/** Marks the option the asking agent recommends. */
+	recommended?: boolean;
+	/** Markdown detail rendered by the option-detail modal. */
+	description?: string;
+}
+/** Normalized option used for storage, rendering, and answer matching. */
+export interface ResolvedDeveloperQuestionOption {
 	label: string;
 	value: string;
+	recommended?: boolean;
+	description?: string;
+}
+/** Resolve the display label, stable value, and new detail fields of an option
+ * while accepting both the new `title` and the legacy `label` shapes. */
+export function resolveDeveloperQuestionOption(
+	option: DeveloperQuestionOption,
+): ResolvedDeveloperQuestionOption {
+	const label = option.title ?? option.label ?? option.value ?? "";
+	const value = option.value ?? option.title ?? option.label ?? "";
+	return {
+		label,
+		value,
+		...(option.recommended === undefined
+			? {}
+			: { recommended: option.recommended }),
+		...(option.description === undefined
+			? {}
+			: { description: option.description }),
+	};
 }
 export interface DeveloperQuestionItem {
-	description: string;
+	/** Short tab title shown when several questions are grouped. */
+	ident?: string;
+	/** Question text; legacy payloads use `description`. */
+	question?: string;
+	/** Legacy question text; retained so existing payloads keep decoding. */
+	description?: string;
 	context?: string;
 	options: readonly DeveloperQuestionOption[];
 }
@@ -263,6 +301,8 @@ export interface DeveloperDialogueRecord {
 	runId: string;
 	stepId: string;
 	role: string;
+	/** Short tab title; absent for legacy single-question records. */
+	ident?: string;
 	description: string;
 	context?: string;
 	options: readonly DeveloperQuestionOption[];
@@ -585,27 +625,65 @@ export type WorkflowCommand =
 // ---------------------------------------------------------------------------
 export const DeveloperQuestionOptionSchema: Schema.Schema<DeveloperQuestionOption> =
 	Schema.Struct({
-		label: text(256),
-		value: text(1024),
+		title: Schema.optionalWith(text(256), { exact: true }),
+		label: Schema.optionalWith(text(256), { exact: true }),
+		value: Schema.optionalWith(text(1024), { exact: true }),
+		recommended: Schema.optionalWith(Schema.Boolean, { exact: true }),
+		description: Schema.optionalWith(boundedText(4096), { exact: true }),
 	});
 
+/** Structural option-list validation shared by command input and persisted
+ * records. Kept permissive so a snapshot written by an earlier schema of this
+ * feature (for example with two recommendations) still decodes; the
+ * recommendation invariant is a command-input rule only. */
 export const questionOptions = Schema.Array(DeveloperQuestionOptionSchema).pipe(
 	Schema.filter(
+		(options) => {
+			const resolved = options.map(resolveDeveloperQuestionOption);
+			return (
+				options.length <= 16 &&
+				resolved.every(
+					(option) =>
+						option.label.trim().length > 0 && option.value.trim().length > 0,
+				) &&
+				new Set(resolved.map((option) => option.value)).size === resolved.length
+			);
+		},
+		{
+			message: () =>
+				"expected at most 16 options with a non-empty title and unique values",
+		},
+	),
+);
+
+/** Command-input option list: the shared structural rules plus the authoring
+ * invariant that at most one option is marked recommended. Never used to decode
+ * persisted dialogue, so tightening it cannot strand older state. */
+export const commandQuestionOptions = questionOptions.pipe(
+	Schema.filter(
 		(options) =>
-			options.length <= 16 &&
-			new Set(options.map((option) => option.value)).size === options.length,
-		{ message: () => "expected at most 16 unique option objects" },
+			options.filter(
+				(option) => resolveDeveloperQuestionOption(option).recommended === true,
+			).length <= 1,
+		{ message: () => "expected at most one recommended option" },
 	),
 );
 
 export const DeveloperQuestionItemSchema = Schema.Struct({
-	description: text(4096),
+	ident: Schema.optionalWith(text(256), { exact: true }),
+	question: Schema.optionalWith(text(4096), { exact: true }),
+	description: Schema.optionalWith(text(4096), { exact: true }),
 	context: Schema.optionalWith(boundedText(4096), { exact: true }),
-	options: Schema.optionalWith(questionOptions, {
+	options: Schema.optionalWith(commandQuestionOptions, {
 		exact: true,
 		default: () => [],
 	}),
-});
+}).pipe(
+	Schema.filter(
+		(item) => item.question !== undefined || item.description !== undefined,
+		{ message: () => "each question requires question or description" },
+	),
+);
 
 const MAX_QUESTIONNAIRE_ITEMS = 8;
 
@@ -671,7 +749,7 @@ const agentQuestionSchema = Schema.Struct({
 	token: text(1024),
 	description: Schema.optionalWith(text(4096), { exact: true }),
 	context: Schema.optionalWith(boundedText(4096), { exact: true }),
-	options: Schema.optionalWith(questionOptions, { exact: true }),
+	options: Schema.optionalWith(commandQuestionOptions, { exact: true }),
 	questions: Schema.optionalWith(
 		Schema.Array(DeveloperQuestionItemSchema).pipe(
 			Schema.filter(
@@ -709,7 +787,7 @@ const agentAskSchema = Schema.Struct({
 	targetRole: text(4096),
 	description: text(4096),
 	context: Schema.optionalWith(boundedText(4096), { exact: true }),
-	options: Schema.optionalWith(questionOptions, { exact: true }),
+	options: Schema.optionalWith(commandQuestionOptions, { exact: true }),
 });
 const agentAnswerSchema = Schema.Struct({
 	type: Schema.Literal("agent.answer"),
@@ -1130,8 +1208,15 @@ const dialogueRecordResponseSchema = Schema.Struct({
 	role: Schema.String,
 	description: Schema.String,
 	context: Schema.optional(Schema.String),
+	ident: Schema.optional(Schema.String),
 	options: Schema.Array(
-		Schema.Struct({ label: Schema.String, value: Schema.String }),
+		Schema.Struct({
+			title: Schema.optional(Schema.String),
+			label: Schema.optional(Schema.String),
+			value: Schema.optional(Schema.String),
+			recommended: Schema.optional(Schema.Boolean),
+			description: Schema.optional(Schema.String),
+		}),
 	),
 	groupId: Schema.optional(Schema.String),
 	timerNonce: Schema.optional(Schema.String),

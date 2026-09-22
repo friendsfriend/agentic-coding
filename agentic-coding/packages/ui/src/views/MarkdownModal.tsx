@@ -11,6 +11,8 @@ export interface MarkdownModalProps {
 	title: string;
 	content: string;
 	hideTitle?: boolean;
+	/** Portal z-order; provided when the modal must stack above another dialog. */
+	zIndex?: number;
 	onScrollBoxReady?: (scrollBox: ScrollBoxRenderable) => void;
 }
 
@@ -25,6 +27,7 @@ export function MarkdownModal(props: MarkdownModalProps) {
 			helpText={formatHelpText([{ key: "Esc", action: "Close" }])}
 			widthPercent={0.7}
 			heightPercent={0.75}
+			zIndex={props.zIndex}
 			customHeader={props.hideTitle ? <box style={{ height: 0 }} /> : undefined}
 		>
 			<ScrollableContent axes={["y"]} onScrollBoxReady={props.onScrollBoxReady}>

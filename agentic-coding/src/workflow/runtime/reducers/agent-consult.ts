@@ -9,22 +9,23 @@
 // are the peer target and the one-shot answer nonce (stored hashed).
 import type { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
-import type {
-	DeveloperDialogueRecord,
-	WorkflowCommand,
-	WorkflowSnapshot,
+import {
+	type DeveloperDialogueRecord,
+	resolveDeveloperQuestionOption,
+	type WorkflowCommand,
+	type WorkflowSnapshot,
 } from "../../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
 import { tokenMatches } from "../capability.ts";
 import {
+	assertDialogueContentBound,
 	MAX_DEVELOPER_DIALOGUE_RECORDS,
+	MAX_DIALOGUE_BYTES,
 	QUESTION_WAIT_MS,
 	questionRun,
 } from "../dialogue.ts";
 import { enqueue } from "../kernel.ts";
 import { nowIso, type RunRow, runFromRow, runs } from "../store.ts";
-
-const MAX_DIALOGUE_BYTES = 128 * 1024;
 
 /** The latest completed, still-live run for `targetRole` outside the current
  * step. Only roles from already-completed steps are consultable, which keeps
@@ -75,7 +76,7 @@ export function agentAsk(
 		role: run.role,
 		description: command.description,
 		...(command.context === undefined ? {} : { context: command.context }),
-		options: command.options ?? [],
+		options: (command.options ?? []).map(resolveDeveloperQuestionOption),
 		timerNonce: randomUUID(),
 		targetRole: target.role,
 		targetRunId: target.id,
@@ -170,6 +171,7 @@ export function agentAnswer(
 	question.status = "answered";
 	question.answeredAt = at;
 	question.answer = { kind: "custom", value: command.answer };
+	assertDialogueContentBound(snapshot.developerDialogue);
 	return {
 		type: "agent.question.answered",
 		actor: { kind: "agent", runId: run.id, role: run.role },
