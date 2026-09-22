@@ -275,6 +275,10 @@ describe("profiles, assignments, and adapters", () => {
 				expect(start.some((value) => value.startsWith("--env"))).toBe(false);
 				if (runtime === "pi") {
 					expect(start).toContain("/tmp/developer-question.ts");
+					// Managed sessions never depend on pi's interactive project-trust
+					// decision (a new worktree prompts on startup and eats the launch
+					// prompt as its answer).
+					expect(start).toContain("--no-approve");
 					const toolsArg = start[start.indexOf("--tools") + 1];
 					expect(toolsArg).toBeDefined();
 					expect(toolsArg.split(",").sort()).toEqual(["bash", "read"]);

@@ -405,7 +405,16 @@ abstract class BaseAdapter implements AgentAdapter {
 export class PiAdapter extends BaseAdapter {
 	readonly id = "pi" as const;
 	launch(ctx: LaunchContext): Effect.Effect<AgentHandle, Error> {
-		const args = ["--name", ctx.name, "--no-prompt-templates"];
+		// A managed session must not depend on pi's interactive project-trust
+		// decision. Worktrees carry the repository's `.pi` resources but sit outside
+		// its saved trust path, so pi asks at startup and the launch prompt —
+		// submitted into that dialog — is consumed as its answer, leaving the run
+		// parked on a live but unprompted agent. Declining project resources for the
+		// run matches the managed-session contract already visible in
+		// `--no-prompt-templates` and the default `--no-extensions`; context files
+		// such as AGENTS.md load regardless of trust, and CLI `--extension` paths are
+		// unaffected.
+		const args = ["--name", ctx.name, "--no-prompt-templates", "--no-approve"];
 		if (ctx.profile.model) args.push("--model", ctx.profile.model);
 		if (ctx.profile.thinking) args.push("--thinking", ctx.profile.thinking);
 		const tools = ctx.profile.tools;
