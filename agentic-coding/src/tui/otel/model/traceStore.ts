@@ -75,6 +75,9 @@ export class TraceStore {
 		{ field: "name", mode: "none" },
 	];
 	private statusFilter: StatusFilter = "all";
+	/** Selected span (event) type the list must contain; `"all"` keeps every
+	 * workflow. The distinct values come from the loaded page's summaries. */
+	private spanTypeFilter = "all";
 	private readonly listeners = new Set<() => void>();
 
 	constructor(initial: SpanData[] = []) {
@@ -438,6 +441,7 @@ export class TraceStore {
 			errorCount: row.errorCount,
 			spanCount: row.spanCount,
 			agents: row.agents,
+			spanNames: row.spanNames,
 		};
 	}
 
@@ -482,6 +486,7 @@ export class TraceStore {
 							.filter((role): role is string => !!role),
 					),
 				],
+				spanNames: [...new Set(sorted.map((span) => span.name))],
 			});
 		}
 		return summaries;
@@ -524,6 +529,12 @@ export class TraceStore {
 		this.notify();
 	}
 
+	/** Restrict the list to workflows containing this span (event) type. */
+	setSpanTypeFilter(spanType: string): void {
+		this.spanTypeFilter = spanType || "all";
+		this.notify();
+	}
+
 	setSort(field: SortField): void {
 		const criterion = this.sortCriteria.find((item) => item.field === field);
 		if (!criterion) throw new Error(`unknown sort field: ${field}`);
@@ -546,6 +557,17 @@ export class TraceStore {
 	get statusFilter_(): StatusFilter {
 		return this.statusFilter;
 	}
+	get spanTypeFilter_(): string {
+		return this.spanTypeFilter;
+	}
+	/** Distinct span (event) names across the loaded trace summaries, sorted, for
+	 * the filter modal's value list. */
+	get spanTypes_(): string[] {
+		const names = new Set<string>();
+		for (const summary of this.summaries)
+			for (const name of summary.spanNames) names.add(name);
+		return [...names].sort();
+	}
 	get sortDir_(): SortDir {
 		return (
 			(this.sortCriteria.find((item) => item.mode !== "none")
@@ -565,7 +587,8 @@ export class TraceStore {
 	}
 
 	/** A trace-list entry matches on what the list shows: the workflow id, its
-	 * service, its agents and the status the aggregation counted. */
+	 * service, its agents, its span names and the status the aggregation
+	 * counted, plus the selected span type when one is active. */
 	private matchesFilter(summary: TraceSummary): boolean {
 		const q = this.query;
 		const root = summary.rootSpans[0];
@@ -573,6 +596,7 @@ export class TraceStore {
 			!q ||
 			summary.traceId.toLowerCase().includes(q) ||
 			summary.agents.some((agent) => agent.toLowerCase().includes(q)) ||
+			summary.spanNames.some((name) => name.toLowerCase().includes(q)) ||
 			(root?.name.toLowerCase().includes(q) ?? false) ||
 			(root?.serviceName.toLowerCase().includes(q) ?? false) ||
 			(root?.attributes.some(
@@ -586,6 +610,9 @@ export class TraceStore {
 			(this.statusFilter === "success"
 				? summary.errorCount === 0
 				: summary.errorCount > 0);
-		return textMatches && statusMatches;
+		const typeMatches =
+			this.spanTypeFilter === "all" ||
+			summary.spanNames.includes(this.spanTypeFilter);
+		return textMatches && statusMatches && typeMatches;
 	}
 }

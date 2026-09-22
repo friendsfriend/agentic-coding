@@ -20,14 +20,20 @@ import { TopologyStore } from "../../src/tui/otel/model/topologyStore.ts";
 import { TraceStore } from "../../src/tui/otel/model/traceStore.ts";
 import { jumpTo, renderUntil } from "./support/terminal.ts";
 
-/** Three workflows, two per page, newest first. */
+/** Three workflows, two per page, newest first. The span names make the
+ * span-type filter observable: only `wf-newest` and `wf-oldest` carry a tool
+ * span, and only `wf-newest` an LLM message. */
 const ROWS: TraceSummaryRow[] = [
-	row("wf-newest", 0),
-	row("wf-mid", 1),
-	row("wf-oldest", 0),
+	row("wf-newest", 0, ["runtime.tool", "runtime.message"]),
+	row("wf-mid", 1, ["effect.result"]),
+	row("wf-oldest", 0, ["runtime.tool"]),
 ];
 
-function row(changeId: string, errorCount: number): TraceSummaryRow {
+function row(
+	changeId: string,
+	errorCount: number,
+	spanNames: string[] = ["effect.result"],
+): TraceSummaryRow {
 	return {
 		changeId,
 		spanCount: 2,
@@ -35,6 +41,7 @@ function row(changeId: string, errorCount: number): TraceSummaryRow {
 		startNanos: "1000000000",
 		endNanos: "3000000000",
 		agents: ["worker"],
+		spanNames,
 	};
 }
 
@@ -177,5 +184,35 @@ test("paging moves between trace pages and a trace opens by fetching its spans",
 	t.mockInput.pressEnter();
 	expect(await renderUntil(t, "Span tree")).toBe(true);
 	expect(db.spanReads).toEqual(["wf-newest"]);
+	t.renderer.destroy();
+});
+
+test("the filter modal narrows the list by span type", async () => {
+	const { t, traceStore } = await renderPagedShell();
+	await jumpTo(t, "traces");
+	expect(await renderUntil(t, "wf-newest")).toBe(true);
+
+	// Shift+F opens the shared filter modal on the Status criterion.
+	t.mockInput.pressKey("f", { shift: true });
+	expect(await renderUntil(t, "Span type")).toBe(true);
+
+	// Move to the Span type criterion, then into its values. The values are
+	// "all" plus the distinct names on the loaded page, sorted: all,
+	// effect.result, runtime.message, runtime.tool.
+	t.mockInput.pressKey("j");
+	t.mockInput.pressKey("j");
+	t.mockInput.pressKey("l");
+	t.mockInput.pressKey("j");
+	t.mockInput.pressKey("j");
+	t.mockInput.pressKey("j");
+	expect(await renderUntil(t, "Tool calls")).toBe(true);
+	t.mockInput.pressEnter();
+	expect(await renderUntil(t, (frame) => !frame.includes("Filter"))).toBe(true);
+
+	expect(traceStore.spanTypeFilter_).toBe("runtime.tool");
+	expect(traceStore.filteredCount_).toBe(1);
+	const frame = t.captureCharFrame();
+	expect(frame).toContain("wf-newest");
+	expect(frame).not.toContain("wf-mid");
 	t.renderer.destroy();
 });

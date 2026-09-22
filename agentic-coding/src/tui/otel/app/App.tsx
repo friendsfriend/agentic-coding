@@ -848,6 +848,7 @@ export function App(props: {
 	const [filterCriterion, setFilterCriterion] = createSignal(0);
 	const [filterStatusIndex, setFilterStatusIndex] = createSignal(0);
 	const [filterWorkspaceIndex, setFilterWorkspaceIndex] = createSignal(0);
+	const [filterSpanTypeIndex, setFilterSpanTypeIndex] = createSignal(0);
 	const [sortIndex, setSortIndex] = createSignal(0);
 	const [sortDraft, setSortDraft] = createSignal<SortCriterion[]>(
 		props.traceStore.sortCriteria_,
@@ -868,6 +869,18 @@ export function App(props: {
 		createSignal<string>();
 	const [topologyDetail, setTopologyDetail] = createSignal<string>();
 	const [logFilterQuery, setLogFilterQuery] = createSignal("");
+
+	// Span (event) types the filter modal offers: the distinct names on the
+	// loaded page, plus the active filter when paging has scrolled it off the
+	// page so the criterion stays visible and selectable.
+	const traceSpanTypes = (): string[] => {
+		const types = traceStore.spanTypes_;
+		const active = traceStore.spanTypeFilter_;
+		return active !== "all" && !types.includes(active)
+			? [active, ...types]
+			: types;
+	};
+	const filterSpanTypeValues = (): string[] => ["all", ...traceSpanTypes()];
 
 	const db = props.db;
 	const traceStore = props.traceStore;
@@ -1767,17 +1780,19 @@ export function App(props: {
 			if (key === "x") {
 				traceStore.applyFilter("");
 				traceStore.setStatusFilter("all");
+				traceStore.setSpanTypeFilter("all");
 				setSearchQuery("");
 				setFilterPane("criteria");
 				setFilterCriterion(0);
 				setFilterStatusIndex(0);
 				setFilterWorkspaceIndex(0);
+				setFilterSpanTypeIndex(0);
 				switchWorkspace();
 				refresh();
 			} else if (key === "h" || key === "left") setFilterPane("criteria");
 			else if (key === "l" || key === "right") setFilterPane("values");
 			else if (filterPane() === "criteria" && (key === "j" || key === "down"))
-				setFilterCriterion((i) => Math.min(1, i + 1));
+				setFilterCriterion((i) => Math.min(2, i + 1));
 			else if (filterPane() === "criteria" && (key === "k" || key === "up"))
 				setFilterCriterion((i) => Math.max(0, i - 1));
 			else if (
@@ -1804,8 +1819,25 @@ export function App(props: {
 				(key === "k" || key === "up")
 			)
 				setFilterWorkspaceIndex((i) => Math.max(0, i - 1));
+			else if (
+				filterPane() === "values" &&
+				filterCriterion() === 2 &&
+				(key === "j" || key === "down")
+			)
+				setFilterSpanTypeIndex((i) =>
+					Math.min(filterSpanTypeValues().length - 1, i + 1),
+				);
+			else if (
+				filterPane() === "values" &&
+				filterCriterion() === 2 &&
+				(key === "k" || key === "up")
+			)
+				setFilterSpanTypeIndex((i) => Math.max(0, i - 1));
 			else if (key === "enter" || key === "return") {
 				traceStore.setStatusFilter(statusOptions[filterStatusIndex()]?.value);
+				traceStore.setSpanTypeFilter(
+					filterSpanTypeValues()[filterSpanTypeIndex()] ?? "all",
+				);
 				switchWorkspace(
 					filterWorkspaceIndex() === 0
 						? undefined
@@ -1889,6 +1921,9 @@ export function App(props: {
 					0,
 					workspaces().findIndex((w) => w.changeId === activeWorkspace()) + 1,
 				),
+			);
+			setFilterSpanTypeIndex(
+				Math.max(0, filterSpanTypeValues().indexOf(traceStore.spanTypeFilter_)),
 			);
 			nav.pushModal("filter", activeFeatureId());
 		} else if (key === "o" && shifted) {
@@ -2474,7 +2509,9 @@ export function App(props: {
 					criterion={filterCriterion}
 					statusIndex={filterStatusIndex}
 					workspaceIndex={filterWorkspaceIndex}
+					spanTypeIndex={filterSpanTypeIndex}
 					workspaces={workspaces}
+					spanTypes={traceSpanTypes}
 				/>
 			)}
 			{nav.modal() === "sort" && (

@@ -133,6 +133,7 @@ describe("client response decoding", () => {
 						startNanos: "1",
 						endNanos: "2",
 						agents: ["planner"],
+						spanNames: ["runtime.tool"],
 					},
 				],
 				total: 1,
