@@ -92,6 +92,10 @@ export interface ServerApp {
 	 * *same* instances instead of opening a socket to itself. */
 	readonly operations: ServerOperations;
 	readonly telemetry?: TelemetryOperations;
+	/** Server-owned workflow refresh hub. Exposed so the in-process gateway can
+	 * register a repository exactly like the HTTP routes do, instead of the
+	 * dashboard waiting on the periodic safety resync for every status change. */
+	readonly hub?: WorkflowEventHub;
 	fetch(request: Request): Promise<Response>;
 	/** A `CredentialPrompt`-compatible function bound to one client owner. */
 	credentialPrompt(
@@ -616,6 +620,7 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		credentials,
 		operations,
 		telemetry: options.telemetry,
+		...(options.hub ? { hub: options.hub } : {}),
 		fetch: handle,
 		credentialPrompt: (ownerId) => async (prompt, signal) => {
 			const answer = credentials.request(ownerId, signal);

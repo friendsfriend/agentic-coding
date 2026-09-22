@@ -37,6 +37,7 @@ import type { WorkflowView } from "../../contracts/workflow.ts";
 import type { CredentialRegistry } from "../credentials.ts";
 import type { EventBroker } from "../events.ts";
 import type { ServerOperations } from "../handlers.ts";
+import type { WorkflowEventHub } from "../subscriptions.ts";
 import type { TelemetryOperations } from "../telemetry.ts";
 
 export interface InProcessGatewayOptions {
@@ -45,6 +46,11 @@ export interface InProcessGatewayOptions {
 	readonly telemetry: TelemetryOperations;
 	readonly credentials: CredentialRegistry;
 	readonly events: EventBroker;
+	/** Server-owned workflow refresh hub. When present, the in-process gateway
+	 * registers a repository on the same mutations the HTTP routes do, so the
+	 * server's execution-coordinator events reach the dashboard instead of
+	 * leaving it to recover on the periodic safety resync. */
+	readonly hub?: WorkflowEventHub;
 	/** Aborts an in-flight call when the caller's signal fires. */
 	readonly abortError?: (signal: AbortSignal) => Error;
 }
@@ -63,6 +69,9 @@ export function createInProcessGateway(
 ): DashboardGateway {
 	const { operations, telemetry, credentials, events } = options;
 	const abortError = options.abortError ?? defaultAbortError;
+	// Register a repository with the server-owned refresh hub exactly like the
+	// HTTP routes: idempotent, and a no-op when no hub was installed.
+	const watchRepo = (repo: string): void => options.hub?.watchRepo(repo);
 	const publishWorkflow = (
 		kind: string,
 		repo: string,
@@ -151,6 +160,7 @@ export function createInProcessGateway(
 
 		// -- mutations: the operations own revision guards and re-reads --------
 		async action(request: WorkflowActionRequest): Promise<WorkflowView> {
+			watchRepo(request.repo);
 			const view = operations.action(request);
 			publishWorkflow(
 				"workflow.action",
@@ -162,12 +172,14 @@ export function createInProcessGateway(
 		},
 
 		async start(request: WorkflowStartRequest): Promise<string> {
+			watchRepo(request.repo);
 			const workflowId = await operations.start(request);
 			publishWorkflow("workflow.start", request.repo, workflowId);
 			return workflowId;
 		},
 
 		async repair(request: WorkflowRepairRequest): Promise<WorkflowView> {
+			watchRepo(request.repo);
 			const view = operations.repair(request);
 			publishWorkflow(
 				"workflow.repair",
@@ -179,6 +191,7 @@ export function createInProcessGateway(
 		},
 
 		async question(request: WorkflowQuestionRequest): Promise<WorkflowView> {
+			watchRepo(request.repo);
 			const view = operations.question(request);
 			publishWorkflow(
 				"workflow.question",
@@ -190,6 +203,7 @@ export function createInProcessGateway(
 		},
 
 		async execute(request: WorkflowExecuteRequest): Promise<void> {
+			watchRepo(request.repo);
 			operations.execute(request);
 		},
 
@@ -199,6 +213,7 @@ export function createInProcessGateway(
 		},
 
 		async agentHandoff(request: AgentHandoffRequest): Promise<WorkflowView> {
+			watchRepo(request.repo);
 			const view = await operations.handoff(request);
 			publishWorkflow(
 				"workflow.handoff",
@@ -213,6 +228,7 @@ export function createInProcessGateway(
 			request: AgentQuestionRequest,
 			signal?: AbortSignal,
 		): Promise<string> {
+			watchRepo(request.repo);
 			const controller = new AbortController();
 			const onAbort = () => controller.abort();
 			signal?.addEventListener("abort", onAbort, { once: true });
@@ -236,6 +252,7 @@ export function createInProcessGateway(
 		async researchHandoff(
 			request: AgentResearchHandoffRequest,
 		): Promise<WorkflowView> {
+			watchRepo(request.repo);
 			const view = await operations.researchHandoff(request);
 			publishWorkflow(
 				"workflow.research-handoff",
