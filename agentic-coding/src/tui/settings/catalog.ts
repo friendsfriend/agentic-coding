@@ -82,7 +82,7 @@ export const SETTINGS_INVENTORY: readonly SettingsInventoryEntry[] = [
 		secret: false,
 		effect: "next-start",
 		editable: true,
-		items: ["agents.manage", "agents.profile."],
+		items: ["agents.profiles"],
 	},
 	{
 		id: "agents.presets",
@@ -94,7 +94,7 @@ export const SETTINGS_INVENTORY: readonly SettingsInventoryEntry[] = [
 		secret: false,
 		effect: "next-start",
 		editable: true,
-		items: ["agents.manage", "agents.preset."],
+		items: ["agents.presets"],
 	},
 	{
 		id: "agents.routing",

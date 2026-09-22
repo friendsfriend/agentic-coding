@@ -42,6 +42,11 @@ export function agentConfigEntry(repository?: string): AgentConfigEntry {
 	return entry;
 }
 
+/** Drop every cached read (tests, and a scope switch before the first read). */
+export function clearAgentConfigCache(): void {
+	cache.clear();
+}
+
 /** Re-read the transport-less config into the cache (used after an in-process
  * mutation so the view's synchronous read reflects the write). */
 export function reloadAgentConfigLocal(repository?: string): void {

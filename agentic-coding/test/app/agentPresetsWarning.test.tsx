@@ -4,11 +4,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { testRender } from "@opentui/solid";
+import { clearAgentConfigCache } from "../../src/tui/dash/agent-config-cache.ts";
 import {
 	activeNotification,
 	resetNotifications,
 } from "../../src/tui/dash/notifications.ts";
-import { ModelConfigModal } from "../../src/tui/dash/ui/ModelConfigModal.tsx";
+import { AgentPresetsView } from "../../src/tui/settings/AgentPresetsView.tsx";
 
 type CapturedSpan = {
 	name: string;
@@ -23,6 +24,7 @@ afterEach(() => {
 	if (originalEndpoint === undefined)
 		delete process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
 	else process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = originalEndpoint;
+	clearAgentConfigCache();
 	resetNotifications();
 });
 
@@ -45,19 +47,20 @@ function attribute(span: CapturedSpan | undefined, key: string) {
 		?.stringValue;
 }
 
-test("library warnings while the agent editor is open become warning toasts and telemetry", async () => {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "model-warn-test-"));
-	process.env.HERDR_WORKFLOW_CONFIG = path.join(dir, "config.toml");
-	fs.writeFileSync(process.env.HERDR_WORKFLOW_CONFIG, "[agents]\n");
+test("library warnings on the Agent Presets surface become warning toasts and telemetry", async () => {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-presets-warn-"));
+	const previousConfig = process.env.HERDR_WORKFLOW_CONFIG;
+	process.env.HERDR_WORKFLOW_CONFIG = path.join(dir, "config.json");
+	fs.writeFileSync(process.env.HERDR_WORKFLOW_CONFIG, "{}\n");
 	process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT =
 		"http://127.0.0.1:9/v1/traces";
 	const spans = captureSpans();
 	const consoleWarnBeforeMount = console.warn;
 	try {
-		const t = await testRender(
-			() => <ModelConfigModal onKeyReady={() => {}} onCancel={() => {}} />,
-			{ width: 90, height: 26 },
-		);
+		const t = await testRender(() => <AgentPresetsView />, {
+			width: 90,
+			height: 26,
+		});
 		await t.flush();
 		resetNotifications();
 
@@ -69,8 +72,8 @@ test("library warnings while the agent editor is open become warning toasts and 
 		const leakSpan = spans.find(
 			(span) => attribute(span, "tui.kind") === "leak",
 		);
-		expect(leakSpan?.name).toBe("tui.model_config.console");
-		expect(attribute(leakSpan, "tui.surface")).toBe("model-config");
+		expect(leakSpan?.name).toBe("tui.agent_presets.console");
+		expect(attribute(leakSpan, "tui.surface")).toBe("agent-presets");
 		expect(attribute(leakSpan, "tui.action")).toBe("console-warn");
 		// The free-form warning text never reaches telemetry.
 		expect(JSON.stringify(spans)).not.toContain("buffer not disposed");
@@ -79,7 +82,8 @@ test("library warnings while the agent editor is open become warning toasts and 
 		// Unmounting releases the intercept for the rest of the session.
 		expect(console.warn).toBe(consoleWarnBeforeMount);
 	} finally {
-		delete process.env.HERDR_WORKFLOW_CONFIG;
+		if (previousConfig === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
+		else process.env.HERDR_WORKFLOW_CONFIG = previousConfig;
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
 }, 20000);

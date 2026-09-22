@@ -93,13 +93,13 @@ import {
 	quitConfirmation,
 	resolveQuitConfirmation,
 } from "../../lifecycle.ts";
+import { AgentPresetsView } from "../../settings/AgentPresetsView.tsx";
 import { resolveBackendSettings } from "../../settings/backend-info.ts";
 import {
 	type SettingsContext,
 	type SettingsItem,
 	settingsItems,
 } from "../../settings/items.ts";
-import { SettingsAgentEditor } from "../../settings/SettingsAgentEditor.tsx";
 import { SettingsSectionView } from "../../settings/SettingsSectionView.tsx";
 import {
 	refreshSettingsProjects,
@@ -542,7 +542,6 @@ export function App(props: {
 	// (route scope, agent config cache, client preferences, server reads) so the
 	// item builders stay pure and testable.
 	const [settingsAgentVersion, setSettingsAgentVersion] = createSignal(0);
-	const [settingsAgentEditor, setSettingsAgentEditor] = createSignal(false);
 	const settingsSection = (): SettingsSection | undefined =>
 		settingsSectionOfPage(currentPage());
 	/** Stable configured project id of a project-scoped Settings page. */
@@ -630,11 +629,6 @@ export function App(props: {
 			setSettingsAgentVersion((value) => value + 1),
 		);
 	});
-	// Leaving Settings closes the shared editor: its keymap layer is registered
-	// by the editor itself, so a hidden page must not keep it mounted.
-	createEffect(() => {
-		if (!currentPage().startsWith("settings")) setSettingsAgentEditor(false);
-	});
 	const settingsIndex = (): number =>
 		pages.viewState<number>(pages.current()) ?? 0;
 	const setSettingsIndex = (index: number): void => {
@@ -657,24 +651,15 @@ export function App(props: {
 				void refreshSettingsProviders(props.environments?.serverUrl);
 				void refreshSettingsProjects(props.environments?.serverUrl);
 				return;
-			case "open-agents": {
-				const ident = settingsProjectIdent();
-				if (ident && !settingsAgentRepository()) {
-					notify(
-						`Project ${ident} is not in the connected server's catalog; refusing to edit a local fallback configuration`,
-						"error",
-					);
-					return;
-				}
-				setSettingsAgentEditor(true);
-				return;
-			}
 			case "navigate":
 				pages.navigate(item.action.route);
 				return;
 		}
 	};
 	const handleSettingsKey = (key: string, shifted: boolean): boolean => {
+		// The Agent Presets section is one inline surface that owns its keys
+		// through its own keymap layer (so names can contain any character).
+		if (settingsSection() === "agents") return false;
 		const items = settingsSectionItems();
 		if (!items) return false;
 		if (shifted && key === "r") {
@@ -2184,7 +2169,10 @@ export function App(props: {
 			return;
 		}
 		// Settings sections publish their own catalog: the destination catalog
-		// describes a list of pages, which a section is not.
+		// describes a list of pages, which a section is not. Agent Presets owns
+		// its sub-view catalog itself (the inline form is not a shell page), so
+		// return before the fallback: opening/closing `?` must not overwrite it.
+		if (settingsSection() === "agents") return;
 		if (settingsSection()) {
 			setActiveKeybindCatalog(settingsKeybindCatalog());
 			return;
@@ -2278,11 +2266,44 @@ export function App(props: {
 							/>
 						) : null;
 					})()}
+					{/* Agent Presets: an inline menu, list and form (no editor modal). */}
+					{settingsSection() === "agents" &&
+						props.dashboard &&
+						(() => {
+							const ident = settingsProjectIdent();
+							const repository = settingsAgentRepository();
+							// A project-scoped page must never fall back to the user config: if the
+							// project is not in the catalog (or has no checkout) refuse the editor.
+							if (ident && !repository)
+								return (
+									<box
+										style={{
+											flexGrow: 1,
+											justifyContent: "center",
+											alignItems: "center",
+										}}
+									>
+										<text fg={uiColors.textMuted}>
+											{settingsProjects().state === "loading"
+												? `Reading project ${ident}…`
+												: `Project ${ident} is not in the connected server's catalog; refusing to edit a local fallback configuration`}
+										</text>
+									</box>
+								);
+							return (
+								<AgentPresetsView
+									keymap={props.dashboard.keymap}
+									items={settingsSectionItems() ?? []}
+									onActivate={activateSettingsItem}
+									{...(repository ? { repository } : {})}
+								/>
+							);
+						})()}
 					{/* Settings sections: one list of effective values per section. */}
 					{(() => {
 						const section = settingsSection();
 						const items = settingsSectionItems();
-						return section && items ? (
+						return section && section !== "agents" && items ? (
 							<SettingsSectionView
 								items={items}
 								selectedIndex={settingsIndex()}
@@ -2545,16 +2566,6 @@ export function App(props: {
 					title="Keybindings"
 					offset={helpOffset()}
 					lines={helpLines()}
-				/>
-			)}
-			{/* The shared profile/preset editor, owned by Settings (task 2.1). */}
-			{settingsAgentEditor() && props.dashboard && (
-				<SettingsAgentEditor
-					keymap={props.dashboard.keymap}
-					{...(settingsAgentRepository()
-						? { repository: settingsAgentRepository() }
-						: {})}
-					onClose={() => setSettingsAgentEditor(false)}
 				/>
 			)}
 			{/* Contextual workflow creation: one form for a configured project

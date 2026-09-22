@@ -529,7 +529,7 @@ question tools must survive it.
    `bun run scripts/generate-embedded.ts`) and confirm
    `AGENT_DEFINITION_VERSION` changed; never hand-edit
    `src/workflow/embedded.generated.ts`.
-6. Consume the role only through the catalog: the dashboard preset editor
+6. Consume the role only through the catalog: the Settings Agent Presets form
    imports `VERIFIER_ROLES`, so no second role list is edited. Keep
    `test-verifier` the sole engine-auto-launched verifier and the only owner
    of the complete repository test suite.
@@ -537,7 +537,7 @@ question tools must survive it.
    digest table, add a registration test that every catalog role resolves a
    pinned asset, then run the focused workflow tests (`bun test
    test/workflow-steps.test.ts test/workflow-registry.test.ts
-   test/workflow-model-config.test.ts test/dash/modelConfigModal.test.tsx`),
+   test/workflow-model-config.test.ts test/app/agentPresetsView.test.tsx`),
    `bun run lint`, `bun run type-check`, and `bun run build` with zero
    diagnostics.
 

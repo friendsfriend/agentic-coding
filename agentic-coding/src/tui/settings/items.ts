@@ -25,8 +25,6 @@ export type SettingsAction =
 	| { kind: "none" }
 	/** Open the shared theme picker (search, live preview, save on selection). */
 	| { kind: "theme-picker" }
-	/** Open the shared profile/preset editor. */
-	| { kind: "open-agents" }
 	/** Re-read the connected server after an unavailable/error state. */
 	| { kind: "retry" }
 	| { kind: "navigate"; route: Route };
@@ -214,36 +212,24 @@ function agentItems(context: SettingsContext): SettingsItem[] {
 			action: { kind: "none" },
 		});
 	}
+	// The section renders the two menu options as its first selectable rows; the
+	// items stay declared here so the inventory reachability check can name them.
 	items.push({
-		id: "agents.manage",
-		label: "Profiles and presets…",
-		value: `${agents.profiles.length} profiles · ${agents.presets.length} presets`,
-		detail: `${detailFor(
-			agents.scope,
-			source,
-			"next-start",
-		)} · explicit save, validated before write`,
+		id: "agents.profiles",
+		label: "Model profiles",
+		value: `${agents.profiles.length} configured`,
+		detail: `${detailFor(agents.scope, source, "next-start")} · edit the selected profile or add one`,
 		editable: true,
-		action: { kind: "open-agents" },
+		action: { kind: "none" },
 	});
-	for (const profile of agents.profiles)
-		items.push({
-			id: `agents.profile.${profile.name}`,
-			label: `Profile ${profile.name}`,
-			value: profile.value,
-			detail: `${detailFor(agents.scope, source, "next-start")} · edit under Profiles and presets`,
-			editable: true,
-			action: { kind: "open-agents" },
-		});
-	for (const preset of agents.presets)
-		items.push({
-			id: `agents.preset.${preset.name}`,
-			label: `Preset ${preset.name}`,
-			value: preset.value,
-			detail: `${detailFor(agents.scope, source, "next-start")} · edit under Profiles and presets`,
-			editable: true,
-			action: { kind: "open-agents" },
-		});
+	items.push({
+		id: "agents.presets",
+		label: "Presets",
+		value: `${agents.presets.length} configured`,
+		detail: `${detailFor(agents.scope, source, "next-start")} · edit the selected preset or add one`,
+		editable: true,
+		action: { kind: "none" },
+	});
 	for (const entry of agents.routing)
 		items.push({
 			id: `agents.routing.${entry.label}`,
