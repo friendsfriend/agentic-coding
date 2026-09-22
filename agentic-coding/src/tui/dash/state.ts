@@ -63,10 +63,9 @@ export function createPanelState(): PanelState {
 	};
 }
 
-/** The developer-dialogue form: which question, which tab, and the drafts. */
+/** The developer-dialogue form: which question, which tab, and the drafts.
+ * Visibility belongs to the shell modal host, so this state is values only. */
 export interface DialogueState {
-	readonly open: () => boolean;
-	readonly setOpen: Setter<boolean>;
 	readonly tab: () => number;
 	readonly setTab: Setter<number>;
 	readonly promptOffset: () => number;
@@ -86,7 +85,6 @@ export interface DialogueState {
 }
 
 export function createDialogueState(): DialogueState {
-	const [open, setOpen] = createSignal(false);
 	const [tab, setTab] = createSignal(0);
 	const [promptOffset, setPromptOffset] = createSignal(0);
 	const [selection, setSelection] = createSignal(0);
@@ -95,8 +93,6 @@ export function createDialogueState(): DialogueState {
 	const [drafts, setDrafts] = createSignal<Record<string, DialogueDraft>>({});
 	const [submitting, setSubmitting] = createSignal(false);
 	return {
-		open,
-		setOpen,
 		tab,
 		setTab,
 		promptOffset,
