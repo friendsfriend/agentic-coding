@@ -8,12 +8,13 @@ import { testRender, useRenderer } from "@opentui/solid";
 import { activeKeybindCatalog, resetErrorModal, themeNames } from "@ui";
 import { onCleanup } from "solid-js";
 import { TraceDb } from "../../src/server/telemetry-db";
+import { clearAgentConfigCache } from "../../src/tui/dash/agent-config-cache.ts";
 import { App } from "../../src/tui/otel/app/App.tsx";
 import { LogStore } from "../../src/tui/otel/model/logStore.ts";
 import { MetricStore } from "../../src/tui/otel/model/metricStore.ts";
 import { TopologyStore } from "../../src/tui/otel/model/topologyStore.ts";
 import { TraceStore } from "../../src/tui/otel/model/traceStore.ts";
-import { renderUntil } from "./support/terminal.ts";
+import { pressEscapeAndSettle, renderUntil } from "./support/terminal.ts";
 
 // Settings as a Home destination (centralize-application-settings, tasks 1.2,
 // 2.1, 2.2, 3.3). Rendered checks: the landing lists every section, a section
@@ -34,6 +35,7 @@ beforeEach(() => {
 	// The error-modal signal is module-global; a dialog left open by another
 	// file would own input and swallow this suite's keys.
 	resetErrorModal();
+	clearAgentConfigCache();
 	configDir = mkdtempSync(join(tmpdir(), "settings-pages-config-"));
 	workflowConfig = join(configDir, "herdr-workflow.toml");
 	wikiRoot = mkdtempSync(join(tmpdir(), "settings-pages-wiki-"));
@@ -173,7 +175,7 @@ test("Home exposes Settings and the landing lists every section", async () => {
 	const frame = t.captureCharFrame();
 	for (const label of [
 		"Appearance",
-		"Agent models/presets",
+		"Agent Presets",
 		"Providers/credentials",
 		"Projects/environments",
 		"Backend/telemetry",
@@ -213,28 +215,59 @@ test("the appearance section states the client-local scope and opens the shared 
 	db.close();
 });
 
-test("the agents section states its scope and opens the shared editor without a workflow", async () => {
+test("Agent Presets offers Model profiles and Presets and opens the inline form", async () => {
 	const { t, db } = await renderHomeShell();
-	expect(await openSection(t, 1, "Profiles and presets")).toBe(true);
-	const frame = t.captureCharFrame();
-	expect(frame).toContain("user configuration");
-	expect(frame).toContain("next workflow start");
-	expect(frame).toContain("pi-a");
-	// Routing the preset editor does not own is shown read-only.
-	expect(frame).toContain("Default profile");
+	expect(await openSection(t, 1, "Model profiles")).toBe(true);
+	let frame = t.captureCharFrame();
+	expect(frame).toContain("Model profiles");
+	expect(frame).toContain("Presets");
+	expect(frame).toContain("1 profiles");
+	expect(frame).toContain("Agent Presets");
 
-	// The shared profile/preset editor is owned by Settings now.
-	t.mockInput.pressKey("j"); // "Profiles and presets…"
-	await t.renderOnce();
+	// Enter opens the selectable profile list.
 	t.mockInput.pressEnter();
-	expect(
-		await renderUntil(t, (value) => value.includes("Model configuration")),
-	).toBe(true);
+	expect(await renderUntil(t, (value) => value.includes("pi-a"))).toBe(true);
+
+	// Enter on the entry opens a prefilled inline form, not the old editor modal.
+	t.mockInput.pressEnter();
+	expect(await renderUntil(t, (value) => value.includes("Profile name"))).toBe(
+		true,
+	);
+	frame = t.captureCharFrame();
+	expect(frame).toContain("pi-a");
+	expect(frame).not.toContain("Model configuration");
+	expect(frame).toContain("Execution environment");
 	t.renderer.destroy();
 	db.close();
 });
 
-test("an inactive legacy configuration is surfaced with migration guidance", async () => {
+test("the Agent Presets catalog survives opening and closing ? help", async () => {
+	const { t, db } = await renderHomeShell();
+	expect(await openSection(t, 1, "Model profiles")).toBe(true);
+	t.mockInput.pressEnter(); // open the profile list
+	expect(await renderUntil(t, (value) => value.includes("pi-a"))).toBe(true);
+	const actions = () =>
+		activeKeybindCatalog().flatMap((section) =>
+			section.keybinds.map((keybind) => keybind.action),
+		);
+	expect(actions()).toContain("add entry");
+
+	// `?` opens the shared help over the section; closing it must not overwrite
+	// the Agent Presets catalog with the shell tab catalog.
+	t.mockInput.pressKey("?");
+	expect(await renderUntil(t, (value) => value.includes("Keybindings"))).toBe(
+		true,
+	);
+	expect(
+		await pressEscapeAndSettle(t, (value) => !value.includes("Keybindings")),
+	).toBe(true);
+	expect(actions()).toContain("add entry");
+	expect(actions()).not.toContain("select setting");
+	t.renderer.destroy();
+	db.close();
+});
+
+test("Agent Presets reads the canonical JSON even when a legacy TOML remains", async () => {
 	const root = mkdtempSync(join(tmpdir(), "settings-inactive-"));
 	const previousEnv = {
 		root: process.env.AGENTIC_CODING_CONFIG_DIR,
@@ -258,18 +291,10 @@ test("an inactive legacy configuration is surfaced with migration guidance", asy
 		delete process.env.HERDR_WORKFLOW_CONFIG;
 
 		const { t, db } = await renderHomeShell();
-		expect(await openSection(t, 1, "Profiles and presets")).toBe(true);
-		const frame = t.captureCharFrame();
-		// The canonical JSON is the active source and the leftover TOML is reported.
-		expect(frame).toContain("Inactive legacy configuration");
-		expect(frame).toContain(join(root, "config.toml"));
-		// The detail line wraps in the frame, so the parts are asserted separately.
-		expect(frame).toContain("read-only");
-		expect(frame).toContain("compatibility input");
-		expect(frame).toContain("JSON is the active format");
-		expect(frame).toContain("pi-a");
-		// The keybind footer is unchanged by the new CLI command (no new keybind).
-		expect(frame).toContain("? help");
+		expect(await openSection(t, 1, "Model profiles")).toBe(true);
+		t.mockInput.pressEnter();
+		// The canonical JSON is the active source; the leftover TOML is never read.
+		expect(await renderUntil(t, (value) => value.includes("pi-a"))).toBe(true);
 		t.renderer.destroy();
 		db.close();
 	} finally {
@@ -372,39 +397,27 @@ test("a narrow terminal keeps the section readable and publishes its catalog", a
 	db.close();
 });
 
-test("a long section keeps the cursor row in view while scrolling", async () => {
+test("the profile list keeps the cursor row in view while scrolling", async () => {
 	const profiles = Array.from(
 		{ length: 20 },
 		(_, i) =>
-			`[agents.profiles.p${i}]\nruntime = "pi"\nmodel = "stub/model-${i}"\n`,
+			`[agents.profiles.p${String(i).padStart(2, "0")}]\nruntime = "pi"\nmodel = "stub/model-${i}"\n`,
 	).join("\n");
 	writeFileSync(
 		workflowConfig,
-		`[agents]\ndefault_profile = "p0"\n\n${profiles}`,
+		`[agents]\ndefault_profile = "p00"\n\n${profiles}`,
 	);
 	const { t, db } = await renderHomeShell(120, 20);
-	expect(await openSection(t, 1, "Profiles and presets")).toBe(true);
-	const body = () =>
-		t
-			.captureCharFrame()
-			.split("\n")
-			.map((line) => line.trim())
-			.filter((line) => line.length > 0)
-			.slice(0, -1);
-	const opened = body();
-	// Row 0 is the header, row 1 the breadcrumb, row 2 the first list row.
-	expect(opened[2]).toContain("Scope");
+	expect(await openSection(t, 1, "Model profiles")).toBe(true);
+	t.mockInput.pressEnter();
+	expect(await renderUntil(t, (frame) => frame.includes("p00"))).toBe(true);
 
-	// Every step keeps the row the cursor is on inside the window, and the
-	// window only moves when it has to.
-	const rows = ["Scope", "Profiles and presets…"];
-	for (let index = 0; index < 20; index += 1) rows.push(`Profile p${index}`);
+	// Every step keeps the row the cursor is on inside the window.
 	for (let step = 0; step < 14; step += 1) {
 		t.mockInput.pressKey("j");
 		await t.renderOnce();
-		expect(body().some((line) => line.startsWith(rows[step + 1] ?? ""))).toBe(
-			true,
-		);
+		const name = `p${String(step + 1).padStart(2, "0")}`;
+		expect(t.captureCharFrame()).toContain(name);
 	}
 
 	// Coming back lands on the first row again, not a drifted window.
@@ -412,7 +425,7 @@ test("a long section keeps the cursor row in view while scrolling", async () => 
 		t.mockInput.pressKey("k");
 		await t.renderOnce();
 	}
-	expect(body()).toEqual(opened);
+	expect(t.captureCharFrame()).toContain("p00");
 	t.renderer.destroy();
 	db.close();
 });

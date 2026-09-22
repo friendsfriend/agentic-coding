@@ -25,11 +25,15 @@ export type AgentsMutation =
 	| {
 			readonly kind: "set-profile";
 			readonly name: string;
+			/** Existing key to remove when it differs from `name` (a rename). */
+			readonly renameFrom?: string;
 			readonly profile: ProfileConfig;
 	  }
 	| {
 			readonly kind: "set-preset";
 			readonly name: string;
+			/** Existing key to remove when it differs from `name` (a rename). */
+			readonly renameFrom?: string;
 			readonly preset: PresetConfig;
 	  }
 	| { readonly kind: "delete-profile"; readonly name: string }
@@ -87,6 +91,10 @@ export function applyAgentsMutation(
 					Array.isArray(section.profiles)
 				)
 					throw new Error("agents.profiles must be a table of profiles");
+				if (mutation.renameFrom && mutation.renameFrom !== mutation.name)
+					delete (section.profiles as Record<string, unknown>)[
+						mutation.renameFrom
+					];
 				(section.profiles as Record<string, unknown>)[mutation.name] =
 					mutation.profile;
 				return;
@@ -99,6 +107,10 @@ export function applyAgentsMutation(
 					Array.isArray(section.presets)
 				)
 					throw new Error("agents.presets must be a table of presets");
+				if (mutation.renameFrom && mutation.renameFrom !== mutation.name)
+					delete (section.presets as Record<string, unknown>)[
+						mutation.renameFrom
+					];
 				(section.presets as Record<string, unknown>)[mutation.name] =
 					mutation.preset;
 				return;

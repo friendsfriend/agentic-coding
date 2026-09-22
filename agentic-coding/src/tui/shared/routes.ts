@@ -87,7 +87,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<
 	Record<SettingsSection, string>
 > = {
 	appearance: "Appearance",
-	agents: "Agent models/presets",
+	agents: "Agent Presets",
 	providers: "Providers/credentials",
 	projects: "Projects/environments",
 	backend: "Backend/telemetry",
@@ -98,7 +98,7 @@ export const SETTINGS_SECTION_DESCRIPTIONS: Readonly<
 	Record<SettingsSection, string>
 > = {
 	appearance: "Theme and client-local UI preferences",
-	agents: "Agent profiles, configuration presets and routing",
+	agents: "Model profiles and configuration presets",
 	providers: "Git providers and protected credentials",
 	projects: "Configured applications, libraries and environments",
 	backend: "Server ownership, telemetry receivers and retention",

@@ -25,6 +25,7 @@ export * from "./components/ErrorModalOverlay.tsx";
 export * from "./components/errorModal.ts";
 export * from "./components/FilterModal.tsx";
 export * from "./components/FilterStatusBar.tsx";
+export * from "./components/Form.tsx";
 export * from "./components/FrontmatterView.tsx";
 export * from "./components/GenericModal.tsx";
 export * from "./components/Header.tsx";

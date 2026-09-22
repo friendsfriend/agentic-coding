@@ -10,8 +10,9 @@ export interface PresetChoice {
 	value?: string;
 }
 
-/** Small workflow-scoped picker. Configuration management remains in
- * ModelConfigModal; this dialog only chooses a preset for the current run. */
+/** Small workflow-scoped picker. Configuration management lives in the
+ * Settings Agent Presets surface; this dialog only chooses a preset for the
+ * current run. */
 export function PresetSwitcherModal(props: {
 	choices: readonly PresetChoice[];
 	selected?: string;
