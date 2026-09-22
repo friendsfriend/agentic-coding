@@ -23,4 +23,4 @@ UI Rework / Devenv union:
     * Remove scope option
 * Build proper provider settings ui for github and gitlab git providers
     * No proper ui has been built yet
-* Introduce phase based telemetry grouping (tree view)
+* Implement proper developer question ui (Demo Iwan)
