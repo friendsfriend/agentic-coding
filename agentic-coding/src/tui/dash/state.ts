@@ -174,8 +174,6 @@ export interface OverlayState {
 export interface RepairTarget {
 	readonly targetStep: string;
 	readonly label: string;
-	readonly expiresRuns: readonly string[];
-	readonly retainedEvidence: readonly string[];
 }
 
 export interface FindingsOverlayData {

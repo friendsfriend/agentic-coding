@@ -355,8 +355,6 @@ export function createDashboardKeyHandler(
 						(await previewRepair(props.repo, props.workflowId)) as Array<{
 							targetStep: string;
 							label: string;
-							expiresRuns: string[];
-							retainedEvidence: string[];
 						}>,
 					);
 					setRepairSelection(0);
