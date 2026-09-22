@@ -16,7 +16,7 @@
     "root": "~/.config/agentic-coding/wiki"
   },
   "telemetry": {
-    "capture_content": false
+    "capture_content": true
   },
   "ui": {
     "theme": "catppuccin",

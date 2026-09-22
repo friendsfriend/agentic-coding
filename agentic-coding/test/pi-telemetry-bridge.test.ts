@@ -128,7 +128,12 @@ test("pi telemetry bridge books tool durations, provider status, compaction, and
 	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "bridge-hooks-"));
 	const telemetryPath = path.join(repo, "telemetry.jsonl");
 	const savedPath = process.env.HERDR_TELEMETRY_PATH;
+	const savedCapture = process.env.HERDR_CAPTURE_CONTENT;
 	process.env.HERDR_TELEMETRY_PATH = telemetryPath;
+	// This test asserts metadata only (the failed tool must not leak its result),
+	// so pin capture off: an outer HERDR_CAPTURE_CONTENT=1 (the shipped default)
+	// would otherwise put the tool result in the raw file and fail the assertion.
+	delete process.env.HERDR_CAPTURE_CONTENT;
 	try {
 		const module = path.join(repo, "bridge-hooks.ts");
 		fs.copyFileSync(
@@ -311,6 +316,8 @@ test("pi telemetry bridge books tool durations, provider status, compaction, and
 	} finally {
 		if (savedPath === undefined) delete process.env.HERDR_TELEMETRY_PATH;
 		else process.env.HERDR_TELEMETRY_PATH = savedPath;
+		if (savedCapture === undefined) delete process.env.HERDR_CAPTURE_CONTENT;
+		else process.env.HERDR_CAPTURE_CONTENT = savedCapture;
 		fs.rmSync(repo, { recursive: true, force: true });
 	}
 });
