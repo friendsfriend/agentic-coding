@@ -2422,10 +2422,7 @@ export function App(props: {
 					repairOpen()
 						? {
 								revision: data().state.revision,
-								items: repairTargets().map(
-									(target) =>
-										`${target.label} · expire [${target.expiresRuns.slice(0, 4).join(", ") || "none"}${target.expiresRuns.length > 4 ? ", …" : ""}] · retain [${target.retainedEvidence.slice(0, 4).join(", ") || "none"}${target.retainedEvidence.length > 4 ? ", …" : ""}]`,
-								),
+								items: repairTargets().map((target) => target.label),
 							}
 						: undefined
 				}

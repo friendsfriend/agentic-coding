@@ -78,7 +78,6 @@ export interface VerdictOverlay {
 
 /** The overlay values and selections owned by `dash/state.ts`. */
 export interface OverlaysState {
-	readonly repairTargets: () => readonly RepairTarget[];
 	readonly repairSelection: () => number;
 	readonly completedSelection: () => number;
 	readonly actionReason: () => string;
@@ -97,12 +96,6 @@ export interface OverlaysState {
 		| undefined;
 	readonly verdictOffset: () => number;
 	readonly verdictRenderMarkdown: () => boolean;
-}
-
-export interface RepairTarget {
-	readonly label: string;
-	readonly expiresRuns: readonly string[];
-	readonly retainedEvidence: readonly string[];
 }
 
 export interface OverlaysProps {
