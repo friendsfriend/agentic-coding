@@ -42,6 +42,12 @@ export interface MarkdownReviewViewProps {
 	 * name and the shell footer the keybinds.
 	 */
 	page?: boolean;
+	/**
+	 * Insert one blank line between top-level blocks. The wiki note page sets
+	 * this so prose paragraphs breathe; the review surfaces keep the compact
+	 * one-row-per-block layout.
+	 */
+	blockSpacing?: boolean;
 }
 
 /**
@@ -248,6 +254,11 @@ export function MarkdownReviewView(props: MarkdownReviewViewProps) {
 
 						return (
 							<>
+								{/* Reading rhythm: a blank line between blocks, never before the
+								    first one. Comment rows stay attached to their block. */}
+								<Show when={props.blockSpacing && index() > 0}>
+									<box height={1} />
+								</Show>
 								<box
 									id={`block-${index()}`}
 									flexDirection="row"

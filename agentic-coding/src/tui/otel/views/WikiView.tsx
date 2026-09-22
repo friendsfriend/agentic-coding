@@ -4,6 +4,7 @@ import type { Keymap } from "@opentui/keymap";
 import { useTerminalDimensions } from "@opentui/solid";
 import type { Discussion } from "@ui";
 import {
+	FrontmatterModal,
 	hostBodyLines,
 	MarkdownReviewView as MarkdownViewModal,
 	ScrollableList,
@@ -24,7 +25,6 @@ import {
 	flattenWikiTree,
 	listConcepts,
 	readConcept,
-	renderDocument,
 	type WikiConcept,
 	type WikiReviewComment,
 	type WikiTreeNode,
@@ -94,6 +94,7 @@ export function WikiView(props: WikiViewProps) {
 		start?: number;
 		end?: number;
 	}>({});
+	const [frontmatterOpen, setFrontmatterOpen] = createSignal(false);
 	createEffect(() => setWikiCommentEntry(commentMode()));
 	onCleanup(() => setWikiCommentEntry(false));
 
@@ -127,6 +128,7 @@ export function WikiView(props: WikiViewProps) {
 		setCommentMode(false);
 		setCommentText("");
 		setSourceRange({});
+		setFrontmatterOpen(false);
 	});
 
 	const rows = createMemo(() => {
@@ -276,7 +278,19 @@ export function WikiView(props: WikiViewProps) {
 
 	const handleKey = (event: KeyEvent): boolean => {
 		const key = event.name.toLowerCase();
+		// Terminals deliver a shifted letter either as `shift` or as the uppercase
+		// character; accept both, exactly as the shell's own shift handling does.
+		const shifted =
+			event.shift ||
+			(event.name.length === 1 && event.name >= "A" && event.name <= "Z");
 		const currentNote = note();
+		// The frontmatter popup is modal over the note: only its own close keys
+		// act, and every other key is swallowed so the page underneath stays put.
+		if (frontmatterOpen()) {
+			if (key === "escape" || (key === "f" && shifted))
+				setFrontmatterOpen(false);
+			return true;
+		}
 		if (commentMode()) {
 			if (key === "escape") {
 				setCommentMode(false);
@@ -300,6 +314,11 @@ export function WikiView(props: WikiViewProps) {
 		// shell's structural up-step instead of consuming it (an open note closes
 		// below, and a comment is cancelled above).
 		if (key === "escape" && !currentNote) return false;
+		// Shift+F is the frontmatter view; plain `f` keeps finishing the review.
+		if (key === "f" && shifted) {
+			if (currentNote) setFrontmatterOpen((open) => !open);
+			return true;
+		}
 		if (key === "f") {
 			void finish();
 			return true;
@@ -318,6 +337,7 @@ export function WikiView(props: WikiViewProps) {
 			if (key === "escape") {
 				props.onCloseNote();
 				setVisualMode(false);
+				setFrontmatterOpen(false);
 				return true;
 			}
 			if (key === "j" || key === "down") {
@@ -466,8 +486,9 @@ export function WikiView(props: WikiViewProps) {
 				{(current) => (
 					<MarkdownViewModal
 						page
+						blockSpacing
 						filePath={current().id}
-						content={renderDocument(current().frontmatter, current().body)}
+						content={current().body.replace(/^\n+/, "")}
 						currentFileIndex={Math.max(0, notePosition())}
 						totalFiles={Math.max(1, concepts().length)}
 						selectedLine={selectedLine()}
@@ -482,6 +503,16 @@ export function WikiView(props: WikiViewProps) {
 						}
 						onClose={() => props.onCloseNote()}
 						onNavigateFile={navigateNote}
+					/>
+				)}
+			</Show>
+			{/* Frontmatter leaves the reading view by default and returns here, on
+			    demand, as structured rows rather than a raw fenced block. */}
+			<Show when={frontmatterOpen() && note()}>
+				{(current) => (
+					<FrontmatterModal
+						frontmatter={current().frontmatter}
+						onClose={() => setFrontmatterOpen(false)}
 					/>
 				)}
 			</Show>
