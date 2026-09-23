@@ -27,6 +27,7 @@ import {
 	type CommandEventSink,
 	CommandHandler,
 	OSCommandRunner,
+	type CommandRunner,
 } from "./command.ts";
 import {
 	compileDockerLifecycleActions,
@@ -36,6 +37,8 @@ import {
 	compileKubernetesLifecycleActions,
 } from "./compile.ts";
 import { Coordinator } from "./coordinator.ts";
+import { createQueuedCredentialPrompt } from "../../workflow/execution-coordinator.ts";
+import { runGitWithCredentials } from "../../workflow/credentials.ts";
 import { discoverActionTargets } from "./discovery.ts";
 import { type CommandStepHandler, Engine, type EngineEvent } from "./engine.ts";
 import {
@@ -748,9 +751,10 @@ async function executeRun(
 			}
 		},
 	};
-	// A `git` step runs through the same Bun argv boundary the Git capability
-	// uses, in-process: the earlier Go-owned bridge is not in this path.
-	const command = new CommandHandler(new OSCommandRunner(), commandSink);
+	// Git's ssh subprocess cannot read a passphrase from the action's piped
+	// stdio. Route askpass requests through the dashboard's existing credential
+	// modal; all other command types keep the regular process runner.
+	const command = new CommandHandler(actionCommandRunner(), commandSink);
 	const readiness = new ReadinessHandler(
 		new StandardProbeFactory({
 			processes,
@@ -894,6 +898,33 @@ async function runOperation(
 	return {
 		outcome: OUTCOME.failed,
 		error: new Error(result.error ?? "operation failed"),
+	};
+}
+
+function actionCommandRunner(): CommandRunner {
+	const regular = new OSCommandRunner();
+	return {
+		run: async (spec, output, signal) => {
+			if (spec.name !== "git") return regular.run(spec, output, signal);
+			try {
+				const stdout = await runGitWithCredentials(
+					spec.dir ?? process.cwd(),
+					spec.args,
+					{ prompt: createQueuedCredentialPrompt(), signal },
+				);
+				if (stdout !== "") output?.("stdout", stdout);
+				return { stdout, stderr: "", exitCode: 0 };
+			} catch (error) {
+				const stderr = error instanceof Error ? error.message : String(error);
+				if (stderr !== "") output?.("stderr", stderr);
+				return {
+					stdout: "",
+					stderr,
+					exitCode: 1,
+					error: error instanceof Error ? error : new Error(stderr),
+				};
+			}
+		},
 	};
 }
 
