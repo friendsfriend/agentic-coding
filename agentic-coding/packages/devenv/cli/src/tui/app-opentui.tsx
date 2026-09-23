@@ -3,18 +3,14 @@ import type { App } from "@devenv/types";
 import { createCliRenderer } from "@opentui/core";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { KeymapProvider, useKeymap } from "@opentui/keymap/solid";
-import {
-	render,
-	usePaste,
-	useRenderer,
-	useTerminalDimensions,
-} from "@opentui/solid";
+import { render, usePaste, useRenderer } from "@opentui/solid";
 import {
 	getSelectableRows,
 	Header,
 	Layout,
 	StatusBar,
 	setGlobalSelectionMouseUpHandler,
+	useTerminalDimensions,
 } from "@ui";
 import {
 	createEffect,

@@ -1,7 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 
 import { TextAttributes } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/solid";
 import { createMemo, For, Show } from "solid-js";
 import { Badge } from "../components/Badge";
 import { ContentPanel } from "../components/ContentStack";
@@ -20,6 +19,7 @@ import {
 	gitlabHtmlToMarkdown,
 } from "../components/utils/gitlabHtml.ts";
 import { calculateVisibleItems } from "../components/utils/virtualScroll";
+import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors";
 import type {
 	ChangeRequestChange,

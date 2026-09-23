@@ -1,8 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 
 import type { ScrollBoxRenderable } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/solid";
 import { createEffect, createMemo, For, Show } from "solid-js";
+import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors";
 import { GenericModal } from "./GenericModal.tsx";
 import { MarkdownBlockView } from "./MarkdownViewer.tsx";

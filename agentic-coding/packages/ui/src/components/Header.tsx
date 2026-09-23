@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { TextAttributes } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/solid";
+import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { colors, uiColors } from "../theme/colors";
 import { highlightColor } from "./Highlight.tsx";
 import {

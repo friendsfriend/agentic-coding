@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 
-import { useTerminalDimensions } from "@opentui/solid";
 import { createMemo, For, type JSX, Show } from "solid-js";
+import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors";
 import { AnimatedStatusText } from "./AnimatedStatusText.tsx";
 import { useModalContentLines } from "./GenericModal.tsx";

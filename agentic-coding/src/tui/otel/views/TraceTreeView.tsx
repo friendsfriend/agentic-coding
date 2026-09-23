@@ -1,7 +1,11 @@
 /** @jsxImportSource @opentui/solid */
 import { TextAttributes } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/solid";
-import { HighlightedText, Selectable, uiColors } from "@ui";
+import {
+	HighlightedText,
+	Selectable,
+	uiColors,
+	useTerminalDimensions,
+} from "@ui";
 import { createMemo, For } from "solid-js";
 import type { TreeNode } from "../../../contracts/telemetry.ts";
 

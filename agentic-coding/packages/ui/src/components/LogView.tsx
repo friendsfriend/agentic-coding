@@ -1,8 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 
 import { TextAttributes } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/solid";
 import { createEffect, createSignal, For } from "solid-js";
+import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors";
 
 export interface LogViewProps {

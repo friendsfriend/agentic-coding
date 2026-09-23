@@ -2,7 +2,6 @@
 
 import type { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core";
 import { TextAttributes } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/solid";
 import {
 	focusSoon,
 	GenericModal,
@@ -10,6 +9,7 @@ import {
 	ScrollableContent,
 	SelectableList,
 	uiColors,
+	useTerminalDimensions,
 } from "@ui";
 import { createEffect, Show, untrack } from "solid-js";
 import {

@@ -12,8 +12,9 @@
 // Help is accepted as entries (the dashboard's shape) or as a pre-formatted
 // string (the env's), and `renderItem` gets a selection *getter* so a cursor
 // move does not re-render the whole list.
-import { useTerminalDimensions } from "@opentui/solid";
+
 import { createMemo, type JSX } from "solid-js";
+import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors";
 import type { SummaryEntry } from "./GenericModal.tsx";
 import { GenericModal } from "./GenericModal.tsx";

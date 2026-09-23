@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 
-import { useTerminalDimensions } from "@opentui/solid";
 import { createMemo } from "solid-js";
+import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 
 export interface RunningTextProps {
 	text: string;

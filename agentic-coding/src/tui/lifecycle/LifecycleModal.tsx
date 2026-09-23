@@ -4,8 +4,8 @@
 // pattern as dash/ui/GenericModal.tsx) so it covers the terminal regardless of
 // the active tab. Renders nothing when the lifecycle phase is idle/running.
 import { RGBA, TextAttributes } from "@opentui/core";
-import { Portal, useTerminalDimensions } from "@opentui/solid";
-import { colors, uiColors } from "@ui";
+import { Portal } from "@opentui/solid";
+import { colors, uiColors, useTerminalDimensions } from "@ui";
 import {
 	createEffect,
 	createMemo,

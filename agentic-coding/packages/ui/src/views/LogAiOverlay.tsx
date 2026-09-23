@@ -1,11 +1,11 @@
 /** @jsxImportSource @opentui/solid */
 
 import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/solid";
 import { Show } from "solid-js";
 import { AnimatedStatusText } from "../components/AnimatedStatusText";
 import { getMarkdownSyntaxStyle } from "../components/markdownSyntax.ts";
 import { ScrollableContent } from "../components/ScrollableContent";
+import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { colors, uiColors } from "../theme/colors";
 
 export interface LogAiOverlayProps {

@@ -65,6 +65,7 @@ export * from "./components/utils/focusSoon";
 export * from "./components/utils/gitlabHtml.ts";
 export * from "./components/utils/virtualScroll";
 export * from "./components/VerdictModal.tsx";
+export * from "./hooks/useTerminalDimensions.ts";
 export * from "./theme/animationColors.ts";
 export * from "./theme/colors.ts";
 export * from "./theme/terminal-theme";

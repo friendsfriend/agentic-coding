@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
-import { useTerminalDimensions } from "@opentui/solid";
+
 import type { JSX } from "solid-js";
+import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors";
 import { useModalContentLines } from "./GenericModal.tsx";
 import { hostBodyLines } from "./hostChrome.ts";

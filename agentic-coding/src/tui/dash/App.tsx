@@ -3,7 +3,7 @@
 import { join } from "node:path";
 import type { KeyEvent, Renderable, ScrollBoxRenderable } from "@opentui/core";
 import type { Binding, Keymap } from "@opentui/keymap";
-import { useRenderer, useTerminalDimensions } from "@opentui/solid";
+import { useRenderer } from "@opentui/solid";
 import {
 	activeErrorModal,
 	createModalHost,
@@ -18,6 +18,7 @@ import {
 	showErrorModal,
 	themeNames,
 	uiColors,
+	useTerminalDimensions,
 } from "@ui";
 import {
 	createEffect,

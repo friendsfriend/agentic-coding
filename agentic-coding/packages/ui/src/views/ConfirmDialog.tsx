@@ -1,9 +1,9 @@
 /** @jsxImportSource @opentui/solid */
 import { TextAttributes } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/solid";
 import { GenericModal } from "../components/GenericModal";
 import { formatHelpText } from "../components/HelpText.tsx";
 import { SearchHeader } from "../components/SearchHeader";
+import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors";
 
 export interface ConfirmDialogProps {

@@ -1,7 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 
 import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/solid";
 import { createMemo, For, type JSX, Show } from "solid-js";
 import { GenericModal } from "../components/GenericModal";
 import { formatHelpText } from "../components/HelpText.tsx";
@@ -13,6 +12,7 @@ import { ScrollableContent } from "../components/ScrollableContent";
 import { ScrollableList } from "../components/ScrollableList";
 import { SearchHeader } from "../components/SearchHeader";
 import { focusSoon } from "../components/utils/focusSoon";
+import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors";
 import { ModalTabs } from "./ModalTabs.tsx";
 import { WorkItemCard } from "./WorkItemCard.tsx";

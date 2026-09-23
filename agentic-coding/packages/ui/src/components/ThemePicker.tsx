@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
-import { useTerminalDimensions } from "@opentui/solid";
+
 import { createMemo, For } from "solid-js";
+import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors";
 import { themeColorForTheme, themeNames } from "../theme/theme";
 import { GenericModal } from "./GenericModal.tsx";

@@ -1,6 +1,5 @@
 /** @jsxImportSource @opentui/solid */
 import { TextAttributes } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/solid";
 import {
 	Badge,
 	HighlightedText,
@@ -8,6 +7,7 @@ import {
 	SearchHeader,
 	SelectableList,
 	uiColors,
+	useTerminalDimensions,
 } from "@ui";
 import type { TraceSummary } from "../../../contracts/telemetry.ts";
 

@@ -1,7 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 import { TextAttributes } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/solid";
-import { hostBodyLines, SearchHeader, SelectableList, uiColors } from "@ui";
+import {
+	hostBodyLines,
+	SearchHeader,
+	SelectableList,
+	uiColors,
+	useTerminalDimensions,
+} from "@ui";
 import { createMemo } from "solid-js";
 import type { LogStore } from "../model/logStore.ts";
 

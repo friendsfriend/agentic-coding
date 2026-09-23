@@ -4,8 +4,13 @@
 // destinations, not a tab row, and the row chrome comes from the shell's
 // breadcrumb. Selection state is controlled by the caller so it can live in
 // route-keyed view state and survive leaving and returning.
-import { useTerminalDimensions } from "@opentui/solid";
-import { Card, hostBodyLines, ScrollableList, uiColors } from "@ui";
+import {
+	Card,
+	hostBodyLines,
+	ScrollableList,
+	uiColors,
+	useTerminalDimensions,
+} from "@ui";
 import { Show } from "solid-js";
 import type { Route } from "../routes.ts";
 import type { DestinationEntry } from "./destinations.ts";

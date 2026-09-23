@@ -4,13 +4,13 @@
 // line, and a row that cannot be edited here is marked read-only instead of
 // looking like an editable control. Selection is controlled by the shell so it
 // lives in route-keyed view state and survives leaving and returning.
-import { useTerminalDimensions } from "@opentui/solid";
 import {
 	Card,
 	hostChromeLines,
 	LAYOUT_CHROME_LINES,
 	ScrollableList,
 	uiColors,
+	useTerminalDimensions,
 } from "@ui";
 import { Show } from "solid-js";
 import type { SettingsItem } from "./items.ts";

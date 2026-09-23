@@ -1,11 +1,11 @@
 /** @jsxImportSource @opentui/solid */
 
 import { TextAttributes } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/solid";
 import { Show } from "solid-js";
 import { GenericModal } from "../components/GenericModal";
 import { formatHelpText } from "../components/HelpText.tsx";
 import { RunningText } from "../components/RunningText";
+import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors";
 
 export interface PassphraseModalProps {

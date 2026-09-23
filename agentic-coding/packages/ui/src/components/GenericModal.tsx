@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { RGBA, TextAttributes } from "@opentui/core";
-import { Portal, useTerminalDimensions } from "@opentui/solid";
+import { Portal } from "@opentui/solid";
 import {
 	createContext,
 	createEffect,
@@ -12,6 +12,7 @@ import {
 	untrack,
 	useContext,
 } from "solid-js";
+import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { colors, uiColors } from "../theme/colors";
 import { FilterStatusBar } from "./FilterStatusBar.tsx";
 import { HelpText, wrapHelpEntries } from "./HelpText.tsx";

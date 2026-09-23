@@ -9,7 +9,6 @@
 // character without the shell's single-letter shortcuts firing.
 import type { KeyEvent, Renderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
-import { useTerminalDimensions } from "@opentui/solid";
 import {
 	Card,
 	Form,
@@ -26,6 +25,7 @@ import {
 	ScrollableList,
 	setActiveKeybindCatalog,
 	uiColors,
+	useTerminalDimensions,
 } from "@ui";
 import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
 import {

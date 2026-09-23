@@ -1,11 +1,11 @@
 /** @jsxImportSource @opentui/solid */
 // Shared markdown rendering — single source: src/tui/shared/MarkdownViewer.tsx.
 import type { ScrollBoxRenderable } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/solid";
 import { GenericModal } from "../components/GenericModal";
 import { formatHelpText } from "../components/HelpText.tsx";
 import { MarkdownViewer } from "../components/MarkdownViewer";
 import { ScrollableContent } from "../components/ScrollableContent";
+import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 
 export interface MarkdownModalProps {
 	title: string;

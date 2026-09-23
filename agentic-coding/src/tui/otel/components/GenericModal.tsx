@@ -1,6 +1,5 @@
 /** @jsxImportSource @opentui/solid */
 import { RGBA, TextAttributes } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/solid";
 import type { Keybind, KeybindSection } from "@ui";
 import {
 	FilterStatusBar,
@@ -10,6 +9,7 @@ import {
 	registerModalHelp,
 	SearchHeader,
 	uiColors,
+	useTerminalDimensions,
 	withModalHelpKeybind,
 } from "@ui";
 import { type JSX, onCleanup } from "solid-js";

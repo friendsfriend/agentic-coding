@@ -3,7 +3,7 @@
 import type { Renderable } from "@opentui/core";
 import { type KeyEvent, TextAttributes } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
-import { useRenderer, useTerminalDimensions } from "@opentui/solid";
+import { useRenderer } from "@opentui/solid";
 import {
 	activeErrorModal,
 	activeKeybindCatalog,
@@ -29,6 +29,7 @@ import {
 	ThemePickerModal,
 	themeNames,
 	uiColors,
+	useTerminalDimensions,
 } from "@ui";
 import {
 	createEffect,

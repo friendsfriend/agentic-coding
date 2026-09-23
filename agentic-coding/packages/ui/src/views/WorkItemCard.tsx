@@ -1,7 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 
 import { TextAttributes } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/solid";
 import { createMemo, For, type JSXElement, Show } from "solid-js";
 import {
 	type StatusAnimationIntent,
@@ -11,6 +10,7 @@ import { Badge } from "../components/Badge";
 import type { Highlight } from "../components/Highlight";
 import { MatchedText } from "../components/MatchedText";
 import { RunningText } from "../components/RunningText";
+import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors";
 
 export interface WorkItemCardProps {

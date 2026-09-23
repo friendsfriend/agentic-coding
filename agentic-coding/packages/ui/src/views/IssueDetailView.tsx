@@ -2,7 +2,6 @@
 
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { TextAttributes } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/solid";
 import { For, Show } from "solid-js";
 import { AnimatedStatusText } from "../components/AnimatedStatusText";
 import { ContentFrame } from "../components/ContentStack";
@@ -14,6 +13,7 @@ import {
 	containsHtml,
 	gitlabHtmlToMarkdown,
 } from "../components/utils/gitlabHtml.ts";
+import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors";
 import type { ChangeRequest, Issue, IssueComment } from "../types";
 import { DetailSection } from "./DetailSection.tsx";

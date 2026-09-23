@@ -1,7 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 
 import { TextAttributes } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/solid";
 import { createMemo, For, Show } from "solid-js";
 import { ContentFrame } from "../components/ContentStack";
 import { HighlightedText } from "../components/Highlight";
@@ -12,6 +11,7 @@ import {
 	containsHtml,
 	gitlabHtmlToMarkdown,
 } from "../components/utils/gitlabHtml.ts";
+import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors";
 import type {
 	ChangeRequest,

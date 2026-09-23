@@ -1,7 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import type { KeyEvent, Renderable } from "@opentui/core";
 import type { Keymap } from "@opentui/keymap";
-import { useTerminalDimensions } from "@opentui/solid";
 import type { Discussion } from "@ui";
 import {
 	FrontmatterModal,
@@ -11,6 +10,7 @@ import {
 	Selectable,
 	showErrorModal,
 	uiColors,
+	useTerminalDimensions,
 } from "@ui";
 import {
 	createEffect,

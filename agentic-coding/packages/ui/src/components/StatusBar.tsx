@@ -6,8 +6,8 @@
 // A surface that spreads keybinds over several rows (the env surface reserves
 // three footer lines) asks for more lines and the entries wrap into them.
 import { TextAttributes } from "@opentui/core";
-import { useTerminalDimensions } from "@opentui/solid";
 import { createMemo, Show } from "solid-js";
+import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors";
 import { HelpText } from "./HelpText.tsx";
 import type { Keybind } from "./keybinds.ts";
