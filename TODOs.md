@@ -14,11 +14,3 @@ Small ones:
 * Findings in the developer review:
     * Should show which reviewer marked the issue. 
     * Also it doesnt show a recommendation for a solution. I want it to have two parts: What is the issue? How can it be solved?
-
-
-UI Rework: 
-* Rework settings for model presets
-    * Make proper ui instead of popup
-    * Remove scope option
-* Build proper provider settings ui for github and gitlab git providers
-    * No proper ui has been built yet
