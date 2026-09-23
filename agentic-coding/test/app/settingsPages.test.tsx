@@ -177,11 +177,12 @@ test("Home exposes Settings and the landing lists every section", async () => {
 		"Appearance",
 		"Agent Presets",
 		"Providers/credentials",
-		"Projects/environments",
-		"Backend/telemetry",
 	]) {
 		expect(frame).toContain(label);
 	}
+	// The removed sections are gone from the landing entirely.
+	expect(frame).not.toContain("Projects/environments");
+	expect(frame).not.toContain("Backend/telemetry");
 	expect(frame).toContain("Home › Settings");
 	t.renderer.destroy();
 	db.close();
@@ -306,18 +307,6 @@ test("Agent Presets reads the canonical JSON even when a legacy TOML remains", a
 		else process.env.HERDR_WORKFLOW_CONFIG = previousEnv.workflow;
 		rmSync(root, { recursive: true, force: true });
 	}
-});
-
-test("the backend section reports restart-required read-only overrides", async () => {
-	const { t, db } = await renderHomeShell();
-	expect(await openSection(t, 4, "Backend endpoint")).toBe(true);
-	const frame = t.captureCharFrame();
-	expect(frame).toContain("connected server");
-	expect(frame).toContain("needs a restart");
-	expect(frame).toContain("value not shown");
-	expect(frame).toContain("not started");
-	t.renderer.destroy();
-	db.close();
 });
 
 test("an unavailable server is a retryable section error, not a local fallback", async () => {

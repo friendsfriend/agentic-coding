@@ -95,7 +95,6 @@ import {
 	resolveQuitConfirmation,
 } from "../../lifecycle.ts";
 import { AgentPresetsView } from "../../settings/AgentPresetsView.tsx";
-import { resolveBackendSettings } from "../../settings/backend-info.ts";
 import {
 	type SettingsContext,
 	type SettingsItem,
@@ -194,10 +193,11 @@ function stripSpanSuffix(resourceId: string | undefined): string | undefined {
 }
 
 /**
- * Read-only routing view for the Settings agent section: the agent settings a
+ * Read-only routing values for the Settings agent section: the agent settings a
  * preset editor does not own (default profile, per-step routes, role routes and
- * definition defaults) are shown with their effective value instead of being
- * silently unreachable (centralize-application-settings, task 2.2).
+ * definition defaults). They are resolved into the agents snapshot so the
+ * section's inventory stays complete; the actionable-only Agent Presets menu
+ * does not render read-only rows, so these values have no menu surface.
  */
 function agentRoutingEntries(
 	agents: AgentsConfig,
@@ -597,19 +597,11 @@ export function App(props: {
 				routing: agents ? agentRoutingEntries(agents) : [],
 			},
 			providers: settingsProviders(),
-			projects: settingsProjects(),
-			backend: {
-				values: resolveBackendSettings({
-					serverUrl: props.environments?.serverUrl,
-					owned: Boolean(props.environments && !props.attached),
-					attached: Boolean(props.attached),
-				}),
-			},
 		};
 	};
 	const settingsSectionItems = (): SettingsItem[] | undefined => {
 		if (!settingsSection()) return undefined;
-		return settingsItems(settingsContext(), settingsProjectIdent());
+		return settingsItems(settingsContext());
 	};
 	// Reads follow the visible section; an unavailable server stays a section
 	// error with a retry rather than a local write.
@@ -620,7 +612,7 @@ export function App(props: {
 		const ident = pages.current().resourceId;
 		if (section === "providers")
 			void refreshSettingsProviders(props.environments?.serverUrl);
-		if (section === "projects" || (section === "agents" && ident))
+		if (section === "agents" && ident)
 			void refreshSettingsProjects(props.environments?.serverUrl);
 	});
 	createEffect(() => {

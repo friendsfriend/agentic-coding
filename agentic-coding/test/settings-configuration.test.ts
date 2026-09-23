@@ -14,12 +14,9 @@ import {
 	loadAgentConfig,
 } from "../src/server/config.ts";
 import {
-	flagValue,
-	resolveBackendSettings,
-} from "../src/tui/settings/backend-info.ts";
-import {
 	inventoryBySection,
 	inventoryGaps,
+	SETTINGS_INVENTORY,
 } from "../src/tui/settings/catalog.ts";
 import {
 	type SettingsContext,
@@ -131,8 +128,6 @@ describe("settings inventory", () => {
 						routing: [],
 					},
 					providers: { state: "ready", providers: [] },
-					projects: { state: "ready", revision: "r", projects: [] },
-					backend: { values: [] },
 				});
 				const inactive = items.find((item) =>
 					item.id.startsWith("agents.inactive."),
@@ -168,6 +163,11 @@ describe("settings inventory", () => {
 				expect(entry.storage.length).toBeGreaterThan(0);
 				if (!entry.editable) expect(entry.note).toBeTruthy();
 			}
+	});
+
+	test("no inventory entry names a section that is no longer registered", () => {
+		for (const entry of SETTINGS_INVENTORY)
+			expect(SETTINGS_SECTIONS).toContain(entry.section);
 	});
 });
 
@@ -318,56 +318,6 @@ describe("subsequent starts versus a running workflow's resolved routing", () =>
 	});
 });
 
-describe("read-only backend overrides", () => {
-	test("a CLI flag is reported as the controlling source with its restart effect", () => {
-		const values = resolveBackendSettings(
-			{ serverUrl: "http://127.0.0.1:4050", owned: true, attached: false },
-			{ AGENTIC_DEVENV_TOKEN: "super-secret-token" },
-			[
-				"--zipkin-port",
-				"9411",
-				"--prom-target",
-				"host:9100",
-				"--prom-interval",
-				"3000",
-			],
-		);
-		const byId = new Map(values.map((value) => [value.id, value]));
-		expect(byId.get("backend.receivers.zipkin")).toMatchObject({
-			value: "port 9411",
-			source: "CLI flag --zipkin-port",
-			effect: "restart",
-		});
-		expect(byId.get("backend.receivers.grpc")).toMatchObject({
-			value: "disabled",
-			effect: "restart",
-		});
-		expect(byId.get("backend.endpoint")?.value).toBe("http://127.0.0.1:4050");
-		// A capability is reported as present without its value anywhere.
-		expect(byId.get("backend.capability")).toMatchObject({
-			value: "present (value not shown)",
-			secret: true,
-		});
-		for (const value of values)
-			expect(JSON.stringify(value)).not.toContain("super-secret-token");
-		expect(flagValue(["--http-port=4318"], "--http-port")).toBe("4318");
-	});
-
-	test("an attached server is never presented as locally editable", () => {
-		const values = resolveBackendSettings(
-			{ serverUrl: "http://remote:4050", owned: false, attached: true },
-			{},
-			[],
-		);
-		expect(
-			values.find((value) => value.id === "backend.endpoint")?.source,
-		).toBe("attached server");
-		expect(
-			values.find((value) => value.id === "backend.telemetry.retention")?.value,
-		).toBe("owned by the attached server");
-	});
-});
-
 describe("remote settings reads fail without a local fallback", () => {
 	test("an unavailable server is an error, not local configuration", async () => {
 		await expect(readProviderStatus("http://127.0.0.1:1")).rejects.toThrow();
@@ -408,71 +358,6 @@ describe("section items surface every inventoried setting", () => {
 					},
 				],
 			},
-			projects: {
-				state: "ready",
-				revision: "rev-1",
-				projects: [
-					{
-						ident: "checkout",
-						displayName: "Checkout",
-						kind: "app",
-						available: true,
-						repository: "/repo/checkout",
-					},
-				],
-			},
-			backend: {
-				values: [
-					{
-						id: "backend.endpoint",
-						label: "Backend endpoint",
-						value: "http://127.0.0.1:4050",
-						source: "default",
-						effect: "restart",
-						secret: false,
-					},
-					{
-						id: "backend.capability",
-						label: "Instance capability",
-						value: "present (value not shown)",
-						source: "generated per instance",
-						effect: "restart",
-						secret: true,
-					},
-					{
-						id: "backend.config-dir",
-						label: "Configuration directory",
-						value: "/home/u/.config/agentic-coding",
-						source: "default (~/.config/agentic-coding)",
-						effect: "restart",
-						secret: false,
-					},
-					{
-						id: "backend.receivers.http",
-						label: "Telemetry receiver OTLP HTTP",
-						value: "port 4318",
-						source: "CLI flag --http-port",
-						effect: "restart",
-						secret: false,
-					},
-					{
-						id: "backend.telemetry.scrape",
-						label: "Prometheus scrape targets",
-						value: "none",
-						source: "default (not started)",
-						effect: "restart",
-						secret: false,
-					},
-					{
-						id: "backend.telemetry.retention",
-						label: "Telemetry persistence",
-						value: "owned by this server",
-						source: "shell-owned server",
-						effect: "restart",
-						secret: false,
-					},
-				],
-			},
 		};
 	}
 
@@ -480,11 +365,7 @@ describe("section items surface every inventoried setting", () => {
 
 	test("every inventory entry has at least one rendered item", () => {
 		for (const section of sections) {
-			// Both scopes: a project-scoped page renders project items instead.
-			const items = [
-				...settingsItems(context(section), "checkout"),
-				...settingsItems(context(section)),
-			];
+			const items = settingsItems(context(section));
 			for (const entry of inventoryBySection(section)) {
 				const matches = entry.items.filter((prefix) =>
 					items.some((item) => item.id.startsWith(prefix)),
@@ -497,36 +378,13 @@ describe("section items surface every inventoried setting", () => {
 	test("every rendered item belongs to an inventoried setting", () => {
 		for (const section of sections) {
 			const entries = inventoryBySection(section);
-			for (const item of [
-				...settingsItems(context(section), "checkout"),
-				...settingsItems(context(section)),
-			])
+			for (const item of settingsItems(context(section)))
 				expect(
 					entries.some((entry) =>
 						entry.items.some((prefix) => item.id.startsWith(prefix)),
 					),
 				).toBe(true);
 		}
-	});
-
-	test("a project shortcut opens the same page scoped to the stable project id", () => {
-		const unscoped = settingsItems(context("projects"));
-		const project = unscoped.find((item) => item.id === "projects.checkout");
-		expect(project?.action).toEqual({
-			kind: "navigate",
-			route: { page: "settings.projects", resourceId: "checkout" },
-		});
-		const scoped = settingsItems(context("projects"), "checkout");
-		expect(
-			scoped.find((item) => item.id === "project.agent-settings")?.action,
-		).toEqual({
-			kind: "navigate",
-			route: { page: "settings.agents", resourceId: "checkout" },
-		});
-		// An unknown project id is reported, never silently substituted.
-		expect(settingsItems(context("projects"), "ghost")[0]?.id).toBe(
-			"projects.missing",
-		);
 	});
 
 	test("provider credentials are shown as status only", () => {

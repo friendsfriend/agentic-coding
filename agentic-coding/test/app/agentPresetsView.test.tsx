@@ -367,7 +367,7 @@ test("text fields accept quote characters", async () => {
 	t.renderer.destroy();
 });
 
-test("informational rows render and an actionable row activates", async () => {
+test("read-only rows are dropped and an editable row still activates", async () => {
 	const activated: string[] = [];
 	const items: SettingsItem[] = [
 		{
@@ -375,6 +375,14 @@ test("informational rows render and an actionable row activates", async () => {
 			label: "Scope",
 			value: "user configuration",
 			detail: "this client · next workflow start",
+			editable: false,
+			action: { kind: "none" },
+		},
+		{
+			id: "agents.routing.Default profile",
+			label: "Default profile",
+			value: "(unset)",
+			detail: "read-only: edit the config file",
 			editable: false,
 			action: { kind: "none" },
 		},
@@ -411,11 +419,11 @@ test("informational rows render and an actionable row activates", async () => {
 		await renderUntil(t, (frame) => frame.includes("Model profiles")),
 	).toBe(true);
 	const frame = t.captureCharFrame();
-	// The two options lead; the inventoried rows are surfaced after them.
-	expect(frame).toContain("Scope");
+	// Read-only settings are not actionable here, so they are not listed.
+	expect(frame).not.toContain("Scope");
+	expect(frame).not.toContain("Default profile");
 	expect(frame).toContain("Reset to user scope");
-	// rows: 0 Model profiles, 1 Presets, 2 Scope, 3 Reset to user scope.
-	t.mockInput.pressKey("j");
+	// rows: 0 Model profiles, 1 Presets, 2 Reset to user scope.
 	t.mockInput.pressKey("j");
 	t.mockInput.pressKey("j");
 	await t.renderOnce();
@@ -469,19 +477,11 @@ test("the menu cursor re-clamps when the inventoried rows shrink", async () => {
 		editable: true,
 		action: { kind: "none" },
 	});
-	const info = (id: string, label: string): SettingsItem => ({
-		id,
-		label,
-		value: "",
-		detail: "d",
-		editable: false,
-		action: { kind: "none" },
-	});
 	const longItems = [
 		option("agents.profiles", "Model profiles"),
 		option("agents.presets", "Presets"),
-		info("agents.scope", "Scope"),
-		info("agents.reset-scope", "Reset to user scope"),
+		option("agents.repository", "Project checkout"),
+		option("agents.reset-scope", "Reset to user scope"),
 	];
 	const shortItems = [
 		option("agents.profiles", "Model profiles"),

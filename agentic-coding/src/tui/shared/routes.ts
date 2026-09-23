@@ -28,8 +28,6 @@ export type PageId =
 	| "settings.appearance"
 	| "settings.agents"
 	| "settings.providers"
-	| "settings.projects"
-	| "settings.backend"
 	| "environments"
 	| "environments.applications"
 	| "environments.libraries"
@@ -73,13 +71,7 @@ export interface PageDef {
 }
 
 /** Settings sections, in listing order (centralize-application-settings). */
-export const SETTINGS_SECTIONS = [
-	"appearance",
-	"agents",
-	"providers",
-	"projects",
-	"backend",
-] as const;
+export const SETTINGS_SECTIONS = ["appearance", "agents", "providers"] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 /** Human labels for the Settings sections, in listing order. */
@@ -89,8 +81,6 @@ export const SETTINGS_SECTION_LABELS: Readonly<
 	appearance: "Appearance",
 	agents: "Agent Presets",
 	providers: "Providers/credentials",
-	projects: "Projects/environments",
-	backend: "Backend/telemetry",
 };
 
 /** One-line description of what each Settings section edits and where. */
@@ -100,8 +90,6 @@ export const SETTINGS_SECTION_DESCRIPTIONS: Readonly<
 	appearance: "Theme and client-local UI preferences",
 	agents: "Model profiles and configuration presets",
 	providers: "Git providers and protected credentials",
-	projects: "Configured applications, libraries and environments",
-	backend: "Server ownership, telemetry receivers and retention",
 };
 
 /** The page identity of one Settings section. */
@@ -193,16 +181,6 @@ export const PAGES: Readonly<Record<PageId, PageDef>> = {
 	},
 	"settings.providers": {
 		label: SETTINGS_SECTION_LABELS.providers,
-		parent: () => ({ page: "settings" }),
-		picker: true,
-	},
-	"settings.projects": {
-		label: SETTINGS_SECTION_LABELS.projects,
-		parent: () => ({ page: "settings" }),
-		picker: true,
-	},
-	"settings.backend": {
-		label: SETTINGS_SECTION_LABELS.backend,
 		parent: () => ({ page: "settings" }),
 		picker: true,
 	},

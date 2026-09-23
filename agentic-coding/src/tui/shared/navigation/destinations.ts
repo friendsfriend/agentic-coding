@@ -113,8 +113,7 @@ export function homeDestinations(
 		entries.push({
 			id: "settings",
 			label: "Settings",
-			description:
-				"Appearance, agent models, providers, projects and backend configuration",
+			description: "Appearance, agent models and provider configuration",
 			group: "Destinations",
 			route: { page: "settings" },
 		});

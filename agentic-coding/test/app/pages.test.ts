@@ -11,6 +11,7 @@ import {
 	homeLaunchEntry,
 	observabilityDestinations,
 	pickerEntries,
+	settingsDestinations,
 } from "../../src/tui/shared/navigation/destinations.ts";
 import {
 	destinationPageKeybindCatalog,
@@ -47,6 +48,14 @@ describe("home and category destinations", () => {
 			"Observability",
 			"Wiki",
 			"Settings",
+		]);
+	});
+
+	test("Settings lists only the remaining sections", () => {
+		expect(settingsDestinations().map((entry) => entry.id)).toEqual([
+			"settings.appearance",
+			"settings.agents",
+			"settings.providers",
 		]);
 	});
 
@@ -127,7 +136,6 @@ describe("home and category destinations", () => {
 			// The label match outranks the description-only matches; the requested
 			// order stays stable within a rank.
 			"observability.metrics",
-			"settings.backend",
 			"observability",
 		]);
 		expect(
@@ -136,8 +144,6 @@ describe("home and category destinations", () => {
 			// The category page outranks Environments, which only describes it.
 			"environments.applications",
 			"environments",
-			// Settings describes its project section with the same word.
-			"settings.projects",
 		]);
 		expect(filterPickerEntries(entries, "  ")).toHaveLength(entries.length);
 		expect(filterPickerEntries(entries, "nothing-here")).toEqual([]);
@@ -266,8 +272,6 @@ describe("every routed page has a definition and a label", () => {
 			"settings.appearance",
 			"settings.agents",
 			"settings.providers",
-			"settings.projects",
-			"settings.backend",
 			"environments",
 			"environments.applications",
 			"environments.libraries",

@@ -8,9 +8,8 @@ Settings section page, a scope, a storage description, and at least one rendered
 item, so nothing can be inventoried and then never shown.
 
 Sections: `settings` (landing) with `settings.appearance`,
-`settings.agents`, `settings.providers`, `settings.projects` and
-`settings.backend`. A section route may carry a configured
-application/library id (`resourceId`) as its stable project scope.
+`settings.agents` and `settings.providers`. A section route may carry a
+configured application/library id (`resourceId`) as its stable project scope.
 
 ## Scopes
 
@@ -32,16 +31,9 @@ unavailable or unauthorized server is a section error with a retry.
 | Theme | Appearance | `src/tui/shared/preferences.ts` | client | `$AGENTIC_CODING_CONFIG_DIR/tui.json` · `theme` | no | immediate | yes (shared theme picker) |
 | Agent profiles | Agent Presets | `src/server/config.ts` | user / project | `[agents.profiles]` in the layered workflow config | no | next workflow start | yes (inline form) |
 | Configuration presets | Agent Presets | `src/server/config.ts` | user / project | `[agents.presets]` in the layered workflow config | no | next workflow start | yes (inline form) |
-| Routing and definition defaults | Agent Presets | `src/workflow/profiles.ts` | user | `[agents]` `default_profile`, `routes`, `role_routes`, `definition_defaults` | no | next workflow start | no (no bounded editor; shown read-only with its source) |
+| Routing and definition defaults | Agent Presets | `src/workflow/profiles.ts` | user | `[agents]` `default_profile`, `routes`, `role_routes`, `definition_defaults` | no | next workflow start | no (no bounded editor; edit the config file) |
 | Git providers | Providers/credentials | server integration families (`/api/providers`) | server | `$AGENTIC_CODING_CONFIG_DIR/providers` served by the connected server | yes | immediate | yes (edited in Environments) |
 | Provider credentials | Providers/credentials | `src/workflow/credentials.ts`, `src/server/credentials.ts` | server | protected credential store; single-owner ephemeral prompts | yes | immediate | no (status only) |
-| Applications and libraries | Projects/environments | `src/server/environment/authority.ts` | server | `$AGENTIC_CODING_CONFIG_DIR/{apps,libraries}/definitions/*.json` (projected catalog) | no | immediate | yes (through Settings project scope / Environments) |
-| Scripts and infrastructure | Projects/environments | `src/server/environment/authority.ts` | server | `$AGENTIC_CODING_CONFIG_DIR/{scripts,infra}` | no | immediate | yes (edited in Environments) |
-| Backend endpoint and ownership | Backend/telemetry | `src/tui/index.tsx`, `src/server/lifecycle.ts` | server | `AGENTIC_DEVENV_URL` / `AGENTIC_WORKFLOW_URL` and the instance capability | yes | restart | no (start-time decision) |
-| Configuration directory | Backend/telemetry | `src/backend/home.ts` | server | `AGENTIC_CODING_CONFIG_DIR` (default `~/.config/agentic-coding`) | no | restart | no |
-| Telemetry receiver ports | Backend/telemetry | `src/server/receivers.ts` | server | `--http-port`, `--grpc-port`, `--zipkin-port`, `--datadog-port`, `--statsd-port` | no | restart | no (read-only override) |
-| Prometheus scrape targets | Backend/telemetry | `src/tui/otel/receiver/index.ts` | server | `--prom-target`, `--prom-interval` | no | restart | no (read-only override) |
-| Telemetry persistence and retention | Backend/telemetry | `src/server/telemetry.ts` | server | server-owned telemetry database | no | restart | no (server-owned) |
 
 ## Source and restart policy
 
@@ -54,14 +46,10 @@ unavailable or unauthorized server is a section error with a retry.
   effective `[agents]` section and refuses a write when another client changed
   it since, so a concurrent edit is detected instead of overwritten. Unrelated
   keys, unknown preset role tables and source precedence are preserved.
-- **Providers, projects and environments** are owned by the connected server.
-  Settings reads status through the capability-bearing environment client
+- **Providers and environments** are owned by the connected server. Settings
+  reads provider status through the capability-bearing environment client
   (`Authorization: Bearer <instance token>`) and opens the existing environment
   editors for changes; it never writes the client's own checkout.
-- **Backend/telemetry** values are decided when the owning server starts
-  (CLI flags, environment variables, defaults). Settings shows the effective
-  value, names the controlling source and states that a restart is required; it
-  never restarts or stops an unowned server.
 - **Application of changes**: persistent agent edits affect subsequent workflow
   starts only. A running workflow keeps the routing resolved into its run input
   (its pins/revisions) until its existing explicit revision-bound adoption

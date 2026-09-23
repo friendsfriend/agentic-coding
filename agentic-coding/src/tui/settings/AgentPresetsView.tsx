@@ -97,8 +97,9 @@ export interface AgentPresetsViewProps {
 	keymap?: Keymap<Renderable, KeyEvent>;
 	/** Project scope; absent means the user configuration. */
 	repository?: string;
-	/** Inventoried section items: the two menu options plus the read-only
-	 * scope/routing rows the section is required to surface. */
+	/** Inventoried section items: the two menu options plus any editable
+	 * informational rows (e.g. reset to user scope). Read-only rows are dropped
+	 * here because this menu only offers actions the user can take. */
 	items?: readonly SettingsItem[];
 	/** Activate an informational row (e.g. reset to user scope). */
 	onActivate?: (item: SettingsItem) => void;
@@ -228,9 +229,10 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 			? profileNames()
 			: [...presetNames(), BUILTIN_PRESET_NAME];
 
-	// The two editable options lead the menu; every inventoried informational
-	// row (scope, project checkout, reset-to-user-scope, inactive legacy config,
-	// conflicts, routing) follows so it stays surfaced and its action reachable.
+	// The two editable options lead the menu; every editable informational row
+	// (reset-to-user-scope) follows so its action stays reachable. Read-only
+	// rows (scope, project checkout, routing, inactive legacy config, read
+	// errors, conflicts) are not actionable here and are dropped.
 	const menuEntries = (): MenuEntry[] => {
 		const options: MenuEntry[] = [
 			{
@@ -248,7 +250,10 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 		];
 		const info: MenuEntry[] = (props.items ?? [])
 			.filter(
-				(item) => item.id !== "agents.profiles" && item.id !== "agents.presets",
+				(item) =>
+					item.editable &&
+					item.id !== "agents.profiles" &&
+					item.id !== "agents.presets",
 			)
 			.map((item) => ({
 				id: item.id,
@@ -649,13 +654,7 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 						<Card
 							height={3}
 							selected={selected()}
-							title={
-								entry.list
-									? entry.label
-									: `${entry.label}${
-											entry.item?.editable === false ? " · read-only" : ""
-										}`
-							}
+							title={entry.label}
 							cells={[<text fg={uiColors.textMuted}>{entry.detail}</text>]}
 						/>
 					)}

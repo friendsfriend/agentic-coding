@@ -21,20 +21,19 @@ its own similarly named root).
 
 ## 2. Root resolution today (task 1.1)
 
-There is no single resolver. Six independent decisions exist:
+There is no single resolver. Five independent decisions exist:
 
 | # | Site | Precedence | Default |
 | --- | --- | --- | --- |
 | 1 | `src/backend/home.ts:resolveConfigDir()` | `DEVENV_CONFIG_DIR` | `~/.config/devenv` |
 | 2 | `src/tui/shared/preferences.ts:configDir()` | `DEVENV_CONFIG_DIR` | `~/.config/devenv` (duplicate of 1) |
 | 3 | `packages/devenv/core/src/logger.ts:resolveDevenvHome()` | `DEVENV_HOME` → `DEVENV_HOME` in `<configDir>/.env` | `~/devenv`, with an inline third copy of the `DEVENV_CONFIG_DIR`/`~/.config/devenv` pair |
-| 4 | `src/tui/settings/backend-info.ts:resolvedConfigDir()` | `DEVENV_CONFIG_DIR` | `~/.config/devenv` (display/provenance only) |
-| 5 | `src/workflow/paths.ts:CONFIG` + `effects.ts:loadConfigWithProvenance()` | `HERDR_WORKFLOW_CONFIG` → first existing base | `~/.config/agentic-coding/config.toml`, legacy `~/.pi/agent/herdr-workflow.toml` |
-| 6 | `src/workflow/wiki.ts:wikiRoot()` | `HERDR_WIKI_DIR` → `[wiki] root` | `~/.config/agentic-coding/wiki` |
+| 4 | `src/workflow/paths.ts:CONFIG` + `effects.ts:loadConfigWithProvenance()` | `HERDR_WORKFLOW_CONFIG` → first existing base | `~/.config/agentic-coding/config.toml`, legacy `~/.pi/agent/herdr-workflow.toml` |
+| 5 | `src/workflow/wiki.ts:wikiRoot()` | `HERDR_WIKI_DIR` → `[wiki] root` | `~/.config/agentic-coding/wiki` |
 
 Root environment variables and override flags in use:
 
-- `DEVENV_CONFIG_DIR` — env/provider/preferences root (sites 1–4).
+- `DEVENV_CONFIG_DIR` — env/provider/preferences root (sites 1–3).
 - `DEVENV_HOME` — managed runtime root (`db/`, `logs/`, `scripts/`); retained
   and **not** renamed by this change.
 - `HERDR_WORKFLOW_CONFIG` — explicit full replacement of workflow config; skips
@@ -77,8 +76,8 @@ Consumers of the root: `src/server-command.ts` (`resolveConfigDir` +
 `resolveDevenvHome` at 92), `src/server/catalog-command.ts:16`,
 `src/server/integrations/services.ts:76-78` (`providers` + `.env`),
 `src/server/environment/authority.ts` (`configDir`, `homeDir`),
-`src/tui/settings/backend-info.ts`, `src/tui/shared/preferences.ts`,
-`packages/devenv/core/src/logger.ts`, and the installer scripts
+`src/tui/shared/preferences.ts`, `packages/devenv/core/src/logger.ts`, and the
+installer scripts
 (`scripts/stow.sh`, `scripts/test-stow.sh`, `scripts/test-herdr-workflow.sh`).
 
 ## 4. Credentials, `.env` and interpolation (task 1.2)

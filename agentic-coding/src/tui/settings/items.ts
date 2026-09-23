@@ -8,7 +8,6 @@
 // explanation from the inventory instead of pretending to accept an edit.
 import {
 	type Route,
-	resourceRoute,
 	type SettingsSection,
 	settingsRoute,
 } from "../shared/routes.ts";
@@ -89,17 +88,6 @@ export interface ProjectSnapshot {
 	error?: string;
 }
 
-export interface BackendSnapshot {
-	values: Array<{
-		id: string;
-		label: string;
-		value: string;
-		source: string;
-		effect: SettingsEffect;
-		secret: boolean;
-	}>;
-}
-
 export interface SettingsContext {
 	themes: string[];
 	activeTheme: string;
@@ -109,8 +97,6 @@ export interface SettingsContext {
 	section: SettingsSection;
 	agents: AgentStatus;
 	providers: ProviderSnapshot;
-	projects: ProjectSnapshot;
-	backend: BackendSnapshot;
 }
 
 function detailFor(
@@ -307,159 +293,8 @@ function providerItems(context: SettingsContext): SettingsItem[] {
 	return items;
 }
 
-function projectItems(context: SettingsContext): SettingsItem[] {
-	const projects = context.projects;
-	if (projects.state === "loading")
-		return [
-			{
-				id: "projects.loading",
-				label: "Configured projects",
-				value: "loading…",
-				detail: "reading the project catalog from the connected server",
-				editable: false,
-				action: { kind: "none" },
-			},
-		];
-	if (projects.state === "error")
-		return [
-			{
-				id: "projects.error",
-				label: "Projects unavailable",
-				value: projects.error ?? "unavailable",
-				detail:
-					"the connected server could not be read; no local configuration was written",
-				editable: false,
-				action: { kind: "none" },
-			},
-			{
-				id: "projects.retry",
-				label: "Retry",
-				value: "",
-				detail: "read the connected server again",
-				editable: true,
-				action: { kind: "retry" },
-			},
-		];
-	const items: SettingsItem[] = projects.projects.map((project) => ({
-		id: `projects.${project.ident}`,
-		label: project.displayName || project.ident,
-		value: `${project.kind} · ${
-			project.available ? "available" : "unavailable"
-		}`,
-		detail: `${inventoryDetail("projects.catalog")} · opens this project's settings`,
-		editable: true,
-		action: {
-			kind: "navigate",
-			route: settingsRoute("projects", project.ident),
-		},
-	}));
-	if (items.length)
-		items.push({
-			id: "projects.revision",
-			label: "Catalog revision",
-			value: projects.revision ?? "",
-			detail: `${detailFor(
-				"server",
-				"projected catalog fingerprint",
-				"immediate",
-			)} · a changed revision means configured projects changed`,
-			editable: false,
-			action: { kind: "none" },
-		});
-	return items.length
-		? items
-		: [
-				{
-					id: "projects.empty",
-					label: "No configured projects",
-					value: "",
-					detail: "configure an application or library in Environments first",
-					editable: false,
-					action: { kind: "none" },
-				},
-			];
-}
-
-/** Project-scoped detail: the project's own settings, scoped by its stable id. */
-function projectScopeItems(
-	context: SettingsContext,
-	projectIdent: string,
-): SettingsItem[] {
-	const project = context.projects.projects.find(
-		(candidate) => candidate.ident === projectIdent,
-	);
-	if (!project)
-		return [
-			{
-				id: "projects.missing",
-				label: projectIdent,
-				value: "not configured",
-				detail:
-					"this project id is not in the connected server's catalog; no other identity was substituted",
-				editable: false,
-				action: { kind: "none" },
-			},
-		];
-	const kind = project.kind === "library" ? "libraries" : "applications";
-	return [
-		{
-			id: "project.ident",
-			label: project.displayName || project.ident,
-			value: `${project.kind} · ${project.ident}`,
-			detail: `${inventoryDetail(
-				"projects.catalog",
-			)} · this is the stable project scope`,
-			editable: false,
-			action: { kind: "none" },
-		},
-		{
-			id: "project.agent-settings",
-			label: "Agent models/presets for this project",
-			value: "",
-			detail: `${detailFor(
-				"project",
-				project.repository ?? "project checkout",
-				"next-start",
-			)} · opens Settings scoped to this project`,
-			editable: true,
-			action: {
-				kind: "navigate",
-				route: settingsRoute("agents", project.ident),
-			},
-		},
-		{
-			id: "project.open-environments",
-			label: "Open in Environments",
-			value: "",
-			detail:
-				"reuses the environment editors for this project's repository and runtime",
-			editable: true,
-			action: {
-				kind: "navigate",
-				route: resourceRoute(kind, project.ident),
-			},
-		},
-	];
-}
-
-function backendItems(context: SettingsContext): SettingsItem[] {
-	return context.backend.values.map((value) => ({
-		id: value.id,
-		label: value.label,
-		value: value.value,
-		detail: `${scopeLabel("server")} · ${value.source} · ${effectLabel(
-			value.effect,
-		)}${value.secret ? " · value not shown" : ""}`,
-		editable: false,
-		action: { kind: "none" as const },
-	}));
-}
-
 /** Items of one Settings section for the resolved snapshot. */
-export function settingsItems(
-	context: SettingsContext,
-	projectIdent?: string,
-): SettingsItem[] {
+export function settingsItems(context: SettingsContext): SettingsItem[] {
 	switch (context.section) {
 		case "appearance":
 			return appearanceItems(context);
@@ -467,11 +302,5 @@ export function settingsItems(
 			return agentItems(context);
 		case "providers":
 			return providerItems(context);
-		case "projects":
-			return projectIdent
-				? projectScopeItems(context, projectIdent)
-				: projectItems(context);
-		case "backend":
-			return backendItems(context);
 	}
 }
