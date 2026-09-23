@@ -171,6 +171,9 @@ export async function runGitWithCredentials(
 		PATH: process.env.PATH ?? "/usr/bin:/bin",
 		...(process.env.HOME ? { HOME: process.env.HOME } : {}),
 		...(process.env.TMPDIR ? { TMPDIR: process.env.TMPDIR } : {}),
+		...(process.env.SSH_AUTH_SOCK
+			? { SSH_AUTH_SOCK: process.env.SSH_AUTH_SOCK }
+			: {}),
 		...(options.env ?? {}),
 		...ASKPASS_ENV,
 		SSH_ASKPASS: shim.shimPath,
