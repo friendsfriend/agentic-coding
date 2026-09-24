@@ -1,6 +1,7 @@
 Not for agents. This is only for humans.
 
 Fixes: 
+* Test verifier is missing from the agents panel in the dashboard -> on the second run it was there
 
 Big ones:
 * Agent steered version of the workflow. Basically an orchestrator version of the workflow.
@@ -11,6 +12,4 @@ Big ones:
 Small ones: 
 * (Maybe) Give all agents their own tab. Multitab spawning always has issues for some reason
 * Improve agent steering based on recent runs (observability first)
-* Findings in the developer review:
-    * Should show which reviewer marked the issue. 
-    * Also it doesnt show a recommendation for a solution. I want it to have two parts: What is the issue? How can it be solved?
+* Dependency upgrades
