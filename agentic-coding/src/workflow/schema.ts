@@ -191,6 +191,7 @@ export const FindingsInputSchema = Schema.Struct({
 			id: text(4096),
 			severity: Schema.Literal("critical", "warning", "info"),
 			detail: text(4096),
+			recommendation: Schema.optional(text(4096)),
 			path: text(4096),
 			line: integer(1),
 		}),

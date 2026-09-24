@@ -10,7 +10,7 @@
  * modal stack and the focus restoration.
  */
 
-import type { KeyEvent } from "@opentui/core";
+import type { KeyEvent, ScrollBoxRenderable } from "@opentui/core";
 import { TextAttributes } from "@opentui/core";
 import {
 	HelpModal,
@@ -51,6 +51,7 @@ export interface ThemeOverlay {
 export interface FindingsOverlay {
 	readonly title: string;
 	readonly events: Parameters<typeof FindingsModal>[0]["events"];
+	readonly onDetailScrollBoxReady: (scrollBox: ScrollBoxRenderable) => void;
 }
 
 export interface PlanRejectionOverlay {
@@ -220,6 +221,7 @@ export function Overlays(props: OverlaysProps) {
 						title={result().title}
 						events={result().events}
 						selected={props.state.selectedFinding()}
+						onDetailScrollBoxReady={result().onDetailScrollBoxReady}
 					/>
 				)}
 			</Show>

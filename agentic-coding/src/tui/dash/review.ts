@@ -413,11 +413,18 @@ export function createReviewFeature(
 				const note = {
 					id: 10000 + reviewFindings().indexOf(finding),
 					type: "DiffNote",
-					body: `${finding.detail}${finding.fix ? ` Fix: ${finding.fix}` : ""}`,
+					body: [
+						finding.detail,
+						finding.recommendation
+							? `\n\n### Recommended fix\n\n${finding.recommendation}`
+							: finding.fix
+								? `\n\n### Resolution\n\n${finding.fix}`
+								: "",
+					].join(""),
 					author: {
 						id: 0,
-						username: "verifier",
-						name: "Verifier",
+						username: finding.verifier ?? "verifier",
+						name: finding.verifier ?? "Verifier",
 						avatar_url: "",
 					},
 					created_at: new Date().toISOString(),

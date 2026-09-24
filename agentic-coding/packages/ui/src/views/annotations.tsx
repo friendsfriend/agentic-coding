@@ -7,7 +7,9 @@
 // shown when a surface supplies a reply handler.
 import { TextAttributes } from "@opentui/core";
 import { For, type JSX, Show } from "solid-js";
+import { MarkdownViewer } from "../components/MarkdownViewer.tsx";
 import { SelectionMarker } from "../components/SelectionMarker.tsx";
+import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors";
 import type { Discussion } from "./types.ts";
 
@@ -89,6 +91,8 @@ export function DiscussionThread(props: {
 	replyText?: string;
 }) {
 	const notesCount = props.discussion.notes.length;
+	const dimensions = useTerminalDimensions();
+	const markdownWidth = () => Math.max(20, dimensions().width - 12);
 	return (
 		<MarkedThread selected={props.selected} range={props.range}>
 			<box
@@ -209,7 +213,14 @@ export function DiscussionThread(props: {
 											</box>
 											<box style={{ width: "100%", marginTop: 0.5 }}>
 												<text fg={uiColors.textSecondary}>
-													{note.body || "(no content)"}
+													{props.discussion.findingId ? (
+														<MarkdownViewer
+															content={note.body || "(no content)"}
+															width={markdownWidth()}
+														/>
+													) : (
+														note.body || "(no content)"
+													)}
 												</text>
 											</box>
 										</box>

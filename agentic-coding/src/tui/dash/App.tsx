@@ -131,6 +131,7 @@ export function App(props: {
 	/** Push the workflow header context up to the composition root's header. */
 	onHeader?: (header: WorkflowHeaderInfo | null) => void;
 }) {
+	let findingDetailScroll: ScrollBoxRenderable | undefined;
 	const renderer = useRenderer();
 	const dimensions = useTerminalDimensions();
 	const demoPhases = [
@@ -2119,6 +2120,8 @@ export function App(props: {
 							);
 						else if (key === "k" || key === "up")
 							setSelectedFinding((value) => Math.max(0, value - 1));
+						else if (key === "pagedown") findingDetailScroll?.scrollBy(5);
+						else if (key === "pageup") findingDetailScroll?.scrollBy(-5);
 						else if (key === "enter" || key === "return") {
 							const finding = items[selectedFinding()];
 							if (finding?.type === "finding") {
@@ -2141,9 +2144,18 @@ export function App(props: {
 					},
 				},
 			],
-			bindings: ["escape", "enter", "return", "j", "k", "up", "down", "?"].map(
-				(key) => ({ key, cmd: "findings.handle" }),
-			),
+			bindings: [
+				"escape",
+				"enter",
+				"return",
+				"j",
+				"k",
+				"up",
+				"down",
+				"pageup",
+				"pagedown",
+				"?",
+			].map((key) => ({ key, cmd: "findings.handle" })),
 		});
 		const disposeVerdict = props.keymap.registerLayer({
 			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
@@ -2506,6 +2518,9 @@ export function App(props: {
 						? {
 								title: findings()?.title ?? "",
 								events: [...(findings()?.events ?? [])],
+								onDetailScrollBoxReady: (scrollBox) => {
+									findingDetailScroll = scrollBox;
+								},
 							}
 						: undefined
 				}

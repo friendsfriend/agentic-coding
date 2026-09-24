@@ -5,6 +5,7 @@ import type {
 	KeyEvent,
 	TextareaRenderable,
 } from "@opentui/core";
+import { TextAttributes } from "@opentui/core";
 import {
 	focusSoon,
 	GenericModal,
@@ -355,6 +356,16 @@ export function NewWorkflowModal(props: {
 							fallback={
 								<GenericModal
 									title="New workflow"
+									customHeader={
+										pathTarget() ? (
+											<box width="100%" flexDirection="column">
+												<text attributes={TextAttributes.BOLD}>
+													New workflow
+												</text>
+												<text fg={uiColors.textMuted}>{repository()}</text>
+											</box>
+										) : undefined
+									}
 									fieldLabel={fieldLabels[field()]}
 									summary={summary()}
 									step={step()}

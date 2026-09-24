@@ -163,7 +163,7 @@ export function renderAssignment(
 							]
 						: assignment.output.schemaId === "core.findings"
 							? [
-									"Payload: `findings` array; each item requires unique string `id`, `severity` (`critical`, `warning`, or `info`), non-empty string `detail`, repository-relative `path`, and integer `line` (1-based line in the current file).",
+									"Payload: `findings` array; each item requires unique string `id`, `severity` (`critical`, `warning`, or `info`), non-empty Markdown `detail`, repository-relative `path`, and integer `line` (1-based line in the current file). Optional `recommendation` is Markdown describing a concrete recommended fix; include enough rationale and implementation detail to make it actionable.",
 								]
 							: assignment.output.schemaId === "core.plan-draft"
 								? [

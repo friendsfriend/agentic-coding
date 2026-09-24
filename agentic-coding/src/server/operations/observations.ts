@@ -632,6 +632,9 @@ function verifierFinding(value: unknown): VerifierFinding | undefined {
 		id: item.id,
 		severity: item.severity as VerifierFinding["severity"],
 		detail: item.detail,
+		...(typeof item.recommendation === "string"
+			? { recommendation: item.recommendation }
+			: {}),
 		...(typeof item.path === "string" ? { path: item.path } : {}),
 		...(typeof item.line === "number" ? { line: item.line } : {}),
 		...(typeof item.status === "string" ? { status: item.status } : {}),
@@ -751,6 +754,7 @@ export function loadVerifierFindings(
 	if (!output) return undefined;
 	const events = output.findings.map((finding) => ({
 		...finding,
+		verifier: role,
 		type: "finding",
 	}));
 	return {
@@ -763,7 +767,9 @@ export function loadVerifierFindings(
 			detail?: string;
 			evidence?: string;
 			changedCode?: string;
+			recommendation?: string;
 			fix?: string;
+			verifier?: string;
 		}>,
 	};
 }
@@ -782,6 +788,7 @@ export function loadDeveloperReviewFindings(
 		.flatMap((run) =>
 			(committedVerifierRun(run)?.findings ?? []).map((finding) => ({
 				...finding,
+				verifier: run.role,
 				runId: run.id,
 			})),
 		);
@@ -802,8 +809,13 @@ export function loadDeveloperReviewFindings(
 			path: typeof item.path === "string" ? item.path : undefined,
 			line: typeof item.line === "number" ? item.line : undefined,
 			detail: item.detail,
+			recommendation:
+				typeof item.recommendation === "string"
+					? item.recommendation
+					: undefined,
 			evidence: typeof item.evidence === "string" ? item.evidence : undefined,
 			fix: typeof item.fix === "string" ? item.fix : undefined,
+			verifier: item.verifier,
 		}));
 }
 
@@ -833,7 +845,11 @@ export function loadVerifierReport(
 						: entry.changedCode
 							? `Changed code: ${entry.changedCode}`
 							: "",
-					entry.fix ? `Resolution: ${entry.fix}` : "",
+					entry.recommendation
+						? `## Recommended fix\n${entry.recommendation}`
+						: entry.fix
+							? `Resolution: ${entry.fix}`
+							: "",
 				]
 					.filter(Boolean)
 					.join("\n"),

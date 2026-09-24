@@ -1059,8 +1059,10 @@ export interface DeveloperReviewFinding {
 	path?: string;
 	line?: number;
 	detail: string;
+	recommendation?: string;
 	evidence?: string;
 	fix?: string;
+	verifier?: string;
 }
 
 export interface FindingCounts {
@@ -1152,6 +1154,7 @@ export interface VerifierFinding {
 	id: string;
 	severity: "critical" | "warning" | "info";
 	detail: string;
+	recommendation?: string;
 	path?: string;
 	line?: number;
 	status?: string;
