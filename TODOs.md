@@ -1,6 +1,7 @@
 Not for agents. This is only for humans.
 
 Fixes: 
+* Some verifiers dont show findings in the ui -> missing the verifier ui
 
 Big ones:
 * Agent steered version of the workflow. Basically an orchestrator version of the workflow.
