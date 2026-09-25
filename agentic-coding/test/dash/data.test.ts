@@ -10,7 +10,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { DeveloperReviewComment } from "../../src/contracts/workflow";
 import type { WorkflowState } from "../../src/contracts/workflow.ts";
 import {
@@ -180,6 +180,99 @@ test("loadDashboard projects the pinned runtime without fabricating a model", ()
 	);
 	expect(agent).toMatchObject({ runtime: "pi" });
 	expect(agent?.model).toBeUndefined();
+});
+
+test("loadDashboard reports an agent from its run before a pane handle exists", () => {
+	const repo = fixture();
+	writeState(repo);
+	// `writeState` starts the workflow but never drains the launch effect, so the
+	// worker run exists with no persisted pane handle yet.
+	const db = new Database(canonicalStorePath(repo));
+	const row = db
+		.query("SELECT handle_json FROM workflow_runs WHERE role=?")
+		.get("worker") as { handle_json: string | null } | null;
+	db.close();
+	expect(row?.handle_json).toBeNull();
+	expect(
+		loadDashboard(repo, "review").agents.map((agent) => agent.role),
+	).toContain("worker");
+});
+
+test("loadDashboard detects the auto-spawned test verifier before its pane handle exists", () => {
+	const repo = fixture();
+	const baseCommit = runGit(repo, "rev-parse", "HEAD");
+	const profile = {
+		name: "test",
+		runtime: "pi" as const,
+		executable: "sh",
+		tools: [],
+		extensions: [],
+		readOnly: false,
+		capabilities: ["prompt", "run-environment", "observe"] as const,
+		digest: "test",
+	};
+	const engine = new WorkflowEngine(registerBuiltins());
+	let view = engine.start({
+		repo,
+		workflowId: "verify-agent",
+		definitionId: "no-openspec",
+		metadata: {
+			branch: runGit(repo, "branch", "--show-current"),
+			baseBranch: "main",
+			baseCommit,
+			task: "test",
+		},
+		routing: {
+			defaultProfile: "test",
+			routes: ["core.implementation", "core.triage", "core.verification"].map(
+				(stepId) => ({ stepId, profile }),
+			),
+		},
+	}).view;
+	const handoff = (role: string, payload: unknown) => {
+		const runView = view.runs.find((item) => item.role === role);
+		if (!runView) throw new Error(`expected ${role} run`);
+		const launch = engine
+			.claimEffects(repo, 100)
+			.find(
+				(effect) =>
+					effect.kind === "agent.launch" &&
+					(effect.payload as { runId?: string }).runId === runView.id,
+			);
+		const run = engine.getRun(repo, runView.id);
+		if (!run.outputPath) throw new Error("expected run output path");
+		mkdirSync(dirname(run.outputPath), { recursive: true });
+		writeFileSync(
+			run.outputPath,
+			JSON.stringify({
+				runId: run.id,
+				schemaId: run.outputSchema?.id,
+				schemaVersion: run.outputSchema?.version,
+				payload,
+			}),
+		);
+		view = engine.dispatch(repo, {
+			type: "agent.handoff",
+			runId: run.id,
+			generation: run.generation,
+			token: launch?.runToken ?? "",
+			outcome: "complete",
+			artifact: run.outputPath,
+		}).view;
+	};
+	handoff("worker", { changed: true });
+	// An empty triage selection makes the engine spawn the mandatory test
+	// verifier directly, with no selected verifier ahead of it.
+	handoff("triage", { roles: [] });
+	expect(view.runs.find((item) => item.role === "test-verifier")?.status).toBe(
+		"pending",
+	);
+	// The run is created during handoff but its launch effect has not persisted
+	// any pane handle, which used to hide it from the agents panel entirely.
+	const agent = loadDashboard(repo, "verify-agent").agents.find(
+		(item) => item.role === "test-verifier",
+	);
+	expect(agent?.status).toBe("pending");
 });
 
 test("dashboard agent status matches the label the agent tab renders", async () => {

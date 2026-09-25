@@ -1399,28 +1399,27 @@ export function loadDashboard(repo: string, workflowId: string): DashboardData {
 		reviewHistory,
 		// Agent status has one source: the persisted run status that also drives
 		// the Herdr tab-status glyphs (workflow/tab-status.ts, workflow/tab-sync.ts).
-		// The pane map keys the rows (App.tsx focuses `state.panes[role]`), and
-		// `latestRuns` is the same per-role projection `viewToDashboardState` used
-		// to build that map, so the list and the focus target can never disagree.
-		agents: Object.entries(state.panes)
-			.filter(([role]) => !["git", "dashboard"].includes(role))
-			.flatMap(([role]) => {
-				const run = latestRuns.get(role);
-				if (!run) return [];
-				return [
-					{
-						role,
-						status: run.status,
-						runtime: run.runtime,
-						model: run.model,
-						cost: costByRole.get(role)?.cost,
-						metrics: metricsByRole.get(role),
-						findingCounts: role.endsWith("verifier")
-							? verifierFindingCounts(state, role)
-							: undefined,
-					},
-				];
-			}),
+		// The row set comes from `latestRuns`, not `state.panes`: a run exists (and is
+		// reported) as soon as the engine creates it, while its pane handle is only
+		// persisted once the launch effect completes. Gating on panes hid runs whose
+		// handle was not yet stored — notably the auto-spawned `test-verifier`, which
+		// is created during the last verifier's handoff and launched afterwards. The
+		// seed projection (`tui/data/workflow.ts`) already lists runs this way, so
+		// both reads now agree. `state.panes[role]` stays the optional focus target
+		// (App.tsx just no-ops when a run has no live pane yet).
+		agents: [...latestRuns.values()]
+			.filter((run) => !["git", "dashboard"].includes(run.role))
+			.map((run) => ({
+				role: run.role,
+				status: run.status,
+				runtime: run.runtime,
+				model: run.model,
+				cost: costByRole.get(run.role)?.cost,
+				metrics: metricsByRole.get(run.role),
+				findingCounts: run.role.endsWith("verifier")
+					? verifierFindingCounts(state, run.role)
+					: undefined,
+			})),
 		updated: new Date().toLocaleTimeString(),
 		health: {
 			dirty:

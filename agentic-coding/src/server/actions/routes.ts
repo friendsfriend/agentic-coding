@@ -22,12 +22,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ActionDefinition, ActionStepDefinition } from "@devenv/types";
+import { runGitWithCredentials } from "../../workflow/credentials.ts";
+import { createQueuedCredentialPrompt } from "../../workflow/execution-coordinator.ts";
 import {
 	type CommandEvent,
 	type CommandEventSink,
 	CommandHandler,
-	OSCommandRunner,
 	type CommandRunner,
+	OSCommandRunner,
 } from "./command.ts";
 import {
 	compileDockerLifecycleActions,
@@ -37,8 +39,6 @@ import {
 	compileKubernetesLifecycleActions,
 } from "./compile.ts";
 import { Coordinator } from "./coordinator.ts";
-import { createQueuedCredentialPrompt } from "../../workflow/execution-coordinator.ts";
-import { runGitWithCredentials } from "../../workflow/credentials.ts";
 import { discoverActionTargets } from "./discovery.ts";
 import { type CommandStepHandler, Engine, type EngineEvent } from "./engine.ts";
 import {
