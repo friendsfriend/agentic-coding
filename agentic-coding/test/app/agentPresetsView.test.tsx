@@ -48,8 +48,10 @@ async function renderView(
 	options: {
 		items?: SettingsItem[];
 		onActivate?: (item: SettingsItem) => void;
+		onCtrlS?: () => void;
 	} = {},
 ) {
+	const { onCtrlS, ...viewOptions } = options;
 	const t = await testRender(
 		() => {
 			const renderer = useRenderer();
@@ -65,10 +67,25 @@ async function renderView(
 					ctx.require("textEntry.active", Boolean(value));
 				},
 			});
+			const disposeCtrlSProbe = keymap.registerLayer({
+				name: "agent-presets-ctrl-s-probe",
+				priority: 1,
+				commands: [
+					{
+						name: "agent-presets-ctrl-s-probe.handle",
+						run: () => {
+							onCtrlS?.();
+							return true;
+						},
+					},
+				],
+				bindings: [{ key: "ctrl+s", cmd: "agent-presets-ctrl-s-probe.handle" }],
+			});
+			onCleanup(disposeCtrlSProbe);
 			keymap.setData("app.view", "home");
 			keymap.setData("modal.active", "none");
 			onCleanup(dispose);
-			return <AgentPresetsView keymap={keymap} {...options} />;
+			return <AgentPresetsView keymap={keymap} {...viewOptions} />;
 		},
 		{ width: 110, height: 30 },
 	);
@@ -84,8 +101,14 @@ function wroteConfig(): Record<string, unknown> {
 	>;
 }
 
+function saveWithEnter(t: Awaited<ReturnType<typeof renderView>>) {
+	for (let index = 0; index < 100; index += 1) t.mockInput.pressTab();
+	t.mockInput.pressEnter();
+}
+
 test("the + key opens a blank form and saving persists a new profile", async () => {
-	const t = await renderView();
+	let ctrlSPassedThrough = false;
+	const t = await renderView({ onCtrlS: () => (ctrlSPassedThrough = true) });
 	expect(
 		await renderUntil(t, (frame) => frame.includes("Model profiles")),
 	).toBe(true);
@@ -103,18 +126,30 @@ test("the + key opens a blank form and saving persists a new profile", async () 
 	expect(await renderUntil(t, (frame) => frame.includes("Profile name"))).toBe(
 		true,
 	);
+	const formActions = activeKeybindCatalog().flatMap((section) =>
+		section.keybinds.map((keybind) => keybind.key),
+	);
+	expect(formActions).toContain("Enter");
+	expect(formActions).not.toContain("Ctrl+S");
 
-	// Ctrl+S validates before writing: the empty name is refused in place.
+	// Ctrl+S no longer submits or closes the editor.
 	t.mockInput.pressKey("s", { ctrl: true });
+	await t.renderOnce();
+	expect(ctrlSPassedThrough).toBe(true);
+	expect(wroteConfig()).not.toHaveProperty("agents");
+	expect(t.captureCharFrame()).toContain("Profile name");
+
+	// Enter on the last field validates before writing.
+	saveWithEnter(t);
 	expect(
 		await renderUntil(t, (frame) => frame.includes("Name is required")),
 	).toBe(true);
 	expect(wroteConfig()).not.toHaveProperty("agents");
 
-	// Type the name, then save from the name field.
+	// Type the name, then save with Enter on the last field.
 	for (const char of "fresh") t.mockInput.pressKey(char);
 	await t.renderOnce();
-	t.mockInput.pressKey("s", { ctrl: true });
+	saveWithEnter(t);
 	expect(await renderUntil(t, (frame) => frame.includes("fresh"))).toBe(true);
 	const agents = wroteConfig().agents as {
 		profiles: Record<string, { runtime: string }>;
@@ -173,7 +208,7 @@ test("renaming an unreferenced profile saves the new key and drops the old", asy
 		t.mockInput.pressBackspace();
 	for (const char of "new") t.mockInput.pressKey(char);
 	await t.renderOnce();
-	t.mockInput.pressKey("s", { ctrl: true });
+	saveWithEnter(t);
 	expect(await renderUntil(t, (frame) => frame.includes("new"))).toBe(true);
 	const profiles = (
 		wroteConfig().agents as { profiles: Record<string, unknown> }
@@ -208,7 +243,7 @@ test("renaming a referenced profile is refused in place", async () => {
 		t.mockInput.pressBackspace();
 	for (const char of "renamed") t.mockInput.pressKey(char);
 	await t.renderOnce();
-	t.mockInput.pressKey("s", { ctrl: true });
+	saveWithEnter(t);
 	expect(await renderUntil(t, (frame) => frame.includes("Cannot rename"))).toBe(
 		true,
 	);
@@ -293,6 +328,11 @@ test("presets list exposes the built-in and creates a preset with a step route",
 	expect(await renderUntil(t, (frame) => frame.includes("Preset name"))).toBe(
 		true,
 	);
+	const formKeys = activeKeybindCatalog().flatMap((section) =>
+		section.keybinds.map((keybind) => keybind.key),
+	);
+	expect(formKeys).toContain("Enter");
+	expect(formKeys).not.toContain("Ctrl+S");
 	for (const char of "my-preset") t.mockInput.pressKey(char);
 	// name → default profile → four complexity fields → step core.plan.
 	for (let index = 0; index < 6; index += 1) t.mockInput.pressTab();
@@ -300,7 +340,7 @@ test("presets list exposes the built-in and creates a preset with a step route",
 	expect(t.captureCharFrame()).toContain("Step core.plan");
 	t.mockInput.pressKey("l"); // choose profile "a"
 	await t.renderOnce();
-	t.mockInput.pressKey("s", { ctrl: true });
+	saveWithEnter(t);
 	expect(await renderUntil(t, (frame) => frame.includes("my-preset"))).toBe(
 		true,
 	);
@@ -509,7 +549,7 @@ test("text fields accept quote characters", async () => {
 	);
 	for (const char of ["o", "'", "k", '"']) t.mockInput.pressKey(char);
 	await t.renderOnce();
-	t.mockInput.pressKey("s", { ctrl: true });
+	saveWithEnter(t);
 	const name = `o'k"`;
 	expect(await renderUntil(t, (frame) => frame.includes(name))).toBe(true);
 	const profiles = (

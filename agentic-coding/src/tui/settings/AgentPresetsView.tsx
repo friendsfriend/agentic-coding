@@ -77,7 +77,6 @@ const SURFACE_KEYS = [
 	"right",
 	"home",
 	"end",
-	"ctrl+s",
 	"j",
 	"k",
 	"d",
@@ -493,10 +492,6 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 		// form
 		const focused = field();
 		if (!focused) return false;
-		if (event.ctrl && key === "s") {
-			submit();
-			return true;
-		}
 		if (event.ctrl || event.meta || event.option) return false;
 		if (key === "escape") {
 			setDraft(undefined);
@@ -765,7 +760,6 @@ export function catalogFor(view: View): KeybindSection[] {
 				{ key: "j/k", action: "move choice field", standard: true },
 				{ key: "h/l", action: "change choice", standard: true },
 				{ key: "Enter", action: "next / save", short: "next" },
-				{ key: "Ctrl+S", action: "save", short: "save" },
 				{ key: "Esc", action: "cancel", short: "cancel", standard: true },
 			],
 		},
