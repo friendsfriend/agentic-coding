@@ -95,13 +95,14 @@ function complete(
 	view: WorkflowView,
 	role: string,
 	payload: unknown,
+	runToken?: string,
 ): WorkflowView {
 	const summary = view.runs.find(
 		(run) => run.role === role && ["pending", "working"].includes(run.status),
 	);
 	if (!summary) throw new Error(`missing ${role} run`);
 	const run = engine.getRun(root, summary.id);
-	const token = launchToken(engine, root, run.id);
+	const token = runToken ?? launchToken(engine, root, run.id);
 	fs.mkdirSync(path.dirname(requireDefined(run.outputPath, "output path")), {
 		recursive: true,
 	});
@@ -186,6 +187,7 @@ function drive(
 		routing,
 	}).view;
 	const visited = [view.currentStep.id];
+	let archiveLaunchToken: string | undefined;
 	if (definitionId === "openspec-full") {
 		view = complete(engine, root, view, "planner", {
 			primaryChangeId: definitionId,
@@ -257,17 +259,66 @@ function drive(
 		});
 		visited.push(view.currentStep.id);
 		view = action(engine, root, view, "approve-wiki");
-		const verification = requireEffect(
-			engine.claimEffects(root, 1),
-			"wiki.verify",
-		);
-		view = engine.dispatch(root, {
-			type: "effect.result",
-			effectId: verification.id,
-			lease: requireDefined(verification.lease, "effect lease"),
-			outcome: "complete",
-		}).view;
-		visited.push(view.currentStep.id);
+		if (definitionId === "no-openspec") {
+			const verification = requireEffect(
+				engine.claimEffects(root, 1),
+				"wiki.verify",
+			);
+			view = engine.dispatch(root, {
+				type: "effect.result",
+				effectId: verification.id,
+				lease: requireDefined(verification.lease, "effect lease"),
+				outcome: "complete",
+			}).view;
+		} else {
+			const archiveRun = requireDefined(
+				view.runs.find((run) => run.role === "archive"),
+				"archive run",
+			);
+			const enteredEffects = engine.claimEffects(root, 100);
+			expect(enteredEffects.map((effect) => effect.kind)).toEqual([
+				"artifact.write",
+				"agent.launch",
+				"wiki.verify",
+			]);
+			const archiveArtifact = requireDefined(
+				enteredEffects.find(
+					(effect) =>
+						effect.kind === "artifact.write" &&
+						(effect.payload as { runId?: string }).runId === archiveRun.id,
+				),
+				"archive assignment effect",
+			);
+			const archiveLaunch = requireDefined(
+				enteredEffects.find(
+					(effect) =>
+						effect.kind === "agent.launch" &&
+						(effect.payload as { runId?: string }).runId === archiveRun.id,
+				),
+				"archive launch effect",
+			);
+			view = engine.dispatch(root, {
+				type: "effect.result",
+				effectId: archiveArtifact.id,
+				lease: requireDefined(archiveArtifact.lease, "effect lease"),
+				outcome: "complete",
+			}).view;
+			const verification = requireEffect(enteredEffects, "wiki.verify");
+			view = engine.dispatch(root, {
+				type: "effect.result",
+				effectId: verification.id,
+				lease: requireDefined(verification.lease, "effect lease"),
+				outcome: "complete",
+			}).view;
+			visited.push(view.currentStep.id);
+			// Launch effect is claimed before wiki verification, so handoff uses its
+			// already-issued capability instead of claiming it a second time.
+			archiveLaunchToken = requireDefined(
+				archiveLaunch.runToken,
+				"archive launch token",
+			);
+		}
+		if (definitionId === "no-openspec") visited.push(view.currentStep.id);
 	}
 	if (definitionId !== "no-openspec") {
 		const active = path.join(root, "openspec", "changes", definitionId);
@@ -280,7 +331,14 @@ function drive(
 		);
 		fs.mkdirSync(path.dirname(archived), { recursive: true });
 		fs.renameSync(active, archived);
-		view = complete(engine, root, view, "archive", { archived: true });
+		view = complete(
+			engine,
+			root,
+			view,
+			"archive",
+			{ archived: true },
+			archiveLaunchToken,
+		);
 		visited.push(view.currentStep.id);
 	}
 	const commit = requireEffect(

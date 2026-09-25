@@ -490,19 +490,30 @@ export function transition(
 	);
 	if (context !== undefined) snapshot.step.context = context;
 	snapshot.status = arrival.status ?? "active";
-	for (const effect of edge.effects ?? [])
-		enqueue(
-			db,
-			snapshot,
-			effect.kind,
-			`${snapshot.workflowId}:${effect.idempotencyKey}:${snapshot.revision}`,
-			effect.kind === "wiki.verify"
-				? snapshot.definition.id === "wiki-comments"
-					? wikiVerificationPayload(snapshot)
-					: (prior.context ?? wikiVerificationPayload(snapshot))
-				: effect.payload,
-		);
-	enterStep(db, snapshot, definition, registry, now);
+	const enqueueEdgeEffects = () => {
+		for (const effect of edge.effects ?? [])
+			enqueue(
+				db,
+				snapshot,
+				effect.kind,
+				`${snapshot.workflowId}:${effect.idempotencyKey}:${snapshot.revision}`,
+				effect.kind === "wiki.verify"
+					? snapshot.definition.id === "wiki-comments"
+						? wikiVerificationPayload(snapshot)
+						: (prior.context ?? wikiVerificationPayload(snapshot))
+					: effect.payload,
+			);
+	};
+	// Start destination agents before unrelated transition effects. In archive
+	// flows, wiki.verify can involve Git I/O; it must not hide archive launch
+	// behind that potentially slow operation.
+	if (destination.actor === "agent") {
+		enterStep(db, snapshot, definition, registry, now);
+		enqueueEdgeEffects();
+	} else {
+		enqueueEdgeEffects();
+		enterStep(db, snapshot, definition, registry, now);
+	}
 }
 
 export function enterStep(
