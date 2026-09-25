@@ -18,9 +18,11 @@ export {
 	onWorkflowExecutionSettled,
 	PRESET_CONFIG_DEFAULTS,
 	reconcileSidebarPresentation,
+	reconcileWorkflowNotifications,
 	requestWorkflowExecution,
 	startSidebarPresentation,
 	startWikiCommentWorkflowInProcess,
+	startWorkflowNotifications,
 	switchWorkflowPreset,
 	workflowExecutionError,
 } from "../../server/operations/engine.ts";

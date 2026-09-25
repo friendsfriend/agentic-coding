@@ -66,6 +66,7 @@ import {
 	openSpecArtifacts,
 	PRESET_CONFIG_DEFAULTS,
 	reconcileSidebarPresentation,
+	reconcileWorkflowNotifications,
 	serverOwnsExecutionEvents,
 	subscribeDataEvents,
 	subscribeHerdrEvents,
@@ -1112,6 +1113,10 @@ export function App(props: {
 		const debounced = debounce(() => {
 			refresh();
 			reconcileSidebarPresentation();
+			// Present only when the notifier owner lives in this process (the home
+			// shell); in the standalone dash process this is a no-op and the
+			// observer's bounded fallback interval drives reconciliation.
+			reconcileWorkflowNotifications();
 		}, 200);
 		if (serverOwnsExecutionEvents()) {
 			// Attached: the server owns execution and Herdr, and publishes

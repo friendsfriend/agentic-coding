@@ -16,6 +16,7 @@ import {
 	setCredentialPromptProvider,
 	workflowExecutionError,
 } from "../../workflow/execution-coordinator.ts";
+import { WorkflowNotifications } from "../../workflow/notification-observer.ts";
 import { engine as workflowEngineFactory } from "../../workflow/operations.ts";
 import { parseAgentsConfig } from "../../workflow/profiles.ts";
 import {
@@ -139,6 +140,63 @@ export function startSidebarPresentation(
 export function reconcileSidebarPresentation(): void {
 	if (!sidebarPresentation?.enabled) return;
 	void sidebarPresentation.reconcile();
+}
+
+/**
+ * Developer-action notification owner (workflow-developer-notifications): one
+ * application-scoped observer alongside the sidebar owner. Same registration
+ * lifetime and reconcile triggers, but gated by its own independent trusted
+ * preference and free of the sidebar's view writes.
+ */
+const notificationRepoProviders = new Set<() => readonly string[]>();
+let workflowNotifications: WorkflowNotifications | undefined;
+
+export function governedNotificationRepos(): string[] {
+	const repos = new Set<string>();
+	for (const provider of notificationRepoProviders) {
+		try {
+			for (const repo of provider()) if (repo) repos.add(repo);
+		} catch {
+			/* a provider source that is unavailable contributes nothing */
+		}
+	}
+	return [...repos];
+}
+
+/** Register a repository source for the notifier; returns its disposer. */
+export function startWorkflowNotifications(
+	provideRepos: () => readonly string[],
+): () => void {
+	notificationRepoProviders.add(provideRepos);
+	if (!workflowNotifications) {
+		workflowNotifications = new WorkflowNotifications({
+			herdr: new Herdr(),
+			views: () =>
+				governedNotificationRepos().flatMap((repo) => {
+					try {
+						return listWorkflowViews(repo);
+					} catch {
+						return [];
+					}
+				}),
+		});
+		// Disabled by default: nothing is observed or raised unless the trusted
+		// user preference turns the integration on.
+		if (workflowNotifications.enabled) workflowNotifications.start();
+	}
+	return () => {
+		notificationRepoProviders.delete(provideRepos);
+		if (notificationRepoProviders.size === 0) {
+			workflowNotifications?.dispose();
+			workflowNotifications = undefined;
+		}
+	};
+}
+
+/** Reconcile notifications after a dashboard-side mutation or Herdr event. */
+export function reconcileWorkflowNotifications(): void {
+	if (!workflowNotifications?.enabled) return;
+	void workflowNotifications.reconcile();
 }
 export function previewWorkflowRepair(repo: string, workflowId: string) {
 	return workflowEngineFactory(dashboardApplication).previewRepair(

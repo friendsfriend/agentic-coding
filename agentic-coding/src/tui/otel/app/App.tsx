@@ -62,6 +62,7 @@ import {
 	listPresetNames,
 	startSidebarPresentation,
 	startWikiCommentWorkflowInProcess,
+	startWorkflowNotifications,
 } from "../../context/app-actions.ts";
 import {
 	agentConfigEntry,
@@ -1230,6 +1231,9 @@ export function App(props: {
 		// reads, never re-registered (or its custom view reasserted) on refresh
 		// (improve-herdr-workflow-sidebar).
 		const stopSidebarPresentation = startSidebarPresentation(sidebarRepos);
+		// One developer-action notification owner alongside the sidebar owner, on
+		// the same stable repository source and bounded lifetime.
+		const stopWorkflowNotifications = startWorkflowNotifications(sidebarRepos);
 		// The initial history load and live OTLP receiver pushes mutate the store
 		// directly (shell-owned), so refresh the mounted views on every change.
 		const unsubscribeTraceStore = traceStore.onChange(refresh);
@@ -1274,6 +1278,7 @@ export function App(props: {
 			unsubscribeTelemetry();
 			if (catalogPoll) clearInterval(catalogPoll);
 			stopSidebarPresentation();
+			stopWorkflowNotifications();
 			renderer.keyInput.off("keypress", recordKey);
 			disposeKeyRecording?.();
 			unsubscribeTraceStore();

@@ -83,6 +83,7 @@ const DOMAIN_FILES = [
 	"workflow/definitions.ts", // re-export barrel over definitions/*
 	"workflow/classifiers.ts", // pure classifier integration catalog (categories + parsing; I/O lives in classifier-runner.ts)
 	"workflow/sidebar.ts", // pure Herdr sidebar projection: views + supplied observations -> display tokens and input ranks
+	"workflow/notifications.ts", // pure developer-action notification projection + transition dedup
 	"workflow/run-projections.ts", // pure run projections shared by the dashboard, server operations and gateway
 ];
 const RUNTIME_FILES = [
@@ -105,6 +106,8 @@ const RUNTIME_FILES = [
 	"workflow/agent-extensions.ts",
 	"workflow/sidebar-sync.ts", // bounded Herdr metadata/view publication boundary
 	"workflow/sidebar-observer.ts", // application-owned presentation lifecycle
+	"workflow/notification-sync.ts", // bounded Herdr notification show/focus boundary
+	"workflow/notification-observer.ts", // application-owned developer-action notification lifecycle
 	"workflow/project-catalog.ts", // single asynchronous configured-project catalog client (HTTP + bounded headless invocation)
 ];
 const APPLICATION_FILES = [

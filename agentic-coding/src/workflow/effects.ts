@@ -283,6 +283,9 @@ export interface WorkflowConfig {
 		/** Trusted user-only opt-in for the native Herdr sidebar integration
 		 * (improve-herdr-workflow-sidebar); project overlays cannot change it. */
 		herdr_sidebar?: boolean;
+		/** Trusted user-only opt-in for developer-action notifications
+		 * (workflow-developer-notifications); project overlays cannot change it. */
+		herdr_notifications?: boolean;
 	};
 	wiki?: { root?: string; reviewer?: string };
 }
@@ -298,7 +301,12 @@ export const DEFAULT_CONFIG: WorkflowConfig = {
 		base_branch: "origin/HEAD",
 	},
 	telemetry: { capture_content: true },
-	ui: { theme: "catppuccin", selection_height: 10, herdr_sidebar: false },
+	ui: {
+		theme: "catppuccin",
+		selection_height: 10,
+		herdr_sidebar: false,
+		herdr_notifications: false,
+	},
 	wiki: { root: "~/.config/agentic-coding/wiki" },
 };
 
@@ -518,6 +526,29 @@ export function userConfigPaths(
 	];
 }
 
+/** One trusted user-only `ui.<key> === true` reader: first existing user
+ * config file wins, a project overlay or `HERDR_WORKFLOW_CONFIG` is never
+ * consulted, and a missing/unreadable file is false. Both Herdr integrations
+ * share this precedence so they cannot drift. */
+function trustedUiFlag(
+	key: "herdr_sidebar" | "herdr_notifications",
+	home: string,
+	root: string,
+): boolean {
+	for (const candidate of userConfigPaths(home, root)) {
+		try {
+			if (!fs.existsSync(candidate)) continue;
+			const parsed = readConfigDocument(candidate) as {
+				ui?: Record<string, unknown>;
+			};
+			return parsed.ui?.[key] === true;
+		} catch {
+			return false;
+		}
+	}
+	return false;
+}
+
 /** `ui.herdr_sidebar`, default false (improve-herdr-workflow-sidebar). The
  * canonical root is an independent input from `home` (the legacy `~/.pi` path
  * lives outside it), so both are injected rather than derived from one another. */
@@ -525,18 +556,17 @@ export function herdrSidebarEnabled(
 	home = os.homedir(),
 	root: string = resolveConfigRoot(),
 ): boolean {
-	for (const candidate of userConfigPaths(home, root)) {
-		try {
-			if (!fs.existsSync(candidate)) continue;
-			const parsed = readConfigDocument(candidate) as {
-				ui?: { herdr_sidebar?: unknown };
-			};
-			return parsed.ui?.herdr_sidebar === true;
-		} catch {
-			return false;
-		}
-	}
-	return false;
+	return trustedUiFlag("herdr_sidebar", home, root);
+}
+
+/** `ui.herdr_notifications`, default false (workflow-developer-notifications).
+ * Same trusted user-only precedence as `herdrSidebarEnabled`: a project overlay
+ * or `HERDR_WORKFLOW_CONFIG` can never flip a server-wide integration. */
+export function herdrNotificationsEnabled(
+	home = os.homedir(),
+	root: string = resolveConfigRoot(),
+): boolean {
+	return trustedUiFlag("herdr_notifications", home, root);
 }
 
 /** Resolve the config file that dashboard edits write back to (see

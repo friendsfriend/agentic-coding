@@ -176,6 +176,10 @@ Use `agentic-coding workflow wiki list`, `search`, `show`, `write`, `verify`, an
 
 Optional native Herdr sidebar cards for managed workflows and agents: canonical project, workflow, type/phase, lifecycle role, live runtime status, an input-first Agents ordering, and a reversible opt-in. Disabled by default (`ui.herdr_sidebar`); the row configuration recipe, view-ownership semantics, observer lifetime, and rollback steps live in [`agentic-coding/docs/herdr-sidebar.md`](agentic-coding/docs/herdr-sidebar.md). The integration publishes display-only metadata through the shared Herdr boundary and never changes workflow stores, agent processes, native names, or topology.
 
+## Workflow developer-action notifications
+
+Optional Herdr notification whenever a managed workflow newly owes developer input (an approval gate, a pending developer question, or a blocked agent), naming the workflow and the phase and focusing that workflow's dashboard tab. Disabled by default (`ui.herdr_notifications`), opt-in trusted user configuration only, and alive only while an Agentic Coding shell is running — there is no daemon. Enablement, the focus behavior, the no-daemon lifetime rule, and the manual Herdr recipe for silencing agent-finished toasts live in [`agentic-coding/docs/workflow-notifications.md`](agentic-coding/docs/workflow-notifications.md).
+
 ## Development
 
 ```bash
