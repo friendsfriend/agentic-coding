@@ -6,7 +6,7 @@ import type { HerdrPort } from "../adapters.ts";
 import { isPaneLiveAsync, resolveLiveAgentAsync } from "../effect-runner.ts";
 import type { WorkflowEngine } from "../runtime.ts";
 import type { StepBehavior } from "../steps/types.ts";
-import { agentTabLabel } from "../tab-status.ts";
+import { agentTabLabel, agentTabRoleName } from "../tab-status.ts";
 import { registry as defaultRegistry } from "./registry.ts";
 
 /** Tab/pane group a round-scoped step splits into. Runs share a tab only when
@@ -202,7 +202,10 @@ export function paneForRunFactory(
 				}
 			}
 		}
-		const label = agentTabLabel(group ?? run.role, run.status);
+		const label = agentTabLabel(
+			agentTabRoleName(group ?? run.role),
+			run.status,
+		);
 		const result = herdr.call(
 			"tab",
 			"create",

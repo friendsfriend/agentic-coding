@@ -80,7 +80,7 @@ When assignment interaction mode is `developer-dialogue`, the prompt SHALL permi
 - **AND** it SHALL not add a complete-suite worker task that duplicates the workflow test-verifier run
 
 ### Requirement: Triage has its own tab and each verifier role has its own tab
-The workflow SHALL run triage in its own tab labeled `triage` and SHALL give every verifier role its own tab labeled with that role's name and current run status glyph. Verifier roles SHALL NOT share a tab and SHALL NOT split a shared verifier pane into a grid; each verifier pane SHALL occupy the full tab height. Verifier pane geometry SHALL never anchor on the triage pane, and a verifier tab SHALL be reused across verification rounds and fix loops rather than duplicated.
+The workflow SHALL run triage in its own tab labeled `triage` and SHALL give every verifier role its own tab labeled with a shortened form of that role's name and current run status glyph. Verifier roles SHALL NOT share a tab and SHALL NOT split a shared verifier pane into a grid; each verifier pane SHALL occupy the full tab height. Verifier pane geometry SHALL never anchor on the triage pane, and a verifier tab SHALL be reused across verification rounds and fix loops rather than duplicated.
 
 #### Scenario: Triage creates its own tab
 - **WHEN** the triage run is launched
@@ -95,13 +95,14 @@ The workflow SHALL run triage in its own tab labeled `triage` and SHALL give eve
 
 #### Scenario: First verifier role creates its own tab
 - **WHEN** a verifier role is launched and no live agent resolves for it
-- **THEN** workflow SHALL create a tab labeled `<status glyph> <role>` and start the verifier in the returned root pane at full tab height
+- **THEN** workflow SHALL create a tab labeled `<status glyph> <shortened role>` and start the verifier in the returned root pane at full tab height
+- **AND** the shortened role SHALL compress the role's `-verifier` suffix to `-v…` (for example `quality-v…`), leaving non-verifier role names unchanged
 - **AND** record the returned tab ID against that role
 
 #### Scenario: Additional verifier roles each get their own tab
 - **GIVEN** a live tab exists for one verifier role
 - **WHEN** another verifier role launches
-- **THEN** workflow SHALL create a separate tab labeled with the second role's name at full tab height
+- **THEN** workflow SHALL create a separate tab labeled with the second role's shortened name at full tab height
 - **AND** SHALL NOT split the first verifier's tab or place the second role in the first role's pane
 - **AND** SHALL NOT anchor verifier pane geometry on the triage pane
 

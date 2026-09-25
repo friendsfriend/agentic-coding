@@ -740,9 +740,7 @@ describe("breaking workflow CLI surface", () => {
 		const created = calls.find(
 			(args) => args[0] === "tab" && args[1] === "create",
 		);
-		expect(created?.[created.indexOf("--label") + 1]).toBe(
-			"○ quality-verifier",
-		);
+		expect(created?.[created.indexOf("--label") + 1]).toBe("○ quality-v…");
 	});
 
 	test("each verifier role launches into its own tab and never splits a live sibling's pane", async () => {
@@ -843,7 +841,7 @@ describe("breaking workflow CLI surface", () => {
 		const labels = calls
 			.filter((args) => args[0] === "tab" && args[1] === "create")
 			.map((args) => args[args.indexOf("--label") + 1]);
-		expect(labels).toEqual(["○ quality-verifier", "○ security-verifier"]);
+		expect(labels).toEqual(["○ quality-v…", "○ security-v…"]);
 	});
 
 	test("shared-group layout anchors on siblings confirmed live by canonical name, not stored pane ids", async () => {

@@ -4,6 +4,7 @@ import {
 	agentTabGlyph,
 	agentTabLabel,
 	agentTabMatchesBase,
+	agentTabRoleName,
 	aggregateAgentTabStatus,
 	findAgentTabByBase,
 	latestStatusesByTab,
@@ -66,6 +67,19 @@ describe("agent tab status glyphs", () => {
 		expect(findAgentTabByBase(tabs, "dashboard")?.tab_id).toBe("t2");
 		expect(findAgentTabByBase(tabs, "worker")?.tab_id).toBe("t1");
 		expect(findAgentTabByBase(tabs, "git")).toBeUndefined();
+	});
+
+	test("verifier role names compress to a short tab base", () => {
+		expect(agentTabRoleName("quality-verifier")).toBe("quality-v…");
+		expect(agentTabRoleName("security-verifier")).toBe("security-v…");
+		expect(agentTabRoleName("performance-verifier")).toBe("performance-v…");
+		expect(agentTabRoleName("test-quality-verifier")).toBe("test-quality-v…");
+	});
+
+	test("non-verifier role names are unchanged", () => {
+		expect(agentTabRoleName("worker")).toBe("worker");
+		expect(agentTabRoleName("triage")).toBe("triage");
+		expect(agentTabRoleName("planner")).toBe("planner");
 	});
 
 	test("aggregation keeps outstanding work ahead of terminal states", () => {

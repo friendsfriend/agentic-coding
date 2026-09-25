@@ -89,6 +89,14 @@ export function latestStatusesByTab(
 	return result;
 }
 
+/** Shorten a role name for use as a tab-label base. Verifier roles keep their
+ * prefix but compress the `-verifier` suffix to a single `v` plus an ellipsis
+ * (`quality-verifier` → `quality-v…`), so a row of verifier tabs stays narrow;
+ * every other role is returned unchanged. */
+export function agentTabRoleName(role: string): string {
+	return role.replace(/-verifier$/, "-v…");
+}
+
 /** Render a tab label as `<glyph> <base>`. The glyph prefix is a single cell,
  * so repeated updates never change the rendered tab width. */
 export function agentTabLabel(base: string, status: string): string {
