@@ -46,6 +46,8 @@ describe("workflow registry", () => {
 			"openspec-full",
 			"openspec-propose",
 			"openspec-apply",
+			"openspec-jev",
+			"openspec-jev-apply",
 			"no-openspec",
 			"openspec-fusion-full",
 			"openspec-fusion-propose",

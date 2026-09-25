@@ -23,6 +23,18 @@ export const PUBLIC_WORKFLOW_CATALOG: readonly WorkflowCatalogEntry[] =
 				"Openspec flow with reduced apply, verify, developer-review, wiki, wiki-review, archive phases",
 		}),
 		Object.freeze({
+			id: "openspec-jev",
+			label: "Openspec (JEV)",
+			description:
+				"Openspec flow that asks the JEV classifier for plan complexity before the worker and picks the matching preset profile",
+		}),
+		Object.freeze({
+			id: "openspec-jev-apply",
+			label: "Openspec apply (JEV)",
+			description:
+				"Openspec apply flow that classifies complexity before the first implementation round",
+		}),
+		Object.freeze({
 			id: "no-openspec",
 			label: "No OpenSpec",
 			description:

@@ -9,6 +9,29 @@ import { loadAssignments } from "./agent-extensions.ts";
 import type { CompiledWorkflowDefinition } from "./registry.ts";
 import { stableJson } from "./registry.ts";
 
+/** Flat preset keys that map a classifier category to a worker profile
+ * (introduce-jev-for-model-range-decision). The key set is the integration's
+ * category vocabulary; adding a classifier with different categories needs a
+ * matching config shape before it can route. */
+export const PRESET_CATEGORY_KEYS = [
+	"easy",
+	"medium",
+	"hard",
+	"critical",
+] as const;
+export type PresetCategory = (typeof PRESET_CATEGORY_KEYS)[number];
+
+function categoryEntries(value: unknown): Array<[PresetCategory, string]> {
+	if (!value || typeof value !== "object") return [];
+	const record = value as Record<string, unknown>;
+	const entries: Array<[PresetCategory, string]> = [];
+	for (const key of PRESET_CATEGORY_KEYS) {
+		const profile = record[key];
+		if (typeof profile === "string") entries.push([key, profile]);
+	}
+	return entries;
+}
+
 export interface ProfileConfig {
 	runtime: RuntimeId;
 	executable?: string;
@@ -27,6 +50,11 @@ export interface PresetConfig {
 	default_profile?: string;
 	steps?: Record<string, string>;
 	roles?: Record<string, Record<string, string>>;
+	/** Per-complexity worker profiles consumed by classifier integrations. */
+	easy?: string;
+	medium?: string;
+	hard?: string;
+	critical?: string;
 }
 export interface AgentsConfig {
 	default_profile?: string;
@@ -43,6 +71,10 @@ export interface RoutingPreset {
 	default_profile?: string;
 	steps?: Record<string, string>;
 	roles?: Record<string, Record<string, string>>;
+	easy?: string;
+	medium?: string;
+	hard?: string;
+	critical?: string;
 }
 const RUNTIME_OPTIONS: Record<string, Set<string>> = {
 	pi: new Set([
@@ -216,6 +248,11 @@ function validatePresets(
 						`preset ${name}: unknown profile ${profileName} for role ${role} of step ${stepId}`,
 					);
 		}
+		for (const [category, profileName] of categoryEntries(preset))
+			if (!ownProfile(profiles, profileName))
+				throw new Error(
+					`preset ${name}: unknown profile ${profileName} for category ${category}`,
+				);
 	}
 	if (!Object.hasOwn(parsed, BUILTIN_PRESET_NAME))
 		parsed[BUILTIN_PRESET_NAME] = { runtime: "pi" };
@@ -297,6 +334,7 @@ export function resolvePreset(
 			: {}),
 		...(preset.steps ? { steps: preset.steps } : {}),
 		...(preset.roles ? { roles: preset.roles } : {}),
+		...Object.fromEntries(categoryEntries(preset)),
 	};
 }
 /** Fail startup when a selected preset leaves an agent step unresolvable. */
@@ -408,11 +446,42 @@ export function enforceReadOnlySteps(
 		),
 	};
 }
+export interface CategorySelection {
+	readonly stepId: string;
+	readonly role?: string;
+	readonly profileName: string;
+}
+
+/** The worker profile a preset maps a classifier category to, if any. */
+export function categoryProfile(
+	preset: RoutingPreset | undefined,
+	category: string,
+): string | undefined {
+	if (!preset) return undefined;
+	return categoryEntries(preset).find(([key]) => key === category)?.[1];
+}
+
+/** Collapse a pinned routing back into the role table `resolveRouting` takes,
+ * so a mid-workflow re-resolution (classification, preset switch) reuses the
+ * already-pinned roles instead of recomputing step knowledge. */
+export function rolesByStepFromRouting(
+	routing: WorkflowRouting,
+): Record<string, string[]> {
+	const rolesByStep: Record<string, string[]> = {};
+	for (const route of routing.routes) {
+		const roles = rolesByStep[route.stepId] ?? [];
+		rolesByStep[route.stepId] = roles;
+		if (route.role && !roles.includes(route.role)) roles.push(route.role);
+	}
+	return rolesByStep;
+}
+
 export function resolveRouting(
 	definition: CompiledWorkflowDefinition,
 	rolesByStep: Record<string, string[]>,
 	config: AgentsConfig,
 	preset?: RoutingPreset,
+	selection?: CategorySelection,
 ): WorkflowRouting {
 	const routes: WorkflowRouting["routes"][number][] = [];
 	for (const stepId of definition.steps) {
@@ -430,6 +499,20 @@ export function resolveRouting(
 					role,
 					profile: profileFor(stepId, role, definition, config, preset),
 				});
+	}
+	if (selection) {
+		const profile = resolveProfile(selection.profileName, config);
+		const matches = (route: (typeof routes)[number]) =>
+			route.stepId === selection.stepId &&
+			(selection.role === undefined || route.role === selection.role);
+		const index = routes.findIndex(matches);
+		const entry = {
+			stepId: selection.stepId,
+			...(selection.role ? { role: selection.role } : {}),
+			profile,
+		};
+		if (index >= 0) routes[index] = entry;
+		else routes.push(entry);
 	}
 	return {
 		defaultProfile: config.default_profile ?? BUILTIN_PRESET_NAME,

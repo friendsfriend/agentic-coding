@@ -81,12 +81,14 @@ const DOMAIN_FILES = [
 	"workflow/registry.ts",
 	"workflow/embedded.generated.ts",
 	"workflow/definitions.ts", // re-export barrel over definitions/*
+	"workflow/classifiers.ts", // pure classifier integration catalog (categories + parsing; I/O lives in classifier-runner.ts)
 	"workflow/sidebar.ts", // pure Herdr sidebar projection: views + supplied observations -> display tokens and input ranks
 	"workflow/run-projections.ts", // pure run projections shared by the dashboard, server operations and gateway
 ];
 const RUNTIME_FILES = [
 	"workflow/effects.ts",
 	"workflow/effect-runner.ts",
+	"workflow/classifier-runner.ts", // bounded OpenSpec artifact collection + classifier model invocation
 	"workflow/secure-fs.ts",
 	"workflow/paths.ts",
 	"workflow/assets.ts",

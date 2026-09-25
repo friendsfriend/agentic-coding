@@ -1,6 +1,7 @@
 import type { WorkflowSnapshot } from "../../contracts/workflow.ts";
 import { implementationBehavior } from "./implementation.ts";
 import { lifecycleBehaviors } from "./lifecycle.ts";
+import { modelSelectionBehavior } from "./model-selection.ts";
 import { planningBehaviors } from "./planning.ts";
 import { researchBehavior } from "./research.ts";
 import type { StepBehavior } from "./types.ts";
@@ -10,6 +11,7 @@ import { wikiBehavior } from "./wiki.ts";
 export const STEP_BEHAVIORS: Readonly<Record<string, StepBehavior>> =
 	Object.freeze({
 		...planningBehaviors,
+		"core.model-selection": modelSelectionBehavior,
 		"core.implementation": implementationBehavior,
 		...verificationBehaviors,
 		"core.wiki": wikiBehavior,

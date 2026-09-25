@@ -21,10 +21,15 @@ import {
 import { workflowAssets } from "./assets.ts";
 import { renderAssignment } from "./assignment.ts";
 import {
+	collectClassifierArtifacts,
+	invokeClassifier,
+} from "./classifier-runner.ts";
+import { classifierFor } from "./classifiers.ts";
+import {
 	type CredentialPrompt,
 	runGitWithCredentialsEffect,
 } from "./credentials.ts";
-import { loadConfig } from "./effects.ts";
+import { loadConfig, loadConfigWithProvenance } from "./effects.ts";
 import { PermanentFailure, TransientFailure } from "./failures.ts";
 import * as H from "./herdr-schema.ts";
 import {
@@ -35,6 +40,11 @@ import {
 	workflowTraceContext,
 } from "./observability.ts";
 import { runProcessEffect } from "./process.ts";
+import {
+	categoryProfile,
+	parseAgentsConfig,
+	resolvePreset,
+} from "./profiles.ts";
 import type { StepDefinition, WorkflowRegistry } from "./registry.ts";
 import {
 	type ClaimedEffect,
@@ -1076,6 +1086,53 @@ export function agentEffectHandlers(
 						}
 					}
 					setupWorkspaces.delete(effect.id);
+				}),
+		},
+		"model.classify": {
+			execute: (effect, signal) =>
+				Effect.gen(function* () {
+					const snapshot = snapshotFor(effect);
+					const payload = effect.payload as { integration?: unknown };
+					const integration = classifierFor(
+						typeof payload.integration === "string" ? payload.integration : "",
+					);
+					const loaded = loadConfigWithProvenance({
+						repository: snapshot.metadata.repository || undefined,
+						repositoryIndependent: !snapshot.metadata.repository,
+					});
+					const agents = parseAgentsConfig(loaded.config.agents, loaded.config);
+					const raw = yield* invokeClassifier(
+						integration,
+						agents,
+						snapshot.metadata.worktree,
+						{
+							task: snapshot.metadata.task ?? "",
+							changeId: snapshot.metadata.changeId,
+							artifacts: collectClassifierArtifacts(
+								snapshot.metadata.worktree,
+								snapshot.metadata.changeId,
+							),
+						},
+						signal,
+					);
+					let category: string;
+					try {
+						category = integration.parse(raw);
+					} catch (error) {
+						throw new PermanentFailure(
+							`classifier ${integration.id}: ${(error as Error).message}`,
+						);
+					}
+					const preset = snapshot.metadata.selectedPreset
+						? resolvePreset(agents, snapshot.metadata.selectedPreset)
+						: undefined;
+					if (!categoryProfile(preset, category))
+						throw new PermanentFailure(
+							`classifier ${integration.id} chose ${category}, but preset ${
+								preset?.name ?? "(config defaults)"
+							} maps no profile for that category`,
+						);
+					return { integration: integration.id, category };
 				}),
 		},
 		"artifact.write": {
