@@ -541,7 +541,7 @@ describe("profiles, assignments, and adapters", () => {
 	});
 	test("verification routes are pinned read-only with no edit/write tools", () => {
 		const registry = registerBuiltins();
-		const definition = registry.definition("openspec-full", 1);
+		const definition = registry.definition("no-openspec", 1);
 		// Realistic user config: profiles carry no tools/capabilities, so they
 		// resolve writable (shell + edit) and must be narrowed by the step policy.
 		const agents = parseAgentsConfig({
@@ -549,7 +549,7 @@ describe("profiles, assignments, and adapters", () => {
 			profiles: { flash: { runtime: "pi", model: "provider/model" } },
 		});
 		const routing = startRouting(
-			"openspec-full",
+			"no-openspec",
 			undefined,
 			definition,
 			registry,
@@ -576,13 +576,13 @@ describe("profiles, assignments, and adapters", () => {
 	});
 	test("verification Pi launch keeps bash and the question tools, no extensions", async () => {
 		const registry = registerBuiltins();
-		const definition = registry.definition("openspec-full", 1);
+		const definition = registry.definition("no-openspec", 1);
 		const agents = parseAgentsConfig({
 			default_profile: "flash",
 			profiles: { flash: { runtime: "pi", model: "provider/model" } },
 		});
 		const routing = startRouting(
-			"openspec-full",
+			"no-openspec",
 			undefined,
 			definition,
 			registry,

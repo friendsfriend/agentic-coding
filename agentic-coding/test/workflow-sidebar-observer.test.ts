@@ -38,7 +38,7 @@ function view(overrides: {
 		workflowId: overrides.workflowId ?? "wf",
 		changeId: "wf",
 		revision: 4,
-		definition: { id: "openspec-full", version: 1, digest: "d", label: "Full" },
+		definition: { id: "openspec", version: 1, digest: "d", label: "Full" },
 		status: overrides.status ?? "active",
 		repository: "/projects/agentic-coding",
 		worktree: "/projects/agentic-coding",
@@ -245,7 +245,7 @@ describe("sidebar presentation lifecycle (task 4.6)", () => {
 			views: () => [{ ...gate, runs: [] }],
 		});
 		expect(metadataCalls(calls)).toContain(
-			"workspace report-metadata w1 --source agentic-coding --token ac_project_line=◆ agentic-coding --token ac_workflow_line=├─ wf --token ac_type_line=│  openspec-full --token ac_phase_line=└─ Implementation",
+			"workspace report-metadata w1 --source agentic-coding --token ac_project_line=◆ agentic-coding --token ac_workflow_line=├─ wf --token ac_type_line=│  openspec --token ac_phase_line=└─ Implementation",
 		);
 		// The agent card of the same space reflects only its own live state. The
 		// fallback always carries the workflow row (here the pane label).

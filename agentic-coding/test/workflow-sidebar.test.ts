@@ -57,7 +57,7 @@ function view(overrides: {
 		changeId: "improve-authentication",
 		revision: 3,
 		definition: {
-			id: overrides.definitionId ?? "openspec-full",
+			id: overrides.definitionId ?? "openspec",
 			version: 1,
 			digest: "d",
 			label: "Full",
@@ -119,7 +119,7 @@ describe("sidebar projection", () => {
 		expect(publication.workspaces[0]?.tokens).toEqual({
 			[SIDEBAR_WORKSPACE_TOKENS.project]: "◇ agentic-coding",
 			[SIDEBAR_WORKSPACE_TOKENS.workflow]: "├─ improve-authentication",
-			[SIDEBAR_WORKSPACE_TOKENS.kind]: "│  openspec-full",
+			[SIDEBAR_WORKSPACE_TOKENS.kind]: "│  openspec",
 			[SIDEBAR_WORKSPACE_TOKENS.phase]: "└─ Implementation",
 		});
 	});

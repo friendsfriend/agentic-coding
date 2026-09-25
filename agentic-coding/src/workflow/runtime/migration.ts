@@ -253,14 +253,14 @@ export function migrateLegacy(
 		typeof legacy.workflowType === "string" ? legacy.workflowType : undefined;
 	const workflowType =
 		legacyWorkflowType === "standard"
-			? "openspec-full"
+			? "openspec"
 			: (legacyWorkflowType ??
 				(Array.isArray(legacy.workflowModules) &&
 				!(legacy.workflowModules as unknown[]).includes("plan")
 					? (legacy.workflowModules as unknown[]).includes("archive")
 						? "openspec-apply"
 						: "no-openspec"
-					: "openspec-full"));
+					: "openspec"));
 	const stepMap: Record<string, string> = {
 		explore: "core.plan",
 		proposed: "core.plan-approval",

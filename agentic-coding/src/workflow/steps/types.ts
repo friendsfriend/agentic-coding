@@ -130,6 +130,9 @@ export interface InstructionAssetForRoleContext {
 }
 
 export interface StepBehavior {
+	/** Classifier mode this step participates in; absent when the step is not
+	 * classifiable. Step-owned so the runner/reducer never keep a step table. */
+	classification?: "single" | "roster";
 	roles?(ctx: StepRolesContext): string[];
 	candidateRoles?(ctx: CandidateRolesContext): string[];
 	/** Entry-guard predicate run before a step's `complete` outcome is

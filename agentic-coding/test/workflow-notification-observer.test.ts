@@ -26,7 +26,7 @@ function view(overrides: {
 		workflowId: overrides.workflowId ?? "wf",
 		changeId: "wf",
 		revision: 4,
-		definition: { id: "openspec-full", version: 1, digest: "d", label: "Full" },
+		definition: { id: "openspec", version: 1, digest: "d", label: "Full" },
 		status: overrides.status ?? "active",
 		repository: overrides.repository ?? "/projects/agentic-coding",
 		worktree: overrides.repository ?? "/projects/agentic-coding",

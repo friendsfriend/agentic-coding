@@ -9,29 +9,43 @@ import type {
 	WorkflowCommand,
 	WorkflowSnapshot,
 } from "../../../contracts/workflow.ts";
-import { classifierFor } from "../../classifiers.ts";
+import {
+	APPLY_PHASE_STEPS,
+	type ClassifierAnswer,
+	PLAN_PHASE_STEPS,
+	ROUTING_INTEGRATION,
+	selectRosterEntries,
+	selectSingleEntry,
+} from "../../classifiers.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
 import { loadConfigWithProvenance } from "../../effects.ts";
 import {
-	categoryProfile,
+	type AgentsConfig,
+	applyFusionRoster,
+	applyRoutingSelections,
+	type CategorySelection,
 	enforceReadOnlySteps,
 	parseAgentsConfig,
+	poolEntries,
 	preflightProfile,
 	resolvePreset,
-	resolveRouting,
-	rolesByStepFromRouting,
 } from "../../profiles.ts";
 import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
 } from "../../registry.ts";
-import { applyCompletionResult, enqueue, enterStep } from "../kernel.ts";
+import {
+	applyCompletionResult,
+	enqueue,
+	enterStep,
+	validateFusionRouting,
+} from "../kernel.ts";
 import { boundedError, type EffectRow, json, nowIso } from "../store.ts";
 
-/** Rewrite the pinned routing so the classifier integration's target route
- * uses the profile mapped from the answered category. Failures are surfaced
- * as attention and leave the existing (default) route in place rather than
- * stranding the workflow after the classifying effect already completed. */
+/** Apply the answered pool selections to the pinned routing. Every single
+ * selection replaces every route of its step (one verification pool covers all
+ * verifier roles); a fusion roster recomputes `planner-1..N`. Failures keep the
+ * tagged-default routing and record attention rather than stranding the run. */
 export function applyClassifierRouting(
 	snapshot: WorkflowSnapshot,
 	definition: CompiledWorkflowDefinition,
@@ -41,57 +55,97 @@ export function applyClassifierRouting(
 	try {
 		const payload =
 			data && typeof data === "object"
-				? (data as { integration?: unknown; category?: unknown })
+				? (data as {
+						integration?: unknown;
+						phase?: unknown;
+						answers?: unknown;
+						category?: unknown;
+					})
 				: {};
-		if (typeof payload.category !== "string")
-			throw new Error("classifier result is missing a category");
-		const integration = classifierFor(String(payload.integration ?? ""));
 		const loaded = loadConfigWithProvenance({
 			repository: snapshot.metadata.repository || undefined,
 			repositoryIndependent: !snapshot.metadata.repository,
 		});
-		const agents = parseAgentsConfig(loaded.config.agents, loaded.config);
+		const agents = parseAgentsConfig(
+			loaded.config.agents,
+			loaded.config,
+			loaded.provenance.files.join(", ") || undefined,
+		);
 		const preset = snapshot.metadata.selectedPreset
 			? resolvePreset(agents, snapshot.metadata.selectedPreset)
 			: undefined;
-		const profileName = categoryProfile(preset, payload.category);
-		if (!profileName)
+		if (payload.integration !== ROUTING_INTEGRATION)
 			throw new Error(
-				`classifier ${integration.id} chose ${payload.category} with no configured profile`,
+				`unknown model.classify integration: ${String(payload.integration)}`,
 			);
-		const routing = enforceReadOnlySteps(
-			resolveRouting(
-				definition,
-				rolesByStepFromRouting(snapshot.routing),
-				agents,
-				preset,
-				{
-					stepId: integration.target.stepId,
-					...(integration.target.role ? { role: integration.target.role } : {}),
-					profileName,
-				},
-			),
-			(stepId) => registry.stepForDefinition(definition, stepId).requirements,
-		);
-		const route = routing.routes.find(
-			(item) =>
-				item.stepId === integration.target.stepId &&
-				(integration.target.role === undefined ||
-					item.role === integration.target.role),
-		);
-		if (route)
-			preflightProfile(
-				route.profile,
-				registry.stepForDefinition(definition, integration.target.stepId)
-					.requirements,
-			);
-		snapshot.routing = routing;
+		applyPoolRouting(snapshot, definition, registry, agents, preset, payload);
 	} catch (error) {
 		snapshot.attention = [
 			...(snapshot.attention ?? []),
 			`classifier routing update failed: ${boundedError(error)}`,
 		];
 	}
+}
+
+function applyPoolRouting(
+	snapshot: WorkflowSnapshot,
+	definition: CompiledWorkflowDefinition,
+	registry: WorkflowRegistry,
+	agents: AgentsConfig,
+	preset: ReturnType<typeof resolvePreset> | undefined,
+	payload: { phase?: unknown; answers?: unknown },
+): void {
+	const phase = payload.phase === "apply" ? "apply" : "plan";
+	const answers =
+		payload.answers && typeof payload.answers === "object"
+			? (payload.answers as Record<string, ClassifierAnswer>)
+			: {};
+	const steps = phase === "plan" ? PLAN_PHASE_STEPS : APPLY_PHASE_STEPS;
+	const selections: CategorySelection[] = [];
+	const attention: string[] = [];
+	let rosterProfiles: string[] | undefined;
+	for (const stepId of steps) {
+		if (!definition.steps.includes(stepId)) continue;
+		const mode =
+			registry.stepForDefinition(definition, stepId).behavior?.classification ??
+			"single";
+		const entries = poolEntries(preset, stepId);
+		if (entries.length === 0)
+			throw new Error(
+				`classifier routing has no model pool for ${stepId}; define it in Settings → Presets`,
+			);
+		const answer = answers[stepId] ?? { type: "noul" };
+		if (mode === "roster") {
+			const selected = selectRosterEntries(entries, answer);
+			if (selected.attention)
+				attention.push(`${stepId}: ${selected.attention}`);
+			rosterProfiles = selected.profiles;
+			continue;
+		}
+		const selected = selectSingleEntry(entries, answer);
+		if (selected.attention) attention.push(`${stepId}: ${selected.attention}`);
+		if (selected.profile)
+			selections.push({ stepId, profileName: selected.profile });
+	}
+	// Overlay this pass's selections onto the pinned routes so an earlier pass's
+	// classification is preserved (a plain rebuild would revert every route to
+	// its pool default and flatten the fusion roster).
+	let routing = applyRoutingSelections(snapshot.routing, agents, selections);
+	if (rosterProfiles?.length)
+		routing = applyFusionRoster(routing, agents, rosterProfiles);
+	routing = enforceReadOnlySteps(
+		routing,
+		(stepId) => registry.stepForDefinition(definition, stepId).requirements,
+	);
+	if (rosterProfiles?.length) validateFusionRouting(definition.id, routing);
+	for (const route of routing.routes)
+		preflightProfile(
+			route.profile,
+			registry.stepForDefinition(definition, route.stepId).requirements,
+		);
+	snapshot.routing = routing;
+	if (attention.length)
+		snapshot.attention = [...(snapshot.attention ?? []), ...attention];
 }
 
 export function effectResult(

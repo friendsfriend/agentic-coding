@@ -65,6 +65,9 @@ const BASE_CONFIG = {
 				default_profile: "a",
 				steps: { "core.plan": "a" },
 				roles: { "custom.step": { "custom-role": "b" } },
+				pools: {
+					"core.implementation": [{ label: "a", profile: "a", default: true }],
+				},
 			},
 		},
 	},
@@ -230,22 +233,19 @@ describe("agents configuration revision", () => {
 	test("a preset edit preserves role tables outside the edited fields", () => {
 		withConfig(BASE_CONFIG, () => {
 			const current = loadAgentConfig().agents.presets?.p;
-			const {
-				"core.verification": verification = {},
-				"fusion.plan": fusionPlan = {},
-				...otherRoles
-			} = current?.roles ?? {};
-			// The editor's own shaping: only the tables it edits are rewritten.
+			// The editor's own shaping: only the pool fields are rewritten, and
+			// arbitrary role tables survive verbatim.
 			applyAgentsMutation(
 				{
 					kind: "set-preset",
 					name: "p",
 					preset: {
 						steps: { ...current?.steps, "core.implementation": "b" },
-						roles: {
-							...otherRoles,
-							"core.verification": { ...verification, "quality-verifier": "b" },
-							"fusion.plan": { ...fusionPlan, "planner-1": "a" },
+						roles: { ...current?.roles },
+						pools: {
+							"core.implementation": [
+								{ label: "a", profile: "b", default: true },
+							],
 						},
 					},
 				},
@@ -254,10 +254,7 @@ describe("agents configuration revision", () => {
 			);
 			const preset = loadAgentConfig().agents.presets?.p;
 			expect(preset?.steps?.["core.implementation"]).toBe("b");
-			expect(preset?.roles?.["core.verification"]?.["quality-verifier"]).toBe(
-				"b",
-			);
-			expect(preset?.roles?.["fusion.plan"]?.["planner-1"]).toBe("a");
+			expect(preset?.pools?.["core.implementation"]?.[0]?.profile).toBe("b");
 			// An arbitrary role table survives verbatim.
 			expect(preset?.roles?.["custom.step"]?.["custom-role"]).toBe("b");
 		});
@@ -282,7 +279,15 @@ describe("subsequent starts versus a running workflow's resolved routing", () =>
 		const before = parseAgentsConfig({
 			...baseConfig,
 			profiles: { ...baseConfig.profiles },
-			presets: { p: { steps: { "core.implementation": "a" } } },
+			presets: {
+				p: {
+					pools: {
+						"core.implementation": [
+							{ label: "a", profile: "a", default: true },
+						],
+					},
+				},
+			},
 		});
 		const started = startRouting(
 			"no-openspec",
@@ -297,7 +302,15 @@ describe("subsequent starts versus a running workflow's resolved routing", () =>
 		const after = parseAgentsConfig({
 			...baseConfig,
 			profiles: { ...baseConfig.profiles },
-			presets: { p: { steps: { "core.implementation": "b" } } },
+			presets: {
+				p: {
+					pools: {
+						"core.implementation": [
+							{ label: "b", profile: "b", default: true },
+						],
+					},
+				},
+			},
 		});
 		// The running workflow keeps its own resolved routing (it is recorded in the
 		// run input, not re-resolved), while a new start sees the new preset.

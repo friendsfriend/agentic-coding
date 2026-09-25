@@ -3,7 +3,11 @@
 // (split-workflow-god-modules). Every current importer keeps working
 // unchanged; see `src/workflow/README.md` for the module map.
 export type { WorkflowCatalogEntry } from "./definitions/catalog.ts";
-export { PUBLIC_WORKFLOW_CATALOG } from "./definitions/catalog.ts";
+export {
+	PUBLIC_WORKFLOW_CATALOG,
+	REMOVED_WORKFLOW_REPLACEMENTS,
+	removedWorkflowHint,
+} from "./definitions/catalog.ts";
 export type {
 	ResearchHandoff,
 	ResearchHandoffDirective,

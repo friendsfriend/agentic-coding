@@ -306,7 +306,7 @@ test("Home starts a workflow in the working directory or a path the user enters"
 	const types = await t.waitForFrame((value) =>
 		value.includes("Openspec apply"),
 	);
-	expect(types).toMatch(/Workflow type\s+openspec-full/);
+	expect(types).toMatch(/Workflow type\s+openspec/);
 	// Selecting a type opens the preset list. The editor that owned the
 	// repository path is removed from the tree here, and OpenTUI blurs only on
 	// destroy: without an explicit blur it kept receiving keys and wrote its path
@@ -317,7 +317,7 @@ test("Home starts a workflow in the working directory or a path the user enters"
 		value.includes("Config defaults"),
 	);
 	expect(presets).toContain("Agent preset");
-	expect(presets).toMatch(/Workflow type\s+openspec-full/);
+	expect(presets).toMatch(/Workflow type\s+openspec/);
 	expect(presets).not.toMatch(/Agent preset\s+\/home\//);
 	// The preset is a real choice: selecting one records it, never the path.
 	t.mockInput.pressEnter();

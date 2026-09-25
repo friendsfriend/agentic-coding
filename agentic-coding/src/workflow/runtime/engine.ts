@@ -900,11 +900,7 @@ export class WorkflowEngine {
 		}
 		if (!wikiOnlyTarget && !researchTarget)
 			validateStartEvidence(repository, input, sameCheckout);
-		if (
-			["openspec-fusion-full", "openspec-fusion-propose"].includes(
-				definition.id,
-			)
-		)
+		if (["openspec-fusion", "openspec-fusion-propose"].includes(definition.id))
 			validateFusionRouting(definition.id, input.routing);
 		const at = nowIso(this.now);
 		const workflowId = input.workflowId;
@@ -913,10 +909,7 @@ export class WorkflowEngine {
 		// primary into metadata.changeId at plan handoff. `openspec-apply` has
 		// no planner step, so its pre-existing change is the workflow id itself.
 		const startChangeId =
-			input.definitionId === "openspec-apply" ||
-			input.definitionId === "openspec-jev-apply"
-				? input.workflowId
-				: "";
+			input.definitionId === "openspec-apply" ? input.workflowId : "";
 		const snapshot: WorkflowSnapshot = {
 			schemaVersion: 1,
 			workflowId,

@@ -77,14 +77,19 @@ export interface MigrationAction {
 	/** `convert-workflow` rewrites TOML as JSON; `copy-asset` copies a new file;
 	 * `merge-env` keeps the existing target and appends only missing keys;
 	 * `extract-credentials` moves a literal provider credential into the
-	 * protected `.env` and leaves a reference behind in the JSON. */
+	 * protected `.env` and leaves a reference behind in the JSON;
+	 * `strip-presets` deletes the stored agent presets during the pools hard
+	 * break, keeping profiles and every non-preset agents field. */
 	readonly kind:
 		| "convert-workflow"
 		| "copy-asset"
 		| "merge-env"
-		| "extract-credentials";
+		| "extract-credentials"
+		| "strip-presets";
 	readonly from: string;
 	readonly to: string;
+	/** Strip stored agent presets while publishing this action. */
+	readonly stripPresets?: boolean;
 	/** Credential pairs written into the protected `.env`. Names and values are
 	 * only ever written there, never reported. */
 	readonly envPairs?: ReadonlyMap<string, string>;
@@ -105,6 +110,8 @@ export interface MigrationPlan {
 	readonly skipped: readonly MigrationSkip[];
 	/** Secret-carrying variable names encountered, never their values. */
 	readonly secretKeyNames: readonly string[];
+	/** Stored agent presets the hard break will delete (profiles stay). */
+	readonly presetsRemoved: number;
 	readonly pendingJournal: boolean;
 }
 
@@ -132,6 +139,26 @@ function stableJson(value: unknown): string {
 			.join(",")}}`;
 	}
 	return JSON.stringify(value) ?? "null";
+}
+
+/** Number of stored agent presets in a config document; the built-in
+ * `use-default-model` is stored too and is stripped with the rest. */
+function presetCount(document: unknown): number {
+	if (!document || typeof document !== "object") return 0;
+	const agents = (document as { agents?: unknown }).agents;
+	if (!agents || typeof agents !== "object" || Array.isArray(agents)) return 0;
+	const presets = (agents as { presets?: unknown }).presets;
+	if (!presets || typeof presets !== "object" || Array.isArray(presets))
+		return 0;
+	return Object.keys(presets as Record<string, unknown>).length;
+}
+
+/** Delete the stored preset table in place, keeping profiles, default profile,
+ * routes, role routes, and definition defaults. */
+function stripPresets(document: Record<string, unknown>): void {
+	const agents = document.agents;
+	if (agents && typeof agents === "object" && !Array.isArray(agents))
+		delete (agents as Record<string, unknown>).presets;
 }
 
 function listFiles(root: string): string[] {
@@ -307,6 +334,7 @@ export function planMigration(options: MigrationOptions = {}): MigrationPlan {
 	const conflicts: MigrationConflict[] = [];
 	const skipped: MigrationSkip[] = [];
 	const secretKeyNames = new Set<string>();
+	let presetsRemoved = 0;
 
 	if (sourceEnvRoot === targetRoot)
 		conflicts.push({
@@ -352,6 +380,56 @@ export function planMigration(options: MigrationOptions = {}): MigrationPlan {
 					to: targetWorkflow,
 				});
 		}
+	}
+
+	// 1b. Hard config break (classifier-driven-model-pools): the stored preset
+	// table is superseded by per-step model pools. Detect it in the effective
+	// canonical config, or in a legacy TOML whose conversion is still pending,
+	// and plan to delete it while keeping profiles and the other agents fields.
+	const conversionIndex = actions.findIndex(
+		(action) =>
+			action.kind === "convert-workflow" && action.to === targetWorkflow,
+	);
+	if (conversionIndex >= 0 && legacyWorkflow !== undefined) {
+		try {
+			const count = presetCount(readConfigDocument(legacyWorkflow));
+			if (count > 0) {
+				actions[conversionIndex] = {
+					...actions[conversionIndex],
+					stripPresets: true,
+				};
+				presetsRemoved += count;
+			}
+		} catch {}
+	} else if (fs.existsSync(targetWorkflow) && isSymlink(targetWorkflow)) {
+		// A symlinked canonical config would be silently skipped by the strip
+		// path; surface it as a conflict like the legacy-TOML symlink branch.
+		try {
+			const count = presetCount(
+				JSON.parse(fs.readFileSync(targetWorkflow, "utf8")),
+			);
+			if (count > 0)
+				conflicts.push({
+					kind: "symlink",
+					detail: `${targetWorkflow} is a symlink carrying stored presets`,
+					resolution:
+						"materialize the link as a regular file (keeping its content) before migrating so the preset hard break can publish",
+				});
+		} catch {}
+	} else if (fs.existsSync(targetWorkflow)) {
+		try {
+			const document = JSON.parse(fs.readFileSync(targetWorkflow, "utf8"));
+			const count = presetCount(document);
+			if (count > 0) {
+				actions.push({
+					kind: "strip-presets",
+					from: targetWorkflow,
+					to: targetWorkflow,
+					stripPresets: true,
+				});
+				presetsRemoved += count;
+			}
+		} catch {}
 	}
 
 	// 2. Environment configuration assets.
@@ -550,6 +628,7 @@ export function planMigration(options: MigrationOptions = {}): MigrationPlan {
 		conflicts,
 		skipped,
 		secretKeyNames: [...secretKeyNames].sort(),
+		presetsRemoved,
 		pendingJournal: fs.existsSync(migrationJournalPath(targetRoot)),
 	};
 }
@@ -570,6 +649,9 @@ interface MigrationJournal {
 	readonly sources: readonly { path: string; sha256: string }[];
 	targets: readonly JournalTarget[];
 	readonly secretKeys: readonly string[];
+	/** Stored presets the strip-presets action deleted (absent on legacy
+	 * journals, treated as 0). */
+	readonly presetsRemoved?: number;
 }
 
 function writeJournal(journal: MigrationJournal): void {
@@ -602,10 +684,18 @@ export function formatMigrationPlan(plan: MigrationPlan): string {
 					? "merge  "
 					: action.kind === "extract-credentials"
 						? "extract"
-						: "copy   ";
+						: action.kind === "strip-presets"
+							? "strip  "
+							: "copy   ";
 		lines.push(`  ${verb} ${action.from} -> ${action.to}`);
 	}
 	if (plan.actions.length === 0) lines.push("  (nothing to do)");
+	if (plan.presetsRemoved > 0) {
+		lines.push("");
+		lines.push(
+			`Removed ${plan.presetsRemoved} presets; recreate them as model pools in Settings \u2192 Presets.`,
+		);
+	}
 	if (plan.secretKeyNames.length) {
 		lines.push("");
 		lines.push(
@@ -640,6 +730,8 @@ export function formatMigrationPlan(plan: MigrationPlan): string {
 export interface ApplyResult {
 	readonly applied: number;
 	readonly backupDir?: string;
+	/** Stored agent presets deleted by this migration. */
+	readonly presetsRemoved: number;
 }
 
 /**
@@ -658,7 +750,7 @@ export function applyMigration(plan: MigrationPlan): ApplyResult {
 		throw new Error(
 			`an incomplete migration journal already exists at ${plan.targetRoot}; run \`agentic-coding config migrate --resume\` or \`--rollback\``,
 		);
-	if (plan.actions.length === 0) return { applied: 0 };
+	if (plan.actions.length === 0) return { applied: 0, presetsRemoved: 0 };
 
 	fs.mkdirSync(plan.targetRoot, { recursive: true, mode: 0o700 });
 	const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -682,6 +774,7 @@ export function applyMigration(plan: MigrationPlan): ApplyResult {
 		})),
 		targets: [],
 		secretKeys: plan.secretKeyNames,
+		presetsRemoved: plan.presetsRemoved,
 	};
 	writeJournal(journal);
 
@@ -740,7 +833,19 @@ export function applyMigration(plan: MigrationPlan): ApplyResult {
 					throw new Error(
 						`converting ${action.from} would change the effective configuration; aborting without writing`,
 					);
-				fs.writeFileSync(staged, jsonText, { mode: 0o600 });
+				if (action.stripPresets) stripPresets(document);
+				fs.writeFileSync(staged, `${JSON.stringify(document, null, 2)}\n`, {
+					mode: 0o600,
+				});
+				fs.chmodSync(staged, 0o600);
+			} else if (action.kind === "strip-presets") {
+				const document = JSON.parse(
+					fs.readFileSync(action.from, "utf8"),
+				) as Record<string, unknown>;
+				stripPresets(document);
+				fs.writeFileSync(staged, `${JSON.stringify(document, null, 2)}\n`, {
+					mode: 0o600,
+				});
 				fs.chmodSync(staged, 0o600);
 			} else if (action.kind === "merge-env") {
 				// Only keys the target is missing are added; unrelated target lines and
@@ -810,7 +915,11 @@ export function applyMigration(plan: MigrationPlan): ApplyResult {
 		journal.targets = [...targets.values()];
 		writeJournal({ ...journal, state: "published" });
 		fs.rmSync(migrationJournalPath(plan.targetRoot), { force: true });
-		return { applied: targets.size, backupDir };
+		return {
+			applied: targets.size,
+			backupDir,
+			presetsRemoved: plan.presetsRemoved,
+		};
 	} catch (error) {
 		rollbackMigration(plan.targetRoot);
 		throw error;
@@ -845,9 +954,15 @@ export function rollbackMigration(root: string): number {
 	return restored;
 }
 
-/** Finish an interrupted publication by publishing every remaining staged file. */
-export function resumeMigration(root: string): number {
-	if (!fs.existsSync(migrationJournalPath(root))) return 0;
+/** Finish an interrupted publication by publishing every remaining staged file.
+ * Reports how many stored presets the resumed publication stripped so the
+ * caller can repeat the recreate-as-pools notification. */
+export function resumeMigration(root: string): {
+	published: number;
+	presetsRemoved: number;
+} {
+	if (!fs.existsSync(migrationJournalPath(root)))
+		return { published: 0, presetsRemoved: 0 };
 	const journal = readJournal(root);
 	let published = 0;
 	for (const target of journal.targets) {
@@ -859,5 +974,5 @@ export function resumeMigration(root: string): number {
 		published += 1;
 	}
 	fs.rmSync(migrationJournalPath(root), { force: true });
-	return published;
+	return { published, presetsRemoved: journal.presetsRemoved ?? 0 };
 }

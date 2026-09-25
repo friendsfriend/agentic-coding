@@ -8,11 +8,7 @@ import {
 
 test("archive-bearing workflows document, review, then archive", () => {
 	const registry = registerBuiltins();
-	for (const id of [
-		"openspec-full",
-		"openspec-apply",
-		"openspec-fusion-full",
-	]) {
+	for (const id of ["openspec", "openspec-apply", "openspec-fusion"]) {
 		const definition = registry.definition(id, definitionVersionForPolicy(6));
 		const wiki = definition.steps.indexOf("core.wiki");
 		expect(definition.steps.slice(wiki, wiki + 4)).toEqual([

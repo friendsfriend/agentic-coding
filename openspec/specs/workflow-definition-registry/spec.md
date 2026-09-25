@@ -2,7 +2,9 @@
 
 ## Purpose
 Defines rigid, versioned workflow and step contracts that remain easy to compose and can later be registered by trusted workflow plugins without changing runtime semantics.
+
 ## Requirements
+
 ### Requirement: Registered step contract
 The system SHALL represent every workflow step as a registered, versioned definition with a stable identifier, actor kind, input and output contract, permitted outcomes, entry and completion validation, instruction assets when applicable, allowlisted external effects, and a declarative step behavior block carrying the step's engine-internal semantics. The behavior block SHALL cover agent role selection, entry guards, arrival semantics, entry effects, developer actions, and assignment inputs. New definition versions SHALL bind executable semantics through explicit behavior compatibility versions rather than function-source hashes. Supported historical digest formats SHALL remain unchanged through an explicit legacy compatibility mapping; moving equivalent behavior SHALL not by itself invalidate a pin.
 
@@ -32,23 +34,30 @@ The system SHALL represent every workflow step as a registered, versioned defini
 - **AND** no partially registered catalog SHALL be exposed
 
 ### Requirement: Explicit workflow composition
-The system SHALL define each workflow as an explicit, versioned graph of registered steps and legal outcomes rather than deriving behavior from phase names or array position. The catalog SHALL include explicit `openspec-propose`, `openspec-fusion-propose`, `wiki`, and `research` graphs that reference the registered steps needed for their respective execution, while excluding implementation, verification, archive, delivery, and pull-request action/effect paths from proposal-only, wiki, and research lifecycles.
+
+The system SHALL define each workflow as an explicit, versioned graph of registered steps and legal outcomes rather than deriving behavior from phase names or array position. The catalog SHALL include explicit `openspec`, `openspec-apply`, `openspec-propose`, `openspec-fusion`, `openspec-fusion-propose`, `wiki`, and `research` graphs that reference the registered steps needed for their respective execution, including the classifier routing pass each OpenSpec family needs, while excluding implementation, verification, archive, delivery, and pull-request action/effect paths from proposal-only, wiki, and research lifecycles.
 
 #### Scenario: Workflow graph is explicit
 - **WHEN** a workflow definition is registered
 - **THEN** the system SHALL expose its new technical ID, UI label, initial step, terminal steps, registered steps, legal outcome targets, declared loops, retry bounds, actor requirements, and requested effects as an explicit validated graph
 
+#### Scenario: OpenSpec definitions are explicit
+- **WHEN** the built-in catalog is initialized
+- **THEN** `openspec` SHALL start at `core.route-plan` and route classification to `core.plan` before the standard flow
+- **AND** `openspec-apply` SHALL start at `core.route-apply` and route classification to `core.implementation`
+- **AND** `openspec-fusion` SHALL start at `core.route-plan` and route classification to `fusion.plan` before consolidation and the standard flow
+
 #### Scenario: Standard proposal definition is explicit
 - **WHEN** the built-in catalog is initialized
-- **THEN** `openspec-propose` SHALL contain `core.plan`, `core.plan-approval`, `core.completed`, and `core.closed`
-- **AND** its successful path SHALL be `core.plan → core.plan-approval → core.completed → core.closed`
+- **THEN** `openspec-propose` SHALL contain `core.route-plan`, `core.plan`, `core.plan-approval`, `core.completed`, and `core.closed`
+- **AND** its successful path SHALL be `core.route-plan → core.plan → core.plan-approval → core.completed → core.closed`
 - **AND** its planning `blocked` and `failed` outcomes SHALL retain bounded loops
 - **AND** its reachable lifecycle SHALL not launch implementation, verification, archive, delivery, or pull-request effects
 
 #### Scenario: Fusion proposal definition is explicit
 - **WHEN** the built-in catalog is initialized
-- **THEN** `openspec-fusion-propose` SHALL contain `fusion.plan`, `fusion.consolidate`, `core.plan-approval`, `core.completed`, and `core.closed`
-- **AND** its successful path SHALL be `fusion.plan → fusion.consolidate → core.plan-approval → core.completed → core.closed`
+- **THEN** `openspec-fusion-propose` SHALL contain `core.route-plan`, `fusion.plan`, `fusion.consolidate`, `core.plan-approval`, `core.completed`, and `core.closed`
+- **AND** its successful path SHALL be `core.route-plan → fusion.plan → fusion.consolidate → core.plan-approval → core.completed → core.closed`
 - **AND** its fusion planning and consolidation `blocked` and `failed` outcomes SHALL retain bounded loops
 - **AND** its reachable lifecycle SHALL not launch implementation, verification, archive, delivery, or pull-request effects
 
@@ -111,12 +120,14 @@ Each workflow SHALL pin its exact workflow-definition identifier, version, and d
 - **THEN** the prior pins, run ownership, state, and pending effects SHALL remain unchanged
 
 ### Requirement: Plugin-grade built-in registry seam
+
 Built-in steps and workflows SHALL register through the same public definition contract reserved for future trusted workflow plugins, while this release SHALL NOT automatically discover or execute external workflow plugin code.
 
 #### Scenario: Built-in workflows initialize
 - **WHEN** the engine starts
-- **THEN** `openspec-full`, `openspec-apply`, `no-openspec`, `openspec-fusion-full`, `openspec-propose`, `openspec-fusion-propose`, `wiki`, and `research` definitions SHALL be registered through the public registry contract
+- **THEN** `openspec`, `openspec-apply`, `openspec-propose`, `openspec-fusion`, `openspec-fusion-propose`, `no-openspec`, `wiki`, and `research` definitions SHALL be registered through the public registry contract
 - **AND** the UI-only `wiki-comments` definition SHALL also be registered for its internal start path
+- **AND** the removed `openspec-full`, old `openspec-apply`, `openspec-fusion-full`, old `openspec-fusion-propose`, `openspec-jev`, and `openspec-jev-apply` definitions SHALL NOT be registered
 - **AND** the engine SHALL validate them identically to later registered definitions
 
 #### Scenario: External package is present
@@ -275,3 +286,25 @@ Completion behavior SHALL receive validated facts and explicit state, not databa
 - **THEN** the transaction SHALL roll back including capability consumption
 - **AND** no requested external work SHALL execute from the failed command
 
+### Requirement: Removed workflow definition diagnostic
+
+A start against a workflow definition that is not registered, including an
+identifier removed by this change, SHALL fail with an actionable
+`unknown/removed definition` diagnostic that names the requested identifier and
+lists the registered alternatives. The workflow store status and drain path
+SHALL surface the same diagnostic for a persisted run whose pinned definition
+can no longer be resolved, instead of a generic pin or registry error.
+
+#### Scenario: Removed identifier is started
+- **WHEN** a caller starts a workflow with a removed identifier such as `openspec-full` or `openspec-jev`
+- **THEN** startup SHALL fail before creating any workflow state or launching an agent
+- **AND** the diagnostic SHALL identify the requested identifier as removed or unknown
+
+#### Scenario: Persisted run references a removed definition
+- **WHEN** the status or drain path encounters a persisted run whose pinned definition id is no longer registered
+- **THEN** it SHALL report an `unknown/removed definition` diagnostic naming the definition and the run
+- **AND** it SHALL NOT report a generic pin mismatch
+
+#### Scenario: Registered alternative is suggested
+- **WHEN** a removed OpenSpec identifier maps to a registered replacement
+- **THEN** the diagnostic SHALL name the registered definition a caller should use instead

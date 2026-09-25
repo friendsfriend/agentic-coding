@@ -50,6 +50,31 @@ function requireToken(
 	return launch.runToken;
 }
 
+/** Complete the plan/apply routing pass so the classifier-routed graphs reach
+ * their first agent step. The pinned routing is pre-seeded, so the no-answer
+ * result keeps it. */
+function advanceRouting(
+	engine: WorkflowEngine,
+	repo: string,
+	view: ReturnType<WorkflowEngine["start"]>["view"],
+): ReturnType<WorkflowEngine["start"]>["view"] {
+	const classify = engine
+		.claimEffects(repo, 100)
+		.find((effect) => effect.kind === "model.classify");
+	if (!classify) return view;
+	const phase =
+		(classify.payload as { phase?: string }).phase === "apply"
+			? "apply"
+			: "plan";
+	return engine.dispatch(repo, {
+		type: "effect.result",
+		effectId: classify.id,
+		lease: requireDefined(classify.lease, "classify lease"),
+		outcome: "complete",
+		data: { integration: "routing", phase, answers: {} },
+	}).view;
+}
+
 function repository(root: string): string {
 	fs.mkdirSync(root, { recursive: true });
 	execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
@@ -1264,6 +1289,7 @@ describe("transactional workflow runtime", () => {
 				outcome: "complete",
 				data: { workspace: "proposal", worktree: repo, branch: "main" },
 			}).view;
+			view = advanceRouting(engine, repo, view);
 			const run = requireDefined(view.runs[0], "planner run");
 			const launch = engine
 				.claimEffects(repo, 100)
@@ -1468,15 +1494,16 @@ describe("transactional workflow runtime", () => {
 			const result = engine.start({
 				repo,
 				workflowId: "repair",
-				definitionId: "openspec-full",
+				definitionId: "openspec",
 				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
 				routing: routing(),
 			});
-			const oldRun = requireDefined(result.view.runs[0], "first run");
+			const startedView = advanceRouting(engine, repo, result.view);
+			const oldRun = requireDefined(startedView.runs[0], "first run");
 			const repaired = engine.dispatch(repo, {
 				type: "operator.repair",
-				workflowId: result.view.workflowId,
-				revision: 0,
+				workflowId: startedView.workflowId,
+				revision: startedView.revision,
 				targetStep: "core.plan-approval",
 				reason: "operator confirmed evidence",
 			});
@@ -1509,7 +1536,9 @@ describe("transactional workflow runtime", () => {
 				revision: repaired.view.revision,
 				actionId: "approve-plan",
 			});
-			expect(approved.view.currentStep.id).toBe("core.implementation");
+			expect(approved.view.currentStep.id).toBe("core.route-apply");
+			const routed = advanceRouting(engine, repo, approved.view);
+			expect(routed.currentStep.id).toBe("core.implementation");
 			expect(() =>
 				engine.dispatch(repo, {
 					type: "developer.action",
@@ -1580,14 +1609,15 @@ describe("transactional workflow runtime", () => {
 			const result = engine.start({
 				repo,
 				workflowId: "plan-comments",
-				definitionId: "openspec-full",
+				definitionId: "openspec",
 				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
 				routing: routing(),
 			});
+			const startedView = advanceRouting(engine, repo, result.view);
 			const atGate = engine.dispatch(repo, {
 				type: "operator.repair",
-				workflowId: result.view.workflowId,
-				revision: 0,
+				workflowId: startedView.workflowId,
+				revision: startedView.revision,
 				targetStep: "core.plan-approval",
 				reason: "operator confirmed evidence",
 			});
@@ -1613,7 +1643,7 @@ describe("transactional workflow runtime", () => {
 			expect(reentered.snapshot.step.context).toEqual(
 				JSON.parse(JSON.stringify({ comments })),
 			);
-			expect(engine.getRun(repo, result.view.runs[0]?.id).status).toBe(
+			expect(engine.getRun(repo, startedView.runs[0]?.id).status).toBe(
 				"expired",
 			);
 		} finally {
@@ -1630,7 +1660,7 @@ describe("transactional workflow runtime", () => {
 			const result = engine.start({
 				repo,
 				workflowId: "plan-comments-invalid",
-				definitionId: "openspec-full",
+				definitionId: "openspec",
 				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
 				routing: routing(),
 			});
@@ -1684,7 +1714,7 @@ describe("transactional workflow runtime", () => {
 			const result = engine.start({
 				repo,
 				workflowId: "plan-gate",
-				definitionId: "openspec-full",
+				definitionId: "openspec",
 				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
 				routing: routing(),
 			});
@@ -1701,13 +1731,16 @@ describe("transactional workflow runtime", () => {
 				revision: atGate.view.revision,
 				actionId: "approve-plan",
 			});
-			expect(approved.view.currentStep.id).toBe("core.implementation");
+			expect(approved.view.currentStep.id).toBe("core.route-apply");
+			expect(advanceRouting(engine, repo, approved.view).currentStep.id).toBe(
+				"core.implementation",
+			);
 			const rejectedRepo = repository(path.join(tmp, "rejected-repo"));
 			const rejectedEngine = new WorkflowEngine(registerBuiltins());
 			const rejected = rejectedEngine.start({
 				repo: rejectedRepo,
 				workflowId: "plan-reject",
-				definitionId: "openspec-full",
+				definitionId: "openspec",
 				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
 				routing: routing(),
 			});
@@ -2450,7 +2483,7 @@ describe("transactional workflow runtime", () => {
 			const started = engine.start({
 				repo,
 				workflowId: "migration-test",
-				definitionId: "openspec-full",
+				definitionId: "openspec",
 				definitionVersion: definitionVersionForPolicy(6),
 				mode: "worktree",
 				metadata: {

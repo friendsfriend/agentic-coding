@@ -6,6 +6,7 @@ import {
 	BUILTIN_EFFECTS,
 	definitionVersionForBehaviorPins,
 	PUBLIC_WORKFLOW_CATALOG,
+	REMOVED_WORKFLOW_REPLACEMENTS,
 	registerBuiltins,
 } from "../src/workflow/definitions.ts";
 import {
@@ -43,37 +44,42 @@ describe("workflow registry", () => {
 				.filter((item) => item.version === 1)
 				.map((item) => item.id),
 		).toEqual([
-			"openspec-full",
-			"openspec-propose",
+			"openspec",
 			"openspec-apply",
-			"openspec-jev",
-			"openspec-jev-apply",
+			"openspec-propose",
 			"no-openspec",
-			"openspec-fusion-full",
+			"openspec-fusion",
 			"openspec-fusion-propose",
 		]);
-		const standard = registry.definition("openspec-full", 1);
+		const standard = registry.definition("openspec", 1);
 		expect(standard.steps).toContain("core.verification");
-		expect(() => registry.definition("openspec-full", 1, "changed")).toThrow(
+		expect(() => registry.definition("openspec", 1, "changed")).toThrow(
 			/pin mismatch/,
 		);
 		expect(Object.isFrozen(standard)).toBe(true);
 		for (const [id, steps, initial] of [
 			[
 				"openspec-propose",
-				["core.plan", "core.plan-approval", "core.completed", "core.closed"],
-				"core.plan",
+				[
+					"core.route-plan",
+					"core.plan",
+					"core.plan-approval",
+					"core.completed",
+					"core.closed",
+				],
+				"core.route-plan",
 			],
 			[
 				"openspec-fusion-propose",
 				[
+					"core.route-plan",
 					"fusion.plan",
 					"fusion.consolidate",
 					"core.plan-approval",
 					"core.completed",
 					"core.closed",
 				],
-				"fusion.plan",
+				"core.route-plan",
 			],
 		] as const) {
 			const proposal = registry.definition(id, 1);
@@ -83,6 +89,7 @@ describe("workflow registry", () => {
 		}
 		const standardProposal = registry.definition("openspec-propose", 1);
 		expect(standardProposal.edges).toEqual([
+			{ from: "core.route-plan", outcome: "complete", to: "core.plan" },
 			{ from: "core.plan", outcome: "complete", to: "core.plan-approval" },
 			{
 				from: "core.plan",
@@ -141,10 +148,10 @@ describe("workflow registry", () => {
 			expect(proposal.steps).not.toContain("core.archive");
 			expect(proposal.steps).not.toContain("core.delivery");
 		}
-		expect(registry.definition("openspec-full", 1).steps).toContain(
+		expect(registry.definition("openspec", 1).steps).toContain(
 			"core.implementation",
 		);
-		expect(registry.definition("openspec-fusion-full", 1).steps).toContain(
+		expect(registry.definition("openspec-fusion", 1).steps).toContain(
 			"core.plan-approval",
 		);
 		for (const entry of PUBLIC_WORKFLOW_CATALOG)
@@ -164,12 +171,21 @@ describe("workflow registry", () => {
 			expect(() => registry.definition(oldId, 1)).toThrow(
 				/missing workflow definition/,
 			);
+		// Identifiers removed by the pools hard cut name their replacement.
+		for (const [removed, replacement] of Object.entries(
+			REMOVED_WORKFLOW_REPLACEMENTS,
+		))
+			expect(() => registry.definition(removed, 1)).toThrow(
+				new RegExp(
+					`unknown/removed definition: ${removed} \\(use ${replacement}\\)`,
+				),
+			);
 	});
 	test("new definitions pin exact step and behavior identities", () => {
 		const registry = registerBuiltins();
-		const legacy = registry.definition("openspec-full", 1);
+		const legacy = registry.definition("openspec", 1);
 		const pinned = registry.definition(
-			"openspec-full",
+			"openspec",
 			definitionVersionForBehaviorPins(6),
 		);
 		expect(pinned.stepRefs).toEqual(
@@ -336,8 +352,8 @@ describe("workflow registry", () => {
 	});
 	test("configured verification policy is pinned as a distinct definition", () => {
 		const registry = registerBuiltins(undefined, 20);
-		const legacy = registry.definition("openspec-full", 1);
-		const configured = registry.definition("openspec-full", 20);
+		const legacy = registry.definition("openspec", 1);
+		const configured = registry.definition("openspec", 20);
 		expect(configured.digest).not.toBe(legacy.digest);
 		expect(
 			configured.edges.find(
@@ -346,15 +362,15 @@ describe("workflow registry", () => {
 		).toBe(20);
 		for (let rounds = 1; rounds <= 20; rounds++) {
 			const version = rounds === 6 ? 1 : rounds === 1 ? 21 : rounds;
-			expect(registry.definition("openspec-full", version)).toBeTruthy();
+			expect(registry.definition("openspec", version)).toBeTruthy();
 			for (const id of ["openspec-propose", "openspec-fusion-propose"])
 				expect(registry.definition(id, version)).toBeTruthy();
 		}
-		const planFusion = registry.definition("openspec-fusion-full", 120);
+		const planFusion = registry.definition("openspec-fusion", 120);
 		expect(
 			rolesForDefinition(
-				"openspec-full",
-				registry.definition("openspec-full", 120).steps,
+				"openspec",
+				registry.definition("openspec", 120).steps,
 				registry,
 			),
 		).toMatchObject({
@@ -362,7 +378,7 @@ describe("workflow registry", () => {
 		});
 		const fusionProposal = registry.definition("openspec-fusion-propose", 20);
 		expect(
-			rolesForDefinition("openspec-fusion-full", planFusion.steps, registry, 2)[
+			rolesForDefinition("openspec-fusion", planFusion.steps, registry, 2)[
 				"fusion.plan"
 			],
 		).toEqual(
@@ -467,10 +483,10 @@ describe("workflow registry", () => {
 	});
 	test("extra registered step never changes existing composition", () => {
 		const registry = registerBuiltins();
-		const before = registry.definition("openspec-full", 1).digest;
+		const before = registry.definition("openspec", 1).digest;
 		registry.registerStep(testStep("extension.audit"));
-		expect(registry.definition("openspec-full", 1).digest).toBe(before);
-		expect(registry.definition("openspec-full", 1).steps).not.toContain(
+		expect(registry.definition("openspec", 1).digest).toBe(before);
+		expect(registry.definition("openspec", 1).steps).not.toContain(
 			"extension.audit",
 		);
 		const composed = registry.registerWorkflow({

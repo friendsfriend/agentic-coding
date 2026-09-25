@@ -1,15 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import {
 	applyDraftValue,
-	complexityKey,
 	type PresetDraft,
-	type ProfileDraft,
+	poolDefaultKey,
+	poolLabelsKey,
+	poolProfileKey,
 	presetDraft,
 	presetFields,
 	presetMutation,
 	profileDraft,
 	profileMutation,
 	profileReferences,
+	splitPoolLabels,
 	validateDraft,
 } from "../../src/tui/settings/agentPresets.ts";
 import type { AgentsConfig } from "../../src/workflow/profiles.ts";
@@ -27,9 +29,16 @@ const agents: AgentsConfig = {
 		routed: {
 			default_profile: "used",
 			steps: { "core.plan": "used" },
-			roles: {
-				"core.verification": { "quality-verifier": "free" },
-				"custom.step": { "custom-role": "used" },
+			roles: { "custom.step": { "custom-role": "used" } },
+			pools: {
+				"core.plan": [
+					{ label: "quick", profile: "used", criteria: { what: "small" } },
+					{ label: "thorough", profile: "free", default: true },
+				],
+				"fusion.plan": [
+					{ label: "strong", profile: "used", default: true },
+					{ label: "balanced", profile: "free", default: true },
+				],
 			},
 		},
 	},
@@ -58,86 +67,92 @@ describe("agent preset drafts", () => {
 		});
 	});
 
-	test("changing a runtime clears the previous runtime's executable and extensions", () => {
-		const draft = profileDraft("p", {
-			runtime: "pi",
-			executable: "/usr/bin/pi",
-			extensions: ["ext"],
-			tools: ["read"],
-			capabilities: ["shell"],
-		});
-		const next = applyDraftValue(draft, "runtime", "opencode") as ProfileDraft;
-		// opencode rejects pi's `extensions`, and the stale pi executable must not
-		// be spawned for the opencode harness.
-		expect(next.executable).toBeUndefined();
-		expect(next.extensions).toBeUndefined();
-		// Fields every runtime accepts survive the switch.
-		expect(next.tools).toEqual(["read"]);
-		expect(next.capabilities).toEqual(["shell"]);
-	});
-
-	test("a preset draft keeps role tables the form does not edit", () => {
+	test("a preset draft loads stored pools into labels, profiles, and defaults", () => {
 		const draft = presetDraft("routed", agents.presets);
-		expect(draft.fusionRoles).toEqual({});
-		expect(draft.roles).toEqual({ "quality-verifier": "free" });
-		expect(draft.otherRoles).toEqual({
-			"custom.step": { "custom-role": "used" },
-		});
+		expect(draft.poolLabels["core.plan"]).toBe("quick, thorough");
+		expect(draft.poolProfiles["core.plan\u0000quick"]).toBe("used");
+		expect(draft.poolProfiles["core.plan\u0000thorough"]).toBe("free");
+		expect(draft.poolDefaults["core.plan\u0000thorough"]).toBe(true);
+		// Step/role assignments outside the pool fields survive.
+		expect(draft.steps).toEqual({ "core.plan": "used" });
+		expect(draft.roles).toEqual({ "custom.step": { "custom-role": "used" } });
 	});
 
-	test("a prefilled preset draft loads stored complexity mappings", () => {
-		const draft = presetDraft("classified", {
-			classified: { easy: "used", critical: "free" },
-		});
-		expect(draft.complexities).toEqual({ easy: "used", critical: "free" });
+	test("the expanded preset form derives one select per label", () => {
+		const draft = presetDraft("routed", agents.presets);
+		const keys = presetFields(draft, ["used", "free"]).map((f) => f.key);
+		expect(keys).toContain(poolLabelsKey("core.plan"));
+		expect(keys).toContain(poolProfileKey("core.plan", "quick"));
+		expect(keys).toContain(poolProfileKey("core.plan", "thorough"));
+		// Only the fusion roster exposes default toggles.
+		expect(keys).toContain(poolDefaultKey("fusion.plan", "strong"));
+		expect(keys).not.toContain(poolDefaultKey("core.plan", "quick"));
 	});
 
-	test("the preset form offers a complexity field per category after the default profile", () => {
-		const fields = presetFields(["used", "free"]);
-		const labels = fields.map((field) => field.label);
-		const defaultIndex = labels.indexOf("Default profile (fallback)");
-		expect(labels.slice(defaultIndex + 1, defaultIndex + 5)).toEqual([
-			"Complexity easy",
-			"Complexity medium",
-			"Complexity hard",
-			"Complexity critical",
-		]);
-		const hard = fields.find((field) => field.label === "Complexity hard");
-		expect(hard?.options).toEqual(["", "used", "free"]);
-	});
-
-	test("applyDraftValue sets one complexity mapping", () => {
+	test("editing the label text derives the matching profile selects", () => {
 		const draft = presetDraft("new", {});
 		const next = applyDraftValue(
 			draft,
-			complexityKey("hard"),
-			"used",
+			poolLabelsKey("core.plan"),
+			"alpha, beta",
 		) as PresetDraft;
-		expect(next.complexities).toEqual({ hard: "used" });
+		const keys = presetFields(next, ["used", "free"]).map((f) => f.key);
+		expect(keys).toContain(poolProfileKey("core.plan", "alpha"));
+		expect(keys).toContain(poolProfileKey("core.plan", "beta"));
+		expect(splitPoolLabels(next.poolLabels["core.plan"] ?? "")).toEqual([
+			"alpha",
+			"beta",
+		]);
+	});
+
+	test("a label edit drops the removed entry on save", () => {
+		const draft = presetDraft("routed", agents.presets);
+		const next = applyDraftValue(
+			draft,
+			poolLabelsKey("core.plan"),
+			"quick",
+		) as PresetDraft;
+		const mutation = presetMutation(next);
+		if (mutation.kind !== "set-preset") throw new Error("expected set-preset");
+		expect(mutation.preset.pools?.["core.plan"]?.map((e) => e.label)).toEqual([
+			"quick",
+		]);
 	});
 });
 
 describe("agent preset validation", () => {
 	test("a blank name is refused in place", () => {
-		const draft = profileDraft("", undefined);
-		expect(validateDraft(draft, [])).toEqual({ name: "Name is required" });
+		expect(validateDraft(profileDraft("", undefined), [])).toEqual({
+			name: "Name is required",
+		});
 	});
 
 	test("the reserved built-in name is refused", () => {
-		const draft = presetDraft("use-default-model", agents.presets);
-		expect(validateDraft(draft, [])).toEqual({
+		expect(
+			validateDraft(presetDraft("use-default-model", agents.presets), []),
+		).toMatchObject({
 			name: '"use-default-model" is reserved',
 		});
 	});
 
-	test("a duplicate name is refused for a new entry but allowed when unchanged", () => {
-		expect(validateDraft(profileDraft("used", undefined), ["used"])).toEqual({
-			name: 'A profile named "used" already exists',
+	test("a custom preset without pools is refused", () => {
+		const draft = presetDraft("empty", {});
+		expect(validateDraft(draft, [])).toMatchObject({
+			name: "A preset must declare at least one model pool",
 		});
-		const existing = agents.profiles.used
-			? profileDraft("used", agents.profiles.used)
-			: undefined;
-		expect(existing && validateDraft(existing, ["used"])).toEqual({});
+	});
+
+	test("fusion default counts outside 2-5 are refused", () => {
+		const draft = presetDraft("routed", agents.presets);
+		const one = applyDraftValue(
+			draft,
+			poolDefaultKey("fusion.plan", "balanced"),
+			"",
+		) as PresetDraft;
+		expect(validateDraft(one, [])).toMatchObject({
+			[poolLabelsKey("fusion.plan")]:
+				"fusion.plan needs 2-5 entries marked default",
+		});
 	});
 });
 
@@ -148,7 +163,7 @@ describe("agent preset mutations", () => {
 			applyDraftValue(draft, "name", "  trimmed  "),
 			"runtime",
 			"opencode",
-		) as ProfileDraft;
+		) as PresetDraft & { kind: "profile" };
 		expect(profileMutation(next)).toEqual({
 			kind: "set-profile",
 			name: "trimmed",
@@ -156,50 +171,43 @@ describe("agent preset mutations", () => {
 		});
 	});
 
-	test("a profile mutation carries fields the form does not edit", () => {
-		const draft = profileDraft("p", {
-			runtime: "pi",
-			executable: "/usr/bin/pi",
-			model: "vendor/model",
-			tools: ["read"],
-			extensions: ["ext"],
-			capabilities: ["shell"],
+	test("a preset mutation persists pools and preserves step assignments", () => {
+		const mutation = presetMutation(presetDraft("routed", agents.presets));
+		if (mutation.kind !== "set-preset") throw new Error("expected set-preset");
+		expect(mutation.preset.default_profile).toBe("used");
+		expect(mutation.preset.steps).toEqual({ "core.plan": "used" });
+		expect(mutation.preset.roles).toEqual({
+			"custom.step": { "custom-role": "used" },
 		});
-		const mutation = profileMutation(draft);
-		if (mutation.kind !== "set-profile")
-			throw new Error("expected set-profile");
-		expect(mutation.profile).toMatchObject({
-			executable: "/usr/bin/pi",
-			tools: ["read"],
-			extensions: ["ext"],
-			capabilities: ["shell"],
-		});
+		expect(
+			mutation.preset.pools?.["core.plan"]?.find((e) => e.default)?.label,
+		).toBe("thorough");
+	});
+
+	test("structured criteria survive an unchanged preset save", () => {
+		const mutation = presetMutation(presetDraft("routed", agents.presets));
+		if (mutation.kind !== "set-preset") throw new Error("expected set-preset");
+		expect(
+			mutation.preset.pools?.["core.plan"]?.find((e) => e.label === "quick")
+				?.criteria,
+		).toEqual({ what: "small" });
 	});
 
 	test("a preset mutation preserves the description", () => {
 		const draft = presetDraft("described", {
-			described: { description: "why it exists" },
+			described: {
+				description: "why it exists",
+				pools: {
+					"core.plan": [{ label: "quick", profile: "used", default: true }],
+				},
+			},
 		});
 		const mutation = presetMutation(draft);
 		if (mutation.kind !== "set-preset") throw new Error("expected set-preset");
 		expect(mutation.preset.description).toBe("why it exists");
 	});
 
-	test("a preset mutation drops empty references and preserves other role tables", () => {
-		const draft = presetDraft("routed", agents.presets);
-		const next = applyDraftValue(draft, "step:core.plan", "") as PresetDraft;
-		const mutation = presetMutation(next);
-		if (mutation.kind !== "set-preset") throw new Error("expected set-preset");
-		expect(mutation.name).toBe("routed");
-		expect(mutation.preset.default_profile).toBe("used");
-		expect(mutation.preset.steps).toBeUndefined();
-		expect(mutation.preset.roles).toEqual({
-			"custom.step": { "custom-role": "used" },
-			"core.verification": { "quality-verifier": "free" },
-		});
-	});
-
-	test("every reference to a profile is found", () => {
+	test("every reference to a profile is found, including pool entries", () => {
 		expect(profileReferences(agents, "used")).toEqual([
 			"agents.default_profile",
 			"routes.core.plan",
@@ -208,47 +216,12 @@ describe("agent preset mutations", () => {
 			"presets.routed.default_profile",
 			"presets.routed.steps.core.plan",
 			"presets.routed.roles.custom.step.custom-role",
+			"presets.routed.pools.core.plan.quick",
+			"presets.routed.pools.fusion.plan.strong",
 		]);
 		expect(profileReferences(agents, "free")).toEqual([
-			"presets.routed.roles.core.verification.quality-verifier",
-		]);
-	});
-
-	test("a preset mutation writes only non-empty complexity mappings", () => {
-		const draft = applyDraftValue(
-			applyDraftValue(presetDraft("new", {}), complexityKey("easy"), "used"),
-			complexityKey("critical"),
-			"",
-		) as PresetDraft;
-		const mutation = presetMutation(draft);
-		if (mutation.kind !== "set-preset") throw new Error("expected set-preset");
-		expect(mutation.preset.easy).toBe("used");
-		expect(mutation.preset.medium).toBeUndefined();
-		expect(mutation.preset.hard).toBeUndefined();
-		expect(mutation.preset.critical).toBeUndefined();
-	});
-
-	test("a preset draft round-trips a stored complexity mapping", () => {
-		const mutation = presetMutation(
-			presetDraft("classified", {
-				classified: { easy: "used", critical: "free" },
-			}),
-		);
-		if (mutation.kind !== "set-preset") throw new Error("expected set-preset");
-		expect(mutation.preset.easy).toBe("used");
-		expect(mutation.preset.critical).toBe("free");
-		expect(mutation.preset.medium).toBeUndefined();
-		expect(mutation.preset.hard).toBeUndefined();
-	});
-
-	test("a profile referenced only by a complexity mapping is reported", () => {
-		const config: AgentsConfig = {
-			profiles: { used: { runtime: "pi" } },
-			presets: { classified: { easy: "used", critical: "used" } },
-		};
-		expect(profileReferences(config, "used")).toEqual([
-			"presets.classified.easy",
-			"presets.classified.critical",
+			"presets.routed.pools.core.plan.thorough",
+			"presets.routed.pools.fusion.plan.balanced",
 		]);
 	});
 
@@ -257,28 +230,11 @@ describe("agent preset mutations", () => {
 			profileDraft("old", { runtime: "pi" }),
 			"name",
 			"new",
-		) as ProfileDraft;
+		) as ReturnType<typeof profileDraft>;
 		const profileMut = profileMutation(profile);
 		if (profileMut.kind !== "set-profile")
 			throw new Error("expected set-profile");
 		expect(profileMut.name).toBe("new");
 		expect(profileMut.renameFrom).toBe("old");
-
-		const preset = applyDraftValue(
-			presetDraft("old", { old: {} }),
-			"name",
-			"new",
-		) as PresetDraft;
-		const presetMut = presetMutation(preset);
-		if (presetMut.kind !== "set-preset") throw new Error("expected set-preset");
-		expect(presetMut.name).toBe("new");
-		expect(presetMut.renameFrom).toBe("old");
-	});
-
-	test("an unchanged name is not emitted as a rename", () => {
-		const mutation = profileMutation(profileDraft("same", { runtime: "pi" }));
-		if (mutation.kind !== "set-profile")
-			throw new Error("expected set-profile");
-		expect(mutation.renameFrom).toBeUndefined();
 	});
 });

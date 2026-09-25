@@ -24,10 +24,7 @@ import {
 import { QUESTION_WAIT_MS, WorkflowEngine } from "../src/workflow/runtime.ts";
 import type { StepBehavior } from "../src/workflow/steps/types.ts";
 
-const openspecFullDigest = registerBuiltins().definition(
-	"openspec-full",
-	1,
-).digest;
+const openspecFullDigest = registerBuiltins().definition("openspec", 1).digest;
 
 class StubAdapter implements AgentAdapter {
 	readonly id = "pi" as const;
@@ -470,7 +467,7 @@ describe("breaking workflow CLI surface", () => {
 			workflowId: "change",
 			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
 			definition: {
-				id: "openspec-full",
+				id: "openspec",
 				version: 1,
 				digest: openspecFullDigest,
 			},
@@ -490,7 +487,7 @@ describe("breaking workflow CLI surface", () => {
 		} as unknown as WorkflowEngine;
 		const canonical = effectRunnerTest.canonicalAgentName(
 			"change",
-			"openspec-full",
+			"openspec",
 			{
 				stepId: run.stepId,
 				role: run.role,
@@ -560,7 +557,7 @@ describe("breaking workflow CLI surface", () => {
 			workflowId: "change",
 			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
 			definition: {
-				id: "openspec-full",
+				id: "openspec",
 				version: 1,
 				digest: openspecFullDigest,
 			},
@@ -580,7 +577,7 @@ describe("breaking workflow CLI surface", () => {
 		} as unknown as WorkflowEngine;
 		const canonical = effectRunnerTest.canonicalAgentName(
 			"change",
-			"openspec-full",
+			"openspec",
 			{ stepId: run.stepId, role: run.role, id: run.id },
 		);
 		const calls: string[][] = [];
@@ -623,7 +620,7 @@ describe("breaking workflow CLI surface", () => {
 			workflowId: "change",
 			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
 			definition: {
-				id: "openspec-full",
+				id: "openspec",
 				version: 1,
 				digest: openspecFullDigest,
 			},
@@ -673,7 +670,7 @@ describe("breaking workflow CLI surface", () => {
 			workflowId: "change",
 			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
 			definition: {
-				id: "openspec-full",
+				id: "openspec",
 				version: 1,
 				digest: openspecFullDigest,
 			},
@@ -703,7 +700,7 @@ describe("breaking workflow CLI surface", () => {
 		} as unknown as WorkflowEngine;
 		const triageCanonical = effectRunnerTest.canonicalAgentName(
 			"change",
-			"openspec-full",
+			"openspec",
 			{ stepId: triage.stepId, role: triage.role, id: triage.id },
 		);
 		const calls: string[][] = [];
@@ -753,7 +750,7 @@ describe("breaking workflow CLI surface", () => {
 			workflowId: "change",
 			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
 			definition: {
-				id: "openspec-full",
+				id: "openspec",
 				version: 1,
 				digest: openspecFullDigest,
 			},

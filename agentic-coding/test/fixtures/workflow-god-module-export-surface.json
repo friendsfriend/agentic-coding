@@ -3,6 +3,7 @@
 		"BUILTIN_CAPABILITIES",
 		"BUILTIN_EFFECTS",
 		"PUBLIC_WORKFLOW_CATALOG",
+		"REMOVED_WORKFLOW_REPLACEMENTS",
 		"ResearchHandoff",
 		"ResearchHandoffDirective",
 		"ResearchHandoffDirectiveIntent",
@@ -12,7 +13,8 @@
 		"definitionVersionForManifestPolicy",
 		"definitionVersionForPolicy",
 		"effectiveManifestPolicy",
-		"registerBuiltins"
+		"registerBuiltins",
+		"removedWorkflowHint"
 	],
 	"cli.ts": [
 		"AGENT_EXTENSION_SUBCOMMANDS",
@@ -24,7 +26,6 @@
 		"detachedDrainArgv",
 		"main",
 		"paneForRunFactory",
-		"parseFusionProfiles",
 		"rolesForDefinition",
 		"run",
 		"runDeveloperQuestion",

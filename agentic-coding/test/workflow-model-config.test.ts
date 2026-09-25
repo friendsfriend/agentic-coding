@@ -141,9 +141,7 @@ describe("agent configuration presets", () => {
 					y: { roles: { "core.verification": { "quality-verifier": "nope" } } },
 				},
 			}),
-		).toThrow(
-			/preset y: unknown profile nope for role quality-verifier of step core.verification/,
-		);
+		).toThrow(/roles\["core.verification"\] was removed/);
 		expect(() =>
 			parseAgentsConfig({
 				...baseConfig,
@@ -174,7 +172,7 @@ describe("agent configuration presets", () => {
 			}),
 		).toThrow(/unknown agent profile: valueOf/);
 	});
-	test("valid presets parse and resolution follows preset roles > steps > default", () => {
+	test("pool defaults override preset step assignments for classifiable steps", () => {
 		const registry = registerBuiltins();
 		const definition = registry.definition("no-openspec", 1);
 		const config = parseAgentsConfig({
@@ -185,7 +183,11 @@ describe("agent configuration presets", () => {
 				mixed: {
 					default_profile: "b",
 					steps: { "core.implementation": "a" },
-					roles: { "core.verification": { "quality-verifier": "b" } },
+					pools: {
+						"core.implementation": [
+							{ label: "quick", profile: "b", default: true },
+						],
+					},
 				},
 			},
 		});
@@ -200,12 +202,12 @@ describe("agent configuration presets", () => {
 			preset,
 		);
 		const names = routing.routes.map((route) => route.profile.name);
-		// role override, step assignment, preset default for uncovered role
-		expect(names).toEqual(["a", "b", "b"]);
+		// pool default for the classifiable implementation step, preset default
+		// for the remainder
+		expect(names).toEqual(["b", "b", "b"]);
 		expect(() => resolvePreset(config, "ghost")).toThrow(
 			/unknown agent preset: ghost/,
 		);
-		// prototype-chain preset names must fail, never yield a bogus preset
 		for (const inherited of ["toString", "constructor", "hasOwnProperty"])
 			expect(() => resolvePreset(config, inherited)).toThrow(
 				new RegExp(`unknown agent preset: ${inherited}`),
@@ -246,8 +248,14 @@ describe("agent configuration presets", () => {
 			...baseConfig,
 			presets: {
 				equiv: {
-					steps: { "core.implementation": "a" },
-					roles: { "core.verification": { "quality-verifier": "b" } },
+					pools: {
+						"core.implementation": [
+							{ label: "quick", profile: "a", default: true },
+						],
+						"core.verification": [
+							{ label: "quality", profile: "b", default: true },
+						],
+					},
 				},
 			},
 		});
@@ -286,6 +294,71 @@ describe("agent configuration presets", () => {
 			validatePresetCoverage(preset, definition, ["core.archive"], covered),
 		).toBeUndefined();
 	});
+	test("routed coverage requires a pool for every classifiable step", () => {
+		const registry = registerBuiltins();
+		const definition = registry.definition("openspec", 1);
+		const agents = parseAgentsConfig({
+			...baseConfig,
+			presets: {
+				thin: {
+					pools: {
+						"core.plan": [{ label: "a", profile: "d", default: true }],
+					},
+				},
+			},
+		});
+		const preset = resolvePreset(agents, "thin");
+		expect(() =>
+			validatePresetCoverage(preset, definition, [], agents),
+		).toThrow(
+			/preset thin has no model pool for classifiable step core\.implementation/,
+		);
+	});
+	test("pool entry rules are rejected at parse", () => {
+		const profile = { runtime: "pi" as const };
+		expect(() =>
+			parseAgentsConfig({
+				profiles: { a: profile, b: profile },
+				presets: {
+					double: {
+						pools: {
+							"core.plan": [
+								{ label: "x", profile: "a", default: true },
+								{ label: "y", profile: "b", default: true },
+							],
+						},
+					},
+				},
+			}),
+		).toThrow(/needs exactly one entry marked default/);
+		expect(() =>
+			parseAgentsConfig({
+				profiles: { a: profile },
+				presets: {
+					dup: {
+						pools: {
+							"core.plan": [
+								{ label: "x", profile: "a", default: true },
+								{ label: "x", profile: "a" },
+							],
+						},
+					},
+				},
+			}),
+		).toThrow(/duplicate label x in pool core\.plan/);
+		expect(() =>
+			parseAgentsConfig({
+				profiles: { a: profile },
+				presets: {
+					unknown: {
+						pools: {
+							"core.plan": [{ label: "x", profile: "missing", default: true }],
+						},
+					},
+				},
+			}),
+		).toThrow(/unknown profile missing in pool core\.plan entry x/);
+	});
 });
 
 describe("agents section write-back", () => {
@@ -298,7 +371,14 @@ describe("agents section write-back", () => {
 				{
 					agents: {
 						profiles: { "pi-a": { runtime: "pi" } },
-						presets: { base: { default_profile: "pi-a" } },
+						presets: {
+							base: {
+								default_profile: "pi-a",
+								pools: {
+									"core.plan": [{ label: "a", profile: "pi-a", default: true }],
+								},
+							},
+						},
 					},
 				},
 				null,
@@ -345,6 +425,9 @@ describe("agents section write-back", () => {
 							base: {
 								default_profile: "pi-a",
 								steps: { "core.plan": "pi-a" },
+								pools: {
+									"core.plan": [{ label: "a", profile: "pi-a", default: true }],
+								},
 							},
 						},
 					},
@@ -364,6 +447,9 @@ describe("agents section write-back", () => {
 				presets.extra = {
 					default_profile: "pi-a",
 					steps: { "core.archive": "pi-a" },
+					pools: {
+						"core.archive": [{ label: "a", profile: "pi-a", default: true }],
+					},
 				};
 			});
 			const reparsed = JSON.parse(fs.readFileSync(file, "utf8")) as Record<
@@ -534,7 +620,12 @@ describe("write-back target selection", () => {
 		try {
 			saveAgentsSection((section) => {
 				(section.presets as Record<string, unknown>) = {
-					extra: { default_profile: "p" },
+					extra: {
+						default_profile: "p",
+						pools: {
+							"core.plan": [{ label: "a", profile: "p", default: true }],
+						},
+					},
 				};
 			});
 			const reparsed = JSON.parse(fs.readFileSync(file, "utf8")) as Record<
@@ -668,7 +759,7 @@ describe("start argument threading", () => {
 	});
 });
 
-describe("dashboard openspec-fusion-full start routing", () => {
+describe("dashboard fusion start routing", () => {
 	const baseConfig = {
 		default_profile: "d",
 		profiles: {
@@ -691,51 +782,44 @@ describe("dashboard openspec-fusion-full start routing", () => {
 			agents,
 		).routes.map((route) => [route.stepId, route.role, route.profile.name]);
 	}
-	test("fusionPlannerCount derives the contiguous run and rejects gaps", () => {
+	const entry = (name: string) => ({
+		label: name,
+		profile: name,
+		default: true,
+	});
+	const fusionPools = (planners: string[]) => ({
+		"core.plan": [entry("d")],
+		"fusion.plan": planners.map(entry),
+		"fusion.consolidate": [entry("b")],
+		"core.implementation": [entry("d")],
+		"core.triage": [entry("d")],
+		"core.verification": [entry("d")],
+		"core.wiki": [entry("d")],
+		"core.archive": [entry("d")],
+	});
+
+	test("fusionPlannerCount counts tagged fusion.plan defaults", () => {
 		expect(fusionPlannerCount(undefined)).toBe(0);
 		expect(
-			fusionPlannerCount({ name: "p", roles: { "fusion.plan": {} } }),
+			fusionPlannerCount({
+				name: "p",
+				pools: { "fusion.plan": [{ label: "a", profile: "a" }] },
+			}),
 		).toBe(0);
 		expect(
 			fusionPlannerCount({
 				name: "p",
-				roles: { "fusion.plan": { "planner-1": "a", "planner-2": "b" } },
+				pools: { "fusion.plan": [entry("a"), entry("b")] },
 			}),
 		).toBe(2);
-		expect(
-			fusionPlannerCount({
-				name: "p",
-				roles: {
-					"fusion.plan": {
-						"planner-1": "a",
-						"planner-2": "a",
-						"planner-3": "a",
-						"planner-4": "a",
-						"planner-5": "a",
-					},
-				},
-			}),
-		).toBe(5);
-		expect(() =>
-			fusionPlannerCount({
-				name: "p",
-				roles: { "fusion.plan": { "planner-1": "a", "planner-3": "b" } },
-			}),
-		).toThrow(/contiguous planner roles/);
 	});
+
 	test("valid 2-planner preset creates ordered planner and consolidator routes", () => {
 		const agents = parseAgentsConfig({
 			...baseConfig,
-			presets: {
-				duo: {
-					steps: { "fusion.consolidate": "b" },
-					roles: {
-						"fusion.plan": { "planner-1": "a", "planner-2": "b" },
-					},
-				},
-			},
+			presets: { duo: { pools: fusionPools(["a", "b"]) } },
 		});
-		const routes = routesFor("openspec-fusion-full", agents, "duo");
+		const routes = routesFor("openspec-fusion", agents, "duo");
 		expect(routes.filter(([step]) => step === "fusion.plan")).toEqual([
 			["fusion.plan", "planner-1", "a"],
 			["fusion.plan", "planner-2", "b"],
@@ -743,13 +827,13 @@ describe("dashboard openspec-fusion-full start routing", () => {
 		expect(routes.filter(([step]) => step === "fusion.consolidate")).toEqual([
 			["fusion.consolidate", "consolidator", "b"],
 		]);
-		// remaining agent steps resolve through the config default as before
 		expect(
 			routes
 				.filter(([step]) => step === "core.implementation")
 				.map((route) => route[2]),
 		).toEqual(["d"]);
 	});
+
 	test("valid 5-planner preset creates planner-1 through planner-5", () => {
 		const agents = parseAgentsConfig({
 			...baseConfig,
@@ -758,23 +842,10 @@ describe("dashboard openspec-fusion-full start routing", () => {
 				c: { runtime: "pi" },
 				e: { runtime: "pi" },
 			},
-			presets: {
-				five: {
-					default_profile: "d",
-					roles: {
-						"fusion.plan": {
-							"planner-1": "a",
-							"planner-2": "b",
-							"planner-3": "c",
-							"planner-4": "d",
-							"planner-5": "e",
-						},
-					},
-				},
-			},
+			presets: { five: { pools: fusionPools(["a", "b", "c", "d", "e"]) } },
 		});
 		expect(
-			routesFor("openspec-fusion-full", agents, "five").filter(
+			routesFor("openspec-fusion", agents, "five").filter(
 				([step]) => step === "fusion.plan",
 			),
 		).toEqual([
@@ -785,68 +856,58 @@ describe("dashboard openspec-fusion-full start routing", () => {
 			["fusion.plan", "planner-5", "e"],
 		]);
 	});
-	test("fewer than 2 or more than 5 planners are rejected before launch", async () => {
-		const one = parseAgentsConfig({
-			...baseConfig,
-			presets: {
-				one: { roles: { "fusion.plan": { "planner-1": "a" } } },
-			},
-		});
-		expect(() => routesFor("openspec-fusion-full", one, "one")).toThrow(
-			/between 2 and 5 planner routings/,
-		);
-		// a gap in the run is caught during count derivation
-		const gapped = parseAgentsConfig({
-			...baseConfig,
-			presets: {
-				gapped: {
-					roles: {
-						"fusion.plan": {
-							"planner-1": "a",
-							"planner-2": "b",
-							"planner-4": "a",
-						},
-					},
+
+	test("fusion.plan default counts outside 2-5 are rejected at parse", () => {
+		expect(() =>
+			parseAgentsConfig({
+				...baseConfig,
+				presets: { one: { pools: fusionPools(["a"]) } },
+			}),
+		).toThrow(/2-5 entries marked default/);
+		expect(() =>
+			parseAgentsConfig({
+				...baseConfig,
+				profiles: {
+					...baseConfig.profiles,
+					c: { runtime: "pi" },
+					e: { runtime: "pi" },
+					f: { runtime: "pi" },
 				},
-			},
-		});
-		expect(() => routesFor("openspec-fusion-full", gapped, "gapped")).toThrow(
-			/contiguous planner roles/,
-		);
-	});
-	test("duplicate resolved planner profiles are rejected before launch", () => {
-		// without per-planner role assignments every planner falls back to the
-		// same profile, which the engine would reject at start time
-		const fallback = parseAgentsConfig({
-			...baseConfig,
-			presets: {
-				thin: {
-					roles: {
-						"fusion.plan": { "planner-1": "d", "planner-2": "d" },
-					},
+				presets: {
+					six: { pools: fusionPools(["a", "b", "c", "d", "e", "f"]) },
 				},
-			},
-		});
-		expect(() => routesFor("openspec-fusion-full", fallback, "thin")).toThrow(
-			/distinct planner profiles/,
-		);
+			}),
+		).toThrow(/2-5 entries marked default/);
 	});
-	test("non-fusion workflows keep their existing routing without a preset", () => {
+
+	test("duplicate fusion.plan default profiles are rejected at parse", () => {
+		const pools = fusionPools(["a", "b"]);
+		pools["fusion.plan"] = [
+			{ label: "one", profile: "d", default: true },
+			{ label: "two", profile: "d", default: true },
+		];
+		expect(() =>
+			parseAgentsConfig({
+				...baseConfig,
+				presets: { thin: { pools } },
+			}),
+		).toThrow(/distinct profiles/);
+	});
+
+	test("a routed workflow without a preset fails with the Settings hint", () => {
 		const agents = parseAgentsConfig(baseConfig);
-		expect(routesFor("openspec-full", agents)).toEqual([
-			["core.plan", "planner", "d"],
+		expect(() => routesFor("openspec", agents)).toThrow(/requires a preset/);
+	});
+
+	test("non-fusion workflows keep their routing without a preset", () => {
+		const agents = parseAgentsConfig(baseConfig);
+		const routes = routesFor("no-openspec", agents);
+		expect(routes.filter(([step]) => step === "core.implementation")).toEqual([
 			["core.implementation", "worker", "d"],
-			["core.triage", "triage", "d"],
-			["core.verification", "quality-verifier", "d"],
-			["core.verification", "security-verifier", "d"],
-			["core.verification", "performance-verifier", "d"],
-			["core.verification", "openspec-verifier", "d"],
-			["core.verification", "usability-verifier", "d"],
-			["core.verification", "test-verifier", "d"],
-			["core.verification", "concurrency-verifier", "d"],
-			["core.verification", "migration-verifier", "d"],
-			["core.verification", "test-quality-verifier", "d"],
-			["core.archive", "archive", "d"],
 		]);
+		expect(
+			routes.filter(([step]) => step === "core.verification"),
+		).toHaveLength(8);
+		expect(routes.every(([, , name]) => name === "d")).toBe(true);
 	});
 });

@@ -9,28 +9,37 @@ import { loadAssignments } from "./agent-extensions.ts";
 import type { CompiledWorkflowDefinition } from "./registry.ts";
 import { stableJson } from "./registry.ts";
 
-/** Flat preset keys that map a classifier category to a worker profile
- * (introduce-jev-for-model-range-decision). The key set is the integration's
- * category vocabulary; adding a classifier with different categories needs a
- * matching config shape before it can route. */
-export const PRESET_CATEGORY_KEYS = [
+/** Re-exported from the pure classifier protocol so `profiles.ts` never
+ * creates a domain->runtime edge. */
+export type { ClassificationMode, PoolEntry } from "./classifiers.ts";
+
+import type { ClassificationMode, PoolEntry } from "./classifiers.ts";
+import { ROSTER_MAX_PLANNERS, ROSTER_MIN_PLANNERS } from "./classifiers.ts";
+
+/** Recovery hint repeated by every pool/preset configuration error. */
+export const SETTINGS_PRESETS_HINT = "Settings → Presets";
+
+/** Classifiable step ids by their declared mode; step knowledge lives in
+ * `steps/`, this only names the config keys the preset editor offers. */
+export const POOL_STEPS: Readonly<Record<string, ClassificationMode>> =
+	Object.freeze({
+		"core.plan": "single",
+		"fusion.consolidate": "single",
+		"fusion.plan": "roster",
+		"core.implementation": "single",
+		"core.triage": "single",
+		"core.verification": "single",
+		"core.wiki": "single",
+		"core.archive": "single",
+	});
+
+/** The removed flat category keys; any occurrence is a hard config break. */
+export const REMOVED_PRESET_CATEGORY_KEYS = [
 	"easy",
 	"medium",
 	"hard",
 	"critical",
 ] as const;
-export type PresetCategory = (typeof PRESET_CATEGORY_KEYS)[number];
-
-function categoryEntries(value: unknown): Array<[PresetCategory, string]> {
-	if (!value || typeof value !== "object") return [];
-	const record = value as Record<string, unknown>;
-	const entries: Array<[PresetCategory, string]> = [];
-	for (const key of PRESET_CATEGORY_KEYS) {
-		const profile = record[key];
-		if (typeof profile === "string") entries.push([key, profile]);
-	}
-	return entries;
-}
 
 export interface ProfileConfig {
 	runtime: RuntimeId;
@@ -50,11 +59,8 @@ export interface PresetConfig {
 	default_profile?: string;
 	steps?: Record<string, string>;
 	roles?: Record<string, Record<string, string>>;
-	/** Per-complexity worker profiles consumed by classifier integrations. */
-	easy?: string;
-	medium?: string;
-	hard?: string;
-	critical?: string;
+	/** Per-classifiable-step model pools keyed by step id. */
+	pools?: Record<string, PoolEntry[]>;
 }
 export interface AgentsConfig {
 	default_profile?: string;
@@ -71,10 +77,7 @@ export interface RoutingPreset {
 	default_profile?: string;
 	steps?: Record<string, string>;
 	roles?: Record<string, Record<string, string>>;
-	easy?: string;
-	medium?: string;
-	hard?: string;
-	critical?: string;
+	pools?: Record<string, PoolEntry[]>;
 }
 const RUNTIME_OPTIONS: Record<string, Set<string>> = {
 	pi: new Set([
@@ -119,6 +122,7 @@ export function parseAgentsConfig(
 		models?: Record<string, string>;
 		thinking?: Record<string, string>;
 	},
+	source?: string,
 ): AgentsConfig {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
 		const model = legacy?.models?.worker_default;
@@ -174,7 +178,7 @@ export function parseAgentsConfig(
 		!ownProfile(profiles, input.default_profile)
 	)
 		throw new Error(`unknown default profile: ${input.default_profile}`);
-	const presets = validatePresets(input.presets, profiles);
+	const presets = validatePresets(input.presets, profiles, source);
 	return {
 		...(input.default_profile !== undefined
 			? { default_profile: input.default_profile }
@@ -200,9 +204,106 @@ export function parseAgentsConfig(
 			: {}),
 	};
 }
+function removedPoolShape(
+	name: string,
+	preset: Record<string, unknown>,
+	source?: string,
+): string | undefined {
+	const where = source ? ` (${source})` : "";
+	const flat = REMOVED_PRESET_CATEGORY_KEYS.filter((key) =>
+		Object.hasOwn(preset, key),
+	);
+	if (flat.length)
+		return `preset ${name}${where}: removed model-routing keys (${flat.join(
+			", ",
+		)}); recreate them as model pools in ${SETTINGS_PRESETS_HINT}`;
+	const roles = preset.roles;
+	if (
+		roles &&
+		typeof roles === "object" &&
+		!Array.isArray(roles) &&
+		Object.hasOwn(roles as Record<string, unknown>, "core.verification")
+	)
+		return `preset ${name}${where}: roles["core.verification"] was removed; use the core.verification model pool in ${SETTINGS_PRESETS_HINT}`;
+	return undefined;
+}
+
+function validatePool(
+	presetName: string,
+	stepId: string,
+	value: unknown,
+	profiles: Record<string, ProfileConfig>,
+	source?: string,
+): PoolEntry[] {
+	const where = source ? ` (${source})` : "";
+	if (!Array.isArray(value))
+		throw new Error(
+			`preset ${presetName}${where}: pool ${stepId} must be a list of entries; define it in ${SETTINGS_PRESETS_HINT}`,
+		);
+	const mode = POOL_STEPS[stepId] ?? "single";
+	const labels = new Set<string>();
+	const entries: PoolEntry[] = [];
+	let defaults = 0;
+	for (const raw of value) {
+		if (!raw || typeof raw !== "object" || Array.isArray(raw))
+			throw new Error(
+				`preset ${presetName}${where}: pool ${stepId} entry must be an object`,
+			);
+		const entry = raw as Record<string, unknown>;
+		if (typeof entry.label !== "string" || !entry.label.trim())
+			throw new Error(
+				`preset ${presetName}${where}: pool ${stepId} entry is missing a label`,
+			);
+		const label = entry.label.trim();
+		if (labels.has(label))
+			throw new Error(
+				`preset ${presetName}${where}: duplicate label ${label} in pool ${stepId}`,
+			);
+		labels.add(label);
+		if (typeof entry.profile !== "string" || !entry.profile.trim())
+			throw new Error(
+				`preset ${presetName}${where}: pool ${stepId} entry ${label} is missing a profile`,
+			);
+		if (!ownProfile(profiles, entry.profile))
+			throw new Error(
+				`preset ${presetName}${where}: unknown profile ${entry.profile} in pool ${stepId} entry ${label}`,
+			);
+		if (entry.default !== undefined && typeof entry.default !== "boolean")
+			throw new Error(
+				`preset ${presetName}${where}: pool ${stepId} entry ${label} default must be a boolean`,
+			);
+		if (entry.default === true) defaults += 1;
+		entries.push({
+			label,
+			profile: entry.profile,
+			...(entry.criteria !== undefined ? { criteria: entry.criteria } : {}),
+			...(entry.default === true ? { default: true } : {}),
+		});
+	}
+	if (mode === "roster") {
+		if (defaults < ROSTER_MIN_PLANNERS || defaults > ROSTER_MAX_PLANNERS)
+			throw new Error(
+				`preset ${presetName}${where}: pool ${stepId} needs ${ROSTER_MIN_PLANNERS}-${ROSTER_MAX_PLANNERS} entries marked default, found ${defaults}; edit it in ${SETTINGS_PRESETS_HINT}`,
+			);
+		const defaultProfiles = entries
+			.filter((entry) => entry.default)
+			.map((entry) => entry.profile);
+		if (new Set(defaultProfiles).size !== defaultProfiles.length)
+			throw new Error(
+				`preset ${presetName}${where}: pool ${stepId} default entries must name distinct profiles; edit it in ${SETTINGS_PRESETS_HINT}`,
+			);
+	} else if (defaults !== 1) {
+		throw new Error(
+			`preset ${presetName}${where}: pool ${stepId} needs exactly one entry marked default, found ${defaults}; edit it in ${SETTINGS_PRESETS_HINT}`,
+		);
+	}
+	return entries;
+}
+
 function validatePresets(
 	presets: unknown,
 	profiles: Record<string, ProfileConfig>,
+	source?: string,
 ): Record<string, PresetConfig> {
 	if (presets === undefined)
 		return { [BUILTIN_PRESET_NAME]: { runtime: "pi" } };
@@ -212,7 +313,7 @@ function validatePresets(
 	for (const [name, value] of Object.entries(presets)) {
 		if (!value || typeof value !== "object" || Array.isArray(value))
 			throw new Error(`invalid preset: ${name}`);
-		const preset = value as PresetConfig;
+		const preset = value as PresetConfig & Record<string, unknown>;
 		if (
 			preset.runtime !== undefined &&
 			!Object.hasOwn(RUNTIME_OPTIONS, preset.runtime)
@@ -225,6 +326,9 @@ function validatePresets(
 				);
 			continue;
 		}
+		const removed = removedPoolShape(name, preset, source);
+		if (removed) throw new Error(removed);
+		const where = source ? ` (${source})` : "";
 		if (
 			preset.default_profile !== undefined &&
 			!ownProfile(profiles, preset.default_profile)
@@ -248,11 +352,20 @@ function validatePresets(
 						`preset ${name}: unknown profile ${profileName} for role ${role} of step ${stepId}`,
 					);
 		}
-		for (const [category, profileName] of categoryEntries(preset))
-			if (!ownProfile(profiles, profileName))
-				throw new Error(
-					`preset ${name}: unknown profile ${profileName} for category ${category}`,
-				);
+		const poolTable = preset.pools;
+		if (
+			!poolTable ||
+			typeof poolTable !== "object" ||
+			Array.isArray(poolTable) ||
+			Object.keys(poolTable).length === 0
+		)
+			throw new Error(
+				`preset ${name}${where}: a custom preset must declare at least one model pool; create one in ${SETTINGS_PRESETS_HINT}`,
+			);
+		const pools: Record<string, PoolEntry[]> = {};
+		for (const [stepId, pool] of Object.entries(poolTable))
+			pools[stepId] = validatePool(name, stepId, pool, profiles, source);
+		preset.pools = pools;
 	}
 	if (!Object.hasOwn(parsed, BUILTIN_PRESET_NAME))
 		parsed[BUILTIN_PRESET_NAME] = { runtime: "pi" };
@@ -334,17 +447,65 @@ export function resolvePreset(
 			: {}),
 		...(preset.steps ? { steps: preset.steps } : {}),
 		...(preset.roles ? { roles: preset.roles } : {}),
-		...Object.fromEntries(categoryEntries(preset)),
+		...(preset.pools ? { pools: preset.pools } : {}),
 	};
 }
-/** Fail startup when a selected preset leaves an agent step unresolvable. */
+
+/** The ordered pool entries a preset declares for a step (empty if none). */
+export function poolEntries(
+	preset: RoutingPreset | undefined,
+	stepId: string,
+): readonly PoolEntry[] {
+	return ownValue(preset?.pools, stepId) ?? [];
+}
+
+/** The entries tagged `default: true` for a step, in pool order. */
+export function defaultPoolEntries(
+	preset: RoutingPreset | undefined,
+	stepId: string,
+): readonly PoolEntry[] {
+	return poolEntries(preset, stepId).filter((entry) => entry.default === true);
+}
+
+/** The tagged-default profile for a single-select pool, if any. */
+export function defaultPoolProfile(
+	preset: RoutingPreset | undefined,
+	stepId: string,
+): string | undefined {
+	return defaultPoolEntries(preset, stepId)[0]?.profile;
+}
+
+/** True when a definition runs a classifier routing pass. */
+export function isClassifierRouted(
+	definition: CompiledWorkflowDefinition,
+): boolean {
+	return definition.steps.some(
+		(stepId) => stepId === "core.route-plan" || stepId === "core.route-apply",
+	);
+}
+
+/** Fail startup when a selected preset leaves a required step unresolvable.
+ * A classifier-routed definition requires a valid pool for every classifiable
+ * step it contains; every other agent step keeps the legacy resolvability
+ * rule with the built-in fallback. */
 export function validatePresetCoverage(
 	preset: RoutingPreset,
 	definition: CompiledWorkflowDefinition,
 	agentSteps: readonly string[],
 	config: AgentsConfig,
 ): void {
+	const routed = isClassifierRouted(definition);
+	if (routed)
+		for (const stepId of definition.steps) {
+			if (!(stepId in POOL_STEPS)) continue;
+			const pool = poolEntries(preset, stepId);
+			if (pool.length === 0)
+				throw new Error(
+					`preset ${preset.name} has no model pool for classifiable step ${stepId}; define it in ${SETTINGS_PRESETS_HINT}`,
+				);
+		}
 	for (const stepId of agentSteps) {
+		if (routed && stepId in POOL_STEPS) continue;
 		const resolvable =
 			ownValue(preset.steps, stepId) ||
 			Object.keys(ownValue(preset.roles, stepId) ?? {}).length > 0 ||
@@ -369,6 +530,7 @@ export function profileFor(
 	preset?: RoutingPreset,
 ): ResolvedProfile {
 	const name =
+		defaultPoolProfile(preset, stepId) ??
 		(role && ownValue(ownValue(preset?.roles, stepId), role)) ??
 		ownValue(preset?.steps, stepId) ??
 		preset?.default_profile ??
@@ -429,6 +591,66 @@ export function asReadOnlyProfile(profile: ResolvedProfile): ResolvedProfile {
 		digest: createHash("sha256").update(stableJson(unsigned)).digest("hex"),
 	});
 }
+/** The ordered `planner-1..N` role names a fusion preset's tagged defaults
+ * seed before classification. */
+export function fusionPlannerRoleNames(
+	preset: RoutingPreset | undefined,
+): string[] {
+	return defaultPoolEntries(preset, "fusion.plan").map(
+		(_, index) => `planner-${index + 1}`,
+	);
+}
+
+/** Overlay classifier selections onto the pinned routes, replacing every route
+ * of each selected step and preserving all other (earlier-pass) routes. */
+export function applyRoutingSelections(
+	routing: WorkflowRouting,
+	config: AgentsConfig,
+	selections: readonly CategorySelection[],
+): WorkflowRouting {
+	let routes: WorkflowRouting["routes"][number][] = [...routing.routes];
+	for (const item of selections) {
+		const profile = resolveProfile(item.profileName, config);
+		let replaced = false;
+		routes = routes.map((route) => {
+			if (
+				route.stepId === item.stepId &&
+				(item.role === undefined || route.role === item.role)
+			) {
+				replaced = true;
+				return { ...route, profile };
+			}
+			return route;
+		});
+		if (!replaced)
+			routes.push({
+				stepId: item.stepId,
+				...(item.role ? { role: item.role } : {}),
+				profile,
+			});
+	}
+	return { ...routing, routes };
+}
+
+/** Replace the fusion planner roles with the chosen roster, preserving every
+ * other route (including an earlier pass's single-step selections). */
+export function applyFusionRoster(
+	routing: WorkflowRouting,
+	config: AgentsConfig,
+	profiles: readonly string[],
+): WorkflowRouting {
+	const routes = routing.routes.filter(
+		(route) => route.stepId !== "fusion.plan",
+	);
+	for (const [index, name] of profiles.entries())
+		routes.push({
+			stepId: "fusion.plan",
+			role: `planner-${index + 1}`,
+			profile: resolveProfile(name, config),
+		});
+	return { ...routing, routes };
+}
+
 /** Apply every read-only step's declared policy to its routed profiles, before
  * the routing is pinned and preflighted. `requirementsFor` is the caller's
  * already-resolved step lookup (the registry owns step semantics), so this
@@ -446,19 +668,11 @@ export function enforceReadOnlySteps(
 		),
 	};
 }
+/** A classifier-selected profile to apply to a step's routes. */
 export interface CategorySelection {
 	readonly stepId: string;
 	readonly role?: string;
 	readonly profileName: string;
-}
-
-/** The worker profile a preset maps a classifier category to, if any. */
-export function categoryProfile(
-	preset: RoutingPreset | undefined,
-	category: string,
-): string | undefined {
-	if (!preset) return undefined;
-	return categoryEntries(preset).find(([key]) => key === category)?.[1];
 }
 
 /** Collapse a pinned routing back into the role table `resolveRouting` takes,
@@ -481,9 +695,9 @@ export function resolveRouting(
 	rolesByStep: Record<string, string[]>,
 	config: AgentsConfig,
 	preset?: RoutingPreset,
-	selection?: CategorySelection,
+	selection?: CategorySelection | readonly CategorySelection[],
 ): WorkflowRouting {
-	const routes: WorkflowRouting["routes"][number][] = [];
+	let routes: WorkflowRouting["routes"][number][] = [];
 	for (const stepId of definition.steps) {
 		if (!(stepId in rolesByStep)) continue;
 		const roles = rolesByStep[stepId] ?? [];
@@ -500,19 +714,32 @@ export function resolveRouting(
 					profile: profileFor(stepId, role, definition, config, preset),
 				});
 	}
-	if (selection) {
-		const profile = resolveProfile(selection.profileName, config);
-		const matches = (route: (typeof routes)[number]) =>
-			route.stepId === selection.stepId &&
-			(selection.role === undefined || route.role === selection.role);
-		const index = routes.findIndex(matches);
-		const entry = {
-			stepId: selection.stepId,
-			...(selection.role ? { role: selection.role } : {}),
-			profile,
-		};
-		if (index >= 0) routes[index] = entry;
-		else routes.push(entry);
+	const selections = selection
+		? Array.isArray(selection)
+			? selection
+			: [selection]
+		: [];
+	for (const item of selections) {
+		const profile = resolveProfile(item.profileName, config);
+		let replaced = false;
+		// Replace EVERY route of the step (not just the first): one
+		// `core.verification` pool selection must cover all verifier roles.
+		routes = routes.map((route) => {
+			if (
+				route.stepId === item.stepId &&
+				(item.role === undefined || route.role === item.role)
+			) {
+				replaced = true;
+				return { ...route, profile };
+			}
+			return route;
+		});
+		if (!replaced)
+			routes.push({
+				stepId: item.stepId,
+				...(item.role ? { role: item.role } : {}),
+				profile,
+			});
 	}
 	return {
 		defaultProfile: config.default_profile ?? BUILTIN_PRESET_NAME,

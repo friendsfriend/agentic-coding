@@ -62,10 +62,21 @@ inside the transaction; concurrent replacement or source drift is rejected,
 not silently accepted. This leaves an intentional filesystem race window and
 keeps the final integrity check load-bearing.
 
-Fusion routing has one precedence rule: an explicit ordered `--fusion-profiles`
-list wins; otherwise the selected preset must provide contiguous `planner-1`
-through `planner-N` roles (2–5). The resolved routing is pinned in the workflow
-snapshot before effects run.
+Classifier-driven model pools are the routing model for the OpenSpec family.
+Each classifiable step (`core.plan`, `fusion.consolidate`, `fusion.plan`,
+`core.implementation`, `core.triage`, `core.verification`, `core.wiki`,
+`core.archive`) declares a classification mode in its step behavior; a custom
+preset supplies one ordered pool per classifiable step, and the JEV classifier
+picks an entry. Two passes run: `core.route-plan` (task state; `core.plan`,
+`fusion.consolidate`, and the `fusion.plan` roster) and `core.route-apply`
+(plan-artifact state; implementation/triage/verification/wiki/archive). A
+single selection replaces every route of its step, so one `core.verification`
+pool covers all verifier roles; a fusion roster recomputes `planner-1..N`. A
+classifier-routed start requires a preset whose pools cover every classifiable
+step in the definition; the `fusion.plan` pool's tagged defaults seed the
+pre-classification planner fan-out. The resolved routing is pinned in the
+workflow snapshot before effects run, so a preset switch is validated and
+explicit.
 
 Non-secret delivery settings are pinned in `metadata.executionSettings`, including
 the effective remote, resolved PR executable (or `null`), and config provenance.
@@ -115,6 +126,9 @@ performs the write.
 
 `StepBehavior` hooks:
 
+- `classification` — the classifier mode (`single` or `roster`) a classifiable
+  step declares; absent when the step is never asked of the classifier. The
+  route steps and the reducer read it from the registered step definition.
 - `roles` / `candidateRoles` — which agent roles are active now / could ever be
   routed for this definition (stage A).
 - `validateEvidence({ snapshot })` — entry-guard predicate run before a step's

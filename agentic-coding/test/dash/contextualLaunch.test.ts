@@ -49,7 +49,7 @@ const INPUT = {
 	ticket: "",
 	workflowId: "add-thing",
 	mode: "worktree",
-	workflowType: "openspec-full",
+	workflowType: "openspec",
 	preset: "Config defaults",
 };
 
@@ -64,13 +64,11 @@ const PROJECT: WorkflowLaunchContext = {
 
 test("the registry catalog is the single workflow-type authority", () => {
 	expect(PUBLIC_WORKFLOW_CATALOG.map((entry) => entry.id)).toEqual([
-		"openspec-full",
+		"openspec",
 		"openspec-apply",
-		"openspec-jev",
-		"openspec-jev-apply",
-		"no-openspec",
-		"openspec-fusion-full",
 		"openspec-propose",
+		"no-openspec",
+		"openspec-fusion",
 		"openspec-fusion-propose",
 		"wiki",
 		"research",

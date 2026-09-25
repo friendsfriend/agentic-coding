@@ -22,9 +22,14 @@ import { workflowAssets } from "./assets.ts";
 import { renderAssignment } from "./assignment.ts";
 import {
 	collectClassifierArtifacts,
-	invokeClassifier,
+	invokeRoutingClassifier,
 } from "./classifier-runner.ts";
-import { classifierFor } from "./classifiers.ts";
+import {
+	APPLY_PHASE_STEPS,
+	PLAN_PHASE_STEPS,
+	ROUTING_INTEGRATION,
+	type RoutingQuestionSpec,
+} from "./classifiers.ts";
 import {
 	type CredentialPrompt,
 	runGitWithCredentialsEffect,
@@ -40,11 +45,7 @@ import {
 	workflowTraceContext,
 } from "./observability.ts";
 import { runProcessEffect } from "./process.ts";
-import {
-	categoryProfile,
-	parseAgentsConfig,
-	resolvePreset,
-} from "./profiles.ts";
+import { parseAgentsConfig, poolEntries, resolvePreset } from "./profiles.ts";
 import type { StepDefinition, WorkflowRegistry } from "./registry.ts";
 import {
 	type ClaimedEffect,
@@ -1092,46 +1093,55 @@ export function agentEffectHandlers(
 			execute: (effect, signal) =>
 				Effect.gen(function* () {
 					const snapshot = snapshotFor(effect);
-					const payload = effect.payload as { integration?: unknown };
-					const integration = classifierFor(
-						typeof payload.integration === "string" ? payload.integration : "",
-					);
+					const payload = effect.payload as {
+						integration?: unknown;
+						phase?: unknown;
+					};
 					const loaded = loadConfigWithProvenance({
 						repository: snapshot.metadata.repository || undefined,
 						repositoryIndependent: !snapshot.metadata.repository,
 					});
-					const agents = parseAgentsConfig(loaded.config.agents, loaded.config);
-					const raw = yield* invokeClassifier(
-						integration,
-						agents,
-						{
-							task: snapshot.metadata.task ?? "",
-							changeId: snapshot.metadata.changeId,
-							artifacts: collectClassifierArtifacts(
-								snapshot.metadata.worktree,
-								snapshot.metadata.changeId,
-							),
-						},
-						signal,
+					const agents = parseAgentsConfig(
+						loaded.config.agents,
+						loaded.config,
+						loaded.provenance.files.join(", ") || undefined,
 					);
-					let category: string;
-					try {
-						category = integration.parse(raw);
-					} catch (error) {
-						throw new PermanentFailure(
-							`classifier ${integration.id}: ${(error as Error).message}`,
-						);
-					}
 					const preset = snapshot.metadata.selectedPreset
 						? resolvePreset(agents, snapshot.metadata.selectedPreset)
 						: undefined;
-					if (!categoryProfile(preset, category))
-						throw new PermanentFailure(
-							`classifier ${integration.id} chose ${category}, but preset ${
-								preset?.name ?? "(config defaults)"
-							} maps no profile for that category`,
+					const input = {
+						task: snapshot.metadata.task ?? "",
+						changeId: snapshot.metadata.changeId,
+						artifacts: collectClassifierArtifacts(
+							snapshot.metadata.worktree,
+							snapshot.metadata.changeId,
+						),
+					};
+					if (payload.integration !== ROUTING_INTEGRATION)
+						return yield* Effect.fail(
+							new PermanentFailure(
+								`unknown model.classify integration: ${String(payload.integration)}`,
+							),
 						);
-					return { integration: integration.id, category };
+					const phase = payload.phase === "apply" ? "apply" : "plan";
+					const definition = snapshotDefinition(snapshot, options.registry);
+					const steps = phase === "plan" ? PLAN_PHASE_STEPS : APPLY_PHASE_STEPS;
+					const specs: RoutingQuestionSpec[] = steps
+						.filter((stepId) => definition.steps.includes(stepId))
+						.map((stepId) => ({
+							stepId,
+							mode:
+								options.registry.stepForDefinition(definition, stepId).behavior
+									?.classification ?? "single",
+							entries: poolEntries(preset, stepId),
+						}));
+					const answers = yield* invokeRoutingClassifier(
+						specs,
+						agents,
+						input,
+						signal,
+					);
+					return { integration: ROUTING_INTEGRATION, phase, answers };
 				}),
 		},
 		"artifact.write": {

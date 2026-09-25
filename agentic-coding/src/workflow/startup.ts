@@ -13,6 +13,7 @@ import {
 	definitionVersionForBehaviorPins,
 	PUBLIC_WORKFLOW_CATALOG,
 	registerBuiltins,
+	removedWorkflowHint,
 } from "./definitions.ts";
 import {
 	type ConfigOptions,
@@ -23,13 +24,16 @@ import {
 } from "./effects.ts";
 import {
 	type AgentsConfig,
+	applyFusionRoster,
+	defaultPoolEntries,
 	enforceReadOnlySteps,
+	isClassifierRouted,
 	parseAgentsConfig,
 	preflightProfile,
 	type RoutingPreset,
 	resolvePreset,
-	resolveProfile,
 	resolveRouting,
+	SETTINGS_PRESETS_HINT,
 	validatePresetCoverage,
 } from "./profiles.ts";
 import type { WorkflowRegistry } from "./registry.ts";
@@ -54,7 +58,6 @@ export interface WorkflowStartRequest {
 	ticket?: string;
 	mode?: "worktree" | "checkout";
 	preset?: string;
-	fusionProfiles?: readonly string[];
 	context?: Record<string, unknown>;
 }
 
@@ -63,20 +66,6 @@ export interface PreparedWorkflowStart {
 	target: string;
 	config: WorkflowConfig;
 	provenance: ConfigProvenance;
-}
-
-export function parseFusionProfiles(value: string | undefined): string[] {
-	const names = (value ?? "")
-		.split(",")
-		.map((name) => name.trim())
-		.filter(Boolean);
-	if (names.length < 2 || names.length > 5)
-		throw new Error(
-			"--fusion-profiles requires 2-5 comma-separated profile names",
-		);
-	if (new Set(names).size !== names.length)
-		throw new Error("--fusion-profiles profiles must be distinct");
-	return names;
 }
 
 export function validateStart(
@@ -113,7 +102,7 @@ export function validateStart(
 	}
 	if (!fs.existsSync(path.join(repo, "openspec", "config.yaml")))
 		throw new Error("OpenSpec project required for this workflow");
-	if (workflow === "openspec-apply" || workflow === "openspec-jev-apply") {
+	if (workflow === "openspec-apply") {
 		const root = path.join(repo, "openspec", "changes", workflowId);
 		for (const file of ["proposal.md", "design.md", "tasks.md"])
 			if (
@@ -167,21 +156,14 @@ export function rolesForDefinition(
 	return roles;
 }
 
-function plannerCount(preset: RoutingPreset | undefined): number {
-	const table = preset?.roles?.["fusion.plan"] ?? {};
-	const has = (name: string) =>
-		typeof table[name] === "string" && table[name] !== "";
-	let count = 0;
-	while (count < 5 && has(`planner-${count + 1}`)) count++;
-	for (let index = count + 1; index <= 5; index++)
-		if (has(`planner-${index}`))
-			throw new Error(
-				`contiguous planner roles required: planner-${index} is set but planner-${count + 1} is missing`,
-			);
-	return count;
+function fusionPlannerDefaults(preset: RoutingPreset | undefined): string[] {
+	return defaultPoolEntries(preset, "fusion.plan").map(
+		(entry) => entry.profile,
+	);
 }
 
-export const fusionPlannerCount = plannerCount;
+export const fusionPlannerCount = (preset: RoutingPreset | undefined): number =>
+	fusionPlannerDefaults(preset).length;
 
 function startPreset(
 	agents: AgentsConfig,
@@ -190,55 +172,56 @@ function startPreset(
 	return name ? resolvePreset(agents, name) : undefined;
 }
 
+/** Build a definition's pinned routing at start. Classifiable steps seed from
+ * their pool's tagged defaults; a fusion roster seeds `planner-1..N` from the
+ * `fusion.plan` tagged defaults; a classifier-routed definition without a
+ * preset fails before any agent launches. */
 function resolveRoutingForStart(
 	definitionId: string,
 	definition: ReturnType<WorkflowRegistry["definition"]>,
 	registry: WorkflowRegistry,
 	agents: AgentsConfig,
 	presetName?: string,
-	fusionProfiles?: readonly string[],
 ): WorkflowRouting {
 	const preset = startPreset(agents, presetName);
+	if (isClassifierRouted(definition) && !preset)
+		throw new Error(
+			`classifier-routed workflow ${definitionId} requires a preset; create model pools in ${SETTINGS_PRESETS_HINT}`,
+		);
 	const fusion = definitionId.startsWith("openspec-fusion");
-	const count = fusion ? (fusionProfiles?.length ?? plannerCount(preset)) : 0;
+	const defaults = fusion ? fusionPlannerDefaults(preset) : [];
 	const roles = rolesForDefinition(
 		definitionId,
 		definition.steps,
 		registry,
-		count,
+		defaults.length,
 		definition,
 	);
 	if (preset)
 		validatePresetCoverage(preset, definition, Object.keys(roles), agents);
-	const routing = enforceReadOnlySteps(
-		resolveRouting(definition, roles, agents, preset),
+	let routing = resolveRouting(definition, roles, agents, preset);
+	if (defaults.length) routing = applyFusionRoster(routing, agents, defaults);
+	const enforced = enforceReadOnlySteps(
+		routing,
 		(stepId) => registry.stepForDefinition(definition, stepId).requirements,
 	);
-	if (fusionProfiles) {
-		for (const [index, name] of fusionProfiles.entries()) {
-			const route = routing.routes.find(
-				(item) =>
-					item.stepId === "fusion.plan" && item.role === `planner-${index + 1}`,
-			);
-			if (!route)
-				throw new Error(`missing fusion planner route planner-${index + 1}`);
-			route.profile = resolveProfile(name, agents);
-		}
-	}
-	const planners = routing.routes.filter(
+	const planners = enforced.routes.filter(
 		(route) => route.stepId === "fusion.plan",
 	);
 	if (fusion && (planners.length < 2 || planners.length > 5))
 		throw new Error(
-			`${definitionId} requires between 2 and 5 planner routings`,
+			`${definitionId} requires between 2 and 5 planner routings; edit the fusion.plan pool in ${SETTINGS_PRESETS_HINT}`,
 		);
 	if (
 		fusion &&
 		new Set(planners.map((route) => route.profile.name)).size !==
 			planners.length
 	)
-		throw new Error("fusion workflow requires distinct planner profiles");
-	return routing;
+		throw new Error(
+			"fusion workflow requires distinct planner profiles; edit the fusion.plan pool in " +
+				SETTINGS_PRESETS_HINT,
+		);
+	return enforced;
 }
 
 /** Shared routing boundary used by dashboard controls and startup execution. */
@@ -266,15 +249,30 @@ interface PreparedStartContext {
 	workflowId: string;
 }
 
+function registeredDefinition(id: string): boolean {
+	return (
+		id === "wiki-comments" ||
+		PUBLIC_WORKFLOW_CATALOG.some((item) => item.id === id)
+	);
+}
+
+/** Actionable `unknown/removed definition` text naming the id and a registered
+ * alternative, instead of a bare registry lookup failure. */
+export function removedDefinitionDiagnostic(id: string): string {
+	const hint = removedWorkflowHint(id) ?? `unknown/removed definition: ${id}`;
+	const registered = PUBLIC_WORKFLOW_CATALOG.map((item) => item.id).join(", ");
+	return `${hint}; registered definitions: ${registered}`;
+}
+
 /** Stage 1 of shared startup: resolve the target repository/worktree and the
  * config options used for the provenance-resolved load. Pure/sync; the Effect
  * boundary loads the config through `WorkflowConfig`. */
 function startupContext(request: WorkflowStartRequest): PreparedStartContext {
 	if (
 		request.definitionId !== "wiki-comments" &&
-		!PUBLIC_WORKFLOW_CATALOG.some((item) => item.id === request.definitionId)
+		!registeredDefinition(request.definitionId)
 	)
-		throw new Error(`unknown workflow definition: ${request.definitionId}`);
+		throw new Error(removedDefinitionDiagnostic(request.definitionId));
 	const workflowId = validateWorkflowId(request.workflowId);
 	const research = request.definitionId === "research";
 	const wikiOnly = request.definitionId === "wiki-comments";
@@ -285,12 +283,6 @@ function startupContext(request: WorkflowStartRequest): PreparedStartContext {
 		: wikiOnly
 			? ""
 			: fs.realpathSync(path.resolve(request.repo ?? ""));
-	if (request.fusionProfiles) {
-		if (request.fusionProfiles.length < 2 || request.fusionProfiles.length > 5)
-			throw new Error("fusion profiles require 2-5 profiles");
-		if (new Set(request.fusionProfiles).size !== request.fusionProfiles.length)
-			throw new Error("fusion profiles must be distinct");
-	}
 	const target = research
 		? researchWorkflowTarget()
 		: wikiOnly
@@ -334,14 +326,17 @@ function prepareFromContext(
 		request.definitionId,
 		definitionVersion,
 	);
-	const agents = parseAgentsConfig(config.agents, config);
+	const agents = parseAgentsConfig(
+		config.agents,
+		config,
+		provenance.files.join(", ") || undefined,
+	);
 	const routing = resolveRoutingForStart(
 		request.definitionId,
 		definition,
 		registry,
 		agents,
 		request.preset,
-		request.fusionProfiles,
 	);
 	for (const route of routing.routes)
 		preflightProfile(

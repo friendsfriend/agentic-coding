@@ -6,6 +6,7 @@ import type {
 	EffectKind,
 	WorkflowSnapshot,
 } from "../contracts/workflow.ts";
+import { removedWorkflowHint } from "./definitions/catalog.ts";
 import type { StepBehavior } from "./steps/types.ts";
 
 export type { StepBehavior } from "./steps/types.ts";
@@ -109,11 +110,12 @@ const ID = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/;
 // for manifests written before stepRefs existed, not a promise that arbitrary
 // extension steps behaved like the current implementation.
 const LEGACY_STEP_BASELINE = new Set([
+	"core.route-plan",
+	"core.route-apply",
 	"core.plan",
 	"fusion.plan",
 	"fusion.consolidate",
 	"core.plan-approval",
-	"core.model-selection",
 	"core.implementation",
 	"core.triage",
 	"core.verification",
@@ -501,8 +503,12 @@ export class WorkflowRegistry {
 		expectedDigest?: string,
 	): Readonly<CompiledWorkflowDefinition> {
 		const definition = this.#definitions.get(`${id}@${version}`);
-		if (!definition)
-			throw new Error(`missing workflow definition: ${id}@${version}`);
+		if (!definition) {
+			const hint = removedWorkflowHint(id);
+			throw new Error(
+				`missing workflow definition: ${id}@${version}${hint ? `; ${hint}` : ""}`,
+			);
+		}
 		if (expectedDigest && definition.digest !== expectedDigest)
 			throw new Error(`workflow definition pin mismatch: ${id}@${version}`);
 		return definition;

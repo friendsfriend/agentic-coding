@@ -31,7 +31,7 @@ function view(overrides: {
 		changeId: "wf",
 		revision: 4,
 		definition: {
-			id: overrides.definitionId ?? "openspec-full",
+			id: overrides.definitionId ?? "openspec",
 			version: 1,
 			digest: "d",
 			label: "Full",

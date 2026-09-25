@@ -51,11 +51,18 @@ default_profile = "pi-planner"
 "core.plan" = "pi-planner"
 "core.implementation" = "oc-worker"
 
-[agents.presets.frontier-plan.roles."core.verification"]
-quality-verifier = "custom-tool"
-
 [agents.presets.frontier-plan.roles."custom.step"]
 custom-role = "oc-worker"
+
+[[agents.presets.frontier-plan.pools."core.plan"]]
+label = "planner"
+profile = "pi-planner"
+default = true
+
+[[agents.presets.frontier-plan.pools."core.implementation"]]
+label = "worker"
+profile = "oc-worker"
+default = true
 
 [workflow]
 max_verification_rounds = 20
@@ -106,13 +113,16 @@ function write(file: string, content: string, mode = 0o644): void {
 function effectiveAgents(root: string) {
 	const resolved = loadConfigWithProvenance({ repositoryIndependent: true });
 	const parsed = parseAgentsConfig(resolved.config.agents, resolved.config);
+	const preset = parsed.presets?.["frontier-plan"]
+		? resolvePreset(parsed, "frontier-plan")
+		: undefined;
 	return {
 		provenance: resolved.provenance,
 		routing: {
 			defaultProfile: parsed.default_profile,
 			routes: parsed.routes,
 			roleRoutes: parsed.role_routes,
-			preset: resolvePreset(parsed, "frontier-plan"),
+			preset,
 			arbitraryRoles: parsed.presets?.["frontier-plan"]?.roles,
 		},
 		config: resolved.config,
@@ -131,16 +141,21 @@ describe("conversion parity", () => {
 			);
 			const after = effectiveAgents(f.target);
 
-			// Every non-secret effective value survives the format change.
-			expect(after.routing).toEqual(before.routing);
+			// The hard break strips presets; every other non-secret effective value
+			// survives the format change.
+			expect(before.routing.preset).toBeDefined();
+			expect(after.routing.preset).toBeUndefined();
+			expect(after.routing.defaultProfile).toEqual(
+				before.routing.defaultProfile,
+			);
+			expect(after.routing.routes).toEqual(before.routing.routes);
+			expect(after.routing.roleRoutes).toEqual(before.routing.roleRoutes);
 			expect(after.config.workflow).toEqual(before.config.workflow);
 			expect(after.config.ui).toEqual(before.config.ui);
 			expect(after.config.wiki).toEqual(before.config.wiki);
 			expect(after.config.telemetry).toEqual(before.config.telemetry);
 			// The built-in harness selection still has no model of its own.
-			expect(
-				before.routing.preset?.runtime ?? after.routing.preset?.runtime,
-			).toBeUndefined();
+			expect(before.routing.preset?.runtime).toBeUndefined();
 			expect(
 				(after.config.agents as { profiles: Record<string, unknown> }).profiles,
 			).toEqual(

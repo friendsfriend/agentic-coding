@@ -10,10 +10,7 @@ import {
 	saveAgentsSection,
 	settingsFingerprint,
 } from "../src/workflow/effects.ts";
-import {
-	parseFusionProfiles,
-	prepareWorkflowStart,
-} from "../src/workflow/startup.ts";
+import { prepareWorkflowStart } from "../src/workflow/startup.ts";
 
 function repository(): string {
 	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-startup-"));
@@ -120,9 +117,7 @@ describe("shared workflow startup", () => {
 		}
 	});
 
-	test("keeps explicit fusion profile order and records unavailable PR tooling", () => {
-		expect(parseFusionProfiles(" one, two ")).toEqual(["one", "two"]);
-		expect(() => parseFusionProfiles(undefined)).toThrow(/fusion-profiles/);
+	test("records unavailable PR tooling in the pinned execution settings", () => {
 		const pinned: WorkflowExecutionSettings = executionSettings(
 			{
 				workflow: {

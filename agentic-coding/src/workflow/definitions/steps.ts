@@ -174,10 +174,20 @@ export const WORKFLOW_STEPS: readonly StepDefinition[] = [
 		"reject",
 		"comments",
 	]),
-	step("core.model-selection", "Model selection", "system", ["complete"], {
+	step("core.route-plan", "Plan-phase model routing", "system", ["complete"], {
 		allowedEffects: ["model.classify"],
 		retryLimit: 3,
 	}),
+	step(
+		"core.route-apply",
+		"Apply-phase model routing",
+		"system",
+		["complete"],
+		{
+			allowedEffects: ["model.classify"],
+			retryLimit: 3,
+		},
+	),
 	step(
 		"core.implementation",
 		"Implementation",

@@ -13,9 +13,8 @@ import {
 	resetNotifications,
 } from "../../src/tui/dash/notifications.ts";
 import { AgentPresetsView } from "../../src/tui/settings/AgentPresetsView.tsx";
-import { FUSION_PLAN_ROLES } from "../../src/tui/settings/agentPresets.ts";
+import { POOL_EDITOR_STEPS } from "../../src/tui/settings/agentPresets.ts";
 import type { SettingsItem } from "../../src/tui/settings/items.ts";
-import { VERIFIER_ROLES } from "../../src/workflow/steps/verification.ts";
 import { renderUntil } from "./support/terminal.ts";
 
 // The inline Agent Presets surface (rework-model-profiles-and-presets). Rendered
@@ -334,10 +333,14 @@ test("presets list exposes the built-in and creates a preset with a step route",
 	expect(formKeys).toContain("Enter");
 	expect(formKeys).not.toContain("Ctrl+S");
 	for (const char of "my-preset") t.mockInput.pressKey(char);
-	// name → default profile → four complexity fields → step core.plan.
-	for (let index = 0; index < 6; index += 1) t.mockInput.pressTab();
+	t.mockInput.pressTab(); // default profile
+	t.mockInput.pressTab(); // pool core.plan labels
 	await t.renderOnce();
-	expect(t.captureCharFrame()).toContain("Step core.plan");
+	expect(t.captureCharFrame()).toContain("Pool core.plan labels");
+	for (const char of "quick") t.mockInput.pressKey(char);
+	t.mockInput.pressTab(); // derived pool profile select
+	await t.renderOnce();
+	expect(t.captureCharFrame()).toContain("quick profile");
 	t.mockInput.pressKey("l"); // choose profile "a"
 	await t.renderOnce();
 	saveWithEnter(t);
@@ -346,63 +349,37 @@ test("presets list exposes the built-in and creates a preset with a step route",
 	);
 	const preset = (
 		wroteConfig().agents as {
-			presets: Record<string, { steps?: Record<string, string> }>;
+			presets: Record<string, { pools?: Record<string, unknown[]> }>;
 		}
 	).presets["my-preset"];
 	expect(preset).toBeDefined();
-	expect(preset?.steps).toEqual({ "core.plan": "a" });
+	expect(preset?.pools?.["core.plan"]).toEqual([
+		{ label: "quick", profile: "a", default: true },
+	]);
 	t.renderer.destroy();
 });
 
-test("the preset form assigns a profile to a complexity category", async () => {
-	writeFileSync(
-		configFile,
-		`${JSON.stringify({
-			agents: {
-				profiles: { a: { runtime: "pi" }, b: { runtime: "opencode" } },
-			},
-		})}\n`,
-	);
-	clearAgentConfigCache();
-	const t = await renderView();
-	expect(
-		await renderUntil(t, (frame) => frame.includes("Model profiles")),
-	).toBe(true);
-	t.mockInput.pressKey("j");
-	t.mockInput.pressEnter();
-	await renderUntil(t, (frame) => frame.includes("use-default-model"));
-	t.mockInput.pressKey("+");
-	expect(await renderUntil(t, (frame) => frame.includes("Preset name"))).toBe(
-		true,
-	);
-	for (const char of "classified") t.mockInput.pressKey(char);
-	t.mockInput.pressTab(); // default profile
-	t.mockInput.pressTab(); // complexity easy
-	await t.renderOnce();
-	expect(t.captureCharFrame()).toContain("Complexity easy");
-	t.mockInput.pressKey("l"); // choose the saved profile "a"
-	await t.renderOnce();
-	t.mockInput.pressKey("s", { ctrl: true });
-	expect(await renderUntil(t, (frame) => frame.includes("classified"))).toBe(
-		true,
-	);
-	const preset = (
-		wroteConfig().agents as {
-			presets: Record<string, { easy?: string }>;
-		}
-	).presets.classified;
-	expect(preset?.easy).toBe("a");
-	t.renderer.destroy();
-});
-
-test("stored complexity mappings survive an unchanged preset save", async () => {
+test("stored model pools survive an unchanged preset save", async () => {
 	writeFileSync(
 		configFile,
 		`${JSON.stringify({
 			agents: {
 				profiles: { a: { runtime: "pi" }, b: { runtime: "opencode" } },
 				presets: {
-					classified: { default_profile: "a", easy: "b", critical: "a" },
+					classified: {
+						default_profile: "a",
+						pools: {
+							"core.plan": [
+								{
+									label: "quick",
+									profile: "b",
+									criteria: { what: "small" },
+									default: true,
+								},
+								{ label: "thorough", profile: "a" },
+							],
+						},
+					},
 				},
 			},
 		})}\n`,
@@ -421,27 +398,40 @@ test("stored complexity mappings survive an unchanged preset save", async () => 
 	expect(await renderUntil(t, (frame) => frame.includes("Preset name"))).toBe(
 		true,
 	);
-	t.mockInput.pressKey("s", { ctrl: true });
+	saveWithEnter(t);
 	expect(await renderUntil(t, (frame) => frame.includes("classified"))).toBe(
 		true,
 	);
 	const preset = (
 		wroteConfig().agents as {
-			presets: Record<string, { easy?: string; critical?: string }>;
+			presets: Record<string, { pools?: Record<string, unknown[]> }>;
 		}
 	).presets.classified;
-	expect(preset?.easy).toBe("b");
-	expect(preset?.critical).toBe("a");
+	expect(preset?.pools?.["core.plan"]).toEqual([
+		{
+			label: "quick",
+			profile: "b",
+			criteria: { what: "small" },
+			default: true,
+		},
+		{ label: "thorough", profile: "a" },
+	]);
 	t.renderer.destroy();
 });
 
-test("a profile referenced only by a complexity mapping cannot be deleted", async () => {
+test("a profile referenced only by a pool entry cannot be deleted", async () => {
 	writeFileSync(
 		configFile,
 		`${JSON.stringify({
 			agents: {
 				profiles: { a: { runtime: "pi" } },
-				presets: { classified: { easy: "a" } },
+				presets: {
+					classified: {
+						pools: {
+							"core.plan": [{ label: "quick", profile: "a", default: true }],
+						},
+					},
+				},
 			},
 		})}\n`,
 	);
@@ -458,14 +448,16 @@ test("a profile referenced only by a complexity mapping cannot be deleted", asyn
 	).toBe(true);
 	t.mockInput.pressKey("y");
 	await t.renderOnce();
-	expect(activeNotification()?.message).toContain("presets.classified.easy");
+	expect(activeNotification()?.message).toContain(
+		"presets.classified.pools.core.plan.quick",
+	);
 	expect(
 		(wroteConfig().agents as { profiles: Record<string, unknown> }).profiles,
 	).toHaveProperty("a");
 	t.renderer.destroy();
 });
 
-test("the preset form renders every registered verification role and fusion planner", async () => {
+test("the preset form renders a pool labels field per classifiable step", async () => {
 	writeFileSync(
 		configFile,
 		`${JSON.stringify({
@@ -484,11 +476,10 @@ test("the preset form renders every registered verification role and fusion plan
 	expect(await renderUntil(t, (frame) => frame.includes("Preset name"))).toBe(
 		true,
 	);
-	// Walk every field and collect the role rows that scroll past.
-	const expected = [
-		...FUSION_PLAN_ROLES.map((role) => `Fusion ${role}`),
-		...VERIFIER_ROLES.map((role) => `Verification ${role}`),
-	];
+	// Walk every field and collect the pool rows that scroll past.
+	const expected = POOL_EDITOR_STEPS.map(
+		({ stepId }) => `Pool ${stepId} labels`,
+	);
 	const seen = new Set<string>();
 	for (let index = 0; index < 80; index += 1) {
 		const frame = t.captureCharFrame();
@@ -500,11 +491,24 @@ test("the preset form renders every registered verification role and fusion plan
 	t.renderer.destroy();
 });
 
-test("the preset form renders every complexity assignment field", async () => {
+test("the preset form derives a profile select per pool label", async () => {
 	writeFileSync(
 		configFile,
 		`${JSON.stringify({
-			agents: { profiles: { a: { runtime: "pi" } } },
+			agents: {
+				profiles: { a: { runtime: "pi" }, b: { runtime: "pi" } },
+				presets: {
+					classified: {
+						pools: {
+							"core.plan": [{ label: "quick", profile: "a", default: true }],
+							"fusion.plan": [
+								{ label: "strong", profile: "a", default: true },
+								{ label: "fast", profile: "b", default: true },
+							],
+						},
+					},
+				},
+			},
 		})}\n`,
 	);
 	clearAgentConfigCache();
@@ -514,19 +518,21 @@ test("the preset form renders every complexity assignment field", async () => {
 	).toBe(true);
 	t.mockInput.pressKey("j");
 	t.mockInput.pressEnter();
-	await renderUntil(t, (frame) => frame.includes("use-default-model"));
-	t.mockInput.pressKey("+");
+	expect(await renderUntil(t, (frame) => frame.includes("classified"))).toBe(
+		true,
+	);
+	t.mockInput.pressEnter();
 	expect(await renderUntil(t, (frame) => frame.includes("Preset name"))).toBe(
 		true,
 	);
 	const expected = [
-		"Complexity easy",
-		"Complexity medium",
-		"Complexity hard",
-		"Complexity critical",
+		"Pool core.plan · quick profile",
+		"Pool fusion.plan · strong profile",
+		"Pool fusion.plan · strong default",
+		"Pool fusion.plan · fast default",
 	];
 	const seen = new Set<string>();
-	for (let index = 0; index < 12; index += 1) {
+	for (let index = 0; index < 80; index += 1) {
 		const frame = t.captureCharFrame();
 		for (const label of expected) if (frame.includes(label)) seen.add(label);
 		t.mockInput.pressTab();

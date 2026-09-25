@@ -11,7 +11,6 @@ export {
 	validateQuestionTimeout,
 } from "./cli/commands/dispatch-actions.ts";
 export {
-	parseFusionProfiles,
 	rolesForDefinition,
 	validateStart,
 } from "./cli/commands/start.ts";

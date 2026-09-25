@@ -1,5 +1,5 @@
 // The `start` command: validates workflow-specific preconditions, resolves
-// role routing (including the openspec-fusion-full planner fan-out), and
+// role routing (including the openspec-fusion planner fan-out), and
 // starts the pinned workflow definition. Moved verbatim out of cli.ts
 // (split-workflow-god-modules); migrated to run Effect programs at the
 // CLI-invocation application root (complete-workflow-effect-cutover, task 2.1).
@@ -7,20 +7,13 @@ import fs from "node:fs";
 import path from "node:path";
 import type { WorkflowApplication } from "../../application.ts";
 import type { WorkflowEngine } from "../../runtime.ts";
-import {
-	parseFusionProfiles as parseStartupFusionProfiles,
-	prepareWorkflowStart,
-} from "../../startup.ts";
+import { prepareWorkflowStart } from "../../startup.ts";
 import { flag, requireFlag } from "../args.ts";
 import { scheduleDrain } from "../drain.ts";
 
 type App = WorkflowApplication;
 
-export {
-	parseFusionProfiles,
-	rolesForDefinition,
-	validateStart,
-} from "../../startup.ts";
+export { rolesForDefinition, validateStart } from "../../startup.ts";
 
 export function parseMode(value: string | undefined): "worktree" | "checkout" {
 	if (value !== "worktree" && value !== "checkout")
@@ -33,15 +26,10 @@ export async function runStart(
 	workflowEngine: WorkflowEngine,
 	application?: App,
 ): Promise<void> {
-	const definitionId = flag(rest, "workflow") ?? "openspec-full";
+	const definitionId = flag(rest, "workflow") ?? "openspec";
 	const research = definitionId === "research";
 	const repo = research ? flag(rest, "repo") : requireFlag(rest, "repo");
 	const mode = research ? undefined : parseMode(flag(rest, "mode"));
-	const fusionFlag = flag(rest, "fusion-profiles");
-	const fusionProfiles =
-		definitionId.startsWith("openspec-fusion") && fusionFlag !== undefined
-			? parseStartupFusionProfiles(fusionFlag)
-			: undefined;
 	const prepared = prepareWorkflowStart({
 		definitionId,
 		repo: repo ? fs.realpathSync(path.resolve(repo)) : undefined,
@@ -51,7 +39,6 @@ export async function runStart(
 		task: flag(rest, "task"),
 		ticket: flag(rest, "ticket"),
 		preset: flag(rest, "preset"),
-		fusionProfiles,
 	});
 	if (application)
 		application.runSync(workflowEngine.startEffect(prepared.input));

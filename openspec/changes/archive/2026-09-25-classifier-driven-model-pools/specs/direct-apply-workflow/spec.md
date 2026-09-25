@@ -1,0 +1,53 @@
+# Spec Delta
+
+## MODIFIED Requirements
+
+### Requirement: Direct-apply workflow creation
+
+The system SHALL support starting the pinned `openspec-apply` workflow definition at the `core.route-apply` classification step after validating pre-authored OpenSpec proposal, design, tasks, and scenarios. Classification SHALL resolve the apply-phase pools before the implementation step launches.
+
+#### Scenario: CLI creates direct-apply workflow
+- **GIVEN** pre-authored OpenSpec artifacts exist for change
+- **WHEN** developer runs `agentic-coding workflow start --repo <repo> --change <change> --workflow openspec-apply ...`
+- **THEN** engine SHALL validate artifacts and definition entry guards before creating workflow
+- **AND** current step SHALL be `core.route-apply` with no planning run
+- **AND** after classification the implementation run SHALL use the routed pool profile
+
+#### Scenario: Default workflow type preserves existing behavior
+- **WHEN** developer starts workflow without `--workflow`
+- **THEN** engine SHALL select the pinned `openspec` definition
+- **AND** initial run SHALL be planning rather than direct implementation
+
+#### Scenario: Direct apply artifacts are invalid
+- **WHEN** required artifact is missing, empty, malformed, has no scenario, or has no actionable task
+- **THEN** start SHALL fail before workflow row, workspace, pane, or agent is created
+- **AND** diagnostic SHALL identify invalid artifact
+
+#### Scenario: Legacy workflow backward compatibility
+- **WHEN** valid legacy direct-apply state is first accessed
+- **THEN** the renamed implementation MAY reject the old technical ID rather than mapping it to `openspec-apply`
+- **AND** ambiguous state SHALL become repair-required rather than guessed
+
+### Requirement: Direct-apply archives before git operations
+
+The `openspec-apply` definition SHALL sequence classification, implementation, triage, verification/fix loop, developer review, OpenSpec archive, delivery, and completion with each successor selected by registered reducer.
+
+#### Scenario: Direct-apply module order places archive before git-operations
+- **WHEN** classification completes and all required verifier runs complete without blocking critical findings
+- **THEN** engine SHALL enter developer-review gate
+- **AND** approval action SHALL enter archive before delivery
+
+#### Scenario: Archive move is staged into the pushed commit
+- **WHEN** archive run submits valid completion after OpenSpec archive validation
+- **THEN** engine SHALL enter delivery step and enqueue idempotent commit/push effects including archive move
+- **AND** workflow SHALL complete only after delivery confirms pushed archived tree
+
+#### Scenario: Direct-apply phase flow after developer approval
+- **WHEN** developer approves verified `openspec-apply` workflow
+- **THEN** registered flow SHALL proceed archive, delivery, then completed
+- **AND** delivery SHALL not run before archive completes
+
+#### Scenario: Verification fails
+- **WHEN** verifier output contains critical finding
+- **THEN** definition SHALL return to implementation fix run with validated findings input
+- **AND** next verification attempt SHALL use same pinned routing unless repaired

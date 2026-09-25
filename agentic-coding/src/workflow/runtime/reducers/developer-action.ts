@@ -16,11 +16,17 @@ import {
 	settingsFingerprint,
 } from "../../effects.ts";
 import {
+	applyFusionRoster,
+	defaultPoolEntries,
 	enforceReadOnlySteps,
+	fusionPlannerRoleNames,
+	isClassifierRouted,
 	parseAgentsConfig,
 	preflightProfile,
 	resolvePreset,
 	resolveRouting,
+	SETTINGS_PRESETS_HINT,
+	validatePresetCoverage,
 } from "../../profiles.ts";
 import type {
 	CompiledWorkflowDefinition,
@@ -73,24 +79,54 @@ export function developerAction(
 				snapshot.revision,
 			);
 		const selected = requested === "Config defaults" ? undefined : requested;
-		const config = loadConfigWithProvenance({
+		const loaded = loadConfigWithProvenance({
 			repository: snapshot.metadata.repository || undefined,
 			repositoryIndependent: !snapshot.metadata.repository,
-		}).config;
-		const agents = parseAgentsConfig(config.agents, config);
+		});
+		const agents = parseAgentsConfig(
+			loaded.config.agents,
+			loaded.config,
+			loaded.provenance.files.join(", ") || undefined,
+		);
 		const preset = selected ? resolvePreset(agents, selected) : undefined;
+		// A classifier-routed definition cannot run without pools; switching to a
+		// preset-less state is the same hard config error as a preset-less start.
+		if (isClassifierRouted(definition) && !preset)
+			throw new WorkflowRuntimeError(
+				"invalid-command",
+				`classifier-routed workflow ${definition.id} requires a preset; create model pools in ${SETTINGS_PRESETS_HINT}`,
+				snapshot.revision,
+			);
 		const rolesByStep: Record<string, string[]> = {};
 		for (const route of snapshot.routing.routes) {
 			const roles = rolesByStep[route.stepId] ?? [];
 			rolesByStep[route.stepId] = roles;
 			if (route.role && !roles.includes(route.role)) roles.push(route.role);
 		}
-		const routing = enforceReadOnlySteps(
-			resolveRouting(definition, rolesByStep, agents, preset),
+		if (preset)
+			validatePresetCoverage(
+				preset,
+				definition,
+				Object.keys(rolesByStep),
+				agents,
+			);
+		const fusion = definition.id.startsWith("openspec-fusion");
+		if (fusion && preset)
+			rolesByStep["fusion.plan"] = fusionPlannerRoleNames(preset);
+		let routing = resolveRouting(definition, rolesByStep, agents, preset);
+		// Re-seed the planner fan-out from the tagged defaults so every planner-K
+		// gets a distinct profile (a plain resolve would collapse them).
+		if (fusion && preset)
+			routing = applyFusionRoster(
+				routing,
+				agents,
+				defaultPoolEntries(preset, "fusion.plan").map((entry) => entry.profile),
+			);
+		routing = enforceReadOnlySteps(
+			routing,
 			(stepId) => registry.stepForDefinition(definition, stepId).requirements,
 		);
-		if (definition.id.startsWith("openspec-fusion"))
-			validateFusionRouting(definition.id, routing);
+		if (fusion) validateFusionRouting(definition.id, routing);
 		const activeRuns = runs(db, snapshot.workflowId).filter(
 			(run) =>
 				snapshot.step.activeRunIds.includes(run.id) &&

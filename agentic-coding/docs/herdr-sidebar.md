@@ -109,7 +109,7 @@ Target cards:
 ```text
 ◆ agentic-coding            ◆ agentic-coding
 ├─ improve-authentication   ├─ improve-authentication
-│  openspec-full            │  worker
+│  openspec                 │  worker
 └─ Implementation           └─ ● blocked (input)
 ```
 

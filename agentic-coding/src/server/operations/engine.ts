@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { WorkflowView } from "../../contracts/workflow.ts";
 import { Herdr } from "../../herdr-client.ts";
-import { loadConfig } from "../../workflow/effects.ts";
+import { loadConfigWithProvenance } from "../../workflow/effects.ts";
 import {
 	dashboardApplication,
 	disposeDashboardApplication,
@@ -315,7 +315,7 @@ export function startArgs(input: {
 	const definitionId =
 		input.workflowType === "quick"
 			? "no-openspec"
-			: (input.workflowType ?? "openspec-full");
+			: (input.workflowType ?? "openspec");
 	const sameCheckout = [
 		"openspec-propose",
 		"openspec-fusion-propose",
@@ -338,9 +338,13 @@ export function startArgs(input: {
 }
 /** Preset names available for the new workflow modal's agent-preset step. */
 export function listPresetNames(repository?: string): string[] {
-	const config = loadConfig(repository);
+	const resolved = loadConfigWithProvenance({ repository });
 	try {
-		const agents = parseAgentsConfig(config.agents, config);
+		const agents = parseAgentsConfig(
+			resolved.config.agents,
+			resolved.config,
+			resolved.provenance.files.join(", ") || undefined,
+		);
 		return Object.keys(agents.presets ?? {}).sort();
 	} catch {
 		return [];

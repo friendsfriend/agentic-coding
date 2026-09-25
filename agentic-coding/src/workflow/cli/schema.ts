@@ -73,7 +73,6 @@ const FLAG_SCHEMA: Record<
 			"task",
 			"ticket",
 			"preset",
-			"fusion-profiles",
 		],
 		positionals: [0, 0],
 	},

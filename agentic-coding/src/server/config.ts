@@ -140,7 +140,11 @@ export function loadAgentConfig(repository?: string): {
 } {
 	const resolved = loadConfigWithProvenance({ repository });
 	return {
-		agents: parseAgentsConfig(resolved.config.agents, resolved.config),
+		agents: parseAgentsConfig(
+			resolved.config.agents,
+			resolved.config,
+			resolved.provenance.files.join(", ") || undefined,
+		),
 		provenance: resolved.provenance,
 		conflicts: conflictingAgentsFiles(undefined, repository ?? process.cwd()),
 		revision: agentConfigRevision(repository),

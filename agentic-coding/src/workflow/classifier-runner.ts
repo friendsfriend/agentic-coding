@@ -1,14 +1,23 @@
-// Runtime half of the pluggable classifier integrations
-// (introduce-jev-for-model-range-decision): collect the bounded OpenSpec
-// artifacts, turn them into a System One request, invoke the configured
-// classifier model, and return its selected answer. The effect handler
-// in `effect-runner.ts` owns outbox/lease concerns; this module stays a plain
-// bounded I/O helper so it can be unit-tested without a workflow.
+// Runtime half of the pluggable classifier integrations plus the pool-routing
+// protocol (classifier-driven-model-pools): collect the bounded OpenSpec
+// artifacts, turn them into one System One request carrying every step
+// question in parallel, invoke the configured classifier model, and return the
+// full answer per question. The effect handler in `effect-runner.ts` owns
+// outbox/lease concerns; this module stays a plain bounded I/O helper so it can
+// be unit-tested without a workflow.
 import fs from "node:fs";
 import path from "node:path";
 import { Effect } from "effect";
-import type { ClassifierInput, ClassifierIntegration } from "./classifiers.ts";
-import { renderClassifierPrompt } from "./classifiers.ts";
+import {
+	type ClassifierAnswer,
+	type ClassifierInput,
+	parseClassifierAnswer,
+	ROUTING_CLASSIFIER_MODEL,
+	ROUTING_CLASSIFIER_PROFILE,
+	ROUTING_ENDPOINT,
+	type RoutingQuestionSpec,
+	routingQuestionInstructions,
+} from "./classifiers.ts";
 import { configEnvValue, postJsonEffect } from "./effects.ts";
 import { PermanentFailure, TransientFailure } from "./failures.ts";
 import type { AgentsConfig } from "./profiles.ts";
@@ -67,85 +76,85 @@ export interface ClassifierRequest {
 			{
 				readonly type: "choice";
 				readonly instructions: string;
-				readonly criteria: Readonly<Record<string, string>>;
+				readonly criteria: Readonly<Record<string, unknown>>;
 			}
 		>;
 	};
 }
 
-/** Build the typed OpenCode Zen System One request. JEV model IDs are bare at
- * this endpoint; config keeps the provider/model spelling for clarity. */
-export function classifierRequest(
-	integration: ClassifierIntegration,
-	model: string,
-	state: string,
-): ClassifierRequest {
+function bareModel(integrationId: string, model: string): string {
 	const prefix = "opencode/";
 	if (!model.startsWith(prefix) || model.length === prefix.length)
 		throw new PermanentFailure(
-			`classifier ${integration.id} requires an opencode/ model, got ${model}`,
+			`classifier ${integrationId} requires an opencode/ model, got ${model}`,
 		);
-	const question = integration.question;
+	return model.slice(prefix.length);
+}
+
+/** Build one routing request holding every classifiable step's question in
+ * parallel. One request per pass, never one per step. */
+export function routingRequest(
+	specs: readonly RoutingQuestionSpec[],
+	model: string,
+	state: string,
+): ClassifierRequest {
+	const questions: ClassifierRequest["body"]["questions"] = {};
+	for (const spec of specs) {
+		const criteria: Record<string, unknown> = {};
+		for (const entry of spec.entries)
+			criteria[entry.label] =
+				entry.criteria !== undefined ? entry.criteria : entry.label;
+		questions[spec.stepId] = {
+			type: "choice",
+			instructions: routingQuestionInstructions(spec.stepId, spec.mode),
+			criteria,
+		};
+	}
 	return {
-		url: integration.endpoint,
-		body: {
-			model: model.slice(prefix.length),
-			state,
-			questions: {
-				[question.id]: {
-					type: "choice",
-					instructions: question.instructions,
-					criteria: question.criteria,
-				},
-			},
-		},
+		url: ROUTING_ENDPOINT,
+		body: { model: bareModel("routing", model), state, questions },
 	};
 }
 
 const CLASSIFIER_TIMEOUT_MS = 300_000;
 
-function answerChoice(
-	integration: ClassifierIntegration,
+function parseAnswers(
+	integrationId: string,
 	body: string,
-): string {
+	questionIds: readonly string[],
+): Record<string, ClassifierAnswer> {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(body);
 	} catch {
 		throw new PermanentFailure(
-			`classifier ${integration.id} returned invalid JSON`,
+			`classifier ${integrationId} returned invalid JSON`,
 		);
 	}
 	if (!parsed || typeof parsed !== "object")
 		throw new PermanentFailure(
-			`classifier ${integration.id} returned invalid System One data`,
+			`classifier ${integrationId} returned invalid System One data`,
 		);
 	const answers = (parsed as { answers?: unknown }).answers;
-	const answer =
-		answers && typeof answers === "object"
-			? (answers as Record<string, unknown>)[integration.question.id]
-			: undefined;
-	const choice =
-		answer && typeof answer === "object"
-			? (answer as { choice?: unknown }).choice
-			: undefined;
-	if (typeof choice !== "string" || !choice.trim())
-		throw new PermanentFailure(
-			`classifier ${integration.id} returned no choice for ${integration.question.id}`,
-		);
-	return choice;
+	const map =
+		answers && typeof answers === "object" && !Array.isArray(answers)
+			? (answers as Record<string, unknown>)
+			: {};
+	return Object.fromEntries(
+		questionIds.map((id) => [id, parseClassifierAnswer(map[id])]),
+	);
 }
 
 function requestClassifier(
-	integration: ClassifierIntegration,
+	integrationId: string,
 	request: ClassifierRequest,
 	signal?: AbortSignal,
-): Effect.Effect<string, Error> {
+): Effect.Effect<Record<string, ClassifierAnswer>, Error> {
 	const apiKey = configEnvValue("OPENCODE_API_KEY")?.trim();
 	if (!apiKey)
 		return Effect.fail(
 			new PermanentFailure(
-				`classifier ${integration.id} requires OPENCODE_API_KEY`,
+				`classifier ${integrationId} requires OPENCODE_API_KEY`,
 			),
 		);
 	return Effect.gen(function* () {
@@ -161,12 +170,12 @@ function requestClassifier(
 			Effect.mapError(
 				(error) =>
 					new TransientFailure(
-						`classifier ${integration.id} request failed: ${error.message}`,
+						`classifier ${integrationId} request failed: ${error.message}`,
 					),
 			),
 		);
 		if (response.status < 200 || response.status >= 300) {
-			const message = `classifier ${integration.id} provider returned ${response.status}`;
+			const message = `classifier ${integrationId} provider returned ${response.status}`;
 			if (
 				response.status === 408 ||
 				response.status === 425 ||
@@ -177,21 +186,32 @@ function requestClassifier(
 			return yield* Effect.fail(new PermanentFailure(message));
 		}
 		return yield* Effect.try({
-			try: () => answerChoice(integration, response.body),
+			try: () =>
+				parseAnswers(
+					integrationId,
+					response.body,
+					Object.keys(request.body.questions),
+				),
 			catch: (error) =>
 				error instanceof PermanentFailure
 					? error
 					: new PermanentFailure(
-							`classifier ${integration.id} response parsing failed: ${error instanceof Error ? error.message : String(error)}`,
+							`classifier ${integrationId} response parsing failed: ${error instanceof Error ? error.message : String(error)}`,
 						),
 		});
 	});
 }
 
-/** Invoke one classifier through OpenCode Zen's System One endpoint and return
- * its selected choice. Provider failures are typed for durable retry handling. */
-export function invokeClassifier(
-	integration: ClassifierIntegration,
+function classifierModel(agents: AgentsConfig): string {
+	const profile = agents.profiles[ROUTING_CLASSIFIER_PROFILE];
+	return profile?.model ?? ROUTING_CLASSIFIER_MODEL;
+}
+
+/** Invoke the pool-routing classifier through OpenCode Zen's System One
+ * endpoint. The state is the task before planning and the plan artifacts after
+ * approval; every spec question travels in one request. */
+export function invokeRoutingClassifier(
+	specs: readonly RoutingQuestionSpec[],
 	agents: AgentsConfig,
 	input: {
 		task: string;
@@ -199,12 +219,45 @@ export function invokeClassifier(
 		artifacts: ClassifierInput["artifacts"];
 	},
 	signal?: AbortSignal,
-): Effect.Effect<string, Error> {
-	const profile = Object.hasOwn(agents.profiles, integration.profile)
-		? agents.profiles[integration.profile]
-		: undefined;
-	const model = profile?.model ?? integration.model;
-	const prompt = renderClassifierPrompt(integration, input);
-	const request = classifierRequest(integration, model, prompt);
-	return requestClassifier(integration, request, signal);
+): Effect.Effect<Record<string, ClassifierAnswer>, Error> {
+	const model = classifierModel(agents);
+	const instruction = specs.some((spec) => spec.mode === "roster")
+		? ROUTING_ROSTER_INSTRUCTION
+		: ROUTING_SINGLE_INSTRUCTION;
+	const state = renderRoutingState(instruction, input);
+	const request = routingRequest(specs, model, state);
+	return requestClassifier("routing", request, signal);
+}
+
+const ROUTING_SINGLE_INSTRUCTION = `You assign model profiles to OpenSpec workflow steps.
+Each question names one workflow step and a list of labelled candidate
+profiles with their criteria. Answer with the label of the single best fit.`;
+const ROUTING_ROSTER_INSTRUCTION = `You assign model profiles to OpenSpec workflow steps.
+One question is a planning roster: choose the subset of labelled planner
+profiles that should plan in parallel. Answer with the labels of the best two
+to five distinct profiles.`;
+
+function renderRoutingState(
+	instruction: string,
+	input: {
+		task: string;
+		changeId: string;
+		artifacts: ClassifierInput["artifacts"];
+	},
+): string {
+	const header = [
+		instruction.trim(),
+		"",
+		`Change: ${input.changeId || "(unknown)"}`,
+		input.task.trim() ? `Task: ${input.task.trim()}` : "",
+	]
+		.filter(Boolean)
+		.join("\n");
+	const body = input.artifacts
+		.map(
+			(artifact) =>
+				`<artifact path="${artifact.path}">\n${artifact.content}\n</artifact>`,
+		)
+		.join("\n\n");
+	return `${header}\n\n${body}\n`;
 }

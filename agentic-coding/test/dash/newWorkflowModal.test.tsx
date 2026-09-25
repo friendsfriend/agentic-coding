@@ -150,8 +150,8 @@ test("an independent Wiki context offers a target-compatible research type only"
 
 test("proposal choices submit their type, task, and fixed checkout mode", async () => {
 	for (const [offset, workflowType] of [
-		[6, "openspec-propose"],
-		[7, "openspec-fusion-propose"],
+		[2, "openspec-propose"],
+		[5, "openspec-fusion-propose"],
 	] as const) {
 		let handler: ((event: KeyEvent) => boolean) | undefined;
 		const completed: NewWorkflowInput[] = [];
@@ -247,7 +247,7 @@ test("openspec-apply omits the task step and submits no task", async () => {
 	}
 });
 
-test("openspec-jev renders the task step before checkout mode and submits the task", async () => {
+test("openspec renders the task step before checkout mode and submits the task", async () => {
 	let handler: ((event: KeyEvent) => boolean) | undefined;
 	const completed: NewWorkflowInput[] = [];
 	const t = await testRender(
@@ -266,9 +266,7 @@ test("openspec-jev renders the task step before checkout mode and submits the ta
 		{ width: 160, height: 30 },
 	);
 	await t.flush();
-	handler?.(key("j")); // standard -> openspec-apply
-	handler?.(key("j")); // openspec-apply -> openspec-jev
-	handler?.(key("enter")); // select openspec-jev
+	handler?.(key("enter")); // select the default openspec workflow
 	await t.flush();
 	// Task-driven fields: preset -> ticket -> workflow id -> task -> mode.
 	handler?.(key("enter")); // preset: (config defaults)
@@ -298,13 +296,13 @@ test("openspec-jev renders the task step before checkout mode and submits the ta
 	await t.flush();
 	expect(completed).toHaveLength(1);
 	expect(completed[0]).toMatchObject({
-		workflowType: "openspec-jev",
+		workflowType: "openspec",
 		task: "Classify the JEV plan",
 	});
 	t.renderer.destroy();
 });
 
-test("selecting openspec-fusion-full submits workflowType openspec-fusion-full", async () => {
+test("selecting openspec-fusion submits workflowType openspec-fusion", async () => {
 	let handler: ((event: KeyEvent) => boolean) | undefined;
 	const completed: NewWorkflowInput[] = [];
 	const t = await testRender(
@@ -323,14 +321,13 @@ test("selecting openspec-fusion-full submits workflowType openspec-fusion-full",
 		{ width: 160, height: 30 },
 	);
 	await t.flush();
-	handler?.(key("j")); // standard -> openspec-apply
-	handler?.(key("j")); // openspec-apply -> openspec-jev
-	handler?.(key("j")); // openspec-jev -> openspec-jev-apply
-	handler?.(key("j")); // openspec-jev-apply -> quick
-	handler?.(key("j")); // quick -> openspec-fusion-full
-	handler?.(key("enter")); // select openspec-fusion-full
+	handler?.(key("j")); // openspec -> openspec-apply
+	handler?.(key("j")); // openspec-apply -> openspec-propose
+	handler?.(key("j")); // openspec-propose -> quick
+	handler?.(key("j")); // quick -> openspec-fusion
+	handler?.(key("enter")); // select openspec-fusion
 	await t.flush();
-	// openspec-fusion-full uses the task-driven fields: preset -> ticket -> change -> task -> mode.
+	// openspec-fusion uses the task-driven fields: preset -> ticket -> change -> task -> mode.
 	handler?.(key("enter")); // preset: (config defaults)
 	t.mockInput.pressEnter(); // ticket: optional
 	t.mockInput.pressEnter(); // change
@@ -350,7 +347,7 @@ test("selecting openspec-fusion-full submits workflowType openspec-fusion-full",
 	handler?.(key("return")); // create workflow
 	await t.flush();
 	expect(completed).toHaveLength(1);
-	expect(completed[0].workflowType).toBe("openspec-fusion-full");
+	expect(completed[0].workflowType).toBe("openspec-fusion");
 	expect(completed[0].task).toBe(
 		"Compare the proposed approaches\nand recommend one",
 	);

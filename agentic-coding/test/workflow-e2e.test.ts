@@ -139,10 +139,35 @@ function action(
 		...(input === undefined ? {} : { input }),
 	}).view;
 }
+
+/** Complete the pending classifier routing pass so the graph reaches its first
+ * agent step. The pinned routing is pre-seeded, so the no-answer result keeps
+ * it. */
+function advanceRouting(
+	engine: WorkflowEngine,
+	root: string,
+	view: WorkflowView,
+): WorkflowView {
+	const classify = engine
+		.claimEffects(root, 100)
+		.find((effect) => effect.kind === "model.classify");
+	if (!classify) return view;
+	const phase =
+		(classify.payload as { phase?: string }).phase === "apply"
+			? "apply"
+			: "plan";
+	return engine.dispatch(root, {
+		type: "effect.result",
+		effectId: classify.id,
+		lease: requireDefined(classify.lease, "classify lease"),
+		outcome: "complete",
+		data: { integration: "routing", phase, answers: {} },
+	}).view;
+}
 function drive(
 	engine: WorkflowEngine,
 	root: string,
-	definitionId: "openspec-full" | "openspec-apply" | "no-openspec",
+	definitionId: "openspec" | "openspec-apply" | "no-openspec",
 	policy = false,
 ): string[] {
 	if (definitionId !== "no-openspec") {
@@ -188,7 +213,11 @@ function drive(
 	}).view;
 	const visited = [view.currentStep.id];
 	let archiveLaunchToken: string | undefined;
-	if (definitionId === "openspec-full") {
+	if (definitionId !== "no-openspec") {
+		view = advanceRouting(engine, root, view);
+		visited.push(view.currentStep.id);
+	}
+	if (definitionId === "openspec") {
 		view = complete(engine, root, view, "planner", {
 			primaryChangeId: definitionId,
 			validated: true,
@@ -205,6 +234,8 @@ function drive(
 		}).view;
 		visited.push(view.currentStep.id);
 		view = action(engine, root, view, "approve-plan");
+		visited.push(view.currentStep.id);
+		view = advanceRouting(engine, root, view);
 		visited.push(view.currentStep.id);
 	}
 	if (definitionId === "openspec-apply")
@@ -363,7 +394,7 @@ function drive(
 	visited.push(view.currentStep.id);
 	return visited;
 }
-for (const type of ["openspec-full", "openspec-apply", "no-openspec"] as const)
+for (const type of ["openspec", "openspec-apply", "no-openspec"] as const)
 	test(`${type} definition reaches terminal through registered commands`, () => {
 		const root = repo();
 		try {
@@ -373,7 +404,9 @@ for (const type of ["openspec-full", "openspec-apply", "no-openspec"] as const)
 				type,
 			);
 			expect(sequence.at(-1)).toBe("core.closed");
-			if (type === "openspec-full") expect(sequence[0]).toBe("core.plan");
+			if (type === "openspec") expect(sequence[0]).toBe("core.route-plan");
+			else if (type === "openspec-apply")
+				expect(sequence[0]).toBe("core.route-apply");
 			else expect(sequence[0]).toBe("core.implementation");
 			expect(sequence.includes("core.archive")).toBe(type !== "no-openspec");
 		} finally {

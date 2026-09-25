@@ -14,7 +14,6 @@ import { definitionVersionForPolicy } from "./edges.ts";
 import { fusionManifests } from "./graphs/fusion.ts";
 import { noOpenspecManifests } from "./graphs/no-openspec.ts";
 import { openspecManifests } from "./graphs/openspec.ts";
-import { openspecJevManifests } from "./graphs/openspec-jev.ts";
 import { researchManifests } from "./graphs/research.ts";
 import { wikiManifests } from "./graphs/wiki.ts";
 import {
@@ -64,7 +63,6 @@ function manifests(
 ): WorkflowManifest[] {
 	return [
 		...openspecManifests(rounds, version, wikiGate, wikiBeforeArchive),
-		...openspecJevManifests(rounds, version, wikiGate, wikiBeforeArchive),
 		...noOpenspecManifests(rounds, version, wikiGate),
 		...fusionManifests(rounds, version, wikiGate, wikiBeforeArchive),
 		...researchManifests(version, wikiGate),

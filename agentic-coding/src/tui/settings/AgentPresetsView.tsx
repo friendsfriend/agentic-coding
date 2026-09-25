@@ -243,7 +243,7 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 			{
 				id: "agents.presets",
 				label: "Presets",
-				detail: `${presetNames().length} presets · step, role and complexity routing`,
+				detail: `${presetNames().length} presets · step and model-pool routing`,
 				list: "presets",
 			},
 		];
@@ -618,6 +618,11 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 			backgroundColor={uiColors.bgBase}
 			style={{ width: "100%", height: "100%", flexDirection: "column" }}
 		>
+			<Show when={agents() !== undefined && presetNames().length === 0}>
+				<text fg={uiColors.warning}>
+					No custom presets: recreate them as model pools in Settings → Presets.
+				</text>
+			</Show>
 			<Show when={pendingDelete()}>
 				{(confirm) => (
 					<GenericModal
@@ -689,7 +694,7 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 												? [profile()?.runtime, profile()?.model]
 														.filter(Boolean)
 														.join(" · ") || "runtime pi"
-												: `${Object.keys(preset()?.steps ?? {}).length} steps`}
+												: `${Object.keys(preset()?.pools ?? {}).length} pools`}
 										</text>,
 									]}
 								/>

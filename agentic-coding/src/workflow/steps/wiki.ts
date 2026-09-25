@@ -13,6 +13,7 @@ const WIKI_ROLE_ASSET: Readonly<Record<string, string>> = {
 };
 
 export const wikiBehavior: StepBehavior = {
+	classification: "single",
 	onAgentComplete: ({ definitionId, outcome }) =>
 		outcome === "blocked" &&
 		["wiki", "wiki-comments", "research"].includes(definitionId)

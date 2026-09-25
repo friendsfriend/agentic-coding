@@ -78,6 +78,7 @@ export const fusionPlannerRoles = (routing: WorkflowRouting): string[] =>
 
 export const planningBehaviors: Readonly<Record<string, StepBehavior>> = {
 	"core.plan": {
+		classification: "single",
 		roles: () => ["planner"],
 		candidateRoles: () => ["planner"],
 		validateEvidence: validatePlanning,
@@ -91,6 +92,7 @@ export const planningBehaviors: Readonly<Record<string, StepBehavior>> = {
 		carriesOutputContext: true,
 	},
 	"fusion.plan": {
+		classification: "roster",
 		roles: ({ snapshot }) => fusionPlannerRoles(snapshot.routing),
 		candidateRoles: ({ fusionPlannerCount }) =>
 			plannerRoles(fusionPlannerCount),
@@ -178,6 +180,7 @@ export const planningBehaviors: Readonly<Record<string, StepBehavior>> = {
 		}),
 	},
 	"fusion.consolidate": {
+		classification: "single",
 		roles: () => ["consolidator"],
 		candidateRoles: () => ["consolidator"],
 		validateEvidence: validatePlanning,

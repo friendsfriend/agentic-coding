@@ -2,9 +2,17 @@
 
 ## Purpose
 TBD - created by archiving change implement-propose-only-worflows. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Proposal-only workflow graphs
-The system SHALL register `openspec-propose` and `openspec-fusion-propose` as explicit versioned workflow definitions. `openspec-propose` SHALL start at `core.plan`, route a completed plan to `core.plan-approval`, route approval to `core.completed`, and route an explicit close from `core.completed` to `core.closed`. `openspec-fusion-propose` SHALL start at `fusion.plan`, route completed consolidation to `core.plan-approval`, route approval to `core.completed`, and route an explicit close to `core.closed`. Both definitions SHALL retain their planning retry bounds and SHALL expose no reachable implementation, verification, archive, delivery, or pull-request action/effect path.
+
+The system SHALL register `openspec-propose` and `openspec-fusion-propose` as explicit versioned workflow definitions. `openspec-propose` SHALL start at `core.route-plan`, route classification to `core.plan`, route a completed plan to `core.plan-approval`, route approval to `core.completed`, and route an explicit close from `core.completed` to `core.closed`. `openspec-fusion-propose` SHALL start at `core.route-plan`, route classification to `fusion.plan`, route completed consolidation to `core.plan-approval`, route approval to `core.completed`, and route an explicit close to `core.closed`. Both definitions SHALL retain their planning retry bounds and SHALL expose no reachable implementation, verification, archive, delivery, or pull-request action/effect path.
+
+#### Scenario: Classification precedes proposal planning
+- **WHEN** an `openspec-propose` or `openspec-fusion-propose` run starts
+- **THEN** the initial step SHALL be `core.route-plan`
+- **AND** planning SHALL begin only after the classification effect completes
 
 #### Scenario: Standard proposal reaches plan approval
 - **WHEN** the `core.plan` agent in an `openspec-propose` run submits a validated `complete` handoff
@@ -31,7 +39,7 @@ The system SHALL register `openspec-propose` and `openspec-fusion-propose` as ex
 - **AND** it SHALL not create implementation, verification, archive, delivery, or pull-request effects
 
 #### Scenario: Proposal is explicitly closed
-- **WHEN** a developer dispatches the close action from `core.completed` for either renamed proposal definition
+- **WHEN** a developer dispatches the close action from `core.completed` for either proposal definition
 - **THEN** the workflow SHALL enter `core.closed`
 - **AND** workspace close and cleanup effects SHALL be scheduled only after this transition
 
@@ -42,12 +50,12 @@ The system SHALL register `openspec-propose` and `openspec-fusion-propose` as ex
 
 #### Scenario: Proposal plan is rejected
 - **WHEN** a developer rejects a plan at `core.plan-approval`
-- **THEN** `openspec-propose` SHALL return to `core.plan` and `openspec-fusion-propose` SHALL return to `core.plan`'s fusion consolidation path
+- **THEN** `openspec-propose` SHALL return to `core.plan` and `openspec-fusion-propose` SHALL return to the fusion consolidation path
 - **AND** the workflow SHALL remain in planning without closing the workspace
 
 #### Scenario: Proposal plan receives comments
 - **WHEN** a developer submits bounded review comments at `core.plan-approval`
-- **THEN** `openspec-propose` SHALL return to `core.plan` and `openspec-fusion-propose` SHALL return to `core.plan`'s fusion consolidation path
+- **THEN** `openspec-propose` SHALL return to `core.plan` and `openspec-fusion-propose` SHALL return to the fusion consolidation path
 - **AND** the returned planning step SHALL receive the comments as review-fix context
 - **AND** the workspace SHALL remain open
 
@@ -100,16 +108,17 @@ The planning steps of proposal-only workflows SHALL use the existing planning in
 - **AND** the workflow SHALL enter plan approval rather than closing or applying the artifacts
 
 ### Requirement: Proposal workflow surfaces
-The CLI and dashboard SHALL expose both renamed proposal-only definition IDs, preserve task input for OpenSpec and fusion planning, and route fusion proposals through the same planner preset/count/profile validation as the full fusion workflow. The dashboard SHALL select checkout behavior without offering worktree mode for proposal-only definitions, SHALL show plan-approval state and actions, SHALL show proposal completion with an explicit close action, and SHALL not offer pull-request creation for proposal definitions.
+
+The CLI and dashboard SHALL expose both proposal-only definition IDs, preserve task input for OpenSpec and fusion planning, and route fusion proposals through the same `fusion.plan` and `fusion.consolidate` pool coverage validation as the full fusion workflow. The dashboard SHALL select checkout behavior without offering worktree mode for proposal-only definitions, SHALL show plan-approval state and actions, SHALL show proposal completion with an explicit close action, and SHALL not offer pull-request creation for proposal definitions.
 
 #### Scenario: CLI starts a standard proposal
 - **WHEN** the CLI receives `--workflow openspec-propose --mode checkout`
 - **THEN** it SHALL resolve the `openspec-propose` definition and pass the task and current-branch proposal metadata to the engine
 
 #### Scenario: Dashboard starts a fusion proposal
-- **WHEN** a user selects OpenSpec fusion proposal, enters a task, and chooses a valid planner preset
+- **WHEN** a user selects OpenSpec fusion proposal, enters a task, and chooses a preset with valid `fusion.plan` and `fusion.consolidate` pools
 - **THEN** the dashboard SHALL submit `openspec-fusion-propose` with the task and checkout semantics
-- **AND** startup SHALL derive the configured distinct planner routes and consolidator route before launching agents
+- **AND** startup SHALL seed the planner routes from the tagged defaults before the classification pass replaces them
 
 #### Scenario: Dashboard shows proposal plan approval
 - **WHEN** a proposal has entered `core.plan-approval`
@@ -123,10 +132,10 @@ The CLI and dashboard SHALL expose both renamed proposal-only definition IDs, pr
 - **AND** it SHALL not display or submit a pull-request action
 
 #### Scenario: Invalid fusion proposal preset is rejected
-- **WHEN** an OpenSpec fusion proposal preset has fewer than 2, more than 5, non-contiguous, duplicate, or unresolved planner routes
+- **WHEN** an OpenSpec fusion proposal preset's `fusion.plan` pool has fewer than two, more than five, duplicate, or unresolved tagged default profiles
 - **THEN** startup SHALL report a routing error
 - **AND** it SHALL launch no workspace or agent effects
 
 #### Scenario: Old proposal identifiers are breaking inputs
-- **WHEN** the CLI receives `--workflow standard-propose` or `--workflow fusion-propose`
+- **WHEN** the CLI receives an unregistered proposal identifier
 - **THEN** it MAY reject the old identifier rather than silently selecting a renamed definition

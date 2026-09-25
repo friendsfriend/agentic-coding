@@ -10,7 +10,6 @@ import type {
 	WorkflowRouting,
 	WorkflowView,
 } from "../src/contracts/workflow.ts";
-import { parseFusionProfiles } from "../src/workflow/cli.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import { effectRunnerTest } from "../src/workflow/effect-runner.ts";
 import { AGENT_DEFINITIONS } from "../src/workflow/embedded.generated.ts";
@@ -93,10 +92,10 @@ function start(
 	workflowId: string,
 	n: number,
 ): WorkflowView {
-	return engine.start({
+	const view = engine.start({
 		repo,
 		workflowId,
-		definitionId: "openspec-fusion-full",
+		definitionId: "openspec-fusion",
 		metadata: {
 			branch: "main",
 			baseBranch: "main",
@@ -104,6 +103,31 @@ function start(
 			task: "build the thing",
 		},
 		routing: fusionRouting(n),
+	}).view;
+	return advanceRouting(engine, repo, view);
+}
+
+/** Complete the plan-phase routing pass so the graph reaches fusion.plan.
+ * The pinned routing is pre-seeded, so the no-answer result is a no-op. */
+function advanceRouting(
+	engine: WorkflowEngine,
+	repo: string,
+	view: WorkflowView,
+): WorkflowView {
+	const classify = engine
+		.claimEffects(repo, 100)
+		.find((effect) => effect.kind === "model.classify");
+	if (!classify) return view;
+	const phase =
+		(classify.payload as { phase?: string }).phase === "apply"
+			? "apply"
+			: "plan";
+	return engine.dispatch(repo, {
+		type: "effect.result",
+		effectId: classify.id,
+		lease: requireDefined(classify.lease, "classify lease"),
+		outcome: "complete",
+		data: { integration: "routing", phase, answers: {} },
 	}).view;
 }
 function tokenCache(engine: WorkflowEngine, repo: string) {
@@ -183,10 +207,10 @@ function seedChangeArtifacts(repo: string, changeId: string): void {
 	);
 }
 
-describe("openspec-fusion-full workflow", () => {
+describe("openspec-fusion workflow", () => {
 	test("core.plan-draft contract rejects malformed drafts without consuming the capability", () => {
 		const tmp = fs.mkdtempSync(
-			path.join(os.tmpdir(), "openspec-fusion-full-draft-"),
+			path.join(os.tmpdir(), "openspec-fusion-draft-"),
 		);
 		try {
 			const repo = repository(path.join(tmp, "repo"));
@@ -239,7 +263,7 @@ describe("openspec-fusion-full workflow", () => {
 	});
 	test("out-of-range counts and duplicate profiles are rejected before any launch", () => {
 		const tmp = fs.mkdtempSync(
-			path.join(os.tmpdir(), "openspec-fusion-full-bounds-"),
+			path.join(os.tmpdir(), "openspec-fusion-bounds-"),
 		);
 		try {
 			const repo = repository(path.join(tmp, "repo"));
@@ -281,7 +305,7 @@ describe("openspec-fusion-full workflow", () => {
 					engine.start({
 						repo,
 						workflowId: "bounds",
-						definitionId: "openspec-fusion-full",
+						definitionId: "openspec-fusion",
 						metadata: {
 							branch: "main",
 							baseBranch: "main",
@@ -290,7 +314,7 @@ describe("openspec-fusion-full workflow", () => {
 						},
 						routing: bad,
 					}),
-				).toThrow(/openspec-fusion-full requires/);
+				).toThrow(/openspec-fusion requires/);
 			expect(fs.existsSync(canonicalStorePath(repo))).toBe(false);
 		} finally {
 			fs.rmSync(tmp, { recursive: true, force: true });
@@ -298,7 +322,7 @@ describe("openspec-fusion-full workflow", () => {
 	});
 	test("fan-out assignments are byte-identical across planners except the role field", () => {
 		const tmp = fs.mkdtempSync(
-			path.join(os.tmpdir(), "openspec-fusion-full-render-"),
+			path.join(os.tmpdir(), "openspec-fusion-render-"),
 		);
 		try {
 			const repo = repository(path.join(tmp, "repo"));
@@ -344,7 +368,7 @@ describe("openspec-fusion-full workflow", () => {
 	});
 	test("failed planner retries only missing roles while preserving surviving drafts", () => {
 		const tmp = fs.mkdtempSync(
-			path.join(os.tmpdir(), "openspec-fusion-full-retry-"),
+			path.join(os.tmpdir(), "openspec-fusion-retry-"),
 		);
 		try {
 			const repo = repository(path.join(tmp, "repo"));
@@ -415,7 +439,7 @@ describe("openspec-fusion-full workflow", () => {
 	});
 	test("consolidation inputs list every validated draft for N=2 and N=5", () => {
 		const tmp = fs.mkdtempSync(
-			path.join(os.tmpdir(), "openspec-fusion-full-inputs-"),
+			path.join(os.tmpdir(), "openspec-fusion-inputs-"),
 		);
 		try {
 			const registry = registerBuiltins();
@@ -471,10 +495,8 @@ describe("openspec-fusion-full workflow", () => {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
 	});
-	test("openspec-fusion-full reaches terminal through registered commands with one retry", () => {
-		const tmp = fs.mkdtempSync(
-			path.join(os.tmpdir(), "openspec-fusion-full-e2e-"),
-		);
+	test("openspec-fusion reaches terminal through registered commands with one retry", () => {
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openspec-fusion-e2e-"));
 		try {
 			const repo = repository(path.join(tmp, "repo"));
 			const engine = new WorkflowEngine(registerBuiltins());
@@ -532,6 +554,8 @@ describe("openspec-fusion-full workflow", () => {
 				revision: view.revision,
 				actionId: "approve-plan",
 			}).view;
+			visited.push(view.currentStep.id);
+			view = advanceRouting(engine, repo, view);
 			visited.push(view.currentStep.id);
 			fs.writeFileSync(path.join(repo, "impl.txt"), "changed\n");
 			view = handoff(engine, repo, view, "worker", { changed: true }, cache);
@@ -613,12 +637,9 @@ describe("openspec-fusion-full workflow", () => {
 			visited.push(view.currentStep.id);
 			expect(visited.at(-1)).toBe("core.closed");
 			// Every transition matches the pinned definition's step order.
-			const definition = registerBuiltins().definition(
-				"openspec-fusion-full",
-				1,
-			);
+			const definition = registerBuiltins().definition("openspec-fusion", 1);
 			for (const step of visited) expect(definition.steps).toContain(step);
-			expect(definition.initial).toBe("fusion.plan");
+			expect(definition.initial).toBe("core.route-plan");
 		} finally {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
@@ -656,6 +677,7 @@ describe("openspec-fusion-full workflow", () => {
 				outcome: "complete",
 				data: { workspace: "workspace", worktree: repo, branch: "main" },
 			}).view;
+			view = advanceRouting(engine, repo, view);
 			const cache = tokenCache(engine, repo);
 			view = handoff(engine, repo, view, "planner-1", draft(), cache);
 			view = handoff(engine, repo, view, "planner-2", draft(), cache);
@@ -721,24 +743,113 @@ describe("openspec-fusion-full workflow", () => {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
 	});
+	test("switch-preset refuses a preset-less routed run and seeds distinct fusion planners", () => {
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "fusion-switch-preset-"));
+		const previous = process.env.HERDR_WORKFLOW_CONFIG;
+		try {
+			const repo = repository(path.join(tmp, "repo"));
+			const configFile = path.join(tmp, "config.json");
+			const single = (profile: string) => [
+				{ label: "only", profile, default: true },
+			];
+			fs.writeFileSync(
+				configFile,
+				JSON.stringify({
+					agents: {
+						profiles: {
+							base: { runtime: "pi", executable: "/bin/true" },
+							strong: { runtime: "pi", executable: "/bin/true" },
+						},
+						presets: {
+							fusion: {
+								pools: {
+									"core.plan": single("base"),
+									"fusion.plan": [
+										{ label: "strong", profile: "strong", default: true },
+										{ label: "base", profile: "base", default: true },
+									],
+									"fusion.consolidate": single("base"),
+									"core.implementation": single("base"),
+									"core.triage": single("base"),
+									"core.verification": single("base"),
+									"core.archive": single("base"),
+								},
+							},
+							thin: {
+								pools: {
+									"core.plan": single("base"),
+									"fusion.plan": [
+										{ label: "strong", profile: "strong", default: true },
+										{ label: "base", profile: "base", default: true },
+									],
+									"fusion.consolidate": single("base"),
+									"core.implementation": single("base"),
+									"core.triage": single("base"),
+									"core.archive": single("base"),
+								},
+							},
+						},
+					},
+				}),
+			);
+			process.env.HERDR_WORKFLOW_CONFIG = configFile;
+			const engine = new WorkflowEngine(registerBuiltins());
+			const started = engine.start({
+				repo,
+				workflowId: "switch-fusion",
+				definitionId: "openspec-fusion",
+				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
+				routing: fusionRouting(2),
+			});
+			const switchTo = (input: string) =>
+				engine.dispatch(repo, {
+					type: "developer.action",
+					workflowId: "switch-fusion",
+					revision: started.view.revision,
+					actionId: "switch-preset",
+					input,
+				});
+			expect(() => switchTo("Config defaults")).toThrow(/requires a preset/);
+			const before = engine
+				.status(repo, "switch-fusion")
+				.routing.routes.filter((route) => route.stepId === "fusion.plan")
+				.map((route) => route.profile.name);
+			expect(() => switchTo("thin")).toThrow(
+				/no model pool for classifiable step core\.verification/,
+			);
+			expect(
+				engine
+					.status(repo, "switch-fusion")
+					.routing.routes.filter((route) => route.stepId === "fusion.plan")
+					.map((route) => route.profile.name),
+			).toEqual(before);
+			const switched = switchTo("fusion").view;
+			expect(
+				switched.routing.routes
+					.filter((route) => route.stepId === "fusion.plan")
+					.map((route) => [route.role, route.profile.name]),
+			).toEqual([
+				["planner-1", "strong"],
+				["planner-2", "base"],
+			]);
+		} finally {
+			if (previous === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
+			else process.env.HERDR_WORKFLOW_CONFIG = previous;
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
 	test("existing built-in definitions keep identifiers, versions, graphs, and pins", () => {
 		const registry = registerBuiltins();
-		const standard = registry.definition("openspec-full", 1);
-		expect(standard.steps[0]).toBe("core.plan");
+		const standard = registry.definition("openspec", 1);
+		expect(standard.steps[0]).toBe("core.route-plan");
 		expect(
 			standard.edges.find(
 				(edge) =>
 					edge.from === "core.plan-approval" && edge.outcome === "reject",
 			)?.to,
 		).toBe("core.plan");
-		for (const id of ["openspec-full", "openspec-apply", "no-openspec"])
+		for (const id of ["openspec", "openspec-apply", "no-openspec"])
 			expect(registry.definition(id, 1).version).toBe(1);
-	});
-	test("--fusion-profiles parses an ordered unique 2-5 profile list", () => {
-		expect(parseFusionProfiles(" a , b ,c")).toEqual(["a", "b", "c"]);
-		expect(parseFusionProfiles("a,b,c,d,e").length).toBe(5);
-		for (const bad of [undefined, "a", "a,b,c,d,e,f", "a,b,a", " , , "])
-			expect(() => parseFusionProfiles(bad)).toThrow(/fusion-profiles/);
 	});
 	test("embedded fusion assets match on-disk instructions and pin via rendering", () => {
 		const diskRoot = path.resolve(

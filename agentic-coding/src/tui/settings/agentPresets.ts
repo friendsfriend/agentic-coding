@@ -1,4 +1,5 @@
-// Agent profile/preset form domain (rework-model-profiles-and-presets).
+// Agent profile/preset form domain (rework-model-profiles-and-presets,
+// classifier-driven-model-pools).
 //
 // Pure data and pure functions: the field catalog, the draft model, the
 // values<->draft mapping, validation and the mutation builders. The Solid view
@@ -8,11 +9,12 @@
 import type { FormErrors, FormField, FormValues } from "@ui";
 import type { RuntimeId } from "../../contracts/workflow.ts";
 import {
-	PRESET_CATEGORY_KEYS,
+	type ClassificationMode,
+	POOL_STEPS,
+	type PoolEntry,
 	type PresetConfig,
 	type ProfileConfig,
 } from "../../workflow/profiles.ts";
-import { VERIFIER_ROLES } from "../../workflow/steps/verification.ts";
 import {
 	type AgentsConfig,
 	type AgentsMutation,
@@ -26,24 +28,15 @@ const RUNTIME_EXECUTABLES: Record<string, string> = {
 	opencode: "opencode",
 	"opencode-v2": "opencode2",
 };
-export const PRESET_STEPS = [
-	"core.plan",
-	"core.implementation",
-	"core.triage",
-	"core.wiki",
-	"core.archive",
-];
-export const FUSION_CONSOLIDATE_STEP = "fusion.consolidate";
-export const FUSION_PLAN_ROLES = [
-	"planner-1",
-	"planner-2",
-	"planner-3",
-	"planner-4",
-	"planner-5",
-];
 const THINKING_LEVELS = ["", "minimal", "low", "medium", "high"];
 
 export type AgentListKind = "profiles" | "presets";
+
+/** The classifiable steps the pool editor renders, in display order. */
+export const POOL_EDITOR_STEPS: ReadonlyArray<{
+	stepId: string;
+	mode: ClassificationMode;
+}> = Object.entries(POOL_STEPS).map(([stepId, mode]) => ({ stepId, mode }));
 
 export interface ProfileDraft {
 	kind: "profile";
@@ -70,28 +63,53 @@ export interface PresetDraft {
 	description?: string;
 	runtime?: RuntimeId;
 	defaultProfile: string;
-	/** Flat per-complexity worker profiles, keyed by category (sparse). */
-	complexities: Record<string, string>;
+	/** Raw comma-separated label text per classifiable step. */
+	poolLabels: Record<string, string>;
+	/** One profile choice per `step\0label` entry key. */
+	poolProfiles: Record<string, string>;
+	/** Default flag per `step\0label` entry key (fusion.plan toggles). */
+	poolDefaults: Record<string, boolean>;
+	/** Opaque criteria JSON per `step\0label` entry key, preserved verbatim so
+	 * an unchanged save never drops a structured TypeSafe criterion. */
+	poolCriteria: Record<string, unknown>;
+	/** Step assignments outside the pool fields, preserved verbatim. */
 	steps: Record<string, string>;
-	roles: Record<string, string>;
-	/** Role assignments under roles.fusion.plan (planner-1..5). */
-	fusionRoles: Record<string, string>;
-	/** Role tables for steps other than core.verification and fusion.plan,
-	 * preserved verbatim so an edit-save cycle never collapses them. */
-	otherRoles: Record<string, Record<string, string>>;
+	/** Role tables outside the pool fields, preserved verbatim. */
+	roles: Record<string, Record<string, string>>;
 }
 
 export type Draft = ProfileDraft | PresetDraft;
 
-/** Field key of one step route inside a preset draft. */
-export const stepKey = (step: string): string => `step:${step}`;
-/** Field key of one fusion planner role. */
-export const fusionRoleKey = (role: string): string => `fusionRole:${role}`;
-/** Field key of one plan-complexity profile assignment. */
-export const complexityKey = (category: string): string =>
-	`complexity:${category}`;
-/** Field key of one verification role. */
-export const roleKey = (role: string): string => `role:${role}`;
+/** Field key of one pool's comma-separated label list. */
+export const poolLabelsKey = (step: string): string => `pool:${step}:labels`;
+/** Field key of one pool entry's profile choice. */
+export const poolProfileKey = (step: string, label: string): string =>
+	`pool:${step}:profile:${label}`;
+/** Field key of one pool entry's default toggle. */
+export const poolDefaultKey = (step: string, label: string): string =>
+	`pool:${step}:default:${label}`;
+
+const ENTRY_SEPARATOR = "\u0000";
+function entryKey(step: string, label: string): string {
+	return `${step}${ENTRY_SEPARATOR}${label}`;
+}
+function splitEntryKey(key: string): { step: string; label: string } {
+	const index = key.indexOf(ENTRY_SEPARATOR);
+	if (index < 0) return { step: key, label: "" };
+	return { step: key.slice(0, index), label: key.slice(index + 1) };
+}
+/** Split a comma-separated label list into unique, trimmed labels. */
+export function splitPoolLabels(value: string): string[] {
+	const seen = new Set<string>();
+	const labels: string[] = [];
+	for (const raw of value.split(",")) {
+		const label = raw.trim();
+		if (!label || seen.has(label)) continue;
+		seen.add(label);
+		labels.push(label);
+	}
+	return labels;
+}
 
 /** Profile fields for the current runtime; model is a choice when the runtime
  * enumerates models, otherwise free text. */
@@ -147,11 +165,15 @@ export function profileFields(draft: ProfileDraft): FormField[] {
 	return fields;
 }
 
-/** Preset fields. Every profile reference is a choice over the saved profiles
- * (empty means "not set"), so a typo cannot create a broken reference. */
-export function presetFields(profileNames: readonly string[]): FormField[] {
+/** Preset fields. Each classifiable step gets a comma-separated label field
+ * plus one profile choice per current label, derived live from the draft; the
+ * `fusion.plan` roster also gets a default toggle per entry. */
+export function presetFields(
+	draft: PresetDraft,
+	profileNames: readonly string[],
+): FormField[] {
 	const options = ["", ...profileNames];
-	return [
+	const fields: FormField[] = [
 		{ key: "name", label: "Preset name", kind: "text" },
 		{
 			key: "defaultProfile",
@@ -159,37 +181,30 @@ export function presetFields(profileNames: readonly string[]): FormField[] {
 			kind: "select",
 			options,
 		},
-		...PRESET_CATEGORY_KEYS.map((category) => ({
-			key: complexityKey(category),
-			label: `Complexity ${category}`,
-			kind: "select" as const,
-			options,
-		})),
-		...PRESET_STEPS.map((step) => ({
-			key: stepKey(step),
-			label: `Step ${step}`,
-			kind: "select" as const,
-			options,
-		})),
-		{
-			key: stepKey(FUSION_CONSOLIDATE_STEP),
-			label: `Step ${FUSION_CONSOLIDATE_STEP}`,
-			kind: "select" as const,
-			options,
-		},
-		...FUSION_PLAN_ROLES.map((role) => ({
-			key: fusionRoleKey(role),
-			label: `Fusion ${role}`,
-			kind: "select" as const,
-			options,
-		})),
-		...VERIFIER_ROLES.map((role) => ({
-			key: roleKey(role),
-			label: `Verification ${role}`,
-			kind: "select" as const,
-			options,
-		})),
 	];
+	for (const { stepId, mode } of POOL_EDITOR_STEPS) {
+		fields.push({
+			key: poolLabelsKey(stepId),
+			label: `Pool ${stepId} labels (comma-separated)`,
+			kind: "text",
+		});
+		for (const label of splitPoolLabels(draft.poolLabels[stepId] ?? "")) {
+			fields.push({
+				key: poolProfileKey(stepId, label),
+				label: `Pool ${stepId} · ${label} profile`,
+				kind: "select",
+				options,
+			});
+			if (mode === "roster")
+				fields.push({
+					key: poolDefaultKey(stepId, label),
+					label: `Pool ${stepId} · ${label} default`,
+					kind: "select",
+					options: ["", "default"],
+				});
+		}
+	}
+	return fields;
 }
 
 /** The fields of a draft (depends on the profile runtime). */
@@ -199,7 +214,7 @@ export function draftFields(
 ): FormField[] {
 	return draft.kind === "profile"
 		? profileFields(draft)
-		: presetFields(profileNames);
+		: presetFields(draft, profileNames);
 }
 
 /** Flatten a draft into the form's value map. */
@@ -216,14 +231,16 @@ export function draftValues(draft: Draft): FormValues {
 		name: draft.name,
 		defaultProfile: draft.defaultProfile,
 	};
-	for (const [category, profile] of Object.entries(draft.complexities))
-		values[complexityKey(category)] = profile;
-	for (const [step, profile] of Object.entries(draft.steps))
-		values[stepKey(step)] = profile;
-	for (const [role, profile] of Object.entries(draft.fusionRoles))
-		values[fusionRoleKey(role)] = profile;
-	for (const [role, profile] of Object.entries(draft.roles))
-		values[roleKey(role)] = profile;
+	for (const { stepId } of POOL_EDITOR_STEPS)
+		values[poolLabelsKey(stepId)] = draft.poolLabels[stepId] ?? "";
+	for (const [key, profile] of Object.entries(draft.poolProfiles)) {
+		const { step, label } = splitEntryKey(key);
+		if (label) values[poolProfileKey(step, label)] = profile;
+	}
+	for (const [key, isDefault] of Object.entries(draft.poolDefaults)) {
+		const { step, label } = splitEntryKey(key);
+		if (label) values[poolDefaultKey(step, label)] = isDefault ? "default" : "";
+	}
 	return values;
 }
 
@@ -256,21 +273,26 @@ export function applyDraftValue(
 	}
 	const next: PresetDraft = {
 		...draft,
-		complexities: { ...draft.complexities },
-		steps: { ...draft.steps },
-		roles: { ...draft.roles },
-		fusionRoles: { ...draft.fusionRoles },
+		poolLabels: { ...draft.poolLabels },
+		poolProfiles: { ...draft.poolProfiles },
+		poolDefaults: { ...draft.poolDefaults },
+		poolCriteria: { ...draft.poolCriteria },
 	};
 	if (key === "name") next.name = value;
 	else if (key === "defaultProfile") next.defaultProfile = value;
-	else if (key.startsWith("complexity:"))
-		next.complexities[key.slice("complexity:".length)] = value;
-	else if (key.startsWith("step:"))
-		next.steps[key.slice("step:".length)] = value;
-	else if (key.startsWith("fusionRole:"))
-		next.fusionRoles[key.slice("fusionRole:".length)] = value;
-	else if (key.startsWith("role:"))
-		next.roles[key.slice("role:".length)] = value;
+	else if (key.startsWith("pool:")) {
+		const [, step, kind, ...rest] = key.split(":");
+		if (kind === "labels" && step) next.poolLabels[step] = value;
+		else if (kind === "profile" && step) {
+			const label = rest.join(":");
+			if (value) next.poolProfiles[entryKey(step, label)] = value;
+			else delete next.poolProfiles[entryKey(step, label)];
+		} else if (kind === "default" && step) {
+			const label = rest.join(":");
+			if (value === "default") next.poolDefaults[entryKey(step, label)] = true;
+			else delete next.poolDefaults[entryKey(step, label)];
+		}
+	}
 	return next;
 }
 
@@ -298,17 +320,18 @@ export function presetDraft(
 	presets?: AgentsConfig["presets"],
 ): PresetDraft {
 	const current = name ? presets?.[name] : undefined;
-	// Edit only the core.verification and fusion.plan role tables; other steps'
-	// tables are kept verbatim.
-	const {
-		"core.verification": verification = {},
-		"fusion.plan": fusionPlan = {},
-		...otherRoles
-	} = current?.roles ?? {};
-	const complexities: Record<string, string> = {};
-	for (const category of PRESET_CATEGORY_KEYS) {
-		const profile = current?.[category];
-		if (profile) complexities[category] = profile;
+	const poolLabels: Record<string, string> = {};
+	const poolProfiles: Record<string, string> = {};
+	const poolDefaults: Record<string, boolean> = {};
+	const poolCriteria: Record<string, unknown> = {};
+	for (const [step, entries] of Object.entries(current?.pools ?? {})) {
+		poolLabels[step] = entries.map((entry) => entry.label).join(", ");
+		for (const entry of entries) {
+			const key = entryKey(step, entry.label);
+			poolProfiles[key] = entry.profile;
+			if (entry.default === true) poolDefaults[key] = true;
+			if (entry.criteria !== undefined) poolCriteria[key] = entry.criteria;
+		}
 	}
 	return {
 		kind: "preset",
@@ -317,12 +340,55 @@ export function presetDraft(
 		...(current?.description ? { description: current.description } : {}),
 		...(current?.runtime ? { runtime: current.runtime } : {}),
 		defaultProfile: current?.default_profile ?? "",
-		complexities,
+		poolLabels,
+		poolProfiles,
+		poolDefaults,
+		poolCriteria,
 		steps: { ...(current?.steps ?? {}) },
-		roles: { ...verification },
-		fusionRoles: { ...fusionPlan },
-		otherRoles,
+		roles: { ...(current?.roles ?? {}) },
 	};
+}
+
+/** Entries built from the draft's label text and per-label choices. */
+export function poolDraftEntries(
+	draft: PresetDraft,
+): Record<string, PoolEntry[]> {
+	const pools: Record<string, PoolEntry[]> = {};
+	for (const { stepId, mode } of POOL_EDITOR_STEPS) {
+		const labels = splitPoolLabels(draft.poolLabels[stepId] ?? "");
+		if (!labels.length) continue;
+		const entries: PoolEntry[] = [];
+		for (const [index, label] of labels.entries()) {
+			const key = entryKey(stepId, label);
+			const profile = draft.poolProfiles[key];
+			if (!profile) continue;
+			const isDefault =
+				mode === "roster"
+					? draft.poolDefaults[key] === true
+					: singleDefaultIndex(draft, stepId, labels) === index;
+			const criteria = draft.poolCriteria[key];
+			entries.push({
+				label,
+				profile,
+				...(criteria !== undefined ? { criteria } : {}),
+				...(isDefault ? { default: true } : {}),
+			});
+		}
+		if (entries.length) pools[stepId] = entries;
+	}
+	return pools;
+}
+
+/** The single-select default is the first labeled entry explicitly tagged as
+ * default, or the first remaining label when that tag is gone. */
+function singleDefaultIndex(
+	draft: PresetDraft,
+	step: string,
+	labels: readonly string[],
+): number {
+	for (const [index, label] of labels.entries())
+		if (draft.poolDefaults[entryKey(step, label)] === true) return index;
+	return 0;
 }
 
 /**
@@ -342,6 +408,31 @@ export function validateDraft(
 		errors.name = `A ${
 			draft.kind === "profile" ? "profile" : "preset"
 		} named "${name}" already exists`;
+	if (draft.kind === "preset") {
+		const anyLabels = POOL_EDITOR_STEPS.some(
+			({ stepId }) =>
+				splitPoolLabels(draft.poolLabels[stepId] ?? "").length > 0,
+		);
+		if (!anyLabels && !errors.name)
+			errors.name = "A preset must declare at least one model pool";
+		for (const { stepId, mode } of POOL_EDITOR_STEPS) {
+			const labels = splitPoolLabels(draft.poolLabels[stepId] ?? "");
+			if (!labels.length) continue;
+			for (const label of labels)
+				if (!draft.poolProfiles[entryKey(stepId, label)]) {
+					errors[poolProfileKey(stepId, label)] =
+						`Choose a profile for ${label}`;
+					break;
+				}
+			if (mode !== "roster") continue;
+			const defaults = labels.filter(
+				(label) => draft.poolDefaults[entryKey(stepId, label)] === true,
+			).length;
+			if (defaults < 2 || defaults > 5)
+				errors[poolLabelsKey(stepId)] =
+					"fusion.plan needs 2-5 entries marked default";
+		}
+	}
 	return errors;
 }
 
@@ -369,24 +460,19 @@ export function profileMutation(draft: ProfileDraft): AgentsMutation {
 }
 
 /** Server mutation for a preset draft, dropping empty references and preserving
- * role tables the form does not edit. */
+ * step/role assignments outside the pool fields. */
 export function presetMutation(draft: PresetDraft): AgentsMutation {
 	const steps = Object.fromEntries(
 		Object.entries(draft.steps).filter(([, value]) => value),
 	);
-	const verificationRoles = Object.fromEntries(
-		Object.entries(draft.roles).filter(([, value]) => value),
-	);
-	const fusionPlanRoles = Object.fromEntries(
-		Object.entries(draft.fusionRoles).filter(([, value]) => value),
-	);
-	const roleTables: Record<string, Record<string, string>> = {
-		...draft.otherRoles,
-	};
-	if (Object.keys(verificationRoles).length)
-		roleTables["core.verification"] = verificationRoles;
-	if (Object.keys(fusionPlanRoles).length)
-		roleTables["fusion.plan"] = fusionPlanRoles;
+	const roleTables: Record<string, Record<string, string>> = {};
+	for (const [step, roles] of Object.entries(draft.roles)) {
+		const kept = Object.fromEntries(
+			Object.entries(roles).filter(([, value]) => value),
+		);
+		if (Object.keys(kept).length) roleTables[step] = kept;
+	}
+	const pools = poolDraftEntries(draft);
 	const name = draft.name.trim();
 	const preset: PresetConfig = {
 		...(draft.description ? { description: draft.description } : {}),
@@ -394,11 +480,8 @@ export function presetMutation(draft: PresetDraft): AgentsMutation {
 		...(draft.defaultProfile ? { default_profile: draft.defaultProfile } : {}),
 		...(Object.keys(steps).length ? { steps } : {}),
 		...(Object.keys(roleTables).length ? { roles: roleTables } : {}),
+		...(Object.keys(pools).length ? { pools } : {}),
 	};
-	for (const category of PRESET_CATEGORY_KEYS) {
-		const profile = draft.complexities[category];
-		if (profile) preset[category] = profile;
-	}
 	return {
 		kind: "set-preset",
 		name,
@@ -435,9 +518,10 @@ export function profileReferences(
 			for (const [role, profile] of Object.entries(roleMap))
 				if (profile === name)
 					refs.push(`presets.${presetName}.roles.${step}.${role}`);
-		for (const category of PRESET_CATEGORY_KEYS)
-			if (preset[category] === name)
-				refs.push(`presets.${presetName}.${category}`);
+		for (const [step, entries] of Object.entries(preset.pools ?? {}))
+			for (const entry of entries)
+				if (entry.profile === name)
+					refs.push(`presets.${presetName}.pools.${step}.${entry.label}`);
 	}
 	return refs;
 }

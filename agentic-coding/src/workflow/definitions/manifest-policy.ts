@@ -24,7 +24,7 @@ export function definitionVersionForResearchTools(rounds: number): number {
 }
 
 const MANIFEST_POLICY: Readonly<Record<string, WorkflowManifestPolicy>> = {
-	"openspec-full": {
+	openspec: {
 		targetKind: "repository",
 		checkoutRequired: false,
 		requiresReadOnlyResearcher: false,
@@ -39,22 +39,12 @@ const MANIFEST_POLICY: Readonly<Record<string, WorkflowManifestPolicy>> = {
 		checkoutRequired: false,
 		requiresReadOnlyResearcher: false,
 	},
-	"openspec-jev": {
-		targetKind: "repository",
-		checkoutRequired: false,
-		requiresReadOnlyResearcher: false,
-	},
-	"openspec-jev-apply": {
-		targetKind: "repository",
-		checkoutRequired: false,
-		requiresReadOnlyResearcher: false,
-	},
 	"no-openspec": {
 		targetKind: "repository",
 		checkoutRequired: false,
 		requiresReadOnlyResearcher: false,
 	},
-	"openspec-fusion-full": {
+	"openspec-fusion": {
 		targetKind: "repository",
 		checkoutRequired: false,
 		requiresReadOnlyResearcher: false,

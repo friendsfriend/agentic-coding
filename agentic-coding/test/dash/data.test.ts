@@ -741,7 +741,7 @@ test("required user actions expose developer review and completion commands", ()
 	]);
 });
 
-test("required user actions offer exactly what the engine reports for wiki-comments and openspec-full completion", () => {
+test("required user actions offer exactly what the engine reports for wiki-comments and openspec completion", () => {
 	// The known divergence this change fixes: wiki-comments is close-only
 	// because the engine's core.completed action list omits create-pr for it,
 	// not because of a separate dashboard allowlist.
@@ -762,13 +762,13 @@ test("required user actions offer exactly what the engine reports for wiki-comme
 		),
 	).toBe(false);
 
-	// A completed openspec-full workflow still offers create-pr, because the
+	// A completed openspec workflow still offers create-pr, because the
 	// engine still reports it.
 	const openspecFull = requiredUserActionFor(
 		"core.completed",
 		false,
 		[],
-		"openspec-full",
+		"openspec",
 		COMPLETED_WITH_PR_ACTIONS,
 	);
 	expect(openspecFull?.items.map((item) => item.label)).toEqual([
@@ -795,7 +795,7 @@ test("required user actions never dispatch an id the engine did not report", () 
 		["core.plan-approval", undefined, PLAN_APPROVAL_ACTIONS],
 		["core.developer-review", undefined, DEVELOPER_REVIEW_ACTIONS],
 		["core.wiki-approval", undefined, WIKI_APPROVAL_ACTIONS],
-		["core.completed", "openspec-full", COMPLETED_WITH_PR_ACTIONS],
+		["core.completed", "openspec", COMPLETED_WITH_PR_ACTIONS],
 		["core.completed", "wiki-comments", COMPLETED_CLOSE_ONLY_ACTIONS],
 	];
 	for (const [phase, definitionId, actions] of cases) {
@@ -822,7 +822,7 @@ test("required user actions render an unmapped action id using the engine's own 
 		"core.completed",
 		false,
 		[],
-		"openspec-full",
+		"openspec",
 		[
 			{ id: "close", label: "Close workflow", confirmation: "confirm" },
 			{
@@ -939,10 +939,10 @@ test("startArgs maps quick workflow type to no-openspec and preserves task text"
 		workflowId: "fusion-fix",
 		task: "Compare plans\nand recommend one",
 		mode: "worktree",
-		workflowType: "openspec-fusion-full",
+		workflowType: "openspec-fusion",
 	});
 
-	expect(fusionArgs.definitionId).toBe("openspec-fusion-full");
+	expect(fusionArgs.definitionId).toBe("openspec-fusion");
 	expect(fusionArgs.task).toBe("Compare plans\nand recommend one");
 
 	const proposalArgs = startArgs({

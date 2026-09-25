@@ -237,7 +237,7 @@ export function testDashboard(phase = "proposed"): DashboardData {
 			{
 				at: "10:42:00",
 				event: "verification_started",
-				tier: "openspec-full",
+				tier: "openspec",
 				roles: ["security-verifier", "quality-verifier"],
 			},
 		],

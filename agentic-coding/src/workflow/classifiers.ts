@@ -1,17 +1,35 @@
-// Pluggable classifier integrations (introduce-jev-for-model-range-decision).
-//
-// A classifier is pure domain knowledge: what it is called, which categories
-// it may return, which workflow step/role its result routes, and how to turn
-// the model's raw answer into one of those categories. The runtime owns the
-// I/O half (collecting the OpenSpec artifacts, invoking the configured model,
-// and rewriting routing) in `classifier-runner.ts`, so adding another JEV
-// integration is one entry here plus (optionally) a new workflow step — no
-// engine branches.
-/** One category a classifier may return. Categories are integration-local
- * strings; the routing layer maps them to profiles through the preset. */
-export type ClassifierCategory = string;
+// The pool-routing protocol (classifier-driven-model-pools): pure domain
+// knowledge for per-step model pools, the TypeSafe question shape, and the
+// mode-aware answer parsing/selection. The runtime I/O half lives in
+// `classifier-runner.ts`; the reducer applies the result in
+// `runtime/reducers/effect-result.ts`.
+/** A labelled candidate profile in a per-step model pool. `criteria` is
+ * opaque JSON passed through to the TypeSafe choice question; `default` marks
+ * the fallback entry/entries for the step. */
+export interface PoolEntry {
+	label: string;
+	profile: string;
+	criteria?: unknown;
+	default?: boolean;
+}
 
-/** The bounded, already-collected material handed to a classifier. */
+/** Classification mode a classifiable step declares. */
+export type ClassificationMode = "single" | "roster";
+
+/** Selector constants (not config): a single choice below the confidence floor
+ * falls back to the pool default; roster entries below the probability
+ * threshold are dropped; the roster is clamped to [2,5] distinct profiles.
+ * Defined here (pure protocol) and imported by `profiles.ts` for validation so
+ * the domain never imports the runtime config module. */
+export const SINGLE_CONFIDENCE_FLOOR = 0.5;
+export const ROSTER_PROBABILITY_THRESHOLD = 0.2;
+export const ROSTER_MIN_PLANNERS = 2;
+export const ROSTER_MAX_PLANNERS = 5;
+
+/** The identifier a `model.classify` routing payload carries. */
+export const ROUTING_INTEGRATION = "routing";
+
+/** The bounded, already-collected material handed to the classifier. */
 export interface ClassifierInput {
 	readonly task: string;
 	readonly changeId: string;
@@ -21,119 +39,178 @@ export interface ClassifierInput {
 	}[];
 }
 
-/** Where a classifier's winning category is applied. */
-export interface ClassifierTarget {
+/** One classifiable step's question for a routing pass. */
+export interface RoutingQuestionSpec {
 	readonly stepId: string;
-	readonly role?: string;
+	readonly mode: ClassificationMode;
+	readonly entries: readonly PoolEntry[];
 }
 
-export interface ClassifierQuestion {
-	readonly id: string;
-	readonly instructions: string;
-	readonly criteria: Readonly<Record<ClassifierCategory, string>>;
-}
+/** Classifiable steps asked by the plan pass, in stable order. */
+export const PLAN_PHASE_STEPS: readonly string[] = Object.freeze([
+	"core.plan",
+	"fusion.consolidate",
+	"fusion.plan",
+]);
 
-export interface ClassifierIntegration {
-	readonly id: string;
-	readonly label: string;
-	/** Every category this classifier may return, in display order. */
-	readonly categories: readonly ClassifierCategory[];
-	/** Step/role whose pinned profile this classification overrides. */
-	readonly target: ClassifierTarget;
-	/** Config profile used to select the classifier model. */
-	readonly profile: string;
-	/** OpenCode Zen System One endpoint used by this classifier. */
-	readonly endpoint: string;
-	/** Typed question sent to System One. */
-	readonly question: ClassifierQuestion;
-	readonly model: string;
-	/** Prepended to the rendered artifacts to form the classifier state. */
-	readonly instruction: string;
-	/** Parse a raw model answer into exactly one category, or throw. */
-	parse(raw: string): ClassifierCategory;
-}
+/** Classifiable steps asked by the apply pass, in stable order. */
+export const APPLY_PHASE_STEPS: readonly string[] = Object.freeze([
+	"core.implementation",
+	"core.triage",
+	"core.verification",
+	"core.wiki",
+	"core.archive",
+]);
 
-/** Render the prompt for one integration without leaking integration-specific
- * logic into the runtime. Artifact contents are bounded by the caller. */
-export function renderClassifierPrompt(
-	integration: ClassifierIntegration,
-	input: ClassifierInput,
+/** A single entry as parsed from a `choice` answer. */
+export interface ChoiceAnswer {
+	readonly type: "choice";
+	readonly choice?: string;
+	readonly probabilities?: Readonly<Record<string, number>>;
+	readonly confidence?: number;
+}
+export interface NoulAnswer {
+	readonly type: "noul";
+}
+export type ClassifierAnswer = ChoiceAnswer | NoulAnswer;
+
+/** The classifier model used by the routing integration. */
+export const ROUTING_CLASSIFIER_MODEL = "opencode/jev-1.13-free";
+export const ROUTING_CLASSIFIER_PROFILE = "jev-classifier";
+export const ROUTING_ENDPOINT = "https://opencode.ai/zen/v1/systemone";
+
+/** Rendering text for one routing question. The criteria are the pool entry
+ * labels mapped to their (possibly structured) criteria. */
+export function routingQuestionInstructions(
+	stepId: string,
+	mode: ClassificationMode,
 ): string {
-	const header = [
-		integration.instruction.trim(),
-		"",
-		`Change: ${input.changeId || "(unknown)"}`,
-		input.task.trim() ? `Task: ${input.task.trim()}` : "",
-		`Allowed categories: ${integration.categories.join(", ")}`,
-		"Answer with exactly one category and nothing else.",
-	]
-		.filter(Boolean)
-		.join("\n");
-	const body = input.artifacts
-		.map(
-			(artifact) =>
-				`<artifact path="${artifact.path}">\n${artifact.content}\n</artifact>`,
-		)
-		.join("\n\n");
-	return `${header}\n\n${body}\n`;
+	return mode === "roster"
+		? `Choose the subset of profiles that should plan ${stepId} in parallel.`
+		: `Choose the profile that should run the ${stepId} step.`;
 }
 
-/** Case-insensitive first-category match used by keyword classifiers. */
-export function parseCategoryAnswer(
-	categories: readonly ClassifierCategory[],
-	raw: string,
-): ClassifierCategory {
-	const text = raw.toLowerCase();
-	for (const category of categories) {
-		const escaped = category.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-		if (new RegExp(`\\b${escaped}\\b`, "i").test(text)) return category;
-	}
-	throw new Error(
-		`classifier answer did not name one of: ${categories.join(", ")}`,
+/** Parse one System One answer object into the full answer shape. Missing or
+ * malformed fields collapse to `{ type: "noul" }` so the router can fall back
+ * rather than throw. */
+export function parseClassifierAnswer(value: unknown): ClassifierAnswer {
+	if (!value || typeof value !== "object") return { type: "noul" };
+	const answer = value as Record<string, unknown>;
+	if (answer.type === "noul") return { type: "noul" };
+	const choice =
+		typeof answer.choice === "string" && answer.choice.trim()
+			? answer.choice.trim()
+			: undefined;
+	const confidence =
+		typeof answer.confidence === "number" && Number.isFinite(answer.confidence)
+			? answer.confidence
+			: undefined;
+	const probabilities: Record<string, number> = {};
+	const raw = answer.probabilities;
+	if (raw && typeof raw === "object" && !Array.isArray(raw))
+		for (const [key, entry] of Object.entries(raw as Record<string, unknown>))
+			if (typeof entry === "number" && Number.isFinite(entry))
+				probabilities[key] = entry;
+	if (choice === undefined && Object.keys(probabilities).length === 0)
+		return { type: "noul" };
+	return {
+		type: "choice",
+		...(choice !== undefined ? { choice } : {}),
+		...(confidence !== undefined ? { confidence } : {}),
+		...(Object.keys(probabilities).length ? { probabilities } : {}),
+	};
+}
+
+/** True when the answer's `confidence` clears the single-select floor. A
+ * `choice` without a numeric confidence never clears it. */
+export function confidentChoice(
+	answer: ClassifierAnswer,
+	floor = SINGLE_CONFIDENCE_FLOOR,
+): boolean {
+	return (
+		answer.type === "choice" &&
+		typeof answer.confidence === "number" &&
+		answer.confidence >= floor
 	);
 }
 
-const COMPLEXITY_INSTRUCTION = `You classify the implementation complexity of an OpenSpec change.
-Judge how much engineering effort and care the tasks require, not how terse the
-proposal is.`;
+/** Select a single pool entry by label, or the tagged default. The choice is
+ * applied only when `confidence` clears the floor; otherwise the tagged
+ * default is kept and attention is recorded. */
+export function selectSingleEntry(
+	entries: readonly PoolEntry[],
+	answer: ClassifierAnswer,
+	floor = SINGLE_CONFIDENCE_FLOOR,
+): { profile: string; attention?: string } {
+	const fallback = entries.find((entry) => entry.default === true);
+	if (!confidentChoice(answer, floor))
+		return {
+			profile: fallback?.profile ?? "",
+			attention:
+				answer.type === "choice"
+					? "classifier confidence below floor; kept the pool default routing"
+					: "classifier returned no usable choice; kept the pool default routing",
+		};
+	const chosen =
+		answer.type === "choice" && answer.choice !== undefined
+			? entries.find((entry) => entry.label === answer.choice)
+			: undefined;
+	if (chosen) return { profile: chosen.profile };
+	return {
+		profile: fallback?.profile ?? "",
+		attention:
+			"classifier returned no usable choice; kept the pool default routing",
+	};
+}
 
-const COMPLEXITY_CRITERIA = Object.freeze({
-	easy: "A tiny, low-risk change scoped to one or two files",
-	medium: "A normal change touching a few modules with clear requirements",
-	hard: "A broad or subtle change with many moving parts or integration risk",
-	critical:
-		"A high-risk change with architectural, migration, security, or cross-cutting consequences",
-});
-
-/** The first integration: worker-model range from plan complexity. This is
- * the only classifier the workflow family currently routes; more integrations
- * are added by appending entries to `CLASSIFIER_INTEGRATIONS`. */
-export const complexityClassifier: ClassifierIntegration = Object.freeze({
-	id: "complexity",
-	label: "Plan complexity",
-	categories: Object.freeze(["easy", "medium", "hard", "critical"]),
-	target: Object.freeze({ stepId: "core.implementation", role: "worker" }),
-	profile: "jev-classifier",
-	endpoint: "https://opencode.ai/zen/v1/systemone",
-	question: {
-		id: "complexity",
-		instructions: "Which complexity class fits this planned change?",
-		criteria: COMPLEXITY_CRITERIA,
-	},
-	model: "opencode/jev-1.13-free",
-	instruction: COMPLEXITY_INSTRUCTION,
-	parse: (raw: string) =>
-		parseCategoryAnswer(
-			["easy", "medium", "hard", "critical"],
-			raw,
-		) as ClassifierCategory,
-});
-
-export const CLASSIFIER_INTEGRATIONS: readonly ClassifierIntegration[] =
-	Object.freeze([complexityClassifier]);
-
-export function classifierFor(id: string): ClassifierIntegration {
-	const integration = CLASSIFIER_INTEGRATIONS.find((item) => item.id === id);
-	if (!integration) throw new Error(`unknown classifier integration: ${id}`);
-	return integration;
+/** Sort probabilities descending, keep probabilities at or above the
+ * threshold, de-duplicate profiles, clamp to [min,max], and fall back to the
+ * tagged defaults when fewer than `min` distinct profiles survive. */
+export function selectRosterEntries(
+	entries: readonly PoolEntry[],
+	answer: ClassifierAnswer,
+	options: { threshold?: number; min?: number; max?: number } = {},
+): { profiles: string[]; attention?: string } {
+	const threshold = options.threshold ?? ROSTER_PROBABILITY_THRESHOLD;
+	const min = options.min ?? ROSTER_MIN_PLANNERS;
+	const max = options.max ?? ROSTER_MAX_PLANNERS;
+	const defaults = entries
+		.filter((entry) => entry.default === true)
+		.map((entry) => entry.profile);
+	const probabilities =
+		answer.type === "choice" && answer.probabilities
+			? Object.entries(answer.probabilities)
+			: [];
+	const ranked = probabilities
+		.map(([label, probability]) => ({
+			label,
+			probability,
+			profile: entries.find((entry) => entry.label === label)?.profile,
+		}))
+		.filter(
+			(item): item is { label: string; probability: number; profile: string } =>
+				item.profile !== undefined && item.probability >= threshold,
+		)
+		.sort((a, b) => b.probability - a.probability);
+	const profiles: string[] = [];
+	for (const item of ranked) {
+		if (!profiles.includes(item.profile)) profiles.push(item.profile);
+		if (profiles.length >= max) break;
+	}
+	const selected = profiles.slice(0, max);
+	if (selected.length < min) {
+		const fallback = defaults.slice(0, max);
+		return fallback.length
+			? {
+					profiles: fallback,
+					attention:
+						"classifier roster collapsed below two profiles; kept the tagged defaults",
+				}
+			: {
+					profiles: selected,
+					attention:
+						"classifier roster collapsed below two profiles and the pool has no usable defaults",
+				};
+	}
+	return { profiles: selected };
 }

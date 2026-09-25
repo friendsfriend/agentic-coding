@@ -5,6 +5,7 @@ import {
 } from "./validation.ts";
 
 export const implementationBehavior: StepBehavior = {
+	classification: "single",
 	roles: () => ["worker"],
 	candidateRoles: () => ["worker"],
 	validateEvidence: ({ snapshot, evidence }) => {

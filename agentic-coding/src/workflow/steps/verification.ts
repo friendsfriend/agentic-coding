@@ -116,6 +116,7 @@ function verificationCompletion(
 
 export const verificationBehaviors: Readonly<Record<string, StepBehavior>> = {
 	"core.triage": {
+		classification: "single",
 		roles: () => ["triage"],
 		candidateRoles: () => ["triage"],
 		onAgentComplete: triageCompletion,
@@ -129,6 +130,7 @@ export const verificationBehaviors: Readonly<Record<string, StepBehavior>> = {
 		paneGroup: "triage",
 	},
 	"core.verification": {
+		classification: "single",
 		onAgentComplete: verificationCompletion,
 		// Candidate roles configure routing before a run exists; active roles use
 		// the selected subset (or the test/quality fallback) during fan-out.

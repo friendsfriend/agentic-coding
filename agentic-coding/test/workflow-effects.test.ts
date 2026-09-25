@@ -1318,7 +1318,7 @@ test("review-comment loop reuses the planner agent by stable name instead of lau
 		const started = engine.start({
 			repo,
 			workflowId: "plan-reuse",
-			definitionId: "openspec-full",
+			definitionId: "openspec",
 			metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
 			routing,
 		});
@@ -1363,25 +1363,37 @@ test("review-comment loop reuses the planner agent by stable name instead of lau
 					return { ...handle, paneId: "planner-pane" };
 				}),
 			);
-		const handlers = agentEffectHandlers(repo, engine, {
-			registry,
-			adapters: new Map([["pi", adapter]]),
-			herdr,
-			async paneForRun() {
-				paneForRunCalls++;
-				if (paneForRunCalls > 1)
-					throw new Error("must not create a second pane");
-				return { paneId: "planner-pane", owned: true };
+		const handlers = {
+			...agentEffectHandlers(repo, engine, {
+				registry,
+				adapters: new Map([["pi", adapter]]),
+				herdr,
+				async paneForRun() {
+					paneForRunCalls++;
+					if (paneForRunCalls > 1)
+						throw new Error("must not create a second pane");
+					return { paneId: "planner-pane", owned: true };
+				},
+			}),
+			// The routing pass is exercised elsewhere; this test only needs the
+			// graph to advance to core.plan without a network call.
+			"model.classify": {
+				execute: () =>
+					Effect.succeed({
+						integration: "routing",
+						phase: "plan",
+						answers: {},
+					}),
 			},
-		});
+		};
 
 		await new EffectRunner(repo, engine, handlers).drain();
 		expect(adapter.launches).toBe(1);
 		expect(paneForRunCalls).toBe(1);
-		const firstRunId = started.view.runs[0]?.id;
+		const firstRunId = engine.status(repo, "plan-reuse").runs[0]?.id;
 		const firstName = adapter.context?.name;
 		expect(firstName).toBe(
-			effectRunnerTest.canonicalAgentName("plan-reuse", "openspec-full", {
+			effectRunnerTest.canonicalAgentName("plan-reuse", "openspec", {
 				stepId: "core.plan",
 				role: "planner",
 				id: "irrelevant-for-persistent-roles",
@@ -1489,7 +1501,7 @@ test("canonical agent names stay within herdr limits and never collide across lo
 	]) {
 		const name = effectRunnerTest.canonicalAgentName(
 			changeId,
-			"openspec-full",
+			"openspec",
 			verifier,
 		);
 		expect(name.length).toBeLessThanOrEqual(32);
@@ -1505,7 +1517,7 @@ test("canonical agent names stay within herdr limits and never collide across lo
 	const prefix = "rethink-agent-and-pane-identification-shared-prefix";
 	const one = effectRunnerTest.canonicalAgentName(
 		`${prefix}-one`,
-		"openspec-full",
+		"openspec",
 		worker,
 	);
 	const two = effectRunnerTest.canonicalAgentName(
@@ -1519,7 +1531,7 @@ test("canonical agent names stay within herdr limits and never collide across lo
 
 test("canonical agent names are stable across generations and grouped rounds", () => {
 	const name = (stepId: string, role: string, id: string) =>
-		effectRunnerTest.canonicalAgentName("change-id", "openspec-full", {
+		effectRunnerTest.canonicalAgentName("change-id", "openspec", {
 			stepId,
 			role,
 			id,
@@ -1575,7 +1587,7 @@ test("resolveLiveAgent reuses the live pane and recovers stale handles by identi
 	};
 	const canonical = effectRunnerTest.canonicalAgentName(
 		"change",
-		"openspec-full",
+		"openspec",
 		run,
 	);
 	const legacy = effectRunnerTest.legacyRunName("change", run);
@@ -1601,7 +1613,7 @@ test("resolveLiveAgent reuses the live pane and recovers stale handles by identi
 			},
 		}),
 		"change",
-		"openspec-full",
+		"openspec",
 		{ ...run, handle: { runtime: "pi", name: canonical, paneId: "dead-pane" } },
 	);
 	expect(stale?.paneId).toBe("moved-pane");
@@ -1616,7 +1628,7 @@ test("resolveLiveAgent reuses the live pane and recovers stale handles by identi
 			},
 		}),
 		"change",
-		"openspec-full",
+		"openspec",
 		{ ...run, handle: { runtime: "pi", name: canonical, paneId: "kept-pane" } },
 	);
 	expect(healthy?.paneId).toBe("kept-pane");
@@ -1627,7 +1639,7 @@ test("resolveLiveAgent reuses the live pane and recovers stale handles by identi
 			[legacy]: { agent: { pane_id: "legacy-pane", agent_status: "working" } },
 		}),
 		"change",
-		"openspec-full",
+		"openspec",
 		run,
 	);
 	expect(migrated?.paneId).toBe("legacy-pane");
@@ -1635,12 +1647,7 @@ test("resolveLiveAgent reuses the live pane and recovers stale handles by identi
 
 	// No live agent anywhere: the only outcome allowed to spawn.
 	expect(
-		effectRunnerTest.resolveLiveAgent(
-			herdrWith({}),
-			"change",
-			"openspec-full",
-			run,
-		),
+		effectRunnerTest.resolveLiveAgent(herdrWith({}), "change", "openspec", run),
 	).toBeUndefined();
 	// A dead tracked process reports 'unknown' and must not count as live.
 	expect(
@@ -1649,7 +1656,7 @@ test("resolveLiveAgent reuses the live pane and recovers stale handles by identi
 				[canonical]: { agent: { pane_id: "p", agent_status: "unknown" } },
 			}),
 			"change",
-			"openspec-full",
+			"openspec",
 			run,
 		),
 	).toBeUndefined();

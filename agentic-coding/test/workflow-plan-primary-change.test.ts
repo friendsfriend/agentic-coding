@@ -88,6 +88,31 @@ function runForRole(view: WorkflowView, role: string) {
 	if (!summary) throw new Error(`missing ${role} run`);
 	return summary;
 }
+
+/** Complete the plan-phase routing pass so the planner run exists. The pinned
+ * routing is pre-seeded, so the no-answer result keeps it. */
+function advanceRouting(
+	engine: WorkflowEngine,
+	repo: string,
+	view: WorkflowView,
+): WorkflowView {
+	const classify = engine
+		.claimEffects(repo, 100)
+		.find((effect) => effect.kind === "model.classify");
+	if (!classify) return view;
+	if (!classify.lease) throw new Error("missing classify lease");
+	const phase =
+		(classify.payload as { phase?: string }).phase === "apply"
+			? "apply"
+			: "plan";
+	return engine.dispatch(repo, {
+		type: "effect.result",
+		effectId: classify.id,
+		lease: classify.lease,
+		outcome: "complete",
+		data: { integration: "routing", phase, answers: {} },
+	}).view;
+}
 function handoff(
 	engine: WorkflowEngine,
 	root: string,
@@ -193,7 +218,7 @@ describe("planner-owned change identity (allow-planners-to-create-multiple-propo
 			const started = engine.start({
 				repo,
 				workflowId: "dup-guard",
-				definitionId: "openspec-full",
+				definitionId: "openspec",
 				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
 				routing: routing(),
 			});
@@ -221,7 +246,7 @@ describe("planner-owned change identity (allow-planners-to-create-multiple-propo
 				engine.start({
 					repo,
 					workflowId: "dup-guard",
-					definitionId: "openspec-full",
+					definitionId: "openspec",
 					metadata: {
 						branch: "main",
 						baseBranch: "main",
@@ -242,13 +267,17 @@ describe("planner-owned change identity (allow-planners-to-create-multiple-propo
 		try {
 			const repo = repository(path.join(tmp, "repo"));
 			const engine = new WorkflowEngine(registerBuiltins());
-			let view = engine.start({
+			let view = advanceRouting(
+				engine,
 				repo,
-				workflowId: "primary-recording",
-				definitionId: "openspec-full",
-				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
-				routing: routing(),
-			}).view;
+				engine.start({
+					repo,
+					workflowId: "primary-recording",
+					definitionId: "openspec",
+					metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
+					routing: routing(),
+				}).view,
+			);
 			const run = runForRole(view, "planner");
 			const token = launchToken(engine, repo, run.id);
 			const outputPath = engine.getRun(repo, run.id).outputPath;
@@ -275,12 +304,16 @@ describe("planner-owned change identity (allow-planners-to-create-multiple-propo
 			};
 			// No primary declared: completion rejected; nothing recorded or advanced.
 			expect(() => submit({ planned: true })).toThrow(/primary change id/);
-			expect(engine.status(repo, "primary-recording").revision).toBe(0);
+			expect(engine.status(repo, "primary-recording").revision).toBe(
+				view.revision,
+			);
 			// Primary points at a missing directory: rejected by the entry guard.
 			expect(() => submit({ primaryChangeId: "missing-dir" })).toThrow(
 				/planning artifact invalid: proposal.md/,
 			);
-			expect(engine.status(repo, "primary-recording").revision).toBe(0);
+			expect(engine.status(repo, "primary-recording").revision).toBe(
+				view.revision,
+			);
 			// Valid primary: recorded and the workflow advances once the
 			// plan-gated openspec.validate effect completes.
 			seedChange(repo, "primary");
@@ -315,13 +348,17 @@ describe("planner-owned change identity (allow-planners-to-create-multiple-propo
 		try {
 			const repo = repository(path.join(tmp, "repo"));
 			const engine = new WorkflowEngine(registerBuiltins());
-			let view = engine.start({
+			let view = advanceRouting(
+				engine,
 				repo,
-				workflowId: "env-guard",
-				definitionId: "openspec-full",
-				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
-				routing: routing(),
-			}).view;
+				engine.start({
+					repo,
+					workflowId: "env-guard",
+					definitionId: "openspec",
+					metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
+					routing: routing(),
+				}).view,
+			);
 			const registry = registerBuiltins();
 			const plannerRun = runForRole(view, "planner");
 			const plannerAssignment = effectRunnerTest.renderedAssignment(
@@ -339,12 +376,16 @@ describe("planner-owned change identity (allow-planners-to-create-multiple-propo
 			});
 			view = completeEffect(engine, repo, "openspec.validate");
 			expect(view.currentStep.id).toBe("core.plan-approval");
-			const after = engine.dispatch(repo, {
-				type: "developer.action",
-				workflowId: view.workflowId,
-				revision: view.revision,
-				actionId: "approve-plan",
-			}).view;
+			const after = advanceRouting(
+				engine,
+				repo,
+				engine.dispatch(repo, {
+					type: "developer.action",
+					workflowId: view.workflowId,
+					revision: view.revision,
+					actionId: "approve-plan",
+				}).view,
+			);
 			const workerRun = runForRole(after, "worker");
 			const workerAssignment = effectRunnerTest.renderedAssignment(
 				engine,
@@ -364,13 +405,17 @@ describe("planner-owned change identity (allow-planners-to-create-multiple-propo
 		try {
 			const repo = repository(path.join(tmp, "repo"));
 			const engine = new WorkflowEngine(registerBuiltins());
-			const view = engine.start({
+			const view = advanceRouting(
+				engine,
 				repo,
-				workflowId: "content-capture",
-				definitionId: "openspec-full",
-				metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
-				routing: routing(),
-			}).view;
+				engine.start({
+					repo,
+					workflowId: "content-capture",
+					definitionId: "openspec",
+					metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
+					routing: routing(),
+				}).view,
+			);
 			const registry = registerBuiltins();
 			const run = runForRole(view, "planner");
 			// Off by default: the bridges stay metadata-only without the opt-in.

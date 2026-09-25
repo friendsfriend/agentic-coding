@@ -42,8 +42,8 @@ agentic-coding manager   alias for home
 
 ```text
 start --repo PATH --workflow-id ID --mode worktree|checkout
-      [--workflow openspec-full|openspec-propose|openspec-apply|no-openspec|openspec-fusion-full|openspec-fusion-propose|wiki|research]
-      [--fusion-profiles NAME,NAME,...] [--task TEXT] [--ticket ID]
+      [--workflow openspec|openspec-propose|openspec-apply|no-openspec|openspec-fusion|openspec-fusion-propose|wiki|research]
+      [--task TEXT] [--ticket ID] [--preset NAME]
 status --repo PATH --workflow-id ID
 action ACTION_ID --repo PATH --workflow-id ID --revision N [--input JSON_OR_PATH]
 handoff --outcome complete|blocked|failed [--artifact PATH] [--message TEXT]
@@ -61,11 +61,12 @@ Legacy role/phase verbs are removed. No compatibility shim translates `apply`, `
 
 Built-ins register through public registry seam and pin exact `{id, version, digest}`:
 
-- `openspec-full`: plan → approval → implementation → triage → verification/fix → developer review → archive → wiki approval → delivery → completed
-- `openspec-apply`: validates pre-authored OpenSpec artifacts, then starts implementation; archive still precedes delivery
+- `openspec`: routes the `core.plan` pool, plans → approval → routes the apply pools → implementation → triage → verification/fix → developer review → archive → wiki approval → delivery → completed
+- `openspec-apply`: validates pre-authored OpenSpec artifacts, routes the apply pools, then starts implementation; archive still precedes delivery
 - `no-openspec`: requires non-empty task; excludes planning, OpenSpec verifier/checklist, and archive
-- `openspec-propose`: plans and validates an OpenSpec change, waits for plan approval, then holds in completed until explicitly closed; it never implements or creates a PR
-- `openspec-fusion-propose`: runs fusion planning and validation, waits for plan approval, then holds in completed until explicitly closed; it never implements or creates a PR
+- `openspec-propose`: routes the `core.plan` pool, plans and validates an OpenSpec change, waits for plan approval, then holds in completed until explicitly closed; it never implements or creates a PR
+- `openspec-fusion`: routes the `fusion.plan` roster and `fusion.consolidate` pool, consolidates to one plan, then approval → apply pools → implementation → … → completed
+- `openspec-fusion-propose`: routes the fusion pools, waits for plan approval, then holds in completed until explicitly closed; it never implements or creates a PR
 - `wiki`: requires a repository as read-only evidence, writes drafts only to the centralized wiki, and progresses through documentation → wiki approval → completed until explicitly closed; it never modifies source files or runs implementation, verification, archive, delivery, or pull-request stages
 - `research`: runs research, wiki, and wiki review phases
 

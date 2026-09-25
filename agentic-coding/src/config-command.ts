@@ -68,12 +68,16 @@ export async function runConfigCommand(
 		return 0;
 	}
 	if (rest.includes("--resume")) {
-		const published = resumeMigration(target);
+		const resumed = resumeMigration(target);
 		process.stdout.write(
-			published
-				? `Finished publishing ${published} file(s).\n`
+			resumed.published
+				? `Finished publishing ${resumed.published} file(s).\n`
 				: "No interrupted migration to resume.\n",
 		);
+		if (resumed.presetsRemoved > 0)
+			process.stdout.write(
+				`Removed ${resumed.presetsRemoved} presets; recreate them as model pools in Settings \u2192 Presets.\n`,
+			);
 		return 0;
 	}
 
@@ -99,5 +103,9 @@ export async function runConfigCommand(
 			? "Configuration is already migrated.\n"
 			: `Migrated ${result.applied} file(s)${result.backupDir ? `; protected backup at ${result.backupDir}` : ""}.\n`,
 	);
+	if (result.presetsRemoved > 0)
+		process.stdout.write(
+			`Removed ${result.presetsRemoved} presets; recreate them as model pools in Settings \u2192 Presets.\n`,
+		);
 	return 0;
 }

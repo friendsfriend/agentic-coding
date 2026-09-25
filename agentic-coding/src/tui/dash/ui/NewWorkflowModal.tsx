@@ -32,16 +32,14 @@ import {
 } from "../live.ts";
 
 /** Task-driven registry types: the wizard renders and submits the task step for
- * these, and `openspec-jev` runs the same plan-first graph as `openspec-full`.
- * Every other type (openspec-apply, openspec-jev-apply) selects an existing
- * OpenSpec change instead and keeps its task-free field set. The task itself
- * stays optional except where `canSubmit` requires it (wiki, research, quick,
- * no-openspec). */
+ * these, and `openspec` runs the classifier-routed plan-first graph. Every
+ * other type (`openspec-apply`) selects an existing OpenSpec change instead
+ * and keeps its task-free field set. The task itself stays optional except
+ * where `canSubmit` requires it (wiki, research, quick, no-openspec). */
 const TASK_TYPES = new Set([
-	"openspec-full",
-	"openspec-jev",
+	"openspec",
 	"quick",
-	"openspec-fusion-full",
+	"openspec-fusion",
 	"openspec-propose",
 	"openspec-fusion-propose",
 	"wiki",
@@ -84,7 +82,7 @@ export function NewWorkflowModal(props: {
 		workflowId: "",
 		mode: "",
 		workflowType:
-			props.context.kind === "independent" ? "research" : "openspec-full",
+			props.context.kind === "independent" ? "research" : "openspec",
 		preset: PRESET_CONFIG_DEFAULTS,
 	});
 	let currentInput: InputRenderable | undefined;

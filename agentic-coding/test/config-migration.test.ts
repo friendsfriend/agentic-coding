@@ -566,7 +566,10 @@ describe("interrupted migration recovery", () => {
 				expect(() =>
 					loadConfigWithProvenance({ repositoryIndependent: true }),
 				).toThrow(/migration .* is incomplete/);
-				expect(resumeMigration(f.target)).toBe(0);
+				expect(resumeMigration(f.target)).toEqual({
+					published: 0,
+					presetsRemoved: 0,
+				});
 				expect(
 					loadConfigWithProvenance({ repositoryIndependent: true }).config.ui
 						.herdr_sidebar,
@@ -867,5 +870,201 @@ describe("legacy root discovery", () => {
 			"/tmp/legacy",
 		);
 		expect(legacyEnvRoot({}, "/home/u")).toBe("/home/u/.config/devenv");
+	});
+});
+
+describe("preset hard-break migration (classifier-driven-model-pools)", () => {
+	const configWithPresets = `${JSON.stringify(
+		{
+			workflow: { max_verification_rounds: 6 },
+			agents: {
+				default_profile: "pi-a",
+				profiles: { "pi-a": { runtime: "pi", model: "a/b" } },
+				routes: { "core.plan": "pi-a" },
+				role_routes: { "core.implementation": { worker: "pi-a" } },
+				definition_defaults: { openspec: "pi-a" },
+				presets: {
+					"pi-a": { default_profile: "pi-a", easy: "pi-a" },
+					"use-default-model": { runtime: "pi" },
+				},
+			},
+		},
+		null,
+		2,
+	)}\n`;
+
+	test("strips stored presets while keeping every other agents field", () => {
+		const f = fixture();
+		try {
+			write(path.join(f.target, "config.json"), configWithPresets);
+			const plan = planMigration({
+				source: f.source,
+				target: f.target,
+				home: f.home,
+			});
+			expect(plan.presetsRemoved).toBe(2);
+			expect(plan.actions.map((action) => action.kind)).toEqual([
+				"strip-presets",
+			]);
+			expect(formatMigrationPlan(plan)).toContain(
+				"Removed 2 presets; recreate them as model pools in Settings",
+			);
+			const result = applyMigration(plan);
+			expect(result.presetsRemoved).toBe(2);
+			const agents = (
+				JSON.parse(
+					fs.readFileSync(path.join(f.target, "config.json"), "utf8"),
+				) as {
+					agents: Record<string, unknown>;
+				}
+			).agents;
+			expect(agents.presets).toBeUndefined();
+			expect(agents.default_profile).toBe("pi-a");
+			expect(agents.profiles).toEqual({
+				"pi-a": { runtime: "pi", model: "a/b" },
+			});
+			expect(agents.routes).toEqual({ "core.plan": "pi-a" });
+			expect(agents.role_routes).toEqual({
+				"core.implementation": { worker: "pi-a" },
+			});
+			expect(agents.definition_defaults).toEqual({ openspec: "pi-a" });
+		} finally {
+			fs.rmSync(f.dir, { recursive: true, force: true });
+		}
+	});
+
+	test("is idempotent after presets are stripped", () => {
+		const f = fixture();
+		try {
+			write(path.join(f.target, "config.json"), configWithPresets);
+			applyMigration(
+				planMigration({ source: f.source, target: f.target, home: f.home }),
+			);
+			const again = planMigration({
+				source: f.source,
+				target: f.target,
+				home: f.home,
+			});
+			expect(again.presetsRemoved).toBe(0);
+			expect(again.actions).toEqual([]);
+			expect(again.conflicts).toEqual([]);
+		} finally {
+			fs.rmSync(f.dir, { recursive: true, force: true });
+		}
+	});
+
+	test("strips presets from a pending legacy TOML conversion", () => {
+		const f = fixture();
+		try {
+			write(
+				path.join(f.target, "config.toml"),
+				`[agents]
+default_profile = "pi-a"
+
+[agents.profiles.pi-a]
+runtime = "pi"
+
+[agents.presets.old]
+default_profile = "pi-a"
+easy = "pi-a"
+`,
+			);
+			const plan = planMigration({
+				source: f.source,
+				target: f.target,
+				home: f.home,
+			});
+			expect(plan.presetsRemoved).toBe(1);
+			const convert = plan.actions.find(
+				(action) => action.kind === "convert-workflow",
+			);
+			expect(convert?.stripPresets).toBe(true);
+			applyMigration(plan);
+			const agents = (
+				JSON.parse(
+					fs.readFileSync(path.join(f.target, "config.json"), "utf8"),
+				) as {
+					agents: Record<string, unknown>;
+				}
+			).agents;
+			expect(agents.presets).toBeUndefined();
+			expect(agents.profiles).toEqual({ "pi-a": { runtime: "pi" } });
+		} finally {
+			fs.rmSync(f.dir, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("preset parser hard break", () => {
+	test("rejects removed flat category keys and names the provenance", async () => {
+		const { parseAgentsConfig } = await import("../src/workflow/profiles.ts");
+		expect(() =>
+			parseAgentsConfig(
+				{
+					profiles: { a: { runtime: "pi" } },
+					presets: { old: { easy: "a" } },
+				},
+				undefined,
+				"config.json",
+			),
+		).toThrow(/config\.json.*easy.*Settings → Presets/);
+	});
+
+	test("rejects a leftover core.verification role table", async () => {
+		const { parseAgentsConfig } = await import("../src/workflow/profiles.ts");
+		expect(() =>
+			parseAgentsConfig({
+				profiles: { a: { runtime: "pi" } },
+				presets: {
+					old: {
+						roles: { "core.verification": { "quality-verifier": "a" } },
+					},
+				},
+			}),
+		).toThrow(/roles\["core\.verification"\] was removed/);
+	});
+
+	test("rejects a custom preset without pools and names the provenance", async () => {
+		const { parseAgentsConfig } = await import("../src/workflow/profiles.ts");
+		expect(() =>
+			parseAgentsConfig(
+				{
+					profiles: { a: { runtime: "pi" } },
+					presets: { old: { default_profile: "a" } },
+				},
+				undefined,
+				"config.json",
+			),
+		).toThrow(/config\.json.*at least one model pool/);
+	});
+});
+
+describe("preset hard-break migration on a symlinked canonical config", () => {
+	test("a symlinked config.json carrying presets is a conflict, not a silent skip", () => {
+		const f = fixture();
+		try {
+			const real = path.join(f.dir, "real-config.json");
+			write(
+				real,
+				`${JSON.stringify({
+					agents: {
+						profiles: { a: { runtime: "pi" } },
+						presets: { old: { easy: "a" } },
+					},
+				})}\n`,
+			);
+			fs.symlinkSync(real, path.join(f.target, "config.json"));
+			const plan = planMigration({
+				source: f.source,
+				target: f.target,
+				home: f.home,
+			});
+			expect(plan.presetsRemoved).toBe(0);
+			expect(plan.conflicts.map((conflict) => conflict.kind)).toContain(
+				"symlink",
+			);
+		} finally {
+			fs.rmSync(f.dir, { recursive: true, force: true });
+		}
 	});
 });
