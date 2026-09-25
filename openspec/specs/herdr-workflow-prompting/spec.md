@@ -33,37 +33,6 @@ The workflow SHALL launch each new managed session and re-prompt each reused ses
 - **AND** engine SHALL NOT derive that identity from the per-run identifier
 - **AND** grouped triage/verifier roles SHALL keep the same identity for same role across rounds
 
-### Requirement: Triage has its own tab and verifiers share one tab
-The workflow SHALL run triage in its own tab labeled `triage` and SHALL group all verifier roles in a separate tab labeled `verification`, retaining one pane per role and never anchoring verifier pane geometry on the triage pane.
-
-#### Scenario: Triage creates its own tab
-- **WHEN** the triage run is launched
-- **THEN** workflow SHALL create a tab labeled `triage` and start triage in the returned root pane
-- **AND** record the tab ID as the triage tab
-
-#### Scenario: First verifier creates the verification tab
-- **WHEN** the first verifier role is launched in a round
-- **THEN** workflow SHALL create a tab labeled `verification` and start the verifier in the returned root pane
-- **AND** record the tab ID as the verification group tab
-
-#### Scenario: Additional verifier roles split the verification tab
-- **GIVEN** a live verification tab exists
-- **WHEN** another verifier role starts
-- **THEN** workflow SHALL split a live sibling verifier pane right and start the role in the returned shell pane
-- **AND** preserve sibling panes when replacing a stale grouped agent
-- **AND** SHALL NOT anchor verifier pane geometry on the triage pane
-
-#### Scenario: Closed triage or verification tab is recreated
-- **GIVEN** a recorded group tab and panes are no longer live
-- **WHEN** the next triage or verifier starts
-- **THEN** workflow SHALL create a new tab for that role's group instead of targeting a stale tab ID
-- **AND** SHALL reject any recorded group tab also owned by dashboard, git, worker, planner, recovery, or archive
-
-#### Scenario: Repair re-prompts without teardown
-- **WHEN** repair or failure cleanup expires a managed run and workflow later needs same step and role
-- **THEN** engine SHALL send its complete fresh assignment through `herdr agent prompt` to existing session
-- **AND** it SHALL NOT call agent stop or close that agent pane before workspace closure
-
 ### Requirement: Every role has a role-specific prompt
 When assignment interaction mode is `developer-dialogue`, the prompt SHALL permit visible discussion and blockers and SHALL identify the `developer_question` interface as the preferred way to resolve an unclear decision before implementation or verification proceeds. When assignment interaction mode is `silent`, the prompt SHALL require artifact-based handoff without chat summary, but the role SHALL still be able to use the authenticated question interface when the workflow exposes it. Every assignment SHALL include the workflow's available prior developer dialogue as explicitly untrusted decision context.
 
@@ -109,3 +78,46 @@ When assignment interaction mode is `developer-dialogue`, the prompt SHALL permi
 - **WHEN** a fusion planner or consolidation role proposes or reconciles implementation validation for an OpenSpec change
 - **THEN** the resulting plan SHALL preserve focused worker checks for changed behavior
 - **AND** it SHALL not add a complete-suite worker task that duplicates the workflow test-verifier run
+
+### Requirement: Triage has its own tab and each verifier role has its own tab
+The workflow SHALL run triage in its own tab labeled `triage` and SHALL give every verifier role its own tab labeled with that role's name and current run status glyph. Verifier roles SHALL NOT share a tab and SHALL NOT split a shared verifier pane into a grid; each verifier pane SHALL occupy the full tab height. Verifier pane geometry SHALL never anchor on the triage pane, and a verifier tab SHALL be reused across verification rounds and fix loops rather than duplicated.
+
+#### Scenario: Triage creates its own tab
+- **WHEN** the triage run is launched
+- **THEN** workflow SHALL create a tab labeled `triage` and start triage in the returned root pane
+- **AND** record the tab ID as the triage tab
+
+#### Scenario: Closed triage tab is recreated
+- **GIVEN** a recorded `triage` tab and its panes are no longer live
+- **WHEN** triage next starts
+- **THEN** workflow SHALL create a new `triage` tab instead of targeting the stale tab ID
+- **AND** SHALL reject any recorded agent tab also owned by dashboard, git, worker, planner, recovery, or archive
+
+#### Scenario: First verifier role creates its own tab
+- **WHEN** a verifier role is launched and no live agent resolves for it
+- **THEN** workflow SHALL create a tab labeled `<status glyph> <role>` and start the verifier in the returned root pane at full tab height
+- **AND** record the returned tab ID against that role
+
+#### Scenario: Additional verifier roles each get their own tab
+- **GIVEN** a live tab exists for one verifier role
+- **WHEN** another verifier role launches
+- **THEN** workflow SHALL create a separate tab labeled with the second role's name at full tab height
+- **AND** SHALL NOT split the first verifier's tab or place the second role in the first role's pane
+- **AND** SHALL NOT anchor verifier pane geometry on the triage pane
+
+#### Scenario: Verifier tab is reused across rounds
+- **GIVEN** a verifier role launched in an earlier verification round and its canonical agent is still live
+- **WHEN** the same role launches in a later verification round or fix loop
+- **THEN** workflow SHALL resolve the existing live agent by its stable identity and reuse that agent's pane and tab
+- **AND** SHALL NOT create a second tab for that role
+
+#### Scenario: Closed verifier tab is recreated
+- **GIVEN** a recorded verifier role tab and its panes are no longer live
+- **WHEN** that role next starts
+- **THEN** workflow SHALL create a new tab for that role instead of targeting the stale tab ID
+- **AND** SHALL reject any recorded agent tab also owned by dashboard, git, worker, planner, recovery, or archive
+
+#### Scenario: Repair re-prompts without teardown
+- **WHEN** repair or failure cleanup expires a managed run and workflow later needs same step and role
+- **THEN** engine SHALL send its complete fresh assignment through `herdr agent prompt` to existing session
+- **AND** it SHALL NOT call agent stop or close that agent pane before workspace closure

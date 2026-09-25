@@ -22,6 +22,7 @@ import {
 	effectRunnerTest,
 } from "../src/workflow/effect-runner.ts";
 import { QUESTION_WAIT_MS, WorkflowEngine } from "../src/workflow/runtime.ts";
+import type { StepBehavior } from "../src/workflow/steps/types.ts";
 
 const openspecFullDigest = registerBuiltins().definition(
 	"openspec-full",
@@ -62,6 +63,24 @@ function stubHerdr() {
 		},
 	};
 }
+
+// A step behavior with a shared constant group and no `groupByRole`. It drives
+// the generic grid-split allocation path that verifier roles took before
+// per-role tabs, so that path stays covered after the built-in verifiers moved
+// to one tab per role.
+const sharedGroupBehavior: StepBehavior = {
+	roundScoped: true,
+	paneGroup: "verification",
+};
+const sharedGroupDefinition = {
+	id: "synthetic-shared",
+	version: 1,
+	digest: "synthetic-shared",
+};
+const sharedGroupRegistry = {
+	definition: () => sharedGroupDefinition,
+	stepForDefinition: () => ({ behavior: sharedGroupBehavior }),
+};
 
 describe("breaking workflow CLI surface", () => {
 	test("exports only typed lifecycle commands", () => {
@@ -536,7 +555,7 @@ describe("breaking workflow CLI surface", () => {
 		expect(created?.[created.indexOf("--label") + 1]).toBe("○ worker");
 	});
 
-	test("verifier runs reuse a live canonical-name pane before creating a tab", async () => {
+	test("verifier re-entry reuses the live canonical-name pane and its tab without creating a tab", async () => {
 		const snapshot = {
 			workflowId: "change",
 			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
@@ -571,7 +590,11 @@ describe("breaking workflow CLI surface", () => {
 				if (args[0] === "agent" && args[1] === "get") {
 					if (args[2] === canonical)
 						return {
-							agent: { pane_id: "verifier-live", agent_status: "working" },
+							agent: {
+								pane_id: "verifier-live",
+								tab_id: "verifier-tab",
+								agent_status: "working",
+							},
 						};
 					throw new Error(`not found: ${args[2]}`);
 				}
@@ -581,9 +604,12 @@ describe("breaking workflow CLI surface", () => {
 			},
 		};
 
+		// Canonical identity ignores attempt/round, so a later verification round
+		// or fix loop resolves this same live agent and its tab.
 		expect(await paneForRunFactory(fakeEngine, "/repo", herdr)(run.id)).toEqual(
 			{
 				paneId: "verifier-live",
+				tabId: "verifier-tab",
 				owned: false,
 			},
 		);
@@ -706,7 +732,8 @@ describe("breaking workflow CLI surface", () => {
 		};
 
 		// The triage agent is live and, before pane groups, served as the split
-		// anchor for every verifier. A verifier now owns a separate tab instead.
+		// anchor for every verifier. A verifier now owns a separate role tab
+		// instead, and triage is excluded from its round.
 		expect(
 			await paneForRunFactory(fakeEngine, "/repo", herdr)(verifier.id),
 		).toEqual({ paneId: "verif-pane", tabId: "verif-tab", owned: true });
@@ -716,10 +743,12 @@ describe("breaking workflow CLI surface", () => {
 		const created = calls.find(
 			(args) => args[0] === "tab" && args[1] === "create",
 		);
-		expect(created?.[created.indexOf("--label") + 1]).toBe("○ verification");
+		expect(created?.[created.indexOf("--label") + 1]).toBe(
+			"○ quality-verifier",
+		);
 	});
 
-	test("verification layout anchors on siblings confirmed live by canonical name, not stored pane ids", async () => {
+	test("each verifier role launches into its own tab and never splits a live sibling's pane", async () => {
 		const snapshot = {
 			workflowId: "change",
 			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
@@ -728,6 +757,103 @@ describe("breaking workflow CLI surface", () => {
 				version: 1,
 				digest: openspecFullDigest,
 			},
+		};
+		const qv = {
+			id: "qv",
+			workflowId: "wf",
+			stepId: "core.verification",
+			role: "quality-verifier",
+			attempt: 1,
+			status: "pending",
+		};
+		const sv = {
+			id: "sv",
+			workflowId: "wf",
+			stepId: "core.verification",
+			role: "security-verifier",
+			attempt: 1,
+			status: "pending",
+		};
+		const runs = [qv, sv];
+		const fakeEngine = {
+			getRun: (_repo: string, id: string) =>
+				runs.find((item) => item.id === id),
+			getSnapshot: () => snapshot,
+			status: () => ({ runs }),
+		} as unknown as WorkflowEngine;
+		const qvCanonical = effectRunnerTest.canonicalAgentName(
+			"change",
+			"openspec-full",
+			{ stepId: qv.stepId, role: qv.role, id: qv.id },
+		);
+		const calls: string[][] = [];
+		let created = 0;
+		// The first role owns `pane-1` before the second launches. Its canonical
+		// agent is then live and would be a tempting split anchor if the sibling
+		// filter compared candidates against the launching role instead of each
+		// candidate's own role: the second role would reuse-and-split the first's
+		// tab, which is exactly the shared-grid bug this change removes.
+		let qvLive = false;
+		const herdr = {
+			call(...args: string[]) {
+				calls.push(args);
+				if (args[0] === "agent" && args[1] === "get") {
+					if (qvLive && args[2] === qvCanonical)
+						return {
+							agent: {
+								pane_id: "pane-1",
+								tab_id: "tab-1",
+								agent_status: "working",
+							},
+						};
+					throw new Error(`not found: ${args[2]}`);
+				}
+				if (args[0] === "pane" && args[1] === "split")
+					return { pane: { pane_id: "split-pane", tab_id: "tab-split" } };
+				if (args[0] === "tab" && args[1] === "create") {
+					created += 1;
+					return {
+						root_pane: {
+							pane_id: `pane-${created}`,
+							tab_id: `tab-${created}`,
+						},
+					};
+				}
+				return {};
+			},
+		};
+
+		expect(await paneForRunFactory(fakeEngine, "/repo", herdr)(qv.id)).toEqual({
+			paneId: "pane-1",
+			tabId: "tab-1",
+			owned: true,
+		});
+		qvLive = true;
+		expect(await paneForRunFactory(fakeEngine, "/repo", herdr)(sv.id)).toEqual({
+			paneId: "pane-2",
+			tabId: "tab-2",
+			owned: true,
+		});
+		expect(
+			calls.some((args) => args[0] === "pane" && args[1] === "split"),
+		).toBe(false);
+		expect(
+			calls.some(
+				(args) =>
+					args[0] === "pane" && args[1] === "split" && args.includes("pane-1"),
+			),
+		).toBe(false);
+		const labels = calls
+			.filter((args) => args[0] === "tab" && args[1] === "create")
+			.map((args) => args[args.indexOf("--label") + 1]);
+		expect(labels).toEqual(["○ quality-verifier", "○ security-verifier"]);
+	});
+
+	test("shared-group layout anchors on siblings confirmed live by canonical name, not stored pane ids", async () => {
+		const snapshot = {
+			workflowId: "change",
+			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
+			definition: sharedGroupDefinition,
 		};
 		const qv = {
 			id: "qv",
@@ -744,17 +870,22 @@ describe("breaking workflow CLI surface", () => {
 			role: "security-verifier",
 			attempt: 1,
 			status: "working",
+			// A stale stored handle: the resolver must probe it, find it dead, and
+			// fall through to the live canonical-name pane.
+			handle: { paneId: "dead-pane" },
 		};
 		const fakeEngine = {
 			getRun: (_repo: string, id: string) =>
 				[qv, sibling].find((r) => r.id === id),
 			getSnapshot: () => snapshot,
 			status: () => ({ runs: [qv, sibling] }),
+			registry: sharedGroupRegistry,
 		} as unknown as WorkflowEngine;
 		const siblingCanonical = effectRunnerTest.canonicalAgentName(
 			"change",
-			"openspec-full",
+			"synthetic-shared",
 			{ stepId: sibling.stepId, role: sibling.role, id: sibling.id },
+			{ behavior: sharedGroupBehavior },
 		);
 		const calls: string[][] = [];
 		const herdr = {
@@ -777,10 +908,17 @@ describe("breaking workflow CLI surface", () => {
 			},
 		};
 		const pane = await paneForRunFactory(fakeEngine, "/repo", herdr)(qv.id);
-		// The sibling had no persisted handle: the split targets its live pane
-		// found via the canonical name instead of falling through to tab creation.
+		// The sibling's stale stored handle is probed and discarded, so the split
+		// anchors on the pane found via the canonical name instead of the dead
+		// pane or falling through to tab creation.
+		expect(calls).toContainEqual(["agent", "get", "dead-pane"]);
 		expect(
-			calls.some((args) => args[0] === "pane" && args.includes("dead-pane")),
+			calls.some(
+				(args) =>
+					args[0] === "pane" &&
+					args[1] === "split" &&
+					args.includes("dead-pane"),
+			),
 		).toBe(false);
 		expect(calls).toContainEqual([
 			"pane",
@@ -797,15 +935,11 @@ describe("breaking workflow CLI surface", () => {
 			owned: true,
 		});
 	});
-	test("third-run pane reuse skips an occupied bottom pane and picks the idle one instead", async () => {
+	test("shared-group third-run pane reuse skips an occupied bottom pane and picks the idle one instead", async () => {
 		const snapshot = {
 			workflowId: "change",
 			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
-			definition: {
-				id: "openspec-full",
-				version: 1,
-				digest: openspecFullDigest,
-			},
+			definition: sharedGroupDefinition,
 		};
 		const first = {
 			id: "qv",
@@ -836,11 +970,13 @@ describe("breaking workflow CLI surface", () => {
 				[first, second, third].find((r) => r.id === id),
 			getSnapshot: () => snapshot,
 			status: () => ({ runs: [first, second, third] }),
+			registry: sharedGroupRegistry,
 		} as unknown as WorkflowEngine;
 		const firstCanonical = effectRunnerTest.canonicalAgentName(
 			"change",
-			"openspec-full",
+			"synthetic-shared",
 			{ stepId: first.stepId, role: first.role, id: first.id },
+			{ behavior: sharedGroupBehavior },
 		);
 		const calls: string[][] = [];
 		const herdr = {
@@ -877,15 +1013,11 @@ describe("breaking workflow CLI surface", () => {
 		const pane = await paneForRunFactory(fakeEngine, "/repo", herdr)(third.id);
 		expect(pane).toEqual({ paneId: "idle", owned: false });
 	});
-	test("third-run pane reuse spawns a fresh split when every bottom-pane candidate is occupied", async () => {
+	test("shared-group third-run pane reuse spawns a fresh split when every bottom-pane candidate is occupied", async () => {
 		const snapshot = {
 			workflowId: "change",
 			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
-			definition: {
-				id: "openspec-full",
-				version: 1,
-				digest: openspecFullDigest,
-			},
+			definition: sharedGroupDefinition,
 		};
 		const first = {
 			id: "qv",
@@ -916,11 +1048,13 @@ describe("breaking workflow CLI surface", () => {
 				[first, second, third].find((r) => r.id === id),
 			getSnapshot: () => snapshot,
 			status: () => ({ runs: [first, second, third] }),
+			registry: sharedGroupRegistry,
 		} as unknown as WorkflowEngine;
 		const firstCanonical = effectRunnerTest.canonicalAgentName(
 			"change",
-			"openspec-full",
+			"synthetic-shared",
 			{ stepId: first.stepId, role: first.role, id: first.id },
+			{ behavior: sharedGroupBehavior },
 		);
 		const calls: string[][] = [];
 		const herdr = {

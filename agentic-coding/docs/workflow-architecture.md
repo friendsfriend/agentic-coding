@@ -150,9 +150,11 @@ performs the write.
 - `handoffNote` — replaces the rendered assignment's generic handoff guidance.
 - Declared flags: `carriesOutputContext`, `acceptsCommentsContext`,
   `producesWikiVerificationContext` (context carry-over opt-ins, see below),
-  `roundScoped` (triage/verification pane and agent-name grouping) and
-  `paneGroup` (which tab a round-scoped step splits into; triage and
-  verification are separate groups).
+  `roundScoped` (triage/verification agent-name grouping), `groupByRole`
+  (resolve a round-scoped step's layout group to the run's role, so each
+  verifier role owns its own full-height tab) and `paneGroup` (which tab a
+  round-scoped step splits into when `groupByRole` is unset; triage is its own
+  group).
 
 There are two intentional role-resolution moments:
 

@@ -125,7 +125,7 @@ export const verificationBehaviors: Readonly<Record<string, StepBehavior>> = {
 			attempt: (snapshot.loopCounts["core.verification:round"] ?? 0) + 1,
 		}),
 		roundScoped: true,
-		// Triage owns its own tab; verifiers group separately (pane.ts).
+		// Triage owns its own constant group; verifiers group per role (pane.ts).
 		paneGroup: "triage",
 	},
 	"core.verification": {
@@ -153,7 +153,10 @@ export const verificationBehaviors: Readonly<Record<string, StepBehavior>> = {
 			return result;
 		},
 		carriesOutputContext: true,
+		// Round-scoped naming keeps each verifier's canonical identity stable
+		// across rounds; groupByRole gives every verifier role its own tab.
 		roundScoped: true,
+		groupByRole: true,
 		paneGroup: "verification",
 	},
 };

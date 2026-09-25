@@ -1,6 +1,7 @@
 // Pane allocation for a launched run: reuse-before-spawn for persistent
-// roles, split geometry for grouped triage/verification rounds. Moved
-// verbatim out of cli.ts (split-workflow-god-modules).
+// roles, split geometry for a shared constant group (triage), and one tab per
+// role for `groupByRole` steps (verification). Moved verbatim out of cli.ts
+// (split-workflow-god-modules).
 import type { HerdrPort } from "../adapters.ts";
 import { isPaneLiveAsync, resolveLiveAgentAsync } from "../effect-runner.ts";
 import type { WorkflowEngine } from "../runtime.ts";
@@ -9,10 +10,16 @@ import { agentTabLabel } from "../tab-status.ts";
 import { registry as defaultRegistry } from "./registry.ts";
 
 /** Tab/pane group a round-scoped step splits into. Runs share a tab only when
- * their group matches; the default keeps legacy round-scoped steps grouped as
- * `verification`. Returns undefined for ungrouped (persistent-role) steps. */
-function paneGroup(behavior: StepBehavior | undefined): string | undefined {
+ * their group matches: `groupByRole` resolves the launching run's own role so
+ * each verifier role owns its own tab, while the default keeps legacy
+ * round-scoped steps grouped as `verification`. Returns undefined for
+ * ungrouped (persistent-role) steps. */
+function paneGroup(
+	behavior: StepBehavior | undefined,
+	role: string,
+): string | undefined {
 	if (behavior?.roundScoped !== true) return undefined;
+	if (behavior.groupByRole === true) return role;
 	return behavior.paneGroup ?? "verification";
 }
 
@@ -28,9 +35,9 @@ export function verificationPosition(
  * Allocates the pane a run launches into. Reuse-before-spawn is authoritative:
  * persistent roles adopt the live agent's resolved pane and a new tab is
  * created only when no live agent resolves; grouped rounds keep their split
- * geometry but only among runs in the same pane group (triage and verification
- * each own a group), anchoring on siblings confirmed live through the
- * canonical-name resolver instead of raw stored pane ids.
+ * geometry but only among runs in the same pane group (triage owns a constant
+ * group, verifier roles each own their own), anchoring on siblings confirmed
+ * live through the canonical-name resolver instead of raw stored pane ids.
  */
 export function paneForRunFactory(
 	workflowEngine: WorkflowEngine,
@@ -54,7 +61,7 @@ export function paneForRunFactory(
 			definition,
 			run.stepId,
 		).behavior;
-		const group = paneGroup(behavior);
+		const group = paneGroup(behavior, run.role);
 		const roundScoped = group !== undefined;
 		// Adopt any live agent's pane instead of spawning a duplicate; fall
 		// through to geometry or tab creation only when no agent resolves.
@@ -80,6 +87,7 @@ export function paneForRunFactory(
 					(item) =>
 						paneGroup(
 							stepRegistry.stepForDefinition(definition, item.stepId).behavior,
+							item.role,
 						) === group &&
 						item.attempt === run.attempt &&
 						!["expired", "failed"].includes(item.status),

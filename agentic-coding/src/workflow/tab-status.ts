@@ -2,9 +2,10 @@
 //
 // Every agent role tab carries exactly one leading status glyph so the tab
 // width never changes as the run progresses: open (`○`), active (`●`),
-// done (`✓`), blocked (`■`), failed (`✗`), expired (`·`). Grouped roles
-// (verification) share one tab, so multiple runs on the same tab collapse to
-// the most urgent status before the label is rendered.
+// done (`✓`), blocked (`■`), failed (`✗`), expired (`·`). Each verifier
+// role owns its own tab, so a verifier tab shows only that role's status;
+// when several roles do share one tab, their runs collapse to the most urgent
+// status before the label is rendered.
 import type { RunStatus } from "../contracts/workflow.ts";
 
 /** A status plus the single-cell glyph rendered ahead of the tab name. */
