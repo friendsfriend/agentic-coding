@@ -866,12 +866,6 @@ export function App(props: {
 			props.keymap.setData("modal.active", "verdict");
 			return;
 		}
-		if (item.kind === "workflow" && item.value === "research-follow-up") {
-			setUserActionOpen(false);
-			setCompletedPicker(true);
-			props.keymap.setData("modal.active", "completed-actions");
-			return;
-		}
 		setUserActionOpen(false);
 		props.keymap.setData("modal.active", "none");
 		setBusy(true);

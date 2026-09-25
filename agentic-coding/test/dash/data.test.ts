@@ -795,7 +795,6 @@ test("required user actions never dispatch an id the engine did not report", () 
 		["core.plan-approval", undefined, PLAN_APPROVAL_ACTIONS],
 		["core.developer-review", undefined, DEVELOPER_REVIEW_ACTIONS],
 		["core.wiki-approval", undefined, WIKI_APPROVAL_ACTIONS],
-		["core.research", "research", RESEARCH_ACTIONS],
 		["core.completed", "openspec-full", COMPLETED_WITH_PR_ACTIONS],
 		["core.completed", "wiki-comments", COMPLETED_CLOSE_ONLY_ACTIONS],
 	];
@@ -853,9 +852,9 @@ test("required user actions fall back to the legacy phase-derived set only when 
 	expect(requiredUserActionFor("developer-review")?.key).toBe(
 		"developer-review",
 	);
-	expect(
-		requiredUserActionFor("research")?.items.map((item) => item.label),
-	).toEqual(["Ask researcher", "Close research", "Not now"]);
+	// Active research has no dashboard user action (and so no modal), in the
+	// legacy fallback as well: its actions stay available through the picker.
+	expect(requiredUserActionFor("research")).toBeUndefined();
 	// close-clean is removed everywhere (design D2), including this fallback.
 	expect(
 		requiredUserActionFor("completed")?.items.map((item) => item.label),
@@ -900,39 +899,25 @@ test("required user actions for research wiki-approval use the standard trigger-
 	).toBeUndefined();
 });
 
-test("required user actions for active research exclude any developer wiki-drafting trigger", () => {
-	const action = requiredUserActionFor(
-		"core.research",
-		false,
-		[],
-		"research",
-		RESEARCH_ACTIONS,
-	);
-	expect(action?.key).toBe("research");
-	expect(action?.items.map((item) => item.label)).toEqual([
-		"Ask researcher",
-		"Close research",
-		"Not now",
-	]);
+test("active research renders no required user action", () => {
+	// The research-phase modal is gone: even when the engine reports research
+	// developer actions, the dashboard does not surface a blocking user action,
+	// so nothing auto-opens. Follow-up/close stay reachable via the action
+	// picker, which reads `availableActions` independently of this projection.
 	expect(
-		action?.items.some(
-			(item) => "value" in item && item.value === "request-research-wiki",
+		requiredUserActionFor(
+			"core.research",
+			false,
+			[],
+			"research",
+			RESEARCH_ACTIONS,
 		),
-	).toBe(false);
+	).toBeUndefined();
 
-	// Legacy phase naming resolves to the same stable action set.
-	const legacyAction = requiredUserActionFor(
-		"research",
-		false,
-		[],
-		"research",
-		RESEARCH_ACTIONS,
-	);
-	expect(legacyAction?.items.map((item) => item.label)).toEqual([
-		"Ask researcher",
-		"Close research",
-		"Not now",
-	]);
+	// Legacy phase naming behaves the same way.
+	expect(
+		requiredUserActionFor("research", false, [], "research", RESEARCH_ACTIONS),
+	).toBeUndefined();
 });
 
 test("startArgs maps quick workflow type to no-openspec and preserves task text", () => {

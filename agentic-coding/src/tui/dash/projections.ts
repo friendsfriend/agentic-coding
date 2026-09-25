@@ -90,32 +90,6 @@ export function requiredUserActionFor(
 			items: [],
 		};
 	}
-	if (phase === "research" || phase === "core.research") {
-		if (!hasAction("close-research")) return undefined;
-		return {
-			key: "research",
-			title: "Research active",
-			prompt:
-				"Ask follow-ups in the researcher session, or close research when finished. The researcher itself starts wiki drafting when the user explicitly requests it.",
-			items: [
-				...(hasAction("research-follow-up")
-					? [
-							{
-								label: "Ask researcher",
-								kind: "workflow" as const,
-								value: "research-follow-up",
-							},
-						]
-					: []),
-				{
-					label: "Close research",
-					kind: "workflow",
-					value: "close-research",
-				},
-				later,
-			],
-		};
-	}
 	if (phase === "completed" || phase === "core.completed") {
 		if (actions !== undefined) {
 			// Availability comes entirely from the engine's action list: whatever
