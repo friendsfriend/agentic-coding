@@ -31,10 +31,15 @@ import {
 	PUBLIC_WORKFLOW_CATALOG,
 } from "../live.ts";
 
-/** Types whose task is a required field; everything else (openspec-apply)
- * selects an existing change instead. */
+/** Task-driven registry types: the wizard renders and submits the task step for
+ * these, and `openspec-jev` runs the same plan-first graph as `openspec-full`.
+ * Every other type (openspec-apply, openspec-jev-apply) selects an existing
+ * OpenSpec change instead and keeps its task-free field set. The task itself
+ * stays optional except where `canSubmit` requires it (wiki, research, quick,
+ * no-openspec). */
 const TASK_TYPES = new Set([
 	"openspec-full",
+	"openspec-jev",
 	"quick",
 	"openspec-fusion-full",
 	"openspec-propose",

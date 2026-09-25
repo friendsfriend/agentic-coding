@@ -2,7 +2,9 @@
 
 ## Purpose
 TBD - created by archiving change launch-workflows-from-project-and-wiki-pages. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Repository launch starts from its resource page
 Application and library pages SHALL offer Start workflow using their configured stable project identity. Repository-related workflows, including research and wiki workflows, SHALL start there rather than from Wiki or a global workflow picker. Forms SHALL retain supported task/type/preset/checkout options without repository, custom-path or independent-target selectors. The backend SHALL revalidate project availability, capability and authorization at submission.
 
@@ -44,3 +46,19 @@ The full application SHALL NOT expose a Workflows destination, global or project
 - **THEN** the full application SHALL NOT create a recent/history/reopen entry for it
 - **AND** closure and durable cleanup SHALL continue to follow existing backend semantics rather than UI navigation
 
+### Requirement: Task-driven workflow types expose the task input
+The contextual creation form SHALL render and submit a task input for every
+registry workflow type whose planner is steered by a user task, including
+`openspec-jev`. The form SHALL NOT silently omit the task step for a
+task-driven type. Workflow types that select an existing OpenSpec change
+instead of accepting a task SHALL keep their current task-free field set, and
+the checkout behavior of each type SHALL NOT change.
+
+#### Scenario: JEV workflow offers and submits a task
+- **WHEN** the user selects the `openspec-jev` workflow type in the new-workflow form
+- **THEN** the wizard SHALL present a task input step before the checkout mode step
+- **AND** the submitted launch input SHALL carry the entered task text with workflow type `openspec-jev`
+
+#### Scenario: Existing-change workflows stay task-free
+- **WHEN** the user selects `openspec-apply` in the new-workflow form
+- **THEN** the wizard SHALL continue to omit the task step and submit the launch input without a task

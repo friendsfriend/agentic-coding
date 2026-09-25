@@ -247,6 +247,63 @@ test("openspec-apply omits the task step and submits no task", async () => {
 	}
 });
 
+test("openspec-jev renders the task step before checkout mode and submits the task", async () => {
+	let handler: ((event: KeyEvent) => boolean) | undefined;
+	const completed: NewWorkflowInput[] = [];
+	const t = await testRender(
+		() => (
+			<NewWorkflowModal
+				context={PROJECT}
+				onKeyReady={(h) => {
+					handler = h;
+				}}
+				onCancel={() => {}}
+				onComplete={async (input) => {
+					completed.push(input);
+				}}
+			/>
+		),
+		{ width: 160, height: 30 },
+	);
+	await t.flush();
+	handler?.(key("j")); // standard -> openspec-apply
+	handler?.(key("j")); // openspec-apply -> openspec-jev
+	handler?.(key("enter")); // select openspec-jev
+	await t.flush();
+	// Task-driven fields: preset -> ticket -> workflow id -> task -> mode.
+	handler?.(key("enter")); // preset: (config defaults)
+	t.mockInput.pressEnter(); // ticket: optional
+	t.mockInput.pressEnter(); // workflow id
+	await t.flush();
+	// The task step is current: the untruncated field label is only rendered
+	// here, and the checkout-mode choices do not exist yet.
+	const taskFrame = t.captureCharFrame();
+	expect(taskFrame).toContain(
+		"Task required for wiki, research, and no OpenSpec",
+	);
+	expect(taskFrame).not.toContain("worktree");
+	for (const character of "Classify the JEV plan")
+		t.mockInput.pressKey(character);
+	await t.flush();
+	t.mockInput.pressEnter({ meta: true }); // task -> mode
+	await t.flush();
+	// The checkout-mode step follows the task step.
+	const modeFrame = t.captureCharFrame();
+	expect(modeFrame).toContain("Checkout mode");
+	expect(modeFrame).toContain("worktree");
+	handler?.(key("enter")); // mode: worktree -> confirm
+	await t.flush();
+	expect(t.captureCharFrame()).toContain("Confirm workflow");
+	handler?.(key("return")); // create workflow
+	await t.flush();
+	expect(completed).toHaveLength(1);
+	expect(completed[0]).toMatchObject({
+		workflowType: "openspec-jev",
+		task: "Classify the JEV plan",
+	});
+	t.renderer.destroy();
+});
+
 test("selecting openspec-fusion-full submits workflowType openspec-fusion-full", async () => {
 	let handler: ((event: KeyEvent) => boolean) | undefined;
 	const completed: NewWorkflowInput[] = [];
