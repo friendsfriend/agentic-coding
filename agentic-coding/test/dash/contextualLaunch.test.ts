@@ -66,6 +66,8 @@ test("the registry catalog is the single workflow-type authority", () => {
 	expect(PUBLIC_WORKFLOW_CATALOG.map((entry) => entry.id)).toEqual([
 		"openspec-full",
 		"openspec-apply",
+		"openspec-jev",
+		"openspec-jev-apply",
 		"no-openspec",
 		"openspec-fusion-full",
 		"openspec-propose",

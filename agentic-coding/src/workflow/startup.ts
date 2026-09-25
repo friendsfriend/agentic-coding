@@ -113,7 +113,7 @@ export function validateStart(
 	}
 	if (!fs.existsSync(path.join(repo, "openspec", "config.yaml")))
 		throw new Error("OpenSpec project required for this workflow");
-	if (workflow === "openspec-apply") {
+	if (workflow === "openspec-apply" || workflow === "openspec-jev-apply") {
 		const root = path.join(repo, "openspec", "changes", workflowId);
 		for (const file of ["proposal.md", "design.md", "tasks.md"])
 			if (

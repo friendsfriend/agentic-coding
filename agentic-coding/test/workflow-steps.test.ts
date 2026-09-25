@@ -44,6 +44,8 @@ const STEP_DIGESTS: Readonly<Record<string, string>> = {
 		"6971f0f3c96848ce355c2bd1e94a126404ddc48de78325f4e8918e046eab84eb",
 	"core.implementation":
 		"c6a0a68dae6d07c1df1275c40b19e0b9033bc545d82394813933cbc3607f1f56",
+	"core.model-selection":
+		"46277354fd87204d10aef9b082ce49983f1bbd9c8e04c808e4110160e63dc306",
 	"core.plan":
 		"580f709daabc429c0242a9c42cfafd5e877662f422c9995ab5e4528df1a098fd",
 	"core.plan-approval":
@@ -262,6 +264,84 @@ const STEP_SET_15: readonly string[] = [
 	"core.completed",
 	"core.closed",
 ];
+const STEP_SET_16: readonly string[] = [
+	"core.plan",
+	"core.plan-approval",
+	"core.model-selection",
+	"core.implementation",
+	"core.triage",
+	"core.verification",
+	"core.developer-review",
+	"core.archive",
+	"core.delivery",
+	"core.completed",
+	"core.closed",
+];
+const STEP_SET_17: readonly string[] = [
+	"core.model-selection",
+	"core.implementation",
+	"core.triage",
+	"core.verification",
+	"core.developer-review",
+	"core.archive",
+	"core.delivery",
+	"core.completed",
+	"core.closed",
+];
+const STEP_SET_18: readonly string[] = [
+	"core.plan",
+	"core.plan-approval",
+	"core.model-selection",
+	"core.implementation",
+	"core.triage",
+	"core.verification",
+	"core.developer-review",
+	"core.wiki",
+	"core.wiki-approval",
+	"core.archive",
+	"core.delivery",
+	"core.completed",
+	"core.closed",
+];
+const STEP_SET_19: readonly string[] = [
+	"core.model-selection",
+	"core.implementation",
+	"core.triage",
+	"core.verification",
+	"core.developer-review",
+	"core.wiki",
+	"core.wiki-approval",
+	"core.archive",
+	"core.delivery",
+	"core.completed",
+	"core.closed",
+];
+const STEP_SET_20: readonly string[] = [
+	"core.plan",
+	"core.plan-approval",
+	"core.model-selection",
+	"core.implementation",
+	"core.triage",
+	"core.verification",
+	"core.developer-review",
+	"core.archive",
+	"core.wiki-approval",
+	"core.delivery",
+	"core.completed",
+	"core.closed",
+];
+const STEP_SET_21: readonly string[] = [
+	"core.model-selection",
+	"core.implementation",
+	"core.triage",
+	"core.verification",
+	"core.developer-review",
+	"core.archive",
+	"core.wiki-approval",
+	"core.delivery",
+	"core.completed",
+	"core.closed",
+];
 // openspec-fusion-full v1000
 
 /** Every historical definition: identity, version, definition digest, and the
@@ -290,6 +370,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 21,
 		digest: "921cae048064a9963a07c60f0a17bded9c7b3081a1b80b3fe69ef1677be7b0ea",
 		steps: STEP_SET_2,
+	},
+	{
+		id: "openspec-jev",
+		version: 21,
+		digest: "69cc5293437592a1c7d944efd7c765956300edeade477275b2d06574519e5dc7",
+		steps: STEP_SET_16,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 21,
+		digest: "25f2b8c553d635a8d0d844c9ac7562ae20bf78eb143dd10e2daaf47e4c2a5f7d",
+		steps: STEP_SET_17,
 	},
 	{
 		id: "no-openspec",
@@ -326,6 +418,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 101,
 		digest: "efc5d6e31c623478b5619f86da4714669f6531c625b2e84c10b21129f53531cc",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 101,
+		digest: "8f5cc979079c9654e9292e62ad92a2cc890534ab9771a7757b48c83417484831",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 101,
+		digest: "6e2d49d14f14e726bb857bb442b56608545b42156f818274418ea8f726ec51dd",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -382,6 +486,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_2,
 	},
 	{
+		id: "openspec-jev",
+		version: 2,
+		digest: "788d107bf87e57719dfb6c6ca76fd214d67350c87b52851f7a4353ec0543c08e",
+		steps: STEP_SET_16,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 2,
+		digest: "5d79de90b878ffa11b56b583909148cf852d10580f9ee73ca1c66fa3955f33a7",
+		steps: STEP_SET_17,
+	},
+	{
 		id: "no-openspec",
 		version: 2,
 		digest: "3a2a6f579d9e5922c45d0880a1fc76159365a786e6c6065e746493388794ae98",
@@ -416,6 +532,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 102,
 		digest: "59c6623a49915e41599a00ec6efbf9f6c0ea81ebbbc60dd3bf9413b4e957a1a8",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 102,
+		digest: "62f9b1289eeb4dc1be40fda4f01b3ef5965316017d8df10db16a83f7a82d35b6",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 102,
+		digest: "fdf599a38d7693801706bbf0da37b5ce2bb990c56527bf9875a947813fd0dc78",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -472,6 +600,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_2,
 	},
 	{
+		id: "openspec-jev",
+		version: 3,
+		digest: "ab2529d5803a611bda97d32c443361c1ea592cac52e97790ee2963bb21bd9863",
+		steps: STEP_SET_16,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 3,
+		digest: "f3cd140348971efa309b7eb199d260d1fe89cbbc0ad25035d9216af8e49a677e",
+		steps: STEP_SET_17,
+	},
+	{
 		id: "no-openspec",
 		version: 3,
 		digest: "18ac3fbf3a4ba11209df90d9dfe7a339fcdd6bb95fc45f68e557566a482e4d41",
@@ -506,6 +646,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 103,
 		digest: "834c862ca5a1ef46370042d41a3c8b8ce14509cb8ba613cc3f985fcfcbaeea19",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 103,
+		digest: "5616817eef881b3acf9e3e324fd2f2c7ca7976d082734f55da9f26ef699562e4",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 103,
+		digest: "4387fc50662c04a9f1d211cf815ed8d952d52687d9b10c5ee82115aa71beb7c6",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -562,6 +714,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_2,
 	},
 	{
+		id: "openspec-jev",
+		version: 4,
+		digest: "47bc403dc14bf32292587c65cd9d393374ac3978c748d69b4c93e9372fa9647f",
+		steps: STEP_SET_16,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 4,
+		digest: "2579573aa7bbdd96b1d638873a8e947cdcb734a8f060b2c9e50eb6ecb01879fe",
+		steps: STEP_SET_17,
+	},
+	{
 		id: "no-openspec",
 		version: 4,
 		digest: "8abf62b1adcb188f7ca626e7cf9bf29b7d693a2f686cb8dff39c29ba1badb31a",
@@ -596,6 +760,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 104,
 		digest: "b7be86927d31713555895b729e6469a79134b61d89e9106e9c493741b73e353b",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 104,
+		digest: "4842e06bb8ce04443fe5a54539e2068eefeca907fa4e2212a3a64536a8c938e8",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 104,
+		digest: "b533a134408c3c65a154ad27704efd4edc6abfd4e6be56fb32974ac27ef9328a",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -652,6 +828,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_2,
 	},
 	{
+		id: "openspec-jev",
+		version: 5,
+		digest: "f65e574afb092b64599b5f96527bfff390a6e1ba4e1d5c86c0d72c5d7e391d02",
+		steps: STEP_SET_16,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 5,
+		digest: "c0855d43e8adb9dc08341f771f3690f93e32e7273d77ca64254f684d684f8918",
+		steps: STEP_SET_17,
+	},
+	{
 		id: "no-openspec",
 		version: 5,
 		digest: "c3f9fa8f7f3992a23841ac45327f130120e874748a37984df7b2b4cb5dc1ef29",
@@ -686,6 +874,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 105,
 		digest: "ceeb45406e150ed2bcc061fde9083f2d3880fa74a9cded0fde288f33990c91c7",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 105,
+		digest: "c57f259e3895928dbed2bd8e908e4da29cedc3db44d512146179d80717627685",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 105,
+		digest: "83ce835866ae0f3437585537bc2868c71688de514c1bfb0941746371206215c1",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -742,6 +942,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_2,
 	},
 	{
+		id: "openspec-jev",
+		version: 1,
+		digest: "35457f10d3d9dda4ef3c1dcc499e09a72c2e7e432d38c4f5d99d5b2f26cd4d2a",
+		steps: STEP_SET_16,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 1,
+		digest: "76276d2c999087fd586b195d65647965653eed48d359810fc90adab6c70ea6d3",
+		steps: STEP_SET_17,
+	},
+	{
 		id: "no-openspec",
 		version: 1,
 		digest: "d838cc1452e6d1c05c85948f7b04e512abd2f7942a3261a9f8d5404b7619a029",
@@ -776,6 +988,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 106,
 		digest: "589227a3b708b092c135ed0769f668e7a0e2d3657343f892df633a0df09e3cf9",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 106,
+		digest: "a1ec4128e148a7ec3db0703dce7e649d44c3062b8c70973d34bcc7189eefd1dd",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 106,
+		digest: "390b8d289ca2762c7cb4bae5fb7313662e799ef72332a17ee0e1ea5d6a2190ed",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -832,6 +1056,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_14,
 	},
 	{
+		id: "openspec-jev",
+		version: 1000,
+		digest: "f28be474162d030247fb9f8c976d61d2fb45b5bccaa56574211ad71f59f5d87e",
+		steps: STEP_SET_20,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 1000,
+		digest: "e34e6172b714b67cb591af5770fda3f61987f46bea3782479e490b53ec7ee28d",
+		steps: STEP_SET_21,
+	},
+	{
 		id: "no-openspec",
 		version: 1000,
 		digest: "7909799fb49f756bb95dd18157ac1559b16aab89a7ac88ef32b392450db6e47c",
@@ -886,6 +1122,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_2,
 	},
 	{
+		id: "openspec-jev",
+		version: 7,
+		digest: "dee765eb384a70b1692cab9c129efc2b6ecfb7589ac8fe1cb9388738e916a669",
+		steps: STEP_SET_16,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 7,
+		digest: "ec1d7e337989ffed20bae48003c9527f49c5c61596f98bf3e15d39a5863ca4d8",
+		steps: STEP_SET_17,
+	},
+	{
 		id: "no-openspec",
 		version: 7,
 		digest: "a4ba348f0a103aa4ab67501ce880bbbedf5968286e0c2cc8587215d3f6788566",
@@ -920,6 +1168,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 107,
 		digest: "b285ce90dcc3f1034d7a5d326c9cfb3b085430fcf41619e12e468ade1af628c0",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 107,
+		digest: "c3b6975f43ed8ae61100a1204bf567ed022e6b98fda9f8a3c49dfcd8523eee2c",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 107,
+		digest: "d50d6d9cbe7cc9a152e76e6ae3ca3524d7cdb96ecb6f5047a30a8d6f5da8fcb6",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -976,6 +1236,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_2,
 	},
 	{
+		id: "openspec-jev",
+		version: 8,
+		digest: "8f202a68ddbd30957ecdb70fdeefff6e542d2adaae8bdc811ea4d92aaf2561e4",
+		steps: STEP_SET_16,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 8,
+		digest: "16608f268fe814afad3918d523d118511c6b948c1f55bffcb119821022a3e7a2",
+		steps: STEP_SET_17,
+	},
+	{
 		id: "no-openspec",
 		version: 8,
 		digest: "96041e3a314dd80a23015132d59f3e44967f267350863c997fce6219e215d2f4",
@@ -1010,6 +1282,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 108,
 		digest: "56705f1378fdab1dfea9844f17724c227b4b57341963048a5528ea358deee0b5",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 108,
+		digest: "2bb451d2771c03308815609ebb4ddf022890db39259d84f8b82fd34d9e732b34",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 108,
+		digest: "0529881d44383d495d38662a926db57dc82ae2eb555d3d676464c6f1c50fa747",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -1066,6 +1350,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_2,
 	},
 	{
+		id: "openspec-jev",
+		version: 9,
+		digest: "9d47f066c8256bc38faf496f2f1703d0e6f1b1c0a85909db624e86e2bb0dbf40",
+		steps: STEP_SET_16,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 9,
+		digest: "4ed9e1947ab43ab5437d93b36467281e857fabb0fbffb8df49a73514d6bf71e3",
+		steps: STEP_SET_17,
+	},
+	{
 		id: "no-openspec",
 		version: 9,
 		digest: "bc510e24937d1d8fba1b69a42d1c44e1cbb792c160d43e7334c09d0e7652659e",
@@ -1100,6 +1396,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 109,
 		digest: "2971b9febeb3fea13a8699abf82c7182bb011de5480603dbe1ba95ccc59b6cef",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 109,
+		digest: "f8e77e915b96b83d95c46fca4d4d78b3c3bb3d45fab6a22af19ac4eb86469122",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 109,
+		digest: "ebc713ae8d49db4b95811cc5c6c643497ebee3e364158d3c7b2164912f5876e3",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -1156,6 +1464,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_2,
 	},
 	{
+		id: "openspec-jev",
+		version: 10,
+		digest: "3ffd74f2c5a281266e5d6a73cb05a1241f0c8789cdf202e63cec331ce95848f2",
+		steps: STEP_SET_16,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 10,
+		digest: "f5bf66963444a331b5187a8b1acd27a7c90322b2b06926a019bdb9c0c72b5036",
+		steps: STEP_SET_17,
+	},
+	{
 		id: "no-openspec",
 		version: 10,
 		digest: "4a91459197fa4d712ea71ed0cd90fa6c370492766530b44b8f32b7421f4f0059",
@@ -1190,6 +1510,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 110,
 		digest: "3d43065d054b6a7f1affe5a8596e60667405196a3b07c4f87860788ad09c25cc",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 110,
+		digest: "c8ec678b6f1d1afcd1f466320b459f54724f5878b749ee1d926bbfcf3d374ea9",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 110,
+		digest: "35cf7ca786f26e5811ec676887cb1078145501fcac7bd426601d1092cba2e1e8",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -1246,6 +1578,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_2,
 	},
 	{
+		id: "openspec-jev",
+		version: 11,
+		digest: "9b52257c5c936f0cc3115accbcf5ffb0c330b1b48916c95bcb8fe220e2d43882",
+		steps: STEP_SET_16,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 11,
+		digest: "fe58ed7cac6b67b92158012a5008119649a7b764a827f3a9757f6d2a7f612ffd",
+		steps: STEP_SET_17,
+	},
+	{
 		id: "no-openspec",
 		version: 11,
 		digest: "ff5c3010891f75300cd049b3ab6d5ce0f3cd86076dcb4f8214d912ca00c503bd",
@@ -1280,6 +1624,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 111,
 		digest: "ea5b0de7172010dff49f32eba482ba06615b726c7e5a03c28f1378cd497d88aa",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 111,
+		digest: "024f7a73735a0d02f429919b83ef30e78c375f7776fd137bc01e46e544b12be6",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 111,
+		digest: "77558c93dd67978505386079c70c1d40b01a1957b06d8dabed7353eaf8a647c9",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -1336,6 +1692,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_2,
 	},
 	{
+		id: "openspec-jev",
+		version: 12,
+		digest: "ed9815afaa95b073842c5bcbd108c62278e2d33d2490422a1fc0757831047ae7",
+		steps: STEP_SET_16,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 12,
+		digest: "674547b97ccc60b2441ec2ee6f1863c86efaa9186136960a28b4b73c0826d5a4",
+		steps: STEP_SET_17,
+	},
+	{
 		id: "no-openspec",
 		version: 12,
 		digest: "d6b31f4819fb7e7a4e17e8ccb23fbb005562a4e2672884f3c81f57d319101010",
@@ -1370,6 +1738,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 112,
 		digest: "af17f594104189b1c0d4f65fa37378a19860f7e8c0ecd5aecfd843a3766194b3",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 112,
+		digest: "e46cc5d0f1053aedb72e3c4b18549a00e774197a2a069aa85d32a8b06069ec0e",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 112,
+		digest: "46a2cb1ca93c1a4d433ceddf4ed3ed195c7469eb1f529a2be4565e6806d247f7",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -1426,6 +1806,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_2,
 	},
 	{
+		id: "openspec-jev",
+		version: 13,
+		digest: "4d91fbbe19bd9cda1fcf9edc8f1e3a54c3d4394518f60d440c43e958f5a276e7",
+		steps: STEP_SET_16,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 13,
+		digest: "d774b5e5745d8dc7d4bd80e553f1ac122f5bed73db76ebf3244cdc3fa5cbc84a",
+		steps: STEP_SET_17,
+	},
+	{
 		id: "no-openspec",
 		version: 13,
 		digest: "811fa0a34682adc78583ab02c2d663ba8b71be4cae0b66ebe7b48969e62832f0",
@@ -1460,6 +1852,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 113,
 		digest: "a4eb400a05675e478e74a5c2a2261c391305f7b38c3a1aa29cb00c2efd94f82a",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 113,
+		digest: "599a47a8c426f61b7746c6c7fc622f2d1e7eca37add0375620b1622134a3c2ea",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 113,
+		digest: "b9154ab2cf7e462e0fafc2aa334758882151b595fcf7a1cb4a029afba1f96763",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -1516,6 +1920,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_2,
 	},
 	{
+		id: "openspec-jev",
+		version: 14,
+		digest: "f1663035deb2ce569840c08679e70cdc1002cdcd7033fe830bafe2d6fa81b1df",
+		steps: STEP_SET_16,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 14,
+		digest: "9122f4756dc8ad0bc5dfe0e4321687394b2e487b898cd72821801a326cffeed9",
+		steps: STEP_SET_17,
+	},
+	{
 		id: "no-openspec",
 		version: 14,
 		digest: "cafebfadda8b73329dadcd2edb4c135e1369c3ef4c0a63f3df5bff3def075302",
@@ -1550,6 +1966,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 114,
 		digest: "5de3f0563be2a83fb7b2f23ea343430d15a43382a04c88ba9bdaa10ab66c3903",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 114,
+		digest: "2bf06e967d4e1217d6a1caf0320c82e3a54f3e1bc9169a3c7073af8187dcc910",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 114,
+		digest: "3e27420ddfdb6fae34210a844fafaa5707bbe9c53ac3072b488e64605be635ee",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -1606,6 +2034,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_2,
 	},
 	{
+		id: "openspec-jev",
+		version: 15,
+		digest: "25066e154b2ad4b4462ce863b350c247fd92bd3062aecdee1ffe66a7d8835416",
+		steps: STEP_SET_16,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 15,
+		digest: "7f4ed24de6f3b41f6cec1a0ac6ffc2cb5980609a20b721ea93a310a66c0f4a1b",
+		steps: STEP_SET_17,
+	},
+	{
 		id: "no-openspec",
 		version: 15,
 		digest: "ff8582dff8ab2cb2931425978099c0f2b7820e6c7cc103d7158a652a676e6de5",
@@ -1640,6 +2080,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 115,
 		digest: "f1d808ec249ac6469de92d7d8d1237e2680d52629765b799a0c146a7623d5a06",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 115,
+		digest: "48b9681cffab0faa5a3278eeb3c6e8886f33ee23f2f198116a3c6c8e51bc6d49",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 115,
+		digest: "d477f4995fb8b5212e2f147904194363cb589af083f7ce3d5ef92a9c832b4f05",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -1696,6 +2148,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_2,
 	},
 	{
+		id: "openspec-jev",
+		version: 16,
+		digest: "208f8d512fbd4acdce5baa8b751c16d50287323fdb5f0c011b3fefbabdbf182b",
+		steps: STEP_SET_16,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 16,
+		digest: "d0ed84708a96b35977c70f2e976cbdf61ca6140f64ebac9aacee5cfd9356df9c",
+		steps: STEP_SET_17,
+	},
+	{
 		id: "no-openspec",
 		version: 16,
 		digest: "7b596e7179d1b53edc1be2125794a0ea6bb4dd978da3cc8adc538dfec0e3c25c",
@@ -1730,6 +2194,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 116,
 		digest: "bc5fc14fa81cb4e2a7f0fdd5e3a80498a8ed163bec076fc6bc5abda8038229aa",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 116,
+		digest: "5470aab90e9172032b4fbeb69b8ce44d8c1a24ff4fd0ff6cbe8e366937a1215b",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 116,
+		digest: "359b34fb4186066a8f6aec6965814078e3d4ae345f60159c1c029bc230038893",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -1786,6 +2262,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_2,
 	},
 	{
+		id: "openspec-jev",
+		version: 17,
+		digest: "21fa3af992422f822fe4b9de08e39248676c923f14aece051f227a7bafeb0fa9",
+		steps: STEP_SET_16,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 17,
+		digest: "a03a617d349697040e22cbda84c65906310702d86bc61575602ce84af56a38fb",
+		steps: STEP_SET_17,
+	},
+	{
 		id: "no-openspec",
 		version: 17,
 		digest: "d6efdac97e0879c656348ed51840f7ecc585ae12456afcfb2e9cf1647558436e",
@@ -1820,6 +2308,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 117,
 		digest: "a0cb1c91ca1b3e4d39320800c797bd02767bfc995ee08377f80fa2f8c6212cf1",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 117,
+		digest: "0b5a6f88672de202f6915ddaf30bc4226d9d9b1cca6578be43f966e2acb0bc3e",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 117,
+		digest: "e27a41f174d0ea09c296882f1ac3f7ccf0bfb9e1cffe3e882d5b91d4b37c3265",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -1876,6 +2376,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_2,
 	},
 	{
+		id: "openspec-jev",
+		version: 18,
+		digest: "7fbdb2dddb1b867f96577c9f62d01773ffb19a73c6a47c59c686d91cd0b94271",
+		steps: STEP_SET_16,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 18,
+		digest: "67e658c247cc562fb8311c4c45d5a057c9a4ac6dcc3e32246dc3e890f871890f",
+		steps: STEP_SET_17,
+	},
+	{
 		id: "no-openspec",
 		version: 18,
 		digest: "17169663c68e9739731656ac40fb4d0ce5f5b5de53fac714681560fce059d986",
@@ -1910,6 +2422,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 118,
 		digest: "b72f4331392909a4aa5b9f53d7f8e27c690662f840151b9f01bad4ffc17854b3",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 118,
+		digest: "9cf1bdc5cda87cca09ca7c2212b1ac60785c8e7b31b6c7624301dd8c0048484e",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 118,
+		digest: "146693f6d17a6939461413bb7d5aba5249a254ae9c2ce91bc5bfedd796eb9dde",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -1966,6 +2490,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_2,
 	},
 	{
+		id: "openspec-jev",
+		version: 19,
+		digest: "e840f5b7bb03875734d37e3d8fcd16c790305ebdea2ad5be194abcc84888045d",
+		steps: STEP_SET_16,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 19,
+		digest: "ccc8a710af7b16bae49933e73424caf70d5e8140e273dcf409c5b51916d1f45d",
+		steps: STEP_SET_17,
+	},
+	{
 		id: "no-openspec",
 		version: 19,
 		digest: "af95c0c2f46073111dc86568718871de828425cd90304ef8f465369eb6387fcf",
@@ -2000,6 +2536,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 119,
 		digest: "6dc249c31019a94f315a29182b7b4be15e9caee312c0147629b6ee1cca0ad143",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 119,
+		digest: "27c11a208c946cb99e340a193c913c6117388aad37f67fa9c487d10f685e6d81",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 119,
+		digest: "1e07cc5570843bf9dc95c7c19f03b29c83cbd5b7ad0caa24b05cb088844a93bc",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -2056,6 +2604,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_2,
 	},
 	{
+		id: "openspec-jev",
+		version: 20,
+		digest: "256cb8ce139c55bc07856f97f72b39c6ed3676ff7be8f34af90858f6352ed206",
+		steps: STEP_SET_16,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 20,
+		digest: "2eefe7fdc0ba7bfca1cc4f55e68d9e0963dcb681d2cec43c52f6e1405bd13e7c",
+		steps: STEP_SET_17,
+	},
+	{
 		id: "no-openspec",
 		version: 20,
 		digest: "6cffa8a4fa9cbf0790b1405d093e2bb7afd3e021886b7566cb4b61ae09773249",
@@ -2090,6 +2650,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 120,
 		digest: "3997b8a442e83a6ea583d08d46b7dc66d0a3513c9e5a336a51054fa99b453b6d",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 120,
+		digest: "6f6dbd0ee7cfd9b33ccad6b5c5ca3938f22750888272e55c6842f1b5c1b0072c",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 120,
+		digest: "6770166fd841da1752c15a0b9002c0c754eebc0a4333327d1d0429e3d269ea74",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -2146,6 +2718,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_7,
 	},
 	{
+		id: "openspec-jev",
+		version: 201,
+		digest: "99933ac951014564e5bba9323b662252bcbfed9d3c6b68f394fb9c69137d7c4a",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 201,
+		digest: "0414e99e411438c16e45f877467c786758a2d746f0d176a5a8a1d0e08d546fd8",
+		steps: STEP_SET_19,
+	},
+	{
 		id: "no-openspec",
 		version: 201,
 		digest: "c3ca1698b2c8c687ddf414b5935c23233565e664805dc6d31d4b1b3c85c8b298",
@@ -2198,6 +2782,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 202,
 		digest: "d79c8f62b3727de766c84c86066b93dc88dff7c9b6102857c0d97d2ca4c5e023",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 202,
+		digest: "950229ae21aaccfb29da953db6b183eeeb7e7a053e533ffe0055b8dfc228b9a5",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 202,
+		digest: "30d8390bb0d79c7ccb9788b1f4814687868a69865bb627889e8010c9b0303254",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -2254,6 +2850,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_7,
 	},
 	{
+		id: "openspec-jev",
+		version: 203,
+		digest: "45d99f1c4d705ac8f539f8568d61eda32607add4dd10b831d5c958afbda9af21",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 203,
+		digest: "fef83337e62c10808b18283569de7a14257cf2f832afdad7bd775a2e3b353c39",
+		steps: STEP_SET_19,
+	},
+	{
 		id: "no-openspec",
 		version: 203,
 		digest: "d62aa0fd369f332783d7ed7fd14c21ca6f3ddd47f54ee54d84d5cdd7f613b9c0",
@@ -2306,6 +2914,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 204,
 		digest: "83dcf9d9c6e8c15b7b5e03998d5e61a91e9fd163e47e232f7d8d4327ccf92d0e",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 204,
+		digest: "bb040afb9b172b2a43ceefd939c890e8dc0559409ed669ff958f9b784e22687f",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 204,
+		digest: "2d894feff140c90f2780e97368f5331c062566d8398250fdd9d0c35815c68e62",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -2362,6 +2982,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_7,
 	},
 	{
+		id: "openspec-jev",
+		version: 205,
+		digest: "7450937a08c1185bc319ef43d240ef6aa12daba6117dedbe7ada99b0fb5a0b03",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 205,
+		digest: "fcc027bc0ac2c98d1c374f6d229a1b7106fcde54241a4789d8b190224290cd60",
+		steps: STEP_SET_19,
+	},
+	{
 		id: "no-openspec",
 		version: 205,
 		digest: "63330a92c7ad8cfadb07618a22b9a7ec0c36c71fc85b0fcc3a027a87a8f5ebd7",
@@ -2414,6 +3046,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 206,
 		digest: "2c5799c432c5488cf2f3e5124ed26b1c04d1ab1eedd8753a694f503bab161e00",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 206,
+		digest: "a5678b0125679daaa25c736385903a9e0f57cb05551fde868327ebb82b8bead5",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 206,
+		digest: "f3949b1f67864de2b08d270ee8c182fab0028a6f7022c74de91564b375021d83",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -2470,6 +3114,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_7,
 	},
 	{
+		id: "openspec-jev",
+		version: 207,
+		digest: "74f849d2babfcf67e960fe8a7a0899570813c0fb22f3cfcf147cae63542c2ebc",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 207,
+		digest: "9eaaa01330be1893a9918018eb30c922c74b3e5b863027ce5de24fdb8a925330",
+		steps: STEP_SET_19,
+	},
+	{
 		id: "no-openspec",
 		version: 207,
 		digest: "4fe2241b13e42fa769e32a15be7f2c8be21b8074c1c61aae465369c67a11f2e7",
@@ -2522,6 +3178,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 208,
 		digest: "a62adcc83f542aa37a88299f5b17834c5ea0df0392341d16e5bcd9ebb1bd31e7",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 208,
+		digest: "34a670581766bf110be75a606c0590cb104e992028c6e4798bbd2332d900fb3d",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 208,
+		digest: "e843eba00839c83aef15328c1ee990ea6e46f30ff7468cfc6386e4a0e1ef1ca3",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -2578,6 +3246,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_7,
 	},
 	{
+		id: "openspec-jev",
+		version: 209,
+		digest: "0196a9fac8a973a10bb6e64ed1acd41d721ac2bf25d3692db416ffcb06ce5181",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 209,
+		digest: "8fc7ff0a404f4f12bd048285ad94068280a5ef62eb5ea6da710619c2b337d425",
+		steps: STEP_SET_19,
+	},
+	{
 		id: "no-openspec",
 		version: 209,
 		digest: "3ff9c9ddec8d07378e4d7176190c3807cef387b28e77edaf821ea1cc2bc2181e",
@@ -2630,6 +3310,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 210,
 		digest: "03bf1f3de44fd3cc9d0f6a6333d550f4755781c63f517ccc2e276eca54a3c52d",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 210,
+		digest: "fff7b5336b6e7a2951ca70e0554f711bf3103e22ddd5e73449a637241539b2f8",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 210,
+		digest: "991af6d9f44d18d77cddfb0ff09973e8e70c0f7c19c1fc5f1b068dd16a7f4774",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -2686,6 +3378,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_7,
 	},
 	{
+		id: "openspec-jev",
+		version: 211,
+		digest: "c7d7c5b6314e2298904b6c7f147afab0ce36a81ec4b156fda9c5f76acfc75d27",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 211,
+		digest: "363ec87a5ad2eddc899446a1fd0dd2d7b7f79e6ba84ba1086b125a1c2331bf3b",
+		steps: STEP_SET_19,
+	},
+	{
 		id: "no-openspec",
 		version: 211,
 		digest: "a7e42a2017219854e5d561675b68b71ec1810aee40fe917afb187a404279ae07",
@@ -2738,6 +3442,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 212,
 		digest: "7ee505634a449b64d78779f3e7d65e2b89e889b32c7a272370d93e2c0b85677e",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 212,
+		digest: "78fbf70cc616d933ad9d5fa42cd72141be88366ad56a718836c57d77ac757b2a",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 212,
+		digest: "c11a8e0c590f15d966ec51a50a7e82154cf7d5a67a617cee6fd8888540e5a28f",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -2794,6 +3510,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_7,
 	},
 	{
+		id: "openspec-jev",
+		version: 213,
+		digest: "e937774ec667600362dfaeac772d0628daa25c262169d8079785408483d87b30",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 213,
+		digest: "eba9f276256463463551d3c80f1aaa9d058257620f94155578266f267d3d5af5",
+		steps: STEP_SET_19,
+	},
+	{
 		id: "no-openspec",
 		version: 213,
 		digest: "2cb650eaab1b441c393cc4d06705ef2558c6cd5ee5b5fe338af41530d2606078",
@@ -2846,6 +3574,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 214,
 		digest: "375dec92bd4a3f3d158c7c5095fecf8940829053274020f8b4c540d0db848de2",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 214,
+		digest: "8a8769e4e38b3a825c862af7407e3d0a87e3bac84c2ec6b49cfd0c1d374ac33a",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 214,
+		digest: "c247aab7a844e91c0d73491e2804b0e5cc6ae3914cd26ad7b70ffc06bdd8c5e7",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -2902,6 +3642,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_7,
 	},
 	{
+		id: "openspec-jev",
+		version: 215,
+		digest: "c4bd7493e584f0f8fc4a2dce53aa59d783ee02f68a42365d4f0362b6fcf3aaa6",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 215,
+		digest: "ce24464b1df8af9184c277232d391453447ffef2d28a86c4bd30eef40a477eec",
+		steps: STEP_SET_19,
+	},
+	{
 		id: "no-openspec",
 		version: 215,
 		digest: "5a4d5cae853e00861d17e74589aff6340685ccec8aad72bd82ff6d86205fba00",
@@ -2954,6 +3706,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 216,
 		digest: "46c4e482e0ca897f7d757858393df60dbfcdaf8c114cf7c4db19dc6b2711fa79",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 216,
+		digest: "d714503766864bcd6b25c12507ee0ab9839e2ed4150e200a54fd9bd5d37751a6",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 216,
+		digest: "58c37c40f8af6950218fdc117a80f8837665e16021c4e28fe51e5b02a54df014",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -3010,6 +3774,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_7,
 	},
 	{
+		id: "openspec-jev",
+		version: 217,
+		digest: "1fb0c1d0a98531809aaa66817915965b848c74e211a55cd33ae9416e49ead497",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 217,
+		digest: "77a9e28cbf4f631d0157a6fcfec77e2403f7b61333eaef5ee310599c62178e26",
+		steps: STEP_SET_19,
+	},
+	{
 		id: "no-openspec",
 		version: 217,
 		digest: "93fca7a74ef15fcdf8f645ba617721111c8fd9e0b06aa0ec4d0efa6943ed4053",
@@ -3062,6 +3838,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 218,
 		digest: "59e4104bbe8fa70fca98d4f83dea2cc3c0ca8cde3dbd49a6560aa288fe3cde27",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 218,
+		digest: "e2fc9384ea9ab295203745e1187b99aafb4ffd09ff039e801a05953efe6fde81",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 218,
+		digest: "8f33e8b00851b50ae927d7403444d73e3c0fbab8af3c01ac3c9c046a96f45881",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",
@@ -3118,6 +3906,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: STEP_SET_7,
 	},
 	{
+		id: "openspec-jev",
+		version: 219,
+		digest: "6b5c891ffe17310faf5d22d9416147f3a09e9947ad678f77e628074e9889b8bc",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 219,
+		digest: "983369a15dc6d58b68257e0cb5f91e963b4a346e210db28c6eea86b3a7b4d674",
+		steps: STEP_SET_19,
+	},
+	{
 		id: "no-openspec",
 		version: 219,
 		digest: "6dd07e84cb61a617e8a844faad646eac7c81b0d3ba1cfb0b217bae77ee55fa25",
@@ -3170,6 +3970,18 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 220,
 		digest: "ea1d506430cdf6f6556c0ad949c10b242182dd705001caf75e5bc0cf4afd6f98",
 		steps: STEP_SET_7,
+	},
+	{
+		id: "openspec-jev",
+		version: 220,
+		digest: "8c395565147955491e87942b0a483cff2386b6589e3f798fa9fa98be1db9c0dc",
+		steps: STEP_SET_18,
+	},
+	{
+		id: "openspec-jev-apply",
+		version: 220,
+		digest: "0a7772a851435d24358a11754f867c5dbc4dd40626721a275dc364e50e1ed04a",
+		steps: STEP_SET_19,
 	},
 	{
 		id: "no-openspec",

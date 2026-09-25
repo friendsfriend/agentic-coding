@@ -913,7 +913,10 @@ export class WorkflowEngine {
 		// primary into metadata.changeId at plan handoff. `openspec-apply` has
 		// no planner step, so its pre-existing change is the workflow id itself.
 		const startChangeId =
-			input.definitionId === "openspec-apply" ? input.workflowId : "";
+			input.definitionId === "openspec-apply" ||
+			input.definitionId === "openspec-jev-apply"
+				? input.workflowId
+				: "";
 		const snapshot: WorkflowSnapshot = {
 			schemaVersion: 1,
 			workflowId,

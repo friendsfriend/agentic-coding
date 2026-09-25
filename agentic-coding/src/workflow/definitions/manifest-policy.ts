@@ -39,6 +39,16 @@ const MANIFEST_POLICY: Readonly<Record<string, WorkflowManifestPolicy>> = {
 		checkoutRequired: false,
 		requiresReadOnlyResearcher: false,
 	},
+	"openspec-jev": {
+		targetKind: "repository",
+		checkoutRequired: false,
+		requiresReadOnlyResearcher: false,
+	},
+	"openspec-jev-apply": {
+		targetKind: "repository",
+		checkoutRequired: false,
+		requiresReadOnlyResearcher: false,
+	},
 	"no-openspec": {
 		targetKind: "repository",
 		checkoutRequired: false,

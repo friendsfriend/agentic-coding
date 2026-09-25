@@ -113,6 +113,7 @@ const LEGACY_STEP_BASELINE = new Set([
 	"fusion.plan",
 	"fusion.consolidate",
 	"core.plan-approval",
+	"core.model-selection",
 	"core.implementation",
 	"core.triage",
 	"core.verification",

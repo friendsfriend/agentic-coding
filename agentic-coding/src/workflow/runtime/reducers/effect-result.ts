@@ -9,13 +9,90 @@ import type {
 	WorkflowCommand,
 	WorkflowSnapshot,
 } from "../../../contracts/workflow.ts";
+import { classifierFor } from "../../classifiers.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
+import { loadConfigWithProvenance } from "../../effects.ts";
+import {
+	categoryProfile,
+	enforceReadOnlySteps,
+	parseAgentsConfig,
+	preflightProfile,
+	resolvePreset,
+	resolveRouting,
+	rolesByStepFromRouting,
+} from "../../profiles.ts";
 import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
 } from "../../registry.ts";
 import { applyCompletionResult, enqueue, enterStep } from "../kernel.ts";
 import { boundedError, type EffectRow, json, nowIso } from "../store.ts";
+
+/** Rewrite the pinned routing so the classifier integration's target route
+ * uses the profile mapped from the answered category. Failures are surfaced
+ * as attention and leave the existing (default) route in place rather than
+ * stranding the workflow after the classifying effect already completed. */
+export function applyClassifierRouting(
+	snapshot: WorkflowSnapshot,
+	definition: CompiledWorkflowDefinition,
+	registry: WorkflowRegistry,
+	data: unknown,
+): void {
+	try {
+		const payload =
+			data && typeof data === "object"
+				? (data as { integration?: unknown; category?: unknown })
+				: {};
+		if (typeof payload.category !== "string")
+			throw new Error("classifier result is missing a category");
+		const integration = classifierFor(String(payload.integration ?? ""));
+		const loaded = loadConfigWithProvenance({
+			repository: snapshot.metadata.repository || undefined,
+			repositoryIndependent: !snapshot.metadata.repository,
+		});
+		const agents = parseAgentsConfig(loaded.config.agents, loaded.config);
+		const preset = snapshot.metadata.selectedPreset
+			? resolvePreset(agents, snapshot.metadata.selectedPreset)
+			: undefined;
+		const profileName = categoryProfile(preset, payload.category);
+		if (!profileName)
+			throw new Error(
+				`classifier ${integration.id} chose ${payload.category} with no configured profile`,
+			);
+		const routing = enforceReadOnlySteps(
+			resolveRouting(
+				definition,
+				rolesByStepFromRouting(snapshot.routing),
+				agents,
+				preset,
+				{
+					stepId: integration.target.stepId,
+					...(integration.target.role ? { role: integration.target.role } : {}),
+					profileName,
+				},
+			),
+			(stepId) => registry.stepForDefinition(definition, stepId).requirements,
+		);
+		const route = routing.routes.find(
+			(item) =>
+				item.stepId === integration.target.stepId &&
+				(integration.target.role === undefined ||
+					item.role === integration.target.role),
+		);
+		if (route)
+			preflightProfile(
+				route.profile,
+				registry.stepForDefinition(definition, integration.target.stepId)
+					.requirements,
+			);
+		snapshot.routing = routing;
+	} catch (error) {
+		snapshot.attention = [
+			...(snapshot.attention ?? []),
+			`classifier routing update failed: ${boundedError(error)}`,
+		];
+	}
+}
 
 export function effectResult(
 	db: Database,
@@ -157,6 +234,8 @@ export function effectResult(
 		if (typeof data.branch === "string") snapshot.metadata.branch = data.branch;
 		enterStep(db, snapshot, definition, registry, now);
 	}
+	if (command.outcome === "complete" && row.kind === "model.classify")
+		applyClassifierRouting(snapshot, definition, registry, command.data);
 	if (command.outcome === "complete") {
 		const step = registry.stepForDefinition(definition, snapshot.currentStep);
 		const completion = step.behavior?.onEffectComplete?.({

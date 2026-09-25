@@ -150,8 +150,8 @@ test("an independent Wiki context offers a target-compatible research type only"
 
 test("proposal choices submit their type, task, and fixed checkout mode", async () => {
 	for (const [offset, workflowType] of [
-		[4, "openspec-propose"],
-		[5, "openspec-fusion-propose"],
+		[6, "openspec-propose"],
+		[7, "openspec-fusion-propose"],
 	] as const) {
 		let handler: ((event: KeyEvent) => boolean) | undefined;
 		const completed: NewWorkflowInput[] = [];
@@ -267,7 +267,9 @@ test("selecting openspec-fusion-full submits workflowType openspec-fusion-full",
 	);
 	await t.flush();
 	handler?.(key("j")); // standard -> openspec-apply
-	handler?.(key("j")); // openspec-apply -> quick
+	handler?.(key("j")); // openspec-apply -> openspec-jev
+	handler?.(key("j")); // openspec-jev -> openspec-jev-apply
+	handler?.(key("j")); // openspec-jev-apply -> quick
 	handler?.(key("j")); // quick -> openspec-fusion-full
 	handler?.(key("enter")); // select openspec-fusion-full
 	await t.flush();

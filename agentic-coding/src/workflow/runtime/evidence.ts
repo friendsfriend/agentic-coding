@@ -382,7 +382,10 @@ export function validateStartEvidence(
 	}
 	if (!fs.existsSync(path.join(repository, "openspec", "config.yaml")))
 		throw new WorkflowRuntimeError("start-guard", "OpenSpec project required");
-	if (input.definitionId === "openspec-apply") {
+	if (
+		input.definitionId === "openspec-apply" ||
+		input.definitionId === "openspec-jev-apply"
+	) {
 		const root = path.join(repository, "openspec", "changes", input.workflowId);
 		for (const file of ["proposal.md", "design.md", "tasks.md"])
 			if (
