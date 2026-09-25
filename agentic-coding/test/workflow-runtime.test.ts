@@ -21,6 +21,7 @@ import {
 import {
 	canonicalStorePath,
 	researchWorkflowTarget,
+	sourceContentFingerprint,
 	validateChangeId,
 	WorkflowEngine,
 	WorkflowRuntimeError,
@@ -168,6 +169,24 @@ describe("transactional workflow runtime", () => {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
 	});
+	test("source fingerprint ignores oversized Git-ignored build output", () => {
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "workflow-source-fingerprint-"),
+		);
+		try {
+			const source = repository(path.join(tmp, "source"));
+			fs.writeFileSync(path.join(source, ".gitignore"), "dist/\n");
+			const output = path.join(source, "dist", "agentic-coding");
+			fs.mkdirSync(path.dirname(output));
+			fs.writeFileSync(output, Buffer.alloc(4 * 1024 * 1024 + 1));
+			const before = sourceContentFingerprint(source);
+			fs.writeFileSync(output, Buffer.alloc(4 * 1024 * 1024 + 2));
+			expect(sourceContentFingerprint(source)).toBe(before);
+		} finally {
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
 	test("research accepts trusted integrations but rejects source mutations", () => {
 		const tmp = fs.mkdtempSync(
 			path.join(os.tmpdir(), "workflow-research-source-isolation-"),

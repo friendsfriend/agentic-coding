@@ -73,19 +73,14 @@ export function sourceContentFingerprint(
 	repository: string,
 	configuredWikiPath = wikiRoot(),
 ): string {
+	// Ignored paths are generated/local artifacts (for example `dist/`), not
+	// source evidence. They may exceed the bounded file observation limit.
 	const tracked = [
 		...gitNullSeparated(repository, ["ls-files", "-z", "--cached"]),
 		...gitNullSeparated(repository, [
 			"ls-files",
 			"-z",
 			"--others",
-			"--exclude-standard",
-		]),
-		...gitNullSeparated(repository, [
-			"ls-files",
-			"-z",
-			"--others",
-			"--ignored",
 			"--exclude-standard",
 		]),
 	].filter(
