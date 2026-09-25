@@ -56,7 +56,7 @@ digests) are not migration shims and remain.
 
 ## Phase-1 done
 
-- `effect@3.22.2` locked (task 1.1); Bun 1.4.0 / TypeScript 6.0.3 compatible.
+- `effect@3.22.2` locked (task 1.1); Bun 1.4.0 / TypeScript 7.0.2 compatible. The structural guard scripts parse with `@babel/parser` because TypeScript 7 removed the synchronous compiler API.
 - Command, developer-dialogue, snapshot/profile/settings, and built-in step
   contracts decode through Effect Schema (tasks 2.2–2.4).
 - `WorkflowFailure` tagged union + `externalDiagnostic` mapping (task 2.1).

@@ -1,7 +1,7 @@
 // Source-layer ownership and pure-domain guardrails backing
 // test/workflow-source-layer-boundaries.test.ts (enforce-source-layer-
-// boundaries). These are bounded static checks over the installed TypeScript
-// AST: they are not a sandbox, a whole-program purity proof, or a linter.
+// boundaries). These are bounded static checks over the parsed Babel syntax
+// tree: they are not a sandbox, a whole-program purity proof, or a linter.
 //
 // Layers (path classification):
 //   domain       pure definitions, contracts, and step behavior
@@ -13,9 +13,30 @@
 //   tui-app      TUI shell entry points and lifecycle glue
 //   root         composition roots and foundational clients
 
-import fs from "node:fs";
 import path from "node:path";
-import ts from "typescript";
+import {
+	isCallExpression,
+	isClassDeclaration,
+	isExportDefaultDeclaration,
+	isExportNamedDeclaration,
+	isFunctionDeclaration,
+	isIdentifier,
+	isMemberExpression,
+	isNewExpression,
+	isOptionalCallExpression,
+	isOptionalMemberExpression,
+	isTSInterfaceDeclaration,
+	isTSTypeAliasDeclaration,
+	isVariableDeclaration,
+	type Node,
+	traverseFast,
+} from "@babel/types";
+import {
+	exportedName,
+	parseSourceFile,
+	positionOf,
+	textOf,
+} from "./source-ast.ts";
 import {
 	buildImportGraph,
 	buildSourceAnalysis,
@@ -466,67 +487,62 @@ function pureGlobalViolations(file: string): Array<{
 	column: number;
 	label: string;
 }> {
-	const sourceText = fs.readFileSync(file, "utf8");
-	const sourceFile = ts.createSourceFile(
-		file,
-		sourceText,
-		ts.ScriptTarget.Latest,
-		true,
-		file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-	);
+	const source = parseSourceFile(file);
 	const found: Array<{ line: number; column: number; label: string }> = [];
-	const locate = (node: ts.Node) => {
-		const start = node.getStart(sourceFile);
-		const loc = sourceFile.getLineAndCharacterOfPosition(start);
-		return { line: loc.line + 1, column: loc.character + 1 };
-	};
-	const visit = (node: ts.Node): void => {
-		if (ts.isCallExpression(node)) {
-			const callee = node.expression;
-			if (ts.isIdentifier(callee) && callee.text === "fetch") {
+	const locate = (node: Node) => positionOf(node);
+	const visit = (node: Node): void => {
+		if (isCallExpression(node) || isOptionalCallExpression(node)) {
+			const callee = node.callee;
+			if (isIdentifier(callee) && callee.name === "fetch") {
 				found.push({ ...locate(callee), label: "fetch" });
 			} else if (
-				ts.isPropertyAccessExpression(callee) &&
-				ts.isIdentifier(callee.expression) &&
-				callee.expression.text === "Date" &&
-				callee.name.text === "now"
+				(isMemberExpression(callee) || isOptionalMemberExpression(callee)) &&
+				!callee.computed &&
+				isIdentifier(callee.object) &&
+				callee.object.name === "Date" &&
+				isIdentifier(callee.property) &&
+				callee.property.name === "now"
 			) {
 				found.push({ ...locate(callee), label: "Date.now" });
 			} else if (
-				ts.isPropertyAccessExpression(callee) &&
-				ts.isIdentifier(callee.expression) &&
-				callee.expression.text === "Bun" &&
+				(isMemberExpression(callee) || isOptionalMemberExpression(callee)) &&
+				!callee.computed &&
+				isIdentifier(callee.object) &&
+				callee.object.name === "Bun" &&
+				isIdentifier(callee.property) &&
 				["spawn", "spawnSync", "write", "read", "file"].includes(
-					callee.name.text,
+					callee.property.name,
 				)
 			) {
 				found.push({
 					...locate(callee),
-					label: `Bun.${callee.name.text}`,
+					label: `Bun.${callee.property.name}`,
 				});
 			} else if (
-				ts.isPropertyAccessExpression(callee) &&
-				ts.isIdentifier(callee.expression) &&
-				callee.expression.text === "process" &&
+				(isMemberExpression(callee) || isOptionalMemberExpression(callee)) &&
+				!callee.computed &&
+				isIdentifier(callee.object) &&
+				callee.object.name === "process" &&
+				isIdentifier(callee.property) &&
 				["cwd", "chdir", "exit", "stdout", "stderr", "stdin"].includes(
-					callee.name.text,
+					callee.property.name,
 				)
 			) {
 				found.push({
 					...locate(callee),
-					label: `process.${callee.name.text}`,
+					label: `process.${callee.property.name}`,
 				});
 			}
 		} else if (
-			ts.isNewExpression(node) &&
-			node.expression.getText(sourceFile) === "Date" &&
-			(node.arguments?.length ?? 0) === 0
+			isNewExpression(node) &&
+			isIdentifier(node.callee) &&
+			node.callee.name === "Date" &&
+			node.arguments.length === 0
 		) {
 			found.push({ ...locate(node), label: "new Date()" });
 		}
-		ts.forEachChild(node, visit);
 	};
-	for (const statement of sourceFile.statements) visit(statement);
+	for (const statement of source.statements) traverseFast(statement, visit);
 	return found;
 }
 
@@ -703,43 +719,33 @@ function runtimeExecutionCalls(file: string): Array<{
 	column: number;
 	label: string;
 }> {
-	const sourceText = fs.readFileSync(file, "utf8");
-	const sourceFile = ts.createSourceFile(
-		file,
-		sourceText,
-		ts.ScriptTarget.Latest,
-		true,
-		file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-	);
+	const source = parseSourceFile(file);
 	const found: Array<{ line: number; column: number; label: string }> = [];
-	const locate = (node: ts.Node) => {
-		const start = node.getStart(sourceFile);
-		const loc = sourceFile.getLineAndCharacterOfPosition(start);
-		return { line: loc.line + 1, column: loc.character + 1 };
-	};
-	const visit = (node: ts.Node): void => {
-		if (ts.isCallExpression(node)) {
-			const callee = node.expression;
+	const locate = (node: Node) => positionOf(node);
+	const visit = (node: Node): void => {
+		if (isCallExpression(node) || isOptionalCallExpression(node)) {
+			const callee = node.callee;
 			if (
-				ts.isPropertyAccessExpression(callee) &&
-				RUNTIME_EXECUTION_NAMES.has(callee.name.text) &&
-				ts.isIdentifier(callee.expression) &&
-				RUNTIME_EXECUTION_RECEIVERS.has(callee.expression.text)
+				(isMemberExpression(callee) || isOptionalMemberExpression(callee)) &&
+				!callee.computed &&
+				isIdentifier(callee.property) &&
+				RUNTIME_EXECUTION_NAMES.has(callee.property.name) &&
+				isIdentifier(callee.object) &&
+				RUNTIME_EXECUTION_RECEIVERS.has(callee.object.name)
 			) {
 				found.push({
-					...locate(callee.name),
-					label: `${callee.expression.text}.${callee.name.text}`,
+					...locate(callee.property),
+					label: `${callee.object.name}.${callee.property.name}`,
 				});
 			} else if (
-				ts.isIdentifier(callee) &&
-				RUNTIME_EXECUTION_NAMES.has(callee.text)
+				isIdentifier(callee) &&
+				RUNTIME_EXECUTION_NAMES.has(callee.name)
 			) {
-				found.push({ ...locate(callee), label: callee.text });
+				found.push({ ...locate(callee), label: callee.name });
 			}
 		}
-		ts.forEachChild(node, visit);
 	};
-	for (const statement of sourceFile.statements) visit(statement);
+	for (const statement of source.statements) traverseFast(statement, visit);
 	return found;
 }
 
@@ -790,21 +796,10 @@ export function checkObsoleteShims(
 			(file) => relativeOf(file) === moduleRel,
 		);
 		if (!moduleFile) continue; // module already deleted; nothing to guard
-		const sourceText = fs.readFileSync(moduleFile, "utf8");
-		const sourceFile = ts.createSourceFile(
-			moduleFile,
-			sourceText,
-			ts.ScriptTarget.Latest,
-			true,
-			moduleFile.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-		);
+		const source = parseSourceFile(moduleFile);
 		const symbolSet = new Set(symbols);
-		const locate = (node: ts.Node) => {
-			const start = node.getStart(sourceFile);
-			const loc = sourceFile.getLineAndCharacterOfPosition(start);
-			return { line: loc.line + 1, column: loc.character + 1 };
-		};
-		const report = (name: string, node: ts.Node, kind: string) =>
+		const locate = (node: Node) => positionOf(node);
+		const report = (name: string, node: Node, kind: string) =>
 			issues.push({
 				file: moduleFile,
 				...locate(node),
@@ -812,51 +807,48 @@ export function checkObsoleteShims(
 				message: `${moduleRel} ${kind} obsolete migration bridge symbol ${name}; consume the Effect application boundary instead`,
 			});
 		const declared = (name: string) => symbolSet.has(name);
-		for (const statement of sourceFile.statements) {
-			const isExported =
-				ts.canHaveModifiers(statement) &&
-				ts
-					.getModifiers(statement)
-					?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword);
-			if (isExported) {
-				if (ts.isVariableStatement(statement)) {
-					for (const declaration of statement.declarationList.declarations) {
-						const name = declaration.name.getText(sourceFile);
+		for (const statement of source.statements) {
+			const declaration =
+				isExportNamedDeclaration(statement) ||
+				isExportDefaultDeclaration(statement)
+					? statement.declaration
+					: null;
+			if (declaration) {
+				if (isVariableDeclaration(declaration)) {
+					for (const declarator of declaration.declarations) {
+						const name = textOf(source, declarator.id);
 						if (declared(name)) report(name, statement, "declares exported");
 					}
 				}
 				if (
-					ts.isFunctionDeclaration(statement) &&
-					statement.name &&
-					declared(statement.name.text)
+					isFunctionDeclaration(declaration) &&
+					declaration.id &&
+					declared(declaration.id.name)
 				)
-					report(statement.name.text, statement, "declares exported");
+					report(declaration.id.name, statement, "declares exported");
 				if (
-					ts.isClassDeclaration(statement) &&
-					statement.name &&
-					declared(statement.name.text)
+					isClassDeclaration(declaration) &&
+					declaration.id &&
+					declared(declaration.id.name)
 				)
-					report(statement.name.text, statement, "declares exported");
+					report(declaration.id.name, statement, "declares exported");
 				if (
-					ts.isTypeAliasDeclaration(statement) &&
-					statement.name &&
-					declared(statement.name.text)
+					isTSTypeAliasDeclaration(declaration) &&
+					declared(declaration.id.name)
 				)
-					report(statement.name.text, statement, "declares type");
+					report(declaration.id.name, statement, "declares type");
 				if (
-					ts.isInterfaceDeclaration(statement) &&
-					statement.name &&
-					declared(statement.name.text)
+					isTSInterfaceDeclaration(declaration) &&
+					declared(declaration.id.name)
 				)
-					report(statement.name.text, statement, "declares interface");
-				if (ts.isExportDeclaration(statement) && statement.exportClause) {
-					const clause = statement.exportClause;
-					if (ts.isNamedExports(clause)) {
-						for (const element of clause.elements) {
-							if (declared(element.name.text))
-								report(element.name.text, element, "re-exports obsolete");
-						}
-					}
+					report(declaration.id.name, statement, "declares interface");
+			}
+			if (isExportNamedDeclaration(statement)) {
+				for (const specifier of statement.specifiers) {
+					if (specifier.type !== "ExportSpecifier") continue;
+					const name = exportedName(specifier);
+					if (name && declared(name))
+						report(name, specifier, "re-exports obsolete");
 				}
 			}
 		}

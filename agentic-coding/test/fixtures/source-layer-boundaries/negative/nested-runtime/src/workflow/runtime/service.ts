@@ -6,3 +6,10 @@ import { Effect } from "effect";
 export function read<T>(program: Effect.Effect<T, never, never>): T {
 	return Effect.runSync(program);
 }
+
+// Optional-chained runtime execution must be rejected the same way.
+export function readOptional<T>(
+	program: Effect.Effect<T, never, never>,
+): Promise<T> {
+	return Effect?.runPromise(program);
+}

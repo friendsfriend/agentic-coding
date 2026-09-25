@@ -25,19 +25,21 @@
 		"lint:boundaries": "bun test test/workflow-source-layer-boundaries.test.ts test/contracts/boundaries.test.ts test/data/boundaries.test.ts test/dash/viewIsolation.test.ts test/ui/packageBoundaries.test.ts"
 	},
 	"dependencies": {
-		"@grpc/grpc-js": "^1.14.4",
+		"@grpc/grpc-js": "^1.14.5",
 		"@grpc/proto-loader": "^0.8.1",
 		"@ui": "workspace:*",
-		"@opentui/core": "0.4.2",
-		"@opentui/keymap": "0.4.2",
-		"@opentui/solid": "0.4.2",
+		"@opentui/core": "0.5.12",
+		"@opentui/keymap": "0.5.12",
+		"@opentui/solid": "0.5.12",
 		"effect": "3.22.2",
-		"marked": "^17.0.1",
-		"solid-js": "^1.9.12"
+		"marked": "^18.0.14",
+		"solid-js": "^1.9.15"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "^2.5.10",
-		"@types/bun": "^1.3.14",
-		"typescript": "^6.0.3"
+		"@babel/parser": "^7.29.9",
+		"@babel/types": "^7.29.8",
+		"@biomejs/biome": "^2.5.14",
+		"@types/bun": "^1.4.2",
+		"typescript": "^7.0.2"
 	}
 }

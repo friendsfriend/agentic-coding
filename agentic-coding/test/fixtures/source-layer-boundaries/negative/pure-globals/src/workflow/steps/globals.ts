@@ -6,5 +6,11 @@ export function readAmbient(input: string): string {
 	const now = Date.now();
 	const stamp = new Date();
 	process.cwd();
+	// Optional-chained forms parse as OptionalCallExpression /
+	// OptionalMemberExpression; the guard must still recognize them.
+	fetch?.("https://example.test");
+	Date?.now();
+	process?.exit(1);
+	Bun?.file(input);
 	return `${fetched}${now}${stamp}${input}`;
 }

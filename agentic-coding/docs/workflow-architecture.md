@@ -431,8 +431,9 @@ JavaScript runtime behavior can escape them.
 
 ### Import forms covered
 
-The graph helper parses `.ts` and `.tsx` with the correct TypeScript
-`ScriptKind` and resolves extensionless specifiers, explicit extensions
+The graph helper parses `.ts` and `.tsx` with `@babel/parser` (its
+`typescript` plugin, with `jsx` enabled only for `.tsx`) and resolves
+extensionless specifiers, explicit extensions
 `.ts`/`.tsx`/`.json`, and `index.ts`/`index.tsx`/`index.json` directory
 targets. It collects static imports/re-exports, literal `import()` calls, and
 literal `require()` calls (property calls named `require` are ignored). Two

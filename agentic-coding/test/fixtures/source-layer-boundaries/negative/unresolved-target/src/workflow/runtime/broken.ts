@@ -5,3 +5,8 @@ import { missingHelper } from "./missing.ts";
 export function brokenRead(): unknown {
 	return missingHelper();
 }
+
+// Optional-chained require is still a literal module edge the guard must record.
+export function brokenOptionalRead(): unknown {
+	return require?.("./missing-optional.ts");
+}

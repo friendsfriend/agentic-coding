@@ -5,65 +5,75 @@
 //   - the layer/purity ownership checks
 //     (test/workflow-source-layer-boundaries.test.ts).
 // Kept as a script rather than src/ code since nothing at runtime depends on
-// it. Scans .ts and .tsx sources with the installed TypeScript parser,
+// it. Scans .ts and .tsx sources with the Babel parser (TypeScript 7 removed
+// the synchronous `ts.createSourceFile` API),
 // resolving extensionless, explicit-extension, and index targets, and
 // collecting static imports/re-exports, literal dynamic-import, and literal
 // require() edges.
 import fs from "node:fs";
 import path from "node:path";
-import ts from "typescript";
+import {
+	isCallExpression,
+	isClassDeclaration,
+	isExportAllDeclaration,
+	isExportDefaultDeclaration,
+	isExportNamedDeclaration,
+	isFunctionDeclaration,
+	isIdentifier,
+	isImportDeclaration,
+	isOptionalCallExpression,
+	isStringLiteral,
+	isTSEnumDeclaration,
+	isTSInterfaceDeclaration,
+	isTSTypeAliasDeclaration,
+	isVariableDeclaration,
+	type Node,
+	traverseFast,
+} from "@babel/types";
+import {
+	collectBindingNames,
+	exportBindsValue,
+	exportedName,
+	importBindsValue,
+	parseSource,
+	positionOf,
+} from "./source-ast.ts";
 
 /** Sorted list of every name a module makes available via `export`, syntactic
  * only (no type resolution) — enough to diff a barrel's re-export surface
  * against the original file it replaces. */
 export function listExportedNames(filePath: string): string[] {
-	const sourceText = fs.readFileSync(filePath, "utf8");
-	const sourceFile = ts.createSourceFile(
-		filePath,
-		sourceText,
-		ts.ScriptTarget.Latest,
-		true,
-		ts.ScriptKind.TS,
-	);
+	const source = parseSource(filePath, fs.readFileSync(filePath, "utf8"));
 	const names = new Set<string>();
-	const addBindingNames = (name: ts.BindingName) => {
-		if (ts.isIdentifier(name)) {
-			names.add(name.text);
-			return;
-		}
-		for (const element of name.elements)
-			if (ts.isBindingElement(element)) addBindingNames(element.name);
-	};
-	for (const statement of sourceFile.statements) {
-		const isExported =
-			ts.canHaveModifiers(statement) &&
-			ts
-				.getModifiers(statement)
-				?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword);
-		if (isExported) {
-			if (ts.isVariableStatement(statement)) {
-				for (const declaration of statement.declarationList.declarations)
-					addBindingNames(declaration.name);
-			} else if (
-				(ts.isFunctionDeclaration(statement) ||
-					ts.isClassDeclaration(statement) ||
-					ts.isInterfaceDeclaration(statement) ||
-					ts.isTypeAliasDeclaration(statement) ||
-					ts.isEnumDeclaration(statement)) &&
-				statement.name
-			) {
-				names.add(statement.name.text);
+	for (const statement of source.statements) {
+		if (isExportNamedDeclaration(statement)) {
+			const declaration = statement.declaration;
+			if (declaration) {
+				if (isVariableDeclaration(declaration)) {
+					for (const declarator of declaration.declarations)
+						collectBindingNames(declarator.id, names);
+				} else if (
+					(isFunctionDeclaration(declaration) ||
+						isClassDeclaration(declaration) ||
+						isTSInterfaceDeclaration(declaration) ||
+						isTSTypeAliasDeclaration(declaration) ||
+						isTSEnumDeclaration(declaration)) &&
+					declaration.id
+				) {
+					names.add(declaration.id.name);
+				}
 			}
-		}
-		if (
-			ts.isExportDeclaration(statement) &&
-			statement.exportClause &&
-			ts.isNamedExports(statement.exportClause)
+			for (const specifier of statement.specifiers)
+				if (specifier.type === "ExportSpecifier") {
+					const name = exportedName(specifier);
+					if (name) names.add(name);
+				}
+		} else if (
+			isExportDefaultDeclaration(statement) ||
+			statement.type === "TSExportAssignment"
 		) {
-			for (const element of statement.exportClause.elements)
-				names.add(element.name.text);
+			names.add("default");
 		}
-		if (ts.isExportAssignment(statement)) names.add("default");
 	}
 	return Array.from(names).sort();
 }
@@ -101,64 +111,15 @@ export interface ModuleAnalysis {
 	computedLoading: Array<{ line: number; column: number }>;
 }
 
-function sourceFileFor(file: string): ts.SourceFile {
-	const text = fs.readFileSync(file, "utf8");
-	return ts.createSourceFile(
-		file,
-		text,
-		ts.ScriptTarget.Latest,
-		true,
-		file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-	);
-}
-
-/** True when a static import/export declaration binds at least one value.
- * `import type` / all-type-only named bindings / `export type` are erased by
- * Bun and tsc, so they cannot form a real ESM load-order cycle (design D5
- * relies on exactly this to let types cross the dependency direction). */
-function hasValueBinding(
-	clause: ts.ImportClause | ts.NamedExportBindings | undefined,
-	declaration: ts.ImportDeclaration | ts.ExportDeclaration,
-): boolean {
-	if (ts.isExportDeclaration(declaration) && declaration.isTypeOnly)
-		return false; // `export type ... from`
-	if (ts.isImportDeclaration(declaration)) {
-		const importClause = declaration.importClause;
-		if (!importClause) return true; // side-effect import
-		if (importClause.isTypeOnly) return false; // `import type ... from`
-		if (importClause.name) return true;
-		const named = importClause.namedBindings;
-		if (!named) return false;
-		if (ts.isNamespaceImport(named)) return true;
-		return named.elements.some((element) => !element.isTypeOnly);
-	}
-	if (!declaration.moduleSpecifier) return true;
-	if (!clause) return true; // `export * from "..."` re-exports values
-	if (ts.isNamedExports(clause))
-		return clause.elements.some((element) => !element.isTypeOnly);
-	return ts.isNamespaceExport(clause);
-}
-
-function positionOf(
-	sourceFile: ts.SourceFile,
-	node: ts.Node,
-): { line: number; column: number } {
-	const start = node.getStart(sourceFile);
-	const loc = sourceFile.getLineAndCharacterOfPosition(start);
-	return { line: loc.line + 1, column: loc.character + 1 };
-}
-
-const IMPORT_KEYWORD = ts.SyntaxKind.ImportKeyword;
-
 /** Every module dependency a source file declares, including type-only edges,
  * literal dynamic `import()` targets, and literal `require()` calls. */
 export function analyzeModule(file: string): ModuleAnalysis {
-	const sourceFile = sourceFileFor(file);
+	const source = parseSource(file, fs.readFileSync(file, "utf8"));
 	const edges: ModuleEdge[] = [];
 	const computedLoading: Array<{ line: number; column: number }> = [];
 
 	const addEdge = (
-		node: ts.Node,
+		node: Node,
 		specifier: string,
 		kind: ModuleEdgeKind,
 		typeOnly: boolean,
@@ -167,56 +128,57 @@ export function analyzeModule(file: string): ModuleAnalysis {
 			specifier,
 			kind,
 			typeOnly,
-			...positionOf(sourceFile, node),
+			...positionOf(node),
 			resolved: specifier.startsWith(".")
 				? resolveRelative(file, specifier)
 				: null,
 		});
 	};
 
-	for (const statement of sourceFile.statements) {
-		if (ts.isImportDeclaration(statement)) {
-			if (!ts.isStringLiteral(statement.moduleSpecifier)) continue;
+	for (const statement of source.statements) {
+		if (isImportDeclaration(statement) && isStringLiteral(statement.source)) {
 			addEdge(
-				statement.moduleSpecifier,
-				statement.moduleSpecifier.text,
+				statement.source,
+				statement.source.value,
 				"static",
-				!hasValueBinding(statement.importClause, statement),
+				!importBindsValue(statement),
 			);
-		} else if (ts.isExportDeclaration(statement)) {
-			if (!statement.moduleSpecifier) continue;
-			if (!ts.isStringLiteral(statement.moduleSpecifier)) continue;
+		} else if (
+			(isExportNamedDeclaration(statement) ||
+				isExportAllDeclaration(statement)) &&
+			statement.source &&
+			isStringLiteral(statement.source)
+		) {
 			addEdge(
-				statement.moduleSpecifier,
-				statement.moduleSpecifier.text,
+				statement.source,
+				statement.source.value,
 				"static",
-				!hasValueBinding(statement.exportClause, statement),
+				!exportBindsValue(statement),
 			);
 		}
 	}
 
-	const visitCall = (node: ts.Node): void => {
-		if (ts.isCallExpression(node)) {
-			const expression = node.expression;
-			if (expression.kind === IMPORT_KEYWORD && node.arguments.length >= 1) {
+	const visitCall = (node: Node): void => {
+		if (isCallExpression(node) || isOptionalCallExpression(node)) {
+			const expression = node.callee;
+			if (expression.type === "Import" && node.arguments.length >= 1) {
 				const argument = node.arguments[0];
-				if (ts.isStringLiteral(argument))
-					addEdge(argument, argument.text, "dynamic", false);
-				else computedLoading.push(positionOf(sourceFile, argument));
+				if (isStringLiteral(argument))
+					addEdge(argument, argument.value, "dynamic", false);
+				else computedLoading.push(positionOf(argument));
 			} else if (
-				ts.isIdentifier(expression) &&
-				expression.text === "require" &&
+				isIdentifier(expression) &&
+				expression.name === "require" &&
 				node.arguments.length >= 1
 			) {
 				const argument = node.arguments[0];
-				if (ts.isStringLiteral(argument))
-					addEdge(argument, argument.text, "require", false);
-				else computedLoading.push(positionOf(sourceFile, argument));
+				if (isStringLiteral(argument))
+					addEdge(argument, argument.value, "require", false);
+				else computedLoading.push(positionOf(argument));
 			}
 		}
-		ts.forEachChild(node, visitCall);
 	};
-	for (const statement of sourceFile.statements) visitCall(statement);
+	for (const statement of source.statements) traverseFast(statement, visitCall);
 
 	return {
 		file,

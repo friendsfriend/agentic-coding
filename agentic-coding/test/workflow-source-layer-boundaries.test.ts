@@ -191,9 +191,11 @@ describe("workflow source-layer boundaries (enforce-source-layer-boundaries)", (
 	test("an unresolved project-relative runtime target fails with source and specifier", () => {
 		const root = fixtureRoot("negative", "unresolved-target");
 		const issues = checkUnresolvedRuntimeTargets(root);
-		expect(issues).toHaveLength(1);
-		expect(issues[0].message).toContain("workflow/runtime/broken.ts");
-		expect(issues[0].message).toContain("'./missing.ts'");
+		expect(issues).toHaveLength(2);
+		const text = messages(issues).join("\n");
+		expect(text).toContain("workflow/runtime/broken.ts");
+		expect(text).toContain("'./missing.ts'");
+		expect(text).toContain("'./missing-optional.ts'");
 	});
 
 	test("a dashboard module importing CLI orchestration fails and identifies the application boundary", () => {
@@ -232,13 +234,15 @@ describe("workflow source-layer boundaries (enforce-source-layer-boundaries)", (
 		const issues = checkPureDomain(root, NO_EXCEPTIONS);
 		const globals = issues.filter((issue) => issue.rule === "pure:global");
 		const labels = globals.map((issue) => issue.message);
-		expect(labels).toHaveLength(5);
+		expect(labels).toHaveLength(9);
 		for (const expected of [
 			"Bun.spawnSync",
+			"Bun.file",
 			"fetch",
 			"Date.now",
 			"new Date()",
 			"process.cwd",
+			"process.exit",
 		])
 			expect(labels.some((label) => label.includes(expected))).toBe(true);
 		for (const issue of globals) {
@@ -309,11 +313,15 @@ describe("workflow source-layer boundaries (enforce-source-layer-boundaries)", (
 		const root = fixtureRoot("negative", "nested-runtime");
 		const roots = new Set(["workflow/cli/composition.ts"]);
 		const issues = checkRuntimeBoundaries(root, roots);
-		expect(issues).toHaveLength(1);
-		expect(rel(root, issues[0].file)).toBe("workflow/runtime/service.ts");
-		expect(issues[0].rule).toBe("runtime:nested");
-		expect(issues[0].message).toContain("Effect.runSync");
-		expect(issues[0].line).toBeGreaterThan(0);
+		expect(issues).toHaveLength(2);
+		for (const issue of issues) {
+			expect(rel(root, issue.file)).toBe("workflow/runtime/service.ts");
+			expect(issue.rule).toBe("runtime:nested");
+			expect(issue.line).toBeGreaterThan(0);
+		}
+		const text = messages(issues).join("\n");
+		expect(text).toContain("Effect.runSync");
+		expect(text).toContain("Effect.runPromise");
 	});
 
 	test("a named composition root running Effect is not flagged", () => {
@@ -333,13 +341,17 @@ describe("workflow source-layer boundaries (enforce-source-layer-boundaries)", (
 		const root = fixtureRoot("negative", "obsolete-shim");
 		const issues = checkObsoleteShims(
 			root,
-			new Map([["workflow/legacy-bridge.ts", ["drain"]]]),
+			new Map([["workflow/legacy-bridge.ts", ["drain", "parseSnapshot"]]]),
 		);
-		expect(issues).toHaveLength(1);
-		expect(rel(root, issues[0].file)).toBe("workflow/legacy-bridge.ts");
-		expect(issues[0].rule).toBe("shim:obsolete");
-		expect(issues[0].message).toContain("declares exported");
-		expect(issues[0].message).toContain("drain");
+		expect(issues).toHaveLength(2);
+		for (const issue of issues) {
+			expect(rel(root, issue.file)).toBe("workflow/legacy-bridge.ts");
+			expect(issue.rule).toBe("shim:obsolete");
+			expect(issue.message).toContain("declares exported");
+		}
+		const text = messages(issues).join("\n");
+		expect(text).toContain("drain");
+		expect(text).toContain("parseSnapshot");
 	});
 
 	test("positive fixtures pass every check (evidence/time inputs, application calls, type contracts, wrappers, composition)", () => {

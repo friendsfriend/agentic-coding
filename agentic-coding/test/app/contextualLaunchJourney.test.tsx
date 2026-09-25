@@ -77,7 +77,7 @@ type EnvironmentStart = (project: {
 
 let startFromResourcePage: EnvironmentStart | undefined;
 
-async function renderHomeShell() {
+async function renderHomeShell(width = 140) {
 	const dir = mkdtempSync(join(tmpdir(), "launch-journey-db-"));
 	const db = new TraceDb(dir);
 	const t = await testRender(
@@ -121,7 +121,7 @@ async function renderHomeShell() {
 				/>
 			);
 		},
-		{ width: 140, height: 40 },
+		{ width, height: 40 },
 	);
 	await t.renderOnce();
 	return { t, db };
@@ -280,7 +280,11 @@ test("Home offers the workflow action but never a workflow list, history or reop
 });
 
 test("Home starts a workflow in the working directory or a path the user enters", async () => {
-	const { t, db } = await renderHomeShell();
+	// A checkout path can be longer than the default 140-column frame, which
+	// wraps the prefilled repository path across lines. Render this journey wide
+	// enough that the absolute working directory is visible contiguously, so the
+	// assertion does not depend on the checkout's length.
+	const { t, db } = await renderHomeShell(240);
 	await t.waitForFrame((value) => value.includes("Settings"));
 	// Home order is Environments, Observability, Wiki, Settings, New workflow.
 	for (let index = 0; index < 4; index += 1) {
