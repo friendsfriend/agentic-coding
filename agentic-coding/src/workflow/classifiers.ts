@@ -7,8 +7,6 @@
 // and rewriting routing) in `classifier-runner.ts`, so adding another JEV
 // integration is one entry here plus (optionally) a new workflow step — no
 // engine branches.
-import type { RuntimeId } from "../contracts/workflow.ts";
-
 /** One category a classifier may return. Categories are integration-local
  * strings; the routing layer maps them to profiles through the preset. */
 export type ClassifierCategory = string;
@@ -29,6 +27,12 @@ export interface ClassifierTarget {
 	readonly role?: string;
 }
 
+export interface ClassifierQuestion {
+	readonly id: string;
+	readonly instructions: string;
+	readonly criteria: Readonly<Record<ClassifierCategory, string>>;
+}
+
 export interface ClassifierIntegration {
 	readonly id: string;
 	readonly label: string;
@@ -36,12 +40,14 @@ export interface ClassifierIntegration {
 	readonly categories: readonly ClassifierCategory[];
 	/** Step/role whose pinned profile this classification overrides. */
 	readonly target: ClassifierTarget;
-	/** Config profile used to invoke the classifier; absent means the
-	 * integration's own runtime/model below is used. */
+	/** Config profile used to select the classifier model. */
 	readonly profile: string;
-	readonly runtime: RuntimeId;
+	/** OpenCode Zen System One endpoint used by this classifier. */
+	readonly endpoint: string;
+	/** Typed question sent to System One. */
+	readonly question: ClassifierQuestion;
 	readonly model: string;
-	/** Prepended to the rendered artifacts to form the classifier prompt. */
+	/** Prepended to the rendered artifacts to form the classifier state. */
 	readonly instruction: string;
 	/** Parse a raw model answer into exactly one category, or throw. */
 	parse(raw: string): ClassifierCategory;
@@ -89,12 +95,15 @@ export function parseCategoryAnswer(
 
 const COMPLEXITY_INSTRUCTION = `You classify the implementation complexity of an OpenSpec change.
 Judge how much engineering effort and care the tasks require, not how terse the
-proposal is. Return one of:
-- easy: a tiny, low-risk change scoped to one or two files
-- medium: a normal change touching a few modules with clear requirements
-- hard: a broad or subtle change with many moving parts or integration risk
-- critical: a high-risk change with architectural, migration, security, or
-  cross-cutting consequences`;
+proposal is.`;
+
+const COMPLEXITY_CRITERIA = Object.freeze({
+	easy: "A tiny, low-risk change scoped to one or two files",
+	medium: "A normal change touching a few modules with clear requirements",
+	hard: "A broad or subtle change with many moving parts or integration risk",
+	critical:
+		"A high-risk change with architectural, migration, security, or cross-cutting consequences",
+});
 
 /** The first integration: worker-model range from plan complexity. This is
  * the only classifier the workflow family currently routes; more integrations
@@ -105,8 +114,13 @@ export const complexityClassifier: ClassifierIntegration = Object.freeze({
 	categories: Object.freeze(["easy", "medium", "hard", "critical"]),
 	target: Object.freeze({ stepId: "core.implementation", role: "worker" }),
 	profile: "jev-classifier",
-	runtime: "pi",
-	model: "opencode-go/jev-1.13",
+	endpoint: "https://opencode.ai/zen/v1/systemone",
+	question: {
+		id: "complexity",
+		instructions: "Which complexity class fits this planned change?",
+		criteria: COMPLEXITY_CRITERIA,
+	},
+	model: "opencode/jev-1.13-free",
 	instruction: COMPLEXITY_INSTRUCTION,
 	parse: (raw: string) =>
 		parseCategoryAnswer(

@@ -2,14 +2,16 @@ import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Effect } from "effect";
 import type {
 	ResolvedProfile,
 	WorkflowSnapshot,
 } from "../src/contracts/workflow.ts";
 import {
 	CLASSIFIER_ARTIFACT_CAP_BYTES,
-	classifierCommand,
+	classifierRequest,
 	collectClassifierArtifacts,
+	invokeClassifier,
 } from "../src/workflow/classifier-runner.ts";
 import {
 	CLASSIFIER_INTEGRATIONS,
@@ -23,7 +25,6 @@ import {
 	registerBuiltins,
 } from "../src/workflow/definitions.ts";
 import {
-	type AgentsConfig,
 	categoryProfile,
 	parseAgentsConfig,
 	resolvePreset,
@@ -79,7 +80,7 @@ describe("classifier integrations (domain)", () => {
 	});
 });
 
-describe("classifier runner (artifact collection + command)", () => {
+describe("classifier runner (artifact collection + System One request)", () => {
 	test("collects planning artifacts and specs in a stable order", () => {
 		const worktree = tempDir();
 		const root = path.join(worktree, "openspec", "changes", "add-thing");
@@ -114,40 +115,89 @@ describe("classifier runner (artifact collection + command)", () => {
 		);
 	});
 
-	test("builds a pi one-shot command with the integration default model", () => {
-		const agents = { profiles: {} } as unknown as AgentsConfig;
-		const command = classifierCommand(
+	test("builds a direct OpenCode Zen System One request", () => {
+		const request = classifierRequest(
 			complexityClassifier,
-			agents,
+			complexityClassifier.model,
 			"classify this",
-			"/worktree",
 		);
-		expect(command.cwd).toBe("/worktree");
-		expect(command.args[0]).toBe("pi");
-		expect(command.args).toContain("--print");
-		expect(command.args).toContain("--model");
-		expect(command.args).toContain("opencode-go/jev-1.13");
-		expect(command.args.at(-1)).toBe("classify this");
+		expect(request.url).toBe("https://opencode.ai/zen/v1/systemone");
+		expect(request.body.model).toBe("jev-1.13-free");
+		expect(request.body.state).toBe("classify this");
+		expect(request.body.questions.complexity).toEqual({
+			type: "choice",
+			instructions: "Which complexity class fits this planned change?",
+			criteria: {
+				easy: "A tiny, low-risk change scoped to one or two files",
+				medium:
+					"A normal change touching a few modules with clear requirements",
+				hard: "A broad or subtle change with many moving parts or integration risk",
+				critical:
+					"A high-risk change with architectural, migration, security, or cross-cutting consequences",
+			},
+		});
 	});
 
-	test("honours a configured classifier profile and runtime", () => {
+	test("uses configured OpenCode model and config-root env-file key", async () => {
 		const agents = parseAgentsConfig({
 			profiles: {
 				"jev-classifier": {
-					runtime: "pi",
-					model: "opencode-go/other",
-					thinking: "low",
+					runtime: "opencode",
+					model: "opencode/jev-1.13-free",
 				},
 			},
 		});
-		const command = classifierCommand(
-			complexityClassifier,
-			agents,
-			"prompt",
-			"/worktree",
+		const configDir = tempDir();
+		fs.writeFileSync(
+			path.join(configDir, ".env"),
+			"OPENCODE_API_KEY=test-key\n",
 		);
-		expect(command.args).toContain("opencode-go/other");
-		expect(command.args).toEqual(expect.arrayContaining(["--thinking", "low"]));
+		const previousKey = process.env.OPENCODE_API_KEY;
+		const previousConfigDir = process.env.AGENTIC_CODING_CONFIG_DIR;
+		const previousFetch = globalThis.fetch;
+		let sent: { url: string; init?: RequestInit } | undefined;
+		delete process.env.OPENCODE_API_KEY;
+		process.env.AGENTIC_CODING_CONFIG_DIR = configDir;
+		globalThis.fetch = (async (url, init) => {
+			sent = { url: String(url), init };
+			return new Response(
+				JSON.stringify({
+					answers: {
+						complexity: {
+							type: "choice",
+							choice: "hard",
+						},
+					},
+				}),
+				{ status: 200 },
+			);
+		}) as typeof fetch;
+		try {
+			expect(
+				await Effect.runPromise(
+					invokeClassifier(complexityClassifier, agents, {
+						task: "task",
+						changeId: "change",
+						artifacts: [],
+					}),
+				),
+			).toBe("hard");
+			expect(sent?.url).toBe("https://opencode.ai/zen/v1/systemone");
+			expect(sent?.init?.headers).toEqual({
+				Authorization: "Bearer test-key",
+				"Content-Type": "application/json",
+			});
+			const body = JSON.parse(String(sent?.init?.body));
+			expect(body.model).toBe("jev-1.13-free");
+			expect(body.questions.complexity.type).toBe("choice");
+		} finally {
+			globalThis.fetch = previousFetch;
+			if (previousKey === undefined) delete process.env.OPENCODE_API_KEY;
+			else process.env.OPENCODE_API_KEY = previousKey;
+			if (previousConfigDir === undefined)
+				delete process.env.AGENTIC_CODING_CONFIG_DIR;
+			else process.env.AGENTIC_CODING_CONFIG_DIR = previousConfigDir;
+		}
 	});
 });
 

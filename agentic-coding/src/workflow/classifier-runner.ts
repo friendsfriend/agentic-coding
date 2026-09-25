@@ -1,7 +1,7 @@
 // Runtime half of the pluggable classifier integrations
 // (introduce-jev-for-model-range-decision): collect the bounded OpenSpec
-// artifacts, turn them into a prompt through the integration, invoke the
-// configured classifier model, and return its raw answer. The effect handler
+// artifacts, turn them into a System One request, invoke the configured
+// classifier model, and return its selected answer. The effect handler
 // in `effect-runner.ts` owns outbox/lease concerns; this module stays a plain
 // bounded I/O helper so it can be unit-tested without a workflow.
 import fs from "node:fs";
@@ -9,12 +9,12 @@ import path from "node:path";
 import { Effect } from "effect";
 import type { ClassifierInput, ClassifierIntegration } from "./classifiers.ts";
 import { renderClassifierPrompt } from "./classifiers.ts";
+import { configEnvValue, postJsonEffect } from "./effects.ts";
 import { PermanentFailure, TransientFailure } from "./failures.ts";
-import { runProcessEffect } from "./process.ts";
 import type { AgentsConfig } from "./profiles.ts";
 
 /** Per-artifact and total caps so a large change cannot blow up the prompt or
- * the process argv budget. */
+ * the request body budget. */
 export const CLASSIFIER_ARTIFACT_CAP_BYTES = 96 * 1024;
 export const CLASSIFIER_TOTAL_CAP_BYTES = 256 * 1024;
 
@@ -57,57 +57,142 @@ export function collectClassifierArtifacts(
 	return artifacts;
 }
 
-export interface ClassifierCommand {
-	readonly args: string[];
-	readonly cwd: string;
+export interface ClassifierRequest {
+	readonly url: string;
+	readonly body: {
+		readonly model: string;
+		readonly state: string;
+		readonly questions: Record<
+			string,
+			{
+				readonly type: "choice";
+				readonly instructions: string;
+				readonly criteria: Readonly<Record<string, string>>;
+			}
+		>;
+	};
 }
 
-/** Build the one-shot model command. Only `pi` is wired today; the
- * classifier integration's own runtime/model are used unless the configured
- * profile overrides them. */
-export function classifierCommand(
+/** Build the typed OpenCode Zen System One request. JEV model IDs are bare at
+ * this endpoint; config keeps the provider/model spelling for clarity. */
+export function classifierRequest(
 	integration: ClassifierIntegration,
-	agents: AgentsConfig,
-	prompt: string,
-	cwd: string,
-): ClassifierCommand {
-	const profile = Object.hasOwn(agents.profiles, integration.profile)
-		? agents.profiles[integration.profile]
-		: undefined;
-	const runtime = profile?.runtime ?? integration.runtime;
-	const model = profile?.model ?? integration.model;
-	const executable =
-		profile?.executable ?? (runtime === "opencode-v2" ? "opencode2" : runtime);
-	if (runtime !== "pi")
+	model: string,
+	state: string,
+): ClassifierRequest {
+	const prefix = "opencode/";
+	if (!model.startsWith(prefix) || model.length === prefix.length)
 		throw new PermanentFailure(
-			`classifier runtime ${runtime} is not supported yet for ${integration.id}`,
+			`classifier ${integration.id} requires an opencode/ model, got ${model}`,
 		);
-	const args = [
-		executable,
-		"--print",
-		"--mode",
-		"text",
-		"--no-session",
-		"--no-extensions",
-		"--no-skills",
-		"--no-prompt-templates",
-		"--no-context-files",
-		"--no-tools",
-		"--model",
-		model,
-	];
-	if (profile?.thinking) args.push("--thinking", profile.thinking);
-	args.push(prompt);
-	return { args, cwd };
+	const question = integration.question;
+	return {
+		url: integration.endpoint,
+		body: {
+			model: model.slice(prefix.length),
+			state,
+			questions: {
+				[question.id]: {
+					type: "choice",
+					instructions: question.instructions,
+					criteria: question.criteria,
+				},
+			},
+		},
+	};
 }
 
-/** Invoke one classifier and return its raw answer text. Transient process
- * failures request the durable retry budget; a missing executable or an
- * unusable invocation is permanent. */
+const CLASSIFIER_TIMEOUT_MS = 300_000;
+
+function answerChoice(
+	integration: ClassifierIntegration,
+	body: string,
+): string {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(body);
+	} catch {
+		throw new PermanentFailure(
+			`classifier ${integration.id} returned invalid JSON`,
+		);
+	}
+	if (!parsed || typeof parsed !== "object")
+		throw new PermanentFailure(
+			`classifier ${integration.id} returned invalid System One data`,
+		);
+	const answers = (parsed as { answers?: unknown }).answers;
+	const answer =
+		answers && typeof answers === "object"
+			? (answers as Record<string, unknown>)[integration.question.id]
+			: undefined;
+	const choice =
+		answer && typeof answer === "object"
+			? (answer as { choice?: unknown }).choice
+			: undefined;
+	if (typeof choice !== "string" || !choice.trim())
+		throw new PermanentFailure(
+			`classifier ${integration.id} returned no choice for ${integration.question.id}`,
+		);
+	return choice;
+}
+
+function requestClassifier(
+	integration: ClassifierIntegration,
+	request: ClassifierRequest,
+	signal?: AbortSignal,
+): Effect.Effect<string, Error> {
+	const apiKey = configEnvValue("OPENCODE_API_KEY")?.trim();
+	if (!apiKey)
+		return Effect.fail(
+			new PermanentFailure(
+				`classifier ${integration.id} requires OPENCODE_API_KEY`,
+			),
+		);
+	return Effect.gen(function* () {
+		const response = yield* postJsonEffect(
+			request.url,
+			request.body,
+			{
+				Authorization: `Bearer ${apiKey}`,
+				"Content-Type": "application/json",
+			},
+			{ signal, timeoutMs: CLASSIFIER_TIMEOUT_MS },
+		).pipe(
+			Effect.mapError(
+				(error) =>
+					new TransientFailure(
+						`classifier ${integration.id} request failed: ${error.message}`,
+					),
+			),
+		);
+		if (response.status < 200 || response.status >= 300) {
+			const message = `classifier ${integration.id} provider returned ${response.status}`;
+			if (
+				response.status === 408 ||
+				response.status === 425 ||
+				response.status === 429 ||
+				response.status >= 500
+			)
+				return yield* Effect.fail(new TransientFailure(message));
+			return yield* Effect.fail(new PermanentFailure(message));
+		}
+		return yield* Effect.try({
+			try: () => answerChoice(integration, response.body),
+			catch: (error) =>
+				error instanceof PermanentFailure
+					? error
+					: new PermanentFailure(
+							`classifier ${integration.id} response parsing failed: ${error instanceof Error ? error.message : String(error)}`,
+						),
+		});
+	});
+}
+
+/** Invoke one classifier through OpenCode Zen's System One endpoint and return
+ * its selected choice. Provider failures are typed for durable retry handling. */
 export function invokeClassifier(
 	integration: ClassifierIntegration,
 	agents: AgentsConfig,
-	worktree: string,
 	input: {
 		task: string;
 		changeId: string;
@@ -115,24 +200,11 @@ export function invokeClassifier(
 	},
 	signal?: AbortSignal,
 ): Effect.Effect<string, Error> {
-	return Effect.gen(function* () {
-		const prompt = renderClassifierPrompt(integration, input);
-		const command = classifierCommand(integration, agents, prompt, worktree);
-		const result = yield* runProcessEffect(command.args, {
-			cwd: command.cwd,
-			signal,
-			timeoutMs: 300_000,
-		}).pipe(
-			Effect.mapError((failure) =>
-				failure._tag === "exit"
-					? new PermanentFailure(
-							`classifier ${integration.id} exited ${failure.exitCode}: ${failure.detail}`,
-						)
-					: new TransientFailure(
-							`classifier ${integration.id} failed: ${failure.detail}`,
-						),
-			),
-		);
-		return result.stdout.trim();
-	});
+	const profile = Object.hasOwn(agents.profiles, integration.profile)
+		? agents.profiles[integration.profile]
+		: undefined;
+	const model = profile?.model ?? integration.model;
+	const prompt = renderClassifierPrompt(integration, input);
+	const request = classifierRequest(integration, model, prompt);
+	return requestClassifier(integration, request, signal);
 }

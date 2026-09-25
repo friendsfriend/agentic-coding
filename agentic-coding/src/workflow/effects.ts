@@ -4,12 +4,14 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Effect } from "effect";
 import {
 	assertNoPendingMigration,
 	configDiagnostic,
 	resolveConfigRoot,
 } from "../config-root.ts";
 import type { WorkflowExecutionSettings } from "../contracts/workflow.ts";
+import { loadEnvFile, resolveEnvReference } from "../env-file.ts";
 import { Herdr } from "../herdr-client.ts";
 import { TELEMETRY_FLUSH_BUDGET_MS } from "./observability.ts";
 
@@ -53,6 +55,56 @@ export class Clock {
 	async sleep(seconds: number): Promise<void> {
 		await Bun.sleep(seconds * 1000);
 	}
+}
+
+export interface JsonPostResult {
+	readonly status: number;
+	readonly body: string;
+}
+
+export interface JsonPostOptions {
+	readonly signal?: AbortSignal;
+	readonly timeoutMs?: number;
+}
+
+/** Cancellable, bounded-lifetime JSON POST boundary for workflow providers. */
+export function postJsonEffect(
+	url: string,
+	body: unknown,
+	headers: Record<string, string>,
+	options: JsonPostOptions = {},
+): Effect.Effect<JsonPostResult, Error> {
+	return Effect.tryPromise({
+		try: async () => {
+			const controller = new AbortController();
+			let timedOut = false;
+			const timeout = setTimeout(() => {
+				timedOut = true;
+				controller.abort();
+			}, options.timeoutMs ?? 120_000);
+			const abort = () => controller.abort();
+			if (options.signal?.aborted) controller.abort();
+			else options.signal?.addEventListener("abort", abort, { once: true });
+			try {
+				const response = await fetch(url, {
+					method: "POST",
+					headers,
+					body: JSON.stringify(body),
+					signal: controller.signal,
+				});
+				return { status: response.status, body: await response.text() };
+			} catch (error) {
+				if (timedOut) throw new Error("request timed out");
+				if (options.signal?.aborted) throw new Error("request canceled");
+				throw error;
+			} finally {
+				clearTimeout(timeout);
+				options.signal?.removeEventListener("abort", abort);
+			}
+		},
+		catch: (error) =>
+			error instanceof Error ? error : new Error(String(error)),
+	});
 }
 
 function traceEndpoint(): string {
@@ -439,6 +491,14 @@ function resolveConfigWithProvenance(
 
 export function loadConfig(options?: ConfigOptions): WorkflowConfig {
 	return loadConfigWithProvenance(options).config;
+}
+
+/** Resolve one secret from process environment or selected config-root `.env`.
+ * Explicit process values win, matching provider credential resolution. */
+export function configEnvValue(name: string): string | undefined {
+	return resolveEnvReference(name, {
+		fileVars: loadEnvFile(path.join(resolveConfigRoot(), ".env")),
+	});
 }
 
 /** The trusted user-owned configuration files, in load precedence order

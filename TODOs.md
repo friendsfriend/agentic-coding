@@ -1,10 +1,7 @@
 Not for agents. This is only for humans.
 
 Fixes: 
-* No task input for jev based openspec workflow
-* Remove ctrl + s keybind from preset and profile editting ui. Should be done with enter
 * Agent status in the tab header seems to not update correctly. If a agent finishes and then starts working again the status stays the same
-* Sometimes developer questions dont show up in the dashboard
 
 Big ones:
 * Agent steered version of the workflow. Basically an orchestrator version of the workflow.

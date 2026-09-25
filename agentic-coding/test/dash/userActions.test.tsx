@@ -239,17 +239,19 @@ test("dismissed plan review stays closed during panel interactions", async () =>
 
 test("pending plan review reopens when the dashboard becomes active again", async () => {
 	const [active, setActive] = createSignal(false);
-	const t = await testRender(
-		() => <TestDashboard active={active} />,
-		{ width: 120, height: 40 },
-	);
+	const t = await testRender(() => <TestDashboard active={active} />, {
+		width: 120,
+		height: 40,
+	});
 
 	setActive(true);
 	await t.waitForFrame((frame) => frame.includes("Plan review"));
 	setActive(false);
 	await t.waitForFrame((frame) => !frame.includes("Plan review"));
 	setActive(true);
-	const reopened = await t.waitForFrame((frame) => frame.includes("Plan review"));
+	const reopened = await t.waitForFrame((frame) =>
+		frame.includes("Plan review"),
+	);
 	expect(reopened).toContain("proposal.md");
 	t.renderer.destroy();
 });

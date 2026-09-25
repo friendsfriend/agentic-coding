@@ -46,6 +46,7 @@ export function scheduleDrain(
 		"HERDR_SOCKET_PATH",
 		"HERDR_WORKFLOW_CONFIG",
 		"HERDR_WIKI_DIR",
+		"OPENCODE_API_KEY",
 	];
 	// The detached drain resolves the same configuration root as its parent.
 	const env = {

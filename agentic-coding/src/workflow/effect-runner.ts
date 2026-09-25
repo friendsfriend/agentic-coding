@@ -1104,7 +1104,6 @@ export function agentEffectHandlers(
 					const raw = yield* invokeClassifier(
 						integration,
 						agents,
-						snapshot.metadata.worktree,
 						{
 							task: snapshot.metadata.task ?? "",
 							changeId: snapshot.metadata.changeId,
