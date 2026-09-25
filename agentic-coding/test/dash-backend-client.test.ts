@@ -4,6 +4,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { WorkflowView } from "../src/contracts/workflow.ts";
 import {
+	BackendClient,
 	backendClient,
 	clearBackendClient,
 	configureBackendClient,
@@ -116,6 +117,22 @@ afterEach(() => {
 });
 
 describe("dashboard mutations cross the typed backend API", () => {
+	test("loopback dashboard client follows server capability rotation", async () => {
+		const server = await startWorkflowServer({
+			operations: recordingOperations({}),
+		});
+		try {
+			const client = new BackendClient({
+				baseUrl: server.url,
+				token: "stale-token",
+				ownerId: "stale-dashboard",
+			});
+			await client.execute({ repo: "/repo", workflowId: "wf-1" });
+		} finally {
+			await server.stop();
+		}
+	});
+
 	test("repair, question, action and start reach the server operations", async () => {
 		const calls: Calls = {};
 		const server = await startWorkflowServer({

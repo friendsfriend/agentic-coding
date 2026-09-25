@@ -5,9 +5,12 @@
 // are bounded before any handler sees them.
 //
 // The token is generated once per server instance and handed to the owning
-// TUI/CLI over an inherited descriptor or environment variable — never a URL,
-// never a log line, never an event payload.
-import { timingSafeEqual } from "node:crypto";
+// TUI/CLI over an inherited descriptor, environment variable, or mode-0600
+// loopback handoff file — never a URL, log line, or event payload.
+import { randomUUID, timingSafeEqual } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { MAX_PATH_CHARS, MAX_REQUEST_BYTES } from "./protocol.ts";
 
 export class AuthorizationError extends Error {
@@ -28,6 +31,64 @@ export class PayloadBoundError extends Error {
 export interface InstanceAuthority {
 	readonly instance: string;
 	readonly token: string;
+}
+
+/** Loopback clients can reread current capability after server restart. The
+ * file is mode 0600 and replaced atomically; it is a handoff mechanism, not an
+ * authorization bypass. */
+export function instanceTokenFile(port: number): string {
+	const owner =
+		typeof process.getuid === "function"
+			? String(process.getuid())
+			: (process.env.USER ?? "user");
+	return path.join(os.tmpdir(), `agentic-coding-${owner}-${port}.token`);
+}
+
+export function instanceTokenFileForUrl(baseUrl: string): string | undefined {
+	try {
+		const url = new URL(baseUrl);
+		if (
+			url.hostname !== "127.0.0.1" &&
+			url.hostname !== "localhost" &&
+			url.hostname !== "[::1]" &&
+			url.hostname !== "::1"
+		)
+			return undefined;
+		const port = Number(url.port || (url.protocol === "https:" ? 443 : 80));
+		return Number.isInteger(port) && port > 0 && port <= 65535
+			? instanceTokenFile(port)
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+export function readInstanceTokenFile(file: string): string | undefined {
+	try {
+		const token = fs.readFileSync(file, "utf8").trim();
+		return token || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+export function publishInstanceToken(file: string, token: string): void {
+	const temporary = `${file}.${randomUUID()}.tmp`;
+	try {
+		fs.writeFileSync(temporary, `${token}\n`, { mode: 0o600 });
+		fs.renameSync(temporary, file);
+	} finally {
+		try {
+			fs.unlinkSync(temporary);
+		} catch {}
+	}
+}
+
+export function removeInstanceToken(file: string, token: string): void {
+	if (readInstanceTokenFile(file) !== token) return;
+	try {
+		fs.unlinkSync(file);
+	} catch {}
 }
 
 /** A fresh per-instance identity + capability token. A caller that has already

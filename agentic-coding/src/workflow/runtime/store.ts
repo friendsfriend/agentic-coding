@@ -36,6 +36,7 @@ export const EFFECT_KINDS = new Set<EffectKind>([
 	"agent.launch",
 	"agent.prompt",
 	"agent.stop",
+	"model.classify",
 	"notification.show",
 	"openspec.validate",
 	"wiki.verify",

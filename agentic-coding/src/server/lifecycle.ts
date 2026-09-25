@@ -6,7 +6,12 @@
 // Bun/Promise I/O lives here; operation handlers stay transport-agnostic.
 
 import { createServerApp, type ServerApp } from "./app.ts";
-import { createInstanceAuthority } from "./auth.ts";
+import {
+	createInstanceAuthority,
+	instanceTokenFile,
+	publishInstanceToken,
+	removeInstanceToken,
+} from "./auth.ts";
 import { CredentialRegistry } from "./credentials.ts";
 import type { EnvironmentAuthority } from "./environment/private-api.ts";
 import { EventBroker } from "./events.ts";
@@ -138,6 +143,8 @@ export async function startWorkflowServer(
 			: undefined;
 	const assignedPort = listener.port ?? options.port ?? 0;
 	const url = `http://${listener.hostname}:${assignedPort}`;
+	const tokenFile = instanceTokenFile(assignedPort);
+	publishInstanceToken(tokenFile, authority.token);
 	let stopped = false;
 	return {
 		url,
@@ -153,6 +160,7 @@ export async function startWorkflowServer(
 			credentials.cancelAll();
 			events.closeAll();
 			hub.stop();
+			removeInstanceToken(tokenFile, authority.token);
 			await ownedReceivers?.stop();
 			ownedTelemetry?.close();
 			await listener.stop(true);

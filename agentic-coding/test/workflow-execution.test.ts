@@ -12,7 +12,10 @@ import path from "node:path";
 import { Effect, Either } from "effect";
 import { decodeHerdrResult } from "../src/herdr-client.ts";
 import { runGitWithCredentialsEffect } from "../src/workflow/credentials.ts";
-import { registerBuiltins } from "../src/workflow/definitions.ts";
+import {
+	BUILTIN_EFFECTS,
+	registerBuiltins,
+} from "../src/workflow/definitions.ts";
 import {
 	agentEffectHandlers,
 	classifyFailure,
@@ -99,6 +102,10 @@ function startWorkflow(
 }
 
 test("every registered EffectKind has a migrated handler (coverage gate)", () => {
+	for (const kind of BUILTIN_EFFECTS)
+		expect(EFFECT_KINDS.has(kind), `missing runtime effect kind ${kind}`).toBe(
+			true,
+		);
 	const registry = registerBuiltins();
 	const engine = new WorkflowEngine(registry);
 	const handlers = agentEffectHandlers(os.tmpdir(), engine, {

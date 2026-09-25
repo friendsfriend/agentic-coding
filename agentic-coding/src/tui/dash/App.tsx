@@ -1208,7 +1208,18 @@ export function App(props: {
 				})
 				.catch(() => undefined);
 			onCleanup(() => seedController.abort());
-			void requestExecution(props.repo, props.workflowId);
+			void requestExecution(props.repo, props.workflowId).catch((error) => {
+				// Initial execution is best-effort; refresh owns visible diagnostics.
+				traceTui(
+					"tui.dashboard.execute",
+					{
+						surface: "dashboard",
+						action: "execute",
+						detail: error instanceof Error ? error.message : String(error),
+					},
+					"error",
+				);
+			});
 		}
 		// The sidebar presentation, execution coordinator and shared application
 		// runtime are root-owned (task 1.2/1.3): hiding this feature view must

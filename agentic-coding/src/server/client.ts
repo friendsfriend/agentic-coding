@@ -37,6 +37,7 @@ import {
 	workflowViewListSchema,
 	workflowViewSchema,
 } from "../contracts/workflow.ts";
+import { instanceTokenFileForUrl, readInstanceTokenFile } from "./auth.ts";
 import { SERVER_API_VERSION } from "./protocol.ts";
 
 export interface BackendClientConfig {
@@ -101,9 +102,14 @@ export class BackendClient implements DashboardGateway {
 		}
 	}
 
-	private headers(json: boolean): Headers {
+	private authToken(): string {
+		const file = instanceTokenFileForUrl(this.baseUrl);
+		return (file && readInstanceTokenFile(file)) ?? this.token;
+	}
+
+	private headers(json: boolean, token = this.authToken()): Headers {
 		const headers = new Headers();
-		headers.set("authorization", `Bearer ${this.token}`);
+		headers.set("authorization", `Bearer ${token}`);
 		headers.set("x-api-version", SERVER_API_VERSION);
 		headers.set("x-client-owner", this.ownerId);
 		if (json) headers.set("content-type", "application/json");
@@ -117,13 +123,21 @@ export class BackendClient implements DashboardGateway {
 		signal?: AbortSignal,
 	): Promise<unknown> {
 		let response: Response;
-		try {
-			response = await fetch(`${this.baseUrl}${path}`, {
+		const token = this.authToken();
+		const send = (authorization: string) =>
+			fetch(`${this.baseUrl}${path}`, {
 				method,
-				headers: this.headers(body !== undefined),
+				headers: this.headers(body !== undefined, authorization),
 				body: body === undefined ? undefined : JSON.stringify(body),
 				...(signal ? { signal } : {}),
 			});
+		try {
+			response = await send(token);
+			// A stale fallback token can survive while a loopback server restarts.
+			// Retry once with configured token for callers attached to a server that
+			// does not publish a local token file.
+			if (response.status === 401 && token !== this.token)
+				response = await send(this.token);
 		} catch (error) {
 			// A cancelled call reports one stable error shape regardless of what
 			// the runtime threw, so both adapters behave identically (task 3.6).
@@ -447,10 +461,16 @@ export class BackendClient implements DashboardGateway {
 		this.stateListeners.add(handlers.onConnectionChange ?? (() => {}));
 		void (async () => {
 			try {
-				const response = await fetch(`${this.baseUrl}/api/v1/events${query}`, {
-					headers: this.headers(false),
+				const token = this.authToken();
+				let response = await fetch(`${this.baseUrl}/api/v1/events${query}`, {
+					headers: this.headers(false, token),
 					signal: controller.signal,
 				});
+				if (response.status === 401 && token !== this.token)
+					response = await fetch(`${this.baseUrl}/api/v1/events${query}`, {
+						headers: this.headers(false, this.token),
+						signal: controller.signal,
+					});
 				if (!response.ok || !response.body)
 					throw new BackendClientError(
 						response.status,
