@@ -11,3 +11,4 @@ Big ones:
 Small ones: 
 * (Maybe) Give all agents their own tab. Multitab spawning always has issues for some reason
 * Improve agent steering based on recent runs (observability first)
+
