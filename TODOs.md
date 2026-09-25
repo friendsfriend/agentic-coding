@@ -1,7 +1,6 @@
 Not for agents. This is only for humans.
 
 Fixes: 
-* Test verifier is missing from the agents panel in the dashboard -> on the second run it was there
 
 Big ones:
 * Agent steered version of the workflow. Basically an orchestrator version of the workflow.
