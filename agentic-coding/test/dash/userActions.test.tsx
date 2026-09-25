@@ -44,6 +44,7 @@ function TestDashboard(
 		noUpstream?: boolean;
 		artifacts?: number;
 		testData?: DashboardData;
+		active?: () => boolean;
 	} = {},
 ) {
 	const renderer = useRenderer();
@@ -96,6 +97,7 @@ function TestDashboard(
 				(props.artifacts ? artifactsFixture(props.artifacts) : undefined)
 			}
 			keymap={keymap}
+			active={props.active}
 		/>
 	);
 }
@@ -232,6 +234,23 @@ test("dismissed plan review stays closed during panel interactions", async () =>
 	const frame = t.captureCharFrame();
 	expect(frame).toContain("OpenSpec ·");
 	expect(frame).not.toContain("Plan review");
+	t.renderer.destroy();
+});
+
+test("pending plan review reopens when the dashboard becomes active again", async () => {
+	const [active, setActive] = createSignal(false);
+	const t = await testRender(
+		() => <TestDashboard active={active} />,
+		{ width: 120, height: 40 },
+	);
+
+	setActive(true);
+	await t.waitForFrame((frame) => frame.includes("Plan review"));
+	setActive(false);
+	await t.waitForFrame((frame) => !frame.includes("Plan review"));
+	setActive(true);
+	const reopened = await t.waitForFrame((frame) => frame.includes("Plan review"));
+	expect(reopened).toContain("proposal.md");
 	t.renderer.destroy();
 });
 

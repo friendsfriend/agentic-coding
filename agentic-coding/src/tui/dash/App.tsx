@@ -1021,7 +1021,9 @@ export function App(props: {
 		// when the shell switches features. Pending backend prompts remain pending
 		// and are re-presented when Workflows becomes active again.
 		const currentModalState = modalHost.state();
-		modalHost.set({ stack: [], nextSeq: currentModalState.nextSeq });
+		if (currentModalState.stack.length > 0)
+			modalHost.set({ stack: [], nextSeq: currentModalState.nextSeq });
+		promptedUserActionKey = undefined;
 		setCredentialInput("");
 		setQuestionOpen(false);
 		setUserActionOpen(false);

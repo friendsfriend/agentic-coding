@@ -2,7 +2,7 @@
 import { expect, test } from "bun:test";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
-import { onCleanup } from "solid-js";
+import { createSignal, onCleanup } from "solid-js";
 import type {
 	DashboardData,
 	DeveloperDialogueRecord,
@@ -66,7 +66,10 @@ function fixture(
 	};
 }
 
-function TestDashboard(props: { testData: DashboardData }) {
+function TestDashboard(props: {
+	testData: DashboardData;
+	active?: () => boolean;
+}) {
 	const renderer = useRenderer();
 	const keymap = createDefaultOpenTuiKeymap(renderer);
 	const dispose = keymap.registerLayerFields({
@@ -86,6 +89,7 @@ function TestDashboard(props: { testData: DashboardData }) {
 			profile="test"
 			testData={props.testData}
 			keymap={keymap}
+			active={props.active}
 		/>
 	);
 }
@@ -103,6 +107,29 @@ test("a pending developer question opens the dashboard modal", async () => {
 	expect(frame).toContain("Which implementation should land?");
 	expect(frame).toContain("Option A");
 	expect(frame).toContain("[1 scope");
+	t.renderer.destroy();
+});
+
+test("planning questions surface when the dashboard becomes active", async () => {
+	const [active, setActive] = createSignal(false);
+	const question = {
+		...pendingQuestion(),
+		workflowId: "demo",
+		runId: "planning-run",
+		stepId: "core.planning",
+		role: "planner",
+	};
+	const t = await testRender(
+		() => <TestDashboard testData={fixture([question])} active={active} />,
+		{ width: 120, height: 40 },
+	);
+
+	setActive(true);
+	const frame = await t.waitForFrame((value) =>
+		value.includes("Which implementation should land?"),
+	);
+	expect(frame).toContain("Developer input");
+	expect(frame).toContain("Option A");
 	t.renderer.destroy();
 });
 
