@@ -8,7 +8,10 @@ import { testRender, useRenderer } from "@opentui/solid";
 import { activeKeybindCatalog } from "@ui";
 import { createSignal, onCleanup } from "solid-js";
 import { clearAgentConfigCache } from "../../src/tui/dash/agent-config-cache.ts";
-import { resetNotifications } from "../../src/tui/dash/notifications.ts";
+import {
+	activeNotification,
+	resetNotifications,
+} from "../../src/tui/dash/notifications.ts";
 import { AgentPresetsView } from "../../src/tui/settings/AgentPresetsView.tsx";
 import { FUSION_PLAN_ROLES } from "../../src/tui/settings/agentPresets.ts";
 import type { SettingsItem } from "../../src/tui/settings/items.ts";
@@ -291,8 +294,10 @@ test("presets list exposes the built-in and creates a preset with a step route",
 		true,
 	);
 	for (const char of "my-preset") t.mockInput.pressKey(char);
-	t.mockInput.pressTab(); // default profile
-	t.mockInput.pressTab(); // step core.plan
+	// name → default profile → four complexity fields → step core.plan.
+	for (let index = 0; index < 6; index += 1) t.mockInput.pressTab();
+	await t.renderOnce();
+	expect(t.captureCharFrame()).toContain("Step core.plan");
 	t.mockInput.pressKey("l"); // choose profile "a"
 	await t.renderOnce();
 	t.mockInput.pressKey("s", { ctrl: true });
@@ -306,6 +311,117 @@ test("presets list exposes the built-in and creates a preset with a step route",
 	).presets["my-preset"];
 	expect(preset).toBeDefined();
 	expect(preset?.steps).toEqual({ "core.plan": "a" });
+	t.renderer.destroy();
+});
+
+test("the preset form assigns a profile to a complexity category", async () => {
+	writeFileSync(
+		configFile,
+		`${JSON.stringify({
+			agents: {
+				profiles: { a: { runtime: "pi" }, b: { runtime: "opencode" } },
+			},
+		})}\n`,
+	);
+	clearAgentConfigCache();
+	const t = await renderView();
+	expect(
+		await renderUntil(t, (frame) => frame.includes("Model profiles")),
+	).toBe(true);
+	t.mockInput.pressKey("j");
+	t.mockInput.pressEnter();
+	await renderUntil(t, (frame) => frame.includes("use-default-model"));
+	t.mockInput.pressKey("+");
+	expect(await renderUntil(t, (frame) => frame.includes("Preset name"))).toBe(
+		true,
+	);
+	for (const char of "classified") t.mockInput.pressKey(char);
+	t.mockInput.pressTab(); // default profile
+	t.mockInput.pressTab(); // complexity easy
+	await t.renderOnce();
+	expect(t.captureCharFrame()).toContain("Complexity easy");
+	t.mockInput.pressKey("l"); // choose the saved profile "a"
+	await t.renderOnce();
+	t.mockInput.pressKey("s", { ctrl: true });
+	expect(await renderUntil(t, (frame) => frame.includes("classified"))).toBe(
+		true,
+	);
+	const preset = (
+		wroteConfig().agents as {
+			presets: Record<string, { easy?: string }>;
+		}
+	).presets.classified;
+	expect(preset?.easy).toBe("a");
+	t.renderer.destroy();
+});
+
+test("stored complexity mappings survive an unchanged preset save", async () => {
+	writeFileSync(
+		configFile,
+		`${JSON.stringify({
+			agents: {
+				profiles: { a: { runtime: "pi" }, b: { runtime: "opencode" } },
+				presets: {
+					classified: { default_profile: "a", easy: "b", critical: "a" },
+				},
+			},
+		})}\n`,
+	);
+	clearAgentConfigCache();
+	const t = await renderView();
+	expect(
+		await renderUntil(t, (frame) => frame.includes("Model profiles")),
+	).toBe(true);
+	t.mockInput.pressKey("j");
+	t.mockInput.pressEnter();
+	expect(await renderUntil(t, (frame) => frame.includes("classified"))).toBe(
+		true,
+	);
+	t.mockInput.pressEnter(); // open the prefilled preset form
+	expect(await renderUntil(t, (frame) => frame.includes("Preset name"))).toBe(
+		true,
+	);
+	t.mockInput.pressKey("s", { ctrl: true });
+	expect(await renderUntil(t, (frame) => frame.includes("classified"))).toBe(
+		true,
+	);
+	const preset = (
+		wroteConfig().agents as {
+			presets: Record<string, { easy?: string; critical?: string }>;
+		}
+	).presets.classified;
+	expect(preset?.easy).toBe("b");
+	expect(preset?.critical).toBe("a");
+	t.renderer.destroy();
+});
+
+test("a profile referenced only by a complexity mapping cannot be deleted", async () => {
+	writeFileSync(
+		configFile,
+		`${JSON.stringify({
+			agents: {
+				profiles: { a: { runtime: "pi" } },
+				presets: { classified: { easy: "a" } },
+			},
+		})}\n`,
+	);
+	clearAgentConfigCache();
+	const t = await renderView();
+	expect(
+		await renderUntil(t, (frame) => frame.includes("Model profiles")),
+	).toBe(true);
+	t.mockInput.pressEnter(); // Model profiles list
+	expect(await renderUntil(t, (frame) => frame.includes("a"))).toBe(true);
+	t.mockInput.pressKey("d");
+	expect(
+		await renderUntil(t, (frame) => frame.includes("Delete profile?")),
+	).toBe(true);
+	t.mockInput.pressKey("y");
+	await t.renderOnce();
+	expect(activeNotification()?.message).toContain("presets.classified.easy");
+	expect(
+		(wroteConfig().agents as { profiles: Record<string, unknown> }).profiles,
+	).toHaveProperty("a");
 	t.renderer.destroy();
 });
 
@@ -335,6 +451,42 @@ test("the preset form renders every registered verification role and fusion plan
 	];
 	const seen = new Set<string>();
 	for (let index = 0; index < 80; index += 1) {
+		const frame = t.captureCharFrame();
+		for (const label of expected) if (frame.includes(label)) seen.add(label);
+		t.mockInput.pressTab();
+		await t.renderOnce();
+	}
+	for (const label of expected) expect(seen.has(label)).toBe(true);
+	t.renderer.destroy();
+});
+
+test("the preset form renders every complexity assignment field", async () => {
+	writeFileSync(
+		configFile,
+		`${JSON.stringify({
+			agents: { profiles: { a: { runtime: "pi" } } },
+		})}\n`,
+	);
+	clearAgentConfigCache();
+	const t = await renderView();
+	expect(
+		await renderUntil(t, (frame) => frame.includes("Model profiles")),
+	).toBe(true);
+	t.mockInput.pressKey("j");
+	t.mockInput.pressEnter();
+	await renderUntil(t, (frame) => frame.includes("use-default-model"));
+	t.mockInput.pressKey("+");
+	expect(await renderUntil(t, (frame) => frame.includes("Preset name"))).toBe(
+		true,
+	);
+	const expected = [
+		"Complexity easy",
+		"Complexity medium",
+		"Complexity hard",
+		"Complexity critical",
+	];
+	const seen = new Set<string>();
+	for (let index = 0; index < 12; index += 1) {
 		const frame = t.captureCharFrame();
 		for (const label of expected) if (frame.includes(label)) seen.add(label);
 		t.mockInput.pressTab();

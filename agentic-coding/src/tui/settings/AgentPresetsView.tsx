@@ -244,7 +244,7 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 			{
 				id: "agents.presets",
 				label: "Presets",
-				detail: `${presetNames().length} presets · step and role routing`,
+				detail: `${presetNames().length} presets · step, role and complexity routing`,
 				list: "presets",
 			},
 		];

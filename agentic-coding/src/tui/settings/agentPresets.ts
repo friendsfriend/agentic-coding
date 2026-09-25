@@ -7,7 +7,11 @@
 
 import type { FormErrors, FormField, FormValues } from "@ui";
 import type { RuntimeId } from "../../contracts/workflow.ts";
-import type { ProfileConfig } from "../../workflow/profiles.ts";
+import {
+	PRESET_CATEGORY_KEYS,
+	type PresetConfig,
+	type ProfileConfig,
+} from "../../workflow/profiles.ts";
 import { VERIFIER_ROLES } from "../../workflow/steps/verification.ts";
 import {
 	type AgentsConfig,
@@ -66,6 +70,8 @@ export interface PresetDraft {
 	description?: string;
 	runtime?: RuntimeId;
 	defaultProfile: string;
+	/** Flat per-complexity worker profiles, keyed by category (sparse). */
+	complexities: Record<string, string>;
 	steps: Record<string, string>;
 	roles: Record<string, string>;
 	/** Role assignments under roles.fusion.plan (planner-1..5). */
@@ -81,6 +87,9 @@ export type Draft = ProfileDraft | PresetDraft;
 export const stepKey = (step: string): string => `step:${step}`;
 /** Field key of one fusion planner role. */
 export const fusionRoleKey = (role: string): string => `fusionRole:${role}`;
+/** Field key of one plan-complexity profile assignment. */
+export const complexityKey = (category: string): string =>
+	`complexity:${category}`;
 /** Field key of one verification role. */
 export const roleKey = (role: string): string => `role:${role}`;
 
@@ -150,6 +159,12 @@ export function presetFields(profileNames: readonly string[]): FormField[] {
 			kind: "select",
 			options,
 		},
+		...PRESET_CATEGORY_KEYS.map((category) => ({
+			key: complexityKey(category),
+			label: `Complexity ${category}`,
+			kind: "select" as const,
+			options,
+		})),
 		...PRESET_STEPS.map((step) => ({
 			key: stepKey(step),
 			label: `Step ${step}`,
@@ -201,6 +216,8 @@ export function draftValues(draft: Draft): FormValues {
 		name: draft.name,
 		defaultProfile: draft.defaultProfile,
 	};
+	for (const [category, profile] of Object.entries(draft.complexities))
+		values[complexityKey(category)] = profile;
 	for (const [step, profile] of Object.entries(draft.steps))
 		values[stepKey(step)] = profile;
 	for (const [role, profile] of Object.entries(draft.fusionRoles))
@@ -239,12 +256,15 @@ export function applyDraftValue(
 	}
 	const next: PresetDraft = {
 		...draft,
+		complexities: { ...draft.complexities },
 		steps: { ...draft.steps },
 		roles: { ...draft.roles },
 		fusionRoles: { ...draft.fusionRoles },
 	};
 	if (key === "name") next.name = value;
 	else if (key === "defaultProfile") next.defaultProfile = value;
+	else if (key.startsWith("complexity:"))
+		next.complexities[key.slice("complexity:".length)] = value;
 	else if (key.startsWith("step:"))
 		next.steps[key.slice("step:".length)] = value;
 	else if (key.startsWith("fusionRole:"))
@@ -285,6 +305,11 @@ export function presetDraft(
 		"fusion.plan": fusionPlan = {},
 		...otherRoles
 	} = current?.roles ?? {};
+	const complexities: Record<string, string> = {};
+	for (const category of PRESET_CATEGORY_KEYS) {
+		const profile = current?.[category];
+		if (profile) complexities[category] = profile;
+	}
 	return {
 		kind: "preset",
 		name,
@@ -292,6 +317,7 @@ export function presetDraft(
 		...(current?.description ? { description: current.description } : {}),
 		...(current?.runtime ? { runtime: current.runtime } : {}),
 		defaultProfile: current?.default_profile ?? "",
+		complexities,
 		steps: { ...(current?.steps ?? {}) },
 		roles: { ...verification },
 		fusionRoles: { ...fusionPlan },
@@ -362,21 +388,24 @@ export function presetMutation(draft: PresetDraft): AgentsMutation {
 	if (Object.keys(fusionPlanRoles).length)
 		roleTables["fusion.plan"] = fusionPlanRoles;
 	const name = draft.name.trim();
+	const preset: PresetConfig = {
+		...(draft.description ? { description: draft.description } : {}),
+		...(draft.runtime ? { runtime: draft.runtime } : {}),
+		...(draft.defaultProfile ? { default_profile: draft.defaultProfile } : {}),
+		...(Object.keys(steps).length ? { steps } : {}),
+		...(Object.keys(roleTables).length ? { roles: roleTables } : {}),
+	};
+	for (const category of PRESET_CATEGORY_KEYS) {
+		const profile = draft.complexities[category];
+		if (profile) preset[category] = profile;
+	}
 	return {
 		kind: "set-preset",
 		name,
 		...(draft.originalName && draft.originalName !== name
 			? { renameFrom: draft.originalName }
 			: {}),
-		preset: {
-			...(draft.description ? { description: draft.description } : {}),
-			...(draft.runtime ? { runtime: draft.runtime } : {}),
-			...(draft.defaultProfile
-				? { default_profile: draft.defaultProfile }
-				: {}),
-			...(Object.keys(steps).length ? { steps } : {}),
-			...(Object.keys(roleTables).length ? { roles: roleTables } : {}),
-		},
+		preset,
 	};
 }
 
@@ -406,6 +435,9 @@ export function profileReferences(
 			for (const [role, profile] of Object.entries(roleMap))
 				if (profile === name)
 					refs.push(`presets.${presetName}.roles.${step}.${role}`);
+		for (const category of PRESET_CATEGORY_KEYS)
+			if (preset[category] === name)
+				refs.push(`presets.${presetName}.${category}`);
 	}
 	return refs;
 }

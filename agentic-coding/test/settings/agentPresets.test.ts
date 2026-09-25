@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
 	applyDraftValue,
+	complexityKey,
 	type PresetDraft,
 	type ProfileDraft,
 	presetDraft,
+	presetFields,
 	presetMutation,
 	profileDraft,
 	profileMutation,
@@ -81,6 +83,37 @@ describe("agent preset drafts", () => {
 		expect(draft.otherRoles).toEqual({
 			"custom.step": { "custom-role": "used" },
 		});
+	});
+
+	test("a prefilled preset draft loads stored complexity mappings", () => {
+		const draft = presetDraft("classified", {
+			classified: { easy: "used", critical: "free" },
+		});
+		expect(draft.complexities).toEqual({ easy: "used", critical: "free" });
+	});
+
+	test("the preset form offers a complexity field per category after the default profile", () => {
+		const fields = presetFields(["used", "free"]);
+		const labels = fields.map((field) => field.label);
+		const defaultIndex = labels.indexOf("Default profile (fallback)");
+		expect(labels.slice(defaultIndex + 1, defaultIndex + 5)).toEqual([
+			"Complexity easy",
+			"Complexity medium",
+			"Complexity hard",
+			"Complexity critical",
+		]);
+		const hard = fields.find((field) => field.label === "Complexity hard");
+		expect(hard?.options).toEqual(["", "used", "free"]);
+	});
+
+	test("applyDraftValue sets one complexity mapping", () => {
+		const draft = presetDraft("new", {});
+		const next = applyDraftValue(
+			draft,
+			complexityKey("hard"),
+			"used",
+		) as PresetDraft;
+		expect(next.complexities).toEqual({ hard: "used" });
 	});
 });
 
@@ -178,6 +211,44 @@ describe("agent preset mutations", () => {
 		]);
 		expect(profileReferences(agents, "free")).toEqual([
 			"presets.routed.roles.core.verification.quality-verifier",
+		]);
+	});
+
+	test("a preset mutation writes only non-empty complexity mappings", () => {
+		const draft = applyDraftValue(
+			applyDraftValue(presetDraft("new", {}), complexityKey("easy"), "used"),
+			complexityKey("critical"),
+			"",
+		) as PresetDraft;
+		const mutation = presetMutation(draft);
+		if (mutation.kind !== "set-preset") throw new Error("expected set-preset");
+		expect(mutation.preset.easy).toBe("used");
+		expect(mutation.preset.medium).toBeUndefined();
+		expect(mutation.preset.hard).toBeUndefined();
+		expect(mutation.preset.critical).toBeUndefined();
+	});
+
+	test("a preset draft round-trips a stored complexity mapping", () => {
+		const mutation = presetMutation(
+			presetDraft("classified", {
+				classified: { easy: "used", critical: "free" },
+			}),
+		);
+		if (mutation.kind !== "set-preset") throw new Error("expected set-preset");
+		expect(mutation.preset.easy).toBe("used");
+		expect(mutation.preset.critical).toBe("free");
+		expect(mutation.preset.medium).toBeUndefined();
+		expect(mutation.preset.hard).toBeUndefined();
+	});
+
+	test("a profile referenced only by a complexity mapping is reported", () => {
+		const config: AgentsConfig = {
+			profiles: { used: { runtime: "pi" } },
+			presets: { classified: { easy: "used", critical: "used" } },
+		};
+		expect(profileReferences(config, "used")).toEqual([
+			"presets.classified.easy",
+			"presets.classified.critical",
 		]);
 	});
 
