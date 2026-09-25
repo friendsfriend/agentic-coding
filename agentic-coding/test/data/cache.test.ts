@@ -100,6 +100,7 @@ describe("data cache", () => {
 			"workflow:/repo:wf-1",
 			"views:/repo",
 			"dashboard:/repo:wf-1",
+			"artifacts:/repo:wf-1",
 			"wiki:/repo:wf-1",
 			"git:/repo:wf-1",
 			"workflow:/other:wf-2",
@@ -119,6 +120,7 @@ describe("data cache", () => {
 			"workflow:/repo:wf-1",
 			"views:/repo",
 			"dashboard:/repo:wf-1",
+			"artifacts:/repo:wf-1",
 			"wiki:/repo:wf-1",
 			"git:/repo:wf-1",
 		])

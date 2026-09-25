@@ -17,6 +17,7 @@ import {
 	loadLocalDiff,
 	loadWikiChanges,
 	loadWikiDiff,
+	type RefreshOptions,
 } from "./git.ts";
 import {
 	loadDeveloperReviewFindings,
@@ -33,8 +34,9 @@ export async function loadLocalChangesOrEmpty(
 	repo: string,
 	workflowId: string,
 	signal?: AbortSignal,
+	options: RefreshOptions = {},
 ): Promise<LocalChange[]> {
-	return (await loadLocalChanges(repo, workflowId, signal)) ?? [];
+	return (await loadLocalChanges(repo, workflowId, signal, options)) ?? [];
 }
 
 /** Wiki snapshot changes (empty when the read was superseded). */
@@ -42,8 +44,9 @@ export async function loadWikiChangesOrEmpty(
 	repo: string,
 	workflowId: string,
 	signal?: AbortSignal,
+	options: RefreshOptions = {},
 ): Promise<LocalChange[]> {
-	return (await loadWikiChanges(repo, workflowId, signal)) ?? [];
+	return (await loadWikiChanges(repo, workflowId, signal, options)) ?? [];
 }
 
 /** One worktree diff (empty when the read was superseded). */

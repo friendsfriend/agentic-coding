@@ -211,6 +211,7 @@ export function App(props: {
 	let refreshForceQueued = false;
 	let refreshDisposed = false;
 	let refreshController: AbortController | undefined;
+	let refreshReviewFiles: (() => void) | undefined;
 	// The last observation failure surfaced in the error modal. A persistent
 	// failure must not reopen the modal on every refresh (watchDirectories
 	// refreshes on each workflow file change); clearing on success re-arms it.
@@ -249,7 +250,9 @@ export function App(props: {
 			setArtifacts(openSpecArtifacts(data().state));
 			return;
 		}
-		void loadArtifacts(data().state, artifactController.signal)
+		void loadArtifacts(data().state, artifactController.signal, {
+			refresh: true,
+		})
 			.then((next) => {
 				if (next && generation === artifactGeneration) setArtifacts(next);
 			})
@@ -899,6 +902,7 @@ export function App(props: {
 	};
 	const refresh = (force = false) => {
 		if (refreshDisposed) return;
+		refreshReviewFiles?.();
 		if (props.profile === "test") {
 			setData(load());
 			traceTui("tui.dashboard.refresh", {
@@ -985,10 +989,12 @@ export function App(props: {
 		data,
 		requiredUserAction,
 		artifacts,
+		setArtifacts,
 		dimensions,
 		setDemoIndex,
 		demoPhases,
 	});
+	refreshReviewFiles = () => void reviewFeature.refreshReviewFiles();
 	const {
 		setReviewOpen,
 		setReviewComments,
@@ -1241,6 +1247,7 @@ export function App(props: {
 			artifactGeneration++;
 			artifactController?.abort();
 			reviewFeatureDispose();
+			refreshReviewFiles = undefined;
 			disposeFocusRestorer();
 		});
 	});

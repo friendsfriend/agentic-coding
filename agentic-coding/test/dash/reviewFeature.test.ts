@@ -4,6 +4,8 @@
  * outlive its owning component. */
 import { expect, test } from "bun:test";
 import { createRoot } from "solid-js";
+import type { ObservationRequest } from "../../src/contracts/environment.ts";
+import type { DashboardGateway } from "../../src/contracts/gateway.ts";
 import { testDashboard } from "../../src/tui/dash/demo.ts";
 import {
 	createReviewFeature,
@@ -12,6 +14,7 @@ import {
 	reviewCommentsForEngine,
 	withFindingAnchorLines,
 } from "../../src/tui/dash/review.ts";
+import { clearGateway, configureGateway } from "../../src/tui/data/index.ts";
 
 function context(
 	overrides: Partial<ReviewFeatureContext> = {},
@@ -227,6 +230,38 @@ test("feature dispose aborts in-flight review observation controllers", async ()
 		expect(feature.reviewVisibleChanges().length).toBeGreaterThan(0);
 		dispose();
 	});
+});
+
+test("plan review reloads files when its source list changes", async () => {
+	let listed = ["proposal.md"];
+	configureGateway({
+		observe: async (observation: ObservationRequest) => {
+			if (observation.kind === "artifacts") return listed;
+			if (observation.kind === "artifact-content")
+				return `# ${observation.artifact}`;
+			throw new Error(`unexpected ${observation.kind}`);
+		},
+	} as unknown as DashboardGateway);
+	try {
+		await createRoot(async (dispose) => {
+			const feature = createReviewFeature(
+				context({ profile: undefined, artifacts: () => [] }),
+			);
+			await feature.openPlanReview();
+			expect(
+				feature.reviewVisibleChanges().map((file) => file.newPath),
+			).toEqual(["proposal.md"]);
+
+			listed = ["design.md"];
+			await feature.refreshReviewFiles();
+			expect(
+				feature.reviewVisibleChanges().map((file) => file.newPath),
+			).toEqual(["design.md"]);
+			dispose();
+		});
+	} finally {
+		clearGateway();
+	}
 });
 
 test("feature tracks draft comments and rejection state in its own signals", async () => {

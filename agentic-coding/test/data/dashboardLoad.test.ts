@@ -4,12 +4,34 @@
 // the cache both behave correctly in isolation. This pins the link end to end
 // at the data-layer boundary.
 import { afterEach, expect, test } from "bun:test";
+import type { ObservationRequest } from "../../src/contracts/environment.ts";
 import type { DashboardGateway } from "../../src/contracts/gateway.ts";
 import { testDashboard } from "../../src/tui/dash/demo.ts";
+import { loadArtifacts } from "../../src/tui/data/git.ts";
 import { clearGateway, configureGateway } from "../../src/tui/data/index.ts";
 import { loadDashboard } from "../../src/tui/data/workflow.ts";
 
 afterEach(() => clearGateway());
+
+test("loadArtifacts re-reads the gateway when refresh is requested", async () => {
+	let observes = 0;
+	configureGateway({
+		observe: async (observation: ObservationRequest) => {
+			if (observation.kind !== "artifacts") throw new Error("unexpected read");
+			observes += 1;
+			return observes === 1 ? [] : ["proposal.md"];
+		},
+	} as unknown as DashboardGateway);
+	const state = testDashboard().state;
+
+	await loadArtifacts(state);
+	await loadArtifacts(state);
+	expect(observes).toBe(1);
+
+	await loadArtifacts(state, undefined, { refresh: true });
+	expect(observes).toBe(2);
+	expect(await loadArtifacts(state)).toEqual(["proposal.md"]);
+});
 
 test("loadDashboard re-reads the gateway only when refresh is requested", async () => {
 	let observes = 0;

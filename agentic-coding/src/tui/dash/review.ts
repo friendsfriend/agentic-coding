@@ -16,6 +16,7 @@ import type {
 	DeveloperReviewComment,
 	DeveloperReviewFinding,
 } from "../../contracts/workflow.ts";
+import { loadArtifacts } from "../data/git.ts";
 import {
 	loadArtifactOrEmpty,
 	loadLocalChangesOrEmpty,
@@ -136,6 +137,7 @@ export interface ReviewFeatureContext {
 	/** Displayed engine user action; the submission targets its action IDs. */
 	requiredUserAction: () => RequiredUserAction | undefined;
 	artifacts: () => string[];
+	setArtifacts?: (artifacts: string[]) => void;
 	dimensions: () => { width: number; height: number };
 	setDemoIndex: (update: (index: number) => number) => void;
 	demoPhases: readonly string[];
@@ -219,6 +221,8 @@ export interface ReviewFeature {
 	handleReviewKey: (event: KeyEvent) => boolean;
 	/** In-flight diff observation signal for the root's artifact verdict path. */
 	reviewDiffSignal: () => AbortSignal | undefined;
+	/** Refresh review files from the authoritative source. */
+	refreshReviewFiles: () => Promise<void>;
 	/** Abort in-flight review observations and bump the generation on unmount. */
 	dispose: () => void;
 }
@@ -255,6 +259,7 @@ export function createReviewFeature(
 		data,
 		requiredUserAction,
 		artifacts,
+		setArtifacts,
 		dimensions,
 		setDemoIndex,
 		demoPhases,
@@ -267,7 +272,10 @@ export function createReviewFeature(
 
 	let reviewController: AbortController | undefined;
 	let reviewDiffController: AbortController | undefined;
+	let reviewRefreshController: AbortController | undefined;
 	let reviewGeneration = 0;
+	let reviewRefreshGeneration = 0;
+	let reviewRefreshRunning = false;
 	const [reviewLoading, setReviewLoading] = createSignal(false);
 	const planRejectionReasons = [
 		"Needs more detail",
@@ -315,7 +323,7 @@ export function createReviewFeature(
 	const [reviewSplitView, setReviewSplitView] = createSignal<boolean | null>(
 		null,
 	);
-	const reviewVisibleChanges = createMemo(() => {
+	const reviewVisibleChanges = () => {
 		const query = reviewSearchQuery().toLowerCase();
 		if (!query) return reviewChanges();
 		return reviewChanges().filter((change) =>
@@ -323,7 +331,7 @@ export function createReviewFeature(
 				path?.toLowerCase().includes(query),
 			),
 		);
-	});
+	};
 	const reviewFile = () => reviewVisibleChanges()[reviewChangeIndex()];
 	const reviewChangeForView = (change: LocalChange, diff = "") => ({
 		old_path: change.oldPath ?? change.newPath,
@@ -489,6 +497,7 @@ export function createReviewFeature(
 							repo,
 							workflowId,
 							reviewController.signal,
+							{ refresh: true },
 						);
 			if (generation !== reviewGeneration) return;
 			const findings =
@@ -672,6 +681,41 @@ export function createReviewFeature(
 		} as Record<string, string>;
 		return demo[artifact] ?? `# ${artifact}\n\nDemo artifact content.`;
 	};
+	const loadPlanReviewChanges = async (signal: AbortSignal) => {
+		let listedArtifacts: string[] | undefined;
+		if (profile !== "test") {
+			try {
+				listedArtifacts = await loadArtifacts(data().state, signal, {
+					refresh: true,
+				});
+			} catch {
+				/* Keep review usable with the last panel snapshot. */
+			}
+		}
+		if (listedArtifacts) setArtifacts?.(listedArtifacts);
+		const planArtifacts = listedArtifacts ?? artifacts();
+		if (profile === "test") return demoPlanArtifacts();
+		return Promise.all(
+			planArtifacts.slice(0, 200).map(async (artifact) => {
+				let linesAdded = 0;
+				try {
+					linesAdded = (
+						await loadArtifactOrEmpty(data().state, artifact, signal)
+					).split(/\r?\n/).length;
+				} catch {
+					/* line count falls back to 0 when the artifact is unreadable */
+				}
+				return {
+					newPath: artifact,
+					linesAdded,
+					linesDeleted: 0,
+					newFile: true,
+					deletedFile: false,
+					renamedFile: false,
+				};
+			}),
+		);
+	};
 	const openPlanReview = async () => {
 		const generation = ++reviewGeneration;
 		reviewDiffController?.abort();
@@ -683,35 +727,11 @@ export function createReviewFeature(
 						repo,
 						workflowId,
 						reviewDiffController.signal,
+						{ refresh: true },
 					)
 				: profile === "test"
 					? demoPlanArtifacts()
-					: await Promise.all(
-							artifacts()
-								.slice(0, 200)
-								.map(async (artifact) => {
-									let linesAdded = 0;
-									try {
-										linesAdded = (
-											await loadArtifactOrEmpty(
-												data().state,
-												artifact,
-												reviewDiffController?.signal,
-											)
-										).split(/\r?\n/).length;
-									} catch {
-										/* line count falls back to 0 when the artifact is unreadable */
-									}
-									return {
-										newPath: artifact,
-										linesAdded,
-										linesDeleted: 0,
-										newFile: true,
-										deletedFile: false,
-										renamedFile: false,
-									};
-								}),
-						);
+					: await loadPlanReviewChanges(reviewDiffController.signal);
 			if (generation !== reviewGeneration) return;
 			setReviewKind(wikiReview ? "wiki" : "plan");
 			setReviewChanges(changes);
@@ -735,6 +755,47 @@ export function createReviewFeature(
 			queueMicrotask(() => setModalActive("plan-review"));
 		} catch {
 			traceReview("plan-review-open", "error");
+		}
+	};
+	const refreshReviewFiles = async () => {
+		if (!reviewOpen() || reviewRefreshRunning) return;
+		reviewRefreshRunning = true;
+		const generation = ++reviewRefreshGeneration;
+		reviewRefreshController?.abort();
+		reviewRefreshController = new AbortController();
+		try {
+			const kind = reviewKind();
+			const changes =
+				kind === "plan"
+					? await loadPlanReviewChanges(reviewRefreshController.signal)
+					: kind === "wiki"
+						? await loadWikiChangesOrEmpty(
+								repo,
+								workflowId,
+								reviewRefreshController.signal,
+								{ refresh: true },
+							)
+						: await loadLocalChangesOrEmpty(
+								repo,
+								workflowId,
+								reviewRefreshController.signal,
+								{ refresh: true },
+							);
+			if (generation !== reviewRefreshGeneration) return;
+			const currentPath = reviewFile()?.newPath;
+			const nextIndex = currentPath
+				? changes.findIndex((change) => change.newPath === currentPath)
+				: 0;
+			if (nextIndex < 0 && reviewView() === "diff") {
+				setReviewView("files");
+				setReviewDiff("");
+			}
+			setReviewChanges(changes);
+			setReviewChangeIndex(Math.max(0, nextIndex));
+		} catch {
+			traceReview("review-refresh", "error");
+		} finally {
+			reviewRefreshRunning = false;
 		}
 	};
 	const openPlanMarkdown = async () => {
@@ -1115,12 +1176,15 @@ export function createReviewFeature(
 		finishPlanReview,
 		openPlanRejection,
 		rejectPlan,
+		refreshReviewFiles,
 		handleReviewKey,
 		reviewDiffSignal: () => reviewDiffController?.signal,
 		dispose: () => {
 			reviewGeneration++;
+			reviewRefreshGeneration++;
 			reviewController?.abort();
 			reviewDiffController?.abort();
+			reviewRefreshController?.abort();
 		},
 	};
 }

@@ -14,6 +14,9 @@ import type { WorkflowState } from "../../contracts/workflow.ts";
 import { cache, gateway } from "./index.ts";
 
 type Signal = AbortSignal | undefined;
+export interface RefreshOptions {
+	readonly refresh?: boolean;
+}
 
 export function gitKey(repo: string, workflowId: string): string {
 	return `git:${repo}:${workflowId}`;
@@ -28,6 +31,7 @@ export async function loadLocalChanges(
 	repo: string,
 	workflowId: string,
 	signal?: Signal,
+	options: RefreshOptions = {},
 ): Promise<LocalChange[] | undefined> {
 	return cache.load(
 		`${gitKey(repo, workflowId)}:changes`,
@@ -37,7 +41,7 @@ export async function loadLocalChanges(
 				localChangesSchema,
 				signal,
 			),
-		{ signal },
+		{ signal, ...options },
 	);
 }
 
@@ -65,6 +69,7 @@ export async function loadWikiChanges(
 	repo: string,
 	workflowId: string,
 	signal?: Signal,
+	options: RefreshOptions = {},
 ): Promise<LocalChange[] | undefined> {
 	return cache.load(
 		`${wikiKey(repo, workflowId)}:changes`,
@@ -74,7 +79,7 @@ export async function loadWikiChanges(
 				localChangesSchema,
 				signal,
 			),
-		{ signal },
+		{ signal, ...options },
 	);
 }
 
@@ -101,6 +106,7 @@ export async function loadWikiDiff(
 export async function loadArtifacts(
 	state: WorkflowState,
 	signal?: Signal,
+	options: RefreshOptions = {},
 ): Promise<string[] | undefined> {
 	return cache.load(
 		`artifacts:${state.repository}:${state.workflowId}`,
@@ -110,7 +116,7 @@ export async function loadArtifacts(
 				pathListSchema,
 				signal,
 			),
-		{ signal },
+		{ signal, ...options },
 	);
 }
 

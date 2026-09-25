@@ -78,7 +78,8 @@ export interface ReadOptions {
 
 /** Keys are namespaced by resource so invalidation can be targeted:
  * `workflow:<repo>:<workflowId>`, `dashboard:<repo>:<workflowId>`,
- * `wiki:<repo>:<workflowId>`, `git:<repo>:<workflowId>`,
+ * `artifacts:<repo>:<workflowId>`, `wiki:<repo>:<workflowId>`,
+ * `git:<repo>:<workflowId>`,
  * `telemetry:traces:<changeId>`, `views:<repo>`. */
 export type DataKey = string;
 
@@ -163,6 +164,7 @@ export class DataCache {
 			this.invalidate(`workflow:${event.resource}`);
 			this.invalidate(`views:${event.resource}`);
 			this.invalidate(`dashboard:${event.resource}`);
+			this.invalidate(`artifacts:${event.resource}`);
 			this.invalidate(`wiki:${event.resource}`);
 			this.invalidate(`git:${event.resource}`);
 			return;
