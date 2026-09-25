@@ -6,6 +6,7 @@ import {
 	agentTabMatchesBase,
 	aggregateAgentTabStatus,
 	findAgentTabByBase,
+	latestStatusesByTab,
 } from "../src/workflow/tab-status.ts";
 
 describe("agent tab status glyphs", () => {
@@ -75,5 +76,29 @@ describe("agent tab status glyphs", () => {
 		expect(aggregateAgentTabStatus(["completed", "expired"])).toBe("completed");
 		expect(aggregateAgentTabStatus([])).toBe("expired");
 		expect(aggregateAgentTabStatus(["mystery"])).toBe("pending");
+	});
+
+	test("reduces each tab to the latest run per role", () => {
+		const byTab = latestStatusesByTab([
+			{ role: "worker", status: "failed", tabId: "t1" },
+			{ role: "worker", status: "blocked", tabId: "t1" },
+			{ role: "worker", status: "completed", tabId: "t1" },
+			{ role: "quality-verifier", status: "working", tabId: "t1" },
+			{ role: "worker", status: "completed", tabId: "t2" },
+			{ role: "worker", status: "working", tabId: "t2" },
+		]);
+		expect([...byTab.keys()]).toEqual(["t1", "t2"]);
+		// Superseded failed/blocked runs are dropped; the other role is kept.
+		expect(byTab.get("t1")).toEqual(["completed", "working"]);
+		// The later working run supersedes the earlier completed one.
+		expect(byTab.get("t2")).toEqual(["working"]);
+	});
+
+	test("ignores every run without a tab id", () => {
+		const byTab = latestStatusesByTab([
+			{ role: "worker", status: "working" },
+			{ role: "quality-verifier", status: "failed" },
+		]);
+		expect(byTab.size).toBe(0);
 	});
 });

@@ -66,7 +66,12 @@ export function paneForRunFactory(
 			undefined,
 			stepRegistry.stepForDefinition(definition, run.stepId),
 		);
-		if (resolved) return { paneId: resolved.paneId, owned: false };
+		if (resolved)
+			return {
+				paneId: resolved.paneId,
+				...(resolved.tabId ? { tabId: resolved.tabId } : {}),
+				owned: false,
+			};
 		if (roundScoped) {
 			const round = workflowEngine
 				.status(repo, snapshot.workflowId)

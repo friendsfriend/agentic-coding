@@ -12,6 +12,7 @@ import {
 	agentTabBaseLabel,
 	agentTabLabel,
 	aggregateAgentTabStatus,
+	latestStatusesByTab,
 } from "./tab-status.ts";
 
 interface TabListResult {
@@ -43,13 +44,9 @@ export async function syncAgentTabLabels(
 	try {
 		const view = workflowEngine.status(repo, workflowId);
 		if (!view.workspace) return;
-		const statusesByTab = new Map<string, string[]>();
-		for (const run of view.runs) {
-			if (!run.tabId) continue;
-			const statuses = statusesByTab.get(run.tabId) ?? [];
-			statuses.push(run.status);
-			statusesByTab.set(run.tabId, statuses);
-		}
+		// Latest run per role per tab, so a superseded attempt/generation/round
+		// cannot outlive the role's current run and pin the glyph.
+		const statusesByTab = latestStatusesByTab(view.runs);
 		if (!statusesByTab.size) return;
 		const listed = (await call(
 			herdr,

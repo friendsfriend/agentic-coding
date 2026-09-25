@@ -485,7 +485,11 @@ describe("breaking workflow CLI surface", () => {
 				if (args[0] === "agent" && args[1] === "get") {
 					if (live && args[2] === canonical)
 						return {
-							agent: { pane_id: "live-pane", agent_status: "working" },
+							agent: {
+								pane_id: "live-pane",
+								tab_id: "live-tab",
+								agent_status: "working",
+							},
 						};
 					throw new Error(`not found: ${args[2]}`);
 				}
@@ -502,7 +506,11 @@ describe("breaking workflow CLI surface", () => {
 			"/repo",
 			herdrWithLive(true),
 		)(run.id);
-		expect(reused).toEqual({ paneId: "live-pane", owned: false });
+		expect(reused).toEqual({
+			paneId: "live-pane",
+			tabId: "live-tab",
+			owned: false,
+		});
 		expect(
 			calls.some((args) => args[0] === "tab" && args[1] === "create"),
 		).toBe(false);

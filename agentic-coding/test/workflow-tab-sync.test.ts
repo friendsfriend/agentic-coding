@@ -5,7 +5,7 @@ import { syncAgentTabLabels } from "../src/workflow/tab-sync.ts";
 
 function fakeEngine(input: {
 	workspace?: string;
-	runs: Array<{ status: string; tabId?: string }>;
+	runs: Array<{ status: string; tabId?: string; role?: string }>;
 }): WorkflowEngine {
 	return {
 		status: () => ({
@@ -14,7 +14,7 @@ function fakeEngine(input: {
 			runs: input.runs.map((run, index) => ({
 				id: `run-${index}`,
 				stepId: "core.implementation",
-				role: "worker",
+				role: run.role ?? "worker",
 				attempt: 1,
 				status: run.status,
 				runtime: "pi",
@@ -106,6 +106,76 @@ describe("syncAgentTabLabels", () => {
 				runs: [
 					{ status: "completed", tabId: "tv" },
 					{ status: "working", tabId: "tv" },
+				],
+			}),
+			"/repo",
+			"wf",
+		);
+		expect(calls).toContainEqual(["tab", "rename", "tv", "● verification"]);
+	});
+
+	test("a superseded failed run no longer pins the completed tab", async () => {
+		const { herdr, calls } = fakeHerdr([{ tab_id: "t1", label: "✗ worker" }]);
+		await syncAgentTabLabels(
+			herdr,
+			fakeEngine({
+				workspace: "w1",
+				runs: [
+					{ status: "failed", tabId: "t1" },
+					{ status: "completed", tabId: "t1" },
+				],
+			}),
+			"/repo",
+			"wf",
+		);
+		expect(calls).toContainEqual(["tab", "rename", "t1", "✓ worker"]);
+	});
+
+	test("a superseded blocked run no longer pins the completed tab", async () => {
+		const { herdr, calls } = fakeHerdr([{ tab_id: "t1", label: "■ worker" }]);
+		await syncAgentTabLabels(
+			herdr,
+			fakeEngine({
+				workspace: "w1",
+				runs: [
+					{ status: "blocked", tabId: "t1" },
+					{ status: "completed", tabId: "t1" },
+				],
+			}),
+			"/repo",
+			"wf",
+		);
+		expect(calls).toContainEqual(["tab", "rename", "t1", "✓ worker"]);
+	});
+
+	test("a latest working run reactivates the tab after a completed run", async () => {
+		const { herdr, calls } = fakeHerdr([{ tab_id: "t1", label: "✓ worker" }]);
+		await syncAgentTabLabels(
+			herdr,
+			fakeEngine({
+				workspace: "w1",
+				runs: [
+					{ status: "completed", tabId: "t1" },
+					{ status: "working", tabId: "t1" },
+				],
+			}),
+			"/repo",
+			"wf",
+		);
+		expect(calls).toContainEqual(["tab", "rename", "t1", "● worker"]);
+	});
+
+	test("aggregates the latest run of each role on a grouped tab", async () => {
+		const { herdr, calls } = fakeHerdr([
+			{ tab_id: "tv", label: "○ verification" },
+		]);
+		await syncAgentTabLabels(
+			herdr,
+			fakeEngine({
+				workspace: "w1",
+				runs: [
+					{ role: "worker", status: "completed", tabId: "tv" },
+					{ role: "quality-verifier", status: "working", tabId: "tv" },
 				],
 			}),
 			"/repo",

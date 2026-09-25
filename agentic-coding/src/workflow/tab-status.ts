@@ -53,6 +53,41 @@ export function aggregateAgentTabStatus(statuses: Iterable<string>): RunStatus {
 	return selected;
 }
 
+/** A run reduced to the fields the tab reconcile needs: which tab it occupies,
+ * which role it represents, and its status. */
+export interface TabStatusRun {
+	role: string;
+	status: string;
+	tabId?: string;
+}
+
+/**
+ * Reduce a creation-ordered run list to one status per role per tab, keyed by
+ * tab id. Within a tab the last run for a role wins, so a superseded attempt,
+ * generation, or round can never pin the tab's glyph. Runs without a tab id
+ * are ignored — they have no tab to label. Returns a fresh map of tab id to
+ * the latest per-role statuses in first-seen role order.
+ */
+export function latestStatusesByTab(
+	runs: Iterable<TabStatusRun>,
+): Map<string, string[]> {
+	const byTab = new Map<string, Map<string, string>>();
+	for (const run of runs) {
+		if (!run.tabId) continue;
+		let byRole = byTab.get(run.tabId);
+		if (!byRole) {
+			byRole = new Map<string, string>();
+			byTab.set(run.tabId, byRole);
+		}
+		// Re-setting an existing role keeps its insertion position but overwrites
+		// the value, so the last run for that role in creation order wins.
+		byRole.set(run.role, run.status);
+	}
+	const result = new Map<string, string[]>();
+	for (const [tabId, byRole] of byTab) result.set(tabId, [...byRole.values()]);
+	return result;
+}
+
 /** Render a tab label as `<glyph> <base>`. The glyph prefix is a single cell,
  * so repeated updates never change the rendered tab width. */
 export function agentTabLabel(base: string, status: string): string {
