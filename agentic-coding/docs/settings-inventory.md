@@ -30,7 +30,7 @@ unavailable or unauthorized server is a section error with a retry.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Theme | Appearance | `src/tui/shared/preferences.ts` | client | `$AGENTIC_CODING_CONFIG_DIR/tui.json` · `theme` | no | immediate | yes (shared theme picker) |
 | Agent profiles | Agent Presets | `src/server/config.ts` | user / project | `[agents.profiles]` in the layered workflow config | no | next workflow start | yes (inline form) |
-| Configuration presets | Agent Presets | `src/server/config.ts` | user / project | `[agents.presets]` in the layered workflow config | no | next workflow start | yes (inline form) |
+| Agent presets | Agent Presets | `src/server/config.ts` | user / project | `[agents.presets]` in the layered workflow config | no | next workflow start | yes (inline form) |
 | Routing and definition defaults | Agent Presets | `src/workflow/profiles.ts` | user | `[agents]` `default_profile`, `routes`, `role_routes`, `definition_defaults` | no | next workflow start | no (no bounded editor; edit the config file) |
 | Git providers | Providers/credentials | server integration families (`/api/providers`) | server | `$AGENTIC_CODING_CONFIG_DIR/providers` served by the connected server | yes | immediate | yes (edited in Environments) |
 | Provider credentials | Providers/credentials | `src/workflow/credentials.ts`, `src/server/credentials.ts` | server | protected credential store; single-owner ephemeral prompts | yes | immediate | no (status only) |

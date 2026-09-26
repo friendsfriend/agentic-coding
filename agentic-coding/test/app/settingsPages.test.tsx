@@ -216,13 +216,13 @@ test("the appearance section states the client-local scope and opens the shared 
 	db.close();
 });
 
-test("Agent Presets offers Model profiles and Presets and opens the inline form", async () => {
+test("Agent Presets offers profile and preset entries and opens the inline form", async () => {
 	const { t, db } = await renderHomeShell();
-	expect(await openSection(t, 1, "Model profiles")).toBe(true);
+	expect(await openSection(t, 1, "Agent profiles")).toBe(true);
 	let frame = t.captureCharFrame();
-	expect(frame).toContain("Model profiles");
-	expect(frame).toContain("Presets");
-	expect(frame).toContain("1 profiles");
+	expect(frame).toContain("Agent profiles");
+	expect(frame).toContain("Agent presets");
+	expect(frame).toContain("1 configured");
 	expect(frame).toContain("Agent Presets");
 
 	// Enter opens the selectable profile list.
@@ -238,13 +238,75 @@ test("Agent Presets offers Model profiles and Presets and opens the inline form"
 	expect(frame).toContain("pi-a");
 	expect(frame).not.toContain("Model configuration");
 	expect(frame).toContain("Execution environment");
+
+	t.renderer.destroy();
+	db.close();
+});
+
+test("empty Agent Presets opens an error modal instead of showing a persistent warning", async () => {
+	const { t, db } = await renderHomeShell();
+	expect(await openSection(t, 1, "Agent profiles")).toBe(true);
+	t.mockInput.pressKey("j"); // Agent presets
+	await t.renderOnce();
+	t.mockInput.pressEnter();
+	expect(
+		await renderUntil(
+			t,
+			(frame) =>
+				frame.includes("No custom presets") &&
+				frame.includes("Recreate them as model pools"),
+		),
+	).toBe(true);
+	expect(
+		await pressEscapeAndSettle(
+			t,
+			(frame) =>
+				frame.includes("use-default-model") &&
+				!frame.includes("No custom presets"),
+		),
+	).toBe(true);
+	t.mockInput.pressKey("+");
+	expect(await renderUntil(t, (frame) => frame.includes("Preset name"))).toBe(
+		true,
+	);
+	t.mockInput.pressTab();
+	t.mockInput.pressTab();
+	await t.renderOnce();
+	t.mockInput.pressKey("?");
+	expect(await renderUntil(t, (frame) => frame.includes("Keybindings"))).toBe(
+		true,
+	);
+	let helpFrame = t.captureCharFrame();
+	expect(helpFrame).toContain("y");
+	expect(helpFrame).toContain("copy pool");
+	expect(helpFrame).toContain("p");
+	expect(helpFrame).toContain("paste pool");
+	expect(
+		await pressEscapeAndSettle(t, (frame) => !frame.includes("Keybindings")),
+	).toBe(true);
+	t.mockInput.pressEnter(); // open core.plan pool entries
+	expect(
+		await renderUntil(t, (frame) =>
+			frame.includes("No profile tags configured"),
+		),
+	).toBe(true);
+	t.mockInput.pressKey("?");
+	expect(await renderUntil(t, (frame) => frame.includes("Keybindings"))).toBe(
+		true,
+	);
+	helpFrame = t.captureCharFrame();
+	expect(helpFrame).toContain("Shift+↑/↓");
+	expect(helpFrame).toContain("move entry");
+	expect(
+		await pressEscapeAndSettle(t, (frame) => !frame.includes("Keybindings")),
+	).toBe(true);
 	t.renderer.destroy();
 	db.close();
 });
 
 test("the Agent Presets catalog survives opening and closing ? help", async () => {
 	const { t, db } = await renderHomeShell();
-	expect(await openSection(t, 1, "Model profiles")).toBe(true);
+	expect(await openSection(t, 1, "Agent profiles")).toBe(true);
 	t.mockInput.pressEnter(); // open the profile list
 	expect(await renderUntil(t, (value) => value.includes("pi-a"))).toBe(true);
 	const actions = () =>
@@ -292,7 +354,7 @@ test("Agent Presets reads the canonical JSON even when a legacy TOML remains", a
 		delete process.env.HERDR_WORKFLOW_CONFIG;
 
 		const { t, db } = await renderHomeShell();
-		expect(await openSection(t, 1, "Model profiles")).toBe(true);
+		expect(await openSection(t, 1, "Agent profiles")).toBe(true);
 		t.mockInput.pressEnter();
 		// The canonical JSON is the active source; the leftover TOML is never read.
 		expect(await renderUntil(t, (value) => value.includes("pi-a"))).toBe(true);
@@ -397,7 +459,7 @@ test("the profile list keeps the cursor row in view while scrolling", async () =
 		`[agents]\ndefault_profile = "p00"\n\n${profiles}`,
 	);
 	const { t, db } = await renderHomeShell(120, 20);
-	expect(await openSection(t, 1, "Model profiles")).toBe(true);
+	expect(await openSection(t, 1, "Agent profiles")).toBe(true);
 	t.mockInput.pressEnter();
 	expect(await renderUntil(t, (frame) => frame.includes("p00"))).toBe(true);
 

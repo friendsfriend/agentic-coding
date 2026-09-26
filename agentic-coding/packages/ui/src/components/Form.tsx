@@ -1,18 +1,12 @@
 /** @jsxImportSource @opentui/solid */
-// Shared form primitive (rework-model-profiles-and-presets).
-//
-// A form is a vertical list of labelled fields. Each field has an input kind,
-// an optional default and an optional hint; validation is per field and the
-// error renders directly under the field that produced it, in the theme error
-// colour, so a failing save never hides which value is wrong. The component is
-// presentational: the owner keeps the value/error state and key dispatch, which
-// keeps the same form usable inline (settings pages) or inside a dialog.
+// Shared form primitive: field selector on left, active field editor on right.
+import { TextAttributes } from "@opentui/core";
 import { Show } from "solid-js";
 import { uiColors } from "../theme/colors";
 import { ScrollableList } from "./ScrollableList.tsx";
 
 /** Input kinds a form field can declare. */
-export type FormFieldKind = "text" | "select";
+export type FormFieldKind = "text" | "select" | "action";
 
 export interface FormField {
 	/** Stable identity used as the values/errors key. */
@@ -31,6 +25,7 @@ export interface FormField {
 
 export type FormValues = Record<string, string>;
 export type FormErrors = Record<string, string | undefined>;
+export type FormPane = "field" | "value";
 
 /** The values of a blank form: every field's default, or empty. */
 export function formDefaults(fields: readonly FormField[]): FormValues {
@@ -39,10 +34,7 @@ export function formDefaults(fields: readonly FormField[]): FormValues {
 	return values;
 }
 
-/**
- * Merge stored values over the blank defaults so a prefilled form still applies
- * field defaults for keys the stored value omits (new fields, cleared values).
- */
+/** Merge stored values over blank defaults, retaining defaults for missing keys. */
 export function formValues(
 	fields: readonly FormField[],
 	stored: FormValues = {},
@@ -57,8 +49,7 @@ export function formValues(
 
 /** Index of `value` among a select field's options (0 when it is not listed). */
 export function formOptionIndex(field: FormField, value: string): number {
-	const options = field.options ?? [];
-	const index = options.indexOf(value);
+	const index = (field.options ?? []).indexOf(value);
 	return index >= 0 ? index : 0;
 }
 
@@ -70,26 +61,17 @@ export function formStepOption(
 ): string {
 	const options = field.options ?? [];
 	if (!options.length) return value;
-	const current = formOptionIndex(field, value);
-	const next =
-		(current + delta + options.length * Math.abs(delta)) % options.length;
-	return options[next] ?? value;
+	const index = formOptionIndex(field, value);
+	return (
+		options[
+			(index + delta + options.length * Math.abs(delta)) % options.length
+		] ?? value
+	);
 }
 
 /** Display string for a field's value, falling back to its placeholder. */
 export function formDisplay(field: FormField, value: string): string {
-	if (value !== "") return value;
-	return field.placeholder ?? "—";
-}
-
-/** Per-item line budget so a long form scrolls with the cursor in view. */
-function fieldHeights(
-	fields: readonly FormField[],
-	errors: FormErrors,
-): number[] {
-	return fields.map(
-		(field) => 1 + (errors[field.key] ? 1 : 0) + (field.hint ? 1 : 0),
-	);
+	return value !== "" ? value : (field.placeholder ?? "—");
 }
 
 export interface FormProps {
@@ -98,91 +80,186 @@ export interface FormProps {
 	errors?: FormErrors;
 	/** Focused field index. */
 	activeIndex: number;
-	/** Text fields render an entry cursor while the form is in entry mode. */
+	/** Pane receiving navigation/input. Defaults to `field`. */
+	focusedPane?: FormPane;
+	/** Select choice under the cursor; committed value stays in `values`. */
+	choiceCursorIndex?: number;
+	/** Text fields accept printable input while entry mode is active. */
 	editing?: boolean;
-	/** Content lines the form may paint; the cursor row is always kept in view. */
+	/** Content lines the form may paint. */
 	availableLines?: number;
-	/** Heading row shown above the fields (e.g. a description). */
+	/** Heading row shown above the fields. */
 	header?: string;
 }
 
-/**
- * Render a form. The owner is responsible for moving `activeIndex`, changing
- * `values` and calling its own validation to fill `errors`.
- */
+const selectionBackground = (focused: boolean) =>
+	focused ? uiColors.bgSurface2 : uiColors.bgMantle;
+
+/** Two-pane form renderer. Owner supplies draft state and runs validation on save. */
 export function Form(props: FormProps) {
 	const errors = () => props.errors ?? {};
-	const heights = () => fieldHeights(props.fields, errors());
+	const pane = () => props.focusedPane ?? "field";
+	const field = () => props.fields[props.activeIndex];
+	const value = () => {
+		const active = field();
+		return active ? (props.values[active.key] ?? "") : "";
+	};
+	const options = () => field()?.options ?? [];
+	const optionIndex = () => {
+		const active = field();
+		return active ? formOptionIndex(active, value()) : 0;
+	};
+	const choiceCursor = () => props.choiceCursorIndex ?? optionIndex();
+	const listLines = (reservedLines = 0) =>
+		Math.max(1, (props.availableLines ?? 10) - 1 - reservedLines);
+
 	return (
-		<box style={{ width: "100%", height: "100%", flexDirection: "column" }}>
+		<box
+			backgroundColor={uiColors.bgMantle}
+			style={{ width: "100%", height: "100%", flexDirection: "column" }}
+		>
 			<Show when={props.header}>
 				<text fg={uiColors.textMuted}>{props.header}</text>
 			</Show>
-			<ScrollableList
-				items={[...props.fields]}
-				selectedIndex={props.activeIndex}
-				availableLines={props.availableLines}
-				itemHeights={heights()}
-				showScrollIndicator={false}
-				showScrollbar={false}
-				renderItem={(field, selected) => {
-					const value = () => props.values[field.key] ?? "";
-					const error = () => errors()[field.key];
-					return (
-						<box style={{ width: "100%", flexDirection: "column" }}>
-							<box style={{ width: "100%", flexDirection: "row" }}>
-								<text fg={selected() ? uiColors.primary : uiColors.textMuted}>
-									{selected() ? "▌ " : "  "}
-								</text>
-								<box style={{ flexGrow: 1, minWidth: 0, overflow: "hidden" }}>
+			<box
+				style={{
+					width: "100%",
+					flexGrow: 1,
+					minHeight: 0,
+					flexDirection: "row",
+					gap: 2,
+				}}
+			>
+				<box style={{ width: "34%", minWidth: 0, flexDirection: "column" }}>
+					<text
+						fg={pane() === "field" ? uiColors.primary : uiColors.textPrimary}
+						attributes={TextAttributes.BOLD}
+					>
+						Fields
+					</text>
+					<ScrollableList
+						items={[...props.fields]}
+						selectedIndex={props.activeIndex}
+						availableLines={listLines()}
+						estimatedItemHeight={1}
+						showScrollIndicator={false}
+						showScrollbar={false}
+						renderItem={(item, selected) => {
+							const error = () => errors()[item.key];
+							return (
+								<box
+									backgroundColor={
+										selected()
+											? selectionBackground(pane() === "field")
+											: undefined
+									}
+									style={{ height: 1, paddingLeft: 1 }}
+								>
 									<text
 										fg={
 											error()
 												? uiColors.error
 												: selected()
-													? uiColors.textPrimary
+													? uiColors.primary
 													: uiColors.textSecondary
 										}
 									>
-										{field.label}
+										{error() ? "⚠ " : ""}
+										{item.label}
 									</text>
 								</box>
-								<box style={{ flexShrink: 0, flexDirection: "row" }}>
-									<Show when={field.kind === "select"}>
-										<text
-											fg={
-												selected() ? uiColors.primary : uiColors.textSecondary
-											}
-										>
-											{`‹ ${formDisplay(field, value())} ›`}
-										</text>
-									</Show>
-									<Show when={field.kind === "text"}>
-										<text
-											fg={
-												selected()
-													? uiColors.textPrimary
-													: uiColors.textSecondary
-											}
-										>
-											{formDisplay(field, value())}
-										</text>
-										<Show when={selected() && props.editing}>
+							);
+						}}
+					/>
+				</box>
+
+				<box style={{ width: "64%", minWidth: 0, flexDirection: "column" }}>
+					<Show when={field()}>
+						{(active) => (
+							<>
+								<text
+									fg={
+										pane() === "value" ? uiColors.primary : uiColors.textPrimary
+									}
+									attributes={TextAttributes.BOLD}
+								>
+									{active().label}
+								</text>
+								<Show when={errors()[active().key]}>
+									<text fg={uiColors.error}>
+										{`⚠ ${errors()[active().key]}`}
+									</text>
+								</Show>
+								<Show when={active().kind === "text"}>
+									<Show
+										when={pane() === "value" && props.editing}
+										fallback={
+											<text
+												fg={value() ? uiColors.textPrimary : uiColors.textMuted}
+											>
+												{formDisplay(active(), value())}
+											</text>
+										}
+									>
+										<box height={1} flexDirection="row">
+											<text
+												fg={value() ? uiColors.textPrimary : uiColors.textMuted}
+											>
+												{formDisplay(active(), value())}
+											</text>
 											<text fg={uiColors.primary}>▌</text>
-										</Show>
+										</box>
 									</Show>
-								</box>
-							</box>
-							<Show when={field.hint && !error()}>
-								<text fg={uiColors.textMuted}>{`   ${field.hint}`}</text>
-							</Show>
-							<Show when={error()}>
-								<text fg={uiColors.error}>{`   ⚠ ${error()}`}</text>
-							</Show>
-						</box>
-					);
-				}}
-			/>
+									<text fg={uiColors.textMuted}>
+										{props.editing ? "Esc to finish editing" : "e to edit"}
+									</text>
+								</Show>
+								<Show when={active().kind === "action"}>
+									<text fg={uiColors.textPrimary}>
+										{formDisplay(active(), value())}
+									</text>
+								</Show>
+								<Show when={active().kind === "select"}>
+									<ScrollableList
+										items={[...options()]}
+										selectedIndex={choiceCursor()}
+										availableLines={listLines(
+											errors()[active().key] || active().hint ? 1 : 0,
+										)}
+										estimatedItemHeight={1}
+										showScrollIndicator={false}
+										showScrollbar={false}
+										renderItem={(option, selected) => (
+											<box
+												backgroundColor={
+													selected()
+														? selectionBackground(pane() === "value")
+														: undefined
+												}
+												style={{ height: 1, paddingLeft: 1 }}
+											>
+												<text
+													fg={
+														selected()
+															? uiColors.textPrimary
+															: uiColors.textSecondary
+													}
+												>
+													{option === value() ? "● " : "○ "}
+													{option === "" ? "—" : option}
+												</text>
+											</box>
+										)}
+									/>
+								</Show>
+								<Show when={!errors()[active().key] && active().hint}>
+									<text fg={uiColors.textMuted}>{active().hint}</text>
+								</Show>
+							</>
+						)}
+					</Show>
+				</box>
+			</box>
 		</box>
 	);
 }
@@ -192,6 +269,6 @@ export function firstErrorField(
 	fields: readonly FormField[],
 	errors: FormErrors,
 ): number {
-	const field = fields.findIndex((entry) => Boolean(errors[entry.key]));
-	return field === -1 ? 0 : field;
+	const index = fields.findIndex((entry) => Boolean(errors[entry.key]));
+	return index < 0 ? 0 : index;
 }

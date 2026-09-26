@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
-import { activeKeybindCatalog } from "@ui";
+import { activeKeybindCatalog, resetErrorModal } from "@ui";
 import { createSignal, onCleanup } from "solid-js";
 import { clearAgentConfigCache } from "../../src/tui/dash/agent-config-cache.ts";
 import {
@@ -15,7 +15,7 @@ import {
 import { AgentPresetsView } from "../../src/tui/settings/AgentPresetsView.tsx";
 import { POOL_EDITOR_STEPS } from "../../src/tui/settings/agentPresets.ts";
 import type { SettingsItem } from "../../src/tui/settings/items.ts";
-import { renderUntil } from "./support/terminal.ts";
+import { pressEscapeAndSettle, renderUntil } from "./support/terminal.ts";
 
 // The inline Agent Presets surface (rework-model-profiles-and-presets). Rendered
 // checks: the menu, the list, `+` creating a blank form, validation errors,
@@ -28,6 +28,7 @@ let configFile: string;
 const previousEnv = process.env.HERDR_WORKFLOW_CONFIG;
 
 beforeEach(() => {
+	resetErrorModal();
 	resetNotifications();
 	clearAgentConfigCache();
 	configDir = mkdtempSync(join(tmpdir(), "agent-presets-view-"));
@@ -37,6 +38,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	resetErrorModal();
 	if (previousEnv === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
 	else process.env.HERDR_WORKFLOW_CONFIG = previousEnv;
 	clearAgentConfigCache();
@@ -105,6 +107,19 @@ function saveWithEnter(t: Awaited<ReturnType<typeof renderView>>) {
 	t.mockInput.pressEnter();
 }
 
+async function editText(
+	t: Awaited<ReturnType<typeof renderView>>,
+	value: string,
+	backspaces = 0,
+) {
+	t.mockInput.pressKey("e");
+	await t.renderOnce();
+	for (let index = 0; index < backspaces; index += 1)
+		t.mockInput.pressBackspace();
+	for (const char of value) t.mockInput.pressKey(char);
+	await pressEscapeAndSettle(t);
+}
+
 test("the + key opens a blank form and saving persists a new profile", async () => {
 	let ctrlSPassedThrough = false;
 	const t = await renderView({ onCtrlS: () => (ctrlSPassedThrough = true) });
@@ -125,10 +140,19 @@ test("the + key opens a blank form and saving persists a new profile", async () 
 	expect(await renderUntil(t, (frame) => frame.includes("Profile name"))).toBe(
 		true,
 	);
-	const formActions = activeKeybindCatalog().flatMap((section) =>
-		section.keybinds.map((keybind) => keybind.key),
+	expect(t.captureCharFrame()).toContain("Thinking level");
+	const formBinds = activeKeybindCatalog().flatMap(
+		(section) => section.keybinds,
 	);
+	const formActions = formBinds.map((keybind) => keybind.key);
+	expect(formActions).toContain("h/l");
+	expect(formActions).toContain("Space");
+	expect(formActions).toContain("e");
 	expect(formActions).toContain("Enter");
+	expect(formActions).toContain("Backspace");
+	expect(formBinds.find((keybind) => keybind.key === "Enter")?.action).toBe(
+		"validate and save",
+	);
 	expect(formActions).not.toContain("Ctrl+S");
 
 	// Ctrl+S no longer submits or closes the editor.
@@ -145,11 +169,15 @@ test("the + key opens a blank form and saving persists a new profile", async () 
 	).toBe(true);
 	expect(wroteConfig()).not.toHaveProperty("agents");
 
-	// Type the name, then save with Enter on the last field.
-	for (const char of "fresh") t.mockInput.pressKey(char);
-	await t.renderOnce();
-	saveWithEnter(t);
-	expect(await renderUntil(t, (frame) => frame.includes("fresh"))).toBe(true);
+	// Enter from the first field validates and saves whole draft.
+	await editText(t, "fresh");
+	t.mockInput.pressEnter();
+	expect(
+		await renderUntil(
+			t,
+			(frame) => frame.includes("fresh") && !frame.includes("Profile name"),
+		),
+	).toBe(true);
 	const agents = wroteConfig().agents as {
 		profiles: Record<string, { runtime: string }>;
 	};
@@ -203,10 +231,7 @@ test("renaming an unreferenced profile saves the new key and drops the old", asy
 	expect(await renderUntil(t, (frame) => frame.includes("Profile name"))).toBe(
 		true,
 	);
-	for (let index = 0; index < "old".length; index += 1)
-		t.mockInput.pressBackspace();
-	for (const char of "new") t.mockInput.pressKey(char);
-	await t.renderOnce();
+	await editText(t, "new", "old".length);
 	saveWithEnter(t);
 	expect(await renderUntil(t, (frame) => frame.includes("new"))).toBe(true);
 	const profiles = (
@@ -238,10 +263,7 @@ test("renaming a referenced profile is refused in place", async () => {
 	expect(await renderUntil(t, (frame) => frame.includes("Profile name"))).toBe(
 		true,
 	);
-	for (let index = 0; index < "used".length; index += 1)
-		t.mockInput.pressBackspace();
-	for (const char of "renamed") t.mockInput.pressKey(char);
-	await t.renderOnce();
+	await editText(t, "renamed", "used".length);
 	saveWithEnter(t);
 	expect(await renderUntil(t, (frame) => frame.includes("Cannot rename"))).toBe(
 		true,
@@ -306,11 +328,11 @@ test("a referenced profile cannot be deleted, an unreferenced one can", async ()
 	t.renderer.destroy();
 });
 
-test("presets list exposes the built-in and creates a preset with a step route", async () => {
+test("preset pool subform adds a tagged profile from sorted choices", async () => {
 	writeFileSync(
 		configFile,
 		`${JSON.stringify({
-			agents: { profiles: { a: { runtime: "pi" }, b: { runtime: "pi" } } },
+			agents: { profiles: { b: { runtime: "pi" }, a: { runtime: "pi" } } },
 		})}\n`,
 	);
 	clearAgentConfigCache();
@@ -332,18 +354,52 @@ test("presets list exposes the built-in and creates a preset with a step route",
 	);
 	expect(formKeys).toContain("Enter");
 	expect(formKeys).not.toContain("Ctrl+S");
-	for (const char of "my-preset") t.mockInput.pressKey(char);
+	await editText(t, "my-preset");
 	t.mockInput.pressTab(); // default profile
-	t.mockInput.pressTab(); // pool core.plan labels
+	t.mockInput.pressTab(); // core.plan pool entries
 	await t.renderOnce();
-	expect(t.captureCharFrame()).toContain("Pool core.plan labels");
-	for (const char of "quick") t.mockInput.pressKey(char);
-	t.mockInput.pressTab(); // derived pool profile select
+	expect(t.captureCharFrame()).toContain("Pool core.plan entries");
+	expect(
+		activeKeybindCatalog()
+			.flatMap((section) => section.keybinds)
+			.find((keybind) => keybind.key === "Enter")?.action,
+	).toBe("manage pool entries");
+	t.mockInput.pressEnter();
+	expect(
+		await renderUntil(t, (frame) =>
+			frame.includes("No profile tags configured"),
+		),
+	).toBe(true);
+	const poolBinds = activeKeybindCatalog().flatMap(
+		(section) => section.keybinds,
+	);
+	expect(poolBinds.map((keybind) => keybind.action)).toContain("add entry");
+	expect(poolBinds.map((keybind) => keybind.action)).toContain("move entry");
+	t.mockInput.pressKey("+");
+	expect(await renderUntil(t, (frame) => frame.includes("Profile tag"))).toBe(
+		true,
+	);
+	await editText(t, "quick");
+	t.mockInput.pressTab(); // sorted profile selector
 	await t.renderOnce();
-	expect(t.captureCharFrame()).toContain("quick profile");
-	t.mockInput.pressKey("l"); // choose profile "a"
+	const frame = t.captureCharFrame();
+	expect(frame.indexOf("○ a")).toBeLessThan(frame.indexOf("○ b"));
+	t.mockInput.pressKey("j");
+	t.mockInput.pressKey("j"); // select b after the empty choice
 	await t.renderOnce();
-	saveWithEnter(t);
+	expect(t.captureCharFrame()).toContain("○ b");
+	t.mockInput.pressKey(" ");
+	t.mockInput.pressEnter(); // save the pool entry
+	expect(await renderUntil(t, (frame) => frame.includes("quick"))).toBe(true);
+	expect(t.captureCharFrame()).toContain("b");
+	expect(
+		await pressEscapeAndSettle(t, (frame) => frame.includes("Preset name")),
+	).toBe(true);
+	t.mockInput.pressKey("k");
+	await t.renderOnce();
+	t.mockInput.pressKey("k");
+	await t.renderOnce();
+	t.mockInput.pressEnter(); // save preset from its name field
 	expect(await renderUntil(t, (frame) => frame.includes("my-preset"))).toBe(
 		true,
 	);
@@ -354,7 +410,7 @@ test("presets list exposes the built-in and creates a preset with a step route",
 	).presets["my-preset"];
 	expect(preset).toBeDefined();
 	expect(preset?.pools?.["core.plan"]).toEqual([
-		{ label: "quick", profile: "a", default: true },
+		{ label: "quick", profile: "b", default: true },
 	]);
 	t.renderer.destroy();
 });
@@ -398,7 +454,7 @@ test("stored model pools survive an unchanged preset save", async () => {
 	expect(await renderUntil(t, (frame) => frame.includes("Preset name"))).toBe(
 		true,
 	);
-	saveWithEnter(t);
+	t.mockInput.pressEnter(); // save unchanged preset from Preset name
 	expect(await renderUntil(t, (frame) => frame.includes("classified"))).toBe(
 		true,
 	);
@@ -415,6 +471,95 @@ test("stored model pools survive an unchanged preset save", async () => {
 			default: true,
 		},
 		{ label: "thorough", profile: "a" },
+	]);
+	t.renderer.destroy();
+});
+
+test("pool entries copy between steps and paste as ordered config", async () => {
+	writeFileSync(
+		configFile,
+		`${JSON.stringify({
+			agents: {
+				profiles: { a: { runtime: "pi" }, b: { runtime: "opencode" } },
+				presets: {
+					classified: {
+						pools: {
+							"core.plan": [
+								{
+									label: "quick",
+									profile: "a",
+									criteria: { complexity: "small" },
+									default: true,
+								},
+								{ label: "steady", profile: "b" },
+							],
+						},
+					},
+				},
+			},
+		})}\n`,
+	);
+	clearAgentConfigCache();
+	const t = await renderView();
+	expect(
+		await renderUntil(t, (frame) => frame.includes("Model profiles")),
+	).toBe(true);
+	t.mockInput.pressKey("j");
+	t.mockInput.pressEnter();
+	expect(await renderUntil(t, (frame) => frame.includes("classified"))).toBe(
+		true,
+	);
+	t.mockInput.pressEnter();
+	expect(await renderUntil(t, (frame) => frame.includes("Preset name"))).toBe(
+		true,
+	);
+	t.mockInput.pressTab();
+	t.mockInput.pressTab(); // focus core.plan on full step list
+	await t.renderOnce();
+	const actions = activeKeybindCatalog().flatMap((section) =>
+		section.keybinds.map((keybind) => keybind.action),
+	);
+	expect(actions).toContain("copy pool");
+	expect(actions).toContain("paste pool");
+	t.mockInput.pressKey("y");
+	expect(activeNotification()?.message).toContain(
+		"Copied pool entries from core.plan",
+	);
+	t.mockInput.pressTab(); // fusion.consolidate on same list
+	await t.renderOnce();
+	t.mockInput.pressKey("p");
+	expect(await renderUntil(t, (frame) => frame.includes("2 entries"))).toBe(
+		true,
+	);
+	for (let index = 0; index < 3; index += 1) {
+		t.mockInput.pressKey("k");
+		await t.renderOnce();
+	}
+	t.mockInput.pressEnter();
+	expect(
+		await renderUntil(t, () =>
+			Boolean(
+				(
+					wroteConfig().agents as {
+						presets: Record<string, { pools?: Record<string, unknown[]> }>;
+					}
+				).presets.classified?.pools?.["fusion.consolidate"],
+			),
+		),
+	).toBe(true);
+	const pools = (
+		wroteConfig().agents as {
+			presets: Record<string, { pools?: Record<string, unknown[]> }>;
+		}
+	).presets.classified?.pools;
+	expect(pools?.["fusion.consolidate"]).toEqual([
+		{
+			label: "quick",
+			profile: "a",
+			criteria: { complexity: "small" },
+			default: true,
+		},
+		{ label: "steady", profile: "b" },
 	]);
 	t.renderer.destroy();
 });
@@ -457,7 +602,7 @@ test("a profile referenced only by a pool entry cannot be deleted", async () => 
 	t.renderer.destroy();
 });
 
-test("the preset form renders a pool labels field per classifiable step", async () => {
+test("the preset form exposes an entry manager per classifiable step", async () => {
 	writeFileSync(
 		configFile,
 		`${JSON.stringify({
@@ -478,7 +623,7 @@ test("the preset form renders a pool labels field per classifiable step", async 
 	);
 	// Walk every field and collect the pool rows that scroll past.
 	const expected = POOL_EDITOR_STEPS.map(
-		({ stepId }) => `Pool ${stepId} labels`,
+		({ stepId }) => `Pool ${stepId} entries`,
 	);
 	const seen = new Set<string>();
 	for (let index = 0; index < 80; index += 1) {
@@ -491,7 +636,7 @@ test("the preset form renders a pool labels field per classifiable step", async 
 	t.renderer.destroy();
 });
 
-test("the preset form derives a profile select per pool label", async () => {
+test("existing pool entries open label and roster-default subforms", async () => {
 	writeFileSync(
 		configFile,
 		`${JSON.stringify({
@@ -525,20 +670,39 @@ test("the preset form derives a profile select per pool label", async () => {
 	expect(await renderUntil(t, (frame) => frame.includes("Preset name"))).toBe(
 		true,
 	);
-	const expected = [
-		"Pool core.plan · quick profile",
-		"Pool fusion.plan · strong profile",
-		"Pool fusion.plan · strong default",
-		"Pool fusion.plan · fast default",
-	];
-	const seen = new Set<string>();
-	for (let index = 0; index < 80; index += 1) {
-		const frame = t.captureCharFrame();
-		for (const label of expected) if (frame.includes(label)) seen.add(label);
+	for (let index = 0; index < 4; index += 1) {
 		t.mockInput.pressTab();
 		await t.renderOnce();
 	}
-	for (const label of expected) expect(seen.has(label)).toBe(true);
+	expect(
+		await renderUntil(t, (frame) => frame.includes("Pool fusion.plan entries")),
+	).toBe(true);
+	t.mockInput.pressEnter();
+	expect(await renderUntil(t, (frame) => frame.includes("strong"))).toBe(true);
+	const poolKeys = activeKeybindCatalog().flatMap((section) =>
+		section.keybinds.map((keybind) => keybind.key),
+	);
+	expect(poolKeys).toContain("Shift+↑/↓");
+	t.mockInput.pressArrow("down", { shift: true });
+	await t.renderOnce();
+	const movedFrame = t.captureCharFrame();
+	expect(movedFrame.indexOf("fast")).toBeLessThan(movedFrame.indexOf("strong"));
+	t.mockInput.pressEnter();
+	expect(await renderUntil(t, (frame) => frame.includes("Profile tag"))).toBe(
+		true,
+	);
+	let frame = t.captureCharFrame();
+	expect(frame).toContain("Profile tag");
+	expect(frame).toContain("Agent profile");
+	expect(frame).toContain("Roster default");
+	t.mockInput.pressTab();
+	await t.renderOnce();
+	t.mockInput.pressTab();
+	expect(await renderUntil(t, (value) => value.includes("● default"))).toBe(
+		true,
+	);
+	frame = t.captureCharFrame();
+	expect(frame).toContain("● default");
 	t.renderer.destroy();
 });
 
@@ -553,7 +717,7 @@ test("text fields accept quote characters", async () => {
 	expect(await renderUntil(t, (frame) => frame.includes("Profile name"))).toBe(
 		true,
 	);
-	for (const char of ["o", "'", "k", '"']) t.mockInput.pressKey(char);
+	await editText(t, `o'k"`);
 	await t.renderOnce();
 	saveWithEnter(t);
 	const name = `o'k"`;

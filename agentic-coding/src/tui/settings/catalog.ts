@@ -87,7 +87,7 @@ export const SETTINGS_INVENTORY: readonly SettingsInventoryEntry[] = [
 	{
 		id: "agents.presets",
 		section: "agents",
-		label: "Configuration presets",
+		label: "Agent presets",
 		owner: "src/server/config.ts",
 		scope: "user",
 		storage: "[agents.presets] in the layered workflow config",

@@ -63,15 +63,8 @@ export interface PresetDraft {
 	description?: string;
 	runtime?: RuntimeId;
 	defaultProfile: string;
-	/** Raw comma-separated label text per classifiable step. */
-	poolLabels: Record<string, string>;
-	/** One profile choice per `step\0label` entry key. */
-	poolProfiles: Record<string, string>;
-	/** Default flag per `step\0label` entry key (fusion.plan toggles). */
-	poolDefaults: Record<string, boolean>;
-	/** Opaque criteria JSON per `step\0label` entry key, preserved verbatim so
-	 * an unchanged save never drops a structured TypeSafe criterion. */
-	poolCriteria: Record<string, unknown>;
+	/** Editable entries per classifiable step, retaining opaque criteria. */
+	pools: Record<string, PoolEntry[]>;
 	/** Step assignments outside the pool fields, preserved verbatim. */
 	steps: Record<string, string>;
 	/** Role tables outside the pool fields, preserved verbatim. */
@@ -80,36 +73,8 @@ export interface PresetDraft {
 
 export type Draft = ProfileDraft | PresetDraft;
 
-/** Field key of one pool's comma-separated label list. */
-export const poolLabelsKey = (step: string): string => `pool:${step}:labels`;
-/** Field key of one pool entry's profile choice. */
-export const poolProfileKey = (step: string, label: string): string =>
-	`pool:${step}:profile:${label}`;
-/** Field key of one pool entry's default toggle. */
-export const poolDefaultKey = (step: string, label: string): string =>
-	`pool:${step}:default:${label}`;
-
-const ENTRY_SEPARATOR = "\u0000";
-function entryKey(step: string, label: string): string {
-	return `${step}${ENTRY_SEPARATOR}${label}`;
-}
-function splitEntryKey(key: string): { step: string; label: string } {
-	const index = key.indexOf(ENTRY_SEPARATOR);
-	if (index < 0) return { step: key, label: "" };
-	return { step: key.slice(0, index), label: key.slice(index + 1) };
-}
-/** Split a comma-separated label list into unique, trimmed labels. */
-export function splitPoolLabels(value: string): string[] {
-	const seen = new Set<string>();
-	const labels: string[] = [];
-	for (const raw of value.split(",")) {
-		const label = raw.trim();
-		if (!label || seen.has(label)) continue;
-		seen.add(label);
-		labels.push(label);
-	}
-	return labels;
-}
+/** Field key for the item manager of one classifiable step. */
+export const poolItemsKey = (step: string): string => `pool:${step}:items`;
 
 /** Profile fields for the current runtime; model is a choice when the runtime
  * enumerates models, otherwise free text. */
@@ -158,20 +123,15 @@ export function profileFields(draft: ProfileDraft): FormField[] {
 	if (draft.runtime === "pi")
 		fields.push({
 			key: "thinking",
-			label: "Thinking level (optional)",
+			label: "Thinking level (Pi only)",
 			kind: "select",
 			options: [...THINKING_LEVELS],
 		});
 	return fields;
 }
 
-/** Preset fields. Each classifiable step gets a comma-separated label field
- * plus one profile choice per current label, derived live from the draft; the
- * `fusion.plan` roster also gets a default toggle per entry. */
-export function presetFields(
-	draft: PresetDraft,
-	profileNames: readonly string[],
-): FormField[] {
+/** Preset fields. Each classifiable step opens a pool-entry manager. */
+export function presetFields(profileNames: readonly string[]): FormField[] {
 	const options = ["", ...profileNames];
 	const fields: FormField[] = [
 		{ key: "name", label: "Preset name", kind: "text" },
@@ -182,28 +142,12 @@ export function presetFields(
 			options,
 		},
 	];
-	for (const { stepId, mode } of POOL_EDITOR_STEPS) {
+	for (const { stepId } of POOL_EDITOR_STEPS)
 		fields.push({
-			key: poolLabelsKey(stepId),
-			label: `Pool ${stepId} labels (comma-separated)`,
-			kind: "text",
+			key: poolItemsKey(stepId),
+			label: `Pool ${stepId} entries`,
+			kind: "action",
 		});
-		for (const label of splitPoolLabels(draft.poolLabels[stepId] ?? "")) {
-			fields.push({
-				key: poolProfileKey(stepId, label),
-				label: `Pool ${stepId} · ${label} profile`,
-				kind: "select",
-				options,
-			});
-			if (mode === "roster")
-				fields.push({
-					key: poolDefaultKey(stepId, label),
-					label: `Pool ${stepId} · ${label} default`,
-					kind: "select",
-					options: ["", "default"],
-				});
-		}
-	}
 	return fields;
 }
 
@@ -214,7 +158,7 @@ export function draftFields(
 ): FormField[] {
 	return draft.kind === "profile"
 		? profileFields(draft)
-		: presetFields(draft, profileNames);
+		: presetFields(profileNames);
 }
 
 /** Flatten a draft into the form's value map. */
@@ -231,15 +175,10 @@ export function draftValues(draft: Draft): FormValues {
 		name: draft.name,
 		defaultProfile: draft.defaultProfile,
 	};
-	for (const { stepId } of POOL_EDITOR_STEPS)
-		values[poolLabelsKey(stepId)] = draft.poolLabels[stepId] ?? "";
-	for (const [key, profile] of Object.entries(draft.poolProfiles)) {
-		const { step, label } = splitEntryKey(key);
-		if (label) values[poolProfileKey(step, label)] = profile;
-	}
-	for (const [key, isDefault] of Object.entries(draft.poolDefaults)) {
-		const { step, label } = splitEntryKey(key);
-		if (label) values[poolDefaultKey(step, label)] = isDefault ? "default" : "";
+	for (const { stepId } of POOL_EDITOR_STEPS) {
+		const count = draft.pools[stepId]?.length ?? 0;
+		values[poolItemsKey(stepId)] =
+			`${count} ${count === 1 ? "entry" : "entries"}`;
 	}
 	return values;
 }
@@ -271,28 +210,9 @@ export function applyDraftValue(
 		else if (key === "thinking") next.thinking = value;
 		return next;
 	}
-	const next: PresetDraft = {
-		...draft,
-		poolLabels: { ...draft.poolLabels },
-		poolProfiles: { ...draft.poolProfiles },
-		poolDefaults: { ...draft.poolDefaults },
-		poolCriteria: { ...draft.poolCriteria },
-	};
+	const next = { ...draft };
 	if (key === "name") next.name = value;
 	else if (key === "defaultProfile") next.defaultProfile = value;
-	else if (key.startsWith("pool:")) {
-		const [, step, kind, ...rest] = key.split(":");
-		if (kind === "labels" && step) next.poolLabels[step] = value;
-		else if (kind === "profile" && step) {
-			const label = rest.join(":");
-			if (value) next.poolProfiles[entryKey(step, label)] = value;
-			else delete next.poolProfiles[entryKey(step, label)];
-		} else if (kind === "default" && step) {
-			const label = rest.join(":");
-			if (value === "default") next.poolDefaults[entryKey(step, label)] = true;
-			else delete next.poolDefaults[entryKey(step, label)];
-		}
-	}
 	return next;
 }
 
@@ -320,19 +240,12 @@ export function presetDraft(
 	presets?: AgentsConfig["presets"],
 ): PresetDraft {
 	const current = name ? presets?.[name] : undefined;
-	const poolLabels: Record<string, string> = {};
-	const poolProfiles: Record<string, string> = {};
-	const poolDefaults: Record<string, boolean> = {};
-	const poolCriteria: Record<string, unknown> = {};
-	for (const [step, entries] of Object.entries(current?.pools ?? {})) {
-		poolLabels[step] = entries.map((entry) => entry.label).join(", ");
-		for (const entry of entries) {
-			const key = entryKey(step, entry.label);
-			poolProfiles[key] = entry.profile;
-			if (entry.default === true) poolDefaults[key] = true;
-			if (entry.criteria !== undefined) poolCriteria[key] = entry.criteria;
-		}
-	}
+	const pools = Object.fromEntries(
+		Object.entries(current?.pools ?? {}).map(([step, entries]) => [
+			step,
+			entries.map((entry) => ({ ...entry })),
+		]),
+	);
 	return {
 		kind: "preset",
 		name,
@@ -340,55 +253,58 @@ export function presetDraft(
 		...(current?.description ? { description: current.description } : {}),
 		...(current?.runtime ? { runtime: current.runtime } : {}),
 		defaultProfile: current?.default_profile ?? "",
-		poolLabels,
-		poolProfiles,
-		poolDefaults,
-		poolCriteria,
+		pools,
 		steps: { ...(current?.steps ?? {}) },
 		roles: { ...(current?.roles ?? {}) },
 	};
 }
 
-/** Entries built from the draft's label text and per-label choices. */
+/** Normalize pools before save: single-choice steps keep exactly one default. */
 export function poolDraftEntries(
 	draft: PresetDraft,
 ): Record<string, PoolEntry[]> {
 	const pools: Record<string, PoolEntry[]> = {};
 	for (const { stepId, mode } of POOL_EDITOR_STEPS) {
-		const labels = splitPoolLabels(draft.poolLabels[stepId] ?? "");
-		if (!labels.length) continue;
-		const entries: PoolEntry[] = [];
-		for (const [index, label] of labels.entries()) {
-			const key = entryKey(stepId, label);
-			const profile = draft.poolProfiles[key];
-			if (!profile) continue;
+		const entries = draft.pools[stepId] ?? [];
+		if (!entries.length) continue;
+		const defaultIndex =
+			mode === "single" ? entries.findIndex((entry) => entry.default) : -1;
+		pools[stepId] = entries.map((entry, index) => {
+			const normalized = { ...entry };
 			const isDefault =
 				mode === "roster"
-					? draft.poolDefaults[key] === true
-					: singleDefaultIndex(draft, stepId, labels) === index;
-			const criteria = draft.poolCriteria[key];
-			entries.push({
-				label,
-				profile,
-				...(criteria !== undefined ? { criteria } : {}),
-				...(isDefault ? { default: true } : {}),
-			});
-		}
-		if (entries.length) pools[stepId] = entries;
+					? entry.default === true
+					: index === (defaultIndex < 0 ? 0 : defaultIndex);
+			if (isDefault) normalized.default = true;
+			else delete normalized.default;
+			return normalized;
+		});
 	}
 	return pools;
 }
 
-/** The single-select default is the first labeled entry explicitly tagged as
- * default, or the first remaining label when that tag is gone. */
-function singleDefaultIndex(
+/** Swap one pool item with its neighbor; boundary moves leave order unchanged. */
+export function movePoolEntry(
 	draft: PresetDraft,
 	step: string,
-	labels: readonly string[],
-): number {
-	for (const [index, label] of labels.entries())
-		if (draft.poolDefaults[entryKey(step, label)] === true) return index;
-	return 0;
+	index: number,
+	delta: -1 | 1,
+): PresetDraft {
+	const entries = [...(draft.pools[step] ?? [])];
+	const nextIndex = index + delta;
+	if (
+		index < 0 ||
+		index >= entries.length ||
+		nextIndex < 0 ||
+		nextIndex >= entries.length
+	)
+		return draft;
+	const entry = entries[index];
+	const neighbor = entries[nextIndex];
+	if (!entry || !neighbor) return draft;
+	entries[index] = neighbor;
+	entries[nextIndex] = entry;
+	return { ...draft, pools: { ...draft.pools, [step]: entries } };
 }
 
 /**
@@ -409,27 +325,21 @@ export function validateDraft(
 			draft.kind === "profile" ? "profile" : "preset"
 		} named "${name}" already exists`;
 	if (draft.kind === "preset") {
-		const anyLabels = POOL_EDITOR_STEPS.some(
-			({ stepId }) =>
-				splitPoolLabels(draft.poolLabels[stepId] ?? "").length > 0,
+		const anyEntries = POOL_EDITOR_STEPS.some(
+			({ stepId }) => (draft.pools[stepId]?.length ?? 0) > 0,
 		);
-		if (!anyLabels && !errors.name)
+		if (!anyEntries && !errors.name)
 			errors.name = "A preset must declare at least one model pool";
 		for (const { stepId, mode } of POOL_EDITOR_STEPS) {
-			const labels = splitPoolLabels(draft.poolLabels[stepId] ?? "");
-			if (!labels.length) continue;
-			for (const label of labels)
-				if (!draft.poolProfiles[entryKey(stepId, label)]) {
-					errors[poolProfileKey(stepId, label)] =
-						`Choose a profile for ${label}`;
-					break;
-				}
+			const entries = draft.pools[stepId] ?? [];
+			if (!entries.length) continue;
+			if (entries.some((entry) => !entry.label.trim() || !entry.profile))
+				errors[poolItemsKey(stepId)] =
+					"Every pool entry needs a label and profile";
 			if (mode !== "roster") continue;
-			const defaults = labels.filter(
-				(label) => draft.poolDefaults[entryKey(stepId, label)] === true,
-			).length;
+			const defaults = entries.filter((entry) => entry.default === true).length;
 			if (defaults < 2 || defaults > 5)
-				errors[poolLabelsKey(stepId)] =
+				errors[poolItemsKey(stepId)] =
 					"fusion.plan needs 2-5 entries marked default";
 		}
 	}

@@ -70,14 +70,50 @@ function rgb(hex: string): [number, number, number] {
 	];
 }
 
+test("select list reserves a row for its optional hint", async () => {
+	const options = Array.from({ length: 20 }, (_, index) => `model-${index}`);
+	const t = await testRender(
+		() => (
+			<Form
+				fields={[
+					{
+						key: "model",
+						label: "Model",
+						kind: "select",
+						options,
+						hint: "optional; empty uses the runtime default",
+					},
+				]}
+				values={{ model: "model-0" }}
+				activeIndex={0}
+				focusedPane="value"
+				availableLines={10}
+			/>
+		),
+		{ width: 80, height: 24 },
+	);
+	await t.flush();
+	const lines = t.captureCharFrame().split("\n");
+	const optionLines = lines.filter((line) => /model-\d+/.test(line));
+	const hintLine = lines.findIndex((line) =>
+		line.includes("optional; empty uses the runtime default"),
+	);
+	expect(optionLines).toHaveLength(8);
+	expect(hintLine).toBeGreaterThan(
+		lines.findIndex((line) => line.includes("model-7")),
+	);
+	t.renderer.destroy();
+});
+
 test("the form renders labels, values and a styled validation error", async () => {
 	const t = await testRender(
 		() => (
 			<Form
 				fields={fields}
 				values={{ name: "", runtime: "pi", note: "" }}
-				errors={{ name: "Name is required" }}
-				activeIndex={0}
+				errors={{ runtime: "Choose a runtime" }}
+				activeIndex={1}
+				focusedPane="value"
 				editing
 				availableLines={10}
 			/>
@@ -86,26 +122,37 @@ test("the form renders labels, values and a styled validation error", async () =
 	);
 	await t.flush();
 	const frame = t.captureCharFrame();
+	expect(frame).toContain("Fields");
 	expect(frame).toContain("Name");
 	expect(frame).toContain("Runtime");
 	expect(frame).toContain("pi");
-	expect(frame).toContain("Name is required");
+	expect(frame).toContain("Choose a runtime");
 
 	// The error is not just text: it renders in the theme error colour on the
 	// line directly under the field that produced it.
 	const lines = t.captureSpans().lines;
 	const errorLine = lines.findIndex((line) =>
-		line.spans.some((span) => span.text.includes("Name is required")),
+		line.spans.some((span) => span.text.includes("Choose a runtime")),
 	);
 	const fieldLine = lines.findIndex((line) =>
 		line.spans.some(
-			(span) => span.text.includes("Name") && !span.text.includes("required"),
+			(span) => span.text.includes("Runtime") && !span.text.includes("Choose"),
 		),
 	);
 	expect(errorLine).toBe(fieldLine + 1);
 	const errorSpan = lines[errorLine]?.spans.find((span) =>
-		span.text.includes("Name is required"),
+		span.text.includes("Choose a runtime"),
 	);
+	const fieldsSpan = lines
+		.flatMap((line) => line.spans)
+		.find((span) => span.text.includes("Fields"));
+	const [backgroundRed, backgroundGreen, backgroundBlue] = rgb(
+		uiColors.bgMantle,
+	);
+	expect(fieldsSpan?.bg.buffer[0]).toBe(backgroundRed);
+	expect(fieldsSpan?.bg.buffer[1]).toBe(backgroundGreen);
+	expect(fieldsSpan?.bg.buffer[2]).toBe(backgroundBlue);
+
 	const [red, green, blue] = rgb(uiColors.error);
 	expect(errorSpan?.fg.buffer[0]).toBe(red);
 	expect(errorSpan?.fg.buffer[1]).toBe(green);

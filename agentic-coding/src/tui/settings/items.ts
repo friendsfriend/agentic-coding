@@ -202,17 +202,17 @@ function agentItems(context: SettingsContext): SettingsItem[] {
 	// items stay declared here so the inventory reachability check can name them.
 	items.push({
 		id: "agents.profiles",
-		label: "Model profiles",
+		label: "Agent profiles",
 		value: `${agents.profiles.length} configured`,
-		detail: `${detailFor(agents.scope, source, "next-start")} · edit the selected profile or add one`,
+		detail: `${detailFor(agents.scope, source, "next-start")} · edit a profile or add one`,
 		editable: true,
 		action: { kind: "none" },
 	});
 	items.push({
 		id: "agents.presets",
-		label: "Presets",
+		label: "Agent presets",
 		value: `${agents.presets.length} configured`,
-		detail: `${detailFor(agents.scope, source, "next-start")} · edit the selected preset or add one`,
+		detail: `${detailFor(agents.scope, source, "next-start")} · edit a preset or add one`,
 		editable: true,
 		action: { kind: "none" },
 	});

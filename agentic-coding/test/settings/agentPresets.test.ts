@@ -1,17 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import {
 	applyDraftValue,
+	movePoolEntry,
 	type PresetDraft,
-	poolDefaultKey,
-	poolLabelsKey,
-	poolProfileKey,
+	poolItemsKey,
 	presetDraft,
 	presetFields,
 	presetMutation,
 	profileDraft,
+	profileFields,
 	profileMutation,
 	profileReferences,
-	splitPoolLabels,
 	validateDraft,
 } from "../../src/tui/settings/agentPresets.ts";
 import type { AgentsConfig } from "../../src/workflow/profiles.ts";
@@ -45,6 +44,15 @@ const agents: AgentsConfig = {
 };
 
 describe("agent preset drafts", () => {
+	test("thinking choice is available only for Pi profiles", () => {
+		const piFields = profileFields(profileDraft("pi", { runtime: "pi" }));
+		const opencodeFields = profileFields(
+			profileDraft("opencode", { runtime: "opencode" }),
+		);
+		expect(piFields.map((field) => field.key)).toContain("thinking");
+		expect(opencodeFields.map((field) => field.key)).not.toContain("thinking");
+	});
+
 	test("a prefilled profile draft carries the stored values", () => {
 		const draft = profileDraft("used", agents.profiles.used);
 		expect(draft).toMatchObject({
@@ -67,55 +75,42 @@ describe("agent preset drafts", () => {
 		});
 	});
 
-	test("a preset draft loads stored pools into labels, profiles, and defaults", () => {
+	test("a preset draft retains ordered pool entries and metadata", () => {
 		const draft = presetDraft("routed", agents.presets);
-		expect(draft.poolLabels["core.plan"]).toBe("quick, thorough");
-		expect(draft.poolProfiles["core.plan\u0000quick"]).toBe("used");
-		expect(draft.poolProfiles["core.plan\u0000thorough"]).toBe("free");
-		expect(draft.poolDefaults["core.plan\u0000thorough"]).toBe(true);
+		expect(draft.pools["core.plan"]).toEqual([
+			{ label: "quick", profile: "used", criteria: { what: "small" } },
+			{ label: "thorough", profile: "free", default: true },
+		]);
 		// Step/role assignments outside the pool fields survive.
 		expect(draft.steps).toEqual({ "core.plan": "used" });
 		expect(draft.roles).toEqual({ "custom.step": { "custom-role": "used" } });
 	});
 
-	test("the expanded preset form derives one select per label", () => {
-		const draft = presetDraft("routed", agents.presets);
-		const keys = presetFields(draft, ["used", "free"]).map((f) => f.key);
-		expect(keys).toContain(poolLabelsKey("core.plan"));
-		expect(keys).toContain(poolProfileKey("core.plan", "quick"));
-		expect(keys).toContain(poolProfileKey("core.plan", "thorough"));
-		// Only the fusion roster exposes default toggles.
-		expect(keys).toContain(poolDefaultKey("fusion.plan", "strong"));
-		expect(keys).not.toContain(poolDefaultKey("core.plan", "quick"));
+	test("preset fields expose one entry manager per classifiable step", () => {
+		const fields = presetFields(["used", "free"]);
+		expect(fields.map((field) => field.key)).toContain(
+			poolItemsKey("core.plan"),
+		);
+		expect(
+			fields.find((field) => field.key === poolItemsKey("core.plan"))?.kind,
+		).toBe("action");
+		expect(fields.map((field) => field.key)).toContain(
+			poolItemsKey("fusion.plan"),
+		);
 	});
 
-	test("editing the label text derives the matching profile selects", () => {
-		const draft = presetDraft("new", {});
-		const next = applyDraftValue(
-			draft,
-			poolLabelsKey("core.plan"),
-			"alpha, beta",
-		) as PresetDraft;
-		const keys = presetFields(next, ["used", "free"]).map((f) => f.key);
-		expect(keys).toContain(poolProfileKey("core.plan", "alpha"));
-		expect(keys).toContain(poolProfileKey("core.plan", "beta"));
-		expect(splitPoolLabels(next.poolLabels["core.plan"] ?? "")).toEqual([
-			"alpha",
-			"beta",
+	test("moving a pool entry changes order without losing its metadata", () => {
+		const draft = presetDraft("routed", agents.presets);
+		const moved = movePoolEntry(draft, "core.plan", 0, 1);
+		expect(moved.pools["core.plan"]?.map((entry) => entry.label)).toEqual([
+			"thorough",
+			"quick",
 		]);
-	});
-
-	test("a label edit drops the removed entry on save", () => {
-		const draft = presetDraft("routed", agents.presets);
-		const next = applyDraftValue(
-			draft,
-			poolLabelsKey("core.plan"),
-			"quick",
-		) as PresetDraft;
-		const mutation = presetMutation(next);
+		const mutation = presetMutation(moved);
 		if (mutation.kind !== "set-preset") throw new Error("expected set-preset");
-		expect(mutation.preset.pools?.["core.plan"]?.map((e) => e.label)).toEqual([
-			"quick",
+		expect(mutation.preset.pools?.["core.plan"]).toEqual([
+			{ label: "thorough", profile: "free", default: true },
+			{ label: "quick", profile: "used", criteria: { what: "small" } },
 		]);
 	});
 });
@@ -144,13 +139,17 @@ describe("agent preset validation", () => {
 
 	test("fusion default counts outside 2-5 are refused", () => {
 		const draft = presetDraft("routed", agents.presets);
-		const one = applyDraftValue(
-			draft,
-			poolDefaultKey("fusion.plan", "balanced"),
-			"",
-		) as PresetDraft;
+		const one: PresetDraft = {
+			...draft,
+			pools: {
+				...draft.pools,
+				"fusion.plan": (draft.pools["fusion.plan"] ?? []).map((entry) =>
+					entry.label === "balanced" ? { ...entry, default: false } : entry,
+				),
+			},
+		};
 		expect(validateDraft(one, [])).toMatchObject({
-			[poolLabelsKey("fusion.plan")]:
+			[poolItemsKey("fusion.plan")]:
 				"fusion.plan needs 2-5 entries marked default",
 		});
 	});
