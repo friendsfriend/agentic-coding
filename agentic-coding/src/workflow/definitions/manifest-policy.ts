@@ -31,6 +31,14 @@ export function definitionVersionForTriageRouting(rounds: number): number {
 	return rounds + 500;
 }
 
+/** Version tier for the graphs carrying the four configurable stage gates
+ * (add-jev-stage-gating). Threaded behind a flag for the same reason as the
+ * tier above: editing a registered version changes its digest and would strand
+ * every workflow already pinned to it. */
+export function definitionVersionForStageGates(rounds: number): number {
+	return rounds + 600;
+}
+
 const MANIFEST_POLICY: Readonly<Record<string, WorkflowManifestPolicy>> = {
 	openspec: {
 		targetKind: "repository",

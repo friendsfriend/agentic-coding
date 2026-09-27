@@ -29,6 +29,7 @@ import type {
 import {
 	CLASSIFIER_DECISION_INPUT_MAX_BYTES,
 	CLASSIFIER_DECISION_MAX_RECORDS,
+	GATE_DECISION_MAX_RECORDS,
 	questionOptions,
 } from "../contracts/workflow.ts";
 
@@ -133,6 +134,17 @@ const classifierDecisionRecordSchema = Schema.Struct({
 		profiles: stringArray(),
 		attention: Schema.optionalWith(boundedText(4096), { exact: true }),
 	}),
+});
+const gateDecisionRecordSchema = Schema.Struct({
+	id: text(4096),
+	at: text(4096),
+	stepId: text(4096),
+	stage: text(256),
+	policy: text(64),
+	decision: Schema.Literal("run", "skip"),
+	forced: Schema.Boolean,
+	noul: Schema.optionalWith(Schema.Number, { exact: true }),
+	reason: Schema.optionalWith(boundedText(4096), { exact: true }),
 });
 const dialogueRecordSchema = Schema.Struct({
 	id: text(4096),
@@ -405,6 +417,10 @@ export const WorkflowSnapshotSchema = Schema.Struct({
 		updatedAt: text(4096),
 		stepEnteredAt: text(4096),
 		selectedPreset: Schema.optionalWith(boundedText(4096), { exact: true }),
+		gatePolicies: Schema.optionalWith(
+			Schema.Record({ key: Schema.String, value: Schema.String }),
+			{ exact: true },
+		),
 		wikiRoot: Schema.optionalWith(text(4096), { exact: true }),
 		executionSettings: Schema.optionalWith(executionSettingsSchema, {
 			exact: true,
@@ -436,6 +452,17 @@ export const WorkflowSnapshotSchema = Schema.Struct({
 			),
 		),
 		{ exact: true },
+	),
+	// A snapshot that has taken no gate decision still decodes, as an empty
+	// list: the field is newer than every workflow already on disk.
+	gateDecisions: Schema.optionalWith(
+		Schema.Array(gateDecisionRecordSchema).pipe(
+			Schema.filter((items) => items.length <= GATE_DECISION_MAX_RECORDS, {
+				message: () =>
+					`expected at most ${GATE_DECISION_MAX_RECORDS} gate decision records`,
+			}),
+		),
+		{ exact: true, default: () => [] },
 	),
 	sourceBaseline: Schema.optionalWith(sourceBaselineSchema, { exact: true }),
 	wikiBaseline: Schema.optionalWith(wikiBaselineSchema, { exact: true }),

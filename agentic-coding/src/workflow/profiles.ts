@@ -11,10 +11,26 @@ import { stableJson } from "./registry.ts";
 
 /** Re-exported from the pure classifier protocol so `profiles.ts` never
  * creates a domain->runtime edge. */
-export type { ClassificationMode, PoolEntry } from "./classifiers.ts";
+export type {
+	ClassificationMode,
+	GatePolicy,
+	GateStage,
+	PoolEntry,
+} from "./classifiers.ts";
+export { GATE_POLICIES, GATE_STAGES } from "./classifiers.ts";
 
-import type { ClassificationMode, PoolEntry } from "./classifiers.ts";
-import { ROSTER_MAX_PLANNERS, ROSTER_MIN_PLANNERS } from "./classifiers.ts";
+import type {
+	ClassificationMode,
+	GatePolicy,
+	GateStage,
+	PoolEntry,
+} from "./classifiers.ts";
+import {
+	GATE_POLICIES,
+	GATE_STAGES,
+	ROSTER_MAX_PLANNERS,
+	ROSTER_MIN_PLANNERS,
+} from "./classifiers.ts";
 
 /** Recovery hint repeated by every pool/preset configuration error. */
 export const SETTINGS_PRESETS_HINT = "Settings → Presets";
@@ -61,6 +77,9 @@ export interface PresetConfig {
 	roles?: Record<string, Record<string, string>>;
 	/** Per-classifiable-step model pools keyed by step id. */
 	pools?: Record<string, PoolEntry[]>;
+	/** Per-stage gate policies; a stage absent here falls back to the global
+	 * `agents.gates` table and then to `always`. */
+	gates?: Record<string, GatePolicy>;
 }
 export interface AgentsConfig {
 	default_profile?: string;
@@ -69,6 +88,9 @@ export interface AgentsConfig {
 	role_routes?: Record<string, Record<string, string>>;
 	definition_defaults?: Record<string, string>;
 	presets?: Record<string, PresetConfig>;
+	/** Global gate policies used by every preset that declares no entry for a
+	 * stage. Config-file only: the Settings editor writes the preset table. */
+	gates?: Record<string, GatePolicy>;
 }
 /** A selected preset as passed into per-start routing resolution. */
 export interface RoutingPreset {
@@ -78,6 +100,7 @@ export interface RoutingPreset {
 	steps?: Record<string, string>;
 	roles?: Record<string, Record<string, string>>;
 	pools?: Record<string, PoolEntry[]>;
+	gates?: Record<string, GatePolicy>;
 }
 const RUNTIME_OPTIONS: Record<string, Set<string>> = {
 	pi: new Set([
@@ -186,6 +209,9 @@ export function parseAgentsConfig(
 		profiles,
 		presets,
 		...(input.routes ? { routes: input.routes as Record<string, string> } : {}),
+		...(input.gates
+			? { gates: validateGates(input.gates, "agents.gates", source) }
+			: {}),
 		...(input.role_routes
 			? {
 					role_routes: input.role_routes as Record<
@@ -226,6 +252,33 @@ function removedPoolShape(
 	)
 		return `preset ${name}${where}: roles["core.verification"] was removed; use the core.verification model pool in ${SETTINGS_PRESETS_HINT}`;
 	return undefined;
+}
+
+function validateGates(
+	value: unknown,
+	where: string,
+	source?: string,
+): Record<string, GatePolicy> {
+	const location = source ? `${where} (${source})` : where;
+	if (!value || typeof value !== "object" || Array.isArray(value))
+		throw new Error(`${location} must be a table of stage gate policies`);
+	const table = value as Record<string, unknown>;
+	const gates: Record<string, GatePolicy> = {};
+	for (const [stage, policy] of Object.entries(table)) {
+		if (!(GATE_STAGES as readonly string[]).includes(stage))
+			throw new Error(
+				`${location}: unknown stage gate "${stage}"; expected one of ${GATE_STAGES.join(", ")}`,
+			);
+		if (
+			typeof policy !== "string" ||
+			!(GATE_POLICIES as readonly string[]).includes(policy)
+		)
+			throw new Error(
+				`${location}: stage ${stage} has invalid gate policy ${JSON.stringify(policy)}; expected ${GATE_POLICIES.join(" or ")}`,
+			);
+		gates[stage] = policy as GatePolicy;
+	}
+	return gates;
 }
 
 function validatePool(
@@ -366,6 +419,12 @@ function validatePresets(
 		for (const [stepId, pool] of Object.entries(poolTable))
 			pools[stepId] = validatePool(name, stepId, pool, profiles, source);
 		preset.pools = pools;
+		if (preset.gates !== undefined)
+			preset.gates = validateGates(
+				preset.gates,
+				`preset ${name} gates`,
+				source,
+			);
 	}
 	if (!Object.hasOwn(parsed, BUILTIN_PRESET_NAME))
 		parsed[BUILTIN_PRESET_NAME] = { runtime: "pi" };
@@ -448,7 +507,27 @@ export function resolvePreset(
 		...(preset.steps ? { steps: preset.steps } : {}),
 		...(preset.roles ? { roles: preset.roles } : {}),
 		...(preset.pools ? { pools: preset.pools } : {}),
+		...(preset.gates ? { gates: preset.gates } : {}),
 	};
+}
+
+/** The effective gate policy of every stage for one run: the preset's entry
+ * wins, then the global `agents.gates` table, then `always`. A configuration
+ * that declares nothing therefore runs every stage, and the table is read from
+ * the already-pinned config at classification time so a mid-run edit cannot
+ * change a running workflow. */
+export function resolveGatePolicies(
+	agents: AgentsConfig,
+	presetName?: string,
+): Record<GateStage, GatePolicy> {
+	const preset = presetName ? ownValue(agents.presets, presetName) : undefined;
+	const resolved = {} as Record<GateStage, GatePolicy>;
+	for (const stage of GATE_STAGES)
+		resolved[stage] =
+			ownValue(preset?.gates, stage) ??
+			ownValue(agents.gates, stage) ??
+			"always";
+	return resolved;
 }
 
 /** The ordered pool entries a preset declares for a step (empty if none). */

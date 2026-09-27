@@ -8,9 +8,10 @@ import {
 	ScrollableContent,
 	uiColors,
 } from "@ui";
-import { Show } from "solid-js";
+import { For, Show } from "solid-js";
 import type { DashboardData } from "../../../contracts/workflow.ts";
 import { PhaseStatus } from "../ui/PhaseStatus.tsx";
+import { skippedGateStages } from "./gates.ts";
 
 export interface ChangePanelProps {
 	readonly data: DashboardData;
@@ -21,6 +22,9 @@ export interface ChangePanelProps {
 export function ChangePanel(props: ChangePanelProps) {
 	const git = () => props.data.gitStatus;
 	const state = () => props.data.state;
+	// A skipped stage is never silent: the durable record is the workflow's, and
+	// this is the always-visible surface for it next to the phase status.
+	const skippedStages = () => skippedGateStages(state().gateDecisions ?? []);
 	return (
 		<Panel
 			title={`Change (${props.data.age} ago)`}
@@ -132,6 +136,36 @@ export function ChangePanel(props: ChangePanelProps) {
 							</box>
 						);
 					}}
+				</Show>
+				<Show when={skippedStages().length > 0}>
+					<>
+						<box flexDirection="column">
+							<box flexDirection="row">
+								<box width={7}>
+									<text fg={uiColors.warning}>GATES</text>
+								</box>
+								<text fg={uiColors.textSecondary}>
+									skipped by the classifier
+								</text>
+							</box>
+							<For each={skippedStages()}>
+								{(stage) => (
+									<box flexDirection="row" overflow="hidden">
+										<text fg={uiColors.warning} wrapMode="none">
+											{stage.stage}
+										</text>
+										<text fg={uiColors.textSecondary} wrapMode="none">
+											{` \u2014 skipped (policy ${stage.policy}${
+												stage.noul === undefined
+													? ""
+													: `, necessity ${stage.noul}`
+											})`}
+										</text>
+									</box>
+								)}
+							</For>
+						</box>
+					</>
 				</Show>
 				<text fg={uiColors.textMuted}>REQUEST</text>
 				<box paddingLeft={1}>

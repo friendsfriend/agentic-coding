@@ -13,7 +13,10 @@ import {
 	resetNotifications,
 } from "../../src/tui/dash/notifications.ts";
 import { AgentPresetsView } from "../../src/tui/settings/AgentPresetsView.tsx";
-import { POOL_EDITOR_STEPS } from "../../src/tui/settings/agentPresets.ts";
+import {
+	GATE_EDITOR_STAGES,
+	POOL_EDITOR_STEPS,
+} from "../../src/tui/settings/agentPresets.ts";
 import type { SettingsItem } from "../../src/tui/settings/items.ts";
 import { pressEscapeAndSettle, renderUntil } from "./support/terminal.ts";
 
@@ -869,5 +872,69 @@ test("the menu cursor re-clamps when the inventoried rows shrink", async () => {
 	expect(
 		await renderUntil(t, (frame) => frame.includes("use-default-model")),
 	).toBe(true);
+	t.renderer.destroy();
+});
+
+test("the preset form renders one stage-gate select per stage and can change it", async () => {
+	writeFileSync(
+		configFile,
+		`${JSON.stringify({
+			agents: {
+				profiles: { a: { runtime: "pi" } },
+				presets: {
+					gated: {
+						pools: {
+							"core.plan": [{ label: "quick", profile: "a", default: true }],
+						},
+					},
+				},
+			},
+		})}\n`,
+	);
+	clearAgentConfigCache();
+	const t = await renderView();
+	expect(
+		await renderUntil(t, (frame) => frame.includes("Model profiles")),
+	).toBe(true);
+	t.mockInput.pressKey("j");
+	t.mockInput.pressEnter();
+	await renderUntil(t, (frame) => frame.includes("gated"));
+	t.mockInput.pressEnter();
+	expect(await renderUntil(t, (frame) => frame.includes("Preset name"))).toBe(
+		true,
+	);
+	const wikiLabel = GATE_EDITOR_STAGES.find(
+		({ stage }) => stage === "wiki",
+	)?.label;
+	const expected = GATE_EDITOR_STAGES.map(
+		({ label }) => `Stage gate: ${label}`,
+	);
+	// Tab the whole form: every gate field is reachable, and the focused gate
+	// select shows the value the engine would actually use.
+	// The form lists every field and shows the focused select's options with a
+	// filled marker on the current one. Tab until the wiki gate is focused.
+	const seen = new Set<string>();
+	let focusedFrame = "";
+	for (let index = 0; index < 200; index += 1) {
+		focusedFrame = t.captureCharFrame();
+		for (const label of expected)
+			if (focusedFrame.includes(label)) seen.add(label);
+		if (focusedFrame.split("\n")[1]?.includes(`Stage gate: ${wikiLabel}`))
+			break;
+		t.mockInput.pressTab();
+		await t.renderOnce();
+	}
+	for (const label of expected) expect(seen.has(label)).toBe(true);
+	expect(focusedFrame.split("\n")[1]).toContain(`Stage gate: ${wikiLabel}`);
+	// The preset owns no stage, so the select starts on the inherited value.
+	expect(focusedFrame).toContain("\u25cf inherit");
+	// The select is editable, not a read-only echo: moving the option cursor
+	// puts a real policy in its place.
+	t.mockInput.pressKey("j");
+	t.mockInput.pressKey(" ");
+	await t.renderOnce();
+	const changed = t.captureCharFrame();
+	expect(changed).toContain("\u25cf always");
+	expect(changed).not.toContain("\u25cf inherit");
 	t.renderer.destroy();
 });

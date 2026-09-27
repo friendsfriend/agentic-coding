@@ -13,17 +13,33 @@ export function fusionManifests(
 	wikiGate: boolean,
 	wikiBeforeArchive: boolean,
 	includeTriageRoute = false,
+	stageGates = false,
 ): WorkflowManifest[] {
-	const common = commonImplementationSteps(includeTriageRoute);
+	const common = commonImplementationSteps(includeTriageRoute, stageGates);
 	const tail = [
 		...(wikiGate && wikiBeforeArchive
-			? ["core.wiki", "core.wiki-approval"]
+			? [
+					...(stageGates ? ["core.wiki-gate"] : []),
+					"core.wiki",
+					"core.wiki-approval",
+				]
 			: []),
 		"core.archive",
 		...(wikiGate && !wikiBeforeArchive ? ["core.wiki-approval"] : []),
 		"core.delivery",
 	];
-	const fusionPlanEdges: WorkflowManifest["edges"] = [
+	/** The plan gate mirrors this definition's own approval target, so a skip
+	 * is shape-identical to an approval. */
+	const planGateEdges = (approvalTarget: string): WorkflowManifest["edges"] =>
+		stageGates
+			? ([
+					{ from: "core.plan-gate", outcome: "run", to: "core.plan-approval" },
+					{ from: "core.plan-gate", outcome: "skip", to: approvalTarget },
+				] as const)
+			: [];
+	const fusionPlanEdges = (
+		approvalTarget: string,
+	): WorkflowManifest["edges"] => [
 		{ from: "core.route-plan", outcome: "complete", to: "fusion.plan" },
 		{ from: "fusion.plan", outcome: "complete", to: "fusion.consolidate" },
 		{
@@ -41,8 +57,9 @@ export function fusionManifests(
 		{
 			from: "fusion.consolidate",
 			outcome: "complete",
-			to: "core.plan-approval",
+			to: stageGates ? "core.plan-gate" : "core.plan-approval",
 		},
+		...planGateEdges(approvalTarget),
 		{
 			from: "fusion.consolidate",
 			outcome: "blocked",
@@ -67,6 +84,7 @@ export function fusionManifests(
 				"core.route-plan",
 				"fusion.plan",
 				"fusion.consolidate",
+				...(stageGates ? ["core.plan-gate"] : []),
 				"core.plan-approval",
 				"core.route-apply",
 				...common,
@@ -75,7 +93,7 @@ export function fusionManifests(
 				"core.closed",
 			],
 			edges: [
-				...fusionPlanEdges,
+				...fusionPlanEdges("core.route-apply"),
 				{
 					from: "core.plan-approval",
 					outcome: "approve",
@@ -104,6 +122,7 @@ export function fusionManifests(
 					wikiGate,
 					wikiBeforeArchive,
 					includeTriageRoute,
+					stageGates,
 				),
 			],
 		},
@@ -117,12 +136,13 @@ export function fusionManifests(
 				"core.route-plan",
 				"fusion.plan",
 				"fusion.consolidate",
+				...(stageGates ? ["core.plan-gate"] : []),
 				"core.plan-approval",
 				"core.completed",
 				"core.closed",
 			],
 			edges: [
-				...fusionPlanEdges,
+				...fusionPlanEdges("core.completed"),
 				{
 					from: "core.plan-approval",
 					outcome: "approve",

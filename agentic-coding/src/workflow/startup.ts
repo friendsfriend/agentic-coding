@@ -8,9 +8,13 @@ import type {
 import { runGit } from "./cli/git.ts";
 import { registry as defaultRegistry } from "./cli/registry.ts";
 import type { WorkflowRuntimeError } from "./contracts.ts";
-import { definitionVersionForResearchTools } from "./definitions/manifest-policy.ts";
+// Imported from `manifest-policy.ts` rather than the `definitions.ts` barrel so
+// the barrel's frozen export-surface fixture stays untouched by a new tier.
 import {
-	definitionVersionForTriageRouting,
+	definitionVersionForResearchTools,
+	definitionVersionForStageGates,
+} from "./definitions/manifest-policy.ts";
+import {
 	PUBLIC_WORKFLOW_CATALOG,
 	registerBuiltins,
 	removedWorkflowHint,
@@ -31,6 +35,7 @@ import {
 	parseAgentsConfig,
 	preflightProfile,
 	type RoutingPreset,
+	resolveGatePolicies,
 	resolvePreset,
 	resolveRouting,
 	SETTINGS_PRESETS_HINT,
@@ -315,9 +320,7 @@ function prepareFromContext(
 			? definitionVersionForResearchTools(
 					config.workflow.max_verification_rounds,
 				)
-			: definitionVersionForTriageRouting(
-					config.workflow.max_verification_rounds,
-				);
+			: definitionVersionForStageGates(config.workflow.max_verification_rounds);
 	const registry = registerBuiltins(
 		undefined,
 		config.workflow.max_verification_rounds,
@@ -400,6 +403,10 @@ function prepareFromContext(
 				...(request.task?.trim() ? { task: request.task.trim() } : {}),
 				...(request.ticket ? { ticket: request.ticket } : {}),
 				...(request.preset ? { selectedPreset: request.preset } : {}),
+				// The gate table is resolved once, here, and pinned with the
+				// preset: a later edit to the config document must not change
+				// what an in-flight workflow is allowed to skip.
+				...{ gatePolicies: resolveGatePolicies(agents, request.preset) },
 				executionSettings: settings,
 			},
 			routing,

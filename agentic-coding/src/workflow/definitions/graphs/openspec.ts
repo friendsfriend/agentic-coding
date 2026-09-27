@@ -12,16 +12,31 @@ export function openspecManifests(
 	wikiGate: boolean,
 	wikiBeforeArchive: boolean,
 	includeTriageRoute = false,
+	stageGates = false,
 ): WorkflowManifest[] {
-	const common = commonImplementationSteps(includeTriageRoute);
+	const common = commonImplementationSteps(includeTriageRoute, stageGates);
 	const tail = [
 		...(wikiGate && wikiBeforeArchive
-			? ["core.wiki", "core.wiki-approval"]
+			? [
+					...(stageGates ? ["core.wiki-gate"] : []),
+					"core.wiki",
+					"core.wiki-approval",
+				]
 			: []),
 		"core.archive",
 		...(wikiGate && !wikiBeforeArchive ? ["core.wiki-approval"] : []),
 		"core.delivery",
 	];
+	/** The plan gate mirrors its definition's own approval target: a skip is
+	 * shape-identical to an approval, so the propose flows complete without
+	 * ever creating an implementation, verification, or archive effect. */
+	const planGateEdges = (approvalTarget: string): WorkflowManifest["edges"] =>
+		stageGates
+			? ([
+					{ from: "core.plan-gate", outcome: "run", to: "core.plan-approval" },
+					{ from: "core.plan-gate", outcome: "skip", to: approvalTarget },
+				] as const)
+			: [];
 	return [
 		{
 			id: "openspec",
@@ -32,6 +47,7 @@ export function openspecManifests(
 			steps: [
 				"core.route-plan",
 				"core.plan",
+				...(stageGates ? ["core.plan-gate"] : []),
 				"core.plan-approval",
 				"core.route-apply",
 				...common,
@@ -41,7 +57,12 @@ export function openspecManifests(
 			],
 			edges: [
 				{ from: "core.route-plan", outcome: "complete", to: "core.plan" },
-				{ from: "core.plan", outcome: "complete", to: "core.plan-approval" },
+				{
+					from: "core.plan",
+					outcome: "complete",
+					to: stageGates ? "core.plan-gate" : "core.plan-approval",
+				},
+				...planGateEdges("core.route-apply"),
 				{
 					from: "core.plan",
 					outcome: "blocked",
@@ -82,6 +103,7 @@ export function openspecManifests(
 					wikiGate,
 					wikiBeforeArchive,
 					includeTriageRoute,
+					stageGates,
 				),
 			],
 		},
@@ -110,6 +132,7 @@ export function openspecManifests(
 					wikiGate,
 					wikiBeforeArchive,
 					includeTriageRoute,
+					stageGates,
 				),
 			],
 		},
@@ -122,13 +145,19 @@ export function openspecManifests(
 			steps: [
 				"core.route-plan",
 				"core.plan",
+				...(stageGates ? ["core.plan-gate"] : []),
 				"core.plan-approval",
 				"core.completed",
 				"core.closed",
 			],
 			edges: [
 				{ from: "core.route-plan", outcome: "complete", to: "core.plan" },
-				{ from: "core.plan", outcome: "complete", to: "core.plan-approval" },
+				{
+					from: "core.plan",
+					outcome: "complete",
+					to: stageGates ? "core.plan-gate" : "core.plan-approval",
+				},
+				...planGateEdges("core.completed"),
 				{
 					from: "core.plan",
 					outcome: "blocked",

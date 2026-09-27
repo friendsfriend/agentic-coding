@@ -152,7 +152,16 @@ function verificationCompletion(
 			step: { appendResults, testRunStarted: true },
 			runs: [{ role: "test-verifier" }],
 		};
-	return { step: { appendResults }, transition: { outcome: "pass" } };
+	return {
+		step: { appendResults },
+		// The passing round hands its bounded results to the review gate, which
+		// decides "does a developer need to see this?" with the verifier
+		// evidence in hand.
+		transition: {
+			outcome: "pass",
+			output: { verification: [...ctx.snapshot.step.results, result] },
+		},
+	};
 }
 
 /** The role set an arriving step adopts from its edge output, or — for a

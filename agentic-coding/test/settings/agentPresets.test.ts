@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import type { AgentsMutation } from "../../src/tui/data/agents.ts";
 import {
 	applyDraftValue,
+	draftFields,
+	draftValues,
+	GATE_EDITOR_STAGES,
+	GATE_INHERIT,
+	gateItemsKey,
 	movePoolEntry,
 	type PresetDraft,
 	poolItemsKey,
@@ -13,7 +19,10 @@ import {
 	profileReferences,
 	validateDraft,
 } from "../../src/tui/settings/agentPresets.ts";
-import type { AgentsConfig } from "../../src/workflow/profiles.ts";
+import type {
+	AgentsConfig,
+	PresetConfig,
+} from "../../src/workflow/profiles.ts";
 
 const agents: AgentsConfig = {
 	default_profile: "used",
@@ -235,5 +244,139 @@ describe("agent preset mutations", () => {
 			throw new Error("expected set-profile");
 		expect(profileMut.name).toBe("new");
 		expect(profileMut.renameFrom).toBe("old");
+	});
+});
+
+const presetOf = (mutation: AgentsMutation): PresetConfig => {
+	if (mutation.kind !== "set-preset")
+		throw new Error("expected a preset mutation");
+	return mutation.preset;
+};
+
+describe("preset stage gate fields", () => {
+	const fields = presetFields(["used", "free"]);
+	const gateField = (stage: string) =>
+		fields.find((field) => field.key === gateItemsKey(stage));
+
+	test("one select per stage is appended after the pool fields", () => {
+		const keys = fields.map((field) => field.key);
+		expect(GATE_EDITOR_STAGES.map(({ stage }) => gateItemsKey(stage))).toEqual([
+			"gate:planApproval",
+			"gate:verification",
+			"gate:developerReview",
+			"gate:wiki",
+		]);
+		for (const { stage, label } of GATE_EDITOR_STAGES) {
+			const field = gateField(stage);
+			expect(field?.kind).toBe("select");
+			// `inherit` is a removal, not a third policy, and it is what makes
+			// the form's clear-choice key meaningful on these fields.
+			expect(field?.options).toEqual(["inherit", "always", "auto"]);
+			expect(field?.label).toBe(`Stage gate: ${label}`);
+		}
+		// The gates follow the pool managers rather than replacing them.
+		expect(keys.indexOf("gate:planApproval")).toBeGreaterThan(
+			keys.lastIndexOf("pool:core.archive:items"),
+		);
+	});
+
+	test("a stage the preset does not own offers inherit, not a false always", () => {
+		expect(draftValues(presetDraft("p", {}))[gateItemsKey("wiki")]).toBe(
+			GATE_INHERIT,
+		);
+		// A global `auto` fallback must not read as `always`: the select stays on
+		// `inherit` and the field's hint names the policy it resolves to.
+		const draft = presetDraft("p", {}, { verification: "auto" });
+		expect(draftValues(draft)[gateItemsKey("verification")]).toBe(GATE_INHERIT);
+		expect(
+			draftFields(draft, ["used", "free"]).find(
+				(field) => field.key === gateItemsKey("verification"),
+			)?.hint,
+		).toContain("inherits auto");
+		// A preset-owned stage shows its own value and no inherited hint.
+		const owned = presetDraft(
+			"p",
+			{ p: { gates: { verification: "always" } } },
+			{ verification: "auto" },
+		);
+		expect(draftValues(owned)[gateItemsKey("verification")]).toBe("always");
+		expect(
+			draftFields(owned, ["used", "free"]).find(
+				(field) => field.key === gateItemsKey("verification"),
+			)?.hint,
+		).not.toContain("inherits");
+	});
+
+	test("choosing inherit removes the preset entry", () => {
+		const owned = applyDraftValue(
+			presetDraft("p", {}),
+			gateItemsKey("wiki"),
+			"auto",
+		) as PresetDraft;
+		expect(owned.gates).toEqual({ wiki: "auto" });
+		const inherited = applyDraftValue(
+			owned,
+			gateItemsKey("wiki"),
+			GATE_INHERIT,
+		) as PresetDraft;
+		expect(inherited.gates).toEqual({});
+		expect(presetOf(presetMutation(inherited)).gates).toBeUndefined();
+	});
+
+	test("a stage change is applied to the draft and can be saved", () => {
+		const draft = applyDraftValue(
+			presetDraft("p", {}),
+			gateItemsKey("wiki"),
+			"auto",
+		) as PresetDraft;
+		expect(draft.gates).toEqual({ wiki: "auto" });
+		// A value outside the vocabulary is ignored rather than persisted.
+		expect(
+			(applyDraftValue(draft, gateItemsKey("wiki"), "maybe") as PresetDraft)
+				.gates,
+		).toEqual({ wiki: "auto" });
+		const saved = presetMutation({
+			...draft,
+			pools: {
+				"core.plan": [{ label: "quick", profile: "used", default: true }],
+			},
+		});
+		expect(presetOf(saved).gates).toEqual({ wiki: "auto" });
+	});
+
+	test("saving preserves pools, steps, roles, and the description, and never persists an unedited stage", () => {
+		const draft = presetDraft("p", {
+			p: {
+				description: "keep me",
+				default_profile: "used",
+				steps: { "core.wiki": "used" },
+				roles: { "core.verification": { "quality-verifier": "free" } },
+				pools: {
+					"core.plan": [{ label: "quick", profile: "used", default: true }],
+				},
+				gates: { verification: "auto" },
+			},
+		});
+		const edited = applyDraftValue(
+			draft,
+			gateItemsKey("developerReview"),
+			"auto",
+		) as PresetDraft;
+		const saved = presetMutation(edited);
+		expect(presetOf(saved)).toMatchObject({
+			description: "keep me",
+			default_profile: "used",
+			steps: { "core.wiki": "used" },
+			roles: { "core.verification": { "quality-verifier": "free" } },
+			pools: {
+				"core.plan": [{ label: "quick", profile: "used", default: true }],
+			},
+		});
+		// Only the two declared stages are persisted; planApproval and wiki stay
+		// resolved from the global table and the `always` default.
+		expect(presetOf(saved).gates).toEqual({
+			verification: "auto",
+			developerReview: "auto",
+		});
 	});
 });

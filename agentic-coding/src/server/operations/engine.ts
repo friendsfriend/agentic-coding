@@ -515,6 +515,7 @@ export function viewToDashboardState(view: WorkflowView) {
 		health: view.health,
 		developerDialogue: view.developerDialogue ?? [],
 		classifierDecisions: view.classifierDecisions ?? [],
+		gateDecisions: view.gateDecisions ?? [],
 		pendingQuestions: view.pendingQuestions ?? [],
 		availableActions: view.availableActions,
 		repository: view.repository,

@@ -4,6 +4,7 @@ import {
 	decodeCommand,
 	decodeDeveloperQuestionAnswer,
 	externalDiagnostic,
+	GATE_DECISION_MAX_RECORDS,
 	isRetryableFailure,
 	type WorkflowFailure,
 } from "../src/contracts/workflow.ts";
@@ -389,6 +390,114 @@ test("schema-backed snapshot decoding normalizes paths and keeps legacy default 
 			evidence: [],
 			loopCounts: {},
 			attention: [],
+		}),
+	).toThrow();
+});
+
+test("a legacy snapshot without gate decisions decodes as an empty list", () => {
+	const base = {
+		schemaVersion: 1,
+		workflowId: "w",
+		revision: 0,
+		definition: { id: "no-openspec", version: 1, digest: "d" },
+		status: "active",
+		currentStep: "core.implementation",
+		step: {
+			attempt: 1,
+			activeRunIds: [],
+			completedRunIds: [],
+			selectedRoles: [],
+			testRunStarted: false,
+			results: [],
+		},
+		metadata: {
+			repository: ".",
+			worktree: ".",
+			branch: "main",
+			baseBranch: "main",
+			baseCommit: "x",
+			createdAt: "x",
+			updatedAt: "x",
+			stepEnteredAt: "x",
+		},
+		routing: { defaultProfile: "x", routes: [] },
+		evidence: [],
+		loopCounts: {},
+		attention: [],
+	};
+	expect(decodeSnapshot(base).gateDecisions).toEqual([]);
+	expect(
+		decodeSnapshot({
+			...base,
+			gateDecisions: [
+				{
+					id: "g",
+					at: "2026-01-01T00:00:00Z",
+					stepId: "core.wiki-gate",
+					stage: "wiki",
+					policy: "auto",
+					decision: "skip",
+					forced: false,
+					noul: 0.1,
+				},
+			],
+		}).gateDecisions,
+	).toHaveLength(1);
+});
+
+test("an oversized gate decision history is rejected", () => {
+	const base = {
+		schemaVersion: 1,
+		workflowId: "w",
+		revision: 0,
+		definition: { id: "no-openspec", version: 1, digest: "d" },
+		status: "active",
+		currentStep: "core.implementation",
+		step: {
+			attempt: 1,
+			activeRunIds: [],
+			completedRunIds: [],
+			selectedRoles: [],
+			testRunStarted: false,
+			results: [],
+		},
+		metadata: {
+			repository: ".",
+			worktree: ".",
+			branch: "main",
+			baseBranch: "main",
+			baseCommit: "x",
+			createdAt: "x",
+			updatedAt: "x",
+			stepEnteredAt: "x",
+		},
+		routing: { defaultProfile: "x", routes: [] },
+		evidence: [],
+		loopCounts: {},
+		attention: [],
+	};
+	const record = {
+		id: "g",
+		at: "2026-01-01T00:00:00Z",
+		stepId: "core.wiki-gate",
+		stage: "wiki",
+		policy: "auto",
+		decision: "skip" as const,
+		forced: false,
+	};
+	expect(() =>
+		decodeSnapshot({
+			...base,
+			gateDecisions: Array.from(
+				{ length: GATE_DECISION_MAX_RECORDS + 1 },
+				(_unused, index) => ({ ...record, id: `g${index}` }),
+			),
+		}),
+	).toThrow();
+	expect(() =>
+		decodeSnapshot({
+			...base,
+			gateDecisions: [{ ...record, decision: "maybe" }],
 		}),
 	).toThrow();
 });

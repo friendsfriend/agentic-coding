@@ -236,6 +236,11 @@ export interface WorkflowMetadata {
 	wikiRoot?: string;
 	/** The preset selected for this workflow, when one was explicitly chosen. */
 	selectedPreset?: string;
+	/** Stage-gate policies resolved once at start and pinned for the run's
+	 * lifetime, so a mid-run config edit cannot change what may be skipped.
+	 * Absent on snapshots started before the gates existed; the mandatory
+	 * `always` default is the fallback for those. */
+	gatePolicies?: Record<string, string>;
 	/** Missing only on legacy snapshots; sensitive delivery effects must not guess. */
 	executionSettings?: WorkflowExecutionSettings;
 	executionSettingsPreview?: {
@@ -299,6 +304,28 @@ export interface DeveloperQuestionItem {
 export const CLASSIFIER_DECISION_MAX_RECORDS = 100;
 export const CLASSIFIER_DECISION_INPUT_MAX_BYTES = 16 * 1024;
 export const CLASSIFIER_DECISION_CONTENT_MAX_BYTES = 160 * 1024;
+
+/** The gate-decision history has its own bounds: a record is small (stage,
+ * policy, decision, one number) but a long workflow with several rounds takes
+ * one decision per gate per round, so the list is capped independently of the
+ * model-pool decision history. */
+export const GATE_DECISION_MAX_RECORDS = 200;
+export const GATE_DECISION_CONTENT_MAX_BYTES = 96 * 1024;
+
+/** One recorded stage-gate decision. `forced` distinguishes a run decided
+ * locally (`always`) or because the decision failed from an answered run, and
+ * `noul` is the necessity answer when one was obtained. */
+export interface GateDecisionRecord {
+	id: string;
+	at: string;
+	stepId: string;
+	stage: string;
+	policy: string;
+	decision: "run" | "skip";
+	forced: boolean;
+	noul?: number;
+	reason?: string;
+}
 
 export interface ClassifierDecisionOption {
 	label: string;
@@ -376,6 +403,8 @@ export interface WorkflowSnapshot {
 	developerDialogue: DeveloperDialogueRecord[];
 	/** Bounded, ordered classifier-decision history. Missing in legacy snapshots. */
 	classifierDecisions?: ClassifierDecisionRecord[];
+	/** Bounded, ordered stage-gate decision history. Missing in legacy snapshots. */
+	gateDecisions?: GateDecisionRecord[];
 	/** Deterministic source-content baseline for repository-backed wiki runs. */
 	sourceBaseline?: { fingerprint: string };
 	/** Complete pre-agent baseline for repository-independent wiki reviews. */
@@ -511,6 +540,8 @@ export interface WorkflowView {
 	updatedAt: string;
 	/** The selected agent preset, or absent when using configuration defaults. */
 	selectedPreset?: string;
+	/** The gate policies pinned at start; absent when none were pinned. */
+	gatePolicies?: Record<string, string>;
 	currentStep: {
 		id: string;
 		label: string;
@@ -551,6 +582,8 @@ export interface WorkflowView {
 	developerDialogue?: DeveloperDialogueRecord[];
 	/** Classifier decisions in creation order. */
 	classifierDecisions?: ClassifierDecisionRecord[];
+	/** Stage-gate decisions in creation order. */
+	gateDecisions?: GateDecisionRecord[];
 	/** Pending subset, ordered oldest first. */
 	pendingQuestions?: DeveloperDialogueRecord[];
 	availableActions: WorkflowActionView[];
@@ -1045,6 +1078,7 @@ export interface WorkflowState {
 	verificationModels?: Record<string, string>;
 	developerDialogue?: DeveloperDialogueRecord[];
 	classifierDecisions?: ClassifierDecisionRecord[];
+	gateDecisions?: GateDecisionRecord[];
 	pendingQuestions?: DeveloperDialogueRecord[];
 	planQuality?: {
 		passed: boolean;
@@ -1272,6 +1306,18 @@ const classifierDecisionRecordResponseSchema = Schema.Struct({
 	}),
 });
 
+const gateDecisionRecordResponseSchema = Schema.Struct({
+	id: Schema.String,
+	at: Schema.String,
+	stepId: Schema.String,
+	stage: Schema.String,
+	policy: Schema.String,
+	decision: Schema.Literal("run", "skip"),
+	forced: Schema.Boolean,
+	noul: Schema.optional(Schema.Number),
+	reason: Schema.optional(Schema.String),
+});
+
 const dialogueRecordResponseSchema = Schema.Struct({
 	id: Schema.String,
 	workflowId: Schema.String,
@@ -1321,6 +1367,9 @@ export const workflowViewSchema = Schema.Struct({
 	createdAt: Schema.String,
 	updatedAt: Schema.String,
 	selectedPreset: Schema.optional(Schema.String),
+	gatePolicies: Schema.optional(
+		Schema.Record({ key: Schema.String, value: Schema.String }),
+	),
 	currentStep: Schema.Struct({
 		id: Schema.String,
 		label: Schema.String,
@@ -1357,6 +1406,9 @@ export const workflowViewSchema = Schema.Struct({
 	),
 	classifierDecisions: Schema.optional(
 		Schema.Array(classifierDecisionRecordResponseSchema),
+	),
+	gateDecisions: Schema.optional(
+		Schema.Array(gateDecisionRecordResponseSchema),
 	),
 	pendingQuestions: Schema.optional(Schema.Array(dialogueRecordResponseSchema)),
 	availableActions: Schema.Array(

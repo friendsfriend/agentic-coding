@@ -602,7 +602,8 @@ describe("workflow registry", () => {
 			// with no `policy` field, so their digests are the ones asserted
 			// unchanged in test/workflow-steps.test.ts's full-catalog pin. Every
 			// tier since the manifest-policy one (including the
-			// classifier-driven triage-routing tier) declares a policy.
+			// classifier-driven triage-routing and stage-gate tiers) declares a
+			// policy.
 			for (const definition of registry
 				.definitions()
 				.filter(
@@ -610,7 +611,8 @@ describe("workflow registry", () => {
 						(definition.version < 201 || definition.version > 220) &&
 						(definition.version < 301 || definition.version > 320) &&
 						(definition.version < 401 || definition.version > 420) &&
-						(definition.version < 501 || definition.version > 520),
+						(definition.version < 501 || definition.version > 520) &&
+						(definition.version < 601 || definition.version > 620),
 				))
 				expect(definition.policy).toBeUndefined();
 		});

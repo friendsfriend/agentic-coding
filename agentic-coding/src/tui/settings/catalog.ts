@@ -90,7 +90,8 @@ export const SETTINGS_INVENTORY: readonly SettingsInventoryEntry[] = [
 		label: "Agent presets",
 		owner: "src/server/config.ts",
 		scope: "user",
-		storage: "[agents.presets] in the layered workflow config",
+		storage:
+			"[agents.presets] in the layered workflow config (pools, roles, steps, and the stage gate `gates` table; the global [agents.gates] is the fallback)",
 		secret: false,
 		effect: "next-start",
 		editable: true,
@@ -103,7 +104,7 @@ export const SETTINGS_INVENTORY: readonly SettingsInventoryEntry[] = [
 		owner: "src/workflow/profiles.ts",
 		scope: "user",
 		storage:
-			"[agents] default_profile, routes, role_routes, definition_defaults (layered config)",
+			"[agents] default_profile, routes, role_routes, definition_defaults, gates (layered config)",
 		secret: false,
 		effect: "next-start",
 		editable: false,

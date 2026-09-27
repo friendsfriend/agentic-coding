@@ -5,6 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import type { WorkflowExecutionSettings } from "../src/contracts/workflow.ts";
 import {
+	definitionVersionForResearchTools,
+	definitionVersionForStageGates,
+} from "../src/workflow/definitions/manifest-policy.ts";
+import {
 	executionSettings,
 	loadConfigWithProvenance,
 	saveAgentsSection,
@@ -138,4 +142,35 @@ describe("shared workflow startup", () => {
 			settingsFingerprint(pinned),
 		);
 	});
+});
+
+test("a new non-research start resolves the stage-gate definition tier", () => {
+	const repo = repository();
+	execFileSync("git", ["remote", "add", "origin", repo], { cwd: repo });
+	execFileSync("git", ["fetch", "-q", "origin"], { cwd: repo });
+	execFileSync("git", ["remote", "set-head", "origin", "main"], { cwd: repo });
+	const previous = process.env.HERDR_WORKFLOW_CONFIG;
+	process.env.HERDR_WORKFLOW_CONFIG = path.join(repo, "config.json");
+	try {
+		expect(
+			prepareWorkflowStart({
+				workflowId: "gate-tier",
+				definitionId: "no-openspec",
+				task: "gate tier",
+				repo,
+			}).input.definitionVersion,
+		).toBe(definitionVersionForStageGates(6));
+		// Research keeps the tool-policy tier: it has no gated stage.
+		expect(
+			prepareWorkflowStart({
+				workflowId: "research-tier",
+				definitionId: "research",
+				task: "research tier",
+			}).input.definitionVersion,
+		).toBe(definitionVersionForResearchTools(6));
+	} finally {
+		if (previous === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
+		else process.env.HERDR_WORKFLOW_CONFIG = previous;
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
 });

@@ -10,8 +10,9 @@ export function noOpenspecManifests(
 	version: number,
 	wikiGate: boolean,
 	includeTriageRoute = false,
+	stageGates = false,
 ): WorkflowManifest[] {
-	const common = commonImplementationSteps(includeTriageRoute);
+	const common = commonImplementationSteps(includeTriageRoute, stageGates);
 	return [
 		{
 			id: "no-openspec",
@@ -21,12 +22,25 @@ export function noOpenspecManifests(
 			terminal: ["core.closed"],
 			steps: [
 				...common,
-				...(wikiGate ? ["core.wiki", "core.wiki-approval"] : []),
+				...(wikiGate
+					? [
+							...(stageGates ? ["core.wiki-gate"] : []),
+							"core.wiki",
+							"core.wiki-approval",
+						]
+					: []),
 				"core.delivery",
 				"core.completed",
 				"core.closed",
 			],
-			edges: workflowEdges(false, rounds, wikiGate, true, includeTriageRoute),
+			edges: workflowEdges(
+				false,
+				rounds,
+				wikiGate,
+				true,
+				includeTriageRoute,
+				stageGates,
+			),
 		},
 	];
 }

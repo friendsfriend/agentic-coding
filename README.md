@@ -137,11 +137,18 @@ the dashboard:
       "frontier-plan": {
         "description": "Frontier planning, cheap workers",
         "default_profile": "pi-cheap",
+        "pools": {
+          "core.plan": [{ "label": "frontier", "profile": "pi-planner", "default": true }],
+          "core.implementation": [{ "label": "cheap", "profile": "oc-worker", "default": true }],
+          "core.triage": [{ "label": "cheap", "profile": "oc-worker", "default": true }],
+          "core.verification": [{ "label": "cheap", "profile": "oc-worker", "default": true }],
+          "core.wiki": [{ "label": "cheap", "profile": "oc-worker", "default": true }],
+          "core.archive": [{ "label": "cheap", "profile": "oc-worker", "default": true }]
+        },
         "steps": {
           "core.plan": "pi-planner",
           "core.implementation": "oc-worker"
-        },
-        "roles": { "core.verification": { "quality-verifier": "pi-review" } }
+        }
       }
     }
   }
@@ -164,6 +171,82 @@ control, and review `.pi/herdr-workflow.json` when cloning untrusted
 repositories. At startup every routed profile's model is validated against
 its runtime's model enumeration (`pi --list-models`, `<exe> models`); an
 unknown model fails startup before any agent launches.
+
+### Stage gates
+
+Four stages can be skipped by the JEV classifier instead of always running:
+plan approval, verification (triage *and* verification, as one inseparable
+decision), developer review, and wiki documentation. Each stage's policy is
+`always` or `auto`, declared per preset with a global `agents.gates` table as
+the fallback. `always` is the default for every stage and is decided locally —
+the stage runs and no classifier request is made — so a configuration that
+declares nothing behaves exactly as before. `auto` asks one necessity question
+and runs the stage at or above 0.5. A classifier failure never skips a stage:
+it forces the run and records an attention entry. `core.archive` is never
+gated; archiving stays mandatory.
+
+Resolution order is preset entry → global `agents.gates` entry → `always`, and
+the resolved table is pinned into the workflow snapshot at start, so editing the
+config mid-run cannot change what an in-flight workflow is allowed to skip. The
+preset's own table is also editable from the dashboard's model configuration
+modal (`m`), where a stage the preset does not own shows the value it inherits
+and can be set back to inherit; the global table is config-file only, like
+`agents.routing`, and is shown read-only in Settings.
+
+To try all four classifier-driven gates, add this to
+`~/.config/agentic-coding/config.json` (or the project
+`.pi/herdr-workflow.json` overlay). The global `agents.gates` table alone is
+enough — it is the fallback for every preset:
+
+```json
+{
+  "agents": {
+    "gates": {
+      "planApproval": "auto",
+      "verification": "auto",
+      "developerReview": "auto",
+      "wiki": "auto"
+    }
+  }
+}
+```
+
+The per-preset `gates` table overrides the global one. Because a custom preset
+must declare at least one model pool, an override is added to an existing
+preset, not to a pool-less one:
+
+```json
+{
+  "agents": {
+    "presets": {
+      "frontier-plan": {
+        "pools": {
+          "core.plan": [{ "label": "frontier", "profile": "pi-planner", "default": true }],
+          "core.implementation": [{ "label": "cheap", "profile": "oc-worker", "default": true }],
+          "core.triage": [{ "label": "cheap", "profile": "oc-worker", "default": true }],
+          "core.verification": [{ "label": "cheap", "profile": "oc-worker", "default": true }],
+          "core.wiki": [{ "label": "cheap", "profile": "oc-worker", "default": true }],
+          "core.archive": [{ "label": "cheap", "profile": "oc-worker", "default": true }]
+        },
+        "gates": {
+          "planApproval": "always",
+          "verification": "auto",
+          "developerReview": "auto",
+          "wiki": "auto"
+        }
+      }
+    }
+  }
+}
+```
+
+A custom preset must still declare at least one model pool, so keep its existing
+`pools` (and `default_profile`/description) when you add the `gates` table. A
+stage absent from a preset's table — or a preset with no `gates` key at all —
+resolves from the global table and then from `always`. Every decision is
+recorded in the workflow snapshot, and a skip raises a notification and a
+`gate.skip` telemetry event, so a skipped test suite or human review is never
+silent.
 
 Telemetry uses normalized engine/adapter/runtime envelope with W3C trace context. Runtime bridges under `agent-definitions/bridges/` are explicitly injected per managed run, best effort, and observational only. They never read workflow state, infer completion, nudge/retry agents, or switch runtime/model. Unsupported deep runtime fields remain absent; baseline adapter lifecycle stays available.
 

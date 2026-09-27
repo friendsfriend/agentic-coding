@@ -20,6 +20,7 @@ import {
 	definitionVersionForBehaviorPins,
 	definitionVersionForManifestPolicy,
 	definitionVersionForResearchTools,
+	definitionVersionForStageGates,
 	definitionVersionForTriageRouting,
 	withFullToolResearchPolicy,
 	withManifestPolicy,
@@ -161,6 +162,35 @@ export function registerBuiltins(
 			const pinned: WorkflowManifest = {
 				...pinnedBase,
 				stepRefs: exactStepReferences(pinnedBase.steps),
+			};
+			assertStepBehaviorCoverage(pinned.steps);
+			registry.registerWorkflow(pinned);
+		}
+	}
+	// Configurable stage gates add `core.plan-gate`, `core.review-gate`, and
+	// `core.wiki-gate` to the implementation-loop families, and give
+	// `core.triage-route` its third outcome. Published as its own tier: a
+	// digest spreads the whole manifest, so mutating the tier above would
+	// strand every workflow pinned to it. The `core.triage-route` outcome
+	// change is a step version bump for the same reason — version 1 stays
+	// registered for the earlier tier, and only this one pins version 2.
+	// The standalone wiki and research lifecycles are registered unchanged:
+	// their gated-shaped stage is the whole workflow, so a gate in front of it
+	// would have nothing to fall through to.
+	for (const rounds of Array.from({ length: 20 }, (_, index) => index + 1)) {
+		const version = definitionVersionForStageGates(rounds);
+		for (const definition of [
+			...openspecManifests(rounds, version, true, true, true, true),
+			...noOpenspecManifests(rounds, version, true, true, true),
+			...fusionManifests(rounds, version, true, true, true, true),
+			...wikiManifests(version, true),
+		]) {
+			const pinnedBase = withManifestPolicy(definition);
+			const pinned: WorkflowManifest = {
+				...pinnedBase,
+				stepRefs: exactStepReferences(pinnedBase.steps, {
+					"core.triage-route": 2,
+				}),
 			};
 			assertStepBehaviorCoverage(pinned.steps);
 			registry.registerWorkflow(pinned);

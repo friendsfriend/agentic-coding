@@ -14,6 +14,7 @@ export function workflowEdges(
 	wikiGate = true,
 	wikiBeforeArchive = true,
 	includeTriageRoute = false,
+	stageGates = false,
 ): WorkflowManifest["edges"] {
 	const approved = archive
 		? wikiGate && wikiBeforeArchive
@@ -22,6 +23,14 @@ export function workflowEdges(
 		: wikiGate
 			? "core.wiki"
 			: "core.delivery";
+	// Derived once and reused by the developer approval and the review gate's
+	// skip so the two cannot diverge: with a wiki gate both land on the gate,
+	// and without one both land on the same unconditional tail.
+	const afterReview = stageGates && wikiGate ? "core.wiki-gate" : approved;
+	// The archive is mandatory for OpenSpec to complete, so no gate ever
+	// stands in front of it: a wiki-gate skip enters it (or delivery, for the
+	// archive-free no-OpenSpec family).
+	const afterWikiGate = archive ? "core.archive" : "core.delivery";
 	return [
 		// The routing step is the per-round classifier gate: it sits between
 		// implementation and triage, and an empty selection bypasses triage
@@ -43,6 +52,18 @@ export function workflowEdges(
 						outcome: "empty",
 						to: "core.verification",
 					},
+					// The verification gate's skip is a whole-round skip: the only
+					// edge out of it is the review gate, which skips again only
+					// when the developer-review policy is itself automatic.
+					...(stageGates
+						? [
+								{
+									from: "core.triage-route",
+									outcome: "skip-verification",
+									to: "core.review-gate",
+								},
+							]
+						: []),
 				] as const)
 			: []),
 		...(includeTriageRoute
@@ -79,7 +100,33 @@ export function workflowEdges(
 			to: "core.triage",
 			loop: { maxAttempts: 3 },
 		},
-		{ from: "core.verification", outcome: "pass", to: "core.developer-review" },
+		...(stageGates
+			? ([
+					{
+						from: "core.verification",
+						outcome: "pass",
+						to: "core.review-gate",
+					},
+					{
+						from: "core.review-gate",
+						outcome: "run",
+						to: "core.developer-review",
+					},
+					{ from: "core.review-gate", outcome: "skip", to: afterReview },
+				] as const)
+			: [
+					{
+						from: "core.verification",
+						outcome: "pass",
+						to: "core.developer-review",
+					},
+				]),
+		...(stageGates && wikiGate
+			? ([
+					{ from: "core.wiki-gate", outcome: "run", to: "core.wiki" },
+					{ from: "core.wiki-gate", outcome: "skip", to: afterWikiGate },
+				] as const)
+			: []),
 		{
 			from: "core.verification",
 			outcome: "fix",
@@ -104,7 +151,7 @@ export function workflowEdges(
 			to: "core.implementation",
 			loop: { maxAttempts: maxVerificationRounds },
 		},
-		{ from: "core.developer-review", outcome: "approve", to: approved },
+		{ from: "core.developer-review", outcome: "approve", to: afterReview },
 		{
 			from: "core.developer-review",
 			outcome: "comments",

@@ -10,6 +10,8 @@ import type { FormErrors, FormField, FormValues } from "@ui";
 import type { RuntimeId } from "../../contracts/workflow.ts";
 import {
 	type ClassificationMode,
+	GATE_POLICIES,
+	type GatePolicy,
 	POOL_STEPS,
 	type PoolEntry,
 	type PresetConfig,
@@ -37,6 +39,43 @@ export const POOL_EDITOR_STEPS: ReadonlyArray<{
 	stepId: string;
 	mode: ClassificationMode;
 }> = Object.entries(POOL_STEPS).map(([stepId, mode]) => ({ stepId, mode }));
+
+/** The stage gates the preset editor renders, in the protocol's own order.
+ * The display label is UI copy; the key is the config stage name. The hint
+ * states what `auto` actually removes, because the verification gate in
+ * particular removes the triage step as well as verification, and a skipped
+ * test suite or human review must never be a silent choice. */
+export const GATE_EDITOR_STAGES: ReadonlyArray<{
+	stage: string;
+	label: string;
+	hint: string;
+}> = [
+	{
+		stage: "planApproval",
+		label: "Plan approval",
+		hint: "always shows the approval step; auto lets the classifier skip it",
+	},
+	{
+		stage: "verification",
+		label: "Verification (with triage)",
+		hint: "auto skips triage AND verification — no verifier runs at all",
+	},
+	{
+		stage: "developerReview",
+		label: "Developer review",
+		hint: "always shows the human review; auto lets the classifier skip it",
+	},
+	{
+		stage: "wiki",
+		label: "Wiki documentation",
+		hint: "auto skips the wiki page and its approval",
+	},
+] as const;
+
+/** The value a stage select carries when this preset does not own the stage:
+ * the effective policy from the global `agents.gates` table. Choosing it
+ * removes the preset entry, so the stage inherits again. */
+export const GATE_INHERIT = "inherit";
 
 export interface ProfileDraft {
 	kind: "profile";
@@ -69,12 +108,22 @@ export interface PresetDraft {
 	steps: Record<string, string>;
 	/** Role tables outside the pool fields, preserved verbatim. */
 	roles: Record<string, Record<string, string>>;
+	/** Stage gate policies this preset owns. A stage absent here is resolved
+	 * from `globalGates` and then from the `always` default, and is not
+	 * persisted until the user gives it an explicit policy. */
+	gates: Record<string, GatePolicy>;
+	/** The global `agents.gates` table, carried so the editor can show the
+	 * effective value of a stage the preset does not own. */
+	globalGates?: Record<string, GatePolicy>;
 }
 
 export type Draft = ProfileDraft | PresetDraft;
 
 /** Field key for the item manager of one classifiable step. */
 export const poolItemsKey = (step: string): string => `pool:${step}:items`;
+
+/** Field key for one stage gate's policy select. */
+export const gateItemsKey = (stage: string): string => `gate:${stage}`;
 
 /** Profile fields for the current runtime; model is a choice when the runtime
  * enumerates models, otherwise free text. */
@@ -130,8 +179,16 @@ export function profileFields(draft: ProfileDraft): FormField[] {
 	return fields;
 }
 
-/** Preset fields. Each classifiable step opens a pool-entry manager. */
-export function presetFields(profileNames: readonly string[]): FormField[] {
+/** Preset fields. Each classifiable step opens a pool-entry manager, and the
+ * stage gates follow as selects. `gates`/`globalGates` are the draft's own
+ * table and the global fallback: a stage the draft does not own offers
+ * `inherit` and states in its hint which policy that resolves to, so the form
+ * never shows a value the engine would not use. */
+export function presetFields(
+	profileNames: readonly string[],
+	gates: Readonly<Record<string, GatePolicy>> = {},
+	globalGates: Readonly<Record<string, GatePolicy>> = {},
+): FormField[] {
 	const options = ["", ...profileNames];
 	const fields: FormField[] = [
 		{ key: "name", label: "Preset name", kind: "text" },
@@ -148,6 +205,18 @@ export function presetFields(profileNames: readonly string[]): FormField[] {
 			label: `Pool ${stepId} entries`,
 			kind: "action",
 		});
+	// The stage-gate section: one select per stage over the fixed policy
+	// vocabulary, reusing the existing `select` field kind.
+	for (const { stage, label, hint } of GATE_EDITOR_STAGES) {
+		const inherited = globalGates[stage] ?? "always";
+		fields.push({
+			key: gateItemsKey(stage),
+			label: `Stage gate: ${label}`,
+			kind: "select",
+			options: [GATE_INHERIT, ...GATE_POLICIES],
+			hint: gates[stage] ? hint : `inherits ${inherited} — ${hint}`,
+		});
+	}
 	return fields;
 }
 
@@ -158,7 +227,7 @@ export function draftFields(
 ): FormField[] {
 	return draft.kind === "profile"
 		? profileFields(draft)
-		: presetFields(profileNames);
+		: presetFields(profileNames, draft.gates, draft.globalGates ?? {});
 }
 
 /** Flatten a draft into the form's value map. */
@@ -180,6 +249,11 @@ export function draftValues(draft: Draft): FormValues {
 		values[poolItemsKey(stepId)] =
 			`${count} ${count === 1 ? "entry" : "entries"}`;
 	}
+	// A stage this preset does not own is `inherit`: the field's hint names the
+	// policy that resolves to, so the select never claims a value the engine
+	// would not use.
+	for (const { stage } of GATE_EDITOR_STAGES)
+		values[gateItemsKey(stage)] = draft.gates[stage] ?? GATE_INHERIT;
 	return values;
 }
 
@@ -213,6 +287,21 @@ export function applyDraftValue(
 	const next = { ...draft };
 	if (key === "name") next.name = value;
 	else if (key === "defaultProfile") next.defaultProfile = value;
+	else {
+		const stage = GATE_EDITOR_STAGES.find(
+			(entry) => gateItemsKey(entry.stage) === key,
+		)?.stage;
+		if (stage) {
+			// `inherit` is a removal, not a third policy: the stage falls back
+			// to the global table and then to `always`.
+			if (value === GATE_INHERIT) {
+				const gates = { ...next.gates };
+				delete gates[stage];
+				next.gates = gates;
+			} else if ((GATE_POLICIES as readonly string[]).includes(value))
+				next.gates = { ...next.gates, [stage]: value as GatePolicy };
+		}
+	}
 	return next;
 }
 
@@ -238,6 +327,7 @@ export function profileDraft(
 export function presetDraft(
 	name: string,
 	presets?: AgentsConfig["presets"],
+	globalGates?: Record<string, GatePolicy>,
 ): PresetDraft {
 	const current = name ? presets?.[name] : undefined;
 	const pools = Object.fromEntries(
@@ -256,6 +346,8 @@ export function presetDraft(
 		pools,
 		steps: { ...(current?.steps ?? {}) },
 		roles: { ...(current?.roles ?? {}) },
+		gates: { ...(current?.gates ?? {}) },
+		...(globalGates ? { globalGates: { ...globalGates } } : {}),
 	};
 }
 
@@ -383,6 +475,14 @@ export function presetMutation(draft: PresetDraft): AgentsMutation {
 		if (Object.keys(kept).length) roleTables[step] = kept;
 	}
 	const pools = poolDraftEntries(draft);
+	// Only stages the user actually set are persisted: an unedited stage must
+	// keep resolving from the global table and the `always` default rather than
+	// freezing today's fallback into the preset.
+	const gates = Object.fromEntries(
+		Object.entries(draft.gates).filter(([, policy]) =>
+			(GATE_POLICIES as readonly string[]).includes(policy),
+		),
+	) as Record<string, GatePolicy>;
 	const name = draft.name.trim();
 	const preset: PresetConfig = {
 		...(draft.description ? { description: draft.description } : {}),
@@ -391,6 +491,7 @@ export function presetMutation(draft: PresetDraft): AgentsMutation {
 		...(Object.keys(steps).length ? { steps } : {}),
 		...(Object.keys(roleTables).length ? { roles: roleTables } : {}),
 		...(Object.keys(pools).length ? { pools } : {}),
+		...(Object.keys(gates).length ? { gates } : {}),
 	};
 	return {
 		kind: "set-preset",

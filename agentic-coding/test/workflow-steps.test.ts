@@ -8057,8 +8057,12 @@ describe("workflow step behavior hooks (move-step-semantics-to-behavior-hooks)",
 				output: { critical: 0 },
 			});
 			// A sole full-suite run passes; the engine does not relaunch itself.
+			// The pass carries the round's bounded results for the review gate.
 			expect(passed?.runs).toBeUndefined();
-			expect(passed?.transition).toEqual({ outcome: "pass" });
+			expect(passed?.transition?.outcome).toBe("pass");
+			expect(passed?.transition?.output).toEqual({
+				verification: [{ runId: "run", role: "test-verifier", critical: 0 }],
+			});
 			// A critical finding still fails the round.
 			const failed = completeStep("core.verification", {
 				snapshot: round,
@@ -8090,7 +8094,49 @@ describe("workflow step behavior hooks (move-step-semantics-to-behavior-hooks)",
 				snapshot: snapshot("openspec", ["test-quality-verifier"], true),
 			});
 			expect(alreadyRan?.runs).toBeUndefined();
-			expect(alreadyRan?.transition).toEqual({ outcome: "pass" });
+			expect(alreadyRan?.transition?.outcome).toBe("pass");
+			expect(alreadyRan?.transition?.output).toEqual({
+				verification: [
+					{ runId: "run", role: "test-quality-verifier", critical: 0 },
+				],
+			});
 		});
+	});
+});
+
+describe("stage gate step definitions", () => {
+	test("each gate is a system step with run/skip and only the classify effect", () => {
+		const registry = registerBuiltins();
+		for (const id of ["core.plan-gate", "core.review-gate", "core.wiki-gate"]) {
+			const step = registry.step(id);
+			expect(step.actor).toBe("system");
+			expect([...step.outcomes]).toEqual(["run", "skip"]);
+			expect([...step.allowedEffects]).toEqual(["model.classify"]);
+			expect(step.retryLimit).toBe(3);
+			// A system gate step has no agent instructions to pin.
+			expect([...step.instructionAssets]).toEqual([]);
+			expect(step.behavior).toBeDefined();
+		}
+	});
+
+	test("behavior coverage holds for every registered definition", () => {
+		const registry = registerBuiltins();
+		for (const definition of registry.definitions())
+			expect(() => assertStepBehaviorCoverage(definition.steps)).not.toThrow();
+	});
+
+	test("the gate tier is the one that carries the gate steps and the new outcome", () => {
+		const registry = registerBuiltins();
+		const gateTier = registry.definition("openspec", 606);
+		expect(gateTier.steps).toContain("core.plan-gate");
+		expect(gateTier.steps).toContain("core.review-gate");
+		expect(gateTier.steps).toContain("core.wiki-gate");
+		const pinned = registry.stepForDefinition(gateTier, "core.triage-route");
+		expect([...pinned.outcomes]).toContain("skip-verification");
+		// The earlier tier keeps the two-outcome step version.
+		const triageTier = registry.definition("openspec", 506);
+		expect([
+			...registry.stepForDefinition(triageTier, "core.triage-route").outcomes,
+		]).toEqual(["complete", "empty"]);
 	});
 });

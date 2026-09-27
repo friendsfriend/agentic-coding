@@ -17,18 +17,30 @@ import { workflowAssets } from "./assets.ts";
 import { renderAssignment } from "./assignment.ts";
 import {
 	collectClassifierArtifacts,
+	collectGateClassifierState,
 	collectTriageClassifierState,
+	invokeGateClassifier,
 	invokeRoutingClassifier,
 	invokeTriageClassifier,
 	type RoutingClassifierTelemetryObserver,
 } from "./classifier-runner.ts";
 import {
 	APPLY_PHASE_STEPS,
+	type ClassifierAnswer,
+	GATE_INTEGRATION,
+	GATE_QUESTION_IDS,
+	GATE_STAGE_BY_STEP,
+	GATE_STAGES,
+	type GatePolicy,
+	type GateStage,
+	gateAnswer,
 	PLAN_PHASE_STEPS,
 	ROUTING_INTEGRATION,
 	type RoutingQuestionSpec,
+	selectGateDecision,
 	selectTriageRoles,
 	TRIAGE_INTEGRATION,
+	triageRoleQuestions,
 } from "./classifiers.ts";
 import {
 	type CredentialPrompt,
@@ -45,7 +57,12 @@ import {
 	workflowTraceContext,
 } from "./observability.ts";
 import { runProcessEffect } from "./process.ts";
-import { parseAgentsConfig, poolEntries, resolvePreset } from "./profiles.ts";
+import {
+	parseAgentsConfig,
+	poolEntries,
+	resolveGatePolicies,
+	resolvePreset,
+} from "./profiles.ts";
 import type { StepDefinition, WorkflowRegistry } from "./registry.ts";
 import {
 	type ClaimedEffect,
@@ -792,8 +809,8 @@ export function agentEffectHandlers(
 		snapshot: WorkflowSnapshot,
 		effect: ClaimedEffect,
 		input: {
-			event: "routing.request" | "routing.response";
-			model: string;
+			event: "routing.request" | "routing.response" | "gate.skip";
+			model?: string;
 			outcome?: "ok" | "error";
 			durationMs?: number;
 			tokens?: number;
@@ -811,7 +828,7 @@ export function agentEffectHandlers(
 					traceparent: traceparent(workflowTraceContext(snapshot.workflowId)),
 					stepId: snapshot.currentStep,
 					effectId: effect.id,
-					model: redactTelemetryText(input.model),
+					...(input.model ? { model: redactTelemetryText(input.model) } : {}),
 					...(input.outcome ? { outcome: input.outcome } : {}),
 					...(input.durationMs !== undefined
 						? { durationMs: input.durationMs }
@@ -885,6 +902,28 @@ export function agentEffectHandlers(
 				});
 			},
 		};
+	};
+	/** A skipped stage is never silent: the notification goes through the same
+	 * `port.notify` boundary the `notification.show` effect calls, and a
+	 * `gate.skip` telemetry event names the stage and its answer. */
+	const announceGateSkip = (
+		snapshot: WorkflowSnapshot,
+		effect: ClaimedEffect,
+	) => {
+		return (stage: GateStage, noul?: number): void =>
+			announceGateSkipBoundary(
+				(input) => options.port.notify(input),
+				(skipped, value) =>
+					emitRouting(snapshot, effect, {
+						event: "gate.skip",
+						payload: {
+							"herdr.gate.stage": skipped,
+							...(value === undefined ? {} : { "herdr.gate.noul": value }),
+						},
+					}),
+				stage,
+				noul,
+			);
 	};
 	return {
 		"workspace.setup": {
@@ -1152,13 +1191,28 @@ export function agentEffectHandlers(
 					const payload = effect.payload as {
 						integration?: unknown;
 						phase?: unknown;
+						stage?: unknown;
 					};
 					const definition = snapshotDefinition(snapshot, options.registry);
 					// The verifier-role integration resolves no pool and must never
 					// block verification, so it is dispatched before any config work
 					// and its failures become a successful fail-open result.
 					if (payload.integration === TRIAGE_INTEGRATION)
-						return yield* triageClassification(snapshot, definition.id, signal);
+						return yield* triageClassification(
+							snapshot,
+							definition.id,
+							announceGateSkip(snapshot, effect),
+							signal,
+						);
+					// A stage gate also resolves no pool, and it must never block its
+					// own stage: every failure mode becomes a forced run.
+					if (payload.integration === GATE_INTEGRATION)
+						return yield* gateClassification(
+							snapshot,
+							payload.stage,
+							announceGateSkip(snapshot, effect),
+							signal,
+						);
 					const loaded = loadConfigWithProvenance({
 						repository: snapshot.metadata.repository || undefined,
 						repositoryIndependent: !snapshot.metadata.repository,
@@ -2443,57 +2497,97 @@ export function writeAgentEnvPointer(
 	}
 }
 export const effectRunnerTest = {
+	announceGateSkipBoundary,
 	canonicalAgentName,
 	commitAndPushWiki,
+	gateClassification,
 	legacyRunName,
 	resolveLiveAgentAsync,
 	triageClassification,
 	writeAgentEnvPointer,
 	renderedAssignment,
 };
+
+/** Announce one skipped stage. Both channels are best-effort and swallowed:
+ * a gate step's `allowedEffects` may only carry `model.classify`, so this
+ * cannot be a durable effect, and the reducer's `gateDecisions` record plus
+ * the `attention` entry are the guarantee that a skip is never silent. */
+export function announceGateSkipBoundary(
+	notify: (input: {
+		title: string;
+		body: string;
+	}) => Effect.Effect<unknown, unknown>,
+	emit: (stage: string, noul?: number) => void,
+	stage: string,
+	noul?: number,
+): void {
+	const answer = noul === undefined ? "" : ` (necessity ${noul})`;
+	try {
+		void Effect.runPromise(
+			notify({
+				title: "Workflow stage skipped",
+				body: `The ${stage} stage was skipped by the classifier${answer}.`,
+			}).pipe(Effect.catchAll(() => Effect.void)),
+		).catch(() => {});
+	} catch {
+		/* an announcement must never alter the workflow outcome */
+	}
+	emit(stage, noul);
+}
 /** The outcome of one verifier-role classification pass. `failOpen` marks a
  * classification the engine could not obtain: the step then completes with no
- * role constraint, so the round keeps today's unconstrained triage. */
+ * role constraint, so the round keeps today's unconstrained triage. `gate`
+ * carries the verification gate's own verdict, which the step resolves before
+ * the roles. */
 interface TriageClassification {
 	readonly integration: typeof TRIAGE_INTEGRATION;
 	readonly roles?: readonly string[];
 	readonly failOpen?: true;
-	readonly reason?: string;
+	readonly reason?: unknown;
+	readonly gate?: GateClassification;
 }
 
-/** Classify which verifier roles this round needs. Every failure mode — a
- * missing credential, a provider error, an unparsable body, answers with no
- * usable value, even an unreadable worktree — resolves to a successful
- * fail-open result. `StepBehavior` has no effect-failure hook, and a failed
- * effect would strand the workflow in attention-required, which decision 6 of
+/** Classify which verifier roles this round needs, and — when the
+ * verification gate is automatic — whether the round needs verifying at all.
+ * Every failure mode — a missing credential, a provider error, an unparsable
+ * body, answers with no usable value, even an unreadable worktree — resolves to
+ * a successful fail-open result. `StepBehavior` has no effect-failure hook,
+ * and a failed effect would strand the workflow in attention-required, which
  * the change forbids: a classifier outage degrades to today's behaviour and
  * never blocks verification. Ownership loss is re-thrown so the runner's
  * cancellation path stays honest. */
 function triageClassification(
 	snapshot: WorkflowSnapshot,
 	definitionId: string,
+	announceGateSkip: (stage: GateStage, noul?: number) => void,
 	signal?: AbortSignal,
 ): Effect.Effect<TriageClassification, Error> {
 	return Effect.gen(function* () {
+		const policy = resolveSnapshotGatePolicies(snapshot).verification;
+		// ONE request per round: the role questions plus, only when the
+		// verification gate is automatic, its `needs_verification` question. The
+		// gate verdict and the role selection are both read from that single
+		// answer set, so a gate can never be decided by a different response
+		// than the roles it gates.
+		const automatic = policy === "auto";
+		const forced = {
+			integration: GATE_INTEGRATION,
+			stage: "verification",
+			policy,
+			decision: "run",
+			forced: true,
+		} satisfies GateClassification;
 		const classified = yield* Effect.either(
 			Effect.gen(function* () {
-				const loaded = loadConfigWithProvenance({
-					repository: snapshot.metadata.repository || undefined,
-					repositoryIndependent: !snapshot.metadata.repository,
-				});
-				const agents = parseAgentsConfig(
-					loaded.config.agents,
-					loaded.config,
-					loaded.provenance.files.join(", ") || undefined,
-				);
+				const agents = loadClassifierAgents(snapshot);
 				const state = yield* p(() => collectTriageClassifierState(snapshot));
-				const answers = yield* invokeTriageClassifier(
+				return yield* invokeTriageClassifier(
 					definitionId,
 					agents,
 					state,
 					signal,
+					automatic,
 				);
-				return selectTriageRoles(definitionId, answers);
 			}).pipe(
 				Effect.catchAllDefect((defect) =>
 					Effect.fail(
@@ -2509,17 +2603,236 @@ function triageClassification(
 				integration: TRIAGE_INTEGRATION,
 				failOpen: true,
 				reason: classified.left.message,
+				...(automatic
+					? { gate: { ...forced, reason: classified.left.message } }
+					: {}),
 			};
 		}
-		const selection = classified.right;
+		const gate = automatic
+			? verificationGateVerdict(
+					definitionId,
+					classified.right,
+					policy,
+					forced,
+					announceGateSkip,
+				)
+			: forced;
+		if (gate.decision === "skip")
+			return { integration: TRIAGE_INTEGRATION, gate };
+		const selection = selectTriageRoles(definitionId, classified.right);
 		return selection.failOpen
 			? {
 					integration: TRIAGE_INTEGRATION,
 					failOpen: true,
 					reason: selection.failOpen,
+					gate,
 				}
-			: { integration: TRIAGE_INTEGRATION, roles: selection.roles };
+			: { integration: TRIAGE_INTEGRATION, roles: selection.roles, gate };
 	});
+}
+
+/** The verification gate's verdict, read from the round's single answer set.
+ * A skip is honored only when EVERY question the round asked carries a usable
+ * necessity value: the gate question travels with the role questions, so a
+ * response that answers only `needs_verification` and omits every role is a
+ * truncated outage, not an authoritative "no verification is needed" — trusting
+ * it would give strictly LESS verification for a LESS complete response, the
+ * exact inversion `selectTriageRoles` already refuses. */
+function verificationGateVerdict(
+	definitionId: string,
+	answers: Readonly<Record<string, ClassifierAnswer>>,
+	policy: GatePolicy,
+	forced: GateClassification,
+	announceGateSkip: (stage: GateStage, noul?: number) => void,
+): GateClassification {
+	const asked = [
+		...triageRoleQuestions(definitionId).map((question) => question.questionId),
+		GATE_QUESTION_IDS.verification,
+	];
+	const answered = asked.filter((questionId) => {
+		const answer = answers[questionId];
+		return (
+			answer?.type === "noul" &&
+			typeof answer.noul === "number" &&
+			Number.isFinite(answer.noul)
+		);
+	}).length;
+	if (answered < asked.length)
+		return {
+			...forced,
+			reason: `classifier answered ${answered} of ${asked.length} round questions`,
+		};
+	const selection = selectGateDecision(
+		"verification",
+		policy,
+		gateAnswer("verification", answers),
+	);
+	if (selection.decision === "skip")
+		announceGateSkip("verification", selection.noul);
+	return { ...forced, ...selection };
+}
+
+/** The outcome of one stage-gate decision. */
+export interface GateClassification {
+	readonly integration: typeof GATE_INTEGRATION;
+	readonly stage: string;
+	readonly policy: GatePolicy;
+	readonly decision: "run" | "skip";
+	/** True when the guarded stage runs because the policy was `always` or
+	 * because the decision could not be obtained. */
+	readonly forced: boolean;
+	readonly noul?: number;
+	readonly reason?: string;
+}
+
+/** Decide one stage gate. `always` is resolved locally and issues no request;
+ * `auto` asks exactly one necessity question. Every failure mode of the
+ * `auto` path is a successful forced run, never a skip and never a failed
+ * effect: a gate that blocks its own stage is exactly the behavior the change
+ * forbids. */
+function gateClassification(
+	snapshot: WorkflowSnapshot,
+	stage: unknown,
+	announceGateSkip: (stage: GateStage, noul?: number) => void,
+	signal?: AbortSignal,
+): Effect.Effect<GateClassification, Error> {
+	// The guarded stage is derived from the step, not from the payload. A
+	// payload that disagrees with the step it arrived on is an unusable
+	// decision, so it forces the run with a reason rather than letting one
+	// stage's question and policy decide another stage.
+	const resolved = GATE_STAGE_BY_STEP[snapshot.currentStep];
+	return Effect.gen(function* () {
+		const policy =
+			resolveSnapshotGatePolicies(snapshot)[resolved ?? "verification"];
+		if (
+			resolved === undefined ||
+			!GATE_STAGES.includes(stage as GateStage) ||
+			stage !== resolved
+		)
+			return {
+				integration: GATE_INTEGRATION,
+				stage: typeof stage === "string" ? stage : "unknown",
+				policy,
+				decision: "run",
+				forced: true,
+				reason: "gate stage did not match the step",
+			} satisfies GateClassification;
+		return yield* decideGate(
+			resolved,
+			policy,
+			() => p(() => collectGateClassifierState(snapshot, resolved)),
+			(state) =>
+				invokeGateClassifier(
+					resolved,
+					loadClassifierAgents(snapshot),
+					state,
+					signal,
+				),
+			announceGateSkip,
+		);
+	});
+}
+
+/** The shared decision body: a local `always` short-circuit, otherwise one
+ * request whose answer is resolved against the necessity floor. An unknown or
+ * unusable answer forces the guarded stage to run. */
+function decideGate(
+	stage: GateStage,
+	policy: GatePolicy,
+	collect: () => Effect.Effect<unknown, Error>,
+	ask: (state: never) => Effect.Effect<Record<string, unknown>, Error>,
+	announceGateSkip: (stage: GateStage, noul?: number) => void,
+): Effect.Effect<GateClassification, Error> {
+	const base: GateClassification = {
+		integration: GATE_INTEGRATION,
+		stage,
+		policy,
+		decision: "run",
+		forced: true,
+	};
+	return Effect.gen(function* () {
+		if (policy === "always") return base;
+		const answered = yield* Effect.either(
+			Effect.gen(function* () {
+				const state = yield* collect();
+				return yield* ask(state as never);
+			}).pipe(
+				Effect.catchAllDefect((defect) =>
+					Effect.fail(
+						defect instanceof Error ? defect : new Error(String(defect)),
+					),
+				),
+			),
+		);
+		if (Either.isLeft(answered)) {
+			if (isOwnershipError(answered.left))
+				return yield* Effect.fail(answered.left);
+			return { ...base, reason: answered.left.message };
+		}
+		const selection = selectGateDecision(
+			stage,
+			policy,
+			gateAnswer(stage, answered.right as never),
+		);
+		if (selection.decision === "skip") announceGateSkip(stage, selection.noul);
+		return { ...base, ...selection };
+	});
+}
+
+/** The pinned agents configuration for a workflow, or the mandatory gate
+ * default when it cannot be read: an unreadable or invalid configuration can
+ * never widen what a run is allowed to skip. */
+function loadClassifierAgents(snapshot: WorkflowSnapshot) {
+	const loaded = loadConfigWithProvenance({
+		repository: snapshot.metadata.repository || undefined,
+		repositoryIndependent: !snapshot.metadata.repository,
+	});
+	return parseAgentsConfig(
+		loaded.config.agents,
+		loaded.config,
+		loaded.provenance.files.join(", ") || undefined,
+	);
+}
+
+const MANDATORY_GATE_POLICIES = Object.fromEntries(
+	GATE_STAGES.map((stage) => [stage, "always"]),
+) as Record<GateStage, GatePolicy>;
+
+function resolveSnapshotGatePolicies(
+	snapshot: WorkflowSnapshot,
+): Record<GateStage, GatePolicy> {
+	// The table pinned at start is authoritative: it is the only source, so a
+	// config edit after the run began cannot widen what this workflow may skip.
+	// A snapshot started before the gates existed (or one whose pinned table is
+	// unreadable) falls back to the configuration, and any failure there to the
+	// mandatory default — an unreadable document can never widen a gate.
+	const pinned = pinnedGatePolicies(snapshot);
+	if (pinned) return pinned;
+	try {
+		return resolveGatePolicies(
+			loadClassifierAgents(snapshot),
+			snapshot.metadata.selectedPreset,
+		);
+	} catch {
+		return MANDATORY_GATE_POLICIES;
+	}
+}
+
+/** The pinned table, or undefined when the snapshot carries none. A pinned
+ * entry that is no longer a known policy is dropped, so a corrupt value can
+ * only widen to `always` for that stage. */
+function pinnedGatePolicies(
+	snapshot: WorkflowSnapshot,
+): Record<GateStage, GatePolicy> | undefined {
+	const pinned = snapshot.metadata.gatePolicies;
+	if (!pinned || typeof pinned !== "object") return undefined;
+	const resolved = {} as Record<GateStage, GatePolicy>;
+	for (const stage of GATE_STAGES) {
+		const policy = pinned[stage];
+		resolved[stage] =
+			policy === "always" || policy === "auto" ? policy : "always";
+	}
+	return resolved;
 }
 
 function snapshotDefinition(

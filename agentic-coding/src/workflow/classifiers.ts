@@ -1,7 +1,8 @@
 // The classifier integration protocol (classifier-driven-model-pools for the
 // per-step model pools, classifier-driven-triage-routing for the per-round
-// verifier-role questions): pure domain knowledge for the TypeSafe question
-// shapes, answer parsing, and the two selections. The runtime I/O half lives in
+// verifier-role questions, add-jev-stage-gating for the four configurable
+// stage gates): pure domain knowledge for the TypeSafe question shapes, answer
+// parsing, and the selections. The runtime I/O half lives in
 // `classifier-runner.ts`; the reducer applies the result in
 // `runtime/reducers/effect-result.ts`.
 import { triageRolesFor } from "./steps/verification.ts";
@@ -35,6 +36,11 @@ export const ROUTING_INTEGRATION = "routing";
 /** The identifier a `model.classify` verifier-role payload carries. Unlike
  * `routing` it resolves no model pool, profile, or preset entry. */
 export const TRIAGE_INTEGRATION = "triage";
+
+/** The identifier a `model.classify` stage-gate payload carries. It resolves
+ * no model pool either: a gate asks one boolean-necessity question about the
+ * change, never which model should run a step. */
+export const GATE_INTEGRATION = "gate";
 
 /** The bounded, already-collected material handed to the classifier. */
 export interface ClassifierInput {
@@ -436,4 +442,107 @@ export function selectTriageRoles(
 			failOpen: `classifier answered ${answered} of ${questions.length} verifier-role questions`,
 		};
 	return { roles };
+}
+
+// ---------------------------------------------------------------------------
+// Configurable stage gates (add-jev-stage-gating)
+// ---------------------------------------------------------------------------
+
+/** The stages a gate can decide, in a stable order. `verification` is the
+ * single gate over triage *and* verification: they are inseparable, so it is
+ * decided on the existing `core.triage-route` step rather than by a step of
+ * its own. The remaining three carry their own `core.*-gate` system step. */
+export const GATE_STAGES = [
+	"planApproval",
+	"verification",
+	"developerReview",
+	"wiki",
+] as const;
+export type GateStage = (typeof GATE_STAGES)[number];
+
+/** The two gate policies. `always` is the default everywhere and is decided
+ * locally (a forced run, no HTTP request); `auto` lets the classifier skip. */
+export const GATE_POLICIES = ["always", "auto"] as const;
+export type GatePolicy = (typeof GATE_POLICIES)[number];
+
+/** One fixed necessity question per stage. The text is a constant (not
+ * config) so the same stage always asks the same question. The `verification`
+ * question travels inside the triage request (the gate is decided on the step
+ * that already asks the role questions) and never as a standalone request. */
+export const GATE_QUESTIONS: Readonly<Record<GateStage, string>> =
+	Object.freeze({
+		planApproval:
+			"Should a developer review and approve this plan before implementation?",
+		verification:
+			"Does this change require independent verification before it is archived?",
+		developerReview:
+			"Should a developer review this change before it is archived and delivered?",
+		wiki: "Does this change require a wiki documentation update?",
+	});
+
+/** The question key each stage's necessity answer arrives under. */
+export const GATE_QUESTION_IDS: Readonly<Record<GateStage, string>> =
+	Object.freeze({
+		planApproval: "needs_plan_approval",
+		verification: "needs_verification",
+		developerReview: "needs_developer_review",
+		wiki: "needs_wiki",
+	});
+
+/** Which stage each gate step guards. The step id is the source of truth for
+ * the decision: an effect payload that names a different stage is treated as an
+ * unusable decision rather than being resolved to some default stage. */
+export const GATE_STAGE_BY_STEP: Readonly<Record<string, GateStage>> =
+	Object.freeze({
+		"core.plan-gate": "planApproval",
+		"core.triage-route": "verification",
+		"core.review-gate": "developerReview",
+		"core.wiki-gate": "wiki",
+	});
+
+/** The outcome of one gate decision. `skip` is only ever reachable from an
+ * answered `auto` gate. */
+export type GateDecision = "run" | "skip";
+
+export interface GateSelection {
+	readonly decision: GateDecision;
+	/** True when no usable answer was consulted: the policy was `always`, the
+	 * request failed, or the answer carried no numeric necessity value. */
+	readonly forced: boolean;
+	/** The necessity answer, when one was obtained. */
+	readonly noul?: number;
+}
+
+/** Decide one gate. `always` is forced locally and consults nothing; `auto`
+ * runs the stage at or above the shared necessity floor and skips strictly
+ * below it. A `noul` answer carries no confidence, so no other field and no
+ * second threshold is consulted. An answer with no usable value is an outage,
+ * not a verdict: it forces the run. */
+export function selectGateDecision(
+	stage: GateStage,
+	policy: GatePolicy,
+	answer: ClassifierAnswer | undefined,
+	floor = TRIAGE_NOUL_FLOOR,
+): GateSelection {
+	// An unrecognized stage guards an unknown stage, so it runs: the only way
+	// to skip a stage is a positively identified one.
+	if (!(GATE_STAGES as readonly string[]).includes(stage))
+		return { decision: "run", forced: true };
+	if (policy === "always") return { decision: "run", forced: true };
+	const noul = answer?.type === "noul" ? answer.noul : undefined;
+	if (noul === undefined || !Number.isFinite(noul))
+		return { decision: "run", forced: true };
+	return {
+		decision: noul >= floor ? "run" : "skip",
+		forced: false,
+		noul,
+	};
+}
+
+/** The necessity answer of one stage, read from a whole-request answer map. */
+export function gateAnswer(
+	stage: GateStage,
+	answers: Readonly<Record<string, ClassifierAnswer>> | undefined,
+): ClassifierAnswer | undefined {
+	return answers?.[GATE_QUESTION_IDS[stage]];
 }

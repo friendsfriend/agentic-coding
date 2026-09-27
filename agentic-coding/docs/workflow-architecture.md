@@ -127,6 +127,85 @@ suite only; and every classifier failure fails open into an unconstrained triage
 plus an `attention` entry, because a classifier outage must never block
 verification.
 
+Configurable stage gates decide whether four stages run at all. The policy is
+configuration, not code: a preset's `gates` table
+(`planApproval`, `verification`, `developerReview`, `wiki`, each `always` or
+`auto`) wins over the global `agents.gates` table, which wins over `always`. It
+is resolved once at start and pinned into `metadata.gatePolicies`, so a mid-run
+config edit cannot change a running workflow; a snapshot with no pinned table
+(some pre-gate workflow already on disk) resolves from the configuration, and an
+unreadable or invalid one falls back to `always` for every stage. `always` is decided
+locally — a forced run, no HTTP request — so a configuration that declares
+nothing behaves exactly like a workflow with no gates at all. `auto` asks the
+JEV classifier one `noul` necessity question for the stage and runs it at
+`noul >= 0.5`, skipping strictly below; a `noul` answer carries no confidence,
+so that one floor is the whole rule. Every failure mode — missing credential,
+provider error, unparsable body, missing answer key, an answer with no usable
+value — is a successful *forced run* plus an `attention` entry, never a skip and
+never a failed effect, because a gate must never block its own stage.
+
+Three gates are system steps with exactly two outcomes, `run` and `skip`, in
+the `rounds + 600` tier (earlier tiers keep their graph, digest, and step
+list): `core.plan-gate` between `core.plan` and `core.plan-approval` (present
+only in definitions that own a plan approval), `core.review-gate` between a
+passing `core.verification` and `core.developer-review`, and `core.wiki-gate`
+in front of `core.wiki`. Each enqueues one `model.classify` with the `gate`
+integration and a revision-keyed idempotency key, exactly like
+`core.triage-route`. A skip targets the guarded stage's *own* approval or
+completion target, so a skip is shape-identical to an approval: the plan gate
+skips to the apply-phase routing pass (or `core.completed` in the propose-only
+families), the review gate to the wiki gate or the archive/delivery tail, and
+the wiki gate to `core.archive` — or `core.delivery` in the archive-free
+`no-openspec` family. `core.archive` is never gated: archiving is mandatory for
+OpenSpec to complete.
+
+The fourth gate, `verification`, guards triage and verification as one
+inseparable unit and therefore rides on the existing `core.triage-route` step:
+under `auto` its `needs_verification` question joins the round's single
+request, and a `skip` takes the step's third outcome, `skip-verification`,
+which bypasses both stages. The only edge out of that outcome is
+`core.review-gate`, so skipping both verification and developer review is
+possible only when both gates are `auto` — the safeguard is structural, not a
+second rule in code. A zero-role round is a *reduction*, not a skip: triage is
+bypassed and the engine-owned full suite still runs, and the round is never
+recorded as a skipped gate. The standalone `wiki` and `research` lifecycles are
+registered unchanged: their wiki step is the whole workflow, so a gate in front
+of it would have nothing to fall through to and the gate's evidence does not
+exist in a documentation-only run.
+
+Each gate is decided from bounded, stage-specific state: the plan gate reads
+the change's planning artifacts, the review gate the capped changed-file diffs
+plus the round's bounded verification results (handed over on the `pass`
+transition and adopted by the gate's `onArrive`), and the wiki gate the plan
+summary with a changed-file path list. The collectors keep their per-file,
+total, and file-count caps, pass manifest entries to git with
+`--literal-pathspecs`, list every path in full even when its diff text is
+truncated away, and frame the material as untrusted repository data that cannot
+direct the answer.
+
+A failed decision records the same `attention` entry as a skip: a forced run
+carrying a `reason` is the one forced run that stays audible, while a
+locally-decided `always` run and an answered run carry no reason and stay
+attention-free. Every decision is recorded in the snapshot's bounded
+`gateDecisions` list —
+stage, resolved policy, answer value, forced-or-answered, run-or-skip — with
+its own record-count and aggregate-size bounds; an actual skip additionally
+appends an `attention` entry naming the stage (so `workflow status` shows it
+without a new status surface), raises a notification through the same
+`port.notify` boundary the `notification.show` effect uses, and emits a
+`gate.skip` telemetry event. The notification and the telemetry are
+best-effort and outside the outbox; the reducer's record is the durable
+guarantee that a skipped test suite or human review is never silent. A
+workflow that has taken no gate decision exposes an empty list. The dashboard's
+Change panel renders the latest decision per stage, so a stage whose most recent
+verdict was a skip shows as `stage — skipped (policy, necessity)` beside the
+phase status; a workflow that has skipped nothing renders nothing.
+
+Every repository-controlled string a gate reads — the task, the change id, the
+plan summary, artifact bodies, paths, and diffs — travels inside one JSON
+envelope introduced by an "untrusted data" preamble, so no repository line can
+start a line that reads as engine-authored in the classifier's instruction area.
+
 Non-secret delivery settings are pinned in `metadata.executionSettings`, including
 the effective remote, resolved PR executable (or `null`), and config provenance.
 Delivery effects never reread ambient cwd configuration. Legacy snapshots remain
@@ -292,11 +371,21 @@ already set:
 - **Manifest-policy tier:** `definitionVersionForManifestPolicy(rounds)` =
   `rounds + 200` — wiki gate and `policy`.
 - **Behavior-pin tier:** `definitionVersionForBehaviorPins(rounds)` =
-  `rounds + 300` — wiki gate, `policy`, and exact semantic `stepRefs`. This is
-  the version `startWorkflowInProcess` / `cli.ts`'s `start` command actually
-  use for new workflows.
+  `rounds + 300` — wiki gate, `policy`, and exact semantic `stepRefs`.
+- **Research-tool tier:** `definitionVersionForResearchTools(rounds)` =
+  `rounds + 400` — the `research` family with the selected profile's normal
+  tool access. `research` starts still resolve this tier.
+- **Verifier-role tier:** `definitionVersionForTriageRouting(rounds)` =
+  `rounds + 500` — adds `core.triage-route` to the shared implementation loop.
+- **Stage-gate tier:** `definitionVersionForStageGates(rounds)` =
+  `rounds + 600` — adds `core.plan-gate`, `core.review-gate`, and
+  `core.wiki-gate`, gives `core.triage-route` its `skip-verification` outcome
+  (as step version 2, with version 1 still registered for the tier above), and
+  registers the standalone `wiki` family unchanged. This is the version
+  `startWorkflowInProcess` / `cli.ts`'s `start` command actually use for new
+  non-research workflows.
 
-All four tiers stay registered; nothing is removed. `start()` reads policy
+All tiers stay registered; nothing is removed. `start()` reads policy
 through `effectiveManifestPolicy(definition)`, which falls back to the same
 per-id table the manifest-policy tier is built from when a resolved
 definition has no `policy` block (any legacy or wikiGate-policy version).
@@ -385,7 +474,7 @@ row):
 | `contracts.ts` | The step output contracts (`triage`, `findings`, `planDraft`, `passthrough`, `empty`) and the standalone `researchHandoffContract`. |
 | `steps.ts` | The `step()` factory, per-step instruction asset list, `commonImplementationSteps(triageRoute)`, and the full `WORKFLOW_STEPS` catalog. |
 | `edges.ts` | `workflowEdges()` (the shared implementation-loop edge builder, which threads the triage-routing edges) and `definitionVersionForPolicy`. |
-| `manifest-policy.ts` | The version tiers (`definitionVersionForManifestPolicy`, `…ForBehaviorPins`, `…ForResearchTools`, `…ForTriageRouting`), the per-workflow-id policy table, and `effectiveManifestPolicy`. |
+| `manifest-policy.ts` | The version tiers (`definitionVersionForManifestPolicy`, `…ForBehaviorPins`, `…ForResearchTools`, `…ForTriageRouting`, `…ForStageGates`), the per-workflow-id policy table, and `effectiveManifestPolicy`. |
 | `graphs/*.ts` | One file per workflow family — `openspec.ts`, `no-openspec.ts`, `fusion.ts`, `wiki.ts`, `research.ts` — each exporting a manifest-builder function for that family only. |
 | `registerBuiltins.ts` | Orchestrates step registration and every family's graphs across every verification-round count and wikiGate/manifest-policy tier. |
 
@@ -555,6 +644,22 @@ cd agentic-coding && bun test test/workflow-source-layer-boundaries.test.ts test
    cycle through `definitions.ts` → `steps/index.ts`).
 5. Add role parity and digest coverage, then run the focused workflow tests,
    type-check, format, lint, and build.
+
+## Adding a stage gate
+
+`core.plan-gate`, `core.review-gate`, and `core.wiki-gate` share one behavior
+factory in `src/workflow/steps/gates.ts`; each entry names only the stage it
+guards, and the step catalog entry declares the two `run`/`skip` outcomes,
+`allowedEffects: ["model.classify"]`, and `retryLimit: 3`. The stage
+vocabulary, the fixed question texts, and the necessity rule live once in
+`src/workflow/classifiers.ts` (`GATE_STAGES`, `GATE_POLICIES`,
+`GATE_QUESTIONS`, `selectGateDecision`); `src/workflow/profiles.ts` re-exports
+the vocabulary so the Settings editor never reaches into the runtime protocol.
+The verification gate has no step of its own: it is the `needs_verification`
+question inside the triage request and the `skip-verification` outcome of
+`core.triage-route`, which is step version 2. `assertStepBehaviorCoverage`
+fails closed for a gate step without a behavior, and every gate step must
+appear in `LEGACY_STEP_BASELINE` for tiers without exact step references.
 
 ## Adding a verifier role
 

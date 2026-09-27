@@ -126,6 +126,27 @@ test("dashboard projection carries classifier decisions and defaults to an empty
 	);
 });
 
+test("dashboard projection carries gate decisions and defaults to an empty list", () => {
+	const withoutDecisions = viewToDashboardState(view());
+	expect(withoutDecisions.gateDecisions).toEqual([]);
+	const gated = view();
+	gated.gateDecisions = [
+		{
+			id: "gate",
+			at: "2026-01-01T00:00:00Z",
+			stepId: "core.review-gate",
+			stage: "developerReview",
+			policy: "auto",
+			decision: "skip",
+			forced: false,
+			noul: 0.1,
+		},
+	];
+	expect(viewToDashboardState(gated).gateDecisions).toEqual(
+		gated.gateDecisions,
+	);
+});
+
 test("openspec-fusion steps render their registry labels in phase status", () => {
 	const fusion = (stepId: string, label: string) => {
 		const fixture = view();

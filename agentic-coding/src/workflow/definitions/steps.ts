@@ -65,6 +65,7 @@ function step(
 	options: Partial<
 		Pick<
 			StepDefinition,
+			| "version"
 			| "requirements"
 			| "allowedEffects"
 			| "retryLimit"
@@ -76,7 +77,7 @@ function step(
 	const assets = INSTRUCTION_BY_STEP[id] ?? [];
 	return {
 		id,
-		version: 1,
+		version: options.version ?? 1,
 		behaviorVersion: options.behaviorVersion ?? 1,
 		label,
 		actor,
@@ -105,17 +106,20 @@ function step(
 }
 
 /** Step ids shared by every workflow family that runs an implementation
- * loop (openspec, no-openspec, fusion). The routing step is a tier-specific
- * shape change (classifier-driven-triage-routing): only a definition version
- * that registers it carries the per-round verifier-role selection. */
+ * loop (openspec, no-openspec, fusion). The routing step and the gates are
+ * tier-specific shape changes (classifier-driven-triage-routing,
+ * add-jev-stage-gating): only a definition version that registers them carries
+ * the per-round verifier-role selection and the gate steps. */
 export function commonImplementationSteps(
 	includeTriageRoute = false,
+	stageGates = false,
 ): readonly string[] {
 	return [
 		"core.implementation",
 		...(includeTriageRoute ? ["core.triage-route"] : []),
 		"core.triage",
 		"core.verification",
+		...(stageGates ? ["core.review-gate"] : []),
 		"core.developer-review",
 	];
 }
@@ -125,8 +129,13 @@ export function commonImplementationSteps(
  * stable while new definition versions pin implementation compatibility. */
 export function exactStepReferences(
 	stepIds: readonly string[],
+	versions: Readonly<Record<string, number>> = {},
 ): StepReference[] {
-	return stepIds.map((id) => ({ id, version: 1, behaviorVersion: 1 }));
+	return stepIds.map((id) => ({
+		id,
+		version: versions[id] ?? 1,
+		behaviorVersion: 1,
+	}));
 }
 
 export const WORKFLOW_STEPS: readonly StepDefinition[] = [
@@ -206,12 +215,39 @@ export const WORKFLOW_STEPS: readonly StepDefinition[] = [
 		"core.triage-route",
 		"Verifier role routing",
 		"system",
+		// Version 1 is the published verifier-role-only step. Version 2 adds
+		// the verification gate's `skip-verification` outcome; keeping the
+		// earlier version registered leaves every definition pinned to it with
+		// its previous step digest, so only the gate tier resolves version 2.
 		["complete", "empty"],
 		{
 			allowedEffects: ["model.classify"],
 			retryLimit: 3,
 		},
 	),
+	step(
+		"core.triage-route",
+		"Verifier role routing",
+		"system",
+		["complete", "empty", "skip-verification"],
+		{
+			version: 2,
+			allowedEffects: ["model.classify"],
+			retryLimit: 3,
+		},
+	),
+	step("core.plan-gate", "Plan approval gate", "system", ["run", "skip"], {
+		allowedEffects: ["model.classify"],
+		retryLimit: 3,
+	}),
+	step("core.review-gate", "Developer review gate", "system", ["run", "skip"], {
+		allowedEffects: ["model.classify"],
+		retryLimit: 3,
+	}),
+	step("core.wiki-gate", "Wiki documentation gate", "system", ["run", "skip"], {
+		allowedEffects: ["model.classify"],
+		retryLimit: 3,
+	}),
 	step(
 		"core.triage",
 		"Verification triage",

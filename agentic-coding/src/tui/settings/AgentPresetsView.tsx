@@ -291,7 +291,7 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 			);
 			return;
 		}
-		setDraft(presetDraft(existing ?? "", agents()?.presets));
+		setDraft(presetDraft(existing ?? "", agents()?.presets, agents()?.gates));
 		setPoolClipboard(undefined);
 		setEditorRevision(agentConfigEntry(props.repository).revision);
 		setFieldIndex(0);

@@ -2,6 +2,8 @@ import path from "node:path";
 import { ContractFailure, decodeContract } from "../contracts/decode.ts";
 import {
 	CLASSIFIER_DECISION_CONTENT_MAX_BYTES,
+	GATE_DECISION_CONTENT_MAX_BYTES,
+	GATE_DECISION_MAX_RECORDS,
 	type JsonValue,
 	type WorkflowSnapshot,
 } from "../contracts/workflow.ts";
@@ -110,6 +112,35 @@ export function decodeSnapshot(value: unknown): WorkflowSnapshot {
 			{
 				path: "$.classifierDecisions",
 				message: "classifier decision content exceeds bound",
+			},
+		]);
+	// The gate-decision history is bounded independently: a skipped test suite
+	// or a skipped human review is the record that must never be lost to an
+	// unbounded list, and an oversized history is a defect, not a truncation.
+	const gateDecisions = normalized.gateDecisions ?? [];
+	let gateDecisionBytes: number;
+	try {
+		gateDecisionBytes = Buffer.byteLength(JSON.stringify(gateDecisions));
+	} catch {
+		throw new ContractFailure("core.workflow-snapshot", [
+			{
+				path: "$.gateDecisions",
+				message: "gate decision content must be JSON",
+			},
+		]);
+	}
+	if (gateDecisionBytes > GATE_DECISION_CONTENT_MAX_BYTES)
+		throw new ContractFailure("core.workflow-snapshot", [
+			{
+				path: "$.gateDecisions",
+				message: "gate decision content exceeds bound",
+			},
+		]);
+	if (gateDecisions.length > GATE_DECISION_MAX_RECORDS)
+		throw new ContractFailure("core.workflow-snapshot", [
+			{
+				path: "$.gateDecisions",
+				message: `expected at most ${GATE_DECISION_MAX_RECORDS} gate decision records`,
 			},
 		]);
 	if (

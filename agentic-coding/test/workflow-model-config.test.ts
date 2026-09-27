@@ -21,6 +21,7 @@ import {
 	parseOpenCodeModels,
 	parsePiModels,
 	preflightProfile,
+	resolveGatePolicies,
 	resolvePreset,
 	resolveProfile,
 	resolveRouting,
@@ -909,5 +910,110 @@ describe("dashboard fusion start routing", () => {
 			routes.filter(([step]) => step === "core.verification"),
 		).toHaveLength(8);
 		expect(routes.every(([, , name]) => name === "d")).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Stage gate policies (add-jev-stage-gating)
+// ---------------------------------------------------------------------------
+
+describe("stage gate policy resolution", () => {
+	const baseConfig = {
+		default_profile: "d",
+		profiles: { d: { runtime: "pi" } },
+	};
+	const pools = {
+		"core.plan": [{ label: "quick", profile: "d", default: true }],
+	};
+	const all = {
+		planApproval: "always",
+		verification: "always",
+		developerReview: "always",
+		wiki: "always",
+	} as const;
+
+	test("a configuration with no gates table runs every stage", () => {
+		expect(resolveGatePolicies(parseAgentsConfig(baseConfig))).toEqual(all);
+		expect(
+			resolveGatePolicies(parseAgentsConfig(baseConfig), undefined),
+		).toEqual(all);
+	});
+
+	test("a preset entry overrides the global table", () => {
+		const agents = parseAgentsConfig({
+			...baseConfig,
+			gates: { verification: "auto", wiki: "auto" },
+			presets: {
+				p: { pools, gates: { verification: "always", planApproval: "auto" } },
+			},
+		});
+		expect(resolveGatePolicies(agents, "p")).toEqual({
+			planApproval: "auto",
+			verification: "always",
+			developerReview: "always",
+			wiki: "auto",
+		});
+		// A preset that declares no entry for a stage takes the global table.
+		expect(resolveGatePolicies(agents, "p").developerReview).toBe("always");
+	});
+
+	test("the global table applies to a preset without an entry", () => {
+		const agents = parseAgentsConfig({
+			...baseConfig,
+			gates: { developerReview: "auto" },
+			presets: { p: { pools } },
+		});
+		expect(resolveGatePolicies(agents, "p")).toEqual({
+			...all,
+			developerReview: "auto",
+		});
+	});
+
+	test("an unknown stage or an invalid value is rejected, naming both", () => {
+		expect(() =>
+			parseAgentsConfig({ ...baseConfig, gates: { nope: "auto" } }),
+		).toThrow(/unknown stage gate "nope"/);
+		expect(() =>
+			parseAgentsConfig({ ...baseConfig, gates: { wiki: "sometimes" } }),
+		).toThrow(/stage wiki has invalid gate policy "sometimes"/);
+		expect(() =>
+			parseAgentsConfig({
+				...baseConfig,
+				presets: { p: { pools, gates: { nope: "auto" } } },
+			}),
+		).toThrow(/preset p gates.*unknown stage gate "nope"/s);
+		expect(() =>
+			parseAgentsConfig({
+				...baseConfig,
+				presets: { p: { pools, gates: { verification: true } } },
+			}),
+		).toThrow(/stage verification has invalid gate policy true/);
+	});
+
+	test("a gate table never requires a profile and never satisfies the pool rule", () => {
+		// A custom preset still needs at least one model pool: a gates table is
+		// not model routing and must not stand in for one.
+		expect(() =>
+			parseAgentsConfig({
+				...baseConfig,
+				presets: { p: { gates: { wiki: "auto" } } },
+			}),
+		).toThrow(/must declare at least one model pool/);
+		// And the gate table itself is accepted on an otherwise empty preset.
+		const agents = parseAgentsConfig({
+			...baseConfig,
+			presets: { p: { pools, gates: { wiki: "auto" } } },
+		});
+		expect(agents.presets?.p?.gates).toEqual({ wiki: "auto" });
+		expect(resolvePreset(agents, "p").gates).toEqual({ wiki: "auto" });
+	});
+
+	test("the reserved built-in preset still configures only its runtime", () => {
+		expect(() =>
+			parseAgentsConfig({
+				...baseConfig,
+				presets: { "use-default-model": { runtime: "pi", gates: {} } },
+			}),
+		).toThrow(/reserved preset use-default-model/);
 	});
 });

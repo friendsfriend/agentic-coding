@@ -48,6 +48,7 @@ import {
 import {
 	type AgentsConfig,
 	BUILTIN_PRESET_NAME,
+	GATE_STAGES,
 } from "../../../workflow/profiles.ts";
 import {
 	fetchProjectCatalog,
@@ -218,6 +219,14 @@ function agentRoutingEntries(
 		agents.definition_defaults ?? {},
 	))
 		entries.push({ label: `Definition default ${definition}`, value: profile });
+	// The global stage-gate table has no bounded editor, so this read-only
+	// surface is the only place a user can confirm what a run falls back to
+	// for a stage its preset does not own.
+	for (const stage of GATE_STAGES)
+		entries.push({
+			label: `Stage gate ${stage}`,
+			value: agents.gates?.[stage] ?? "always (default)",
+		});
 	return entries;
 }
 

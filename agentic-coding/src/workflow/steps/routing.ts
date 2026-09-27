@@ -25,12 +25,16 @@ function routingBehavior(phase: RoutingPhase): StepBehavior {
 	};
 }
 
-/** `core.triage-route`: the per-round classifier gate that asks which verifier
+/** `core.triage-route`: the per-round classifier gate that decides whether
+ * independent verification is needed at all and, when it is, which verifier
  * roles run. A selection hands the locked role set to `core.triage`; no
  * selection bypasses triage and runs the engine-owned full suite; a failed
  * classification completes the step with no constraint at all, so a classifier
  * outage degrades to today's unconstrained triage instead of blocking
- * verification. */
+ * verification. The `skip-verification` outcome is the verification gate's own
+ * verdict: it bypasses triage AND verification as one unit and always routes
+ * through `core.review-gate`, which is what keeps "skip both" reachable only
+ * when the developer-review gate is automatic too. */
 const triageRouteBehavior: StepBehavior = {
 	onEnter: ({ snapshot, enqueue }) => {
 		enqueue(
@@ -52,18 +56,33 @@ const triageRouteBehavior: StepBehavior = {
 
 /** Always transitions: an unrecognized result degrades to an unconstrained
  * `core.triage` rather than parking the round at a system step that has no run
- * and no pending effect. */
+ * and no pending effect. A payload that is not a triage classification at all is
+ * an outage, not a verdict, so it must not be read as an answer of zero roles:
+ * `empty` is reserved for a real selection that came back empty, because
+ * bypassing triage on an outage would silently reduce the round. */
 function triageRouteCompletion(data: unknown): CompletionResult | undefined {
 	const result = data as
-		| { integration?: unknown; failOpen?: unknown; roles?: unknown }
+		| {
+				integration?: unknown;
+				failOpen?: unknown;
+				roles?: unknown;
+				gate?: { decision?: unknown } | undefined;
+		  }
 		| undefined;
+	if (result?.integration !== TRIAGE_INTEGRATION)
+		return { transition: { outcome: "complete" } };
+	// The verification gate resolves first and unconditionally: only an
+	// explicit skip verdict bypasses the round. A fail-open or unusable gate
+	// answer leaves the verdict at "run" and falls through to the ordinary
+	// role resolution below, so a classifier outage can never skip a stage.
+	if (result.gate?.decision === "skip")
+		return { transition: { outcome: "skip-verification" } };
 	// A fail-open result carries no role constraint, so the transition carries
 	// no output and `core.triage` validates against the full eligible catalog.
-	if (result?.failOpen === true) return { transition: { outcome: "complete" } };
-	const roles =
-		result?.integration === TRIAGE_INTEGRATION && Array.isArray(result.roles)
-			? result.roles.filter((role): role is string => typeof role === "string")
-			: [];
+	if (result.failOpen === true) return { transition: { outcome: "complete" } };
+	const roles = Array.isArray(result.roles)
+		? result.roles.filter((role): role is string => typeof role === "string")
+		: [];
 	return roles.length
 		? { transition: { outcome: "complete", output: { roles } } }
 		: { transition: { outcome: "empty", output: { roles: [] } } };

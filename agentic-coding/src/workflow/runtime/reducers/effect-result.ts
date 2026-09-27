@@ -10,6 +10,9 @@ import {
 	CLASSIFIER_DECISION_INPUT_MAX_BYTES,
 	CLASSIFIER_DECISION_MAX_RECORDS,
 	type ClassifierDecisionRecord,
+	GATE_DECISION_CONTENT_MAX_BYTES,
+	GATE_DECISION_MAX_RECORDS,
+	type GateDecisionRecord,
 	type JsonValue,
 	type WorkflowCommand,
 	type WorkflowSnapshot,
@@ -18,6 +21,7 @@ import {
 	APPLY_PHASE_STEPS,
 	buildRoutingDecisionSummary,
 	type ClassifierAnswer,
+	GATE_INTEGRATION,
 	PLAN_PHASE_STEPS,
 	parseClassifierAnswer,
 	ROUTING_INTEGRATION,
@@ -75,8 +79,16 @@ export function applyClassifierRouting(
 						failOpen?: unknown;
 						reason?: unknown;
 						roles?: unknown;
+						gate?: unknown;
 					})
 				: {};
+		// A stage gate resolves no pool: it changes no route and only leaves a
+		// durable record of what was decided, so it never touches the pinned
+		// routing below.
+		if (payload.integration === GATE_INTEGRATION) {
+			recordGateDecision(snapshot, payload, now);
+			return;
+		}
 		// The verifier-role integration resolves no pool: it changes no route and
 		// only surfaces a fail-open classification as attention, so it never
 		// touches the pinned routing below.
@@ -86,6 +98,10 @@ export function applyClassifierRouting(
 				reason: payload.reason,
 				roles: payload.roles,
 			});
+			// The verification gate is decided on this step, so its verdict is
+			// recorded here too: a round that skipped triage AND verification
+			// must be as auditable as one that ran them.
+			recordGateDecision(snapshot, payload.gate, now);
 			return;
 		}
 		const loaded = loadConfigWithProvenance({
@@ -120,6 +136,82 @@ export function applyClassifierRouting(
 		];
 		return undefined;
 	}
+}
+
+/** Record one stage-gate decision. Recording is diagnostic: a snapshot that
+ * cannot hold the record must not turn a successful gate effect into a failed
+ * one, so the whole append runs inside an empty `catch`. An actual skip also
+ * appends an attention entry naming the stage, which is what makes
+ * `workflow status` show a skipped test suite or human review without any new
+ * status surface. */
+function recordGateDecision(
+	snapshot: WorkflowSnapshot,
+	payload: unknown,
+	now: () => Date,
+): void {
+	if (!payload || typeof payload !== "object") return;
+	const result = payload as {
+		stage?: unknown;
+		policy?: unknown;
+		decision?: unknown;
+		forced?: unknown;
+		noul?: unknown;
+		reason?: unknown;
+	};
+	if (result.decision !== "run" && result.decision !== "skip") return;
+	const stage = typeof result.stage === "string" ? result.stage : "unknown";
+	const policy = typeof result.policy === "string" ? result.policy : "always";
+	const record: GateDecisionRecord = {
+		id: `${snapshot.workflowId}:${snapshot.revision}:gate:${stage}:${snapshot.gateDecisions?.length ?? 0}`,
+		at: now().toISOString(),
+		stepId: snapshot.currentStep,
+		stage,
+		policy,
+		decision: result.decision,
+		forced: result.forced === true,
+		...(typeof result.noul === "number" && Number.isFinite(result.noul)
+			? { noul: result.noul }
+			: {}),
+		...(typeof result.reason === "string" && result.reason.trim()
+			? { reason: result.reason }
+			: {}),
+	};
+	try {
+		appendGateDecision(snapshot, record);
+	} catch {
+		/* a gate decision that cannot be stored never fails the effect */
+	}
+	if (result.decision === "skip")
+		snapshot.attention = [
+			...(snapshot.attention ?? []),
+			`stage gate skipped ${stage} (policy ${policy}, necessity ${record.noul ?? "unknown"})`,
+		];
+	// A forced run because the decision FAILED is the one forced run that must
+	// stay audible: `always` and an answered run carry no reason, so the
+	// mandatory-gate scenario stays attention-free while an outage, a missing
+	// credential, or an unusable answer is named.
+	else if (record.reason)
+		snapshot.attention = [
+			...(snapshot.attention ?? []),
+			`stage gate could not be decided for ${stage} (policy ${policy}); the stage ran anyway: ${record.reason}`,
+		];
+}
+
+/** Append with a fixed record count and a fixed aggregate size, shifting the
+ * oldest record first. */
+function appendGateDecision(
+	snapshot: WorkflowSnapshot,
+	record: GateDecisionRecord,
+): void {
+	const history = [...(snapshot.gateDecisions ?? []), record];
+	while (
+		history.length > 0 &&
+		(history.length > GATE_DECISION_MAX_RECORDS ||
+			Buffer.byteLength(JSON.stringify(history)) >
+				GATE_DECISION_CONTENT_MAX_BYTES)
+	)
+		history.shift();
+	snapshot.gateDecisions = history;
 }
 
 function recordTriageAttention(

@@ -1,4 +1,5 @@
 import type { WorkflowSnapshot } from "../../contracts/workflow.ts";
+import { gateBehaviors } from "./gates.ts";
 import { implementationBehavior } from "./implementation.ts";
 import { lifecycleBehaviors } from "./lifecycle.ts";
 import { planningBehaviors } from "./planning.ts";
@@ -12,6 +13,7 @@ export const STEP_BEHAVIORS: Readonly<Record<string, StepBehavior>> =
 	Object.freeze({
 		...planningBehaviors,
 		...routingBehaviors,
+		...gateBehaviors,
 		"core.implementation": implementationBehavior,
 		...verificationBehaviors,
 		"core.wiki": wikiBehavior,
