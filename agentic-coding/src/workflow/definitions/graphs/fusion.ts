@@ -5,15 +5,16 @@
 // defaults and replaces it with the classified roster.
 import type { WorkflowManifest } from "../../registry.ts";
 import { workflowEdges } from "../edges.ts";
-import { COMMON_IMPLEMENTATION_STEPS } from "../steps.ts";
+import { commonImplementationSteps } from "../steps.ts";
 
 export function fusionManifests(
 	rounds: number,
 	version: number,
 	wikiGate: boolean,
 	wikiBeforeArchive: boolean,
+	includeTriageRoute = false,
 ): WorkflowManifest[] {
-	const common = COMMON_IMPLEMENTATION_STEPS;
+	const common = commonImplementationSteps(includeTriageRoute);
 	const tail = [
 		...(wikiGate && wikiBeforeArchive
 			? ["core.wiki", "core.wiki-approval"]
@@ -97,7 +98,13 @@ export function fusionManifests(
 					outcome: "complete",
 					to: "core.implementation",
 				},
-				...workflowEdges(true, rounds, wikiGate, wikiBeforeArchive),
+				...workflowEdges(
+					true,
+					rounds,
+					wikiGate,
+					wikiBeforeArchive,
+					includeTriageRoute,
+				),
 			],
 		},
 		{

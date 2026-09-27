@@ -8,7 +8,10 @@ import type {
 	WorkflowRouting,
 	WorkflowView,
 } from "../src/contracts/workflow.ts";
-import { registerBuiltins } from "../src/workflow/definitions.ts";
+import {
+	definitionVersionForTriageRouting,
+	registerBuiltins,
+} from "../src/workflow/definitions.ts";
 import { WorkflowEngine } from "../src/workflow/runtime.ts";
 
 // Replaces non-null assertions: fail loudly with a clear message instead of
@@ -582,6 +585,222 @@ test("review-comments request-changes dispatch validates bounded comment entries
 		expect(engine.getSnapshot(root, reported.workflowId).step.mode).toBe(
 			"review-fix",
 		);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+// ---------------------------------------------------------------------------
+// Classifier-driven verifier-role routing (classifier-driven-triage-routing)
+// ---------------------------------------------------------------------------
+
+/** Start a workflow on the triage-routing tier, complete implementation, and
+ * answer the routing classification with `data`. The pinned routing is
+ * pre-seeded, so the result data is all the classification contributes. */
+/** The roles the view launched at one step (a view also lists earlier runs). */
+function stepRoles(view: WorkflowView, stepId: string): string[] {
+	return view.runs
+		.filter((run) => run.stepId === stepId)
+		.map((run) => run.role);
+}
+
+function startRoutedRound(
+	engine: WorkflowEngine,
+	root: string,
+	data: unknown,
+	workflowId = "triage-routing",
+): WorkflowView {
+	const view = engine.start({
+		repo: root,
+		workflowId,
+		definitionId: "no-openspec",
+		definitionVersion: definitionVersionForTriageRouting(6),
+		metadata: {
+			branch: "main",
+			baseBranch: "main",
+			baseCommit: requireDefined(
+				execFileSync("git", ["rev-parse", "HEAD"], {
+					cwd: root,
+					encoding: "utf8",
+				}).trim(),
+				"base commit",
+			),
+			task: "task",
+		},
+		routing,
+	}).view;
+	fs.writeFileSync(path.join(root, "implementation.txt"), "changed\n");
+	const implemented = complete(engine, root, view, "worker", { changed: true });
+	expect(implemented.currentStep.id).toBe("core.triage-route");
+	const classify = requireEffect(
+		engine.claimEffects(root, 100),
+		"model.classify",
+	);
+	expect((classify.payload as { integration?: string }).integration).toBe(
+		"triage",
+	);
+	return engine.dispatch(root, {
+		type: "effect.result",
+		effectId: classify.id,
+		lease: requireDefined(classify.lease, "classify lease"),
+		outcome: "complete",
+		data,
+	}).view;
+}
+
+test("a zero-role classification bypasses triage and runs the full suite only", () => {
+	const root = repo();
+	try {
+		const engine = new WorkflowEngine(registerBuiltins());
+		const routed = startRoutedRound(engine, root, {
+			integration: "triage",
+			roles: [],
+		});
+		// Triage is skipped entirely: the round goes straight to verification.
+		expect(routed.currentStep.id).toBe("core.verification");
+		expect(stepRoles(routed, "core.verification")).toEqual(["test-verifier"]);
+		const passed = complete(engine, root, routed, "test-verifier", {
+			findings: [],
+		});
+		expect(passed.currentStep.id).toBe("core.developer-review");
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a selected classification locks the round's roles into triage", () => {
+	const root = repo();
+	try {
+		const engine = new WorkflowEngine(registerBuiltins());
+		const routed = startRoutedRound(engine, root, {
+			integration: "triage",
+			roles: ["quality-verifier", "security-verifier"],
+		});
+		expect(routed.currentStep.id).toBe("core.triage");
+		// The locked set is the triage assignment's step input.
+		expect(engine.getSnapshot(root, routed.workflowId).step.context).toEqual({
+			roles: ["quality-verifier", "security-verifier"],
+		});
+		const scoped = complete(engine, root, routed, "triage", {
+			roles: [
+				{
+					role: "quality-verifier",
+					reason: "runner correctness",
+					files: ["implementation.txt"],
+				},
+			],
+		});
+		expect(scoped.currentStep.id).toBe("core.verification");
+		expect(stepRoles(scoped, "core.verification")).toEqual([
+			"quality-verifier",
+		]);
+		// The engine still launches the full suite after the selected verifiers.
+		const afterVerifier = complete(engine, root, scoped, "quality-verifier", {
+			findings: [],
+		});
+		expect(
+			stepRoles(afterVerifier, "core.verification").filter(
+				(role) => role === "test-verifier",
+			),
+		).toEqual(["test-verifier"]);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a fail-open classification leaves triage unconstrained and records attention", () => {
+	const root = repo();
+	try {
+		const engine = new WorkflowEngine(registerBuiltins());
+		const routed = startRoutedRound(engine, root, {
+			integration: "triage",
+			failOpen: true,
+			reason: "classifier triage requires OPENCODE_API_KEY",
+		});
+		expect(routed.currentStep.id).toBe("core.triage");
+		expect(
+			engine.getSnapshot(root, routed.workflowId).step.selectedRoles,
+		).toEqual([]);
+		expect(
+			engine.getSnapshot(root, routed.workflowId).attention?.join(" "),
+		).toContain("OPENCODE_API_KEY");
+		// Unconstrained triage: a role the classifier never saw is still valid.
+		const scoped = complete(engine, root, routed, "triage", {
+			roles: [
+				{
+					role: "security-verifier",
+					reason: "secret boundary",
+					files: ["implementation.txt"],
+				},
+			],
+		});
+		expect(scoped.currentStep.id).toBe("core.verification");
+		expect(stepRoles(scoped, "core.verification")).toEqual([
+			"security-verifier",
+		]);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a second verification round re-runs the classifier routing step", () => {
+	const root = repo();
+	try {
+		const engine = new WorkflowEngine(registerBuiltins());
+		// Round 1 selects one role; its critical finding sends the round to fix.
+		let view = startRoutedRound(
+			engine,
+			root,
+			{ integration: "triage", roles: ["quality-verifier"] },
+			"triage-routing-rounds",
+		);
+		view = complete(engine, root, view, "triage", {
+			roles: [
+				{
+					role: "quality-verifier",
+					reason: "runner correctness",
+					files: ["implementation.txt"],
+				},
+			],
+		});
+		expect(view.currentStep.id).toBe("core.verification");
+		view = complete(engine, root, view, "quality-verifier", {
+			findings: [
+				{
+					id: "Q-1",
+					severity: "critical",
+					detail: "runner mishandles an empty input",
+					path: "implementation.txt",
+					line: 1,
+				},
+			],
+		});
+		// The round loops back through implementation into the routing step.
+		expect(view.currentStep.id).toBe("core.implementation");
+		fs.writeFileSync(path.join(root, "implementation.txt"), "changed again\n");
+		view = complete(engine, root, view, "worker", { changed: true });
+		expect(view.currentStep.id).toBe("core.triage-route");
+
+		// A second `model.classify` must be enqueued: the step is re-entered
+		// with the same attempt, so a per-attempt idempotency key would be
+		// dropped by the outbox and strand the round here forever.
+		const classify = requireEffect(
+			engine.claimEffects(root, 100),
+			"model.classify",
+		);
+		view = engine.dispatch(root, {
+			type: "effect.result",
+			effectId: classify.id,
+			lease: requireDefined(classify.lease, "classify lease"),
+			outcome: "complete",
+			data: { integration: "triage", roles: ["security-verifier"] },
+		}).view;
+		expect(view.currentStep.id).toBe("core.triage");
+		// The round's own selection is what triage is constrained by, not the
+		// previous round's.
+		expect(engine.getSnapshot(root, view.workflowId).step.context).toEqual({
+			roles: ["security-verifier"],
+		});
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });
 	}

@@ -20,6 +20,7 @@ import {
 	definitionVersionForBehaviorPins,
 	definitionVersionForManifestPolicy,
 	definitionVersionForResearchTools,
+	definitionVersionForTriageRouting,
 	withFullToolResearchPolicy,
 	withManifestPolicy,
 } from "./manifest-policy.ts";
@@ -134,6 +135,29 @@ export function registerBuiltins(
 		const version = definitionVersionForResearchTools(rounds);
 		for (const definition of researchManifests(version, true)) {
 			const pinnedBase = withFullToolResearchPolicy(definition);
+			const pinned: WorkflowManifest = {
+				...pinnedBase,
+				stepRefs: exactStepReferences(pinnedBase.steps),
+			};
+			assertStepBehaviorCoverage(pinned.steps);
+			registry.registerWorkflow(pinned);
+		}
+	}
+	// Classifier-driven verifier-role routing adds `core.triage-route` to the
+	// shared implementation loop. Published as its own tier so definitions
+	// pinned to an earlier version keep their previous graph, digest, and step
+	// list. Every non-research family is registered here — the loop-bearing
+	// ones extended, the wiki-only ones unchanged — because a new non-research
+	// start resolves this tier; research keeps the tool-policy tier above.
+	for (const rounds of Array.from({ length: 20 }, (_, index) => index + 1)) {
+		const version = definitionVersionForTriageRouting(rounds);
+		for (const definition of [
+			...openspecManifests(rounds, version, true, true, true),
+			...noOpenspecManifests(rounds, version, true, true),
+			...fusionManifests(rounds, version, true, true, true),
+			...wikiManifests(version, true),
+		]) {
+			const pinnedBase = withManifestPolicy(definition);
 			const pinned: WorkflowManifest = {
 				...pinnedBase,
 				stepRefs: exactStepReferences(pinnedBase.steps),

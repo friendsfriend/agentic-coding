@@ -16,6 +16,7 @@ import {
 	ROUTING_INTEGRATION,
 	selectRosterEntries,
 	selectSingleEntry,
+	TRIAGE_INTEGRATION,
 } from "../../classifiers.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
 import { loadConfigWithProvenance } from "../../effects.ts";
@@ -60,8 +61,22 @@ export function applyClassifierRouting(
 						phase?: unknown;
 						answers?: unknown;
 						category?: unknown;
+						failOpen?: unknown;
+						reason?: unknown;
+						roles?: unknown;
 					})
 				: {};
+		// The verifier-role integration resolves no pool: it changes no route and
+		// only surfaces a fail-open classification as attention, so it never
+		// touches the pinned routing below.
+		if (payload.integration === TRIAGE_INTEGRATION) {
+			recordTriageAttention(snapshot, {
+				failOpen: payload.failOpen,
+				reason: payload.reason,
+				roles: payload.roles,
+			});
+			return;
+		}
 		const loaded = loadConfigWithProvenance({
 			repository: snapshot.metadata.repository || undefined,
 			repositoryIndependent: !snapshot.metadata.repository,
@@ -85,6 +100,32 @@ export function applyClassifierRouting(
 			`classifier routing update failed: ${boundedError(error)}`,
 		];
 	}
+}
+
+function recordTriageAttention(
+	snapshot: WorkflowSnapshot,
+	payload: { failOpen?: unknown; reason?: unknown; roles?: unknown },
+): void {
+	if (payload.failOpen === true) {
+		const reason =
+			typeof payload.reason === "string" && payload.reason.trim()
+				? payload.reason
+				: "unknown reason";
+		snapshot.attention = [
+			...(snapshot.attention ?? []),
+			`verifier role classification failed open: ${reason}`,
+		];
+		return;
+	}
+	// A zero-role round is a legitimate classifier verdict, but it also skips
+	// every domain verifier, so it is recorded: a later reader can tell "the
+	// classifier judged no domain verifier necessary" from a silently dropped
+	// gate.
+	if (Array.isArray(payload.roles) && payload.roles.length === 0)
+		snapshot.attention = [
+			...(snapshot.attention ?? []),
+			"verifier role classification selected no domain verifier; the round ran the full suite only",
+		];
 }
 
 function applyPoolRouting(

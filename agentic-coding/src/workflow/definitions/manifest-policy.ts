@@ -23,6 +23,14 @@ export function definitionVersionForResearchTools(rounds: number): number {
 	return rounds + 400;
 }
 
+/** Version tier for the graphs that select verifier roles with the classifier
+ * (classifier-driven-triage-routing). Threaded behind a flag rather than
+ * mutating every earlier tier, so a workflow already pinned to one of them
+ * keeps its graph, its digest, and its resolvable steps. */
+export function definitionVersionForTriageRouting(rounds: number): number {
+	return rounds + 500;
+}
+
 const MANIFEST_POLICY: Readonly<Record<string, WorkflowManifestPolicy>> = {
 	openspec: {
 		targetKind: "repository",

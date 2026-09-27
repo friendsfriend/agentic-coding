@@ -105,13 +105,20 @@ function step(
 }
 
 /** Step ids shared by every workflow family that runs an implementation
- * loop (openspec, no-openspec, fusion). */
-export const COMMON_IMPLEMENTATION_STEPS: readonly string[] = [
-	"core.implementation",
-	"core.triage",
-	"core.verification",
-	"core.developer-review",
-];
+ * loop (openspec, no-openspec, fusion). The routing step is a tier-specific
+ * shape change (classifier-driven-triage-routing): only a definition version
+ * that registers it carries the per-round verifier-role selection. */
+export function commonImplementationSteps(
+	includeTriageRoute = false,
+): readonly string[] {
+	return [
+		"core.implementation",
+		...(includeTriageRoute ? ["core.triage-route"] : []),
+		"core.triage",
+		"core.verification",
+		"core.developer-review",
+	];
+}
 
 /** Convert a graph's stable step IDs into exact semantic references. Graph
  * edges intentionally continue using IDs so UI and transition identity stay
@@ -194,6 +201,16 @@ export const WORKFLOW_STEPS: readonly StepDefinition[] = [
 		"agent",
 		["complete", "blocked", "failed"],
 		{ retryLimit: 6 },
+	),
+	step(
+		"core.triage-route",
+		"Verifier role routing",
+		"system",
+		["complete", "empty"],
+		{
+			allowedEffects: ["model.classify"],
+			retryLimit: 3,
+		},
 	),
 	step(
 		"core.triage",

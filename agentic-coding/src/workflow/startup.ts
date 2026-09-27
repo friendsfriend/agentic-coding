@@ -10,7 +10,7 @@ import { registry as defaultRegistry } from "./cli/registry.ts";
 import type { WorkflowRuntimeError } from "./contracts.ts";
 import { definitionVersionForResearchTools } from "./definitions/manifest-policy.ts";
 import {
-	definitionVersionForBehaviorPins,
+	definitionVersionForTriageRouting,
 	PUBLIC_WORKFLOW_CATALOG,
 	registerBuiltins,
 	removedWorkflowHint,
@@ -315,7 +315,7 @@ function prepareFromContext(
 			? definitionVersionForResearchTools(
 					config.workflow.max_verification_rounds,
 				)
-			: definitionVersionForBehaviorPins(
+			: definitionVersionForTriageRouting(
 					config.workflow.max_verification_rounds,
 				);
 	const registry = registerBuiltins(

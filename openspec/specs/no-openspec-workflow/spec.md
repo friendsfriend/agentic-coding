@@ -6,7 +6,7 @@ TBD - created by archiving change introduce-no-openspec-workflow. Update Purpose
 ## Requirements
 
 ### Requirement: No-openspec workflow creation
-The system SHALL support pinned `no-openspec` workflow definition starting at implementation from non-empty task without requiring or creating OpenSpec artifacts.
+The system SHALL support pinned `no-openspec` workflow definition starting at implementation from non-empty task without requiring or creating OpenSpec artifacts. The per-round verifier role selection of that definition SHALL NOT ask about the OpenSpec verifier role, and its implementation loop SHALL still route through the role-selection step before triage.
 
 #### Scenario: CLI creates no-openspec workflow
 - **GIVEN** clean Git repository and non-empty task
@@ -26,12 +26,13 @@ The system SHALL support pinned `no-openspec` workflow definition starting at im
 
 #### Scenario: No-openspec verification skips OpenSpec gates
 - **WHEN** implementation completes
-- **THEN** definition SHALL enter triage and verification without OpenSpec validator or OpenSpec verifier role
+- **THEN** definition SHALL enter the per-round verifier role selection step, then triage and verification, without OpenSpec validator or OpenSpec verifier role
+- **AND** the role-selection step SHALL NOT ask any question about the OpenSpec verifier role
 - **AND** other applicable verifier and test runs SHALL use common assignment/handoff protocol
 
 #### Scenario: No-openspec transitions through full lifecycle
 - **WHEN** implementation and verification complete and developer approves
-- **THEN** workflow SHALL proceed implementation, triage, verification, developer-review, wiki, wiki-approval, delivery, completed
+- **THEN** workflow SHALL proceed implementation, verifier role selection, triage, verification, developer-review, wiki, wiki-approval, delivery, completed
 - **AND** no planning or archive step SHALL run
 
 ### Requirement: Default workflow type preserves existing behavior

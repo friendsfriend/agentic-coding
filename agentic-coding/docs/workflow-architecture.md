@@ -78,6 +78,30 @@ pre-classification planner fan-out. The resolved routing is pinned in the
 workflow snapshot before effects run, so a preset switch is validated and
 explicit.
 
+Classifier-driven verifier-role routing decides *which* verifiers run, per
+round. `core.triage-route` is a system step between `core.implementation` and
+`core.triage` in the shared implementation loop (definition tier
+`rounds + 500`; earlier tiers keep their graph, digest, and step list). It
+enqueues one `model.classify` with the `triage` integration, whose idempotency
+key carries the snapshot revision — the step is re-entered every round with a
+constant attempt, so a per-attempt key would be dropped by the outbox from round
+2 and strand the run. It asks one `noul` necessity question per eligible role —
+the registered verifier catalog minus the engine-owned full suite, minus the
+OpenSpec verifier for `no-openspec` — and includes a role at `noul >= 0.5`. A
+selection is trusted only when every question is answered: a truncated response
+is an outage, not a verdict, so the round falls back to the full catalog rather
+than silently narrowing. It resolves no model pool and never changes the pinned
+routing. The state is the engine's own changed-file manifest plus capped
+per-file diffs (per-file, total, and a cap on how many files are read at all);
+reads are bounded at the source, manifest entries are passed to git with
+`--literal-pathspecs`, and the corpus is framed as untrusted JSON data so a
+filename or diff cannot forge structure or address the questions. A selection
+arrives at `core.triage` as the edge output (and as its step input), which may
+only narrow it — never empty it; zero roles bypass triage and run the full
+suite only; and every classifier failure fails open into an unconstrained triage
+plus an `attention` entry, because a classifier outage must never block
+verification.
+
 Non-secret delivery settings are pinned in `metadata.executionSettings`, including
 the effective remote, resolved PR executable (or `null`), and config provenance.
 Delivery effects never reread ambient cwd configuration. Legacy snapshots remain
@@ -334,9 +358,9 @@ row):
 | --- | --- |
 | `catalog.ts` | `PUBLIC_WORKFLOW_CATALOG` — the human-facing workflow family list. |
 | `contracts.ts` | The step output contracts (`triage`, `findings`, `planDraft`, `passthrough`, `empty`) and the standalone `researchHandoffContract`. |
-| `steps.ts` | The `step()` factory, per-step instruction asset list, and the full `WORKFLOW_STEPS` catalog. |
-| `edges.ts` | `workflowEdges()` (the shared implementation-loop edge builder) and `definitionVersionForPolicy`. |
-| `manifest-policy.ts` | The manifest-policy tier (design D1): the per-workflow-id policy table, `definitionVersionForManifestPolicy`, `effectiveManifestPolicy`. |
+| `steps.ts` | The `step()` factory, per-step instruction asset list, `commonImplementationSteps(triageRoute)`, and the full `WORKFLOW_STEPS` catalog. |
+| `edges.ts` | `workflowEdges()` (the shared implementation-loop edge builder, which threads the triage-routing edges) and `definitionVersionForPolicy`. |
+| `manifest-policy.ts` | The version tiers (`definitionVersionForManifestPolicy`, `…ForBehaviorPins`, `…ForResearchTools`, `…ForTriageRouting`), the per-workflow-id policy table, and `effectiveManifestPolicy`. |
 | `graphs/*.ts` | One file per workflow family — `openspec.ts`, `no-openspec.ts`, `fusion.ts`, `wiki.ts`, `research.ts` — each exporting a manifest-builder function for that family only. |
 | `registerBuiltins.ts` | Orchestrates step registration and every family's graphs across every verification-round count and wikiGate/manifest-policy tier. |
 
@@ -534,12 +558,14 @@ question tools must survive it.
    "-verifier">.md`, following the brevity and "concrete evidence only"
    wording of its siblings; state the role's scope boundary (for example that
    a review role never runs the complete suite).
-2. Add a row for the role to the role→remit table in
-   `agent-definitions/instructions/triage.md`, scoping it to the changed files
-   it covers.
-3. Append the role id to `VERIFIER_ROLES` in
+2. Append the role id to `VERIFIER_ROLES` in
    `src/workflow/steps/verification.ts` before the derived `TRIAGE_ROLES`
    filter; `test-verifier` is the only derived exclusion.
+3. Add the role's necessity question to `TRIAGE_ROLE_QUESTIONS` in
+   `src/workflow/classifiers.ts` (id `needs_<role without "-verifier">` plus
+   the role's remit as a necessity question), so `core.triage-route` asks it.
+   `triage.md` needs no role row: the classifier decides the round's roles and
+   the agent only scopes them.
 4. Append `verification-<role>.md` to the `core.verification` asset list in
    `src/workflow/definitions/steps.ts` in the same order.
 5. Regenerate the embedded definitions with `bun run build` (or
