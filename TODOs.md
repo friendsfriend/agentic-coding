@@ -4,6 +4,9 @@ Fixes:
 * Some verifiers dont show findings in the ui -> missing the verifier ui
 * Findings dont render markdown yet
 * Jev based model selection -> Remove confidence gate. Always defaults to the cheapest model otherwise
+* Luvus:
+    * Spawning a new tab always focuses it. Check if that can be disabled
+    * Review modals flash the diff files (seems like it is reloading constantly)
 
 Big ones:
 * Agent steered version of the workflow. Basically an orchestrator version of the workflow.
