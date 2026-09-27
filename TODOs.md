@@ -2,6 +2,7 @@ Not for agents. This is only for humans.
 
 Fixes: 
 * Some verifiers dont show findings in the ui -> missing the verifier ui
+* Findings dont render markdown yet
 
 Big ones:
 * Agent steered version of the workflow. Basically an orchestrator version of the workflow.
