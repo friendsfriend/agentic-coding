@@ -12,7 +12,6 @@ Big ones:
 Small ones: 
 * (Maybe) Give all agents their own tab. Multitab spawning always has issues for some reason
 * Improve agent steering based on recent runs (observability first)
-* make verifier tabs use quality-v... (use ... glyphe to save space) instead of quality-verifier
 
 Promps (jev):
 
