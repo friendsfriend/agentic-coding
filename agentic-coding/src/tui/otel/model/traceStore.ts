@@ -32,6 +32,7 @@ const CATEGORY_BY_FAMILY: Readonly<Record<string, string>> = {
 	wiki: "wiki",
 	openspec: "openspec",
 	verification: "verification",
+	routing: "classifier routing",
 	migration: "migration",
 };
 

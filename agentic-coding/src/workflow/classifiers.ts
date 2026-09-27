@@ -84,6 +84,94 @@ export interface NoulAnswer {
 }
 export type ClassifierAnswer = ChoiceAnswer | NoulAnswer;
 
+/** Content-free account of the routing that one completed pass applied. */
+export interface RoutingDecisionStepSummary {
+	readonly fallback: boolean;
+	readonly label?: string;
+	readonly confidence?: number;
+	readonly profile?: string;
+	readonly profiles?: string;
+	readonly selectedCount?: number;
+}
+export interface RoutingDecisionSummary {
+	readonly phase: "plan" | "apply";
+	readonly askedStepCount: number;
+	readonly appliedStepCount: number;
+	readonly fallbackCount: number;
+	readonly steps: Readonly<Record<string, RoutingDecisionStepSummary>>;
+}
+
+function reportedConfidence(answer: ClassifierAnswer): number | undefined {
+	const confidence =
+		answer.type === "choice"
+			? (answer as { confidence?: unknown }).confidence
+			: undefined;
+	return typeof confidence === "number" && Number.isFinite(confidence)
+		? confidence
+		: undefined;
+}
+
+/** Build the telemetry-safe routing result from the same inputs used by the
+ * reducer. Only validated pool vocabulary and scalar outcomes survive. */
+export function buildRoutingDecisionSummary(
+	phase: "plan" | "apply",
+	specs: readonly RoutingQuestionSpec[],
+	answers: Readonly<Record<string, ClassifierAnswer>>,
+): RoutingDecisionSummary {
+	const steps: Record<string, RoutingDecisionStepSummary> = {};
+	let appliedStepCount = 0;
+	let fallbackCount = 0;
+	for (const spec of specs) {
+		const answer = answers[spec.stepId] ?? { type: "noul" };
+		const confidence = reportedConfidence(answer);
+		if (spec.mode === "roster") {
+			const selected = selectRosterEntries(spec.entries, answer);
+			const fallback = selected.attention !== undefined;
+			if (fallback) fallbackCount++;
+			if (selected.profiles.length) appliedStepCount++;
+			steps[spec.stepId] = {
+				fallback,
+				selectedCount: selected.profiles.length,
+				...(selected.profiles.length
+					? { profiles: selected.profiles.join(",") }
+					: {}),
+				...(confidence !== undefined ? { confidence } : {}),
+			};
+			continue;
+		}
+		const selected = selectSingleEntry(spec.entries, answer);
+		const fallback = selected.attention !== undefined;
+		const appliedEntry = fallback
+			? spec.entries.find(
+					(entry) =>
+						entry.default === true && entry.profile === selected.profile,
+				)
+			: spec.entries.find(
+					(entry) =>
+						answer.type === "choice" &&
+						entry.label === answer.choice &&
+						entry.profile === selected.profile,
+				);
+		if (fallback) fallbackCount++;
+		if (selected.profile) appliedStepCount++;
+		steps[spec.stepId] = {
+			fallback,
+			...(answer.type === "choice" && appliedEntry
+				? { label: appliedEntry.label }
+				: {}),
+			...(confidence !== undefined ? { confidence } : {}),
+			...(selected.profile ? { profile: selected.profile } : {}),
+		};
+	}
+	return {
+		phase,
+		askedStepCount: specs.length,
+		appliedStepCount,
+		fallbackCount,
+		steps,
+	};
+}
+
 /** The classifier model used by the routing integration. */
 export const ROUTING_CLASSIFIER_MODEL = "opencode/jev-1.13-free";
 export const ROUTING_CLASSIFIER_PROFILE = "jev-classifier";

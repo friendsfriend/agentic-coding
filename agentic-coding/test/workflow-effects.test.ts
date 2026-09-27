@@ -6,10 +6,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Effect, Either } from "effect";
-import type { AgentHandle } from "../src/contracts/workflow.ts";
+import type {
+	AgentHandle,
+	WorkflowSnapshot,
+} from "../src/contracts/workflow.ts";
 import type { AgentAdapter, LaunchContext } from "../src/workflow/adapters.ts";
 import { cliTest } from "../src/workflow/cli.ts";
 import {
+	definitionVersionForBehaviorPins,
 	definitionVersionForPolicy,
 	registerBuiltins,
 } from "../src/workflow/definitions.ts";
@@ -20,7 +24,10 @@ import {
 	PermanentFailure,
 	TransientFailure,
 } from "../src/workflow/effect-runner.ts";
-import { workflowTraceId } from "../src/workflow/observability.ts";
+import {
+	type TelemetryEnvelope,
+	workflowTraceId,
+} from "../src/workflow/observability.ts";
 import {
 	canonicalStorePath,
 	researchWorkflowTarget,
@@ -2349,5 +2356,237 @@ test("adapter baseline telemetry emits launch, delivery, stop, and failure", asy
 		).toBe(true);
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+function classifierHandlerFixture(
+	telemetry: (directory: string, envelope: TelemetryEnvelope) => void,
+): {
+	repo: string;
+	handler: NonNullable<
+		ReturnType<typeof agentEffectHandlers>["model.classify"]
+	>;
+	effect: Parameters<
+		NonNullable<
+			ReturnType<typeof agentEffectHandlers>["model.classify"]
+		>["execute"]
+	>[0];
+} {
+	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "routing-telemetry-"));
+	const registry = registerBuiltins();
+	const definition = registry.definition(
+		"openspec",
+		definitionVersionForBehaviorPins(6),
+	);
+	const snapshot = {
+		workflowId: "routing-telemetry",
+		currentStep: "core.route-apply",
+		definition: {
+			id: definition.id,
+			version: definition.version,
+			digest: definition.digest,
+		},
+		metadata: {
+			repository: repo,
+			worktree: repo,
+			changeId: "change",
+			task: "private task text",
+		},
+	} as unknown as WorkflowSnapshot;
+	const engine = {
+		getSnapshot: () => snapshot,
+	} as unknown as WorkflowEngine;
+	const handlers = agentEffectHandlers(repo, engine, {
+		registry,
+		adapters: new Map(),
+		herdr: { call: () => ({}) },
+		paneForRun: async () => ({ paneId: "unused", owned: false }),
+		telemetry,
+	});
+	const handler = handlers["model.classify"];
+	if (!handler) throw new Error("expected model.classify handler");
+	return {
+		repo,
+		handler,
+		effect: {
+			id: "classify-effect",
+			workflowId: snapshot.workflowId,
+			kind: "model.classify",
+			payload: { integration: "routing", phase: "apply" },
+		} as never,
+	};
+}
+
+test("classifier provider telemetry reports bounded metadata and conditional usage", async () => {
+	const originalFetch = globalThis.fetch;
+	const originalApiKey = process.env.OPENCODE_API_KEY;
+	process.env.OPENCODE_API_KEY = "test-key";
+	const envelopes: TelemetryEnvelope[] = [];
+	const fixture = classifierHandlerFixture((_directory, envelope) => {
+		envelopes.push(envelope);
+	});
+	try {
+		globalThis.fetch = (async () =>
+			new Response(
+				JSON.stringify({
+					answers: {
+						"core.implementation": {
+							type: "choice",
+							choice: "quick",
+							confidence: 0.9,
+						},
+					},
+					usage: { total_tokens: 42, cost: 0.125 },
+				}),
+				{ status: 200 },
+			)) as unknown as typeof fetch;
+		const result = (await Effect.runPromise(
+			fixture.handler.execute(fixture.effect),
+		)) as { answers?: unknown };
+		expect(result.answers).toBeDefined();
+		const request = envelopes.find((item) => item.event === "routing.request");
+		const response = envelopes.find(
+			(item) => item.event === "routing.response",
+		);
+		expect(request).toMatchObject({
+			layer: "adapter",
+			model: "opencode/jev-1.13-free",
+			effectId: "classify-effect",
+			"herdr.routing.integration": "routing",
+			"herdr.routing.phase": "apply",
+			"herdr.routing.steps.asked": 5,
+			"herdr.routing.artifacts.count": 0,
+			"herdr.routing.timeout.ms": 300000,
+			"herdr.routing.endpoint.host": "opencode.ai",
+		});
+		expect(response).toMatchObject({
+			outcome: "ok",
+			"herdr.routing.status": 200,
+			"herdr.routing.status.class": "2xx",
+			tokens: 42,
+			cost: 0.125,
+		});
+		expect(response?.["herdr.routing.answers.choice"]).toBe(1);
+		expect(response?.["herdr.routing.answers.noul"]).toBe(4);
+		expect(JSON.stringify(envelopes)).not.toContain("private task text");
+
+		envelopes.length = 0;
+		globalThis.fetch = (async () =>
+			new Response(JSON.stringify({ answers: {} }), {
+				status: 200,
+			})) as unknown as typeof fetch;
+		await Effect.runPromise(fixture.handler.execute(fixture.effect));
+		const withoutUsage = envelopes.find(
+			(item) => item.event === "routing.response",
+		);
+		expect(withoutUsage?.tokens).toBeUndefined();
+		expect(withoutUsage?.cost).toBeUndefined();
+	} finally {
+		globalThis.fetch = originalFetch;
+		if (originalApiKey === undefined) delete process.env.OPENCODE_API_KEY;
+		else process.env.OPENCODE_API_KEY = originalApiKey;
+		fs.rmSync(fixture.repo, { recursive: true, force: true });
+	}
+});
+
+test("classifier provider failures emit one content-free response and telemetry cannot change the result", async () => {
+	const originalFetch = globalThis.fetch;
+	const originalApiKey = process.env.OPENCODE_API_KEY;
+	process.env.OPENCODE_API_KEY = "test-key";
+	const envelopes: TelemetryEnvelope[] = [];
+	const fixture = classifierHandlerFixture((_directory, envelope) => {
+		envelopes.push(envelope);
+	});
+	try {
+		globalThis.fetch = (async () =>
+			new Response("unavailable", { status: 503 })) as unknown as typeof fetch;
+		await expect(
+			Effect.runPromise(fixture.handler.execute(fixture.effect)),
+		).rejects.toThrow();
+		let responses = envelopes.filter(
+			(item) => item.event === "routing.response",
+		);
+		expect(responses).toHaveLength(1);
+		expect(responses[0]).toMatchObject({
+			outcome: "error",
+			"herdr.routing.status": 503,
+			"herdr.routing.status.class": "5xx",
+		});
+		expect(responses[0]?.["herdr.routing.answers.choice"]).toBeUndefined();
+
+		envelopes.length = 0;
+		globalThis.fetch = (async () =>
+			new Response("invalid", { status: 400 })) as unknown as typeof fetch;
+		await expect(
+			Effect.runPromise(fixture.handler.execute(fixture.effect)),
+		).rejects.toThrow();
+		responses = envelopes.filter((item) => item.event === "routing.response");
+		expect(responses).toHaveLength(1);
+		expect(responses[0]?.["herdr.routing.status.class"]).toBe("4xx");
+
+		envelopes.length = 0;
+		globalThis.fetch = (async () => {
+			throw new Error("network unavailable");
+		}) as unknown as typeof fetch;
+		await expect(
+			Effect.runPromise(fixture.handler.execute(fixture.effect)),
+		).rejects.toThrow();
+		responses = envelopes.filter((item) => item.event === "routing.response");
+		expect(responses).toHaveLength(1);
+		expect(responses[0]?.["herdr.routing.status.class"]).toBe("transport");
+
+		envelopes.length = 0;
+		const originalSetTimeout = globalThis.setTimeout;
+		globalThis.setTimeout = ((callback: TimerHandler) =>
+			originalSetTimeout(callback, 0)) as unknown as typeof setTimeout;
+		try {
+			globalThis.fetch = ((_url, init) =>
+				new Promise<Response>((_resolve, reject) => {
+					const signal = init?.signal;
+					const abort = () => reject(new Error("aborted"));
+					if (signal?.aborted) abort();
+					else signal?.addEventListener("abort", abort, { once: true });
+				})) as typeof fetch;
+			await expect(
+				Effect.runPromise(fixture.handler.execute(fixture.effect)),
+			).rejects.toThrow();
+		} finally {
+			globalThis.setTimeout = originalSetTimeout;
+		}
+		responses = envelopes.filter((item) => item.event === "routing.response");
+		expect(responses).toHaveLength(1);
+		expect(responses[0]?.["herdr.routing.status.class"]).toBe("transport");
+
+		envelopes.length = 0;
+		process.env.OPENCODE_API_KEY = " ";
+		let fetchCalled = false;
+		globalThis.fetch = (async () => {
+			fetchCalled = true;
+			return new Response("unexpected");
+		}) as unknown as typeof fetch;
+		await expect(
+			Effect.runPromise(fixture.handler.execute(fixture.effect)),
+		).rejects.toThrow();
+		expect(fetchCalled).toBe(false);
+		expect(envelopes).toHaveLength(0);
+		process.env.OPENCODE_API_KEY = "test-key";
+
+		const throwing = classifierHandlerFixture(() => {
+			throw new Error("sink failed");
+		});
+		globalThis.fetch = (async () =>
+			new Response(JSON.stringify({ answers: {} }), {
+				status: 200,
+			})) as unknown as typeof fetch;
+		const result = (await Effect.runPromise(
+			throwing.handler.execute(throwing.effect),
+		)) as { answers?: Record<string, unknown> };
+		expect(Object.keys(result.answers ?? {})).toHaveLength(5);
+		fs.rmSync(throwing.repo, { recursive: true, force: true });
+	} finally {
+		globalThis.fetch = originalFetch;
+		if (originalApiKey === undefined) delete process.env.OPENCODE_API_KEY;
+		else process.env.OPENCODE_API_KEY = originalApiKey;
+		fs.rmSync(fixture.repo, { recursive: true, force: true });
 	}
 });

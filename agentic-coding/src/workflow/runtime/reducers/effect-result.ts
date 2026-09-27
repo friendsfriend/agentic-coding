@@ -11,9 +11,12 @@ import type {
 } from "../../../contracts/workflow.ts";
 import {
 	APPLY_PHASE_STEPS,
+	buildRoutingDecisionSummary,
 	type ClassifierAnswer,
 	PLAN_PHASE_STEPS,
+	parseClassifierAnswer,
 	ROUTING_INTEGRATION,
+	type RoutingDecisionSummary,
 	selectRosterEntries,
 	selectSingleEntry,
 	TRIAGE_INTEGRATION,
@@ -52,7 +55,7 @@ export function applyClassifierRouting(
 	definition: CompiledWorkflowDefinition,
 	registry: WorkflowRegistry,
 	data: unknown,
-): void {
+): RoutingDecisionSummary | undefined {
 	try {
 		const payload =
 			data && typeof data === "object"
@@ -93,12 +96,20 @@ export function applyClassifierRouting(
 			throw new Error(
 				`unknown model.classify integration: ${String(payload.integration)}`,
 			);
-		applyPoolRouting(snapshot, definition, registry, agents, preset, payload);
+		return applyPoolRouting(
+			snapshot,
+			definition,
+			registry,
+			agents,
+			preset,
+			payload,
+		);
 	} catch (error) {
 		snapshot.attention = [
 			...(snapshot.attention ?? []),
 			`classifier routing update failed: ${boundedError(error)}`,
 		];
+		return undefined;
 	}
 }
 
@@ -135,22 +146,34 @@ function applyPoolRouting(
 	agents: AgentsConfig,
 	preset: ReturnType<typeof resolvePreset> | undefined,
 	payload: { phase?: unknown; answers?: unknown },
-): void {
+): RoutingDecisionSummary {
 	const phase = payload.phase === "apply" ? "apply" : "plan";
-	const answers =
-		payload.answers && typeof payload.answers === "object"
-			? (payload.answers as Record<string, ClassifierAnswer>)
+	const answers: Record<string, ClassifierAnswer> =
+		payload.answers &&
+		typeof payload.answers === "object" &&
+		!Array.isArray(payload.answers)
+			? Object.fromEntries(
+					Object.entries(payload.answers).map(([stepId, answer]) => [
+						stepId,
+						parseClassifierAnswer(answer),
+					]),
+				)
 			: {};
 	const steps = phase === "plan" ? PLAN_PHASE_STEPS : APPLY_PHASE_STEPS;
 	const selections: CategorySelection[] = [];
 	const attention: string[] = [];
 	let rosterProfiles: string[] | undefined;
-	for (const stepId of steps) {
-		if (!definition.steps.includes(stepId)) continue;
-		const mode =
-			registry.stepForDefinition(definition, stepId).behavior?.classification ??
-			"single";
-		const entries = poolEntries(preset, stepId);
+	const specs = steps
+		.filter((stepId) => definition.steps.includes(stepId))
+		.map((stepId) => ({
+			stepId,
+			mode:
+				registry.stepForDefinition(definition, stepId).behavior
+					?.classification ?? "single",
+			entries: poolEntries(preset, stepId),
+		}));
+	for (const spec of specs) {
+		const { stepId, mode, entries } = spec;
 		if (entries.length === 0)
 			throw new Error(
 				`classifier routing has no model pool for ${stepId}; define it in Settings → Presets`,
@@ -187,6 +210,7 @@ function applyPoolRouting(
 	snapshot.routing = routing;
 	if (attention.length)
 		snapshot.attention = [...(snapshot.attention ?? []), ...attention];
+	return buildRoutingDecisionSummary(phase, specs, answers);
 }
 
 export function effectResult(
@@ -329,8 +353,10 @@ export function effectResult(
 		if (typeof data.branch === "string") snapshot.metadata.branch = data.branch;
 		enterStep(db, snapshot, definition, registry, now);
 	}
-	if (command.outcome === "complete" && row.kind === "model.classify")
-		applyClassifierRouting(snapshot, definition, registry, command.data);
+	const routingDecision =
+		command.outcome === "complete" && row.kind === "model.classify"
+			? applyClassifierRouting(snapshot, definition, registry, command.data)
+			: undefined;
 	if (command.outcome === "complete") {
 		const step = registry.stepForDefinition(definition, snapshot.currentStep);
 		const completion = step.behavior?.onEffectComplete?.({
@@ -362,6 +388,9 @@ export function effectResult(
 	return {
 		type: "effect.result",
 		actor: { kind: "system", effectId: row.id },
-		data: { outcome: command.outcome },
+		data: {
+			outcome: command.outcome,
+			...(routingDecision ? { routingDecision } : {}),
+		},
 	};
 }

@@ -53,6 +53,9 @@ describe("telemetryCategory", () => {
 		expect(telemetryCategory("workflow.started")).toBe("workflow");
 		expect(telemetryCategory("git.status")).toBe("git operation");
 		expect(telemetryCategory("developer.question.created")).toBe("developer");
+		expect(telemetryCategory("routing.request")).toBe("classifier routing");
+		expect(telemetryCategory("routing.response")).toBe("classifier routing");
+		expect(telemetryCategory("routing.classified")).toBe("classifier routing");
 		// Unknown families keep their own name rather than being dropped.
 		expect(telemetryCategory("custom.event")).toBe("custom");
 	});
@@ -114,6 +117,31 @@ describe("phase/category span tree", () => {
 		expect(names(verification?.children ?? [])).toEqual(["agent", "workflow"]);
 		expect(names(verification?.children[0]?.children ?? [])).toEqual([
 			"verifier",
+		]);
+	});
+
+	test("groups all routing records under one category", () => {
+		const store = new TraceStore([
+			span({ name: "routing.request", startMs: 10, stepId: "core.route-plan" }),
+			span({
+				name: "routing.response",
+				startMs: 20,
+				stepId: "core.route-plan",
+			}),
+			span({
+				name: "routing.classified",
+				startMs: 30,
+				stepId: "core.route-plan",
+			}),
+			span({ name: "custom.event", startMs: 40, stepId: "core.route-plan" }),
+		]);
+		const categories =
+			store.getSpanTree("wf-1")[0]?.children[0]?.children ?? [];
+		expect(names(categories)).toEqual(["classifier routing", "custom"]);
+		expect(names(categories[0]?.children ?? [])).toEqual([
+			"routing.request",
+			"routing.response",
+			"routing.classified",
 		]);
 	});
 

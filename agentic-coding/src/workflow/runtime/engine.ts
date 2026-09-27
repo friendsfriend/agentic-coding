@@ -26,6 +26,7 @@ import {
 	type WorkflowSnapshot,
 	type WorkflowView,
 } from "../../contracts/workflow.ts";
+import type { RoutingDecisionSummary } from "../classifiers.ts";
 import { decodeSnapshot, WorkflowRuntimeError } from "../contracts.ts";
 import { decodePlanResult } from "../definitions/contracts.ts";
 import { effectiveManifestPolicy } from "../definitions.ts";
@@ -151,6 +152,8 @@ interface CommittedTelemetry {
 	outcome?: "ok" | "error";
 	durationMs?: number;
 	payload: Record<string, unknown>;
+	/** Present when a completed classifier effect applied routing. */
+	routingPayload?: Record<string, unknown>;
 	/** Present when the command made the workflow terminal: the payload of the
 	 * one best-effort `workflow.rollup` event (D2). */
 	rollupPayload?: Record<string, unknown>;
@@ -189,6 +192,32 @@ function errorClass(value: unknown): string | undefined {
 		.trim()
 		.slice(0, 160);
 	return normalized || undefined;
+}
+
+function routingDecisionPayload(
+	summary: RoutingDecisionSummary,
+): Record<string, unknown> {
+	const payload: Record<string, unknown> = {
+		"herdr.routing.phase": summary.phase,
+		"herdr.routing.steps.asked": summary.askedStepCount,
+		"herdr.routing.steps.applied": summary.appliedStepCount,
+		"herdr.routing.fallback.count": summary.fallbackCount,
+	};
+	for (const [stepId, decision] of Object.entries(summary.steps)) {
+		const prefix = `herdr.routing.${stepId}`;
+		payload[`${prefix}.fallback`] = decision.fallback;
+		if (decision.label !== undefined)
+			payload[`${prefix}.label`] = redactTelemetryText(decision.label);
+		if (decision.confidence !== undefined)
+			payload[`${prefix}.confidence`] = decision.confidence;
+		if (decision.profile !== undefined)
+			payload[`${prefix}.profile`] = redactTelemetryText(decision.profile);
+		if (decision.profiles !== undefined)
+			payload[`${prefix}.profiles`] = redactTelemetryText(decision.profiles);
+		if (decision.selectedCount !== undefined)
+			payload[`${prefix}.selected.count`] = decision.selectedCount;
+	}
+	return payload;
 }
 
 function truncatedDigest(value: unknown): string | undefined {
@@ -472,6 +501,13 @@ export class WorkflowEngine {
 				committed.event.type,
 				committed.telemetry,
 			);
+			if (committed.telemetry.routingPayload)
+				yield* self.telemetryEffect(committed.snapshot, "routing.classified", {
+					stepId: committed.telemetry.stepId,
+					effectId: committed.telemetry.effectId,
+					outcome: "ok",
+					payload: committed.telemetry.routingPayload,
+				});
 			if (committed.telemetry.rollupPayload)
 				yield* self.telemetryEffect(committed.snapshot, "workflow.rollup", {
 					stepId: committed.snapshot.currentStep,
@@ -1318,6 +1354,7 @@ export class WorkflowEngine {
 			if (row) {
 				telemetry.effectId = row.id;
 				telemetry.effectKind = row.kind;
+				if (row.kind === "model.classify") telemetry.stepId = stepBefore;
 				telemetry.attempt = row.attempts;
 				telemetry.payload["herdr.effect.kind"] = row.kind;
 				telemetry.payload["herdr.effect.attempt"] = row.attempts;
@@ -1326,6 +1363,14 @@ export class WorkflowEngine {
 				if (cls) telemetry.payload["herdr.error.class"] = cls;
 			}
 		}
+		const eventData =
+			event.data && typeof event.data === "object"
+				? (event.data as { routingDecision?: RoutingDecisionSummary })
+				: {};
+		if (eventData.routingDecision)
+			telemetry.routingPayload = routingDecisionPayload(
+				eventData.routingDecision,
+			);
 		if (event.type === "agent.handoff") {
 			const data =
 				event.data && typeof event.data === "object"

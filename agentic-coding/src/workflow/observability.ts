@@ -103,6 +103,9 @@ export interface AdapterTelemetryInput {
 	effectId?: string;
 	outcome?: "ok" | "error";
 	durationMs?: number;
+	model?: string;
+	tokens?: number;
+	cost?: number;
 	traceparent?: string;
 	payload?: Record<string, unknown>;
 	captureContent?: boolean;

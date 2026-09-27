@@ -183,6 +183,146 @@ test("engine dispatch telemetry carries identity and payload fields", () => {
 	}
 });
 
+test("completed classifier effects emit the applied routing decision", () => {
+	const root = repository(
+		fs.mkdtempSync(path.join(os.tmpdir(), "engine-routing-telemetry-")),
+	);
+	const config = path.join(root, "agents.json");
+	fs.writeFileSync(
+		config,
+		JSON.stringify({
+			agents: {
+				default_profile: "base",
+				profiles: {
+					base: { runtime: "pi", executable: process.execPath },
+					strong: { runtime: "pi", executable: process.execPath },
+				},
+				presets: {
+					auto: {
+						pools: {
+							"core.plan": [
+								{ label: "quick", profile: "base" },
+								{
+									label: "thorough-sk-abcdefghijklmnop",
+									profile: "strong",
+									default: true,
+								},
+							],
+						},
+					},
+				},
+			},
+		}),
+	);
+	fs.mkdirSync(path.join(root, "openspec"), { recursive: true });
+	fs.writeFileSync(
+		path.join(root, "openspec", "config.yaml"),
+		"schema: spec-driven\n",
+	);
+	execFileSync("git", ["add", "agents.json", "openspec/config.yaml"], {
+		cwd: root,
+	});
+	execFileSync("git", ["commit", "-qm", "test config"], { cwd: root });
+	const previousConfig = process.env.HERDR_WORKFLOW_CONFIG;
+	process.env.HERDR_WORKFLOW_CONFIG = config;
+	try {
+		const engine = new WorkflowEngine(
+			registerBuiltins(),
+			() => new Date("2026-01-01T00:00:00Z"),
+		);
+		engine.start({
+			repo: root,
+			workflowId: "telemetry-routing",
+			definitionId: "openspec",
+			metadata: {
+				branch: "feature/x",
+				baseBranch: "main",
+				baseCommit: "abc123",
+				task: "task",
+				selectedPreset: "auto",
+			},
+			routing: {
+				defaultProfile: "base",
+				routes: [
+					{
+						stepId: "core.plan",
+						role: "planner",
+						profile: { ...profile, name: "base", digest: "base" },
+					},
+				],
+			},
+		});
+		let claimed = engine.claimEffects(root);
+		const setup = claimed.find((effect) => effect.kind === "workspace.setup");
+		if (setup) {
+			engine.dispatch(root, {
+				type: "effect.result",
+				effectId: setup.id,
+				lease: setup.lease ?? "",
+				outcome: "complete",
+				data: { worktree: root, branch: "feature/x" },
+			});
+			claimed = engine.claimEffects(root);
+		}
+		const classify = claimed.find((effect) => effect.kind === "model.classify");
+		if (!classify) throw new Error("expected model.classify effect");
+		const maliciousConfidence =
+			"SECRET sk-abcdefghijklmnopqrstuvwxyz task text: implement the widget";
+		engine.dispatch(root, {
+			type: "effect.result",
+			effectId: classify.id,
+			lease: classify.lease ?? "",
+			outcome: "complete",
+			data: {
+				integration: "routing",
+				phase: "plan",
+				answers: {
+					"core.plan": {
+						type: "choice",
+						choice: "quick",
+						confidence: maliciousConfidence,
+					},
+				},
+			},
+		});
+		const events = readTelemetry(root, "telemetry-routing");
+		const decisions = events.filter(
+			(event) => event.event === "routing.classified",
+		);
+		expect(decisions).toHaveLength(1);
+		const decision = decisions[0];
+		expect(decision).toMatchObject({
+			layer: "engine",
+			effectId: classify.id,
+			stepId: "core.route-plan",
+			"herdr.routing.phase": "plan",
+			"herdr.routing.steps.asked": 1,
+			"herdr.routing.steps.applied": 1,
+			"herdr.routing.fallback.count": 1,
+			"herdr.routing.core.plan.label": "thorough-[REDACTED]",
+			"herdr.routing.core.plan.fallback": true,
+			"herdr.routing.core.plan.profile": "strong",
+		});
+		expect(decision?.["herdr.routing.core.plan.confidence"]).toBeUndefined();
+		expect(JSON.stringify(decision)).not.toContain(maliciousConfidence);
+		expect(traceIdOf(decision ?? { event: "" })).toBe(
+			workflowTraceId("telemetry-routing"),
+		);
+		const effectResult = events.find(
+			(event) =>
+				event.event === "effect.result" && event.effectId === classify.id,
+		);
+		expect(effectResult).toBeDefined();
+		expect(events.indexOf(effectResult ?? { event: "" })).toBeLessThan(
+			events.indexOf(decision ?? { event: "" }),
+		);
+	} finally {
+		if (previousConfig === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
+		else process.env.HERDR_WORKFLOW_CONFIG = previousConfig;
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("effect exhaustion exports the durable event and one roll-up", () => {
 	const root = repository(
 		fs.mkdtempSync(path.join(os.tmpdir(), "engine-exhausted-")),

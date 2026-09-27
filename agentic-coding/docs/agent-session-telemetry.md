@@ -41,9 +41,34 @@ detail renders `herdr.content.*` attributes wrapped (JSON indented) under
 "Message input", "Message output", "Tool input" and "Tool output" instead of a
 clipped one-line metadata row.
 
+## Classifier routing telemetry
+
+The JEV/System One routing integration emits adapter spans for each provider
+call and an engine span for each applied decision:
+
+- `routing.request` and `routing.response` carry `model`, effect identity, and
+  `herdr.routing.integration`, `.phase`, `.steps.asked`, `.entries.offered`,
+  `.artifacts.count`, `.state.bytes`, `.timeout.ms`, and `.endpoint.host`.
+  Responses add `outcome`, `durationMs`, `herdr.routing.status`,
+  `.status.class`, `herdr.error.class`, and successful choice/`noul` answer
+  counts. Numeric `tokens` and `cost` are present only when System One reports
+  them; missing usage is never represented as zero.
+- `routing.classified` carries `herdr.routing.phase`, `.steps.asked`,
+  `.steps.applied`, `.fallback.count`, and per-step
+  `herdr.routing.<stepId>.label`, `.confidence`, `.fallback`, plus `.profile`
+  for a single selection or stable comma-joined `.profiles` and
+  `.selected.count` for a roster.
+
+Routing telemetry is permanently content-free, regardless of
+`telemetry.capture_content`: task text, prompts, artifact contents, pool
+criteria, free-form answers, and model output are never exported. Only bounded,
+redacted scalar metadata and the validated pool label/profile actually applied
+may leave the process.
+
 ## Not captured
 
 - system prompts and thinking/reasoning parts
 - images and other non-text content parts
 - streaming updates (only the completed message/part is recorded)
-- anything at all while `telemetry.capture_content = false`
+- session content while `telemetry.capture_content = false` (bounded metadata,
+  including content-free routing telemetry, remains enabled)

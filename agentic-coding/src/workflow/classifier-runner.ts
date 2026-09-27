@@ -16,6 +16,7 @@ import {
 	ROUTING_CLASSIFIER_MODEL,
 	ROUTING_CLASSIFIER_PROFILE,
 	ROUTING_ENDPOINT,
+	ROUTING_INTEGRATION,
 	type RoutingQuestionSpec,
 	routingQuestionInstructions,
 	TRIAGE_INTEGRATION,
@@ -130,13 +131,51 @@ export function routingRequest(
 	};
 }
 
-const CLASSIFIER_TIMEOUT_MS = 300_000;
+export const CLASSIFIER_TIMEOUT_MS = 300_000;
 
-function parseAnswers(
+export interface RoutingClassifierRequestTelemetry {
+	readonly model: string;
+	readonly integration: typeof ROUTING_INTEGRATION;
+	readonly stepsAsked: number;
+	readonly entriesOffered: number;
+	readonly artifactsCount: number;
+	readonly stateBytes: number;
+	readonly timeoutMs: number;
+	readonly endpointHost: string;
+}
+export interface RoutingClassifierResponseTelemetry {
+	readonly outcome: "ok" | "error";
+	readonly durationMs: number;
+	readonly status?: number;
+	readonly statusClass: string;
+	readonly errorClass?: string;
+	readonly choiceAnswers?: number;
+	readonly noulAnswers?: number;
+	readonly tokens?: number;
+	readonly cost?: number;
+}
+export interface RoutingClassifierTelemetryObserver {
+	readonly request?: (event: RoutingClassifierRequestTelemetry) => void;
+	readonly response?: (event: RoutingClassifierResponseTelemetry) => void;
+}
+
+function notify<T>(callback: ((event: T) => void) | undefined, event: T): void {
+	try {
+		callback?.(event);
+	} catch {
+		/* telemetry observers are observational */
+	}
+}
+
+function parseResponse(
 	integrationId: string,
 	body: string,
 	questionIds: readonly string[],
-): Record<string, ClassifierAnswer> {
+): {
+	answers: Record<string, ClassifierAnswer>;
+	tokens?: number;
+	cost?: number;
+} {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(body);
@@ -149,30 +188,65 @@ function parseAnswers(
 		throw new PermanentFailure(
 			`classifier ${integrationId} returned invalid System One data`,
 		);
-	const answers = (parsed as { answers?: unknown }).answers;
+	const envelope = parsed as {
+		answers?: unknown;
+		usage?: unknown;
+		cost?: unknown;
+	};
 	const map =
-		answers && typeof answers === "object" && !Array.isArray(answers)
-			? (answers as Record<string, unknown>)
+		envelope.answers &&
+		typeof envelope.answers === "object" &&
+		!Array.isArray(envelope.answers)
+			? (envelope.answers as Record<string, unknown>)
 			: {};
-	return Object.fromEntries(
+	const answers = Object.fromEntries(
 		questionIds.map((id) => [id, parseClassifierAnswer(map[id])]),
 	);
+	const usage =
+		envelope.usage &&
+		typeof envelope.usage === "object" &&
+		!Array.isArray(envelope.usage)
+			? (envelope.usage as Record<string, unknown>)
+			: {};
+	const number = (...values: unknown[]): number | undefined =>
+		values.find(
+			(value): value is number =>
+				typeof value === "number" && Number.isFinite(value),
+		);
+	return {
+		answers,
+		...(number(usage.total_tokens, usage.tokens) !== undefined
+			? { tokens: number(usage.total_tokens, usage.tokens) }
+			: {}),
+		...(number(usage.cost, envelope.cost) !== undefined
+			? { cost: number(usage.cost, envelope.cost) }
+			: {}),
+	};
+}
+
+function statusClass(status: number): string {
+	return `${Math.floor(status / 100)}xx`;
 }
 
 function requestClassifier(
 	integrationId: string,
 	request: ClassifierRequest,
+	requestTelemetry?: RoutingClassifierRequestTelemetry,
 	signal?: AbortSignal,
+	observer?: RoutingClassifierTelemetryObserver,
 ): Effect.Effect<Record<string, ClassifierAnswer>, Error> {
-	const apiKey = configEnvValue("OPENCODE_API_KEY")?.trim();
-	if (!apiKey)
-		return Effect.fail(
-			new PermanentFailure(
-				`classifier ${integrationId} requires OPENCODE_API_KEY`,
-			),
-		);
 	return Effect.gen(function* () {
-		const response = yield* postJsonEffect(
+		const apiKey = configEnvValue("OPENCODE_API_KEY")?.trim();
+		if (!apiKey)
+			return yield* Effect.fail(
+				new PermanentFailure(
+					`classifier ${integrationId} requires OPENCODE_API_KEY`,
+				),
+			);
+		const startedAt = Date.now();
+		if (requestTelemetry !== undefined)
+			notify(observer?.request, requestTelemetry);
+		const attempted = yield* postJsonEffect(
 			request.url,
 			request.body,
 			{
@@ -180,28 +254,41 @@ function requestClassifier(
 				"Content-Type": "application/json",
 			},
 			{ signal, timeoutMs: CLASSIFIER_TIMEOUT_MS },
-		).pipe(
-			Effect.mapError(
-				(error) =>
-					new TransientFailure(
-						`classifier ${integrationId} request failed: ${error.message}`,
-					),
-			),
-		);
+		).pipe(Effect.either);
+		if (attempted._tag === "Left") {
+			const error = new TransientFailure(
+				`classifier ${integrationId} request failed: ${attempted.left.message}`,
+			);
+			notify(observer?.response, {
+				outcome: "error",
+				durationMs: Date.now() - startedAt,
+				statusClass: "transport",
+				errorClass: error.name,
+			});
+			return yield* Effect.fail(error);
+		}
+		const response = attempted.right;
 		if (response.status < 200 || response.status >= 300) {
 			const message = `classifier ${integrationId} provider returned ${response.status}`;
-			if (
+			const error =
 				response.status === 408 ||
 				response.status === 425 ||
 				response.status === 429 ||
 				response.status >= 500
-			)
-				return yield* Effect.fail(new TransientFailure(message));
-			return yield* Effect.fail(new PermanentFailure(message));
+					? new TransientFailure(message)
+					: new PermanentFailure(message);
+			notify(observer?.response, {
+				outcome: "error",
+				durationMs: Date.now() - startedAt,
+				status: response.status,
+				statusClass: statusClass(response.status),
+				errorClass: error.name,
+			});
+			return yield* Effect.fail(error);
 		}
-		return yield* Effect.try({
+		const parsed = yield* Effect.try({
 			try: () =>
-				parseAnswers(
+				parseResponse(
 					integrationId,
 					response.body,
 					Object.keys(request.body.questions),
@@ -212,7 +299,37 @@ function requestClassifier(
 					: new PermanentFailure(
 							`classifier ${integrationId} response parsing failed: ${error instanceof Error ? error.message : String(error)}`,
 						),
+		}).pipe(Effect.either);
+		if (parsed._tag === "Left") {
+			notify(observer?.response, {
+				outcome: "error",
+				durationMs: Date.now() - startedAt,
+				status: response.status,
+				statusClass: statusClass(response.status),
+				errorClass: parsed.left.name,
+			});
+			return yield* Effect.fail(parsed.left);
+		}
+		const counts = Object.values(parsed.right.answers).reduce(
+			(result, answer) => {
+				result[answer.type]++;
+				return result;
+			},
+			{ choice: 0, noul: 0 },
+		);
+		notify(observer?.response, {
+			outcome: "ok",
+			durationMs: Date.now() - startedAt,
+			status: response.status,
+			statusClass: statusClass(response.status),
+			choiceAnswers: counts.choice,
+			noulAnswers: counts.noul,
+			...(parsed.right.tokens !== undefined
+				? { tokens: parsed.right.tokens }
+				: {}),
+			...(parsed.right.cost !== undefined ? { cost: parsed.right.cost } : {}),
 		});
+		return parsed.right.answers;
 	});
 }
 
@@ -233,6 +350,7 @@ export function invokeRoutingClassifier(
 		artifacts: ClassifierInput["artifacts"];
 	},
 	signal?: AbortSignal,
+	observer?: RoutingClassifierTelemetryObserver,
 ): Effect.Effect<Record<string, ClassifierAnswer>, Error> {
 	const model = classifierModel(agents);
 	const instruction = specs.some((spec) => spec.mode === "roster")
@@ -240,7 +358,25 @@ export function invokeRoutingClassifier(
 		: ROUTING_SINGLE_INSTRUCTION;
 	const state = renderRoutingState(instruction, input);
 	const request = routingRequest(specs, model, state);
-	return requestClassifier("routing", request, signal);
+	return requestClassifier(
+		"routing",
+		request,
+		{
+			model,
+			integration: ROUTING_INTEGRATION,
+			stepsAsked: specs.length,
+			entriesOffered: specs.reduce(
+				(count, spec) => count + spec.entries.length,
+				0,
+			),
+			artifactsCount: input.artifacts.length,
+			stateBytes: Buffer.byteLength(state),
+			timeoutMs: CLASSIFIER_TIMEOUT_MS,
+			endpointHost: new URL(request.url).host,
+		},
+		signal,
+		observer,
+	);
 }
 
 const ROUTING_SINGLE_INSTRUCTION = `You assign model profiles to OpenSpec workflow steps.
@@ -518,5 +654,7 @@ export function invokeTriageClassifier(
 		classifierModel(agents),
 		renderTriageState(state),
 	);
-	return requestClassifier(TRIAGE_INTEGRATION, request, signal);
+	/** The triage request carries no routing telemetry observer, so the
+	 * request event stays unreported until it grows its own. */
+	return requestClassifier(TRIAGE_INTEGRATION, request, undefined, signal);
 }

@@ -22,6 +22,7 @@ import {
 } from "../src/workflow/classifier-runner.ts";
 import {
 	APPLY_PHASE_STEPS,
+	buildRoutingDecisionSummary,
 	type ClassifierAnswer,
 	confidentChoice,
 	parseClassifierAnswer,
@@ -244,6 +245,106 @@ describe("routing answer parsing", () => {
 		});
 		expect(result.profiles).toEqual(["p1", "p2"]);
 		expect(result.attention).toContain("roster");
+	});
+});
+
+describe("routing decision telemetry summary", () => {
+	const entries = [
+		{ label: "quick", profile: "base" },
+		{ label: "thorough", profile: "strong", default: true },
+	];
+
+	test("reports confident, fallback, noul, and roster decisions", () => {
+		const summary = buildRoutingDecisionSummary(
+			"plan",
+			[
+				{ stepId: "core.plan", mode: "single", entries },
+				{ stepId: "fusion.consolidate", mode: "single", entries },
+				{ stepId: "core.wiki", mode: "single", entries },
+				{
+					stepId: "fusion.plan",
+					mode: "roster",
+					entries: [
+						{ label: "a", profile: "p1" },
+						{ label: "b", profile: "p2" },
+						{ label: "c", profile: "p3" },
+					],
+				},
+			],
+			{
+				"core.plan": { type: "choice", choice: "quick", confidence: 0.8 },
+				"fusion.consolidate": {
+					type: "choice",
+					choice: "quick",
+					confidence: 0.2,
+				},
+				"core.wiki": { type: "noul" },
+				"fusion.plan": {
+					type: "choice",
+					probabilities: { a: 0.9, b: 0.8, c: 0.7 },
+				},
+			},
+		);
+		expect(summary.steps["core.plan"]).toEqual({
+			fallback: false,
+			label: "quick",
+			confidence: 0.8,
+			profile: "base",
+		});
+		expect(summary.steps["fusion.consolidate"]).toEqual({
+			fallback: true,
+			label: "thorough",
+			confidence: 0.2,
+			profile: "strong",
+		});
+		expect(summary.steps["core.wiki"]).toEqual({
+			fallback: true,
+			profile: "strong",
+		});
+		expect(summary.steps["fusion.plan"]).toMatchObject({
+			profiles: "p1,p2,p3",
+			selectedCount: 3,
+		});
+		expect(summary).toMatchObject({
+			phase: "plan",
+			askedStepCount: 4,
+			appliedStepCount: 4,
+			fallbackCount: 2,
+		});
+	});
+
+	test("does not retain criteria, prose answers, or keys derived from them", () => {
+		const secretCriteria = "criteria prose must stay private";
+		const secretAnswer = "free form answer must stay private";
+		const summary = buildRoutingDecisionSummary(
+			"apply",
+			[
+				{
+					stepId: "core.implementation",
+					mode: "single",
+					entries: [
+						{
+							label: "safe",
+							profile: "base",
+							criteria: { [secretCriteria]: secretCriteria },
+							default: true,
+						},
+					],
+				},
+			],
+			{
+				"core.implementation": {
+					type: "choice",
+					choice: secretAnswer,
+					confidence: secretAnswer as never,
+					probabilities: { [secretAnswer]: 1 },
+				},
+			},
+		);
+		const serialized = JSON.stringify(summary);
+		expect(serialized).not.toContain(secretCriteria);
+		expect(serialized).not.toContain(secretAnswer);
+		expect(Object.keys(summary.steps)).toEqual(["core.implementation"]);
 	});
 });
 

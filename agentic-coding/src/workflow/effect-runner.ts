@@ -25,6 +25,7 @@ import {
 	collectTriageClassifierState,
 	invokeRoutingClassifier,
 	invokeTriageClassifier,
+	type RoutingClassifierTelemetryObserver,
 } from "./classifier-runner.ts";
 import {
 	APPLY_PHASE_STEPS,
@@ -43,6 +44,7 @@ import { PermanentFailure, TransientFailure } from "./failures.ts";
 import * as H from "./herdr-schema.ts";
 import {
 	adapterTelemetryEnvelope,
+	redactTelemetryText,
 	type TelemetryEnvelope,
 	TelemetrySink,
 	traceparent,
@@ -740,6 +742,15 @@ export function agentEffectHandlers(
 			return false;
 		}
 	})();
+	const telemetryDirectory = (snapshot: WorkflowSnapshot): string =>
+		snapshot.definition.id === "wiki-comments" ||
+		snapshot.definition.id === "research"
+			? path.join(wikiWorkflowDataRoot(), snapshot.workflowId)
+			: path.join(
+					snapshot.metadata.worktree,
+					".herdr-workflow",
+					snapshot.workflowId,
+				);
 	/** Emit one adapter-layer baseline event; never throws and never mutates
 	 * workflow state (task 3.1–3.4). */
 	const emitAdapter = (
@@ -762,14 +773,7 @@ export function agentEffectHandlers(
 	): void => {
 		try {
 			telemetrySink(
-				snapshot.definition.id === "wiki-comments" ||
-					snapshot.definition.id === "research"
-					? path.join(wikiWorkflowDataRoot(), snapshot.workflowId)
-					: path.join(
-							snapshot.metadata.worktree,
-							".herdr-workflow",
-							snapshot.workflowId,
-						),
+				telemetryDirectory(snapshot),
 				adapterTelemetryEnvelope({
 					event: input.event,
 					at: new Date().toISOString(),
@@ -796,6 +800,104 @@ export function agentEffectHandlers(
 		} catch {
 			/* telemetry is observational; never alter the workflow outcome */
 		}
+	};
+	const emitRouting = (
+		snapshot: WorkflowSnapshot,
+		effect: ClaimedEffect,
+		input: {
+			event: "routing.request" | "routing.response";
+			model: string;
+			outcome?: "ok" | "error";
+			durationMs?: number;
+			tokens?: number;
+			cost?: number;
+			payload: Record<string, unknown>;
+		},
+	): void => {
+		try {
+			telemetrySink(
+				telemetryDirectory(snapshot),
+				adapterTelemetryEnvelope({
+					event: input.event,
+					at: new Date().toISOString(),
+					workflowId: snapshot.workflowId,
+					traceparent: traceparent(workflowTraceContext(snapshot.workflowId)),
+					stepId: snapshot.currentStep,
+					effectId: effect.id,
+					model: redactTelemetryText(input.model),
+					...(input.outcome ? { outcome: input.outcome } : {}),
+					...(input.durationMs !== undefined
+						? { durationMs: input.durationMs }
+						: {}),
+					...(input.tokens !== undefined ? { tokens: input.tokens } : {}),
+					...(input.cost !== undefined ? { cost: input.cost } : {}),
+					payload: input.payload,
+				}),
+			);
+		} catch {
+			/* telemetry is observational; never alter the workflow outcome */
+		}
+	};
+	const routingTelemetryObserver = (
+		snapshot: WorkflowSnapshot,
+		effect: ClaimedEffect,
+		phase: "plan" | "apply",
+	): RoutingClassifierTelemetryObserver => {
+		let requestTelemetry:
+			| { model: string; payload: Record<string, unknown> }
+			| undefined;
+		return {
+			request: (event) => {
+				requestTelemetry = {
+					model: event.model,
+					payload: {
+						"herdr.routing.integration": event.integration,
+						"herdr.routing.phase": phase,
+						"herdr.routing.steps.asked": event.stepsAsked,
+						"herdr.routing.entries.offered": event.entriesOffered,
+						"herdr.routing.artifacts.count": event.artifactsCount,
+						"herdr.routing.state.bytes": event.stateBytes,
+						"herdr.routing.timeout.ms": event.timeoutMs,
+						"herdr.routing.endpoint.host": redactTelemetryText(
+							event.endpointHost,
+						),
+					},
+				};
+				emitRouting(snapshot, effect, {
+					event: "routing.request",
+					...requestTelemetry,
+				});
+			},
+			response: (event) => {
+				if (!requestTelemetry) return;
+				emitRouting(snapshot, effect, {
+					event: "routing.response",
+					model: requestTelemetry.model,
+					outcome: event.outcome,
+					durationMs: event.durationMs,
+					...(event.tokens !== undefined ? { tokens: event.tokens } : {}),
+					...(event.cost !== undefined ? { cost: event.cost } : {}),
+					payload: {
+						...requestTelemetry.payload,
+						...(event.status !== undefined
+							? { "herdr.routing.status": event.status }
+							: {}),
+						"herdr.routing.status.class": event.statusClass,
+						...(event.errorClass
+							? {
+									"herdr.error.class": redactTelemetryText(event.errorClass),
+								}
+							: {}),
+						...(event.choiceAnswers !== undefined
+							? { "herdr.routing.answers.choice": event.choiceAnswers }
+							: {}),
+						...(event.noulAnswers !== undefined
+							? { "herdr.routing.answers.noul": event.noulAnswers }
+							: {}),
+					},
+				});
+			},
+		};
 	};
 	return {
 		"workspace.setup": {
@@ -1149,6 +1251,7 @@ export function agentEffectHandlers(
 						agents,
 						input,
 						signal,
+						routingTelemetryObserver(snapshot, effect, phase),
 					);
 					return { integration: ROUTING_INTEGRATION, phase, answers };
 				}),
