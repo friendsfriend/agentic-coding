@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { HerdrPort } from "../src/workflow/adapters.ts";
+import type { HerdrCli } from "../src/multiplexer/herdr/cli.ts";
 import { SIDEBAR_PANE_TOKENS } from "../src/workflow/sidebar.ts";
 import { reconcileSidebarOnce } from "../src/workflow/sidebar-observer.ts";
 import {
@@ -23,11 +23,11 @@ import {
 } from "../src/workflow/sidebar-sync.ts";
 
 function fakeHerdr(handlers: Record<string, (args: string[]) => unknown>): {
-	herdr: HerdrPort;
+	herdr: HerdrCli;
 	calls: string[][];
 } {
 	const calls: string[][] = [];
-	const herdr: HerdrPort = {
+	const herdr: HerdrCli = {
 		call(...args: string[]) {
 			calls.push(args);
 			for (const [prefix, handler] of Object.entries(handlers))
@@ -109,7 +109,7 @@ describe("sidebar metadata publication", () => {
 		const diagnostics = new BoundedSidebarDiagnostics((message) =>
 			messages.push(message),
 		);
-		const failing: HerdrPort = {
+		const failing: HerdrCli = {
 			call() {
 				throw new Error("the 'agent list' subcommand is not supported");
 			},
@@ -187,7 +187,7 @@ describe("sidebar metadata publication", () => {
 	});
 
 	test("a missing Herdr binary fails as a bounded error, never a crash", async () => {
-		const missing: HerdrPort = {
+		const missing: HerdrCli = {
 			call() {
 				throw new Error("herdr: command not found");
 			},

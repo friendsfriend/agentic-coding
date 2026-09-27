@@ -33,6 +33,21 @@ export function scheduleDrain(
 	const argv = detachedDrainArgv(entry, repo);
 	if (limit !== 20) argv.push("--limit", String(limit));
 	argv.push("--wait-ms", String(waitMs));
+	const env = detachedDrainEnvironment(process.env);
+	const child = Bun.spawn(argv, {
+		detached: true,
+		stdio: ["ignore", "ignore", "ignore"],
+		cwd: process.cwd(),
+		env,
+	});
+	child.unref();
+}
+
+/** The detached drain's bounded environment allowlist: runtime selection and
+ * both runtimes' connection variables, plus the process basics. */
+export function detachedDrainEnvironment(
+	source: NodeJS.ProcessEnv,
+): Record<string, string> {
 	const safeKeys = [
 		"PATH",
 		"HOME",
@@ -41,29 +56,28 @@ export function scheduleDrain(
 		"LANG",
 		"LC_ALL",
 		"LC_MESSAGES",
+		"AGENTIC_CODING_MULTIPLEXER",
 		"HERDR_ENV",
 		"HERDR_BIN_PATH",
 		"HERDR_SOCKET_PATH",
 		"HERDR_WORKFLOW_CONFIG",
 		"HERDR_WIKI_DIR",
+		"LUVUS_ENV",
+		"LUVUS_BIN_PATH",
+		"LUVUS_SOCKET_PATH",
+		"LUVUS_API_ADDRESS",
+		"LUVUS_HOME",
+		"LUVUS_SESSION",
+		"LUVUS_PANE_ID",
 		"OPENCODE_API_KEY",
 	];
-	// The detached drain resolves the same configuration root as its parent.
-	const env = {
+	return {
 		...Object.fromEntries(
 			safeKeys.flatMap((key) =>
-				process.env[key] === undefined
-					? []
-					: [[key, process.env[key] as string]],
+				source[key] === undefined ? [] : [[key, source[key] as string]],
 			),
 		),
-		[CONFIG_ROOT_VAR]: resolveConfigRoot(),
+		// The detached drain resolves the same configuration root as its parent.
+		[CONFIG_ROOT_VAR]: source[CONFIG_ROOT_VAR] ?? resolveConfigRoot(),
 	};
-	const child = Bun.spawn(argv, {
-		detached: true,
-		stdio: ["ignore", "ignore", "ignore"],
-		cwd: process.cwd(),
-		env,
-	});
-	child.unref();
 }

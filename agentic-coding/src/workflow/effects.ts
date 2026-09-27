@@ -13,6 +13,7 @@ import {
 import type { WorkflowExecutionSettings } from "../contracts/workflow.ts";
 import { loadEnvFile, resolveEnvReference } from "../env-file.ts";
 import { Herdr } from "../herdr-client.ts";
+import { MULTIPLEXER_IDS, type MultiplexerId } from "../multiplexer/port.ts";
 import { TELEMETRY_FLUSH_BUDGET_MS } from "./observability.ts";
 
 export { Herdr };
@@ -265,6 +266,9 @@ export function deepMerge<T extends object>(base: T, overlay: unknown): T {
 }
 
 export interface WorkflowConfig {
+	/** Runtime-neutral multiplexer selector; `AGENTIC_CODING_MULTIPLEXER`
+	 * overrides it and `herdr` is the default (add-multiplexer-adapters). */
+	multiplexer?: MultiplexerId;
 	/** Legacy-only input migrated by profile parser. */
 	models?: Record<string, string>;
 	thinking?: Record<string, string>;
@@ -406,11 +410,13 @@ function resolveConfigWithProvenance(
 		typeof options === "string" ? { repository: options } : options;
 	const envPath = process.env.HERDR_WORKFLOW_CONFIG;
 	if (envPath) {
+		const environmentConfig = deepMerge(
+			structuredClone(DEFAULT_CONFIG),
+			readConfigDocument(envPath),
+		);
+		validateMultiplexerSelector(environmentConfig);
 		return {
-			config: deepMerge(
-				structuredClone(DEFAULT_CONFIG),
-				readConfigDocument(envPath),
-			),
+			config: environmentConfig,
 			provenance: { source: "environment", files: [envPath] },
 		};
 	}
@@ -478,6 +484,7 @@ function resolveConfigWithProvenance(
 			);
 		cfg = deepMerge(cfg, readConfigDocument(projectConfig));
 	}
+	validateMultiplexerSelector(cfg);
 	const baseSource: ConfigProvenance["source"] = file
 		? file === canonical
 			? "user"
@@ -495,6 +502,21 @@ function resolveConfigWithProvenance(
 			...(projectRoot ? { repository: projectRoot } : {}),
 		},
 	};
+}
+
+/** Reject an unsupported selector at configuration load, with the supported
+ * identifiers named, rather than deferring the failure to first port use. */
+function validateMultiplexerSelector(config: WorkflowConfig): void {
+	const value = (config as { multiplexer?: unknown }).multiplexer;
+	if (value === undefined) return;
+	if (
+		typeof value === "string" &&
+		(MULTIPLEXER_IDS as readonly string[]).includes(value)
+	)
+		return;
+	throw new Error(
+		`unsupported multiplexer '${String(value)}'; supported multiplexers: ${MULTIPLEXER_IDS.join(", ")}`,
+	);
 }
 
 export function loadConfig(options?: ConfigOptions): WorkflowConfig {

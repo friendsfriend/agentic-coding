@@ -22,6 +22,7 @@ import {
 	EffectRunner,
 	effectRunnerTest,
 	PermanentFailure,
+	resolveLiveAgentAsync,
 	TransientFailure,
 } from "../src/workflow/effect-runner.ts";
 import {
@@ -33,6 +34,7 @@ import {
 	researchWorkflowTarget,
 	WorkflowEngine,
 } from "../src/workflow/runtime.ts";
+import { asPort } from "./fakes.ts";
 
 class Adapter implements AgentAdapter {
 	readonly id = "pi" as const;
@@ -484,7 +486,7 @@ test("research workspace setup launches and prompts the researcher", async () =>
 		const handlers = agentEffectHandlers(researchWorkflowTarget(), engine, {
 			registry,
 			adapters: new Map([["pi", adapter]]),
-			herdr,
+			port: asPort(herdr),
 			async paneForRun() {
 				return { paneId: "research-pane", owned: true };
 			},
@@ -574,7 +576,7 @@ test("wiki run's assignment carries the researcher's full recorded handoff verba
 		const handlers = agentEffectHandlers(researchWorkflowTarget(), engine, {
 			registry,
 			adapters: new Map([["pi", adapter]]),
-			herdr,
+			port: asPort(herdr),
 			async paneForRun() {
 				return { paneId: "research-pane", owned: true };
 			},
@@ -727,7 +729,7 @@ test("runner retains stale agent after repair", async () => {
 		const handlers = agentEffectHandlers(repo, engine, {
 			registry,
 			adapters: new Map([["pi", adapter]]),
-			herdr,
+			port: asPort(herdr),
 			async paneForRun() {
 				return { paneId: "pane", owned: true };
 			},
@@ -857,7 +859,7 @@ test("workspace setup recognizes a dashboard tab carrying a status glyph", async
 		const handlers = agentEffectHandlers(repo, engine, {
 			registry,
 			adapters: new Map([["pi", adapter]]),
-			herdr,
+			port: asPort(herdr),
 			async paneForRun() {
 				return { paneId: "pane", owned: true };
 			},
@@ -969,7 +971,7 @@ test("launch failure on a reused pane does not close it", async () => {
 		const handlers = agentEffectHandlers(repo, engine, {
 			registry,
 			adapters: new Map([["pi", new FailingAdapter()]]),
-			herdr,
+			port: asPort(herdr),
 			async paneForRun() {
 				// A live agent already resolved to this pane; the allocator did not
 				// create it, so a launch failure must not close it.
@@ -1099,7 +1101,7 @@ test("launch failure on a newly created pane still cleans it up", async () => {
 		const handlers = agentEffectHandlers(repo, engine, {
 			registry,
 			adapters: new Map([["pi", new FailingAdapter()]]),
-			herdr,
+			port: asPort(herdr),
 			async paneForRun() {
 				// This allocation call created the pane itself (e.g. a fresh tab),
 				// so a launch failure must still clean it up.
@@ -1227,7 +1229,7 @@ test("launch retry recovers stable Herdr agent without duplicating launch, minti
 		const handlers = agentEffectHandlers(repo, engine, {
 			registry,
 			adapters: new Map([["pi", adapter]]),
-			herdr,
+			port: asPort(herdr),
 			async paneForRun() {
 				throw new Error("must not create pane");
 			},
@@ -1374,7 +1376,7 @@ test("review-comment loop reuses the planner agent by stable name instead of lau
 			...agentEffectHandlers(repo, engine, {
 				registry,
 				adapters: new Map([["pi", adapter]]),
-				herdr,
+				port: asPort(herdr),
 				async paneForRun() {
 					paneForRunCalls++;
 					if (paneForRunCalls > 1)
@@ -1586,7 +1588,7 @@ test("canonical agent names are stable across generations and grouped rounds", (
 	}
 });
 
-test("resolveLiveAgent reuses the live pane and recovers stale handles by identity", () => {
+test("resolveLiveAgent reuses the live pane and recovers stale handles by identity", async () => {
 	const run = {
 		stepId: "core.implementation",
 		role: "worker",
@@ -1598,19 +1600,20 @@ test("resolveLiveAgent reuses the live pane and recovers stale handles by identi
 		run,
 	);
 	const legacy = effectRunnerTest.legacyRunName("change", run);
-	const herdrWith = (responses: Record<string, unknown>) => ({
-		call(...args: string[]) {
-			if (args[0] === "agent" && args[1] === "get") {
-				if (!(args[2] in responses)) throw new Error(`not found: ${args[2]}`);
-				return responses[args[2]];
-			}
-			throw new Error(`unexpected ${args.join(" ")}`);
-		},
-	});
+	const portWith = (responses: Record<string, unknown>) =>
+		asPort({
+			call(...args: string[]) {
+				if (args[0] === "agent" && args[1] === "get") {
+					if (!(args[2] in responses)) throw new Error(`not found: ${args[2]}`);
+					return responses[args[2]];
+				}
+				throw new Error(`unexpected ${args.join(" ")}`);
+			},
+		});
 
 	// Stale stored pane id, live agent under the canonical name: adopt its pane.
-	const stale = effectRunnerTest.resolveLiveAgent(
-		herdrWith({
+	const stale = await resolveLiveAgentAsync(
+		portWith({
 			[canonical]: {
 				agent: {
 					pane_id: "moved-pane",
@@ -1628,8 +1631,8 @@ test("resolveLiveAgent reuses the live pane and recovers stale handles by identi
 	expect(stale?.name).toBe(canonical);
 
 	// Live handle confirmed via its own pane id: reused as-is.
-	const healthy = effectRunnerTest.resolveLiveAgent(
-		herdrWith({
+	const healthy = await resolveLiveAgentAsync(
+		portWith({
 			"kept-pane": {
 				agent: { pane_id: "kept-pane", agent_status: "idle" },
 			},
@@ -1641,8 +1644,8 @@ test("resolveLiveAgent reuses the live pane and recovers stale handles by identi
 	expect(healthy?.paneId).toBe("kept-pane");
 
 	// Live agent reachable only under the legacy name: adopted and re-keyed.
-	const migrated = effectRunnerTest.resolveLiveAgent(
-		herdrWith({
+	const migrated = await resolveLiveAgentAsync(
+		portWith({
 			[legacy]: { agent: { pane_id: "legacy-pane", agent_status: "working" } },
 		}),
 		"change",
@@ -1654,12 +1657,12 @@ test("resolveLiveAgent reuses the live pane and recovers stale handles by identi
 
 	// No live agent anywhere: the only outcome allowed to spawn.
 	expect(
-		effectRunnerTest.resolveLiveAgent(herdrWith({}), "change", "openspec", run),
+		await resolveLiveAgentAsync(portWith({}), "change", "openspec", run),
 	).toBeUndefined();
 	// A dead tracked process reports 'unknown' and must not count as live.
 	expect(
-		effectRunnerTest.resolveLiveAgent(
-			herdrWith({
+		await resolveLiveAgentAsync(
+			portWith({
 				[canonical]: { agent: { pane_id: "p", agent_status: "unknown" } },
 			}),
 			"change",
@@ -1765,7 +1768,7 @@ test("proposal workspace setup stays on the dirty current checkout", async () =>
 		const handlers = agentEffectHandlers(repo, engine, {
 			registry: registerBuiltins(),
 			adapters: new Map(),
-			herdr,
+			port: asPort(herdr),
 			async paneForRun() {
 				return { paneId: "pane", owned: true };
 			},
@@ -1903,7 +1906,7 @@ test("workspace retry recovers stable branch and workspace identity", async () =
 		const handlers = agentEffectHandlers(repo, engine, {
 			registry,
 			adapters: new Map([["pi", adapter]]),
-			herdr,
+			port: asPort(herdr),
 			async paneForRun() {
 				return { paneId: "pane", owned: true };
 			},
@@ -2252,11 +2255,11 @@ test("adapter baseline telemetry emits launch, delivery, stop, and failure", asy
 		const handlers = agentEffectHandlers(repo, engine, {
 			registry,
 			adapters: new Map([["pi", adapter]]),
-			herdr: {
+			port: asPort({
 				call() {
 					throw new Error("unexpected herdr call");
 				},
-			},
+			}),
 			async paneForRun() {
 				return { paneId: "pane", owned: true };
 			},
@@ -2399,7 +2402,7 @@ function classifierHandlerFixture(
 	const handlers = agentEffectHandlers(repo, engine, {
 		registry,
 		adapters: new Map(),
-		herdr: { call: () => ({}) },
+		port: asPort({ call: () => ({}) }),
 		paneForRun: async () => ({ paneId: "unused", owned: false }),
 		telemetry,
 	});

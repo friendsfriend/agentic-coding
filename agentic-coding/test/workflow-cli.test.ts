@@ -23,6 +23,7 @@ import {
 } from "../src/workflow/effect-runner.ts";
 import { QUESTION_WAIT_MS, WorkflowEngine } from "../src/workflow/runtime.ts";
 import type { StepBehavior } from "../src/workflow/steps/types.ts";
+import { asPort } from "./fakes.ts";
 
 const openspecFullDigest = registerBuiltins().definition("openspec", 1).digest;
 
@@ -282,7 +283,7 @@ describe("breaking workflow CLI surface", () => {
 			const handlers = agentEffectHandlers(repo, workflowEngine, {
 				registry,
 				adapters: new Map([["pi", new StubAdapter()]]),
-				herdr: stubHerdr(),
+				port: asPort(stubHerdr()),
 				async paneForRun() {
 					return { paneId: "pane", owned: true };
 				},
@@ -401,7 +402,7 @@ describe("breaking workflow CLI surface", () => {
 			const handlers = agentEffectHandlers(repo, workflowEngine, {
 				registry,
 				adapters: new Map([["pi", new StubAdapter()]]),
-				herdr: stubHerdr(),
+				port: asPort(stubHerdr()),
 				async paneForRun() {
 					return { paneId: "pane", owned: true };
 				},
@@ -520,7 +521,7 @@ describe("breaking workflow CLI surface", () => {
 		const reused = await paneForRunFactory(
 			fakeEngine,
 			"/repo",
-			herdrWithLive(true),
+			asPort(herdrWithLive(true)),
 		)(run.id);
 		expect(reused).toEqual({
 			paneId: "live-pane",
@@ -536,7 +537,7 @@ describe("breaking workflow CLI surface", () => {
 		const spawned = await paneForRunFactory(
 			fakeEngine,
 			"/repo",
-			herdrWithLive(false),
+			asPort(herdrWithLive(false)),
 		)(run.id);
 		expect(spawned).toEqual({
 			paneId: "new-pane",
@@ -603,13 +604,13 @@ describe("breaking workflow CLI surface", () => {
 
 		// Canonical identity ignores attempt/round, so a later verification round
 		// or fix loop resolves this same live agent and its tab.
-		expect(await paneForRunFactory(fakeEngine, "/repo", herdr)(run.id)).toEqual(
-			{
-				paneId: "verifier-live",
-				tabId: "verifier-tab",
-				owned: false,
-			},
-		);
+		expect(
+			await paneForRunFactory(fakeEngine, "/repo", asPort(herdr))(run.id),
+		).toEqual({
+			paneId: "verifier-live",
+			tabId: "verifier-tab",
+			owned: false,
+		});
 		expect(
 			calls.some((args) => args[0] === "tab" && args[1] === "create"),
 		).toBe(false);
@@ -652,13 +653,13 @@ describe("breaking workflow CLI surface", () => {
 			},
 		};
 
-		expect(await paneForRunFactory(fakeEngine, "/repo", herdr)(run.id)).toEqual(
-			{
-				paneId: "triage-pane",
-				tabId: "triage-tab",
-				owned: true,
-			},
-		);
+		expect(
+			await paneForRunFactory(fakeEngine, "/repo", asPort(herdr))(run.id),
+		).toEqual({
+			paneId: "triage-pane",
+			tabId: "triage-tab",
+			owned: true,
+		});
 		const created = calls.find(
 			(args) => args[0] === "tab" && args[1] === "create",
 		);
@@ -732,7 +733,7 @@ describe("breaking workflow CLI surface", () => {
 		// anchor for every verifier. A verifier now owns a separate role tab
 		// instead, and triage is excluded from its round.
 		expect(
-			await paneForRunFactory(fakeEngine, "/repo", herdr)(verifier.id),
+			await paneForRunFactory(fakeEngine, "/repo", asPort(herdr))(verifier.id),
 		).toEqual({ paneId: "verif-pane", tabId: "verif-tab", owned: true });
 		expect(
 			calls.some((args) => args[0] === "pane" && args[1] === "split"),
@@ -818,13 +819,17 @@ describe("breaking workflow CLI surface", () => {
 			},
 		};
 
-		expect(await paneForRunFactory(fakeEngine, "/repo", herdr)(qv.id)).toEqual({
+		expect(
+			await paneForRunFactory(fakeEngine, "/repo", asPort(herdr))(qv.id),
+		).toEqual({
 			paneId: "pane-1",
 			tabId: "tab-1",
 			owned: true,
 		});
 		qvLive = true;
-		expect(await paneForRunFactory(fakeEngine, "/repo", herdr)(sv.id)).toEqual({
+		expect(
+			await paneForRunFactory(fakeEngine, "/repo", asPort(herdr))(sv.id),
+		).toEqual({
 			paneId: "pane-2",
 			tabId: "tab-2",
 			owned: true,
@@ -902,7 +907,11 @@ describe("breaking workflow CLI surface", () => {
 				return {};
 			},
 		};
-		const pane = await paneForRunFactory(fakeEngine, "/repo", herdr)(qv.id);
+		const pane = await paneForRunFactory(
+			fakeEngine,
+			"/repo",
+			asPort(herdr),
+		)(qv.id);
 		// The sibling's stale stored handle is probed and discarded, so the split
 		// anchors on the pane found via the canonical name instead of the dead
 		// pane or falling through to tab creation.
@@ -1005,7 +1014,11 @@ describe("breaking workflow CLI surface", () => {
 				return {};
 			},
 		};
-		const pane = await paneForRunFactory(fakeEngine, "/repo", herdr)(third.id);
+		const pane = await paneForRunFactory(
+			fakeEngine,
+			"/repo",
+			asPort(herdr),
+		)(third.id);
 		expect(pane).toEqual({ paneId: "idle", owned: false });
 	});
 	test("shared-group third-run pane reuse spawns a fresh split when every bottom-pane candidate is occupied", async () => {
@@ -1080,7 +1093,11 @@ describe("breaking workflow CLI surface", () => {
 				return {};
 			},
 		};
-		const pane = await paneForRunFactory(fakeEngine, "/repo", herdr)(third.id);
+		const pane = await paneForRunFactory(
+			fakeEngine,
+			"/repo",
+			asPort(herdr),
+		)(third.id);
 		expect(pane).toEqual({
 			paneId: "split-pane",
 			tabId: "tab-split",

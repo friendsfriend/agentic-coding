@@ -8,7 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { WorkflowView } from "../src/contracts/workflow.ts";
-import type { HerdrPort } from "../src/workflow/adapters.ts";
+import type { HerdrCli } from "../src/multiplexer/herdr/cli.ts";
 import {
 	DEFAULT_CONFIG,
 	herdrSidebarEnabled,
@@ -99,10 +99,10 @@ interface RecordedCall {
 function fakeHerdr(options: {
 	agentStatus?: string;
 	agentStatusReads?: string[];
-}): { herdr: HerdrPort; calls: RecordedCall[] } {
+}): { herdr: HerdrCli; calls: RecordedCall[] } {
 	const calls: RecordedCall[] = [];
 	let reads = 0;
-	const herdr: HerdrPort = {
+	const herdr: HerdrCli = {
 		call(...args: string[]) {
 			calls.push({ args });
 			if (args[0] === "agent" && args[1] === "list") {
@@ -321,7 +321,7 @@ describe("sidebar presentation lifecycle (task 4.6)", () => {
 
 	test("unmanaged fallback cards survive the next refresh", async () => {
 		const calls: RecordedCall[] = [];
-		const herdr: HerdrPort = {
+		const herdr: HerdrCli = {
 			call(...args: string[]) {
 				calls.push({ args });
 				if (args[0] === "agent" && args[1] === "list")
@@ -382,7 +382,7 @@ describe("sidebar presentation lifecycle (task 4.6)", () => {
 	test("a live title change never drops the unmanaged fallback workflow row", async () => {
 		let title = "vim";
 		const calls: RecordedCall[] = [];
-		const herdr: HerdrPort = {
+		const herdr: HerdrCli = {
 			call(...args: string[]) {
 				calls.push({ args });
 				if (args[0] === "agent" && args[1] === "list") return { agents: [] };
@@ -426,7 +426,7 @@ describe("sidebar presentation lifecycle (task 4.6)", () => {
 
 	test("publication failure never throws and leaves committed facts alone", async () => {
 		const messages: string[] = [];
-		const failing: HerdrPort = {
+		const failing: HerdrCli = {
 			call() {
 				throw new Error("herdr unavailable");
 			},
@@ -451,7 +451,7 @@ describe("sidebar presentation lifecycle (task 4.6)", () => {
 
 	test("a vanished pane is skipped and never blocks the remaining cards", async () => {
 		const calls: string[][] = [];
-		const herdr: HerdrPort = {
+		const herdr: HerdrCli = {
 			call(...args: string[]) {
 				calls.push(args);
 				if (args[1] === "report-metadata" && args[2] === "w1:p1")

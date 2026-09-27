@@ -4,13 +4,14 @@
 // event stream. Dashboards refresh from that stream instead of opening a local
 // Herdr socket or watching store files.
 
+import { multiplexerPort } from "../multiplexer/factory.ts";
 import {
 	onWorkflowExecutionError,
 	onWorkflowExecutionProgress,
 	onWorkflowExecutionSettled,
 } from "../workflow/execution-coordinator.ts";
 import type { EventBroker } from "./events.ts";
-import { subscribeHerdrEvents } from "./herdr-events";
+import { subscribeMultiplexerEvents } from "./herdr-events";
 
 export interface WorkflowEventHub {
 	/** Register the execution-coordinator listeners for one repository. */
@@ -21,6 +22,7 @@ export interface WorkflowEventHub {
 export function startWorkflowEventHub(events: EventBroker): WorkflowEventHub {
 	const watched = new Set<string>();
 	const disposers: Array<() => void> = [];
+	let stopped = false;
 	const publish = (repo: string, workflowId?: string): void => {
 		events.publish({
 			domain: "workflow",
@@ -30,7 +32,7 @@ export function startWorkflowEventHub(events: EventBroker): WorkflowEventHub {
 		});
 	};
 	disposers.push(
-		subscribeHerdrEvents((event) => {
+		subscribeMultiplexerEvents(multiplexerPort(), (event) => {
 			events.publish({
 				domain: "workflow",
 				kind: "workflow.updated",
@@ -40,7 +42,9 @@ export function startWorkflowEventHub(events: EventBroker): WorkflowEventHub {
 	);
 	return {
 		watchRepo(repo) {
-			if (watched.has(repo)) return;
+			// A late registration after stop() must not re-arm process-global
+			// coordinator listeners that nothing will dispose.
+			if (stopped || watched.has(repo)) return;
 			watched.add(repo);
 			disposers.push(
 				onWorkflowExecutionProgress(repo, () => publish(repo)),
@@ -53,6 +57,7 @@ export function startWorkflowEventHub(events: EventBroker): WorkflowEventHub {
 			);
 		},
 		stop() {
+			stopped = true;
 			for (const dispose of disposers) dispose();
 			disposers.length = 0;
 			watched.clear();

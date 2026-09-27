@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { WorkflowView } from "../../contracts/workflow.ts";
 import { Herdr } from "../../herdr-client.ts";
+import { multiplexerPort } from "../../multiplexer/factory.ts";
 import { loadConfigWithProvenance } from "../../workflow/effects.ts";
 import {
 	dashboardApplication,
@@ -171,6 +172,7 @@ export function startWorkflowNotifications(
 	if (!workflowNotifications) {
 		workflowNotifications = new WorkflowNotifications({
 			herdr: new Herdr(),
+			port: multiplexerPort(),
 			views: () =>
 				governedNotificationRepos().flatMap((repo) => {
 					try {

@@ -11,10 +11,10 @@
 //   - `listProjects` moved from cli/commands/misc.ts
 import { Effect } from "effect";
 import { Herdr } from "../herdr-client.ts";
+import { agentLifecycleOps, multiplexerPort } from "../multiplexer/factory.ts";
+import type { HerdrCli } from "../multiplexer/herdr/cli.ts";
 import {
 	type AgentAdapter,
-	HerdrLifecycle,
-	type HerdrPort,
 	OpenCodeAdapter,
 	OpenCodeV2Adapter,
 	PiAdapter,
@@ -66,8 +66,8 @@ export async function drainEffects(
 	onFailure?: (workflowId: string, message: string) => void,
 	onProgress?: () => void,
 ): Promise<number> {
-	const herdr = new Herdr();
-	const lifecycle = new HerdrLifecycle(herdr);
+	const port = multiplexerPort();
+	const lifecycle = agentLifecycleOps(port);
 	const adapters = new Map<string, AgentAdapter>([
 		["pi", new PiAdapter(lifecycle)],
 		["opencode", new OpenCodeAdapter(lifecycle)],
@@ -76,9 +76,9 @@ export async function drainEffects(
 	const handlers = agentEffectHandlers(repo, workflowEngine, {
 		registry,
 		adapters,
-		herdr,
+		port,
 		credentialPrompt,
-		paneForRun: paneForRunFactory(workflowEngine, repo, herdr),
+		paneForRun: paneForRunFactory(workflowEngine, repo, port),
 		telemetry: (directory, envelope) =>
 			new TelemetrySink(directory).emit(envelope),
 	});
@@ -104,14 +104,14 @@ export async function drainEffects(
 		if (Date.now() >= deadline) break;
 		await Bun.sleep(Math.min(DRAIN_POLL_MS, deadline - Date.now()));
 	} while (!signal?.aborted && Date.now() < deadline);
-	// Reflect run status transitions on the Herdr agent tabs. The engine owns
-	// the status, this boundary owns the transport, so the rename happens here
+	// Reflect run status transitions on the agent tabs. The engine owns the
+	// status, this boundary owns the transport, so the rename happens here
 	// after the effects that caused the transition have landed.
 	try {
 		for (const view of workflowEngine.list(repo)) {
 			if (!view.runs.some((run) => run.tabId)) continue;
 			await syncAgentTabLabels(
-				herdr,
+				port,
 				workflowEngine,
 				repo,
 				view.workflowId,
@@ -121,17 +121,18 @@ export async function drainEffects(
 	} catch {
 		/* tab labels are presentation-only; never fail the drain for them */
 	}
-	// Same post-commit boundary publishes the sidebar cards. Presentation-only
-	// and opt-in: a failure or a disabled preference never changes the drain's
-	// result (improve-herdr-workflow-sidebar).
-	await reconcileWorkflowSidebar(herdr, workflowEngine, repo, signal);
+	// Same post-commit boundary publishes the sidebar cards. The sidebar view
+	// integration is Herdr-only and deferred; it keeps the raw Herdr CLI.
+	// Presentation-only and opt-in: a failure or a disabled preference never
+	// changes the drain's result (improve-herdr-workflow-sidebar).
+	await reconcileWorkflowSidebar(new Herdr(), workflowEngine, repo, signal);
 	return completed;
 }
 
 /** Best-effort sidebar reconciliation after a committed mutation. Non-throwing
  * and skipped entirely unless the trusted user preference enables it. */
 export async function reconcileWorkflowSidebar(
-	herdr: HerdrPort,
+	herdr: HerdrCli,
 	workflowEngine: WorkflowEngine,
 	repo: string,
 	signal?: AbortSignal,

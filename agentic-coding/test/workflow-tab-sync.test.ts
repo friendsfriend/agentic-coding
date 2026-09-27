@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { HerdrPort } from "../src/workflow/adapters.ts";
+import { Effect } from "effect";
+import type { MultiplexerPort } from "../src/multiplexer/port.ts";
 import type { WorkflowEngine } from "../src/workflow/runtime.ts";
 import { syncAgentTabLabels } from "../src/workflow/tab-sync.ts";
 
@@ -25,32 +26,39 @@ function fakeEngine(input: {
 	} as unknown as WorkflowEngine;
 }
 
-function fakeHerdr(tabs: Array<{ tab_id: string; label: string }>) {
+/** Fake port recording the equivalent tab argv so the assertions stay about
+ * behavior, not transport. */
+function fakePort(tabs: Array<{ tab_id: string; label: string }>): {
+	port: MultiplexerPort;
+	calls: string[][];
+	tabs: Array<{ tab_id: string; label: string }>;
+} {
 	const calls: string[][] = [];
-	const herdr: HerdrPort = {
-		call(...args: string[]) {
-			calls.push(args);
-			if (args[0] === "tab" && args[1] === "list")
-				return { tabs: tabs.map((tab) => ({ ...tab })) };
-			if (args[0] === "tab" && args[1] === "rename") {
-				const target = tabs.find((tab) => tab.tab_id === args[2]);
-				if (target) target.label = args[3] ?? target.label;
-				return {};
-			}
-			return {};
+	const port = {
+		tabList: (workspaceId: string) => {
+			calls.push(["tab", "list", workspaceId]);
+			return Effect.succeed(
+				tabs.map((tab) => ({ tabId: tab.tab_id, label: tab.label })),
+			);
 		},
-	};
-	return { herdr, calls, tabs };
+		tabRename: (tabId: string, label: string) => {
+			calls.push(["tab", "rename", tabId, label]);
+			const target = tabs.find((tab) => tab.tab_id === tabId);
+			if (target) target.label = label;
+			return Effect.void;
+		},
+	} as unknown as MultiplexerPort;
+	return { port, calls, tabs };
 }
 
 describe("syncAgentTabLabels", () => {
 	test("renames a role tab to the glyph for its run status", async () => {
-		const { herdr, calls } = fakeHerdr([
+		const { port, calls } = fakePort([
 			{ tab_id: "t1", label: "worker" },
 			{ tab_id: "t2", label: "dashboard" },
 		]);
 		await syncAgentTabLabels(
-			herdr,
+			port,
 			fakeEngine({
 				workspace: "w1",
 				runs: [{ status: "working", tabId: "t1" }],
@@ -58,6 +66,7 @@ describe("syncAgentTabLabels", () => {
 			"/repo",
 			"wf",
 		);
+		expect(calls).toContainEqual(["tab", "list", "w1"]);
 		expect(calls).toContainEqual(["tab", "rename", "t1", "● worker"]);
 		// The dashboard tab has no run and is never touched.
 		expect(calls.some((args) => args[0] === "tab" && args[2] === "t2")).toBe(
@@ -66,9 +75,9 @@ describe("syncAgentTabLabels", () => {
 	});
 
 	test("is idempotent when the label already matches", async () => {
-		const { herdr, calls } = fakeHerdr([{ tab_id: "t1", label: "● worker" }]);
+		const { port, calls } = fakePort([{ tab_id: "t1", label: "● worker" }]);
 		await syncAgentTabLabels(
-			herdr,
+			port,
 			fakeEngine({
 				workspace: "w1",
 				runs: [{ status: "working", tabId: "t1" }],
@@ -82,9 +91,9 @@ describe("syncAgentTabLabels", () => {
 	});
 
 	test("updates a previously open tab once the run completes", async () => {
-		const { herdr, calls } = fakeHerdr([{ tab_id: "t1", label: "○ worker" }]);
+		const { port, calls } = fakePort([{ tab_id: "t1", label: "○ worker" }]);
 		await syncAgentTabLabels(
-			herdr,
+			port,
 			fakeEngine({
 				workspace: "w1",
 				runs: [{ status: "completed", tabId: "t1" }],
@@ -96,11 +105,11 @@ describe("syncAgentTabLabels", () => {
 	});
 
 	test("aggregates grouped verification runs sharing one tab", async () => {
-		const { herdr, calls } = fakeHerdr([
+		const { port, calls } = fakePort([
 			{ tab_id: "tv", label: "○ verification" },
 		]);
 		await syncAgentTabLabels(
-			herdr,
+			port,
 			fakeEngine({
 				workspace: "w1",
 				runs: [
@@ -115,9 +124,9 @@ describe("syncAgentTabLabels", () => {
 	});
 
 	test("a superseded failed run no longer pins the completed tab", async () => {
-		const { herdr, calls } = fakeHerdr([{ tab_id: "t1", label: "✗ worker" }]);
+		const { port, calls } = fakePort([{ tab_id: "t1", label: "✗ worker" }]);
 		await syncAgentTabLabels(
-			herdr,
+			port,
 			fakeEngine({
 				workspace: "w1",
 				runs: [
@@ -132,9 +141,9 @@ describe("syncAgentTabLabels", () => {
 	});
 
 	test("a superseded blocked run no longer pins the completed tab", async () => {
-		const { herdr, calls } = fakeHerdr([{ tab_id: "t1", label: "■ worker" }]);
+		const { port, calls } = fakePort([{ tab_id: "t1", label: "■ worker" }]);
 		await syncAgentTabLabels(
-			herdr,
+			port,
 			fakeEngine({
 				workspace: "w1",
 				runs: [
@@ -149,9 +158,9 @@ describe("syncAgentTabLabels", () => {
 	});
 
 	test("a latest working run reactivates the tab after a completed run", async () => {
-		const { herdr, calls } = fakeHerdr([{ tab_id: "t1", label: "✓ worker" }]);
+		const { port, calls } = fakePort([{ tab_id: "t1", label: "✓ worker" }]);
 		await syncAgentTabLabels(
-			herdr,
+			port,
 			fakeEngine({
 				workspace: "w1",
 				runs: [
@@ -166,11 +175,11 @@ describe("syncAgentTabLabels", () => {
 	});
 
 	test("aggregates the latest run of each role on a grouped tab", async () => {
-		const { herdr, calls } = fakeHerdr([
+		const { port, calls } = fakePort([
 			{ tab_id: "tv", label: "○ verification" },
 		]);
 		await syncAgentTabLabels(
-			herdr,
+			port,
 			fakeEngine({
 				workspace: "w1",
 				runs: [
@@ -185,21 +194,21 @@ describe("syncAgentTabLabels", () => {
 	});
 
 	test("ignores missing workspace, runs without tabs, and closed tabs", async () => {
-		const { herdr, calls } = fakeHerdr([{ tab_id: "t1", label: "worker" }]);
+		const { port, calls } = fakePort([{ tab_id: "t1", label: "worker" }]);
 		await syncAgentTabLabels(
-			herdr,
+			port,
 			fakeEngine({ runs: [{ status: "working", tabId: "t1" }] }),
 			"/repo",
 			"wf",
 		);
 		await syncAgentTabLabels(
-			herdr,
+			port,
 			fakeEngine({ workspace: "w1", runs: [{ status: "working" }] }),
 			"/repo",
 			"wf",
 		);
 		await syncAgentTabLabels(
-			herdr,
+			port,
 			fakeEngine({
 				workspace: "w1",
 				runs: [{ status: "working", tabId: "gone" }],
@@ -212,15 +221,13 @@ describe("syncAgentTabLabels", () => {
 		).toBe(false);
 	});
 
-	test("never throws when Herdr fails", async () => {
-		const herdr: HerdrPort = {
-			call() {
-				throw new Error("herdr unavailable");
-			},
-		};
+	test("never throws when the multiplexer fails", async () => {
+		const port = {
+			tabList: () => Effect.fail(new Error("runtime unavailable")),
+		} as unknown as MultiplexerPort;
 		await expect(
 			syncAgentTabLabels(
-				herdr,
+				port,
 				fakeEngine({
 					workspace: "w1",
 					runs: [{ status: "working", tabId: "t1" }],

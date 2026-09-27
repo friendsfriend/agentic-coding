@@ -5,7 +5,19 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { Effect } from "effect";
+import { HerdrMultiplexer } from "../src/multiplexer/herdr/index.ts";
+import type { MultiplexerPort } from "../src/multiplexer/port.ts";
 import type { Context } from "../src/workflow/effects.ts";
+
+/** Present an argv-shaped Herdr CLI fake as the runtime-neutral port, with
+ * instant confirmation sleeps so tests stay deterministic. */
+export function asPort(cli: {
+	call(...args: string[]): unknown;
+	callAsync?(args: string[], signal?: AbortSignal): Promise<unknown>;
+}): MultiplexerPort {
+	return new HerdrMultiplexer(cli, { sleep: () => Effect.void });
+}
 
 export const DEFAULT_CONFIG = {
 	models: {

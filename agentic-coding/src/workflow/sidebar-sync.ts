@@ -12,7 +12,7 @@
 // revisions, capabilities, effect attempts, or agent processes.
 import { createConnection, type Socket } from "node:net";
 import { decodeHerdrResult } from "../herdr-client.ts";
-import type { HerdrPort } from "./adapters.ts";
+import type { HerdrCli } from "../multiplexer/herdr/cli.ts";
 import {
 	agentListResult,
 	emptyResult,
@@ -41,7 +41,7 @@ export interface SidebarDiagnostics {
 export const SIDEBAR_SOCKET_TIMEOUT_MS = 2_000;
 
 async function call(
-	herdr: HerdrPort,
+	herdr: HerdrCli,
 	args: string[],
 	signal?: AbortSignal,
 ): Promise<unknown> {
@@ -182,7 +182,7 @@ export async function clearSidebarView(options: {
 /** Publish one pane card: one `report-metadata` call per card, with the owned
  * tokens only. Existing tokens of other sources are untouched. */
 export async function publishPaneCard(
-	herdr: HerdrPort,
+	herdr: HerdrCli,
 	card: SidebarPaneCard,
 	signal?: AbortSignal,
 ): Promise<void> {
@@ -193,7 +193,7 @@ export async function publishPaneCard(
 }
 
 export async function publishWorkspaceCard(
-	herdr: HerdrPort,
+	herdr: HerdrCli,
 	card: SidebarWorkspaceCard,
 	signal?: AbortSignal,
 ): Promise<void> {
@@ -210,7 +210,7 @@ export async function publishWorkspaceCard(
 }
 
 async function clearTokens(
-	herdr: HerdrPort,
+	herdr: HerdrCli,
 	kind: "pane" | "workspace",
 	clear: SidebarClear,
 	signal?: AbortSignal,
@@ -232,7 +232,7 @@ const SOURCE = SIDEBAR_SOURCE;
  * interleave here.
  */
 export async function publishSidebar(
-	herdr: HerdrPort,
+	herdr: HerdrCli,
 	publication: SidebarPublication,
 	signal?: AbortSignal,
 	diagnostics?: SidebarDiagnostics,
@@ -262,7 +262,7 @@ export async function publishSidebar(
  * plus the panes and workspaces that carry no workflow association. Never one
  * workflow CLI call per pane. */
 export async function readSidebarObservations(
-	herdr: HerdrPort,
+	herdr: HerdrCli,
 	signal?: AbortSignal,
 ): Promise<{
 	observations: SidebarObservation[];

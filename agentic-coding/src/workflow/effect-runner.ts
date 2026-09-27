@@ -10,14 +10,9 @@ import {
 	type WorkflowFailure,
 	type WorkflowSnapshot,
 } from "../contracts/workflow.ts";
-import { decodeHerdrResult } from "../herdr-client.ts";
-import {
-	type AgentAdapter,
-	HerdrLifecycle,
-	type HerdrPort,
-	herdrCallEffect,
-	type LaunchContext,
-} from "./adapters.ts";
+import { writeAgentRunEnv } from "../multiplexer/agent-env.ts";
+import type { MultiplexerError, MultiplexerPort } from "../multiplexer/port.ts";
+import type { AgentAdapter, LaunchContext } from "./adapters.ts";
 import { workflowAssets } from "./assets.ts";
 import { renderAssignment } from "./assignment.ts";
 import {
@@ -41,7 +36,6 @@ import {
 } from "./credentials.ts";
 import { loadConfig, loadConfigWithProvenance } from "./effects.ts";
 import { PermanentFailure, TransientFailure } from "./failures.ts";
-import * as H from "./herdr-schema.ts";
 import {
 	adapterTelemetryEnvelope,
 	redactTelemetryText,
@@ -166,6 +160,16 @@ const git = (
 		// durable retry budget rather than surfacing as defects.
 		Effect.mapError((failure) => new TransientFailure(failure.detail)),
 	);
+
+/** Map a port failure onto the runner's existing failure classes: ownership
+ * stays ownership (abort/skip), and every other boundary failure including a
+ * leaked `absent` is infrastructure-flavored (transient retry). Getters fold
+ * confirmed absence into `undefined`, so specific callers do not route it
+ * through this mapper. */
+export function classifyMultiplexerFailure(error: MultiplexerError): Error {
+	if (error.kind === "ownership-lost" || isOwnershipError(error)) return error;
+	return new TransientFailure(error.message);
+}
 
 export interface EffectHandler {
 	observe?(
@@ -534,14 +538,6 @@ export class EffectRunner {
 	}
 }
 
-async function herdrCall(
-	herdr: HerdrPort,
-	args: string[],
-	signal?: AbortSignal,
-): Promise<unknown> {
-	if (signal?.aborted) throw new Error("effect ownership was lost");
-	return herdr.callAsync ? herdr.callAsync(args, signal) : herdr.call(...args);
-}
 function samePath(left: string, right: string): boolean {
 	try {
 		return fs.realpathSync(left) === fs.realpathSync(right);
@@ -697,7 +693,7 @@ function commitAndPushWiki(
 export interface AdapterEffectOptions {
 	registry: WorkflowRegistry;
 	adapters: Map<string, AgentAdapter>;
-	herdr: HerdrPort;
+	port: MultiplexerPort;
 	credentialPrompt?: CredentialPrompt;
 	paneForRun(
 		runId: string,
@@ -714,19 +710,10 @@ export function agentEffectHandlers(
 	const snapshotFor = (effect: ClaimedEffect) =>
 		engine.getSnapshot(repo, effect.workflowId);
 	const setupWorkspaces = new Map<string, string>();
-	/** Herdr boundary failures are infrastructure-flavored (transient) unless
-	 * they are ownership losses, which must stay classified as ownership. */
-	const herdr = (
-		args: string[],
-		signal?: AbortSignal,
-	): Effect.Effect<unknown, Error, never> =>
-		herdrCallEffect(options.herdr, args, signal).pipe(
-			Effect.catchAll((error) =>
-				Effect.fail(
-					isOwnershipError(error) ? error : new TransientFailure(error.message),
-				),
-			),
-		);
+	const portCall = <A>(
+		effect: Effect.Effect<A, MultiplexerError>,
+	): Effect.Effect<A, Error, never> =>
+		effect.pipe(Effect.mapError((error) => classifyMultiplexerFailure(error)));
 	const live = (effect: ClaimedEffect): boolean =>
 		engine.effectIsLive(repo, effect.id, effect.lease ?? "");
 	const telemetrySink: (
@@ -913,14 +900,14 @@ export function agentEffectHandlers(
 							snapshot.metadata.workspace ??
 							(yield* p(() =>
 								recoverWorkspaceAsync(
-									options.herdr,
+									options.port,
 									snapshot.workflowId,
 									signal,
 								),
 							));
 						return workspace &&
 							(yield* p(() =>
-								dashboardReadyAsync(options.herdr, workspace, signal),
+								dashboardReadyAsync(options.port, workspace, signal),
 							))
 							? { workspace, worktree: snapshot.metadata.worktree, branch: "" }
 							: undefined;
@@ -954,12 +941,12 @@ export function agentEffectHandlers(
 					const workspace =
 						snapshot.metadata.workspace ??
 						(yield* p(() =>
-							recoverWorkspaceAsync(options.herdr, snapshot.workflowId, signal),
+							recoverWorkspaceAsync(options.port, snapshot.workflowId, signal),
 						));
 					return worktree &&
 						workspace &&
 						(yield* p(() =>
-							dashboardReadyAsync(options.herdr, workspace, signal),
+							dashboardReadyAsync(options.port, workspace, signal),
 						))
 						? { workspace, worktree, branch }
 						: undefined;
@@ -976,28 +963,19 @@ export function agentEffectHandlers(
 							snapshot.metadata.workspace ??
 							(yield* p(() =>
 								recoverWorkspaceAsync(
-									options.herdr,
+									options.port,
 									snapshot.workflowId,
 									signal,
 								),
 							));
 						if (!workspace) {
 							if (!live(effect)) return { cancelled: true };
-							const created = decodeHerdrResult(
-								H.workspaceCreateResult,
-								yield* herdr(
-									[
-										"workspace",
-										"create",
-										"--cwd",
-										snapshot.metadata.worktree,
-										"--label",
-										snapshot.workflowId,
-									],
-									signal,
-								),
-							);
-							workspace = created.workspace?.workspace_id;
+							workspace = (yield* portCall(
+								options.port.workspaceCreate({
+									cwd: snapshot.metadata.worktree,
+									label: snapshot.workflowId,
+								}),
+							)).workspaceId;
 						}
 						if (!workspace)
 							throw new TransientFailure(
@@ -1005,17 +983,15 @@ export function agentEffectHandlers(
 							);
 						setupWorkspaces.set(effect.id, workspace);
 						if (!live(effect)) {
-							try {
-								options.herdr.call("workspace", "close", workspace);
-							} catch {
-								/* best effort cleanup for a concurrently closed workflow */
-							}
+							yield* options.port
+								.workspaceClose(workspace)
+								.pipe(Effect.catchAll(() => Effect.void));
 							setupWorkspaces.delete(effect.id);
 							return { cancelled: true };
 						}
 						yield* p(() =>
 							ensureWorkspaceTabs(
-								options.herdr,
+								options.port,
 								workspace,
 								snapshot.metadata.worktree,
 								snapshot.workflowId,
@@ -1028,22 +1004,18 @@ export function agentEffectHandlers(
 						).pipe(
 							Effect.catchAll((error) =>
 								Effect.gen(function* () {
-									try {
-										options.herdr.call("workspace", "close", workspace);
-									} catch {
-										/* best effort cleanup after setup failure */
-									}
+									yield* options.port
+										.workspaceClose(workspace)
+										.pipe(Effect.catchAll(() => Effect.void));
 									setupWorkspaces.delete(effect.id);
 									return yield* Effect.fail(error);
 								}),
 							),
 						);
 						if (!live(effect)) {
-							try {
-								options.herdr.call("workspace", "close", workspace);
-							} catch {
-								/* best effort cleanup for a concurrently closed workflow */
-							}
+							yield* options.port
+								.workspaceClose(workspace)
+								.pipe(Effect.catchAll(() => Effect.void));
 							setupWorkspaces.delete(effect.id);
 							return { cancelled: true };
 						}
@@ -1081,30 +1053,19 @@ export function agentEffectHandlers(
 								)
 							: snapshot.metadata.repository;
 					let workspace = yield* p(() =>
-						recoverWorkspaceAsync(options.herdr, snapshot.workflowId, signal),
+						recoverWorkspaceAsync(options.port, snapshot.workflowId, signal),
 					);
 					if (input.mode === "worktree" && !worktree) {
-						const result = decodeHerdrResult(
-							H.worktreeCreateResult,
-							yield* herdr(
-								[
-									"worktree",
-									"create",
-									"--cwd",
-									snapshot.metadata.repository,
-									"--branch",
-									branch,
-									"--base",
-									input.baseCommit ?? snapshot.metadata.baseCommit,
-									"--label",
-									snapshot.workflowId,
-									"--no-focus",
-								],
-								signal,
-							),
+						const created = yield* portCall(
+							options.port.worktreeCreate({
+								cwd: snapshot.metadata.repository,
+								branch,
+								base: input.baseCommit ?? snapshot.metadata.baseCommit,
+								label: snapshot.workflowId,
+							}),
 						);
-						workspace = result.workspace?.workspace_id;
-						worktree = result.worktree?.path;
+						workspace = created.workspace.workspaceId;
+						worktree = created.worktree;
 						if (!workspace || !worktree)
 							throw new TransientFailure(
 								"Herdr worktree setup returned incomplete identity",
@@ -1142,21 +1103,12 @@ export function agentEffectHandlers(
 								"workspace setup returned incomplete identity",
 							);
 						if (!workspace) {
-							const result = decodeHerdrResult(
-								H.workspaceCreateResult,
-								yield* herdr(
-									[
-										"workspace",
-										"create",
-										"--cwd",
-										worktree,
-										"--label",
-										snapshot.workflowId,
-									],
-									signal,
-								),
-							);
-							workspace = result.workspace?.workspace_id;
+							workspace = (yield* portCall(
+								options.port.workspaceCreate({
+									cwd: worktree,
+									label: snapshot.workflowId,
+								}),
+							)).workspaceId;
 						}
 					}
 					if (!workspace || !worktree)
@@ -1165,7 +1117,7 @@ export function agentEffectHandlers(
 						);
 					yield* p(() =>
 						ensureWorkspaceTabs(
-							options.herdr,
+							options.port,
 							workspace,
 							worktree,
 							snapshot.workflowId,
@@ -1186,11 +1138,9 @@ export function agentEffectHandlers(
 							? resultWorkspace
 							: setupWorkspaces.get(effect.id);
 					if (workspace) {
-						try {
-							options.herdr.call("workspace", "close", workspace);
-						} catch {
-							/* best effort cleanup after concurrent workflow closure */
-						}
+						void Effect.runPromise(
+							options.port.workspaceClose(workspace),
+						).catch(() => {});
 					}
 					setupWorkspaces.delete(effect.id);
 				}),
@@ -1330,7 +1280,7 @@ export function agentEffectHandlers(
 					);
 					const resolved = yield* p(() =>
 						resolveLiveAgentAsync(
-							options.herdr,
+							options.port,
 							snapshot.workflowId,
 							snapshot.definition.id,
 							run,
@@ -1379,9 +1329,12 @@ export function agentEffectHandlers(
 					});
 					if (!live(effect)) return undefined;
 					const deliveryStartedAt = Date.now();
-					yield* herdr(
-						["agent", "prompt", resolved.paneId, expected.rendered.prompt],
-						signal,
+					yield* portCall(
+						options.port.agentPrompt(
+							resolved.paneId,
+							expected.rendered.prompt,
+							signal,
+						),
 					);
 					yield* Effect.sync(() => {
 						emitAdapter(
@@ -1435,7 +1388,7 @@ export function agentEffectHandlers(
 						const resolved = ownsClaim
 							? yield* p(() =>
 									resolveLiveAgentAsync(
-										options.herdr,
+										options.port,
 										snapshot.workflowId,
 										snapshot.definition.id,
 										run,
@@ -1556,11 +1509,9 @@ export function agentEffectHandlers(
 							pane.owned === true &&
 							engine.effectOwnsLease(repo, effect.id, effect.lease ?? "")
 						) {
-							try {
-								options.herdr.call("pane", "close", pane.paneId);
-							} catch {
-								/* preserve original launch error */
-							}
+							yield* options.port
+								.paneClose(pane.paneId)
+								.pipe(Effect.catchAll(() => Effect.void));
 						}
 						const detail =
 							launchOutcome.left instanceof Error
@@ -1652,7 +1603,7 @@ export function agentEffectHandlers(
 							: ownsClaim
 								? yield* p(() =>
 										resolveLiveAgentAsync(
-											options.herdr,
+											options.port,
 											snapshot.workflowId,
 											snapshot.definition.id,
 											run,
@@ -1771,7 +1722,7 @@ export function agentEffectHandlers(
 						run.handle ??
 						(yield* p(() =>
 							resolveLiveAgentAsync(
-								options.herdr,
+								options.port,
 								snapshot.workflowId,
 								snapshot.definition.id,
 								run,
@@ -1802,18 +1753,14 @@ export function agentEffectHandlers(
 				}),
 		},
 		"notification.show": {
-			execute: (effect, signal) =>
+			execute: (effect, _signal) =>
 				Effect.gen(function* () {
 					const body = effect.payload as { title?: string; body?: string };
-					yield* herdr(
-						[
-							"notification",
-							"show",
-							body.title ?? "Workflow update",
-							"--body",
-							body.body ?? "",
-						],
-						signal,
+					yield* portCall(
+						options.port.notify({
+							title: body.title ?? "Workflow update",
+							body: body.body ?? "",
+						}),
 					);
 					return { shown: true };
 				}),
@@ -2098,36 +2045,21 @@ export function agentEffectHandlers(
 				}),
 		},
 		"workspace.close": {
-			observe: (effect, signal) =>
+			observe: (effect, _signal) =>
 				Effect.gen(function* () {
 					const workspace = snapshotFor(effect).metadata.workspace;
 					if (!workspace) return true;
-					const outcome = yield* herdr(
-						["workspace", "get", workspace],
-						signal,
-					).pipe(Effect.either);
-					if (Either.isLeft(outcome)) {
-						// Herdr reporting the workspace as unknown is confirmed
-						// absence (already closed), not a failed observation.
-						if (
-							/not found|unknown workspace/i.test(
-								String(outcome.left?.message ?? ""),
-							)
-						)
-							return true;
-						return yield* Effect.fail(outcome.left);
-					}
-					const result = decodeHerdrResult(H.workspaceGetResult, outcome.right);
-					return (
-						result.workspace?.status === "closed" ||
-						Boolean(result.workspace?.closed_at)
-					);
+					// The getter folds confirmed absence into `undefined`, so an
+					// undefined result is already-closed and a failure stays a failure.
+					const info = yield* portCall(options.port.workspaceGet(workspace));
+					if (!info) return true;
+					return info.status === "closed" || Boolean(info.closedAt);
 				}),
-			execute: (effect, signal) =>
+			execute: (effect, _signal) =>
 				Effect.gen(function* () {
 					const workspace = snapshotFor(effect).metadata.workspace;
 					if (workspace)
-						yield* herdr(["workspace", "close", workspace], signal);
+						yield* portCall(options.port.workspaceClose(workspace));
 					return { closed: true };
 				}),
 		},
@@ -2199,53 +2131,37 @@ async function worktreeForBranch(
 	return undefined;
 }
 async function recoverWorkspaceAsync(
-	herdr: HerdrPort,
+	port: MultiplexerPort,
 	identity: string,
-	signal?: AbortSignal,
+	_signal?: AbortSignal,
 ): Promise<string | undefined> {
 	try {
-		const result = (await herdrCall(
-			herdr,
-			["workspace", "get", identity],
-			signal,
-		)) as { workspace?: { workspace_id?: string; status?: string } };
-		if (result.workspace?.status !== "closed" && result.workspace?.workspace_id)
-			return result.workspace.workspace_id;
+		const info = await Effect.runPromise(port.workspaceGet(identity));
+		if (info && info.status !== "closed") return info.workspaceId;
 	} catch {
 		/* fall through to list recovery */
 	}
 	try {
-		const result = (await herdrCall(herdr, ["workspace", "list"], signal)) as {
-			workspaces?: Array<{
-				workspace_id?: string;
-				label?: string;
-				name?: string;
-				status?: string;
-			}>;
-		};
-		return result.workspaces?.find(
+		const workspaces = await Effect.runPromise(port.workspaceList());
+		return workspaces.find(
 			(item) =>
 				item.status !== "closed" &&
 				(item.label === identity || item.name === identity),
-		)?.workspace_id;
+		)?.workspaceId;
 	} catch {
 		return undefined;
 	}
 }
 async function dashboardReadyAsync(
-	herdr: HerdrPort,
+	port: MultiplexerPort,
 	workspace: string,
-	signal?: AbortSignal,
+	_signal?: AbortSignal,
 ): Promise<boolean> {
 	try {
-		const result = (await herdrCall(
-			herdr,
-			["tab", "list", "--workspace", workspace],
-			signal,
-		)) as { tabs?: Array<{ label?: string }> };
+		const tabs = await Effect.runPromise(port.tabList(workspace));
 		// Tab labels carry a status glyph, so match the base name rather than the
 		// raw label (the dashboard tab can acquire a glyph when a run shares it).
-		return findAgentTabByBase(result.tabs ?? [], "dashboard") !== undefined;
+		return findAgentTabByBase(tabs, "dashboard") !== undefined;
 	} catch {
 		return false;
 	}
@@ -2280,42 +2196,25 @@ function writeDashboardHandoff(worktree: string, workflowId: string): string {
 }
 
 async function ensureWorkspaceTabs(
-	herdr: HerdrPort,
+	port: MultiplexerPort,
 	workspace: string,
 	worktree: string,
 	workflowId: string,
 	dashboardRepo = worktree,
-	signal?: AbortSignal,
+	_signal?: AbortSignal,
 ): Promise<void> {
-	const tabs =
-		(
-			(await herdrCall(
-				herdr,
-				["tab", "list", "--workspace", workspace],
-				signal,
-			)) as { tabs?: Array<{ tab_id?: string; label?: string }> }
-		).tabs ?? [];
+	const tabs = await Effect.runPromise(port.tabList(workspace));
 	if (!findAgentTabByBase(tabs, "dashboard")) {
-		const panes =
-			(
-				(await herdrCall(
-					herdr,
-					["pane", "list", "--workspace", workspace],
-					signal,
-				)) as { panes?: Array<{ pane_id?: string; tab_id?: string }> }
-			).panes ?? [];
-		const tab = tabs[0];
-		const root = tab?.tab_id
-			? panes.find((pane) => pane.tab_id === tab.tab_id)?.pane_id
-			: undefined;
-		if (!tab?.tab_id || !root)
-			throw new Error("workspace dashboard pane unavailable");
-		await Effect.runPromise(
-			new HerdrLifecycle(herdr, (ms) => Effect.sleep(ms), signal).waitForShell(
-				root,
-			),
+		const panes = await Effect.runPromise(
+			port.paneList({ workspaceId: workspace }),
 		);
-		await herdrCall(herdr, ["tab", "rename", tab.tab_id, "dashboard"], signal);
+		const tab = tabs[0];
+		const root = tab
+			? panes.find((pane) => pane.tabId === tab.tabId)?.paneId
+			: undefined;
+		if (!tab || !root) throw new Error("workspace dashboard pane unavailable");
+		await Effect.runPromise(port.waitForShell(root));
+		await Effect.runPromise(port.tabRename(tab.tabId, "dashboard"));
 		const command = [
 			writeDashboardHandoff(worktree, workflowId),
 			[
@@ -2329,37 +2228,25 @@ async function ensureWorkspaceTabs(
 				.map((value) => Bun.$.escape(value))
 				.join(" "),
 		].join("");
-		await herdrCall(herdr, ["pane", "run", root, command], signal);
+		await Effect.runPromise(port.paneRun(root, command));
 	}
 	// Auxiliary git tab (lazygit): best-effort — the dashboard's Git panel
 	// recreates it on demand if this fails (e.g. lazygit not installed).
 	if (!findAgentTabByBase(tabs, "git")) {
 		try {
-			const result = (await herdrCall(
-				herdr,
-				[
-					"tab",
-					"create",
-					"--workspace",
-					workspace,
-					"--cwd",
-					worktree,
-					"--label",
-					"git",
-				],
-				signal,
-			)) as { root_pane?: { pane_id?: string } };
-			const pane = result.root_pane?.pane_id;
-			if (pane)
-				await herdrCall(herdr, ["pane", "run", pane, "lazygit"], signal);
+			const created = await Effect.runPromise(
+				port.tabCreate({
+					workspaceId: workspace,
+					cwd: worktree,
+					label: "git",
+				}),
+			);
+			if (created.rootPaneId)
+				await Effect.runPromise(port.paneRun(created.rootPaneId, "lazygit"));
 		} catch {
-			try {
-				herdr.call(
-					"tab",
-					"close",
-					findAgentTabByBase(tabs, "git")?.tab_id ?? "",
-				);
-			} catch {}
+			const gitTab = findAgentTabByBase(tabs, "git")?.tabId;
+			if (gitTab)
+				await Effect.runPromise(port.tabClose(gitTab)).catch(() => {});
 		}
 	}
 }
@@ -2432,38 +2319,27 @@ export interface LiveAgent {
  * application root (complete-workflow-effect-cutover, task 3.1): production
  * callers await this instead of the removed synchronous herdr probe. */
 export async function isPaneLiveAsync(
-	herdr: HerdrPort,
+	port: MultiplexerPort,
 	paneId: string,
 	signal?: AbortSignal,
 ): Promise<boolean> {
-	return Boolean(await getLiveAgentAsync(herdr, paneId, signal));
-}
-function getLiveAgent(herdr: HerdrPort, key: string): HerdrAgent | undefined {
-	try {
-		const agent = (herdr.call("agent", "get", key) as { agent?: HerdrAgent })
-			.agent;
-		if (!agent?.pane_id) return undefined;
-		if (!agent.agent_status || agent.agent_status === "unknown")
-			return undefined;
-		return agent;
-	} catch {
-		return undefined;
-	}
+	return Boolean(await getLiveAgentAsync(port, paneId, signal));
 }
 async function getLiveAgentAsync(
-	herdr: HerdrPort,
+	port: MultiplexerPort,
 	key: string,
-	signal?: AbortSignal,
+	_signal?: AbortSignal,
 ): Promise<HerdrAgent | undefined> {
 	try {
-		const result = (await herdrCall(herdr, ["agent", "get", key], signal)) as {
-			agent?: HerdrAgent;
+		const agent = await Effect.runPromise(port.agentGet(key));
+		if (!agent?.paneId) return undefined;
+		if (!agent.status || agent.status === "unknown") return undefined;
+		return {
+			pane_id: agent.paneId,
+			...(agent.tabId ? { tab_id: agent.tabId } : {}),
+			...(agent.sessionId ? { session_id: agent.sessionId } : {}),
+			agent_status: agent.status,
 		};
-		const agent = result.agent;
-		if (!agent?.pane_id) return undefined;
-		if (!agent.agent_status || agent.agent_status === "unknown")
-			return undefined;
-		return agent;
 	} catch {
 		return undefined;
 	}
@@ -2491,7 +2367,7 @@ function adopt(name: string, live: HerdrAgent): LiveAgent {
  * the only outcome under which callers may spawn a fresh pane.
  */
 export async function resolveLiveAgentAsync(
-	herdr: HerdrPort,
+	port: MultiplexerPort,
 	workflowId: string,
 	definitionId: string,
 	run: { stepId: string; role: string; id: string; handle?: AgentHandle },
@@ -2500,38 +2376,18 @@ export async function resolveLiveAgentAsync(
 ): Promise<LiveAgent | undefined> {
 	const canonical = canonicalAgentName(workflowId, definitionId, run, step);
 	if (run.handle?.paneId) {
-		const live = await getLiveAgentAsync(herdr, run.handle.paneId, signal);
+		const live = await getLiveAgentAsync(port, run.handle.paneId, signal);
 		if (live && live.pane_id === run.handle.paneId)
 			return adopt(canonical, live);
 	}
-	const byCanonical = await getLiveAgentAsync(herdr, canonical, signal);
+	const byCanonical = await getLiveAgentAsync(port, canonical, signal);
 	if (byCanonical) return adopt(canonical, byCanonical);
 	const legacy = legacyRunName(workflowId, run, step);
 	if (legacy === canonical) return undefined;
-	const byLegacy = await getLiveAgentAsync(herdr, legacy, signal);
+	const byLegacy = await getLiveAgentAsync(port, legacy, signal);
 	return byLegacy ? adopt(canonical, byLegacy) : undefined;
 }
 
-export function resolveLiveAgent(
-	herdr: HerdrPort,
-	workflowId: string,
-	definitionId: string,
-	run: { stepId: string; role: string; id: string; handle?: AgentHandle },
-	step?: Pick<StepDefinition, "behavior">,
-): LiveAgent | undefined {
-	const canonical = canonicalAgentName(workflowId, definitionId, run, step);
-	if (run.handle?.paneId) {
-		const live = getLiveAgent(herdr, run.handle.paneId);
-		if (live && live.pane_id === run.handle.paneId)
-			return adopt(canonical, live);
-	}
-	const byCanonical = getLiveAgent(herdr, canonical);
-	if (byCanonical) return adopt(canonical, byCanonical);
-	const legacy = legacyRunName(workflowId, run, step);
-	if (legacy === canonical) return undefined;
-	const byLegacy = getLiveAgent(herdr, legacy);
-	return byLegacy ? adopt(canonical, byLegacy) : undefined;
-}
 /**
  * Publishes `.herdr-workflow/runtime-bin/by-agent/<canonicalName>` pointing at
  * the current run's run.env (relative to the worktree), via atomic rename. The
@@ -2539,7 +2395,7 @@ export function resolveLiveAgent(
  * deterministically for every name shape. Written at launch and at every
  * reused-prompt delivery so the pointer never outlives its run.
  */
-function shellQuote(value: string): string {
+function _shellQuote(value: string): string {
 	return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 function writeRunEnvironment(
@@ -2548,29 +2404,14 @@ function writeRunEnvironment(
 	environment: Record<string, string>,
 	runDirectory?: string,
 ): void {
-	const envFile = path.join(
-		runDirectory ?? path.join(worktree, ".herdr-workflow"),
-		"runtime-bin",
+	// One shared writer owns the `KEY='value'` format and its newline guard;
+	// the Herdr/Luvus launch paths write the same artifact through this helper.
+	writeAgentRunEnv({
+		cwd: worktree,
+		...(runDirectory ? { runDirectory } : {}),
 		runId,
-		"run.env",
-	);
-	const directory = openSecureDirectory(path.dirname(envFile), worktree);
-	try {
-		if (Object.values(environment).some((value) => /[\r\n]/.test(value)))
-			throw new Error("run environment values may not contain newlines");
-		const content = Object.entries(environment)
-			.filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
-			.map(([key, value]) => `${key}=${shellQuote(value)}`)
-			.join("\n");
-		writeAtomicPrivateFile(
-			directory,
-			path.basename(envFile),
-			`${content}\n`,
-			0o600,
-		);
-	} finally {
-		closeSecureDirectory(directory);
-	}
+		environment,
+	});
 }
 export function writeAgentEnvPointer(
 	worktree: string,
@@ -2605,7 +2446,7 @@ export const effectRunnerTest = {
 	canonicalAgentName,
 	commitAndPushWiki,
 	legacyRunName,
-	resolveLiveAgent,
+	resolveLiveAgentAsync,
 	triageClassification,
 	writeAgentEnvPointer,
 	renderedAssignment,

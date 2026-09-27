@@ -1,4 +1,5 @@
 // Focused effect-runner/execution tests (migrate-workflow-execution-to-effect,
+
 // tasks 1.3, 1.4, 2.1, 2.2, 2.3, 3.3): typed failure policy, scoped renewal
 // behavior, the bounded process service, the Herdr Schema envelope boundary,
 // the Effect credential boundary, and explicit pinned wiki roots without
@@ -38,6 +39,7 @@ import {
 	verifyConcept,
 	writeConcept,
 } from "../src/workflow/wiki.ts";
+import { asPort } from "./fakes.ts";
 
 function initRepo(label: string): string {
 	const repo = fs.mkdtempSync(path.join(os.tmpdir(), `${label}-`));
@@ -111,7 +113,7 @@ test("every registered EffectKind has a migrated handler (coverage gate)", () =>
 	const handlers = agentEffectHandlers(os.tmpdir(), engine, {
 		registry,
 		adapters: new Map(),
-		herdr: { call: () => ({}) },
+		port: asPort({ call: () => ({}) }),
 		async paneForRun() {
 			return { paneId: "pane", owned: true };
 		},
