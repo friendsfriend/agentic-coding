@@ -3,14 +3,15 @@
 // (split-workflow-god-modules).
 import type { WorkflowManifest } from "../../registry.ts";
 import { workflowEdges } from "../edges.ts";
-import { COMMON_IMPLEMENTATION_STEPS } from "../steps.ts";
+import { commonImplementationSteps } from "../steps.ts";
 
 export function noOpenspecManifests(
 	rounds: number,
 	version: number,
 	wikiGate: boolean,
+	includeTriageRoute = false,
 ): WorkflowManifest[] {
-	const common = COMMON_IMPLEMENTATION_STEPS;
+	const common = commonImplementationSteps(includeTriageRoute);
 	return [
 		{
 			id: "no-openspec",
@@ -25,7 +26,7 @@ export function noOpenspecManifests(
 				"core.completed",
 				"core.closed",
 			],
-			edges: workflowEdges(false, rounds, wikiGate),
+			edges: workflowEdges(false, rounds, wikiGate, true, includeTriageRoute),
 		},
 	];
 }

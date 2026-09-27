@@ -22,13 +22,17 @@ import { workflowAssets } from "./assets.ts";
 import { renderAssignment } from "./assignment.ts";
 import {
 	collectClassifierArtifacts,
+	collectTriageClassifierState,
 	invokeRoutingClassifier,
+	invokeTriageClassifier,
 } from "./classifier-runner.ts";
 import {
 	APPLY_PHASE_STEPS,
 	PLAN_PHASE_STEPS,
 	ROUTING_INTEGRATION,
 	type RoutingQuestionSpec,
+	selectTriageRoles,
+	TRIAGE_INTEGRATION,
 } from "./classifiers.ts";
 import {
 	type CredentialPrompt,
@@ -1097,6 +1101,12 @@ export function agentEffectHandlers(
 						integration?: unknown;
 						phase?: unknown;
 					};
+					const definition = snapshotDefinition(snapshot, options.registry);
+					// The verifier-role integration resolves no pool and must never
+					// block verification, so it is dispatched before any config work
+					// and its failures become a successful fail-open result.
+					if (payload.integration === TRIAGE_INTEGRATION)
+						return yield* triageClassification(snapshot, definition.id, signal);
 					const loaded = loadConfigWithProvenance({
 						repository: snapshot.metadata.repository || undefined,
 						repositoryIndependent: !snapshot.metadata.repository,
@@ -1124,7 +1134,6 @@ export function agentEffectHandlers(
 							),
 						);
 					const phase = payload.phase === "apply" ? "apply" : "plan";
-					const definition = snapshotDefinition(snapshot, options.registry);
 					const steps = phase === "plan" ? PLAN_PHASE_STEPS : APPLY_PHASE_STEPS;
 					const specs: RoutingQuestionSpec[] = steps
 						.filter((stepId) => definition.steps.includes(stepId))
@@ -2494,9 +2503,81 @@ export const effectRunnerTest = {
 	commitAndPushWiki,
 	legacyRunName,
 	resolveLiveAgent,
+	triageClassification,
 	writeAgentEnvPointer,
 	renderedAssignment,
 };
+/** The outcome of one verifier-role classification pass. `failOpen` marks a
+ * classification the engine could not obtain: the step then completes with no
+ * role constraint, so the round keeps today's unconstrained triage. */
+interface TriageClassification {
+	readonly integration: typeof TRIAGE_INTEGRATION;
+	readonly roles?: readonly string[];
+	readonly failOpen?: true;
+	readonly reason?: string;
+}
+
+/** Classify which verifier roles this round needs. Every failure mode — a
+ * missing credential, a provider error, an unparsable body, answers with no
+ * usable value, even an unreadable worktree — resolves to a successful
+ * fail-open result. `StepBehavior` has no effect-failure hook, and a failed
+ * effect would strand the workflow in attention-required, which decision 6 of
+ * the change forbids: a classifier outage degrades to today's behaviour and
+ * never blocks verification. Ownership loss is re-thrown so the runner's
+ * cancellation path stays honest. */
+function triageClassification(
+	snapshot: WorkflowSnapshot,
+	definitionId: string,
+	signal?: AbortSignal,
+): Effect.Effect<TriageClassification, Error> {
+	return Effect.gen(function* () {
+		const classified = yield* Effect.either(
+			Effect.gen(function* () {
+				const loaded = loadConfigWithProvenance({
+					repository: snapshot.metadata.repository || undefined,
+					repositoryIndependent: !snapshot.metadata.repository,
+				});
+				const agents = parseAgentsConfig(
+					loaded.config.agents,
+					loaded.config,
+					loaded.provenance.files.join(", ") || undefined,
+				);
+				const state = yield* p(() => collectTriageClassifierState(snapshot));
+				const answers = yield* invokeTriageClassifier(
+					definitionId,
+					agents,
+					state,
+					signal,
+				);
+				return selectTriageRoles(definitionId, answers);
+			}).pipe(
+				Effect.catchAllDefect((defect) =>
+					Effect.fail(
+						defect instanceof Error ? defect : new Error(String(defect)),
+					),
+				),
+			),
+		);
+		if (Either.isLeft(classified)) {
+			if (isOwnershipError(classified.left))
+				return yield* Effect.fail(classified.left);
+			return {
+				integration: TRIAGE_INTEGRATION,
+				failOpen: true,
+				reason: classified.left.message,
+			};
+		}
+		const selection = classified.right;
+		return selection.failOpen
+			? {
+					integration: TRIAGE_INTEGRATION,
+					failOpen: true,
+					reason: selection.failOpen,
+				}
+			: { integration: TRIAGE_INTEGRATION, roles: selection.roles };
+	});
+}
+
 function snapshotDefinition(
 	snapshot: ReturnType<WorkflowEngine["getSnapshot"]>,
 	registry: WorkflowRegistry,

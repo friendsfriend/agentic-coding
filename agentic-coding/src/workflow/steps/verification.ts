@@ -1,3 +1,4 @@
+import type { WorkflowSnapshot } from "../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../contracts.ts";
 import type { ArriveResult, StepBehavior } from "./types.ts";
 
@@ -18,9 +19,39 @@ export const VERIFIER_ROLES = [
 ] as const;
 const TRIAGE_ROLES = VERIFIER_ROLES.filter((role) => role !== "test-verifier");
 
+/** The roles triage and the classifier may select for a definition: the
+ * catalog minus the engine-owned full-suite role, minus the OpenSpec verifier
+ * for a definition that declares no OpenSpec surface. Single source for the
+ * engine's selection validation, triage validation, and the per-round
+ * classifier questions (`classifiers.ts`). */
+export function triageRolesFor(definitionId: string): string[] {
+	return TRIAGE_ROLES.filter(
+		(role) => definitionId !== "no-openspec" || role !== "openspec-verifier",
+	);
+}
+
 function candidateRoles(definitionId: string): string[] {
 	return VERIFIER_ROLES.filter(
 		(role) => definitionId !== "no-openspec" || role !== "openspec-verifier",
+	);
+}
+
+/** The roles an arriving triage plan may name. An empty `selectedRoles` is the
+ * unconstrained path (classifier fail-open, or a definition tier that predates
+ * the routing step) and falls back to the full eligible catalog.
+ *
+ * With a real selection the intersection is a defensive narrowing only: the
+ * classifier's own selection is produced from the same eligible set, so a role
+ * outside the catalog can never arrive here. The engine's guarantee is that a
+ * selection cannot introduce an ineligible role, and it cannot widen the plan
+ * beyond `TRIAGE_ROLES` in either case. */
+function allowedTriageRoles(
+	definitionId: string,
+	selectedRoles: readonly string[],
+): Set<string> {
+	if (selectedRoles.length === 0) return new Set(triageRolesFor(definitionId));
+	return new Set(
+		selectedRoles.filter((role) => triageRolesFor(definitionId).includes(role)),
 	);
 }
 
@@ -29,17 +60,18 @@ function triageCompletion(ctx: {
 	outcome: string;
 	output?: unknown;
 	changedFiles?: readonly string[];
+	snapshot: WorkflowSnapshot;
 }) {
 	if (ctx.outcome !== "complete") return undefined;
 	const output = ctx.output as {
 		assignments: Array<{ role: string; files: string[] }>;
 		roles: string[];
 	};
-	const allowed = new Set<string>(
-		TRIAGE_ROLES.filter(
-			(role) =>
-				ctx.definitionId !== "no-openspec" || role !== "openspec-verifier",
-		),
+	// The classifier may only narrow the round: a plan naming a role outside
+	// the arrival selection is rejected like any other invalid selection.
+	const allowed = allowedTriageRoles(
+		ctx.definitionId,
+		ctx.snapshot.step.selectedRoles,
 	);
 	if (
 		!Array.isArray(output.roles) ||
@@ -47,6 +79,15 @@ function triageCompletion(ctx: {
 		new Set(output.roles).size !== output.roles.length
 	)
 		throw new WorkflowRuntimeError("triage", "invalid verifier role selection");
+	// A selection may be narrowed, never discarded: an empty plan would turn a
+	// round the classifier gated up into a tests-only round. Only the routing
+	// step's own `empty` outcome (which bypasses triage entirely) may select
+	// nothing, and an unconstrained arrival still has no selection to keep.
+	if (ctx.snapshot.step.selectedRoles.length && output.roles.length === 0)
+		throw new WorkflowRuntimeError(
+			"triage",
+			"triage may narrow the selected roles but must keep at least one",
+		);
 	const assignmentRoles = new Set(output.assignments.map(({ role }) => role));
 	if (
 		output.roles.some(
@@ -114,6 +155,26 @@ function verificationCompletion(
 	return { step: { appendResults }, transition: { outcome: "pass" } };
 }
 
+/** The role set an arriving step adopts from its edge output, or — for a
+ * self-loop retry with no fresh output — from the carried arrival context. */
+function arrivingRoles(
+	output: unknown,
+	priorContext: unknown,
+): { selectedRoles?: string[] } {
+	const fromOutput = (value: unknown): string[] | undefined => {
+		if (
+			value &&
+			typeof value === "object" &&
+			"roles" in value &&
+			Array.isArray((value as { roles: unknown }).roles)
+		)
+			return [...(value as { roles: string[] }).roles];
+		return undefined;
+	};
+	const roles = fromOutput(output) ?? fromOutput(priorContext);
+	return roles ? { selectedRoles: roles } : {};
+}
+
 export const verificationBehaviors: Readonly<Record<string, StepBehavior>> = {
 	"core.triage": {
 		classification: "single",
@@ -121,10 +182,15 @@ export const verificationBehaviors: Readonly<Record<string, StepBehavior>> = {
 		candidateRoles: () => ["triage"],
 		onAgentComplete: triageCompletion,
 		// Attempt is seeded from the verification round counter so a triage
-		// redo after a verification loop keeps the same round number.
-		onArrive: ({ snapshot }) => ({
+		// redo after a verification loop keeps the same round number. The
+		// round's classifier selection arrives as the edge output; a self-loop
+		// retry carries it forward through the arrival context instead.
+		onArrive: ({ snapshot, output, prior }) => ({
 			attempt: (snapshot.loopCounts["core.verification:round"] ?? 0) + 1,
+			...arrivingRoles(output, prior.context),
 		}),
+		// The rendered step input is the round's locked role set.
+		carriesOutputContext: true,
 		roundScoped: true,
 		// Triage owns its own constant group; verifiers group per role (pane.ts).
 		paneGroup: "triage",
@@ -133,25 +199,20 @@ export const verificationBehaviors: Readonly<Record<string, StepBehavior>> = {
 		classification: "single",
 		onAgentComplete: verificationCompletion,
 		// Candidate roles configure routing before a run exists; active roles use
-		// the selected subset (or the test/quality fallback) during fan-out.
+		// the selected subset during fan-out. An empty selection means the round
+		// needs no domain verifier, so the engine-owned full suite is the only
+		// role it runs.
 		roles: ({ snapshot }) =>
 			snapshot.step.selectedRoles.length
 				? [...snapshot.step.selectedRoles]
-				: snapshot.step.testRunStarted
-					? ["test-verifier"]
-					: ["quality-verifier"],
+				: ["test-verifier"],
 		candidateRoles: ({ definitionId }) => candidateRoles(definitionId),
 		onArrive: ({ snapshot, output }) => {
 			const round = (snapshot.loopCounts["core.verification:round"] ?? 0) + 1;
 			snapshot.loopCounts["core.verification:round"] = round;
 			const result: ArriveResult = { attempt: round };
-			if (
-				output &&
-				typeof output === "object" &&
-				"roles" in output &&
-				Array.isArray((output as { roles: unknown }).roles)
-			)
-				result.selectedRoles = [...(output as { roles: string[] }).roles];
+			const roles = arrivingRoles(output, undefined).selectedRoles;
+			if (roles) result.selectedRoles = roles;
 			return result;
 		},
 		carriesOutputContext: true,

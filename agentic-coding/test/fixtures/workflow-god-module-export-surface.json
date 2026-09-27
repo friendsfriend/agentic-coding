@@ -12,6 +12,7 @@
 		"definitionVersionForBehaviorPins",
 		"definitionVersionForManifestPolicy",
 		"definitionVersionForPolicy",
+		"definitionVersionForTriageRouting",
 		"effectiveManifestPolicy",
 		"registerBuiltins",
 		"removedWorkflowHint"

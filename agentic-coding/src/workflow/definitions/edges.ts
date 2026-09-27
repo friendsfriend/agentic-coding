@@ -13,6 +13,7 @@ export function workflowEdges(
 	maxVerificationRounds: number,
 	wikiGate = true,
 	wikiBeforeArchive = true,
+	includeTriageRoute = false,
 ): WorkflowManifest["edges"] {
 	const approved = archive
 		? wikiGate && wikiBeforeArchive
@@ -22,7 +23,37 @@ export function workflowEdges(
 			? "core.wiki"
 			: "core.delivery";
 	return [
-		{ from: "core.implementation", outcome: "complete", to: "core.triage" },
+		// The routing step is the per-round classifier gate: it sits between
+		// implementation and triage, and an empty selection bypasses triage
+		// entirely for the full-suite-only round.
+		...(includeTriageRoute
+			? ([
+					{
+						from: "core.implementation",
+						outcome: "complete",
+						to: "core.triage-route",
+					},
+					{
+						from: "core.triage-route",
+						outcome: "complete",
+						to: "core.triage",
+					},
+					{
+						from: "core.triage-route",
+						outcome: "empty",
+						to: "core.verification",
+					},
+				] as const)
+			: []),
+		...(includeTriageRoute
+			? []
+			: [
+					{
+						from: "core.implementation",
+						outcome: "complete",
+						to: "core.triage",
+					},
+				]),
 		{
 			from: "core.implementation",
 			outcome: "blocked",

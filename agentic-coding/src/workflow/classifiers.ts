@@ -1,8 +1,11 @@
-// The pool-routing protocol (classifier-driven-model-pools): pure domain
-// knowledge for per-step model pools, the TypeSafe question shape, and the
-// mode-aware answer parsing/selection. The runtime I/O half lives in
+// The classifier integration protocol (classifier-driven-model-pools for the
+// per-step model pools, classifier-driven-triage-routing for the per-round
+// verifier-role questions): pure domain knowledge for the TypeSafe question
+// shapes, answer parsing, and the two selections. The runtime I/O half lives in
 // `classifier-runner.ts`; the reducer applies the result in
 // `runtime/reducers/effect-result.ts`.
+import { triageRolesFor } from "./steps/verification.ts";
+
 /** A labelled candidate profile in a per-step model pool. `criteria` is
  * opaque JSON passed through to the TypeSafe choice question; `default` marks
  * the fallback entry/entries for the step. */
@@ -28,6 +31,10 @@ export const ROSTER_MAX_PLANNERS = 5;
 
 /** The identifier a `model.classify` routing payload carries. */
 export const ROUTING_INTEGRATION = "routing";
+
+/** The identifier a `model.classify` verifier-role payload carries. Unlike
+ * `routing` it resolves no model pool, profile, or preset entry. */
+export const TRIAGE_INTEGRATION = "triage";
 
 /** The bounded, already-collected material handed to the classifier. */
 export interface ClassifierInput {
@@ -71,6 +78,9 @@ export interface ChoiceAnswer {
 }
 export interface NoulAnswer {
 	readonly type: "noul";
+	/** The necessity value when the answer carried a finite number; absent
+	 * means unanswered, never a usable zero. */
+	readonly noul?: number;
 }
 export type ClassifierAnswer = ChoiceAnswer | NoulAnswer;
 
@@ -92,11 +102,19 @@ export function routingQuestionInstructions(
 
 /** Parse one System One answer object into the full answer shape. Missing or
  * malformed fields collapse to `{ type: "noul" }` so the router can fall back
- * rather than throw. */
+ * rather than throw. A `noul` answer keeps a finite numeric necessity value;
+ * a missing, non-numeric, or non-finite one parses as a value-less answer so
+ * callers treat the question as unanswered. */
 export function parseClassifierAnswer(value: unknown): ClassifierAnswer {
 	if (!value || typeof value !== "object") return { type: "noul" };
 	const answer = value as Record<string, unknown>;
-	if (answer.type === "noul") return { type: "noul" };
+	if (answer.type === "noul")
+		return {
+			type: "noul",
+			...(typeof answer.noul === "number" && Number.isFinite(answer.noul)
+				? { noul: answer.noul }
+				: {}),
+		};
 	const choice =
 		typeof answer.choice === "string" && answer.choice.trim()
 			? answer.choice.trim()
@@ -213,4 +231,121 @@ export function selectRosterEntries(
 				};
 	}
 	return { profiles: selected };
+}
+
+// ---------------------------------------------------------------------------
+// Verifier-role routing (classifier-driven-triage-routing)
+// ---------------------------------------------------------------------------
+
+/** The single inclusion gate for a per-role necessity answer. A `noul`
+ * answer carries no confidence, so 0.5 is the only threshold. */
+export const TRIAGE_NOUL_FLOOR = 0.5;
+
+/** One independent necessity question asked for one eligible verifier role. */
+export interface TriageRoleQuestion {
+	readonly role: string;
+	readonly questionId: string;
+	readonly instructions: string;
+}
+
+/** One necessity question per role triage and the classifier may select. The
+ * engine-owned full-suite role is absent by construction: it is never asked,
+ * only launched. Exhaustive over `TRIAGE_ROLES` (asserted by the role-coverage
+ * test) so a catalog change cannot silently leave a role unasked. */
+export const TRIAGE_ROLE_QUESTIONS: readonly TriageRoleQuestion[] =
+	Object.freeze([
+		{
+			role: "quality-verifier",
+			questionId: "needs_quality_verifier",
+			instructions:
+				"Does this change require a correctness review: logic errors, error handling, and formatting/lint/type-check gates?",
+		},
+		{
+			role: "security-verifier",
+			questionId: "needs_security_verifier",
+			instructions:
+				"Does this change touch a trust boundary, credentials or secrets, injection, authorization, or permissions?",
+		},
+		{
+			role: "performance-verifier",
+			questionId: "needs_performance_verifier",
+			instructions:
+				"Does this change affect a hot path, resource use, or observable latency?",
+		},
+		{
+			role: "openspec-verifier",
+			questionId: "needs_openspec_verifier",
+			instructions:
+				"Does this change need conformance review against the approved OpenSpec proposal, design, tasks, and specs?",
+		},
+		{
+			role: "usability-verifier",
+			questionId: "needs_usability_verifier",
+			instructions:
+				"Does this change touch a user-facing UI/UX surface, accessibility, or interaction behaviour?",
+		},
+		{
+			role: "concurrency-verifier",
+			questionId: "needs_concurrency_verifier",
+			instructions:
+				"Does this change introduce races, ordering assumptions, reentrancy, or shared mutable state?",
+		},
+		{
+			role: "migration-verifier",
+			questionId: "needs_migration_verifier",
+			instructions:
+				"Does this change a persisted-state format or version, an upgrade path, atomicity, or rollback behaviour?",
+		},
+		{
+			role: "test-quality-verifier",
+			questionId: "needs_test_quality_verifier",
+			instructions:
+				"Does the changed test scope need a test-adequacy review: assertions that really fail when the logic breaks?",
+		},
+	] as const);
+
+/** The questions a definition's round asks, in catalog order. */
+export function triageRoleQuestions(
+	definitionId: string,
+): TriageRoleQuestion[] {
+	return TRIAGE_ROLE_QUESTIONS.filter((question) =>
+		triageRolesFor(definitionId).includes(question.role),
+	);
+}
+
+/** The roles the round selected, or the reason the round failed open.
+ *
+ * A selection is trusted only when EVERY eligible question carries a usable
+ * value: a truncated or evasive response is an outage, not a verdict. Without
+ * this gate the failure is inverted — an answer-free response fails open and
+ * runs the full eligible set, while a response answering one cheap question at
+ * 0.0 would be trusted as an authoritative "no domain verifier is needed" and
+ * silently disable every remaining one, security included. Narrowing a
+ * verification gate therefore requires complete, positive evidence. */
+export interface TriageSelection {
+	readonly roles: readonly string[];
+	readonly failOpen?: string;
+}
+
+export function selectTriageRoles(
+	definitionId: string,
+	answers: Readonly<Record<string, ClassifierAnswer>>,
+	floor = TRIAGE_NOUL_FLOOR,
+): TriageSelection {
+	const questions = triageRoleQuestions(definitionId);
+	const roles: string[] = [];
+	let answered = 0;
+	for (const question of questions) {
+		const answer = answers[question.questionId];
+		const noul = answer && answer.type === "noul" ? answer.noul : undefined;
+		if (noul === undefined) continue;
+		answered += 1;
+		if (noul >= floor) roles.push(question.role);
+	}
+	if (answered < questions.length)
+		return {
+			roles: [],
+			failOpen: `classifier answered ${answered} of ${questions.length} verifier-role questions`,
+		};
+	return { roles };
 }

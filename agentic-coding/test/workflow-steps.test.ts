@@ -26,7 +26,10 @@ import {
 	stepBehavior,
 } from "../src/workflow/steps/index.ts";
 import type { AgentCompletionContext } from "../src/workflow/steps/types.ts";
-import { VERIFIER_ROLES } from "../src/workflow/steps/verification.ts";
+import {
+	triageRolesFor,
+	VERIFIER_ROLES,
+} from "../src/workflow/steps/verification.ts";
 
 /** Step digest per step id. Shared by the definitions below and captured as
  * literals from the pre-cleanup fixture — never recomputed from the registry
@@ -7327,8 +7330,10 @@ describe("workflow step behaviors", () => {
 
 	test("resolves active roles from representative snapshots", () => {
 		const selected = ["security-verifier", "test-verifier"];
+		// An empty selection means the round needs no domain verifier: the
+		// engine-owned full suite is the only role it runs.
 		expect(rolesForStep("core.verification", snapshot("openspec"))).toEqual([
-			"quality-verifier",
+			"test-verifier",
 		]);
 		expect(
 			rolesForStep("core.verification", snapshot("openspec", [], true)),
@@ -7880,6 +7885,187 @@ describe("workflow step behavior hooks (move-step-semantics-to-behavior-hooks)",
 					changedFiles,
 				}),
 			).toThrow(/invalid verifier role selection/);
+		});
+
+		test("triage accepts a subset of the classifier selection", () => {
+			const changedFiles = ["src/a.ts", "src/b.ts"];
+			const selected = [
+				"quality-verifier",
+				"security-verifier",
+				"performance-verifier",
+			];
+			const result = completeStep("core.triage", {
+				snapshot: snapshot("openspec", selected),
+				output: {
+					roles: ["quality-verifier", "security-verifier"],
+					assignments: [
+						{
+							role: "quality-verifier",
+							reason: "r",
+							files: changedFiles,
+						},
+						{ role: "security-verifier", reason: "r", files: changedFiles },
+					],
+				},
+				changedFiles,
+			});
+			// Only the roles triage kept reach verification.
+			expect(result?.step?.selectedRoles).toEqual([
+				"quality-verifier",
+				"security-verifier",
+			]);
+		});
+
+		test("triage rejects a role the classifier did not select", () => {
+			const changedFiles = ["src/a.ts"];
+			expect(() =>
+				completeStep("core.triage", {
+					snapshot: snapshot("openspec", ["quality-verifier"]),
+					output: plan("security-verifier", changedFiles),
+					changedFiles,
+				}),
+			).toThrow(/invalid verifier role selection/);
+		});
+
+		test("triage may narrow the selection but never discard it", () => {
+			// An empty plan would silently downgrade a gated round to the full
+			// suite alone; only the routing step's own `empty` outcome (which
+			// bypasses triage) may select nothing.
+			expect(() =>
+				completeStep("core.triage", {
+					snapshot: snapshot("openspec", [
+						"quality-verifier",
+						"security-verifier",
+					]),
+					output: { roles: [], assignments: [] },
+					changedFiles: ["src/a.ts"],
+				}),
+			).toThrow(/must keep at least one/);
+			// An unconstrained arrival still accepts an empty plan: the
+			// classifier produced no selection, so triage chooses.
+			expect(
+				completeStep("core.triage", {
+					snapshot: snapshot("openspec"),
+					output: { roles: [], assignments: [] },
+					changedFiles: ["src/a.ts"],
+				})?.step?.selectedRoles,
+			).toEqual([]);
+		});
+
+		test("a selection cannot widen into an ineligible role", () => {
+			// The intersection in `allowedTriageRoles` is defensive: a selection
+			// naming a role outside the catalog narrows rather than reaching the
+			// plan, and no ineligible role can ever be launched.
+			const changedFiles = ["src/a.ts"];
+			expect(() =>
+				completeStep("core.triage", {
+					snapshot: snapshot("no-openspec", [
+						"quality-verifier",
+						"openspec-verifier",
+					]),
+					definitionId: "no-openspec",
+					output: plan("openspec-verifier", changedFiles),
+					changedFiles,
+				}),
+			).toThrow(/invalid verifier role selection/);
+		});
+
+		test("triage still rejects a file outside the changed scope", () => {
+			expect(() =>
+				completeStep("core.triage", {
+					snapshot: snapshot("openspec", ["quality-verifier"]),
+					output: plan("quality-verifier", ["src/unchanged.ts"]),
+					changedFiles: ["src/a.ts"],
+				}),
+			).toThrow(/outside changed scope/);
+		});
+
+		test("an unconstrained triage arrival validates against the full catalog", () => {
+			// The classifier fail-open path and pre-routing definition tiers both
+			// arrive with no selection; every catalog role stays available.
+			const changedFiles = ["src/a.ts"];
+			for (const role of triageRolesFor("openspec"))
+				expect(
+					completeStep("core.triage", {
+						snapshot: snapshot("openspec"),
+						output: plan(role, changedFiles),
+						changedFiles,
+					})?.step?.selectedRoles,
+				).toEqual([role]);
+			// The OpenSpec verifier is still excluded for a no-OpenSpec definition.
+			expect(() =>
+				completeStep("core.triage", {
+					snapshot: snapshot("no-openspec"),
+					definitionId: "no-openspec",
+					output: plan("openspec-verifier", changedFiles),
+					changedFiles,
+				}),
+			).toThrow(/invalid verifier role selection/);
+		});
+
+		test("triage adopts the arriving role set, including on a self-loop retry", () => {
+			const behavior = stepBehavior("core.triage");
+			const arrived = behavior.onArrive?.({
+				snapshot: snapshot("openspec"),
+				edge: {} as never,
+				outcome: "complete",
+				output: { roles: ["quality-verifier"] },
+				prior: { attempt: 1, results: [], context: undefined },
+			});
+			expect(arrived?.selectedRoles).toEqual(["quality-verifier"]);
+			const retried = behavior.onArrive?.({
+				snapshot: snapshot("openspec"),
+				edge: {} as never,
+				outcome: "blocked",
+				output: undefined,
+				prior: {
+					attempt: 1,
+					results: [],
+					context: { roles: ["quality-verifier", "security-verifier"] },
+				},
+			});
+			expect(retried?.selectedRoles).toEqual([
+				"quality-verifier",
+				"security-verifier",
+			]);
+			// Both operands present: a fresh round's selection outranks the
+			// previous round's carry-over, or the round would verify against
+			// the last round's roles.
+			const fresh = behavior.onArrive?.({
+				snapshot: snapshot("openspec"),
+				edge: {} as never,
+				outcome: "complete",
+				output: { roles: ["security-verifier"] },
+				prior: {
+					attempt: 2,
+					results: [],
+					context: { roles: ["quality-verifier", "security-verifier"] },
+				},
+			});
+			expect(fresh?.selectedRoles).toEqual(["security-verifier"]);
+			expect(behavior.carriesOutputContext).toBe(true);
+		});
+
+		test("an empty selection runs the engine-owned full suite and passes", () => {
+			const round = snapshot("openspec", [], true);
+			expect(rolesForStep("core.verification", round)).toEqual([
+				"test-verifier",
+			]);
+			const passed = completeStep("core.verification", {
+				snapshot: round,
+				run: { id: "run", role: "test-verifier", stepId: "core.verification" },
+				output: { critical: 0 },
+			});
+			// A sole full-suite run passes; the engine does not relaunch itself.
+			expect(passed?.runs).toBeUndefined();
+			expect(passed?.transition).toEqual({ outcome: "pass" });
+			// A critical finding still fails the round.
+			const failed = completeStep("core.verification", {
+				snapshot: round,
+				run: { id: "run", role: "test-verifier", stepId: "core.verification" },
+				output: { critical: 1 },
+			});
+			expect(failed?.transition?.outcome).toBe("fix");
 		});
 
 		test("test-quality-verifier does not replace the engine's test-verifier launch", () => {

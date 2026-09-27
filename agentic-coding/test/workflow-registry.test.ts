@@ -600,14 +600,17 @@ describe("workflow registry", () => {
 			// The pre-manifest-policy tiers (legacy, wikiGate-policy, and the
 			// frozen 1000 set) keep registering under their original versions
 			// with no `policy` field, so their digests are the ones asserted
-			// unchanged in test/workflow-steps.test.ts's full-catalog pin.
+			// unchanged in test/workflow-steps.test.ts's full-catalog pin. Every
+			// tier since the manifest-policy one (including the
+			// classifier-driven triage-routing tier) declares a policy.
 			for (const definition of registry
 				.definitions()
 				.filter(
 					(definition) =>
 						(definition.version < 201 || definition.version > 220) &&
 						(definition.version < 301 || definition.version > 320) &&
-						(definition.version < 401 || definition.version > 420),
+						(definition.version < 401 || definition.version > 420) &&
+						(definition.version < 501 || definition.version > 520),
 				))
 				expect(definition.policy).toBeUndefined();
 		});

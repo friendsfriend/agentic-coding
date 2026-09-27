@@ -112,6 +112,7 @@ const ID = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/;
 const LEGACY_STEP_BASELINE = new Set([
 	"core.route-plan",
 	"core.route-apply",
+	"core.triage-route",
 	"core.plan",
 	"fusion.plan",
 	"fusion.consolidate",

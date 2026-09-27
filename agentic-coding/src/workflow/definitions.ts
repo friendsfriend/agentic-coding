@@ -18,6 +18,7 @@ export { definitionVersionForPolicy } from "./definitions/edges.ts";
 export {
 	definitionVersionForBehaviorPins,
 	definitionVersionForManifestPolicy,
+	definitionVersionForTriageRouting,
 	effectiveManifestPolicy,
 } from "./definitions/manifest-policy.ts";
 export {
