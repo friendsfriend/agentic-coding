@@ -9,7 +9,7 @@
 // processes, and every failure is presentation-only.
 
 import type { WorkflowView } from "../contracts/workflow.ts";
-import type { HerdrPort } from "./adapters.ts";
+import type { HerdrCli } from "../multiplexer/herdr/cli.ts";
 import { herdrSidebarEnabled } from "./effects.ts";
 import {
 	projectSidebar,
@@ -33,7 +33,7 @@ import {
 export const SIDEBAR_FALLBACK_REFRESH_MS = 2_000;
 
 export interface SidebarPresentationOptions {
-	herdr: HerdrPort;
+	herdr: HerdrCli;
 	/** Current authoritative views for the repositories this owner covers. */
 	views: () => readonly WorkflowView[];
 	socketPath?: string;
@@ -47,7 +47,7 @@ export interface SidebarPresentationOptions {
  * other sources' tokens, and the row configuration are left untouched.
  */
 export async function clearSidebarPresentation(options: {
-	herdr: HerdrPort;
+	herdr: HerdrCli;
 	views: () => readonly WorkflowView[];
 	/** Ids published by earlier refreshes but absent from the current views. */
 	extraPaneIds?: readonly string[];

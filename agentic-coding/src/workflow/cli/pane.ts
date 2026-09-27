@@ -1,8 +1,5 @@
-// Pane allocation for a launched run: reuse-before-spawn for persistent
-// roles, split geometry for a shared constant group (triage), and one tab per
-// role for `groupByRole` steps (verification). Moved verbatim out of cli.ts
-// (split-workflow-god-modules).
-import type { HerdrPort } from "../adapters.ts";
+import { runMultiplexer } from "../../multiplexer/boundary.ts";
+import type { MultiplexerPort } from "../../multiplexer/port.ts";
 import { isPaneLiveAsync, resolveLiveAgentAsync } from "../effect-runner.ts";
 import type { WorkflowEngine } from "../runtime.ts";
 import type { StepBehavior } from "../steps/types.ts";
@@ -42,7 +39,7 @@ export function verificationPosition(
 export function paneForRunFactory(
 	workflowEngine: WorkflowEngine,
 	repo: string,
-	herdr: HerdrPort,
+	port: MultiplexerPort,
 ): (
 	runId: string,
 ) => Promise<{ paneId: string; tabId?: string; owned: boolean }> {
@@ -66,7 +63,7 @@ export function paneForRunFactory(
 		// Adopt any live agent's pane instead of spawning a duplicate; fall
 		// through to geometry or tab creation only when no agent resolves.
 		const resolved = await resolveLiveAgentAsync(
-			herdr,
+			port,
 			snapshot.workflowId,
 			snapshot.definition.id,
 			run,
@@ -101,45 +98,31 @@ export function paneForRunFactory(
 				anchor: string,
 			): Promise<string | undefined> => {
 				try {
-					const layout = herdr.call("pane", "layout", "--pane", anchor) as {
-						layout?: {
-							panes?: Array<{ pane_id?: string; rect?: { y?: number } }>;
-						};
-					};
-					const panes = layout.layout?.panes ?? [];
-					const idle: Array<{ pane_id: string; y: number }> = [];
-					for (const pane of panes) {
+					const layout = await runMultiplexer(port.paneLayout(anchor));
+					const idle: Array<{ paneId: string; y: number }> = [];
+					for (const pane of layout.panes) {
 						if (
-							pane.pane_id === anchor ||
-							pane.pane_id === undefined ||
-							(await isPaneLiveAsync(herdr, pane.pane_id))
+							pane.paneId === anchor ||
+							(await isPaneLiveAsync(port, pane.paneId))
 						)
 							continue;
-						idle.push({ pane_id: pane.pane_id, y: pane.rect?.y ?? 0 });
+						idle.push({ paneId: pane.paneId, y: pane.y });
 					}
-					return idle.sort((a, b) => b.y - a.y)[0]?.pane_id;
+					return idle.sort((a, b) => b.y - a.y)[0]?.paneId;
 				} catch {
 					return undefined;
 				}
 			};
-			const split = (target: string, direction: "right" | "down") => {
+			const split = async (target: string, direction: "right" | "down") => {
 				try {
-					const result = herdr.call(
-						"pane",
-						"split",
-						target,
-						"--direction",
-						direction,
-						"--ratio",
-						"0.5",
-					) as { pane?: { pane_id?: string; tab_id?: string } };
-					return result.pane?.pane_id
-						? {
-								paneId: result.pane.pane_id,
-								...(result.pane.tab_id ? { tabId: result.pane.tab_id } : {}),
-								owned: true as const,
-							}
-						: undefined;
+					const result = await runMultiplexer(
+						port.paneSplit({ target, direction, ratio: 0.5 }),
+					);
+					return {
+						paneId: result.paneId,
+						...(result.tabId ? { tabId: result.tabId } : {}),
+						owned: true as const,
+					};
 				} catch {
 					return undefined;
 				}
@@ -150,7 +133,7 @@ export function paneForRunFactory(
 				const resolvedSiblings = new Map<string, string>();
 				for (const sibling of all) {
 					const resolved = await resolveLiveAgentAsync(
-						herdr,
+						port,
 						snapshot.workflowId,
 						snapshot.definition.id,
 						sibling,
@@ -169,22 +152,22 @@ export function paneForRunFactory(
 				}
 				if (anchor) {
 					if (k === 2) {
-						if (n >= 3) split(anchor, "down");
-						const placed = split(anchor, "right");
+						if (n >= 3) await split(anchor, "down");
+						const placed = await split(anchor, "right");
 						if (placed) return placed;
 					} else if (k === 3) {
 						// bottom full-width row was created with the second pane; reuse it, or create it now if the second launch was retried
 						const spare = await bottomPane(anchor);
 						if (spare) return { paneId: spare, owned: false };
-						const placed = split(anchor, "down");
+						const placed = await split(anchor, "down");
 						if (placed) return placed;
 					} else if (k === 4) {
 						const bottom = await bottomPane(anchor);
 						if (bottom) {
-							const placed = split(bottom, "right");
+							const placed = await split(bottom, "right");
 							if (placed) return placed;
 						}
-						const placed = split(anchor, "down");
+						const placed = await split(anchor, "down");
 						if (placed) return placed;
 					} else {
 						const nextSibling = all[k - 3];
@@ -195,7 +178,7 @@ export function paneForRunFactory(
 							(await bottomPane(anchor)) ??
 							anchor;
 						if (target) {
-							const placed = split(target, "down");
+							const placed = await split(target, "down");
 							if (placed) return placed;
 						}
 					}
@@ -206,21 +189,16 @@ export function paneForRunFactory(
 			agentTabRoleName(group ?? run.role),
 			run.status,
 		);
-		const result = herdr.call(
-			"tab",
-			"create",
-			"--workspace",
-			snapshot.metadata.workspace,
-			"--cwd",
-			snapshot.metadata.worktree,
-			"--label",
-			label,
-		) as { root_pane?: { pane_id?: string; tab_id?: string } };
-		if (!result.root_pane?.pane_id)
-			throw new Error("Herdr tab create returned no pane");
+		const result = await runMultiplexer(
+			port.tabCreate({
+				workspaceId: snapshot.metadata.workspace,
+				cwd: snapshot.metadata.worktree,
+				label,
+			}),
+		);
 		return {
-			paneId: result.root_pane.pane_id,
-			...(result.root_pane.tab_id ? { tabId: result.root_pane.tab_id } : {}),
+			paneId: result.rootPaneId,
+			...(result.tabId ? { tabId: result.tabId } : {}),
 			owned: true,
 		};
 	};

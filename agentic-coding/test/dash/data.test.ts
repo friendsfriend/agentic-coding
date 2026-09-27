@@ -29,7 +29,6 @@ import {
 } from "../../src/server/operations/observations.ts";
 import { testDashboard } from "../../src/tui/dash/demo.ts";
 import { requiredUserActionFor } from "../../src/tui/dash/projections.ts";
-import type { HerdrPort } from "../../src/workflow/adapters.ts";
 import { registerBuiltins } from "../../src/workflow/definitions.ts";
 import {
 	agentMetrics,
@@ -46,6 +45,7 @@ import {
 	aggregateAgentTabStatus,
 } from "../../src/workflow/tab-status.ts";
 import { syncAgentTabLabels } from "../../src/workflow/tab-sync.ts";
+import { asPort } from "../fakes.ts";
 
 function requireChange<T extends { newPath: string }>(
 	changes: T[],
@@ -307,9 +307,9 @@ test("dashboard agent status matches the label the agent tab renders", async () 
 			renames.push(args);
 			return {};
 		},
-	} as unknown as HerdrPort;
+	};
 	await syncAgentTabLabels(
-		herdr,
+		asPort(herdr),
 		new WorkflowEngine(registerBuiltins()),
 		repo,
 		"review",

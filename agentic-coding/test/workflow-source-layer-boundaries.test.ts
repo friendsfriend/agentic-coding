@@ -129,6 +129,11 @@ describe("workflow source-layer boundaries (enforce-source-layer-boundaries)", (
 			"workflow/effect-runner.ts",
 			"workflow/application.ts",
 			"workflow/operations.ts",
+			// The one execution point for Promise/sync consumers of the
+			// Effect-native multiplexer port (add-multiplexer-adapters): tab and
+			// notification synchronization, dashboard observation, and the Herdr
+			// event helper.
+			"multiplexer/boundary.ts",
 			// Named composition root for the owned environment backend: it owns the
 			// process scope that keeps the Go child's finalizers alive.
 			"backend/lifecycle.ts",

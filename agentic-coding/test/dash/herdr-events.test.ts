@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { Effect } from "effect";
 import { HERDR_DASHBOARD_EVENTS } from "../../src/contracts/integration.ts";
 import {
 	herdrEventMatchesWorkspace,
 	herdrEventRequest,
 	parseHerdrEventLines,
+	subscribeMultiplexerEvents,
 } from "../../src/server/herdr-events.ts";
 
 describe("herdr dashboard event subscription", () => {
@@ -57,5 +59,49 @@ describe("herdr dashboard event subscription", () => {
 		expect(herdrEventMatchesWorkspace({ workspace_id: "w2" }, undefined)).toBe(
 			true,
 		);
+	});
+});
+
+describe("scoped multiplexer event subscription", () => {
+	test("forwards normalized events and releases its scope on dispose", () => {
+		const seen: Array<{ event: string; data: Record<string, unknown> }> = [];
+		let released = false;
+		const port = {
+			eventsSubscribe(
+				handler: (event: {
+					event: string;
+					data: Record<string, unknown>;
+				}) => void,
+			) {
+				return Effect.acquireRelease(
+					Effect.sync(() => {
+						handler({ event: "pane.created", data: { workspace_id: "w1" } });
+						return () => {
+							released = true;
+						};
+					}),
+					(dispose) => Effect.sync(dispose),
+				);
+			},
+		} as unknown as Parameters<typeof subscribeMultiplexerEvents>[0];
+		const dispose = subscribeMultiplexerEvents(port, (event) =>
+			seen.push(event),
+		);
+		expect(seen).toEqual([
+			{ event: "pane.created", data: { workspace_id: "w1" } },
+		]);
+		expect(released).toBe(false);
+		dispose();
+		expect(released).toBe(true);
+	});
+
+	test("a failed subscription leaves a no-op disposer rather than throwing", () => {
+		const port = {
+			eventsSubscribe() {
+				return Effect.fail(new Error("runtime unavailable"));
+			},
+		} as unknown as Parameters<typeof subscribeMultiplexerEvents>[0];
+		const dispose = subscribeMultiplexerEvents(port, () => {});
+		expect(() => dispose()).not.toThrow();
 	});
 });

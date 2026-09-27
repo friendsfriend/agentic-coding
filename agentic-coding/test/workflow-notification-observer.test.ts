@@ -3,8 +3,14 @@
 // transitions, retained blocked obligations, coalescing, enabled gating, and
 // presentation-only non-interference.
 import { describe, expect, test } from "bun:test";
+import { Effect } from "effect";
 import type { WorkflowView } from "../src/contracts/workflow.ts";
-import type { HerdrPort } from "../src/workflow/adapters.ts";
+import type { HerdrCli } from "../src/multiplexer/herdr/cli.ts";
+import { HerdrMultiplexer } from "../src/multiplexer/herdr/index.ts";
+import {
+	MultiplexerError,
+	type MultiplexerPort,
+} from "../src/multiplexer/port.ts";
 import {
 	NOTIFICATION_FALLBACK_REFRESH_MS,
 	viewAgentRequiresInput,
@@ -87,11 +93,12 @@ interface FakeState {
 }
 
 function fakeHerdr(state: FakeState = {}): {
-	herdr: HerdrPort;
+	herdr: HerdrCli;
+	port: MultiplexerPort;
 	calls: string[][];
 } {
 	const calls: string[][] = [];
-	const herdr: HerdrPort = {
+	const herdr: HerdrCli = {
 		call(...args: string[]) {
 			calls.push(args);
 			if (args[0] === "agent" && args[1] === "list") {
@@ -123,7 +130,8 @@ function fakeHerdr(state: FakeState = {}): {
 			return {};
 		},
 	};
-	return { herdr, calls };
+	const port = new HerdrMultiplexer(herdr, { sleep: () => Effect.void });
+	return { herdr, port, calls };
 }
 
 const notificationCalls = (calls: string[][]): string[][] =>
@@ -131,11 +139,12 @@ const notificationCalls = (calls: string[][]): string[][] =>
 
 describe("notification observer transitions (task 3.1)", () => {
 	test("records a baseline then notifies once per new obligation", async () => {
-		const { herdr, calls } = fakeHerdr({ agentStatus: "idle" });
+		const { herdr, port, calls } = fakeHerdr({ agentStatus: "idle" });
 		let current = view({ status: "paused", workspace: "w1" });
 		const owner = new WorkflowNotifications({
 			enabled: () => true,
 			herdr,
+			port,
 			views: () => [current],
 		});
 		// First observation already owes input: no replay notification.
@@ -154,11 +163,12 @@ describe("notification observer transitions (task 3.1)", () => {
 	});
 
 	test("the focus calls precede the notification it accompanies", async () => {
-		const { herdr, calls } = fakeHerdr({ agentStatus: "idle" });
+		const { herdr, port, calls } = fakeHerdr({ agentStatus: "idle" });
 		let current = view({ status: "active", workspace: "w1" });
 		const owner = new WorkflowNotifications({
 			enabled: () => true,
 			herdr,
+			port,
 			views: () => [current],
 		});
 		await owner.reconcile();
@@ -175,7 +185,7 @@ describe("notification observer transitions (task 3.1)", () => {
 	});
 
 	test("workflows sharing an id across repositories notify independently", async () => {
-		const { herdr, calls } = fakeHerdr({ agentStatus: "idle" });
+		const { herdr, port, calls } = fakeHerdr({ agentStatus: "idle" });
 		let views = [
 			view({ workflowId: "x", repository: "/a", status: "active" }),
 			view({ workflowId: "x", repository: "/b", status: "active" }),
@@ -183,6 +193,7 @@ describe("notification observer transitions (task 3.1)", () => {
 		const owner = new WorkflowNotifications({
 			enabled: () => true,
 			herdr,
+			port,
 			views: () => views,
 		});
 		// Both baseline as not owed.
@@ -198,11 +209,12 @@ describe("notification observer transitions (task 3.1)", () => {
 	});
 
 	test("a committed pending question on the current run raises a notification", async () => {
-		const { herdr, calls } = fakeHerdr({ agentStatus: "idle" });
+		const { herdr, port, calls } = fakeHerdr({ agentStatus: "idle" });
 		let current = view({});
 		const owner = new WorkflowNotifications({
 			enabled: () => true,
 			herdr,
+			port,
 			views: () => [current],
 		});
 		await owner.reconcile();
@@ -230,11 +242,12 @@ describe("notification observer transitions (task 3.1)", () => {
 	});
 
 	test("coalesces overlapping refreshes into one notification", async () => {
-		const { herdr, calls } = fakeHerdr({ agentStatus: "idle" });
+		const { herdr, port, calls } = fakeHerdr({ agentStatus: "idle" });
 		let current = view({ status: "active", workspace: "w1" });
 		const owner = new WorkflowNotifications({
 			enabled: () => true,
 			herdr,
+			port,
 			views: () => [current],
 		});
 		await owner.reconcile();
@@ -249,11 +262,12 @@ describe("notification observer transitions (task 3.1)", () => {
 	});
 
 	test("a cleared workflow reappears owing and re-arms across a vanish", async () => {
-		const { herdr, calls } = fakeHerdr({ agentStatus: "idle" });
+		const { herdr, port, calls } = fakeHerdr({ agentStatus: "idle" });
 		let views: WorkflowView[] = [view({ status: "paused", workspace: "w1" })];
 		const owner = new WorkflowNotifications({
 			enabled: () => true,
 			herdr,
+			port,
 			views: () => views,
 		});
 		// Baseline while owed, then clear, then vanish, then reappear owing.
@@ -270,10 +284,11 @@ describe("notification observer transitions (task 3.1)", () => {
 
 	test("the fallback interval is bounded and disabled-safe", async () => {
 		expect(NOTIFICATION_FALLBACK_REFRESH_MS).toBe(2000);
-		const { herdr, calls } = fakeHerdr({ agentStatus: "idle" });
+		const { herdr, port, calls } = fakeHerdr({ agentStatus: "idle" });
 		const owner = new WorkflowNotifications({
 			enabled: () => false,
 			herdr,
+			port,
 			views: () => [view({ status: "paused", workspace: "w1" })],
 			refreshMs: 5,
 		});
@@ -286,11 +301,12 @@ describe("notification observer transitions (task 3.1)", () => {
 	});
 
 	test("start schedules the periodic refresh and dispose stops it", async () => {
-		const { herdr, calls } = fakeHerdr({ agentStatus: "idle" });
+		const { herdr, port, calls } = fakeHerdr({ agentStatus: "idle" });
 		let current = view({ status: "active", workspace: "w1" });
 		const owner = new WorkflowNotifications({
 			enabled: () => true,
 			herdr,
+			port,
 			views: () => [current],
 			refreshMs: 5,
 		});
@@ -370,10 +386,11 @@ describe("live observation mapping (task 3.2)", () => {
 
 	test("a blocked observation retains through a later missing observation end to end", async () => {
 		const state: FakeState = { agentStatus: "idle", agentPresent: true };
-		const { herdr, calls } = fakeHerdr(state);
+		const { herdr, port, calls } = fakeHerdr(state);
 		const owner = new WorkflowNotifications({
 			enabled: () => true,
 			herdr,
+			port,
 			views: () => [view({ workspace: "w1" })],
 		});
 		await owner.reconcile();
@@ -412,16 +429,35 @@ describe("live observation mapping (task 3.2)", () => {
 describe("presentation-only non-interference (task 3.4)", () => {
 	test("a failed observation leaves the view untouched with one bounded diagnostic", async () => {
 		const messages: string[] = [];
-		const failing: HerdrPort = {
+		const failing: HerdrCli = {
 			call() {
 				throw new Error("herdr unavailable");
 			},
 		};
+		const failingPort = {
+			notify: () =>
+				Effect.fail(
+					new MultiplexerError("unavailable", "herdr", "herdr unavailable"),
+				),
+			tabList: () =>
+				Effect.fail(
+					new MultiplexerError("unavailable", "herdr", "herdr unavailable"),
+				),
+			workspaceFocus: () =>
+				Effect.fail(
+					new MultiplexerError("unavailable", "herdr", "herdr unavailable"),
+				),
+			tabFocus: () =>
+				Effect.fail(
+					new MultiplexerError("unavailable", "herdr", "herdr unavailable"),
+				),
+		} as unknown as MultiplexerPort;
 		const target = view({ status: "paused", workspace: "w1" });
 		const before = JSON.stringify(target);
 		const owner = new WorkflowNotifications({
 			enabled: () => true,
 			herdr: failing,
+			port: failingPort,
 			views: () => [target],
 			diagnostics: new BoundedNotificationDiagnostics((message) =>
 				messages.push(message),
@@ -440,7 +476,7 @@ describe("presentation-only non-interference (task 3.4)", () => {
 
 	test("a failed focus reports one bounded diagnostic without failing the notification", async () => {
 		const messages: string[] = [];
-		const { herdr, calls } = fakeHerdr({
+		const { herdr, port, calls } = fakeHerdr({
 			agentStatus: "idle",
 			tabLabel: "worker",
 		});
@@ -448,6 +484,7 @@ describe("presentation-only non-interference (task 3.4)", () => {
 		const owner = new WorkflowNotifications({
 			enabled: () => true,
 			herdr,
+			port,
 			views: () => [current],
 			diagnostics: new BoundedNotificationDiagnostics((message) =>
 				messages.push(message),

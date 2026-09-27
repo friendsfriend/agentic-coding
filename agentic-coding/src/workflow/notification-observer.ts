@@ -10,7 +10,8 @@
 // processes, and every failure is presentation-only.
 
 import type { WorkflowView } from "../contracts/workflow.ts";
-import type { HerdrPort } from "./adapters.ts";
+import type { HerdrCli } from "../multiplexer/herdr/cli.ts";
+import type { MultiplexerPort } from "../multiplexer/port.ts";
 import { herdrNotificationsEnabled } from "./effects.ts";
 import {
 	BoundedNotificationDiagnostics,
@@ -42,7 +43,10 @@ export const NOTIFICATION_FALLBACK_REFRESH_MS = 2_000;
 export const OWED_STATE_MISSING_GRACE = 5;
 
 export interface WorkflowNotificationsOptions {
-	herdr: HerdrPort;
+	/** Raw Herdr CLI used for the Herdr-only sidebar observation reads. */
+	herdr: HerdrCli;
+	/** Selected runtime used for the notification itself. */
+	port: MultiplexerPort;
 	/** Current authoritative views for the repositories this owner covers. */
 	views: () => readonly WorkflowView[];
 	diagnostics?: NotificationDiagnostics;
@@ -235,7 +239,7 @@ export class WorkflowNotifications {
 	): Promise<void> {
 		try {
 			const result = await raiseDeveloperNotification(
-				this.options.herdr,
+				this.options.port,
 				notification,
 				view.workspace,
 				signal,

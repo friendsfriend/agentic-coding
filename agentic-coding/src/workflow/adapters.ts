@@ -1,25 +1,33 @@
 import fs from "node:fs";
 import path from "node:path";
-import { Effect, Either } from "effect";
+import { Effect } from "effect";
 import type {
 	AgentHandle,
 	Assignment,
 	ResolvedProfile,
 	RuntimeId,
 } from "../contracts/workflow.ts";
-import { decodeHerdrResult } from "../herdr-client.ts";
+import type {
+	AgentLifecycleOps,
+	AgentObservation,
+	MultiplexerPort,
+} from "../multiplexer/port.ts";
 import type { RenderedAssignment } from "./assignment.ts";
-import * as H from "./herdr-schema.ts";
 import {
 	closeSecureDirectory,
 	openSecureDirectory,
 	writeAtomicPrivateFile,
 } from "./secure-fs.ts";
 
-export interface HerdrPort {
-	call(...args: string[]): unknown;
-	callAsync?(args: string[], signal?: AbortSignal): Promise<unknown>;
-}
+export {
+	HerdrLifecycle,
+	HerdrMultiplexer,
+} from "../multiplexer/herdr/index.ts";
+export type { AgentObservation, MultiplexerPort } from "../multiplexer/port.ts";
+/** Deprecated alias (add-multiplexer-adapters, task 1.3): existing Herdr-port
+ * imports keep type-checking while call sites migrate to the port. */
+export type HerdrPort = MultiplexerPort;
+
 export interface LaunchContext {
 	profile: ResolvedProfile;
 	assignment: Assignment;
@@ -37,17 +45,12 @@ export interface LaunchContext {
 	/** Abort ownership-bound external work when the effect lease is lost. */
 	signal?: AbortSignal;
 }
-export interface AgentObservation {
-	status: "idle" | "working" | "blocked" | "done" | "unknown";
-	paneId: string;
-	sessionId?: string;
-}
 /** Workflow-facing agent lifecycle boundary (migrate-workflow-execution-to-effect
- * task 2.2/3.1). Methods are Effect operations; the underlying Herdr CLI and
- * subprocesses remain the foreign API boundary. Successfully launched agents,
- * adopted panes, and created workspaces belong to the durable workflow and
- * intentionally outlive a runner drain — nothing here tears them down on
- * ordinary scope exit. */
+ * task 2.2/3.1). Methods are Effect operations; the underlying multiplexer
+ * transport and subprocesses remain the foreign API boundary. Successfully
+ * launched agents, adopted panes, and created workspaces belong to the durable
+ * workflow and intentionally outlive a runner drain — nothing here tears them
+ * down on ordinary scope exit. */
 export interface AgentAdapter {
 	readonly id: RuntimeId;
 	preflight(profile: ResolvedProfile, requirements: readonly string[]): void;
@@ -63,22 +66,6 @@ export interface AgentAdapter {
 	): Effect.Effect<AgentObservation, Error>;
 	stop(handle: AgentHandle, signal?: AbortSignal): Effect.Effect<void, Error>;
 }
-function agent(value: unknown): Record<string, unknown> {
-	if (!value || typeof value !== "object" || !("agent" in value))
-		throw new Error("Herdr returned no agent");
-	const item = (value as { agent: unknown }).agent;
-	if (!item || typeof item !== "object")
-		throw new Error("Herdr returned invalid agent");
-	return item as Record<string, unknown>;
-}
-/** Agent state from an `agent get` envelope, empty when it cannot be read. */
-function agentStatus(value: unknown): string {
-	try {
-		return String(agent(value).agent_status ?? "");
-	} catch {
-		return "";
-	}
-}
 function requireExecutable(executable: string): string {
 	const resolved = path.isAbsolute(executable)
 		? executable
@@ -87,294 +74,9 @@ function requireExecutable(executable: string): string {
 		throw new Error(`configured runtime executable not found: ${executable}`);
 	return fs.realpathSync(resolved);
 }
-const SHELL_NAMES = new Set([
-	"sh",
-	"bash",
-	"dash",
-	"zsh",
-	"fish",
-	"ksh",
-	"mksh",
-	"csh",
-	"tcsh",
-	"elvish",
-	"xonsh",
-	"nu",
-	"pwsh",
-	"powershell",
-	"cmd",
-]);
-/** Effect acquisition around the shared Herdr port: ownership loss aborts the
- * underlying call, and Herdr failures surface as classified `Error`s. */
-export function herdrCallEffect(
-	herdr: HerdrPort,
-	args: string[],
-	signal?: AbortSignal,
-): Effect.Effect<unknown, Error> {
-	return Effect.tryPromise({
-		try: () =>
-			herdr.callAsync
-				? herdr.callAsync(args, signal)
-				: Promise.resolve(herdr.call(...args)),
-		catch: (error) =>
-			error instanceof Error ? error : new Error(String(error)),
-	});
-}
-export class HerdrLifecycle {
-	/** How many launch-prompt submissions one launch may take, and how long each
-	 * submission is watched for before it counts as dropped. */
-	static readonly PROMPT_SUBMIT_ATTEMPTS = 3;
-	static readonly PROMPT_CONFIRM_POLLS = 24;
-	static readonly PROMPT_CONFIRM_INTERVAL_MS = 500;
-	constructor(
-		private readonly herdr: HerdrPort,
-		private readonly sleep: (ms: number) => Effect.Effect<void> = (ms) =>
-			Effect.sleep(ms),
-		private readonly signal?: AbortSignal,
-	) {}
-	private call(
-		args: string[],
-		signal = this.signal,
-	): Effect.Effect<unknown, Error> {
-		const herdr = this.herdr;
-		return Effect.gen(function* () {
-			if (signal?.aborted) throw new Error("effect ownership was lost");
-			return yield* herdrCallEffect(herdr, args, signal);
-		});
-	}
-	waitForShell(
-		paneId: string,
-		signal = this.signal,
-	): Effect.Effect<void, Error> {
-		const self = this;
-		return Effect.gen(function* () {
-			for (let attempt = 0; attempt < 50; attempt++) {
-				const raw = yield* self.call(
-					["pane", "process-info", "--pane", paneId],
-					signal,
-				);
-				const result = decodeHerdrResult(H.processInfoResult, raw);
-				const info = result.process_info;
-				const foreground = info?.foreground_processes ?? [];
-				// Match Herdr's Linux/macOS available-shell check. Linux can report zsh
-				// alongside startup helpers; seeing zsh somewhere in that job is not ready.
-				const foregroundName = String(
-					foreground[0]?.name ?? foreground[0]?.argv?.[0] ?? "",
-				)
-					.split(/[\\/]/)
-					.at(-1)
-					?.replace(/^-/, "")
-					.replace(/\.exe$/, "")
-					.toLowerCase();
-				const shellIsForeground =
-					typeof info?.shell_pid === "number" &&
-					info.foreground_process_group_id === info.shell_pid &&
-					foreground.length === 1 &&
-					foreground[0]?.pid === info.shell_pid &&
-					SHELL_NAMES.has(foregroundName ?? "");
-				if (shellIsForeground) return;
-				yield* self.sleep(100);
-			}
-			throw new Error(`pane did not reach foreground shell: ${paneId}`);
-		});
-	}
-	start(
-		kind: "pi" | "opencode",
-		ctx: LaunchContext,
-		runtimeArgs: string[],
-	): Effect.Effect<AgentHandle, Error> {
-		const self = this;
-		return Effect.gen(function* () {
-			yield* self.waitForShell(ctx.paneId, ctx.signal);
-			// herdr 0.8.0 has no agent-level env flag and spawns agents through the pane
-			// shell, so the run environment must be injected into the pane first. Source
-			// a 0600 env file (secrets stay out of the terminal scrollback), then keep a
-			// shell alive with the exported vars for `agent start` to inherit.
-			const envFile = path.join(
-				ctx.runDirectory ?? path.join(ctx.cwd, ".herdr-workflow"),
-				"runtime-bin",
-				ctx.assignment.runId,
-				"run.env",
-			);
-			const directory = openSecureDirectory(
-				path.dirname(envFile),
-				ctx.runDirectory ?? ctx.cwd,
-			);
-			try {
-				const lines = Object.entries(ctx.environment)
-					.filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
-					.map(([key, value]) => `${key}=${shQuote(value)}`);
-				writeAtomicPrivateFile(
-					directory,
-					path.basename(envFile),
-					`${lines.join("\n")}\n`,
-					0o600,
-				);
-			} finally {
-				closeSecureDirectory(directory);
-			}
-			// pane run is asynchronous and waitForShell cannot tell the pre-injection
-			// shell from the exec'd one; a marker touched after sourcing proves the
-			// env landed before `agent start` inherits it.
-			const marker = `${envFile}.done`;
-			yield* Effect.sync(() => fs.rmSync(marker, { force: true }));
-			yield* self.call(
-				[
-					"pane",
-					"run",
-					ctx.paneId,
-					`set -a; . ${shQuote(envFile)}; set +a; touch ${shQuote(marker)}; exec "${"$"}{SHELL:-sh}"`,
-				],
-				ctx.signal,
-			);
-			for (let attempt = 0; attempt < 50 && !fs.existsSync(marker); attempt++) {
-				if (ctx.signal?.aborted) throw new Error("effect ownership was lost");
-				yield* self.sleep(100);
-			}
-			if (!fs.existsSync(marker))
-				throw new Error(
-					`run environment injection did not land in pane: ${ctx.paneId}`,
-				);
-			yield* self.waitForShell(ctx.paneId, ctx.signal);
-			const invoke = () =>
-				self.call(
-					[
-						"agent",
-						"start",
-						ctx.name,
-						"--kind",
-						kind,
-						"--pane",
-						ctx.paneId,
-						"--",
-						...runtimeArgs,
-					],
-					ctx.signal,
-				);
-			let invokeOutcome = yield* Effect.either(invoke());
-			if (
-				Either.isLeft(invokeOutcome) &&
-				String(invokeOutcome.left?.message ?? "").includes(
-					"not an available shell",
-				)
-			) {
-				yield* self.sleep(250);
-				yield* self.waitForShell(ctx.paneId, ctx.signal);
-				invokeOutcome = yield* Effect.either(invoke());
-			}
-			const result = Either.isLeft(invokeOutcome)
-				? yield* Effect.fail(invokeOutcome.left)
-				: invokeOutcome.right;
-			const started = agent(result);
-			const paneId = String(started.pane_id ?? ctx.paneId);
-			const live = agent(
-				yield* self.call(["agent", "get", paneId], ctx.signal),
-			);
-			if (String(live.pane_id) !== paneId)
-				throw new Error(`agent get mismatch for ${paneId}`);
-			yield* self.submitLaunchPrompt(paneId, ctx.rendered.prompt, ctx.signal);
-			return {
-				runtime: ctx.profile.runtime,
-				name: ctx.name,
-				paneId,
-				...(live.tab_id ? { tabId: String(live.tab_id) } : {}),
-				...(live.session_id ? { sessionId: String(live.session_id) } : {}),
-			};
-		});
-	}
-	/** Deliver the launch prompt and confirm the runtime left idle for it. Herdr
-	 * reports a known runtime as ready through an idle fallback the moment its
-	 * process appears, so `agent start` can return while the runtime is still
-	 * booting and a prompt submitted into that window is dropped without any
-	 * error. The run would then stay parked on a live, unprompted agent, so the
-	 * submission is confirmed by the agent leaving idle and re-submitted while it
-	 * never does. A submission that was only partially consumed (text landed, the
-	 * submit key did not) is re-sent on top of the retained text; clearing it
-	 * would need per-runtime input semantics this boundary deliberately avoids. */
-	private submitLaunchPrompt(
-		paneId: string,
-		prompt: string,
-		signal?: AbortSignal,
-	): Effect.Effect<void, Error> {
-		const self = this;
-		return Effect.gen(function* () {
-			for (
-				let attempt = 0;
-				attempt < HerdrLifecycle.PROMPT_SUBMIT_ATTEMPTS;
-				attempt++
-			) {
-				yield* self.call(["agent", "prompt", paneId, prompt], signal);
-				if (yield* self.promptTookEffect(paneId, signal)) return;
-			}
-			return yield* Effect.fail(
-				new Error(`agent did not start on its launch prompt: ${paneId}`),
-			);
-		});
-	}
-	/** Watch the agent through the same boundary the engine observes it, so a
-	 * prompt that did land is never submitted twice. An unreadable state counts
-	 * as unconfirmed: a launch may retry, a duplicated assignment may not. */
-	private promptTookEffect(
-		paneId: string,
-		signal?: AbortSignal,
-	): Effect.Effect<boolean> {
-		const self = this;
-		return Effect.gen(function* () {
-			for (
-				let attempt = 0;
-				attempt < HerdrLifecycle.PROMPT_CONFIRM_POLLS;
-				attempt++
-			) {
-				yield* self.sleep(HerdrLifecycle.PROMPT_CONFIRM_INTERVAL_MS);
-				const observed = yield* Effect.either(
-					self.call(["agent", "get", paneId], signal),
-				);
-				if (Either.isLeft(observed)) return false;
-				const status = agentStatus(observed.right);
-				if (status === "") return false;
-				if (status !== "idle") return true;
-			}
-			return false;
-		});
-	}
-	prompt(
-		handle: AgentHandle,
-		message: string,
-		signal = this.signal,
-	): Effect.Effect<void, Error> {
-		const self = this;
-		return Effect.gen(function* () {
-			agent(yield* self.call(["agent", "get", handle.paneId], signal));
-			yield* self.call(["agent", "prompt", handle.paneId, message], signal);
-		});
-	}
-	observe(
-		handle: AgentHandle,
-		signal = this.signal,
-	): Effect.Effect<AgentObservation, Error> {
-		const self = this;
-		return Effect.gen(function* () {
-			const live = agent(
-				yield* self.call(["agent", "get", handle.paneId], signal),
-			);
-			const observed = String(live.agent_status ?? "unknown");
-			const status = ["idle", "working", "blocked", "done"].includes(observed)
-				? (observed as AgentObservation["status"])
-				: "unknown";
-			return {
-				status,
-				paneId: handle.paneId,
-				...(live.session_id ? { sessionId: String(live.session_id) } : {}),
-			};
-		});
-	}
-	stop(handle: AgentHandle, signal = this.signal): Effect.Effect<void, Error> {
-		return this.call(["pane", "close", handle.paneId], signal);
-	}
-}
 abstract class BaseAdapter implements AgentAdapter {
 	abstract readonly id: RuntimeId;
-	constructor(protected readonly lifecycle: HerdrLifecycle) {}
+	constructor(protected readonly lifecycle: AgentLifecycleOps) {}
 	preflight(profile: ResolvedProfile, requirements: readonly string[]): void {
 		if (profile.runtime !== this.id)
 			throw new Error(
@@ -393,13 +95,13 @@ abstract class BaseAdapter implements AgentAdapter {
 	}
 	abstract launch(ctx: LaunchContext): Effect.Effect<AgentHandle, Error>;
 	prompt(handle: AgentHandle, message: string, signal?: AbortSignal) {
-		return this.lifecycle.prompt(handle, message, signal);
+		return this.lifecycle.prompt(handle.paneId, message, signal);
 	}
 	observe(handle: AgentHandle, signal?: AbortSignal) {
-		return this.lifecycle.observe(handle, signal);
+		return this.lifecycle.observe(handle.paneId, signal);
 	}
 	stop(handle: AgentHandle, signal?: AbortSignal) {
-		return this.lifecycle.stop(handle, signal);
+		return this.lifecycle.stop(handle.paneId, signal);
 	}
 }
 export class PiAdapter extends BaseAdapter {
@@ -435,7 +137,8 @@ export class PiAdapter extends BaseAdapter {
 		if (ctx.workflowExtensionPath)
 			args.push("--extension", ctx.workflowExtensionPath);
 		if (ctx.bridgePath) args.push("--extension", ctx.bridgePath);
-		return this.lifecycle.start("pi", withRuntimeLauncher(ctx, "pi"), args);
+		const withLauncher = withRuntimeLauncher(ctx, "pi");
+		return launchHandle(this.lifecycle, withLauncher, "pi", args, ctx);
 	}
 }
 export class OpenCodeAdapter extends BaseAdapter {
@@ -444,12 +147,42 @@ export class OpenCodeAdapter extends BaseAdapter {
 		const args: string[] = ["--auto"];
 		if (ctx.profile.model) args.push("--model", ctx.profile.model);
 		if (ctx.profile.agent) args.push("--agent", ctx.profile.agent);
-		return this.lifecycle.start(
-			"opencode",
-			withOpenCodeLauncher(isolatedOpenCode(ctx)),
-			args,
-		);
+		const withLauncher = withOpenCodeLauncher(isolatedOpenCode(ctx));
+		return launchHandle(this.lifecycle, withLauncher, "opencode", args, ctx);
 	}
+}
+/** Shared launch mapping: the adapter owns runtime args + profile-visible
+ * paths, the multiplexer port owns env injection, readiness, and launch-prompt
+ * confirmation. */
+function launchHandle(
+	lifecycle: AgentLifecycleOps,
+	launched: LaunchContext,
+	kind: "pi" | "opencode",
+	runtimeArgs: string[],
+	original: LaunchContext,
+): Effect.Effect<AgentHandle, Error> {
+	return lifecycle
+		.start({
+			kind,
+			name: original.name,
+			paneId: original.paneId,
+			cwd: original.cwd,
+			runId: original.assignment.runId,
+			...(original.runDirectory ? { runDirectory: original.runDirectory } : {}),
+			runtimeArgs,
+			environment: launched.environment,
+			prompt: original.rendered.prompt,
+			...(original.signal ? { signal: original.signal } : {}),
+		})
+		.pipe(
+			Effect.map((info) => ({
+				runtime: original.profile.runtime,
+				name: original.name,
+				paneId: info.paneId,
+				...(info.tabId ? { tabId: info.tabId } : {}),
+				...(info.sessionId ? { sessionId: info.sessionId } : {}),
+			})),
+		);
 }
 function isolatedOpenCode(ctx: LaunchContext): LaunchContext {
 	const root = ctx.runDirectory ?? path.join(ctx.cwd, ".herdr-workflow");
@@ -530,10 +263,7 @@ export class OpenCodeV2Adapter extends BaseAdapter {
 		const args: string[] = ["--auto"];
 		if (ctx.profile.model) args.push("--model", ctx.profile.model);
 		if (ctx.profile.agent) args.push("--agent", ctx.profile.agent);
-		return this.lifecycle.start(
-			"opencode",
-			withOpenCodeLauncher(isolatedOpenCode(ctx)),
-			args,
-		);
+		const withLauncher = withOpenCodeLauncher(isolatedOpenCode(ctx));
+		return launchHandle(this.lifecycle, withLauncher, "opencode", args, ctx);
 	}
 }

@@ -32,7 +32,9 @@ import type {
 	WorkflowState,
 } from "../../contracts/workflow";
 import type { WorkflowView } from "../../contracts/workflow.ts";
-import { directionBetween, Herdr, type Rect } from "../../herdr-client.ts";
+import { runMultiplexer } from "../../multiplexer/boundary.ts";
+import { multiplexerPort } from "../../multiplexer/factory.ts";
+import type { MultiplexerPort } from "../../multiplexer/port.ts";
 import {
 	fetchProjectCatalog,
 	loadProjectCatalog,
@@ -76,7 +78,6 @@ import {
 	workflowExecutionError,
 } from "./engine.ts";
 
-const herdr = new Herdr();
 export type DashboardObservation =
 	| { kind: "dashboard"; repo: string; workflowId: string }
 	| { kind: "workflows" }
@@ -179,21 +180,42 @@ async function observeAsync<T>(
 	return (await runLocalObservation(observation, signal)) as T;
 }
 
-function openWorkspaceIds(): Set<string> | undefined {
+/** Best-effort open-workspace set. The async catalog path awaits the port and
+ * caches the result so the synchronous compatibility entry point keeps the
+ * pre-change open-workspace filtering once a catalog read has happened; an
+ * unavailable runtime leaves the cache unset (no filtering), exactly like a
+ * missing runtime today. */
+let cachedOpenWorkspaces: Set<string> | undefined;
+
+async function openWorkspaceIdsAsync(
+	port: MultiplexerPort = multiplexerPort(),
+): Promise<Set<string> | undefined> {
 	try {
-		const workspaces = herdr.call("workspace", "list").workspaces as Array<{
-			workspace_id: string;
-		}>;
-		return new Set(workspaces.map((workspace) => workspace.workspace_id));
+		const workspaces = await runMultiplexer(port.workspaceList());
+		cachedOpenWorkspaces = new Set(
+			workspaces.map((workspace) => workspace.workspaceId),
+		);
+		return cachedOpenWorkspaces;
 	} catch {
 		return undefined;
 	}
 }
 
+/** Reset the cached open-workspace set (test seam). */
+export function resetOpenWorkspaceCache(): void {
+	cachedOpenWorkspaces = undefined;
+}
+
 export function listWorkflows(...roots: string[]): WorkflowOverview[] {
+	return buildWorkflows(cachedOpenWorkspaces, roots);
+}
+
+function buildWorkflows(
+	openWorkspaces: Set<string> | undefined,
+	roots: string[],
+): WorkflowOverview[] {
 	const found: WorkflowOverview[] = [];
 	const seen = new Set<string>();
-	const openWorkspaces = openWorkspaceIds();
 	const addRepository = (repo: string) => {
 		try {
 			if (!existsSync(canonicalStorePath(repo))) return;
@@ -267,7 +289,11 @@ export async function listWorkflowsFromCatalog(
 	serverUrl?: string,
 ): Promise<WorkflowOverview[]> {
 	const catalog = await loadProjectCatalog({ baseUrl: serverUrl });
-	const overviews = listWorkflows(...projectCanonicalRoots(catalog));
+	const openWorkspaces = await openWorkspaceIdsAsync();
+	const overviews = buildWorkflows(
+		openWorkspaces,
+		projectCanonicalRoots(catalog),
+	);
 	return overviews.map((overview) => ({
 		...overview,
 		projectIdent: projectIdentForPath(catalog, overview.state.repository),
@@ -1482,8 +1508,13 @@ export function focusReturnWorkspace(
 	focusWorkspace(workspace);
 	consumeReturnWorkspace(repo, workflowId, workspace);
 }
+/** Best-effort workspace focus through the selected port. Kept synchronous for
+ * the TUI key handler; a focus failure is swallowed like any other
+ * presentation-only action. */
 export function focusWorkspace(workspace: string) {
-	herdr.call("workspace", "focus", workspace);
+	void runMultiplexer(multiplexerPort().workspaceFocus(workspace)).catch(
+		() => {},
+	);
 }
 
 /** Root of the workflow's OpenSpec change directory, or `undefined` when the
@@ -1544,54 +1575,44 @@ export async function openFindingInEditorAsync(
 	signal?: AbortSignal,
 ) {
 	if (!finding.path) throw new Error("Finding has no file path.");
-	const file = join(state.worktree, finding.path);
-	const call = herdr.callAsync;
-	if (!call) return openFindingInEditor(state, finding);
-	const pane = (
-		(await call(
-			[
-				"tab",
-				"create",
-				"--workspace",
-				state.workspace,
-				"--label",
-				`finding:${finding.path.split("/").at(-1)}`,
-				"--focus",
-			],
-			signal,
-		)) as { root_pane?: { pane_id?: string } }
-	).root_pane?.pane_id;
-	if (!pane) throw new Error("editor pane was not created");
-	const editor = process.env.EDITOR || "vi";
-	await call(
-		[
-			"pane",
-			"run",
-			pane,
-			`${editor} +${finding.line ?? 1} ${JSON.stringify(file)}`,
-		],
-		signal,
+	if (isAbsolute(finding.path) || finding.path.split(/[/]/).includes(".."))
+		throw new Error("finding path must stay inside the worktree");
+	const root = resolve(state.worktree);
+	const file = resolve(root, finding.path);
+	if (file !== root && !file.startsWith(`${root}${sep}`))
+		throw new Error("finding path escapes the worktree");
+	signal?.throwIfAborted();
+	const port = multiplexerPort();
+	const created = await runMultiplexer(
+		port.tabCreate({
+			workspaceId: state.workspace,
+			label: `finding:${finding.path.split("/").at(-1)}`,
+			focus: true,
+		}),
 	);
+	const pane = created.rootPaneId;
+	if (!pane) throw new Error("editor pane was not created");
+	// paneRun executes through a shell, so both the configured editor and the
+	// agent-influenceable finding path are single-quoted, never interpolated raw.
+	const editor = process.env.EDITOR || "vi";
+	await runMultiplexer(
+		port.paneRun(
+			pane,
+			`${shQuote(editor)} +${finding.line ?? 1} ${shQuote(file)}`,
+		),
+	);
+}
+
+/** POSIX single-quote escaping for values handed to a pane shell. */
+function shQuote(value: string): string {
+	return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 export function openFindingInEditor(
 	state: WorkflowState,
 	finding: { path?: string; line?: number },
 ) {
-	if (!finding.path) throw new Error("Finding has no file path.");
-	const file = join(state.worktree, finding.path);
-	const pane = herdr.call(
-		"tab",
-		"create",
-		"--workspace",
-		state.workspace,
-		"--label",
-		`finding:${finding.path.split("/").at(-1)}`,
-		"--focus",
-	).root_pane.pane_id as string;
-	const editor = process.env.EDITOR || "vi";
-	const command = `${editor} +${finding.line ?? 1} ${JSON.stringify(file)}`;
-	herdr.call("pane", "run", pane, command);
+	void openFindingInEditorAsync(state, finding).catch(() => {});
 }
 
 export async function focusAgentAsync(
@@ -1599,75 +1620,21 @@ export async function focusAgentAsync(
 	pane: string,
 	signal?: AbortSignal,
 ) {
-	const call = herdr.callAsync;
-	if (!call) return focusAgent(state, pane);
-	await call(["workspace", "focus", state.workspace], signal);
-	const paneResult = (await call(["pane", "get", pane], signal)) as {
-		pane?: { tab_id?: string };
-	};
-	const tabId = paneResult.pane?.tab_id;
-	if (!tabId) throw new Error("agent pane has no tab");
-	await call(["tab", "focus", tabId], signal);
-	for (let attempt = 0; attempt < 8; attempt++) {
-		const layoutResult = (await call(
-			["pane", "layout", "--pane", pane],
-			signal,
-		)) as {
-			layout?: {
-				focused_pane_id?: string;
-				panes?: Array<{ pane_id: string; rect: Rect }>;
-			};
-		};
-		const layout = layoutResult.layout;
-		if (layout?.focused_pane_id === pane) return;
-		const current = layout?.panes?.find(
-			(item) => item.pane_id === layout?.focused_pane_id,
-		);
-		const target = layout?.panes?.find((item) => item.pane_id === pane);
-		if (!layout || !current || !target)
-			throw new Error("agent pane not present in focused tab");
-		await call(
-			[
-				"pane",
-				"focus",
-				"--pane",
-				current.pane_id,
-				"--direction",
-				directionBetween(current.rect, target.rect),
-			],
-			signal,
-		);
-	}
-	throw new Error("could not reach agent pane");
+	signal?.throwIfAborted();
+	// The port owns the workspace/tab focus plus layout traversal; the Luvus
+	// adapter maps it to its own pane focus primitive.
+	await runMultiplexer(
+		multiplexerPort().paneFocus({
+			paneId: pane,
+			workspaceId: state.workspace,
+		}),
+	);
 }
 
+/** Synchronous compatibility entry point for the TUI key handler: fire the
+ * focus traversal and swallow a best-effort miss. */
 export function focusAgent(state: WorkflowState, pane: string) {
-	focusWorkspace(state.workspace);
-	const tabId = herdr.call("pane", "get", pane).pane.tab_id as string;
-	herdr.call("tab", "focus", tabId);
-	for (let attempt = 0; attempt < 8; attempt++) {
-		const layout = herdr.call("pane", "layout", "--pane", pane).layout as {
-			focused_pane_id: string;
-			panes: Array<{ pane_id: string; rect: Rect }>;
-		};
-		if (layout.focused_pane_id === pane) return;
-		const current = layout.panes.find(
-			(item) => item.pane_id === layout.focused_pane_id,
-		);
-		const target = layout.panes.find((item) => item.pane_id === pane);
-		if (!current || !target)
-			throw new Error("agent pane not present in focused tab");
-		const direction = directionBetween(current.rect, target.rect);
-		herdr.call(
-			"pane",
-			"focus",
-			"--pane",
-			current.pane_id,
-			"--direction",
-			direction,
-		);
-	}
-	throw new Error("could not reach agent pane");
+	void focusAgentAsync(state, pane).catch(() => {});
 }
 
 export function discoverChanges(repo: string): string[] {

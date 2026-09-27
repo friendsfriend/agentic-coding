@@ -1,21 +1,18 @@
-// Bounded Herdr boundary for developer-action notifications
+// Bounded multiplexer boundary for developer-action notifications
 // (workflow-developer-notifications).
 //
-// Two best-effort presentation writes through the shared `HerdrPort`:
-//   - `notification show <title> --body <body> --sound request`, the same
-//     `herdr` CLI envelope every other workflow call parses;
-//   - dashboard focus: `tab list --workspace` to resolve the workflow's
-//     `dashboard` tab (ignoring its status glyph), then `workspace focus` and
-//     `tab focus`.
+// Two best-effort presentation writes through the selected `MultiplexerPort`:
+//   - a needs-attention notification for the workflow transition;
+//   - dashboard focus: list the workspace's tabs, resolve the workflow's
+//     `dashboard` tab (ignoring its status glyph), then focus workspace + tab.
 //
 // Focus is a skip, never a failure: a missing workspace, missing dashboard
 // tab, or missing tab id returns `false` and throws nothing. Notification
 // transport errors still throw so the observer can report one bounded
 // diagnostic; no partial side effect is produced by a failed call.
 
-import { decodeHerdrResult } from "../herdr-client.ts";
-import type { HerdrPort } from "./adapters.ts";
-import { tabListResult } from "./herdr-schema.ts";
+import { runMultiplexer } from "../multiplexer/boundary.ts";
+import type { MultiplexerPort } from "../multiplexer/port.ts";
 import { findAgentTabByBase } from "./tab-status.ts";
 
 /** One bounded diagnostic sink for the whole notifier, never a flood. */
@@ -23,14 +20,15 @@ export interface NotificationDiagnostics {
 	report(message: string): void;
 }
 
-/** The bounded Herdr delivery outcome. Every value counts as "raised"; the
- * notifier never retries a refused delivery in a loop. */
+/** The bounded delivery outcome. Every value counts as "raised"; the notifier
+ * never retries a refused delivery in a loop. */
 export type NotificationDelivery =
 	| "shown"
 	| "disabled"
 	| "rate_limited"
 	| "busy"
 	| "no_foreground_client"
+	| "refused"
 	| "unknown";
 
 export interface DeveloperNotification {
@@ -44,21 +42,13 @@ const KNOWN_DELIVERIES: ReadonlySet<string> = new Set([
 	"rate_limited",
 	"busy",
 	"no_foreground_client",
+	"refused",
 	"unknown",
 ]);
 
-async function call(
-	herdr: HerdrPort,
-	args: string[],
-	signal?: AbortSignal,
-): Promise<unknown> {
-	if (signal?.aborted) throw new Error("notification call was cancelled");
-	return herdr.callAsync ? herdr.callAsync(args, signal) : herdr.call(...args);
-}
-
-/** Narrow a `.result` envelope to a bounded delivery outcome. An envelope that
- * carries no recognizable status (for example `{ shown: true }`) counts as
- * `shown`, and any unrecognized string is `unknown`. */
+/** Narrow a delivery envelope to a bounded outcome. An envelope that carries
+ * no recognizable status (for example `{ shown: true }`) counts as `shown`,
+ * and any unrecognized string is `unknown`. */
 export function notificationDelivery(result: unknown): NotificationDelivery {
 	if (!result || typeof result !== "object") return "shown";
 	const record = result as Record<string, unknown>;
@@ -71,30 +61,25 @@ export function notificationDelivery(result: unknown): NotificationDelivery {
 }
 
 /** Raise one needs-attention notification. A transport failure throws a bounded
- * error and performs no other Herdr call. */
+ * error and performs no other call. */
 export async function showDeveloperNotification(
-	herdr: HerdrPort,
+	port: MultiplexerPort,
 	notification: DeveloperNotification,
 	signal?: AbortSignal,
 ): Promise<NotificationDelivery> {
-	const result = await call(
-		herdr,
-		[
-			"notification",
-			"show",
-			notification.title,
-			"--body",
-			notification.body,
-			"--sound",
-			"request",
-		],
-		signal,
+	signal?.throwIfAborted();
+	const outcome = await runMultiplexer(
+		port.notify({
+			title: notification.title,
+			body: notification.body,
+			needsAttention: true,
+		}),
 	);
-	return notificationDelivery(result);
+	return notificationDelivery({ delivery: outcome });
 }
 
 /**
- * Reject a store-sourced workspace identity that could confuse the Herdr CLI:
+ * Reject a store-sourced workspace identity that could confuse the runtime:
  * empty, over-long, or carrying C0 control characters. Mirrors the identity
  * guard in `setReturnInProcess` (`server/operations/engine.ts`). A rejected
  * workspace is treated as a skipped focus.
@@ -113,21 +98,20 @@ export function validWorkspaceIdentity(workspace: string | undefined): boolean {
  * never fail a notification.
  */
 export async function focusWorkflowDashboard(
-	herdr: HerdrPort,
+	port: MultiplexerPort,
 	workspace: string,
 	signal?: AbortSignal,
 ): Promise<boolean> {
 	if (!validWorkspaceIdentity(workspace)) return false;
 	try {
-		const tabs = decodeHerdrResult(
-			tabListResult,
-			await call(herdr, ["tab", "list", "--workspace", workspace], signal),
-		);
-		const dashboard = findAgentTabByBase(tabs.tabs ?? [], "dashboard");
-		const tabId = dashboard?.tab_id;
+		signal?.throwIfAborted();
+		const tabs = await runMultiplexer(port.tabList(workspace));
+		const dashboard = findAgentTabByBase(tabs, "dashboard");
+		const tabId = dashboard?.tabId;
 		if (!tabId) return false;
-		await call(herdr, ["workspace", "focus", workspace], signal);
-		await call(herdr, ["tab", "focus", tabId], signal);
+		await runMultiplexer(port.workspaceFocus(workspace));
+		if (signal?.aborted) return false;
+		await runMultiplexer(port.tabFocus(tabId));
 		return true;
 	} catch {
 		return false;
@@ -150,21 +134,21 @@ export interface NotificationRaiseResult {
  * throws; the caller owns the diagnostic.
  */
 export async function raiseDeveloperNotification(
-	herdr: HerdrPort,
+	port: MultiplexerPort,
 	notification: DeveloperNotification,
 	workspace: string | undefined,
 	signal?: AbortSignal,
 ): Promise<NotificationRaiseResult> {
 	const focused =
 		workspace && validWorkspaceIdentity(workspace)
-			? await focusWorkflowDashboard(herdr, workspace, signal)
+			? await focusWorkflowDashboard(port, workspace, signal)
 			: false;
-	const delivery = await showDeveloperNotification(herdr, notification, signal);
+	const delivery = await showDeveloperNotification(port, notification, signal);
 	return { delivery, focused };
 }
 
 /** One bounded, non-secret diagnostic sink: identical repeats collapse, so a
- * persistent Herdr failure reports once per distinct message. */
+ * persistent failure reports once per distinct message. */
 export class BoundedNotificationDiagnostics implements NotificationDiagnostics {
 	private readonly seen = new Set<string>();
 	constructor(private readonly sink: (message: string) => void = () => {}) {}

@@ -20,6 +20,31 @@ importer listed above keeps importing the barrel path unchanged; the split is
 a pure internal reorganization with no behavior change (digests, exports, and
 the full test suite are unmodified oracles for that claim).
 
+### Multiplexer boundary
+
+Workspaces, tabs, panes, agents, notifications, and runtime events reach the
+terminal multiplexer through one runtime-neutral port
+(`src/multiplexer/port.ts`). Every operation is an Effect with a normalized
+identity/intent payload and a classified `MultiplexerError`; callers never
+construct vendor argument vectors or parse vendor envelopes. Two adapters
+implement it: `src/multiplexer/herdr/` is the mechanical passthrough over the
+existing Herdr CLI calls (moved from `src/herdr-client.ts` and
+`src/workflow/herdr-schema.ts`, whose paths remain compatibility shims), and
+`src/multiplexer/luvus/` speaks Luvus UHP/CLI with its own decoders.
+
+Runtime selection is top-level `multiplexer: "herdr" | "luvus"` configuration
+with `AGENTIC_CODING_MULTIPLEXER` taking precedence and `herdr` as the default;
+`src/multiplexer/factory.ts` resolves it once and fails loudly when the
+selected executable/socket is unavailable, never falling back to another
+runtime. Detached `workflow drain` children inherit the selector and both
+runtimes' connection variables through the bounded allowlist in
+`src/workflow/cli/drain.ts`. Promise/sync consumers of the port run its effects
+through the single `src/multiplexer/boundary.ts` execution point.
+
+The Herdr-only sidebar/custom Agents view (`src/workflow/sidebar-sync.ts`) is
+deferred and stays on the raw Herdr CLI type; the port deliberately exposes no
+sidebar operation.
+
 ### Store lifecycle
 
 `initializeStore()` is the only schema-writing boundary. It takes SQLite's
@@ -398,7 +423,7 @@ runtime code depends on it.
 | **tui-feature** | `tui/dash/`, `tui/otel/`, `tui/settings/` | Dashboard, observability and settings feature implementations (the Settings surface is a Home destination: section views, inventory and its own section keys). |
 | **tui-shared** | `tui/shared/`, `tui/themes/`, `tui/clipboard.ts`, `tui/lifecycle.ts` | Shared presentation primitives and theme data. |
 | **tui-app** | remaining `tui/` files | TUI shell entrypoint (`index.tsx`) and lifecycle components. |
-| **root** | `cli.ts`, `herdr-client.ts`, `server-command.ts`, `server/` | Composition roots and foundational clients. `server/` is the unified Bun backend transport/client/build root (`expose-unified-bun-backend`): `protocol.ts` (contracts + route manifest), `auth.ts`, `app.ts`, `client.ts`, `events.ts`, `credentials.ts`, `handlers.ts`, `lifecycle.ts`. See [`docs/unified-backend-api.md`](unified-backend-api.md). |
+| **root** | `cli.ts`, `herdr-client.ts` (shim over `multiplexer/herdr/cli.ts`), `multiplexer/`, `server-command.ts`, `server/` | Composition roots and foundational clients. `server/` is the unified Bun backend transport/client/build root (`expose-unified-bun-backend`): `protocol.ts` (contracts + route manifest), `auth.ts`, `app.ts`, `client.ts`, `events.ts`, `credentials.ts`, `handlers.ts`, `lifecycle.ts`. See [`docs/unified-backend-api.md`](unified-backend-api.md). |
 
 Allowed directions (anything else fails, **including type-only imports**):
 

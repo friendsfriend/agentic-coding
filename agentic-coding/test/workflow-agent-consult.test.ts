@@ -12,6 +12,7 @@ import type { AgentAdapter } from "../src/workflow/adapters.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import { agentEffectHandlers } from "../src/workflow/effect-runner.ts";
 import { runtimeTest, WorkflowEngine } from "../src/workflow/runtime.ts";
+import { asPort } from "./fakes.ts";
 
 function repository(root: string): string {
 	fs.mkdirSync(root, { recursive: true });
@@ -409,11 +410,11 @@ test("the prompt handler mints the peer nonce outside the durable store", async 
 		const handlers = agentEffectHandlers(repo, engine, {
 			registry: registerBuiltins(),
 			adapters: new Map([["pi", adapter]]),
-			herdr: {
+			port: asPort({
 				call() {
 					throw new Error("herdr is not used by this test");
 				},
-			},
+			}),
 			async paneForRun() {
 				return { paneId: "pane", owned: true };
 			},
