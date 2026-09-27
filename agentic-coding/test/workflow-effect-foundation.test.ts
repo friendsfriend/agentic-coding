@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+	CLASSIFIER_DECISION_INPUT_MAX_BYTES,
 	decodeCommand,
 	decodeDeveloperQuestionAnswer,
 	externalDiagnostic,
@@ -241,6 +242,58 @@ test("requireText failures name the snapshot contract, not a field path", () => 
 	).toThrow(/core\.workflow-snapshot/);
 });
 
+test("snapshot classifier decisions enforce their aggregate content bound", () => {
+	const record = {
+		id: "decision",
+		at: "2026-01-01T00:00:00Z",
+		integration: "routing",
+		phase: "apply",
+		questionId: "core.implementation",
+		model: "jev",
+		input: "x".repeat(CLASSIFIER_DECISION_INPUT_MAX_BYTES),
+		inputTruncated: false,
+		options: [],
+		answer: { type: "noul" },
+		result: { applied: false, profiles: [] },
+	};
+	expect(() =>
+		decodeSnapshot({
+			schemaVersion: 1,
+			workflowId: "w",
+			revision: 0,
+			definition: { id: "no-openspec", version: 1, digest: "d" },
+			status: "active",
+			currentStep: "core.implementation",
+			step: {
+				attempt: 1,
+				activeRunIds: [],
+				completedRunIds: [],
+				selectedRoles: [],
+				testRunStarted: false,
+				results: [],
+			},
+			metadata: {
+				repository: ".",
+				worktree: ".",
+				branch: "main",
+				baseBranch: "main",
+				baseCommit: "x",
+				createdAt: "x",
+				updatedAt: "x",
+				stepEnteredAt: "x",
+			},
+			routing: { defaultProfile: "x", routes: [] },
+			evidence: [],
+			loopCounts: {},
+			attention: [],
+			classifierDecisions: Array.from({ length: 11 }, (_, index) => ({
+				...record,
+				id: `decision-${index}`,
+			})),
+		}),
+	).toThrow(/classifier decision content exceeds bound/);
+});
+
 test("schema-backed command and answer facades preserve acceptance behavior", () => {
 	const command = decodeCommand({
 		type: "operator.repair",
@@ -304,6 +357,7 @@ test("schema-backed snapshot decoding normalizes paths and keeps legacy default 
 		attention: [],
 	});
 	expect(snapshot.developerDialogue).toEqual([]);
+	expect(snapshot.classifierDecisions).toBeUndefined();
 	expect(snapshot.metadata.worktree).toBe(process.cwd());
 	expect(() =>
 		decodeSnapshot({

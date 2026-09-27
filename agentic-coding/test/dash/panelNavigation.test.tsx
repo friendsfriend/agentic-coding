@@ -153,7 +153,36 @@ function artifactsFixture(count: number): DashboardData {
 		);
 	}
 	const dashboard = testDashboard();
-	return { ...dashboard, state: { ...dashboard.state, worktree: root } };
+	return {
+		...dashboard,
+		state: { ...dashboard.state, worktree: root, classifierDecisions: [] },
+	};
+}
+
+function noDecisionsFixture(): DashboardData {
+	const dashboard = testDashboard();
+	return {
+		...dashboard,
+		state: { ...dashboard.state, classifierDecisions: [] },
+	};
+}
+
+function decisionsFixture(count: number): DashboardData {
+	const dashboard = testDashboard();
+	const template = dashboard.state.classifierDecisions?.[0];
+	if (!template) throw new Error("demo classifier decision missing");
+	return {
+		...dashboard,
+		state: {
+			...dashboard.state,
+			classifierDecisions: Array.from({ length: count }, (_, index) => ({
+				...template,
+				id: `decision-${index + 1}`,
+				questionId: `decision-${index + 1}`,
+				input: `classifier input ${index + 1}`,
+			})),
+		},
+	};
 }
 
 test("Shift+J/K move focus vertically with wrap at both edges", async () => {
@@ -224,11 +253,14 @@ test("Shift+H/L move focus horizontally with wrap at both edges", async () => {
 	t.renderer.destroy();
 });
 
-test("Shift+J/K without artifacts leave the active panel unchanged", async () => {
-	const t = await testRender(() => <TestDashboard />, {
-		width: 120,
-		height: 40,
-	});
+test("Shift+J/K without artifacts or decisions leave the active panel unchanged", async () => {
+	const t = await testRender(
+		() => <TestDashboard testData={noDecisionsFixture()} />,
+		{
+			width: 120,
+			height: 40,
+		},
+	);
 	await dashboardReady(t);
 
 	// Change has no vertical neighbor without a listed OpenSpec panel: a
@@ -342,6 +374,57 @@ test("focused OpenSpec panel shows five rows and scrolls with j/k", async () => 
 	const verdict = await waitForText(t, (frame) => frame.includes("Body 6."));
 	expect(verdict).not.toContain("Plan review");
 
+	t.renderer.destroy();
+});
+
+test("Classifier panel renders a bounded selectable viewport and opens detail", async () => {
+	const t = await testRender(
+		() => <TestDashboard testData={decisionsFixture(7)} />,
+		{ width: 120, height: 40 },
+	);
+	await dashboardReady(t);
+
+	// With no artifacts, Shift+J skips the empty OpenSpec cell and focuses the
+	// Classifier panel. Five of seven decisions are visible initially.
+	t.mockInput.pressKey("j", { shift: true });
+	await t.renderOnce();
+	const initial = t.captureCharFrame();
+	expect(initial).toContain("Classifier");
+	expect(
+		initial.split("\n").filter((line) => line.includes("routing · decision-")),
+	).toHaveLength(5);
+	expect(initial).not.toContain("decision-6");
+
+	for (let index = 0; index < 5; index++) t.mockInput.pressKey("j");
+	await t.renderOnce();
+	expect(t.captureCharFrame()).toContain("decision-6");
+	t.mockInput.pressEnter();
+	const detail = await waitForText(t, (frame) =>
+		frame.includes("Classifier · routing · decision-6"),
+	);
+	expect(detail).toContain("classifier input 6");
+
+	// Closing and reopening leaves the list selection on the same decision.
+	t.mockInput.pressEscape();
+	await t.waitForFrame(
+		(frame) => !frame.includes("Classifier · routing · decision-6"),
+	);
+	t.mockInput.pressEnter();
+	expect(
+		await t.waitForFrame((frame) =>
+			frame.includes("Classifier · routing · decision-6"),
+		),
+	).toContain("Classifier · routing · decision-6");
+	t.renderer.destroy();
+});
+
+test("Classifier panel is absent when the workflow exposes no decisions", async () => {
+	const t = await testRender(
+		() => <TestDashboard testData={noDecisionsFixture()} />,
+		{ width: 120, height: 40 },
+	);
+	await dashboardReady(t);
+	expect(t.captureCharFrame()).not.toContain("Classifier");
 	t.renderer.destroy();
 });
 

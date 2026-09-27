@@ -7,9 +7,87 @@
 import type { RequiredUserAction } from "../../contracts/actions.ts";
 import type {
 	AgentUsageMetrics,
+	ClassifierDecisionRecord,
 	WorkflowState,
 } from "../../contracts/workflow";
 import { formatDuration } from "../../workflow/format.ts";
+
+export function classifierDecisionRows(
+	decisions: readonly ClassifierDecisionRecord[],
+): string[] {
+	return decisions.map((decision) => {
+		const profiles = decision.result.profiles.join(", ") || "none";
+		const result = decision.result.applied
+			? `applied ${profiles}`
+			: `kept ${profiles}`;
+		return `${decision.integration} · ${decision.questionId} · ${result}`;
+	});
+}
+
+export function classifierDecisionDetail(decision: ClassifierDecisionRecord): {
+	title: string;
+	content: string;
+} {
+	const answer = decision.answer;
+	const escapeCell = (value: string) => value.replaceAll("|", "\\|");
+	const criteria = (value: unknown) =>
+		value === undefined
+			? "—"
+			: escapeCell(typeof value === "string" ? value : JSON.stringify(value));
+	const optionRows = decision.options.map((option) => {
+		const probability =
+			answer.type === "choice"
+				? answer.probabilities?.[option.label]
+				: undefined;
+		return `| ${escapeCell(option.label)} | ${escapeCell(option.profile)} | ${answer.type === "choice" && answer.choice === option.label ? "yes" : ""} | ${probability === undefined ? "—" : probability} | ${criteria(option.criteria)} |`;
+	});
+	const fence = "`".repeat(
+		Math.max(
+			3,
+			...[...decision.input.matchAll(/`+/g)].map(
+				(match) => match[0].length + 1,
+			),
+		),
+	);
+	return {
+		title: `Classifier · ${decision.integration} · ${decision.questionId}`,
+		content: [
+			"## Decision",
+			`- **Integration:** ${decision.integration}`,
+			...(decision.phase ? [`- **Phase:** ${decision.phase}`] : []),
+			`- **Question:** ${decision.questionId}`,
+			`- **Model:** ${decision.model}`,
+			`- **Recorded:** ${decision.at}`,
+			"",
+			"## Options and answer",
+			"| Option | Profile | Chosen | Probability | Criteria |",
+			"| --- | --- | --- | ---: | --- |",
+			...optionRows,
+			"",
+			...(answer.type === "choice"
+				? [
+						`Choice: ${answer.choice ?? "none"}`,
+						`Confidence: ${answer.confidence ?? "not provided"}`,
+					]
+				: ["Answer: no usable answer"]),
+			"",
+			"## Applied result",
+			`- **Applied:** ${decision.result.applied ? "yes" : "no"}`,
+			`- **Profiles:** ${decision.result.profiles.join(", ") || "none"}`,
+			...(decision.result.attention
+				? [`- **Attention:** ${decision.result.attention}`]
+				: []),
+			...(decision.inputTruncated
+				? ["", "> Stored classifier input was truncated."]
+				: []),
+			"",
+			"## Classifier input",
+			fence,
+			decision.input,
+			fence,
+		].join("\n"),
+	};
+}
 
 export function phaseAgeHours(
 	state: { phase: string; phaseStartedAt?: string; createdAt?: string },

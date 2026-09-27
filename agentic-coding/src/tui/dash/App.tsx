@@ -74,8 +74,10 @@ import {
 } from "./live.ts";
 import { Overlays } from "./modals/Overlays.tsx";
 import { notify } from "./notifications.ts";
+import { CLASSIFIER_PANEL } from "./panel-grid.ts";
 import { AgentsPanel } from "./panels/AgentsPanel.tsx";
 import { ChangePanel } from "./panels/ChangePanel.tsx";
+import { ClassifierPanel } from "./panels/ClassifierPanel.tsx";
 import { OpenSpecPanel } from "./panels/OpenSpecPanel.tsx";
 import {
 	agentMetricLine,
@@ -239,6 +241,8 @@ export function App(props: {
 	const setSelectedAgent = panels.setAgent;
 	const selectedArtifact = panels.artifact;
 	const setSelectedArtifact = panels.setArtifact;
+	const selectedDecision = panels.decision;
+	const setSelectedDecision = panels.setDecision;
 	const artifacts = panels.artifacts;
 	const setArtifacts = panels.setArtifacts;
 	let artifactGeneration = 0;
@@ -269,6 +273,13 @@ export function App(props: {
 					);
 			});
 	});
+	createEffect(() =>
+		panels.clamp({
+			agents: data().agents.length,
+			artifacts: artifacts().length,
+			decisions: data().state.classifierDecisions?.length ?? 0,
+		}),
+	);
 	const requiredUserAction = createMemo(() =>
 		requiredUserActionFor(
 			data().state.phase,
@@ -1061,6 +1072,7 @@ export function App(props: {
 	const keybindCatalog = createMemo(() =>
 		dashboardDetailKeybindCatalog({
 			artifactsVisible: artifacts().length > 0,
+			classifierVisible: (data().state.classifierDecisions?.length ?? 0) > 0,
 		}),
 	);
 	// The shell footer and `?` help read the active surface catalog from the
@@ -1286,6 +1298,8 @@ export function App(props: {
 		setSelectedAgent,
 		selectedArtifact,
 		setSelectedArtifact,
+		selectedDecision,
+		setSelectedDecision,
 		artifacts,
 		data,
 		setData,
@@ -2477,6 +2491,15 @@ export function App(props: {
 										artifacts={artifacts()}
 										active={activePanel() === 6}
 										selectedIndex={selectedArtifact()}
+									/>
+								</Show>
+								<Show
+									when={(data().state.classifierDecisions?.length ?? 0) > 0}
+								>
+									<ClassifierPanel
+										decisions={data().state.classifierDecisions ?? []}
+										active={activePanel() === CLASSIFIER_PANEL}
+										selectedIndex={selectedDecision()}
 									/>
 								</Show>
 							</box>

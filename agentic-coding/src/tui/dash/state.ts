@@ -7,6 +7,11 @@
 // a feature modal stays props-in/callbacks-out.
 import type { KeyEvent } from "@opentui/core";
 import { createSignal, type Setter } from "solid-js";
+import {
+	CHANGE_PANEL,
+	CLASSIFIER_PANEL,
+	OPENSPEC_PANEL,
+} from "./panel-grid.ts";
 
 /** One finding row the findings overlay renders (the modal's own shape). */
 export type FindingEvent = Parameters<
@@ -36,8 +41,14 @@ export interface PanelState {
 	readonly setArtifacts: Setter<string[]>;
 	readonly artifact: () => number;
 	readonly setArtifact: Setter<number>;
+	readonly decision: () => number;
+	readonly setDecision: Setter<number>;
 	/** Clamp every selection to the current list lengths. */
-	readonly clamp: (counts: { agents: number; artifacts: number }) => void;
+	readonly clamp: (counts: {
+		agents: number;
+		artifacts: number;
+		decisions: number;
+	}) => void;
 }
 
 export function createPanelState(): PanelState {
@@ -45,6 +56,7 @@ export function createPanelState(): PanelState {
 	const [agent, setAgentSignal] = createSignal(0);
 	const [artifacts, setArtifactsSignal] = createSignal<string[]>([]);
 	const [artifact, setArtifactSignal] = createSignal(0);
+	const [decision, setDecisionSignal] = createSignal(0);
 	const clampIndex = (value: number, length: number) =>
 		Math.max(0, Math.min(value, Math.max(0, length - 1)));
 	return {
@@ -56,9 +68,18 @@ export function createPanelState(): PanelState {
 		setArtifacts: setArtifactsSignal,
 		artifact,
 		setArtifact: setArtifactSignal,
-		clamp: ({ agents, artifacts: artifactCount }) => {
+		decision,
+		setDecision: setDecisionSignal,
+		clamp: ({ agents, artifacts: artifactCount, decisions }) => {
 			setAgentSignal((index) => clampIndex(index, agents));
 			setArtifactSignal((index) => clampIndex(index, artifactCount));
+			setDecisionSignal((index) => clampIndex(index, decisions));
+			setActiveSignal((panel) =>
+				(panel === OPENSPEC_PANEL && artifactCount === 0) ||
+				(panel === CLASSIFIER_PANEL && decisions === 0)
+					? CHANGE_PANEL
+					: panel,
+			);
 		},
 	};
 }

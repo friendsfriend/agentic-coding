@@ -4,9 +4,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Effect } from "effect";
-import type {
-	ResolvedProfile,
-	WorkflowSnapshot,
+import {
+	CLASSIFIER_DECISION_INPUT_MAX_BYTES,
+	CLASSIFIER_DECISION_MAX_RECORDS,
+	type ClassifierDecisionRecord,
+	type ResolvedProfile,
+	type WorkflowSnapshot,
 } from "../src/contracts/workflow.ts";
 import {
 	CLASSIFIER_ARTIFACT_CAP_BYTES,
@@ -128,6 +131,22 @@ function baseProfile(name: string): ResolvedProfile {
 		capabilities: ["prompt", "run-environment", "observe"],
 		digest: name,
 	} as ResolvedProfile;
+}
+
+function classifierRecord(id: string): ClassifierDecisionRecord {
+	return {
+		id,
+		at: "2026-01-01T00:00:00Z",
+		integration: "routing",
+		phase: "apply",
+		questionId: "old",
+		model: "jev",
+		input: "old",
+		inputTruncated: false,
+		options: [],
+		answer: { type: "noul" },
+		result: { applied: false, profiles: [] },
+	};
 }
 
 describe("routing answer parsing", () => {
@@ -1055,6 +1074,8 @@ describe("applyClassifierRouting (reducer)", () => {
 			applyClassifierRouting(snapshot, definition, registry, {
 				integration: "routing",
 				phase: "apply",
+				model: "opencode/jev-test",
+				state: "x".repeat(CLASSIFIER_DECISION_INPUT_MAX_BYTES + 1),
 				answers: {
 					"core.implementation": {
 						type: "choice",
@@ -1094,6 +1115,29 @@ describe("applyClassifierRouting (reducer)", () => {
 					.filter((route) => route.stepId === "core.verification")
 					.map((route) => route.profile.name),
 			).toEqual(["base", "base"]);
+			expect(snapshot.classifierDecisions).toHaveLength(5);
+			const implementation = snapshot.classifierDecisions?.find(
+				(decision) => decision.questionId === "core.implementation",
+			);
+			expect(implementation).toMatchObject({
+				integration: "routing",
+				phase: "apply",
+				model: "opencode/jev-test",
+				inputTruncated: true,
+				options: [
+					{ label: "quick", profile: "base" },
+					{ label: "thorough", profile: "strong" },
+				],
+				result: { applied: true, profiles: ["strong"] },
+			});
+			expect(Buffer.byteLength(implementation?.input ?? "")).toBe(
+				CLASSIFIER_DECISION_INPUT_MAX_BYTES,
+			);
+			expect(
+				snapshot.classifierDecisions?.find(
+					(decision) => decision.questionId === "core.verification",
+				)?.result.profiles,
+			).toEqual(["base"]);
 		} finally {
 			if (previous === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
 			else process.env.HERDR_WORKFLOW_CONFIG = previous;
@@ -1159,6 +1203,8 @@ describe("applyClassifierRouting (reducer)", () => {
 			applyClassifierRouting(snapshot, definition, registry, {
 				integration: "routing",
 				phase: "apply",
+				model: "opencode/jev-test",
+				state: "state",
 				answers: {
 					"core.implementation": {
 						type: "choice",
@@ -1173,6 +1219,110 @@ describe("applyClassifierRouting (reducer)", () => {
 				)?.profile.name,
 			).toBe("strong");
 			expect(snapshot.attention.length).toBeGreaterThan(0);
+			expect(
+				snapshot.classifierDecisions?.find(
+					(decision) => decision.questionId === "core.implementation",
+				),
+			).toMatchObject({
+				answer: { type: "choice", choice: "quick", confidence: 0.2 },
+				result: {
+					applied: false,
+					profiles: ["strong"],
+					attention: expect.stringContaining("confidence"),
+				},
+			});
+		} finally {
+			if (previous === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
+			else process.env.HERDR_WORKFLOW_CONFIG = previous;
+		}
+	});
+
+	test("drops oldest decision records at the count bound", () => {
+		const repo = tempDir();
+		const configPath = writeAgentsConfig(repo);
+		const previous = process.env.HERDR_WORKFLOW_CONFIG;
+		process.env.HERDR_WORKFLOW_CONFIG = configPath;
+		try {
+			const registry = registerBuiltins();
+			const definition = registry.definition(
+				"openspec-fusion",
+				definitionVersionForBehaviorPins(6),
+			);
+			const snapshot = fusionSnapshot(repo);
+			snapshot.classifierDecisions = Array.from(
+				{ length: CLASSIFIER_DECISION_MAX_RECORDS },
+				(_, index) => classifierRecord(`old-${index}`),
+			);
+			applyClassifierRouting(snapshot, definition, registry, {
+				integration: "routing",
+				phase: "apply",
+				model: "opencode/jev-test",
+				state: "state",
+				answers: {},
+			});
+			expect(snapshot.classifierDecisions).toHaveLength(
+				CLASSIFIER_DECISION_MAX_RECORDS,
+			);
+			expect(
+				snapshot.classifierDecisions?.some(
+					(decision) => decision.id === "old-0",
+				),
+			).toBe(false);
+			expect(snapshot.classifierDecisions?.at(-1)?.questionId).toBe(
+				"core.archive",
+			);
+		} finally {
+			if (previous === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
+			else process.env.HERDR_WORKFLOW_CONFIG = previous;
+		}
+	});
+
+	test("an unrecordable decision never fails the routing update", () => {
+		const repo = tempDir();
+		const configPath = writeAgentsConfig(repo, {
+			...POOLS,
+			"core.implementation": [
+				{ label: "quick", profile: "base" },
+				{
+					label: "thorough",
+					profile: "strong",
+					default: true,
+					criteria: "x".repeat(200 * 1024),
+				},
+			],
+		});
+		const previous = process.env.HERDR_WORKFLOW_CONFIG;
+		process.env.HERDR_WORKFLOW_CONFIG = configPath;
+		try {
+			const registry = registerBuiltins();
+			const definition = registry.definition(
+				"openspec-fusion",
+				definitionVersionForBehaviorPins(6),
+			);
+			const snapshot = fusionSnapshot(repo);
+			applyClassifierRouting(snapshot, definition, registry, {
+				integration: "routing",
+				phase: "apply",
+				model: "opencode/jev-test",
+				state: "state",
+				answers: {
+					"core.implementation": {
+						type: "choice",
+						choice: "thorough",
+						confidence: 0.9,
+					},
+				},
+			});
+			expect(
+				snapshot.routing.routes.find(
+					(route) => route.stepId === "core.implementation",
+				)?.profile.name,
+			).toBe("strong");
+			expect(
+				snapshot.classifierDecisions?.some(
+					(decision) => decision.questionId === "core.implementation",
+				),
+			).toBe(false);
 		} finally {
 			if (previous === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
 			else process.env.HERDR_WORKFLOW_CONFIG = previous;

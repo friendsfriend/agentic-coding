@@ -1,6 +1,10 @@
 import type { KeybindSection } from "@ui";
 import { hostKeybind } from "../../../packages/devenv/cli/src/tui/keyboard/host-keys.ts";
-import { AGENTS_PANEL, OPENSPEC_PANEL } from "./panel-grid.ts";
+import {
+	AGENTS_PANEL,
+	CLASSIFIER_PANEL,
+	OPENSPEC_PANEL,
+} from "./panel-grid.ts";
 
 /**
  * Footer contexts for the dashboard detail panels. `Keybind.context` entries
@@ -10,9 +14,11 @@ import { AGENTS_PANEL, OPENSPEC_PANEL } from "./panel-grid.ts";
 export const CHANGE_PANEL_CONTEXT = "change";
 export const OPENSPEC_PANEL_CONTEXT = "openspec";
 export const AGENTS_PANEL_CONTEXT = "agents";
+export const CLASSIFIER_PANEL_CONTEXT = "classifier";
 
 export function panelContext(panel: number): string {
 	if (panel === OPENSPEC_PANEL) return OPENSPEC_PANEL_CONTEXT;
+	if (panel === CLASSIFIER_PANEL) return CLASSIFIER_PANEL_CONTEXT;
 	if (panel === AGENTS_PANEL) return AGENTS_PANEL_CONTEXT;
 	return CHANGE_PANEL_CONTEXT;
 }
@@ -43,6 +49,7 @@ export function workflowLaunchKeybindCatalog(): KeybindSection[] {
  */
 export function dashboardDetailKeybindCatalog(options: {
 	artifactsVisible: boolean;
+	classifierVisible?: boolean;
 }): KeybindSection[] {
 	const sections: KeybindSection[] = [
 		{
@@ -86,6 +93,18 @@ export function dashboardDetailKeybindCatalog(options: {
 					action: "Open selected artifact",
 					short: "open",
 					context: OPENSPEC_PANEL_CONTEXT,
+				},
+			],
+		});
+	if (options.classifierVisible)
+		sections.push({
+			title: "Classifier panel",
+			keybinds: [
+				{
+					key: "Enter",
+					action: "View selected classifier decision",
+					short: "decision",
+					context: CLASSIFIER_PANEL_CONTEXT,
 				},
 			],
 		});

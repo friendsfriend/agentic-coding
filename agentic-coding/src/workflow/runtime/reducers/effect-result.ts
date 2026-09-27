@@ -5,9 +5,14 @@
 import type { Database } from "bun:sqlite";
 import fs from "node:fs";
 import path from "node:path";
-import type {
-	WorkflowCommand,
-	WorkflowSnapshot,
+import {
+	CLASSIFIER_DECISION_CONTENT_MAX_BYTES,
+	CLASSIFIER_DECISION_INPUT_MAX_BYTES,
+	CLASSIFIER_DECISION_MAX_RECORDS,
+	type ClassifierDecisionRecord,
+	type JsonValue,
+	type WorkflowCommand,
+	type WorkflowSnapshot,
 } from "../../../contracts/workflow.ts";
 import {
 	APPLY_PHASE_STEPS,
@@ -55,6 +60,7 @@ export function applyClassifierRouting(
 	definition: CompiledWorkflowDefinition,
 	registry: WorkflowRegistry,
 	data: unknown,
+	now: () => Date = () => new Date(),
 ): RoutingDecisionSummary | undefined {
 	try {
 		const payload =
@@ -63,6 +69,8 @@ export function applyClassifierRouting(
 						integration?: unknown;
 						phase?: unknown;
 						answers?: unknown;
+						model?: unknown;
+						state?: unknown;
 						category?: unknown;
 						failOpen?: unknown;
 						reason?: unknown;
@@ -103,6 +111,7 @@ export function applyClassifierRouting(
 			agents,
 			preset,
 			payload,
+			now,
 		);
 	} catch (error) {
 		snapshot.attention = [
@@ -145,7 +154,13 @@ function applyPoolRouting(
 	registry: WorkflowRegistry,
 	agents: AgentsConfig,
 	preset: ReturnType<typeof resolvePreset> | undefined,
-	payload: { phase?: unknown; answers?: unknown },
+	payload: {
+		phase?: unknown;
+		answers?: unknown;
+		model?: unknown;
+		state?: unknown;
+	},
+	now: () => Date,
 ): RoutingDecisionSummary {
 	const phase = payload.phase === "apply" ? "apply" : "plan";
 	const answers: Record<string, ClassifierAnswer> =
@@ -162,6 +177,13 @@ function applyPoolRouting(
 	const steps = phase === "plan" ? PLAN_PHASE_STEPS : APPLY_PHASE_STEPS;
 	const selections: CategorySelection[] = [];
 	const attention: string[] = [];
+	const decisions: Array<{
+		stepId: string;
+		entries: ReturnType<typeof poolEntries>;
+		answer: ClassifierAnswer;
+		applied: boolean;
+		attention?: string;
+	}> = [];
 	let rosterProfiles: string[] | undefined;
 	const specs = steps
 		.filter((stepId) => definition.steps.includes(stepId))
@@ -178,18 +200,32 @@ function applyPoolRouting(
 			throw new Error(
 				`classifier routing has no model pool for ${stepId}; define it in Settings → Presets`,
 			);
-		const answer = answers[stepId] ?? { type: "noul" };
+		const answer = parseClassifierAnswer(answers[stepId]);
 		if (mode === "roster") {
 			const selected = selectRosterEntries(entries, answer);
 			if (selected.attention)
 				attention.push(`${stepId}: ${selected.attention}`);
 			rosterProfiles = selected.profiles;
+			decisions.push({
+				stepId,
+				entries,
+				answer,
+				applied: selected.attention === undefined,
+				...(selected.attention ? { attention: selected.attention } : {}),
+			});
 			continue;
 		}
 		const selected = selectSingleEntry(entries, answer);
 		if (selected.attention) attention.push(`${stepId}: ${selected.attention}`);
 		if (selected.profile)
 			selections.push({ stepId, profileName: selected.profile });
+		decisions.push({
+			stepId,
+			entries,
+			answer,
+			applied: selected.attention === undefined,
+			...(selected.attention ? { attention: selected.attention } : {}),
+		});
 	}
 	// Overlay this pass's selections onto the pinned routes so an earlier pass's
 	// classification is preserved (a plain rebuild would revert every route to
@@ -210,7 +246,93 @@ function applyPoolRouting(
 	snapshot.routing = routing;
 	if (attention.length)
 		snapshot.attention = [...(snapshot.attention ?? []), ...attention];
+	try {
+		appendClassifierDecisions(
+			snapshot,
+			decisions.map((decision, index) => ({
+				id: `${snapshot.workflowId}:${snapshot.revision}:routing:${phase}:${decision.stepId}:${index}`,
+				at: now().toISOString(),
+				integration: ROUTING_INTEGRATION,
+				phase,
+				questionId: decision.stepId,
+				model:
+					typeof payload.model === "string" && payload.model.trim()
+						? payload.model
+						: "unknown",
+				...truncateClassifierInput(
+					typeof payload.state === "string" ? payload.state : "",
+				),
+				options: decision.entries.map((entry) => {
+					const criteria = normalizeJson(entry.criteria);
+					return {
+						label: entry.label,
+						profile: entry.profile,
+						...(criteria === undefined ? {} : { criteria }),
+					};
+				}),
+				answer: decision.answer,
+				result: {
+					applied: decision.applied,
+					profiles: [
+						...new Set(
+							routing.routes
+								.filter((route) => route.stepId === decision.stepId)
+								.map((route) => route.profile.name),
+						),
+					],
+					...(decision.attention ? { attention: decision.attention } : {}),
+				},
+			})),
+		);
+	} catch {
+		// Decision history is diagnostic. A successful routing update must never
+		// become a failed classifier effect because its record could not be stored.
+	}
 	return buildRoutingDecisionSummary(phase, specs, answers);
+}
+
+function normalizeJson(value: unknown): JsonValue | undefined {
+	if (value === undefined) return undefined;
+	try {
+		const encoded = JSON.stringify(value);
+		return encoded === undefined
+			? undefined
+			: (JSON.parse(encoded) as JsonValue);
+	} catch {
+		return undefined;
+	}
+}
+
+function truncateClassifierInput(input: string): {
+	input: string;
+	inputTruncated: boolean;
+} {
+	if (Buffer.byteLength(input) <= CLASSIFIER_DECISION_INPUT_MAX_BYTES)
+		return { input, inputTruncated: false };
+	let truncated = Buffer.from(input)
+		.subarray(0, CLASSIFIER_DECISION_INPUT_MAX_BYTES)
+		.toString("utf8");
+	while (Buffer.byteLength(truncated) > CLASSIFIER_DECISION_INPUT_MAX_BYTES)
+		truncated = truncated.slice(0, -1);
+	return { input: truncated, inputTruncated: true };
+}
+
+function appendClassifierDecisions(
+	snapshot: WorkflowSnapshot,
+	decisions: ClassifierDecisionRecord[],
+): void {
+	const history = [...(snapshot.classifierDecisions ?? [])];
+	for (const decision of decisions) {
+		history.push(decision);
+		while (
+			history.length > 0 &&
+			(history.length > CLASSIFIER_DECISION_MAX_RECORDS ||
+				Buffer.byteLength(JSON.stringify(history)) >
+					CLASSIFIER_DECISION_CONTENT_MAX_BYTES)
+		)
+			history.shift();
+	}
+	snapshot.classifierDecisions = history;
 }
 
 export function effectResult(
@@ -355,7 +477,13 @@ export function effectResult(
 	}
 	const routingDecision =
 		command.outcome === "complete" && row.kind === "model.classify"
-			? applyClassifierRouting(snapshot, definition, registry, command.data)
+			? applyClassifierRouting(
+					snapshot,
+					definition,
+					registry,
+					command.data,
+					now,
+				)
 			: undefined;
 	if (command.outcome === "complete") {
 		const step = registry.stepForDefinition(definition, snapshot.currentStep);

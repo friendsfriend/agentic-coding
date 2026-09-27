@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	AGENTS_PANEL,
 	CHANGE_PANEL,
+	CLASSIFIER_PANEL,
 	movePanel,
 	OPENSPEC_PANEL,
 	type PanelDirection,
@@ -61,6 +62,64 @@ describe("movePanel with open-spec artifacts listed", () => {
 	}
 });
 
+describe("movePanel with open-spec artifacts and classifier decisions", () => {
+	const table: Record<PanelId, Row> = {
+		[CHANGE_PANEL]: {
+			down: OPENSPEC_PANEL,
+			up: CLASSIFIER_PANEL,
+			left: AGENTS_PANEL,
+			right: AGENTS_PANEL,
+		},
+		[OPENSPEC_PANEL]: {
+			down: CLASSIFIER_PANEL,
+			up: CHANGE_PANEL,
+			left: AGENTS_PANEL,
+			right: AGENTS_PANEL,
+		},
+		[CLASSIFIER_PANEL]: {
+			down: CHANGE_PANEL,
+			up: OPENSPEC_PANEL,
+			left: AGENTS_PANEL,
+			right: AGENTS_PANEL,
+		},
+		[AGENTS_PANEL]: {
+			down: AGENTS_PANEL,
+			up: AGENTS_PANEL,
+			left: CHANGE_PANEL,
+			right: CHANGE_PANEL,
+		},
+	};
+	for (const [from, moves] of Object.entries(table)) {
+		for (const direction of DIRECTIONS) {
+			test(`${from} + ${direction} → ${moves[direction]}`, () => {
+				expect(
+					movePanel(Number(from), direction, {
+						artifactsVisible: true,
+						classifierVisible: true,
+					}),
+				).toBe(moves[direction]);
+			});
+		}
+	}
+});
+
+describe("movePanel with classifier decisions but no artifacts", () => {
+	test("vertical movement skips the empty OpenSpec cell", () => {
+		expect(
+			movePanel(CHANGE_PANEL, "down", {
+				artifactsVisible: false,
+				classifierVisible: true,
+			}),
+		).toBe(CLASSIFIER_PANEL);
+		expect(
+			movePanel(CLASSIFIER_PANEL, "up", {
+				artifactsVisible: false,
+				classifierVisible: true,
+			}),
+		).toBe(CHANGE_PANEL);
+	});
+});
+
 describe("movePanel without open-spec artifacts", () => {
 	for (const [from, table] of Object.entries(WITHOUT_ARTIFACTS)) {
 		for (const direction of DIRECTIONS) {
@@ -86,6 +145,18 @@ describe("movePanel stale focus on a hidden panel", () => {
 		);
 		expect(
 			movePanel(OPENSPEC_PANEL, "right", { artifactsVisible: false }),
+		).toBe(AGENTS_PANEL);
+	});
+
+	test("Classifier loses a panel while focused: any move lands on a rendered panel", () => {
+		expect(
+			movePanel(CLASSIFIER_PANEL, "down", { artifactsVisible: false }),
+		).toBe(CHANGE_PANEL);
+		expect(movePanel(CLASSIFIER_PANEL, "up", { artifactsVisible: false })).toBe(
+			CHANGE_PANEL,
+		);
+		expect(
+			movePanel(CLASSIFIER_PANEL, "left", { artifactsVisible: false }),
 		).toBe(AGENTS_PANEL);
 	});
 });

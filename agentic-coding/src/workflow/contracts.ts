@@ -1,6 +1,10 @@
 import path from "node:path";
 import { ContractFailure, decodeContract } from "../contracts/decode.ts";
-import type { JsonValue, WorkflowSnapshot } from "../contracts/workflow.ts";
+import {
+	CLASSIFIER_DECISION_CONTENT_MAX_BYTES,
+	type JsonValue,
+	type WorkflowSnapshot,
+} from "../contracts/workflow.ts";
 import { WorkflowSnapshotSchema } from "./schema.ts";
 /** Shared with `src/workflow/steps/*.ts` so step behavior hooks can throw the
  * same engine error the runtime recognizes, without importing runtime.ts and
@@ -85,6 +89,27 @@ export function decodeSnapshot(value: unknown): WorkflowSnapshot {
 			{
 				path: "$.developerDialogue",
 				message: "dialogue content exceeds bound",
+			},
+		]);
+	const classifierDecisions = normalized.classifierDecisions ?? [];
+	let classifierDecisionBytes: number;
+	try {
+		classifierDecisionBytes = Buffer.byteLength(
+			JSON.stringify(classifierDecisions),
+		);
+	} catch {
+		throw new ContractFailure("core.workflow-snapshot", [
+			{
+				path: "$.classifierDecisions",
+				message: "classifier decision content must be JSON",
+			},
+		]);
+	}
+	if (classifierDecisionBytes > CLASSIFIER_DECISION_CONTENT_MAX_BYTES)
+		throw new ContractFailure("core.workflow-snapshot", [
+			{
+				path: "$.classifierDecisions",
+				message: "classifier decision content exceeds bound",
 			},
 		]);
 	if (

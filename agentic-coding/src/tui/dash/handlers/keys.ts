@@ -14,7 +14,12 @@ import {
 	requestShutdown,
 	resolveQuitConfirmation,
 } from "../../lifecycle.ts";
-import { movePanel, type PanelDirection } from "../panel-grid.ts";
+import {
+	CLASSIFIER_PANEL,
+	movePanel,
+	type PanelDirection,
+} from "../panel-grid.ts";
+import { classifierDecisionDetail } from "../projections.ts";
 
 /** The route props the handler reads. */
 export interface DashboardKeyProps {
@@ -39,6 +44,8 @@ export interface DashboardKeyContext {
 	readonly setSelectedAgent: (index: number) => void;
 	readonly selectedArtifact: () => number;
 	readonly setSelectedArtifact: (index: number) => void;
+	readonly selectedDecision: () => number;
+	readonly setSelectedDecision: (index: number) => void;
 	readonly artifacts: () => string[];
 	readonly data: () => DashboardData;
 	readonly dimensions: () => { width: number; height: number };
@@ -202,6 +209,8 @@ export function createDashboardKeyHandler(
 			setSelectedAgent,
 			selectedArtifact,
 			setSelectedArtifact,
+			selectedDecision,
+			setSelectedDecision,
 			artifacts,
 			data,
 			notify,
@@ -257,8 +266,8 @@ export function createDashboardKeyHandler(
 		const setVerdict = context.setVerdict;
 		const setVerdictOffset = context.setVerdictOffset;
 		const setVerdictRenderMarkdown = context.setVerdictRenderMarkdown;
-		const _setVerdictReturnToFindings = context.setVerdictReturnToFindings;
-		const _setVerdictReturnToUserAction = context.setVerdictReturnToUserAction;
+		const setVerdictReturnToFindings = context.setVerdictReturnToFindings;
+		const setVerdictReturnToUserAction = context.setVerdictReturnToUserAction;
 		const _setFindings = context.setFindings;
 		const _setSelectedFinding = context.setSelectedFinding;
 		const _findings = context.findings;
@@ -426,6 +435,8 @@ export function createDashboardKeyHandler(
 			setActivePanel(
 				movePanel(activePanel(), direction, {
 					artifactsVisible: artifacts().length > 0,
+					classifierVisible:
+						(data().state.classifierDecisions?.length ?? 0) > 0,
 				}),
 			);
 			return;
@@ -440,6 +451,13 @@ export function createDashboardKeyHandler(
 				setSelectedArtifact(
 					Math.min(Math.max(0, artifacts().length - 1), selectedArtifact() + 1),
 				);
+			else if (activePanel() === CLASSIFIER_PANEL)
+				setSelectedDecision(
+					Math.min(
+						Math.max(0, (data().state.classifierDecisions?.length ?? 0) - 1),
+						selectedDecision() + 1,
+					),
+				);
 			return;
 		}
 		if (name === "up" || name === "k") {
@@ -448,6 +466,8 @@ export function createDashboardKeyHandler(
 				setSelectedAgent(Math.max(0, selectedAgent() - 1));
 			else if (activePanel() === 6)
 				setSelectedArtifact(Math.max(0, selectedArtifact() - 1));
+			else if (activePanel() === CLASSIFIER_PANEL)
+				setSelectedDecision(Math.max(0, selectedDecision() - 1));
 			return;
 		}
 		if (name === "enter" || name === "return") {
@@ -457,6 +477,18 @@ export function createDashboardKeyHandler(
 			// does instead of force-reopening it (previously a `core.*` stepId
 			// check bypassed that guard for engine-driven views only).
 			if (context.openRequiredUserAction() === true) return;
+			if (activePanel() === CLASSIFIER_PANEL) {
+				const decision = data().state.classifierDecisions?.[selectedDecision()];
+				if (decision) {
+					setVerdictReturnToFindings(false);
+					setVerdictReturnToUserAction(false);
+					setVerdictRenderMarkdown(true);
+					setVerdict(classifierDecisionDetail(decision));
+					setVerdictOffset(0);
+					props.keymap.setData("modal.active", "verdict");
+				}
+				return;
+			}
 			if (activePanel() === 6) {
 				const artifact = artifacts()[selectedArtifact()];
 				if (artifact) {

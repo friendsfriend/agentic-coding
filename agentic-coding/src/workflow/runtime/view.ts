@@ -80,6 +80,7 @@ export function diagnosticView(
 		observations: [],
 		health: { valid: false, attention: [diagnostic], diagnostic },
 		developerDialogue: [],
+		classifierDecisions: [],
 		pendingQuestions: [],
 		availableActions: [],
 	};
@@ -202,6 +203,7 @@ export function view(
 			observations: [],
 			health: { valid: true, attention: snapshot.attention },
 			developerDialogue: publicDialogue(snapshot.developerDialogue ?? []),
+			classifierDecisions: snapshot.classifierDecisions ?? [],
 			pendingQuestions: pendingDeveloperQuestions(
 				snapshot.developerDialogue ?? [],
 				now,
@@ -257,6 +259,7 @@ export function view(
 					observations: [],
 					health: { valid: false, attention: [diagnostic], diagnostic },
 					developerDialogue: publicDialogue(snapshot.developerDialogue ?? []),
+					classifierDecisions: snapshot.classifierDecisions ?? [],
 					pendingQuestions: pendingDeveloperQuestions(
 						snapshot.developerDialogue ?? [],
 						now,
@@ -302,6 +305,7 @@ export function view(
 			observations: [],
 			health: { valid: false, attention: [], diagnostic },
 			developerDialogue: [],
+			classifierDecisions: [],
 			pendingQuestions: [],
 			availableActions: [],
 		};

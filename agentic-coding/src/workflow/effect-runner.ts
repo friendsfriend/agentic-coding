@@ -1246,14 +1246,14 @@ export function agentEffectHandlers(
 									?.classification ?? "single",
 							entries: poolEntries(preset, stepId),
 						}));
-					const answers = yield* invokeRoutingClassifier(
+					const result = yield* invokeRoutingClassifier(
 						specs,
 						agents,
 						input,
 						signal,
 						routingTelemetryObserver(snapshot, effect, phase),
 					);
-					return { integration: ROUTING_INTEGRATION, phase, answers };
+					return { integration: ROUTING_INTEGRATION, phase, ...result };
 				}),
 		},
 		"artifact.write": {

@@ -1,9 +1,6 @@
-# dashboard-pane-grid Specification
+# Spec Delta
 
-## Purpose
-Defines that the workflow dashboard detail view arranges its panels on a consistent two-column grid so the vertical gutters between left- and right-column panes align across all dashboard rows.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Dashboard panes align on a uniform grid
 The workflow dashboard detail view SHALL lay out its interactive panels on a two-column grid so that, at any terminal width, the Change/OpenSpec/Classifier column and Agents column divide usable width evenly after accounting for their inter-column gutter. The Change panel SHALL occupy the top-left cell; when OpenSpec artifacts are listed, the OpenSpec panel SHALL occupy the cell directly below it; when classifier decisions are exposed, the Classifier panel SHALL occupy the cell below the OpenSpec cell; and the Agents panel SHALL span the right column beside every left-column cell. Git status SHALL be rendered inside the primary Change/overview panel rather than in a separate panel. The detail view SHALL NOT render a Current task panel or a task-specific row.

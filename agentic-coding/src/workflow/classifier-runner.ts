@@ -351,7 +351,14 @@ export function invokeRoutingClassifier(
 	},
 	signal?: AbortSignal,
 	observer?: RoutingClassifierTelemetryObserver,
-): Effect.Effect<Record<string, ClassifierAnswer>, Error> {
+): Effect.Effect<
+	{
+		model: string;
+		state: string;
+		answers: Record<string, ClassifierAnswer>;
+	},
+	Error
+> {
 	const model = classifierModel(agents);
 	const instruction = specs.some((spec) => spec.mode === "roster")
 		? ROUTING_ROSTER_INSTRUCTION
@@ -376,7 +383,7 @@ export function invokeRoutingClassifier(
 		},
 		signal,
 		observer,
-	);
+	).pipe(Effect.map((answers) => ({ model, state, answers })));
 }
 
 const ROUTING_SINGLE_INSTRUCTION = `You assign model profiles to OpenSpec workflow steps.

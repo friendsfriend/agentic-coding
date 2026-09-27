@@ -102,6 +102,30 @@ test("dashboard projection renders registry-provided future step and generated a
 	expect(state.panes.audit).toBe("pane");
 	expect(state.phaseStartedAt).toBe("2026-01-01T12:00:00Z");
 });
+test("dashboard projection carries classifier decisions and defaults to an empty list", () => {
+	const withoutDecisions = viewToDashboardState(view());
+	expect(withoutDecisions.classifierDecisions).toEqual([]);
+	const classified = view();
+	classified.classifierDecisions = [
+		{
+			id: "decision",
+			at: "2026-01-01T00:00:00Z",
+			integration: "routing",
+			phase: "apply",
+			questionId: "core.implementation",
+			model: "jev",
+			input: "state",
+			inputTruncated: false,
+			options: [],
+			answer: { type: "noul" },
+			result: { applied: false, profiles: ["worker"] },
+		},
+	];
+	expect(viewToDashboardState(classified).classifierDecisions).toEqual(
+		classified.classifierDecisions,
+	);
+});
+
 test("openspec-fusion steps render their registry labels in phase status", () => {
 	const fusion = (stepId: string, label: string) => {
 		const fixture = view();

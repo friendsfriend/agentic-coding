@@ -26,7 +26,11 @@ import type {
 	ResolvedProfile,
 	WorkflowExecutionSettings,
 } from "../contracts/workflow.ts";
-import { questionOptions } from "../contracts/workflow.ts";
+import {
+	CLASSIFIER_DECISION_INPUT_MAX_BYTES,
+	CLASSIFIER_DECISION_MAX_RECORDS,
+	questionOptions,
+} from "../contracts/workflow.ts";
 
 // ---------------------------------------------------------------------------
 // Snapshot / profile / settings
@@ -98,6 +102,37 @@ const dialogueStatusSchema = Schema.Literal(
 const dialogueAnswerSchema = Schema.Struct({
 	kind: Schema.Literal("option", "custom", "cancel"),
 	value: Schema.optionalWith(text(8192), { exact: true }),
+});
+const classifierDecisionRecordSchema = Schema.Struct({
+	id: text(4096),
+	at: text(4096),
+	integration: text(4096),
+	phase: Schema.optionalWith(text(4096), { exact: true }),
+	questionId: text(4096),
+	model: text(4096),
+	input: boundedText(CLASSIFIER_DECISION_INPUT_MAX_BYTES),
+	inputTruncated: Schema.Boolean,
+	options: Schema.Array(
+		Schema.Struct({
+			label: text(4096),
+			profile: text(4096),
+			criteria: Schema.optionalWith(Schema.Unknown, { exact: true }),
+		}),
+	),
+	answer: Schema.Struct({
+		type: Schema.Literal("choice", "noul"),
+		choice: Schema.optionalWith(text(4096), { exact: true }),
+		confidence: Schema.optionalWith(Schema.Number, { exact: true }),
+		probabilities: Schema.optionalWith(
+			Schema.Record({ key: Schema.String, value: Schema.Number }),
+			{ exact: true },
+		),
+	}),
+	result: Schema.Struct({
+		applied: Schema.Boolean,
+		profiles: stringArray(),
+		attention: Schema.optionalWith(boundedText(4096), { exact: true }),
+	}),
 });
 const dialogueRecordSchema = Schema.Struct({
 	id: text(4096),
@@ -389,6 +424,18 @@ export const WorkflowSnapshotSchema = Schema.Struct({
 			}),
 		),
 		{ exact: true, default: () => [] },
+	),
+	classifierDecisions: Schema.optionalWith(
+		Schema.Array(classifierDecisionRecordSchema).pipe(
+			Schema.filter(
+				(items) => items.length <= CLASSIFIER_DECISION_MAX_RECORDS,
+				{
+					message: () =>
+						`expected at most ${CLASSIFIER_DECISION_MAX_RECORDS} classifier decision records`,
+				},
+			),
+		),
+		{ exact: true },
 	),
 	sourceBaseline: Schema.optionalWith(sourceBaselineSchema, { exact: true }),
 	wikiBaseline: Schema.optionalWith(wikiBaselineSchema, { exact: true }),

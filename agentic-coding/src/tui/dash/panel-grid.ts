@@ -1,17 +1,18 @@
 /**
  * 2D panel navigation model for the dashboard detail view.
  *
- * The rendered panels form a 2×2 occupancy grid; a panel may span more than
+ * The rendered panels form a 2×3 occupancy grid; a panel may span more than
  * one cell:
  *
  * ```
- *         col 0         col 1
- * row 0   Change (0)    Agents (1)
- * row 1   OpenSpec (6)  Agents (1)   (span: rows 0–1)
+ *         col 0           col 1
+ * row 0   Change (0)      Agents (1)
+ * row 1   OpenSpec (6)    Agents (1)
+ * row 2   Classifier (7)  Agents (1)   (span: rows 0–2)
  * ```
  *
- * When no open-spec artifacts are listed the OpenSpec cell `(1, 0)` is empty
- * and navigation transparently skips it. `movePanel` scans from the active
+ * Empty conditional cells are transparent to navigation. `movePanel` scans
+ * from the active
  * panel's anchor cell in the pressed direction, skipping cells owned by the
  * same panel's span and empty cells, wrapping at every grid edge, and landing
  * on the first distinct panel found. A direction with no distinct rendered
@@ -24,19 +25,23 @@ export type PanelDirection = "up" | "down" | "left" | "right";
 export const CHANGE_PANEL = 0;
 export const AGENTS_PANEL = 1;
 export const OPENSPEC_PANEL = 6;
+export const CLASSIFIER_PANEL = 7;
 
-export const GRID_ROWS = 2;
+export const GRID_ROWS = 3;
 export const GRID_COLS = 2;
 
 export interface PanelGridOptions {
 	/** True while open-spec artifacts are listed (OpenSpec cell occupied). */
 	readonly artifactsVisible: boolean;
+	/** True while classifier decisions are listed (Classifier cell occupied). */
+	readonly classifierVisible?: boolean;
 }
 
 /** Static geometry: every cell incl. the OpenSpec cell, used to anchor panels. */
 const FULL_GRID: ReadonlyArray<ReadonlyArray<PanelId>> = [
 	[CHANGE_PANEL, AGENTS_PANEL],
 	[OPENSPEC_PANEL, AGENTS_PANEL],
+	[CLASSIFIER_PANEL, AGENTS_PANEL],
 ];
 
 /** Rendered occupancy: the OpenSpec cell is empty while no artifacts exist. */
@@ -46,6 +51,7 @@ function renderedGrid(
 	return [
 		[CHANGE_PANEL, AGENTS_PANEL],
 		[opts.artifactsVisible ? OPENSPEC_PANEL : undefined, AGENTS_PANEL],
+		[opts.classifierVisible ? CLASSIFIER_PANEL : undefined, AGENTS_PANEL],
 	];
 }
 

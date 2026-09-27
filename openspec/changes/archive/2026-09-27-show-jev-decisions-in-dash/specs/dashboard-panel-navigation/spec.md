@@ -1,9 +1,6 @@
-# dashboard-panel-navigation Specification
+# Spec Delta
 
-## Purpose
-Defines two-dimensional, vim-style panel navigation for the workflow dashboard detail view: Shift+J/K/H/L move focus between panels by grid position (rows and columns) with wrap-around at every edge, instead of cycling through a fixed one-dimensional order.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Panel grid positions
 The workflow dashboard detail view SHALL map its interactive panels onto a 2-column, 3-row grid: the Change panel SHALL occupy the top-left cell; the OpenSpec panel SHALL occupy the cell directly below Change and SHALL be present only while OpenSpec artifacts are listed; the Classifier panel SHALL occupy the cell below OpenSpec and SHALL be present only while the workflow exposes classifier decisions; and the Agents panel SHALL occupy the right column spanning all three rows. The detail view SHALL NOT include the Current task panel in the grid.

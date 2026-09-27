@@ -126,12 +126,21 @@ test("footer follows the focused detail panel and hides standard keys", async ()
 	const openspec = t.captureCharFrame();
 	expect(openspec).not.toContain("Enter approve");
 
-	// Shift+L → Agents panel: its own actions replace the OpenSpec action.
+	// Shift+J → Classifier panel: its decision action replaces the artifact action.
+	t.mockInput.pressKey("j", { shift: true });
+	await t.renderOnce();
+	const classifier = await t.waitForFrame((frame) =>
+		frame.includes("Enter decision"),
+	);
+	expect(classifier).not.toContain("Enter open");
+
+	// Shift+L → Agents panel: its own actions replace the Classifier action.
 	t.mockInput.pressKey("l", { shift: true });
 	await t.renderOnce();
 	const agents = await t.waitForFrame((frame) => frame.includes("Enter focus"));
 	expect(agents).toContain("v verifier");
 	expect(agents).not.toContain("Enter open");
+	expect(agents).not.toContain("Enter decision");
 
 	t.renderer.destroy();
 });
@@ -154,6 +163,7 @@ test("`?` help keeps the full descriptions the footer shortens", async () => {
 	expect(help).toContain("Approve gate / review changed files");
 	expect(help).toContain("Move between panels");
 	expect(help).toContain("View selected verifier result");
+	expect(help).toContain("View selected classifier decision");
 
 	t.renderer.destroy();
 });

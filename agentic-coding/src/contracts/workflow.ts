@@ -296,6 +296,38 @@ export interface DeveloperQuestionItem {
 	context?: string;
 	options: readonly DeveloperQuestionOption[];
 }
+export const CLASSIFIER_DECISION_MAX_RECORDS = 100;
+export const CLASSIFIER_DECISION_INPUT_MAX_BYTES = 16 * 1024;
+export const CLASSIFIER_DECISION_CONTENT_MAX_BYTES = 160 * 1024;
+
+export interface ClassifierDecisionOption {
+	label: string;
+	profile: string;
+	criteria?: JsonValue;
+}
+export interface ClassifierDecisionAnswer {
+	type: "choice" | "noul";
+	choice?: string;
+	confidence?: number;
+	probabilities?: Readonly<Record<string, number>>;
+}
+export interface ClassifierDecisionRecord {
+	id: string;
+	at: string;
+	integration: string;
+	phase?: string;
+	questionId: string;
+	model: string;
+	input: string;
+	inputTruncated: boolean;
+	options: ClassifierDecisionOption[];
+	answer: ClassifierDecisionAnswer;
+	result: {
+		applied: boolean;
+		profiles: string[];
+		attention?: string;
+	};
+}
 export interface DeveloperDialogueRecord {
 	id: string;
 	workflowId: string;
@@ -342,6 +374,8 @@ export interface WorkflowSnapshot {
 	attention: string[];
 	/** Bounded, ordered question/answer history. Missing in legacy snapshots. */
 	developerDialogue: DeveloperDialogueRecord[];
+	/** Bounded, ordered classifier-decision history. Missing in legacy snapshots. */
+	classifierDecisions?: ClassifierDecisionRecord[];
 	/** Deterministic source-content baseline for repository-backed wiki runs. */
 	sourceBaseline?: { fingerprint: string };
 	/** Complete pre-agent baseline for repository-independent wiki reviews. */
@@ -515,6 +549,8 @@ export interface WorkflowView {
 	health: { valid: boolean; attention: string[]; diagnostic?: string };
 	/** Answered and terminal questions in creation order. */
 	developerDialogue?: DeveloperDialogueRecord[];
+	/** Classifier decisions in creation order. */
+	classifierDecisions?: ClassifierDecisionRecord[];
 	/** Pending subset, ordered oldest first. */
 	pendingQuestions?: DeveloperDialogueRecord[];
 	availableActions: WorkflowActionView[];
@@ -1008,6 +1044,7 @@ export interface WorkflowState {
 	verificationRoleStartedAt?: Record<string, string>;
 	verificationModels?: Record<string, string>;
 	developerDialogue?: DeveloperDialogueRecord[];
+	classifierDecisions?: ClassifierDecisionRecord[];
 	pendingQuestions?: DeveloperDialogueRecord[];
 	planQuality?: {
 		passed: boolean;
@@ -1204,6 +1241,37 @@ const workflowRunResponseSchema = Schema.Struct({
 	outputDigest: Schema.optional(Schema.String),
 });
 
+const classifierDecisionRecordResponseSchema = Schema.Struct({
+	id: Schema.String,
+	at: Schema.String,
+	integration: Schema.String,
+	phase: Schema.optional(Schema.String),
+	questionId: Schema.String,
+	model: Schema.String,
+	input: Schema.String,
+	inputTruncated: Schema.Boolean,
+	options: Schema.Array(
+		Schema.Struct({
+			label: Schema.String,
+			profile: Schema.String,
+			criteria: Schema.optional(Schema.Unknown),
+		}),
+	),
+	answer: Schema.Struct({
+		type: Schema.Literal("choice", "noul"),
+		choice: Schema.optional(Schema.String),
+		confidence: Schema.optional(Schema.Number),
+		probabilities: Schema.optional(
+			Schema.Record({ key: Schema.String, value: Schema.Number }),
+		),
+	}),
+	result: Schema.Struct({
+		applied: Schema.Boolean,
+		profiles: Schema.Array(Schema.String),
+		attention: Schema.optional(Schema.String),
+	}),
+});
+
 const dialogueRecordResponseSchema = Schema.Struct({
 	id: Schema.String,
 	workflowId: Schema.String,
@@ -1286,6 +1354,9 @@ export const workflowViewSchema = Schema.Struct({
 	}),
 	developerDialogue: Schema.optional(
 		Schema.Array(dialogueRecordResponseSchema),
+	),
+	classifierDecisions: Schema.optional(
+		Schema.Array(classifierDecisionRecordResponseSchema),
 	),
 	pendingQuestions: Schema.optional(Schema.Array(dialogueRecordResponseSchema)),
 	availableActions: Schema.Array(
