@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 // Shared form primitive: field selector on left, active field editor on right.
 import { TextAttributes } from "@opentui/core";
-import { Show } from "solid-js";
+import { type JSX, Show } from "solid-js";
 import { uiColors } from "../theme/colors";
 import { ScrollableList } from "./ScrollableList.tsx";
 
@@ -90,6 +90,8 @@ export interface FormProps {
 	availableLines?: number;
 	/** Heading row shown above the fields. */
 	header?: string;
+	/** Custom right-pane content for action fields. */
+	actionContent?: JSX.Element;
 }
 
 const selectionBackground = (focused: boolean) =>
@@ -215,9 +217,11 @@ export function Form(props: FormProps) {
 									</text>
 								</Show>
 								<Show when={active().kind === "action"}>
-									<text fg={uiColors.textPrimary}>
-										{formDisplay(active(), value())}
-									</text>
+									{props.actionContent ?? (
+										<text fg={uiColors.textPrimary}>
+											{formDisplay(active(), value())}
+										</text>
+									)}
 								</Show>
 								<Show when={active().kind === "select"}>
 									<ScrollableList

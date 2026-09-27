@@ -359,22 +359,16 @@ test("preset pool subform adds a tagged profile from sorted choices", async () =
 	t.mockInput.pressTab(); // core.plan pool entries
 	await t.renderOnce();
 	expect(t.captureCharFrame()).toContain("Pool core.plan entries");
-	expect(
-		activeKeybindCatalog()
-			.flatMap((section) => section.keybinds)
-			.find((keybind) => keybind.key === "Enter")?.action,
-	).toBe("manage pool entries");
-	t.mockInput.pressEnter();
-	expect(
-		await renderUntil(t, (frame) =>
-			frame.includes("No profile tags configured"),
-		),
-	).toBe(true);
+	expect(t.captureCharFrame()).toContain("No profile tags configured");
 	const poolBinds = activeKeybindCatalog().flatMap(
 		(section) => section.keybinds,
 	);
-	expect(poolBinds.map((keybind) => keybind.action)).toContain("add entry");
-	expect(poolBinds.map((keybind) => keybind.action)).toContain("move entry");
+	expect(poolBinds.map((keybind) => keybind.action)).toContain(
+		"add pool entry",
+	);
+	expect(poolBinds.map((keybind) => keybind.action)).toContain(
+		"move pool entry",
+	);
 	t.mockInput.pressKey("+");
 	expect(await renderUntil(t, (frame) => frame.includes("Profile tag"))).toBe(
 		true,
@@ -392,14 +386,7 @@ test("preset pool subform adds a tagged profile from sorted choices", async () =
 	t.mockInput.pressEnter(); // save the pool entry
 	expect(await renderUntil(t, (frame) => frame.includes("quick"))).toBe(true);
 	expect(t.captureCharFrame()).toContain("b");
-	expect(
-		await pressEscapeAndSettle(t, (frame) => frame.includes("Preset name")),
-	).toBe(true);
-	t.mockInput.pressKey("k");
-	await t.renderOnce();
-	t.mockInput.pressKey("k");
-	await t.renderOnce();
-	t.mockInput.pressEnter(); // save preset from its name field
+	t.mockInput.pressEnter(); // save preset from the selected pool step
 	expect(await renderUntil(t, (frame) => frame.includes("my-preset"))).toBe(
 		true,
 	);
@@ -528,14 +515,8 @@ test("pool entries copy between steps and paste as ordered config", async () => 
 	t.mockInput.pressTab(); // fusion.consolidate on same list
 	await t.renderOnce();
 	t.mockInput.pressKey("p");
-	expect(await renderUntil(t, (frame) => frame.includes("2 entries"))).toBe(
-		true,
-	);
-	for (let index = 0; index < 3; index += 1) {
-		t.mockInput.pressKey("k");
-		await t.renderOnce();
-	}
-	t.mockInput.pressEnter();
+	expect(await renderUntil(t, (frame) => frame.includes("steady"))).toBe(true);
+	t.mockInput.pressEnter(); // Enter saves instead of opening the entry manager
 	expect(
 		await renderUntil(t, () =>
 			Boolean(
@@ -602,7 +583,7 @@ test("a profile referenced only by a pool entry cannot be deleted", async () => 
 	t.renderer.destroy();
 });
 
-test("the preset form exposes an entry manager per classifiable step", async () => {
+test("the preset form shows inline pools for each classifiable step", async () => {
 	writeFileSync(
 		configFile,
 		`${JSON.stringify({
@@ -636,7 +617,7 @@ test("the preset form exposes an entry manager per classifiable step", async () 
 	t.renderer.destroy();
 });
 
-test("existing pool entries open label and roster-default subforms", async () => {
+test("e edits inline pool entries with label and roster-default subforms", async () => {
 	writeFileSync(
 		configFile,
 		`${JSON.stringify({
@@ -677,7 +658,6 @@ test("existing pool entries open label and roster-default subforms", async () =>
 	expect(
 		await renderUntil(t, (frame) => frame.includes("Pool fusion.plan entries")),
 	).toBe(true);
-	t.mockInput.pressEnter();
 	expect(await renderUntil(t, (frame) => frame.includes("strong"))).toBe(true);
 	const poolKeys = activeKeybindCatalog().flatMap((section) =>
 		section.keybinds.map((keybind) => keybind.key),
@@ -687,7 +667,7 @@ test("existing pool entries open label and roster-default subforms", async () =>
 	await t.renderOnce();
 	const movedFrame = t.captureCharFrame();
 	expect(movedFrame.indexOf("fast")).toBeLessThan(movedFrame.indexOf("strong"));
-	t.mockInput.pressEnter();
+	t.mockInput.pressKey("e");
 	expect(await renderUntil(t, (frame) => frame.includes("Profile tag"))).toBe(
 		true,
 	);

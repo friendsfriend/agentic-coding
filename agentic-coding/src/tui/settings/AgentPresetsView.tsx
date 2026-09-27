@@ -112,7 +112,7 @@ export interface AgentPresetsViewProps {
 	onActivate?: (item: SettingsItem) => void;
 }
 
-type View = "menu" | "list" | "form" | "pool-list" | "pool-entry";
+type View = "menu" | "list" | "form" | "pool-entry";
 
 /** One row of the Agent Presets menu. */
 interface MenuEntry {
@@ -226,9 +226,12 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 	const poolStepForField = (key: string) =>
 		POOL_EDITOR_STEPS.find(({ stepId }) => poolItemsKey(stepId) === key)
 			?.stepId;
-	const poolEntries = () => {
+	const activePoolStep = () => {
+		const active = field();
+		return active?.kind === "action" ? poolStepForField(active.key) : undefined;
+	};
+	const poolEntries = (step = poolStep()) => {
 		const current = draft();
-		const step = poolStep();
 		return current?.kind === "preset" && step
 			? (current.pools[step] ?? [])
 			: [];
@@ -376,6 +379,7 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 		);
 		setFieldIndex(nextIndex);
 		const next = fields()[nextIndex];
+		if (next?.kind === "action") setPoolIndex(0);
 		if (next?.kind === "select")
 			setChoiceCursors((current) => ({
 				...current,
@@ -419,11 +423,6 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 			}));
 		editDraft(focused.key, "");
 	};
-	const openPoolManager = (step: string) => {
-		setPoolStep(step);
-		setPoolIndex(0);
-		setView("pool-list");
-	};
 	const copyPool = (step: string) => {
 		const current = draft();
 		if (current?.kind !== "preset") return;
@@ -452,10 +451,10 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 			"success",
 		);
 	};
-	const openPoolEntry = (index?: number) => {
+	const openPoolEntry = (step: string, index?: number) => {
 		const current = draft();
-		const step = poolStep();
-		if (current?.kind !== "preset" || !step) return;
+		if (current?.kind !== "preset") return;
+		setPoolStep(step);
 		const existing =
 			index === undefined ? undefined : current.pools[step]?.[index];
 		if (index !== undefined && !existing) return;
@@ -531,9 +530,13 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 			...current,
 			pools: { ...current.pools, [editor.step]: updated },
 		});
+		setErrors((currentErrors) => ({
+			...currentErrors,
+			[poolItemsKey(editor.step)]: undefined,
+		}));
 		setPoolIndex(editor.index ?? updated.length - 1);
 		setPoolEntryEditor(undefined);
-		setView("pool-list");
+		setView("form");
 	};
 	const movePoolEntryField = (delta: number) => {
 		const editor = poolEntryEditor();
@@ -592,48 +595,6 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 			);
 		editPoolEntryValue(focused.key, "");
 	};
-	const handlePoolList = (event: KeyEvent, key: string): boolean => {
-		const current = draft();
-		const step = poolStep();
-		if (current?.kind !== "preset" || !step) return false;
-		const entries = current.pools[step] ?? [];
-		if (key === "escape") {
-			setView("form");
-			return true;
-		}
-		if (key === "+" || key === "=") {
-			openPoolEntry();
-			return true;
-		}
-		if (key === "d") {
-			if (entries[poolIndex()]) {
-				const updated = entries.filter((_, index) => index !== poolIndex());
-				const pools = { ...current.pools };
-				if (updated.length) pools[step] = updated;
-				else delete pools[step];
-				setDraft({ ...current, pools });
-				setPoolIndex(Math.max(0, Math.min(poolIndex(), updated.length - 1)));
-			}
-			return true;
-		}
-		if ((key === "up" || key === "down") && event.shift) {
-			const delta = key === "up" ? -1 : 1;
-			setDraft(movePoolEntry(current, step, poolIndex(), delta));
-			setPoolIndex((index) =>
-				Math.max(0, Math.min(index + delta, entries.length - 1)),
-			);
-			return true;
-		}
-		if (key === "j" || key === "down")
-			setPoolIndex((index) =>
-				Math.min(index + 1, Math.max(0, entries.length - 1)),
-			);
-		else if (key === "k" || key === "up")
-			setPoolIndex((index) => Math.max(index - 1, 0));
-		else if (key === "enter" || key === "return") openPoolEntry(poolIndex());
-		else return false;
-		return true;
-	};
 	const handlePoolEntry = (event: KeyEvent, key: string): boolean => {
 		const focused = poolEntryField();
 		if (!focused) return false;
@@ -646,7 +607,7 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 				return true;
 			}
 			setPoolEntryEditor(undefined);
-			setView("pool-list");
+			setView("form");
 			return true;
 		}
 		if (key === "tab") {
@@ -912,7 +873,6 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 			else return false;
 			return true;
 		}
-		if (view() === "pool-list") return handlePoolList(event, key);
 		if (view() === "pool-entry") return handlePoolEntry(event, key);
 		// form
 		const focused = field();
@@ -943,13 +903,8 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 			return true;
 		}
 		if (key === "enter" || key === "return") {
-			if (focused.kind === "action") {
-				const step = poolStepForField(focused.key);
-				if (step) openPoolManager(step);
-			} else {
-				// Always validate and save the full draft; Enter never advances fields.
-				submit();
-			}
+			// Enter always validates and saves the full draft.
+			submit();
 			return true;
 		}
 		if (editing()) {
@@ -989,7 +944,56 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 			return true;
 		}
 		if (focused.kind === "action") {
+			const step = poolStepForField(focused.key);
+			const current = draft();
+			if (focusedPane() === "value" && step && current?.kind === "preset") {
+				const entries = current.pools[step] ?? [];
+				if (key === "e") {
+					if (entries[poolIndex()]) openPoolEntry(step, poolIndex());
+					return true;
+				}
+				if (key === "+" || key === "=") {
+					openPoolEntry(step);
+					return true;
+				}
+				if (key === "d") {
+					if (entries[poolIndex()]) {
+						const updated = entries.filter((_, index) => index !== poolIndex());
+						const pools = { ...current.pools };
+						if (updated.length) pools[step] = updated;
+						else delete pools[step];
+						setDraft({ ...current, pools });
+						setErrors((currentErrors) => ({
+							...currentErrors,
+							[poolItemsKey(step)]: undefined,
+						}));
+						setPoolIndex(
+							Math.max(0, Math.min(poolIndex(), updated.length - 1)),
+						);
+					}
+					return true;
+				}
+				if ((key === "up" || key === "down") && event.shift) {
+					const delta = key === "up" ? -1 : 1;
+					setDraft(movePoolEntry(current, step, poolIndex(), delta));
+					setPoolIndex((index) =>
+						Math.max(0, Math.min(index + delta, entries.length - 1)),
+					);
+					return true;
+				}
+				if (key === "j" || key === "down")
+					setPoolIndex((index) =>
+						Math.min(index + 1, Math.max(0, entries.length - 1)),
+					);
+				else if (key === "k" || key === "up")
+					setPoolIndex((index) => Math.max(index - 1, 0));
+				else if (key === "h" || key === "left") setFocusedPane("field");
+				else if (key === "l" || key === "right") return true;
+				else return false;
+				return true;
+			}
 			if (key === "h" || key === "left") setFocusedPane("field");
+			else if (key === "l" || key === "right") setFocusedPane("value");
 			else if (key === "j" || key === "down") moveField(1);
 			else if (key === "k" || key === "up") moveField(-1);
 			else return false;
@@ -1009,7 +1013,13 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 	// agents section so this is the one writer while it is mounted.
 	createEffect(() =>
 		setActiveKeybindCatalog(
-			catalogFor(view(), view() === "form" && field()?.kind === "action"),
+			catalogFor(
+				view(),
+				view() === "form" && field()?.kind === "action",
+				view() === "form" &&
+					field()?.kind === "action" &&
+					focusedPane() === "value",
+			),
 		),
 	);
 
@@ -1021,8 +1031,11 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 		if (listIndex() > listMax) setListIndex(listMax);
 		const menuMax = Math.max(0, menuEntries().length - 1);
 		if (menuIndex() > menuMax) setMenuIndex(menuMax);
-		const poolMax = Math.max(0, poolEntries().length - 1);
-		if (poolIndex() > poolMax) setPoolIndex(poolMax);
+		const step = activePoolStep();
+		if (step) {
+			const poolMax = Math.max(0, poolEntries(step).length - 1);
+			if (poolIndex() > poolMax) setPoolIndex(poolMax);
+		}
 	});
 
 	// Route library warnings/errors emitted while the surface is open to OTEL and
@@ -1169,47 +1182,6 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 					/>
 				</Show>
 			</Show>
-			<Show when={view() === "pool-list"}>
-				<box
-					style={{
-						width: "100%",
-						height: "100%",
-						minHeight: 0,
-						flexDirection: "column",
-					}}
-				>
-					<text fg={uiColors.textPrimary}>Pool {poolStep()} entries</text>
-					<Show
-						when={poolEntries().length > 0}
-						fallback={
-							<box style={{ flexGrow: 1, justifyContent: "center" }}>
-								<text fg={uiColors.textMuted}>No profile tags configured</text>
-							</box>
-						}
-					>
-						<ScrollableList
-							items={poolEntries()}
-							selectedIndex={poolIndex()}
-							availableLines={contentLines() - 1}
-							estimatedItemHeight={3}
-							showScrollIndicator={false}
-							renderItem={(entry, selected) => (
-								<Card
-									height={3}
-									selected={selected()}
-									title={entry.label}
-									cells={[
-										<text fg={uiColors.textMuted}>
-											{entry.profile}
-											{entry.default ? " · default" : ""}
-										</text>,
-									]}
-								/>
-							)}
-						/>
-					</Show>
-				</box>
-			</Show>
 			<Show when={view() === "pool-entry" && poolEntryEditor()}>
 				<box style={{ width: "100%", flexGrow: 1, minHeight: 0 }}>
 					<Form
@@ -1241,6 +1213,52 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 								? "Model profile"
 								: "Configuration preset"
 						}
+						actionContent={
+							<Show when={activePoolStep()}>
+								{(step) => (
+									<box
+										style={{
+											width: "100%",
+											flexGrow: 1,
+											minHeight: 0,
+											flexDirection: "column",
+											gap: 1,
+										}}
+									>
+										<text fg={uiColors.textPrimary}>Pool {step()} entries</text>
+										<Show
+											when={poolEntries(step()).length > 0}
+											fallback={
+												<text fg={uiColors.textMuted}>
+													No profile tags configured
+												</text>
+											}
+										>
+											<ScrollableList
+												items={poolEntries(step())}
+												selectedIndex={poolIndex()}
+												availableLines={Math.max(1, contentLines() - 4)}
+												estimatedItemHeight={3}
+												showScrollIndicator={false}
+												renderItem={(entry, selected) => (
+													<Card
+														height={3}
+														selected={selected() && focusedPane() === "value"}
+														title={entry.label}
+														cells={[
+															<text fg={uiColors.textMuted}>
+																{entry.profile}
+																{entry.default ? " · default" : ""}
+															</text>,
+														]}
+													/>
+												)}
+											/>
+										</Show>
+									</box>
+								)}
+							</Show>
+						}
 					/>
 				</box>
 			</Show>
@@ -1252,6 +1270,7 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 export function catalogFor(
 	view: View,
 	poolFieldFocused = false,
+	poolListFocused = false,
 ): KeybindSection[] {
 	if (view === "menu")
 		return [
@@ -1279,25 +1298,6 @@ export function catalogFor(
 					{ key: "+", action: "add entry", short: "add" },
 					{ key: "d", action: "delete entry", short: "delete" },
 					{ key: "Esc", action: "back", short: "back", standard: true },
-				],
-			},
-		];
-	if (view === "pool-list")
-		return [
-			{
-				title: "Model pool entries",
-				keybinds: [
-					{ key: "j/k or ↑/↓", action: "select entry", standard: true },
-					{ key: "Enter", action: "edit entry", short: "edit" },
-					{ key: "+", action: "add entry", short: "add" },
-					{ key: "d", action: "delete entry", short: "delete" },
-					{ key: "Shift+↑/↓", action: "move entry", short: "move" },
-					{
-						key: "Esc",
-						action: "back to preset",
-						short: "back",
-						standard: true,
-					},
 				],
 			},
 		];
@@ -1332,25 +1332,40 @@ export function catalogFor(
 			title: "Agent form",
 			keybinds: [
 				{ key: "h/l", action: "focus fields/value", standard: true },
-				{ key: "j/k or ↑/↓", action: "move fields/choices", standard: true },
-				{ key: "Space", action: "select highlighted choice", short: "select" },
-				{ key: "e", action: "edit text field", short: "edit" },
-				{ key: "Tab", action: "next field", short: "next", standard: true },
-				{ key: "Backspace", action: "delete character", short: "delete" },
-				{ key: "x", action: "clear choice", short: "clear" },
+				{
+					key: "j/k or ↑/↓",
+					action: poolListFocused ? "select pool entry" : "move fields/choices",
+					standard: true,
+				},
 				...(poolFieldFocused
 					? [
+							...(poolListFocused
+								? [
+										{ key: "e", action: "edit pool entry", short: "edit" },
+										{ key: "+", action: "add pool entry", short: "add" },
+										{ key: "d", action: "delete pool entry", short: "delete" },
+										{
+											key: "Shift+↑/↓",
+											action: "move pool entry",
+											short: "move",
+										},
+									]
+								: []),
 							{ key: "y", action: "copy pool", short: "copy" },
 							{ key: "p", action: "paste pool", short: "paste" },
 						]
-					: []),
-				{
-					key: "Enter",
-					action: poolFieldFocused
-						? "manage pool entries"
-						: "validate and save",
-					short: poolFieldFocused ? "manage" : "save",
-				},
+					: [
+							{
+								key: "Space",
+								action: "select highlighted choice",
+								short: "select",
+							},
+							{ key: "e", action: "edit text field", short: "edit" },
+							{ key: "x", action: "clear choice", short: "clear" },
+						]),
+				{ key: "Tab", action: "next field", short: "next", standard: true },
+				{ key: "Backspace", action: "delete character", short: "delete" },
+				{ key: "Enter", action: "validate and save", short: "save" },
 				{
 					key: "Esc",
 					action: "finish editing / cancel",

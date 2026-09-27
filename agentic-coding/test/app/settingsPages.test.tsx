@@ -277,6 +277,12 @@ test("empty Agent Presets opens an error modal instead of showing a persistent w
 		true,
 	);
 	let helpFrame = t.captureCharFrame();
+	expect(helpFrame).toContain("+");
+	expect(helpFrame).toContain("add pool entry");
+	expect(helpFrame).toContain("e");
+	expect(helpFrame).toContain("edit pool entry");
+	expect(helpFrame).toContain("Enter");
+	expect(helpFrame).toContain("validate and save");
 	expect(helpFrame).toContain("y");
 	expect(helpFrame).toContain("copy pool");
 	expect(helpFrame).toContain("p");
@@ -284,19 +290,14 @@ test("empty Agent Presets opens an error modal instead of showing a persistent w
 	expect(
 		await pressEscapeAndSettle(t, (frame) => !frame.includes("Keybindings")),
 	).toBe(true);
-	t.mockInput.pressEnter(); // open core.plan pool entries
-	expect(
-		await renderUntil(t, (frame) =>
-			frame.includes("No profile tags configured"),
-		),
-	).toBe(true);
+	expect(t.captureCharFrame()).toContain("No profile tags configured");
 	t.mockInput.pressKey("?");
 	expect(await renderUntil(t, (frame) => frame.includes("Keybindings"))).toBe(
 		true,
 	);
 	helpFrame = t.captureCharFrame();
 	expect(helpFrame).toContain("Shift+↑/↓");
-	expect(helpFrame).toContain("move entry");
+	expect(helpFrame).toContain("move pool entry");
 	expect(
 		await pressEscapeAndSettle(t, (frame) => !frame.includes("Keybindings")),
 	).toBe(true);
