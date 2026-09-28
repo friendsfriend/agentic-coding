@@ -31,7 +31,6 @@ import {
 	APPLY_PHASE_STEPS,
 	buildRoutingDecisionSummary,
 	type ClassifierAnswer,
-	confidentChoice,
 	GATE_QUESTIONS,
 	parseClassifierAnswer,
 	selectGateDecision,
@@ -185,7 +184,33 @@ describe("routing answer parsing", () => {
 		});
 	});
 
-	test("selects a single entry above the confidence floor", () => {
+	test("applies the classifier's chosen entry regardless of confidence", () => {
+		const entries = [
+			{ label: "quick", profile: "base" },
+			{ label: "thorough", profile: "strong", default: true },
+		];
+		for (const confidence of [0.9, 0.5, 0.2]) {
+			expect(
+				selectSingleEntry(entries, {
+					type: "choice",
+					choice: "quick",
+					confidence,
+				}),
+			).toEqual({ profile: "base" });
+		}
+	});
+
+	test("a choice without a confidence is still applied", () => {
+		const entries = [
+			{ label: "quick", profile: "base" },
+			{ label: "thorough", profile: "strong", default: true },
+		];
+		expect(
+			selectSingleEntry(entries, { type: "choice", choice: "quick" }),
+		).toEqual({ profile: "base" });
+	});
+
+	test("a probabilities-only answer selects the most probable entry", () => {
 		const entries = [
 			{ label: "quick", profile: "base" },
 			{ label: "thorough", profile: "strong", default: true },
@@ -193,40 +218,27 @@ describe("routing answer parsing", () => {
 		expect(
 			selectSingleEntry(entries, {
 				type: "choice",
-				choice: "quick",
-				confidence: 0.8,
+				probabilities: { quick: 0.4, thorough: 0.6 },
+			}),
+		).toEqual({ profile: "strong" });
+	});
+
+	test("an unknown label falls back to the most probable entry", () => {
+		const entries = [
+			{ label: "quick", profile: "base" },
+			{ label: "thorough", profile: "strong", default: true },
+		];
+		expect(
+			selectSingleEntry(entries, {
+				type: "choice",
+				choice: "missing",
+				confidence: 0.9,
+				probabilities: { quick: 0.7, thorough: 0.3 },
 			}),
 		).toEqual({ profile: "base" });
 	});
 
-	test("falls back to the tagged default below the confidence floor", () => {
-		const entries = [
-			{ label: "quick", profile: "base" },
-			{ label: "thorough", profile: "strong", default: true },
-		];
-		const result = selectSingleEntry(entries, {
-			type: "choice",
-			choice: "quick",
-			confidence: 0.2,
-		});
-		expect(result.profile).toBe("strong");
-		expect(result.attention).toContain("confidence");
-	});
-
-	test("a choice without a confidence never clears the gate", () => {
-		const entries = [
-			{ label: "quick", profile: "base" },
-			{ label: "thorough", profile: "strong", default: true },
-		];
-		const result = selectSingleEntry(entries, {
-			type: "choice",
-			choice: "quick",
-		});
-		expect(result.profile).toBe("strong");
-		expect(result.attention).toContain("confidence");
-	});
-
-	test("an unknown label falls back to the tagged default", () => {
+	test("an unusable answer falls back to the tagged default with attention", () => {
 		const entries = [
 			{ label: "quick", profile: "base" },
 			{ label: "thorough", profile: "strong", default: true },
@@ -322,10 +334,10 @@ describe("routing decision telemetry summary", () => {
 			profile: "base",
 		});
 		expect(summary.steps["fusion.consolidate"]).toEqual({
-			fallback: true,
-			label: "thorough",
+			fallback: false,
+			label: "quick",
 			confidence: 0.2,
-			profile: "strong",
+			profile: "base",
 		});
 		expect(summary.steps["core.wiki"]).toEqual({
 			fallback: true,
@@ -339,7 +351,7 @@ describe("routing decision telemetry summary", () => {
 			phase: "plan",
 			askedStepCount: 4,
 			appliedStepCount: 4,
-			fallbackCount: 2,
+			fallbackCount: 1,
 		});
 	});
 
@@ -516,7 +528,6 @@ describe("noul answers and the per-role questions", () => {
 			type: "noul",
 			noul: 0.5,
 		});
-		expect(confidentChoice({ type: "noul", noul: 0.9 })).toBe(false);
 	});
 
 	test("collapses a missing or non-numeric necessity value to no value", () => {
@@ -1155,7 +1166,7 @@ describe("applyClassifierRouting (reducer)", () => {
 		}
 	});
 
-	test("keeps the tagged default and records attention on low confidence", () => {
+	test("applies a low-confidence choice and keeps its confidence in the record", () => {
 		const repo = tempDir();
 		const configPath = writeAgentsConfig(repo);
 		const previous = process.env.HERDR_WORKFLOW_CONFIG;
@@ -1228,8 +1239,7 @@ describe("applyClassifierRouting (reducer)", () => {
 				snapshot.routing.routes.find(
 					(route) => route.stepId === "core.implementation",
 				)?.profile.name,
-			).toBe("strong");
-			expect(snapshot.attention.length).toBeGreaterThan(0);
+			).toBe("base");
 			expect(
 				snapshot.classifierDecisions?.find(
 					(decision) => decision.questionId === "core.implementation",
@@ -1237,9 +1247,8 @@ describe("applyClassifierRouting (reducer)", () => {
 			).toMatchObject({
 				answer: { type: "choice", choice: "quick", confidence: 0.2 },
 				result: {
-					applied: false,
-					profiles: ["strong"],
-					attention: expect.stringContaining("confidence"),
+					applied: true,
+					profiles: ["base"],
 				},
 			});
 		} finally {

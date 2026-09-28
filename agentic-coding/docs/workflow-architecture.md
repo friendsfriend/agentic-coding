@@ -95,8 +95,12 @@ preset supplies one ordered pool per classifiable step, and the JEV classifier
 picks an entry. Two passes run: `core.route-plan` (task state; `core.plan`,
 `fusion.consolidate`, and the `fusion.plan` roster) and `core.route-apply`
 (plan-artifact state; implementation/triage/verification/wiki/archive). A
-single selection replaces every route of its step, so one `core.verification`
-pool covers all verifier roles; a fusion roster recomputes `planner-1..N`. A
+single selection pins the entry the classifier named — or, when it named
+none, the offered entry with the highest `probabilities` value — and replaces
+every route of its step, so one `core.verification` pool covers all verifier
+roles; the reported `confidence` is observable telemetry and never changes the
+pick, and only an answer with no usable decision falls back to the pool's
+tagged `default`. A fusion roster recomputes `planner-1..N`. A
 classifier-routed start requires a preset whose pools cover every classifiable
 step in the definition; the `fusion.plan` pool's tagged defaults seed the
 pre-classification planner fan-out. The resolved routing is pinned in the

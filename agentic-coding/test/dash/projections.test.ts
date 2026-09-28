@@ -55,14 +55,15 @@ test("classifier decision projections show rows, options, result, and verbatim i
 		],
 		answer: {
 			type: "choice",
-			choice: "quick",
+			choice: "missing",
 			confidence: 0.2,
-			probabilities: { quick: 0.6, deep: 0.4 },
+			probabilities: { ghost: 0.9 },
 		},
 		result: {
 			applied: false,
 			profiles: ["smart"],
-			attention: "confidence below floor",
+			attention:
+				"classifier returned no usable choice; kept the pool default routing",
 		},
 	};
 	expect(classifierDecisionRows([decision])).toEqual([
@@ -70,9 +71,9 @@ test("classifier decision projections show rows, options, result, and verbatim i
 	]);
 	const detail = classifierDecisionDetail(decision);
 	expect(detail.title).toContain("core.implementation");
-	expect(detail.content).toContain("| quick | cheap | yes | 0.6 |");
+	expect(detail.content).toContain("| quick | cheap |  | — |");
 	expect(detail.content).toContain("**Applied:** no");
-	expect(detail.content).toContain("confidence below floor");
+	expect(detail.content).toContain("no usable choice");
 	expect(detail.content).toContain("input was truncated");
 	expect(detail.content).toContain(decision.input);
 });

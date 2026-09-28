@@ -279,7 +279,7 @@ test("completed classifier effects emit the applied routing decision", () => {
 				answers: {
 					"core.plan": {
 						type: "choice",
-						choice: "quick",
+						choice: "thorough-sk-abcdefghijklmnop",
 						confidence: maliciousConfidence,
 					},
 				},
@@ -298,9 +298,9 @@ test("completed classifier effects emit the applied routing decision", () => {
 			"herdr.routing.phase": "plan",
 			"herdr.routing.steps.asked": 1,
 			"herdr.routing.steps.applied": 1,
-			"herdr.routing.fallback.count": 1,
+			"herdr.routing.fallback.count": 0,
 			"herdr.routing.core.plan.label": "thorough-[REDACTED]",
-			"herdr.routing.core.plan.fallback": true,
+			"herdr.routing.core.plan.fallback": false,
 			"herdr.routing.core.plan.profile": "strong",
 		});
 		expect(decision?.["herdr.routing.core.plan.confidence"]).toBeUndefined();

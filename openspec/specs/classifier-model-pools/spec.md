@@ -4,9 +4,7 @@
 Define per-step, user-labelled model pools and the two-pass System One
 classifier routing that selects one pool entry per classifiable workflow step
 (or a planning roster for fusion), with deterministic default fallback.
-
 ## Requirements
-
 ### Requirement: Per-step model pools
 
 A custom agent preset SHALL define its routing as `pools`: a table keyed by
@@ -105,24 +103,6 @@ no pool SHALL run outside these two passes without extending them.
 - **WHEN** a routing pass collects questions for several classifiable steps
 - **THEN** it SHALL issue exactly one classifier request containing every question in parallel
 - **AND** it SHALL NOT issue one request per step
-
-### Requirement: Single-select choice with confidence gate
-
-For a `single` step the classifier SHALL ask a TypeSafe `choice` question whose
-criteria are the pool entries' criteria, and SHALL apply the returned `choice`
-only when the answer's `confidence` is at least 0.5. A choice below that floor
-SHALL keep the pool's tagged default and record `attention`.
-
-#### Scenario: Confident choice is applied
-
-- **WHEN** a single-select answer names a pool entry with `confidence` of at least 0.5
-- **THEN** that entry's profile SHALL be applied to the step's routes
-
-#### Scenario: Low-confidence answer falls back
-
-- **WHEN** a single-select answer has `confidence` below 0.5
-- **THEN** the pool's `default: true` entry SHALL be applied
-- **AND** the workflow SHALL record `attention`
 
 ### Requirement: Fusion roster probability selection
 
@@ -224,3 +204,44 @@ SHALL NOT be produced from a `noul` answer or the reverse.
 - **WHEN** a `choice` answer is parsed
 - **THEN** its choice, confidence, and probabilities SHALL be preserved exactly
   as before this capability
+
+### Requirement: Single-select choice uses the classifier's most probable entry
+
+For a `single` step the classifier SHALL ask a TypeSafe `choice` question whose
+criteria are the pool entries' criteria, and the router SHALL apply the entry the
+classifier named in the answer's `choice` regardless of the answer's
+`confidence`. `confidence` SHALL be retained on the recorded answer and in
+routing telemetry, but SHALL NOT influence which entry is applied. When the
+answer names no entry, or names an entry that is not in the pool, the router
+SHALL select the offered entry with the highest `probabilities` value. Only when
+the answer carries neither a `choice` naming an offered entry nor probabilities
+for offered entries SHALL the pool's tagged `default: true` entry be applied and
+`attention` recorded.
+
+#### Scenario: Low-confidence choice is applied
+
+- **WHEN** a single-select answer names a pool entry with `confidence` below 0.5
+- **THEN** that entry's profile SHALL be applied to the step's routes
+- **AND** no fallback SHALL be recorded
+
+#### Scenario: Confidence is not consulted
+
+- **WHEN** a single-select answer names a pool entry and carries a confidence above, at, or below 0.5
+- **THEN** the named entry SHALL be applied in every case
+
+#### Scenario: Probabilities-only answer uses the most probable entry
+
+- **WHEN** a single-select answer carries no `choice` naming an offered entry but carries `probabilities` for offered entries
+- **THEN** the offered entry with the highest probability SHALL be applied to the step's routes
+
+#### Scenario: An unknown label falls back to the most probable entry
+
+- **WHEN** a single-select answer names a `choice` that is not in the pool but carries probabilities for offered entries
+- **THEN** the offered entry with the highest probability SHALL be applied
+
+#### Scenario: Unusable answer falls back to the tagged default
+
+- **WHEN** a single-select answer carries neither a `choice` naming an offered entry nor probabilities for offered entries
+- **THEN** the pool's `default: true` entry SHALL be applied
+- **AND** the workflow SHALL record `attention`
+

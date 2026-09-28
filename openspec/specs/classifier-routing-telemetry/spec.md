@@ -6,9 +6,7 @@ observable: every routing pass exports a bounded, content-free decision record
 and a provider-call record into the same OTEL/JSONL telemetry stream that
 already carries the agent sessions, so a workflow's routing behaviour can be
 reviewed, tuned, and debugged the way its sessions can.
-
 ## Requirements
-
 ### Requirement: Every completed classification pass exports one decision record
 
 The system SHALL export exactly one `routing.classified` event per completed
@@ -17,25 +15,29 @@ the workflow, the routing step that issued the pass, the pass phase (`plan` or
 `apply`), and the effect id, and SHALL report, for every step the pass asked:
 the label the classifier selected, the reported confidence, whether that step
 fell back to a pool's tagged default, and the model profile(s) pinned for the
-step by that pass. A field the classifier or the pass did not produce SHALL be
-omitted rather than reported as a placeholder, and the event SHALL report the
-pass's fallbacks as a count so a silently defaulted pass is visible in one row.
+step by that pass. A step SHALL be reported as a fallback only when the pass
+applied the tagged default because the answer carried no usable choice, so a
+below-floor confidence that is applied is not a fallback. A field the classifier
+or the pass did not produce SHALL be omitted rather than reported as a
+placeholder, and the event SHALL report the pass's fallbacks as a count so a
+silently defaulted pass is visible in one row.
 
 #### Scenario: Single-selection pass records the applied profile
 
 - **WHEN** a plan-phase pass asks `core.plan` and the classifier answers with the
-  label `high-cost-smart` at a confidence at or above the selection floor
+  label `high-cost-smart`
 - **THEN** the `routing.classified` event SHALL report step `core.plan` with that
-  label, that confidence, no fallback, and the model profile pinned for `core.plan`
+  label, its reported confidence, no fallback, and the model profile pinned for
+  `core.plan`
 - **AND** the event SHALL report the phase `plan` and the pass's effect id
 
-#### Scenario: Below-floor confidence records a default fallback
+#### Scenario: Below-floor confidence is applied, not a fallback
 
-- **WHEN** the classifier answers `core.plan` with a confidence below the
-  selection floor
-- **THEN** the `routing.classified` event SHALL mark `core.plan` as a fallback
-- **AND** it SHALL report the pool's tagged default label and the profile that
-  pass actually pinned, never the rejected answer's label as applied
+- **WHEN** the classifier answers `core.plan` with a chosen label at a
+  confidence below 0.5
+- **THEN** the `routing.classified` event SHALL report that label and confidence
+  and SHALL NOT mark `core.plan` as a fallback
+- **AND** it SHALL report the profile the pass pinned from that answer
 
 #### Scenario: Roster pass records the selected planner set
 
@@ -160,3 +162,4 @@ classifier call, or switch a model or profile.
 
 - **WHEN** a pass's telemetry is emitted
 - **THEN** no additional classifier call SHALL be made on the pass's behalf
+

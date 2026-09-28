@@ -180,10 +180,8 @@ export function testDashboard(phase = "proposed"): DashboardData {
 						probabilities: { quick: 0.6, thorough: 0.4 },
 					},
 					result: {
-						applied: false,
-						profiles: ["strong"],
-						attention:
-							"classifier confidence below floor; kept the pool default routing",
+						applied: true,
+						profiles: ["base"],
 					},
 				},
 			],

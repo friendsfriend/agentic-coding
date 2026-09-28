@@ -20,12 +20,12 @@ export interface PoolEntry {
 /** Classification mode a classifiable step declares. */
 export type ClassificationMode = "single" | "roster";
 
-/** Selector constants (not config): a single choice below the confidence floor
- * falls back to the pool default; roster entries below the probability
- * threshold are dropped; the roster is clamped to [2,5] distinct profiles.
- * Defined here (pure protocol) and imported by `profiles.ts` for validation so
- * the domain never imports the runtime config module. */
-export const SINGLE_CONFIDENCE_FLOOR = 0.5;
+/** Selector constants (not config): a single selection never consults
+ * `confidence` and falls back to the pool default only for a genuinely
+ * unusable answer; roster entries below the probability threshold are dropped;
+ * the roster is clamped to [2,5] distinct profiles. Defined here (pure
+ * protocol) and imported by `profiles.ts` for validation so the domain never
+ * imports the runtime config module. */
 export const ROSTER_PROBABILITY_THRESHOLD = 0.2;
 export const ROSTER_MIN_PLANNERS = 2;
 export const ROSTER_MAX_PLANNERS = 5;
@@ -152,12 +152,12 @@ export function buildRoutingDecisionSummary(
 					(entry) =>
 						entry.default === true && entry.profile === selected.profile,
 				)
-			: spec.entries.find(
+			: (spec.entries.find(
 					(entry) =>
 						answer.type === "choice" &&
 						entry.label === answer.choice &&
 						entry.profile === selected.profile,
-				);
+				) ?? spec.entries.find((entry) => entry.profile === selected.profile));
 		if (fallback) fallbackCount++;
 		if (selected.profile) appliedStepCount++;
 		steps[spec.stepId] = {
@@ -233,41 +233,32 @@ export function parseClassifierAnswer(value: unknown): ClassifierAnswer {
 	};
 }
 
-/** True when the answer's `confidence` clears the single-select floor. A
- * `choice` without a numeric confidence never clears it. */
-export function confidentChoice(
-	answer: ClassifierAnswer,
-	floor = SINGLE_CONFIDENCE_FLOOR,
-): boolean {
-	return (
-		answer.type === "choice" &&
-		typeof answer.confidence === "number" &&
-		answer.confidence >= floor
-	);
-}
-
-/** Select a single pool entry by label, or the tagged default. The choice is
- * applied only when `confidence` clears the floor; otherwise the tagged
- * default is kept and attention is recorded. */
+/** Select a single pool entry: the entry the classifier explicitly named,
+ * else the offered entry with the highest `probabilities` value, else the
+ * tagged default. `confidence` is recorded but never consulted. Attention is
+ * recorded only when the answer carries no usable decision. */
 export function selectSingleEntry(
 	entries: readonly PoolEntry[],
 	answer: ClassifierAnswer,
-	floor = SINGLE_CONFIDENCE_FLOOR,
 ): { profile: string; attention?: string } {
 	const fallback = entries.find((entry) => entry.default === true);
-	if (!confidentChoice(answer, floor))
-		return {
-			profile: fallback?.profile ?? "",
-			attention:
-				answer.type === "choice"
-					? "classifier confidence below floor; kept the pool default routing"
-					: "classifier returned no usable choice; kept the pool default routing",
-		};
-	const chosen =
-		answer.type === "choice" && answer.choice !== undefined
-			? entries.find((entry) => entry.label === answer.choice)
-			: undefined;
-	if (chosen) return { profile: chosen.profile };
+	if (answer.type === "choice") {
+		if (answer.choice !== undefined) {
+			const chosen = entries.find((entry) => entry.label === answer.choice);
+			if (chosen) return { profile: chosen.profile };
+		}
+		const mostProbable = entries.reduce<{
+			profile: string;
+			probability: number;
+		} | null>((best, entry) => {
+			const probability = answer.probabilities?.[entry.label];
+			if (probability === undefined) return best;
+			return best === null || probability > best.probability
+				? { profile: entry.profile, probability }
+				: best;
+		}, null);
+		if (mostProbable) return { profile: mostProbable.profile };
+	}
 	return {
 		profile: fallback?.profile ?? "",
 		attention:

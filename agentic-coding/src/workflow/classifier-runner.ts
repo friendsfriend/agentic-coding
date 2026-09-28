@@ -60,7 +60,9 @@ export function collectClassifierArtifacts(
 	}
 	const specs = path.join(root, "specs");
 	if (fs.existsSync(specs))
-		for (const entry of fs.readdirSync(specs, { withFileTypes: true }).sort())
+		for (const entry of fs
+			.readdirSync(specs, { withFileTypes: true })
+			.sort((a, b) => a.name.localeCompare(b.name)))
 			if (
 				entry.isDirectory() &&
 				fs.existsSync(path.join(specs, entry.name, "spec.md"))
