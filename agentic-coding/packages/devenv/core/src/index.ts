@@ -115,11 +115,7 @@ import {
 	setIssueAssignee,
 	setIssueLabels,
 } from "./issues-client.ts";
-import {
-	analyzeCRWithAIStream,
-	analyzeLogsWithAI,
-	analyzeLogsWithAIStream,
-} from "./logs-client.ts";
+import { analyzeLogsWithAI, analyzeLogsWithAIStream } from "./logs-client.ts";
 import { getProjectCatalog } from "./projects-client.ts";
 import {
 	createProvider,
@@ -610,22 +606,6 @@ export class DevEnvClient {
 		onSessionId?: (sessionId: string) => void,
 	): AsyncGenerator<string> {
 		return analyzeLogsWithAIStream(this.deps, logs, prompt, onSessionId);
-	}
-	analyzeCRWithAIStream(
-		appIdent: string,
-		crIID: number,
-		sourceBranch: string,
-		targetBranch: string,
-		prompt: string,
-	): AsyncGenerator<string> {
-		return analyzeCRWithAIStream(
-			this.deps,
-			appIdent,
-			crIID,
-			sourceBranch,
-			targetBranch,
-			prompt,
-		);
 	}
 	searchRepos(
 		provider: string,

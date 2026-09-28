@@ -1,7 +1,7 @@
 // Luvus multiplexer adapter (add-multiplexer-adapters, task 5).
 //
 // Implements the runtime-neutral `MultiplexerPort` over Luvus UHP 1.0:
-// workspace/tab/pane/agent/worktree operations, atomic agent start and prompt,
+// workspace/tab/pane/agent operations, atomic agent start and prompt,
 // notification delivery through the semantic CLI, and a scoped event
 // subscription with sequence resume. The named session and socket always come
 // from the environment; this module never hardcodes a path.
@@ -270,119 +270,6 @@ export class LuvusMultiplexer implements MultiplexerPort {
 			yield* this.request("workspace.close", {
 				workspace_id: ref.workspaceId,
 			});
-		});
-	}
-	worktreeCreate(i: {
-		cwd: string;
-		branch: string;
-		base?: string;
-		label: string;
-	}): Effect.Effect<
-		{ workspace: WorkspaceInfo; worktree: string },
-		MultiplexerError
-	> {
-		return Effect.gen(this, function* () {
-			const list = yield* this.decode(
-				L.workspaceListResult,
-				yield* this.request("workspace.list"),
-			);
-			let repository = (list.workspaces ?? []).find(
-				(row) => row.cwd === i.cwd || row.terminal_cwd === i.cwd,
-			);
-			if (!repository) {
-				const opened = yield* this.decode(
-					L.workspaceResult,
-					yield* this.request("workspace.open", { path: i.cwd }),
-				);
-				if (opened.workspace) repository = { workspace: opened.workspace };
-			}
-			if (!repository?.workspace)
-				return yield* Effect.fail(
-					new MultiplexerError(
-						"unavailable",
-						"luvus",
-						`Luvus has no workspace for ${i.cwd}`,
-					),
-				);
-			// Luvus addresses worktree.* by the workspace's numeric index and ignores
-			// `workspace_id` there (verified against luvus 0.14.2): sending the stable
-			// id creates the worktree in whichever workspace happens to be active, so
-			// a workflow would be given a worktree of an unrelated repository.
-			const target = repository.workspace;
-			const createReply = yield* this.decode(
-				L.worktreeCreateResult,
-				yield* this.request("worktree.create", {
-					workspace: target,
-					branch: i.branch,
-				}),
-			);
-			const worktree = createReply.path;
-			if (!worktree)
-				return yield* Effect.fail(
-					new MultiplexerError(
-						"invalid-response",
-						"luvus",
-						"Luvus worktree.create returned no worktree path",
-					),
-				);
-			// Luvus names the new workspace after the branch with its separators
-			// collapsed (`feature/x` becomes `feature-x`) and focuses it, which is what
-			// the session-scoped tab/pane/agent calls that follow rely on. Identity
-			// therefore comes from the created path the reply reported, never from the
-			// branch name.
-			const after = yield* this.decode(
-				L.workspaceListResult,
-				yield* this.request("workspace.list"),
-			);
-			const workspace = (after.workspaces ?? []).find(
-				(row) => row.cwd === worktree || row.terminal_cwd === worktree,
-			);
-			if (!workspace)
-				return yield* Effect.fail(
-					new MultiplexerError(
-						"invalid-response",
-						"luvus",
-						`Luvus worktree.create reported ${worktree} but no workspace opened it`,
-					),
-				);
-			const info = workspaceInfo(workspace) ?? {
-				workspaceId: String(workspace.workspace ?? ""),
-			};
-
-			// Luvus creates the branch from the workspace's current HEAD and has no
-			// base parameter. Verify the requested base rather than silently
-			// ignoring it: a mismatch fails loudly with the runtime named.
-			if (i.base) {
-				const worktrees = yield* this.decode(
-					L.worktreeListResult,
-					yield* this.request("worktree.list", { workspace: target }),
-				);
-				const created = (worktrees.worktrees ?? []).find(
-					(row) => row.path === worktree,
-				);
-				if (!created)
-					return yield* Effect.fail(
-						new MultiplexerError(
-							"invalid-response",
-							"luvus",
-							"Luvus worktree.list did not report the created worktree",
-						),
-					);
-				if (
-					created.head &&
-					created.head !== i.base &&
-					!created.head.startsWith(i.base) &&
-					!i.base.startsWith(created.head)
-				)
-					return yield* Effect.fail(
-						new MultiplexerError(
-							"unavailable",
-							"luvus",
-							`Luvus created worktree '${i.branch}' at ${created.head} instead of the requested base ${i.base}`,
-						),
-					);
-			}
-			return { workspace: info, worktree };
 		});
 	}
 	tabList(workspaceId: string): Effect.Effect<TabInfo[], MultiplexerError> {

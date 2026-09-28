@@ -154,28 +154,6 @@ function resolveClient(
 	return result.ok ? result.resolved : fail(result.status, result.message);
 }
 
-/**
- * Resolve the GitLab target a review session needs, from an app ident alone.
- * Used by the AI comment callback, which must not trust a request-supplied
- * project: the session already decided which review it belongs to.
- */
-export function gitLabReviewTarget(
-	services: IntegrationServices,
-	appIdent: string,
-):
-	| { changeRequests: GitLabChangeRequests; project: ResolvedGitLab["project"] }
-	| { error: string; status: number } {
-	const app = services.apps.getAppByIdent(appIdent);
-	if (!app) return { error: "app not found", status: 404 };
-	const result = resolveClientResult(services, app);
-	if (!result.ok)
-		return { error: `GitLab client error: ${result.message}`, status: 502 };
-	return {
-		changeRequests: result.resolved.changeRequests,
-		project: result.resolved.project,
-	};
-}
-
 /** Serve one Bun-owned GitLab route, or `undefined` for another family. */
 export async function handleGitLabRoute(
 	services: IntegrationServices,

@@ -105,6 +105,26 @@ test("phase status and approval prompts are pure display projections", () => {
 		working: true,
 		blocked: false,
 	});
+	// The shimmer is an aurora timeline, and a playing timeline keeps the
+	// renderer live: a badge that animated while nothing ran held a dashboard at
+	// ~28 fps (~4-5% CPU) indefinitely. Only an active workflow shimmers.
+	expect(
+		phaseStatus({
+			phase: "core.archive",
+			stepId: "core.archive",
+			stepLabel: "OpenSpec archive",
+			status: "attention-required",
+			runs: [{ stepId: "core.archive", status: "blocked" }],
+		}),
+	).toEqual({ text: "OpenSpec archive", working: false, blocked: true });
+	expect(phaseStatus({ phase: "verify", status: "paused", runs: [] })).toEqual({
+		text: "verify",
+		working: false,
+		blocked: false,
+	});
+	expect(
+		phaseStatus({ phase: "verify", status: "completed", runs: [] }),
+	).toEqual({ text: "verify", working: false, blocked: false });
 	expect(approvalFor("proposed")).toEqual({
 		prompt: "Press Enter to approve plan",
 		action: "approve-plan",

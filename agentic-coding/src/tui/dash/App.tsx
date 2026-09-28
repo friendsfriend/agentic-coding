@@ -216,7 +216,7 @@ export function App(props: {
 	let refreshForceQueued = false;
 	let refreshDisposed = false;
 	let refreshController: AbortController | undefined;
-	let refreshReviewFiles: (() => void) | undefined;
+	let refreshReviewFiles: ((force?: boolean) => void) | undefined;
 	// The last observation failure surfaced in the error modal. A persistent
 	// failure must not reopen the modal on every refresh (watchDirectories
 	// refreshes on each workflow file change); clearing on success re-arms it.
@@ -975,7 +975,9 @@ export function App(props: {
 	// workflow events turned into back-to-back reads of identical data.
 	const refreshThrottle = throttle(runRefresh, REFRESH_MIN_INTERVAL_MS);
 	const refresh = (force = false) => {
-		refreshReviewFiles?.();
+		// `force` is the safety resync's authoritative read; a push-event refresh
+		// must not force the review's file list past the cache.
+		refreshReviewFiles?.(force);
 		if (props.profile === "test") {
 			setData(load());
 			traceTui("tui.dashboard.refresh", {
@@ -1009,7 +1011,7 @@ export function App(props: {
 		setDemoIndex,
 		demoPhases,
 	});
-	refreshReviewFiles = () => void reviewFeature.refreshReviewFiles();
+	refreshReviewFiles = (force) => void reviewFeature.refreshReviewFiles(force);
 	const {
 		setReviewOpen,
 		setReviewComments,

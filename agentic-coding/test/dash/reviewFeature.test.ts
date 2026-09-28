@@ -264,6 +264,46 @@ test("plan review reloads files when its source list changes", async () => {
 	}
 });
 
+test("a push refresh serves the review file list from the cache and the resync forces it", async () => {
+	// The worktree listing costs a ~100 ms tree walk plus the state read, and the
+	// dashboard used to call this on every push event with `refresh: true`
+	// (measured: 19 reads per 5 s window, i.e. over a core of Git work).
+	let calls = 0;
+	configureGateway({
+		observe: async (observation: ObservationRequest) => {
+			if (observation.kind === "local-changes") {
+				calls += 1;
+				return [{ newPath: `file-${calls}.ts`, linesAdded: 1 }];
+			}
+			if (observation.kind === "developer-review-findings") return [];
+			throw new Error(`unexpected ${observation.kind}`);
+		},
+	} as unknown as DashboardGateway);
+	try {
+		await createRoot(async (dispose) => {
+			const feature = createReviewFeature(
+				context({
+					profile: undefined,
+					repo: "/cache-probe",
+					workflowId: "cache-probe",
+				}),
+			);
+			// Opening the review is user-initiated: it reads through.
+			await feature.openDeveloperReview();
+			expect(calls).toBe(1);
+			// A push-event refresh must not force past the cache...
+			await feature.refreshReviewFiles();
+			expect(calls).toBe(1);
+			// ...while the safety resync's forced read is authoritative.
+			await feature.refreshReviewFiles(true);
+			expect(calls).toBe(2);
+			dispose();
+		});
+	} finally {
+		clearGateway();
+	}
+});
+
 test("feature tracks draft comments and rejection state in its own signals", async () => {
 	await createRoot(async (dispose) => {
 		const feature = createReviewFeature(context());

@@ -9,6 +9,11 @@
 // deliberately separate — runtime state is never written into a definition
 // file.
 
+import {
+	linkedWorktreePath,
+	primaryWorktreePath,
+} from "../../worktree/template.ts";
+
 export const APP_TYPE_APP = "APP";
 export const APP_TYPE_LIBRARY = "LIB";
 
@@ -458,16 +463,6 @@ export function newProjectCatalog(projects: Project[]): ProjectCatalog {
 	return { revision: catalogRevision(projects), projects };
 }
 
-/** Branch name -> filesystem-safe directory segment (worktrunk's sanitize). */
-export function worktreeBranchToDir(branch: string): string {
-	return branch.replaceAll("/", "-").replaceAll("\\", "-");
-}
-
-/** `$DEVENV_HOME/{ident}/{ident}` — the primary worktree of an app. */
-export function primaryWorktreePath(homeDir: string, ident: string): string {
-	return `${homeDir}/${ident}/${ident}`;
-}
-
 /**
  * Absolute path of the currently active worktree with the disk-existence
  * fallback chain: primary when nothing is recorded or the primary is
@@ -483,14 +478,13 @@ export function resolveActiveWorktreePath(
 	app: Pick<App, "ident" | "activeWorktree" | "mainWorktreeBranch">,
 	exists: (path: string) => boolean,
 ): string {
-	const appRoot = `${homeDir}/${app.ident}`;
-	const primary = `${appRoot}/${app.ident}`;
+	const primary = primaryWorktreePath(homeDir, app.ident);
 	const active = app.activeWorktree ?? "";
 	if (
 		active === "" ||
 		(app.mainWorktreeBranch && active === app.mainWorktreeBranch)
 	)
 		return primary;
-	const linked = `${appRoot}/${app.ident}.${worktreeBranchToDir(active)}`;
+	const linked = linkedWorktreePath(homeDir, app.ident, active);
 	return exists(linked) ? linked : primary;
 }

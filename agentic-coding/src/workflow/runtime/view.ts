@@ -335,7 +335,10 @@ export function status(
 	registry: WorkflowRegistry,
 	now: () => Date,
 ): WorkflowView {
-	const observed = observedStore(repo);
+	// One store open per read: the legacy-migration pre-check that used to open
+	// the store a second time can never fire (`observedStore` reports no legacy
+	// change ids), and the same diagnostic is still reached below from
+	// `workflow_migration_diagnostics` when the instance row is missing.
 	let db: Database;
 	try {
 		db = openReadStore(repo);
@@ -348,21 +351,6 @@ export function status(
 		throw error;
 	}
 	try {
-		if (
-			observed?.version === STORE_SCHEMA_VERSION &&
-			observed.legacyChangeIds.includes(workflowId)
-		) {
-			const diagnostic = db
-				.query(
-					"SELECT diagnostic FROM workflow_migration_diagnostics WHERE change_id=?",
-				)
-				.get(workflowId) as { diagnostic: string } | null;
-			return diagnosticView(
-				workflowId,
-				diagnostic?.diagnostic ??
-					"workflow store has unimported legacy workflows; initialize the target before observing",
-			);
-		}
 		let row = db
 			.query("SELECT id FROM workflow_instances WHERE id=?")
 			.get(workflowId) as { id: string } | null;

@@ -2,24 +2,22 @@
 
 ## Purpose
 Alerts the developer through Herdr whenever a workflow needs a developer decision or input and takes them to that workflow's dashboard, without changing workflow state.
-
 ## Requirements
-
 ### Requirement: Developer-action notification
 
-The system SHALL raise one Herdr notification when a governed workflow transitions from not owing developer input to owing it. A workflow owes developer input when its committed status is `paused` or `attention-required`, when at least one of its available actions declares `requiresInput`, or when at least one associated run has an unexpired pending developer question or a fresh-or-retained `blocked` runtime observation. The notification title SHALL carry the workflow id and the notification body SHALL carry the current phase label. The notification SHALL request the needs-attention sound class.
+The system SHALL raise one notification through the selected multiplexer when a governed workflow transitions from not owing developer input to owing it. A workflow owes developer input when its committed status is `paused` or `attention-required`, when at least one of its available actions declares `requiresInput`, or when at least one associated run has an unexpired pending developer question or a fresh-or-retained `blocked` runtime observation. The notification title SHALL carry the workflow id and the notification body SHALL carry the current phase label. The notification SHALL request the needs-attention presentation class.
 
 #### Scenario: Approval gate opens
 - **WHEN** a workflow enters a registered plan, developer-review, or wiki approval step and had no developer obligation in the previous observation
-- **THEN** the system SHALL raise exactly one Herdr notification naming the workflow and the phase
+- **THEN** the system SHALL raise exactly one notification naming the workflow and the phase
 
 #### Scenario: Agent asks a developer question
 - **WHEN** an associated run acquires an unexpired pending developer question and had no developer obligation in the previous observation
-- **THEN** the system SHALL raise exactly one Herdr notification naming the workflow and the phase
+- **THEN** the system SHALL raise exactly one notification naming the workflow and the phase
 
 #### Scenario: Agent runtime blocks on input
 - **WHEN** an associated run is freshly observed `blocked`, or a retained positive blocked observation cannot be refreshed, and the workflow had no developer obligation in the previous observation
-- **THEN** the system SHALL raise exactly one Herdr notification naming the workflow and the phase
+- **THEN** the system SHALL raise exactly one notification naming the workflow and the phase
 
 #### Scenario: Workflow already owes input at first observation
 - **WHEN** the notifier observes a workflow that already owes developer input and has no recorded prior observation for it
@@ -68,12 +66,12 @@ The integration SHALL be controlled only by the trusted user preference `ui.herd
 Raising a notification, focusing a dashboard, reading observations, or failing any of those SHALL NOT change a workflow revision, available action, run status, capability, durable effect attempt, or agent process. Notification and focus failures SHALL be bounded diagnostics that do not propagate to the workflow engine.
 
 #### Scenario: Herdr is unavailable
-- **WHEN** a notification or focus call fails because Herdr is unavailable
+- **WHEN** a notification or focus call fails because the selected multiplexer runtime (Herdr by default, or the configured runtime) is unavailable
 - **THEN** the workflow SHALL continue unchanged
 - **AND** the failure SHALL be reported at most once per distinct bounded message
 
 #### Scenario: Notification delivery is refused
-- **WHEN** Herdr reports the notification as disabled, rate-limited, busy, or without a foreground client
+- **WHEN** the selected multiplexer reports the notification as disabled, rate-limited, busy, unauthorized, or without a foreground client
 - **THEN** the workflow SHALL continue unchanged
 - **AND** the notifier SHALL treat the obligation as raised rather than retrying it in a tight loop
 
@@ -85,3 +83,4 @@ The system documentation SHALL describe how to silence Herdr's default agent-fin
 - **WHEN** an operator enables `ui.herdr_notifications`
 - **THEN** the documentation SHALL state the Herdr `[ui.sound]` and `[ui.toast]` settings that affect agent-finished alerts
 - **AND** it SHALL name the upstream capabilities required for finished-only muting and click-to-focus
+

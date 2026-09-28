@@ -134,6 +134,11 @@ describe("workflow source-layer boundaries (enforce-source-layer-boundaries)", (
 			// notification synchronization, dashboard observation, and the Herdr
 			// event helper.
 			"multiplexer/boundary.ts",
+			// The one execution point for Promise/sync consumers of the
+			// Effect-native worktree port (introduce-worktree-port): environment
+			// routes, the code-review checkout, the action engine, and the
+			// environment path policy.
+			"worktree/boundary.ts",
 			// Named composition root for the owned environment backend: it owns the
 			// process scope that keeps the Go child's finalizers alive.
 			"backend/lifecycle.ts",

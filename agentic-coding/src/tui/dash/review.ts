@@ -222,7 +222,11 @@ export interface ReviewFeature {
 	/** In-flight diff observation signal for the root's artifact verdict path. */
 	reviewDiffSignal: () => AbortSignal | undefined;
 	/** Refresh review files from the authoritative source. */
-	refreshReviewFiles: () => Promise<void>;
+	/** Re-read the review's file list. `force` comes from the dashboard's refresh:
+	 * the periodic safety resync forces an authoritative read, a push event
+	 * refresh is served from the cache (the data layer invalidates it on the
+	 * workflow events that changed the worktree). */
+	refreshReviewFiles: (force?: boolean) => Promise<void>;
 	/** Abort in-flight review observations and bump the generation on unmount. */
 	dispose: () => void;
 }
@@ -685,6 +689,9 @@ export function createReviewFeature(
 		let listedArtifacts: string[] | undefined;
 		if (profile !== "test") {
 			try {
+				// The artifact *list* is a directory read (~0.4 ms measured), and the
+				// review must show a plan file the moment an agent adds one; the file
+				// contents below stay cached.
 				listedArtifacts = await loadArtifacts(data().state, signal, {
 					refresh: true,
 				});
@@ -757,7 +764,7 @@ export function createReviewFeature(
 			traceReview("plan-review-open", "error");
 		}
 	};
-	const refreshReviewFiles = async () => {
+	const refreshReviewFiles = async (force = false) => {
 		if (!reviewOpen() || reviewRefreshRunning) return;
 		reviewRefreshRunning = true;
 		const generation = ++reviewRefreshGeneration;
@@ -773,13 +780,13 @@ export function createReviewFeature(
 								repo,
 								workflowId,
 								reviewRefreshController.signal,
-								{ refresh: true },
+								{ refresh: force },
 							)
 						: await loadLocalChangesOrEmpty(
 								repo,
 								workflowId,
 								reviewRefreshController.signal,
-								{ refresh: true },
+								{ refresh: force },
 							);
 			if (generation !== reviewRefreshGeneration) return;
 			const currentPath = reviewFile()?.newPath;

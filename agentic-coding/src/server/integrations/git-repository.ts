@@ -8,16 +8,22 @@
 //     interpolates user data into a shell.
 //   - `git reset --hard`/`switch` do not touch ignored files, so the Go
 //     implementation's ignored-file backup dance is unnecessary here.
-//   - Linked worktrees are created with `git worktree add` instead of
-//     worktrunk (`wt`); the path layout, tracking-branch behavior and
-//     primary-worktree protection are the observable contract and are pinned
-//     by the cross-runtime fixtures in `test/fixtures/integrations/git`.
+//   - Linked worktrees are created, listed and removed through the worktree
+//     port (`src/worktree/`, worktrunk) instead of `git worktree` argv; the path
+//     layout, tracking-branch behavior and primary-worktree protection are the
+//     observable contract and are pinned by the cross-runtime fixtures in
+//     `test/fixtures/integrations/git`. The credentialed fetch a new branch
+//     needs stays here, because worktrunk never receives a credential.
 //   - `push` names `HEAD` explicitly instead of relying on `push.default` and
 //     a configured upstream.
 // Credentials travel as `-c` config argv (never a shell string) and are
 // redacted from every diagnostic and recorded command.
 import fs from "node:fs";
 import path from "node:path";
+import { runWorktree } from "../../worktree/boundary.ts";
+import { realpathOrSelf } from "../../worktree/cli.ts";
+import { WorktreeAdapter } from "../../worktree/index.ts";
+import type { WorktreeLocation, WorktreePort } from "../../worktree/port.ts";
 
 export interface GitApp {
 	readonly ident: string;
@@ -60,15 +66,21 @@ export class GitError extends Error {
 export interface GitRepositoryOptions {
 	readonly auth?: GitAuthResolver;
 	readonly logger?: (message: string) => void;
+	/** Worktree operations; defaults to the worktrunk port for this process.
+	 * The port is Effect-native and asynchronous, so the worktree methods below
+	 * are the repository facade's only `Promise`-returning operations. */
+	readonly worktrees?: WorktreePort;
 }
 
 export class GitRepository {
 	private readonly auth?: GitAuthResolver;
 	private readonly logger: (message: string) => void;
+	private readonly worktrees: WorktreePort;
 
 	constructor(options: GitRepositoryOptions = {}) {
 		this.auth = options.auth;
 		this.logger = options.logger ?? (() => {});
+		this.worktrees = options.worktrees ?? new WorktreeAdapter();
 	}
 
 	// ---- Command boundary ----
@@ -136,14 +148,14 @@ export class GitRepository {
 		return path.join(path.dirname(app.localDirectoryPath), app.ident);
 	}
 
-	/** `$DEVENV_HOME/{ident}/{ident}.{sanitized-branch}` — worktrunk's default
-	 * path template, reproduced natively. */
-	linkedWorktreeDir(app: GitApp, branch: string): string {
-		const safe = branch.replaceAll("/", "-").replaceAll("\\", "-");
-		return path.join(
-			path.dirname(app.localDirectoryPath),
-			`${app.ident}.${safe}`,
-		);
+	/** The layout the port builds linked worktrees from. The shared template is
+	 * `<root>/<ident>/<ident>.<sanitized branch>`, and this layer's app root is
+	 * `dirname(localDirectoryPath)`, so the root is that directory's parent and
+	 * the identifier its name — the same `{ident}.{branch}` leaf the environment
+	 * layer has always used. */
+	private worktreeLocation(app: GitApp): WorktreeLocation {
+		const appRoot = path.dirname(app.localDirectoryPath);
+		return { root: path.dirname(appRoot), ident: path.basename(appRoot) };
 	}
 
 	// ---- Reads ----
@@ -308,38 +320,16 @@ export class GitRepository {
 
 	// ---- Worktrees ----
 
-	listWorktrees(app: GitApp): WorktreeInfo[] {
+	async listWorktrees(app: GitApp): Promise<WorktreeInfo[]> {
 		const primaryDir = this.primaryWorktreeDir(app);
 		if (!fs.existsSync(path.join(primaryDir, ".git"))) return [];
-		const stdout = this.must(primaryDir, ["worktree", "list", "--porcelain"]);
-		const activePath = app.localDirectoryPath;
-		const results: WorktreeInfo[] = [];
-		let current = { path: "", branch: "" };
-		let isFirst = true;
-		const flush = () => {
-			if (current.path === "") return;
-			results.push({
-				branch: current.branch,
-				path: current.path,
-				isMain: isFirst,
-				active: current.path === activePath,
-			});
-			current = { path: "", branch: "" };
-			isFirst = false;
-		};
-		for (const rawLine of stdout.split("\n")) {
-			const line = rawLine.trim();
-			if (line === "") {
-				flush();
-				continue;
-			}
-			if (line.startsWith("worktree "))
-				current.path = line.slice("worktree ".length);
-			else if (line.startsWith("branch refs/heads/"))
-				current.branch = line.slice("branch refs/heads/".length);
-		}
-		flush();
-		return results;
+		const activePath = realpathOrSelf(app.localDirectoryPath);
+		return (await runWorktree(this.worktrees.list(primaryDir))).map((ref) => ({
+			branch: ref.branch,
+			path: ref.path,
+			isMain: ref.isMain,
+			active: ref.path === activePath,
+		}));
 	}
 
 	/**
@@ -347,11 +337,8 @@ export class GitRepository {
 	 * A branch already checked out in the primary worktree resolves to the
 	 * primary worktree itself, so a workflow pin is never retargeted.
 	 */
-	addWorktree(app: GitApp, branch: string): string {
+	async addWorktree(app: GitApp, branch: string): Promise<string> {
 		const primaryDir = this.primaryWorktreeDir(app);
-		const targetDir = this.linkedWorktreeDir(app, branch);
-		if (isDirectory(targetDir)) return targetDir;
-
 		if (!fs.existsSync(path.join(primaryDir, ".git"))) {
 			const mainBranch =
 				app.mainWorktreeBranch && app.mainWorktreeBranch !== ""
@@ -360,16 +347,11 @@ export class GitRepository {
 			fs.mkdirSync(path.dirname(primaryDir), { recursive: true, mode: 0o755 });
 			this.cloneIntoPrimaryWorktree(app, primaryDir, mainBranch);
 		}
-		if (currentBranchAtPath(primaryDir) === branch) {
-			this.logger(
-				`[INFO] devenv: branch ${JSON.stringify(branch)} is the primary worktree for ${JSON.stringify(app.ident)}, skipping linked worktree creation`,
-			);
-			return primaryDir;
-		}
 		if (!this.localBranchExists(app, branch)) {
 			// The UI lists remote branches through `ls-remote`, which creates no
-			// local remote-tracking ref; fetch so `worktree add` can create the
-			// tracking branch it needs.
+			// local remote-tracking ref; fetch so the runtime can create the
+			// tracking branch it needs. The fetch carries the credential, so it
+			// stays on this side of the port.
 			try {
 				this.fetch(app);
 			} catch (error) {
@@ -378,19 +360,29 @@ export class GitRepository {
 				);
 			}
 		}
-		this.must(primaryDir, ["worktree", "add", targetDir, branch]);
-		return targetDir;
+		const ref = await runWorktree(
+			this.worktrees.ensure({
+				repo: primaryDir,
+				branch,
+				location: this.worktreeLocation(app),
+			}),
+		);
+		if (ref.isMain)
+			this.logger(
+				`[INFO] devenv: branch ${JSON.stringify(branch)} is the primary worktree for ${JSON.stringify(app.ident)}, skipping linked worktree creation`,
+			);
+		return ref.path;
 	}
 
-	removeWorktree(app: GitApp, branch: string): void {
+	async removeWorktree(app: GitApp, branch: string): Promise<void> {
 		if (branch === (app.mainWorktreeBranch ?? ""))
 			throw new GitError(
 				`cannot remove the primary worktree (branch ${JSON.stringify(branch)})`,
 			);
 		const primaryDir = this.primaryWorktreeDir(app);
-		const targetDir = this.linkedWorktreeDir(app, branch);
-		this.must(primaryDir, ["worktree", "remove", "--force", targetDir]);
-		this.run(primaryDir, ["worktree", "prune"]);
+		await runWorktree(
+			this.worktrees.remove({ repo: primaryDir, branch, force: true }),
+		);
 	}
 
 	/** Clone the remote into the primary worktree, falling back to the remote's

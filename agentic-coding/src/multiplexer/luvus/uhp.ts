@@ -3,8 +3,10 @@
 // One newline-delimited JSON request over the selected session's Unix socket,
 // one JSON reply: `{id, method, params}` -> `{id, result}` or `{id, error}`.
 // The session/socket location is always resolved from the environment
-// (`LUVUS_SOCKET_PATH`, `LUVUS_API_ADDRESS`, `LUVUS_HOME`, `LUVUS_SESSION`)
-// and is never hardcoded. Event subscriptions reuse the same socket with
+// (`LUVUS_SOCKET_PATH`, `LUVUS_SESSION`, `LUVUS_HOME`, `LUVUS_API_ADDRESS`) and
+// is never hardcoded. Precedence: an explicit socket path, then the requested
+// session's own socket, then the ambient address of the server that launched
+// this process, then the default-session socket. Event subscriptions reuse the same socket with
 // `events.subscribe` and resume from the last observed sequence after a
 // dropped connection.
 import { connect, type Socket } from "node:net";
@@ -29,13 +31,21 @@ export function resolveLuvusSocketPath(
 	env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
 	if (env.LUVUS_SOCKET_PATH) return env.LUVUS_SOCKET_PATH;
-	if (env.LUVUS_API_ADDRESS && !/^tcp:/i.test(env.LUVUS_API_ADDRESS))
-		return env.LUVUS_API_ADDRESS;
 	const home = env.LUVUS_HOME ?? path.join(os.homedir(), ".luvus");
 	const session = env.LUVUS_SESSION;
-	return session && session !== "default"
-		? path.join(home, "sessions", session, "luvus.sock")
-		: path.join(home, "luvus.sock");
+	const sessionScoped = session !== undefined && session !== "";
+	// A named session is a selector, so its socket wins over the ambient
+	// address. `LUVUS_API_ADDRESS` is published by Luvus inside its own panes and
+	// points at whichever server launched this process: honoring it while a
+	// session is requested would silently reach another session's server.
+	if (sessionScoped)
+		return session === "default"
+			? path.join(home, "luvus.sock")
+			: path.join(home, "sessions", session, "luvus.sock");
+	// Without a session, the ambient unix address is the process's own server.
+	if (env.LUVUS_API_ADDRESS && !/^tcp:/i.test(env.LUVUS_API_ADDRESS))
+		return env.LUVUS_API_ADDRESS;
+	return path.join(home, "luvus.sock");
 }
 
 /** Default reply deadline for one UHP request. A socket that accepts the

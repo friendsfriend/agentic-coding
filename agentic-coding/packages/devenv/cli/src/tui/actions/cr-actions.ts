@@ -4,12 +4,6 @@ import type { AppStore } from "../stores/app-store.ts";
 import type { ChangeRequestStore } from "../stores/cr-store.ts";
 import type { UiStore } from "../stores/ui-store.ts";
 
-const AI_ATTRIBUTION_HEADER = `> 🤖 *This review was generated automatically by AI. Please verify all suggestions before acting on them.*
-
----
-
-`;
-
 const UNKNOWN_ERROR = "Unknown error";
 
 let crListAbortController: AbortController | null = null;
@@ -648,95 +642,6 @@ export function createCrActions(
 		return linesWithComments;
 	};
 
-	const runCrAiReview = async (prompt?: string) => {
-		const cr = changeRequestStore.selectedChangeRequest();
-		const app = getSelectedApp();
-		if (!cr || !app) return;
-
-		const { buildCrReviewPrompt } = await import("./cr-ai-utils");
-		const reviewPrompt = prompt ?? buildCrReviewPrompt(cr);
-
-		changeRequestStore.setCrAiVisible(true);
-		changeRequestStore.setCrAiLoading(true);
-		changeRequestStore.setCrAiStreaming(false);
-		changeRequestStore.setCrAiSummary(null);
-		changeRequestStore.setCrAiError(null);
-		changeRequestStore.crAiAtBottom = true;
-		changeRequestStore.crAiLastScrollTop = 0;
-
-		try {
-			let firstDelta = true;
-			for await (const delta of client.analyzeCRWithAIStream(
-				app.ident,
-				cr.iid,
-				cr.source_branch,
-				cr.target_branch,
-				reviewPrompt,
-			)) {
-				if (firstDelta) {
-					changeRequestStore.setCrAiLoading(false);
-					changeRequestStore.setCrAiStreaming(true);
-					changeRequestStore.setCrAiSummary("");
-					firstDelta = false;
-				}
-				changeRequestStore.setCrAiSummary((prev) => (prev ?? "") + delta);
-				if (
-					changeRequestStore.crAiAtBottom &&
-					changeRequestStore.crAiScrollBoxRef
-				) {
-					if (
-						changeRequestStore.crAiScrollBoxRef.scrollTop !==
-						changeRequestStore.crAiLastScrollTop
-					) {
-						changeRequestStore.crAiAtBottom = false;
-					} else {
-						changeRequestStore.crAiScrollBoxRef.scrollTo(
-							changeRequestStore.crAiScrollBoxRef.scrollHeight,
-						);
-						changeRequestStore.crAiLastScrollTop =
-							changeRequestStore.crAiScrollBoxRef.scrollTop;
-					}
-				}
-			}
-			if (firstDelta) {
-				// No output at all — set empty summary so overlay shows done state
-				changeRequestStore.setCrAiLoading(false);
-				changeRequestStore.setCrAiSummary("");
-			}
-		} catch (e) {
-			changeRequestStore.setCrAiError(
-				e instanceof Error ? e.message : "AI review failed",
-			);
-		} finally {
-			changeRequestStore.setCrAiLoading(false);
-			changeRequestStore.setCrAiStreaming(false);
-		}
-	};
-
-	const postCrAiComments = async () => {
-		const summary = changeRequestStore.crAiSummary();
-		const app = getSelectedApp();
-		const cr = changeRequestStore.selectedChangeRequest();
-		if (!summary || !app || !cr) return;
-		if (app.sourceType === "github") {
-			showError(
-				"Not Supported",
-				"Posting AI review comments is only supported for GitLab CRs.",
-			);
-			return;
-		}
-		changeRequestStore.setCrAiPostingComments(true);
-		try {
-			const body = AI_ATTRIBUTION_HEADER + summary;
-			await client.createCRComment(app.ident, cr.iid, body);
-			changeRequestStore.setCrAiCommentsPosted(true);
-		} catch (e) {
-			changeRequestStore.setCrAiError(`Failed to post comments: ${errMsg(e)}`);
-		} finally {
-			changeRequestStore.setCrAiPostingComments(false);
-		}
-	};
-
 	return {
 		loadChangeRequestForCurrentBranch,
 		loadAllChangeRequests,
@@ -753,8 +658,6 @@ export function createCrActions(
 		rebaseCR,
 		getDiscussionAtCurrentLine,
 		getLinesWithComments,
-		runCrAiReview,
-		postCrAiComments,
 	};
 }
 

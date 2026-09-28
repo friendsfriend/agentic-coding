@@ -337,12 +337,25 @@ export type PhaseStatusState = Pick<
 
 export function phaseStatus(state: PhaseStatusState) {
 	const text = state.stepLabel ?? state.phase;
-	const terminal = ["completed", "closed"].includes(state.status);
+	// The shimmer is an aurora timeline, and a playing timeline keeps OpenTUI's
+	// render loop live: a shimmer that outlived its work held a dashboard at
+	// ~28 fps (measured 4-5% CPU per process) for as long as the badge stayed on
+	// screen. So it means "a run for this step is actually in flight" — plus an
+	// active workflow, which is being driven even between run rows. A parked or
+	// paused workflow (attention-required with settled runs) has nothing running
+	// and must not animate.
+	const working =
+		state.status === "active" ||
+		state.runs.some(
+			(run) =>
+				run.stepId === state.stepId &&
+				["pending", "working"].includes(run.status),
+		);
 	const blocked =
 		state.status === "attention-required" &&
 		state.stepId !== undefined &&
 		state.runs.some(
 			(run) => run.stepId === state.stepId && run.status === "blocked",
 		);
-	return { text, working: !terminal, blocked };
+	return { text, working, blocked };
 }

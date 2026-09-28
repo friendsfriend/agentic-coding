@@ -11,6 +11,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ActionStepDefinition, ActionStepKind } from "@devenv/types";
+import { Effect } from "effect";
 import {
 	type CommandEvent,
 	CommandHandler,
@@ -35,6 +36,10 @@ import {
 	StandardProbeFactory,
 	TCPProbe,
 } from "../src/server/actions/readiness.ts";
+import {
+	actionCommandRunner,
+	worktreeCommand,
+} from "../src/server/actions/routes.ts";
 import { RUN_STATUS, RunRegistry } from "../src/server/actions/run-registry.ts";
 import {
 	type HandlerContext,
@@ -43,6 +48,7 @@ import {
 	type StepResult,
 } from "../src/server/actions/step-result.ts";
 import { ValueStore } from "../src/server/actions/values.ts";
+import { WorktreeError, type WorktreePort } from "../src/worktree/port.ts";
 
 function step(
 	id: string,
@@ -856,5 +862,87 @@ describe("readiness gates the action outcome", () => {
 			OUTCOME.alreadyRunning,
 		);
 		expect(run?.steps.find((s) => s.id === "start-db")?.commands).toEqual([]);
+	});
+});
+
+describe("git worktree commands run through the worktree port", () => {
+	test("only the two mutations are translated", () => {
+		// Reads and diagnostics keep their git argv: the actions view shows their
+		// output, and they create nothing.
+		expect(
+			worktreeCommand(["worktree", "list", "--porcelain"]),
+		).toBeUndefined();
+		expect(worktreeCommand(["worktree", "prune"])).toBeUndefined();
+		expect(worktreeCommand(["switch", "main"])).toBeUndefined();
+		expect(
+			worktreeCommand(["worktree", "add", "/srv/wt", "feature/x"]),
+		).toEqual({
+			operation: "add",
+			values: ["/srv/wt", "feature/x"],
+			force: false,
+		});
+		expect(
+			worktreeCommand(["worktree", "remove", "--force", "/srv/wt"]),
+		).toEqual({ operation: "remove", values: ["/srv/wt"], force: true });
+	});
+
+	test("the runner creates and removes through the port, and reports failures", async () => {
+		const calls: Array<Record<string, unknown>> = [];
+		const port = {
+			list: () => Effect.fail(new WorktreeError("unavailable", "unused")),
+			find: () => Effect.fail(new WorktreeError("unavailable", "unused")),
+			ensure: (input: Record<string, unknown>) => {
+				calls.push({ operation: "add", ...input });
+				return Effect.succeed({
+					path: String(input.path),
+					branch: String(input.branch),
+					isMain: false,
+					detached: false,
+					created: true,
+				});
+			},
+			remove: (input: Record<string, unknown>) => {
+				calls.push({ operation: "remove", ...input });
+				return input.path === "/missing"
+					? Effect.fail(new WorktreeError("absent", "no worktree at /missing"))
+					: Effect.void;
+			},
+		} as unknown as WorktreePort;
+		const runner = actionCommandRunner(port);
+
+		const added = await runner.run({
+			name: "git",
+			args: ["worktree", "add", "/srv/wt", "feature/x"],
+			dir: "/repo",
+		});
+		expect(added.exitCode).toBe(0);
+		expect(calls[0]).toEqual({
+			operation: "add",
+			repo: "/repo",
+			branch: "feature/x",
+			path: "/srv/wt",
+		});
+
+		const removed = await runner.run({
+			name: "git",
+			args: ["worktree", "remove", "/srv/wt"],
+			dir: "/repo",
+		});
+		expect(removed.exitCode).toBe(0);
+		expect(calls[1]).toEqual({
+			operation: "remove",
+			repo: "/repo",
+			path: "/srv/wt",
+			force: false,
+		});
+
+		// A port failure is a failed command step, never a silent success.
+		const failed = await runner.run({
+			name: "git",
+			args: ["worktree", "remove", "/missing"],
+			dir: "/repo",
+		});
+		expect(failed.exitCode).toBe(1);
+		expect(failed.error).toBeInstanceOf(Error);
 	});
 });

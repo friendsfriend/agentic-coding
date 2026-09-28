@@ -108,7 +108,6 @@ export * from "./views/CloseReasonModal.tsx";
 export * from "./views/CommentModal.tsx";
 export * from "./views/ConfirmDialog.tsx";
 export * from "./views/ConnectProviderModal.tsx";
-export * from "./views/CrAiReviewOverlay.tsx";
 export * from "./views/DependencyTreeView.tsx";
 export * from "./views/DetailSection.tsx";
 export * from "./views/DiffReviewView.tsx";

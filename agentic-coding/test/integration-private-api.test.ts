@@ -163,9 +163,6 @@ describe("legacy route ownership", () => {
 		expect(legacyRouteMatch("GET", "/api/pi-sessions")?.route.owner).toBe(
 			"bun",
 		);
-		expect(
-			legacyRouteMatch("POST", "/api/ai/cr-review-stream")?.route.owner,
-		).toBe("bun");
 		expect(legacyRouteMatch("GET", "/api/health")?.route.owner).toBe("bun");
 		expect(legacyRouteMatch("GET", "/api/unknown")).toBeUndefined();
 	});

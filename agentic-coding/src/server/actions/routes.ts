@@ -24,6 +24,9 @@ import path from "node:path";
 import type { ActionDefinition, ActionStepDefinition } from "@devenv/types";
 import { runGitWithCredentials } from "../../workflow/credentials.ts";
 import { createQueuedCredentialPrompt } from "../../workflow/execution-coordinator.ts";
+import { runWorktree } from "../../worktree/boundary.ts";
+import { WorktreeAdapter } from "../../worktree/index.ts";
+import type { WorktreePort } from "../../worktree/port.ts";
 import {
 	type CommandEvent,
 	type CommandEventSink,
@@ -111,6 +114,9 @@ export interface ActionApp {
 export interface ActionRouteServices {
 	readonly configDir: string;
 	readonly homeDir: string;
+	/** Worktree lifecycle for a declared `git worktree add`/`remove` command;
+	 * defaults to the worktrunk port for this process. */
+	readonly worktrees?: WorktreePort;
 	readonly apps: {
 		getAppByIdent(ident: string): ActionApp | undefined;
 		getApps(): readonly ActionApp[];
@@ -168,6 +174,7 @@ export interface ActionRouteServices {
 
 export interface ActionRouteContext {
 	readonly services: ActionRouteServices;
+	readonly worktrees: WorktreePort;
 	readonly registry: ActionRegistry;
 	readonly runs: RunRegistry;
 	readonly coordinator: Coordinator;
@@ -183,6 +190,7 @@ export function createActionRouteContext(
 ): ActionRouteContext {
 	return {
 		services,
+		worktrees: services.worktrees ?? new WorktreeAdapter(),
 		registry: services.registry ?? new ActionRegistry(),
 		runs: services.runs ?? new RunRegistry(services.now),
 		coordinator: services.coordinator ?? new Coordinator(),
@@ -754,7 +762,10 @@ async function executeRun(
 	// Git's ssh subprocess cannot read a passphrase from the action's piped
 	// stdio. Route askpass requests through the dashboard's existing credential
 	// modal; all other command types keep the regular process runner.
-	const command = new CommandHandler(actionCommandRunner(), commandSink);
+	const command = new CommandHandler(
+		actionCommandRunner(context.worktrees),
+		commandSink,
+	);
 	const readiness = new ReadinessHandler(
 		new StandardProbeFactory({
 			processes,
@@ -901,11 +912,69 @@ async function runOperation(
 	};
 }
 
-function actionCommandRunner(): CommandRunner {
+/**
+ * A declared worktree mutation, translated from the compiled command. Only the
+ * two mutations are translated: `worktree list` and `worktree prune` stay plain
+ * `git` because they are reads/diagnostics whose output the actions view shows.
+ *
+ * The declaration keeps naming a git command (that is what an app configures and
+ * what the actions view renders), while the environment reaches one worktree
+ * implementation — the port — for anything that creates or removes a checkout.
+ */
+export function worktreeCommand(
+	args: readonly string[],
+):
+	| { operation: "add" | "remove"; values: string[]; force: boolean }
+	| undefined {
+	if (args[0] !== "worktree") return undefined;
+	const operation = args[1];
+	if (operation !== "add" && operation !== "remove") return undefined;
+	return {
+		operation,
+		values: args.slice(2).filter((argument) => !argument.startsWith("-")),
+		force: args.includes("--force"),
+	};
+}
+
+export function actionCommandRunner(worktrees: WorktreePort): CommandRunner {
 	const regular = new OSCommandRunner();
 	return {
 		run: async (spec, output, signal) => {
 			if (spec.name !== "git") return regular.run(spec, output, signal);
+			const worktree = worktreeCommand(spec.args);
+			if (worktree) {
+				const repo = spec.dir ?? process.cwd();
+				const [first = "", second = ""] = worktree.values;
+				try {
+					if (worktree.operation === "add") {
+						await runWorktree(
+							worktrees.ensure({
+								repo,
+								branch: second,
+								path: first,
+							}),
+						);
+					} else {
+						await runWorktree(
+							worktrees.remove({
+								repo,
+								path: first,
+								force: worktree.force,
+							}),
+						);
+					}
+					return { stdout: "", stderr: "", exitCode: 0 };
+				} catch (error) {
+					const stderr = error instanceof Error ? error.message : String(error);
+					output?.("stderr", stderr);
+					return {
+						stdout: "",
+						stderr,
+						exitCode: 1,
+						error: error instanceof Error ? error : new Error(stderr),
+					};
+				}
+			}
 			try {
 				const stdout = await runGitWithCredentials(
 					spec.dir ?? process.cwd(),

@@ -2,9 +2,7 @@
 
 ## Purpose
 Bun owns the Git, provider, GitHub/GitLab, CI and AI/session integration surface that the Go environment child used to serve. The unified server answers the migrated route families in-process and delegates the unported ones to the private child, so every route has exactly one runtime owner while the staged migration continues.
-
 ## Requirements
-
 ### Requirement: Provider and CI feature parity
 Bun SHALL preserve existing provider configuration, repository search, GitHub/GitLab issues, change requests, discussions, approvals, references and CI job/test/log operations. Provider-specific identifiers and diff positions SHALL NOT be lost through normalization.
 
@@ -29,24 +27,41 @@ Git inspection and mutations SHALL preserve configured repository/worktree ident
 - **AND** only the existing action owner SHALL record the command in its run tree
 
 ### Requirement: Scoped AI streaming and session discovery
-Bun SHALL preserve supported Pi session discovery, streamed log analysis and change-request AI review. Callback authorization SHALL be bounded to the active review/project/change request; owned temporary worktrees and processes SHALL be cleaned up without deleting pre-existing resources.
 
-#### Scenario: Review stream disconnects
-- **WHEN** the controlling review stream closes or is cancelled
-- **THEN** callback authorization SHALL expire, owned work SHALL stop, and owned temporary checkout cleanup SHALL run
-- **AND** secret values SHALL NOT enter logs/history and unrelated worktrees SHALL remain untouched
-
-#### Scenario: Callback targets wrong review
-- **WHEN** a callback presents an expired token or a different review/project target
-- **THEN** Bun SHALL reject it without posting provider content
+Bun SHALL preserve supported Pi session discovery and streamed log analysis.
+Session parsing SHALL remain bounded, and a stream that closes or is cancelled
+SHALL stop its own work without affecting unrelated resources.
 
 #### Scenario: Session file is malformed or oversized
+
 - **WHEN** session discovery reads invalid or excessive JSONL content
-- **THEN** parsing SHALL remain bounded and report/skip the invalid record without executing content or crashing the entire list
+- **THEN** parsing SHALL remain bounded and report/skip the invalid record
+  without executing content or crashing the entire list
+
+#### Scenario: Analysis stream disconnects
+
+- **WHEN** a log analysis stream closes or is cancelled
+- **THEN** the analysis work SHALL stop
+- **AND** secret values SHALL NOT enter logs or history
 
 ### Requirement: Single route and mutation ownership
-Each integration route/capability SHALL have exactly one runtime owner at cutover. Compatibility evidence SHALL use fixtures or isolated test systems rather than duplicate real mutations.
+
+Each integration route/capability SHALL have exactly one runtime owner at
+cutover, and every route SHALL require the instance bearer token. There SHALL be
+no route whose authorization is a capability carried in its path. Compatibility
+evidence SHALL use fixtures or isolated test systems rather than duplicate real
+mutations.
 
 #### Scenario: Response is lost after provider write
+
 - **WHEN** a provider write may have committed before transport failure
-- **THEN** the client/backend SHALL reconcile using operation semantics rather than automatically submit the same mutation to both runtimes
+- **THEN** the client/backend SHALL reconcile using operation semantics rather
+  than automatically submit the same mutation to both runtimes
+
+#### Scenario: Unauthenticated request
+
+- **WHEN** a request carries no instance bearer token
+- **THEN** it SHALL be rejected, except for the exact `GET /api/health`
+  liveness probe
+- **AND** no path-shaped capability SHALL exempt any other route
+

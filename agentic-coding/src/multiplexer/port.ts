@@ -1,7 +1,9 @@
 // Runtime-neutral multiplexer port (add-multiplexer-adapters).
 //
 // One intent-level, Effect-native boundary over workspace, tab, pane, agent,
-// notification, and runtime-event behavior. Callers name workflow concepts and
+// notification, and runtime-event behavior. Worktrees are not a multiplexer
+// concern: they belong to the worktree port (`src/worktree/`), and a caller
+// opens a workspace at the path that port resolved. Callers name workflow concepts and
 // never construct vendor CLI arguments or parse vendor envelopes; the Herdr and
 // Luvus adapters own transport mechanics behind this interface.
 //
@@ -185,15 +187,6 @@ export interface MultiplexerPort {
 	workspaceList(): Effect.Effect<WorkspaceInfo[], MultiplexerError>;
 	workspaceFocus(id: string): Effect.Effect<void, MultiplexerError>;
 	workspaceClose(id: string): Effect.Effect<void, MultiplexerError>;
-	worktreeCreate(i: {
-		cwd: string;
-		branch: string;
-		base?: string;
-		label: string;
-	}): Effect.Effect<
-		{ workspace: WorkspaceInfo; worktree: string },
-		MultiplexerError
-	>;
 
 	tabList(workspaceId: string): Effect.Effect<TabInfo[], MultiplexerError>;
 	tabCreate(i: {

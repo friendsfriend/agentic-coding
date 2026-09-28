@@ -33,7 +33,6 @@ import {
 	authorizeRequest,
 	type InstanceAuthority,
 	isPublicRoute,
-	isSessionAuthorizedRoute,
 	originAllowed,
 	PayloadBoundError,
 	readJsonBody,
@@ -165,18 +164,14 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		// foreign origin never reaches a route (or a Go mutation) at all.
 		if (!originAllowed(request.headers.get("origin")))
 			return errorResponse(403, "origin", "untrusted origin");
-		// The review callback authorizes with its own path capability and the
-		// liveness probe is public (no secret in it); every other route needs the
-		// instance bearer token.
-		if (!isSessionAuthorizedRoute(request.method, url.pathname)) {
-			if (!isPublicRoute(request.method, url.pathname)) {
-				try {
-					authorizeRequest(request, authority);
-				} catch (error) {
-					const status =
-						error instanceof AuthorizationError ? error.status : 401;
-					return errorResponse(status, "unauthorized", safeMessage(error));
-				}
+		// The liveness probe is public (no secret in it); every other route needs
+		// the instance bearer token.
+		if (!isPublicRoute(request.method, url.pathname)) {
+			try {
+				authorizeRequest(request, authority);
+			} catch (error) {
+				const status = error instanceof AuthorizationError ? error.status : 401;
+				return errorResponse(status, "unauthorized", safeMessage(error));
 			}
 		}
 

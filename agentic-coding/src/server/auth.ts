@@ -111,27 +111,6 @@ function constantTimeEqual(a: string, b: string): boolean {
 }
 
 /**
- * Routes whose authorization is a capability carried in the path rather than
- * the instance token.
- *
- * The change-request review callback is the only one: the spawned review agent
- * runs `curl` against a URL it was given and must not be handed the instance
- * capability (it would leak into the agent's prompt, transcript and history).
- * Its authorization is the 128-bit, single-review, short-lived token that the
- * stream registers and revokes, and the handler still validates that token,
- * the method, the body bounds and the browser origin. Every other route keeps
- * requiring the instance bearer token.
- */
-export function isSessionAuthorizedRoute(
-	method: string,
-	pathname: string,
-): boolean {
-	if (method.toUpperCase() !== "POST") return false;
-	const prefix = "/api/ai/cr-comment-callback/";
-	return pathname.startsWith(prefix) && pathname.length > prefix.length;
-}
-
-/**
  * Routes answered without the instance token.
  *
  * `GET /api/health` is the liveness/identity probe every client, launcher and

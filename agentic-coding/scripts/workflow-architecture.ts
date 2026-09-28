@@ -142,6 +142,10 @@ export function classifySourcePath(relPath: string): SourceLayer | null {
 	// The wire-contract layer is pure by construction: types and Effect
 	// Schemas only, so every layer may import it and it may import no layer.
 	if (relPath.startsWith("contracts/")) return "domain";
+	// One worktree boundary for the environment and workflow layers
+	// (introduce-worktree-port): foundational client, so every layer may import
+	// it and it may import anything.
+	if (relPath.startsWith("worktree/")) return "root";
 	if (
 		relPath.startsWith("workflow/steps/") ||
 		relPath.startsWith("workflow/definitions/")

@@ -485,18 +485,6 @@ export const LEGACY_ROUTE_OWNERSHIP: readonly LegacyRoute[] = [
 		path: "/api/ai/analyze-logs-stream",
 		owner: "bun",
 	},
-	{
-		family: "ai",
-		method: "POST",
-		path: "/api/ai/cr-review-stream",
-		owner: "bun",
-	},
-	{
-		family: "ai",
-		method: "POST",
-		path: "/api/ai/cr-comment-callback/",
-		owner: "bun",
-	},
 	// system
 	{ family: "system", method: "GET", path: "/api/pi-sessions", owner: "bun" },
 	// The action view is fed by this stream, so the family that owns actions owns
@@ -674,7 +662,7 @@ export async function handleLegacyRoute(
 		case "gitlab":
 			return handleGitLabRoute(services, request, url);
 		case "ai":
-			return handleAiRoute(services, request, url);
+			return handleAiRoute(request, url);
 		case "system": {
 			if (url.pathname === "/api/events") {
 				if (!services.actions) {
@@ -682,7 +670,7 @@ export async function handleLegacyRoute(
 				}
 				return handleActionRoute(services.actions, request, url);
 			}
-			return handleAiRoute(services, request, url);
+			return handleAiRoute(request, url);
 		}
 		case "actions":
 		case "scripts":
@@ -723,8 +711,8 @@ async function handleGitRoute(
 	if (method === "GET" && url.pathname === "/api/git/branches")
 		return gitBranches(services, app);
 	if (url.pathname === "/api/git/worktrees") {
-		if (method === "GET") return gitWorktrees(services, app);
-		if (method === "DELETE") return removeWorktree(services, url, app);
+		if (method === "GET") return await gitWorktrees(services, app);
+		if (method === "DELETE") return await removeWorktree(services, url, app);
 		return updateWorktree(
 			services,
 			request,
@@ -766,8 +754,11 @@ function gitBranches(services: IntegrationServices, app: AppForGit): Response {
 	});
 }
 
-function gitWorktrees(services: IntegrationServices, app: AppForGit): Response {
-	const worktrees = services.git.listWorktrees(app);
+async function gitWorktrees(
+	services: IntegrationServices,
+	app: AppForGit,
+): Promise<Response> {
+	const worktrees = await services.git.listWorktrees(app);
 	return legacyJson({ worktrees: worktrees ?? [] });
 }
 
@@ -779,7 +770,7 @@ function updateWorktree(
 	app: AppForGit,
 	status: number,
 ): Promise<Response> | Response {
-	return readWorktreeBody(request).then((body) => {
+	return readWorktreeBody(request).then(async (body) => {
 		if (body === null)
 			return legacyError(400, "appIdent and branch are required");
 		if (status === 200) {
@@ -797,7 +788,7 @@ function updateWorktree(
 			});
 		}
 		try {
-			services.git.addWorktree(app, body.branch);
+			await services.git.addWorktree(app, body.branch);
 		} catch (error) {
 			return legacyError(500, message(error));
 		}
@@ -832,18 +823,18 @@ async function readWorktreeBody(
 	return { appIdent, branch };
 }
 
-function removeWorktree(
+async function removeWorktree(
 	services: IntegrationServices,
 	url: URL,
 	app: AppForGit,
-): Response {
+): Promise<Response> {
 	const branch = url.searchParams.get("branch") ?? "";
 	if (branch === "")
 		return legacyError(400, "appIdent and branch parameters required");
 	if (branch === app.activeWorktree || branch === app.mainWorktreeBranch)
 		return legacyError(400, "cannot remove the active or primary worktree");
 	try {
-		services.git.removeWorktree(app, branch);
+		await services.git.removeWorktree(app, branch);
 	} catch (error) {
 		return legacyError(500, message(error));
 	}

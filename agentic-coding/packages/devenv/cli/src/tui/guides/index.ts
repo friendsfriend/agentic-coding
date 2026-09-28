@@ -158,7 +158,7 @@ export const guides: Guide[] = [
 		key: "using-git-integrations",
 		title: "Using Git Integrations",
 		description:
-			"Providers, Change Request browsing, diff, discussions, approvals, AI review, pipelines, test results",
+			"Providers, Change Request browsing, diff, discussions, approvals, pipelines, test results",
 		category: "Git",
 		import: () =>
 			import("./using-git-integrations.md", { with: { type: "text" } }).then(

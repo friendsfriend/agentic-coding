@@ -98,7 +98,7 @@ mode routes to an imported view component; none is dropped by the import.
 | Agent view | `agentView` | `AgentSpaceView`, `agent-actions` | devenv `ui`+`cli` | unchanged | imported tests | imported |
 | SSH host picker | `sshPicker` | `SshHostPickerView`, `PassphraseModal` | devenv `ui` | unchanged | imported tests | imported |
 | Help / keybind modal | `help` | `HelpView`, `HelpText`, `keymap-metadata` | devenv `ui`+`cli` | unchanged | `keymap-metadata.test.ts`, `keymap-conflicts.test.ts` | imported |
-| Modals (theme, editor, branch, filter, sort, labels, assignee, confirm, passphrase, worktree, log/AI, CR AI review) | modal stack | `*Modal`, `*Picker*`, `*Overlay` components | devenv `ui`+`cli` | unchanged | modal/keymap tests | imported |
+| Modals (theme, editor, branch, filter, sort, labels, assignee, confirm, passphrase, worktree, log/AI) | modal stack | `*Modal`, `*Picker*`, `*Overlay` components | devenv `ui`+`cli` | unchanged | modal/keymap tests | imported |
 
 ## 3. HTTP API routes
 
@@ -126,8 +126,6 @@ registered without a method filter.
 | --- | --- | --- | --- | --- | --- | --- |
 | Post | `/api/ai/analyze-logs` | `s.handleAIAnalyzeLogs` | Go `server/pkg/server` | Go (change 1) | `server/pkg/server` AI handlers (no dedicated Go test) | imported, unmigrated |
 | Get | `/api/ai/analyze-logs-stream` | `s.handleAIAnalyzeLogsStream` | Go `server/pkg/server` | Go (change 1) | `server/pkg/server` AI handlers (no dedicated Go test) | imported, unmigrated |
-| Post | `/api/ai/cr-comment-callback/` | `s.handleCRCommentCallback` | Go `server/pkg/server` | Go (change 1) | `server/pkg/server` AI handlers (no dedicated Go test) | imported, unmigrated |
-| Get | `/api/ai/cr-review-stream` | `s.handleAICRReviewStream` | Go `server/pkg/server` | Go (change 1) | `server/pkg/server` AI handlers (no dedicated Go test) | imported, unmigrated |
 
 ### app
 

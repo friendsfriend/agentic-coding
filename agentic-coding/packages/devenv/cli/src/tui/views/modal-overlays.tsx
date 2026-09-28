@@ -11,7 +11,6 @@ import {
 	CommentModal,
 	ConfirmDialog,
 	ConnectProviderModal,
-	CrAiReviewOverlay,
 	DiffReviewView,
 	EditorPickerView,
 	ErrorDialog,
@@ -673,19 +672,6 @@ export function ModalOverlays(props: ModalOverlaysProps) {
 					onAiDismiss={logActions.dismissAiOverlay}
 					onAiScrollBoxReady={(sb) => {
 						logStore.logAiScrollBoxRef = sb;
-					}}
-				/>
-			</Show>
-
-			<Show when={changeRequestStore.crAiVisible()}>
-				<CrAiReviewOverlay
-					loading={changeRequestStore.crAiLoading()}
-					streaming={changeRequestStore.crAiStreaming()}
-					summary={changeRequestStore.crAiSummary()}
-					error={changeRequestStore.crAiError()}
-					onDismiss={() => changeRequestStore.setCrAiVisible(false)}
-					onScrollBoxReady={(sb) => {
-						changeRequestStore.crAiScrollBoxRef = sb;
 					}}
 				/>
 			</Show>

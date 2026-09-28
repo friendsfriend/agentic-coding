@@ -7,6 +7,10 @@
 // a load never writes a runtime field back into a definition file.
 import fs from "node:fs";
 import path from "node:path";
+import {
+	linkedWorktreePath,
+	primaryWorktreePath,
+} from "../../worktree/template.ts";
 import { liveCatalogObservation } from "./catalog-observer.ts";
 import {
 	APP_TYPE_APP,
@@ -23,7 +27,6 @@ import {
 	parseInfraDefinition,
 	resolveActiveWorktreePath,
 	resolveProjectAvailability,
-	worktreeBranchToDir,
 } from "./config.ts";
 import type { EnvironmentStateStore } from "./state-store.ts";
 
@@ -227,7 +230,7 @@ export class EnvironmentManager {
 
 	/** Branch checked out in the primary worktree, whatever is active now. */
 	private primaryWorktreeBranch(ident: string): string {
-		return currentBranchFromGit(path.join(this.homeDir, ident, ident));
+		return currentBranchFromGit(primaryWorktreePath(this.homeDir, ident));
 	}
 
 	/**
@@ -239,7 +242,7 @@ export class EnvironmentManager {
 		const resolved = resolveActiveWorktreePath(this.homeDir, app, (target) =>
 			fs.existsSync(target),
 		);
-		const primary = path.join(this.homeDir, app.ident, app.ident);
+		const primary = primaryWorktreePath(this.homeDir, app.ident);
 		if (resolved !== primary) {
 			this.logger(
 				`[INFO] devenv: linked worktree ${JSON.stringify(resolved)} selected for app ${JSON.stringify(app.ident)}`,
@@ -247,10 +250,10 @@ export class EnvironmentManager {
 			return resolved;
 		}
 		if (app.activeWorktree && app.activeWorktree !== app.mainWorktreeBranch) {
-			const linked = path.join(
+			const linked = linkedWorktreePath(
 				this.homeDir,
 				app.ident,
-				`${app.ident}.${worktreeBranchToDir(app.activeWorktree)}`,
+				app.activeWorktree,
 			);
 			this.logger(
 				`[INFO] devenv: active worktree directory ${JSON.stringify(linked)} no longer exists, falling back to primary worktree for app ${JSON.stringify(app.ident)}`,

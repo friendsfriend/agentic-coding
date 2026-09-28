@@ -169,22 +169,9 @@ export function createChangeRequestStore() {
 	const [crDetailPanelIndex, setCrDetailPanelIndex] = createSignal(0);
 	const crDetailScrollBoxRefs: (ScrollBoxRenderable | undefined)[] = [];
 
-	// CR AI review overlay state
-	const [crAiVisible, setCrAiVisible] = createSignal(false);
-	const [crAiLoading, setCrAiLoading] = createSignal(false);
-	const [crAiStreaming, setCrAiStreaming] = createSignal(false);
-	const [crAiSummary, setCrAiSummary] = createSignal<string | null>(null);
-	const [crAiError, setCrAiError] = createSignal<string | null>(null);
-	const [crAiFollowupText, setCrAiFollowupText] = createSignal("");
-	const [crAiPostingComments, setCrAiPostingComments] = createSignal(false);
-	const [crAiCommentsPosted, setCrAiCommentsPosted] = createSignal(false);
-
-	let crAiScrollBoxRef: import("@opentui/core").ScrollBoxRenderable | undefined;
 	let diffModalScrollBoxRef:
 		| import("@opentui/core").ScrollBoxRenderable
 		| undefined;
-	let crAiAtBottom = true;
-	let crAiLastScrollTop = 0;
 
 	const currentListFilters = createMemo(
 		() => listFilters()[listControlTarget() ?? "changedFiles"],
@@ -524,31 +511,6 @@ export function createChangeRequestStore() {
 			return crDetailScrollBoxRefs;
 		},
 
-		// CR AI review overlay
-		crAiVisible,
-		setCrAiVisible,
-		crAiLoading,
-		setCrAiLoading,
-		crAiStreaming,
-		setCrAiStreaming,
-		crAiSummary,
-		setCrAiSummary,
-		crAiError,
-		setCrAiError,
-		crAiFollowupText,
-		setCrAiFollowupText,
-		crAiPostingComments,
-		setCrAiPostingComments,
-		crAiCommentsPosted,
-		setCrAiCommentsPosted,
-		get crAiScrollBoxRef() {
-			return crAiScrollBoxRef;
-		},
-		set crAiScrollBoxRef(v:
-			| import("@opentui/core").ScrollBoxRenderable
-			| undefined) {
-			crAiScrollBoxRef = v;
-		},
 		get diffModalScrollBoxRef() {
 			return diffModalScrollBoxRef;
 		},
@@ -556,18 +518,6 @@ export function createChangeRequestStore() {
 			| import("@opentui/core").ScrollBoxRenderable
 			| undefined) {
 			diffModalScrollBoxRef = v;
-		},
-		get crAiAtBottom() {
-			return crAiAtBottom;
-		},
-		set crAiAtBottom(v: boolean) {
-			crAiAtBottom = v;
-		},
-		get crAiLastScrollTop() {
-			return crAiLastScrollTop;
-		},
-		set crAiLastScrollTop(v: number) {
-			crAiLastScrollTop = v;
 		},
 	};
 }

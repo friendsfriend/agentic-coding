@@ -583,12 +583,6 @@ const RAW_KEYBINDS: KeybindDef[] = [
 		category: "Actions",
 	},
 	{
-		keys: ["Shift+A"],
-		description: "AI review — stream review, then post as comment",
-		context: "changeRequestDetail",
-		category: "Actions",
-	},
-	{
 		keys: ["r"],
 		description: "Rebase change request",
 		context: "changeRequestDetail",
@@ -1869,7 +1863,6 @@ const FOOTER_LABELS = new Map<string, string>([
 	["Next page", "Next page"],
 	["Back to table", "Back"],
 	["Toggle approval (approve/unapprove)", "Approve"],
-	["AI review — stream review, then post as comment", "AI review"],
 	["Rebase change request", "Rebase"],
 	["View changed files", "Files"],
 	["View discussions/comments", "Comments"],

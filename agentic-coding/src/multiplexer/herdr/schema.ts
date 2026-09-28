@@ -31,16 +31,6 @@ export const workspaceListResult = Schema.Struct({
 	workspaces: Schema.optionalWith(Schema.Array(workspaceRef), { exact: true }),
 });
 
-export const worktreeCreateResult = Schema.Struct({
-	workspace: Schema.optionalWith(workspaceRef, { exact: true }),
-	worktree: Schema.optionalWith(
-		Schema.Struct({
-			path: Schema.optionalWith(Schema.String, { exact: true }),
-		}),
-		{ exact: true },
-	),
-});
-
 export const tabRef = Schema.Struct({
 	tab_id: Schema.optionalWith(Schema.String, { exact: true }),
 	label: Schema.optionalWith(Schema.String, { exact: true }),

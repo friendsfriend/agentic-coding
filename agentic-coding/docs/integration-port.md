@@ -30,7 +30,7 @@ guessing.
 | repos | `POST /api/repos/search`, `GET /api/repos/branches` | this process |
 | github | 24 routes under `/api/github/*` | this process |
 | gitlab | 30 routes under `/api/gitlab/*` | this process |
-| ai | `POST /api/ai/analyze-logs`, `POST /api/ai/analyze-logs-stream`, `POST /api/ai/cr-review-stream`, `POST /api/ai/cr-comment-callback/{token}` | this process |
+| ai | `POST /api/ai/analyze-logs`, `POST /api/ai/analyze-logs-stream` | this process |
 | system | `GET /api/pi-sessions`, `GET /api/events`, `GET /api/health` | this process |
 | app | `/api/apps*`, `/api/projects`, `/api/status`, `/api/infra-services*`, `/api/example-config` | this process |
 | actions / scripts | `/api/action-runs`, `/api/actions/*`, `/api/scripts*`, `/api/apps/{ident}/actions`, `/api/action-definition`, `/api/action-registry/status` | this process |
@@ -122,30 +122,21 @@ Deliberate differences from the Go implementation, all visible in the fixtures:
 | --- | --- |
 | `pi-sessions.ts` | bounded Pi session discovery and JSONL parsing |
 | `ai-streams.ts` | `pi --print` log analysis, the 100 KB tail bound and the SSE body |
-| `cr-review.ts` | the review checkout, the Pi RPC event mapping, the scoped callback registry and the comment submission |
-| `ai-routes.ts` | the five routes plus the session registry singleton |
+| `ai-routes.ts` | the analysis and session routes |
 
 Deliberate differences from the Go implementation:
 
-- **The two stream routes are `POST`.** `routes.go` declared `GET` for
-  `/api/ai/analyze-logs-stream` and `/api/ai/cr-review-stream` while the
-  handlers required `POST` (and the devenv clients send `POST`); the manifest and
-  dispatcher follow the real contract.
+- **The stream route is `POST`.** `routes.go` declared `GET` for
+  `/api/ai/analyze-logs-stream` while the handler required `POST` (and the
+  devenv client sends `POST`); the manifest and dispatcher follow the real
+  contract.
 - **Session groups are sorted by name.** The Go grouping iterated a map, so its
   order was incidental; the fixture is captured sorted and the port sorts.
-- **The callback route is authorized by its path token, not the instance
-  capability.** A review agent runs `curl` against a URL it was given, and
-  handing it the instance token would leak that capability into the agent's
-  prompt, transcript and history. `isSessionAuthorizedRoute` in `auth.ts`
-  exempts exactly `POST /api/ai/cr-comment-callback/<token>`; the handler still
-  validates the 128-bit single-review token, the method, the body bounds and the
-  browser origin, and every other route keeps requiring the instance bearer
-  token (`test/integration-ai.test.ts` asserts both halves).
-- **Cleanup is scoped to the owned checkout.** The review directory is a unique
-  temp path and only that path is removed, so a pre-existing worktree survives;
-  the prompt file lives inside the checkout and is removed with it. A timed-out
-  review does not wait on a diagnostic read that an inherited pipe could hold
-  open.
+- **The change-request AI review was removed.** Its stream route, its comment
+  callback, the path-token authorization exemption, the review checkout and the
+  devenv review overlay are gone: agentic workflows now own review work, so the
+  feature had no user. Every route requires the instance bearer token, and the
+  only worktree a process creates is the one the worktree port resolves.
 
 ## Credential handling
 

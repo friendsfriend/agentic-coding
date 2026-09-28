@@ -45,6 +45,26 @@ The Herdr-only sidebar/custom Agents view (`src/workflow/sidebar-sync.ts`) is
 deferred and stays on the raw Herdr CLI type; the port deliberately exposes no
 sidebar operation.
 
+### Worktree boundary
+
+Worktrees are created, resolved, listed and removed through one Effect-native
+port (`src/worktree/port.ts`) implemented over worktrunk (`wt`) in
+`src/worktree/index.ts`, so neither the environment layer nor a workflow runs
+worktree `git`/`wt` arguments itself:
+
+- the environment repository facade's worktree methods are its only
+  `Promise`-returning ones and cross the port through
+  `src/worktree/boundary.ts`;
+- the action runner translates a declared `git worktree add|remove` command into
+  a port call, while `worktree list`/`prune` stay plain git because their output
+  is what the actions view shows;
+- a workflow resolves its worktree through the port and then asks the
+  multiplexer for a workspace at that path, so setup is runtime-independent.
+
+The shared layout (`<root>/<ident>/<ident>.<sanitized branch>`,
+`src/worktree/template.ts`) is the only place a worktree path is computed, and
+every port call disables worktrunk hooks, directory changes and prompts.
+
 ### Store lifecycle
 
 `initializeStore()` is the only schema-writing boundary. It takes SQLite's
@@ -540,7 +560,7 @@ runtime code depends on it.
 | **tui-feature** | `tui/dash/`, `tui/otel/`, `tui/settings/` | Dashboard, observability and settings feature implementations (the Settings surface is a Home destination: section views, inventory and its own section keys). |
 | **tui-shared** | `tui/shared/`, `tui/themes/`, `tui/clipboard.ts`, `tui/lifecycle.ts` | Shared presentation primitives and theme data. |
 | **tui-app** | remaining `tui/` files | TUI shell entrypoint (`index.tsx`) and lifecycle components. |
-| **root** | `cli.ts`, `herdr-client.ts` (shim over `multiplexer/herdr/cli.ts`), `multiplexer/`, `server-command.ts`, `server/` | Composition roots and foundational clients. `server/` is the unified Bun backend transport/client/build root (`expose-unified-bun-backend`): `protocol.ts` (contracts + route manifest), `auth.ts`, `app.ts`, `client.ts`, `events.ts`, `credentials.ts`, `handlers.ts`, `lifecycle.ts`. See [`docs/unified-backend-api.md`](unified-backend-api.md). |
+| **root** | `cli.ts`, `herdr-client.ts` (shim over `multiplexer/herdr/cli.ts`), `multiplexer/`, `worktree/`, `server-command.ts`, `server/` | Composition roots and foundational clients. `server/` is the unified Bun backend transport/client/build root (`expose-unified-bun-backend`): `protocol.ts` (contracts + route manifest), `auth.ts`, `app.ts`, `client.ts`, `events.ts`, `credentials.ts`, `handlers.ts`, `lifecycle.ts`. See [`docs/unified-backend-api.md`](unified-backend-api.md). |
 
 Allowed directions (anything else fails, **including type-only imports**):
 

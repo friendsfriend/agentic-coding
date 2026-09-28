@@ -43,9 +43,14 @@ Dashboard SHALL refresh from canonical workflow events, outbox status, runtime o
 - **AND** it SHALL render current step/run state and available actions from view
 
 #### Scenario: Runtime observation changes
-- **WHEN** Herdr agent status or telemetry changes without state revision
+- **WHEN** the selected multiplexer reports an agent status or telemetry change without a state revision
 - **THEN** dashboard MAY refresh observation panels
 - **AND** observation SHALL not be presented as committed step completion
+
+#### Scenario: Runtime event stream is interrupted
+- **WHEN** the selected multiplexer's event subscription drops or the runtime becomes temporarily unreachable
+- **THEN** the dashboard SHALL resume or reconnect with bounded backoff without treating the gap as confirmed workflow state
+- **AND** it SHALL NOT report a workflow change that no event or observation supports
 
 ### Requirement: Engine-provided workflow view
 Dashboard SHALL consume one typed workflow view containing revision, pinned definition, current step, active runs, resolved runtime/profile per run, validation/attention state, and available actions. The view's available actions SHALL be the dashboard's only source of action availability; the dashboard SHALL NOT derive, extend, or filter that set from step or workflow definition identifiers. The dashboard SHALL remain the owner of user-facing presentation for those actions.

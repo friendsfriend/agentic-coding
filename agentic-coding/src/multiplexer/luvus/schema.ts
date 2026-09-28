@@ -198,16 +198,6 @@ export const agentPromptResult = Schema.Struct({
 	evidence: optionalString,
 });
 
-export const worktreeCreateResult = Schema.Struct({
-	type: optionalString,
-	path: optionalString,
-});
-
-export const okResult = Schema.Struct({
-	type: optionalString,
-	revision: optionalNumber,
-});
-
 // Named row types for adapter locals; the schemas above remain the single
 // source of truth.
 export type WorkspaceRow = Schema.Schema.Type<typeof workspaceRow>;
@@ -215,18 +205,3 @@ export type TabRow = Schema.Schema.Type<typeof tabRow>;
 export type PaneRow = Schema.Schema.Type<typeof paneRow>;
 export type AgentRow = Schema.Schema.Type<typeof agentRow>;
 export type PaneLayoutRow = Schema.Schema.Type<typeof paneLayoutResult>;
-
-export const worktreeListResult = Schema.Struct({
-	type: optionalString,
-	worktrees: Schema.optionalWith(
-		Schema.Array(
-			Schema.Struct({
-				path: optionalString,
-				branch: optionalString,
-				head: optionalString,
-				main: optionalBoolean,
-			}),
-		),
-		{ exact: true },
-	),
-});

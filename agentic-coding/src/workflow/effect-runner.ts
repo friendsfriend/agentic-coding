@@ -12,6 +12,8 @@ import {
 } from "../contracts/workflow.ts";
 import { writeAgentRunEnv } from "../multiplexer/agent-env.ts";
 import type { MultiplexerError, MultiplexerPort } from "../multiplexer/port.ts";
+import { worktreePort } from "../worktree/index.ts";
+import type { WorktreeError, WorktreePort } from "../worktree/port.ts";
 import type { AgentAdapter, LaunchContext } from "./adapters.ts";
 import { workflowAssets } from "./assets.ts";
 import { renderAssignment } from "./assignment.ts";
@@ -183,8 +185,12 @@ const git = (
  * leaked `absent` is infrastructure-flavored (transient retry). Getters fold
  * confirmed absence into `undefined`, so specific callers do not route it
  * through this mapper. */
-export function classifyMultiplexerFailure(error: MultiplexerError): Error {
-	if (error.kind === "ownership-lost" || isOwnershipError(error)) return error;
+export function classifyMultiplexerFailure(error: {
+	readonly kind: string;
+	readonly message: string;
+}): Error {
+	if (error.kind === "ownership-lost" || isOwnershipError(error))
+		return error instanceof Error ? error : new TransientFailure(error.message);
 	return new TransientFailure(error.message);
 }
 
@@ -711,6 +717,8 @@ export interface AdapterEffectOptions {
 	registry: WorkflowRegistry;
 	adapters: Map<string, AgentAdapter>;
 	port: MultiplexerPort;
+	/** Worktree lifecycle; defaults to the process-scoped worktrunk port. */
+	worktree?: WorktreePort;
 	credentialPrompt?: CredentialPrompt;
 	paneForRun(
 		runId: string,
@@ -726,6 +734,7 @@ export function agentEffectHandlers(
 ): Partial<Record<EffectKind, EffectHandler>> {
 	const snapshotFor = (effect: ClaimedEffect) =>
 		engine.getSnapshot(repo, effect.workflowId);
+	const worktreePort = options.worktree ?? worktreePortOf();
 	const setupWorkspaces = new Map<string, string>();
 	const portCall = <A>(
 		effect: Effect.Effect<A, MultiplexerError>,
@@ -964,12 +973,10 @@ export function agentEffectHandlers(
 						: (input.branch ?? snapshot.metadata.branch);
 					const worktree =
 						input.mode === "worktree"
-							? yield* p(() =>
-									worktreeForBranch(
-										snapshot.metadata.repository,
-										branch ?? "",
-										signal,
-									),
+							? yield* resolveWorktree(
+									worktreePort,
+									snapshot.metadata.repository,
+									branch ?? "",
 								)
 							: (snapshot.metadata.worktree ??
 								((yield* p(() =>
@@ -1083,31 +1090,39 @@ export function agentEffectHandlers(
 						);
 					let worktree =
 						input.mode === "worktree" && !sameCheckout
-							? yield* p(() =>
-									worktreeForBranch(
-										snapshot.metadata.repository,
-										branch,
-										signal,
-									),
+							? yield* resolveWorktree(
+									worktreePort,
+									snapshot.metadata.repository,
+									branch,
 								)
 							: snapshot.metadata.repository;
 					let workspace = yield* p(() =>
 						recoverWorkspaceAsync(options.port, snapshot.workflowId, signal),
 					);
 					if (input.mode === "worktree" && !worktree) {
-						const created = yield* portCall(
-							options.port.worktreeCreate({
-								cwd: snapshot.metadata.repository,
+						// The port creates the worktree (starting the branch at the
+						// requested base) or reuses the one a previous attempt made;
+						// the multiplexer only opens a workspace at that path, so the
+						// same setup works on every runtime.
+						const created = yield* worktreePortCall(
+							worktreePort.ensure({
+								repo: snapshot.metadata.repository,
 								branch,
 								base: input.baseCommit ?? snapshot.metadata.baseCommit,
-								label: snapshot.workflowId,
 							}),
 						);
-						workspace = created.workspace.workspaceId;
-						worktree = created.worktree;
-						if (!workspace || !worktree)
+						worktree = created.path;
+						if (!worktree)
+							throw new TransientFailure("worktree setup returned no path");
+						workspace = (yield* portCall(
+							options.port.workspaceCreate({
+								cwd: worktree,
+								label: snapshot.workflowId,
+							}),
+						)).workspaceId;
+						if (!workspace)
 							throw new TransientFailure(
-								"Herdr worktree setup returned incomplete identity",
+								"workspace setup returned incomplete identity",
 							);
 					} else {
 						if (
@@ -2142,10 +2157,21 @@ export function agentEffectHandlers(
 					)
 						return { cleaned: true };
 					if (snapshot.metadata.worktree !== snapshot.metadata.repository)
-						yield* git(
-							snapshot.metadata.repository,
-							["worktree", "remove", "--force", snapshot.metadata.worktree],
-							signal,
+						// A worktree that is already gone counts as cleaned, exactly
+						// as a close of an absent workspace does.
+						yield* worktreePortCall(
+							worktreePort
+								.remove({
+									repo: snapshot.metadata.repository,
+									path: snapshot.metadata.worktree,
+									force: true,
+								})
+								.pipe(
+									Effect.catchIf(
+										(error) => error.kind === "absent",
+										() => Effect.void,
+									),
+								),
 						);
 					return { cleaned: true };
 				}),
@@ -2166,23 +2192,39 @@ async function currentBranch(
 		? result.right.stdout.trim() || undefined
 		: undefined;
 }
-async function worktreeForBranch(
+/** The worktree registered for `branch`, or `undefined` for confirmed absence.
+ * A transport failure is a real failure: it is never silently treated as "no
+ * worktree yet" (which would create a second one). */
+function resolveWorktree(
+	port: WorktreePort,
 	repo: string,
 	branch: string,
-	signal?: AbortSignal,
-): Promise<string | undefined> {
-	const result = await Effect.runPromise(
-		runProcessEffect(["git", "-C", repo, "worktree", "list", "--porcelain"], {
-			signal,
-		}).pipe(Effect.either),
+): Effect.Effect<string | undefined, Error> {
+	return port.find(repo, branch).pipe(
+		Effect.map((ref) => ref?.path),
+		Effect.mapError((error) => classifyMultiplexerFailure(error)),
 	);
-	if (Either.isLeft(result) || result.right.exitCode !== 0) return undefined;
-	for (const block of result.right.stdout.trim().split(/\n\n+/)) {
-		const lines = block.split("\n");
-		if (lines.includes(`branch refs/heads/${branch}`))
-			return lines.find((line) => line.startsWith("worktree "))?.slice(9);
-	}
-	return undefined;
+}
+
+/** Map a worktree-port failure onto the runner's failure classes: a conflict
+ * retrying cannot fix is permanent, everything else keeps the existing
+ * transient/ownership behaviour the multiplexer boundary uses. */
+function worktreePortCall<A>(
+	effect: Effect.Effect<A, WorktreeError>,
+): Effect.Effect<A, Error> {
+	return effect.pipe(
+		Effect.mapError((error) =>
+			error.kind === "conflict"
+				? new PermanentFailure(error.message)
+				: classifyMultiplexerFailure(error),
+		),
+	);
+}
+
+/** The process-scoped worktree port, resolved without a factory: there is one
+ * implementation (worktrunk) and selection lives at the application roots. */
+function worktreePortOf(): WorktreePort {
+	return worktreePort();
 }
 async function recoverWorkspaceAsync(
 	port: MultiplexerPort,

@@ -127,20 +127,25 @@ function normalizePath(root: string, target: string): string {
 	return rel.startsWith("..") ? resolved : rel.split(path.sep).join("/");
 }
 
-function runOperations(
+async function runOperations(
 	root: string,
 	git: GitRepository,
 	app: GitApp,
 	operations: readonly GitFixtureOperation[],
-): GitFixtureOperation[] {
+): Promise<GitFixtureOperation[]> {
 	const recorded: GitFixtureOperation[] = [];
 	for (const op of operations) {
 		const result: GitFixtureOperation = { ...op };
-		const capture = (fn: () => string) => {
+		const record = (value: string) => {
+			result.value = value;
+			result.error = false;
+			result.message = "";
+		};
+		/** The worktree operations cross the Effect-native port, so they are the
+		 * only fixture operations that are asynchronous. */
+		const capture = async (fn: () => string | Promise<string>) => {
 			try {
-				result.value = fn();
-				result.error = false;
-				result.message = "";
+				record(await fn());
 			} catch (error) {
 				result.error = true;
 				result.message = (
@@ -150,23 +155,22 @@ function runOperations(
 		};
 		switch (op.op) {
 			case "currentBranch":
-				capture(() => git.getCurrentBranch(app));
+				await capture(() => git.getCurrentBranch(app));
 				break;
 			case "status":
-				capture(() => git.getStatus(app));
+				await capture(() => git.getStatus(app));
 				break;
 			case "localBranches":
-				capture(() => git.getLocalBranches(app).join(","));
+				await capture(() => git.getLocalBranches(app).join(","));
 				break;
 			case "remoteBranches":
-				capture(() =>
+				await capture(() =>
 					git.getBranches(expand(root, op.repoURL ?? "")).join(","),
 				);
 				break;
 			case "listWorktrees":
-				capture(() =>
-					git
-						.listWorktrees(app)
+				await capture(async () =>
+					(await git.listWorktrees(app))
 						.map(
 							(wt) =>
 								`${wt.branch}|${normalizePath(root, wt.path)}|${wt.isMain}|${wt.active}`,
@@ -175,13 +179,13 @@ function runOperations(
 				);
 				break;
 			case "addWorktree":
-				capture(() =>
-					normalizePath(root, git.addWorktree(app, op.branch ?? "")),
+				await capture(async () =>
+					normalizePath(root, await git.addWorktree(app, op.branch ?? "")),
 				);
 				break;
 			case "removeWorktree":
-				capture(() => {
-					git.removeWorktree(app, op.branch ?? "");
+				await capture(async () => {
+					await git.removeWorktree(app, op.branch ?? "");
 					return "";
 				});
 				break;
@@ -230,7 +234,7 @@ function gitFixtureCases(): string[] {
 
 describe("git capability parity (cross-runtime fixtures)", () => {
 	for (const fixtureCase of gitFixtureCases()) {
-		test(`reproduces the Go recipe: ${fixtureCase}`, () => {
+		test(`reproduces the Go recipe: ${fixtureCase}`, async () => {
 			const dir = path.join(FIXTURES, "git", fixtureCase);
 			const fixture = JSON.parse(
 				fs.readFileSync(path.join(dir, "recipe.json"), "utf8"),
@@ -249,7 +253,7 @@ describe("git capability parity (cross-runtime fixtures)", () => {
 				branch: fixture.app.branch,
 				mainWorktreeBranch: fixture.app.mainWorktreeBranch,
 			};
-			const recorded = runOperations(
+			const recorded = await runOperations(
 				root,
 				new GitRepository(),
 				app,

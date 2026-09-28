@@ -2,9 +2,7 @@
 
 ## Purpose
 Gives every workflow-managed agent a deterministic, collision-free identity and guarantees that launches reuse the agent's existing pane instead of spawning duplicates, so long-running workflows stay stable across retries, generations, and engine restarts.
-
 ## Requirements
-
 ### Requirement: Agent sessions last for workspace lifetime
 A successfully launched workflow-managed agent SHALL remain alive until its workspace closes. Completion, blocked or failed handoff, verification-round completion, run expiration, repair, migration, effect cancellation, and transition to another step SHALL revoke obsolete run ownership without closing the agent pane or stopping its session. A later run with same workflow, step, and role SHALL reuse that session and receive a complete new prompt with fresh run authority. Workspace closure is sole normal agent-session teardown path; legacy queued stop effects SHALL be harmless.
 
@@ -24,7 +22,7 @@ A successfully launched workflow-managed agent SHALL remain alive until its work
 - **AND** no earlier run-lifecycle action SHALL enqueue agent-session teardown
 
 ### Requirement: Deterministic unique agent names
-Each workflow-managed agent SHALL have one canonical name derived from its workflow change ID, step, and role (plus round discriminator for grouped one-shot roles). The derivation SHALL be injective within the Herdr runtime: two different workflows, steps, or roles SHALL never map to the same live agent name. The discriminating identity (change + role) SHALL NOT be truncated away to satisfy runtime name limits.
+Each workflow-managed agent SHALL have one canonical name derived from its workflow change ID, step, and role (plus round discriminator for grouped one-shot roles). The derivation SHALL be injective within the selected multiplexer runtime: two different workflows, steps, or roles SHALL never map to the same live agent name. The discriminating identity (change + role) SHALL NOT be truncated away to satisfy runtime name limits; when the selected runtime cannot accept the canonical name, the launch SHALL fail with a bounded diagnostic naming the limit instead of truncating or renaming the identity.
 
 #### Scenario: Long change IDs do not collide
 - **WHEN** two workflows run for change IDs that share the same leading characters up to any legacy truncation width
@@ -33,6 +31,11 @@ Each workflow-managed agent SHALL have one canonical name derived from its workf
 #### Scenario: Name derivation is stable across restarts
 - **WHEN** the engine re-derives an agent's canonical name after a restart or retry
 - **THEN** the same workflow, step, role, and round SHALL produce the identical name as before
+
+#### Scenario: Selected runtime rejects the canonical name
+- **WHEN** the selected multiplexer enforces a name limit or character set the canonical name cannot satisfy
+- **THEN** the launch SHALL fail with a bounded diagnostic naming the constraint
+- **AND** the identity SHALL NOT be silently truncated into a possible collision
 
 ### Requirement: Reuse before spawn
 
@@ -86,3 +89,4 @@ Grouped triage and verification roles SHALL derive their canonical agent name fr
 #### Scenario: Roles and workflows remain distinct
 - **WHEN** two different verifier roles run for the same step, or the same role runs for two workflows whose change IDs share a leading prefix
 - **THEN** their canonical agent names SHALL differ
+

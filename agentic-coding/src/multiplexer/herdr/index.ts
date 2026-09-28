@@ -485,45 +485,6 @@ export class HerdrMultiplexer implements MultiplexerPort {
 	workspaceClose(id: string): Effect.Effect<void, MultiplexerError> {
 		return this.call(["workspace", "close", id]).pipe(Effect.asVoid);
 	}
-	worktreeCreate(i: {
-		cwd: string;
-		branch: string;
-		base?: string;
-		label: string;
-	}): Effect.Effect<
-		{ workspace: WorkspaceInfo; worktree: string },
-		MultiplexerError
-	> {
-		return Effect.gen(this, function* () {
-			const raw = yield* this.call([
-				"worktree",
-				"create",
-				"--cwd",
-				i.cwd,
-				"--branch",
-				i.branch,
-				...(i.base ? ["--base", i.base] : []),
-				"--label",
-				i.label,
-				"--no-focus",
-			]);
-			const result = yield* this.decode(H.worktreeCreateResult, raw);
-			const workspace = result.workspace?.workspace_id;
-			const worktree = result.worktree?.path;
-			if (!workspace || !worktree)
-				return yield* Effect.fail(
-					new MultiplexerError(
-						"invalid-response",
-						"herdr",
-						"Herdr worktree setup returned incomplete identity",
-					),
-				);
-			return {
-				workspace: { workspaceId: workspace, label: i.label },
-				worktree,
-			};
-		});
-	}
 	tabList(workspaceId: string): Effect.Effect<TabInfo[], MultiplexerError> {
 		return Effect.gen(this, function* () {
 			const raw = yield* this.call(["tab", "list", "--workspace", workspaceId]);

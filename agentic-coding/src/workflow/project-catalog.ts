@@ -8,11 +8,14 @@
 //   • a non-retryable configuration error (for example duplicate idents),
 //   • a retryable transport/server failure.
 import path from "node:path";
+// Deep imports on purpose: the `@devenv/core` barrel re-exports `diff-utils`,
+// which re-exports a React UI view, so importing the barrel loads the whole UI
+// framework (~67 MB RSS measured) into processes that only make an HTTP call.
+import { createCustomFetch } from "@devenv/core/src/custom-fetch.ts";
 import {
-	createCustomFetch,
 	ProjectCatalogError,
 	getProjectCatalog as requestProjectCatalog,
-} from "@devenv/core";
+} from "@devenv/core/src/projects-client.ts";
 import type { CatalogProject, ProjectCatalog } from "@devenv/types";
 
 export type { CatalogProject, ProjectCatalog };

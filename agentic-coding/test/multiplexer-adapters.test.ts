@@ -97,11 +97,6 @@ function scriptedHerdr(_repo: string): HerdrScript {
 				(args[1] === "focus" || args[1] === "close")
 			)
 				return {};
-			if (args[0] === "worktree" && args[1] === "create")
-				return {
-					workspace: { workspace_id: "workspace_wt" },
-					worktree: { path: "/wt" },
-				};
 			if (key === "tab list --workspace workspace_abc")
 				return { tabs: [{ tab_id: "tab_1", label: "worker" }] };
 			if (args[0] === "tab" && args[1] === "create")
@@ -225,25 +220,11 @@ function scriptedLuvus(
 	const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
 	let openedCwd = repo;
 	let _prompted = false;
-	let worktreeCreated = false;
 	const handle = (method: string, params: Record<string, unknown>): unknown => {
 		if (method === "workspace.list")
 			return {
 				type: "workspace_list",
-				workspaces: [
-					{ ...workspaceRow, cwd: openedCwd },
-					...(worktreeCreated
-						? [
-								{
-									...workspaceRow,
-									workspace: "1",
-									workspace_id: "workspace_wt",
-									name: "b",
-									cwd: "/wt",
-								},
-							]
-						: []),
-				],
+				workspaces: [{ ...workspaceRow, cwd: openedCwd }],
 			};
 		if (method === "workspace.open") {
 			openedCwd = String(params.path ?? repo);
@@ -257,15 +238,6 @@ function scriptedLuvus(
 		if (method === "workspace.rename") return { type: "workspace_rename" };
 		if (method === "workspace.focus" || method === "workspace.close")
 			return { type: "ok" };
-		if (method === "worktree.create") {
-			worktreeCreated = true;
-			return { type: "ok", path: "/wt" };
-		}
-		if (method === "worktree.list")
-			return {
-				type: "worktree_list",
-				worktrees: [{ path: "/wt", branch: "b", head: "c1", main: false }],
-			};
 		if (method === "tab.list")
 			return {
 				type: "tab_list",
@@ -401,18 +373,6 @@ async function sharedConformance(
 	await run(port.workspaceFocus("workspace_abc"));
 	await run(port.workspaceClose("workspace_abc"));
 
-	// Worktree pairing with a verified base.
-	const worktree = await run(
-		port.worktreeCreate({
-			cwd: repo,
-			branch: "b",
-			base: "c1",
-			label: "wf",
-		}),
-	);
-	expect(worktree.worktree).toBe("/wt");
-	expect(worktree.workspace.workspaceId).toBeTruthy();
-
 	// Tabs.
 	const tabs = await run(port.tabList("workspace_abc"));
 	expect(tabs.map((tab) => tab.tabId)).toEqual(["tab_1"]);
@@ -540,19 +500,11 @@ describe("shared multiplexer conformance", () => {
 });
 
 describe("Herdr adapter request shape", () => {
-	test("emits the exact Herdr argv for workspace/worktree/tab/pane/agent calls", async () => {
+	test("emits the exact Herdr argv for workspace/tab/pane/agent calls", async () => {
 		const repo = fs.mkdtempSync(path.join(os.tmpdir(), "herdr-argv-"));
 		try {
 			const script = scriptedHerdr(repo);
 			await run(script.port.workspaceCreate({ cwd: "/repo", label: "wf" }));
-			await run(
-				script.port.worktreeCreate({
-					cwd: "/repo",
-					branch: "b",
-					base: "c1",
-					label: "wf",
-				}),
-			);
 			await run(
 				script.port.tabCreate({
 					workspaceId: "w1",
@@ -580,19 +532,6 @@ describe("Herdr adapter request shape", () => {
 				"/repo",
 				"--label",
 				"wf",
-			]);
-			expect(script.calls).toContainEqual([
-				"worktree",
-				"create",
-				"--cwd",
-				"/repo",
-				"--branch",
-				"b",
-				"--base",
-				"c1",
-				"--label",
-				"wf",
-				"--no-focus",
 			]);
 			expect(script.calls).toContainEqual([
 				"tab",
@@ -858,6 +797,46 @@ describe("Luvus adapter request shape and outcomes", () => {
 		expect(resolveLuvusSocketPath({ LUVUS_HOME: "/home/u/.luvus" })).toBe(
 			"/home/u/.luvus/luvus.sock",
 		);
+		// The ambient address of the server that launched this process is not a
+		// session selector: a requested session must not be silently replaced by
+		// whichever server the pane happens to be attached to.
+		expect(
+			resolveLuvusSocketPath({
+				LUVUS_HOME: "/home/u/.luvus",
+				LUVUS_SESSION: "review",
+				LUVUS_API_ADDRESS: "/home/u/.luvus/luvus.sock",
+			}),
+		).toBe("/home/u/.luvus/sessions/review/luvus.sock");
+		// An explicit socket path still wins over everything.
+		expect(
+			resolveLuvusSocketPath({
+				LUVUS_SOCKET_PATH: "/custom.sock",
+				LUVUS_SESSION: "review",
+				LUVUS_API_ADDRESS: "/home/u/.luvus/luvus.sock",
+			}),
+		).toBe("/custom.sock");
+		// Without a session the ambient unix address is this process's own server.
+		expect(
+			resolveLuvusSocketPath({
+				LUVUS_HOME: "/home/u/.luvus",
+				LUVUS_API_ADDRESS: "/home/u/.luvus/luvus.sock",
+			}),
+		).toBe("/home/u/.luvus/luvus.sock");
+		// A TCP address is not a socket path, so it never becomes one.
+		expect(
+			resolveLuvusSocketPath({
+				LUVUS_HOME: "/home/u/.luvus",
+				LUVUS_API_ADDRESS: "tcp:127.0.0.1:7777",
+			}),
+		).toBe("/home/u/.luvus/luvus.sock");
+		// An explicitly requested default session keeps the default socket.
+		expect(
+			resolveLuvusSocketPath({
+				LUVUS_HOME: "/home/u/.luvus",
+				LUVUS_SESSION: "default",
+				LUVUS_API_ADDRESS: "/elsewhere/luvus.sock",
+			}),
+		).toBe("/home/u/.luvus/luvus.sock");
 		// A session-selected adapter resolves the same session-scoped socket the
 		// CLI would target, even without an explicit socket path.
 		const previous = process.env.LUVUS_SESSION;
@@ -977,95 +956,6 @@ describe("Luvus adapter request shape and outcomes", () => {
 			expect(outcome.left.kind).toBe("invalid-response");
 			expect(outcome.left.message).toContain("workspace_other");
 		}
-	});
-
-	test("a worktree base the runtime cannot honor fails loudly", async () => {
-		const port = new LuvusMultiplexer({
-			request: async (method) => {
-				if (method === "workspace.list")
-					return {
-						workspaces: [
-							{ ...workspaceRow, cwd: "/repo", workspace_id: "workspace_abc" },
-							{
-								...workspaceRow,
-								workspace: "1",
-								workspace_id: "workspace_wt",
-								name: "b",
-								cwd: "/wt",
-							},
-						],
-					};
-				if (method === "worktree.create") return { type: "ok", path: "/wt" };
-				if (method === "worktree.list")
-					return {
-						worktrees: [{ path: "/wt", branch: "b", head: "different" }],
-					};
-				return { type: "ok" };
-			},
-			sleep: () => Effect.void,
-		});
-		const outcome = await run(
-			Effect.either(
-				port.worktreeCreate({
-					cwd: "/repo",
-					branch: "b",
-					base: "c1",
-					label: "wf",
-				}),
-			),
-		);
-		expect(Either.isLeft(outcome)).toBe(true);
-		if (Either.isLeft(outcome)) {
-			expect(outcome.left.kind).toBe("unavailable");
-			expect(outcome.left.message).toContain("requested base c1");
-		}
-	});
-
-	test("a worktree is created in the requested repository, addressed by workspace index", async () => {
-		// Luvus 0.14.2 honors only the numeric `workspace` index for worktree.*;
-		// `workspace_id` is ignored there and the worktree lands in whichever
-		// workspace is active. Its reply names the new workspace after the branch
-		// with separators collapsed (`feature/b` -> `feature-b`), so the created
-		// identity has to come from the reported path.
-		const calls: Array<{ method: string; params: Record<string, unknown> }> =
-			[];
-		let createdWorktree = false;
-		const port = new LuvusMultiplexer({
-			request: async (method, params) => {
-				calls.push({ method, params });
-				if (method === "workspace.list")
-					return {
-						workspaces: [
-							{ ...workspaceRow, cwd: "/repo" },
-							...(createdWorktree
-								? [
-										{
-											...workspaceRow,
-											workspace: "1",
-											workspace_id: "workspace_wt",
-											name: "feature-b",
-											cwd: "/wt",
-										},
-									]
-								: []),
-						],
-					};
-				if (method === "worktree.create") {
-					createdWorktree = true;
-					return { type: "ok", path: "/wt" };
-				}
-				return { type: "ok" };
-			},
-			sleep: () => Effect.void,
-		});
-		const created = await run(
-			port.worktreeCreate({ cwd: "/repo", branch: "feature/b", label: "wf" }),
-		);
-		expect(created.worktree).toBe("/wt");
-		expect(created.workspace.workspaceId).toBe("workspace_wt");
-		expect(
-			calls.find((call) => call.method === "worktree.create")?.params,
-		).toEqual({ workspace: "0", branch: "feature/b" });
 	});
 
 	test("a failed agent.get poll fails the launch instead of reporting success", async () => {

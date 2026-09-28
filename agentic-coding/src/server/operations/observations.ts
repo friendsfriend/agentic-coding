@@ -990,24 +990,12 @@ export function loadLocalChanges(
 			changes.set(path, existing);
 		}
 	}
-	// -uall expands untracked directories into their individual files (so a
-	// file created inside a brand-new directory is its own reviewable row
-	// instead of a single "?? dir/" entry whose diff errors); core.quotePath
-	// keeps special-character paths raw, matching worktreeGitStatus.
-	for (const line of (
-		git(
-			state.worktree,
-			"-c",
-			"core.quotePath=false",
-			"status",
-			"--short",
-			"-uall",
-		) ?? ""
-	)
-		.split(/\r?\n/)
-		.filter(Boolean)) {
-		if (!line.startsWith("?? ")) continue;
-		const path = line.slice(3);
+	// Untracked files come from the shared cached listing that the dashboard's
+	// Git status uses: `git status -uall` pays the same ~100 ms tree walk for the
+	// same paths, and paid it again on every review refresh. Either way a file
+	// created inside a brand-new directory is its own reviewable row instead of a
+	// single "?? dir/" entry whose diff errors.
+	for (const path of untrackedPaths(state.worktree)) {
 		if (path === ".herdr-workflow" || path.startsWith(".herdr-workflow/"))
 			continue;
 		if (changes.has(path)) continue;

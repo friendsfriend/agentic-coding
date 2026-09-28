@@ -5,7 +5,6 @@ import {
 	nextPanelIndex,
 	prevPanelIndex,
 } from "./";
-import { handleHorizontalScrollKey } from "./horizontal-scroll.ts";
 import { isDownKey, isUpKey } from "./nav-keys.ts";
 import type {
 	KeyboardActions,
@@ -14,11 +13,7 @@ import type {
 	KeyboardStores,
 } from "./types.ts";
 
-/**
- * Handles keyboard events for the CR detail view.
- * Shift+A starts the pi-powered AI review overlay.
- * While the overlay is open all keys are forwarded to it.
- */
+/** Handles keyboard events for the CR detail view. */
 export async function handleCrDetailKeys(
 	event: KeyboardEvent,
 	stores: KeyboardStores,
@@ -34,75 +29,6 @@ export async function handleCrDetailKeys(
 		"DEBUG",
 		`[CR DETAIL] Key: name="${event.name}", sequence="${event.sequence}", shift=${event.shift}, ctrl=${event.ctrl}`,
 	);
-
-	// --- AI review overlay intercepts all keys while open ---
-	if (changeRequestStore.crAiVisible()) {
-		const name = event.name;
-
-		// Dismiss
-		const isEsc =
-			name === "escape" ||
-			name === "Escape" ||
-			name === "esc" ||
-			event.sequence === "\x1b" ||
-			event.raw === "\x1b";
-		if (isEsc) {
-			changeRequestStore.setCrAiVisible(false);
-			return true;
-		}
-
-		// Scroll when review is visible
-		if (
-			changeRequestStore.crAiSummary() !== null &&
-			changeRequestStore.crAiScrollBoxRef
-		) {
-			const sb = changeRequestStore.crAiScrollBoxRef;
-			if (handleHorizontalScrollKey(event, sb)) return true;
-			if (event.ctrl && name === "j") {
-				changeRequestStore.crAiAtBottom = false;
-				sb.scrollBy(1);
-				changeRequestStore.crAiLastScrollTop = sb.scrollTop;
-				return true;
-			}
-			if (event.ctrl && name === "k") {
-				changeRequestStore.crAiAtBottom = false;
-				sb.scrollBy(-1);
-				changeRequestStore.crAiLastScrollTop = sb.scrollTop;
-				return true;
-			}
-			if (event.ctrl && name === "g") {
-				changeRequestStore.crAiAtBottom = false;
-				sb.scrollTo(0);
-				changeRequestStore.crAiLastScrollTop = 0;
-				return true;
-			}
-			if (event.ctrl && name === "G") {
-				changeRequestStore.crAiAtBottom = true;
-				sb.scrollTo(sb.scrollHeight);
-				changeRequestStore.crAiLastScrollTop = sb.scrollTop;
-				return true;
-			}
-		}
-
-		// Enter — close completed review
-		if (
-			name === "return" ||
-			name === "Return" ||
-			name === "enter" ||
-			name === "Enter"
-		) {
-			if (
-				changeRequestStore.crAiSummary() !== null &&
-				!changeRequestStore.crAiLoading() &&
-				!changeRequestStore.crAiStreaming()
-			) {
-				changeRequestStore.setCrAiVisible(false);
-			}
-			return true;
-		}
-
-		return true; // consume everything else while overlay is open
-	}
 
 	// --- Panel focus navigation ---
 	const panelCount = changeRequestStore.crDetailPanelCount;
@@ -226,19 +152,9 @@ export async function handleCrDetailKeys(
 		return true;
 	}
 
-	// 'a' (lowercase only) — toggle approval; Shift+A is AI review
+	// 'a' (lowercase only) — toggle approval
 	if (event.name === "a" && event.sequence !== "A") {
 		await crActions.toggleCRApproval();
-		return true;
-	}
-
-	// Shift+A — start the CR AI review immediately with the predefined prompt
-	if (event.sequence === "A") {
-		const cr = changeRequestStore.selectedChangeRequest();
-		if (cr) {
-			const { buildCrReviewPrompt } = await import("../actions/cr-ai-utils");
-			void crActions.runCrAiReview(buildCrReviewPrompt(cr));
-		}
 		return true;
 	}
 

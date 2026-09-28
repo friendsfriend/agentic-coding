@@ -7,7 +7,8 @@
 //
 // Only status fields are decoded. A provider's token is represented by
 // `hasToken` and never requested, returned or rendered.
-import { createCustomFetch } from "@devenv/core";
+// Deep import: see `src/workflow/project-catalog.ts` (the barrel loads the UI framework).
+import { createCustomFetch } from "@devenv/core/src/custom-fetch.ts";
 import type { CatalogProject } from "@devenv/types";
 import { loadProjectCatalog } from "../data/workflow.ts";
 
