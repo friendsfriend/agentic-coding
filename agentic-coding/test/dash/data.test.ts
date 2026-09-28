@@ -529,6 +529,33 @@ test("worktreeGitStatus expands untracked directories into their files", () => {
 	expect(status.addedFiles).toBe(1);
 });
 
+test("worktreeGitStatus keeps tracked state fresh while only the untracked walk is cached", () => {
+	// The untracked walk is ~100 ms of a ~110 ms `git status` against ~10 ms for
+	// the tracked half, so the cached half is the one a viewer tolerates lagging.
+	const repo = fixture();
+	writeFileSync(join(repo, "tracked.ts"), "const value = 2;\n");
+	writeFileSync(join(repo, "untracked.ts"), "new\n");
+	const first = worktreeGitStatus(repo);
+	expect(first.changedFiles).toBe(1);
+	expect(first.addedFiles).toBe(1);
+
+	// Staged inside the cache window: the tracked half is read every call.
+	writeFileSync(join(repo, "staged.ts"), "export {};\n");
+	runGit(repo, "add", "staged.ts");
+	const second = worktreeGitStatus(repo);
+	expect(second.changedFiles).toBe(1);
+	expect(second.addedFiles).toBe(2); // cached untracked.ts + staged.ts
+});
+
+test("worktreeGitStatus bounds how long a fresh untracked file can go uncounted", () => {
+	const repo = fixture();
+	expect(worktreeGitStatus(repo).addedFiles).toBe(0);
+	writeFileSync(join(repo, "later.ts"), "export {};\n");
+	// Deliberate staleness bound: the cached untracked listing is reused for the
+	// cache window, so this is the worst-case lag on a brand-new untracked file.
+	expect(worktreeGitStatus(repo).addedFiles).toBe(0);
+});
+
 test("worktreeGitStatus computes ahead/behind against the configured upstream", () => {
 	const repo = fixture();
 	const main = runGit(repo, "rev-parse", "--abbrev-ref", "HEAD");

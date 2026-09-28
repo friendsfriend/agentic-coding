@@ -7,6 +7,7 @@ import {
 	SAFETY_RESYNC_MS,
 	startPeriodicResync,
 	startSafetyResync,
+	throttle,
 	watchDirectories,
 } from "../../src/tui/dash/watchRefresh.ts";
 
@@ -56,6 +57,44 @@ test("debounce cancel suppresses a pending call", async () => {
 	await new Promise((resolve) => setTimeout(resolve, 60));
 
 	expect(calls).toBe(0);
+});
+
+test("throttle runs the first trigger at once and collapses a burst into one trailing run", async () => {
+	const runs: boolean[] = [];
+	const throttled = throttle((force) => runs.push(force), 40);
+
+	throttled.trigger();
+	// Arrivals during the interval must not each start a read: a streaming agent
+	// produced 13-32 reads per 5 s window this way.
+	for (let i = 0; i < 5; i += 1) throttled.trigger();
+	await new Promise((resolve) => setTimeout(resolve, 90));
+
+	expect(runs).toEqual([false, false]);
+	throttled.cancel();
+});
+
+test("throttle keeps a forced trigger's flag on the trailing run", async () => {
+	const runs: boolean[] = [];
+	const throttled = throttle((force) => runs.push(force), 40);
+
+	throttled.trigger();
+	throttled.trigger(true); // a safety resync must still bypass the cache
+	await new Promise((resolve) => setTimeout(resolve, 90));
+
+	expect(runs).toEqual([false, true]);
+	throttled.cancel();
+});
+
+test("throttle cancel suppresses the trailing run", async () => {
+	const runs: boolean[] = [];
+	const throttled = throttle((force) => runs.push(force), 40);
+
+	throttled.trigger();
+	throttled.trigger();
+	throttled.cancel();
+	await new Promise((resolve) => setTimeout(resolve, 90));
+
+	expect(runs).toEqual([false]);
 });
 
 test("startPeriodicResync fires on the interval and stops on dispose", async () => {

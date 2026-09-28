@@ -101,7 +101,9 @@ import { pendingCredentialRequest } from "./ui/CredentialsModal.tsx";
 import type { FindingEvent } from "./ui/FindingsModal.tsx";
 import {
 	debounce,
+	REFRESH_MIN_INTERVAL_MS,
 	startSafetyResync,
+	throttle,
 	watchDirectories,
 } from "./watchRefresh.ts";
 
@@ -906,17 +908,8 @@ export function App(props: {
 			setBusy(false);
 		}
 	};
-	const refresh = (force = false) => {
+	const runRefresh = (force: boolean) => {
 		if (refreshDisposed) return;
-		refreshReviewFiles?.();
-		if (props.profile === "test") {
-			setData(load());
-			traceTui("tui.dashboard.refresh", {
-				surface: "dashboard",
-				action: "refresh",
-			});
-			return;
-		}
 		if (refreshRunning) {
 			refreshQueued = true;
 			refreshForceQueued = refreshForceQueued || force;
@@ -976,6 +969,22 @@ export function App(props: {
 					refresh(queuedForce);
 				}
 			});
+	};
+	// Reads are spaced by `REFRESH_MIN_INTERVAL_MS`: a streaming agent used to
+	// start the next read the moment the previous one finished, so a burst of
+	// workflow events turned into back-to-back reads of identical data.
+	const refreshThrottle = throttle(runRefresh, REFRESH_MIN_INTERVAL_MS);
+	const refresh = (force = false) => {
+		refreshReviewFiles?.();
+		if (props.profile === "test") {
+			setData(load());
+			traceTui("tui.dashboard.refresh", {
+				surface: "dashboard",
+				action: "refresh",
+			});
+			return;
+		}
+		refreshThrottle.trigger(force);
 	};
 
 	// Review feature: plan/developer/wiki review state, drafts, and submission

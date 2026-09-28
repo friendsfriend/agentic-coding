@@ -531,11 +531,41 @@ const isWorkflowMetadataPath = (path: string) =>
  * ahead/behind counts. Best-effort: a missing or non-Git worktree yields an
  * unavailable result with a bounded diagnostic instead of throwing.
  */
+/** The untracked-path walk is the expensive half of `git status`: a full tree
+ * scan (~100 ms here) against ~10 ms for the tracked half, and it is the half a
+ * viewer tolerates lagging. Only that half is cached; branch, ahead/behind and
+ * tracked/staged/deleted state stay authoritative on every read. */
+const UNTRACKED_PATHS_TTL_MS = 3_000;
+const untrackedPathsCache = new Map<string, { at: number; paths: string[] }>();
+
+function untrackedPaths(worktree: string): string[] {
+	const cached = untrackedPathsCache.get(worktree);
+	const now = Date.now();
+	if (cached && now - cached.at < UNTRACKED_PATHS_TTL_MS) return cached.paths;
+	const listed = gitResult(
+		worktree,
+		"ls-files",
+		"--others",
+		"--exclude-standard",
+		"-z",
+	);
+	if (listed.exitCode !== 0) return cached?.paths ?? [];
+	const paths = listed.stdout.toString().split("\0").filter(Boolean);
+	// Keep the map bounded to the worktrees read inside one window: a long-lived
+	// dash touches a new worktree per workflow.
+	for (const [key, value] of untrackedPathsCache)
+		if (now - value.at >= UNTRACKED_PATHS_TTL_MS)
+			untrackedPathsCache.delete(key);
+	untrackedPathsCache.set(worktree, { at: now, paths });
+	return paths;
+}
+
 export function worktreeGitStatus(worktree: string): WorktreeGitStatus {
 	if (!existsSync(worktree)) return unavailableGitStatus("worktree not found");
-	// One synchronous invocation per worktree carries everything: -b adds the
-	// branch header (branch...upstream [ahead N, behind M]), -uall expands
-	// untracked directories into files, core.quotePath=false keeps paths raw.
+	// One synchronous invocation for the tracked half: -b adds the branch header
+	// (branch...upstream [ahead N, behind M]), -uno skips the untracked tree walk,
+	// core.quotePath=false keeps paths raw. Untracked files come from a separately
+	// cached listing so their count still matches `-uall`'s per-file expansion.
 	const status = gitResult(
 		worktree,
 		"-c",
@@ -543,7 +573,7 @@ export function worktreeGitStatus(worktree: string): WorktreeGitStatus {
 		"status",
 		"--porcelain=v1",
 		"-b",
-		"-uall",
+		"-uno",
 	);
 	if (status.exitCode !== 0)
 		return unavailableGitStatus(
@@ -581,6 +611,12 @@ export function worktreeGitStatus(worktree: string): WorktreeGitStatus {
 				: "changed";
 		const previous = kinds.get(path);
 		if (!previous || rank[kind] > rank[previous]) kinds.set(path, kind);
+	}
+	// Untracked paths are added to the same map so the rank rule still counts a
+	// path once and never shadows a staged record for the same path.
+	for (const path of untrackedPaths(worktree)) {
+		if (isWorkflowMetadataPath(path)) continue;
+		if (!kinds.has(path)) kinds.set(path, "added");
 	}
 	for (const kind of kinds.values()) result[`${kind}Files` as const]++;
 	return result;
