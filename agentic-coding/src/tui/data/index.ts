@@ -10,7 +10,7 @@
 // invalidates the entries it names, and an event gap (unknown or missing
 // revision) marks everything stale so the next read is authoritative instead
 // of guessed.
-import { createSignal } from "solid-js";
+import { createSignal, untrack } from "solid-js";
 import type { EventEnvelope } from "../../contracts/environment.ts";
 import type { DashboardGateway } from "../../contracts/gateway.ts";
 
@@ -108,7 +108,12 @@ export class DataCache {
 		options: ReadOptions = {},
 	): Promise<T | undefined> {
 		const entry = this.entry(key);
-		const cached = entry.signal() as CacheEntry<T> | undefined;
+		// Untracked: a loader is routinely awaited from inside a reactive scope
+		// (an effect that refetches on new state). Reading the entry signal there
+		// would subscribe that scope to the entry, so publishing the loaded value
+		// re-ran the very effect that started the read — a self-feeding read loop
+		// that never applied the result. `read` stays the reactive accessor.
+		const cached = untrack(() => entry.signal()) as CacheEntry<T> | undefined;
 		if (
 			cached &&
 			!options.refresh &&

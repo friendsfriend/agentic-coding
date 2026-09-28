@@ -234,6 +234,20 @@ function normalizedActionId(value: unknown): string {
 	return separator > 0 ? value.slice(0, separator) : value;
 }
 
+/** Whether a definition lookup failed because a store outlived the definition it
+ * pinned rather than because of a defect. `WorkflowRegistry.definition` throws
+ * exactly these two for a pin that no longer resolves: a version the registry
+ * dropped (`missing workflow definition`) and a digest that changed under the
+ * same version. Such a workflow stays repairable through `operator.repin`, and
+ * its stale outbox row must never block newer workflows in the same store. */
+function staleDefinitionPin(error: unknown): boolean {
+	const message = String(error);
+	return (
+		message.includes("missing workflow definition") ||
+		message.includes("workflow definition pin mismatch")
+	);
+}
+
 export class WorkflowEngine {
 	private readonly layer: ReturnType<typeof engineLayer>;
 	constructor(
@@ -1571,9 +1585,9 @@ export class WorkflowEngine {
 				);
 			} catch (error) {
 				// A stale workflow remains repairable through operator.repin, but its
-				// old outbox row must not block every newer workflow in this store.
-				if (String(error).includes("workflow definition pin mismatch"))
-					continue;
+				// old outbox row must not block every newer workflow in this store —
+				// including the definition version a retired registry dropped.
+				if (staleDefinitionPin(error)) continue;
 				throw error;
 			}
 			const runList = runs(db, snapshot.workflowId);

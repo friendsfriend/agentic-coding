@@ -587,6 +587,14 @@ export async function main(): Promise<void> {
 		beginStartup(startupSteps);
 	}
 
+	// ---- Server-stack bootstrap ----------------
+	// The standalone dashboard reads through the composition root's gateway, so
+	// it must not paint before that gateway exists: it has no startup modal to
+	// mask a not-yet-ready data source, and its first observation would race the
+	// server start and report "no dashboard gateway configured for this process".
+	// Every other route renders first so its startup modal can show progress.
+	if (dashOnly) await startServerStack(false);
+
 	await render(
 		() => (
 			<KeymapProvider keymap={keymap}>
@@ -638,8 +646,8 @@ export async function main(): Promise<void> {
 		renderer,
 	);
 
-	// ---- Server-stack bootstrap (after first paint; modal shows progress) ----
-	void startServerStack(home);
+	// ---- Server-stack bootstrap after first paint (modal shows progress) ----
+	if (!dashOnly) void startServerStack(home);
 	await new Promise<void>((done) => renderer.once("destroy", done));
 	clearSelectionCopy();
 	disposeCredentialPrompt();

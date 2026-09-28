@@ -296,7 +296,7 @@ export class LuvusMultiplexer implements MultiplexerPort {
 				);
 				if (opened.workspace) repository = { workspace: opened.workspace };
 			}
-			if (!repository?.workspace && !repository?.workspace_id)
+			if (!repository?.workspace)
 				return yield* Effect.fail(
 					new MultiplexerError(
 						"unavailable",
@@ -304,31 +304,19 @@ export class LuvusMultiplexer implements MultiplexerPort {
 						`Luvus has no workspace for ${i.cwd}`,
 					),
 				);
-			yield* this.request("worktree.create", {
-				branch: i.branch,
-				...(repository.workspace_id
-					? { workspace_id: repository.workspace_id }
-					: { workspace: repository.workspace }),
-			});
-			const after = yield* this.decode(
-				L.workspaceListResult,
-				yield* this.request("workspace.list"),
+			// Luvus addresses worktree.* by the workspace's numeric index and ignores
+			// `workspace_id` there (verified against luvus 0.14.2): sending the stable
+			// id creates the worktree in whichever workspace happens to be active, so
+			// a workflow would be given a worktree of an unrelated repository.
+			const target = repository.workspace;
+			const createReply = yield* this.decode(
+				L.worktreeCreateResult,
+				yield* this.request("worktree.create", {
+					workspace: target,
+					branch: i.branch,
+				}),
 			);
-			const workspace = (after.workspaces ?? []).find(
-				(row) => row.name === i.branch || row.cwd?.endsWith(`/${i.branch}`),
-			);
-			if (!workspace)
-				return yield* Effect.fail(
-					new MultiplexerError(
-						"invalid-response",
-						"luvus",
-						"Luvus worktree.create returned no workspace identity",
-					),
-				);
-			const info = workspaceInfo(workspace) ?? {
-				workspaceId: String(workspace.workspace ?? ""),
-			};
-			const worktree = workspace.cwd;
+			const worktree = createReply.path;
 			if (!worktree)
 				return yield* Effect.fail(
 					new MultiplexerError(
@@ -337,17 +325,37 @@ export class LuvusMultiplexer implements MultiplexerPort {
 						"Luvus worktree.create returned no worktree path",
 					),
 				);
+			// Luvus names the new workspace after the branch with its separators
+			// collapsed (`feature/x` becomes `feature-x`) and focuses it, which is what
+			// the session-scoped tab/pane/agent calls that follow rely on. Identity
+			// therefore comes from the created path the reply reported, never from the
+			// branch name.
+			const after = yield* this.decode(
+				L.workspaceListResult,
+				yield* this.request("workspace.list"),
+			);
+			const workspace = (after.workspaces ?? []).find(
+				(row) => row.cwd === worktree || row.terminal_cwd === worktree,
+			);
+			if (!workspace)
+				return yield* Effect.fail(
+					new MultiplexerError(
+						"invalid-response",
+						"luvus",
+						`Luvus worktree.create reported ${worktree} but no workspace opened it`,
+					),
+				);
+			const info = workspaceInfo(workspace) ?? {
+				workspaceId: String(workspace.workspace ?? ""),
+			};
+
 			// Luvus creates the branch from the workspace's current HEAD and has no
 			// base parameter. Verify the requested base rather than silently
 			// ignoring it: a mismatch fails loudly with the runtime named.
 			if (i.base) {
 				const worktrees = yield* this.decode(
 					L.worktreeListResult,
-					yield* this.request("worktree.list", {
-						...(repository.workspace_id
-							? { workspace_id: repository.workspace_id }
-							: { workspace: repository.workspace }),
-					}),
+					yield* this.request("worktree.list", { workspace: target }),
 				);
 				const created = (worktrees.worktrees ?? []).find(
 					(row) => row.path === worktree,
@@ -402,6 +410,13 @@ export class LuvusMultiplexer implements MultiplexerPort {
 		focus?: boolean;
 	}): Effect.Effect<{ tabId: string; rootPaneId: string }, MultiplexerError> {
 		return Effect.gen(this, function* () {
+			// A Luvus tab is created in the session's active workspace and `tab.new`
+			// honors neither `workspace_id` nor `cwd` (verified against luvus 0.14.2),
+			// so the target workspace has to be focused first: otherwise a workflow's
+			// agent pane lands in whatever workspace the developer is looking at. The
+			// workspace root is the worktree, so focusing it also puts the new pane in
+			// the run's directory.
+			yield* this.workspaceFocus(i.workspaceId);
 			const created = yield* this.decode(
 				L.tabResult,
 				yield* this.request("tab.new", {
@@ -428,6 +443,17 @@ export class LuvusMultiplexer implements MultiplexerPort {
 						"invalid-response",
 						"luvus",
 						"Luvus tab.get returned no tab id",
+					),
+				);
+			// A focus that silently did not take effect would run an agent in the
+			// wrong checkout, so the created tab is checked against the request.
+			const landed = tab.workspace_id ?? tab.workspace;
+			if (landed !== undefined && landed !== i.workspaceId)
+				return yield* Effect.fail(
+					new MultiplexerError(
+						"invalid-response",
+						"luvus",
+						`Luvus created tab ${tabId} in workspace ${landed} instead of ${i.workspaceId}`,
 					),
 				);
 			const rootPaneId = tab.panes?.[0];

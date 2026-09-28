@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createEffect, createRoot } from "solid-js";
 import { DataCache } from "../../src/tui/data/index.ts";
 
 /**
@@ -175,5 +176,52 @@ describe("data cache", () => {
 		unsubscribe();
 		cache.invalidate("k");
 		expect(seen).toEqual(["k", "k"]);
+	});
+
+	test("a loader awaited inside a reactive scope never re-triggers that scope", async () => {
+		// The dashboard's artifact effect refetches on new state, so it awaits a
+		// loader inside an effect. Reading the cache entry there used to subscribe
+		// the effect to it, so publishing the value re-ran the effect that started
+		// the read: a self-feeding loop that re-read for as long as it ran (measured
+		// ~120 artifact loads/s and a pegged core) and never applied a value.
+		const cache = new DataCache();
+		let runs = 0;
+		let calls = 0;
+		// The second read never settles, so a looping effect cannot starve the
+		// assertions below: it stops on its own after the re-run it should not have.
+		const never = new Promise<string>(() => {});
+		const dispose = createRoot((disposeRoot) => {
+			createEffect(() => {
+				runs += 1;
+				void cache.load(
+					"artifacts:/repo:wf-1",
+					async () => {
+						calls += 1;
+						return calls === 1 ? "value" : never;
+					},
+					{ refresh: true },
+				);
+			});
+			return disposeRoot;
+		});
+		await new Promise((resolve) => setTimeout(resolve, 25));
+		dispose();
+		expect(runs).toBe(1);
+		expect(calls).toBe(1);
+	});
+
+	test("the reactive accessor still publishes a loaded value", async () => {
+		const cache = new DataCache();
+		const seen: Array<string | undefined> = [];
+		const dispose = createRoot((disposeRoot) => {
+			createEffect(() => {
+				seen.push(cache.read<string>("dashboard:/repo:wf-1")?.value);
+			});
+			return disposeRoot;
+		});
+		await cache.load("dashboard:/repo:wf-1", async () => "loaded");
+		await new Promise((resolve) => setTimeout(resolve, 25));
+		dispose();
+		expect(seen).toEqual([undefined, "loaded"]);
 	});
 });

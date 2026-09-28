@@ -821,6 +821,9 @@ describe("Luvus adapter request shape and outcomes", () => {
 			]);
 			expect(byMethod("workspace.focus")).toEqual([
 				{ workspace_id: "workspace_abc" },
+				// tabCreate focuses the target first: a Luvus tab lands in the session's
+				// active workspace and `tab.new` honors neither workspace_id nor cwd.
+				{ workspace_id: "workspace_abc" },
 			]);
 			expect(byMethod("workspace.close")).toEqual([
 				{ workspace_id: "workspace_abc" },
@@ -929,6 +932,7 @@ describe("Luvus adapter request shape and outcomes", () => {
 	test("tabCreate fails loudly when the runtime returns no root pane", async () => {
 		const port = new LuvusMultiplexer({
 			request: async (method) => {
+				if (method === "workspace.get") return { ...workspaceRow };
 				if (method === "tab.new") return { type: "tab", tab: "1" };
 				if (method === "tab.get")
 					return { type: "tab", tab: "1", tab_id: "tab_1", panes: [] };
@@ -937,12 +941,41 @@ describe("Luvus adapter request shape and outcomes", () => {
 			sleep: () => Effect.void,
 		});
 		const outcome = await run(
-			Effect.either(port.tabCreate({ workspaceId: "w" })),
+			Effect.either(port.tabCreate({ workspaceId: "workspace_abc" })),
 		);
 		expect(Either.isLeft(outcome)).toBe(true);
 		if (Either.isLeft(outcome)) {
 			expect(outcome.left.kind).toBe("invalid-response");
 			expect(outcome.left.message).toContain("no root pane");
+		}
+	});
+
+	test("a tab that landed in another workspace fails loudly", async () => {
+		// The real failure mode behind this guard: a pane silently created in the
+		// developer's focused workspace instead of the workflow's worktree.
+		const port = new LuvusMultiplexer({
+			request: async (method) => {
+				if (method === "workspace.get") return { ...workspaceRow };
+				if (method === "tab.new") return { type: "tab", tab: "1" };
+				if (method === "tab.get")
+					return {
+						type: "tab",
+						tab: "1",
+						tab_id: "tab_1",
+						panes: ["1"],
+						workspace_id: "workspace_other",
+					};
+				return { type: "ok" };
+			},
+			sleep: () => Effect.void,
+		});
+		const outcome = await run(
+			Effect.either(port.tabCreate({ workspaceId: "workspace_abc" })),
+		);
+		expect(Either.isLeft(outcome)).toBe(true);
+		if (Either.isLeft(outcome)) {
+			expect(outcome.left.kind).toBe("invalid-response");
+			expect(outcome.left.message).toContain("workspace_other");
 		}
 	});
 
@@ -986,6 +1019,53 @@ describe("Luvus adapter request shape and outcomes", () => {
 			expect(outcome.left.kind).toBe("unavailable");
 			expect(outcome.left.message).toContain("requested base c1");
 		}
+	});
+
+	test("a worktree is created in the requested repository, addressed by workspace index", async () => {
+		// Luvus 0.14.2 honors only the numeric `workspace` index for worktree.*;
+		// `workspace_id` is ignored there and the worktree lands in whichever
+		// workspace is active. Its reply names the new workspace after the branch
+		// with separators collapsed (`feature/b` -> `feature-b`), so the created
+		// identity has to come from the reported path.
+		const calls: Array<{ method: string; params: Record<string, unknown> }> =
+			[];
+		let createdWorktree = false;
+		const port = new LuvusMultiplexer({
+			request: async (method, params) => {
+				calls.push({ method, params });
+				if (method === "workspace.list")
+					return {
+						workspaces: [
+							{ ...workspaceRow, cwd: "/repo" },
+							...(createdWorktree
+								? [
+										{
+											...workspaceRow,
+											workspace: "1",
+											workspace_id: "workspace_wt",
+											name: "feature-b",
+											cwd: "/wt",
+										},
+									]
+								: []),
+						],
+					};
+				if (method === "worktree.create") {
+					createdWorktree = true;
+					return { type: "ok", path: "/wt" };
+				}
+				return { type: "ok" };
+			},
+			sleep: () => Effect.void,
+		});
+		const created = await run(
+			port.worktreeCreate({ cwd: "/repo", branch: "feature/b", label: "wf" }),
+		);
+		expect(created.worktree).toBe("/wt");
+		expect(created.workspace.workspaceId).toBe("workspace_wt");
+		expect(
+			calls.find((call) => call.method === "worktree.create")?.params,
+		).toEqual({ workspace: "0", branch: "feature/b" });
 	});
 
 	test("a failed agent.get poll fails the launch instead of reporting success", async () => {
