@@ -65,7 +65,7 @@ export async function readProviderStatus(
 export async function readProjectStatus(
 	options: { baseUrl?: string; signal?: AbortSignal } = {},
 ): Promise<ProjectStatusSnapshot> {
-	const catalog = await loadProjectCatalog(options.signal);
+	const catalog = await loadProjectCatalog(options);
 	if (!catalog) throw new Error("project catalog read was superseded");
 	return { revision: catalog.revision, projects: catalog.projects };
 }

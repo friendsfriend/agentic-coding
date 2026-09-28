@@ -138,34 +138,30 @@ export function ChangePanel(props: ChangePanelProps) {
 					}}
 				</Show>
 				<Show when={skippedStages().length > 0}>
-					<>
-						<box flexDirection="column">
-							<box flexDirection="row">
-								<box width={7}>
-									<text fg={uiColors.warning}>GATES</text>
-								</box>
-								<text fg={uiColors.textSecondary}>
-									skipped by the classifier
-								</text>
+					<box flexDirection="column">
+						<box flexDirection="row">
+							<box width={7}>
+								<text fg={uiColors.warning}>GATES</text>
 							</box>
-							<For each={skippedStages()}>
-								{(stage) => (
-									<box flexDirection="row" overflow="hidden">
-										<text fg={uiColors.warning} wrapMode="none">
-											{stage.stage}
-										</text>
-										<text fg={uiColors.textSecondary} wrapMode="none">
-											{` \u2014 skipped (policy ${stage.policy}${
-												stage.noul === undefined
-													? ""
-													: `, necessity ${stage.noul}`
-											})`}
-										</text>
-									</box>
-								)}
-							</For>
+							<text fg={uiColors.textSecondary}>skipped by the classifier</text>
 						</box>
-					</>
+						<For each={skippedStages()}>
+							{(stage) => (
+								<box flexDirection="row" overflow="hidden">
+									<text fg={uiColors.warning} wrapMode="none">
+										{stage.stage}
+									</text>
+									<text fg={uiColors.textSecondary} wrapMode="none">
+										{` \u2014 skipped (policy ${stage.policy}${
+											stage.noul === undefined
+												? ""
+												: `, necessity ${stage.noul}`
+										})`}
+									</text>
+								</box>
+							)}
+						</For>
+					</box>
 				</Show>
 				<text fg={uiColors.textMuted}>REQUEST</text>
 				<box paddingLeft={1}>

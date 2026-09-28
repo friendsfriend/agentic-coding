@@ -23,6 +23,7 @@ import type {
 } from "../../contracts/workflow.ts";
 import {
 	fetchProjectCatalog,
+	type ProjectCatalogOptions,
 	type ProjectOption,
 } from "../../workflow/project-catalog.ts";
 import {
@@ -507,11 +508,14 @@ export async function saveWikiReview(
 
 /** The configured project catalog (settings and launch surfaces read it). */
 export async function loadProjectCatalog(
-	signal?: Signal,
+	options: ProjectCatalogOptions = {},
 ): Promise<Awaited<ReturnType<typeof fetchProjectCatalog>> | undefined> {
+	const key = options.baseUrl
+		? `projects:catalog:${options.baseUrl}`
+		: "projects:catalog";
 	return cache.load(
-		"projects:catalog",
-		(readSignal) => fetchProjectCatalog({ signal: readSignal }),
-		{ signal },
+		key,
+		(readSignal) => fetchProjectCatalog({ ...options, signal: readSignal }),
+		{ signal: options.signal },
 	);
 }
