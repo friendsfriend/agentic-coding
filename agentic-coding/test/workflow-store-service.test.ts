@@ -48,7 +48,61 @@ function auditCount(db: Database): number {
 	).count;
 }
 
+/** Journal-mode byte pair at the SQLite header offset: `0x02 0x02` is WAL, the
+ * mode the retired runtime left behind on every store it wrote. */
+function journalMode(file: string): string {
+	return fs.readFileSync(file).subarray(18, 20).toString("hex");
+}
+
 describe("workflow store service", () => {
+	test("a store left in WAL mode by the retired runtime opens and leaves WAL", () => {
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "store-wal-"));
+		try {
+			const repo = repository(path.join(tmp, "repo"));
+			run(
+				Effect.gen(function* () {
+					const store = yield* WorkflowStore;
+					yield* store.initialize(repo);
+				}),
+			);
+			const file = canonicalStorePath(repo);
+			// SQLite derives `-wal`/`-shm` from the filename it is given, so a WAL
+			// store cannot be reached through a file descriptor path at all: every
+			// open failed with `unable to open database file` until it left WAL.
+			const legacy = new Database(file);
+			legacy.exec("PRAGMA journal_mode=WAL");
+			legacy.close();
+			expect(journalMode(file)).toBe("0202");
+
+			// Observation cannot convert a store, so it diagnoses instead of passing
+			// SQLite's message through; the next write open leaves WAL.
+			const observed = Effect.runSyncExit(
+				Effect.gen(function* () {
+					const store = yield* WorkflowStore;
+					return yield* store.observed(repo);
+				}).pipe(Effect.provide(layer)),
+			);
+			expect(Exit.isFailure(observed)).toBe(true);
+			if (Exit.isFailure(observed)) {
+				const failure = Cause.failureOption(observed.cause);
+				expect(Option.isSome(failure) && failure.value.code).toBe(
+					"migration-required",
+				);
+			}
+
+			run(
+				Effect.gen(function* () {
+					const store = yield* WorkflowStore;
+					yield* store.initialize(repo);
+					expect((yield* store.observed(repo))?.version).toBeGreaterThan(0);
+				}),
+			);
+			expect(journalMode(file)).toBe("0101");
+		} finally {
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
 	test("transaction commits writes and releases the handle", () => {
 		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "store-commit-"));
 		try {

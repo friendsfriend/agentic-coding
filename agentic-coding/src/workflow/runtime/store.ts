@@ -179,6 +179,34 @@ const CURRENT_COLUMNS: Record<string, string[]> = {
 	],
 };
 
+/**
+ * Leaves WAL mode on a store the previous runtime wrote. SQLite derives its
+ * `-wal`/`-shm` paths from the filename it is handed, so a store opened through
+ * `/dev/fd/<n>` can never reach them and a WAL store fails every guarded open
+ * with SQLite's `unable to open database file`. One connection through the
+ * store's real path checkpoints it and pins it to MEMORY, the journal mode the
+ * guarded open needs because it runs no sidecar files at all. Read-only
+ * observation cannot convert a store, so it reports the store instead of
+ * passing SQLite's message through.
+ */
+function leaveLegacyWal(file: string, guard: number, readonly: boolean): void {
+	const header = Buffer.alloc(2);
+	if (fs.readSync(guard, header, 0, 2, 18) !== 2) return;
+	if (header[0] !== 0x02 || header[1] !== 0x02) return;
+	if (readonly)
+		throw new WorkflowRuntimeError(
+			"migration-required",
+			`workflow store ${JSON.stringify(file)} is still in WAL mode; it has to be opened for writing before it can be observed`,
+		);
+	const db = new Database(file, { create: true });
+	try {
+		db.exec("PRAGMA busy_timeout=10000");
+		db.exec("PRAGMA journal_mode=MEMORY");
+	} finally {
+		db.close();
+	}
+}
+
 function guardedDatabase(
 	repo: string,
 	file: string,
@@ -191,6 +219,7 @@ function guardedDatabase(
 	);
 	try {
 		const guardedStat = fs.fstatSync(guard);
+		leaveLegacyWal(file, guard, options.readonly === true);
 		// Keep SQLite on descriptor's stable inode. Hard-link aliases make SQLite
 		// race journal/shared-memory files on macOS (`SQLITE_IOERR_VNODE`).
 		const db = new Database(
