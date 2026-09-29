@@ -111,6 +111,29 @@ export const agentsListResponseSchema = Schema.Struct({
 	revision: Schema.optional(Schema.String),
 });
 
+/** Classifier status read: provider selection plus local-model state. */
+export type { ClassifierStatusResponse } from "./gateway.ts";
+
+export const classifierStatusResponseSchema = Schema.Struct({
+	provider: Schema.String,
+	providers: Schema.Array(
+		Schema.Struct({ id: Schema.String, label: Schema.String }),
+	),
+	local: Schema.Struct({
+		installed: Schema.Boolean,
+		running: Schema.Boolean,
+		modelPath: Schema.optional(Schema.String),
+		bytes: Schema.optional(Schema.Number),
+		binary: Schema.optional(Schema.String),
+		error: Schema.optional(Schema.String),
+		job: Schema.optional(Schema.Unknown),
+	}),
+});
+
+/** The classifier install/cancel requests carry no fields: acquisition is
+ * server-owned and idempotent, and the provider is never named in the body. */
+export const classifierRequestSchema = Schema.Struct({});
+
 /** Decoded request type for `workflowActionRequestSchema`. */
 export type WorkflowActionRequest = typeof workflowActionRequestSchema.Type;
 

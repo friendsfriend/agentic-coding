@@ -98,6 +98,18 @@ export const SETTINGS_INVENTORY: readonly SettingsInventoryEntry[] = [
 		items: ["agents.presets"],
 	},
 	{
+		id: "agents.classifier",
+		section: "agents",
+		label: "Classifier provider",
+		owner: "src/server/config.ts",
+		scope: "user",
+		storage: "[agents.classifier] in the layered workflow config",
+		secret: false,
+		effect: "next-start",
+		editable: true,
+		items: ["agents.classifier"],
+	},
+	{
 		id: "agents.routing",
 		section: "agents",
 		label: "Routing and definition defaults",

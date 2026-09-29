@@ -251,9 +251,25 @@ function applyPoolRouting(
 		answers?: unknown;
 		model?: unknown;
 		state?: unknown;
+		failOpen?: unknown;
+		reason?: unknown;
 	},
 	now: () => Date,
 ): RoutingDecisionSummary {
+	if (payload.failOpen === true) {
+		// A classifier outage is not a verdict: routing keeps the pool defaults
+		// already pinned in the snapshot, and the outage is recorded so a later
+		// reader can tell "the classifier chose these" from "the classifier was
+		// unreachable". The per-step fallback attention below names each step.
+		const reason =
+			typeof payload.reason === "string" && payload.reason.trim()
+				? payload.reason
+				: "unknown reason";
+		snapshot.attention = [
+			...(snapshot.attention ?? []),
+			`classifier routing failed open; kept the pool defaults: ${reason}`,
+		];
+	}
 	const phase = payload.phase === "apply" ? "apply" : "plan";
 	const answers: Record<string, ClassifierAnswer> =
 		payload.answers &&

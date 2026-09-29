@@ -21,6 +21,7 @@ import {
 	formValues,
 	GenericModal,
 	hostChromeLines,
+	type Keybind,
 	type KeybindSection,
 	LAYOUT_CHROME_LINES,
 	ScrollableList,
@@ -30,11 +31,28 @@ import {
 	useTerminalDimensions,
 } from "@ui";
 import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
+import type {
+	ClassifierProviderOption,
+	ClassifierStatusResponse,
+} from "../../contracts/gateway.ts";
+import {
+	CLASSIFIER_PROVIDER_SPECS,
+	classifierProviderSpec,
+	DEFAULT_CLASSIFIER_PROVIDER,
+	LAYA_LOCAL_PROVIDER,
+} from "../../workflow/classifier-providers.ts";
 import {
 	agentConfigEntry,
 	refreshAgentConfig,
 	reloadAgentConfigLocal,
 } from "../dash/agent-config-cache.ts";
+import {
+	cancelClassifierInstallJob,
+	clearClassifierError,
+	lastClassifierError,
+	refreshClassifierStatus,
+	startClassifierInstall,
+} from "../dash/classifier-status.ts";
 import {
 	type ConsoleIssue,
 	captureConsoleIssues,
@@ -110,9 +128,12 @@ export interface AgentPresetsViewProps {
 	items?: readonly SettingsItem[];
 	/** Activate an informational row (e.g. reset to user scope). */
 	onActivate?: (item: SettingsItem) => void;
+	/** Classifier provider selection plus local-model status, when a snapshot
+	 * has been read. The picker falls back to the built-in catalog. */
+	classifier?: ClassifierStatusResponse;
 }
 
-type View = "menu" | "list" | "form" | "pool-entry";
+type View = "menu" | "list" | "form" | "pool-entry" | "classifier";
 
 /** One row of the Agent Presets menu. */
 interface MenuEntry {
@@ -121,6 +142,8 @@ interface MenuEntry {
 	detail: string;
 	/** Set on the two navigation options. */
 	list?: AgentListKind;
+	/** Set on the classifier-provider navigation option. */
+	view?: View;
 	/** Present on informational rows. */
 	item?: SettingsItem;
 }
@@ -170,6 +193,31 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 		kind: AgentListKind;
 		name: string;
 	}>();
+	// Classifier provider picker + the user-decided local install. The view never
+	// downloads: it asks the server to install and renders the job it reads back.
+	const [providerIndex, setProviderIndex] = createSignal(0);
+	const [installPrompt, setInstallPrompt] = createSignal(false);
+	const [installStatus, setInstallStatus] = createSignal<
+		ClassifierStatusResponse | undefined
+	>(props.classifier);
+	// A cancel request that did not move the job out of an in-flight phase (an
+	// unreachable server): the dialog stops being a progress surface so Escape can
+	// still close it.
+	const [cancelFailed, setCancelFailed] = createSignal(false);
+	let installPoll: ReturnType<typeof setInterval> | undefined;
+
+	const stopInstallPolling = () => {
+		if (installPoll === undefined) return;
+		clearInterval(installPoll);
+		installPoll = undefined;
+	};
+	onCleanup(stopInstallPolling);
+	createEffect(() => {
+		// A fresh server snapshot (props) is authoritative until a local install
+		// read replaces it.
+		const incoming = props.classifier;
+		if (incoming) setInstallStatus(incoming);
+	});
 
 	const reload = () => {
 		setVersion((value) => value + 1);
@@ -324,6 +372,9 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 	const menuEntries = (): MenuEntry[] => {
 		const profiles = props.items?.find((item) => item.id === "agents.profiles");
 		const presets = props.items?.find((item) => item.id === "agents.presets");
+		const classifier = props.items?.find(
+			(item) => item.id === "agents.classifier",
+		);
 		const options: MenuEntry[] = [
 			{
 				id: "agents.profiles",
@@ -342,12 +393,22 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 				list: "presets",
 			},
 		];
+		// The classifier picker is only offered when the inventory surfaced its
+		// row, so the menu continues to mirror `props.items` exactly.
+		if (classifier)
+			options.push({
+				id: "agents.classifier",
+				label: classifier.label,
+				detail: `${providerLabel(activeProvider())} · local model ${localStatusLine()}`,
+				view: "classifier",
+			});
 		const info: MenuEntry[] = (props.items ?? [])
 			.filter(
 				(item) =>
 					item.editable &&
 					item.id !== "agents.profiles" &&
-					item.id !== "agents.presets",
+					item.id !== "agents.presets" &&
+					item.id !== "agents.classifier",
 			)
 			.map((item) => ({
 				id: item.id,
@@ -685,10 +746,15 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 	/** Apply an agent-config mutation through the typed client when a transport is
 	 * configured; the demo/test path applies it in-process. */
 	const commitAgents = (mutation: AgentsMutation, onDone: () => void): void => {
+		// The classifier path never opens the profile/preset editor, so it holds no
+		// editor revision; fall back to the revision the cached read captured so a
+		// concurrent edit is still detected instead of silently overwritten.
+		const expectedRevision =
+			editorRevision() ?? agentConfigEntry(props.repository).revision;
 		if (gatewayOrUndefined()) {
 			void saveAgentConfig({
 				repository: props.repository,
-				expectedRevision: editorRevision(),
+				expectedRevision,
 				mutation,
 			})
 				.then(() => refreshAgentConfig(props.repository))
@@ -702,9 +768,205 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 				});
 			return;
 		}
-		applyAgentsMutation(mutation, props.repository, editorRevision());
+		applyAgentsMutation(mutation, props.repository, expectedRevision);
 		reloadAgentConfigLocal(props.repository);
 		onDone();
+	};
+
+	// -- classifier provider picker + user-decided local install -------------
+
+	/** The offered providers: the server snapshot when one was read, otherwise
+	 * the built-in catalog. */
+	const classifierOptions = (): ClassifierProviderOption[] => {
+		const providers = props.classifier?.providers;
+		return providers && providers.length > 0
+			? [...providers]
+			: CLASSIFIER_PROVIDER_SPECS.filter((spec) => spec.selectable).map(
+					(spec) => ({ id: spec.id, label: spec.label }),
+				);
+	};
+	const providerLabel = (id: string): string =>
+		classifierOptions().find((option) => option.id === id)?.label ?? id;
+	const statusKnown = (): boolean => installStatus() !== undefined;
+	const activeProvider = (): string =>
+		installStatus()?.provider ??
+		props.classifier?.provider ??
+		DEFAULT_CLASSIFIER_PROVIDER;
+	const localStatus = () =>
+		installStatus()?.local ?? { installed: false, running: false };
+	const installPhase = (): string | undefined => localStatus().job?.phase;
+	const installInFlight = (): boolean => {
+		const phase = installPhase();
+		return phase === "acquiring" || phase === "starting";
+	};
+	const megabytes = (bytes: number): string => `${(bytes / 1e6).toFixed(1)} MB`;
+	/** Human copy for the current install job, or "" when there is nothing to
+	 * report (no job, or an untouched `idle`). Never surfaces the raw enum. */
+	const installPhaseCopy = (): string => {
+		const job = localStatus().job;
+		if (!job) return "";
+		const bytes = job.receivedBytes
+			? `${megabytes(job.receivedBytes)}${job.totalBytes ? ` / ${megabytes(job.totalBytes)}` : ""}`
+			: job.totalBytes
+				? megabytes(job.totalBytes)
+				: "";
+		switch (job.phase) {
+			case "acquiring":
+				return bytes ? `Downloading ${bytes}` : "Downloading…";
+			case "starting":
+				return "Starting the local model…";
+			case "ready":
+				return "Installed";
+			case "cancelled":
+				return "Install cancelled";
+			case "failed":
+				return job.detail ?? "Install failed";
+			default:
+				return "";
+		}
+	};
+	/** One-line, non-secret local-model state shared by the menu row, the picker
+	 * header and the modal. `running` and `installed (not running)` stay distinct:
+	 * a stopped sidecar silently fails open, so the degraded state must be
+	 * visible without running a workflow. */
+	const localStatusLine = (): string => {
+		if (!statusKnown()) return "checking…";
+		const local = localStatus();
+		if (local.running) return "running";
+		if (local.installed) return "installed (not running)";
+		if (installInFlight())
+			return installPhaseCopy().toLowerCase() || "installing…";
+		const phase = installPhase();
+		if (phase === "failed") return "install failed";
+		if (phase === "cancelled") return "install cancelled";
+		return "not installed";
+	};
+	/** Where the opt-in model is stored, shortened to the last path segments so a
+	 * long config root cannot crowd the dialog. */
+	const localInstallLocation = (): string => {
+		const modelPath = localStatus().modelPath;
+		if (!modelPath) return "the app configuration directory (classifier/laya)";
+		const parts = modelPath.split("/").filter(Boolean);
+		return parts.length > 3 ? `…/${parts.slice(-3).join("/")}` : modelPath;
+	};
+	/** One-line description of an offered provider, for its Settings row. */
+	const providerDetail = (id: string): string => {
+		const description = classifierProviderSpec(id)?.description ?? id;
+		return id === LAYA_LOCAL_PROVIDER
+			? `${description} · ${localStatusLine()}`
+			: description;
+	};
+
+	const persistProvider = (provider: string, done?: () => void): void => {
+		if (refuseOnConflict()) return;
+		try {
+			commitAgents({ kind: "set-classifier", classifier: { provider } }, () => {
+				reload();
+				notify(
+					`Classifier provider set to ${providerLabel(provider)}`,
+					"success",
+				);
+				done?.();
+			});
+		} catch (error) {
+			notify(error instanceof Error ? error.message : String(error), "error");
+		}
+	};
+
+	/** After a successful install the sidecar is serving; persist the provider
+	 * once the agents revision is re-read, so the post-install write is not
+	 * refused as stale against a pre-install revision. */
+	const persistLocalAfterInstall = (): void => {
+		void refreshAgentConfig(props.repository)
+			.catch(() => undefined)
+			.then(() => {
+				persistProvider(LAYA_LOCAL_PROVIDER, () => {
+					setInstallPrompt(false);
+					setView("menu");
+				});
+			});
+	};
+
+	/** Ask the server to acquire the local model; poll until it settles. */
+	const beginInstallPolling = (): void => {
+		stopInstallPolling();
+		installPoll = setInterval(() => {
+			void refreshClassifierStatus(props.repository).then((status) => {
+				if (!status) return;
+				setInstallStatus(status);
+				if (
+					status.local.job?.phase === "acquiring" ||
+					status.local.job?.phase === "starting"
+				)
+					return;
+				stopInstallPolling();
+				// A ready model is switched over; a failure keeps the old provider.
+				if (status.local.installed && status.local.running)
+					persistLocalAfterInstall();
+			});
+		}, 500);
+	};
+	const confirmInstall = async (): Promise<void> => {
+		clearClassifierError();
+		const status = await startClassifierInstall(props.repository);
+		setInstallStatus(status);
+		const failure = lastClassifierError();
+		if (failure) {
+			// The POST never reached the server: report it instead of looking like a
+			// no-op key press.
+			clearClassifierError();
+			notify(`Could not start the install: ${failure}`, "error");
+			return;
+		}
+		setCancelFailed(false);
+		beginInstallPolling();
+	};
+	const openInstallPrompt = (): void => {
+		setInstallPrompt(true);
+		setCancelFailed(false);
+		stopInstallPolling();
+		void refreshClassifierStatus(props.repository).then(setInstallStatus);
+	};
+	const cancelInstall = (): void => {
+		stopInstallPolling();
+		clearClassifierError();
+		void cancelClassifierInstallJob(props.repository).then((status) => {
+			setInstallStatus(status);
+			const failure = lastClassifierError();
+			const stillRunning =
+				status?.local.job?.phase === "acquiring" ||
+				status?.local.job?.phase === "starting";
+			if (failure || stillRunning) {
+				clearClassifierError();
+				setCancelFailed(true);
+				notify(
+					`Could not cancel the install${failure ? `: ${failure}` : ""}`,
+					"error",
+				);
+			}
+		});
+	};
+	const closeInstallPrompt = (): void => {
+		// Not now / Escape: do not persist the switch; keep the previous provider.
+		setInstallPrompt(false);
+		setCancelFailed(false);
+		stopInstallPolling();
+		void refreshClassifierStatus(props.repository).then(setInstallStatus);
+	};
+	const chooseProvider = (): void => {
+		const option = classifierOptions()[providerIndex()];
+		if (!option) return;
+		const choice = providerChoice(
+			option.id,
+			statusKnown() && localStatus().installed,
+		);
+		if (choice.action === "install") {
+			// Not installed: the modal decides. The switch is only persisted after a
+			// successful, verified install.
+			openInstallPrompt();
+			return;
+		}
+		persistProvider(option.id, () => setView("menu"));
 	};
 
 	const submit = () => {
@@ -811,6 +1073,36 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 	// global shortcuts (Ctrl+P, Ctrl+O/I, `q`, `T`, `?`) outside text entry.
 	const handler = (event: KeyEvent): boolean => {
 		const key = event.name.toLowerCase();
+		if (installPrompt()) {
+			// While acquiring, the modal is a progress surface: only cancel is
+			// accepted, and Escape is the universal cancel alias. Once a cancel has
+			// failed (unreachable server), Escape falls through to a plain close so
+			// the dialog can never become unclosable.
+			if (installInFlight() && !cancelFailed()) {
+				if (key === "c" || key === "escape") cancelInstall();
+				return true;
+			}
+			if (key === "escape" || key === "n") {
+				closeInstallPrompt();
+				return true;
+			}
+			if (localStatus().installed) {
+				// Ready state: Enter switches the provider, `i` must not re-run the
+				// acquisition the dialog's own copy used to imply.
+				if (key === "enter" || key === "return") {
+					persistProvider(LAYA_LOCAL_PROVIDER, () => {
+						setInstallPrompt(false);
+						setView("menu");
+					});
+				}
+				return true;
+			}
+			if (key === "i" || key === "enter" || key === "return") {
+				void confirmInstall();
+				return true;
+			}
+			return true;
+		}
 		if (pendingDelete()) {
 			if (key === "y" || key === "enter" || key === "return") {
 				confirmDelete();
@@ -821,6 +1113,33 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 				return true;
 			}
 			return false;
+		}
+		if (view() === "classifier") {
+			const options = classifierOptions();
+			if (key === "escape") {
+				setView("menu");
+				return true;
+			}
+			if (key === "j" || key === "down")
+				setProviderIndex((index) =>
+					Math.min(index + 1, Math.max(0, options.length - 1)),
+				);
+			else if (key === "k" || key === "up")
+				setProviderIndex((index) => Math.max(index - 1, 0));
+			else if (key === "i") {
+				// `i` is an install affordance only for an uninstalled local model;
+				// Enter already persists an installed one. Opening the install copy for
+				// an installed model produced a contradictory "ready" dialog.
+				if (
+					options[providerIndex()]?.id === LAYA_LOCAL_PROVIDER &&
+					statusKnown() &&
+					!localStatus().installed
+				)
+					openInstallPrompt();
+				else return false;
+			} else if (key === "enter" || key === "return") chooseProvider();
+			else return false;
+			return true;
 		}
 		if (view() === "menu") {
 			const entries = menuEntries();
@@ -845,6 +1164,20 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 							"No custom presets",
 							"Recreate them as model pools in Settings → Presets.",
 						);
+				} else if (entry?.view) {
+					setView(entry.view);
+					if (entry.view === "classifier") {
+						const options = classifierOptions();
+						setProviderIndex(
+							Math.max(
+								0,
+								options.findIndex((option) => option.id === activeProvider()),
+							),
+						);
+						void refreshClassifierStatus(props.repository).then(
+							setInstallStatus,
+						);
+					}
 				} else if (entry?.item) props.onActivate?.(entry.item);
 			} else return false;
 			return true;
@@ -1009,17 +1342,31 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 		return true;
 	};
 
-	// The active footer/`?` catalog follows the sub-view; the shell skips the
+	/** Which install-dialog state is showing: the footer and the modal's `?` help
+	 * are derived from this so they cannot drift from the handler. */
+	const installPromptState = (): InstallPromptState => {
+		if (installInFlight() && !cancelFailed()) return "cancel";
+		return localStatus().installed ? "ready" : "install";
+	};
+	const installPromptKeys = (): readonly Keybind[] =>
+		installPromptCatalog(installPromptState()).flatMap(
+			(section) => section.keybinds,
+		);
+
+	// The active footer/`?` catalog follows the sub-view (or the install prompt,
+	// whose keys the view's own catalog would mis-advertise); the shell skips the
 	// agents section so this is the one writer while it is mounted.
 	createEffect(() =>
 		setActiveKeybindCatalog(
-			catalogFor(
-				view(),
-				view() === "form" && field()?.kind === "action",
-				view() === "form" &&
-					field()?.kind === "action" &&
-					focusedPane() === "value",
-			),
+			installPrompt()
+				? installPromptCatalog(installPromptState())
+				: catalogFor(
+						view(),
+						view() === "form" && field()?.kind === "action",
+						view() === "form" &&
+							field()?.kind === "action" &&
+							focusedPane() === "value",
+					),
 		),
 	);
 
@@ -1121,6 +1468,89 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 						</box>
 					</GenericModal>
 				)}
+			</Show>
+			<Show when={installPrompt()}>
+				<GenericModal
+					title={
+						installInFlight() && !cancelFailed()
+							? "Installing local classifier"
+							: localStatus().installed
+								? "Local classifier ready"
+								: "Install local classifier?"
+					}
+					helpSections={installPromptCatalog(installPromptState())}
+					widthPercent={0.7}
+					heightPercent={0.8}
+					help={installPromptKeys()}
+				>
+					<box width="100%" flexDirection="column" gap={1}>
+						<text
+							fg={localStatus().error ? uiColors.warning : uiColors.textMuted}
+						>
+							Status: {installPhaseCopy() || localStatusLine()}
+						</text>
+						{localStatus().installed ? (
+							<text fg={uiColors.textPrimary}>
+								{localStatus().bytes
+									? `${megabytes(localStatus().bytes ?? 0)}, Apache-2.0. `
+									: "Apache-2.0. "}
+								Stored under {localInstallLocation()}.
+							</text>
+						) : (
+							<>
+								<text fg={uiColors.textPrimary}>
+									~324 MB, Apache-2.0. Stored under {localInstallLocation()}.
+								</text>
+								<text fg={uiColors.textPrimary}>
+									Inference is fully offline afterwards and needs no API key.
+								</text>
+							</>
+						)}
+						<Show when={!localStatus().installed && !installInFlight()}>
+							<text fg={uiColors.textMuted}>
+								"Not now" keeps the current provider in effect.
+							</text>
+						</Show>
+						<Show when={localStatus().installed}>
+							<text fg={uiColors.textMuted}>
+								Enter uses this provider; Esc closes.
+							</text>
+						</Show>
+					</box>
+				</GenericModal>
+			</Show>
+			<Show when={view() === "classifier"}>
+				<box
+					style={{
+						width: "100%",
+						flexGrow: 1,
+						minHeight: 0,
+						flexDirection: "column",
+					}}
+				>
+					<box style={{ width: "100%", paddingLeft: 1, paddingBottom: 1 }}>
+						<text fg={uiColors.textMuted}>Local model {localStatusLine()}</text>
+					</box>
+					<ScrollableList
+						items={classifierOptions()}
+						selectedIndex={providerIndex()}
+						availableLines={Math.max(1, contentLines() - 3)}
+						estimatedItemHeight={3}
+						showScrollIndicator={false}
+						renderItem={(option, selected) => (
+							<Card
+								height={3}
+								selected={selected()}
+								title={`${option.id === activeProvider() ? "(active) " : ""}${option.label}`}
+								cells={[
+									<text fg={uiColors.textMuted}>
+										{providerDetail(option.id)}
+									</text>,
+								]}
+							/>
+						)}
+					/>
+				</box>
 			</Show>
 			<Show when={view() === "menu"}>
 				<ScrollableList
@@ -1266,12 +1696,66 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 	);
 }
 
+/** What selecting a provider must do. A hosted provider (or an installed
+ * local one) is persisted; an uninstalled local provider may only open the
+ * install modal, because a switch without a model would be a broken endpoint.
+ * Pure and exported so the decision is testable without a terminal. */
+export function providerChoice(
+	providerId: string,
+	installed: boolean,
+): { action: "persist" | "install" } {
+	return providerId === LAYA_LOCAL_PROVIDER && !installed
+		? { action: "install" }
+		: { action: "persist" };
+}
+
+/** Which state the install dialog is in. The modal help and the shell footer
+ * are both derived from it, so the two can never advertise different keys. */
+export type InstallPromptState = "install" | "cancel" | "ready";
+
+/** Footer/`?` catalog for the install modal for one state. Exported so the modal
+ * and the active catalog cannot drift. */
+export function installPromptCatalog(
+	state: InstallPromptState = "install",
+): KeybindSection[] {
+	const keybinds: Keybind[] =
+		state === "cancel"
+			? [{ key: "c/Esc", action: "cancel install", short: "cancel" }]
+			: state === "ready"
+				? [
+						{ key: "Enter", action: "use this provider", short: "use" },
+						{
+							key: "Esc/n",
+							action: "close",
+							short: "close",
+							standard: true,
+						},
+					]
+				: [
+						{ key: "i/Enter", action: "install", short: "install" },
+						{ key: "Esc/n", action: "not now", short: "not now" },
+					];
+	return [{ title: "Local classifier", keybinds }];
+}
+
 /** Footer/`?` catalog for one sub-view. */
 export function catalogFor(
 	view: View,
 	poolFieldFocused = false,
 	poolListFocused = false,
 ): KeybindSection[] {
+	if (view === "classifier")
+		return [
+			{
+				title: "Classifier provider",
+				keybinds: [
+					{ key: "j/k or ↑/↓", action: "select provider", standard: true },
+					{ key: "i", action: "install local model", short: "install" },
+					{ key: "Enter", action: "use provider", short: "select" },
+					{ key: "Esc", action: "back", short: "back", standard: true },
+				],
+			},
+		];
 	if (view === "menu")
 		return [
 			{

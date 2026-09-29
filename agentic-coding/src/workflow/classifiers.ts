@@ -178,10 +178,12 @@ export function buildRoutingDecisionSummary(
 	};
 }
 
-/** The classifier model used by the routing integration. */
+/** The classifier model used by the routing integration. The endpoint and the
+ * transport are provider-owned (`classifier-providers.ts`); this module keeps
+ * only the model id the hosted provider is asked for and the profile it is read
+ * from. */
 export const ROUTING_CLASSIFIER_MODEL = "opencode/jev-1.13-free";
 export const ROUTING_CLASSIFIER_PROFILE = "jev-classifier";
-export const ROUTING_ENDPOINT = "https://opencode.ai/zen/v1/systemone";
 
 /** Rendering text for one routing question. The criteria are the pool entry
  * labels mapped to their (possibly structured) criteria. */

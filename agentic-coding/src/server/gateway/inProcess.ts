@@ -29,6 +29,7 @@ import type {
 } from "../../contracts/environment.ts";
 import type {
 	AgentsListResponse,
+	ClassifierStatusResponse,
 	DashboardGateway,
 	GatewayEventHandlers,
 } from "../../contracts/gateway.ts";
@@ -156,6 +157,28 @@ export function createInProcessGateway(
 
 		async loadAgents(repository?: string): Promise<AgentsListResponse> {
 			return operations.loadAgents(repository);
+		},
+
+		async classifierStatus(
+			repository?: string,
+		): Promise<ClassifierStatusResponse> {
+			return await operations.classifierStatus(repository);
+		},
+
+		async classifierInstall(
+			repository?: string,
+		): Promise<ClassifierStatusResponse> {
+			const value = await operations.installClassifier(repository);
+			publishWorkflow("classifier.install", "");
+			return value;
+		},
+
+		async classifierInstallCancel(
+			repository?: string,
+		): Promise<ClassifierStatusResponse> {
+			const value = await operations.cancelClassifierInstall(repository);
+			publishWorkflow("classifier.install.cancel", "");
+			return value;
 		},
 
 		// -- mutations: the operations own revision guards and re-reads --------

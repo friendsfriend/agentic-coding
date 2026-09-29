@@ -35,6 +35,7 @@ import {
 	parseAgentsConfig,
 	preflightProfile,
 	type RoutingPreset,
+	resolveClassifierProvider,
 	resolveGatePolicies,
 	resolvePreset,
 	resolveRouting,
@@ -407,6 +408,10 @@ function prepareFromContext(
 				// preset: a later edit to the config document must not change
 				// what an in-flight workflow is allowed to skip.
 				...{ gatePolicies: resolveGatePolicies(agents, request.preset) },
+				// Same pinning for the classifier transport: which endpoint serves
+				// this run is decided once, so a mid-run provider switch cannot
+				// redirect the requests.
+				...{ classifier: resolveClassifierProvider(agents) },
 				executionSettings: settings,
 			},
 			routing,

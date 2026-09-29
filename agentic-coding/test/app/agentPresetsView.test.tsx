@@ -7,7 +7,9 @@ import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
 import { activeKeybindCatalog, resetErrorModal } from "@ui";
 import { createSignal, onCleanup } from "solid-js";
+import type { ClassifierStatusResponse } from "../../src/contracts/gateway.ts";
 import { clearAgentConfigCache } from "../../src/tui/dash/agent-config-cache.ts";
+import { clearClassifierSnapshot } from "../../src/tui/dash/classifier-status.ts";
 import {
 	activeNotification,
 	resetNotifications,
@@ -18,7 +20,15 @@ import {
 	POOL_EDITOR_STEPS,
 } from "../../src/tui/settings/agentPresets.ts";
 import type { SettingsItem } from "../../src/tui/settings/items.ts";
-import { pressEscapeAndSettle, renderUntil } from "./support/terminal.ts";
+import {
+	LayaLocalClassifier,
+	setLayaLocalClassifier,
+} from "../../src/workflow/laya-local.ts";
+import {
+	advance,
+	pressEscapeAndSettle,
+	renderUntil,
+} from "./support/terminal.ts";
 
 // The inline Agent Presets surface (rework-model-profiles-and-presets). Rendered
 // checks: the menu, the list, `+` creating a blank form, validation errors,
@@ -34,6 +44,7 @@ beforeEach(() => {
 	resetErrorModal();
 	resetNotifications();
 	clearAgentConfigCache();
+	clearClassifierSnapshot();
 	configDir = mkdtempSync(join(tmpdir(), "agent-presets-view-"));
 	configFile = join(configDir, "config.json");
 	writeFileSync(configFile, "{}\n");
@@ -42,6 +53,8 @@ beforeEach(() => {
 
 afterEach(() => {
 	resetErrorModal();
+	setLayaLocalClassifier();
+	clearClassifierSnapshot();
 	if (previousEnv === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
 	else process.env.HERDR_WORKFLOW_CONFIG = previousEnv;
 	clearAgentConfigCache();
@@ -53,6 +66,7 @@ async function renderView(
 		items?: SettingsItem[];
 		onActivate?: (item: SettingsItem) => void;
 		onCtrlS?: () => void;
+		classifier?: ClassifierStatusResponse;
 	} = {},
 ) {
 	const { onCtrlS, ...viewOptions } = options;
@@ -936,5 +950,144 @@ test("the preset form renders one stage-gate select per stage and can change it"
 	const changed = t.captureCharFrame();
 	expect(changed).toContain("\u25cf always");
 	expect(changed).not.toContain("\u25cf inherit");
+	t.renderer.destroy();
+});
+
+// ---------------------------------------------------------------------------
+// Classifier provider install decision (introduce-local-model-support-for-
+// classification): the modal, not a pure predicate, decides whether the switch
+// is persisted.
+// ---------------------------------------------------------------------------
+
+/** A local classifier over fake deps: an install succeeds without a download. */
+function fakeLocalClassifier(installDir: string): LayaLocalClassifier {
+	return new LayaLocalClassifier({
+		paths: () => ({ installDir, cacheDir: installDir, backend: "native" }),
+		acquire: async () => ({
+			path: join(installDir, "model.onnx"),
+			bytes: 42,
+		}),
+		totalBytes: () => 324_125_608,
+		start: async () => ({
+			url: "http://127.0.0.1:4321",
+			stop: async () => {},
+		}),
+		isAlive: async () => true,
+	});
+}
+
+function classifierItem(): SettingsItem {
+	return {
+		id: "agents.classifier",
+		label: "Classifier provider",
+		value: "Hosted (usage-based)",
+		detail: "user configuration · next workflow start",
+		editable: true,
+		action: { kind: "none" },
+	};
+}
+
+const statusSnapshot: ClassifierStatusResponse = {
+	provider: "opencode-zen",
+	providers: [
+		{ id: "opencode-zen", label: "Hosted (usage-based)" },
+		{ id: "laya-local", label: "Offline, on this machine" },
+	],
+	local: { installed: false, running: false },
+};
+
+function storedProvider(): string | undefined {
+	return (
+		wroteConfig().agents as { classifier?: { provider?: string } } | undefined
+	)?.classifier?.provider;
+}
+
+async function openInstalledPrompt(
+	t: Awaited<ReturnType<typeof renderView>>,
+): Promise<void> {
+	await renderUntil(t, (frame) => frame.includes("Classifier provider"));
+	t.mockInput.pressKey("j");
+	t.mockInput.pressKey("j");
+	t.mockInput.pressEnter();
+	await renderUntil(t, (frame) => frame.includes("Offline, on this machine"));
+	t.mockInput.pressKey("j"); // move from opencode-zen to laya-local
+	t.mockInput.pressEnter();
+}
+
+test("Not now keeps the previous provider and install only persists when ready", async () => {
+	setLayaLocalClassifier(fakeLocalClassifier(configDir));
+	const t = await renderView({
+		items: [classifierItem()],
+		classifier: statusSnapshot,
+	});
+	await renderUntil(t, (frame) => frame.includes("Classifier provider"));
+
+	// 1. Selecting an uninstalled local provider opens the modal without writing.
+	await openInstalledPrompt(t);
+	await renderUntil(t, (frame) => frame.includes("Install local classifier?"));
+	expect(storedProvider()).toBeUndefined();
+
+	// 2. "Not now" (Escape) leaves the previous provider in effect.
+	await pressEscapeAndSettle(t, (frame) => !frame.includes("Install local"));
+	expect(storedProvider()).toBeUndefined();
+
+	// 3. Install acquires, verifies and only then persists the switch.
+	await openInstalledPrompt(t);
+	await renderUntil(t, (frame) => frame.includes("Install local classifier?"));
+	t.mockInput.pressKey("i");
+	await advance(t, 20, 60);
+	expect(storedProvider()).toBe("laya-local");
+	t.renderer.destroy();
+});
+
+test("Escape cancels an in-flight install without persisting the provider", async () => {
+	// An acquisition that only settles on abort keeps the job in `acquiring`, so
+	// the cancel path is genuinely exercised instead of racing a completed install.
+	const fake = new LayaLocalClassifier({
+		paths: () => ({
+			installDir: configDir,
+			cacheDir: configDir,
+			backend: "native",
+		}),
+		acquire: ({ signal, onPhase }) =>
+			new Promise((_, reject) => {
+				onPhase({ phase: "acquiring" });
+				signal.addEventListener(
+					"abort",
+					() => {
+						const error = new Error("aborted");
+						error.name = "AbortError";
+						reject(error);
+					},
+					{ once: true },
+				);
+			}),
+		totalBytes: () => 324_125_608,
+		start: async () => ({
+			url: "http://127.0.0.1:4321",
+			stop: async () => {},
+		}),
+		isAlive: async () => true,
+	});
+	setLayaLocalClassifier(fake);
+	const t = await renderView({
+		items: [classifierItem()],
+		classifier: statusSnapshot,
+	});
+	await openInstalledPrompt(t);
+	await renderUntil(t, (frame) => frame.includes("Install local classifier?"));
+	// Start the install, then cancel it from the progress modal.
+	t.mockInput.pressKey("i");
+	expect(await renderUntil(t, (frame) => frame.includes("c/Esc"))).toBe(true);
+	t.mockInput.pressKey("escape");
+	// Wait past the 500 ms poll so a no-op cancel would let the poll persist.
+	await advance(t, 20, 60);
+	expect(
+		await renderUntil(t, (frame) =>
+			frame.toLowerCase().includes("install cancelled"),
+		),
+	).toBe(true);
+	// Cancelling must not persist the provider switch.
+	expect(storedProvider()).toBeUndefined();
 	t.renderer.destroy();
 });

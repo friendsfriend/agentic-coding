@@ -108,6 +108,21 @@ function recordingOperations(calls: Calls): ServerOperations {
 		}),
 		agentQuestion: async () => "answer",
 		researchHandoff: async () => view,
+		classifierStatus: async () => ({
+			provider: "opencode-zen",
+			providers: [],
+			local: { installed: false, running: false },
+		}),
+		installClassifier: async () => ({
+			provider: "opencode-zen",
+			providers: [],
+			local: { installed: false, running: false },
+		}),
+		cancelClassifierInstall: async () => ({
+			provider: "opencode-zen",
+			providers: [],
+			local: { installed: false, running: false },
+		}),
 	};
 }
 

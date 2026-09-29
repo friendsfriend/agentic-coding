@@ -10,6 +10,8 @@ import {
 	type AgentsListResponse,
 	type AgentsMutationRequest,
 	agentsListResponseSchema,
+	type ClassifierStatusResponse,
+	classifierStatusResponseSchema,
 } from "../contracts/actions.ts";
 import type { CredentialRespondRequest } from "../contracts/credential.ts";
 import { ContractFailure, decodeContract } from "../contracts/decode.ts";
@@ -372,6 +374,49 @@ export class BackendClient implements DashboardGateway {
 			"core.agents-list",
 			agentsListResponseSchema,
 			await this.request("GET", `/api/v1/config/agents${query}`, undefined),
+		);
+	}
+
+	async classifierStatus(
+		repository?: string,
+	): Promise<ClassifierStatusResponse> {
+		const query = repository
+			? `?repository=${encodeURIComponent(repository)}`
+			: "";
+		return this.decode(
+			"core.classifier-status",
+			classifierStatusResponseSchema,
+			await this.request("GET", `/api/v1/classifier/status${query}`, undefined),
+		);
+	}
+
+	async classifierInstall(
+		repository?: string,
+	): Promise<ClassifierStatusResponse> {
+		const query = repository
+			? `?repository=${encodeURIComponent(repository)}`
+			: "";
+		return this.decode(
+			"core.classifier-status",
+			classifierStatusResponseSchema,
+			await this.request("POST", `/api/v1/classifier/install${query}`, {}),
+		);
+	}
+
+	async classifierInstallCancel(
+		repository?: string,
+	): Promise<ClassifierStatusResponse> {
+		const query = repository
+			? `?repository=${encodeURIComponent(repository)}`
+			: "";
+		return this.decode(
+			"core.classifier-status",
+			classifierStatusResponseSchema,
+			await this.request(
+				"POST",
+				`/api/v1/classifier/install/cancel${query}`,
+				{},
+			),
 		);
 	}
 

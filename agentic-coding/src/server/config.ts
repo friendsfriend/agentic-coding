@@ -9,6 +9,7 @@
 // of silently overwriting it; unrelated keys stay out of the digest, and the
 // mutation itself still preserves every field it does not edit.
 import { createHash } from "node:crypto";
+import { isClassifierProviderId } from "../workflow/classifier-providers.ts";
 import {
 	conflictingAgentsFiles,
 	loadConfigWithProvenance,
@@ -37,7 +38,14 @@ export type AgentsMutation =
 			readonly preset: PresetConfig;
 	  }
 	| { readonly kind: "delete-profile"; readonly name: string }
-	| { readonly kind: "delete-preset"; readonly name: string };
+	| { readonly kind: "delete-preset"; readonly name: string }
+	| {
+			readonly kind: "set-classifier";
+			readonly classifier: {
+				readonly provider: string;
+				readonly options?: Record<string, unknown>;
+			};
+	  };
 
 /** Stable JSON of the effective agents section: object keys are ordered so the
  * digest depends on the values, not on key insertion order. */
@@ -123,6 +131,37 @@ export function applyAgentsMutation(
 			case "delete-preset": {
 				if (section.presets && typeof section.presets === "object")
 					delete (section.presets as Record<string, unknown>)[mutation.name];
+				return;
+			}
+			case "set-classifier": {
+				if (!isClassifierProviderId(mutation.classifier.provider))
+					throw new Error(
+						`unknown classifier provider: ${mutation.classifier.provider}`,
+					);
+				const options = mutation.classifier.options;
+				if (
+					options !== undefined &&
+					(!options || typeof options !== "object" || Array.isArray(options))
+				)
+					// Refused before `saveAgentsSection` runs: one malformed write would
+					// otherwise make the whole `[agents]` section permanently unloadable.
+					throw new Error("agents.classifier.options must be a table");
+				// Merge instead of replace: a provider switch must not silently drop a
+				// hand-tuned `options` table (or any unknown key) from the layered
+				// config, exactly as every other agents mutation preserves its siblings.
+				const existing =
+					section.classifier &&
+					typeof section.classifier === "object" &&
+					!Array.isArray(section.classifier)
+						? (section.classifier as Record<string, unknown>)
+						: {};
+				section.classifier = {
+					...existing,
+					provider: mutation.classifier.provider,
+					...(mutation.classifier.options !== undefined
+						? { options: mutation.classifier.options }
+						: {}),
+				};
 				return;
 			}
 		}

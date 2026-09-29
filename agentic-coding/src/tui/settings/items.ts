@@ -6,6 +6,8 @@
 // Every item states its effective value and the source/scope line it came from;
 // an item that cannot be edited here is marked read-only and carries the
 // explanation from the inventory instead of pretending to accept an edit.
+
+import type { ClassifierStatusResponse } from "../../contracts/gateway.ts";
 import {
 	type Route,
 	type SettingsSection,
@@ -97,6 +99,9 @@ export interface SettingsContext {
 	section: SettingsSection;
 	agents: AgentStatus;
 	providers: ProviderSnapshot;
+	/** Classifier provider selection and local-model status. Absent until the
+	 * first server read resolves; the item then states the built-in default. */
+	classifier?: ClassifierStatusResponse;
 }
 
 function detailFor(
@@ -216,6 +221,16 @@ function agentItems(context: SettingsContext): SettingsItem[] {
 		editable: true,
 		action: { kind: "none" },
 	});
+	// The classifier provider is edited in the same Agent Presets surface, so the
+	// item routes there rather than opening a second editor.
+	items.push({
+		id: "agents.classifier",
+		label: "Classifier provider",
+		value: classifierSelectionLabel(context.classifier),
+		detail: `${detailFor("user", "[agents.classifier]", "next-start")} · edit in Agent Presets`,
+		editable: true,
+		action: { kind: "none" },
+	});
 	for (const entry of agents.routing)
 		items.push({
 			id: `agents.routing.${entry.label}`,
@@ -226,6 +241,18 @@ function agentItems(context: SettingsContext): SettingsItem[] {
 			action: { kind: "none" },
 		});
 	return items;
+}
+
+/** The one-line classifier selection: the label of the selected provider, or
+ * the built-in hosted default before the first status read. */
+function classifierSelectionLabel(
+	classifier: ClassifierStatusResponse | undefined,
+): string {
+	if (!classifier) return "Hosted (usage-based)";
+	return (
+		classifier.providers.find((option) => option.id === classifier.provider)
+			?.label ?? classifier.provider
+	);
 }
 
 function providerItems(context: SettingsContext): SettingsItem[] {

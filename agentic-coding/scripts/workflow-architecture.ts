@@ -82,6 +82,7 @@ const DOMAIN_FILES = [
 	"workflow/embedded.generated.ts",
 	"workflow/definitions.ts", // re-export barrel over definitions/*
 	"workflow/classifiers.ts", // pure classifier integration catalog (categories + parsing; I/O lives in classifier-runner.ts)
+	"workflow/classifier-providers.ts", // pure classifier provider catalog (ids, labels, target contract; live providers + sidecar I/O live in classifier-runner.ts / laya-local.ts)
 	"workflow/sidebar.ts", // pure Herdr sidebar projection: views + supplied observations -> display tokens and input ranks
 	"workflow/notifications.ts", // pure developer-action notification projection + transition dedup
 	"workflow/run-projections.ts", // pure run projections shared by the dashboard, server operations and gateway
@@ -90,6 +91,7 @@ const RUNTIME_FILES = [
 	"workflow/effects.ts",
 	"workflow/effect-runner.ts",
 	"workflow/classifier-runner.ts", // bounded OpenSpec artifact collection + classifier model invocation
+	"workflow/laya-local.ts", // managed local classifier sidecar + opt-in model acquisition
 	"workflow/secure-fs.ts",
 	"workflow/paths.ts",
 	"workflow/assets.ts",
@@ -134,6 +136,7 @@ const ROOT_FILES = [
 	"server/events.ts",
 	"server/credentials.ts",
 	"server/handlers.ts",
+	"server/classifier.ts",
 	"server/lifecycle.ts",
 ];
 

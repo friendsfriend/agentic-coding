@@ -12,6 +12,7 @@
         "@opentui/solid": "0.5.12",
         "@ui": "workspace:*",
         "effect": "3.22.2",
+        "laya-system-one": "1.3.3",
         "marked": "^18.0.14",
         "solid-js": "^1.9.15",
       },
@@ -202,6 +203,46 @@
 
     "@standard-schema/spec": ["@standard-schema/spec@1.1.0", "", {}, "sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w=="],
 
+    "@sys-one/laya-model-chunk-00": ["@sys-one/laya-model-chunk-00@1.1.0", "", {}, "sha512-HZmxXPYxS7pJuzRskY11cCzUVNHxNiRTEpJ5UD+EV1OZdMTI1zDJZWuamr/k163TjyJw3ASA+LIOtcc7UKuqhg=="],
+
+    "@sys-one/laya-model-chunk-01": ["@sys-one/laya-model-chunk-01@1.1.0", "", {}, "sha512-hfW7i0Yz+A1D/xCpapLxRQnm1+tYQ7ZleNc9Xk6bT3lFYqfFPUpnciSIk2PgwwpBXFC2Q9swdadIvF+E2vCrfw=="],
+
+    "@sys-one/laya-model-chunk-02": ["@sys-one/laya-model-chunk-02@1.1.0", "", {}, "sha512-dvfL08GhQp2xyoMC3lOryVEWYTP/xwtzQuxeiYdYEfOccSj3bbl5+qGJgAMf5y5SaZhvsWo/4hB6oJH5V14Xlw=="],
+
+    "@sys-one/laya-model-chunk-03": ["@sys-one/laya-model-chunk-03@1.1.0", "", {}, "sha512-rxCAtc/XZ5w59Cuihp9m3E3yoXLgm2kFfSBaKzPyzGlcE9xySGn9QZZx1BpGaDiCSopr56JUTj3CbyMWKYfPOg=="],
+
+    "@sys-one/laya-model-chunk-04": ["@sys-one/laya-model-chunk-04@1.1.0", "", {}, "sha512-mrRaEvD2ThhZ6PZQjaLlMWjSa+8cWnxGBv4n0sSAQzuR9dUJ1EGw6vxn2vvMOwMET0F+qbQf68bMiZ3NEivtgQ=="],
+
+    "@sys-one/laya-model-chunk-05": ["@sys-one/laya-model-chunk-05@1.1.0", "", {}, "sha512-w66/Xt5ZL+dU7QFMr2Cw1YgUm9x58H6pQlKo4LL4V5c8LmEA98DQsDX6UD0EenhjURyMZHwwLv8Uqo1eZk4Dng=="],
+
+    "@sys-one/laya-model-chunk-06": ["@sys-one/laya-model-chunk-06@1.1.0", "", {}, "sha512-OfjBXoVNpH6AVM8bFCTHk30G112Od2aJZ6WWkJuGFbbN1BbZgr23oPsaLaX4KaNuZWSdH/BYeguvwvAR4hdOEA=="],
+
+    "@sys-one/laya-model-chunk-07": ["@sys-one/laya-model-chunk-07@1.1.0", "", {}, "sha512-gaIAfBOrhuVLYHV9hqml8XccPwn5IZ3guuhLAXb/YyIApFjD4p1bRO4l1a/8ifuIBnIJKy4OFMGzxFr0Ah6+4Q=="],
+
+    "@sys-one/laya-model-chunk-08": ["@sys-one/laya-model-chunk-08@1.1.0", "", {}, "sha512-qwcWnBfAt9k9xIOxjxaHseDTmZNOnsvj4LGHZRoQHrwkKElbhAnxDWoTu8SX3ZfgM5QZSDTGDumQOPyxosQvcQ=="],
+
+    "@sys-one/laya-model-chunk-09": ["@sys-one/laya-model-chunk-09@1.1.0", "", {}, "sha512-YW2xMSmLQGGMTOFy5KON8+k/8KBWKF2iYK6mtZkw7gQv5jbZGfjHeO1c/llD02ANQuCkLeCiH8SwsxlqMkFzoA=="],
+
+    "@sys-one/laya-model-chunk-10": ["@sys-one/laya-model-chunk-10@1.1.0", "", {}, "sha512-TEYF64MARvwq43Kuh9WrWwx/O3TQAekCtjTiF7kV8ZoXXtvXIkoCIrHoVS9ZYUa7uhZwx88NlCFCVDDS1B3Z4g=="],
+
+    "@sys-one/laya-model-chunk-11": ["@sys-one/laya-model-chunk-11@1.1.0", "", {}, "sha512-7tkptkJRg+/goqLM3RUkEPvPLwjQYyRCkEAHxGJ7nky2UlhRn88j0op8cBYBDXv2fypv/MH/Am8txzM9YdG8ow=="],
+
+    "@sys-one/laya-model-chunk-12": ["@sys-one/laya-model-chunk-12@1.1.0", "", {}, "sha512-fN9Usy5mUIE8ffBy1A+JodewMMXcidzcSSIAncG4dE4ARF7Hlk2Y1q9Iura+RHFM6VSAhVrrw12pVNU89+Tdgw=="],
+
+    "@sys-one/laya-serve-darwin-arm64": ["@sys-one/laya-serve-darwin-arm64@1.3.3", "", { "os": "darwin", "cpu": "arm64" }, "sha512-ghPuyiZqBZI8NW1+C1tJkjveBr/tRL1nnQ3/0G242jsA/tgjH7Lapy5z3YmyMWFHoPInAtszDUy1mCKYnqwopg=="],
+
+    "@sys-one/laya-serve-darwin-x64": ["@sys-one/laya-serve-darwin-x64@1.3.3", "", { "os": "darwin", "cpu": "x64" }, "sha512-dS7xymyZCe/gwxBIfW4HG0xlrq7i331CqSFvncyhKeJgF7bmpK32x/jeQadej9FwjQnFIemwxx+BvY5yjlxWDA=="],
+
+    "@sys-one/laya-serve-linux-arm64": ["@sys-one/laya-serve-linux-arm64@1.3.3", "", { "os": "linux", "cpu": "arm64" }, "sha512-tYThk9VQzLoZ/I28qz7laVJVWixCbILGRTOWOZ+oCWjIdNhNNi+htXKW4f6+9TP1sGWjgyTEnN8e/tgNpGvfBg=="],
+
+    "@sys-one/laya-serve-linux-x64": ["@sys-one/laya-serve-linux-x64@1.3.3", "", { "os": "linux", "cpu": "x64" }, "sha512-yH0Gu8N/zEy35WMffvWXNPM0D1tn345sS8S874yUd7tmY34bARqPG+NyDB0+uBsbW50vU1sojcu8KbUULoKpQA=="],
+
+    "@sys-one/laya-serve-universal": ["@sys-one/laya-serve-universal@1.3.3", "", { "os": "!android", "cpu": [ "arm", "ia32", "mips", "ppc64", "s390x", ] }, "sha512-1IPUzm9UKJg08gg1mEEEwY4k3xsNnwrWeAj74KtG411PkI7iTyCt0S4LgXEWT/kDEoW+5W5ZNZYPuDdYqb0XgQ=="],
+
+    "@sys-one/laya-serve-win32-arm64": ["@sys-one/laya-serve-win32-arm64@1.3.3", "", { "os": "win32", "cpu": "arm64" }, "sha512-xJrzquwzewfpQBeCj2RlX/oXNmOnsSyhkyDDclel/5lSngUNSFDv+goLHX7/fkYw/oKQmCijrzGh1TLeiiRn0A=="],
+
+    "@sys-one/laya-serve-win32-x64": ["@sys-one/laya-serve-win32-x64@1.3.3", "", { "os": "win32", "cpu": "x64" }, "sha512-RNTwqda/6/MinazKAgbo6dtioWxIeHuQ5D3M9+9dE6ptudAs69LTeaRYgcKcPYdf0A8cF3TrRW27djst67x2pA=="],
+
     "@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
 
     "@types/node": ["@types/node@26.6.2", "", { "dependencies": { "undici-types": "~8.9.0" } }, "sha512-X1P21scMv4zGKLYqjdGjaKa7COa0RKVYYZZN/NfvLQ1JegxFhdhpZG/Lyn8AXx6CDUavKAd11v6BvfpkDByK8g=="],
@@ -331,6 +372,8 @@
     "jsesc": ["jsesc@3.1.0", "", { "bin": { "jsesc": "bin/jsesc" } }, "sha512-/sM3dO2FOzXjKQhJuo0Q173wf2KOo8t4I8vHy6lF9poUp7bKT0/NHE8fPX23PwfhnykfqnC2xRxOnVw5XuGIaA=="],
 
     "json5": ["json5@2.2.3", "", { "bin": { "json5": "lib/cli.js" } }, "sha512-XmOWe7eyHYH14cLdVPoyg+GOH3rYX++KpzrylJwSW98t3Nk+U8XOl8FWKOgwtzdb8lXGf6zYwDUzeHMWfxasyg=="],
+
+    "laya-system-one": ["laya-system-one@1.3.3", "", { "optionalDependencies": { "@sys-one/laya-model-chunk-00": "1.1.0", "@sys-one/laya-model-chunk-01": "1.1.0", "@sys-one/laya-model-chunk-02": "1.1.0", "@sys-one/laya-model-chunk-03": "1.1.0", "@sys-one/laya-model-chunk-04": "1.1.0", "@sys-one/laya-model-chunk-05": "1.1.0", "@sys-one/laya-model-chunk-06": "1.1.0", "@sys-one/laya-model-chunk-07": "1.1.0", "@sys-one/laya-model-chunk-08": "1.1.0", "@sys-one/laya-model-chunk-09": "1.1.0", "@sys-one/laya-model-chunk-10": "1.1.0", "@sys-one/laya-model-chunk-11": "1.1.0", "@sys-one/laya-model-chunk-12": "1.1.0", "@sys-one/laya-serve-darwin-arm64": "1.3.3", "@sys-one/laya-serve-darwin-x64": "1.3.3", "@sys-one/laya-serve-linux-arm64": "1.3.3", "@sys-one/laya-serve-linux-x64": "1.3.3", "@sys-one/laya-serve-universal": "1.3.3", "@sys-one/laya-serve-win32-arm64": "1.3.3", "@sys-one/laya-serve-win32-x64": "1.3.3" }, "bin": { "laya-system-one": "bin/cli.js" } }, "sha512-3PcNuCsTtBPnjDvNq9wQ4KIfigvM+DRa0a9ObiUQlquWokgsDeO5sOPX70ptXfh58wOevKfND3RnIyqJlboxLg=="],
 
     "locate-path": ["locate-path@3.0.0", "", { "dependencies": { "p-locate": "^3.0.0", "path-exists": "^3.0.0" } }, "sha512-7AO748wWnIhNqAuaty2ZWHkQHRSNfPVIsPIfwEOWO22AmaoVrWavlOcMR5nzTLNYvp36X220/maaRsrec1G65A=="],
 

@@ -22,6 +22,9 @@ const PURE_HELPER_EXCEPTIONS = [
 	/\/workflow\/format\.ts$/,
 	/\/workflow\/definitions\.ts$/,
 	/\/workflow\/profiles\.ts$/,
+	// pure classifier provider catalog: ids + Settings labels, no I/O (the live
+	// providers and the sidecar lifecycle stay in the runtime half)
+	/\/workflow\/classifier-providers\.ts$/,
 	/\/workflow\/credentials\.ts$/,
 	/\/workflow\/steps\//,
 	/\/workflow\/wiki\.ts$/,

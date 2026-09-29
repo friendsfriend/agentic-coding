@@ -4,6 +4,7 @@ import {
 	agentQuestionRequestSchema,
 	agentResearchHandoffRequestSchema,
 	agentsMutationRequestSchema,
+	classifierRequestSchema,
 	reviewSaveRequestSchema,
 	workflowActionRequestSchema,
 	workflowExecuteRequestSchema,
@@ -139,6 +140,24 @@ export const ROUTE_OWNERSHIP: readonly RouteOwnership[] = [
 	{
 		method: "GET",
 		path: "/api/v1/config/agents",
+		owner: "bun",
+		domain: "workflow",
+	},
+	{
+		method: "GET",
+		path: "/api/v1/classifier/status",
+		owner: "bun",
+		domain: "workflow",
+	},
+	{
+		method: "POST",
+		path: "/api/v1/classifier/install",
+		owner: "bun",
+		domain: "workflow",
+	},
+	{
+		method: "POST",
+		path: "/api/v1/classifier/install/cancel",
 		owner: "bun",
 		domain: "workflow",
 	},
@@ -279,6 +298,16 @@ export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
 		path: "/api/v1/config/agents",
 		schemaId: "server.config.agents",
 		schema: agentsMutationRequestSchema,
+	},
+	{
+		path: "/api/v1/classifier/install",
+		schemaId: "server.classifier.install",
+		schema: classifierRequestSchema,
+	},
+	{
+		path: "/api/v1/classifier/install/cancel",
+		schemaId: "server.classifier.install.cancel",
+		schema: classifierRequestSchema,
 	},
 	{
 		path: "/api/v1/credentials/respond",

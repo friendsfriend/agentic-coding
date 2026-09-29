@@ -80,6 +80,21 @@ function stubOperations(scenario: Scenario): ServerOperations {
 		}),
 		agentQuestion: async () => "answer",
 		researchHandoff: async () => stubView,
+		classifierStatus: async () => ({
+			provider: "opencode-zen",
+			providers: [],
+			local: { installed: false, running: false },
+		}),
+		installClassifier: async () => ({
+			provider: "opencode-zen",
+			providers: [],
+			local: { installed: false, running: false },
+		}),
+		cancelClassifierInstall: async () => ({
+			provider: "opencode-zen",
+			providers: [],
+			local: { installed: false, running: false },
+		}),
 	};
 }
 
@@ -159,6 +174,20 @@ describe("gateway conformance", () => {
 		expect(http.observed).toEqual(inProcess.observed);
 		expect(http.agents.conflicts).toEqual(inProcess.agents.conflicts);
 		expect(http.agents.revision).toBe(inProcess.agents.revision);
+	});
+
+	test("the classifier status and install agree across adapters", async () => {
+		const { http, inProcess } = await bothAdapters(
+			{ applied: [] },
+			async (g) => ({
+				status: await g.classifierStatus("/repo"),
+				installed: await g.classifierInstall("/repo"),
+				cancelled: await g.classifierInstallCancel("/repo"),
+			}),
+		);
+		expect(http.status).toEqual(inProcess.status);
+		expect(http.installed).toEqual(inProcess.installed);
+		expect(http.cancelled).toEqual(inProcess.cancelled);
 	});
 
 	test("a mutation returns the committed view from both adapters", async () => {

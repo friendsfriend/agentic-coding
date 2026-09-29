@@ -19,6 +19,11 @@ export type {
 } from "./classifiers.ts";
 export { GATE_POLICIES, GATE_STAGES } from "./classifiers.ts";
 
+import {
+	classifierProviderIds,
+	DEFAULT_CLASSIFIER_PROVIDER,
+	isClassifierProviderId,
+} from "./classifier-providers.ts";
 import type {
 	ClassificationMode,
 	GatePolicy,
@@ -91,6 +96,19 @@ export interface AgentsConfig {
 	/** Global gate policies used by every preset that declares no entry for a
 	 * stage. Config-file only: the Settings editor writes the preset table. */
 	gates?: Record<string, GatePolicy>;
+	/** The selected classifier transport. Absent means the default hosted
+	 * provider, so a configuration that says nothing behaves exactly as today. */
+	classifier?: ClassifierConfig;
+}
+/** The classifier transport selection (`[agents.classifier]`). */
+export interface ClassifierConfig {
+	provider: string;
+	/** Provider-specific options; preserved verbatim, never validated here.
+	 * NOTE: options are not keyed by provider, so switching providers carries the
+	 * previous provider's table over. No provider reads `options` today; the
+	 * first one that does must either ignore unknown keys or the table should be
+	 * cleared on switch. */
+	options?: Record<string, unknown>;
 }
 /** A selected preset as passed into per-start routing resolution. */
 export interface RoutingPreset {
@@ -212,6 +230,15 @@ export function parseAgentsConfig(
 		...(input.gates
 			? { gates: validateGates(input.gates, "agents.gates", source) }
 			: {}),
+		...(input.classifier !== undefined
+			? {
+					classifier: validateClassifier(
+						input.classifier,
+						"agents.classifier",
+						source,
+					),
+				}
+			: {}),
 		...(input.role_routes
 			? {
 					role_routes: input.role_routes as Record<
@@ -279,6 +306,38 @@ function validateGates(
 		gates[stage] = policy as GatePolicy;
 	}
 	return gates;
+}
+
+/** Validate `[agents.classifier]`. The provider id must name a registered
+ * provider; an unknown one is a hard config break with the recovery list, in
+ * the same style as the stage-gate validation. Provider options are preserved
+ * verbatim: only the provider that understands them reads them. */
+function validateClassifier(
+	value: unknown,
+	where: string,
+	source?: string,
+): ClassifierConfig {
+	const location = source ? `${where} (${source})` : where;
+	if (!value || typeof value !== "object" || Array.isArray(value))
+		throw new Error(`${location} must be a table with a provider id`);
+	const table = value as Record<string, unknown>;
+	if (!isClassifierProviderId(table.provider))
+		throw new Error(
+			`${location}: unknown classifier provider ${JSON.stringify(table.provider)}; expected one of ${classifierProviderIds().join(", ")}`,
+		);
+	if (
+		table.options !== undefined &&
+		(!table.options ||
+			typeof table.options !== "object" ||
+			Array.isArray(table.options))
+	)
+		throw new Error(`${location}.options must be a table`);
+	return {
+		provider: table.provider,
+		...(table.options !== undefined
+			? { options: table.options as Record<string, unknown> }
+			: {}),
+	};
 }
 
 function validatePool(
@@ -528,6 +587,14 @@ export function resolveGatePolicies(
 			ownValue(agents.gates, stage) ??
 			"always";
 	return resolved;
+}
+
+/** The classifier provider a configuration selects. An absent
+ * `[agents.classifier]` keeps the default hosted provider, so a configuration
+ * that says nothing behaves exactly as before. Read once at start and pinned
+ * into the snapshot, so a mid-run edit cannot switch the endpoint. */
+export function resolveClassifierProvider(agents: AgentsConfig): string {
+	return agents.classifier?.provider ?? DEFAULT_CLASSIFIER_PROVIDER;
 }
 
 /** The ordered pool entries a preset declares for a step (empty if none). */
