@@ -18,6 +18,7 @@ Small ones:
   * Compaction hints
   * jev for file read questions (agent tool that allows asking questions about a file and jev answers them)
   * Use jev to block bash commands that should be blocked
+  * Research local jev alternatives so that I dont need a provider for jev
 
 Promps (jev):
 
