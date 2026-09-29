@@ -18,7 +18,7 @@ import {
 	meetsMinimumVersion,
 	parseWorktrunkVersion,
 } from "../src/worktree/cli.ts";
-import { WorktreeAdapter } from "../src/worktree/index.ts";
+import { validateWorktrunk, WorktreeAdapter } from "../src/worktree/index.ts";
 import { WorktreeError } from "../src/worktree/port.ts";
 import {
 	linkedWorktreePath,
@@ -349,6 +349,30 @@ describe("worktree failure classification", () => {
 		expect(meetsMinimumVersion([0, 80, 1], "0.80.0")).toBe(true);
 		expect(meetsMinimumVersion([1, 0, 0], "0.80.0")).toBe(true);
 		expect(meetsMinimumVersion([0, 79, 9], "0.80.0")).toBe(false);
+	});
+
+	test("presence is re-checked on every run, not decided once", async () => {
+		// The adapter memoizes this effect, so an eager presence check would keep
+		// answering "worktrunk is missing" after it was installed (the failure
+		// that stranded a running shell on this machine).
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "worktrunk-check-"));
+		const bin = path.join(root, "fake wt");
+		try {
+			const validation = validateWorktrunk({ binPath: bin });
+			const missing = await run(Effect.either(validation));
+			expect(Either.isLeft(missing)).toBe(true);
+			if (Either.isLeft(missing)) {
+				expect(missing.left.kind).toBe("unavailable");
+				expect(missing.left.message).toContain("on PATH");
+			}
+			fs.writeFileSync(bin, `#!/bin/sh\necho wt v${MIN_WORKTRUNK_VERSION}\n`);
+			fs.chmodSync(bin, 0o755);
+			expect(await run(Effect.either(validation))).toEqual(
+				Either.right(undefined),
+			);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
 	});
 });
 

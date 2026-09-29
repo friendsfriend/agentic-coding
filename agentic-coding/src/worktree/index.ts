@@ -237,53 +237,60 @@ export class WorktreeAdapter implements WorktreePort {
 }
 
 /** Failing loudly beats a missing-binary stack trace: the worktrunk executable
- * is validated once (presence plus minimum version) before the first worktree
+ * is validated (presence plus minimum version) before every worktree
  * operation, with the missing prerequisite named. A replaced subprocess (the
  * test seam) skips the executable lookup, which would otherwise consult the
- * developer's PATH for a call that never spawns. */
+ * developer's PATH for a call that never spawns.
+ *
+ * The checks sit inside `Effect.suspend` because the adapter memoizes this
+ * effect: an eager check would replay the verdict of the first operation for
+ * the rest of the process, so installing worktrunk while the shell runs (or
+ * removing it) would not be seen until a restart. */
 export function validateWorktrunk(
 	options: WorktreeAdapterOptions = {},
 ): Effect.Effect<void, WorktreeError> {
 	const bin = options.binPath ?? worktrunkBin();
 	const runner = options.runner ?? runWorktreeCommand;
-	if (!options.runner && !Bun.which(bin))
-		return Effect.fail(
-			new WorktreeError(
-				"unavailable",
-				`worktree operations require '${bin}' on PATH or WORKTRUNK_BIN_PATH`,
+	return Effect.suspend(() => {
+		if (!options.runner && !Bun.which(bin))
+			return Effect.fail(
+				new WorktreeError(
+					"unavailable",
+					`worktree operations require '${bin}' on PATH or WORKTRUNK_BIN_PATH`,
+				),
+			);
+		return runner([bin, "--version"]).pipe(
+			Effect.flatMap((stdout) => {
+				const version = parseWorktrunkVersion(stdout);
+				if (!version)
+					return Effect.fail(
+						new WorktreeError(
+							"invalid-response",
+							`could not read the worktrunk version from '${stdout.trim()}'`,
+						),
+					);
+				if (!meetsMinimumVersion(version, MIN_WORKTRUNK_VERSION))
+					return Effect.fail(
+						new WorktreeError(
+							"unavailable",
+							`worktrunk ${version.join(".")} is older than the required ${MIN_WORKTRUNK_VERSION}`,
+						),
+					);
+				return Effect.void;
+			}),
+			Effect.catchIf(
+				(error) =>
+					error.kind === "unavailable" && !error.message.includes("older"),
+				(error) =>
+					Effect.fail(
+						new WorktreeError(
+							"unavailable",
+							`worktrunk '${bin}' could not be run: ${error.message}`,
+						),
+					),
 			),
 		);
-	return runner([bin, "--version"]).pipe(
-		Effect.flatMap((stdout) => {
-			const version = parseWorktrunkVersion(stdout);
-			if (!version)
-				return Effect.fail(
-					new WorktreeError(
-						"invalid-response",
-						`could not read the worktrunk version from '${stdout.trim()}'`,
-					),
-				);
-			if (!meetsMinimumVersion(version, MIN_WORKTRUNK_VERSION))
-				return Effect.fail(
-					new WorktreeError(
-						"unavailable",
-						`worktrunk ${version.join(".")} is older than the required ${MIN_WORKTRUNK_VERSION}`,
-					),
-				);
-			return Effect.void;
-		}),
-		Effect.catchIf(
-			(error) =>
-				error.kind === "unavailable" && !error.message.includes("older"),
-			(error) =>
-				Effect.fail(
-					new WorktreeError(
-						"unavailable",
-						`worktrunk '${bin}' could not be run: ${error.message}`,
-					),
-				),
-		),
-	);
+	});
 }
 
 export { classifyWorktreeFailure };
