@@ -51,6 +51,9 @@ export function detachedDrainEnvironment(
 	const safeKeys = [
 		"PATH",
 		"HOME",
+		// The workflow worktree root resolves from the managed runtime home; a
+		// drain that lost the exported value would place worktrees elsewhere.
+		"DEVENV_HOME",
 		"TMPDIR",
 		"TERM",
 		"LANG",

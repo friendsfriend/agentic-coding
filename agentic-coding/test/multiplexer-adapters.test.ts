@@ -1281,6 +1281,7 @@ describe("runtime selection and detached drain environment", () => {
 			LUVUS_SOCKET_PATH: "/tmp/luvus.sock",
 			LUVUS_HOME: "/home/u/.luvus",
 			HERDR_BIN_PATH: "/usr/bin/herdr",
+			DEVENV_HOME: "/home/u/devenv",
 			SECRET: "must-not-leak",
 		});
 		expect(env.AGENTIC_CODING_MULTIPLEXER).toBe("luvus");
@@ -1288,6 +1289,8 @@ describe("runtime selection and detached drain environment", () => {
 		expect(env.LUVUS_SOCKET_PATH).toBe("/tmp/luvus.sock");
 		expect(env.LUVUS_HOME).toBe("/home/u/.luvus");
 		expect(env.HERDR_BIN_PATH).toBe("/usr/bin/herdr");
+		// The workflow worktree root resolves from the managed runtime home.
+		expect(env.DEVENV_HOME).toBe("/home/u/devenv");
 		expect(env.SECRET).toBeUndefined();
 	});
 

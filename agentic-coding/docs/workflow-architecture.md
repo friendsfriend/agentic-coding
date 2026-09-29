@@ -63,7 +63,12 @@ worktree `git`/`wt` arguments itself:
 
 The shared layout (`<root>/<ident>/<ident>.<sanitized branch>`,
 `src/worktree/template.ts`) is the only place a worktree path is computed, and
-every port call disables worktrunk hooks, directory changes and prompts.
+every port call disables worktrunk hooks, directory changes and prompts. The
+workflow layer always passes an explicit location (`src/worktree/layout.ts`):
+its own root, `<DEVENV_HOME>/worktrees`, with the managed project's ident or a
+short-hashed ident for a custom path. It never relies on worktrunk's ambient
+`worktree-path` default, which has no `<root>/<ident>/` container to derive from
+for a repository outside the environment home.
 
 ### Store lifecycle
 

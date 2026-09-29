@@ -13,6 +13,7 @@ import {
 import { writeAgentRunEnv } from "../multiplexer/agent-env.ts";
 import type { MultiplexerError, MultiplexerPort } from "../multiplexer/port.ts";
 import { worktreePort } from "../worktree/index.ts";
+import { workflowWorktreeLocation } from "../worktree/layout.ts";
 import type { WorktreeError, WorktreePort } from "../worktree/port.ts";
 import type { AgentAdapter, LaunchContext } from "./adapters.ts";
 import { workflowAssets } from "./assets.ts";
@@ -1109,6 +1110,11 @@ export function agentEffectHandlers(
 								repo: snapshot.metadata.repository,
 								branch,
 								base: input.baseCommit ?? snapshot.metadata.baseCommit,
+								// The workflow layer's own root, never worktrunk's ambient default:
+								// a custom path has no `<root>/<ident>/` container to derive from.
+								location: workflowWorktreeLocation(
+									snapshot.metadata.repository,
+								),
 							}),
 						);
 						worktree = created.path;
