@@ -1,8 +1,6 @@
 Not for agents. This is only for humans.
 
 Fixes: 
-* Some verifiers dont show findings in the ui -> missing the verifier ui
-* Findings dont render markdown yet
 * Luvus:
     * Spawning a new tab always focuses it. Check if that can be disabled
     * Review modals flash the diff files (seems like it is reloading constantly)
@@ -17,6 +15,7 @@ Small ones:
 * (Maybe) Give all agents their own tab. Multitab spawning always has issues for some reason
 * Improve agent steering based on recent runs (observability first)
 * Jev based compaction?
+* Use jev to block bash commands that should be blocked
 
 Promps (jev):
 
