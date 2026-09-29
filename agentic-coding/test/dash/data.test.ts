@@ -275,6 +275,133 @@ test("loadDashboard detects the auto-spawned test verifier before its pane handl
 	expect(agent?.status).toBe("pending");
 });
 
+test("agents panel keeps the findings of a verifier a later round dropped", () => {
+	const repo = fixture();
+	const baseCommit = runGit(repo, "rev-parse", "HEAD");
+	const profile = {
+		name: "test",
+		runtime: "pi" as const,
+		executable: "sh",
+		tools: [],
+		extensions: [],
+		readOnly: false,
+		capabilities: ["prompt", "run-environment", "observe"] as const,
+		digest: "test",
+	};
+	const engine = new WorkflowEngine(registerBuiltins());
+	let view = engine.start({
+		repo,
+		workflowId: "verify-rounds",
+		definitionId: "no-openspec",
+		metadata: {
+			branch: runGit(repo, "branch", "--show-current"),
+			baseBranch: "main",
+			baseCommit,
+			task: "test",
+		},
+		routing: {
+			defaultProfile: "test",
+			routes: ["core.implementation", "core.triage", "core.verification"].map(
+				(stepId) => ({ stepId, profile }),
+			),
+		},
+	}).view;
+	// A round launches every selected verifier at once, so one claim collects
+	// the launch tokens of runs that complete later.
+	const tokens = new Map<string, string>();
+	const handoff = (role: string, payload: unknown) => {
+		const runView = view.runs.find(
+			(item) =>
+				item.role === role && ["pending", "working"].includes(item.status),
+		);
+		if (!runView) throw new Error(`expected ${role} run`);
+		for (const effect of engine.claimEffects(repo, 100)) {
+			const runId = (effect.payload as { runId?: string }).runId;
+			if (effect.runToken && runId) tokens.set(runId, effect.runToken);
+		}
+		const run = engine.getRun(repo, runView.id);
+		const token = tokens.get(run.id);
+		if (!token) throw new Error(`expected launch token for ${role}`);
+		if (!run.outputPath) throw new Error("expected run output path");
+		mkdirSync(dirname(run.outputPath), { recursive: true });
+		writeFileSync(
+			run.outputPath,
+			JSON.stringify({
+				runId: run.id,
+				schemaId: run.outputSchema?.id,
+				schemaVersion: run.outputSchema?.version,
+				payload,
+			}),
+		);
+		view = engine.dispatch(repo, {
+			type: "agent.handoff",
+			runId: run.id,
+			generation: run.generation,
+			token,
+			outcome: "complete",
+			artifact: run.outputPath,
+		}).view;
+	};
+	const finding = (id: string, severity: string) => ({
+		id,
+		severity,
+		detail: "detail",
+		path: "changed.ts",
+		line: 1,
+	});
+	// Round 1 runs two verifiers; the critical one sends the round back to fix.
+	writeFileSync(join(repo, "changed.ts"), "export const value = 2;\n");
+	handoff("worker", { changed: true });
+	handoff("triage", {
+		roles: [
+			{
+				role: "quality-verifier",
+				reason: "correctness",
+				files: ["changed.ts"],
+			},
+			{
+				role: "test-quality-verifier",
+				reason: "test adequacy",
+				files: ["changed.ts"],
+			},
+		],
+	});
+	handoff("quality-verifier", { findings: [finding("Q-1", "critical")] });
+	handoff("test-quality-verifier", { findings: [finding("TQ-1", "warning")] });
+	expect(view.currentStep.id).toBe("core.implementation");
+	// Round 2 re-selects only the role that reported the critical finding.
+	writeFileSync(join(repo, "changed.ts"), "export const value = 3;\n");
+	handoff("worker", { changed: true });
+	handoff("triage", {
+		roles: [
+			{
+				role: "quality-verifier",
+				reason: "correctness",
+				files: ["changed.ts"],
+			},
+		],
+	});
+	handoff("quality-verifier", { findings: [] });
+	handoff("test-verifier", { findings: [] });
+
+	const dashboard = loadDashboard(repo, "verify-rounds");
+	const dropped = dashboard.agents.find(
+		(item) => item.role === "test-quality-verifier",
+	);
+	expect(dropped?.status).toBe("completed");
+	expect(dropped?.findingCounts).toEqual({ critical: 0, warning: 1, info: 0 });
+	// The verdict badge comes from the same run as the counts.
+	expect(
+		dashboard.verifierTimeline.find(
+			(item) => item.role === "test-quality-verifier",
+		)?.status,
+	).toBe("PASS");
+	expect(
+		dashboard.agents.find((item) => item.role === "quality-verifier")
+			?.findingCounts,
+	).toEqual({ critical: 0, warning: 0, info: 0 });
+});
+
 test("dashboard agent status matches the label the agent tab renders", async () => {
 	const repo = fixture();
 	writeState(repo);
@@ -1392,7 +1519,7 @@ test("verifier finding counts preserve zero severities", () => {
 	});
 });
 
-test("verifier finding counts require a valid current-round committed result", () => {
+test("verifier finding counts require a valid committed result", () => {
 	const repo = fixture();
 	const outputPath = join(repo, "findings.json");
 	const output = JSON.stringify({
@@ -1425,6 +1552,67 @@ test("verifier finding counts require a valid current-round committed result", (
 		info: 0,
 	});
 	expect(verifierFindingCounts(state, "security-verifier")).toBeUndefined();
+});
+
+test("verifier finding counts read the role's latest run, not the newest round", () => {
+	// Each round selects a subset of the catalog, so a role the newest round
+	// did not re-select keeps a row in the agents list. Its counts come from
+	// that row's own run, not from a run in the newest round.
+	const repo = fixture();
+	const commit = (id: string, findings: unknown[]) => {
+		const outputPath = join(repo, `${id}.json`);
+		const output = JSON.stringify({
+			runId: id,
+			schemaId: "core.findings",
+			schemaVersion: 1,
+			payload: { findings },
+		});
+		writeFileSync(outputPath, output);
+		return {
+			outputPath,
+			outputDigest: createHash("sha256").update(output).digest("hex"),
+		};
+	};
+	const state = {
+		verificationRound: 2,
+		runs: [
+			{
+				id: "round-1-role",
+				stepId: "core.verification",
+				role: "test-quality-verifier",
+				attempt: 1,
+				status: "completed",
+				runtime: "test",
+				profile: "test",
+				...commit("round-1-role", [
+					{ id: "TQ-1", severity: "warning", detail: "weak assertion" },
+				]),
+			},
+			{
+				id: "round-2-role",
+				stepId: "core.verification",
+				role: "quality-verifier",
+				attempt: 2,
+				status: "completed",
+				runtime: "test",
+				profile: "test",
+				...commit("round-2-role", [
+					{ id: "Q-1", severity: "critical", detail: "wrong result" },
+				]),
+			},
+		],
+	} as WorkflowState;
+
+	expect(verifierFindingCounts(state, "test-quality-verifier")).toEqual({
+		critical: 0,
+		warning: 1,
+		info: 0,
+	});
+	expect(verifierFindingCounts(state, "quality-verifier")).toEqual({
+		critical: 1,
+		warning: 0,
+		info: 0,
+	});
 });
 
 test("demo dashboard includes representative verifier finding counts", () => {

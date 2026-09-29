@@ -743,19 +743,26 @@ function committedVerifierRun(
 		return undefined;
 	}
 }
+/** Latest `core.verification` run per verifier role, across every round.
+ *
+ * The Agents panel renders one row per role, so a role's verifier evidence —
+ * finding counts and verdict — must be read from the run that row represents:
+ * the role's newest verification run, whichever round it belongs to. Rounds
+ * select a subset of the catalog, so a verifier that a later round did not
+ * re-select has no run in that round at all; reading only the newest round
+ * dropped such a role's committed result and left a `completed` row with
+ * neither findings nor a verdict. */
+function latestVerifierRuns(state: WorkflowState) {
+	return latestRunsByRole(
+		state.runs.filter((run) => run.stepId === "core.verification"),
+	);
+}
 function committedVerifierOutput(state: WorkflowState, role: string) {
-	const run = state.runs
-		.filter(
-			(item) =>
-				item.stepId === "core.verification" &&
-				item.attempt === state.verificationRound &&
-				item.role === role,
-		)
-		.at(-1);
+	const run = latestVerifierRuns(state).get(role);
 	return run ? committedVerifierRun(run) : undefined;
 }
 
-/** Current-round committed finding counts for one verifier, when available. */
+/** Committed finding counts for one verifier's latest run, when available. */
 export function verifierFindingCounts(
 	state: WorkflowState,
 	role: string,
@@ -1367,68 +1374,68 @@ export function loadDashboard(repo: string, workflowId: string): DashboardData {
 	const latestRuns = latestRunsByRole(state.runs);
 
 	const telemetry = telemetryEvents(join(workflowRoot, "telemetry.jsonl"));
-	const verifierRuns = state.runs.filter(
-		(run) =>
-			run.stepId === "core.verification" &&
-			run.attempt === state.verificationRound,
-	);
-	const verifierTimeline = verifierRuns.map((run) => {
-		const role = run.role;
-		const committed =
-			run.status === "completed"
-				? committedVerifierOutput(state, role)
+	// One timeline entry per verifier role, from the same run the Agents row
+	// represents (see `latestVerifierRuns`): the row's verdict and its finding
+	// counts always describe one and the same verification run.
+	const verifierTimeline = [...latestVerifierRuns(state).values()].map(
+		(run) => {
+			const role = run.role;
+			const committed =
+				run.status === "completed"
+					? committedVerifierOutput(state, role)
+					: undefined;
+			const verdict =
+				run.status === "completed"
+					? !committed
+						? "EVIDENCE ERROR"
+						: committed.findings.some(
+									(finding) => finding.severity === "critical",
+								)
+							? "FAIL"
+							: "PASS"
+					: ["pending", "working"].includes(run.status)
+						? "RUN"
+						: ["failed", "blocked"].includes(run.status)
+							? "FAIL"
+							: "SKIPPED";
+			const roleEvents = telemetry.filter((event) => event.role === role);
+			const responseErrors = roleEvents.filter(
+				(event) =>
+					event.event === "provider_response" && Number(event.status) >= 400,
+			).length;
+			const started = state.verificationRoleStartedAt?.[role];
+			const ended = [...roleEvents]
+				.reverse()
+				.find((event) => event.event === "verifier_result")?.at;
+			const durationSeconds = started
+				? Math.max(
+						0,
+						Math.floor(
+							((ended ? Date.parse(String(ended)) : Date.now()) -
+								Date.parse(String(started))) /
+								1000,
+						),
+					)
 				: undefined;
-		const verdict =
-			run.status === "completed"
-				? !committed
-					? "EVIDENCE ERROR"
-					: committed.findings.some(
-								(finding) => finding.severity === "critical",
-							)
-						? "FAIL"
-						: "PASS"
-				: ["pending", "working"].includes(run.status)
-					? "RUN"
-					: ["failed", "blocked"].includes(run.status)
-						? "FAIL"
-						: "SKIPPED";
-		const roleEvents = telemetry.filter((event) => event.role === role);
-		const responseErrors = roleEvents.filter(
-			(event) =>
-				event.event === "provider_response" && Number(event.status) >= 400,
-		).length;
-		const started = state.verificationRoleStartedAt?.[role];
-		const ended = [...roleEvents]
-			.reverse()
-			.find((event) => event.event === "verifier_result")?.at;
-		const durationSeconds = started
-			? Math.max(
-					0,
-					Math.floor(
-						((ended ? Date.parse(String(ended)) : Date.now()) -
-							Date.parse(String(started))) /
-							1000,
-					),
-				)
-			: undefined;
-		return {
-			role,
-			status: verdict,
-			rawStatus: run.status,
-			...(!committed && run.status === "completed"
-				? {
-						diagnostic:
-							"Committed verifier artifact missing, unreadable, malformed, or digest-mismatched",
-					}
-				: {}),
-			durationSeconds,
-			model: state.verificationModels?.[role],
-			providerErrors: responseErrors,
-			fallback: roleEvents.some(
-				(event) => event.event === "provider_launch_fallback",
-			),
-		};
-	});
+			return {
+				role,
+				status: verdict,
+				rawStatus: run.status,
+				...(!committed && run.status === "completed"
+					? {
+							diagnostic:
+								"Committed verifier artifact missing, unreadable, malformed, or digest-mismatched",
+						}
+					: {}),
+				durationSeconds,
+				model: state.verificationModels?.[role],
+				providerErrors: responseErrors,
+				fallback: roleEvents.some(
+					(event) => event.event === "provider_launch_fallback",
+				),
+			};
+		},
+	);
 	const costByRole = new Map(
 		costSummary(telemetry).map((row) => [row.role, row]),
 	);

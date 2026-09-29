@@ -92,10 +92,22 @@ export async function loadDashboardSeed(
 	const currentVerifierRuns = verifierRuns.filter(
 		(run) => run.attempt === verificationRound,
 	);
+	// Latest run per role, selected by attempt (the same per-role projection the
+	// server observation applies; inlined because the data layer may not reach
+	// the workflow run projections).
 	const latest = new Map<string, (typeof view.runs)[number]>();
 	for (const run of view.runs) {
 		const existing = latest.get(run.role);
 		if (!existing || existing.attempt <= run.attempt) latest.set(run.role, run);
+	}
+	// One timeline entry per verifier role, from the same latest run the Agents
+	// row represents: a verifier a later round did not re-select keeps its
+	// verdict here exactly as the full observation reports it.
+	const latestVerifierRuns = new Map<string, (typeof view.runs)[number]>();
+	for (const run of verifierRuns) {
+		const existing = latestVerifierRuns.get(run.role);
+		if (!existing || existing.attempt <= run.attempt)
+			latestVerifierRuns.set(run.role, run);
 	}
 	const state = {
 		workflowId: view.workflowId,
@@ -133,25 +145,19 @@ export async function loadDashboardSeed(
 			),
 		),
 	};
-	const verifierTimeline = state.runs
-		.filter(
-			(run) =>
-				run.stepId === "core.verification" &&
-				run.attempt === state.verificationRound,
-		)
-		.map((run) => ({
-			role: run.role,
-			status:
-				run.status === "completed"
-					? "PASS"
-					: run.status === "working" || run.status === "pending"
-						? "RUN"
-						: "FAIL",
-			rawStatus: run.status,
-			model: run.model,
-			providerErrors: 0,
-			fallback: false,
-		}));
+	const verifierTimeline = [...latestVerifierRuns.values()].map((run) => ({
+		role: run.role,
+		status:
+			run.status === "completed"
+				? "PASS"
+				: run.status === "working" || run.status === "pending"
+					? "RUN"
+					: "FAIL",
+		rawStatus: run.status,
+		model: run.model,
+		providerErrors: 0,
+		fallback: false,
+	}));
 	const now = Date.now();
 	const createdAt = Date.parse(view.createdAt);
 	const updatedAt = Date.parse(view.updatedAt);
