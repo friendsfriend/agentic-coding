@@ -241,6 +241,15 @@ export interface WorkflowMetadata {
 	 * Absent on snapshots started before the gates existed; the mandatory
 	 * `always` default is the fallback for those. */
 	gatePolicies?: Record<string, string>;
+	/** The classifier provider id resolved once at start and pinned for the
+	 * run's lifetime, so a mid-run config edit cannot switch the endpoint. The
+	 * *model id* is not pinned: it continues to follow
+	 * `agents.profiles["jev-classifier"].model` for the hosted provider, while the
+	 * local provider always asks its sidecar for its own local model id. Absent
+	 * on snapshots started before local providers existed; the configuration is
+	 * consulted for those, and an unreadable value falls back to the default
+	 * hosted provider. */
+	classifier?: string;
 	/** Missing only on legacy snapshots; sensitive delivery effects must not guess. */
 	executionSettings?: WorkflowExecutionSettings;
 	executionSettingsPreview?: {

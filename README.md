@@ -10,7 +10,7 @@ Requires Bun, Git, Herdr, and at least one configured agent runtime:
 - stable OpenCode: `opencode`
 - official OpenCode V2 beta: `opencode2`
 
-Installer never installs agent runtimes, providers, or credentials. Configure Git credential helper or SSH agent before workflow start; dashboard never collects or persists passphrases.
+Installer never installs agent runtimes, providers, or credentials. Configure Git credential helper or SSH agent before workflow start; dashboard never collects or persists passphrases. The local classifier model is **opt-in**: no application code downloads or assembles it at install time or on first run. Selecting `laya-local` in Settings → Agents → Classifier provider opens an install dialog; only **Install** acquires the ~324 MB, Apache-2.0 model into `~/.config/agentic-coding/classifier/laya/`, after which inference is fully offline. **Not now** keeps the hosted `opencode-zen` provider. (The `laya-system-one` npm dependency ships the model as optional npm chunk packages; when they are present the opt-in install assembles them locally, and otherwise the server fetches them from the npm registry on request.)
 
 ```bash
 ./scripts/install.sh

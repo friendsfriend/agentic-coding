@@ -18,6 +18,7 @@ import type { WorktreeError, WorktreePort } from "../worktree/port.ts";
 import type { AgentAdapter, LaunchContext } from "./adapters.ts";
 import { workflowAssets } from "./assets.ts";
 import { renderAssignment } from "./assignment.ts";
+import { isClassifierProviderId } from "./classifier-providers.ts";
 import {
 	collectClassifierArtifacts,
 	collectGateClassifierState,
@@ -26,6 +27,7 @@ import {
 	invokeRoutingClassifier,
 	invokeTriageClassifier,
 	type RoutingClassifierTelemetryObserver,
+	resolveClassifierBinding,
 } from "./classifier-runner.ts";
 import {
 	APPLY_PHASE_STEPS,
@@ -50,7 +52,11 @@ import {
 	runGitWithCredentialsEffect,
 } from "./credentials.ts";
 import { loadConfig, loadConfigWithProvenance } from "./effects.ts";
-import { PermanentFailure, TransientFailure } from "./failures.ts";
+import {
+	ClassifierUnavailable,
+	PermanentFailure,
+	TransientFailure,
+} from "./failures.ts";
 import {
 	adapterTelemetryEnvelope,
 	redactTelemetryText,
@@ -1250,26 +1256,6 @@ export function agentEffectHandlers(
 							announceGateSkip(snapshot, effect),
 							signal,
 						);
-					const loaded = loadConfigWithProvenance({
-						repository: snapshot.metadata.repository || undefined,
-						repositoryIndependent: !snapshot.metadata.repository,
-					});
-					const agents = parseAgentsConfig(
-						loaded.config.agents,
-						loaded.config,
-						loaded.provenance.files.join(", ") || undefined,
-					);
-					const preset = snapshot.metadata.selectedPreset
-						? resolvePreset(agents, snapshot.metadata.selectedPreset)
-						: undefined;
-					const input = {
-						task: snapshot.metadata.task ?? "",
-						changeId: snapshot.metadata.changeId,
-						artifacts: collectClassifierArtifacts(
-							snapshot.metadata.worktree,
-							snapshot.metadata.changeId,
-						),
-					};
 					if (payload.integration !== ROUTING_INTEGRATION)
 						return yield* Effect.fail(
 							new PermanentFailure(
@@ -1277,24 +1263,50 @@ export function agentEffectHandlers(
 							),
 						);
 					const phase = payload.phase === "apply" ? "apply" : "plan";
-					const steps = phase === "plan" ? PLAN_PHASE_STEPS : APPLY_PHASE_STEPS;
-					const specs: RoutingQuestionSpec[] = steps
-						.filter((stepId) => definition.steps.includes(stepId))
-						.map((stepId) => ({
-							stepId,
-							mode:
-								options.registry.stepForDefinition(definition, stepId).behavior
-									?.classification ?? "single",
-							entries: poolEntries(preset, stepId),
-						}));
-					const result = yield* invokeRoutingClassifier(
-						specs,
-						agents,
-						input,
-						signal,
-						routingTelemetryObserver(snapshot, effect, phase),
-					);
-					return { integration: ROUTING_INTEGRATION, phase, ...result };
+					// A routing outage keeps each step's pool default rather than parking the
+					// run: the same fail-open contract triage and gates already have.
+					return yield* routingClassification(() => {
+						const loaded = loadConfigWithProvenance({
+							repository: snapshot.metadata.repository || undefined,
+							repositoryIndependent: !snapshot.metadata.repository,
+						});
+						const agents = parseAgentsConfig(
+							loaded.config.agents,
+							loaded.config,
+							loaded.provenance.files.join(", ") || undefined,
+						);
+						const preset = snapshot.metadata.selectedPreset
+							? resolvePreset(agents, snapshot.metadata.selectedPreset)
+							: undefined;
+						const steps =
+							phase === "plan" ? PLAN_PHASE_STEPS : APPLY_PHASE_STEPS;
+						const specs: RoutingQuestionSpec[] = steps
+							.filter((stepId) => definition.steps.includes(stepId))
+							.map((stepId) => ({
+								stepId,
+								mode:
+									options.registry.stepForDefinition(definition, stepId)
+										.behavior?.classification ?? "single",
+								entries: poolEntries(preset, stepId),
+							}));
+						return invokeRoutingClassifier(
+							specs,
+							resolveClassifierBinding(
+								agents,
+								pinnedClassifierProvider(snapshot),
+							),
+							{
+								task: snapshot.metadata.task ?? "",
+								changeId: snapshot.metadata.changeId,
+								artifacts: collectClassifierArtifacts(
+									snapshot.metadata.worktree,
+									snapshot.metadata.changeId,
+								),
+							},
+							signal,
+							routingTelemetryObserver(snapshot, effect, phase),
+						);
+					}, phase);
 				}),
 		},
 		"artifact.write": {
@@ -2169,7 +2181,7 @@ export function agentEffectHandlers(
 						!fs.existsSync(snapshot.metadata.worktree)
 					);
 				}),
-			execute: (effect, signal) =>
+			execute: (effect, _signal) =>
 				Effect.gen(function* () {
 					const snapshot = snapshotFor(effect);
 					if (
@@ -2592,7 +2604,9 @@ export const effectRunnerTest = {
 	commitAndPushWiki,
 	gateClassification,
 	legacyRunName,
+	pinnedClassifierProvider,
 	resolveLiveAgentAsync,
+	routingClassification,
 	triageClassification,
 	writeAgentEnvPointer,
 	renderedAssignment,
@@ -2637,6 +2651,67 @@ interface TriageClassification {
 	readonly gate?: GateClassification;
 }
 
+/** The outcome of one pool-routing pass. `failOpen` marks a classification the
+ * engine could not obtain: the empty answer map makes the reducer keep the pool
+ * defaults already pinned in the snapshot. */
+export interface RoutingClassification {
+	readonly integration: typeof ROUTING_INTEGRATION;
+	readonly phase: "plan" | "apply";
+	readonly answers?: Record<string, ClassifierAnswer>;
+	readonly failOpen?: true;
+	readonly reason?: string;
+	readonly model?: string;
+	readonly state?: string;
+}
+
+/** Classify one routing pass. Every failure mode — a missing credential, an
+ * unreachable endpoint, an unparsable body, a local sidecar whose model is not
+ * installed — resolves to a successful fail-open result, because a classifier
+ * outage must never block a workflow: the reducer then keeps each step's pool
+ * default. Ownership loss is re-thrown so the runner's cancellation path stays
+ * honest. */
+function routingClassification(
+	build: () => Effect.Effect<
+		{
+			model: string;
+			state: string;
+			answers: Record<string, ClassifierAnswer>;
+		},
+		Error
+	>,
+	phase: "plan" | "apply",
+): Effect.Effect<RoutingClassification, Error> {
+	return Effect.gen(function* () {
+		const classified = yield* Effect.either(
+			Effect.suspend(build).pipe(
+				Effect.catchAllDefect((defect) =>
+					Effect.fail(
+						defect instanceof Error ? defect : new Error(String(defect)),
+					),
+				),
+			),
+		);
+		if (Either.isLeft(classified)) {
+			if (isOwnershipError(classified.left))
+				return yield* Effect.fail(classified.left);
+			// Only a provider that is genuinely unavailable fails open (routing keeps
+			// each step's pool default). A hosted transport/status failure stays a
+			// real failure, so the durable outbox still retries it and the
+			// content-free error telemetry is still emitted.
+			if (!(classified.left instanceof ClassifierUnavailable))
+				return yield* Effect.fail(classified.left);
+			return {
+				integration: ROUTING_INTEGRATION,
+				phase,
+				answers: {},
+				failOpen: true,
+				reason: classified.left.message,
+			};
+		}
+		return { integration: ROUTING_INTEGRATION, phase, ...classified.right };
+	});
+}
+
 /** Classify which verifier roles this round needs, and — when the
  * verification gate is automatic — whether the round needs verifying at all.
  * Every failure mode — a missing credential, a provider error, an unparsable
@@ -2670,10 +2745,14 @@ function triageClassification(
 		const classified = yield* Effect.either(
 			Effect.gen(function* () {
 				const agents = loadClassifierAgents(snapshot);
+				const binding = resolveClassifierBinding(
+					agents,
+					pinnedClassifierProvider(snapshot),
+				);
 				const state = yield* p(() => collectTriageClassifierState(snapshot));
 				return yield* invokeTriageClassifier(
 					definitionId,
-					agents,
+					binding,
 					state,
 					signal,
 					automatic,
@@ -2812,12 +2891,23 @@ function gateClassification(
 			policy,
 			() => p(() => collectGateClassifierState(snapshot, resolved)),
 			(state) =>
-				invokeGateClassifier(
-					resolved,
-					loadClassifierAgents(snapshot),
-					state,
-					signal,
-				),
+				Effect.gen(function* () {
+					const binding = yield* Effect.try({
+						try: () =>
+							resolveClassifierBinding(
+								loadClassifierAgents(snapshot),
+								pinnedClassifierProvider(snapshot),
+							),
+						catch: (error) =>
+							error instanceof Error ? error : new Error(String(error)),
+					});
+					return yield* invokeGateClassifier(
+						resolved,
+						binding,
+						state as never,
+						signal,
+					);
+				}),
 			announceGateSkip,
 		);
 	});
@@ -2887,6 +2977,17 @@ function loadClassifierAgents(snapshot: WorkflowSnapshot) {
 const MANDATORY_GATE_POLICIES = Object.fromEntries(
 	GATE_STAGES.map((stage) => [stage, "always"]),
 ) as Record<GateStage, GatePolicy>;
+
+/** The classifier provider pinned at start, or undefined when the snapshot
+ * carries none or an unreadable value. A snapshot started before this change
+ * falls back to the configuration, and any failure there to the default
+ * hosted provider, so a corrupt value can never select an unknown endpoint. */
+export function pinnedClassifierProvider(
+	snapshot: WorkflowSnapshot,
+): string | undefined {
+	const pinned = snapshot.metadata.classifier;
+	return isClassifierProviderId(pinned) ? pinned : undefined;
+}
 
 function resolveSnapshotGatePolicies(
 	snapshot: WorkflowSnapshot,

@@ -22,6 +22,7 @@ import type {
 	workflowStartRequestSchema,
 } from "../contracts/actions.ts";
 import type { ObservationRequest } from "../contracts/environment.ts";
+import type { ClassifierStatusResponse } from "../contracts/gateway.ts";
 import type {
 	DeveloperReviewComment,
 	PlanReviewComment,
@@ -35,6 +36,12 @@ import {
 	engine as workflowEngineFactory,
 } from "../workflow/operations.ts";
 import { QUESTION_WAIT_MS } from "../workflow/runtime.ts";
+import {
+	cancelLocalClassifierInstall,
+	classifierStatus,
+	installLocalClassifier,
+	startSelectedLocalClassifier,
+} from "./classifier.ts";
 import {
 	type AgentsMutation,
 	applyAgentsMutation,
@@ -90,6 +97,11 @@ export interface ServerOperations {
 	handoff(request: AgentHandoffRequest): Promise<WorkflowView>;
 	saveAgents(request: AgentsMutationRequest): void;
 	loadAgents(repository?: string): ReturnType<typeof loadAgentConfig>;
+	classifierStatus(repository?: string): Promise<ClassifierStatusResponse>;
+	installClassifier(repository?: string): Promise<ClassifierStatusResponse>;
+	cancelClassifierInstall(
+		repository?: string,
+	): Promise<ClassifierStatusResponse>;
 	agentQuestion(
 		request: AgentQuestionRequest,
 		signal: AbortSignal,
@@ -222,12 +234,20 @@ export function saveAgents(request: AgentsMutationRequest): void {
 	const mutation = request.mutation as AgentsMutation | undefined;
 	if (
 		!mutation ||
-		!["set-profile", "set-preset", "delete-profile", "delete-preset"].includes(
-			mutation.kind,
-		)
+		![
+			"set-profile",
+			"set-preset",
+			"delete-profile",
+			"delete-preset",
+			"set-classifier",
+		].includes(mutation.kind)
 	)
 		throw new Error("unknown agents mutation");
 	applyAgentsMutation(mutation, request.repository, request.expectedRevision);
+	// Selecting the local provider starts its sidecar for an already-installed
+	// model. It never acquires: only an explicit install may download.
+	if (mutation.kind === "set-classifier")
+		startSelectedLocalClassifier(mutation.classifier.provider);
 }
 
 /** Read the effective agents config server-side (no view reads the file). */
@@ -301,6 +321,9 @@ export const serverOperations: ServerOperations = {
 	handoff,
 	saveAgents,
 	loadAgents,
+	classifierStatus,
+	installClassifier: installLocalClassifier,
+	cancelClassifierInstall: cancelLocalClassifierInstall,
 	agentQuestion,
 	researchHandoff,
 };

@@ -12,6 +12,7 @@ import {
 	publishInstanceToken,
 	removeInstanceToken,
 } from "./auth.ts";
+import { stopLocalClassifier } from "./classifier.ts";
 import { CredentialRegistry } from "./credentials.ts";
 import type { EnvironmentAuthority } from "./environment/private-api.ts";
 import { EventBroker } from "./events.ts";
@@ -163,6 +164,7 @@ export async function startWorkflowServer(
 			removeInstanceToken(tokenFile, authority.token);
 			await ownedReceivers?.stop();
 			ownedTelemetry?.close();
+			await stopLocalClassifier();
 			await listener.stop(true);
 		},
 	};

@@ -16,3 +16,12 @@ export class TransientFailure extends Error {
 export class PermanentFailure extends Error {
 	readonly name = "PermanentFailure";
 }
+/** The selected classifier provider cannot serve a request right now — an
+ * uninstalled/unstarted local sidecar or a failed local verification. This is
+ * the ONE classifier failure that fails open (routing keeps the pool default;
+ * triage and gates force-run), because a local-provider failure must never
+ * block a workflow. A hosted transport/status failure stays a
+ * `TransientFailure`/`PermanentFailure` so the durable outbox still retries it. */
+export class ClassifierUnavailable extends Error {
+	readonly name = "ClassifierUnavailable";
+}

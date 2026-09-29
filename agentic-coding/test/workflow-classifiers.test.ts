@@ -1,4 +1,11 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	describe,
+	expect,
+	test,
+} from "bun:test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -12,6 +19,7 @@ import {
 	type ResolvedProfile,
 	type WorkflowSnapshot,
 } from "../src/contracts/workflow.ts";
+import { OPENCODE_ZEN_PROVIDER } from "../src/workflow/classifier-providers.ts";
 import {
 	CLASSIFIER_ARTIFACT_CAP_BYTES,
 	CLASSIFIER_DIFF_CAP_BYTES,
@@ -67,6 +75,18 @@ import { STEP_BEHAVIORS, stepBehavior } from "../src/workflow/steps/index.ts";
 import { triageRolesFor } from "../src/workflow/steps/verification.ts";
 
 const temps: string[] = [];
+// The request-builder tests exercise the wire shape, not credential handling;
+// the missing-credential tests below set an explicit empty value on purpose.
+// The fallback is scoped to this file so no other test file inherits it.
+let previousOpencodeKey: string | undefined;
+beforeAll(() => {
+	previousOpencodeKey = process.env.OPENCODE_API_KEY;
+	process.env.OPENCODE_API_KEY ??= "test-key";
+});
+afterAll(() => {
+	if (previousOpencodeKey === undefined) delete process.env.OPENCODE_API_KEY;
+	else process.env.OPENCODE_API_KEY = previousOpencodeKey;
+});
 function tempDir(): string {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-classifier-"));
 	temps.push(dir);
@@ -430,9 +450,14 @@ describe("classifier runner (artifact collection + System One request)", () => {
 			mode: "single" as const,
 			entries: [{ label: "quick", profile: "base", default: true }],
 		}));
-		const request = routingRequest(specs, "opencode/jev-1.13-free", "state");
-		expect(request.url).toBe("https://opencode.ai/zen/v1/systemone");
-		expect(request.body.model).toBe("jev-1.13-free");
+		const request = routingRequest(
+			specs,
+			OPENCODE_ZEN_PROVIDER,
+			"opencode/jev-1.13-free",
+			"state",
+		);
+		expect(request.target.url).toBe("https://opencode.ai/zen/v1/systemone");
+		expect(request.target.model).toBe("jev-1.13-free");
 		// Exactly the apply-phase questions, one per step, in the phase order.
 		expect(Object.keys(request.body.questions)).toEqual([...APPLY_PHASE_STEPS]);
 		expect(choiceCriteria(request, "core.implementation")).toEqual({
@@ -454,6 +479,7 @@ describe("classifier runner (artifact collection + System One request)", () => {
 					],
 				},
 			],
+			OPENCODE_ZEN_PROVIDER,
 			"opencode/jev-1.13-free",
 			"state",
 		);
@@ -664,9 +690,14 @@ describe("noul answers and the per-role questions", () => {
 	});
 
 	test("builds one request of noul questions and consults no pool", () => {
-		const request = triageRequest("no-openspec", "opencode/jev-1.13-free", "s");
-		expect(request.url).toBe("https://opencode.ai/zen/v1/systemone");
-		expect(request.body.model).toBe("jev-1.13-free");
+		const request = triageRequest(
+			"no-openspec",
+			OPENCODE_ZEN_PROVIDER,
+			"opencode/jev-1.13-free",
+			"s",
+		);
+		expect(request.target.url).toBe("https://opencode.ai/zen/v1/systemone");
+		expect(request.target.model).toBe("jev-1.13-free");
 		expect(Object.keys(request.body.questions)).toEqual(
 			triageRoleQuestions("no-openspec").map((q) => q.questionId),
 		);
@@ -1160,6 +1191,85 @@ describe("applyClassifierRouting (reducer)", () => {
 					(decision) => decision.questionId === "core.verification",
 				)?.result.profiles,
 			).toEqual(["base"]);
+		} finally {
+			if (previous === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
+			else process.env.HERDR_WORKFLOW_CONFIG = previous;
+		}
+	});
+
+	test("a routing outage keeps the pool defaults and records attention", () => {
+		const repo = tempDir();
+		const configPath = writeAgentsConfig(repo);
+		const previous = process.env.HERDR_WORKFLOW_CONFIG;
+		process.env.HERDR_WORKFLOW_CONFIG = configPath;
+		try {
+			const registry = registerBuiltins();
+			const definition = registry.definition(
+				"openspec",
+				definitionVersionForBehaviorPins(6),
+			);
+			// Pinned routing carries a non-default profile for the step, so the
+			// assertion can tell "kept the pool default" from "kept what was pinned".
+			const snapshot = {
+				workflowId: "wf",
+				revision: 1,
+				currentStep: "core.route-apply",
+				definition: {
+					id: "openspec",
+					version: definition.version,
+					digest: definition.digest,
+				},
+				status: "active",
+				step: {
+					attempt: 1,
+					activeRunIds: [],
+					completedRunIds: [],
+					selectedRoles: [],
+					testRunStarted: false,
+					results: [],
+				},
+				metadata: {
+					repository: "",
+					worktree: repo,
+					changeId: "",
+					branch: "",
+					baseBranch: "",
+					baseCommit: "",
+					createdAt: "",
+					updatedAt: "",
+					stepEnteredAt: "",
+					selectedPreset: "auto",
+				},
+				routing: {
+					defaultProfile: "base",
+					routes: [
+						{
+							stepId: "core.implementation",
+							role: "worker",
+							profile: baseProfile("base"),
+						},
+					],
+				},
+				evidence: [],
+				loopCounts: {},
+				attention: [],
+				developerDialogue: [],
+			} as unknown as WorkflowSnapshot;
+			const summary = applyClassifierRouting(snapshot, definition, registry, {
+				integration: "routing",
+				phase: "apply",
+				answers: {},
+				failOpen: true,
+				reason: "classifier routing failed: laya-local is not running",
+			});
+			// The pool's tagged default is applied, not the earlier pin.
+			expect(
+				snapshot.routing.routes
+					.filter((route) => route.stepId === "core.implementation")
+					.map((route) => route.profile.name),
+			).toEqual(["strong"]);
+			expect(summary?.fallbackCount).toBeGreaterThan(0);
+			expect(snapshot.attention.join(" ")).toContain("failed open");
 		} finally {
 			if (previous === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
 			else process.env.HERDR_WORKFLOW_CONFIG = previous;
@@ -1876,11 +1986,17 @@ describe("stage gate protocol", () => {
 	test("the verification question travels inside the triage request", () => {
 		const gated = triageRequest(
 			"openspec",
+			OPENCODE_ZEN_PROVIDER,
 			"opencode/jev-1.13-free",
 			"s",
 			true,
 		);
-		const mandatory = triageRequest("openspec", "opencode/jev-1.13-free", "s");
+		const mandatory = triageRequest(
+			"openspec",
+			OPENCODE_ZEN_PROVIDER,
+			"opencode/jev-1.13-free",
+			"s",
+		);
 		expect(gated.body.questions.needs_verification).toEqual({
 			type: "noul",
 			instructions: GATE_QUESTIONS.verification,
@@ -1891,6 +2007,7 @@ describe("stage gate protocol", () => {
 	test("a gate request carries exactly one necessity question", () => {
 		const request = gateRequest(
 			"planApproval",
+			OPENCODE_ZEN_PROVIDER,
 			"opencode/jev-1.13-free",
 			"state",
 		);

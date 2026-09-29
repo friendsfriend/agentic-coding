@@ -4,7 +4,11 @@
 // with injected operations, so no filesystem/Git/Herdr work happens.
 
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Schema } from "effect";
+import type { ClassifierStatusResponse } from "../src/contracts/gateway.ts";
 import type { WorkflowView } from "../src/contracts/workflow.ts";
 import {
 	authorizeRequest,
@@ -23,6 +27,10 @@ import {
 	routeOwner,
 } from "../src/server/protocol.ts";
 import { run } from "../src/workflow/cli.ts";
+import {
+	LayaLocalClassifier,
+	setLayaLocalClassifier,
+} from "../src/workflow/laya-local.ts";
 
 /** A minimal but contract-shaped view: the client decodes every response, so a
  * fixture missing a required field is a real (and now detected) server bug. */
@@ -75,6 +83,21 @@ function stubOperations(
 		}),
 		agentQuestion: async () => "answer",
 		researchHandoff: async () => stubView,
+		classifierStatus: async () => ({
+			provider: "opencode-zen",
+			providers: [],
+			local: { installed: false, running: false },
+		}),
+		installClassifier: async () => ({
+			provider: "opencode-zen",
+			providers: [],
+			local: { installed: false, running: false },
+		}),
+		cancelClassifierInstall: async () => ({
+			provider: "opencode-zen",
+			providers: [],
+			local: { installed: false, running: false },
+		}),
 	};
 	return { ...base, ...overrides };
 }
@@ -596,6 +619,118 @@ describe("agent config mutations", () => {
 				},
 			}),
 		);
+	});
+});
+
+describe("classifier status and install", () => {
+	const stubStatus: ClassifierStatusResponse = {
+		provider: "laya-local",
+		providers: [{ id: "laya-local", label: "Offline, on this machine" }],
+		local: { installed: false, running: false },
+	};
+
+	test("forwards the repository-scoped status, install and cancel", async () => {
+		const calls: string[] = [];
+		const events: unknown[] = [];
+		await withServer(
+			async (server) => {
+				const subscription = server.app.events.open({}, (event) =>
+					events.push(event),
+				);
+				try {
+					const client = new BackendClient({
+						baseUrl: server.url,
+						token: server.token,
+						ownerId: "tui-1",
+					});
+					expect(await client.classifierStatus("/repo")).toEqual(stubStatus);
+					expect(await client.classifierInstall("/repo")).toEqual(stubStatus);
+					expect(await client.classifierInstallCancel("/repo")).toEqual(
+						stubStatus,
+					);
+				} finally {
+					subscription.unsubscribe();
+				}
+			},
+			stubOperations({
+				classifierStatus: async (repository) => {
+					calls.push(`status:${repository}`);
+					return stubStatus;
+				},
+				installClassifier: async (repository) => {
+					calls.push(`install:${repository}`);
+					return stubStatus;
+				},
+				cancelClassifierInstall: async (repository) => {
+					calls.push(`cancel:${repository}`);
+					return stubStatus;
+				},
+			}),
+		);
+		expect(calls).toEqual(["status:/repo", "install:/repo", "cancel:/repo"]);
+		expect(events).toContainEqual(
+			expect.objectContaining({ kind: "classifier.install" }),
+		);
+		expect(events).toContainEqual(
+			expect.objectContaining({ kind: "classifier.install.cancel" }),
+		);
+	});
+
+	test("the classifier routes require the instance token", async () => {
+		await withServer(async (server) => {
+			for (const [method, path] of [
+				["GET", "/api/v1/classifier/status"],
+				["POST", "/api/v1/classifier/install"],
+				["POST", "/api/v1/classifier/install/cancel"],
+			] as const) {
+				const response = await fetch(`${server.url}${path}`, { method });
+				expect(response.status).toBe(401);
+			}
+		});
+	});
+
+	test("a status response without providers is rejected at the client boundary", async () => {
+		await withServer(
+			async (server) => {
+				const client = new BackendClient({
+					baseUrl: server.url,
+					token: server.token,
+					ownerId: "tui-1",
+				});
+				await expect(client.classifierStatus()).rejects.toThrow();
+			},
+			stubOperations({
+				classifierStatus: async () =>
+					({ provider: "opencode-zen" }) as unknown as ClassifierStatusResponse,
+			}),
+		);
+	});
+
+	test("server shutdown stops the managed local sidecar", async () => {
+		let stops = 0;
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "classifier-shutdown-"));
+		const fake = new LayaLocalClassifier({
+			paths: () => ({ installDir: dir, cacheDir: dir, backend: "native" }),
+			acquire: async () => ({ path: path.join(dir, "model.onnx"), bytes: 1 }),
+			totalBytes: () => 1,
+			start: async () => ({
+				url: "http://127.0.0.1:4321",
+				stop: async () => {
+					stops += 1;
+				},
+			}),
+		});
+		setLayaLocalClassifier(fake);
+		try {
+			await fake.install();
+			await withServer(async (server) => {
+				await server.stop();
+			});
+			expect(stops).toBeGreaterThanOrEqual(1);
+		} finally {
+			setLayaLocalClassifier();
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
 

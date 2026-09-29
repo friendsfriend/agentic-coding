@@ -3,17 +3,23 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { WorkflowExecutionSettings } from "../src/contracts/workflow.ts";
+import type {
+	WorkflowExecutionSettings,
+	WorkflowSnapshot,
+} from "../src/contracts/workflow.ts";
+import { resolveClassifierBinding } from "../src/workflow/classifier-runner.ts";
 import {
 	definitionVersionForResearchTools,
 	definitionVersionForStageGates,
 } from "../src/workflow/definitions/manifest-policy.ts";
+import { effectRunnerTest } from "../src/workflow/effect-runner.ts";
 import {
 	executionSettings,
 	loadConfigWithProvenance,
 	saveAgentsSection,
 	settingsFingerprint,
 } from "../src/workflow/effects.ts";
+import { parseAgentsConfig } from "../src/workflow/profiles.ts";
 import { prepareWorkflowStart } from "../src/workflow/startup.ts";
 
 function repository(): string {
@@ -48,6 +54,69 @@ default_profile = "p"
 runtime = "pi"
 executable = "/bin/true"
 `;
+
+describe("classifier provider pinning", () => {
+	test("the selected provider is pinned at start and survives a config edit", () => {
+		const repo = repository();
+		const file = path.join(repo, "config.json");
+		const write = (provider: string) => {
+			fs.writeFileSync(
+				file,
+				`${JSON.stringify({
+					agents: {
+						default_profile: "p",
+						profiles: { p: { runtime: "pi", executable: "/bin/true" } },
+						classifier: { provider },
+					},
+				})}\n`,
+			);
+		};
+		const previous = process.env.HERDR_WORKFLOW_CONFIG;
+		process.env.HERDR_WORKFLOW_CONFIG = file;
+		try {
+			write("laya-local");
+			const started = prepareWorkflowStart({
+				repo,
+				workflowId: "pin-local",
+				definitionId: "wiki",
+				task: "pin the local classifier",
+				mode: "checkout",
+			});
+			expect(started.input.metadata.classifier).toBe("laya-local");
+			// A mid-run edit to the config must not switch the running workflow's
+			// endpoint. Resolve the binding the way the effect handler does — from the
+			// stored pin plus the *current* config — so this cannot pass by re-reading
+			// the materialized string.
+			write("opencode-zen");
+			const liveAgents = parseAgentsConfig(
+				(
+					JSON.parse(fs.readFileSync(file, "utf8")) as {
+						agents: unknown;
+					}
+				).agents,
+			);
+			const pinned = effectRunnerTest.pinnedClassifierProvider({
+				metadata: started.input.metadata,
+			} as unknown as WorkflowSnapshot);
+			expect(pinned).toBe("laya-local");
+			expect(resolveClassifierBinding(liveAgents, pinned).provider).toBe(
+				"laya-local",
+			);
+			const next = prepareWorkflowStart({
+				repo,
+				workflowId: "pin-hosted",
+				definitionId: "wiki",
+				task: "pin the hosted classifier",
+				mode: "checkout",
+			});
+			expect(next.input.metadata.classifier).toBe("opencode-zen");
+		} finally {
+			if (previous === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
+			else process.env.HERDR_WORKFLOW_CONFIG = previous;
+			fs.rmSync(repo, { recursive: true, force: true });
+		}
+	});
+});
 
 describe("shared workflow startup", () => {
 	test("normalizes repository-backed startup and pins config provenance", () => {

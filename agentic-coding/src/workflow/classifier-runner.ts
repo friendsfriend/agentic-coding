@@ -10,6 +10,16 @@ import path from "node:path";
 import { Effect } from "effect";
 import type { WorkflowSnapshot } from "../contracts/workflow.ts";
 import {
+	type ClassifierProvider,
+	type ClassifierTarget,
+	DEFAULT_CLASSIFIER_PROVIDER,
+	isClassifierProviderId,
+	LAYA_LOCAL_MODEL,
+	LAYA_LOCAL_PROVIDER,
+	OPENCODE_ZEN_PROVIDER,
+	ROUTING_ENDPOINT,
+} from "./classifier-providers.ts";
+import {
 	type ClassifierAnswer,
 	type ClassifierInput,
 	GATE_INTEGRATION,
@@ -19,7 +29,6 @@ import {
 	parseClassifierAnswer,
 	ROUTING_CLASSIFIER_MODEL,
 	ROUTING_CLASSIFIER_PROFILE,
-	ROUTING_ENDPOINT,
 	ROUTING_INTEGRATION,
 	type RoutingQuestionSpec,
 	routingQuestionInstructions,
@@ -27,7 +36,12 @@ import {
 	triageRoleQuestions,
 } from "./classifiers.ts";
 import { configEnvValue, postJsonEffect } from "./effects.ts";
-import { PermanentFailure, TransientFailure } from "./failures.ts";
+import {
+	ClassifierUnavailable,
+	PermanentFailure,
+	TransientFailure,
+} from "./failures.ts";
+import { type LayaLocalClassifier, layaLocalClassifier } from "./laya-local.ts";
 import type { AgentsConfig } from "./profiles.ts";
 import { changedFilesInAsync } from "./runtime/evidence.ts";
 
@@ -95,14 +109,17 @@ export type ClassifierQuestion =
 	| { readonly type: "noul"; readonly instructions: string };
 
 export interface ClassifierRequest {
-	readonly url: string;
+	/** The transport the request goes to: endpoint, headers, and the model id
+	 * the provider is asked for. */
+	readonly target: ClassifierTarget;
 	readonly body: {
-		readonly model: string;
 		readonly state: string;
 		readonly questions: Record<string, ClassifierQuestion>;
 	};
 }
 
+/** Strip the hosted `opencode/` prefix the System One endpoint expects to be
+ * absent, and reject an id that does not carry it. */
 function bareModel(integrationId: string, model: string): string {
 	const prefix = "opencode/";
 	if (!model.startsWith(prefix) || model.length === prefix.length)
@@ -112,10 +129,129 @@ function bareModel(integrationId: string, model: string): string {
 	return model.slice(prefix.length);
 }
 
+/** The live provider for one id. The hosted provider reads its credential
+ * lazily, so a missing key is reported when a request is built rather than at
+ * import time. */
+export function classifierProvider(id: string): ClassifierProvider {
+	const providers = classifierProviders();
+	// `Object.hasOwn`: an inherited prototype name (`constructor`, `toString`,
+	// `__proto__`) must fail as an unknown provider, never resolve to an
+	// `Object.prototype` member and throw an opaque TypeError later.
+	if (!Object.hasOwn(providers, id))
+		throw new PermanentFailure(`unknown classifier provider: ${id}`);
+	return providers[id];
+}
+
+/** The live provider registry. Adding a provider means one entry here plus one
+ * `classifier-providers.ts` spec; the effect handler never changes. */
+export function classifierProviders(): Record<string, ClassifierProvider> {
+	return {
+		[OPENCODE_ZEN_PROVIDER]: {
+			id: OPENCODE_ZEN_PROVIDER,
+			label: "Hosted (usage-based)",
+			resolve: ({ model }) => {
+				const apiKey = configEnvValue("OPENCODE_API_KEY")?.trim();
+				if (!apiKey)
+					throw new PermanentFailure(
+						`classifier ${OPENCODE_ZEN_PROVIDER} requires OPENCODE_API_KEY`,
+					);
+				return {
+					url: ROUTING_ENDPOINT,
+					headers: {
+						Authorization: `Bearer ${apiKey}`,
+						"Content-Type": "application/json",
+					},
+					model: bareModel(OPENCODE_ZEN_PROVIDER, model),
+				};
+			},
+		},
+		[LAYA_LOCAL_PROVIDER]: layaLocalProvider(),
+	};
+}
+
+/** The `laya-local` provider over the managed sidecar. Resolution reads the
+ * sidecar's bound loopback endpoint; `start` spins it up for an
+ * already-installed model, and `health` reports the non-secret state. */
+export function layaLocalProvider(
+	classifier: Pick<
+		LayaLocalClassifier,
+		"systemOneUrl" | "ensureStarted" | "stop" | "health"
+	> = layaLocalClassifier(),
+): ClassifierProvider {
+	return {
+		id: LAYA_LOCAL_PROVIDER,
+		label: "Offline, on this machine",
+		resolve: () => {
+			const url = classifier.systemOneUrl();
+			if (!url)
+				throw new ClassifierUnavailable(
+					"laya-local classifier is not running; its model is not installed or the sidecar failed to start",
+				);
+			return {
+				url,
+				// The sidecar is bound to loopback and runs without a bearer
+				// credential (the dependency cannot carry one without a duplicate
+				// `--api-key`); ambient auth variables are neutralized at start.
+				headers: { "Content-Type": "application/json" },
+				model: LAYA_LOCAL_MODEL,
+			};
+		},
+		start: () => classifier.ensureStarted(),
+		stop: () => classifier.stop(),
+		health: () => classifier.health(),
+	};
+}
+
+/** The local server ignores unknown models, so it is always asked for the
+ * provider's own local model id. */
+
+/** Resolve one provider + model pair into a transport target. */
+export function classifierTarget(
+	providerId: string,
+	model: string,
+): ClassifierTarget {
+	return classifierProvider(providerId).resolve({ model });
+}
+
+/** The pinned classifier selection for one workflow: which provider serves the
+ * System One requests, and which model id it is asked for. */
+export interface ClassifierBinding {
+	readonly provider: string;
+	readonly model: string;
+}
+
+/** Collapse an agents configuration and a pinned provider id into one binding.
+ * An absent or unknown pinned id falls back to the configured provider and then
+ * to the default, so an unreadable value can never select a provider the
+ * configuration does not name. */
+export function resolveClassifierBinding(
+	agents: AgentsConfig,
+	pinnedProvider?: string,
+): ClassifierBinding {
+	return {
+		provider:
+			classifierProviderIdOr(pinnedProvider, agents) ??
+			DEFAULT_CLASSIFIER_PROVIDER,
+		model: classifierModel(agents),
+	};
+}
+
+/** A pinned id is honored only when it still names a registered provider. */
+function classifierProviderIdOr(
+	pinned: string | undefined,
+	agents: AgentsConfig,
+): string | undefined {
+	const candidates = [pinned, agents.classifier?.provider];
+	for (const candidate of candidates)
+		if (isClassifierProviderId(candidate)) return candidate;
+	return undefined;
+}
+
 /** Build one routing request holding every classifiable step's question in
  * parallel. One request per pass, never one per step. */
 export function routingRequest(
 	specs: readonly RoutingQuestionSpec[],
+	providerId: string,
 	model: string,
 	state: string,
 ): ClassifierRequest {
@@ -132,8 +268,8 @@ export function routingRequest(
 		};
 	}
 	return {
-		url: ROUTING_ENDPOINT,
-		body: { model: bareModel("routing", model), state, questions },
+		target: classifierTarget(providerId, model),
+		body: { state, questions },
 	};
 }
 
@@ -242,23 +378,17 @@ function requestClassifier(
 	observer?: RoutingClassifierTelemetryObserver,
 ): Effect.Effect<Record<string, ClassifierAnswer>, Error> {
 	return Effect.gen(function* () {
-		const apiKey = configEnvValue("OPENCODE_API_KEY")?.trim();
-		if (!apiKey)
-			return yield* Effect.fail(
-				new PermanentFailure(
-					`classifier ${integrationId} requires OPENCODE_API_KEY`,
-				),
-			);
 		const startedAt = Date.now();
 		if (requestTelemetry !== undefined)
 			notify(observer?.request, requestTelemetry);
 		const attempted = yield* postJsonEffect(
-			request.url,
-			request.body,
+			request.target.url,
 			{
-				Authorization: `Bearer ${apiKey}`,
-				"Content-Type": "application/json",
+				model: request.target.model,
+				state: request.body.state,
+				questions: request.body.questions,
 			},
+			request.target.headers,
 			{ signal, timeoutMs: CLASSIFIER_TIMEOUT_MS },
 		).pipe(Effect.either);
 		if (attempted._tag === "Left") {
@@ -344,12 +474,87 @@ function classifierModel(agents: AgentsConfig): string {
 	return profile?.model ?? ROUTING_CLASSIFIER_MODEL;
 }
 
-/** Invoke the pool-routing classifier through OpenCode Zen's System One
+function toError(error: unknown): Error {
+	return error instanceof Error ? error : new Error(String(error));
+}
+
+/** Attribute a provider/resolution failure to the integration that asked, so
+ * an operator sees which classifier call failed and why. A
+ * `ClassifierUnavailable` keeps its type: it is the one failure the routing
+ * path is allowed to fail open for. */
+function integrationFailure(integrationId: string, error: unknown): Error {
+	if (error instanceof ClassifierUnavailable) return error;
+	return new PermanentFailure(
+		`classifier ${integrationId} failed: ${toError(error).message}`,
+	);
+}
+
+/** How long a provider's lifecycle start may take before it is treated as a
+ * classifier outage. A local sidecar that never becomes ready must degrade via
+ * the fail-open paths rather than stall the `model.classify` effect. */
+export const CLASSIFIER_START_TIMEOUT_MS = 120_000;
+
+/** Resolve the provider, run its lifecycle hook, then build the request. A
+ * provider that owns a sidecar is started here (a hosted provider has no
+ * `start`); resolution failures become typed Effect failures so the existing
+ * fail-open handling applies. The start is bounded so a wedged sidecar cannot
+ * hold the effect open indefinitely. */
+function prepareRequest(
+	integrationId: string,
+	providerId: string,
+	build: () => ClassifierRequest,
+): Effect.Effect<ClassifierRequest, Error> {
+	return Effect.gen(function* () {
+		const provider = yield* Effect.try({
+			try: () => classifierProvider(providerId),
+			catch: (error) => integrationFailure(integrationId, error),
+		});
+		const start = provider.start;
+		if (start)
+			yield* Effect.tryPromise({
+				try: () => withTimeout(start(), integrationId),
+				catch: (error) => integrationFailure(integrationId, error),
+			});
+		return yield* Effect.try({
+			try: build,
+			catch: (error) => integrationFailure(integrationId, error),
+		});
+	});
+}
+
+function withTimeout(
+	start: Promise<void>,
+	integrationId: string,
+): Promise<void> {
+	return new Promise((resolve, reject) => {
+		const timer = setTimeout(
+			() =>
+				reject(
+					new Error(
+						`classifier ${integrationId} provider did not start within ${CLASSIFIER_START_TIMEOUT_MS}ms`,
+					),
+				),
+			CLASSIFIER_START_TIMEOUT_MS,
+		);
+		start.then(
+			() => {
+				clearTimeout(timer);
+				resolve();
+			},
+			(error) => {
+				clearTimeout(timer);
+				reject(error);
+			},
+		);
+	});
+}
+
+/** Invoke the pool-routing classifier through the pinned provider's System One
  * endpoint. The state is the task before planning and the plan artifacts after
  * approval; every spec question travels in one request. */
 export function invokeRoutingClassifier(
 	specs: readonly RoutingQuestionSpec[],
-	agents: AgentsConfig,
+	binding: ClassifierBinding,
 	input: {
 		task: string;
 		changeId: string;
@@ -365,31 +570,39 @@ export function invokeRoutingClassifier(
 	},
 	Error
 > {
-	const model = classifierModel(agents);
+	const { model } = binding;
 	const instruction = specs.some((spec) => spec.mode === "roster")
 		? ROUTING_ROSTER_INSTRUCTION
 		: ROUTING_SINGLE_INSTRUCTION;
 	const state = renderRoutingState(instruction, input);
-	const request = routingRequest(specs, model, state);
-	return requestClassifier(
-		"routing",
-		request,
-		{
-			model,
-			integration: ROUTING_INTEGRATION,
-			stepsAsked: specs.length,
-			entriesOffered: specs.reduce(
-				(count, spec) => count + spec.entries.length,
-				0,
-			),
-			artifactsCount: input.artifacts.length,
-			stateBytes: Buffer.byteLength(state),
-			timeoutMs: CLASSIFIER_TIMEOUT_MS,
-			endpointHost: new URL(request.url).host,
-		},
-		signal,
-		observer,
-	).pipe(Effect.map((answers) => ({ model, state, answers })));
+	return Effect.gen(function* () {
+		const request = yield* prepareRequest("routing", binding.provider, () =>
+			routingRequest(specs, binding.provider, model, state),
+		);
+		return yield* requestClassifier(
+			"routing",
+			request,
+			{
+				// Telemetry reports the *configured* model id, not the wire id: the
+				// hosted provider strips `opencode/` from the request body, but the OTEL
+				// stream must keep correlating on the configured
+				// `agents.profiles["jev-classifier"].model`.
+				model,
+				integration: ROUTING_INTEGRATION,
+				stepsAsked: specs.length,
+				entriesOffered: specs.reduce(
+					(count, spec) => count + spec.entries.length,
+					0,
+				),
+				artifactsCount: input.artifacts.length,
+				stateBytes: Buffer.byteLength(state),
+				timeoutMs: CLASSIFIER_TIMEOUT_MS,
+				endpointHost: new URL(request.target.url).host,
+			},
+			signal,
+			observer,
+		).pipe(Effect.map((answers) => ({ model, state, answers })));
+	});
 }
 
 const ROUTING_SINGLE_INSTRUCTION = `You assign model profiles to OpenSpec workflow steps.
@@ -590,6 +803,7 @@ export async function collectTriageClassifierState(
  * role, no criteria, and no pool of any kind. */
 export function triageRequest(
 	definitionId: string,
+	providerId: string,
 	model: string,
 	state: string,
 	needsVerification = false,
@@ -609,8 +823,8 @@ export function triageRequest(
 			instructions: GATE_QUESTIONS.verification,
 		};
 	return {
-		url: ROUTING_ENDPOINT,
-		body: { model: bareModel(TRIAGE_INTEGRATION, model), state, questions },
+		target: classifierTarget(providerId, model),
+		body: { state, questions },
 	};
 }
 
@@ -663,24 +877,38 @@ function escapeJsonText(value: string): string {
 	);
 }
 
-/** Invoke the verifier-role classifier through the same pinned System One
- * endpoint and profile as pool routing. One request, all eligible roles. */
+/** Invoke the verifier-role classifier through the same pinned provider and
+ * profile as pool routing. One request, all eligible roles. */
 export function invokeTriageClassifier(
 	definitionId: string,
-	agents: AgentsConfig,
+	binding: ClassifierBinding,
 	state: TriageClassifierState,
 	signal?: AbortSignal,
 	needsVerification = false,
 ): Effect.Effect<Record<string, ClassifierAnswer>, Error> {
-	const request = triageRequest(
-		definitionId,
-		classifierModel(agents),
-		renderTriageState(state),
-		needsVerification,
-	);
-	/** The triage request carries no routing telemetry observer, so the
-	 * request event stays unreported until it grows its own. */
-	return requestClassifier(TRIAGE_INTEGRATION, request, undefined, signal);
+	const rendered = renderTriageState(state);
+	return Effect.gen(function* () {
+		const request = yield* prepareRequest(
+			TRIAGE_INTEGRATION,
+			binding.provider,
+			() =>
+				triageRequest(
+					definitionId,
+					binding.provider,
+					binding.model,
+					rendered,
+					needsVerification,
+				),
+		);
+		/** The triage request carries no routing telemetry observer, so the
+		 * request event stays unreported until it grows its own. */
+		return yield* requestClassifier(
+			TRIAGE_INTEGRATION,
+			request,
+			undefined,
+			signal,
+		);
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -812,13 +1040,13 @@ export function renderGateState(state: GateClassifierState): string {
 /** Build the single-question gate request. */
 export function gateRequest(
 	stage: GateStage,
+	providerId: string,
 	model: string,
 	state: string,
 ): ClassifierRequest {
 	return {
-		url: ROUTING_ENDPOINT,
+		target: classifierTarget(providerId, model),
 		body: {
-			model: bareModel(GATE_INTEGRATION, model),
 			state,
 			questions: {
 				[GATE_QUESTION_IDS[stage]]: {
@@ -830,18 +1058,26 @@ export function gateRequest(
 	};
 }
 
-/** Ask one gate question through the same pinned System One endpoint and
- * profile as every other classifier integration. */
+/** Ask one gate question through the same pinned provider and profile as every
+ * other classifier integration. */
 export function invokeGateClassifier(
 	stage: GateStage,
-	agents: AgentsConfig,
+	binding: ClassifierBinding,
 	state: GateClassifierState,
 	signal?: AbortSignal,
 ): Effect.Effect<Record<string, ClassifierAnswer>, Error> {
-	const request = gateRequest(
-		stage,
-		classifierModel(agents),
-		renderGateState(state),
-	);
-	return requestClassifier(GATE_INTEGRATION, request, undefined, signal);
+	const rendered = renderGateState(state);
+	return Effect.gen(function* () {
+		const request = yield* prepareRequest(
+			GATE_INTEGRATION,
+			binding.provider,
+			() => gateRequest(stage, binding.provider, binding.model, rendered),
+		);
+		return yield* requestClassifier(
+			GATE_INTEGRATION,
+			request,
+			undefined,
+			signal,
+		);
+	});
 }

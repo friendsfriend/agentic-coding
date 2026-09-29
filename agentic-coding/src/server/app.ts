@@ -378,6 +378,38 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			return json({ ok: true, value: operations.loadAgents(repository) });
 		}
 
+		if (method === "GET" && path === "/api/v1/classifier/status") {
+			const repository = url.searchParams.get("repository") ?? undefined;
+			return json({
+				ok: true,
+				value: await operations.classifierStatus(repository),
+			});
+		}
+
+		if (method === "POST" && path === "/api/v1/classifier/install") {
+			decodeRouteRequest(
+				"/api/v1/classifier/install",
+				await readJsonBody(request),
+			);
+			const value = await operations.installClassifier(
+				url.searchParams.get("repository") ?? undefined,
+			);
+			events.publish({ domain: "workflow", kind: "classifier.install" });
+			return json({ ok: true, value });
+		}
+
+		if (method === "POST" && path === "/api/v1/classifier/install/cancel") {
+			decodeRouteRequest(
+				"/api/v1/classifier/install/cancel",
+				await readJsonBody(request),
+			);
+			const value = await operations.cancelClassifierInstall(
+				url.searchParams.get("repository") ?? undefined,
+			);
+			events.publish({ domain: "workflow", kind: "classifier.install.cancel" });
+			return json({ ok: true, value });
+		}
+
 		if (method === "POST" && path === "/api/v1/credentials/respond") {
 			const decoded = decodeRouteRequest<CredentialRespondRequest>(
 				"/api/v1/credentials/respond",

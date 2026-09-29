@@ -69,6 +69,10 @@ import {
 	agentConfigEntry,
 	refreshAgentConfig,
 } from "../../dash/agent-config-cache.ts";
+import {
+	classifierSnapshot,
+	refreshClassifierStatus,
+} from "../../dash/classifier-status.ts";
 import { workflowLaunchKeybindCatalog } from "../../dash/keybinds.ts";
 import {
 	registerShellFeatureField,
@@ -553,6 +557,8 @@ export function App(props: {
 	// (route scope, agent config cache, client preferences, server reads) so the
 	// item builders stay pure and testable.
 	const [settingsAgentVersion, setSettingsAgentVersion] = createSignal(0);
+	const [settingsClassifierVersion, setSettingsClassifierVersion] =
+		createSignal(0);
 	const settingsSection = (): SettingsSection | undefined =>
 		settingsSectionOfPage(currentPage());
 	/** Stable configured project id of a project-scoped Settings page. */
@@ -569,6 +575,9 @@ export function App(props: {
 	const settingsContext = (): SettingsContext => {
 		// Re-read the agent cache after a refresh; the cache itself is not reactive.
 		settingsAgentVersion();
+		// Re-read after a classifier-status refresh (the snapshot itself is not
+		// reactive).
+		settingsClassifierVersion();
 		const repository = settingsAgentRepository();
 		const entry = agentConfigEntry(repository);
 		const agents = entry.agents;
@@ -607,6 +616,7 @@ export function App(props: {
 				routing: agents ? agentRoutingEntries(agents) : [],
 			},
 			providers: settingsProviders(),
+			...(classifierSnapshot() ? { classifier: classifierSnapshot() } : {}),
 		};
 	};
 	const settingsSectionItems = (): SettingsItem[] | undefined => {
@@ -630,6 +640,16 @@ export function App(props: {
 		const repository = settingsAgentRepository();
 		void refreshAgentConfig(repository).then(() =>
 			setSettingsAgentVersion((value) => value + 1),
+		);
+	});
+	createEffect(() => {
+		if (settingsSection() !== "agents") return;
+		// The classifier status is a server read; refresh it when the section opens
+		// so the picker shows the effective provider and local-model state. The
+		// version signal is read by settingsContext(), not here, so this effect
+		// runs once per section change instead of re-arming on its own increment.
+		void refreshClassifierStatus(settingsAgentRepository()).then(() =>
+			setSettingsClassifierVersion((value) => value + 1),
 		);
 	});
 	const settingsIndex = (): number =>
@@ -2302,6 +2322,9 @@ export function App(props: {
 									keymap={props.dashboard.keymap}
 									items={settingsSectionItems() ?? []}
 									onActivate={activateSettingsItem}
+									{...(classifierSnapshot()
+										? { classifier: classifierSnapshot() }
+										: {})}
 									{...(repository ? { repository } : {})}
 								/>
 							);

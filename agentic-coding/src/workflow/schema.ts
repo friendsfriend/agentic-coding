@@ -421,6 +421,7 @@ export const WorkflowSnapshotSchema = Schema.Struct({
 			Schema.Record({ key: Schema.String, value: Schema.String }),
 			{ exact: true },
 		),
+		classifier: Schema.optionalWith(boundedText(4096), { exact: true }),
 		wikiRoot: Schema.optionalWith(text(4096), { exact: true }),
 		executionSettings: Schema.optionalWith(executionSettingsSchema, {
 			exact: true,

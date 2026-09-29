@@ -132,6 +132,60 @@ pre-classification planner fan-out. The resolved routing is pinned in the
 workflow snapshot before effects run, so a preset switch is validated and
 explicit.
 
+## Classifier providers and the local model
+
+The transport that serves those System One requests is pluggable. A provider
+(`src/workflow/classifier-providers.ts` catalog + `src/workflow/classifier-runner.ts`
+live registry) supplies the endpoint, the headers, and the model id; the
+request builders own only the `state` and `questions`. Two providers are
+built in:
+
+- **`opencode-zen`** — the hosted, usage-based plan. This is the default, and
+  `resolve` returns today's endpoint (`https://opencode.ai/zen/v1/systemone`),
+  `OPENCODE_API_KEY` bearer header, and the model id with the `opencode/`
+  prefix stripped. A configuration that says nothing keeps exactly this.
+- **`laya-local`** — an offline sidecar. `src/workflow/laya-local.ts` locates
+  the `laya-system-one` package (from the install root, so a compiled
+  executable works), stages the model metadata, acquires the ~324 MB INT8
+  model only on an explicit request, and spawns `laya-serve` on an ephemeral
+  `127.0.0.1` port. The model id is a local one; the sidecar ignores unknown
+  models. It is bound to loopback only and runs without a bearer credential:
+  the start scopes its spawn environment and neutralizes any ambient
+  `LAYA_API_KEY`/`API_KEY`, so an unrelated variable can never turn the local
+  listener into an authenticated service this process cannot reach. Liveness is
+  probed (a killed sidecar reports `unavailable` and is respawned on the next
+  classification), and the sidecar is stopped on a provider switch and on
+  server shutdown.
+
+`[agents.classifier]` selects the provider (`provider`, plus opaque
+`options`); an unknown id is a hard config break. The selected id is resolved
+once at start and pinned into `metadata.classifier`, exactly like
+`metadata.gatePolicies`, so a mid-run config edit cannot switch the endpoint;
+a snapshot without the pin (one started before local providers existed)
+resolves from the configuration and falls back to `opencode-zen`. Provider
+overrides are `LAYA_SERVE_BIN`, `LAYA_MODEL_PATH`, `LAYA_CACHE_DIR`, and
+`LAYA_BACKEND` (`native` or `wasm`); the install/cache directory defaults under
+the app config root at `classifier/laya/`.
+
+Installation is user-decided and never automatic. Flipping the Settings picker
+to `laya-local` opens an install modal: *Install* starts a server-owned,
+cancelable acquisition (atomic and checksum-verified by `resolveModel`) and
+persists the provider only after health is `ready`; *Not now* / Escape leaves
+the previous provider in effect. The server exposes
+`GET /api/v1/classifier/status`, `POST /api/v1/classifier/install`, and
+`POST /api/v1/classifier/install/cancel`; persisting the provider stays on the
+existing `POST /api/v1/config/agents` path through a `set-classifier`
+mutation, so the `expectedRevision` conflict check is reused. A missing model
+or a dead sidecar is never fatal: the provider reports `unavailable`, triage
+and gates fail open (force the run plus an `attention` entry), and routing fails
+open too, completing each step on its pinned pool default plus an `attention`
+entry instead of parking the run. Routing fails open only for a typed
+`ClassifierUnavailable` (the local provider's own outage); a hosted transport or
+status failure still fails and is retried by the durable outbox, so the OTEL
+error telemetry and retry budget are unchanged. `GET /api/v1/classifier/status`
+awaits a bounded liveness probe, so a killed sidecar is reported as not running
+rather than as a healthy handle.
+
 Classifier-driven verifier-role routing decides *which* verifiers run, per
 round. `core.triage-route` is a system step between `core.implementation` and
 `core.triage` in the shared implementation loop (definition tier

@@ -50,6 +50,41 @@ export interface AgentsListResponse {
 	readonly revision?: string;
 }
 
+/** One selectable classifier transport, for the Settings picker. */
+export interface ClassifierProviderOption {
+	readonly id: string;
+	readonly label: string;
+}
+
+/** Local model acquisition progress: phase plus byte counts when the resolver
+ * exposes them. */
+export interface ClassifierInstallProgress {
+	readonly phase: string;
+	readonly receivedBytes?: number;
+	readonly totalBytes?: number;
+	readonly detail?: string;
+}
+
+/** Local classifier state, non-secret: whether the model is installed, whether
+ * the sidecar is running, and where it lives. */
+export interface ClassifierLocalStatus {
+	readonly installed: boolean;
+	readonly running: boolean;
+	readonly modelPath?: string;
+	readonly bytes?: number;
+	readonly binary?: string;
+	readonly error?: string;
+	readonly job?: ClassifierInstallProgress;
+}
+
+/** Classifier provider selection and local-model status, server-owned so the
+ * view never downloads anything itself. */
+export interface ClassifierStatusResponse {
+	readonly provider: string;
+	readonly providers: readonly ClassifierProviderOption[];
+	readonly local: ClassifierLocalStatus;
+}
+
 /** The dashboard's whole data surface. Reads take an `AbortSignal` where a
  * result can outlive the view that asked for it; mutations carry the revision
  * the caller rendered, so a stale action is refused rather than applied. */
@@ -75,6 +110,10 @@ export interface DashboardGateway {
 		signal?: AbortSignal,
 	): Promise<T>;
 	loadAgents(repository?: string): Promise<AgentsListResponse>;
+	/** Classifier provider selection plus local-model status (server-owned). The
+	 * repository scopes the read exactly like `loadAgents`, so a project-scoped
+	 * Settings session sees the project layer's selection. */
+	classifierStatus(repository?: string): Promise<ClassifierStatusResponse>;
 
 	// -- mutations -----------------------------------------------------------
 	action(request: WorkflowActionRequest): Promise<WorkflowView>;
@@ -90,6 +129,12 @@ export interface DashboardGateway {
 	): Promise<string>;
 	researchHandoff(request: AgentResearchHandoffRequest): Promise<WorkflowView>;
 	saveAgents(request: AgentsMutationRequest): Promise<void>;
+	/** Start (or resume) the local classifier model acquisition; idempotent. */
+	classifierInstall(repository?: string): Promise<ClassifierStatusResponse>;
+	/** Cancel an in-flight acquisition and clean its temp files. */
+	classifierInstallCancel(
+		repository?: string,
+	): Promise<ClassifierStatusResponse>;
 	respondCredential(request: CredentialRespondRequest): Promise<void>;
 
 	// -- telemetry -----------------------------------------------------------
