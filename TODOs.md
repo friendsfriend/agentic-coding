@@ -2,7 +2,6 @@ Not for agents. This is only for humans.
 
 Fixes: 
 * Luvus:
-    * Spawning a new tab always focuses it. Check if that can be disabled
     * Review modals flash the diff files (seems like it is reloading constantly)
 
 Big ones:
