@@ -1,7 +1,6 @@
 Not for agents. This is only for humans.
 
 Fixes: 
-* Viewport always jumps to top after a like a second in the developer review diff
 
 Big ones:
 * Agent steered version of the workflow. Basically an orchestrator version of the workflow.
