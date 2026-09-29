@@ -6,6 +6,7 @@
 // (split-workflow-god-modules).
 
 import { CONFIG_ROOT_VAR, resolveConfigRoot } from "../../config-root.ts";
+import { selfExecEntry } from "../../self-exec.ts";
 import { CONTINUATION_WAIT_MS } from "../operations.ts";
 
 export function detachedDrainArgv(
@@ -29,8 +30,7 @@ export function scheduleDrain(
 	limit = 20,
 	waitMs = CONTINUATION_WAIT_MS,
 ): void {
-	const entry = Bun.main.startsWith("$bunfs") ? undefined : Bun.main;
-	const argv = detachedDrainArgv(entry, repo);
+	const argv = detachedDrainArgv(selfExecEntry(), repo);
 	if (limit !== 20) argv.push("--limit", String(limit));
 	argv.push("--wait-ms", String(waitMs));
 	const env = detachedDrainEnvironment(process.env);

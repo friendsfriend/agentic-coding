@@ -135,6 +135,8 @@ class RepositoryExecutionCoordinator {
 	private pendingSettleIds: Array<string | undefined> = [];
 	private activeWorkflowId: string | undefined;
 	private controller: AbortController | undefined;
+	/** Wait window of the active drain; a queued continuation keeps it. */
+	private waitMs = CONTINUATION_WAIT_MS;
 	/** One engine per repository, built from the root-owned application layer:
 	 * refresh/action/start reuse the same runtime instead of creating a fresh
 	 * engine per drain. */
@@ -147,7 +149,7 @@ class RepositoryExecutionCoordinator {
 		this.workflowEngine = workflowEngineFactory(application);
 	}
 
-	request(workflowId?: string): void {
+	request(workflowId?: string, waitMs = CONTINUATION_WAIT_MS): void {
 		if (this.disposed) return;
 		if (this.running) {
 			this.queued = true;
@@ -155,6 +157,7 @@ class RepositoryExecutionCoordinator {
 			return;
 		}
 		this.running = true;
+		this.waitMs = waitMs;
 		// This drain settles the active request plus any ids coalesced while the
 		// previous drain was in flight; they must settle after this drain commits
 		// their effects, not before it starts (QUAL-001/CONCURRENCY-101).
@@ -171,7 +174,7 @@ class RepositoryExecutionCoordinator {
 			this.repo,
 			createQueuedCredentialPrompt(),
 			20,
-			CONTINUATION_WAIT_MS,
+			this.waitMs,
 			this.controller.signal,
 			(workflowId, message) => {
 				this.workflowErrors.set(workflowId, message);
@@ -197,7 +200,7 @@ class RepositoryExecutionCoordinator {
 					this.queued = false;
 					this.pendingSettleIds = this.queuedWorkflowIds;
 					this.queuedWorkflowIds = [];
-					this.request(undefined);
+					this.request(undefined, this.waitMs);
 				}
 			});
 	}
@@ -285,6 +288,17 @@ export function cancelActiveWorkflowExecutions(): void {
 export function disposeAllExecutionCoordinators(): void {
 	for (const coordinator of coordinators.values()) coordinator.dispose();
 	coordinators.clear();
+}
+
+/**
+ * One bounded drain pass for a repository whose effects a previous process
+ * left pending: a workflow is durably accepted at start, so a drain cancelled
+ * by a quit or a shell restart must not strand it until someone opens its
+ * dashboard. `waitMs: 0` claims what is due and returns instead of holding the
+ * coordinator for the full continuation window.
+ */
+export function resumeWorkflowExecution(repo: string): void {
+	executionCoordinator(repo).request(undefined, 0);
 }
 
 export function requestWorkflowExecution(

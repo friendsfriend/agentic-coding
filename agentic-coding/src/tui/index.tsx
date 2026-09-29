@@ -18,7 +18,7 @@
 // partial startup or a second quit can only stop what this process acquired.
 
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { createCliRenderer } from "@opentui/core";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { KeymapProvider } from "@opentui/keymap/solid";
@@ -47,6 +47,7 @@ import {
 	cancelActiveWorkflowExecutions,
 	disposeAllExecutionCoordinators,
 	disposeDashboardApplication,
+	resumeWorkflowExecution,
 	setCredentialPromptProvider,
 } from "../workflow/execution-coordinator.ts";
 import { BACKEND_STARTING_ENV } from "../workflow/project-catalog.ts";
@@ -663,10 +664,17 @@ export async function main(): Promise<void> {
 				isTest || remoteAttach
 					? []
 					: await discoverProjectRepos(environmentSurfaceUrl);
-			await db.watchRepositories(
-				Array.from(new Set([...explicitRepos, ...catalogRoots])),
+			const repositories = Array.from(
+				new Set([...explicitRepos, ...catalogRoots]),
 			);
+			await db.watchRepositories(repositories);
 			await db.refreshWorkspaces();
+			// A workflow is durably accepted at start, so effects a previous shell
+			// process left pending (its drain was cancelled by a quit/restart) are
+			// resumed here instead of waiting for someone to open its dashboard.
+			for (const target of new Set([...repositories, process.cwd()]))
+				if (existsSync(join(target, ".herdr-workflow", "herdr.db")))
+					resumeWorkflowExecution(target);
 		} catch (error) {
 			notify(
 				`Telemetry repositories unavailable: ${

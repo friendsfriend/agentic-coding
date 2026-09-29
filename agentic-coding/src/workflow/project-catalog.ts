@@ -17,6 +17,7 @@ import {
 	getProjectCatalog as requestProjectCatalog,
 } from "@devenv/core/src/projects-client.ts";
 import type { CatalogProject, ProjectCatalog } from "@devenv/types";
+import { isCompiledBinary } from "../self-exec.ts";
 
 export type { CatalogProject, ProjectCatalog };
 export { ProjectCatalogError };
@@ -92,10 +93,7 @@ interface BoundedInvocation {
  * whatever file the host process happened to start).
  */
 function boundedCatalogArgv(): string[] {
-	const compiled =
-		Bun.main.startsWith("$bunfs") ||
-		process.execPath.endsWith("agentic-coding");
-	if (compiled) return [process.execPath, "__catalog"];
+	if (isCompiledBinary()) return [process.execPath, "__catalog"];
 	return [
 		process.execPath,
 		path.resolve(import.meta.dir, "..", "cli.ts"),
