@@ -10,8 +10,13 @@ import { getMarkdownSyntaxStyle } from "./markdownSyntax.ts";
 export interface MarkdownViewerProps {
 	/** Whole-document markdown source. */
 	content: string;
-	/** Render width in terminal cells. */
-	width: number;
+	/**
+	 * Render width in terminal cells. Omit it to fill the surrounding box:
+	 * a markdown renderable that only flexes wraps to the width its parent
+	 * actually gives it, which is what the review thread wants (the thread
+	 * sits in a modal whose width is a fraction of the terminal).
+	 */
+	width?: number;
 	fg?: string;
 }
 
@@ -22,7 +27,9 @@ export function MarkdownViewer(props: MarkdownViewerProps) {
 			content={props.content}
 			syntaxStyle={getMarkdownSyntaxStyle()}
 			fg={props.fg ?? uiColors.textSecondary}
-			width={props.width}
+			{...(props.width === undefined
+				? { flexGrow: 1 }
+				: { width: props.width })}
 		/>
 	);
 }

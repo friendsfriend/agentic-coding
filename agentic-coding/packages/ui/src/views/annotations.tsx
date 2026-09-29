@@ -9,7 +9,6 @@ import { TextAttributes } from "@opentui/core";
 import { For, type JSX, Show } from "solid-js";
 import { MarkdownViewer } from "../components/MarkdownViewer.tsx";
 import { SelectionMarker } from "../components/SelectionMarker.tsx";
-import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors";
 import type { Discussion } from "./types.ts";
 
@@ -91,8 +90,10 @@ export function DiscussionThread(props: {
 	replyText?: string;
 }) {
 	const notesCount = props.discussion.notes.length;
-	const dimensions = useTerminalDimensions();
-	const markdownWidth = () => Math.max(20, dimensions().width - 12);
+	// A thread is anchored by its position, so one with no notes can reach this
+	// component; the badges and the collapsed summary all need the first note.
+	const firstNote = props.discussion.notes[0];
+	if (!firstNote) return null;
 	return (
 		<MarkedThread selected={props.selected} range={props.range}>
 			<box
@@ -106,14 +107,10 @@ export function DiscussionThread(props: {
 				<box flexDirection="row" gap={2} marginBottom={0.5}>
 					<Show when={props.discussion.findingId}>
 						<text
-							fg={
-								props.discussion.notes[0].resolved
-									? uiColors.success
-									: uiColors.warning
-							}
+							fg={firstNote.resolved ? uiColors.success : uiColors.warning}
 							attributes={TextAttributes.BOLD}
 						>
-							{props.discussion.notes[0].resolved ? "☑ FIX" : "☐ FIX"}
+							{firstNote.resolved ? "☑ FIX" : "☐ FIX"}
 						</text>
 					</Show>
 					<Show when={props.outdated}>
@@ -121,12 +118,12 @@ export function DiscussionThread(props: {
 							⚠ OUTDATED
 						</text>
 					</Show>
-					<Show when={props.discussion.notes[0].resolved}>
+					<Show when={firstNote.resolved}>
 						<text fg={uiColors.success} attributes={TextAttributes.BOLD}>
 							✓ Resolved
 						</text>
 					</Show>
-					<Show when={!props.discussion.notes[0].resolved && !props.outdated}>
+					<Show when={!firstNote.resolved && !props.outdated}>
 						<text fg={uiColors.warning} attributes={TextAttributes.BOLD}>
 							● Open
 						</text>
@@ -212,16 +209,24 @@ export function DiscussionThread(props: {
 												</text>
 											</box>
 											<box style={{ width: "100%", marginTop: 0.5 }}>
-												<text fg={uiColors.textSecondary}>
-													{props.discussion.findingId ? (
-														<MarkdownViewer
-															content={note.body || "(no content)"}
-															width={markdownWidth()}
-														/>
-													) : (
-														note.body || "(no content)"
-													)}
-												</text>
+												{/* A finding body is markdown, so it renders through the
+								    markdown renderable — a sibling of `<text>`, never a child,
+								    since `<text>` only accepts string content. It flexes to the
+								    message column instead of taking a terminal-derived width, so it
+								    wraps inside the review modal instead of past its right edge. A
+								    human comment stays plain text. */}
+												<Show
+													when={props.discussion.findingId}
+													fallback={
+														<text fg={uiColors.textSecondary}>
+															{note.body || "(no content)"}
+														</text>
+													}
+												>
+													<MarkdownViewer
+														content={note.body || "(no content)"}
+													/>
+												</Show>
 											</box>
 										</box>
 									</box>
@@ -241,10 +246,10 @@ export function DiscussionThread(props: {
 				<Show when={props.collapsed}>
 					<box flexDirection="row" gap={1} alignItems="center" marginBottom={1}>
 						<text fg={uiColors.textPrimary} attributes={TextAttributes.BOLD}>
-							{props.discussion.notes[0].author?.name || "Unknown"}
+							{firstNote.author?.name || "Unknown"}
 						</text>
 						<text fg={uiColors.textMuted}>
-							{props.formatTimestamp(props.discussion.notes[0].created_at)}
+							{props.formatTimestamp(firstNote.created_at)}
 						</text>
 						<text
 							fg={uiColors.borderHighlight}

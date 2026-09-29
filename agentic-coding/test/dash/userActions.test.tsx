@@ -18,6 +18,28 @@ afterEach(() => {
 		rmSync(root, { recursive: true, force: true });
 });
 
+/**
+ * A finding body paints through the markdown renderable's background worker,
+ * so `t.waitForFrame` can resolve before the body appears (its render loop
+ * goes idle without yielding real time for the worker). Poll with a real
+ * `setTimeout` between renders — same reason as `waitForRealFrame` in
+ * `markdownViewModal.test.tsx`.
+ */
+async function waitForRealFrame(
+	t: Awaited<ReturnType<typeof testRender>>,
+	predicate: (frame: string) => boolean,
+	timeoutMs = 5000,
+): Promise<string> {
+	const start = Date.now();
+	while (Date.now() - start < timeoutMs) {
+		await t.renderOnce();
+		const frame = t.captureCharFrame();
+		if (predicate(frame)) return frame;
+		await new Promise((resolve) => setTimeout(resolve, 20));
+	}
+	throw new Error("Timed out waiting for frame predicate");
+}
+
 /** Fixture dashboard with `count` OpenSpec artifacts backed by real files. */
 function artifactsFixture(count: number): DashboardData {
 	const root = mkdtempSync(join(tmpdir(), "agent-dash-openspec-"));
@@ -209,10 +231,13 @@ test("last finding anchor scrolls its inline comment into view", async () => {
 	await t.flush();
 	// The last selectable row is the injected `[finding]` line (index 20).
 	setSelectedLine(20);
-	await t.flush();
-	const frame = t.captureCharFrame();
+	// A finding body paints through the markdown renderable's background
+	// worker, so wait for it instead of reading the first frame (same reason
+	// as the developer review tests below).
+	const frame = await waitForRealFrame(t, (candidate) =>
+		candidate.includes("Helper is never used."),
+	);
 	expect(frame).toContain("[finding]");
-	expect(frame).toContain("Helper is never used.");
 	t.renderer.destroy();
 });
 
@@ -371,12 +396,14 @@ test("developer review shows a finding whose anchor line is outside the diff", a
 	await t.waitForFrame((frame) => frame.includes("reviewed();"));
 
 	// The second finding anchors to line 99, which no hunk covers: the diff
-	// modal injects a synthetic line so the finding still renders.
+	// modal injects a synthetic line so the finding still renders. The finding
+	// body paints through the markdown renderable's background worker, so wait
+	// for it instead of reading the first frame.
 	for (let step = 0; step < 5; step++) t.mockInput.pressKey("j");
-	await t.renderOnce();
-	const injected = t.captureCharFrame();
+	const injected = await waitForRealFrame(t, (frame) =>
+		frame.includes("Helper is never used."),
+	);
 	expect(injected).toContain("[finding]");
-	expect(injected).toContain("Helper is never used.");
 
 	t.mockInput.pressKey(" ");
 	await t.renderOnce();

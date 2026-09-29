@@ -28,11 +28,7 @@ import { ScrollableContent } from "../components/ScrollableContent.tsx";
 import { SearchHeader } from "../components/SearchHeader.tsx";
 import { SelectionMarker } from "../components/SelectionMarker.tsx";
 import { uiColors } from "../theme/colors";
-import {
-	DiscussionThread,
-	MarkedThread,
-	ReplyAffordance,
-} from "./annotations.tsx";
+import { DiscussionThread } from "./annotations.tsx";
 import type { Discussion } from "./types.ts";
 
 /** True for a whole-file add or delete (the diff has no old/new side). */
@@ -879,269 +875,32 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 														</Show>
 													</box>
 
-													{/* Render inline comments for this line - Timeline style */}
+													{/* A comment and a finding are the same `Discussion`
+												    record, so the line renders through the one shared
+												    thread component (findings get markdown bodies). */}
 													<Show when={getCommentsForLine(line).length > 0}>
 														<For each={getCommentsForLine(line)}>
-															{(discussion) => {
-																const isOutdated =
-																	isCommentOutdated(discussion);
-																const threadIsCollapsed = () =>
-																	isCollapsed(discussion.id);
-																const notesCount = discussion.notes.length;
-
-																return (
-																	<MarkedThread
-																		selected={isSelected()}
-																		range={isInSelection()}
-																	>
-																		<box
-																			flexDirection="column"
-																			paddingTop={1}
-																			paddingBottom={1}
-																			paddingLeft={9} // 12 - 3 marker columns
-																			paddingRight={2}
-																		>
-																			{/* Header row with status badges */}
-																			<box
-																				flexDirection="row"
-																				gap={2}
-																				marginBottom={0.5}
-																			>
-																				<Show when={discussion.findingId}>
-																					<text
-																						fg={
-																							discussion.notes[0].resolved
-																								? uiColors.success
-																								: uiColors.warning
-																						}
-																						attributes={TextAttributes.BOLD}
-																					>
-																						{discussion.notes[0].resolved
-																							? "☑ FIX"
-																							: "☐ FIX"}
-																					</text>
-																				</Show>
-																				<Show when={isOutdated}>
-																					<text
-																						fg={uiColors.warning}
-																						attributes={TextAttributes.BOLD}
-																					>
-																						⚠ OUTDATED
-																					</text>
-																				</Show>
-																				<Show
-																					when={discussion.notes[0].resolved}
-																				>
-																					<text
-																						fg={uiColors.success}
-																						attributes={TextAttributes.BOLD}
-																					>
-																						✓ Resolved
-																					</text>
-																				</Show>
-																				<Show
-																					when={
-																						!discussion.notes[0].resolved &&
-																						!isOutdated
-																					}
-																				>
-																					<text
-																						fg={uiColors.warning}
-																						attributes={TextAttributes.BOLD}
-																					>
-																						● Open
-																					</text>
-																				</Show>
-																			</box>
-
-																			{/* Conversation Messages with Timeline */}
-																			<Show when={!threadIsCollapsed()}>
-																				<box flexDirection="column">
-																					<For each={discussion.notes}>
-																						{(note, noteIndex) => {
-																							const isLastNote = () =>
-																								noteIndex() ===
-																								discussion.notes.length - 1;
-																							return (
-																								<box
-																									style={{
-																										width: "100%",
-																										flexDirection: "row",
-																										flexShrink: 0,
-																									}}
-																								>
-																									{/* Timeline Column */}
-																									<box
-																										style={{
-																											width: 4,
-																											flexDirection: "column",
-																											alignItems: "center",
-																											flexShrink: 0,
-																										}}
-																									>
-																										{/* Node */}
-																										<box
-																											style={{
-																												width: 3,
-																												height: 1,
-																												justifyContent:
-																													"center",
-																												alignItems: "center",
-																											}}
-																										>
-																											<text
-																												fg={uiColors.primary}
-																											>
-																												●
-																											</text>
-																										</box>
-
-																										{/* Vertical line */}
-																										<Show when={!isLastNote()}>
-																											<box
-																												style={{
-																													width: 1,
-																													flexGrow: 1,
-																													flexDirection:
-																														"column",
-																												}}
-																											>
-																												{/* Calculate approximate lines needed based on message length */}
-																												{(() => {
-																													const bodyLength =
-																														note.body?.length ||
-																														0;
-																													const lines =
-																														Math.max(
-																															3,
-																															Math.ceil(
-																																bodyLength / 80,
-																															) + 2,
-																														);
-																													return Array(lines)
-																														.fill(null)
-																														.map((_, _i) => (
-																															<text
-																																fg={
-																																	uiColors.bgSurface1
-																																}
-																															>
-																																│
-																															</text>
-																														));
-																												})()}
-																											</box>
-																										</Show>
-																									</box>
-
-																									{/* Message Content */}
-																									<box
-																										style={{
-																											flexGrow: 1,
-																											flexDirection: "column",
-																											paddingLeft: 1,
-																											paddingBottom: 1.5,
-																										}}
-																									>
-																										{/* Message Header: Author + Time */}
-																										<box
-																											flexDirection="row"
-																											gap={1}
-																										>
-																											<text
-																												fg={
-																													uiColors.textPrimary
-																												}
-																												attributes={
-																													TextAttributes.BOLD
-																												}
-																											>
-																												{note.author?.name ||
-																													"Unknown"}
-																											</text>
-																											<text
-																												fg={uiColors.textMuted}
-																											>
-																												{formatTimestamp(
-																													note.created_at,
-																												)}
-																											</text>
-																										</box>
-
-																										{/* Message Body */}
-																										<box
-																											style={{
-																												width: "100%",
-																												marginTop: 0.5,
-																											}}
-																										>
-																											<text
-																												fg={
-																													uiColors.textSecondary
-																												}
-																											>
-																												{note.body ||
-																													"(no content)"}
-																											</text>
-																										</box>
-																									</box>
-																								</box>
-																							);
-																						}}
-																					</For>
-																				</box>
-																			</Show>
-
-																			{/* Collapsed state - show expand button */}
-																			<Show when={threadIsCollapsed()}>
-																				<box
-																					flexDirection="row"
-																					gap={1}
-																					alignItems="center"
-																					marginBottom={1}
-																				>
-																					<text
-																						fg={uiColors.textPrimary}
-																						attributes={TextAttributes.BOLD}
-																					>
-																						{discussion.notes[0].author?.name ||
-																							"Unknown"}
-																					</text>
-																					<text fg={uiColors.textMuted}>
-																						{formatTimestamp(
-																							discussion.notes[0].created_at,
-																						)}
-																					</text>
-																					<text
-																						fg={uiColors.borderHighlight}
-																						attributes={TextAttributes.BOLD}
-																					>
-																						[t] Show {notesCount}{" "}
-																						{notesCount === 1
-																							? "message"
-																							: "messages"}
-																					</text>
-																				</box>
-																			</Show>
-																			{/* Reply affordance: the same mechanism as the comment composer. */}
-																			<Show
-																				when={
-																					props.onReplyToDiscussion !==
-																					undefined
-																				}
-																			>
-																				<ReplyAffordance
-																					active={
-																						props.replyModeDiscussionId ===
-																						discussion.id
-																					}
-																					text={props.replyText ?? ""}
-																				/>
-																			</Show>
-																		</box>
-																	</MarkedThread>
-																);
-															}}
+															{(discussion) => (
+																<DiscussionThread
+																	discussion={discussion}
+																	outdated={isCommentOutdated(discussion)}
+																	collapsed={isCollapsed(discussion.id)}
+																	selected={isSelected()}
+																	range={isInSelection()}
+																	formatTimestamp={formatTimestamp}
+																	paddingLeft={12}
+																	repliesEnabled={
+																		props.onReplyToDiscussion !== undefined
+																	}
+																	replyActive={
+																		props.replyModeDiscussionId ===
+																		discussion.id
+																	}
+																	{...(props.replyText !== undefined
+																		? { replyText: props.replyText }
+																		: {})}
+																/>
+															)}
 														</For>
 													</Show>
 
@@ -1451,244 +1210,31 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 													</box>
 												</box>
 
-												{/* Render inline comments for this line - Timeline style */}
+												{/* A comment and a finding are the same `Discussion` record, so the
+												    row renders through the one shared thread component (findings get
+												    markdown bodies). */}
 												<Show when={getCommentsForSplitLine(line).length > 0}>
 													<For each={getCommentsForSplitLine(line)}>
-														{(discussion) => {
-															const isOutdated = isCommentOutdated(discussion);
-															const threadIsCollapsed = () =>
-																isCollapsed(discussion.id);
-															const notesCount = discussion.notes.length;
-
-															return (
-																<MarkedThread
-																	selected={isSelected()}
-																	range={isInSelection()}
-																>
-																	<box
-																		flexDirection="column"
-																		paddingTop={1}
-																		paddingBottom={1}
-																		paddingLeft={3} // 6 - 3 marker columns
-																		paddingRight={2}
-																	>
-																		{/* Header row with status badges */}
-																		<box
-																			flexDirection="row"
-																			gap={2}
-																			marginBottom={0.5}
-																		>
-																			<Show when={discussion.findingId}>
-																				<text
-																					fg={
-																						discussion.notes[0].resolved
-																							? uiColors.success
-																							: uiColors.warning
-																					}
-																					attributes={TextAttributes.BOLD}
-																				>
-																					{discussion.notes[0].resolved
-																						? "☑ FIX"
-																						: "☐ FIX"}
-																				</text>
-																			</Show>
-																			<Show when={isOutdated}>
-																				<text
-																					fg={uiColors.warning}
-																					attributes={TextAttributes.BOLD}
-																				>
-																					⚠ OUTDATED
-																				</text>
-																			</Show>
-																			<Show when={discussion.notes[0].resolved}>
-																				<text
-																					fg={uiColors.success}
-																					attributes={TextAttributes.BOLD}
-																				>
-																					✓ Resolved
-																				</text>
-																			</Show>
-																			<Show
-																				when={
-																					!discussion.notes[0].resolved &&
-																					!isOutdated
-																				}
-																			>
-																				<text
-																					fg={uiColors.warning}
-																					attributes={TextAttributes.BOLD}
-																				>
-																					● Open
-																				</text>
-																			</Show>
-																		</box>
-
-																		{/* Conversation Messages with Timeline */}
-																		<Show when={!threadIsCollapsed()}>
-																			<box flexDirection="column">
-																				<For each={discussion.notes}>
-																					{(note, noteIndex) => {
-																						const isLastNote = () =>
-																							noteIndex() ===
-																							discussion.notes.length - 1;
-																						return (
-																							<box
-																								style={{
-																									width: "100%",
-																									flexDirection: "row",
-																									flexShrink: 0,
-																								}}
-																							>
-																								{/* Timeline Column */}
-																								<box
-																									style={{
-																										width: 4,
-																										flexDirection: "column",
-																										alignItems: "center",
-																										flexShrink: 0,
-																									}}
-																								>
-																									{/* Node */}
-																									<box
-																										style={{
-																											width: 3,
-																											height: 1,
-																											justifyContent: "center",
-																											alignItems: "center",
-																										}}
-																									>
-																										<text fg={uiColors.primary}>
-																											●
-																										</text>
-																									</box>
-
-																									{/* Vertical line */}
-																									<Show when={!isLastNote()}>
-																										<box
-																											style={{
-																												width: 1,
-																												flexGrow: 1,
-																												flexDirection: "column",
-																											}}
-																										>
-																											{/* Calculate approximate lines needed based on message length */}
-																											{(() => {
-																												const bodyLength =
-																													note.body?.length ||
-																													0;
-																												const lines = Math.max(
-																													3,
-																													Math.ceil(
-																														bodyLength / 80,
-																													) + 2,
-																												);
-																												return Array(lines)
-																													.fill(null)
-																													.map((_, _i) => (
-																														<text
-																															fg={
-																																uiColors.bgSurface1
-																															}
-																														>
-																															│
-																														</text>
-																													));
-																											})()}
-																										</box>
-																									</Show>
-																								</box>
-
-																								{/* Message Content */}
-																								<box
-																									style={{
-																										flexGrow: 1,
-																										flexDirection: "column",
-																										paddingLeft: 1,
-																										paddingBottom: 1.5,
-																									}}
-																								>
-																									{/* Message Header: Author + Time */}
-																									<box
-																										flexDirection="row"
-																										gap={1}
-																									>
-																										<text
-																											fg={uiColors.textPrimary}
-																											attributes={
-																												TextAttributes.BOLD
-																											}
-																										>
-																											{note.author?.name ||
-																												"Unknown"}
-																										</text>
-																										<text
-																											fg={uiColors.textMuted}
-																										>
-																											{formatTimestamp(
-																												note.created_at,
-																											)}
-																										</text>
-																									</box>
-
-																									{/* Message Body */}
-																									<box
-																										style={{
-																											width: "100%",
-																											marginTop: 0.5,
-																										}}
-																									>
-																										<text
-																											fg={
-																												uiColors.textSecondary
-																											}
-																										>
-																											{note.body ||
-																												"(no content)"}
-																										</text>
-																									</box>
-																								</box>
-																							</box>
-																						);
-																					}}
-																				</For>
-																			</box>
-																		</Show>
-
-																		{/* Collapsed state - show expand button */}
-																		<Show when={threadIsCollapsed()}>
-																			<box
-																				flexDirection="row"
-																				gap={1}
-																				alignItems="center"
-																				marginBottom={1}
-																			>
-																				<text
-																					fg={uiColors.textPrimary}
-																					attributes={TextAttributes.BOLD}
-																				>
-																					{discussion.notes[0].author?.name ||
-																						"Unknown"}
-																				</text>
-																				<text fg={uiColors.textMuted}>
-																					{formatTimestamp(
-																						discussion.notes[0].created_at,
-																					)}
-																				</text>
-																				<text
-																					fg={uiColors.borderHighlight}
-																					attributes={TextAttributes.BOLD}
-																				>
-																					[t] Show {notesCount}{" "}
-																					{notesCount === 1
-																						? "message"
-																						: "messages"}
-																				</text>
-																			</box>
-																		</Show>
-																	</box>
-																</MarkedThread>
-															);
-														}}
+														{(discussion) => (
+															<DiscussionThread
+																discussion={discussion}
+																outdated={isCommentOutdated(discussion)}
+																collapsed={isCollapsed(discussion.id)}
+																selected={isSelected()}
+																range={isInSelection()}
+																formatTimestamp={formatTimestamp}
+																paddingLeft={6}
+																repliesEnabled={
+																	props.onReplyToDiscussion !== undefined
+																}
+																replyActive={
+																	props.replyModeDiscussionId === discussion.id
+																}
+																{...(props.replyText !== undefined
+																	? { replyText: props.replyText }
+																	: {})}
+															/>
+														)}
 													</For>
 												</Show>
 
