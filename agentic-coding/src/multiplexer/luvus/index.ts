@@ -5,6 +5,7 @@
 // notification delivery through the semantic CLI, and a scoped event
 // subscription with sequence resume. The named session and socket always come
 // from the environment; this module never hardcodes a path.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { Effect, Either, type Schema, type Scope } from "effect";
 import { agentRunEnvMarker, writeAgentRunEnv } from "../agent-env.ts";
@@ -59,12 +60,27 @@ function toAgentStatus(value: unknown): AgentInfo["status"] {
 		: "unknown";
 }
 
+/** Luvus caps a workspace name at 40 characters while a workflow id may be 80,
+ * so a long id is bounded with an 8-hex digest over the full id: two ids that
+ * share a prefix never share a name, and `workspace.rename` cannot fail the
+ * whole workspace setup. */
+export function luvusWorkspaceName(label: string): string {
+	if (label.length <= LUVUS_WORKSPACE_NAME_MAX) return label;
+	const suffix = `-${createHash("sha256").update(label).digest("hex").slice(0, 8)}`;
+	return `${label.slice(0, LUVUS_WORKSPACE_NAME_MAX - suffix.length)}${suffix}`;
+}
+
+/** The installed Luvus server's workspace-name cap (`workspace name must be at
+ * most 40 characters`). */
+export const LUVUS_WORKSPACE_NAME_MAX = 40;
+
 function workspaceInfo(row: L.WorkspaceRow): WorkspaceInfo | undefined {
 	const id = row.workspace_id ?? row.workspace;
 	if (!id) return undefined;
 	return {
 		workspaceId: id,
 		...(row.name ? { label: row.name, name: row.name } : {}),
+		...(row.active ? { active: true } : {}),
 	};
 }
 
@@ -178,11 +194,14 @@ export class LuvusMultiplexer implements MultiplexerPort {
 			catch: (error) => this.fail(error),
 		});
 	}
-	/** Resolve the id params Luvus accepts for a stable id or a 0-based index. */
+	/** Resolve the id params Luvus accepts for a stable id or a 0-based index.
+	 * `workspace` is an index, so a label only ever goes through `workspace_id`
+	 * (which answers `not_found`, letting the caller fall through to the name
+	 * scan); passing a label as `workspace` fails as an invalid index instead. */
 	private workspaceParams(idOrLabel: string): Record<string, unknown>[] {
 		return /^\d+$/.test(idOrLabel)
 			? [{ workspace: idOrLabel }, { workspace_id: idOrLabel }]
-			: [{ workspace_id: idOrLabel }, { workspace: idOrLabel }];
+			: [{ workspace_id: idOrLabel }];
 	}
 	private findWorkspace(
 		idOrLabel: string,
@@ -202,8 +221,12 @@ export class LuvusMultiplexer implements MultiplexerPort {
 			}
 			const list = yield* this.request("workspace.list");
 			const result = yield* this.decode(L.workspaceListResult, list);
+			const bounded = luvusWorkspaceName(idOrLabel);
 			const match = (result.workspaces ?? []).find(
-				(row) => row.name === idOrLabel || row.cwd === idOrLabel,
+				(row) =>
+					row.name === idOrLabel ||
+					row.name === bounded ||
+					row.cwd === idOrLabel,
 			);
 			return match ? workspaceInfo(match) : undefined;
 		});
@@ -228,7 +251,7 @@ export class LuvusMultiplexer implements MultiplexerPort {
 			if (i.label.trim())
 				yield* this.request("workspace.rename", {
 					workspace: opened.workspace,
-					name: i.label,
+					name: luvusWorkspaceName(i.label),
 				});
 			const info = yield* this.findWorkspace(opened.workspace);
 			return info ?? { workspaceId: opened.workspace, label: i.label };

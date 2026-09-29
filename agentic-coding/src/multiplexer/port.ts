@@ -63,6 +63,11 @@ export interface WorkspaceInfo {
 	readonly name?: string;
 	readonly status?: string;
 	readonly closedAt?: string;
+	/** True for the workspace the developer is looking at. Only runtimes whose
+	 * tab API is workspace-scoped (Luvus) report it, and a caller uses it to
+	 * restore the developer's view after a setup that had to focus a new
+	 * workspace. */
+	readonly active?: boolean;
 }
 
 export interface TabInfo {

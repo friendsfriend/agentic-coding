@@ -10,6 +10,7 @@ import type {
 	AgentHandle,
 	WorkflowSnapshot,
 } from "../src/contracts/workflow.ts";
+import { LuvusMultiplexer } from "../src/multiplexer/luvus/index.ts";
 import type { AgentAdapter, LaunchContext } from "../src/workflow/adapters.ts";
 import { cliTest } from "../src/workflow/cli.ts";
 import {
@@ -1810,6 +1811,153 @@ test("proposal workspace setup stays on the dirty current checkout", async () =>
 		expect(calls).toContainEqual(["workspace", "close", "proposal-workspace"]);
 		expect(fs.existsSync(repo)).toBe(true);
 		expect(started.view.definition.id).toBe("openspec-propose");
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
+	}
+});
+
+test("workspace setup restores the developer's focused workspace", async () => {
+	// Luvus's tab API is workspace-scoped (tab.new/tab.list ignore workspace_id),
+	// so setup must focus the workflow workspace; it must put the developer's
+	// workspace back instead of leaving the view on the workflow.
+	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-focus-"));
+	try {
+		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+		fs.writeFileSync(path.join(repo, "README.md"), "x\n");
+		execFileSync("git", ["add", "."], { cwd: repo });
+		execFileSync(
+			"git",
+			[
+				"-c",
+				"user.email=test@example.com",
+				"-c",
+				"user.name=Test",
+				"commit",
+				"-qm",
+				"base",
+			],
+			{ cwd: repo },
+		);
+		const profile = {
+			name: "pi",
+			runtime: "pi" as const,
+			executable: "sh",
+			tools: [],
+			extensions: [],
+			readOnly: false,
+			capabilities: ["prompt", "run-environment", "observe"] as const,
+			digest: "profile",
+		};
+		const routing = {
+			defaultProfile: "pi",
+			routes: [
+				{ stepId: "core.implementation", role: "worker", profile },
+				{ stepId: "core.triage", role: "triage", profile },
+				{ stepId: "core.verification", profile },
+			],
+			diversity: [],
+		};
+		const registry = registerBuiltins();
+		const engine = new WorkflowEngine(registry);
+		engine.start({
+			repo,
+			mode: "checkout",
+			workflowId: "focus-restore",
+			definitionId: "no-openspec",
+			metadata: {
+				branch: "main",
+				baseBranch: "main",
+				baseCommit: "base",
+				task: "task",
+			},
+			routing,
+		});
+		const focuses: string[] = [];
+		const port = new LuvusMultiplexer({
+			socketPath: "/unused.sock",
+			sleep: () => Effect.void,
+			request: async (method, params) => {
+				if (method === "workspace.list")
+					return {
+						type: "workspace_list",
+						workspaces: [
+							{
+								workspace: "0",
+								workspace_id: "developer",
+								name: "developer",
+								cwd: "/developer",
+								active: true,
+							},
+						],
+					};
+				if (method === "workspace.get") {
+					const id = String(params.workspace_id ?? params.workspace ?? "");
+					// The workflow id has no workspace yet, so setup creates one; every
+					// other id resolves (workspaceFocus re-resolves the target).
+					if (id === "focus-restore")
+						throw Object.assign(new Error("workspace not found"), {
+							code: "not_found",
+						});
+					return { type: "workspace", workspace_id: id };
+				}
+				if (method === "workspace.open")
+					return { type: "workspace", workspace: "workflow-ws" };
+				if (method === "workspace.rename") return { type: "workspace_rename" };
+				if (method === "workspace.focus") {
+					focuses.push(String(params.workspace_id));
+					return { type: "ok" };
+				}
+				if (method === "tab.list")
+					return {
+						type: "tab_list",
+						tabs: [{ tab: "1", tab_id: "tab1", name: "root" }],
+					};
+				if (method === "tab.get")
+					return typeof params.tab_id === "string"
+						? { type: "tab", tab: "1", tab_id: params.tab_id, panes: ["2"] }
+						: {
+								type: "tab",
+								tab: params.tab,
+								tab_id: "tab2",
+								workspace_id: "workflow-ws",
+								panes: ["2"],
+							};
+				if (method === "tab.new") return { type: "tab", tab: "2" };
+				if (method === "pane.get")
+					return {
+						type: "pane",
+						pane: "2",
+						tab_id: "tab1",
+						workspace_id: "workflow-ws",
+					};
+				if (method === "pane.processes")
+					return { type: "pane_processes", root_process: { pid: 1 } };
+				if (["tab.rename", "pane.run", "workspace.close"].includes(method))
+					return { type: "ok" };
+				throw new Error(`unexpected ${method}`);
+			},
+		});
+		const handlers = agentEffectHandlers(repo, engine, {
+			registry,
+			adapters: new Map(),
+			port,
+			async paneForRun() {
+				return { paneId: "pane", owned: true };
+			},
+		});
+		const setup = engine
+			.claimEffects(repo, 10)
+			.find((effect) => effect.kind === "workspace.setup");
+		if (!setup) throw new Error("expected workspace setup effect");
+		const result = await Effect.runPromise(
+			handlers["workspace.setup"]?.execute(setup) ?? Effect.never,
+		);
+		expect(result).toMatchObject({
+			workspace: "workflow-ws",
+			worktree: fs.realpathSync(repo),
+		});
+		expect(focuses).toContain("workflow-ws");
+		expect(focuses.at(-1)).toBe("developer");
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
 	}

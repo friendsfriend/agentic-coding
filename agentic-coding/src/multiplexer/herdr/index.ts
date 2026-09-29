@@ -422,6 +422,9 @@ export class HerdrMultiplexer implements MultiplexerPort {
 				i.cwd,
 				"--label",
 				i.label,
+				// A workflow workspace must not steal the developer's view; the old
+				// `worktree create --no-focus` had the same guarantee.
+				"--no-focus",
 			]);
 			const result = yield* this.decode(H.workspaceCreateResult, raw);
 			const workspace = result.workspace?.workspace_id;

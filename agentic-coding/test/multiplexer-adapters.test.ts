@@ -15,7 +15,11 @@ import {
 } from "../src/multiplexer/factory.ts";
 import { Herdr } from "../src/multiplexer/herdr/cli.ts";
 import { HerdrMultiplexer } from "../src/multiplexer/herdr/index.ts";
-import { LuvusMultiplexer } from "../src/multiplexer/luvus/index.ts";
+import {
+	LUVUS_WORKSPACE_NAME_MAX,
+	LuvusMultiplexer,
+	luvusWorkspaceName,
+} from "../src/multiplexer/luvus/index.ts";
 import {
 	resolveLuvusSocketPath,
 	UhpError,
@@ -532,6 +536,8 @@ describe("Herdr adapter request shape", () => {
 				"/repo",
 				"--label",
 				"wf",
+				// Workflow setup must not steal the developer's view.
+				"--no-focus",
 			]);
 			expect(script.calls).toContainEqual([
 				"tab",
@@ -782,6 +788,67 @@ describe("Luvus adapter request shape and outcomes", () => {
 		} finally {
 			fs.rmSync(repo, { recursive: true, force: true });
 		}
+	});
+
+	test("a long workflow id is bounded to Luvus's workspace-name cap", () => {
+		// A workflow id may be 80 chars; `workspace.rename` rejects anything over
+		// 40, which used to fail the whole workspace setup permanently.
+		const short = "fix-agent-findings-missing";
+		expect(luvusWorkspaceName(short)).toBe(short);
+		const long = "verifiers-dont-show-findings-in-agent-list";
+		const bounded = luvusWorkspaceName(long);
+		expect(bounded.length).toBe(LUVUS_WORKSPACE_NAME_MAX);
+		expect(bounded).toMatch(/^verifiers-dont-show-findings-in-[0-9a-f]{8}$/);
+		// Two ids sharing a prefix never share a name.
+		expect(luvusWorkspaceName(`${long}-two`)).not.toBe(bounded);
+	});
+
+	test("workspaceCreate renames with the bounded label, never the raw id", async () => {
+		const repo = fs.mkdtempSync(path.join(os.tmpdir(), "luvus-long-label-"));
+		try {
+			const script = scriptedLuvus(repo);
+			const long = "verifiers-dont-show-findings-in-agent-list";
+			await run(script.port.workspaceCreate({ cwd: repo, label: long }));
+			const rename = script.calls.find(
+				(call) => call.method === "workspace.rename",
+			);
+			expect(rename?.params).toEqual({
+				workspace: "0",
+				name: luvusWorkspaceName(long),
+			});
+		} finally {
+			fs.rmSync(repo, { recursive: true, force: true });
+		}
+	});
+
+	test("a workspace label resolves through the name scan, never as an index", async () => {
+		// Luvus's `workspace` param is an index; sending a label there fails with
+		// `unavailable` and used to abort the lookup before the name scan ran.
+		const long = "verifiers-dont-show-findings-in-agent-list";
+		const bounded = luvusWorkspaceName(long);
+		const port = new LuvusMultiplexer({
+			socketPath: "/unused.sock",
+			sleep: () => Effect.void,
+			request: async (method, params) => {
+				if (method === "workspace.get") {
+					if ("workspace" in params)
+						throw Object.assign(
+							new Error("workspace indices must be non-negative integers"),
+							{ code: "bad_request" },
+						);
+					throw Object.assign(new Error("workspace not found"), {
+						code: "not_found",
+					});
+				}
+				if (method === "workspace.list")
+					return {
+						type: "workspace_list",
+						workspaces: [{ workspace: "0", workspace_id: "ws", name: bounded }],
+					};
+				throw new Error(`unexpected ${method}`);
+			},
+		});
+		expect((await run(port.workspaceGet(long)))?.workspaceId).toBe("ws");
 	});
 
 	test("the named session and socket layout are honored from the environment", () => {

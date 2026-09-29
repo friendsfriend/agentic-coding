@@ -1001,6 +1001,12 @@ export function agentEffectHandlers(
 			execute: (effect, signal) =>
 				Effect.gen(function* () {
 					const snapshot = snapshotFor(effect);
+					// Luvus's workspace-scoped tab API forces the workflow workspace to be
+					// focused while its tabs are set up; remember the developer's workspace
+					// so setup does not leave the view on the workflow.
+					const previousWorkspace = yield* p(() =>
+						activeWorkspaceAsync(options.port),
+					);
 					if (
 						isWikiWorkflowTarget(repo) ||
 						isResearchWorkflowTarget(repo) ||
@@ -1067,6 +1073,11 @@ export function agentEffectHandlers(
 							return { cancelled: true };
 						}
 						setupWorkspaces.delete(effect.id);
+						yield* restoreWorkspaceFocus(
+							options.port,
+							previousWorkspace,
+							workspace,
+						);
 						return {
 							workspace,
 							worktree: snapshot.metadata.worktree,
@@ -1184,6 +1195,11 @@ export function agentEffectHandlers(
 							undefined,
 							signal,
 						),
+					);
+					yield* restoreWorkspaceFocus(
+						options.port,
+						previousWorkspace,
+						workspace,
 					);
 					return { workspace, worktree, branch };
 				}),
@@ -2231,6 +2247,32 @@ function worktreePortCall<A>(
  * implementation (worktrunk) and selection lives at the application roots. */
 function worktreePortOf(): WorktreePort {
 	return worktreePort();
+}
+
+/** The workspace the developer is looking at, or `undefined` when the runtime
+ * does not report one. A read failure degrades to "unknown" so it can never
+ * fail workspace setup. */
+async function activeWorkspaceAsync(
+	port: MultiplexerPort,
+): Promise<string | undefined> {
+	try {
+		const workspaces = await Effect.runPromise(port.workspaceList());
+		return workspaces.find((item) => item.active && item.status !== "closed")
+			?.workspaceId;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Put the developer's view back after a setup that had to focus the workflow
+ * workspace. A failed restore is best-effort: setup already succeeded. */
+function restoreWorkspaceFocus(
+	port: MultiplexerPort,
+	previous: string | undefined,
+	current: string,
+): Effect.Effect<void, never> {
+	if (!previous || previous === current) return Effect.void;
+	return port.workspaceFocus(previous).pipe(Effect.catchAll(() => Effect.void));
 }
 async function recoverWorkspaceAsync(
 	port: MultiplexerPort,

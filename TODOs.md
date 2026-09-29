@@ -14,8 +14,10 @@ Big ones:
 Small ones: 
 * (Maybe) Give all agents their own tab. Multitab spawning always has issues for some reason
 * Improve agent steering based on recent runs (observability first)
-* Jev based compaction?
-* Use jev to block bash commands that should be blocked
+* JEV:
+  * Compaction hints
+  * jev for file read questions (agent tool that allows asking questions about a file and jev answers them)
+  * Use jev to block bash commands that should be blocked
 
 Promps (jev):
 
