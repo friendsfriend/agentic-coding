@@ -304,6 +304,53 @@ test("a push refresh serves the review file list from the cache and the resync f
 	}
 });
 
+test("a background refresh keeps the open diff's view model, so its viewport does", async () => {
+	// The dashboard's safety resync re-reads the review file list about once a
+	// second. A fresh view-model object per read re-created the open diff modal
+	// (rows included), and the rebuilt scrollbox starts at the top of the file
+	// while the selected line stays where it was.
+	let diff =
+		"diff --git a/src/a.ts b/src/a.ts\n@@ -1,1 +1,1 @@\n-old();\n+new();\n";
+	configureGateway({
+		observe: async (observation: ObservationRequest) => {
+			if (observation.kind === "local-changes")
+				return [{ newPath: "src/a.ts", linesAdded: 1 }];
+			if (observation.kind === "developer-review-findings") return [];
+			if (observation.kind === "local-diff") return diff;
+			throw new Error(`unexpected ${observation.kind}`);
+		},
+	} as unknown as DashboardGateway);
+	try {
+		await createRoot(async (dispose) => {
+			const feature = createReviewFeature(
+				context({
+					profile: undefined,
+					repo: "/viewport",
+					workflowId: "viewport",
+				}),
+			);
+			await feature.openDeveloperReview();
+			feature.setReviewView("diff");
+			const opened = feature.reviewDiffFile();
+			expect(opened?.new_path).toBe("src/a.ts");
+
+			// An unchanged re-read keeps the identity...
+			await feature.refreshReviewFiles(true);
+			expect(feature.reviewDiffFile()).toBe(opened);
+
+			// ...while a real change to the open file still propagates.
+			diff =
+				"diff --git a/src/a.ts b/src/a.ts\n@@ -1,1 +1,2 @@\n-old();\n+new();\n+extra();\n";
+			feature.setReviewDiff(diff);
+			expect(feature.reviewDiffFile()).not.toBe(opened);
+			expect(feature.reviewDiffFile()?.diff).toBe(diff);
+			dispose();
+		});
+	} finally {
+		clearGateway();
+	}
+});
+
 test("feature tracks draft comments and rejection state in its own signals", async () => {
 	await createRoot(async (dispose) => {
 		const feature = createReviewFeature(context());

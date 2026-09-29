@@ -10,7 +10,7 @@
 
 import { type ScrollBoxRenderable, TextAttributes } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
-import { createEffect, createMemo, For, Show } from "solid-js";
+import { createEffect, createMemo, For, onCleanup, Show } from "solid-js";
 import type { SplitDiffLine } from "../components/diffView.ts";
 import {
 	buildSplitDiffLines,
@@ -134,6 +134,8 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 	const renderer = useRenderer();
 
 	let scrollBox: ScrollBoxRenderable;
+	/** Pending post-layout auto-scroll, replaced on every selection change. */
+	let scrollRetry: ReturnType<typeof setTimeout> | undefined;
 
 	const dimensions = () => ({
 		width: renderer.width,
@@ -578,14 +580,36 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 			return;
 		}
 
-		// Auto-scroll to keep selected line visible
+		const idPrefix = markdownMode ? "block-" : "line-";
+		scrollSelectionIntoView(next, idPrefix);
+		// The rows are re-created whenever the file or the diff behind them
+		// changes, and re-created rows carry no geometry until the next frame
+		// lays them out. Re-apply the scroll once they are measured, or the
+		// viewport stays at the top of the file with the selected line far below
+		// it. A selection that is already visible makes this a no-op.
+		clearTimeout(scrollRetry);
+		scrollRetry = setTimeout(() => {
+			scrollSelectionIntoView(
+				props.selectedLine,
+				markdownMode ? "block-" : "line-",
+			);
+		}, 0);
+		onCleanup(() => clearTimeout(scrollRetry));
+	});
+
+	/**
+	 * Keep `next` and any thread rendered under it in view.
+	 *
+	 * A no-op when the selection is already visible, so it is safe to re-apply
+	 * after the rows have been re-laid out.
+	 */
+	function scrollSelectionIntoView(next: number, idPrefix: string) {
 		if (!scrollBox) return;
 
 		// Find the target line by searching through the wrapper box's children
 		const wrapperBox = scrollBox.getChildren()[0];
 		if (!wrapperBox) return;
 
-		const idPrefix = markdownMode ? "block-" : "line-";
 		const target = wrapperBox.getChildren().find((child) => {
 			return child.id === `${idPrefix}${next}`;
 		});
@@ -610,7 +634,7 @@ export function DiffReviewView(props: DiffReviewViewProps) {
 		// content bottom so the thread stays visible.
 		scrollBox.scrollChildIntoView(target.id);
 		scrollBox.scrollTop = scrollBox.scrollHeight;
-	});
+	}
 
 	// Extract file extension for syntax highlighting
 	const _filetype = () => {

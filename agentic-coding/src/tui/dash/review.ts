@@ -367,14 +367,42 @@ export function createReviewFeature(
 				4 -
 				3,
 		);
-	const reviewDiffFile = createMemo(() => {
-		const file = reviewFile();
-		if (!file) return undefined;
-		return reviewChangeForView(
-			file,
-			withFindingAnchorLines(reviewDiff(), file.newPath, reviewFindings()),
-		);
-	});
+	/**
+	 * Structural equality for the open file's view model. The dashboard's
+	 * background refresh replaces `reviewChanges` with a fresh array every
+	 * second, so a plain memo would hand the open diff modal a new object every
+	 * second: the modal is re-created from scratch and loses its scroll
+	 * position. Keeping the identity while the content is equal keeps the
+	 * mounted diff (and its viewport) in place.
+	 */
+	const sameDiffFile = (
+		a: ReviewChangeForView,
+		b: ReviewChangeForView,
+	): boolean =>
+		a.old_path === b.old_path &&
+		a.new_path === b.new_path &&
+		a.new_file === b.new_file &&
+		a.renamed_file === b.renamed_file &&
+		a.deleted_file === b.deleted_file &&
+		a.diff === b.diff &&
+		a.lines_added === b.lines_added &&
+		a.lines_deleted === b.lines_deleted &&
+		a.review_finding_count === b.review_finding_count;
+	const reviewDiffFile = createMemo(
+		() => {
+			const file = reviewFile();
+			if (!file) return undefined;
+			return reviewChangeForView(
+				file,
+				withFindingAnchorLines(reviewDiff(), file.newPath, reviewFindings()),
+			);
+		},
+		undefined,
+		{
+			equals: (a, b) =>
+				a === undefined || b === undefined ? a === b : sameDiffFile(a, b),
+		},
+	);
 	const reviewDiscussions = createMemo<Discussion[]>(() => [
 		...reviewComments().map((comment, index) => {
 			const position = {
