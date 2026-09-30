@@ -244,15 +244,16 @@ describe("UI preferences", () => {
 
 	beforeEach(() => {
 		dir = mkdtempSync(join(tmpdir(), "ui-prefs-"));
-		previousConfigDir = process.env.DEVENV_CONFIG_DIR;
+		previousConfigDir = process.env.AGENTIC_CODING_CONFIG_DIR;
 		previousLegacy = process.env.HERDR_WORKFLOW_CONFIG;
-		process.env.DEVENV_CONFIG_DIR = dir;
+		process.env.AGENTIC_CODING_CONFIG_DIR = dir;
 		delete process.env.HERDR_WORKFLOW_CONFIG;
 	});
 
 	afterEach(() => {
-		if (previousConfigDir === undefined) delete process.env.DEVENV_CONFIG_DIR;
-		else process.env.DEVENV_CONFIG_DIR = previousConfigDir;
+		if (previousConfigDir === undefined)
+			delete process.env.AGENTIC_CODING_CONFIG_DIR;
+		else process.env.AGENTIC_CODING_CONFIG_DIR = previousConfigDir;
 		if (previousLegacy === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
 		else process.env.HERDR_WORKFLOW_CONFIG = previousLegacy;
 		rmSync(dir, { recursive: true, force: true });
@@ -390,15 +391,16 @@ describe("system theme registration", () => {
 
 	beforeEach(() => {
 		dir = mkdtempSync(join(tmpdir(), "system-theme-config-"));
-		previousConfigDir = process.env.DEVENV_CONFIG_DIR;
-		process.env.DEVENV_CONFIG_DIR = dir;
+		previousConfigDir = process.env.AGENTIC_CODING_CONFIG_DIR;
+		process.env.AGENTIC_CODING_CONFIG_DIR = dir;
 	});
 
 	afterEach(() => {
 		setSystemTheme(undefined);
 		setActiveThemeName("catppuccin");
-		if (previousConfigDir === undefined) delete process.env.DEVENV_CONFIG_DIR;
-		else process.env.DEVENV_CONFIG_DIR = previousConfigDir;
+		if (previousConfigDir === undefined)
+			delete process.env.AGENTIC_CODING_CONFIG_DIR;
+		else process.env.AGENTIC_CODING_CONFIG_DIR = previousConfigDir;
 		rmSync(dir, { recursive: true, force: true });
 	});
 

@@ -35,8 +35,14 @@ function portArg(args: string[], flags: string[]): number | undefined {
 	const raw = arg(args, ...flags);
 	if (raw === undefined) return undefined;
 	const value = Number(raw);
-	if (!Number.isInteger(value) || value < 1 || value > 65535) {
-		console.error(`${flags.join("/")} requires a port from 1 to 65535`);
+	// 0 is not a typo: it lets the OS assign a free port, which the lifecycle
+	// already supports and the startup line reports. Reserving a port elsewhere
+	// and hoping it is still free is a race, and under a parallel test run two
+	// callers can be handed the same one.
+	if (!Number.isInteger(value) || value < 0 || value > 65535) {
+		console.error(
+			`${flags.join("/")} requires a port from 0 to 65535 (0 lets the OS assign one)`,
+		);
 		process.exit(1);
 	}
 	return value;

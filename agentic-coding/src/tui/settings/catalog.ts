@@ -116,7 +116,7 @@ export const SETTINGS_INVENTORY: readonly SettingsInventoryEntry[] = [
 		owner: "src/workflow/profiles.ts",
 		scope: "user",
 		storage:
-			"[agents] default_profile, routes, role_routes, definition_defaults, gates (layered config)",
+			"[agents] default_profile, routes, role_routes, definition_defaults, gates, file_judgment (layered config)",
 		secret: false,
 		effect: "next-start",
 		editable: false,

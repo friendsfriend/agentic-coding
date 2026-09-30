@@ -21,17 +21,27 @@ import { renderAssignment } from "./assignment.ts";
 import { isClassifierProviderId } from "./classifier-providers.ts";
 import {
 	collectClassifierArtifacts,
+	collectFileJudgmentCandidates,
 	collectGateClassifierState,
 	collectTriageClassifierState,
+	type FileJudgmentCandidate,
+	fileSignalsArtifactPath,
+	invokeFileJudgment,
 	invokeGateClassifier,
 	invokeRoutingClassifier,
 	invokeTriageClassifier,
+	type JevSessionBinding,
+	jevSessionBinding,
 	type RoutingClassifierTelemetryObserver,
 	resolveClassifierBinding,
+	writeFileSignalsArtifact,
 } from "./classifier-runner.ts";
 import {
 	APPLY_PHASE_STEPS,
 	type ClassifierAnswer,
+	FILE_JUDGMENT_INTEGRATION,
+	FILE_JUDGMENT_THRESHOLDS,
+	type FileSignalReference,
 	GATE_INTEGRATION,
 	GATE_QUESTION_IDS,
 	GATE_STAGE_BY_STEP,
@@ -42,6 +52,8 @@ import {
 	PLAN_PHASE_STEPS,
 	ROUTING_INTEGRATION,
 	type RoutingQuestionSpec,
+	renderFileSignals,
+	type SkippedFileJudgment,
 	selectGateDecision,
 	selectTriageRoles,
 	TRIAGE_INTEGRATION,
@@ -52,6 +64,7 @@ import {
 	runGitWithCredentialsEffect,
 } from "./credentials.ts";
 import { loadConfig, loadConfigWithProvenance } from "./effects.ts";
+import { AGENT_DEFINITIONS } from "./embedded.generated.ts";
 import {
 	ClassifierUnavailable,
 	PermanentFailure,
@@ -1583,6 +1596,22 @@ export function agentEffectHandlers(
 					);
 					const pane = yield* p(() => options.paneForRun(run.id));
 					if (!live(effect)) return { cancelled: true };
+					// The in-session Jev tool is offered to any run whose resolved provider a
+					// pane can actually reach, whether or not the file-signal sweep is enabled:
+					// it is a general tool the agent drives, not a feature of the sweep. A
+					// hosted provider builds no binding: its credential belongs to another
+					// process and is not handed to an agent whose shell can read its own
+					// environment. An unreadable configuration is no binding either — the
+					// launch path must never fail because of the optional tool.
+					let jev: JevSessionBinding | undefined;
+					try {
+						jev = jevSessionBinding(
+							loadClassifierAgents(snapshot),
+							pinnedClassifierProvider(snapshot),
+						);
+					} catch {
+						jev = undefined;
+					}
 					const ctx: LaunchContext = {
 						profile: run.profile,
 						assignment,
@@ -1601,6 +1630,11 @@ export function agentEffectHandlers(
 							run.profile.runtime === "pi"
 								? `${assetRoot}/extensions/developer-question.ts`
 								: undefined,
+						jevExtensionPath:
+							run.profile.runtime === "pi" && jev
+								? `${assetRoot}/extensions/ask-jev.ts`
+								: undefined,
+						...(jev ? { jev } : {}),
 						signal,
 					};
 					const launchOutcome = yield* Effect.either(adapter.launch(ctx));
@@ -2721,7 +2755,142 @@ function routingClassification(
  * the change forbids: a classifier outage degrades to today's behaviour and
  * never blocks verification. Ownership loss is re-thrown so the runner's
  * cancellation path stays honest. */
+/** One round's per-file judgment sweep, written to an artifact the verifiers
+ * read. Opportunistic by contract: a classifier outage, an unwritable artifact,
+ * or a round with no changed files yields no reference rather than parking
+ * verification. Per-file call failures are already absorbed by the sweep itself
+ * and surface as unjudged files in the artifact. The section is written outside
+ * the worktree so the sweep's own output cannot enter the next round's
+ * candidate set. Ownership loss still propagates: the runner's lease accounting
+ * must never be masked by an opportunistic side quest. */
+/** The conventions preamble prepended to every candidate's state. Read from the
+ * embedded agent definitions so the text a human reviews is exactly the text the
+ * classifier receives, and so the embedded definition version covers it. */
+function fileJudgmentPreamble(): string {
+	return AGENT_DEFINITIONS["instructions/file-judgment-conventions.md"] ?? "";
+}
+
+/** The sweep's collaborators, defaulted to the production implementations so a
+ * test can drive the fail-open contract without a repository, a reachable
+ * classifier, or a writable artifact path. */
+export interface FileSignalSweepDeps {
+	readonly agents: (
+		snapshot: WorkflowSnapshot,
+	) => ReturnType<typeof loadClassifierAgents>;
+	readonly provider: (snapshot: WorkflowSnapshot) => string | undefined;
+	readonly collect: (snapshot: WorkflowSnapshot) => Promise<{
+		candidates: readonly FileJudgmentCandidate[];
+		skipped: readonly SkippedFileJudgment[];
+	}>;
+	readonly judge: typeof invokeFileJudgment;
+	readonly write: (filePath: string, section: string) => FileSignalReference;
+	readonly path: (workflowId: string, revision: number) => string;
+}
+
+/** One round's per-file judgment sweep, written to an artifact the verifiers
+ * read. Opportunistic by contract: a classifier outage, an unwritable artifact,
+ * or a round with no changed files yields no reference rather than parking
+ * verification. Per-file call failures are already absorbed by the sweep itself
+ * and surface as unjudged files in the artifact. The section is written outside
+ * the worktree so the sweep's own output cannot enter the next round's
+ * candidate set. Ownership loss still propagates: the runner's lease accounting
+ * must never be masked by an opportunistic side quest. */
+export function fileSignalSweep(
+	snapshot: WorkflowSnapshot,
+	signal?: AbortSignal,
+	deps: FileSignalSweepDeps = {
+		agents: loadClassifierAgents,
+		provider: pinnedClassifierProvider,
+		collect: collectFileJudgmentCandidates,
+		judge: invokeFileJudgment,
+		write: writeFileSignalsArtifact,
+		path: fileSignalsArtifactPath,
+	},
+): Effect.Effect<FileSignalReference | undefined, Error> {
+	return Effect.gen(function* () {
+		const attempted = yield* Effect.either(
+			Effect.gen(function* () {
+				// Disabled is the default, and the check runs before a single file is
+				// read, so a disabled sweep costs nothing at all.
+				const agents = deps.agents(snapshot);
+				const config = agents.file_judgment;
+				if (config?.enabled !== true) return undefined;
+				const thresholds = {
+					flag: config.threshold ?? FILE_JUDGMENT_THRESHOLDS.flag,
+					unsure: config.unsure ?? FILE_JUDGMENT_THRESHOLDS.unsure,
+				};
+				const collected = yield* p(() => deps.collect(snapshot));
+				if (!collected.candidates.length) return undefined;
+				const binding = resolveClassifierBinding(
+					agents,
+					deps.provider(snapshot),
+					FILE_JUDGMENT_INTEGRATION,
+				);
+				const outcome = yield* deps.judge(
+					binding,
+					collected.candidates,
+					collected.skipped,
+					{
+						preamble: fileJudgmentPreamble(),
+						thresholds,
+						...(config.concurrency !== undefined
+							? { concurrency: config.concurrency }
+							: {}),
+					},
+					signal,
+				);
+				return yield* Effect.try({
+					try: () =>
+						deps.write(
+							deps.path(snapshot.workflowId, snapshot.revision),
+							renderFileSignals(outcome, {
+								provider: binding.provider,
+								model: binding.model,
+								thresholds,
+							}),
+						),
+					catch: (error) =>
+						error instanceof Error ? error : new Error(String(error)),
+				});
+			}),
+		);
+		if (Either.isLeft(attempted))
+			return yield* isOwnershipError(attempted.left)
+				? Effect.fail(attempted.left)
+				: Effect.succeed(undefined);
+		return attempted.right;
+	});
+}
+
+/** The round's verifier-role classification plus this round's per-file judgment
+ * sweep. The sweep never changes the role selection and does not alter the role
+ * classification's own fail-open contract. */
 function triageClassification(
+	snapshot: WorkflowSnapshot,
+	definitionId: string,
+	announceGateSkip: (stage: GateStage, noul?: number) => void,
+	signal?: AbortSignal,
+): Effect.Effect<TriageClassificationWithSignals, Error> {
+	return Effect.gen(function* () {
+		const classified = yield* classifyTriageRoles(
+			snapshot,
+			definitionId,
+			announceGateSkip,
+			signal,
+		);
+		const fileSignals = yield* fileSignalSweep(snapshot, signal);
+		return fileSignals ? { ...classified, fileSignals } : classified;
+	});
+}
+
+/** The triage payload plus the sweep's artifact reference. Declared here rather
+ * than on `TriageClassification` so the role-classification shape stays exactly
+ * the contract the reducer and the step behavior already agreed on. */
+type TriageClassificationWithSignals = TriageClassification & {
+	fileSignals?: FileSignalReference;
+};
+
+function classifyTriageRoles(
 	snapshot: WorkflowSnapshot,
 	definitionId: string,
 	announceGateSkip: (stage: GateStage, noul?: number) => void,

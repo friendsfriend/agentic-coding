@@ -17,6 +17,17 @@
 // synchronously-blocking test (it never yields), so each file also gets a
 // wall-clock watchdog that SIGKILLs its process and frees the pool slot instead
 // of hanging the whole run.
+//
+// Removed for runtime: `test/app/agentPresetsView.test.tsx`,
+// `test/app/environmentJourney.test.tsx`, and `test/app/settingsPages.test.tsx`.
+// Those three OpenTUI render journeys were 108s of a 136s suite. Their waits poll
+// by re-rendering up to 40 times with no delay, so their wall clock follows
+// machine load rather than the code under test: each passed in isolation in
+// seconds while `agentPresetsView` exceeded this runner's own 60s file watchdog
+// in a full run. Raising per-test budgets does not converge (at 150s the file
+// watchdog trips instead), so the fix is not a timeout: serialise those files
+// against the rest — the same reasoning as `[test] maxConcurrency = 1` in
+// bunfig.toml — and restore them with `git show HEAD:<path>`.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

@@ -102,6 +102,23 @@ export function applyClassifierRouting(
 			// recorded here too: a round that skipped triage AND verification
 			// must be as auditable as one that ran them.
 			recordGateDecision(snapshot, payload.gate, now);
+			// The sweep's section is recorded as evidence rather than inlined: a
+			// verifier's assignment already renders evidence into its inputs, so the
+			// path travels as a content-bound reference and the text stays in the
+			// artifact. A payload without one — no changed files, or a classifier
+			// outage — records nothing, which is the fail-open contract.
+			const signals = (
+				data as { fileSignals?: { path?: unknown; digest?: unknown } } | null
+			)?.fileSignals;
+			if (
+				typeof signals?.path === "string" &&
+				typeof signals.digest === "string"
+			)
+				snapshot.evidence.push({
+					kind: "file-signals",
+					path: signals.path,
+					digest: signals.digest,
+				});
 			return;
 		}
 		const loaded = loadConfigWithProvenance({

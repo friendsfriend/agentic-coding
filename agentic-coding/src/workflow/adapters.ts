@@ -13,6 +13,7 @@ import type {
 	MultiplexerPort,
 } from "../multiplexer/port.ts";
 import type { RenderedAssignment } from "./assignment.ts";
+import type { JevSessionBinding } from "./classifier-runner.ts";
 import {
 	closeSecureDirectory,
 	openSecureDirectory,
@@ -42,6 +43,15 @@ export interface LaunchContext {
 	bridgePath?: string;
 	/** Trusted workflow extension; distinct from user-configured extensions. */
 	workflowExtensionPath?: string;
+	/** The in-session `ask_jev` tool. Absent for a runtime with no such tool, and
+	 * loaded only by the runtime whose adapter knows how to hand it the run's
+	 * classifier binding. */
+	jevExtensionPath?: string;
+	/** The resolved classifier binding the in-session tool obeys, or absent when
+	 * no pane-reachable provider is resolved. Serialized into the pane
+	 * environment by the launcher, never read from the machine: the agent cannot
+	 * select a provider the run was not pinned to. */
+	jev?: JevSessionBinding;
 	/** Abort ownership-bound external work when the effect lease is lost. */
 	signal?: AbortSignal;
 }
@@ -136,6 +146,7 @@ export class PiAdapter extends BaseAdapter {
 			args.push("--extension", extension);
 		if (ctx.workflowExtensionPath)
 			args.push("--extension", ctx.workflowExtensionPath);
+		if (ctx.jevExtensionPath) args.push("--extension", ctx.jevExtensionPath);
 		if (ctx.bridgePath) args.push("--extension", ctx.bridgePath);
 		const withLauncher = withRuntimeLauncher(ctx, "pi");
 		return launchHandle(this.lifecycle, withLauncher, "pi", args, ctx);
@@ -243,6 +254,10 @@ function withRuntimeLauncher(
 	const environment = {
 		...ctx.environment,
 		PATH: `${directory}:${process.env.PATH ?? ""}`,
+		// The binding travels to the pane, so the in-session tool cannot disagree
+		// with the run's pinned classifier. It is not a secret: for a hosted
+		// provider no binding is built at all.
+		...(ctx.jev ? { AGENTIC_JEV: JSON.stringify(ctx.jev) } : {}),
 	};
 	const exports = Object.entries(environment)
 		.filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))

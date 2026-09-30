@@ -6,6 +6,6 @@ preload = ["@opentui/solid/preload"]
 linker = "hoisted"
 
 [test]
-preload = ["@opentui/solid/preload"]
+preload = ["@opentui/solid/preload", "./test/support/isolate-config-root.ts"]
 # OpenTUI's test renderer uses process-global terminal state.
 maxConcurrency = 1

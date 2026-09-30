@@ -79,13 +79,37 @@ const temps: string[] = [];
 // the missing-credential tests below set an explicit empty value on purpose.
 // The fallback is scoped to this file so no other test file inherits it.
 let previousOpencodeKey: string | undefined;
+let previousConfigRoot: string | undefined;
+let isolatedConfigRoot: string | undefined;
 beforeAll(() => {
 	previousOpencodeKey = process.env.OPENCODE_API_KEY;
 	process.env.OPENCODE_API_KEY ??= "test-key";
+	// `configEnvValue` merges the process environment with the config root's
+	// `.env`, so an empty `process.env.OPENCODE_API_KEY` does NOT make a
+	// credential absent: a machine whose config root carries a `.env` with the key
+	// still resolves one, and every missing-credential test below would silently
+	// exercise the success path instead (measured: the gate returns a
+	// non-forced `run` and the fail-open assertions never run). Point the config
+	// root at a directory this file owns, for the same reason the key fallback is
+	// scoped here: neither the machine nor another config source decides what
+	// these tests see. Each test file runs in its own process, so this cannot
+	// leak into another file.
+	previousConfigRoot = process.env.AGENTIC_CODING_CONFIG_DIR;
+	isolatedConfigRoot = fs.mkdtempSync(
+		path.join(os.tmpdir(), "workflow-config-"),
+	);
+	process.env.AGENTIC_CODING_CONFIG_DIR = isolatedConfigRoot;
 });
 afterAll(() => {
 	if (previousOpencodeKey === undefined) delete process.env.OPENCODE_API_KEY;
 	else process.env.OPENCODE_API_KEY = previousOpencodeKey;
+	if (previousConfigRoot === undefined)
+		delete process.env.AGENTIC_CODING_CONFIG_DIR;
+	else process.env.AGENTIC_CODING_CONFIG_DIR = previousConfigRoot;
+	// Deliberately not registered with `temps`: the config root must outlive every
+	// per-test cleanup, and only this hook removes it.
+	if (isolatedConfigRoot)
+		fs.rmSync(isolatedConfigRoot, { recursive: true, force: true });
 });
 function tempDir(): string {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-classifier-"));

@@ -565,6 +565,7 @@ describe("profiles, assignments, and adapters", () => {
 			"bash",
 			"developer_question",
 			"agent_ask",
+			"ask_jev",
 		]);
 		expect(verifier.profile.capabilities).toContain("read-only");
 		expect(verifier.profile.capabilities).not.toContain("edit");
@@ -617,7 +618,7 @@ describe("profiles, assignments, and adapters", () => {
 			);
 			if (!start) throw new Error("expected agent start call");
 			expect(start[start.indexOf("--tools") + 1]).toBe(
-				"read,bash,developer_question,agent_ask",
+				"read,bash,developer_question,agent_ask,ask_jev",
 			);
 			expect(start).toContain("--no-extensions");
 			expect(start).not.toContain("edit");

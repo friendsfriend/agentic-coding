@@ -99,6 +99,29 @@ export interface AgentsConfig {
 	/** The selected classifier transport. Absent means the default hosted
 	 * provider, so a configuration that says nothing behaves exactly as today. */
 	classifier?: ClassifierConfig;
+	/** The per-file judgment sweep (`[agents.file_judgment]`). Absent means
+	 * disabled, so a configuration that says nothing spends no classifier calls
+	 * and writes no artifact. */
+	file_judgment?: FileJudgmentConfig;
+}
+
+/** The per-file judgment sweep (`[agents.file_judgment]`). The provider and the
+ * model are NOT here on purpose: they resolve from `[agents.classifier]` and
+ * `agents.profiles["jev-classifier"].model` like every other classifier
+ * integration, so an operator keeps exactly one model knob. This table carries
+ * only the sweep's own bounds. */
+export interface FileJudgmentConfig {
+	/** Off unless explicitly enabled: an enabled sweep spends one classifier call
+	 * per changed file on every verification round and records an evidence
+	 * artifact. */
+	enabled: boolean;
+	/** Above this probability a file is reported as a finding. */
+	threshold?: number;
+	/** At or above this probability, and at or below `threshold`, a file is
+	 * reported as ambiguous instead of being dropped. */
+	unsure?: number;
+	/** How many classifier calls may be in flight. */
+	concurrency?: number;
 }
 /** The classifier transport selection (`[agents.classifier]`). */
 export interface ClassifierConfig {
@@ -239,6 +262,15 @@ export function parseAgentsConfig(
 					),
 				}
 			: {}),
+		...(input.file_judgment !== undefined
+			? {
+					file_judgment: validateFileJudgment(
+						input.file_judgment,
+						"agents.file_judgment",
+						source,
+					),
+				}
+			: {}),
 		...(input.role_routes
 			? {
 					role_routes: input.role_routes as Record<
@@ -337,6 +369,53 @@ function validateClassifier(
 		...(table.options !== undefined
 			? { options: table.options as Record<string, unknown> }
 			: {}),
+	};
+}
+
+function validateFileJudgment(
+	value: unknown,
+	where: string,
+	source?: string,
+): FileJudgmentConfig {
+	const location = source ? `${where} (${source})` : where;
+	if (!value || typeof value !== "object" || Array.isArray(value))
+		throw new Error(`${location} must be a table with an \`enabled\` boolean`);
+	const table = value as Record<string, unknown>;
+	if (typeof table.enabled !== "boolean")
+		throw new Error(`${location}.enabled must be a boolean`);
+	const probability = (key: string): number | undefined => {
+		const raw = table[key];
+		if (raw === undefined) return undefined;
+		if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0 || raw > 1)
+			throw new Error(
+				`${location}.${key} must be a probability between 0 and 1`,
+			);
+		return raw;
+	};
+	const threshold = probability("threshold");
+	const unsure = probability("unsure");
+	// A flag threshold at or below the ambiguity floor would make the `unsure`
+	// band empty, which is the one configuration that reads as if it works while
+	// silently losing the band's whole purpose.
+	if (threshold !== undefined && unsure !== undefined && unsure > threshold)
+		throw new Error(
+			`${location}.unsure must not be above ${location}.threshold`,
+		);
+	let concurrency: number | undefined;
+	if (table.concurrency !== undefined) {
+		if (
+			typeof table.concurrency !== "number" ||
+			!Number.isInteger(table.concurrency) ||
+			table.concurrency < 1
+		)
+			throw new Error(`${location}.concurrency must be a positive integer`);
+		concurrency = table.concurrency;
+	}
+	return {
+		enabled: table.enabled,
+		...(threshold !== undefined ? { threshold } : {}),
+		...(unsure !== undefined ? { unsure } : {}),
+		...(concurrency !== undefined ? { concurrency } : {}),
 	};
 }
 
@@ -700,7 +779,17 @@ const MUTATING_TOOLS = new Set(["edit", "write", "multi_edit", "multiedit"]);
  * workflow-extension conversation tools the pinned protocol names and a
  * verifier may need (`developer_question`, `agent_ask`). None of them edit the
  * repository; `write`/`edit` stay excluded. */
-const READ_ONLY_PI_TOOLS = ["read", "bash", "developer_question", "agent_ask"];
+const READ_ONLY_PI_TOOLS = [
+	"read",
+	"bash",
+	"developer_question",
+	"agent_ask",
+	// The in-session judgment sweep. It only reads files and asks the run's
+	// configured classifier about them, so it belongs on a verifier's surface;
+	// it is named here for the same reason the two question tools are, because a
+	// declared `--tools` list would otherwise hide it.
+	"ask_jev",
+];
 /** Read-only launch policy for a step that declares the `read-only`
  * requirement (`core.verification`): no edit/write tools and no shell/edit
  * capability, so the adapter launches the runtime without them (pi `--tools`,

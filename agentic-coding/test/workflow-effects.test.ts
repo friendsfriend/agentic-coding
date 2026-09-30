@@ -2542,6 +2542,12 @@ function classifierHandlerFixture(
 			worktree: repo,
 			changeId: "change",
 			task: "private task text",
+			// Pin the provider this fixture exercises. Without a pin the resolution
+			// falls back to the layered configuration, so a developer machine whose
+			// `[agents.classifier].provider` names the local sidecar sent the request
+			// to 127.0.0.1 and the hosted-endpoint assertions read the wrong host.
+			// The pin is what every real run carries, too.
+			classifier: "opencode-zen",
 		},
 	} as unknown as WorkflowSnapshot;
 	const engine = {

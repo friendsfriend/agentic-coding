@@ -284,10 +284,19 @@ test("outer cancellation during observation cancels owned work without executing
 		startWorkflow(engine, repo, "observe-cancel");
 		let executed = 0;
 		let cancelled = 0;
+		// Abort once the observation window has actually opened. A wall-clock timer
+		// races the 50ms observation and, under load, is coalesced past its end — the
+		// effect then executes and the assertion measures the scheduler instead of the
+		// cancellation path (measured: failed in a full run, passed in isolation).
+		let markObserving: () => void = () => {};
+		const observing = new Promise<void>((resolve) => {
+			markObserving = resolve;
+		});
 		const runner = new EffectRunner(repo, engine, {
 			"artifact.write": {
 				observe: () =>
 					Effect.gen(function* () {
+						markObserving();
 						yield* Effect.sleep(50);
 						return undefined;
 					}),
@@ -304,7 +313,8 @@ test("outer cancellation during observation cancels owned work without executing
 		});
 		const controller = new AbortController();
 		const draining = runner.drain(1, 100, controller.signal);
-		setTimeout(() => controller.abort(), 10);
+		await observing;
+		controller.abort();
 		await draining;
 		expect(executed).toBe(0);
 		expect(cancelled).toBe(1);

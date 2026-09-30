@@ -5,10 +5,17 @@
 // full answer per question. The effect handler in `effect-runner.ts` owns
 // outbox/lease concerns; this module stays a plain bounded I/O helper so it can
 // be unit-tested without a workflow.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Effect } from "effect";
+import { resolveConfigRoot } from "../config-root.ts";
 import type { WorkflowSnapshot } from "../contracts/workflow.ts";
+import {
+	diskJudgmentCache,
+	type JudgmentCache,
+	judgmentCacheKey,
+} from "./classifier-cache.ts";
 import {
 	type ClassifierProvider,
 	type ClassifierTarget,
@@ -22,16 +29,26 @@ import {
 import {
 	type ClassifierAnswer,
 	type ClassifierInput,
+	DEFAULT_CLASSIFIER_MODELS,
+	FILE_JUDGMENT_INTEGRATION,
+	FILE_JUDGMENT_QUESTION,
+	FILE_JUDGMENT_QUESTION_ID,
+	FILE_JUDGMENT_THRESHOLDS,
+	type FileJudgmentOutcome,
+	type FileJudgmentThresholds,
+	type FileSignalReference,
 	GATE_INTEGRATION,
 	GATE_QUESTION_IDS,
 	GATE_QUESTIONS,
 	type GateStage,
 	parseClassifierAnswer,
+	pruneFileJudgments,
 	ROUTING_CLASSIFIER_MODEL,
 	ROUTING_CLASSIFIER_PROFILE,
 	ROUTING_INTEGRATION,
 	type RoutingQuestionSpec,
 	routingQuestionInstructions,
+	type SkippedFileJudgment,
 	TRIAGE_INTEGRATION,
 	triageRoleQuestions,
 } from "./classifiers.ts";
@@ -42,7 +59,7 @@ import {
 	TransientFailure,
 } from "./failures.ts";
 import { type LayaLocalClassifier, layaLocalClassifier } from "./laya-local.ts";
-import type { AgentsConfig } from "./profiles.ts";
+import type { AgentsConfig, FileJudgmentConfig } from "./profiles.ts";
 import { changedFilesInAsync } from "./runtime/evidence.ts";
 
 /** Per-artifact and total caps so a large change cannot blow up the prompt or
@@ -227,12 +244,13 @@ export interface ClassifierBinding {
 export function resolveClassifierBinding(
 	agents: AgentsConfig,
 	pinnedProvider?: string,
+	integrationId: string = ROUTING_INTEGRATION,
 ): ClassifierBinding {
 	return {
 		provider:
 			classifierProviderIdOr(pinnedProvider, agents) ??
 			DEFAULT_CLASSIFIER_PROVIDER,
-		model: classifierModel(agents),
+		model: classifierModelFor(agents, integrationId),
 	};
 }
 
@@ -469,9 +487,16 @@ function requestClassifier(
 	});
 }
 
-function classifierModel(agents: AgentsConfig): string {
+function classifierModelFor(
+	agents: AgentsConfig,
+	integrationId: string,
+): string {
 	const profile = agents.profiles[ROUTING_CLASSIFIER_PROFILE];
-	return profile?.model ?? ROUTING_CLASSIFIER_MODEL;
+	return (
+		profile?.model ??
+		DEFAULT_CLASSIFIER_MODELS[integrationId] ??
+		ROUTING_CLASSIFIER_MODEL
+	);
 }
 
 function toError(error: unknown): Error {
@@ -499,11 +524,10 @@ export const CLASSIFIER_START_TIMEOUT_MS = 120_000;
  * `start`); resolution failures become typed Effect failures so the existing
  * fail-open handling applies. The start is bounded so a wedged sidecar cannot
  * hold the effect open indefinitely. */
-function prepareRequest(
+function prepareProvider(
 	integrationId: string,
 	providerId: string,
-	build: () => ClassifierRequest,
-): Effect.Effect<ClassifierRequest, Error> {
+): Effect.Effect<ClassifierProvider, Error> {
 	return Effect.gen(function* () {
 		const provider = yield* Effect.try({
 			try: () => classifierProvider(providerId),
@@ -515,6 +539,17 @@ function prepareRequest(
 				try: () => withTimeout(start(), integrationId),
 				catch: (error) => integrationFailure(integrationId, error),
 			});
+		return provider;
+	});
+}
+
+function prepareRequest(
+	integrationId: string,
+	providerId: string,
+	build: () => ClassifierRequest,
+): Effect.Effect<ClassifierRequest, Error> {
+	return Effect.gen(function* () {
+		yield* prepareProvider(integrationId, providerId);
 		return yield* Effect.try({
 			try: build,
 			catch: (error) => integrationFailure(integrationId, error),
@@ -1079,5 +1114,327 @@ export function invokeGateClassifier(
 			undefined,
 			signal,
 		);
+	});
+}
+
+/** One candidate file for a per-file sweep. The state is the file's *content*,
+ * not its diff: a control-flow question about releases cannot be answered from
+ * a diff, because the unchanged context around a change is what decides it. */
+export interface FileJudgmentCandidate {
+	readonly path: string;
+	readonly content: string;
+}
+
+/** How many classifier calls one sweep may keep in flight. Bounded because a
+ * hosted provider rate-limits a wide fan-out (measured: the free tier stops
+ * answering entirely) and a local sidecar serializes on one inference engine. */
+export const FILE_JUDGMENT_DEFAULT_CONCURRENCY = 4;
+
+/** Read the change's candidate files through the shared classifier budgets. A
+ * file past a budget is reported as skipped rather than judged on a truncated
+ * body: half a function cannot answer a question about all of its exit paths. */
+export async function collectFileJudgmentCandidates(
+	snapshot: WorkflowSnapshot,
+): Promise<{
+	candidates: FileJudgmentCandidate[];
+	skipped: SkippedFileJudgment[];
+}> {
+	const files = await changedFilesInAsync(snapshot);
+	const root = snapshot.metadata.worktree;
+	const candidates: FileJudgmentCandidate[] = [];
+	const skipped: SkippedFileJudgment[] = [];
+	let total = 0;
+	for (const file of files) {
+		if (candidates.length >= CLASSIFIER_FILE_CAP) {
+			skipped.push({ path: file, reason: "past the file cap" });
+			continue;
+		}
+		const remaining = CLASSIFIER_TOTAL_CAP_BYTES - total;
+		if (remaining <= 0) {
+			skipped.push({ path: file, reason: "past the byte budget" });
+			continue;
+		}
+		let content: string;
+		try {
+			content = fs.readFileSync(path.join(root, file), "utf8");
+		} catch {
+			skipped.push({ path: file, reason: "unreadable" });
+			continue;
+		}
+		const budget = Math.min(CLASSIFIER_ARTIFACT_CAP_BYTES, remaining);
+		if (Buffer.byteLength(content) > budget) {
+			skipped.push({ path: file, reason: "over the per-file budget" });
+			continue;
+		}
+		total += Buffer.byteLength(content);
+		candidates.push({ path: file, content });
+	}
+	return { candidates, skipped };
+}
+
+/** The state for one candidate: the conventions preamble, then that one file.
+ * The preamble is what makes helper semantics knowable from a file in
+ * isolation, so a wrapper that releases for the caller can be judged safe. */
+export function renderFileJudgmentState(
+	preamble: string,
+	candidate: FileJudgmentCandidate,
+): string {
+	return [
+		preamble.trim(),
+		`file: ${candidate.path}`,
+		"--- file content ---",
+		candidate.content,
+	]
+		.filter((part) => part.length > 0)
+		.join("\n");
+}
+
+/** The necessity value of one `noul` answer, or undefined when the provider
+ * answered with something unusable. A value-less answer is never a zero: the
+ * caller records it as a skip so it cannot be read as a clean file. */
+function noulOf(answers: Record<string, ClassifierAnswer>): number | undefined {
+	const answer = answers[FILE_JUDGMENT_QUESTION_ID];
+	return answer?.type === "noul" && answer.noul !== undefined
+		? answer.noul
+		: undefined;
+}
+
+/** Counts only: a sweep telemetry event never carries a path or a file body. */
+export interface FileJudgmentTelemetry {
+	readonly integration: typeof FILE_JUDGMENT_INTEGRATION;
+	readonly model: string;
+	readonly candidates: number;
+	readonly judged: number;
+	readonly flagged: number;
+	readonly unsure: number;
+	readonly skipped: number;
+	readonly callsFailed: number;
+	readonly degenerate: boolean;
+	readonly durationMs: number;
+	readonly endpointHost: string;
+}
+
+export interface FileJudgmentOptions {
+	readonly thresholds?: FileJudgmentThresholds;
+	readonly concurrency?: number;
+	/** Reviewable conventions text prepended to every file's state. */
+	readonly preamble?: string;
+	/** Content-addressed judgment cache. `false` asks the classifier about every
+	 * candidate again, which is what a sweep that must not trust earlier answers
+	 * wants. Defaults to the on-disk cache shared by every round and pane. */
+	readonly cache?: JudgmentCache | false;
+}
+
+/** Where a sweep's rendered section is written. Deliberately outside the
+ * worktree: a derived artifact inside it would enter the next round's
+ * changed-file set and feed itself back into the sweep. */
+export function fileSignalsArtifactPath(
+	workflowId: string,
+	revision: number,
+): string {
+	return path.join(
+		resolveConfigRoot(),
+		"file-signals",
+		workflowId,
+		`r${revision}.md`,
+	);
+}
+
+/** Write one sweep's rendered section and return its content-bound evidence
+ * reference. The digest covers the exact bytes written, so a reference cannot
+ * silently point at a different section than the one that was judged. */
+export function writeFileSignalsArtifact(
+	filePath: string,
+	section: string,
+): FileSignalReference {
+	fs.mkdirSync(path.dirname(filePath), { recursive: true });
+	fs.writeFileSync(filePath, section, "utf8");
+	return {
+		path: filePath,
+		digest: createHash("sha256").update(section).digest("hex"),
+	};
+}
+
+/** The per-run binding the in-session `ask_jev` tool obeys, serialized
+ * into the pane environment. The engine owns it so the tool cannot disagree with
+ * the run's pinned classifier: provider, model, endpoint, question, preamble and
+ * thresholds all come from the same resolution point the engine-side sweep uses.
+ *
+ * Absent for any provider other than the local sidecar. A hosted provider's
+ * credential belongs to another process and is deliberately not exposed to an
+ * agent whose shell can read its own environment; the tool then reports
+ * in-session judgment as unavailable instead of guessing an endpoint. */
+export interface JevSessionBinding {
+	readonly provider: string;
+	readonly model: string;
+	readonly endpoint: string;
+}
+
+/** Build the pane's binding, or undefined when no pane-reachable provider is
+ * resolved. A sidecar that is not running is an undefined binding, never a
+ * stale endpoint: `classifierTarget` throws until the sidecar reports a URL. */
+export function jevSessionBinding(
+	agents: AgentsConfig,
+	pinnedProvider: string | undefined,
+	// Injectable so the serializer is testable without a running sidecar, the
+	// same seam `layaLocalProvider` uses for its classifier.
+	resolveTarget: (
+		provider: string,
+		model: string,
+	) => ClassifierTarget = classifierTarget,
+): JevSessionBinding | undefined {
+	const binding = resolveClassifierBinding(
+		agents,
+		pinnedProvider,
+		FILE_JUDGMENT_INTEGRATION,
+	);
+	if (binding.provider !== LAYA_LOCAL_PROVIDER) return undefined;
+	let target: ClassifierTarget;
+	try {
+		target = resolveTarget(binding.provider, binding.model);
+	} catch {
+		return undefined;
+	}
+	return {
+		provider: binding.provider,
+		// The local provider always answers with its own model id, so the pane is
+		// told what the sidecar will be asked for rather than what was configured.
+		model: target.model,
+		endpoint: target.url,
+	};
+}
+
+/** Ask one snap judgment per candidate file through the same pinned provider and
+ * profile as every other classifier integration, then band the answers.
+ *
+ * A failed call is not fatal to the sweep: it is recorded as an unjudged file so
+ * the coverage count stays honest and one rate-limited request cannot discard
+ * the answers that did arrive.
+ *
+ * ponytail: one request per file through a bounded pool and the shared per-call
+ * timeout; there is no whole-sweep deadline. Add one only if a wedged provider
+ * can hold a launch open past the per-call bound. */
+export function invokeFileJudgment(
+	binding: ClassifierBinding,
+	candidates: readonly FileJudgmentCandidate[],
+	skipped: readonly SkippedFileJudgment[],
+	options: FileJudgmentOptions = {},
+	signal?: AbortSignal,
+	observer?: (event: FileJudgmentTelemetry) => void,
+): Effect.Effect<FileJudgmentOutcome, Error> {
+	const thresholds = options.thresholds ?? FILE_JUDGMENT_THRESHOLDS;
+	const concurrency = Math.max(
+		1,
+		options.concurrency ?? FILE_JUDGMENT_DEFAULT_CONCURRENCY,
+	);
+	const preamble = options.preamble ?? "";
+	const cache =
+		options.cache === false
+			? undefined
+			: (options.cache ?? diskJudgmentCache());
+	return Effect.gen(function* () {
+		// Look every candidate up before resolving a transport. On a round where
+		// nothing changed, this answers the whole sweep without starting a sidecar
+		// or making a call — the cache has to remove the cost, not just the call.
+		const looked = yield* Effect.sync(() =>
+			candidates.map((candidate) => {
+				const state = renderFileJudgmentState(preamble, candidate);
+				const key = cache
+					? judgmentCacheKey({
+							provider: binding.provider,
+							model: binding.model,
+							question: FILE_JUDGMENT_QUESTION,
+							state,
+						})
+					: undefined;
+				return {
+					candidate,
+					state,
+					key,
+					noul: key !== undefined ? cache?.read(key) : undefined,
+				};
+			}),
+		);
+		const misses = looked.filter((entry) => entry.noul === undefined);
+		let target: ClassifierTarget | undefined;
+		if (misses.length) {
+			const provider = yield* prepareProvider(
+				FILE_JUDGMENT_INTEGRATION,
+				binding.provider,
+			);
+			target = yield* Effect.try({
+				try: () => provider.resolve({ model: binding.model }),
+				catch: (error) => integrationFailure(FILE_JUDGMENT_INTEGRATION, error),
+			});
+		}
+		const startedAt = Date.now();
+		const resolved = target;
+		const called =
+			resolved === undefined
+				? []
+				: yield* Effect.forEach(
+						misses,
+						(entry) =>
+							Effect.gen(function* () {
+								const request: ClassifierRequest = {
+									target: resolved,
+									body: {
+										state: entry.state,
+										questions: {
+											[FILE_JUDGMENT_QUESTION_ID]: {
+												type: "noul",
+												instructions: FILE_JUDGMENT_QUESTION,
+											},
+										},
+									},
+								};
+								const attempted = yield* requestClassifier(
+									FILE_JUDGMENT_INTEGRATION,
+									request,
+									undefined,
+									signal,
+								).pipe(Effect.either);
+								if (attempted._tag !== "Right")
+									return {
+										path: entry.candidate.path,
+										noul: undefined,
+										cached: false,
+									};
+								const noul = noulOf(attempted.right);
+								const key = entry.key;
+								// Only a usable answer is remembered: caching an outage would turn
+								// a transient failure into a permanent verdict.
+								if (key !== undefined && noul !== undefined)
+									yield* Effect.sync(() => cache?.write(key, noul));
+								return { path: entry.candidate.path, noul, cached: false };
+							}),
+						{ concurrency },
+					);
+		const answers = [
+			...looked.flatMap((entry) =>
+				entry.noul === undefined
+					? []
+					: [{ path: entry.candidate.path, noul: entry.noul, cached: true }],
+			),
+			...called,
+		];
+		const outcome = pruneFileJudgments(answers, skipped, thresholds);
+		const callsFailed = called.filter(
+			(answer) => answer.noul === undefined,
+		).length;
+		notify(observer, {
+			integration: FILE_JUDGMENT_INTEGRATION,
+			model: binding.model,
+			candidates: candidates.length + skipped.length,
+			judged: outcome.judged,
+			flagged: outcome.flagged.length,
+			unsure: outcome.unsure.length,
+			skipped: outcome.skipped.length,
+			callsFailed,
+			degenerate: outcome.degenerate,
+			durationMs: Date.now() - startedAt,
+			endpointHost: target ? new URL(target.url).host : "cache",
+		});
+		return outcome;
 	});
 }

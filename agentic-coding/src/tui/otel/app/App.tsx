@@ -102,6 +102,7 @@ import {
 } from "../../lifecycle.ts";
 import { AgentPresetsView } from "../../settings/AgentPresetsView.tsx";
 import {
+	fileJudgmentSummaryLabel,
 	type SettingsContext,
 	type SettingsItem,
 	settingsItems,
@@ -231,6 +232,14 @@ function agentRoutingEntries(
 			label: `Stage gate ${stage}`,
 			value: agents.gates?.[stage] ?? "always (default)",
 		});
+	// The per-file judgment sweep is `[agents]` configuration with no bounded
+	// editor either, so its effective state is reported here. The label is built
+	// by the settings item builder so the inventory row stays testable without a
+	// terminal.
+	entries.push({
+		label: "File judgment sweep",
+		value: fileJudgmentSummaryLabel(agents.file_judgment),
+	});
 	return entries;
 }
 

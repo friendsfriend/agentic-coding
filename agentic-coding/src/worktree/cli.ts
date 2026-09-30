@@ -17,7 +17,6 @@ import { type ProcessFailure, runProcessEffect } from "../workflow/process.ts";
 import {
 	WorktreeError,
 	type WorktreeFailureKind,
-	type WorktreeLocation,
 	type WorktreeRef,
 } from "./port.ts";
 

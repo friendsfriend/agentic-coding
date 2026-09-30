@@ -185,6 +185,213 @@ export function buildRoutingDecisionSummary(
 export const ROUTING_CLASSIFIER_MODEL = "opencode/jev-1.13-free";
 export const ROUTING_CLASSIFIER_PROFILE = "jev-classifier";
 
+/** The identifier a per-file judgment payload carries. Unlike `routing` it
+ * resolves no pool, profile, or preset entry: one bounded file is one question. */
+export const FILE_JUDGMENT_INTEGRATION = "file-judgment";
+
+/** The model the per-file judgment integration asks for by default. Routing and
+ * gates are cheap single-shot decisions over short prose, so they default to
+ * the free model; judging what a file *does* is the one integration that needs
+ * a discriminating model.
+ *
+ * The resolution is provider-relative. With `agents.classifier.provider` set to
+ * `laya-local` the local sidecar is always asked for its own model id
+ * (`laya-system-one`) and this constant is ignored, so the local model is the
+ * default in practice. The hosted fallback stays on the free variant: the
+ * usage-based model must be opted into explicitly with
+ * `agents.profiles["jev-classifier"].model`, because defaulting to it turns
+ * every sweep into a billing error on an account that has no credit. */
+export const FILE_JUDGMENT_CLASSIFIER_MODEL = "opencode/jev-1.13-free";
+
+/** Every classifier integration's fallback model. One profile
+ * (`agents.profiles["jev-classifier"].model`) still overrides all of them, so
+ * the operator keeps exactly one model knob while each integration keeps its own
+ * default. */
+export const DEFAULT_CLASSIFIER_MODELS: Readonly<Record<string, string>> =
+	Object.freeze({
+		[ROUTING_INTEGRATION]: ROUTING_CLASSIFIER_MODEL,
+		[TRIAGE_INTEGRATION]: ROUTING_CLASSIFIER_MODEL,
+		[GATE_INTEGRATION]: ROUTING_CLASSIFIER_MODEL,
+		[FILE_JUDGMENT_INTEGRATION]: FILE_JUDGMENT_CLASSIFIER_MODEL,
+	});
+
+/** The question id a per-file request uses. The state carries exactly one file,
+ * so the path travels as provenance instead of as part of the question. */
+export const FILE_JUDGMENT_QUESTION_ID = "leak";
+
+/** A content-bound reference to one sweep's rendered section, recorded as
+ * evidence so a verifier reads it instead of receiving its text in the prompt. */
+export interface FileSignalReference {
+	readonly path: string;
+	readonly digest: string;
+}
+
+/** The single snap judgment asked of every candidate file. It is answered
+ * against the conventions preamble the caller puts in the state, and it asks
+ * only about the exported entry point so a dead helper cannot decide the file. */
+export const FILE_JUDGMENT_QUESTION =
+	"Does the exported entry point of this file allow a pooled resource it acquired, or a transaction it began, to remain unreleased on at least one exit path? Decide only about the exported entry point. A wrapper that releases for you is safe; a cleanup block that releases some other resource is not.";
+
+/** A per-file verdict. `unsure` is a first-class band rather than a rounding of
+ * the other two, so an uninformative backend degrades into a visible third state
+ * instead of silently clearing or flagging every file. */
+export type FileJudgmentVerdict = "flag" | "clear" | "unsure";
+
+export interface FileJudgment {
+	readonly path: string;
+	readonly noul: number;
+	readonly verdict: FileJudgmentVerdict;
+}
+
+/** A candidate the sweep could not judge, with the bounded reason it was left
+ * out. The reason set is closed so the rendered coverage cannot grow unbounded. */
+export interface SkippedFileJudgment {
+	readonly path: string;
+	readonly reason: string;
+}
+
+/** Filter thresholds live in code and are never asked of the model. `flag` is
+ * the probability a verdict needs to be reported as a finding; the band between
+ * `unsure` and `flag` is reported as ambiguous rather than dropped. */
+export interface FileJudgmentThresholds {
+	readonly flag: number;
+	readonly unsure: number;
+}
+
+export const FILE_JUDGMENT_THRESHOLDS: FileJudgmentThresholds = Object.freeze({
+	flag: 0.7,
+	unsure: 0.25,
+});
+
+/** The share of judged files above which the flagged band stops being
+ * informative. A backend that flags nearly every candidate has not classified
+ * anything, so the sweep is reported as degenerate instead of being handed to a
+ * reviewer as findings. */
+export const FILE_JUDGMENT_DEGENERATE_SHARE = 0.8;
+
+/** How many paths of each band the rendered section lists in full. */
+export const FILE_JUDGMENT_MAX_PATHS = 40;
+
+/** One sweep's reported bands plus its coverage. `judged + skipped.length` is
+ * the candidate count, so a partial sweep can never be presented as full
+ * coverage. */
+export interface FileJudgmentOutcome {
+	readonly flagged: readonly FileJudgment[];
+	readonly unsure: readonly FileJudgment[];
+	readonly cleared: number;
+	readonly judged: number;
+	readonly skipped: readonly SkippedFileJudgment[];
+	/** True when the flagged band covers at least
+	 * `FILE_JUDGMENT_DEGENERATE_SHARE` of the judged files: every verdict is a
+	 * finding, which carries no information. */
+	readonly degenerate: boolean;
+	/** Judged from the content-addressed cache rather than the classifier. The
+	 * section reports it so a reader knows the answers are about bytes that have
+	 * not changed since an earlier round. */
+	readonly cached: number;
+}
+
+/** Band one sweep's answers, sort each band by confidence, and count what was
+ * left out. An unanswered question is not a usable zero: it is recorded as a
+ * skip so coverage stays honest and a call that returned nothing usable never
+ * looks like a clean file. */
+export function pruneFileJudgments(
+	answers: readonly {
+		readonly path: string;
+		readonly noul: number | undefined;
+		readonly cached?: boolean;
+	}[],
+	skipped: readonly SkippedFileJudgment[],
+	thresholds: FileJudgmentThresholds = FILE_JUDGMENT_THRESHOLDS,
+): FileJudgmentOutcome {
+	const flagged: FileJudgment[] = [];
+	const unsure: FileJudgment[] = [];
+	const dropped: SkippedFileJudgment[] = [...skipped];
+	let cleared = 0;
+	let judged = 0;
+	let cached = 0;
+	for (const answer of answers) {
+		if (answer.noul === undefined) {
+			dropped.push({ path: answer.path, reason: "no usable answer" });
+			continue;
+		}
+		judged += 1;
+		if (answer.cached === true) cached += 1;
+		if (answer.noul > thresholds.flag)
+			flagged.push({ path: answer.path, noul: answer.noul, verdict: "flag" });
+		else if (answer.noul >= thresholds.unsure)
+			unsure.push({ path: answer.path, noul: answer.noul, verdict: "unsure" });
+		else cleared += 1;
+	}
+	const byConfidence = (a: FileJudgment, b: FileJudgment): number =>
+		b.noul - a.noul;
+	const sorted = (band: FileJudgment[]): FileJudgment[] =>
+		[...band].sort(byConfidence);
+	const sortedFlagged = sorted(flagged);
+	return {
+		flagged: sortedFlagged,
+		unsure: sorted(unsure),
+		cleared,
+		judged,
+		skipped: dropped,
+		cached,
+		degenerate:
+			judged > 0 &&
+			sortedFlagged.length / judged >= FILE_JUDGMENT_DEGENERATE_SHARE,
+	};
+}
+
+/** What produced one sweep, so the section cannot be read without its
+ * provenance and thresholds. */
+export interface FileJudgmentProvenance {
+	readonly provider: string;
+	readonly model: string;
+	readonly thresholds: FileJudgmentThresholds;
+}
+
+/** Render the assignment section. Bounded on purpose: only the flagged and
+ * ambiguous paths (capped) and the coverage counts reach the model. A full
+ * per-file verdict list would re-inflate the context the sweep exists to
+ * protect, and the caveat is unconditional because a verdict is not evidence. */
+export function renderFileSignals(
+	outcome: FileJudgmentOutcome,
+	provenance: FileJudgmentProvenance,
+	maxPaths: number = FILE_JUDGMENT_MAX_PATHS,
+): string {
+	const lines: string[] = [
+		"## File signals (classifier-assisted)",
+		`provider=${provenance.provider} model=${provenance.model} flag>${provenance.thresholds.flag} unsure>=${provenance.thresholds.unsure}`,
+		`judged ${outcome.judged}${outcome.cached > 0 ? ` (${outcome.cached} from cache)` : ""}, cleared ${outcome.cleared}, flagged ${outcome.flagged.length}, unsure ${outcome.unsure.length}, not judged ${outcome.skipped.length}`,
+	];
+	if (outcome.degenerate)
+		lines.push(
+			`The classifier flagged ${outcome.flagged.length} of ${outcome.judged} judged files, which is at or above the degenerate share. Treat these signals as unusable and review the change itself.`,
+		);
+	const band = (label: string, entries: readonly FileJudgment[]): void => {
+		if (!entries.length) return;
+		const shown = entries
+			.slice(0, maxPaths)
+			.map((entry) => `${entry.path} (${entry.noul.toFixed(2)})`);
+		const hidden = entries.length - shown.length;
+		lines.push(
+			`${label} (${entries.length}): ${shown.join(", ")}${hidden > 0 ? ` ... and ${hidden} more` : ""}`,
+		);
+	};
+	band("flagged", outcome.flagged);
+	band("unsure", outcome.unsure);
+	const reasons = new Map<string, number>();
+	for (const entry of outcome.skipped)
+		reasons.set(entry.reason, (reasons.get(entry.reason) ?? 0) + 1);
+	if (reasons.size)
+		lines.push(
+			`not judged: ${[...reasons].map(([reason, count]) => `${reason} ${count}`).join(", ")}`,
+		);
+	lines.push(
+		"Files not judged, and files in the cleared band, were not reviewed by the classifier. A verdict is not evidence: read the repository and the assigned artifacts before reporting a finding, and a security verifier must judge the actual code.",
+	);
+	return `${lines.join("\n")}\n`;
+}
+
 /** Rendering text for one routing question. The criteria are the pool entry
  * labels mapped to their (possibly structured) criteria. */
 export function routingQuestionInstructions(

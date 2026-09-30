@@ -9,13 +9,9 @@ import path from "node:path";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 
-function freePort(): number {
-	const server = Bun.serve({ port: 0, fetch: () => new Response("") });
-	const port = server.port;
-	server.stop(true);
-	if (port === undefined) throw new Error("failed to reserve a port");
-	return port;
-}
+// The server assigns its own port: it is started with `--port 0` and reports the
+// port it actually bound. Reserving one here and passing it on races every other
+// process doing the same thing, and the loser never announces anything.
 
 async function sourceFiles(dir: string): Promise<string[]> {
 	const entries = await fs.promises.readdir(dir, { withFileTypes: true });
@@ -109,13 +105,20 @@ describe("retired runtime and bridges", () => {
 			.filter((name) => /^(env|sh|uname|git|ps|pgrep)$/.test(name))
 			.map((name) => `/usr/bin/${name}`)
 			.join(":");
+		// The selected multiplexer is resolved from PATH and its absence is a loud
+		// refusal rather than a fallback, so the bare PATH must still carry it. This
+		// test is about the Go toolchain, not about a machine without herdr, and
+		// `dirname(process.execPath)` is not where it lives: that is bun's own
+		// install directory, which on a versioned install holds only bun.
+		const mux = Bun.which("herdr") ?? Bun.which("luvus");
 		const child = Bun.spawn(
 			[
 				process.execPath,
 				path.join(ROOT, "src", "cli.ts"),
 				"server",
 				"--port",
-				String(freePort()),
+				// 0: the OS assigns, and the announcement carries the real port.
+				"0",
 			],
 			{
 				stdout: "pipe",
@@ -124,7 +127,13 @@ describe("retired runtime and bridges", () => {
 					...process.env,
 					DEVENV_HOME: home,
 					DEVENV_CONFIG_DIR: configDir,
-					PATH: `${barePath}:${path.dirname(process.execPath)}`,
+					PATH: [
+						barePath,
+						path.dirname(process.execPath),
+						mux ? path.dirname(mux) : "",
+					]
+						.filter(Boolean)
+						.join(":"),
 					AGENTIC_WORKFLOW_TOKEN: "retirement-token",
 				},
 			},
@@ -136,11 +145,21 @@ describe("retired runtime and bridges", () => {
 					20_000,
 				);
 				void (async () => {
+					// Stdout arrives in arbitrary chunks, and the announcement is not
+					// guaranteed to land in one of them: matching a single chunk can miss the
+					// marker, and the URL that follows it can arrive in the next chunk even
+					// when the marker did not. Accumulate, and require the URL before
+					// resolving, so a split write cannot turn into a 20s timeout.
+					let buffered = "";
+					const decoder = new TextDecoder();
 					for await (const chunk of child.stdout) {
-						const text = new TextDecoder().decode(chunk);
-						if (text.includes("unified server")) {
+						buffered += decoder.decode(chunk as Uint8Array, { stream: true });
+						if (
+							buffered.includes("unified server") &&
+							/http:\/\/127\.0\.0\.1:\d+/.test(buffered)
+						) {
 							clearTimeout(timer);
-							resolve(text);
+							resolve(buffered);
 							return;
 						}
 					}

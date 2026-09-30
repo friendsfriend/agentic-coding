@@ -104,6 +104,37 @@ export interface SettingsContext {
 	classifier?: ClassifierStatusResponse;
 }
 
+/** The structural shape of `[agents] file_judgment` this layer renders. Declared
+ * here rather than imported so the settings surface keeps no runtime dependency
+ * on the workflow layer; the parsed agents config is structurally compatible. */
+export interface FileJudgmentSummary {
+	enabled?: boolean;
+	threshold?: number;
+	unsure?: number;
+	concurrency?: number;
+}
+
+/** The read-only label for the per-file judgment sweep. Only the bounds the
+ * configuration actually sets are named: an unset bound is reported as the
+ * default instead of a number this layer would have to duplicate from the
+ * classifier protocol and could then drift from. */
+export function fileJudgmentSummaryLabel(
+	config: FileJudgmentSummary | undefined,
+): string {
+	if (config?.enabled !== true) return "disabled (default)";
+	const bounds: string[] = [
+		config.threshold !== undefined
+			? `flag > ${config.threshold}`
+			: "default flag threshold",
+		config.unsure !== undefined
+			? `unsure >= ${config.unsure}`
+			: "default unsure floor",
+	];
+	if (config.concurrency !== undefined)
+		bounds.push(`concurrency ${config.concurrency}`);
+	return `enabled · ${bounds.join(" · ")}`;
+}
+
 function detailFor(
 	scope: SettingsScope,
 	storage: string,
