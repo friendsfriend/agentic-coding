@@ -1,6 +1,7 @@
 Not for agents. This is only for humans.
 
 Fixes: 
+* Classification runs dont all show up in the classification panel in the agentic-coding dash yet. I want to see the gate decisions and all other classifications here
 
 Big ones:
 * Agent steered version of the workflow. Basically an orchestrator version of the workflow.
@@ -12,9 +13,7 @@ Small ones:
 * Improve agent steering based on recent runs (observability first)
 * JEV:
   * Compaction hints
-  * jev for file read questions (agent tool that allows asking questions about a file and jev answers them)
   * Use jev to block bash commands that should be blocked
-  * Research local jev alternatives so that I dont need a provider for jev
 
 Promps (jev):
 
