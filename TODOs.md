@@ -9,7 +9,6 @@ Big ones:
 * Agent skills to create the environments for a fresh app.
 
 Small ones: 
-* (Maybe) Give all agents their own tab. Multitab spawning always has issues for some reason
 * Improve agent steering based on recent runs (observability first)
 * JEV:
   * Compaction hints
