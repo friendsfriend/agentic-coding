@@ -247,7 +247,7 @@ export function saveAgents(request: AgentsMutationRequest): void {
 	// Selecting the local provider starts its sidecar for an already-installed
 	// model. It never acquires: only an explicit install may download.
 	if (mutation.kind === "set-classifier")
-		startSelectedLocalClassifier(mutation.classifier.provider);
+		void startSelectedLocalClassifier(mutation.classifier.provider);
 }
 
 /** Read the effective agents config server-side (no view reads the file). */

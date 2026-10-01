@@ -156,7 +156,7 @@ export async function startWorkflowServer(
 	// explicit install downloads the model.
 	const selectedClassifier = selectedClassifierProvider();
 	if (selectedClassifier === LAYA_LOCAL_PROVIDER)
-		startSelectedLocalClassifier(selectedClassifier);
+		void startSelectedLocalClassifier(selectedClassifier);
 	const url = `http://${listener.hostname}:${assignedPort}`;
 	const tokenFile = instanceTokenFile(assignedPort);
 	publishInstanceToken(tokenFile, authority.token);

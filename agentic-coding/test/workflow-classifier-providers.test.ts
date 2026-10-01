@@ -865,15 +865,12 @@ describe("laya-local sidecar port", () => {
 				},
 			}),
 		);
-		const settle = async () => {
-			for (let attempt = 0; attempt < 200 && starts === 0; attempt++)
-				await new Promise((resolve) => setTimeout(resolve, 10));
-		};
 		startSelectedLocalClassifier(OPENCODE_ZEN_PROVIDER);
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		expect(starts).toBe(0);
-		startSelectedLocalClassifier(LAYA_LOCAL_PROVIDER);
-		await settle();
+		// Awaited, not fire-and-forget: the shell's splash holds its step until
+		// the model is actually serving, so no polling is needed here.
+		await startSelectedLocalClassifier(LAYA_LOCAL_PROVIDER);
 		expect(starts).toBe(1);
 		// Switching away must leave the standalone service warm: panes already
 		// hold its endpoint.

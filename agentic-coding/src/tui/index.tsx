@@ -33,6 +33,10 @@ import { ownsEnvironmentBackend } from "../backend/ownership.ts";
 import { setConfigDiagnosticSink } from "../config-root.ts";
 import type { LogData, MetricData, SpanData } from "../contracts/telemetry.ts";
 import { createInstanceAuthority } from "../server/auth.ts";
+import {
+	selectedClassifierProvider,
+	startSelectedLocalClassifier,
+} from "../server/classifier.ts";
 import { backendClient, configureBackendClient } from "../server/client.ts";
 import { createEnvironmentAuthority } from "../server/environment/authority.ts";
 import { createIntegrationServices } from "../server/integrations/services.ts";
@@ -42,6 +46,7 @@ import {
 } from "../server/lifecycle.ts";
 import { discoverProjectRepos, TraceDb } from "../server/telemetry-db";
 import { APP_VERSION } from "../version.ts";
+import { LAYA_LOCAL_PROVIDER } from "../workflow/classifier-providers.ts";
 import {
 	activeWorkflowExecutions,
 	cancelActiveWorkflowExecutions,
@@ -80,6 +85,7 @@ import {
 	beginStartup,
 	finishStartup,
 	isShutdownRequested,
+	type LifecycleStepDef,
 	registerActiveWork,
 	registerStopSequence,
 	releaseResources,
@@ -209,6 +215,30 @@ function isDashboardMode(options: {
 	attachUrl?: string;
 }): boolean {
 	return !options.home && !options.attachUrl;
+}
+
+/** Splash row for the standalone local classifier sidecar. One id/label pair,
+ * so the row the shell advertises and the row it waits on cannot drift. The
+ * sidecar is started by the server (it must be, for every client), and this row
+ * only makes that start *visible*: the model load happens inside startup
+ * instead of racing the first classification. */
+const LOCAL_CLASSIFIER_STEP: LifecycleStepDef = {
+	id: "local-classifier",
+	label: "Starting local classifier",
+};
+
+/** Whether this process should expect a local sidecar at all: the selected
+ * provider is local and this shell either owns the server or is the server.
+ * An attach reads the remote server's status instead. */
+function startsLocalClassifier(
+	remoteAttach: boolean,
+	isTest: boolean,
+): boolean {
+	return (
+		!isTest &&
+		!remoteAttach &&
+		selectedClassifierProvider() === LAYA_LOCAL_PROVIDER
+	);
 }
 
 export async function main(): Promise<void> {
@@ -576,6 +606,9 @@ export async function main(): Promise<void> {
 			...(isTest
 				? []
 				: [{ id: "workflow-server", label: "Starting unified server" }]),
+			...(startsLocalClassifier(remoteAttach, isTest)
+				? [LOCAL_CLASSIFIER_STEP]
+				: []),
 			...(httpPort ||
 			zipkinPort ||
 			datadogPort ||
@@ -816,6 +849,21 @@ export async function main(): Promise<void> {
 				const remote = backendClient();
 				if (remote && db instanceof RemoteTelemetryDb) db.setClient(remote);
 				setStepDone("workflow-server");
+				await tick();
+				if (isShutdownRequested()) return;
+			}
+
+			// 1b. The local classifier sidecar. The server above already asked for
+			// its start; awaiting the same single-flight start here is what turns
+			// that into a visible step and removes the cold-model race from the
+			// first classification. Optional by design: a missing model or a dead
+			// binary must never fail the shell — the failure is reported by
+			// `classifier status` and the Settings picker, and every classifier
+			// call already fails open.
+			if (startsLocalClassifier(remoteAttach, isTest)) {
+				mark(LOCAL_CLASSIFIER_STEP.id);
+				await startSelectedLocalClassifier(LAYA_LOCAL_PROVIDER);
+				setStepDone(LOCAL_CLASSIFIER_STEP.id);
 				await tick();
 				if (isShutdownRequested()) return;
 			}

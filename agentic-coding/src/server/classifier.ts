@@ -83,9 +83,15 @@ export async function cancelLocalClassifierInstall(
  * switch away from `laya-local` leaves the service warm for the panes that
  * already hold its endpoint. Never blocks the caller and never acquires: only
  * an explicit install downloads the model. */
-export function startSelectedLocalClassifier(provider: string): void {
+export async function startSelectedLocalClassifier(
+	provider: string,
+): Promise<void> {
 	if (provider !== LAYA_LOCAL_PROVIDER) return;
-	void layaLocalClassifier()
+	// Never rejects: a missing model or a dead binary is reported by
+	// `classifierStatus`/Settings, it must not fail a caller whose only job was
+	// to warm the classifier. Awaitable so a caller that *shows* the start (the
+	// shell's splash) can hold its step until the model is actually serving.
+	await layaLocalClassifier()
 		.ensureStarted()
 		.catch(() => {});
 }
