@@ -2,6 +2,7 @@ Not for agents. This is only for humans.
 
 Fixes: 
 * Classification runs dont all show up in the classification panel in the agentic-coding dash yet. I want to see the gate decisions and all other classifications here
+* Some agents dont have the ask_jev tool exposed yet
 
 Big ones:
 * Agent steered version of the workflow. Basically an orchestrator version of the workflow.
