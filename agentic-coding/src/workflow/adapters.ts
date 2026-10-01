@@ -14,6 +14,7 @@ import type {
 } from "../multiplexer/port.ts";
 import type { RenderedAssignment } from "./assignment.ts";
 import type { JevSessionBinding } from "./classifier-runner.ts";
+import type { GlobalPiTool } from "./pi-tools.ts";
 import {
 	closeSecureDirectory,
 	openSecureDirectory,
@@ -43,10 +44,15 @@ export interface LaunchContext {
 	bridgePath?: string;
 	/** Trusted workflow extension; distinct from user-configured extensions. */
 	workflowExtensionPath?: string;
-	/** The in-session `ask_jev` tool. Absent for a runtime with no such tool, and
-	 * loaded only by the runtime whose adapter knows how to hand it the run's
-	 * classifier binding. */
+	/** The in-session `ask_jev` tool, loaded for every pi run: without it the tool
+	 * the pinned protocol names is simply absent. Absent for a runtime with no
+	 * such tool. */
 	jevExtensionPath?: string;
+	/** Tools this user's own pi configuration enables globally (`codemode`), so a
+	 * managed agent gets the same tool surface as their own pi session. Read by
+	 * the engine at launch, and defaulted to none, so a launch never depends on
+	 * the machine's settings being readable at that moment. */
+	globalTools?: readonly GlobalPiTool[];
 	/** The resolved classifier binding the in-session tool obeys, or absent when
 	 * no pane-reachable provider is resolved. Serialized into the pane
 	 * environment by the launcher, never read from the machine: the agent cannot
@@ -129,21 +135,41 @@ export class PiAdapter extends BaseAdapter {
 		const args = ["--name", ctx.name, "--no-prompt-templates", "--no-approve"];
 		if (ctx.profile.model) args.push("--model", ctx.profile.model);
 		if (ctx.profile.thinking) args.push("--thinking", ctx.profile.thinking);
-		const tools = ctx.profile.tools;
-		if (tools.length) args.push("--tools", tools.join(","));
-		else if (
-			ctx.profile.readOnly ||
-			ctx.profile.capabilities.includes("read-only")
-		)
-			args.push("--tools", "read");
-		if (
-			ctx.profile.readOnly ||
-			ctx.profile.capabilities.includes("read-only") ||
-			ctx.profile.extensions.length === 0
-		)
+		const readOnly =
+			ctx.profile.readOnly || ctx.profile.capabilities.includes("read-only");
+		// pi's `--tools` replaces the whole selection, so a tool nobody names is a
+		// tool the model never sees. Everything the run loads or inherits has to be
+		// named here: the workflow's own extension tools (the pinned protocol's
+		// question tools, and the in-session judgment sweep), plus the tools this
+		// user's own pi settings enable globally.
+		const global = ctx.globalTools ?? [];
+		const inherited = [
+			...(ctx.workflowExtensionPath ? ["developer_question", "agent_ask"] : []),
+			...(ctx.jevExtensionPath ? ["ask_jev"] : []),
+			...global.map((entry) => entry.tool),
+		];
+		const declared = ctx.profile.tools;
+		// A profile that declares no tool list keeps pi's own default selection:
+		// naming only the inherited tools would replace `read`/`bash`/`edit`/
+		// `write` with an extension-only allowlist, contradicting the capabilities
+		// preflight accepted. A read-only profile still needs `read` named,
+		// because its whole point is to have no edit/write tool at all.
+		const tools = declared.length
+			? [...new Set([...declared, ...inherited])]
+			: readOnly
+				? [...new Set(["read", ...inherited])]
+				: undefined;
+		if (tools) args.push("--tools", tools.join(","));
+		if (readOnly || ctx.profile.extensions.length === 0)
 			args.push("--no-extensions");
 		for (const extension of ctx.profile.extensions)
 			args.push("--extension", extension);
+		// `--no-extensions` disables the built-in extensions too, and a globally
+		// enabled tool like `codemode` lives in one. Requesting it explicitly keeps
+		// the user's extension *files* out of a managed run without dropping the
+		// tool they configured.
+		for (const entry of global)
+			args.push("--extension", `builtin:${entry.extension}`);
 		if (ctx.workflowExtensionPath)
 			args.push("--extension", ctx.workflowExtensionPath);
 		if (ctx.jevExtensionPath) args.push("--extension", ctx.jevExtensionPath);

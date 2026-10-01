@@ -774,22 +774,17 @@ export function profileFor(
 /** Tools a read-only run must never be handed; the adapters translate the
  * resolved profile into the runtime's own allowlist / permission block. */
 const MUTATING_TOOLS = new Set(["edit", "write", "multi_edit", "multiedit"]);
-/** Pi's read-only surface: `read` for evidence, `bash` for the focused checks
- * and the `agentic-coding workflow handoff` CLI, plus the two injected
- * workflow-extension conversation tools the pinned protocol names and a
- * verifier may need (`developer_question`, `agent_ask`). None of them edit the
- * repository; `write`/`edit` stay excluded. */
-const READ_ONLY_PI_TOOLS = [
-	"read",
-	"bash",
-	"developer_question",
-	"agent_ask",
-	// The in-session judgment sweep. It only reads files and asks the run's
-	// configured classifier about them, so it belongs on a verifier's surface;
-	// it is named here for the same reason the two question tools are, because a
-	// declared `--tools` list would otherwise hide it.
-	"ask_jev",
-];
+/** Pi's read-only surface: `read` for evidence and `bash` for the focused
+ * checks and the `agentic-coding workflow handoff` CLI. `bash` stays on
+ * purpose: a read-only verifier is prevented from using pi's *edit/write
+ * tools*, not from mutating state through the shell — repo write access via
+ * `sed -i` or a redirection is unchanged by this policy, and pi applies no
+ * per-command approval (`--no-approve`). The workflow's own extension tools
+ * (`developer_question`, `agent_ask`, `ask_jev`) are deliberately not listed
+ * here: the pi adapter names every tool it loads, for every step, because pi's
+ * `--tools` is a strict allowlist and a declared list would otherwise hide
+ * them. */
+const READ_ONLY_PI_TOOLS = ["read", "bash"];
 /** Read-only launch policy for a step that declares the `read-only`
  * requirement (`core.verification`): no edit/write tools and no shell/edit
  * capability, so the adapter launches the runtime without them (pi `--tools`,
@@ -808,9 +803,9 @@ export function asReadOnlyProfile(profile: ResolvedProfile): ResolvedProfile {
 	const declared = profile.tools.filter(
 		(tool) => !MUTATING_TOOLS.has(tool.toLowerCase()),
 	);
-	// pi's `--tools` is a strict allowlist over built-in *and* extension tools,
-	// so a declared list would otherwise hide `developer_question`/`agent_ask`
-	// (or drop bash, the handoff path) from a verifier.
+	// pi's `--tools` is a strict allowlist over built-in *and* extension tools, so
+	// a declared list would otherwise drop bash, the handoff path, from a
+	// verifier.
 	const tools =
 		profile.runtime === "pi"
 			? [...new Set([...declared, ...READ_ONLY_PI_TOOLS])]

@@ -7,6 +7,7 @@ import {
 	type Assignment,
 	type EffectKind,
 	isRetryableFailure,
+	type RuntimeId,
 	type WorkflowFailure,
 	type WorkflowSnapshot,
 } from "../contracts/workflow.ts";
@@ -32,8 +33,10 @@ import {
 	invokeTriageClassifier,
 	type JevSessionBinding,
 	jevSessionBinding,
+	jevUsesLocalSidecar,
 	type RoutingClassifierTelemetryObserver,
 	resolveClassifierBinding,
+	withStartTimeout,
 	writeFileSignalsArtifact,
 } from "./classifier-runner.ts";
 import {
@@ -70,6 +73,7 @@ import {
 	PermanentFailure,
 	TransientFailure,
 } from "./failures.ts";
+import { layaLocalClassifier } from "./laya-local.ts";
 import {
 	adapterTelemetryEnvelope,
 	redactTelemetryText,
@@ -78,6 +82,7 @@ import {
 	traceparent,
 	workflowTraceContext,
 } from "./observability.ts";
+import { globalPiTools } from "./pi-tools.ts";
 import { runProcessEffect } from "./process.ts";
 import {
 	parseAgentsConfig,
@@ -185,6 +190,39 @@ const p = <A>(run: () => Promise<A>): Effect.Effect<A, Error, never> =>
 		catch: (error) =>
 			error instanceof Error ? error : new Error(String(error)),
 	});
+
+/** The launch assets for one run, keyed by runtime. Both workflow extensions
+ * belong to every pi run: the question tools are part of the pinned protocol,
+ * and the judgment tool is offered to every agent rather than only to runs a
+ * classifier binding happened to resolve for — it reports an absent binding
+ * itself, so an agent without one still gets the tool and an honest answer.
+ * Deliberately pi-only: `opencode`/`opencode-v2` have no equivalent extension
+ * in this repository, so a route resolving to one of them gets neither the
+ * judgment tool nor the question tools (a pre-existing gap, not a regression). */
+export function piLaunchAssets(
+	runtime: RuntimeId,
+	assetRoot: string,
+): { workflowExtensionPath?: string; jevExtensionPath?: string } {
+	return runtime === "pi"
+		? {
+				workflowExtensionPath: `${assetRoot}/extensions/developer-question.ts`,
+				jevExtensionPath: `${assetRoot}/extensions/ask-jev.ts`,
+			}
+		: {};
+}
+
+/** Start (or re-check) the local classifier sidecar for a launch that selected
+ * it. The classifier owns single-flight and an liveness probe, so concurrent
+ * launches share one spawn and a dead sidecar is replaced rather than trusted.
+ * The wait is bounded like every other provider start, so a sidecar that never
+ * settles degrades to "no binding" instead of stalling the serial drain. */
+function ensureLocalClassifierRunning(signal?: AbortSignal): Promise<void> {
+	return withStartTimeout(
+		layaLocalClassifier().ensureStarted(),
+		FILE_JUDGMENT_INTEGRATION,
+		signal,
+	);
+}
 
 /** Run a git subprocess through the bounded process service (`process.ts`). */
 const git = (
@@ -1596,19 +1634,31 @@ export function agentEffectHandlers(
 					);
 					const pane = yield* p(() => options.paneForRun(run.id));
 					if (!live(effect)) return { cancelled: true };
-					// The in-session Jev tool is offered to any run whose resolved provider a
-					// pane can actually reach, whether or not the file-signal sweep is enabled:
-					// it is a general tool the agent drives, not a feature of the sweep. A
-					// hosted provider builds no binding: its credential belongs to another
-					// process and is not handed to an agent whose shell can read its own
-					// environment. An unreadable configuration is no binding either — the
+					// The in-session Jev tool is offered to every pi run, whether or not the
+					// file-signal sweep is enabled: it is a general tool the agent drives,
+					// not a feature of the sweep. The binding is what decides whether it can
+					// answer, and a hosted provider builds none — its credential belongs to
+					// another process and is not handed to an agent whose shell can read its
+					// own environment. The tool itself reports that case, so an agent whose
+					// run has no local classifier still has the tool and an honest answer
+					// instead of a tool the pinned protocol names but the session never
+					// loads. The local provider's sidecar is engine-owned, so a run that
+					// selected it starts it here: otherwise the tool would be available and
+					// answer nothing. An unreadable configuration is no binding either — the
 					// launch path must never fail because of the optional tool.
+					const pi = run.profile.runtime === "pi";
 					let jev: JevSessionBinding | undefined;
 					try {
-						jev = jevSessionBinding(
-							loadClassifierAgents(snapshot),
-							pinnedClassifierProvider(snapshot),
-						);
+						const agents = loadClassifierAgents(snapshot);
+						const pinned = pinnedClassifierProvider(snapshot);
+						if (pi && jevUsesLocalSidecar(agents, pinned))
+							yield* p(() => ensureLocalClassifierRunning(signal)).pipe(
+								// A sidecar that cannot start — or does not settle within the
+								// classifier's own start bound — leaves the run exactly as it
+								// was before this change: no binding, and a tool that says so.
+								Effect.catchAll(() => Effect.void),
+							);
+						jev = jevSessionBinding(agents, pinned);
 					} catch {
 						jev = undefined;
 					}
@@ -1626,14 +1676,8 @@ export function agentEffectHandlers(
 							run.profile.runtime === "pi"
 								? `${assetRoot}/bridges/pi-telemetry.ts`
 								: `${assetRoot}/bridges/${run.profile.runtime === "opencode-v2" ? "opencode-v2" : "opencode"}-telemetry.js`,
-						workflowExtensionPath:
-							run.profile.runtime === "pi"
-								? `${assetRoot}/extensions/developer-question.ts`
-								: undefined,
-						jevExtensionPath:
-							run.profile.runtime === "pi" && jev
-								? `${assetRoot}/extensions/ask-jev.ts`
-								: undefined,
+						...piLaunchAssets(run.profile.runtime, assetRoot),
+						...(pi ? { globalTools: globalPiTools() } : {}),
 						...(jev ? { jev } : {}),
 						signal,
 					};

@@ -145,10 +145,15 @@ built in:
   `OPENCODE_API_KEY` bearer header, and the model id with the `opencode/`
   prefix stripped. A configuration that says nothing keeps exactly this.
 - **`laya-local`** — an offline sidecar. `src/workflow/laya-local.ts` locates
-  the `laya-system-one` package (from the install root, so a compiled
-  executable works), stages the model metadata, acquires the ~324 MB INT8
+  the `laya-system-one` package — the `LAYA_PACKAGE_ROOT` override first (a
+  directory that must actually be that package), then the executable's
+  neighbourhood, the working directory, and module resolution — stages the
+  model metadata, acquires the ~324 MB INT8
   model only on an explicit request, and spawns `laya-serve` on an ephemeral
-  `127.0.0.1` port. The model id is a local one; the sidecar ignores unknown
+  `127.0.0.1` port. A compiled binary copied out of the tree its `node_modules`
+  live in finds none of those, so `LAYA_PACKAGE_ROOT` is the supported way to
+  point it back at the package, and the failure names it instead of reading as
+  a corrupt or missing install. The model id is a local one; the sidecar ignores unknown
   models. It is bound to loopback only and runs without a bearer credential:
   the start scopes its spawn environment and neutralizes any ambient
   `LAYA_API_KEY`/`API_KEY`, so an unrelated variable can never turn the local
@@ -759,13 +764,29 @@ routing enforces it: `enforceReadOnlySteps` (`src/workflow/profiles.ts`) runs in
 both routing paths (`startup.ts`'s `resolveRoutingForStart` and the
 `switch-preset` reducer) and rewrites every `core.verification` route into a
 read-only profile — no `edit`/`write` tools, no `shell`/`edit` capability —
-before the routing is pinned or preflighted. A verifier therefore launches with
-pi's `--tools read,bash --no-extensions` (or opencode's `edit: deny` permission
-block), and its assignment renders `read repository`. `bash` stays on purpose:
-focused checks and the `agentic-coding workflow handoff` CLI run through it;
-pi's list is `read,bash,developer_question,agent_ask`, because `--tools` is a
-strict allowlist over extension tools too and the injected developer/peer
-question tools must survive it.
+before the routing is pinned or preflighted. A verifier therefore launches
+under pi's read-only policy (`--no-extensions`, no `edit`/`write` in the
+tool list; or opencode's `edit: deny` permission block), and its assignment
+renders `read repository`. `bash` stays on purpose: focused checks and the
+`agentic-coding workflow handoff` CLI run through it — a read-only verifier is
+prevented from using pi's *edit/write tools*, not from mutating state through
+the shell.
+
+`--tools` is a strict allowlist over built-in *and* extension tools, so the pi
+adapter (`src/workflow/adapters.ts`) is the single place that builds it: the
+profile's declared list plus every tool the launch itself loads
+(`developer_question`, `agent_ask`, the in-session `ask_jev`) plus the tools the
+user enabled globally in their pi settings, with each global tool's built-in
+extension requested explicitly (`-e builtin:codemode`) because
+`--no-extensions` would otherwise drop it. A profile that declares no tools keeps
+pi's own default selection, so an undeclared profile is never reduced to the
+extension tools alone. The allowlist governs the *surface*, but it is not the
+whole containment story: a `codemode` script may call every active `direct` tool
+plus every registered `codemode`/`deferred`-exposure tool. The read-only
+guarantee therefore rests on `edit`/`write` being `direct` and inactive — they
+are never named in the allowlist — and on a global tool being inherited only
+when a built-in extension provides it (`BUILTIN_EXTENSION_BY_TOOL` in
+`src/workflow/pi-tools.ts`).
 
 1. Author `agent-definitions/instructions/verification-<role without
    "-verifier">.md`, following the brevity and "concrete evidence only"

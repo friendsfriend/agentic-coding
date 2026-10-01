@@ -34,8 +34,10 @@ import {
 } from "../src/workflow/classifier-runner.ts";
 import { effectRunnerTest } from "../src/workflow/effect-runner.ts";
 import {
+	LAYA_PACKAGE_ROOT_VAR,
 	LayaLocalClassifier,
 	type LayaLocalDependencies,
+	resolveLayaPackageRoot,
 	setLayaLocalClassifier,
 } from "../src/workflow/laya-local.ts";
 import {
@@ -381,6 +383,78 @@ describe("laya-local install state machine", () => {
 		expect(starts).toBe(1);
 	});
 
+	test("concurrent starts share one verification, not only one spawn", async () => {
+		// The expensive front half runs before the spawn's single-flight point, so
+		// without a whole-operation guard every concurrent launch would hash the
+		// model again.
+		const dir = tempDir();
+		fs.writeFileSync(path.join(dir, "model.onnx"), "model");
+		let verifies = 0;
+		let starts = 0;
+		const classifier = fakeClassifier(dir, {
+			verify: async () => {
+				verifies += 1;
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				return { ok: true };
+			},
+			start: async () => {
+				starts += 1;
+				return { url: "http://127.0.0.1:4321", stop: async () => {} };
+			},
+		});
+		await Promise.all([
+			classifier.ensureStarted(),
+			classifier.ensureStarted(),
+			classifier.ensureStarted(),
+		]);
+		expect(verifies).toBe(1);
+		expect(starts).toBe(1);
+	});
+
+	test("stop does not resolve while a start is still verifying", async () => {
+		// A start that has not reached the spawn yet is invisible to the spawn's
+		// own single-flight, so `stop()` has to wait for the whole operation —
+		// otherwise the spawn lands after shutdown reported it had released the
+		// sidecar.
+		const dir = tempDir();
+		fs.writeFileSync(path.join(dir, "model.onnx"), "model");
+		let verifying: (() => void) | undefined;
+		const inVerify = new Promise<void>((resolve) => {
+			verifying = resolve;
+		});
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let stops = 0;
+		const classifier = fakeClassifier(dir, {
+			verify: async () => {
+				verifying?.();
+				await gate;
+				return { ok: true };
+			},
+			start: async () => ({
+				url: "http://127.0.0.1:4321",
+				stop: async () => {
+					stops += 1;
+				},
+			}),
+		});
+		const pending = classifier.ensureStarted().catch(() => {});
+		await inVerify;
+		let stopped = false;
+		const stopping = classifier.stop().then(() => {
+			stopped = true;
+		});
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(stopped).toBe(false);
+		release?.();
+		await Promise.all([pending, stopping]);
+		// The superseded spawn is stopped and never published.
+		expect(classifier.status().running).toBe(false);
+		expect(stops).toBe(1);
+	});
+
 	test("stop releases the sidecar exactly once", async () => {
 		const dir = tempDir();
 		let stops = 0;
@@ -425,6 +499,66 @@ describe("laya-local install state machine", () => {
 		// The superseded spawn is stopped and never published.
 		expect(classifier.status().running).toBe(false);
 		expect(stops).toBe(1);
+	});
+});
+
+describe("laya package discovery", () => {
+	test("an explicit override names the package when the executable cannot find it", () => {
+		// The case this exists for: a compiled binary copied out of the tree its
+		// `node_modules` live in, where neither the executable's neighbourhood nor
+		// module resolution can reach `laya-system-one`.
+		const elsewhere = tempDir();
+		const packageDir = tempDir();
+		fs.writeFileSync(
+			path.join(packageDir, "package.json"),
+			JSON.stringify({ name: "laya-system-one" }),
+		);
+		expect(
+			resolveLayaPackageRoot({
+				execPath: path.join(elsewhere, "agentic-coding"),
+				cwd: elsewhere,
+				env: { [LAYA_PACKAGE_ROOT_VAR]: packageDir },
+				resolve: () => path.join(elsewhere, "missing.js"),
+			}),
+		).toBe(packageDir);
+	});
+
+	test("an override that is not the package is ignored, not trusted", () => {
+		// The override must not become a way to point the process at an arbitrary
+		// directory claiming to be the classifier runtime.
+		const elsewhere = tempDir();
+		const impostor = tempDir();
+		fs.writeFileSync(
+			path.join(impostor, "package.json"),
+			JSON.stringify({ name: "not-the-classifier" }),
+		);
+		expect(
+			resolveLayaPackageRoot({
+				execPath: path.join(elsewhere, "agentic-coding"),
+				cwd: elsewhere,
+				env: { [LAYA_PACKAGE_ROOT_VAR]: impostor },
+				resolve: () => path.join(elsewhere, "missing.js"),
+			}),
+		).toBeUndefined();
+	});
+
+	test("the executable's own tree still wins when nothing is configured", () => {
+		const root = tempDir();
+		const install = path.join(root, "app");
+		const packageDir = path.join(install, "node_modules", "laya-system-one");
+		fs.mkdirSync(packageDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(packageDir, "package.json"),
+			JSON.stringify({ name: "laya-system-one" }),
+		);
+		expect(
+			resolveLayaPackageRoot({
+				execPath: path.join(install, "dist", "agentic-coding"),
+				cwd: tempDir(),
+				env: {},
+				resolve: () => path.join(root, "missing.js"),
+			}),
+		).toBe(packageDir);
 	});
 });
 

@@ -536,7 +536,7 @@ function prepareProvider(
 		const start = provider.start;
 		if (start)
 			yield* Effect.tryPromise({
-				try: () => withTimeout(start(), integrationId),
+				try: () => withStartTimeout(start(), integrationId),
 				catch: (error) => integrationFailure(integrationId, error),
 			});
 		return provider;
@@ -557,29 +557,48 @@ function prepareRequest(
 	});
 }
 
-function withTimeout(
+/** Bound a provider (or sidecar) lifecycle start so a wedged one cannot hold
+ * the caller open indefinitely; `signal` releases the wait immediately when the
+ * work that wanted the provider is itself cancelled. Exported because a launch
+ * that starts the sidecar itself — to build the pane's classifier binding —
+ * must degrade on the same bound the classifier path uses, not on an unbounded
+ * await. */
+export function withStartTimeout(
 	start: Promise<void>,
 	integrationId: string,
+	signal?: AbortSignal,
 ): Promise<void> {
 	return new Promise((resolve, reject) => {
+		const done = (action: () => void) => {
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", onAbort);
+			action();
+		};
+		const onAbort = () =>
+			done(() =>
+				reject(
+					new Error(`classifier ${integrationId} provider start was cancelled`),
+				),
+			);
 		const timer = setTimeout(
 			() =>
-				reject(
-					new Error(
-						`classifier ${integrationId} provider did not start within ${CLASSIFIER_START_TIMEOUT_MS}ms`,
+				done(() =>
+					reject(
+						new Error(
+							`classifier ${integrationId} provider did not start within ${CLASSIFIER_START_TIMEOUT_MS}ms`,
+						),
 					),
 				),
 			CLASSIFIER_START_TIMEOUT_MS,
 		);
+		if (signal?.aborted) {
+			onAbort();
+			return;
+		}
+		signal?.addEventListener("abort", onAbort, { once: true });
 		start.then(
-			() => {
-				clearTimeout(timer);
-				resolve();
-			},
-			(error) => {
-				clearTimeout(timer);
-				reject(error);
-			},
+			() => done(resolve),
+			(error) => done(() => reject(error)),
 		);
 	});
 }
@@ -1268,6 +1287,19 @@ export interface JevSessionBinding {
 	readonly provider: string;
 	readonly model: string;
 	readonly endpoint: string;
+}
+
+/** True when the run's classifier selection is the local sidecar — the one
+ * provider whose endpoint the engine owns and may therefore have to start
+ * itself before a managed agent can judge anything. */
+export function jevUsesLocalSidecar(
+	agents: AgentsConfig,
+	pinnedProvider: string | undefined,
+): boolean {
+	return (
+		resolveClassifierBinding(agents, pinnedProvider, FILE_JUDGMENT_INTEGRATION)
+			.provider === LAYA_LOCAL_PROVIDER
+	);
 }
 
 /** Build the pane's binding, or undefined when no pane-reachable provider is

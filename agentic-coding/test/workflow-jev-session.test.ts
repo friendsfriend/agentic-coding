@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { jevSessionBinding } from "../src/workflow/classifier-runner.ts";
+import {
+	jevSessionBinding,
+	jevUsesLocalSidecar,
+} from "../src/workflow/classifier-runner.ts";
 import type { AgentsConfig } from "../src/workflow/profiles.ts";
 
 const LOCAL: AgentsConfig = {
@@ -59,5 +62,14 @@ describe("in-session Jev binding", () => {
 			model: "laya-system-one",
 		}));
 		expect(binding?.model).toBe("laya-system-one");
+	});
+
+	test("only the local selection needs the engine to start a sidecar", () => {
+		// The launch path starts the sidecar exactly when this holds, so a hosted
+		// provider never causes a ~324 MB model to be loaded here.
+		expect(jevUsesLocalSidecar(LOCAL, undefined)).toBe(true);
+		expect(jevUsesLocalSidecar(HOSTED, undefined)).toBe(false);
+		expect(jevUsesLocalSidecar(HOSTED, "laya-local")).toBe(true);
+		expect(jevUsesLocalSidecar(LOCAL, "opencode-zen")).toBe(false);
 	});
 });

@@ -5,6 +5,7 @@
 // authority, the legacy devenv surface and the telemetry receivers. Native
 // Bun/Promise I/O lives here; operation handlers stay transport-agnostic.
 
+import { LAYA_LOCAL_PROVIDER } from "../workflow/classifier-providers.ts";
 import { createServerApp, type ServerApp } from "./app.ts";
 import {
 	createInstanceAuthority,
@@ -12,7 +13,11 @@ import {
 	publishInstanceToken,
 	removeInstanceToken,
 } from "./auth.ts";
-import { stopLocalClassifier } from "./classifier.ts";
+import {
+	selectedClassifierProvider,
+	startSelectedLocalClassifier,
+	stopLocalClassifier,
+} from "./classifier.ts";
 import { CredentialRegistry } from "./credentials.ts";
 import type { EnvironmentAuthority } from "./environment/private-api.ts";
 import { EventBroker } from "./events.ts";
@@ -143,6 +148,17 @@ export async function startWorkflowServer(
 			? await startTelemetryReceivers(options.receivers, options.signalSink)
 			: undefined;
 	const assignedPort = listener.port ?? options.port ?? 0;
+	// Selecting the local classifier already starts its sidecar; starting a
+	// server with that provider selected has to as well. Without it the engine's
+	// own classifier calls fail open and the in-session `ask_jev` tool every
+	// managed agent gets answers "unavailable" for a provider the run pinned.
+	// Only the start is asked for here: `startSelectedLocalClassifier` also stops
+	// a sidecar on a non-local selection, which belongs to the provider-switch
+	// path, not to every server start. Never blocks startup and never acquires:
+	// only an explicit install downloads the model.
+	const selectedClassifier = selectedClassifierProvider();
+	if (selectedClassifier === LAYA_LOCAL_PROVIDER)
+		startSelectedLocalClassifier(selectedClassifier);
 	const url = `http://${listener.hostname}:${assignedPort}`;
 	const tokenFile = instanceTokenFile(assignedPort);
 	publishInstanceToken(tokenFile, authority.token);

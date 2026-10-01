@@ -279,9 +279,17 @@ describe("profiles, assignments, and adapters", () => {
 					// decision (a new worktree prompts on startup and eats the launch
 					// prompt as its answer).
 					expect(start).toContain("--no-approve");
+					// The profile's tools, plus the tools the loaded extension registers:
+					// pi's `--tools` replaces the whole selection, so an unnamed tool is
+					// never declared to the model.
 					const toolsArg = start[start.indexOf("--tools") + 1];
 					expect(toolsArg).toBeDefined();
-					expect(toolsArg.split(",").sort()).toEqual(["bash", "read"]);
+					expect(toolsArg.split(",").sort()).toEqual([
+						"agent_ask",
+						"bash",
+						"developer_question",
+						"read",
+					]);
 				} else expect(start).toContain("--auto");
 				expect(
 					fake.calls.some(
@@ -417,7 +425,7 @@ describe("profiles, assignments, and adapters", () => {
 						tools: [],
 						extensions: ["/tmp/research-extension.ts"],
 						readOnly: false,
-						capabilities: ["prompt", "shell", "edit"],
+						capabilities: ["prompt", "shell", "edit"] as const,
 					},
 					assignment: current,
 					rendered,
@@ -458,7 +466,7 @@ describe("profiles, assignments, and adapters", () => {
 							...baseProfile(runtime),
 							tools: ["read", "web_search", "custom_tool"],
 							readOnly: false,
-							capabilities: ["prompt", "shell", "edit"],
+							capabilities: ["prompt", "shell", "edit"] as const,
 						},
 						assignment: current,
 						rendered,
@@ -560,13 +568,10 @@ describe("profiles, assignments, and adapters", () => {
 		);
 		if (!verifier) throw new Error("expected a verification route");
 		expect(verifier.profile.readOnly).toBe(true);
-		expect(verifier.profile.tools).toEqual([
-			"read",
-			"bash",
-			"developer_question",
-			"agent_ask",
-			"ask_jev",
-		]);
+		// The profile's own read-only surface. The workflow's extension tools are
+		// named by the pi adapter, which is the only place that knows which
+		// extensions a launch actually loads.
+		expect(verifier.profile.tools).toEqual(["read", "bash"]);
 		expect(verifier.profile.capabilities).toContain("read-only");
 		expect(verifier.profile.capabilities).not.toContain("edit");
 		expect(verifier.profile.capabilities).not.toContain("shell");
@@ -611,12 +616,16 @@ describe("profiles, assignments, and adapters", () => {
 					cwd,
 					name: "agent-verify",
 					environment: current.environment,
+					workflowExtensionPath: "/tmp/developer-question.ts",
+					jevExtensionPath: "/tmp/ask-jev.ts",
 				}),
 			);
 			const start = fake.calls.find(
 				(call) => call[0] === "agent" && call[1] === "start",
 			);
 			if (!start) throw new Error("expected agent start call");
+			// The judgment sweep belongs on a verifier's surface too, so it is named
+			// like the question tools rather than only being loaded.
 			expect(start[start.indexOf("--tools") + 1]).toBe(
 				"read,bash,developer_question,agent_ask,ask_jev",
 			);
@@ -625,6 +634,198 @@ describe("profiles, assignments, and adapters", () => {
 			expect(start).not.toContain("write");
 		} finally {
 			fs.rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+	test("a writable Pi launch still names the workflow's own tools", async () => {
+		const fake = new FakeHerdr();
+		const adapter = new PiAdapter(new HerdrLifecycle(fake, () => Effect.void));
+		const current = assignment("core.implementation", { role: "worker" });
+		const rendered = renderAssignment(
+			registerBuiltins().step("core.implementation"),
+			current,
+		);
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "adapter-worker-pi-"));
+		try {
+			await Effect.runPromise(
+				adapter.launch({
+					profile: {
+						...baseProfile("pi"),
+						tools: ["read", "bash", "edit", "write"],
+						readOnly: false,
+						capabilities: ["prompt", "shell", "edit"] as const,
+					},
+					assignment: current,
+					rendered,
+					paneId: "pane",
+					cwd,
+					name: "agent-worker",
+					environment: current.environment,
+					workflowExtensionPath: "/tmp/developer-question.ts",
+					// Loaded even without a binding: the tool reports that itself, and a
+					// tool the pinned protocol names must exist in the session.
+					jevExtensionPath: "/tmp/ask-jev.ts",
+				}),
+			);
+			const start = fake.calls.find(
+				(call) => call[0] === "agent" && call[1] === "start",
+			);
+			if (!start) throw new Error("expected agent start call");
+			expect(start[start.indexOf("--tools") + 1]).toBe(
+				"read,bash,edit,write,developer_question,agent_ask,ask_jev",
+			);
+			expect(start).toContain("/tmp/ask-jev.ts");
+		} finally {
+			fs.rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+	test("globally configured Pi tools reach a managed launch under --no-extensions", async () => {
+		const fake = new FakeHerdr();
+		const adapter = new PiAdapter(new HerdrLifecycle(fake, () => Effect.void));
+		const current = assignment("core.verification");
+		const rendered = renderAssignment(
+			registerBuiltins().step("core.verification"),
+			current,
+		);
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "adapter-global-pi-"));
+		try {
+			await Effect.runPromise(
+				adapter.launch({
+					profile: {
+						...baseProfile("pi"),
+						tools: ["read", "bash"],
+						// The flag has to come from the empty-extension rule this test is
+						// about, not from the read-only rule it should not depend on.
+						readOnly: false,
+						capabilities: ["prompt", "shell", "edit"] as const,
+					},
+					assignment: current,
+					rendered,
+					paneId: "pane",
+					cwd,
+					name: "agent-global",
+					environment: current.environment,
+					workflowExtensionPath: "/tmp/developer-question.ts",
+					globalTools: [{ tool: "codemode", extension: "codemode" }],
+				}),
+			);
+			const start = fake.calls.find(
+				(call) => call[0] === "agent" && call[1] === "start",
+			);
+			if (!start) throw new Error("expected agent start call");
+			// Named so the tool is declared, and its built-in extension requested
+			// explicitly because `--no-extensions` would otherwise drop it. The
+			// allowlist still governs the surface a codemode script may call.
+			expect(start[start.indexOf("--tools") + 1]).toBe(
+				"read,bash,developer_question,agent_ask,codemode",
+			);
+			expect(start).toContain("--no-extensions");
+			expect(start).toContain("builtin:codemode");
+		} finally {
+			fs.rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+	test("a Pi profile that declares no tools keeps the runtime's own default", async () => {
+		// `--tools` replaces pi's whole selection, so naming only the tools this
+		// launch adds would leave a worker without `read`, `bash`, `edit` or
+		// `write` — a surface that contradicts the capabilities preflight accepted.
+		const fake = new FakeHerdr();
+		const adapter = new PiAdapter(new HerdrLifecycle(fake, () => Effect.void));
+		const current = assignment("core.implementation", { role: "worker" });
+		const rendered = renderAssignment(
+			registerBuiltins().step("core.implementation"),
+			current,
+		);
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "adapter-default-pi-"));
+		try {
+			await Effect.runPromise(
+				adapter.launch({
+					profile: {
+						...baseProfile("pi"),
+						tools: [],
+						readOnly: false,
+						capabilities: ["prompt", "shell", "edit"] as const,
+					},
+					assignment: current,
+					rendered,
+					paneId: "pane",
+					cwd,
+					name: "agent-default",
+					environment: current.environment,
+					workflowExtensionPath: "/tmp/developer-question.ts",
+					jevExtensionPath: "/tmp/ask-jev.ts",
+				}),
+			);
+			const start = fake.calls.find(
+				(call) => call[0] === "agent" && call[1] === "start",
+			);
+			if (!start) throw new Error("expected agent start call");
+			expect(start).not.toContain("--tools");
+		} finally {
+			fs.rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+	test("read-only and deduplicated tool lists are exact", async () => {
+		const cases = [
+			{
+				name: "read-only with no declared tools",
+				profile: {
+					...baseProfile("pi"),
+					tools: [],
+					readOnly: true,
+					capabilities: ["prompt", "read-only"] as const,
+				},
+				workflowExtensionPath: "/tmp/developer-question.ts",
+				withJevExtension: true,
+				expected: "read,developer_question,agent_ask,ask_jev",
+			},
+			{
+				name: "a declared tool that is also added is named once",
+				profile: {
+					...baseProfile("pi"),
+					tools: ["read", "bash", "ask_jev"],
+				},
+				workflowExtensionPath: "/tmp/developer-question.ts",
+				withJevExtension: true,
+				expected: "read,bash,ask_jev,developer_question,agent_ask",
+			},
+		];
+		for (const item of cases) {
+			const fake = new FakeHerdr();
+			const adapter = new PiAdapter(
+				new HerdrLifecycle(fake, () => Effect.void),
+			);
+			const current = assignment();
+			const rendered = renderAssignment(
+				registerBuiltins().step("core.verification"),
+				current,
+			);
+			const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "adapter-tools-pi-"));
+			try {
+				await Effect.runPromise(
+					adapter.launch({
+						profile: item.profile,
+						assignment: current,
+						rendered,
+						paneId: "pane",
+						cwd,
+						name: "agent-tools",
+						environment: current.environment,
+						workflowExtensionPath: item.workflowExtensionPath,
+						...(item.withJevExtension
+							? { jevExtensionPath: "/tmp/ask-jev.ts" }
+							: {}),
+					}),
+				);
+				const start = fake.calls.find(
+					(call) => call[0] === "agent" && call[1] === "start",
+				);
+				if (!start) throw new Error("expected agent start call");
+				expect(start[start.indexOf("--tools") + 1], item.name).toBe(
+					item.expected,
+				);
+			} finally {
+				fs.rmSync(cwd, { recursive: true, force: true });
+			}
 		}
 	});
 	test("preflight rejects missing executable and capabilities", () => {

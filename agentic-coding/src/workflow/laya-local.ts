@@ -102,6 +102,28 @@ export interface LayaLocalDependencies {
 
 const IN_FLIGHT_PHASES: readonly LayaInstallPhase[] = ["acquiring", "starting"];
 
+/** How long `stop()` waits for an in-flight `ensureStarted` before it proceeds.
+ * The epoch bump already invalidates that start, so a dependency that never
+ * settles must not hold shutdown open; the wait exists only so the common case
+ * (a start that is still verifying the model) finishes before the epoch check
+ * would spawn a sidecar the shutdown then has to kill. */
+const STOP_WAIT_MS = 5_000;
+
+/** Race a pending operation against `STOP_WAIT_MS`, never rejecting. */
+async function settledWithin(promise: Promise<unknown>): Promise<void> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await Promise.race([
+			promise.catch(() => {}),
+			new Promise<void>((resolve) => {
+				timer = setTimeout(resolve, STOP_WAIT_MS);
+			}),
+		]);
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+	}
+}
+
 /** Pure path/override resolution. `LAYA_MODEL_PATH` names an assembled model,
  * `LAYA_CACHE_DIR` the cache, `LAYA_SERVE_BIN` the binary, and `LAYA_BACKEND`
  * the engine (`native` sharp, `wasm` fallback). */
@@ -151,16 +173,30 @@ export function installedModelPath(paths: LayaLocalPaths): string | undefined {
 	return fs.existsSync(candidate) ? candidate : undefined;
 }
 
+/** Explicit package-root override. The search below walks the executable's
+ * neighbourhood, the working directory and Node resolution, and all three fail
+ * when a compiled binary is copied out of the tree its `node_modules` live in.
+ * This names the `laya-system-one` package directory directly for that case. */
+export const LAYA_PACKAGE_ROOT_VAR = "LAYA_PACKAGE_ROOT";
+
+/** What to tell an operator when the package cannot be located at all: the
+ * failure is discovery, not installation, and the message says how to fix it. */
+export function layaPackageRootHint(): string {
+	return `laya-system-one could not be located; set ${LAYA_PACKAGE_ROOT_VAR} to its package directory when this executable runs outside its install tree`;
+}
+
 /** Locate the installed `laya-system-one` package.
  *
  * `bun build --compile` does not preserve `node_modules` resolution, so the
  * package cannot discover itself from `import.meta.url` inside the compiled
- * executable. Walk up from the real executable path looking for the package,
- * then fall back to Node/Bun resolution for a dev checkout. */
+ * executable. The explicit override is consulted first, then the walk up from
+ * the real executable path, then the working directory, then Node/Bun
+ * resolution for a dev checkout. */
 export function resolveLayaPackageRoot(options: {
 	readonly execPath: string;
 	readonly cwd?: string;
 	readonly resolve?: (specifier: string) => string;
+	readonly env?: Readonly<Record<string, string | undefined>>;
 }): string | undefined {
 	const found = (candidate: string): string | undefined => {
 		try {
@@ -174,6 +210,16 @@ export function resolveLayaPackageRoot(options: {
 			return undefined;
 		}
 	};
+	// A name that does not resolve to the real package is ignored rather than
+	// trusted: the override must not become a way to hand this process an
+	// arbitrary directory claiming to be the classifier runtime.
+	const configured = (
+		options.env?.[LAYA_PACKAGE_ROOT_VAR] ?? process.env[LAYA_PACKAGE_ROOT_VAR]
+	)?.trim();
+	if (configured) {
+		const explicit = found(path.resolve(configured));
+		if (explicit) return explicit;
+	}
 	let dir = path.dirname(safeRealpath(options.execPath));
 	for (let depth = 0; depth < 10; depth++) {
 		const candidate = found(path.join(dir, "node_modules", "laya-system-one"));
@@ -190,7 +236,9 @@ export function resolveLayaPackageRoot(options: {
 		const resolve =
 			options.resolve ??
 			createRequire(pathToFileURL(import.meta.url).href).resolve;
-		return path.dirname(resolve("laya-system-one/package.json"));
+		// Validated like every other candidate: a resolver that answers with some
+		// other directory must not be handed to the classifier as its runtime.
+		return found(path.dirname(resolve("laya-system-one/package.json")));
 	} catch {
 		return undefined;
 	}
@@ -296,6 +344,7 @@ export function realLayaLocalDependencies(
 		resolveLayaPackageRoot({
 			execPath: process.execPath,
 			cwd: process.cwd(),
+			env,
 		});
 	const importer = async <T>(rootDir: string, relative: string): Promise<T> =>
 		(await import(pathToFileURL(path.join(rootDir, relative)).href)) as T;
@@ -313,7 +362,11 @@ export function realLayaLocalDependencies(
 			}
 		},
 		verify: async (modelPath) => {
-			const expected = layaModelManifest(packageRoot())?.sha256;
+			const rootDir = packageRoot();
+			// An unresolvable package is reported as discovery, so the operator is told
+			// what to fix instead of reading it as a corrupt install.
+			if (!rootDir) return { ok: false, detail: layaPackageRootHint() };
+			const expected = layaModelManifest(rootDir)?.sha256;
 			if (!expected)
 				// A control that silently becomes a no-op is worse than a refusal: do
 				// not serve a model whose expected digest cannot be established.
@@ -337,13 +390,8 @@ export function realLayaLocalDependencies(
 			} catch {
 				/* no sidecar: hash once below */
 			}
-			const rootDir = packageRoot();
-			if (!rootDir)
-				return {
-					ok: false,
-					detail:
-						"laya-system-one is not installed; the local classifier model cannot be verified",
-				};
+			// The package root was already resolved above, so the resolver import is
+			// reachable.
 			const { sha256File } = await importer<{
 				sha256File: (file: string) => Promise<string>;
 			}>(rootDir, "src/model-resolver.js");
@@ -368,7 +416,7 @@ export function realLayaLocalDependencies(
 			const rootDir = packageRoot();
 			if (!rootDir)
 				throw new Error(
-					"laya-system-one is not installed; the local classifier model cannot be acquired",
+					`${layaPackageRootHint()}; the local classifier model cannot be acquired`,
 				);
 			fs.mkdirSync(paths.installDir, { recursive: true });
 			stageModelAssets(rootDir, paths.installDir);
@@ -394,7 +442,7 @@ export function realLayaLocalDependencies(
 			const rootDir = packageRoot();
 			if (!rootDir)
 				throw new Error(
-					"laya-system-one is not installed; the local classifier cannot start",
+					`${layaPackageRootHint()}; the local classifier cannot start`,
 				);
 			const binary = paths.explicitBinary ?? resolveSidecarBinary(rootDir);
 			// Both variables are read only by the dependency/the child at spawn
@@ -500,7 +548,14 @@ export class LayaLocalClassifier {
 	readonly #deps: LayaLocalDependencies;
 	#sidecar: LayaSidecar | undefined;
 	#sidecarModelPath: string | undefined;
+	/** The spawn currently in flight, if any (the inner single-flight). */
 	#starting: Promise<void> | undefined;
+	/** The whole `ensureStarted` currently in flight, if any. The front half (a
+	 * liveness probe and a full-file checksum) is expensive, so concurrent
+	 * launches share one operation rather than each repeating it; `stop()` awaits
+	 * this so a start this process requested cannot spawn a sidecar after
+	 * shutdown resolved. */
+	#ensuring: Promise<void> | undefined;
 	#model: { path: string; bytes: number } | undefined;
 	/** The install run currently unwinding, if any. A run object is the only thing
 	 * that clears itself, so a stale `finally` can never clear a newer run. */
@@ -652,8 +707,23 @@ export class LayaLocalClassifier {
 	}
 
 	/** Start the sidecar for an already-installed model. Never acquires: the
-	 * `laya-local` provider must stay offline until the user installs. */
+	 * `laya-local` provider must stay offline until the user installs. Concurrent
+	 * callers share one attempt: the probe, the verification and the spawn all
+	 * happen once per wave, and the shared promise is dropped as soon as it
+	 * settles so a later caller retries a failure. */
 	async ensureStarted(): Promise<void> {
+		const inFlight = this.#ensuring;
+		if (inFlight) return inFlight;
+		const promise = this.#ensureStartedOnce();
+		this.#ensuring = promise;
+		try {
+			await promise;
+		} finally {
+			if (this.#ensuring === promise) this.#ensuring = undefined;
+		}
+	}
+
+	async #ensureStartedOnce(): Promise<void> {
 		// Capture the epoch synchronously, before any await: a `stop()` that lands
 		// while this start is being prepared must supersede it.
 		const epoch = this.#generation;
@@ -707,6 +777,12 @@ export class LayaLocalClassifier {
 		// publish a sidecar or a `ready` job after this stop.
 		this.#generation += 1;
 		this.#run?.controller.abort();
+		// Await the whole pending start, not only the spawn: a start that is still
+		// verifying the model has not reached `#starting` yet, and would otherwise
+		// spawn a sidecar after this stop resolved. Bounded, because the epoch bump
+		// above already invalidates it.
+		const ensuring = this.#ensuring;
+		if (ensuring) await settledWithin(ensuring);
 		const starting = this.#starting;
 		if (starting) await starting.catch(() => {});
 		const sidecar = this.#sidecar;

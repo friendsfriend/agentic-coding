@@ -732,6 +732,103 @@ describe("classifier status and install", () => {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	test("server start runs the local sidecar when the settings select it", async () => {
+		// Selecting the provider already started it once; a server that starts with
+		// that provider selected has to as well, or every classifier call — including
+		// the one behind the in-session `ask_jev` tool — fails open.
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "classifier-start-"));
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "classifier-root-"));
+		fs.writeFileSync(
+			path.join(root, "config.json"),
+			JSON.stringify({ agents: { classifier: { provider: "laya-local" } } }),
+		);
+		let starts = 0;
+		const fake = new LayaLocalClassifier({
+			paths: () => ({ installDir: dir, cacheDir: dir, backend: "native" }),
+			acquire: async () => ({ path: path.join(dir, "model.onnx"), bytes: 1 }),
+			totalBytes: () => 1,
+			start: async () => {
+				starts += 1;
+				return {
+					url: "http://127.0.0.1:4321",
+					stop: async () => {},
+				};
+			},
+		});
+		const previousRoot = process.env.AGENTIC_CODING_CONFIG_DIR;
+		setLayaLocalClassifier(fake);
+		process.env.AGENTIC_CODING_CONFIG_DIR = root;
+		try {
+			await fake.install();
+			// Installing already starts a sidecar; stopping it first leaves the
+			// server start as the only thing that can produce the next one.
+			await fake.stop();
+			starts = 0;
+			await withServer(async (server) => {
+				// Startup never waits for the model to load, so the request is
+				// observed by its effect rather than by ordering.
+				for (let attempt = 0; attempt < 200 && starts === 0; attempt++)
+					await new Promise((resolve) => setTimeout(resolve, 10));
+				expect(starts).toBe(1);
+				await server.stop();
+			});
+		} finally {
+			if (previousRoot === undefined)
+				delete process.env.AGENTIC_CODING_CONFIG_DIR;
+			else process.env.AGENTIC_CODING_CONFIG_DIR = previousRoot;
+			setLayaLocalClassifier();
+			fs.rmSync(dir, { recursive: true, force: true });
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("server start leaves a running sidecar alone when the provider is hosted", async () => {
+		// The provider-switch path owns the stop; a server start must not stop a
+		// healthy sidecar just because the selection is not local.
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "classifier-hosted-"));
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "classifier-root-"));
+		fs.writeFileSync(
+			path.join(root, "config.json"),
+			JSON.stringify({ agents: { classifier: { provider: "opencode-zen" } } }),
+		);
+		let stops = 0;
+		let starts = 0;
+		const fake = new LayaLocalClassifier({
+			paths: () => ({ installDir: dir, cacheDir: dir, backend: "native" }),
+			acquire: async () => ({ path: path.join(dir, "model.onnx"), bytes: 1 }),
+			totalBytes: () => 1,
+			start: async () => {
+				starts += 1;
+				return {
+					url: "http://127.0.0.1:4321",
+					stop: async () => {
+						stops += 1;
+					},
+				};
+			},
+		});
+		const previousRoot = process.env.AGENTIC_CODING_CONFIG_DIR;
+		setLayaLocalClassifier(fake);
+		process.env.AGENTIC_CODING_CONFIG_DIR = root;
+		try {
+			await fake.install();
+			const startsBefore = starts;
+			await withServer(async () => {
+				// Give the (fire-and-forget) start path a chance to stop it.
+				await new Promise((resolve) => setTimeout(resolve, 50));
+				expect(starts).toBe(startsBefore);
+				expect(stops).toBe(0);
+			});
+		} finally {
+			if (previousRoot === undefined)
+				delete process.env.AGENTIC_CODING_CONFIG_DIR;
+			else process.env.AGENTIC_CODING_CONFIG_DIR = previousRoot;
+			setLayaLocalClassifier();
+			fs.rmSync(dir, { recursive: true, force: true });
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("agent question", () => {

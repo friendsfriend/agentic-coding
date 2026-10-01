@@ -27,6 +27,11 @@ import {
 	TransientFailure,
 } from "../src/workflow/effect-runner.ts";
 import {
+	LayaLocalClassifier,
+	type LayaSidecar,
+	setLayaLocalClassifier,
+} from "../src/workflow/laya-local.ts";
+import {
 	type TelemetryEnvelope,
 	workflowTraceId,
 } from "../src/workflow/observability.ts";
@@ -2745,5 +2750,273 @@ test("classifier provider failures emit one content-free response and telemetry 
 		if (originalApiKey === undefined) delete process.env.OPENCODE_API_KEY;
 		else process.env.OPENCODE_API_KEY = originalApiKey;
 		fs.rmSync(fixture.repo, { recursive: true, force: true });
+	}
+});
+
+// ── local classifier on the launch path ─────────────────────────────────────
+// The launch handler starts the engine-owned local sidecar before it builds the
+// pane's classifier binding, so `ask_jev` can answer in a run that pinned
+// `laya-local`. These tests drive the real handler with a stubbed classifier,
+// which is the only place that wiring is observable: the predicate, the adapter
+// merge and the settings reader are covered separately.
+
+/** A capturing adapter for any runtime, so a launch test can assert what the
+ * handler handed the adapter instead of only that it launched. */
+class CapturingAdapter implements AgentAdapter {
+	readonly id: AgentAdapter["id"];
+	launches = 0;
+	context?: LaunchContext;
+	constructor(id: AgentAdapter["id"]) {
+		this.id = id;
+	}
+	preflight() {}
+	launch(ctx: LaunchContext) {
+		this.launches++;
+		this.context = ctx;
+		return Effect.succeed({
+			runtime: ctx.profile.runtime,
+			name: ctx.name,
+			paneId: ctx.paneId,
+		});
+	}
+	prompt() {
+		return Effect.void;
+	}
+	observe(handle: AgentHandle) {
+		return Effect.succeed({
+			status: "working" as const,
+			paneId: handle.paneId,
+		});
+	}
+	stop() {
+		return Effect.void;
+	}
+}
+
+interface LocalLaunchHarness {
+	readonly context: () => LaunchContext | undefined;
+	readonly starts: () => number;
+	dispose: () => void;
+}
+
+/** Drive one `core.implementation` launch through the engine with a stubbed
+ * local classifier, returning what the launch handler produced. */
+async function drainLaunchWithClassifier(options: {
+	readonly runtime: "pi" | "opencode";
+	readonly pinnedProvider: string;
+	readonly start?: () => Promise<LayaSidecar>;
+	readonly piDefaultTools?: Record<string, unknown>;
+}): Promise<LocalLaunchHarness> {
+	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-localjev-"));
+	const configRoot = fs.mkdtempSync(
+		path.join(os.tmpdir(), "workflow-localjev-cfg-"),
+	);
+	const modelDir = fs.mkdtempSync(
+		path.join(os.tmpdir(), "workflow-localjev-model-"),
+	);
+	const agentDir = fs.mkdtempSync(
+		path.join(os.tmpdir(), "workflow-localjev-pi-"),
+	);
+	const previousConfig = process.env.AGENTIC_CODING_CONFIG_DIR;
+	const previousAgent = process.env.PI_CODING_AGENT_DIR;
+	let starts = 0;
+	try {
+		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
+		fs.writeFileSync(path.join(repo, "README.md"), "x\n");
+		execFileSync("git", ["add", "."], { cwd: repo });
+		execFileSync(
+			"git",
+			[
+				"-c",
+				"user.email=test@example.com",
+				"-c",
+				"user.name=Test",
+				"commit",
+				"-qm",
+				"base",
+			],
+			{ cwd: repo },
+		);
+		// The pinned classifier lives in the config the engine reads, and the
+		// model file makes the install "already on disk" so the stub never
+		// acquires anything.
+		fs.writeFileSync(
+			path.join(configRoot, "config.json"),
+			JSON.stringify({
+				agents: { classifier: { provider: options.pinnedProvider } },
+			}),
+		);
+		fs.writeFileSync(
+			path.join(agentDir, "settings.json"),
+			JSON.stringify(options.piDefaultTools ?? {}),
+		);
+		fs.writeFileSync(path.join(modelDir, "model.onnx"), "model");
+		process.env.AGENTIC_CODING_CONFIG_DIR = configRoot;
+		process.env.PI_CODING_AGENT_DIR = agentDir;
+		const classifier = new LayaLocalClassifier({
+			paths: () => ({
+				installDir: modelDir,
+				cacheDir: modelDir,
+				backend: "native",
+			}),
+			acquire: async () => ({
+				path: path.join(modelDir, "model.onnx"),
+				bytes: 1,
+			}),
+			totalBytes: () => 1,
+			start: async () => {
+				starts += 1;
+				if (options.start) return await options.start();
+				return { url: "http://127.0.0.1:4321", stop: async () => {} };
+			},
+		});
+		setLayaLocalClassifier(classifier);
+		const registry = registerBuiltins();
+		const engine = new WorkflowEngine(registry);
+		const profile = {
+			name: options.runtime,
+			runtime: options.runtime,
+			executable: "sh",
+			tools: [],
+			extensions: [],
+			readOnly: false,
+			capabilities: ["prompt", "run-environment", "observe"] as const,
+			digest: "profile",
+		};
+		engine.start({
+			repo,
+			mode: "checkout",
+			workflowId: "localjev",
+			definitionId: "no-openspec",
+			metadata: {
+				branch: "feature/localjev",
+				baseBranch: "main",
+				baseCommit: execFileSync("git", ["rev-parse", "HEAD"], {
+					cwd: repo,
+					encoding: "utf8",
+				}).trim(),
+				task: "task",
+				classifier: options.pinnedProvider,
+			},
+			routing: {
+				defaultProfile: options.runtime,
+				routes: [{ stepId: "core.implementation", role: "worker", profile }],
+				diversity: [],
+			},
+		});
+		const herdr = {
+			call(...args: string[]) {
+				if (args[0] === "tab" && args[1] === "list")
+					return { tabs: [{ tab_id: "tab1", label: "dashboard" }] };
+				if (args[0] === "workspace" && args[1] === "create")
+					return { workspace: { workspace_id: "workspace" } };
+				throw new Error(`unexpected ${args.join(" ")}`);
+			},
+		};
+		const adapter = new CapturingAdapter(options.runtime);
+		const handlers = agentEffectHandlers(repo, engine, {
+			registry,
+			adapters: new Map([[options.runtime, adapter]]),
+			port: asPort(herdr),
+			async paneForRun() {
+				return { paneId: "pane", owned: true };
+			},
+		});
+		await new EffectRunner(repo, engine, handlers).drain();
+		return {
+			context: () => adapter.context,
+			starts: () => starts,
+			dispose: () => {
+				setLayaLocalClassifier();
+				if (previousConfig === undefined)
+					delete process.env.AGENTIC_CODING_CONFIG_DIR;
+				else process.env.AGENTIC_CODING_CONFIG_DIR = previousConfig;
+				if (previousAgent === undefined) delete process.env.PI_CODING_AGENT_DIR;
+				else process.env.PI_CODING_AGENT_DIR = previousAgent;
+				for (const dir of [repo, configRoot, modelDir, agentDir])
+					fs.rmSync(dir, { recursive: true, force: true });
+			},
+		};
+	} catch (error) {
+		setLayaLocalClassifier();
+		if (previousConfig === undefined)
+			delete process.env.AGENTIC_CODING_CONFIG_DIR;
+		else process.env.AGENTIC_CODING_CONFIG_DIR = previousConfig;
+		if (previousAgent === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgent;
+		for (const dir of [repo, configRoot, modelDir, agentDir])
+			fs.rmSync(dir, { recursive: true, force: true });
+		throw error;
+	}
+}
+
+test("a launch with the local classifier starts the sidecar before it binds it", async () => {
+	const harness = await drainLaunchWithClassifier({
+		runtime: "pi",
+		pinnedProvider: "laya-local",
+		piDefaultTools: { defaultTools: ["+codemode"] },
+	});
+	try {
+		// Started here, not only by the server: without this the tool loads and
+		// answers nothing.
+		expect(harness.starts()).toBe(1);
+		// Started *then* bound: the endpoint is the sidecar's own.
+		expect(harness.context()?.jev?.endpoint).toBe(
+			"http://127.0.0.1:4321/v1/systemone",
+		);
+		expect(harness.context()?.jevExtensionPath).toContain("ask-jev.ts");
+		// The same launch also carries the user's globally configured tools.
+		expect(harness.context()?.globalTools).toEqual([
+			{ tool: "codemode", extension: "codemode" },
+		]);
+	} finally {
+		harness.dispose();
+	}
+});
+
+test("a hosted classifier selection never starts the local sidecar", async () => {
+	const harness = await drainLaunchWithClassifier({
+		runtime: "pi",
+		pinnedProvider: "opencode-zen",
+	});
+	try {
+		expect(harness.starts()).toBe(0);
+		expect(harness.context()?.jev).toBeUndefined();
+		// The tool is still loaded for the run; it reports the missing binding.
+		expect(harness.context()?.jevExtensionPath).toContain("ask-jev.ts");
+	} finally {
+		harness.dispose();
+	}
+});
+
+test("a non-pi run never starts the local sidecar", async () => {
+	const harness = await drainLaunchWithClassifier({
+		runtime: "opencode",
+		pinnedProvider: "laya-local",
+	});
+	try {
+		expect(harness.starts()).toBe(0);
+		expect(harness.context()?.globalTools).toBeUndefined();
+	} finally {
+		harness.dispose();
+	}
+});
+
+test("a sidecar that cannot start degrades the launch instead of failing it", async () => {
+	const harness = await drainLaunchWithClassifier({
+		runtime: "pi",
+		pinnedProvider: "laya-local",
+		start: async () => {
+			throw new Error("sidecar exploded");
+		},
+	});
+	try {
+		expect(harness.starts()).toBe(1);
+		// The launch proceeded with no binding: the optional tool must never fail
+		// a run.
+		expect(harness.context()).toBeDefined();
+		expect(harness.context()?.jev).toBeUndefined();
+	} finally {
+		harness.dispose();
 	}
 });
