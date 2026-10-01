@@ -53,24 +53,24 @@ describe("keybind catalog contract", () => {
 		expect(panelContext(7)).toBe("classifier");
 	});
 
-	it("scopes and omits the Classifier section with panel visibility", () => {
+	it("scopes and omits the Classifications section with panel visibility", () => {
 		const visible = dashboardDetailKeybindCatalog({
 			artifactsVisible: false,
 			classifierVisible: true,
 		});
 		expect(
 			footerKeybinds(visible, "classifier").map((keybind) => keybind.action),
-		).toContain("View selected classifier decision");
+		).toContain("View selected classification");
 		expect(
 			footerKeybinds(visible, "change").map((keybind) => keybind.action),
-		).not.toContain("View selected classifier decision");
+		).not.toContain("View selected classification");
 		const hidden = dashboardDetailKeybindCatalog({
 			artifactsVisible: false,
 			classifierVisible: false,
 		});
 		expect(
 			catalogKeybinds(hidden).some(
-				(keybind) => keybind.action === "View selected classifier decision",
+				(keybind) => keybind.action === "View selected classification",
 			),
 		).toBe(false);
 	});
@@ -149,7 +149,7 @@ test("help modal lists every keybind from the active catalog", async () => {
 	expect(frame).toContain("Scroll focused panel");
 	expect(frame).toContain("Open selected artifact");
 	expect(frame).toContain("View selected verifier result");
-	expect(frame).toContain("View selected classifier decision");
+	expect(frame).toContain("View selected classification");
 	t.renderer.destroy();
 });
 

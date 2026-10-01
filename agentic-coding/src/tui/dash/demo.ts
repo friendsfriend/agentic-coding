@@ -184,6 +184,43 @@ export function testDashboard(phase = "proposed"): DashboardData {
 						profiles: ["base"],
 					},
 				},
+				// A verifier-role classification reads differently from a pool choice:
+				// one necessity question per role, no options. The demo shows both in
+				// the one panel the same history feeds.
+				{
+					id: "demo-triage-security",
+					at: "2026-01-01T10:44:00Z",
+					integration: "triage",
+					questionId: "needs_security_verifier",
+					model: "opencode/jev-1.13-free",
+					input: "Verifier-role state for the round.",
+					inputTruncated: false,
+					options: [],
+					answer: { type: "noul", noul: 0.82 },
+					result: { applied: true, profiles: ["security-verifier"] },
+				},
+			],
+			gateDecisions: [
+				{
+					id: "demo-gate-verification",
+					at: "2026-01-01T10:44:01Z",
+					stepId: "core.triage-route",
+					stage: "verification",
+					policy: "auto",
+					decision: "run",
+					forced: false,
+					noul: 0.9,
+				},
+				{
+					id: "demo-gate-wiki",
+					at: "2026-01-01T10:58:00Z",
+					stepId: "core.wiki-gate",
+					stage: "wiki",
+					policy: "auto",
+					decision: "skip",
+					forced: false,
+					noul: 0.12,
+				},
 			],
 			pendingQuestions: [],
 			runs: [],

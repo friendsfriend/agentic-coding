@@ -2739,6 +2739,218 @@ describe("stage gate audit record (reducer)", () => {
 	});
 });
 
+describe("classification history (reducer)", () => {
+	const registry = registerBuiltins();
+	const definition = registry.definition(
+		"openspec",
+		definitionVersionForStageGates(6),
+	);
+	function snapshot(): WorkflowSnapshot {
+		return {
+			workflowId: "wf",
+			revision: 7,
+			currentStep: "core.triage-route",
+			metadata: { repository: "", worktree: tempDir() },
+			attention: [],
+			evidence: [],
+			routing: { defaultProfile: "base", routes: [] },
+		} as unknown as WorkflowSnapshot;
+	}
+	const reduce = (data: unknown, target = snapshot()) => {
+		applyClassifierRouting(target, definition, registry, data);
+		return target;
+	};
+
+	test("a triage pass records one classification per role question it asked", () => {
+		const roles = triageRoleQuestions(definition.id);
+		const state = reduce({
+			integration: "triage",
+			model: "opencode/jev-test",
+			state: "role state",
+			// One role answered above the floor, the rest answered below it: the
+			// record has to show a selection per question, not one pass verdict.
+			answers: Object.fromEntries(
+				roles.map((question, index) => [
+					question.questionId,
+					{ type: "noul", noul: index === 0 ? 0.9 : 0.1 },
+				]),
+			),
+			roles: [roles[0]?.role],
+			gate: {
+				integration: "gate",
+				stage: "verification",
+				policy: "auto",
+				decision: "run",
+				forced: false,
+				noul: 0.9,
+			},
+		});
+		expect(state.classifierDecisions).toHaveLength(roles.length);
+		const selected = state.classifierDecisions?.find(
+			(decision) => decision.questionId === roles[0]?.questionId,
+		);
+		expect(selected).toMatchObject({
+			integration: "triage",
+			model: "opencode/jev-test",
+			input: "role state",
+			options: [],
+			answer: { type: "noul", noul: 0.9 },
+			result: { applied: true, profiles: [roles[0]?.role] },
+		});
+		const rejected = state.classifierDecisions?.find(
+			(decision) => decision.questionId === roles[1]?.questionId,
+		);
+		expect(rejected).toMatchObject({
+			answer: { type: "noul", noul: 0.1 },
+			result: { applied: false, profiles: [] },
+		});
+		// The gate verdict of the same round is still its own durable record.
+		expect(state.gateDecisions).toHaveLength(1);
+	});
+
+	test("a role answered above the floor without being selected is not applied", () => {
+		const roles = triageRoleQuestions(definition.id);
+		const state = reduce({
+			integration: "triage",
+			model: "opencode/jev-test",
+			state: "role state",
+			// Every question answered above the floor would select every role, but
+			// the round failed open, so nothing ran: the record must not claim a
+			// selection the round never made.
+			answers: Object.fromEntries(
+				roles.map((question) => [
+					question.questionId,
+					{ type: "noul", noul: 0.9 },
+				]),
+			),
+			failOpen: true,
+			reason: "classifier unavailable",
+		});
+		expect(state.classifierDecisions).toHaveLength(roles.length);
+		expect(
+			state.classifierDecisions?.every(
+				(decision) =>
+					decision.result.applied === false &&
+					decision.result.attention === "classifier unavailable",
+			),
+		).toBe(true);
+	});
+
+	test("an unanswered round is one record, not eight", () => {
+		const state = reduce({
+			integration: "triage",
+			failOpen: true,
+			reason: "no usable answer",
+		});
+		expect(state.classifierDecisions).toHaveLength(1);
+		expect(state.classifierDecisions?.[0]).toMatchObject({
+			integration: "triage",
+			questionId: "verifier-roles",
+			model: "unknown",
+			answer: { type: "noul" },
+			result: {
+				applied: false,
+				profiles: [],
+				attention: "no usable answer",
+			},
+		});
+	});
+
+	test("a sweep is recorded once, with its bands and coverage", () => {
+		const state = reduce({
+			integration: "triage",
+			roles: [],
+			fileSignals: { path: "/tmp/file-signals/wf/r7.md", digest: "digest" },
+			fileJudgment: {
+				model: "laya-system-one",
+				section: "## File signals",
+				judged: 3,
+				cleared: 2,
+				cached: 1,
+				skipped: 1,
+				degenerate: false,
+				flagged: [{ path: "src/a.ts", noul: 0.91 }],
+				unsure: [{ path: "src/b.ts", noul: 0.4 }],
+			},
+		});
+		const sweep = state.classifierDecisions?.find(
+			(decision) => decision.integration === "file-judgment",
+		);
+		expect(sweep).toMatchObject({
+			questionId: "leak",
+			model: "laya-system-one",
+			input: "## File signals",
+			options: [
+				{ label: "src/a.ts", profile: "flag", criteria: 0.91 },
+				{ label: "src/b.ts", profile: "unsure", criteria: 0.4 },
+			],
+			answer: { type: "noul" },
+			result: {
+				applied: true,
+				profiles: [],
+				attention:
+					"judged 3 (1 from cache) cleared 2 flagged 1 unsure 1 not judged 1",
+			},
+		});
+		// The artifact reference is still recorded as evidence: the record shows
+		// the bands, the artifact holds the full section.
+		expect(state.evidence).toEqual([
+			{
+				kind: "file-signals",
+				path: "/tmp/file-signals/wf/r7.md",
+				digest: "digest",
+			},
+		]);
+	});
+
+	test("a sweep that judged nothing is not recorded as a classification", () => {
+		const state = reduce({
+			integration: "triage",
+			fileJudgment: {
+				model: "laya-system-one",
+				section: "## File signals",
+				judged: 0,
+				cleared: 0,
+				cached: 0,
+				skipped: 4,
+				degenerate: false,
+				flagged: [],
+				unsure: [],
+			},
+		});
+		expect(
+			state.classifierDecisions?.some(
+				(decision) => decision.integration === "file-judgment",
+			) ?? false,
+		).toBe(false);
+	});
+
+	test("a degenerate sweep is recorded but never as an applied verdict", () => {
+		const state = reduce({
+			integration: "triage",
+			fileJudgment: {
+				model: "laya-system-one",
+				section: "## File signals",
+				judged: 2,
+				cleared: 0,
+				cached: 0,
+				skipped: 0,
+				degenerate: true,
+				flagged: [
+					{ path: "src/a.ts", noul: 0.95 },
+					{ path: "src/b.ts", noul: 0.9 },
+				],
+				unsure: [],
+			},
+		});
+		const sweep = state.classifierDecisions?.find(
+			(decision) => decision.integration === "file-judgment",
+		);
+		expect(sweep?.result.applied).toBe(false);
+		expect(sweep?.result.attention).toContain("degenerate");
+	});
+});
+
 describe("model.classify gate handler", () => {
 	function writeGateConfig(gates: unknown, presetGates?: unknown): string {
 		const dir = tempDir();

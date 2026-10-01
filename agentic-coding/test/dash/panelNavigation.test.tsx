@@ -155,7 +155,14 @@ function artifactsFixture(count: number): DashboardData {
 	const dashboard = testDashboard();
 	return {
 		...dashboard,
-		state: { ...dashboard.state, worktree: root, classifierDecisions: [] },
+		state: {
+			...dashboard.state,
+			worktree: root,
+			// The panel lists every classification, so "no classifications" clears
+			// both histories the merge reads.
+			classifierDecisions: [],
+			gateDecisions: [],
+		},
 	};
 }
 
@@ -163,7 +170,11 @@ function noDecisionsFixture(): DashboardData {
 	const dashboard = testDashboard();
 	return {
 		...dashboard,
-		state: { ...dashboard.state, classifierDecisions: [] },
+		state: {
+			...dashboard.state,
+			classifierDecisions: [],
+			gateDecisions: [],
+		},
 	};
 }
 
@@ -175,6 +186,8 @@ function decisionsFixture(count: number): DashboardData {
 		...dashboard,
 		state: {
 			...dashboard.state,
+			// The count is exact only with no gate records merged in.
+			gateDecisions: [],
 			classifierDecisions: Array.from({ length: count }, (_, index) => ({
 				...template,
 				id: `decision-${index + 1}`,
@@ -389,7 +402,7 @@ test("Classifier panel renders a bounded selectable viewport and opens detail", 
 	t.mockInput.pressKey("j", { shift: true });
 	await t.renderOnce();
 	const initial = t.captureCharFrame();
-	expect(initial).toContain("Classifier");
+	expect(initial).toContain("Classifications");
 	expect(
 		initial.split("\n").filter((line) => line.includes("routing · decision-")),
 	).toHaveLength(5);
@@ -418,13 +431,13 @@ test("Classifier panel renders a bounded selectable viewport and opens detail", 
 	t.renderer.destroy();
 });
 
-test("Classifier panel is absent when the workflow exposes no decisions", async () => {
+test("Classifications panel is absent when the workflow exposes no decisions", async () => {
 	const t = await testRender(
 		() => <TestDashboard testData={noDecisionsFixture()} />,
 		{ width: 120, height: 40 },
 	);
 	await dashboardReady(t);
-	expect(t.captureCharFrame()).not.toContain("Classifier");
+	expect(t.captureCharFrame()).not.toContain("Classifications");
 	t.renderer.destroy();
 });
 

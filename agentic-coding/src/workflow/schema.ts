@@ -123,6 +123,9 @@ const classifierDecisionRecordSchema = Schema.Struct({
 	answer: Schema.Struct({
 		type: Schema.Literal("choice", "noul"),
 		choice: Schema.optionalWith(text(4096), { exact: true }),
+		// The necessity value of a "noul" answer: every question the
+		// classifier asks outside model-pool routing is a necessity question.
+		noul: Schema.optionalWith(Schema.Number, { exact: true }),
 		confidence: Schema.optionalWith(Schema.Number, { exact: true }),
 		probabilities: Schema.optionalWith(
 			Schema.Record({ key: Schema.String, value: Schema.Number }),

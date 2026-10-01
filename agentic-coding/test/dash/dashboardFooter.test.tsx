@@ -163,7 +163,7 @@ test("`?` help keeps the full descriptions the footer shortens", async () => {
 	expect(help).toContain("Approve gate / review changed files");
 	expect(help).toContain("Move between panels");
 	expect(help).toContain("View selected verifier result");
-	expect(help).toContain("View selected classifier decision");
+	expect(help).toContain("View selected classification");
 
 	t.renderer.destroy();
 });

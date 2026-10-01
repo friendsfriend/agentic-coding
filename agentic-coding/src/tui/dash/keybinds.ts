@@ -98,11 +98,11 @@ export function dashboardDetailKeybindCatalog(options: {
 		});
 	if (options.classifierVisible)
 		sections.push({
-			title: "Classifier panel",
+			title: "Classifications panel",
 			keybinds: [
 				{
 					key: "Enter",
-					action: "View selected classifier decision",
+					action: "View selected classification",
 					short: "decision",
 					context: CLASSIFIER_PANEL_CONTEXT,
 				},

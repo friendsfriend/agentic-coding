@@ -19,7 +19,7 @@ import {
 	movePanel,
 	type PanelDirection,
 } from "../panel-grid.ts";
-import { classifierDecisionDetail } from "../projections.ts";
+import { classificationDetail, classificationEntries } from "../projections.ts";
 
 /** The route props the handler reads. */
 export interface DashboardKeyProps {
@@ -217,6 +217,10 @@ export function createDashboardKeyHandler(
 			props,
 		} = context;
 		const traceTui = context.trace;
+		// The one merged classification history the panel lists, Enter opens, and
+		// navigation bounds against: routing, verifier-role triage, stage gates,
+		// and the per-file judgment sweep in the order they happened.
+		const classifications = () => classificationEntries(data().state);
 		const _routeModalHelp = context.routeModalHelp;
 		const setBusy = context.setBusy;
 		const loadDashboard = context.loadDashboard;
@@ -435,8 +439,7 @@ export function createDashboardKeyHandler(
 			setActivePanel(
 				movePanel(activePanel(), direction, {
 					artifactsVisible: artifacts().length > 0,
-					classifierVisible:
-						(data().state.classifierDecisions?.length ?? 0) > 0,
+					classifierVisible: classifications().length > 0,
 				}),
 			);
 			return;
@@ -454,7 +457,7 @@ export function createDashboardKeyHandler(
 			else if (activePanel() === CLASSIFIER_PANEL)
 				setSelectedDecision(
 					Math.min(
-						Math.max(0, (data().state.classifierDecisions?.length ?? 0) - 1),
+						Math.max(0, classifications().length - 1),
 						selectedDecision() + 1,
 					),
 				);
@@ -478,12 +481,12 @@ export function createDashboardKeyHandler(
 			// check bypassed that guard for engine-driven views only).
 			if (context.openRequiredUserAction() === true) return;
 			if (activePanel() === CLASSIFIER_PANEL) {
-				const decision = data().state.classifierDecisions?.[selectedDecision()];
-				if (decision) {
+				const entry = classifications()[selectedDecision()];
+				if (entry) {
 					setVerdictReturnToFindings(false);
 					setVerdictReturnToUserAction(false);
 					setVerdictRenderMarkdown(true);
-					setVerdict(classifierDecisionDetail(decision));
+					setVerdict(classificationDetail(entry));
 					setVerdictOffset(0);
 					props.keymap.setData("modal.active", "verdict");
 				}

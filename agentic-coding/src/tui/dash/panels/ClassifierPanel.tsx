@@ -1,24 +1,28 @@
-/** Classifier decision history panel. The route owns selection and activation;
- * this component only renders the bounded selectable viewport. */
+/** Classification history panel: every classification the engine recorded
+ * (model-pool routing, verifier-role triage, stage gates, the per-file
+ * judgment sweep) in the order it happened. The route owns selection and
+ * activation; this component only renders the bounded selectable viewport. */
 
 import { TextAttributes } from "@opentui/core";
 import { Panel, SelectableList, uiColors } from "@ui";
-import type { ClassifierDecisionRecord } from "../../../contracts/workflow.ts";
-import { classifierDecisionRows } from "../projections.ts";
+import {
+	type ClassificationEntry,
+	classificationRows,
+} from "../projections.ts";
 
 export interface ClassifierPanelProps {
-	readonly decisions: readonly ClassifierDecisionRecord[];
+	readonly entries: readonly ClassificationEntry[];
 	readonly active: boolean;
 	readonly selectedIndex: number;
 	readonly visibleRows?: number;
 }
 
 export function ClassifierPanel(props: ClassifierPanelProps) {
-	const rows = () => props.visibleRows ?? Math.min(props.decisions.length, 5);
-	const items = () => classifierDecisionRows(props.decisions);
+	const rows = () => props.visibleRows ?? Math.min(props.entries.length, 5);
+	const items = () => classificationRows(props.entries);
 	return (
 		<Panel
-			title="Classifier"
+			title="Classifications"
 			accent={uiColors.accent}
 			active={props.active}
 			style={{ width: "100%", height: rows() + 1, flexShrink: 0 }}

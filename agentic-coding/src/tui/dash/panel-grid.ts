@@ -8,7 +8,7 @@
  *         col 0           col 1
  * row 0   Change (0)      Agents (1)
  * row 1   OpenSpec (6)    Agents (1)
- * row 2   Classifier (7)  Agents (1)   (span: rows 0–2)
+ * row 2   Classifications (7)  Agents (1)   (span: rows 0–2)
  * ```
  *
  * Empty conditional cells are transparent to navigation. `movePanel` scans
@@ -33,7 +33,7 @@ export const GRID_COLS = 2;
 export interface PanelGridOptions {
 	/** True while open-spec artifacts are listed (OpenSpec cell occupied). */
 	readonly artifactsVisible: boolean;
-	/** True while classifier decisions are listed (Classifier cell occupied). */
+	/** True while classifications are listed (Classifications cell occupied). */
 	readonly classifierVisible?: boolean;
 }
 

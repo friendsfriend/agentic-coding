@@ -14,6 +14,7 @@ import {
 	GATE_DECISION_MAX_RECORDS,
 	type GateDecisionRecord,
 	type JsonValue,
+	TRIAGE_DECISION_INPUT_MAX_BYTES,
 	type WorkflowCommand,
 	type WorkflowSnapshot,
 } from "../../../contracts/workflow.ts";
@@ -21,6 +22,9 @@ import {
 	APPLY_PHASE_STEPS,
 	buildRoutingDecisionSummary,
 	type ClassifierAnswer,
+	FILE_JUDGMENT_INTEGRATION,
+	FILE_JUDGMENT_MAX_PATHS,
+	FILE_JUDGMENT_QUESTION_ID,
 	GATE_INTEGRATION,
 	PLAN_PHASE_STEPS,
 	parseClassifierAnswer,
@@ -29,6 +33,8 @@ import {
 	selectRosterEntries,
 	selectSingleEntry,
 	TRIAGE_INTEGRATION,
+	TRIAGE_NOUL_FLOOR,
+	triageRoleQuestions,
 } from "../../classifiers.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
 import { loadConfigWithProvenance } from "../../effects.ts";
@@ -80,6 +86,7 @@ export function applyClassifierRouting(
 						reason?: unknown;
 						roles?: unknown;
 						gate?: unknown;
+						fileJudgment?: unknown;
 					})
 				: {};
 		// A stage gate resolves no pool: it changes no route and only leaves a
@@ -98,6 +105,16 @@ export function applyClassifierRouting(
 				reason: payload.reason,
 				roles: payload.roles,
 			});
+			// Which roles a round needs is a classification like any other, so it
+			// belongs in the same history the dashboard reads: before this, an
+			// answered role classification left no record at all and only a
+			// fail-open ever surfaced as attention.
+			recordTriageClassification(snapshot, definition.id, payload, now);
+			// The per-file judgment sweep answers one question per candidate file,
+			// so it is recorded as the one sweep it was rather than as one record
+			// per file, which a change-sized fan-out could never fit in the bounded
+			// history.
+			recordFileJudgmentClassification(snapshot, payload.fileJudgment, now);
 			// The verification gate is decided on this step, so its verdict is
 			// recorded here too: a round that skipped triage AND verification
 			// must be as auditable as one that ran them.
@@ -231,6 +248,239 @@ function appendGateDecision(
 	snapshot.gateDecisions = history;
 }
 
+/** The reason a triage pass carries, or undefined when it answered. The reason
+ * is what lets a later reader tell "the classifier chose no role" apart from
+ * "the classifier could not be asked". A fail-open with no reason reads the
+ * same here as in the attention entry, so one outage has one wording. */
+function triageFailure(payload: {
+	failOpen?: unknown;
+	reason?: unknown;
+}): string | undefined {
+	if (payload.failOpen !== true) return undefined;
+	return typeof payload.reason === "string" && payload.reason.trim()
+		? payload.reason.trim().slice(0, 1000)
+		: "unknown reason";
+}
+
+/** The classifier model a classification names, or "unknown" when the payload
+ * carried none. A missing model must stay visible as missing: an unnamed
+ * answer is still an answer, but an unnamed model is not a decision anybody
+ * can reproduce. */
+function classifierModel(value: unknown): string {
+	return typeof value === "string" && value.trim() ? value : "unknown";
+}
+
+/** Record the round's verifier-role classification: one record per question
+ * the round asked, exactly as a routing pass records one per pool question, so
+ * every classification the engine made lands in one history the dashboard can
+ * show. A pass that obtained no usable answer at all is recorded as a single
+ * record instead: eight records that all say "no usable answer" are one event,
+ * not eight.
+ *
+ * Recording is diagnostic. The whole append runs inside an empty catch, so a
+ * snapshot that cannot hold the history never turns a successful classification
+ * into a failed effect. */
+function recordTriageClassification(
+	snapshot: WorkflowSnapshot,
+	definitionId: string,
+	payload: {
+		model?: unknown;
+		state?: unknown;
+		answers?: unknown;
+		roles?: unknown;
+		failOpen?: unknown;
+		reason?: unknown;
+	},
+	now: () => Date,
+): void {
+	const questions = triageRoleQuestions(definitionId);
+	if (!questions.length) return;
+	const answers =
+		payload.answers &&
+		typeof payload.answers === "object" &&
+		!Array.isArray(payload.answers)
+			? Object.fromEntries(
+					Object.entries(payload.answers).map(([questionId, answer]) => [
+						questionId,
+						parseClassifierAnswer(answer),
+					]),
+				)
+			: {};
+	const roles = Array.isArray(payload.roles)
+		? payload.roles.filter((role): role is string => typeof role === "string")
+		: [];
+	const attention = triageFailure(payload);
+	const model = classifierModel(payload.model);
+	const input = truncateClassifierInput(
+		typeof payload.state === "string" ? payload.state : "",
+		TRIAGE_DECISION_INPUT_MAX_BYTES,
+	);
+	const answered = (questionId: string): number | undefined => {
+		const answer = answers[questionId];
+		return answer?.type === "noul" ? answer.noul : undefined;
+	};
+	const at = now().toISOString();
+	const record = (
+		id: string,
+		questionId: string,
+		noul: number | undefined,
+		selected: boolean,
+		profiles: string[],
+	): ClassifierDecisionRecord => ({
+		id,
+		at,
+		integration: TRIAGE_INTEGRATION,
+		questionId,
+		model,
+		...input,
+		options: [],
+		answer: {
+			type: "noul",
+			...(noul === undefined ? {} : { noul }),
+		},
+		result: {
+			applied: selected,
+			profiles,
+			...(attention ? { attention } : {}),
+		},
+	});
+	const prefix = [snapshot.workflowId, snapshot.revision, "triage"].join(":");
+	try {
+		appendClassifierDecisions(
+			snapshot,
+			questions.some((question) => answered(question.questionId) !== undefined)
+				? questions.map((question, index) => {
+						const noul = answered(question.questionId);
+						// A role runs only when this round actually selected it: a
+						// necessity value above the floor is necessary but not
+						// sufficient, because an unanswered sibling question fails
+						// the whole round open.
+						const selected =
+							noul !== undefined &&
+							noul >= TRIAGE_NOUL_FLOOR &&
+							roles.includes(question.role);
+						return record(
+							`${prefix}:${question.questionId}:${index}`,
+							question.questionId,
+							noul,
+							selected,
+							selected ? [question.role] : [],
+						);
+					})
+				: [
+						record(
+							`${prefix}:verifier-roles`,
+							"verifier-roles",
+							undefined,
+							false,
+							[],
+						),
+					],
+		);
+	} catch {
+		/* decision history is diagnostic, never an effect failure */
+	}
+}
+
+/** Record one per-file judgment sweep as the single classification it was: a
+ * sweep asks one question per candidate file, so one record per file could
+ * never fit a bounded history on a large change. The banded verdicts travel as
+ * the record's options (path, band, necessity) and the coverage counts in its
+ * attention line, so the dashboard shows what the sweep decided without reading
+ * the artifact. */
+function recordFileJudgmentClassification(
+	snapshot: WorkflowSnapshot,
+	payload: unknown,
+	now: () => Date,
+): void {
+	if (!payload || typeof payload !== "object") return;
+	const report = payload as {
+		model?: unknown;
+		section?: unknown;
+		judged?: unknown;
+		cleared?: unknown;
+		cached?: unknown;
+		skipped?: unknown;
+		degenerate?: unknown;
+		flagged?: unknown;
+		unsure?: unknown;
+	};
+	const count = (value: unknown): number =>
+		typeof value === "number" && Number.isFinite(value) && value > 0
+			? Math.floor(value)
+			: 0;
+	// The engine owns the bound: a band list arriving over the effect boundary
+	// cannot grow the record past what the bounded history can hold.
+	const band = (
+		value: unknown,
+		verdict: string,
+	): ClassifierDecisionRecord["options"] =>
+		Array.isArray(value)
+			? value.slice(0, FILE_JUDGMENT_MAX_PATHS).flatMap((entry) => {
+					const path =
+						entry && typeof entry === "object"
+							? (entry as { path?: unknown }).path
+							: undefined;
+					if (typeof path !== "string" || !path) return [];
+					const noul = (entry as { noul?: unknown }).noul;
+					return [
+						{
+							label: path,
+							profile: verdict,
+							...(typeof noul === "number" && Number.isFinite(noul)
+								? { criteria: noul }
+								: {}),
+						},
+					];
+				})
+			: [];
+	const flagged = band(report.flagged, "flag");
+	const unsure = band(report.unsure, "unsure");
+	const judged = count(report.judged);
+	// A sweep that judged nothing is not a classification. The artifact and the
+	// evidence reference record that it ran; this history records decisions.
+	if (!judged && !flagged.length && !unsure.length) return;
+	const degenerate = report.degenerate === true;
+	const coverage = [
+		`judged ${judged}`,
+		...(count(report.cached) ? [`(${count(report.cached)} from cache)`] : []),
+		`cleared ${count(report.cleared)}`,
+		`flagged ${flagged.length}`,
+		`unsure ${unsure.length}`,
+		`not judged ${count(report.skipped)}`,
+	];
+	if (degenerate) coverage.push("(degenerate: every verdict is a finding)");
+	try {
+		appendClassifierDecisions(snapshot, [
+			{
+				id: [
+					snapshot.workflowId,
+					snapshot.revision,
+					"file-judgment",
+					snapshot.classifierDecisions?.length ?? 0,
+				].join(":"),
+				at: now().toISOString(),
+				integration: FILE_JUDGMENT_INTEGRATION,
+				questionId: FILE_JUDGMENT_QUESTION_ID,
+				model: classifierModel(report.model),
+				...truncateClassifierInput(
+					typeof report.section === "string" ? report.section : "",
+				),
+				options: [...flagged, ...unsure],
+				// One sweep asks one question per file, so it carries no single
+				// necessity value: the bands above are the answer.
+				answer: { type: "noul" },
+				result: {
+					applied: judged > 0 && !degenerate,
+					profiles: [],
+					attention: coverage.join(" "),
+				},
+			},
+		]);
+	} catch {
+		/* decision history is diagnostic, never an effect failure */
+	}
+}
 function recordTriageAttention(
 	snapshot: WorkflowSnapshot,
 	payload: { failOpen?: unknown; reason?: unknown; roles?: unknown },
@@ -428,16 +678,17 @@ function normalizeJson(value: unknown): JsonValue | undefined {
 	}
 }
 
-function truncateClassifierInput(input: string): {
+function truncateClassifierInput(
+	input: string,
+	limit = CLASSIFIER_DECISION_INPUT_MAX_BYTES,
+): {
 	input: string;
 	inputTruncated: boolean;
 } {
-	if (Buffer.byteLength(input) <= CLASSIFIER_DECISION_INPUT_MAX_BYTES)
+	if (Buffer.byteLength(input) <= limit)
 		return { input, inputTruncated: false };
-	let truncated = Buffer.from(input)
-		.subarray(0, CLASSIFIER_DECISION_INPUT_MAX_BYTES)
-		.toString("utf8");
-	while (Buffer.byteLength(truncated) > CLASSIFIER_DECISION_INPUT_MAX_BYTES)
+	let truncated = Buffer.from(input).subarray(0, limit).toString("utf8");
+	while (Buffer.byteLength(truncated) > limit)
 		truncated = truncated.slice(0, -1);
 	return { input: truncated, inputTruncated: true };
 }
