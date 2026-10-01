@@ -27,6 +27,21 @@ export function stepBehavior(id: string): StepBehavior {
 	return behavior;
 }
 
+/** Every classifiable step and its selection mode, derived from the registered
+ * behaviors so a step's `classification` declaration is the only place that
+ * knows it (classifier-driven-step-model-selection). Config parsing, pool
+ * coverage validation, and the routing pass all read this one table. */
+export const CLASSIFIABLE_STEPS: Readonly<Record<string, "single" | "roster">> =
+	Object.freeze(
+		Object.fromEntries(
+			Object.entries(STEP_BEHAVIORS)
+				.filter(([, behavior]) => behavior.classification !== undefined)
+				.map(([id, behavior]) => [id, behavior.classification]) as Array<
+				[string, "single" | "roster"]
+			>,
+		),
+	);
+
 export function rolesForStep(id: string, snapshot: WorkflowSnapshot): string[] {
 	return stepBehavior(id).roles?.({ snapshot }) ?? [];
 }

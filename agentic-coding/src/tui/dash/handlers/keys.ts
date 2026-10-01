@@ -439,7 +439,6 @@ export function createDashboardKeyHandler(
 			setActivePanel(
 				movePanel(activePanel(), direction, {
 					artifactsVisible: artifacts().length > 0,
-					classifierVisible: classifications().length > 0,
 				}),
 			);
 			return;

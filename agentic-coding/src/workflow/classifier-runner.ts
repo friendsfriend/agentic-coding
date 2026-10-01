@@ -613,6 +613,10 @@ export function invokeRoutingClassifier(
 		task: string;
 		changeId: string;
 		artifacts: ClassifierInput["artifacts"];
+		/** Changed-file paths for a step that runs after planning. Paths only:
+		 * diff bodies would cost every step the corpus assembly for a decision
+		 * whose inputs are that step's own prompt. */
+		paths?: readonly string[];
 	},
 	signal?: AbortSignal,
 	observer?: RoutingClassifierTelemetryObserver,
@@ -673,6 +677,7 @@ function renderRoutingState(
 		task: string;
 		changeId: string;
 		artifacts: ClassifierInput["artifacts"];
+		paths?: readonly string[];
 	},
 ): string {
 	const header = [
@@ -680,6 +685,13 @@ function renderRoutingState(
 		"",
 		`Change: ${input.changeId || "(unknown)"}`,
 		input.task.trim() ? `Task: ${input.task.trim()}` : "",
+		...(input.paths?.length
+			? [
+					"",
+					"Changed files (paths only; read them with your own tools):",
+					...input.paths.map((path) => `- ${path}`),
+				]
+			: []),
 	]
 		.filter(Boolean)
 		.join("\n");

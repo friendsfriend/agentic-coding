@@ -7,11 +7,7 @@
 // a feature modal stays props-in/callbacks-out.
 import type { KeyEvent } from "@opentui/core";
 import { createSignal, type Setter } from "solid-js";
-import {
-	CHANGE_PANEL,
-	CLASSIFIER_PANEL,
-	OPENSPEC_PANEL,
-} from "./panel-grid.ts";
+import { CHANGE_PANEL, OPENSPEC_PANEL } from "./panel-grid.ts";
 
 /** One finding row the findings overlay renders (the modal's own shape). */
 export type FindingEvent = Parameters<
@@ -74,11 +70,11 @@ export function createPanelState(): PanelState {
 			setAgentSignal((index) => clampIndex(index, agents));
 			setArtifactSignal((index) => clampIndex(index, artifactCount));
 			setDecisionSignal((index) => clampIndex(index, classifications));
+			// Only a *hidden* panel bounces focus away. Classifications is always
+			// rendered (its empty state is the panel), so it stays focusable with
+			// zero decisions.
 			setActiveSignal((panel) =>
-				(panel === OPENSPEC_PANEL && artifactCount === 0) ||
-				(panel === CLASSIFIER_PANEL && classifications === 0)
-					? CHANGE_PANEL
-					: panel,
+				panel === OPENSPEC_PANEL && artifactCount === 0 ? CHANGE_PANEL : panel,
 			);
 		},
 	};

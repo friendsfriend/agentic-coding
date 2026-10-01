@@ -52,6 +52,7 @@ import { workflowEdges } from "../src/workflow/definitions/edges.ts";
 import {
 	definitionVersionForResearchTools,
 	definitionVersionForStageGates,
+	definitionVersionForStepRouting,
 } from "../src/workflow/definitions/manifest-policy.ts";
 import {
 	BUILTIN_CAPABILITIES,
@@ -71,7 +72,12 @@ import {
 import { WorkflowRegistry } from "../src/workflow/registry.ts";
 import { changedFilesInAsync } from "../src/workflow/runtime/evidence.ts";
 import { applyClassifierRouting } from "../src/workflow/runtime/reducers/effect-result.ts";
-import { STEP_BEHAVIORS, stepBehavior } from "../src/workflow/steps/index.ts";
+import {
+	CLASSIFIABLE_STEPS,
+	STEP_BEHAVIORS,
+	stepBehavior,
+} from "../src/workflow/steps/index.ts";
+import { STEP_ROUTES } from "../src/workflow/steps/routing.ts";
 import { triageRolesFor } from "../src/workflow/steps/verification.ts";
 
 const temps: string[] = [];
@@ -516,6 +522,77 @@ describe("classifier runner (artifact collection + System One request)", () => {
 	});
 });
 
+describe("per-step routing coverage", () => {
+	// Every agent step of every family selects its own model immediately before
+	// it runs: a step whose route step is missing, edge-less, or bypassed would
+	// silently keep its pinned default.
+	const withRoutes = [
+		"openspec",
+		"openspec-apply",
+		"openspec-propose",
+		"openspec-fusion",
+		"openspec-fusion-propose",
+		"no-openspec",
+		"wiki",
+		"wiki-comments",
+		"research",
+	];
+	test("every classifiable step is entered through its route step", () => {
+		const registry = registerBuiltins();
+		const version = definitionVersionForStepRouting(6);
+		for (const id of withRoutes) {
+			const definition = registry.definition(id, version);
+			for (const stepId of definition.steps) {
+				const mode = CLASSIFIABLE_STEPS[stepId];
+				if (!mode) continue;
+				const route = Object.entries(STEP_ROUTES).find(
+					([, spec]) => spec.target === stepId,
+				)?.[0];
+				expect(route).toBeDefined();
+				if (!route) continue;
+				expect(
+					registry.stepForDefinition(definition, stepId).behavior
+						?.classification,
+				).toBe(mode);
+				expect(definition.steps).toContain(route);
+				expect(
+					definition.edges.find(
+						(edge) => edge.from === route && edge.outcome === "complete",
+					)?.to,
+				).toBe(stepId);
+				for (const edge of definition.edges.filter(
+					(entry) => entry.to === stepId,
+				))
+					expect(edge.from).toBe(route);
+			}
+		}
+	});
+
+	test("each route step asks exactly one question, for the step it precedes", () => {
+		for (const [routeStepId, spec] of Object.entries(STEP_ROUTES)) {
+			const enqueued: Array<{ key: string; payload: unknown }> = [];
+			stepBehavior(routeStepId).onEnter?.({
+				snapshot: {
+					workflowId: "wf",
+					currentStep: routeStepId,
+					revision: 3,
+					step: { attempt: 1 },
+				} as never,
+				enqueue: (_kind, key, payload) =>
+					enqueued.push({ key, payload: payload as unknown }),
+				hasLiveRun: () => false,
+			});
+			expect(enqueued).toHaveLength(1);
+			expect(enqueued[0]?.payload).toEqual({
+				integration: "routing",
+				phase: spec.phase,
+				stepId: spec.target,
+			});
+			expect(enqueued[0]?.key).toBe(`route:wf:${spec.target}:3`);
+		}
+	});
+});
+
 describe("routing steps and graph wiring", () => {
 	test("core.route-plan enqueues one routing classify effect and advances", () => {
 		const behavior = stepBehavior("core.route-plan");
@@ -524,6 +601,7 @@ describe("routing steps and graph wiring", () => {
 			snapshot: {
 				workflowId: "wf",
 				currentStep: "core.route-plan",
+				revision: 7,
 				step: { attempt: 2 },
 			} as never,
 			enqueue: (kind, key, payload) =>
@@ -532,9 +610,14 @@ describe("routing steps and graph wiring", () => {
 		});
 		expect(enqueued).toHaveLength(1);
 		expect(enqueued[0]?.kind).toBe("model.classify");
+		// One question, for the step this route step precedes (the key carries
+		// the revision so a loop back into the step re-asks instead of colliding
+		// with the outbox's INSERT OR IGNORE).
+		expect(enqueued[0]?.key).toBe("route:wf:core.plan:7");
 		expect(enqueued[0]?.payload).toEqual({
 			integration: "routing",
 			phase: "plan",
+			stepId: "core.plan",
 		});
 		const completion = behavior.onEffectComplete?.({
 			snapshot: {} as never,

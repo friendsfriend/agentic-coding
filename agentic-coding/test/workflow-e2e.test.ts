@@ -8,6 +8,7 @@ import type {
 	WorkflowRouting,
 	WorkflowView,
 } from "../src/contracts/workflow.ts";
+import { definitionVersionForStepRouting } from "../src/workflow/definitions/manifest-policy.ts";
 import {
 	definitionVersionForTriageRouting,
 	registerBuiltins,
@@ -416,6 +417,119 @@ for (const type of ["openspec", "openspec-apply", "no-openspec"] as const)
 			fs.rmSync(root, { recursive: true, force: true });
 		}
 	});
+test("a per-step routing definition asks one question before each agent step", () => {
+	const root = repo();
+	const configDir = fs.mkdtempSync(
+		path.join(os.tmpdir(), "workflow-per-step-cfg-"),
+	);
+	const configFile = path.join(configDir, "config.json");
+	const profileEntry = {
+		runtime: "pi",
+		executable: process.execPath,
+		capabilities: ["prompt", "run-environment", "observe", "shell", "edit"],
+	};
+	fs.writeFileSync(
+		configFile,
+		`${JSON.stringify({
+			agents: {
+				default_profile: "fake",
+				profiles: { fake: profileEntry, chosen: profileEntry },
+				presets: {
+					fixed: {
+						default_profile: "fake",
+						pools: Object.fromEntries(
+							[
+								"core.implementation",
+								"core.triage",
+								"core.verification",
+								"core.wiki",
+							].map((stepId) => [
+								stepId,
+								[{ label: "only", profile: "chosen", default: true }],
+							]),
+						),
+					},
+				},
+			},
+		})}\n`,
+	);
+	const previous = process.env.HERDR_WORKFLOW_CONFIG;
+	process.env.HERDR_WORKFLOW_CONFIG = configFile;
+	try {
+		const engine = new WorkflowEngine(registerBuiltins());
+		// The pinned routing covers only the steps this definition runs: the
+		// router preflights every route against the resolved definition.
+		// The routing preflight checks every pinned route against its step's
+		// requirements, so the fixture profile needs the writable capabilities an
+		// apply step asks for.
+		const writableProfile: ResolvedProfile = {
+			...profile,
+			capabilities: ["prompt", "run-environment", "observe", "shell", "edit"],
+		};
+		const definitionRouting: WorkflowRouting = {
+			defaultProfile: "fake",
+			routes: [
+				"core.implementation",
+				"core.triage",
+				"core.verification",
+				"core.wiki",
+			].map((stepId) => ({ stepId, profile: writableProfile })),
+		};
+		let view = engine.start({
+			repo: root,
+			workflowId: "per-step",
+			definitionId: "no-openspec",
+			definitionVersion: definitionVersionForStepRouting(6),
+			metadata: {
+				branch: "main",
+				baseBranch: "main",
+				baseCommit: "base",
+				task: "task",
+				selectedPreset: "fixed",
+			},
+			routing: definitionRouting,
+		}).view;
+		// The first agent step is preceded by its own routing step.
+		expect(view.currentStep.id).toBe("core.route-implementation");
+		const classify = requireEffect(
+			engine.claimEffects(root, 100),
+			"model.classify",
+		);
+		expect(classify.payload).toMatchObject({
+			integration: "routing",
+			stepId: "core.implementation",
+		});
+		view = engine.dispatch(root, {
+			type: "effect.result",
+			effectId: classify.id,
+			lease: requireDefined(classify.lease, "classify lease"),
+			outcome: "complete",
+			data: {
+				integration: "routing",
+				phase: "apply",
+				answers: {
+					"core.implementation": { type: "choice", choice: "only" },
+				},
+			},
+		}).view;
+		// The answer is applied before the step runs, and recorded against it.
+		expect(view.currentStep.id).toBe("core.implementation");
+		expect(
+			view.routing.routes.find(
+				(route) => route.stepId === "core.implementation",
+			)?.profile.name,
+		).toBe("chosen");
+		expect(
+			view.classifierDecisions?.map((decision) => decision.questionId),
+		).toEqual(["core.implementation"]);
+	} finally {
+		if (previous === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
+		else process.env.HERDR_WORKFLOW_CONFIG = previous;
+		fs.rmSync(configDir, { recursive: true, force: true });
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("policy workflow returns wiki comments before approval and archive", () => {
 	const root = repo();
 	try {

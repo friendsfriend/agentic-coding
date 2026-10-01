@@ -76,14 +76,17 @@ test("the panel lists routing, triage, and gate decisions together", async () =>
 	t.renderer.destroy();
 });
 
-test("a workflow with no classification renders no panel body rows", async () => {
+test("a workflow with no classification renders the panel with an empty state", async () => {
+	// A newly started workflow has no decisions yet; the panel must still exist
+	// and say so, not disappear from the grid.
 	const t = await testRender(
 		() => <ClassifierPanel entries={[]} active={false} selectedIndex={0} />,
 		{ width: 90, height: 20 },
 	);
 	const frame = await t.waitForFrame((value) =>
-		value.includes("Classifications"),
+		value.includes("No classifications recorded yet"),
 	);
+	expect(frame).toContain("Classifications");
 	expect(frame).not.toContain("stage gate");
 	t.renderer.destroy();
 });

@@ -11,30 +11,17 @@ import {
 
 type Row = Record<PanelDirection, PanelId>;
 
-/** Transition tables from the design: design.md → section `### 2.`. */
-const WITH_ARTIFACTS: Record<PanelId, Row> = {
-	[CHANGE_PANEL]: {
-		down: OPENSPEC_PANEL,
-		up: OPENSPEC_PANEL,
-		left: AGENTS_PANEL,
-		right: AGENTS_PANEL,
-	},
-	[OPENSPEC_PANEL]: {
-		down: CHANGE_PANEL,
-		up: CHANGE_PANEL,
-		left: AGENTS_PANEL,
-		right: AGENTS_PANEL,
-	},
-	[AGENTS_PANEL]: {
-		down: AGENTS_PANEL,
-		up: AGENTS_PANEL,
-		left: CHANGE_PANEL,
-		right: CHANGE_PANEL,
-	},
-};
-
+/** Transition tables from the design: design.md → section `### 2.`, with the
+ * Classifications cell always occupied (its empty state is the panel) and only
+ * the OpenSpec cell conditional. */
 const WITHOUT_ARTIFACTS: Record<PanelId, Row> = {
 	[CHANGE_PANEL]: {
+		down: CLASSIFIER_PANEL,
+		up: CLASSIFIER_PANEL,
+		left: AGENTS_PANEL,
+		right: AGENTS_PANEL,
+	},
+	[CLASSIFIER_PANEL]: {
 		down: CHANGE_PANEL,
 		up: CHANGE_PANEL,
 		left: AGENTS_PANEL,
@@ -51,18 +38,6 @@ const WITHOUT_ARTIFACTS: Record<PanelId, Row> = {
 const DIRECTIONS: PanelDirection[] = ["down", "up", "left", "right"];
 
 describe("movePanel with open-spec artifacts listed", () => {
-	for (const [from, table] of Object.entries(WITH_ARTIFACTS)) {
-		for (const direction of DIRECTIONS) {
-			test(`${from} + ${direction} → ${table[direction]}`, () => {
-				expect(
-					movePanel(Number(from), direction, { artifactsVisible: true }),
-				).toBe(table[direction]);
-			});
-		}
-	}
-});
-
-describe("movePanel with open-spec artifacts and classifier decisions", () => {
 	const table: Record<PanelId, Row> = {
 		[CHANGE_PANEL]: {
 			down: OPENSPEC_PANEL,
@@ -93,31 +68,11 @@ describe("movePanel with open-spec artifacts and classifier decisions", () => {
 		for (const direction of DIRECTIONS) {
 			test(`${from} + ${direction} → ${moves[direction]}`, () => {
 				expect(
-					movePanel(Number(from), direction, {
-						artifactsVisible: true,
-						classifierVisible: true,
-					}),
+					movePanel(Number(from), direction, { artifactsVisible: true }),
 				).toBe(moves[direction]);
 			});
 		}
 	}
-});
-
-describe("movePanel with classifier decisions but no artifacts", () => {
-	test("vertical movement skips the empty OpenSpec cell", () => {
-		expect(
-			movePanel(CHANGE_PANEL, "down", {
-				artifactsVisible: false,
-				classifierVisible: true,
-			}),
-		).toBe(CLASSIFIER_PANEL);
-		expect(
-			movePanel(CLASSIFIER_PANEL, "up", {
-				artifactsVisible: false,
-				classifierVisible: true,
-			}),
-		).toBe(CHANGE_PANEL);
-	});
 });
 
 describe("movePanel without open-spec artifacts", () => {
@@ -133,9 +88,10 @@ describe("movePanel without open-spec artifacts", () => {
 });
 
 describe("movePanel stale focus on a hidden panel", () => {
+	// Only OpenSpec can be hidden; Classifications is rendered everywhere.
 	test("OpenSpec loses a panel while focused: any move lands on a rendered panel", () => {
 		expect(movePanel(OPENSPEC_PANEL, "down", { artifactsVisible: false })).toBe(
-			CHANGE_PANEL,
+			CLASSIFIER_PANEL,
 		);
 		expect(movePanel(OPENSPEC_PANEL, "up", { artifactsVisible: false })).toBe(
 			CHANGE_PANEL,
@@ -145,18 +101,6 @@ describe("movePanel stale focus on a hidden panel", () => {
 		);
 		expect(
 			movePanel(OPENSPEC_PANEL, "right", { artifactsVisible: false }),
-		).toBe(AGENTS_PANEL);
-	});
-
-	test("Classifier loses a panel while focused: any move lands on a rendered panel", () => {
-		expect(
-			movePanel(CLASSIFIER_PANEL, "down", { artifactsVisible: false }),
-		).toBe(CHANGE_PANEL);
-		expect(movePanel(CLASSIFIER_PANEL, "up", { artifactsVisible: false })).toBe(
-			CHANGE_PANEL,
-		);
-		expect(
-			movePanel(CLASSIFIER_PANEL, "left", { artifactsVisible: false }),
 		).toBe(AGENTS_PANEL);
 	});
 });

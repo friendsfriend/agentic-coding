@@ -112,23 +112,30 @@ inside the transaction; concurrent replacement or source drift is rejected,
 not silently accepted. This leaves an intentional filesystem race window and
 keeps the final integrity check load-bearing.
 
-Classifier-driven model pools are the routing model for the OpenSpec family.
-Each classifiable step (`core.plan`, `fusion.consolidate`, `fusion.plan`,
-`core.implementation`, `core.triage`, `core.verification`, `core.wiki`,
-`core.archive`) declares a classification mode in its step behavior; a custom
-preset supplies one ordered pool per classifiable step, and the JEV classifier
-picks an entry. Two passes run: `core.route-plan` (task state; `core.plan`,
-`fusion.consolidate`, and the `fusion.plan` roster) and `core.route-apply`
-(plan-artifact state; implementation/triage/verification/wiki/archive). A
-single selection pins the entry the classifier named — or, when it named
-none, the offered entry with the highest `probabilities` value — and replaces
-every route of its step, so one `core.verification` pool covers all verifier
-roles; the reported `confidence` is observable telemetry and never changes the
-pick, and only an answer with no usable decision falls back to the pool's
-tagged `default`. A fusion roster recomputes `planner-1..N`. A
-classifier-routed start requires a preset whose pools cover every classifiable
-step in the definition; the `fusion.plan` pool's tagged defaults seed the
-pre-classification planner fan-out. The resolved routing is pinned in the
+Classifier-driven model pools select the model of **every** agent step, in
+**every** family. Each classifiable step (`core.plan`, `fusion.consolidate`,
+`fusion.plan`, `core.implementation`, `core.triage`, `core.verification`,
+`core.wiki`, `core.research`, `core.archive`) declares a classification mode in
+its own step behavior — `CLASSIFIABLE_STEPS` is *derived* from those behaviors,
+so the config keys and the routing pass can never disagree — and a preset
+supplies one ordered pool per classifiable step. Routing is per step, not per
+phase: `withPerStepRouting` gives every classifiable step a routing step
+immediately before it (`core.route-implementation`, `core.route-verification`,
+…), every inbound edge enters that routing step, and the routing step asks
+exactly one pool question for the step that follows. The state is what that step
+is about to run against: the task before planning, and the task plus the plan
+artifacts and the changed-file paths afterwards (never diff bodies). A loop
+therefore re-selects the model, so a verification round re-asks. A single
+selection pins the entry the classifier named — or, when it named none, the
+offered entry with the highest `probabilities` value — and replaces every route
+of its step, so one `core.verification` pool covers all verifier roles; the
+reported `confidence` is observable telemetry and never changes the pick, and
+only an answer with no usable decision falls back to the pool's tagged
+`default`. A fusion roster recomputes `planner-1..N`. Every new start
+resolves the per-step routing tier (`rounds + 700`) and requires a preset whose
+pools cover every classifiable step in its definition — the error names the
+step; the `fusion.plan` pool's tagged defaults seed the pre-classification
+planner fan-out. The resolved routing is pinned in the
 workflow snapshot before effects run, so a preset switch is validated and
 explicit.
 

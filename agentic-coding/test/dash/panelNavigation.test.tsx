@@ -93,6 +93,14 @@ async function expectOpenSpec(t: Test) {
 	await t.waitForFrame((frame) => !frame.includes("OpenSpec ·"));
 }
 
+async function expectClassifier(t: Test) {
+	const frame = await openFocusedPanelModal(t);
+	expect(frame).toContain("Classifier ·");
+	expect(frame).not.toContain("Plan review");
+	t.mockInput.pressEscape();
+	await t.waitForFrame((frame) => !frame.includes("Classifier ·"));
+}
+
 async function expectChange(t: Test) {
 	const frame = await openFocusedPanelModal(t);
 	expect(frame).toContain("Plan review");
@@ -178,14 +186,21 @@ function noDecisionsFixture(): DashboardData {
 	};
 }
 
-function decisionsFixture(count: number): DashboardData {
-	const dashboard = testDashboard();
-	const template = dashboard.state.classifierDecisions?.[0];
+/** The demo's classifier decisions repeated `count` times, merged into `data`:
+ * panel navigation is the same geometry whether or not anything was classified,
+ * so the focus probe needs a populated panel. */
+function withClassifierDecisions(
+	data: DashboardData,
+	count: number,
+): DashboardData {
+	// The template comes from the demo itself, not from `data`: a fixture may
+	// have cleared both histories, and this one is the shape to replicate.
+	const template = testDashboard().state.classifierDecisions?.[0];
 	if (!template) throw new Error("demo classifier decision missing");
 	return {
-		...dashboard,
+		...data,
 		state: {
-			...dashboard.state,
+			...data.state,
 			// The count is exact only with no gate records merged in.
 			gateDecisions: [],
 			classifierDecisions: Array.from({ length: count }, (_, index) => ({
@@ -198,9 +213,17 @@ function decisionsFixture(count: number): DashboardData {
 	};
 }
 
+function decisionsFixture(count: number): DashboardData {
+	return withClassifierDecisions(testDashboard(), count);
+}
+
 test("Shift+J/K move focus vertically with wrap at both edges", async () => {
 	const t = await testRender(
-		() => <TestDashboard testData={artifactsFixture(5)} />,
+		() => (
+			<TestDashboard
+				testData={withClassifierDecisions(artifactsFixture(5), 3)}
+			/>
+		),
 		{
 			width: 120,
 			height: 40,
@@ -213,20 +236,25 @@ test("Shift+J/K move focus vertically with wrap at both edges", async () => {
 	await t.renderOnce();
 	await expectOpenSpec(t);
 
-	// OpenSpec → (Shift+J, bottom wraps to top) → Change.
+	// OpenSpec → (Shift+J) → Classifications, which is always rendered.
+	t.mockInput.pressKey("j", { shift: true });
+	await t.renderOnce();
+	await expectClassifier(t);
+
+	// Classifications → (Shift+J, bottom wraps to top) → Change.
 	t.mockInput.pressKey("j", { shift: true });
 	await t.renderOnce();
 	await expectChange(t);
 
-	// Change → (Shift+K, top wraps to bottom) → OpenSpec.
+	// Change → (Shift+K, top wraps to bottom) → Classifications.
+	t.mockInput.pressKey("k", { shift: true });
+	await t.renderOnce();
+	await expectClassifier(t);
+
+	// Classifications → (Shift+K) → OpenSpec.
 	t.mockInput.pressKey("k", { shift: true });
 	await t.renderOnce();
 	await expectOpenSpec(t);
-
-	// OpenSpec → (Shift+K) → Change.
-	t.mockInput.pressKey("k", { shift: true });
-	await t.renderOnce();
-	await expectChange(t);
 
 	t.renderer.destroy();
 });
@@ -266,9 +294,9 @@ test("Shift+H/L move focus horizontally with wrap at both edges", async () => {
 	t.renderer.destroy();
 });
 
-test("Shift+J/K without artifacts or decisions leave the active panel unchanged", async () => {
+test("Shift+J/K without artifacts skip the empty OpenSpec cell into Classifications", async () => {
 	const t = await testRender(
-		() => <TestDashboard testData={noDecisionsFixture()} />,
+		() => <TestDashboard testData={decisionsFixture(3)} />,
 		{
 			width: 120,
 			height: 40,
@@ -276,21 +304,23 @@ test("Shift+J/K without artifacts or decisions leave the active panel unchanged"
 	);
 	await dashboardReady(t);
 
-	// Change has no vertical neighbor without a listed OpenSpec panel: a
-	// vertical move is a no-op, so Enter still opens the plan review.
+	// Change → (Shift+J): the OpenSpec cell is empty, so the move lands on
+	// Classifications rather than doing nothing.
 	t.mockInput.pressKey("j", { shift: true });
-	t.mockInput.pressEnter();
 	await t.renderOnce();
-	expect(t.captureCharFrame()).toContain("Plan review");
-	t.mockInput.pressEscape();
-	await t.waitForFrame((frame) => !frame.includes("Plan review"));
+	await expectClassifier(t);
 
+	// Classifications → (Shift+K) → Change; Change has no *distinct* upward
+	// neighbor either (the wrap reaches Classifications, not OpenSpec).
 	t.mockInput.pressKey("k", { shift: true });
-	t.mockInput.pressEnter();
 	await t.renderOnce();
-	expect(t.captureCharFrame()).toContain("Plan review");
-	t.mockInput.pressEscape();
-	await t.waitForFrame((frame) => !frame.includes("Plan review"));
+	await expectChange(t);
+	t.mockInput.pressKey("k", { shift: true });
+	await t.renderOnce();
+	await expectClassifier(t);
+	t.mockInput.pressKey("j", { shift: true });
+	await t.renderOnce();
+	await expectChange(t);
 
 	// The spanning Agents column also has no distinct vertical neighbor:
 	// Shift+J/K leave it focused, so `v` still opens the selection's verdict.
@@ -431,13 +461,16 @@ test("Classifier panel renders a bounded selectable viewport and opens detail", 
 	t.renderer.destroy();
 });
 
-test("Classifications panel is absent when the workflow exposes no decisions", async () => {
+test("Classifications panel shows its empty state when the workflow exposes no decisions", async () => {
 	const t = await testRender(
 		() => <TestDashboard testData={noDecisionsFixture()} />,
 		{ width: 120, height: 40 },
 	);
 	await dashboardReady(t);
-	expect(t.captureCharFrame()).not.toContain("Classifications");
+	const frame = await t.waitForFrame((value) =>
+		value.includes("No classifications recorded yet"),
+	);
+	expect(frame).toContain("Classifications");
 	t.renderer.destroy();
 });
 

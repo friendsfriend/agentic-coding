@@ -1088,7 +1088,6 @@ export function App(props: {
 	const keybindCatalog = createMemo(() =>
 		dashboardDetailKeybindCatalog({
 			artifactsVisible: artifacts().length > 0,
-			classifierVisible: classifications().length > 0,
 		}),
 	);
 	// The shell footer and `?` help read the active surface catalog from the
@@ -2509,13 +2508,13 @@ export function App(props: {
 										selectedIndex={selectedArtifact()}
 									/>
 								</Show>
-								<Show when={classifications().length > 0}>
-									<ClassifierPanel
-										entries={classifications()}
-										active={activePanel() === CLASSIFIER_PANEL}
-										selectedIndex={selectedDecision()}
-									/>
-								</Show>
+								{/* Always rendered, empty state included: a newly started
+								    workflow must show where its decisions will land. */}
+								<ClassifierPanel
+									entries={classifications()}
+									active={activePanel() === CLASSIFIER_PANEL}
+									selectedIndex={selectedDecision()}
+								/>
 							</box>
 							<AgentsPanel
 								data={data()}

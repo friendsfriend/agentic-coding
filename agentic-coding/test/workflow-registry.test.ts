@@ -367,26 +367,34 @@ describe("workflow registry", () => {
 				expect(registry.definition(id, version)).toBeTruthy();
 		}
 		const planFusion = registry.definition("openspec-fusion", 120);
+		const openspecPolicyTier = registry.definition("openspec", 120);
 		expect(
 			rolesForDefinition(
 				"openspec",
-				registry.definition("openspec", 120).steps,
+				openspecPolicyTier.steps,
 				registry,
+				0,
+				openspecPolicyTier,
 			),
 		).toMatchObject({
 			"core.wiki": ["wiki"],
 		});
 		const fusionProposal = registry.definition("openspec-fusion-propose", 20);
 		expect(
-			rolesForDefinition("openspec-fusion", planFusion.steps, registry, 2)[
-				"fusion.plan"
-			],
+			rolesForDefinition(
+				"openspec-fusion",
+				planFusion.steps,
+				registry,
+				2,
+				planFusion,
+			)["fusion.plan"],
 		).toEqual(
 			rolesForDefinition(
 				"openspec-fusion-propose",
 				fusionProposal.steps,
 				registry,
 				2,
+				fusionProposal,
 			)["fusion.plan"],
 		);
 		expect(() => registerBuiltins(undefined, 21)).toThrow(
@@ -612,7 +620,8 @@ describe("workflow registry", () => {
 						(definition.version < 301 || definition.version > 320) &&
 						(definition.version < 401 || definition.version > 420) &&
 						(definition.version < 501 || definition.version > 520) &&
-						(definition.version < 601 || definition.version > 620),
+						(definition.version < 601 || definition.version > 620) &&
+						(definition.version < 701 || definition.version > 720),
 				))
 				expect(definition.policy).toBeUndefined();
 		});

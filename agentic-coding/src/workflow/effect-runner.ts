@@ -1290,6 +1290,9 @@ export function agentEffectHandlers(
 						integration?: unknown;
 						phase?: unknown;
 						stage?: unknown;
+						/** Present on a per-step routing payload: the classifiable step
+						 * this route step asks about. */
+						stepId?: unknown;
 					};
 					const definition = snapshotDefinition(snapshot, options.registry);
 					// The verifier-role integration resolves no pool and must never
@@ -1333,33 +1336,61 @@ export function agentEffectHandlers(
 						const preset = snapshot.metadata.selectedPreset
 							? resolvePreset(agents, snapshot.metadata.selectedPreset)
 							: undefined;
-						const steps =
-							phase === "plan" ? PLAN_PHASE_STEPS : APPLY_PHASE_STEPS;
-						const specs: RoutingQuestionSpec[] = steps
-							.filter((stepId) => definition.steps.includes(stepId))
-							.map((stepId) => ({
-								stepId,
-								mode:
-									options.registry.stepForDefinition(definition, stepId)
-										.behavior?.classification ?? "single",
-								entries: poolEntries(preset, stepId),
-							}));
-						return invokeRoutingClassifier(
-							specs,
-							resolveClassifierBinding(
-								agents,
-								pinnedClassifierProvider(snapshot),
-							),
-							{
-								task: snapshot.metadata.task ?? "",
-								changeId: snapshot.metadata.changeId,
-								artifacts: collectClassifierArtifacts(
-									snapshot.metadata.worktree,
-									snapshot.metadata.changeId,
+						// Per-step routing asks one question, for the step whose route
+						// step enqueued this effect. A payload without a `stepId` is a
+						// definition pinned to one of the pre-per-step tiers, still
+						// resolving through its phase's step list.
+						const requested =
+							typeof payload.stepId === "string" &&
+							definition.steps.includes(payload.stepId)
+								? [payload.stepId]
+								: (phase === "plan"
+										? PLAN_PHASE_STEPS
+										: APPLY_PHASE_STEPS
+									).filter((stepId) => definition.steps.includes(stepId));
+						const specs: RoutingQuestionSpec[] = requested.map((stepId) => ({
+							stepId,
+							mode:
+								options.registry.stepForDefinition(definition, stepId).behavior
+									?.classification ?? "single",
+							entries: poolEntries(preset, stepId),
+						}));
+						// The state is what the step is about to run against: the task
+						// before planning, and the task plus the plan artifacts and the
+						// changed-file paths afterwards. Diff bodies stay out of it.
+						const postPlan = requested.every(
+							(stepId) => !PLAN_PHASE_STEPS.includes(stepId),
+						);
+						// Best effort: the changed-file list is context for the decision,
+						// so a worktree that cannot be inspected (an uninitialized
+						// fixture, a missing git) degrades to no paths instead of
+						// failing the classification.
+						const paths = postPlan
+							? p(() =>
+									changedFilesInAsync(snapshot).catch(() => [] as string[]),
+								)
+							: Effect.succeed([] as string[]);
+						return paths.pipe(
+							Effect.flatMap((changed) =>
+								invokeRoutingClassifier(
+									specs,
+									resolveClassifierBinding(
+										agents,
+										pinnedClassifierProvider(snapshot),
+									),
+									{
+										task: snapshot.metadata.task ?? "",
+										changeId: snapshot.metadata.changeId,
+										artifacts: collectClassifierArtifacts(
+											snapshot.metadata.worktree,
+											snapshot.metadata.changeId,
+										),
+										...(changed.length ? { paths: changed } : {}),
+									},
+									signal,
+									routingTelemetryObserver(snapshot, effect, phase),
 								),
-							},
-							signal,
-							routingTelemetryObserver(snapshot, effect, phase),
+							),
 						);
 					}, phase);
 				}),

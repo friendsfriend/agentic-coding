@@ -204,6 +204,58 @@ export const WORKFLOW_STEPS: readonly StepDefinition[] = [
 			retryLimit: 3,
 		},
 	),
+	// Per-step model selection (classifier-driven-step-model-selection): one
+	// routing step immediately before every classifiable agent step. The
+	// pre-per-step `core.route-plan`/`core.route-apply` passes stay registered
+	// with the same ids and definitions, so a definition pinned to an earlier
+	// tier keeps resolving them.
+	step(
+		"core.route-fusion-consolidate",
+		"Consolidator model routing",
+		"system",
+		["complete"],
+		{ allowedEffects: ["model.classify"], retryLimit: 3 },
+	),
+	step(
+		"core.route-fusion-plan",
+		"Fusion planner model routing",
+		"system",
+		["complete"],
+		{ allowedEffects: ["model.classify"], retryLimit: 3 },
+	),
+	step(
+		"core.route-implementation",
+		"Implementation model routing",
+		"system",
+		["complete"],
+		{ allowedEffects: ["model.classify"], retryLimit: 3 },
+	),
+	step("core.route-triage", "Triage model routing", "system", ["complete"], {
+		allowedEffects: ["model.classify"],
+		retryLimit: 3,
+	}),
+	step(
+		"core.route-verification",
+		"Verification model routing",
+		"system",
+		["complete"],
+		{ allowedEffects: ["model.classify"], retryLimit: 3 },
+	),
+	step("core.route-wiki", "Wiki model routing", "system", ["complete"], {
+		allowedEffects: ["model.classify"],
+		retryLimit: 3,
+	}),
+	step("core.route-archive", "Archive model routing", "system", ["complete"], {
+		allowedEffects: ["model.classify"],
+		retryLimit: 3,
+	}),
+	step(
+		"core.route-research",
+		"Research model routing",
+		"system",
+		["complete"],
+		{ allowedEffects: ["model.classify"], retryLimit: 3 },
+	),
 	step(
 		"core.implementation",
 		"Implementation",

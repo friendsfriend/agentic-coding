@@ -8,10 +8,7 @@ import type {
 	WorkflowSnapshot,
 } from "../src/contracts/workflow.ts";
 import { resolveClassifierBinding } from "../src/workflow/classifier-runner.ts";
-import {
-	definitionVersionForResearchTools,
-	definitionVersionForStageGates,
-} from "../src/workflow/definitions/manifest-policy.ts";
+import { definitionVersionForStepRouting } from "../src/workflow/definitions/manifest-policy.ts";
 import { effectRunnerTest } from "../src/workflow/effect-runner.ts";
 import {
 	executionSettings,
@@ -53,7 +50,43 @@ default_profile = "p"
 [agents.profiles.p]
 runtime = "pi"
 executable = "/bin/true"
+
+[agents.presets.fixed]
+default_profile = "p"
+
+[[agents.presets.fixed.pools."core.wiki"]]
+label = "only"
+profile = "p"
+default = true
+
+[[agents.presets.fixed.pools."core.research"]]
+label = "only"
+profile = "p"
+default = true
 `;
+
+/** A coverage-validating preset over the keys the started definitions ask
+ * about: every classifiable step needs a pool, so a family that never had one
+ * before now fails a preset-less start with the step named. */
+function fixedPools(stepIds: readonly string[]): Record<string, unknown[]> {
+	return Object.fromEntries(
+		stepIds.map((stepId) => [
+			stepId,
+			[{ label: "only", profile: "p", default: true }],
+		]),
+	);
+}
+
+function presetConfig(stepIds: readonly string[], provider?: string): string {
+	return `${JSON.stringify({
+		agents: {
+			default_profile: "p",
+			profiles: { p: { runtime: "pi", executable: "/bin/true" } },
+			presets: { fixed: { default_profile: "p", pools: fixedPools(stepIds) } },
+			...(provider ? { classifier: { provider } } : {}),
+		},
+	})}\n`;
+}
 
 describe("classifier provider pinning", () => {
 	test("the selected provider is pinned at start and survives a config edit", () => {
@@ -62,13 +95,7 @@ describe("classifier provider pinning", () => {
 		const write = (provider: string) => {
 			fs.writeFileSync(
 				file,
-				`${JSON.stringify({
-					agents: {
-						default_profile: "p",
-						profiles: { p: { runtime: "pi", executable: "/bin/true" } },
-						classifier: { provider },
-					},
-				})}\n`,
+				presetConfig(["core.wiki", "core.research"], provider),
 			);
 		};
 		const previous = process.env.HERDR_WORKFLOW_CONFIG;
@@ -81,6 +108,7 @@ describe("classifier provider pinning", () => {
 				definitionId: "wiki",
 				task: "pin the local classifier",
 				mode: "checkout",
+				preset: "fixed",
 			});
 			expect(started.input.metadata.classifier).toBe("laya-local");
 			// A mid-run edit to the config must not switch the running workflow's
@@ -108,6 +136,7 @@ describe("classifier provider pinning", () => {
 				definitionId: "wiki",
 				task: "pin the hosted classifier",
 				mode: "checkout",
+				preset: "fixed",
 			});
 			expect(next.input.metadata.classifier).toBe("opencode-zen");
 		} finally {
@@ -132,6 +161,7 @@ describe("shared workflow startup", () => {
 				definitionId: "wiki",
 				task: "document startup",
 				mode: "checkout",
+				preset: "fixed",
 			});
 			expect(prepared.input.repo).toBe(fs.realpathSync(repo));
 			expect(prepared.input.metadata.executionSettings?.remote).toBe(
@@ -143,17 +173,19 @@ describe("shared workflow startup", () => {
 				prepareWorkflowStart({
 					workflowId: "research-test",
 					definitionId: "research",
+					preset: "fixed",
 				}),
 			).toThrow(/research workflow requires non-empty task/);
 			const research = prepareWorkflowStart({
 				workflowId: "research-tools",
 				definitionId: "research",
 				task: "research with all runtime tools",
+				preset: "fixed",
 			});
 			const researcher = research.input.routing.routes.find(
 				(route) => route.role === "researcher",
 			)?.profile;
-			expect(research.input.definitionVersion).toBeGreaterThanOrEqual(401);
+			expect(research.input.definitionVersion).toBeGreaterThanOrEqual(701);
 			expect(researcher?.readOnly).toBe(false);
 			expect(researcher?.capabilities).toContain("shell");
 			expect(researcher?.capabilities).toContain("edit");
@@ -213,30 +245,49 @@ describe("shared workflow startup", () => {
 	});
 });
 
-test("a new non-research start resolves the stage-gate definition tier", () => {
+test("a new start resolves the per-step routing definition tier", () => {
 	const repo = repository();
 	execFileSync("git", ["remote", "add", "origin", repo], { cwd: repo });
 	execFileSync("git", ["fetch", "-q", "origin"], { cwd: repo });
 	execFileSync("git", ["remote", "set-head", "origin", "main"], { cwd: repo });
 	const previous = process.env.HERDR_WORKFLOW_CONFIG;
-	process.env.HERDR_WORKFLOW_CONFIG = path.join(repo, "config.json");
+	// Outside the repository: a config file inside the worktree would make the
+	// start fail its clean-tree check.
+	const file = path.join(
+		fs.mkdtempSync(path.join(os.tmpdir(), "workflow-startup-cfg-")),
+		"config.json",
+	);
+	process.env.HERDR_WORKFLOW_CONFIG = file;
+	fs.writeFileSync(
+		file,
+		presetConfig([
+			"core.implementation",
+			"core.triage",
+			"core.verification",
+			"core.wiki",
+			"core.research",
+		]),
+	);
 	try {
+		// Per-step routing is the tier a new start resolves, whichever family it
+		// is: research included, whose tool policy that tier applies too.
 		expect(
 			prepareWorkflowStart({
-				workflowId: "gate-tier",
+				workflowId: "routed-tier",
 				definitionId: "no-openspec",
-				task: "gate tier",
+				task: "routed tier",
 				repo,
+				preset: "fixed",
 			}).input.definitionVersion,
-		).toBe(definitionVersionForStageGates(6));
-		// Research keeps the tool-policy tier: it has no gated stage.
+		).toBe(definitionVersionForStepRouting(6));
 		expect(
 			prepareWorkflowStart({
 				workflowId: "research-tier",
 				definitionId: "research",
 				task: "research tier",
+				preset: "fixed",
 			}).input.definitionVersion,
-		).toBe(definitionVersionForResearchTools(6));
+		).toBe(definitionVersionForStepRouting(6));
 	} finally {
 		if (previous === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
 		else process.env.HERDR_WORKFLOW_CONFIG = previous;

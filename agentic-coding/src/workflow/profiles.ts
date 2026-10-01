@@ -36,23 +36,18 @@ import {
 	ROSTER_MAX_PLANNERS,
 	ROSTER_MIN_PLANNERS,
 } from "./classifiers.ts";
+import { CLASSIFIABLE_STEPS } from "./steps/index.ts";
+import { STEP_ROUTES } from "./steps/routing.ts";
 
 /** Recovery hint repeated by every pool/preset configuration error. */
 export const SETTINGS_PRESETS_HINT = "Settings → Presets";
 
-/** Classifiable step ids by their declared mode; step knowledge lives in
- * `steps/`, this only names the config keys the preset editor offers. */
+/** Classifiable step ids by their declared mode: the registered step
+ * behaviors are the only place that knows, so this is derived rather than kept
+ * as a parallel table that can drift (classifier-driven-step-model-selection).
+ * These double as the config keys the preset editor offers. */
 export const POOL_STEPS: Readonly<Record<string, ClassificationMode>> =
-	Object.freeze({
-		"core.plan": "single",
-		"fusion.consolidate": "single",
-		"fusion.plan": "roster",
-		"core.implementation": "single",
-		"core.triage": "single",
-		"core.verification": "single",
-		"core.wiki": "single",
-		"core.archive": "single",
-	});
+	CLASSIFIABLE_STEPS;
 
 /** The removed flat category keys; any occurrence is a hard config break. */
 export const REMOVED_PRESET_CATEGORY_KEYS = [
@@ -700,13 +695,15 @@ export function defaultPoolProfile(
 	return defaultPoolEntries(preset, stepId)[0]?.profile;
 }
 
-/** True when a definition runs a classifier routing pass. */
+/** True when a definition selects its step models with the classifier. Since
+ * classifier-driven-step-model-selection every family has a routing step before
+ * each of its classifiable steps, so this asks whether the resolved definition
+ * carries any of them rather than whether it carries the pre-per-step
+ * `core.route-plan`/`core.route-apply` passes. */
 export function isClassifierRouted(
 	definition: CompiledWorkflowDefinition,
 ): boolean {
-	return definition.steps.some(
-		(stepId) => stepId === "core.route-plan" || stepId === "core.route-apply",
-	);
+	return definition.steps.some((stepId) => STEP_ROUTES[stepId] !== undefined);
 }
 
 /** Fail startup when a selected preset leaves a required step unresolvable.

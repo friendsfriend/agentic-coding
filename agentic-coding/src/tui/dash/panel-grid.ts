@@ -33,8 +33,6 @@ export const GRID_COLS = 2;
 export interface PanelGridOptions {
 	/** True while open-spec artifacts are listed (OpenSpec cell occupied). */
 	readonly artifactsVisible: boolean;
-	/** True while classifications are listed (Classifications cell occupied). */
-	readonly classifierVisible?: boolean;
 }
 
 /** Static geometry: every cell incl. the OpenSpec cell, used to anchor panels. */
@@ -44,14 +42,16 @@ const FULL_GRID: ReadonlyArray<ReadonlyArray<PanelId>> = [
 	[CLASSIFIER_PANEL, AGENTS_PANEL],
 ];
 
-/** Rendered occupancy: the OpenSpec cell is empty while no artifacts exist. */
+/** Rendered occupancy: the OpenSpec cell is empty while no artifacts exist.
+ * The Classifications cell is always occupied — the panel renders an empty
+ * state for a workflow that has not classified anything yet. */
 function renderedGrid(
 	opts: PanelGridOptions,
 ): Array<Array<PanelId | undefined>> {
 	return [
 		[CHANGE_PANEL, AGENTS_PANEL],
 		[opts.artifactsVisible ? OPENSPEC_PANEL : undefined, AGENTS_PANEL],
-		[opts.classifierVisible ? CLASSIFIER_PANEL : undefined, AGENTS_PANEL],
+		[CLASSIFIER_PANEL, AGENTS_PANEL],
 	];
 }
 

@@ -515,6 +515,9 @@ function applyPoolRouting(
 	preset: ReturnType<typeof resolvePreset> | undefined,
 	payload: {
 		phase?: unknown;
+		/** The classifiable step a per-step routing payload asks about. Absent
+		 * on a definition pinned to one of the pre-per-step tiers. */
+		stepId?: unknown;
 		answers?: unknown;
 		model?: unknown;
 		state?: unknown;
@@ -549,7 +552,15 @@ function applyPoolRouting(
 					]),
 				)
 			: {};
-	const steps = phase === "plan" ? PLAN_PHASE_STEPS : APPLY_PHASE_STEPS;
+	// One question per route step: the step comes from the payload. A payload
+	// without one is a pre-per-step phase pass, which keeps resolving through
+	// its phase's step list.
+	const steps =
+		typeof payload.stepId === "string"
+			? [payload.stepId]
+			: phase === "plan"
+				? PLAN_PHASE_STEPS
+				: APPLY_PHASE_STEPS;
 	const selections: CategorySelection[] = [];
 	const attention: string[] = [];
 	const decisions: Array<{
@@ -851,13 +862,22 @@ export function effectResult(
 		if (typeof data.branch === "string") snapshot.metadata.branch = data.branch;
 		enterStep(db, snapshot, definition, registry, now);
 	}
+	// The routing payload (which step was asked) lives on the effect row; the
+	// answers live on the command. Both are needed: without the payload's
+	// `stepId` a per-step routing effect would be read as a phase-wide pass and
+	// re-answer steps whose models were already chosen.
 	const routingDecision =
 		command.outcome === "complete" && row.kind === "model.classify"
 			? applyClassifierRouting(
 					snapshot,
 					definition,
 					registry,
-					command.data,
+					{
+						...(JSON.parse(row.payload_json) as Record<string, unknown>),
+						...(command.data && typeof command.data === "object"
+							? (command.data as Record<string, unknown>)
+							: {}),
+					},
 					now,
 				)
 			: undefined;

@@ -7270,6 +7270,7 @@ describe("workflow step behaviors", () => {
 					definition.steps,
 					registry,
 					count,
+					definition,
 				);
 				for (const stepId of definition.steps) {
 					if (registry.step(stepId).actor !== "agent") continue;

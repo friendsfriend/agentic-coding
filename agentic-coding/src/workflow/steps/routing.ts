@@ -1,20 +1,75 @@
-// The classifier-routing step behaviors (classifier-driven-model-pools for
-// `core.route-plan` / `core.route-apply`, classifier-driven-triage-routing for
-// `core.triage-route`). Each is a system step that enqueues one `model.classify`
-// effect on entry; the reducer applies the answered result before the
-// effect-complete transition advances the step.
+// The classifier-routing step behaviors: one per-step routing step
+// (classifier-driven-step-model-selection), plus the pre-per-step phase passes
+// that definitions pinned to the older tiers still reach, plus
+// classifier-driven-triage-routing's `core.triage-route`. Each is a system step
+// that enqueues one `model.classify` effect on entry; the reducer applies the
+// answered result before the effect-complete transition advances the step.
 import { ROUTING_INTEGRATION, TRIAGE_INTEGRATION } from "../classifiers.ts";
 import type { CompletionResult, StepBehavior } from "./types.ts";
 
 export type RoutingPhase = "plan" | "apply";
 
-function routingBehavior(phase: RoutingPhase): StepBehavior {
+/** One routing step and the classifiable step it selects a model for.
+ * `phase` only labels the decision record and telemetry; the selection itself
+ * is per step (classifier-driven-step-model-selection). */
+export interface StepRoute {
+	readonly target: string;
+	readonly phase: RoutingPhase;
+}
+
+/** Every routing step, keyed by its step id. One entry per classifiable agent
+ * step: the route step sits immediately before its target in the graph, so a
+ * model is chosen with the state as it stands when that step is about to run,
+ * and a loop that re-enters a step re-selects its model. */
+export const STEP_ROUTES: Readonly<Record<string, StepRoute>> = Object.freeze({
+	"core.route-plan": { target: "core.plan", phase: "plan" },
+	"core.route-fusion-consolidate": {
+		target: "fusion.consolidate",
+		phase: "plan",
+	},
+	"core.route-fusion-plan": { target: "fusion.plan", phase: "plan" },
+	"core.route-implementation": {
+		target: "core.implementation",
+		phase: "apply",
+	},
+	"core.route-triage": { target: "core.triage", phase: "apply" },
+	"core.route-verification": { target: "core.verification", phase: "apply" },
+	"core.route-wiki": { target: "core.wiki", phase: "apply" },
+	"core.route-archive": { target: "core.archive", phase: "apply" },
+	"core.route-research": { target: "core.research", phase: "apply" },
+});
+
+/** Pre-per-step routing steps that definitions pinned to an older tier still
+ * reach. They are deliberately *not* part of {@link STEP_ROUTES}: a target has
+ * exactly one per-step route step, and these exist only so those definitions
+ * resolve a behavior and run. `core.route-apply` now selects for the one step
+ * its pass most affects; an effect it already enqueued with the old
+ * `{integration, phase}` payload still resolves through the runner's phase
+ * fallback. */
+export const LEGACY_ROUTE_STEPS: Readonly<Record<string, StepRoute>> =
+	Object.freeze({
+		"core.route-apply": { target: "core.implementation", phase: "apply" },
+	});
+
+/** The per-step routing step: it asks exactly one pool question, for the step
+ * that follows, and always transitions to that step. A fail-open result carries
+ * no answer, so the step runs with the pinned default rather than parking the
+ * workflow at a system step that has no run and nothing pending. */
+function stepRoutingBehavior(route: StepRoute): StepBehavior {
 	return {
 		onEnter: ({ snapshot, enqueue }) => {
 			enqueue(
 				"model.classify",
-				`route:${snapshot.workflowId}:${snapshot.currentStep}:${snapshot.step.attempt}`,
-				{ integration: ROUTING_INTEGRATION, phase },
+				// The key carries the snapshot revision: a route step is re-entered
+				// on every loop back into its target, and the outbox's
+				// `INSERT OR IGNORE` would silently drop a repeated key, stranding
+				// the step with no run and nothing pending.
+				`route:${snapshot.workflowId}:${route.target}:${snapshot.revision}`,
+				{
+					integration: ROUTING_INTEGRATION,
+					phase: route.phase,
+					stepId: route.target,
+				},
 			);
 			return undefined;
 		},
@@ -90,7 +145,14 @@ function triageRouteCompletion(data: unknown): CompletionResult | undefined {
 
 export const routingBehaviors: Readonly<Record<string, StepBehavior>> =
 	Object.freeze({
-		"core.route-plan": routingBehavior("plan"),
-		"core.route-apply": routingBehavior("apply"),
+		// One behavior per route step, reading its target from the catalog.
+		// Behaviors are keyed by step id, so a versioned step definition and a
+		// legacy phase pass share the one registration here.
+		...Object.fromEntries(
+			[
+				...Object.entries(STEP_ROUTES),
+				...Object.entries(LEGACY_ROUTE_STEPS),
+			].map(([id, route]) => [id, stepRoutingBehavior(route)]),
+		),
 		"core.triage-route": triageRouteBehavior,
 	});

@@ -53,26 +53,19 @@ describe("keybind catalog contract", () => {
 		expect(panelContext(7)).toBe("classifier");
 	});
 
-	it("scopes and omits the Classifications section with panel visibility", () => {
-		const visible = dashboardDetailKeybindCatalog({
-			artifactsVisible: false,
-			classifierVisible: true,
-		});
+	it("always scopes the Classifications section to its panel", () => {
+		// The panel is always rendered (empty state included), so its keybind is
+		// always in the catalog and always context-scoped.
+		const catalog = dashboardDetailKeybindCatalog({ artifactsVisible: false });
+		expect(catalogKeybinds(catalog).map((keybind) => keybind.action)).toContain(
+			"View selected classification",
+		);
 		expect(
-			footerKeybinds(visible, "classifier").map((keybind) => keybind.action),
+			footerKeybinds(catalog, "classifier").map((keybind) => keybind.action),
 		).toContain("View selected classification");
 		expect(
-			footerKeybinds(visible, "change").map((keybind) => keybind.action),
+			footerKeybinds(catalog, "change").map((keybind) => keybind.action),
 		).not.toContain("View selected classification");
-		const hidden = dashboardDetailKeybindCatalog({
-			artifactsVisible: false,
-			classifierVisible: false,
-		});
-		expect(
-			catalogKeybinds(hidden).some(
-				(keybind) => keybind.action === "View selected classification",
-			),
-		).toBe(false);
 	});
 
 	it("omits the OpenSpec section while no artifacts are listed", () => {
@@ -133,10 +126,7 @@ describe("keybind catalog contract", () => {
 });
 
 test("help modal lists every keybind from the active catalog", async () => {
-	const catalog = dashboardDetailKeybindCatalog({
-		artifactsVisible: true,
-		classifierVisible: true,
-	});
+	const catalog = dashboardDetailKeybindCatalog({ artifactsVisible: true });
 	setActiveKeybindCatalog(catalog, "change");
 	const t = await testRender(
 		() => <HelpModal title="Dashboard keybindings" offset={0} lines={30} />,

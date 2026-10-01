@@ -39,6 +39,14 @@ export function definitionVersionForStageGates(rounds: number): number {
 	return rounds + 600;
 }
 
+/** Version tier for the graphs that select the model of every classifiable
+ * step immediately before it runs (classifier-driven-step-model-selection).
+ * Threaded behind the same kind of transform as the tiers above, so a workflow
+ * pinned to an earlier version keeps its graph, its digest, and its step list. */
+export function definitionVersionForStepRouting(rounds: number): number {
+	return rounds + 700;
+}
+
 const MANIFEST_POLICY: Readonly<Record<string, WorkflowManifestPolicy>> = {
 	openspec: {
 		targetKind: "repository",

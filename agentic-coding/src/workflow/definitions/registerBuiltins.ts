@@ -10,7 +10,7 @@ import type {
 } from "../../contracts/workflow.ts";
 import { type WorkflowManifest, WorkflowRegistry } from "../registry.ts";
 import { assertStepBehaviorCoverage } from "../steps/index.ts";
-import { definitionVersionForPolicy } from "./edges.ts";
+import { definitionVersionForPolicy, withPerStepRouting } from "./edges.ts";
 import { fusionManifests } from "./graphs/fusion.ts";
 import { noOpenspecManifests } from "./graphs/no-openspec.ts";
 import { openspecManifests } from "./graphs/openspec.ts";
@@ -21,6 +21,7 @@ import {
 	definitionVersionForManifestPolicy,
 	definitionVersionForResearchTools,
 	definitionVersionForStageGates,
+	definitionVersionForStepRouting,
 	definitionVersionForTriageRouting,
 	withFullToolResearchPolicy,
 	withManifestPolicy,
@@ -186,6 +187,31 @@ export function registerBuiltins(
 			...wikiManifests(version, true),
 		]) {
 			const pinnedBase = withManifestPolicy(definition);
+			const pinned: WorkflowManifest = {
+				...pinnedBase,
+				stepRefs: exactStepReferences(pinnedBase.steps, {
+					"core.triage-route": 2,
+				}),
+			};
+			assertStepBehaviorCoverage(pinned.steps);
+			registry.registerWorkflow(pinned);
+		}
+	}
+	// Per-step model selection adds one routing step before every classifiable
+	// agent step in every family, so each model is chosen immediately before its
+	// step runs rather than in two phase-wide passes that only the OpenSpec
+	// families reached. Published as its own tier for the same reason as every
+	// tier above: a digest spreads the whole manifest.
+	for (const rounds of Array.from({ length: 20 }, (_, index) => index + 1)) {
+		const version = definitionVersionForStepRouting(rounds);
+		for (const definition of [
+			...openspecManifests(rounds, version, true, true, true, true),
+			...noOpenspecManifests(rounds, version, true, true, true),
+			...fusionManifests(rounds, version, true, true, true, true),
+			...wikiManifests(version, true),
+			...researchManifests(version, true).map(withFullToolResearchPolicy),
+		]) {
+			const pinnedBase = withPerStepRouting(withManifestPolicy(definition));
 			const pinned: WorkflowManifest = {
 				...pinnedBase,
 				stepRefs: exactStepReferences(pinnedBase.steps, {

@@ -49,7 +49,6 @@ export function workflowLaunchKeybindCatalog(): KeybindSection[] {
  */
 export function dashboardDetailKeybindCatalog(options: {
 	artifactsVisible: boolean;
-	classifierVisible?: boolean;
 }): KeybindSection[] {
 	const sections: KeybindSection[] = [
 		{
@@ -96,18 +95,20 @@ export function dashboardDetailKeybindCatalog(options: {
 				},
 			],
 		});
-	if (options.classifierVisible)
-		sections.push({
-			title: "Classifications panel",
-			keybinds: [
-				{
-					key: "Enter",
-					action: "View selected classification",
-					short: "decision",
-					context: CLASSIFIER_PANEL_CONTEXT,
-				},
-			],
-		});
+	// Always listed: the Classifications panel is always rendered, empty state
+	// included, so its keybind is never advertising a panel the reader cannot
+	// reach.
+	sections.push({
+		title: "Classifications panel",
+		keybinds: [
+			{
+				key: "Enter",
+				action: "View selected classification",
+				short: "decision",
+				context: CLASSIFIER_PANEL_CONTEXT,
+			},
+		],
+	});
 	sections.push(
 		{
 			title: "Agents panel",
