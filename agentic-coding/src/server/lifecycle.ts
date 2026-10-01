@@ -16,7 +16,6 @@ import {
 import {
 	selectedClassifierProvider,
 	startSelectedLocalClassifier,
-	stopLocalClassifier,
 } from "./classifier.ts";
 import { CredentialRegistry } from "./credentials.ts";
 import type { EnvironmentAuthority } from "./environment/private-api.ts";
@@ -148,14 +147,13 @@ export async function startWorkflowServer(
 			? await startTelemetryReceivers(options.receivers, options.signalSink)
 			: undefined;
 	const assignedPort = listener.port ?? options.port ?? 0;
-	// Selecting the local classifier already starts its sidecar; starting a
-	// server with that provider selected has to as well. Without it the engine's
-	// own classifier calls fail open and the in-session `ask_jev` tool every
-	// managed agent gets answers "unavailable" for a provider the run pinned.
-	// Only the start is asked for here: `startSelectedLocalClassifier` also stops
-	// a sidecar on a non-local selection, which belongs to the provider-switch
-	// path, not to every server start. Never blocks startup and never acquires:
-	// only an explicit install downloads the model.
+	// The UI spawns the local classifier sidecar at startup whenever that
+	// provider is selected, and the sidecar then keeps running independently of
+	// this server: panes outlive the engine, so an endpoint they were handed has
+	// to survive it. Shutdown deliberately does not stop it, and a provider
+	// switch does not either — the service stays warm for the panes that already
+	// hold its endpoint. Never blocks startup and never acquires: only an
+	// explicit install downloads the model.
 	const selectedClassifier = selectedClassifierProvider();
 	if (selectedClassifier === LAYA_LOCAL_PROVIDER)
 		startSelectedLocalClassifier(selectedClassifier);
@@ -180,7 +178,6 @@ export async function startWorkflowServer(
 			removeInstanceToken(tokenFile, authority.token);
 			await ownedReceivers?.stop();
 			ownedTelemetry?.close();
-			await stopLocalClassifier();
 			await listener.stop(true);
 		},
 	};

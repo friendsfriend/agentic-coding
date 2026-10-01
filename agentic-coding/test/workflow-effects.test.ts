@@ -2858,6 +2858,7 @@ async function drainLaunchWithClassifier(options: {
 				installDir: modelDir,
 				cacheDir: modelDir,
 				backend: "native",
+				port: 4571,
 			}),
 			acquire: async () => ({
 				path: path.join(modelDir, "model.onnx"),

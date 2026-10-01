@@ -149,18 +149,25 @@ built in:
   directory that must actually be that package), then the executable's
   neighbourhood, the working directory, and module resolution — stages the
   model metadata, acquires the ~324 MB INT8
-  model only on an explicit request, and spawns `laya-serve` on an ephemeral
-  `127.0.0.1` port. A compiled binary copied out of the tree its `node_modules`
+  model only on an explicit request, and spawns `laya-serve` itself — a
+  standalone process, not the dependency's `serve()` proxy — on a fixed
+  `127.0.0.1` port (`LAYA_PORT`, default 4571). Everything about the sidecar is
+  deliberate: it is detached with no stdio, so it keeps running after the UI
+  exits; the port is fixed, so the endpoint serialized into a pane's
+  `AGENTIC_JEV` stays valid when that pane outlives the engine; and a start
+  that finds the port already answering adopts that sidecar instead of loading a
+  second ~1 GB model. Readiness is polled on `/health`, not parsed from the
+  child's stdout, because stdio is detached and the port is chosen here. Nothing
+  in the app stops it — not a provider switch, not server shutdown — so a later
+  engine, and any pane still holding the endpoint, keeps the warm model. A compiled binary copied out of the tree its `node_modules`
   live in finds none of those, so `LAYA_PACKAGE_ROOT` is the supported way to
   point it back at the package, and the failure names it instead of reading as
   a corrupt or missing install. The model id is a local one; the sidecar ignores unknown
   models. It is bound to loopback only and runs without a bearer credential:
-  the start scopes its spawn environment and neutralizes any ambient
-  `LAYA_API_KEY`/`API_KEY`, so an unrelated variable can never turn the local
-  listener into an authenticated service this process cannot reach. Liveness is
-  probed (a killed sidecar reports `unavailable` and is respawned on the next
-  classification), and the sidecar is stopped on a provider switch and on
-  server shutdown.
+  the child environment has any ambient `LAYA_API_KEY`/`API_KEY` removed, so an
+  unrelated variable can never turn the local listener into an authenticated
+  service this process cannot reach. Liveness is probed (a killed sidecar
+  reports `unavailable` and is respawned on the next classification).
 
 `[agents.classifier]` selects the provider (`provider`, plus opaque
 `options`); an unknown id is a hard config break. The selected id is resolved
@@ -169,7 +176,8 @@ once at start and pinned into `metadata.classifier`, exactly like
 a snapshot without the pin (one started before local providers existed)
 resolves from the configuration and falls back to `opencode-zen`. Provider
 overrides are `LAYA_SERVE_BIN`, `LAYA_MODEL_PATH`, `LAYA_CACHE_DIR`, and
-`LAYA_BACKEND` (`native` or `wasm`); the install/cache directory defaults under
+`LAYA_PORT`; `LAYA_BACKEND` is native-only, since the wasm engine lives
+in-process and cannot be a standalone service. The install/cache directory defaults under
 the app config root at `classifier/laya/`.
 
 Installation is user-decided and never automatic. Flipping the Settings picker

@@ -1,8 +1,8 @@
 // Managed local classifier sidecar (introduce-local-model-support-for-
 // classification). The `laya-local` provider runs the `laya-system-one` INT8
 // model fully offline: this module owns locating the package, acquiring the
-// ~324 MB model on explicit request, spawning `laya-serve` on an ephemeral
-// loopback port, and reporting health. It never reimplements inference.
+// ~324 MB model on explicit request, spawning `laya-serve` on a fixed loopback
+// port, and reporting health. It never reimplements inference.
 //
 // Division of labour: the `laya-system-one` dependency owns download,
 // assembly, atomic writes and checksum verification (`resolveModel`); this
@@ -14,6 +14,7 @@
 // A missing model or binary is never fatal to a workflow: the provider reports
 // `unavailable` and the existing fail-open classifier behavior applies.
 
+import { type ChildProcess, spawn } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -53,24 +54,32 @@ export interface LayaLocalStatus {
 	readonly job?: LayaInstallJob;
 }
 
-/** A running sidecar: the loopback base URL and its shutdown. The sidecar is
- * bound to `127.0.0.1` and runs without a bearer credential: the dependency's
- * native server cannot be given one without pushing `--api-key` twice (a
- * dependency bug), so the start explicitly neutralizes any ambient
- * `LAYA_API_KEY`/`API_KEY` instead of adopting an unrelated secret. */
+/** A running sidecar: the loopback base URL, and this process's reference to
+ * it. The sidecar is a *standalone* local service — the UI starts it on
+ * startup and it keeps running, so a pane whose engine exited still reaches it,
+ * and a second engine adopts the same one instead of loading a second model.
+ * `stop()` there is a no-op for that reason; only the fake dependencies in
+ * tests own a process they may kill.
+ *
+ * It is bound to `127.0.0.1` and runs without a bearer credential: every
+ * ambient `LAYA_API_KEY`/`API_KEY` is stripped from the child environment
+ * instead of an unrelated secret being adopted as the classifier's. */
 export interface LayaSidecar {
 	readonly url: string;
 	stop(): Promise<void>;
 }
 
-/** Resolved file locations and overrides. Every value is a path or an enum —
- * never a secret. */
+/** Resolved file locations and overrides. Every value is a path, a port or an
+ * enum — never a secret. */
 export interface LayaLocalPaths {
 	readonly installDir: string;
 	readonly cacheDir: string;
 	readonly explicitModelPath?: string;
 	readonly explicitBinary?: string;
 	readonly backend: string;
+	/** Loopback port the sidecar binds. Fixed, not ephemeral; see
+	 * `LAYA_LOCAL_PORT`. */
+	readonly port: number;
 }
 
 /** Injectables so the install state machine is testable without the model, the
@@ -85,7 +94,8 @@ export interface LayaLocalDependencies {
 	}) => Promise<{ path: string; bytes: number }>;
 	/** Best-effort total download size for progress display. */
 	readonly totalBytes: () => number | undefined;
-	/** Start the sidecar against an already-installed model. */
+	/** Start the sidecar against an already-installed model, or adopt one this
+	 * port already answers for. */
 	readonly start: (input: {
 		readonly paths: LayaLocalPaths;
 		readonly modelPath: string;
@@ -124,9 +134,32 @@ async function settledWithin(promise: Promise<unknown>): Promise<void> {
 	}
 }
 
+/** The fixed loopback port the managed sidecar binds.
+ *
+ * Deliberately not ephemeral. The bound endpoint is serialized into a pane's
+ * `AGENTIC_JEV`, and that pane (a multiplexer-owned agent) outlives the engine
+ * process that spawned the sidecar. An ephemeral port makes the recorded URL
+ * permanently dead as soon as the engine restarts, so every `ask_jev` call from
+ * a still-running agent fails with `fetch failed`. Re-binding the same port on
+ * the next server start makes the recorded URL live again. */
+export const LAYA_LOCAL_PORT = 4571;
+
+/** Override for {@link LAYA_LOCAL_PORT}; a value that is not a port is ignored
+ * so a typo cannot make the classifier unbindable. */
+export const LAYA_PORT_VAR = "LAYA_PORT";
+
+function loopbackPort(raw: string | undefined): number {
+	if (raw === undefined || raw.trim() === "") return LAYA_LOCAL_PORT;
+	const parsed = Number.parseInt(raw, 10);
+	return Number.isInteger(parsed) && parsed > 0 && parsed <= 65_535
+		? parsed
+		: LAYA_LOCAL_PORT;
+}
+
 /** Pure path/override resolution. `LAYA_MODEL_PATH` names an assembled model,
- * `LAYA_CACHE_DIR` the cache, `LAYA_SERVE_BIN` the binary, and `LAYA_BACKEND`
- * the engine (`native` sharp, `wasm` fallback). */
+ * `LAYA_CACHE_DIR` the cache, `LAYA_SERVE_BIN` the binary, `LAYA_BACKEND`
+ * the engine (`native` sharp, `wasm` fallback), and `LAYA_PORT` the sidecar
+ * port. */
 export function layaLocalPaths(
 	env: Readonly<Record<string, string | undefined>>,
 	root: string,
@@ -146,6 +179,7 @@ export function layaLocalPaths(
 			? { explicitBinary: value("LAYA_SERVE_BIN") }
 			: {}),
 		backend: value("LAYA_BACKEND") ?? "native",
+		port: loopbackPort(value(LAYA_PORT_VAR)),
 	};
 }
 
@@ -444,51 +478,158 @@ export function realLayaLocalDependencies(
 				throw new Error(
 					`${layaPackageRootHint()}; the local classifier cannot start`,
 				);
+			const url = `http://127.0.0.1:${paths.port}`;
+			// Adopt the sidecar a previous UI run left behind instead of loading a
+			// second ~1 GB model: its URL is the one every live pane was told.
+			if (await sidecarResponds(url)) return standaloneSidecar(url);
 			const binary = paths.explicitBinary ?? resolveSidecarBinary(rootDir);
-			// Both variables are read only by the dependency/the child at spawn
-			// time, so the hand-off is scoped: set them for the spawn, then restore,
-			// so neither leaks into every later agent/git child and `status().binary`
-			// keeps reporting only an explicitly configured value.
-			const previous = {
-				bin: process.env.LAYA_SERVE_BIN,
-				layaKey: process.env.LAYA_API_KEY,
-				apiKey: process.env.API_KEY,
-			};
-			if (binary) process.env.LAYA_SERVE_BIN = binary;
-			// The dependency would silently require a bearer credential whenever an
-			// ambient `LAYA_API_KEY` (or the common, unrelated `API_KEY`) is set, and
-			// its own proxy would then fail without it. Neutralize both for the spawn
-			// so the loopback sidecar stays credential-free and an unrelated variable
-			// cannot toggle authentication on.
-			delete process.env.LAYA_API_KEY;
-			delete process.env.API_KEY;
-			try {
-				const server = await importer<{
-					serve: (options: Record<string, unknown>) => Promise<{
-						url: string;
-						close: () => Promise<void>;
-					}>;
-				}>(rootDir, "src/server.js");
-				const handle = await server.serve({
-					host: "127.0.0.1",
-					port: 0,
-					modelDir: path.dirname(modelPath),
-					backend: paths.backend,
-				});
-				return {
-					url: handle.url,
-					stop: async () => void (await handle.close()),
-				};
-			} finally {
-				if (previous.bin === undefined) delete process.env.LAYA_SERVE_BIN;
-				else process.env.LAYA_SERVE_BIN = previous.bin;
-				if (previous.layaKey === undefined) delete process.env.LAYA_API_KEY;
-				else process.env.LAYA_API_KEY = previous.layaKey;
-				if (previous.apiKey === undefined) delete process.env.API_KEY;
-				else process.env.API_KEY = previous.apiKey;
-			}
+			if (!binary)
+				throw new Error(
+					`no laya-serve binary for ${process.platform}-${process.arch} under ${rootDir}; LAYA_SERVE_BIN may name one`,
+				);
+			// The service is native-only: the wasm backend lives in-process and
+			// cannot outlive the engine, which is the whole point here.
+			if (paths.backend !== "native")
+				throw new Error(
+					`the standalone laya-serve sidecar is native-only; LAYA_BACKEND=${paths.backend} is not supported`,
+				);
+			// The native binary is itself a Jev server on `/v1/systemone`, so it can
+			// be the endpoint directly. The dependency's own `serve()` is an
+			// in-process HTTP proxy instead, which dies with this process — the
+			// exact failure of a pane that outlives the engine.
+			const sidecarProcess = spawnStandaloneSidecar({
+				binary,
+				modelDir: path.dirname(modelPath),
+				port: paths.port,
+			});
+			// A port held by something that is not this sidecar fails the start
+			// loudly. Falling back to an ephemeral port would spawn a duplicate
+			// model behind a URL no pane knows, which is the bug the fixed port
+			// exists to prevent.
+			await waitForSidecar(url, sidecarProcess);
+			// Only now: while waiting, the child stays referenced so its `exit` is
+			// observable and a binary that dies fails the start immediately instead
+			// of costing the whole readiness timeout.
+			sidecarProcess.child.unref();
+			return standaloneSidecar(url);
 		},
 	};
+}
+
+/** This process's reference to the standalone sidecar. It never stops the
+ * process: the UI starts it at startup and it keeps running, so any engine,
+ * any pane and any later UI run shares one warm model. */
+function standaloneSidecar(url: string): LayaSidecar {
+	return { url, stop: async () => {} };
+}
+
+/** The spawned child plus the exit it may already have had. The listener is
+ * attached *here*, not by the readiness wait: a broken binary exits in
+ * microseconds, before the wait would have registered its own listener, and the
+ * start would then sit out the whole readiness timeout on a process that is
+ * already gone. */
+interface StandaloneSidecarProcess {
+	readonly child: ChildProcess;
+	/** Set once the child has exited or failed to spawn, else undefined. */
+	exited():
+		| { code: number | null; signal: NodeJS.Signals | null; error?: string }
+		| undefined;
+}
+
+/** Spawn `laya-serve` as a detached, stdio-less process: nothing about it is
+ * tied to this process's lifetime, stdout, or event loop. */
+function spawnStandaloneSidecar(input: {
+	readonly binary: string;
+	readonly modelDir: string;
+	readonly port: number;
+}): StandaloneSidecarProcess {
+	const env = { ...process.env };
+	// The service is credential-free by contract. Whatever an unrelated
+	// `LAYA_API_KEY`/`API_KEY` in the operator's shell means, it must not turn
+	// this loopback listener into an authenticated service nothing here can call.
+	delete env.LAYA_API_KEY;
+	delete env.API_KEY;
+	// Bundled musl libs sit next to the binary; the dependency sets the same
+	// variable for its own spawn.
+	const binDir = path.dirname(input.binary);
+	const bundledLib = path.join(binDir, "lib");
+	if (path.basename(binDir).endsWith("-musl") && fs.existsSync(bundledLib))
+		env.LD_LIBRARY_PATH = env.LD_LIBRARY_PATH
+			? `${bundledLib}:${env.LD_LIBRARY_PATH}`
+			: bundledLib;
+	const child = spawn(
+		input.binary,
+		[
+			"--model-dir",
+			input.modelDir,
+			"--host",
+			"127.0.0.1",
+			"--port",
+			String(input.port),
+			"--threads",
+			"0",
+		],
+		{ detached: true, stdio: "ignore", windowsHide: true, env },
+	);
+	// `detached` puts the child in its own process group. The caller unrefs it
+	// once it is ready (see `start`).
+	let status:
+		| { code: number | null; signal: NodeJS.Signals | null; error?: string }
+		| undefined;
+	child.once("exit", (code, signal) => {
+		status = { code, signal };
+	});
+	// A binary that cannot be spawned at all reports through `error`, never
+	// `exit`; without this listener the start would sit out the whole timeout.
+	child.once("error", (error) => {
+		status = { code: null, signal: null, error: error.message };
+	});
+	return { child, exited: () => status };
+}
+
+/** How long the standalone sidecar may take to answer `/health` before the
+ * start is reported as failed. Matches the dependency's own readiness bound. */
+export const SIDECAR_READY_TIMEOUT_MS = 120_000;
+
+/** Poll the sidecar's own `/health` until it answers. Readiness is probed over
+ * HTTP rather than parsed from the child's stdout: the child has no stdout to
+ * parse (stdio is detached), and the port is chosen by us, not by it. A child
+ * that exits first fails the start immediately, so a wrong `LAYA_SERVE_BIN`
+ * costs a message instead of the whole timeout. */
+async function waitForSidecar(
+	url: string,
+	process?: StandaloneSidecarProcess,
+	timeoutMs: number = SIDECAR_READY_TIMEOUT_MS,
+): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
+		const exit = process?.exited();
+		if (exit)
+			throw new Error(
+				`laya-serve exited before it answered on ${url} (${exit.error ?? `code ${exit.code}, signal ${exit.signal}`})`,
+			);
+		if (await sidecarResponds(url)) return;
+		if (Date.now() >= deadline)
+			throw new Error(
+				`laya-serve did not become ready within ${timeoutMs}ms on ${url}`,
+			);
+		await new Promise((resolve) => setTimeout(resolve, 200));
+	}
+}
+
+/** Probe the sidecar's own `/health` envelope, so adopting a port means
+ * adopting this exact server and not whatever else happens to listen there. */
+async function sidecarResponds(url: string): Promise<boolean> {
+	try {
+		const response = await fetch(`${url}/health`, {
+			signal: AbortSignal.timeout(2_000),
+		});
+		if (!response.ok) return false;
+		const body = (await response.json()) as { status?: unknown };
+		return body.status === "ok";
+	} catch {
+		return false;
+	}
 }
 
 /** Locate the bundled `laya-serve` binary under the resolved package root so a

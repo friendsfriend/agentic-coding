@@ -706,11 +706,19 @@ describe("classifier status and install", () => {
 		);
 	});
 
-	test("server shutdown stops the managed local sidecar", async () => {
+	test("server shutdown leaves the standalone local sidecar running", async () => {
+		// The UI starts the sidecar at startup and it keeps running: a pane whose
+		// engine exited still holds its endpoint, and the next engine adopts the
+		// same process instead of loading the model again.
 		let stops = 0;
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "classifier-shutdown-"));
 		const fake = new LayaLocalClassifier({
-			paths: () => ({ installDir: dir, cacheDir: dir, backend: "native" }),
+			paths: () => ({
+				installDir: dir,
+				cacheDir: dir,
+				backend: "native",
+				port: 4571,
+			}),
 			acquire: async () => ({ path: path.join(dir, "model.onnx"), bytes: 1 }),
 			totalBytes: () => 1,
 			start: async () => ({
@@ -726,7 +734,9 @@ describe("classifier status and install", () => {
 			await withServer(async (server) => {
 				await server.stop();
 			});
-			expect(stops).toBeGreaterThanOrEqual(1);
+			// The class still resolves its own handle; the *server* must not be the
+			// thing that ends a service the panes depend on.
+			expect(stops).toBe(0);
 		} finally {
 			setLayaLocalClassifier();
 			fs.rmSync(dir, { recursive: true, force: true });
@@ -745,7 +755,12 @@ describe("classifier status and install", () => {
 		);
 		let starts = 0;
 		const fake = new LayaLocalClassifier({
-			paths: () => ({ installDir: dir, cacheDir: dir, backend: "native" }),
+			paths: () => ({
+				installDir: dir,
+				cacheDir: dir,
+				backend: "native",
+				port: 4571,
+			}),
 			acquire: async () => ({ path: path.join(dir, "model.onnx"), bytes: 1 }),
 			totalBytes: () => 1,
 			start: async () => {
@@ -795,7 +810,12 @@ describe("classifier status and install", () => {
 		let stops = 0;
 		let starts = 0;
 		const fake = new LayaLocalClassifier({
-			paths: () => ({ installDir: dir, cacheDir: dir, backend: "native" }),
+			paths: () => ({
+				installDir: dir,
+				cacheDir: dir,
+				backend: "native",
+				port: 4571,
+			}),
 			acquire: async () => ({ path: path.join(dir, "model.onnx"), bytes: 1 }),
 			totalBytes: () => 1,
 			start: async () => {

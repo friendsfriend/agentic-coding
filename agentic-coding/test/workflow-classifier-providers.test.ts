@@ -11,7 +11,10 @@ import os from "node:os";
 import path from "node:path";
 import { Effect } from "effect";
 import type { WorkflowSnapshot } from "../src/contracts/workflow.ts";
-import { selectedClassifierProvider } from "../src/server/classifier.ts";
+import {
+	selectedClassifierProvider,
+	startSelectedLocalClassifier,
+} from "../src/server/classifier.ts";
 import {
 	agentConfigRevision,
 	applyAgentsMutation,
@@ -34,9 +37,13 @@ import {
 } from "../src/workflow/classifier-runner.ts";
 import { effectRunnerTest } from "../src/workflow/effect-runner.ts";
 import {
+	LAYA_LOCAL_PORT,
 	LAYA_PACKAGE_ROOT_VAR,
 	LayaLocalClassifier,
 	type LayaLocalDependencies,
+	layaLocalClassifier,
+	layaLocalPaths,
+	realLayaLocalDependencies,
 	resolveLayaPackageRoot,
 	setLayaLocalClassifier,
 } from "../src/workflow/laya-local.ts";
@@ -67,6 +74,7 @@ function fakeClassifier(
 			installDir,
 			cacheDir: installDir,
 			backend: "native",
+			port: 4571,
 		}),
 		acquire: async () => ({
 			path: path.join(installDir, "model.onnx"),
@@ -815,5 +823,119 @@ describe("fail-open with an unavailable local provider", () => {
 
 	test("the default local model id is a local one, never a hosted prefix", () => {
 		expect(LAYA_LOCAL_MODEL).toBe("laya-system-one");
+	});
+});
+
+// A pane's `AGENTIC_JEV` outlives the engine that wrote it, so the sidecar's
+// port has to survive an engine restart: an ephemeral port leaves the recorded
+// URL permanently dead and every in-session `ask_jev` call failing with
+// "fetch failed".
+describe("laya-local sidecar port", () => {
+	test("binds a fixed loopback port, not an ephemeral one", () => {
+		const paths = layaLocalPaths({}, "/tmp/root");
+		expect(paths.port).toBe(LAYA_LOCAL_PORT);
+		expect(LAYA_LOCAL_PORT).toBeGreaterThan(0);
+	});
+
+	test("LAYA_PORT overrides it and a non-port value falls back", () => {
+		expect(layaLocalPaths({ LAYA_PORT: "4610" }, "/tmp/root").port).toBe(4610);
+		expect(layaLocalPaths({ LAYA_PORT: "nope" }, "/tmp/root").port).toBe(
+			LAYA_LOCAL_PORT,
+		);
+		expect(layaLocalPaths({ LAYA_PORT: "70000" }, "/tmp/root").port).toBe(
+			LAYA_LOCAL_PORT,
+		);
+	});
+
+	test("selecting the local provider starts it and switching away never stops it", async () => {
+		let starts = 0;
+		let stops = 0;
+		const dir = tempDir();
+		fs.writeFileSync(path.join(dir, "model.onnx"), "model");
+		setLayaLocalClassifier(
+			fakeClassifier(dir, {
+				start: async () => {
+					starts += 1;
+					return {
+						url: "http://127.0.0.1:4321",
+						stop: async () => {
+							stops += 1;
+						},
+					};
+				},
+			}),
+		);
+		const settle = async () => {
+			for (let attempt = 0; attempt < 200 && starts === 0; attempt++)
+				await new Promise((resolve) => setTimeout(resolve, 10));
+		};
+		startSelectedLocalClassifier(OPENCODE_ZEN_PROVIDER);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(starts).toBe(0);
+		startSelectedLocalClassifier(LAYA_LOCAL_PROVIDER);
+		await settle();
+		expect(starts).toBe(1);
+		// Switching away must leave the standalone service warm: panes already
+		// hold its endpoint.
+		startSelectedLocalClassifier(OPENCODE_ZEN_PROVIDER);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(stops).toBe(0);
+		expect(layaLocalClassifier().endpoint()).toBe("http://127.0.0.1:4321");
+	});
+
+	test("a binary that exits fails the start instead of waiting out the timeout", async () => {
+		// A free port claimed and released, so this exercises the spawn and not
+		// adoption of whatever the developer's own machine has on 4571.
+		const free = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: () => new Response(""),
+		});
+		const port = free.port;
+		await free.stop(true);
+		if (port === undefined) throw new Error("the probe server has no port");
+		const started = Date.now();
+		await expect(
+			realLayaLocalDependencies({}, "/tmp/root").start({
+				paths: {
+					installDir: "/tmp/none",
+					cacheDir: "/tmp/none",
+					backend: "native",
+					port,
+					explicitBinary: "/nonexistent/laya-serve",
+				},
+				modelPath: "/tmp/none/model.onnx",
+			}),
+		).rejects.toThrow(/exited before it answered/);
+		expect(Date.now() - started).toBeLessThan(30_000);
+	});
+
+	test("a start adopts a sidecar already answering on the port", async () => {
+		// The probe server stands in for the sidecar a previous engine started:
+		// same /health envelope the dependency serves.
+		const existing = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: () => Response.json({ status: "ok" }),
+		});
+		const port = existing.port;
+		if (port === undefined) throw new Error("the probe server has no port");
+		try {
+			const handle = await realLayaLocalDependencies({}, "/tmp/root").start({
+				paths: {
+					installDir: "/tmp/none",
+					cacheDir: "/tmp/none",
+					backend: "native",
+					port,
+				},
+				modelPath: "/tmp/none/model.onnx",
+			});
+			expect(handle.url).toBe(`http://127.0.0.1:${port}`);
+			// Adopted, never ours to stop: a running engine's sidecar must survive.
+			await handle.stop();
+			expect((await fetch(`http://127.0.0.1:${port}/health`)).ok).toBe(true);
+		} finally {
+			await existing.stop(true);
+		}
 	});
 });

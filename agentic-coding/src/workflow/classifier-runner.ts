@@ -59,7 +59,7 @@ import {
 	TransientFailure,
 } from "./failures.ts";
 import { type LayaLocalClassifier, layaLocalClassifier } from "./laya-local.ts";
-import type { AgentsConfig, FileJudgmentConfig } from "./profiles.ts";
+import type { AgentsConfig } from "./profiles.ts";
 import { changedFilesInAsync } from "./runtime/evidence.ts";
 
 /** Per-artifact and total caps so a large change cannot blow up the prompt or

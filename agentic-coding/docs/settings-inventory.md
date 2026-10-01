@@ -85,13 +85,15 @@ unavailable or unauthorized server is a section error with a retry.
   conventions preamble: the agent writes the questions, and a file-judgment
   preamble would bias a question about anything else. A hosted provider builds no
   binding, so the tool reports in-session judgment as unavailable rather than
-  handing an agent a credential its own shell can read. Because the local sidecar
-  is engine-owned, a launch whose selection is `laya-local` starts it (one shared
-  attempt per wave of launches) before the binding is built, and a server that
-  starts with that provider selected starts it too — otherwise the engine's own
-  classifier calls, and a tool the run pinned, would both fail open. A server
-  start only ever *starts*: stopping a sidecar when the selection moves away from
-  `laya-local` belongs to the provider-switch path, not to every startup. The tool keeps the last four
+  handing an agent a credential its own shell can read. The local sidecar is a
+  standalone local service: the UI starts it when `laya-local` is selected and
+  it keeps running after the UI exits, and a launch whose selection is
+  `laya-local` starts it too (one shared attempt per wave of launches) before
+  the binding is built. It binds a fixed loopback port (`LAYA_PORT`, default
+  4571) and a start adopts a sidecar already answering there, so a pane's
+  recorded endpoint survives an engine restart, nothing waits for a still-loading
+  model, and a second engine never doubles it. Nothing stops it — not a provider
+  switch, not server shutdown. The tool keeps the last four
   assembled states per session, so a follow-up round about the same situation
   reuses one by handle: the files are re-checked (mtime and size) and only changed
   ones are re-read, while a command's output is reused as it was and reported as

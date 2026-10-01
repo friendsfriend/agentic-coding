@@ -75,21 +75,17 @@ export async function cancelLocalClassifierInstall(
 	return await classifierStatus(repository);
 }
 
-/** Start the sidecar for an already-installed local model, or stop it when the
- * provider moves away from `laya-local`. A provider switch must not leave a
- * ~324 MB `laya-serve` process and its loopback listener behind. */
+/** Start the standalone sidecar for an already-installed local model. Called
+ * when the local provider is selected and when a server starts with it already
+ * selected: the UI spawns the sidecar at startup and it then *keeps running*,
+ * so a pane whose engine exited still reaches it and a later engine adopts the
+ * same process instead of loading the model again. Nothing here stops it — a
+ * switch away from `laya-local` leaves the service warm for the panes that
+ * already hold its endpoint. Never blocks the caller and never acquires: only
+ * an explicit install downloads the model. */
 export function startSelectedLocalClassifier(provider: string): void {
-	const classifier = layaLocalClassifier();
-	if (provider !== LAYA_LOCAL_PROVIDER) {
-		void classifier.stop().catch(() => {});
-		return;
-	}
-	void classifier.ensureStarted().catch(() => {});
-}
-
-/** Release the managed sidecar on server shutdown. */
-export async function stopLocalClassifier(): Promise<void> {
-	await layaLocalClassifier()
-		.stop()
+	if (provider !== LAYA_LOCAL_PROVIDER) return;
+	void layaLocalClassifier()
+		.ensureStarted()
 		.catch(() => {});
 }
