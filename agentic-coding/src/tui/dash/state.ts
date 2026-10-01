@@ -47,7 +47,7 @@ export interface PanelState {
 	readonly clamp: (counts: {
 		agents: number;
 		artifacts: number;
-		decisions: number;
+		classifications: number;
 	}) => void;
 }
 
@@ -70,13 +70,13 @@ export function createPanelState(): PanelState {
 		setArtifact: setArtifactSignal,
 		decision,
 		setDecision: setDecisionSignal,
-		clamp: ({ agents, artifacts: artifactCount, decisions }) => {
+		clamp: ({ agents, artifacts: artifactCount, classifications }) => {
 			setAgentSignal((index) => clampIndex(index, agents));
 			setArtifactSignal((index) => clampIndex(index, artifactCount));
-			setDecisionSignal((index) => clampIndex(index, decisions));
+			setDecisionSignal((index) => clampIndex(index, classifications));
 			setActiveSignal((panel) =>
 				(panel === OPENSPEC_PANEL && artifactCount === 0) ||
-				(panel === CLASSIFIER_PANEL && decisions === 0)
+				(panel === CLASSIFIER_PANEL && classifications === 0)
 					? CHANGE_PANEL
 					: panel,
 			);

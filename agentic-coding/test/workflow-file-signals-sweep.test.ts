@@ -88,11 +88,22 @@ describe("per-file judgment sweep", () => {
 		expect(h.calls).toEqual(["collect"]);
 	});
 
-	test("a successful sweep returns the artifact reference", async () => {
+	test("a successful sweep returns the artifact reference and the summary", async () => {
 		const h = harness();
 		expect(await run(h.deps)).toEqual({
-			path: "/tmp/file-signals/r4.md",
-			digest: "digest",
+			reference: { path: "/tmp/file-signals/r4.md", digest: "digest" },
+			summary: {
+				model: "opencode/jev-1.13-free",
+				section: expect.any(String),
+				judged: 1,
+				cleared: 0,
+				cached: 0,
+				skipped: 0,
+				// One judged file flagged is the degenerate share, and the sweep says so.
+				degenerate: true,
+				flagged: [{ path: "src/a.ts", noul: 0.9 }],
+				unsure: [],
+			},
 		});
 		expect(h.calls).toEqual(["collect", "judge", "write"]);
 	});

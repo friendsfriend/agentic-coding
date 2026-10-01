@@ -83,6 +83,7 @@ import {
 	agentMetricLine,
 	agentRuntimeModelLine,
 	approvalFor,
+	classificationEntries,
 	type PhaseStatusState,
 	phaseStatus,
 	requiredUserActionFor,
@@ -275,11 +276,15 @@ export function App(props: {
 					);
 			});
 	});
+	// Every classification the workflow recorded, in the order it happened:
+	// model-pool routing, verifier-role triage, stage gates, and the per-file
+	// judgment sweep. The panel, its keybinds, and Enter all read this one list.
+	const classifications = createMemo(() => classificationEntries(data().state));
 	createEffect(() =>
 		panels.clamp({
 			agents: data().agents.length,
 			artifacts: artifacts().length,
-			decisions: data().state.classifierDecisions?.length ?? 0,
+			classifications: classifications().length,
 		}),
 	);
 	const requiredUserAction = createMemo(() =>
@@ -1083,7 +1088,7 @@ export function App(props: {
 	const keybindCatalog = createMemo(() =>
 		dashboardDetailKeybindCatalog({
 			artifactsVisible: artifacts().length > 0,
-			classifierVisible: (data().state.classifierDecisions?.length ?? 0) > 0,
+			classifierVisible: classifications().length > 0,
 		}),
 	);
 	// The shell footer and `?` help read the active surface catalog from the
@@ -2504,11 +2509,9 @@ export function App(props: {
 										selectedIndex={selectedArtifact()}
 									/>
 								</Show>
-								<Show
-									when={(data().state.classifierDecisions?.length ?? 0) > 0}
-								>
+								<Show when={classifications().length > 0}>
 									<ClassifierPanel
-										decisions={data().state.classifierDecisions ?? []}
+										entries={classifications()}
 										active={activePanel() === CLASSIFIER_PANEL}
 										selectedIndex={selectedDecision()}
 									/>

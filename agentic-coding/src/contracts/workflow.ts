@@ -314,6 +314,14 @@ export const CLASSIFIER_DECISION_MAX_RECORDS = 100;
 export const CLASSIFIER_DECISION_INPUT_MAX_BYTES = 16 * 1024;
 export const CLASSIFIER_DECISION_CONTENT_MAX_BYTES = 160 * 1024;
 
+/** One triage pass records one record per role question it asked, and every
+ * one of them carries the same rendered state, so the per-record input budget
+ * is a fraction of `CLASSIFIER_DECISION_INPUT_MAX_BYTES`: at the full budget a
+ * single eight-role round would evict every routing record from the bounded
+ * history. The state is still the material the classifier was asked about; it
+ * is simply stored as a bounded head. */
+export const TRIAGE_DECISION_INPUT_MAX_BYTES = 4 * 1024;
+
 /** The gate-decision history has its own bounds: a record is small (stage,
  * policy, decision, one number) but a long workflow with several rounds takes
  * one decision per gate per round, so the list is capped independently of the
@@ -344,6 +352,12 @@ export interface ClassifierDecisionOption {
 export interface ClassifierDecisionAnswer {
 	type: "choice" | "noul";
 	choice?: string;
+	/** The necessity value of a `noul` answer. Every question the classifier
+	 * asks outside model-pool routing is a necessity question — the verifier
+	 * roles, the stage gates, the per-file judgment sweep — so without this
+	 * field those decisions could be recorded but never shown. Absent means the
+	 * question went unanswered, never a usable zero. */
+	noul?: number;
 	confidence?: number;
 	probabilities?: Readonly<Record<string, number>>;
 }
@@ -1303,6 +1317,7 @@ const classifierDecisionRecordResponseSchema = Schema.Struct({
 	answer: Schema.Struct({
 		type: Schema.Literal("choice", "noul"),
 		choice: Schema.optional(Schema.String),
+		noul: Schema.optional(Schema.Number),
 		confidence: Schema.optional(Schema.Number),
 		probabilities: Schema.optional(
 			Schema.Record({ key: Schema.String, value: Schema.Number }),

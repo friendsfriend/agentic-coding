@@ -8,26 +8,195 @@ import type { RequiredUserAction } from "../../contracts/actions.ts";
 import type {
 	AgentUsageMetrics,
 	ClassifierDecisionRecord,
+	GateDecisionRecord,
 	WorkflowState,
 } from "../../contracts/workflow";
 import { formatDuration } from "../../workflow/format.ts";
 
+/** One classification the engine recorded, in either of the two histories it
+ * keeps: a classifier question (model-pool routing, verifier-role triage, the
+ * per-file judgment sweep) or a stage-gate verdict. */
+export type ClassificationEntry =
+	| { readonly kind: "classifier"; readonly record: ClassifierDecisionRecord }
+	| { readonly kind: "gate"; readonly record: GateDecisionRecord };
+
+/** How each classifier integration reads in a one-line row. The ids are the
+ * engine's own vocabulary; the panel shows what the classification was for. */
+const INTEGRATION_LABELS: Readonly<Record<string, string>> = Object.freeze({
+	routing: "routing",
+	triage: "verifier roles",
+	"file-judgment": "file sweep",
+});
+
+/** The outcome half of a classifier row, per integration. A `noul` question
+ * resolves no profile pool, so routing's "applied profiles" would read as
+ * "applied none" on a role decision that did select a role. */
+function classifierOutcome(decision: ClassifierDecisionRecord): string {
+	const profiles = decision.result.profiles.join(", ") || "none";
+	if (decision.integration === "triage")
+		return decision.result.applied ? `selected ${profiles}` : "not selected";
+	// A sweep answers once per file, so its counts are its outcome.
+	if (decision.integration === "file-judgment")
+		return decision.result.attention ?? "no bands reported";
+	return decision.result.applied ? `applied ${profiles}` : `kept ${profiles}`;
+}
+
+/** Every classification a workflow made, oldest first. Two append-only
+ * histories in, one ordered list out: both carry an ISO timestamp and a unique
+ * id, so the order is total and a dashboard refresh cannot reshuffle rows. */
+export function classificationEntries(state: {
+	readonly classifierDecisions?: readonly ClassifierDecisionRecord[];
+	readonly gateDecisions?: readonly GateDecisionRecord[];
+}): ClassificationEntry[] {
+	const entries: ClassificationEntry[] = [
+		...(state.classifierDecisions ?? []).map((record) => ({
+			kind: "classifier" as const,
+			record,
+		})),
+		...(state.gateDecisions ?? []).map((record) => ({
+			kind: "gate" as const,
+			record,
+		})),
+	];
+	return entries.sort(
+		(a, b) =>
+			a.record.at.localeCompare(b.record.at) ||
+			a.record.id.localeCompare(b.record.id),
+	);
+}
+
+/** The panel's one line per classification. */
+export function classificationRows(
+	entries: readonly ClassificationEntry[],
+): string[] {
+	return entries.map((entry) =>
+		entry.kind === "gate"
+			? gateDecisionRow(entry.record)
+			: [
+					INTEGRATION_LABELS[entry.record.integration] ??
+						entry.record.integration,
+					entry.record.questionId,
+					classifierOutcome(entry.record),
+				].join(" · "),
+	);
+}
+
+function gateDecisionRow(decision: GateDecisionRecord): string {
+	const parts = [
+		"stage gate",
+		decision.stage,
+		decision.decision === "skip" ? "skipped" : "runs",
+		`policy ${decision.policy}`,
+	];
+	if (decision.decision === "skip")
+		parts.push(
+			decision.noul === undefined
+				? "necessity unknown"
+				: `necessity ${decision.noul}`,
+		);
+	return parts.join(" · ");
+}
+
+/** The detail a selected classification opens. */
+export function classificationDetail(entry: ClassificationEntry): {
+	title: string;
+	content: string;
+} {
+	return entry.kind === "gate"
+		? gateDecisionDetail(entry.record)
+		: classifierDecisionDetail(entry.record);
+}
+
+/** A gate verdict is a different record from a classifier question, so it
+ * reads as what it is: a stage, a policy, and what was decided with it. */
+export function gateDecisionDetail(decision: GateDecisionRecord): {
+	title: string;
+	content: string;
+} {
+	return {
+		title: `Stage gate · ${decision.stage}`,
+		content: [
+			"## Decision",
+			`- **Stage:** ${decision.stage}`,
+			`- **Step:** ${decision.stepId}`,
+			`- **Policy:** ${decision.policy}`,
+			`- **Decision:** ${decision.decision === "skip" ? "skipped" : "runs"}`,
+			`- **Forced:** ${decision.forced ? "yes" : "no"}`,
+			`- **Necessity:** ${decision.noul ?? "not answered"}`,
+			...(decision.reason ? [`- **Reason:** ${decision.reason}`] : []),
+			`- **Recorded:** ${decision.at}`,
+			"",
+			"> A forced decision ran its stage without asking the classifier: the",
+			"> policy was always, or the answer could not be obtained.",
+		].join("\n"),
+	};
+}
+
 export function classifierDecisionRows(
 	decisions: readonly ClassifierDecisionRecord[],
 ): string[] {
-	return decisions.map((decision) => {
-		const profiles = decision.result.profiles.join(", ") || "none";
-		const result = decision.result.applied
-			? `applied ${profiles}`
-			: `kept ${profiles}`;
-		return `${decision.integration} · ${decision.questionId} · ${result}`;
-	});
+	return decisions.map((decision) =>
+		[
+			INTEGRATION_LABELS[decision.integration] ?? decision.integration,
+			decision.questionId,
+			classifierOutcome(decision),
+		].join(" · "),
+	);
+}
+
+/** A necessity answer: the value, or the fact that the question went
+ * unanswered. An unanswered question is never a zero, so the distinction is
+ * rendered rather than defaulted. What the value decided is already carried by
+ * the record's applied result. */
+function noulLine(answer: ClassifierDecisionRecord["answer"]): string[] {
+	return [
+		answer.noul === undefined
+			? "Necessity: not answered"
+			: `Necessity: ${answer.noul}`,
+	];
+}
+
+/** The per-file judgment sweep answers once per candidate file, so its verdict
+ * is a band per path rather than a pool of options: it gets its own table
+ * instead of a routing option table that would read as nonsense. */
+function fileJudgmentDetail(decision: ClassifierDecisionRecord): {
+	title: string;
+	content: string;
+} {
+	const escapeCell = (value: string) => value.replaceAll("|", "\\|");
+	const rows = decision.options.map(
+		(option) =>
+			`| ${escapeCell(option.label)} | ${escapeCell(option.profile)} | ${
+				option.criteria === undefined ? "—" : option.criteria
+			} |`,
+	);
+	return {
+		title: `File sweep · ${decision.questionId}`,
+		content: [
+			"## Coverage",
+			`- **Coverage:** ${decision.result.attention ?? "not reported"}`,
+			`- **Applied:** ${decision.result.applied ? "yes" : "no"}`,
+			`- **Model:** ${decision.model}`,
+			`- **Recorded:** ${decision.at}`,
+			"",
+			"## Flagged and ambiguous files",
+			"| File | Band | Necessity |",
+			"| --- | --- | ---: |",
+			...(rows.length ? rows : ["| — | — | — |"]),
+			"",
+			"> Files in neither band were cleared, and files that were never judged",
+			"> are listed in the sweep's artifact. A verdict is not evidence: read the",
+			"> repository and the assigned artifacts before reporting a finding.",
+		].join("\n"),
+	};
 }
 
 export function classifierDecisionDetail(decision: ClassifierDecisionRecord): {
 	title: string;
 	content: string;
 } {
+	if (decision.integration === "file-judgment")
+		return fileJudgmentDetail(decision);
 	const answer = decision.answer;
 	const escapeCell = (value: string) => value.replaceAll("|", "\\|");
 	const criteria = (value: unknown) =>
@@ -50,30 +219,37 @@ export function classifierDecisionDetail(decision: ClassifierDecisionRecord): {
 		),
 	);
 	return {
-		title: `Classifier · ${decision.integration} · ${decision.questionId}`,
+		title: `Classifier · ${INTEGRATION_LABELS[decision.integration] ?? decision.integration} · ${decision.questionId}`,
 		content: [
 			"## Decision",
-			`- **Integration:** ${decision.integration}`,
+			`- **Integration:** ${decision.integration} (${INTEGRATION_LABELS[decision.integration] ?? "unknown integration"})`,
 			...(decision.phase ? [`- **Phase:** ${decision.phase}`] : []),
 			`- **Question:** ${decision.questionId}`,
 			`- **Model:** ${decision.model}`,
 			`- **Recorded:** ${decision.at}`,
 			"",
 			"## Options and answer",
-			"| Option | Profile | Chosen | Probability | Criteria |",
-			"| --- | --- | --- | ---: | --- |",
-			...optionRows,
-			"",
+			...(decision.options.length
+				? [
+						"| Option | Profile | Chosen | Probability | Criteria |",
+						"| --- | --- | --- | ---: | --- |",
+						...optionRows,
+						"",
+					]
+				: [
+						"This integration resolves no profile pool; it asks one question.",
+						"",
+					]),
 			...(answer.type === "choice"
 				? [
 						`Choice: ${answer.choice ?? "none"}`,
 						`Confidence: ${answer.confidence ?? "not provided"}`,
 					]
-				: ["Answer: no usable answer"]),
+				: noulLine(answer)),
 			"",
 			"## Applied result",
 			`- **Applied:** ${decision.result.applied ? "yes" : "no"}`,
-			`- **Profiles:** ${decision.result.profiles.join(", ") || "none"}`,
+			`- **Selected:** ${decision.result.profiles.join(", ") || "none"}`,
 			...(decision.result.attention
 				? [`- **Attention:** ${decision.result.attention}`]
 				: []),

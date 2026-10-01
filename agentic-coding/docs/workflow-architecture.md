@@ -213,7 +213,15 @@ arrives at `core.triage` as the edge output (and as its step input), which may
 only narrow it — never empty it; zero roles bypass triage and run the full
 suite only; and every classifier failure fails open into an unconstrained triage
 plus an `attention` entry, because a classifier outage must never block
-verification.
+verification. The pass is recorded in the snapshot's bounded
+`classifierDecisions` history — one record per question it asked, carrying the
+model, the bounded head of the state, the necessity answer, and whether the role
+was selected; a pass that obtained no usable answer at all is one record — so a
+round's classification can be read instead of inferred from which verifiers ran.
+The per-file judgment sweep is recorded the same way, as the one sweep it was:
+its banded paths travel as the record's options, its coverage counts as the
+record's attention line, and its rendered section as the record's input, while
+the content-bound artifact reference stays the evidence a verifier reads.
 
 Configurable stage gates decide whether four stages run at all. The policy is
 configuration, not code: a preset's `gates` table
@@ -287,7 +295,11 @@ guarantee that a skipped test suite or human review is never silent. A
 workflow that has taken no gate decision exposes an empty list. The dashboard's
 Change panel renders the latest decision per stage, so a stage whose most recent
 verdict was a skip shows as `stage — skipped (policy, necessity)` beside the
-phase status; a workflow that has skipped nothing renders nothing.
+phase status; a workflow that has skipped nothing renders nothing. The
+dashboard's Classifications panel merges that list with the classifier-decision
+history into one time-ordered view, so model-pool routing, verifier-role triage,
+every stage-gate verdict, and the per-file sweep appear in the one place a
+reader looks for what the classifier decided.
 
 Every repository-controlled string a gate reads — the task, the change id, the
 plan summary, artifact bodies, paths, and diffs — travels inside one JSON

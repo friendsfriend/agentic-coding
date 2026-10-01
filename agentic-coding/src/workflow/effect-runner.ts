@@ -35,6 +35,7 @@ import {
 	jevSessionBinding,
 	jevUsesLocalSidecar,
 	type RoutingClassifierTelemetryObserver,
+	renderTriageState,
 	resolveClassifierBinding,
 	withStartTimeout,
 	writeFileSignalsArtifact,
@@ -43,7 +44,10 @@ import {
 	APPLY_PHASE_STEPS,
 	type ClassifierAnswer,
 	FILE_JUDGMENT_INTEGRATION,
+	FILE_JUDGMENT_MAX_PATHS,
 	FILE_JUDGMENT_THRESHOLDS,
+	type FileJudgment,
+	type FileJudgmentOutcome,
 	type FileSignalReference,
 	GATE_INTEGRATION,
 	GATE_QUESTION_IDS,
@@ -2716,17 +2720,47 @@ export function announceGateSkipBoundary(
 	}
 	emit(stage, noul);
 }
+/** What one sweep decided, in the bounded form the decision history records.
+ * The per-file verdicts travel as banded paths rather than as a full per-file
+ * list, and the rendered section travels as the sweep's classifier input: the
+ * dashboard shows the sweep's answer without re-reading the artifact. */
+export interface FileJudgmentSummary {
+	readonly model: string;
+	readonly section: string;
+	readonly judged: number;
+	readonly cleared: number;
+	readonly cached: number;
+	readonly skipped: number;
+	readonly degenerate: boolean;
+	readonly flagged: readonly { path: string; noul?: number }[];
+	readonly unsure: readonly { path: string; noul?: number }[];
+}
+
+/** One sweep's evidence reference plus the summary the decision history
+ * records. The two travel together because both come from the same render: a
+ * reference without a summary would leave the classification invisible, and a
+ * summary without a reference would claim a sweep no verifier ever read. */
+export interface FileSignalSweepOutcome {
+	readonly reference: FileSignalReference;
+	readonly summary: FileJudgmentSummary;
+}
+
 /** The outcome of one verifier-role classification pass. `failOpen` marks a
  * classification the engine could not obtain: the step then completes with no
  * role constraint, so the round keeps today's unconstrained triage. `gate`
  * carries the verification gate's own verdict, which the step resolves before
- * the roles. */
+ * the roles. `model`, `state`, and `answers` carry what the pass was asked
+ * and what it answered, so the decision history can show the classification
+ * instead of only its outcome. */
 interface TriageClassification {
 	readonly integration: typeof TRIAGE_INTEGRATION;
 	readonly roles?: readonly string[];
 	readonly failOpen?: true;
 	readonly reason?: unknown;
 	readonly gate?: GateClassification;
+	readonly model?: string;
+	readonly state?: string;
+	readonly answers?: Readonly<Record<string, ClassifierAnswer>>;
 }
 
 /** The outcome of one pool-routing pass. `failOpen` marks a classification the
@@ -2850,7 +2884,7 @@ export function fileSignalSweep(
 		write: writeFileSignalsArtifact,
 		path: fileSignalsArtifactPath,
 	},
-): Effect.Effect<FileSignalReference | undefined, Error> {
+): Effect.Effect<FileSignalSweepOutcome | undefined, Error> {
 	return Effect.gen(function* () {
 		const attempted = yield* Effect.either(
 			Effect.gen(function* () {
@@ -2883,19 +2917,23 @@ export function fileSignalSweep(
 					},
 					signal,
 				);
-				return yield* Effect.try({
-					try: () =>
-						deps.write(
-							deps.path(snapshot.workflowId, snapshot.revision),
-							renderFileSignals(outcome, {
-								provider: binding.provider,
-								model: binding.model,
-								thresholds,
-							}),
-						),
-					catch: (error) =>
-						error instanceof Error ? error : new Error(String(error)),
+				const section = renderFileSignals(outcome, {
+					provider: binding.provider,
+					model: binding.model,
+					thresholds,
 				});
+				return {
+					reference: yield* Effect.try({
+						try: () =>
+							deps.write(
+								deps.path(snapshot.workflowId, snapshot.revision),
+								section,
+							),
+						catch: (error) =>
+							error instanceof Error ? error : new Error(String(error)),
+					}),
+					summary: fileJudgmentSummary(binding.model, section, outcome),
+				};
 			}),
 		);
 		if (Either.isLeft(attempted))
@@ -2904,6 +2942,32 @@ export function fileSignalSweep(
 				: Effect.succeed(undefined);
 		return attempted.right;
 	});
+}
+
+/** Reduce one sweep's outcome to the bounded summary the decision history
+ * records. The banded paths are capped at the same count the rendered section
+ * lists, so a large change cannot inflate one classification record past what
+ * the bounded history holds. */
+function fileJudgmentSummary(
+	model: string,
+	section: string,
+	outcome: FileJudgmentOutcome,
+): FileJudgmentSummary {
+	const banded = (judgments: readonly FileJudgment[]) =>
+		judgments
+			.slice(0, FILE_JUDGMENT_MAX_PATHS)
+			.map((judgment) => ({ path: judgment.path, noul: judgment.noul }));
+	return {
+		model,
+		section,
+		judged: outcome.judged,
+		cleared: outcome.cleared,
+		cached: outcome.cached,
+		skipped: outcome.skipped.length,
+		degenerate: outcome.degenerate,
+		flagged: banded(outcome.flagged),
+		unsure: banded(outcome.unsure),
+	};
 }
 
 /** The round's verifier-role classification plus this round's per-file judgment
@@ -2922,8 +2986,14 @@ function triageClassification(
 			announceGateSkip,
 			signal,
 		);
-		const fileSignals = yield* fileSignalSweep(snapshot, signal);
-		return fileSignals ? { ...classified, fileSignals } : classified;
+		const swept = yield* fileSignalSweep(snapshot, signal);
+		return swept
+			? {
+					...classified,
+					fileSignals: swept.reference,
+					fileJudgment: swept.summary,
+				}
+			: classified;
 	});
 }
 
@@ -2932,6 +3002,7 @@ function triageClassification(
  * the contract the reducer and the step behavior already agreed on. */
 type TriageClassificationWithSignals = TriageClassification & {
 	fileSignals?: FileSignalReference;
+	fileJudgment?: FileJudgmentSummary;
 };
 
 function classifyTriageRoles(
@@ -2963,13 +3034,22 @@ function classifyTriageRoles(
 					pinnedClassifierProvider(snapshot),
 				);
 				const state = yield* p(() => collectTriageClassifierState(snapshot));
-				return yield* invokeTriageClassifier(
+				const answers = yield* invokeTriageClassifier(
 					definitionId,
 					binding,
 					state,
 					signal,
 					automatic,
 				);
+				// The pass's model, the exact state it was asked about, and its
+				// answers ride along with the selection: the decision history records
+				// what was asked, so a round's classification can be read rather
+				// than inferred from which verifiers ran.
+				return {
+					model: binding.model,
+					state: renderTriageState(state),
+					answers,
+				};
 			}).pipe(
 				Effect.catchAllDefect((defect) =>
 					Effect.fail(
@@ -2990,26 +3070,33 @@ function classifyTriageRoles(
 					: {}),
 			};
 		}
+		const asked = classified.right;
 		const gate = automatic
 			? verificationGateVerdict(
 					definitionId,
-					classified.right,
+					asked.answers,
 					policy,
 					forced,
 					announceGateSkip,
 				)
 			: forced;
 		if (gate.decision === "skip")
-			return { integration: TRIAGE_INTEGRATION, gate };
-		const selection = selectTriageRoles(definitionId, classified.right);
+			return { integration: TRIAGE_INTEGRATION, gate, ...asked };
+		const selection = selectTriageRoles(definitionId, asked.answers);
 		return selection.failOpen
 			? {
 					integration: TRIAGE_INTEGRATION,
 					failOpen: true,
 					reason: selection.failOpen,
 					gate,
+					...asked,
 				}
-			: { integration: TRIAGE_INTEGRATION, roles: selection.roles, gate };
+			: {
+					integration: TRIAGE_INTEGRATION,
+					roles: selection.roles,
+					gate,
+					...asked,
+				};
 	});
 }
 

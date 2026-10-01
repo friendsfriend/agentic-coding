@@ -6,11 +6,18 @@
 
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import type { ClassifierDecisionRecord } from "../../src/contracts/workflow.ts";
+import type {
+	ClassifierDecisionRecord,
+	GateDecisionRecord,
+} from "../../src/contracts/workflow.ts";
 import {
 	approvalFor,
+	classificationDetail,
+	classificationEntries,
+	classificationRows,
 	classifierDecisionDetail,
 	classifierDecisionRows,
+	gateDecisionDetail,
 	phaseAgeHours,
 	phaseStatus,
 } from "../../src/tui/dash/projections.ts";
@@ -76,6 +83,147 @@ test("classifier decision projections show rows, options, result, and verbatim i
 	expect(detail.content).toContain("no usable choice");
 	expect(detail.content).toContain("input was truncated");
 	expect(detail.content).toContain(decision.input);
+});
+
+/** One recorded classification of each kind, deliberately out of order, so the
+ * merge has to sort rather than concatenate. */
+function classificationFixture() {
+	const routing: ClassifierDecisionRecord = {
+		id: "b-routing",
+		at: "2026-01-01T00:00:02Z",
+		integration: "routing",
+		questionId: "core.implementation",
+		model: "opencode/jev-1.13-free",
+		input: "state",
+		inputTruncated: false,
+		options: [{ label: "quick", profile: "base" }],
+		answer: { type: "choice", choice: "quick" },
+		result: { applied: true, profiles: ["base"] },
+	};
+	const triage: ClassifierDecisionRecord = {
+		id: "c-triage",
+		at: "2026-01-01T00:00:03Z",
+		integration: "triage",
+		questionId: "needs_security_verifier",
+		model: "opencode/jev-1.13-free",
+		input: "state",
+		inputTruncated: false,
+		options: [],
+		answer: { type: "noul", noul: 0.81 },
+		result: { applied: true, profiles: ["security-verifier"] },
+	};
+	const sweep: ClassifierDecisionRecord = {
+		id: "d-sweep",
+		at: "2026-01-01T00:00:04Z",
+		integration: "file-judgment",
+		questionId: "leak",
+		model: "opencode/jev-1.13-free",
+		input: "## File signals",
+		inputTruncated: false,
+		options: [{ label: "src/a.ts", profile: "flag", criteria: 0.91 }],
+		answer: { type: "noul" },
+		result: {
+			applied: false,
+			profiles: [],
+			attention: "judged 3, cleared 2, flagged 1, unsure 0, not judged 0",
+		},
+	};
+	const gate: GateDecisionRecord = {
+		id: "a-gate",
+		at: "2026-01-01T00:00:01Z",
+		stepId: "core.wiki-gate",
+		stage: "wiki",
+		policy: "auto",
+		decision: "skip",
+		forced: false,
+		noul: 0.12,
+	};
+	return { routing, triage, sweep, gate };
+}
+
+test("the classification history is every recorded classification, oldest first", () => {
+	const { routing, triage, sweep, gate } = classificationFixture();
+	const entries = classificationEntries({
+		classifierDecisions: [routing, triage, sweep],
+		gateDecisions: [gate],
+	});
+	expect(entries.map((entry) => entry.record.id)).toEqual([
+		"a-gate",
+		"b-routing",
+		"c-triage",
+		"d-sweep",
+	]);
+	// A workflow that classified nothing renders no panel, not an empty heading.
+	expect(classificationEntries({})).toEqual([]);
+	expect(
+		classificationEntries({ classifierDecisions: [], gateDecisions: [] }),
+	).toEqual([]);
+});
+
+test("each classification kind renders a row that names what it decided", () => {
+	const { routing, triage, sweep, gate } = classificationFixture();
+	expect(
+		classificationRows(
+			classificationEntries({
+				classifierDecisions: [routing, triage, sweep],
+				gateDecisions: [gate],
+			}),
+		),
+	).toEqual([
+		"stage gate · wiki · skipped · policy auto · necessity 0.12",
+		"routing · core.implementation · applied base",
+		"verifier roles · needs_security_verifier · selected security-verifier",
+		"file sweep · leak · judged 3, cleared 2, flagged 1, unsure 0, not judged 0",
+	]);
+});
+
+test("a necessity answer is shown as a value, never defaulted to zero", () => {
+	const { triage } = classificationFixture();
+	const detail = classifierDecisionDetail({
+		...triage,
+		answer: { type: "noul" },
+		result: { applied: false, profiles: [] },
+	});
+	expect(detail.content).toContain("Necessity: not answered");
+	expect(detail.content).not.toContain("Necessity: 0");
+	// A role question resolves no pool, so it must not render an option table
+	// claiming every role was an unchosen option.
+	expect(detail.content).not.toContain("| Option | Profile |");
+	expect(detail.content).toContain("asks one question");
+});
+
+test("the sweep detail bands paths instead of pretending to be a pool choice", () => {
+	const { sweep } = classificationFixture();
+	const detail = classificationDetail({ kind: "classifier", record: sweep });
+	expect(detail.title).toContain("File sweep");
+	expect(detail.content).toContain("judged 3, cleared 2, flagged 1");
+	expect(detail.content).toContain("| src/a.ts | flag | 0.91 |");
+	expect(detail.content).toContain("A verdict is not evidence");
+});
+
+test("a gate verdict reads as its stage, policy, and decision", () => {
+	const { gate } = classificationFixture();
+	const detail = classificationDetail({ kind: "gate", record: gate });
+	expect(detail).toEqual(gateDecisionDetail(gate));
+	expect(detail.title).toBe("Stage gate · wiki");
+	expect(detail.content).toContain("- **Decision:** skipped");
+	expect(detail.content).toContain("- **Necessity:** 0.12");
+	expect(detail.content).toContain("- **Forced:** no");
+	expect(detail.content).toContain("policy was always");
+});
+
+test("a forced gate with no answer says so instead of inventing a necessity", () => {
+	const { gate } = classificationFixture();
+	const detail = gateDecisionDetail({
+		...gate,
+		policy: "always",
+		decision: "run",
+		forced: true,
+		noul: undefined,
+	});
+	expect(detail.content).toContain("- **Decision:** runs");
+	expect(detail.content).toContain("- **Necessity:** not answered");
+	expect(detail.content).toContain("- **Forced:** yes");
 });
 
 test("projections compute from their explicit inputs", () => {
