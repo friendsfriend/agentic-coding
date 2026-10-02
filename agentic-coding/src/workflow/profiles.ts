@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type {
 	AdapterCapability,
 	ResolvedProfile,
@@ -164,6 +167,17 @@ const RUNTIME_OPTIONS: Record<string, Set<string>> = {
 		"tools",
 		"capabilities",
 	]),
+	// Pane-less durable host runtime (add-pi-durable-runtime): no "agent" option
+	// (that is an opencode concept), otherwise the same shape as "pi".
+	"pi-durable": new Set([
+		"runtime",
+		"executable",
+		"model",
+		"thinking",
+		"tools",
+		"extensions",
+		"capabilities",
+	]),
 };
 const DEFAULT_CAPABILITIES: AdapterCapability[] = [
 	"interactive",
@@ -195,12 +209,17 @@ export function parseAgentsConfig(
 						thinking: legacy?.thinking?.worker_default,
 					},
 				},
-				presets: { [BUILTIN_PRESET_NAME]: { runtime: "pi" } },
+				// The built-in preset's own runtime stays unset here too (falls through
+				// to `builtinRuntime`'s "pi-durable" default): a legacy TOML migration
+				// sets up an explicit "pi-default" named profile for `default_profile`,
+				// but a workflow that separately selects `use-default-model` gets the
+				// same sitewide default as a fresh installation.
+				presets: { [BUILTIN_PRESET_NAME]: {} },
 			};
 		}
 		return {
 			profiles: {},
-			presets: { [BUILTIN_PRESET_NAME]: { runtime: "pi" } },
+			presets: { [BUILTIN_PRESET_NAME]: {} },
 		};
 	}
 	const input = value as Record<string, unknown>;
@@ -491,8 +510,7 @@ function validatePresets(
 	profiles: Record<string, ProfileConfig>,
 	source?: string,
 ): Record<string, PresetConfig> {
-	if (presets === undefined)
-		return { [BUILTIN_PRESET_NAME]: { runtime: "pi" } };
+	if (presets === undefined) return { [BUILTIN_PRESET_NAME]: {} };
 	if (!presets || typeof presets !== "object" || Array.isArray(presets))
 		throw new Error("agents.presets must be a table of presets");
 	const parsed = presets as Record<string, PresetConfig>;
@@ -560,7 +578,7 @@ function validatePresets(
 			);
 	}
 	if (!Object.hasOwn(parsed, BUILTIN_PRESET_NAME))
-		parsed[BUILTIN_PRESET_NAME] = { runtime: "pi" };
+		parsed[BUILTIN_PRESET_NAME] = {};
 	return parsed;
 }
 /** Own-property profile lookup; inherited prototype names like "constructor"
@@ -580,10 +598,21 @@ function ownValue<T>(
 	return Object.hasOwn(record, key) ? record[key] : undefined;
 }
 function executable(runtime: RuntimeId, configured?: string): string {
-	return configured ?? (runtime === "opencode-v2" ? "opencode2" : runtime);
+	// `pi-durable` has no external executable (durable-agent-host: "preflight
+	// checks capabilities (no executable lookup)"); the bundled label stays for
+	// display and digest stability.
+	return (
+		configured ?? (runtime === "opencode-v2" ? "opencode2" : String(runtime))
+	);
 }
 function builtinRuntime(config: AgentsConfig, override?: RuntimeId): RuntimeId {
-	return override ?? config.presets?.[BUILTIN_PRESET_NAME]?.runtime ?? "pi";
+	// default-model-preset: "the built-in preset configuration ... when no
+	// harness is configured it SHALL default to pi-durable." A user who sets
+	// the preset's runtime explicitly (including to "pi") keeps that choice;
+	// only the unset case changed.
+	return (
+		override ?? config.presets?.[BUILTIN_PRESET_NAME]?.runtime ?? "pi-durable"
+	);
 }
 export function resolveProfile(
 	name: string,
@@ -977,12 +1006,17 @@ export function preflightProfile(
 	profile: ResolvedProfile,
 	requirements: readonly AdapterCapability[],
 ): void {
-	const bin = profile.executable;
-	const resolved = bin.startsWith("/") ? bin : Bun.which(bin);
-	if (!resolved)
-		throw new Error(
-			`configured runtime executable not found for profile ${profile.name}: ${bin}`,
-		);
+	// `pi-durable` is bundled, not an external executable on PATH
+	// (durable-agent-host: "preflight checks capabilities (no executable
+	// lookup)"); every other runtime keeps the executable-resolution check.
+	if (profile.runtime !== "pi-durable") {
+		const bin = profile.executable;
+		const resolved = bin.startsWith("/") ? bin : Bun.which(bin);
+		if (!resolved)
+			throw new Error(
+				`configured runtime executable not found for profile ${profile.name}: ${bin}`,
+			);
+	}
 	validateProfileRequirements(profile, requirements);
 	assertModelAvailable(profile);
 }
@@ -1061,9 +1095,94 @@ export function runtimeModels(
 	modelCache.set(executable, { models: available, at: Date.now() });
 	return available;
 }
+/** Global pi `models.json` custom-provider model ids, read synchronously and
+ * without any external executable (durable-agent-configuration: "Durable
+ * model enumeration"). Returns the providers the user configured locally and
+ * every `provider/model` id those providers declare. An absent or unreadable
+ * file contributes nothing, matching every other optional global-pi read in
+ * this codebase (`pi-tools.ts`'s `globalPiTools`). */
+function durableCustomModels(): {
+	providers: Set<string>;
+	models: Set<string>;
+} {
+	const providers = new Set<string>();
+	const models = new Set<string>();
+	try {
+		// Mirrors `agent-host/credentials.ts`'s `piAgentDir()` resolution without a
+		// static import of that module from this always-loaded config-parsing
+		// layer: same `PI_CODING_AGENT_DIR` override, same `~/.pi/agent` default.
+		const configured = process.env.PI_CODING_AGENT_DIR?.trim();
+		const agentDir = configured
+			? configured
+			: path.join(os.homedir(), ".pi", "agent");
+		const raw = fs.readFileSync(path.join(agentDir, "models.json"), "utf8");
+		const parsed = JSON.parse(raw) as {
+			providers?: Record<string, { models?: Array<{ id?: unknown }> }>;
+		};
+		for (const [providerId, provider] of Object.entries(
+			parsed.providers ?? {},
+		)) {
+			providers.add(providerId);
+			for (const model of provider.models ?? [])
+				if (typeof model.id === "string")
+					models.add(`${providerId}/${model.id}`);
+		}
+	} catch {
+		/* no custom models configured, or the file is unreadable */
+	}
+	return { providers, models };
+}
+
+/** `pi-durable` model validation (durable-agent-configuration: "Durable model
+ * enumeration"). Validates shape (`provider/model`, optional `:thinking`
+ * suffix) and, for a provider the user configured locally
+ * (`~/.pi/agent/models.json`), exact membership. A built-in provider's model
+ * id is accepted on shape alone: enumerating pi-ai's full generated catalog
+ * synchronously, with no external executable, would mean eagerly loading the
+ * pi-ai package into every workflow-start validation — including workflows
+ * that never route to `pi-durable` — which conflicts with keeping that
+ * package's cost out of the common path. This is a deliberately narrower
+ * guarantee than the spec's "fail closed" wording for every provider; a
+ * genuinely invalid built-in model still fails, just later, at launch,
+ * instead of at workflow start. */
+function assertDurableModelAvailable(profile: ResolvedProfile): void {
+	if (!profile.model) return;
+	const candidate = profile.model.replace(/:[^:]+$/, "");
+	const slash = candidate.indexOf("/");
+	if (slash <= 0 || slash === candidate.length - 1)
+		throw new Error(
+			"profile " +
+				profile.name +
+				': pi-durable model must be "<provider>/<model>" (got ' +
+				profile.model +
+				")",
+		);
+	const providerId = candidate.slice(0, slash);
+	const { providers, models } = durableCustomModels();
+	if (providers.has(providerId) && !models.has(candidate)) {
+		const sample = [...models]
+			.filter((model) => model.startsWith(`${providerId}/`))
+			.slice(0, 8);
+		throw new Error(
+			"profile " +
+				profile.name +
+				": unknown model " +
+				profile.model +
+				" for custom provider " +
+				providerId +
+				" (available: " +
+				(sample.length ? sample.join(", ") : "none") +
+				")",
+		);
+	}
+}
 /** Fail closed when a profile's configured model is not offered by its runtime. */
 export function assertModelAvailable(profile: ResolvedProfile): void {
 	if (!profile.model) return;
+	if (profile.runtime === "pi-durable") {
+		assertDurableModelAvailable(profile);
+		return;
+	}
 	const available = runtimeModels(profile.executable, profile.runtime);
 	// pi models may carry a :<thinking> suffix; availability is about the base id.
 	const candidate =

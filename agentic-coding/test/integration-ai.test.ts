@@ -12,7 +12,10 @@ import {
 	handleLegacyRoute,
 	type IntegrationServices,
 } from "../src/server/integrations/routes.ts";
-import { autoRemoveRepoFixtures, createRepoFixture } from "./support/git-fixture.ts";
+import {
+	autoRemoveRepoFixtures,
+	createRepoFixture,
+} from "./support/git-fixture.ts";
 
 // Sweep the repositories this file created, at the end of this file only.
 autoRemoveRepoFixtures();

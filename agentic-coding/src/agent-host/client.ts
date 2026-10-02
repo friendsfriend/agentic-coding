@@ -1,0 +1,241 @@
+// Typed client for the durable agent host's control socket
+// (durable-agent-host D3). Pure transport: no pi-durable or pi-ai import, so
+// the engine adapter and the dashboard session view can depend on this
+// module directly without loading the experimental runtime packages.
+import { type ChildProcess, spawn } from "node:child_process";
+import fs from "node:fs";
+import net from "node:net";
+import type { HostLayout } from "./layout.ts";
+import {
+	decodeFrame,
+	type EnsureRunRequest,
+	type EnsureRunResponse,
+	encodeFrame,
+	FrameReader,
+	type HostResponse,
+	PROTOCOL_VERSION,
+	type StatusResponse,
+	type SubmitResponse,
+} from "./protocol.ts";
+
+export class HostUnavailableError extends Error {}
+
+/** How to start a workflow's host process when none is reachable yet. The
+ * adapter supplies the already-resolved executable and arguments (compiled
+ * binary self-exec, or `bun run src/cli.ts`), matching the pattern other
+ * adapters use for their own launcher scripts. */
+export interface HostSpawn {
+	readonly command: string;
+	readonly args: readonly string[];
+	readonly cwd: string;
+}
+
+function sendRequest(
+	socketPath: string,
+	request: Record<string, unknown> & { type: string },
+	timeoutMs: number,
+	onFrame?: (value: HostResponse) => void,
+): Promise<HostResponse> {
+	return new Promise((resolve, reject) => {
+		const socket = net.createConnection(socketPath);
+		const reader = new FrameReader();
+		let settled = false;
+		const timer = setTimeout(() => {
+			if (settled) return;
+			settled = true;
+			socket.destroy();
+			reject(
+				new HostUnavailableError(
+					`agent host request timed out: ${request.type}`,
+				),
+			);
+		}, timeoutMs);
+		socket.once("connect", () => {
+			socket.write(encodeFrame(request as never));
+		});
+		socket.setEncoding("utf8");
+		socket.on("data", (chunk: string) => {
+			for (const line of reader.push(chunk)) {
+				const decoded = decodeFrame(line);
+				const value = decoded.ok ? decoded.value : decoded.error;
+				if (value.type === "watchFrame") {
+					onFrame?.(value as HostResponse);
+					continue;
+				}
+				if (settled) continue;
+				settled = true;
+				clearTimeout(timer);
+				resolve(value as HostResponse);
+				if (request.type !== "watch") socket.end();
+			}
+		});
+		socket.on("error", (error) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			reject(error);
+		});
+		socket.on("close", () => clearTimeout(timer));
+	});
+}
+
+/** Spawn the host detached from this process, so a bounded `workflow drain`
+ * exiting never takes the agent's work with it (durable-agent-host: "Host
+ * outlives drains and the dashboard"). */
+function spawnHost(target: HostSpawn, layout: HostLayout): ChildProcess {
+	const out = fs.openSync(layout.logPath, "a");
+	const child = spawn(target.command, target.args, {
+		cwd: target.cwd,
+		detached: true,
+		stdio: ["ignore", out, out],
+	});
+	child.unref();
+	return child;
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Ensure a workflow's host is reachable, spawning it when the socket is not
+ * yet accepting connections. Idempotent under a concurrent caller: a host
+ * that is still starting is simply retried against, and a host that won the
+ * single-writer lock answers every later caller's requests (durable-agent-
+ * host: "Concurrent host start"). */
+export async function ensureHostRunning(
+	layout: HostLayout,
+	target: HostSpawn,
+	options: { attempts?: number; delayMs?: number } = {},
+): Promise<void> {
+	const attempts = options.attempts ?? 30;
+	const delayMs = options.delayMs ?? 200;
+	for (let attempt = 0; attempt < attempts; attempt++) {
+		try {
+			await sendRequest(
+				layout.socketPath,
+				{ type: "hello", protocolVersion: PROTOCOL_VERSION },
+				2_000,
+			);
+			return;
+		} catch {
+			if (attempt === 0) spawnHost(target, layout);
+			await sleep(delayMs);
+		}
+	}
+	throw new HostUnavailableError(
+		`agent host did not become reachable: ${layout.socketPath}`,
+	);
+}
+
+/** Typed request/response client over one workflow's control socket. Every
+ * call opens its own connection (NDJSON framing, D3): low volume, no
+ * multiplexed-request bookkeeping needed. */
+export class HostClient {
+	constructor(
+		private readonly socketPath: string,
+		private readonly timeoutMs = 30_000,
+	) {}
+
+	async ensureRun(
+		request: Omit<EnsureRunRequest, "type">,
+	): Promise<EnsureRunResponse> {
+		const response = await sendRequest(
+			this.socketPath,
+			{ type: "ensureRun", ...request },
+			this.timeoutMs,
+		);
+		if (response.type !== "ensureRun") throw unexpected(response);
+		return response;
+	}
+	async submit(
+		runId: string,
+		text: string,
+		requestId: string,
+		whenBusy?: "steer" | "followUp",
+	): Promise<SubmitResponse> {
+		const response = await sendRequest(
+			this.socketPath,
+			{
+				type: "submit",
+				runId,
+				text,
+				requestId,
+				...(whenBusy ? { whenBusy } : {}),
+			},
+			this.timeoutMs,
+		);
+		if (response.type !== "submit") throw unexpected(response);
+		return response;
+	}
+	async status(runId: string): Promise<StatusResponse> {
+		const response = await sendRequest(
+			this.socketPath,
+			{ type: "status", runId },
+			this.timeoutMs,
+		);
+		if (response.type !== "status") throw unexpected(response);
+		return response;
+	}
+	async abort(runId: string): Promise<void> {
+		const response = await sendRequest(
+			this.socketPath,
+			{ type: "abort", runId },
+			this.timeoutMs,
+		);
+		if (response.type !== "ok") throw unexpected(response);
+	}
+	async stopRun(runId: string): Promise<void> {
+		const response = await sendRequest(
+			this.socketPath,
+			{ type: "stopRun", runId },
+			this.timeoutMs,
+		);
+		if (response.type !== "ok") throw unexpected(response);
+	}
+	async shutdown(): Promise<void> {
+		const response = await sendRequest(
+			this.socketPath,
+			{ type: "shutdown" },
+			this.timeoutMs,
+		);
+		if (response.type !== "ok") throw unexpected(response);
+	}
+	/** Streams watch frames until `stop` is awaited; resolves with the stop
+	 * function once the watch is acknowledged by the first frame. */
+	watch(runId: string, onFrame: (value: unknown) => void): Promise<() => void> {
+		return new Promise((resolve, reject) => {
+			const socket = net.createConnection(this.socketPath);
+			const reader = new FrameReader();
+			let resolved = false;
+			socket.once("connect", () =>
+				socket.write(encodeFrame({ type: "watch", runId })),
+			);
+			socket.setEncoding("utf8");
+			socket.on("data", (chunk: string) => {
+				for (const line of reader.push(chunk)) {
+					const decoded = decodeFrame(line);
+					if (!decoded.ok) continue;
+					if (
+						decoded.value.type === "watchFrame" &&
+						decoded.value.runId === runId
+					) {
+						onFrame(decoded.value.value);
+						if (!resolved) {
+							resolved = true;
+							resolve(() => socket.end());
+						}
+					}
+				}
+			});
+			socket.on("error", (error) => {
+				if (!resolved) reject(error);
+			});
+		});
+	}
+}
+
+function unexpected(response: HostResponse): Error {
+	if (response.type === "error")
+		return new Error(`agent host: ${response.code}: ${response.message}`);
+	return new Error(`agent host: unexpected response type ${response.type}`);
+}

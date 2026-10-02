@@ -13,7 +13,11 @@ import { registerBuiltins } from "../src/workflow/definitions.ts";
 import { effectRunnerTest } from "../src/workflow/effect-runner.ts";
 import { AGENT_DEFINITIONS } from "../src/workflow/embedded.generated.ts";
 import { canonicalStorePath, WorkflowEngine } from "../src/workflow/runtime.ts";
-import { autoRemoveRepoFixtures, createRepoFixture, repoPreset } from "./support/git-fixture.ts";
+import {
+	autoRemoveRepoFixtures,
+	createRepoFixture,
+	repoPreset,
+} from "./support/git-fixture.ts";
 
 // Sweep the repositories this file created, at the end of this file only.
 autoRemoveRepoFixtures();

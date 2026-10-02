@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type {
 	ResolvedProfile,
@@ -13,7 +14,11 @@ import {
 	registerBuiltins,
 } from "../src/workflow/definitions.ts";
 import { WorkflowEngine } from "../src/workflow/runtime.ts";
-import { autoRemoveRepoFixtures, createTempRepoFixture, repoPreset } from "./support/git-fixture.ts";
+import {
+	autoRemoveRepoFixtures,
+	createTempRepoFixture,
+	repoPreset,
+} from "./support/git-fixture.ts";
 
 // Sweep the repositories this file created, at the end of this file only.
 autoRemoveRepoFixtures();

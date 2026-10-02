@@ -10,7 +10,11 @@ import {
 	STORE_SCHEMA_VERSION,
 	WorkflowEngine,
 } from "../src/workflow/runtime.ts";
-import { autoRemoveRepoFixtures, createTempRepoFixture, repoPreset } from "./support/git-fixture.ts";
+import {
+	autoRemoveRepoFixtures,
+	createTempRepoFixture,
+	repoPreset,
+} from "./support/git-fixture.ts";
 
 // Sweep the repositories this file created, at the end of this file only.
 autoRemoveRepoFixtures();

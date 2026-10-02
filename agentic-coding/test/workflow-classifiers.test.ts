@@ -79,7 +79,11 @@ import {
 } from "../src/workflow/steps/index.ts";
 import { STEP_ROUTES } from "../src/workflow/steps/routing.ts";
 import { triageRolesFor } from "../src/workflow/steps/verification.ts";
-import { autoRemoveRepoFixtures, commitRepoFixture, createRepoFixture } from "./support/git-fixture.ts";
+import {
+	autoRemoveRepoFixtures,
+	commitRepoFixture,
+	createRepoFixture,
+} from "./support/git-fixture.ts";
 
 // Sweep the repositories this file created, at the end of this file only.
 autoRemoveRepoFixtures();

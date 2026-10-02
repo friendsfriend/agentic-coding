@@ -115,7 +115,7 @@ export function dashboardDetailKeybindCatalog(options: {
 			keybinds: [
 				{
 					key: "Enter",
-					action: "Focus selected agent",
+					action: "Focus selected agent / open durable agent session",
 					short: "focus",
 					context: AGENTS_PANEL_CONTEXT,
 				},

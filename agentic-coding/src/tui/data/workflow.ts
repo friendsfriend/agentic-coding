@@ -176,6 +176,11 @@ export async function loadDashboardSeed(
 							status: run.status,
 							runtime: run.runtime,
 							model: run.model,
+							runId: run.id,
+							...(run.hostSocket ? { hostSocket: run.hostSocket } : {}),
+							...(run.conversationId
+								? { conversationId: run.conversationId }
+								: {}),
 						},
 					],
 		),

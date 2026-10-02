@@ -631,6 +631,45 @@ row):
   private method on `WorkflowEngine` in `engine.ts` instead of widening this
   contract.
 
+## The durable agent host (`src/agent-host/`)
+
+`pi-durable` (add-pi-durable-runtime) is the one runtime that hosts its own
+process instead of running inside a multiplexer pane. Its code is isolated
+under `src/agent-host/` so the heavy experimental `@earendil-works/pi-durable`/
+`pi-ai` packages are never eagerly loaded by a command mode that does not need
+them:
+
+| Module | Owns | Imports pi-durable/pi-ai? |
+| --- | --- | --- |
+| `protocol.ts` | The versioned NDJSON wire protocol (requests, responses, framing, byte bound) between the host and its clients. | No. |
+| `layout.ts` | Storage/socket/lock/log/run-env paths under one workflow's runtime directory. | No. |
+| `client.ts` | `HostClient` (typed request/response + `watch`) and `ensureHostRunning` (connect-or-spawn). The engine adapter (`PiDurableAdapter` in `workflow/adapters.ts`) and the dashboard session snapshot (`tui/dash/handlers/keys.ts`) depend on this module only. | No. |
+| `settings.ts` | The `agentHost` configuration section type and its one-time seeding from the global pi `settings.json`. | No. |
+| `credentials.ts` | `PiAuthCredentialStore`, a pi-ai `CredentialStore`-shaped adapter over the user's live `~/.pi/agent/auth.json` (no copying). | No (structurally compatible, not statically coupled). |
+| `tools.ts` | The durable extensions: coding tools + read-only policy, `developer_question`/`agent_ask`, `ask_jev`, and the system-prompt sections. | Yes. |
+| `host.ts` | `DurableHost`: opens the `Harness`, serves the control socket, maps requests to conversations. | Yes. |
+| `host-main.ts` | The `agent host --workflow-dir DIR` process entry point. | Yes (transitively, via `host.ts`). |
+
+`src/cli.ts`'s `agent host` mode reaches `host-main.ts` through a dynamic
+`await import()`, which the source-layer boundary check does not track as a
+static edge, so no other command mode pays for loading `host.ts`. The boundary
+check (`scripts/workflow-architecture.ts`) classifies every file under
+`agent-host/` as **runtime**; the client/protocol-only dependency the
+workflow/dashboard layers are meant to take is a discipline enforced by
+reviewing `workflow/adapters.ts` and `tui/dash/handlers/keys.ts`'s own imports
+(they import `client.ts`/`protocol.ts` only), not by a dedicated static rule —
+a narrower guarantee than a hard import-allowlist would give.
+
+**Known gaps in this pass** (add-pi-durable-runtime, deliberately deferred):
+the `use-default-model` built-in preset still defaults to `pi`, not
+`pi-durable`, because flipping that sitewide default has a blast radius this
+implementation pass could not fully verify with focused tests; `pi-durable`
+model validation at workflow start accepts a built-in provider's model on
+shape alone rather than enumerating pi-ai's full catalog (a locally configured
+custom provider's models are still validated exactly); and the dashboard
+Agents-panel session view is a read-only snapshot, not the live, steerable
+session the `dashboard-agent-session-view` spec describes.
+
 ## Source-layer boundaries (enforced)
 
 `test/workflow-source-layer-boundaries.test.ts` is a runnable architecture
@@ -645,7 +684,7 @@ runtime code depends on it.
 | Layer | Paths | Owns |
 | --- | --- | --- |
 | **domain** (pure) | `workflow/steps/`, `workflow/definitions/`, `workflow/contracts.ts`, `workflow/schema.ts`, `workflow/format.ts`, `workflow/registry.ts`, `workflow/embedded.generated.ts`, `workflow/definitions.ts` | Pure step behavior, definitions, contracts, Effect Schema-backed contract decoding (`schema.ts` — declarative; the `Contract<T>` facades delegate here), structural registry validation, and the generated instruction-asset data module. |
-| **runtime** | `workflow/runtime/`, `workflow/runtime.ts`, `workflow/effects.ts`, `workflow/effect-runner.ts`, `workflow/secure-fs.ts`, `workflow/paths.ts`, `workflow/assets.ts`, `workflow/assignment.ts`, `workflow/observability.ts`, `workflow/wiki.ts`, `workflow/adapters.ts`, `workflow/credentials.ts`, `workflow/profiles.ts`, `workflow/agent-extensions.ts`, `workflow/project-catalog.ts` | Persistence, engine internals, effect execution, and external I/O services (git inspection, wiki data, adapters, credentials, agent-extension config, configured-project catalog reads). |
+| **runtime** | `workflow/runtime/`, `workflow/runtime.ts`, `workflow/effects.ts`, `workflow/effect-runner.ts`, `workflow/secure-fs.ts`, `workflow/paths.ts`, `workflow/assets.ts`, `workflow/assignment.ts`, `workflow/observability.ts`, `workflow/wiki.ts`, `workflow/adapters.ts`, `workflow/credentials.ts`, `workflow/profiles.ts`, `workflow/agent-extensions.ts`, `workflow/project-catalog.ts`, `agent-host/` | Persistence, engine internals, effect execution, and external I/O services (git inspection, wiki data, adapters, credentials, agent-extension config, configured-project catalog reads, the durable agent host). |
 | **application** | `workflow/startup.ts`, `workflow/operations.ts`, `workflow/application.ts` | Shared orchestration both the CLI and the dashboard compose: startup/validation routing, the in-process engine factory, effect draining, configured-project listing (`operations.ts`, backed by the runtime catalog client), and the named application composition root (`application.ts` — the single place the production `applicationLayer` is composed and Effect programs run, complete-workflow-effect-cutover task 1). |
 | **cli** | `workflow/cli/`, `workflow/cli.ts` | Command parsing, dispatch (`run.ts`), command modules, and git/registry/pane helpers. |
 | **tui-feature** | `tui/dash/`, `tui/otel/`, `tui/settings/` | Dashboard, observability and settings feature implementations (the Settings surface is a Home destination: section views, inventory and its own section keys). |

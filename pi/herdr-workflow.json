@@ -1,9 +1,7 @@
 {
   "agents": {
     "presets": {
-      "use-default-model": {
-        "runtime": "pi"
-      }
+      "use-default-model": {}
     }
   },
   "workflow": {

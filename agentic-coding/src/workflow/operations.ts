@@ -18,6 +18,7 @@ import {
 	OpenCodeAdapter,
 	OpenCodeV2Adapter,
 	PiAdapter,
+	PiDurableAdapter,
 } from "./adapters.ts";
 import type { WorkflowApplication } from "./application.ts";
 import { paneForRunFactory } from "./cli/pane.ts";
@@ -72,6 +73,9 @@ export async function drainEffects(
 		["pi", new PiAdapter(lifecycle)],
 		["opencode", new OpenCodeAdapter(lifecycle)],
 		["opencode-v2", new OpenCodeV2Adapter(lifecycle)],
+		// Hosts its own process (durable-agent-host): no multiplexer lifecycle
+		// dependency, unlike the pane-based adapters above.
+		["pi-durable", new PiDurableAdapter()],
 	]);
 	const handlers = agentEffectHandlers(repo, workflowEngine, {
 		registry,

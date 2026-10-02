@@ -20,6 +20,7 @@ import {
 	VerdictModal,
 } from "@ui";
 import { Show } from "solid-js";
+import { AgentSessionModal } from "../ui/AgentSessionModal.tsx";
 import { CostModal } from "../ui/CostModal.tsx";
 import { FindingsModal } from "../ui/FindingsModal.tsx";
 import { NotificationOverlay } from "../ui/Notification.tsx";
@@ -77,6 +78,17 @@ export interface VerdictOverlay {
 	readonly lines: number;
 }
 
+/** A live, writable durable agent session (add-pi-durable-runtime,
+ * dashboard-agent-session-view). Live status text and the draft are read from
+ * `OverlaysState` (high-frequency signals), matching the `verdictOffset`-style
+ * split already used for the read-only overlays. */
+export interface AgentSessionOverlay {
+	readonly role: string;
+	readonly onSubmit: (text: string) => void;
+	readonly onAbort: () => void;
+	readonly onClose: () => void;
+}
+
 /** The overlay values and selections owned by `dash/state.ts`. */
 export interface OverlaysState {
 	readonly repairSelection: () => number;
@@ -97,6 +109,9 @@ export interface OverlaysState {
 		| undefined;
 	readonly verdictOffset: () => number;
 	readonly verdictRenderMarkdown: () => boolean;
+	readonly agentSessionStatusLines: () => readonly string[];
+	readonly agentSessionDraft: () => string;
+	readonly setAgentSessionDraft: (value: string) => void;
 }
 
 export interface OverlaysProps {
@@ -111,6 +126,7 @@ export interface OverlaysProps {
 	readonly cost?: CostOverlay;
 	readonly presetSwitcher?: PresetSwitcherOverlay;
 	readonly verdict?: VerdictOverlay;
+	readonly agentSession?: AgentSessionOverlay;
 	/** Short hint shown beside the action picker title. */
 	readonly pickerHint?: string;
 	/** Keybind help: zero lines means closed. */
@@ -276,6 +292,19 @@ export function Overlays(props: OverlaysProps) {
 						offset={props.state.verdictOffset()}
 						lines={report().lines}
 						renderMarkdown={props.state.verdictRenderMarkdown()}
+					/>
+				)}
+			</Show>
+			<Show when={props.agentSession}>
+				{(session) => (
+					<AgentSessionModal
+						role={session().role}
+						statusLines={props.state.agentSessionStatusLines()}
+						draft={props.state.agentSessionDraft()}
+						onDraftChange={(value) => props.state.setAgentSessionDraft(value)}
+						onSubmit={(text) => session().onSubmit(text)}
+						onAbort={() => session().onAbort()}
+						onClose={() => session().onClose()}
 					/>
 				)}
 			</Show>

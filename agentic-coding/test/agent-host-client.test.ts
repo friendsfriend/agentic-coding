@@ -1,0 +1,147 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import fs from "node:fs";
+import net from "node:net";
+import os from "node:os";
+import path from "node:path";
+import {
+	ensureHostRunning,
+	HostClient,
+	HostUnavailableError,
+} from "../src/agent-host/client.ts";
+import { hostLayout } from "../src/agent-host/layout.ts";
+import {
+	decodeFrame,
+	encodeFrame,
+	FrameReader,
+	type HostRequest,
+} from "../src/agent-host/protocol.ts";
+
+/** A minimal fake host: just enough of the protocol to exercise the client
+ * without pulling in pi-durable (the real host lives in `host.ts`, tested by
+ * its own narrower unit tests given the experimental runtime it wraps). */
+function fakeServer(
+	socketPath: string,
+	handle: (request: HostRequest) => unknown,
+): net.Server {
+	const server = net.createServer((socket) => {
+		const reader = new FrameReader();
+		socket.setEncoding("utf8");
+		socket.on("data", (chunk: string) => {
+			for (const line of reader.push(chunk)) {
+				const decoded = decodeFrame(line);
+				if (!decoded.ok) {
+					socket.write(encodeFrame(decoded.error));
+					continue;
+				}
+				const response = handle(decoded.value as HostRequest);
+				socket.write(encodeFrame(response as never));
+			}
+		});
+	});
+	server.listen(socketPath);
+	return server;
+}
+
+describe("HostClient over the control socket", () => {
+	let dir: string;
+	let server: net.Server | undefined;
+
+	beforeEach(() => {
+		dir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-host-client-"));
+	});
+	afterEach(() => {
+		server?.close();
+		fs.rmSync(dir, { recursive: true, force: true });
+	});
+
+	test("ensureRun/submit/status/abort/stopRun round-trip through the socket", async () => {
+		const layout = hostLayout(dir);
+		fs.mkdirSync(layout.root, { recursive: true });
+		server = fakeServer(layout.socketPath, (request) => {
+			switch (request.type) {
+				case "ensureRun":
+					return {
+						type: "ensureRun",
+						runId: request.runId,
+						conversationId: "1",
+					};
+				case "submit":
+					return { type: "submit", runId: request.runId, submissionId: "s1" };
+				case "status":
+					return { type: "status", runId: request.runId, status: "working" };
+				case "abort":
+				case "stopRun":
+				case "shutdown":
+					return { type: "ok" };
+				default:
+					return {
+						type: "error",
+						code: "invalid-request",
+						message: "unhandled in fake server",
+					};
+			}
+		});
+		const client = new HostClient(layout.socketPath, 2_000);
+		const ensured = await client.ensureRun({
+			runId: "run-1",
+			cwd: dir,
+			runEnvPath: path.join(dir, "run.env"),
+			name: "worker-1",
+			toolPolicy: "default",
+		});
+		expect(ensured.conversationId).toBe("1");
+		const submitted = await client.submit("run-1", "hello", "req-1");
+		expect(submitted.submissionId).toBe("s1");
+		const status = await client.status("run-1");
+		expect(status.status).toBe("working");
+		await expect(client.abort("run-1")).resolves.toBeUndefined();
+		await expect(client.stopRun("run-1")).resolves.toBeUndefined();
+	});
+
+	test("an error response is surfaced as a rejected promise", async () => {
+		const layout = hostLayout(dir);
+		fs.mkdirSync(layout.root, { recursive: true });
+		server = fakeServer(layout.socketPath, () => ({
+			type: "error",
+			code: "unknown-run",
+			message: "no such run",
+		}));
+		const client = new HostClient(layout.socketPath, 2_000);
+		await expect(client.status("ghost")).rejects.toThrow(/unknown-run/);
+	});
+
+	test("ensureHostRunning spawns nothing once the host already answers hello", async () => {
+		const layout = hostLayout(dir);
+		fs.mkdirSync(layout.root, { recursive: true });
+		server = fakeServer(layout.socketPath, (request) =>
+			request.type === "hello"
+				? {
+						type: "hello",
+						protocolVersion: request.protocolVersion,
+						hostId: "fake",
+					}
+				: { type: "ok" },
+		);
+		await expect(
+			ensureHostRunning(
+				layout,
+				{ command: "does-not-matter", args: [], cwd: dir },
+				{ attempts: 3, delayMs: 10 },
+			),
+		).resolves.toBeUndefined();
+	});
+
+	test("ensureHostRunning fails closed when nothing ever becomes reachable", async () => {
+		const layout = hostLayout(dir);
+		fs.mkdirSync(layout.root, { recursive: true });
+		// No server listening, and the spawn target is a command that will not
+		// produce a listening socket within the bounded attempts.
+		await expect(
+			ensureHostRunning(
+				layout,
+				{ command: "true", args: [], cwd: dir },
+				{ attempts: 2, delayMs: 5 },
+			),
+		).rejects.toBeInstanceOf(HostUnavailableError);
+	});
+});

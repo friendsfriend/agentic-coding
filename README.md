@@ -4,7 +4,11 @@
 
 ## Install
 
-Requires Bun, Git, Herdr, and at least one configured agent runtime:
+Requires Bun and Git. `pi-durable`, the bundled durable agent host, needs no
+separately installed agent executable — only a configured `pi` credential
+(`~/.pi/agent/auth.json`) to authenticate with. Herdr, and at least one of
+these externally installed agent runtimes, are required only for the
+pane-based runtimes:
 
 - Pi: `pi`
 - stable OpenCode: `opencode`
@@ -94,7 +98,7 @@ Raw phase overwrite is removed. `repair` previews compatible targets and affecte
 
 ## Agent routing
 
-Named profiles select `pi`, `opencode`, or `opencode-v2`. A fresh installation has no model-specific profiles: the built-in `use-default-model` preset uses Pi (configurable to another supported harness) without passing a model, allowing the selected harness to choose its own default. Custom profiles and presets are optional.
+Named profiles select `pi`, `opencode`, `opencode-v2`, or `pi-durable`. A fresh installation has no model-specific profiles: the built-in `use-default-model` preset uses Pi (configurable to another supported harness) without passing a model, allowing the selected harness to choose its own default. Custom profiles and presets are optional.
 
 For custom profiles, precedence is:
 
@@ -107,7 +111,15 @@ For custom profiles, precedence is:
 
 Resolved non-secret route is pinned for workflow lifetime. Missing executable, unsupported tool policy, capability mismatch, or diversity violation fails before agent/pane creation. Runtime/model never falls back silently.
 
-All adapters use Herdr lifecycle only: create topology, wait for foreground shell, call `herdr agent start`, retry once only for unavailable shell, confirm with `herdr agent get`, then send full assignment with `herdr agent prompt`.
+`pi`, `opencode`, and `opencode-v2` use Herdr lifecycle only: create topology, wait for foreground shell, call `herdr agent start`, retry once only for unavailable shell, confirm with `herdr agent get`, then send full assignment with `herdr agent prompt`.
+
+### `pi-durable`: the bundled durable agent host
+
+`pi-durable` runs without Herdr or any external agent executable. The `agentic-coding` executable has a hidden internal mode, `agentic-coding agent host --workflow-dir DIR`, that opens one [`@earendil-works/pi-durable`](https://github.com/earendil-works/pi/tree/main/packages/durable) harness over one SQLite storage file per workflow; the engine's `PiDurableAdapter` (`src/workflow/adapters.ts`) spawns that host on first use, and every agent run of the workflow becomes a conversation in it. A private Unix-socket control protocol (`src/agent-host/protocol.ts`, `client.ts`) carries submissions, status, abort/stop, and a dashboard watch stream; submissions carry an idempotency key, and a crashed host resumes unfinished work on restart. The workflow adapter allocates no multiplexer pane for this runtime.
+
+Credentials and custom models are read live from the user's global pi agent directory (`auth.json`/`models.json` under `PI_CODING_AGENT_DIR` or `~/.pi/agent`) — nothing is copied into agentic-coding's own configuration or workflow storage, so logging in once for `pi` also authenticates `pi-durable`. An `agentHost` configuration section (default provider/model/thinking, compaction, retry, steering/follow-up mode) is seeded once from the matching keys of the global pi `settings.json` the first time a durable run uses it, and is never overwritten by a later change to the global default.
+
+The dashboard Agents panel opens a bounded session snapshot for a `pi-durable` agent on Enter instead of focusing a pane; live steering, follow-up and abort from that view are not implemented yet (use the workflow CLI or the agent's own tools in the meantime). The `pi` runtime remains fully supported and is not scheduled for removal in this change.
 
 ## Assignments and telemetry
 

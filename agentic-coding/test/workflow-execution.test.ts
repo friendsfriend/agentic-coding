@@ -40,7 +40,10 @@ import {
 	writeConcept,
 } from "../src/workflow/wiki.ts";
 import { asPort } from "./fakes.ts";
-import { autoRemoveRepoFixtures, createTempRepoFixture } from "./support/git-fixture.ts";
+import {
+	autoRemoveRepoFixtures,
+	createTempRepoFixture,
+} from "./support/git-fixture.ts";
 
 // Sweep the repositories this file created, at the end of this file only.
 autoRemoveRepoFixtures();

@@ -50,7 +50,10 @@ import {
 	parseAgentsConfig,
 	resolveClassifierProvider,
 } from "../src/workflow/profiles.ts";
-import { autoRemoveRepoFixtures, createRepoFixture } from "./support/git-fixture.ts";
+import {
+	autoRemoveRepoFixtures,
+	createRepoFixture,
+} from "./support/git-fixture.ts";
 
 // Sweep the repositories this file created, at the end of this file only.
 autoRemoveRepoFixtures();

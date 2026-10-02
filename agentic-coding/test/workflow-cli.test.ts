@@ -23,7 +23,10 @@ import {
 import { QUESTION_WAIT_MS, WorkflowEngine } from "../src/workflow/runtime.ts";
 import type { StepBehavior } from "../src/workflow/steps/types.ts";
 import { asPort } from "./fakes.ts";
-import { autoRemoveRepoFixtures, createRepoFixture } from "./support/git-fixture.ts";
+import {
+	autoRemoveRepoFixtures,
+	createRepoFixture,
+} from "./support/git-fixture.ts";
 
 // Sweep the repositories this file created, at the end of this file only.
 autoRemoveRepoFixtures();

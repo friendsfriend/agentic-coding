@@ -170,6 +170,13 @@ export interface DashboardKeyContext {
 	readonly verdict: () => { title: string; content: string } | undefined;
 	readonly setPresetSwitcherHandler: (handler: unknown) => void;
 	readonly setPresetSwitcherChoices: (choices: unknown[]) => void;
+	/** Open the live, writable durable agent session view (add-pi-durable-
+	 * runtime, dashboard-agent-session-view). */
+	readonly openAgentSession: (session: {
+		role: string;
+		runId: string;
+		hostSocket: string;
+	}) => void;
 	readonly setReviewOpen: (open: boolean) => void;
 	readonly reviewFeature: unknown;
 	readonly setQuestionOpen: (open: boolean) => void;
@@ -521,6 +528,18 @@ export function createDashboardKeyHandler(
 			if (activePanel() === 1) {
 				const agent = data().agents[selectedAgent()];
 				if (!agent) return;
+				// A durable agent hosts its own process (add-pi-durable-runtime): there
+				// is no pane to focus, so Enter opens the live, writable agent session
+				// view instead.
+				if (agent.runtime === "pi-durable") {
+					if (!agent.hostSocket || !agent.runId) return;
+					context.openAgentSession({
+						role: agent.role,
+						runId: agent.runId,
+						hostSocket: agent.hostSocket,
+					});
+					return;
+				}
 				try {
 					const pane = data().state.panes[agent.role];
 					if (!pane) return;

@@ -61,6 +61,20 @@ if (surface === "__catalog") {
 	console.log(
 		"Usage: agentic-coding [command] [args]\n\nCommands:\n  (none)     Unified shell (owned environment backend + workflows + observability).\n  workflow   Transactional workflow engine. Run `agentic-coding workflow --help`.\n  config     Preview or apply configuration migration (`config migrate [--apply|--resume|--rollback]`).\n  home       Unified shell, home route. `manager` is an alias.\n  dash       Workflow dashboard for one explicit target, without application navigation. `agentic-coding dash --repo PATH --workflow-id ID`\n  server     Start only the unified backend (headless).\n  attach     Attach the shell to a running environment backend: `agentic-coding attach URL`\n  devenv     Thin alias of this executable (spawn/attach/server).",
 	);
+} else if (surface === "agent") {
+	// Hidden internal mode: the headless durable agent host
+	// (durable-agent-host spec). Lazily imported so every other command mode
+	// never loads pi-durable/pi-ai (unified-application-distribution: "Non-host
+	// command modes SHALL NOT eagerly load the durable host modules").
+	if (rest[0] === "host") {
+		const { main: agentHostMain } = await import("./agent-host/host-main.ts");
+		await agentHostMain(rest.slice(1));
+	} else {
+		console.error(
+			`unknown agentic-coding agent command: ${rest[0] ?? ""}. Known commands: host`,
+		);
+		process.exit(1);
+	}
 } else if (surface === "workflow") {
 	await workflowMain(rest);
 } else if (surface === "config") {
