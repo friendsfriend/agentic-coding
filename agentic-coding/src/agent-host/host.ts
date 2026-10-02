@@ -1,8 +1,9 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { Models } from "@earendil-works/pi-ai";
+import type { Models, MutableModels, Provider } from "@earendil-works/pi-ai";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import type { Storage } from "@earendil-works/pi-durable";
 import {
@@ -46,6 +47,35 @@ const RunMapDoc = defineDoc<RunMapState>({
 	scope: "session",
 	initial: () => ({ runs: {} }),
 });
+
+/** pi-durable never threads pi-ai's `options.sessionId`, but the built-in
+ * `opencode-go` provider needs it to emit its required `x-opencode-session`
+ * routing header. Without it every generation fails with a 400
+ * `MissingSessionID` and the submission settles `model_error`, so the
+ * dashboard shows a worker that starts and is idle again instantly. Pane
+ * runtimes get a session id from pi's own session manager; a durable host has
+ * none, so pin one per host process for provider session affinity.
+ * ponytail: one id per host, not per conversation — split it per conversation
+ * if OpenCode's per-conversation routing ever measurably matters. */
+export function withDurableSession(models: MutableModels): MutableModels {
+	const provider = models.getProvider("opencode-go");
+	if (!provider) return models;
+	const sessionId = randomUUID();
+	const withSession = <T>(options: T | undefined): T =>
+		({
+			...(options as object | undefined),
+			sessionId:
+				(options as { sessionId?: string } | undefined)?.sessionId ?? sessionId,
+		}) as T;
+	models.setProvider({
+		...provider,
+		stream: (model, context, options) =>
+			provider.stream(model, context, withSession(options)),
+		streamSimple: (model, context, options) =>
+			provider.streamSimple(model, context, withSession(options)),
+	} as Provider);
+	return models;
+}
 
 function parseRunEnvFile(contents: string): Record<string, string> {
 	const env: Record<string, string> = {};
@@ -161,11 +191,13 @@ export class DurableHost {
 		registry.install(createPromptExtension(options.globalAgentDir));
 		const models =
 			options.models ??
-			builtinModels({
-				credentials: new PiAuthCredentialStore(
-					options.credentialsPath,
-				) as never,
-			});
+			withDurableSession(
+				builtinModels({
+					credentials: new PiAuthCredentialStore(
+						options.credentialsPath,
+					) as never,
+				}),
+			);
 		const storage =
 			options.storage ??
 			(await openNodeSqliteStorage(options.layout.storagePath));

@@ -17,7 +17,7 @@ function Harness(props: {
 	return (
 		<AgentSessionModal
 			role="worker"
-			statusLines={["**Status:** working", "**Transcript entries:** 3"]}
+			statusLines={["Status: working", "Transcript entries: 3"]}
 			draft={draft()}
 			onDraftChange={setDraft}
 			onSubmit={props.onSubmit}
@@ -38,6 +38,28 @@ test("renders the agent title and live status lines", async () => {
 	expect(frame).toContain("worker");
 	expect(frame).toContain("Status:");
 	expect(frame).toContain("working");
+	t.renderer.destroy();
+});
+
+test("renders a provider error line from the session summary", async () => {
+	const t = await testRender(
+		() => (
+			<AgentSessionModal
+				role="worker"
+				statusLines={["Status: error", "Error: 400: MissingSessionID"]}
+				draft=""
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onClose={() => {}}
+			/>
+		),
+		{ width: 100, height: 30 },
+	);
+	await t.flush();
+	const frame = t.captureCharFrame();
+	expect(frame).toContain("Status: error");
+	expect(frame).toContain("Error: 400: MissingSessionID");
 	t.renderer.destroy();
 });
 

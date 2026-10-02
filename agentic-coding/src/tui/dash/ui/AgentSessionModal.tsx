@@ -34,6 +34,12 @@ export interface AgentSessionModalProps {
 export const ABORT_COMMAND = "/abort";
 export const CLOSE_COMMAND = "/close";
 
+/** A session line that reports a provider/tool failure, rendered in the theme's
+ * error color so a failed generation cannot be mistaken for ordinary output. */
+function isErrorLine(line: string): boolean {
+	return line.startsWith("Error:") || line.includes("⚠");
+}
+
 export function AgentSessionModal(props: AgentSessionModalProps) {
 	let inputRef: InputRenderable | undefined;
 	return (
@@ -57,7 +63,13 @@ export function AgentSessionModal(props: AgentSessionModalProps) {
 					overflow="hidden"
 				>
 					<For each={props.statusLines}>
-						{(line) => <text fg={uiColors.textSecondary}>{line}</text>}
+						{(line) => (
+							<text
+								fg={isErrorLine(line) ? uiColors.error : uiColors.textSecondary}
+							>
+								{line}
+							</text>
+						)}
 					</For>
 				</box>
 				<input

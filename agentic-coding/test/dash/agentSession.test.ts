@@ -90,6 +90,78 @@ describe("renderAgentSessionSummary", () => {
 		expect(text).toContain("pi: Writing the fix");
 	});
 
+	test("surfaces a failed generation instead of showing an idle run", () => {
+		const text = renderAgentSessionSummary({
+			entries: [
+				{
+					kind: "pi.assistant",
+					model: [
+						{
+							role: "assistant",
+							content: [],
+							stopReason: "error",
+							errorMessage: "400: MissingSessionID",
+						},
+					],
+				},
+			],
+		});
+		expect(text).toContain("Status: error");
+		expect(text).toContain("Error: 400: MissingSessionID");
+		expect(text).toContain("pi: ⚠ 400: MissingSessionID");
+	});
+
+	test("a later successful assistant turn clears the error status", () => {
+		const text = renderAgentSessionSummary({
+			entries: [
+				{
+					kind: "pi.assistant",
+					model: [
+						{
+							role: "assistant",
+							content: [],
+							stopReason: "error",
+							errorMessage: "boom",
+						},
+					],
+				},
+				{
+					kind: "pi.assistant",
+					model: [
+						{
+							role: "assistant",
+							content: [{ type: "text", text: "recovered" }],
+							stopReason: "stop",
+						},
+					],
+				},
+			],
+		});
+		expect(text).toContain("Status: idle");
+		expect(text).not.toContain("Error: boom");
+	});
+
+	test("a busy run still reads as working after an earlier error", () => {
+		const text = renderAgentSessionSummary({
+			entries: [
+				{
+					kind: "pi.assistant",
+					model: [
+						{
+							role: "assistant",
+							content: [],
+							stopReason: "error",
+							errorMessage: "boom",
+						},
+					],
+				},
+			],
+			docs: { "pi.live": { run: { taskId: "t1", inputs: [] } } },
+		});
+		expect(text).toContain("Status: working");
+		expect(text).toContain("Error: boom");
+	});
+
 	test("keeps only the newest transcript lines so the modal does not overflow", () => {
 		const entries = Array.from({ length: 60 }, (_, index) => ({
 			kind: "pi.user",

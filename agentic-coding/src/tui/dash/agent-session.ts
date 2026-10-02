@@ -72,6 +72,13 @@ function entryLines(entry: unknown): string[] {
 						lines.push(`  • ${block.name}${args ? `(${args})` : ""}`);
 					}
 				}
+				// A failed generation commits an empty assistant entry with the
+				// provider error; without this the run looks idle with no explanation.
+				if (
+					message.stopReason === "error" &&
+					typeof message.errorMessage === "string"
+				)
+					lines.push(oneLine(`pi: ⚠ ${message.errorMessage}`));
 			}
 			return lines;
 		}
@@ -135,6 +142,24 @@ function liveLines(live: Record<string, unknown> | undefined): string[] {
 	return lines;
 }
 
+/** The newest assistant generation's provider error, if that generation failed
+ * and no later successful assistant entry cleared it. This is what turns a run
+ * that "starts and instantly goes idle" into a visible failure instead of a
+ * silent one. */
+function lastAssistantError(entries: readonly unknown[]): string | undefined {
+	let error: string | undefined;
+	for (const entry of entries) {
+		if (!isRecord(entry) || entry.kind !== "pi.assistant") continue;
+		const message = Array.isArray(entry.model) ? entry.model[0] : undefined;
+		if (!isRecord(message)) continue;
+		error =
+			message.stopReason === "error" && typeof message.errorMessage === "string"
+				? message.errorMessage
+				: undefined;
+	}
+	return error;
+}
+
 /** Most recent transcript lines, bounded so the fixed-height modal keeps the
  * newest activity visible instead of clipping it. */
 const MAX_TRANSCRIPT_LINES = 26;
@@ -163,10 +188,20 @@ export function renderAgentSessionSummary(value: unknown): string {
 		(tool) => isRecord(tool) && tool.status === "running",
 	);
 	const queued = inbox && Array.isArray(inbox.items) ? inbox.items : [];
+	const generation =
+		live && isRecord(live.generation) ? live.generation : undefined;
+	const retryError =
+		generation &&
+		isRecord(generation.retry) &&
+		typeof generation.retry.error === "string"
+			? generation.retry.error
+			: undefined;
+	const error = lastAssistantError(entries) ?? retryError;
 	// Plain labels, not markdown: the modal renders these lines as terminal
 	// text, so emphasis markers would show up literally.
 	const lines = [
-		`Status: ${busy ? "working" : "idle"}`,
+		`Status: ${busy ? "working" : error ? "error" : "idle"}`,
+		...(error ? [`Error: ${oneLine(error, 400)}`] : []),
 		...running.map(
 			(tool) =>
 				`Running tool: ${isRecord(tool) && typeof tool.name === "string" ? tool.name : "tool"}`,
