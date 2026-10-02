@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -24,6 +23,10 @@ import {
 import { QUESTION_WAIT_MS, WorkflowEngine } from "../src/workflow/runtime.ts";
 import type { StepBehavior } from "../src/workflow/steps/types.ts";
 import { asPort } from "./fakes.ts";
+import { autoRemoveRepoFixtures, createRepoFixture } from "./support/git-fixture.ts";
+
+// Sweep the repositories this file created, at the end of this file only.
+autoRemoveRepoFixtures();
 
 const openspecFullDigest = registerBuiltins().definition("openspec", 1).digest;
 
@@ -232,22 +235,11 @@ describe("breaking workflow CLI surface", () => {
 		);
 		const saved = { ...process.env };
 		try {
-			execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
-			fs.writeFileSync(path.join(repo, "README.md"), "x\n");
-			execFileSync("git", ["add", "."], { cwd: repo });
-			execFileSync(
-				"git",
-				[
-					"-c",
-					"user.email=test@example.com",
-					"-c",
-					"user.name=Test",
-					"commit",
-					"-qm",
-					"base",
-				],
-				{ cwd: repo },
-			);
+			createRepoFixture(repo, {
+				files: {
+					"README.md": "x\n",
+				},
+			});
 			const profile = {
 				name: "pi",
 				runtime: "pi" as const,
@@ -351,22 +343,11 @@ describe("breaking workflow CLI surface", () => {
 		);
 		const saved = { ...process.env };
 		try {
-			execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
-			fs.writeFileSync(path.join(repo, "README.md"), "x\n");
-			execFileSync("git", ["add", "."], { cwd: repo });
-			execFileSync(
-				"git",
-				[
-					"-c",
-					"user.email=test@example.com",
-					"-c",
-					"user.name=Test",
-					"commit",
-					"-qm",
-					"base",
-				],
-				{ cwd: repo },
-			);
+			createRepoFixture(repo, {
+				files: {
+					"README.md": "x\n",
+				},
+			});
 			const profile = {
 				name: "pi",
 				runtime: "pi" as const,

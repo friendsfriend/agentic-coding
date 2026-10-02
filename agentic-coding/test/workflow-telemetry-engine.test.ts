@@ -12,22 +12,17 @@ import type {
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import { workflowTraceId } from "../src/workflow/observability.ts";
 import { canonicalStorePath, WorkflowEngine } from "../src/workflow/runtime.ts";
+import { autoRemoveRepoFixtures, createRepoFixture, repoPreset } from "./support/git-fixture.ts";
+
+// Sweep the repositories this file created, at the end of this file only.
+autoRemoveRepoFixtures();
 
 type TelemetryEvent = Record<string, string | number | boolean | undefined> & {
 	event: string;
 };
 
 function repository(root: string): string {
-	fs.mkdirSync(root, { recursive: true });
-	execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
-	execFileSync("git", ["config", "user.email", "test@example.com"], {
-		cwd: root,
-	});
-	execFileSync("git", ["config", "user.name", "Test"], { cwd: root });
-	fs.writeFileSync(path.join(root, "README.md"), "test\n");
-	execFileSync("git", ["add", "."], { cwd: root });
-	execFileSync("git", ["commit", "-qm", "base"], { cwd: root });
-	return root;
+	return createRepoFixture(root, repoPreset.readme);
 }
 
 const profile: ResolvedProfile = {

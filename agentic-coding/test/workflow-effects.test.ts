@@ -41,6 +41,10 @@ import {
 	WorkflowEngine,
 } from "../src/workflow/runtime.ts";
 import { asPort } from "./fakes.ts";
+import { autoRemoveRepoFixtures, createRepoFixture } from "./support/git-fixture.ts";
+
+// Sweep the repositories this file created, at the end of this file only.
+autoRemoveRepoFixtures();
 
 class Adapter implements AgentAdapter {
 	readonly id = "pi" as const;
@@ -112,22 +116,7 @@ function installGitPushShim(): { log: string; restore: () => void } {
 test("serial runner renews a slow effect and does not preclaim later work", async () => {
 	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-lease-runner-"));
 	try {
-		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
-		fs.writeFileSync(path.join(repo, "README.md"), "x\n");
-		execFileSync("git", ["add", "."], { cwd: repo });
-		execFileSync(
-			"git",
-			[
-				"-c",
-				"user.email=test@example.com",
-				"-c",
-				"user.name=Test",
-				"commit",
-				"-qm",
-				"base",
-			],
-			{ cwd: repo },
-		);
+		createRepoFixture(repo, { files: { "README.md": "x\n" } });
 		const registry = registerBuiltins();
 		let now = Date.now();
 		const engine = new WorkflowEngine(registry, () => new Date(now));
@@ -206,22 +195,7 @@ test("serial runner renews a slow effect and does not preclaim later work", asyn
 test("a lease lost while dispatching an unhandled effect is classified, not fatal", async () => {
 	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-no-handler-"));
 	try {
-		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
-		fs.writeFileSync(path.join(repo, "README.md"), "x\n");
-		execFileSync("git", ["add", "."], { cwd: repo });
-		execFileSync(
-			"git",
-			[
-				"-c",
-				"user.email=test@example.com",
-				"-c",
-				"user.name=Test",
-				"commit",
-				"-qm",
-				"base",
-			],
-			{ cwd: repo },
-		);
+		createRepoFixture(repo, { files: { "README.md": "x\n" } });
 		const registry = registerBuiltins();
 		// The clock advances on every read, so the drain's claim (leaseMs = 1) is
 		// already expired by the time it dispatches the "no handler" outcome. That
@@ -284,23 +258,9 @@ test("a lease lost while dispatching an unhandled effect is classified, not fata
 test("runner cancels a lost effect and a successor can reclaim it", async () => {
 	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-lease-loss-"));
 	try {
-		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
-		fs.writeFileSync(path.join(repo, "README.md"), "x\n");
-		fs.writeFileSync(path.join(repo, ".gitignore"), ".herdr-workflow\n");
-		execFileSync("git", ["add", "."], { cwd: repo });
-		execFileSync(
-			"git",
-			[
-				"-c",
-				"user.email=test@example.com",
-				"-c",
-				"user.name=Test",
-				"commit",
-				"-qm",
-				"base",
-			],
-			{ cwd: repo },
-		);
+		createRepoFixture(repo, {
+			files: { "README.md": "x\n", ".gitignore": ".herdr-workflow\n" },
+		});
 		const registry = registerBuiltins();
 		const engine = new WorkflowEngine(registry);
 		const profile = {
@@ -665,22 +625,7 @@ test("wiki run's assignment carries the researcher's full recorded handoff verba
 test("runner retains stale agent after repair", async () => {
 	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-effects-"));
 	try {
-		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
-		fs.writeFileSync(path.join(repo, "README.md"), "x\n");
-		execFileSync("git", ["add", "."], { cwd: repo });
-		execFileSync(
-			"git",
-			[
-				"-c",
-				"user.email=test@example.com",
-				"-c",
-				"user.name=Test",
-				"commit",
-				"-qm",
-				"base",
-			],
-			{ cwd: repo },
-		);
+		createRepoFixture(repo, { files: { "README.md": "x\n" } });
 		const registry = registerBuiltins();
 		const engine = new WorkflowEngine(registry);
 		const adapter = new Adapter();
@@ -794,22 +739,7 @@ test("runner retains stale agent after repair", async () => {
 test("workspace setup recognizes a dashboard tab carrying a status glyph", async () => {
 	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-glyph-tab-"));
 	try {
-		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
-		fs.writeFileSync(path.join(repo, "README.md"), "x\n");
-		execFileSync("git", ["add", "."], { cwd: repo });
-		execFileSync(
-			"git",
-			[
-				"-c",
-				"user.email=test@example.com",
-				"-c",
-				"user.name=Test",
-				"commit",
-				"-qm",
-				"base",
-			],
-			{ cwd: repo },
-		);
+		createRepoFixture(repo, { files: { "README.md": "x\n" } });
 		const registry = registerBuiltins();
 		const engine = new WorkflowEngine(registry);
 		const adapter = new Adapter();
@@ -893,22 +823,7 @@ test("launch failure on a reused pane does not close it", async () => {
 		path.join(os.tmpdir(), "workflow-launch-fail-reused-"),
 	);
 	try {
-		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
-		fs.writeFileSync(path.join(repo, "README.md"), "x\n");
-		execFileSync("git", ["add", "."], { cwd: repo });
-		execFileSync(
-			"git",
-			[
-				"-c",
-				"user.email=test@example.com",
-				"-c",
-				"user.name=Test",
-				"commit",
-				"-qm",
-				"base",
-			],
-			{ cwd: repo },
-		);
+		createRepoFixture(repo, { files: { "README.md": "x\n" } });
 		const registry = registerBuiltins();
 		const engine = new WorkflowEngine(registry);
 		engine.start({
@@ -1023,22 +938,7 @@ test("launch failure on a newly created pane still cleans it up", async () => {
 		path.join(os.tmpdir(), "workflow-launch-fail-created-"),
 	);
 	try {
-		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
-		fs.writeFileSync(path.join(repo, "README.md"), "x\n");
-		execFileSync("git", ["add", "."], { cwd: repo });
-		execFileSync(
-			"git",
-			[
-				"-c",
-				"user.email=test@example.com",
-				"-c",
-				"user.name=Test",
-				"commit",
-				"-qm",
-				"base",
-			],
-			{ cwd: repo },
-		);
+		createRepoFixture(repo, { files: { "README.md": "x\n" } });
 		const registry = registerBuiltins();
 		const engine = new WorkflowEngine(registry);
 		engine.start({
@@ -1148,22 +1048,7 @@ test("launch retry recovers stable Herdr agent without duplicating launch, minti
 		path.join(os.tmpdir(), "workflow-launch-recover-"),
 	);
 	try {
-		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
-		fs.writeFileSync(path.join(repo, "README.md"), "x\n");
-		execFileSync("git", ["add", "."], { cwd: repo });
-		execFileSync(
-			"git",
-			[
-				"-c",
-				"user.email=test@example.com",
-				"-c",
-				"user.name=Test",
-				"commit",
-				"-qm",
-				"base",
-			],
-			{ cwd: repo },
-		);
+		createRepoFixture(repo, { files: { "README.md": "x\n" } });
 		const profile = {
 			name: "pi",
 			runtime: "pi" as const,
@@ -1292,27 +1177,12 @@ test("launch retry recovers stable Herdr agent without duplicating launch, minti
 test("review-comment loop reuses the planner agent by stable name instead of launching a new tab", async () => {
 	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-plan-reuse-"));
 	try {
-		fs.mkdirSync(path.join(repo, "openspec"), { recursive: true });
-		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
-		fs.writeFileSync(path.join(repo, "README.md"), "x\n");
-		fs.writeFileSync(
-			path.join(repo, "openspec", "config.yaml"),
-			"schema: spec-driven\n",
-		);
-		execFileSync("git", ["add", "."], { cwd: repo });
-		execFileSync(
-			"git",
-			[
-				"-c",
-				"user.email=test@example.com",
-				"-c",
-				"user.name=Test",
-				"commit",
-				"-qm",
-				"base",
-			],
-			{ cwd: repo },
-		);
+		createRepoFixture(repo, {
+			files: {
+				"README.md": "x\n",
+				"openspec/config.yaml": "schema: spec-driven\n",
+			},
+		});
 		const profile = {
 			name: "pi",
 			runtime: "pi" as const,
@@ -1706,27 +1576,12 @@ test("proposal workspace setup stays on the dirty current checkout", async () =>
 		path.join(os.tmpdir(), "workflow-proposal-workspace-"),
 	);
 	try {
-		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
-		fs.mkdirSync(path.join(repo, "openspec"));
-		fs.writeFileSync(path.join(repo, "README.md"), "x\n");
-		fs.writeFileSync(
-			path.join(repo, "openspec", "config.yaml"),
-			"schema: spec-driven\n",
-		);
-		execFileSync("git", ["add", "."], { cwd: repo });
-		execFileSync(
-			"git",
-			[
-				"-c",
-				"user.email=test@example.com",
-				"-c",
-				"user.name=Test",
-				"commit",
-				"-qm",
-				"base",
-			],
-			{ cwd: repo },
-		);
+		createRepoFixture(repo, {
+			files: {
+				"README.md": "x\n",
+				"openspec/config.yaml": "schema: spec-driven\n",
+			},
+		});
 		fs.writeFileSync(path.join(repo, "uncommitted.txt"), "allowed\n");
 		const profile = {
 			name: "pi",
@@ -1827,22 +1682,7 @@ test("workspace setup restores the developer's focused workspace", async () => {
 	// workspace back instead of leaving the view on the workflow.
 	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-focus-"));
 	try {
-		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
-		fs.writeFileSync(path.join(repo, "README.md"), "x\n");
-		execFileSync("git", ["add", "."], { cwd: repo });
-		execFileSync(
-			"git",
-			[
-				"-c",
-				"user.email=test@example.com",
-				"-c",
-				"user.name=Test",
-				"commit",
-				"-qm",
-				"base",
-			],
-			{ cwd: repo },
-		);
+		createRepoFixture(repo, { files: { "README.md": "x\n" } });
 		const profile = {
 			name: "pi",
 			runtime: "pi" as const,
@@ -1973,22 +1813,7 @@ test("workspace retry recovers stable branch and workspace identity", async () =
 		path.join(os.tmpdir(), "workflow-workspace-recover-"),
 	);
 	try {
-		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
-		fs.writeFileSync(path.join(repo, "README.md"), "x\n");
-		execFileSync("git", ["add", "."], { cwd: repo });
-		execFileSync(
-			"git",
-			[
-				"-c",
-				"user.email=test@example.com",
-				"-c",
-				"user.name=Test",
-				"commit",
-				"-qm",
-				"base",
-			],
-			{ cwd: repo },
-		);
+		createRepoFixture(repo, { files: { "README.md": "x\n" } });
 		const base = execFileSync("git", ["rev-parse", "HEAD"], {
 			cwd: repo,
 			encoding: "utf8",
@@ -2079,11 +1904,10 @@ test("wiki delivery commits and pushes the bundle on its current branch", async 
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-wiki-git-"));
 	let shim: ReturnType<typeof installGitPushShim> | undefined;
 	try {
-		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
-		execFileSync("git", ["config", "user.email", "wiki@example.com"], {
-			cwd: root,
+		createRepoFixture(root, {
+			identity: { name: "Wiki", email: "wiki@example.com" },
+			unborn: true,
 		});
-		execFileSync("git", ["config", "user.name", "Wiki"], { cwd: root });
 		fs.writeFileSync(
 			path.join(root, "index.md"),
 			'---\nokf_version: "0.2"\n---\n',
@@ -2136,11 +1960,10 @@ test("wiki delivery pushes the tracked upstream without set-upstream", async () 
 	);
 	let shim: ReturnType<typeof installGitPushShim> | undefined;
 	try {
-		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
-		execFileSync("git", ["config", "user.email", "wiki@example.com"], {
-			cwd: root,
+		createRepoFixture(root, {
+			identity: { name: "Wiki", email: "wiki@example.com" },
+			unborn: true,
 		});
-		execFileSync("git", ["config", "user.name", "Wiki"], { cwd: root });
 		fs.writeFileSync(path.join(root, "index.md"), "base\n");
 		execFileSync("git", ["add", "."], { cwd: root });
 		execFileSync("git", ["commit", "-qm", "base"], { cwd: root });
@@ -2191,11 +2014,10 @@ test("wiki delivery commits without pushing when the bundle has no remote", asyn
 		path.join(os.tmpdir(), "workflow-wiki-noremote-"),
 	);
 	try {
-		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
-		execFileSync("git", ["config", "user.email", "wiki@example.com"], {
-			cwd: root,
+		createRepoFixture(root, {
+			identity: { name: "Wiki", email: "wiki@example.com" },
+			unborn: true,
 		});
-		execFileSync("git", ["config", "user.name", "Wiki"], { cwd: root });
 		fs.writeFileSync(path.join(root, "concept.md"), "fact\n");
 		const result = await Effect.runPromise(
 			effectRunnerTest.commitAndPushWiki(root, "Update wiki"),
@@ -2216,11 +2038,10 @@ test("wiki delivery commits without pushing on a detached HEAD", async () => {
 		path.join(os.tmpdir(), "workflow-wiki-detached-"),
 	);
 	try {
-		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
-		execFileSync("git", ["config", "user.email", "wiki@example.com"], {
-			cwd: root,
+		createRepoFixture(root, {
+			identity: { name: "Wiki", email: "wiki@example.com" },
+			unborn: true,
 		});
-		execFileSync("git", ["config", "user.name", "Wiki"], { cwd: root });
 		fs.writeFileSync(path.join(root, "index.md"), "base\n");
 		execFileSync("git", ["add", "."], { cwd: root });
 		execFileSync("git", ["commit", "-qm", "base"], { cwd: root });
@@ -2278,11 +2099,10 @@ test("wiki delivery skips a bundle nested in a larger repository", async () => {
 test("wiki delivery rejects a non-allowlisted remote before committing", async () => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-wiki-ext-"));
 	try {
-		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
-		execFileSync("git", ["config", "user.email", "wiki@example.com"], {
-			cwd: root,
+		createRepoFixture(root, {
+			identity: { name: "Wiki", email: "wiki@example.com" },
+			unborn: true,
 		});
-		execFileSync("git", ["config", "user.name", "Wiki"], { cwd: root });
 		fs.writeFileSync(path.join(root, "index.md"), "base\n");
 		execFileSync("git", ["add", "."], { cwd: root });
 		execFileSync("git", ["commit", "-qm", "base"], { cwd: root });
@@ -2320,22 +2140,7 @@ test("adapter baseline telemetry emits launch, delivery, stop, and failure", asy
 		path.join(os.tmpdir(), "workflow-adapter-telemetry-"),
 	);
 	try {
-		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
-		fs.writeFileSync(path.join(repo, "README.md"), "x\n");
-		execFileSync("git", ["add", "."], { cwd: repo });
-		execFileSync(
-			"git",
-			[
-				"-c",
-				"user.email=test@example.com",
-				"-c",
-				"user.name=Test",
-				"commit",
-				"-qm",
-				"base",
-			],
-			{ cwd: repo },
-		);
+		createRepoFixture(repo, { files: { "README.md": "x\n" } });
 		const registry = registerBuiltins();
 		const engine = new WorkflowEngine(registry);
 		const started = engine.start({
@@ -2821,22 +2626,7 @@ async function drainLaunchWithClassifier(options: {
 	const previousAgent = process.env.PI_CODING_AGENT_DIR;
 	let starts = 0;
 	try {
-		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
-		fs.writeFileSync(path.join(repo, "README.md"), "x\n");
-		execFileSync("git", ["add", "."], { cwd: repo });
-		execFileSync(
-			"git",
-			[
-				"-c",
-				"user.email=test@example.com",
-				"-c",
-				"user.name=Test",
-				"commit",
-				"-qm",
-				"base",
-			],
-			{ cwd: repo },
-		);
+		createRepoFixture(repo, { files: { "README.md": "x\n" } });
 		// The pinned classifier lives in the config the engine reads, and the
 		// model file makes the install "already on disk" so the stub never
 		// acquires anything.

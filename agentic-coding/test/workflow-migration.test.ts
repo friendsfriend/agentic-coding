@@ -1,6 +1,5 @@
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,11 +10,13 @@ import {
 	STORE_SCHEMA_VERSION,
 	WorkflowEngine,
 } from "../src/workflow/runtime.ts";
+import { autoRemoveRepoFixtures, createTempRepoFixture, repoPreset } from "./support/git-fixture.ts";
+
+// Sweep the repositories this file created, at the end of this file only.
+autoRemoveRepoFixtures();
 
 function repo(): string {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "legacy-"));
-	execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
-	return root;
+	return createTempRepoFixture("legacy-", repoPreset.empty);
 }
 function legacy(
 	root: string,

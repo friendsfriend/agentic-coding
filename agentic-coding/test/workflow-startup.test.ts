@@ -18,26 +18,15 @@ import {
 } from "../src/workflow/effects.ts";
 import { parseAgentsConfig } from "../src/workflow/profiles.ts";
 import { prepareWorkflowStart } from "../src/workflow/startup.ts";
+import { autoRemoveRepoFixtures, createTempRepoFixture } from "./support/git-fixture.ts";
+
+// Sweep the repositories this file created, at the end of this file only.
+autoRemoveRepoFixtures();
 
 function repository(): string {
-	const repo = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-startup-"));
-	execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
-	fs.writeFileSync(path.join(repo, "README.md"), "startup\n");
-	execFileSync("git", ["add", "."], { cwd: repo });
-	execFileSync(
-		"git",
-		[
-			"-c",
-			"user.email=test@example.com",
-			"-c",
-			"user.name=Test",
-			"commit",
-			"-qm",
-			"startup",
-		],
-		{ cwd: repo },
-	);
-	return repo;
+	return createTempRepoFixture("workflow-startup-", {
+		files: { "README.md": "startup\n" },
+	});
 }
 
 const config = `[workflow]

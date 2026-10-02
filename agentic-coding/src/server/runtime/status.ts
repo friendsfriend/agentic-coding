@@ -205,9 +205,18 @@ export class StatusManager {
 	readonly #statuses = new Map<string, OperationStatus>();
 	readonly #timers = new Map<string, ReturnType<typeof setTimeout>>();
 	private readonly now: () => Date;
+	private readonly clearAfterMs: number;
 
-	constructor(now: () => Date = () => new Date()) {
+	/** `now` and the auto-clear delay are both seams: production passes the
+	 * system clock and the documented Go delay, while a test that is about the
+	 * timer rather than the delay can use a shorter one instead of sleeping the
+	 * full two seconds. */
+	constructor(
+		now: () => Date = () => new Date(),
+		clearAfterMs: number = STATUS_CLEAR_AFTER_MS,
+	) {
 		this.now = now;
+		this.clearAfterMs = clearAfterMs;
 	}
 
 	startOperation(
@@ -233,7 +242,7 @@ export class StatusManager {
 			message,
 			timestamp: this.now().toISOString(),
 			autoClear,
-			clearAfterMs: STATUS_CLEAR_AFTER_MS,
+			clearAfterMs: this.clearAfterMs,
 		});
 		const existing = this.#timers.get(ident);
 		if (existing) {
@@ -245,7 +254,7 @@ export class StatusManager {
 			ident,
 			setTimeout(() => {
 				this.clearStatus(ident);
-			}, STATUS_CLEAR_AFTER_MS),
+			}, this.clearAfterMs),
 		);
 	}
 

@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
+import { autoRemoveRepoFixtures, createRepoFixture } from "../support/git-fixture.ts";
+
+// Sweep the repositories this file created, at the end of this file only.
+autoRemoveRepoFixtures();
 
 /**
  * Server-owned I/O and event publication (establish-opencode-boundaries,
@@ -140,22 +144,11 @@ describe("observational reads stay non-mutating (task 2.4)", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "obs-readonly-"));
 		const repo = path.join(root, "repo");
 		fs.mkdirSync(repo);
-		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
-		fs.writeFileSync(path.join(repo, "README.md"), "base\n");
-		execFileSync("git", ["add", "."], { cwd: repo });
-		execFileSync(
-			"git",
-			[
-				"-c",
-				"user.email=t@example.com",
-				"-c",
-				"user.name=t",
-				"commit",
-				"-qm",
-				"base",
-			],
-			{ cwd: repo },
-		);
+		createRepoFixture(repo, {
+			files: {
+				"README.md": "base\n",
+			},
+		});
 
 		const workflowId = "wf-readonly";
 		const read = async () => ({

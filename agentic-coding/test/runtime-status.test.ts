@@ -117,23 +117,44 @@ describe("operation status", () => {
 		expect(classify("still working")).toBe("active");
 	});
 
-	test("a terminal status auto-clears after the Go delay", async () => {
+	// The auto-clear delay is the documented Go value; the mechanism underneath
+	// is exercised with a short one so the suite does not sleep two seconds
+	// twice to prove that setTimeout works.
+	test("the documented auto-clear delay is the Go delay", () => {
+		expect(STATUS_CLEAR_AFTER_MS).toBe(2000);
+	});
+
+	test("the production constructor applies the documented delay", () => {
+		// The seam tests above inject a delay, so without this the default the
+		// server actually uses (app-services.ts constructs `new StatusManager()`)
+		// could drift from the Go parity contract with the suite still green.
 		const manager = new StatusManager();
+		const update = manager.startOperation("infra", "start");
+		update("start successful");
+		expect(manager.getStatus("infra")?.clearAfterMs).toBe(
+			STATUS_CLEAR_AFTER_MS,
+		);
+		manager.stop();
+	});
+
+	test("a terminal status auto-clears after the delay", async () => {
+		const manager = new StatusManager(() => new Date(), 20);
 		const update = manager.startOperation("infra", "start");
 		update("start successful");
 		expect(manager.isActiveOperation("infra")).toBe(false);
 		expect(manager.getFormattedStatus("infra")).toBe("start successful");
-		await Bun.sleep(STATUS_CLEAR_AFTER_MS + 50);
+		expect(manager.getStatus("infra")?.clearAfterMs).toBe(20);
+		await Bun.sleep(80);
 		expect(manager.getStatus("infra")).toBeUndefined();
 		manager.stop();
 	});
 
 	test("stop clears pending auto-clear timers", async () => {
-		const manager = new StatusManager();
+		const manager = new StatusManager(() => new Date(), 20);
 		manager.setStatus("infra", "start", "completed", "done");
 		manager.stop();
 		expect(manager.getStatus("infra")?.message).toBe("done");
-		await Bun.sleep(STATUS_CLEAR_AFTER_MS + 20);
+		await Bun.sleep(60);
 		// The timer was cancelled, so the status is still there for this process.
 		expect(manager.getStatus("infra")?.message).toBe("done");
 	});

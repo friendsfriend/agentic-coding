@@ -4,7 +4,6 @@
 // repository execution through child scopes. Mirrors the store/clock/config
 // service seams used across the workflow runtime tests.
 import { describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -22,24 +21,15 @@ import {
 	WorkflowStore,
 } from "../src/workflow/runtime/services.ts";
 import { WorkflowEngine } from "../src/workflow/runtime.ts";
+import { autoRemoveRepoFixtures, createRepoFixture, repoPreset } from "./support/git-fixture.ts";
+
+// Sweep the repositories this file created, at the end of this file only.
+autoRemoveRepoFixtures();
 
 const FIXED_NOW = "2026-01-02T00:00:00.000Z";
 
-function repository(root: string): void {
-	fs.mkdirSync(root, { recursive: true });
-	execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
-	execFileSync("git", ["config", "user.email", "test@example.com"], {
-		cwd: root,
-	});
-	execFileSync("git", ["config", "user.name", "Test"], { cwd: root });
-	fs.writeFileSync(path.join(root, "README.md"), "test\n");
-	fs.mkdirSync(path.join(root, "openspec"));
-	fs.writeFileSync(
-		path.join(root, "openspec", "config.yaml"),
-		"schema: spec-driven\n",
-	);
-	execFileSync("git", ["add", "."], { cwd: root });
-	execFileSync("git", ["commit", "-qm", "base"], { cwd: root });
+function repository(root: string): string {
+	return createRepoFixture(root, repoPreset.specDriven);
 }
 
 describe("workflow application composition roots (complete-workflow-effect-cutover)", () => {

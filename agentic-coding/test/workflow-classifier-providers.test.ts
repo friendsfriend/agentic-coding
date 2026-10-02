@@ -5,7 +5,6 @@
 // `laya-local` wire target, fail-open behavior when the local provider is
 // unavailable, and the identical answer parsing of a local response.
 import { afterEach, describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -51,6 +50,10 @@ import {
 	parseAgentsConfig,
 	resolveClassifierProvider,
 } from "../src/workflow/profiles.ts";
+import { autoRemoveRepoFixtures, createRepoFixture } from "./support/git-fixture.ts";
+
+// Sweep the repositories this file created, at the end of this file only.
+autoRemoveRepoFixtures();
 
 const temps: string[] = [];
 function tempDir(): string {
@@ -725,16 +728,7 @@ describe("fail-open with an unavailable local provider", () => {
 	 * reaches the provider, so the state must be readable to exercise that
 	 * path at all. */
 	function gitRoot(): string {
-		const root = tempDir();
-		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
-		fs.writeFileSync(path.join(root, "a.txt"), "one\n");
-		execFileSync("git", ["add", "."], { cwd: root });
-		execFileSync(
-			"git",
-			["-c", "user.email=t@e", "-c", "user.name=T", "commit", "-qm", "base"],
-			{ cwd: root },
-		);
-		return root;
+		return createRepoFixture(tempDir(), { files: { "a.txt": "one\n" } });
 	}
 
 	function snapshotWith(metadata: Record<string, unknown>): WorkflowSnapshot {

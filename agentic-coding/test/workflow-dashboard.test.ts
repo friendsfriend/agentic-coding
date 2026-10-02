@@ -21,6 +21,10 @@ import {
 } from "../src/server/operations/observations.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import { canonicalStorePath, WorkflowEngine } from "../src/workflow/runtime.ts";
+import { autoRemoveRepoFixtures, createRepoFixture } from "./support/git-fixture.ts";
+
+// Sweep the repositories this file created, at the end of this file only.
+autoRemoveRepoFixtures();
 
 function view(step = "extension.future"): WorkflowView {
 	return {
@@ -294,22 +298,11 @@ test("developer review reads authoritative workflow worktree and closed state is
 	const linked = path.join(root, "linked");
 	try {
 		fs.mkdirSync(repo);
-		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
-		fs.writeFileSync(path.join(repo, "README.md"), "base\n");
-		execFileSync("git", ["add", "."], { cwd: repo });
-		execFileSync(
-			"git",
-			[
-				"-c",
-				"user.email=test@example.com",
-				"-c",
-				"user.name=Test",
-				"commit",
-				"-qm",
-				"base",
-			],
-			{ cwd: repo },
-		);
+		createRepoFixture(repo, {
+			files: {
+				"README.md": "base\n",
+			},
+		});
 		execFileSync(
 			"git",
 			["worktree", "add", "-q", "-b", "feature/review", linked],
@@ -394,22 +387,11 @@ test("catalog-backed history annotates the configured project ident", async () =
 			}),
 	});
 	try {
-		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
-		fs.writeFileSync(path.join(repo, "README.md"), "base\n");
-		execFileSync("git", ["add", "."], { cwd: repo });
-		execFileSync(
-			"git",
-			[
-				"-c",
-				"user.email=test@example.com",
-				"-c",
-				"user.name=Test",
-				"commit",
-				"-qm",
-				"base",
-			],
-			{ cwd: repo },
-		);
+		createRepoFixture(repo, {
+			files: {
+				"README.md": "base\n",
+			},
+		});
 		const base = execFileSync("git", ["rev-parse", "HEAD"], {
 			cwd: repo,
 			encoding: "utf8",

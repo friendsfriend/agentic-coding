@@ -12,6 +12,10 @@ import {
 	handleLegacyRoute,
 	type IntegrationServices,
 } from "../src/server/integrations/routes.ts";
+import { autoRemoveRepoFixtures, createRepoFixture } from "./support/git-fixture.ts";
+
+// Sweep the repositories this file created, at the end of this file only.
+autoRemoveRepoFixtures();
 
 const ORIGINAL_PATH = process.env.PATH;
 let binDir = "";
@@ -150,11 +154,10 @@ function sseEvents(
 beforeEach(() => {
 	binDir = fs.mkdtempSync(path.join(os.tmpdir(), "fake-pi-"));
 	process.env.PATH = `${binDir}:${ORIGINAL_PATH ?? ""}`;
-	repoDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ai-repo-")));
-	runGit(["init", "-q", "-b", "main"], repoDir);
-	fs.writeFileSync(path.join(repoDir, "README.md"), "hello\n");
-	runGit(["add", "README.md"], repoDir);
-	runGit(["commit", "-q", "-m", "init"], repoDir);
+	repoDir = createRepoFixture(
+		fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ai-repo-"))),
+		{ files: { "README.md": "hello\n" } },
+	);
 	runGit(["branch", "fix-login"], repoDir);
 });
 

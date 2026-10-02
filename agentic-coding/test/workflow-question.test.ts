@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,26 +10,13 @@ import {
 import { decodeSnapshot } from "../src/workflow/contracts.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import { QUESTION_WAIT_MS, WorkflowEngine } from "../src/workflow/runtime.ts";
+import { autoRemoveRepoFixtures, createRepoFixture, repoPreset } from "./support/git-fixture.ts";
+
+// Sweep the repositories this file created, at the end of this file only.
+autoRemoveRepoFixtures();
 
 function repository(root: string): string {
-	fs.mkdirSync(root, { recursive: true });
-	execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
-	fs.writeFileSync(path.join(root, "README.md"), "test\n");
-	execFileSync("git", ["add", "."], { cwd: root });
-	execFileSync(
-		"git",
-		[
-			"-c",
-			"user.email=test@example.com",
-			"-c",
-			"user.name=Test",
-			"commit",
-			"-qm",
-			"base",
-		],
-		{ cwd: root },
-	);
-	return root;
+	return createRepoFixture(root, repoPreset.readme);
 }
 const profile: ResolvedProfile = {
 	name: "test",

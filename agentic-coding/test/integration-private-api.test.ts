@@ -17,25 +17,18 @@ import {
 	LEGACY_ROUTE_OWNERSHIP,
 	legacyRouteMatch,
 } from "../src/server/integrations/routes.ts";
+import { autoRemoveRepoFixtures, createRepoFixture } from "./support/git-fixture.ts";
+
+// Sweep the repositories this file created, at the end of this file only.
+autoRemoveRepoFixtures();
 
 function tempRepo(): string {
-	const dir = fs.realpathSync(
-		fs.mkdtempSync(path.join(os.tmpdir(), "integration-repo-")),
+	return createRepoFixture(
+		fs.realpathSync(
+			fs.mkdtempSync(path.join(os.tmpdir(), "integration-repo-")),
+		),
+		{ files: { "README.md": "hello\n" } },
 	);
-	Bun.spawnSync(["git", "init", "-q", "-b", "main"], { cwd: dir });
-	fs.writeFileSync(path.join(dir, "README.md"), "hello\n");
-	Bun.spawnSync(["git", "add", "README.md"], { cwd: dir });
-	Bun.spawnSync(["git", "commit", "-q", "-m", "init"], {
-		cwd: dir,
-		env: {
-			...process.env,
-			GIT_AUTHOR_NAME: "t",
-			GIT_AUTHOR_EMAIL: "t@example.com",
-			GIT_COMMITTER_NAME: "t",
-			GIT_COMMITTER_EMAIL: "t@example.com",
-		},
-	});
-	return dir;
 }
 
 function services(

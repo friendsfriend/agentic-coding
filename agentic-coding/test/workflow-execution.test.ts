@@ -40,27 +40,15 @@ import {
 	writeConcept,
 } from "../src/workflow/wiki.ts";
 import { asPort } from "./fakes.ts";
+import { autoRemoveRepoFixtures, createTempRepoFixture } from "./support/git-fixture.ts";
+
+// Sweep the repositories this file created, at the end of this file only.
+autoRemoveRepoFixtures();
 
 function initRepo(label: string): string {
-	const repo = fs.mkdtempSync(path.join(os.tmpdir(), `${label}-`));
-	execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
-	fs.writeFileSync(path.join(repo, "README.md"), "x\n");
-	fs.writeFileSync(path.join(repo, ".gitignore"), ".herdr-workflow\n");
-	execFileSync("git", ["add", "."], { cwd: repo });
-	execFileSync(
-		"git",
-		[
-			"-c",
-			"user.email=test@example.com",
-			"-c",
-			"user.name=Test",
-			"commit",
-			"-qm",
-			"base",
-		],
-		{ cwd: repo },
-	);
-	return repo;
+	return createTempRepoFixture(`${label}-`, {
+		files: { "README.md": "x\n", ".gitignore": ".herdr-workflow\n" },
+	});
 }
 
 function profile() {
@@ -391,13 +379,51 @@ test("bounded process service reports exit, timeout, cancel, and overflow distin
 	if (!Either.isLeft(timeoutOutcome)) throw new Error("expected timeout");
 	expect(timeoutOutcome.left._tag).toBe("timeout");
 
+	// The trailing descendant only has to outlive the drain window for this to
+	// prove that the service terminates the child on overflow rather than waiting
+	// for it to finish; a short one keeps the test from leaving an orphaned
+	// `sleep` behind on every run, and the elapsed assertion below is what makes
+	// the short one sufficient.
+	const overflowStartedAt = Date.now();
 	const overflowOutcome = await Effect.runPromise(
-		runProcessEffect(["sh", "-c", "yes x | head -c 100000; sleep 30"], {
+		runProcessEffect(["sh", "-c", "yes x | head -c 100000; sleep 3"], {
 			maxOutputBytes: 1024,
 		}).pipe(Effect.either),
 	);
 	if (!Either.isLeft(overflowOutcome)) throw new Error("expected overflow");
 	expect(overflowOutcome.left._tag).toBe("overflow");
+	expect(Date.now() - overflowStartedAt).toBeLessThan(2_000);
+
+	// A descendant that inherits the pipe but writes nothing is not evidence that
+	// the capture is short: the effect settles on the child's exit and the output
+	// is complete. Failing here would retry a command that already succeeded.
+	const silentDescendantStartedAt = Date.now();
+	const silentDescendant = await Effect.runPromise(
+		runProcessEffect(["sh", "-c", "echo early; sleep 3 &"]),
+	);
+	expect(silentDescendant.exitCode).toBe(0);
+	expect(silentDescendant.stdout).toBe("early\n");
+	expect(Date.now() - silentDescendantStartedAt).toBeLessThan(2_000);
+
+	// A descendant that is still *writing* when the window closes can only yield a
+	// prefix, and the callers of this service parse stdout as authoritative data
+	// (a created PR/MR URL, a changed-file list). That is reported rather than
+	// passed off as a complete read, and the effect still settles on the child's
+	// exit instead of waiting out the descendant. The trailing `sleep` is what
+	// keeps the pipe open past the window; without it EOF arrives inside the window
+	// and the same command is complete, which is the case asserted above.
+	const truncatedStartedAt = Date.now();
+	const truncated = await Effect.runPromise(
+		runProcessEffect([
+			"sh",
+			"-c",
+			"echo early; (sleep 0.1; echo late; sleep 3) &",
+		]).pipe(Effect.either),
+	);
+	if (!Either.isLeft(truncated)) throw new Error("expected a reported read");
+	expect(truncated.left._tag).toBe("overflow");
+	expect(truncated.left.detail).toContain("still being written");
+	expect(Date.now() - truncatedStartedAt).toBeLessThan(2_000);
 
 	// Interruption propagates to the real child promptly and reports cancellation
 	// (the child is killed; the reader cleanup is bounded).
@@ -413,6 +439,22 @@ test("bounded process service reports exit, timeout, cancel, and overflow distin
 	if (!Either.isLeft(cancelOutcome)) throw new Error("expected cancel");
 	expect(cancelOutcome.left._tag).toBe("canceled");
 	expect(Date.now() - startedAt).toBeLessThan(3_000);
+
+	// Cancellation outranks the state of a surviving descendant. The two are
+	// correlated by construction — the abort kills the direct child while the
+	// descendant keeps the pipe open — so an ownership abort must not be reported
+	// as retryable infrastructure and retried against a lease that is already
+	// gone.
+	const abortedController = new AbortController();
+	const abortedWithDescendant = Effect.runPromise(
+		runProcessEffect(["sh", "-c", "sleep 3 & exit 0"], {
+			signal: abortedController.signal,
+		}).pipe(Effect.either),
+	);
+	setTimeout(() => abortedController.abort(), 60);
+	const abortedOutcome = await abortedWithDescendant;
+	if (!Either.isLeft(abortedOutcome)) throw new Error("expected cancel");
+	expect(abortedOutcome.left._tag).toBe("canceled");
 });
 
 test("herdr envelope decode accepts optional shapes and rejects drift with a bounded error", () => {

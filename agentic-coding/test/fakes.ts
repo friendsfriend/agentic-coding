@@ -3,12 +3,11 @@
 // ponytail: real git in a tmp dir beats mocking diff output; upgrade to a pure
 // fake only if git-in-CI proves flaky.
 import { execFileSync } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
 import { Effect } from "effect";
 import { HerdrMultiplexer } from "../src/multiplexer/herdr/index.ts";
 import type { MultiplexerPort } from "../src/multiplexer/port.ts";
 import type { Context } from "../src/workflow/effects.ts";
+import { createRepoFixture } from "./support/git-fixture.ts";
 
 /** Present an argv-shaped Herdr CLI fake as the runtime-neutral port, with
  * instant confirmation sleeps so tests stay deterministic. */
@@ -318,21 +317,11 @@ export function makeContext(overrides: Partial<Context> = {}): Context {
 
 /** Init a git repo with an OpenSpec project and one committed base file. */
 export function initRepo(dir: string): string {
-	fs.mkdirSync(dir, { recursive: true });
-	const run = (...args: string[]) =>
-		execFileSync("git", args, { cwd: dir, encoding: "utf8" });
-	run("init", "-q", "-b", "main");
-	run("config", "user.email", "test@example.com");
-	run("config", "user.name", "Test");
-	fs.mkdirSync(path.join(dir, "openspec"), { recursive: true });
-	fs.writeFileSync(path.join(dir, "openspec", "config.yaml"), "name: test\n");
-	fs.writeFileSync(path.join(dir, "README.md"), "# test\n");
-	run("add", "-A");
-	run("commit", "-q", "-m", "base");
-	fs.mkdirSync(path.join(dir, ".git", "info"), { recursive: true });
-	fs.writeFileSync(
-		path.join(dir, ".git", "info", "exclude"),
-		"\n.herdr-workflow/\n",
-	);
-	return dir;
+	return createRepoFixture(dir, {
+		files: {
+			"README.md": "# test\n",
+			"openspec/config.yaml": "name: test\n",
+		},
+		excludeWorkflowState: true,
+	});
 }

@@ -13,13 +13,34 @@
 //
 // A test that needs a specific root still sets `AGENTIC_CODING_CONFIG_DIR` itself
 // after this preload runs.
+import { afterAll } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const configured = process.env.AGENTIC_CODING_CONFIG_DIR;
-if (!configured) {
-	process.env.AGENTIC_CODING_CONFIG_DIR = fs.mkdtempSync(
-		path.join(os.tmpdir(), "agentic-coding-test-config-"),
-	);
-}
+// Installed unconditionally, deliberately. Deciding based on the incoming value
+// inverted this preload's own contract: a shell that already exports
+// AGENTIC_CODING_CONFIG_DIR — the workflow runner exports exactly that to the
+// agents it launches, and a CI job or developer shell may too — silently kept the
+// ambient root and reinstated the 324 MB sidecar load this file exists to
+// prevent, with no test failing. A test that needs a specific root still wins, by
+// setting (or deleting) the variable itself after this preload has run, which is
+// what test/config-diagnostics.test.ts, test/backend-lifecycle.test.ts and
+// test/workflow-classifiers.test.ts already do.
+//
+// Scope note, measured rather than assumed: a hook registered by a *preload* is
+// process-scoped (it printed after the last file), whereas the same hook
+// registered by an ordinary imported module is FILE-scoped (it printed after the
+// first file that imported it — which is why test/support/git-fixture.ts owns no
+// hook at all). This file is a preload, so the sweep below runs once, at the end
+// of the process.
+const root = fs.mkdtempSync(
+	path.join(os.tmpdir(), "agentic-coding-test-config-"),
+);
+// Unswept, this leaves one directory per test process (~136 per full run) in
+// $TMPDIR, growing without bound across runs. `process.on("exit")` never runs
+// under `bun test` (measured), so the sweep has to be a test hook.
+afterAll(() => {
+	fs.rmSync(root, { recursive: true, force: true });
+});
+process.env.AGENTIC_CODING_CONFIG_DIR = root;

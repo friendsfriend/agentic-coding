@@ -165,6 +165,149 @@ test("shim still times out instead of hanging when neither timeout(1) nor gtimeo
 	}
 });
 
+/** Minimal PATH holding only the plain utilities the shim needs, so the
+ * timeout(1)/gtimeout(1) branches are deterministically skipped. */
+function minimalShimPath(
+	options: { stubFractionalSleep?: boolean } = {},
+): string {
+	const binDir = fs.mkdtempSync(
+		path.join(os.tmpdir(), "credentials-minimal-bin-"),
+	);
+	for (const utility of ["cat", "rm"]) {
+		const resolved = Bun.which(utility);
+		if (!resolved)
+			throw new Error(
+				["test environment is missing required utility:", utility].join(" "),
+			);
+		fs.symlinkSync(resolved, path.join(binDir, utility));
+	}
+	const realSleep = Bun.which("sleep");
+	if (!realSleep)
+		throw new Error("test environment is missing required utility: sleep");
+	if (options.stubFractionalSleep === true) {
+		// A platform whose sleep(1) rejects fractions, which is the only way the
+		// whole-second fallback branch runs on a machine that has a fractional
+		// sleep.
+		fs.writeFileSync(
+			path.join(binDir, "sleep"),
+			[
+				"#!/bin/sh",
+				"case $1 in *.*) exit 1 ;; esac",
+				["exec", realSleep, '"$@"'].join(" "),
+				"",
+			].join("\n"),
+			{ mode: 0o700 },
+		);
+	} else {
+		fs.symlinkSync(realSleep, path.join(binDir, "sleep"));
+	}
+	return binDir;
+}
+
+/** Read the prompt the shim published, then answer it. */
+async function answerPrompt(
+	shim: ReturnType<typeof installAskpassShim>,
+	answer: string,
+): Promise<void> {
+	const reader = await fs.promises.open(shim.requestFifo, "r");
+	await reader.readFile({ encoding: "utf8" });
+	await reader.close();
+	const writer = await fs.promises.open(shim.responseFifo, "w");
+	await writer.writeFile(answer, "utf8");
+	await writer.close();
+}
+
+test("an answer supplied promptly is picked up in well under the one-second step", async () => {
+	// The shim has no timeout(1) here, so this is the manual poller. Before the
+	// poll step was split, even an immediately-supplied answer waited out the
+	// rest of a full second, which is what made every credential round trip cost
+	// ~1s on a machine without GNU coreutils.
+	const binDir = minimalShimPath();
+	const shim = installAskpassShim();
+	const started = Date.now();
+	const proc = Bun.spawn([shim.shimPath, "Enter passphrase:"], {
+		env: {
+			AGENTIC_CODING_ASKPASS_DIR: shim.dir,
+			AGENTIC_CODING_ASKPASS_TIMEOUT: "10",
+			PATH: binDir,
+			HOME: os.homedir(),
+		},
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	try {
+		await answerPrompt(shim, "s3cret");
+		const stdout = await new Response(proc.stdout).text();
+		await proc.exited;
+		expect(stdout).toBe("s3cret");
+		expect(Date.now() - started).toBeLessThan(900);
+	} finally {
+		cleanupAskpassShim(shim);
+		fs.rmSync(binDir, { recursive: true, force: true });
+	}
+});
+
+test("the whole-second fallback still bounds a wait when sleep(1) rejects fractions", async () => {
+	const binDir = minimalShimPath({ stubFractionalSleep: true });
+	const shim = installAskpassShim();
+	const started = Date.now();
+	const proc = Bun.spawn([shim.shimPath, "Enter passphrase:"], {
+		env: {
+			AGENTIC_CODING_ASKPASS_DIR: shim.dir,
+			AGENTIC_CODING_ASKPASS_TIMEOUT: "1",
+			PATH: binDir,
+			HOME: os.homedir(),
+		},
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	try {
+		const reader = await fs.promises.open(shim.requestFifo, "r");
+		await reader.readFile({ encoding: "utf8" });
+		await reader.close();
+		const stdout = await new Response(proc.stdout).text();
+		const exitCode = await proc.exited;
+		// No answer is ever written: the fallback has to end the wait on its own.
+		expect(stdout).toBe("");
+		expect(exitCode).toBe(0);
+		// One whole-second step per increment of ten tenths, so a one-second
+		// deadline still lands near one second.
+		expect(Date.now() - started).toBeLessThan(5_000);
+	} finally {
+		cleanupAskpassShim(shim);
+		fs.rmSync(binDir, { recursive: true, force: true });
+	}
+});
+
+test("a non-integer timeout falls back to the default instead of disarming the shim", async () => {
+	// "0.5" reaches shell arithmetic. Under dash that aborted the shim before it
+	// could answer; under bash it left the deadline empty, which silently removed
+	// the only bound on a hanging credential prompt. Either way the relay must
+	// survive, so the value is validated before use.
+	const binDir = minimalShimPath();
+	const shim = installAskpassShim();
+	const proc = Bun.spawn([shim.shimPath, "Enter passphrase:"], {
+		env: {
+			AGENTIC_CODING_ASKPASS_DIR: shim.dir,
+			AGENTIC_CODING_ASKPASS_TIMEOUT: "0.5",
+			PATH: binDir,
+			HOME: os.homedir(),
+		},
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	try {
+		await answerPrompt(shim, "s3cret");
+		const stdout = await new Response(proc.stdout).text();
+		const exitCode = await proc.exited;
+		expect(exitCode).toBe(0);
+		expect(stdout).toBe("s3cret");
+	} finally {
+		cleanupAskpassShim(shim);
+		fs.rmSync(binDir, { recursive: true, force: true });
+	}
+});
+
 test("runner detects the prompt, feeds the answer, and the command completes", async () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "credentials-runner-"));
 	try {

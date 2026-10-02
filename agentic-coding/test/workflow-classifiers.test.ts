@@ -79,6 +79,10 @@ import {
 } from "../src/workflow/steps/index.ts";
 import { STEP_ROUTES } from "../src/workflow/steps/routing.ts";
 import { triageRolesFor } from "../src/workflow/steps/verification.ts";
+import { autoRemoveRepoFixtures, commitRepoFixture, createRepoFixture } from "./support/git-fixture.ts";
+
+// Sweep the repositories this file created, at the end of this file only.
+autoRemoveRepoFixtures();
 
 const temps: string[] = [];
 // The request-builder tests exercise the wire shape, not credential handling;
@@ -977,22 +981,11 @@ describe("verifier-role routing step and graph", () => {
 
 describe("verifier-role classification state", () => {
 	function changeRepo(): { root: string; base: string } {
-		const root = tempDir();
-		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
-		fs.writeFileSync(path.join(root, "a.txt"), "one\n");
-		execFileSync("git", ["add", "."], { cwd: root });
-		execFileSync(
-			"git",
-			["-c", "user.email=t@e", "-c", "user.name=T", "commit", "-qm", "base"],
-			{ cwd: root },
-		);
+		const root = createRepoFixture(tempDir(), {
+			files: { "a.txt": "one\n" },
+		});
 		fs.writeFileSync(path.join(root, "b.txt"), "two\n");
-		execFileSync("git", ["add", "."], { cwd: root });
-		execFileSync(
-			"git",
-			["-c", "user.email=t@e", "-c", "user.name=T", "commit", "-qm", "base"],
-			{ cwd: root },
-		);
+		commitRepoFixture(root);
 		return { root, base: "HEAD" };
 	}
 	function stateSnapshot(root: string, base: string): WorkflowSnapshot {
@@ -2571,27 +2564,14 @@ describe("stage gate graph (rounds + 600 tier)", () => {
 
 describe("stage gate state assembly", () => {
 	function changeRepo(): { root: string; worktree: string } {
-		const root = tempDir();
-		execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
-		fs.mkdirSync(path.join(root, "openspec", "changes", "c1"), {
-			recursive: true,
+		const root = createRepoFixture(tempDir(), {
+			files: {
+				"openspec/changes/c1/proposal.md": "## Why\nPlan it.\n",
+				"openspec/changes/c1/design.md": "D\n",
+				"a.txt": "one\n",
+				'weird"name.txt': "two\n",
+			},
 		});
-		fs.writeFileSync(
-			path.join(root, "openspec", "changes", "c1", "proposal.md"),
-			"## Why\nPlan it.\n",
-		);
-		fs.writeFileSync(
-			path.join(root, "openspec", "changes", "c1", "design.md"),
-			"D\n",
-		);
-		fs.writeFileSync(path.join(root, "a.txt"), "one\n");
-		fs.writeFileSync(path.join(root, 'weird"name.txt'), "two\n");
-		execFileSync("git", ["add", "."], { cwd: root });
-		execFileSync(
-			"git",
-			["-c", "user.email=t@e", "-c", "user.name=T", "commit", "-qm", "base"],
-			{ cwd: root },
-		);
 		const base = execFileSync("git", ["rev-parse", "HEAD"], {
 			cwd: root,
 		})

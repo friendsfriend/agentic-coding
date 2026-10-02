@@ -32,6 +32,14 @@ dir="\${AGENTIC_CODING_ASKPASS_DIR:?askpass dir required}"
 prompt="\${1:-}"
 printf '%s\\n' "$prompt" > "$dir/request.fifo" 2>/dev/null || exit 1
 timeout="\${AGENTIC_CODING_ASKPASS_TIMEOUT:-120}"
+# Every branch below feeds this value to a timeout, and the manual branch also
+# feeds it to shell arithmetic. An operator-supplied non-integer (say "0.5")
+# would abort the shim under dash or, worse, leave the manual branch's deadline
+# comparison empty — silently removing the only bound on a hanging credential
+# prompt. Fall back to the documented default instead.
+case "$timeout" in
+  ''|*[!0-9]*) timeout=120 ;;
+esac
 if command -v timeout >/dev/null 2>&1; then
   answer="$(timeout "$timeout" cat "$dir/response.fifo" 2>/dev/null || true)"
 elif command -v gtimeout >/dev/null 2>&1; then
@@ -50,14 +58,35 @@ else
   tmp="$dir/response.$$.tmp"
   cat "$dir/response.fifo" > "$tmp" 2>/dev/null &
   reader="$!"
+  # Poll in tenths where sleep(1) accepts a fraction (macOS, GNU, busybox) and
+  # in whole seconds where it does not. A fixed one-second step made even an
+  # answer supplied immediately wait out the rest of the second, so every
+  # credential round trip cost ~1s on a machine without timeout(1). The
+  # deadline is tracked in tenths so the whole-second fallback keeps comparing
+  # integers.
+  #
+  # Only the first second polls in tenths. Every iteration forks a 'sleep', so a
+  # tenth-second step for a wait that runs to its deadline would fork ten times
+  # as many children as before, on exactly the machines that take this branch
+  # (stock macOS: no timeout(1), no gtimeout). A prompt answered promptly is what
+  # the fine step is for; anything still waiting after a second has no need for
+  # sub-second resolution.
+  fine=0
+  if sleep 0.1 2>/dev/null; then fine=1; fi
+  deadline=$((timeout * 10))
   elapsed=0
   while kill -0 "$reader" 2>/dev/null; do
-    if [ "$elapsed" -ge "$timeout" ]; then
+    if [ "$elapsed" -ge "$deadline" ]; then
       kill "$reader" 2>/dev/null
       break
     fi
-    sleep 1
-    elapsed=$((elapsed + 1))
+    if [ "$fine" = "1" ] && [ "$elapsed" -lt 10 ]; then
+      sleep 0.1
+      elapsed=$((elapsed + 1))
+    else
+      sleep 1
+      elapsed=$((elapsed + 10))
+    fi
   done
   wait "$reader" 2>/dev/null
   answer="$(cat "$tmp" 2>/dev/null || true)"

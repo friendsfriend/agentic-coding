@@ -21,30 +21,15 @@ import {
 	validateWorkflowId,
 	WorkflowEngine,
 } from "../src/workflow/runtime.ts";
+import { autoRemoveRepoFixtures, createRepoFixture } from "./support/git-fixture.ts";
+
+// Sweep the repositories this file created, at the end of this file only.
+autoRemoveRepoFixtures();
 
 function repository(root: string): string {
-	fs.mkdirSync(root, { recursive: true });
-	execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
-	fs.mkdirSync(path.join(root, "openspec"));
-	fs.writeFileSync(
-		path.join(root, "openspec", "config.yaml"),
-		"schema: spec\n",
-	);
-	execFileSync("git", ["add", "."], { cwd: root });
-	execFileSync(
-		"git",
-		[
-			"-c",
-			"user.email=test@example.com",
-			"-c",
-			"user.name=Test",
-			"commit",
-			"-qm",
-			"base",
-		],
-		{ cwd: root },
-	);
-	return root;
+	return createRepoFixture(root, {
+		files: { "openspec/config.yaml": "schema: spec\n" },
+	});
 }
 function profile(name = "fake"): ResolvedProfile {
 	return {

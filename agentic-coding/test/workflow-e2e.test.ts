@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type {
 	ResolvedProfile,
@@ -14,6 +13,10 @@ import {
 	registerBuiltins,
 } from "../src/workflow/definitions.ts";
 import { WorkflowEngine } from "../src/workflow/runtime.ts";
+import { autoRemoveRepoFixtures, createTempRepoFixture, repoPreset } from "./support/git-fixture.ts";
+
+// Sweep the repositories this file created, at the end of this file only.
+autoRemoveRepoFixtures();
 
 // Replaces non-null assertions: fail loudly with a clear message instead of
 // asserting away `undefined`.
@@ -55,28 +58,7 @@ const routing: WorkflowRouting = {
 	].map((stepId) => ({ stepId, profile })),
 };
 function repo(): string {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "e2e-"));
-	execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
-	fs.mkdirSync(path.join(root, "openspec"));
-	fs.writeFileSync(
-		path.join(root, "openspec", "config.yaml"),
-		"schema: spec-driven\n",
-	);
-	execFileSync("git", ["add", "."], { cwd: root });
-	execFileSync(
-		"git",
-		[
-			"-c",
-			"user.email=test@example.com",
-			"-c",
-			"user.name=Test",
-			"commit",
-			"-qm",
-			"base",
-		],
-		{ cwd: root },
-	);
-	return root;
+	return createTempRepoFixture("e2e-", repoPreset.openspec);
 }
 function launchToken(
 	engine: WorkflowEngine,

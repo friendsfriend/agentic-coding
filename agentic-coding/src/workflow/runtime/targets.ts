@@ -37,8 +37,64 @@ export function validateChangeId(value: string): string {
 	return value;
 }
 
+/** A repository's canonical root is a pure function of its resolved path *and
+ * the directory that path currently names*, but deriving it spawns a `git
+ * rev-parse` child. The workflow runtime derives paths several times per
+ * operation (store open, path verification, view projection), so the child
+ * dominated hot paths — measured at ~66 spawns per engine-heavy test.
+ *
+ * The answer is *not* pure in the path alone: a worktree path can be removed and
+ * recreated from a different main repository, or promoted from a plain clone to a
+ * linked worktree, and the cached root would then point an operation at another
+ * repository's store — a silently wrong destination rather than an error, since
+ * `verifyCanonicalStorePath` compares two values that share this cache. So an
+ * entry is only honoured while the directory it was derived from still has the
+ * same identity, which is one `stat` against the `git` spawn the cache exists to
+ * avoid.
+ *
+ * Failures are never cached and an entry is dropped as soon as the path stops
+ * resolving, so a repository created after a failed probe is still discovered. */
+interface CachedRepository {
+	canonical: string;
+	dev: bigint | number;
+	ino: bigint | number;
+	/** Directory creation time. An inode is reused after a directory is deleted,
+	 * so identity needs a field that cannot be: a re-created directory cannot
+	 * share both an inode and a creation time with the one it replaced. Taken
+	 * from the same `stat` as the rest, so it costs nothing extra. */
+	birthtimeMs: number;
+}
+const canonicalRepositoryCache = new Map<string, CachedRepository>();
+/** Bounds the cache for long-lived processes (dashboard/server) that may see
+ * many short-lived worktrees. Eviction drops the oldest entry rather than
+ * clearing the map: a wholesale `clear()` at the limit would make every call
+ * past it re-probe, which is exactly the long-lived case the cache is for. */
+const CANONICAL_REPOSITORY_CACHE_LIMIT = 256;
+
+function dropCanonicalRepository(resolved: string): void {
+	canonicalRepositoryCache.delete(resolved);
+}
+
 export function canonicalRepository(repo: string): string {
 	const resolved = fs.realpathSync(path.resolve(repo));
+	const cached = canonicalRepositoryCache.get(resolved);
+	if (cached !== undefined) {
+		let current: fs.Stats | undefined;
+		try {
+			current = fs.statSync(resolved);
+		} catch {
+			current = undefined;
+		}
+		if (
+			current &&
+			current.dev === cached.dev &&
+			current.ino === cached.ino &&
+			current.birthtimeMs === cached.birthtimeMs
+		)
+			return cached.canonical;
+		// The path now names something else (or nothing): the memo is stale.
+		dropCanonicalRepository(resolved);
+	}
 	const result = Bun.spawnSync(
 		[
 			"git",
@@ -52,7 +108,30 @@ export function canonicalRepository(repo: string): string {
 	);
 	if (result.exitCode !== 0) throw new Error(`not a Git repository: ${repo}`);
 	const common = fs.realpathSync(result.stdout.toString().trim());
-	return path.basename(common) === ".git" ? path.dirname(common) : resolved;
+	const canonical =
+		path.basename(common) === ".git" ? path.dirname(common) : resolved;
+	// The directory can be pruned between the probe and this stat — the dashboard
+	// removes worktrees while it reads them — and an optimisation must degrade to
+	// an uncached answer, never to a thrown ENOENT that hides the root we already
+	// derived.
+	let identity: fs.Stats | undefined;
+	try {
+		identity = fs.statSync(resolved);
+	} catch {
+		identity = undefined;
+	}
+	if (!identity) return canonical;
+	if (canonicalRepositoryCache.size >= CANONICAL_REPOSITORY_CACHE_LIMIT) {
+		const oldest = canonicalRepositoryCache.keys().next();
+		if (!oldest.done) dropCanonicalRepository(oldest.value);
+	}
+	canonicalRepositoryCache.set(resolved, {
+		canonical,
+		dev: identity.dev,
+		ino: identity.ino,
+		birthtimeMs: identity.birthtimeMs,
+	});
+	return canonical;
 }
 /** Explicit locator for workflows that review the centralized wiki without a repository. */
 export const WIKI_WORKFLOW_TARGET = "wiki://centralized";

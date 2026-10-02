@@ -46,6 +46,10 @@ import {
 } from "../../src/workflow/tab-status.ts";
 import { syncAgentTabLabels } from "../../src/workflow/tab-sync.ts";
 import { asPort } from "../fakes.ts";
+import {
+	createTempRepoFixture,
+	removeRepoFixture,
+} from "../support/git-fixture.ts";
 
 function requireChange<T extends { newPath: string }>(
 	changes: T[],
@@ -60,15 +64,17 @@ const roots: string[] = [];
 const runGit = (repo: string, ...args: string[]) =>
 	execFileSync("git", args, { cwd: repo, stdio: "pipe" }).toString().trim();
 
+const fixtures: string[] = [];
+
 function fixture() {
-	const repo = mkdtempSync(join(tmpdir(), "agent-dash-data-"));
-	roots.push(repo);
-	runGit(repo, "init", "-q");
-	runGit(repo, "config", "user.email", "test@example.com");
-	runGit(repo, "config", "user.name", "Test");
-	writeFileSync(join(repo, "tracked.ts"), "const value = 1;\n");
-	runGit(repo, "add", "tracked.ts");
-	runGit(repo, "commit", "-qm", "initial");
+	// Tracked here rather than left to the module-level backstop: this file runs
+	// inside a render shard, so a sweep of every fixture in the process would
+	// delete repositories a sibling file in the same shard still owns. Each test
+	// disposes the repository it created.
+	const repo = createTempRepoFixture("agent-dash-data-", {
+		files: { "tracked.ts": "const value = 1;\n" },
+	});
+	fixtures.push(repo);
 	return repo;
 }
 
@@ -142,6 +148,7 @@ function setWorkflowWorkspace(repo: string, change: string, workspace: string) {
 afterEach(() => {
 	for (const root of roots.splice(0))
 		rmSync(root, { recursive: true, force: true });
+	for (const root of fixtures.splice(0)) removeRepoFixture(root);
 });
 
 test("workflow metadata task reaches dashboard state and request", () => {

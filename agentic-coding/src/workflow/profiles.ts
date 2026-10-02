@@ -1027,7 +1027,17 @@ export function runtimeModels(
 		runtime === "pi" ? [executable, "--list-models"] : [executable, "models"];
 	let result: ReturnType<typeof Bun.spawnSync>;
 	try {
-		result = Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe" });
+		// The environment is passed explicitly rather than inherited. Bun resolves
+		// the executable against the PATH captured at process start, so a process
+		// that prepends a directory to its own live PATH — the runner putting a
+		// tool directory first, or a test substituting a runtime stub — would
+		// otherwise spawn the binary it did not ask for, while a snapshot of the
+		// startup environment is also not what the rest of this process sees.
+		result = Bun.spawnSync(args, {
+			stdout: "pipe",
+			stderr: "pipe",
+			env: process.env as Record<string, string>,
+		});
 	} catch (error) {
 		// Missing/unrunnable executable: fail closed like a non-zero exit.
 		throw new Error(

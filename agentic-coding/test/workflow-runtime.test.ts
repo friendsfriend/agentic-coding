@@ -28,6 +28,10 @@ import {
 	wikiWorkflowDataRoot,
 } from "../src/workflow/runtime.ts";
 import { listConcepts } from "../src/workflow/wiki.ts";
+import { autoRemoveRepoFixtures, createRepoFixture, repoPreset } from "./support/git-fixture.ts";
+
+// Sweep the repositories this file created, at the end of this file only.
+autoRemoveRepoFixtures();
 
 // Replaces non-null assertions: fail loudly with a clear message instead of
 // asserting away `undefined`.
@@ -76,21 +80,7 @@ function advanceRouting(
 }
 
 function repository(root: string): string {
-	fs.mkdirSync(root, { recursive: true });
-	execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
-	execFileSync("git", ["config", "user.email", "test@example.com"], {
-		cwd: root,
-	});
-	execFileSync("git", ["config", "user.name", "Test"], { cwd: root });
-	fs.writeFileSync(path.join(root, "README.md"), "test\n");
-	fs.mkdirSync(path.join(root, "openspec"));
-	fs.writeFileSync(
-		path.join(root, "openspec", "config.yaml"),
-		"schema: spec-driven\n",
-	);
-	execFileSync("git", ["add", "."], { cwd: root });
-	execFileSync("git", ["commit", "-qm", "base"], { cwd: root });
-	return root;
+	return createRepoFixture(root, repoPreset.specDriven);
 }
 const profile: ResolvedProfile = {
 	name: "test",

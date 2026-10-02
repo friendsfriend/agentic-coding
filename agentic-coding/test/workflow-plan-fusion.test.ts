@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -14,6 +13,10 @@ import { registerBuiltins } from "../src/workflow/definitions.ts";
 import { effectRunnerTest } from "../src/workflow/effect-runner.ts";
 import { AGENT_DEFINITIONS } from "../src/workflow/embedded.generated.ts";
 import { canonicalStorePath, WorkflowEngine } from "../src/workflow/runtime.ts";
+import { autoRemoveRepoFixtures, createRepoFixture, repoPreset } from "./support/git-fixture.ts";
+
+// Sweep the repositories this file created, at the end of this file only.
+autoRemoveRepoFixtures();
 
 function requireDefined<T>(value: T | null | undefined, what: string): T {
 	if (value === undefined || value === null)
@@ -22,21 +25,7 @@ function requireDefined<T>(value: T | null | undefined, what: string): T {
 }
 
 function repository(root: string): string {
-	fs.mkdirSync(root, { recursive: true });
-	execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
-	execFileSync("git", ["config", "user.email", "test@example.com"], {
-		cwd: root,
-	});
-	execFileSync("git", ["config", "user.name", "Test"], { cwd: root });
-	fs.writeFileSync(path.join(root, "README.md"), "test\n");
-	fs.mkdirSync(path.join(root, "openspec"));
-	fs.writeFileSync(
-		path.join(root, "openspec", "config.yaml"),
-		"schema: spec-driven\n",
-	);
-	execFileSync("git", ["add", "."], { cwd: root });
-	execFileSync("git", ["commit", "-qm", "base"], { cwd: root });
-	return root;
+	return createRepoFixture(root, repoPreset.specDriven);
 }
 const tailProfile = (): ResolvedProfile => ({
 	name: "tail",
