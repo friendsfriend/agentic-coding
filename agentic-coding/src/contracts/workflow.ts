@@ -1115,6 +1115,11 @@ export interface WorkflowState {
 		profile: string;
 		model?: string;
 		paneId?: string;
+		/** `pi-durable` session identity (add-pi-durable-runtime): present only
+		 * for a durable run, so the dashboard Agents panel can open its session
+		 * view instead of focusing a (nonexistent) pane. */
+		hostSocket?: string;
+		conversationId?: string;
 		outputPath?: string;
 		outputDigest?: string;
 	}>;

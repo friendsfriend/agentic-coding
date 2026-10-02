@@ -189,6 +189,46 @@ test("loadDashboard projects the pinned runtime without fabricating a model", ()
 	expect(agent?.model).toBeUndefined();
 });
 
+test("loadDashboard surfaces a durable agent's session identity to the Agents panel", () => {
+	const repo = fixture();
+	writeState(repo);
+	const db = new Database(canonicalStorePath(repo));
+	const row = db
+		.query("SELECT id, profile_json FROM workflow_runs WHERE role=?")
+		.get("worker") as { id: string; profile_json: string };
+	// A durable route pins the profile runtime to `pi-durable` and persists the
+	// host handle the Agents panel opens the session view from.
+	db.query(
+		"UPDATE workflow_runs SET profile_json=?, handle_json=? WHERE role=?",
+	).run(
+		JSON.stringify({
+			...JSON.parse(row.profile_json),
+			runtime: "pi-durable",
+		}),
+		JSON.stringify({
+			runtime: "pi-durable",
+			name: "worker",
+			paneId: "",
+			hostSocket: join(repo, ".herdr-workflow/agent-host/host.sock"),
+			conversationId: "7",
+		}),
+		"worker",
+	);
+	db.close();
+
+	const agent = loadDashboard(repo, "review").agents.find(
+		(item) => item.role === "worker",
+	);
+	// The Agents panel opens the session view from these three fields; without
+	// them Enter on a durable row is a silent no-op (dashboard-agent-session-view).
+	expect(agent).toMatchObject({
+		runtime: "pi-durable",
+		runId: row.id,
+		hostSocket: join(repo, ".herdr-workflow/agent-host/host.sock"),
+		conversationId: "7",
+	});
+});
+
 test("loadDashboard reports an agent from its run before a pane handle exists", () => {
 	const repo = fixture();
 	writeState(repo);

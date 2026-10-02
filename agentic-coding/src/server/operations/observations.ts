@@ -1476,6 +1476,13 @@ export function loadDashboard(repo: string, workflowId: string): DashboardData {
 				findingCounts: run.role.endsWith("verifier")
 					? verifierFindingCounts(state, run.role)
 					: undefined,
+				// A durable agent hosts its own process: the Agents panel opens its
+				// session view by run id + host socket instead of focusing a pane, so
+				// the same identity the seed projection carries must survive this
+				// read too (add-pi-durable-runtime, dashboard-agent-session-view).
+				runId: run.id,
+				...(run.hostSocket ? { hostSocket: run.hostSocket } : {}),
+				...(run.conversationId ? { conversationId: run.conversationId } : {}),
 			})),
 		updated: new Date().toLocaleTimeString(),
 		health: {
