@@ -63,6 +63,29 @@ question block schema (`noul`, `choice`, `score`).
   say that is what you did. Do not look for another endpoint, and do not treat the
   limitation as a reason to skip the question.
 
+## Batching tool calls (codemode)
+
+When the `codemode` tool is available it runs JavaScript in a sandbox whose only
+capability is calling this run's own tools as `tools.<name>(args)`; `ALL_TOOLS`
+lists them. Your tools stay available directly, so codemode is for composing calls,
+not for replacing one.
+
+- Batch independent calls in one script (`Promise.allSettled`) instead of one call
+  per turn.
+- Chain a pipeline you can plan without seeing intermediate output — search, read
+  the matches, filter, summarize — in one call.
+- Filter large output inside the script and return only what you need: the matching
+  lines, a count, or a summary, so raw `grep`/`bash` output never reaches your
+  context.
+- Keep a single call direct. Writing a script for one `read` or one `grep` costs
+  more than it saves, and a plan that depends on output you have not seen is better
+  served by a direct call than by a guessed script.
+- Keep edits and writes direct: a script hides the change from the transcript, and
+  the developer review and verification read that. Report the handoff directly too,
+  never from inside a script.
+- Keep every call scoped to the repository, as above; a script can reach only the
+  tools this run was offered, so a read-only run cannot write through it.
+
 ---
 
 ## Implementation guidance

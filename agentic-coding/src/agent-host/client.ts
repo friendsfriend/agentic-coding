@@ -7,6 +7,7 @@ import fs from "node:fs";
 import net from "node:net";
 import type { HostLayout } from "./layout.ts";
 import {
+	type CatalogResponse,
 	decodeFrame,
 	type EnsureRunRequest,
 	type EnsureRunResponse,
@@ -172,6 +173,35 @@ export class HostClient {
 		if (response.type !== "submit") throw unexpected(response);
 		return response;
 	}
+	/** Apply a live model / thinking override to one run. */
+	async configureRun(
+		runId: string,
+		change: { model?: string; thinking?: string },
+	): Promise<void> {
+		const response = await sendRequest(
+			this.socketPath,
+			{
+				type: "configureRun",
+				runId,
+				...(change.model ? { model: change.model } : {}),
+				...(change.thinking ? { thinking: change.thinking } : {}),
+			},
+			this.timeoutMs,
+		);
+		if (response.type !== "ok") throw unexpected(response);
+	}
+
+	/** The models and thinking levels this host can run. */
+	async catalog(): Promise<CatalogResponse> {
+		const response = await sendRequest(
+			this.socketPath,
+			{ type: "catalog" },
+			this.timeoutMs,
+		);
+		if (response.type !== "catalog") throw unexpected(response);
+		return response;
+	}
+
 	async status(runId: string): Promise<StatusResponse> {
 		const response = await sendRequest(
 			this.socketPath,

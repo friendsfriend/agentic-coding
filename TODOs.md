@@ -1,7 +1,6 @@
 Not for agents. This is only for humans.
 
 Fixes: 
-* Test performance optimizations
 * Verfication doenst get started based on the gating.
 
 Big ones:
@@ -17,3 +16,14 @@ Small ones:
 * JEV:
   * Compaction hints
   * Use jev to block bash commands that should be blocked
+
+
+Pi durable rebuild:
+* Models are not selectable yet
+* Enter doenst work for the thinking selection
+* Improve animation for working state. Make the pulse less prominent
+* Build Workflows sidebar that shows the active workflows and lets me jump to it. -> Git panel will be removed so that no multiplexing is needed in the future.
+* Go back to tmux for spawning side apps like lazygit and nvim and so on.
+* remove multiplexing fully so that the user keeps the choice.
+* Fully migrate to pi-durable
+* Remove opencode and pi legacy support

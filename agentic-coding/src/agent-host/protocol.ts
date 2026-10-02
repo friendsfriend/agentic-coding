@@ -39,6 +39,18 @@ export interface StatusRequest {
 	readonly type: "status";
 	readonly runId: string;
 }
+/** Live model / thinking override for one run (dashboard \`/model\` and
+ * \`/thinking\`). Both fields are the same string forms \`ensureRun\` uses. */
+export interface ConfigureRunRequest {
+	readonly type: "configureRun";
+	readonly runId: string;
+	readonly model?: string;
+	readonly thinking?: string;
+}
+/** The models and thinking levels this host can run. */
+export interface CatalogRequest {
+	readonly type: "catalog";
+}
 export interface AbortRequest {
 	readonly type: "abort";
 	readonly runId: string;
@@ -63,6 +75,8 @@ export type HostRequest =
 	| EnsureRunRequest
 	| SubmitRequest
 	| StatusRequest
+	| ConfigureRunRequest
+	| CatalogRequest
 	| AbortRequest
 	| StopRunRequest
 	| ShutdownRequest
@@ -94,6 +108,14 @@ export interface StatusResponse {
 export interface OkResponse {
 	readonly type: "ok";
 }
+export interface CatalogResponse {
+	readonly type: "catalog";
+	/** `provider/modelId` for every chat model the host's catalog knows. */
+	readonly models: readonly string[];
+	readonly thinkingLevels: readonly string[];
+	/** Context window per `provider/modelId`, for the prompt's context meter. */
+	readonly contextWindows: Readonly<Record<string, number>>;
+}
 export interface ErrorResponse {
 	readonly type: "error";
 	readonly code:
@@ -116,6 +138,7 @@ export type HostResponse =
 	| EnsureRunResponse
 	| SubmitResponse
 	| StatusResponse
+	| CatalogResponse
 	| OkResponse
 	| ErrorResponse
 	| WatchFrame;

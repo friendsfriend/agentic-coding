@@ -13,10 +13,13 @@ import {
 	defineDoc,
 	Harness,
 	type JsonObject,
+	type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
+import { globalPiTools, piSettingsPath } from "../workflow/pi-tools.ts";
+import { createDurableCodemode } from "./codemode.ts";
 import { PiAuthCredentialStore } from "./credentials.ts";
 import type { HostLayout } from "./layout.ts";
 import {
@@ -29,7 +32,7 @@ import {
 	type RunStatus,
 } from "./protocol.ts";
 import type { AgentHostSettings } from "./settings.ts";
-import { attachTelemetry } from "./telemetry.ts";
+import { attachTelemetry, type EntryTiming } from "./telemetry.ts";
 import {
 	codingTools,
 	createAskJevExtension,
@@ -151,13 +154,34 @@ export class DurableHost {
 	private readonly runs = new Map<string, RunRecord>();
 	private readonly contexts = new Map<ConversationId, DurableRunContext>();
 	private readonly telemetry = new Map<ConversationId, () => void>();
+	/** Measured wall-clock timing per committed assistant entry, keyed by
+	 * conversation then entry id. In-memory: a host restart loses it. */
+	private readonly timings = new Map<
+		ConversationId,
+		Record<string, EntryTiming>
+	>();
 	private readonly watchers = new Map<net.Socket, Set<() => void>>();
 	private server: net.Server | undefined;
 	private closing = false;
 
+	/** Thinking levels pi-ai accepts, newest first for the picker. */
+	static readonly THINKING_LEVELS = [
+		"off",
+		"minimal",
+		"low",
+		"medium",
+		"high",
+		"xhigh",
+		"max",
+	] as const;
+
 	private constructor(
 		private readonly harness: Harness,
 		private readonly options: DurableHostOptions,
+		private readonly models: Models | undefined,
+		/** The durable `codemode` tool when the user's global pi settings enable
+		 * it, so a read-only run's explicit selection can still offer it. */
+		private readonly codemodeTool: ToolRegistration | undefined,
 	) {}
 
 	private log(line: string): void {
@@ -189,6 +213,15 @@ export class DurableHost {
 			),
 		);
 		registry.install(createPromptExtension(options.globalAgentDir));
+		// A durable run gets codemode only when the user's own global pi settings
+		// enable it, matching what a managed pane session inherits. It is an
+		// additional tool: the run keeps its direct tools either way.
+		const codemode = globalPiTools(piSettingsPath(options.globalAgentDir)).some(
+			(tool) => tool.tool === "codemode",
+		)
+			? createDurableCodemode()
+			: undefined;
+		if (codemode) registry.install(codemode.extension);
 		const models =
 			options.models ??
 			withDurableSession(
@@ -231,7 +264,7 @@ export class DurableHost {
 			context,
 		);
 		harness.resume();
-		const instance = new DurableHost(harness, options);
+		const instance = new DurableHost(harness, options, models, codemode?.tool);
 		host.instance = instance;
 		return instance;
 	}
@@ -304,6 +337,13 @@ export class DurableHost {
 						telemetryPath: envVars.HERDR_TELEMETRY_PATH,
 						captureContent: envVars.HERDR_CAPTURE_CONTENT === "1",
 					},
+					(entryId, timing) => {
+						const existing = this.timings.get(conversation.id) ?? {};
+						this.timings.set(conversation.id, {
+							...existing,
+							[entryId]: timing,
+						});
+					},
 				);
 				this.telemetry.set(conversation.id, stop);
 			} catch {
@@ -315,7 +355,12 @@ export class DurableHost {
 	}
 
 	private readOnlyToolSelection() {
-		return [...codingTools(true)];
+		// codemode stays offered to a read-only run (its script can only reach the
+		// tools this selection names, so `write`/`edit` remain unreachable).
+		return [
+			...codingTools(true),
+			...(this.codemodeTool ? [this.codemodeTool] : []),
+		];
 	}
 
 	/** Test-only: the committed transcript entries of one run's conversation.
@@ -394,6 +439,51 @@ export class DurableHost {
 		}
 	}
 
+	/** Apply a live model / thinking override to one run's conversation
+	 * (dashboard \`/model\` and \`/thinking\`). The change lands in \`pi.agent\`, so the
+	 * next generation uses it and every watcher sees it. */
+	async configureRun(
+		runId: string,
+		change: { model?: string; thinking?: string },
+	): Promise<void> {
+		const record = this.requireConversation(runId);
+		const conversation = await this.harness.conversation(
+			record.conversationId,
+			BACKGROUND_CONTEXT,
+		);
+		if (!conversation) throw new Error(`conversation gone for run: ${runId}`);
+		await conversation.configure(
+			{
+				...(change.model ? { model: parseModelRef(change.model) } : {}),
+				...(change.thinking ? { thinkingLevel: change.thinking as never } : {}),
+			},
+			BACKGROUND_CONTEXT,
+		);
+	}
+
+	/** Every chat model this host's catalog knows, as `provider/modelId`, plus
+	 * each model's context window so a client can show a context meter. */
+	catalog(): {
+		models: string[];
+		thinkingLevels: string[];
+		contextWindows: Record<string, number>;
+	} {
+		const all = this.models?.getModels() ?? [];
+		const models = [
+			...new Set(all.map((model) => `${model.provider}/${model.id}`)),
+		].sort();
+		const contextWindows: Record<string, number> = {};
+		for (const model of all) {
+			if (typeof model.contextWindow === "number")
+				contextWindows[`${model.provider}/${model.id}`] = model.contextWindow;
+		}
+		return {
+			models,
+			thinkingLevels: [...DurableHost.THINKING_LEVELS],
+			contextWindows,
+		};
+	}
+
 	async abort(runId: string): Promise<void> {
 		const record = this.runs.get(runId);
 		if (!record) return;
@@ -414,6 +504,7 @@ export class DurableHost {
 		await conversation?.abort(BACKGROUND_CONTEXT);
 		this.runs.delete(runId);
 		this.contexts.delete(record.conversationId);
+		this.timings.delete(record.conversationId);
 	}
 
 	async watchRun(
@@ -428,8 +519,14 @@ export class DurableHost {
 		);
 		if (!conversation) throw new Error(`conversation gone for run: ${runId}`);
 		const state = await conversation.viewState(BACKGROUND_CONTEXT);
-		onValue(state.value);
-		const unsubscribe = state.subscribe((value) => onValue(value));
+		// The measured timings travel with the conversation view, the only place
+		// the dashboard can read them (pi-durable stores no timing itself).
+		const augment = (value: unknown) => ({
+			...(value as Record<string, unknown>),
+			timings: this.timings.get(record.conversationId) ?? {},
+		});
+		onValue(augment(state.value));
+		const unsubscribe = state.subscribe((value) => onValue(augment(value)));
 		return () => {
 			unsubscribe();
 			state.dispose();
@@ -587,6 +684,23 @@ export class DurableHost {
 				case "status": {
 					const result = await this.status(request.runId);
 					send({ type: "status", runId: request.runId, ...result });
+					return;
+				}
+				case "configureRun":
+					await this.configureRun(request.runId, {
+						...(request.model ? { model: request.model } : {}),
+						...(request.thinking ? { thinking: request.thinking } : {}),
+					});
+					send({ type: "ok" });
+					return;
+				case "catalog": {
+					const catalog = this.catalog();
+					send({
+						type: "catalog",
+						models: catalog.models,
+						thinkingLevels: catalog.thinkingLevels,
+						contextWindows: catalog.contextWindows,
+					});
 					return;
 				}
 				case "abort":

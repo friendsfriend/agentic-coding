@@ -84,6 +84,22 @@ const workerRelativePath = path
 	.relative(root, parserWorker)
 	.replaceAll("\\", "/");
 
+// The durable codemode sandbox runs its script in a worker with its own QuickJS
+// wasm instance. Both must be embedded: a compiled binary has no node_modules,
+// so the package's own worker/wasm resolution cannot find them at run time. The
+// wasm is embedded by the `with { type: "file" }` import in
+// `src/agent-host/codemode-assets.ts`; the worker needs its own entrypoint and
+// the `$bunfs` specifier the sandbox is handed as `workerUrl`.
+const codemodeWorker = fs.realpathSync(
+	path.join(
+		root,
+		"node_modules/@earendil-works/pi-codemode/dist/runtime/worker.js",
+	),
+);
+const codemodeWorkerRelativePath = path
+	.relative(root, codemodeWorker)
+	.replaceAll("\\", "/");
+
 await Bun.build({
 	tsconfig: "./tsconfig.json",
 	plugins: [solidPlugin],
@@ -99,10 +115,13 @@ await Bun.build({
 			"--",
 		],
 	},
-	entrypoints: ["./src/cli.ts", parserWorker],
+	entrypoints: ["./src/cli.ts", parserWorker, codemodeWorker],
 	define: {
 		AGENTIC_CODING_VERSION: `'${appVersion}'`,
 		OTUI_TREE_SITTER_WORKER_PATH: bunfsRoot + workerRelativePath,
+		PI_CODEMODE_WORKER_PATH: JSON.stringify(
+			bunfsRoot + codemodeWorkerRelativePath,
+		),
 	},
 });
 

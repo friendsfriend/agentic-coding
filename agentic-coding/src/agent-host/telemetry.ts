@@ -69,19 +69,71 @@ function emit(
 	}
 }
 
+/** Wall-clock timing of one committed assistant entry, measured from the
+ * agent-event stream: pi-durable records no generation start/end, so this is
+ * the only source for a real duration or token rate. */
+export interface EntryTiming {
+	/** `message_start` → `message_end` for the assistant response. */
+	readonly generationMs?: number;
+	/** `thinking_start` → the first text/tool-call block (or the message end). */
+	readonly thinkingMs?: number;
+}
+
 /** Attach agent-event telemetry for one conversation; returns a stop
  * function. Best-effort: a failure to attach must never fail the run it
- * would have been observing. */
+ * would have been observing. `onTiming` additionally receives each committed
+ * assistant entry's measured wall-clock timing. */
 export async function attachTelemetry(
 	harness: Harness,
 	conversationId: ConversationId,
 	context: Context,
 	identity: TelemetryIdentity,
+	onTiming?: (entryId: string, timing: EntryTiming) => void,
 ): Promise<() => void> {
 	const stream = await watchEvents(harness, conversationId, context);
+	let generationStart: number | undefined;
+	let thinkingStart: number | undefined;
+	let thinkingMs = 0;
+	const closeThinking = (now: number) => {
+		if (thinkingStart === undefined) return;
+		thinkingMs += Math.max(0, now - thinkingStart);
+		thinkingStart = undefined;
+	};
 	const handle = (events: readonly AgentEvent[]) => {
 		for (const event of events) {
+			const now = Date.now();
 			switch (event.type) {
+				case "message_start":
+					if ((event.message as { role?: string }).role === "assistant") {
+						generationStart = now;
+						thinkingMs = 0;
+						thinkingStart = undefined;
+					}
+					break;
+				case "message_update":
+					for (const change of event.changes) {
+						if (change.type === "thinking_start") thinkingStart = now;
+						else if (
+							change.type === "text_start" ||
+							change.type === "toolcall_start"
+						)
+							closeThinking(now);
+					}
+					break;
+				case "message_end": {
+					closeThinking(now);
+					if (event.entry?.kind === "pi.assistant" && onTiming) {
+						onTiming(String(event.entry.id), {
+							...(generationStart !== undefined
+								? { generationMs: Math.max(0, now - generationStart) }
+								: {}),
+							...(thinkingMs > 0 ? { thinkingMs } : {}),
+						});
+					}
+					generationStart = undefined;
+					thinkingMs = 0;
+					break;
+				}
 				case "turn_start":
 					emit(identity, "runtime.turn_started");
 					break;

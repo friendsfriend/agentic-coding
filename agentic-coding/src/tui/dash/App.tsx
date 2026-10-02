@@ -346,19 +346,36 @@ export function App(props: {
 	const setPresetSwitcherChoices = overlays.setPresetSwitcherChoices;
 	const agentSession = overlays.agentSession;
 	const setAgentSession = overlays.setAgentSession;
-	const setAgentSessionStatusLines = overlays.setAgentSessionStatusLines;
+	const setAgentSessionBlocks = overlays.setAgentSessionBlocks;
+	const setAgentSessionMetadata = overlays.setAgentSessionMetadata;
 	const setAgentSessionDraft = overlays.setAgentSessionDraft;
 	// Live session watch (add-pi-durable-runtime, dashboard-agent-session-view):
 	// at most one subscription at a time, torn down whenever the open session
 	// changes identity or the view closes. `HostClient` is dynamically imported
 	// so no dashboard route eagerly loads the durable-agent-host module.
 	let agentSessionStopWatch: (() => void) | undefined;
+	// The transcript scroll box, owned by the modal and scrolled by the
+	// agent-session keymap layer registered below.
+	let agentSessionScrollbox: ScrollBoxRenderable | undefined;
+	// The `/model` and `/thinking` picker catalogs, fetched once per open
+	// session from the host that will actually run the choice.
+	const agentSessionModels = overlays.agentSessionModels;
+	const setAgentSessionModels = overlays.setAgentSessionModels;
+	const agentSessionThinkingLevels = overlays.agentSessionThinkingLevels;
+	const setAgentSessionThinkingLevels = overlays.setAgentSessionThinkingLevels;
+	const setAgentSessionContextWindows = overlays.setAgentSessionContextWindows;
+	// The modal's picker key handler while a picker is open; the
+	// `agent-session-picker` keymap layer delegates to it.
+	let agentSessionPickerHandler: ((event: KeyEvent) => boolean) | undefined;
 	const closeAgentSession = () => {
 		agentSessionStopWatch?.();
 		agentSessionStopWatch = undefined;
+		agentSessionScrollbox = undefined;
+		agentSessionPickerHandler = undefined;
 		setAgentSession(undefined);
 		setAgentSessionDraft("");
-		setAgentSessionStatusLines([]);
+		setAgentSessionBlocks([]);
+		setAgentSessionMetadata({ working: false });
 		props.keymap.setData("modal.active", "none");
 	};
 	const openAgentSession = (session: {
@@ -369,21 +386,33 @@ export function App(props: {
 		agentSessionStopWatch?.();
 		agentSessionStopWatch = undefined;
 		setAgentSessionDraft("");
-		setAgentSessionStatusLines(["Connecting…"]);
+		setAgentSessionMetadata({ working: false });
+		setAgentSessionBlocks([
+			{ kind: "notice", tone: "muted", text: "Connecting…" },
+		]);
 		setAgentSession(session);
 		props.keymap.setData("modal.active", "agent-session");
 		void (async () => {
 			try {
 				const { HostClient } = await import("../../agent-host/client.ts");
-				const { renderAgentSessionSummary } = await import(
-					"./agent-session.ts"
-				);
+				const { buildAgentSessionView, readAgentSessionMetadata } =
+					await import("./agent-session.ts");
 				const client = new HostClient(session.hostSocket);
+				// The catalog is best-effort: an old host without the request just
+				// leaves the pickers empty instead of failing the session view.
+				void client
+					.catalog()
+					.then((catalog) => {
+						if (agentSession()?.runId !== session.runId) return;
+						setAgentSessionModels([...catalog.models]);
+						setAgentSessionThinkingLevels([...catalog.thinkingLevels]);
+						setAgentSessionContextWindows(catalog.contextWindows ?? {});
+					})
+					.catch(() => undefined);
 				const stop = await client.watch(session.runId, (value) => {
 					if (agentSession()?.runId !== session.runId) return;
-					setAgentSessionStatusLines(
-						renderAgentSessionSummary(value).split("\n"),
-					);
+					setAgentSessionBlocks(buildAgentSessionView(value));
+					setAgentSessionMetadata(readAgentSessionMetadata(value));
 				});
 				if (agentSession()?.runId !== session.runId) {
 					stop();
@@ -392,9 +421,14 @@ export function App(props: {
 				agentSessionStopWatch = stop;
 			} catch (error) {
 				if (agentSession()?.runId !== session.runId) return;
-				setAgentSessionStatusLines([
-					"Could not reach the agent host: " +
-						(error instanceof Error ? error.message : String(error)),
+				setAgentSessionBlocks([
+					{
+						kind: "error",
+						tone: "error",
+						text:
+							"Could not reach the agent host: " +
+							(error instanceof Error ? error.message : String(error)),
+					},
 				]);
 			}
 		})();
@@ -415,6 +449,32 @@ export function App(props: {
 			} catch (error) {
 				notify(
 					"Could not send message: " +
+						(error instanceof Error ? error.message : String(error)),
+					"error",
+				);
+			}
+		})();
+	};
+	const configureAgentSession = (change: {
+		model?: string;
+		thinking?: string;
+	}) => {
+		const session = agentSession();
+		if (!session) return;
+		void (async () => {
+			try {
+				const { HostClient } = await import("../../agent-host/client.ts");
+				const client = new HostClient(session.hostSocket);
+				await client.configureRun(session.runId, change);
+				notify(
+					change.model
+						? `Model set to ${change.model}`
+						: `Thinking level set to ${change.thinking ?? ""}`,
+					"success",
+				);
+			} catch (error) {
+				notify(
+					"Could not apply the change: " +
 						(error instanceof Error ? error.message : String(error)),
 					"error",
 				);
@@ -2351,6 +2411,68 @@ export function App(props: {
 				}),
 			),
 		});
+		// The agent session modal keeps its input focused, so scrolling binds to
+		// keys that never insert text (page/ctrl combos) rather than j/k, which
+		// the user must be able to type into a message.
+		const disposeAgentSession = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
+			name: "agent-session",
+			priority: 1000,
+			activeModal: "agent-session",
+			commands: [
+				{
+					name: "agent-session.handle",
+					run: ({ event }) => {
+						const name = event.name.toLowerCase();
+						const box = agentSessionScrollbox;
+						if (!box) return false;
+						const page = Math.max(1, Math.floor(dimensions().height / 3));
+						if (name === "pageup") box.scrollBy(-page);
+						else if (name === "pagedown") box.scrollBy(page);
+						else if (name === "u" && event.ctrl) box.scrollBy(-page);
+						else if (name === "d" && event.ctrl) box.scrollBy(page);
+						return true;
+					},
+				},
+			],
+			bindings: ["pageup", "pagedown", "ctrl+u", "ctrl+d"].map((key) => ({
+				key,
+				cmd: "agent-session.handle",
+			})),
+		});
+		// The model/thinking picker owns the keyboard while it is open (the
+		// prompt input is unfocused then), so ordinary letters are free for
+		// filtering.
+		const disposeAgentSessionPicker = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
+			name: "agent-session-picker",
+			priority: 1100,
+			activeModal: "agent-session-picker",
+			commands: [
+				{
+					name: "agent-session-picker.handle",
+					run: ({ event }) => {
+						// Only the open picker owns the keyboard. Without its handler
+						// (modal gone) the key must fall through to the dashboard
+						// layers instead of being swallowed by this letter-wide layer.
+						const handler = agentSessionPickerHandler;
+						if (!handler) return false;
+						return handler(event);
+					},
+				},
+			],
+			bindings: [
+				"j",
+				"k",
+				"up",
+				"down",
+				"enter",
+				"escape",
+				"/",
+				"backspace",
+				..."abcdefghijklmnopqrstuvwxyz".split(""),
+			].map((key) => ({ key, cmd: "agent-session-picker.handle" })),
+		});
 		const dispose = props.keymap.registerLayer({
 			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "detail",
@@ -2410,6 +2532,8 @@ export function App(props: {
 			disposePlanReview();
 			disposeFindings();
 			disposeVerdict();
+			disposeAgentSession();
+			disposeAgentSessionPicker();
 			agentSessionStopWatch?.();
 			dispose();
 		});
@@ -2477,6 +2601,27 @@ export function App(props: {
 		createEffect(() => {
 			if (!anyModalOpen()) props.keymap.setData("modal.active", "none");
 		});
+		// A closed agent session must never leave the keymap parked on one of its
+		// layers (they bind keys the dashboard also needs), so a close that raced
+		// the modal's own reset cannot swallow the dashboard keybinds.
+		createEffect(() => {
+			if (agentSession()) return;
+			const active = props.keymap.getData?.("modal.active");
+			if (active === "agent-session" || active === "agent-session-picker")
+				props.keymap.setData("modal.active", "none");
+		});
+		// The effect above only re-runs when the session state changes, so any
+		// later writer that parks the field again (a picker closing, a shell
+		// overlay restoring its saved value) would leave the dashboard's layers
+		// unreachable. Repair the field before every dispatch instead, so the very
+		// keystroke that would have been swallowed already sees the right layer.
+		const disposeAgentSessionRepair = props.keymap.intercept("key", () => {
+			if (agentSession()) return;
+			const active = props.keymap.getData?.("modal.active");
+			if (active === "agent-session" || active === "agent-session-picker")
+				props.keymap.setData("modal.active", "none");
+		});
+		onCleanup(disposeAgentSessionRepair);
 		// The credential popup opens while the dashboard is busy (delivery drain);
 		// switch the keymap to the non-busy-gated layer and restore the previous
 		// modal on resolution.
@@ -2711,9 +2856,31 @@ export function App(props: {
 					agentSession()
 						? {
 								role: agentSession()?.role ?? "",
+								models: agentSessionModels(),
+								thinkingLevels: agentSessionThinkingLevels(),
 								onSubmit: submitAgentSession,
 								onAbort: abortAgentSession,
 								onClose: closeAgentSession,
+								onConfigure: configureAgentSession,
+								onScrollBoxReady: (box: ScrollBoxRenderable) => {
+									agentSessionScrollbox = box;
+								},
+								onPickerKeyReady: (handler) => {
+									agentSessionPickerHandler = handler;
+								},
+								onPickerActiveChange: (active) => {
+									// A picker closing after the session was hidden must not
+									// re-park the keymap on an agent-session layer; the
+									// dashboard only regains its keys at "none".
+									props.keymap.setData(
+										"modal.active",
+										agentSession()
+											? active
+												? "agent-session-picker"
+												: "agent-session"
+											: "none",
+									);
+								},
 							}
 						: undefined
 				}

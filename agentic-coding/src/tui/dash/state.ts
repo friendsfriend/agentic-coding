@@ -7,6 +7,10 @@
 // a feature modal stays props-in/callbacks-out.
 import type { KeyEvent } from "@opentui/core";
 import { createSignal, type Setter } from "solid-js";
+import type {
+	AgentSessionBlock,
+	AgentSessionMetadata,
+} from "./agent-session.ts";
 import { CHANGE_PANEL, OPENSPEC_PANEL } from "./panel-grid.ts";
 
 /** One finding row the findings overlay renders (the modal's own shape). */
@@ -209,13 +213,26 @@ export interface OverlayState {
 	readonly presetSwitcherChoices: () => PresetChoice[];
 	readonly setPresetSwitcherChoices: Setter<PresetChoice[]>;
 	/** The open durable agent session (add-pi-durable-runtime,
-	 * dashboard-agent-session-view): identity only — live status text and the
-	 * composed draft are separate, high-frequency signals so a keystroke or a
-	 * watch frame never re-creates the whole overlay value. */
+	 * dashboard-agent-session-view): identity only — the rendered transcript
+	 * blocks and the composed draft are separate, high-frequency signals so a
+	 * keystroke or a watch frame never re-creates the whole overlay value. */
 	readonly agentSession: () => AgentSessionIdentity | undefined;
 	readonly setAgentSession: Setter<AgentSessionIdentity | undefined>;
-	readonly agentSessionStatusLines: () => readonly string[];
-	readonly setAgentSessionStatusLines: Setter<readonly string[]>;
+	readonly agentSessionBlocks: () => readonly AgentSessionBlock[];
+	readonly setAgentSessionBlocks: Setter<readonly AgentSessionBlock[]>;
+	/** Model, thinking level, and working/idle state from the watch frames. */
+	readonly agentSessionMetadata: () => AgentSessionMetadata;
+	readonly setAgentSessionMetadata: Setter<AgentSessionMetadata>;
+	/** The `/model` and `/thinking` picker catalogs, from the host catalog. */
+	readonly agentSessionModels: () => readonly string[];
+	readonly setAgentSessionModels: Setter<readonly string[]>;
+	readonly agentSessionThinkingLevels: () => readonly string[];
+	readonly setAgentSessionThinkingLevels: Setter<readonly string[]>;
+	/** Context window per `provider/modelId`, for the prompt's context meter. */
+	readonly agentSessionContextWindows: () => Readonly<Record<string, number>>;
+	readonly setAgentSessionContextWindows: Setter<
+		Readonly<Record<string, number>>
+	>;
 	readonly agentSessionDraft: () => string;
 	readonly setAgentSessionDraft: Setter<string>;
 }
@@ -289,9 +306,18 @@ export function createOverlayState(options: {
 	const [costOffset, setCostOffset] = createSignal(0);
 
 	const [agentSession, setAgentSession] = createSignal<AgentSessionIdentity>();
-	const [agentSessionStatusLines, setAgentSessionStatusLines] = createSignal<
+	const [agentSessionBlocks, setAgentSessionBlocks] = createSignal<
+		readonly AgentSessionBlock[]
+	>([]);
+	const [agentSessionMetadata, setAgentSessionMetadata] =
+		createSignal<AgentSessionMetadata>({ working: false });
+	const [agentSessionModels, setAgentSessionModels] = createSignal<
 		readonly string[]
 	>([]);
+	const [agentSessionThinkingLevels, setAgentSessionThinkingLevels] =
+		createSignal<readonly string[]>([]);
+	const [agentSessionContextWindows, setAgentSessionContextWindows] =
+		createSignal<Readonly<Record<string, number>>>({});
 	const [agentSessionDraft, setAgentSessionDraft] = createSignal("");
 	return {
 		verdict,
@@ -338,8 +364,16 @@ export function createOverlayState(options: {
 		setPresetSwitcherChoices,
 		agentSession,
 		setAgentSession,
-		agentSessionStatusLines,
-		setAgentSessionStatusLines,
+		agentSessionBlocks,
+		setAgentSessionBlocks,
+		agentSessionMetadata,
+		setAgentSessionMetadata,
+		agentSessionModels,
+		setAgentSessionModels,
+		agentSessionThinkingLevels,
+		setAgentSessionThinkingLevels,
+		agentSessionContextWindows,
+		setAgentSessionContextWindows,
 		agentSessionDraft,
 		setAgentSessionDraft,
 	};

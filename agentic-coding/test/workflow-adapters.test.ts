@@ -172,6 +172,8 @@ describe("profiles, assignments, and adapters", () => {
 		expect(rendered.prompt).not.toContain("herdr_");
 		expect(rendered.prompt).toContain(`"runId": "run"`);
 		expect(rendered.prompt).toContain("each item requires unique string `id`");
+		// The workflow engine steers every role toward codemode batching.
+		expect(rendered.prompt).toContain("## Batching tool calls (codemode)");
 		const triageStep = registerBuiltins().step("core.triage");
 		const triageAssignment = {
 			...assignment("core.triage"),

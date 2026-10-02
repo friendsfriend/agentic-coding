@@ -84,6 +84,52 @@ describe("DurableHost against a faux provider and in-memory storage", () => {
 		await host.shutdown();
 	});
 
+	test("catalog lists models and configureRun applies a thinking override", async () => {
+		const dir = tempWorkflowDir();
+		const layout = hostLayout(dir);
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const host = await DurableHost.open({
+			layout,
+			settings: {},
+			globalAgentDir: dir,
+			storage: new MemoryStorage(),
+			models,
+		});
+		const modelRef = `${faux.getModel().provider}/${faux.getModel().id}`;
+		const runEnvPath = writeRunEnv(dir, {});
+		await host.ensureRun({
+			runId: "run-catalog",
+			name: "worker-catalog",
+			cwd: dir,
+			runEnvPath,
+			toolPolicy: "default",
+			model: modelRef,
+		});
+
+		const catalog = host.catalog();
+		expect(catalog.thinkingLevels).toContain("high");
+		expect(catalog.models).toContain(modelRef);
+
+		let value:
+			| { docs?: Record<string, { thinkingLevel?: string }> }
+			| undefined;
+		const stop = await host.watchRun("run-catalog", (next) => {
+			value = next as never;
+		});
+		await host.configureRun("run-catalog", { thinking: "high" });
+		for (
+			let i = 0;
+			i < 50 && value?.docs?.["pi.agent"]?.thinkingLevel !== "high";
+			i++
+		)
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(value?.docs?.["pi.agent"]?.thinkingLevel).toBe("high");
+		stop();
+		await host.shutdown();
+	});
+
 	test("a read-only run is offered read and bash only", async () => {
 		const dir = tempWorkflowDir();
 		const layout = hostLayout(dir);

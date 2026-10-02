@@ -5,6 +5,7 @@
 // (including a tool call) over the real control socket. Skipped when the
 // binary has not been built (`bun run build`), so `bun test` alone never
 // requires a prior build step.
+import { Database } from "bun:sqlite";
 import { afterEach, expect, test } from "bun:test";
 import { type ChildProcess, spawn } from "node:child_process";
 import fs from "node:fs";
@@ -72,6 +73,88 @@ test.skipIf(!fs.existsSync(BINARY))(
 		await client.shutdown();
 	},
 	15_000,
+);
+
+test.skipIf(!fs.existsSync(BINARY))(
+	"the compiled binary runs a durable codemode script (embedded wasm + worker)",
+	async () => {
+		const dir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "agent-host-compiled-codemode-"),
+		);
+		// The host resolves codemode enablement from the global pi settings.
+		const agentDir = path.join(dir, "pi-agent");
+		fs.mkdirSync(agentDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(agentDir, "settings.json"),
+			JSON.stringify({ defaultTools: ["+codemode"] }),
+		);
+		fs.writeFileSync(path.join(dir, "note.txt"), "hello from codemode");
+		const layout = hostLayout(dir);
+		child = spawn(BINARY, ["agent", "host", "--workflow-dir", dir], {
+			cwd: os.tmpdir(),
+			env: {
+				...process.env,
+				AGENT_HOST_TEST_FAUX_PROVIDER: "1",
+				PI_CODING_AGENT_DIR: agentDir,
+				AGENT_HOST_TEST_FAUX_TOOL: JSON.stringify({
+					name: "codemode",
+					args: {
+						code: 'const value = await tools.read({ path: "note.txt" }); text(value); return 7;',
+					},
+				}),
+			},
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		for (let i = 0; i < 50 && !fs.existsSync(layout.socketPath); i++)
+			await sleep(100);
+		expect(fs.existsSync(layout.socketPath)).toBe(true);
+
+		const client = new HostClient(layout.socketPath, 10_000);
+		const runEnvPath = path.join(dir, "run.env");
+		fs.writeFileSync(runEnvPath, "HERDR_RUN_ID='compiled-codemode'\n");
+		await client.ensureRun({
+			runId: "compiled-codemode",
+			cwd: dir,
+			runEnvPath,
+			name: "compiled-codemode-worker",
+			toolPolicy: "default",
+			model: "faux/faux-1",
+		});
+		await client.submit("compiled-codemode", "use codemode", "req-1");
+		let status = await client.status("compiled-codemode");
+		for (let i = 0; i < 100 && status.status !== "idle"; i++) {
+			await sleep(100);
+			status = await client.status("compiled-codemode");
+		}
+		expect(status.status).toBe("idle");
+		await client.shutdown();
+		await sleep(300);
+
+		const db = new Database(layout.storagePath);
+		const row = db
+			.query(
+				"SELECT record FROM entries WHERE record LIKE '%pi.tool-result%' AND record LIKE '%codemode%' ORDER BY id DESC LIMIT 1",
+			)
+			.get() as { record: string } | null;
+		db.close();
+		expect(row).not.toBeNull();
+		const message = (
+			JSON.parse(row?.record ?? "{}") as {
+				model?: Array<{
+					toolName?: string;
+					isError?: boolean;
+					content?: Array<{ type?: string; text?: string }>;
+				}>;
+			}
+		).model?.[0];
+		expect(message?.isError).not.toBe(true);
+		const text = (message?.content ?? [])
+			.flatMap((part) => (part.type === "text" ? [part.text] : []))
+			.join("\n");
+		expect(text).toContain("Script completed");
+		expect(text).toContain("hello from codemode");
+	},
+	30_000,
 );
 
 test.skipIf(!fs.existsSync(BINARY))(
