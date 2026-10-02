@@ -2,6 +2,7 @@ Not for agents. This is only for humans.
 
 Fixes: 
 * Test performance optimizations
+* Verfication doenst get started based on the gating.
 
 Big ones:
 * Make otel work for apps that are launched via the environment as well (Introduce Agent skill for setup)
