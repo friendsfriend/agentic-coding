@@ -83,6 +83,11 @@ function sendRequest(
  * exiting never takes the agent's work with it (durable-agent-host: "Host
  * outlives drains and the dashboard"). */
 function spawnHost(target: HostSpawn, layout: HostLayout): ChildProcess {
+	// The host creates its own runtime directory when it opens, but the client
+	// opens the host log first: on a workflow's first durable launch nothing has
+	// created `agent-host/` yet, and the spawn dies on ENOENT before the host
+	// ever starts. Same mode as `DurableHost.open`.
+	fs.mkdirSync(layout.root, { recursive: true, mode: 0o700 });
 	const out = fs.openSync(layout.logPath, "a");
 	const child = spawn(target.command, target.args, {
 		cwd: target.cwd,

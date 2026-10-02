@@ -13,6 +13,7 @@ import type {
 	AgentObservation,
 	MultiplexerPort,
 } from "../multiplexer/port.ts";
+import { selfExecEntry } from "../self-exec.ts";
 import type { RenderedAssignment } from "./assignment.ts";
 import type { JevSessionBinding } from "./classifier-runner.ts";
 import type { GlobalPiTool } from "./pi-tools.ts";
@@ -348,7 +349,6 @@ export class PiDurableAdapter implements AgentAdapter {
 				const { ensureHostRunning, HostClient } = await import(
 					"../agent-host/client.ts"
 				);
-				const { selfExecEntry } = await import("../self-exec.ts");
 				const runtimeDir = durableRuntimeDir(ctx);
 				const layout = hostLayout(runtimeDir);
 				const entry = selfExecEntry();
@@ -462,9 +462,16 @@ export class PiDurableAdapter implements AgentAdapter {
 					try {
 						const runtimeDir = path.dirname(path.dirname(handle.hostSocket));
 						const layout = hostLayout(runtimeDir);
+						const entry = selfExecEntry();
 						await ensureHostRunning(layout, {
 							command: process.execPath,
-							args: ["agent", "host", "--workflow-dir", runtimeDir],
+							args: [
+								...(entry ? [entry] : []),
+								"agent",
+								"host",
+								"--workflow-dir",
+								runtimeDir,
+							],
 							cwd: runtimeDir,
 						});
 						const retried = await new HostClient(layout.socketPath).status(

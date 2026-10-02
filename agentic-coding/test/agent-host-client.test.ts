@@ -132,8 +132,10 @@ describe("HostClient over the control socket", () => {
 	});
 
 	test("ensureHostRunning fails closed when nothing ever becomes reachable", async () => {
+		// No `layout.root` up front: on a workflow's first durable launch the
+		// client is the first thing to touch the runtime directory, and the
+		// spawn must create it before opening the host log.
 		const layout = hostLayout(dir);
-		fs.mkdirSync(layout.root, { recursive: true });
 		// No server listening, and the spawn target is a command that will not
 		// produce a listening socket within the bounded attempts.
 		await expect(
@@ -143,5 +145,6 @@ describe("HostClient over the control socket", () => {
 				{ attempts: 2, delayMs: 5 },
 			),
 		).rejects.toBeInstanceOf(HostUnavailableError);
+		expect(fs.existsSync(layout.logPath)).toBe(true);
 	});
 });
