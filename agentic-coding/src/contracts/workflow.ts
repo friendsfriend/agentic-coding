@@ -122,7 +122,14 @@ export type EffectStatus =
 	| "completed"
 	| "failed"
 	| "expired";
-export type RuntimeId = "pi" | "opencode" | "opencode-v2" | (string & {});
+export type RuntimeId =
+	| "pi"
+	| "opencode"
+	| "opencode-v2"
+	// The pane-less durable agent host runtime (add-pi-durable-runtime): runs
+	// without a multiplexer pane, so `AgentHandle.paneId` is optional for it.
+	| "pi-durable"
+	| (string & {});
 export type AdapterCapability =
 	| "interactive"
 	| "prompt"
@@ -468,9 +475,23 @@ export interface WorkflowRun {
 export interface AgentHandle {
 	runtime: RuntimeId;
 	name: string;
+	// Kept required and string-typed (rather than optional) so every existing
+	// `AgentObservation`/pane-keyed caller keeps type-checking unchanged
+	// (add-pi-durable-runtime deliberately narrowed task 5.1 here: widening
+	// this to optional ripples `string | undefined` through
+	// `AgentObservation.paneId` and every stub adapter across the test suite).
+	// A `pi-durable` handle, which hosts its own process and allocates no
+	// multiplexer pane, carries the empty string; every pane-reading code path
+	// for that runtime is gated by the adapter's `hostsOwnProcess` flag before
+	// it ever reads `paneId`, so the empty string is never treated as a real
+	// pane.
 	paneId: string;
 	tabId?: string;
 	sessionId?: string;
+	/** `pi-durable` handle fields: the workflow host's control-socket path and
+	 * the conversation this run maps to. Absent for every pane-based runtime. */
+	hostSocket?: string;
+	conversationId?: string;
 }
 export interface WorkflowEffect {
 	id: string;
@@ -584,6 +605,11 @@ export interface WorkflowView {
 		tabId?: string;
 		outputPath?: string;
 		outputDigest?: string;
+		/** `pi-durable` handle fields (add-pi-durable-runtime), surfaced so the
+		 * dashboard Agents panel can open the agent session view instead of
+		 * focusing a (nonexistent) pane. Absent for every pane-based runtime. */
+		hostSocket?: string;
+		conversationId?: string;
 	}>;
 	routing: WorkflowRouting;
 	executionSettingsPreview?: WorkflowMetadata["executionSettingsPreview"];
@@ -1184,6 +1210,11 @@ export interface DashboardData {
 		cost?: number;
 		metrics?: AgentUsageMetrics;
 		findingCounts?: FindingCounts;
+		/** `pi-durable` session identity (add-pi-durable-runtime): present only
+		 * for a durable agent, so the Agents panel can open its session view. */
+		runId?: string;
+		hostSocket?: string;
+		conversationId?: string;
 	}>;
 	updated: string;
 	health: { dirty: boolean; ahead: number; behind: number; branch: string };

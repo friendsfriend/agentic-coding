@@ -24,12 +24,24 @@ import {
 	runtimeModels,
 } from "../data/agents.ts";
 
-export const RUNTIMES = ["pi", "opencode", "opencode-v2"] as const;
+export const RUNTIMES = [
+	"pi",
+	"pi-durable",
+	"opencode",
+	"opencode-v2",
+] as const;
 const RUNTIME_EXECUTABLES: Record<string, string> = {
 	pi: "pi",
+	"pi-durable": "pi-durable",
 	opencode: "opencode",
 	"opencode-v2": "opencode2",
 };
+/** Runtimes that share pi's `model`/`thinking` shape (no `agent` field, a
+ * selectable thinking level): the pane-based `pi` and the pane-less
+ * `pi-durable` (add-pi-durable-runtime). */
+function hasPiShapedOptions(runtime: string): boolean {
+	return runtime === "pi" || runtime === "pi-durable";
+}
 const THINKING_LEVELS = ["", "minimal", "low", "medium", "high"];
 
 export type AgentListKind = "profiles" | "presets";
@@ -163,16 +175,16 @@ export function profileFields(draft: ProfileDraft): FormField[] {
 					kind: "text",
 				},
 	);
-	if (draft.runtime !== "pi")
+	if (!hasPiShapedOptions(draft.runtime))
 		fields.push({
 			key: "agent",
 			label: "Agent name (optional)",
 			kind: "text",
 		});
-	if (draft.runtime === "pi")
+	if (hasPiShapedOptions(draft.runtime))
 		fields.push({
 			key: "thinking",
-			label: "Thinking level (Pi only)",
+			label: "Thinking level (Pi / pi-durable only)",
 			kind: "select",
 			options: [...THINKING_LEVELS],
 		});

@@ -1667,7 +1667,13 @@ export function agentEffectHandlers(
 							runDirectory,
 						),
 					);
-					const pane = yield* p(() => options.paneForRun(run.id));
+					// A runtime that hosts its own process (`pi-durable`, durable-agent-
+					// host D4) never allocates a multiplexer pane: `paneId` stays empty
+					// and `owned` stays false so a failed launch never attempts to close
+					// a pane that was never opened.
+					const pane = adapter.hostsOwnProcess
+						? { paneId: "", owned: false as const }
+						: yield* p(() => options.paneForRun(run.id));
 					if (!live(effect)) return { cancelled: true };
 					// The in-session Jev tool is offered to every pi run, whether or not the
 					// file-signal sweep is enabled: it is a general tool the agent drives,
@@ -1682,11 +1688,16 @@ export function agentEffectHandlers(
 					// answer nothing. An unreadable configuration is no binding either — the
 					// launch path must never fail because of the optional tool.
 					const pi = run.profile.runtime === "pi";
+					// The in-session Jev tool is native in the durable host too
+					// (durable-agent-tools: "In-session judgment tool"), so a durable
+					// run proactively starts the local sidecar the same way a pi run
+					// does.
+					const durable = run.profile.runtime === "pi-durable";
 					let jev: JevSessionBinding | undefined;
 					try {
 						const agents = loadClassifierAgents(snapshot);
 						const pinned = pinnedClassifierProvider(snapshot);
-						if (pi && jevUsesLocalSidecar(agents, pinned))
+						if ((pi || durable) && jevUsesLocalSidecar(agents, pinned))
 							yield* p(() => ensureLocalClassifierRunning(signal)).pipe(
 								// A sidecar that cannot start — or does not settle within the
 								// classifier's own start bound — leaves the run exactly as it
@@ -1707,10 +1718,17 @@ export function agentEffectHandlers(
 						...(runDirectory ? { runDirectory } : {}),
 						name,
 						environment: assignment.environment,
-						bridgePath:
-							run.profile.runtime === "pi"
-								? `${assetRoot}/bridges/pi-telemetry.ts`
-								: `${assetRoot}/bridges/${run.profile.runtime === "opencode-v2" ? "opencode-v2" : "opencode"}-telemetry.js`,
+						// A runtime that hosts its own process emits telemetry natively
+						// from durable hooks (durable-agent-tools: "Runtime telemetry
+						// envelopes") instead of through a loaded bridge script.
+						...(adapter.hostsOwnProcess
+							? {}
+							: {
+									bridgePath:
+										run.profile.runtime === "pi"
+											? `${assetRoot}/bridges/pi-telemetry.ts`
+											: `${assetRoot}/bridges/${run.profile.runtime === "opencode-v2" ? "opencode-v2" : "opencode"}-telemetry.js`,
+								}),
 						...piLaunchAssets(run.profile.runtime, assetRoot),
 						...(pi ? { globalTools: globalPiTools() } : {}),
 						...(jev ? { jev } : {}),

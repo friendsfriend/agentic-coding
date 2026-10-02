@@ -157,6 +157,13 @@ export function classifySourcePath(relPath: string): SourceLayer | null {
 		return "domain";
 	if (RUNTIME_FILES.includes(relPath)) return "runtime";
 	if (relPath.startsWith("workflow/runtime/")) return "runtime";
+	// The durable agent host (add-pi-durable-runtime): `client.ts`/`protocol.ts`
+	// are the boundary the workflow/dashboard layers may depend on; `host.ts`/
+	// `tools.ts`/`credentials.ts`/`host-main.ts` carry the pi-durable/pi-ai
+	// imports and are reached only through the CLI's lazy `agent host` import
+	// (a dynamic `await import()`, so it is not a static edge this checker
+	// tracks), never a static import from a workflow/dashboard module.
+	if (relPath.startsWith("agent-host/")) return "runtime";
 	if (APPLICATION_FILES.includes(relPath)) return "application";
 	if (relPath.startsWith("workflow/cli/") || relPath === "workflow/cli.ts")
 		return "cli";

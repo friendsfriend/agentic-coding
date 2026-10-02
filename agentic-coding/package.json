@@ -25,6 +25,10 @@
 		"lint:boundaries": "bun test test/workflow-source-layer-boundaries.test.ts test/contracts/boundaries.test.ts test/data/boundaries.test.ts test/dash/viewIsolation.test.ts test/ui/packageBoundaries.test.ts"
 	},
 	"dependencies": {
+		"@earendil-works/chord": "1.0.0",
+		"@earendil-works/pi-ai": "1.0.0",
+		"@earendil-works/pi-coding-agent": "1.0.0",
+		"@earendil-works/pi-durable": "1.0.0",
 		"@grpc/grpc-js": "^1.14.5",
 		"@grpc/proto-loader": "^0.8.1",
 		"@opentui/core": "0.5.12",

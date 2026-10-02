@@ -125,7 +125,24 @@ script it writes may reach every active `direct` tool plus every registered
 
 `ask_jev` and the question tools are pi-only: `opencode` and `opencode-v2` runs
 have no equivalent extension, so a route that resolves to one of them starts
-without them (a pre-existing gap, not a regression).
+without them (a pre-existing gap, not a regression). `pi-durable` carries its
+own native equivalents (`src/agent-host/tools.ts`), not this pi-extension
+mechanism.
+
+## `agentHost` (durable agent host settings)
+
+`pi-durable` runs read their default provider/model/thinking level,
+compaction, retry, and steering/follow-up mode from an `agentHost` section of
+the application configuration, resolved by `src/agent-host/settings.ts` and
+seeded once by `src/agent-host/host-main.ts`. The section is absent by
+default; the first `pi-durable` use seeds it from the matching keys of the
+global pi `settings.json` (`defaultProvider`, `defaultModel`,
+`defaultThinkingLevel`) and persists the seeded value into the configuration
+file, after which it is never overwritten by a later change to the global
+default — the same "seed once, then owned" pattern `config-root.ts` uses for
+the configuration root itself. No credential value is ever part of this
+section: provider auth is read live from `~/.pi/agent/auth.json` through
+`src/agent-host/credentials.ts`'s `PiAuthCredentialStore`, never copied.
 
 ## Credentials
 

@@ -10,7 +10,11 @@ import {
 import { decodeSnapshot } from "../src/workflow/contracts.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import { QUESTION_WAIT_MS, WorkflowEngine } from "../src/workflow/runtime.ts";
-import { autoRemoveRepoFixtures, createRepoFixture, repoPreset } from "./support/git-fixture.ts";
+import {
+	autoRemoveRepoFixtures,
+	createRepoFixture,
+	repoPreset,
+} from "./support/git-fixture.ts";
 
 // Sweep the repositories this file created, at the end of this file only.
 autoRemoveRepoFixtures();

@@ -184,6 +184,12 @@ export function view(
 				...(run.profile.model ? { model: run.profile.model } : {}),
 				...(run.handle?.paneId ? { paneId: run.handle.paneId } : {}),
 				...(run.handle?.tabId ? { tabId: run.handle.tabId } : {}),
+				...(run.handle?.hostSocket
+					? { hostSocket: run.handle.hostSocket }
+					: {}),
+				...(run.handle?.conversationId
+					? { conversationId: run.handle.conversationId }
+					: {}),
 				...(run.outputPath ? { outputPath: run.outputPath } : {}),
 				...(run.outputDigest ? { outputDigest: run.outputDigest } : {}),
 			})),

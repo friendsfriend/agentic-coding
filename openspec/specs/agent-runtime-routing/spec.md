@@ -55,7 +55,16 @@ Each agent step SHALL declare required runtime capabilities and routing SHALL fa
 - **AND** agent SHALL NOT launch with weaker policy
 
 ### Requirement: Pi, OpenCode, and OpenCode V2 adapters
-The system SHALL provide adapters for Pi, stable OpenCode `opencode`, and official OpenCode V2 beta `opencode2`, all using the selected multiplexer's managed agent lifecycle and common assignment/handoff protocol.
+The system SHALL provide adapters for the bundled durable runtime `pi-durable`, Pi, stable OpenCode `opencode`, and official OpenCode V2 beta `opencode2`, all using the common assignment/handoff protocol. Pi, OpenCode and OpenCode V2 SHALL use the selected multiplexer's managed agent lifecycle. `pi-durable` SHALL run in the workflow's bundled durable host without allocating a multiplexer pane.
+
+#### Scenario: Pi durable run launches
+- **WHEN** run routes to a `pi-durable` profile
+- **THEN** engine SHALL ensure the workflow's durable host is running, create or reuse the run's conversation, and submit the rendered assignment with an idempotent request id
+- **AND** no multiplexer pane SHALL be created for the run
+
+#### Scenario: Pi durable run observed after host crash
+- **WHEN** the engine observes a `pi-durable` run whose host is not running
+- **THEN** the adapter SHALL restart the host over the existing storage so the run resumes before reporting status
 
 #### Scenario: Pi run launches
 - **WHEN** run routes to Pi profile and Pi is installed
@@ -78,7 +87,7 @@ The system SHALL provide adapters for Pi, stable OpenCode `opencode`, and offici
 - **AND** engine SHALL NOT install executable automatically
 
 #### Scenario: Selected multiplexer is unavailable
-- **WHEN** the selected multiplexer runtime cannot be reached while routing an agent step
+- **WHEN** the selected multiplexer runtime cannot be reached while routing a Pi, OpenCode, or OpenCode V2 agent step
 - **THEN** the launch SHALL fail with a diagnostic naming the selected runtime
 - **AND** the engine SHALL NOT launch the agent through another multiplexer
 
@@ -91,7 +100,7 @@ Agent launch or execution failure SHALL NOT silently switch profile, runtime, mo
 - **AND** alternate runtime SHALL require explicit configured retry policy or validated operator repair
 
 ### Requirement: Model availability preflight
-At workflow start, the system SHALL validate that each routed profile's configured model is offered by the profile's execution environment, using the runtime CLI's model enumeration. Validation SHALL run during start-time routing preflight before any agent launches.
+At workflow start, the system SHALL validate that each routed profile's configured model is offered by the profile's execution environment, using the runtime CLI's model enumeration, or for `pi-durable` the bundled model runtime's enumeration of available models. Validation SHALL run during start-time routing preflight before any agent launches.
 
 #### Scenario: Configured model is unavailable
 - **WHEN** a routed profile names a model that the runtime's model enumeration does not include
@@ -99,12 +108,16 @@ At workflow start, the system SHALL validate that each routed profile's configur
 - **AND** the error SHALL identify the profile, the runtime, the invalid model, and reference the available models
 
 #### Scenario: Model with thinking suffix on pi
-- **WHEN** a pi profile's model carries a `:<thinking>` suffix whose base id is available
+- **WHEN** a pi or `pi-durable` profile's model carries a `:<thinking>` suffix whose base id is available
 - **THEN** the model SHALL pass availability validation
 
+#### Scenario: Durable model enumeration
+- **WHEN** a `pi-durable` profile names a model available through the user's global pi credentials
+- **THEN** preflight SHALL pass without invoking any external executable
+
 #### Scenario: Runtime model enumeration fails
-- **WHEN** the runtime CLI cannot enumerate its models during preflight
-- **THEN** workflow startup SHALL fail closed with the underlying command error rather than starting agents unvalidated
+- **WHEN** the runtime CLI or bundled model runtime cannot enumerate its models during preflight
+- **THEN** workflow startup SHALL fail closed with the underlying error rather than starting agents unvalidated
 
 ### Requirement: Repository-scoped configuration context
 Workflow startup and related configuration reads/edits SHALL resolve project overlays from an explicit selected canonical repository context, not the host process working directory. Configuration provenance SHALL identify the effective sources. An explicit HERDR_WORKFLOW_CONFIG replacement SHALL retain precedence over user defaults and project overlays.

@@ -18,7 +18,10 @@ import {
 } from "../src/workflow/effects.ts";
 import { parseAgentsConfig } from "../src/workflow/profiles.ts";
 import { prepareWorkflowStart } from "../src/workflow/startup.ts";
-import { autoRemoveRepoFixtures, createTempRepoFixture } from "./support/git-fixture.ts";
+import {
+	autoRemoveRepoFixtures,
+	createTempRepoFixture,
+} from "./support/git-fixture.ts";
 
 // Sweep the repositories this file created, at the end of this file only.
 autoRemoveRepoFixtures();

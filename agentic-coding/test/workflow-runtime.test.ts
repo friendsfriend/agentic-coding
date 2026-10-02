@@ -28,7 +28,11 @@ import {
 	wikiWorkflowDataRoot,
 } from "../src/workflow/runtime.ts";
 import { listConcepts } from "../src/workflow/wiki.ts";
-import { autoRemoveRepoFixtures, createRepoFixture, repoPreset } from "./support/git-fixture.ts";
+import {
+	autoRemoveRepoFixtures,
+	createRepoFixture,
+	repoPreset,
+} from "./support/git-fixture.ts";
 
 // Sweep the repositories this file created, at the end of this file only.
 autoRemoveRepoFixtures();

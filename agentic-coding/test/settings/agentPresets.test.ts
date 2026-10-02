@@ -76,7 +76,7 @@ beforeAll(() => {
 		["opencode2", ["stub/opencode-two"]],
 	];
 	for (const [name, lines] of listings) {
-		const commands = lines.map((line) => "echo '" + line + "'");
+		const commands = lines.map((line) => `echo '${line}'`);
 		fs.writeFileSync(
 			path.join(runtimeBin, name),
 			["#!/bin/sh", ...commands].join("\n"),

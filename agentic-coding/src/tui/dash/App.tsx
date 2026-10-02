@@ -344,6 +344,101 @@ export function App(props: {
 	const setPresetSwitcherHandler = overlays.setPresetSwitcherHandler;
 	const presetSwitcherChoices = overlays.presetSwitcherChoices;
 	const setPresetSwitcherChoices = overlays.setPresetSwitcherChoices;
+	const agentSession = overlays.agentSession;
+	const setAgentSession = overlays.setAgentSession;
+	const setAgentSessionStatusLines = overlays.setAgentSessionStatusLines;
+	const setAgentSessionDraft = overlays.setAgentSessionDraft;
+	// Live session watch (add-pi-durable-runtime, dashboard-agent-session-view):
+	// at most one subscription at a time, torn down whenever the open session
+	// changes identity or the view closes. `HostClient` is dynamically imported
+	// so no dashboard route eagerly loads the durable-agent-host module.
+	let agentSessionStopWatch: (() => void) | undefined;
+	const closeAgentSession = () => {
+		agentSessionStopWatch?.();
+		agentSessionStopWatch = undefined;
+		setAgentSession(undefined);
+		setAgentSessionDraft("");
+		setAgentSessionStatusLines([]);
+		props.keymap.setData("modal.active", "none");
+	};
+	const openAgentSession = (session: {
+		role: string;
+		runId: string;
+		hostSocket: string;
+	}) => {
+		agentSessionStopWatch?.();
+		agentSessionStopWatch = undefined;
+		setAgentSessionDraft("");
+		setAgentSessionStatusLines(["Connecting…"]);
+		setAgentSession(session);
+		props.keymap.setData("modal.active", "agent-session");
+		void (async () => {
+			try {
+				const { HostClient } = await import("../../agent-host/client.ts");
+				const { renderAgentSessionSummary } = await import(
+					"./agent-session.ts"
+				);
+				const client = new HostClient(session.hostSocket);
+				const stop = await client.watch(session.runId, (value) => {
+					if (agentSession()?.runId !== session.runId) return;
+					setAgentSessionStatusLines(
+						renderAgentSessionSummary(value).split("\n"),
+					);
+				});
+				if (agentSession()?.runId !== session.runId) {
+					stop();
+					return;
+				}
+				agentSessionStopWatch = stop;
+			} catch (error) {
+				if (agentSession()?.runId !== session.runId) return;
+				setAgentSessionStatusLines([
+					"Could not reach the agent host: " +
+						(error instanceof Error ? error.message : String(error)),
+				]);
+			}
+		})();
+	};
+	const submitAgentSession = (text: string) => {
+		const session = agentSession();
+		if (!session) return;
+		void (async () => {
+			try {
+				const { HostClient } = await import("../../agent-host/client.ts");
+				const client = new HostClient(session.hostSocket);
+				await client.submit(
+					session.runId,
+					text,
+					crypto.randomUUID(),
+					"followUp",
+				);
+			} catch (error) {
+				notify(
+					"Could not send message: " +
+						(error instanceof Error ? error.message : String(error)),
+					"error",
+				);
+			}
+		})();
+	};
+	const abortAgentSession = () => {
+		const session = agentSession();
+		if (!session) return;
+		void (async () => {
+			try {
+				const { HostClient } = await import("../../agent-host/client.ts");
+				const client = new HostClient(session.hostSocket);
+				await client.abort(session.runId);
+				notify("Abort requested", "info");
+			} catch (error) {
+				notify(
+					"Could not abort the run: " +
+						(error instanceof Error ? error.message : String(error)),
+					"error",
+				);
+			}
+		})();
+	};
 	const openVerifierResult = async (role: string) => {
 		setVerdictReturnToFindings(false);
 		setVerdictReturnToUserAction(false);
@@ -1353,6 +1448,7 @@ export function App(props: {
 		openVerifierResult,
 		openRequiredUserAction,
 		openPresetSwitcher,
+		openAgentSession,
 		openCost: () => setCostOpen(true),
 		openReview: (kind) =>
 			kind === "plan" ? openPlanReview() : openDeveloperReview(),
@@ -2314,6 +2410,7 @@ export function App(props: {
 			disposePlanReview();
 			disposeFindings();
 			disposeVerdict();
+			agentSessionStopWatch?.();
 			dispose();
 		});
 		// Failure diagnostics the engine attaches to a workflow are surfaced once
@@ -2373,6 +2470,7 @@ export function App(props: {
 				presetSwitcherOpen() ||
 				reviewOpen() ||
 				reviewCommentMode() ||
+				agentSession() ||
 				activeErrorModal() != null
 			);
 		// Self-heal: reconcile keymap modal data with real modal state.
@@ -2606,6 +2704,16 @@ export function App(props: {
 								title: verdict()?.title ?? "",
 								content: verdict()?.content ?? "",
 								lines: verdictLines(),
+							}
+						: undefined
+				}
+				agentSession={
+					agentSession()
+						? {
+								role: agentSession()?.role ?? "",
+								onSubmit: submitAgentSession,
+								onAbort: abortAgentSession,
+								onClose: closeAgentSession,
 							}
 						: undefined
 				}

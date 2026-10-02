@@ -11,7 +11,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { canonicalRepository } from "../src/workflow/runtime/targets.ts";
-import { autoRemoveRepoFixtures, createTempRepoFixture } from "./support/git-fixture.ts";
+import {
+	autoRemoveRepoFixtures,
+	createTempRepoFixture,
+} from "./support/git-fixture.ts";
 
 // Sweep the repositories this file created, at the end of this file only.
 autoRemoveRepoFixtures();

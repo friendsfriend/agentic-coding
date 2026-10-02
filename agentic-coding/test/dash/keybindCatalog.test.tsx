@@ -40,8 +40,12 @@ describe("keybind catalog contract", () => {
 		expect(change).toContain("Approve gate / review changed files");
 		expect(change).not.toContain("Open selected artifact");
 		expect(openspec).toContain("Open selected artifact");
-		expect(openspec).not.toContain("Focus selected agent");
-		expect(agents).toContain("Focus selected agent");
+		expect(openspec).not.toContain(
+			"Focus selected agent / open durable agent session",
+		);
+		expect(agents).toContain(
+			"Focus selected agent / open durable agent session",
+		);
 		expect(agents).toContain("View selected verifier result");
 		expect(agents).not.toContain("Approve gate / review changed files");
 	});

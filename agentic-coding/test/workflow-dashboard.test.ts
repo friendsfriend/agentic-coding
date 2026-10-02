@@ -21,7 +21,10 @@ import {
 } from "../src/server/operations/observations.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import { canonicalStorePath, WorkflowEngine } from "../src/workflow/runtime.ts";
-import { autoRemoveRepoFixtures, createRepoFixture } from "./support/git-fixture.ts";
+import {
+	autoRemoveRepoFixtures,
+	createRepoFixture,
+} from "./support/git-fixture.ts";
 
 // Sweep the repositories this file created, at the end of this file only.
 autoRemoveRepoFixtures();

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Effect } from "effect";
@@ -69,6 +70,11 @@ export interface LaunchContext {
  * down on ordinary scope exit. */
 export interface AgentAdapter {
 	readonly id: RuntimeId;
+	/** True for a runtime that hosts its own process rather than running inside
+	 * a multiplexer pane (add-pi-durable-runtime, `pi-durable`). Absent (or
+	 * false) for every pane-based runtime; the launch handler in
+	 * `effect-runner.ts` gates pane allocation/closing on it. */
+	readonly hostsOwnProcess?: boolean;
 	preflight(profile: ResolvedProfile, requirements: readonly string[]): void;
 	launch(ctx: LaunchContext): Effect.Effect<AgentHandle, Error>;
 	prompt(
@@ -307,4 +313,209 @@ export class OpenCodeV2Adapter extends BaseAdapter {
 		const withLauncher = withOpenCodeLauncher(isolatedOpenCode(ctx));
 		return launchHandle(this.lifecycle, withLauncher, "opencode", args, ctx);
 	}
+}
+
+export class PiDurableAdapter implements AgentAdapter {
+	readonly id = "pi-durable" as const;
+	/** Marks this adapter as hosting its own process (durable-agent-host D4):
+	 * the launch handler in `effect-runner.ts` skips pane allocation/closing
+	 * for it instead of every runtime needing a pane. */
+	readonly hostsOwnProcess = true as const;
+
+	preflight(profile: ResolvedProfile, requirements: readonly string[]): void {
+		if (profile.runtime !== this.id)
+			throw new Error(
+				`profile runtime ${profile.runtime} routed to ${this.id}`,
+			);
+		// No executable lookup (durable-agent-host: "preflight checks
+		// capabilities (no executable lookup)"): the host is bundled, not an
+		// external binary on PATH.
+		const missing = requirements.filter(
+			(requirement) =>
+				requirement !== "read-only" &&
+				!profile.capabilities.includes(requirement as never),
+		);
+		if (missing.length)
+			throw new Error(
+				`${this.id} lacks required policy: ${missing.join(", ")}`,
+			);
+	}
+
+	launch(ctx: LaunchContext): Effect.Effect<AgentHandle, Error> {
+		return Effect.tryPromise({
+			try: async () => {
+				const { hostLayout } = await import("../agent-host/layout.ts");
+				const { ensureHostRunning, HostClient } = await import(
+					"../agent-host/client.ts"
+				);
+				const { selfExecEntry } = await import("../self-exec.ts");
+				const runtimeDir = durableRuntimeDir(ctx);
+				const layout = hostLayout(runtimeDir);
+				const entry = selfExecEntry();
+				await ensureHostRunning(layout, {
+					command: process.execPath,
+					args: [
+						...(entry ? [entry] : []),
+						"agent",
+						"host",
+						"--workflow-dir",
+						runtimeDir,
+					],
+					cwd: ctx.cwd,
+				});
+				// No multiplexer pane shell injects the run environment for this
+				// runtime (durable-agent-host: "Per-run execution environment"), so
+				// the adapter writes the same `run.env` file a pane-based launch
+				// gets from its multiplexer `agentStart`, including the classifier
+				// binding every other runtime's launcher injects into the pane
+				// shell instead.
+				const { writeAgentRunEnv } = await import(
+					"../multiplexer/agent-env.ts"
+				);
+				const runEnvPath = writeAgentRunEnv({
+					cwd: ctx.cwd,
+					...(ctx.runDirectory ? { runDirectory: ctx.runDirectory } : {}),
+					runId: ctx.assignment.runId,
+					environment: {
+						...ctx.environment,
+						...(ctx.jev ? { AGENTIC_JEV: JSON.stringify(ctx.jev) } : {}),
+					},
+				});
+				const client = new HostClient(layout.socketPath);
+				const readOnly =
+					ctx.profile.readOnly ||
+					ctx.profile.capabilities.includes("read-only");
+				const ensured = await client.ensureRun({
+					runId: ctx.assignment.runId,
+					cwd: ctx.cwd,
+					runEnvPath,
+					name: ctx.name,
+					toolPolicy: readOnly ? "read-only" : "default",
+					...(ctx.profile.model ? { model: ctx.profile.model } : {}),
+					...(ctx.profile.thinking ? { thinking: ctx.profile.thinking } : {}),
+				});
+				await client.submit(
+					ctx.assignment.runId,
+					ctx.rendered.prompt,
+					promptRequestId(ctx.assignment.runId, ctx.rendered.prompt),
+					"followUp",
+				);
+				const handle: AgentHandle = {
+					runtime: this.id,
+					name: ctx.name,
+					paneId: "",
+					hostSocket: layout.socketPath,
+					sessionId: ctx.assignment.runId,
+					conversationId: ensured.conversationId,
+				};
+				return handle;
+			},
+			catch: toError,
+		});
+	}
+
+	prompt(
+		handle: AgentHandle,
+		message: string,
+		_signal?: AbortSignal,
+	): Effect.Effect<void, Error> {
+		return Effect.tryPromise({
+			try: async () => {
+				const runId = requireDurableRunId(handle);
+				const { HostClient } = await import("../agent-host/client.ts");
+				const client = new HostClient(requireDurableSocket(handle));
+				await client.submit(
+					runId,
+					message,
+					promptRequestId(runId, message),
+					"followUp",
+				);
+			},
+			catch: toError,
+		});
+	}
+
+	observe(
+		handle: AgentHandle,
+		_signal?: AbortSignal,
+	): Effect.Effect<AgentObservation, Error> {
+		return Effect.tryPromise({
+			try: async () => {
+				if (!handle.hostSocket || !handle.sessionId)
+					return { status: "unknown" as const, paneId: "" };
+				const { HostClient, ensureHostRunning } = await import(
+					"../agent-host/client.ts"
+				);
+				const { hostLayout } = await import("../agent-host/layout.ts");
+				const client = new HostClient(handle.hostSocket);
+				try {
+					const result = await client.status(handle.sessionId);
+					return {
+						status: result.status,
+						paneId: "",
+						...(handle.sessionId ? { sessionId: handle.sessionId } : {}),
+					};
+				} catch {
+					// One restart/resume attempt per observation before reporting
+					// unknown (durable-agent-host D4): a crashed host must not
+					// permanently block the run it was serving.
+					try {
+						const runtimeDir = path.dirname(path.dirname(handle.hostSocket));
+						const layout = hostLayout(runtimeDir);
+						await ensureHostRunning(layout, {
+							command: process.execPath,
+							args: ["agent", "host", "--workflow-dir", runtimeDir],
+							cwd: runtimeDir,
+						});
+						const retried = await new HostClient(layout.socketPath).status(
+							handle.sessionId,
+						);
+						return { status: retried.status, paneId: "" };
+					} catch {
+						return { status: "unknown" as const, paneId: "" };
+					}
+				}
+			},
+			catch: toError,
+		});
+	}
+
+	stop(handle: AgentHandle, _signal?: AbortSignal): Effect.Effect<void, Error> {
+		return Effect.tryPromise({
+			try: async () => {
+				if (!handle.hostSocket || !handle.sessionId) return;
+				const { HostClient } = await import("../agent-host/client.ts");
+				await new HostClient(handle.hostSocket).stopRun(handle.sessionId);
+			},
+			catch: toError,
+		});
+	}
+}
+
+function toError(error: unknown): Error {
+	return error instanceof Error ? error : new Error(String(error));
+}
+function durableRuntimeDir(ctx: LaunchContext): string {
+	return ctx.runDirectory ?? path.join(ctx.cwd, ".herdr-workflow");
+}
+/** A stable per-(run, message) idempotency key: a retried delivery of the same
+ * text is the same key (durable-agent-host: "Exactly-once submissions"), while
+ * genuinely new content gets a new one. `AgentAdapter.prompt` does not carry
+ * the caller's own effect idempotency key, so this is derived rather than
+ * threaded through the adapter interface. */
+function promptRequestId(runId: string, message: string): string {
+	return createHash("sha256")
+		.update(`${runId}\u0000${message}`)
+		.digest("hex")
+		.slice(0, 32);
+}
+function requireDurableRunId(handle: AgentHandle): string {
+	if (!handle.sessionId)
+		throw new Error("pi-durable handle is missing its run id");
+	return handle.sessionId;
+}
+function requireDurableSocket(handle: AgentHandle): string {
+	if (!handle.hostSocket)
+		throw new Error("pi-durable handle is missing its host socket");
+	return handle.hostSocket;
 }

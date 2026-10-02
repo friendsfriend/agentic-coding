@@ -208,6 +208,22 @@ export interface OverlayState {
 	>;
 	readonly presetSwitcherChoices: () => PresetChoice[];
 	readonly setPresetSwitcherChoices: Setter<PresetChoice[]>;
+	/** The open durable agent session (add-pi-durable-runtime,
+	 * dashboard-agent-session-view): identity only — live status text and the
+	 * composed draft are separate, high-frequency signals so a keystroke or a
+	 * watch frame never re-creates the whole overlay value. */
+	readonly agentSession: () => AgentSessionIdentity | undefined;
+	readonly setAgentSession: Setter<AgentSessionIdentity | undefined>;
+	readonly agentSessionStatusLines: () => readonly string[];
+	readonly setAgentSessionStatusLines: Setter<readonly string[]>;
+	readonly agentSessionDraft: () => string;
+	readonly setAgentSessionDraft: Setter<string>;
+}
+
+export interface AgentSessionIdentity {
+	readonly role: string;
+	readonly runId: string;
+	readonly hostSocket: string;
 }
 
 export interface RepairTarget {
@@ -271,6 +287,12 @@ export function createOverlayState(options: {
 	const [costAgent, setCostAgent] = createSignal<string | null>(null);
 
 	const [costOffset, setCostOffset] = createSignal(0);
+
+	const [agentSession, setAgentSession] = createSignal<AgentSessionIdentity>();
+	const [agentSessionStatusLines, setAgentSessionStatusLines] = createSignal<
+		readonly string[]
+	>([]);
+	const [agentSessionDraft, setAgentSessionDraft] = createSignal("");
 	return {
 		verdict,
 		setVerdict,
@@ -314,5 +336,11 @@ export function createOverlayState(options: {
 		setPresetSwitcherHandler,
 		presetSwitcherChoices,
 		setPresetSwitcherChoices,
+		agentSession,
+		setAgentSession,
+		agentSessionStatusLines,
+		setAgentSessionStatusLines,
+		agentSessionDraft,
+		setAgentSessionDraft,
 	};
 }
