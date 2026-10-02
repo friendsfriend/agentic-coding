@@ -40,7 +40,7 @@ export function AgentSessionModal(props: AgentSessionModalProps) {
 		<GenericModal
 			title={`Agent · ${props.role}`}
 			widthPercent={0.72}
-			heightPercent={0.6}
+			heightPercent={0.8}
 			fieldLabel="Session"
 			help={[
 				{ key: "Enter", action: "Send message" },
