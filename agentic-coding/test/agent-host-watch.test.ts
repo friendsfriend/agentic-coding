@@ -7,16 +7,19 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+	type AssistantMessage,
 	createModels,
 	fauxAssistantMessage,
 	fauxProvider,
 	fauxText,
 	fauxToolCall,
+	type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { HostClient } from "../src/agent-host/client.ts";
 import { DurableHost } from "../src/agent-host/host.ts";
 import { hostLayout } from "../src/agent-host/layout.ts";
+import { buildAgentSessionView } from "../src/tui/dash/agent-session.ts";
 
 function tempWorkflowDir(): string {
 	return fs.mkdtempSync(path.join(os.tmpdir(), "agent-host-watch-"));
@@ -99,6 +102,111 @@ describe("watch streams the conversation view over the control socket", () => {
 			}
 		} finally {
 			await host.shutdown();
+		}
+	});
+
+	test("busy input queues FIFO and steers at tool boundaries before the run ends", async () => {
+		const dir = tempWorkflowDir();
+		const layout = hostLayout(dir);
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const host = await DurableHost.open({
+			layout,
+			settings: {},
+			globalAgentDir: dir,
+			storage: new MemoryStorage(),
+			models,
+		});
+		const started = Promise.withResolvers<void>();
+		const firstResponse = Promise.withResolvers<AssistantMessage>();
+		const toolResponse = fauxAssistantMessage(
+			[fauxToolCall("read", { path: "input.txt" })],
+			{ stopReason: "toolUse" },
+		);
+		const requests: string[][] = [];
+		faux.setResponses([
+			async () => {
+				started.resolve();
+				return firstResponse.promise;
+			},
+			...Array.from(
+				{ length: 2 },
+				(_, index) => (context: TranscriptContext) => {
+					requests.push(
+						context.messages
+							.filter((message) => message.role === "user")
+							.map((message) =>
+								typeof message.content === "string"
+									? message.content
+									: message.content
+											.filter((part) => part.type === "text")
+											.map((part) => part.text)
+											.join(""),
+							),
+					);
+					return index === 0 ? toolResponse : fauxAssistantMessage("done");
+				},
+			),
+		]);
+		let stop: (() => void) | undefined;
+		try {
+			await host.listen();
+			fs.writeFileSync(path.join(dir, "input.txt"), "contents");
+			const runEnvPath = path.join(dir, "run.env");
+			fs.writeFileSync(runEnvPath, "");
+			await host.ensureRun({
+				runId: "steer-run",
+				name: "steer-worker",
+				cwd: dir,
+				runEnvPath,
+				toolPolicy: "default",
+				model: `${faux.getModel().provider}/${faux.getModel().id}`,
+			});
+			const client = new HostClient(layout.socketPath, 10_000);
+			await client.submit("steer-run", "start work", "start");
+			await started.promise;
+			await client.submit("steer-run", "use approach B", "steer-1", "steer");
+			await client.submit("steer-run", "keep the tests", "steer-2", "steer");
+			let snapshot: unknown;
+			stop = await client.watch("steer-run", (value) => {
+				snapshot = value;
+			});
+			expect(
+				buildAgentSessionView(snapshot)
+					.filter((block) => block.kind === "notice")
+					.map((block) => block.text),
+			).toEqual([
+				"Queued steering: use approach B",
+				"Queued steering: keep the tests",
+			]);
+			firstResponse.resolve(toolResponse);
+			for (
+				let i = 0;
+				i < 100 && (await host.status("steer-run")).status !== "idle";
+				i++
+			) {
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			}
+			expect((await host.status("steer-run")).status).toBe("idle");
+			expect(requests).toEqual([
+				["start work", "use approach B"],
+				["start work", "use approach B", "keep the tests"],
+			]);
+			const entries = (await host.entriesForTest("steer-run")) as Array<{
+				kind: string;
+			}>;
+			expect(entries.filter((entry) => entry.kind === "pi.user")).toHaveLength(
+				3,
+			);
+			expect(
+				entries.filter((entry) => entry.kind === "pi.tool-result"),
+			).toHaveLength(2);
+		} finally {
+			firstResponse.resolve(toolResponse);
+			stop?.();
+			await host.shutdown();
+			fs.rmSync(dir, { recursive: true, force: true });
 		}
 	});
 });

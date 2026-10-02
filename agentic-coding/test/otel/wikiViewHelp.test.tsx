@@ -45,6 +45,9 @@ function TestWiki(props: { onHelp: () => void }) {
 		activeModal(value, ctx) {
 			ctx.require("modal.active", String(value));
 		},
+		agentView(value, ctx) {
+			ctx.require("agent.view", String(value));
+		},
 	});
 	keymap.setData("app.view", "home");
 	keymap.setData("modal.active", "none");

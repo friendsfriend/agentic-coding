@@ -25,6 +25,9 @@ function TestDashboard() {
 		activeModal(value, ctx) {
 			ctx.require("modal.active", String(value));
 		},
+		agentView(value, ctx) {
+			ctx.require("agent.view", String(value));
+		},
 	});
 	onCleanup(() => dispose());
 	return <App repo="/demo" workflowId="demo" profile="test" keymap={keymap} />;

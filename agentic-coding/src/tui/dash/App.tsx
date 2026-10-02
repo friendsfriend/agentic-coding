@@ -50,9 +50,18 @@ import {
 	requestExecution,
 	runWorkflow,
 } from "../data/workflow.ts";
+import {
+	loadPromptHistory,
+	MAX_PROMPT_HISTORY,
+	savePromptHistory,
+} from "../shared/preferences.ts";
 import { testDashboard } from "./demo.ts";
 import { createDashboardKeyHandler } from "./handlers/keys.ts";
-import { dashboardDetailKeybindCatalog, panelContext } from "./keybinds.ts";
+import {
+	agentSessionKeybindCatalog,
+	dashboardDetailKeybindCatalog,
+	panelContext,
+} from "./keybinds.ts";
 import {
 	focusAgentAsync,
 	focusReturnWorkspace,
@@ -98,6 +107,10 @@ import {
 } from "./state.ts";
 import { applyTheme, loadThemeName, saveThemeName } from "./theme-settings.ts";
 import { traceTui } from "./tracing.ts";
+import {
+	AgentSessionView,
+	SESSION_PICKER_KEYS,
+} from "./ui/AgentSessionView.tsx";
 import { pendingCredentialRequest } from "./ui/CredentialsModal.tsx";
 import type { FindingEvent } from "./ui/FindingsModal.tsx";
 import {
@@ -301,6 +314,7 @@ export function App(props: {
 	// Opt-in Markdown rendering for the OpenSpec artifact view only (D5).
 	const overlays = createOverlayState({
 		themeIndex: Math.max(0, themeNames.indexOf(loadThemeName())),
+		promptHistory: loadPromptHistory(),
 	});
 	const verdict = overlays.verdict;
 	const setVerdict = overlays.setVerdict;
@@ -346,15 +360,22 @@ export function App(props: {
 	const setPresetSwitcherChoices = overlays.setPresetSwitcherChoices;
 	const agentSession = overlays.agentSession;
 	const setAgentSession = overlays.setAgentSession;
+	const agentSessionOpen = overlays.agentSessionOpen;
+	const setAgentSessionOpen = overlays.setAgentSessionOpen;
 	const setAgentSessionBlocks = overlays.setAgentSessionBlocks;
+	const agentSessionBlocks = overlays.agentSessionBlocks;
+	const agentSessionDraft = overlays.agentSessionDraft;
+	const agentSessionMetadata = overlays.agentSessionMetadata;
+	const agentSessionContextWindows = overlays.agentSessionContextWindows;
 	const setAgentSessionMetadata = overlays.setAgentSessionMetadata;
 	const setAgentSessionDraft = overlays.setAgentSessionDraft;
 	// Live session watch (add-pi-durable-runtime, dashboard-agent-session-view):
 	// at most one subscription at a time, torn down whenever the open session
-	// changes identity or the view closes. `HostClient` is dynamically imported
-	// so no dashboard route eagerly loads the durable-agent-host module.
+	// changes identity or the dashboard unmounts (going back to the grid keeps
+	// it streaming). `HostClient` is dynamically imported so no dashboard route
+	// eagerly loads the durable-agent-host module.
 	let agentSessionStopWatch: (() => void) | undefined;
-	// The transcript scroll box, owned by the modal and scrolled by the
+	// The transcript scroll box, owned by the view and scrolled by the
 	// agent-session keymap layer registered below.
 	let agentSessionScrollbox: ScrollBoxRenderable | undefined;
 	// The `/model` and `/thinking` picker catalogs, fetched once per open
@@ -364,19 +385,17 @@ export function App(props: {
 	const agentSessionThinkingLevels = overlays.agentSessionThinkingLevels;
 	const setAgentSessionThinkingLevels = overlays.setAgentSessionThinkingLevels;
 	const setAgentSessionContextWindows = overlays.setAgentSessionContextWindows;
-	// The modal's picker key handler while a picker is open; the
+	// The view's picker key handler while a picker is open; the
 	// `agent-session-picker` keymap layer delegates to it.
 	let agentSessionPickerHandler: ((event: KeyEvent) => boolean) | undefined;
-	const closeAgentSession = () => {
-		agentSessionStopWatch?.();
-		agentSessionStopWatch = undefined;
-		agentSessionScrollbox = undefined;
-		agentSessionPickerHandler = undefined;
-		setAgentSession(undefined);
-		setAgentSessionDraft("");
-		setAgentSessionBlocks([]);
-		setAgentSessionMetadata({ working: false });
-		props.keymap.setData("modal.active", "none");
+	/**
+	 * Leave the view for the dashboard grid. The run keeps streaming into the
+	 * session state, so reopening the panel's agent lands on the live view
+	 * instead of resubscribing.
+	 */
+	const backAgentSession = () => {
+		setAgentSessionOpen(false);
+		props.keymap.setData("agent.view", "none");
 	};
 	const openAgentSession = (session: {
 		role: string;
@@ -391,7 +410,8 @@ export function App(props: {
 			{ kind: "notice", tone: "muted", text: "Connecting…" },
 		]);
 		setAgentSession(session);
-		props.keymap.setData("modal.active", "agent-session");
+		setAgentSessionOpen(true);
+		props.keymap.setData("agent.view", "session");
 		void (async () => {
 			try {
 				const { HostClient } = await import("../../agent-host/client.ts");
@@ -433,6 +453,21 @@ export function App(props: {
 			}
 		})();
 	};
+	const rememberAgentSessionInput = (text: string) => {
+		const history = overlays.agentSessionHistory();
+		if (history.at(-1) === text) return;
+		const next = [...history, text].slice(-MAX_PROMPT_HISTORY);
+		overlays.setAgentSessionHistory(next);
+		try {
+			savePromptHistory(next);
+		} catch (error) {
+			notify(
+				"Could not save prompt history: " +
+					(error instanceof Error ? error.message : String(error)),
+				"error",
+			);
+		}
+	};
 	const submitAgentSession = (text: string) => {
 		const session = agentSession();
 		if (!session) return;
@@ -440,12 +475,7 @@ export function App(props: {
 			try {
 				const { HostClient } = await import("../../agent-host/client.ts");
 				const client = new HostClient(session.hostSocket);
-				await client.submit(
-					session.runId,
-					text,
-					crypto.randomUUID(),
-					"followUp",
-				);
+				await client.submit(session.runId, text, crypto.randomUUID(), "steer");
 			} catch (error) {
 				notify(
 					"Could not send message: " +
@@ -1241,14 +1271,20 @@ export function App(props: {
 	const filteredThemes = () =>
 		themeNames.filter((name) => name.includes(themeQuery().toLowerCase()));
 	const keybindCatalog = createMemo(() =>
-		dashboardDetailKeybindCatalog({
-			artifactsVisible: artifacts().length > 0,
-		}),
+		agentSessionOpen()
+			? agentSessionKeybindCatalog()
+			: dashboardDetailKeybindCatalog({
+					artifactsVisible: artifacts().length > 0,
+				}),
 	);
 	// The shell footer and `?` help read the active surface catalog from the
-	// shared store; the detail view publishes the panel-scoped catalog here.
+	// shared store; the route publishes the panel-scoped catalog here, or the
+	// agent session's own keys while its view replaced the grid.
 	createEffect(() =>
-		setActiveKeybindCatalog(keybindCatalog(), panelContext(activePanel())),
+		setActiveKeybindCatalog(
+			keybindCatalog(),
+			agentSessionOpen() ? undefined : panelContext(activePanel()),
+		),
 	);
 	const helpMaxOffset = () =>
 		Math.max(
@@ -1570,6 +1606,9 @@ export function App(props: {
 	});
 	onMount(() => {
 		props.keymap.setData("app.view", "detail");
+		// No agent session page is open until the Agents panel opens one; the
+		// grid's detail layer requires this field.
+		props.keymap.setData("agent.view", "none");
 		props.keymap.setData("modal.active", activeErrorModal() ? "error" : "none");
 		const disposeTheme = props.keymap.registerLayer({
 			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
@@ -2414,16 +2453,25 @@ export function App(props: {
 		// The agent session modal keeps its input focused, so scrolling binds to
 		// keys that never insert text (page/ctrl combos) rather than j/k, which
 		// the user must be able to type into a message.
+		// The agent session view is a page of the dashboard body, so it takes the
+		// keyboard from the panel grid through the `agent.view` field (and only
+		// while no dialog is on top): scrolling its transcript, and leaving it for
+		// the grid on Escape. The prompt input stays focused and owns text keys.
 		const disposeAgentSession = props.keymap.registerLayer({
 			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "agent-session",
 			priority: 1000,
-			activeModal: "agent-session",
+			agentView: "session",
+			activeModal: "none",
 			commands: [
 				{
 					name: "agent-session.handle",
 					run: ({ event }) => {
 						const name = event.name.toLowerCase();
+						if (name === "escape") {
+							backAgentSession();
+							return true;
+						}
 						const box = agentSessionScrollbox;
 						if (!box) return false;
 						const page = Math.max(1, Math.floor(dimensions().height / 3));
@@ -2435,10 +2483,9 @@ export function App(props: {
 					},
 				},
 			],
-			bindings: ["pageup", "pagedown", "ctrl+u", "ctrl+d"].map((key) => ({
-				key,
-				cmd: "agent-session.handle",
-			})),
+			bindings: ["pageup", "pagedown", "ctrl+u", "ctrl+d", "escape"].map(
+				(key) => ({ key, cmd: "agent-session.handle" }),
+			),
 		});
 		// The model/thinking picker owns the keyboard while it is open (the
 		// prompt input is unfocused then), so ordinary letters are free for
@@ -2447,13 +2494,13 @@ export function App(props: {
 			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "agent-session-picker",
 			priority: 1100,
-			activeModal: "agent-session-picker",
+			agentView: "picker",
 			commands: [
 				{
 					name: "agent-session-picker.handle",
 					run: ({ event }) => {
 						// Only the open picker owns the keyboard. Without its handler
-						// (modal gone) the key must fall through to the dashboard
+						// (view gone) the key must fall through to the dashboard
 						// layers instead of being swallowed by this letter-wide layer.
 						const handler = agentSessionPickerHandler;
 						if (!handler) return false;
@@ -2461,17 +2508,10 @@ export function App(props: {
 					},
 				},
 			],
-			bindings: [
-				"j",
-				"k",
-				"up",
-				"down",
-				"enter",
-				"escape",
-				"/",
-				"backspace",
-				..."abcdefghijklmnopqrstuvwxyz".split(""),
-			].map((key) => ({ key, cmd: "agent-session-picker.handle" })),
+			bindings: SESSION_PICKER_KEYS.map((key) => ({
+				key,
+				cmd: "agent-session-picker.handle",
+			})),
 		});
 		const dispose = props.keymap.registerLayer({
 			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
@@ -2479,6 +2519,8 @@ export function App(props: {
 			priority: 100,
 			appView: "detail",
 			activeModal: "none",
+			// The grid keeps its keys only while the agent session page is closed.
+			agentView: "none",
 			commands: [
 				{
 					name: "detail.handle",
@@ -2535,6 +2577,9 @@ export function App(props: {
 			disposeAgentSession();
 			disposeAgentSessionPicker();
 			agentSessionStopWatch?.();
+			// The unmounted page must not leave its keymap field parking the grid
+			// layers of whatever surface mounts next.
+			props.keymap.setData("agent.view", "none");
 			dispose();
 		});
 		// Failure diagnostics the engine attaches to a workflow are surfaced once
@@ -2594,33 +2639,32 @@ export function App(props: {
 				presetSwitcherOpen() ||
 				reviewOpen() ||
 				reviewCommentMode() ||
-				agentSession() ||
 				activeErrorModal() != null
 			);
 		// Self-heal: reconcile keymap modal data with real modal state.
 		createEffect(() => {
 			if (!anyModalOpen()) props.keymap.setData("modal.active", "none");
 		});
-		// A closed agent session must never leave the keymap parked on one of its
-		// layers (they bind keys the dashboard also needs), so a close that raced
-		// the modal's own reset cannot swallow the dashboard keybinds.
-		createEffect(() => {
-			if (agentSession()) return;
-			const active = props.keymap.getData?.("modal.active");
-			if (active === "agent-session" || active === "agent-session-picker")
-				props.keymap.setData("modal.active", "none");
-		});
+		// A hidden agent session must never leave the keymap parked on its view
+		// (it takes keys the panel grid also needs), so a close that raced the
+		// view's own reset cannot swallow the dashboard keybinds. The field is
+		// separate from `modal.active`: this is a page, not a dialog.
+		const repairAgentView = () => {
+			if (agentSessionOpen()) return;
+			const view = props.keymap.getData?.("agent.view");
+			if (view === "session" || view === "picker")
+				props.keymap.setData("agent.view", "none");
+		};
+		createEffect(repairAgentView);
 		// The effect above only re-runs when the session state changes, so any
 		// later writer that parks the field again (a picker closing, a shell
 		// overlay restoring its saved value) would leave the dashboard's layers
 		// unreachable. Repair the field before every dispatch instead, so the very
 		// keystroke that would have been swallowed already sees the right layer.
-		const disposeAgentSessionRepair = props.keymap.intercept("key", () => {
-			if (agentSession()) return;
-			const active = props.keymap.getData?.("modal.active");
-			if (active === "agent-session" || active === "agent-session-picker")
-				props.keymap.setData("modal.active", "none");
-		});
+		const disposeAgentSessionRepair = props.keymap.intercept(
+			"key",
+			repairAgentView,
+		);
 		onCleanup(disposeAgentSessionRepair);
 		// The credential popup opens while the dashboard is busy (delivery drain);
 		// switch the keymap to the non-busy-gated layer and restore the previous
@@ -2728,6 +2772,10 @@ export function App(props: {
 								flexDirection: "row",
 								gap: 1,
 							}}
+							// The agent session page takes the body: the grid stays mounted
+							// (hidden, so its scroll positions survive the round trip) and
+							// hands the keyboard over through the `agent.view` keymap field.
+							visible={!agentSessionOpen()}
 						>
 							<box
 								flexGrow={1}
@@ -2766,6 +2814,61 @@ export function App(props: {
 								narrow={dimensions().width < 90}
 							/>
 						</box>
+						<Show when={agentSessionOpen() && agentSession()}>
+							{(session) => (
+								<AgentSessionView
+									role={session().role}
+									blocks={agentSessionBlocks()}
+									{...agentSessionMetadata()}
+									{...(agentSessionMetadata().model
+										? {
+												contextWindow:
+													agentSessionContextWindows()[
+														agentSessionMetadata().model as string
+													],
+											}
+										: {})}
+									models={agentSessionModels()}
+									thinkingLevels={agentSessionThinkingLevels()}
+									draft={agentSessionDraft()}
+									history={overlays.agentSessionHistory()}
+									onDraftChange={(value) =>
+										overlays.setAgentSessionDraft(value)
+									}
+									onHistoryAppend={rememberAgentSessionInput}
+									onSubmit={submitAgentSession}
+									onAbort={abortAgentSession}
+									onBack={backAgentSession}
+									onConfigure={configureAgentSession}
+									// The view is not a dialog, so `?` opens the page's
+									// keybind help the way the panel grid does.
+									onHelp={() => {
+										setHelp(true);
+										setHelpOffset(0);
+										props.keymap.setData("modal.active", "help");
+									}}
+									onScrollBoxReady={(box: ScrollBoxRenderable) => {
+										agentSessionScrollbox = box;
+									}}
+									onPickerKeyReady={(handler) => {
+										agentSessionPickerHandler = handler;
+									}}
+									onPickerActiveChange={(active) => {
+										// A picker closing after the view was left must not re-park
+										// the keymap on the view; the grid only regains its keys
+										// at "none".
+										props.keymap.setData(
+											"agent.view",
+											agentSessionOpen()
+												? active
+													? "picker"
+													: "session"
+												: "none",
+										);
+									}}
+								/>
+							)}
+						</Show>
 					</box>
 				}
 			/>
@@ -2849,38 +2952,6 @@ export function App(props: {
 								title: verdict()?.title ?? "",
 								content: verdict()?.content ?? "",
 								lines: verdictLines(),
-							}
-						: undefined
-				}
-				agentSession={
-					agentSession()
-						? {
-								role: agentSession()?.role ?? "",
-								models: agentSessionModels(),
-								thinkingLevels: agentSessionThinkingLevels(),
-								onSubmit: submitAgentSession,
-								onAbort: abortAgentSession,
-								onClose: closeAgentSession,
-								onConfigure: configureAgentSession,
-								onScrollBoxReady: (box: ScrollBoxRenderable) => {
-									agentSessionScrollbox = box;
-								},
-								onPickerKeyReady: (handler) => {
-									agentSessionPickerHandler = handler;
-								},
-								onPickerActiveChange: (active) => {
-									// A picker closing after the session was hidden must not
-									// re-park the keymap on an agent-session layer; the
-									// dashboard only regains its keys at "none".
-									props.keymap.setData(
-										"modal.active",
-										agentSession()
-											? active
-												? "agent-session-picker"
-												: "agent-session"
-											: "none",
-									);
-								},
 							}
 						: undefined
 				}

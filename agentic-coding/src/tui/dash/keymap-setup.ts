@@ -90,6 +90,12 @@ export function setupKeymap(keymap: Keymap<Renderable, KeyEvent>) {
 				activeModal(value, ctx) {
 					ctx.require("modal.active", String(value));
 				},
+				// The agent session view is a page of the dashboard body rather than a
+				// dialog, so it owns keys through its own field: the detail grid stays
+				// mounted behind it and must release the keyboard while it is open.
+				agentView(value, ctx) {
+					ctx.require("agent.view", String(value));
+				},
 				// The environment feature owns its dialog state on its own key: the
 				// dashboard and wiki write `modal.active` while their body is hidden,
 				// and a shared field left every environment layer parked (all of them

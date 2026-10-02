@@ -296,6 +296,52 @@ describe("buildAgentSessionView", () => {
 		expect(blocks.some((block) => block.text === "message-0")).toBe(false);
 	});
 
+	test("queued messages show their delivery mode and disappear when placed", () => {
+		const queued = { mode: "steer", content: "use approach B" };
+		const snapshot = {
+			entries: [],
+			docs: {
+				"pi.inbox": {
+					items: [
+						queued,
+						{
+							mode: "followUp",
+							content: [{ type: "text", text: "then run tests" }],
+						},
+						{ mode: "write", entry: {} },
+						null,
+					],
+				},
+			},
+		};
+		expect(buildAgentSessionView(snapshot)).toEqual([
+			{
+				kind: "notice",
+				tone: "warning",
+				text: "Queued steering: use approach B",
+			},
+			{
+				kind: "notice",
+				tone: "warning",
+				text: "Queued follow-up: then run tests",
+			},
+		]);
+		expect(readAgentSessionMetadata(snapshot).working).toBe(true);
+		expect(
+			buildAgentSessionView({
+				entries: [{ kind: "pi.user", model: [{ content: queued.content }] }],
+				docs: { "pi.inbox": { items: [] } },
+			}),
+		).toEqual([{ kind: "user", tone: "accent", text: queued.content }]);
+		expect(
+			buildAgentSessionView({
+				docs: {
+					"pi.inbox": { items: [false, {}, { mode: "steer", content: {} }] },
+				},
+			}),
+		).toEqual([]);
+	});
+
 	test("degrades to no blocks instead of throwing on an unexpected shape", () => {
 		expect(buildAgentSessionView(null)).toEqual([]);
 		expect(buildAgentSessionView("not an object")).toEqual([]);

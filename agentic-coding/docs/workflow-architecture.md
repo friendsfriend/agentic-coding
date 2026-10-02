@@ -666,9 +666,7 @@ the `use-default-model` built-in preset still defaults to `pi`, not
 implementation pass could not fully verify with focused tests; `pi-durable`
 model validation at workflow start accepts a built-in provider's model on
 shape alone rather than enumerating pi-ai's full catalog (a locally configured
-custom provider's models are still validated exactly); and the dashboard
-Agents-panel session view is a read-only snapshot, not the live, steerable
-session the `dashboard-agent-session-view` spec describes.
+custom provider's models are still validated exactly).
 
 ## Source-layer boundaries (enforced)
 

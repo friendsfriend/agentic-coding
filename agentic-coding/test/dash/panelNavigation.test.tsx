@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
+import { activeKeybindCatalog } from "@ui";
 import { onCleanup } from "solid-js";
 import type { DashboardData } from "../../src/contracts/workflow";
 import { App } from "../../src/tui/dash/App.tsx";
@@ -52,6 +53,9 @@ function TestDashboard(props: { testData?: DashboardData }) {
 		},
 		activeModal(value, ctx) {
 			ctx.require("modal.active", String(value));
+		},
+		agentView(value, ctx) {
+			ctx.require("agent.view", String(value));
 		},
 	});
 	onCleanup(() => {
@@ -567,5 +571,70 @@ test("help documents directional panel navigation", async () => {
 	expect(helpFrame).toContain("Move between panels");
 	// In-panel scrolling stays documented alongside the new bindings.
 	expect(helpFrame).toContain("Scroll focused panel");
+	t.renderer.destroy();
+});
+
+test("the durable agent session opens as a page and Esc returns to the grid", async () => {
+	const dashboard = testDashboard();
+	const agent = dashboard.agents[0];
+	if (!agent) throw new Error("demo agent missing");
+	const t = await testRender(
+		() => (
+			<TestDashboard
+				testData={{
+					...dashboard,
+					agents: [
+						{
+							...agent,
+							role: "worker",
+							runtime: "pi-durable",
+							runId: "run-1",
+							// Nothing listens here: the view reports the failed
+							// subscription while still being the open page.
+							hostSocket: join(tmpdir(), "agent-dash-no-host.sock"),
+						},
+					],
+				}}
+			/>
+		),
+		{ width: 120, height: 40 },
+	);
+	await dashboardReady(t);
+
+	t.mockInput.pressKey("l", { shift: true });
+	await t.renderOnce();
+	t.mockInput.pressEnter();
+	const session = await t.waitForFrame((frame) =>
+		frame.includes("Agent · worker"),
+	);
+	// The page replaced the grid rather than floating above it.
+	expect(session).not.toContain("Plan review");
+	// The view publishes its own catalog: the shell footer and `?` help read
+	// the active surface, which is now the session rather than the panels.
+	expect(activeKeybindCatalog().map((section) => section.title)).toEqual([
+		"Agent session",
+	]);
+	// `?` on the empty prompt opens that catalog's help (the page is not a
+	// dialog, so this is the dashboard's own help overlay).
+	t.mockInput.pressKey("?");
+	const help = await t.waitForFrame((frame) =>
+		frame.includes("Choose command or browse history"),
+	);
+	expect(help).toContain("Send message (steer if the run is busy)");
+
+	// Escape closes the help first and leaves the page second: the page keeps
+	// its keys while a dialog is on top of it.
+	t.mockInput.pressEscape();
+	await t.waitForFrame((frame) => !frame.includes("Dashboard keybindings"));
+	expect(t.captureCharFrame()).toContain("Agent · worker");
+	t.mockInput.pressEscape();
+	const grid = await t.waitForFrame(
+		(frame) => !frame.includes("Agent · worker"),
+	);
+	// The grid is showing again, with its own panel keys published.
+	expect(grid).toContain("Agents");
+	expect(activeKeybindCatalog().map((section) => section.title)).toContain(
+		"Navigation",
+	);
 	t.renderer.destroy();
 });

@@ -79,7 +79,11 @@ export function writeSettingsAtomically(
 	fs.mkdirSync(path.dirname(target), { recursive: true });
 	const temp = `${target}.${process.pid}.tmp`;
 	try {
-		fs.writeFileSync(temp, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+		// Prompt history can contain private input; keep client state owner-only.
+		fs.writeFileSync(temp, `${JSON.stringify(settings, null, 2)}\n`, {
+			encoding: "utf8",
+			mode: 0o600,
+		});
 		fs.renameSync(temp, target);
 	} catch (error) {
 		try {
@@ -136,6 +140,28 @@ export function applyTheme(name: string): boolean {
 export function saveThemeName(name: string): void {
 	if (!isValidThemeName(name)) throw new Error(`unknown theme: ${name}`);
 	writeSettingsAtomically({ ...readJsonSettings(), theme: name });
+}
+
+/** Match opencode's bounded, client-local input history. */
+export const MAX_PROMPT_HISTORY = 50;
+
+export function loadPromptHistory(): string[] {
+	const history = readJsonSettings().promptHistory;
+	return Array.isArray(history)
+		? history
+				.filter(
+					(item): item is string =>
+						typeof item === "string" && item.trim().length > 0,
+				)
+				.slice(-MAX_PROMPT_HISTORY)
+		: [];
+}
+
+export function savePromptHistory(history: readonly string[]): void {
+	writeSettingsAtomically({
+		...readJsonSettings(),
+		promptHistory: history.slice(-MAX_PROMPT_HISTORY),
+	});
 }
 
 /**

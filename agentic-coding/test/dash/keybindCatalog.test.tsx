@@ -10,6 +10,7 @@ import {
 	wrapHelpEntries,
 } from "@ui";
 import {
+	agentSessionKeybindCatalog,
 	dashboardDetailKeybindCatalog,
 	panelContext,
 	workflowLaunchKeybindCatalog,
@@ -48,6 +49,30 @@ describe("keybind catalog contract", () => {
 		);
 		expect(agents).toContain("View selected verifier result");
 		expect(agents).not.toContain("Approve gate / review changed files");
+	});
+
+	it("publishes the session's keys while the agent page replaces the grid", () => {
+		const catalog = agentSessionKeybindCatalog();
+		const all = catalogKeybinds(catalog);
+		expect(catalog.map((section) => section.title)).toEqual(["Agent session"]);
+		// The footer keeps the special keys and hides pure navigation, while
+		// `?` help still documents the prompt's standard keys.
+		expect(footerKeybinds(catalog).map((keybind) => keybind.short)).toEqual([
+			"back",
+			"send",
+			"scroll",
+		]);
+		expect(all.map((keybind) => keybind.action)).toContain(
+			"Choose command or browse history (empty prompt)",
+		);
+		// No panel context: the grid's keybindings are not advertised here.
+		expect(
+			all.some(
+				(keybind) =>
+					keybind.context !== undefined &&
+					keybind.action === "Move between panels",
+			),
+		).toBe(false);
 	});
 
 	it("maps every detail grid panel to a footer context", () => {

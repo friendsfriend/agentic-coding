@@ -32,6 +32,9 @@ async function renderHomeApp() {
 				activeModal(value, ctx) {
 					ctx.require("modal.active", String(value));
 				},
+				agentView(value, ctx) {
+					ctx.require("agent.view", String(value));
+				},
 				textEntry(value, ctx) {
 					ctx.require("textEntry.active", Boolean(value));
 				},

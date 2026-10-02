@@ -43,6 +43,40 @@ export function workflowLaunchKeybindCatalog(): KeybindSection[] {
 }
 
 /**
+ * Agent session view (`dashboard-agent-session-view`). The view is a page of
+ * the dashboard body: while it is open its keys replace the panel keys, so it
+ * publishes this catalog instead of the detail one.
+ */
+export function agentSessionKeybindCatalog(): KeybindSection[] {
+	return [
+		{
+			title: "Agent session",
+			keybinds: [
+				{ key: "Esc", action: "Back to the dashboard panels", short: "back" },
+				{
+					key: "Enter",
+					action: "Send message (steer if the run is busy)",
+					short: "send",
+				},
+				{ key: "PgUp/PgDn", action: "Scroll transcript", short: "scroll" },
+				{ key: "Tab", action: "Complete command", standard: true },
+				{
+					key: "↑/↓",
+					action: "Choose command or browse history (empty prompt)",
+					standard: true,
+				},
+				{ key: "Ctrl+T", action: "Expand/collapse thinking", standard: true },
+				{
+					key: "Ctrl+O",
+					action: "Expand/collapse tool output",
+					standard: true,
+				},
+			],
+		},
+	];
+}
+
+/**
  * Workflow detail (`App`) catalog. Panel-specific actions carry a `context`
  * so the footer changes with the focused panel, while `?` still lists the
  * whole set.

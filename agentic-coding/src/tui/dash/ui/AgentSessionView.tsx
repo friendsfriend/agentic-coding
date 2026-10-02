@@ -1,10 +1,11 @@
 /** @jsxImportSource @opentui/solid */
 // Dashboard agent session view (add-pi-durable-runtime,
 // dashboard-agent-session-view): a live, writable view of one `pi-durable`
-// agent run, opened from the Agents panel. Status/transcript blocks are owned
-// by the route (a live `HostClient.watch()` subscription); this component
-// owns the presentation, the opencode-style prompt, and the `/model` and
-// `/thinking` pickers.
+// agent run, opened from the Agents panel. It is a page of the dashboard body
+// — the detail grid stays mounted behind it — not a dialog. Status/transcript
+// blocks are owned by the route (a live `HostClient.watch()` subscription);
+// this component owns the presentation, the opencode-style prompt, and the
+// `/model` and `/thinking` pickers.
 //
 // Assistant output renders as markdown with no box; thinking collapses to a
 // single `Thinking…` line; every other entry is a status box with a solid
@@ -13,9 +14,10 @@
 // input and a metadata row (`Role · model · thinking` plus a live working
 // indicator).
 //
-// The picker keys are handled by the route's keymap layer (the input is
-// unfocused while a picker is open), so the always-focused input can keep
-// accepting ordinary characters, including `j` and `k`.
+// The view replaces the detail grid, so its own keys (scroll, back) and the
+// picker's keys are route keymap layers gated on the `agent.view` field. The
+// prompt input stays focused throughout and keeps accepting ordinary
+// characters, including `j`, `k` and a `?` that starts a message.
 import type {
 	InputRenderable,
 	KeyEvent,
@@ -23,7 +25,6 @@ import type {
 } from "@opentui/core";
 import { parseColor, RGBA, rgbToHex, TextAttributes } from "@opentui/core";
 import {
-	GenericModal,
 	ListViewModal,
 	MarkdownViewer,
 	ScrollableContent,
@@ -39,10 +40,12 @@ import {
 } from "../agent-session.ts";
 import { PromptPulse } from "./PromptPulse.tsx";
 
-export interface AgentSessionModalProps {
+export interface AgentSessionViewProps {
 	readonly role: string;
 	readonly blocks: readonly AgentSessionBlock[];
 	readonly draft: string;
+	readonly history: readonly string[];
+	readonly onHistoryAppend: (text: string) => void;
 	/** Current model/thinking/working state from pi-durable's `pi.agent` + `pi.live`. */
 	readonly model?: string;
 	readonly thinking?: string;
@@ -60,7 +63,8 @@ export interface AgentSessionModalProps {
 	readonly onDraftChange: (value: string) => void;
 	readonly onSubmit: (text: string) => void;
 	readonly onAbort: () => void;
-	readonly onClose: () => void;
+	/** Leave the view for the dashboard grid; the run keeps streaming. */
+	readonly onBack: () => void;
 	/** Apply a live model / thinking override. */
 	readonly onConfigure: (change: { model?: string; thinking?: string }) => void;
 	/** The transcript scroll box, so the route's keymap layer can scroll it. */
@@ -69,6 +73,8 @@ export interface AgentSessionModalProps {
 	readonly onPickerKeyReady?: (handler: (event: KeyEvent) => boolean) => void;
 	/** Whether a picker is open, so the route can switch keymap layers. */
 	readonly onPickerActiveChange?: (active: boolean) => void;
+	/** `?` on an empty prompt: the route opens the shared keybind help. */
+	readonly onHelp?: () => void;
 }
 
 /** Typing one of these exact messages, instead of an ordinary one, performs
@@ -318,6 +324,25 @@ function Block(props: {
 	);
 }
 
+/**
+ * The picker's keys are routed by the route's keymap layer (the prompt input
+ * is unfocused while a picker is open), so the names it binds must cover every
+ * spelling a terminal reports: Enter arrives as `enter` or `return`, and the
+ * unpicked letters are the filter's alphabet.
+ */
+export const SESSION_PICKER_KEYS = [
+	"j",
+	"k",
+	"up",
+	"down",
+	"enter",
+	"return",
+	"escape",
+	"/",
+	"backspace",
+	..."abcdefghijklmnopqrstuvwxyz".split(""),
+];
+
 type PickerKind = "model" | "thinking";
 interface PickerState {
 	readonly kind: PickerKind;
@@ -326,8 +351,26 @@ interface PickerState {
 	readonly filtering: boolean;
 }
 
-export function AgentSessionModal(props: AgentSessionModalProps) {
+export function AgentSessionView(props: AgentSessionViewProps) {
 	let inputRef: InputRenderable | undefined;
+	// Negative offsets from newest; zero is the empty prompt, not an entry.
+	let historyIndex = 0;
+	const recallHistory = (direction: -1 | 1): boolean => {
+		const value = inputRef?.value ?? props.draft;
+		if (value.length === 0) historyIndex = 0;
+		// Only empty or unchanged recalled input can navigate. Never overwrite edits.
+		else if (historyIndex === 0 || value !== props.history.at(historyIndex))
+			return false;
+		const next = Math.max(
+			-props.history.length,
+			Math.min(0, historyIndex + direction),
+		);
+		if (next === historyIndex) return historyIndex !== 0;
+		historyIndex = next;
+		props.onDraftChange(next === 0 ? "" : (props.history.at(next) ?? ""));
+		setAutocompleteIndex(0);
+		return true;
+	};
 	const [picker, setPicker] = createSignal<PickerState | undefined>();
 	const [autocompleteIndex, setAutocompleteIndex] = createSignal(0);
 	// Which thinking blocks are expanded. Collapsed by default so a long
@@ -421,7 +464,8 @@ export function AgentSessionModal(props: AgentSessionModalProps) {
 		if (state.filtering) {
 			if (name === "escape")
 				setPicker({ ...state, filtering: false, filter: "" });
-			else if (name === "enter") setPicker({ ...state, filtering: false });
+			else if (name === "enter" || name === "return")
+				setPicker({ ...state, filtering: false });
 			else if (name === "backspace")
 				setPicker({ ...state, filter: state.filter.slice(0, -1) });
 			else if (event.name.length === 1)
@@ -437,7 +481,8 @@ export function AgentSessionModal(props: AgentSessionModalProps) {
 		else if (name === "k" || name === "up")
 			setPicker({ ...state, selected: Math.max(0, state.selected - 1) });
 		else if (name === "/") setPicker({ ...state, filtering: true, filter: "" });
-		else if (name === "enter") selectPicker();
+		// Terminals report Enter either name, so both must select.
+		else if (name === "enter" || name === "return") selectPicker();
 		return true;
 	};
 	onMount(() => props.onPickerKeyReady?.(handlePickerKey));
@@ -449,10 +494,12 @@ export function AgentSessionModal(props: AgentSessionModalProps) {
 	});
 
 	const runCommand = (name: string) => {
+		props.onHistoryAppend(name);
+		historyIndex = 0;
 		if (name === MODEL_COMMAND) openPicker("model");
 		else if (name === THINKING_COMMAND) openPicker("thinking");
 		else if (name === ABORT_COMMAND) props.onAbort();
-		else if (name === CLOSE_COMMAND) props.onClose();
+		else if (name === CLOSE_COMMAND) props.onBack();
 		else props.onSubmit(name);
 		props.onDraftChange("");
 	};
@@ -475,42 +522,27 @@ export function AgentSessionModal(props: AgentSessionModalProps) {
 
 	return (
 		<>
-			<GenericModal
-				title={`Agent · ${props.role}`}
-				widthPercent={0.72}
-				heightPercent={0.8}
-				help={[
-					// The footer advertises only the special keys; the slash commands are
-					// discovered by typing `/`, and the autocomplete keys are standard.
-					{ key: "PgUp/PgDn", action: "Scroll transcript", short: "scroll" },
-					{ key: "Enter", action: "Send message", short: "send" },
-				]}
-				helpSections={[
-					{
-						title: "Session",
-						keybinds: [
-							{
-								key: "PgUp/PgDn",
-								action: "Scroll transcript",
-								short: "scroll",
-							},
-							{ key: "Enter", action: "Send message", short: "send" },
-							{ key: "Tab", action: "Complete command", standard: true },
-							{ key: "↑/↓", action: "Choose command", standard: true },
-							{
-								key: "Ctrl+T",
-								action: "Expand/collapse thinking",
-								standard: true,
-							},
-							{
-								key: "Ctrl+O",
-								action: "Expand/collapse tool output",
-								standard: true,
-							},
-						],
-					},
-				]}
+			<box
+				width="100%"
+				height="100%"
+				flexDirection="column"
+				gap={1}
+				minHeight={0}
+				paddingTop={1}
+				paddingBottom={1}
+				paddingLeft={2}
+				paddingRight={2}
+				backgroundColor={uiColors.bgBase}
 			>
+				{/* The modal title bar is gone with the dialog; the view still
+				    names the run it shows before the transcript. */}
+				<box flexDirection="row" gap={1} flexShrink={0}>
+					<text fg={uiColors.accent} attributes={TextAttributes.BOLD}>
+						Agent
+					</text>
+					<text fg={uiColors.textMuted}>·</text>
+					<text fg={uiColors.textPrimary}>{props.role}</text>
+				</box>
 				<box
 					width="100%"
 					flexDirection="column"
@@ -642,9 +674,29 @@ export function AgentSessionModal(props: AgentSessionModalProps) {
 										toggleBlocksOfKind("tool");
 										return;
 									}
+									const name = event.name.toLowerCase();
+									// `?` opens the shared help, but only on an empty prompt: a message
+									// may start with one, so anything typed keeps it literal.
+									if (
+										name === "?" &&
+										(inputRef?.value ?? props.draft).length === 0
+									) {
+										event.preventDefault();
+										props.onHelp?.();
+										return;
+									}
+									if (
+										!event.ctrl &&
+										!event.meta &&
+										!event.shift &&
+										(name === "up" || name === "down") &&
+										recallHistory(name === "up" ? -1 : 1)
+									) {
+										event.preventDefault();
+										return;
+									}
 									const items = autocompleteItems();
 									if (items.length === 0) return;
-									const name = event.name.toLowerCase();
 									if (name === "down") {
 										event.preventDefault();
 										setAutocompleteIndex((index) => (index + 1) % items.length);
@@ -657,7 +709,10 @@ export function AgentSessionModal(props: AgentSessionModalProps) {
 										event.preventDefault();
 										const item =
 											items[Math.min(autocompleteIndex(), items.length - 1)];
-										if (item) props.onDraftChange(item.name);
+										if (item) {
+											historyIndex = 0;
+											props.onDraftChange(item.name);
+										}
 									}
 								}}
 								focusedBackgroundColor={uiColors.bgMantle}
@@ -716,7 +771,7 @@ export function AgentSessionModal(props: AgentSessionModalProps) {
 						</box>
 					</box>
 				</box>
-			</GenericModal>
+			</box>
 			<Show when={picker()}>
 				{(state) => (
 					<ListViewModal

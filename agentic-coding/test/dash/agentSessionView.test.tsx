@@ -1,14 +1,19 @@
 /** @jsxImportSource @opentui/solid */
 // add-pi-durable-runtime, dashboard-agent-session-view: the live agent
-// session modal renders its title and transcript blocks (opencode v2 styling),
-// and the always-focused input drives submit/abort/close without any
+// session page renders the run title and transcript blocks (opencode v2
+// styling), and the always-focused input drives submit/abort without any
 // competing text keymap binding (see the module comment in
-// AgentSessionModal.tsx for why).
+// AgentSessionView.tsx for why).
 import { expect, test } from "bun:test";
-import { testRender } from "@opentui/solid";
-import { createSignal } from "solid-js";
+import type { KeyEvent } from "@opentui/core";
+import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
+import { testRender, useRenderer } from "@opentui/solid";
+import { createSignal, onCleanup } from "solid-js";
 import type { AgentSessionBlock } from "../../src/tui/dash/agent-session.ts";
-import { AgentSessionModal } from "../../src/tui/dash/ui/AgentSessionModal.tsx";
+import {
+	AgentSessionView,
+	SESSION_PICKER_KEYS,
+} from "../../src/tui/dash/ui/AgentSessionView.tsx";
 
 const SAMPLE_BLOCKS: AgentSessionBlock[] = [
 	{ kind: "user", text: "fix the parser", tone: "accent" },
@@ -20,21 +25,31 @@ const SAMPLE_BLOCKS: AgentSessionBlock[] = [
 function Harness(props: {
 	onSubmit: (text: string) => void;
 	onAbort: () => void;
-	onClose: () => void;
+	onBack: () => void;
+	history?: readonly string[];
 }) {
 	const [draft, setDraft] = createSignal("");
+	const [history, setHistory] = createSignal<readonly string[]>(
+		props.history ?? [],
+	);
 	return (
-		<AgentSessionModal
+		<AgentSessionView
 			role="worker"
 			blocks={SAMPLE_BLOCKS}
 			working={false}
 			models={["opencode-go/deepseek-v4.1-flash", "openai-codex/gpt-5.6-luna"]}
 			thinkingLevels={["off", "low", "medium", "high"]}
 			draft={draft()}
+			history={history()}
+			onHistoryAppend={(text) =>
+				setHistory((items) =>
+					items.at(-1) === text ? items : [...items, text],
+				)
+			}
 			onDraftChange={setDraft}
 			onSubmit={props.onSubmit}
 			onAbort={props.onAbort}
-			onClose={props.onClose}
+			onBack={props.onBack}
 			onConfigure={() => {}}
 		/>
 	);
@@ -42,7 +57,7 @@ function Harness(props: {
 
 test("renders the agent title and the transcript blocks", async () => {
 	const t = await testRender(
-		() => <Harness onSubmit={() => {}} onAbort={() => {}} onClose={() => {}} />,
+		() => <Harness onSubmit={() => {}} onAbort={() => {}} onBack={() => {}} />,
 		{ width: 100, height: 30 },
 	);
 	await t.flush();
@@ -58,8 +73,10 @@ test("renders the agent title and the transcript blocks", async () => {
 test("renders a provider error block", async () => {
 	const t = await testRender(
 		() => (
-			<AgentSessionModal
+			<AgentSessionView
 				role="worker"
+				history={[]}
+				onHistoryAppend={() => {}}
 				blocks={[
 					{ kind: "error", text: "400: MissingSessionID", tone: "error" },
 				]}
@@ -71,7 +88,7 @@ test("renders a provider error block", async () => {
 				onDraftChange={() => {}}
 				onSubmit={() => {}}
 				onAbort={() => {}}
-				onClose={() => {}}
+				onBack={() => {}}
 				onConfigure={() => {}}
 			/>
 		),
@@ -95,7 +112,7 @@ test("typing a message and pressing Enter submits it, not /abort", async () => {
 				onAbort={() => {
 					aborted = true;
 				}}
-				onClose={() => {}}
+				onBack={() => {}}
 			/>
 		),
 		{ width: 100, height: 30 },
@@ -121,7 +138,7 @@ test("typing /abort and pressing Enter aborts instead of sending a message", asy
 				onAbort={() => {
 					aborted = true;
 				}}
-				onClose={() => {}}
+				onBack={() => {}}
 			/>
 		),
 		{ width: 100, height: 30 },
@@ -148,7 +165,7 @@ test("typing /hide and pressing Enter hides the view without submitting or abort
 				onAbort={() => {
 					aborted = true;
 				}}
-				onClose={() => {
+				onBack={() => {
 					closed = true;
 				}}
 			/>
@@ -168,8 +185,10 @@ test("typing /hide and pressing Enter hides the view without submitting or abort
 test("thinking blocks collapse to 'Thinking…' and Ctrl+T expands them", async () => {
 	const t = await testRender(
 		() => (
-			<AgentSessionModal
+			<AgentSessionView
 				role="worker"
+				history={[]}
+				onHistoryAppend={() => {}}
 				blocks={[
 					{
 						kind: "reasoning",
@@ -184,7 +203,7 @@ test("thinking blocks collapse to 'Thinking…' and Ctrl+T expands them", async 
 				onDraftChange={() => {}}
 				onSubmit={() => {}}
 				onAbort={() => {}}
-				onClose={() => {}}
+				onBack={() => {}}
 				onConfigure={() => {}}
 			/>
 		),
@@ -203,8 +222,10 @@ test("thinking blocks collapse to 'Thinking…' and Ctrl+T expands them", async 
 test("a thinking block with a measured duration renders 'Thought: 1.6s'", async () => {
 	const t = await testRender(
 		() => (
-			<AgentSessionModal
+			<AgentSessionView
 				role="worker"
+				history={[]}
+				onHistoryAppend={() => {}}
 				blocks={[
 					{
 						kind: "reasoning",
@@ -220,7 +241,7 @@ test("a thinking block with a measured duration renders 'Thought: 1.6s'", async 
 				onDraftChange={() => {}}
 				onSubmit={() => {}}
 				onAbort={() => {}}
-				onClose={() => {}}
+				onBack={() => {}}
 				onConfigure={() => {}}
 			/>
 		),
@@ -234,8 +255,10 @@ test("a thinking block with a measured duration renders 'Thought: 1.6s'", async 
 test("assistant text renders as markdown without a status box", async () => {
 	const t = await testRender(
 		() => (
-			<AgentSessionModal
+			<AgentSessionView
 				role="worker"
+				history={[]}
+				onHistoryAppend={() => {}}
 				blocks={[
 					{
 						kind: "assistant",
@@ -250,14 +273,14 @@ test("assistant text renders as markdown without a status box", async () => {
 				onDraftChange={() => {}}
 				onSubmit={() => {}}
 				onAbort={() => {}}
-				onClose={() => {}}
+				onBack={() => {}}
 				onConfigure={() => {}}
 			/>
 		),
 		{ width: 100, height: 30 },
 	);
 	await t.flush();
-	const frame = t.captureCharFrame();
+	const frame = await t.waitForFrame((value) => value.includes("second item"));
 	expect(frame).toContain("first item");
 	expect(frame).toContain("second item");
 	t.renderer.destroy();
@@ -266,8 +289,10 @@ test("assistant text renders as markdown without a status box", async () => {
 test("renders the assistant footer and the context/cost meter", async () => {
 	const t = await testRender(
 		() => (
-			<AgentSessionModal
+			<AgentSessionView
 				role="worker"
+				history={[]}
+				onHistoryAppend={() => {}}
 				blocks={[
 					{
 						kind: "summary",
@@ -285,7 +310,7 @@ test("renders the assistant footer and the context/cost meter", async () => {
 				onDraftChange={() => {}}
 				onSubmit={() => {}}
 				onAbort={() => {}}
-				onClose={() => {}}
+				onBack={() => {}}
 				onConfigure={() => {}}
 			/>
 		),
@@ -300,7 +325,7 @@ test("renders the assistant footer and the context/cost meter", async () => {
 
 test("typing / opens the command autocomplete and Tab completes the command", async () => {
 	const t = await testRender(
-		() => <Harness onSubmit={() => {}} onAbort={() => {}} onClose={() => {}} />,
+		() => <Harness onSubmit={() => {}} onAbort={() => {}} onBack={() => {}} />,
 		{ width: 100, height: 30 },
 	);
 	await t.flush();
@@ -320,7 +345,7 @@ test("typing / opens the command autocomplete and Tab completes the command", as
 
 test("the autocomplete's highlighted command runs on Enter", async () => {
 	const t = await testRender(
-		() => <Harness onSubmit={() => {}} onAbort={() => {}} onClose={() => {}} />,
+		() => <Harness onSubmit={() => {}} onAbort={() => {}} onBack={() => {}} />,
 		{ width: 100, height: 30 },
 	);
 	await t.flush();
@@ -339,10 +364,12 @@ test("/model opens the picker and selecting applies the model override", async (
 	let handler: ((event: { name: string }) => boolean) | undefined;
 	const t = await testRender(
 		() => (
-			<AgentSessionModal
+			<AgentSessionView
 				role="worker"
 				blocks={[]}
 				working={false}
+				history={[]}
+				onHistoryAppend={() => {}}
 				models={[
 					"opencode-go/deepseek-v4.1-flash",
 					"openai-codex/gpt-5.6-luna",
@@ -352,7 +379,7 @@ test("/model opens the picker and selecting applies the model override", async (
 				onDraftChange={() => {}}
 				onSubmit={() => {}}
 				onAbort={() => {}}
-				onClose={() => {}}
+				onBack={() => {}}
 				onConfigure={(change) => {
 					configured = change;
 				}}
@@ -374,22 +401,105 @@ test("/model opens the picker and selecting applies the model override", async (
 	t.renderer.destroy();
 });
 
+/** The route's `agent-session-picker` layer, built from the modal's own key
+ * list: while a picker is open the prompt input is unfocused, so the picker's
+ * keys (including the terminal's Enter spelling) reach the modal through the
+ * keymap rather than through the input. */
+function PickerRoute(props: {
+	onSubmit: (text: string) => void;
+	onConfigure: (change: { model?: string; thinking?: string }) => void;
+}) {
+	const renderer = useRenderer();
+	const keymap = createDefaultOpenTuiKeymap(renderer);
+	const [draft, setDraft] = createSignal("");
+	let handler: ((event: KeyEvent) => boolean) | undefined;
+	const dispose = keymap.registerLayer({
+		priority: 1100,
+		commands: [
+			{
+				name: "agent-session-picker.handle",
+				run: ({ event }) => (handler ? handler(event) : false),
+			},
+		],
+		bindings: SESSION_PICKER_KEYS.map((key) => ({
+			key,
+			cmd: "agent-session-picker.handle",
+		})),
+	});
+	onCleanup(dispose);
+	return (
+		<AgentSessionView
+			role="worker"
+			blocks={[]}
+			working={false}
+			models={["opencode-go/deepseek-v4.1-flash", "openai-codex/gpt-5.6-luna"]}
+			thinkingLevels={["off", "low"]}
+			draft={draft()}
+			history={[]}
+			onHistoryAppend={() => {}}
+			onDraftChange={setDraft}
+			onSubmit={props.onSubmit}
+			onAbort={() => {}}
+			onBack={() => {}}
+			onConfigure={props.onConfigure}
+			onPickerKeyReady={(value) => {
+				handler = value;
+			}}
+		/>
+	);
+}
+
+test("the picker layer selects on the terminal's Enter spelling", async () => {
+	const configured: Array<{ model?: string; thinking?: string }> = [];
+	const submitted: string[] = [];
+	const t = await testRender(
+		() => (
+			<PickerRoute
+				onConfigure={(change) => configured.push(change)}
+				onSubmit={(text) => submitted.push(text)}
+			/>
+		),
+		{ width: 100, height: 30 },
+	);
+	try {
+		await t.flush();
+		for (const character of "/model") t.mockInput.pressKey(character);
+		t.mockInput.pressEnter();
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("Select model");
+		t.mockInput.pressArrow("down");
+		t.mockInput.pressEnter();
+		await t.renderOnce();
+		expect(configured).toEqual([{ model: "openai-codex/gpt-5.6-luna" }]);
+		expect(submitted).toEqual([]);
+		// The prompt accepts ordinary keys again once the picker is closed.
+		for (const character of "carry on") t.mockInput.pressKey(character);
+		t.mockInput.pressEnter();
+		await t.renderOnce();
+		expect(submitted).toEqual(["carry on"]);
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
 test("/thinking opens the picker and selecting applies the thinking override", async () => {
 	let configured: { model?: string; thinking?: string } | undefined;
 	let handler: ((event: { name: string }) => boolean) | undefined;
 	const t = await testRender(
 		() => (
-			<AgentSessionModal
+			<AgentSessionView
 				role="worker"
 				blocks={[]}
 				working={false}
 				models={[]}
+				history={[]}
+				onHistoryAppend={() => {}}
 				thinkingLevels={["off", "low", "medium", "high"]}
 				draft=""
 				onDraftChange={() => {}}
 				onSubmit={() => {}}
 				onAbort={() => {}}
-				onClose={() => {}}
+				onBack={() => {}}
 				onConfigure={(change) => {
 					configured = change;
 				}}
@@ -423,7 +533,7 @@ test("an empty submission does nothing", async () => {
 				onAbort={() => {
 					calls++;
 				}}
-				onClose={() => {}}
+				onBack={() => {}}
 			/>
 		),
 		{ width: 100, height: 30 },
@@ -433,4 +543,132 @@ test("an empty submission does nothing", async () => {
 	await t.renderOnce();
 	expect(calls).toBe(0);
 	t.renderer.destroy();
+});
+
+test("empty prompt recalls submitted input; arrows browse history without overwriting edits", async () => {
+	const submitted: string[] = [];
+	const t = await testRender(
+		() => (
+			<Harness
+				onSubmit={(text) => submitted.push(text)}
+				onAbort={() => {}}
+				onBack={() => {}}
+			/>
+		),
+		{ width: 100, height: 30 },
+	);
+	try {
+		await t.flush();
+		for (const text of ["first input", "second input"]) {
+			for (const character of text) t.mockInput.pressKey(character);
+			t.mockInput.pressEnter();
+			await t.renderOnce();
+		}
+		expect(submitted).toEqual(["first input", "second input"]);
+		t.mockInput.pressArrow("up");
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("second input");
+		t.mockInput.pressArrow("up");
+		t.mockInput.pressArrow("up"); // Clamp at oldest.
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("first input");
+		t.mockInput.pressArrow("down");
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("second input");
+		t.mockInput.pressArrow("down");
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("Ask anything…");
+		for (const character of "new draft") t.mockInput.pressKey(character);
+		t.mockInput.pressArrow("up");
+		t.mockInput.pressEnter();
+		await t.renderOnce();
+		expect(submitted.at(-1)).toBe("new draft");
+		t.mockInput.pressArrow("up");
+		t.mockInput.pressKey("!");
+		t.mockInput.pressArrow("up");
+		t.mockInput.pressArrow("down");
+		t.mockInput.pressEnter();
+		await t.renderOnce();
+		expect(submitted.at(-1)).toBe("new draft!");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("restored history recalls slash commands without interfering with typed autocomplete", async () => {
+	let aborted = false;
+	const t = await testRender(
+		() => (
+			<Harness
+				history={["saved message", "/abort"]}
+				onSubmit={() => {}}
+				onAbort={() => {
+					aborted = true;
+				}}
+				onBack={() => {}}
+			/>
+		),
+		{ width: 100, height: 30 },
+	);
+	try {
+		await t.flush();
+		t.mockInput.pressArrow("up");
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("/abort");
+		t.mockInput.pressArrow("up");
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("saved message");
+		t.mockInput.pressArrow("down");
+		t.mockInput.pressEnter();
+		await t.renderOnce();
+		expect(aborted).toBe(true);
+		t.mockInput.pressKey("/");
+		t.mockInput.pressArrow("down");
+		t.mockInput.pressEnter();
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("Select thinking level");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("`?` on an empty prompt opens the shared help, and a typed `?` stays literal", async () => {
+	let help = 0;
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={[]}
+				working={false}
+				models={[]}
+				thinkingLevels={["off", "low"]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onHelp={() => {
+					help++;
+				}}
+			/>
+		),
+		{ width: 100, height: 30 },
+	);
+	try {
+		await t.flush();
+		t.mockInput.pressKey("?");
+		await t.renderOnce();
+		expect(help).toBe(1);
+		// A message may start with `?`: once anything is typed the key is text.
+		t.mockInput.pressKey("w");
+		t.mockInput.pressKey("?");
+		await t.renderOnce();
+		expect(help).toBe(1);
+		expect(t.captureCharFrame()).toContain("w?");
+	} finally {
+		t.renderer.destroy();
+	}
 });

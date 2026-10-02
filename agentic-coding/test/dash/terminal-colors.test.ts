@@ -11,6 +11,7 @@ import {
 	mkdtempSync,
 	readFileSync,
 	rmSync,
+	statSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -33,6 +34,12 @@ import {
 	saveThemeName,
 	themeSettingsPath,
 } from "../../src/tui/dash/theme-settings.ts";
+
+import {
+	loadPromptHistory,
+	MAX_PROMPT_HISTORY,
+	savePromptHistory,
+} from "../../src/tui/shared/preferences.ts";
 
 const pad = (value: number) => value.toString(16).padStart(2, "0");
 
@@ -325,6 +332,38 @@ describe("UI preferences", () => {
 			keymap: "vim",
 			theme: "nord",
 		});
+	});
+
+	it("persists bounded prompt history privately and preserves other preferences", () => {
+		writeFileSync(
+			themeSettingsPath(),
+			JSON.stringify({ theme: "nord", keymap: "vim" }),
+		);
+		const history = Array.from(
+			{ length: MAX_PROMPT_HISTORY + 5 },
+			(_, index) => `prompt-${index}`,
+		);
+		savePromptHistory(history);
+		expect(loadPromptHistory()).toEqual(history.slice(-MAX_PROMPT_HISTORY));
+		expect(statSync(themeSettingsPath()).mode & 0o777).toBe(0o600);
+		saveThemeName("dracula");
+		expect(loadPromptHistory()).toEqual(history.slice(-MAX_PROMPT_HISTORY));
+		expect(JSON.parse(String(readFileSync(themeSettingsPath()))).keymap).toBe(
+			"vim",
+		);
+	});
+
+	it("ignores malformed or empty saved prompt history entries", () => {
+		expect(loadPromptHistory()).toEqual([]);
+		writeFileSync(themeSettingsPath(), "not JSON");
+		expect(loadPromptHistory()).toEqual([]);
+		writeFileSync(
+			themeSettingsPath(),
+			JSON.stringify({
+				promptHistory: [null, {}, 2, "", " ", "saved command"],
+			}),
+		);
+		expect(loadPromptHistory()).toEqual(["saved command"]);
 	});
 
 	it("rejects an invalid theme name without touching the saved file", () => {

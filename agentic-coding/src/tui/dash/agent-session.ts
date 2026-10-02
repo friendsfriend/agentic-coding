@@ -2,16 +2,16 @@
 // (add-pi-durable-runtime, dashboard-agent-session-view). The route owns the
 // `HostClient.watch()` subscription and hands each watch frame here; this
 // module turns one defensively-parsed conversation snapshot into the blocks
-// the session modal renders. Presentation only — no host, no I/O — so a shape
+// the session view renders. Presentation only — no host, no I/O — so a shape
 // drift in the experimental pi-durable package degrades to fewer blocks
 // instead of throwing in the dashboard.
 //
 // The block vocabulary and its visual language mirror opencode v2's session
 // transcript (user prompt block, indented assistant text, tool rows with a
 // two-cell icon gutter, muted result output, red error rows); the renderer in
-// `ui/AgentSessionModal.tsx` owns the actual styling.
+// `ui/AgentSessionView.tsx` owns the actual styling.
 
-/** Semantic color role of one block; the modal maps it to a theme color. */
+/** Semantic color role of one block; the view maps it to a theme color. */
 export type AgentSessionTone =
 	| "base"
 	| "muted"
@@ -57,7 +57,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Collapse whitespace and bound one line so a multi-line model answer cannot
- * push the rest of the transcript out of the modal. */
+ * push the rest of the transcript out of the view. */
 function oneLine(value: unknown, max = 400): string {
 	if (typeof value !== "string") return "";
 	const text = value.replace(/\s+/g, " ").trim();
@@ -198,7 +198,7 @@ function entryBlocks(
 				for (const block of message.content) {
 					if (!isRecord(block)) continue;
 					if (block.type === "text" && typeof block.text === "string") {
-						// Assistant output keeps its line structure: the modal renders it
+						// Assistant output keeps its line structure: the view renders it
 						// as markdown, not as a collapsed one-liner.
 						const text = rawText(block.text);
 						if (text) blocks.push({ kind: "assistant", text, tone: "base" });
@@ -346,7 +346,7 @@ function liveBlocks(
 	return blocks;
 }
 
-/** Most recent blocks, bounded so the fixed-height modal keeps the newest
+/** Most recent blocks, bounded so the view keeps the newest
  * activity visible instead of clipping it. */
 const MAX_BLOCKS = 60;
 
@@ -474,6 +474,18 @@ export function buildAgentSessionView(value: unknown): AgentSessionBlock[] {
 		if (summary) blocks.push(summary);
 	}
 	blocks.push(...liveBlocks(live));
+	const inbox = isRecord(docs["pi.inbox"]) ? docs["pi.inbox"] : undefined;
+	for (const item of Array.isArray(inbox?.items) ? inbox.items : []) {
+		if (!isRecord(item) || (item.mode !== "steer" && item.mode !== "followUp"))
+			continue;
+		const text = contentRaw(item.content);
+		if (text)
+			blocks.push({
+				kind: "notice",
+				tone: "warning",
+				text: `Queued ${item.mode === "steer" ? "steering" : "follow-up"}: ${text}`,
+			});
+	}
 	const merged = mergeToolLifecycle(blocks);
 	return merged.length > MAX_BLOCKS
 		? merged.slice(merged.length - MAX_BLOCKS)

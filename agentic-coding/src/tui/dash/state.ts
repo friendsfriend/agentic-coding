@@ -218,6 +218,11 @@ export interface OverlayState {
 	 * keystroke or a watch frame never re-creates the whole overlay value. */
 	readonly agentSession: () => AgentSessionIdentity | undefined;
 	readonly setAgentSession: Setter<AgentSessionIdentity | undefined>;
+	/** Whether the session page is showing. The identity above (and its live
+	 * watch) outlives it: leaving for the grid keeps the run streaming, so
+	 * reopening the agent lands on a transcript that never stopped. */
+	readonly agentSessionOpen: () => boolean;
+	readonly setAgentSessionOpen: Setter<boolean>;
 	readonly agentSessionBlocks: () => readonly AgentSessionBlock[];
 	readonly setAgentSessionBlocks: Setter<readonly AgentSessionBlock[]>;
 	/** Model, thinking level, and working/idle state from the watch frames. */
@@ -235,6 +240,9 @@ export interface OverlayState {
 	>;
 	readonly agentSessionDraft: () => string;
 	readonly setAgentSessionDraft: Setter<string>;
+	/** Client-local input history survives closing or switching agent views. */
+	readonly agentSessionHistory: () => readonly string[];
+	readonly setAgentSessionHistory: Setter<readonly string[]>;
 }
 
 export interface AgentSessionIdentity {
@@ -256,6 +264,7 @@ export interface FindingsOverlayData {
 export function createOverlayState(options: {
 	/** Index of the currently applied theme name in the registry. */
 	readonly themeIndex: number;
+	readonly promptHistory?: readonly string[];
 }): OverlayState {
 	const [repairTargets, setRepairTargets] = createSignal<RepairTarget[]>([]);
 
@@ -306,6 +315,7 @@ export function createOverlayState(options: {
 	const [costOffset, setCostOffset] = createSignal(0);
 
 	const [agentSession, setAgentSession] = createSignal<AgentSessionIdentity>();
+	const [agentSessionOpen, setAgentSessionOpen] = createSignal(false);
 	const [agentSessionBlocks, setAgentSessionBlocks] = createSignal<
 		readonly AgentSessionBlock[]
 	>([]);
@@ -319,6 +329,9 @@ export function createOverlayState(options: {
 	const [agentSessionContextWindows, setAgentSessionContextWindows] =
 		createSignal<Readonly<Record<string, number>>>({});
 	const [agentSessionDraft, setAgentSessionDraft] = createSignal("");
+	const [agentSessionHistory, setAgentSessionHistory] = createSignal<
+		readonly string[]
+	>(options.promptHistory ?? []);
 	return {
 		verdict,
 		setVerdict,
@@ -364,6 +377,8 @@ export function createOverlayState(options: {
 		setPresetSwitcherChoices,
 		agentSession,
 		setAgentSession,
+		agentSessionOpen,
+		setAgentSessionOpen,
 		agentSessionBlocks,
 		setAgentSessionBlocks,
 		agentSessionMetadata,
@@ -376,5 +391,7 @@ export function createOverlayState(options: {
 		setAgentSessionContextWindows,
 		agentSessionDraft,
 		setAgentSessionDraft,
+		agentSessionHistory,
+		setAgentSessionHistory,
 	};
 }

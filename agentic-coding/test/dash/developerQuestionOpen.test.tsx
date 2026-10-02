@@ -80,6 +80,9 @@ function TestDashboard(props: {
 		activeModal(value, ctx) {
 			ctx.require("modal.active", String(value));
 		},
+		agentView(value, ctx) {
+			ctx.require("agent.view", String(value));
+		},
 	});
 	onCleanup(() => dispose());
 	return (

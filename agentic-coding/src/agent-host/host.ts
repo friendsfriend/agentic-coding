@@ -4,6 +4,7 @@ import net from "node:net";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models, MutableModels, Provider } from "@earendil-works/pi-ai";
+import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import type { Storage } from "@earendil-works/pi-durable";
 import {
@@ -40,6 +41,10 @@ import {
 	createWorkflowDialogueExtension,
 	type DurableRunContext,
 } from "./tools.ts";
+
+// pi-ai's default OAuth loaders hide imports from bundlers. Embed/register all
+// flows here so compiled hosts can derive auth and refresh without node_modules.
+registerBunOAuthFlows();
 
 interface RunMapState extends JsonObject {
 	runs: Record<string, { conversationId: number }>;

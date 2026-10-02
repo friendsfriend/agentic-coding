@@ -24,7 +24,6 @@ import type {
 	AgentSessionBlock,
 	AgentSessionMetadata,
 } from "../agent-session.ts";
-import { AgentSessionModal } from "../ui/AgentSessionModal.tsx";
 import { CostModal } from "../ui/CostModal.tsx";
 import { FindingsModal } from "../ui/FindingsModal.tsx";
 import { NotificationOverlay } from "../ui/Notification.tsx";
@@ -82,24 +81,6 @@ export interface VerdictOverlay {
 	readonly lines: number;
 }
 
-/** A live, writable durable agent session (add-pi-durable-runtime,
- * dashboard-agent-session-view). Live status text and the draft are read from
- * `OverlaysState` (high-frequency signals), matching the `verdictOffset`-style
- * split already used for the read-only overlays. */
-export interface AgentSessionOverlay {
-	readonly role: string;
-	readonly models: readonly string[];
-	readonly thinkingLevels: readonly string[];
-	readonly onSubmit: (text: string) => void;
-	readonly onAbort: () => void;
-	readonly onClose: () => void;
-	readonly onConfigure: (change: { model?: string; thinking?: string }) => void;
-	/** The transcript scroll box, so the route's keymap layer can scroll it. */
-	readonly onScrollBoxReady?: (box: ScrollBoxRenderable) => void;
-	readonly onPickerKeyReady?: (handler: (event: KeyEvent) => boolean) => void;
-	readonly onPickerActiveChange?: (active: boolean) => void;
-}
-
 /** The overlay values and selections owned by `dash/state.ts`. */
 export interface OverlaysState {
 	readonly repairSelection: () => number;
@@ -125,6 +106,7 @@ export interface OverlaysState {
 	readonly agentSessionContextWindows: () => Readonly<Record<string, number>>;
 	readonly agentSessionDraft: () => string;
 	readonly setAgentSessionDraft: (value: string) => void;
+	readonly agentSessionHistory: () => readonly string[];
 }
 
 export interface OverlaysProps {
@@ -139,7 +121,6 @@ export interface OverlaysProps {
 	readonly cost?: CostOverlay;
 	readonly presetSwitcher?: PresetSwitcherOverlay;
 	readonly verdict?: VerdictOverlay;
-	readonly agentSession?: AgentSessionOverlay;
 	/** Short hint shown beside the action picker title. */
 	readonly pickerHint?: string;
 	/** Keybind help: zero lines means closed. */
@@ -305,48 +286,6 @@ export function Overlays(props: OverlaysProps) {
 						offset={props.state.verdictOffset()}
 						lines={report().lines}
 						renderMarkdown={props.state.verdictRenderMarkdown()}
-					/>
-				)}
-			</Show>
-			<Show when={props.agentSession}>
-				{(session) => (
-					<AgentSessionModal
-						role={session().role}
-						blocks={props.state.agentSessionBlocks()}
-						model={props.state.agentSessionMetadata().model}
-						thinking={props.state.agentSessionMetadata().thinking}
-						working={props.state.agentSessionMetadata().working}
-						{...(props.state.agentSessionMetadata().error
-							? { error: props.state.agentSessionMetadata().error }
-							: {})}
-						{...(props.state.agentSessionMetadata().contextTokens !== undefined
-							? {
-									contextTokens:
-										props.state.agentSessionMetadata().contextTokens,
-								}
-							: {})}
-						{...(props.state.agentSessionMetadata().cost !== undefined
-							? { cost: props.state.agentSessionMetadata().cost }
-							: {})}
-						{...(props.state.agentSessionMetadata().model
-							? {
-									contextWindow:
-										props.state.agentSessionContextWindows()[
-											props.state.agentSessionMetadata().model as string
-										],
-								}
-							: {})}
-						models={session().models}
-						thinkingLevels={session().thinkingLevels}
-						draft={props.state.agentSessionDraft()}
-						onDraftChange={(value) => props.state.setAgentSessionDraft(value)}
-						onSubmit={(text) => session().onSubmit(text)}
-						onAbort={() => session().onAbort()}
-						onClose={() => session().onClose()}
-						onConfigure={(change) => session().onConfigure(change)}
-						onScrollBoxReady={session().onScrollBoxReady}
-						onPickerKeyReady={session().onPickerKeyReady}
-						onPickerActiveChange={session().onPickerActiveChange}
 					/>
 				)}
 			</Show>

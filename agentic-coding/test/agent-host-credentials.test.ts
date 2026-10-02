@@ -88,3 +88,91 @@ describe("live global pi credentials", () => {
 		await expect(store.list()).resolves.toEqual([]);
 	});
 });
+
+test("compiled durable models derive and refresh Codex OAuth without node_modules", async () => {
+	const dir = fs.mkdtempSync(
+		path.join(os.tmpdir(), "agent-host-compiled-oauth-"),
+	);
+	try {
+		const authPath = path.join(dir, "auth.json");
+		const credential = {
+			type: "oauth",
+			access: "test-access",
+			refresh: "test-refresh",
+			expires: Date.now() + 3_600_000,
+		};
+		fs.writeFileSync(authPath, JSON.stringify({ "openai-codex": credential }), {
+			mode: 0o600,
+		});
+		const entrypoint = path.join(dir, "oauth.ts");
+		fs.writeFileSync(
+			entrypoint,
+			`
+import { builtinModels } from ${JSON.stringify(Bun.resolveSync("@earendil-works/pi-ai/providers/all", import.meta.dir))};
+import { PiAuthCredentialStore } from ${JSON.stringify(path.resolve(import.meta.dir, "../src/agent-host/credentials.ts"))};
+import { withDurableSession } from ${JSON.stringify(path.resolve(import.meta.dir, "../src/agent-host/host.ts"))};
+const store = new PiAuthCredentialStore(process.argv[2]);
+const models = withDurableSession(builtinModels({ credentials: store }));
+const valid = await models.getAuth("openai-codex");
+await store.modify("openai-codex", async (credential) => ({ ...credential, expires: 0 }));
+const payload = btoa(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "test-account" } }));
+const access = "header." + payload + ".signature";
+let refreshes = 0;
+globalThis.fetch = async (url, options) => {
+	if (String(url) !== "https://auth.openai.com/oauth/token" ||
+		new URLSearchParams(options?.body).get("refresh_token") !== "test-refresh")
+		throw new Error("Unexpected OAuth request");
+	refreshes++;
+	return Response.json({ access_token: access, refresh_token: "rotated-refresh", expires_in: 3600 });
+};
+const refreshed = await models.getAuth("openai-codex");
+console.log(JSON.stringify({ valid, refreshed, access, refreshes }));
+`,
+		);
+		const binary = path.join(dir, "oauth");
+		const build = await Bun.build({
+			entrypoints: [entrypoint],
+			compile: {
+				outfile: binary,
+				autoloadBunfig: false,
+				autoloadDotenv: false,
+				autoloadTsconfig: false,
+				autoloadPackageJson: false,
+			},
+		});
+		expect(build.success).toBe(true);
+		const child = Bun.spawn([binary, authPath], {
+			cwd: dir,
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [stdout, stderr, exitCode] = await Promise.all([
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+			child.exited,
+		]);
+		expect(stderr).toBe("");
+		expect(exitCode).toBe(0);
+		const result = JSON.parse(stdout);
+		expect(result.valid).toEqual({
+			auth: { apiKey: credential.access },
+			source: "OAuth",
+		});
+		expect(result.refreshed).toEqual({
+			auth: { apiKey: result.access },
+			source: "OAuth",
+		});
+		expect(result.refreshes).toBe(1);
+		const stored = await new PiAuthCredentialStore(authPath).read(
+			"openai-codex",
+		);
+		expect(stored).toMatchObject({
+			access: result.access,
+			refresh: "rotated-refresh",
+			accountId: "test-account",
+		});
+		expect(stored?.type === "oauth" && stored.expires > Date.now()).toBe(true);
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}, 15_000);
