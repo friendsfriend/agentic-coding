@@ -131,6 +131,66 @@ describe("buildAgentSessionView", () => {
 		);
 	});
 
+	test("writes one assistant footer per turn, not per generation", () => {
+		const assistant = (
+			stopReason: string,
+			content: unknown[],
+			output: number,
+		) => ({
+			kind: "pi.assistant",
+			model: [
+				{
+					role: "assistant",
+					provider: "opencode-go",
+					model: "deepseek",
+					stopReason,
+					content,
+					usage: { output },
+				},
+			],
+		});
+		const user = {
+			kind: "pi.user",
+			model: [{ role: "user", content: "what is this repo" }],
+		};
+		const call = assistant(
+			"toolUse",
+			[{ type: "toolCall", name: "read", arguments: { path: "a.ts" } }],
+			100,
+		);
+		const answer = assistant(
+			"stop",
+			[{ type: "text", text: "A workflow engine." }],
+			600,
+		);
+
+		// The turn's intermediate generation (a tool call) carries no footer; the
+		// answer that ended the turn carries the turn's own.
+		const finished = buildAgentSessionView({
+			entries: [
+				user,
+				call,
+				{
+					kind: "pi.tool-result",
+					model: [{ toolName: "read", content: "contents", isError: false }],
+				},
+				answer,
+			],
+		});
+		expect(
+			finished
+				.filter((block) => block.kind === "summary")
+				.map((block) => block.text),
+		).toEqual(["opencode-go/deepseek · 600 out"]);
+
+		// A turn still working through its tools has no footer yet.
+		expect(
+			buildAgentSessionView({ entries: [user, call] }).filter(
+				(block) => block.kind === "summary",
+			),
+		).toEqual([]);
+	});
+
 	test("pairs a tool call with its result into one minimized entry", () => {
 		const blocks = buildAgentSessionView({
 			entries: [

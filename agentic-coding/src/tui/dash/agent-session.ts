@@ -466,16 +466,39 @@ function mergeToolLifecycle(
 	return out;
 }
 
+/**
+ * Whether a generation ended its turn instead of calling another tool. A turn
+ * is the work one user or engine message starts: its assistant steps (thoughts,
+ * tool calls) are steps *inside* it, and only the answer that stopped the loop
+ * closes it.
+ */
+function endsTurn(entry: unknown): boolean {
+	if (!isRecord(entry)) return false;
+	const message = Array.isArray(entry.model) ? entry.model[0] : undefined;
+	if (!isRecord(message)) return false;
+	if (message.stopReason === "toolUse") return false;
+	return !(
+		Array.isArray(message.content) &&
+		message.content.some(
+			(block) => isRecord(block) && block.type === "toolCall",
+		)
+	);
+}
+
 /** opencode's assistant footer, minus the duration and token rate: pi-durable
  * records a message timestamp that is the generation's *start* and no
  * completion time, so subtracting timestamps fabricates a rate (a 58 ms
  * "duration" for a 476-token answer, seen live). The model and the output token
- * count are the accurate part of the footer. */
+ * count are the accurate part of the footer.
+ *
+ * One footer per turn, like opencode: the intermediate generations that only
+ * called tools carry no footer of their own. */
 function assistantSummaryBlock(
 	entry: unknown,
 	timings: Readonly<Record<string, EntryTiming>>,
 ): AgentSessionBlock | undefined {
 	if (!isRecord(entry) || entry.kind !== "pi.assistant") return undefined;
+	if (!endsTurn(entry)) return undefined;
 	const message = Array.isArray(entry.model) ? entry.model[0] : undefined;
 	if (!isRecord(message) || message.stopReason === "error") return undefined;
 	const provider =

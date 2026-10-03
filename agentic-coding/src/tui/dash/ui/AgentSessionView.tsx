@@ -30,6 +30,7 @@ import {
 	parseMarkdownBlocks,
 	ScrollableContent,
 	uiColors,
+	useTerminalDimensions,
 } from "@ui";
 import {
 	createMemo,
@@ -120,12 +121,13 @@ const DEFAULT_THINKING_LEVELS = [
 	"max",
 ] as const;
 
-/** Blend two theme colors: `amount` 0 keeps `from`, 1 gives `to`. Named theme
+/** Blend a status color into the dialog background, so every box has a solid
+ * background that still reads as "the theme, tinted by status". Named theme
  * colors resolve through OpenTUI's own parser. */
-function blend(from: string, to: string, amount: number): string {
-	const base = parseColor(from);
-	const tone = parseColor(to);
-	const mix = (start: number, end: number) => start + (end - start) * amount;
+function tint(color: string, amount: number): string {
+	const base = parseColor(uiColors.bgBase);
+	const tone = parseColor(color);
+	const mix = (from: number, to: number) => from + (to - from) * amount;
 	return rgbToHex(
 		RGBA.fromValues(
 			mix(base.r, tone.r),
@@ -136,25 +138,18 @@ function blend(from: string, to: string, amount: number): string {
 	);
 }
 
-/** Blend a status color into the dialog background, so every box has a solid
- * background that still reads as "the theme, tinted by status". */
-function tint(color: string, amount: number): string {
-	return blend(uiColors.bgBase, color, amount);
-}
+/** The separator between the transcript and its newest output: a dashed rule,
+ * one vertical dash per cell, so the boundary is visible without tinting (or
+ * bordering) the content that follows it. */
+const DIVIDER_GLYPH = "╎";
 
-/** How far the newest content's background leans toward the accent: enough to
- * read as "this just arrived", faint enough to stay a background. */
-const FRESH = 0.08;
-
-/** The marker for the newest content: a background nudged toward the accent,
- * so a fresh block is marked without a border or a bar of its own. */
-function freshBackground(background: string): string {
-	return blend(background, uiColors.accent, FRESH);
-}
-
-/** A block that carries no status tint of its own sits on the page background. */
-function contentBackground(fresh: boolean): string {
-	return fresh ? freshBackground(uiColors.bgBase) : uiColors.bgBase;
+function NewContentDivider() {
+	const dimensions = useTerminalDimensions();
+	return (
+		<text fg={uiColors.textMuted} wrapMode="none" flexShrink={0}>
+			{DIVIDER_GLYPH.repeat(Math.max(0, dimensions().width))}
+		</text>
+	);
 }
 
 /** The left-edge marker color: the status color, fully saturated. */
@@ -273,8 +268,8 @@ function AssistantMarkdown(props: { text: string }) {
 /** The transcript rows and the blocks carrying the newest-content marker. */
 interface TranscriptState {
 	readonly rows: readonly AgentSessionBlock[];
-	/** The newest content: the blocks the latest frame arrived with. */
-	readonly marked: readonly AgentSessionBlock[];
+	/** The blocks the latest frame arrived with: the newest output. */
+	readonly newest: readonly AgentSessionBlock[];
 }
 
 /** One transcript entry. Assistant output is markdown with no status box;
@@ -285,33 +280,39 @@ function Block(props: {
 	role: string;
 	index: number;
 	expanded: boolean;
-	/** Newest content: marked with a faint background. */
-	fresh: boolean;
 	onToggle: (index: number) => void;
 }) {
 	const color = () => toneColor(props.block.tone);
 	if (props.block.kind === "summary")
 		// opencode's assistant footer: agent · model · duration · tok/s.
 		return (
-			<box
-				paddingLeft={3}
-				paddingRight={1}
-				flexShrink={0}
-				backgroundColor={contentBackground(props.fresh)}
-			>
+			<box paddingLeft={3} paddingRight={1} flexShrink={0}>
 				<text fg={uiColors.textMuted} wrapMode="none" truncate>
 					{titlecase(props.role)} · {props.block.text}
 				</text>
 			</box>
 		);
-	if (props.block.kind === "assistant")
+	if (props.block.kind === "user")
+		// opencode's user prompt: the prompt box's own raised block, with a blank
+		// line above and below the text so a message reads as a paragraph of its
+		// own instead of a dense row.
 		return (
 			<box
-				paddingLeft={3}
+				border={["left"]}
+				borderColor={uiColors.accent}
+				backgroundColor={uiColors.bgMantle}
+				paddingTop={1}
+				paddingBottom={1}
+				paddingLeft={2}
 				paddingRight={1}
 				flexShrink={0}
-				backgroundColor={contentBackground(props.fresh)}
 			>
+				<text fg={uiColors.textPrimary}>{props.block.text}</text>
+			</box>
+		);
+	if (props.block.kind === "assistant")
+		return (
+			<box paddingLeft={3} paddingRight={1} flexShrink={0}>
 				<AssistantMarkdown text={props.block.text} />
 			</box>
 		);
@@ -322,7 +323,6 @@ function Block(props: {
 				paddingRight={1}
 				flexDirection="column"
 				flexShrink={0}
-				backgroundColor={contentBackground(props.fresh)}
 				onMouseUp={() => props.onToggle(props.index)}
 			>
 				<text fg={uiColors.warning}>
@@ -340,8 +340,6 @@ function Block(props: {
 		);
 	const content = () => {
 		switch (props.block.kind) {
-			case "user":
-				return <text fg={uiColors.textPrimary}>{props.block.text}</text>;
 			case "tool":
 				// One line per tool call: the result's answer replaces the request, and
 				// the full output (plus the request) only shows when expanded.
@@ -422,11 +420,7 @@ function Block(props: {
 		<box
 			border={["left"]}
 			borderColor={markerColor(props.block.tone)}
-			backgroundColor={
-				props.fresh
-					? freshBackground(boxBackground(props.block.tone))
-					: boxBackground(props.block.tone)
-			}
+			backgroundColor={boxBackground(props.block.tone)}
 			paddingLeft={2}
 			paddingRight={1}
 			flexShrink={0}
@@ -493,23 +487,21 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 	 * renderable through its async highlight pass again — the transcript
 	 * flashing after every message.
 	 *
-	 * The marker follows whatever arrived or changed in the latest frame and
-	 * stays there until newer output replaces it, so a live session always shows
-	 * where the last output landed.
+	 * The newest output follows whatever arrived or changed in the latest frame
+	 * and stays the newest until newer output replaces it, so the divider always
+	 * sits between the transcript and the output that just landed. Nothing is
+	 * marked on the first frame: opening a page adds no output.
 	 */
 	const transcript = createMemo((previous: TranscriptState | undefined) => {
 		const rows = reuseAgentSessionBlocks(previous?.rows ?? [], props.blocks);
-		const known = previous ? new Set(previous.rows) : undefined;
-		const arrived = known
-			? rows.filter((row) => !known.has(row))
-			: // Opening the page marks the newest output, exactly where a live
-				// session would have left the marker.
-				rows.slice(-1);
-		const marked =
+		if (!previous) return { rows, newest: [] };
+		const known = new Set(previous.rows);
+		const arrived = rows.filter((row) => !known.has(row));
+		const newest =
 			arrived.length > 0
 				? arrived
-				: (previous?.marked ?? []).filter((row) => rows.includes(row));
-		return { rows, marked };
+				: previous.newest.filter((row) => rows.includes(row));
+		return { rows, newest };
 	}, undefined);
 	const [picker, setPicker] = createSignal<PickerState | undefined>();
 	const [autocompleteIndex, setAutocompleteIndex] = createSignal(0);
@@ -670,8 +662,8 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 				height="100%"
 				flexDirection="column"
 				minHeight={0}
-				paddingLeft={2}
-				paddingRight={2}
+				paddingLeft={1}
+				paddingRight={1}
 				backgroundColor={uiColors.bgBase}
 			>
 				<box width="100%" flexDirection="column" flexGrow={1} minHeight={0}>
@@ -683,14 +675,21 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 						<box flexDirection="column" gap={1}>
 							<For each={transcript().rows}>
 								{(block, index) => (
-									<Block
-										block={block}
-										role={props.role}
-										index={index()}
-										expanded={expandedBlocks().has(index())}
-										fresh={transcript().marked.includes(block)}
-										onToggle={toggleBlock}
-									/>
+									<box width="100%" flexDirection="column">
+										{/* Above the first block of the newest output, and only
+										    there: the divider is the boundary, not a mark on
+										    the content. */}
+										<Show when={transcript().newest[0] === block}>
+											<NewContentDivider />
+										</Show>
+										<Block
+											block={block}
+											role={props.role}
+											index={index()}
+											expanded={expandedBlocks().has(index())}
+											onToggle={toggleBlock}
+										/>
+									</box>
 								)}
 							</For>
 						</box>

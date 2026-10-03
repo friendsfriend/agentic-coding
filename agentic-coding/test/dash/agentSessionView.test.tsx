@@ -73,7 +73,10 @@ test("the page is body content: no title row, and the prompt ends it", async () 
 	// `captureCharFrame` ends with a newline: the rows are the trimmed split.
 	const lines = frame.trimEnd().split("\n");
 	expect(frame).not.toContain("Agent · worker");
-	expect(lines[0]).toContain("fix the parser");
+	// The user prompt block owns the first row (its own blank line above the
+	// text), and the prompt's metadata row is the last.
+	expect(lines[0]).not.toContain("fix the parser");
+	expect(lines[1]).toContain("fix the parser");
 	expect(lines.at(-1)).toContain("Worker");
 	t.renderer.destroy();
 });
@@ -640,7 +643,7 @@ test("restored history recalls slash commands without interfering with typed aut
 	}
 });
 
-test("the newest output carries a background marker until the next output", async () => {
+test("the newest output is separated by a dashed divider, until the next output", async () => {
 	const [blocks, setBlocks] = createSignal<readonly AgentSessionBlock[]>([
 		{ kind: "user", text: "fix the parser", tone: "accent" },
 		{ kind: "assistant", text: "Reading the parser now.", tone: "base" },
@@ -665,49 +668,39 @@ test("the newest output carries a background marker until the next output", asyn
 		),
 		{ width: 80, height: 20 },
 	);
-	/** The painted background of the first cell holding `text`. */
-	const background = (text: string) => {
-		for (const line of t.captureSpans().lines) {
-			for (const span of line.spans) {
-				if (span.text.includes(text)) return JSON.stringify(span.bg);
-			}
-		}
-		return undefined;
-	};
+	const rows = () => t.captureCharFrame().trimEnd().split("\n");
+	const rowOf = (text: string) =>
+		rows().findIndex((line) => line.includes(text));
+	const dividerRow = () => rows().findIndex((line) => line.includes("╎"));
 	try {
 		await t.renderOnce();
 		await t.renderOnce();
-		// Opening the page marks the newest output.
-		const markedAssistant = background("Reading the parser");
-		expect(markedAssistant).toBeDefined();
+		// Opening a page adds no output, so nothing is separated.
+		expect(dividerRow()).toBe(-1);
 
-		// New output takes the marker over, and the previous block keeps its own
-		// (unmarked) background.
+		// New output: the divider sits between it and the transcript before it.
 		setBlocks((current) => [
 			...current,
 			{ kind: "result", text: "read: file contents", tone: "success" },
 		]);
 		await t.renderOnce();
-		const assistantPlain = background("Reading the parser");
-		const markedResult = background("read: file contents");
-		expect(assistantPlain).not.toBe(markedAssistant);
-		expect(markedResult).not.toBe(assistantPlain);
+		const first = dividerRow();
+		expect(first).toBeGreaterThan(rowOf("Reading the parser"));
+		expect(first).toBeLessThan(rowOf("read: file contents"));
 
-		// A frame that adds nothing keeps the marker where it is.
+		// A frame that adds nothing leaves the divider where it is.
 		setBlocks((current) => current.map((block) => ({ ...block })));
 		await t.renderOnce();
-		expect(background("read: file contents")).toBe(markedResult);
+		expect(dividerRow()).toBe(first);
 
-		// The next output takes the marker over: the result reverts, and the new
-		// assistant block carries the marker (compared against the other, now
-		// unmarked, assistant block).
+		// The next output moves the divider down: everything above it is old.
 		setBlocks((current) => [
 			...current,
 			{ kind: "assistant", text: "Applied the fix.", tone: "base" },
 		]);
 		await t.renderOnce();
-		expect(background("read: file contents")).not.toBe(markedResult);
-		expect(background("Applied the fix")).not.toBe(assistantPlain);
+		expect(dividerRow()).toBeGreaterThan(rowOf("read: file contents"));
+		expect(dividerRow()).toBeLessThan(rowOf("Applied the fix"));
 	} finally {
 		t.renderer.destroy();
 	}
