@@ -16,10 +16,10 @@ import {
 } from "../../src/tui/dash/ui/AgentSessionView.tsx";
 
 const SAMPLE_BLOCKS: AgentSessionBlock[] = [
-	{ kind: "user", text: "fix the parser", tone: "accent" },
-	{ kind: "assistant", text: "Reading the parser", tone: "base" },
-	{ kind: "tool", text: "read path=a.ts", tone: "muted", icon: "→" },
-	{ kind: "result", text: "read: file contents", tone: "success" },
+	{ id: "b1", kind: "user", text: "fix the parser", tone: "accent" },
+	{ id: "b2", kind: "assistant", text: "Reading the parser", tone: "base" },
+	{ id: "b3", kind: "tool", text: "read path=a.ts", tone: "muted", icon: "→" },
+	{ id: "b4", kind: "result", text: "read: file contents", tone: "success" },
 ];
 
 function Harness(props: {
@@ -89,7 +89,12 @@ test("renders a provider error block", async () => {
 				history={[]}
 				onHistoryAppend={() => {}}
 				blocks={[
-					{ kind: "error", text: "400: MissingSessionID", tone: "error" },
+					{
+						id: "b5",
+						kind: "error",
+						text: "400: MissingSessionID",
+						tone: "error",
+					},
 				]}
 				working={false}
 				error="400: MissingSessionID"
@@ -202,6 +207,7 @@ test("thinking blocks collapse to 'Thinking…' and Ctrl+T expands them", async 
 				onHistoryAppend={() => {}}
 				blocks={[
 					{
+						id: "b6",
 						kind: "reasoning",
 						text: "the hidden chain of thought",
 						tone: "muted",
@@ -239,6 +245,7 @@ test("a thinking block with a measured duration renders 'Thought: 1.6s'", async 
 				onHistoryAppend={() => {}}
 				blocks={[
 					{
+						id: "b7",
 						kind: "reasoning",
 						text: "weighing options",
 						tone: "muted",
@@ -272,6 +279,7 @@ test("assistant text renders as markdown without a status box", async () => {
 				onHistoryAppend={() => {}}
 				blocks={[
 					{
+						id: "b8",
 						kind: "assistant",
 						text: "- first item\n- second item",
 						tone: "base",
@@ -306,6 +314,7 @@ test("renders the assistant footer and the context/cost meter", async () => {
 				onHistoryAppend={() => {}}
 				blocks={[
 					{
+						id: "b9",
 						kind: "summary",
 						text: "opencode-go/deepseek · 4.1K out",
 						tone: "muted",
@@ -646,6 +655,7 @@ test("restored history recalls slash commands without interfering with typed aut
 test("a frame that arrives while scrolled up leaves the viewport alone", async () => {
 	const [blocks, setBlocks] = createSignal<readonly AgentSessionBlock[]>(
 		Array.from({ length: 20 }, (_, index) => ({
+			id: "b10",
 			kind: "result" as const,
 			text: `line ${index}`,
 			tone: "success" as const,
@@ -693,7 +703,7 @@ test("a frame that arrives while scrolled up leaves the viewport alone", async (
 		// New output arrives: the viewport stays where the reader left it.
 		setBlocks((current) => [
 			...current,
-			{ kind: "assistant", text: "a new answer", tone: "base" },
+			{ id: "b11", kind: "assistant", text: "a new answer", tone: "base" },
 		]);
 		await t.renderOnce();
 		const after = t.captureCharFrame();
@@ -709,6 +719,7 @@ test("output arriving while scrolled up does not slide the transcript", async ()
 	// viewport toward the bottom with it) if it were not anchored.
 	const [blocks, setBlocks] = createSignal<readonly AgentSessionBlock[]>(
 		Array.from({ length: 100 }, (_, index) => ({
+			id: "b12",
 			kind: "result" as const,
 			text: `line ${index}`,
 			tone: "success" as const,
@@ -752,7 +763,12 @@ test("output arriving while scrolled up does not slide the transcript", async ()
 		for (let index = 0; index < 4; index++) {
 			setBlocks((current) => [
 				...current,
-				{ kind: "assistant", text: `streaming ${index}`, tone: "base" },
+				{
+					id: "b13",
+					kind: "assistant",
+					text: `streaming ${index}`,
+					tone: "base",
+				},
 			]);
 			await t.renderOnce();
 		}
@@ -766,6 +782,7 @@ test("output arriving while scrolled up does not slide the transcript", async ()
 test("reaching the top loads the older rows the window left out", async () => {
 	const [blocks] = createSignal<readonly AgentSessionBlock[]>(
 		Array.from({ length: 80 }, (_, index) => ({
+			id: "b14",
 			kind: "result" as const,
 			text: `line ${index}`,
 			tone: "success" as const,
@@ -821,10 +838,11 @@ test("reaching the top loads the older rows the window left out", async () => {
 	}
 });
 
-test("the newest output is separated by a divider, until the next output", async () => {
+test("the divider opens the newest run of the model's output", async () => {
 	const [blocks, setBlocks] = createSignal<readonly AgentSessionBlock[]>([
-		{ kind: "user", text: "fix the parser", tone: "accent" },
-		{ kind: "assistant", text: "Reading the parser now.", tone: "base" },
+		{ id: "u1", kind: "user", text: "first question", tone: "accent" },
+		{ id: "a1", kind: "assistant", text: "first answer", tone: "base" },
+		{ id: "s1", kind: "summary", text: "600 out", tone: "muted" },
 	]);
 	const t = await testRender(
 		() => (
@@ -857,29 +875,102 @@ test("the newest output is separated by a divider, until the next output", async
 		// Opening a page adds no output, so nothing is separated.
 		expect(dividerRow()).toBe(-1);
 
-		// New output: the divider sits between it and the transcript before it.
+		// The model answers the first question: the divider opens that answer,
+		// below the user's message.
 		setBlocks((current) => [
 			...current,
-			{ kind: "result", text: "read: file contents", tone: "success" },
+			{ id: "u2", kind: "user", text: "second question", tone: "accent" },
+			{ id: "a2", kind: "assistant", text: "second answer", tone: "base" },
 		]);
 		await t.renderOnce();
-		const first = dividerRow();
-		expect(first).toBeGreaterThan(rowOf("Reading the parser"));
-		expect(first).toBeLessThan(rowOf("read: file contents"));
+		expect(dividerRow()).toBeGreaterThan(rowOf("second question"));
+		expect(dividerRow()).toBeLessThan(rowOf("second answer"));
 
-		// A frame that adds nothing leaves the divider where it is.
-		setBlocks((current) => current.map((block) => ({ ...block })));
-		await t.renderOnce();
-		expect(dividerRow()).toBe(first);
-
-		// The next output moves the divider down: everything above it is old.
+		// The turn's own steps join the same run: the divider stays put.
 		setBlocks((current) => [
 			...current,
-			{ kind: "assistant", text: "Applied the fix.", tone: "base" },
+			{ id: "s2", kind: "summary", text: "4 out", tone: "muted" },
 		]);
 		await t.renderOnce();
-		expect(dividerRow()).toBeGreaterThan(rowOf("read: file contents"));
-		expect(dividerRow()).toBeLessThan(rowOf("Applied the fix"));
+		expect(dividerRow()).toBeLessThan(rowOf("4 out"));
+		expect(dividerRow()).toBeGreaterThan(rowOf("second question"));
+
+		// A new user message does not move it: the divider marks output, and
+		// keeps the position it had until the model answers.
+		setBlocks((current) => [
+			...current,
+			{ id: "u3", kind: "user", text: "third question", tone: "accent" },
+		]);
+		await t.renderOnce();
+		expect(dividerRow()).toBeLessThan(rowOf("third question"));
+
+		// The next answer starts the next run.
+		setBlocks((current) => [
+			...current,
+			{ id: "a3", kind: "assistant", text: "third answer", tone: "base" },
+		]);
+		await t.renderOnce();
+		expect(dividerRow()).toBeGreaterThan(rowOf("third question"));
+		expect(dividerRow()).toBeLessThan(rowOf("third answer"));
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("an expanded block stays expanded when the window loads older rows", async () => {
+	const [blocks] = createSignal<readonly AgentSessionBlock[]>([
+		...Array.from({ length: 70 }, (_, index) => ({
+			id: `r${index}`,
+			kind: "result" as const,
+			text: `line ${index}`,
+			tone: "success" as const,
+			detail: [`detail ${index}`],
+		})),
+		{ id: "think", kind: "reasoning", text: "weighing options", tone: "muted" },
+	]);
+	let box: { scrollTop: number; scrollHeight: number } | undefined;
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={blocks()}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onScrollBoxReady={(value) => {
+					box = value as unknown as typeof box;
+				}}
+			/>
+		),
+		{ width: 80, height: 16 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		// Ctrl+T expands the thinking block.
+		t.mockInput.pressKey("t", { ctrl: true });
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("weighing options");
+
+		// Loading older rows shifts every rendered row's position: the expansion
+		// follows the block, not the position.
+		if (box) box.scrollTop = 0;
+		await t.renderOnce();
+		await t.renderOnce();
+		if (box) box.scrollTop = box.scrollHeight;
+		await t.renderOnce();
+		await t.renderOnce();
+		const frame = t.captureCharFrame();
+		expect(frame).toContain("weighing options");
+		expect(frame).not.toContain("detail 59");
 	} finally {
 		t.renderer.destroy();
 	}
@@ -887,8 +978,9 @@ test("the newest output is separated by a divider, until the next output", async
 
 test("a watch frame never blanks the transcript's markdown", async () => {
 	const committed: AgentSessionBlock[] = [
-		{ kind: "user", text: "fix the parser", tone: "accent" },
+		{ id: "b19", kind: "user", text: "fix the parser", tone: "accent" },
 		{
+			id: "b20",
 			kind: "assistant",
 			text: "Reading the parser now.\n\n```ts\nconst a = 1;\n```\n",
 			tone: "base",
@@ -922,7 +1014,12 @@ test("a watch frame never blanks the transcript's markdown", async () => {
 		for (let index = 0; index < 4; index++) {
 			setBlocks(() => [
 				...committed.map((block) => ({ ...block })),
-				{ kind: "assistant", text: `streaming ${index}`, tone: "base" },
+				{
+					id: "b21",
+					kind: "assistant",
+					text: `streaming ${index}`,
+					tone: "base",
+				},
 			]);
 			await t.renderOnce();
 			const frame = t.captureCharFrame();
@@ -934,7 +1031,7 @@ test("a watch frame never blanks the transcript's markdown", async () => {
 		// The in-flight block commits: the message keeps drawing as it settles.
 		setBlocks(() => [
 			...committed,
-			{ kind: "assistant", text: "streaming 3", tone: "base" },
+			{ id: "b22", kind: "assistant", text: "streaming 3", tone: "base" },
 		]);
 		await t.renderOnce();
 		expect(t.captureCharFrame()).toContain("streaming 3");

@@ -284,8 +284,8 @@ function AssistantMarkdown(props: { text: string }) {
 /** The transcript rows and the blocks carrying the newest-content marker. */
 interface TranscriptState {
 	readonly rows: readonly AgentSessionBlock[];
-	/** The blocks the latest frame arrived with: the newest output. */
-	readonly newest: readonly AgentSessionBlock[];
+	/** The block the newest-output divider sits above, by id. */
+	readonly dividerId: string | undefined;
 }
 
 /** One transcript entry. Assistant output is markdown with no status box;
@@ -294,9 +294,8 @@ interface TranscriptState {
 function Block(props: {
 	block: AgentSessionBlock;
 	role: string;
-	index: number;
 	expanded: boolean;
-	onToggle: (index: number) => void;
+	onToggle: (id: string) => void;
 }) {
 	const color = () => toneColor(props.block.tone);
 	if (props.block.kind === "summary")
@@ -339,7 +338,7 @@ function Block(props: {
 				paddingRight={1}
 				flexDirection="column"
 				flexShrink={0}
-				onMouseUp={() => props.onToggle(props.index)}
+				onMouseUp={() => props.onToggle(props.block.id)}
 			>
 				<text fg={uiColors.warning}>
 					{props.expanded ? "▾" : "▸"}{" "}
@@ -363,7 +362,7 @@ function Block(props: {
 					<box flexDirection="column">
 						<box
 							flexDirection="row"
-							onMouseUp={() => props.onToggle(props.index)}
+							onMouseUp={() => props.onToggle(props.block.id)}
 						>
 							<text width={2} flexShrink={0} fg={color()}>
 								{props.block.icon ?? "•"}
@@ -494,7 +493,7 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		return true;
 	};
 	/**
-	 * The transcript rows, plus the ones carrying the "newest content" marker.
+	 * The transcript rows, plus the id the "new content" divider sits above.
 	 *
 	 * The rows reuse the previous frame's blocks wherever their content did not
 	 * change: `<For>` keys its rows by object identity, and a watch frame hands
@@ -503,21 +502,28 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 	 * renderable through its async highlight pass again — the transcript
 	 * flashing after every message.
 	 *
-	 * The newest output follows whatever arrived or changed in the latest frame
-	 * and stays the newest until newer output replaces it, so the divider always
-	 * sits between the transcript and the output that just landed. Nothing is
-	 * marked on the first frame: opening a page adds no output.
+	 * The divider opens the newest run of the model's output: the first block
+	 * that is not a user or engine message after the newest one. A turn's steps
+	 * (thoughts, tool calls, the answer, its footer) are one run, so the divider
+	 * stays at the run's first block as the turn fills in, and moves when the
+	 * next turn's output starts. While the newest message is the user's own, the
+	 * divider keeps the position it had — it marks output, not the prompt. It
+	 * starts unset: opening a page adds no output.
 	 */
 	const transcript = createMemo((previous: TranscriptState | undefined) => {
 		const rows = reuseAgentSessionBlocks(previous?.rows ?? [], props.blocks);
-		if (!previous) return { rows, newest: [] };
-		const known = new Set(previous.rows);
-		const arrived = rows.filter((row) => !known.has(row));
-		const newest =
-			arrived.length > 0
-				? arrived
-				: previous.newest.filter((row) => rows.includes(row));
-		return { rows, newest };
+		if (!previous) return { rows, dividerId: undefined };
+		const newestUser = rows.findLastIndex((row) => row.kind === "user");
+		const runStart =
+			newestUser >= 0
+				? rows.findIndex(
+						(row, index) => index > newestUser && row.kind !== "user",
+					)
+				: -1;
+		return {
+			rows,
+			dividerId: runStart >= 0 ? rows[runStart]?.id : previous.dividerId,
+		};
 	}, undefined);
 	// The oldest rendered row. While the reader is at the bottom the window
 	// slides with the newest output; once they scroll up it is anchored to this
@@ -552,28 +558,29 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 	};
 	const [picker, setPicker] = createSignal<PickerState | undefined>();
 	const [autocompleteIndex, setAutocompleteIndex] = createSignal(0);
-	// Which thinking blocks are expanded. Collapsed by default so a long
-	// reasoning block is one line until asked for.
-	const [expandedBlocks, setExpandedBlocks] = createSignal<ReadonlySet<number>>(
+	// Which thinking blocks are expanded, by block id: collapsed by default so a
+	// long reasoning block is one line until asked for, and an entry keeps its
+	// state while output arrives around it.
+	const [expandedBlocks, setExpandedBlocks] = createSignal<ReadonlySet<string>>(
 		new Set(),
 	);
-	const toggleBlock = (index: number) => {
+	const toggleBlock = (id: string) => {
 		setExpandedBlocks((current) => {
 			const next = new Set(current);
-			if (next.has(index)) next.delete(index);
-			else next.add(index);
+			if (next.has(id)) next.delete(id);
+			else next.add(id);
 			return next;
 		});
 	};
 	/** Ctrl+T / Ctrl+O: expand every block of one kind, or collapse them all. */
 	const toggleBlocksOfKind = (kind: AgentSessionBlock["kind"]) => {
-		const indices = props.blocks.flatMap((block, index) =>
-			block.kind === kind ? [index] : [],
+		const ids = props.blocks.flatMap((block) =>
+			block.kind === kind ? [block.id] : [],
 		);
 		setExpandedBlocks((current) =>
-			indices.some((index) => current.has(index))
-				? new Set<number>()
-				: new Set<number>(indices),
+			ids.some((id) => current.has(id))
+				? new Set<string>()
+				: new Set<string>(ids),
 		);
 	};
 
@@ -746,15 +753,15 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 	return (
 		<>
 			{/* The page fills the body its host reserved for it (the shell owns the
-			    blank lines around the header and footer), and names the run in the
-			    prompt's own metadata row instead of a title row of its own. */}
+			    blank lines around the header and footer) and spans its full width:
+			    the transcript and the prompt are the page's own edges, so they carry
+			    no margin of their own. The run is named by the prompt's metadata row
+			    instead of a title row of its own. */}
 			<box
 				width="100%"
 				height="100%"
 				flexDirection="column"
 				minHeight={0}
-				paddingLeft={1}
-				paddingRight={1}
 				backgroundColor={uiColors.bgBase}
 			>
 				<box width="100%" flexDirection="column" flexGrow={1} minHeight={0}>
@@ -769,19 +776,18 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 					>
 						<box flexDirection="column" gap={1}>
 							<For each={windowRows()}>
-								{(block, index) => (
+								{(block) => (
 									<box width="100%" flexDirection="column">
-										{/* Above the first block of the newest output, and only
-										    there: the divider is the boundary, not a mark on
-										    the content. */}
-										<Show when={transcript().newest[0] === block}>
+										{/* Above the newest output's first block, and only there:
+										    the divider is the boundary, not a mark on the
+										    content. */}
+										<Show when={block.id === transcript().dividerId}>
 											<NewContentDivider />
 										</Show>
 										<Block
 											block={block}
 											role={props.role}
-											index={index()}
-											expanded={expandedBlocks().has(index())}
+											expanded={expandedBlocks().has(block.id)}
 											onToggle={toggleBlock}
 										/>
 									</box>

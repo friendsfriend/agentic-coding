@@ -407,7 +407,12 @@ export function App(props: {
 		setAgentSessionDraft("");
 		setAgentSessionMetadata({ working: false });
 		setAgentSessionBlocks([
-			{ kind: "notice", tone: "muted", text: "Connecting…" },
+			{
+				id: "route:connecting",
+				kind: "notice",
+				tone: "muted",
+				text: "Connecting…",
+			},
 		]);
 		setAgentSession(session);
 		setAgentSessionOpen(true);
@@ -443,6 +448,7 @@ export function App(props: {
 				if (agentSession()?.runId !== session.runId) return;
 				setAgentSessionBlocks([
 					{
+						id: "route:host-error",
 						kind: "error",
 						tone: "error",
 						text:

@@ -7,9 +7,13 @@ import {
 	reuseAgentSessionBlocks,
 } from "../../src/tui/dash/agent-session.ts";
 
+/** Blocks without their identity: these assertions are about content. */
+const blocksOf = (value: unknown) =>
+	buildAgentSessionView(value).map(({ id: _id, ...block }) => block);
+
 describe("buildAgentSessionView", () => {
 	test("an empty conversation has no blocks", () => {
-		expect(buildAgentSessionView({ entries: [] })).toEqual([]);
+		expect(blocksOf({ entries: [] })).toEqual([]);
 	});
 
 	test("renders committed user, assistant, thinking, and tool-call entries", () => {
@@ -34,7 +38,7 @@ describe("buildAgentSessionView", () => {
 				},
 			],
 		});
-		expect(blocks).toEqual([
+		expect(blocks.map(({ id: _id, ...block }) => block)).toEqual([
 			{ kind: "user", text: "fix the parser", tone: "accent" },
 			{ kind: "reasoning", text: "weighing options", tone: "muted" },
 			{ kind: "assistant", text: "Reading the parser", tone: "base" },
@@ -299,7 +303,7 @@ describe("buildAgentSessionView", () => {
 				},
 			},
 		});
-		expect(blocks).toEqual([
+		expect(blocks.map(({ id: _id, ...block }) => block)).toEqual([
 			{
 				kind: "tool",
 				text: "bash",
@@ -329,7 +333,7 @@ describe("buildAgentSessionView", () => {
 				},
 			],
 		});
-		expect(blocks).toEqual([
+		expect(blocks.map(({ id: _id, ...block }) => block)).toEqual([
 			{ kind: "error", text: "400: MissingSessionID", tone: "error" },
 		]);
 	});
@@ -343,7 +347,7 @@ describe("buildAgentSessionView", () => {
 				},
 			},
 		});
-		expect(blocks).toEqual([
+		expect(blocks.map(({ id: _id, ...block }) => block)).toEqual([
 			{ kind: "notice", text: "Retrying: rate limited", tone: "warning" },
 		]);
 	});
@@ -381,7 +385,7 @@ describe("buildAgentSessionView", () => {
 				},
 			},
 		};
-		expect(buildAgentSessionView(snapshot)).toEqual([
+		expect(blocksOf(snapshot)).toEqual([
 			{
 				kind: "notice",
 				tone: "warning",
@@ -395,7 +399,7 @@ describe("buildAgentSessionView", () => {
 		]);
 		expect(readAgentSessionMetadata(snapshot).working).toBe(true);
 		expect(
-			buildAgentSessionView({
+			blocksOf({
 				entries: [{ kind: "pi.user", model: [{ content: queued.content }] }],
 				docs: { "pi.inbox": { items: [] } },
 			}),
@@ -410,8 +414,8 @@ describe("buildAgentSessionView", () => {
 	});
 
 	test("degrades to no blocks instead of throwing on an unexpected shape", () => {
-		expect(buildAgentSessionView(null)).toEqual([]);
-		expect(buildAgentSessionView("not an object")).toEqual([]);
+		expect(blocksOf(null)).toEqual([]);
+		expect(blocksOf("not an object")).toEqual([]);
 		expect(() =>
 			buildAgentSessionView({ docs: { "pi.live": "not an object" } }),
 		).not.toThrow();
@@ -503,6 +507,7 @@ describe("renderAgentSessionSummary", () => {
 
 describe("reuseAgentSessionBlocks", () => {
 	const block = (text: string): AgentSessionBlock => ({
+		id: text,
 		kind: "assistant",
 		text,
 		tone: "base",
@@ -545,8 +550,33 @@ describe("reuseAgentSessionBlocks", () => {
 		).toEqual([one, block("two"), three]);
 	});
 
+	test("does not reuse an identical block from a different position", () => {
+		// Repeated turns produce identical messages ("OK!" twice): identity keeps
+		// the newest one out of the reuse pool, so the view can tell new output
+		// from the one it already showed.
+		const first = [
+			{
+				id: "turn1",
+				kind: "assistant" as const,
+				text: "OK!",
+				tone: "base" as const,
+			},
+		];
+		const next = [
+			{
+				id: "turn2",
+				kind: "assistant" as const,
+				text: "OK!",
+				tone: "base" as const,
+			},
+		];
+		expect(reuseAgentSessionBlocks(first, next)).toEqual(next);
+		expect(reuseAgentSessionBlocks(first, next)[0]).toBe(next[0]);
+	});
+
 	test("distinguishes blocks by their whole content, not just the text", () => {
 		const result = (tone: AgentSessionBlock["tone"]): AgentSessionBlock => ({
+			id: "read",
 			kind: "result",
 			text: "read: done",
 			tone,

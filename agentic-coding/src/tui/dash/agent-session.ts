@@ -33,6 +33,12 @@ export type AgentSessionKind =
 	| "summary";
 
 export interface AgentSessionBlock {
+	/** Stable identity of the source this block came from: a committed entry's
+	 * id and its position inside it, or the slot a live block occupies. The
+	 * view keys its expansion state and its newest-output marker by it, so both
+	 * survive content changes and repeated identical messages elsewhere in the
+	 * transcript. */
+	readonly id: string;
 	readonly kind: AgentSessionKind;
 	readonly text: string;
 	readonly tone: AgentSessionTone;
@@ -177,6 +183,7 @@ function argsSummary(value: unknown): string {
 function entryBlocks(
 	entry: unknown,
 	timings: Readonly<Record<string, EntryTiming>>,
+	entryKey: string,
 ): AgentSessionBlock[] {
 	if (!isRecord(entry)) return [];
 	const model = Array.isArray(entry.model) ? entry.model : [];
@@ -189,7 +196,15 @@ function entryBlocks(
 					.filter(Boolean)
 					// The user's own prompt is the accent-colored box, distinct from the
 					// model's neutral messages.
-					.map((text) => ({ kind: "user", text, tone: "accent" }) as const)
+					.map(
+						(text, index) =>
+							({
+								id: `${entryKey}:${index}`,
+								kind: "user",
+								text,
+								tone: "accent",
+							}) as const,
+					)
 			);
 		case "pi.assistant": {
 			const blocks: AgentSessionBlock[] = [];
@@ -197,11 +212,13 @@ function entryBlocks(
 				if (!isRecord(message) || !Array.isArray(message.content)) continue;
 				for (const block of message.content) {
 					if (!isRecord(block)) continue;
+					const id = `${entryKey}:${blocks.length}`;
 					if (block.type === "text" && typeof block.text === "string") {
 						// Assistant output keeps its line structure: the view renders it
 						// as markdown, not as a collapsed one-liner.
 						const text = rawText(block.text);
-						if (text) blocks.push({ kind: "assistant", text, tone: "base" });
+						if (text)
+							blocks.push({ id, kind: "assistant", text, tone: "base" });
 					} else if (
 						block.type === "thinking" &&
 						typeof block.thinking === "string"
@@ -209,6 +226,7 @@ function entryBlocks(
 						const text = rawText(block.thinking, 4000);
 						if (text)
 							blocks.push({
+								id,
 								kind: "reasoning",
 								text,
 								tone: "muted",
@@ -222,6 +240,7 @@ function entryBlocks(
 					) {
 						const args = argsSummary(block.arguments);
 						blocks.push({
+							id,
 							kind: "tool",
 							text: `${block.name}${args ? ` ${args}` : ""}`,
 							tone: "muted",
@@ -237,6 +256,7 @@ function entryBlocks(
 					typeof message.errorMessage === "string"
 				)
 					blocks.push({
+						id: `${entryKey}:${blocks.length}`,
 						kind: "error",
 						text: oneLine(message.errorMessage, 400),
 						tone: "error",
@@ -245,7 +265,7 @@ function entryBlocks(
 			return blocks;
 		}
 		case "pi.tool-result":
-			return model.flatMap((message): AgentSessionBlock[] => {
+			return model.flatMap((message, index): AgentSessionBlock[] => {
 				if (!isRecord(message)) return [];
 				const name =
 					typeof message.toolName === "string" ? message.toolName : "tool";
@@ -263,6 +283,7 @@ function entryBlocks(
 				const [first] = lines;
 				return [
 					{
+						id: `${entryKey}:${index}`,
 						kind: "result",
 						text: first
 							? `${name}: ${oneLine(first, 2000)}`
@@ -279,9 +300,23 @@ function entryBlocks(
 				];
 			});
 		case "pi.compaction":
-			return [{ kind: "compaction", text: "Compaction", tone: "muted" }];
+			return [
+				{
+					id: `${entryKey}:compaction`,
+					kind: "compaction",
+					text: "Compaction",
+					tone: "muted",
+				},
+			];
 		case "pi.reset":
-			return [{ kind: "compaction", text: "Context reset", tone: "muted" }];
+			return [
+				{
+					id: `${entryKey}:reset`,
+					kind: "compaction",
+					text: "Context reset",
+					tone: "muted",
+				},
+			];
 		default:
 			return [];
 	}
@@ -295,11 +330,12 @@ function liveBlocks(
 	if (!live) return [];
 	const blocks: AgentSessionBlock[] = [];
 	const tools = Array.isArray(live.tools) ? live.tools : [];
-	for (const slot of tools) {
+	for (const [index, slot] of tools.entries()) {
 		if (!isRecord(slot) || slot.status === "done") continue;
 		const name = typeof slot.name === "string" ? slot.name : "tool";
 		const detail = outputLines(slot.output, 8);
 		blocks.push({
+			id: `live:tool:${index}`,
 			kind: "tool",
 			text: name,
 			tone: "warning",
@@ -316,12 +352,14 @@ function liveBlocks(
 			typeof generation.retry.error === "string"
 		)
 			blocks.push({
+				id: "live:retry",
 				kind: "notice",
 				text: `Retrying: ${oneLine(generation.retry.error, 300)}`,
 				tone: "warning",
 			});
 		else if (generation.deferred)
 			blocks.push({
+				id: "live:deferred",
 				kind: "notice",
 				text: "Waiting on provider response",
 				tone: "muted",
@@ -331,13 +369,20 @@ function liveBlocks(
 			: undefined;
 		if (message) {
 			const text = contentRaw(message.content);
-			if (text) blocks.push({ kind: "assistant", text, tone: "base" });
+			if (text)
+				blocks.push({
+					id: "live:generation",
+					kind: "assistant",
+					text,
+					tone: "base",
+				});
 		}
 	}
 	const compactions = Array.isArray(live.compactions) ? live.compactions : [];
-	for (const compaction of compactions) {
+	for (const [index, compaction] of compactions.entries()) {
 		if (isRecord(compaction))
 			blocks.push({
+				id: `live:compaction:${index}`,
 				kind: "compaction",
 				text: "Compacting context",
 				tone: "muted",
@@ -351,10 +396,18 @@ function liveBlocks(
  * screenful. */
 const MAX_BLOCKS = 240;
 
-/** One block's content as a comparison key: two blocks with the same key
- * render identically. */
+/** The committed entry's own id when it has one, and its position otherwise:
+ * the key every block of that entry is identified by. */
+function entryId(entry: unknown, index: number): string {
+	const id = isRecord(entry) ? entry.id : undefined;
+	return typeof id === "string" ? id : `entry:${index}`;
+}
+
+/** One block's identity and content as a comparison key: two blocks with the
+ * same key are the same block, unchanged. */
 function blockKey(block: AgentSessionBlock): string {
 	return [
+		block.id,
 		block.kind,
 		block.tone,
 		block.text,
@@ -497,6 +550,7 @@ function endsTurn(entry: unknown): boolean {
 function assistantSummaryBlock(
 	entry: unknown,
 	timings: Readonly<Record<string, EntryTiming>>,
+	summaryId: string,
 ): AgentSessionBlock | undefined {
 	if (!isRecord(entry) || entry.kind !== "pi.assistant") return undefined;
 	if (!endsTurn(entry)) return undefined;
@@ -527,6 +581,7 @@ function assistantSummaryBlock(
 	].filter((part): part is string => part !== undefined);
 	if (parts.length === 0) return undefined;
 	return {
+		id: `${summaryId}:summary`,
 		kind: "summary",
 		text: parts.join(" · "),
 		tone: "muted",
@@ -543,19 +598,22 @@ export function buildAgentSessionView(value: unknown): AgentSessionBlock[] {
 		? (value.timings as Record<string, EntryTiming>)
 		: {};
 	const blocks: AgentSessionBlock[] = [];
-	for (const entry of entries) {
-		blocks.push(...entryBlocks(entry, timings));
-		const summary = assistantSummaryBlock(entry, timings);
+	for (const [index, entry] of entries.entries()) {
+		const entryKey = entryId(entry, index);
+		blocks.push(...entryBlocks(entry, timings, entryKey));
+		const summary = assistantSummaryBlock(entry, timings, entryKey);
 		if (summary) blocks.push(summary);
 	}
 	blocks.push(...liveBlocks(live));
 	const inbox = isRecord(docs["pi.inbox"]) ? docs["pi.inbox"] : undefined;
-	for (const item of Array.isArray(inbox?.items) ? inbox.items : []) {
+	const inboxItems = Array.isArray(inbox?.items) ? inbox.items : [];
+	for (const [index, item] of inboxItems.entries()) {
 		if (!isRecord(item) || (item.mode !== "steer" && item.mode !== "followUp"))
 			continue;
 		const text = contentRaw(item.content);
 		if (text)
 			blocks.push({
+				id: `inbox:${index}`,
 				kind: "notice",
 				tone: "warning",
 				text: `Queued ${item.mode === "steer" ? "steering" : "follow-up"}: ${text}`,
