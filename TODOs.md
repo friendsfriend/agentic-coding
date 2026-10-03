@@ -15,6 +15,8 @@ Small ones:
 * JEV:
   * Compaction hints
   * Use jev to block bash commands that should be blocked
+* Implement instant workflow -> one agent without task, no workflow at all. Basically like spawning a random pi agent
+* Implement workspace resume -> Should work with pi durable
 
 
 Pi durable rebuild:

@@ -16,13 +16,25 @@ export interface ToolViewRow {
 	readonly tone: "base" | "muted" | "error" | "warning" | "success" | "info";
 }
 
-/** A tool call's transcript view: the summary line, the hint beside it, and the
- * rows that appear when the row is expanded. */
+/** One independently collapsible part of an expanded tool view. */
+export interface ToolViewSection {
+	readonly id: string;
+	readonly label: string;
+	readonly rows: readonly ToolViewRow[];
+}
+
+/** A tool call's transcript view: the summary line, the hint beside it, the
+ * rows under it (always visible once the row is expanded), and the sections a
+ * long view splits into so its parts can be read one at a time. */
 export interface ToolView {
 	readonly icon: string;
 	readonly summary: string;
 	readonly hint?: string;
+	/** Rows that are part of the collapsed view: a script's call list says what
+	 * the call did, so it is not a detail to expand into. */
+	readonly alwaysRows?: readonly ToolViewRow[];
 	readonly rows?: readonly ToolViewRow[];
+	readonly sections?: readonly ToolViewSection[];
 }
 
 /** Expanded rows kept per tool view: enough for a diff or a command's output
@@ -30,8 +42,9 @@ export interface ToolView {
 const MAX_VIEW_ROWS = 40;
 
 /** Script lines shown in a codemode view before the output would be pushed off
- * screen. */
+ * screen, and calls listed before the list itself becomes the transcript. */
 const MAX_SCRIPT_ROWS = 12;
+const MAX_CALL_ROWS = 6;
 
 function stringArg(
 	args: Readonly<Record<string, unknown>>,
@@ -300,39 +313,60 @@ function codemodeScriptRows(code: string): ToolViewRow[] {
 	];
 }
 
-/** `codemode`: the pipeline a script drove, and (expanded) the script itself
- * followed by what it produced. A script is its own program, so the collapsed
- * row names the tools it called — the shape of the work — and the expanded view
- * shows the source that did it. */
+/** One line per call a script made: its name and how it ended, failures in the
+ * error tone. This is the collapsed view's whole content — the shape of the
+ * work — and stays visible once expanded. */
+function codemodeCallRows(calls: readonly CodemodeCall[]): ToolViewRow[] {
+	const shown = calls.slice(0, MAX_CALL_ROWS);
+	return [
+		...shown.map((entry) => ({
+			text: `${entry.name} (${entry.status})`,
+			tone: entry.status === "ok" ? ("muted" as const) : ("error" as const),
+		})),
+		...(calls.length > shown.length
+			? [
+					{
+						text: `… ${calls.length - shown.length} more calls`,
+						tone: "muted" as const,
+					},
+				]
+			: []),
+	];
+}
+
+/** `codemode`: the calls a script made, one line each, and — expanded — the
+ * script that made them and what it produced, as parts that can be folded away
+ * again to keep the call list in view. */
 function codemodeView(call: AgentSessionToolCall): ToolView {
 	const code = stringArg(call.args, "code") ?? "";
 	const lines = call.result?.lines ?? [];
 	const calls = codemodeCalls(lines);
 	const failed = call.result?.isError === true;
 	const errors = calls.filter((entry) => entry.status !== "ok").length;
-	const hint = failed
-		? "failed"
-		: calls.length > 0
-			? `${calls.length} calls${errors > 0 ? ` · ${errors} failed` : ""}`
-			: undefined;
+	const [first, ...rest] = calls;
+	const script = codemodeScriptRows(code);
+	const output: ToolViewRow[] = lines.map((text) => ({
+		text,
+		tone: failed ? ("error" as const) : ("muted" as const),
+	}));
 	return {
 		icon: "λ",
-		summary:
-			calls.length > 0
-				? calls.map((entry) => entry.name).join(" → ")
-				: codemodeHeadline(code),
-		...(hint === undefined ? {} : { hint }),
-		rows:
-			lines.length === 0
-				? codemodeScriptRows(code)
-				: [
-						...codemodeScriptRows(code),
-						{ text: "", tone: "muted" as const },
-						...lines.map((text) => ({
-							text,
-							tone: failed ? ("error" as const) : ("muted" as const),
-						})),
-					],
+		summary: first ? `${first.name} (${first.status})` : codemodeHeadline(code),
+		// The call lines already say how many ran; only a failure needs saying.
+		...(failed
+			? { hint: "failed" }
+			: errors > 0
+				? { hint: `${calls.length} calls · ${errors} failed` }
+				: {}),
+		alwaysRows: codemodeCallRows(rest),
+		sections: [
+			...(script.length > 0
+				? [{ id: "script", label: "script", rows: script }]
+				: []),
+			...(output.length > 0
+				? [{ id: "output", label: "output", rows: output }]
+				: []),
+		],
 	};
 }
 

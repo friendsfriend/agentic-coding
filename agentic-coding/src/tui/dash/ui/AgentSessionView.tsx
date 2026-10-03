@@ -297,6 +297,10 @@ function Block(props: {
 	role: string;
 	expanded: boolean;
 	onToggle: (id: string) => void;
+	/** The parts folded away, and how to fold one: a long tool view keeps its
+	 * headers when a part is closed. */
+	foldedSections: () => ReadonlySet<string>;
+	onToggleSection: (key: string) => void;
 }) {
 	const color = () => toneColor(props.block.tone);
 	if (props.block.kind === "summary")
@@ -394,11 +398,24 @@ function Block(props: {
 								</text>
 							)}
 						</Show>
-						<Show when={(tool.rows?.length ?? 0) > 0}>
+						<Show
+							when={
+								(tool.rows?.length ?? 0) > 0 || (tool.sections?.length ?? 0) > 0
+							}
+						>
 							<text fg={uiColors.textMuted} flexShrink={0}>
 								{props.expanded ? " ▾" : " ▸"}
 							</text>
 						</Show>
+					</box>
+					<box paddingLeft={2} flexDirection="column">
+						<For each={tool.alwaysRows ?? []}>
+							{(row) => (
+								<text fg={markerColor(row.tone)} wrapMode="none" truncate>
+									{row.text}
+								</text>
+							)}
+						</For>
 					</box>
 					<Show when={props.expanded}>
 						<box paddingLeft={2} flexDirection="column">
@@ -408,6 +425,42 @@ function Block(props: {
 										{row.text}
 									</text>
 								)}
+							</For>
+							{/* A long view splits into parts: the header stays, so
+							    folding one away keeps the overview. */}
+							<For each={tool.sections ?? []}>
+								{(section) => {
+									const key = `${props.block.id}:${section.id}`;
+									const folded = () => props.foldedSections().has(key);
+									return (
+										<box flexDirection="column">
+											<box
+												flexDirection="row"
+												onMouseUp={() => props.onToggleSection(key)}
+											>
+												<text fg={uiColors.textMuted} wrapMode="none" truncate>
+													{folded() ? "▸" : "▾"} {section.label}{" "}
+													{`(${section.rows.length} lines)`}
+												</text>
+											</box>
+											<Show when={!folded()}>
+												<box flexDirection="column" paddingLeft={2}>
+													<For each={section.rows}>
+														{(row) => (
+															<text
+																fg={markerColor(row.tone)}
+																wrapMode="none"
+																truncate
+															>
+																{row.text}
+															</text>
+														)}
+													</For>
+												</box>
+											</Show>
+										</box>
+									);
+								}}
 							</For>
 						</box>
 					</Show>
@@ -626,6 +679,19 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 	const [expandedBlocks, setExpandedBlocks] = createSignal<ReadonlySet<string>>(
 		new Set(),
 	);
+	// Which parts of an expanded tool view are folded away, by
+	// `${block.id}:${section.id}`. Empty means every part is open.
+	const [foldedSections, setFoldedSections] = createSignal<ReadonlySet<string>>(
+		new Set(),
+	);
+	const toggleSection = (key: string) => {
+		setFoldedSections((current) => {
+			const next = new Set(current);
+			if (next.has(key)) next.delete(key);
+			else next.add(key);
+			return next;
+		});
+	};
 	const toggleBlock = (id: string) => {
 		setExpandedBlocks((current) => {
 			const next = new Set(current);
@@ -851,6 +917,8 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 											role={props.role}
 											expanded={expandedBlocks().has(block.id)}
 											onToggle={toggleBlock}
+											foldedSections={foldedSections}
+											onToggleSection={toggleSection}
 										/>
 									</box>
 								)}

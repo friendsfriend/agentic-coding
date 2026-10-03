@@ -179,7 +179,7 @@ describe("toolView", () => {
 		expect(view?.rows?.[0]?.text).toContain("nothing to judge");
 	});
 
-	test("codemode shows the pipeline it drove and the script behind it", () => {
+	test("codemode lists one line per call, then the script and its output", () => {
 		const code = [
 			'const hits = await tools.glob({ pattern: "*.ts" });',
 			'const files = hits.split("\\n").slice(0, 3);',
@@ -201,16 +201,24 @@ describe("toolView", () => {
 			),
 		);
 		expect(view?.icon).toBe("λ");
-		// The collapsed row is the shape of the work: the tools it called.
-		expect(view?.summary).toBe("glob → read → read");
+		// The call list is the collapsed view, and the first call is the summary.
+		expect(view?.summary).toBe("glob (ok)");
+		expect(view?.alwaysRows).toEqual([
+			{ text: "read (ok)", tone: "muted" },
+			{ text: "read (error)", tone: "error" },
+		]);
 		expect(view?.hint).toBe("3 calls · 1 failed");
-		// Expanded: the script, then what it produced.
-		expect(view?.rows?.[0]).toEqual({
+		// The script and its output are parts of their own, so either can be
+		// folded away while the call list stays in view.
+		expect(view?.sections?.map((section) => section.id)).toEqual([
+			"script",
+			"output",
+		]);
+		expect(view?.sections?.[0]?.rows[0]).toEqual({
 			text: 'const hits = await tools.glob({ pattern: "*.ts" });',
 			tone: "base",
 		});
-		expect(view?.rows?.slice(-4)).toEqual([
-			{ text: "", tone: "muted" },
+		expect(view?.sections?.[1]?.rows).toEqual([
 			{ text: "Script completed", tone: "muted" },
 			{ text: 'return: ["a.ts","b.ts"]', tone: "muted" },
 			{ text: "calls: glob (ok), read (ok), read (error)", tone: "muted" },
@@ -228,6 +236,9 @@ describe("toolView", () => {
 			'const x = await tools.read({ path: "a.ts" });',
 		);
 		expect(pending?.hint).toBeUndefined();
+		expect(pending?.alwaysRows).toEqual([]);
+		// A script that never got a result still shows its source.
+		expect(pending?.sections?.map((section) => section.id)).toEqual(["script"]);
 
 		// A failed script keeps its output and its error in the error tone.
 		const failed = toolView(
@@ -243,22 +254,44 @@ describe("toolView", () => {
 		);
 		expect(failed?.summary).toBe('throw new Error("boom");');
 		expect(failed?.hint).toBe("failed");
-		expect(failed?.rows?.slice(-3).every((row) => row.tone === "error")).toBe(
-			true,
-		);
+		expect(
+			failed?.sections?.[1]?.rows.every((row) => row.tone === "error"),
+		).toBe(true);
 	});
 
-	test("codemode bounds a long script", () => {
+	test("codemode bounds a long script and a long call list", () => {
 		const view = toolView(
 			call("codemode", {
 				code: Array.from({ length: 20 }, (_, index) => `line ${index}`).join(
 					"\n",
 				),
+				result: undefined,
 			}),
 		);
-		expect(view?.rows?.length).toBe(13);
-		expect(view?.rows?.at(-1)).toEqual({
+		expect(view?.sections?.[0]?.rows.length).toBe(13);
+		expect(view?.sections?.[0]?.rows.at(-1)).toEqual({
 			text: "… 8 more lines",
+			tone: "muted",
+		});
+
+		const many = toolView(
+			call(
+				"codemode",
+				{ code: "return 1;" },
+				{
+					lines: [
+						"Script completed",
+						`calls: ${Array.from({ length: 9 }, (_, index) => `tool${index} (ok)`).join(", ")}`,
+					],
+					isError: false,
+					notes: [],
+				},
+			),
+		);
+		// Six calls listed under the summary line, the rest counted.
+		expect(many?.alwaysRows?.length).toBe(7);
+		expect(many?.alwaysRows?.at(-1)).toEqual({
+			text: "… 2 more calls",
 			tone: "muted",
 		});
 	});

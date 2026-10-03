@@ -1123,6 +1123,86 @@ test("tool rows get a view from their call and result, and a generic default", a
 	}
 });
 
+test("a codemode row lists its calls, and its script and output fold away", async () => {
+	const block: AgentSessionBlock = {
+		id: "c1",
+		kind: "tool",
+		text: "codemode",
+		tone: "success",
+		icon: "λ",
+		tool: "codemode",
+		toolCall: {
+			name: "codemode",
+			args: {
+				code: 'const hits = await tools.glob({ pattern: "*.ts" });\nreturn hits.length;',
+			},
+			callId: "k1",
+			result: {
+				lines: [
+					"Script completed",
+					'return: ["a.ts","b.ts"]',
+					"calls: glob (ok), read (error)",
+				],
+				isError: false,
+				notes: [],
+			},
+		},
+	};
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={[block]}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+			/>
+		),
+		{ width: 70, height: 20 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		// Collapsed: the calls the script made, one line each.
+		const collapsed = t.captureCharFrame();
+		expect(collapsed).toContain("λ glob (ok)");
+		expect(collapsed).toContain("read (error)");
+		expect(collapsed).not.toContain("tools.glob");
+
+		// Expanded: the script and its output, as parts with their own headers.
+		t.mockInput.pressKey("o", { ctrl: true });
+		await t.renderOnce();
+		const expanded = t.captureCharFrame();
+		expect(expanded).toContain("▾ script (2 lines)");
+		expect(expanded).toContain(
+			'const hits = await tools.glob({ pattern: "*.ts" });',
+		);
+		expect(expanded).toContain("▾ output (3 lines)");
+		expect(expanded).toContain("Script completed");
+
+		// Folding a part keeps its header, so the call list stays in view.
+		const scriptRow = expanded
+			.split("\n")
+			.findIndex((line) => line.includes("script (2 lines)"));
+		await t.mockMouse.click(10, scriptRow);
+		await t.renderOnce();
+		const folded = t.captureCharFrame();
+		expect(folded).toContain("▸ script (2 lines)");
+		expect(folded).not.toContain("tools.glob");
+		expect(folded).toContain("Script completed");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
 test("a watch frame never blanks the transcript's markdown", async () => {
 	const committed: AgentSessionBlock[] = [
 		{ id: "b19", kind: "user", text: "fix the parser", tone: "accent" },
