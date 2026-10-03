@@ -64,6 +64,7 @@ import {
 	applyAgentsMutation,
 	BUILTIN_PRESET_NAME,
 	clearModelCache,
+	durableModels as loadDurableModels,
 	saveAgentConfig,
 } from "../data/agents.ts";
 import { gatewayOrUndefined } from "../data/index.ts";
@@ -188,6 +189,21 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 	const [poolClipboard, setPoolClipboard] = createSignal<PoolClipboard>();
 	const [poolEntryEditor, setPoolEntryEditor] = createSignal<PoolEntryEditor>();
 	const [errors, setErrors] = createSignal<FormErrors>({});
+	// The models a `pi-durable` profile can select, resolved once from the user's
+	// configured providers. Undefined while the first read is in flight (and if it
+	// fails): the durable model field then stays free text rather than offering a
+	// list the editor could not resolve.
+	const [durableModels, setDurableModels] = createSignal<readonly string[]>();
+	// The read is spawned once per mount and never re-awaited; a profile editor
+	// reopened in the same session keeps the list it already has.
+	let durableModelsRequested = false;
+	const loadDurableModelsOnce = () => {
+		if (durableModelsRequested) return;
+		durableModelsRequested = true;
+		void loadDurableModels()
+			.then(setDurableModels)
+			.catch(() => undefined);
+	};
 	const [editorRevision, setEditorRevision] = createSignal<string>();
 	const [pendingDelete, setPendingDelete] = createSignal<{
 		kind: AgentListKind;
@@ -262,7 +278,7 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 	const fields = (): FormField[] => {
 		const current = draft();
 		if (!current) return [];
-		return draftFields(current, profileNames());
+		return draftFields(current, profileNames(), durableModels());
 	};
 	const values = (): FormValues => {
 		const current = draft();
@@ -322,6 +338,10 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 	const openProfileEditor = (existing?: string) => {
 		const current = existing ? agents()?.profiles[existing] : undefined;
 		clearModelCache();
+		// A durable profile's model choices come from the configured providers, not
+		// from a runtime enumeration, so make sure that read is in flight as soon
+		// as an editor could need it.
+		loadDurableModelsOnce();
 		setDraft(profileDraft(existing ?? "", current));
 		setEditorRevision(agentConfigEntry(props.repository).revision);
 		setFieldIndex(0);

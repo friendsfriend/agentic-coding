@@ -21,6 +21,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 import { globalPiTools, piSettingsPath } from "../workflow/pi-tools.ts";
 import { createDurableCodemode } from "./codemode.ts";
+import { configuredProviderIds } from "./configured-models.ts";
 import { PiAuthCredentialStore } from "./credentials.ts";
 import type { HostLayout } from "./layout.ts";
 import {
@@ -466,27 +467,60 @@ export class DurableHost {
 		);
 	}
 
-	/** Every chat model this host's catalog knows, as `provider/modelId`, plus
-	 * each model's context window so a client can show a context meter. */
-	catalog(): {
+	/** Every chat model this host can run for the user's *configured*
+	 * providers, as `provider/modelId`, plus each of those models' context
+	 * windows so a client can show a context meter. Availability is resolved in
+	 * process from the live global-pi credentials (`configured-models.ts`) — no
+	 * `pi` executable is involved — so the dashboard `/model` picker offers the
+	 * configured providers' models instead of pi-ai's full generated catalog.
+	 *
+	 * The walk is per provider: one availability check per provider, then only
+	 * the configured providers' models are enumerated. Nothing here reads the
+	 * whole catalog, and the response carries a context window only for a model
+	 * it actually offers. Fails open: a collection whose auth cannot be resolved
+	 * keeps the unfiltered catalog and records the reason, so a picker is never
+	 * silently emptied. */
+	async catalog(): Promise<{
 		models: string[];
 		thinkingLevels: string[];
 		contextWindows: Record<string, number>;
-	} {
-		const all = this.models?.getModels() ?? [];
-		const models = [
-			...new Set(all.map((model) => `${model.provider}/${model.id}`)),
-		].sort();
+	}> {
+		// Availability first, so only the configured providers' models are ever
+		// read: the generated catalog of an unconfigured provider costs nothing to
+		// skip, and the response below carries exactly the offered models.
+		const configured = await this.configuredProviderIds();
+		const models = new Set<string>();
 		const contextWindows: Record<string, number> = {};
-		for (const model of all) {
-			if (typeof model.contextWindow === "number")
-				contextWindows[`${model.provider}/${model.id}`] = model.contextWindow;
+		for (const provider of this.models?.getProviders() ?? []) {
+			if (configured && !configured.has(provider.id)) continue;
+			for (const model of this.models?.getModels(provider.id) ?? []) {
+				const id = `${model.provider}/${model.id}`;
+				models.add(id);
+				if (typeof model.contextWindow === "number")
+					contextWindows[id] = model.contextWindow;
+			}
 		}
 		return {
-			models,
+			models: [...models].sort(),
 			thinkingLevels: [...DurableHost.THINKING_LEVELS],
 			contextWindows,
 		};
+	}
+
+	/** The providers this host can authenticate with, or `undefined` when that
+	 * cannot be resolved. */
+	private async configuredProviderIds(): Promise<Set<string> | undefined> {
+		if (!this.models) return undefined;
+		try {
+			return await configuredProviderIds(this.models);
+		} catch (error) {
+			this.log(
+				`catalog: configured-provider models unavailable (${
+					error instanceof Error ? error.message : String(error)
+				})`,
+			);
+			return undefined;
+		}
 	}
 
 	async abort(runId: string): Promise<void> {
@@ -699,7 +733,7 @@ export class DurableHost {
 					send({ type: "ok" });
 					return;
 				case "catalog": {
-					const catalog = this.catalog();
+					const catalog = await this.catalog();
 					send({
 						type: "catalog",
 						models: catalog.models,

@@ -115,6 +115,34 @@ describe("agent preset drafts", () => {
 		expect(opencodeModel?.options).toEqual(["", "stub/opencode-one"]);
 	});
 
+	test("a pi-durable profile offers the configured models it is given, never a runtime's", () => {
+		// The durable runtime is bundled and has no model CLI: its choices are the
+		// configured providers' models the view resolved in process. The stub `pi`
+		// on PATH (see above) makes an accidental enumeration visible: if the
+		// durable field ever enumerated a runtime, its options would be the stub's
+		// `stub/model-one` instead of the supplied list.
+		const durable = profileFields(
+			profileDraft("durable", { runtime: "pi-durable" }),
+			["vendor/model-a", "vendor/model-b"],
+		);
+		expect(durable.find((field) => field.key === "model")).toMatchObject({
+			kind: "select",
+			options: ["", "vendor/model-a", "vendor/model-b"],
+		});
+	});
+
+	test("a pi-durable profile stays free text while its model list is unresolved", () => {
+		const draft = profileDraft("durable", { runtime: "pi-durable" });
+		// Unresolved, and resolved-but-empty (no provider configured): both leave
+		// the model nameable rather than offering a choice list with no choice.
+		expect(
+			profileFields(draft).find((field) => field.key === "model")?.kind,
+		).toBe("text");
+		expect(
+			profileFields(draft, []).find((field) => field.key === "model")?.kind,
+		).toBe("text");
+	});
+
 	test("a prefilled profile draft carries the stored values", () => {
 		const draft = profileDraft("used", agents.profiles.used);
 		expect(draft).toMatchObject({

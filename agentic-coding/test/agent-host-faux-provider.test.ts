@@ -84,12 +84,29 @@ describe("DurableHost against a faux provider and in-memory storage", () => {
 		await host.shutdown();
 	});
 
-	test("catalog lists models and configureRun applies a thinking override", async () => {
+	test("catalog offers the configured providers' models and applies a thinking override", async () => {
 		const dir = tempWorkflowDir();
 		const layout = hostLayout(dir);
-		const faux = fauxProvider();
+		const faux = fauxProvider({
+			models: [
+				{ id: "configured", contextWindow: 1000 },
+				{ id: "unconfigured", contextWindow: 2000 },
+			],
+		});
 		const models = createModels();
 		models.setProvider(faux.provider);
+		// A second provider declaring the same models whose auth never resolves: it
+		// is not configured, so the durable `/model` picker must not offer it. That
+		// filter is answered in process — no `pi` executable is involved, which the
+		// empty PATH this catalog is read under proves.
+		models.setProvider({
+			...faux.provider,
+			id: "unconfigured-provider",
+			auth: {
+				check: async () => undefined,
+				resolve: async () => undefined,
+			},
+		} as typeof faux.provider);
 		const host = await DurableHost.open({
 			layout,
 			settings: {},
@@ -108,9 +125,28 @@ describe("DurableHost against a faux provider and in-memory storage", () => {
 			model: modelRef,
 		});
 
-		const catalog = host.catalog();
+		const previousPath = process.env.PATH;
+		process.env.PATH = "";
+		let catalog: Awaited<ReturnType<typeof host.catalog>>;
+		try {
+			catalog = await host.catalog();
+		} finally {
+			if (previousPath === undefined) delete process.env.PATH;
+			else process.env.PATH = previousPath;
+		}
 		expect(catalog.thinkingLevels).toContain("high");
 		expect(catalog.models).toContain(modelRef);
+		expect(catalog.models).not.toContain("unconfigured-provider/unconfigured");
+		expect(catalog.contextWindows[modelRef]).toBe(1000);
+		// The response carries a context window only for a model it offers: an
+		// unconfigured provider's catalog is never walked, so it costs neither
+		// work here nor bytes on the socket.
+		expect(
+			catalog.contextWindows["unconfigured-provider/unconfigured"],
+		).toBeUndefined();
+		expect(Object.keys(catalog.contextWindows).sort()).toEqual(
+			catalog.models.filter((id) => catalog.contextWindows[id] !== undefined),
+		);
 
 		let value:
 			| { docs?: Record<string, { thinkingLevel?: string }> }

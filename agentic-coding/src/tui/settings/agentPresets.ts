@@ -138,8 +138,16 @@ export const poolItemsKey = (step: string): string => `pool:${step}:items`;
 export const gateItemsKey = (stage: string): string => `gate:${stage}`;
 
 /** Profile fields for the current runtime; model is a choice when the runtime
- * enumerates models, otherwise free text. */
-export function profileFields(draft: ProfileDraft): FormField[] {
+ * enumerates models, otherwise free text. `durableModels` is the model list the
+ * durable runtime's configured providers offer, supplied by the caller because
+ * resolving it is asynchronous (pi-ai) and spawns nothing. While it is still
+ * loading, if it could not be resolved, or when it is empty (no provider is
+ * configured), the field stays free text: an empty choice list would leave no
+ * way to name a model at all. */
+export function profileFields(
+	draft: ProfileDraft,
+	durableModels?: readonly string[],
+): FormField[] {
 	const fields: FormField[] = [
 		{ key: "name", label: "Profile name", kind: "text" },
 		{
@@ -149,17 +157,16 @@ export function profileFields(draft: ProfileDraft): FormField[] {
 			options: [...RUNTIMES],
 		},
 	];
-	let models: string[] | undefined;
-	try {
-		models = [
-			...runtimeModels(
-				RUNTIME_EXECUTABLES[draft.runtime] ?? draft.runtime,
-				draft.runtime,
-			),
-		].sort();
-	} catch {
-		models = undefined;
-	}
+	// A durable profile never spawns a runtime to enumerate: the bundled runtime
+	// has no model CLI, and its models are the configured providers' models the
+	// caller resolved in process (the same list the dashboard `/model` picker
+	// shows for a durable run).
+	const models: string[] | undefined =
+		draft.runtime === "pi-durable"
+			? durableModels && durableModels.length > 0
+				? [...durableModels]
+				: undefined
+			: enumerateRuntimeModels(draft.runtime);
 	fields.push(
 		models
 			? {
@@ -232,13 +239,26 @@ export function presetFields(
 	return fields;
 }
 
+/** The models a runtime enumerates itself, or `undefined` when it cannot
+ * enumerate (the field falls back to free text rather than failing the form). */
+function enumerateRuntimeModels(runtime: RuntimeId): string[] | undefined {
+	try {
+		return [
+			...runtimeModels(RUNTIME_EXECUTABLES[runtime] ?? runtime, runtime),
+		].sort();
+	} catch {
+		return undefined;
+	}
+}
+
 /** The fields of a draft (depends on the profile runtime). */
 export function draftFields(
 	draft: Draft,
 	profileNames: readonly string[],
+	durableModels?: readonly string[],
 ): FormField[] {
 	return draft.kind === "profile"
-		? profileFields(draft)
+		? profileFields(draft, durableModels)
 		: presetFields(profileNames, draft.gates, draft.globalGates ?? {});
 }
 

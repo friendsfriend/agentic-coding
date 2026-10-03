@@ -18,6 +18,21 @@ export {
 	runtimeModels,
 } from "../../workflow/profiles.ts";
 
+/** The models a `pi-durable` profile can select: every model of every provider
+ * the user has configured, resolved in process from the live global-pi
+ * credentials. The bundled durable runtime has no model CLI and this needs
+ * none — it spawns nothing and never reads the `pi` executable. Resolved
+ * asynchronously because availability is pi-ai's: the provider catalog is
+ * dynamically imported, so it loads only when a durable profile is actually
+ * edited. Rejects when the provider catalog cannot be opened; callers keep
+ * their own fallback rather than learning about the failure here. */
+export async function durableModels(): Promise<readonly string[]> {
+	const { configuredModelList } = await import(
+		"../../agent-host/configured-models.ts"
+	);
+	return await configuredModelList();
+}
+
 export function agentsKey(repository?: string): string {
 	return `agents:${repository ?? "*"}`;
 }
