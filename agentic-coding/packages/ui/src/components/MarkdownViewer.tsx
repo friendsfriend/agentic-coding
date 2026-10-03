@@ -18,6 +18,19 @@ export interface MarkdownViewerProps {
 	 */
 	width?: number;
 	fg?: string;
+	/**
+	 * Draw the text immediately instead of waiting for the syntax pass.
+	 *
+	 * Each markdown block is a code renderable that stays blank until its
+	 * asynchronous tree-sitter highlight arrives, so a block that appears (or
+	 * whose text grows) is invisible for the first frames — the whole message
+	 * flashes. Telling the renderable the content is still streaming makes it
+	 * lay the text out with markdown-derived styling first and let the highlight
+	 * refine it in place.
+	 */
+	streaming?: boolean;
+	/** Blank rows under the document, as the block flow gives a code block. */
+	marginBottom?: number;
 }
 
 /** Render a whole markdown document. */
@@ -25,11 +38,15 @@ export function MarkdownViewer(props: MarkdownViewerProps) {
 	return (
 		<markdown
 			content={props.content}
+			streaming={props.streaming ?? false}
 			syntaxStyle={getMarkdownSyntaxStyle()}
 			fg={props.fg ?? uiColors.textSecondary}
 			{...(props.width === undefined
 				? { flexGrow: 1 }
 				: { width: props.width })}
+			{...(props.marginBottom === undefined
+				? {}
+				: { marginBottom: props.marginBottom })}
 		/>
 	);
 }

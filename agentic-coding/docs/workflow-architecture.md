@@ -122,7 +122,13 @@ supplies one ordered pool per classifiable step. Routing is per step, not per
 phase: `withPerStepRouting` gives every classifiable step a routing step
 immediately before it (`core.route-implementation`, `core.route-verification`,
 …), every inbound edge enters that routing step, and the routing step asks
-exactly one pool question for the step that follows. The state is what that step
+exactly one pool question for the step that follows. It is otherwise a
+pass-through: it records the arriving edge's output as its own context and hands
+the same value on as its transition output, so the step it precedes receives
+exactly what the edge would have delivered directly — a triage plan's locked
+role set and each role's scoped files, or a review's comments. The model answer
+is consumed by the routing reducer and recorded in `classifierDecisions`; it is
+never forwarded as the next step's input. The state is what that step
 is about to run against: the task before planning, and the task plus the plan
 artifacts and the changed-file paths afterwards (never diff bodies). A loop
 therefore re-selects the model, so a verification round re-asks. A single

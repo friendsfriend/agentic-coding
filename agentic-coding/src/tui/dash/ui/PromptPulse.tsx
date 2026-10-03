@@ -25,8 +25,10 @@ import {
 /** Upper one-eighth block: a thin line at the top of the cell. */
 const TOP_LINE = "▔";
 /** How far each aurora color is blended toward the prompt background: higher is
- * paler, so the line reads as a soft hint rather than a solid bar. */
-const PALE = 0.55;
+ * paler. Kept low enough that the working line reads as a solid accent rather
+ * than a washed-out hint, and softened just enough not to look like a filled
+ * bar against the input beneath it. */
+const PALE = 0.2;
 
 export interface PromptPulseProps {
 	/** The agent is working: run the sweep. */

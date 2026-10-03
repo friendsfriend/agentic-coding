@@ -27,16 +27,25 @@ import { parseColor, RGBA, rgbToHex, TextAttributes } from "@opentui/core";
 import {
 	ListViewModal,
 	MarkdownViewer,
+	parseMarkdownBlocks,
 	ScrollableContent,
 	uiColors,
 } from "@ui";
-import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import {
+	createMemo,
+	createSignal,
+	For,
+	onCleanup,
+	onMount,
+	Show,
+} from "solid-js";
 import {
 	type AgentSessionBlock,
 	type AgentSessionTone,
 	formatCost,
 	formatDuration,
 	formatTokenCount,
+	reuseAgentSessionBlocks,
 } from "../agent-session.ts";
 import { PromptPulse } from "./PromptPulse.tsx";
 
@@ -111,13 +120,12 @@ const DEFAULT_THINKING_LEVELS = [
 	"max",
 ] as const;
 
-/** Blend a status color into the dialog background, so every box has a solid
- * background that still reads as "the theme, tinted by status". Named theme
+/** Blend two theme colors: `amount` 0 keeps `from`, 1 gives `to`. Named theme
  * colors resolve through OpenTUI's own parser. */
-function tint(color: string, amount: number): string {
-	const base = parseColor(uiColors.bgBase);
-	const tone = parseColor(color);
-	const mix = (from: number, to: number) => from + (to - from) * amount;
+function blend(from: string, to: string, amount: number): string {
+	const base = parseColor(from);
+	const tone = parseColor(to);
+	const mix = (start: number, end: number) => start + (end - start) * amount;
 	return rgbToHex(
 		RGBA.fromValues(
 			mix(base.r, tone.r),
@@ -126,6 +134,27 @@ function tint(color: string, amount: number): string {
 			1,
 		),
 	);
+}
+
+/** Blend a status color into the dialog background, so every box has a solid
+ * background that still reads as "the theme, tinted by status". */
+function tint(color: string, amount: number): string {
+	return blend(uiColors.bgBase, color, amount);
+}
+
+/** How far the newest content's background leans toward the accent: enough to
+ * read as "this just arrived", faint enough to stay a background. */
+const FRESH = 0.08;
+
+/** The marker for the newest content: a background nudged toward the accent,
+ * so a fresh block is marked without a border or a bar of its own. */
+function freshBackground(background: string): string {
+	return blend(background, uiColors.accent, FRESH);
+}
+
+/** A block that carries no status tint of its own sits on the page background. */
+function contentBackground(fresh: boolean): string {
+	return fresh ? freshBackground(uiColors.bgBase) : uiColors.bgBase;
 }
 
 /** The left-edge marker color: the status color, fully saturated. */
@@ -182,6 +211,72 @@ function truncateModel(model: string): string {
 	return model.length > 32 ? `${model.slice(0, 31)}…` : model;
 }
 
+/** One rendered piece of an assistant message: a fenced code block, or the
+ * prose around it. */
+interface AssistantPart {
+	readonly source: string;
+	/** Fenced code: drawn as text immediately instead of waiting for the
+	 * markdown syntax pass (prose needs that pass to conceal its own markers). */
+	readonly code: boolean;
+}
+
+/**
+ * Split an assistant message at its top-level markdown blocks. Each part keeps
+ * the blank lines up to the next block, because a rendered part only draws the
+ * spacing that is part of its own text.
+ */
+function assistantParts(text: string): AssistantPart[] {
+	const blocks = parseMarkdownBlocks(text);
+	const lines = text.split("\n");
+	return blocks.map((block, index) => {
+		const next = blocks[index + 1];
+		return {
+			source: lines
+				.slice(block.startLine - 1, next ? next.startLine - 1 : lines.length)
+				.join("\n"),
+			code: block.kind === "code",
+		};
+	});
+}
+
+/**
+ * One assistant message as its markdown pieces. A single `<markdown>` for the
+ * whole message would stay blank wherever the asynchronous syntax pass has not
+ * landed yet — every paragraph, or (with the streaming preview on) every code
+ * block — so code draws as a code block and prose as a streaming preview, and
+ * neither waits to become visible.
+ */
+function AssistantMarkdown(props: { text: string }) {
+	// Lexing the message is the expensive part of a render, so it happens once
+	// per text (every streaming frame), not once per part.
+	const parts = createMemo(() => assistantParts(props.text));
+	return (
+		<box flexDirection="column">
+			<For each={parts()}>
+				{(part, index) => (
+					<MarkdownViewer
+						content={part.source}
+						fg={uiColors.textPrimary}
+						streaming={!part.code}
+						// A code block's trailing blank line is not part of its text,
+						// so the following block would touch it.
+						{...(part.code && index() < parts().length - 1
+							? { marginBottom: 1 }
+							: {})}
+					/>
+				)}
+			</For>
+		</box>
+	);
+}
+
+/** The transcript rows and the blocks carrying the newest-content marker. */
+interface TranscriptState {
+	readonly rows: readonly AgentSessionBlock[];
+	/** The newest content: the blocks the latest frame arrived with. */
+	readonly marked: readonly AgentSessionBlock[];
+}
+
 /** One transcript entry. Assistant output is markdown with no status box;
  * thinking is collapsible; everything else is a status box with the same left
  * highlight the prompt uses. */
@@ -190,13 +285,20 @@ function Block(props: {
 	role: string;
 	index: number;
 	expanded: boolean;
+	/** Newest content: marked with a faint background. */
+	fresh: boolean;
 	onToggle: (index: number) => void;
 }) {
 	const color = () => toneColor(props.block.tone);
 	if (props.block.kind === "summary")
 		// opencode's assistant footer: agent · model · duration · tok/s.
 		return (
-			<box paddingLeft={3} paddingRight={1} flexShrink={0}>
+			<box
+				paddingLeft={3}
+				paddingRight={1}
+				flexShrink={0}
+				backgroundColor={contentBackground(props.fresh)}
+			>
 				<text fg={uiColors.textMuted} wrapMode="none" truncate>
 					{titlecase(props.role)} · {props.block.text}
 				</text>
@@ -204,8 +306,13 @@ function Block(props: {
 		);
 	if (props.block.kind === "assistant")
 		return (
-			<box paddingLeft={3} paddingRight={1} flexShrink={0}>
-				<MarkdownViewer content={props.block.text} fg={uiColors.textPrimary} />
+			<box
+				paddingLeft={3}
+				paddingRight={1}
+				flexShrink={0}
+				backgroundColor={contentBackground(props.fresh)}
+			>
+				<AssistantMarkdown text={props.block.text} />
 			</box>
 		);
 	if (props.block.kind === "reasoning")
@@ -215,6 +322,7 @@ function Block(props: {
 				paddingRight={1}
 				flexDirection="column"
 				flexShrink={0}
+				backgroundColor={contentBackground(props.fresh)}
 				onMouseUp={() => props.onToggle(props.index)}
 			>
 				<text fg={uiColors.warning}>
@@ -314,7 +422,11 @@ function Block(props: {
 		<box
 			border={["left"]}
 			borderColor={markerColor(props.block.tone)}
-			backgroundColor={boxBackground(props.block.tone)}
+			backgroundColor={
+				props.fresh
+					? freshBackground(boxBackground(props.block.tone))
+					: boxBackground(props.block.tone)
+			}
 			paddingLeft={2}
 			paddingRight={1}
 			flexShrink={0}
@@ -371,6 +483,34 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		setAutocompleteIndex(0);
 		return true;
 	};
+	/**
+	 * The transcript rows, plus the ones carrying the "newest content" marker.
+	 *
+	 * The rows reuse the previous frame's blocks wherever their content did not
+	 * change: `<For>` keys its rows by object identity, and a watch frame hands
+	 * us a freshly built block for every entry, so rendering the rebuilt array
+	 * directly would recreate every row each frame and take each markdown
+	 * renderable through its async highlight pass again — the transcript
+	 * flashing after every message.
+	 *
+	 * The marker follows whatever arrived or changed in the latest frame and
+	 * stays there until newer output replaces it, so a live session always shows
+	 * where the last output landed.
+	 */
+	const transcript = createMemo((previous: TranscriptState | undefined) => {
+		const rows = reuseAgentSessionBlocks(previous?.rows ?? [], props.blocks);
+		const known = previous ? new Set(previous.rows) : undefined;
+		const arrived = known
+			? rows.filter((row) => !known.has(row))
+			: // Opening the page marks the newest output, exactly where a live
+				// session would have left the marker.
+				rows.slice(-1);
+		const marked =
+			arrived.length > 0
+				? arrived
+				: (previous?.marked ?? []).filter((row) => rows.includes(row));
+		return { rows, marked };
+	}, undefined);
 	const [picker, setPicker] = createSignal<PickerState | undefined>();
 	const [autocompleteIndex, setAutocompleteIndex] = createSignal(0);
 	// Which thinking blocks are expanded. Collapsed by default so a long
@@ -522,47 +662,33 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 
 	return (
 		<>
+			{/* The page fills the body its host reserved for it (the shell owns the
+			    blank lines around the header and footer), and names the run in the
+			    prompt's own metadata row instead of a title row of its own. */}
 			<box
 				width="100%"
 				height="100%"
 				flexDirection="column"
-				gap={1}
 				minHeight={0}
-				paddingTop={1}
-				paddingBottom={1}
 				paddingLeft={2}
 				paddingRight={2}
 				backgroundColor={uiColors.bgBase}
 			>
-				{/* The modal title bar is gone with the dialog; the view still
-				    names the run it shows before the transcript. */}
-				<box flexDirection="row" gap={1} flexShrink={0}>
-					<text fg={uiColors.accent} attributes={TextAttributes.BOLD}>
-						Agent
-					</text>
-					<text fg={uiColors.textMuted}>·</text>
-					<text fg={uiColors.textPrimary}>{props.role}</text>
-				</box>
-				<box
-					width="100%"
-					flexDirection="column"
-					flexGrow={1}
-					gap={1}
-					minHeight={0}
-				>
+				<box width="100%" flexDirection="column" flexGrow={1} minHeight={0}>
 					<ScrollableContent
 						stickyStart="bottom"
 						stickyScroll
 						onScrollBoxReady={(box) => props.onScrollBoxReady?.(box)}
 					>
 						<box flexDirection="column" gap={1}>
-							<For each={props.blocks}>
+							<For each={transcript().rows}>
 								{(block, index) => (
 									<Block
 										block={block}
 										role={props.role}
 										index={index()}
 										expanded={expandedBlocks().has(index())}
+										fresh={transcript().marked.includes(block)}
 										onToggle={toggleBlock}
 									/>
 								)}
@@ -622,7 +748,6 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 					<box
 						border={["left"]}
 						borderColor={uiColors.accent}
-						marginBottom={1}
 						flexShrink={0}
 						backgroundColor={uiColors.bgMantle}
 					>

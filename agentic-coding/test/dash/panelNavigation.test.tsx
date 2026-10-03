@@ -605,7 +605,7 @@ test("the durable agent session opens as a page and Esc returns to the grid", as
 	await t.renderOnce();
 	t.mockInput.pressEnter();
 	const session = await t.waitForFrame((frame) =>
-		frame.includes("Agent · worker"),
+		frame.includes("Ask anything…"),
 	);
 	// The page replaced the grid rather than floating above it.
 	expect(session).not.toContain("Plan review");
@@ -626,10 +626,10 @@ test("the durable agent session opens as a page and Esc returns to the grid", as
 	// its keys while a dialog is on top of it.
 	t.mockInput.pressEscape();
 	await t.waitForFrame((frame) => !frame.includes("Dashboard keybindings"));
-	expect(t.captureCharFrame()).toContain("Agent · worker");
+	expect(t.captureCharFrame()).toContain("Ask anything…");
 	t.mockInput.pressEscape();
 	const grid = await t.waitForFrame(
-		(frame) => !frame.includes("Agent · worker"),
+		(frame) => !frame.includes("Ask anything…"),
 	);
 	// The grid is showing again, with its own panel keys published.
 	expect(grid).toContain("Agents");

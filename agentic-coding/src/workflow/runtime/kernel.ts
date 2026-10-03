@@ -28,6 +28,7 @@ import type {
 	WorkflowRegistry,
 } from "../registry.ts";
 import { fusionPlannerRoles as stepFusionPlannerRoles } from "../steps/planning.ts";
+import { STEP_ROUTES } from "../steps/routing.ts";
 import type {
 	ArriveResult,
 	CompletionResult,
@@ -168,10 +169,14 @@ export function applyCompletionResult(
 					"reducer-contract",
 					"selected roles require a completion destination",
 				);
-			const destinationStep = registry.stepForDefinition(
-				definition,
-				destination,
-			);
+			// A per-step routing step owns no roles of its own: a selection that
+			// lands on one belongs to the agent step that route step selects a
+			// model for, which is also where the candidate catalog and the pinned
+			// routes are keyed (classifier-driven-step-model-selection). Reading
+			// the raw edge destination here rejected every real triage plan once
+			// the route step sat between triage and verification.
+			const roleStep = STEP_ROUTES[destination]?.target ?? destination;
+			const destinationStep = registry.stepForDefinition(definition, roleStep);
 			const candidates = destinationStep.behavior?.candidateRoles?.({
 				definitionId: definition.id,
 				fusionPlannerCount: snapshot.routing.routes.filter(
@@ -183,13 +188,13 @@ export function applyCompletionResult(
 					!candidates?.includes(role) ||
 					!snapshot.routing.routes.some(
 						(route) =>
-							route.stepId === destination &&
+							route.stepId === roleStep &&
 							(route.role === role || route.role === undefined),
 					)
 				)
 					throw new WorkflowRuntimeError(
 						"reducer-contract",
-						`selected role is not a pinned ${destination} route: ${role}`,
+						`selected role is not a pinned ${roleStep} route: ${role}`,
 					);
 			}
 			snapshot.step.selectedRoles = [...result.step.selectedRoles];

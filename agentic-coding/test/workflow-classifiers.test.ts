@@ -628,7 +628,12 @@ describe("routing steps and graph wiring", () => {
 			stepId: "core.plan",
 		});
 		const completion = behavior.onEffectComplete?.({
-			snapshot: {} as never,
+			// The arriving edge's output is recorded as this step's context; the
+			// completion hands it on rather than forwarding the model answer, so the
+			// step this route step precedes receives what the edge delivered.
+			snapshot: {
+				step: { context: { comments: [{ comment: "use const" }] } },
+			} as never,
 			effect: {
 				kind: "model.classify",
 				payload: { integration: "routing", phase: "plan" },
@@ -636,6 +641,10 @@ describe("routing steps and graph wiring", () => {
 			},
 		});
 		expect(completion?.transition?.outcome).toBe("complete");
+		expect(completion?.transition?.output).toEqual({
+			comments: [{ comment: "use const" }],
+		});
+		expect(behavior.carriesOutputContext).toBe(true);
 	});
 
 	test("openspec routes plan to route-apply after approval", () => {

@@ -55,18 +55,26 @@ function Harness(props: {
 	);
 }
 
-test("renders the agent title and the transcript blocks", async () => {
+test("the page is body content: no title row, and the prompt ends it", async () => {
 	const t = await testRender(
 		() => <Harness onSubmit={() => {}} onAbort={() => {}} onBack={() => {}} />,
 		{ width: 100, height: 30 },
 	);
-	await t.flush();
+	// Two passes: the transcript's sticky scroll settles on the first one.
+	await t.renderOnce();
+	await t.renderOnce();
 	const frame = t.captureCharFrame();
-	expect(frame).toContain("Agent");
-	expect(frame).toContain("worker");
 	expect(frame).toContain("fix the parser");
 	expect(frame).toContain("Reading the parser");
 	expect(frame).toContain("read path=a.ts");
+	// The run is named by the prompt's metadata row, not a title row: the host
+	// owns the blank lines around its header and footer, so the page adds none
+	// of its own above the transcript or below the prompt.
+	// `captureCharFrame` ends with a newline: the rows are the trimmed split.
+	const lines = frame.trimEnd().split("\n");
+	expect(frame).not.toContain("Agent · worker");
+	expect(lines[0]).toContain("fix the parser");
+	expect(lines.at(-1)).toContain("Worker");
 	t.renderer.destroy();
 });
 
@@ -627,6 +635,137 @@ test("restored history recalls slash commands without interfering with typed aut
 		t.mockInput.pressEnter();
 		await t.renderOnce();
 		expect(t.captureCharFrame()).toContain("Select thinking level");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("the newest output carries a background marker until the next output", async () => {
+	const [blocks, setBlocks] = createSignal<readonly AgentSessionBlock[]>([
+		{ kind: "user", text: "fix the parser", tone: "accent" },
+		{ kind: "assistant", text: "Reading the parser now.", tone: "base" },
+	]);
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={blocks()}
+				working={true}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+			/>
+		),
+		{ width: 80, height: 20 },
+	);
+	/** The painted background of the first cell holding `text`. */
+	const background = (text: string) => {
+		for (const line of t.captureSpans().lines) {
+			for (const span of line.spans) {
+				if (span.text.includes(text)) return JSON.stringify(span.bg);
+			}
+		}
+		return undefined;
+	};
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		// Opening the page marks the newest output.
+		const markedAssistant = background("Reading the parser");
+		expect(markedAssistant).toBeDefined();
+
+		// New output takes the marker over, and the previous block keeps its own
+		// (unmarked) background.
+		setBlocks((current) => [
+			...current,
+			{ kind: "result", text: "read: file contents", tone: "success" },
+		]);
+		await t.renderOnce();
+		const assistantPlain = background("Reading the parser");
+		const markedResult = background("read: file contents");
+		expect(assistantPlain).not.toBe(markedAssistant);
+		expect(markedResult).not.toBe(assistantPlain);
+
+		// A frame that adds nothing keeps the marker where it is.
+		setBlocks((current) => current.map((block) => ({ ...block })));
+		await t.renderOnce();
+		expect(background("read: file contents")).toBe(markedResult);
+
+		// The next output takes the marker over: the result reverts, and the new
+		// assistant block carries the marker (compared against the other, now
+		// unmarked, assistant block).
+		setBlocks((current) => [
+			...current,
+			{ kind: "assistant", text: "Applied the fix.", tone: "base" },
+		]);
+		await t.renderOnce();
+		expect(background("read: file contents")).not.toBe(markedResult);
+		expect(background("Applied the fix")).not.toBe(assistantPlain);
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("a watch frame never blanks the transcript's markdown", async () => {
+	const committed: AgentSessionBlock[] = [
+		{ kind: "user", text: "fix the parser", tone: "accent" },
+		{
+			kind: "assistant",
+			text: "Reading the parser now.\n\n```ts\nconst a = 1;\n```\n",
+			tone: "base",
+		},
+	];
+	const [blocks, setBlocks] =
+		createSignal<readonly AgentSessionBlock[]>(committed);
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={blocks()}
+				working={true}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+			/>
+		),
+		{ width: 100, height: 30 },
+	);
+	try {
+		await t.waitForFrame((frame) => frame.includes("Reading the parser"));
+		// Every frame rebuilds the block objects and grows the in-flight one.
+		for (let index = 0; index < 4; index++) {
+			setBlocks(() => [
+				...committed.map((block) => ({ ...block })),
+				{ kind: "assistant", text: `streaming ${index}`, tone: "base" },
+			]);
+			await t.renderOnce();
+			const frame = t.captureCharFrame();
+			expect(frame).toContain("Reading the parser");
+			// The code fence draws in the same frame, before its syntax pass.
+			expect(frame).toContain("const a = 1;");
+			expect(frame).toContain(`streaming ${index}`);
+		}
+		// The in-flight block commits: the message keeps drawing as it settles.
+		setBlocks(() => [
+			...committed,
+			{ kind: "assistant", text: "streaming 3", tone: "base" },
+		]);
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("streaming 3");
 	} finally {
 		t.renderer.destroy();
 	}

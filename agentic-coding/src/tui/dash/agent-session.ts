@@ -350,6 +350,57 @@ function liveBlocks(
  * activity visible instead of clipping it. */
 const MAX_BLOCKS = 60;
 
+/** One block's content as a comparison key: two blocks with the same key
+ * render identically. */
+function blockKey(block: AgentSessionBlock): string {
+	return [
+		block.kind,
+		block.tone,
+		block.text,
+		block.icon ?? "",
+		block.pending ? "pending" : "",
+		block.tool ?? "",
+		block.request ?? "",
+		block.durationMs ?? "",
+		(block.detail ?? []).join("\u0000"),
+	].join("\u0001");
+}
+
+/**
+ * Carry the previous frame's block objects over to the next frame wherever the
+ * content did not change, and hand the previous array back untouched when
+ * nothing changed at all.
+ *
+ * The transcript renders with `<For>`, which keys rows by object identity: a
+ * watch frame rebuilds every block object, so without this every frame would
+ * rebuild every row and each markdown renderable would run its asynchronous
+ * syntax pass again — the whole transcript flashing after each message.
+ */
+export function reuseAgentSessionBlocks(
+	previous: readonly AgentSessionBlock[],
+	next: readonly AgentSessionBlock[],
+): readonly AgentSessionBlock[] {
+	if (previous.length === 0) return next;
+	const available = new Map<string, AgentSessionBlock[]>();
+	for (const block of previous) {
+		const key = blockKey(block);
+		const list = available.get(key);
+		if (list) list.push(block);
+		else available.set(key, [block]);
+	}
+	let unchanged = previous.length === next.length;
+	const reused = next.map((block, index) => {
+		const before = available.get(blockKey(block))?.pop();
+		if (!before) {
+			unchanged = false;
+			return block;
+		}
+		if (before !== previous[index]) unchanged = false;
+		return before;
+	});
+	return unchanged ? previous : reused;
+}
+
 /** Defensive, version-tolerant read of pi-durable's `ConversationView` shape
  * (`docs["pi.live"]`, `docs["pi.inbox"]`, `entries`): every field is read as
  * unknown and checked, so a shape drift in the experimental package degrades

@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import type { AgentSessionBlock } from "../../src/tui/dash/agent-session.ts";
 import {
 	buildAgentSessionView,
 	readAgentSessionMetadata,
 	renderAgentSessionSummary,
+	reuseAgentSessionBlocks,
 } from "../../src/tui/dash/agent-session.ts";
 
 describe("buildAgentSessionView", () => {
@@ -431,5 +433,61 @@ describe("renderAgentSessionSummary", () => {
 			entries: [{ kind: "pi.user", model: [{ content: "hello" }] }],
 		});
 		expect(text).toContain("hello");
+	});
+});
+
+describe("reuseAgentSessionBlocks", () => {
+	const block = (text: string): AgentSessionBlock => ({
+		kind: "assistant",
+		text,
+		tone: "base",
+	});
+
+	test("hands the previous array back when a frame changed nothing", () => {
+		const first = [block("one"), block("two")];
+		// Every watch frame rebuilds the block objects, content identical.
+		const frame = [block("one"), block("two")];
+		const reused = reuseAgentSessionBlocks(first, frame);
+		expect(reused).toBe(first);
+		expect(reused[0]).toBe(first[0]);
+		expect(reused[1]).toBe(first[1]);
+	});
+
+	test("reuses the unchanged blocks and replaces only the changed one", () => {
+		const first = [block("one"), block("two"), block("streaming 1")];
+		const frame = [block("one"), block("two"), block("streaming 2")];
+		const reused = reuseAgentSessionBlocks(first, frame);
+		expect(reused).not.toBe(first);
+		expect(reused[0]).toBe(first[0]);
+		expect(reused[1]).toBe(first[1]);
+		expect(reused[2]).toBe(frame[2]);
+	});
+
+	test("keeps the blocks that survive a trim or an insertion", () => {
+		const one = block("one");
+		const two = block("two");
+		const three = block("three");
+		// A front trim: the oldest block is gone, the rest keep their identity.
+		expect(
+			reuseAgentSessionBlocks(
+				[one, two, three],
+				[block("two"), block("three")],
+			),
+		).toEqual([two, three]);
+		// An insertion in the middle leaves both surviving blocks untouched.
+		expect(
+			reuseAgentSessionBlocks([one, three], [one, block("two"), three]),
+		).toEqual([one, block("two"), three]);
+	});
+
+	test("distinguishes blocks by their whole content, not just the text", () => {
+		const result = (tone: AgentSessionBlock["tone"]): AgentSessionBlock => ({
+			kind: "result",
+			text: "read: done",
+			tone,
+		});
+		const first = [result("success")];
+		const reused = reuseAgentSessionBlocks(first, [result("error")]);
+		expect(reused[0]).not.toBe(first[0]);
 	});
 });

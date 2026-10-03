@@ -57,6 +57,15 @@ export const LEGACY_ROUTE_STEPS: Readonly<Record<string, StepRoute>> =
  * workflow at a system step that has no run and nothing pending. */
 function stepRoutingBehavior(route: StepRoute): StepBehavior {
 	return {
+		// A route step is a pass-through for the edge that entered it: the arriving
+		// output is what the step it precedes must receive — a triage plan carries
+		// the round's locked role set and each role's scoped files, a review's
+		// comments carry the revision request. `carriesOutputContext` records that
+		// output as this step's context, and the completion hands the same value on
+		// as the transition output, exactly as the edge delivered it before the
+		// route step existed. The model answer itself is never forwarded: it is
+		// consumed by the routing reducer and recorded in `classifierDecisions`.
+		carriesOutputContext: true,
 		onEnter: ({ snapshot, enqueue }) => {
 			enqueue(
 				"model.classify",
@@ -73,9 +82,14 @@ function stepRoutingBehavior(route: StepRoute): StepBehavior {
 			);
 			return undefined;
 		},
-		onEffectComplete: ({ effect }) =>
+		onEffectComplete: ({ snapshot, effect }) =>
 			effect.kind === "model.classify"
-				? { transition: { outcome: "complete", output: effect.data } }
+				? {
+						transition: {
+							outcome: "complete",
+							output: snapshot.step.context,
+						},
+					}
 				: undefined,
 	};
 }

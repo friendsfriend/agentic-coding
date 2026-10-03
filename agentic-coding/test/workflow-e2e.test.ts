@@ -906,3 +906,91 @@ test("a second verification round re-runs the classifier routing step", () => {
 		fs.rmSync(root, { recursive: true, force: true });
 	}
 });
+
+test("the current definition tier keeps the round's roles through the per-step route steps", () => {
+	const root = repo();
+	try {
+		const engine = new WorkflowEngine(registerBuiltins());
+		let view = engine.start({
+			repo: root,
+			workflowId: "step-routing-roles",
+			definitionId: "no-openspec",
+			definitionVersion: definitionVersionForStepRouting(6),
+			metadata: {
+				branch: "main",
+				baseBranch: "main",
+				baseCommit: "base",
+				task: "task",
+			},
+			routing,
+		}).view;
+		// The worker is entered through the route step that selects its model.
+		expect(view.currentStep.id).toBe("core.route-implementation");
+		view = advanceRouting(engine, root, view);
+		expect(view.currentStep.id).toBe("core.implementation");
+		fs.writeFileSync(path.join(root, "implementation.txt"), "changed\n");
+		view = complete(engine, root, view, "worker", { changed: true });
+		expect(view.currentStep.id).toBe("core.triage-route");
+		const classify = requireEffect(
+			engine.claimEffects(root, 100),
+			"model.classify",
+		);
+		view = engine.dispatch(root, {
+			type: "effect.result",
+			effectId: classify.id,
+			lease: requireDefined(classify.lease, "classify lease"),
+			outcome: "complete",
+			data: {
+				integration: "triage",
+				roles: ["quality-verifier", "security-verifier"],
+			},
+		}).view;
+		// The classifier's locked set reaches triage through its own route step.
+		expect(view.currentStep.id).toBe("core.route-triage");
+		view = advanceRouting(engine, root, view);
+		expect(view.currentStep.id).toBe("core.triage");
+		expect(engine.getSnapshot(root, view.workflowId).step.context).toEqual({
+			roles: ["quality-verifier", "security-verifier"],
+		});
+		view = complete(engine, root, view, "triage", {
+			roles: [
+				{
+					role: "quality-verifier",
+					reason: "runner correctness",
+					files: ["implementation.txt"],
+				},
+				{
+					role: "security-verifier",
+					reason: "secret boundary",
+					files: ["implementation.txt"],
+				},
+			],
+		});
+		// Verification is entered through the route step that re-selects its
+		// model every round; the round's scoped plan must survive that hop.
+		expect(view.currentStep.id).toBe("core.route-verification");
+		view = advanceRouting(engine, root, view);
+		expect(view.currentStep.id).toBe("core.verification");
+		expect(stepRoles(view, "core.verification")).toEqual([
+			"quality-verifier",
+			"security-verifier",
+		]);
+		expect(engine.getSnapshot(root, view.workflowId).step.context).toEqual({
+			roles: ["quality-verifier", "security-verifier"],
+			assignments: [
+				{
+					role: "quality-verifier",
+					reason: "runner correctness",
+					files: ["implementation.txt"],
+				},
+				{
+					role: "security-verifier",
+					reason: "secret boundary",
+					files: ["implementation.txt"],
+				},
+			],
+		});
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
