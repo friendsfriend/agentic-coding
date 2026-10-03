@@ -20,7 +20,10 @@
 			"@ui/*": ["./packages/ui/src/*"],
 			"@devenv/cli": ["./packages/devenv/cli/src"],
 			"@devenv/core": ["./packages/devenv/core/src"],
-			"@devenv/types": ["./packages/devenv/types/src"]
+			"@devenv/types": ["./packages/devenv/types/src"],
+			// `agent-definitions/` sits outside this package: the repo-root
+			// tsconfig maps the same specifier for bun's runtime resolution.
+			"typebox": ["./node_modules/typebox"]
 		}
 	},
 	"include": ["src/**/*", "test/**/*", "scripts/test.ts", "packages/**/*"],

@@ -348,14 +348,19 @@ describe("buildAgentSessionView", () => {
 		]);
 	});
 
-	test("keeps only the newest blocks so the modal does not overflow", () => {
-		const entries = Array.from({ length: 100 }, (_, index) => ({
+	test("keeps the newest blocks, bounded for the projection", () => {
+		// The view renders a window of these and loads older ones on scroll, so
+		// the bound is the projection's memory limit, not a screenful.
+		const entries = Array.from({ length: 300 }, (_, index) => ({
 			kind: "pi.user",
 			model: [{ role: "user", content: `message-${index}` }],
 		}));
 		const blocks = buildAgentSessionView({ entries });
-		expect(blocks.at(-1)?.text).toBe("message-99");
+		expect(blocks.length).toBe(240);
+		expect(blocks.at(-1)?.text).toBe("message-299");
 		expect(blocks.some((block) => block.text === "message-0")).toBe(false);
+		expect(blocks.some((block) => block.text === "message-59")).toBe(false);
+		expect(blocks.some((block) => block.text === "message-60")).toBe(true);
 	});
 
 	test("queued messages show their delivery mode and disappear when placed", () => {

@@ -23,14 +23,20 @@ import type {
 	KeyEvent,
 	ScrollBoxRenderable,
 } from "@opentui/core";
-import { parseColor, RGBA, rgbToHex, TextAttributes } from "@opentui/core";
+import {
+	CliRenderEvents,
+	parseColor,
+	RGBA,
+	rgbToHex,
+	TextAttributes,
+} from "@opentui/core";
+import { useRenderer } from "@opentui/solid";
 import {
 	ListViewModal,
 	MarkdownViewer,
 	parseMarkdownBlocks,
 	ScrollableContent,
 	uiColors,
-	useTerminalDimensions,
 } from "@ui";
 import {
 	createMemo,
@@ -138,17 +144,27 @@ function tint(color: string, amount: number): string {
 	);
 }
 
-/** The separator between the transcript and its newest output: a dashed rule,
- * one vertical dash per cell, so the boundary is visible without tinting (or
- * bordering) the content that follows it. */
-const DIVIDER_GLYPH = "╎";
+/** Rows rendered on open, and how many more each load at the top adds. The
+ * projection keeps a longer transcript, so the window is a rendering budget,
+ * not the transcript's own bound. */
+const TRANSCRIPT_WINDOW = 60;
+const TRANSCRIPT_PAGE = 40;
 
+/** The separator between the transcript and its newest output: a rule in the
+ * theme's accent with `new` and a down arrow centered on it, so the boundary is
+ * visible without tinting or bordering the content that follows it. */
 function NewContentDivider() {
-	const dimensions = useTerminalDimensions();
 	return (
-		<text fg={uiColors.textMuted} wrapMode="none" flexShrink={0}>
-			{DIVIDER_GLYPH.repeat(Math.max(0, dimensions().width))}
-		</text>
+		<box
+			width="100%"
+			height={1}
+			flexShrink={0}
+			border={["top"]}
+			borderColor={uiColors.accent}
+			title=" new ↓ "
+			titleColor={uiColors.accent}
+			titleAlignment="center"
+		/>
 	);
 }
 
@@ -503,6 +519,37 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 				: previous.newest.filter((row) => rows.includes(row));
 		return { rows, newest };
 	}, undefined);
+	// The oldest rendered row. While the reader is at the bottom the window
+	// slides with the newest output; once they scroll up it is anchored to this
+	// row instead, so arriving output never slides the rendered transcript (and
+	// the viewport with it) out from under them. The projection keeps far more
+	// than a screenful, so reaching the top loads the older rows the window left
+	// out rather than dropping them.
+	const [anchor, setAnchor] = createSignal<AgentSessionBlock | undefined>();
+	const windowRows = () => {
+		const rows = transcript().rows;
+		const oldest = anchor();
+		const start = oldest ? rows.indexOf(oldest) : -1;
+		if (start >= 0) return rows.slice(start);
+		return rows.slice(Math.max(0, rows.length - TRANSCRIPT_WINDOW));
+	};
+	let scrollBox: ScrollBoxRenderable | undefined;
+	/** A load in flight: the frame that lays the older rows out moves the
+	 * viewport down by their height, so the reader keeps their place. */
+	let pendingLoad: { height: number; top: number } | undefined;
+	const loadOlder = () => {
+		const box = scrollBox;
+		if (!box || pendingLoad) return;
+		const rows = transcript().rows;
+		const oldest = anchor();
+		const start =
+			oldest && rows.indexOf(oldest) >= 0
+				? rows.indexOf(oldest)
+				: Math.max(0, rows.length - TRANSCRIPT_WINDOW);
+		if (start <= 0) return;
+		pendingLoad = { height: box.scrollHeight, top: box.scrollTop };
+		setAnchor(rows[Math.max(0, start - TRANSCRIPT_PAGE)]);
+	};
 	const [picker, setPicker] = createSignal<PickerState | undefined>();
 	const [autocompleteIndex, setAutocompleteIndex] = createSignal(0);
 	// Which thinking blocks are expanded. Collapsed by default so a long
@@ -652,6 +699,50 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		runCommand(text);
 	};
 
+	// Scrolling is owned by the scroll box (keys, wheel, scrollbar), so the
+	// view follows its position instead of intercepting keys: the box's own
+	// sticky logic only re-reads "the reader scrolled away from the bottom"
+	// from its `scrollTop` setter, which a `scrollBy` from the keymap bypasses —
+	// without this, the next frame would yank the viewport back to the bottom.
+	onMount(() => {
+		const renderer = useRenderer();
+		const onFrame = () => {
+			const box = scrollBox;
+			if (!box || !pendingLoad) return;
+			const grown = box.scrollHeight - pendingLoad.height;
+			if (grown <= 0) return;
+			box.scrollTop = pendingLoad.top + grown;
+			pendingLoad = undefined;
+		};
+		renderer.on(CliRenderEvents.FRAME, onFrame);
+		onCleanup(() => renderer.off(CliRenderEvents.FRAME, onFrame));
+	});
+
+	/** Stop the window sliding: the rows on screen keep their place while the
+	 * reader is not following the newest output. */
+	const freezeWindow = () => {
+		if (anchor()) return;
+		const rows = transcript().rows;
+		setAnchor(rows[Math.max(0, rows.length - TRANSCRIPT_WINDOW)]);
+	};
+
+	const attachScrollBox = (box: ScrollBoxRenderable) => {
+		scrollBox = box;
+		const onScroll = () => {
+			// The box only re-reads "the reader scrolled away from the bottom"
+			// from its own `scrollTop` setter, which a `scrollBy` from the keymap
+			// bypasses: without this the next frame would yank the viewport back
+			// down to the bottom.
+			box.scrollTo(box.scrollTop);
+			if (box.scrollTop < box.scrollHeight - box.viewport.height)
+				freezeWindow();
+			if (box.scrollTop <= 0) loadOlder();
+		};
+		box.verticalScrollBar.on("change", onScroll);
+		onCleanup(() => box.verticalScrollBar.off("change", onScroll));
+		props.onScrollBoxReady?.(box);
+	};
+
 	return (
 		<>
 			{/* The page fills the body its host reserved for it (the shell owns the
@@ -670,10 +761,14 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 					<ScrollableContent
 						stickyStart="bottom"
 						stickyScroll
-						onScrollBoxReady={(box) => props.onScrollBoxReady?.(box)}
+						onScrollBoxReady={attachScrollBox}
+						// One blank line between the transcript and the prompt: the
+						// transcript owns it, so the autocomplete stays attached to the
+						// prompt it completes.
+						style={{ marginBottom: 1 }}
 					>
 						<box flexDirection="column" gap={1}>
-							<For each={transcript().rows}>
+							<For each={windowRows()}>
 								{(block, index) => (
 									<box width="100%" flexDirection="column">
 										{/* Above the first block of the newest output, and only

@@ -346,9 +346,10 @@ function liveBlocks(
 	return blocks;
 }
 
-/** Most recent blocks, bounded so the view keeps the newest
- * activity visible instead of clipping it. */
-const MAX_BLOCKS = 60;
+/** Most recent blocks. The view renders a window of these and loads older ones
+ * as the reader scrolls up, so this is the projection's memory bound, not a
+ * screenful. */
+const MAX_BLOCKS = 240;
 
 /** One block's content as a comparison key: two blocks with the same key
  * render identically. */

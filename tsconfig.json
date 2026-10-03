@@ -1,0 +1,15 @@
+{
+	// Repo-root resolution for the agent definitions: `agent-definitions/`
+	// sits outside the `agentic-coding` package, so the bare imports its
+	// extensions make (`typebox`, and the pi packages in pi's own tree) have no
+	// node_modules of their own on the way up. The runtime that loads these
+	// extensions in production resolves them from pi; this mapping is what lets
+	// repo tooling (bun test, scripts) load the same files unchanged.
+	"compilerOptions": {
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"paths": {
+			"typebox": ["./agentic-coding/node_modules/typebox"]
+		}
+	}
+}

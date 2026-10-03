@@ -643,7 +643,185 @@ test("restored history recalls slash commands without interfering with typed aut
 	}
 });
 
-test("the newest output is separated by a dashed divider, until the next output", async () => {
+test("a frame that arrives while scrolled up leaves the viewport alone", async () => {
+	const [blocks, setBlocks] = createSignal<readonly AgentSessionBlock[]>(
+		Array.from({ length: 20 }, (_, index) => ({
+			kind: "result" as const,
+			text: `line ${index}`,
+			tone: "success" as const,
+		})),
+	);
+	let box: { scrollBy: (delta: number) => void; scrollTop: number } | undefined;
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={blocks()}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onScrollBoxReady={(value) => {
+					box = value as unknown as typeof box;
+				}}
+			/>
+		),
+		{ width: 80, height: 16 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		// The keymap scrolls with `scrollBy`, which the box's sticky logic does
+		// not read as "the reader left the bottom".
+		box?.scrollBy(-12);
+		await t.renderOnce();
+		// The top row of the viewport, so the assertion is about position rather
+		// than about how far one scroll happened to move.
+		const topLine = (frame: string) =>
+			Number(/line (\d+)/.exec(frame)?.[1] ?? -1);
+		const scrolled = t.captureCharFrame();
+		expect(topLine(scrolled)).toBeGreaterThan(0);
+		expect(scrolled).not.toContain("line 19");
+
+		// New output arrives: the viewport stays where the reader left it.
+		setBlocks((current) => [
+			...current,
+			{ kind: "assistant", text: "a new answer", tone: "base" },
+		]);
+		await t.renderOnce();
+		const after = t.captureCharFrame();
+		expect(topLine(after)).toBe(topLine(scrolled));
+		expect(after).not.toContain("a new answer");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("output arriving while scrolled up does not slide the transcript", async () => {
+	// More rows than the window renders, so the window would slide (and drag the
+	// viewport toward the bottom with it) if it were not anchored.
+	const [blocks, setBlocks] = createSignal<readonly AgentSessionBlock[]>(
+		Array.from({ length: 100 }, (_, index) => ({
+			kind: "result" as const,
+			text: `line ${index}`,
+			tone: "success" as const,
+		})),
+	);
+	let box: { scrollBy: (delta: number) => void; scrollTop: number } | undefined;
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={blocks()}
+				working={true}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onScrollBoxReady={(value) => {
+					box = value as unknown as typeof box;
+				}}
+			/>
+		),
+		{ width: 80, height: 16 },
+	);
+	/** The line at the top of the viewport. */
+	const topLine = () => Number(/line (\d+)/.exec(t.captureCharFrame())?.[1]);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		box?.scrollBy(-20);
+		await t.renderOnce();
+		const scrolled = box?.scrollTop ?? 0;
+		const top = topLine();
+		expect(top).toBeGreaterThan(0);
+
+		for (let index = 0; index < 4; index++) {
+			setBlocks((current) => [
+				...current,
+				{ kind: "assistant", text: `streaming ${index}`, tone: "base" },
+			]);
+			await t.renderOnce();
+		}
+		expect(box?.scrollTop).toBe(scrolled);
+		expect(topLine()).toBe(top);
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("reaching the top loads the older rows the window left out", async () => {
+	const [blocks] = createSignal<readonly AgentSessionBlock[]>(
+		Array.from({ length: 80 }, (_, index) => ({
+			kind: "result" as const,
+			text: `line ${index}`,
+			tone: "success" as const,
+		})),
+	);
+	let box:
+		| {
+				scrollTop: number;
+				scrollHeight: number;
+		  }
+		| undefined;
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={blocks()}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onScrollBoxReady={(value) => {
+					box = value as unknown as typeof box;
+				}}
+			/>
+		),
+		{ width: 80, height: 16 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		const opened = box?.scrollHeight ?? 0;
+		expect(t.captureCharFrame()).not.toContain("line 0");
+
+		// Reaching the top renders the older rows the window left out.
+		if (box) box.scrollTop = 0;
+		await t.renderOnce();
+		await t.renderOnce();
+		expect(box?.scrollHeight ?? 0).toBeGreaterThan(opened);
+
+		// The loaded rows are above the viewport, so scrolling on reaches them.
+		if (box) box.scrollTop = 0;
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("line 0");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("the newest output is separated by a divider, until the next output", async () => {
 	const [blocks, setBlocks] = createSignal<readonly AgentSessionBlock[]>([
 		{ kind: "user", text: "fix the parser", tone: "accent" },
 		{ kind: "assistant", text: "Reading the parser now.", tone: "base" },
@@ -671,7 +849,8 @@ test("the newest output is separated by a dashed divider, until the next output"
 	const rows = () => t.captureCharFrame().trimEnd().split("\n");
 	const rowOf = (text: string) =>
 		rows().findIndex((line) => line.includes(text));
-	const dividerRow = () => rows().findIndex((line) => line.includes("╎"));
+	const dividerRow = () =>
+		rows().findIndex((line) => line.includes("new ↓") && line.includes("─"));
 	try {
 		await t.renderOnce();
 		await t.renderOnce();
