@@ -7,9 +7,12 @@ import {
 	reuseAgentSessionBlocks,
 } from "../../src/tui/dash/agent-session.ts";
 
-/** Blocks without their identity: these assertions are about content. */
+/** Blocks without their identity or structured tool payload: these assertions
+ * are about the rendered content (the tool payload has its own tests). */
 const blocksOf = (value: unknown) =>
-	buildAgentSessionView(value).map(({ id: _id, ...block }) => block);
+	buildAgentSessionView(value).map(
+		({ id: _id, toolCall: _toolCall, ...block }) => block,
+	);
 
 describe("buildAgentSessionView", () => {
 	test("an empty conversation has no blocks", () => {
@@ -38,7 +41,9 @@ describe("buildAgentSessionView", () => {
 				},
 			],
 		});
-		expect(blocks.map(({ id: _id, ...block }) => block)).toEqual([
+		expect(
+			blocks.map(({ id: _id, toolCall: _toolCall, ...block }) => block),
+		).toEqual([
 			{ kind: "user", text: "fix the parser", tone: "accent" },
 			{ kind: "reasoning", text: "weighing options", tone: "muted" },
 			{ kind: "assistant", text: "Reading the parser", tone: "base" },
@@ -195,6 +200,44 @@ describe("buildAgentSessionView", () => {
 		).toEqual([]);
 	});
 
+	test("pairs a result with the call it answers, not the next same-named one", () => {
+		const call = (id: string, path: string) => ({
+			kind: "pi.assistant",
+			model: [
+				{
+					role: "assistant",
+					stopReason: "toolUse",
+					content: [
+						{ type: "toolCall", id, name: "read", arguments: { path } },
+					],
+				},
+			],
+		});
+		const result = (id: string, text: string) => ({
+			kind: "pi.tool-result",
+			model: [
+				{ role: "toolResult", toolCallId: id, toolName: "read", content: text },
+			],
+		});
+		// Two parallel reads whose results come back in the other order.
+		const blocks = buildAgentSessionView({
+			entries: [
+				call("a", "a.ts"),
+				call("b", "b.ts"),
+				result("b", "contents of b"),
+				result("a", "contents of a"),
+			],
+		});
+		const rows = blocks.map((block) => ({
+			args: block.toolCall?.args.path,
+			lines: block.toolCall?.result?.lines,
+		}));
+		expect(rows).toEqual([
+			{ args: "a.ts", lines: ["contents of a"] },
+			{ args: "b.ts", lines: ["contents of b"] },
+		]);
+	});
+
 	test("pairs a tool call with its result into one minimized entry", () => {
 		const blocks = buildAgentSessionView({
 			entries: [
@@ -303,7 +346,9 @@ describe("buildAgentSessionView", () => {
 				},
 			},
 		});
-		expect(blocks.map(({ id: _id, ...block }) => block)).toEqual([
+		expect(
+			blocks.map(({ id: _id, toolCall: _toolCall, ...block }) => block),
+		).toEqual([
 			{
 				kind: "tool",
 				text: "bash",
@@ -333,7 +378,9 @@ describe("buildAgentSessionView", () => {
 				},
 			],
 		});
-		expect(blocks.map(({ id: _id, ...block }) => block)).toEqual([
+		expect(
+			blocks.map(({ id: _id, toolCall: _toolCall, ...block }) => block),
+		).toEqual([
 			{ kind: "error", text: "400: MissingSessionID", tone: "error" },
 		]);
 	});
@@ -347,7 +394,9 @@ describe("buildAgentSessionView", () => {
 				},
 			},
 		});
-		expect(blocks.map(({ id: _id, ...block }) => block)).toEqual([
+		expect(
+			blocks.map(({ id: _id, toolCall: _toolCall, ...block }) => block),
+		).toEqual([
 			{ kind: "notice", text: "Retrying: rate limited", tone: "warning" },
 		]);
 	});

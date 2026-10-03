@@ -6,8 +6,10 @@
 // the same contract the pi workflow extension gives a `pi` run
 // (agent-definitions/extensions/developer-question.ts, ask-jev.ts).
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { JsonValue } from "@earendil-works/chord";
 import { Type } from "@earendil-works/pi-ai";
 import {
 	type ConversationId,
@@ -17,6 +19,17 @@ import {
 	section,
 } from "@earendil-works/pi-durable";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
+import {
+	MAX_FILE_BYTES,
+	MAX_OUTPUT_CHARS,
+	MAX_OWN_STATE_CHARS,
+	MAX_PATHS_PER_CALL,
+	MAX_STATE_CHARS,
+	parseOwnState,
+	renderAnswers,
+	usageLine,
+	validateQuestions,
+} from "./jev.ts";
 
 /** Per-conversation context the durable tools need but pi-durable's own
  * `ToolExecutionApi`/`PromptInput` do not carry: the run's workflow identity,
@@ -247,38 +260,207 @@ export function createWorkflowDialogueExtension(
 	});
 }
 
-const MAX_QUESTIONS = 12;
-const MAX_OWN_STATE_CHARS = 8_000;
-const MAX_PATHS_PER_CALL = 20;
-const MAX_FILE_BYTES = 96 * 1024;
-const LOW_CONFIDENCE = 0.5;
+/** How many states one conversation keeps for `reuse`. */
+const MAX_RETAINED_STATES = 4;
+
+interface CommandOutput {
+	readonly command: string;
+	readonly exit_code: number | null;
+	readonly stdout: string;
+	readonly stderr: string;
+	readonly note?: string;
+}
+
+/** One state the run can ask about again: what a `reuse` handle names. The
+ * named paths are re-read on a reuse; the command's output is reused exactly as
+ * it was, because it cannot be re-run without the caller asking for it again. */
+interface RetainedState {
+	readonly id: string;
+	readonly at: number;
+	readonly summary: string;
+	readonly own: Record<string, unknown>;
+	readonly paths: readonly string[];
+	readonly command?: CommandOutput;
+}
+
+/** How long ago, in the coarsest unit that still says something. Mirrors the pi
+ * extension's own report so a reuse reads the same in every runtime. */
+function ageOf(ms: number): string {
+	if (ms < 90_000) return `${Math.max(1, Math.round(ms / 1000))}s ago`;
+	if (ms < 90 * 60_000) return `${Math.round(ms / 60_000)} min ago`;
+	return `${Math.round(ms / 3_600_000)}h ago`;
+}
+
+/** The state one call sends: the agent's own fields, the named files, and the
+ * command's output under `output`. */
+function stateOf(
+	own: Record<string, unknown>,
+	files: Record<string, string>,
+	command: CommandOutput | undefined,
+): Record<string, unknown> {
+	const state: Record<string, unknown> = { ...own };
+	if (Object.keys(files).length) state.files = files;
+	if (command)
+		state.output = {
+			command: command.command,
+			exit_code: command.exit_code,
+			stdout: command.stdout,
+			stderr: command.stderr,
+			...(command.note ? { note: command.note } : {}),
+		};
+	return state;
+}
+
+/** The largest parts of an over-budget state, so the refusal names what to
+ * narrow instead of leaving the caller to bisect the budget. */
+function stateParts(
+	files: Record<string, string>,
+	command: CommandOutput | undefined,
+): string {
+	const parts = Object.entries(files).map(([name, content]) => ({
+		name,
+		chars: content.length,
+	}));
+	if (command)
+		parts.push({
+			name: `output of \`${command.command}\``,
+			chars: command.stdout.length,
+		});
+	return (
+		parts
+			.sort((a, b) => b.chars - a.chars)
+			.slice(0, 5)
+			.map((part) => `${part.name} ${part.chars} chars`)
+			.join(", ") || "nothing readable"
+	);
+}
+
+/** What the state was built from, in one clause: what the classifier judged,
+ * and the coverage any skipped file cost. */
+function summarize(
+	own: Record<string, unknown>,
+	files: Record<string, string>,
+	command: CommandOutput | undefined,
+	stateChars: number,
+	skipped: readonly string[],
+): string {
+	const bits = [
+		Object.keys(own).length
+			? `your state (${Object.keys(own).join(", ")})`
+			: "",
+		Object.keys(files).length ? `files (${Object.keys(files).length})` : "",
+		command ? `output of \`${command.command}\`` : "",
+		`${stateChars} chars`,
+	].filter((part) => part.length > 0);
+	if (skipped.length) bits.push(`skipped ${skipped.join(", ")}`);
+	return bits.join(", ");
+}
+
 const AskJevParameters = Type.Object({
-	state: Type.Optional(Type.Unknown()),
-	paths: Type.Optional(
-		Type.Array(Type.String(), { maxItems: MAX_PATHS_PER_CALL }),
+	state: Type.Optional(
+		Type.Unknown({
+			description:
+				"Your own state: plain text, or a JSON object with your own field names. Do not paste file contents or command output here; name them with paths or command and code fetches them.",
+		}),
 	),
-	command: Type.Optional(Type.String()),
-	questions: Type.Unknown(),
+	paths: Type.Optional(
+		Type.Array(Type.String(), {
+			maxItems: MAX_PATHS_PER_CALL,
+			description: `Files for code to read. Their contents reach the classifier as files[path] and never reach you. Up to ${MAX_PATHS_PER_CALL} files, ${MAX_FILE_BYTES / 1024} KiB each.`,
+		}),
+	),
+	command: Type.Optional(
+		Type.String({
+			description:
+				"A command for code to run in the run's working directory. Its combined output and exit code reach the classifier as output and never reach you.",
+		}),
+	),
+	reuse: Type.Optional(
+		Type.String({
+			description:
+				"A state handle from an earlier result (`state s7f3a2`), to ask new questions about the same situation: the named files are re-read and a command is not re-run. Pass it on its own, without state, paths or command.",
+		}),
+	),
+	questions: Type.Unknown({
+		description:
+			"The question block, keyed by question id; see the tool description for the three types.",
+	}),
 });
 
-/** `ask_jev` (durable-agent-tools: "In-session judgment tool"). A narrowed
- * port of `agent-definitions/extensions/ask-jev.ts`: state assembly from the
- * agent's own note, named files (read through the run's own execution
- * environment, so a file read is scoped to the run's cwd) and a named
- * command's output (run the same way), one call per situation, and the same
- * "unavailable without a binding" honesty rule. `reuse`-by-handle across
- * calls is not implemented in this pass (every call assembles state fresh). */
+/** The question schema travels with the tool, not with the workflow
+ * instructions: a model that never saw a `noul`/`choice`/`score` example sends
+ * a block the classifier cannot parse, and the endpoint answers that with a
+ * confident-looking number instead of an error. */
+const ASK_JEV_DESCRIPTION = [
+	"Ask the run's configured classifier (Jev) typed questions about one situation: files you name with `paths`, the output of a `command`, your own `state`, or any mix. It answers with numbers you can branch on rather than prose, and you never receive the file contents or the command output. An answer is a judgment, not evidence.",
+	"",
+	"`questions` is an object keyed by question id; three types:",
+	'\t noul   {"type":"noul","instructions":"Does `output` show a real failure rather than a flaky one?","criteria":{"true":"...","false":"..."}}  -> { noul: 0..1, confidence }',
+	'\t choice {"type":"choice","instructions":"What kind of failure is `output`?","criteria":{"bug_in_code":"...","wrong_test":"...","other":"..."}}  -> { choice, confidence, probabilities }',
+	'\t score  {"type":"score","instructions":"How risky is the diff in `files`?","criteria":["Isolated, tested","Some callers","Security sensitive, no tests"]}  -> { score, confidence, legend }',
+	"",
+	"Write questions against files[path], output, or your own field names. Ask every question you might need in one call; they share the state. Always give a choice an `other` option. Not for exact lookups, counting, math, or anything a grep answers.",
+	"An answer whose confidence comes back below 0.5 is reported as a guess: narrow the state and ask again, or judge it yourself and say that you did. A malformed question block is refused before anything is sent.",
+	'The result names the state it judged (`state s7f3a2`). To ask more questions about that same situation, call again with reuse: "s7f3a2" and new questions: the named files are re-read and the command is not re-run.',
+].join("\n");
+
+/** `ask_jev` (durable-agent-tools: "In-session judgment tool"): the same
+ * contract as the pi judgment extension — state assembly from the agent's own
+ * note, named files and a named command's output (both through the run's own
+ * execution environment, so a read is scoped to the run's cwd), the question
+ * schema validated before any transport, `reuse` handles, and the same
+ * "unavailable without a binding" honesty rule. The wire contract itself lives
+ * in `./jev.ts`; this registers it as a durable tool. */
 export function createAskJevExtension(lookup: RunContextLookup): Extension {
+	// Retained states, one map per conversation: a handle belongs to the run that
+	// issued it, so a stale handle from an earlier round never resolves here. The
+	// four newest are kept, the same bound the pi extension uses.
+	// ponytail: a retained state keeps its file contents in memory (bounded per
+	// state by MAX_PATHS_PER_CALL × MAX_FILE_BYTES) and the maps are never
+	// evicted; cap the total per host if many conversations ever matter.
+	const retained = new Map<string, Map<string, RetainedState>>();
+
+	const statesFor = (conversationId: string): Map<string, RetainedState> => {
+		const existing = retained.get(conversationId);
+		if (existing) return existing;
+		const created = new Map<string, RetainedState>();
+		retained.set(conversationId, created);
+		return created;
+	};
+
+	/** A random handle, never a counter: a counter is predictable, and a stale
+	 * handle outliving its conversation must not land on another situation. */
+	const retain = (
+		states: Map<string, RetainedState>,
+		state: Omit<RetainedState, "id" | "at">,
+	): string => {
+		let id = `s${randomUUID().replace(/-/g, "").slice(0, 6)}`;
+		while (states.has(id))
+			id = `s${randomUUID().replace(/-/g, "").slice(0, 6)}`;
+		states.set(id, { ...state, id, at: Date.now() });
+		for (const key of [...states.keys()].slice(0, -MAX_RETAINED_STATES))
+			states.delete(key);
+		return id;
+	};
+
+	const describeRetained = (states: Map<string, RetainedState>): string =>
+		[...states.values()]
+			.map((snapshot) => `${snapshot.id} (${snapshot.summary})`)
+			.join("; ") || "none";
+
 	return defineExtension({
 		name: "agentic.ask-jev",
 		tools: [
 			defineTool({
 				name: "ask_jev",
-				description:
-					"Ask the run's own configured classifier typed questions about files, a command's output, or your own state. Answers are judgments, not evidence.",
+				description: ASK_JEV_DESCRIPTION,
 				replay: "safe",
 				parameters: AskJevParameters,
 				execute: async (args, api, context) => {
+					const fail = (text: string) => ({
+						content: [{ type: "text" as const, text }],
+						isError: true,
+					});
 					const run = lookup(api.conversationId);
 					if (!run?.jev)
 						return {
@@ -289,70 +471,142 @@ export function createAskJevExtension(lookup: RunContextLookup): Extension {
 								},
 							],
 						};
-					if (!args.questions || typeof args.questions !== "object")
-						return {
-							content: [
-								{
-									type: "text",
-									text: "ask_jev: questions must be a non-empty object keyed by question id",
-								},
-							],
-							isError: true,
-						};
-					const ids = Object.keys(args.questions as Record<string, unknown>);
-					if (!ids.length || ids.length > MAX_QUESTIONS)
-						return {
-							content: [
-								{
-									type: "text",
-									text:
-										"ask_jev: questions must have 1-" +
-										MAX_QUESTIONS +
-										" entries",
-								},
-							],
-							isError: true,
-						};
-					const state: Record<string, unknown> = {};
-					if (args.state !== undefined) {
-						const own =
-							typeof args.state === "string"
-								? args.state
-								: JSON.stringify(args.state);
-						state.state =
-							own.length > MAX_OWN_STATE_CHARS
-								? own.slice(0, MAX_OWN_STATE_CHARS)
-								: own;
-					}
-					if (args.paths?.length) {
+					const questions = validateQuestions(args.questions);
+					if (!questions.ok) return fail(`ask_jev: ${questions.error}`);
+					const states = statesFor(String(api.conversationId));
+
+					/** Read the named files through the run's own execution
+					 * environment. A file that cannot be read, or that is over the
+					 * per-file limit, is skipped and reported in the summary rather
+					 * than silently truncated: half a file is a different question. */
+					const readPaths = async (
+						paths: readonly string[],
+					): Promise<{ files: Record<string, string>; skipped: string[] }> => {
 						const files: Record<string, string> = {};
-						for (const relativePath of args.paths.slice(
-							0,
-							MAX_PATHS_PER_CALL,
-						)) {
-							const resolved = path.resolve(run.cwd, relativePath);
+						const skipped: string[] = [];
+						for (const relativePath of paths.slice(0, MAX_PATHS_PER_CALL)) {
 							const read = api.env
-								? await api.env.readTextFile(resolved, context)
+								? await api.env.readTextFile(
+										path.resolve(run.cwd, relativePath),
+										context,
+									)
 								: undefined;
-							if (read?.ok)
-								files[relativePath] = read.value.slice(0, MAX_FILE_BYTES);
+							if (!read?.ok) {
+								skipped.push(`${relativePath} (unreadable)`);
+								continue;
+							}
+							if (Buffer.byteLength(read.value, "utf8") > MAX_FILE_BYTES) {
+								skipped.push(
+									`${relativePath} (over ${MAX_FILE_BYTES / 1024} KiB)`,
+								);
+								continue;
+							}
+							files[relativePath] = read.value;
 						}
-						state.files = files;
+						return { files, skipped };
+					};
+
+					let own: Record<string, unknown>;
+					let files: Record<string, string> = {};
+					let command: CommandOutput | undefined;
+					let skipped: string[] = [];
+					let reuseNote = "";
+					if (args.reuse?.trim()) {
+						if (
+							args.state !== undefined ||
+							args.paths?.length ||
+							args.command?.trim()
+						)
+							return fail(
+								"ask_jev: pass reuse on its own. A reuse answers new questions about the state that was already judged; if the situation changed, name state, paths, or command again instead.",
+							);
+						const snapshot = states.get(args.reuse.trim());
+						if (!snapshot)
+							return fail(
+								`ask_jev: unknown state "${args.reuse.trim()}". Retained here: ${describeRetained(states)}. Nothing was sent.`,
+							);
+						own = snapshot.own;
+						command = snapshot.command;
+						const refreshed = await readPaths(snapshot.paths);
+						files = refreshed.files;
+						skipped = refreshed.skipped;
+						reuseNote = `reused ${snapshot.id} (assembled ${ageOf(Date.now() - snapshot.at)}: re-read ${Object.keys(files).length} file(s)${refreshed.skipped.length ? `, skipped ${refreshed.skipped.join(", ")}` : ""}${command ? `; the output of \`${command.command}\` was not re-run` : ""})`;
+					} else {
+						own = parseOwnState(args.state);
+						const ownText = JSON.stringify(own);
+						if (ownText.length > MAX_OWN_STATE_CHARS)
+							return fail(
+								`ask_jev: your own state is ${ownText.length} characters and the limit is ${MAX_OWN_STATE_CHARS}. Do not paste file contents or command output into it; pass paths or command and code fetches them. Nothing was sent.`,
+							);
+						if (args.paths?.length) {
+							const read = await readPaths(args.paths);
+							files = read.files;
+							skipped = read.skipped;
+						}
+						if (args.command?.trim()) {
+							const name = args.command.trim();
+							if (!api.env)
+								return fail(
+									"ask_jev: this run has no execution environment, so `command` cannot run. Pass the output as state instead.",
+								);
+							// The environment streams combined stdout/stderr through
+							// `onOutput`; the resolved value carries only the exit code and
+							// an optional spill path, so the output has to be collected
+							// here or the classifier would be asked about a bare exit code.
+							let captured = "";
+							const result = await api.env.exec(
+								name,
+								{
+									cwd: run.cwd,
+									timeout: 30_000,
+									onOutput: (text: string) => {
+										captured += text;
+									},
+								},
+								context,
+							);
+							const stdout = captured.slice(0, MAX_OUTPUT_CHARS);
+							const note = [
+								result.ok
+									? ""
+									: `the command could not run (${result.error.code})`,
+								captured.length > stdout.length
+									? `only the first ${MAX_OUTPUT_CHARS} of ${captured.length} characters were judged`
+									: "",
+							]
+								.filter((part) => part.length > 0)
+								.join("; ");
+							command = {
+								command: name,
+								exit_code: result.ok ? result.value.exitCode : null,
+								stdout,
+								stderr: "",
+								...(note ? { note } : {}),
+							};
+						}
 					}
-					if (args.command) {
-						const result = api.env
-							? await api.env.exec(
-									args.command,
-									{ cwd: run.cwd, timeout: 30_000 },
-									context,
-								)
-							: undefined;
-						state.output = {
-							command: args.command,
-							exit_code: result?.ok ? result.value.exitCode : null,
-							note: result?.ok ? undefined : "command could not run",
-						};
+
+					const state = stateOf(own, files, command);
+					if (!Object.keys(state).length)
+						return fail(
+							"ask_jev: nothing to judge. Pass state, paths, or command.",
+						);
+					const stateChars = JSON.stringify(state).length;
+					if (stateChars > MAX_STATE_CHARS)
+						return fail(
+							`ask_jev: the state is ${stateChars} characters and one call holds ${MAX_STATE_CHARS}. Nothing was sent. Parts, largest first: ${stateParts(files, command)}. Narrow it, or make one call per file.`,
+						);
+					if (!reuseNote) {
+						const summary = summarize(own, files, command, stateChars, skipped);
+						const id = retain(states, {
+							summary,
+							own,
+							paths: args.paths ?? [],
+							...(command ? { command } : {}),
+						});
+						reuseNote = `state ${id} · judged ${summary}`;
 					}
+
 					let response: Response;
 					try {
 						response = await fetch(run.jev.endpoint, {
@@ -361,53 +615,39 @@ export function createAskJevExtension(lookup: RunContextLookup): Extension {
 							body: JSON.stringify({
 								model: run.jev.model,
 								state,
-								questions: args.questions,
+								questions: questions.questions,
 							}),
+							...(context?.abortSignal ? { signal: context.abortSignal } : {}),
 						});
 					} catch (error) {
-						return {
-							content: [
-								{
-									type: "text",
-									text:
-										"ask_jev: the classifier could not be reached (" +
-										(error as Error).message +
-										")",
-								},
-							],
-							isError: true,
-						};
+						return fail(
+							`ask_jev: the classifier could not be reached (${(error as Error).message}). Nothing was decided.`,
+						);
 					}
 					if (!response.ok)
-						return {
-							content: [
-								{
-									type: "text",
-									text:
-										"ask_jev: the classifier answered " +
-										response.status +
-										" " +
-										response.statusText,
-								},
-							],
-							isError: true,
-						};
+						return fail(
+							`ask_jev: the classifier answered ${response.status} ${response.statusText}. Nothing was decided.`,
+						);
 					const payload = (await response.json()) as {
-						answers?: Record<string, { confidence?: number }>;
+						answers?: unknown;
+						usage?: unknown;
 					};
-					const answers = payload.answers ?? {};
-					const low = Object.entries(answers).filter(
-						([, answer]) => (answer?.confidence ?? 1) < LOW_CONFIDENCE,
-					);
+					const answers =
+						payload.answers &&
+						typeof payload.answers === "object" &&
+						!Array.isArray(payload.answers)
+							? (payload.answers as Record<string, JsonValue>)
+							: {};
+					const rendered = renderAnswers(answers, questions.ids);
 					const text = [
-						"## Jev (provider=" +
-							run.jev.provider +
-							" model=" +
-							run.jev.model +
-							")",
-						JSON.stringify(answers, null, 2),
-						...(low.length
-							? [`- low confidence: ${low.map(([id]) => id).join(", ")}`]
+						`## Jev (provider=${run.jev.provider} model=${run.jev.model})`,
+						[reuseNote, usageLine(payload.usage)]
+							.filter((part) => part.length > 0)
+							.join(" · "),
+						"",
+						rendered.text,
+						...(rendered.warnings.length
+							? ["", ...rendered.warnings.map((warning) => `- ${warning}`)]
 							: []),
 					].join("\n");
 					return { content: [{ type: "text", text }], details: { answers } };

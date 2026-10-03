@@ -55,6 +55,7 @@ import {
 	reuseAgentSessionBlocks,
 } from "../agent-session.ts";
 import { PromptPulse } from "./PromptPulse.tsx";
+import { toolView } from "./tool-views.ts";
 
 export interface AgentSessionViewProps {
 	readonly role: string;
@@ -353,6 +354,67 @@ function Block(props: {
 				</Show>
 			</box>
 		);
+	// The tools a run leans on get a view built from their call and result; a
+	// tool without one keeps the generic row below (icon, name, argument).
+	const tool = props.block.toolCall
+		? toolView(props.block.toolCall)
+		: undefined;
+	if (tool && (props.block.kind === "tool" || props.block.kind === "result"))
+		return (
+			<box
+				border={["left"]}
+				borderColor={markerColor(props.block.tone)}
+				backgroundColor={boxBackground(props.block.tone)}
+				paddingLeft={2}
+				paddingRight={1}
+				flexShrink={0}
+			>
+				<box flexDirection="column">
+					<box
+						flexDirection="row"
+						onMouseUp={() => props.onToggle(props.block.id)}
+					>
+						<text width={2} flexShrink={0} fg={color()}>
+							{tool.icon}
+						</text>
+						<text
+							fg={color()}
+							flexGrow={1}
+							minWidth={0}
+							wrapMode="none"
+							truncate
+						>
+							{tool.summary}
+							{props.block.pending ? " …" : ""}
+						</text>
+						<Show when={tool.hint}>
+							{(hint) => (
+								<text fg={uiColors.textMuted} flexShrink={0}>
+									{` ${hint()}`}
+								</text>
+							)}
+						</Show>
+						<Show when={(tool.rows?.length ?? 0) > 0}>
+							<text fg={uiColors.textMuted} flexShrink={0}>
+								{props.expanded ? " ▾" : " ▸"}
+							</text>
+						</Show>
+					</box>
+					<Show when={props.expanded}>
+						<box paddingLeft={2} flexDirection="column">
+							<For each={tool.rows ?? []}>
+								{(row) => (
+									<text fg={markerColor(row.tone)} wrapMode="none" truncate>
+										{row.text}
+									</text>
+								)}
+							</For>
+						</box>
+					</Show>
+				</box>
+			</box>
+		);
+
 	const content = () => {
 		switch (props.block.kind) {
 			case "tool":

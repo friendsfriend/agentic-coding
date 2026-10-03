@@ -32,6 +32,29 @@ export type AgentSessionKind =
 	| "compaction"
 	| "summary";
 
+/** What a tool call asked for and what came back, as the source recorded it:
+ * the transcript's specialized tool views read this instead of re-parsing the
+ * summary line. */
+export interface AgentSessionToolCall {
+	readonly name: string;
+	/** The call's arguments. A result without its call carries none. */
+	readonly args: Readonly<Record<string, unknown>>;
+	/** The call's own id, so a result pairs with the call it answers. */
+	readonly callId?: string;
+	/** The result, once the call has one. */
+	readonly result?: AgentSessionToolResult;
+}
+
+export interface AgentSessionToolResult {
+	/** The result's text lines, before the harness diagnostics were folded in. */
+	readonly lines: readonly string[];
+	readonly isError: boolean;
+	/** Tool-specific details: `edit`'s diff and patch, `read`'s truncation. */
+	readonly details?: Readonly<Record<string, unknown>>;
+	/** Harness diagnostics, one message each (truncation, spilled output). */
+	readonly notes: readonly string[];
+}
+
 export interface AgentSessionBlock {
 	/** Stable identity of the source this block came from: a committed entry's
 	 * id and its position inside it, or the slot a live block occupies. The
@@ -53,6 +76,8 @@ export interface AgentSessionBlock {
 	readonly durationMs?: number;
 	/** Canonical tool name, so a call and its result can be paired. */
 	readonly tool?: string;
+	/** The call and result behind a tool row, for the specialized tool views. */
+	readonly toolCall?: AgentSessionToolCall;
 	/** A merged tool block's request line (icon + name + args), shown when the
 	 * answer is expanded. */
 	readonly request?: string;
@@ -148,6 +173,18 @@ const TOOL_ICONS: Record<string, string> = {
 };
 function toolIcon(name: string): string {
 	return TOOL_ICONS[name] ?? "•";
+}
+
+/** The harness diagnostics a tool result entry carries, one message each. */
+function diagnosticsOf(entry: unknown): string[] {
+	if (!isRecord(entry) || !isRecord(entry.data)) return [];
+	const diagnostics = entry.data.diagnostics;
+	if (!Array.isArray(diagnostics)) return [];
+	return diagnostics.flatMap((diagnostic) =>
+		isRecord(diagnostic) && typeof diagnostic.message === "string"
+			? [diagnostic.message]
+			: [],
+	);
 }
 
 /** The primary argument of a tool call, chosen the way opencode v2 picks the
@@ -246,6 +283,11 @@ function entryBlocks(
 							tone: "muted",
 							icon: toolIcon(block.name),
 							tool: block.name,
+							toolCall: {
+								name: block.name,
+								args: isRecord(block.arguments) ? block.arguments : {},
+								...(typeof block.id === "string" ? { callId: block.id } : {}),
+							},
 						});
 					}
 				}
@@ -267,6 +309,7 @@ function entryBlocks(
 		case "pi.tool-result":
 			return model.flatMap((message, index): AgentSessionBlock[] => {
 				if (!isRecord(message)) return [];
+				const notes = diagnosticsOf(entry);
 				const name =
 					typeof message.toolName === "string" ? message.toolName : "tool";
 				const failed = message.isError === true;
@@ -284,6 +327,21 @@ function entryBlocks(
 				return [
 					{
 						id: `${entryKey}:${index}`,
+						toolCall: {
+							name,
+							args: {},
+							...(typeof message.toolCallId === "string"
+								? { callId: message.toolCallId }
+								: {}),
+							result: {
+								lines,
+								isError: failed,
+								...(isRecord(message.details)
+									? { details: message.details }
+									: {}),
+								notes,
+							},
+						},
 						kind: "result",
 						text: first
 							? `${name}: ${oneLine(first, 2000)}`
@@ -466,6 +524,13 @@ export function reuseAgentSessionBlocks(
  * `request` and only shows when the answer is expanded. A live running slot
  * upgrades its committed call to pending instead of duplicating it.
  */
+/** The lifecycle key of a tool row: its call id when the source recorded one,
+ * so a call pairs with the result that answers it rather than with the next
+ * same-named call. */
+function callKey(block: AgentSessionBlock): string {
+	return block.toolCall?.callId ?? block.tool ?? block.text;
+}
+
 function mergeToolLifecycle(
 	blocks: readonly AgentSessionBlock[],
 ): AgentSessionBlock[] {
@@ -474,7 +539,7 @@ function mergeToolLifecycle(
 	const open = new Map<string, number[]>();
 	for (const block of blocks) {
 		if (block.kind === "tool") {
-			const key = block.tool ?? block.text;
+			const key = callKey(block);
 			const list = open.get(key);
 			if (block.pending && list !== undefined && list.length > 0) {
 				const index = list[0];
@@ -496,7 +561,7 @@ function mergeToolLifecycle(
 			continue;
 		}
 		if (block.kind === "result") {
-			const key = block.tool ?? "";
+			const key = callKey(block);
 			const list = open.get(key);
 			const index = list?.shift();
 			const call = index === undefined ? undefined : out[index];
@@ -509,6 +574,16 @@ function mergeToolLifecycle(
 					pending: false,
 					request: `${call.icon ?? "•"} ${call.text}`,
 					...(block.detail ? { detail: block.detail } : {}),
+					...(call.toolCall
+						? {
+								toolCall: {
+									...call.toolCall,
+									...(block.toolCall?.result
+										? { result: block.toolCall.result }
+										: {}),
+								},
+							}
+						: {}),
 				};
 				continue;
 			}

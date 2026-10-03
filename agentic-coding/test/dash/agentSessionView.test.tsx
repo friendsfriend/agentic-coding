@@ -5,9 +5,10 @@
 // competing text keymap binding (see the module comment in
 // AgentSessionView.tsx for why).
 import { expect, test } from "bun:test";
-import type { KeyEvent } from "@opentui/core";
+import { type KeyEvent, parseColor } from "@opentui/core";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { testRender, useRenderer } from "@opentui/solid";
+import { uiColors } from "@ui";
 import { createSignal, onCleanup } from "solid-js";
 import type { AgentSessionBlock } from "../../src/tui/dash/agent-session.ts";
 import {
@@ -971,6 +972,152 @@ test("an expanded block stays expanded when the window loads older rows", async 
 		const frame = t.captureCharFrame();
 		expect(frame).toContain("weighing options");
 		expect(frame).not.toContain("detail 59");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("tool rows get a view from their call and result, and a generic default", async () => {
+	const blocks: AgentSessionBlock[] = [
+		{
+			id: "r1",
+			kind: "tool",
+			text: "read path=src/a.ts",
+			tone: "success",
+			icon: "→",
+			tool: "read",
+			toolCall: {
+				name: "read",
+				args: { path: "src/a.ts", offset: 40, limit: 80 },
+				callId: "c1",
+				result: {
+					lines: ["const a = 1;"],
+					isError: false,
+					notes: ["Showing lines 40-120 of 512. Use offset=121 to continue."],
+				},
+			},
+		},
+		{
+			id: "e1",
+			kind: "tool",
+			text: "edit path=src/a.ts",
+			tone: "success",
+			icon: "←",
+			tool: "edit",
+			toolCall: {
+				name: "edit",
+				args: { path: "src/a.ts", edits: [{ oldText: "a", newText: "b" }] },
+				callId: "c2",
+				result: {
+					lines: ["Successfully replaced 1 block(s) in src/a.ts."],
+					isError: false,
+					details: { diff: "-const a = 1;\n+const b = 2;" },
+					notes: [],
+				},
+			},
+		},
+		{
+			id: "j1",
+			kind: "tool",
+			text: "ask_jev",
+			tone: "success",
+			icon: "◆",
+			tool: "ask_jev",
+			toolCall: {
+				name: "ask_jev",
+				args: { questions: { leak: { type: "noul" } }, paths: ["src/a.ts"] },
+				callId: "c3",
+				result: {
+					lines: [
+						"## Jev",
+						"state s1 · judged files (1), 12.3k tokens",
+						"",
+						"leak (noul): 0.12 confidence 0.93",
+					],
+					isError: false,
+					details: { answers: { leak: { noul: 0.12, confidence: 0.93 } } },
+					notes: [],
+				},
+			},
+		},
+		{
+			id: "p1",
+			kind: "tool",
+			text: "agent_ask role=planner",
+			tone: "success",
+			icon: "•",
+			tool: "agent_ask",
+			toolCall: { name: "agent_ask", args: { role: "planner" } },
+		},
+	];
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={blocks}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+			/>
+		),
+		{ width: 80, height: 18 },
+	);
+	/** The painted foreground of the first cell holding `text`. */
+	const foreground = (text: string) => {
+		for (const line of t.captureSpans().lines) {
+			for (const span of line.spans) {
+				if (span.text.includes(text)) return span.fg;
+			}
+		}
+		return undefined;
+	};
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		const collapsed = t.captureCharFrame();
+		// Each view names its own subject: the file, the range, the command.
+		expect(collapsed).toContain("→ src/a.ts");
+		expect(collapsed).toContain("40-120 of 512");
+		expect(collapsed).toContain("← src/a.ts");
+		expect(collapsed).toContain("1 edit · +1 −1");
+		// The judgment view names the verdict; a tool without a view keeps the
+		// generic row.
+		expect(collapsed).toContain("◆ leak → 0.12");
+		expect(collapsed).toContain("agent_ask role=planner");
+
+		// Ctrl+O expands every tool row: the diff and the text appear.
+		t.mockInput.pressKey("o", { ctrl: true });
+		await t.renderOnce();
+		const expanded = t.captureCharFrame();
+		expect(expanded).toContain("-const a = 1;");
+		expect(expanded).toContain("+const b = 2;");
+		expect(expanded).toContain("const a = 1;");
+		// Additions and removals carry their own tone.
+		const rgb = (color: unknown) => {
+			const buffer = (color as { buffer: Record<string, number> }).buffer;
+			return [buffer[0], buffer[1], buffer[2]].map(Math.round).join(",");
+		};
+		const theme = (hex: string) => {
+			const parsed = parseColor(hex) as unknown as {
+				r: number;
+				g: number;
+				b: number;
+			};
+			// RGBA carries normalized components; the spans carry bytes.
+			return [parsed.r, parsed.g, parsed.b]
+				.map((part) => Math.round(part * 255))
+				.join(",");
+		};
+		expect(rgb(foreground("+const b = 2;"))).toBe(theme(uiColors.success));
+		expect(rgb(foreground("-const a = 1;"))).toBe(theme(uiColors.error));
 	} finally {
 		t.renderer.destroy();
 	}
