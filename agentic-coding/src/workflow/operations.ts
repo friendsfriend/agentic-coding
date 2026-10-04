@@ -11,7 +11,11 @@
 //   - `listProjects` moved from cli/commands/misc.ts
 import { Effect } from "effect";
 import { Herdr } from "../herdr-client.ts";
-import { agentLifecycleOps, multiplexerPort } from "../multiplexer/factory.ts";
+import {
+	agentLifecycleOps,
+	isIntegratedPort,
+	multiplexerPort,
+} from "../multiplexer/factory.ts";
 import type { HerdrCli } from "../multiplexer/herdr/cli.ts";
 import {
 	type AgentAdapter,
@@ -69,14 +73,20 @@ export async function drainEffects(
 ): Promise<number> {
 	const port = multiplexerPort();
 	const lifecycle = agentLifecycleOps(port);
-	const adapters = new Map<string, AgentAdapter>([
-		["pi", new PiAdapter(lifecycle)],
-		["opencode", new OpenCodeAdapter(lifecycle)],
-		["opencode-v2", new OpenCodeV2Adapter(lifecycle)],
-		// Hosts its own process (durable-agent-host): no multiplexer lifecycle
-		// dependency, unlike the pane-based adapters above.
-		["pi-durable", new PiDurableAdapter()],
-	]);
+	// The integrated selection has no pane surface: only the pane-less durable
+	// host is registered, so a workflow that pins `pi`/`opencode` fails with the
+	// engine's "adapter unavailable" diagnostic instead of allocating a pane that
+	// cannot exist.
+	const adapters = isIntegratedPort(port)
+		? new Map<string, AgentAdapter>([["pi-durable", new PiDurableAdapter()]])
+		: new Map<string, AgentAdapter>([
+				["pi", new PiAdapter(lifecycle)],
+				["opencode", new OpenCodeAdapter(lifecycle)],
+				["opencode-v2", new OpenCodeV2Adapter(lifecycle)],
+				// Hosts its own process (durable-agent-host): no multiplexer lifecycle
+				// dependency, unlike the pane-based adapters above.
+				["pi-durable", new PiDurableAdapter()],
+			]);
 	const handlers = agentEffectHandlers(repo, workflowEngine, {
 		registry,
 		adapters,

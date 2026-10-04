@@ -45,6 +45,7 @@ import {
 	TRACE_PAGE_SIZE,
 	type TreeNode,
 } from "../../../contracts/telemetry.ts";
+import type { WorkflowOverview } from "../../../contracts/workflow.ts";
 import {
 	type AgentsConfig,
 	BUILTIN_PRESET_NAME,
@@ -65,6 +66,7 @@ import {
 	startWikiCommentWorkflowInProcess,
 	startWorkflowNotifications,
 } from "../../context/app-actions.ts";
+import { App as DashApp } from "../../dash/App.tsx";
 import {
 	agentConfigEntry,
 	refreshAgentConfig,
@@ -95,6 +97,7 @@ import {
 import { isKeyTraceSuppressed, traceTui } from "../../dash/tracing.ts";
 import { NewWorkflowModal } from "../../dash/ui/NewWorkflowModal.tsx";
 import type { WikiReviewComment } from "../../data/wiki.ts";
+import { loadOverviews } from "../../data/workflow.ts";
 import {
 	phase,
 	quitConfirmation,
@@ -144,6 +147,8 @@ import {
 	routeKey,
 	type SettingsSection,
 	settingsSectionOfPage,
+	workflowRoute,
+	workflowTarget,
 } from "../../shared/routes.ts";
 import { NotificationOverlay } from "../components/Notification.tsx";
 import {
@@ -151,6 +156,7 @@ import {
 	SortModal,
 	statusOptions,
 } from "../components/TraceModals.tsx";
+import { WorkspaceSidebar } from "../components/WorkspaceSidebar.tsx";
 import type { LogStore } from "../model/logStore.ts";
 import type { MetricStore } from "../model/metricStore.ts";
 import type { TelemetryDb } from "../model/telemetry-db.ts";
@@ -169,9 +175,23 @@ import { WikiView, wikiCommentEntryActive } from "../views/WikiView.tsx";
 import {
 	environmentsKeybindCatalog,
 	observabilityKeybindCatalog,
+	workspaceSidebarFocusKeybind,
+	workspaceSidebarKeybindCatalog,
 } from "./keybinds.ts";
 import { createNavigation, isShellOwnedOverlay } from "./navigation.ts";
 import { activeNotification, notify } from "./notifications.ts";
+import {
+	cycleFilter,
+	DEFAULT_SIDEBAR_FILTER,
+	filterOverviews,
+	type SidebarFilter,
+	sidebarDirection,
+} from "./sidebar-model.ts";
+
+/** Bounded poll for the sidebar's workflow observation. The store is SQLite
+ * and the read is a catalog pass; a few seconds keeps a started or finished
+ * workflow visible without a per-workflow subscription per row. */
+const SIDEBAR_REFRESH_MS = 5_000;
 
 type Tab =
 	| "home"
@@ -310,6 +330,9 @@ export function App(props: {
 	) => JSX.Element;
 	/** Keymap/host context; see `DashboardTab`. */
 	dashboard?: DashboardTab;
+	/** Workspace sidebar side, resolved from `ui.sidebar_side` by the shell root
+	 * (defaults to left). */
+	sidebarSide?: "left" | "right";
 }) {
 	const renderer = useRenderer();
 	const dimensions = useTerminalDimensions();
@@ -347,6 +370,146 @@ export function App(props: {
 		if (page.startsWith("observability")) return "observability";
 		return "home";
 	};
+	// ---- Workspace sidebar (integrated-multiplexer sidebar) ----
+	// The sidebar lists durable workflows from the workflow store, so its rows
+	// survive a shell restart exactly as the workflows do; it owns no state of
+	// its own beyond the filter and cursor. The panel model is two panels —
+	// sidebar and page body — and the sidebar side is configuration
+	// (`ui.sidebar_side`), which is also the direction panel movement uses.
+	const sidebarSide = (): "left" | "right" => props.sidebarSide ?? "left";
+	const [focusPanel, setFocusPanel] = createSignal<"sidebar" | "content">(
+		"content",
+	);
+	const [sidebarFilter, setSidebarFilter] = createSignal<SidebarFilter>(
+		DEFAULT_SIDEBAR_FILTER,
+	);
+	const [sidebarOverviews, setSidebarOverviews] = createSignal<
+		WorkflowOverview[]
+	>([]);
+	const [sidebarLoading, setSidebarLoading] = createSignal(true);
+	const [sidebarIndex, setSidebarIndex] = createSignal(0);
+	const sidebarRows = () =>
+		filterOverviews(sidebarOverviews(), sidebarFilter());
+	/** Workflow dashboard target of the current route, when it is one. */
+	const workflow = () => workflowTarget(pages.current());
+	const sidebarAvailable = () => Boolean(props.dashboard);
+	/** Open one workflow's dashboard in the page body and focus it. */
+	const openWorkflow = (overview: WorkflowOverview): void => {
+		pages.navigate(
+			workflowRoute(overview.state.repository, overview.state.workflowId),
+		);
+		setFocusPanel("content");
+	};
+	const handleSidebarKey = (event: KeyEvent): void => {
+		const key = event.name.toLowerCase();
+		const rows = sidebarRows();
+		const last = Math.max(0, rows.length - 1);
+		if (key === "j" || key === "down") {
+			setSidebarIndex((index) => Math.min(last, index + 1));
+			return;
+		}
+		if (key === "k" || key === "up") {
+			setSidebarIndex((index) => Math.max(0, index - 1));
+			return;
+		}
+		if (key === "enter" || key === "return") {
+			const entry = rows[sidebarIndex()];
+			if (entry) openWorkflow(entry);
+			return;
+		}
+		if (key === "f") {
+			setSidebarFilter(cycleFilter(sidebarFilter()));
+			return;
+		}
+		if (key === "escape") {
+			setFocusPanel("content");
+			return;
+		}
+		// The direction from the sidebar back to the body follows the configured
+		// side: away from the body is a no-op, toward it releases focus.
+		if (event.shift && key === "l" && sidebarSide() === "left")
+			setFocusPanel("content");
+		if (event.shift && key === "h" && sidebarSide() === "right")
+			setFocusPanel("content");
+	};
+	// Keep the cursor inside the filtered list without resetting it on every
+	// poll: the index clamps only when the row count shrinks past it.
+	createEffect(() => {
+		const last = Math.max(0, sidebarRows().length - 1);
+		setSidebarIndex((index) => Math.min(last, index));
+	});
+	// The workflow store is the durable source; this reads it (plus the page's
+	// revisit) on a bounded poll so started and finished workflows appear
+	// without a restart and without a second state store to keep in sync.
+	createEffect(() => {
+		if (!sidebarAvailable()) return;
+		let disposed = false;
+		const refresh = async (): Promise<void> => {
+			try {
+				const next = await loadOverviews(undefined, { refresh: true });
+				if (disposed || !next) return;
+				setSidebarOverviews(next);
+				setSidebarLoading(false);
+			} catch {
+				// A failed observation keeps the last list; the next poll retries.
+			}
+		};
+		void refresh();
+		const timer = setInterval(() => void refresh(), SIDEBAR_REFRESH_MS);
+		onCleanup(() => {
+			disposed = true;
+			clearInterval(timer);
+		});
+	});
+	// Panel focus drives two keymap fields: `app.view` parks the dashboard's own
+	// layers when the sidebar holds focus, and `shell.panel` activates the
+	// sidebar's key layer only there.
+	createEffect(() => {
+		const keymap = props.dashboard?.keymap;
+		if (!keymap) return;
+		keymap.setData(
+			"app.view",
+			workflow() && focusPanel() === "content" ? "detail" : "home",
+		);
+		keymap.setData("shell.panel", focusPanel());
+	});
+	const disposeSidebarLayer = props.dashboard?.keymap.registerLayer({
+		name: "Workspace Sidebar",
+		priority: 1500,
+		appView: "home",
+		activeModal: "none",
+		shellPanel: "sidebar",
+		commands: [
+			{
+				name: "sidebar.handle",
+				run: ({ event }) => {
+					// The field gates the layer; this is the same check at dispatch time,
+					// so a mount whose keymap did not register the field (a bare test
+					// keymap) still lets the key fall through to the page body.
+					if (focusPanel() !== "sidebar") return false;
+					handleSidebarKey(event);
+					return true;
+				},
+			},
+		],
+		bindings: [
+			"j",
+			"k",
+			"up",
+			"down",
+			"enter",
+			"return",
+			"H",
+			"L",
+			"f",
+			"escape",
+		].map((key) => ({
+			key,
+			cmd: "sidebar.handle",
+			preventDefault: false,
+		})),
+	});
+	onCleanup(() => disposeSidebarLayer?.());
 	// A shell overlay owns input: while one is on top the feature keymap layers
 	// are parked through the shared `modal.active` field, so typing in the
 	// location picker cannot reach a dashboard or environment binding. The field
@@ -1520,6 +1683,21 @@ export function App(props: {
 		}
 		if (phase() === "starting" || phase() === "stopping") return;
 
+		// Shell panel model: Shift+H/L move focus to the workspace sidebar while
+		// the page body holds it, on the side the sidebar is configured for. The
+		// dashboard's own layer handles this itself while it is mounted; a shell
+		// overlay owns the key while one is open.
+		if (
+			nav.modal() === "none" &&
+			sidebarAvailable() &&
+			event.shift &&
+			((key === "h" && sidebarSide() === "left") ||
+				(key === "l" && sidebarSide() === "right"))
+		) {
+			setFocusPanel("sidebar");
+			return;
+		}
+
 		// The one Escape ladder owns every Escape press from here on.
 		if (handleEscape(event, key)) return;
 
@@ -2182,16 +2360,32 @@ export function App(props: {
 
 	const tabKeybindCatalog = (): KeybindSection[] => {
 		const tab = activeTab();
-		return observabilityKeybindCatalog({
+		const base = observabilityKeybindCatalog({
 			tab: tab === "home" ? "traces" : tab,
 			view: traceView(),
 		});
+		// The page body advertises how to reach the sidebar (the dashboard
+		// publishes its own catalog and already names J/K/H/L).
+		if (!sidebarAvailable() || workflow()) return base;
+		return [
+			...base,
+			{
+				title: "Panels",
+				keybinds: [workspaceSidebarFocusKeybind(sidebarSide())],
+			},
+		];
 	};
 
 	// The shell footer and `?` help read the active surface catalog from the
 	// shared store. The dashboard (workflow tab) publishes its own catalog, so
 	// the shell skips it there instead of fighting for the store.
 	createEffect(() => {
+		// The sidebar panel owns the footer while it holds focus: its keys are the
+		// ones the next press will act on.
+		if (focusPanel() === "sidebar") {
+			setActiveKeybindCatalog(workspaceSidebarKeybindCatalog(sidebarSide()));
+			return;
+		}
 		// The contextual creation form currently owns input, so the footer and `?`
 		// describe what it is doing rather than the page behind it.
 		if (nav.modal() === "new-workflow") {
@@ -2199,9 +2393,20 @@ export function App(props: {
 			return;
 		}
 		// Destination pages publish their own catalog: the shell feature bodies
-		// (environments) publish theirs while visible.
+		// (environments) publish theirs while visible. The sidebar panel entry is
+		// appended there too, because the sidebar is mounted on every page.
 		if (destinationEntries()) {
-			setActiveKeybindCatalog(destinationPageKeybindCatalog());
+			setActiveKeybindCatalog(
+				sidebarAvailable()
+					? [
+							...destinationPageKeybindCatalog(),
+							{
+								title: "Panels",
+								keybinds: [workspaceSidebarFocusKeybind(sidebarSide())],
+							},
+						]
+					: destinationPageKeybindCatalog(),
+			);
 			return;
 		}
 		// Settings sections publish their own catalog: the destination catalog
@@ -2285,275 +2490,341 @@ export function App(props: {
 				{/* The one blank row between the header and every page's content. */}
 				<box style={{ height: 1, flexShrink: 0 }} />
 
-				{/* Tab content */}
+				{/* Page body plus the workspace sidebar (integrated-multiplexer
+				    sidebar): one panel row, the sidebar on its configured side. */}
 				<box
 					backgroundColor={uiColors.bgBase}
-					style={{ flexGrow: 1, minHeight: 0, flexDirection: "column" }}
+					style={{ flexGrow: 1, minHeight: 0, flexDirection: "row" }}
 				>
-					{/* Destination pages: Home and the category pages. */}
-					{(() => {
-						const entries = destinationEntries();
-						return entries ? (
-							<DestinationPage
-								entries={entries}
-								selectedIndex={destinationIndex()}
-								onSelectIndex={setDestinationIndex}
-								onOpen={openDestination}
-							/>
-						) : null;
-					})()}
-					{/* Agent Presets: an inline menu, list and form (no editor modal). */}
-					{settingsSection() === "agents" &&
-						props.dashboard &&
-						(() => {
-							const ident = settingsProjectIdent();
-							const repository = settingsAgentRepository();
-							// A project-scoped page must never fall back to the user config: if the
-							// project is not in the catalog (or has no checkout) refuse the editor.
-							if (ident && !repository)
+					<Show when={sidebarAvailable() && sidebarSide() === "left"}>
+						<WorkspaceSidebar
+							active={focusPanel() === "sidebar"}
+							overviews={sidebarRows()}
+							filter={sidebarFilter()}
+							selectedIndex={sidebarIndex()}
+							loading={sidebarLoading()}
+							onSelectIndex={setSidebarIndex}
+							onOpen={openWorkflow}
+							onFilterChange={setSidebarFilter}
+							onFocus={() => setFocusPanel("sidebar")}
+						/>
+					</Show>
+					<box
+						backgroundColor={uiColors.bgBase}
+						style={{ flexGrow: 1, minWidth: 0, flexDirection: "column" }}
+					>
+						{/* Destination pages: Home and the category pages. */}
+						{(() => {
+							const entries = destinationEntries();
+							return entries ? (
+								<DestinationPage
+									entries={entries}
+									selectedIndex={destinationIndex()}
+									onSelectIndex={setDestinationIndex}
+									onOpen={openDestination}
+								/>
+							) : null;
+						})()}
+						{/* Agent Presets: an inline menu, list and form (no editor modal). */}
+						{settingsSection() === "agents" &&
+							props.dashboard &&
+							(() => {
+								const ident = settingsProjectIdent();
+								const repository = settingsAgentRepository();
+								// A project-scoped page must never fall back to the user config: if the
+								// project is not in the catalog (or has no checkout) refuse the editor.
+								if (ident && !repository)
+									return (
+										<box
+											style={{
+												flexGrow: 1,
+												justifyContent: "center",
+												alignItems: "center",
+											}}
+										>
+											<text fg={uiColors.textMuted}>
+												{settingsProjects().state === "loading"
+													? `Reading project ${ident}…`
+													: `Project ${ident} is not in the connected server's catalog; refusing to edit a local fallback configuration`}
+											</text>
+										</box>
+									);
 								return (
+									<AgentPresetsView
+										keymap={props.dashboard.keymap}
+										items={settingsSectionItems() ?? []}
+										onActivate={activateSettingsItem}
+										{...(classifierSnapshot()
+											? { classifier: classifierSnapshot() }
+											: {})}
+										{...(repository ? { repository } : {})}
+									/>
+								);
+							})()}
+						{/* Settings sections: one list of effective values per section. */}
+						{(() => {
+							const section = settingsSection();
+							const items = settingsSectionItems();
+							return section && section !== "agents" && items ? (
+								<SettingsSectionView
+									items={items}
+									selectedIndex={settingsIndex()}
+									onSelectIndex={setSettingsIndex}
+								/>
+							) : null;
+						})()}
+						{/* Feature bodies stay mounted while hidden: switching shell tabs must
+						 * preserve live environment/workflow drafts, selections and subscriptions. */}
+						{props.renderEnvironments && (
+							<box
+								visible={currentPage().startsWith("environments.")}
+								style={{ flexGrow: 1, minHeight: 0 }}
+							>
+								{props.renderEnvironments(
+									setEnvironmentCatalog,
+									() => currentPage().startsWith("environments."),
+									(open) => {
+										// While a shell-owned overlay is on top the shell owns input,
+										// so the feature's own modal report is not authoritative:
+										// mirroring it here would stack the two overlays and leave the
+										// top one without a key handler.
+										if (isShellOwnedOverlay(nav.modal())) return;
+										if (open && activeFeature() === "environments") {
+											if (nav.modal() !== "environment")
+												nav.pushModal("environment", "environments");
+										} else if (!open && nav.modal() === "environment") {
+											nav.popModal();
+										}
+									},
+									environmentDestination,
+									(project) =>
+										openLaunch({
+											kind: "project",
+											ident: project.ident,
+											name: project.name,
+											repository: project.repository,
+										}),
+								)}
+							</box>
+						)}
+						{props.dashboard?.mode === "home" && (
+							<box
+								visible={activeTab() === "wiki"}
+								style={{ flexGrow: 1, minHeight: 0 }}
+							>
+								<WikiView
+									keymap={props.dashboard.keymap}
+									shellFeature="wiki"
+									comments={wikiComments()}
+									onAddComment={(comment) =>
+										setWikiComments((comments) => [...comments, comment])
+									}
+									onFinish={finishWikiReview}
+									submitting={wikiSubmitting()}
+									onSubmittingChange={setWikiSubmitting}
+									onClearComments={() => setWikiComments([])}
+									noteId={
+										currentPage() === "wiki.note"
+											? pages.current().resourceId
+											: undefined
+									}
+									onOpenNote={(conceptId) =>
+										pages.navigate({
+											page: "wiki.note",
+											resourceId: conceptId,
+										})
+									}
+									onCloseNote={() => pages.goToParent()}
+									// Repository-independent research starts from Wiki, the only
+									// full-application entry for work that has no project.
+									onStartWorkflow={() => openLaunch({ kind: "independent" })}
+									onHelp={() => {
+										setHelpOffset(0);
+										// The shell modal effect parks WikiView's keymap layer while
+										// the help overlay is open, so j/k/Esc reach the modal.
+										nav.pushModal("help", "wiki");
+									}}
+								/>
+							</box>
+						)}
+						{!showsDestinationList() && activeTab() === "traces" && (
+							<>
+								{traceView() === "selection" && (
+									<TraceListView
+										summaries={summaries}
+										selectedIndex={selectedTraceIndex}
+										searchMode={searchMode}
+										searchQuery={searchQuery}
+										resultCount={filteredCount}
+										page={listPage}
+										totalPages={listTotalPages}
+										loading={tracesLoading}
+										onSelect={selectTrace}
+									/>
+								)}
+								{traceView() === "detail" && (
 									<box
 										style={{
 											flexGrow: 1,
-											justifyContent: "center",
-											alignItems: "center",
+											minHeight: 0,
+											flexDirection: "column",
 										}}
 									>
-										<text fg={uiColors.textMuted}>
-											{settingsProjects().state === "loading"
-												? `Reading project ${ident}…`
-												: `Project ${ident} is not in the connected server's catalog; refusing to edit a local fallback configuration`}
-										</text>
+										<box
+											height={1}
+											paddingLeft={1}
+											flexShrink={0}
+											flexDirection="row"
+										>
+											<HighlightedText
+												text="Span tree"
+												attributes={TextAttributes.BOLD}
+											/>
+											<box style={{ flexGrow: 1 }} />
+											<text fg={uiColors.textMuted}>
+												{flatTree().length} visible
+											</text>
+										</box>
+										<box style={{ flexGrow: 1, minHeight: 0 }}>
+											<TraceTreeView
+												roots={treeRoots}
+												selectedIndex={treeIndex}
+												onToggle={(node, path) =>
+													setNodeExpanded(path, !node.expanded)
+												}
+												onSelect={selectTree}
+											/>
+										</box>
+									</box>
+								)}
+								{traceView() === "span" && (
+									<SpanDetailView node={selectedSpan} />
+								)}
+							</>
+						)}
+						{!showsDestinationList() && activeTab() === "metrics" && (
+							<>
+								{currentPage() !== "observability.metrics.detail" && (
+									<MetricsView
+										store={metricStore}
+										selectedIndex={selectedMetricIndex}
+										onSelectIndex={setSelectedMetricIndex}
+										onOpen={(name, serviceName) => {
+											setSelectedMetric({ name, serviceName });
+											pages.navigate({
+												page: "observability.metrics.detail",
+												resourceId: name,
+												params: { service: serviceName },
+											});
+										}}
+									/>
+								)}
+								{(() => {
+									const selected = selectedMetric();
+									return currentPage() === "observability.metrics.detail" &&
+										selected ? (
+										<MetricDetailView
+											store={metricStore}
+											name={selected.name}
+											serviceName={selected.serviceName}
+										/>
+									) : null;
+								})()}
+							</>
+						)}
+						{!showsDestinationList() && activeTab() === "logs" && (
+							<>
+								{currentPage() !== "observability.logs.detail" && (
+									<LogsView
+										store={logStore}
+										selectedIndex={selectedLogIndex}
+										onSelectIndex={setSelectedLogIndex}
+										onOpen={(index) => {
+											setSelectedLog(index);
+											const log = logStore.getLogs()[index];
+											if (log)
+												pages.navigate({
+													page: "observability.logs.detail",
+													resourceId: logRouteIdentity(log),
+												});
+										}}
+									/>
+								)}
+								{(() => {
+									const idx = selectedLog();
+									return currentPage() === "observability.logs.detail" &&
+										idx !== undefined ? (
+										<LogDetailView store={logStore} index={idx} />
+									) : null;
+								})()}
+							</>
+						)}
+						{!showsDestinationList() && activeTab() === "topology" && (
+							<>
+								{currentPage() !== "observability.topology.service" && (
+									<TopologyView
+										store={topologyStore}
+										selectedService={selectedTopologyService}
+										onSelect={(id) => {
+											setSelectedTopologyService(id);
+											pages.navigate({
+												page: "observability.topology.service",
+												resourceId: id,
+											});
+										}}
+									/>
+								)}
+								{(() => {
+									const id = topologyDetail();
+									return currentPage() === "observability.topology.service" &&
+										id ? (
+										<ServiceDetailView store={topologyStore} id={id} />
+									) : null;
+								})()}
+							</>
+						)}
+						{/* Workflow dashboard body (integrated-multiplexer sidebar): the
+						    same dashboard `agentic-coding dash` renders, for the workflow
+						    the sidebar selected. It is mounted only for its own route, so
+						    its layers and data stay scoped to the workflow page. */}
+						{workflow() &&
+							props.dashboard &&
+							(() => {
+								const target = workflow();
+								if (!target) return null;
+								return (
+									<box style={{ flexGrow: 1, minHeight: 0 }}>
+										<DashApp
+											repo={target.repo}
+											workflowId={target.workflowId}
+											keymap={props.dashboard.keymap}
+											shellFeature="workflows"
+											active={() => focusPanel() === "content"}
+											onPanelExit={(direction, atEdge) => {
+												if (!atEdge) return false;
+												if (direction !== sidebarDirection(sidebarSide()))
+													return false;
+												setFocusPanel("sidebar");
+												return true;
+											}}
+										/>
 									</box>
 								);
-							return (
-								<AgentPresetsView
-									keymap={props.dashboard.keymap}
-									items={settingsSectionItems() ?? []}
-									onActivate={activateSettingsItem}
-									{...(classifierSnapshot()
-										? { classifier: classifierSnapshot() }
-										: {})}
-									{...(repository ? { repository } : {})}
-								/>
-							);
-						})()}
-					{/* Settings sections: one list of effective values per section. */}
-					{(() => {
-						const section = settingsSection();
-						const items = settingsSectionItems();
-						return section && section !== "agents" && items ? (
-							<SettingsSectionView
-								items={items}
-								selectedIndex={settingsIndex()}
-								onSelectIndex={setSettingsIndex}
-							/>
-						) : null;
-					})()}
-					{/* Feature bodies stay mounted while hidden: switching shell tabs must
-					 * preserve live environment/workflow drafts, selections and subscriptions. */}
-					{props.renderEnvironments && (
-						<box
-							visible={currentPage().startsWith("environments.")}
-							style={{ flexGrow: 1, minHeight: 0 }}
-						>
-							{props.renderEnvironments(
-								setEnvironmentCatalog,
-								() => currentPage().startsWith("environments."),
-								(open) => {
-									// While a shell-owned overlay is on top the shell owns input,
-									// so the feature's own modal report is not authoritative:
-									// mirroring it here would stack the two overlays and leave the
-									// top one without a key handler.
-									if (isShellOwnedOverlay(nav.modal())) return;
-									if (open && activeFeature() === "environments") {
-										if (nav.modal() !== "environment")
-											nav.pushModal("environment", "environments");
-									} else if (!open && nav.modal() === "environment") {
-										nav.popModal();
-									}
-								},
-								environmentDestination,
-								(project) =>
-									openLaunch({
-										kind: "project",
-										ident: project.ident,
-										name: project.name,
-										repository: project.repository,
-									}),
-							)}
-						</box>
-					)}
-					{props.dashboard?.mode === "home" && (
-						<box
-							visible={activeTab() === "wiki"}
-							style={{ flexGrow: 1, minHeight: 0 }}
-						>
-							<WikiView
-								keymap={props.dashboard.keymap}
-								shellFeature="wiki"
-								comments={wikiComments()}
-								onAddComment={(comment) =>
-									setWikiComments((comments) => [...comments, comment])
-								}
-								onFinish={finishWikiReview}
-								submitting={wikiSubmitting()}
-								onSubmittingChange={setWikiSubmitting}
-								onClearComments={() => setWikiComments([])}
-								noteId={
-									currentPage() === "wiki.note"
-										? pages.current().resourceId
-										: undefined
-								}
-								onOpenNote={(conceptId) =>
-									pages.navigate({
-										page: "wiki.note",
-										resourceId: conceptId,
-									})
-								}
-								onCloseNote={() => pages.goToParent()}
-								// Repository-independent research starts from Wiki, the only
-								// full-application entry for work that has no project.
-								onStartWorkflow={() => openLaunch({ kind: "independent" })}
-								onHelp={() => {
-									setHelpOffset(0);
-									// The shell modal effect parks WikiView's keymap layer while
-									// the help overlay is open, so j/k/Esc reach the modal.
-									nav.pushModal("help", "wiki");
-								}}
-							/>
-						</box>
-					)}
-					{!showsDestinationList() && activeTab() === "traces" && (
-						<>
-							{traceView() === "selection" && (
-								<TraceListView
-									summaries={summaries}
-									selectedIndex={selectedTraceIndex}
-									searchMode={searchMode}
-									searchQuery={searchQuery}
-									resultCount={filteredCount}
-									page={listPage}
-									totalPages={listTotalPages}
-									loading={tracesLoading}
-									onSelect={selectTrace}
-								/>
-							)}
-							{traceView() === "detail" && (
-								<box
-									style={{ flexGrow: 1, minHeight: 0, flexDirection: "column" }}
-								>
-									<box
-										height={1}
-										paddingLeft={1}
-										flexShrink={0}
-										flexDirection="row"
-									>
-										<HighlightedText
-											text="Span tree"
-											attributes={TextAttributes.BOLD}
-										/>
-										<box style={{ flexGrow: 1 }} />
-										<text fg={uiColors.textMuted}>
-											{flatTree().length} visible
-										</text>
-									</box>
-									<box style={{ flexGrow: 1, minHeight: 0 }}>
-										<TraceTreeView
-											roots={treeRoots}
-											selectedIndex={treeIndex}
-											onToggle={(node, path) =>
-												setNodeExpanded(path, !node.expanded)
-											}
-											onSelect={selectTree}
-										/>
-									</box>
-								</box>
-							)}
-							{traceView() === "span" && <SpanDetailView node={selectedSpan} />}
-						</>
-					)}
-					{!showsDestinationList() && activeTab() === "metrics" && (
-						<>
-							{currentPage() !== "observability.metrics.detail" && (
-								<MetricsView
-									store={metricStore}
-									selectedIndex={selectedMetricIndex}
-									onSelectIndex={setSelectedMetricIndex}
-									onOpen={(name, serviceName) => {
-										setSelectedMetric({ name, serviceName });
-										pages.navigate({
-											page: "observability.metrics.detail",
-											resourceId: name,
-											params: { service: serviceName },
-										});
-									}}
-								/>
-							)}
-							{(() => {
-								const selected = selectedMetric();
-								return currentPage() === "observability.metrics.detail" &&
-									selected ? (
-									<MetricDetailView
-										store={metricStore}
-										name={selected.name}
-										serviceName={selected.serviceName}
-									/>
-								) : null;
 							})()}
-						</>
-					)}
-					{!showsDestinationList() && activeTab() === "logs" && (
-						<>
-							{currentPage() !== "observability.logs.detail" && (
-								<LogsView
-									store={logStore}
-									selectedIndex={selectedLogIndex}
-									onSelectIndex={setSelectedLogIndex}
-									onOpen={(index) => {
-										setSelectedLog(index);
-										const log = logStore.getLogs()[index];
-										if (log)
-											pages.navigate({
-												page: "observability.logs.detail",
-												resourceId: logRouteIdentity(log),
-											});
-									}}
-								/>
-							)}
-							{(() => {
-								const idx = selectedLog();
-								return currentPage() === "observability.logs.detail" &&
-									idx !== undefined ? (
-									<LogDetailView store={logStore} index={idx} />
-								) : null;
-							})()}
-						</>
-					)}
-					{!showsDestinationList() && activeTab() === "topology" && (
-						<>
-							{currentPage() !== "observability.topology.service" && (
-								<TopologyView
-									store={topologyStore}
-									selectedService={selectedTopologyService}
-									onSelect={(id) => {
-										setSelectedTopologyService(id);
-										pages.navigate({
-											page: "observability.topology.service",
-											resourceId: id,
-										});
-									}}
-								/>
-							)}
-							{(() => {
-								const id = topologyDetail();
-								return currentPage() === "observability.topology.service" &&
-									id ? (
-									<ServiceDetailView store={topologyStore} id={id} />
-								) : null;
-							})()}
-						</>
-					)}
+					</box>
+					<Show when={sidebarAvailable() && sidebarSide() === "right"}>
+						<WorkspaceSidebar
+							active={focusPanel() === "sidebar"}
+							overviews={sidebarRows()}
+							filter={sidebarFilter()}
+							selectedIndex={sidebarIndex()}
+							loading={sidebarLoading()}
+							onSelectIndex={setSidebarIndex}
+							onOpen={openWorkflow}
+							onFilterChange={setSidebarFilter}
+							onFocus={() => setFocusPanel("sidebar")}
+						/>
+					</Show>
 				</box>
 
 				{/* Status bar — one global footer for all tabs; keybinds are tab-dependent.

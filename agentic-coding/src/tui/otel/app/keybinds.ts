@@ -1,9 +1,54 @@
 import {
 	hostDiagnosticsKeybind,
+	type Keybind,
 	type KeybindSection,
 	PAGE_NAVIGATION_KEYBINDS,
 } from "@ui";
 import { hostKeybind } from "../../../../packages/devenv/cli/src/tui/keyboard/host-keys.ts";
+
+/** The page body's entry to the workspace sidebar panel; the direction is the
+ * shifted letter on the side the sidebar is mounted on. */
+export function workspaceSidebarFocusKeybind(side: "left" | "right"): Keybind {
+	return {
+		key: side === "left" ? "H" : "L",
+		action: "focus the workspace sidebar",
+		short: "workspaces",
+	};
+}
+
+/**
+ * Workspace sidebar keys (integrated-multiplexer sidebar), published while the
+ * sidebar panel holds focus. The content direction is written as the shifted
+ * letter the panel model uses, never as `Shift+<x>`.
+ */
+export function workspaceSidebarKeybindCatalog(
+	side: "left" | "right",
+): KeybindSection[] {
+	return [
+		{
+			title: "Workspaces",
+			keybinds: [
+				{ key: "j/k or ↑/↓", action: "select workflow", standard: true },
+				{ key: "Enter", action: "open workflow dashboard", short: "open" },
+				{
+					key: "f",
+					action: "cycle filter (active/attention/all)",
+					short: "filter",
+				},
+				{
+					key: side === "left" ? "L" : "H",
+					action: "focus the main content",
+					short: "content",
+				},
+				{
+					key: "Esc",
+					action: "focus the main content",
+					standard: true,
+				},
+			],
+		},
+	];
+}
 
 /** Traces-local view: list, span tree or span detail. */
 export type View = "selection" | "detail" | "span";

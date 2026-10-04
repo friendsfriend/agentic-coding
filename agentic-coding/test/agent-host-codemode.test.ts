@@ -167,6 +167,10 @@ test("a durable run runs a codemode script that calls its own tools", async () =
 			status: "ok",
 			durationMs: expect.any(Number),
 			args: { path: "note.txt" },
+			// What the call returned travels with it, so the dashboard can show a
+			// script's calls as the tool rows they are.
+			output: "hello codemode",
+			isError: false,
 		},
 	]);
 	await host.shutdown();

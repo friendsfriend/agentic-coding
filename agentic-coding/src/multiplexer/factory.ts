@@ -9,6 +9,7 @@ import { Effect } from "effect";
 import { loadConfig } from "../workflow/effects.ts";
 import { Herdr as DefaultHerdrCli } from "./herdr/cli.ts";
 import { HerdrMultiplexer } from "./herdr/index.ts";
+import { IntegratedMultiplexer } from "./integrated/index.ts";
 import { LuvusMultiplexer } from "./luvus/index.ts";
 import { resolveLuvusSocketPath } from "./luvus/uhp.ts";
 import {
@@ -18,7 +19,11 @@ import {
 	type MultiplexerPort,
 } from "./port.ts";
 
-export const MULTIPLEXER_IDS: readonly MultiplexerId[] = ["herdr", "luvus"];
+export const MULTIPLEXER_IDS: readonly MultiplexerId[] = [
+	"herdr",
+	"luvus",
+	"integrated",
+];
 
 export interface MultiplexerSelectionInput {
 	configMultiplexer?: string;
@@ -33,10 +38,15 @@ export function resolveMultiplexerSelection(
 	const env = input.env ?? process.env;
 	const raw =
 		env.AGENTIC_CODING_MULTIPLEXER ?? input.configMultiplexer ?? "herdr";
-	if (raw === "herdr" || raw === "luvus") return raw;
+	if (raw === "herdr" || raw === "luvus" || raw === "integrated") return raw;
 	throw new Error(
 		`unsupported multiplexer '${raw}'; supported multiplexers: ${MULTIPLEXER_IDS.join(", ")}`,
 	);
+}
+
+/** Whether one constructed port is the integrated adapter. */
+export function isIntegratedPort(port: MultiplexerPort): boolean {
+	return port.id === "integrated";
 }
 
 /** Resolve the selector from the loaded application configuration. Kept behind
@@ -67,11 +77,13 @@ function unavailableRuntime(
 }
 
 /** Construct the selected adapter. A missing selected runtime throws a bounded
- * diagnostic naming the runtime; no other runtime is constructed. */
+ * diagnostic naming the runtime; no other runtime is constructed. The
+ * integrated selection has no executable or socket to require. */
 export function createMultiplexerPort(
 	id: MultiplexerId = configuredMultiplexer(),
 	options: CreateMultiplexerOptions = {},
 ): MultiplexerPort {
+	if (id === "integrated") return new IntegratedMultiplexer();
 	if (id === "herdr") {
 		const binPath = options.binPath ?? process.env.HERDR_BIN_PATH;
 		const executable = binPath ?? "herdr";

@@ -337,9 +337,11 @@ export async function saveReview(request: ReviewSaveRequest): Promise<void> {
 	}
 }
 
-/** Workflow overviews for the history list (the `workflows` observation). */
+/** Workflow overviews for the history list (the `workflows` observation).
+ * `options.refresh` bypasses the cache for the sidebar's bounded poll. */
 export async function loadOverviews(
 	signal?: Signal,
+	options?: DataReadOptions,
 ): Promise<WorkflowOverview[] | undefined> {
 	return cache.load(
 		"workflows",
@@ -349,7 +351,7 @@ export async function loadOverviews(
 				compositeSchema,
 				signal,
 			),
-		{ signal },
+		{ signal, ...(options?.refresh ? { refresh: true } : {}) },
 	);
 }
 

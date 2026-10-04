@@ -342,6 +342,22 @@ export function resourceRoute(
 	};
 }
 
+/** The dashboard route of one durable workflow (workspace-sidebar navigation).
+ * The repository travels in the params because the dashboard addresses a
+ * workflow by repository + workflow id. */
+export function workflowRoute(repo: string, workflowId: string): Route {
+	return { page: "workflows.detail", resourceId: workflowId, params: { repo } };
+}
+
+/** Repository + workflow identity of a workflow-dashboard route, or undefined
+ * for every other page. */
+export function workflowTarget(
+	route: Route,
+): { repo: string; workflowId: string } | undefined {
+	if (route.page !== "workflows.detail" || !route.resourceId) return undefined;
+	return { repo: route.params?.repo ?? "", workflowId: route.resourceId };
+}
+
 /** Longest resource identity a breadcrumb segment renders before it clips. */
 export const RESOURCE_LABEL_LIMIT = 24;
 

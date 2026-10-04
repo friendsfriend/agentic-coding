@@ -32,17 +32,32 @@ existing Herdr CLI calls (moved from `src/herdr-client.ts` and
 `src/workflow/herdr-schema.ts`, whose paths remain compatibility shims), and
 `src/multiplexer/luvus/` speaks Luvus UHP/CLI with its own decoders.
 
-Runtime selection is top-level `multiplexer: "herdr" | "luvus"` configuration
-with `AGENTIC_CODING_MULTIPLEXER` taking precedence and `herdr` as the default;
-`src/multiplexer/factory.ts` resolves it once and fails loudly when the
-selected executable/socket is unavailable, never falling back to another
+Runtime selection is top-level `multiplexer: "herdr" | "luvus" | "integrated"`
+configuration with `AGENTIC_CODING_MULTIPLEXER` taking precedence and `herdr` as
+the default; `src/multiplexer/factory.ts` resolves it once and fails loudly when
+the selected executable/socket is unavailable, never falling back to another
 runtime. Detached `workflow drain` children inherit the selector and both
 runtimes' connection variables through the bounded allowlist in
 `src/workflow/cli/drain.ts`. Promise/sync consumers of the port run its effects
 through the single `src/multiplexer/boundary.ts` execution point.
 
-The Herdr-only sidebar/custom Agents view (`src/workflow/sidebar-sync.ts`) is
-deferred and stays on the raw Herdr CLI type; the port deliberately exposes no
+`integrated` is the selection that says "no external multiplexer":
+`src/multiplexer/integrated/` implements the port with a virtual workspace
+identity (the workflow id) and no tabs, panes or pane-hosted agents. The
+OpenTUI shell is the workspace surface — its workspace sidebar
+(`src/tui/otel/app/sidebar-model.ts`, `src/tui/otel/components/WorkspaceSidebar.tsx`)
+lists the durable workflows, `Enter` opens the same dashboard `agentic-coding
+dash` renders, and the panel model moves focus with `Shift+H/L` on the side
+`ui.sidebar_side` names. Only the pane-less `pi-durable` adapter is registered
+for the selection, so a workflow that pins a pane-based runtime fails with the
+engine's bounded "adapter unavailable" diagnostic instead of allocating a pane
+that cannot exist, and `workspace.setup` skips workspace/tab bookkeeping while
+still resolving the worktree. Workspace rows survive restarts because the
+workflow store they are read from is SQLite-backed; the adapter itself keeps no
+state.
+
+The Herdr-only external sidebar/custom Agents view (`src/workflow/sidebar-sync.ts`)
+stays on the raw Herdr CLI type; the port deliberately exposes no
 sidebar operation.
 
 ### Worktree boundary

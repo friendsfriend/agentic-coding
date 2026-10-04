@@ -12,6 +12,7 @@ import {
 	type WorkflowSnapshot,
 } from "../contracts/workflow.ts";
 import { writeAgentRunEnv } from "../multiplexer/agent-env.ts";
+import { integratedWorkspaceId } from "../multiplexer/integrated/index.ts";
 import type { MultiplexerError, MultiplexerPort } from "../multiplexer/port.ts";
 import { worktreePort } from "../worktree/index.ts";
 import { workflowWorktreeLocation } from "../worktree/layout.ts";
@@ -1001,11 +1002,25 @@ export function agentEffectHandlers(
 			observe: (effect, signal) =>
 				Effect.gen(function* () {
 					const snapshot = snapshotFor(effect);
+					// The integrated selection has no external workspace to open or
+					// wait on: the worktree is the only setup artifact that matters,
+					// and the virtual workspace identity is derived, never created.
+					const integrated = options.port.id === "integrated";
 					if (
 						isWikiWorkflowTarget(repo) ||
 						isResearchWorkflowTarget(repo) ||
 						snapshot.definition.id === "research"
 					) {
+						if (integrated)
+							return snapshot.metadata.worktree
+								? {
+										workspace:
+											snapshot.metadata.workspace ??
+											integratedWorkspaceId(snapshot.workflowId),
+										worktree: snapshot.metadata.worktree,
+										branch: "",
+									}
+								: undefined;
 						const workspace =
 							snapshot.metadata.workspace ??
 							(yield* p(() =>
@@ -1046,6 +1061,16 @@ export function agentEffectHandlers(
 								)) === branch
 									? snapshot.metadata.repository
 									: undefined));
+					if (integrated)
+						return worktree
+							? {
+									workspace:
+										snapshot.metadata.workspace ??
+										integratedWorkspaceId(snapshot.workflowId),
+									worktree,
+									branch,
+								}
+							: undefined;
 					const workspace =
 						snapshot.metadata.workspace ??
 						(yield* p(() =>
@@ -1062,6 +1087,14 @@ export function agentEffectHandlers(
 			execute: (effect, signal) =>
 				Effect.gen(function* () {
 					const snapshot = snapshotFor(effect);
+					// The integrated selection owns no external workspace, tab or pane:
+					// the virtual workspace identity is derived from the workflow and the
+					// sidebar is the workspace surface, so this effect only resolves the
+					// worktree and records the identity.
+					const integrated = options.port.id === "integrated";
+					const virtualWorkspace = () =>
+						snapshot.metadata.workspace ??
+						integratedWorkspaceId(snapshot.workflowId);
 					// Luvus's workspace-scoped tab API forces the workflow workspace to be
 					// focused while its tabs are set up; remember the developer's workspace
 					// so setup does not leave the view on the workflow.
@@ -1073,6 +1106,12 @@ export function agentEffectHandlers(
 						isResearchWorkflowTarget(repo) ||
 						snapshot.definition.id === "research"
 					) {
+						if (integrated)
+							return {
+								workspace: virtualWorkspace(),
+								worktree: snapshot.metadata.worktree,
+								branch: "",
+							};
 						let workspace =
 							snapshot.metadata.workspace ??
 							(yield* p(() =>
@@ -1192,12 +1231,16 @@ export function agentEffectHandlers(
 						worktree = created.path;
 						if (!worktree)
 							throw new TransientFailure("worktree setup returned no path");
-						workspace = (yield* portCall(
-							options.port.workspaceCreate({
-								cwd: worktree,
-								label: snapshot.workflowId,
-							}),
-						)).workspaceId;
+						if (integrated) {
+							workspace = virtualWorkspace();
+						} else {
+							workspace = (yield* portCall(
+								options.port.workspaceCreate({
+									cwd: worktree,
+									label: snapshot.workflowId,
+								}),
+							)).workspaceId;
+						}
 						if (!workspace)
 							throw new TransientFailure(
 								"workspace setup returned incomplete identity",
@@ -1235,33 +1278,40 @@ export function agentEffectHandlers(
 								"workspace setup returned incomplete identity",
 							);
 						if (!workspace) {
-							workspace = (yield* portCall(
-								options.port.workspaceCreate({
-									cwd: worktree,
-									label: snapshot.workflowId,
-								}),
-							)).workspaceId;
+							workspace = integrated
+								? virtualWorkspace()
+								: (yield* portCall(
+										options.port.workspaceCreate({
+											cwd: worktree,
+											label: snapshot.workflowId,
+										}),
+									)).workspaceId;
 						}
 					}
 					if (!workspace || !worktree)
 						throw new TransientFailure(
 							"workspace setup returned incomplete identity",
 						);
-					yield* p(() =>
-						ensureWorkspaceTabs(
+					// The external tab set (dashboard pane, lazygit) exists only on a real
+					// multiplexer; the shell's embedded dashboard and sidebar replace it in
+					// the integrated selection.
+					if (!integrated) {
+						yield* p(() =>
+							ensureWorkspaceTabs(
+								options.port,
+								workspace,
+								worktree,
+								snapshot.workflowId,
+								undefined,
+								signal,
+							),
+						);
+						yield* restoreWorkspaceFocus(
 							options.port,
+							previousWorkspace,
 							workspace,
-							worktree,
-							snapshot.workflowId,
-							undefined,
-							signal,
-						),
-					);
-					yield* restoreWorkspaceFocus(
-						options.port,
-						previousWorkspace,
-						workspace,
-					);
+						);
+					}
 					return { workspace, worktree, branch };
 				}),
 			cancel: (effect, result) =>

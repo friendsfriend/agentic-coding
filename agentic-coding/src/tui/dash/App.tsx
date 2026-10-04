@@ -147,6 +147,11 @@ export function App(props: {
 	/** Set only when the dashboard is mounted inside the unified shell. */
 	shellFeature?: "workflows";
 	active?: () => boolean;
+	/** Composition-root panel boundary: called for horizontal panel movement
+	 * before the dashboard's own grid moves, with the active panel's column
+	 * edge. Returns true when the root handled the move (it owns a panel beside
+	 * the dashboard, e.g. the workspace sidebar). */
+	onPanelExit?: (direction: "left" | "right", atEdge: boolean) => boolean;
 	/** Push the workflow header context up to the composition root's header. */
 	onHeader?: (header: WorkflowHeaderInfo | null) => void;
 }) {
@@ -1285,13 +1290,16 @@ export function App(props: {
 	);
 	// The shell footer and `?` help read the active surface catalog from the
 	// shared store; the route publishes the panel-scoped catalog here, or the
-	// agent session's own keys while its view replaced the grid.
-	createEffect(() =>
+	// agent session's own keys while its view replaced the grid. A composition
+	// root that parks the dashboard (the shell's sidebar panel) keeps its own
+	// catalog instead, so a parked dashboard never overwrites it.
+	createEffect(() => {
+		if (props.active && !props.active()) return;
 		setActiveKeybindCatalog(
 			keybindCatalog(),
 			agentSessionOpen() ? undefined : panelContext(activePanel()),
-		),
-	);
+		);
+	});
 	const helpMaxOffset = () =>
 		Math.max(
 			0,
@@ -1506,6 +1514,7 @@ export function App(props: {
 		busy,
 		activePanel,
 		setActivePanel,
+		...(props.onPanelExit ? { onPanelExit: props.onPanelExit } : {}),
 		selectedAgent,
 		setSelectedAgent,
 		selectedArtifact,

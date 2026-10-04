@@ -18,6 +18,7 @@ import {
 	CLASSIFIER_PANEL,
 	movePanel,
 	type PanelDirection,
+	panelAtEdge,
 } from "../panel-grid.ts";
 import { classificationDetail, classificationEntries } from "../projections.ts";
 
@@ -39,6 +40,14 @@ export interface DashboardKeyContext {
 	readonly busy: () => boolean;
 	readonly activePanel: () => number;
 	readonly setActivePanel: (index: number) => void;
+	/** Composition-root panel boundary: called for horizontal panel movement
+	 * before the grid moves, with the active panel's column edge. Returns true
+	 * when the root handled the move (it owns a panel beside the dashboard),
+	 * false to keep the dashboard's own grid navigation. */
+	readonly onPanelExit?: (
+		direction: "left" | "right",
+		atEdge: boolean,
+	) => boolean;
 	readonly refresh: () => void;
 	readonly selectedAgent: () => number;
 	readonly setSelectedAgent: (index: number) => void;
@@ -443,6 +452,14 @@ export function createDashboardKeyHandler(
 						: name === "h"
 							? "left"
 							: "right";
+			// A composition root that mounts the dashboard beside another panel
+			// (the workspace sidebar) gets the boundary move first; only the
+			// dashboard's own grid handles the key when the root declines.
+			if (
+				(direction === "left" || direction === "right") &&
+				context.onPanelExit?.(direction, panelAtEdge(activePanel(), direction))
+			)
+				return;
 			setActivePanel(
 				movePanel(activePanel(), direction, {
 					artifactsVisible: artifacts().length > 0,

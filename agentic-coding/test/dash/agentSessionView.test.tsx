@@ -1182,7 +1182,7 @@ test("a codemode row lists its calls, and its script and output fold away", asyn
 		const collapsed = t.captureCharFrame();
 		expect(collapsed).toContain("▸ λ 2 calls · 1 failed");
 		expect(collapsed).toContain("✱ glob *.ts (ok)");
-		expect(collapsed).toContain("→ src/a.ts (error)");
+		expect(collapsed).toContain("→ read src/a.ts (error)");
 		expect(collapsed).not.toContain("tools.glob");
 
 		// Expanded: the script and its output, as parts with their own headers.
@@ -1209,6 +1209,128 @@ test("a codemode row lists its calls, and its script and output fold away", asyn
 	} finally {
 		t.renderer.destroy();
 	}
+});
+
+test("expanding a block keeps the reader's place", async () => {
+	const blocks: AgentSessionBlock[] = [
+		{
+			id: "t1",
+			kind: "tool",
+			text: "bash npm test",
+			tone: "muted",
+			icon: "$",
+			tool: "bash",
+			detail: Array.from({ length: 20 }, (_, index) => `output ${index}`),
+		},
+		...Array.from({ length: 30 }, (_, index) => ({
+			id: `r${index}`,
+			kind: "result" as const,
+			text: `line ${index}`,
+			tone: "success" as const,
+		})),
+	];
+	let box: { scrollTop: number; scrollHeight: number } | undefined;
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={blocks}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				onScrollBoxReady={(value) => {
+					box = value as unknown as typeof box;
+				}}
+			/>
+		),
+		{ width: 80, height: 16 },
+	);
+	/** The result line at the top of the viewport. */
+	const topLine = () => Number(/line (\d+)/.exec(t.captureCharFrame())?.[1]);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		// Scroll into the transcript: the tool block is now above the viewport.
+		if (box) box.scrollTop = 12;
+		await t.renderOnce();
+		const before = topLine();
+		const height = box?.scrollHeight ?? 0;
+		expect(before).toBeGreaterThan(0);
+
+		// Ctrl+O expands the tool block above: its rows land above the reader,
+		// and the viewport follows the line it was resting on.
+		t.mockInput.pressKey("o", { ctrl: true });
+		await t.renderOnce();
+		await t.renderOnce();
+		expect(box?.scrollHeight ?? 0).toBeGreaterThan(height);
+		expect(topLine()).toBe(before);
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("a streaming message holds its fenced code instead of re-drawing it", async () => {
+	const text = "Here is the fix:\n\n```ts\nconst a = 1;\n```\n";
+	const frameOf = async (block: AgentSessionBlock) => {
+		const t = await testRender(
+			() => (
+				<AgentSessionView
+					role="worker"
+					blocks={[block]}
+					working={true}
+					models={[]}
+					thinkingLevels={[]}
+					draft=""
+					history={[]}
+					onHistoryAppend={() => {}}
+					onDraftChange={() => {}}
+					onSubmit={() => {}}
+					onAbort={() => {}}
+					onBack={() => {}}
+					onConfigure={() => {}}
+				/>
+			),
+			{ width: 60, height: 14 },
+		);
+		await t.renderOnce();
+		await t.renderOnce();
+		const frame = t.captureCharFrame();
+		t.renderer.destroy();
+		return frame;
+	};
+
+	// A committed message draws its fence immediately (the raw text first, the
+	// highlight concealing the markers a moment later).
+	const committed = await frameOf({
+		id: "e1:0",
+		kind: "assistant",
+		text,
+		tone: "base",
+	});
+	expect(committed).toContain("Here is the fix:");
+	expect(committed).toContain("const a = 1;");
+
+	// A live one keeps the text it already laid out rather than re-laying the
+	// chunk: re-drawing shows the fence markers again, which changes the block's
+	// height by a line on every frame — the jump the reader sees as unreadable
+	// output. The prose still draws through its streaming preview.
+	const live = await frameOf({
+		id: "live:generation",
+		kind: "assistant",
+		text,
+		tone: "base",
+		live: true,
+	});
+	expect(live).toContain("Here is the fix:");
+	expect(live).not.toContain("const a = 1;");
 });
 
 test("a watch frame never blanks the transcript's markdown", async () => {

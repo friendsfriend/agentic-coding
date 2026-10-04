@@ -18,7 +18,12 @@
 //     subscription, and reconnect/resume stays inside the adapter.
 import type { Effect, Scope } from "effect";
 
-export type MultiplexerId = "herdr" | "luvus";
+/**
+ * The supported multiplexer selections. `integrated` means "no external
+ * multiplexer": the OpenTUI shell owns the workspace sidebar and managed agents
+ * run through the pane-less `pi-durable` host (integrated-multiplexer sidebar).
+ */
+export type MultiplexerId = "herdr" | "luvus" | "integrated";
 
 /**
  * Why a port operation failed. `absent` is confirmed absence (the caller may
@@ -268,7 +273,11 @@ export interface MultiplexerPort {
 
 /** The supported runtime identifiers, shared by configuration validation and
  * the factory so validation diagnostics cannot drift. */
-export const MULTIPLEXER_IDS: readonly MultiplexerId[] = ["herdr", "luvus"];
+export const MULTIPLEXER_IDS: readonly MultiplexerId[] = [
+	"herdr",
+	"luvus",
+	"integrated",
+];
 
 /**
  * Classify one raw adapter error into a port kind. Transport/spawn failures

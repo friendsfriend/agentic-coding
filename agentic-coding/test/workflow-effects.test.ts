@@ -10,6 +10,7 @@ import type {
 	AgentHandle,
 	WorkflowSnapshot,
 } from "../src/contracts/workflow.ts";
+import { IntegratedMultiplexer } from "../src/multiplexer/integrated/index.ts";
 import { LuvusMultiplexer } from "../src/multiplexer/luvus/index.ts";
 import type { AgentAdapter, LaunchContext } from "../src/workflow/adapters.ts";
 import { cliTest } from "../src/workflow/cli.ts";
@@ -2812,5 +2813,96 @@ test("a sidecar that cannot start degrades the launch instead of failing it", as
 		expect(harness.context()?.jev).toBeUndefined();
 	} finally {
 		harness.dispose();
+	}
+});
+
+test("integrated workspace setup derives a virtual workspace and touches no tabs or panes", async () => {
+	const repo = fs.mkdtempSync(
+		path.join(os.tmpdir(), "workflow-integrated-workspace-"),
+	);
+	try {
+		createRepoFixture(repo, {
+			files: {
+				"README.md": "x\n",
+				"openspec/config.yaml": "schema: spec-driven\n",
+			},
+		});
+		const profile = {
+			name: "pi-durable",
+			runtime: "pi-durable" as const,
+			executable: "agentic-coding",
+			tools: [],
+			extensions: [],
+			readOnly: false,
+			capabilities: ["prompt", "run-environment", "observe"] as const,
+			digest: "profile",
+		};
+		const engine = new WorkflowEngine(registerBuiltins());
+		engine.start({
+			repo,
+			mode: "checkout",
+			workflowId: "integrated-workspace",
+			definitionId: "openspec-propose",
+			metadata: {
+				branch: "main",
+				baseBranch: "main",
+				baseCommit: "main",
+				task: "propose",
+			},
+			routing: {
+				defaultProfile: "pi-durable",
+				routes: [{ stepId: "core.plan", role: "planner", profile }],
+			},
+		});
+		// The real integrated port, with the operations that must never be reached
+		// counted: workspace identity is virtual, so setup may not create a
+		// workspace, open tabs or touch panes.
+		const calls: string[] = [];
+		const port = new IntegratedMultiplexer();
+		const recording = new Proxy(port, {
+			get(target, property, receiver) {
+				const value = Reflect.get(target, property, receiver);
+				if (typeof value !== "function") return value;
+				return (...args: unknown[]) => {
+					calls.push(String(property));
+					return (value as (...args: unknown[]) => unknown).apply(target, args);
+				};
+			},
+		});
+		const handlers = agentEffectHandlers(repo, engine, {
+			registry: registerBuiltins(),
+			adapters: new Map(),
+			port: recording,
+			async paneForRun() {
+				throw new Error("integrated setup must not allocate a pane");
+			},
+		});
+		const setup = engine
+			.claimEffects(repo, 10)
+			.find((effect) => effect.kind === "workspace.setup");
+		if (!setup) throw new Error("expected workspace.setup effect");
+		const result = await Effect.runPromise(
+			handlers["workspace.setup"]?.execute(setup) ?? Effect.never,
+		);
+		expect(result).toEqual({
+			workspace: "integrated:integrated-workspace",
+			worktree: fs.realpathSync(repo),
+			branch: "main",
+		});
+		expect(calls).not.toContain("workspaceCreate");
+		expect(calls).not.toContain("tabList");
+		expect(calls).not.toContain("tabCreate");
+		expect(calls).not.toContain("paneList");
+		expect(calls).not.toContain("paneRun");
+		// The virtual workspace is observable again, so a re-run is idempotent.
+		const observe = handlers["workspace.setup"]?.observe;
+		if (!observe) throw new Error("missing workspace.setup observe");
+		expect(await Effect.runPromise(observe(setup))).toEqual({
+			workspace: "integrated:integrated-workspace",
+			worktree: fs.realpathSync(repo),
+			branch: "main",
+		});
+	} finally {
+		fs.rmSync(repo, { recursive: true, force: true });
 	}
 });

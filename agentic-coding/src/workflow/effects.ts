@@ -284,6 +284,9 @@ export interface WorkflowConfig {
 	ui: {
 		theme: string;
 		selection_height: number;
+		/** Which side the workspace sidebar is mounted on; the shell resolves it
+		 * once and panel movement follows it (integrated-multiplexer sidebar). */
+		sidebar_side?: "left" | "right";
 		/** Trusted user-only opt-in for the native Herdr sidebar integration
 		 * (improve-herdr-workflow-sidebar); project overlays cannot change it. */
 		herdr_sidebar?: boolean;

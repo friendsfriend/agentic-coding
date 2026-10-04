@@ -137,14 +137,101 @@ describe("toolView", () => {
 		// The verdict is the headline; the state it judged rides beside it.
 		expect(view?.summary).toBe("leak → 0.12");
 		expect(view?.hint).toBe("conf 0.40 · files (2) · $ npm test");
-		// The result's own header block is dropped; its caution keeps a tone.
+		// Expanded: the question the agent asked, its verdict with the confidence,
+		// the distribution behind it, and the caution it earned.
 		expect(view?.rows).toEqual([
-			{ text: "", tone: "muted" },
-			{ text: "leak (noul): 0.12 confidence 0.40", tone: "muted" },
+			{ text: "does it leak?", tone: "muted" },
+			{ text: "leak (noul) · 0.12 · confidence 0.40", tone: "base" },
 			{
 				text: '- "leak" came back 0.12 at confidence 0.40, which is a coin flip.',
 				tone: "warning",
 			},
+		]);
+	});
+
+	test("ask_jev expanded shows the question, the verdict, and the distribution", () => {
+		const view = toolView(
+			call(
+				"ask_jev",
+				{
+					questions: {
+						leak: {
+							type: "choice",
+							instructions: { question: "which core owns the file?", data: {} },
+							criteria: {
+								true: "the file is about authentication",
+								false: "the file is about something else",
+							},
+						},
+					},
+					paths: ["src/auth.ts"],
+				},
+				{
+					lines: [
+						"## Jev (provider=laya-local model=laya-system-one)",
+						"state s1 · 1.2k in",
+						"",
+						"leak (choice): auth confidence 0.71",
+						'- "leak" picked auth at confidence 0.71: the pick is plausible.',
+					],
+					isError: false,
+					details: {
+						answers: {
+							leak: {
+								choice: "auth",
+								confidence: 0.71,
+								probabilities: { auth: 0.71, environment: 0.21, other: 0.08 },
+							},
+						},
+					},
+					notes: [],
+				},
+			),
+		);
+		expect(view?.rows).toEqual([
+			{ text: "which core owns the file?", tone: "muted" },
+			{ text: "leak (choice) · auth · confidence 0.71", tone: "base" },
+			{ text: "auth 0.71 · environment 0.21 · other 0.08", tone: "muted" },
+			{ text: "true: the file is about authentication", tone: "muted" },
+			{ text: "false: the file is about something else", tone: "muted" },
+			{
+				text: '- "leak" picked auth at confidence 0.71: the pick is plausible.',
+				tone: "warning",
+			},
+		]);
+	});
+
+	test("ask_jev shows a score answer's levels", () => {
+		const view = toolView(
+			call(
+				"ask_jev",
+				{
+					questions: {
+						core: { type: "score", instructions: "how core is it?" },
+					},
+				},
+				{
+					lines: ["## Jev", "state s1"],
+					isError: false,
+					details: {
+						answers: {
+							core: {
+								score: 0.78,
+								confidence: 0.9,
+								legend: { 0: "auth", 1: "environment", 2: "other" },
+								probabilities: { auth: 0.1, environment: 0.2, other: 0.7 },
+							},
+						},
+					},
+					notes: [],
+				},
+			),
+		);
+		expect(view?.rows).toEqual([
+			{ text: "how core is it?", tone: "muted" },
+			{ text: "core (score) · 0.78 · confidence 0.90", tone: "base" },
+			{ text: "other 0.70 · environment 0.20 · auth 0.10", tone: "muted" },
+			{ text: "0 auth · 1 environment · 2 other", tone: "muted" },
 		]);
 	});
 
@@ -226,8 +313,12 @@ describe("toolView", () => {
 		// each with its tool's type glyph.
 		expect(view?.summary).toBe("2 calls · 1 failed · 3.0s");
 		expect(view?.alwaysRows).toEqual([
-			{ text: "→ src/a.ts (ok)", tone: "muted" },
-			{ text: "← src/b.ts · 1 edit (error)", tone: "error" },
+			{ id: "call:0", text: "→ read src/a.ts (ok)", tone: "muted" },
+			{
+				id: "call:1",
+				text: "← edit src/b.ts · 1 edit (error)",
+				tone: "error",
+			},
 		]);
 		expect(view?.hint).toBeUndefined();
 		// The script and its output are parts of their own, so either can be
@@ -261,8 +352,8 @@ describe("toolView", () => {
 		);
 		expect(view?.summary).toBe("2 calls · 1 failed");
 		expect(view?.alwaysRows).toEqual([
-			{ text: "✱ glob (ok)", tone: "muted" },
-			{ text: "→ read (error)", tone: "error" },
+			{ id: "call:0", text: "✱ glob (ok)", tone: "muted" },
+			{ id: "call:1", text: "→ read (error)", tone: "error" },
 		]);
 	});
 

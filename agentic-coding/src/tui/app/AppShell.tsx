@@ -6,6 +6,7 @@
 // `tui-feature` layer never imports the shell.
 
 import type { KeybindSection } from "@ui";
+import { loadConfig } from "../../workflow/effects.ts";
 import { type DashboardTab, App as FeatureShell } from "../otel/app/App.tsx";
 import type { LogStore } from "../otel/model/logStore.ts";
 import type { MetricStore } from "../otel/model/metricStore.ts";
@@ -32,6 +33,19 @@ export interface AppShellProps {
 	attachLabel?: string;
 }
 
+/**
+ * Workspace sidebar side from `ui.sidebar_side`; an unreadable configuration
+ * keeps the built-in left side (the shell's configuration diagnostics already
+ * reported the failure).
+ */
+function configuredSidebarSide(): "left" | "right" {
+	try {
+		return loadConfig().ui.sidebar_side === "right" ? "right" : "left";
+	} catch {
+		return "left";
+	}
+}
+
 /** The one renderer entry for the unified feature shell. */
 export function AppShell(props: AppShellProps) {
 	return (
@@ -47,6 +61,7 @@ export function AppShell(props: AppShellProps) {
 			environments={props.environments}
 			attached={props.attached}
 			attachLabel={props.attachLabel}
+			sidebarSide={configuredSidebarSide()}
 			renderEnvironments={
 				props.environments
 					? (

@@ -16,6 +16,13 @@ export function registerShellFeatureField(
 			shellFeature(value, ctx) {
 				ctx.require("shell.feature", String(value));
 			},
+			// The shell's panel model (workspace sidebar vs page body): the
+			// sidebar's own key layer is active only while the sidebar panel holds
+			// focus, so the page body keeps its keys while the sidebar advertises
+			// itself as the focused panel.
+			shellPanel(value, ctx) {
+				ctx.require("shell.panel", String(value));
+			},
 		}),
 	);
 }

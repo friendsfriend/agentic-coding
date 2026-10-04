@@ -21,6 +21,7 @@
 import type {
 	InputRenderable,
 	KeyEvent,
+	Renderable,
 	ScrollBoxRenderable,
 } from "@opentui/core";
 import {
@@ -55,7 +56,7 @@ import {
 	reuseAgentSessionBlocks,
 } from "../agent-session.ts";
 import { PromptPulse } from "./PromptPulse.tsx";
-import { toolView } from "./tool-views.ts";
+import { type ToolViewRow, toolView } from "./tool-views.ts";
 
 export interface AgentSessionViewProps {
 	readonly role: string;
@@ -258,7 +259,7 @@ function assistantParts(text: string): AssistantPart[] {
  * block — so code draws as a code block and prose as a streaming preview, and
  * neither waits to become visible.
  */
-function AssistantMarkdown(props: { text: string }) {
+function AssistantMarkdown(props: { text: string; live?: boolean }) {
 	// Lexing the message is the expensive part of a render, so it happens once
 	// per text (every streaming frame), not once per part.
 	const parts = createMemo(() => assistantParts(props.text));
@@ -269,7 +270,13 @@ function AssistantMarkdown(props: { text: string }) {
 					<MarkdownViewer
 						content={part.source}
 						fg={uiColors.textPrimary}
-						streaming={!part.code}
+						// Prose always takes the streaming preview: it draws the text
+						// concealed, so it never re-flashes its own markers. A fenced
+						// block draws its raw text instead, which re-adds the fence
+						// lines on every chunk — while the message is still arriving it
+						// keeps the text it already laid out instead, so the transcript
+						// holds its height and the reader is not jolted line by line.
+						streaming={part.code ? props.live === true : true}
 						// A code block's trailing blank line is not part of its text,
 						// so the following block would touch it.
 						{...(part.code && index() < parts().length - 1
@@ -289,6 +296,51 @@ interface TranscriptState {
 	readonly dividerId: string | undefined;
 }
 
+/** One row of a specialized tool view. A row with a detail of its own — a
+ * codemode call is a whole tool call — folds open into it, so one call can be
+ * read without expanding the rest. */
+function ToolRow(props: {
+	block: AgentSessionBlock;
+	row: ToolViewRow;
+	/** Which rows are folded open, and how to fold one. */
+	openRows: () => ReadonlySet<string>;
+	onToggleRow: (key: string) => void;
+}) {
+	const key = () => `${props.block.id}:${props.row.id ?? props.row.text}`;
+	const open = () => props.openRows().has(key());
+	const detail = () => props.row.detail ?? [];
+	return (
+		<box flexDirection="column">
+			<box
+				flexDirection="row"
+				{...(detail().length > 0
+					? { onMouseUp: () => props.onToggleRow(key()) }
+					: {})}
+			>
+				<Show when={detail().length > 0}>
+					<text width={2} flexShrink={0} fg={uiColors.textMuted}>
+						{open() ? "▾" : "▸"}
+					</text>
+				</Show>
+				<text fg={markerColor(props.row.tone)} wrapMode="none" truncate>
+					{props.row.text}
+				</text>
+			</box>
+			<Show when={open()}>
+				<box flexDirection="column" paddingLeft={2}>
+					<For each={detail()}>
+						{(row) => (
+							<text fg={markerColor(row.tone)} wrapMode="none" truncate>
+								{row.text}
+							</text>
+						)}
+					</For>
+				</box>
+			</Show>
+		</box>
+	);
+}
+
 /** One transcript entry. Assistant output is markdown with no status box;
  * thinking is collapsible; everything else is a status box with the same left
  * highlight the prompt uses. */
@@ -301,6 +353,10 @@ function Block(props: {
 	 * headers when a part is closed. */
 	foldedSections: () => ReadonlySet<string>;
 	onToggleSection: (key: string) => void;
+	/** The rows folded open, and how to fold one: a call inside a script opens
+	 * into its own view without expanding the rest. */
+	openRows: () => ReadonlySet<string>;
+	onToggleRow: (key: string) => void;
 }) {
 	const color = () => toneColor(props.block.tone);
 	if (props.block.kind === "summary")
@@ -333,7 +389,10 @@ function Block(props: {
 	if (props.block.kind === "assistant")
 		return (
 			<box paddingLeft={3} paddingRight={1} flexShrink={0}>
-				<AssistantMarkdown text={props.block.text} />
+				<AssistantMarkdown
+					text={props.block.text}
+					{...(props.block.live === true ? { live: true } : {})}
+				/>
 			</box>
 		);
 	if (props.block.kind === "reasoning")
@@ -409,9 +468,12 @@ function Block(props: {
 					<box paddingLeft={2} flexDirection="column">
 						<For each={tool.alwaysRows ?? []}>
 							{(row) => (
-								<text fg={markerColor(row.tone)} wrapMode="none" truncate>
-									{row.text}
-								</text>
+								<ToolRow
+									block={props.block}
+									row={row}
+									openRows={props.openRows}
+									onToggleRow={props.onToggleRow}
+								/>
 							)}
 						</For>
 					</box>
@@ -419,9 +481,12 @@ function Block(props: {
 						<box paddingLeft={2} flexDirection="column">
 							<For each={tool.rows ?? []}>
 								{(row) => (
-									<text fg={markerColor(row.tone)} wrapMode="none" truncate>
-										{row.text}
-									</text>
+									<ToolRow
+										block={props.block}
+										row={row}
+										openRows={props.openRows}
+										onToggleRow={props.onToggleRow}
+									/>
 								)}
 							</For>
 							{/* A long view splits into parts: the header stays, so
@@ -657,6 +722,29 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 	/** A load in flight: the frame that lays the older rows out moves the
 	 * viewport down by their height, so the reader keeps their place. */
 	let pendingLoad: { height: number; top: number } | undefined;
+	/**
+	 * The row the viewport was resting on before a fold, and where it was. A
+	 * fold grows or shrinks the content above the reader, and the scroll box
+	 * re-pins to the newest output on every content change: without following
+	 * this row, opening a block above the viewport moves everything the reader
+	 * was looking at.
+	 */
+	let pendingAnchor: { row: Renderable; screenY: number } | undefined;
+
+	/** The first row at or below the viewport's top edge. */
+	const anchorRow = (): Renderable | undefined => {
+		const box = scrollBox;
+		if (!box) return undefined;
+		const top = box.viewport.screenY;
+		const rows = box.content.getChildren()[0]?.getChildren() ?? [];
+		return rows.find((row) => row.screenY >= top) ?? rows.at(-1);
+	};
+
+	/** Keep the reader's place across a fold. */
+	const keepPlace = () => {
+		const row = anchorRow();
+		if (row) pendingAnchor = { row, screenY: row.screenY };
+	};
 	const loadOlder = () => {
 		const box = scrollBox;
 		if (!box || pendingLoad) return;
@@ -678,12 +766,28 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 	const [expandedBlocks, setExpandedBlocks] = createSignal<ReadonlySet<string>>(
 		new Set(),
 	);
+	// Which tool-view rows are folded open, by `${block.id}:${row.id}`: a
+	// codemode call row opens into that call's own view, and stays shut until
+	// asked for so the call list keeps its overview.
+	const [expandedRows, setExpandedRows] = createSignal<ReadonlySet<string>>(
+		new Set(),
+	);
+	const toggleRow = (key: string) => {
+		keepPlace();
+		setExpandedRows((current) => {
+			const next = new Set(current);
+			if (next.has(key)) next.delete(key);
+			else next.add(key);
+			return next;
+		});
+	};
 	// Which parts of an expanded tool view are folded away, by
 	// `${block.id}:${section.id}`. Empty means every part is open.
 	const [foldedSections, setFoldedSections] = createSignal<ReadonlySet<string>>(
 		new Set(),
 	);
 	const toggleSection = (key: string) => {
+		keepPlace();
 		setFoldedSections((current) => {
 			const next = new Set(current);
 			if (next.has(key)) next.delete(key);
@@ -692,6 +796,7 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		});
 	};
 	const toggleBlock = (id: string) => {
+		keepPlace();
 		setExpandedBlocks((current) => {
 			const next = new Set(current);
 			if (next.has(id)) next.delete(id);
@@ -701,6 +806,7 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 	};
 	/** Ctrl+T / Ctrl+O: expand every block of one kind, or collapse them all. */
 	const toggleBlocksOfKind = (kind: AgentSessionBlock["kind"]) => {
+		keepPlace();
 		const ids = props.blocks.flatMap((block) =>
 			block.kind === kind ? [block.id] : [],
 		);
@@ -842,7 +948,13 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		const renderer = useRenderer();
 		const onFrame = () => {
 			const box = scrollBox;
-			if (!box || !pendingLoad) return;
+			if (!box) return;
+			if (pendingAnchor) {
+				const moved = pendingAnchor.row.screenY - pendingAnchor.screenY;
+				pendingAnchor = undefined;
+				if (moved !== 0) box.scrollTop += moved;
+			}
+			if (!pendingLoad) return;
 			const grown = box.scrollHeight - pendingLoad.height;
 			if (grown <= 0) return;
 			box.scrollTop = pendingLoad.top + grown;
@@ -921,6 +1033,8 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 											onToggle={toggleBlock}
 											foldedSections={foldedSections}
 											onToggleSection={toggleSection}
+											openRows={expandedRows}
+											onToggleRow={toggleRow}
 										/>
 									</box>
 								)}

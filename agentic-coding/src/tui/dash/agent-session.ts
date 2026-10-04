@@ -69,6 +69,9 @@ export interface AgentSessionBlock {
 	readonly icon?: string;
 	/** A tool call still in flight: rendered in the warning color. */
 	readonly pending?: boolean;
+	/** The block is still being produced (an in-flight generation or a running
+	 * tool): its text grows with every watch frame. */
+	readonly live?: boolean;
 	/** Extra, dimmer lines under the block (tool output, error detail). */
 	readonly detail?: readonly string[];
 	/** Measured wall-clock duration, when the host recorded one: a thinking
@@ -406,6 +409,7 @@ function liveBlocks(
 		const detail = outputLines(slot.output);
 		blocks.push({
 			id: `live:tool:${index}`,
+			live: true,
 			kind: "tool",
 			text: name,
 			tone: "warning",
@@ -423,6 +427,7 @@ function liveBlocks(
 		)
 			blocks.push({
 				id: "live:retry",
+				live: true,
 				kind: "notice",
 				text: `Retrying: ${oneLine(generation.retry.error, 300)}`,
 				tone: "warning",
@@ -430,6 +435,7 @@ function liveBlocks(
 		else if (generation.deferred)
 			blocks.push({
 				id: "live:deferred",
+				live: true,
 				kind: "notice",
 				text: "Waiting on provider response",
 				tone: "muted",
@@ -442,6 +448,7 @@ function liveBlocks(
 			if (text)
 				blocks.push({
 					id: "live:generation",
+					live: true,
 					kind: "assistant",
 					text,
 					tone: "base",
@@ -453,6 +460,7 @@ function liveBlocks(
 		if (isRecord(compaction))
 			blocks.push({
 				id: `live:compaction:${index}`,
+				live: true,
 				kind: "compaction",
 				text: "Compacting context",
 				tone: "muted",
@@ -483,6 +491,7 @@ function blockKey(block: AgentSessionBlock): string {
 		block.text,
 		block.icon ?? "",
 		block.pending ? "pending" : "",
+		block.live ? "live" : "",
 		block.tool ?? "",
 		block.request ?? "",
 		block.durationMs ?? "",

@@ -11,7 +11,7 @@ import {
  * are about the rendered content (the tool payload has its own tests). */
 const blocksOf = (value: unknown) =>
 	buildAgentSessionView(value).map(
-		({ id: _id, toolCall: _toolCall, ...block }) => block,
+		({ id: _id, toolCall: _toolCall, live: _live, ...block }) => block,
 	);
 
 describe("buildAgentSessionView", () => {
@@ -42,7 +42,9 @@ describe("buildAgentSessionView", () => {
 			],
 		});
 		expect(
-			blocks.map(({ id: _id, toolCall: _toolCall, ...block }) => block),
+			blocks.map(
+				({ id: _id, toolCall: _toolCall, live: _live, ...block }) => block,
+			),
 		).toEqual([
 			{ kind: "user", text: "fix the parser", tone: "accent" },
 			{ kind: "reasoning", text: "weighing options", tone: "muted" },
@@ -304,6 +306,41 @@ describe("buildAgentSessionView", () => {
 		expect(blocks[0]?.detail).toEqual(lines);
 	});
 
+	test("marks the blocks that are still being produced as live", () => {
+		// The view renders a live block's fenced code without re-laying it out on
+		// every chunk, which is what keeps the transcript from jolting line by
+		// line while a message streams.
+		const live = buildAgentSessionView({
+			entries: [],
+			docs: {
+				"pi.live": {
+					generation: {
+						message: { content: [{ type: "text", text: "writing" }] },
+					},
+					tools: [{ name: "read", status: "running" }],
+				},
+			},
+		});
+		expect(live.map((block) => block.live)).toEqual([true, true]);
+
+		// A committed generation is not live.
+		const committed = buildAgentSessionView({
+			entries: [
+				{
+					kind: "pi.assistant",
+					model: [
+						{
+							role: "assistant",
+							stopReason: "stop",
+							content: [{ type: "text", text: "done" }],
+						},
+					],
+				},
+			],
+		});
+		expect(committed[0]?.live).toBeUndefined();
+	});
+
 	test("strips ANSI runs from tool output, with or without the ESC byte", () => {
 		const result = (text: string) =>
 			buildAgentSessionView({
@@ -370,7 +407,9 @@ describe("buildAgentSessionView", () => {
 			},
 		});
 		expect(
-			blocks.map(({ id: _id, toolCall: _toolCall, ...block }) => block),
+			blocks.map(
+				({ id: _id, toolCall: _toolCall, live: _live, ...block }) => block,
+			),
 		).toEqual([
 			{
 				kind: "tool",
@@ -402,7 +441,9 @@ describe("buildAgentSessionView", () => {
 			],
 		});
 		expect(
-			blocks.map(({ id: _id, toolCall: _toolCall, ...block }) => block),
+			blocks.map(
+				({ id: _id, toolCall: _toolCall, live: _live, ...block }) => block,
+			),
 		).toEqual([
 			{ kind: "error", text: "400: MissingSessionID", tone: "error" },
 		]);
@@ -418,7 +459,9 @@ describe("buildAgentSessionView", () => {
 			},
 		});
 		expect(
-			blocks.map(({ id: _id, toolCall: _toolCall, ...block }) => block),
+			blocks.map(
+				({ id: _id, toolCall: _toolCall, live: _live, ...block }) => block,
+			),
 		).toEqual([
 			{ kind: "notice", text: "Retrying: rate limited", tone: "warning" },
 		]);

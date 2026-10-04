@@ -82,12 +82,17 @@ function contentToText(content: unknown): string {
  * `execute` through a wrapper of the outer invocation's API, so validation and
  * the tool's environment are the same; `output`/`details`/`diagnostic` are
  * captured locally so a nested call never pollutes the codemode call's result. */
-/** One call a script made, as the host served it: the sandbox records the name,
- * status and duration but not the arguments, so the wrapper adds them. The
- * arguments are JSON, since the sandbox hands tools their JSON round trip. */
+/** One call a script made, as the host served it. The sandbox records the name,
+ * status and duration; the wrapper adds what the call asked for and what came
+ * back, so the dashboard can show a script's calls as the tool rows they are.
+ * The arguments are JSON, since the sandbox hands tools their JSON round trip. */
 interface RecordedCall {
 	readonly name: string;
 	readonly args: JsonValue;
+	/** The tool's own result text, as the script received it. */
+	output: string;
+	isError: boolean;
+	details?: JsonValue;
 }
 
 function nestedTool(
@@ -102,8 +107,15 @@ function nestedTool(
 		inputSchema: tool.parameters as CodemodeJsonSchema,
 		execute: async (rawArgs) => {
 			// The sandbox pushes its own record as the call starts, so the
-			// wrapper's records line up with `result.calls` by position.
-			recorded.push({ name: tool.name, args: rawArgs as JsonValue });
+			// wrapper's records line up with `result.calls` by position. The
+			// record is filled in as the call settles.
+			const record: RecordedCall = {
+				name: tool.name,
+				args: rawArgs as JsonValue,
+				output: "",
+				isError: false,
+			};
+			recorded.push(record);
 			let captured = "";
 			let details: unknown;
 			const nested: ToolExecutionApi = {
@@ -120,6 +132,9 @@ function nestedTool(
 			};
 			const result = await tool.execute(rawArgs as never, nested, context);
 			const text = result.content ? contentToText(result.content) : captured;
+			record.output = text;
+			record.isError = result.isError === true;
+			if (details !== undefined) record.details = details as JsonValue;
 			if (result.isError) throw new Error(text.trim() || `${tool.name} failed`);
 			return details !== undefined ? details : text;
 		},
@@ -162,7 +177,16 @@ function formatResult(
 				name: call.name,
 				status: call.status,
 				durationMs: call.durationMs,
-				...(recorded[index] ? { args: recorded[index]?.args ?? null } : {}),
+				...(recorded[index]
+					? {
+							args: recorded[index]?.args ?? null,
+							output: recorded[index]?.output ?? "",
+							isError: recorded[index]?.isError === true,
+							...(recorded[index]?.details === undefined
+								? {}
+								: { details: recorded[index]?.details }),
+						}
+					: {}),
 			})),
 		},
 	};

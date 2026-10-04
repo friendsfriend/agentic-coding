@@ -15,6 +15,7 @@ import {
 } from "../src/multiplexer/factory.ts";
 import { Herdr } from "../src/multiplexer/herdr/cli.ts";
 import { HerdrMultiplexer } from "../src/multiplexer/herdr/index.ts";
+import { IntegratedMultiplexer } from "../src/multiplexer/integrated/index.ts";
 import {
 	LUVUS_WORKSPACE_NAME_MAX,
 	LuvusMultiplexer,
@@ -1320,7 +1321,7 @@ describe("runtime selection and detached drain environment", () => {
 				socketPath: "/definitely/missing.sock",
 			}),
 		).toThrow(/selected multiplexer 'luvus' is unavailable/);
-		expect(MULTIPLEXER_IDS).toEqual(["herdr", "luvus"]);
+		expect(MULTIPLEXER_IDS).toEqual(["herdr", "luvus", "integrated"]);
 	});
 
 	test("an unsupported configured selector fails configuration load", async () => {
@@ -1449,5 +1450,69 @@ describe("paneRun shell quoting", () => {
 			openFindingInEditorAsync(state, { path: "../outside.ts" }),
 		).rejects.toThrow(/inside the worktree/);
 		setMultiplexerPortForTests(undefined);
+	});
+});
+
+describe("integrated selection", () => {
+	test("constructs without requiring an executable or socket", () => {
+		expect(
+			resolveMultiplexerSelection({
+				env: { AGENTIC_CODING_MULTIPLEXER: "integrated" },
+			}),
+		).toBe("integrated");
+		const port = createMultiplexerPort("integrated");
+		expect(port.id).toBe("integrated");
+		expect(port.environment().envMarker).toBe("AGENTIC_INTEGRATED");
+	});
+
+	test("workspace identity is virtual and tabs/panes/agents do not exist", async () => {
+		const port = new IntegratedMultiplexer();
+		const created = await run(
+			port.workspaceCreate({ cwd: "/repo", label: "wf-1" }),
+		);
+		expect(created.workspaceId).toBe("integrated:wf-1");
+		expect((await run(port.workspaceGet("wf-1")))?.workspaceId).toBe(
+			"integrated:wf-1",
+		);
+		expect((await run(port.workspaceGet("integrated:wf-1")))?.status).toBe(
+			"open",
+		);
+		expect(await run(port.workspaceList())).toEqual([]);
+		expect(await run(port.tabList("integrated:wf-1"))).toEqual([]);
+		expect(await run(port.paneList())).toEqual([]);
+		expect(await run(port.paneGet("p1"))).toBeUndefined();
+		expect(await run(port.agentList())).toEqual([]);
+		expect(await run(port.agentGet("a1"))).toBeUndefined();
+		expect(await run(port.notify({ title: "t", body: "b" }))).toBe("disabled");
+		await run(port.workspaceFocus("integrated:wf-1"));
+		await run(port.workspaceClose("integrated:wf-1"));
+	});
+
+	test("pane-hosted operations fail with one bounded diagnostic naming pi-durable", async () => {
+		const port = new IntegratedMultiplexer();
+		const started = await Effect.runPromise(
+			Effect.either(
+				port.agentStart({
+					kind: "pi",
+					name: "agent",
+					paneId: "p1",
+					cwd: "/repo",
+					runId: "run-1",
+					runtimeArgs: [],
+					environment: {},
+					prompt: "hello",
+				}),
+			),
+		);
+		expect(Either.isLeft(started)).toBe(true);
+		if (Either.isLeft(started)) {
+			expect(started.left.kind).toBe("unavailable");
+			expect(started.left.runtime).toBe("integrated");
+			expect(started.left.message).toMatch(/pi-durable/);
+		}
+		const split = await Effect.runPromise(
+			Effect.either(port.paneSplit({ target: "p1", direction: "right" })),
+		);
+		expect(Either.isLeft(split)).toBe(true);
 	});
 });

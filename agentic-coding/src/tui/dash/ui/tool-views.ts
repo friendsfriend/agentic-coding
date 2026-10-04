@@ -14,10 +14,15 @@ import {
 	toolIcon,
 } from "../agent-session.ts";
 
-/** One row of an expanded tool view, with the tone it is drawn in. */
+/** One row of an expanded tool view, with the tone it is drawn in. A row may
+ * carry a detail of its own — a codemode call is a whole tool call, so its row
+ * folds open into that call's own view. */
 export interface ToolViewRow {
+	/** Stable identity for a row that folds, unique within its block. */
+	readonly id?: string;
 	readonly text: string;
 	readonly tone: "base" | "muted" | "error" | "warning" | "success" | "info";
+	readonly detail?: readonly ToolViewRow[];
 }
 
 /** One independently collapsible part of an expanded tool view. */
@@ -179,9 +184,38 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** The ids an ask_jev call asked about: the question block's own keys, whether
- * the agent passed the record or its JSON string. */
-function jevQuestions(value: unknown): string[] {
+/** One question an ask_jev call asked: the agent's own text for it, and the
+ * criteria a boolean or choice answer was judged against. */
+interface JevQuestion {
+	readonly id: string;
+	readonly type?: string;
+	readonly text?: string;
+	readonly criteria?: readonly string[];
+}
+
+/** Collapse whitespace and bound one line, so a question's own text cannot push
+ * the rest of the view around. */
+function oneLine(value: string, max = 300): string {
+	const text = value.replace(/\s+/g, " ").trim();
+	return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+/** The question text: the instructions string, or the question field of the
+ * object form the tool also accepts. */
+function questionText(value: unknown): string | undefined {
+	if (typeof value === "string") return oneLine(value);
+	if (!isRecord(value)) return undefined;
+	for (const key of ["question", "instructions", "text"]) {
+		const text = value[key];
+		if (typeof text === "string" && text.trim().length > 0)
+			return oneLine(text);
+	}
+	return undefined;
+}
+
+/** The questions an ask_jev call asked, in the order the agent wrote them,
+ * whether it passed the record or its JSON string. */
+function jevQuestions(value: unknown): JevQuestion[] {
 	let parsed: unknown = value;
 	if (typeof value === "string") {
 		try {
@@ -190,7 +224,24 @@ function jevQuestions(value: unknown): string[] {
 			return [];
 		}
 	}
-	return isRecord(parsed) ? Object.keys(parsed) : [];
+	if (!isRecord(parsed)) return [];
+	return Object.entries(parsed).map(([id, entry]) => {
+		const question = isRecord(entry) ? entry : {};
+		const criteria = isRecord(question.criteria)
+			? Object.entries(question.criteria).flatMap(([key, description]) =>
+					typeof description === "string" && description.trim().length > 0
+						? [`${key}: ${oneLine(description, 200)}`]
+						: [],
+				)
+			: [];
+		const text = questionText(question.instructions);
+		return {
+			id,
+			...(typeof question.type === "string" ? { type: question.type } : {}),
+			...(text === undefined ? {} : { text }),
+			...(criteria.length > 0 ? { criteria } : {}),
+		};
+	});
 }
 
 /** One answer an ask_jev call came back with, as its result details record it:
@@ -200,6 +251,10 @@ interface JevAnswer {
 	readonly id: string;
 	readonly value: string;
 	readonly confidence?: number;
+	/** The classifier's distribution over the question's labels, when it sent one. */
+	readonly probabilities?: readonly (readonly [string, number])[];
+	/** A score answer's levels, index to label. */
+	readonly legend?: readonly (readonly [string, string])[];
 }
 
 function jevAnswers(
@@ -211,6 +266,19 @@ function jevAnswers(
 		const record = isRecord(answer) ? answer : {};
 		const confidence =
 			typeof record.confidence === "number" ? record.confidence : undefined;
+		const probabilities = isRecord(record.probabilities)
+			? Object.entries(record.probabilities)
+					.filter(
+						(entry): entry is [string, number] => typeof entry[1] === "number",
+					)
+					.sort((a, b) => b[1] - a[1])
+					.slice(0, 6)
+			: [];
+		const legend = isRecord(record.legend)
+			? Object.entries(record.legend).flatMap(([index, label]) =>
+					typeof label === "string" ? [[index, label] as const] : [],
+				)
+			: [];
 		const value =
 			typeof record.noul === "number"
 				? record.noul.toFixed(2)
@@ -219,7 +287,13 @@ function jevAnswers(
 					: typeof record.score === "number"
 						? record.score.toFixed(2)
 						: "no answer";
-		return { id, value, ...(confidence === undefined ? {} : { confidence }) };
+		return {
+			id,
+			value,
+			...(confidence === undefined ? {} : { confidence }),
+			...(probabilities.length > 1 ? { probabilities } : {}),
+			...(legend.length > 0 ? { legend } : {}),
+		};
 	});
 }
 
@@ -236,6 +310,43 @@ function jevSources(
 	if (command) parts.push(`$ ${command}`);
 	if (parts.length === 0 && args.state !== undefined) parts.push("your state");
 	return parts.length > 0 ? parts.join(" · ") : undefined;
+}
+
+/** One answered question as its own rows: what was asked, the verdict with its
+ * confidence, the distribution behind it, and the levels a score landed on. */
+function jevQuestionRows(
+	question: JevQuestion | undefined,
+	answer: JevAnswer,
+): ToolViewRow[] {
+	const id = answer.id;
+	const type = question?.type ? ` (${question.type})` : "";
+	const rows: ToolViewRow[] = [];
+	if (question?.text) rows.push({ text: question.text, tone: "muted" });
+	rows.push({
+		text: `${id}${type} · ${answer.value}${
+			answer.confidence === undefined
+				? ""
+				: ` · confidence ${answer.confidence.toFixed(2)}`
+		}`,
+		tone: "base",
+	});
+	if (answer.probabilities)
+		rows.push({
+			text: answer.probabilities
+				.map(([label, value]) => `${label} ${value.toFixed(2)}`)
+				.join(" · "),
+			tone: "muted",
+		});
+	if (answer.legend)
+		rows.push({
+			text: answer.legend
+				.map(([index, label]) => `${index} ${label}`)
+				.join(" · "),
+			tone: "muted",
+		});
+	for (const criterion of question?.criteria ?? [])
+		rows.push({ text: criterion, tone: "muted" });
+	return rows;
 }
 
 /** The answer body of an ask_jev result, without its own header block; its
@@ -267,16 +378,32 @@ function jevView(call: AgentSessionToolCall): ToolView {
 	]
 		.filter((part): part is string => part !== undefined)
 		.join(" · ");
+	// Expanded, each question reads as itself: what the agent asked, the verdict
+	// with its confidence, and the distribution the classifier put behind it. A
+	// call with no structured answers (a failed one) keeps its own text.
+	const rows: ToolViewRow[] = [];
+	for (const answer of answers) {
+		rows.push(
+			...jevQuestionRows(
+				questions.find((question) => question.id === answer.id),
+				answer,
+			),
+		);
+	}
+	for (const warning of jevRows(call.result?.lines ?? []).filter((row) =>
+		row.text.startsWith("- "),
+	))
+		rows.push(warning);
 	return {
 		icon: "◆",
 		summary:
 			answers.length > 0
 				? answers.map((answer) => `${answer.id} → ${answer.value}`).join(" · ")
 				: questions.length > 0
-					? questions.join(", ")
+					? questions.map((question) => question.id).join(", ")
 					: "judgment",
 		...(hint.length > 0 ? { hint } : {}),
-		rows: jevRows(call.result?.lines ?? []),
+		rows: rows.length > 0 ? rows : jevRows(call.result?.lines ?? []),
 	};
 }
 
@@ -287,6 +414,10 @@ interface CodemodeCall {
 	readonly status: string;
 	readonly args?: Readonly<Record<string, unknown>>;
 	readonly durationMs?: number;
+	/** What the call returned, as the script received it. */
+	readonly output?: string;
+	readonly isError?: boolean;
+	readonly details?: Readonly<Record<string, unknown>>;
 }
 
 /** The calls a codemode result reports. The host's structured `details.calls`
@@ -308,6 +439,9 @@ function codemodeCalls(
 					...(typeof entry.durationMs === "number"
 						? { durationMs: entry.durationMs }
 						: {}),
+					...(typeof entry.output === "string" ? { output: entry.output } : {}),
+					...(entry.isError === true ? { isError: true } : {}),
+					...(isRecord(entry.details) ? { details: entry.details } : {}),
 				},
 			];
 		});
@@ -340,13 +474,12 @@ function codemodeCallText(call: CodemodeCall): string {
 		? toolView({ name: call.name, args: call.args })
 		: undefined;
 	const primary = call.args ? primaryArg(call.args) : undefined;
-	const subject = view
-		? view.summary
-		: primary
-			? `${call.name} ${primary}`
-			: call.name;
+	// The name is prefixed once, so a generic tool's subject is its argument.
+	const subject = view ? view.summary : (primary ?? "");
 	const hint = view?.hint ? ` · ${view.hint}` : "";
-	return `${view?.icon ?? toolIcon(call.name)} ${subject}${hint} (${call.status})`;
+	// The name stays on the line: the glyph alone does not say which tool ran.
+	const named = subject.length > 0 ? `${call.name} ${subject}` : call.name;
+	return `${view?.icon ?? toolIcon(call.name)} ${named}${hint} (${call.status})`;
 }
 
 /** The first line of a script that says something: its own `// @options:` line
@@ -368,10 +501,44 @@ function codemodeScriptRows(code: string): ToolViewRow[] {
  * error tone. This is the collapsed view's whole content — the shape of the
  * work — and stays visible once expanded. */
 function codemodeCallRows(calls: readonly CodemodeCall[]): ToolViewRow[] {
-	return calls.map((entry) => ({
-		text: codemodeCallText(entry),
-		tone: entry.status === "ok" ? ("muted" as const) : ("error" as const),
-	}));
+	return calls.map((entry, index) => {
+		const detail = codemodeCallDetail(entry);
+		return {
+			id: `call:${index}`,
+			text: codemodeCallText(entry),
+			tone: entry.status === "ok" ? ("muted" as const) : ("error" as const),
+			...(detail.length > 0 ? { detail } : {}),
+		};
+	});
+}
+
+/** The result a call reported, as the projection's own result shape, so a call
+ * row can render through the same view its standalone transcript row would. */
+function codemodeCallResult(
+	call: CodemodeCall,
+): AgentSessionToolCall["result"] | undefined {
+	if (call.output === undefined && call.details === undefined) return undefined;
+	return {
+		lines: (call.output ?? "")
+			.split("\n")
+			.map((line) => line.replace(/\s+$/g, ""))
+			.filter((line) => line.length > 0),
+		isError: call.isError === true,
+		...(call.details === undefined ? {} : { details: call.details }),
+		notes: [],
+	};
+}
+
+/** A call's own view, as the rows it would show in the transcript: the answers
+ * a judgment came back with, the diff an edit produced, the text a read read. */
+function codemodeCallDetail(call: CodemodeCall): readonly ToolViewRow[] {
+	const args = call.args ?? {};
+	const view = toolView({
+		name: call.name,
+		args,
+		...(codemodeCallResult(call) ? { result: codemodeCallResult(call) } : {}),
+	});
+	return view?.rows ?? [];
 }
 
 /** `codemode`: the calls a script made, one line each, and — expanded — the
