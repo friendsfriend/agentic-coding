@@ -281,6 +281,29 @@ describe("buildAgentSessionView", () => {
 		});
 	});
 
+	test("keeps every line of a tool result for the expanded view", () => {
+		// The harness already bounds what a tool may keep; the transcript must
+		// not cut it again, or the expanded view hides what is being analyzed.
+		const lines = Array.from({ length: 30 }, (_, index) => `line ${index}`);
+		const blocks = buildAgentSessionView({
+			entries: [
+				{
+					kind: "pi.tool-result",
+					model: [
+						{
+							role: "toolResult",
+							toolName: "read",
+							content: lines.join("\n"),
+							isError: false,
+						},
+					],
+				},
+			],
+		});
+		expect(blocks[0]?.toolCall?.result?.lines).toEqual(lines);
+		expect(blocks[0]?.detail).toEqual(lines);
+	});
+
 	test("strips ANSI runs from tool output, with or without the ESC byte", () => {
 		const result = (text: string) =>
 			buildAgentSessionView({

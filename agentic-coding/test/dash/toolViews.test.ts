@@ -179,7 +179,7 @@ describe("toolView", () => {
 		expect(view?.rows?.[0]?.text).toContain("nothing to judge");
 	});
 
-	test("codemode lists one line per call, then the script and its output", () => {
+	test("codemode lists one line per call, with what each call did", () => {
 		const code = [
 			'const hits = await tools.glob({ pattern: "*.ts" });',
 			'const files = hits.split("\\n").slice(0, 3);',
@@ -193,21 +193,43 @@ describe("toolView", () => {
 					lines: [
 						"Script completed",
 						'return: ["a.ts","b.ts"]',
-						"calls: glob (ok), read (ok), read (error)",
+						"calls: glob (ok), read (error)",
 					],
 					isError: false,
+					// The host's structured records carry each call's arguments, so
+					// the lines name what the call actually did.
+					details: {
+						calls: [
+							{
+								name: "read",
+								status: "ok",
+								args: { path: "src/a.ts" },
+								durationMs: 1200,
+							},
+							{
+								name: "edit",
+								status: "error",
+								args: {
+									path: "src/b.ts",
+									edits: [{ oldText: "a", newText: "b" }],
+								},
+								durationMs: 1800,
+							},
+						],
+					},
 					notes: [],
 				},
 			),
 		);
 		expect(view?.icon).toBe("λ");
-		// The call list is the collapsed view, and the first call is the summary.
-		expect(view?.summary).toBe("glob (ok)");
+		// The row is the call's metadata; every call gets its own line below it,
+		// each with its tool's type glyph.
+		expect(view?.summary).toBe("2 calls · 1 failed · 3.0s");
 		expect(view?.alwaysRows).toEqual([
-			{ text: "read (ok)", tone: "muted" },
-			{ text: "read (error)", tone: "error" },
+			{ text: "→ src/a.ts (ok)", tone: "muted" },
+			{ text: "← src/b.ts · 1 edit (error)", tone: "error" },
 		]);
-		expect(view?.hint).toBe("3 calls · 1 failed");
+		expect(view?.hint).toBeUndefined();
 		// The script and its output are parts of their own, so either can be
 		// folded away while the call list stays in view.
 		expect(view?.sections?.map((section) => section.id)).toEqual([
@@ -221,7 +243,26 @@ describe("toolView", () => {
 		expect(view?.sections?.[1]?.rows).toEqual([
 			{ text: "Script completed", tone: "muted" },
 			{ text: 'return: ["a.ts","b.ts"]', tone: "muted" },
-			{ text: "calls: glob (ok), read (ok), read (error)", tone: "muted" },
+			{ text: "calls: glob (ok), read (error)", tone: "muted" },
+		]);
+	});
+
+	test("codemode falls back to the result's own call line", () => {
+		const view = toolView(
+			call(
+				"codemode",
+				{ code: "return 1;" },
+				{
+					lines: ["Script completed", "calls: glob (ok), read (error)"],
+					isError: false,
+					notes: [],
+				},
+			),
+		);
+		expect(view?.summary).toBe("2 calls · 1 failed");
+		expect(view?.alwaysRows).toEqual([
+			{ text: "✱ glob (ok)", tone: "muted" },
+			{ text: "→ read (error)", tone: "error" },
 		]);
 	});
 
@@ -252,48 +293,60 @@ describe("toolView", () => {
 				},
 			),
 		);
-		expect(failed?.summary).toBe('throw new Error("boom");');
-		expect(failed?.hint).toBe("failed");
+		expect(failed?.summary).toBe("script failed");
+		expect(failed?.hint).toBeUndefined();
 		expect(
 			failed?.sections?.[1]?.rows.every((row) => row.tone === "error"),
 		).toBe(true);
 	});
 
-	test("codemode bounds a long script and a long call list", () => {
+	test("expanded views keep every line the tool produced", () => {
+		// A long script and a long call list are shown whole: the expanded view
+		// is where a reader goes to analyze the call.
+		const script = Array.from(
+			{ length: 20 },
+			(_, index) => `line ${index}`,
+		).join("\n");
+		const calls = Array.from(
+			{ length: 9 },
+			(_, index) => `tool${index} (ok)`,
+		).join(", ");
 		const view = toolView(
-			call("codemode", {
-				code: Array.from({ length: 20 }, (_, index) => `line ${index}`).join(
-					"\n",
-				),
-				result: undefined,
-			}),
-		);
-		expect(view?.sections?.[0]?.rows.length).toBe(13);
-		expect(view?.sections?.[0]?.rows.at(-1)).toEqual({
-			text: "… 8 more lines",
-			tone: "muted",
-		});
-
-		const many = toolView(
 			call(
 				"codemode",
-				{ code: "return 1;" },
+				{ code: script },
 				{
-					lines: [
-						"Script completed",
-						`calls: ${Array.from({ length: 9 }, (_, index) => `tool${index} (ok)`).join(", ")}`,
-					],
+					lines: ["Script completed", `calls: ${calls}`],
 					isError: false,
 					notes: [],
 				},
 			),
 		);
-		// Six calls listed under the summary line, the rest counted.
-		expect(many?.alwaysRows?.length).toBe(7);
-		expect(many?.alwaysRows?.at(-1)).toEqual({
-			text: "… 2 more calls",
-			tone: "muted",
-		});
+		expect(view?.sections?.[0]?.rows.length).toBe(20);
+		expect(view?.alwaysRows?.length).toBe(9);
+		expect(view?.alwaysRows?.at(-1)?.text).toBe("• tool8 (ok)");
+
+		// The same for a write's content and a diff.
+		const content = Array.from(
+			{ length: 60 },
+			(_, index) => `line ${index}`,
+		).join("\n");
+		expect(
+			toolView(call("write", { path: "a.ts", content }))?.rows?.length,
+		).toBe(60);
+		const diff = Array.from(
+			{ length: 50 },
+			(_, index) => `+added ${index}`,
+		).join("\n");
+		expect(
+			toolView(
+				call(
+					"edit",
+					{ path: "a.ts", edits: [{ oldText: "a", newText: "b" }] },
+					{ lines: ["ok"], isError: false, details: { diff }, notes: [] },
+				),
+			)?.rows?.length,
+		).toBe(50);
 	});
 
 	test("keeps the generic row for a tool without a view", () => {

@@ -8,7 +8,7 @@
 // `codemode` extension uses), not on pi-coding-agent's extension: that one is
 // written against pi-coding-agent's own extension API, which pi-durable does
 // not share.
-import type { Context } from "@earendil-works/chord";
+import type { Context, JsonValue } from "@earendil-works/chord";
 import { Type } from "@earendil-works/pi-ai";
 import {
 	type CodemodeJsonSchema,
@@ -82,16 +82,28 @@ function contentToText(content: unknown): string {
  * `execute` through a wrapper of the outer invocation's API, so validation and
  * the tool's environment are the same; `output`/`details`/`diagnostic` are
  * captured locally so a nested call never pollutes the codemode call's result. */
+/** One call a script made, as the host served it: the sandbox records the name,
+ * status and duration but not the arguments, so the wrapper adds them. The
+ * arguments are JSON, since the sandbox hands tools their JSON round trip. */
+interface RecordedCall {
+	readonly name: string;
+	readonly args: JsonValue;
+}
+
 function nestedTool(
 	tool: ToolRegistration,
 	api: ToolExecutionApi,
 	context: Context,
+	recorded: RecordedCall[],
 ): CodemodeTool {
 	return {
 		name: tool.name,
 		...(tool.description ? { description: tool.description } : {}),
 		inputSchema: tool.parameters as CodemodeJsonSchema,
 		execute: async (rawArgs) => {
+			// The sandbox pushes its own record as the call starts, so the
+			// wrapper's records line up with `result.calls` by position.
+			recorded.push({ name: tool.name, args: rawArgs as JsonValue });
 			let captured = "";
 			let details: unknown;
 			const nested: ToolExecutionApi = {
@@ -122,8 +134,13 @@ function textResult(text: string, isError = false): ToolExecutionResult {
 }
 
 /** The model-facing result: the script's output items, its return value, and
- * the calls it made, headed by whether it completed. */
-function formatResult(result: CodemodeResult): ToolExecutionResult {
+ * the calls it made, headed by whether it completed. The calls also travel as
+ * structured details — with the arguments the sandbox does not record — so the
+ * dashboard can show what each call actually did. */
+function formatResult(
+	result: CodemodeResult,
+	recorded: readonly RecordedCall[],
+): ToolExecutionResult {
 	const output = result.output.flatMap((item) =>
 		item.type === "text" ? [item.text] : [],
 	);
@@ -138,7 +155,17 @@ function formatResult(result: CodemodeResult): ToolExecutionResult {
 				.map((call) => `${call.name} (${call.status})`)
 				.join(", ")}`,
 		);
-	return textResult(lines.join("\n"), !result.ok);
+	return {
+		...textResult(lines.join("\n"), !result.ok),
+		details: {
+			calls: result.calls.map((call, index) => ({
+				name: call.name,
+				status: call.status,
+				durationMs: call.durationMs,
+				...(recorded[index] ? { args: recorded[index]?.args ?? null } : {}),
+			})),
+		},
+	};
 }
 
 /** The durable `codemode` tool. Enablement is the host's decision (global pi
@@ -165,6 +192,7 @@ export function createDurableCodemode(): DurableCodemode {
 			const callable = offered.filter(
 				(entry) => entry.name !== CODEMODE_TOOL_NAME,
 			);
+			const recorded: RecordedCall[] = [];
 			let parsed: ReturnType<typeof parseCodemodeSource>;
 			try {
 				parsed = parseCodemodeSource(args.code);
@@ -178,7 +206,9 @@ export function createDurableCodemode(): DurableCodemode {
 			let sandbox: CodemodeSandbox;
 			try {
 				sandbox = new CodemodeSandbox({
-					tools: callable.map((entry) => nestedTool(entry, api, context)),
+					tools: callable.map((entry) =>
+						nestedTool(entry, api, context, recorded),
+					),
 					wasm: await loadQuickJSWasm(codemodeWasmPath()),
 					timeoutMs: DEFAULT_TIMEOUT_MS,
 					...(workerUrl ? { workerUrl } : {}),
@@ -213,7 +243,7 @@ export function createDurableCodemode(): DurableCodemode {
 				for (const deleted of result.storeWrites.delete) delete next[deleted];
 				stores.set(key, next);
 			}
-			return formatResult(result);
+			return formatResult(result, recorded);
 		},
 	});
 

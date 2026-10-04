@@ -116,15 +116,25 @@ function stripHarness(value: string): string {
 		.trim();
 }
 
-/** Bound and split output into display lines, newest kept. */
-function outputLines(value: unknown, max = 12): string[] {
+/** Split tool output into display lines, newest kept.
+ *
+ * The harness already bounds what a tool may keep (2000 lines / 50KB, with a
+ * diagnostic when it cut something), so the transcript keeps all of it: the
+ * expanded tool views are where a result gets read, and a second cut here would
+ * hide the part being analyzed. `MAX_OUTPUT_LINES` is only a memory guard for a
+ * host that keeps more than the harness does. */
+const MAX_OUTPUT_LINES = 2000;
+
+function outputLines(value: unknown): string[] {
 	if (typeof value !== "string") return [];
 	const lines = stripHarness(stripAnsi(value))
 		.replace(/\r\n?/g, "\n")
 		.split("\n")
 		.map((line) => line.replace(/\s+$/g, ""))
 		.filter((line) => line.length > 0);
-	return lines.length > max ? lines.slice(lines.length - max) : lines;
+	return lines.length > MAX_OUTPUT_LINES
+		? lines.slice(lines.length - MAX_OUTPUT_LINES)
+		: lines;
 }
 
 /** Keep a block's text with its line structure (assistant output is rendered
@@ -171,7 +181,9 @@ const TOOL_ICONS: Record<string, string> = {
 	websearch: "◈",
 	codemode: "{}",
 };
-function toolIcon(name: string): string {
+/** The glyph that marks a tool's type in the transcript (shared with the tool
+ * views' call lines, so one tool looks the same wherever it appears). */
+export function toolIcon(name: string): string {
 	return TOOL_ICONS[name] ?? "•";
 }
 
@@ -391,7 +403,7 @@ function liveBlocks(
 	for (const [index, slot] of tools.entries()) {
 		if (!isRecord(slot) || slot.status === "done") continue;
 		const name = typeof slot.name === "string" ? slot.name : "tool";
-		const detail = outputLines(slot.output, 8);
+		const detail = outputLines(slot.output);
 		blocks.push({
 			id: `live:tool:${index}`,
 			kind: "tool",

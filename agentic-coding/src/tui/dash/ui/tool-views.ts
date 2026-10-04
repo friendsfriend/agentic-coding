@@ -8,7 +8,11 @@
 // Presentation only and pure: a block's structured tool data in, rows out. A
 // tool without a specialized view here (the dialogue tools, anything a future
 // host adds) keeps the generic row.
-import type { AgentSessionToolCall } from "../agent-session.ts";
+import {
+	type AgentSessionToolCall,
+	formatDuration,
+	toolIcon,
+} from "../agent-session.ts";
 
 /** One row of an expanded tool view, with the tone it is drawn in. */
 export interface ToolViewRow {
@@ -37,14 +41,9 @@ export interface ToolView {
 	readonly sections?: readonly ToolViewSection[];
 }
 
-/** Expanded rows kept per tool view: enough for a diff or a command's output
- * without letting one call own the transcript. */
-const MAX_VIEW_ROWS = 40;
-
-/** Script lines shown in a codemode view before the output would be pushed off
- * screen, and calls listed before the list itself becomes the transcript. */
-const MAX_SCRIPT_ROWS = 12;
-const MAX_CALL_ROWS = 6;
+// Expanded views show everything the tool kept. The harness bounds a result
+// (2000 lines / 50KB) and reports what it cut, so a second cut here would hide
+// exactly the output a reader expanded the row to analyze.
 
 function stringArg(
 	args: Readonly<Record<string, unknown>>,
@@ -52,6 +51,16 @@ function stringArg(
 ): string | undefined {
 	const value = args[key];
 	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function numberArg(
+	args: Readonly<Record<string, unknown>>,
+	key: string,
+): number | undefined {
+	const value = args[key];
+	return typeof value === "number" && Number.isFinite(value)
+		? value
+		: undefined;
 }
 
 /** The read tool's truncation diagnostic, as `40-120 of 512` or `+512 more`. */
@@ -80,26 +89,34 @@ function diffCounts(diff: string): string | undefined {
 /** A diff body as rows: additions and removals in their own tone, hunk headers
  * dim, context plain. */
 function diffRows(diff: string): ToolViewRow[] {
-	return diff
-		.split("\n")
-		.slice(0, MAX_VIEW_ROWS)
-		.map((line): ToolViewRow => {
-			if (line.startsWith("+")) return { text: line, tone: "success" };
-			if (line.startsWith("-")) return { text: line, tone: "error" };
-			if (line.startsWith("@@")) return { text: line, tone: "info" };
-			return { text: line, tone: "muted" };
-		});
+	return diff.split("\n").map((line): ToolViewRow => {
+		if (line.startsWith("+")) return { text: line, tone: "success" };
+		if (line.startsWith("-")) return { text: line, tone: "error" };
+		if (line.startsWith("@@")) return { text: line, tone: "info" };
+		return { text: line, tone: "muted" };
+	});
 }
 
-/** `read`: the file, the range that came back, and the text itself. */
+/** `read`: the file, the range that came back, and the text itself. Without a
+ * result (a call inside a codemode script) the arguments still say the range. */
 function readView(call: AgentSessionToolCall): ToolView {
 	const path = stringArg(call.args, "path") ?? "file";
 	const lines = call.result?.lines ?? [];
 	const range = readRange(call.result?.notes ?? []);
+	const limit = numberArg(call.args, "limit");
+	const offset = numberArg(call.args, "offset");
 	return {
 		icon: "→",
 		summary: path,
-		hint: range ?? (lines.length > 0 ? `${lines.length} lines` : undefined),
+		hint:
+			range ??
+			(lines.length > 0
+				? `${lines.length} lines`
+				: limit !== undefined
+					? `${limit} lines`
+					: offset !== undefined
+						? `from ${offset}`
+						: undefined),
 		rows: lines.map((text) => ({ text, tone: "muted" as const })),
 	};
 }
@@ -130,10 +147,7 @@ function writeView(call: AgentSessionToolCall): ToolView {
 		icon: "←",
 		summary: path,
 		...(lines.length > 0 ? { hint: `${lines.length} lines` } : {}),
-		rows: lines.slice(0, MAX_VIEW_ROWS).map((text) => ({
-			text,
-			tone: "muted" as const,
-		})),
+		rows: lines.map((text) => ({ text, tone: "muted" as const })),
 	};
 }
 
@@ -266,15 +280,38 @@ function jevView(call: AgentSessionToolCall): ToolView {
 	};
 }
 
-/** One tool call a codemode script made, as its result line records it. */
+/** One tool call a codemode script made: its name, how it ended, and — when the
+ * host sent the structured record — what it asked for. */
 interface CodemodeCall {
 	readonly name: string;
 	readonly status: string;
+	readonly args?: Readonly<Record<string, unknown>>;
+	readonly durationMs?: number;
 }
 
-/** The calls a codemode result reports: its trailing `calls: a (ok), b (error)`
- * line, in the order the script made them. */
-function codemodeCalls(lines: readonly string[]): CodemodeCall[] {
+/** The calls a codemode result reports. The host's structured `details.calls`
+ * carry each call's arguments; the result's own `calls: a (ok), b (error)` line
+ * is the fallback for a host that predates them. */
+function codemodeCalls(
+	details: Readonly<Record<string, unknown>> | undefined,
+	lines: readonly string[],
+): CodemodeCall[] {
+	const structured = Array.isArray(details?.calls) ? details.calls : undefined;
+	if (structured) {
+		return structured.flatMap((entry) => {
+			if (!isRecord(entry) || typeof entry.name !== "string") return [];
+			return [
+				{
+					name: entry.name,
+					status: typeof entry.status === "string" ? entry.status : "ok",
+					...(isRecord(entry.args) ? { args: entry.args } : {}),
+					...(typeof entry.durationMs === "number"
+						? { durationMs: entry.durationMs }
+						: {}),
+				},
+			];
+		});
+	}
 	const line = lines.find((entry) => entry.startsWith("calls: "));
 	if (!line) return [];
 	return line
@@ -284,6 +321,32 @@ function codemodeCalls(lines: readonly string[]): CodemodeCall[] {
 			const match = /^(.+) \((\w+)\)$/.exec(entry);
 			return match ? [{ name: match[1] ?? "", status: match[2] ?? "" }] : [];
 		});
+}
+
+/** The first argument worth naming, for a tool that has no view of its own. */
+function primaryArg(
+	args: Readonly<Record<string, unknown>>,
+): string | undefined {
+	for (const value of Object.values(args))
+		if (typeof value === "string" && value.length > 0) return value;
+	return undefined;
+}
+
+/** One call line. With the call's arguments the line borrows the tool's own
+ * specialized subject — a script's read names its file, its bash its command —
+ * and a tool without a view keeps its type glyph and names its first argument. */
+function codemodeCallText(call: CodemodeCall): string {
+	const view = call.args
+		? toolView({ name: call.name, args: call.args })
+		: undefined;
+	const primary = call.args ? primaryArg(call.args) : undefined;
+	const subject = view
+		? view.summary
+		: primary
+			? `${call.name} ${primary}`
+			: call.name;
+	const hint = view?.hint ? ` · ${view.hint}` : "";
+	return `${view?.icon ?? toolIcon(call.name)} ${subject}${hint} (${call.status})`;
 }
 
 /** The first line of a script that says something: its own `// @options:` line
@@ -296,42 +359,19 @@ function codemodeHeadline(code: string): string {
 	return line ?? "script";
 }
 
-/** The script's own source, bounded, as the first rows of its expanded view. */
+/** The script's own source, whole, as the first rows of its expanded view. */
 function codemodeScriptRows(code: string): ToolViewRow[] {
-	const lines = code.split("\n");
-	const shown = lines.slice(0, MAX_SCRIPT_ROWS);
-	return [
-		...shown.map((text) => ({ text, tone: "base" as const })),
-		...(lines.length > shown.length
-			? [
-					{
-						text: `… ${lines.length - shown.length} more lines`,
-						tone: "muted" as const,
-					},
-				]
-			: []),
-	];
+	return code.split("\n").map((text) => ({ text, tone: "base" as const }));
 }
 
 /** One line per call a script made: its name and how it ended, failures in the
  * error tone. This is the collapsed view's whole content — the shape of the
  * work — and stays visible once expanded. */
 function codemodeCallRows(calls: readonly CodemodeCall[]): ToolViewRow[] {
-	const shown = calls.slice(0, MAX_CALL_ROWS);
-	return [
-		...shown.map((entry) => ({
-			text: `${entry.name} (${entry.status})`,
-			tone: entry.status === "ok" ? ("muted" as const) : ("error" as const),
-		})),
-		...(calls.length > shown.length
-			? [
-					{
-						text: `… ${calls.length - shown.length} more calls`,
-						tone: "muted" as const,
-					},
-				]
-			: []),
-	];
+	return calls.map((entry) => ({
+		text: codemodeCallText(entry),
+		tone: entry.status === "ok" ? ("muted" as const) : ("error" as const),
+	}));
 }
 
 /** `codemode`: the calls a script made, one line each, and — expanded — the
@@ -340,25 +380,30 @@ function codemodeCallRows(calls: readonly CodemodeCall[]): ToolViewRow[] {
 function codemodeView(call: AgentSessionToolCall): ToolView {
 	const code = stringArg(call.args, "code") ?? "";
 	const lines = call.result?.lines ?? [];
-	const calls = codemodeCalls(lines);
+	const calls = codemodeCalls(call.result?.details, lines);
 	const failed = call.result?.isError === true;
 	const errors = calls.filter((entry) => entry.status !== "ok").length;
-	const [first, ...rest] = calls;
 	const script = codemodeScriptRows(code);
 	const output: ToolViewRow[] = lines.map((text) => ({
 		text,
 		tone: failed ? ("error" as const) : ("muted" as const),
 	}));
+	// The row is the call's own metadata — how much it ran, what failed, how long
+	// it spent in tools — and every call gets its own line below it.
+	const spent = calls.reduce(
+		(total, entry) => total + (entry.durationMs ?? 0),
+		0,
+	);
+	const summary = [
+		calls.length > 0 ? `${calls.length} calls` : undefined,
+		errors > 0 ? `${errors} failed` : undefined,
+		failed ? "script failed" : undefined,
+		spent > 0 ? formatDuration(spent) : undefined,
+	].filter((part): part is string => part !== undefined);
 	return {
 		icon: "λ",
-		summary: first ? `${first.name} (${first.status})` : codemodeHeadline(code),
-		// The call lines already say how many ran; only a failure needs saying.
-		...(failed
-			? { hint: "failed" }
-			: errors > 0
-				? { hint: `${calls.length} calls · ${errors} failed` }
-				: {}),
-		alwaysRows: codemodeCallRows(rest),
+		summary: summary.length > 0 ? summary.join(" · ") : codemodeHeadline(code),
+		alwaysRows: codemodeCallRows(calls),
 		sections: [
 			...(script.length > 0
 				? [{ id: "script", label: "script", rows: script }]

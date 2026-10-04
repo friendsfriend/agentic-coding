@@ -54,6 +54,7 @@ interface ToolResultRecord {
 	readonly model?: ReadonlyArray<{
 		readonly toolName?: string;
 		readonly isError?: boolean;
+		readonly details?: unknown;
 		readonly content?: ReadonlyArray<{
 			readonly type?: string;
 			readonly text?: string;
@@ -148,6 +149,26 @@ test("a durable run runs a codemode script that calls its own tools", async () =
 	expect(result).toContain("hello codemode");
 	expect(result).toContain('return: "ok"');
 	expect(toolResultFailed(entries, "codemode")).toBe(false);
+	// The result also carries the calls as structured details, arguments
+	// included: the sandbox records only names, so the host adds what each call
+	// asked for (the dashboard's codemode view reads these).
+	const details = (
+		entries.find((entry) => {
+			const item = entry as ToolResultRecord;
+			return (
+				item.kind === "pi.tool-result" &&
+				item.model?.[0]?.toolName === "codemode"
+			);
+		}) as ToolResultRecord | undefined
+	)?.model?.[0]?.details as { calls?: unknown } | undefined;
+	expect(details?.calls).toEqual([
+		{
+			name: "read",
+			status: "ok",
+			durationMs: expect.any(Number),
+			args: { path: "note.txt" },
+		},
+	]);
 	await host.shutdown();
 });
 

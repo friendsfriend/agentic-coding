@@ -1084,9 +1084,9 @@ test("tool rows get a view from their call and result, and a generic default", a
 		await t.renderOnce();
 		const collapsed = t.captureCharFrame();
 		// Each view names its own subject: the file, the range, the command.
-		expect(collapsed).toContain("→ src/a.ts");
+		expect(collapsed).toContain("▸ → src/a.ts");
 		expect(collapsed).toContain("40-120 of 512");
-		expect(collapsed).toContain("← src/a.ts");
+		expect(collapsed).toContain("▸ ← src/a.ts");
 		expect(collapsed).toContain("1 edit · +1 −1");
 		// The judgment view names the verdict; a tool without a view keeps the
 		// generic row.
@@ -1144,6 +1144,12 @@ test("a codemode row lists its calls, and its script and output fold away", asyn
 					"calls: glob (ok), read (error)",
 				],
 				isError: false,
+				details: {
+					calls: [
+						{ name: "glob", status: "ok", args: { pattern: "*.ts" } },
+						{ name: "read", status: "error", args: { path: "src/a.ts" } },
+					],
+				},
 				notes: [],
 			},
 		},
@@ -1171,10 +1177,12 @@ test("a codemode row lists its calls, and its script and output fold away", asyn
 	try {
 		await t.renderOnce();
 		await t.renderOnce();
-		// Collapsed: the calls the script made, one line each.
+		// Collapsed: the row is the call's own metadata, and every call gets its
+		// own line, with its tool's type glyph — the fold glyph leads the row.
 		const collapsed = t.captureCharFrame();
-		expect(collapsed).toContain("λ glob (ok)");
-		expect(collapsed).toContain("read (error)");
+		expect(collapsed).toContain("▸ λ 2 calls · 1 failed");
+		expect(collapsed).toContain("✱ glob *.ts (ok)");
+		expect(collapsed).toContain("→ src/a.ts (error)");
 		expect(collapsed).not.toContain("tools.glob");
 
 		// Expanded: the script and its output, as parts with their own headers.

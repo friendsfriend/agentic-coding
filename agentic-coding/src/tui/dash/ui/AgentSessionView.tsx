@@ -363,7 +363,9 @@ function Block(props: {
 	const tool = props.block.toolCall
 		? toolView(props.block.toolCall)
 		: undefined;
-	if (tool && (props.block.kind === "tool" || props.block.kind === "result"))
+	if (tool && (props.block.kind === "tool" || props.block.kind === "result")) {
+		const expandable = () =>
+			(tool.rows?.length ?? 0) > 0 || (tool.sections?.length ?? 0) > 0;
 		return (
 			<box
 				border={["left"]}
@@ -378,6 +380,11 @@ function Block(props: {
 						flexDirection="row"
 						onMouseUp={() => props.onToggle(props.block.id)}
 					>
+						{/* The fold glyph leads the row, so a list of tool rows reads as
+						    a list of folds rather than a ragged right edge. */}
+						<text width={2} flexShrink={0} fg={uiColors.textMuted}>
+							{expandable() ? (props.expanded ? "▾" : "▸") : ""}
+						</text>
 						<text width={2} flexShrink={0} fg={color()}>
 							{tool.icon}
 						</text>
@@ -397,15 +404,6 @@ function Block(props: {
 									{` ${hint()}`}
 								</text>
 							)}
-						</Show>
-						<Show
-							when={
-								(tool.rows?.length ?? 0) > 0 || (tool.sections?.length ?? 0) > 0
-							}
-						>
-							<text fg={uiColors.textMuted} flexShrink={0}>
-								{props.expanded ? " ▾" : " ▸"}
-							</text>
 						</Show>
 					</box>
 					<box paddingLeft={2} flexDirection="column">
@@ -467,6 +465,7 @@ function Block(props: {
 				</box>
 			</box>
 		);
+	}
 
 	const content = () => {
 		switch (props.block.kind) {
@@ -896,6 +895,9 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 					<ScrollableContent
 						stickyStart="bottom"
 						stickyScroll
+						// Expanded tool output can be thousands of lines; culling keeps
+						// the transcript's cost to what is on screen.
+						viewportCulling
 						onScrollBoxReady={attachScrollBox}
 						// One blank line between the transcript and the prompt: the
 						// transcript owns it, so the autocomplete stays attached to the
