@@ -17,11 +17,3 @@ Small ones:
   * Use jev to block bash commands that should be blocked
 * Implement instant workflow -> one agent without task, no workflow at all. Basically like spawning a random pi agent
 * Implement workspace resume -> Should work with pi durable
-
-
-Pi durable rebuild:
-* Build Workflows sidebar that shows the active workflows and lets me jump to it. -> Git panel will be removed so that no multiplexing is needed in the future.
-* Go back to tmux for spawning side apps like lazygit and nvim and so on.
-* remove multiplexing fully so that the user keeps the choice.
-* Fully migrate to pi-durable
-* Remove opencode and pi legacy support
