@@ -8,7 +8,6 @@ import {
 	categoryDestinations,
 	filterPickerEntries,
 	homeDestinations,
-	homeLaunchEntry,
 	observabilityDestinations,
 	pickerEntries,
 	settingsDestinations,
@@ -59,15 +58,17 @@ describe("home and category destinations", () => {
 		]);
 	});
 
-	test("Home's workflow action is an in-place action, never a picker page", () => {
+	test("an in-place action entry never leaks into the location picker", () => {
 		let opened = 0;
-		const entry = homeLaunchEntry(() => {
-			opened += 1;
-		});
-		expect(entry.id).toBe("workflow.new");
-		expect(entry.label).toBe("New workflow");
-		expect(entry.route).toBeUndefined();
-		entry.action?.();
+		const entry = {
+			id: "workflow.new",
+			label: "New workflow",
+			group: "Destinations",
+			action: () => {
+				opened += 1;
+			},
+		};
+		entry.action();
 		expect(opened).toBe(1);
 		// The location picker jumps to pages, so the action entry never leaks in.
 		expect(

@@ -15,8 +15,6 @@ command surface and one lifecycle implementation.
 | --- | --- | --- |
 | `agentic-coding` (no command) | Unified shell, home route | yes (managed) |
 | `agentic-coding home` / `manager` | Unified shell, home route | yes (managed) |
-| `agentic-coding dash [--repo --workflow-id]` | Dashboard-only presentation of one explicit workflow target (no tabs, breadcrumbs, picker, Home/Settings or observability) | no |
-| `agentic-coding dash --profile test` / `--json` | Dummy data / headless read | no |
 | `agentic-coding attach URL` | Shell attached to a running environment backend | no |
 | `agentic-coding server [--port N]` | Headless environment backend, foreground | yes (managed, headless) |
 | `agentic-coding workflow ...` | Transactional workflow engine | no |

@@ -230,3 +230,15 @@ function activeDurationSeconds(
 	if (openAt !== undefined) totalMs += Math.max(0, (lastAt ?? openAt) - openAt);
 	return Math.max(0, Math.round(totalMs / 1000));
 }
+
+/**
+ * Position of one run inside its round: `k` is the 1-based index in launch
+ * order, `n` the round size. Used for verifier reporting; pure, no renderer.
+ */
+export function verificationPosition(
+	round: Array<{ id: string }>,
+	runId: string,
+): { k: number; n: number } {
+	const k = round.findIndex((item) => item.id === runId) + 1;
+	return { k, n: round.length };
+}

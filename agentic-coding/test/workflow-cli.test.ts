@@ -7,9 +7,7 @@ import type { AgentHandle } from "../src/contracts/workflow.ts";
 import type { AgentAdapter, LaunchContext } from "../src/workflow/adapters.ts";
 import { WorkflowApplication } from "../src/workflow/application.ts";
 import {
-	AGENT_EXTENSION_SUBCOMMANDS,
 	cliTest,
-	paneForRunFactory,
 	REQUIRED_FLAGS,
 	run,
 	SUBCOMMANDS,
@@ -18,11 +16,9 @@ import { registerBuiltins } from "../src/workflow/definitions.ts";
 import {
 	agentEffectHandlers,
 	EffectRunner,
-	effectRunnerTest,
 } from "../src/workflow/effect-runner.ts";
 import { QUESTION_WAIT_MS, WorkflowEngine } from "../src/workflow/runtime.ts";
 import type { StepBehavior } from "../src/workflow/steps/types.ts";
-import { asPort } from "./fakes.ts";
 import {
 	autoRemoveRepoFixtures,
 	createRepoFixture,
@@ -31,43 +27,29 @@ import {
 // Sweep the repositories this file created, at the end of this file only.
 autoRemoveRepoFixtures();
 
-const openspecFullDigest = registerBuiltins().definition("openspec", 1).digest;
+const _openspecFullDigest = registerBuiltins().definition("openspec", 1).digest;
 
 class StubAdapter implements AgentAdapter {
-	readonly id = "pi" as const;
+	readonly id = "pi-durable" as const;
 	launch(ctx: LaunchContext) {
 		return Effect.succeed({
-			runtime: "pi" as const,
+			runtime: "pi-durable" as const,
 			name: ctx.name,
-			paneId: "pane",
+			hostSocket: "/tmp/host.sock",
+			sessionId: ctx.assignment.runId,
 		});
 	}
 	preflight() {}
 	prompt() {
 		return Effect.void;
 	}
-	observe(handle: AgentHandle) {
-		return Effect.succeed({
-			status: "working" as const,
-			paneId: handle.paneId,
-		});
+	observe(_handle: AgentHandle) {
+		return Effect.succeed({ status: "working" as const });
 	}
 	stop() {
 		return Effect.void;
 	}
 }
-function stubHerdr() {
-	return {
-		call(...args: string[]) {
-			if (args[0] === "tab" && args[1] === "list")
-				return { tabs: [{ tab_id: "tab1", label: "dashboard" }] };
-			if (args[0] === "workspace" && args[1] === "create")
-				return { workspace: { workspace_id: "workspace" } };
-			throw new Error(`unexpected ${args.join(" ")}`);
-		},
-	};
-}
-
 // A step behavior with a shared constant group and no `groupByRole`. It drives
 // the generic grid-split allocation path that verifier roles took before
 // per-role tabs, so that path stays covered after the built-in verifiers moved
@@ -81,7 +63,7 @@ const sharedGroupDefinition = {
 	version: 1,
 	digest: "synthetic-shared",
 };
-const sharedGroupRegistry = {
+const _sharedGroupRegistry = {
 	definition: () => sharedGroupDefinition,
 	stepForDefinition: () => ({ behavior: sharedGroupBehavior }),
 };
@@ -122,11 +104,6 @@ describe("breaking workflow CLI surface", () => {
 			"plugin",
 		])
 			expect(SUBCOMMANDS).not.toContain(removed as never);
-		expect(AGENT_EXTENSION_SUBCOMMANDS).toEqual([
-			"list",
-			"install",
-			"install-local",
-		]);
 		expect(REQUIRED_FLAGS.action).toEqual(["repo", "workflow-id", "revision"]);
 		expect(REQUIRED_FLAGS.status).toEqual(["repo", "workflow-id"]);
 		expect(REQUIRED_FLAGS.drain).toEqual(["repo"]);
@@ -245,7 +222,7 @@ describe("breaking workflow CLI surface", () => {
 			});
 			const profile = {
 				name: "pi",
-				runtime: "pi" as const,
+				runtime: "pi-durable" as const,
 				executable: "sh",
 				tools: [],
 				extensions: [],
@@ -277,11 +254,7 @@ describe("breaking workflow CLI surface", () => {
 			});
 			const handlers = agentEffectHandlers(repo, workflowEngine, {
 				registry,
-				adapters: new Map([["pi", new StubAdapter()]]),
-				port: asPort(stubHerdr()),
-				async paneForRun() {
-					return { paneId: "pane", owned: true };
-				},
+				adapters: new Map([["pi-durable", new StubAdapter()]]),
 			});
 			await new EffectRunner(repo, workflowEngine, handlers).drain();
 			const activeRun = workflowEngine.getRun(repo, started.view.runs[0]?.id);
@@ -353,7 +326,7 @@ describe("breaking workflow CLI surface", () => {
 			});
 			const profile = {
 				name: "pi",
-				runtime: "pi" as const,
+				runtime: "pi-durable" as const,
 				executable: "sh",
 				tools: [],
 				extensions: [],
@@ -385,11 +358,7 @@ describe("breaking workflow CLI surface", () => {
 			});
 			const handlers = agentEffectHandlers(repo, workflowEngine, {
 				registry,
-				adapters: new Map([["pi", new StubAdapter()]]),
-				port: asPort(stubHerdr()),
-				async paneForRun() {
-					return { paneId: "pane", owned: true };
-				},
+				adapters: new Map([["pi-durable", new StubAdapter()]]),
 			});
 			await new EffectRunner(repo, workflowEngine, handlers).drain();
 			const staleRun = workflowEngine.getRun(repo, started.view.runs[0]?.id);
@@ -447,656 +416,6 @@ describe("breaking workflow CLI surface", () => {
 		}
 	});
 
-	test("persistent roles reuse the resolved pane; tab create fires only on the no-agent outcome", async () => {
-		const snapshot = {
-			workflowId: "change",
-			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
-			definition: {
-				id: "openspec",
-				version: 1,
-				digest: openspecFullDigest,
-			},
-		};
-		const run = {
-			id: "run-worker",
-			workflowId: "wf",
-			stepId: "core.implementation",
-			role: "worker",
-			attempt: 1,
-			status: "pending",
-		};
-		const fakeEngine = {
-			getRun: (_repo: string, id: string) => (id === run.id ? run : undefined),
-			getSnapshot: () => snapshot,
-			status: () => ({ runs: [run] }),
-		} as unknown as WorkflowEngine;
-		const canonical = effectRunnerTest.canonicalAgentName(
-			"change",
-			"openspec",
-			{
-				stepId: run.stepId,
-				role: run.role,
-				id: run.id,
-			},
-		);
-		const calls: string[][] = [];
-		const herdrWithLive = (live: boolean) => ({
-			call(...args: string[]) {
-				calls.push(args);
-				if (args[0] === "agent" && args[1] === "get") {
-					if (live && args[2] === canonical)
-						return {
-							agent: {
-								pane_id: "live-pane",
-								tab_id: "live-tab",
-								agent_status: "working",
-							},
-						};
-					throw new Error(`not found: ${args[2]}`);
-				}
-				if (args[0] === "tab" && args[1] === "create")
-					return { root_pane: { pane_id: "new-pane", tab_id: "new-tab" } };
-				return {};
-			},
-		});
-
-		// Live agent under the canonical name: adopt its pane, never create a tab.
-		calls.length = 0;
-		const reused = await paneForRunFactory(
-			fakeEngine,
-			"/repo",
-			asPort(herdrWithLive(true)),
-		)(run.id);
-		expect(reused).toEqual({
-			paneId: "live-pane",
-			tabId: "live-tab",
-			owned: false,
-		});
-		expect(
-			calls.some((args) => args[0] === "tab" && args[1] === "create"),
-		).toBe(false);
-
-		// No live agent anywhere: only now may a new tab be created.
-		calls.length = 0;
-		const spawned = await paneForRunFactory(
-			fakeEngine,
-			"/repo",
-			asPort(herdrWithLive(false)),
-		)(run.id);
-		expect(spawned).toEqual({
-			paneId: "new-pane",
-			tabId: "new-tab",
-			owned: true,
-		});
-		expect(
-			calls.filter((args) => args[0] === "tab" && args[1] === "create"),
-		).toHaveLength(1);
-		const created = calls.find(
-			(args) => args[0] === "tab" && args[1] === "create",
-		);
-		expect(created?.[created.indexOf("--label") + 1]).toBe("○ worker");
-	});
-
-	test("verifier re-entry reuses the live canonical-name pane and its tab without creating a tab", async () => {
-		const snapshot = {
-			workflowId: "change",
-			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
-			definition: {
-				id: "openspec",
-				version: 1,
-				digest: openspecFullDigest,
-			},
-		};
-		const run = {
-			id: "qv",
-			workflowId: "wf",
-			stepId: "core.verification",
-			role: "quality-verifier",
-			attempt: 1,
-			status: "pending",
-		};
-		const fakeEngine = {
-			getRun: (_repo: string, id: string) => (id === run.id ? run : undefined),
-			getSnapshot: () => snapshot,
-			status: () => ({ runs: [run] }),
-		} as unknown as WorkflowEngine;
-		const canonical = effectRunnerTest.canonicalAgentName(
-			"change",
-			"openspec",
-			{ stepId: run.stepId, role: run.role, id: run.id },
-		);
-		const calls: string[][] = [];
-		const herdr = {
-			call(...args: string[]) {
-				calls.push(args);
-				if (args[0] === "agent" && args[1] === "get") {
-					if (args[2] === canonical)
-						return {
-							agent: {
-								pane_id: "verifier-live",
-								tab_id: "verifier-tab",
-								agent_status: "working",
-							},
-						};
-					throw new Error(`not found: ${args[2]}`);
-				}
-				if (args[0] === "tab" && args[1] === "create")
-					return { root_pane: { pane_id: "new-pane", tab_id: "new-tab" } };
-				return {};
-			},
-		};
-
-		// Canonical identity ignores attempt/round, so a later verification round
-		// or fix loop resolves this same live agent and its tab.
-		expect(
-			await paneForRunFactory(fakeEngine, "/repo", asPort(herdr))(run.id),
-		).toEqual({
-			paneId: "verifier-live",
-			tabId: "verifier-tab",
-			owned: false,
-		});
-		expect(
-			calls.some((args) => args[0] === "tab" && args[1] === "create"),
-		).toBe(false);
-	});
-
-	test("triage launches in its own tab labeled triage, not the verification group tab", async () => {
-		const snapshot = {
-			workflowId: "change",
-			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
-			definition: {
-				id: "openspec",
-				version: 1,
-				digest: openspecFullDigest,
-			},
-		};
-		const run = {
-			id: "triage-run",
-			workflowId: "wf",
-			stepId: "core.triage",
-			role: "triage",
-			attempt: 1,
-			status: "pending",
-		};
-		const fakeEngine = {
-			getRun: (_repo: string, id: string) => (id === run.id ? run : undefined),
-			getSnapshot: () => snapshot,
-			status: () => ({ runs: [run] }),
-		} as unknown as WorkflowEngine;
-		const calls: string[][] = [];
-		const herdr = {
-			call(...args: string[]) {
-				calls.push(args);
-				if (args[0] === "agent" && args[1] === "get")
-					throw new Error(`not found: ${args[2]}`);
-				if (args[0] === "tab" && args[1] === "create")
-					return {
-						root_pane: { pane_id: "triage-pane", tab_id: "triage-tab" },
-					};
-				return {};
-			},
-		};
-
-		expect(
-			await paneForRunFactory(fakeEngine, "/repo", asPort(herdr))(run.id),
-		).toEqual({
-			paneId: "triage-pane",
-			tabId: "triage-tab",
-			owned: true,
-		});
-		const created = calls.find(
-			(args) => args[0] === "tab" && args[1] === "create",
-		);
-		expect(created?.[created.indexOf("--label") + 1]).toBe("○ triage");
-	});
-
-	test("verifier round excludes triage so verifier geometry never anchors on the triage pane", async () => {
-		const snapshot = {
-			workflowId: "change",
-			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
-			definition: {
-				id: "openspec",
-				version: 1,
-				digest: openspecFullDigest,
-			},
-		};
-		const triage = {
-			id: "triage-run",
-			workflowId: "wf",
-			stepId: "core.triage",
-			role: "triage",
-			attempt: 1,
-			status: "working",
-		};
-		const verifier = {
-			id: "qv",
-			workflowId: "wf",
-			stepId: "core.verification",
-			role: "quality-verifier",
-			attempt: 1,
-			status: "pending",
-		};
-		const runs = [triage, verifier];
-		const fakeEngine = {
-			getRun: (_repo: string, id: string) =>
-				runs.find((item) => item.id === id),
-			getSnapshot: () => snapshot,
-			status: () => ({ runs }),
-		} as unknown as WorkflowEngine;
-		const triageCanonical = effectRunnerTest.canonicalAgentName(
-			"change",
-			"openspec",
-			{ stepId: triage.stepId, role: triage.role, id: triage.id },
-		);
-		const calls: string[][] = [];
-		const herdr = {
-			call(...args: string[]) {
-				calls.push(args);
-				if (args[0] === "agent" && args[1] === "get") {
-					if (args[2] === triageCanonical)
-						return {
-							agent: { pane_id: "triage-live", agent_status: "working" },
-						};
-					throw new Error(`not found: ${args[2]}`);
-				}
-				if (args[0] === "pane" && args[1] === "layout")
-					return {
-						layout: { panes: [{ pane_id: "triage-live", rect: { y: 0 } }] },
-					};
-				if (args[0] === "pane" && args[1] === "split")
-					return { pane: { pane_id: "split-pane", tab_id: "tab-split" } };
-				if (args[0] === "tab" && args[1] === "create")
-					return {
-						root_pane: { pane_id: "verif-pane", tab_id: "verif-tab" },
-					};
-				return {};
-			},
-		};
-
-		// The triage agent is live and, before pane groups, served as the split
-		// anchor for every verifier. A verifier now owns a separate role tab
-		// instead, and triage is excluded from its round.
-		expect(
-			await paneForRunFactory(fakeEngine, "/repo", asPort(herdr))(verifier.id),
-		).toEqual({ paneId: "verif-pane", tabId: "verif-tab", owned: true });
-		expect(
-			calls.some((args) => args[0] === "pane" && args[1] === "split"),
-		).toBe(false);
-		const created = calls.find(
-			(args) => args[0] === "tab" && args[1] === "create",
-		);
-		expect(created?.[created.indexOf("--label") + 1]).toBe("○ quality-v…");
-	});
-
-	test("each verifier role launches into its own tab and never splits a live sibling's pane", async () => {
-		const snapshot = {
-			workflowId: "change",
-			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
-			definition: {
-				id: "openspec",
-				version: 1,
-				digest: openspecFullDigest,
-			},
-		};
-		const qv = {
-			id: "qv",
-			workflowId: "wf",
-			stepId: "core.verification",
-			role: "quality-verifier",
-			attempt: 1,
-			status: "pending",
-		};
-		const sv = {
-			id: "sv",
-			workflowId: "wf",
-			stepId: "core.verification",
-			role: "security-verifier",
-			attempt: 1,
-			status: "pending",
-		};
-		const runs = [qv, sv];
-		const fakeEngine = {
-			getRun: (_repo: string, id: string) =>
-				runs.find((item) => item.id === id),
-			getSnapshot: () => snapshot,
-			status: () => ({ runs }),
-		} as unknown as WorkflowEngine;
-		const qvCanonical = effectRunnerTest.canonicalAgentName(
-			"change",
-			"openspec-full",
-			{ stepId: qv.stepId, role: qv.role, id: qv.id },
-		);
-		const calls: string[][] = [];
-		let created = 0;
-		// The first role owns `pane-1` before the second launches. Its canonical
-		// agent is then live and would be a tempting split anchor if the sibling
-		// filter compared candidates against the launching role instead of each
-		// candidate's own role: the second role would reuse-and-split the first's
-		// tab, which is exactly the shared-grid bug this change removes.
-		let qvLive = false;
-		const herdr = {
-			call(...args: string[]) {
-				calls.push(args);
-				if (args[0] === "agent" && args[1] === "get") {
-					if (qvLive && args[2] === qvCanonical)
-						return {
-							agent: {
-								pane_id: "pane-1",
-								tab_id: "tab-1",
-								agent_status: "working",
-							},
-						};
-					throw new Error(`not found: ${args[2]}`);
-				}
-				if (args[0] === "pane" && args[1] === "split")
-					return { pane: { pane_id: "split-pane", tab_id: "tab-split" } };
-				if (args[0] === "tab" && args[1] === "create") {
-					created += 1;
-					return {
-						root_pane: {
-							pane_id: `pane-${created}`,
-							tab_id: `tab-${created}`,
-						},
-					};
-				}
-				return {};
-			},
-		};
-
-		expect(
-			await paneForRunFactory(fakeEngine, "/repo", asPort(herdr))(qv.id),
-		).toEqual({
-			paneId: "pane-1",
-			tabId: "tab-1",
-			owned: true,
-		});
-		qvLive = true;
-		expect(
-			await paneForRunFactory(fakeEngine, "/repo", asPort(herdr))(sv.id),
-		).toEqual({
-			paneId: "pane-2",
-			tabId: "tab-2",
-			owned: true,
-		});
-		expect(
-			calls.some((args) => args[0] === "pane" && args[1] === "split"),
-		).toBe(false);
-		expect(
-			calls.some(
-				(args) =>
-					args[0] === "pane" && args[1] === "split" && args.includes("pane-1"),
-			),
-		).toBe(false);
-		const labels = calls
-			.filter((args) => args[0] === "tab" && args[1] === "create")
-			.map((args) => args[args.indexOf("--label") + 1]);
-		expect(labels).toEqual(["○ quality-v…", "○ security-v…"]);
-	});
-
-	test("shared-group layout anchors on siblings confirmed live by canonical name, not stored pane ids", async () => {
-		const snapshot = {
-			workflowId: "change",
-			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
-			definition: sharedGroupDefinition,
-		};
-		const qv = {
-			id: "qv",
-			workflowId: "wf",
-			stepId: "core.verification",
-			role: "quality-verifier",
-			attempt: 1,
-			status: "working",
-		};
-		const sibling = {
-			id: "sv",
-			workflowId: "wf",
-			stepId: "core.verification",
-			role: "security-verifier",
-			attempt: 1,
-			status: "working",
-			// A stale stored handle: the resolver must probe it, find it dead, and
-			// fall through to the live canonical-name pane.
-			handle: { paneId: "dead-pane" },
-		};
-		const fakeEngine = {
-			getRun: (_repo: string, id: string) =>
-				[qv, sibling].find((r) => r.id === id),
-			getSnapshot: () => snapshot,
-			status: () => ({ runs: [qv, sibling] }),
-			registry: sharedGroupRegistry,
-		} as unknown as WorkflowEngine;
-		const siblingCanonical = effectRunnerTest.canonicalAgentName(
-			"change",
-			"synthetic-shared",
-			{ stepId: sibling.stepId, role: sibling.role, id: sibling.id },
-			{ behavior: sharedGroupBehavior },
-		);
-		const calls: string[][] = [];
-		const herdr = {
-			call(...args: string[]) {
-				calls.push(args);
-				if (args[0] === "agent" && args[1] === "get") {
-					if (args[2] === siblingCanonical)
-						return {
-							agent: { pane_id: "sibling-live", agent_status: "working" },
-						};
-					throw new Error(`not found: ${args[2]}`);
-				}
-				if (args[0] === "pane" && args[1] === "layout")
-					return {
-						layout: { panes: [{ pane_id: "sibling-live", rect: { y: 0 } }] },
-					};
-				if (args[0] === "pane" && args[1] === "split")
-					return { pane: { pane_id: "split-pane", tab_id: "tab-split" } };
-				return {};
-			},
-		};
-		const pane = await paneForRunFactory(
-			fakeEngine,
-			"/repo",
-			asPort(herdr),
-		)(qv.id);
-		// The sibling's stale stored handle is probed and discarded, so the split
-		// anchors on the pane found via the canonical name instead of the dead
-		// pane or falling through to tab creation.
-		expect(calls).toContainEqual(["agent", "get", "dead-pane"]);
-		expect(
-			calls.some(
-				(args) =>
-					args[0] === "pane" &&
-					args[1] === "split" &&
-					args.includes("dead-pane"),
-			),
-		).toBe(false);
-		expect(calls).toContainEqual([
-			"pane",
-			"split",
-			"sibling-live",
-			"--direction",
-			"down",
-			"--ratio",
-			"0.5",
-		]);
-		expect(pane).toEqual({
-			paneId: "split-pane",
-			tabId: "tab-split",
-			owned: true,
-		});
-	});
-	test("shared-group third-run pane reuse skips an occupied bottom pane and picks the idle one instead", async () => {
-		const snapshot = {
-			workflowId: "change",
-			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
-			definition: sharedGroupDefinition,
-		};
-		const first = {
-			id: "qv",
-			workflowId: "wf",
-			stepId: "core.verification",
-			role: "quality-verifier",
-			attempt: 1,
-			status: "working",
-		};
-		const second = {
-			id: "sv",
-			workflowId: "wf",
-			stepId: "core.verification",
-			role: "security-verifier",
-			attempt: 1,
-			status: "working",
-		};
-		const third = {
-			id: "tv",
-			workflowId: "wf",
-			stepId: "core.verification",
-			role: "test-verifier",
-			attempt: 1,
-			status: "pending",
-		};
-		const fakeEngine = {
-			getRun: (_repo: string, id: string) =>
-				[first, second, third].find((r) => r.id === id),
-			getSnapshot: () => snapshot,
-			status: () => ({ runs: [first, second, third] }),
-			registry: sharedGroupRegistry,
-		} as unknown as WorkflowEngine;
-		const firstCanonical = effectRunnerTest.canonicalAgentName(
-			"change",
-			"synthetic-shared",
-			{ stepId: first.stepId, role: first.role, id: first.id },
-			{ behavior: sharedGroupBehavior },
-		);
-		const calls: string[][] = [];
-		const herdr = {
-			call(...args: string[]) {
-				calls.push(args);
-				if (args[0] === "agent" && args[1] === "get") {
-					if (args[2] === firstCanonical)
-						return {
-							agent: { pane_id: "anchor-pane", agent_status: "working" },
-						};
-					// "occupied" still hosts a live agent from a stale earlier round;
-					// "idle" hosts nothing and is the only reusable candidate.
-					if (args[2] === "occupied")
-						return {
-							agent: { pane_id: "occupied", agent_status: "working" },
-						};
-					throw new Error(`not found: ${args[2]}`);
-				}
-				if (args[0] === "pane" && args[1] === "layout")
-					return {
-						layout: {
-							panes: [
-								{ pane_id: "anchor-pane", rect: { y: 0 } },
-								// Occupied sits lower on screen than idle, so the raw
-								// y-sort would have picked it first before the liveness check.
-								{ pane_id: "occupied", rect: { y: 100 } },
-								{ pane_id: "idle", rect: { y: 50 } },
-							],
-						},
-					};
-				return {};
-			},
-		};
-		const pane = await paneForRunFactory(
-			fakeEngine,
-			"/repo",
-			asPort(herdr),
-		)(third.id);
-		expect(pane).toEqual({ paneId: "idle", owned: false });
-	});
-	test("shared-group third-run pane reuse spawns a fresh split when every bottom-pane candidate is occupied", async () => {
-		const snapshot = {
-			workflowId: "change",
-			metadata: { workspace: "ws", worktree: "/tmp/wt", changeId: "change" },
-			definition: sharedGroupDefinition,
-		};
-		const first = {
-			id: "qv",
-			workflowId: "wf",
-			stepId: "core.verification",
-			role: "quality-verifier",
-			attempt: 1,
-			status: "working",
-		};
-		const second = {
-			id: "sv",
-			workflowId: "wf",
-			stepId: "core.verification",
-			role: "security-verifier",
-			attempt: 1,
-			status: "working",
-		};
-		const third = {
-			id: "tv",
-			workflowId: "wf",
-			stepId: "core.verification",
-			role: "test-verifier",
-			attempt: 1,
-			status: "pending",
-		};
-		const fakeEngine = {
-			getRun: (_repo: string, id: string) =>
-				[first, second, third].find((r) => r.id === id),
-			getSnapshot: () => snapshot,
-			status: () => ({ runs: [first, second, third] }),
-			registry: sharedGroupRegistry,
-		} as unknown as WorkflowEngine;
-		const firstCanonical = effectRunnerTest.canonicalAgentName(
-			"change",
-			"synthetic-shared",
-			{ stepId: first.stepId, role: first.role, id: first.id },
-			{ behavior: sharedGroupBehavior },
-		);
-		const calls: string[][] = [];
-		const herdr = {
-			call(...args: string[]) {
-				calls.push(args);
-				if (args[0] === "agent" && args[1] === "get") {
-					if (args[2] === firstCanonical)
-						return {
-							agent: { pane_id: "anchor-pane", agent_status: "working" },
-						};
-					if (args[2] === "occupied")
-						return {
-							agent: { pane_id: "occupied", agent_status: "working" },
-						};
-					throw new Error(`not found: ${args[2]}`);
-				}
-				if (args[0] === "pane" && args[1] === "layout")
-					return {
-						layout: {
-							panes: [
-								{ pane_id: "anchor-pane", rect: { y: 0 } },
-								{ pane_id: "occupied", rect: { y: 100 } },
-							],
-						},
-					};
-				if (args[0] === "pane" && args[1] === "split")
-					return { pane: { pane_id: "split-pane", tab_id: "tab-split" } };
-				return {};
-			},
-		};
-		const pane = await paneForRunFactory(
-			fakeEngine,
-			"/repo",
-			asPort(herdr),
-		)(third.id);
-		expect(pane).toEqual({
-			paneId: "split-pane",
-			tabId: "tab-split",
-			owned: true,
-		});
-		expect(
-			calls.some(
-				(args) =>
-					args[0] === "pane" &&
-					args[1] === "split" &&
-					args[2] === "anchor-pane" &&
-					args.includes("down"),
-			),
-		).toBe(true);
-	});
 	test("research-handoff CLI command requires --subject and --directives and is restricted to an authenticated active core.research researcher run", async () => {
 		// Missing --directives is rejected by flag validation before any engine
 		// or authentication call, regardless of caller identity.

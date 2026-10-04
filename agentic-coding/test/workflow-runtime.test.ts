@@ -88,7 +88,7 @@ function repository(root: string): string {
 }
 const profile: ResolvedProfile = {
 	name: "test",
-	runtime: "pi",
+	runtime: "pi-durable",
 	executable: process.execPath,
 	tools: ["read", "bash", "edit", "write"],
 	extensions: [],
@@ -2043,7 +2043,7 @@ describe("transactional workflow runtime", () => {
 					lease: requireDefined(effect.lease, "effect lease"),
 					outcome: "complete",
 					data: {
-						runtime: "pi",
+						runtime: "pi-durable",
 						name: String((effect.payload as { runId: string }).runId),
 						paneId: `pane-${(effect.payload as { runId: string }).runId}`,
 					},
@@ -2191,7 +2191,7 @@ describe("transactional workflow runtime", () => {
 					lease: requireDefined(launch.lease, "effect lease"),
 					outcome: "complete",
 					data: {
-						runtime: "pi",
+						runtime: "pi-durable",
 						name: runView.id,
 						paneId: `pane-${runView.id}`,
 					},
@@ -2279,7 +2279,7 @@ describe("transactional workflow runtime", () => {
 					lease: requireDefined(launch.lease, "effect lease"),
 					outcome: "complete",
 					data: {
-						runtime: "pi",
+						runtime: "pi-durable",
 						name: runView.id,
 						paneId: `pane-${runView.id}`,
 					},

@@ -1,9 +1,8 @@
 // Focused effect-runner/execution tests (migrate-workflow-execution-to-effect,
 
 // tasks 1.3, 1.4, 2.1, 2.2, 2.3, 3.3): typed failure policy, scoped renewal
-// behavior, the bounded process service, the Herdr Schema envelope boundary,
-// the Effect credential boundary, and explicit pinned wiki roots without
-// process-wide environment mutation.
+// behavior, the bounded process service, the Effect credential boundary, and
+// explicit pinned wiki roots without process-wide environment mutation.
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
@@ -11,7 +10,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Effect, Either } from "effect";
-import { decodeHerdrResult } from "../src/herdr-client.ts";
 import { runGitWithCredentialsEffect } from "../src/workflow/credentials.ts";
 import {
 	BUILTIN_EFFECTS,
@@ -24,7 +22,6 @@ import {
 	PermanentFailure,
 	TransientFailure,
 } from "../src/workflow/effect-runner.ts";
-import * as H from "../src/workflow/herdr-schema.ts";
 import { runProcessEffect } from "../src/workflow/process.ts";
 import { EFFECT_KINDS } from "../src/workflow/runtime/store.ts";
 import { canonicalStorePath, WorkflowEngine } from "../src/workflow/runtime.ts";
@@ -39,7 +36,6 @@ import {
 	verifyConcept,
 	writeConcept,
 } from "../src/workflow/wiki.ts";
-import { asPort } from "./fakes.ts";
 import {
 	autoRemoveRepoFixtures,
 	createTempRepoFixture,
@@ -57,7 +53,7 @@ function initRepo(label: string): string {
 function profile() {
 	return {
 		name: "test",
-		runtime: "pi" as const,
+		runtime: "pi-durable" as const,
 		executable: "sh",
 		tools: [],
 		extensions: [],
@@ -104,10 +100,6 @@ test("every registered EffectKind has a migrated handler (coverage gate)", () =>
 	const handlers = agentEffectHandlers(os.tmpdir(), engine, {
 		registry,
 		adapters: new Map(),
-		port: asPort({ call: () => ({}) }),
-		async paneForRun() {
-			return { paneId: "pane", owned: true };
-		},
 	});
 	for (const kind of EFFECT_KINDS) {
 		expect(handlers[kind], `missing handler for ${kind}`).toBeDefined();
@@ -458,19 +450,6 @@ test("bounded process service reports exit, timeout, cancel, and overflow distin
 	const abortedOutcome = await abortedWithDescendant;
 	if (!Either.isLeft(abortedOutcome)) throw new Error("expected cancel");
 	expect(abortedOutcome.left._tag).toBe("canceled");
-});
-
-test("herdr envelope decode accepts optional shapes and rejects drift with a bounded error", () => {
-	const parsed = decodeHerdrResult(H.workspaceGetResult, {
-		workspace: { workspace_id: "w1", status: "open" },
-	});
-	expect(parsed.workspace?.workspace_id).toBe("w1");
-	// Optional keys may be absent entirely.
-	expect(decodeHerdrResult(H.workspaceGetResult, {}).workspace).toBeUndefined();
-	// A drifted shape fails loudly with a bounded diagnostic, not a cast.
-	expect(() =>
-		decodeHerdrResult(H.workspaceGetResult, { workspace: "not-an-object" }),
-	).toThrow(/did not match its schema/);
 });
 
 test("credential Effect boundary classifies no-UI as permanent and removes the shim afterwards", async () => {

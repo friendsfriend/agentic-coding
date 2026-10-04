@@ -53,7 +53,7 @@ then `~/.pi/agent/herdr-workflow.toml`, then a deep-merged repository overlay at
 detection (`conflictingAgentsFiles`) fires only when the target is the project
 overlay and a base also supplies `[agents]`. `userConfigPaths` deliberately
 excludes project overlays and the explicit replacement because
-`ui.herdr_sidebar` is server-wide.
+a server-wide `ui` flag is never read from a project overlay.
 
 ## 3. Configuration consumers and formats (task 1.1)
 
@@ -194,7 +194,7 @@ Derived from the above and used by tasks 6.1–6.4:
 1. Fresh machine: no `~/.config/agentic-coding/config.*`, no
    `~/.config/devenv` → defaults only.
 2. Legacy-only workflow root: `~/.config/agentic-coding/config.toml` present →
-   convert to `config.json`, preserve profiles/presets/routes/`ui.herdr_sidebar`.
+   convert to `config.json`, preserve profiles/presets/routes and UI settings.
 3. Legacy-only env root: `~/.config/devenv/{.env,providers,apps,...}` present →
    move into the canonical root.
 4. Both roots present with overlapping definitions → explicit conflicts, no

@@ -165,10 +165,10 @@ test("dashboard finish action traces a safe success span without demo text", asy
 	t.renderer.destroy();
 });
 
-test("dashboard return-workspace failure traces an ERROR span without error text", async () => {
+test("Escape without a composition-root panel boundary is a silent no-op", async () => {
 	installCapture();
-	// "apply" phase has no auto-opened modal, so Escape reaches handleKey and
-	// fails on the missing return-workspace (deterministic in the test profile).
+	// A standalone dashboard has no workspace sidebar to return to: Escape must
+	// neither trace a failure nor surface an error modal.
 	const t = await testRender(
 		() => <TestDashboard testData={testDashboard("apply")} />,
 		{ width: 120, height: 40 },
@@ -176,22 +176,16 @@ test("dashboard return-workspace failure traces an ERROR span without error text
 	await t.waitForFrame((frame) => frame.includes("Change ("));
 
 	t.mockInput.pressEscape();
+	await Bun.sleep(120);
+	await t.renderOnce();
 
-	// A lone ESC byte resolves as a keypress asynchronously in the test parser;
-	// poll until the traced failure span lands.
-	let failed: RecordedSpan | undefined;
-	for (let attempt = 0; attempt < 20 && !failed; attempt++) {
-		await Bun.sleep(25);
-		await t.renderOnce();
-		failed = spans.find(
+	expect(
+		spans.some(
 			(span) =>
 				span.name === "tui.dashboard.action" &&
 				attribute(span, "tui.action") === "return-workspace",
-		);
-	}
-	expect(failed?.status.code).toBe(2);
-	expect(attribute(failed, "tui.outcome")).toBe("error");
-	expect(attribute(failed, "tui.surface")).toBe("dashboard");
-	expect(JSON.stringify(failed ?? {})).not.toContain("No dashboard workspace");
+		),
+	).toBe(false);
+	expect(t.captureCharFrame()).not.toContain("Editor launch failed");
 	t.renderer.destroy();
 });

@@ -91,21 +91,17 @@ describe("observation I/O ownership", () => {
 });
 
 describe("event publication contract", () => {
-	test("the Herdr subscription lives behind the server event broker", () => {
+	test("the execution coordinator publishes through the server event broker", () => {
 		const subscriptions = readFileSync(
 			path.join(SRC, "server/subscriptions.ts"),
 			"utf8",
 		);
-		expect(subscriptions).toContain('from "./herdr-events');
+		// The multiplexer lifecycle subscription is gone; the coordinator's own
+		// listeners are the only publisher, and every envelope goes through the
+		// broker.
+		expect(subscriptions).not.toContain("herdr");
+		expect(subscriptions).toContain("onWorkflowExecutionProgress");
 		expect(subscriptions).toContain("events.publish");
-		// the envelope type is the contract's, not a local shape
-		const herdr = readFileSync(
-			path.join(SRC, "server/herdr-events.ts"),
-			"utf8",
-		);
-		expect(herdr).toContain('from "../contracts/integration.ts"');
-		expect(herdr).not.toMatch(/export interface HerdrEvent/);
-		expect(herdr).not.toMatch(/export const HERDR_DASHBOARD_EVENTS/);
 	});
 
 	test("published envelopes decode against the contract schema", async () => {

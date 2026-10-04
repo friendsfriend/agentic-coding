@@ -24,7 +24,7 @@ function repository(root: string): string {
 }
 const profile: ResolvedProfile = {
 	name: "test",
-	runtime: "pi",
+	runtime: "pi-durable",
 	executable: process.execPath,
 	tools: [],
 	extensions: [],
@@ -64,7 +64,7 @@ function setup() {
 		effectId: launch.id,
 		lease: launch.lease,
 		outcome: "complete",
-		data: { runtime: "pi", name: "worker", paneId: "pane" },
+		data: { runtime: "pi-durable", name: "worker", paneId: "pane" },
 	});
 	return {
 		repo,

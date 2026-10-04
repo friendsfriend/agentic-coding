@@ -8,7 +8,7 @@
  * - `telemetry.ts`  OTEL metric/log/span/trace records and telemetry requests
  * - `actions.ts`    action, agent and review request schemas
  * - `environment.ts` observations, event envelopes, connection state, errors
- * - `integration.ts` Git, wiki and Herdr observations
+ * - `integration.ts` Git and wiki observations
  * - `credential.ts` credential interaction responses
  * - `gateway.ts`    the `DashboardGateway` port both transports implement
  * - `decode.ts`     `ContractFailure` and the Effect-Schema decode boundary

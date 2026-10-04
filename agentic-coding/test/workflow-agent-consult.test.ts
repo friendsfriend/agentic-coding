@@ -11,7 +11,6 @@ import type { AgentAdapter } from "../src/workflow/adapters.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
 import { agentEffectHandlers } from "../src/workflow/effect-runner.ts";
 import { runtimeTest, WorkflowEngine } from "../src/workflow/runtime.ts";
-import { asPort } from "./fakes.ts";
 import {
 	autoRemoveRepoFixtures,
 	createRepoFixture,
@@ -27,7 +26,7 @@ function repository(root: string): string {
 
 const profile: ResolvedProfile = {
 	name: "test",
-	runtime: "pi",
+	runtime: "pi-durable",
 	executable: process.execPath,
 	tools: [],
 	extensions: [],
@@ -40,7 +39,7 @@ type Engine = WorkflowEngine;
 type Claims = ReturnType<WorkflowEngine["claimEffects"]>;
 
 class CapturingAdapter implements AgentAdapter {
-	readonly id = "pi" as const;
+	readonly id = "pi-durable" as const;
 	prompts: string[] = [];
 	preflight() {}
 	launch() {
@@ -50,8 +49,8 @@ class CapturingAdapter implements AgentAdapter {
 		this.prompts.push(message);
 		return Effect.void;
 	}
-	observe(handle: AgentHandle) {
-		return Effect.succeed({ status: "idle" as const, paneId: handle.paneId });
+	observe(_handle: AgentHandle) {
+		return Effect.succeed({ status: "idle" as const });
 	}
 	stop() {
 		return Effect.void;
@@ -68,9 +67,10 @@ function completeClaims(engine: Engine, repo: string, claims: Claims): void {
 			data:
 				effect.kind === "agent.launch"
 					? {
-							runtime: "pi",
+							runtime: "pi-durable",
 							name: `agent-${effect.id}`,
-							paneId: `pane-${effect.id}`,
+							hostSocket: `/tmp/host-${effect.id}.sock`,
+							sessionId: effect.id,
 						}
 					: {},
 		});
@@ -399,15 +399,7 @@ test("the prompt handler mints the peer nonce outside the durable store", async 
 		const adapter = new CapturingAdapter();
 		const handlers = agentEffectHandlers(repo, engine, {
 			registry: registerBuiltins(),
-			adapters: new Map([["pi", adapter]]),
-			port: asPort({
-				call() {
-					throw new Error("herdr is not used by this test");
-				},
-			}),
-			async paneForRun() {
-				return { paneId: "pane", owned: true };
-			},
+			adapters: new Map([["pi-durable", adapter]]),
 		});
 		const result = (await Effect.runPromise(
 			handlers["agent.prompt"]?.execute(prompt, undefined) as Effect.Effect<

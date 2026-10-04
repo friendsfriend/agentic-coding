@@ -1,4 +1,5 @@
 /** @jsxImportSource @opentui/solid */
+import { SelectionMarker } from "./SelectionMarker.tsx";
 // Modal list — a dialog around the windowed `ScrollableList`, one implementation
 // for the env surface and the dashboard.
 //
@@ -171,10 +172,7 @@ export function ListViewModal<T>(props: ListViewModalProps<T>): JSX.Element {
 						backgroundColor={isSelected() ? uiColors.bgSurface0 : undefined}
 						style={{ width: "100%", flexDirection: "row", flexShrink: 0 }}
 					>
-						<box
-							backgroundColor={isSelected() ? uiColors.highlight : undefined}
-							style={{ width: 2, flexShrink: 0 }}
-						/>
+						<SelectionMarker selected={isSelected()} />
 						<box style={{ flexGrow: 1, minWidth: 0, overflow: "hidden" }}>
 							{props.renderItem(item, isSelected, absoluteIndex)}
 						</box>

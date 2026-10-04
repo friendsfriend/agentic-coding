@@ -1,22 +1,10 @@
-// Test doubles for the Herdr/Git/Clock/TraceExporter seams, plus a tmp-repo helper.
+// Test doubles for the Git/Clock/TraceExporter seams, plus a tmp-repo helper.
 //
 // ponytail: real git in a tmp dir beats mocking diff output; upgrade to a pure
 // fake only if git-in-CI proves flaky.
 import { execFileSync } from "node:child_process";
-import { Effect } from "effect";
-import { HerdrMultiplexer } from "../src/multiplexer/herdr/index.ts";
-import type { MultiplexerPort } from "../src/multiplexer/port.ts";
 import type { Context } from "../src/workflow/effects.ts";
 import { createRepoFixture } from "./support/git-fixture.ts";
-
-/** Present an argv-shaped Herdr CLI fake as the runtime-neutral port, with
- * instant confirmation sleeps so tests stay deterministic. */
-export function asPort(cli: {
-	call(...args: string[]): unknown;
-	callAsync?(args: string[], signal?: AbortSignal): Promise<unknown>;
-}): MultiplexerPort {
-	return new HerdrMultiplexer(cli, { sleep: () => Effect.void });
-}
 
 export const DEFAULT_CONFIG = {
 	models: {
@@ -49,201 +37,6 @@ export const DEFAULT_CONFIG = {
 	plugins: {},
 };
 
-type Predicate = (args: string[]) => boolean;
-// biome-ignore lint/suspicious/noExplicitAny: mirrors the untyped herdr CLI client
-type Handler = (args: string[]) => any;
-
-/**
- * Records every call(...args); returns scripted or generated responses.
- *
- * Agent state is tracked by pane_id (the source of truth), matching the real
- * herdr API where `wait agent-status`, `pane run`, and `pane send-keys` all
- * target a pane_id and `agent get` has no sequence counter — only `agent_status`.
- * `agent get <name>` resolves name -> pane_id via the `agent rename` mapping,
- * exactly as production code relies on.
- */
-export class FakeHerdr {
-	calls: string[][] = [];
-	private paneToAgent = new Map<string, string>();
-	private agentToPane = new Map<string, string>();
-	private paneToTab = new Map<string, string>();
-	private paneStatus = new Map<string, string>();
-	private tabSeq = 0;
-	private paneSeq = 0;
-	private handlers: Array<[Predicate, Handler]> = [];
-	private afterHooks: Array<[Predicate, (args: string[]) => void]> = [];
-	// Default: `pane run` settles the target pane into the status a real submission
-	// would reach. Tests exercising verification/failure paths set this false and
-	// script transitions explicitly via `.after(...)`.
-	autoAdvanceOnSubmit = true;
-
-	on(predicate: Predicate, handler: Handler): void {
-		this.handlers.push([predicate, handler]);
-	}
-
-	after(predicate: Predicate, effect: (args: string[]) => void): void {
-		this.afterHooks.push([predicate, effect]);
-	}
-
-	registerPane(paneId: string, name: string, tabId?: string): void {
-		this.paneToAgent.set(paneId, name);
-		this.agentToPane.set(name, paneId);
-		if (tabId) this.paneToTab.set(paneId, tabId);
-	}
-
-	setAgent(
-		name: string,
-		options: { paneId?: string; agentStatus?: string } = {},
-	): void {
-		if (options.paneId) this.registerPane(options.paneId, name);
-		const targetPane = options.paneId ?? this.agentToPane.get(name);
-		if (options.agentStatus !== undefined && targetPane)
-			this.paneStatus.set(targetPane, options.agentStatus);
-	}
-
-	setStatus(paneIdOrName: string, status: string): void {
-		const paneId = this.agentToPane.get(paneIdOrName) ?? paneIdOrName;
-		this.paneStatus.set(paneId, status);
-	}
-
-	get paneToTabMap(): Map<string, string> {
-		return this.paneToTab;
-	}
-
-	// biome-ignore lint/suspicious/noExplicitAny: mirrors the untyped herdr CLI client
-	call(...args: string[]): any {
-		this.calls.push(args);
-		// biome-ignore lint/suspicious/noExplicitAny: mirrors the untyped herdr CLI client
-		let result: any;
-		let matched = false;
-		for (const [predicate, handler] of this.handlers) {
-			if (predicate(args)) {
-				result = handler(args);
-				matched = true;
-				break;
-			}
-		}
-		if (!matched) result = this.default(args);
-		for (const [predicate, effect] of this.afterHooks) {
-			if (predicate(args)) effect(args);
-		}
-		return result;
-	}
-
-	// biome-ignore lint/suspicious/noExplicitAny: mirrors the untyped herdr CLI client
-	private default(args: string[]): any {
-		if (args[0] === "tab" && args[1] === "create") {
-			this.tabSeq += 1;
-			this.paneSeq += 1;
-			const tabId = `tab-${this.tabSeq}`;
-			const paneId = `pane-${this.paneSeq}`;
-			this.paneToTab.set(paneId, tabId);
-			return {
-				root_pane: { pane_id: paneId, tab_id: tabId },
-				tab: { tab_id: tabId },
-			};
-		}
-		if (args[0] === "pane" && args[1] === "split") {
-			this.paneSeq += 1;
-			const paneId = `pane-${this.paneSeq}`;
-			const sourceTab = this.paneToTab.get(args[2] ?? "");
-			if (!sourceTab) throw new Error(`no tab for pane ${args[2]}`);
-			this.paneToTab.set(paneId, sourceTab);
-			return { pane: { pane_id: paneId, tab_id: this.paneToTab.get(paneId) } };
-		}
-		if (args[0] === "agent" && args[1] === "start") {
-			const name = args[2];
-			const paneId = args[args.indexOf("--pane") + 1];
-			const tabId = this.paneToTab.get(paneId);
-			this.registerPane(paneId, name, tabId);
-			this.paneStatus.set(paneId, "idle");
-			return {
-				agent: { pane_id: paneId, tab_id: tabId, name, agent_status: "idle" },
-			};
-		}
-		if (args[0] === "agent" && args[1] === "prompt") {
-			const target = args[2];
-			const paneId =
-				this.paneToAgent.has(target) || this.paneStatus.has(target)
-					? target
-					: this.agentToPane.get(target);
-			if (paneId == null) throw new Error(`agent not found: ${target}`);
-			if (this.autoAdvanceOnSubmit) this.paneStatus.set(paneId, "working");
-			return {
-				agent: {
-					pane_id: paneId,
-					agent_status: this.paneStatus.get(paneId) ?? "working",
-				},
-			};
-		}
-		if (args[0] === "agent" && args[1] === "rename") {
-			this.registerPane(args[2], args[3]);
-			return {};
-		}
-		if (args[0] === "pane" && args[1] === "get") {
-			return {
-				pane: { pane_id: args[2], tab_id: this.paneToTab.get(args[2]) },
-			};
-		}
-		if (args[0] === "pane" && args[1] === "process-info") {
-			return {
-				process_info: {
-					shell_pid: 42,
-					foreground_process_group_id: 42,
-					foreground_processes: [{ name: "zsh", pid: 42 }],
-				},
-			};
-		}
-		if (args[0] === "pane" && args[1] === "read") {
-			return { read: { text: "❯ " } };
-		}
-		if (args[0] === "pane" && args[1] === "run") {
-			const paneId = args[2];
-			if (this.autoAdvanceOnSubmit) {
-				// First `pane run` on a pane is the pi launch (settles to idle once
-				// booted); any later one is a prompt on an already-running agent
-				// (settles to working).
-				this.paneStatus.set(
-					paneId,
-					this.paneStatus.has(paneId) ? "working" : "idle",
-				);
-			}
-			return {};
-		}
-		if (
-			(args[0] === "pane" &&
-				(args[1] === "close" || args[1] === "send-keys")) ||
-			(args[0] === "notification" && args[1] === "show")
-		) {
-			return {};
-		}
-		if (args[0] === "agent" && args[1] === "get") {
-			const target = args[2];
-			const paneId =
-				this.paneToAgent.has(target) || this.paneStatus.has(target)
-					? target
-					: this.agentToPane.get(target);
-			if (paneId == null) throw new Error(`agent not found: ${target}`);
-			return {
-				agent: {
-					agent_status: this.paneStatus.get(paneId) ?? "idle",
-					pane_id: paneId,
-					tab_id: this.paneToTab.get(paneId),
-				},
-			};
-		}
-		if (args[0] === "wait" && args[1] === "agent-status") {
-			const paneId = args[2];
-			const wanted = args[args.indexOf("--status") + 1];
-			if ((this.paneStatus.get(paneId) ?? "idle") === wanted) return {};
-			throw new Error("timed out waiting for agent status change");
-		}
-		if (args[0] === "wait") return {};
-		return {};
-	}
-}
-
-/** Backed by a real temp git repo — cheapest correct option for diff/numstat parsing. */
 export class FakeGit {
 	run(args: string[], cwd: string): string {
 		try {
@@ -308,7 +101,6 @@ export class NoopExporter {
 export function makeContext(overrides: Partial<Context> = {}): Context {
 	return {
 		config: overrides.config ?? structuredClone(DEFAULT_CONFIG),
-		herdr: overrides.herdr ?? new FakeHerdr(),
 		git: overrides.git ?? new FakeGit(),
 		clock: overrides.clock ?? new FakeClock(),
 		exporter: overrides.exporter ?? new NoopExporter(),

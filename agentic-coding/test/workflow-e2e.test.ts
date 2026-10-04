@@ -43,7 +43,7 @@ function requireEffect(
 
 const profile: ResolvedProfile = {
 	name: "fake",
-	runtime: "pi",
+	runtime: "pi-durable",
 	executable: process.execPath,
 	tools: [],
 	extensions: [],
@@ -411,7 +411,7 @@ test("a per-step routing definition asks one question before each agent step", (
 	);
 	const configFile = path.join(configDir, "config.json");
 	const profileEntry = {
-		runtime: "pi",
+		runtime: "pi-durable",
 		executable: process.execPath,
 		capabilities: ["prompt", "run-environment", "observe", "shell", "edit"],
 	};

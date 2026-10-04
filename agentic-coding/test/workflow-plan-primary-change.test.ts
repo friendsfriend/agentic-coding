@@ -37,7 +37,7 @@ function repository(root: string): string {
 function profile(name = "fake"): ResolvedProfile {
 	return {
 		name,
-		runtime: "pi",
+		runtime: "pi-durable",
 		executable: process.execPath,
 		tools: [],
 		extensions: [],

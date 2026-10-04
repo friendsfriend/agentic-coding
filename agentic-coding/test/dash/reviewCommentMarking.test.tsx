@@ -7,18 +7,19 @@ import { DiffReviewView, MarkdownReviewView } from "@ui";
 type TestView = Awaited<ReturnType<typeof testRender>>;
 
 /**
- * Background of the two-column left-edge selection mark on the first row whose
- * text contains `text`. The mark is a distinct span, so an unmarked row
- * returns `undefined`.
+ * Foreground of the one-column left-edge selection line on the first row whose
+ * text contains `text`. The line is a distinct `│` span (after the row's own
+ * gutter), so an unmarked row returns `undefined`.
  */
-function markerBackground(view: TestView, text: string) {
+function markerColor(view: TestView, text: string) {
 	const line = view.captureSpans().lines.find((candidate) =>
 		candidate.spans
 			.map((span) => span.text)
 			.join("")
 			.includes(text),
 	);
-	return line?.spans.find((span) => span.text === "  ")?.bg?.toInts();
+	const marker = line?.spans.find((span) => span.text.includes("│"));
+	return marker?.fg.toInts();
 }
 
 /**
@@ -122,9 +123,9 @@ test("diff view marks the comment thread anchored to the selected line", async (
 	);
 	await view.flush();
 	// The thread shares the accent mark with the selected `extra line` row.
-	const marked = markerBackground(view, "please rename");
+	const marked = markerColor(view, "please rename");
 	expect(marked).toBeDefined();
-	expect(marked).toEqual(markerBackground(view, "extra line"));
+	expect(marked).toEqual(markerColor(view, "extra line"));
 	view.renderer.destroy();
 
 	const unselected = await testRender(
@@ -138,7 +139,7 @@ test("diff view marks the comment thread anchored to the selected line", async (
 		{ width: 80, height: 30 },
 	);
 	await unselected.flush();
-	expect(markerBackground(unselected, "please rename")).toBeUndefined();
+	expect(markerColor(unselected, "please rename")).toBeUndefined();
 	unselected.renderer.destroy();
 });
 
@@ -154,9 +155,9 @@ test("split diff view marks the comment thread anchored to the selected row", as
 		{ width: 100, height: 30 },
 	);
 	await view.flush();
-	const marked = markerBackground(view, "please rename");
+	const marked = markerColor(view, "please rename");
 	expect(marked).toBeDefined();
-	expect(marked).toEqual(markerBackground(view, "extra line"));
+	expect(marked).toEqual(markerColor(view, "extra line"));
 	view.renderer.destroy();
 
 	const unselected = await testRender(
@@ -170,7 +171,7 @@ test("split diff view marks the comment thread anchored to the selected row", as
 		{ width: 100, height: 30 },
 	);
 	await unselected.flush();
-	expect(markerBackground(unselected, "please rename")).toBeUndefined();
+	expect(markerColor(unselected, "please rename")).toBeUndefined();
 	unselected.renderer.destroy();
 });
 
@@ -193,10 +194,10 @@ for (const forceSplitView of [false, true]) {
 			{ width: forceSplitView ? 100 : 80, height: 30 },
 		);
 		await view.flush();
-		const threadMark = markerBackground(view, "please rename");
+		const threadMark = markerColor(view, "please rename");
 		expect(threadMark).toBeDefined();
-		expect(threadMark).toEqual(markerBackground(view, "extra line"));
-		expect(threadMark).not.toEqual(markerBackground(view, "context one"));
+		expect(threadMark).toEqual(markerColor(view, "extra line"));
+		expect(threadMark).not.toEqual(markerColor(view, "context one"));
 		view.renderer.destroy();
 	});
 }
@@ -235,11 +236,11 @@ test("markdown view marks the comment thread anchored to the selected block", as
 	// The list block (index 3) spans lines 7-8 and owns the anchored comment.
 	await waitForSpans(
 		view,
-		(candidate) => markerBackground(candidate, "item one") !== undefined,
+		(candidate) => markerColor(candidate, "item one") !== undefined,
 	);
-	const marked = markerBackground(view, "add a diagram");
+	const marked = markerColor(view, "add a diagram");
 	expect(marked).toBeDefined();
-	expect(marked).toEqual(markerBackground(view, "item one"));
+	expect(marked).toEqual(markerColor(view, "item one"));
 	view.renderer.destroy();
 
 	const unselected = await testRender(
@@ -262,7 +263,7 @@ test("markdown view marks the comment thread anchored to the selected block", as
 		{ width: 80, height: 40 },
 	);
 	await unselected.flush();
-	expect(markerBackground(unselected, "add a diagram")).toBeUndefined();
+	expect(markerColor(unselected, "add a diagram")).toBeUndefined();
 	unselected.renderer.destroy();
 });
 
@@ -293,7 +294,7 @@ test("markdown-rendered diff marks the comment thread on the selected block", as
 	);
 	await view.flush();
 	// The removed `Old title` unit is index 0; the added heading block is 1.
-	expect(markerBackground(view, "please reword")).toBeDefined();
+	expect(markerColor(view, "please reword")).toBeDefined();
 	view.renderer.destroy();
 
 	const unselected = await testRender(
@@ -319,7 +320,7 @@ test("markdown-rendered diff marks the comment thread on the selected block", as
 		{ width: 90, height: 30 },
 	);
 	await unselected.flush();
-	expect(markerBackground(unselected, "please reword")).toBeUndefined();
+	expect(markerColor(unselected, "please reword")).toBeUndefined();
 	unselected.renderer.destroy();
 });
 
@@ -348,10 +349,10 @@ test("markdown view marks an in-range comment thread with the range paint", asyn
 	// list block (index 3), so the thread mirrors the range paint.
 	await waitForSpans(
 		view,
-		(candidate) => markerBackground(candidate, "item one") !== undefined,
+		(candidate) => markerColor(candidate, "item one") !== undefined,
 	);
-	const threadMark = markerBackground(view, "add a diagram");
+	const threadMark = markerColor(view, "add a diagram");
 	expect(threadMark).toBeDefined();
-	expect(threadMark).toEqual(markerBackground(view, "item one"));
+	expect(threadMark).toEqual(markerColor(view, "item one"));
 	view.renderer.destroy();
 });

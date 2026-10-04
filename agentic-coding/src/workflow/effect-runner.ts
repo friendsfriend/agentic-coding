@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Effect, Either } from "effect";
+import { hostLayout } from "../agent-host/layout.ts";
 import {
 	type AgentHandle,
 	type Assignment,
@@ -11,9 +12,6 @@ import {
 	type WorkflowFailure,
 	type WorkflowSnapshot,
 } from "../contracts/workflow.ts";
-import { writeAgentRunEnv } from "../multiplexer/agent-env.ts";
-import { integratedWorkspaceId } from "../multiplexer/integrated/index.ts";
-import type { MultiplexerError, MultiplexerPort } from "../multiplexer/port.ts";
 import { worktreePort } from "../worktree/index.ts";
 import { workflowWorktreeLocation } from "../worktree/layout.ts";
 import type { WorktreeError, WorktreePort } from "../worktree/port.ts";
@@ -87,7 +85,6 @@ import {
 	traceparent,
 	workflowTraceContext,
 } from "./observability.ts";
-import { globalPiTools } from "./pi-tools.ts";
 import { runProcessEffect } from "./process.ts";
 import {
 	parseAgentsConfig,
@@ -96,16 +93,15 @@ import {
 	resolvePreset,
 } from "./profiles.ts";
 import type { StepDefinition, WorkflowRegistry } from "./registry.ts";
+import { writeAgentRunEnv } from "./run-env.ts";
 import {
 	type ClaimedEffect,
 	changedFilesIn,
 	changedFilesInAsync,
 	isResearchWorkflowTarget,
 	isWikiWorkflowTarget,
-	researchWorkflowTarget,
 	type WorkflowEngine,
 	wikiWorkflowDataRoot,
-	wikiWorkflowTarget,
 } from "./runtime.ts";
 
 export { PermanentFailure, TransientFailure };
@@ -118,7 +114,6 @@ import {
 	writeAtomicPrivateFile,
 } from "./secure-fs.ts";
 import { stepBehavior } from "./steps/index.ts";
-import { findAgentTabByBase } from "./tab-status.ts";
 import {
 	conceptPath,
 	snapshotList,
@@ -196,26 +191,6 @@ const p = <A>(run: () => Promise<A>): Effect.Effect<A, Error, never> =>
 			error instanceof Error ? error : new Error(String(error)),
 	});
 
-/** The launch assets for one run, keyed by runtime. Both workflow extensions
- * belong to every pi run: the question tools are part of the pinned protocol,
- * and the judgment tool is offered to every agent rather than only to runs a
- * classifier binding happened to resolve for — it reports an absent binding
- * itself, so an agent without one still gets the tool and an honest answer.
- * Deliberately pi-only: `opencode`/`opencode-v2` have no equivalent extension
- * in this repository, so a route resolving to one of them gets neither the
- * judgment tool nor the question tools (a pre-existing gap, not a regression). */
-export function piLaunchAssets(
-	runtime: RuntimeId,
-	assetRoot: string,
-): { workflowExtensionPath?: string; jevExtensionPath?: string } {
-	return runtime === "pi"
-		? {
-				workflowExtensionPath: `${assetRoot}/extensions/developer-question.ts`,
-				jevExtensionPath: `${assetRoot}/extensions/ask-jev.ts`,
-			}
-		: {};
-}
-
 /** Start (or re-check) the local classifier sidecar for a launch that selected
  * it. The classifier owns single-flight and an liveness probe, so concurrent
  * launches share one spawn and a dead sidecar is replaced rather than trusted.
@@ -243,12 +218,11 @@ const git = (
 		Effect.mapError((failure) => new TransientFailure(failure.detail)),
 	);
 
-/** Map a port failure onto the runner's existing failure classes: ownership
- * stays ownership (abort/skip), and every other boundary failure including a
- * leaked `absent` is infrastructure-flavored (transient retry). Getters fold
- * confirmed absence into `undefined`, so specific callers do not route it
- * through this mapper. */
-export function classifyMultiplexerFailure(error: {
+/** Map a worktree-boundary failure onto the runner's existing failure classes:
+ * ownership stays ownership (abort/skip), and every other boundary failure is
+ * infrastructure-flavored (transient retry). Getters fold confirmed absence
+ * into `undefined`, so specific callers do not route it through this mapper. */
+export function classifyWorktreeFailure(error: {
 	readonly kind: string;
 	readonly message: string;
 }): Error {
@@ -779,13 +753,9 @@ function commitAndPushWiki(
 export interface AdapterEffectOptions {
 	registry: WorkflowRegistry;
 	adapters: Map<string, AgentAdapter>;
-	port: MultiplexerPort;
 	/** Worktree lifecycle; defaults to the process-scoped worktrunk port. */
 	worktree?: WorktreePort;
 	credentialPrompt?: CredentialPrompt;
-	paneForRun(
-		runId: string,
-	): Promise<{ paneId: string; tabId?: string; owned: boolean }>;
 	/** Adapter-layer telemetry sink (D3). Defaults to the bounded JSONL sink so
 	 * the drain path needs no extra service. */
 	telemetry?: (directory: string, envelope: TelemetryEnvelope) => void;
@@ -798,11 +768,6 @@ export function agentEffectHandlers(
 	const snapshotFor = (effect: ClaimedEffect) =>
 		engine.getSnapshot(repo, effect.workflowId);
 	const worktreePort = options.worktree ?? worktreePortOf();
-	const setupWorkspaces = new Map<string, string>();
-	const portCall = <A>(
-		effect: Effect.Effect<A, MultiplexerError>,
-	): Effect.Effect<A, Error, never> =>
-		effect.pipe(Effect.mapError((error) => classifyMultiplexerFailure(error)));
 	const live = (effect: ClaimedEffect): boolean =>
 		engine.effectIsLive(repo, effect.id, effect.lease ?? "");
 	const telemetrySink: (
@@ -975,16 +940,15 @@ export function agentEffectHandlers(
 			},
 		};
 	};
-	/** A skipped stage is never silent: the notification goes through the same
-	 * `port.notify` boundary the `notification.show` effect calls, and a
-	 * `gate.skip` telemetry event names the stage and its answer. */
+	/** A skipped stage is never silent: a `gate.skip` telemetry event names the
+	 * stage and its answer, and the reducer's decision record is the durable
+	 * guarantee. */
 	const announceGateSkip = (
 		snapshot: WorkflowSnapshot,
 		effect: ClaimedEffect,
 	) => {
 		return (stage: GateStage, noul?: number): void =>
 			announceGateSkipBoundary(
-				(input) => options.port.notify(input),
 				(skipped, value) =>
 					emitRouting(snapshot, effect, {
 						event: "gate.skip",
@@ -1002,41 +966,14 @@ export function agentEffectHandlers(
 			observe: (effect, signal) =>
 				Effect.gen(function* () {
 					const snapshot = snapshotFor(effect);
-					// The integrated selection has no external workspace to open or
-					// wait on: the worktree is the only setup artifact that matters,
-					// and the virtual workspace identity is derived, never created.
-					const integrated = options.port.id === "integrated";
 					if (
 						isWikiWorkflowTarget(repo) ||
 						isResearchWorkflowTarget(repo) ||
 						snapshot.definition.id === "research"
-					) {
-						if (integrated)
-							return snapshot.metadata.worktree
-								? {
-										workspace:
-											snapshot.metadata.workspace ??
-											integratedWorkspaceId(snapshot.workflowId),
-										worktree: snapshot.metadata.worktree,
-										branch: "",
-									}
-								: undefined;
-						const workspace =
-							snapshot.metadata.workspace ??
-							(yield* p(() =>
-								recoverWorkspaceAsync(
-									options.port,
-									snapshot.workflowId,
-									signal,
-								),
-							));
-						return workspace &&
-							(yield* p(() =>
-								dashboardReadyAsync(options.port, workspace, signal),
-							))
-							? { workspace, worktree: snapshot.metadata.worktree, branch: "" }
+					)
+						return snapshot.metadata.worktree
+							? { worktree: snapshot.metadata.worktree, branch: "" }
 							: undefined;
-					}
 					const input = effect.payload as {
 						mode?: string;
 						branch?: string;
@@ -1061,129 +998,20 @@ export function agentEffectHandlers(
 								)) === branch
 									? snapshot.metadata.repository
 									: undefined));
-					if (integrated)
-						return worktree
-							? {
-									workspace:
-										snapshot.metadata.workspace ??
-										integratedWorkspaceId(snapshot.workflowId),
-									worktree,
-									branch,
-								}
-							: undefined;
-					const workspace =
-						snapshot.metadata.workspace ??
-						(yield* p(() =>
-							recoverWorkspaceAsync(options.port, snapshot.workflowId, signal),
-						));
-					return worktree &&
-						workspace &&
-						(yield* p(() =>
-							dashboardReadyAsync(options.port, workspace, signal),
-						))
-						? { workspace, worktree, branch }
-						: undefined;
+					return worktree ? { worktree, branch } : undefined;
 				}),
 			execute: (effect, signal) =>
 				Effect.gen(function* () {
 					const snapshot = snapshotFor(effect);
-					// The integrated selection owns no external workspace, tab or pane:
-					// the virtual workspace identity is derived from the workflow and the
-					// sidebar is the workspace surface, so this effect only resolves the
-					// worktree and records the identity.
-					const integrated = options.port.id === "integrated";
-					const virtualWorkspace = () =>
-						snapshot.metadata.workspace ??
-						integratedWorkspaceId(snapshot.workflowId);
-					// Luvus's workspace-scoped tab API forces the workflow workspace to be
-					// focused while its tabs are set up; remember the developer's workspace
-					// so setup does not leave the view on the workflow.
-					const previousWorkspace = yield* p(() =>
-						activeWorkspaceAsync(options.port),
-					);
 					if (
 						isWikiWorkflowTarget(repo) ||
 						isResearchWorkflowTarget(repo) ||
 						snapshot.definition.id === "research"
-					) {
-						if (integrated)
-							return {
-								workspace: virtualWorkspace(),
-								worktree: snapshot.metadata.worktree,
-								branch: "",
-							};
-						let workspace =
-							snapshot.metadata.workspace ??
-							(yield* p(() =>
-								recoverWorkspaceAsync(
-									options.port,
-									snapshot.workflowId,
-									signal,
-								),
-							));
-						if (!workspace) {
-							if (!live(effect)) return { cancelled: true };
-							workspace = (yield* portCall(
-								options.port.workspaceCreate({
-									cwd: snapshot.metadata.worktree,
-									label: snapshot.workflowId,
-								}),
-							)).workspaceId;
-						}
-						if (!workspace)
-							throw new TransientFailure(
-								"Herdr wiki workspace setup returned no workspace",
-							);
-						setupWorkspaces.set(effect.id, workspace);
-						if (!live(effect)) {
-							yield* options.port
-								.workspaceClose(workspace)
-								.pipe(Effect.catchAll(() => Effect.void));
-							setupWorkspaces.delete(effect.id);
-							return { cancelled: true };
-						}
-						yield* p(() =>
-							ensureWorkspaceTabs(
-								options.port,
-								workspace,
-								snapshot.metadata.worktree,
-								snapshot.workflowId,
-								isResearchWorkflowTarget(repo) ||
-									snapshot.definition.id === "research"
-									? researchWorkflowTarget()
-									: wikiWorkflowTarget(),
-								signal,
-							),
-						).pipe(
-							Effect.catchAll((error) =>
-								Effect.gen(function* () {
-									yield* options.port
-										.workspaceClose(workspace)
-										.pipe(Effect.catchAll(() => Effect.void));
-									setupWorkspaces.delete(effect.id);
-									return yield* Effect.fail(error);
-								}),
-							),
-						);
-						if (!live(effect)) {
-							yield* options.port
-								.workspaceClose(workspace)
-								.pipe(Effect.catchAll(() => Effect.void));
-							setupWorkspaces.delete(effect.id);
-							return { cancelled: true };
-						}
-						setupWorkspaces.delete(effect.id);
-						yield* restoreWorkspaceFocus(
-							options.port,
-							previousWorkspace,
-							workspace,
-						);
+					)
 						return {
-							workspace,
 							worktree: snapshot.metadata.worktree,
 							branch: "",
 						};
-					}
 					const input = effect.payload as {
 						mode?: string;
 						branch?: string;
@@ -1208,14 +1036,9 @@ export function agentEffectHandlers(
 									branch,
 								)
 							: snapshot.metadata.repository;
-					let workspace = yield* p(() =>
-						recoverWorkspaceAsync(options.port, snapshot.workflowId, signal),
-					);
 					if (input.mode === "worktree" && !worktree) {
-						// The port creates the worktree (starting the branch at the
-						// requested base) or reuses the one a previous attempt made;
-						// the multiplexer only opens a workspace at that path, so the
-						// same setup works on every runtime.
+						// The worktree port creates the worktree (starting the branch at
+						// the requested base) or reuses the one a previous attempt made.
 						const created = yield* worktreePortCall(
 							worktreePort.ensure({
 								repo: snapshot.metadata.repository,
@@ -1231,20 +1054,6 @@ export function agentEffectHandlers(
 						worktree = created.path;
 						if (!worktree)
 							throw new TransientFailure("worktree setup returned no path");
-						if (integrated) {
-							workspace = virtualWorkspace();
-						} else {
-							workspace = (yield* portCall(
-								options.port.workspaceCreate({
-									cwd: worktree,
-									label: snapshot.workflowId,
-								}),
-							)).workspaceId;
-						}
-						if (!workspace)
-							throw new TransientFailure(
-								"workspace setup returned incomplete identity",
-							);
 					} else {
 						if (
 							!sameCheckout &&
@@ -1277,59 +1086,8 @@ export function agentEffectHandlers(
 							throw new TransientFailure(
 								"workspace setup returned incomplete identity",
 							);
-						if (!workspace) {
-							workspace = integrated
-								? virtualWorkspace()
-								: (yield* portCall(
-										options.port.workspaceCreate({
-											cwd: worktree,
-											label: snapshot.workflowId,
-										}),
-									)).workspaceId;
-						}
 					}
-					if (!workspace || !worktree)
-						throw new TransientFailure(
-							"workspace setup returned incomplete identity",
-						);
-					// The external tab set (dashboard pane, lazygit) exists only on a real
-					// multiplexer; the shell's embedded dashboard and sidebar replace it in
-					// the integrated selection.
-					if (!integrated) {
-						yield* p(() =>
-							ensureWorkspaceTabs(
-								options.port,
-								workspace,
-								worktree,
-								snapshot.workflowId,
-								undefined,
-								signal,
-							),
-						);
-						yield* restoreWorkspaceFocus(
-							options.port,
-							previousWorkspace,
-							workspace,
-						);
-					}
-					return { workspace, worktree, branch };
-				}),
-			cancel: (effect, result) =>
-				Effect.sync(() => {
-					const resultWorkspace =
-						result && typeof result === "object" && "workspace" in result
-							? (result as { workspace?: unknown }).workspace
-							: undefined;
-					const workspace =
-						typeof resultWorkspace === "string"
-							? resultWorkspace
-							: setupWorkspaces.get(effect.id);
-					if (workspace) {
-						void Effect.runPromise(
-							options.port.workspaceClose(workspace),
-						).catch(() => {});
-					}
-					setupWorkspaces.delete(effect.id);
+					return { worktree, branch };
 				}),
 		},
 		"model.classify": {
@@ -1512,28 +1270,21 @@ export function agentEffectHandlers(
 				Effect.gen(function* () {
 					const run = engine.getRun(repo, runId(effect));
 					const snapshot = engine.getSnapshot(repo, run.workflowId);
-					const definition = snapshotDefinition(snapshot, options.registry);
-					const step = options.registry.stepForDefinition(
-						definition,
-						run.stepId,
-					);
-					const resolved = yield* p(() =>
-						resolveLiveAgentAsync(
-							options.port,
-							snapshot.workflowId,
-							snapshot.definition.id,
-							run,
-							signal,
-							step,
-						),
-					);
-					if (!resolved) return undefined;
-					// A reused live pane completes this effect here, without ever
-					// reaching execute() below — mint a real capability the same
-					// way execute() does, or the run never gets one and every
-					// later authenticated action (handoff, question,
-					// research-handoff) fails with "persistent agent run
-					// capability is unavailable".
+					// Reuse is durable-host reuse: a persisted handle whose conversation
+					// is still answerable completes the effect without a relaunch. An
+					// observation failure is never treated as confirmed absence.
+					const handle = run.handle;
+					if (!handle?.hostSocket || !handle.sessionId) return undefined;
+					const adapter = options.adapters.get(run.profile.runtime);
+					if (!adapter) return undefined;
+					const observed = yield* adapter
+						.observe(handle, signal)
+						.pipe(Effect.catchAll(() => Effect.succeed(undefined)));
+					if (!observed || observed.status === "unknown") return undefined;
+					// Mint a real capability the same way execute() does, or the run never
+					// gets one and every later authenticated action (handoff, question,
+					// research-handoff) fails with "persistent agent run capability is
+					// unavailable".
 					const token =
 						effect.runToken ?? engine.issueRunCapability(repo, run.id);
 					const expected = yield* p(() =>
@@ -1557,31 +1308,14 @@ export function agentEffectHandlers(
 								? path.join(wikiWorkflowDataRoot(), snapshot.workflowId, "runs")
 								: undefined,
 						);
-						writeAgentEnvPointer(
-							snapshot.metadata.worktree,
-							resolved.name,
-							run.id,
-							snapshot.definition.id === "wiki-comments"
-								? path.join(wikiWorkflowDataRoot(), snapshot.workflowId, "runs")
-								: undefined,
-						);
 					});
 					if (!live(effect)) return undefined;
 					const deliveryStartedAt = Date.now();
-					yield* portCall(
-						options.port.agentPrompt(
-							resolved.paneId,
-							expected.rendered.prompt,
-							signal,
-						),
-					);
+					yield* adapter.prompt(handle, expected.rendered.prompt, signal);
 					yield* Effect.sync(() => {
 						emitAdapter(
 							snapshot,
-							{
-								...run,
-								handle: { sessionId: resolved.sessionId },
-							},
+							{ ...run, handle },
 							{
 								event: "agent.assignment.delivered",
 								effectId: effect.id,
@@ -1596,16 +1330,7 @@ export function agentEffectHandlers(
 							outcome: "ok",
 						});
 					});
-					// An observation failure is never treated as confirmed absence:
-					// if reusing the live agent fails, surface it instead of
-					// authorizing a duplicate launch.
-					return {
-						runtime: run.profile.runtime,
-						name: resolved.name,
-						paneId: resolved.paneId,
-						...(resolved.tabId ? { tabId: resolved.tabId } : {}),
-						...(resolved.sessionId ? { sessionId: resolved.sessionId } : {}),
-					};
+					return handle;
 				}),
 			execute: (effect, signal) =>
 				Effect.gen(function* () {
@@ -1624,20 +1349,11 @@ export function agentEffectHandlers(
 							effect.id,
 							effect.lease ?? "",
 						);
-						const resolved = ownsClaim
-							? yield* p(() =>
-									resolveLiveAgentAsync(
-										options.port,
-										snapshot.workflowId,
-										snapshot.definition.id,
-										run,
-										signal,
-										step,
-									),
-								)
+						const handle = ownsClaim
+							? (run.handle ?? durableHandleFor(snapshot, run))
 							: undefined;
 						if (
-							resolved &&
+							handle &&
 							engine.effectOwnsLease(repo, effect.id, effect.lease ?? "")
 						) {
 							const adapter = options.adapters.get(run.profile.runtime);
@@ -1645,10 +1361,6 @@ export function agentEffectHandlers(
 								throw new PermanentFailure(
 									`adapter unavailable: ${run.profile.runtime}`,
 								);
-							const handle: AgentHandle = {
-								...resolved,
-								runtime: run.profile.runtime,
-							};
 							yield* adapter.stop(handle, signal);
 						}
 						yield* Effect.sync(() =>
@@ -1709,21 +1421,6 @@ export function agentEffectHandlers(
 						snapshot.definition.id === "wiki-comments"
 							? path.join(wikiWorkflowDataRoot(), snapshot.workflowId, "runs")
 							: undefined;
-					yield* Effect.sync(() =>
-						writeAgentEnvPointer(
-							snapshot.metadata.worktree,
-							name,
-							run.id,
-							runDirectory,
-						),
-					);
-					// A runtime that hosts its own process (`pi-durable`, durable-agent-
-					// host D4) never allocates a multiplexer pane: `paneId` stays empty
-					// and `owned` stays false so a failed launch never attempts to close
-					// a pane that was never opened.
-					const pane = adapter.hostsOwnProcess
-						? { paneId: "", owned: false as const }
-						: yield* p(() => options.paneForRun(run.id));
 					if (!live(effect)) return { cancelled: true };
 					// The in-session Jev tool is offered to every pi run, whether or not the
 					// file-signal sweep is enabled: it is a general tool the agent drives,
@@ -1737,17 +1434,14 @@ export function agentEffectHandlers(
 					// selected it starts it here: otherwise the tool would be available and
 					// answer nothing. An unreadable configuration is no binding either — the
 					// launch path must never fail because of the optional tool.
-					const pi = run.profile.runtime === "pi";
-					// The in-session Jev tool is native in the durable host too
-					// (durable-agent-tools: "In-session judgment tool"), so a durable
-					// run proactively starts the local sidecar the same way a pi run
-					// does.
-					const durable = run.profile.runtime === "pi-durable";
+					// The in-session Jev tool is native in the durable host
+					// (durable-agent-tools: "In-session judgment tool"), so a run
+					// proactively starts the local sidecar.
 					let jev: JevSessionBinding | undefined;
 					try {
 						const agents = loadClassifierAgents(snapshot);
 						const pinned = pinnedClassifierProvider(snapshot);
-						if ((pi || durable) && jevUsesLocalSidecar(agents, pinned))
+						if (jevUsesLocalSidecar(agents, pinned))
 							yield* p(() => ensureLocalClassifierRunning(signal)).pipe(
 								// A sidecar that cannot start — or does not settle within the
 								// classifier's own start bound — leaves the run exactly as it
@@ -1762,41 +1456,15 @@ export function agentEffectHandlers(
 						profile: run.profile,
 						assignment,
 						rendered,
-						paneId: pane.paneId,
-						...(pane.tabId ? { tabId: pane.tabId } : {}),
 						cwd: snapshot.metadata.worktree,
 						...(runDirectory ? { runDirectory } : {}),
 						name,
 						environment: assignment.environment,
-						// A runtime that hosts its own process emits telemetry natively
-						// from durable hooks (durable-agent-tools: "Runtime telemetry
-						// envelopes") instead of through a loaded bridge script.
-						...(adapter.hostsOwnProcess
-							? {}
-							: {
-									bridgePath:
-										run.profile.runtime === "pi"
-											? `${assetRoot}/bridges/pi-telemetry.ts`
-											: `${assetRoot}/bridges/${run.profile.runtime === "opencode-v2" ? "opencode-v2" : "opencode"}-telemetry.js`,
-								}),
-						...piLaunchAssets(run.profile.runtime, assetRoot),
-						...(pi ? { globalTools: globalPiTools() } : {}),
 						...(jev ? { jev } : {}),
 						signal,
 					};
 					const launchOutcome = yield* Effect.either(adapter.launch(ctx));
 					if (Either.isLeft(launchOutcome)) {
-						// Only close the pane when this launch call created it; a
-						// reused pane may still host another live agent, so a failed
-						// relaunch must never tear it down.
-						if (
-							pane.owned === true &&
-							engine.effectOwnsLease(repo, effect.id, effect.lease ?? "")
-						) {
-							yield* options.port
-								.paneClose(pane.paneId)
-								.pipe(Effect.catchAll(() => Effect.void));
-						}
 						const detail =
 							launchOutcome.left instanceof Error
 								? launchOutcome.left.message
@@ -1855,7 +1523,7 @@ export function agentEffectHandlers(
 						return;
 					const run = engine.getRun(repo, runId(effect));
 					const snapshot = engine.getSnapshot(repo, run.workflowId);
-					const step = options.registry.stepForDefinition(
+					const _step = options.registry.stepForDefinition(
 						snapshotDefinition(snapshot, options.registry),
 						run.stepId,
 					);
@@ -1869,45 +1537,27 @@ export function agentEffectHandlers(
 						result && typeof result === "object"
 							? (result as Record<string, unknown>)
 							: undefined;
-					const resolved =
-						candidate &&
-						typeof candidate.name === "string" &&
-						typeof candidate.paneId === "string"
+					const resolved: AgentHandle | undefined =
+						candidate && typeof candidate.name === "string"
 							? {
 									runtime: run.profile.runtime,
 									name: candidate.name,
-									paneId: candidate.paneId,
-									...(typeof candidate.tabId === "string"
-										? { tabId: candidate.tabId }
+									...(typeof candidate.hostSocket === "string"
+										? { hostSocket: candidate.hostSocket }
 										: {}),
 									...(typeof candidate.sessionId === "string"
 										? { sessionId: candidate.sessionId }
 										: {}),
 								}
 							: ownsClaim
-								? yield* p(() =>
-										resolveLiveAgentAsync(
-											options.port,
-											snapshot.workflowId,
-											snapshot.definition.id,
-											run,
-											undefined,
-											step,
-										),
-									)
+								? (run.handle ?? durableHandleFor(snapshot, run))
 								: undefined;
 					if (
 						resolved &&
 						engine.effectOwnsLease(repo, effect.id, effect.lease ?? "")
 					) {
 						const adapter = options.adapters.get(run.profile.runtime);
-						if (adapter) {
-							yield* adapter.stop(
-								"runtime" in resolved
-									? resolved
-									: { ...resolved, runtime: run.profile.runtime },
-							);
-						}
+						if (adapter) yield* adapter.stop(resolved);
 					}
 					yield* Effect.sync(() =>
 						engine.acknowledgeCancelledEffect(
@@ -1991,40 +1641,21 @@ export function agentEffectHandlers(
 				}),
 		},
 		// Stop effects also cover launches that had not persisted a handle when
-		// preset switching retired their run; resolve those by canonical identity.
+		// preset switching retired their run; the durable conversation is
+		// addressed by the run id, so the handle is derived when none is stored.
 		"agent.stop": {
 			execute: (effect, signal) =>
 				Effect.gen(function* () {
 					const run = engine.getRun(repo, runId(effect));
 					const snapshot = engine.getSnapshot(repo, run.workflowId);
-					const definition = snapshotDefinition(snapshot, options.registry);
-					const step = options.registry.stepForDefinition(
-						definition,
-						run.stepId,
-					);
-					const resolved =
-						run.handle ??
-						(yield* p(() =>
-							resolveLiveAgentAsync(
-								options.port,
-								snapshot.workflowId,
-								snapshot.definition.id,
-								run,
-								signal,
-								step,
-							),
-						));
+					const resolved = run.handle ?? durableHandleFor(snapshot, run);
 					if (resolved) {
 						const adapter = options.adapters.get(run.profile.runtime);
 						if (!adapter)
 							throw new PermanentFailure(
 								`adapter unavailable: ${run.profile.runtime}`,
 							);
-						const handle: AgentHandle =
-							"runtime" in resolved
-								? (resolved as AgentHandle)
-								: { ...resolved, runtime: run.profile.runtime };
-						yield* adapter.stop(handle, signal);
+						yield* adapter.stop(resolved, signal);
 					}
 					yield* Effect.sync(() =>
 						emitAdapter(snapshot, run, {
@@ -2037,17 +1668,11 @@ export function agentEffectHandlers(
 				}),
 		},
 		"notification.show": {
-			execute: (effect, _signal) =>
-				Effect.gen(function* () {
-					const body = effect.payload as { title?: string; body?: string };
-					yield* portCall(
-						options.port.notify({
-							title: body.title ?? "Workflow update",
-							body: body.body ?? "",
-						}),
-					);
-					return { shown: true };
-				}),
+			// The multiplexer's desktop notifier is gone with the multiplexer; the
+			// shell surfaces workflow state in its own surfaces, and the durable
+			// `gate.skip`/attention telemetry is unaffected. Kept as an explicit
+			// no-op so a queued effect completes instead of failing the drain.
+			execute: (_effect, _signal) => Effect.succeed({ shown: false }),
 		},
 		"wiki.verify": {
 			execute: (effect, signal) =>
@@ -2328,24 +1953,11 @@ export function agentEffectHandlers(
 					return { url: result.stdout.trim() };
 				}),
 		},
+		// The external workspace is gone with the multiplexer: the workflow's own
+		// status is the only lifecycle there is, so closing one is already done.
 		"workspace.close": {
-			observe: (effect, _signal) =>
-				Effect.gen(function* () {
-					const workspace = snapshotFor(effect).metadata.workspace;
-					if (!workspace) return true;
-					// The getter folds confirmed absence into `undefined`, so an
-					// undefined result is already-closed and a failure stays a failure.
-					const info = yield* portCall(options.port.workspaceGet(workspace));
-					if (!info) return true;
-					return info.status === "closed" || Boolean(info.closedAt);
-				}),
-			execute: (effect, _signal) =>
-				Effect.gen(function* () {
-					const workspace = snapshotFor(effect).metadata.workspace;
-					if (workspace)
-						yield* portCall(options.port.workspaceClose(workspace));
-					return { closed: true };
-				}),
+			observe: (_effect, _signal) => Effect.succeed(true),
+			execute: (_effect, _signal) => Effect.succeed({ closed: true }),
 		},
 		"workspace.cleanup": {
 			observe: (effect) =>
@@ -2417,7 +2029,7 @@ function resolveWorktree(
 ): Effect.Effect<string | undefined, Error> {
 	return port.find(repo, branch).pipe(
 		Effect.map((ref) => ref?.path),
-		Effect.mapError((error) => classifyMultiplexerFailure(error)),
+		Effect.mapError((error) => classifyWorktreeFailure(error)),
 	);
 }
 
@@ -2431,7 +2043,7 @@ function worktreePortCall<A>(
 		Effect.mapError((error) =>
 			error.kind === "conflict"
 				? new PermanentFailure(error.message)
-				: classifyMultiplexerFailure(error),
+				: classifyWorktreeFailure(error),
 		),
 	);
 }
@@ -2442,151 +2054,6 @@ function worktreePortOf(): WorktreePort {
 	return worktreePort();
 }
 
-/** The workspace the developer is looking at, or `undefined` when the runtime
- * does not report one. A read failure degrades to "unknown" so it can never
- * fail workspace setup. */
-async function activeWorkspaceAsync(
-	port: MultiplexerPort,
-): Promise<string | undefined> {
-	try {
-		const workspaces = await Effect.runPromise(port.workspaceList());
-		return workspaces.find((item) => item.active && item.status !== "closed")
-			?.workspaceId;
-	} catch {
-		return undefined;
-	}
-}
-
-/** Put the developer's view back after a setup that had to focus the workflow
- * workspace. A failed restore is best-effort: setup already succeeded. */
-function restoreWorkspaceFocus(
-	port: MultiplexerPort,
-	previous: string | undefined,
-	current: string,
-): Effect.Effect<void, never> {
-	if (!previous || previous === current) return Effect.void;
-	return port.workspaceFocus(previous).pipe(Effect.catchAll(() => Effect.void));
-}
-async function recoverWorkspaceAsync(
-	port: MultiplexerPort,
-	identity: string,
-	_signal?: AbortSignal,
-): Promise<string | undefined> {
-	try {
-		const info = await Effect.runPromise(port.workspaceGet(identity));
-		if (info && info.status !== "closed") return info.workspaceId;
-	} catch {
-		/* fall through to list recovery */
-	}
-	try {
-		const workspaces = await Effect.runPromise(port.workspaceList());
-		return workspaces.find(
-			(item) =>
-				item.status !== "closed" &&
-				(item.label === identity || item.name === identity),
-		)?.workspaceId;
-	} catch {
-		return undefined;
-	}
-}
-async function dashboardReadyAsync(
-	port: MultiplexerPort,
-	workspace: string,
-	_signal?: AbortSignal,
-): Promise<boolean> {
-	try {
-		const tabs = await Effect.runPromise(port.tabList(workspace));
-		// Tab labels carry a status glyph, so match the base name rather than the
-		// raw label (the dashboard tab can acquire a glyph when a run shares it).
-		return findAgentTabByBase(tabs, "dashboard") !== undefined;
-	} catch {
-		return false;
-	}
-}
-function writeDashboardHandoff(worktree: string, workflowId: string): string {
-	const url = process.env.AGENTIC_WORKFLOW_URL;
-	const token = process.env.AGENTIC_WORKFLOW_TOKEN;
-	if (!url || !token) return "";
-
-	const envFile = path.join(
-		worktree,
-		".herdr-workflow",
-		workflowId,
-		"dashboard.env",
-	);
-	const directory = openSecureDirectory(path.dirname(envFile), worktree);
-	try {
-		writeAtomicPrivateFile(
-			directory,
-			path.basename(envFile),
-			[
-				`AGENTIC_WORKFLOW_URL=${Bun.$.escape(url)}`,
-				`AGENTIC_WORKFLOW_TOKEN=${Bun.$.escape(token)}`,
-				"",
-			].join("\n"),
-			0o600,
-		);
-	} finally {
-		closeSecureDirectory(directory);
-	}
-	return `set -a; . ${Bun.$.escape(envFile)}; set +a; `;
-}
-
-async function ensureWorkspaceTabs(
-	port: MultiplexerPort,
-	workspace: string,
-	worktree: string,
-	workflowId: string,
-	dashboardRepo = worktree,
-	_signal?: AbortSignal,
-): Promise<void> {
-	const tabs = await Effect.runPromise(port.tabList(workspace));
-	if (!findAgentTabByBase(tabs, "dashboard")) {
-		const panes = await Effect.runPromise(
-			port.paneList({ workspaceId: workspace }),
-		);
-		const tab = tabs[0];
-		const root = tab
-			? panes.find((pane) => pane.tabId === tab.tabId)?.paneId
-			: undefined;
-		if (!tab || !root) throw new Error("workspace dashboard pane unavailable");
-		await Effect.runPromise(port.waitForShell(root));
-		await Effect.runPromise(port.tabRename(tab.tabId, "dashboard"));
-		const command = [
-			writeDashboardHandoff(worktree, workflowId),
-			[
-				"agentic-coding",
-				"dash",
-				"--repo",
-				dashboardRepo,
-				"--workflow-id",
-				workflowId,
-			]
-				.map((value) => Bun.$.escape(value))
-				.join(" "),
-		].join("");
-		await Effect.runPromise(port.paneRun(root, command));
-	}
-	// Auxiliary git tab (lazygit): best-effort — the dashboard's Git panel
-	// recreates it on demand if this fails (e.g. lazygit not installed).
-	if (!findAgentTabByBase(tabs, "git")) {
-		try {
-			const created = await Effect.runPromise(
-				port.tabCreate({
-					workspaceId: workspace,
-					cwd: worktree,
-					label: "git",
-				}),
-			);
-			if (created.rootPaneId)
-				await Effect.runPromise(port.paneRun(created.rootPaneId, "lazygit"));
-		} catch {
-			const gitTab = findAgentTabByBase(tabs, "git")?.tabId;
-			if (gitTab)
-				await Effect.runPromise(port.tabClose(gitTab)).catch(() => {});
-		}
-	}
-}
 function roundScoped(
 	stepId: string,
 	step?: Pick<StepDefinition, "behavior">,
@@ -2623,118 +2090,32 @@ export function canonicalAgentName(
 		: run.role;
 	return `${shortRole.slice(0, 14)}-${hash}`;
 }
-/**
- * Pre-canonical naming (`<truncated workflowId>-<role>[-<runId8>]`). Lossy under
- * Herdr's 32-char cap; kept only so in-flight workflows launched before the
- * canonical scheme resolve once via the legacy derivation, then migrate to
- * canonical names on first adoption.
- */
-export function legacyRunName(
-	workflowId: string,
-	run: { stepId: string; role: string; id: string },
-	step?: Pick<StepDefinition, "behavior">,
-): string {
-	const suffix = roundScoped(run.stepId, step)
-		? `-${run.role}-${run.id.slice(0, 8)}`
-		: `-${run.role}`;
-	const head = workflowId.slice(0, Math.max(1, 32 - suffix.length));
-	return `${head}${suffix}`.slice(0, 32);
-}
-interface HerdrAgent {
-	pane_id?: string;
-	tab_id?: string;
-	session_id?: string;
-	agent_status?: string;
-}
-export interface LiveAgent {
-	name: string;
-	paneId: string;
-	tabId?: string;
-	sessionId?: string;
-}
-/** Async pane-liveness probe used by the pane-allocation boundary at the
- * application root (complete-workflow-effect-cutover, task 3.1): production
- * callers await this instead of the removed synchronous herdr probe. */
-export async function isPaneLiveAsync(
-	port: MultiplexerPort,
-	paneId: string,
-	signal?: AbortSignal,
-): Promise<boolean> {
-	return Boolean(await getLiveAgentAsync(port, paneId, signal));
-}
-async function getLiveAgentAsync(
-	port: MultiplexerPort,
-	key: string,
-	_signal?: AbortSignal,
-): Promise<HerdrAgent | undefined> {
-	try {
-		const agent = await Effect.runPromise(port.agentGet(key));
-		if (!agent?.paneId) return undefined;
-		if (!agent.status || agent.status === "unknown") return undefined;
-		return {
-			pane_id: agent.paneId,
-			...(agent.tabId ? { tab_id: agent.tabId } : {}),
-			...(agent.sessionId ? { session_id: agent.sessionId } : {}),
-			agent_status: agent.status,
-		};
-	} catch {
-		return undefined;
-	}
-}
-function adopt(name: string, live: HerdrAgent): LiveAgent {
+/** The durable handle of one run, derived from the workflow identity when the
+ * engine has not persisted one yet: the host socket path is a function of the
+ * runtime directory and the conversation is keyed by the run id. */
+function durableHandleFor(
+	snapshot: WorkflowSnapshot,
+	run: {
+		id: string;
+		stepId: string;
+		role: string;
+		profile: { runtime: RuntimeId };
+		handle?: AgentHandle;
+	},
+): AgentHandle {
+	const runtimeDir =
+		snapshot.definition.id === "wiki-comments" ||
+		snapshot.definition.id === "research"
+			? path.join(wikiWorkflowDataRoot(), snapshot.workflowId)
+			: path.join(snapshot.metadata.worktree, ".herdr-workflow");
 	return {
-		name,
-		paneId: String(live.pane_id),
-		...(live.tab_id ? { tabId: String(live.tab_id) } : {}),
-		...(live.session_id ? { sessionId: String(live.session_id) } : {}),
+		runtime: run.profile.runtime,
+		name: canonicalAgentName(snapshot.workflowId, snapshot.definition.id, run),
+		hostSocket: hostLayout(runtimeDir).socketPath,
+		sessionId: run.id,
 	};
 }
-/**
- * Single authority for reuse-before-spawn: given a run's persisted handle and
- * its canonical identity, find the live agent to talk to.
- *
- * 1. A stored handle's pane id is transport only — confirm it still belongs to
- *    a live agent; on mismatch/death discard the pane id but keep looking.
- * 2. Look the agent up by canonical name and adopt its current pane.
- * 3. Fall back to the legacy derivation once (migration window for agents
- *    launched before the canonical scheme).
- *
- * The returned name is always canonical, so adopting re-keys stale handles
- * onto the canonical scheme. Returns undefined when no live agent exists —
- * the only outcome under which callers may spawn a fresh pane.
- */
-export async function resolveLiveAgentAsync(
-	port: MultiplexerPort,
-	workflowId: string,
-	definitionId: string,
-	run: { stepId: string; role: string; id: string; handle?: AgentHandle },
-	signal?: AbortSignal,
-	step?: Pick<StepDefinition, "behavior">,
-): Promise<LiveAgent | undefined> {
-	const canonical = canonicalAgentName(workflowId, definitionId, run, step);
-	if (run.handle?.paneId) {
-		const live = await getLiveAgentAsync(port, run.handle.paneId, signal);
-		if (live && live.pane_id === run.handle.paneId)
-			return adopt(canonical, live);
-	}
-	const byCanonical = await getLiveAgentAsync(port, canonical, signal);
-	if (byCanonical) return adopt(canonical, byCanonical);
-	const legacy = legacyRunName(workflowId, run, step);
-	if (legacy === canonical) return undefined;
-	const byLegacy = await getLiveAgentAsync(port, legacy, signal);
-	return byLegacy ? adopt(canonical, byLegacy) : undefined;
-}
 
-/**
- * Publishes `.herdr-workflow/runtime-bin/by-agent/<canonicalName>` pointing at
- * the current run's run.env (relative to the worktree), via atomic rename. The
- * pi telemetry bridge reads it with its own --name to recover the run env
- * deterministically for every name shape. Written at launch and at every
- * reused-prompt delivery so the pointer never outlives its run.
- */
-function _shellQuote(value: string): string {
-	return `'${value.replace(/'/g, `'\\''`)}'`;
-}
 function writeRunEnvironment(
 	worktree: string,
 	runId: string,
@@ -2750,46 +2131,14 @@ function writeRunEnvironment(
 		environment,
 	});
 }
-export function writeAgentEnvPointer(
-	worktree: string,
-	agentName: string,
-	runId: string,
-	runDirectory?: string,
-): void {
-	const pointer = path.join(
-		worktree,
-		".herdr-workflow",
-		"runtime-bin",
-		"by-agent",
-		agentName,
-	);
-	const directory = openSecureDirectory(path.dirname(pointer), worktree);
-	try {
-		const target = path.relative(
-			worktree,
-			path.join(
-				runDirectory ?? path.join(worktree, ".herdr-workflow"),
-				"runtime-bin",
-				runId,
-				"run.env",
-			),
-		);
-		writeAtomicPrivateFile(directory, agentName, `${target}\n`, 0o600);
-	} finally {
-		closeSecureDirectory(directory);
-	}
-}
 export const effectRunnerTest = {
 	announceGateSkipBoundary,
 	canonicalAgentName,
 	commitAndPushWiki,
 	gateClassification,
-	legacyRunName,
 	pinnedClassifierProvider,
-	resolveLiveAgentAsync,
 	routingClassification,
 	triageClassification,
-	writeAgentEnvPointer,
 	renderedAssignment,
 };
 
@@ -2798,25 +2147,10 @@ export const effectRunnerTest = {
  * cannot be a durable effect, and the reducer's `gateDecisions` record plus
  * the `attention` entry are the guarantee that a skip is never silent. */
 export function announceGateSkipBoundary(
-	notify: (input: {
-		title: string;
-		body: string;
-	}) => Effect.Effect<unknown, unknown>,
 	emit: (stage: string, noul?: number) => void,
 	stage: string,
 	noul?: number,
 ): void {
-	const answer = noul === undefined ? "" : ` (necessity ${noul})`;
-	try {
-		void Effect.runPromise(
-			notify({
-				title: "Workflow stage skipped",
-				body: `The ${stage} stage was skipped by the classifier${answer}.`,
-			}).pipe(Effect.catchAll(() => Effect.void)),
-		).catch(() => {});
-	} catch {
-		/* an announcement must never alter the workflow outcome */
-	}
 	emit(stage, noul);
 }
 /** What one sweep decided, in the bounded form the decision history records.

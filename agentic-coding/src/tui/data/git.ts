@@ -2,7 +2,7 @@
 //
 // Worktree status/diff and wiki concept/render/snapshot reads through the
 // gateway. Selectors expose contract data and take callbacks; they never touch
-// the filesystem, a Git process or a Herdr socket.
+// the filesystem or a Git process.
 import {
 	diffBodySchema,
 	type LocalChange,

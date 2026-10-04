@@ -21,27 +21,10 @@ import {
 	type AgentsConfig,
 	type AgentsMutation,
 	BUILTIN_PRESET_NAME,
-	runtimeModels,
 } from "../data/agents.ts";
 
-export const RUNTIMES = [
-	"pi",
-	"pi-durable",
-	"opencode",
-	"opencode-v2",
-] as const;
-const RUNTIME_EXECUTABLES: Record<string, string> = {
-	pi: "pi",
-	"pi-durable": "pi-durable",
-	opencode: "opencode",
-	"opencode-v2": "opencode2",
-};
-/** Runtimes that share pi's `model`/`thinking` shape (no `agent` field, a
- * selectable thinking level): the pane-based `pi` and the pane-less
- * `pi-durable` (add-pi-durable-runtime). */
-function hasPiShapedOptions(runtime: string): boolean {
-	return runtime === "pi" || runtime === "pi-durable";
-}
+/** The one execution environment (multiplexer removal). */
+export const RUNTIMES = ["pi-durable"] as const;
 const THINKING_LEVELS = ["", "minimal", "low", "medium", "high"];
 
 export type AgentListKind = "profiles" | "presets";
@@ -96,7 +79,6 @@ export interface ProfileDraft {
 	originalName?: string;
 	runtime: RuntimeId;
 	model: string;
-	agent: string;
 	thinking: string;
 	/** Fields the form does not edit, carried through so a save never drops them
 	 * (the mutation replaces the whole profile object). */
@@ -162,11 +144,7 @@ export function profileFields(
 	// caller resolved in process (the same list the dashboard `/model` picker
 	// shows for a durable run).
 	const models: string[] | undefined =
-		draft.runtime === "pi-durable"
-			? durableModels && durableModels.length > 0
-				? [...durableModels]
-				: undefined
-			: enumerateRuntimeModels(draft.runtime);
+		durableModels && durableModels.length > 0 ? [...durableModels] : undefined;
 	fields.push(
 		models
 			? {
@@ -182,19 +160,12 @@ export function profileFields(
 					kind: "text",
 				},
 	);
-	if (!hasPiShapedOptions(draft.runtime))
-		fields.push({
-			key: "agent",
-			label: "Agent name (optional)",
-			kind: "text",
-		});
-	if (hasPiShapedOptions(draft.runtime))
-		fields.push({
-			key: "thinking",
-			label: "Thinking level (Pi / pi-durable only)",
-			kind: "select",
-			options: [...THINKING_LEVELS],
-		});
+	fields.push({
+		key: "thinking",
+		label: "Thinking level",
+		kind: "select",
+		options: [...THINKING_LEVELS],
+	});
 	return fields;
 }
 
@@ -239,18 +210,6 @@ export function presetFields(
 	return fields;
 }
 
-/** The models a runtime enumerates itself, or `undefined` when it cannot
- * enumerate (the field falls back to free text rather than failing the form). */
-function enumerateRuntimeModels(runtime: RuntimeId): string[] | undefined {
-	try {
-		return [
-			...runtimeModels(RUNTIME_EXECUTABLES[runtime] ?? runtime, runtime),
-		].sort();
-	} catch {
-		return undefined;
-	}
-}
-
 /** The fields of a draft (depends on the profile runtime). */
 export function draftFields(
 	draft: Draft,
@@ -269,7 +228,6 @@ export function draftValues(draft: Draft): FormValues {
 			name: draft.name,
 			runtime: draft.runtime,
 			model: draft.model,
-			agent: draft.agent,
 			thinking: draft.thinking,
 		};
 	const values: FormValues = {
@@ -290,10 +248,8 @@ export function draftValues(draft: Draft): FormValues {
 }
 
 /** Apply one edited field back onto the draft. Changing a profile's runtime
- * clears every runtime-scoped field (model/agent/thinking/executable/
- * extensions) so a stale value cannot survive under a harness that does not
- * accept it — opencode rejects pi's `extensions`, and the previous runtime's
- * `executable` would be spawned for the wrong harness. */
+ * clears every runtime-scoped field (model/thinking/executable/extensions) so
+ * a stale value cannot survive under a runtime that does not accept it. */
 export function applyDraftValue(
 	draft: Draft,
 	key: string,
@@ -305,14 +261,12 @@ export function applyDraftValue(
 		else if (key === "runtime") {
 			if (next.runtime !== value) {
 				next.model = "";
-				next.agent = "";
 				next.thinking = "";
 				delete next.executable;
 				delete next.extensions;
 			}
 			next.runtime = value as RuntimeId;
 		} else if (key === "model") next.model = value;
-		else if (key === "agent") next.agent = value;
 		else if (key === "thinking") next.thinking = value;
 		return next;
 	}
@@ -345,9 +299,8 @@ export function profileDraft(
 		kind: "profile",
 		name: name,
 		...(profile ? { originalName: name } : {}),
-		runtime: profile?.runtime ?? "pi",
+		runtime: profile?.runtime ?? "pi-durable",
 		model: profile?.model ?? "",
-		agent: profile?.agent ?? "",
 		thinking: profile?.thinking ?? "",
 		...(profile?.executable ? { executable: profile.executable } : {}),
 		...(profile?.tools ? { tools: profile.tools } : {}),
@@ -484,7 +437,6 @@ export function profileMutation(draft: ProfileDraft): AgentsMutation {
 			runtime: draft.runtime,
 			...(draft.executable ? { executable: draft.executable } : {}),
 			...(draft.model ? { model: draft.model } : {}),
-			...(draft.agent ? { agent: draft.agent } : {}),
 			...(draft.thinking ? { thinking: draft.thinking } : {}),
 			...(draft.tools ? { tools: draft.tools } : {}),
 			...(draft.extensions ? { extensions: draft.extensions } : {}),

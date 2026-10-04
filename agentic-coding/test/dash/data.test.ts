@@ -41,12 +41,6 @@ import {
 	WorkflowEngine,
 } from "../../src/workflow/runtime.ts";
 import {
-	agentTabLabel,
-	aggregateAgentTabStatus,
-} from "../../src/workflow/tab-status.ts";
-import { syncAgentTabLabels } from "../../src/workflow/tab-sync.ts";
-import { asPort } from "../fakes.ts";
-import {
 	createTempRepoFixture,
 	removeRepoFixture,
 } from "../support/git-fixture.ts";
@@ -98,7 +92,7 @@ function writeState(repo: string, change = "review") {
 					role: "worker",
 					profile: {
 						name: "test",
-						runtime: "pi",
+						runtime: "pi-durable",
 						executable: "sh",
 						tools: [],
 						extensions: [],
@@ -122,22 +116,6 @@ function removeWorkflowTask(repo: string, change: string) {
 		metadata: { task?: string };
 	};
 	delete snapshot.metadata.task;
-	db.query("UPDATE workflow_instances SET snapshot_json=? WHERE id=?").run(
-		JSON.stringify(snapshot),
-		row.id,
-	);
-	db.close();
-}
-
-function setWorkflowWorkspace(repo: string, change: string, workspace: string) {
-	const db = new Database(canonicalStorePath(repo));
-	const row = db
-		.query("SELECT id, snapshot_json FROM workflow_instances WHERE id=?")
-		.get(change) as { id: string; snapshot_json: string };
-	const snapshot = JSON.parse(row.snapshot_json) as {
-		metadata: { workspace?: string };
-	};
-	snapshot.metadata.workspace = workspace;
 	db.query("UPDATE workflow_instances SET snapshot_json=? WHERE id=?").run(
 		JSON.stringify(snapshot),
 		row.id,
@@ -177,7 +155,7 @@ test("loadDashboard projects the pinned runtime without fabricating a model", ()
 	writeState(repo);
 	const db = new Database(canonicalStorePath(repo));
 	db.query("UPDATE workflow_runs SET handle_json=? WHERE role=?").run(
-		JSON.stringify({ runtime: "pi", name: "worker", paneId: "worker-pane" }),
+		JSON.stringify({ runtime: "pi-durable", name: "worker" }),
 		"worker",
 	);
 	db.close();
@@ -185,7 +163,7 @@ test("loadDashboard projects the pinned runtime without fabricating a model", ()
 	const agent = loadDashboard(repo, "review").agents.find(
 		(item) => item.role === "worker",
 	);
-	expect(agent).toMatchObject({ runtime: "pi" });
+	expect(agent).toMatchObject({ runtime: "pi-durable" });
 	expect(agent?.model).toBeUndefined();
 });
 
@@ -208,7 +186,6 @@ test("loadDashboard surfaces a durable agent's session identity to the Agents pa
 		JSON.stringify({
 			runtime: "pi-durable",
 			name: "worker",
-			paneId: "",
 			hostSocket: join(repo, ".herdr-workflow/agent-host/host.sock"),
 			conversationId: "7",
 		}),
@@ -250,7 +227,7 @@ test("loadDashboard detects the auto-spawned test verifier before its pane handl
 	const baseCommit = runGit(repo, "rev-parse", "HEAD");
 	const profile = {
 		name: "test",
-		runtime: "pi" as const,
+		runtime: "pi-durable" as const,
 		executable: "sh",
 		tools: [],
 		extensions: [],
@@ -327,7 +304,7 @@ test("agents panel keeps the findings of a verifier a later round dropped", () =
 	const baseCommit = runGit(repo, "rev-parse", "HEAD");
 	const profile = {
 		name: "test",
-		runtime: "pi" as const,
+		runtime: "pi-durable" as const,
 		executable: "sh",
 		tools: [],
 		extensions: [],
@@ -447,56 +424,6 @@ test("agents panel keeps the findings of a verifier a later round dropped", () =
 		dashboard.agents.find((item) => item.role === "quality-verifier")
 			?.findingCounts,
 	).toEqual({ critical: 0, warning: 0, info: 0 });
-});
-
-test("dashboard agent status matches the label the agent tab renders", async () => {
-	const repo = fixture();
-	writeState(repo);
-	setWorkflowWorkspace(repo, "review", "w1");
-	const db = new Database(canonicalStorePath(repo));
-	db.query("UPDATE workflow_runs SET status=?, handle_json=? WHERE role=?").run(
-		"working",
-		JSON.stringify({
-			runtime: "pi",
-			name: "worker",
-			paneId: "worker-pane",
-			tabId: "worker-tab",
-		}),
-		"worker",
-	);
-	db.close();
-
-	const agent = loadDashboard(repo, "review").agents.find(
-		(item) => item.role === "worker",
-	);
-	if (!agent) throw new Error("expected a worker agent");
-	expect(agent.status).toBe("working");
-
-	// The tab surface renders the real label for the same persisted run.
-	const renames: string[][] = [];
-	const herdr = {
-		call(...args: string[]) {
-			if (args[0] === "tab" && args[1] === "list")
-				return { tabs: [{ tab_id: "worker-tab", label: "worker" }] };
-			renames.push(args);
-			return {};
-		},
-	};
-	await syncAgentTabLabels(
-		asPort(herdr),
-		new WorkflowEngine(registerBuiltins()),
-		repo,
-		"review",
-	);
-	// One source: the dashboard status feeds the same composition the tab uses.
-	expect(renames[0]?.[3]).toBe(
-		agentTabLabel("worker", aggregateAgentTabStatus([agent.status])),
-	);
-	expect(renames[0]?.[3]).toBe("● worker");
-	// The shared composition covers the terminal statuses as well.
-	expect(agentTabLabel("worker", aggregateAgentTabStatus(["completed"]))).toBe(
-		"✓ worker",
-	);
 });
 
 test("dashboard does not fabricate runtime for synthetic agents without runs", () => {

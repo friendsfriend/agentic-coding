@@ -1,30 +1,16 @@
 // Server-owned workflow refresh subscriptions (expose-unified-bun-backend,
-// task 3.3). The server subscribes once to Herdr lifecycle events and to each
-// repository's execution coordinator, and publishes `workflow.updated` on the
-// event stream. Dashboards refresh from that stream instead of opening a local
-// Herdr socket or watching store files.
+// task 3.3). The server registers each repository's execution-coordinator
+// listeners and publishes `workflow.updated` on the event stream, so
+// dashboards refresh from that stream instead of watching store files. The
+// former multiplexer lifecycle subscription is gone with the multiplexer: the
+// engine owns run state, and the coordinator is its only publisher.
 
-import { multiplexerPort } from "../multiplexer/factory.ts";
 import {
 	onWorkflowExecutionError,
 	onWorkflowExecutionProgress,
 	onWorkflowExecutionSettled,
 } from "../workflow/execution-coordinator.ts";
 import type { EventBroker } from "./events.ts";
-import { subscribeMultiplexerEvents } from "./herdr-events";
-
-/** Pane output is a firehose, not a state change: a live Luvus session emitted
- * `terminal.output_ready` at ~50 events/s in a 10 s window and nothing else, no
- * surface reads it, and each one was republished as `workflow.updated` — which a
- * consumer reads as "the workflow changed", clearing the dashboard cache and
- * waking a full re-read (measured: back-to-back dashboard reads while an agent
- * streamed). Structural events keep publishing for whatever vocabulary the
- * selected runtime speaks, so no lifecycle change is lost. */
-const OUTPUT_FIREHOSE_EVENTS = new Set(["terminal.output_ready"]);
-
-export function isRefreshWorthyEvent(name: string): boolean {
-	return !OUTPUT_FIREHOSE_EVENTS.has(name);
-}
 
 export interface WorkflowEventHub {
 	/** Register the execution-coordinator listeners for one repository. */
@@ -32,11 +18,7 @@ export interface WorkflowEventHub {
 	stop(): void;
 }
 
-export function startWorkflowEventHub(
-	events: EventBroker,
-	// Seam for tests: the real subscription opens a socket to the selected runtime.
-	subscribe: typeof subscribeMultiplexerEvents = subscribeMultiplexerEvents,
-): WorkflowEventHub {
+export function startWorkflowEventHub(events: EventBroker): WorkflowEventHub {
 	const watched = new Set<string>();
 	const disposers: Array<() => void> = [];
 	let stopped = false;
@@ -48,16 +30,6 @@ export function startWorkflowEventHub(
 			...(workflowId ? { runId: workflowId } : {}),
 		});
 	};
-	disposers.push(
-		subscribe(multiplexerPort(), (event) => {
-			if (!isRefreshWorthyEvent(event.event)) return;
-			events.publish({
-				domain: "workflow",
-				kind: "workflow.updated",
-				payload: event.data,
-			});
-		}),
-	);
 	return {
 		watchRepo(repo) {
 			// A late registration after stop() must not re-arm process-global

@@ -15,117 +15,21 @@ import {
 } from "../src/workflow/effects.ts";
 import {
 	type AgentsConfig,
-	assertModelAvailable,
-	clearModelCache,
 	parseAgentsConfig,
-	parseOpenCodeModels,
-	parsePiModels,
-	preflightProfile,
 	resolveGatePolicies,
 	resolvePreset,
 	resolveProfile,
 	resolveRouting,
-	runtimeModels,
 	validatePresetCoverage,
 } from "../src/workflow/profiles.ts";
-
-function stubExecutable(body: string): string {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "models-stub-"));
-	const file = path.join(dir, `stub-${Date.now()}-${Math.random()}`);
-	fs.writeFileSync(file, `#!/bin/sh\n${body}\n`);
-	fs.chmodSync(file, 0o755);
-	return file;
-}
-const PI_LISTING = `provider       model
-openai         gpt-5.4
-opencode-go    ox-alpha-free
-──────────────`;
-const OPENCODE_LISTING = `anthropic/claude-opus-4
-opencode-go/ox-alpha-free`;
-
-describe("model availability detection", () => {
-	test("parsers handle each runtime's output format", () => {
-		expect(parsePiModels(PI_LISTING)).toEqual([
-			"openai/gpt-5.4",
-			"opencode-go/ox-alpha-free",
-		]);
-		expect(parseOpenCodeModels(OPENCODE_LISTING)).toEqual([
-			"anthropic/claude-opus-4",
-			"opencode-go/ox-alpha-free",
-		]);
-		expect(parsePiModels("")).toEqual([]);
-	});
-	test("runtimeModels caches per executable until cleared", () => {
-		const pi = stubExecutable(`cat <<'EOF'
-${PI_LISTING}
-EOF`);
-		try {
-			expect([...runtimeModels(pi, "pi")].sort()).toEqual([
-				"openai/gpt-5.4",
-				"opencode-go/ox-alpha-free",
-			]);
-			// second call is served from cache (script now deleted)
-			fs.unlinkSync(pi);
-			expect(runtimeModels(pi, "pi").has("openai/gpt-5.4")).toBe(true);
-			// cache invalidation forces a fresh (failing) enumeration
-			clearModelCache();
-			expect(() => runtimeModels(pi, "pi")).toThrow(/model enumeration failed/);
-		} finally {
-			fs.rmSync(path.dirname(pi), { recursive: true, force: true });
-		}
-	});
-	test("preflight rejects unknown models and accepts pi thinking suffixes", () => {
-		const exe = stubExecutable(`cat <<'EOF'
-${PI_LISTING}
-EOF`);
-		try {
-			const ok = parseAgentsConfig({
-				default_profile: "ok",
-				profiles: {
-					ok: { runtime: "pi", executable: exe, model: "openai/gpt-5.4:high" },
-				},
-			});
-			preflightProfile(resolveProfile("ok", ok), []);
-			const bad = parseAgentsConfig({
-				default_profile: "bad",
-				profiles: {
-					bad: { runtime: "pi", executable: exe, model: "openai/nope" },
-				},
-			});
-			expect(() => preflightProfile(resolveProfile("bad", bad), [])).toThrow(
-				/profile bad: unknown model openai\/nope for runtime pi \(available: openai\/gpt-5\.4/,
-			);
-		} finally {
-			fs.rmSync(path.dirname(exe), { recursive: true, force: true });
-		}
-	});
-	test("enumeration failure fails closed with the command error", () => {
-		const exe = stubExecutable('echo "catalog unavailable" >&2\nexit 3');
-		try {
-			const config = parseAgentsConfig({
-				default_profile: "p",
-				profiles: { p: { runtime: "pi", executable: exe, model: "a/b" } },
-			});
-			const profile = resolveProfile("p", config);
-			expect(() => assertModelAvailable(profile)).toThrow(
-				/model enumeration failed \(.*--list-models\): catalog unavailable/,
-			);
-			expect(() => preflightProfile(profile, [])).toThrow(
-				/catalog unavailable/,
-			);
-		} finally {
-			fs.rmSync(path.dirname(exe), { recursive: true, force: true });
-		}
-	});
-});
 
 describe("agent configuration presets", () => {
 	const baseConfig = {
 		default_profile: "d",
 		profiles: {
-			d: { runtime: "pi" },
-			a: { runtime: "opencode" },
-			b: { runtime: "opencode-v2" },
+			d: { runtime: "pi-durable" },
+			a: { runtime: "pi-durable" },
+			b: { runtime: "pi-durable" },
 		},
 	};
 	test("preset validation errors name preset, entry, and unknown profile", () => {
@@ -169,7 +73,7 @@ describe("agent configuration presets", () => {
 		expect(() =>
 			resolveProfile("valueOf", {
 				default_profile: "d",
-				profiles: { d: { runtime: "pi" } },
+				profiles: { d: { runtime: "pi-durable" } },
 			}),
 		).toThrow(/unknown agent profile: valueOf/);
 	});
@@ -316,7 +220,7 @@ describe("agent configuration presets", () => {
 		);
 	});
 	test("pool entry rules are rejected at parse", () => {
-		const profile = { runtime: "pi" as const };
+		const profile = { runtime: "pi-durable" as const };
 		expect(() =>
 			parseAgentsConfig({
 				profiles: { a: profile, b: profile },
@@ -371,7 +275,7 @@ describe("agents section write-back", () => {
 			`${JSON.stringify(
 				{
 					agents: {
-						profiles: { "pi-a": { runtime: "pi" } },
+						profiles: { "pi-a": { runtime: "pi-durable" } },
 						presets: {
 							base: {
 								default_profile: "pi-a",
@@ -396,7 +300,7 @@ describe("agents section write-back", () => {
 					.agents,
 			);
 			expect(agents.default_profile).toBe("pi-a");
-			expect(agents.profiles["pi-a"]?.runtime).toBe("pi");
+			expect(agents.profiles["pi-a"]?.runtime).toBe("pi-durable");
 			expect(agents.presets?.base?.default_profile).toBe("pi-a");
 		} finally {
 			delete process.env.HERDR_WORKFLOW_CONFIG;
@@ -420,7 +324,7 @@ describe("agents section write-back", () => {
 					ui: { theme: "catppuccin", selection_height: 10 },
 					agents: {
 						default_profile: "pi-a",
-						profiles: { "pi-a": { runtime: "pi", model: "a/b" } },
+						profiles: { "pi-a": { runtime: "pi-durable", model: "a/b" } },
 						routes: { "core.plan": "pi-a" },
 						presets: {
 							base: {
@@ -443,7 +347,7 @@ describe("agents section write-back", () => {
 			expect(agentsConfigPath()).toBe(file);
 			saveAgentsSection((section) => {
 				const profiles = section.profiles as Record<string, unknown>;
-				profiles["oc-worker"] = { runtime: "opencode", agent: "build" };
+				profiles["oc-worker"] = { runtime: "pi-durable" };
 				const presets = section.presets as Record<string, unknown>;
 				presets.extra = {
 					default_profile: "pi-a",
@@ -468,8 +372,7 @@ describe("agents section write-back", () => {
 			const agents = parseAgentsConfig(reparsed.agents);
 			expect(agents.default_profile).toBe("pi-a");
 			expect(agents.profiles["oc-worker"]).toMatchObject({
-				runtime: "opencode",
-				agent: "build",
+				runtime: "pi-durable",
 			});
 			expect(agents.profiles["pi-a"]?.model).toBe("a/b");
 			expect(agents.routes?.["core.plan"]).toBe("pi-a");
@@ -610,7 +513,7 @@ describe("write-back target selection", () => {
 				{
 					agents: {
 						default_profile: "p",
-						profiles: { p: { runtime: "pi" } },
+						profiles: { p: { runtime: "pi-durable" } },
 					},
 				},
 				null,
@@ -764,9 +667,9 @@ describe("dashboard fusion start routing", () => {
 	const baseConfig = {
 		default_profile: "d",
 		profiles: {
-			d: { runtime: "pi" },
-			a: { runtime: "pi" },
-			b: { runtime: "pi" },
+			d: { runtime: "pi-durable" },
+			a: { runtime: "pi-durable" },
+			b: { runtime: "pi-durable" },
 		},
 	};
 	const registry = registerBuiltins();
@@ -840,8 +743,8 @@ describe("dashboard fusion start routing", () => {
 			...baseConfig,
 			profiles: {
 				...baseConfig.profiles,
-				c: { runtime: "pi" },
-				e: { runtime: "pi" },
+				c: { runtime: "pi-durable" },
+				e: { runtime: "pi-durable" },
 			},
 			presets: { five: { pools: fusionPools(["a", "b", "c", "d", "e"]) } },
 		});
@@ -870,9 +773,9 @@ describe("dashboard fusion start routing", () => {
 				...baseConfig,
 				profiles: {
 					...baseConfig.profiles,
-					c: { runtime: "pi" },
-					e: { runtime: "pi" },
-					f: { runtime: "pi" },
+					c: { runtime: "pi-durable" },
+					e: { runtime: "pi-durable" },
+					f: { runtime: "pi-durable" },
 				},
 				presets: {
 					six: { pools: fusionPools(["a", "b", "c", "d", "e", "f"]) },
@@ -920,7 +823,7 @@ describe("dashboard fusion start routing", () => {
 describe("stage gate policy resolution", () => {
 	const baseConfig = {
 		default_profile: "d",
-		profiles: { d: { runtime: "pi" } },
+		profiles: { d: { runtime: "pi-durable" } },
 	};
 	const pools = {
 		"core.plan": [{ label: "quick", profile: "d", default: true }],
@@ -1012,7 +915,7 @@ describe("stage gate policy resolution", () => {
 		expect(() =>
 			parseAgentsConfig({
 				...baseConfig,
-				presets: { "use-default-model": { runtime: "pi", gates: {} } },
+				presets: { "use-default-model": { runtime: "pi-durable", gates: {} } },
 			}),
 		).toThrow(/reserved preset use-default-model/);
 	});

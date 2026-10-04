@@ -2,7 +2,7 @@
 //
 // List/get/start/action/handoff/repair/preview/question through the gateway
 // port. Nothing here imports the workflow engine, server internals, the
-// filesystem, Git or Herdr: the transport decision belongs to the adapter
+// filesystem or Git: the transport decision belongs to the adapter
 // behind the port, and projections stay pure.
 import { Schema } from "effect";
 import type {
@@ -126,17 +126,11 @@ export async function loadDashboardSeed(
 		worktree: view.worktree,
 		branch: view.branch,
 		task: view.task,
-		workspace: view.workspace ?? "",
 		verificationRound,
 		baseCommit: view.baseCommit,
 		createdAt: view.createdAt,
 		phaseStartedAt: view.currentStep.enteredAt,
 		...(view.selectedPreset ? { selectedPreset: view.selectedPreset } : {}),
-		panes: Object.fromEntries(
-			[...latest.values()].flatMap((run) =>
-				run.paneId ? [[run.role, run.paneId]] : [],
-			),
-		),
 		runs: view.runs,
 		verificationRoles: currentVerifierRuns.map((run) => run.role),
 		verificationModels: Object.fromEntries(

@@ -18,7 +18,6 @@ import {
 	CLASSIFIER_PANEL,
 	movePanel,
 	type PanelDirection,
-	panelAtEdge,
 } from "../panel-grid.ts";
 import { classificationDetail, classificationEntries } from "../projections.ts";
 
@@ -40,14 +39,6 @@ export interface DashboardKeyContext {
 	readonly busy: () => boolean;
 	readonly activePanel: () => number;
 	readonly setActivePanel: (index: number) => void;
-	/** Composition-root panel boundary: called for horizontal panel movement
-	 * before the grid moves, with the active panel's column edge. Returns true
-	 * when the root handled the move (it owns a panel beside the dashboard),
-	 * false to keep the dashboard's own grid navigation. */
-	readonly onPanelExit?: (
-		direction: "left" | "right",
-		atEdge: boolean,
-	) => boolean;
 	readonly refresh: () => void;
 	readonly selectedAgent: () => number;
 	readonly setSelectedAgent: (index: number) => void;
@@ -84,19 +75,14 @@ export interface DashboardKeyContext {
 		repo: string,
 		workflowId: string,
 	) => Promise<DashboardData | undefined>;
-	readonly focusReturnWorkspace: (
-		repo: string,
-		workflowId: string,
-		workspace: string,
-	) => void;
+	/** Composition-root panel boundary for Escape: true when the root handled
+	 * it (the shell moves focus to the workspace sidebar). A standalone
+	 * dashboard leaves it undefined and the key is a no-op. */
+	readonly onBack?: () => boolean;
 	readonly applyTheme: (name: string) => void;
 	readonly themeNames: readonly string[];
 	readonly setDemoIndex: (update: (index: number) => number) => void;
 	readonly openFindingInEditor: (path: string, line: number) => void;
-	readonly focusAgentAsync: (
-		state: DashboardData["state"],
-		role: string,
-	) => Promise<void>;
 	readonly switchWorkflowPreset: (
 		repo: string,
 		workflowId: string,
@@ -239,8 +225,7 @@ export function createDashboardKeyHandler(
 		const classifications = () => classificationEntries(data().state);
 		const _routeModalHelp = context.routeModalHelp;
 		const setBusy = context.setBusy;
-		const loadDashboard = context.loadDashboard;
-		const focusReturnWorkspace = context.focusReturnWorkspace;
+		const _loadDashboard = context.loadDashboard;
 		const applyTheme = context.applyTheme;
 		const themeNames = context.themeNames;
 		const demoPhases = context.demoPhases;
@@ -251,7 +236,6 @@ export function createDashboardKeyHandler(
 		const _openRequiredUserAction = context.openRequiredUserAction;
 		const openPresetSwitcher = context.openPresetSwitcher;
 		const _openFindingInEditor = context.openFindingInEditor;
-		const focusAgentAsync = context.focusAgentAsync;
 		const _switchWorkflowPreset = context.switchWorkflowPreset;
 		const runWorkflow = context.runWorkflow;
 		const _applyRepair = context.applyRepair;
@@ -348,27 +332,10 @@ export function createDashboardKeyHandler(
 			return;
 		}
 		if (name === "escape") {
-			setBusy(true);
-			try {
-				const current =
-					props.profile === "test"
-						? data()
-						: await loadDashboard(props.repo, props.workflowId);
-				const workspace = current?.state.returnWorkspace;
-				if (!workspace)
-					throw new Error(
-						"No dashboard workspace recorded. Open this workflow from the overview first.",
-					);
-				focusReturnWorkspace(props.repo, props.workflowId, workspace);
-			} catch {
-				traceTui(
-					"tui.dashboard.action",
-					{ surface: "dashboard", action: "return-workspace" },
-					"error",
-				);
-			} finally {
-				setBusy(false);
-			}
+			// The composition root's panel boundary gets the key first: the shell
+			// moves focus to the workspace sidebar. A standalone dashboard has no
+			// panel to return to, so Escape is a no-op there.
+			context.onBack?.();
 			return;
 		}
 		if (name === "t" && key.shift) {
@@ -452,14 +419,6 @@ export function createDashboardKeyHandler(
 						: name === "h"
 							? "left"
 							: "right";
-			// A composition root that mounts the dashboard beside another panel
-			// (the workspace sidebar) gets the boundary move first; only the
-			// dashboard's own grid handles the key when the root declines.
-			if (
-				(direction === "left" || direction === "right") &&
-				context.onPanelExit?.(direction, panelAtEdge(activePanel(), direction))
-			)
-				return;
 			setActivePanel(
 				movePanel(activePanel(), direction, {
 					artifactsVisible: artifacts().length > 0,
@@ -545,29 +504,14 @@ export function createDashboardKeyHandler(
 			if (activePanel() === 1) {
 				const agent = data().agents[selectedAgent()];
 				if (!agent) return;
-				// A durable agent hosts its own process (add-pi-durable-runtime): there
-				// is no pane to focus, so Enter opens the live, writable agent session
-				// view instead.
-				if (agent.runtime === "pi-durable") {
-					if (!agent.hostSocket || !agent.runId) return;
-					context.openAgentSession({
-						role: agent.role,
-						runId: agent.runId,
-						hostSocket: agent.hostSocket,
-					});
-					return;
-				}
-				try {
-					const pane = data().state.panes[agent.role];
-					if (!pane) return;
-					await focusAgentAsync(data().state, pane);
-				} catch {
-					traceTui(
-						"tui.dashboard.action",
-						{ surface: "dashboard", action: "focus-agent" },
-						"error",
-					);
-				}
+				// The durable host is the only runtime: Enter opens the live,
+				// writable agent session view for the run's conversation.
+				if (!agent.hostSocket || !agent.runId) return;
+				context.openAgentSession({
+					role: agent.role,
+					runId: agent.runId,
+					hostSocket: agent.hostSocket,
+				});
 				return;
 			}
 			const approval = gate();

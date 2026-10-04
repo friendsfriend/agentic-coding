@@ -53,10 +53,10 @@ export function recordResearchHandoff(
 		);
 	}
 	validateSourceBaseline(snapshot);
-	if (!snapshot.metadata.workspace)
+	if (!snapshot.metadata.worktree)
 		throw new WorkflowRuntimeError(
 			"unavailable",
-			"research handoff requires a ready workspace",
+			"research handoff requires a ready worktree",
 		);
 	const researchContext = {
 		task: snapshot.metadata.task ?? "",

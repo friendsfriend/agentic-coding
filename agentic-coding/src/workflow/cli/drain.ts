@@ -43,8 +43,8 @@ export function scheduleDrain(
 	child.unref();
 }
 
-/** The detached drain's bounded environment allowlist: runtime selection and
- * both runtimes' connection variables, plus the process basics. */
+/** The detached drain's bounded environment allowlist: the configuration and
+ * workflow-directory inputs a drain needs, plus the process basics. */
 export function detachedDrainEnvironment(
 	source: NodeJS.ProcessEnv,
 ): Record<string, string> {
@@ -59,19 +59,10 @@ export function detachedDrainEnvironment(
 		"LANG",
 		"LC_ALL",
 		"LC_MESSAGES",
-		"AGENTIC_CODING_MULTIPLEXER",
-		"HERDR_ENV",
-		"HERDR_BIN_PATH",
-		"HERDR_SOCKET_PATH",
 		"HERDR_WORKFLOW_CONFIG",
 		"HERDR_WIKI_DIR",
-		"LUVUS_ENV",
-		"LUVUS_BIN_PATH",
-		"LUVUS_SOCKET_PATH",
-		"LUVUS_API_ADDRESS",
-		"LUVUS_HOME",
-		"LUVUS_SESSION",
-		"LUVUS_PANE_ID",
+		// The classifier provider a durable run may pin still reads its key from
+		// the environment the drain inherits.
 		"OPENCODE_API_KEY",
 	];
 	return {

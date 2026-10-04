@@ -97,17 +97,3 @@ export function movePanel(
 function modulo(value: number, size: number): number {
 	return ((value % size) + size) % size;
 }
-
-/**
- * Whether the active panel sits in the outermost column on `direction`. Used by
- * a composition root that mounts the dashboard beside its own panel (the
- * workspace sidebar): the root extends panel navigation past the grid edge
- * instead of the dashboard wrapping around inside it.
- */
-export function panelAtEdge(
-	panel: PanelId,
-	direction: "left" | "right",
-): boolean {
-	const anchor = anchorCell(panel);
-	return direction === "left" ? anchor.col === 0 : anchor.col === GRID_COLS - 1;
-}

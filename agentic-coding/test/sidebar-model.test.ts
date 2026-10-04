@@ -6,13 +6,11 @@ import { describe, expect, test } from "bun:test";
 import type { WorkflowOverview } from "../src/contracts/workflow.ts";
 import {
 	clip,
-	contentDirection,
 	cycleFilter,
 	DEFAULT_SIDEBAR_FILTER,
 	filterOverviews,
 	isRunningStatus,
 	SIDEBAR_FILTERS,
-	sidebarDirection,
 	statusGlyph,
 	workflowMeta,
 } from "../src/tui/otel/app/sidebar-model.ts";
@@ -37,15 +35,12 @@ function overview(options: {
 			repository: options.repository ?? "/repo",
 			worktree: options.repository ?? "/repo",
 			branch: "main",
-			workspace: "",
 			verificationRound: 0,
 			runs: [],
-			panes: {},
 			...(options.phaseStartedAt
 				? { phaseStartedAt: options.phaseStartedAt }
 				: {}),
 		},
-		workspaceOpen: false,
 		tasks: [0, 0],
 		...(options.projectIdent ? { projectIdent: options.projectIdent } : {}),
 		agents: [],
@@ -147,14 +142,5 @@ describe("workspace sidebar rows", () => {
 		expect(clip("short", 10)).toBe("short");
 		expect(clip("0123456789abc", 10)).toBe("012345678…");
 		expect(clip("anything", 0)).toBe("");
-	});
-});
-
-describe("workspace sidebar panel directions", () => {
-	test("movement follows the configured side", () => {
-		expect(sidebarDirection("left")).toBe("left");
-		expect(contentDirection("left")).toBe("right");
-		expect(sidebarDirection("right")).toBe("right");
-		expect(contentDirection("right")).toBe("left");
 	});
 });

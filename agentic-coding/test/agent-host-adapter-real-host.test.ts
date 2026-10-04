@@ -88,7 +88,7 @@ describe("PiDurableAdapter against a real DurableHost", () => {
 					profile,
 					assignment,
 					rendered,
-					paneId: "unused",
+
 					cwd: dir,
 					runDirectory: runtimeDir,
 					name: "adapter-worker",
@@ -96,7 +96,6 @@ describe("PiDurableAdapter against a real DurableHost", () => {
 				}),
 			);
 			expect(handle.runtime).toBe("pi-durable");
-			expect(handle.paneId).toBe("");
 			expect(handle.hostSocket).toBe(layout.socketPath);
 			expect(handle.sessionId).toBe("adapter-run-1");
 			expect(handle.conversationId).toBeTruthy();
@@ -127,8 +126,13 @@ describe("PiDurableAdapter against a real DurableHost", () => {
 		expect(() =>
 			adapter.preflight(fakeProfile("faux/faux-1"), ["read-only"]),
 		).not.toThrow();
+		// A profile routed to another adapter is refused; with one runtime left,
+		// the mismatch can only be constructed structurally.
 		expect(() =>
-			adapter.preflight({ ...fakeProfile("faux/faux-1"), runtime: "pi" }, []),
+			adapter.preflight(
+				{ ...fakeProfile("faux/faux-1"), runtime: "opencode" as never },
+				[],
+			),
 		).toThrow();
 	});
 });

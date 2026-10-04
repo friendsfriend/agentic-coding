@@ -1,9 +1,5 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
 import type { WorkflowView } from "../../contracts/workflow.ts";
-import { Herdr } from "../../herdr-client.ts";
-import { multiplexerPort } from "../../multiplexer/factory.ts";
 import { loadConfigWithProvenance } from "../../workflow/effects.ts";
 import {
 	dashboardApplication,
@@ -17,7 +13,6 @@ import {
 	setCredentialPromptProvider,
 	workflowExecutionError,
 } from "../../workflow/execution-coordinator.ts";
-import { WorkflowNotifications } from "../../workflow/notification-observer.ts";
 import { engine as workflowEngineFactory } from "../../workflow/operations.ts";
 import { parseAgentsConfig } from "../../workflow/profiles.ts";
 import {
@@ -26,11 +21,9 @@ import {
 	projectOptions,
 } from "../../workflow/project-catalog.ts";
 import {
-	canonicalStorePath,
 	researchWorkflowTarget,
 	validateWorkflowId,
 } from "../../workflow/runtime.ts";
-import { SidebarPresentation } from "../../workflow/sidebar-observer.ts";
 import { prepareWorkflowStart } from "../../workflow/startup.ts";
 
 export {
@@ -38,7 +31,6 @@ export {
 	startRouting,
 } from "../../workflow/startup.ts";
 
-import { latestRunsByRole } from "../../workflow/run-projections.ts";
 import {
 	validateWikiReviewComments,
 	type WikiReviewComment,
@@ -85,121 +77,6 @@ export function listWorkflowViews(repo: string): WorkflowView[] {
 	return workflowEngineFactory(dashboardApplication).list(repo);
 }
 
-/**
- * Sidebar presentation owner (improve-herdr-workflow-sidebar): one
- * application-scoped observer while any dashboard surface is alive. Callers
- * register the repositories they cover; the owner starts on the first
- * registration, reconciles on the bounded fallback interval, and releases its
- * timers/transport only when the last registration goes away.
- */
-const sidebarRepoProviders = new Set<() => readonly string[]>();
-let sidebarPresentation: SidebarPresentation | undefined;
-
-export function governedSidebarRepos(): string[] {
-	const repos = new Set<string>();
-	for (const provider of sidebarRepoProviders) {
-		try {
-			for (const repo of provider()) if (repo) repos.add(repo);
-		} catch {
-			/* a provider source that is unavailable contributes nothing */
-		}
-	}
-	return [...repos];
-}
-
-/** Register a repository source. Returns the disposer for that registration. */
-export function startSidebarPresentation(
-	provideRepos: () => readonly string[],
-): () => void {
-	sidebarRepoProviders.add(provideRepos);
-	if (!sidebarPresentation) {
-		sidebarPresentation = new SidebarPresentation({
-			herdr: new Herdr(),
-			views: () =>
-				governedSidebarRepos().flatMap((repo) => {
-					try {
-						return listWorkflowViews(repo);
-					} catch {
-						return [];
-					}
-				}),
-		});
-		// Disabled by default: nothing is installed or published unless the
-		// trusted user preference turns the integration on.
-		if (sidebarPresentation.enabled) sidebarPresentation.start();
-	}
-	return () => {
-		sidebarRepoProviders.delete(provideRepos);
-		if (sidebarRepoProviders.size === 0) {
-			sidebarPresentation?.dispose();
-			sidebarPresentation = undefined;
-		}
-	};
-}
-
-/** Reconcile after a dashboard-side mutation or a Herdr event. */
-export function reconcileSidebarPresentation(): void {
-	if (!sidebarPresentation?.enabled) return;
-	void sidebarPresentation.reconcile();
-}
-
-/**
- * Developer-action notification owner (workflow-developer-notifications): one
- * application-scoped observer alongside the sidebar owner. Same registration
- * lifetime and reconcile triggers, but gated by its own independent trusted
- * preference and free of the sidebar's view writes.
- */
-const notificationRepoProviders = new Set<() => readonly string[]>();
-let workflowNotifications: WorkflowNotifications | undefined;
-
-export function governedNotificationRepos(): string[] {
-	const repos = new Set<string>();
-	for (const provider of notificationRepoProviders) {
-		try {
-			for (const repo of provider()) if (repo) repos.add(repo);
-		} catch {
-			/* a provider source that is unavailable contributes nothing */
-		}
-	}
-	return [...repos];
-}
-
-/** Register a repository source for the notifier; returns its disposer. */
-export function startWorkflowNotifications(
-	provideRepos: () => readonly string[],
-): () => void {
-	notificationRepoProviders.add(provideRepos);
-	if (!workflowNotifications) {
-		workflowNotifications = new WorkflowNotifications({
-			herdr: new Herdr(),
-			port: multiplexerPort(),
-			views: () =>
-				governedNotificationRepos().flatMap((repo) => {
-					try {
-						return listWorkflowViews(repo);
-					} catch {
-						return [];
-					}
-				}),
-		});
-		// Disabled by default: nothing is observed or raised unless the trusted
-		// user preference turns the integration on.
-		if (workflowNotifications.enabled) workflowNotifications.start();
-	}
-	return () => {
-		notificationRepoProviders.delete(provideRepos);
-		if (notificationRepoProviders.size === 0) {
-			workflowNotifications?.dispose();
-			workflowNotifications = undefined;
-		}
-	};
-}
-
-/** Reconcile notifications after a dashboard-side mutation or Herdr event. */
-export function reconcileWorkflowNotifications(): void {
-	if (!workflowNotifications?.enabled) return;
-	void workflowNotifications.reconcile();
-}
 export function previewWorkflowRepair(repo: string, workflowId: string) {
 	return workflowEngineFactory(dashboardApplication).previewRepair(
 		repo,
@@ -372,8 +249,7 @@ export async function startWorkflowInProcess(
 	return `Workflow started: ${args.workflowId}`;
 }
 
-/** Start the home-only wiki review without requiring a repository or blocking
- * the UI while Herdr creates the workspace and launches the agent. */
+/** Start the home-only wiki review without requiring a repository. */
 export function startWikiCommentWorkflowInProcess(
 	input: readonly WikiReviewComment[],
 	sessionId = `wiki-review-${randomUUID()}`,
@@ -389,89 +265,6 @@ export function startWikiCommentWorkflowInProcess(
 	engine.start(prepared.input);
 	requestWorkflowExecution(prepared.target, sessionId);
 	return `Wiki review workflow started: ${sessionId}`;
-}
-function navigationPath(repo: string, workflowId: string): string {
-	return path.join(
-		path.dirname(canonicalStorePath(repo)),
-		"navigation",
-		`${encodeURIComponent(workflowId)}.json`,
-	);
-}
-function returnWorkspace(repo: string, workflowId: string): string | undefined {
-	let file: string | undefined;
-	try {
-		file = navigationPath(repo, workflowId);
-		const value = JSON.parse(fs.readFileSync(file, "utf8")) as {
-			workspace?: unknown;
-			at?: unknown;
-		};
-		const workspace =
-			typeof value.workspace === "string" &&
-			value.workspace.length <= 256 &&
-			// biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally rejects control characters
-			!/[\x00-\x1f]/.test(value.workspace)
-				? value.workspace
-				: undefined;
-		const fresh =
-			typeof value.at === "string" &&
-			Date.now() - Date.parse(value.at) <= 10 * 60_000;
-		if (!workspace || !fresh) {
-			fs.rmSync(file, { force: true });
-			return undefined;
-		}
-		const live = new Herdr().call("workspace", "get", workspace) as {
-			workspace?: { status?: string; closed_at?: string };
-		};
-		if (
-			!live.workspace ||
-			live.workspace.status === "closed" ||
-			live.workspace.closed_at
-		) {
-			fs.rmSync(file, { force: true });
-			return undefined;
-		}
-		return workspace;
-	} catch (error) {
-		if (
-			file &&
-			/not found|unknown workspace|closed/i.test(
-				String((error as Error).message),
-			)
-		)
-			fs.rmSync(file, { force: true });
-		return undefined;
-	}
-}
-export function consumeReturnWorkspace(
-	repo: string,
-	workflowId: string,
-	workspace: string,
-): void {
-	try {
-		const file = navigationPath(repo, workflowId);
-		const value = JSON.parse(fs.readFileSync(file, "utf8")) as {
-			workspace?: unknown;
-		};
-		if (value.workspace === workspace) fs.rmSync(file, { force: true });
-	} catch {}
-}
-export function setReturnInProcess(
-	repo: string,
-	workflowId: string,
-	workspace: string,
-): void {
-	// biome-ignore lint/suspicious/noControlCharactersInRegex: intentionally rejects control characters
-	if (!workspace || workspace.length > 256 || /[\x00-\x1f]/.test(workspace))
-		throw new Error("invalid return workspace identity");
-	const file = navigationPath(repo, workflowId);
-	fs.mkdirSync(path.dirname(file), { recursive: true });
-	const temporary = `${file}.${process.pid}.tmp`;
-	fs.writeFileSync(
-		temporary,
-		`${JSON.stringify({ workspace, at: new Date().toISOString() })}\n`,
-		{ mode: 0o600 },
-	);
-	fs.renameSync(temporary, file);
 }
 export async function discoverProjectsInProcess(): Promise<ProjectOption[]> {
 	// All configured projects, including unavailable ones, so the picker can
@@ -494,18 +287,9 @@ export function viewToDashboardState(view: WorkflowView) {
 	const currentVerifierRuns = verifierRuns.filter(
 		(run) => run.attempt === verificationRound,
 	);
-	const latestByRole = latestRunsByRole(view.runs);
-	const panes = Object.fromEntries(
-		[...latestByRole.values()].flatMap((run) =>
-			run.paneId ? [[run.role, run.paneId]] : [],
-		),
-	);
 	return {
 		workflowId: view.workflowId,
 		changeId: view.changeId,
-		...(view.repository
-			? { returnWorkspace: returnWorkspace(view.repository, view.workflowId) }
-			: {}),
 		phase: view.currentStep.id,
 		stepId: view.currentStep.id,
 		stepLabel: view.currentStep.label,
@@ -522,13 +306,11 @@ export function viewToDashboardState(view: WorkflowView) {
 		worktree: view.worktree,
 		branch: view.branch,
 		task: view.task,
-		workspace: view.workspace ?? "",
 		verificationRound,
 		baseCommit: view.baseCommit,
 		createdAt: view.createdAt,
 		phaseStartedAt: view.currentStep.enteredAt,
 		...(view.selectedPreset ? { selectedPreset: view.selectedPreset } : {}),
-		panes,
 		runs: view.runs,
 		verificationRoles: currentVerifierRuns.map((run) => run.role),
 		verificationModels: Object.fromEntries(

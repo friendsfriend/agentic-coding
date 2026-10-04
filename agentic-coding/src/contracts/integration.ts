@@ -65,29 +65,6 @@ export interface LocalChange {
 	renamedFile: boolean;
 }
 
-// ---------------------------------------------------------------------------
-// Herdr pane/agent observations
-// ---------------------------------------------------------------------------
-
-/** Dashboard-relevant Herdr socket events; the dashboard subscribes to exactly
- * these and ignores the rest. */
-export const HERDR_DASHBOARD_EVENTS = [
-	"pane.created",
-	"pane.closed",
-	"pane.exited",
-	"pane.updated",
-	"pane.agent_detected",
-	"workspace.closed",
-	"layout.updated",
-] as const;
-
-/** One Herdr socket event: the event name plus its unbounded payload, which
- * consumers narrow per event kind. */
-export interface HerdrEvent {
-	event: string;
-	data: Record<string, unknown>;
-}
-
 /** Observation payloads: bounded record lists the dashboard reads. */
 export const localChangesSchema = Schema.Array(localChangeSchema);
 

@@ -203,7 +203,10 @@ describe("set-classifier mutation", () => {
 	test("round-trips the provider and preserves unrelated keys", () => {
 		withConfig(
 			{
-				agents: { default_profile: "a", profiles: { a: { runtime: "pi" } } },
+				agents: {
+					default_profile: "a",
+					profiles: { a: { runtime: "pi-durable" } },
+				},
 				workflow: { keep: true },
 			},
 			() => {

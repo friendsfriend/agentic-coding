@@ -122,12 +122,12 @@ export function clip(value: string, max: number): string {
 	return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
 }
 
-/** Direction from the main content toward the sidebar. */
-export function sidebarDirection(side: "left" | "right"): "left" | "right" {
-	return side;
-}
+/** How the sidebar sizes itself: `expanding` collapses it to the workspace
+ * index while unfocused and expands it on focus; `permanent` keeps it expanded
+ * at all times. */
+export type SidebarMode = "expanding" | "permanent";
 
-/** Direction from the sidebar back into the main content. */
-export function contentDirection(side: "left" | "right"): "left" | "right" {
-	return side === "left" ? "right" : "left";
+/** The mode one toggle key press selects. */
+export function toggleSidebarMode(mode: SidebarMode): SidebarMode {
+	return mode === "permanent" ? "expanding" : "permanent";
 }

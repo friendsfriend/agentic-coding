@@ -1,9 +1,8 @@
 import { watch } from "node:fs";
 import path from "node:path";
-import { Herdr } from "../../../herdr-client.ts";
 import { backendClientFromEnv } from "../../../server/client.ts";
 import type { WorkflowApplication } from "../../application.ts";
-import { drainEffects, reconcileWorkflowSidebar } from "../../operations.ts";
+import { drainEffects } from "../../operations.ts";
 // The developer-action, agent-handoff, and agent-question command branches:
 // `action`, `question`, and `handoff`. Moved verbatim out of cli.ts
 // (split-workflow-god-modules); migrated to run Effect programs at the
@@ -171,7 +170,6 @@ export async function runDeveloperQuestion(
 	// minute for the answer: publish the sidebar card now rather than at the
 	// end of the drain, so the pending input is visible while the agent waits
 	// (improve-herdr-workflow-sidebar). Best-effort and bounded.
-	await reconcileWorkflowSidebar(new Herdr(), engineInstance, repo);
 	let interrupted = interruptSignal?.aborted ?? false;
 	let wake: (() => void) | undefined;
 	const interrupt = () => {

@@ -1,7 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { describe, expect, test } from "bun:test";
 import type { AgentsMutation } from "../../src/tui/data/agents.ts";
 import {
 	applyDraftValue,
@@ -30,8 +27,8 @@ import type {
 const agents: AgentsConfig = {
 	default_profile: "used",
 	profiles: {
-		used: { runtime: "pi", model: "vendor/model", thinking: "high" },
-		free: { runtime: "opencode" },
+		used: { runtime: "pi-durable", model: "vendor/model", thinking: "high" },
+		free: { runtime: "pi-durable" },
 	},
 	routes: { "core.plan": "used" },
 	role_routes: { "core.implementation": { worker: "used" } },
@@ -55,64 +52,21 @@ const agents: AgentsConfig = {
 	},
 };
 
-// `profileFields` enumerates a runtime's models by running the runtime itself
-// (`pi --list-models`). Left alone, this file — otherwise a pure unit test of
-// draft and field construction — spawned the developer's real `pi`, which cost
-// roughly a second and made both the outcome and the runtime depend on the
-// machine: under the runner's pool the spawn occasionally outlasted the 15s
-// per-test budget and timed out a synchronous assertion. A stub on PATH makes the
-// enumeration constant and instant.
-const ORIGINAL_PATH = process.env.PATH;
-let runtimeBin = "";
-
-beforeAll(() => {
-	runtimeBin = fs.mkdtempSync(path.join(os.tmpdir(), "agent-presets-bin-"));
-	// Every runtime the field builder can enumerate, not just one: this machine
-	// has a real `opencode` too, and leaving it unstubbed kept the file spawning a
-	// developer binary for the other half of the same test.
-	const listings: Array<[string, string[]]> = [
-		["pi", ["provider  model", "stub  model-one"]],
-		["opencode", ["stub/opencode-one"]],
-		["opencode2", ["stub/opencode-two"]],
-	];
-	for (const [name, lines] of listings) {
-		const commands = lines.map((line) => `echo '${line}'`);
-		fs.writeFileSync(
-			path.join(runtimeBin, name),
-			["#!/bin/sh", ...commands].join("\n"),
-			{ mode: 0o700 },
-		);
-	}
-	process.env.PATH = [runtimeBin, ORIGINAL_PATH ?? ""].join(path.delimiter);
-});
-
-afterAll(() => {
-	if (ORIGINAL_PATH === undefined) delete process.env.PATH;
-	else process.env.PATH = ORIGINAL_PATH;
-	fs.rmSync(runtimeBin, { recursive: true, force: true });
-});
-
 describe("agent preset drafts", () => {
-	test("thinking choice is available only for Pi profiles", () => {
-		const piFields = profileFields(profileDraft("pi", { runtime: "pi" }));
-		const opencodeFields = profileFields(
-			profileDraft("opencode", { runtime: "opencode" }),
+	test("every profile offers a thinking level and no agent-name field", () => {
+		const fields = profileFields(
+			profileDraft("durable", { runtime: "pi-durable" }),
+			["vendor/model-a"],
 		);
-		expect(piFields.map((field) => field.key)).toContain("thinking");
-		expect(opencodeFields.map((field) => field.key)).not.toContain("thinking");
-		// The stub pi on PATH exists to make model enumeration deterministic, and
-		// enumeration is what decides whether the model field is a select of the
-		// runtime's models or a free-text input. Without this the stub could stop
-		// matching parsePiModels, enumeration would yield an empty set, the field
-		// would silently degrade to text, and every assertion above would still
-		// pass. The stub prints "provider  model" then "stub  model-one", which
-		// parsePiModels turns into exactly stub/model-one.
-		const piModel = piFields.find((field) => field.key === "model");
-		expect(piModel?.kind).toBe("select");
-		expect(piModel?.options).toEqual(["", "stub/model-one"]);
-		const opencodeModel = opencodeFields.find((field) => field.key === "model");
-		expect(opencodeModel?.kind).toBe("select");
-		expect(opencodeModel?.options).toEqual(["", "stub/opencode-one"]);
+		const keys = fields.map((field) => field.key);
+		expect(keys).toContain("thinking");
+		expect(keys).not.toContain("agent");
+		// The model field offers the configured providers' models, never a
+		// runtime enumeration: the bundled durable host has no model CLI.
+		expect(fields.find((field) => field.key === "model")).toMatchObject({
+			kind: "select",
+			options: ["", "vendor/model-a"],
+		});
 	});
 
 	test("a pi-durable profile offers the configured models it is given, never a runtime's", () => {
@@ -149,19 +103,19 @@ describe("agent preset drafts", () => {
 			kind: "profile",
 			name: "used",
 			originalName: "used",
-			runtime: "pi",
+			runtime: "pi-durable",
 			model: "vendor/model",
 			thinking: "high",
 		});
 	});
 
-	test("changing a runtime clears the runtime-specific fields", () => {
+	test("selecting the one runtime keeps the stored fields", () => {
 		const draft = profileDraft("used", agents.profiles.used);
-		const next = applyDraftValue(draft, "runtime", "opencode");
+		const next = applyDraftValue(draft, "runtime", "pi-durable");
 		expect(next).toMatchObject({
-			runtime: "opencode",
-			model: "",
-			thinking: "",
+			runtime: "pi-durable",
+			model: "vendor/model",
+			thinking: "high",
 		});
 	});
 
@@ -251,12 +205,12 @@ describe("agent preset mutations", () => {
 		const next = applyDraftValue(
 			applyDraftValue(draft, "name", "  trimmed  "),
 			"runtime",
-			"opencode",
+			"pi-durable",
 		) as PresetDraft & { kind: "profile" };
 		expect(profileMutation(next)).toEqual({
 			kind: "set-profile",
 			name: "trimmed",
-			profile: { runtime: "opencode" },
+			profile: { runtime: "pi-durable" },
 		});
 	});
 
@@ -316,7 +270,7 @@ describe("agent preset mutations", () => {
 
 	test("renaming an entry emits a renameFrom the server removes", () => {
 		const profile = applyDraftValue(
-			profileDraft("old", { runtime: "pi" }),
+			profileDraft("old", { runtime: "pi-durable" }),
 			"name",
 			"new",
 		) as ReturnType<typeof profileDraft>;

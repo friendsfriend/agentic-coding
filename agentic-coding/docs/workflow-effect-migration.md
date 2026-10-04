@@ -93,10 +93,11 @@ digests) are not migration shims and remain.
   cleanup, and typed `exit|timeout|canceled|overflow` failures. Termination
   signals the direct child only; descendants observe pipe EOF (deliberate —
   detached managed agents are never group-killed).
-- **Herdr envelope Schema boundary**: one parser in `herdr-client.ts`
-  (`parseHerdrResult`) + `decodeHerdrResult`; envelope schemas in
-  `herdr-schema.ts`; `HerdrLifecycle`/`AgentAdapter` in `adapters.ts` are
-  Effect-native with stable agent identity recovery unchanged.
+- **Retired (multiplexer removal)**: the Herdr envelope Schema boundary
+  (`parseHerdrResult`, `decodeHerdrResult`, `herdr-schema.ts`) and the
+  pane-hosted lifecycle (`HerdrLifecycle`, the `pi`/`opencode` adapters) are
+  gone; `AgentAdapter` in `adapters.ts` is Effect-native over the durable
+  host.
 - **Credentials** (`credentials.ts`): `runGitWithCredentialsEffect` over the
   askpass/FIFO relay — shim lifecycle scoped to the operation (0700/0600,
   cleanup guaranteed, no retained secrets); missing interactive prompt is

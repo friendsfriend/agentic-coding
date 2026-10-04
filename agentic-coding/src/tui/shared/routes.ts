@@ -12,10 +12,9 @@
 import { createSignal } from "solid-js";
 
 /**
- * Top-level features of the unified shell. `workflows` no longer owns a Home
- * destination (launch-workflows-from-project-and-wiki-pages): it names the
- * Herdr-launched per-workflow dashboard pane only, which sits outside the full
- * application's page hierarchy.
+ * Top-level features of the unified shell. `workflows` owns the workspace
+ * sidebar's workflow dashboard page: a workflow row opens the dashboard body
+ * for that workflow inside the shell.
  */
 export type FeatureId = "environments" | "workflows" | "observability" | "wiki";
 
@@ -303,7 +302,7 @@ export const PAGES: Readonly<Record<PageId, PageDef>> = {
 		parent: () => ({ page: "wiki" }),
 		requiresResource: true,
 	},
-	// The per-workflow dashboard pane (Herdr-launched `dash` mode). Not a
+	// The per-workflow dashboard page (workspace sidebar navigation). Not a
 	// destination: no workflow list, history or reopen route reaches it, and the
 	// location picker never offers it.
 	"workflows.detail": {

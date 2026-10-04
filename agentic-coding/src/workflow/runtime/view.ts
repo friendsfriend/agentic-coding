@@ -152,9 +152,6 @@ export function view(
 			worktree: snapshot.metadata.worktree,
 			branch: snapshot.metadata.branch,
 			baseCommit: snapshot.metadata.baseCommit,
-			...(snapshot.metadata.workspace
-				? { workspace: snapshot.metadata.workspace }
-				: {}),
 			...(snapshot.metadata.task !== undefined
 				? { task: snapshot.metadata.task }
 				: {}),
@@ -182,8 +179,6 @@ export function view(
 				runtime: run.profile.runtime,
 				profile: run.profile.name,
 				...(run.profile.model ? { model: run.profile.model } : {}),
-				...(run.handle?.paneId ? { paneId: run.handle.paneId } : {}),
-				...(run.handle?.tabId ? { tabId: run.handle.tabId } : {}),
 				...(run.handle?.hostSocket
 					? { hostSocket: run.handle.hostSocket }
 					: {}),
@@ -238,9 +233,6 @@ export function view(
 					worktree: snapshot.metadata.worktree,
 					branch: snapshot.metadata.branch,
 					baseCommit: snapshot.metadata.baseCommit,
-					...(snapshot.metadata.workspace
-						? { workspace: snapshot.metadata.workspace }
-						: {}),
 					...(snapshot.metadata.task !== undefined
 						? { task: snapshot.metadata.task }
 						: {}),

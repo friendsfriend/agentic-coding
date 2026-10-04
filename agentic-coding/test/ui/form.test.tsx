@@ -19,8 +19,8 @@ const fields: FormField[] = [
 		key: "runtime",
 		label: "Runtime",
 		kind: "select",
-		options: ["pi", "opencode"],
-		defaultValue: "pi",
+		options: ["alpha", "beta"],
+		defaultValue: "alpha",
 	},
 	{ key: "note", label: "Note", kind: "text", defaultValue: "—" },
 ];
@@ -28,7 +28,7 @@ const fields: FormField[] = [
 test("a blank form applies each field default", () => {
 	expect(formDefaults(fields)).toEqual({
 		name: "",
-		runtime: "pi",
+		runtime: "alpha",
 		note: "—",
 	});
 });
@@ -36,18 +36,18 @@ test("a blank form applies each field default", () => {
 test("stored values override defaults but missing keys keep them", () => {
 	expect(formValues(fields, { name: "fast" })).toEqual({
 		name: "fast",
-		runtime: "pi",
+		runtime: "alpha",
 		note: "—",
 	});
 });
 
 test("select options resolve and step with a wrap", () => {
 	const runtime = fields[1] as FormField;
-	expect(formOptionIndex(runtime, "opencode")).toBe(1);
+	expect(formOptionIndex(runtime, "beta")).toBe(1);
 	expect(formOptionIndex(runtime, "missing")).toBe(0);
-	expect(formStepOption(runtime, "pi", 1)).toBe("opencode");
-	expect(formStepOption(runtime, "opencode", 1)).toBe("pi");
-	expect(formStepOption(runtime, "pi", -1)).toBe("opencode");
+	expect(formStepOption(runtime, "alpha", 1)).toBe("beta");
+	expect(formStepOption(runtime, "beta", 1)).toBe("alpha");
+	expect(formStepOption(runtime, "alpha", -1)).toBe("beta");
 });
 
 test("display falls back to the placeholder", () => {
@@ -110,7 +110,7 @@ test("the form renders labels, values and a styled validation error", async () =
 		() => (
 			<Form
 				fields={fields}
-				values={{ name: "", runtime: "pi", note: "" }}
+				values={{ name: "", runtime: "alpha", note: "" }}
 				errors={{ runtime: "Choose a runtime" }}
 				activeIndex={1}
 				focusedPane="value"
@@ -125,7 +125,7 @@ test("the form renders labels, values and a styled validation error", async () =
 	expect(frame).toContain("Fields");
 	expect(frame).toContain("Name");
 	expect(frame).toContain("Runtime");
-	expect(frame).toContain("pi");
+	expect(frame).toContain("alpha");
 	expect(frame).toContain("Choose a runtime");
 
 	// The error is not just text: it renders in the theme error colour on the

@@ -14,6 +14,7 @@ import { hostChromeLines, hostNamesPage } from "../components/hostChrome.ts";
 import { getMarkdownSyntaxStyle } from "../components/markdownSyntax.ts";
 import { LAYOUT_CHROME_LINES } from "../components/ScrollableList";
 import { SearchHeader } from "../components/SearchHeader";
+import { SelectionMarker } from "../components/SelectionMarker.tsx";
 import {
 	containsHtml,
 	gitlabHtmlToMarkdown,
@@ -588,15 +589,7 @@ export function TimelineView(props: TimelineViewProps) {
 											}}
 										>
 											{/* Accent marker — same width whether selected or not to keep layout stable */}
-											<Show when={isSelected()}>
-												<box
-													backgroundColor={uiColors.highlight}
-													style={{ width: 2, flexShrink: 0 }}
-												/>
-											</Show>
-											<Show when={!isSelected()}>
-												<box style={{ width: 2, flexShrink: 0 }} />
-											</Show>
+											<SelectionMarker selected={isSelected()} />
 											{/* Timeline gutter */}
 											<box
 												style={{

@@ -1,29 +1,22 @@
 import {
 	hostDiagnosticsKeybind,
-	type Keybind,
 	type KeybindSection,
 	PAGE_NAVIGATION_KEYBINDS,
 } from "@ui";
 import { hostKeybind } from "../../../../packages/devenv/cli/src/tui/keyboard/host-keys.ts";
 
-/** The page body's entry to the workspace sidebar panel; the direction is the
- * shifted letter on the side the sidebar is mounted on. */
-export function workspaceSidebarFocusKeybind(side: "left" | "right"): Keybind {
-	return {
-		key: side === "left" ? "H" : "L",
-		action: "focus the workspace sidebar",
-		short: "workspaces",
-	};
+/** The page body's panel section: the dedicated Ctrl+S toggle, a host key so
+ * every surface (including feature views that claim h/l) reaches it. */
+export function workspaceSidebarPanelSection(): KeybindSection {
+	return { title: "Panels", keybinds: [hostKeybind("ctrl+s")] };
 }
 
 /**
  * Workspace sidebar keys (integrated-multiplexer sidebar), published while the
- * sidebar panel holds focus. The content direction is written as the shifted
- * letter the panel model uses, never as `Shift+<x>`.
+ * sidebar panel holds focus: the rows, the panel actions, and the dedicated
+ * Ctrl+S toggle back to the page body.
  */
-export function workspaceSidebarKeybindCatalog(
-	side: "left" | "right",
-): KeybindSection[] {
+export function workspaceSidebarKeybindCatalog(): KeybindSection[] {
 	return [
 		{
 			title: "Workspaces",
@@ -36,10 +29,21 @@ export function workspaceSidebarKeybindCatalog(
 					short: "filter",
 				},
 				{
-					key: side === "left" ? "L" : "H",
-					action: "focus the main content",
-					short: "content",
+					key: "n",
+					action: "open the workspace in a new tmux window",
+					short: "tmux",
 				},
+				{
+					key: "e",
+					action: "toggle sidebar (expanding/permanent)",
+					short: "expand",
+				},
+				{
+					key: "+",
+					action: "start a new workflow",
+					short: "new",
+				},
+				hostKeybind("ctrl+s"),
 				{
 					key: "Esc",
 					action: "focus the main content",
@@ -76,7 +80,12 @@ export function environmentsKeybindCatalog(): KeybindSection[] {
 		},
 		{
 			title: "Actions",
-			keybinds: [hostKeybind("?"), hostDiagnosticsKeybind(), hostKeybind("q")],
+			keybinds: [
+				hostKeybind("ctrl+s"),
+				hostKeybind("?"),
+				hostDiagnosticsKeybind(),
+				hostKeybind("q"),
+			],
 		},
 	];
 }

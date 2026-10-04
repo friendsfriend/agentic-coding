@@ -51,12 +51,4 @@ describe("pi-durable in the Settings profile editor", () => {
 		// than enumerating a runtime: the bundled runtime has no model CLI.
 		expect(fields.find((field) => field.key === "model")?.kind).toBe("text");
 	});
-
-	test("opencode still gets an agent-name field and no thinking level", () => {
-		const draft = profileDraft("opencode-profile", { runtime: "opencode" });
-		const fields = profileFields(draft);
-		const keys = fields.map((field) => field.key);
-		expect(keys).toContain("agent");
-		expect(keys).not.toContain("thinking");
-	});
 });

@@ -137,7 +137,7 @@ async function settledWithin(promise: Promise<unknown>): Promise<void> {
 /** The fixed loopback port the managed sidecar binds.
  *
  * Deliberately not ephemeral. The bound endpoint is serialized into a pane's
- * `AGENTIC_JEV`, and that pane (a multiplexer-owned agent) outlives the engine
+ * `AGENTIC_JEV`, and that agent process outlives the engine
  * process that spawned the sidecar. An ephemeral port makes the recorded URL
  * permanently dead as soon as the engine restarts, so every `ask_jev` call from
  * a still-running agent fails with `fetch failed`. Re-binding the same port on

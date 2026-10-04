@@ -46,6 +46,17 @@ function configuredSidebarSide(): "left" | "right" {
 	}
 }
 
+/** Workspace sidebar mode from `ui.sidebar_mode`; `expanding` is the default. */
+function configuredSidebarMode(): "expanding" | "permanent" {
+	try {
+		return loadConfig().ui.sidebar_mode === "permanent"
+			? "permanent"
+			: "expanding";
+	} catch {
+		return "expanding";
+	}
+}
+
 /** The one renderer entry for the unified feature shell. */
 export function AppShell(props: AppShellProps) {
 	return (
@@ -62,6 +73,7 @@ export function AppShell(props: AppShellProps) {
 			attached={props.attached}
 			attachLabel={props.attachLabel}
 			sidebarSide={configuredSidebarSide()}
+			sidebarMode={configuredSidebarMode()}
 			renderEnvironments={
 				props.environments
 					? (

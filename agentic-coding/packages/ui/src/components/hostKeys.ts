@@ -42,6 +42,15 @@ export const HOST_KEYBINDS: readonly HostKeybind[] = [
 		standard: true,
 	},
 	{
+		// The one sidebar key that must work on every surface, including feature
+		// views whose own layers claim h/l (the environment tables): it toggles
+		// focus between the workspace sidebar and the page body.
+		binding: "ctrl+s",
+		key: "Ctrl+S",
+		action: "toggle the workspace sidebar",
+		short: "sidebar",
+	},
+	{
 		// Support tool: reports which keymap fields the active surface gates on, so
 		// "nothing responds here" can be told apart from "the keyboard is dead"
 		// without a rebuild. Hidden from footers, listed by `?`.

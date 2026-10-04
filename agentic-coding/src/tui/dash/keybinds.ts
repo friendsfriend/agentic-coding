@@ -93,6 +93,7 @@ export function dashboardDetailKeybindCatalog(options: {
 					action: "Move between panels",
 					short: "panels",
 				},
+				hostKeybind("ctrl+s"),
 				{
 					key: "j/k or ↑/↓",
 					action: "Scroll focused panel",

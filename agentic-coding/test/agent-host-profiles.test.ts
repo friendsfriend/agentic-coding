@@ -5,7 +5,6 @@ import path from "node:path";
 import {
 	assertModelAvailable,
 	BUILTIN_PRESET_NAME,
-	clearModelCache,
 	parseAgentsConfig,
 	preflightProfile,
 	resolveProfile,
@@ -98,17 +97,9 @@ describe("pi-durable preflight (no external executable)", () => {
 			models: { worker_default: "anthropic/claude-sonnet-4-5" },
 			thinking: { worker_default: "high" },
 		});
-		expect(config.profiles["pi-default"]?.runtime).toBe("pi");
+		expect(config.profiles["pi-default"]?.runtime).toBe("pi-durable");
 		const profile = resolveProfile(BUILTIN_PRESET_NAME, config);
 		expect(profile.runtime).toBe("pi-durable");
-	});
-
-	test("pi remains selectable by explicitly configuring the preset's runtime", () => {
-		const config = parseAgentsConfig({
-			presets: { [BUILTIN_PRESET_NAME]: { runtime: "pi" } },
-		});
-		const profile = resolveProfile(BUILTIN_PRESET_NAME, config);
-		expect(profile.runtime).toBe("pi");
 	});
 });
 
@@ -142,7 +133,6 @@ describe("pi-durable model enumeration (durable-agent-configuration)", () => {
 		withPiAgentDir(
 			{ providers: { eon: { models: [{ id: "claude-5-sonnet" }] } } },
 			() => {
-				clearModelCache();
 				const config = parseAgentsConfig({
 					profiles: {
 						durable: { runtime: "pi-durable", model: "eon/does-not-exist" },
@@ -158,7 +148,6 @@ describe("pi-durable model enumeration (durable-agent-configuration)", () => {
 		withPiAgentDir(
 			{ providers: { eon: { models: [{ id: "claude-5-sonnet" }] } } },
 			() => {
-				clearModelCache();
 				const config = parseAgentsConfig({
 					profiles: {
 						durable: { runtime: "pi-durable", model: "eon/claude-5-sonnet" },

@@ -20,45 +20,33 @@ importer listed above keeps importing the barrel path unchanged; the split is
 a pure internal reorganization with no behavior change (digests, exports, and
 the full test suite are unmodified oracles for that claim).
 
-### Multiplexer boundary
+### Agent runtime and workspace surface
 
-Workspaces, tabs, panes, agents, notifications, and runtime events reach the
-terminal multiplexer through one runtime-neutral port
-(`src/multiplexer/port.ts`). Every operation is an Effect with a normalized
-identity/intent payload and a classified `MultiplexerError`; callers never
-construct vendor argument vectors or parse vendor envelopes. Two adapters
-implement it: `src/multiplexer/herdr/` is the mechanical passthrough over the
-existing Herdr CLI calls (moved from `src/herdr-client.ts` and
-`src/workflow/herdr-schema.ts`, whose paths remain compatibility shims), and
-`src/multiplexer/luvus/` speaks Luvus UHP/CLI with its own decoders.
+There is no multiplexer boundary: the terminal multiplexer integration
+(Herdr/Luvus ports, adapters, pane lifecycle, tab/sidebar/notification
+synchronization) was removed. `pi-durable` is the one managed agent runtime
+(`src/workflow/adapters.ts`), hosted by the bundled durable agent host
+(`src/agent-host/`); pane-hosted runtimes (`pi`, `opencode`) are gone with the
+multiplexer. `src/workflow/effect-runner.ts` therefore allocates no pane and
+performs no workspace bookkeeping: `workspace.setup` resolves the worktree (and
+switches the branch for a checkout-mode run) and nothing else, `workspace.close`
+is a no-op because the workflow's own durable status is its only lifecycle, and
+`workspace.cleanup` still removes the worktree. `notification.show` is an
+explicit no-op — the shell surfaces workflow state in its own UI.
 
-Runtime selection is top-level `multiplexer: "herdr" | "luvus" | "integrated"`
-configuration with `AGENTIC_CODING_MULTIPLEXER` taking precedence and `herdr` as
-the default; `src/multiplexer/factory.ts` resolves it once and fails loudly when
-the selected executable/socket is unavailable, never falling back to another
-runtime. Detached `workflow drain` children inherit the selector and both
-runtimes' connection variables through the bounded allowlist in
-`src/workflow/cli/drain.ts`. Promise/sync consumers of the port run its effects
-through the single `src/multiplexer/boundary.ts` execution point.
-
-`integrated` is the selection that says "no external multiplexer":
-`src/multiplexer/integrated/` implements the port with a virtual workspace
-identity (the workflow id) and no tabs, panes or pane-hosted agents. The
-OpenTUI shell is the workspace surface — its workspace sidebar
+The OpenTUI shell is the workspace surface: its workspace sidebar
 (`src/tui/otel/app/sidebar-model.ts`, `src/tui/otel/components/WorkspaceSidebar.tsx`)
-lists the durable workflows, `Enter` opens the same dashboard `agentic-coding
-dash` renders, and the panel model moves focus with `Shift+H/L` on the side
-`ui.sidebar_side` names. Only the pane-less `pi-durable` adapter is registered
-for the selection, so a workflow that pins a pane-based runtime fails with the
-engine's bounded "adapter unavailable" diagnostic instead of allocating a pane
-that cannot exist, and `workspace.setup` skips workspace/tab bookkeeping while
-still resolving the worktree. Workspace rows survive restarts because the
-workflow store they are read from is SQLite-backed; the adapter itself keeps no
-state.
-
-The Herdr-only external sidebar/custom Agents view (`src/workflow/sidebar-sync.ts`)
-stays on the raw Herdr CLI type; the port deliberately exposes no
-sidebar operation.
+lists the durable workflows from the workflow store (SQLite-backed, so rows
+survive a restart), `Enter` opens that workflow's dashboard in the page body,
+`n` opens the worktree in a new tmux window, and `Ctrl+S` toggles focus between
+the sidebar and the page body on every surface (it is a host key, so feature
+views that claim `h`/`l` cannot swallow it). The sidebar collapses to
+the workspace index while unfocused; `ui.sidebar_mode: "permanent"` keeps it
+expanded, and the `e` toggle (or the title/strip glyph) writes that value back
+to the user configuration so it survives restarts. Side apps that used to run in a pane (the editor opened
+from a finding) go through `src/tui/shared/side-app.ts`: a new tmux window when
+the shell runs inside a tmux client, a local spawn with the renderer suspended
+otherwise.
 
 ### Worktree boundary
 
@@ -73,8 +61,8 @@ worktree `git`/`wt` arguments itself:
 - the action runner translates a declared `git worktree add|remove` command into
   a port call, while `worktree list`/`prune` stay plain git because their output
   is what the actions view shows;
-- a workflow resolves its worktree through the port and then asks the
-  multiplexer for a workspace at that path, so setup is runtime-independent.
+- a workflow resolves its worktree through the port; there is no workspace to
+  open at that path any more, so setup is runtime-independent.
 
 The shared layout (`<root>/<ident>/<ident>.<sanitized branch>`,
 `src/worktree/template.ts`) is the only place a worktree path is computed, and
@@ -654,8 +642,7 @@ row):
 
 ## The durable agent host (`src/agent-host/`)
 
-`pi-durable` (add-pi-durable-runtime) is the one runtime that hosts its own
-process instead of running inside a multiplexer pane. Its code is isolated
+`pi-durable` is the one managed runtime and hosts its own process. Its code is isolated
 under `src/agent-host/` so the heavy experimental `@earendil-works/pi-durable`/
 `pi-ai` packages are never eagerly loaded by a command mode that does not need
 them:
@@ -703,13 +690,13 @@ runtime code depends on it.
 | Layer | Paths | Owns |
 | --- | --- | --- |
 | **domain** (pure) | `workflow/steps/`, `workflow/definitions/`, `workflow/contracts.ts`, `workflow/schema.ts`, `workflow/format.ts`, `workflow/registry.ts`, `workflow/embedded.generated.ts`, `workflow/definitions.ts` | Pure step behavior, definitions, contracts, Effect Schema-backed contract decoding (`schema.ts` — declarative; the `Contract<T>` facades delegate here), structural registry validation, and the generated instruction-asset data module. |
-| **runtime** | `workflow/runtime/`, `workflow/runtime.ts`, `workflow/effects.ts`, `workflow/effect-runner.ts`, `workflow/secure-fs.ts`, `workflow/paths.ts`, `workflow/assets.ts`, `workflow/assignment.ts`, `workflow/observability.ts`, `workflow/wiki.ts`, `workflow/adapters.ts`, `workflow/credentials.ts`, `workflow/profiles.ts`, `workflow/agent-extensions.ts`, `workflow/project-catalog.ts`, `agent-host/` | Persistence, engine internals, effect execution, and external I/O services (git inspection, wiki data, adapters, credentials, agent-extension config, configured-project catalog reads, the durable agent host). |
+| **runtime** | `workflow/runtime/`, `workflow/runtime.ts`, `workflow/effects.ts`, `workflow/effect-runner.ts`, `workflow/secure-fs.ts`, `workflow/paths.ts`, `workflow/assets.ts`, `workflow/assignment.ts`, `workflow/observability.ts`, `workflow/wiki.ts`, `workflow/adapters.ts`, `workflow/credentials.ts`, `workflow/profiles.ts`, `workflow/pi-tools.ts`, `workflow/run-env.ts`, `workflow/project-catalog.ts`, `agent-host/` | Persistence, engine internals, effect execution, and external I/O services (git inspection, wiki data, adapters, credentials, global-pi settings reads, the run environment file, configured-project catalog reads, the durable agent host). |
 | **application** | `workflow/startup.ts`, `workflow/operations.ts`, `workflow/application.ts` | Shared orchestration both the CLI and the dashboard compose: startup/validation routing, the in-process engine factory, effect draining, configured-project listing (`operations.ts`, backed by the runtime catalog client), and the named application composition root (`application.ts` — the single place the production `applicationLayer` is composed and Effect programs run, complete-workflow-effect-cutover task 1). |
 | **cli** | `workflow/cli/`, `workflow/cli.ts` | Command parsing, dispatch (`run.ts`), command modules, and git/registry/pane helpers. |
 | **tui-feature** | `tui/dash/`, `tui/otel/`, `tui/settings/` | Dashboard, observability and settings feature implementations (the Settings surface is a Home destination: section views, inventory and its own section keys). |
 | **tui-shared** | `tui/shared/`, `tui/themes/`, `tui/clipboard.ts`, `tui/lifecycle.ts` | Shared presentation primitives and theme data. |
 | **tui-app** | remaining `tui/` files | TUI shell entrypoint (`index.tsx`) and lifecycle components. |
-| **root** | `cli.ts`, `herdr-client.ts` (shim over `multiplexer/herdr/cli.ts`), `multiplexer/`, `worktree/`, `server-command.ts`, `server/` | Composition roots and foundational clients. `server/` is the unified Bun backend transport/client/build root (`expose-unified-bun-backend`): `protocol.ts` (contracts + route manifest), `auth.ts`, `app.ts`, `client.ts`, `events.ts`, `credentials.ts`, `handlers.ts`, `lifecycle.ts`. See [`docs/unified-backend-api.md`](unified-backend-api.md). |
+| **root** | `cli.ts`, `worktree/`, `server-command.ts`, `server/` | Composition roots and foundational clients. `server/` is the unified Bun backend transport/client/build root (`expose-unified-bun-backend`): `protocol.ts` (contracts + route manifest), `auth.ts`, `app.ts`, `client.ts`, `events.ts`, `credentials.ts`, `handlers.ts`, `lifecycle.ts`. See [`docs/unified-backend-api.md`](unified-backend-api.md). |
 
 Allowed directions (anything else fails, **including type-only imports**):
 

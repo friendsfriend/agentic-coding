@@ -18,7 +18,6 @@
   },
   "ui": {
     "theme": "catppuccin",
-    "selection_height": 10,
-    "herdr_sidebar": false
+    "selection_height": 10
   }
 }

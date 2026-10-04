@@ -56,14 +56,6 @@ Version-matched official documentation:
 - The engine facade consumes the root-owned layer (`new WorkflowEngine(
   registry, clock, onCommitted, application.layerOf())`) instead of building
   a nested runtime of its own.
-- `src/multiplexer/boundary.ts` is the one execution point for Promise- or
-  sync-shaped consumers of the Effect-native multiplexer port (dashboard
-  observations, tab/notification synchronization, the Herdr event helper), so
-  those modules run port effects without opening ad-hoc nested runtimes. The
-  runtime is selected by the top-level `multiplexer` configuration value
-  (`"herdr"` default, `"luvus"`), overridden by `AGENTIC_CODING_MULTIPLEXER`;
-  the selection is resolved once at the application root and a selected but
-  unavailable runtime fails loudly instead of falling back.
 
 ## Operations: sequential typed effects
 

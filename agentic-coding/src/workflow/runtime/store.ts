@@ -18,6 +18,7 @@ import type {
 	WorkflowRun,
 	WorkflowSnapshot,
 } from "../../contracts/workflow.ts";
+import { normalizeRuntimeId } from "../../contracts/workflow.ts";
 import { decodeSnapshot, WorkflowRuntimeError } from "../contracts.ts";
 import type {
 	CompiledWorkflowDefinition,
@@ -1055,7 +1056,15 @@ export function runFromRow(row: RunRow): WorkflowRun {
 		generation: row.generation,
 		attempt: row.attempt,
 		status: row.status,
-		profile: JSON.parse(row.profile_json),
+		// A run persisted before the multiplexer removal pins a retired runtime;
+		// normalize it on read so the run still loads and resumes on the durable
+		// host.
+		profile: {
+			...JSON.parse(row.profile_json),
+			runtime: normalizeRuntimeId(
+				(JSON.parse(row.profile_json) as { runtime?: unknown }).runtime,
+			),
+		},
 		issuedRevision: row.issued_revision,
 		allowedOutcomes: JSON.parse(row.allowed_outcomes_json),
 		capabilityHash: row.capability_hash,
@@ -1071,7 +1080,16 @@ export function runFromRow(row: RunRow): WorkflowRun {
 				}
 			: {}),
 		...(row.output_digest ? { outputDigest: row.output_digest } : {}),
-		...(row.handle_json ? { handle: JSON.parse(row.handle_json) } : {}),
+		...(row.handle_json
+			? {
+					handle: {
+						...JSON.parse(row.handle_json),
+						runtime: normalizeRuntimeId(
+							(JSON.parse(row.handle_json) as { runtime?: unknown }).runtime,
+						),
+					},
+				}
+			: {}),
 		createdAt: row.created_at,
 		...(row.completed_at ? { completedAt: row.completed_at } : {}),
 	};

@@ -8,7 +8,6 @@
 import type { JSX } from "solid-js";
 import { createContext, useContext } from "solid-js";
 import * as git from "../data/git.ts";
-import * as herdr from "../data/herdr.ts";
 import * as data from "../data/index.ts";
 import * as telemetry from "../data/telemetry.ts";
 import * as workflow from "../data/workflow.ts";
@@ -17,7 +16,6 @@ export interface DataSurface {
 	readonly workflow: typeof workflow;
 	readonly git: typeof git;
 	readonly telemetry: typeof telemetry;
-	readonly herdr: typeof herdr;
 	/** Drop cached entries for a key (or a key prefix) after an event gap. */
 	readonly invalidate: (key: string) => void;
 }
@@ -32,7 +30,6 @@ export function DataProvider(props: {
 		workflow,
 		git,
 		telemetry,
-		herdr,
 		invalidate: (key) => data.invalidateKey(key),
 	};
 	return (

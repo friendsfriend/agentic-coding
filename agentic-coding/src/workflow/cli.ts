@@ -16,12 +16,11 @@ export {
 } from "./cli/commands/start.ts";
 export { detachedDrainArgv, scheduleDrain } from "./cli/drain.ts";
 export { runGit } from "./cli/git.ts";
-export { paneForRunFactory, verificationPosition } from "./cli/pane.ts";
 export { cliTest, main, run } from "./cli/run.ts";
 export {
-	AGENT_EXTENSION_SUBCOMMANDS,
 	PLUGIN_SUBCOMMANDS,
 	REQUIRED_FLAGS,
 	SUBCOMMANDS,
 	WIKI_SUBCOMMANDS,
 } from "./cli/schema.ts";
+export { verificationPosition } from "./run-projections.ts";

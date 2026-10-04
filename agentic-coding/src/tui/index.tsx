@@ -3,14 +3,10 @@
 // Modes:
 //   (default) / --home / manager  unified shell: owned environment backend +
 //                                 contextual workflow launch + observability
-//   --repo P --workflow-id W      per-workflow dashboard pane: the dashboard-only
-//                                 presentation root (no application navigation,
-//                                 no receiver, no owned backend), best-effort
-//                                 OTLP traces
 //   --attach-url URL              attached shell: environment features of a
 //                                 server this process does not own
 //   --profile test                interactive dummy data
-//   --json                        dump dashboard JSON and exit (headless/CI)
+//   --json                        dump overview JSON and exit (headless/CI)
 //
 // Every acquired part of the mixed-runtime stack (Go backend, workflow
 // application, telemetry receivers/collectors, renderer) is registered as an
@@ -61,7 +57,6 @@ import {
 	isWikiWorkflowTarget,
 } from "../workflow/runtime.ts";
 import { AppShell } from "./app/AppShell.tsx";
-import { DashboardRoot } from "./app/DashboardRoot.tsx";
 import { copyToClipboard } from "./clipboard.ts";
 import { CompositionProviders } from "./context/composition.tsx";
 import { inProcessGateway } from "./context/engine-gateway.ts";
@@ -75,7 +70,7 @@ import {
 import { traceTui } from "./dash/tracing.ts";
 import { credentialPromptBridge } from "./dash/ui/CredentialsModal.tsx";
 import { configureGateway, gatewayOrUndefined } from "./data/index.ts";
-import { loadDashboard, loadOverviews } from "./data/workflow.ts";
+import { loadOverviews } from "./data/workflow.ts";
 import { LifecycleModal } from "./lifecycle/LifecycleModal.tsx";
 import { QuitConfirmModal } from "./lifecycle/QuitConfirmModal.tsx";
 import {
@@ -106,14 +101,12 @@ const usage = `Usage: agentic-coding [command] [options]
   (no command)             Unified shell (default): owned environment backend + contextual workflow launch + observability
   workflow                 Transactional workflow engine. Run \`agentic-coding workflow --help\`.
   home | manager           Alias of the unified shell home route
-  dash                     Workflow dashboard for one explicit target, without application navigation (--repo PATH --workflow-id ID)
   server                   Start only the environment backend (headless)
   attach URL               Attach the shell to a running environment backend
   devenv ...               Thin alias of this executable (devenv spawn/attach/server)
 
 Options:
   --repo PATH              Repository root (default: cwd)
-  --workflow-id ID         Workflow id (dash target; required in dash mode)
   --profile test           Interactive dummy data
   --json                   Dump dashboard JSON and exit
   --http-port N            OTLP HTTP JSON port (default 4318 in managed/home mode)
@@ -204,19 +197,6 @@ export interface ShellMode {
 	workflowId: string;
 }
 
-/**
- * `dash` presentation mode: one explicitly targeted workflow, rendered by the
- * dashboard-only root. It is not a route inside the feature shell, so no tab
- * row, breadcrumb, location picker, Home/Settings page or observability body
- * is composed for it (isolate-workflow-dashboard-mode, task 1.2).
- */
-function isDashboardMode(options: {
-	home: boolean;
-	attachUrl?: string;
-}): boolean {
-	return !options.home && !options.attachUrl;
-}
-
 /** Splash row for the standalone local classifier sidecar. One id/label pair,
  * so the row the shell advertises and the row it waits on cannot drift. The
  * sidecar is started by the server (it must be, for every client), and this row
@@ -257,10 +237,9 @@ export async function main(): Promise<void> {
 		process.argv.includes("--home") || process.argv.includes("manager");
 	const isTest = profile === "test";
 	const repoArg = arg("--repo");
-	const workflowId = arg("--workflow-id");
-	if (!home && !isTest && !attachUrl && (!repoArg || !workflowId)) {
+	if (!home && !isTest && !attachUrl) {
 		console.error(
-			"usage: agentic-coding\n       agentic-coding home|manager\n       agentic-coding dash --repo PATH --workflow-id ID [--json]\n       agentic-coding attach URL\n       agentic-coding dash --profile test [--json]",
+			"usage: agentic-coding\n       agentic-coding home|manager\n       agentic-coding attach URL\n       agentic-coding --profile test [--json]",
 		);
 		process.exit(2);
 	}
@@ -271,22 +250,14 @@ export async function main(): Promise<void> {
 			: repoArg
 				? resolve(repoArg)
 				: "/demo";
-	const resolvedWorkflowId = workflowId ?? "demo-optional-realisation-date";
-	// Presentation mode of this process: `dash` renders the dashboard-only root
-	// for one explicit target, everything else composes the feature shell.
-	const dashOnly = isDashboardMode({ home, attachUrl });
-	// A dashboard pane is a client of its parent shell's workflow server. Herdr
-	// starts it as a separate process, so use the explicit handoff environment
-	// instead of falling through to the transport-less path.
-	const workflowAttachUrl =
-		attachUrl ?? (dashOnly ? process.env.AGENTIC_WORKFLOW_URL : undefined);
+	const workflowAttachUrl = attachUrl;
 	const remoteAttach = Boolean(workflowAttachUrl && attachToken);
 	// Configuration diagnostics go to the mounted surface instead of raw stderr,
 	// which would print into the OpenTUI render. A failed load opens the global
 	// error dialog; warnings become toasts, reported once per distinct message
 	// because a configuration load runs again for every request.
 	const reportedConfigWarnings = new Set<string>();
-	const surfaceNotify = dashOnly ? notify : notifyShell;
+	const surfaceNotify = notifyShell;
 	setConfigDiagnosticSink((message, kind) => {
 		if (kind === "error") {
 			showErrorModal("Configuration error", message);
@@ -296,20 +267,6 @@ export async function main(): Promise<void> {
 		reportedConfigWarnings.add(message);
 		surfaceNotify(message, "warning");
 	});
-	// Identity resolution is explicit and bounded: a local target that is not a
-	// repository fails here, before any resource is acquired, instead of
-	// degrading into Home or a workflow picker. Research/wiki standalone targets
-	// resolve without a filesystem check.
-	const standaloneTarget = Boolean(
-		repoArg &&
-			(isResearchWorkflowTarget(repoArg) || isWikiWorkflowTarget(repoArg)),
-	);
-	if (dashOnly && !isTest && !standaloneTarget && !existsSync(repo)) {
-		console.error(
-			`dashboard target repository does not exist: ${repo}\nusage: agentic-coding dash --repo PATH --workflow-id ID`,
-		);
-		process.exit(2);
-	}
 
 	// Resolve the backend address before any observation subprocess can start
 	// (including `--json`). Explicit `--devenv-url`/`--attach-url` win and the
@@ -388,11 +345,7 @@ export async function main(): Promise<void> {
 		try {
 			console.log(
 				JSON.stringify(
-					home
-						? await loadOverviews()
-						: isTest
-							? testDashboard()
-							: await loadDashboard(repo, resolvedWorkflowId),
+					isTest ? testDashboard() : await loadOverviews(),
 					null,
 					2,
 				),
@@ -622,57 +575,37 @@ export async function main(): Promise<void> {
 	}
 
 	// ---- Server-stack bootstrap ----------------
-	// The standalone dashboard reads through the composition root's gateway, so
-	// it must not paint before that gateway exists: it has no startup modal to
-	// mask a not-yet-ready data source, and its first observation would race the
-	// server start and report "no dashboard gateway configured for this process".
-	// Every other route renders first so its startup modal can show progress.
-	if (dashOnly) await startServerStack(false);
-
 	await render(
 		() => (
 			<KeymapProvider keymap={keymap}>
 				<CompositionProviders gateway={gatewayOrUndefined()}>
-					{dashOnly ? (
-						// Dashboard-only presentation (isolate-workflow-dashboard-mode): the
-						// shared dashboard component directly, never the feature shell.
-						<DashboardRoot
-							repo={repo}
-							workflowId={resolvedWorkflowId}
-							profile={isTest ? "test" : undefined}
-							keymap={keymap}
-						/>
-					) : (
-						<>
-							<AppShell
-								repos={explicitRepos}
-								db={db}
-								traceStore={traceStore}
-								metricStore={metricStore}
-								logStore={logStore}
-								topologyStore={topologyStore}
-								tracesOnly={tracesOnly}
-								environments={environments}
-								attached={attachUrl !== undefined}
-								attachLabel={
-									remoteAttach
-										? `attached ${attachUrl ?? ""} · workflow + observability · environment features unavailable`
-										: attachUrl
-											? `attached ${attachUrl} · environment features only · remote workflow features unavailable`
-											: undefined
-								}
-								dashboard={
-									attachUrl && !remoteAttach
-										? undefined
-										: {
-												mode: home ? "home" : "dash",
-												keymap,
-											}
-								}
-							/>
-							<LifecycleModal />
-						</>
-					)}
+					<AppShell
+						repos={explicitRepos}
+						db={db}
+						traceStore={traceStore}
+						metricStore={metricStore}
+						logStore={logStore}
+						topologyStore={topologyStore}
+						tracesOnly={tracesOnly}
+						environments={environments}
+						attached={attachUrl !== undefined}
+						attachLabel={
+							remoteAttach
+								? `attached ${attachUrl ?? ""} · workflow + observability · environment features unavailable`
+								: attachUrl
+									? `attached ${attachUrl} · environment features only · remote workflow features unavailable`
+									: undefined
+						}
+						dashboard={
+							attachUrl && !remoteAttach
+								? undefined
+								: {
+										mode: home ? "home" : "attached",
+										keymap,
+									}
+						}
+					/>
+					<LifecycleModal />
 					<QuitConfirmModal />
 				</CompositionProviders>
 			</KeymapProvider>
@@ -681,7 +614,7 @@ export async function main(): Promise<void> {
 	);
 
 	// ---- Server-stack bootstrap after first paint (modal shows progress) ----
-	if (!dashOnly) void startServerStack(home);
+	void startServerStack(home);
 	await new Promise<void>((done) => renderer.once("destroy", done));
 	clearSelectionCopy();
 	disposeCredentialPrompt();

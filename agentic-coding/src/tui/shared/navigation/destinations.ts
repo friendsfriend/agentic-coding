@@ -105,9 +105,9 @@ export function homeDestinations(
 		});
 	}
 	// Workflow creation is contextual (application/library resource pages) or
-	// independent (Wiki), plus Home's "New workflow" action for a path outside
-	// the configured projects: there is no Workflows list, history or reopen
-	// entry anywhere in the full application
+	// independent (Wiki); the workspace sidebar's `+` opens the same form for a
+	// path outside the configured projects. There is no Workflows list, history
+	// or reopen entry anywhere in the full application
 	// (launch-workflows-from-project-and-wiki-pages).
 	if (surface.settings) {
 		entries.push({
@@ -175,17 +175,6 @@ export function categoryDestinations(
  * shell owns the form it opens. Appended by the shell, never offered by the
  * location picker.
  */
-export function homeLaunchEntry(open: () => void): DestinationEntry {
-	return {
-		id: "workflow.new",
-		label: "New workflow",
-		description:
-			"Start a workflow in the working directory or a path you enter",
-		group: "Destinations",
-		action: open,
-	};
-}
-
 /**
  * Location-picker entries: every registered destination plus in-memory
  * identities the caller supplies (recent resources, ancestors, siblings). The

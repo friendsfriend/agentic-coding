@@ -59,7 +59,7 @@ function withConfig<T>(content: object, run: () => T): T {
 const BASE_CONFIG = {
 	agents: {
 		default_profile: "a",
-		profiles: { a: { runtime: "pi" }, b: { runtime: "pi" } },
+		profiles: { a: { runtime: "pi-durable" }, b: { runtime: "pi-durable" } },
 		presets: {
 			p: {
 				default_profile: "a",
@@ -101,7 +101,7 @@ describe("settings inventory", () => {
 				`${JSON.stringify({
 					agents: {
 						default_profile: "current",
-						profiles: { current: { runtime: "pi" } },
+						profiles: { current: { runtime: "pi-durable" } },
 					},
 				})}\n`,
 			);
@@ -185,13 +185,17 @@ describe("agents configuration revision", () => {
 			updateConfig(file, (document) => {
 				const agents = document.agents as Record<string, unknown>;
 				(agents.profiles as Record<string, unknown>).c = {
-					runtime: "opencode",
+					runtime: "pi-durable",
 				};
 			});
 
 			expect(() =>
 				applyAgentsMutation(
-					{ kind: "set-profile", name: "b", profile: { runtime: "pi" } },
+					{
+						kind: "set-profile",
+						name: "b",
+						profile: { runtime: "pi-durable" },
+					},
 					undefined,
 					revision,
 				),
@@ -203,12 +207,12 @@ describe("agents configuration revision", () => {
 			const current = loadAgentConfig().revision;
 			expect(current).not.toBe(revision);
 			applyAgentsMutation(
-				{ kind: "set-profile", name: "b", profile: { runtime: "opencode-v2" } },
+				{ kind: "set-profile", name: "b", profile: { runtime: "pi-durable" } },
 				undefined,
 				current,
 			);
-			expect(loadAgentConfig().agents.profiles.b?.runtime).toBe("opencode-v2");
-			expect(loadAgentConfig().agents.profiles.c?.runtime).toBe("opencode");
+			expect(loadAgentConfig().agents.profiles.b?.runtime).toBe("pi-durable");
+			expect(loadAgentConfig().agents.profiles.c?.runtime).toBe("pi-durable");
 		});
 	});
 
@@ -222,11 +226,11 @@ describe("agents configuration revision", () => {
 			expect(loadAgentConfig().revision).toBe(before);
 			// A caller that never tracks a revision may still write.
 			applyAgentsMutation(
-				{ kind: "set-profile", name: "b", profile: { runtime: "pi" } },
+				{ kind: "set-profile", name: "b", profile: { runtime: "pi-durable" } },
 				undefined,
 				before,
 			);
-			expect(loadAgentConfig().agents.profiles.b?.runtime).toBe("pi");
+			expect(loadAgentConfig().agents.profiles.b?.runtime).toBe("pi-durable");
 		});
 	});
 
@@ -264,7 +268,7 @@ describe("agents configuration revision", () => {
 describe("subsequent starts versus a running workflow's resolved routing", () => {
 	const baseConfig = {
 		default_profile: "a",
-		profiles: { a: { runtime: "pi" }, b: { runtime: "pi" } },
+		profiles: { a: { runtime: "pi-durable" }, b: { runtime: "pi-durable" } },
 	} as const;
 	const registry = registerBuiltins();
 

@@ -10,11 +10,8 @@ import { Schema } from "effect";
 import { backendClientFromEnv } from "../../server/client.ts";
 import { WorkflowApplication } from "../application.ts";
 import { loadConfig } from "../effects.ts";
-import {
-	disableWorkflowSidebar,
-	drainEffects,
-	listProjects,
-} from "../operations.ts";
+import { drainEffects, listProjects } from "../operations.ts";
+import { verificationPosition } from "../run-projections.ts";
 import { WorkflowEngine } from "../runtime.ts";
 import { flag, positional, positionals, requireFlag } from "./args.ts";
 import type { CallerEnvironment } from "./caller-environment.ts";
@@ -26,19 +23,13 @@ import {
 	runQuestion,
 	validateQuestionTimeout,
 } from "./commands/dispatch-actions.ts";
-import {
-	runAgentExtension,
-	runMigrate,
-	runRepair,
-	runRepin,
-} from "./commands/misc.ts";
+import { runMigrate, runRepair, runRepin } from "./commands/misc.ts";
 import { runResearchHandoff } from "./commands/research-handoff.ts";
 import { parseMode, runStart } from "./commands/start.ts";
 import { runWiki } from "./commands/wiki.ts";
 import { detachedDrainArgv } from "./drain.ts";
 import { help } from "./help.ts";
 import { resolveHandoffIdentity } from "./identity.ts";
-import { verificationPosition } from "./pane.ts";
 import { registry } from "./registry.ts";
 import { required, SUBCOMMANDS, validateArgs } from "./schema.ts";
 
@@ -130,14 +121,6 @@ const COMMAND_HANDLERS: Record<string, CommandHandler> = {
 	repair: runRepair,
 	repin: runRepin,
 	migrate: runMigrate,
-	"agent-extension": (rest) => runAgentExtension(rest),
-	sidebar: async (rest, workflowEngine, repo) => {
-		if (!flag(rest, "disable"))
-			throw new Error("sidebar: --disable is required");
-		console.log(
-			JSON.stringify(await disableWorkflowSidebar(repo, workflowEngine)),
-		);
-	},
 };
 
 export async function run(argv: string[]): Promise<void> {

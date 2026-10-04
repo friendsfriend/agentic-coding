@@ -63,7 +63,6 @@ import {
 	type AgentsMutation,
 	applyAgentsMutation,
 	BUILTIN_PRESET_NAME,
-	clearModelCache,
 	durableModels as loadDurableModels,
 	saveAgentConfig,
 } from "../data/agents.ts";
@@ -337,7 +336,6 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 
 	const openProfileEditor = (existing?: string) => {
 		const current = existing ? agents()?.profiles[existing] : undefined;
-		clearModelCache();
 		// A durable profile's model choices come from the configured providers, not
 		// from a runtime enumeration, so make sure that read is in flight as soon
 		// as an editor could need it.

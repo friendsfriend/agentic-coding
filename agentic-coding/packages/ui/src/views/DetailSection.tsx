@@ -44,8 +44,11 @@ export function DetailSection(props: DetailSectionProps) {
 					minHeight: 0,
 				}}
 			>
+				{/* The focused panel's left line is the same one-column marker the
+				    selection rows and the agent session blocks use. */}
 				<box
-					backgroundColor={props.active ? uiColors.primary : uiColors.bgMantle}
+					border={["left"]}
+					borderColor={props.active ? uiColors.primary : "transparent"}
 					style={{ width: 1, height: "100%", flexShrink: 0 }}
 				/>
 				<box

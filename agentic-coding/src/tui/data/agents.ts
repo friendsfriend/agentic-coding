@@ -14,8 +14,6 @@ export {
 export {
 	type AgentsConfig,
 	BUILTIN_PRESET_NAME,
-	clearModelCache,
-	runtimeModels,
 } from "../../workflow/profiles.ts";
 
 /** The models a `pi-durable` profile can select: every model of every provider

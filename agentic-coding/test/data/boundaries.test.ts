@@ -42,7 +42,6 @@ describe("dashboard data layer", () => {
 			"agents.ts",
 			"events.ts",
 			"git.ts",
-			"herdr.ts",
 			"index.ts",
 			"review.ts",
 			"telemetry.ts",

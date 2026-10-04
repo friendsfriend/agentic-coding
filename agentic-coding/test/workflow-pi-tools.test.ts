@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { piLaunchAssets } from "../src/workflow/effect-runner.ts";
 import { globalPiTools, piSettingsPath } from "../src/workflow/pi-tools.ts";
 
 /** A settings file in a throwaway directory, so a test never reads (or depends
@@ -94,22 +93,5 @@ describe("globally configured pi tools", () => {
 			if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
 			else process.env.PI_CODING_AGENT_DIR = previous;
 		}
-	});
-});
-
-describe("managed pi launch assets", () => {
-	test("every pi run loads the question tools and the judgment tool", () => {
-		// The judgment tool is not gated on a resolved classifier binding: a run
-		// without one still gets the tool the pinned protocol names, and the tool
-		// reports that it cannot answer instead of the session silently lacking it.
-		expect(piLaunchAssets("pi", "/assets")).toEqual({
-			workflowExtensionPath: "/assets/extensions/developer-question.ts",
-			jevExtensionPath: "/assets/extensions/ask-jev.ts",
-		});
-	});
-
-	test("another runtime gets neither pi extension", () => {
-		expect(piLaunchAssets("opencode", "/assets")).toEqual({});
-		expect(piLaunchAssets("opencode-v2", "/assets")).toEqual({});
 	});
 });

@@ -3,7 +3,6 @@
 // owner; `devenv` is a thin alias that maps onto the same modes.
 //   (default)  unified TUI with an owned environment backend
 //   workflow   transactional workflow engine
-//   dash       per-workflow dashboard (dashboard-only presentation; no application navigation) (--repo --workflow-id | --profile test | --json)
 //   home       workflow list + observability TUI (long-lived); manager is an alias
 //   server     headless environment backend (no renderer)
 //   attach     attach the shell to a running environment backend
@@ -59,7 +58,7 @@ if (surface === "__catalog") {
 	process.exit(2);
 } else if (surface === "--help" || surface === "-h" || surface === "help") {
 	console.log(
-		"Usage: agentic-coding [command] [args]\n\nCommands:\n  (none)     Unified shell (owned environment backend + workflows + observability).\n  workflow   Transactional workflow engine. Run `agentic-coding workflow --help`.\n  config     Preview or apply configuration migration (`config migrate [--apply|--resume|--rollback]`).\n  home       Unified shell, home route. `manager` is an alias.\n  dash       Workflow dashboard for one explicit target, without application navigation. `agentic-coding dash --repo PATH --workflow-id ID`\n  server     Start only the unified backend (headless).\n  attach     Attach the shell to a running environment backend: `agentic-coding attach URL`\n  devenv     Thin alias of this executable (spawn/attach/server).",
+		"Usage: agentic-coding [command] [args]\n\nCommands:\n  (none)     Unified shell (owned environment backend + workflows + observability).\n  workflow   Transactional workflow engine. Run `agentic-coding workflow --help`.\n  config     Preview or apply configuration migration (`config migrate [--apply|--resume|--rollback]`).\n  home       Unified shell, home route. `manager` is an alias.\n  server     Start only the unified backend (headless).\n  attach     Attach the shell to a running environment backend: `agentic-coding attach URL`\n  devenv     Thin alias of this executable (spawn/attach/server).",
 	);
 } else if (surface === "agent") {
 	// Hidden internal mode: the headless durable agent host
@@ -84,7 +83,6 @@ if (surface === "__catalog") {
 	process.exit(await runConfigCommand(rest));
 } else if (
 	!surface ||
-	surface === "dash" ||
 	surface === "home" ||
 	surface === "manager" ||
 	surface.startsWith("-")
@@ -97,7 +95,7 @@ if (surface === "__catalog") {
 	await main();
 } else {
 	console.error(
-		`unknown agentic-coding command: ${surface}. Known commands: workflow, config, dash, home, manager, server, attach`,
+		`unknown agentic-coding command: ${surface}. Known commands: workflow, config, home, manager, server, attach`,
 	);
 	process.exit(1);
 }

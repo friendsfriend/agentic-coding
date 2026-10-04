@@ -178,8 +178,8 @@ function writeAgentsConfig(dir: string, pools: unknown = POOLS): string {
 			agents: {
 				default_profile: "base",
 				profiles: {
-					base: { runtime: "pi", executable: "/bin/true" },
-					strong: { runtime: "pi", executable: "/bin/true" },
+					base: { runtime: "pi-durable", executable: "/bin/true" },
+					strong: { runtime: "pi-durable", executable: "/bin/true" },
 				},
 				presets: { auto: { pools } },
 			},
@@ -191,7 +191,7 @@ function writeAgentsConfig(dir: string, pools: unknown = POOLS): string {
 function baseProfile(name: string): ResolvedProfile {
 	return {
 		name,
-		runtime: "pi",
+		runtime: "pi-durable",
 		executable: "/bin/true",
 		tools: [],
 		extensions: [],
@@ -1691,8 +1691,8 @@ describe("preset pool parsing", () => {
 	test("resolvePreset exposes pools", () => {
 		const config = parseAgentsConfig({
 			profiles: {
-				quick: { runtime: "pi" },
-				strong: { runtime: "pi" },
+				quick: { runtime: "pi-durable" },
+				strong: { runtime: "pi-durable" },
 			},
 			presets: {
 				auto: {
@@ -1712,7 +1712,7 @@ describe("preset pool parsing", () => {
 	test("rejects a preset with no pools", () => {
 		expect(() =>
 			parseAgentsConfig({
-				profiles: { quick: { runtime: "pi" } },
+				profiles: { quick: { runtime: "pi-durable" } },
 				presets: { auto: { default_profile: "quick" } },
 			}),
 		).toThrow("at least one model pool");
@@ -3037,8 +3037,8 @@ describe("model.classify gate handler", () => {
 				agents: {
 					default_profile: "base",
 					profiles: {
-						base: { runtime: "pi", executable: "/bin/true" },
-						strong: { runtime: "pi", executable: "/bin/true" },
+						base: { runtime: "pi-durable", executable: "/bin/true" },
+						strong: { runtime: "pi-durable", executable: "/bin/true" },
 					},
 					...(gates === undefined ? {} : { gates }),
 					presets: {
@@ -3176,37 +3176,24 @@ describe("model.classify gate handler", () => {
 		}
 	});
 
-	test("a skip emits a notification and a telemetry event", () => {
-		const notifications: Array<{ title: string; body: string }> = [];
+	test("a skip emits a telemetry event and does not throw", () => {
 		const telemetry: Array<[string, number | undefined]> = [];
 		effectRunnerTest.announceGateSkipBoundary(
-			(input) => {
-				notifications.push(input);
-				return Effect.succeed(undefined);
-			},
 			(stage, noul) => telemetry.push([stage, noul]),
 			"wiki",
 			0.12,
 		);
-		expect(notifications).toEqual([
-			{
-				title: "Workflow stage skipped",
-				body: "The wiki stage was skipped by the classifier (necessity 0.12).",
-			},
-		]);
 		expect(telemetry).toEqual([["wiki", 0.12]]);
-	});
-
-	test("a failing notification port still emits telemetry and does not throw", () => {
-		const telemetry: Array<[string, number | undefined]> = [];
 		expect(() =>
 			effectRunnerTest.announceGateSkipBoundary(
-				() => Effect.fail(new Error("port is down")),
 				(stage, noul) => telemetry.push([stage, noul]),
 				"planApproval",
 			),
 		).not.toThrow();
-		expect(telemetry).toEqual([["planApproval", undefined]]);
+		expect(telemetry).toEqual([
+			["wiki", 0.12],
+			["planApproval", undefined],
+		]);
 	});
 });
 
@@ -3351,8 +3338,8 @@ describe("verification gate wiring (policy to runtime)", () => {
 				agents: {
 					default_profile: "base",
 					profiles: {
-						base: { runtime: "pi", executable: "/bin/true" },
-						strong: { runtime: "pi", executable: "/bin/true" },
+						base: { runtime: "pi-durable", executable: "/bin/true" },
+						strong: { runtime: "pi-durable", executable: "/bin/true" },
 					},
 					...(gates === undefined ? {} : { gates }),
 					presets: {

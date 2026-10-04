@@ -63,26 +63,20 @@ import {
 	panelContext,
 } from "./keybinds.ts";
 import {
-	focusAgentAsync,
-	focusReturnWorkspace,
-	herdrEventMatchesWorkspace,
 	listPresetNames,
 	onWorkflowExecutionError,
 	onWorkflowExecutionProgress,
 	onWorkflowExecutionSettled,
-	openFindingInEditorAsync,
 	openSpecArtifact,
 	openSpecArtifacts,
 	PRESET_CONFIG_DEFAULTS,
-	reconcileSidebarPresentation,
-	reconcileWorkflowNotifications,
 	serverOwnsExecutionEvents,
 	subscribeDataEvents,
-	subscribeHerdrEvents,
 	switchWorkflowPreset,
 } from "./live.ts";
 import { Overlays } from "./modals/Overlays.tsx";
 import { notify } from "./notifications.ts";
+import { openFindingInEditor } from "./open-finding.ts";
 import { CLASSIFIER_PANEL } from "./panel-grid.ts";
 import { AgentsPanel } from "./panels/AgentsPanel.tsx";
 import { ChangePanel } from "./panels/ChangePanel.tsx";
@@ -127,14 +121,6 @@ export type { PhaseStatusState };
 // keep the public dashboard root surface (and its renderer tests) stable.
 export { agentMetricLine, agentRuntimeModelLine, phaseStatus };
 
-/** Header context derived from the dashboard's single data source. */
-export interface WorkflowHeaderInfo {
-	change: string;
-	phase: string;
-	branch: string;
-	updated: string;
-}
-
 export function App(props: {
 	repo: string;
 	workflowId: string;
@@ -147,13 +133,9 @@ export function App(props: {
 	/** Set only when the dashboard is mounted inside the unified shell. */
 	shellFeature?: "workflows";
 	active?: () => boolean;
-	/** Composition-root panel boundary: called for horizontal panel movement
-	 * before the dashboard's own grid moves, with the active panel's column
-	 * edge. Returns true when the root handled the move (it owns a panel beside
-	 * the dashboard, e.g. the workspace sidebar). */
-	onPanelExit?: (direction: "left" | "right", atEdge: boolean) => boolean;
-	/** Push the workflow header context up to the composition root's header. */
-	onHeader?: (header: WorkflowHeaderInfo | null) => void;
+	/** Composition-root panel boundary for Escape: true when the root handled
+	 * it (the shell moves focus to the workspace sidebar). */
+	onBack?: () => boolean;
 }) {
 	let findingDetailScroll: ScrollBoxRenderable | undefined;
 	const renderer = useRenderer();
@@ -200,10 +182,8 @@ export function App(props: {
 						repository: props.repo,
 						worktree: props.repo,
 						branch: "",
-						workspace: "",
 						verificationRound: 0,
 						runs: [],
-						panes: {},
 						availableActions: [],
 					},
 					request: "Loading observations…",
@@ -240,15 +220,6 @@ export function App(props: {
 	// failure must not reopen the modal on every refresh (watchDirectories
 	// refreshes on each workflow file change); clearing on success re-arms it.
 	let lastRefreshError: string | undefined;
-	// Feed the shell's global header from the dashboard's single data source.
-	createEffect(() => {
-		props.onHeader?.({
-			change: data().state.workflowId,
-			phase: data().state.stepLabel ?? data().state.phase,
-			branch: data().state.branch,
-			updated: data().updated,
-		});
-	});
 	const [busy, setBusy] = createSignal(false);
 	// Dedicated review-finishing signal (in addition to the busy guard): scopes
 	// the progress overlay to review finishes instead of every busy action.
@@ -1325,15 +1296,10 @@ export function App(props: {
 		} else props.keymap.setData("modal.active", "none");
 	};
 
-	// A stable workspace key: the memo only notifies when the id actually
-	// changes, so the event subscription is not torn down on every refresh.
-	const workflowWorkspace = createMemo(() => data().state.workspace);
-
 	// Refresh is driven by the server event stream when a transport is
-	// configured: the server owns the Herdr subscription and the execution
-	// coordinator listeners and publishes `workflow.updated`. A transport-less
-	// run (demo/tests) falls back to local file watches + the Herdr socket.
-	// The effect depends only on the active flag and the workspace key: reading
+	// configured: the server owns the execution-coordinator listeners and
+	// publishes `workflow.updated`. A transport-less run (demo/tests) falls back
+	// to local file watches. The effect depends only on the active flag: reading
 	// `data()` untracked keeps the subscription and its safety timer alive
 	// across refreshes instead of tearing them down on every `setData` (which
 	// would open an event-loss window).
@@ -1341,32 +1307,16 @@ export function App(props: {
 		if (props.profile === "test") return;
 		if (props.active && !props.active()) return;
 		const state = untrack(() => data().state);
-		const workspace = workflowWorkspace();
 		const debounced = debounce(() => {
 			refresh();
-			reconcileSidebarPresentation();
-			// Present only when the notifier owner lives in this process (the home
-			// shell); in the standalone dash process this is a no-op and the
-			// observer's bounded fallback interval drives reconciliation.
-			reconcileWorkflowNotifications();
 		}, 200);
 		if (serverOwnsExecutionEvents()) {
-			// Attached: the server owns execution and Herdr, and publishes
-			// `workflow.updated`; the data layer applies each envelope to the cache.
+			// Attached: the server owns execution and publishes `workflow.updated`;
+			// the data layer applies each envelope to the cache.
 			const dispose = subscribeDataEvents({
 				onEvent: (event) => {
 					if (event.domain !== "workflow") return;
 					if (event.resource && event.resource !== props.repo) return;
-					if (
-						!event.resource &&
-						event.payload &&
-						typeof event.payload === "object" &&
-						!herdrEventMatchesWorkspace(
-							event.payload as Record<string, unknown>,
-							workspace,
-						)
-					)
-						return;
 					debounced.trigger();
 				},
 				onResync: () => refresh(true),
@@ -1389,20 +1339,10 @@ export function App(props: {
 						join(state.worktree, ".herdr-workflow", props.workflowId),
 					];
 		const disposeWatch = watchDirectories(dirs, refresh);
-		// When a transport is configured the server owns the Herdr socket
-		// subscription and publishes `workflow.updated`; a transport-less run
-		// (demo/tests) still watches the socket in-process.
-		const disposeHerdr = serverOwnsExecutionEvents()
-			? () => {}
-			: subscribeHerdrEvents((event) => {
-					if (herdrEventMatchesWorkspace(event.data, workspace))
-						debounced.trigger();
-				});
 		const disposeResync = startSafetyResync(refresh);
 		onCleanup(() => {
 			debounced.cancel();
 			disposeWatch();
-			disposeHerdr();
 			disposeResync();
 		});
 	});
@@ -1514,7 +1454,6 @@ export function App(props: {
 		busy,
 		activePanel,
 		setActivePanel,
-		...(props.onPanelExit ? { onPanelExit: props.onPanelExit } : {}),
 		selectedAgent,
 		setSelectedAgent,
 		selectedArtifact,
@@ -1546,14 +1485,11 @@ export function App(props: {
 		applyTheme,
 		themeNames,
 		loadDashboard,
-		focusReturnWorkspace,
-		focusAgentAsync,
-		openFindingInEditor: async (path, line) =>
-			openFindingInEditorAsync(
-				data().state,
-				{ path, line },
-				artifactController?.signal,
-			),
+		...(props.onBack ? { onBack: props.onBack } : {}),
+		openFindingInEditor: async (path, line) => {
+			artifactController?.signal.throwIfAborted();
+			await openFindingInEditor(data().state, { path, line });
+		},
 		openDeveloperReview,
 		openPlanReview,
 		openVerifierResult,
@@ -2383,7 +2319,7 @@ export function App(props: {
 						else if (key === "enter" || key === "return") {
 							const finding = items[selectedFinding()];
 							if (finding?.type === "finding") {
-								void openFindingInEditorAsync(data().state, finding).catch(
+								void openFindingInEditor(data().state, finding).catch(
 									(error) => {
 										setVerdictReturnToFindings(true);
 										setVerdictRenderMarkdown(false);

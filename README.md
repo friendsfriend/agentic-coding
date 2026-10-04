@@ -1,18 +1,14 @@
 # Agentic Coding
 
-`agentic-coding` combines transactional workflow engine and OpenTUI dashboard. Herdr hosts workspaces and managed agent processes; engine alone owns workflow state.
+`agentic-coding` combines a transactional workflow engine and an OpenTUI shell. The bundled durable agent host runs every managed agent; the engine alone owns workflow state, and the shell's workspace sidebar is the workspace surface.
 
 ## Install
 
-Requires Bun and Git. `pi-durable`, the bundled durable agent host, needs no
-separately installed agent executable — only a configured `pi` credential
-(`~/.pi/agent/auth.json`) to authenticate with. Herdr, and at least one of
-these externally installed agent runtimes, are required only for the
-pane-based runtimes:
-
-- Pi: `pi`
-- stable OpenCode: `opencode`
-- official OpenCode V2 beta: `opencode2`
+Requires Bun and Git. The bundled durable agent host (`pi-durable`) needs no
+separately installed agent executable or multiplexer — only a configured `pi`
+credential (`~/.pi/agent/auth.json`) to authenticate with. `tmux` is optional:
+when the shell runs inside a tmux client, side apps (the editor opened from a
+finding) open in a new tmux window; otherwise they are spawned locally.
 
 Installer never installs agent runtimes, providers, or credentials. Configure Git credential helper or SSH agent before workflow start; dashboard never collects or persists passphrases. The local classifier model is **opt-in**: no application code downloads or assembles it at install time or on first run. Selecting `laya-local` in Settings → Agents → Classifier provider opens an install dialog; only **Install** acquires the ~324 MB, Apache-2.0 model into `~/.config/agentic-coding/classifier/laya/`, after which inference is fully offline. **Not now** keeps the hosted `opencode-zen` provider. (The `laya-system-one` npm dependency ships the model as optional npm chunk packages; when they are present the opt-in install assembles them locally, and otherwise the server fetches them from the npm registry on request.)
 
@@ -37,7 +33,6 @@ Migration converts `config.toml` to `config.json`, moves the legacy `~/.config/d
 
 ```text
 agentic-coding workflow  transactional engine
-agentic-coding dash      workflow dashboard and observations
 agentic-coding home      workflow list and observations
 agentic-coding manager   alias for home
 ```
@@ -98,7 +93,7 @@ Raw phase overwrite is removed. `repair` previews compatible targets and affecte
 
 ## Agent routing
 
-Named profiles select `pi`, `opencode`, `opencode-v2`, or `pi-durable`. A fresh installation has no model-specific profiles: the built-in `use-default-model` preset uses Pi (configurable to another supported harness) without passing a model, allowing the selected harness to choose its own default. Custom profiles and presets are optional.
+Named profiles select the one supported runtime, `pi-durable`. A fresh installation has no model-specific profiles: the built-in `use-default-model` preset passes no model, allowing the runtime to choose its own default. Custom profiles and presets are optional.
 
 For custom profiles, precedence is:
 
@@ -109,17 +104,15 @@ For custom profiles, precedence is:
 5. global default
 6. `use-default-model`
 
-Resolved non-secret route is pinned for workflow lifetime. Missing executable, unsupported tool policy, capability mismatch, or diversity violation fails before agent/pane creation. Runtime/model never falls back silently.
-
-`pi`, `opencode`, and `opencode-v2` use Herdr lifecycle only: create topology, wait for foreground shell, call `herdr agent start`, retry once only for unavailable shell, confirm with `herdr agent get`, then send full assignment with `herdr agent prompt`.
+Resolved non-secret route is pinned for workflow lifetime. Unsupported tool policy, capability mismatch, or diversity violation fails before agent launch. Runtime/model never falls back silently.
 
 ### `pi-durable`: the bundled durable agent host
 
-`pi-durable` runs without Herdr or any external agent executable. The `agentic-coding` executable has a hidden internal mode, `agentic-coding agent host --workflow-dir DIR`, that opens one [`@earendil-works/pi-durable`](https://github.com/earendil-works/pi/tree/main/packages/durable) harness over one SQLite storage file per workflow; the engine's `PiDurableAdapter` (`src/workflow/adapters.ts`) spawns that host on first use, and every agent run of the workflow becomes a conversation in it. A private Unix-socket control protocol (`src/agent-host/protocol.ts`, `client.ts`) carries submissions, status, abort/stop, and a dashboard watch stream; submissions carry an idempotency key, and a crashed host resumes unfinished work on restart. The workflow adapter allocates no multiplexer pane for this runtime.
+`pi-durable` is the one managed agent runtime; it runs without any external agent executable or multiplexer. The `agentic-coding` executable has a hidden internal mode, `agentic-coding agent host --workflow-dir DIR`, that opens one [`@earendil-works/pi-durable`](https://github.com/earendil-works/pi/tree/main/packages/durable) harness over one SQLite storage file per workflow; the engine's `PiDurableAdapter` (`src/workflow/adapters.ts`) spawns that host on first use, and every agent run of the workflow becomes a conversation in it. A private Unix-socket control protocol (`src/agent-host/protocol.ts`, `client.ts`) carries submissions, status, abort/stop, and a dashboard watch stream; submissions carry an idempotency key, and a crashed host resumes unfinished work on restart.
 
 Credentials and custom models are read live from the user's global pi agent directory (`auth.json`/`models.json` under `PI_CODING_AGENT_DIR` or `~/.pi/agent`) — nothing is copied into agentic-coding's own configuration or workflow storage, so logging in once for `pi` also authenticates `pi-durable`. An `agentHost` configuration section (default provider/model/thinking, compaction, retry, steering/follow-up mode) is seeded once from the matching keys of the global pi `settings.json` the first time a durable run uses it, and is never overwritten by a later change to the global default.
 
-The dashboard Agents panel opens a bounded session snapshot for a `pi-durable` agent on Enter instead of focusing a pane; live steering, follow-up and abort from that view are not implemented yet (use the workflow CLI or the agent's own tools in the meantime). The `pi` runtime remains fully supported and is not scheduled for removal in this change.
+The dashboard Agents panel opens a bounded session snapshot for a `pi-durable` agent on Enter instead of focusing a pane; live steering, follow-up and abort from that view are not implemented yet (use the workflow CLI or the agent's own tools in the meantime).
 
 ## Assignments and telemetry
 
@@ -268,13 +261,9 @@ Agentic Coding keeps a centralized **Open Knowledge Format v0.2** bundle (see [t
 
 Use `agentic-coding workflow wiki list`, `search`, `show`, `write`, `verify`, and `log`. Search and read before writing, update an existing concept in place, and do not create active near-duplicates. Sequential planners and the consolidator can write drafts; archive verifies shipped knowledge. The wiki role may read repository evidence and write centralized wiki drafts only; it must not write source files. Reads expose status, trust tier, and staleness. Existing `repository/*` Agentic Coding drafts should move to the matching `projects/agentic-coding/*` identifier without verification; if a safe move is unavailable, retain the legacy record as explicitly deprecated and keep only the project-scoped replacement active. The wiki approval gate grants the human-reviewed tier only after developer approval; `[wiki] reviewer` configures the reviewer identity. OKF §3 recommends `git init` on the bundle for history. Changing pinned instructions or manifests may require `agentic-coding workflow repin` for in-flight workflows.
 
-## Herdr sidebar
+## Workspace sidebar
 
-Optional native Herdr sidebar cards for managed workflows and agents: canonical project, workflow, type/phase, lifecycle role, live runtime status, an input-first Agents ordering, and a reversible opt-in. Disabled by default (`ui.herdr_sidebar`); the row configuration recipe, view-ownership semantics, observer lifetime, and rollback steps live in [`agentic-coding/docs/herdr-sidebar.md`](agentic-coding/docs/herdr-sidebar.md). The integration publishes display-only metadata through the shared Herdr boundary and never changes workflow stores, agent processes, native names, or topology.
-
-## Workflow developer-action notifications
-
-Optional Herdr notification whenever a managed workflow newly owes developer input (an approval gate, a pending developer question, or a blocked agent), naming the workflow and the phase and focusing that workflow's dashboard tab. Disabled by default (`ui.herdr_notifications`), opt-in trusted user configuration only, and alive only while an Agentic Coding shell is running — there is no daemon. Enablement, the focus behavior, the no-daemon lifetime rule, and the manual Herdr recipe for silencing agent-finished toasts live in [`agentic-coding/docs/workflow-notifications.md`](agentic-coding/docs/workflow-notifications.md).
+The shell's left (or right, `ui.sidebar_side`) panel lists the durable workflows from the workflow store, so the list survives a restart exactly as the workflows do. `+` opens the new-workflow form (working directory or entered path), `f` cycles the quick filters (active, attention, all; active is the default), `j`/`k` select, and Enter (or a click) opens that workflow's dashboard in the page body. `n` opens the selected workflow's worktree in a new tmux window (named after the workflow); without a tmux client the shell reports an error instead. `Ctrl+S` toggles focus between the sidebar and the page body on every surface (including feature views whose own keys claim `h`/`l`); `Esc` in the sidebar returns to the page body. By default the sidebar collapses to workspace indices while it is unfocused; `ui.sidebar_mode: "permanent"` keeps it expanded, and `e` (or the title-row glyph, or the collapsed strip's glyph) toggles the mode and writes it back to `ui.sidebar_mode`, so the choice survives restarts.
 
 ## Development
 
@@ -295,9 +284,5 @@ cd agentic-coding && bun install --frozen-lockfile
 cd agentic-coding && bun test
 cd agentic-coding && bun run type-check
 cd agentic-coding && bun run build
-scripts/test-herdr-workflow.sh
 openspec validate rework-workflow-state-handling --strict
-HERDR_LIVE_RUNTIME_SMOKE=1 HERDR_LIVE_RUNTIME_EXECUTABLE=pi scripts/test-herdr-workflow.sh  # opt-in
 ```
-
-Shell smoke uses fake Herdr by default and exercises new start/status/action/handoff/repair surface. Live smoke requires installed/configured Herdr and selected runtime.

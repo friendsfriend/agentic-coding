@@ -857,8 +857,6 @@ export function effectResult(
 				);
 			snapshot.metadata.worktree = candidateReal;
 		}
-		if (typeof data.workspace === "string")
-			snapshot.metadata.workspace = data.workspace;
 		if (typeof data.branch === "string") snapshot.metadata.branch = data.branch;
 		enterStep(db, snapshot, definition, registry, now);
 	}

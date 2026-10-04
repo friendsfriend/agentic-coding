@@ -1,16 +1,15 @@
-// Shared agent launch environment injection (add-multiplexer-adapters).
+// Agent run environment file (multiplexer removal).
 //
-// Both adapters deliver the run environment to an agent process that is
-// spawned from the pane shell, so the secret-bearing file and its "the env
-// landed" marker are written the same way in exactly one place. The file is
-// 0600, contains one `KEY='value'` line per variable, and lives under the
-// workflow's run directory so it never outlives the run workspace.
+// The durable agent host reads its per-run environment from this file, so the
+// secret-bearing file is written in exactly one place. It is 0600, contains one
+// `KEY='value'` line per variable, and lives under the workflow's run directory
+// so it never outlives the run.
 import path from "node:path";
 import {
 	closeSecureDirectory,
 	openSecureDirectory,
 	writeAtomicPrivateFile,
-} from "../workflow/secure-fs.ts";
+} from "./secure-fs.ts";
 
 export interface AgentRunEnvInput {
 	cwd: string;
@@ -56,10 +55,4 @@ export function writeAgentRunEnv(input: AgentRunEnvInput): string {
 		closeSecureDirectory(directory);
 	}
 	return envFile;
-}
-
-/** The marker the pane-side shell touches after sourcing the env file, so the
- * adapter can prove the exports landed before the agent inherits them. */
-export function agentRunEnvMarker(envFile: string): string {
-	return `${envFile}.done`;
 }

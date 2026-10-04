@@ -10,6 +10,7 @@ import { Badge } from "../components/Badge";
 import type { Highlight } from "../components/Highlight";
 import { MatchedText } from "../components/MatchedText";
 import { RunningText } from "../components/RunningText";
+import { SelectionMarker } from "../components/SelectionMarker.tsx";
 import { useTerminalDimensions } from "../hooks/useTerminalDimensions.ts";
 import { uiColors } from "../theme/colors";
 
@@ -167,11 +168,8 @@ export function WorkItemCard(props: WorkItemCardProps) {
 				flexDirection: "row",
 			}}
 		>
-			{/* ── Accent marker strip — always present, colored only when selected ── */}
-			<box
-				backgroundColor={props.selected ? uiColors.highlight : undefined}
-				style={{ width: 2, flexShrink: 0 }}
-			/>
+			{/* ── Accent marker — always present, painted only when selected ── */}
+			<SelectionMarker selected={props.selected} />
 
 			{/* ── Card body ─────────────────────────────────────────────── */}
 			<box

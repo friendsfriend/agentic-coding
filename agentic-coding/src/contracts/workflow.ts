@@ -122,14 +122,20 @@ export type EffectStatus =
 	| "completed"
 	| "failed"
 	| "expired";
-export type RuntimeId =
-	| "pi"
-	| "opencode"
-	| "opencode-v2"
-	// The pane-less durable agent host runtime (add-pi-durable-runtime): runs
-	// without a multiplexer pane, so `AgentHandle.paneId` is optional for it.
-	| "pi-durable"
-	| (string & {});
+/** The one managed agent runtime (multiplexer removal): the bundled durable
+ * host. Pane-hosted runtimes (`pi`, `opencode`) are gone with the multiplexer. */
+export type RuntimeId = "pi-durable";
+
+/** Runtime ids a persisted snapshot, run or handle may still carry from before
+ * the multiplexer removal. They are normalized to the one runtime on read, so
+ * history and in-flight workflows stay loadable instead of failing decode. */
+export const RETIRED_RUNTIME_IDS = ["pi", "opencode", "opencode-v2"] as const;
+
+/** Normalize a persisted runtime id onto the one managed runtime. Any value
+ * that is not the current runtime is a retired id by construction. */
+export function normalizeRuntimeId(_value: unknown): RuntimeId {
+	return "pi-durable";
+}
 export type AdapterCapability =
 	| "interactive"
 	| "prompt"
@@ -177,7 +183,6 @@ export interface ResolvedProfile {
 	runtime: RuntimeId;
 	executable: string;
 	model?: string;
-	agent?: string;
 	thinking?: string;
 	tools: readonly string[];
 	extensions: readonly string[];
@@ -233,7 +238,6 @@ export interface WorkflowMetadata {
 	baseBranch: string;
 	/** Empty for repository-independent workflows. */
 	baseCommit: string;
-	workspace?: string;
 	task?: string;
 	ticket?: string;
 	createdAt: string;
@@ -475,21 +479,9 @@ export interface WorkflowRun {
 export interface AgentHandle {
 	runtime: RuntimeId;
 	name: string;
-	// Kept required and string-typed (rather than optional) so every existing
-	// `AgentObservation`/pane-keyed caller keeps type-checking unchanged
-	// (add-pi-durable-runtime deliberately narrowed task 5.1 here: widening
-	// this to optional ripples `string | undefined` through
-	// `AgentObservation.paneId` and every stub adapter across the test suite).
-	// A `pi-durable` handle, which hosts its own process and allocates no
-	// multiplexer pane, carries the empty string; every pane-reading code path
-	// for that runtime is gated by the adapter's `hostsOwnProcess` flag before
-	// it ever reads `paneId`, so the empty string is never treated as a real
-	// pane.
-	paneId: string;
-	tabId?: string;
 	sessionId?: string;
-	/** `pi-durable` handle fields: the workflow host's control-socket path and
-	 * the conversation this run maps to. Absent for every pane-based runtime. */
+	/** The workflow host's control-socket path and the conversation this run
+	 * maps to (durable-agent-host). */
 	hostSocket?: string;
 	conversationId?: string;
 }
@@ -578,7 +570,6 @@ export interface WorkflowView {
 	worktree: string;
 	branch: string;
 	baseCommit: string;
-	workspace?: string;
 	task?: string;
 	createdAt: string;
 	updatedAt: string;
@@ -601,13 +592,10 @@ export interface WorkflowView {
 		runtime: RuntimeId;
 		profile: string;
 		model?: string;
-		paneId?: string;
-		tabId?: string;
 		outputPath?: string;
 		outputDigest?: string;
-		/** `pi-durable` handle fields (add-pi-durable-runtime), surfaced so the
-		 * dashboard Agents panel can open the agent session view instead of
-		 * focusing a (nonexistent) pane. Absent for every pane-based runtime. */
+		/** Durable handle fields, surfaced so the dashboard Agents panel can open
+		 * the agent session view. */
 		hostSocket?: string;
 		conversationId?: string;
 	}>;
@@ -1092,7 +1080,6 @@ export interface WorkflowState {
 	worktree: string;
 	branch: string;
 	task?: string;
-	workspace: string;
 	verificationRound: number;
 	baseCommit?: string;
 	createdAt?: string;
@@ -1102,7 +1089,6 @@ export interface WorkflowState {
 	prUrl?: string | null;
 	ticketNumber?: string;
 	workerModel?: string;
-	returnWorkspace?: string;
 	verificationTier?: string;
 	verificationRoles?: string[];
 	runs: Array<{
@@ -1114,10 +1100,8 @@ export interface WorkflowState {
 		runtime: string;
 		profile: string;
 		model?: string;
-		paneId?: string;
-		/** `pi-durable` session identity (add-pi-durable-runtime): present only
-		 * for a durable run, so the dashboard Agents panel can open its session
-		 * view instead of focusing a (nonexistent) pane. */
+		/** Durable session identity: present so the dashboard Agents panel can
+		 * open the run's session view. */
 		hostSocket?: string;
 		conversationId?: string;
 		outputPath?: string;
@@ -1140,12 +1124,10 @@ export interface WorkflowState {
 		specFiles: number;
 		taskCount: number;
 	};
-	panes: Record<string, string>;
 }
 
 export interface WorkflowOverview {
 	state: WorkflowState;
-	workspaceOpen: boolean;
 	tasks: [number, number];
 	/** Stable configured project ident resolved from the catalog, when the
 	 * workflow's repository is a configured project (environment cross-link). */
@@ -1328,8 +1310,6 @@ const workflowRunResponseSchema = Schema.Struct({
 	runtime: Schema.String,
 	profile: Schema.String,
 	model: Schema.optional(Schema.String),
-	paneId: Schema.optional(Schema.String),
-	tabId: Schema.optional(Schema.String),
 	outputPath: Schema.optional(Schema.String),
 	outputDigest: Schema.optional(Schema.String),
 });
@@ -1422,7 +1402,6 @@ export const workflowViewSchema = Schema.Struct({
 	worktree: Schema.String,
 	branch: Schema.String,
 	baseCommit: Schema.String,
-	workspace: Schema.optional(Schema.String),
 	task: Schema.optional(Schema.String),
 	createdAt: Schema.String,
 	updatedAt: Schema.String,

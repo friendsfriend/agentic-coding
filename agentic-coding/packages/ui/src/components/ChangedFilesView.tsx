@@ -1,10 +1,12 @@
 /** @jsxImportSource @opentui/solid */
+
 // Changed files table — one implementation for the env surface and the shell.
 //
 // Full-page use renders inside `ContentPanel` and reserves the host chrome; an
 // embedding dialog passes `availableLines` (the dialog's content rows), which
 // drops the panel chrome and sizes the list to the dialog instead.
 import type { ChangeRequestChange } from "../types";
+import { SelectionMarker } from "./SelectionMarker.tsx";
 
 /** The shell's review rows carry a finding count the env type does not declare. */
 type ReviewChange = ChangeRequestChange & { review_finding_count?: number };
@@ -206,12 +208,7 @@ export function ChangedFilesView(props: ChangedFilesViewProps) {
 								backgroundColor={isSelected() ? uiColors.bgSurface0 : undefined}
 								style={{ width: "100%", height: 1, flexDirection: "row" }}
 							>
-								<box
-									backgroundColor={
-										isSelected() ? uiColors.highlight : undefined
-									}
-									style={{ width: 2, flexShrink: 0 }}
-								/>
+								<SelectionMarker selected={isSelected()} />
 								<box
 									style={{
 										flexGrow: 1,

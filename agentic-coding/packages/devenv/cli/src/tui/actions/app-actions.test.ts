@@ -5,6 +5,39 @@ import { createAppDetailStore } from "../stores/app-detail-store.ts";
 import { createAppStore } from "../stores/app-store.ts";
 import { createAppActions, handleActionStarted } from "./app-actions.ts";
 
+test("an aborted event stream ends silently instead of printing to the terminal", async () => {
+	const appStore = createAppStore();
+	const controller = new AbortController();
+	const errors: unknown[][] = [];
+	const original = console.error;
+	console.error = (...args: unknown[]) => {
+		errors.push(args);
+	};
+	try {
+		const actions = createAppActions(
+			appStore,
+			createAppDetailStore(),
+			{} as unknown as Parameters<typeof createAppActions>[2],
+			{
+				getActionHistory: async () => [],
+				subscribeToEvents: async function* () {
+					yield { type: "connection.established", properties: {} };
+					controller.abort();
+					// What the fetch reader throws once the signal aborts.
+					throw new DOMException("The operation was aborted.", "AbortError");
+				},
+			} as unknown as Parameters<typeof createAppActions>[3],
+			() => {},
+			createActionRunStore(),
+		);
+		await actions.subscribeToUpdates(controller.signal);
+		expect(errors).toEqual([]);
+		expect(appStore.liveUpdatesActive()).toBe(false);
+	} finally {
+		console.error = original;
+	}
+});
+
 test("action trigger opens actions view", () => {
 	const store = createActionRunStore();
 	let view = "table";

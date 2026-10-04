@@ -91,11 +91,11 @@ test("envelope builders keep identity reserved and payload at the top level", ()
 		at: "2026-01-01T00:00:00.000Z",
 		workflowId: "wf",
 		runId: "run",
-		runtime: "pi",
+		runtime: "pi-durable",
 		payload: { "herdr.run.attempt": 1 },
 	});
 	expect(adapterEnvelope.layer).toBe("adapter");
-	expect(adapterEnvelope.runtime).toBe("pi");
+	expect(adapterEnvelope.runtime).toBe("pi-durable");
 	expect(adapterEnvelope["herdr.run.attempt"]).toBe(1);
 });
 

@@ -153,6 +153,29 @@ function presetCount(document: unknown): number {
 	return Object.keys(presets as Record<string, unknown>).length;
 }
 
+/** Map retired runtime ids onto the one runtime (multiplexer removal). The
+ * durable host is the only managed runtime, so a migrated profile that names
+ * `pi`, `opencode` or `opencode-v2` would otherwise fail configuration load. */
+function normalizeLegacyRuntimes(document: Record<string, unknown>): void {
+	const agents = document.agents;
+	if (!agents || typeof agents !== "object" || Array.isArray(agents)) return;
+	for (const table of ["profiles", "presets"] as const) {
+		const entries = (agents as Record<string, unknown>)[table];
+		if (!entries || typeof entries !== "object" || Array.isArray(entries))
+			continue;
+		for (const entry of Object.values(entries as Record<string, unknown>)) {
+			if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+			const runtime = (entry as Record<string, unknown>).runtime;
+			if (
+				runtime === "pi" ||
+				runtime === "opencode" ||
+				runtime === "opencode-v2"
+			)
+				(entry as Record<string, unknown>).runtime = "pi-durable";
+		}
+	}
+}
+
 /** Delete the stored preset table in place, keeping profiles, default profile,
  * routes, role routes, and definition defaults. */
 function stripPresets(document: Record<string, unknown>): void {
@@ -817,6 +840,8 @@ export function applyMigration(plan: MigrationPlan): ApplyResult {
 			if (action.kind === "convert-workflow") {
 				const raw = fs.readFileSync(action.from, "utf8");
 				const document = parseConfigDocument(action.from, raw);
+				if (action.stripPresets) stripPresets(document);
+				normalizeLegacyRuntimes(document);
 				const jsonText = `${JSON.stringify(document, null, 2)}\n`;
 				// Effective non-secret parity: the JSON form must deep-merge to the
 				// exact configuration the TOML produced. A value only TOML can express
@@ -833,7 +858,6 @@ export function applyMigration(plan: MigrationPlan): ApplyResult {
 					throw new Error(
 						`converting ${action.from} would change the effective configuration; aborting without writing`,
 					);
-				if (action.stripPresets) stripPresets(document);
 				fs.writeFileSync(staged, `${JSON.stringify(document, null, 2)}\n`, {
 					mode: 0o600,
 				});
@@ -843,6 +867,7 @@ export function applyMigration(plan: MigrationPlan): ApplyResult {
 					fs.readFileSync(action.from, "utf8"),
 				) as Record<string, unknown>;
 				stripPresets(document);
+				normalizeLegacyRuntimes(document);
 				fs.writeFileSync(staged, `${JSON.stringify(document, null, 2)}\n`, {
 					mode: 0o600,
 				});

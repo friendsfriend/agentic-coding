@@ -24,16 +24,15 @@ const RICH_CONFIG = `[agents]
 default_profile = "pi-planner"
 
 [agents.profiles.pi-planner]
-runtime = "pi"
+runtime = "pi-durable"
 model = "eon/claude-opus-4-8"
 thinking = "high"
 
 [agents.profiles.oc-worker]
-runtime = "opencode"
-agent = "build"
+runtime = "pi-durable"
 
 [agents.profiles.custom-tool]
-runtime = "pi"
+runtime = "pi-durable"
 executable = "/usr/local/bin/pi"
 capabilities = ["prompt", "run-environment"]
 
@@ -189,7 +188,7 @@ describe("conversion parity", () => {
 				path.join(repo, ".pi", "herdr-workflow.json"),
 				`${JSON.stringify({
 					workflow: { remote: "project-remote" },
-					agents: { profiles: { "project-only": { runtime: "pi" } } },
+					agents: { profiles: { "project-only": { runtime: "pi-durable" } } },
 				})}\n`,
 			);
 			const resolved = loadConfigWithProvenance({ repository: repo });

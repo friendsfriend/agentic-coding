@@ -8,7 +8,6 @@ import type {
 	RuntimeId,
 	WorkflowRouting,
 } from "../contracts/workflow.ts";
-import { loadAssignments } from "./agent-extensions.ts";
 import type { CompiledWorkflowDefinition } from "./registry.ts";
 import { stableJson } from "./registry.ts";
 
@@ -64,7 +63,6 @@ export interface ProfileConfig {
 	runtime: RuntimeId;
 	executable?: string;
 	model?: string;
-	agent?: string;
 	thinking?: string;
 	tools?: string[];
 	extensions?: string[];
@@ -141,34 +139,10 @@ export interface RoutingPreset {
 	pools?: Record<string, PoolEntry[]>;
 	gates?: Record<string, GatePolicy>;
 }
+/** The one runtime (multiplexer removal): the bundled durable host. A profile
+ * may still name an `executable`, which the durable host does not spawn — it is
+ * carried for digest/display stability only. */
 const RUNTIME_OPTIONS: Record<string, Set<string>> = {
-	pi: new Set([
-		"runtime",
-		"executable",
-		"model",
-		"thinking",
-		"tools",
-		"extensions",
-		"capabilities",
-	]),
-	opencode: new Set([
-		"runtime",
-		"executable",
-		"model",
-		"agent",
-		"tools",
-		"capabilities",
-	]),
-	"opencode-v2": new Set([
-		"runtime",
-		"executable",
-		"model",
-		"agent",
-		"tools",
-		"capabilities",
-	]),
-	// Pane-less durable host runtime (add-pi-durable-runtime): no "agent" option
-	// (that is an opencode concept), otherwise the same shape as "pi".
 	"pi-durable": new Set([
 		"runtime",
 		"executable",
@@ -204,7 +178,7 @@ export function parseAgentsConfig(
 				default_profile: "pi-default",
 				profiles: {
 					"pi-default": {
-						runtime: "pi",
+						runtime: "pi-durable",
 						...(model ? { model } : {}),
 						thinking: legacy?.thinking?.worker_default,
 					},
@@ -601,9 +575,7 @@ function executable(runtime: RuntimeId, configured?: string): string {
 	// `pi-durable` has no external executable (durable-agent-host: "preflight
 	// checks capabilities (no executable lookup)"); the bundled label stays for
 	// display and digest stability.
-	return (
-		configured ?? (runtime === "opencode-v2" ? "opencode2" : String(runtime))
-	);
+	return configured ?? String(runtime);
 }
 function builtinRuntime(config: AgentsConfig, override?: RuntimeId): RuntimeId {
 	// default-model-preset: "the built-in preset configuration ... when no
@@ -628,23 +600,14 @@ export function resolveProfile(
 		...new Set(profile.capabilities ?? DEFAULT_CAPABILITIES),
 	];
 	const tools = [...(profile.tools ?? [])];
-	const assigned =
-		!builtin && profile.runtime === "pi"
-			? loadAssignments()
-					.extensions.filter((item) => item.profiles.includes(name))
-					.map((item) => item.source)
-			: [];
 	const unsigned = {
 		name,
 		runtime: profile.runtime,
 		executable: executable(profile.runtime, profile.executable),
 		...(profile.model ? { model: profile.model } : {}),
-		...(profile.agent ? { agent: profile.agent } : {}),
 		...(profile.thinking ? { thinking: profile.thinking } : {}),
 		tools: Object.freeze(tools),
-		extensions: Object.freeze([
-			...new Set([...(profile.extensions ?? []), ...assigned]),
-		]),
+		extensions: Object.freeze([...(profile.extensions ?? [])]),
 		readOnly: capabilities.includes("read-only"),
 		capabilities: Object.freeze(capabilities),
 	};
@@ -797,26 +760,15 @@ export function profileFor(
 		name === BUILTIN_PRESET_NAME ? preset?.runtime : undefined,
 	);
 }
-/** Tools a read-only run must never be handed; the adapters translate the
- * resolved profile into the runtime's own allowlist / permission block. */
+/** Tools a read-only run must never be handed; the durable host translates the
+ * resolved profile into its own tool policy. */
 const MUTATING_TOOLS = new Set(["edit", "write", "multi_edit", "multiedit"]);
-/** Pi's read-only surface: `read` for evidence and `bash` for the focused
- * checks and the `agentic-coding workflow handoff` CLI. `bash` stays on
- * purpose: a read-only verifier is prevented from using pi's *edit/write
- * tools*, not from mutating state through the shell — repo write access via
- * `sed -i` or a redirection is unchanged by this policy, and pi applies no
- * per-command approval (`--no-approve`). The workflow's own extension tools
- * (`developer_question`, `agent_ask`, `ask_jev`) are deliberately not listed
- * here: the pi adapter names every tool it loads, for every step, because pi's
- * `--tools` is a strict allowlist and a declared list would otherwise hide
- * them. */
-const READ_ONLY_PI_TOOLS = ["read", "bash"];
 /** Read-only launch policy for a step that declares the `read-only`
  * requirement (`core.verification`): no edit/write tools and no shell/edit
- * capability, so the adapter launches the runtime without them (pi `--tools`,
- * opencode permission block). `bash` and the workflow-extension question tools
- * deliberately stay: verifiers must run focused checks, ask the developer, and
- * dispatch their own handoff. */
+ * capability, so the durable host launches the run with its read-only tool
+ * policy. `bash` and the workflow's own question tools deliberately stay:
+ * verifiers must run focused checks, ask the developer, and dispatch their own
+ * handoff. */
 export function asReadOnlyProfile(profile: ResolvedProfile): ResolvedProfile {
 	const capabilities = [
 		...new Set([
@@ -829,18 +781,11 @@ export function asReadOnlyProfile(profile: ResolvedProfile): ResolvedProfile {
 	const declared = profile.tools.filter(
 		(tool) => !MUTATING_TOOLS.has(tool.toLowerCase()),
 	);
-	// pi's `--tools` is a strict allowlist over built-in *and* extension tools, so
-	// a declared list would otherwise drop bash, the handoff path, from a
-	// verifier.
-	const tools =
-		profile.runtime === "pi"
-			? [...new Set([...declared, ...READ_ONLY_PI_TOOLS])]
-			: declared;
 	const unsigned = {
 		...profile,
 		readOnly: true,
 		capabilities: Object.freeze(capabilities),
-		tools: Object.freeze(tools),
+		tools: Object.freeze(declared),
 	};
 	return Object.freeze({
 		...unsigned,
@@ -1006,95 +951,13 @@ export function preflightProfile(
 	profile: ResolvedProfile,
 	requirements: readonly AdapterCapability[],
 ): void {
-	// `pi-durable` is bundled, not an external executable on PATH
+	// The durable host is bundled, not an external executable on PATH
 	// (durable-agent-host: "preflight checks capabilities (no executable
-	// lookup)"); every other runtime keeps the executable-resolution check.
-	if (profile.runtime !== "pi-durable") {
-		const bin = profile.executable;
-		const resolved = bin.startsWith("/") ? bin : Bun.which(bin);
-		if (!resolved)
-			throw new Error(
-				`configured runtime executable not found for profile ${profile.name}: ${bin}`,
-			);
-	}
+	// lookup)"), so there is no executable-resolution check.
 	validateProfileRequirements(profile, requirements);
 	assertModelAvailable(profile);
 }
 
-/** How long runtime model enumerations stay cached per executable. */
-const MODEL_CACHE_TTL_MS = 30_000;
-const modelCache = new Map<string, { models: Set<string>; at: number }>();
-/** Forget cached model enumerations (e.g. before the editor re-enumerates). */
-export function clearModelCache(): void {
-	modelCache.clear();
-}
-/** Parse `pi --list-models` table output into `provider/model` ids. */
-export function parsePiModels(output: string): string[] {
-	const models: string[] = [];
-	for (const raw of output.split("\n")) {
-		const line = raw.trim();
-		if (!line || !/[a-z0-9]/i.test(line)) continue;
-		const columns = line.split(/\s{2,}|\t+|\s+/).filter(Boolean);
-		if (columns.length < 2) continue;
-		if (/^provider$/i.test(columns[0])) continue;
-		models.push(`${columns[0]}/${columns[1]}`);
-	}
-	return models;
-}
-/** Parse `<exe> models` line output (`provider/model`) into ids. */
-export function parseOpenCodeModels(output: string): string[] {
-	return output
-		.split("\n")
-		.map((line) => line.trim())
-		.filter((line) => line.includes("/") && !/^provider/i.test(line));
-}
-/** Enumerate a runtime's available models; cached per process per executable.
- * Fails closed with the command error when the runtime cannot enumerate. */
-export function runtimeModels(
-	executable: string,
-	runtime: RuntimeId,
-): Set<string> {
-	const cached = modelCache.get(executable);
-	if (cached && Date.now() - cached.at < MODEL_CACHE_TTL_MS)
-		return cached.models;
-	const args =
-		runtime === "pi" ? [executable, "--list-models"] : [executable, "models"];
-	let result: ReturnType<typeof Bun.spawnSync>;
-	try {
-		// The environment is passed explicitly rather than inherited. Bun resolves
-		// the executable against the PATH captured at process start, so a process
-		// that prepends a directory to its own live PATH — the runner putting a
-		// tool directory first, or a test substituting a runtime stub — would
-		// otherwise spawn the binary it did not ask for, while a snapshot of the
-		// startup environment is also not what the rest of this process sees.
-		result = Bun.spawnSync(args, {
-			stdout: "pipe",
-			stderr: "pipe",
-			env: process.env as Record<string, string>,
-		});
-	} catch (error) {
-		// Missing/unrunnable executable: fail closed like a non-zero exit.
-		throw new Error(
-			`model enumeration failed (${args.join(" ")}): ${(
-				error instanceof Error ? error.message : String(error)
-			).trim()}`,
-		);
-	}
-	if (result.exitCode !== 0)
-		throw new Error(
-			`model enumeration failed (${args.join(" ")}): ${(
-				(result.stderr ?? "").toString() ||
-					(result.stdout ?? "").toString() ||
-					"command failed"
-			).trim()}`,
-		);
-	const stdout = (result.stdout ?? "").toString();
-	const models =
-		runtime === "pi" ? parsePiModels(stdout) : parseOpenCodeModels(stdout);
-	const available = new Set(models);
-	modelCache.set(executable, { models: available, at: Date.now() });
-	return available;
-}
 /** Global pi `models.json` custom-provider model ids, read synchronously and
  * without any external executable (durable-agent-configuration: "Durable
  * model enumeration"). Returns the providers the user configured locally and
@@ -1179,24 +1042,7 @@ function assertDurableModelAvailable(profile: ResolvedProfile): void {
 /** Fail closed when a profile's configured model is not offered by its runtime. */
 export function assertModelAvailable(profile: ResolvedProfile): void {
 	if (!profile.model) return;
-	if (profile.runtime === "pi-durable") {
-		assertDurableModelAvailable(profile);
-		return;
-	}
-	const available = runtimeModels(profile.executable, profile.runtime);
-	// pi models may carry a :<thinking> suffix; availability is about the base id.
-	const candidate =
-		profile.runtime === "pi"
-			? profile.model.replace(/:[^:]+$/, "")
-			: profile.model;
-	if (available.has(candidate)) return;
-	const sample = [...available].slice(0, 8);
-	const suffix = sample.length
-		? `available: ${sample.join(", ")}${available.size > sample.length ? ", …" : ""}`
-		: "runtime reported no models";
-	throw new Error(
-		`profile ${profile.name}: unknown model ${profile.model} for runtime ${profile.runtime} (${suffix})`,
-	);
+	assertDurableModelAvailable(profile);
 }
 export function validateProfileRequirements(
 	profile: ResolvedProfile,

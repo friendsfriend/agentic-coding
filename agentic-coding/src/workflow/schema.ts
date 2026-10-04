@@ -23,7 +23,7 @@ import {
 	text,
 } from "../contracts/decode.ts";
 import type {
-	ResolvedProfile,
+	RuntimeId,
 	WorkflowExecutionSettings,
 } from "../contracts/workflow.ts";
 import {
@@ -61,12 +61,22 @@ const capabilitiesSchema = Schema.Array(
 		"runtime-bridge",
 	),
 );
-const profileSchema: Schema.Schema<ResolvedProfile> = Schema.Struct({
+/** Persisted runtime ids: the current runtime plus the retired pane-hosted ids,
+ * normalized on read so a snapshot or run written before the multiplexer
+ * removal still decodes (multiplexer removal). */
+const runtimeSchema: Schema.Schema<RuntimeId, string> = Schema.transform(
+	Schema.String,
+	Schema.Literal("pi-durable"),
+	{
+		decode: () => "pi-durable" as const,
+		encode: () => "pi-durable" as const,
+	},
+);
+const profileSchema = Schema.Struct({
 	name: text(4096),
-	runtime: text(64),
+	runtime: runtimeSchema,
 	executable: text(4096),
 	model: Schema.optionalWith(text(4096), { exact: true }),
-	agent: Schema.optionalWith(text(4096), { exact: true }),
 	thinking: Schema.optionalWith(text(4096), { exact: true }),
 	tools: stringArray(),
 	extensions: stringArray(),

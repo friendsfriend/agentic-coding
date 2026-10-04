@@ -10,7 +10,6 @@ import {
 	previewWorkflowRepair,
 	repairWorkflow,
 	runWorkflowAction,
-	setReturnInProcess,
 	viewToDashboardState,
 } from "../src/server/operations/engine.ts";
 import {
@@ -60,10 +59,9 @@ function view(step = "extension.future"): WorkflowView {
 				attempt: 2,
 				role: "audit",
 				status: "working",
-				runtime: "opencode-v2",
+				runtime: "pi-durable",
 				profile: "oc2",
 				model: "provider/model",
-				paneId: "pane",
 			},
 		],
 		routing: {
@@ -83,7 +81,7 @@ function view(step = "extension.future"): WorkflowView {
 		observations: [
 			{
 				runId: "run",
-				runtime: "opencode-v2",
+				runtime: "pi-durable",
 				status: "idle",
 				at: "2026-01-02T00:00:01Z",
 			},
@@ -106,7 +104,6 @@ test("dashboard projection renders registry-provided future step and generated a
 	expect(state.definition.label).toBe("Custom flow");
 	expect(state.availableActions[0]?.id).toBe("retry-effect:effect");
 	expect(state.verificationModels.audit).toBe("provider/model");
-	expect(state.panes.audit).toBe("pane");
 	expect(state.phaseStartedAt).toBe("2026-01-01T12:00:00Z");
 });
 test("dashboard projection carries classifier decisions and defaults to an empty list", () => {
@@ -192,7 +189,7 @@ test("dashboard discovery keeps malformed workflows visible with diagnostic", ()
 		);
 		const profile = {
 			name: "test",
-			runtime: "pi" as const,
+			runtime: "pi-durable" as const,
 			executable: "sh",
 			tools: [],
 			extensions: [],
@@ -230,7 +227,6 @@ test("dashboard discovery keeps malformed workflows visible with diagnostic", ()
 		expect(item?.state.health?.diagnostic).toContain(
 			"step not in pinned definition",
 		);
-		expect(item?.workspaceOpen).toBe(false);
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
 	}
@@ -317,7 +313,7 @@ test("developer review reads authoritative workflow worktree and closed state is
 		}).trim();
 		const profile = {
 			name: "test",
-			runtime: "pi" as const,
+			runtime: "pi-durable" as const,
 			executable: "sh",
 			tools: [],
 			extensions: [],
@@ -355,12 +351,6 @@ test("developer review reads authoritative workflow worktree and closed state is
 		expect(
 			listWorkflows(root).some((item) => item.state.workflowId === "review"),
 		).toBe(false);
-		setReturnInProcess(repo, "review", "dashboard-workspace");
-		expect(
-			viewToDashboardState(
-				new WorkflowEngine(registerBuiltins()).status(repo, "review"),
-			).returnWorkspace,
-		).toBeUndefined();
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });
 	}
@@ -401,7 +391,7 @@ test("catalog-backed history annotates the configured project ident", async () =
 		}).trim();
 		const profile = {
 			name: "test",
-			runtime: "pi" as const,
+			runtime: "pi-durable" as const,
 			executable: "sh",
 			tools: [],
 			extensions: [],
@@ -461,7 +451,7 @@ test("dashboard repair and actions use displayed revision", async () => {
 		);
 		const profile = {
 			name: "test",
-			runtime: "pi" as const,
+			runtime: "pi-durable" as const,
 			executable: "sh",
 			tools: [],
 			extensions: [],
@@ -542,7 +532,7 @@ test("dashboard repair dispatches with an empty/omitted reason", () => {
 		);
 		const profile = {
 			name: "test",
-			runtime: "pi" as const,
+			runtime: "pi-durable" as const,
 			executable: "sh",
 			tools: [],
 			extensions: [],

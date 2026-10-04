@@ -31,7 +31,7 @@ function repository(root: string): string {
 
 const profile: ResolvedProfile = {
 	name: "test",
-	runtime: "pi",
+	runtime: "pi-durable",
 	executable: process.execPath,
 	tools: ["read", "bash", "edit", "write"],
 	extensions: [],
@@ -123,7 +123,7 @@ test("engine dispatch telemetry carries identity and payload fields", () => {
 			lease: launch.lease ?? "",
 			outcome: "complete",
 			data: {
-				runtime: "pi",
+				runtime: "pi-durable",
 				name: "worker",
 				paneId: "pane",
 				sessionId: "session-1",
@@ -164,7 +164,7 @@ test("engine dispatch telemetry carries identity and payload fields", () => {
 		expect(handoff.role).toBe("worker");
 		expect(handoff["herdr.run.attempt"]).toBe(run.attempt);
 		expect(handoff.profile).toBe("test");
-		expect(handoff.runtime).toBe("pi");
+		expect(handoff.runtime).toBe("pi-durable");
 		expect(handoff.sessionId).toBe("session-1");
 		expect(handoff["herdr.handoff.outcome"]).toBe("blocked");
 		expect(handoff["herdr.evidence.count"]).toBeTypeOf("number");
@@ -193,8 +193,8 @@ test("completed classifier effects emit the applied routing decision", () => {
 			agents: {
 				default_profile: "base",
 				profiles: {
-					base: { runtime: "pi", executable: process.execPath },
-					strong: { runtime: "pi", executable: process.execPath },
+					base: { runtime: "pi-durable", executable: process.execPath },
+					strong: { runtime: "pi-durable", executable: process.execPath },
 				},
 				presets: {
 					auto: {

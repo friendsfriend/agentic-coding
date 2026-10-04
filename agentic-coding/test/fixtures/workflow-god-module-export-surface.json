@@ -18,7 +18,6 @@
 		"removedWorkflowHint"
 	],
 	"cli.ts": [
-		"AGENT_EXTENSION_SUBCOMMANDS",
 		"PLUGIN_SUBCOMMANDS",
 		"REQUIRED_FLAGS",
 		"SUBCOMMANDS",
@@ -26,7 +25,6 @@
 		"cliTest",
 		"detachedDrainArgv",
 		"main",
-		"paneForRunFactory",
 		"rolesForDefinition",
 		"run",
 		"runDeveloperQuestion",

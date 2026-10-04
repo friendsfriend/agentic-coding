@@ -81,9 +81,9 @@ export function resolveHandoffIdentity(
 	try {
 		authorize(runId, token ?? "");
 	} catch (authorizationError) {
-		// Persistent agents keep the original environment when their pane is
-		// reused. Only adopt the current generation when the immutable caller
-		// run and current run resolve to the same live pane; never select by
+		// A persistent durable conversation keeps its original run environment.
+		// Only adopt the current generation when the immutable caller run and the
+		// current run resolve to the same durable conversation; never select by
 		// mutable role identity alone.
 		const current = application
 			? application.runSync(
@@ -91,12 +91,12 @@ export function resolveHandoffIdentity(
 				)
 			: workflowEngine.activeRunForRole(repo, workflowId, stepId, role);
 		if (
-			!callerRun.handle?.paneId ||
-			!current.handle?.paneId ||
-			callerRun.handle.paneId !== current.handle.paneId
+			!callerRun.handle?.sessionId ||
+			!current.handle?.sessionId ||
+			callerRun.handle.sessionId !== current.handle.sessionId
 		)
 			// SEC: keep the original capability rejection as cause detail on
-			// this trust boundary so token-expiry vs pane-mismatch stays
+			// this trust boundary so token-expiry vs conversation-mismatch stays
 			// auditable instead of collapsing to one generic message.
 			throw new Error(
 				`invalid or inactive run capability (${(authorizationError as Error).message ?? String(authorizationError)})`,

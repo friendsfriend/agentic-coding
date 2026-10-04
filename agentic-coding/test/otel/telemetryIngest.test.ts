@@ -47,7 +47,7 @@ describe("telemetry envelope parsing", () => {
 			schemaVersion: 1,
 			at: "2026-09-11T10:00:05.000Z",
 			layer: "runtime",
-			runtime: "pi",
+			runtime: "pi-durable",
 			event: "runtime.tool",
 			workflowId: "wf-9",
 			role: "worker",
@@ -164,7 +164,7 @@ describe("enriched telemetry payload ingest", () => {
 				row({ layer: "adapter", event: "agent.launch", traceparent }),
 				row({
 					layer: "runtime",
-					runtime: "pi",
+					runtime: "pi-durable",
 					event: "runtime.usage",
 					traceparent,
 					inputTokens: 7,

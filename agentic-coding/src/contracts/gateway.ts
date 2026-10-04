@@ -101,7 +101,7 @@ export interface DashboardGateway {
 		workflowId: string,
 		signal?: AbortSignal,
 	): Promise<WorkflowView>;
-	/** Observation reads (dashboard, Git, wiki, Herdr, artifacts, reviews) with
+	/** Observation reads (dashboard, Git, wiki, artifacts, reviews) with
 	 * the caller's contract schema, so both adapters decode identically. */
 	observe<T>(
 		observation: ObservationRequest,

@@ -40,7 +40,7 @@ pr_tool = "missing-pr-tool"
 default_profile = "p"
 
 [agents.profiles.p]
-runtime = "pi"
+runtime = "pi-durable"
 executable = "/bin/true"
 
 [agents.presets.fixed]
@@ -73,7 +73,7 @@ function presetConfig(stepIds: readonly string[], provider?: string): string {
 	return `${JSON.stringify({
 		agents: {
 			default_profile: "p",
-			profiles: { p: { runtime: "pi", executable: "/bin/true" } },
+			profiles: { p: { runtime: "pi-durable", executable: "/bin/true" } },
 			presets: { fixed: { default_profile: "p", pools: fixedPools(stepIds) } },
 			...(provider ? { classifier: { provider } } : {}),
 		},

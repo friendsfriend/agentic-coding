@@ -55,7 +55,6 @@ export const ROUTE_DOMAINS = [
 	"integrations",
 	"git",
 	"wiki",
-	"herdr",
 ] as const;
 export type RouteDomain = (typeof ROUTE_DOMAINS)[number];
 
@@ -351,7 +350,7 @@ export function decodeRouteRequest<T>(path: string, value: unknown): T {
 // ---------------------------------------------------------------------------
 // Observation ownership
 // ---------------------------------------------------------------------------
-// Git, wiki and Herdr reads travel as observation kinds on the versioned
+// Git and wiki reads travel as observation kinds on the versioned
 // observe route; each kind names the ownership domain it belongs to, so a
 // domain cannot be served without appearing in the manifest.
 

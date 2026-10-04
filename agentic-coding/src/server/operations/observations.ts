@@ -1,4 +1,4 @@
-/** Dashboard observation and execution I/O: filesystem, Git, Herdr, telemetry,
+/** Dashboard observation and execution I/O: filesystem, Git, telemetry,
  * and in-process workflow engine reads/writes. Every function here performs
  * external reads or launches work — deterministic display projections live in
  * `projections.ts`, and the review feature in `review.ts`. */
@@ -32,9 +32,6 @@ import type {
 	WorkflowState,
 } from "../../contracts/workflow";
 import type { WorkflowView } from "../../contracts/workflow.ts";
-import { runMultiplexer } from "../../multiplexer/boundary.ts";
-import { multiplexerPort } from "../../multiplexer/factory.ts";
-import type { MultiplexerPort } from "../../multiplexer/port.ts";
 import {
 	fetchProjectCatalog,
 	loadProjectCatalog,
@@ -65,7 +62,6 @@ import {
 } from "../../workflow/wiki.ts";
 import {
 	answerWorkflowQuestion,
-	consumeReturnWorkspace,
 	dashboardState,
 	discoverProjectsInProcess,
 	listWorkflowViews,
@@ -180,40 +176,11 @@ async function observeAsync<T>(
 	return (await runLocalObservation(observation, signal)) as T;
 }
 
-/** Best-effort open-workspace set. The async catalog path awaits the port and
- * caches the result so the synchronous compatibility entry point keeps the
- * pre-change open-workspace filtering once a catalog read has happened; an
- * unavailable runtime leaves the cache unset (no filtering), exactly like a
- * missing runtime today. */
-let cachedOpenWorkspaces: Set<string> | undefined;
-
-async function openWorkspaceIdsAsync(
-	port: MultiplexerPort = multiplexerPort(),
-): Promise<Set<string> | undefined> {
-	try {
-		const workspaces = await runMultiplexer(port.workspaceList());
-		cachedOpenWorkspaces = new Set(
-			workspaces.map((workspace) => workspace.workspaceId),
-		);
-		return cachedOpenWorkspaces;
-	} catch {
-		return undefined;
-	}
-}
-
-/** Reset the cached open-workspace set (test seam). */
-export function resetOpenWorkspaceCache(): void {
-	cachedOpenWorkspaces = undefined;
-}
-
 export function listWorkflows(...roots: string[]): WorkflowOverview[] {
-	return buildWorkflows(cachedOpenWorkspaces, roots);
+	return buildWorkflows(roots);
 }
 
-function buildWorkflows(
-	openWorkspaces: Set<string> | undefined,
-	roots: string[],
-): WorkflowOverview[] {
+function buildWorkflows(roots: string[]): WorkflowOverview[] {
 	const found: WorkflowOverview[] = [];
 	const seen = new Set<string>();
 	const addRepository = (repo: string) => {
@@ -243,15 +210,8 @@ function buildWorkflows(
 						"tasks.md",
 					),
 				);
-				const workspaceOpen = Boolean(
-					state.workspace &&
-						state.health.valid &&
-						state.status !== "closed" &&
-						(openWorkspaces?.has(state.workspace) ?? true),
-				);
 				found.push({
 					state,
-					workspaceOpen,
 					tasks: [items.filter((item) => item.done).length, items.length],
 					agents: view.runs.map((run) => ({
 						role: run.role,
@@ -289,11 +249,7 @@ export async function listWorkflowsFromCatalog(
 	serverUrl?: string,
 ): Promise<WorkflowOverview[]> {
 	const catalog = await loadProjectCatalog({ baseUrl: serverUrl });
-	const openWorkspaces = await openWorkspaceIdsAsync();
-	const overviews = buildWorkflows(
-		openWorkspaces,
-		projectCanonicalRoots(catalog),
-	);
+	const overviews = buildWorkflows(projectCanonicalRoots(catalog));
 	return overviews.map((overview) => ({
 		...overview,
 		projectIdent: projectIdentForPath(catalog, overview.state.repository),
@@ -1455,7 +1411,7 @@ export function loadDashboard(repo: string, workflowId: string): DashboardData {
 		review: reviewHistory.at(-1) ?? "Not run",
 		reviewHistory,
 		// Agent status has one source: the persisted run status that also drives
-		// the Herdr tab-status glyphs (workflow/tab-status.ts, workflow/tab-sync.ts).
+		// the workflow run's own status projection.
 		// The row set comes from `latestRuns`, not `state.panes`: a run exists (and is
 		// reported) as soon as the engine creates it, while its pane handle is only
 		// persisted once the launch effect completes. Gating on panes hid runs whose
@@ -1515,46 +1471,6 @@ export function loadDashboard(repo: string, workflowId: string): DashboardData {
 	};
 }
 
-export function availableModels(): string[] {
-	const result = Bun.spawnSync(["pi", "--list-models"], {
-		stdout: "pipe",
-		stderr: "ignore",
-	});
-	if (result.exitCode !== 0)
-		return ["openai-codex/gpt-5.6-luna", "opencode-go/deepseek-v4-flash"];
-	const models = result.stdout
-		.toString()
-		.split(/\r?\n/)
-		.flatMap((line) => {
-			const columns = line.trim().split(/\s+/);
-			if (
-				columns.length < 2 ||
-				columns[0] === "provider" ||
-				columns[0] === "---"
-			)
-				return [];
-			return [`${columns[0]}/${columns[1]}`];
-		});
-	return [...new Set(models)];
-}
-
-export function focusReturnWorkspace(
-	repo: string,
-	workflowId: string,
-	workspace: string,
-) {
-	focusWorkspace(workspace);
-	consumeReturnWorkspace(repo, workflowId, workspace);
-}
-/** Best-effort workspace focus through the selected port. Kept synchronous for
- * the TUI key handler; a focus failure is swallowed like any other
- * presentation-only action. */
-export function focusWorkspace(workspace: string) {
-	void runMultiplexer(multiplexerPort().workspaceFocus(workspace)).catch(
-		() => {},
-	);
-}
-
 /** Root of the workflow's OpenSpec change directory, or `undefined` when the
  * workflow owns no change. Workflows started without OpenSpec phases
  * (`no-openspec`, `wiki`, `research`) never record a change id, so they must
@@ -1605,74 +1521,6 @@ export function openSpecArtifact(state: WorkflowState, artifact: string) {
 	if (realFile !== realRoot && !realFile.startsWith(`${realRoot}${sep}`))
 		throw new Error("artifact path escapes OpenSpec root");
 	return read(file);
-}
-
-export async function openFindingInEditorAsync(
-	state: WorkflowState,
-	finding: { path?: string; line?: number },
-	signal?: AbortSignal,
-) {
-	if (!finding.path) throw new Error("Finding has no file path.");
-	if (isAbsolute(finding.path) || finding.path.split(/[/]/).includes(".."))
-		throw new Error("finding path must stay inside the worktree");
-	const root = resolve(state.worktree);
-	const file = resolve(root, finding.path);
-	if (file !== root && !file.startsWith(`${root}${sep}`))
-		throw new Error("finding path escapes the worktree");
-	signal?.throwIfAborted();
-	const port = multiplexerPort();
-	const created = await runMultiplexer(
-		port.tabCreate({
-			workspaceId: state.workspace,
-			label: `finding:${finding.path.split("/").at(-1)}`,
-			focus: true,
-		}),
-	);
-	const pane = created.rootPaneId;
-	if (!pane) throw new Error("editor pane was not created");
-	// paneRun executes through a shell, so both the configured editor and the
-	// agent-influenceable finding path are single-quoted, never interpolated raw.
-	const editor = process.env.EDITOR || "vi";
-	await runMultiplexer(
-		port.paneRun(
-			pane,
-			`${shQuote(editor)} +${finding.line ?? 1} ${shQuote(file)}`,
-		),
-	);
-}
-
-/** POSIX single-quote escaping for values handed to a pane shell. */
-function shQuote(value: string): string {
-	return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-export function openFindingInEditor(
-	state: WorkflowState,
-	finding: { path?: string; line?: number },
-) {
-	void openFindingInEditorAsync(state, finding).catch(() => {});
-}
-
-export async function focusAgentAsync(
-	state: WorkflowState,
-	pane: string,
-	signal?: AbortSignal,
-) {
-	signal?.throwIfAborted();
-	// The port owns the workspace/tab focus plus layout traversal; the Luvus
-	// adapter maps it to its own pane focus primitive.
-	await runMultiplexer(
-		multiplexerPort().paneFocus({
-			paneId: pane,
-			workspaceId: state.workspace,
-		}),
-	);
-}
-
-/** Synchronous compatibility entry point for the TUI key handler: fire the
- * focus traversal and swallow a best-effort miss. */
-export function focusAgent(state: WorkflowState, pane: string) {
-	void focusAgentAsync(state, pane).catch(() => {});
 }
 
 export function discoverChanges(repo: string): string[] {

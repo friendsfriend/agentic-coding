@@ -13,6 +13,9 @@ export interface PanelProps {
 	accent?: string;
 	active?: boolean;
 	style?: Record<string, unknown>;
+	/** Optional element right-aligned in the title row (a control glyph); the
+	 * caller owns its behaviour and colour. */
+	accessory?: JSX.Element;
 }
 
 export function Panel(props: PanelProps) {
@@ -21,7 +24,15 @@ export function Panel(props: PanelProps) {
 			backgroundColor={uiColors.bgMantle}
 			style={{ flexDirection: "column", overflow: "hidden", ...props.style }}
 		>
-			<box style={{ height: 1, paddingLeft: 1, flexShrink: 0 }}>
+			<box
+				style={{
+					height: 1,
+					paddingLeft: 1,
+					paddingRight: 1,
+					flexShrink: 0,
+					flexDirection: "row",
+				}}
+			>
 				<text
 					fg={
 						props.active
@@ -32,13 +43,16 @@ export function Panel(props: PanelProps) {
 				>
 					{props.title}
 				</text>
+				<box style={{ flexGrow: 1 }} />
+				{props.accessory}
 			</box>
 			<box style={{ flexGrow: 1, minHeight: 0, flexDirection: "row" }}>
+				{/* The focused panel's left line is the same one-column marker the
+				    selection rows and the agent session blocks use. */}
 				<box
-					backgroundColor={
-						props.active
-							? (props.accent ?? uiColors.primary)
-							: uiColors.bgMantle
+					border={["left"]}
+					borderColor={
+						props.active ? (props.accent ?? uiColors.primary) : "transparent"
 					}
 					style={{ width: 1, height: "100%", flexShrink: 0 }}
 				/>

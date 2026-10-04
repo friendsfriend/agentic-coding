@@ -4,12 +4,10 @@
 // Moved verbatim out of cli.ts (split-workflow-god-modules); migrated to run
 // Effect programs at the CLI-invocation application root
 // (complete-workflow-effect-cutover, task 2.1).
-import { manageAgentExtension } from "../../agent-extensions.ts";
 import type { WorkflowApplication } from "../../application.ts";
 import type { WorkflowEngine } from "../../runtime.ts";
-import { flag, positional, requireFlag } from "../args.ts";
+import { flag, requireFlag } from "../args.ts";
 import { scheduleDrain } from "../drain.ts";
-import { AGENT_EXTENSION_SUBCOMMANDS } from "../schema.ts";
 
 type App = WorkflowApplication;
 
@@ -168,31 +166,4 @@ export async function runRepin(
 			2,
 		),
 	);
-}
-
-export function runAgentExtension(rest: string[]): void {
-	const [subcommand, ...args] = rest;
-	if (!(AGENT_EXTENSION_SUBCOMMANDS as readonly string[]).includes(subcommand))
-		throw new Error(
-			`unknown agent-extension command: ${subcommand ?? "(none)"}`,
-		);
-	const profiles: string[] = [];
-	for (let index = 0; index < args.length; index++) {
-		if (args[index] !== "--profile") continue;
-		const next = args[index + 1];
-		if (next !== undefined) profiles.push(next);
-	}
-	if (subcommand === "list") manageAgentExtension({ command: "list" });
-	else if (subcommand === "install")
-		manageAgentExtension({
-			command: "install",
-			source: positional(args),
-			profiles,
-		});
-	else
-		manageAgentExtension({
-			command: "install-local",
-			source: positional(args),
-			profiles,
-		});
 }

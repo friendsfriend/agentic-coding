@@ -313,7 +313,6 @@ describe("configuration migration apply", () => {
 					repositoryIndependent: true,
 				});
 				expect(resolved.config.workflow.remote).toBe("origin");
-				expect(resolved.config.ui.herdr_sidebar).toBe(true);
 				expect(resolved.provenance.source).toBe("user");
 			} finally {
 				delete process.env[CONFIG_ROOT_VAR];
@@ -572,8 +571,8 @@ describe("interrupted migration recovery", () => {
 				});
 				expect(
 					loadConfigWithProvenance({ repositoryIndependent: true }).config.ui
-						.herdr_sidebar,
-				).toBe(true);
+						.theme,
+				).toBe("catppuccin");
 			} finally {
 				delete process.env[CONFIG_ROOT_VAR];
 			}
@@ -879,13 +878,13 @@ describe("preset hard-break migration (classifier-driven-model-pools)", () => {
 			workflow: { max_verification_rounds: 6 },
 			agents: {
 				default_profile: "pi-a",
-				profiles: { "pi-a": { runtime: "pi", model: "a/b" } },
+				profiles: { "pi-a": { runtime: "pi-durable", model: "a/b" } },
 				routes: { "core.plan": "pi-a" },
 				role_routes: { "core.implementation": { worker: "pi-a" } },
 				definition_defaults: { openspec: "pi-a" },
 				presets: {
 					"pi-a": { default_profile: "pi-a", easy: "pi-a" },
-					"use-default-model": { runtime: "pi" },
+					"use-default-model": { runtime: "pi-durable" },
 				},
 			},
 		},
@@ -921,7 +920,7 @@ describe("preset hard-break migration (classifier-driven-model-pools)", () => {
 			expect(agents.presets).toBeUndefined();
 			expect(agents.default_profile).toBe("pi-a");
 			expect(agents.profiles).toEqual({
-				"pi-a": { runtime: "pi", model: "a/b" },
+				"pi-a": { runtime: "pi-durable", model: "a/b" },
 			});
 			expect(agents.routes).toEqual({ "core.plan": "pi-a" });
 			expect(agents.role_routes).toEqual({
@@ -988,7 +987,7 @@ easy = "pi-a"
 				}
 			).agents;
 			expect(agents.presets).toBeUndefined();
-			expect(agents.profiles).toEqual({ "pi-a": { runtime: "pi" } });
+			expect(agents.profiles).toEqual({ "pi-a": { runtime: "pi-durable" } });
 		} finally {
 			fs.rmSync(f.dir, { recursive: true, force: true });
 		}
@@ -1001,7 +1000,7 @@ describe("preset parser hard break", () => {
 		expect(() =>
 			parseAgentsConfig(
 				{
-					profiles: { a: { runtime: "pi" } },
+					profiles: { a: { runtime: "pi-durable" } },
 					presets: { old: { easy: "a" } },
 				},
 				undefined,
@@ -1014,7 +1013,7 @@ describe("preset parser hard break", () => {
 		const { parseAgentsConfig } = await import("../src/workflow/profiles.ts");
 		expect(() =>
 			parseAgentsConfig({
-				profiles: { a: { runtime: "pi" } },
+				profiles: { a: { runtime: "pi-durable" } },
 				presets: {
 					old: {
 						roles: { "core.verification": { "quality-verifier": "a" } },
@@ -1029,7 +1028,7 @@ describe("preset parser hard break", () => {
 		expect(() =>
 			parseAgentsConfig(
 				{
-					profiles: { a: { runtime: "pi" } },
+					profiles: { a: { runtime: "pi-durable" } },
 					presets: { old: { default_profile: "a" } },
 				},
 				undefined,
@@ -1048,7 +1047,7 @@ describe("preset hard-break migration on a symlinked canonical config", () => {
 				real,
 				`${JSON.stringify({
 					agents: {
-						profiles: { a: { runtime: "pi" } },
+						profiles: { a: { runtime: "pi-durable" } },
 						presets: { old: { easy: "a" } },
 					},
 				})}\n`,

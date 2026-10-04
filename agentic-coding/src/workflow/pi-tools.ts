@@ -1,26 +1,11 @@
-// The tools a managed pi session inherits from the user's own pi configuration
-// (global-tool-parity-for-managed-agents).
+// The user's globally enabled pi tools (multiplexer removal).
 //
-// Scope: the *user-level* settings file only. pi merges a project-level
-// `<cwd>/.pi/settings.json` on top, but a managed session launches with
-// `--no-approve`, so pi itself ignores project-local files for that run;
-// reading one here would hand an agent a tool the session it belongs to would
-// not otherwise load.
-//
-// Two pi mechanisms hide a configured tool from a managed agent, and this module
-// exists to name both:
-//
-// - `--tools` is a strict allowlist over built-in, extension and custom tools, so
-//   it *replaces* the selection `defaultTools` would have produced. A profile that
-//   declares tools therefore hides `codemode`, even when the user enabled it
-//   globally.
-// - `--no-extensions` disables built-in extensions too, and managed sessions pass
-//   it to keep the user's extension files out of a run. `codemode` lives in the
-//   `builtin:codemode` extension, so it disappears entirely.
-//
-// So a globally enabled tool needs two things from the launch: its name in the
-// allowlist, and its built-in extension requested explicitly (pi documents that
-// explicit `-e` paths still load under `--no-extensions`).
+// The durable host is the one managed runtime, and it decides which built-in
+// extensions to install from the user's own pi settings: `codemode` is offered
+// when the user enabled it globally, matching what their own pi session gets.
+// This module owns only that read plus the settings-path resolution pi itself
+// uses; the pane-launch allowlist it used to feed is gone with the
+// multiplexer.
 
 import fs from "node:fs";
 import os from "node:os";

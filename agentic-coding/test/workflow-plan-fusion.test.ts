@@ -33,7 +33,7 @@ function repository(root: string): string {
 }
 const tailProfile = (): ResolvedProfile => ({
 	name: "tail",
-	runtime: "pi",
+	runtime: "pi-durable",
 	executable: process.execPath,
 	tools: [],
 	extensions: [],
@@ -43,7 +43,7 @@ const tailProfile = (): ResolvedProfile => ({
 });
 const plannerProfile = (index: number): ResolvedProfile => ({
 	name: `planner-model-${index}`,
-	runtime: "pi",
+	runtime: "pi-durable",
 	executable: process.execPath,
 	tools: [],
 	extensions: [],
@@ -750,8 +750,8 @@ describe("openspec-fusion workflow", () => {
 				JSON.stringify({
 					agents: {
 						profiles: {
-							base: { runtime: "pi", executable: "/bin/true" },
-							strong: { runtime: "pi", executable: "/bin/true" },
+							base: { runtime: "pi-durable", executable: "/bin/true" },
+							strong: { runtime: "pi-durable", executable: "/bin/true" },
 						},
 						presets: {
 							fusion: {

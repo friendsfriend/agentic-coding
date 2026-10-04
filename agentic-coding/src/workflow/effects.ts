@@ -1,5 +1,4 @@
 // Seams: the only place that touches git, subprocess, time, network, and config I/O.
-// Herdr access itself lives in ../herdr-client.ts (the single shared `.result` parser).
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -12,11 +11,7 @@ import {
 } from "../config-root.ts";
 import type { WorkflowExecutionSettings } from "../contracts/workflow.ts";
 import { loadEnvFile, resolveEnvReference } from "../env-file.ts";
-import { Herdr } from "../herdr-client.ts";
-import { MULTIPLEXER_IDS, type MultiplexerId } from "../multiplexer/port.ts";
 import { TELEMETRY_FLUSH_BUDGET_MS } from "./observability.ts";
-
-export { Herdr };
 
 export function run(args: string[], cwd?: string): string {
 	const result = Bun.spawnSync(args, { cwd, stdout: "pipe", stderr: "pipe" });
@@ -266,9 +261,6 @@ export function deepMerge<T extends object>(base: T, overlay: unknown): T {
 }
 
 export interface WorkflowConfig {
-	/** Runtime-neutral multiplexer selector; `AGENTIC_CODING_MULTIPLEXER`
-	 * overrides it and `herdr` is the default (add-multiplexer-adapters). */
-	multiplexer?: MultiplexerId;
 	/** Legacy-only input migrated by profile parser. */
 	models?: Record<string, string>;
 	thinking?: Record<string, string>;
@@ -285,14 +277,13 @@ export interface WorkflowConfig {
 		theme: string;
 		selection_height: number;
 		/** Which side the workspace sidebar is mounted on; the shell resolves it
-		 * once and panel movement follows it (integrated-multiplexer sidebar). */
+		 * once and panel movement follows it. */
 		sidebar_side?: "left" | "right";
-		/** Trusted user-only opt-in for the native Herdr sidebar integration
-		 * (improve-herdr-workflow-sidebar); project overlays cannot change it. */
-		herdr_sidebar?: boolean;
-		/** Trusted user-only opt-in for developer-action notifications
-		 * (workflow-developer-notifications); project overlays cannot change it. */
-		herdr_notifications?: boolean;
+		/** How the workspace sidebar sizes itself: `expanding` (the default)
+		 * collapses it to the workspace index while unfocused and expands it on
+		 * focus; `permanent` keeps it expanded. The shell can toggle the mode at
+		 * runtime; this is only its initial value. */
+		sidebar_mode?: "expanding" | "permanent";
 	};
 	wiki?: { root?: string; reviewer?: string };
 }
@@ -311,8 +302,6 @@ export const DEFAULT_CONFIG: WorkflowConfig = {
 	ui: {
 		theme: "catppuccin",
 		selection_height: 10,
-		herdr_sidebar: false,
-		herdr_notifications: false,
 	},
 	wiki: { root: "~/.config/agentic-coding/wiki" },
 };
@@ -417,7 +406,6 @@ function resolveConfigWithProvenance(
 			structuredClone(DEFAULT_CONFIG),
 			readConfigDocument(envPath),
 		);
-		validateMultiplexerSelector(environmentConfig);
 		return {
 			config: environmentConfig,
 			provenance: { source: "environment", files: [envPath] },
@@ -487,7 +475,6 @@ function resolveConfigWithProvenance(
 			);
 		cfg = deepMerge(cfg, readConfigDocument(projectConfig));
 	}
-	validateMultiplexerSelector(cfg);
 	const baseSource: ConfigProvenance["source"] = file
 		? file === canonical
 			? "user"
@@ -505,21 +492,6 @@ function resolveConfigWithProvenance(
 			...(projectRoot ? { repository: projectRoot } : {}),
 		},
 	};
-}
-
-/** Reject an unsupported selector at configuration load, with the supported
- * identifiers named, rather than deferring the failure to first port use. */
-function validateMultiplexerSelector(config: WorkflowConfig): void {
-	const value = (config as { multiplexer?: unknown }).multiplexer;
-	if (value === undefined) return;
-	if (
-		typeof value === "string" &&
-		(MULTIPLEXER_IDS as readonly string[]).includes(value)
-	)
-		return;
-	throw new Error(
-		`unsupported multiplexer '${String(value)}'; supported multiplexers: ${MULTIPLEXER_IDS.join(", ")}`,
-	);
 }
 
 export function loadConfig(options?: ConfigOptions): WorkflowConfig {
@@ -549,49 +521,6 @@ export function userConfigPaths(
 		path.join(root, LEGACY_WORKFLOW_CONFIG_FILE),
 		path.join(home, ".pi", "agent", LEGACY_USER_CONFIG_FILE),
 	];
-}
-
-/** One trusted user-only `ui.<key> === true` reader: first existing user
- * config file wins, a project overlay or `HERDR_WORKFLOW_CONFIG` is never
- * consulted, and a missing/unreadable file is false. Both Herdr integrations
- * share this precedence so they cannot drift. */
-function trustedUiFlag(
-	key: "herdr_sidebar" | "herdr_notifications",
-	home: string,
-	root: string,
-): boolean {
-	for (const candidate of userConfigPaths(home, root)) {
-		try {
-			if (!fs.existsSync(candidate)) continue;
-			const parsed = readConfigDocument(candidate) as {
-				ui?: Record<string, unknown>;
-			};
-			return parsed.ui?.[key] === true;
-		} catch {
-			return false;
-		}
-	}
-	return false;
-}
-
-/** `ui.herdr_sidebar`, default false (improve-herdr-workflow-sidebar). The
- * canonical root is an independent input from `home` (the legacy `~/.pi` path
- * lives outside it), so both are injected rather than derived from one another. */
-export function herdrSidebarEnabled(
-	home = os.homedir(),
-	root: string = resolveConfigRoot(),
-): boolean {
-	return trustedUiFlag("herdr_sidebar", home, root);
-}
-
-/** `ui.herdr_notifications`, default false (workflow-developer-notifications).
- * Same trusted user-only precedence as `herdrSidebarEnabled`: a project overlay
- * or `HERDR_WORKFLOW_CONFIG` can never flip a server-wide integration. */
-export function herdrNotificationsEnabled(
-	home = os.homedir(),
-	root: string = resolveConfigRoot(),
-): boolean {
-	return trustedUiFlag("herdr_notifications", home, root);
 }
 
 /** Resolve the config file that dashboard edits write back to (see
@@ -671,6 +600,76 @@ export function conflictingAgentsFiles(
 			fs.existsSync(candidate) && "agents" in readConfigDocument(candidate),
 	);
 }
+/** Atomically write one config document as JSON. Rename a temporary file so a
+ * failed serialization or write cannot leave a truncated config; resolve
+ * symlinks before renaming so the operator keeps the link itself intact. */
+function writeConfigDocument(
+	file: string,
+	document: Record<string, unknown>,
+): void {
+	const contents = `${JSON.stringify(document, null, 2)}\n`;
+	fs.mkdirSync(path.dirname(file), { recursive: true });
+	const target =
+		fs.existsSync(file) && fs.lstatSync(file).isSymbolicLink()
+			? fs.realpathSync(file)
+			: file;
+	const temporary = `${target}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+	try {
+		fs.writeFileSync(temporary, contents, { mode: 0o600 });
+		fs.renameSync(temporary, target);
+	} finally {
+		fs.rmSync(temporary, { force: true });
+	}
+}
+
+/** The config file a global `ui.*` edit writes back to: the explicit
+ * replacement file, else the winning base file (canonical JSON first) — never
+ * a project overlay, because a project-scoped UI preference would shadow the
+ * user's own choice at load time. */
+export function selectUiConfigPath(
+	envPath: string | undefined,
+	home: string,
+	root: string = resolveConfigRoot(),
+): string {
+	if (envPath) return envPath;
+	const candidates = [
+		path.join(root, WORKFLOW_CONFIG_FILE),
+		path.join(root, LEGACY_WORKFLOW_CONFIG_FILE),
+		path.join(home, ".pi", "agent", LEGACY_USER_CONFIG_FILE),
+	];
+	return (
+		candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0]
+	);
+}
+
+/** Persist `ui.sidebar_mode` so a sidebar toggle survives restarts. Read-
+ * modify-write with unknown keys preserved; a legacy TOML target is refused
+ * rather than converted silently, exactly like `saveAgentsSection`. */
+export function saveSidebarMode(
+	mode: "expanding" | "permanent",
+	options: { home?: string; root?: string } = {},
+): void {
+	const file = selectUiConfigPath(
+		process.env.HERDR_WORKFLOW_CONFIG,
+		options.home ?? os.homedir(),
+		options.root,
+	);
+	if (configFormat(file) === "toml")
+		throw new Error(
+			`${file} is a legacy TOML configuration read for compatibility; run \`agentic-coding config migrate\` (or convert the file explicitly) before editing it`,
+		);
+	const document = readConfigDocument(file);
+	const ui =
+		document.ui &&
+		typeof document.ui === "object" &&
+		!Array.isArray(document.ui)
+			? (document.ui as Record<string, unknown>)
+			: {};
+	ui.sidebar_mode = mode;
+	document.ui = ui;
+	writeConfigDocument(file, document);
+}
+
 /** Read-modify-write the JSON config file backing the agents section. Unknown
  * keys are preserved as read; JSON has no comments to lose. A legacy TOML
  * target is refused rather than converted silently, so an existing user file is
@@ -700,27 +699,11 @@ export function saveAgentsSection(
 	)
 		document.agents = {};
 	mutate(document.agents as Record<string, unknown>);
-	const contents = `${JSON.stringify(document, null, 2)}\n`;
-	fs.mkdirSync(path.dirname(file), { recursive: true });
-	// Rename a temporary file so a failed serialization or write cannot leave a
-	// truncated config. Resolve symlinks before renaming so the dashboard keeps
-	// the link itself intact on Linux.
-	const target =
-		fs.existsSync(file) && fs.lstatSync(file).isSymbolicLink()
-			? fs.realpathSync(file)
-			: file;
-	const temporary = `${target}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
-	try {
-		fs.writeFileSync(temporary, contents, { mode: 0o600 });
-		fs.renameSync(temporary, target);
-	} finally {
-		fs.rmSync(temporary, { force: true });
-	}
+	writeConfigDocument(file, document);
 }
 
 export interface Context {
 	config: WorkflowConfig;
-	herdr: Herdr;
 	git: Git;
 	clock: Clock;
 	exporter: Exporter;

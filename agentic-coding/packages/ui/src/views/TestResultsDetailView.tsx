@@ -14,6 +14,7 @@ import {
 	ScrollableList,
 } from "../components/ScrollableList";
 import { SearchHeader } from "../components/SearchHeader";
+import { SelectionMarker } from "../components/SelectionMarker.tsx";
 import { uiColors } from "../theme/colors";
 import type { TestCase, TestSuite } from "../types";
 
@@ -226,12 +227,7 @@ export function TestResultsDetailView(props: TestResultsDetailViewProps) {
 									}}
 								>
 									{/* Accent marker */}
-									<box
-										backgroundColor={
-											isSelected() ? uiColors.highlight : undefined
-										}
-										style={{ width: 2, flexShrink: 0 }}
-									/>
+									<SelectionMarker selected={isSelected()} />
 									<box
 										style={{
 											flexGrow: 1,

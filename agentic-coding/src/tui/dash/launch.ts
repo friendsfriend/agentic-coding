@@ -6,7 +6,7 @@
 // immutable launch context that decides the target, and the classification of a
 // start result into "rejected", "accepted" or "uncertain" so the UI can tell a
 // refused start apart from a workflow that was durably accepted and then failed
-// its Herdr handoff — without ever submitting a second workflow.
+// its acceptance — without ever submitting a second workflow.
 import { existsSync } from "node:fs";
 import { BackendClientError } from "../../server/client.ts";
 import { gatewayOrUndefined } from "../data/index.ts";
@@ -50,7 +50,7 @@ export interface WorkflowLaunchInput {
 }
 
 export type LaunchOutcome =
-	/** Durably accepted: `workflowId` exists and owns its Herdr workspace. */
+	/** Durably accepted: `workflowId` exists in the workflow store. */
 	| { kind: "accepted"; workflowId: string; message: string }
 	/** Refused before anything was created; safe to correct and resubmit. */
 	| { kind: "rejected"; message: string }
@@ -145,7 +145,7 @@ export function launchRepositoryAvailable(
 
 /**
  * Bounded post-acceptance handoff watch. A workflow that was durably accepted
- * and then failed its Herdr handoff is reported once, by identity, so the user
+ * and then failed its acceptance handoff is reported once, by identity, so the user
  * sees "accepted, handoff failed" instead of a start error — and never a
  * second workflow. The watch reports the first terminal attention state and
  * then stops.

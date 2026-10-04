@@ -117,7 +117,13 @@ export function createAppActions(
 				);
 			}
 		} catch (e) {
-			console.error("Failed to fetch status:", e);
+			// The status read runs in the background; a failure is logged for
+			// diagnostics instead of printed, because raw output would overwrite
+			// the renderer (and fire again while the shell tears down).
+			getLogger().write(
+				"ERROR",
+				`Failed to fetch status: ${e instanceof Error ? e.message : String(e)}`,
+			);
 		}
 	};
 
@@ -390,11 +396,15 @@ export function createAppActions(
 			}
 		} catch (e) {
 			appStore.setLiveUpdatesActive(false);
+			// A shutdown aborts the stream: that is the expected end of the
+			// subscription, not a failure, and printing it would overwrite the
+			// terminal while the renderer is being torn down.
+			if (signal?.aborted || (e instanceof Error && e.name === "AbortError"))
+				return;
 			getLogger().write(
 				"ERROR",
 				`SSE error: ${e instanceof Error ? e.message : String(e)}`,
 			);
-			console.error("SSE error:", e);
 		}
 	};
 

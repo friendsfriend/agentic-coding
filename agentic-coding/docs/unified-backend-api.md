@@ -94,10 +94,10 @@ gap; a cursor that is too old (or ahead of the instance) makes the server emit
 continuing. A slow subscriber overflows its bounded queue to a resync request
 rather than blocking mutation execution.
 
-`src/server/subscriptions.ts` is the server-owned refresh source: it subscribes
-to Herdr lifecycle events and to each repository's execution coordinator and
-publishes `workflow.updated`, so dashboards refresh from the stream instead of a
-local Herdr socket or `fs.watch`.
+`src/server/subscriptions.ts` is the server-owned refresh source: it registers
+each repository's execution-coordinator listeners and publishes
+`workflow.updated`, so dashboards refresh from the stream instead of watching
+store files.
 
 ## Credentials
 

@@ -297,9 +297,9 @@ export function migrateLegacy(
 	const model =
 		typeof legacy.workerModel === "string" ? legacy.workerModel : undefined;
 	const profile = {
-		name: "legacy-pi",
-		runtime: "pi" as const,
-		executable: "pi",
+		name: "legacy-pi-durable",
+		runtime: "pi-durable" as const,
+		executable: "pi-durable",
 		...(model ? { model } : {}),
 		tools: ["read", "bash", "edit", "write"],
 		extensions: [],
@@ -315,7 +315,7 @@ export function migrateLegacy(
 			"runtime-bridge",
 		] as const,
 		digest: createHash("sha256")
-			.update(json({ runtime: "pi", model }))
+			.update(json({ runtime: "pi-durable", model }))
 			.digest("hex"),
 	};
 	const routing = {
@@ -367,9 +367,6 @@ export function migrateLegacy(
 			branch: String(legacy.branch ?? "unknown"),
 			baseBranch: String(legacy.baseBranch ?? "unknown"),
 			baseCommit: String(legacy.baseCommit ?? "unknown"),
-			...(typeof legacy.workspace === "string"
-				? { workspace: legacy.workspace }
-				: {}),
 			...(typeof legacy.task === "string" && legacy.task.trim()
 				? { task: legacy.task }
 				: {}),

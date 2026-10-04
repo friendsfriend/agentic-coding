@@ -72,7 +72,7 @@ test("a pane-based run carries no host socket or conversation id", async () => {
 				role: "worker",
 				attempt: 1,
 				status: "working",
-				runtime: "pi",
+				runtime: "pi-durable",
 				profile: "pi-default",
 				paneId: "pane-1",
 			},
