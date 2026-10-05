@@ -50,6 +50,7 @@ const TASK_TYPES = new Set([
 	"wiki",
 	"research",
 	"no-openspec",
+	"solo",
 ]);
 
 /** One repository-step entry: a configured application/library, the directory
@@ -285,7 +286,7 @@ export function NewWorkflowModal(props: {
 		preset: "Agent preset",
 		ticket: "Ticket identifier optional",
 		workflowId: "Workflow ID",
-		task: "Task required for wiki, research, and no OpenSpec",
+		task: "Task required for wiki, research, no OpenSpec, and solo",
 		mode: "Checkout mode",
 	};
 
@@ -379,7 +380,7 @@ export function NewWorkflowModal(props: {
 
 	const confirmStep = () => step() === fields().length;
 	const canSubmit = () =>
-		!["wiki", "research", "quick", "no-openspec"].includes(
+		!["wiki", "research", "quick", "no-openspec", "solo"].includes(
 			values().workflowType,
 		) || Boolean(values().task?.trim());
 	const totalSteps = () => fields().length + 1;

@@ -50,6 +50,7 @@ describe("workflow registry", () => {
 			"no-openspec",
 			"openspec-fusion",
 			"openspec-fusion-propose",
+			"solo",
 		]);
 		const standard = registry.definition("openspec", 1);
 		expect(standard.steps).toContain("core.verification");

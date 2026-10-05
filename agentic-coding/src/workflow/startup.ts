@@ -98,9 +98,9 @@ export function validateStart(
 	);
 	if (dirty && !proposal)
 		throw new Error("working tree must be clean before workflow start");
-	if (workflow === "no-openspec") {
+	if (workflow === "no-openspec" || workflow === "solo") {
 		if (!task?.trim())
-			throw new Error("no-openspec workflow requires non-empty task");
+			throw new Error(`${workflow} workflow requires non-empty task`);
 		return;
 	}
 	if (!fs.existsSync(path.join(repo, "openspec", "config.yaml")))

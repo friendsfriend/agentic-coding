@@ -9,14 +9,16 @@ const REVIEW_COMMENTS_INPUT = {
 	schemaVersion: 1,
 } as const;
 /** Definitions whose `core.completed` never offers `create-pr`: proposal-only
- * workflows never reach delivery, and the wiki/research workflows have
- * nothing to push as a repository pull request. */
+ * workflows never reach delivery, the wiki/research workflows have nothing to
+ * push as a repository pull request, and a solo workflow has no delivery step
+ * to push from. */
 const CLOSE_ONLY_DEFINITIONS = [
 	"openspec-propose",
 	"openspec-fusion-propose",
 	"wiki",
 	"wiki-comments",
 	"research",
+	"solo",
 ];
 
 export const lifecycleBehaviors: Readonly<Record<string, StepBehavior>> = {

@@ -4,6 +4,11 @@
  * Uses active OpenCode-compatible theme tokens instead of fixed Catppuccin
  * values. SyntaxStyle objects are cached per active theme because native style
  * instances are immutable after creation.
+ *
+ * The same style highlights source blocks: it carries the tree-sitter scopes
+ * the bundled javascript/typescript grammars emit, so a fenced block in a
+ * markdown document and a `<code filetype="javascript">` element both draw in
+ * the active theme.
  */
 
 import { SyntaxStyle } from "@opentui/core";
@@ -94,6 +99,54 @@ export function getMarkdownSyntaxStyle(): SyntaxStyle {
 		{
 			scope: ["markup.thematic_break"],
 			style: { foreground: uiColors.textMuted },
+		},
+
+		// Source in a fenced block or a code element — the scopes the bundled
+		// javascript/typescript grammars emit. A subtoken (`function.method`)
+		// resolves to its base name, so one entry covers the family.
+		{
+			scope: ["keyword"],
+			style: { foreground: uiColors.primary, bold: true },
+		},
+		{
+			scope: ["string"],
+			style: { foreground: uiColors.success },
+		},
+		{
+			scope: ["comment"],
+			style: { foreground: uiColors.textMuted, italic: true },
+		},
+		{
+			scope: ["number"],
+			style: { foreground: uiColors.highlight },
+		},
+		{
+			scope: ["constant"],
+			style: { foreground: uiColors.highlight },
+		},
+		{
+			scope: ["constructor"],
+			style: { foreground: uiColors.primaryDim },
+		},
+		{
+			scope: ["function"],
+			style: { foreground: uiColors.accent },
+		},
+		{
+			scope: ["variable"],
+			style: { foreground: uiColors.textPrimary },
+		},
+		{
+			scope: ["property"],
+			style: { foreground: uiColors.info },
+		},
+		{
+			scope: ["operator"],
+			style: { foreground: uiColors.textSecondary },
+		},
+		{
+			scope: ["punctuation"],
+			style: { foreground: uiColors.textSecondary },
 		},
 
 		// Comments / muted

@@ -6,8 +6,9 @@
 // produced, the command a bash call ran and how it ended.
 //
 // Presentation only and pure: a block's structured tool data in, rows out. A
-// tool without a specialized view here (the dialogue tools, anything a future
-// host adds) keeps the generic row.
+// tool without a specialized view here (a search, anything a future host adds)
+// keeps the generic row.
+import { resolveDeveloperQuestionOption } from "../../../contracts/workflow.ts";
 import {
 	type AgentSessionToolCall,
 	formatDuration,
@@ -22,6 +23,13 @@ export interface ToolViewRow {
 	readonly id?: string;
 	readonly text: string;
 	readonly tone: "base" | "muted" | "error" | "warning" | "success" | "info";
+	/** The text is markdown, drawn rendered instead of as a line. It is the body
+	 * of a fold — a question's context — not a header: a header stays a plain,
+	 * truncated line. */
+	readonly markdown?: boolean;
+	/** The text is source in this tree-sitter filetype (a codemode script): drawn
+	 * as one highlighted code block instead of a line. */
+	readonly syntax?: string;
 	readonly detail?: readonly ToolViewRow[];
 }
 
@@ -30,6 +38,10 @@ export interface ToolViewSection {
 	readonly id: string;
 	readonly label: string;
 	readonly rows: readonly ToolViewRow[];
+	/** The part starts folded: its header shows (`script (12 lines)`), its rows
+	 * wait for a click. A script's source and output are reference material, so
+	 * an expanded codemode row leads with the calls the script made. */
+	readonly collapsed?: boolean;
 }
 
 /** A tool call's transcript view: the summary line, the hint beside it, the
@@ -76,13 +88,13 @@ function readRange(notes: readonly string[]): string | undefined {
 	return undefined;
 }
 
-/** `+12 −4` for a diff body. */
-function diffCounts(diff: string): string | undefined {
+/** `+12 −4` for a diff body's rows. */
+function diffRowCounts(rows: readonly ToolViewRow[]): string | undefined {
 	let added = 0;
 	let removed = 0;
-	for (const line of diff.split("\n")) {
-		if (line.startsWith("+")) added++;
-		else if (line.startsWith("-")) removed++;
+	for (const row of rows) {
+		if (row.text.startsWith("+")) added++;
+		else if (row.text.startsWith("-")) removed++;
 	}
 	if (added === 0 && removed === 0) return undefined;
 	return `+${added} −${removed}`;
@@ -97,6 +109,23 @@ function diffRows(diff: string): ToolViewRow[] {
 		if (line.startsWith("@@")) return { text: line, tone: "info" };
 		return { text: line, tone: "muted" };
 	});
+}
+
+/** The change an edit's own arguments describe, for a host that did not compute
+ * a diff: each edit's old text as removals and its new text as additions. */
+function editArgRows(args: Readonly<Record<string, unknown>>): ToolViewRow[] {
+	const edits = Array.isArray(args.edits) ? args.edits : [];
+	const rows: ToolViewRow[] = [];
+	for (const entry of edits) {
+		if (!isRecord(entry)) continue;
+		const oldText = typeof entry.oldText === "string" ? entry.oldText : "";
+		const newText = typeof entry.newText === "string" ? entry.newText : "";
+		for (const text of oldText.split("\n"))
+			if (text.length > 0) rows.push({ text: `-${text}`, tone: "error" });
+		for (const text of newText.split("\n"))
+			if (text.length > 0) rows.push({ text: `+${text}`, tone: "success" });
+	}
+	return rows;
 }
 
 /** `read`: the file, the range that came back, and the text itself. Without a
@@ -123,20 +152,30 @@ function readView(call: AgentSessionToolCall): ToolView {
 	};
 }
 
-/** `edit`: the file, how much changed, and the diff the tool computed. */
+/** `edit`: the file, how much changed, and the diff it made. */
 function editView(call: AgentSessionToolCall): ToolView {
 	const path = stringArg(call.args, "path") ?? "file";
-	const edits = Array.isArray(call.args.edits) ? call.args.edits.length : 0;
+	const editCount = Array.isArray(call.args.edits) ? call.args.edits.length : 0;
+	// The host's diff is the exact change. Without one, an edit that succeeded
+	// still describes its own change through its arguments; a failed one has
+	// nothing to show there, and its call row opens into the error instead.
 	const diff = call.result?.details?.diff;
+	let rows: ToolViewRow[] = [];
+	if (typeof diff === "string") rows = diffRows(diff);
+	else if (call.result !== undefined && call.result.isError !== true)
+		rows = editArgRows(call.args);
+	const counts = diffRowCounts(rows);
 	const hint = [
-		edits > 0 ? `${edits} edit${edits === 1 ? "" : "s"}` : undefined,
-		typeof diff === "string" ? diffCounts(diff) : undefined,
+		editCount > 0
+			? `${editCount} edit${editCount === 1 ? "" : "s"}`
+			: undefined,
+		counts,
 	].filter((part): part is string => part !== undefined);
 	return {
 		icon: "←",
 		summary: path,
 		...(hint.length > 0 ? { hint: hint.join(" · ") } : {}),
-		...(typeof diff === "string" ? { rows: diffRows(diff) } : {}),
+		...(rows.length > 0 ? { rows } : {}),
 	};
 }
 
@@ -404,6 +443,324 @@ function jevView(call: AgentSessionToolCall): ToolView {
 	};
 }
 
+/** One resolved option a dialogue call offered: the label the developer saw,
+ * the value an answer matches, and the marker and detail the asking agent
+ * attached to it. */
+interface QuestionOption {
+	readonly label: string;
+	readonly value: string;
+	readonly recommended: boolean;
+	readonly description?: string;
+}
+
+/** One question a dialogue call asked, as the view reads it out of the call's
+ * arguments and the CLI's result: the single form's record carries the text,
+ * options, status and answer; the questionnaire form's items carry the text and
+ * options while the group result carries only the answers. */
+interface DialogueQuestion {
+	readonly ident?: string;
+	readonly text?: string;
+	readonly context?: string;
+	readonly options: readonly QuestionOption[];
+	readonly status?: string;
+	readonly answer?: {
+		readonly kind: "option" | "custom" | "cancel";
+		readonly value?: string;
+	};
+}
+
+/** One option, narrowed from whatever the JSON carried and resolved through the
+ * contract's own legacy `label`/`value` rules. */
+function questionOption(value: unknown): QuestionOption | undefined {
+	if (!isRecord(value)) return undefined;
+	const resolved = resolveDeveloperQuestionOption({
+		...(typeof value.title === "string" ? { title: value.title } : {}),
+		...(typeof value.label === "string" ? { label: value.label } : {}),
+		...(typeof value.value === "string" ? { value: value.value } : {}),
+		...(value.recommended === true ? { recommended: true } : {}),
+		...(typeof value.description === "string"
+			? { description: value.description }
+			: {}),
+	});
+	if (resolved.label.length === 0) return undefined;
+	return {
+		label: resolved.label,
+		value: resolved.value,
+		recommended: resolved.recommended === true,
+		...(resolved.description?.trim()
+			? { description: resolved.description }
+			: {}),
+	};
+}
+
+function questionOptions(value: unknown): QuestionOption[] {
+	return Array.isArray(value)
+		? value.flatMap((entry) => questionOption(entry) ?? [])
+		: [];
+}
+
+/** The question's own words: the questionnaire form's `question`, the single
+ * form's `description`. */
+function dialogueQuestionText(
+	source: Readonly<Record<string, unknown>>,
+): string | undefined {
+	for (const key of ["question", "description"]) {
+		const value = source[key];
+		if (typeof value === "string" && value.trim().length > 0) return value;
+	}
+	return undefined;
+}
+
+function questionAnswer(
+	value: unknown,
+): DialogueQuestion["answer"] | undefined {
+	if (!isRecord(value)) return undefined;
+	if (
+		value.kind !== "option" &&
+		value.kind !== "custom" &&
+		value.kind !== "cancel"
+	)
+		return undefined;
+	return {
+		kind: value.kind,
+		...(typeof value.value === "string" ? { value: value.value } : {}),
+	};
+}
+
+/** The JSON the `developer_question`/`agent_ask` CLI prints: the question's own
+ * record, or the group header the questionnaire form returns. Anything else —
+ * an error the tool reported, a pending call — is not a record. */
+function questionRecord(
+	lines: readonly string[],
+): Readonly<Record<string, unknown>> | undefined {
+	const text = lines.join("\n").trim();
+	if (!text.startsWith("{")) return undefined;
+	try {
+		const parsed: unknown = JSON.parse(text);
+		return isRecord(parsed) ? parsed : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** The questions a call asked, paired with what came back: the questionnaire
+ * form's items and the group result's responses are matched by `itemIndex` (a
+ * response without one falls back to its position). */
+function dialogueQuestions(
+	args: Readonly<Record<string, unknown>>,
+	record: Readonly<Record<string, unknown>> | undefined,
+): DialogueQuestion[] {
+	const items = Array.isArray(args.questions)
+		? args.questions.filter(isRecord)
+		: [];
+	const status = typeof record?.status === "string" ? record.status : undefined;
+	if (items.length > 0) {
+		const responses = Array.isArray(record?.responses) ? record.responses : [];
+		const byIndex = new Map<number, Readonly<Record<string, unknown>>>();
+		responses.forEach((response, position) => {
+			if (!isRecord(response)) return;
+			byIndex.set(
+				typeof response.itemIndex === "number" ? response.itemIndex : position,
+				response,
+			);
+		});
+		return items.map((item, index) => {
+			const text = dialogueQuestionText(item);
+			const answer = questionAnswer(byIndex.get(index)?.answer);
+			return {
+				...(typeof item.ident === "string" ? { ident: item.ident } : {}),
+				...(text === undefined ? {} : { text }),
+				...(typeof item.context === "string" ? { context: item.context } : {}),
+				options: questionOptions(item.options),
+				...(status === undefined ? {} : { status }),
+				...(answer === undefined ? {} : { answer }),
+			};
+		});
+	}
+	// The single form: the result is the question's own record, so it carries
+	// the text, the options, and the answer; a call without a result yet has
+	// only its arguments. Its context is not part of the question — the view
+	// hoists it above, so it is not drawn twice.
+	const source = record ?? {};
+	const text = dialogueQuestionText(source) ?? dialogueQuestionText(args);
+	const options = questionOptions(
+		Array.isArray(source.options) ? source.options : args.options,
+	);
+	const answer = questionAnswer(source.answer);
+	return [
+		{
+			...(typeof source.ident === "string" ? { ident: source.ident } : {}),
+			...(text === undefined ? {} : { text }),
+			options,
+			...(status === undefined ? {} : { status }),
+			...(answer === undefined ? {} : { answer }),
+		},
+	];
+}
+
+function optionSelected(
+	question: DialogueQuestion,
+	option: QuestionOption,
+): boolean {
+	const answer = question.answer;
+	if (answer?.kind !== "option") return false;
+	return answer.value === option.value || answer.value === option.label;
+}
+
+/** What the question row says after the question itself: the chosen answer, or
+ * why there is none. */
+function answerSummary(question: DialogueQuestion): string | undefined {
+	const answer = question.answer;
+	if (!answer)
+		return question.status === "pending"
+			? "… pending"
+			: question.status === "expired"
+				? "⊘ expired"
+				: question.status === "cancelled"
+					? "⊘ cancelled"
+					: undefined;
+	if (answer.kind === "cancel")
+		return question.status === "expired" ? "⊘ expired" : "⊘ cancelled";
+	if (answer.kind === "custom") return `→ “${oneLine(answer.value ?? "", 80)}”`;
+	const selected =
+		question.options.find((option) => option.value === answer.value) ??
+		question.options.find((option) => option.label === answer.value);
+	return `→ ${oneLine(selected?.label ?? answer.value ?? "selected", 80)}`;
+}
+
+function questionTone(question: DialogueQuestion): "base" | "warning" {
+	if (
+		question.answer?.kind === "cancel" ||
+		question.status === "pending" ||
+		question.status === "expired" ||
+		question.status === "cancelled"
+	)
+		return "warning";
+	return "base";
+}
+
+/** One question's fold: the context it came with, rendered as the markdown it
+ * is, then every option it offered, the chosen one marked. */
+function questionDetail(
+	question: DialogueQuestion,
+	index: number,
+): ToolViewRow[] {
+	const rows: ToolViewRow[] = [];
+	if (question.context?.trim())
+		rows.push({ text: question.context, tone: "muted", markdown: true });
+	question.options.forEach((option, position) => {
+		const selected = optionSelected(question, option);
+		rows.push({
+			id: `question:${index}:option:${position}`,
+			text: `${selected ? "●" : "○"}${option.recommended ? " ★" : "  "} ${option.label}`,
+			tone: selected ? "success" : option.recommended ? "info" : "muted",
+			...(option.description
+				? {
+						detail: [
+							{
+								text: option.description,
+								tone: "muted" as const,
+								markdown: true,
+							},
+						],
+					}
+				: {}),
+		});
+	});
+	const custom =
+		question.answer?.kind === "custom"
+			? question.answer.value?.trim()
+			: undefined;
+	if (custom)
+		rows.push({ text: `custom: ${oneLine(custom, 400)}`, tone: "base" });
+	return rows;
+}
+
+function dialogueRows(
+	questions: readonly DialogueQuestion[],
+	context: string | undefined,
+): ToolViewRow[] {
+	const rows: ToolViewRow[] = [];
+	if (context?.trim())
+		rows.push({
+			id: "context",
+			text: "context",
+			tone: "muted",
+			detail: [{ text: context, tone: "muted", markdown: true }],
+		});
+	questions.forEach((question, index) => {
+		// One blank line between the question groups, so a questionnaire reads as
+		// groups rather than as one list.
+		if (rows.length > 0) rows.push({ text: "", tone: "muted" });
+		const detail = questionDetail(question, index);
+		const summary = answerSummary(question);
+		const prefix =
+			question.ident ?? (questions.length > 1 ? String(index + 1) : undefined);
+		rows.push({
+			id: `question:${index}`,
+			text: `${prefix === undefined ? "" : `[${prefix}] `}${oneLine(
+				question.text ?? "question",
+				200,
+			)}${summary === undefined ? "" : `   ${summary}`}`,
+			tone: questionTone(question),
+			...(detail.length > 0 ? { detail } : {}),
+		});
+	});
+	return rows;
+}
+
+/** `developer_question` / `agent_ask`: the question a run asked, the context
+ * the developer needs, and every answer it could pick — the chosen one marked —
+ * as folds, so a questionnaire stays readable without hiding its background.
+ * A call that names no question at all keeps the generic row. */
+function dialogueView(call: AgentSessionToolCall): ToolView | undefined {
+	const lines = call.result?.lines ?? [];
+	const record = questionRecord(lines);
+	const questions = dialogueQuestions(call.args, record).filter(
+		(question) =>
+			question.text !== undefined ||
+			question.options.length > 0 ||
+			question.context !== undefined,
+	);
+	if (questions.length === 0) return undefined;
+	const status = typeof record?.status === "string" ? record.status : undefined;
+	const requester =
+		call.name === "agent_ask"
+			? `peer ${stringArg(call.args, "role") ?? "agent"}`
+			: "developer";
+	const headline =
+		questions.length > 1
+			? `${questions.length} questions`
+			: (questions[0]?.text ?? "question");
+	// A single question keeps its context at the top; a questionnaire's items
+	// each carry their own inside the question's fold.
+	const context =
+		Array.isArray(call.args.questions) || questions.length !== 1
+			? undefined
+			: typeof record?.context === "string"
+				? record.context
+				: stringArg(call.args, "context");
+	const rows = dialogueRows(questions, context);
+	// A result that is not a question record — an error the tool reported, a
+	// host without the dialogue — keeps its own words under the question.
+	if (record === undefined && lines.length > 0)
+		rows.push(
+			...lines.map((text) => ({
+				text,
+				tone:
+					call.result?.isError === true
+						? ("error" as const)
+						: ("muted" as const),
+			})),
+		);
+	return {
+		icon: "?",
+		summary: oneLine(headline, 160),
+		hint: `${status ?? "asking"} · ${requester}`,
+		rows,
+	};
+}
+
 /** One tool call a codemode script made: its name, how it ended, and — when the
  * host sent the structured record — what it asked for. */
 interface CodemodeCall {
@@ -489,9 +846,13 @@ function codemodeHeadline(code: string): string {
 	return line ?? "script";
 }
 
-/** The script's own source, whole, as the first rows of its expanded view. */
+/** The script's own source, whole, as the one highlighted code row of its
+ * section: the source is JavaScript, and the tree-sitter pass needs it whole to
+ * highlight it. */
 function codemodeScriptRows(code: string): ToolViewRow[] {
-	return code.split("\n").map((text) => ({ text, tone: "base" as const }));
+	return code.length === 0
+		? []
+		: [{ text: code, tone: "base" as const, syntax: "javascript" }];
 }
 
 /** One line per call a script made: its name and how it ended, failures in the
@@ -527,21 +888,29 @@ function codemodeCallResult(
 }
 
 /** A call's own view, as the rows it would show in the transcript: the answers
- * a judgment came back with, the diff an edit produced, the text a read read. */
+ * a judgment came back with, the diff an edit produced, the text a read read.
+ * A call whose view has nothing to show still opens into the text it answered
+ * with, so every call that produced something can be read in place. */
 function codemodeCallDetail(call: CodemodeCall): readonly ToolViewRow[] {
-	const args = call.args ?? {};
+	const result = codemodeCallResult(call);
 	const view = toolView({
 		name: call.name,
-		args,
-		...(codemodeCallResult(call) ? { result: codemodeCallResult(call) } : {}),
+		args: call.args ?? {},
+		...(result ? { result } : {}),
 	});
-	return view?.rows ?? [];
+	const rows = view?.rows ?? [];
+	if (rows.length > 0) return rows;
+	return (call.output ?? "")
+		.split("\n")
+		.map((line) => line.replace(/\s+$/g, ""))
+		.filter((line) => line.length > 0)
+		.map((text) => ({ text, tone: "muted" as const }));
 }
 
 /** `codemode`: collapsed, the one-line script summary (`λ 11 calls · 0.5s`).
  * Expanded, the calls the script made — one line each, each folding into its
- * own tool view — followed by the script that made them and what it produced,
- * as parts that can be folded away again to keep the call list in view. */
+ * own tool view — with the script that made them and what it produced kept as
+ * compact parts that open on demand, so the call list stays the whole view. */
 function codemodeView(call: AgentSessionToolCall): ToolView {
 	const code = stringArg(call.args, "code") ?? "";
 	const lines = call.result?.lines ?? [];
@@ -571,10 +940,10 @@ function codemodeView(call: AgentSessionToolCall): ToolView {
 		rows: codemodeCallRows(calls),
 		sections: [
 			...(script.length > 0
-				? [{ id: "script", label: "script", rows: script }]
+				? [{ id: "script", label: "script", rows: script, collapsed: true }]
 				: []),
 			...(output.length > 0
-				? [{ id: "output", label: "output", rows: output }]
+				? [{ id: "output", label: "output", rows: output, collapsed: true }]
 				: []),
 		],
 	};
@@ -594,6 +963,9 @@ export function toolView(call: AgentSessionToolCall): ToolView | undefined {
 			return bashView(call);
 		case "ask_jev":
 			return jevView(call);
+		case "developer_question":
+		case "agent_ask":
+			return dialogueView(call);
 		case "codemode":
 			return codemodeView(call);
 		default:

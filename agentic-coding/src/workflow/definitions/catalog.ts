@@ -54,6 +54,12 @@ export const PUBLIC_WORKFLOW_CATALOG: readonly WorkflowCatalogEntry[] =
 			alias: "quick",
 		}),
 		Object.freeze({
+			id: "solo",
+			label: "Solo",
+			description:
+				"One implementation agent, start to finish. No planning, triage, verification, wiki, or delivery.",
+		}),
+		Object.freeze({
 			id: "openspec-fusion",
 			label: "Openspec fusion",
 			description:

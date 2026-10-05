@@ -183,6 +183,8 @@ const TOOL_ICONS: Record<string, string> = {
 	webfetch: "%",
 	websearch: "◈",
 	codemode: "{}",
+	developer_question: "?",
+	agent_ask: "?",
 };
 /** The glyph that marks a tool's type in the transcript (shared with the tool
  * views' call lines, so one tool looks the same wherever it appears). */

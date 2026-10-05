@@ -68,6 +68,14 @@ const MANIFEST_POLICY: Readonly<Record<string, WorkflowManifestPolicy>> = {
 		checkoutRequired: false,
 		requiresReadOnlyResearcher: false,
 	},
+	// The solo family is repository-backed and starts in the implementation
+	// step: like no-openspec it has no OpenSpec planning phase, but it also runs
+	// one agent only.
+	solo: {
+		targetKind: "repository",
+		checkoutRequired: false,
+		requiresReadOnlyResearcher: false,
+	},
 	"openspec-fusion": {
 		targetKind: "repository",
 		checkoutRequired: false,

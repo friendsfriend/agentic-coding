@@ -35,6 +35,7 @@ import {
 } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
 import {
+	getMarkdownSyntaxStyle,
 	ListViewModal,
 	MarkdownViewer,
 	parseMarkdownBlocks,
@@ -58,7 +59,11 @@ import {
 	reuseAgentSessionBlocks,
 } from "../agent-session.ts";
 import { PromptPulse } from "./PromptPulse.tsx";
-import { type ToolViewRow, toolView } from "./tool-views.ts";
+import {
+	type ToolViewRow,
+	type ToolViewSection,
+	toolView,
+} from "./tool-views.ts";
 
 export interface AgentSessionViewProps {
 	readonly role: string;
@@ -309,8 +314,8 @@ interface TranscriptState {
 }
 
 /** One row of a specialized tool view. A row with a detail of its own — a
- * codemode call is a whole tool call — folds open into it, so one call can be
- * read without expanding the rest. */
+ * codemode call is a whole tool call, a question offers its options — folds
+ * open into it, so one part can be read without expanding the rest. */
 function ToolRow(props: {
 	block: AgentSessionBlock;
 	row: ToolViewRow;
@@ -321,6 +326,21 @@ function ToolRow(props: {
 	const key = () => `${props.block.id}:${props.row.id ?? props.row.text}`;
 	const open = () => props.openRows().has(key());
 	const detail = () => props.row.detail ?? [];
+	// A row of source — a codemode script — is drawn as the code it is, one
+	// highlighted block rather than a fold. `drawUnstyledText` keeps it visible
+	// while the tree-sitter pass is still in flight.
+	if (props.row.syntax)
+		return (
+			<box flexDirection="column">
+				<code
+					filetype={props.row.syntax}
+					content={props.row.text}
+					syntaxStyle={getMarkdownSyntaxStyle()}
+					drawUnstyledText
+					fg={markerColor(props.row.tone)}
+				/>
+			</box>
+		);
 	return (
 		<box flexDirection="column">
 			<box
@@ -334,22 +354,43 @@ function ToolRow(props: {
 						{open() ? "▾" : "▸"}
 					</text>
 				</Show>
-				<text fg={markerColor(props.row.tone)} wrapMode="none" truncate>
-					{props.row.text}
-				</text>
+				<Show
+					when={props.row.markdown}
+					fallback={
+						<text fg={markerColor(props.row.tone)} wrapMode="none" truncate>
+							{props.row.text}
+						</text>
+					}
+				>
+					<AssistantMarkdown text={props.row.text} />
+				</Show>
 			</box>
 			<Show when={open()}>
 				<box flexDirection="column" paddingLeft={2}>
+					{/* A row's detail is rows again: a question folds into its options, an
+					    option into the description the agent attached to it. */}
 					<For each={detail()}>
 						{(row) => (
-							<text fg={markerColor(row.tone)} wrapMode="none" truncate>
-								{row.text}
-							</text>
+							<ToolRow
+								block={props.block}
+								row={row}
+								openRows={props.openRows}
+								onToggleRow={props.onToggleRow}
+							/>
 						)}
 					</For>
 				</box>
 			</Show>
 		</box>
+	);
+}
+
+/** The lines a section's rows carry: a row may be one output line or a whole
+ * block of source drawn as one highlighted code row. */
+function sectionLineCount(section: ToolViewSection): number {
+	return section.rows.reduce(
+		(total, row) => total + row.text.split("\n").length,
+		0,
 	);
 }
 
@@ -361,9 +402,10 @@ function Block(props: {
 	role: string;
 	expanded: boolean;
 	onToggle: (id: string) => void;
-	/** The parts folded away, and how to fold one: a long tool view keeps its
-	 * headers when a part is closed. */
-	foldedSections: () => ReadonlySet<string>;
+	/** Which parts a reader toggled away from their default, and how to toggle
+	 * one: a part that starts folded (`script`) opens on a click, one that starts
+	 * open closes on it. */
+	toggledSections: () => ReadonlySet<string>;
 	onToggleSection: (key: string) => void;
 	/** The rows folded open, and how to fold one: a call inside a script opens
 	 * into its own view without expanding the rest. */
@@ -494,7 +536,12 @@ function Block(props: {
 							<For each={tool.sections ?? []}>
 								{(section) => {
 									const key = `${props.block.id}:${section.id}`;
-									const folded = () => props.foldedSections().has(key);
+									// The signal keys the sections a reader moved; whether a key means
+									// "open" or "closed" is the section's own default.
+									const open = () => {
+										const toggled = props.toggledSections().has(key);
+										return section.collapsed === true ? toggled : !toggled;
+									};
 									return (
 										<box flexDirection="column">
 											<box
@@ -502,21 +549,20 @@ function Block(props: {
 												onMouseUp={() => props.onToggleSection(key)}
 											>
 												<text fg={uiColors.textMuted} wrapMode="none" truncate>
-													{folded() ? "▸" : "▾"} {section.label}{" "}
-													{`(${section.rows.length} lines)`}
+													{open() ? "▾" : "▸"} {section.label}{" "}
+													{`(${sectionLineCount(section)} lines)`}
 												</text>
 											</box>
-											<Show when={!folded()}>
+											<Show when={open()}>
 												<box flexDirection="column" paddingLeft={2}>
 													<For each={section.rows}>
 														{(row) => (
-															<text
-																fg={markerColor(row.tone)}
-																wrapMode="none"
-																truncate
-															>
-																{row.text}
-															</text>
+															<ToolRow
+																block={props.block}
+																row={row}
+																openRows={props.openRows}
+																onToggleRow={props.onToggleRow}
+															/>
 														)}
 													</For>
 												</box>
@@ -781,14 +827,15 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 			return next;
 		});
 	};
-	// Which parts of an expanded tool view are folded away, by
-	// `${block.id}:${section.id}`. Empty means every part is open.
-	const [foldedSections, setFoldedSections] = createSignal<ReadonlySet<string>>(
-		new Set(),
-	);
+	// Which parts of an expanded tool view a reader moved away from their
+	// default, by `${block.id}:${section.id}`. Empty means every part is in its
+	// own default state: a section with `collapsed` starts folded, the rest open.
+	const [toggledSections, setToggledSections] = createSignal<
+		ReadonlySet<string>
+	>(new Set());
 	const toggleSection = (key: string) => {
 		keepPlace();
-		setFoldedSections((current) => {
+		setToggledSections((current) => {
 			const next = new Set(current);
 			if (next.has(key)) next.delete(key);
 			else next.add(key);
@@ -1037,7 +1084,7 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 											role={props.role}
 											expanded={expandedBlocks().has(block.id)}
 											onToggle={toggleBlock}
-											foldedSections={foldedSections}
+											toggledSections={toggledSections}
 											onToggleSection={toggleSection}
 											openRows={expandedRows}
 											onToggleRow={toggleRow}

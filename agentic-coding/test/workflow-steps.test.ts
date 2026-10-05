@@ -172,6 +172,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		],
 	},
 	{
+		id: "solo",
+		version: 21,
+		digest: "cc35bf999156b7add3dc688f535d1df4820ee4551e0ecbd67a78e6f413c74f10",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 101,
 		digest: "bfb5e94be8101d863f94ffc678fd5c34b9272c6dc1a2fdf3bd5d277f2c253980",
@@ -298,6 +304,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 101,
+		digest: "721d2f88ce1edfee718bd08efd1145f217e6767a95877bcc0b80f54832eeba74",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 2,
 		digest: "3b84ded362e29fcc7b93c72242aa02936e811a05fb00f23ccd2948eef965cdd5",
@@ -390,6 +402,12 @@ const EXPECTED_DEFINITIONS: Array<{
 			"core.completed",
 			"core.closed",
 		],
+	},
+	{
+		id: "solo",
+		version: 2,
+		digest: "9997bb6d73a5a71341dedd5bd89421f2944f702f8b0341f04d9051402ff9188d",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -518,6 +536,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 102,
+		digest: "53bcf8cd3dfebdfb2527ada52e43acf51f2c2c240da07db57de4c88b3cc8ffac",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 3,
 		digest: "9b8a0ba898ffbb94e94a689bee2c757623b63c2d6ec4f70505218df9f5509f57",
@@ -610,6 +634,12 @@ const EXPECTED_DEFINITIONS: Array<{
 			"core.completed",
 			"core.closed",
 		],
+	},
+	{
+		id: "solo",
+		version: 3,
+		digest: "e7f8441121591e0e9e1a6f787327091a13ac0cde9ad2c7d3940715698803a765",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -738,6 +768,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 103,
+		digest: "0a045695f25838c7eb5141f12a8b80ee5e94b32d3ab1de5834238f341cb1a7f4",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 4,
 		digest: "ae6026428fcd416d920dd99253955177d70c0a26eea1b6d8af756c5af6ca53fc",
@@ -830,6 +866,12 @@ const EXPECTED_DEFINITIONS: Array<{
 			"core.completed",
 			"core.closed",
 		],
+	},
+	{
+		id: "solo",
+		version: 4,
+		digest: "70f361a7f37fec423fb519eef8b580bc7a1f5020bb5e59a1003dbd81c1d32778",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -958,6 +1000,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 104,
+		digest: "be13630f3c0d1c6e17c3f57da249345e6df61fd84f5f5143fc40eb41f51c87ba",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 5,
 		digest: "a2d246c4c84f8843b59a3cbc3944cedfea78e85b2b89f0ff403538ec60fbac11",
@@ -1050,6 +1098,12 @@ const EXPECTED_DEFINITIONS: Array<{
 			"core.completed",
 			"core.closed",
 		],
+	},
+	{
+		id: "solo",
+		version: 5,
+		digest: "97d47b3b69e55c3c980c180cc951912ea79cb7913d40886d0a6877db376bd04a",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -1178,6 +1232,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 105,
+		digest: "af9256e3f63715c47b748ed32f2eebddaef8c587f23c57d2ff4aa47e0ecc1c9a",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 1,
 		digest: "e512bd8c4b4e1f8ec8cdd55e8edb40861913478fe63691d7d54e556a62f9aba5",
@@ -1270,6 +1330,12 @@ const EXPECTED_DEFINITIONS: Array<{
 			"core.completed",
 			"core.closed",
 		],
+	},
+	{
+		id: "solo",
+		version: 1,
+		digest: "d9c8b28c2170b5868773ff8442d922b98dae17a60f937283e9b0a0d8f68c68e2",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -1398,6 +1464,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 106,
+		digest: "a46fc017c1dda39c77ec6a3b6d178a846a09e39b0ab4e2446c35d378601cc72a",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 1000,
 		digest: "85a9d99d9ba40ae5ed05be568ef463eef0c2599a3eb91c66deb69a5320d2b820",
@@ -1521,6 +1593,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 1000,
+		digest: "3ee1a20ab751e58d193c2af5302fa98b953099e578153dbb42fcdc96a1d94a4a",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 7,
 		digest: "d196bd8321499442a972d708f5dc7349c820aab630e892c77e5bdc4b91796568",
@@ -1613,6 +1691,12 @@ const EXPECTED_DEFINITIONS: Array<{
 			"core.completed",
 			"core.closed",
 		],
+	},
+	{
+		id: "solo",
+		version: 7,
+		digest: "900da55cded453217f5471f4fe12709b5015fa235abd608d64bdc88751a3b16e",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -1741,6 +1825,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 107,
+		digest: "0988284f24a1c1f7c13318579dc6916ab1e776199b8648709fb50843ceb1d4c8",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 8,
 		digest: "b9073d51564cc0d2dc1dcdb308bf667745724e7e9e69e8730b9e7a43ba66e127",
@@ -1833,6 +1923,12 @@ const EXPECTED_DEFINITIONS: Array<{
 			"core.completed",
 			"core.closed",
 		],
+	},
+	{
+		id: "solo",
+		version: 8,
+		digest: "01ccb2a7abdde731a965fd1b2349e8b8b9063da9a02a250585a72b0d8af91822",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -1961,6 +2057,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 108,
+		digest: "fcbf1d70bfb1da78a57dac5833620ec346b6ed9ad7653db6cf3af4e12d1276e1",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 9,
 		digest: "d55c3ef2a5ceac26efb9d5cec05b8f5a20d99305d1436c4319bc765a1bd81572",
@@ -2053,6 +2155,12 @@ const EXPECTED_DEFINITIONS: Array<{
 			"core.completed",
 			"core.closed",
 		],
+	},
+	{
+		id: "solo",
+		version: 9,
+		digest: "ef5d4e5b0c43a2b54f6bd9000d2c339f30b91d481151cea197f7a1c5b1eee71f",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -2181,6 +2289,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 109,
+		digest: "7aa409f3fedfbbe29aa05f2169b5a404e756aa35eaca2fd8e0f5c2b7a76116f0",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 10,
 		digest: "d5e6ee71d6bb055ba8096230e91b0471617c4e42a0f64f358488bc871a246363",
@@ -2273,6 +2387,12 @@ const EXPECTED_DEFINITIONS: Array<{
 			"core.completed",
 			"core.closed",
 		],
+	},
+	{
+		id: "solo",
+		version: 10,
+		digest: "8ba6b915f2702631f2919652e7bf09fe4ac8bd8dae78c336a61ee3dc5d1ab3e3",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -2401,6 +2521,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 110,
+		digest: "45ae3dc8488b34b5619057dc27d823ba61850cd65b47823ccbf8ee80b1a49238",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 11,
 		digest: "9725a180d72ffbf7b1cbb86474bf7a108ecf92e57c163c189bef118870ba130c",
@@ -2493,6 +2619,12 @@ const EXPECTED_DEFINITIONS: Array<{
 			"core.completed",
 			"core.closed",
 		],
+	},
+	{
+		id: "solo",
+		version: 11,
+		digest: "07ec8fce96f67a54cd5470a6fa7a811d4ba34b22cf04a425bf205f1d8bf7081f",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -2621,6 +2753,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 111,
+		digest: "f5f54a2e23326ddbd50f5eda4e7ecf664246ac6f84030f90346b40d92f48fa22",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 12,
 		digest: "02771b7aa863e9a0e97c2730cf2da68f58b2703de2a7873967ab5b33af015066",
@@ -2713,6 +2851,12 @@ const EXPECTED_DEFINITIONS: Array<{
 			"core.completed",
 			"core.closed",
 		],
+	},
+	{
+		id: "solo",
+		version: 12,
+		digest: "5d71feae59b47b3a4b3a3d63919875ff98944edab890c524cab41f0422283dfd",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -2841,6 +2985,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 112,
+		digest: "00f6345a37b6f6d3ba6fdfa9e0ecfb416134e62fc27e3aad47f4b0755304f83a",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 13,
 		digest: "829d17a7629ec79642f1290f6f87ab27934531e09cf2dd3eb093d8b912733849",
@@ -2933,6 +3083,12 @@ const EXPECTED_DEFINITIONS: Array<{
 			"core.completed",
 			"core.closed",
 		],
+	},
+	{
+		id: "solo",
+		version: 13,
+		digest: "265cc85b7271ef709195c86e61624675db531e7525c6d5afb502540fc4d97641",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -3061,6 +3217,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 113,
+		digest: "f02bdca2fbbc021930405de9c9c7dbd89ec609383d657a7df2db81fce107cb7a",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 14,
 		digest: "5d193cae4d557922e02d0a212e439aa6a64b23728384552e524c98ca3b5c9477",
@@ -3153,6 +3315,12 @@ const EXPECTED_DEFINITIONS: Array<{
 			"core.completed",
 			"core.closed",
 		],
+	},
+	{
+		id: "solo",
+		version: 14,
+		digest: "6ee0193a22fc440ebf77bec5c789bba026fed9d518440f8cc553d98aa1f3d0bb",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -3281,6 +3449,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 114,
+		digest: "bb486e8c4f190737ac5da0761927d494b8280afff2f88c71f108c41f1e6ca199",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 15,
 		digest: "e2763741ef83bc607d2451533134a119800dfe6c7914e073b7e72ef0c3535823",
@@ -3373,6 +3547,12 @@ const EXPECTED_DEFINITIONS: Array<{
 			"core.completed",
 			"core.closed",
 		],
+	},
+	{
+		id: "solo",
+		version: 15,
+		digest: "b4784d17629081f84b4d1aecf86861542b3fe5e2affc50675b28d8cd6f87e711",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -3501,6 +3681,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 115,
+		digest: "4b3ea45b12f36104d8ce2ec6a19ca48876686781da681b51feaf434f4aea4cea",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 16,
 		digest: "ca2268eadb224a7e403ea4420007252568a88bd745104c82e59be68f95848818",
@@ -3593,6 +3779,12 @@ const EXPECTED_DEFINITIONS: Array<{
 			"core.completed",
 			"core.closed",
 		],
+	},
+	{
+		id: "solo",
+		version: 16,
+		digest: "e5dd5ba2d22b06683dab92632dd1ede00fc1b1e4a335d865d1a641ce261b7f64",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -3721,6 +3913,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 116,
+		digest: "2bb4e57060f64d7028347f6ac1a13348eae613c5152e75a2bde36bbac5d63ed4",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 17,
 		digest: "ff1bc07388c21fde9085af5465dfc028cd2bb1b295f2f35c316db1c0b8b312b7",
@@ -3813,6 +4011,12 @@ const EXPECTED_DEFINITIONS: Array<{
 			"core.completed",
 			"core.closed",
 		],
+	},
+	{
+		id: "solo",
+		version: 17,
+		digest: "6245589c201d6cffd75b00e9b15414fe2ad029deb2c604f19baa8754a85af5e5",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -3941,6 +4145,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 117,
+		digest: "35af5a12b951a053b7fa17de6d136e078f1a5d5226b47828cfa505956ef8c5a8",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 18,
 		digest: "a3d70679f60150af3ace7e0244c0fa82a903807a4d6be005de982f26291b2b37",
@@ -4033,6 +4243,12 @@ const EXPECTED_DEFINITIONS: Array<{
 			"core.completed",
 			"core.closed",
 		],
+	},
+	{
+		id: "solo",
+		version: 18,
+		digest: "7e79dd5926677a235a307a3f7cb4a3ef5d88105847e28e111fccc8456fea59f8",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -4161,6 +4377,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 118,
+		digest: "61c91a69df5a5f7c9d84d657913fcabe0f0b84f84c32bb2fcf1299e9a9c97d90",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 19,
 		digest: "43f22f067e4a6f10dfd956cd4a138ea6655586a7fcc4990da5bb188a3c0b1b2a",
@@ -4253,6 +4475,12 @@ const EXPECTED_DEFINITIONS: Array<{
 			"core.completed",
 			"core.closed",
 		],
+	},
+	{
+		id: "solo",
+		version: 19,
+		digest: "6f907544f60135c6a1e90285d4988acc0d1344e3a0118e3975e64aea851cc119",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -4381,6 +4609,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 119,
+		digest: "d7c4f50ea8dc2c7edab282f1ed52aae4dfa439332ed99a5e19aea7213d4859c4",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 20,
 		digest: "8274f71e09e896f96f58f658ac009a839ae2c76470835c0afee7bd9f80e29d61",
@@ -4473,6 +4707,12 @@ const EXPECTED_DEFINITIONS: Array<{
 			"core.completed",
 			"core.closed",
 		],
+	},
+	{
+		id: "solo",
+		version: 20,
+		digest: "692e675a5449863896b0156e7239dd88a5473ed50c2e1ad25094039e101561d8",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -4601,6 +4841,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 120,
+		digest: "249afb1adf3491d5a73daeddf77eb74ed582e6c1c9515d48570779610abb31d6",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 201,
 		digest: "3349ef4b4328a252af38357a2d78f89c66de82f82aa1b177973cc58a5b062bf2",
@@ -4725,6 +4971,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 201,
 		digest: "2b68c8fc66cd872afa949ce31abf2ff46f5668647c8c10903eade722ef9ae57c",
 		steps: ["core.wiki", "core.completed", "core.closed"],
+	},
+	{
+		id: "solo",
+		version: 201,
+		digest: "24a120232bcc80089ed56fd91ac16ee1f6722db57e543130ab1cc89776de9bd1",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -4853,6 +5105,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 202,
+		digest: "04343f24c4fc063d97ec8cf5acce53cac6505f4d21ba39765cd1c4e4c9e361f0",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 203,
 		digest: "ac5e6c9628d3f70c287833fedd0a1278a91b717d0729e7714d9baabc0f315204",
@@ -4977,6 +5235,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 203,
 		digest: "cca1e5e9dcf43e3fea622cc24f5b52124b7345f6bfe63fc7d2859f713bf40faa",
 		steps: ["core.wiki", "core.completed", "core.closed"],
+	},
+	{
+		id: "solo",
+		version: 203,
+		digest: "f413514fcb2f9f9df622168ec577389a00633369359c4160e7ede65c5f9c4946",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -5105,6 +5369,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 204,
+		digest: "ad954cd291af2cba9ffe3640836ec0c23ff2bc833827e8fd02b3df367b2e50c5",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 205,
 		digest: "0fbcec5399eed0dc2a72a2da6eb346b3e1d70fffd5171c070c1ce36033dc2701",
@@ -5229,6 +5499,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 205,
 		digest: "723891f2ae30c63523d305084180294060814470f6bf6576a496bf3efd5fe3ac",
 		steps: ["core.wiki", "core.completed", "core.closed"],
+	},
+	{
+		id: "solo",
+		version: 205,
+		digest: "1e85ff4ca31fed2eede5004de1d5fa32b10509d6f0b70b2b9f5878e1c67fe438",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -5357,6 +5633,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 206,
+		digest: "8fce8eabe6845e3ab9511be75bb41ba2a04ba239caefcf314a17c8ebfac416a4",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 207,
 		digest: "2f2608d3299675aa0e2ea0db4ddf9dca9df65cb9b5d0c625480420697b490553",
@@ -5481,6 +5763,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 207,
 		digest: "e68ffa85c4d4f3bfc402bc3c8bd9e3948a64d9930e1be41e2eec8011696177ca",
 		steps: ["core.wiki", "core.completed", "core.closed"],
+	},
+	{
+		id: "solo",
+		version: 207,
+		digest: "1ab3e9ad4b1ef1b531dea93284b896e04013e8b3b4ade4ca04648c920421dd94",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -5609,6 +5897,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 208,
+		digest: "3ed32fb7a600edf49fa889bfdb5327351946cee77490217bbe68680b9c49d2d8",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 209,
 		digest: "43da8b00a1310a77adb3a9d34372d51039e51ee3633bc0d2e7c19d19b8ba7e8e",
@@ -5733,6 +6027,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 209,
 		digest: "8327ed9c9f945b4054cfd00cc9f44a204a7cf20c583477917b75d74395d55c70",
 		steps: ["core.wiki", "core.completed", "core.closed"],
+	},
+	{
+		id: "solo",
+		version: 209,
+		digest: "14cd5b687b8d176a499fbaee7a59d22b9b4ee1176d9bffedc9c96616f69191c2",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -5861,6 +6161,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 210,
+		digest: "bd633ab4bc0384c87051c036872495a6449ef734a0b2c5a5d0be4898dd5beb98",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 211,
 		digest: "e52e9600763f0699fdb7ac9887ed9a7690a3c045941bbc4ad250cfb97bccee47",
@@ -5985,6 +6291,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 211,
 		digest: "a1562aa801ccaab65666972217ccb06cb98f188ae050b2cfe5aa85b8a9683739",
 		steps: ["core.wiki", "core.completed", "core.closed"],
+	},
+	{
+		id: "solo",
+		version: 211,
+		digest: "fdb09718447dc300b5daeb9eff8c2978b27b0decc725f2081425c1a5912b9b60",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -6113,6 +6425,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 212,
+		digest: "3b4948f086013f61762c9330695d059120ba5a84a7e9f64f4854a5ab2c468656",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 213,
 		digest: "a50d2076e722f48d3ba86e3ab52015b59b401f0cc3112e04d917f513868b34b2",
@@ -6237,6 +6555,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 213,
 		digest: "eb1770bdd8d27524292ef8cc4f0c334f4662d456a079d57c5bc2b00f277a266f",
 		steps: ["core.wiki", "core.completed", "core.closed"],
+	},
+	{
+		id: "solo",
+		version: 213,
+		digest: "f60922ab2bf7fae543dacd6760ccbcc7fdab385edf9ec253885614c0ce85b3f1",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -6365,6 +6689,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 214,
+		digest: "9b641adb40563f61ca1132af599a8aa5177cf882ae2ebb79008a8e813b1f669f",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 215,
 		digest: "1e2416d5db5cacb7236d17a5c8f6d801cdab73cdadb8f206edddffb6df930017",
@@ -6489,6 +6819,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 215,
 		digest: "0c71f49ae5ab34dbecd767a341a1a551a2c4a15a15912b8703faf97593d5e4d9",
 		steps: ["core.wiki", "core.completed", "core.closed"],
+	},
+	{
+		id: "solo",
+		version: 215,
+		digest: "69f3acb8073a014835e16e178fecaf2a4d550414dae30a63d33d7af57dca4465",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -6617,6 +6953,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 216,
+		digest: "559b88ba13a1b44edc76993962f806e329733df4cd54aa3ed1ee7d4088684c0b",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 217,
 		digest: "aac6fcf947c0484ae4b639ec3de93417150bdd6842a9183b692aa5b8bac0f84d",
@@ -6741,6 +7083,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 217,
 		digest: "89bbf9698e1baef7a4f95405cb6a2ea2a440a53fd1d441287146946b452c009f",
 		steps: ["core.wiki", "core.completed", "core.closed"],
+	},
+	{
+		id: "solo",
+		version: 217,
+		digest: "8199041522f550874caf3e411f4228f55245f0a24f757087eeaf37439bb89e26",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 	{
 		id: "openspec",
@@ -6869,6 +7217,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 218,
+		digest: "950025f603e0f6d3a0a028b2002b4693c7dd65caf1b97282510c7a1c5719d0fd",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 219,
 		digest: "0568617890434a4cc26f888122e0baebb4c98b7a90ce2f49c9baf6c74ec8a4d3",
@@ -6995,6 +7349,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		steps: ["core.wiki", "core.completed", "core.closed"],
 	},
 	{
+		id: "solo",
+		version: 219,
+		digest: "609a4862459ebd1f8e64d47c2028726e9d35cc19ed3b1977fd4904eda019c357",
+		steps: ["core.implementation", "core.completed", "core.closed"],
+	},
+	{
 		id: "openspec",
 		version: 220,
 		digest: "0ac5396355165fd065da130c0086fea7e476e42ebd8ad1d7ef39daee4a2c978d",
@@ -7119,6 +7479,12 @@ const EXPECTED_DEFINITIONS: Array<{
 		version: 220,
 		digest: "fd9eac20a23ddc6051614bbf88c7cfaa5552f240837677c31029f9550b48c52c",
 		steps: ["core.wiki", "core.completed", "core.closed"],
+	},
+	{
+		id: "solo",
+		version: 220,
+		digest: "e5321c87b2b520cda0da2a722ead458dbe7e3db13912979e29e17f76893cd01c",
+		steps: ["core.implementation", "core.completed", "core.closed"],
 	},
 ];
 
@@ -7530,7 +7896,7 @@ describe("workflow step behavior hooks (move-step-semantics-to-behavior-hooks)",
 			}
 		});
 
-		test("core.implementation requires every OpenSpec task checked, except for no-openspec", () => {
+		test("core.implementation requires every OpenSpec task checked, except in change-free workflows", () => {
 			const worktree = tempWorktree();
 			const changeId = "demo";
 			writeChange(worktree, changeId, { "tasks.md": "- [ ] pending\n" });
@@ -7544,16 +7910,18 @@ describe("workflow step behavior hooks (move-step-semantics-to-behavior-hooks)",
 					evidence: prepareStepEvidence(openspecSnap),
 				}),
 			).toThrow("implementation requires completed OpenSpec tasks");
-			const noOpenspecSnap = withMetadata("no-openspec", {
-				worktree,
-				changeId,
-			});
-			expect(() =>
-				stepBehavior("core.implementation").validateEvidence?.({
-					snapshot: noOpenspecSnap,
-					evidence: prepareStepEvidence(noOpenspecSnap),
-				}),
-			).not.toThrow();
+			for (const definitionId of ["no-openspec", "solo"]) {
+				const changeFreeSnap = withMetadata(definitionId, {
+					worktree,
+					changeId,
+				});
+				expect(() =>
+					stepBehavior("core.implementation").validateEvidence?.({
+						snapshot: changeFreeSnap,
+						evidence: prepareStepEvidence(changeFreeSnap),
+					}),
+				).not.toThrow();
+			}
 			writeChange(worktree, changeId, { "tasks.md": "- [x] done\n" });
 			expect(() =>
 				stepBehavior("core.implementation").validateEvidence?.({

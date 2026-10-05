@@ -266,6 +266,190 @@ describe("toolView", () => {
 		expect(view?.rows?.[0]?.text).toContain("nothing to judge");
 	});
 
+	test("developer_question shows the context, the options, and the chosen answer", () => {
+		const options = [
+			{
+				title: "SQLite in-process",
+				value: "sqlite",
+				recommended: true,
+				description: "No service to run.",
+			},
+			{ title: "Postgres via compose", value: "postgres" },
+		];
+		const view = toolView(
+			call(
+				"developer_question",
+				{
+					description: "Which backend should the wiki use?",
+					context: "The migration script must pick one.",
+					options,
+				},
+				{
+					lines: [
+						JSON.stringify({
+							id: "q1",
+							role: "planner",
+							status: "answered",
+							description: "Which backend should the wiki use?",
+							context: "The migration script must pick one.",
+							options,
+							answer: { kind: "option", value: "sqlite" },
+						}),
+					],
+					isError: false,
+					notes: [],
+				},
+			),
+		);
+		expect(view?.icon).toBe("?");
+		expect(view?.summary).toBe("Which backend should the wiki use?");
+		expect(view?.hint).toBe("answered · developer");
+		// The context is a fold of its own, carrying the markdown it is.
+		expect(view?.rows?.[0]).toEqual({
+			id: "context",
+			text: "context",
+			tone: "muted",
+			detail: [
+				{
+					text: "The migration script must pick one.",
+					tone: "muted",
+					markdown: true,
+				},
+			],
+		});
+		// A blank line, then the question with its answer in the header.
+		expect(view?.rows?.[1]).toEqual({ text: "", tone: "muted" });
+		const question = view?.rows?.[2];
+		expect(question?.text).toBe(
+			"Which backend should the wiki use?   → SQLite in-process",
+		);
+		expect(question?.tone).toBe("base");
+		expect(question?.detail?.map((row) => row.text)).toEqual([
+			"● ★ SQLite in-process",
+			"○   Postgres via compose",
+		]);
+		expect(question?.detail?.[0]?.tone).toBe("success");
+		expect(question?.detail?.[1]?.tone).toBe("muted");
+		expect(question?.detail?.[0]?.detail).toEqual([
+			{ text: "No service to run.", tone: "muted", markdown: true },
+		]);
+	});
+
+	test("a questionnaire pairs each question with the answer it came back with", () => {
+		const view = toolView(
+			call(
+				"developer_question",
+				{
+					questions: [
+						{
+							ident: "state",
+							question: "Which state store?",
+							context: "The planner needs a store.",
+							options: [
+								{ title: "SQLite" },
+								{ title: "Redis", recommended: true },
+							],
+						},
+						{
+							ident: "drop",
+							question: "Drop the old table?",
+							options: [{ title: "Yes" }, { title: "No" }],
+						},
+					],
+				},
+				{
+					lines: [
+						JSON.stringify({
+							groupId: "g1",
+							status: "answered",
+							responses: [
+								{ questionId: "a", itemIndex: 1, answer: { kind: "cancel" } },
+								{
+									questionId: "b",
+									itemIndex: 0,
+									answer: { kind: "option", value: "SQLite" },
+								},
+							],
+						}),
+					],
+					isError: false,
+					notes: [],
+				},
+			),
+		);
+		expect(view?.summary).toBe("2 questions");
+		expect(view?.hint).toBe("answered · developer");
+		expect(view?.rows?.map((row) => row.text)).toEqual([
+			"[state] Which state store?   → SQLite",
+			"",
+			"[drop] Drop the old table?   ⊘ cancelled",
+		]);
+		// The item's own context opens above its options.
+		expect(view?.rows?.[0]?.detail?.map((row) => row.text)).toEqual([
+			"The planner needs a store.",
+			"●   SQLite",
+			"○ ★ Redis",
+		]);
+		expect(view?.rows?.[0]?.detail?.[0]).toEqual({
+			text: "The planner needs a store.",
+			tone: "muted",
+			markdown: true,
+		});
+		expect(view?.rows?.[2]?.tone).toBe("warning");
+	});
+
+	test("a custom answer is quoted and a peer question names its peer", () => {
+		const view = toolView(
+			call(
+				"agent_ask",
+				{ role: "verifier", description: "Is the cache warm?" },
+				{
+					lines: [
+						JSON.stringify({
+							id: "q2",
+							role: "planner",
+							status: "answered",
+							description: "Is the cache warm?",
+							options: [{ label: "Warm", value: "warm" }],
+							answer: { kind: "custom", value: "warm after the first call" },
+						}),
+					],
+					isError: false,
+					notes: [],
+				},
+			),
+		);
+		expect(view?.hint).toBe("answered · peer verifier");
+		expect(view?.rows?.[0]?.text).toBe(
+			"Is the cache warm?   → “warm after the first call”",
+		);
+		expect(view?.rows?.[0]?.detail?.map((row) => row.text)).toEqual([
+			"○   Warm",
+			"custom: warm after the first call",
+		]);
+	});
+
+	test("a dialogue result that is not a record keeps its own words", () => {
+		const view = toolView(
+			call(
+				"developer_question",
+				{ description: "Which backend?" },
+				{
+					lines: ["developer_question: run context unavailable"],
+					isError: true,
+					notes: [],
+				},
+			),
+		);
+		expect(view?.summary).toBe("Which backend?");
+		expect(view?.hint).toBe("asking · developer");
+		expect(view?.rows?.map((row) => row.text)).toEqual([
+			"Which backend?",
+			"developer_question: run context unavailable",
+		]);
+		expect(view?.rows?.[1]?.tone).toBe("error");
+	});
+
 	test("codemode lists one line per call, with what each call did", () => {
 		const code = [
 			'const hits = await tools.glob({ pattern: "*.ts" });',
@@ -321,16 +505,21 @@ describe("toolView", () => {
 			},
 		]);
 		expect(view?.hint).toBeUndefined();
-		// The script and its output are parts of their own, so either can be
-		// folded away while the expanded call list stays in view.
+		// The script and its output are compact parts of their own: they start
+		// folded so the expanded row is the call list, and open on a click.
 		expect(view?.sections?.map((section) => section.id)).toEqual([
 			"script",
 			"output",
 		]);
-		expect(view?.sections?.[0]?.rows[0]).toEqual({
-			text: 'const hits = await tools.glob({ pattern: "*.ts" });',
-			tone: "base",
-		});
+		expect(view?.sections?.map((section) => section.collapsed)).toEqual([
+			true,
+			true,
+		]);
+		// The script stays whole in one highlighted row: the tree-sitter pass
+		// needs the source as a single block.
+		expect(view?.sections?.[0]?.rows).toEqual([
+			{ text: code, tone: "base", syntax: "javascript" },
+		]);
 		expect(view?.sections?.[1]?.rows).toEqual([
 			{ text: "Script completed", tone: "muted" },
 			{ text: 'return: ["a.ts","b.ts"]', tone: "muted" },
@@ -377,6 +566,63 @@ describe("toolView", () => {
 		expect(view?.rows?.[1]?.detail?.map((row) => row.text)).toEqual([
 			"line one",
 			"line two",
+		]);
+	});
+
+	test("an edit without a computed diff folds into the change it made", () => {
+		const view = toolView(
+			call(
+				"edit",
+				{
+					path: "src/a.ts",
+					edits: [
+						{ oldText: "const a = 1;", newText: "const b = 2;\nconst c = 3;" },
+					],
+				},
+				{
+					lines: ["Successfully replaced 1 block(s) in src/a.ts."],
+					isError: false,
+					notes: [],
+				},
+			),
+		);
+		// The host's diff is exact; without it the edit's own arguments describe
+		// the change, so a successful call is expandable either way.
+		expect(view?.hint).toBe("1 edit · +2 −1");
+		expect(view?.rows).toEqual([
+			{ text: "-const a = 1;", tone: "error" },
+			{ text: "+const b = 2;", tone: "success" },
+			{ text: "+const c = 3;", tone: "success" },
+		]);
+	});
+
+	test("a call folds into its own output when its tool has no view", () => {
+		const view = toolView(
+			call(
+				"codemode",
+				{ code: "return 1;" },
+				{
+					lines: ["Script completed"],
+					isError: false,
+					details: {
+						calls: [
+							{
+								name: "glob",
+								status: "ok",
+								args: { pattern: "*.ts" },
+								output: "a.ts\nb.ts",
+							},
+						],
+					},
+					notes: [],
+				},
+			),
+		);
+		// `glob` has no view of its own; the text it answered with is what the call
+		// row opens into.
+		expect(view?.rows?.[0]?.detail?.map((row) => row.text)).toEqual([
+			"a.ts",
+			"b.ts",
 		]);
 	});
 
@@ -455,7 +701,7 @@ describe("toolView", () => {
 				},
 			),
 		);
-		expect(view?.sections?.[0]?.rows.length).toBe(20);
+		expect(view?.sections?.[0]?.rows[0]?.text.split("\n").length).toBe(20);
 		expect(view?.rows?.length).toBe(9);
 		expect(view?.rows?.at(-1)?.text).toBe("• tool8 (ok)");
 
@@ -483,7 +729,7 @@ describe("toolView", () => {
 	});
 
 	test("keeps the generic row for a tool without a view", () => {
-		expect(toolView(call("developer_question", {}))).toBeUndefined();
+		expect(toolView(call("grep", { pattern: "x" }))).toBeUndefined();
 		expect(toolView(call("agent_ask", { role: "planner" }))).toBeUndefined();
 	});
 });

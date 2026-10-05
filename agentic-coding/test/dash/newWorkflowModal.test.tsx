@@ -568,7 +568,7 @@ test("an independent Wiki context offers a target-compatible research type only"
 test("proposal choices submit their type, task, and fixed checkout mode", async () => {
 	for (const [offset, workflowType] of [
 		[2, "openspec-propose"],
-		[5, "openspec-fusion-propose"],
+		[6, "openspec-fusion-propose"],
 	] as const) {
 		let handler: ((event: KeyEvent) => boolean) | undefined;
 		const completed: NewWorkflowInput[] = [];
@@ -694,7 +694,7 @@ test("openspec renders the task step before checkout mode and submits the task",
 	// here, and the checkout-mode choices do not exist yet.
 	const taskFrame = t.captureCharFrame();
 	expect(taskFrame).toContain(
-		"Task required for wiki, research, and no OpenSpec",
+		"Task required for wiki, research, no OpenSpec, and solo",
 	);
 	expect(taskFrame).not.toContain("worktree");
 	for (const character of "Classify the JEV plan")
@@ -741,7 +741,8 @@ test("selecting openspec-fusion submits workflowType openspec-fusion", async () 
 	handler?.(key("j")); // openspec -> openspec-apply
 	handler?.(key("j")); // openspec-apply -> openspec-propose
 	handler?.(key("j")); // openspec-propose -> quick
-	handler?.(key("j")); // quick -> openspec-fusion
+	handler?.(key("j")); // quick -> solo
+	handler?.(key("j")); // solo -> openspec-fusion
 	handler?.(key("enter")); // select openspec-fusion
 	await t.flush();
 	// openspec-fusion uses the task-driven fields: preset -> ticket -> change -> task -> mode.

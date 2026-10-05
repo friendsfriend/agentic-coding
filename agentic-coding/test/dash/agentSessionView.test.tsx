@@ -1187,30 +1187,31 @@ test("a codemode row lists its calls, and its script and output fold away", asyn
 		expect(collapsed).not.toContain("glob *.ts");
 		expect(collapsed).not.toContain("tools.glob");
 
-		// Expanded: one line per call, then the script and its output, as parts
-		// with their own headers.
+		// Expanded: one line per call, with the script and its output kept as
+		// compact parts that open on demand.
 		t.mockInput.pressKey("o", { ctrl: true });
 		await t.renderOnce();
 		const expanded = t.captureCharFrame();
 		expect(expanded).toContain("✱ glob *.ts (ok)");
 		expect(expanded).toContain("→ read src/a.ts (error)");
-		expect(expanded).toContain("▾ script (2 lines)");
-		expect(expanded).toContain(
-			'const hits = await tools.glob({ pattern: "*.ts" });',
-		);
-		expect(expanded).toContain("▾ output (3 lines)");
-		expect(expanded).toContain("Script completed");
+		expect(expanded).toContain("▸ script (2 lines)");
+		expect(expanded).toContain("▸ output (3 lines)");
+		expect(expanded).not.toContain("tools.glob");
+		expect(expanded).not.toContain("Script completed");
 
-		// Folding a part keeps its header, so the call list stays in view.
+		// Opening a part shows its rows and keeps its header, so the call list
+		// stays in view beside it.
 		const scriptRow = expanded
 			.split("\n")
 			.findIndex((line) => line.includes("script (2 lines)"));
 		await t.mockMouse.click(10, scriptRow);
 		await t.renderOnce();
-		const folded = t.captureCharFrame();
-		expect(folded).toContain("▸ script (2 lines)");
-		expect(folded).not.toContain("tools.glob");
-		expect(folded).toContain("Script completed");
+		const opened = t.captureCharFrame();
+		expect(opened).toContain("▾ script (2 lines)");
+		expect(opened).toContain(
+			'const hits = await tools.glob({ pattern: "*.ts" });',
+		);
+		expect(opened).toContain("▸ output (3 lines)");
 	} finally {
 		t.renderer.destroy();
 	}
@@ -1301,6 +1302,118 @@ test("a script's call rows fold into their own tool view", async () => {
 		await t.mockMouse.click(5, readRow);
 		await t.renderOnce();
 		expect(t.captureCharFrame()).toContain("line one");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("a developer question shows its context, options, and chosen answer", async () => {
+	const options = [
+		{
+			title: "SQLite in-process",
+			value: "sqlite",
+			recommended: true,
+			description: "No service to run.",
+		},
+		{ title: "Postgres via compose", value: "postgres" },
+	];
+	const block: AgentSessionBlock = {
+		id: "d1",
+		kind: "tool",
+		text: "developer_question",
+		tone: "success",
+		icon: "?",
+		tool: "developer_question",
+		toolCall: {
+			name: "developer_question",
+			args: {
+				description: "Which backend should the wiki use?",
+				context: "The migration script must pick one.",
+				options,
+			},
+			callId: "d1",
+			result: {
+				lines: [
+					JSON.stringify({
+						id: "q1",
+						role: "planner",
+						status: "answered",
+						description: "Which backend should the wiki use?",
+						context: "The migration script must pick one.",
+						options,
+						answer: { kind: "option", value: "sqlite" },
+					}),
+				],
+				isError: false,
+				notes: [],
+			},
+		},
+	};
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={[block]}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+			/>
+		),
+		{ width: 100, height: 24 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		// Collapsed: the question and what came back are the row's own line.
+		const collapsed = t.captureCharFrame();
+		expect(collapsed).toContain("? Which backend should the wiki use?");
+		expect(collapsed).toContain("answered · developer");
+		expect(collapsed).not.toContain("SQLite in-process");
+
+		// Expanded: the context and the question are folds of their own.
+		t.mockInput.pressKey("o", { ctrl: true });
+		await t.renderOnce();
+		const expanded = t.captureCharFrame();
+		expect(expanded).toContain("▸ context");
+		expect(expanded).toContain("→ SQLite in-process");
+		expect(expanded).not.toContain("No service to run.");
+
+		// The context folds open into the markdown it is.
+		const contextRow = expanded
+			.split("\n")
+			.findIndex((line) => line.includes("▸ context"));
+		await t.mockMouse.click(10, contextRow);
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain(
+			"The migration script must pick one.",
+		);
+
+		// The question folds into every option it offered, the chosen one marked.
+		const questionRow = t
+			.captureCharFrame()
+			.split("\n")
+			.findIndex((line) => line.includes("→ SQLite in-process"));
+		await t.mockMouse.click(10, questionRow);
+		await t.renderOnce();
+		const opened = t.captureCharFrame();
+		expect(opened).toContain("● ★ SQLite in-process");
+		expect(opened).toContain("○   Postgres via compose");
+
+		// An option folds into the description the agent attached to it.
+		const optionRow = opened
+			.split("\n")
+			.findIndex((line) => line.includes("● ★ SQLite in-process"));
+		await t.mockMouse.click(10, optionRow);
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("No service to run.");
 	} finally {
 		t.renderer.destroy();
 	}

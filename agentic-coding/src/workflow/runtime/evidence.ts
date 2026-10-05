@@ -367,11 +367,11 @@ export function validateStartEvidence(
 			);
 		return;
 	}
-	if (input.definitionId === "no-openspec") {
+	if (input.definitionId === "no-openspec" || input.definitionId === "solo") {
 		if (!input.metadata.task?.trim())
 			throw new WorkflowRuntimeError(
 				"start-guard",
-				"no-openspec requires non-empty task",
+				`${input.definitionId} requires non-empty task`,
 			);
 		return;
 	}

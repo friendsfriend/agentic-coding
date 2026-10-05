@@ -15,6 +15,7 @@ import { fusionManifests } from "./graphs/fusion.ts";
 import { noOpenspecManifests } from "./graphs/no-openspec.ts";
 import { openspecManifests } from "./graphs/openspec.ts";
 import { researchManifests } from "./graphs/research.ts";
+import { soloManifests } from "./graphs/solo.ts";
 import { wikiManifests } from "./graphs/wiki.ts";
 import {
 	definitionVersionForBehaviorPins,
@@ -70,6 +71,7 @@ function manifests(
 		...fusionManifests(rounds, version, wikiGate, wikiBeforeArchive),
 		...researchManifests(version, wikiGate),
 		...wikiManifests(version, wikiGate),
+		...soloManifests(version),
 	];
 }
 
@@ -158,6 +160,7 @@ export function registerBuiltins(
 			...noOpenspecManifests(rounds, version, true, true),
 			...fusionManifests(rounds, version, true, true, true),
 			...wikiManifests(version, true),
+			...soloManifests(version),
 		]) {
 			const pinnedBase = withManifestPolicy(definition);
 			const pinned: WorkflowManifest = {
@@ -185,6 +188,7 @@ export function registerBuiltins(
 			...noOpenspecManifests(rounds, version, true, true, true),
 			...fusionManifests(rounds, version, true, true, true, true),
 			...wikiManifests(version, true),
+			...soloManifests(version),
 		]) {
 			const pinnedBase = withManifestPolicy(definition);
 			const pinned: WorkflowManifest = {
@@ -209,6 +213,7 @@ export function registerBuiltins(
 			...noOpenspecManifests(rounds, version, true, true, true),
 			...fusionManifests(rounds, version, true, true, true, true),
 			...wikiManifests(version, true),
+			...soloManifests(version),
 			...researchManifests(version, true).map(withFullToolResearchPolicy),
 		]) {
 			const pinnedBase = withPerStepRouting(withManifestPolicy(definition));

@@ -68,6 +68,7 @@ test("the registry catalog is the single workflow-type authority", () => {
 		"openspec-apply",
 		"openspec-propose",
 		"no-openspec",
+		"solo",
 		"openspec-fusion",
 		"openspec-fusion-propose",
 		"wiki",
