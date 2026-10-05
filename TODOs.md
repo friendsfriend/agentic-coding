@@ -15,5 +15,17 @@ Small ones:
 * JEV:
   * Compaction hints
   * Use jev to block bash commands that should be blocked
+  * Improve jev quality by using better input
+  * Compare local with hosted jev quality
 * Implement instant workflow -> one agent without task, no workflow at all. Basically like spawning a random pi agent
 * Implement workspace resume -> Should work with pi durable
+* Make agent panel status update quicker and nicer -> Hook into pi-durable and report current thing working on -> bash, read, thinking, etc. and color it according to the status (animation style like the working status has now) while it is active
+* Make usability nicer -> open each view in a separate tmux window -> dont try to spawn the backend if it is already running.
+* No stage gate for wiki is performed
+* Agent panel doenst use the full available height.
+* /Users/fabiankellner/Desktop/Screenshot\ 2026-10-05\ at\ 12.49.05.png -> Make expanded mode of codemode tool look like this. (Keep output and script in compact mode.). Make compact mode of codemode only show the first line λ 11 calls · 0.5s
+* Input still gets read by the prompt field if sidebar is in focus. Prompt should only read for inputs when focused
+* Implement specialized ui for developer question tool. Show context, questions and answers (possible and selected one) in a structured way. Like Context as rendered markdown one line space question1, answers1, one line of space, question2, answers2, ...)
+* Make sidebar show an icon if attention is required for the workflow. Use a ... glyph for running workflows, think of an idle glyph, a ? glyph for a developer question, ! glyph for blockers, checkmark glyph for review steps.
+* Fix tmux spawning -> Make any view spawnable in a new tmux window -> Dont spawn the server if one is already running
+* Fix statistics for the agents -> Tok/s, cost etc. not shown anymore. Important for long term monitoring
