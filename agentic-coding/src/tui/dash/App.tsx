@@ -133,6 +133,10 @@ export function App(props: {
 	/** Set only when the dashboard is mounted inside the unified shell. */
 	shellFeature?: "workflows";
 	active?: () => boolean;
+	/** A shell-owned overlay (theme picker, location picker, new-workflow form,
+	 * delete confirmation) holds the keyboard. Keymap-only, so the dashboard's
+	 * inputs must blur themselves rather than keep reading keys behind it. */
+	overlay?: () => boolean;
 	/** Composition-root panel boundary for Escape: true when the root handled
 	 * it (the shell moves focus to the workspace sidebar). */
 	onBack?: () => boolean;
@@ -1347,6 +1351,28 @@ export function App(props: {
 			disposeResync();
 		});
 	});
+
+	// Component-scope so the agent prompt's focus gating and the keymap self-heal
+	// can both read it. Whether any dashboard dialog (the question form, help, a
+	// picker, findings, the error modal, …) currently owns the keyboard.
+	const anyModalOpen = () =>
+		!!(
+			credentialRequest() ||
+			verdict() ||
+			findings() ||
+			help() ||
+			themePicker() ||
+			completedPicker() ||
+			repairOpen() ||
+			planRejectionOpen() ||
+			userActionOpen() ||
+			questionOpen() ||
+			costOpen() ||
+			presetSwitcherOpen() ||
+			reviewOpen() ||
+			reviewCommentMode() ||
+			activeErrorModal() != null
+		);
 
 	onMount(() => {
 		// When a transport is configured the server owns the execution-settled
@@ -2575,24 +2601,6 @@ export function App(props: {
 			lastCatalogMismatch = mismatch;
 			notify(mismatch, "warning");
 		});
-		const anyModalOpen = () =>
-			!!(
-				credentialRequest() ||
-				verdict() ||
-				findings() ||
-				help() ||
-				themePicker() ||
-				completedPicker() ||
-				repairOpen() ||
-				planRejectionOpen() ||
-				userActionOpen() ||
-				questionOpen() ||
-				costOpen() ||
-				presetSwitcherOpen() ||
-				reviewOpen() ||
-				reviewCommentMode() ||
-				activeErrorModal() != null
-			);
 		// Self-heal: reconcile keymap modal data with real modal state.
 		createEffect(() => {
 			if (!anyModalOpen()) props.keymap.setData("modal.active", "none");
@@ -2792,6 +2800,15 @@ export function App(props: {
 									onAbort={abortAgentSession}
 									onBack={backAgentSession}
 									onConfigure={configureAgentSession}
+									// The prompt reads keys only while the dashboard owns the keyboard:
+									// the shell sidebar/overlay or a dashboard dialog parks the
+									// keymap, so the input must blur too instead of swallowing the
+									// surface's keys.
+									inputActive={() =>
+										(props.active?.() ?? true) &&
+										!(props.overlay?.() ?? false) &&
+										!anyModalOpen()
+									}
 									// The view is not a dialog, so `?` opens the page's
 									// keybind help the way the panel grid does.
 									onHelp={() => {

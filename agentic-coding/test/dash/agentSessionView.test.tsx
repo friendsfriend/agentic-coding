@@ -1,8 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 // add-pi-durable-runtime, dashboard-agent-session-view: the live agent
 // session page renders the run title and transcript blocks (opencode v2
-// styling), and the always-focused input drives submit/abort without any
-// competing text keymap binding (see the module comment in
+// styling), and its input drives submit/abort without any competing text keymap
+// binding while the view owns the keyboard (see the module comment in
 // AgentSessionView.tsx for why).
 import { expect, test } from "bun:test";
 import { type KeyEvent, parseColor } from "@opentui/core";
@@ -28,6 +28,7 @@ function Harness(props: {
 	onAbort: () => void;
 	onBack: () => void;
 	history?: readonly string[];
+	inputActive?: () => boolean;
 }) {
 	const [draft, setDraft] = createSignal("");
 	const [history, setHistory] = createSignal<readonly string[]>(
@@ -52,6 +53,7 @@ function Harness(props: {
 			onAbort={props.onAbort}
 			onBack={props.onBack}
 			onConfigure={() => {}}
+			inputActive={props.inputActive}
 		/>
 	);
 }
@@ -1392,6 +1394,42 @@ test("a watch frame never blanks the transcript's markdown", async () => {
 		]);
 		await t.renderOnce();
 		expect(t.captureCharFrame()).toContain("streaming 3");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("the prompt reads keys only while the view owns the keyboard", async () => {
+	const [active, setActive] = createSignal(false);
+	let submitted: string | undefined;
+	const t = await testRender(
+		() => (
+			<Harness
+				inputActive={active}
+				onSubmit={(text) => {
+					submitted = text;
+				}}
+				onAbort={() => {}}
+				onBack={() => {}}
+			/>
+		),
+		{ width: 100, height: 30 },
+	);
+	try {
+		await t.flush();
+		// A keymap-only surface (the workspace sidebar, a modal) owns the
+		// keyboard: the unfocused prompt must not swallow what is typed at it.
+		for (const character of "sidebar") t.mockInput.pressKey(character);
+		await t.renderOnce();
+		expect(t.captureCharFrame()).not.toContain("sidebar");
+		// Handing the keyboard back focuses the prompt again, so the same input
+		// accepts text and submits.
+		setActive(true);
+		await t.renderOnce();
+		for (const character of "hello") t.mockInput.pressKey(character);
+		t.mockInput.pressEnter();
+		await t.renderOnce();
+		expect(submitted).toBe("hello");
 	} finally {
 		t.renderer.destroy();
 	}

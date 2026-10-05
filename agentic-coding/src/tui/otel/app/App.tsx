@@ -2919,6 +2919,10 @@ export function App(props: {
 												keymap={props.dashboard.keymap}
 												shellFeature="workflows"
 												active={() => focusPanel() === "content"}
+												// A shell overlay (theme/location picker, creation form,
+												// delete confirmation) is keymap-only, so the dashboard's
+												// inputs must blur themselves while one is on top.
+												overlay={() => nav.modal() !== "none"}
 											/>
 										</box>
 									);

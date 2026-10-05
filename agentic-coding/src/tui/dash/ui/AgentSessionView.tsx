@@ -16,8 +16,10 @@
 //
 // The view replaces the detail grid, so its own keys (scroll, back) and the
 // picker's keys are route keymap layers gated on the `agent.view` field. The
-// prompt input stays focused throughout and keeps accepting ordinary
-// characters, including `j`, `k` and a `?` that starts a message.
+// prompt input is focused only while this view owns the keyboard and keeps
+// accepting ordinary characters, including `j`, `k` and a `?` that starts a
+// message; a keymap-only surface (the workspace sidebar, an open dialog) blurs
+// it through `inputActive` so its keys are not swallowed.
 import type {
 	InputRenderable,
 	KeyEvent,
@@ -93,6 +95,11 @@ export interface AgentSessionViewProps {
 	readonly onPickerActiveChange?: (active: boolean) => void;
 	/** `?` on an empty prompt: the route opens the shared keybind help. */
 	readonly onHelp?: () => void;
+	/** Whether this view owns the keyboard: the dashboard is the active shell
+	 * feature and no dialog is on top. False blurs the prompt, so a keymap-only
+	 * surface (the workspace sidebar, a modal) keeps the keys. Defaults to true
+	 * so a standalone mount stays focused. */
+	readonly inputActive?: () => boolean;
 }
 
 /** Typing one of these exact messages, instead of an ordinary one, performs
@@ -1126,7 +1133,9 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 						>
 							<input
 								ref={inputRef}
-								focused={picker() === undefined}
+								focused={
+									picker() === undefined && (props.inputActive?.() ?? true)
+								}
 								value={props.draft}
 								placeholder="Ask anything…"
 								onInput={(value: string) => {
