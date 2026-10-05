@@ -27,6 +27,10 @@ import {
 	type ProjectCatalogOptions,
 	type ProjectOption,
 } from "../../workflow/project-catalog.ts";
+
+/** The configured-project option shape the creation form renders. */
+export type { ProjectOption };
+
 import {
 	cache,
 	dashboardKey,
