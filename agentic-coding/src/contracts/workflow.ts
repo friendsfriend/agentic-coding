@@ -1128,6 +1128,13 @@ export interface WorkflowState {
 
 export interface WorkflowOverview {
 	state: WorkflowState;
+	/** The workflow target that owns this workflow's store: a canonical
+	 * repository path, the wiki target, or the research target. It is the key
+	 * every store-scoped operation addresses the workflow with, and it is not
+	 * `state.repository`: a repository-independent workflow (wiki, research)
+	 * keeps the repository it was started from — or none at all — in
+	 * `state.repository`, while its rows live in the shared target store. */
+	target: string;
 	tasks: [number, number];
 	/** Stable configured project ident resolved from the catalog, when the
 	 * workflow's repository is a configured project (environment cross-link). */

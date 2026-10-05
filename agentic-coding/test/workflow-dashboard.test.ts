@@ -18,8 +18,15 @@ import {
 	listWorkflowsFromCatalog,
 	loadLocalChanges,
 } from "../src/server/operations/observations.ts";
-import { registerBuiltins } from "../src/workflow/definitions.ts";
-import { canonicalStorePath, WorkflowEngine } from "../src/workflow/runtime.ts";
+import {
+	definitionVersionForPolicy,
+	registerBuiltins,
+} from "../src/workflow/definitions.ts";
+import {
+	canonicalStorePath,
+	researchWorkflowTarget,
+	WorkflowEngine,
+} from "../src/workflow/runtime.ts";
 import {
 	autoRemoveRepoFixtures,
 	createRepoFixture,
@@ -227,6 +234,8 @@ test("dashboard discovery keeps malformed workflows visible with diagnostic", ()
 		expect(item?.state.health?.diagnostic).toContain(
 			"step not in pinned definition",
 		);
+		// A repository-backed row is addressed by the root the caller listed.
+		expect(item?.target).toBe(repo);
 	} finally {
 		fs.rmSync(repo, { recursive: true, force: true });
 	}
@@ -355,6 +364,66 @@ test("developer review reads authoritative workflow worktree and closed state is
 		fs.rmSync(root, { recursive: true, force: true });
 	}
 });
+test("a research workflow is listed under the research target, not the wiki one", () => {
+	// Wiki and research resolve to one store file, so the root that read a row
+	// cannot name its target: the manifest's target kind does. Reporting the
+	// wiki target for research work would address it with a key the start path
+	// and the execution coordinator never used.
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dashboard-research-"));
+	const previousWikiRoot = process.env.HERDR_WIKI_DIR;
+	process.env.HERDR_WIKI_DIR = path.join(tmp, "wiki");
+	try {
+		const researchProfile = {
+			name: "researcher",
+			runtime: "pi-durable" as const,
+			executable: "sh",
+			tools: ["read"],
+			extensions: [],
+			readOnly: true,
+			capabilities: [
+				"interactive",
+				"prompt",
+				"persistent-session",
+				"run-environment",
+				"observe",
+				"read-only",
+			] as const,
+			digest: "profile",
+		};
+		new WorkflowEngine(registerBuiltins()).start({
+			repo: researchWorkflowTarget(),
+			workflowId: "research-listed",
+			definitionId: "research",
+			// The standalone research lifecycle has no legacy version 1.
+			definitionVersion: definitionVersionForPolicy(6),
+			metadata: { branch: "", baseBranch: "", baseCommit: "", task: "task" },
+			routing: {
+				defaultProfile: researchProfile.name,
+				routes: [
+					{
+						stepId: "core.research",
+						role: "researcher",
+						profile: researchProfile,
+					},
+				],
+				diversity: [],
+			},
+		});
+
+		const row = listWorkflows().find(
+			(entry) => entry.state.workflowId === "research-listed",
+		);
+		expect(row?.target).toBe(researchWorkflowTarget());
+		// The repository column is not the key: a repository-independent
+		// workflow has none.
+		expect(row?.state.repository).toBe("");
+	} finally {
+		if (previousWikiRoot === undefined) delete process.env.HERDR_WIKI_DIR;
+		else process.env.HERDR_WIKI_DIR = previousWikiRoot;
+		fs.rmSync(tmp, { recursive: true, force: true });
+	}
+});
+
 test("catalog-backed history annotates the configured project ident", async () => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "dashboard-catalog-"));
 	const repo = path.join(root, "repo");

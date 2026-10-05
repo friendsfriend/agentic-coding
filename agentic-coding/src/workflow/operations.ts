@@ -31,6 +31,7 @@ import {
 	isResearchWorkflowTarget,
 	isWikiWorkflowTarget,
 	WorkflowEngine,
+	wikiWorkflowDataRoot,
 } from "./runtime.ts";
 export const CONTINUATION_WAIT_MS = 65_000;
 
@@ -125,16 +126,33 @@ export async function deleteWorkflow(
 	return removeWorkflowWorktree(repo, view.worktree, view.repository);
 }
 
+/** The shared wiki/research data root, when this machine has one. Its store
+ * file holds every wiki and research workflow's rows, so no delete may remove
+ * the directory: a legacy row that kept the shared root in its worktree column
+ * would otherwise take every other workflow's state with it. */
+function sharedTargetDataRoot(): string | undefined {
+	try {
+		return wikiWorkflowDataRoot();
+	} catch {
+		return undefined;
+	}
+}
+
 async function removeWorkflowWorktree(
 	repo: string,
 	worktree: string,
 	repository: string,
 ): Promise<WorkflowDeletion> {
+	// A repository-independent workflow (wiki, research) owns no worktree: its
+	// rows live in the shared target store. Neither does a workflow checked out
+	// in its own repository, and the shared store's directory is never a
+	// deletable worktree, whichever store a legacy row was read from.
 	if (
 		isWikiWorkflowTarget(repo) ||
 		isResearchWorkflowTarget(repo) ||
 		!worktree ||
-		worktree === repository
+		worktree === repository ||
+		worktree === sharedTargetDataRoot()
 	)
 		return { worktreeRemoved: false };
 	try {

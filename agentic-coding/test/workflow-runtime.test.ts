@@ -188,6 +188,86 @@ describe("transactional workflow runtime", () => {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
 	});
+	test("deleting a research workflow removes its rows and keeps the shared store", () => {
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "workflow-research-delete-"),
+		);
+		const previousWikiRoot = process.env.HERDR_WIKI_DIR;
+		process.env.HERDR_WIKI_DIR = path.join(tmp, "wiki");
+		try {
+			const engine = new WorkflowEngine(
+				registerBuiltins(undefined, 6),
+				() => new Date("2026-01-01T00:00:00Z"),
+			);
+			const researchProfile: ResolvedProfile = {
+				...profile,
+				readOnly: true,
+				tools: ["read"],
+				capabilities: [
+					"interactive",
+					"prompt",
+					"persistent-session",
+					"run-environment",
+					"observe",
+					"read-only",
+				],
+			};
+			const started = engine.start({
+				repo: researchWorkflowTarget(),
+				workflowId: "research-delete",
+				definitionId: "research",
+				definitionVersion: definitionVersionForPolicy(6),
+				metadata: {
+					branch: "",
+					baseBranch: "",
+					baseCommit: "",
+					task: "research",
+				},
+				routing: {
+					defaultProfile: researchProfile.name,
+					routes: [
+						{
+							stepId: "core.research",
+							role: "researcher",
+							profile: researchProfile,
+						},
+					],
+				},
+			});
+			// The target is the store key for a repository-independent workflow:
+			// its own repository column is empty, so only the target addresses it.
+			expect(engine.list(researchWorkflowTarget())).toHaveLength(1);
+			expect(
+				engine.status(researchWorkflowTarget(), started.snapshot.workflowId)
+					.repository,
+			).toBe("");
+			const store = wikiWorkflowDataRoot();
+
+			engine.deleteWorkflow(
+				researchWorkflowTarget(),
+				started.snapshot.workflowId,
+			);
+
+			expect(engine.list(researchWorkflowTarget())).toEqual([]);
+			expect(() =>
+				engine.status(researchWorkflowTarget(), started.snapshot.workflowId),
+			).toThrow(WorkflowRuntimeError);
+			// Every wiki/research workflow shares this directory: a delete removes
+			// rows, never the files the other workflows' rows live in.
+			expect(fs.existsSync(store)).toBe(true);
+			// A second delete reports the workflow as gone instead of succeeding.
+			expect(() =>
+				engine.deleteWorkflow(
+					researchWorkflowTarget(),
+					started.snapshot.workflowId,
+				),
+			).toThrow(/workflow not found/);
+		} finally {
+			if (previousWikiRoot === undefined) delete process.env.HERDR_WIKI_DIR;
+			else process.env.HERDR_WIKI_DIR = previousWikiRoot;
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
 	test("source fingerprint ignores oversized Git-ignored build output", () => {
 		const tmp = fs.mkdtempSync(
 			path.join(os.tmpdir(), "workflow-source-fingerprint-"),

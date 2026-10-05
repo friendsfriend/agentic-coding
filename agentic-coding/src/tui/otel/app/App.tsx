@@ -418,7 +418,9 @@ export function App(props: {
 	/** Open one workflow's dashboard in the page body and focus it. */
 	const openWorkflow = (overview: WorkflowOverview): void => {
 		pages.navigate(
-			workflowRoute(overview.state.repository, overview.state.workflowId),
+			// The target, not `state.repository`: a repository-independent
+			// workflow's rows live in the shared wiki/research store.
+			workflowRoute(overview.target, overview.state.workflowId),
 		);
 		setFocusPanel("content");
 	};
@@ -448,10 +450,7 @@ export function App(props: {
 		setDeleteTarget(undefined);
 		nav.popModal();
 		try {
-			const deletion = await deleteWorkflow(
-				target.state.repository,
-				workflowId,
-			);
+			const deletion = await deleteWorkflow(target.target, workflowId);
 			setSidebarOverviews((overviews) =>
 				overviews.filter((entry) => entry.state.workflowId !== workflowId),
 			);

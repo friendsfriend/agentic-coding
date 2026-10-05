@@ -7,12 +7,18 @@ import os from "node:os";
 import path from "node:path";
 import { Cause, Effect, Exit, Option } from "effect";
 import { WorkflowRuntimeError } from "../src/workflow/contracts.ts";
+import { registerBuiltins } from "../src/workflow/definitions.ts";
+import { deleteWorkflow } from "../src/workflow/operations.ts";
 import {
 	engineLayer,
 	WorkflowStore,
 } from "../src/workflow/runtime/services.ts";
 import { deleteWorkflowRows } from "../src/workflow/runtime/store.ts";
-import { canonicalStorePath } from "../src/workflow/runtime.ts";
+import {
+	canonicalStorePath,
+	WorkflowEngine,
+	wikiWorkflowDataRoot,
+} from "../src/workflow/runtime.ts";
 
 // Real temporary SQLite store behind the live store layer: the same
 // application program must run without consulting hidden production deps.
@@ -274,6 +280,70 @@ describe("workflow store service", () => {
 				}),
 			);
 		} finally {
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	test("deleting a workflow never removes the shared wiki/research data root", async () => {
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "store-shared-root-"));
+		const previousWikiRoot = process.env.HERDR_WIKI_DIR;
+		process.env.HERDR_WIKI_DIR = path.join(tmp, "wiki");
+		try {
+			const repo = repository(path.join(tmp, "repo"));
+			const shared = wikiWorkflowDataRoot();
+			fs.mkdirSync(shared, { recursive: true });
+			const marker = path.join(shared, "herdr.db");
+			fs.writeFileSync(marker, "every workflow's rows live here");
+			const profile = {
+				name: "test",
+				runtime: "pi-durable" as const,
+				executable: "sh",
+				tools: [],
+				extensions: [],
+				readOnly: false,
+				capabilities: ["prompt", "run-environment", "observe"] as const,
+				digest: "profile",
+			};
+			const engine = new WorkflowEngine(registerBuiltins());
+			const started = engine.start({
+				repo,
+				workflowId: "shared-root",
+				definitionId: "no-openspec",
+				metadata: {
+					branch: "main",
+					baseBranch: "main",
+					baseCommit: "base",
+					task: "task",
+				},
+				routing: {
+					defaultProfile: "test",
+					routes: [{ stepId: "core.implementation", role: "worker", profile }],
+					diversity: [],
+				},
+			});
+			// A repository-independent row that predates the shared store keeps the
+			// shared root in its worktree column while its rows live in a
+			// repository: removing that path would take every other wiki/research
+			// workflow's state with it, so the delete must leave it alone.
+			const db = new Database(canonicalStorePath(repo));
+			db.query("UPDATE workflow_instances SET worktree=? WHERE id=?").run(
+				shared,
+				started.view.workflowId,
+			);
+			db.close();
+
+			const deletion = await deleteWorkflow(repo, started.view.workflowId);
+
+			expect(deletion).toEqual({ worktreeRemoved: false });
+			expect(fs.readFileSync(marker, "utf8")).toBe(
+				"every workflow's rows live here",
+			);
+			expect(() => engine.status(repo, started.view.workflowId)).toThrow(
+				WorkflowRuntimeError,
+			);
+		} finally {
+			if (previousWikiRoot === undefined) delete process.env.HERDR_WIKI_DIR;
+			else process.env.HERDR_WIKI_DIR = previousWikiRoot;
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
 	});

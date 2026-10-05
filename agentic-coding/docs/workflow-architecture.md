@@ -37,7 +37,13 @@ explicit no-op — the shell surfaces workflow state in its own UI.
 The OpenTUI shell is the workspace surface: its workspace sidebar
 (`src/tui/otel/app/sidebar-model.ts`, `src/tui/otel/components/WorkspaceSidebar.tsx`)
 lists the durable workflows from the workflow store (SQLite-backed, so rows
-survive a restart), `Enter` opens that workflow's dashboard in the page body,
+survive a restart). A row carries two identities: `state.repository` is the
+repository the workflow was started from — empty for repository-independent
+wiki/research work — while `target` is the store that owns its rows
+(`<repository>` | `wiki://centralized` | `research://standalone`). Every
+store-scoped operation addresses a workflow by its target, so the sidebar
+resolves a row through `target` and never through `state.repository`.
+`Enter` opens that workflow's dashboard in the page body,
 `n` opens the worktree in a new tmux window, `d` opens a confirmation that
 deletes the workflow (its store rows and worktree directory; the branch is
 kept, so the committed work stays reviewable), and `Ctrl+S` toggles focus between

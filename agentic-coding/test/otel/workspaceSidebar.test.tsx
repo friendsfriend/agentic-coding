@@ -28,8 +28,16 @@ import { advance, renderUntil, type Test } from "../app/support/terminal.ts";
 function overview(
 	workflowId: string,
 	status: WorkflowOverview["state"]["status"],
+	/** Repository-independent rows keep an empty (or unrelated) repository and
+	 * are addressed through their target store instead. */
+	overrides: {
+		target?: string;
+		repository?: string;
+		definitionId?: string;
+	} = {},
 ): WorkflowOverview {
 	return {
+		target: overrides.target ?? "/demo",
 		state: {
 			workflowId,
 			changeId: "",
@@ -38,11 +46,21 @@ function overview(
 			revision: 1,
 			status,
 			health: { valid: true, attention: [] },
-			repository: "/demo",
+			repository: overrides.repository ?? "/demo",
 			worktree: "/demo",
 			branch: "main",
 			verificationRound: 0,
 			runs: [],
+			...(overrides.definitionId
+				? {
+						definition: {
+							id: overrides.definitionId,
+							version: 1,
+							digest: "digest",
+							label: overrides.definitionId,
+						},
+					}
+				: {}),
 		},
 		tasks: [0, 0],
 		agents: [],
@@ -55,12 +73,12 @@ function overview(
 const tempConfigDirs: string[] = [];
 let currentConfigFile = "";
 
-/** Workflow ids the stubbed delete removed; the observation read honours them
- * so the sidebar's poll cannot resurrect a deleted row. */
-const deletedWorkflows = new Set<string>();
+/** Deletes the stubbed gateway received, in order. The observation read honours
+ * them so the sidebar's poll cannot resurrect a deleted row. */
+const deletedWorkflows: Array<{ repo: string; workflowId: string }> = [];
 
 afterEach(() => {
-	deletedWorkflows.clear();
+	deletedWorkflows.length = 0;
 	delete process.env.HERDR_WORKFLOW_CONFIG;
 	for (const dir of tempConfigDirs.splice(0))
 		rmSync(dir, { recursive: true, force: true });
@@ -80,22 +98,25 @@ const OVERVIEWS = [
 	overview("wf-done", "completed"),
 ];
 
-function stubGateway(): void {
+function stubGateway(overviews: WorkflowOverview[] = OVERVIEWS): void {
 	configureGateway({
 		kind: "in-process",
 		connectionState: () => "open",
 		observe: async (observation: ObservationRequest) => {
 			if (observation.kind === "workflows")
-				return OVERVIEWS.filter(
-					(entry) => !deletedWorkflows.has(entry.state.workflowId),
+				return overviews.filter(
+					(entry) =>
+						!deletedWorkflows.some(
+							(call) => call.workflowId === entry.state.workflowId,
+						),
 				);
 			throw new Error(`unexpected observation ${observation.kind}`);
 		},
 		view: async () => {
 			throw new Error("no workflow view in this stub");
 		},
-		deleteWorkflow: async (request: { workflowId: string }) => {
-			deletedWorkflows.add(request.workflowId);
+		deleteWorkflow: async (request: { repo: string; workflowId: string }) => {
+			deletedWorkflows.push(request);
 			return { worktreeRemoved: false };
 		},
 		subscribe: () => () => {},
@@ -330,14 +351,14 @@ test("d confirms before deleting the selected workflow", async () => {
 		// The key opens the question; nothing is deleted while it is open.
 		t.mockInput.pressKey("d");
 		expect(await renderUntil(t, "Delete workflow?")).toBe(true);
-		expect(deletedWorkflows.size).toBe(0);
+		expect(deletedWorkflows).toEqual([]);
 
 		// Declining keeps the workflow and closes the dialog.
 		t.mockInput.pressKey("n");
 		expect(
 			await renderUntil(t, (frame) => !frame.includes("Delete workflow?")),
 		).toBe(true);
-		expect(deletedWorkflows.size).toBe(0);
+		expect(deletedWorkflows).toEqual([]);
 		expect(t.captureCharFrame()).toContain("wf-attention");
 
 		// Confirming deletes it. The row is gone from the list, which the
@@ -346,9 +367,41 @@ test("d confirms before deleting the selected workflow", async () => {
 		t.mockInput.pressKey("d");
 		expect(await renderUntil(t, "Delete workflow?")).toBe(true);
 		t.mockInput.pressKey("y");
-		expect([...deletedWorkflows]).toEqual(["wf-attention"]);
+		expect(deletedWorkflows).toEqual([
+			{ repo: "/demo", workflowId: "wf-attention" },
+		]);
 		t.mockInput.pressKey("f");
 		expect(await renderUntil(t, "No attention workflows")).toBe(true);
+	} finally {
+		t.renderer.destroy();
+		clearGateway();
+	}
+});
+
+test("d deletes a repository-independent workflow through its target store", async () => {
+	// A wiki or research workflow keeps its rows in the shared target store, so
+	// its repository is empty (or the repository it was started from) and can
+	// never address it: the target can. Addressing it by repository is what made
+	// the delete answer "workflow not found" for a row the sidebar was showing.
+	stubGateway([
+		overview("research-1", "active", {
+			target: "research://standalone",
+			repository: "",
+			definitionId: "research",
+		}),
+	]);
+	const t = await renderShell();
+	try {
+		await focusSidebar(t);
+		expect(await renderUntil(t, "research-1")).toBe(true);
+
+		t.mockInput.pressKey("d");
+		expect(await renderUntil(t, "Delete workflow?")).toBe(true);
+		t.mockInput.pressKey("y");
+		expect(deletedWorkflows).toEqual([
+			{ repo: "research://standalone", workflowId: "research-1" },
+		]);
+		expect(await renderUntil(t, "No active workflows")).toBe(true);
 	} finally {
 		t.renderer.destroy();
 		clearGateway();

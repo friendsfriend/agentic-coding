@@ -24,6 +24,7 @@ function overview(options: {
 	projectIdent?: string;
 }): WorkflowOverview {
 	return {
+		target: options.repository ?? "/repo",
 		state: {
 			workflowId: options.workflowId,
 			changeId: "",

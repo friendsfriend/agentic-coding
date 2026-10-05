@@ -32,6 +32,7 @@ import type {
 	WorkflowState,
 } from "../../contracts/workflow";
 import type { WorkflowView } from "../../contracts/workflow.ts";
+import { effectiveManifestPolicy } from "../../workflow/definitions.ts";
 import {
 	fetchProjectCatalog,
 	loadProjectCatalog,
@@ -180,12 +181,39 @@ export function listWorkflows(...roots: string[]): WorkflowOverview[] {
 	return buildWorkflows(roots);
 }
 
+/** The target that owns a workflow's rows. For a repository-backed store that
+ * is the root that read the row — including a legacy wiki/research row that
+ * predates the shared store, whose rows still live in a repository. Only the
+ * shared wiki/research store needs disambiguation: it is one file serving two
+ * targets, so the reading root cannot name the target the workflow was started
+ * with, while the manifest's declared target kind can. */
+function workflowTargetFor(repo: string, definitionId: string): string {
+	if (!isWikiWorkflowTarget(repo) && !isResearchWorkflowTarget(repo))
+		return repo;
+	try {
+		switch (effectiveManifestPolicy({ id: definitionId }).targetKind) {
+			case "wiki":
+				return wikiWorkflowTarget();
+			case "research":
+				return researchWorkflowTarget();
+			default:
+				return repo;
+		}
+	} catch {
+		// A removed or unavailable definition has no policy, and a row without a
+		// definition is still a row: the root that read it is the only key left.
+		return repo;
+	}
+}
+
 function buildWorkflows(roots: string[]): WorkflowOverview[] {
 	const found: WorkflowOverview[] = [];
 	const seen = new Set<string>();
 	const addRepository = (repo: string) => {
+		let store: string;
 		try {
-			if (!existsSync(canonicalStorePath(repo))) return;
+			store = canonicalStorePath(repo);
+			if (!existsSync(store)) return;
 		} catch {
 			return;
 		}
@@ -197,7 +225,11 @@ function buildWorkflows(roots: string[]): WorkflowOverview[] {
 		}
 		for (const view of views) {
 			try {
-				const identity = `${view.repository}\0${view.workflowId}`;
+				const target = workflowTargetFor(repo, view.definition.id);
+				// Identity is the store file, not the target: the wiki and research
+				// targets are one file, so both passes read the same rows and the
+				// second must not list them again under its own key.
+				const identity = `${store}\0${view.workflowId}`;
 				if (seen.has(identity)) continue;
 				seen.add(identity);
 				const state = viewToDashboardState(view) as WorkflowState;
@@ -212,6 +244,7 @@ function buildWorkflows(roots: string[]): WorkflowOverview[] {
 				);
 				found.push({
 					state,
+					target,
 					tasks: [items.filter((item) => item.done).length, items.length],
 					agents: view.runs.map((run) => ({
 						role: run.role,
