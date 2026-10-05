@@ -115,6 +115,7 @@ import {
 	validateSnapshot,
 	writeSnapshot,
 } from "./store.ts";
+import { recordWorkflowTarget } from "./target-registry.ts";
 import {
 	canonicalRepository,
 	isResearchWorkflowTarget,
@@ -394,6 +395,10 @@ export class WorkflowEngine {
 				payload: self.startTelemetryPayload(result.snapshot),
 			});
 			self.onCommitted(prepared.storeTarget);
+			// A workflow started in a directory of the operator's choosing owns a
+			// store only this registry remembers; without it the sidebar would stop
+			// listing the workflow as soon as the shell restarts.
+			recordWorkflowTarget(prepared.storeTarget);
 			return {
 				snapshot: result.snapshot,
 				view: viewById(

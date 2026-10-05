@@ -18,6 +18,7 @@ import {
 	canonicalStorePath,
 	WorkflowEngine,
 	wikiWorkflowDataRoot,
+	workflowTargets,
 } from "../src/workflow/runtime.ts";
 
 // Real temporary SQLite store behind the live store layer: the same
@@ -359,6 +360,51 @@ describe("workflow store service", () => {
 			expect(() => engine.status(repo, started.view.workflowId)).toThrow(
 				WorkflowRuntimeError,
 			);
+		} finally {
+			if (previousWikiRoot === undefined) delete process.env.HERDR_WIKI_DIR;
+			else process.env.HERDR_WIKI_DIR = previousWikiRoot;
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
+	test("starting a workflow records its target for the sidebar", () => {
+		// The sidebar lists configured catalog projects plus this registry. A
+		// workflow started in a directory of the operator's choosing belongs to no
+		// project, so without the record it would be invisible after a restart.
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "store-target-record-"));
+		const previousWikiRoot = process.env.HERDR_WIKI_DIR;
+		process.env.HERDR_WIKI_DIR = path.join(tmp, "wiki");
+		try {
+			const repo = repository(path.join(tmp, "repo"));
+			expect(workflowTargets()).toEqual([]);
+			const profile = {
+				name: "test",
+				runtime: "pi-durable" as const,
+				executable: "sh",
+				tools: [],
+				extensions: [],
+				readOnly: false,
+				capabilities: ["prompt", "run-environment", "observe"] as const,
+				digest: "profile",
+			};
+			new WorkflowEngine(registerBuiltins()).start({
+				repo,
+				workflowId: "custom-path",
+				definitionId: "no-openspec",
+				metadata: {
+					branch: "main",
+					baseBranch: "main",
+					baseCommit: "base",
+					task: "task",
+				},
+				routing: {
+					defaultProfile: "test",
+					routes: [{ stepId: "core.implementation", role: "worker", profile }],
+					diversity: [],
+				},
+			});
+			// The target is canonicalized at start, so the record is too.
+			expect(workflowTargets()).toEqual([fs.realpathSync(repo)]);
 		} finally {
 			if (previousWikiRoot === undefined) delete process.env.HERDR_WIKI_DIR;
 			else process.env.HERDR_WIKI_DIR = previousWikiRoot;

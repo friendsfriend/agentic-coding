@@ -26,6 +26,10 @@ export {
 	STORE_SCHEMA_VERSION,
 } from "./runtime/store.ts";
 export {
+	recordWorkflowTarget,
+	workflowTargets,
+} from "./runtime/target-registry.ts";
+export {
 	canonicalRepository,
 	canonicalStorePath,
 	isResearchWorkflowTarget,

@@ -55,6 +55,7 @@ import { BACKEND_STARTING_ENV } from "../workflow/project-catalog.ts";
 import {
 	isResearchWorkflowTarget,
 	isWikiWorkflowTarget,
+	workflowTargets,
 } from "../workflow/runtime.ts";
 import { AppShell } from "./app/AppShell.tsx";
 import { copyToClipboard } from "./clipboard.ts";
@@ -634,7 +635,13 @@ export async function main(): Promise<void> {
 			// A workflow is durably accepted at start, so effects a previous shell
 			// process left pending (its drain was cancelled by a quit/restart) are
 			// resumed here instead of waiting for someone to open its dashboard.
-			for (const target of new Set([...repositories, process.cwd()]))
+			// The registry adds the directories workflows were started in by hand:
+			// those stores belong to no configured project and are not the cwd.
+			for (const target of new Set([
+				...repositories,
+				process.cwd(),
+				...workflowTargets(),
+			]))
 				if (existsSync(join(target, ".herdr-workflow", "herdr.db")))
 					resumeWorkflowExecution(target);
 		} catch (error) {

@@ -54,6 +54,7 @@ import {
 	researchWorkflowTarget,
 	wikiWorkflowDataRoot,
 	wikiWorkflowTarget,
+	workflowTargets,
 } from "../../workflow/runtime.ts";
 import {
 	readConcept,
@@ -278,11 +279,21 @@ export function listWorkflowsAsync(
  * are de-duplicated by canonical root, so linked worktrees share history
  * instead of duplicating it, and each overview is linked back to its stable
  * configured project ident (the environment <-> workflow cross-link). */
+/** Every root the sidebar reads: the configured project catalog plus the
+ * targets a workflow was started in. A workflow started in a directory of the
+ * operator's choosing owns its store there, and only the registry remembers the
+ * directory, so leaving it out would hide that workflow from the panel. */
+export function workflowRoots(catalogRoots: readonly string[]): string[] {
+	return [...new Set([...catalogRoots, ...workflowTargets()])].sort();
+}
+
 export async function listWorkflowsFromCatalog(
 	serverUrl?: string,
 ): Promise<WorkflowOverview[]> {
 	const catalog = await loadProjectCatalog({ baseUrl: serverUrl });
-	const overviews = buildWorkflows(projectCanonicalRoots(catalog));
+	const overviews = buildWorkflows(
+		workflowRoots(projectCanonicalRoots(catalog)),
+	);
 	return overviews.map((overview) => ({
 		...overview,
 		projectIdent: projectIdentForPath(catalog, overview.state.repository),

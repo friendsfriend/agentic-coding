@@ -162,12 +162,22 @@ async function runJob(job: Job): Promise<void> {
 	const configRoot = fs.mkdtempSync(
 		path.join(os.tmpdir(), "agentic-coding-test-config-"),
 	);
+	// The wiki root is pinned into that same throwaway directory. Without it
+	// `wikiRoot()` falls back to the literal `~/.config/agentic-coding/wiki`, so
+	// a test that starts a workflow would write the shared workflow data root —
+	// the wiki store and the workflow target registry — into the developer's real
+	// state instead of its own.
+	const wikiRoot = path.join(configRoot, "wiki");
 	const proc = Bun.spawn(
 		[process.execPath, "test", `--timeout=${TEST_TIMEOUT_MS}`, ...job.files],
 		{
 			stdout: "pipe",
 			stderr: "pipe",
-			env: { ...process.env, AGENTIC_CODING_CONFIG_DIR: configRoot },
+			env: {
+				...process.env,
+				AGENTIC_CODING_CONFIG_DIR: configRoot,
+				HERDR_WIKI_DIR: wikiRoot,
+			},
 		},
 	);
 	// The watchdog bounds the job, so a shard of N files gets N files' worth of

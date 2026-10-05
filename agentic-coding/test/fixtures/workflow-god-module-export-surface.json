@@ -55,12 +55,14 @@
 		"initializeStore",
 		"isResearchWorkflowTarget",
 		"isWikiWorkflowTarget",
+		"recordWorkflowTarget",
 		"researchWorkflowTarget",
 		"runtimeTest",
 		"sourceContentFingerprint",
 		"validateChangeId",
 		"validateWorkflowId",
 		"wikiWorkflowDataRoot",
-		"wikiWorkflowTarget"
+		"wikiWorkflowTarget",
+		"workflowTargets"
 	]
 }

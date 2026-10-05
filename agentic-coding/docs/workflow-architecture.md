@@ -37,7 +37,14 @@ explicit no-op — the shell surfaces workflow state in its own UI.
 The OpenTUI shell is the workspace surface: its workspace sidebar
 (`src/tui/otel/app/sidebar-model.ts`, `src/tui/otel/components/WorkspaceSidebar.tsx`)
 lists the durable workflows from the workflow store (SQLite-backed, so rows
-survive a restart). A row carries two identities: `state.repository` is the
+survive a restart), reading the configured project catalog plus the workflow
+target registry — the durable list of directories workflows were started in
+(`src/workflow/runtime/target-registry.ts`, one marker per target under the
+shared workflow data root, recorded by `WorkflowEngine.start`). The registry is
+what keeps a workflow started in a directory of the operator's own choosing
+visible: that store belongs to no configured project, and the sidebar never
+scans the filesystem for stores. The shell resumes pending effects for the same
+set. A row carries two identities: `state.repository` is the
 repository the workflow was started from — empty for repository-independent
 wiki/research work — while `target` is the store that owns its rows
 (`<repository>` | `wiki://centralized` | `research://standalone`). Every
