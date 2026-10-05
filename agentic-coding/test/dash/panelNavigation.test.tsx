@@ -10,6 +10,7 @@ import { onCleanup } from "solid-js";
 import type { DashboardData } from "../../src/contracts/workflow";
 import { App } from "../../src/tui/dash/App.tsx";
 import { testDashboard } from "../../src/tui/dash/demo.ts";
+import { pressEscapeAndSettle } from "../app/support/terminal.ts";
 
 type Test = Awaited<ReturnType<typeof testRender>>;
 
@@ -19,7 +20,10 @@ afterEach(() => {
 		rmSync(root, { recursive: true, force: true });
 });
 
-function TestDashboard(props: { testData?: DashboardData }) {
+function TestDashboard(props: {
+	testData?: DashboardData;
+	onBack?: () => boolean;
+}) {
 	const renderer = useRenderer();
 	const keymap = createDefaultOpenTuiKeymap(renderer);
 	// Mirror the production detail keymap (src/tui/index.tsx → setupKeymap):
@@ -69,6 +73,7 @@ function TestDashboard(props: { testData?: DashboardData }) {
 			profile="test"
 			keymap={keymap}
 			testData={props.testData}
+			{...(props.onBack ? { onBack: props.onBack } : {})}
 		/>
 	);
 }
@@ -636,5 +641,28 @@ test("the durable agent session opens as a page and Esc returns to the grid", as
 	expect(activeKeybindCatalog().map((section) => section.title)).toContain(
 		"Navigation",
 	);
+	t.renderer.destroy();
+});
+
+test("Escape on the grid delegates to the composition root's back boundary", async () => {
+	let backs = 0;
+	const t = await testRender(
+		() => (
+			<TestDashboard
+				onBack={() => {
+					backs++;
+					return true;
+				}}
+			/>
+		),
+		{ width: 120, height: 40 },
+	);
+	await dashboardReady(t);
+
+	// The grid keeps Escape for the shell: it cannot leave the workflow page
+	// itself, so it reports the boundary and lets the composition root navigate.
+	// A lone Escape is only delivered after the input parser's short delay.
+	await pressEscapeAndSettle(t);
+	expect(backs).toBe(1);
 	t.renderer.destroy();
 });

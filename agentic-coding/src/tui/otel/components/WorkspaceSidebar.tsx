@@ -21,7 +21,7 @@ import {
 	type SidebarFilter,
 	type SidebarMode,
 	type StatusTone,
-	statusGlyph,
+	sidebarStatusGlyph,
 	workflowDisplayName,
 	workflowMeta,
 } from "../app/sidebar-model.ts";
@@ -248,7 +248,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 								if (entry) props.onOpen(entry);
 							}}
 							renderItem={(overview, selected) => {
-								const status = statusGlyph(overview.state.status);
+								const status = sidebarStatusGlyph(overview);
 								return (
 									<box style={{ flexDirection: "column" }}>
 										<text

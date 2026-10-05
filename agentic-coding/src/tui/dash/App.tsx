@@ -55,6 +55,7 @@ import {
 	MAX_PROMPT_HISTORY,
 	savePromptHistory,
 } from "../shared/preferences.ts";
+import { createAgentActivitySource } from "./agent-activity.ts";
 import { testDashboard } from "./demo.ts";
 import { createDashboardKeyHandler } from "./handlers/keys.ts";
 import {
@@ -137,8 +138,9 @@ export function App(props: {
 	 * delete confirmation) holds the keyboard. Keymap-only, so the dashboard's
 	 * inputs must blur themselves rather than keep reading keys behind it. */
 	overlay?: () => boolean;
-	/** Composition-root panel boundary for Escape: true when the root handled
-	 * it (the shell moves focus to the workspace sidebar). */
+	/** Composition-root Escape boundary: true when the root handled it. Inside
+	 * the unified shell the root leaves the workflow page for its structural
+	 * parent (Home); a standalone dashboard leaves it unset and Escape no-ops. */
 	onBack?: () => boolean;
 }) {
 	let findingDetailScroll: ScrollBoxRenderable | undefined;
@@ -368,6 +370,16 @@ export function App(props: {
 	// The view's picker key handler while a picker is open; the
 	// `agent-session-picker` keymap layer delegates to it.
 	let agentSessionPickerHandler: ((event: KeyEvent) => boolean) | undefined;
+	// Live per-agent activity (agents-panel-live-activity): one host watch per
+	// durable run, reconciled with the agent list the dashboard reads. The watch
+	// is the "what is it doing right now" the workflow store cannot give, so the
+	// Agents panel badge tracks the running tool instead of waiting for the
+	// engine's next status observation.
+	const agentActivity = createAgentActivitySource();
+	createEffect(() => {
+		agentActivity.sync(data().agents);
+	});
+	onCleanup(() => agentActivity.dispose());
 	/**
 	 * Leave the view for the dashboard grid. The run keeps streaming into the
 	 * session state, so reopening the panel's agent lands on the live view
@@ -2772,6 +2784,7 @@ export function App(props: {
 								active={activePanel() === 1}
 								selectedIndex={selectedAgent()}
 								narrow={dimensions().width < 90}
+								activity={agentActivity.activity}
 							/>
 						</box>
 						<Show when={agentSessionOpen() && agentSession()}>

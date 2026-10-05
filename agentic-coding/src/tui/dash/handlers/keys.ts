@@ -332,9 +332,10 @@ export function createDashboardKeyHandler(
 			return;
 		}
 		if (name === "escape") {
-			// The composition root's panel boundary gets the key first: the shell
-			// moves focus to the workspace sidebar. A standalone dashboard has no
-			// panel to return to, so Escape is a no-op there.
+			// The composition root handles it: inside the unified shell onBack
+			// leaves the workflow page for its structural parent (Home). A
+			// standalone dashboard has no page to return to, so Escape is a no-op
+			// there.
 			context.onBack?.();
 			return;
 		}

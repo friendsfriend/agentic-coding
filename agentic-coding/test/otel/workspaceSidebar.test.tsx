@@ -34,6 +34,10 @@ function overview(
 		target?: string;
 		repository?: string;
 		definitionId?: string;
+		stepId?: string;
+		pendingQuestions?: number;
+		attention?: string[];
+		valid?: boolean;
 	} = {},
 ): WorkflowOverview {
 	return {
@@ -42,15 +46,34 @@ function overview(
 			workflowId,
 			changeId: "",
 			phase: "apply",
+			...(overrides.stepId ? { stepId: overrides.stepId } : {}),
 			stepLabel: "Apply",
 			revision: 1,
 			status,
-			health: { valid: true, attention: [] },
+			health: {
+				valid: overrides.valid ?? true,
+				attention: overrides.attention ?? [],
+			},
 			repository: overrides.repository ?? "/demo",
 			worktree: "/demo",
 			branch: "main",
 			verificationRound: 0,
 			runs: [],
+			...(overrides.pendingQuestions
+				? {
+						pendingQuestions: Array.from(
+							{ length: overrides.pendingQuestions },
+							(_, index) =>
+								({
+									id: `q-${index}`,
+									role: "planner",
+									prompt: "?",
+								}) as unknown as NonNullable<
+									WorkflowOverview["state"]["pendingQuestions"]
+								>[number],
+						),
+					}
+				: {}),
 			...(overrides.definitionId
 				? {
 						definition: {
@@ -248,6 +271,30 @@ test("Enter opens the selected workflow's dashboard page", async () => {
 				(frame) => frame.includes("wf-active") && frame.includes("workflow"),
 			),
 		).toBe(true);
+	} finally {
+		t.renderer.destroy();
+		clearGateway();
+	}
+});
+
+test("rows show the state that needs a reader as a glyph", async () => {
+	stubGateway([
+		overview("wf-question", "attention-required", { pendingQuestions: 1 }),
+		overview("wf-blocked", "active", { attention: ["retry limit reached"] }),
+		overview("wf-review", "active", { stepId: "core.developer-review" }),
+		overview("wf-running", "active"),
+		overview("wf-idle", "paused"),
+	]);
+	const t = await renderShell();
+	try {
+		await focusSidebar(t);
+		expect(await renderUntil(t, "wf-running")).toBe(true);
+		const frame = t.captureCharFrame();
+		expect(frame).toContain("? wf-question");
+		expect(frame).toContain("! wf-blocked");
+		expect(frame).toContain("✓ wf-review");
+		expect(frame).toContain("… wf-running");
+		expect(frame).toContain("◦ wf-idle");
 	} finally {
 		t.renderer.destroy();
 		clearGateway();

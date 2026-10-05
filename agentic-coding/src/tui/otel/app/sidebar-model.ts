@@ -84,21 +84,43 @@ export function filterLabel(filter: SidebarFilter): string {
  * theme colour so the model stays free of renderer imports. */
 export type StatusTone = "success" | "warning" | "error" | "info" | "muted";
 
-export function statusGlyph(status: string): {
+/** Step ids whose work is a review/approval someone reads before the workflow
+ * moves on (the developer-review gate, plan/wiki approvals, the verifier gate,
+ * the verification step itself). */
+export function isReviewStep(stepId: string | undefined): boolean {
+	if (!stepId) return false;
+	if (stepId === "core.verification") return true;
+	return /(review|approval)/.test(stepId) || /-gate$/.test(stepId);
+}
+
+/** The row glyph and tone: a developer question (`?`), a blocker (`!`), a
+ * review step (`✓`), a running workflow (`…`), idle (`◦`), and the terminal
+ * states. The overview is read rather than the bare status because a question
+ * and a blocker are the interesting states of an otherwise active workflow. */
+export function sidebarStatusGlyph(overview: WorkflowOverview): {
 	glyph: string;
 	tone: StatusTone;
 } {
-	switch (status) {
+	const state = overview.state;
+	// A pending developer question is a blocker with a specific answer path, so
+	// it gets its own glyph before the generic `!`.
+	if ((state.pendingQuestions?.length ?? 0) > 0)
+		return { glyph: "?", tone: "warning" };
+	if (!state.health.valid) return { glyph: "!", tone: "error" };
+	if (state.health.attention.length > 0) return { glyph: "!", tone: "warning" };
+	if (isReviewStep(state.stepId ?? state.phase))
+		return { glyph: "✓", tone: "info" };
+	switch (state.status) {
 		case "active":
-			return { glyph: "●", tone: "info" };
+			return { glyph: "…", tone: "info" };
 		case "attention-required":
-			return { glyph: "◆", tone: "warning" };
+			return { glyph: "!", tone: "warning" };
 		case "paused":
-			return { glyph: "‖", tone: "muted" };
+			return { glyph: "◦", tone: "muted" };
 		case "completed":
 			return { glyph: "✓", tone: "success" };
 		case "closed":
-			return { glyph: "○", tone: "muted" };
+			return { glyph: "·", tone: "muted" };
 		default:
 			return { glyph: "·", tone: "muted" };
 	}
@@ -107,6 +129,20 @@ export function statusGlyph(status: string): {
 /** The workflow's display name: the id the dashboard is addressed by. */
 export function workflowDisplayName(overview: WorkflowOverview): string {
 	return overview.state.workflowId;
+}
+
+/** Index of the sidebar row for the workflow the page body is showing, or -1
+ * when the current list/filter does not hold it. Used to reveal the open
+ * workflow when the sidebar takes focus. */
+export function sidebarIndexFor(
+	overviews: readonly WorkflowOverview[],
+	open: { readonly repo: string; readonly workflowId: string } | undefined,
+): number {
+	if (!open) return -1;
+	return overviews.findIndex(
+		(row) =>
+			row.state.workflowId === open.workflowId && row.target === open.repo,
+	);
 }
 
 /** Second line: phase and the project/repository the workflow runs against. */

@@ -2,14 +2,16 @@
  *
  * One row per agent: role, status badge, runtime/model line, verifier verdict
  * with duration, finding counts and the metrics line. Props-in: the agent list
- * comes from the route's dashboard data, and the narrow-terminal rule for the
- * finding summary is a prop rather than a global read. */
+ * comes from the route's dashboard data, the live activity for a durable run
+ * from the route's host watches, and the narrow-terminal rule for the finding
+ * summary is a prop rather than a global read. */
 
 import { TextAttributes } from "@opentui/core";
-import { Badge, Panel, SelectableList, uiColors } from "@ui";
+import { Badge, type Highlight, Panel, SelectableList, uiColors } from "@ui";
 import { Show } from "solid-js";
 import type { DashboardData } from "../../../contracts/workflow.ts";
 import { formatDuration } from "../../../workflow/format.ts";
+import type { AgentActivity } from "../agent-activity.ts";
 import { agentMetricLine, agentRuntimeModelLine } from "../projections.ts";
 import { FindingCountSummary } from "../ui/FindingCountSummary.tsx";
 
@@ -19,6 +21,9 @@ export interface AgentsPanelProps {
 	readonly selectedIndex: number;
 	/** The finding summary takes three rows below this width. */
 	readonly narrow: boolean;
+	/** What a durable run is doing right now, from its host watch. Absent (or
+	 * nothing in flight) keeps the workflow status badge. */
+	readonly activity?: (role: string) => AgentActivity | undefined;
 }
 
 export function AgentsPanel(props: AgentsPanelProps) {
@@ -50,8 +55,18 @@ export function AgentsPanel(props: AgentsPanelProps) {
 							agent.runtime,
 							timeline()?.model ?? agent.model,
 						);
-					const highlight = () =>
-						agent.status === "working"
+					// A live watch frame outranks the coarse workflow status while work is in
+					// flight: the badge then names what the run is doing (bash/read/thinking)
+					// instead of the status word it will only settle into later.
+					const activity = () => {
+						const current = props.activity?.(agent.role);
+						return current?.active ? current : undefined;
+					};
+					const highlight = (): Highlight => {
+						const running = activity();
+						if (running)
+							return running.tone === "blocked" ? "warning" : "highlight2";
+						return agent.status === "working"
 							? "highlight2"
 							: agent.status === "completed"
 								? "positive"
@@ -60,6 +75,7 @@ export function AgentsPanel(props: AgentsPanelProps) {
 									: agent.status === "failed"
 										? "negative"
 										: "secondary";
+					};
 					return (
 						<box
 							width="100%"
@@ -81,10 +97,18 @@ export function AgentsPanel(props: AgentsPanelProps) {
 									</text>
 								</box>
 								<Badge
-									text={agent.status}
+									text={activity()?.label ?? agent.status}
 									appearance="text"
 									highlight={highlight()}
-									animation={agent.status === "working" ? "aurora" : "static"}
+									{...(activity()?.tone === "blocked"
+										? { animatedTone: "warning" as const }
+										: {})}
+									animation={
+										activity()?.tone === "working" ||
+										(!activity() && agent.status === "working")
+											? "aurora"
+											: "static"
+									}
 									attributes={TextAttributes.BOLD}
 									transitionKey={agent.role}
 								/>

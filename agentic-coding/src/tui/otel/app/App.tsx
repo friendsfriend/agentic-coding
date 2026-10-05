@@ -182,6 +182,7 @@ import {
 	filterOverviews,
 	type SidebarFilter,
 	type SidebarMode,
+	sidebarIndexFor,
 	toggleSidebarMode,
 } from "./sidebar-model.ts";
 
@@ -423,6 +424,19 @@ export function App(props: {
 			workflowRoute(overview.target, overview.state.workflowId),
 		);
 		setFocusPanel("content");
+	};
+	/** Move the sidebar cursor onto the workflow the page body is showing, so
+	 * focusing the panel from a dashboard lands on that row instead of wherever
+	 * the cursor was left. A dashboard opened for a filtered-out or not-yet-polled
+	 * workflow leaves the cursor alone rather than jumping to a wrong row. */
+	const revealOpenWorkflow = (): void => {
+		const index = sidebarIndexFor(sidebarRows(), workflow());
+		if (index >= 0) setSidebarIndex(index);
+	};
+	/** Focus the workspace sidebar, revealing the open workflow on its way in. */
+	const focusSidebar = (): void => {
+		revealOpenWorkflow();
+		setFocusPanel("sidebar");
 	};
 	/** Open one workflow's worktree in a new tmux window (the workspace surface
 	 * for a shell running inside tmux). tmux-only by design: without a client the
@@ -1772,7 +1786,8 @@ export function App(props: {
 			event.ctrl &&
 			key === "s"
 		) {
-			setFocusPanel((panel) => (panel === "sidebar" ? "content" : "sidebar"));
+			if (focusPanel() === "sidebar") setFocusPanel("content");
+			else focusSidebar();
 			return;
 		}
 
@@ -1787,7 +1802,7 @@ export function App(props: {
 			((key === "h" && sidebarSide() === "left") ||
 				(key === "l" && sidebarSide() === "right"))
 		) {
-			setFocusPanel("sidebar");
+			focusSidebar();
 			return;
 		}
 
@@ -2923,6 +2938,15 @@ export function App(props: {
 												// delete confirmation) is keymap-only, so the dashboard's
 												// inputs must blur themselves while one is on top.
 												overlay={() => nav.modal() !== "none"}
+												// The dashboard's detail layer owns Escape while the page body
+												// holds focus, so it delegates back here: leave the workflow
+												// page for its structural parent (Home). The agent-session view
+												// and the sidebar run on higher-priority layers and keep their
+												// own Escape (close the session, return to the page body).
+												onBack={() => {
+													pages.goToParent();
+													return true;
+												}}
 											/>
 										</box>
 									);
