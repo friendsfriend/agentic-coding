@@ -473,10 +473,37 @@ test("d deletes a repository-independent workflow through its target store", asy
 	}
 });
 
+test("Ctrl+T opens the current view in a new tmux window", async () => {
+	const previousTmux = process.env.TMUX;
+	const previousUrl = process.env.AGENTIC_WORKFLOW_URL;
+	delete process.env.TMUX;
+	// A running server is the precondition; the spawn then reports the missing
+	// tmux client instead of opening a window.
+	process.env.AGENTIC_WORKFLOW_URL = "http://127.0.0.1:4050";
+	const t = await renderShell();
+	try {
+		t.mockInput.pressKey("t", { ctrl: true });
+		expect(
+			await renderUntil(t, (frame) => frame.includes("tmux is not available")),
+		).toBe(true);
+	} finally {
+		if (previousTmux !== undefined) process.env.TMUX = previousTmux;
+		if (previousUrl !== undefined)
+			process.env.AGENTIC_WORKFLOW_URL = previousUrl;
+		else delete process.env.AGENTIC_WORKFLOW_URL;
+		t.renderer.destroy();
+		clearGateway();
+	}
+});
+
 test("n reports an error when no tmux client is available", async () => {
 	stubGateway();
 	const previousTmux = process.env.TMUX;
+	const previousUrl = process.env.AGENTIC_WORKFLOW_URL;
 	delete process.env.TMUX;
+	// A running server is the other precondition; without it the report is about
+	// the missing backend, which the next test pins.
+	process.env.AGENTIC_WORKFLOW_URL = "http://127.0.0.1:4050";
 	const t = await renderShell();
 	try {
 		await focusSidebar(t);
@@ -487,6 +514,31 @@ test("n reports an error when no tmux client is available", async () => {
 		).toBe(true);
 	} finally {
 		if (previousTmux !== undefined) process.env.TMUX = previousTmux;
+		if (previousUrl !== undefined)
+			process.env.AGENTIC_WORKFLOW_URL = previousUrl;
+		else delete process.env.AGENTIC_WORKFLOW_URL;
+		t.renderer.destroy();
+		clearGateway();
+	}
+});
+
+test("n reports when no server is running to attach the window to", async () => {
+	stubGateway();
+	const previousUrl = process.env.AGENTIC_WORKFLOW_URL;
+	delete process.env.AGENTIC_WORKFLOW_URL;
+	const t = await renderShell();
+	try {
+		await focusSidebar(t);
+		expect(await renderUntil(t, "wf-active")).toBe(true);
+		t.mockInput.pressKey("n");
+		expect(
+			await renderUntil(t, (frame) =>
+				frame.includes("Cannot open a view window: no server is running"),
+			),
+		).toBe(true);
+	} finally {
+		if (previousUrl !== undefined)
+			process.env.AGENTIC_WORKFLOW_URL = previousUrl;
 		t.renderer.destroy();
 		clearGateway();
 	}

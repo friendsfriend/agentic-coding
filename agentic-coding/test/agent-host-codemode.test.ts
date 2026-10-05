@@ -176,6 +176,54 @@ test("a durable run runs a codemode script that calls its own tools", async () =
 	await host.shutdown();
 });
 
+test("a nested edit keeps its diff in the call's structured details", async () => {
+	const dir = tempWorkflowDir();
+	enableCodemode(dir);
+	fs.writeFileSync(path.join(dir, "note.txt"), "old line\n");
+	const { host, faux } = await openHost(dir);
+	const runEnvPath = writeRunEnv(dir, {});
+	await host.ensureRun({
+		runId: "run-edit",
+		name: "worker-edit",
+		cwd: dir,
+		runEnvPath,
+		toolPolicy: "default",
+		model: `${faux.getModel().provider}/${faux.getModel().id}`,
+	});
+	faux.setResponses([
+		fauxAssistantMessage(
+			[
+				fauxToolCall("codemode", {
+					code: 'return await tools.edit({ path: "note.txt", edits: [{ oldText: "old line", newText: "new line" }] });',
+				}),
+			],
+			{ stopReason: "toolUse" },
+		),
+	]);
+	await host.submit("run-edit", "edit via codemode", "req-edit");
+	faux.appendResponses([fauxAssistantMessage([fauxText("done")])]);
+	await settle(host, "run-edit");
+
+	const entries = await host.entriesForTest("run-edit");
+	const details = (
+		entries.find((entry) => {
+			const item = entry as ToolResultRecord;
+			return (
+				item.kind === "pi.tool-result" &&
+				item.model?.[0]?.toolName === "codemode"
+			);
+		}) as ToolResultRecord | undefined
+	)?.model?.[0]?.details as
+		| { calls?: Array<{ name?: string; details?: { diff?: string } }> }
+		| undefined;
+	// edit reports its diff through the tool result's own `details`, not the
+	// nested `api.details` hook, so the host must capture both for the
+	// dashboard's codemode view to fold the call open.
+	expect(details?.calls?.[0]?.name).toBe("edit");
+	expect(details?.calls?.[0]?.details?.diff).toContain("+1 new line");
+	await host.shutdown();
+});
+
 test("a read-only run cannot reach write through a codemode script", async () => {
 	const dir = tempWorkflowDir();
 	enableCodemode(dir);

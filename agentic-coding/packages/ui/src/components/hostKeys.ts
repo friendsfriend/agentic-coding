@@ -51,6 +51,14 @@ export const HOST_KEYBINDS: readonly HostKeybind[] = [
 		short: "sidebar",
 	},
 	{
+		// The tmux new-window instinct: open the view being shown in a new tmux
+		// window running this shell attached to the same server.
+		binding: "ctrl+t",
+		key: "Ctrl+T",
+		action: "open this view in a new tmux window",
+		short: "window",
+	},
+	{
 		// Support tool: reports which keymap fields the active surface gates on, so
 		// "nothing responds here" can be told apart from "the keyboard is dead"
 		// without a rebuild. Hidden from footers, listed by `?`.

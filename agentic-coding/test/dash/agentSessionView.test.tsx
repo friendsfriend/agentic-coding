@@ -1179,18 +1179,21 @@ test("a codemode row lists its calls, and its script and output fold away", asyn
 	try {
 		await t.renderOnce();
 		await t.renderOnce();
-		// Collapsed: the row is the call's own metadata, and every call gets its
-		// own line, with its tool's type glyph — the fold glyph leads the row.
+		// Collapsed: only the call's own metadata line. The calls a script made
+		// belong to the expanded body, so a run's transcript stays a list of
+		// one-line summaries.
 		const collapsed = t.captureCharFrame();
 		expect(collapsed).toContain("▸ λ 2 calls · 1 failed");
-		expect(collapsed).toContain("✱ glob *.ts (ok)");
-		expect(collapsed).toContain("→ read src/a.ts (error)");
+		expect(collapsed).not.toContain("glob *.ts");
 		expect(collapsed).not.toContain("tools.glob");
 
-		// Expanded: the script and its output, as parts with their own headers.
+		// Expanded: one line per call, then the script and its output, as parts
+		// with their own headers.
 		t.mockInput.pressKey("o", { ctrl: true });
 		await t.renderOnce();
 		const expanded = t.captureCharFrame();
+		expect(expanded).toContain("✱ glob *.ts (ok)");
+		expect(expanded).toContain("→ read src/a.ts (error)");
 		expect(expanded).toContain("▾ script (2 lines)");
 		expect(expanded).toContain(
 			'const hits = await tools.glob({ pattern: "*.ts" });',
@@ -1208,6 +1211,96 @@ test("a codemode row lists its calls, and its script and output fold away", asyn
 		expect(folded).toContain("▸ script (2 lines)");
 		expect(folded).not.toContain("tools.glob");
 		expect(folded).toContain("Script completed");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("a script's call rows fold into their own tool view", async () => {
+	const block: AgentSessionBlock = {
+		id: "c2",
+		kind: "tool",
+		text: "codemode",
+		tone: "success",
+		icon: "λ",
+		tool: "codemode",
+		toolCall: {
+			name: "codemode",
+			args: { code: "return 1;" },
+			callId: "k2",
+			result: {
+				lines: ["Script completed"],
+				isError: false,
+				details: {
+					calls: [
+						{
+							name: "edit",
+							status: "ok",
+							args: {
+								path: "src/b.ts",
+								edits: [{ oldText: "a", newText: "b" }],
+							},
+							// The nested edit's diff, captured from the tool's own
+							// `result.details`.
+							details: { diff: "@@ -1 +1 @@\n-a\n+b" },
+						},
+						{
+							name: "read",
+							status: "ok",
+							args: { path: "src/c.ts" },
+							output: "line one\nline two",
+							isError: false,
+						},
+					],
+				},
+				notes: [],
+			},
+		},
+	};
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={[block]}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+			/>
+		),
+		{ width: 80, height: 24 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		t.mockInput.pressKey("o", { ctrl: true });
+		await t.renderOnce();
+		const expanded = t.captureCharFrame();
+		// Each call is its own fold, so one edit can be read without the rest.
+		expect(expanded).toContain("edit src/b.ts");
+		expect(expanded).not.toContain("+b");
+		const editRow = expanded
+			.split("\n")
+			.findIndex((line) => line.includes("edit src/b.ts"));
+		await t.mockMouse.click(5, editRow);
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("+b");
+
+		// The read call folds into the text it read.
+		const readRow = t
+			.captureCharFrame()
+			.split("\n")
+			.findIndex((line) => line.includes("read src/c.ts"));
+		await t.mockMouse.click(5, readRow);
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("line one");
 	} finally {
 		t.renderer.destroy();
 	}
@@ -1471,6 +1564,45 @@ test("`?` on an empty prompt opens the shared help, and a typed `?` stays litera
 		await t.renderOnce();
 		expect(help).toBe(1);
 		expect(t.captureCharFrame()).toContain("w?");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
+test("the prompt's metadata row shows context, cost, tokens and tok/s", async () => {
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				blocks={[]}
+				working={false}
+				models={[]}
+				thinkingLevels={["off"]}
+				draft=""
+				history={[]}
+				onHistoryAppend={() => {}}
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+				contextTokens={12_500}
+				contextWindow={100_000}
+				cost={0.42}
+				inputTokens={2500}
+				outputTokens={800}
+				tokensPerSecond={40}
+			/>
+		),
+		{ width: 100, height: 30 },
+	);
+	try {
+		await t.flush();
+		const frame = t.captureCharFrame();
+		expect(frame).toContain("12.5K (13%)");
+		expect(frame).toContain("$0.42");
+		expect(frame).toContain("tok 2.5K→800");
+		expect(frame).toContain("40 tok/s");
 	} finally {
 		t.renderer.destroy();
 	}

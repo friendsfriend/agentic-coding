@@ -28,7 +28,11 @@ import { resolveConfigDir, resolveDevenvHome } from "../backend/home.ts";
 import { ownsEnvironmentBackend } from "../backend/ownership.ts";
 import { setConfigDiagnosticSink } from "../config-root.ts";
 import type { LogData, MetricData, SpanData } from "../contracts/telemetry.ts";
-import { createInstanceAuthority } from "../server/auth.ts";
+import {
+	createInstanceAuthority,
+	instanceTokenFileForUrl,
+	readInstanceTokenFile,
+} from "../server/auth.ts";
 import {
 	selectedClassifierProvider,
 	startSelectedLocalClassifier,
@@ -96,6 +100,7 @@ import { RemoteTelemetryDb } from "./otel/model/remote-db.ts";
 import type { TelemetryDb } from "./otel/model/telemetry-db.ts";
 import { TopologyStore } from "./otel/model/topologyStore.ts";
 import { TraceStore } from "./otel/model/traceStore.ts";
+import { parseRoute, type Route } from "./shared/routes.ts";
 
 const usage = `Usage: agentic-coding [command] [options]
   (no command)             Unified shell (default): owned environment backend + contextual workflow launch + observability
@@ -121,6 +126,7 @@ Options:
   --devenv-url URL         Attach to an already running environment backend (no ownership)
   --devenv-port N          Environment backend port (default 4050)
   --attach-url URL         Attached shell mode
+  --route JSON             Initial page (used by a spawned view window)
   --help                   Show this help`;
 
 function arg(name: string) {
@@ -136,6 +142,33 @@ function portArg(name: string): number | undefined {
 		process.exit(1);
 	}
 	return port;
+}
+
+/** The instance token a running loopback server published, so an attach (or a
+ * spawned view) authenticates without the operator handing over a capability. */
+function attachTokenForUrl(url: string | undefined): string | undefined {
+	if (!url) return undefined;
+	const file = instanceTokenFileForUrl(url);
+	return file ? readInstanceTokenFile(file) : undefined;
+}
+
+/** Whether a live unified server answers this loopback address. The health
+ * route is public and reports the instance identity, so a stale listener on the
+ * port is distinguishable from our own server. */
+async function runningServerInstance(url: string): Promise<boolean> {
+	try {
+		const response = await fetch(`${url.replace(/\/$/, "")}/api/health`, {
+			signal: AbortSignal.timeout(500),
+		});
+		if (!response.ok) return false;
+		const value = (await response.json()) as {
+			status?: unknown;
+			instance?: unknown;
+		};
+		return value.status === "ok" && typeof value.instance === "string";
+	} catch {
+		return false;
+	}
 }
 
 function intervalArg(name: string, fallback: number): number {
@@ -226,9 +259,7 @@ export async function main(): Promise<void> {
 
 	const profile = arg("--profile");
 	const attachUrl = arg("--attach-url");
-	// Full-feature attach: a capability for the remote unified server. Without
-	// one, attach stays environment-only (the predecessor milestone).
-	const attachToken =
+	const suppliedAttachToken =
 		arg("--attach-token") ?? process.env.AGENTIC_WORKFLOW_TOKEN;
 	const home =
 		process.argv.includes("--home") || process.argv.includes("manager");
@@ -247,8 +278,18 @@ export async function main(): Promise<void> {
 			: repoArg
 				? resolve(repoArg)
 				: "/demo";
-	const workflowAttachUrl = attachUrl;
-	const remoteAttach = Boolean(workflowAttachUrl && attachToken);
+	// Route handoff from a spawned view window: the parent passes the page,
+	// resource and params it is showing. A malformed value falls back to the
+	// route's own default instead of failing the launch.
+	const requestedRoute: Route | undefined = (() => {
+		const raw = arg("--route");
+		if (!raw) return undefined;
+		try {
+			return parseRoute(JSON.parse(raw));
+		} catch {
+			return undefined;
+		}
+	})();
 	// Configuration diagnostics go to the mounted surface instead of raw stderr,
 	// which would print into the OpenTUI render. A failed load opens the global
 	// error dialog; warnings become toasts, reported once per distinct message
@@ -276,9 +317,28 @@ export async function main(): Promise<void> {
 		process.env.AGENTIC_DEVENV_URL ??
 		process.env.DEVENV_URL;
 	const devenvPort = portArg("--devenv-port") ?? 4050;
+	const managedUrl = `http://127.0.0.1:${devenvPort}`;
+	// One server per machine: when the managed address already answers, this
+	// process is a client of that instance, not a second owner. Attaching reuses
+	// the running store, environment authority and telemetry instead of failing
+	// on the bound port (or bringing up a duplicate backend behind the first).
+	const attachToRunning =
+		home &&
+		!attachUrl &&
+		!explicitUrl &&
+		!isTest &&
+		!process.argv.includes("--json") &&
+		(await runningServerInstance(managedUrl))
+			? managedUrl
+			: undefined;
+	const workflowAttachUrl = attachUrl ?? attachToRunning;
+	const attachToken =
+		suppliedAttachToken ?? attachTokenForUrl(workflowAttachUrl);
+	const remoteAttach = Boolean(workflowAttachUrl && attachToken);
+	const effectiveExplicitUrl = explicitUrl ?? attachToRunning;
 	const ownsBackend = ownsEnvironmentBackend({
-		attachUrl,
-		explicitUrl,
+		attachUrl: workflowAttachUrl,
+		explicitUrl: effectiveExplicitUrl,
 		home,
 		isTest,
 		json: process.argv.includes("--json"),
@@ -293,11 +353,10 @@ export async function main(): Promise<void> {
 	// feature (or its catalog poll) at whatever happens to listen on the default
 	// port — that could be a different install.
 	const environmentSurfaceUrl =
-		explicitUrl ?? (ownsBackend ? `http://127.0.0.1:${devenvPort}` : undefined);
-	const environments =
-		remoteAttach || !environmentSurfaceUrl
-			? undefined
-			: { serverUrl: environmentSurfaceUrl };
+		effectiveExplicitUrl ?? (ownsBackend ? managedUrl : undefined);
+	const environments = environmentSurfaceUrl
+		? { serverUrl: environmentSurfaceUrl }
+		: undefined;
 	// One server serves every surface, so an attached shell's environment address
 	// is the attached server itself, not this machine's default port. An empty
 	// value tells catalog consumers (and the child processes that inherit it)
@@ -309,8 +368,13 @@ export async function main(): Promise<void> {
 		process.env.AGENTIC_DEVENV_TOKEN = ownedAuthority.token;
 	} else if (remoteAttach && attachToken) {
 		// The attached server's capability also authorizes the environment
-		// surface it serves.
+		// surface it serves, and the typed client this shell (and its spawned
+		// views) reads through.
 		process.env.AGENTIC_DEVENV_TOKEN = attachToken;
+		if (workflowAttachUrl) {
+			process.env.AGENTIC_WORKFLOW_URL = workflowAttachUrl;
+			process.env.AGENTIC_WORKFLOW_TOKEN = attachToken;
+		}
 	}
 	// Full-feature attach talks to the remote unified server through the typed
 	// client.
@@ -585,16 +649,17 @@ export async function main(): Promise<void> {
 						topologyStore={topologyStore}
 						tracesOnly={tracesOnly}
 						environments={environments}
-						attached={attachUrl !== undefined}
+						attached={workflowAttachUrl !== undefined}
+						initialRoute={requestedRoute}
 						attachLabel={
 							remoteAttach
-								? `attached ${attachUrl ?? ""} · workflow + observability · environment features unavailable`
+								? `attached ${workflowAttachUrl ?? ""} · workflow + observability + environments`
 								: attachUrl
 									? `attached ${attachUrl} · environment features only · remote workflow features unavailable`
 									: undefined
 						}
 						dashboard={
-							attachUrl && !remoteAttach
+							workflowAttachUrl && !remoteAttach
 								? undefined
 								: {
 										mode: home ? "home" : "attached",

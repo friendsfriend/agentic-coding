@@ -5,6 +5,7 @@
 // flight.
 import { expect, test } from "bun:test";
 import { testRender } from "@opentui/solid";
+import { createSignal } from "solid-js";
 import type { AgentActivity } from "../../src/tui/dash/agent-activity.ts";
 import { testDashboard } from "../../src/tui/dash/demo.ts";
 import { AgentsPanel } from "../../src/tui/dash/panels/AgentsPanel.tsx";
@@ -51,8 +52,8 @@ test("a blocking activity is rendered as the blocked tone", async () => {
 		),
 		{ width: 120, height: 40 },
 	);
-	// The badge wipes between the previous text and the new one, so wait for the
-	// new label rather than reading the first frame of the transition.
+	// The badge swaps immediately, so the first settled frame already carries the
+	// blocked activity.
 	await t.waitForFrame((frame) => frame.includes("asking"));
 	expect(t.captureCharFrame()).toContain("asking");
 	t.renderer.destroy();
@@ -72,11 +73,39 @@ test("an inactive activity keeps the status badge", async () => {
 		),
 		{ width: 120, height: 40 },
 	);
-	// An inactive snapshot must not relabel the badge: wait for the wipe back to
-	// the status word and assert the activity word never lands.
+	// An inactive snapshot must not relabel the badge; the status word stands.
 	await t.waitForFrame((frame) => frame.includes("working"));
 	const frame = t.captureCharFrame();
 	expect(frame).not.toContain("idle");
 	expect(frame).toContain("working");
+	t.renderer.destroy();
+});
+
+test("a live activity change swaps in the same frame, without a wipe", async () => {
+	const [activity, setActivity] = createSignal<AgentActivity>({
+		label: "bash",
+		active: true,
+		tone: "working",
+	});
+	const t = await testRender(
+		() => (
+			<AgentsPanel
+				data={testDashboard()}
+				active
+				selectedIndex={0}
+				narrow={false}
+				activity={() => activity()}
+			/>
+		),
+		{ width: 120, height: 40 },
+	);
+	await t.waitForFrame((frame) => frame.includes("bash"));
+	setActivity({ label: "read", active: true, tone: "working" });
+	// One paint: the new word is already the badge, with no transition frame
+	// showing the previous activity.
+	await t.renderOnce();
+	const frame = t.captureCharFrame();
+	expect(frame).toContain("read");
+	expect(frame).not.toContain("bash");
 	t.renderer.destroy();
 });

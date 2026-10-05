@@ -122,13 +122,45 @@ export async function attachTelemetry(
 					break;
 				case "message_end": {
 					closeThinking(now);
-					if (event.entry?.kind === "pi.assistant" && onTiming) {
-						onTiming(String(event.entry.id), {
-							...(generationStart !== undefined
-								? { generationMs: Math.max(0, now - generationStart) }
-								: {}),
+					const entry = event.entry;
+					const assistant =
+						entry.kind === "pi.assistant" &&
+						entry.model?.[0]?.role === "assistant"
+							? entry.model[0]
+							: undefined;
+					const generationMs =
+						generationStart !== undefined
+							? Math.max(0, now - generationStart)
+							: undefined;
+					if (assistant && onTiming) {
+						onTiming(String(entry.id), {
+							...(generationMs !== undefined ? { generationMs } : {}),
 							...(thinkingMs > 0 ? { thinkingMs } : {}),
 						});
+					}
+					// One usage envelope per committed assistant message: cost, the
+					// provider's token counters and the measured generation duration are
+					// what the dashboard's per-agent metrics (cost, tok/s) aggregate, and
+					// they persist in `telemetry.jsonl` for long-term monitoring. A message
+					// whose provider reported nothing is not emitted, so the panel omits
+					// metrics instead of showing zero placeholders.
+					if (assistant) {
+						const usage = assistant.usage;
+						const cost = usage.cost?.total ?? 0;
+						const tokens =
+							usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+						if (tokens > 0 || cost > 0)
+							emit(identity, "runtime.usage", {
+								inputTokens: usage.input,
+								outputTokens: usage.output,
+								cacheReadTokens: usage.cacheRead,
+								cacheWriteTokens: usage.cacheWrite,
+								totalTokens: usage.totalTokens,
+								cost,
+								...(generationMs !== undefined
+									? { durationMs: generationMs }
+									: {}),
+							});
 					}
 					generationStart = undefined;
 					thinkingMs = 0;

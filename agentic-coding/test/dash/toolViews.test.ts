@@ -309,10 +309,10 @@ describe("toolView", () => {
 			),
 		);
 		expect(view?.icon).toBe("λ");
-		// The row is the call's metadata; every call gets its own line below it,
-		// each with its tool's type glyph.
+		// Collapsed the row is only the call's metadata; expanded it carries one
+		// line per call below it, each with its tool's type glyph.
 		expect(view?.summary).toBe("2 calls · 1 failed · 3.0s");
-		expect(view?.alwaysRows).toEqual([
+		expect(view?.rows).toEqual([
 			{ id: "call:0", text: "→ read src/a.ts (ok)", tone: "muted" },
 			{
 				id: "call:1",
@@ -322,7 +322,7 @@ describe("toolView", () => {
 		]);
 		expect(view?.hint).toBeUndefined();
 		// The script and its output are parts of their own, so either can be
-		// folded away while the call list stays in view.
+		// folded away while the expanded call list stays in view.
 		expect(view?.sections?.map((section) => section.id)).toEqual([
 			"script",
 			"output",
@@ -335,6 +335,48 @@ describe("toolView", () => {
 			{ text: "Script completed", tone: "muted" },
 			{ text: 'return: ["a.ts","b.ts"]', tone: "muted" },
 			{ text: "calls: glob (ok), read (error)", tone: "muted" },
+		]);
+	});
+
+	test("a script's calls fold into their own tool views", () => {
+		const view = toolView(
+			call(
+				"codemode",
+				{ code: "return 1;" },
+				{
+					lines: ["Script completed"],
+					isError: false,
+					details: {
+						calls: [
+							{
+								name: "edit",
+								status: "ok",
+								args: { path: "a.ts", edits: [{ oldText: "a", newText: "b" }] },
+								// edit reports its diff through `result.details`, which the host
+								// captures per nested call.
+								details: { diff: "@@ -1 +1 @@\n-a\n+b" },
+							},
+							{
+								name: "read",
+								status: "ok",
+								args: { path: "b.ts" },
+								output: "line one\nline two",
+								isError: false,
+							},
+						],
+					},
+					notes: [],
+				},
+			),
+		);
+		// Each call is an expanded row with the same detail a standalone row would
+		// have: the edit's diff and the read's text.
+		expect(view?.rows?.[0]?.detail?.some((row) => row.text === "+b")).toBe(
+			true,
+		);
+		expect(view?.rows?.[1]?.detail?.map((row) => row.text)).toEqual([
+			"line one",
+			"line two",
 		]);
 	});
 
@@ -351,7 +393,7 @@ describe("toolView", () => {
 			),
 		);
 		expect(view?.summary).toBe("2 calls · 1 failed");
-		expect(view?.alwaysRows).toEqual([
+		expect(view?.rows).toEqual([
 			{ id: "call:0", text: "✱ glob (ok)", tone: "muted" },
 			{ id: "call:1", text: "→ read (error)", tone: "error" },
 		]);
@@ -368,7 +410,7 @@ describe("toolView", () => {
 			'const x = await tools.read({ path: "a.ts" });',
 		);
 		expect(pending?.hint).toBeUndefined();
-		expect(pending?.alwaysRows).toEqual([]);
+		expect(pending?.rows).toEqual([]);
 		// A script that never got a result still shows its source.
 		expect(pending?.sections?.map((section) => section.id)).toEqual(["script"]);
 
@@ -414,8 +456,8 @@ describe("toolView", () => {
 			),
 		);
 		expect(view?.sections?.[0]?.rows.length).toBe(20);
-		expect(view?.alwaysRows?.length).toBe(9);
-		expect(view?.alwaysRows?.at(-1)?.text).toBe("• tool8 (ok)");
+		expect(view?.rows?.length).toBe(9);
+		expect(view?.rows?.at(-1)?.text).toBe("• tool8 (ok)");
 
 		// The same for a write's content and a diff.
 		const content = Array.from(

@@ -582,6 +582,51 @@ describe("readAgentSessionMetadata", () => {
 		expect(info.cost).toBeCloseTo(0.012);
 	});
 
+	test("reports accumulated tokens and the measured output-token rate", () => {
+		const info = readAgentSessionMetadata({
+			entries: [
+				{
+					kind: "pi.assistant",
+					id: "a1",
+					model: [
+						{
+							stopReason: "stop",
+							usage: { input: 100, output: 40 },
+						},
+					],
+				},
+				{
+					kind: "pi.assistant",
+					id: "a2",
+					model: [
+						{
+							stopReason: "stop",
+							usage: { input: 200, output: 60 },
+						},
+					],
+				},
+			],
+			timings: { a1: { generationMs: 1000 }, a2: { generationMs: 1500 } },
+			docs: {
+				"pi.usage": {
+					models: {
+						"provider/x": {
+							input: 300,
+							output: 100,
+							cost: { total: 0.5 },
+						},
+					},
+					tools: { read: { input: 0, output: 0, cost: { total: 0.001 } } },
+				},
+			},
+		});
+		expect(info.inputTokens).toBe(300);
+		expect(info.outputTokens).toBe(100);
+		expect(info.cost).toBeCloseTo(0.501);
+		// 100 output tokens over 2.5s of measured generation time.
+		expect(info.tokensPerSecond).toBe(40);
+	});
+
 	test("reports working while a run, tool, generation, or queued input is live", () => {
 		const working = (live: Record<string, unknown>) =>
 			readAgentSessionMetadata({ entries: [], docs: { "pi.live": live } })

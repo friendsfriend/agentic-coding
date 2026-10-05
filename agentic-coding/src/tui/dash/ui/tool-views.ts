@@ -33,15 +33,12 @@ export interface ToolViewSection {
 }
 
 /** A tool call's transcript view: the summary line, the hint beside it, the
- * rows under it (always visible once the row is expanded), and the sections a
+ * rows under it (only visible once the row is expanded), and the sections a
  * long view splits into so its parts can be read one at a time. */
 export interface ToolView {
 	readonly icon: string;
 	readonly summary: string;
 	readonly hint?: string;
-	/** Rows that are part of the collapsed view: a script's call list says what
-	 * the call did, so it is not a detail to expand into. */
-	readonly alwaysRows?: readonly ToolViewRow[];
 	readonly rows?: readonly ToolViewRow[];
 	readonly sections?: readonly ToolViewSection[];
 }
@@ -541,9 +538,10 @@ function codemodeCallDetail(call: CodemodeCall): readonly ToolViewRow[] {
 	return view?.rows ?? [];
 }
 
-/** `codemode`: the calls a script made, one line each, and — expanded — the
- * script that made them and what it produced, as parts that can be folded away
- * again to keep the call list in view. */
+/** `codemode`: collapsed, the one-line script summary (`λ 11 calls · 0.5s`).
+ * Expanded, the calls the script made — one line each, each folding into its
+ * own tool view — followed by the script that made them and what it produced,
+ * as parts that can be folded away again to keep the call list in view. */
 function codemodeView(call: AgentSessionToolCall): ToolView {
 	const code = stringArg(call.args, "code") ?? "";
 	const lines = call.result?.lines ?? [];
@@ -570,7 +568,7 @@ function codemodeView(call: AgentSessionToolCall): ToolView {
 	return {
 		icon: "λ",
 		summary: summary.length > 0 ? summary.join(" · ") : codemodeHeadline(code),
-		alwaysRows: codemodeCallRows(calls),
+		rows: codemodeCallRows(calls),
 		sections: [
 			...(script.length > 0
 				? [{ id: "script", label: "script", rows: script }]

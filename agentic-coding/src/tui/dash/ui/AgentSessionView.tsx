@@ -77,6 +77,11 @@ export interface AgentSessionViewProps {
 	readonly contextWindow?: number;
 	/** The conversation's accumulated spend. */
 	readonly cost?: number;
+	/** The conversation's accumulated input/output tokens. */
+	readonly inputTokens?: number;
+	readonly outputTokens?: number;
+	/** Output tokens over the conversation's measured generation time. */
+	readonly tokensPerSecond?: number;
 	/** Picker catalogs, from the host's `catalog` request. */
 	readonly models: readonly string[];
 	readonly thinkingLevels: readonly string[];
@@ -472,18 +477,6 @@ function Block(props: {
 							)}
 						</Show>
 					</box>
-					<box paddingLeft={2} flexDirection="column">
-						<For each={tool.alwaysRows ?? []}>
-							{(row) => (
-								<ToolRow
-									block={props.block}
-									row={row}
-									openRows={props.openRows}
-									onToggleRow={props.onToggleRow}
-								/>
-							)}
-						</For>
-					</box>
 					<Show when={props.expanded}>
 						<box paddingLeft={2} flexDirection="column">
 							<For each={tool.rows ?? []}>
@@ -840,6 +833,12 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 			parts.push(`${formatTokenCount(props.contextTokens)}${percent}`);
 		}
 		if (props.cost !== undefined) parts.push(formatCost(props.cost));
+		if (props.inputTokens !== undefined || props.outputTokens !== undefined)
+			parts.push(
+				`tok ${formatTokenCount(props.inputTokens ?? 0)}→${formatTokenCount(props.outputTokens ?? 0)}`,
+			);
+		if (props.tokensPerSecond !== undefined)
+			parts.push(`${props.tokensPerSecond} tok/s`);
 		return parts.join(" · ");
 	};
 

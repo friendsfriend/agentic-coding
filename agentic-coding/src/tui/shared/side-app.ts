@@ -1,3 +1,5 @@
+import { selfExecEntry } from "../../self-exec.ts";
+
 // Side-app launcher (multiplexer removal).
 //
 // Side apps — the editor opened from a finding, and anything else that needs a
@@ -9,6 +11,10 @@
 //
 // The decision is a pure function of the environment, and the argv builders are
 // pure too, so the launch shape is testable without a terminal.
+//
+// `openViewWindow` reuses the same tmux preference for a second shell view: it
+// re-execs this application at the caller's route with `--attach-url`, so the
+// spawned window is a client of the running server and never starts a second one.
 
 /** One side app to open. `command` is an executable, never a shell string. */
 export interface SideAppRequest {
@@ -49,15 +55,25 @@ export function tmuxSideAppArgs(request: SideAppRequest): string[] {
 	];
 }
 
-/** One workflow workspace to open in a tmux window. */
-export interface WorkspaceWindowRequest {
-	/** Workflow id: the tmux window name. */
+/** One shell view to open in a new tmux window: the same TUI, positioned at
+ * the route the caller is looking at, attached to the running server. */
+export interface ViewWindowRequest {
+	/** Window name (the route's page label). */
 	name: string;
-	/** Directory the window opens in (the workflow's worktree). */
+	/** Directory the window opens in. */
 	cwd: string;
+	/** Repository the spawned shell reads (`--repo`). */
+	repository: string;
+	/** Serialized route (`--route` JSON): the page, resource and params. */
+	routeJson: string;
+	/** Base URL of the running server (`--attach-url`); the spawned shell must
+	 * attach to it instead of owning a second server. */
+	attachUrl: string;
+	/** Capability for the running server, when the parent has one. */
+	token?: string;
 }
 
-export type WorkspaceWindowResult =
+export type WindowResult =
 	| { ok: true; name: string }
 	| { ok: false; reason: string };
 
@@ -71,22 +87,46 @@ export function tmuxWindowName(workflowId: string): string {
 }
 
 /**
- * Open one workflow's workspace in a new tmux window, named after the
- * workflow. This is tmux-only: there is no local fallback, because a workspace
- * window is a request for the multiplexer the developer chose to run the shell
- * in. Without a tmux client the caller reports the reason.
+ * The argv the spawned window runs: this executable again, at the given route,
+ * attached to the server the parent is already talking to. `--attach-url` is
+ * what keeps the child from starting a second server (an explicit URL means
+ * "attach to what is running"). Pure so the launch shape is testable.
  */
-export async function openWorkspaceWindow(
-	request: WorkspaceWindowRequest,
-): Promise<WorkspaceWindowResult> {
+export function viewWindowArgs(
+	request: ViewWindowRequest,
+	options: { entry?: string; execPath?: string } = {},
+): string[] {
+	return [
+		options.execPath ?? process.execPath,
+		...(options.entry ? [options.entry] : []),
+		"home",
+		"--repo",
+		request.repository,
+		"--attach-url",
+		request.attachUrl,
+		...(request.token ? ["--attach-token", request.token] : []),
+		"--route",
+		request.routeJson,
+	];
+}
+
+/**
+ * Open one shell view in a new tmux window. This is tmux-only: a window is a
+ * request for the multiplexer the developer chose to run the shell in, so
+ * without a tmux client there is no local fallback and the caller reports why.
+ */
+export async function openViewWindow(
+	request: ViewWindowRequest,
+): Promise<WindowResult> {
 	if (!tmuxClient() || !Bun.which("tmux"))
 		return {
 			ok: false,
 			reason: "tmux is not available; run the shell inside a tmux client",
 		};
 	const name = tmuxWindowName(request.name);
+	const argv = viewWindowArgs(request, { entry: selfExecEntry() });
 	const process = Bun.spawn(
-		["tmux", "new-window", "-n", name, "-c", request.cwd],
+		["tmux", "new-window", "-n", name, "-c", request.cwd, "--", ...argv],
 		{ stdio: ["ignore", "ignore", "pipe"] },
 	);
 	const stderr = await new Response(process.stderr).text();

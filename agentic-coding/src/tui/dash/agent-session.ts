@@ -753,6 +753,11 @@ export interface AgentSessionMetadata {
 	readonly contextTokens?: number;
 	/** The conversation's accumulated spend across models and tools. */
 	readonly cost?: number;
+	/** The conversation's accumulated input and output tokens (`pi.usage`). */
+	readonly inputTokens?: number;
+	readonly outputTokens?: number;
+	/** Output tokens over the conversation's measured generation time. */
+	readonly tokensPerSecond?: number;
 }
 
 /** The host's measured wall-clock timing for one committed assistant entry
@@ -828,6 +833,43 @@ function usageCost(
 	return total > 0 ? total : undefined;
 }
 
+/** Sum of one `pi.usage` bucket's input/output tokens. */
+function sumUsageTokens(bucket: unknown): { input: number; output: number } {
+	if (!isRecord(bucket)) return { input: 0, output: 0 };
+	let input = 0;
+	let output = 0;
+	for (const value of Object.values(bucket)) {
+		if (!isRecord(value)) continue;
+		input += finiteNumber(value.input) ?? 0;
+		output += finiteNumber(value.output) ?? 0;
+	}
+	return { input, output };
+}
+
+/** The conversation's accumulated input/output tokens, from `pi.usage`. */
+function usageTokens(
+	usage: Record<string, unknown> | undefined,
+): { input: number; output: number } | undefined {
+	if (!usage) return undefined;
+	const models = sumUsageTokens(usage.models);
+	const tools = sumUsageTokens(usage.tools);
+	const input = models.input + tools.input;
+	const output = models.output + tools.output;
+	return input > 0 || output > 0 ? { input, output } : undefined;
+}
+
+/** Total measured generation time across the conversation's committed assistant
+ * entries (the host's `timings` map), for the output-token rate. */
+function timingGenerationMs(value: unknown): number | undefined {
+	if (!isRecord(value) || !isRecord(value.timings)) return undefined;
+	let total = 0;
+	for (const timing of Object.values(value.timings)) {
+		if (!isRecord(timing)) continue;
+		total += finiteNumber(timing.generationMs) ?? 0;
+	}
+	return total > 0 ? total : undefined;
+}
+
 export function readAgentSessionMetadata(value: unknown): AgentSessionMetadata {
 	if (!isRecord(value)) return { working: false };
 	const docs = isRecord(value.docs) ? value.docs : {};
@@ -856,9 +898,14 @@ export function readAgentSessionMetadata(value: unknown): AgentSessionMetadata {
 		live?.generation !== undefined;
 	const error = lastAssistantError(entries);
 	const contextTokens = lastPromptTokens(entries);
-	const cost = usageCost(
-		isRecord(docs["pi.usage"]) ? docs["pi.usage"] : undefined,
-	);
+	const usage = isRecord(docs["pi.usage"]) ? docs["pi.usage"] : undefined;
+	const cost = usageCost(usage);
+	const tokens = usageTokens(usage);
+	const generationMs = timingGenerationMs(value);
+	const tokensPerSecond =
+		tokens && tokens.output > 0 && generationMs !== undefined
+			? Math.round((tokens.output / (generationMs / 1000)) * 10) / 10
+			: undefined;
 	return {
 		...(model ? { model } : {}),
 		...(thinking ? { thinking } : {}),
@@ -866,6 +913,10 @@ export function readAgentSessionMetadata(value: unknown): AgentSessionMetadata {
 		...(error ? { error } : {}),
 		...(contextTokens !== undefined ? { contextTokens } : {}),
 		...(cost !== undefined ? { cost } : {}),
+		...(tokens
+			? { inputTokens: tokens.input, outputTokens: tokens.output }
+			: {}),
+		...(tokensPerSecond !== undefined ? { tokensPerSecond } : {}),
 	};
 }
 

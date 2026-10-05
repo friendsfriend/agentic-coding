@@ -15,6 +15,7 @@ import {
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { DurableHost } from "../src/agent-host/host.ts";
 import { hostLayout } from "../src/agent-host/layout.ts";
+import { agentMetrics } from "../src/workflow/run-projections.ts";
 
 function tempWorkflowDir(): string {
 	return fs.mkdtempSync(path.join(os.tmpdir(), "agent-host-telemetry-"));
@@ -107,6 +108,19 @@ describe("durable host telemetry", () => {
 		}
 		expect(envelopes.some((e) => e.event === "runtime.tool_start")).toBe(true);
 		expect(envelopes.some((e) => e.event === "runtime.tool")).toBe(true);
+		// One usage envelope per committed assistant message: this is what the
+		// dashboard's per-agent cost/token/tok-s projection aggregates, and what
+		// persists for long-term monitoring.
+		const usage = envelopes.find((e) => e.event === "runtime.usage");
+		expect(usage).toBeDefined();
+		expect(usage.workflowId).toBe("wf-1");
+		expect(usage.runId).toBe("run-1");
+		expect(usage.role).toBe("worker");
+		expect(usage.outputTokens).toBeGreaterThan(0);
+		expect(usage.inputTokens).toBeGreaterThan(0);
+		const metrics = agentMetrics(envelopes).get("worker");
+		expect(metrics?.outputTokens).toBeGreaterThan(0);
+		expect(metrics?.inputTokens).toBeGreaterThan(0);
 		await host.shutdown();
 	});
 

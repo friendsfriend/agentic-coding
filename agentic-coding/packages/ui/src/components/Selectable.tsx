@@ -78,6 +78,11 @@ export interface SelectableListProps<T> {
 	 * Only the window uses it, so a conservative value keeps the cursor inside
 	 * the window; rows taller than the estimate scroll in whole rows instead. */
 	estimatedItemHeight?: number;
+	/** Per-item heights, in item order, for rows that size themselves with
+	 * different line counts. Enables an exact window (`ScrollableList`): a list
+	 * whose rows vary from two to five lines fills its height instead of
+	 * rendering `height / estimate` rows and leaving the rest empty. */
+	itemHeights?: number[];
 }
 
 /**
@@ -107,6 +112,7 @@ export function SelectableList<T>(props: SelectableListProps<T>) {
 				hostBodyLines(dimensions().height)
 			}
 			estimatedItemHeight={props.estimatedItemHeight ?? itemHeight()}
+			{...(props.itemHeights ? { itemHeights: props.itemHeights } : {})}
 			showScrollIndicator={false}
 			renderItem={(item, isSelected, index) => (
 				<Selectable

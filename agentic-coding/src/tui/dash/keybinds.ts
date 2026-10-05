@@ -171,6 +171,7 @@ export function dashboardDetailKeybindCatalog(options: {
 				{ key: "T", action: "Theme picker", short: "theme" },
 				{ key: "Ctrl+Shift+C", action: "Copy selection", standard: true },
 				{ key: "r", action: "Refresh dashboard", short: "refresh" },
+				hostKeybind("ctrl+t"),
 				hostKeybind("?"),
 				hostKeybind("q"),
 			],

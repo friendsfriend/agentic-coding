@@ -30,7 +30,7 @@ export function workspaceSidebarKeybindCatalog(): KeybindSection[] {
 				},
 				{
 					key: "n",
-					action: "open the workspace in a new tmux window",
+					action: "open this workflow's dashboard in a new tmux window",
 					short: "tmux",
 				},
 				{
@@ -50,6 +50,7 @@ export function workspaceSidebarKeybindCatalog(): KeybindSection[] {
 					short: "new",
 				},
 				hostKeybind("ctrl+s"),
+				hostKeybind("ctrl+t"),
 				{
 					key: "Esc",
 					action: "focus the main content",
@@ -88,6 +89,7 @@ export function environmentsKeybindCatalog(): KeybindSection[] {
 			title: "Actions",
 			keybinds: [
 				hostKeybind("ctrl+s"),
+				hostKeybind("ctrl+t"),
 				hostKeybind("?"),
 				hostDiagnosticsKeybind(),
 				hostKeybind("q"),
@@ -112,6 +114,7 @@ export function observabilityKeybindCatalog(options: {
 	// tab-order or number key belongs in the footer or the help.
 	const locations = hostKeybind("ctrl+p");
 	const quit = hostKeybind("q");
+	const windowKeybind = hostKeybind("ctrl+t");
 	if (options.tab === "traces") {
 		const navigation =
 			options.view === "selection"
@@ -147,6 +150,7 @@ export function observabilityKeybindCatalog(options: {
 					{ key: "O", action: "sort" },
 					{ key: "w", action: "all workspaces", short: "workspaces" },
 					theme,
+					windowKeybind,
 					locations,
 					help,
 					quit,
@@ -205,6 +209,7 @@ export function observabilityKeybindCatalog(options: {
 						},
 						{ key: "f", action: "finish review", short: "finish" },
 						{ key: "r", action: "refresh" },
+						windowKeybind,
 						locations,
 						help,
 						quit,
@@ -223,7 +228,7 @@ export function observabilityKeybindCatalog(options: {
 				},
 				{
 					title: "Actions",
-					keybinds: [theme, locations, help, quit],
+					keybinds: [theme, windowKeybind, locations, help, quit],
 				},
 			];
 		case "logs":
@@ -241,6 +246,7 @@ export function observabilityKeybindCatalog(options: {
 					keybinds: [
 						{ key: "/", action: "search" },
 						theme,
+						windowKeybind,
 						locations,
 						help,
 						quit,
@@ -259,7 +265,7 @@ export function observabilityKeybindCatalog(options: {
 				},
 				{
 					title: "Actions",
-					keybinds: [theme, locations, help, quit],
+					keybinds: [theme, windowKeybind, locations, help, quit],
 				},
 			];
 		default:

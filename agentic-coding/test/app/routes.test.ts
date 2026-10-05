@@ -14,6 +14,7 @@ import {
 	PAGES,
 	pageLabel,
 	parentRoute,
+	parseRoute,
 	pickerDestinations,
 	resolveAvailable,
 	resourceRoute,
@@ -290,5 +291,32 @@ describe("page routes: identity and reactive wrapper", () => {
 		// Parent used `navigate`, so Back returns to the location it left.
 		expect(nav.current()).toEqual(resourceRoute("applications", "app-1"));
 		expect(nav.canBack()).toBe(true);
+	});
+
+	test("a spawned view's route handoff is parsed defensively", () => {
+		expect(
+			parseRoute({
+				page: "workflows.detail",
+				resourceId: "wf-1",
+				params: { repo: "/repo", view: "changeRequests" },
+			}),
+		).toEqual({
+			page: "workflows.detail",
+			resourceId: "wf-1",
+			params: { repo: "/repo", view: "changeRequests" },
+		});
+		expect(parseRoute({ page: "wiki.note", resourceId: "concept" })).toEqual({
+			page: "wiki.note",
+			resourceId: "concept",
+		});
+		// Unknown pages, non-objects and non-string params are rejected, so a
+		// malformed handoff opens the default view instead of a broken page.
+		expect(parseRoute({ page: "not-a-page" })).toBeUndefined();
+		expect(parseRoute({ page: 7 })).toBeUndefined();
+		expect(parseRoute("home")).toBeUndefined();
+		expect(parseRoute(undefined)).toBeUndefined();
+		expect(parseRoute({ page: "home", params: { bad: 1 } })).toEqual({
+			page: "home",
+		});
 	});
 });

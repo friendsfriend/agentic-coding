@@ -395,6 +395,39 @@ export function pageLabel(route: Route): string {
 	return PAGES[route.page].label;
 }
 
+/**
+ * Parse a route from untrusted input (a spawned shell's `--route` argument).
+ * Unknown pages and non-string params are rejected rather than trusted, so a
+ * malformed handoff opens the default view instead of rendering a broken page.
+ */
+export function parseRoute(value: unknown): Route | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value))
+		return undefined;
+	const record = value as Record<string, unknown>;
+	const page = record.page;
+	if (typeof page !== "string" || !(page in PAGES)) return undefined;
+	const resourceId =
+		typeof record.resourceId === "string" ? record.resourceId : undefined;
+	const rawParams = record.params;
+	let params: Record<string, string> | undefined;
+	if (rawParams && typeof rawParams === "object" && !Array.isArray(rawParams)) {
+		const entries = Object.entries(rawParams as Record<string, unknown>).filter(
+			(entry): entry is [string, string] => typeof entry[1] === "string",
+		);
+		if (entries.length > 0) params = Object.fromEntries(entries);
+	}
+	return {
+		page: page as PageId,
+		...(resourceId !== undefined ? { resourceId } : {}),
+		...(params !== undefined ? { params } : {}),
+	};
+}
+
+/** One shell page's tmux window name: the page label, safe as a tmux target. */
+export function routeWindowName(route: Route): string {
+	return pageLabel(route);
+}
+
 export function featureOf(route: Route): FeatureId | undefined {
 	return PAGES[route.page].feature;
 }

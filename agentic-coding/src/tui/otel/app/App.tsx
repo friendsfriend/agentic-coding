@@ -139,12 +139,13 @@ import {
 	type Route,
 	resolveAvailable,
 	routeKey,
+	routeWindowName,
 	type SettingsSection,
 	settingsSectionOfPage,
 	workflowRoute,
 	workflowTarget,
 } from "../../shared/routes.ts";
-import { openWorkspaceWindow } from "../../shared/side-app.ts";
+import { openViewWindow } from "../../shared/side-app.ts";
 import { DeleteWorkflowModal } from "../components/DeleteWorkflowModal.tsx";
 import { NotificationOverlay } from "../components/Notification.tsx";
 import {
@@ -333,6 +334,9 @@ export function App(props: {
 	/** Workspace sidebar sizing mode, resolved from `ui.sidebar_mode` by the
 	 * shell root (defaults to expanding). */
 	sidebarMode?: SidebarMode;
+	/** Initial page for a spawned view window (`--route`); absent opens the
+	 * route's default. */
+	initialRoute?: Route;
 }) {
 	const renderer = useRenderer();
 	const dimensions = useTerminalDimensions();
@@ -352,13 +356,14 @@ export function App(props: {
 	// one typed location, structural parents and chronological Back replace the
 	// per-feature stacks and single cross-feature origin.
 	const initialRoute: Route =
-		props.dashboard?.mode === "home"
+		props.initialRoute ??
+		(props.dashboard?.mode === "home"
 			? // The full application enters Home (task 2.4); the per-workflow
 				// dashboard is reached by `dash`, not by a shell route.
 				{ page: "home" }
 			: props.environments
 				? { page: "environments" }
-				: { page: "observability.traces" };
+				: { page: "observability.traces" });
 	const pages = createPageNavigation(createRouterState(initialRoute));
 	const currentPage = () => pages.current().page;
 	const activeFeature = (): FeatureId | undefined => pages.feature();
@@ -438,19 +443,49 @@ export function App(props: {
 		revealOpenWorkflow();
 		setFocusPanel("sidebar");
 	};
-	/** Open one workflow's worktree in a new tmux window (the workspace surface
-	 * for a shell running inside tmux). tmux-only by design: without a client the
-	 * failure is reported instead of spawning something invisible. */
-	const spawnWorkspaceWindow = (overview: WorkflowOverview): void => {
-		const target =
-			overview.state.worktree || overview.state.repository || process.cwd();
-		void openWorkspaceWindow({
-			name: overview.state.workflowId,
-			cwd: target,
+	/** Base URL of the server this shell talks to; a spawned view attaches to it
+	 * instead of owning a second server. Absent in test/demo mode. */
+	const viewAttachUrl = (): string | undefined =>
+		process.env.AGENTIC_WORKFLOW_URL;
+	/** Open one view in a new tmux window at its route, attached to the running
+	 * server: the window is a client of this process's backend, never a second
+	 * owner (the server probe in `main` also attaches a bare second `home`). */
+	const spawnView = (
+		route: Route,
+		options: { name?: string; cwd?: string; repository?: string } = {},
+	): void => {
+		const attachUrl = viewAttachUrl();
+		if (!attachUrl) {
+			notify("Cannot open a view window: no server is running", "warning");
+			return;
+		}
+		const token = process.env.AGENTIC_WORKFLOW_TOKEN;
+		void openViewWindow({
+			name: options.name ?? routeWindowName(route),
+			cwd: options.cwd ?? process.cwd(),
+			repository: options.repository ?? props.repos[0] ?? process.cwd(),
+			routeJson: JSON.stringify(route),
+			attachUrl,
+			...(token ? { token } : {}),
 		}).then((result) => {
 			if (result.ok)
 				notify(`Opened ${result.name} in a tmux window`, "success");
 			else notify(result.reason, "error");
+		});
+	};
+	/** Ctrl+T: the page currently shown, in a new tmux window. */
+	const spawnCurrentView = (): void => {
+		const route = pages.current();
+		const target = workflowTarget(route);
+		spawnView(route, target ? { repository: target.repo } : {});
+	};
+	/** Sidebar `n`: the selected workflow's dashboard in a new tmux window. */
+	const spawnWorkspaceWindow = (overview: WorkflowOverview): void => {
+		spawnView(workflowRoute(overview.target, overview.state.workflowId), {
+			name: overview.state.workflowId,
+			cwd:
+				overview.state.worktree || overview.state.repository || process.cwd(),
+			repository: overview.target,
 		});
 	};
 	/** Delete the workflow the confirmation names: store rows and worktree go,
@@ -1776,6 +1811,15 @@ export function App(props: {
 			return;
 		}
 		if (phase() === "starting" || phase() === "stopping") return;
+
+		// Ctrl+T opens the view currently shown in a new tmux window (the tmux
+		// new-window instinct). Host-owned, so every surface reaches it; the
+		// spawned shell attaches to this process's server instead of owning a
+		// second one.
+		if (event.ctrl && key === "t") {
+			spawnCurrentView();
+			return;
+		}
 
 		// The dedicated sidebar toggle works on every surface (host keybind), so
 		// feature views whose own layers claim h/l still reach it. A shell overlay

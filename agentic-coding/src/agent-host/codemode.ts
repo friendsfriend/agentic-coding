@@ -134,7 +134,12 @@ function nestedTool(
 			const text = result.content ? contentToText(result.content) : captured;
 			record.output = text;
 			record.isError = result.isError === true;
-			if (details !== undefined) record.details = details as JsonValue;
+			// Some tools (edit's diff, read's truncation) report their structured
+			// result through `result.details` instead of `api.details`; capture
+			// either, so a nested call keeps the same expandable view it would have
+			// as a standalone row.
+			const structured = details ?? result.details;
+			if (structured !== undefined) record.details = structured as JsonValue;
 			if (result.isError) throw new Error(text.trim() || `${tool.name} failed`);
 			return details !== undefined ? details : text;
 		},

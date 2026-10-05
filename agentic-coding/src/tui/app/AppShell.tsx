@@ -13,6 +13,7 @@ import type { MetricStore } from "../otel/model/metricStore.ts";
 import type { TelemetryDb } from "../otel/model/telemetry-db.ts";
 import type { TopologyStore } from "../otel/model/topologyStore.ts";
 import type { TraceStore } from "../otel/model/traceStore.ts";
+import type { Route } from "../shared/routes.ts";
 import { EnvironmentsFeature } from "./EnvironmentsFeature.tsx";
 
 export interface AppShellProps {
@@ -31,6 +32,9 @@ export interface AppShellProps {
 	attached?: boolean;
 	/** Explicit attached-surface label rendered in the header. */
 	attachLabel?: string;
+	/** Initial page for a spawned view window (`--route`); absent opens the
+	 * route's default. */
+	initialRoute?: Route;
 }
 
 /**
@@ -72,6 +76,7 @@ export function AppShell(props: AppShellProps) {
 			environments={props.environments}
 			attached={props.attached}
 			attachLabel={props.attachLabel}
+			initialRoute={props.initialRoute}
 			sidebarSide={configuredSidebarSide()}
 			sidebarMode={configuredSidebarMode()}
 			renderEnvironments={

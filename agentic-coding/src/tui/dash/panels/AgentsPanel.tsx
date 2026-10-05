@@ -28,6 +28,14 @@ export interface AgentsPanelProps {
 
 export function AgentsPanel(props: AgentsPanelProps) {
 	const findingSummaryRows = () => (props.narrow ? 3 : 1);
+	/** The row heights, in item order: role + runtime/model, plus the metrics
+	 * line and the finding summary when present. `SelectableList` needs them to
+	 * fill the panel — a single estimate cannot cover two- to five-line rows. */
+	const rowHeight = (agent: DashboardData["agents"][number]): number =>
+		2 +
+		(agentMetricLine(agent.metrics) ? 1 : 0) +
+		(agent.findingCounts ? findingSummaryRows() : 0);
+	const rowHeights = () => props.data.agents.map(rowHeight);
 	return (
 		<Panel
 			title="Agents"
@@ -42,7 +50,7 @@ export function AgentsPanel(props: AgentsPanelProps) {
 		>
 			<SelectableList
 				items={props.data.agents}
-				estimatedItemHeight={4}
+				itemHeights={rowHeights()}
 				selectedIndex={props.active ? props.selectedIndex : -1}
 				renderItem={(agent, _selected) => {
 					const timeline = () =>
@@ -79,11 +87,7 @@ export function AgentsPanel(props: AgentsPanelProps) {
 					return (
 						<box
 							width="100%"
-							height={
-								2 +
-								(metricsLine() ? 1 : 0) +
-								(agent.findingCounts ? findingSummaryRows() : 0)
-							}
+							height={rowHeight(agent)}
 							flexDirection="column"
 							paddingRight={1}
 						>
@@ -110,7 +114,10 @@ export function AgentsPanel(props: AgentsPanelProps) {
 											: "static"
 									}
 									attributes={TextAttributes.BOLD}
-									transitionKey={agent.role}
+									// No `transitionKey`: the badge is the agent's live status, so a
+									// bash→read→thinking change swaps instantly instead of wiping
+									// through the previous word (the aurora/tone animation still
+									// runs while a step is active).
 								/>
 							</box>
 							<box width="100%" height={1} flexDirection="row">
