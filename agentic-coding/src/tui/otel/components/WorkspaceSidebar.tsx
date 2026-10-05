@@ -159,19 +159,25 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 						>
 							<text fg={uiColors.textMuted}>{openGlyph()}</text>
 						</box>
-						<SelectableList
-							items={props.overviews}
-							selectedIndex={props.selectedIndex}
-							itemHeight={1}
-							availableLines={Math.max(1, dimensions().height - 4)}
-							onSelect={(index) => {
-								props.onFocus();
-								props.onSelectIndex(index);
-							}}
-							renderItem={(_overview, _selected, index) => (
-								<text fg={uiColors.textSecondary}>{`${index + 1}`}</text>
-							)}
-						/>
+						{/* An index list with nothing to index stays empty: the strip is a
+						    jump list, so a filler line ("No items") would be the only thing
+						    it ever says when there are no workflows. The expanded panel
+						    explains an empty list in words instead. */}
+						<Show when={props.overviews.length > 0}>
+							<SelectableList
+								items={props.overviews}
+								selectedIndex={props.selectedIndex}
+								itemHeight={1}
+								availableLines={Math.max(1, dimensions().height - 4)}
+								onSelect={(index) => {
+									props.onFocus();
+									props.onSelectIndex(index);
+								}}
+								renderItem={(_overview, _selected, index) => (
+									<text fg={uiColors.textSecondary}>{`${index + 1}`}</text>
+								)}
+							/>
+						</Show>
 					</>
 				}
 			>

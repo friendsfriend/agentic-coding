@@ -1142,6 +1142,19 @@ export function effects(db: Database, id: string): WorkflowEffect[] {
  * keyed by change id and describes the legacy import, not this workflow, so it
  * is left alone. */
 export function deleteWorkflowRows(db: Database, id: string): number {
+	// A legacy-imported workflow's source row lives in the pre-migration
+	// `workflows` table keyed by change id, and the engine's legacy import
+	// re-creates every instance row it cannot find: without this, deleting such
+	// a workflow is silently undone by the next store open.
+	if (tableExists(db, "workflows")) {
+		const rows = db
+			.query("SELECT change_id FROM workflow_instances WHERE id=?")
+			.all(id) as Array<{ change_id: string | null }>;
+		for (const row of rows)
+			if (row.change_id)
+				db.query("DELETE FROM workflows WHERE change_id=?").run(row.change_id);
+		db.query("DELETE FROM workflows WHERE change_id=?").run(id);
+	}
 	db.query("DELETE FROM workflow_events WHERE workflow_id=?").run(id);
 	db.query("DELETE FROM workflow_runs WHERE workflow_id=?").run(id);
 	db.query("DELETE FROM workflow_outbox WHERE workflow_id=?").run(id);

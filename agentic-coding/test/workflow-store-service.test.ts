@@ -251,6 +251,14 @@ describe("workflow store service", () => {
 					yield* store.transaction(repo, (db) => {
 						seedWorkflow(db, repo, "wf-1");
 						seedWorkflow(db, repo, "wf-2");
+						// The pre-migration source of a legacy-imported workflow: the
+						// engine's import re-creates any instance row it cannot find, so
+						// a delete must remove the source row with it.
+						db.exec(
+							"CREATE TABLE workflows(change_id TEXT PRIMARY KEY, state TEXT NOT NULL)",
+						);
+						db.query("INSERT INTO workflows VALUES (?,?)").run("wf-1", "{}");
+						db.query("INSERT INTO workflows VALUES (?,?)").run("wf-2", "{}");
 					});
 					const removed = yield* store.transaction(repo, (db) =>
 						deleteWorkflowRows(db, "wf-1"),
@@ -270,6 +278,16 @@ describe("workflow store service", () => {
 						outbox: 1,
 						audit: 1,
 					});
+					// The deleted workflow's legacy source row is gone, the other's is
+					// untouched, and nothing is left for the import to re-create.
+					const legacy = yield* store.transaction(repo, (db) =>
+						(
+							db
+								.query("SELECT change_id FROM workflows ORDER BY change_id")
+								.all() as Array<{ change_id: string }>
+						).map((row) => row.change_id),
+					);
+					expect(legacy).toEqual(["wf-2"]);
 					// A workflow that is already gone reports 0, so the caller can
 					// surface not-found instead of a silent success.
 					expect(

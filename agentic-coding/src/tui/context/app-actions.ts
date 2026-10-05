@@ -12,6 +12,7 @@ export {
 	onWorkflowExecutionProgress,
 	onWorkflowExecutionSettled,
 	PRESET_CONFIG_DEFAULTS,
+	presetCatalog,
 	requestWorkflowExecution,
 	startWikiCommentWorkflowInProcess,
 	switchWorkflowPreset,

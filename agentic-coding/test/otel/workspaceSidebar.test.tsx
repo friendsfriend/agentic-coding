@@ -192,6 +192,24 @@ test("the sidebar collapses to indices while unfocused and expands on focus", as
 	}
 });
 
+test("the collapsed strip shows no filler when there is nothing to list", async () => {
+	stubGateway([]);
+	const t = await renderShell();
+	try {
+		// Unfocused and empty: the strip is the toggle glyph and nothing else. The
+		// list primitive's own empty state ("No items") must not leak into it.
+		expect(t.captureCharFrame()).not.toContain("No items");
+		expect(t.captureCharFrame()).not.toContain("Reading workflows");
+
+		// Focused, the expanded panel is where an empty list is explained.
+		await focusSidebar(t);
+		expect(await renderUntil(t, "No active workflows")).toBe(true);
+	} finally {
+		t.renderer.destroy();
+		clearGateway();
+	}
+});
+
 test("the sidebar filters workflows with f", async () => {
 	stubGateway();
 	const t = await renderShell();

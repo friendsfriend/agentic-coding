@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
 	fusionPlannerCount,
+	presetCatalog,
 	startRouting,
 } from "../src/server/operations/engine.ts";
 import { registerBuiltins } from "../src/workflow/definitions.ts";
@@ -918,5 +919,46 @@ describe("stage gate policy resolution", () => {
 				presets: { "use-default-model": { runtime: "pi-durable", gates: {} } },
 			}),
 		).toThrow(/reserved preset use-default-model/);
+	});
+});
+
+describe("preset catalog read", () => {
+	test("reports the config failure instead of an empty list", () => {
+		// One profile with a removed runtime fails the whole agents config, which
+		// used to look exactly like "no presets configured" in every picker.
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "preset-catalog-"));
+		const file = path.join(dir, "config.json");
+		const write = (agents: unknown) =>
+			fs.writeFileSync(file, `${JSON.stringify({ agents }, null, 2)}\n`);
+		const previous = process.env.HERDR_WORKFLOW_CONFIG;
+		process.env.HERDR_WORKFLOW_CONFIG = file;
+		try {
+			write({
+				profiles: { good: { runtime: "pi-durable" } },
+				presets: {
+					shipping: {
+						default_profile: "good",
+						pools: {
+							"core.plan": [{ label: "good", profile: "good", default: true }],
+						},
+					},
+				},
+			});
+			const read = presetCatalog();
+			expect(read.error).toBeUndefined();
+			expect(read.names).toContain("shipping");
+
+			write({
+				profiles: { stale: { runtime: "pi" } },
+				presets: { shipping: { default_profile: "stale", pools: {} } },
+			});
+			const failed = presetCatalog();
+			expect(failed.names).toEqual([]);
+			expect(failed.error).toBe("invalid runtime in profile stale");
+		} finally {
+			if (previous === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
+			else process.env.HERDR_WORKFLOW_CONFIG = previous;
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });

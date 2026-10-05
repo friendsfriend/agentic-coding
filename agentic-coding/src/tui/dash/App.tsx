@@ -63,13 +63,13 @@ import {
 	panelContext,
 } from "./keybinds.ts";
 import {
-	listPresetNames,
 	onWorkflowExecutionError,
 	onWorkflowExecutionProgress,
 	onWorkflowExecutionSettled,
 	openSpecArtifact,
 	openSpecArtifacts,
 	PRESET_CONFIG_DEFAULTS,
+	presetCatalog,
 	serverOwnsExecutionEvents,
 	subscribeDataEvents,
 	switchWorkflowPreset,
@@ -862,12 +862,13 @@ export function App(props: {
 	};
 	const openPresetSwitcher = () => {
 		const current = data().state.selectedPreset;
-		let configured: string[] = [];
-		try {
-			configured = listPresetNames(data().state.repository);
-		} catch {
-			/* The picker still offers configuration defaults when config is unavailable. */
-		}
+		// The picker still offers configuration defaults when the config cannot be
+		// read, but an empty list must not read as "no presets configured": the
+		// failure is reported.
+		const catalog = presetCatalog(data().state.repository);
+		if (catalog.error)
+			notify(`Agent presets could not be read: ${catalog.error}`, "error");
+		const configured = catalog.names;
 		const names = new Set(configured);
 		if (current) names.add(current);
 		setPresetSwitcherChoices([

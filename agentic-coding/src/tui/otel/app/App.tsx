@@ -57,7 +57,7 @@ import {
 } from "../../../workflow/project-catalog.ts";
 import { copyToClipboard } from "../../clipboard.ts";
 import {
-	listPresetNames,
+	presetCatalog,
 	saveSidebarMode,
 	startWikiCommentWorkflowInProcess,
 } from "../../context/app-actions.ts";
@@ -998,6 +998,19 @@ export function App(props: {
 	 * live set instead of a TUI workflow list.
 	 */
 	const [catalogRoots, setCatalogRoots] = createSignal<string[]>([]);
+	/** The launch form's preset names. A preset list that cannot be read (one
+	 * invalid profile fails the whole agents config) is reported instead of
+	 * rendering an empty picker, and reported once per distinct failure so a
+	 * re-render cannot spam the notice. */
+	let reportedPresetError: string | undefined;
+	const launchPresetNames = (repository: string): string[] => {
+		const catalog = presetCatalog(repository);
+		if (catalog.error && catalog.error !== reportedPresetError) {
+			reportedPresetError = catalog.error;
+			notify(`Agent presets could not be read: ${catalog.error}`, "error");
+		}
+		return catalog.names;
+	};
 	const openLaunch = (context: WorkflowLaunchContext): void => {
 		const problem = launchContextError(context);
 		if (problem) {
@@ -2987,7 +3000,7 @@ export function App(props: {
 			{nav.modal() === "new-workflow" && launchContext() && (
 				<NewWorkflowModal
 					context={launchContext() as WorkflowLaunchContext}
-					presetsForRepository={listPresetNames}
+					presetsForRepository={launchPresetNames}
 					onKeyReady={(handler) => setLaunchHandler(() => handler)}
 					onCancel={closeLaunch}
 					onComplete={submitLaunch}

@@ -215,8 +215,17 @@ export function startArgs(input: {
 			: {}),
 	};
 }
+/** The presets a launch may select, plus the reason the agents config could not
+ * be read. An empty name list on its own reads as "no presets configured",
+ * which hides a broken profile: a caller that can show the failure takes it
+ * from here instead of offering an empty picker. */
+export interface PresetCatalog {
+	names: string[];
+	error?: string;
+}
+
 /** Preset names available for the new workflow modal's agent-preset step. */
-export function listPresetNames(repository?: string): string[] {
+export function presetCatalog(repository?: string): PresetCatalog {
 	const resolved = loadConfigWithProvenance({ repository });
 	try {
 		const agents = parseAgentsConfig(
@@ -224,10 +233,19 @@ export function listPresetNames(repository?: string): string[] {
 			resolved.config,
 			resolved.provenance.files.join(", ") || undefined,
 		);
-		return Object.keys(agents.presets ?? {}).sort();
-	} catch {
-		return [];
+		return { names: Object.keys(agents.presets ?? {}).sort() };
+	} catch (error) {
+		return {
+			names: [],
+			error: error instanceof Error ? error.message : String(error),
+		};
 	}
+}
+
+/** Preset names only, for a caller with nowhere to report a config failure
+ * (see `presetCatalog`). */
+export function listPresetNames(repository?: string): string[] {
+	return presetCatalog(repository).names;
 }
 export async function startWorkflowInProcess(
 	input: Parameters<typeof startArgs>[0],
