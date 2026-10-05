@@ -3,8 +3,9 @@
 Status: `launch-workflows-from-project-and-wiki-pages`.
 
 Workflow creation belongs to the resource page that owns the target. The full
-application's workspace sidebar lists the durable workflows and opens one
-workflow's dashboard; there is no separate history/recent browser.
+application's workspace sidebar lists the durable workflows, opens one
+workflow's dashboard, and deletes one behind a confirmation (`d`: store rows
+and worktree go, the branch stays); there is no separate history/recent browser.
 
 This file is the human-readable mirror of
 `agentic-coding/src/tui/dash/launch.ts` (the launch context and outcome

@@ -12,6 +12,7 @@ import type {
 	AgentsMutationRequest,
 	ReviewSaveRequest,
 	WorkflowActionRequest,
+	WorkflowDeleteRequest,
 	WorkflowExecuteRequest,
 	WorkflowQuestionRequest,
 	WorkflowRepairRequest,
@@ -306,6 +307,21 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			options.hub?.watchRepo(decoded.repo);
 			operations.execute(decoded);
 			return json({ ok: true, value: null });
+		}
+
+		if (method === "POST" && path === "/api/v1/workflow/delete") {
+			const decoded = decodeRouteRequest<WorkflowDeleteRequest>(
+				"/api/v1/workflow/delete",
+				await readJsonBody(request),
+			);
+			const value = await operations.deleteWorkflow(decoded);
+			events.publish({
+				domain: "workflow",
+				kind: "workflow.delete",
+				resource: decoded.repo,
+				runId: decoded.workflowId,
+			});
+			return json({ ok: true, value });
 		}
 
 		if (method === "POST" && path === "/api/v1/agent/handoff") {

@@ -73,6 +73,7 @@ function stubOperations(
 		question: () => stubView,
 		saveReview: async () => {},
 		execute: () => {},
+		deleteWorkflow: async () => ({ worktreeRemoved: false }),
 		handoff: async () => stubView,
 		saveAgents: () => {},
 		loadAgents: () => ({
@@ -591,6 +592,48 @@ describe("workflow event hub", () => {
 		} finally {
 			await server.stop();
 		}
+	});
+});
+
+describe("workflow deletion", () => {
+	test("forwards the delete and publishes a workflow event", async () => {
+		let seen: unknown;
+		const events: unknown[] = [];
+		await withServer(
+			async (server) => {
+				const subscription = server.app.events.open({}, (event) =>
+					events.push(event),
+				);
+				try {
+					const client = new BackendClient({
+						baseUrl: server.url,
+						token: server.token,
+						ownerId: "tui-1",
+					});
+					await client.deleteWorkflow({
+						repo: "/repo",
+						workflowId: "wf-1",
+					});
+				} finally {
+					subscription.unsubscribe();
+				}
+				expect(seen).toMatchObject({ repo: "/repo", workflowId: "wf-1" });
+				expect(events).toContainEqual(
+					expect.objectContaining({
+						domain: "workflow",
+						kind: "workflow.delete",
+						resource: "/repo",
+						runId: "wf-1",
+					}),
+				);
+			},
+			stubOperations({
+				deleteWorkflow: async (request) => {
+					seen = request;
+					return { worktreeRemoved: false };
+				},
+			}),
+		);
 	});
 });
 

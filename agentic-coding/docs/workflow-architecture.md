@@ -38,7 +38,9 @@ The OpenTUI shell is the workspace surface: its workspace sidebar
 (`src/tui/otel/app/sidebar-model.ts`, `src/tui/otel/components/WorkspaceSidebar.tsx`)
 lists the durable workflows from the workflow store (SQLite-backed, so rows
 survive a restart), `Enter` opens that workflow's dashboard in the page body,
-`n` opens the worktree in a new tmux window, and `Ctrl+S` toggles focus between
+`n` opens the worktree in a new tmux window, `d` opens a confirmation that
+deletes the workflow (its store rows and worktree directory; the branch is
+kept, so the committed work stays reviewable), and `Ctrl+S` toggles focus between
 the sidebar and the page body on every surface (it is a host key, so feature
 views that claim `h`/`l` cannot swallow it). The sidebar collapses to
 the workspace index while unfocused; `ui.sidebar_mode: "permanent"` keeps it

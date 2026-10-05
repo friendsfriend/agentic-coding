@@ -1134,6 +1134,22 @@ export function effects(db: Database, id: string): WorkflowEffect[] {
 			.all(id) as EffectRow[]
 	).map(effectFromRow);
 }
+
+/** Delete one workflow and every row that belongs to it, children first so the
+ * foreign keys never see a dangling reference. Returns the number of instances
+ * removed: 0 means the workflow was already gone, which a caller reports as
+ * not-found instead of silently succeeding. The migration diagnostics table is
+ * keyed by change id and describes the legacy import, not this workflow, so it
+ * is left alone. */
+export function deleteWorkflowRows(db: Database, id: string): number {
+	db.query("DELETE FROM workflow_events WHERE workflow_id=?").run(id);
+	db.query("DELETE FROM workflow_runs WHERE workflow_id=?").run(id);
+	db.query("DELETE FROM workflow_outbox WHERE workflow_id=?").run(id);
+	db.query("DELETE FROM workflow_security_audit WHERE workflow_id=?").run(id);
+	return Number(
+		db.query("DELETE FROM workflow_instances WHERE id=?").run(id).changes,
+	);
+}
 export function writeSnapshot(db: Database, snapshot: WorkflowSnapshot): void {
 	db.query(
 		"UPDATE workflow_instances SET revision=?,status=?,current_step=?,snapshot_json=?,updated_at=? WHERE id=?",

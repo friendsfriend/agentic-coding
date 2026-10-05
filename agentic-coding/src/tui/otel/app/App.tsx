@@ -92,7 +92,7 @@ import {
 import { isKeyTraceSuppressed, traceTui } from "../../dash/tracing.ts";
 import { NewWorkflowModal } from "../../dash/ui/NewWorkflowModal.tsx";
 import type { WikiReviewComment } from "../../data/wiki.ts";
-import { loadOverviews } from "../../data/workflow.ts";
+import { deleteWorkflow, loadOverviews } from "../../data/workflow.ts";
 import {
 	phase,
 	quitConfirmation,
@@ -145,6 +145,7 @@ import {
 	workflowTarget,
 } from "../../shared/routes.ts";
 import { openWorkspaceWindow } from "../../shared/side-app.ts";
+import { DeleteWorkflowModal } from "../components/DeleteWorkflowModal.tsx";
 import { NotificationOverlay } from "../components/Notification.tsx";
 import {
 	FilterModal,
@@ -407,6 +408,8 @@ export function App(props: {
 	>([]);
 	const [sidebarLoading, setSidebarLoading] = createSignal(true);
 	const [sidebarIndex, setSidebarIndex] = createSignal(0);
+	/** Workflow the delete confirmation names; undefined closes it. */
+	const [deleteTarget, setDeleteTarget] = createSignal<WorkflowOverview>();
 	const sidebarRows = () =>
 		filterOverviews(sidebarOverviews(), sidebarFilter());
 	/** Workflow dashboard target of the current route, when it is one. */
@@ -434,6 +437,41 @@ export function App(props: {
 			else notify(result.reason, "error");
 		});
 	};
+	/** Delete the workflow the confirmation names: store rows and worktree go,
+	 * the branch stays. The row is dropped from the list immediately and the
+	 * store poll reconciles afterwards; a failed worktree removal is reported
+	 * rather than rolled back, because the stored state is already gone. */
+	const confirmDeleteWorkflow = async (
+		target: WorkflowOverview,
+	): Promise<void> => {
+		const workflowId = target.state.workflowId;
+		setDeleteTarget(undefined);
+		nav.popModal();
+		try {
+			const deletion = await deleteWorkflow(
+				target.state.repository,
+				workflowId,
+			);
+			setSidebarOverviews((overviews) =>
+				overviews.filter((entry) => entry.state.workflowId !== workflowId),
+			);
+			const open = workflow();
+			if (open?.workflowId === workflowId) pages.goToParent();
+			// The stored state is gone either way; a worktree that could not be
+			// removed is reported, because the files are still on disk.
+			if (deletion.worktreeError)
+				notify(
+					`Deleted ${workflowId}, but its worktree was kept: ${deletion.worktreeError}`,
+					"warning",
+				);
+			else notify(`Deleted ${workflowId}`, "success");
+		} catch (error) {
+			notify(
+				`Delete failed: ${error instanceof Error ? error.message : String(error)}`,
+				"error",
+			);
+		}
+	};
 	const handleSidebarKey = (event: KeyEvent): void => {
 		const key = event.name.toLowerCase();
 		const rows = sidebarRows();
@@ -460,6 +498,14 @@ export function App(props: {
 			if (entry) spawnWorkspaceWindow(entry);
 			return;
 		}
+		if (key === "d") {
+			const entry = rows[sidebarIndex()];
+			if (entry) {
+				setDeleteTarget(entry);
+				nav.pushModal("delete-workflow");
+			}
+			return;
+		}
 		if (key === "e") {
 			toggleSidebarModePersisted();
 			return;
@@ -473,6 +519,11 @@ export function App(props: {
 			return;
 		}
 	};
+	// Closing the confirmation by any path (answer, Escape, navigation) drops
+	// the target, so a later open can never delete the previous workflow.
+	createEffect(() => {
+		if (nav.modal() !== "delete-workflow") setDeleteTarget(undefined);
+	});
 	// Keep the cursor inside the filtered list without resetting it on every
 	// poll: the index clamps only when the row count shrinks past it.
 	createEffect(() => {
@@ -542,6 +593,7 @@ export function App(props: {
 			"return",
 			"f",
 			"n",
+			"d",
 			"e",
 			"+",
 			"escape",
@@ -1766,6 +1818,22 @@ export function App(props: {
 			return;
 		}
 
+		// The delete confirmation owns input while it is on top: only its two
+		// answers are live, so no key can act on a workflow that is going away.
+		if (nav.modal() === "delete-workflow") {
+			const target = deleteTarget();
+			if (key === "y" || key === "enter" || key === "return") {
+				if (target) void confirmDeleteWorkflow(target);
+				return;
+			}
+			if (key === "n" || key === "escape") {
+				setDeleteTarget(undefined);
+				nav.popModal();
+				return;
+			}
+			return;
+		}
+
 		// The location picker owns input while it is on top: search, select, jump.
 		if (nav.modal() === "locations") {
 			const matches = pickerMatches();
@@ -2925,6 +2993,13 @@ export function App(props: {
 					onCancel={closeLaunch}
 					onComplete={submitLaunch}
 				/>
+			)}
+			{/* Destructive confirmation for the workspace sidebar: the workflow's
+			    stored state and worktree go, so it is never one keypress. */}
+			{nav.modal() === "delete-workflow" && (
+				<Show when={deleteTarget()}>
+					{(target) => <DeleteWorkflowModal overview={target()} />}
+				</Show>
 			)}
 			{/* Shared portaled modals (e.g. the theme picker) publish a modal-help
 			    catalog; paint it at the shell root so `?` is not a dead key. */}

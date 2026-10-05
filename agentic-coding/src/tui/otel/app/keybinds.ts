@@ -34,6 +34,12 @@ export function workspaceSidebarKeybindCatalog(): KeybindSection[] {
 					short: "tmux",
 				},
 				{
+					key: "d",
+					action:
+						"delete workflow (store rows and worktree, keeping the branch)",
+					short: "delete",
+				},
+				{
 					key: "e",
 					action: "toggle sidebar (expanding/permanent)",
 					short: "expand",

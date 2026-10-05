@@ -70,6 +70,10 @@ function stubOperations(scenario: Scenario): ServerOperations {
 		question: () => stubView,
 		saveReview: async () => {},
 		execute: () => {},
+		deleteWorkflow: async (request) => {
+			scenario.applied.push(`delete:${request.workflowId}`);
+			return { worktreeRemoved: false };
+		},
 		handoff: async () => stubView,
 		saveAgents: () => {},
 		loadAgents: () => ({
@@ -203,6 +207,16 @@ describe("gateway conformance", () => {
 		expect(http.revision).toBe(4);
 		expect(inProcess.revision).toBe(4);
 		expect(scenario.applied).toEqual(["approve", "approve"]);
+	});
+
+	test("the delete mutation reaches the same operation in both adapters", async () => {
+		const scenario: Scenario = { applied: [] };
+		const { http, inProcess } = await bothAdapters(scenario, (g) =>
+			g.deleteWorkflow({ repo: "/repo", workflowId: "wf-1" }),
+		);
+		expect(http).toEqual({ worktreeRemoved: false });
+		expect(inProcess).toEqual({ worktreeRemoved: false });
+		expect(scenario.applied).toEqual(["delete:wf-1", "delete:wf-1"]);
 	});
 
 	test("a stale revision fails without mutating in either adapter", async () => {

@@ -14,6 +14,8 @@ import type {
 	AgentsMutationRequest,
 	ReviewSaveRequest,
 	WorkflowActionRequest,
+	WorkflowDeleteRequest,
+	WorkflowDeletion,
 	WorkflowExecuteRequest,
 	WorkflowQuestionRequest,
 	WorkflowRepairRequest,
@@ -121,6 +123,9 @@ export interface DashboardGateway {
 	repair(request: WorkflowRepairRequest): Promise<WorkflowView>;
 	question(request: WorkflowQuestionRequest): Promise<WorkflowView>;
 	execute(request: WorkflowExecuteRequest): Promise<void>;
+	/** Delete one durable workflow: its store rows and its worktree directory.
+	 * The branch is kept, so the committed work stays reviewable. */
+	deleteWorkflow(request: WorkflowDeleteRequest): Promise<WorkflowDeletion>;
 	saveReview(request: ReviewSaveRequest): Promise<void>;
 	agentHandoff(request: AgentHandoffRequest): Promise<WorkflowView>;
 	agentQuestion(

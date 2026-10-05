@@ -15,6 +15,8 @@ import type {
 	AgentsMutationRequest,
 	ReviewSaveRequest,
 	WorkflowActionRequest,
+	WorkflowDeleteRequest,
+	WorkflowDeletion,
 	WorkflowExecuteRequest,
 	WorkflowQuestionRequest,
 	WorkflowRepairRequest,
@@ -228,6 +230,15 @@ export function createInProcessGateway(
 		async execute(request: WorkflowExecuteRequest): Promise<void> {
 			watchRepo(request.repo);
 			operations.execute(request);
+		},
+
+		async deleteWorkflow(
+			request: WorkflowDeleteRequest,
+		): Promise<WorkflowDeletion> {
+			watchRepo(request.repo);
+			const deletion = await operations.deleteWorkflow(request);
+			publishWorkflow("workflow.delete", request.repo, request.workflowId);
+			return deletion;
 		},
 
 		async saveReview(request: ReviewSaveRequest): Promise<void> {

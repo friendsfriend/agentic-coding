@@ -10,6 +10,7 @@ import type {
 	AgentResearchHandoffRequest,
 	ReviewSaveRequest,
 	WorkflowActionRequest,
+	WorkflowDeletion,
 	WorkflowRepairRequest,
 	WorkflowStartRequest,
 } from "../../contracts/actions.ts";
@@ -247,6 +248,21 @@ export async function startWorkflow(
 	const workflowId = await gateway().start(request);
 	cache.invalidate(viewsKey(request.repo));
 	return workflowId;
+}
+
+/** Delete one durable workflow and its worktree (the branch is kept). The
+ * overview list is cached under one unkeyed entry, so it is invalidated
+ * explicitly instead of waiting for the next poll. */
+export async function deleteWorkflow(
+	repo: string,
+	workflowId: string,
+): Promise<WorkflowDeletion> {
+	const deletion = await gateway().deleteWorkflow({ repo, workflowId });
+	cache.invalidate("workflows");
+	cache.invalidate(workflowKey(repo, workflowId));
+	cache.invalidate(dashboardKey(repo, workflowId));
+	cache.invalidate(viewsKey(repo));
+	return deletion;
 }
 
 export async function repairWorkflow(

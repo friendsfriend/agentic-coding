@@ -12,6 +12,8 @@ import {
 	agentsListResponseSchema,
 	type ClassifierStatusResponse,
 	classifierStatusResponseSchema,
+	type WorkflowDeletion,
+	workflowDeletionSchema,
 } from "../contracts/actions.ts";
 import type { CredentialRespondRequest } from "../contracts/credential.ts";
 import { ContractFailure, decodeContract } from "../contracts/decode.ts";
@@ -317,6 +319,17 @@ export class BackendClient implements DashboardGateway {
 
 	async execute(request: { repo: string; workflowId?: string }): Promise<void> {
 		await this.request("POST", "/api/v1/workflow/execute", request);
+	}
+
+	async deleteWorkflow(request: {
+		repo: string;
+		workflowId: string;
+	}): Promise<WorkflowDeletion> {
+		return this.decode<WorkflowDeletion>(
+			"core.workflow-deletion",
+			workflowDeletionSchema,
+			await this.request("POST", "/api/v1/workflow/delete", request),
+		);
 	}
 
 	async agentHandoff(request: {

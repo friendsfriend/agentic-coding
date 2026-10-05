@@ -93,6 +93,7 @@ import {
 } from "./services.ts";
 import { prepareStepEvidence } from "./step-evidence.ts";
 import {
+	deleteWorkflowRows,
 	type EffectRow,
 	effectFromRow,
 	type InstanceRow,
@@ -555,6 +556,31 @@ export class WorkflowEngine {
 		return Effect.try({
 			try: () => viewStatus(repo, workflowId, this.registry, this.now),
 			catch: toRuntimeError,
+		});
+	}
+	/** Delete one durable workflow and every row it owns (children first). The
+	 * caller owns the worktree boundary, so this removes no files. A workflow
+	 * that is already gone is a not-found failure, never a silent success. */
+	deleteWorkflow(repo: string, workflowId: string): void {
+		this.run(this.deleteWorkflowEffect(repo, workflowId));
+	}
+	/** Effect program for deleting one workflow; run at the named application
+	 * composition root (complete-workflow-effect-cutover, task 2.1). */
+	deleteWorkflowEffect(
+		repo: string,
+		workflowId: string,
+	): Effect.Effect<void, WorkflowRuntimeError, WorkflowStore> {
+		const self = this;
+		return Effect.gen(function* () {
+			const store = yield* WorkflowStore;
+			yield* store.transaction(repo, (db) => {
+				if (deleteWorkflowRows(db, workflowId) === 0)
+					throw new WorkflowRuntimeError(
+						"not-found",
+						`workflow not found: ${workflowId}`,
+					);
+			});
+			self.onCommitted(repo);
 		});
 	}
 	previewRepair(repo: string, workflowId: string): RepairPreview[] {

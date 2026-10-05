@@ -64,6 +64,27 @@ export const workflowExecuteRequestSchema = Schema.Struct({
 	workflowId: Schema.optional(Schema.String),
 });
 
+/** Delete one durable workflow and its worktree; the branch is kept. */
+export const workflowDeleteRequestSchema = Schema.Struct({
+	repo: Schema.String,
+	workflowId: Schema.String,
+});
+
+/** Result of deleting one workflow: the store rows are always gone when the
+ * request succeeds, and the worktree is reported separately because its removal
+ * is a filesystem boundary that can fail on its own. */
+export interface WorkflowDeletion {
+	/** True when the worktree directory was removed, or was already gone. */
+	readonly worktreeRemoved: boolean;
+	/** Why the worktree could not be removed, when it was not. */
+	readonly worktreeError?: string;
+}
+
+export const workflowDeletionSchema = Schema.Struct({
+	worktreeRemoved: Schema.Boolean,
+	worktreeError: Schema.optional(Schema.String),
+});
+
 export const agentHandoffRequestSchema = Schema.Struct({
 	repo: Schema.String,
 	environment: Schema.Record({ key: Schema.String, value: Schema.String }),
@@ -148,6 +169,9 @@ export type WorkflowQuestionRequest = typeof workflowQuestionRequestSchema.Type;
 
 /** Decoded request type for `workflowExecuteRequestSchema`. */
 export type WorkflowExecuteRequest = typeof workflowExecuteRequestSchema.Type;
+
+/** Decoded request type for `workflowDeleteRequestSchema`. */
+export type WorkflowDeleteRequest = typeof workflowDeleteRequestSchema.Type;
 
 /** Decoded request type for `reviewSaveRequestSchema`. */
 export type ReviewSaveRequest = typeof reviewSaveRequestSchema.Type;

@@ -13,7 +13,8 @@ export type Modal =
 	| "help"
 	| "environment"
 	| "locations"
-	| "new-workflow";
+	| "new-workflow"
+	| "delete-workflow";
 
 /**
  * Overlay kinds the shell handler itself owns. `environment` is deliberately
@@ -28,6 +29,9 @@ const SHELL_OWNED_OVERLAY_NAMES: readonly Modal[] = [
 	// Contextual workflow creation: the shell owns the form and its start
 	// boundary, so its keys are routed through the one shell dispatcher.
 	"new-workflow",
+	// Destructive confirmation: the shell owns the question and the delete
+	// boundary, so its answer keys are routed through the one shell dispatcher.
+	"delete-workflow",
 ];
 
 /** Whether the current overlay kind is one the shell handler owns. */

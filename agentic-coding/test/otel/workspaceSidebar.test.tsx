@@ -55,7 +55,12 @@ function overview(
 const tempConfigDirs: string[] = [];
 let currentConfigFile = "";
 
+/** Workflow ids the stubbed delete removed; the observation read honours them
+ * so the sidebar's poll cannot resurrect a deleted row. */
+const deletedWorkflows = new Set<string>();
+
 afterEach(() => {
+	deletedWorkflows.clear();
 	delete process.env.HERDR_WORKFLOW_CONFIG;
 	for (const dir of tempConfigDirs.splice(0))
 		rmSync(dir, { recursive: true, force: true });
@@ -80,11 +85,18 @@ function stubGateway(): void {
 		kind: "in-process",
 		connectionState: () => "open",
 		observe: async (observation: ObservationRequest) => {
-			if (observation.kind === "workflows") return OVERVIEWS;
+			if (observation.kind === "workflows")
+				return OVERVIEWS.filter(
+					(entry) => !deletedWorkflows.has(entry.state.workflowId),
+				);
 			throw new Error(`unexpected observation ${observation.kind}`);
 		},
 		view: async () => {
 			throw new Error("no workflow view in this stub");
+		},
+		deleteWorkflow: async (request: { workflowId: string }) => {
+			deletedWorkflows.add(request.workflowId);
+			return { worktreeRemoved: false };
 		},
 		subscribe: () => () => {},
 	} as unknown as DashboardGateway);
@@ -301,6 +313,42 @@ test("+ opens the new-workflow form from the sidebar", async () => {
 		expect(
 			await renderUntil(t, (frame) => frame.includes("New workflow")),
 		).toBe(true);
+	} finally {
+		t.renderer.destroy();
+		clearGateway();
+	}
+});
+
+test("d confirms before deleting the selected workflow", async () => {
+	stubGateway();
+	const t = await renderShell();
+	try {
+		await focusSidebar(t);
+		// Newest first: the attention workflow is the selected row.
+		expect(await renderUntil(t, "wf-attention")).toBe(true);
+
+		// The key opens the question; nothing is deleted while it is open.
+		t.mockInput.pressKey("d");
+		expect(await renderUntil(t, "Delete workflow?")).toBe(true);
+		expect(deletedWorkflows.size).toBe(0);
+
+		// Declining keeps the workflow and closes the dialog.
+		t.mockInput.pressKey("n");
+		expect(
+			await renderUntil(t, (frame) => !frame.includes("Delete workflow?")),
+		).toBe(true);
+		expect(deletedWorkflows.size).toBe(0);
+		expect(t.captureCharFrame()).toContain("wf-attention");
+
+		// Confirming deletes it. The row is gone from the list, which the
+		// attention filter proves: nothing matches it any more (the confirmation
+		// toast names the workflow, so an absence check would read the toast).
+		t.mockInput.pressKey("d");
+		expect(await renderUntil(t, "Delete workflow?")).toBe(true);
+		t.mockInput.pressKey("y");
+		expect([...deletedWorkflows]).toEqual(["wf-attention"]);
+		t.mockInput.pressKey("f");
+		expect(await renderUntil(t, "No attention workflows")).toBe(true);
 	} finally {
 		t.renderer.destroy();
 		clearGateway();

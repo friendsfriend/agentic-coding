@@ -10,6 +10,10 @@
 //   - `drainEffects` + `CONTINUATION_WAIT_MS` moved from cli/drain.ts
 //   - `listProjects` moved from cli/commands/misc.ts
 import { Effect } from "effect";
+import type { WorkflowDeletion } from "../contracts/actions.ts";
+import { runWorktree } from "../worktree/boundary.ts";
+import { WorktreeAdapter } from "../worktree/index.ts";
+import { WorktreeError } from "../worktree/port.ts";
 import { type AgentAdapter, PiDurableAdapter } from "./adapters.ts";
 import type { WorkflowApplication } from "./application.ts";
 import { registry } from "./cli/registry.ts";
@@ -22,7 +26,12 @@ import {
 	type ProjectOption,
 	projectOptions,
 } from "./project-catalog.ts";
-import { dueQuestionTimers, WorkflowEngine } from "./runtime.ts";
+import {
+	dueQuestionTimers,
+	isResearchWorkflowTarget,
+	isWikiWorkflowTarget,
+	WorkflowEngine,
+} from "./runtime.ts";
 export const CONTINUATION_WAIT_MS = 65_000;
 
 /** The `WorkflowEngine` factory built from the process-lifetime builtin
@@ -96,6 +105,57 @@ export async function listProjects(
 ): Promise<ProjectOption[]> {
 	const catalog = await loadProjectCatalog(options);
 	return projectOptions(catalog);
+}
+
+/** Delete one durable workflow: its store rows first, then its worktree
+ * directory. The branch is kept (the same policy the workflow's own
+ * `workspace.cleanup` effect applies), so the committed work stays reviewable.
+ * Repository-independent workflows (wiki, research) own no worktree and are
+ * store-only. */
+export async function deleteWorkflow(
+	repo: string,
+	workflowId: string,
+	application?: WorkflowApplication,
+): Promise<WorkflowDeletion> {
+	const workflowEngine = engine(application);
+	// The worktree path lives in the snapshot the delete removes, so it is read
+	// before the transaction.
+	const view = workflowEngine.status(repo, workflowId);
+	workflowEngine.deleteWorkflow(repo, workflowId);
+	return removeWorkflowWorktree(repo, view.worktree, view.repository);
+}
+
+async function removeWorkflowWorktree(
+	repo: string,
+	worktree: string,
+	repository: string,
+): Promise<WorkflowDeletion> {
+	if (
+		isWikiWorkflowTarget(repo) ||
+		isResearchWorkflowTarget(repo) ||
+		!worktree ||
+		worktree === repository
+	)
+		return { worktreeRemoved: false };
+	try {
+		await runWorktree(
+			new WorktreeAdapter().remove({
+				repo: repository,
+				path: worktree,
+				force: true,
+			}),
+		);
+		return { worktreeRemoved: true };
+	} catch (error) {
+		// A worktree that is already gone counts as removed, exactly as the
+		// cleanup effect treats an absent workspace.
+		if (error instanceof WorktreeError && error.kind === "absent")
+			return { worktreeRemoved: true };
+		return {
+			worktreeRemoved: false,
+			worktreeError: error instanceof Error ? error.message : String(error),
+		};
+	}
 }
 
 const DRAIN_POLL_MS = 1_000;

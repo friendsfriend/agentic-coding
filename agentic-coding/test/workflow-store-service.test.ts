@@ -11,6 +11,7 @@ import {
 	engineLayer,
 	WorkflowStore,
 } from "../src/workflow/runtime/services.ts";
+import { deleteWorkflowRows } from "../src/workflow/runtime/store.ts";
 import { canonicalStorePath } from "../src/workflow/runtime.ts";
 
 // Real temporary SQLite store behind the live store layer: the same
@@ -46,6 +47,94 @@ function auditCount(db: Database): number {
 			count: number;
 		}
 	).count;
+}
+
+function rowCount(db: Database, table: string): number {
+	return (
+		db.query(`SELECT COUNT(*) AS count FROM ${table}`).get() as {
+			count: number;
+		}
+	).count;
+}
+
+/** One workflow with a row in every table that references it, so a delete has
+ * something to remove in each child table. */
+function seedWorkflow(db: Database, repo: string, workflowId: string): void {
+	const at = "2026-01-01T00:00:00.000Z";
+	db.query(
+		"INSERT INTO workflow_instances VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+	).run(
+		workflowId,
+		null,
+		repo,
+		repo,
+		"core",
+		1,
+		"digest",
+		0,
+		"active",
+		"core.plan",
+		"{}",
+		at,
+		at,
+	);
+	db.query(
+		"INSERT INTO workflow_runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+	).run(
+		`${workflowId}-run`,
+		workflowId,
+		"core.plan",
+		"planner",
+		1,
+		1,
+		"pending",
+		"{}",
+		0,
+		"[]",
+		"hash",
+		at,
+		"/tmp/assignment",
+		null,
+		null,
+		null,
+		null,
+		null,
+		at,
+		null,
+	);
+	db.query("INSERT INTO workflow_events VALUES (?,?,?,?,?,?)").run(
+		workflowId,
+		0,
+		"workflow.started",
+		"{}",
+		"{}",
+		at,
+	);
+	db.query(
+		"INSERT INTO workflow_outbox VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+	).run(
+		`${workflowId}-effect`,
+		workflowId,
+		0,
+		"workspace.setup",
+		`key-${workflowId}`,
+		"{}",
+		"pending",
+		0,
+		3,
+		null,
+		null,
+		null,
+		null,
+	);
+	db.query("INSERT INTO workflow_security_audit VALUES (?,?,?,?,?,?)").run(
+		`${workflowId}-audit`,
+		workflowId,
+		"test",
+		"subject",
+		"diagnostic",
+		at,
+	);
 }
 
 /** Journal-mode byte pair at the SQLite header offset: `0x02 0x02` is WAL, the
@@ -145,6 +234,50 @@ describe("workflow store service", () => {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
 	});
+	test("deleting a workflow removes every row it owns and leaves the others", () => {
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "store-delete-"));
+		try {
+			const repo = repository(path.join(tmp, "repo"));
+			run(
+				Effect.gen(function* () {
+					const store = yield* WorkflowStore;
+					yield* store.initialize(repo);
+					yield* store.transaction(repo, (db) => {
+						seedWorkflow(db, repo, "wf-1");
+						seedWorkflow(db, repo, "wf-2");
+					});
+					const removed = yield* store.transaction(repo, (db) =>
+						deleteWorkflowRows(db, "wf-1"),
+					);
+					expect(removed).toBe(1);
+					const remaining = yield* store.transaction(repo, (db) => ({
+						instances: rowCount(db, "workflow_instances"),
+						runs: rowCount(db, "workflow_runs"),
+						events: rowCount(db, "workflow_events"),
+						outbox: rowCount(db, "workflow_outbox"),
+						audit: rowCount(db, "workflow_security_audit"),
+					}));
+					expect(remaining).toEqual({
+						instances: 1,
+						runs: 1,
+						events: 1,
+						outbox: 1,
+						audit: 1,
+					});
+					// A workflow that is already gone reports 0, so the caller can
+					// surface not-found instead of a silent success.
+					expect(
+						yield* store.transaction(repo, (db) =>
+							deleteWorkflowRows(db, "wf-1"),
+						),
+					).toBe(0);
+				}),
+			);
+		} finally {
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
 	test("transaction failure rolls back every write and surfaces the typed failure", () => {
 		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "store-rollback-"));
 		try {

@@ -15,7 +15,9 @@ import type {
 	agentResearchHandoffRequestSchema,
 	agentsMutationRequestSchema,
 	reviewSaveRequestSchema,
+	WorkflowDeletion,
 	workflowActionRequestSchema,
+	workflowDeleteRequestSchema,
 	workflowExecuteRequestSchema,
 	workflowQuestionRequestSchema,
 	workflowRepairRequestSchema,
@@ -32,6 +34,7 @@ import type { WorkflowView } from "../contracts/workflow.ts";
 import { runDeveloperQuestion } from "../workflow/cli/commands/dispatch-actions.ts";
 import { resolveHandoffIdentity } from "../workflow/cli/identity.ts";
 import {
+	deleteWorkflow as deleteWorkflowOperation,
 	drainEffects,
 	engine as workflowEngineFactory,
 } from "../workflow/operations.ts";
@@ -71,6 +74,7 @@ type RepairRequest = Schema.Schema.Type<typeof workflowRepairRequestSchema>;
 type QuestionRequest = Schema.Schema.Type<typeof workflowQuestionRequestSchema>;
 type ReviewSaveRequest = Schema.Schema.Type<typeof reviewSaveRequestSchema>;
 type ExecuteRequest = Schema.Schema.Type<typeof workflowExecuteRequestSchema>;
+type DeleteRequest = Schema.Schema.Type<typeof workflowDeleteRequestSchema>;
 type AgentHandoffRequest = Schema.Schema.Type<typeof agentHandoffRequestSchema>;
 type AgentQuestionRequest = Schema.Schema.Type<
 	typeof agentQuestionRequestSchema
@@ -94,6 +98,7 @@ export interface ServerOperations {
 	question(request: QuestionRequest): WorkflowView;
 	saveReview(request: ReviewSaveRequest): Promise<void>;
 	execute(request: ExecuteRequest): void;
+	deleteWorkflow(request: DeleteRequest): Promise<WorkflowDeletion>;
 	handoff(request: AgentHandoffRequest): Promise<WorkflowView>;
 	saveAgents(request: AgentsMutationRequest): void;
 	loadAgents(repository?: string): ReturnType<typeof loadAgentConfig>;
@@ -199,6 +204,20 @@ export function saveReview(request: ReviewSaveRequest): Promise<void> {
 /** Ask the server-owned execution coordinator to drain pending effects. */
 export function execute(request: ExecuteRequest): void {
 	requestWorkflowExecution(request.repo, request.workflowId);
+}
+
+/** Delete one durable workflow through the shared application boundary: the
+ * store rows first, then the worktree directory. The branch is kept, and a
+ * worktree that cannot be removed is reported instead of failing the delete the
+ * store already committed. */
+export function deleteWorkflow(
+	request: DeleteRequest,
+): Promise<WorkflowDeletion> {
+	return deleteWorkflowOperation(
+		request.repo,
+		request.workflowId,
+		dashboardApplication,
+	);
 }
 
 /** Managed-agent handoff: resolve the caller's run identity server-side, let the
@@ -318,6 +337,7 @@ export const serverOperations: ServerOperations = {
 	question,
 	saveReview,
 	execute,
+	deleteWorkflow,
 	handoff,
 	saveAgents,
 	loadAgents,

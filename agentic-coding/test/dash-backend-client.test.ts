@@ -15,6 +15,7 @@ import { clearGateway, configureGateway } from "../src/tui/data/index.ts";
 import {
 	answerQuestion,
 	applyRepair,
+	deleteWorkflow,
 	loadDashboardSeed,
 	loadVerifierFindings,
 	loadVerifierReport,
@@ -60,6 +61,7 @@ interface Calls {
 	start?: unknown;
 	saveReview?: unknown;
 	execute?: unknown;
+	deleteWorkflow?: unknown;
 	saveAgents?: unknown;
 	observation?: unknown;
 }
@@ -95,6 +97,10 @@ function recordingOperations(calls: Calls): ServerOperations {
 		},
 		execute: (request) => {
 			calls.execute = request;
+		},
+		deleteWorkflow: async (request) => {
+			calls.deleteWorkflow = request;
+			return { worktreeRemoved: true };
 		},
 		handoff: async () => view,
 		saveAgents: (request) => {
@@ -188,6 +194,7 @@ describe("dashboard mutations cross the typed backend API", () => {
 			);
 			await saveDeveloperReview("/repo", "wf-1", []);
 			await requestExecution("/repo", "wf-1");
+			await deleteWorkflow("/repo", "wf-3");
 			await backendClient()?.saveAgents({
 				repository: "/repo",
 				mutation: { kind: "delete-preset", name: "legacy" },
@@ -220,6 +227,10 @@ describe("dashboard mutations cross the typed backend API", () => {
 			expect(calls.execute).toMatchObject({
 				repo: "/repo",
 				workflowId: "wf-1",
+			});
+			expect(calls.deleteWorkflow).toMatchObject({
+				repo: "/repo",
+				workflowId: "wf-3",
 			});
 			expect(calls.saveAgents).toMatchObject({
 				repository: "/repo",

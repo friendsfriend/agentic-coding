@@ -87,7 +87,6 @@ import {
 	requestShutdown,
 	setStepActive,
 	setStepDone,
-	setStepError,
 } from "./lifecycle.ts";
 import { notify, notify as notifyShell } from "./otel/app/notifications.ts";
 import { LogStore } from "./otel/model/logStore.ts";
@@ -150,9 +149,6 @@ function intervalArg(name: string, fallback: number): number {
 }
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 34));
-const sleep = (ms: number) =>
-	new Promise<void>((resolve) => setTimeout(resolve, ms));
-
 /** Shutdown progress labels keyed by the resource step that owns the row. */
 const SHUTDOWN_STEP_LABELS: Record<string, string> = {
 	"workflow-server": "Stopping unified server",
@@ -833,17 +829,19 @@ export async function main(): Promise<void> {
 			}
 		} catch (error) {
 			// Partial-startup rollback: release only what was acquired, then
-			// report. The message names the failure so a port conflict or an
-			// identity mismatch is actionable instead of a silent exit.
+			// report. `releaseResources` destroys the renderer last, so the
+			// terminal is restored before this runs and the startup modal can no
+			// longer paint: the failure must reach stderr, otherwise a home-mode
+			// startup failure (for example a port another instance still owns)
+			// looks like an instant crash with no message.
 			delete process.env[BACKEND_STARTING_ENV];
 			await releaseResources(1000);
 			const text = error instanceof Error ? error.message : String(error);
-			if (homeMode) {
-				setStepError(activeStep, text);
-				await sleep(1500);
-			} else {
-				console.error(`Cannot start server stack: ${text}`);
-			}
+			console.error(`Cannot start server stack: ${text}`);
+			if ((error as { code?: string } | undefined)?.code === "EADDRINUSE")
+				console.error(
+					`Port ${devenvPort} is already owned by another agentic-coding instance. Quit that shell, or start with --devenv-port <port> --http-port <port>.`,
+				);
 			process.exit(1);
 		}
 	}
