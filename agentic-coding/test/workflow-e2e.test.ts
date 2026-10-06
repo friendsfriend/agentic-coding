@@ -994,3 +994,148 @@ test("the current definition tier keeps the round's roles through the per-step r
 		fs.rmSync(root, { recursive: true, force: true });
 	}
 });
+
+test("the wiki approval promotion survives the archive route step on the current definition tier", () => {
+	const root = repo();
+	try {
+		const change = path.join(
+			root,
+			"openspec",
+			"changes",
+			"step-routing-wiki-promotion",
+		);
+		fs.mkdirSync(path.join(change, "specs", "feature"), { recursive: true });
+		fs.writeFileSync(path.join(change, "proposal.md"), "proposal\n");
+		fs.writeFileSync(path.join(change, "design.md"), "design\n");
+		fs.writeFileSync(path.join(change, "tasks.md"), "- [ ] task\n");
+		fs.writeFileSync(
+			path.join(change, "specs", "feature", "spec.md"),
+			"#### Scenario: works\n",
+		);
+		execFileSync("git", ["add", "."], { cwd: root });
+		execFileSync(
+			"git",
+			[
+				"-c",
+				"user.email=test@example.com",
+				"-c",
+				"user.name=Test",
+				"commit",
+				"-qm",
+				"plan",
+			],
+			{ cwd: root },
+		);
+		const engine = new WorkflowEngine(registerBuiltins());
+		let view = engine.start({
+			repo: root,
+			workflowId: "step-routing-wiki-promotion",
+			definitionId: "openspec-apply",
+			definitionVersion: definitionVersionForStepRouting(6),
+			metadata: { branch: "main", baseBranch: "main", baseCommit: "base" },
+			routing,
+		}).view;
+		expect(view.currentStep.id).toBe("core.route-implementation");
+		view = advanceRouting(engine, root, view);
+		expect(view.currentStep.id).toBe("core.implementation");
+		fs.writeFileSync(path.join(change, "tasks.md"), "- [x] task\n");
+		fs.writeFileSync(path.join(root, "implementation.txt"), "changed\n");
+		view = complete(engine, root, view, "worker", { changed: true });
+		expect(view.currentStep.id).toBe("core.triage-route");
+		const triageRoute = requireEffect(
+			engine.claimEffects(root, 100),
+			"model.classify",
+		);
+		view = engine.dispatch(root, {
+			type: "effect.result",
+			effectId: triageRoute.id,
+			lease: requireDefined(triageRoute.lease, "triage lease"),
+			outcome: "complete",
+			data: { integration: "triage", roles: ["quality-verifier"] },
+		}).view;
+		expect(view.currentStep.id).toBe("core.route-triage");
+		view = advanceRouting(engine, root, view);
+		expect(view.currentStep.id).toBe("core.triage");
+		view = complete(engine, root, view, "triage", {
+			roles: [
+				{
+					role: "quality-verifier",
+					reason: "code changed",
+					files: ["implementation.txt"],
+				},
+			],
+		});
+		expect(view.currentStep.id).toBe("core.route-verification");
+		view = advanceRouting(engine, root, view);
+		view = complete(engine, root, view, "quality-verifier", { findings: [] });
+		view = complete(engine, root, view, "test-verifier", { findings: [] });
+		expect(view.currentStep.id).toBe("core.review-gate");
+		const reviewGate = requireEffect(
+			engine.claimEffects(root, 100),
+			"model.classify",
+		);
+		view = engine.dispatch(root, {
+			type: "effect.result",
+			effectId: reviewGate.id,
+			lease: requireDefined(reviewGate.lease, "gate lease"),
+			outcome: "complete",
+			data: {
+				integration: "gate",
+				stage: "developerReview",
+				policy: "always",
+				decision: "run",
+				forced: true,
+			},
+		}).view;
+		expect(view.currentStep.id).toBe("core.developer-review");
+		view = action(engine, root, view, "approve-review");
+		expect(view.currentStep.id).toBe("core.wiki-gate");
+		const wikiGate = requireEffect(
+			engine.claimEffects(root, 100),
+			"model.classify",
+		);
+		view = engine.dispatch(root, {
+			type: "effect.result",
+			effectId: wikiGate.id,
+			lease: requireDefined(wikiGate.lease, "gate lease"),
+			outcome: "complete",
+			data: {
+				integration: "gate",
+				stage: "wiki",
+				policy: "always",
+				decision: "run",
+				forced: true,
+			},
+		}).view;
+		expect(view.currentStep.id).toBe("core.route-wiki");
+		view = advanceRouting(engine, root, view);
+		expect(view.currentStep.id).toBe("core.wiki");
+		view = complete(engine, root, view, "wiki", { touched: ["architecture"] });
+		expect(view.currentStep.id).toBe("core.wiki-approval");
+		// The approval enqueues wiki.verify and lands on the archive route step.
+		view = action(engine, root, view, "approve-wiki");
+		expect(view.currentStep.id).toBe("core.route-archive");
+		// Regression: the claim loop must not reject the promotion the approval
+		// edge enqueued, even though the routing step does not list it.
+		const entered = engine.claimEffects(root, 100);
+		const routeClassify = requireEffect(entered, "model.classify");
+		const verification = requireEffect(entered, "wiki.verify");
+		view = engine.dispatch(root, {
+			type: "effect.result",
+			effectId: routeClassify.id,
+			lease: requireDefined(routeClassify.lease, "classify lease"),
+			outcome: "complete",
+			data: { integration: "routing", phase: "apply", answers: {} },
+		}).view;
+		expect(view.currentStep.id).toBe("core.archive");
+		view = engine.dispatch(root, {
+			type: "effect.result",
+			effectId: verification.id,
+			lease: requireDefined(verification.lease, "wiki lease"),
+			outcome: "complete",
+		}).view;
+		expect(view.currentStep.id).toBe("core.archive");
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});

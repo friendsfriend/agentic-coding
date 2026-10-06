@@ -1413,18 +1413,18 @@ export function validateEffect(
 	const allowed = registry
 		.stepForDefinition(definition, snapshot.currentStep)
 		.allowedEffects.includes(row.kind);
-	// Edge effects are enqueued while advancing into delivery. Keep the
-	// approval promotion legal without broadening delivery's effect contract.
-	const wikiPromotionAtDelivery =
-		row.kind === "wiki.verify" && snapshot.currentStep === "core.delivery";
-	const wikiPromotionAtCompletion =
-		row.kind === "wiki.verify" &&
-		snapshot.definition.id === "wiki-comments" &&
-		snapshot.currentStep === "core.completed";
-	const researchWikiPromotion =
-		row.kind === "wiki.verify" &&
-		snapshot.definition.id === "research" &&
-		snapshot.currentStep === "core.completed";
+	// An edge effect is enqueued while advancing into its destination step, so
+	// it stays pending at that step and nowhere else. Judging it only by the
+	// step's `allowedEffects` would reject the promotion edges that deliberately
+	// enqueue into a step whose contract they do not broaden — the wiki approval
+	// promotion into delivery/completion, and, with per-step routing, into the
+	// routing step that now precedes archive. A row is therefore also legal at
+	// the current step when one of that step's own inbound edges declares it.
+	const declaredInbound = definition.edges.some(
+		(edge) =>
+			edge.to === snapshot.currentStep &&
+			(edge.effects ?? []).some((effect) => effect.kind === row.kind),
+	);
 	const setupBeforeEntry =
 		row.kind === "workspace.setup" &&
 		!snapshot.step.activeRunIds.length &&
@@ -1439,9 +1439,7 @@ export function validateEffect(
 		snapshot.currentStep === "core.research";
 	if (
 		!allowed &&
-		!wikiPromotionAtDelivery &&
-		!wikiPromotionAtCompletion &&
-		!researchWikiPromotion &&
+		!declaredInbound &&
 		!setupBeforeEntry &&
 		!researchSetup &&
 		row.kind !== "agent.stop"

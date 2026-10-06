@@ -24,6 +24,7 @@ function overview(options: {
 	status: WorkflowOverview["state"]["status"];
 	phase?: string;
 	repository?: string;
+	createdAt?: string;
 	phaseStartedAt?: string;
 	projectIdent?: string;
 	pendingQuestions?: number;
@@ -67,6 +68,7 @@ function overview(options: {
 						),
 					}
 				: {}),
+			...(options.createdAt ? { createdAt: options.createdAt } : {}),
 			...(options.phaseStartedAt
 				? { phaseStartedAt: options.phaseStartedAt }
 				: {}),
@@ -102,27 +104,57 @@ describe("workspace sidebar filters", () => {
 		expect(filterOverviews(all, "all")).toHaveLength(5);
 	});
 
-	test("orders most recently touched first with a stable id tiebreak", () => {
+	test("orders newest workflow first with a stable id tiebreak", () => {
 		const older = overview({
 			workflowId: "older",
 			status: "active",
-			phaseStartedAt: "2024-01-01T00:00:00.000Z",
+			createdAt: "2024-01-01T00:00:00.000Z",
 		});
 		const newer = overview({
 			workflowId: "newer",
 			status: "active",
-			phaseStartedAt: "2024-06-01T00:00:00.000Z",
+			createdAt: "2024-06-01T00:00:00.000Z",
 		});
 		const same = overview({
 			workflowId: "aaa",
 			status: "active",
-			phaseStartedAt: "2024-06-01T00:00:00.000Z",
+			createdAt: "2024-06-01T00:00:00.000Z",
 		});
 		expect(
 			filterOverviews([older, newer, same], "active").map(
 				(entry) => entry.state.workflowId,
 			),
 		).toEqual(["aaa", "newer", "older"]);
+	});
+
+	test("phase changes cannot reorder the list", () => {
+		const before = overview({
+			workflowId: "wf",
+			status: "active",
+			createdAt: "2024-06-01T00:00:00.000Z",
+			phaseStartedAt: "2024-06-02T00:00:00.000Z",
+		});
+		const after = overview({
+			workflowId: "wf",
+			status: "active",
+			createdAt: "2024-06-01T00:00:00.000Z",
+			phaseStartedAt: "2024-07-01T00:00:00.000Z",
+		});
+		const other = overview({
+			workflowId: "other",
+			status: "active",
+			createdAt: "2024-05-01T00:00:00.000Z",
+		});
+		expect(
+			filterOverviews([other, before], "active").map(
+				(entry) => entry.state.workflowId,
+			),
+		).toEqual(["wf", "other"]);
+		expect(
+			filterOverviews([other, after], "active").map(
+				(entry) => entry.state.workflowId,
+			),
+		).toEqual(["wf", "other"]);
 	});
 
 	test("cycling walks the catalog and wraps", () => {
@@ -191,6 +223,29 @@ describe("workspace sidebar rows", () => {
 				overview({ workflowId: "i", status: "active", valid: false }),
 			),
 		).toEqual({ glyph: "!", tone: "error" });
+		// A running implementation keeps the ellipsis even when attention holds
+		// diagnostic notes (a skipped gate, a classifier that failed open):
+		// attention is not a request for developer input.
+		expect(
+			sidebarStatusGlyph(
+				overview({
+					workflowId: "impl",
+					status: "active",
+					stepId: "core.implementation",
+					attention: ["stage gate skipped tests (policy always)"],
+				}),
+			),
+		).toEqual({ glyph: "…", tone: "info" });
+		// A blocked review gate still reads as a blocker, not a checkmark.
+		expect(
+			sidebarStatusGlyph(
+				overview({
+					workflowId: "blocked-review",
+					status: "attention-required",
+					stepId: "core.developer-review",
+				}),
+			),
+		).toEqual({ glyph: "!", tone: "warning" });
 		// A review step reads as a checkmark even while the workflow is running.
 		expect(
 			sidebarStatusGlyph(

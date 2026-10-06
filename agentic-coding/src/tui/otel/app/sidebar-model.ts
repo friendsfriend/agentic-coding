@@ -44,15 +44,14 @@ export function matchesSidebarFilter(
 	}
 }
 
-/** Most recently touched workflow first, with a stable id tiebreak so the list
- * cannot reorder between two polls that read the same state. */
+/** Newest workflow first by creation time, with a stable id tiebreak. The key
+ * is immutable for the workflow's whole life, so advancing a phase cannot
+ * reorder the list under the reader. */
 export function sortOverviews(
 	overviews: readonly WorkflowOverview[],
 ): WorkflowOverview[] {
 	const stamp = (overview: WorkflowOverview): string =>
-		overview.state.phaseStartedAt ??
-		overview.state.createdAt ??
-		overview.state.workflowId;
+		overview.state.createdAt ?? overview.state.workflowId;
 	return [...overviews].sort((a, b) => {
 		const left = stamp(a);
 		const right = stamp(b);
@@ -95,8 +94,11 @@ export function isReviewStep(stepId: string | undefined): boolean {
 
 /** The row glyph and tone: a developer question (`?`), a blocker (`!`), a
  * review step (`✓`), a running workflow (`…`), idle (`◦`), and the terminal
- * states. The overview is read rather than the bare status because a question
- * and a blocker are the interesting states of an otherwise active workflow. */
+ * states. `attention` is deliberately not a blocker: entries there are
+ * diagnostic notes (a skipped stage gate, a classifier that failed open)
+ * appended while the workflow keeps running, so they must not light the input
+ * marker. Only committed evidence of intervention — a question, an invalid
+ * workflow, or the `attention-required` status — reads as `!`. */
 export function sidebarStatusGlyph(overview: WorkflowOverview): {
 	glyph: string;
 	tone: StatusTone;
@@ -107,14 +109,15 @@ export function sidebarStatusGlyph(overview: WorkflowOverview): {
 	if ((state.pendingQuestions?.length ?? 0) > 0)
 		return { glyph: "?", tone: "warning" };
 	if (!state.health.valid) return { glyph: "!", tone: "error" };
-	if (state.health.attention.length > 0) return { glyph: "!", tone: "warning" };
+	// A committed attention-required status outranks the review-step check: a
+	// workflow blocked at a review/approval gate still needs a reader.
+	if (state.status === "attention-required")
+		return { glyph: "!", tone: "warning" };
 	if (isReviewStep(state.stepId ?? state.phase))
 		return { glyph: "✓", tone: "info" };
 	switch (state.status) {
 		case "active":
 			return { glyph: "…", tone: "info" };
-		case "attention-required":
-			return { glyph: "!", tone: "warning" };
 		case "paused":
 			return { glyph: "◦", tone: "muted" };
 		case "completed":
