@@ -110,6 +110,15 @@ export interface AgentSessionViewProps {
 	 * surface (the workspace sidebar, a modal) keeps the keys. Defaults to true
 	 * so a standalone mount stays focused. */
 	readonly inputActive?: () => boolean;
+	/** Route-specific slash commands, offered after the built-in ones. */
+	readonly extraCommands?: readonly SessionRouteCommand[];
+}
+
+/** A slash command a route adds to the prompt (for example `/new`). */
+export interface SessionRouteCommand {
+	readonly name: string;
+	readonly description: string;
+	readonly run: () => void;
 }
 
 /** Typing one of these exact messages, instead of an ordinary one, performs
@@ -894,8 +903,8 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		const match = /^\/(\S*)$/.exec(props.draft);
 		if (!match) return [];
 		const query = (match[1] ?? "").toLowerCase();
-		return SESSION_COMMANDS.filter((command) =>
-			command.name.slice(1).toLowerCase().startsWith(query),
+		return [...SESSION_COMMANDS, ...(props.extraCommands ?? [])].filter(
+			(command) => command.name.slice(1).toLowerCase().startsWith(query),
 		);
 	};
 
@@ -972,7 +981,13 @@ export function AgentSessionView(props: AgentSessionViewProps) {
 		else if (name === THINKING_COMMAND) openPicker("thinking");
 		else if (name === ABORT_COMMAND) props.onAbort();
 		else if (name === CLOSE_COMMAND) props.onBack();
-		else props.onSubmit(name);
+		else {
+			const extra = props.extraCommands?.find(
+				(command) => command.name === name,
+			);
+			if (extra) extra.run();
+			else props.onSubmit(name);
+		}
 		props.onDraftChange("");
 	};
 

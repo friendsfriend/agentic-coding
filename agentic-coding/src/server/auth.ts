@@ -7,7 +7,7 @@
 // The token is generated once per server instance and handed to the owning
 // TUI/CLI over an inherited descriptor, environment variable, or mode-0600
 // loopback handoff file — never a URL, log line, or event payload.
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -137,20 +137,39 @@ export function originAllowed(origin: string | null): boolean {
 	return host === "127.0.0.1" || host === "::1" || host === "localhost";
 }
 
-/** Authorize a request against the instance authority. Throws
- * `AuthorizationError` for a missing/forged token or an untrusted origin. */
+/** Who a request authenticates as. `operator` holds the instance token (the
+ * TUI, the CLI, managed agents); `orchestrator` holds the narrower capability
+ * derived from it for the Home Orchestrator session, which the server confines
+ * to its route/action policy (`orchestrator-policy.ts`). */
+export type Principal = "operator" | "orchestrator";
+
+/** The orchestrator capability for an instance token: an HMAC of the instance
+ * token, so any holder of the instance token can hand it out, the server can
+ * verify it without new state, and its holder cannot recover the instance
+ * token from it. */
+export function orchestratorTokenFor(instanceToken: string): string {
+	return createHmac("sha256", instanceToken)
+		.update("agentic-coding:orchestrator:v1")
+		.digest("hex");
+}
+
+/** Authorize a request against the instance authority and name the principal
+ * it authenticated as. Throws `AuthorizationError` for a missing/forged token
+ * or an untrusted origin. */
 export function authorizeRequest(
 	request: Request,
 	authority: InstanceAuthority,
-): void {
+): Principal {
 	if (!originAllowed(request.headers.get("origin")))
 		throw new AuthorizationError(403, "untrusted origin");
 	const header = request.headers.get("authorization") ?? "";
 	if (!header.startsWith("Bearer "))
 		throw new AuthorizationError(401, "missing instance capability");
 	const supplied = header.slice("Bearer ".length).trim();
-	if (!constantTimeEqual(supplied, authority.token))
-		throw new AuthorizationError(401, "invalid instance capability");
+	if (constantTimeEqual(supplied, authority.token)) return "operator";
+	if (constantTimeEqual(supplied, orchestratorTokenFor(authority.token)))
+		return "orchestrator";
+	throw new AuthorizationError(401, "invalid instance capability");
 }
 
 /** A textual path/argument must be bounded and free of control characters so

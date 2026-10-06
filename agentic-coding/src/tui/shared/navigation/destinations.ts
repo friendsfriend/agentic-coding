@@ -27,6 +27,8 @@ export interface DestinationSurface {
 	/** The shell owns configuration: Home exposes Settings
 	 * (centralize-application-settings). */
 	settings: boolean;
+	/** The Orchestrator chat is rendered (home mode with a shell keymap). */
+	orchestrator?: boolean;
 }
 
 export interface DestinationEntry {
@@ -102,6 +104,15 @@ export function homeDestinations(
 			description: "Review repository knowledge without a workflow",
 			group: "Destinations",
 			route: { page: "wiki" },
+		});
+	}
+	if (surface.orchestrator) {
+		entries.push({
+			id: "orchestrator",
+			label: "Orchestrator",
+			description: "Chat with an agent that launches and manages workflows",
+			group: "Destinations",
+			route: { page: "orchestrator" },
 		});
 	}
 	// Workflow creation is contextual (application/library resource pages) or

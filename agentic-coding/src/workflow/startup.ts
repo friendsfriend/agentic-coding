@@ -38,6 +38,7 @@ import {
 	resolveRouting,
 	SETTINGS_PRESETS_HINT,
 	validatePresetCoverage,
+	withHumanReviewGates,
 } from "./profiles.ts";
 import type { WorkflowRegistry } from "./registry.ts";
 import {
@@ -66,6 +67,9 @@ export interface WorkflowStartRequest {
 	sourceBranch?: string;
 	/** The rebase family's selected target: the ref the branch is rebased onto. */
 	targetBranch?: string;
+	/** Pin the plan, developer, and wiki review gates to `always`. Set by the
+	 * server for orchestrator-started work, never from a wire request. */
+	enforceHumanReviewGates?: boolean;
 }
 
 export interface PreparedWorkflowStart {
@@ -540,7 +544,11 @@ function prepareFromContext(
 				// The gate table is resolved once, here, and pinned with the
 				// preset: a later edit to the config document must not change
 				// what an in-flight workflow is allowed to skip.
-				...{ gatePolicies: resolveGatePolicies(agents, request.preset) },
+				...{
+					gatePolicies: request.enforceHumanReviewGates
+						? withHumanReviewGates(resolveGatePolicies(agents, request.preset))
+						: resolveGatePolicies(agents, request.preset),
+				},
 				// Same pinning for the classifier transport: which endpoint serves
 				// this run is decided once, so a mid-run provider switch cannot
 				// redirect the requests.

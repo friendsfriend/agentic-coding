@@ -268,7 +268,9 @@ export function listPresetNames(repository?: string): string[] {
 	return presetCatalog(repository).names;
 }
 export async function startWorkflowInProcess(
-	input: Parameters<typeof startArgs>[0],
+	input: Parameters<typeof startArgs>[0] & {
+		enforceHumanReviewGates?: boolean;
+	},
 ): Promise<string> {
 	const args = startArgs(input);
 	const prepared = prepareWorkflowStart({
@@ -282,6 +284,7 @@ export async function startWorkflowInProcess(
 		preset: args.preset,
 		sourceBranch: args.sourceBranch,
 		targetBranch: args.targetBranch,
+		...(input.enforceHumanReviewGates ? { enforceHumanReviewGates: true } : {}),
 	});
 	const engine = workflowEngineFactory(dashboardApplication);
 	engine.start(prepared.input);

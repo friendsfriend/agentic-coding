@@ -74,6 +74,11 @@ type RepairRequest = Schema.Schema.Type<typeof workflowRepairRequestSchema>;
 type QuestionRequest = Schema.Schema.Type<typeof workflowQuestionRequestSchema>;
 type ReviewSaveRequest = Schema.Schema.Type<typeof reviewSaveRequestSchema>;
 type ExecuteRequest = Schema.Schema.Type<typeof workflowExecuteRequestSchema>;
+/** Server-decided start options: never read from the wire request. */
+export interface StartOptions {
+	/** Pin the human review gates to `always` (orchestrator-started work). */
+	readonly enforceHumanReviewGates?: boolean;
+}
 type DeleteRequest = Schema.Schema.Type<typeof workflowDeleteRequestSchema>;
 type AgentHandoffRequest = Schema.Schema.Type<typeof agentHandoffRequestSchema>;
 type AgentQuestionRequest = Schema.Schema.Type<
@@ -93,7 +98,7 @@ export interface ServerOperations {
 	listViews(repo: string): WorkflowView[];
 	view(repo: string, workflowId: string): WorkflowView;
 	action(request: ActionRequest): WorkflowView;
-	start(request: StartRequest): Promise<string>;
+	start(request: StartRequest, options?: StartOptions): Promise<string>;
 	repair(request: RepairRequest): WorkflowView;
 	question(request: QuestionRequest): WorkflowView;
 	saveReview(request: ReviewSaveRequest): Promise<void>;
@@ -130,8 +135,14 @@ export function runAction(request: ActionRequest): WorkflowView {
 }
 
 /** Start a workflow and return the bounded acknowledgement string. */
-export function startWorkflow(request: StartRequest): Promise<string> {
+export function startWorkflow(
+	request: StartRequest,
+	options: StartOptions = {},
+): Promise<string> {
 	return startWorkflowInProcess({
+		...(options.enforceHumanReviewGates
+			? { enforceHumanReviewGates: true }
+			: {}),
 		repo: request.repo,
 		ticket: request.ticket ?? "",
 		workflowId: request.workflowId,
@@ -261,6 +272,7 @@ export function saveAgents(request: AgentsMutationRequest): void {
 			"delete-profile",
 			"delete-preset",
 			"set-classifier",
+			"set-orchestrator",
 		].includes(mutation.kind)
 	)
 		throw new Error("unknown agents mutation");

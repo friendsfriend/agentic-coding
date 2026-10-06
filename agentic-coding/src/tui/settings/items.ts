@@ -62,6 +62,8 @@ export interface AgentStatus {
 	profiles: Array<{ name: string; value: string }>;
 	presets: Array<{ name: string; value: string }>;
 	routing: AgentRoutingEntry[];
+	/** The Orchestrator session's configured model and thinking level. */
+	orchestrator?: { model?: string; thinking?: string };
 }
 
 export interface ProviderSnapshot {
@@ -262,6 +264,14 @@ function agentItems(context: SettingsContext): SettingsItem[] {
 		editable: true,
 		action: { kind: "none" },
 	});
+	items.push({
+		id: "agents.orchestrator",
+		label: "Orchestrator model",
+		value: orchestratorModelLabel(agents.orchestrator),
+		detail: `${detailFor("user", "[agents.orchestrator]", "next-session")} · edit in Agent Presets`,
+		editable: true,
+		action: { kind: "none" },
+	});
 	for (const entry of agents.routing)
 		items.push({
 			id: `agents.routing.${entry.label}`,
@@ -272,6 +282,13 @@ function agentItems(context: SettingsContext): SettingsItem[] {
 			action: { kind: "none" },
 		});
 	return items;
+}
+
+/** The one-line orchestrator model: `model · thinking`, host defaults named. */
+export function orchestratorModelLabel(
+	orchestrator: { model?: string; thinking?: string } | undefined,
+): string {
+	return `${orchestrator?.model ?? "host default model"} · ${orchestrator?.thinking ?? "default thinking"}`;
 }
 
 /** The one-line classifier selection: the label of the selected provider, or

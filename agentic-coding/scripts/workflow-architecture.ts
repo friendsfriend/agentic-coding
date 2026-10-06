@@ -8,7 +8,7 @@
 //   runtime      persistence, effects, engine internals, I/O helpers
 //   application  shared orchestration (startup, operations, wiki, config)
 //   cli          workflow CLI command modules and barrels
-//   tui-feature  dashboard, observability and settings feature implementations
+//   tui-feature  dashboard, observability, settings and orchestrator feature implementations
 //   tui-shared   shared TUI primitives and theme data
 //   tui-app      TUI shell entry points and lifecycle glue
 //   root         composition roots and foundational clients
@@ -176,7 +176,8 @@ export function classifySourcePath(relPath: string): SourceLayer | null {
 	if (
 		relPath.startsWith("tui/dash/") ||
 		relPath.startsWith("tui/otel/") ||
-		relPath.startsWith("tui/settings/")
+		relPath.startsWith("tui/settings/") ||
+		relPath.startsWith("tui/orchestrator/")
 	)
 		return "tui-feature";
 	// The dashboard data layer: the only place feature code reads server data.

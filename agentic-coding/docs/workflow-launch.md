@@ -14,8 +14,10 @@ catalog). The code is authoritative.
 
 ## Home destinations
 
-Home offers exactly **Environments**, **Observability**, **Wiki** and
-**Settings**. The one launch not tied to a page lives in the workspace sidebar:
+Home offers exactly **Environments**, **Observability**, **Wiki**,
+**Orchestrator** and **Settings**. The Orchestrator is a chat with an agent
+that starts and manages workflows through the same start boundary (see
+[`orchestrator.md`](orchestrator.md)). The one launch not tied to a page lives in the workspace sidebar:
 `+` opens the creation form for a directory outside the configured projects,
 prefilled with the working directory and editable to any other path. Home
 therefore has no workflow list, history or browser, and the sidebar carries no

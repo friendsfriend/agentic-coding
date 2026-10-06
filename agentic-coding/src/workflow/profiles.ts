@@ -99,6 +99,16 @@ export interface AgentsConfig {
 	 * disabled, so a configuration that says nothing spends no classifier calls
 	 * and writes no artifact. */
 	file_judgment?: FileJudgmentConfig;
+	/** The Home Orchestrator session's model (`[agents.orchestrator]`). Absent
+	 * means the durable host's default model and thinking level. */
+	orchestrator?: OrchestratorConfig;
+}
+
+/** The Orchestrator chat session's model selection. Both fields are the
+ * `provider/modelId` and thinking-level strings a durable run accepts. */
+export interface OrchestratorConfig {
+	model?: string;
+	thinking?: string;
 }
 
 /** The per-file judgment sweep (`[agents.file_judgment]`). The provider and the
@@ -250,6 +260,15 @@ export function parseAgentsConfig(
 					),
 				}
 			: {}),
+		...(input.orchestrator !== undefined
+			? {
+					orchestrator: validateOrchestrator(
+						input.orchestrator,
+						"agents.orchestrator",
+						source,
+					),
+				}
+			: {}),
 		...(input.file_judgment !== undefined
 			? {
 					file_judgment: validateFileJudgment(
@@ -326,6 +345,35 @@ function validateGates(
 		gates[stage] = policy as GatePolicy;
 	}
 	return gates;
+}
+
+/** Validate `[agents.orchestrator]`: an optional model and thinking level,
+ * both non-empty strings. Unknown keys are refused so a typo is not silently
+ * ignored. */
+function validateOrchestrator(
+	value: unknown,
+	where: string,
+	source?: string,
+): OrchestratorConfig {
+	const location = source ? `${where} (${source})` : where;
+	if (!value || typeof value !== "object" || Array.isArray(value))
+		throw new Error(`${location} must be a table with model and thinking`);
+	const table = value as Record<string, unknown>;
+	for (const key of Object.keys(table))
+		if (key !== "model" && key !== "thinking")
+			throw new Error(`${location}: unsupported key ${key}`);
+	for (const key of ["model", "thinking"] as const)
+		if (
+			table[key] !== undefined &&
+			(typeof table[key] !== "string" || !(table[key] as string).trim())
+		)
+			throw new Error(`${location}.${key} must be a non-empty string`);
+	return {
+		...(table.model !== undefined ? { model: table.model as string } : {}),
+		...(table.thinking !== undefined
+			? { thinking: table.thinking as string }
+			: {}),
+	};
 }
 
 /** Validate `[agents.classifier]`. The provider id must name a registered
@@ -653,6 +701,24 @@ export function resolveGatePolicies(
 			ownValue(agents.gates, stage) ??
 			"always";
 	return resolved;
+}
+
+/** The stages whose review is human by definition: an orchestrator-started
+ * workflow pins these to `always`, so the classifier can never skip a plan,
+ * developer, or wiki review on the orchestrator's behalf. */
+export const HUMAN_REVIEW_GATE_STAGES = [
+	"planApproval",
+	"developerReview",
+	"wiki",
+] as const satisfies readonly GateStage[];
+
+/** `policies` with every human review stage forced to `always`. */
+export function withHumanReviewGates(
+	policies: Record<GateStage, GatePolicy>,
+): Record<GateStage, GatePolicy> {
+	const forced = { ...policies };
+	for (const stage of HUMAN_REVIEW_GATE_STAGES) forced[stage] = "always";
+	return forced;
 }
 
 /** The classifier provider a configuration selects. An absent

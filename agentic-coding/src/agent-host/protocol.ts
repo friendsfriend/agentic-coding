@@ -12,7 +12,9 @@ export const PROTOCOL_VERSION = 1;
  * client cannot exhaust the host's memory one line at a time. */
 export const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 
-export type ToolPolicy = "default" | "read-only";
+/** `orchestrator` is served only by a host opened in orchestrator mode: the
+ * `read` tool plus the orchestrator's workflow tools, no shell, no writes. */
+export type ToolPolicy = "default" | "read-only" | "orchestrator";
 
 export interface EnsureRunRequest {
 	readonly type: "ensureRun";

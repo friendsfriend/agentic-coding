@@ -16,7 +16,12 @@ import { createSignal } from "solid-js";
  * sidebar's workflow dashboard page: a workflow row opens the dashboard body
  * for that workflow inside the shell.
  */
-export type FeatureId = "environments" | "workflows" | "observability" | "wiki";
+export type FeatureId =
+	| "environments"
+	| "workflows"
+	| "observability"
+	| "wiki"
+	| "orchestrator";
 
 /** Base view of a resource page (its own detail view). */
 export const RESOURCE_BASE_VIEW = "detail";
@@ -46,6 +51,7 @@ export type PageId =
 	| "observability.topology.service"
 	| "wiki"
 	| "wiki.note"
+	| "orchestrator"
 	| "workflows.detail";
 
 /** A location: page identity + required resource identity + typed params. */
@@ -302,6 +308,14 @@ export const PAGES: Readonly<Record<PageId, PageDef>> = {
 		parent: () => ({ page: "wiki" }),
 		requiresResource: true,
 	},
+	// The Home Orchestrator chat: one persistent durable session that launches
+	// and manages workflows on the developer's behalf.
+	orchestrator: {
+		label: "Orchestrator",
+		feature: "orchestrator",
+		parent: () => ({ page: "home" }),
+		picker: true,
+	},
 	// The per-workflow dashboard page (workspace sidebar navigation). Not a
 	// destination: no workflow list, history or reopen route reaches it, and the
 	// location picker never offers it.
@@ -453,6 +467,7 @@ export const FEATURE_ROOTS: Readonly<Record<FeatureId, Route>> = {
 	workflows: { page: "workflows.detail" },
 	observability: { page: "observability" },
 	wiki: { page: "wiki" },
+	orchestrator: { page: "orchestrator" },
 };
 
 export function featureRoot(feature: FeatureId): Route {

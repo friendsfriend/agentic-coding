@@ -29,6 +29,8 @@ export interface HostSpawn {
 	readonly command: string;
 	readonly args: readonly string[];
 	readonly cwd: string;
+	/** Full child environment; the parent's when omitted. */
+	readonly env?: NodeJS.ProcessEnv;
 }
 
 function sendRequest(
@@ -92,6 +94,7 @@ function spawnHost(target: HostSpawn, layout: HostLayout): ChildProcess {
 	const out = fs.openSync(layout.logPath, "a");
 	const child = spawn(target.command, target.args, {
 		cwd: target.cwd,
+		...(target.env ? { env: target.env } : {}),
 		detached: true,
 		stdio: ["ignore", out, out],
 	});

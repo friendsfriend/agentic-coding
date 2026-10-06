@@ -45,6 +45,14 @@ export type AgentsMutation =
 				readonly provider: string;
 				readonly options?: Record<string, unknown>;
 			};
+	  }
+	| {
+			readonly kind: "set-orchestrator";
+			/** Absent fields are removed: the durable host default applies. */
+			readonly orchestrator: {
+				readonly model?: string;
+				readonly thinking?: string;
+			};
 	  };
 
 /** Stable JSON of the effective agents section: object keys are ordered so the
@@ -162,6 +170,19 @@ export function applyAgentsMutation(
 						? { options: mutation.classifier.options }
 						: {}),
 				};
+				return;
+			}
+			case "set-orchestrator": {
+				const next: Record<string, string> = {};
+				for (const key of ["model", "thinking"] as const) {
+					const value = mutation.orchestrator[key];
+					if (value === undefined || value === "") continue;
+					if (typeof value !== "string" || !value.trim())
+						throw new Error(`agents.orchestrator.${key} must be a string`);
+					next[key] = value.trim();
+				}
+				if (Object.keys(next).length) section.orchestrator = next;
+				else delete section.orchestrator;
 				return;
 			}
 		}

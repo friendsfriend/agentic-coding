@@ -36,6 +36,7 @@ import {
 	isPublicRoute,
 	originAllowed,
 	PayloadBoundError,
+	type Principal,
 	readJsonBody,
 } from "./auth.ts";
 import type { CredentialRegistry } from "./credentials.ts";
@@ -51,6 +52,10 @@ import {
 	handleLegacyRoute,
 	type IntegrationServices,
 } from "./integrations/routes.ts";
+import {
+	orchestratorActionRefusal,
+	orchestratorRouteAllowed,
+} from "./orchestrator-policy.ts";
 import {
 	decodeRouteRequest,
 	MAX_REQUEST_BYTES,
@@ -167,17 +172,29 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			return errorResponse(403, "origin", "untrusted origin");
 		// The liveness probe is public (no secret in it); every other route needs
 		// the instance bearer token.
+		let principal: Principal = "operator";
 		if (!isPublicRoute(request.method, url.pathname)) {
 			try {
-				authorizeRequest(request, authority);
+				principal = authorizeRequest(request, authority);
 			} catch (error) {
 				const status = error instanceof AuthorizationError ? error.status : 401;
 				return errorResponse(status, "unauthorized", safeMessage(error));
 			}
 		}
+		// The orchestrator capability is confined to its route policy before any
+		// handler runs; its action/start limits are applied inside `route`.
+		if (
+			principal === "orchestrator" &&
+			!orchestratorRouteAllowed(request.method, url.pathname)
+		)
+			return errorResponse(
+				403,
+				"orchestrator-forbidden",
+				`${request.method.toUpperCase()} ${url.pathname} is not available to the orchestrator`,
+			);
 
 		try {
-			return await route(request, url);
+			return await route(request, url, principal);
 		} catch (error) {
 			// An engine failure keeps its own code (a stale revision must not
 			// degrade into "bad-request"); anything else is a malformed request.
@@ -188,7 +205,11 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 		}
 	};
 
-	const route = async (request: Request, url: URL): Promise<Response> => {
+	const route = async (
+		request: Request,
+		url: URL,
+		principal: Principal,
+	): Promise<Response> => {
 		const method = request.method.toUpperCase();
 		const path = url.pathname;
 
@@ -226,6 +247,14 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 				"/api/v1/workflow/action",
 				await readJsonBody(request),
 			);
+			if (principal === "orchestrator") {
+				const refusal = orchestratorActionRefusal(
+					decoded.actionId,
+					operations.view(decoded.repo, decoded.workflowId).currentStep.id,
+				);
+				if (refusal)
+					return errorResponse(403, "orchestrator-forbidden", refusal);
+			}
 			const value = operations.action(decoded);
 			events.publish({
 				domain: "workflow",
@@ -242,7 +271,14 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 				"/api/v1/workflow/start",
 				await readJsonBody(request),
 			);
-			const value = await operations.start(decoded);
+			// Orchestrator-started work keeps every human review: the server pins
+			// the plan, developer and wiki gates to `always`, whatever the preset.
+			const value = await operations.start(
+				decoded,
+				principal === "orchestrator"
+					? { enforceHumanReviewGates: true }
+					: undefined,
+			);
 			events.publish({
 				domain: "workflow",
 				kind: "workflow.start",

@@ -28,7 +28,8 @@ import {
 // Home, category pages, breadcrumbs and the location picker
 // (replace-nested-tabs-with-page-navigation, task 2.1).
 //
-// Home offers Environments, Observability, Wiki and Settings, plus the
+// Home offers Environments, Observability, Wiki, Orchestrator (home mode) and
+// Settings, plus the
 // "New workflow" action (working directory or a path the user enters): workflow
 // creation is contextual and there is no Workflows destination, list, history
 // or reopen entry (launch-workflows-from-project-and-wiki-pages, task 2.4).
@@ -48,6 +49,20 @@ describe("home and category destinations", () => {
 			"Wiki",
 			"Settings",
 		]);
+	});
+
+	test("the home shell adds the Orchestrator before Settings", () => {
+		const entries = homeDestinations({ ...FULL_SURFACE, orchestrator: true });
+		expect(entries.map((entry) => entry.label)).toEqual([
+			"Environments",
+			"Observability",
+			"Wiki",
+			"Orchestrator",
+			"Settings",
+		]);
+		expect(entries.find((entry) => entry.id === "orchestrator")?.route).toEqual(
+			{ page: "orchestrator" },
+		);
 	});
 
 	test("Settings lists only the remaining sections", () => {
@@ -292,6 +307,7 @@ describe("every routed page has a definition and a label", () => {
 			"observability.topology.service",
 			"wiki",
 			"wiki.note",
+			"orchestrator",
 			"workflows.detail",
 		];
 		for (const page of ids) {

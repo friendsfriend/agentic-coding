@@ -77,6 +77,7 @@ export async function runAgentHost(
 		layout,
 		settings,
 		globalAgentDir: piAgentDir(),
+		...(argv.includes("--orchestrator") ? { orchestrator: true } : {}),
 		// Test-only hook (unified-application-distribution: "Compiled executable
 		// hosts an agent"), gated behind an explicit env var so production use
 		// never takes it: lets a compiled-binary smoke test complete a model

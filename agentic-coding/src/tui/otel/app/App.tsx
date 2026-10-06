@@ -98,6 +98,7 @@ import {
 	quitConfirmation,
 	resolveQuitConfirmation,
 } from "../../lifecycle.ts";
+import { OrchestratorView } from "../../orchestrator/OrchestratorView.tsx";
 import { AgentPresetsView } from "../../settings/AgentPresetsView.tsx";
 import {
 	fileJudgmentSummaryLabel,
@@ -197,6 +198,7 @@ type Tab =
 	| "environments"
 	| "workflow"
 	| "wiki"
+	| "orchestrator"
 	| "traces"
 	| "metrics"
 	| "logs"
@@ -372,6 +374,7 @@ export function App(props: {
 		if (page.startsWith("environments")) return "environments";
 		if (page.startsWith("workflows")) return "workflows";
 		if (page.startsWith("wiki")) return "wiki";
+		if (page === "orchestrator") return "orchestrator";
 		if (page.startsWith("observability")) return "observability";
 		return "home";
 	};
@@ -725,6 +728,7 @@ export function App(props: {
 		if (page.startsWith("environments")) return "environments";
 		if (page.startsWith("workflows")) return "workflow";
 		if (page.startsWith("wiki")) return "wiki";
+		if (page === "orchestrator") return "orchestrator";
 		if (page.includes("metrics")) return "metrics";
 		if (page.includes("logs")) return "logs";
 		if (page.includes("topology")) return "topology";
@@ -799,6 +803,7 @@ export function App(props: {
 		environments: Boolean(props.environments),
 		tracesOnly: Boolean(props.tracesOnly),
 		wiki: props.dashboard?.mode === "home",
+		orchestrator: props.dashboard?.mode === "home",
 		// Settings owns the shared keymap the profile/preset editor needs, so the
 		// surface that renders it is the one that has a dashboard-mounted shell.
 		settings: Boolean(props.dashboard),
@@ -921,6 +926,7 @@ export function App(props: {
 						value: `${Object.keys(preset.steps ?? {}).length} steps`,
 					})),
 				routing: agents ? agentRoutingEntries(agents) : [],
+				...(agents?.orchestrator ? { orchestrator: agents.orchestrator } : {}),
 			},
 			providers: settingsProviders(),
 			...(classifierSnapshot() ? { classifier: classifierSnapshot() } : {}),
@@ -1591,6 +1597,7 @@ export function App(props: {
 			"workflows",
 			"observability",
 			"wiki",
+			"orchestrator",
 		].map((id) =>
 			registerFocusRestorer(id, () => {
 				// The embedded environment names its own dialog through the same
@@ -2054,8 +2061,14 @@ export function App(props: {
 			return;
 		}
 
-		// Dashboard and wiki bodies own their keys through their own keymap layers.
-		if (activeTab() === "workflow" || activeTab() === "wiki") return;
+		// Dashboard, wiki and orchestrator bodies own their keys through their own
+		// keymap layers.
+		if (
+			activeTab() === "workflow" ||
+			activeTab() === "wiki" ||
+			activeTab() === "orchestrator"
+		)
+			return;
 
 		// Quit (global)
 		if (key === "q") {
@@ -2442,7 +2455,11 @@ export function App(props: {
 	// steals Tab from it.
 	const pageFocusRegions = (): Array<"breadcrumb" | "content"> => {
 		if (currentPage().startsWith("environments.")) return ["content"];
-		if (activeTab() === "workflow" || activeTab() === "wiki")
+		if (
+			activeTab() === "workflow" ||
+			activeTab() === "wiki" ||
+			activeTab() === "orchestrator"
+		)
 			return ["content"];
 		return ["breadcrumb", "content"];
 	};
@@ -2529,7 +2546,7 @@ export function App(props: {
 	const tabKeybindCatalog = (): KeybindSection[] => {
 		const tab = activeTab();
 		const base = observabilityKeybindCatalog({
-			tab: tab === "home" ? "traces" : tab,
+			tab: tab === "home" || tab === "orchestrator" ? "traces" : tab,
 			view: traceView(),
 		});
 		// The page body advertises how to reach the sidebar (the dashboard
@@ -2570,6 +2587,8 @@ export function App(props: {
 		// its sub-view catalog itself (the inline form is not a shell page), so
 		// return before the fallback: opening/closing `?` must not overwrite it.
 		if (settingsSection() === "agents") return;
+		// The Orchestrator page publishes its session catalog itself.
+		if (currentPage() === "orchestrator") return;
 		if (settingsSection()) {
 			setActiveKeybindCatalog(
 				sidebarAvailable()
@@ -2825,6 +2844,27 @@ export function App(props: {
 									/>
 								</box>
 							)}
+							{/* Home → Orchestrator: mounted while its page is current. */}
+							{props.dashboard?.mode === "home" &&
+								currentPage() === "orchestrator" &&
+								(() => {
+									const keymap = props.dashboard?.keymap;
+									if (!keymap) return null;
+									return (
+										<box style={{ flexGrow: 1, minHeight: 0 }}>
+											<OrchestratorView
+												keymap={keymap}
+												active={() => focusPanel() === "content"}
+												overlay={() => nav.modal() !== "none"}
+												onBack={() => pages.goToParent()}
+												onHelp={() => {
+													setHelpOffset(0);
+													nav.pushModal("help", "orchestrator");
+												}}
+											/>
+										</box>
+									);
+								})()}
 							{!showsDestinationList() && activeTab() === "traces" && (
 								<>
 									{traceView() === "selection" && (

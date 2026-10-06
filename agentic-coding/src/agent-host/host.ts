@@ -12,6 +12,7 @@ import {
 	type ConversationId,
 	createRegistry,
 	defineDoc,
+	type Extension,
 	Harness,
 	type JsonObject,
 	type ToolRegistration,
@@ -24,6 +25,7 @@ import { createDurableCodemode } from "./codemode.ts";
 import { configuredProviderIds } from "./configured-models.ts";
 import { PiAuthCredentialStore } from "./credentials.ts";
 import type { HostLayout } from "./layout.ts";
+import { createOrchestratorExtension } from "./orchestrator.ts";
 import {
 	decodeFrame,
 	encodeFrame,
@@ -32,6 +34,7 @@ import {
 	type HostResponse,
 	PROTOCOL_VERSION,
 	type RunStatus,
+	type ToolPolicy,
 } from "./protocol.ts";
 import type { AgentHostSettings } from "./settings.ts";
 import { attachTelemetry, type EntryTiming } from "./telemetry.ts";
@@ -41,6 +44,7 @@ import {
 	createPromptExtension,
 	createWorkflowDialogueExtension,
 	type DurableRunContext,
+	type RunContextLookup,
 } from "./tools.ts";
 
 // pi-ai's default OAuth loaders hide imports from bundlers. Embed/register all
@@ -130,7 +134,7 @@ export interface EnsureRunInput {
 	/** The engine's canonical agent name: the run-map dedup key (see
 	 * `protocol.ts`'s `EnsureRunRequest.name`). */
 	readonly name: string;
-	readonly toolPolicy: "default" | "read-only";
+	readonly toolPolicy: ToolPolicy;
 	readonly model?: string;
 	readonly thinking?: string;
 }
@@ -145,6 +149,10 @@ export interface DurableHostOptions {
 	readonly settings: AgentHostSettings;
 	readonly globalAgentDir: string;
 	readonly credentialsPath?: string;
+	/** Orchestrator mode (`--orchestrator`): the host installs only the coding
+	 * tools and the orchestrator extension, and serves the `orchestrator` tool
+	 * policy instead of workflow runs. */
+	readonly orchestrator?: boolean;
 	readonly log?: (line: string) => void;
 	/** Test-only overrides: a faux `Models` collection and/or an in-memory
 	 * `Storage` in place of the real SQLite file and live pi credentials.
@@ -188,7 +196,21 @@ export class DurableHost {
 		/** The durable `codemode` tool when the user's global pi settings enable
 		 * it, so a read-only run's explicit selection can still offer it. */
 		private readonly codemodeTool: ToolRegistration | undefined,
+		/** The orchestrator extension, present only in orchestrator mode. */
+		private readonly orchestratorExtension: Extension | undefined,
 	) {}
+
+	/** The workflow-run extensions: dialogue tools, `ask_jev`, and the
+	 * workflow system prompt. Never installed in orchestrator mode. */
+	private static installWorkflowExtensions(
+		registry: ReturnType<typeof createRegistry>,
+		lookup: RunContextLookup,
+		options: DurableHostOptions,
+	): void {
+		registry.install(createWorkflowDialogueExtension(lookup));
+		registry.install(createAskJevExtension(lookup));
+		registry.install(createPromptExtension(options.globalAgentDir));
+	}
 
 	private log(line: string): void {
 		try {
@@ -208,25 +230,24 @@ export class DurableHost {
 		const registry = createRegistry();
 		const host: { instance?: DurableHost } = {};
 		registry.install(CodingTools);
-		registry.install(
-			createWorkflowDialogueExtension((conversationId) =>
-				host.instance?.contexts.get(conversationId),
-			),
-		);
-		registry.install(
-			createAskJevExtension((conversationId) =>
-				host.instance?.contexts.get(conversationId),
-			),
-		);
-		registry.install(createPromptExtension(options.globalAgentDir));
+		const lookup = (conversationId: ConversationId) =>
+			host.instance?.contexts.get(conversationId);
+		const orchestrator = options.orchestrator
+			? createOrchestratorExtension(lookup)
+			: undefined;
+		if (orchestrator) registry.install(orchestrator);
+		else DurableHost.installWorkflowExtensions(registry, lookup, options);
 		// A durable run gets codemode only when the user's own global pi settings
 		// enable it, matching what a managed pane session inherits. It is an
-		// additional tool: the run keeps its direct tools either way.
-		const codemode = globalPiTools(piSettingsPath(options.globalAgentDir)).some(
-			(tool) => tool.tool === "codemode",
-		)
-			? createDurableCodemode()
-			: undefined;
+		// additional tool: the run keeps its direct tools either way. The
+		// orchestrator never gets it: its tool surface is exactly its own.
+		const codemode =
+			!orchestrator &&
+			globalPiTools(piSettingsPath(options.globalAgentDir)).some(
+				(tool) => tool.tool === "codemode",
+			)
+				? createDurableCodemode()
+				: undefined;
 		if (codemode) registry.install(codemode.extension);
 		const models =
 			options.models ??
@@ -270,7 +291,13 @@ export class DurableHost {
 			context,
 		);
 		harness.resume();
-		const instance = new DurableHost(harness, options, models, codemode?.tool);
+		const instance = new DurableHost(
+			harness,
+			options,
+			models,
+			codemode?.tool,
+			orchestrator,
+		);
 		host.instance = instance;
 		return instance;
 	}
@@ -284,7 +311,7 @@ export class DurableHost {
 			? await this.harness.conversation(existingId as ConversationId, context)
 			: undefined;
 		const readOnly = input.toolPolicy === "read-only";
-		const toolSelection = readOnly ? this.readOnlyToolSelection() : undefined;
+		const toolSelection = this.toolSelectionFor(input.toolPolicy);
 		if (!conversation) {
 			conversation = await this.harness.createConversation(
 				{
@@ -358,6 +385,23 @@ export class DurableHost {
 		}
 		this.log(`ensureRun ${input.runId} -> conversation ${conversation.id}`);
 		return { conversationId: String(conversation.id) };
+	}
+
+	/** The explicit tool list for a policy, or undefined for the full default
+	 * selection. A policy the host's mode cannot serve is refused, so a workflow
+	 * run never lands on an orchestrator host or the other way around. */
+	private toolSelectionFor(policy: ToolPolicy) {
+		if (this.orchestratorExtension) {
+			if (policy !== "orchestrator")
+				throw new Error("this host only serves the orchestrator session");
+			return [
+				...(CodingTools.tools ?? []).filter((tool) => tool.name === "read"),
+				...(this.orchestratorExtension.tools ?? []),
+			];
+		}
+		if (policy === "orchestrator")
+			throw new Error("the orchestrator policy needs an orchestrator host");
+		return policy === "read-only" ? this.readOnlyToolSelection() : undefined;
 	}
 
 	private readOnlyToolSelection() {

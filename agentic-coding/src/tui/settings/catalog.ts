@@ -34,7 +34,9 @@ export type SettingsEffect =
 	/** Affects the next workflow start; running workflows keep their pins. */
 	| "next-start"
 	/** Needs a restart of the owning process before it applies. */
-	| "restart";
+	| "restart"
+	/** Applies the next time the Orchestrator page opens its session. */
+	| "next-session";
 
 export interface SettingsInventoryEntry {
 	/** Stable inventory identity, also the section item id. */
@@ -108,6 +110,19 @@ export const SETTINGS_INVENTORY: readonly SettingsInventoryEntry[] = [
 		effect: "next-start",
 		editable: true,
 		items: ["agents.classifier"],
+	},
+	{
+		id: "agents.orchestrator",
+		section: "agents",
+		label: "Orchestrator model",
+		owner: "src/server/config.ts",
+		scope: "user",
+		storage:
+			"[agents.orchestrator] model, thinking in the layered workflow config",
+		secret: false,
+		effect: "next-session",
+		editable: true,
+		items: ["agents.orchestrator"],
 	},
 	{
 		id: "agents.routing",
@@ -215,5 +230,7 @@ export function effectLabel(effect: SettingsEffect): string {
 			return "applies to the next workflow start";
 		case "restart":
 			return "needs a restart";
+		case "next-session":
+			return "applies when the Orchestrator opens";
 	}
 }

@@ -84,7 +84,7 @@ import {
 	profileReferences,
 	validateDraft,
 } from "./agentPresets.ts";
-import type { SettingsItem } from "./items.ts";
+import { orchestratorModelLabel, type SettingsItem } from "./items.ts";
 
 /** Keys the surface owns while it is mounted. */
 const SURFACE_KEYS = [
@@ -133,7 +133,26 @@ export interface AgentPresetsViewProps {
 	classifier?: ClassifierStatusResponse;
 }
 
-type View = "menu" | "list" | "form" | "pool-entry" | "classifier";
+type View =
+	| "menu"
+	| "list"
+	| "form"
+	| "pool-entry"
+	| "classifier"
+	| "orchestrator";
+
+/** The thinking levels a durable session accepts (`DurableHost.THINKING_LEVELS`). */
+const ORCHESTRATOR_THINKING_LEVELS = [
+	"off",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+] as const;
+/** The first row of each orchestrator picker: leave the field unset. */
+const HOST_DEFAULT = "(host default)";
 
 /** One row of the Agent Presets menu. */
 interface MenuEntry {
@@ -220,6 +239,12 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 	// still close it.
 	const [cancelFailed, setCancelFailed] = createSignal(false);
 	let installPoll: ReturnType<typeof setInterval> | undefined;
+	// Orchestrator model picker: choose a model, then a thinking level, then save.
+	const [orchestratorStage, setOrchestratorStage] = createSignal<
+		"model" | "thinking"
+	>("model");
+	const [orchestratorIndex, setOrchestratorIndex] = createSignal(0);
+	const [orchestratorModel, setOrchestratorModel] = createSignal<string>();
 
 	const stopInstallPolling = () => {
 		if (installPoll === undefined) return;
@@ -420,13 +445,24 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 				detail: `${providerLabel(activeProvider())} · local model ${localStatusLine()}`,
 				view: "classifier",
 			});
+		const orchestrator = props.items?.find(
+			(item) => item.id === "agents.orchestrator",
+		);
+		if (orchestrator)
+			options.push({
+				id: "agents.orchestrator",
+				label: orchestrator.label,
+				detail: `${orchestratorModelLabel(agents()?.orchestrator)} · ${orchestrator.detail}`,
+				view: "orchestrator",
+			});
 		const info: MenuEntry[] = (props.items ?? [])
 			.filter(
 				(item) =>
 					item.editable &&
 					item.id !== "agents.profiles" &&
 					item.id !== "agents.presets" &&
-					item.id !== "agents.classifier",
+					item.id !== "agents.classifier" &&
+					item.id !== "agents.orchestrator",
 			)
 			.map((item) => ({
 				id: item.id,
@@ -791,6 +827,64 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 		onDone();
 	};
 
+	// -- orchestrator model picker ---------------------------------------------
+
+	/** The rows of the current orchestrator picker stage. */
+	const orchestratorOptions = (): string[] =>
+		orchestratorStage() === "model"
+			? [HOST_DEFAULT, ...(durableModels() ?? [])]
+			: [HOST_DEFAULT, ...ORCHESTRATOR_THINKING_LEVELS];
+	const openOrchestratorPicker = () => {
+		loadDurableModelsOnce();
+		const current = agents()?.orchestrator?.model;
+		setOrchestratorStage("model");
+		setOrchestratorModel(undefined);
+		setOrchestratorIndex(
+			Math.max(0, current ? orchestratorOptions().indexOf(current) : 0),
+		);
+		setView("orchestrator");
+	};
+	const chooseOrchestratorOption = () => {
+		const choice = orchestratorOptions()[orchestratorIndex()];
+		if (choice === undefined) return;
+		const value = choice === HOST_DEFAULT ? undefined : choice;
+		if (orchestratorStage() === "model") {
+			setOrchestratorModel(value);
+			setOrchestratorStage("thinking");
+			const thinking = agents()?.orchestrator?.thinking;
+			setOrchestratorIndex(
+				Math.max(0, thinking ? orchestratorOptions().indexOf(thinking) : 0),
+			);
+			return;
+		}
+		if (refuseOnConflict()) return;
+		const model = orchestratorModel();
+		try {
+			commitAgents(
+				{
+					kind: "set-orchestrator",
+					orchestrator: {
+						...(model ? { model } : {}),
+						...(value ? { thinking: value } : {}),
+					},
+				},
+				() => {
+					reload();
+					notify(
+						`Orchestrator model set to ${orchestratorModelLabel({
+							...(model ? { model } : {}),
+							...(value ? { thinking: value } : {}),
+						})}`,
+						"success",
+					);
+					setView("menu");
+				},
+			);
+		} catch (error) {
+			notify(error instanceof Error ? error.message : String(error), "error");
+		}
+	};
+
 	// -- classifier provider picker + user-decided local install -------------
 
 	/** The offered providers: the server snapshot when one was read, otherwise
@@ -1132,6 +1226,27 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 			}
 			return false;
 		}
+		if (view() === "orchestrator") {
+			const options = orchestratorOptions();
+			if (key === "escape") {
+				if (orchestratorStage() === "thinking") {
+					setOrchestratorStage("model");
+					setOrchestratorIndex(
+						Math.max(0, options.indexOf(orchestratorModel() ?? HOST_DEFAULT)),
+					);
+				} else setView("menu");
+				return true;
+			}
+			if (key === "j" || key === "down")
+				setOrchestratorIndex((index) =>
+					Math.min(index + 1, Math.max(0, options.length - 1)),
+				);
+			else if (key === "k" || key === "up")
+				setOrchestratorIndex((index) => Math.max(index - 1, 0));
+			else if (key === "enter" || key === "return") chooseOrchestratorOption();
+			else return false;
+			return true;
+		}
 		if (view() === "classifier") {
 			const options = classifierOptions();
 			if (key === "escape") {
@@ -1182,6 +1297,8 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 							"No custom presets",
 							"Recreate them as model pools in Settings → Presets.",
 						);
+				} else if (entry?.view === "orchestrator") {
+					openOrchestratorPicker();
 				} else if (entry?.view) {
 					setView(entry.view);
 					if (entry.view === "classifier") {
@@ -1537,6 +1654,50 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 					</box>
 				</GenericModal>
 			</Show>
+			<Show when={view() === "orchestrator"}>
+				<box
+					style={{
+						width: "100%",
+						flexGrow: 1,
+						minHeight: 0,
+						flexDirection: "column",
+					}}
+				>
+					<box style={{ width: "100%", paddingLeft: 1, paddingBottom: 1 }}>
+						<text fg={uiColors.textMuted}>
+							{orchestratorStage() === "model"
+								? durableModels() === undefined
+									? "Orchestrator model · reading configured providers…"
+									: "Orchestrator model"
+								: `Thinking level for ${orchestratorModel() ?? "the host default model"}`}
+						</text>
+					</box>
+					<ScrollableList
+						items={orchestratorOptions()}
+						selectedIndex={orchestratorIndex()}
+						availableLines={Math.max(1, contentLines() - 3)}
+						estimatedItemHeight={1}
+						showScrollIndicator={false}
+						renderItem={(option, selected) => {
+							const current = () =>
+								orchestratorStage() === "model"
+									? agents()?.orchestrator?.model
+									: agents()?.orchestrator?.thinking;
+							const active = () =>
+								(current() ?? HOST_DEFAULT) === option ? "(active) " : "";
+							return (
+								<box style={{ height: 1, paddingLeft: 1 }}>
+									<text
+										fg={selected() ? uiColors.accent : uiColors.textPrimary}
+									>
+										{`${selected() ? "› " : "  "}${active()}${option}`}
+									</text>
+								</box>
+							);
+						}}
+					/>
+				</box>
+			</Show>
 			<Show when={view() === "classifier"}>
 				<box
 					style={{
@@ -1762,6 +1923,21 @@ export function catalogFor(
 	poolFieldFocused = false,
 	poolListFocused = false,
 ): KeybindSection[] {
+	if (view === "orchestrator")
+		return [
+			{
+				title: "Orchestrator model",
+				keybinds: [
+					{ key: "j/k or ↑/↓", action: "select", standard: true },
+					{
+						key: "Enter",
+						action: "choose model, then thinking level (saves)",
+						short: "select",
+					},
+					{ key: "Esc", action: "back", short: "back", standard: true },
+				],
+			},
+		];
 	if (view === "classifier")
 		return [
 			{

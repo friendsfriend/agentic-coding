@@ -103,6 +103,12 @@ export function setupKeymap(keymap: Keymap<Renderable, KeyEvent>) {
 				agentView(value, ctx) {
 					ctx.require("agent.view", String(value));
 				},
+				// The Home Orchestrator session page has its own field: the workflow
+				// dashboard repairs `agent.view` before every key, so sharing it would
+				// let a mounted dashboard close the orchestrator's model picker.
+				orchestratorView(value, ctx) {
+					ctx.require("orchestrator.view", String(value));
+				},
 				// The environment feature owns its dialog state on its own key: the
 				// dashboard and wiki write `modal.active` while their body is hidden,
 				// and a shared field left every environment layer parked (all of them
