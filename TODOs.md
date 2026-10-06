@@ -6,8 +6,6 @@ Big ones:
 * Make otel work for apps that are launched via the environment as well (Introduce Agent skill for setup)
 * Agent skills to create the environments for a fresh app.
 * Rework existing AI features using the workflow engine (ai summary for logs etc.)
-* Introduce Verfication only workflow
-* Introduce Rebase workflow
 * Introduce dependency upgrade and migration workflow
 
 Small ones: 
