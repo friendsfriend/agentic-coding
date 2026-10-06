@@ -64,6 +64,43 @@ export interface WorkflowEdge {
 	}[];
 }
 export type WorkflowTargetKind = "repository" | "wiki" | "research";
+/** Whether a repository family produces OpenSpec change artifacts. */
+export type WorkflowChangeArtifacts = "openspec" | "none";
+/** How a repository family plans: no planner, one planner, or a classified
+ * planner roster consolidating to one plan. */
+export type WorkflowPlanningMode = "none" | "single" | "fusion";
+/** Where a repository family's change id comes from: chosen by a planner step
+ * (`planned`), fixed to the workflow id (`openspec-apply`'s pre-existing
+ * change), or absent entirely (`none` — a workflow that produces no OpenSpec
+ * change and so never records one). `planned` and `workflow-id` both require
+ * `changeArtifacts: openspec`, which registration enforces. */
+export type WorkflowChangeIdentity = "planned" | "workflow-id" | "none";
+/** Whether a repository family delivers a pull request. */
+export type WorkflowDelivery = "pull-request" | "none";
+/** The start-time preconditions a repository family declares. */
+export type WorkflowStartRequirement =
+	| "task"
+	| "clean-tree"
+	| "openspec-project"
+	| "openspec-change"
+	| "base-commit"
+	| "rebase-refs";
+/** Declarative replacement for the engine's per-family definition-id
+ * comparisons (add-definition-family-traits): the properties `steps/`,
+ * `runtime/`, `startup.ts`, and `effect-runner.ts` branch on today. Declared
+ * inside `policy` so one manifest block, one validation path, and one fallback
+ * function family (`effectiveManifestPolicy`, `effectiveFamilyTraits`) own
+ * them. Documentation families (`wiki`, `wiki-comments`, `research`) declare
+ * none: they have their own targets and steps, and custom graphs will not
+ * produce them. */
+export interface WorkflowFamilyTraits {
+	changeArtifacts: WorkflowChangeArtifacts;
+	planning: WorkflowPlanningMode;
+	changeIdentity: WorkflowChangeIdentity;
+	delivery: WorkflowDelivery;
+	startRequirements: readonly WorkflowStartRequirement[];
+	openspecVerifier: boolean;
+}
 /** Declarative replacement for the engine's former `isWikiWorkflowTarget` /
  * `isResearchWorkflowTarget` / definition-id array checks at workflow start
  * time (design D1). Optional so pre-policy definition versions keep
@@ -77,12 +114,106 @@ export interface WorkflowManifestPolicy {
 	checkoutRequired: boolean;
 	/** Only the research workflow's entry role must be forced read-only. */
 	requiresReadOnlyResearcher: boolean;
+	/** Repository family traits. Declared only by the family-traits tier
+	 * (add-definition-family-traits); earlier tiers read the fallback table in
+	 * `definitions/manifest-policy.ts`, so every pinned workflow has traits. */
+	traits?: WorkflowFamilyTraits;
 }
 const TARGET_KINDS: readonly WorkflowTargetKind[] = [
 	"repository",
 	"wiki",
 	"research",
 ];
+const CHANGE_ARTIFACTS_TRAITS: readonly WorkflowChangeArtifacts[] = [
+	"openspec",
+	"none",
+];
+const PLANNING_TRAITS: readonly WorkflowPlanningMode[] = [
+	"none",
+	"single",
+	"fusion",
+];
+const CHANGE_IDENTITY_TRAITS: readonly WorkflowChangeIdentity[] = [
+	"planned",
+	"workflow-id",
+	"none",
+];
+const DELIVERY_TRAITS: readonly WorkflowDelivery[] = ["pull-request", "none"];
+const START_REQUIREMENTS: readonly WorkflowStartRequirement[] = [
+	"task",
+	"clean-tree",
+	"openspec-project",
+	"openspec-change",
+	"base-commit",
+	"rebase-refs",
+];
+/** Validate a declared family-traits block: enum membership, repository target
+ * only, and structural consistency with the steps the graph actually contains.
+ * The messages name the manifest so a rejected registration is actionable. */
+function validateFamilyTraits(
+	id: string,
+	targetKind: WorkflowTargetKind,
+	traits: WorkflowFamilyTraits,
+	steps: readonly string[],
+): void {
+	if (targetKind !== "repository")
+		throw new Error(`family traits outside repository target in ${id}`);
+	if (!CHANGE_ARTIFACTS_TRAITS.includes(traits.changeArtifacts))
+		throw new Error(
+			`unknown change artifacts trait in ${id}: ${traits.changeArtifacts}`,
+		);
+	if (!PLANNING_TRAITS.includes(traits.planning))
+		throw new Error(`unknown planning trait in ${id}: ${traits.planning}`);
+	if (!CHANGE_IDENTITY_TRAITS.includes(traits.changeIdentity))
+		throw new Error(
+			`unknown change identity trait in ${id}: ${traits.changeIdentity}`,
+		);
+	if (!DELIVERY_TRAITS.includes(traits.delivery))
+		throw new Error(`unknown delivery trait in ${id}: ${traits.delivery}`);
+	if (
+		!Array.isArray(traits.startRequirements) ||
+		traits.startRequirements.some(
+			(requirement) => !START_REQUIREMENTS.includes(requirement),
+		) ||
+		new Set(traits.startRequirements).size !== traits.startRequirements.length
+	)
+		throw new Error(`invalid start requirements trait in ${id}`);
+	const has = (step: string) => steps.includes(step);
+	if (traits.planning === "fusion" && !has("fusion.plan"))
+		throw new Error(
+			`contradictory family traits in ${id}: fusion planning without fusion.plan`,
+		);
+	if (traits.planning === "single" && !has("core.plan"))
+		throw new Error(
+			`contradictory family traits in ${id}: single planning without core.plan`,
+		);
+	if (traits.planning === "none" && (has("core.plan") || has("fusion.plan")))
+		throw new Error(
+			`contradictory family traits in ${id}: no planning with a planning step`,
+		);
+	if (traits.delivery === "pull-request" && !has("core.delivery"))
+		throw new Error(
+			`contradictory family traits in ${id}: pull-request delivery without core.delivery`,
+		);
+	if (traits.changeArtifacts === "none" && has("core.archive"))
+		throw new Error(
+			`contradictory family traits in ${id}: change-free workflow with core.archive`,
+		);
+	if (
+		traits.changeIdentity === "workflow-id" &&
+		traits.changeArtifacts !== "openspec"
+	)
+		throw new Error(
+			`contradictory family traits in ${id}: workflow-id change identity without OpenSpec artifacts`,
+		);
+	if (
+		traits.changeIdentity === "planned" &&
+		traits.changeArtifacts !== "openspec"
+	)
+		throw new Error(
+			`contradictory family traits in ${id}: planned change identity without OpenSpec artifacts`,
+		);
+}
 export interface WorkflowManifest {
 	id: string;
 	version: number;
@@ -275,8 +406,12 @@ export class WorkflowRegistry {
 		)
 			throw new Error(`invalid step list in ${manifest.id}`);
 		if (manifest.policy) {
-			const { targetKind, checkoutRequired, requiresReadOnlyResearcher } =
-				manifest.policy;
+			const {
+				targetKind,
+				checkoutRequired,
+				requiresReadOnlyResearcher,
+				traits,
+			} = manifest.policy;
 			if (!TARGET_KINDS.includes(targetKind))
 				throw new Error(
 					`unknown policy target kind in ${manifest.id}: ${targetKind}`,
@@ -289,6 +424,8 @@ export class WorkflowRegistry {
 				throw new Error(
 					`contradictory policy in ${manifest.id}: checkoutRequired outside repository target`,
 				);
+			if (traits)
+				validateFamilyTraits(manifest.id, targetKind, traits, manifest.steps);
 		}
 		const refs = manifest.stepRefs;
 		if (refs) {

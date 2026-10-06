@@ -29,8 +29,17 @@ versions registered before traits existed.
 The family traits SHALL be introduced as a new definition version tier in which
 every built-in family is registered and the repository code-change families
 carry their traits; new starts SHALL resolve this tier, and every earlier tier
-SHALL keep its graph and digest. Declaring traits SHALL NOT change any engine
-behavior.
+SHALL keep its graph, its policy, and its digest. Declaring traits SHALL NOT
+change any engine behavior.
+
+The tier SHALL also register `research` with the full-tool policy
+(`requiresReadOnlyResearcher: false`), the policy
+`definitionVersionForResearchTools` documents, because the step-routing tier's
+second catalog-policy pass had reverted it and left every research start
+refused by a guard that looks for a route named by `definition.initial` — which
+per-step routing rewrites to the `core.route-research` system step. Apart from
+that one policy, the tier's graphs SHALL be identical to the step-routing
+tier's.
 
 #### Scenario: Pinned workflow is unaffected
 
@@ -43,3 +52,9 @@ behavior.
 - **WHEN** the built-in catalog is registered
 - **THEN** every repository code-change family's declared traits SHALL equal the
   per-family fallback table
+
+#### Scenario: A new research start is accepted
+
+- **WHEN** a `research` workflow starts on the family-traits tier
+- **THEN** the start SHALL be accepted, and the tiers below SHALL keep their
+  original `research` policy and digest

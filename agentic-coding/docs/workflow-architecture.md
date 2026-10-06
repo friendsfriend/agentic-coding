@@ -156,7 +156,7 @@ of its step, so one `core.verification` pool covers all verifier roles; the
 reported `confidence` is observable telemetry and never changes the pick, and
 only an answer with no usable decision falls back to the pool's tagged
 `default`. A fusion roster recomputes `planner-1..N`. Every new start
-resolves the per-step routing tier (`rounds + 700`) and requires a preset whose
+resolves the family-traits tier (`rounds + 800`) and requires a preset whose
 pools cover every classifiable step in its definition — the error names the
 step; the `fusion.plan` pool's tagged defaults seed the pre-classification
 planner fan-out. The resolved routing is pinned in the
@@ -490,8 +490,12 @@ definition-id checks *at workflow start time*: `targetKind`
 `requiresReadOnlyResearcher`. `WorkflowRegistry.registerWorkflow` validates it
 (unknown target kind, or a contradictory combination such as
 `requiresReadOnlyResearcher` outside the `research` target) and names the
-manifest in the rejection. Current research definitions set that flag false;
-older pinned definitions retain their original read-only policy and digest.
+manifest in the rejection. `requiresReadOnlyResearcher` is false for the
+definition a new start resolves: the research-tool tier sets it false, the
+step-routing tier's second `withManifestPolicy` pass carried it true again, and
+the family-traits tier — the tier new starts pin — restores the full-tool
+policy (see its bullet), so a `research` start runs with the selected profile's
+normal tools. Older pinned definitions retain their original policy and digest.
 
 **The rule:** adding a field to an existing registered manifest changes its
 digest, because `CompiledWorkflowDefinition.digest` is computed over the whole
@@ -513,7 +517,9 @@ already set:
   `rounds + 300` — wiki gate, `policy`, and exact semantic `stepRefs`.
 - **Research-tool tier:** `definitionVersionForResearchTools(rounds)` =
   `rounds + 400` — the `research` family with the selected profile's normal
-  tool access. `research` starts still resolve this tier.
+  tool access. The tier stays registered so workflows pinned to it keep their
+  policy and their digest; new research starts resolve the newest registered
+  tier (the family-traits tier below), which sets the flag false again.
 - **Verifier-role tier:** `definitionVersionForTriageRouting(rounds)` =
   `rounds + 500` — adds `core.triage-route` to the shared implementation loop.
 - **Stage-gate tier:** `definitionVersionForStageGates(rounds)` =
@@ -523,17 +529,32 @@ already set:
   registers the standalone `wiki` family unchanged.
 - **Step-routing tier:** `definitionVersionForStepRouting(rounds)` =
   `rounds + 700` — one routing step immediately before every classifiable
-  agent step. This is the version `startWorkflowInProcess` / `cli.ts`'s
-  `start` command actually use for new non-research workflows, so a family
-  added later (like `rebase`) is registered here first and in every tier
-  below only so a pinned lookup of an older version still resolves it — a
-  family's own digest covers only its own manifest, so appending one never
-  changes another definition's pin.
+  agent step. A family added later (like `rebase`) is registered here as well
+  as in every tier below only so a pinned lookup of an older version still
+  resolves it — a family's own digest covers only its own manifest, so
+  appending one never changes another definition's pin.
+- **Family-traits tier:** `definitionVersionForFamilyTraits(rounds)` =
+  `rounds + 800` — the same graphs as the step-routing tier, plus a declared
+  `traits` block on every repository code-change family. This is the version
+  `startWorkflowInProcess` / `cli.ts`'s `start` command actually use for new
+  workflows. Nothing reads the block yet; it is the source the next change
+  (`read-family-traits-instead-of-ids`) switches the engine's per-family id
+  comparisons onto, so a graph composed at runtime can declare which family it
+  behaves as instead of falling through every literal comparison. It also
+  restores `research`'s full-tool policy, which the step-routing tier's second
+  `withManifestPolicy` pass had reverted and thereby made unstartable (the
+  start guard looks for a route named by `definition.initial`, which per-step
+  routing had rewritten to the `core.route-research` system step); only
+  versions 801..820 move, and nothing was pinned to them.
 
 All tiers stay registered; nothing is removed. `start()` reads policy
 through `effectiveManifestPolicy(definition)`, which falls back to the same
 per-id table the manifest-policy tier is built from when a resolved
 definition has no `policy` block (any legacy or wikiGate-policy version).
+`effectiveFamilyTraits(definition)` reads a declared `traits` block the same
+way, falling back to the per-id family-traits table for any version registered
+before the family-traits tier — so every repository code-change workflow has
+traits, declared or fallback, whichever version it is pinned to.
 This is why a workflow pinned to a pre-manifest-policy version still starts
 and dispatches without repair: `policy` is read only inside `start()` — no
 other engine function references it — so it cannot affect an already-running
@@ -695,7 +716,7 @@ row):
 | `contracts.ts` | The step output contracts (`triage`, `findings`, `planDraft`, `passthrough`, `empty`) and the standalone `researchHandoffContract`. |
 | `steps.ts` | The `step()` factory, per-step instruction asset list, `commonImplementationSteps(triageRoute)`, and the full `WORKFLOW_STEPS` catalog. |
 | `edges.ts` | `workflowEdges()` (the shared implementation-loop edge builder, which threads the triage-routing edges) and `definitionVersionForPolicy`. |
-| `manifest-policy.ts` | The version tiers (`definitionVersionForManifestPolicy`, `…ForBehaviorPins`, `…ForResearchTools`, `…ForTriageRouting`, `…ForStageGates`), the per-workflow-id policy table, and `effectiveManifestPolicy`. |
+| `manifest-policy.ts` | The version tiers (`definitionVersionForManifestPolicy`, `…ForBehaviorPins`, `…ForResearchTools`, `…ForTriageRouting`, `…ForStageGates`, `…ForStepRouting`, `…ForFamilyTraits`), the per-workflow-id policy table with the repository family-traits table, and the fallbacks `effectiveManifestPolicy` / `effectiveFamilyTraits`. |
 | `graphs/*.ts` | One file per workflow family — `openspec.ts`, `no-openspec.ts`, `fusion.ts`, `wiki.ts`, `research.ts` — each exporting a manifest-builder function for that family only. |
 | `registerBuiltins.ts` | Orchestrates step registration and every family's graphs across every verification-round count and wikiGate/manifest-policy tier. |
 

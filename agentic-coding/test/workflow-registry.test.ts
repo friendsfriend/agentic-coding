@@ -2,6 +2,12 @@ import { describe, expect, test } from "bun:test";
 import type { WorkflowSnapshot } from "../src/contracts/workflow.ts";
 import { rolesForDefinition } from "../src/workflow/cli.ts";
 import {
+	definitionVersionForFamilyTraits,
+	definitionVersionForStageGates,
+	definitionVersionForStepRouting,
+	effectiveFamilyTraits,
+} from "../src/workflow/definitions/manifest-policy.ts";
+import {
 	BUILTIN_CAPABILITIES,
 	BUILTIN_EFFECTS,
 	definitionVersionForBehaviorPins,
@@ -11,8 +17,12 @@ import {
 } from "../src/workflow/definitions.ts";
 import {
 	type StepDefinition,
+	type WorkflowFamilyTraits,
 	WorkflowRegistry,
 } from "../src/workflow/registry.ts";
+import { CHANGE_FREE_IMPLEMENTATION } from "../src/workflow/steps/implementation.ts";
+import { CLOSE_ONLY_DEFINITIONS } from "../src/workflow/steps/lifecycle.ts";
+import { triageRolesFor } from "../src/workflow/steps/verification.ts";
 
 const contract = { id: "test.empty", version: 1, parse: () => null };
 const reduction = (snapshot: WorkflowSnapshot) => ({ snapshot, effects: [] });
@@ -595,15 +605,17 @@ describe("workflow registry", () => {
 			const registry = registerBuiltins();
 			// The manifest-policy tier is `definitionVersionForManifestPolicy`
 			// (rounds + 200) for rounds 1..20 — versions 201..220. The newer
-			// behavior-pin tier (rounds + 300) and full-tool research tier
-			// (rounds + 400) also carry policy blocks.
+			// behavior-pin tier (rounds + 300), full-tool research tier
+			// (rounds + 400), and family-traits tier (rounds + 800) also carry
+			// policy blocks.
 			const policyBearing = registry
 				.definitions()
 				.filter(
 					(definition) =>
 						(definition.version >= 201 && definition.version <= 220) ||
 						(definition.version >= 301 && definition.version <= 320) ||
-						(definition.version >= 401 && definition.version <= 420),
+						(definition.version >= 401 && definition.version <= 420) ||
+						(definition.version >= 801 && definition.version <= 820),
 				);
 			expect(policyBearing.length).toBeGreaterThan(0);
 			for (const definition of policyBearing)
@@ -613,8 +625,8 @@ describe("workflow registry", () => {
 			// with no `policy` field, so their digests are the ones asserted
 			// unchanged in test/workflow-steps.test.ts's full-catalog pin. Every
 			// tier since the manifest-policy one (including the
-			// classifier-driven triage-routing and stage-gate tiers) declares a
-			// policy.
+			// classifier-driven triage-routing, stage-gate, step-routing, and
+			// family-traits tiers) declares a policy.
 			for (const definition of registry
 				.definitions()
 				.filter(
@@ -624,9 +636,390 @@ describe("workflow registry", () => {
 						(definition.version < 401 || definition.version > 420) &&
 						(definition.version < 501 || definition.version > 520) &&
 						(definition.version < 601 || definition.version > 620) &&
-						(definition.version < 701 || definition.version > 720),
+						(definition.version < 701 || definition.version > 720) &&
+						(definition.version < 801 || definition.version > 820),
 				))
 				expect(definition.policy).toBeUndefined();
 		});
+	});
+});
+
+describe("family traits (add-definition-family-traits)", () => {
+	const registry = registerBuiltins();
+	const traitsVersion = definitionVersionForFamilyTraits(6);
+	const FAMILY_IDS: readonly string[] = [
+		"openspec",
+		"openspec-apply",
+		"openspec-propose",
+		"openspec-fusion",
+		"openspec-fusion-propose",
+		"no-openspec",
+		"solo",
+		"rebase",
+		"verify",
+	];
+	const DOCUMENTATION_IDS: readonly string[] = [
+		"wiki",
+		"wiki-comments",
+		"research",
+	];
+	/** The consistent baseline every rejection below varies one field of: a
+	 * change-free, delivery-free, planner-free repository family. */
+	const BASE_TRAITS = {
+		changeArtifacts: "none",
+		planning: "none",
+		changeIdentity: "none",
+		delivery: "none",
+		startRequirements: [],
+		openspecVerifier: true,
+	} as const;
+	/** Register a minimal terminal-step graph with a traits block attached, so
+	 * a structural rejection can be isolated from the graph checks. */
+	function registerWithTraits(
+		traits: unknown,
+		steps: readonly [string, ...string[]],
+		targetKind = "repository",
+	) {
+		const entry = new WorkflowRegistry(BUILTIN_EFFECTS, BUILTIN_CAPABILITIES);
+		for (const step of steps) entry.registerStep(testStep(step));
+		return entry.registerWorkflow({
+			id: "policy-flow",
+			version: 1,
+			label: "Policy flow",
+			initial: steps[0],
+			terminal: [steps[steps.length - 1] as string],
+			steps: [...steps],
+			edges: [],
+			policy: {
+				targetKind,
+				checkoutRequired: false,
+				requiresReadOnlyResearcher: false,
+				traits,
+			},
+		} as never);
+	}
+
+	test("rejects traits on a non-repository target, naming the manifest", () => {
+		expect(() =>
+			registerWithTraits(BASE_TRAITS, ["extension.audit"], "wiki"),
+		).toThrow(/family traits outside repository target in policy-flow/);
+	});
+
+	test("rejects an unknown enum value in each trait", () => {
+		for (const [field, message] of [
+			["changeArtifacts", /unknown change artifacts trait/],
+			["planning", /unknown planning trait/],
+			["changeIdentity", /unknown change identity trait/],
+			["delivery", /unknown delivery trait/],
+		] as const)
+			expect(() =>
+				registerWithTraits({ ...BASE_TRAITS, [field]: "alien" }, [
+					"extension.audit",
+				]),
+			).toThrow(message);
+		expect(() =>
+			registerWithTraits({ ...BASE_TRAITS, startRequirements: ["alien"] }, [
+				"extension.audit",
+			]),
+		).toThrow(/invalid start requirements trait in policy-flow/);
+		expect(() =>
+			registerWithTraits(
+				{ ...BASE_TRAITS, startRequirements: ["task", "task"] },
+				["extension.audit"],
+			),
+		).toThrow(/invalid start requirements trait in policy-flow/);
+		// The shape half of the guard: a block written without the field, or
+		// with a bare string, fails by name instead of raising a `TypeError`.
+		for (const startRequirements of [undefined, "task"])
+			expect(() =>
+				registerWithTraits({ ...BASE_TRAITS, startRequirements }, [
+					"extension.audit",
+				]),
+			).toThrow(/invalid start requirements trait in policy-flow/);
+	});
+
+	test("rejects traits inconsistent with the graph's steps", () => {
+		for (const [traits, steps, message] of [
+			[
+				{ ...BASE_TRAITS, changeArtifacts: "openspec", planning: "fusion" },
+				["extension.audit"],
+				/fusion planning without fusion.plan/,
+			],
+			[
+				{ ...BASE_TRAITS, changeArtifacts: "openspec", planning: "single" },
+				["extension.audit"],
+				/single planning without core.plan/,
+			],
+			[BASE_TRAITS, ["core.plan"], /no planning with a planning step/],
+			[BASE_TRAITS, ["fusion.plan"], /no planning with a planning step/],
+			[
+				{ ...BASE_TRAITS, delivery: "pull-request" },
+				["extension.audit"],
+				/pull-request delivery without core.delivery/,
+			],
+			[BASE_TRAITS, ["core.archive"], /change-free workflow with core.archive/],
+			[
+				{ ...BASE_TRAITS, changeIdentity: "workflow-id" },
+				["extension.audit"],
+				/workflow-id change identity without OpenSpec artifacts/,
+			],
+			[
+				{ ...BASE_TRAITS, changeIdentity: "planned" },
+				["extension.audit"],
+				/planned change identity without OpenSpec artifacts/,
+			],
+		] as const)
+			expect(() => registerWithTraits(traits, steps)).toThrow(message);
+	});
+
+	test("accepts a consistent traits block and pins it on the compiled definition", () => {
+		const compiled = registerWithTraits(BASE_TRAITS, ["extension.audit"]);
+		expect(compiled.policy?.traits).toEqual(BASE_TRAITS);
+	});
+
+	test("every repository code-change family declares traits at the traits tier", () => {
+		for (const id of FAMILY_IDS) {
+			const declared = registry.definition(id, traitsVersion).policy?.traits;
+			expect(declared).toBeTruthy();
+			// Parity (design D3): the fallback the engine reads for an earlier tier
+			// is the same table this tier is built from, so the two cannot drift.
+			expect(declared).toEqual(
+				effectiveFamilyTraits(
+					registry.definition(id, definitionVersionForStepRouting(6)),
+				),
+			);
+		}
+	});
+
+	test("only the repository code-change families declare traits", () => {
+		const tier = registry
+			.definitions()
+			.filter((definition) => definition.version === traitsVersion);
+		expect(tier.length).toBeGreaterThan(0);
+		for (const definition of tier)
+			expect(Boolean(definition.policy?.traits)).toBe(
+				FAMILY_IDS.includes(definition.id),
+			);
+	});
+
+	test("effective traits resolve at every registered tier for the families only", () => {
+		const seen = new Set<string>();
+		for (const definition of registry.definitions()) {
+			const traits = effectiveFamilyTraits(definition);
+			if (FAMILY_IDS.includes(definition.id)) {
+				expect(traits).toBeTruthy();
+				seen.add(definition.id);
+			} else if (DOCUMENTATION_IDS.includes(definition.id))
+				expect(traits).toBeUndefined();
+		}
+		expect([...seen].sort()).toEqual([...FAMILY_IDS].sort());
+	});
+
+	test("every declared trait value is pinned, family by family", () => {
+		// The full matrix, one row per repository code-change family and one entry
+		// per trait (TQV-003). Every value is asserted, so a single-field edit to
+		// `FAMILY_TRAITS` fails here instead of silently changing what the next
+		// change's readers will do.
+		const EXPECTED: Readonly<Record<string, WorkflowFamilyTraits>> = {
+			openspec: {
+				changeArtifacts: "openspec",
+				planning: "single",
+				changeIdentity: "planned",
+				delivery: "pull-request",
+				startRequirements: ["clean-tree", "openspec-project"],
+				openspecVerifier: true,
+			},
+			"openspec-apply": {
+				changeArtifacts: "openspec",
+				planning: "none",
+				changeIdentity: "workflow-id",
+				delivery: "pull-request",
+				startRequirements: [
+					"clean-tree",
+					"openspec-project",
+					"openspec-change",
+				],
+				openspecVerifier: true,
+			},
+			"openspec-propose": {
+				changeArtifacts: "openspec",
+				planning: "single",
+				changeIdentity: "planned",
+				delivery: "none",
+				startRequirements: ["openspec-project"],
+				openspecVerifier: true,
+			},
+			"openspec-fusion": {
+				changeArtifacts: "openspec",
+				planning: "fusion",
+				changeIdentity: "planned",
+				delivery: "pull-request",
+				startRequirements: ["clean-tree", "openspec-project"],
+				openspecVerifier: true,
+			},
+			"openspec-fusion-propose": {
+				changeArtifacts: "openspec",
+				planning: "fusion",
+				changeIdentity: "planned",
+				delivery: "none",
+				startRequirements: ["openspec-project"],
+				openspecVerifier: true,
+			},
+			"no-openspec": {
+				changeArtifacts: "none",
+				planning: "none",
+				changeIdentity: "none",
+				delivery: "pull-request",
+				startRequirements: ["task", "clean-tree"],
+				openspecVerifier: false,
+			},
+			solo: {
+				changeArtifacts: "none",
+				planning: "none",
+				changeIdentity: "none",
+				delivery: "none",
+				startRequirements: ["task", "clean-tree"],
+				openspecVerifier: true,
+			},
+			rebase: {
+				changeArtifacts: "none",
+				planning: "none",
+				changeIdentity: "none",
+				delivery: "none",
+				startRequirements: ["clean-tree", "rebase-refs"],
+				openspecVerifier: true,
+			},
+			verify: {
+				changeArtifacts: "none",
+				planning: "none",
+				changeIdentity: "none",
+				delivery: "none",
+				startRequirements: ["base-commit"],
+				openspecVerifier: true,
+			},
+		};
+		for (const id of FAMILY_IDS)
+			expect([
+				id,
+				effectiveFamilyTraits(registry.definition(id, traitsVersion)),
+			]).toEqual([id, EXPECTED[id]]);
+	});
+
+	test("every trait still mirrors the engine branch it replaces", () => {
+		for (const id of FAMILY_IDS) {
+			const definition = registry.definition(id, traitsVersion);
+			const traits = effectiveFamilyTraits(definition);
+			if (!traits) throw new Error(`missing traits for ${id}`);
+			// `CHANGE_FREE_IMPLEMENTATION` (steps/implementation.ts) skips the
+			// change-evidence check, and only a family that start-validates an
+			// OpenSpec project can produce change artifacts at all.
+			if (CHANGE_FREE_IMPLEMENTATION.has(id))
+				expect(traits.changeArtifacts).toBe("none");
+			expect(traits.changeArtifacts === "none").toBe(
+				!traits.startRequirements.includes("openspec-project"),
+			);
+			// `CLOSE_ONLY_DEFINITIONS` (steps/lifecycle.ts) decides whether
+			// `core.completed` offers `create-pr`.
+			expect(traits.delivery === "none").toBe(
+				CLOSE_ONLY_DEFINITIONS.includes(id),
+			);
+			// The `openspec-verifier` role filter (steps/verification.ts).
+			expect(traits.openspecVerifier).toBe(
+				triageRolesFor(id).includes("openspec-verifier"),
+			);
+			// The graph is the source of the planning mode, exactly as
+			// `validateFamilyTraits` reads it.
+			expect(traits.planning).toBe(
+				definition.steps.includes("fusion.plan")
+					? "fusion"
+					: definition.steps.includes("core.plan")
+						? "single"
+						: "none",
+			);
+			// `definitionId === "openspec-apply"` fixes the change id to the
+			// workflow id (runtime/engine.ts); a change-free family has none.
+			expect(traits.changeIdentity).toBe(
+				traits.changeArtifacts === "none"
+					? "none"
+					: id === "openspec-apply"
+						? "workflow-id"
+						: "planned",
+			);
+		}
+	});
+
+	test("the traits tier differs from the step-routing tier only by its traits block", () => {
+		for (const id of [...FAMILY_IDS, ...DOCUMENTATION_IDS]) {
+			const below = registry.definition(id, definitionVersionForStepRouting(6));
+			const above = registry.definition(id, traitsVersion);
+			for (const field of [
+				"id",
+				"label",
+				"initial",
+				"terminal",
+				"steps",
+				"stepRefs",
+				"edges",
+				"allowedOutcomes",
+			] as const)
+				expect([id, field, above[field]]).toEqual([id, field, below[field]]);
+			expect([id, below.policy?.traits]).toEqual([id, undefined]);
+			expect([id, Boolean(above.policy?.traits)]).toEqual([
+				id,
+				FAMILY_IDS.includes(id),
+			]);
+		}
+	});
+
+	test("the traits tier keeps its published digests", () => {
+		// Literal pins for the versions new starts resolve today: a later edit to
+		// `FAMILY_TRAITS` or to this tier's family list moves a digest, and an
+		// in-flight workflow pinned to the old one would fail `pin-mismatch`.
+		// 801..820 is the family-traits tier; only 6 is pinned here (the default
+		// round count the other suites build), plus the two tiers added
+		// immediately before it.
+		const expected: Readonly<Record<string, string>> = {
+			openspec:
+				"cfa0d0ccc98fc53e5bd02d0d3583dae303322370222b09aa3daaf03c4f50ebd5",
+			"openspec-apply":
+				"ae8bf3c08bc676f96aff6dcbdcea0e9b21e0e6dd779fabfa2d7cb632191e9309",
+			"openspec-propose":
+				"17abd93f89793826176593938bc35979df725b0d5b9e75c7e01a192b038f89d6",
+			"openspec-fusion":
+				"019c678e5cd0ca839fbbaf75d1435f02f78707c12b2a35eeedc588d118aaa7f8",
+			"openspec-fusion-propose":
+				"f4a04814763f35ed2984d1610f5653c999d49d5b1b5363472261213cfdff0891",
+			"no-openspec":
+				"1daf01b29c7cb19fb3d6dc654a15b84f65a5662e9edd2b7b116e0b578accc7bf",
+			solo: "7224eaf5e703d3c94149e6d630c602d3ff23bf2313b47ce3a938b9dd823de191",
+			rebase:
+				"65cc5d6cf4b0bdcc9690bf749798873c12915fe8898d717496540795cb639de0",
+			verify:
+				"c0a185bd0d224ddf00c64f42d3fae01a2d96fc070fbf227d6165a7773dabe689",
+			wiki: "23b5fb7ae4db9ac37804ef55585efae31961235d059886f3c4c9ac526968216b",
+			"wiki-comments":
+				"bef26705cc29c22b887293dd85d6c930648ef60f46aa894713a86e10f58f53b2",
+			research:
+				"f66c5e0dfa29b6ca024766240f5cd2439c65e555878457cc369f8c1e32ecd8ec",
+		};
+		for (const [id, digest] of Object.entries(expected))
+			expect([id, registry.definition(id, traitsVersion).digest]).toEqual([
+				id,
+				digest,
+			]);
+		// The stage-gate and step-routing tiers, which had no literal pin before
+		// this change: `openspec` is the definition every later tier is compared
+		// against.
+		for (const [version, digest] of [
+			[
+				definitionVersionForStageGates(6),
+				"b13fbc03ac5a31d53c410df54aaa54ea40a1e7ce2e7d9ddecabac8f1e5ecb769",
+			],
+			[
+				definitionVersionForStepRouting(6),
+				"3cb37d5eb3dd1b179892c488d339147f6c0d43aa6ec2bb3652e049dcca4b96fd",
+			],
+		] as const)
+			expect(registry.definition("openspec", version).digest).toBe(digest);
 	});
 });

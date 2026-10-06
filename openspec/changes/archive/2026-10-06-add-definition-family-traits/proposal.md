@@ -22,7 +22,7 @@ parity-tested source of truth.
   `openspec-fusion-propose`, `no-openspec`, `solo`, `rebase`, `verify`):
   - `changeArtifacts`: `openspec` | `none`
   - `planning`: `none` | `single` | `fusion`
-  - `changeIdentity`: `planned` | `workflow-id`
+  - `changeIdentity`: `planned` | `workflow-id` | `none`
   - `delivery`: `pull-request` | `none`
   - `startRequirements`: subset of `task`, `clean-tree`, `openspec-project`,
     `openspec-change`, `base-commit`, `rebase-refs`
@@ -36,6 +36,11 @@ parity-tested source of truth.
   has traits.
 - A parity test asserts declared traits equal the fallback table for every
   registered built-in. No reader changes.
+- The same tier restores `research`'s full-tool policy
+  (`requiresReadOnlyResearcher: false`), which the step-routing tier's second
+  catalog-policy pass had reverted and thereby made unstartable. Only the new
+  versions 801..820 move; every earlier tier keeps its policy and digest. See
+  `design.md` for the rationale and the developer decision that scoped it here.
 
 ## Capabilities
 
@@ -52,7 +57,8 @@ None.
 
 - `src/workflow/registry.ts` (type, validation),
   `src/workflow/definitions/manifest-policy.ts` (trait table, tier, fallback),
-  `src/workflow/definitions/registerBuiltins.ts` (register the tier),
+  `src/workflow/definitions/registerBuiltins.ts` (register the tier, research
+  policy),
   `src/workflow/startup.ts` / `cli` start (resolve the new tier).
 - Definition digest table and registry tests; `docs/workflow-architecture.md`
   (tier list).

@@ -21,11 +21,13 @@ import { verifyManifests } from "./graphs/verify.ts";
 import { wikiManifests } from "./graphs/wiki.ts";
 import {
 	definitionVersionForBehaviorPins,
+	definitionVersionForFamilyTraits,
 	definitionVersionForManifestPolicy,
 	definitionVersionForResearchTools,
 	definitionVersionForStageGates,
 	definitionVersionForStepRouting,
 	definitionVersionForTriageRouting,
+	withFamilyTraits,
 	withFullToolResearchPolicy,
 	withManifestPolicy,
 } from "./manifest-policy.ts";
@@ -227,6 +229,54 @@ export function registerBuiltins(
 			...researchManifests(version, true).map(withFullToolResearchPolicy),
 		]) {
 			const pinnedBase = withPerStepRouting(withManifestPolicy(definition));
+			const pinned: WorkflowManifest = {
+				...pinnedBase,
+				stepRefs: exactStepReferences(pinnedBase.steps, {
+					"core.triage-route": 2,
+				}),
+			};
+			assertStepBehaviorCoverage(pinned.steps);
+			registry.registerWorkflow(pinned);
+		}
+	}
+	// Declared family traits (add-definition-family-traits) are attached in
+	// another new tier, for the same reason as every tier above: a digest spreads
+	// the whole manifest, so a `traits` block cannot be added to the step-routing
+	// version the engine resolves today without stranding every workflow pinned
+	// to it. Every family is registered here — the repository code-change families
+	// with the block, the documentation families without one, all of them with
+	// the tier below's graph — so "every family resolves at the newest tier" stays
+	// true.
+	//
+	// `research` is also the one family whose policy this tier corrects: the
+	// per-step routing pass re-applies `withManifestPolicy` after the research
+	// family's full-tool transform, so the `requiresReadOnlyResearcher: false`
+	// that `definitionVersionForResearchTools` documents never reached the tier
+	// new starts resolved. There the start guard then looks for a route named
+	// `core.route-research` — the initial the routing pass installed, a system
+	// step no route table ever names — and refuses every research start, whatever
+	// the researcher profile. The full-tool policy therefore has to be applied
+	// *after* `withManifestPolicy` here, which makes `research` startable again
+	// on the tier new starts pin. Only versions 801..820 move; every earlier tier
+	// keeps its policy, its graph, and its digest, and nothing is pinned to the
+	// new tier yet.
+	for (const rounds of Array.from({ length: 20 }, (_, index) => index + 1)) {
+		const version = definitionVersionForFamilyTraits(rounds);
+		for (const definition of [
+			...openspecManifests(rounds, version, true, true, true, true),
+			...noOpenspecManifests(rounds, version, true, true, true),
+			...fusionManifests(rounds, version, true, true, true, true),
+			...wikiManifests(version, true),
+			...soloManifests(version),
+			...rebaseManifests(version),
+			...verifyManifests(rounds, version, true),
+			...researchManifests(version, true),
+		]) {
+			const catalogPolicy = withPerStepRouting(withManifestPolicy(definition));
+			const pinnedBase =
+				definition.id === "research"
+					? withFullToolResearchPolicy(catalogPolicy)
+					: withFamilyTraits(catalogPolicy);
 			const pinned: WorkflowManifest = {
 				...pinnedBase,
 				stepRefs: exactStepReferences(pinnedBase.steps, {

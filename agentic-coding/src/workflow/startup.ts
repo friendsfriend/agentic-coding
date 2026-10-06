@@ -11,7 +11,7 @@ import { registry as defaultRegistry } from "./cli/registry.ts";
 import type { WorkflowRuntimeError } from "./contracts.ts";
 // Imported from `manifest-policy.ts` rather than the `definitions.ts` barrel so
 // the barrel's frozen export-surface fixture stays untouched by a new tier.
-import { definitionVersionForStepRouting } from "./definitions/manifest-policy.ts";
+import { definitionVersionForFamilyTraits } from "./definitions/manifest-policy.ts";
 import {
 	PUBLIC_WORKFLOW_CATALOG,
 	registerBuiltins,
@@ -403,10 +403,10 @@ function prepareFromContext(
 	provenance: ConfigProvenance,
 	settings: WorkflowExecutionSettings,
 ): PreparedWorkflowStart {
-	// Every family now selects its step models with the classifier, so a new
-	// start resolves the per-step routing tier — including research, whose
-	// tool policy that tier applies as the research tier did.
-	const definitionVersion = definitionVersionForStepRouting(
+	// Every family now declares its repository traits and selects its step
+	// models with the classifier, so a new start resolves the family-traits
+	// tier.
+	const definitionVersion = definitionVersionForFamilyTraits(
 		config.workflow.max_verification_rounds,
 	);
 	const registry = registerBuiltins(

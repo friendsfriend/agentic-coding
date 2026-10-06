@@ -8,7 +8,7 @@ import type {
 	WorkflowSnapshot,
 } from "../src/contracts/workflow.ts";
 import { resolveClassifierBinding } from "../src/workflow/classifier-runner.ts";
-import { definitionVersionForStepRouting } from "../src/workflow/definitions/manifest-policy.ts";
+import { definitionVersionForFamilyTraits } from "../src/workflow/definitions/manifest-policy.ts";
 import { effectRunnerTest } from "../src/workflow/effect-runner.ts";
 import {
 	executionSettings,
@@ -272,7 +272,7 @@ describe("shared workflow startup", () => {
 	});
 });
 
-test("a new start resolves the per-step routing definition tier", () => {
+test("a new start resolves the family-traits definition tier", () => {
 	const repo = repository();
 	execFileSync("git", ["remote", "add", "origin", repo], { cwd: repo });
 	execFileSync("git", ["fetch", "-q", "origin"], { cwd: repo });
@@ -296,8 +296,8 @@ test("a new start resolves the per-step routing definition tier", () => {
 		]),
 	);
 	try {
-		// Per-step routing is the tier a new start resolves, whichever family it
-		// is: research included, whose tool policy that tier applies too.
+		// The family-traits tier is the version a new start resolves, whichever
+		// family it is: research included, whose tool policy that tier applies too.
 		expect(
 			prepareWorkflowStart({
 				workflowId: "routed-tier",
@@ -306,7 +306,7 @@ test("a new start resolves the per-step routing definition tier", () => {
 				repo,
 				preset: "fixed",
 			}).input.definitionVersion,
-		).toBe(definitionVersionForStepRouting(6));
+		).toBe(definitionVersionForFamilyTraits(6));
 		expect(
 			prepareWorkflowStart({
 				workflowId: "research-tier",
@@ -314,7 +314,7 @@ test("a new start resolves the per-step routing definition tier", () => {
 				task: "research tier",
 				preset: "fixed",
 			}).input.definitionVersion,
-		).toBe(definitionVersionForStepRouting(6));
+		).toBe(definitionVersionForFamilyTraits(6));
 	} finally {
 		if (previous === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
 		else process.env.HERDR_WORKFLOW_CONFIG = previous;

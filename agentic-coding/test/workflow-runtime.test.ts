@@ -13,9 +13,14 @@ import {
 } from "../src/contracts/workflow.ts";
 import { decodeSnapshot } from "../src/workflow/contracts.ts";
 import {
+	definitionVersionForFamilyTraits,
+	definitionVersionForStepRouting,
+} from "../src/workflow/definitions/manifest-policy.ts";
+import {
 	decodeResearchHandoff,
 	definitionVersionForBehaviorPins,
 	definitionVersionForPolicy,
+	effectiveManifestPolicy,
 	registerBuiltins,
 } from "../src/workflow/definitions.ts";
 import {
@@ -188,6 +193,61 @@ describe("transactional workflow runtime", () => {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
 	});
+	test("a research start at the family-traits tier is accepted", () => {
+		// The start guard reads `definition.initial`; per-step routing rewrites
+		// that to the `core.route-research` system step, which no route table
+		// names, so a tier that keeps `requiresReadOnlyResearcher: true` refuses
+		// every research start whatever the researcher profile. The family-traits
+		// tier therefore carries the full-tool policy again, and this is the
+		// regression check for it (migration finding MIG-001).
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "workflow-research-traits-"),
+		);
+		const previousWikiRoot = process.env.HERDR_WIKI_DIR;
+		process.env.HERDR_WIKI_DIR = path.join(tmp, "wiki");
+		try {
+			const engine = new WorkflowEngine(
+				registerBuiltins(undefined, 6),
+				() => new Date("2026-01-01T00:00:00Z"),
+			);
+			const version = definitionVersionForFamilyTraits(6);
+			const started = engine.start({
+				repo: researchWorkflowTarget(),
+				workflowId: "research-traits-tier",
+				definitionId: "research",
+				definitionVersion: version,
+				metadata: {
+					branch: "",
+					baseBranch: "",
+					baseCommit: "",
+					task: "research",
+				},
+				routing: {
+					defaultProfile: profile.name,
+					routes: [{ stepId: "core.research", role: "researcher", profile }],
+				},
+			});
+			expect(started.snapshot.definition.version).toBe(version);
+			expect(started.snapshot.currentStep).toBe("core.route-research");
+			// The correction is confined to the new tier: the step-routing tier
+			// keeps the policy (and therefore the digest) it was pinned with.
+			const registry = registerBuiltins(undefined, 6);
+			expect(
+				effectiveManifestPolicy(
+					registry.definition("research", definitionVersionForStepRouting(6)),
+				).requiresReadOnlyResearcher,
+			).toBe(true);
+			expect(
+				effectiveManifestPolicy(registry.definition("research", version))
+					.requiresReadOnlyResearcher,
+			).toBe(false);
+		} finally {
+			if (previousWikiRoot === undefined) delete process.env.HERDR_WIKI_DIR;
+			else process.env.HERDR_WIKI_DIR = previousWikiRoot;
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
+
 	test("deleting a research workflow removes its rows and keeps the shared store", () => {
 		const tmp = fs.mkdtempSync(
 			path.join(os.tmpdir(), "workflow-research-delete-"),

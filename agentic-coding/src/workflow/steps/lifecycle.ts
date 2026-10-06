@@ -11,8 +11,9 @@ const REVIEW_COMMENTS_INPUT = {
 /** Definitions whose `core.completed` never offers `create-pr`: proposal-only
  * workflows never reach delivery, the wiki/research workflows have nothing to
  * push as a repository pull request, and a solo workflow has no delivery step
- * to push from. */
-const CLOSE_ONLY_DEFINITIONS = [
+ * to push from. Exported so the manifest's `delivery` trait is checked against
+ * this list rather than restated (add-definition-family-traits). */
+export const CLOSE_ONLY_DEFINITIONS = [
 	"openspec-propose",
 	"openspec-fusion-propose",
 	"wiki",

@@ -8,8 +8,14 @@ import {
  * task list the entry guard reads does not exist for them, so there is nothing
  * to require. `no-openspec` is the reduced OpenSpec-free loop; `solo` runs one
  * implementation agent with no planning step at all; `verify` has no planning
- * step either — its worker only fixes the findings the developer selected. */
-const CHANGE_FREE_IMPLEMENTATION = new Set(["no-openspec", "solo", "verify"]);
+ * step either — its worker only fixes the findings the developer selected.
+ * Exported so the manifest's `changeArtifacts` trait is checked against this
+ * set rather than restated (add-definition-family-traits). */
+export const CHANGE_FREE_IMPLEMENTATION = new Set([
+	"no-openspec",
+	"solo",
+	"verify",
+]);
 
 /** Whether an arriving transition output is a review's comment payload. The
  * only producer of `{comments}` into the implementation step is a review's
