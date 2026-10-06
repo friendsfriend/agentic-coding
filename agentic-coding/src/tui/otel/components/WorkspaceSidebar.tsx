@@ -22,8 +22,8 @@ import {
 	type SidebarMode,
 	type StatusTone,
 	sidebarStatusGlyph,
-	workflowDisplayName,
 	workflowMeta,
+	workflowRowLabel,
 } from "../app/sidebar-model.ts";
 
 /** Expanded sidebar width: wide enough for a clipped workflow id plus its
@@ -257,7 +257,7 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps) {
 											}
 										>
 											<strong>{status.glyph}</strong>
-											{` ${clip(workflowDisplayName(overview), SIDEBAR_WIDTH - 8)}`}
+											{` ${clip(workflowRowLabel(overview), SIDEBAR_WIDTH - 8)}`}
 										</text>
 										<text fg={toneColor(status.tone)}>
 											{clip(workflowMeta(overview), SIDEBAR_WIDTH - 8)}

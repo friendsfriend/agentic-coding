@@ -51,7 +51,36 @@ import {
 	validateStructure,
 } from "../store.ts";
 
+/** Every `developer.action` event carries the acting principal beside the
+ * developer actor `kind`: an action the server accepted from the orchestrator
+ * capability is labelled, and an operator action keeps exactly the actor it has
+ * always had (no `principal` key is added). The operator label is never written
+ * because the absent field already reads as the operator. */
 export function developerAction(
+	db: Database,
+	snapshot: WorkflowSnapshot,
+	definition: CompiledWorkflowDefinition,
+	command: Extract<WorkflowCommand, { type: "developer.action" }>,
+	registry: WorkflowRegistry,
+	now: () => Date,
+): { type: string; actor: unknown; data: unknown } {
+	const event = reduceDeveloperAction(
+		db,
+		snapshot,
+		definition,
+		command,
+		registry,
+		now,
+	);
+	if (command.principal !== "orchestrator") return event;
+	const actor = event.actor as { kind?: unknown } | null | undefined;
+	// System-actor outcomes (an expired question) are not developer actions and
+	// keep their own actor unchanged.
+	if (actor?.kind !== "developer") return event;
+	return { ...event, actor: { kind: "developer", principal: "orchestrator" } };
+}
+
+function reduceDeveloperAction(
 	db: Database,
 	snapshot: WorkflowSnapshot,
 	definition: CompiledWorkflowDefinition,

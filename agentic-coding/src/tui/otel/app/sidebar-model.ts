@@ -131,6 +131,21 @@ export function workflowDisplayName(overview: WorkflowOverview): string {
 	return overview.state.workflowId;
 }
 
+/** True when the Home Orchestrator started this workflow rather than the
+ * operator. A workflow without the attribution reads as developer-started, so
+ * nothing is marked that was not recorded. */
+export function isOrchestratorStarted(overview: WorkflowOverview): boolean {
+	return overview.startedBy === "orchestrator";
+}
+
+/** The row's name line: the workflow id, prefixed by the Home badge when the
+ * orchestrator started it. The marker is data here; colours and separators stay
+ * with the renderer. */
+export function workflowRowLabel(overview: WorkflowOverview): string {
+	const name = workflowDisplayName(overview);
+	return isOrchestratorStarted(overview) ? `⌂ ${name}` : name;
+}
+
 /** Index of the sidebar row for the workflow the page body is showing, or -1
  * when the current list/filter does not hold it. Used to reveal the open
  * workflow when the sidebar takes focus. */

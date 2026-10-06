@@ -255,7 +255,10 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 				if (refusal)
 					return errorResponse(403, "orchestrator-forbidden", refusal);
 			}
-			const value = operations.action(decoded);
+			// The principal is decided here and handed over as an option, so the
+			// event records the orchestrator without the wire being able to
+			// claim (or suppress) the attribution.
+			const value = operations.action(decoded, { principal });
 			events.publish({
 				domain: "workflow",
 				kind: "workflow.action",
@@ -273,12 +276,13 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			);
 			// Orchestrator-started work keeps every human review: the server pins
 			// the plan, developer and wiki gates to `always`, whatever the preset.
-			const value = await operations.start(
-				decoded,
-				principal === "orchestrator"
+			// The same principal pins `startedBy` for the workflow's lifetime.
+			const value = await operations.start(decoded, {
+				...(principal === "orchestrator"
 					? { enforceHumanReviewGates: true }
-					: undefined,
-			);
+					: {}),
+				principal,
+			});
 			events.publish({
 				domain: "workflow",
 				kind: "workflow.start",

@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import type { WorkflowView } from "../../contracts/workflow.ts";
+import type {
+	StartedBy,
+	WorkflowPrincipal,
+	WorkflowView,
+} from "../../contracts/workflow.ts";
 import { loadConfigWithProvenance } from "../../workflow/effects.ts";
 import {
 	dashboardApplication,
@@ -157,6 +161,7 @@ export async function runWorkflowAction(
 	workflowId: string,
 	revision: number,
 	input?: string,
+	principal?: WorkflowPrincipal,
 ): Promise<string> {
 	const engine = workflowEngineFactory(dashboardApplication);
 	const view = engine.status(repo, workflowId);
@@ -174,6 +179,9 @@ export async function runWorkflowAction(
 		revision,
 		actionId,
 		input: parsed,
+		// The server-decided principal, so the event actor can name the
+		// orchestrator; the operator is the default and stays unlabelled.
+		...(principal === undefined ? {} : { principal }),
 	});
 	requestWorkflowExecution(repo, workflowId);
 	return JSON.stringify(engine.status(repo, workflowId));
@@ -270,6 +278,7 @@ export function listPresetNames(repository?: string): string[] {
 export async function startWorkflowInProcess(
 	input: Parameters<typeof startArgs>[0] & {
 		enforceHumanReviewGates?: boolean;
+		startedBy?: StartedBy;
 	},
 ): Promise<string> {
 	const args = startArgs(input);
@@ -285,6 +294,7 @@ export async function startWorkflowInProcess(
 		sourceBranch: args.sourceBranch,
 		targetBranch: args.targetBranch,
 		...(input.enforceHumanReviewGates ? { enforceHumanReviewGates: true } : {}),
+		...(input.startedBy ? { startedBy: input.startedBy } : {}),
 	});
 	const engine = workflowEngineFactory(dashboardApplication);
 	engine.start(prepared.input);

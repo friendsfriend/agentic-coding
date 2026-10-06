@@ -11,6 +11,7 @@ import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { WorkflowPrincipal } from "../contracts/workflow.ts";
 import { MAX_PATH_CHARS, MAX_REQUEST_BYTES } from "./protocol.ts";
 
 export class AuthorizationError extends Error {
@@ -140,8 +141,10 @@ export function originAllowed(origin: string | null): boolean {
 /** Who a request authenticates as. `operator` holds the instance token (the
  * TUI, the CLI, managed agents); `orchestrator` holds the narrower capability
  * derived from it for the Home Orchestrator session, which the server confines
- * to its route/action policy (`orchestrator-policy.ts`). */
-export type Principal = "operator" | "orchestrator";
+ * to its route/action policy (`orchestrator-policy.ts`). The one principal
+ * union lives with the workflow contract, which records it on the events and
+ * metadata it attributes. */
+export type Principal = WorkflowPrincipal;
 
 /** The orchestrator capability for an instance token: an HMAC of the instance
  * token, so any holder of the instance token can hand it out, the server can

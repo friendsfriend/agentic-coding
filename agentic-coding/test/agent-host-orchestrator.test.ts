@@ -126,4 +126,94 @@ describe("orchestrator host mode", () => {
 			await server.stop();
 		}
 	});
+
+	test("workflow reads report who started each workflow", async () => {
+		// The session can only tell its own workflows from the developer's if the
+		// tools carry `startedBy`, so both reads expose it.
+		const startedBy = "orchestrator";
+		const server = await startWorkflowServer({
+			operations: {
+				runObservation: async (request: unknown) =>
+					(request as { kind?: string }).kind === "workflows"
+						? [
+								{
+									target: "/repos/shop",
+									startedBy,
+									state: {
+										workflowId: "wf-orch",
+										status: "active",
+										stepLabel: "Apply",
+										branch: "main",
+									},
+									tasks: [0, 0],
+									agents: [],
+								},
+							]
+						: [],
+				view: () => ({
+					workflowId: "wf-orch",
+					startedBy,
+					currentStep: { id: "core.implementation", label: "Implementation" },
+					runs: [],
+					effects: [],
+					availableActions: [],
+				}),
+			} as unknown as ServerOperations,
+		});
+		const dir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "orchestrator-attribution-"),
+		);
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const host = await DurableHost.open({
+			layout: hostLayout(dir),
+			settings: {},
+			globalAgentDir: dir,
+			storage: new MemoryStorage(),
+			models,
+			orchestrator: true,
+		});
+		try {
+			const runEnvPath = path.join(dir, "run.env");
+			fs.writeFileSync(
+				runEnvPath,
+				`${ORCHESTRATOR_URL_ENV}='${server.url}'\n${ORCHESTRATOR_TOKEN_ENV}='${orchestratorTokenFor(server.token)}'\n`,
+			);
+			await host.ensureRun({
+				runId: "orchestrator",
+				name: "orchestrator",
+				cwd: dir,
+				runEnvPath,
+				model: `${faux.getModel().provider}/${faux.getModel().id}`,
+				toolPolicy: "orchestrator",
+			});
+			faux.setResponses([
+				fauxAssistantMessage([fauxToolCall("list_workflows", {})], {
+					stopReason: "toolUse",
+				}),
+				fauxAssistantMessage(
+					[
+						fauxToolCall("workflow_status", {
+							repo: "/repos/shop",
+							workflowId: "wf-orch",
+						}),
+					],
+					{ stopReason: "toolUse" },
+				),
+				fauxAssistantMessage([fauxText("done")]),
+			]);
+			await host.submit(
+				"orchestrator",
+				"what am I running?",
+				"req-attribution",
+			);
+			const results = await waitForResults(host, "orchestrator", 2);
+			expect(results[0]).toContain('"startedBy": "orchestrator"');
+			expect(results[1]).toContain('"startedBy": "orchestrator"');
+		} finally {
+			await host.shutdown();
+			await server.stop();
+		}
+	});
 });

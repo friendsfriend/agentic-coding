@@ -9,7 +9,11 @@ import {
 	createInstanceAuthority,
 	orchestratorTokenFor,
 } from "../src/server/auth.ts";
-import type { ServerOperations, StartOptions } from "../src/server/handlers.ts";
+import type {
+	ActionOptions,
+	ServerOperations,
+	StartOptions,
+} from "../src/server/handlers.ts";
 import { startWorkflowServer } from "../src/server/lifecycle.ts";
 import {
 	orchestratorActionRefusal,
@@ -31,12 +35,17 @@ const view = (step: string) =>
 
 function operations(
 	step: string,
-	calls: { actions: string[]; starts: Array<StartOptions | undefined> },
+	calls: {
+		actions: string[];
+		actionOptions: Array<ActionOptions | undefined>;
+		starts: Array<StartOptions | undefined>;
+	},
 ): ServerOperations {
 	const ops: Partial<ServerOperations> = {
 		view: () => view(step),
-		action: (request) => {
+		action: (request, options) => {
 			calls.actions.push(request.actionId);
+			calls.actionOptions.push(options);
 			return view(step);
 		},
 		start: async (request, options) => {
@@ -55,10 +64,18 @@ async function withServer<T>(
 	step: string,
 	run: (
 		server: Awaited<ReturnType<typeof startWorkflowServer>>,
-		calls: { actions: string[]; starts: Array<StartOptions | undefined> },
+		calls: {
+			actions: string[];
+			actionOptions: Array<ActionOptions | undefined>;
+			starts: Array<StartOptions | undefined>;
+		},
 	) => Promise<T>,
 ): Promise<T> {
-	const calls = { actions: [] as string[], starts: [] as StartOptions[] };
+	const calls = {
+		actions: [] as string[],
+		actionOptions: [] as Array<ActionOptions | undefined>,
+		starts: [] as StartOptions[],
+	};
 	const server = await startWorkflowServer({
 		operations: operations(step, calls),
 	});
@@ -218,9 +235,11 @@ describe("orchestrator over the transport", () => {
 				`${server.url}/api/v1/workflow/start`,
 				post(server.token, request),
 			);
+			// The principal, not the request, decides the pin and the attribution:
+			// the operation receives the authenticated principal either way.
 			expect(calls.starts).toEqual([
-				{ enforceHumanReviewGates: true },
-				undefined,
+				{ enforceHumanReviewGates: true, principal: "orchestrator" },
+				{ principal: "operator" },
 			]);
 			// A wire field cannot request (or suppress) the pin: the transport
 			// rejects it and only the principal decides.
@@ -229,7 +248,47 @@ describe("orchestrator over the transport", () => {
 				post(server.token, { ...request, enforceHumanReviewGates: false }),
 			);
 			expect(smuggled.status).toBe(400);
+			// Nor can a request claim attribution for itself.
+			const claimed = await fetch(
+				`${server.url}/api/v1/workflow/start`,
+				post(server.token, { ...request, startedBy: "orchestrator" }),
+			);
+			expect(claimed.status).toBe(400);
 			expect(calls.starts).toHaveLength(2);
+		});
+	});
+
+	test("the server decides the acting principal for a workflow action", async () => {
+		await withServer("core.implementation", async (server, calls) => {
+			const request = {
+				repo: "/repo",
+				workflowId: "wf-1",
+				revision: 3,
+				actionId: "resume",
+			};
+			const orchestrated = await fetch(
+				`${server.url}/api/v1/workflow/action`,
+				post(orchestratorTokenFor(server.token), request),
+			);
+			expect(orchestrated.status).toBe(200);
+			const operator = await fetch(
+				`${server.url}/api/v1/workflow/action`,
+				post(server.token, request),
+			);
+			expect(operator.status).toBe(200);
+			expect(calls.actions).toEqual(["resume", "resume"]);
+			expect(calls.actionOptions).toEqual([
+				{ principal: "orchestrator" },
+				{ principal: "operator" },
+			]);
+			// The principal is not a field of the action contract: a request cannot
+			// claim to be the orchestrator and cannot suppress its own label.
+			const claimed = await fetch(
+				`${server.url}/api/v1/workflow/action`,
+				post(server.token, { ...request, principal: "orchestrator" }),
+			);
+			expect(claimed.status).toBe(400);
+			expect(calls.actions).toHaveLength(2);
 		});
 	});
 });

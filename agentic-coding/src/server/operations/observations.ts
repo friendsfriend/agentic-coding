@@ -249,6 +249,9 @@ function buildWorkflows(roots: string[]): WorkflowOverview[] {
 				found.push({
 					state,
 					target,
+					// Read-side default mirrors the view: a snapshot without the
+					// attribution is operator-started work.
+					startedBy: view.startedBy ?? "developer",
 					tasks: [items.filter((item) => item.done).length, items.length],
 					agents: view.runs.map((run) => ({
 						role: run.role,

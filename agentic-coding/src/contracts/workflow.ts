@@ -102,6 +102,18 @@ export function isRetryableFailure(
 }
 
 export type ActorKind = "agent" | "developer" | "system";
+
+/** The authenticated principal a workflow action arrived from: the operator
+ * (the developer's own shell, CLI or dashboard) or the Home Orchestrator
+ * session. It is decided by the server from the request's bearer capability and
+ * never travels on the wire; an event actor records it beside `kind` so
+ * `ActorKind` (and every step definition) stays untouched. */
+export type WorkflowPrincipal = "operator" | "orchestrator";
+
+/** Who started a workflow, pinned once at start for its lifetime. Snapshots
+ * written before the attribution existed omit it and read as `developer`. */
+export type StartedBy = "developer" | "orchestrator";
+
 export type WorkflowStatus =
 	| "active"
 	| "paused"
@@ -252,6 +264,11 @@ export interface WorkflowMetadata {
 	 * Absent on snapshots started before the gates existed; the mandatory
 	 * `always` default is the fallback for those. */
 	gatePolicies?: Record<string, string>;
+	/** Who started this workflow, pinned once at start: an orchestrator-started
+	 * workflow stays attributed to the orchestrator for its lifetime and a later
+	 * operator action never re-attributes it. Absent on snapshots started before
+	 * the attribution existed; those read as `developer`. */
+	startedBy?: StartedBy;
 	/** The classifier provider id resolved once at start and pinned for the
 	 * run's lifetime, so a mid-run config edit cannot switch the endpoint. The
 	 * *model id* is not pinned: it continues to follow
@@ -575,6 +592,9 @@ export interface WorkflowView {
 	updatedAt: string;
 	/** The selected agent preset, or absent when using configuration defaults. */
 	selectedPreset?: string;
+	/** Who started this workflow; always set by the projection, defaulting to
+	 * `developer` for a snapshot that predates the attribution. */
+	startedBy?: StartedBy;
 	/** The gate policies pinned at start; absent when none were pinned. */
 	gatePolicies?: Record<string, string>;
 	currentStep: {
@@ -633,6 +653,9 @@ export type WorkflowCommand =
 			revision: number;
 			actionId: string;
 			input?: unknown;
+			/** The principal the action arrived from; a server-decided option, never
+			 * a wire field. Absent reads as the operator. */
+			principal?: WorkflowPrincipal;
 	  }
 	| {
 			type: "agent.question";
@@ -846,6 +869,11 @@ const developerActionSchema = Schema.Struct({
 	revision: integer(),
 	actionId: text(4096),
 	input: Schema.Unknown,
+	/** The acting principal, handed over by the server from the authenticated
+	 * capability; the wire request cannot carry it. */
+	principal: Schema.optionalWith(Schema.Literal("operator", "orchestrator"), {
+		exact: true,
+	}),
 });
 const agentQuestionSchema = Schema.Struct({
 	type: Schema.Literal("agent.question"),
@@ -1135,6 +1163,9 @@ export interface WorkflowOverview {
 	 * keeps the repository it was started from — or none at all — in
 	 * `state.repository`, while its rows live in the shared target store. */
 	target: string;
+	/** Who started this workflow; always set by the projection, defaulting to
+	 * `developer` for a snapshot that predates the attribution. */
+	startedBy?: StartedBy;
 	tasks: [number, number];
 	/** Stable configured project ident resolved from the catalog, when the
 	 * workflow's repository is a configured project (environment cross-link). */
@@ -1416,6 +1447,7 @@ export const workflowViewSchema = Schema.Struct({
 	createdAt: Schema.String,
 	updatedAt: Schema.String,
 	selectedPreset: Schema.optional(Schema.String),
+	startedBy: Schema.optional(Schema.Literal("developer", "orchestrator")),
 	gatePolicies: Schema.optional(
 		Schema.Record({ key: Schema.String, value: Schema.String }),
 	),

@@ -104,6 +104,7 @@ export function summarizeWorkflowView(view: Record<string, unknown>): unknown {
 		branch: view.branch,
 		task: view.task,
 		preset: view.selectedPreset,
+		startedBy: view.startedBy,
 		gatePolicies: view.gatePolicies,
 		health: view.health,
 		availableActions: view.availableActions,
@@ -269,6 +270,9 @@ export function createOrchestratorExtension(
 							step: state.stepLabel ?? state.stepId,
 							task: state.task,
 							branch: state.branch,
+							// Who started the workflow: the session tells its own work from
+							// the developer's.
+							startedBy: overview.startedBy,
 							attention: (state.health as { attention?: string[] } | undefined)
 								?.attention,
 							availableActions: state.availableActions,

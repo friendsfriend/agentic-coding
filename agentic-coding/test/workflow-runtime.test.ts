@@ -1315,6 +1315,89 @@ describe("transactional workflow runtime", () => {
 			fs.rmSync(tmp, { recursive: true, force: true });
 		}
 	});
+	test("attribution is pinned at start and recorded on developer actions", () => {
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-attribution-"));
+		try {
+			const repo = repository(path.join(tmp, "repo"));
+			// The workflow store lives inside the repository; ignore it so the
+			// second start of the same tree does not read as a dirty checkout.
+			fs.writeFileSync(path.join(repo, ".gitignore"), ".herdr-workflow/\n");
+			execFileSync("git", ["add", ".gitignore"], { cwd: repo });
+			execFileSync("git", ["commit", "-qm", "ignore workflow state"], {
+				cwd: repo,
+			});
+			const engine = new WorkflowEngine(registerBuiltins());
+			const metadata = {
+				branch: "main",
+				baseBranch: "main",
+				baseCommit: execFileSync("git", ["rev-parse", "HEAD"], {
+					cwd: repo,
+					encoding: "utf8",
+				}).trim(),
+				task: "task",
+			};
+			// A start names its starter explicitly (the server-decided default is
+			// the operator), and the projection reports it.
+			const started = engine.start({
+				repo,
+				workflowId: "attribution-operator",
+				definitionId: "no-openspec",
+				metadata,
+				routing: routing(),
+			}).view;
+			expect(started.startedBy).toBe("developer");
+			const orchestratedStart = engine.start({
+				repo,
+				workflowId: "attribution-orchestrator",
+				definitionId: "no-openspec",
+				metadata: { ...metadata, startedBy: "orchestrator" },
+				routing: routing(),
+			}).view;
+			expect(orchestratedStart.startedBy).toBe("orchestrator");
+			// A developer action from the operator keeps exactly the actor it has
+			// always had; the orchestrator records its principal beside `kind`.
+			const operator = engine.dispatch(repo, {
+				type: "developer.action",
+				workflowId: started.workflowId,
+				revision: started.revision,
+				actionId: "re-pin",
+			}).view;
+			const orchestrated = engine.dispatch(repo, {
+				type: "developer.action",
+				workflowId: started.workflowId,
+				revision: operator.revision,
+				actionId: "re-pin",
+				principal: "orchestrator",
+			}).view;
+			// Attribution is pinned once: a later orchestrator action never
+			// re-attributes the operator's workflow.
+			expect(orchestrated.startedBy).toBe("developer");
+			const db = new Database(canonicalStorePath(repo));
+			const events = db
+				.query(
+					"SELECT actor_json FROM workflow_events WHERE workflow_id=? AND type='developer.action' ORDER BY revision",
+				)
+				.all(started.workflowId) as Array<{ actor_json: string }>;
+			db.close();
+			expect(events.map((event) => JSON.parse(event.actor_json))).toEqual([
+				{ kind: "developer" },
+				{ kind: "developer", principal: "orchestrator" },
+			]);
+			// The attributed snapshot decodes with and without the optional field,
+			// so a store written before it existed keeps loading, and the view
+			// reports the absent value as the operator default (asserted above).
+			const snapshot = engine.getSnapshot(repo, started.workflowId);
+			expect(decodeSnapshot(snapshot).metadata.startedBy).toBeUndefined();
+			expect(
+				decodeSnapshot({
+					...snapshot,
+					metadata: { ...snapshot.metadata, startedBy: "orchestrator" },
+				}).metadata.startedBy,
+			).toBe("orchestrator");
+		} finally {
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
+	});
 	test("proposal planning waits for approval and explicit close before cleanup", () => {
 		const tmp = fs.mkdtempSync(
 			path.join(os.tmpdir(), "workflow-proposal-lifecycle-"),

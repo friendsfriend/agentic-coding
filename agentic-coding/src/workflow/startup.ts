@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Effect } from "effect";
 import type {
+	StartedBy,
 	WorkflowExecutionSettings,
 	WorkflowRouting,
 } from "../contracts/workflow.ts";
@@ -70,6 +71,10 @@ export interface WorkflowStartRequest {
 	/** Pin the plan, developer, and wiki review gates to `always`. Set by the
 	 * server for orchestrator-started work, never from a wire request. */
 	enforceHumanReviewGates?: boolean;
+	/** Who started this workflow. Set by the server from the authenticated
+	 * principal, never from a wire request; the engine-facing request defaults
+	 * to the operator (`developer`). */
+	startedBy?: StartedBy;
 }
 
 export interface PreparedWorkflowStart {
@@ -553,6 +558,11 @@ function prepareFromContext(
 				// this run is decided once, so a mid-run provider switch cannot
 				// redirect the requests.
 				...{ classifier: resolveClassifierProvider(agents) },
+				// Who started the run, pinned once like the gates: an orchestrator
+				// start stays attributed to the orchestrator for the workflow's
+				// lifetime, and an operator start says so explicitly instead of
+				// leaving the reader to infer the default.
+				...{ startedBy: request.startedBy ?? "developer" },
 				executionSettings: settings,
 			},
 			routing,

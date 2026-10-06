@@ -30,7 +30,7 @@ import type {
 	PlanReviewComment,
 	WikiReviewComment,
 } from "../contracts/workflow";
-import type { WorkflowView } from "../contracts/workflow.ts";
+import type { StartedBy, WorkflowView } from "../contracts/workflow.ts";
 import { runDeveloperQuestion } from "../workflow/cli/commands/dispatch-actions.ts";
 import { resolveHandoffIdentity } from "../workflow/cli/identity.ts";
 import {
@@ -39,6 +39,7 @@ import {
 	engine as workflowEngineFactory,
 } from "../workflow/operations.ts";
 import { QUESTION_WAIT_MS } from "../workflow/runtime.ts";
+import type { Principal } from "./auth.ts";
 import {
 	cancelLocalClassifierInstall,
 	classifierStatus,
@@ -78,6 +79,17 @@ type ExecuteRequest = Schema.Schema.Type<typeof workflowExecuteRequestSchema>;
 export interface StartOptions {
 	/** Pin the human review gates to `always` (orchestrator-started work). */
 	readonly enforceHumanReviewGates?: boolean;
+	/** The authenticated principal the start arrived from. Decides the pinned
+	 * `startedBy`; absent reads as the operator. */
+	readonly principal?: Principal;
+}
+
+/** Server-decided action options: never read from the wire request. */
+export interface ActionOptions {
+	/** The authenticated principal the action arrived from. Recorded beside the
+	 * event actor `kind`; absent reads as the operator, whose actor stays
+	 * exactly as it was. */
+	readonly principal?: Principal;
 }
 type DeleteRequest = Schema.Schema.Type<typeof workflowDeleteRequestSchema>;
 type AgentHandoffRequest = Schema.Schema.Type<typeof agentHandoffRequestSchema>;
@@ -97,7 +109,7 @@ export interface ServerOperations {
 	runObservation(request: ObservationRequest): Promise<unknown>;
 	listViews(repo: string): WorkflowView[];
 	view(repo: string, workflowId: string): WorkflowView;
-	action(request: ActionRequest): WorkflowView;
+	action(request: ActionRequest, options?: ActionOptions): WorkflowView;
 	start(request: StartRequest, options?: StartOptions): Promise<string>;
 	repair(request: RepairRequest): WorkflowView;
 	question(request: QuestionRequest): WorkflowView;
@@ -120,16 +132,27 @@ export interface ServerOperations {
 	researchHandoff(request: AgentResearchHandoffRequest): Promise<WorkflowView>;
 }
 
+/** The engine-facing start attribution for a server principal. */
+function startedByFor(principal: Principal | undefined): StartedBy {
+	return principal === "orchestrator" ? "orchestrator" : "developer";
+}
+
 /** Run a workflow action, then re-read the authoritative view so the client
  * renders the committed revision instead of a returned guess. The dispatch
- * itself is revision-guarded and synchronous; the facade returns a JSON string. */
-export function runAction(request: ActionRequest): WorkflowView {
+ * itself is revision-guarded and synchronous; the facade returns a JSON string.
+ * The principal is a server-decided option, so the recorded event actor can
+ * carry `principal: "orchestrator"`; the operator actor is unchanged. */
+export function runAction(
+	request: ActionRequest,
+	options: ActionOptions = {},
+): WorkflowView {
 	runWorkflowAction(
 		request.actionId,
 		request.repo,
 		request.workflowId,
 		request.revision,
 		request.input === undefined ? undefined : JSON.stringify(request.input),
+		options.principal,
 	);
 	return getWorkflowView(request.repo, request.workflowId);
 }
@@ -143,6 +166,7 @@ export function startWorkflow(
 		...(options.enforceHumanReviewGates
 			? { enforceHumanReviewGates: true }
 			: {}),
+		startedBy: startedByFor(options.principal),
 		repo: request.repo,
 		ticket: request.ticket ?? "",
 		workflowId: request.workflowId,

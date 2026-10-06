@@ -430,6 +430,12 @@ export const WorkflowSnapshotSchema = Schema.Struct({
 		updatedAt: text(4096),
 		stepEnteredAt: text(4096),
 		selectedPreset: Schema.optionalWith(boundedText(4096), { exact: true }),
+		/** Who started the workflow; absent on snapshots that predate the
+		 * attribution, which read as `developer`. */
+		startedBy: Schema.optionalWith(
+			Schema.Literal("developer", "orchestrator"),
+			{ exact: true },
+		),
 		gatePolicies: Schema.optionalWith(
 			Schema.Record({ key: Schema.String, value: Schema.String }),
 			{ exact: true },

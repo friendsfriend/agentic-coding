@@ -9,12 +9,14 @@ import {
 	cycleFilter,
 	DEFAULT_SIDEBAR_FILTER,
 	filterOverviews,
+	isOrchestratorStarted,
 	isReviewStep,
 	isRunningStatus,
 	SIDEBAR_FILTERS,
 	sidebarIndexFor,
 	sidebarStatusGlyph,
 	workflowMeta,
+	workflowRowLabel,
 } from "../src/tui/otel/app/sidebar-model.ts";
 
 function overview(options: {
@@ -28,9 +30,11 @@ function overview(options: {
 	attention?: string[];
 	valid?: boolean;
 	stepId?: string;
+	startedBy?: WorkflowOverview["startedBy"];
 }): WorkflowOverview {
 	return {
 		target: options.repository ?? "/repo",
+		...(options.startedBy ? { startedBy: options.startedBy } : {}),
 		state: {
 			workflowId: options.workflowId,
 			changeId: "",
@@ -216,6 +220,63 @@ describe("workspace sidebar rows", () => {
 		expect(isReviewStep("core.verification")).toBe(true);
 		expect(isReviewStep("core.implementation")).toBe(false);
 		expect(isReviewStep(undefined)).toBe(false);
+	});
+
+	test("orchestrator-started rows carry a Home marker; operator rows do not", () => {
+		expect(
+			isOrchestratorStarted(
+				overview({
+					workflowId: "a",
+					status: "active",
+					startedBy: "orchestrator",
+				}),
+			),
+		).toBe(true);
+		expect(
+			isOrchestratorStarted(
+				overview({
+					workflowId: "b",
+					status: "active",
+					startedBy: "developer",
+				}),
+			),
+		).toBe(false);
+		// A row without the attribution (a snapshot from before the field)
+		// reads as operator work, so nothing is marked that was not recorded.
+		expect(
+			isOrchestratorStarted(overview({ workflowId: "c", status: "active" })),
+		).toBe(false);
+		expect(
+			workflowRowLabel(
+				overview({
+					workflowId: "orchestrated",
+					status: "active",
+					startedBy: "orchestrator",
+				}),
+			),
+		).toBe("⌂ orchestrated");
+		expect(
+			workflowRowLabel(
+				overview({
+					workflowId: "mine",
+					status: "active",
+					startedBy: "developer",
+				}),
+			),
+		).toBe("mine");
+		// The marker is part of the label, so the row's clip budget still holds.
+		expect(
+			clip(
+				workflowRowLabel(
+					overview({
+						workflowId: "a-very-long-orchestrated-id",
+						status: "active",
+						startedBy: "orchestrator",
+					}),
+				),
+				12,
+			),
+		).toBe("⌂ a-very-lo…");
 	});
 
 	test("clip never exceeds the budget and keeps short values whole", () => {

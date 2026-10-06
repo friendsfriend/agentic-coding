@@ -160,6 +160,9 @@ export function view(
 			...(snapshot.metadata.selectedPreset
 				? { selectedPreset: snapshot.metadata.selectedPreset }
 				: {}),
+			// Read-side default: a snapshot written before the attribution existed
+			// is operator-started work.
+			startedBy: snapshot.metadata.startedBy ?? "developer",
 			currentStep: {
 				id: snapshot.currentStep,
 				label: registry.stepForDefinition(definition, snapshot.currentStep)
@@ -241,6 +244,7 @@ export function view(
 					...(snapshot.metadata.selectedPreset
 						? { selectedPreset: snapshot.metadata.selectedPreset }
 						: {}),
+					startedBy: snapshot.metadata.startedBy ?? "developer",
 					currentStep: {
 						id: snapshot.currentStep,
 						label: "Unavailable",

@@ -188,6 +188,41 @@ describe("shared workflow startup", () => {
 		}
 	});
 
+	test("pins who started the workflow, defaulting to the operator", () => {
+		const repo = repository();
+		const file = path.join(repo, "config.toml");
+		fs.writeFileSync(file, config);
+		const previous = process.env.HERDR_WORKFLOW_CONFIG;
+		process.env.HERDR_WORKFLOW_CONFIG = file;
+		try {
+			const operator = prepareWorkflowStart({
+				repo,
+				workflowId: "attribution-operator",
+				definitionId: "wiki",
+				task: "document startup",
+				mode: "checkout",
+				preset: "fixed",
+			});
+			// A caller that says nothing is the operator: the pin is written
+			// explicitly instead of left absent for every reader to infer.
+			expect(operator.input.metadata.startedBy).toBe("developer");
+			const orchestrated = prepareWorkflowStart({
+				repo,
+				workflowId: "attribution-orchestrator",
+				definitionId: "wiki",
+				task: "document startup",
+				mode: "checkout",
+				preset: "fixed",
+				startedBy: "orchestrator",
+			});
+			expect(orchestrated.input.metadata.startedBy).toBe("orchestrator");
+		} finally {
+			if (previous === undefined) delete process.env.HERDR_WORKFLOW_CONFIG;
+			else process.env.HERDR_WORKFLOW_CONFIG = previous;
+			fs.rmSync(repo, { recursive: true, force: true });
+		}
+	});
+
 	test("loads the selected repository overlay and writes agents to that source", () => {
 		const repo = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-config-"));
 		const project = path.join(repo, ".pi");

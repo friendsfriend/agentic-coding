@@ -38,6 +38,7 @@ function overview(
 		pendingQuestions?: number;
 		attention?: string[];
 		valid?: boolean;
+		startedBy?: WorkflowOverview["startedBy"];
 	} = {},
 ): WorkflowOverview {
 	return {
@@ -86,6 +87,7 @@ function overview(
 				: {}),
 		},
 		tasks: [0, 0],
+		...(overrides.startedBy ? { startedBy: overrides.startedBy } : {}),
 		agents: [],
 	};
 }
@@ -295,6 +297,29 @@ test("rows show the state that needs a reader as a glyph", async () => {
 		expect(frame).toContain("✓ wf-review");
 		expect(frame).toContain("… wf-running");
 		expect(frame).toContain("◦ wf-idle");
+	} finally {
+		t.renderer.destroy();
+		clearGateway();
+	}
+});
+
+test("orchestrator-started rows are marked, operator rows stay bare", async () => {
+	stubGateway([
+		overview("wf-orchestrated", "active", { startedBy: "orchestrator" }),
+		overview("wf-operator", "active", { startedBy: "developer" }),
+		// A row from before the attribution existed is operator work.
+		overview("wf-unattributed", "active"),
+	]);
+	const t = await renderShell();
+	try {
+		await focusSidebar(t);
+		expect(await renderUntil(t, "wf-orchestrated")).toBe(true);
+		const frame = t.captureCharFrame();
+		expect(frame).toContain("⌂ wf-orchestrated");
+		expect(frame).toContain("wf-operator");
+		expect(frame).not.toContain("⌂ wf-operator");
+		expect(frame).toContain("wf-unattributed");
+		expect(frame).not.toContain("⌂ wf-unattributed");
 	} finally {
 		t.renderer.destroy();
 		clearGateway();
