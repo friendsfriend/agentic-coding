@@ -105,7 +105,8 @@ export type DashboardObservation =
 	  }
 	| { kind: "developer-review-findings"; repo: string; workflowId: string }
 	| { kind: "repair-preview"; repo: string; workflowId: string }
-	| { kind: "changes"; repo: string };
+	| { kind: "changes"; repo: string }
+	| { kind: "branches"; repo: string };
 
 /** Run an observation in-process. This is the server-side dispatch the HTTP
  * transport exposes (expose-unified-bun-backend, task 2.2): the TUI reaches it
@@ -165,6 +166,8 @@ export async function runLocalObservation(
 			return previewWorkflowRepair(observation.repo, observation.workflowId);
 		case "changes":
 			return discoverChanges(observation.repo);
+		case "branches":
+			return discoverBranches(observation.repo);
 	}
 }
 
@@ -861,10 +864,20 @@ export function loadDeveloperReviewFindings(
 				runId: run.id,
 			})),
 		);
+	// The verify-only family reviews a round the verifiers already failed: its
+	// findings review is where the critical findings get selected for the worker,
+	// so that step sees them. The developer review of a passing change keeps its
+	// advisory-only list, because a critical finding there would already have
+	// looped back to the implementation step.
+	const includeCritical = state.stepId === "core.findings-review";
 	return findings
 		.filter(
 			(item) =>
-				(item.severity === "warning" || item.severity === "info") &&
+				(includeCritical
+					? item.severity === "critical" ||
+						item.severity === "warning" ||
+						item.severity === "info"
+					: item.severity === "warning" || item.severity === "info") &&
 				(item.status === undefined ||
 					item.status === "new" ||
 					item.status === "unfixed") &&
@@ -874,7 +887,7 @@ export function loadDeveloperReviewFindings(
 		.map((item) => ({
 			id: `${item.runId}:${item.id}`,
 			originalId: item.id,
-			severity: item.severity as "warning" | "info",
+			severity: item.severity as "critical" | "warning" | "info",
 			path: typeof item.path === "string" ? item.path : undefined,
 			line: typeof item.line === "number" ? item.line : undefined,
 			detail: item.detail,
@@ -1125,6 +1138,85 @@ export function discoverChangesAsync(
 	signal?: AbortSignal,
 ): Promise<string[]> {
 	return observeAsync({ kind: "changes", repo }, signal);
+}
+
+/** The branches a repository can be rebased from and onto. The current branch
+ * and the local refs are what the source picker offers (a rebase attaches an
+ * existing local branch), while the target picker may also name a remote ref. */
+export interface BranchOptions {
+	/** The checked-out branch, empty for a detached HEAD. */
+	current: string;
+	local: string[];
+	remote: string[];
+	/** The ref the target picker preselects: `origin/HEAD`'s target, else the
+	 * first of main/master among the remote and local refs, else the current
+	 * branch. Empty only for a repository with no branches at all. */
+	default: string;
+}
+
+/** Local and remote branches of a checkout, read for the rebase launch's two
+ * pickers. Every list is sorted and deduplicated, and a repository that is not
+ * a Git checkout fails with a readable message instead of an empty list. */
+export function discoverBranches(repo: string): BranchOptions {
+	const head = gitResult(repo, "rev-parse", "--is-inside-work-tree");
+	if (head.exitCode !== 0) throw new Error(`not a Git repository: ${repo}`);
+	const current = gitResult(repo, "branch", "--show-current")
+		.stdout.toString()
+		.trim();
+	const local = gitResult(
+		repo,
+		"for-each-ref",
+		"--format=%(refname:short)",
+		"refs/heads/",
+	)
+		.stdout.toString()
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line !== "");
+	const remote = gitResult(
+		repo,
+		"for-each-ref",
+		"--format=%(refname:short)",
+		"refs/remotes/",
+	)
+		.stdout.toString()
+		.split("\n")
+		.map((line) => line.trim())
+		// `<remote>/HEAD` is a symbolic ref, not a branch, and a bare `<remote>`
+		// entry is the same ref written without its suffix.
+		.filter(
+			(line) => line !== "" && !line.endsWith("/HEAD") && line.includes("/"),
+		);
+	const originHead = gitResult(
+		repo,
+		"symbolic-ref",
+		"-q",
+		"--short",
+		"refs/remotes/origin/HEAD",
+	)
+		.stdout.toString()
+		.trim();
+	const remoteName = originHead.split("/")[0] || "origin";
+	// The preselected target must be a literal entry of the list the picker
+	// offers (local + remote), so the default is resolved to one of those names
+	// and never to a ref the list would not contain.
+	const defaultTarget =
+		(remote.includes(originHead) ? originHead : undefined) ??
+		remote.find((name) => name === `${remoteName}/main`) ??
+		remote.find((name) => name === `${remoteName}/master`) ??
+		remote.find((name) => name.endsWith("/main")) ??
+		remote.find((name) => name.endsWith("/master")) ??
+		local.find((name) => name === "main" || name === "master") ??
+		(local.includes(current) ? current : undefined) ??
+		local[0] ??
+		remote[0] ??
+		"";
+	return {
+		current,
+		local: [...new Set(local)].sort(),
+		remote: [...new Set(remote)].sort(),
+		default: defaultTarget,
+	};
 }
 
 function safeWorktreeRelative(worktree: string, value: string): string {
@@ -1594,6 +1686,8 @@ export async function startWorkflow(input: {
 	mode: string;
 	workflowType?: string;
 	preset?: string;
+	sourceBranch?: string;
+	targetBranch?: string;
 }) {
 	const repo =
 		input.workflowType === "research" && !input.repo

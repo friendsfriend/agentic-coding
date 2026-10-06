@@ -1170,7 +1170,10 @@ export type WikiReviewComment = PlanReviewComment;
 export interface DeveloperReviewFinding {
 	id: string;
 	originalId: string;
-	severity: "warning" | "info";
+	/** `critical` reaches the review only from the verify-only family's findings
+	 * review, which selects fixes from a round the verifiers already failed; the
+	 * developer review of a passing change shows advisory findings only. */
+	severity: "critical" | "warning" | "info";
 	path?: string;
 	line?: number;
 	detail: string;

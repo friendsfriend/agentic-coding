@@ -336,6 +336,17 @@ export function validateSourceBaseline(
 		);
 	return fingerprint;
 }
+/** Whether a ref resolves in `repository`; a start guard's own bounded git
+ * read, mirroring `validateStartEvidence`'s direct `git` invocation (this
+ * module is the runtime boundary and does not import the CLI's wrapper). */
+function resolves(repository: string, ref: string): boolean {
+	const result = Bun.spawnSync(
+		["git", "-C", repository, "rev-parse", "--verify", ref],
+		{ stdout: "pipe", stderr: "pipe" },
+	);
+	return result.exitCode === 0;
+}
+
 export function validateStartEvidence(
 	repository: string,
 	input: StartWorkflowInput,
@@ -372,6 +383,64 @@ export function validateStartEvidence(
 			throw new WorkflowRuntimeError(
 				"start-guard",
 				`${input.definitionId} requires non-empty task`,
+			);
+		return;
+	}
+	// A verify-only run inspects the current checkout, so it needs no task and no
+	// OpenSpec project. Its registry policy requires the repository checkout and
+	// the current branch (checked above), and `proposal` is true for it, so the
+	// clean-tree rule above is deliberately skipped: verifying uncommitted work is
+	// the point. What it does need is a baseline — the branch's change set is
+	// `metadata.baseCommit..HEAD`, so both the base ref it came from and the
+	// commit itself must resolve.
+	if (input.definitionId === "verify") {
+		const base = input.metadata.baseBranch;
+		if (!base)
+			throw new WorkflowRuntimeError(
+				"start-guard",
+				"verify requires a base branch; set workflow.base_branch",
+			);
+		if (!resolves(repository, `${base}^{commit}`))
+			throw new WorkflowRuntimeError(
+				"start-guard",
+				`verify base branch does not resolve: ${base}`,
+			);
+		if (!resolves(repository, input.metadata.baseCommit))
+			throw new WorkflowRuntimeError(
+				"start-guard",
+				`verify base commit does not resolve: ${input.metadata.baseCommit}`,
+			);
+		return;
+	}
+	// A rebase runs one agent on a selected branch, so it needs no task and no
+	// OpenSpec project — but both refs it names must exist. The registry policy
+	// keeps `checkoutRequired` false (the selected branch is not necessarily the
+	// checked-out one), so this guard is what refuses a start whose source branch
+	// or target ref is not there. Each ref gets one direct git read, mirroring
+	// the clean-tree read above; the target is checked after the start boundary's
+	// best-effort fetch.
+	if (input.definitionId === "rebase") {
+		const source = input.metadata.branch;
+		const target = input.metadata.baseBranch;
+		if (!source || !target)
+			throw new WorkflowRuntimeError(
+				"start-guard",
+				"rebase requires a source branch and a target branch",
+			);
+		if (source === target)
+			throw new WorkflowRuntimeError(
+				"start-guard",
+				`rebase source and target are the same ref: ${source}`,
+			);
+		if (!resolves(repository, `refs/heads/${source}`))
+			throw new WorkflowRuntimeError(
+				"start-guard",
+				`rebase source branch does not exist: ${source}`,
+			);
+		if (!resolves(repository, `${target}^{commit}`))
+			throw new WorkflowRuntimeError(
+				"start-guard",
+				`rebase target branch does not resolve: ${target}`,
 			);
 		return;
 	}

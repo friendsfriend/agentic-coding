@@ -73,6 +73,10 @@ const FLAG_SCHEMA: Record<
 			"task",
 			"ticket",
 			"preset",
+			// The rebase family's two refs: the branch that gets rebased and the
+			// ref it is rebased onto.
+			"branch",
+			"onto",
 		],
 		positionals: [0, 0],
 	},

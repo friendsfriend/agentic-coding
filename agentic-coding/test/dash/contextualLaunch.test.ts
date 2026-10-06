@@ -69,10 +69,12 @@ test("the registry catalog is the single workflow-type authority", () => {
 		"openspec-propose",
 		"no-openspec",
 		"solo",
+		"rebase",
 		"openspec-fusion",
 		"openspec-fusion-propose",
 		"wiki",
 		"research",
+		"verify",
 	]);
 	// A project page may offer the whole registry; Wiki may offer the
 	// repository-independent type only.

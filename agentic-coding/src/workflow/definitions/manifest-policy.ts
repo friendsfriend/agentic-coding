@@ -76,12 +76,32 @@ const MANIFEST_POLICY: Readonly<Record<string, WorkflowManifestPolicy>> = {
 		checkoutRequired: false,
 		requiresReadOnlyResearcher: false,
 	},
+	// The rebase family runs one agent in the repository checkout on the source
+	// branch the launch selected, which is not necessarily the branch that is
+	// checked out: `checkoutRequired` stays false so start does not demand
+	// `metadata.branch === current branch`, while the startup boundary still
+	// forces checkout mode and `workspace.setup` switches the checkout.
+	rebase: {
+		targetKind: "repository",
+		checkoutRequired: false,
+		requiresReadOnlyResearcher: false,
+	},
 	"openspec-fusion": {
 		targetKind: "repository",
 		checkoutRequired: false,
 		requiresReadOnlyResearcher: false,
 	},
 	"openspec-fusion-propose": {
+		targetKind: "repository",
+		checkoutRequired: true,
+		requiresReadOnlyResearcher: false,
+	},
+	// The verify-only family runs on the branch that is already checked out and
+	// must never switch it: `checkoutRequired` is exactly that contract (mode
+	// checkout, the repository checkout, `metadata.branch` = the current branch).
+	// Its start also skips the clean-tree rule, because verifying the current
+	// state — uncommitted work included — is the point.
+	verify: {
 		targetKind: "repository",
 		checkoutRequired: true,
 		requiresReadOnlyResearcher: false,

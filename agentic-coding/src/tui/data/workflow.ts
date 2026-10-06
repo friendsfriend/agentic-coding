@@ -457,6 +457,33 @@ export async function discoverChanges(
 	);
 }
 
+/** The branches a rebase launch may select: the current branch, the local
+ * branches (source), and the remote refs (target), plus the target the picker
+ * preselects. Read from the running checkout each time the selected repository
+ * changes, so a branch created outside the form is offered on the next open. */
+export interface BranchOptions {
+	current: string;
+	local: string[];
+	remote: string[];
+	default: string;
+}
+
+export async function discoverBranches(
+	repo: string,
+	signal?: Signal,
+): Promise<BranchOptions | undefined> {
+	return cache.load(
+		`branches:${repo}`,
+		(signal) =>
+			gateway().observe<BranchOptions>(
+				{ kind: "branches", repo },
+				compositeSchema,
+				signal,
+			),
+		{ signal },
+	);
+}
+
 /** Repair preview applied through the gateway (the operation itself is
  * revision-guarded server-side). */
 export async function applyRepair(

@@ -19,6 +19,29 @@ const CLOSE_ONLY_DEFINITIONS = [
 	"wiki-comments",
 	"research",
 	"solo",
+	"rebase",
+	"verify",
+];
+
+/** The review decision both review steps offer: approve the work, or send the
+ * selected findings back to the worker. `core.developer-review` gates a change
+ * the worker produced; `core.findings-review` is the verify-only family's entry
+ * into that same worker loop, where the findings — including the critical ones
+ * that already fail the round — are what the developer selects from. */
+const reviewActions = () => [
+	{
+		id: "approve-review",
+		label: "Approve change",
+		confirmation: "confirm" as const,
+		requiresInput: true,
+	},
+	{
+		id: "review-comments",
+		label: "Request changes",
+		confirmation: "confirm" as const,
+		input: REVIEW_COMMENTS_INPUT,
+		requiresInput: true,
+	},
 ];
 
 export const lifecycleBehaviors: Readonly<Record<string, StepBehavior>> = {
@@ -47,21 +70,14 @@ export const lifecycleBehaviors: Readonly<Record<string, StepBehavior>> = {
 		],
 	},
 	"core.developer-review": {
-		developerActions: () => [
-			{
-				id: "approve-review",
-				label: "Approve change",
-				confirmation: "confirm",
-				requiresInput: true,
-			},
-			{
-				id: "review-comments",
-				label: "Request changes",
-				confirmation: "confirm",
-				input: REVIEW_COMMENTS_INPUT,
-				requiresInput: true,
-			},
-		],
+		developerActions: reviewActions,
+	},
+	// The verify-only family's review: identical actions and input schema, so the
+	// dashboard's review popup and its `review-comments` dispatch work unchanged.
+	// The difference is the findings it shows (the observation includes critical
+	// findings while this step is current) and the graph edge it leaves on.
+	"core.findings-review": {
+		developerActions: reviewActions,
 	},
 	"core.wiki-approval": {
 		developerActions: () => [

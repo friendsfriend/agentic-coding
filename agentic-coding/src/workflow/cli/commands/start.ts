@@ -39,6 +39,10 @@ export async function runStart(
 		task: flag(rest, "task"),
 		ticket: flag(rest, "ticket"),
 		preset: flag(rest, "preset"),
+		// The rebase family's two refs. Both are selected from a branch list in
+		// the dashboard; on the command line they are the same two names.
+		sourceBranch: flag(rest, "branch"),
+		targetBranch: flag(rest, "onto"),
 	});
 	if (application)
 		application.runSync(workflowEngine.startEffect(prepared.input));

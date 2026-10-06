@@ -23,6 +23,7 @@ function unchanged(snapshot: WorkflowSnapshot): Reduction {
 const INSTRUCTION_BY_STEP: Record<string, string[]> = {
 	"core.plan": ["workflow-agent-protocol.md", "planning.md"],
 	"core.implementation": ["workflow-agent-protocol.md", "implementation.md"],
+	"core.rebase": ["workflow-agent-protocol.md", "rebase.md"],
 	"core.triage": ["workflow-agent-protocol.md", "triage.md"],
 	"core.verification": [
 		"workflow-agent-protocol.md",
@@ -230,6 +231,10 @@ export const WORKFLOW_STEPS: readonly StepDefinition[] = [
 		["complete"],
 		{ allowedEffects: ["model.classify"], retryLimit: 3 },
 	),
+	step("core.route-rebase", "Rebase model routing", "system", ["complete"], {
+		allowedEffects: ["model.classify"],
+		retryLimit: 3,
+	}),
 	step("core.route-triage", "Triage model routing", "system", ["complete"], {
 		allowedEffects: ["model.classify"],
 		retryLimit: 3,
@@ -263,6 +268,13 @@ export const WORKFLOW_STEPS: readonly StepDefinition[] = [
 		["complete", "blocked", "failed"],
 		{ retryLimit: 6 },
 	),
+	// The rebase family's one agent. It needs shell and edit on top of the agent
+	// defaults: `git rebase` is driven from the shell, and a conflict is resolved
+	// by editing the conflicted files.
+	step("core.rebase", "Rebase", "agent", ["complete", "blocked", "failed"], {
+		requirements: ["prompt", "run-environment", "observe", "shell", "edit"],
+		retryLimit: 3,
+	}),
 	step(
 		"core.triage-route",
 		"Verifier role routing",
@@ -319,6 +331,13 @@ export const WORKFLOW_STEPS: readonly StepDefinition[] = [
 		},
 	),
 	step("core.developer-review", "Developer review", "developer", [
+		"approve",
+		"comments",
+	]),
+	// The verify-only family's review: the same developer decision as the
+	// developer review, taken over the round's findings (critical included)
+	// before a worker fixes the selected ones.
+	step("core.findings-review", "Findings review", "developer", [
 		"approve",
 		"comments",
 	]),

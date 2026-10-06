@@ -47,6 +47,10 @@ export interface WorkflowLaunchInput {
 	mode: string;
 	workflowType: string;
 	preset: string;
+	/** Rebase only: the selected local branch that gets rebased. */
+	sourceBranch?: string;
+	/** Rebase only: the selected ref the branch is rebased onto. */
+	targetBranch?: string;
 }
 
 export type LaunchOutcome =
@@ -110,6 +114,8 @@ export async function launchWorkflow(
 			...(input.task ? { task: input.task } : {}),
 			...(input.workflowType ? { workflowType: input.workflowType } : {}),
 			...(input.preset ? { preset: input.preset } : {}),
+			...(input.sourceBranch ? { sourceBranch: input.sourceBranch } : {}),
+			...(input.targetBranch ? { targetBranch: input.targetBranch } : {}),
 		});
 		const workflowId = STARTED.exec(message)?.[1];
 		if (workflowId) return { kind: "accepted", workflowId, message };

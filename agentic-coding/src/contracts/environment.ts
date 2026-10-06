@@ -67,6 +67,7 @@ const observationSchema = Schema.Union(
 		workflowId: Schema.String,
 	}),
 	Schema.Struct({ kind: Schema.Literal("changes"), repo: Schema.String }),
+	Schema.Struct({ kind: Schema.Literal("branches"), repo: Schema.String }),
 );
 
 export type ObservationRequest = typeof observationSchema.Type;

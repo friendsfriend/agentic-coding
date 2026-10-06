@@ -33,7 +33,7 @@ export interface Discussion {
 	individual_note: boolean;
 	/** Set for a review finding; its presence switches the thread to FIX style. */
 	findingId?: string;
-	findingSeverity?: "warning" | "info";
+	findingSeverity?: "critical" | "warning" | "info";
 	notes: Array<{
 		id: number;
 		type: string;

@@ -985,6 +985,14 @@ export function agentEffectHandlers(
 								currentBranch(snapshot.metadata.repository, signal),
 							)
 						: (input.branch ?? snapshot.metadata.branch);
+					// A repository checkout counts as set up only when it is already on the
+					// branch this effect selected; otherwise `execute` switches it. A
+					// `sameCheckout` workflow resolves `branch` from the current branch and
+					// is unaffected, while the rebase family selects a branch that may not
+					// be the one checked out.
+					const current = yield* p(() =>
+						currentBranch(snapshot.metadata.repository, signal),
+					);
 					const worktree =
 						input.mode === "worktree"
 							? yield* resolveWorktree(
@@ -992,12 +1000,9 @@ export function agentEffectHandlers(
 									snapshot.metadata.repository,
 									branch ?? "",
 								)
-							: (snapshot.metadata.worktree ??
-								((yield* p(() =>
-									currentBranch(snapshot.metadata.repository, signal),
-								)) === branch
-									? snapshot.metadata.repository
-									: undefined));
+							: current === branch
+								? (snapshot.metadata.worktree ?? snapshot.metadata.repository)
+								: undefined;
 					return worktree ? { worktree, branch } : undefined;
 				}),
 			execute: (effect, signal) =>
@@ -1028,6 +1033,8 @@ export function agentEffectHandlers(
 						throw new PermanentFailure(
 							"workspace setup requires a named branch",
 						);
+					if (snapshot.definition.id === "rebase")
+						yield* prepareRebaseCheckout(snapshot, branch, signal);
 					let worktree =
 						input.mode === "worktree" && !sameCheckout
 							? yield* resolveWorktree(
@@ -2018,6 +2025,55 @@ async function currentBranch(
 	return !Either.isLeft(result) && result.right.exitCode === 0
 		? result.right.stdout.trim() || undefined
 		: undefined;
+}
+
+/** The rebase family's `workspace.setup` preflight, run as the workflow's first
+ * effect and before the agent exists:
+ *
+ *  - the source branch must already exist as a local branch — the checkout is
+ *    switched to an existing ref, never to a branch this effect invents, so a
+ *    mistyped source cannot turn into "rebase a new branch onto the target";
+ *  - the target remote is fetched once so a remote-tracking target ref is
+ *    current. The fetch is best effort: a purely local target, a repository
+ *    without the configured remote, or an offline machine whose refs are
+ *    already there must still be able to rebase;
+ *  - the target ref must resolve afterwards. That is permanent, not transient:
+ *    no retry conjures a ref that is not there, and the run belongs in
+ *    attention-required with the missing ref named. */
+function prepareRebaseCheckout(
+	snapshot: WorkflowSnapshot,
+	sourceBranch: string,
+	signal?: AbortSignal,
+): Effect.Effect<void, Error> {
+	return Effect.gen(function* () {
+		const repository = snapshot.metadata.repository;
+		const target = snapshot.metadata.baseBranch;
+		if (!target)
+			throw new PermanentFailure("rebase workflow requires a target branch");
+		const source = yield* git(
+			repository,
+			["rev-parse", "--verify", `refs/heads/${sourceBranch}`],
+			signal,
+		).pipe(Effect.either);
+		if (Either.isLeft(source))
+			throw new PermanentFailure(
+				`rebase source branch does not exist: ${sourceBranch}`,
+			);
+		const remote = snapshot.metadata.executionSettings?.remote;
+		if (remote)
+			yield* git(repository, ["fetch", "--prune", "--", remote], signal).pipe(
+				Effect.either,
+			);
+		const resolved = yield* git(
+			repository,
+			["rev-parse", "--verify", `${target}^{commit}`],
+			signal,
+		).pipe(Effect.either);
+		if (Either.isLeft(resolved))
+			throw new PermanentFailure(
+				`rebase target branch does not resolve: ${target}`,
+			);
+	});
 }
 /** The worktree registered for `branch`, or `undefined` for confirmed absence.
  * A transport failure is a real failure: it is never silently treated as "no

@@ -808,6 +808,19 @@ test("required user actions expose developer review and completion commands", ()
 	);
 	expect(engineReview?.key).toBe("developer-review");
 	expect(engineReview?.items).toEqual([]);
+
+	// The verify-only family's findings review is the same popup and the same
+	// dispatch, so it carries the same stable key with its own copy.
+	const findingsReview = requiredUserActionFor(
+		"core.findings-review",
+		false,
+		[],
+		undefined,
+		DEVELOPER_REVIEW_ACTIONS,
+	);
+	expect(findingsReview?.key).toBe("developer-review");
+	expect(findingsReview?.title).toContain("Findings review");
+	expect(findingsReview?.items).toEqual([]);
 	expect(
 		requiredUserActionFor(
 			"completed",

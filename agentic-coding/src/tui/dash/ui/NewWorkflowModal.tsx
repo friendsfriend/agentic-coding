@@ -24,6 +24,8 @@ import {
 } from "solid-js";
 import { gatewayOrUndefined, gatewayReady } from "../../data/index.ts";
 import {
+	type BranchOptions,
+	discoverBranches,
 	discoverChanges,
 	discoverProjects,
 	type ProjectOption,
@@ -31,6 +33,7 @@ import {
 import type { WorkflowLaunchContext, WorkflowLaunchInput } from "../launch.ts";
 import { workflowTypesForContext } from "../launch.ts";
 import {
+	discoverBranchesLocal,
 	discoverChangesLocal,
 	PRESET_CONFIG_DEFAULTS,
 	PUBLIC_WORKFLOW_CATALOG,
@@ -39,8 +42,10 @@ import {
 /** Task-driven registry types: the wizard renders and submits the task step for
  * these, and `openspec` runs the classifier-routed plan-first graph. Every
  * other type (`openspec-apply`) selects an existing OpenSpec change instead
- * and keeps its task-free field set. The task itself stays optional except
- * where `canSubmit` requires it (wiki, research, quick, no-openspec). */
+ * and keeps its task-free field set, while `rebase` replaces the task and
+ * checkout steps with its two branch pickers and `verify` has neither a task
+ * nor a checkout choice. The task itself stays optional except where
+ * `canSubmit` requires it (wiki, research, quick, no-openspec). */
 const TASK_TYPES = new Set([
 	"openspec",
 	"quick",
@@ -172,7 +177,7 @@ export function NewWorkflowModal(props: {
 	/** Why the entry the cursor is on cannot be started. Transient: the next
 	 * cursor move or step change drops it. */
 	const [refusal, setRefusal] = createSignal<string | undefined>();
-	const notice = () => refusal() ?? catalogNotice();
+	const notice = () => refusal() ?? branchNotice() ?? catalogNotice();
 	const repository = () =>
 		props.context.kind === "project" || props.context.kind === "path"
 			? props.context.repository
@@ -202,6 +207,66 @@ export function NewWorkflowModal(props: {
 		void discoverChanges(repo, controller.signal)
 			.then((changes) => setAvailableChanges(changes ?? []))
 			.catch(() => setAvailableChanges([]));
+		onCleanup(() => controller.abort());
+	});
+
+	// The rebase type's branch lists come from the repository the form selected.
+	// The read resolves after the workflow-type step, so the two pickers fill in
+	// while the user is still on the earlier steps; a failure is reported in the
+	// picker rather than shown as a repository with no branches.
+	const [branchOptions, setBranchOptions] = createSignal<
+		BranchOptions | undefined
+	>();
+	const [branchNotice, setBranchNotice] = createSignal<string | undefined>();
+	/** The repository the current branch list belongs to: a different repository
+	 * replaces both selections instead of submitting refs the new checkout does
+	 * not have. */
+	const [branchRepo, setBranchRepo] = createSignal<string | undefined>();
+	createEffect(() => {
+		const repo = values().repo;
+		if (!isRebase(values().workflowType) || !repo) {
+			setBranchOptions(undefined);
+			setBranchNotice(undefined);
+			return;
+		}
+		const controller = new AbortController();
+		void (async () => {
+			try {
+				const options = gatewayOrUndefined()
+					? await discoverBranches(repo, controller.signal)
+					: discoverBranchesLocal(repo);
+				if (controller.signal.aborted) return;
+				if (!options) {
+					setBranchNotice(
+						"Branches could not be read: the read was superseded by a change. Reopen the form to retry.",
+					);
+					return;
+				}
+				setBranchOptions(options);
+				setBranchNotice(undefined);
+				// First read for this repository: the target opens on the repository's
+				// default branch and the source on the branch that is checked out. A
+				// later read for the same repository leaves both choices alone, so a
+				// refresh cannot undo what the user picked.
+				if (untrack(() => branchRepo()) === repo) return;
+				setBranchRepo(repo);
+				setValues((current) => ({
+					...current,
+					targetBranch: options.default,
+					sourceBranch: options.local.includes(options.current)
+						? options.current
+						: "",
+				}));
+			} catch (error) {
+				if (controller.signal.aborted) return;
+				setBranchOptions(undefined);
+				setBranchNotice(
+					`Branches could not be read: ${
+						error instanceof Error ? error.message : String(error)
+					}`,
+				);
+			}
+		})();
 		onCleanup(() => controller.abort());
 	});
 
@@ -254,7 +319,14 @@ export function NewWorkflowModal(props: {
 	const isProposal = (type: string) =>
 		type === "openspec-propose" || type === "openspec-fusion-propose";
 	const isRepositoryBacked = (type: string) =>
-		isProposal(type) || type === "wiki";
+		isProposal(type) || type === "wiki" || type === "rebase" || isVerify(type);
+	/** The rebase type's two extra steps: the branch that gets rebased and the
+	 * ref it is rebased onto, both chosen from the repository's branch list. */
+	const isRebase = (type: string) => type === "rebase";
+	/** The verify-only type needs no input beyond the repository: it verifies the
+	 * branch that is already checked out against the configured base branch, so it
+	 * has neither a task step nor a checkout-mode choice. */
+	const isVerify = (type: string) => type === "verify";
 	/** Context-restricted type set; `undefined` means the whole registry. */
 	const allowedTypes = () => workflowTypesForContext(props.context);
 	const workflowTypeChoices = () => {
@@ -264,6 +336,18 @@ export function NewWorkflowModal(props: {
 		).filter((choice) => !allowed || allowed.includes(choice));
 	};
 	const fields = (): (keyof WorkflowLaunchInput)[] => {
+		// The rebase type replaces the task and checkout steps with its two branch
+		// pickers: it needs no task and forces the checkout mode itself.
+		if (isRebase(values().workflowType))
+			return [
+				...(pathTarget() ? (["repo"] as const) : []),
+				"workflowType",
+				"preset",
+				"ticket",
+				"workflowId",
+				"sourceBranch",
+				"targetBranch",
+			];
 		const head: (keyof WorkflowLaunchInput)[] = [
 			...(pathTarget() ? (["repo"] as const) : []),
 			"workflowType",
@@ -271,6 +355,7 @@ export function NewWorkflowModal(props: {
 			"ticket",
 			"workflowId",
 		];
+		if (isVerify(values().workflowType)) return head;
 		if (!TASK_TYPES.has(values().workflowType)) return [...head, "mode"];
 		// Repository-backed workflows and independent research own their checkout
 		// behavior, so only the remaining types show the explicit choice.
@@ -288,6 +373,8 @@ export function NewWorkflowModal(props: {
 		workflowId: "Workflow ID",
 		task: "Task required for wiki, research, no OpenSpec, and solo",
 		mode: "Checkout mode",
+		sourceBranch: "Branch to rebase",
+		targetBranch: "Branch to rebase onto",
 	};
 
 	const workflowTypeEntry = (choice: string) =>
@@ -295,8 +382,33 @@ export function NewWorkflowModal(props: {
 			(item) => item.id === choice || item.alias === choice,
 		);
 
+	/** The selected branch step, when the current field is one of the two the
+	 * rebase type adds. */
+	const branchField = (): "sourceBranch" | "targetBranch" | undefined => {
+		const f = field();
+		return f === "sourceBranch" || f === "targetBranch" ? f : undefined;
+	};
+
+	const localBranches = (): string[] => branchOptions()?.local ?? [];
+
+	/** The target may name a remote ref (the common "rebase onto `origin/main`")
+	 * while the source must be a local branch: a rebase checks out and rewrites
+	 * an existing local ref. */
+	const branchChoices = (): string[] => {
+		if (field() === "sourceBranch") return localBranches();
+		if (field() === "targetBranch")
+			return [...localBranches(), ...(branchOptions()?.remote ?? [])];
+		return [];
+	};
+
 	const choices = (): string[] => {
 		const f = field();
+		if (branchField()) {
+			const query = filter().toLowerCase();
+			return branchChoices().filter((item) =>
+				item.toLowerCase().includes(query),
+			);
+		}
 		if (f === "workflowType")
 			return workflowTypeChoices().filter((item) =>
 				item.includes(filter().toLowerCase()),
@@ -363,7 +475,17 @@ export function NewWorkflowModal(props: {
 			key === undefined
 				? -1
 				: items.findIndex((item) => entryKey(item) === key);
-		return index >= 0 ? index : 0;
+		if (index >= 0) return index;
+		// A branch step opens on the value it preselected as long as the user has
+		// not moved the cursor, so the highlight and Enter agree on the default
+		// the summary already shows.
+		const branch = branchField();
+		if (branch) {
+			const chosen = values()[branch];
+			const at = chosen === undefined ? -1 : items.indexOf(chosen);
+			if (at >= 0) return at;
+		}
+		return 0;
 	};
 
 	const listStep = () => {
@@ -374,15 +496,32 @@ export function NewWorkflowModal(props: {
 			f === "workflowType" ||
 			f === "preset" ||
 			(f === "workflowId" && values().workflowType === "openspec-apply") ||
-			f === "mode"
+			f === "mode" ||
+			branchField() !== undefined
 		);
 	};
 
 	const confirmStep = () => step() === fields().length;
-	const canSubmit = () =>
-		!["wiki", "research", "quick", "no-openspec", "solo"].includes(
-			values().workflowType,
-		) || Boolean(values().task?.trim());
+	/** The step a refused submit sends the cursor to: the first required field the
+	 * form is still missing, so the confirm step never becomes a dead end. */
+	const firstMissingStep = (): number => {
+		if (isRebase(values().workflowType)) {
+			if (!values().sourceBranch) return fields().indexOf("sourceBranch");
+			return fields().indexOf("targetBranch");
+		}
+		return fields().indexOf("task");
+	};
+	const canSubmit = () => {
+		if (isRebase(values().workflowType))
+			// Both refs are the whole input of a rebase, and neither has a fallback
+			// the workflow could pick on its own.
+			return Boolean(values().sourceBranch && values().targetBranch);
+		return (
+			!["wiki", "research", "quick", "no-openspec", "solo"].includes(
+				values().workflowType,
+			) || Boolean(values().task?.trim())
+		);
+	};
 	const totalSteps = () => fields().length + 1;
 	const field = () => fields()[step()];
 	const targetSummary = () =>
@@ -522,7 +661,9 @@ export function NewWorkflowModal(props: {
 		if (confirmStep()) {
 			if (name === "return" || name === "enter") {
 				if (!canSubmit()) {
-					setStep(fields().indexOf("task"));
+					// Send the cursor to the field that is actually missing: the task for
+					// the task-required types, the unset branch for a rebase.
+					setStep(Math.max(0, firstMissingStep()));
 					setCursor(undefined);
 					setFilter("");
 					setFiltering(false);

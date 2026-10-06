@@ -190,6 +190,8 @@ export function startArgs(input: {
 	mode: string;
 	workflowType?: string;
 	preset?: string;
+	sourceBranch?: string;
+	targetBranch?: string;
 }) {
 	const definitionId =
 		input.workflowType === "quick"
@@ -201,6 +203,14 @@ export function startArgs(input: {
 		"wiki",
 	].includes(definitionId);
 	const research = definitionId === "research";
+	// The rebase family runs in the repository checkout, like the sameCheckout
+	// families, but on the branch the launch selected rather than on the one that
+	// happens to be checked out — so it forces checkout mode and carries its two
+	// selected refs to the start boundary instead of setting `sameCheckout`.
+	const rebase = definitionId === "rebase";
+	// The verify-only family verifies the branch the checkout is already on, so
+	// it forces checkout mode too and carries no extra input.
+	const verify = definitionId === "verify";
 	return {
 		repo: research ? researchWorkflowTarget() : input.repo,
 		...(research && input.repo ? { repositoryContext: input.repo } : {}),
@@ -208,8 +218,18 @@ export function startArgs(input: {
 		definitionId,
 		task: input.task || undefined,
 		ticket: input.ticket || undefined,
-		...(research ? {} : { mode: sameCheckout ? "checkout" : input.mode }),
+		...(research
+			? {}
+			: {
+					mode: sameCheckout || rebase || verify ? "checkout" : input.mode,
+				}),
 		...(sameCheckout ? { sameCheckout: true } : {}),
+		...(rebase
+			? {
+					sourceBranch: input.sourceBranch,
+					targetBranch: input.targetBranch,
+				}
+			: {}),
 		...(input.preset && input.preset !== PRESET_CONFIG_DEFAULTS
 			? { preset: input.preset }
 			: {}),
@@ -260,6 +280,8 @@ export async function startWorkflowInProcess(
 		task: args.task,
 		ticket: args.ticket,
 		preset: args.preset,
+		sourceBranch: args.sourceBranch,
+		targetBranch: args.targetBranch,
 	});
 	const engine = workflowEngineFactory(dashboardApplication);
 	engine.start(prepared.input);

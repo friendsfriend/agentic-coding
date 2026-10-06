@@ -60,6 +60,12 @@ export const PUBLIC_WORKFLOW_CATALOG: readonly WorkflowCatalogEntry[] =
 				"One implementation agent, start to finish. No planning, triage, verification, wiki, or delivery.",
 		}),
 		Object.freeze({
+			id: "rebase",
+			label: "Rebase",
+			description:
+				"Rebase one selected branch onto another in your checkout and resolve the conflicts. One agent, no review, no wiki.",
+		}),
+		Object.freeze({
 			id: "openspec-fusion",
 			label: "Openspec fusion",
 			description:
@@ -80,5 +86,11 @@ export const PUBLIC_WORKFLOW_CATALOG: readonly WorkflowCatalogEntry[] =
 			id: "research",
 			label: "Research",
 			description: "Research with research, wiki, wiki review phases",
+		}),
+		Object.freeze({
+			id: "verify",
+			label: "Verify",
+			description:
+				"Verify the current branch against the base branch: triage, verifier roles, full test suite, then a findings review that hands the selected findings to a worker.",
 		}),
 	] as const);

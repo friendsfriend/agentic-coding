@@ -9,7 +9,7 @@ export function help(command?: string): void {
 	}
 	const usage: Record<string, string> = {
 		start:
-			"start --workflow-id ID [--repo PATH --mode worktree|checkout] [--workflow openspec|openspec-propose|openspec-apply|no-openspec|openspec-fusion|openspec-fusion-propose|wiki|research] [--task TEXT] [--ticket ID] [--preset NAME] (repo and mode are required except for research; classifier-routed workflows require a preset with model pools; config is repository-scoped)",
+			"start --workflow-id ID [--repo PATH --mode worktree|checkout] [--workflow openspec|openspec-propose|openspec-apply|no-openspec|solo|rebase|openspec-fusion|openspec-fusion-propose|wiki|research] [--task TEXT] [--ticket ID] [--preset NAME] [--branch BRANCH --onto REF] (repo and mode are required except for research; classifier-routed workflows require a preset with model pools; config is repository-scoped; a rebase start also needs --branch and --onto, and runs in the repository checkout)",
 
 		status: "status --repo PATH --workflow-id ID",
 		drain: "drain --repo PATH [--limit N] [--wait-ms N]",

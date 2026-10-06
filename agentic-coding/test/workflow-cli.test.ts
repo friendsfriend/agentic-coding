@@ -176,6 +176,27 @@ describe("breaking workflow CLI surface", () => {
 		await expect(
 			run(["status", "--repo", ".", "--repo", ".", "--workflow-id", "x"]),
 		).rejects.toThrow("duplicate flag --repo");
+		// The rebase family's two refs are part of the start surface: the schema
+		// accepts them, so a later rejection is about the repository or the refs
+		// themselves, never about an unknown flag.
+		const rebaseFailure = await run([
+			"start",
+			"--repo",
+			".",
+			"--workflow-id",
+			"x",
+			"--mode",
+			"checkout",
+			"--workflow",
+			"rebase",
+			"--branch",
+			"feature/topic",
+			"--onto",
+			"origin/main",
+		]).catch((error: unknown) => error);
+		expect(
+			rebaseFailure instanceof Error ? rebaseFailure.message : rebaseFailure,
+		).not.toContain("unknown flag");
 	});
 	test("detached drain argv works in source-tree and compiled runners", () => {
 		const source = cliTest.detachedDrainArgv("/abs/src/cli.ts", "/repo", "c1");

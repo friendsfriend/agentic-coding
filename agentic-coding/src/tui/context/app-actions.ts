@@ -19,6 +19,7 @@ export {
 	workflowExecutionError,
 } from "../../server/operations/engine.ts";
 export {
+	discoverBranches as discoverBranchesLocal,
 	discoverChanges as discoverChangesLocal,
 	openSpecArtifact,
 	openSpecArtifacts,

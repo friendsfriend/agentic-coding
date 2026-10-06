@@ -568,7 +568,7 @@ test("an independent Wiki context offers a target-compatible research type only"
 test("proposal choices submit their type, task, and fixed checkout mode", async () => {
 	for (const [offset, workflowType] of [
 		[2, "openspec-propose"],
-		[6, "openspec-fusion-propose"],
+		[7, "openspec-fusion-propose"],
 	] as const) {
 		let handler: ((event: KeyEvent) => boolean) | undefined;
 		const completed: NewWorkflowInput[] = [];
@@ -742,7 +742,8 @@ test("selecting openspec-fusion submits workflowType openspec-fusion", async () 
 	handler?.(key("j")); // openspec-apply -> openspec-propose
 	handler?.(key("j")); // openspec-propose -> quick
 	handler?.(key("j")); // quick -> solo
-	handler?.(key("j")); // solo -> openspec-fusion
+	handler?.(key("j")); // solo -> rebase
+	handler?.(key("j")); // rebase -> openspec-fusion
 	handler?.(key("enter")); // select openspec-fusion
 	await t.flush();
 	// openspec-fusion uses the task-driven fields: preset -> ticket -> change -> task -> mode.
@@ -812,5 +813,170 @@ test("creation indicator renders before completion and clears after it settles",
 	resolveComplete?.();
 	await t.flush();
 	expect(t.captureCharFrame()).not.toContain("Starting workspace and agents");
+	t.renderer.destroy();
+});
+
+/** Serve the branch lists the rebase type's two pickers read. */
+function useBranches(options: {
+	current: string;
+	local: string[];
+	remote: string[];
+	default: string;
+}): void {
+	configureGateway({
+		observe: async (observation: ObservationRequest) => {
+			if (observation.kind === "branches") return options;
+			throw new Error(`unexpected ${observation.kind}`);
+		},
+	} as unknown as DashboardGateway);
+}
+
+test("the rebase type selects both refs from branch lists and submits them", async () => {
+	let handler: ((event: KeyEvent) => boolean) | undefined;
+	const completed: NewWorkflowInput[] = [];
+	useBranches({
+		current: "feature/topic",
+		local: ["feature/topic", "main"],
+		remote: ["origin/develop", "origin/main"],
+		default: "origin/main",
+	});
+	const t = await testRender(
+		() => (
+			<NewWorkflowModal
+				context={PROJECT}
+				onKeyReady={(h) => {
+					handler = h;
+				}}
+				onCancel={() => {}}
+				onComplete={async (input) => {
+					completed.push(input);
+				}}
+			/>
+		),
+		{ width: 130, height: 30 },
+	);
+	await t.flush();
+	// openspec, openspec-apply, openspec-propose, quick, solo -> rebase.
+	for (let index = 0; index < 5; index++) handler?.(key("j"));
+	handler?.(key("enter"));
+	await t.flush();
+	// The type step has advanced, so the chosen type is read from the summary.
+	expect(frameLine(t.captureCharFrame(), "Workflow type")).toContain("rebase");
+	// preset -> ticket -> workflow id -> source branch.
+	handler?.(key("enter")); // preset: (config defaults)
+	t.mockInput.pressEnter(); // ticket: optional
+	for (const character of "rebase-demo") t.mockInput.pressKey(character);
+	t.mockInput.pressEnter(); // workflow id
+	await t.flush();
+	// The source picker opens on the checked-out branch, and offers only local
+	// branches: a rebase rewrites an existing local ref.
+	const sourceFrame = t.captureCharFrame();
+	expect(sourceFrame).toContain("Branch to rebase");
+	expect(sourceFrame).toContain("feature/topic");
+	expect(sourceFrame).toContain("main");
+	expect(sourceFrame).not.toContain("origin/develop");
+	handler?.(key("enter")); // source: feature/topic (the checked-out branch)
+	await t.flush();
+	// The target picker opens on the default branch and also offers remote refs.
+	const targetFrame = t.captureCharFrame();
+	expect(targetFrame).toContain("Branch to rebase onto");
+	expect(targetFrame).toContain("origin/develop");
+	expect(targetFrame).toContain("origin/main");
+	handler?.(key("enter")); // target: origin/main (preselected default)
+	await t.flush();
+	expect(t.captureCharFrame()).toContain("Confirm workflow");
+	handler?.(key("enter"));
+	await t.flush();
+	expect(completed).toHaveLength(1);
+	expect(completed[0]).toMatchObject({
+		workflowType: "rebase",
+		mode: "checkout",
+		repo: PROJECT.repository,
+		sourceBranch: "feature/topic",
+		targetBranch: "origin/main",
+	});
+	expect(completed[0]?.task).toBeUndefined();
+	t.renderer.destroy();
+});
+
+test("a rebase whose branch read fails reports it instead of offering an empty list", async () => {
+	let handler: ((event: KeyEvent) => boolean) | undefined;
+	configureGateway({
+		observe: async (observation: ObservationRequest) => {
+			if (observation.kind === "branches")
+				throw new Error("not a Git repository");
+			throw new Error(`unexpected ${observation.kind}`);
+		},
+	} as unknown as DashboardGateway);
+	const t = await testRender(
+		() => (
+			<NewWorkflowModal
+				context={PROJECT}
+				onKeyReady={(h) => {
+					handler = h;
+				}}
+				onCancel={() => {}}
+				onComplete={async () => {}}
+			/>
+		),
+		{ width: 130, height: 30 },
+	);
+	await t.flush();
+	for (let index = 0; index < 5; index++) handler?.(key("j"));
+	handler?.(key("enter"));
+	await t.flush();
+	handler?.(key("enter")); // preset
+	t.mockInput.pressEnter(); // ticket
+	for (const character of "rebase-demo") t.mockInput.pressKey(character);
+	t.mockInput.pressEnter(); // workflow id
+	await t.flush();
+	expect(contentText(t.captureCharFrame())).toContain(
+		"Branches could not be read: not a Git repository",
+	);
+	expect(t.captureCharFrame()).toContain("No items");
+	t.renderer.destroy();
+});
+
+test("the verify type asks for no task and no checkout mode", async () => {
+	let handler: ((event: KeyEvent) => boolean) | undefined;
+	const completed: NewWorkflowInput[] = [];
+	const t = await testRender(
+		() => (
+			<NewWorkflowModal
+				context={PROJECT}
+				onKeyReady={(h) => {
+					handler = h;
+				}}
+				onCancel={() => {}}
+				onComplete={async (input) => {
+					completed.push(input);
+				}}
+			/>
+		),
+		{ width: 130, height: 30 },
+	);
+	await t.flush();
+	// The catalog's last entry: openspec..research, then verify.
+	for (let index = 0; index < 10; index++) handler?.(key("j"));
+	handler?.(key("enter"));
+	await t.flush();
+	// preset -> ticket -> workflow id -> confirm: no task and no mode step.
+	handler?.(key("enter")); // preset: (config defaults)
+	t.mockInput.pressEnter(); // ticket: optional
+	for (const character of "verify-demo") t.mockInput.pressKey(character);
+	t.mockInput.pressEnter(); // workflow id
+	await t.flush();
+	expect(t.captureCharFrame()).toContain("Confirm workflow");
+	handler?.(key("enter"));
+	await t.flush();
+	expect(completed).toHaveLength(1);
+	expect(completed[0]).toMatchObject({
+		workflowType: "verify",
+		// The type owns its checkout behavior: the engine verifies the branch
+		// that is already checked out.
+		mode: "checkout",
+		repo: PROJECT.repository,
+	});
+	expect(completed[0]?.task).toBeUndefined();
 	t.renderer.destroy();
 });

@@ -331,6 +331,20 @@ export function requiredUserActionFor(
 			items: [],
 		};
 	}
+	// The verify-only family's findings review is the same popup and the same
+	// dispatch as the developer review, over the round's findings (critical ones
+	// included): one `developer-review` key, so the direct-open matching and the
+	// review surface's own phase check keep working unchanged.
+	if (phase === "core.findings-review") {
+		if (!hasAction("approve-review")) return undefined;
+		return {
+			key: "developer-review",
+			title: "Action required · Findings review",
+			prompt:
+				"Review the verification findings and select the ones a worker should fix.",
+			items: [],
+		};
+	}
 	if (phase === "developer-review" || phase === "core.developer-review") {
 		if (!hasAction("approve-review")) return undefined;
 		return {

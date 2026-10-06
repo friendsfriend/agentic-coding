@@ -3,6 +3,7 @@ import { gateBehaviors } from "./gates.ts";
 import { implementationBehavior } from "./implementation.ts";
 import { lifecycleBehaviors } from "./lifecycle.ts";
 import { planningBehaviors } from "./planning.ts";
+import { rebaseBehavior } from "./rebase.ts";
 import { researchBehavior } from "./research.ts";
 import { routingBehaviors } from "./routing.ts";
 import type { StepBehavior } from "./types.ts";
@@ -15,6 +16,7 @@ export const STEP_BEHAVIORS: Readonly<Record<string, StepBehavior>> =
 		...routingBehaviors,
 		...gateBehaviors,
 		"core.implementation": implementationBehavior,
+		"core.rebase": rebaseBehavior,
 		...verificationBehaviors,
 		"core.wiki": wikiBehavior,
 		"core.research": researchBehavior,

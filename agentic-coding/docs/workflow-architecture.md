@@ -520,9 +520,15 @@ already set:
   `rounds + 600` — adds `core.plan-gate`, `core.review-gate`, and
   `core.wiki-gate`, gives `core.triage-route` its `skip-verification` outcome
   (as step version 2, with version 1 still registered for the tier above), and
-  registers the standalone `wiki` family unchanged. This is the version
-  `startWorkflowInProcess` / `cli.ts`'s `start` command actually use for new
-  non-research workflows.
+  registers the standalone `wiki` family unchanged.
+- **Step-routing tier:** `definitionVersionForStepRouting(rounds)` =
+  `rounds + 700` — one routing step immediately before every classifiable
+  agent step. This is the version `startWorkflowInProcess` / `cli.ts`'s
+  `start` command actually use for new non-research workflows, so a family
+  added later (like `rebase`) is registered here first and in every tier
+  below only so a pinned lookup of an older version still resolves it — a
+  family's own digest covers only its own manifest, so appending one never
+  changes another definition's pin.
 
 All tiers stay registered; nothing is removed. `start()` reads policy
 through `effectiveManifestPolicy(definition)`, which falls back to the same
@@ -532,6 +538,82 @@ This is why a workflow pinned to a pre-manifest-policy version still starts
 and dispatches without repair: `policy` is read only inside `start()` — no
 other engine function references it — so it cannot affect an already-running
 workflow's `transition`/`dispatch`/`validateStepEvidence`/`actions` path.
+
+## The rebase family
+
+`rebase` is the one family whose launch selects a branch instead of inheriting
+one: `core.rebase` runs one agent (role `worker`, capabilities `shell` and
+`edit`) that rebases `metadata.branch` onto `metadata.baseBranch` in the
+repository checkout and resolves the conflicts. It has no planning, triage,
+verification, developer review, wiki, archive, or delivery step — completion
+offers `close` only.
+
+- The launch surface (`NewWorkflowModal`'s two branch pickers, or
+  `start --branch BRANCH --onto REF`) sends the two refs on
+  `WorkflowStartRequest.sourceBranch` / `targetBranch`; `startup.ts` maps them
+  onto `metadata.branch` / `metadata.baseBranch`, forces checkout mode, and
+  runs one best-effort `git fetch --prune` on the configured remote before the
+  branch rules are enforced.
+- `validateStart` (startup) and `validateStartEvidence` (the engine's own
+  start guard) both require the source to be an existing local branch and the
+  target ref to resolve, and refuse the two being the same ref. They mirror the
+  clean-tree rule the same two boundaries already duplicate.
+- The manifest policy keeps `checkoutRequired: false`: the family uses the
+  repository checkout, but the selected source branch is *not* necessarily the
+  checked-out one, so `start()` must not demand `metadata.branch === current
+  branch`. `workspace.setup`'s observation therefore reports the checkout as
+  set up only when it is already on the selected branch, and its execution
+  switches it otherwise; a checkout run owns no worktree, so
+  `workspace.cleanup` stays a no-op. `prepareRebaseCheckout` (effect-runner)
+  verifies the source branch and target ref once more and fetches the target
+  remote, so an unresolvable target parks the run in `attention-required`
+  without ever launching an agent.
+- The two pickers read the `branches` observation (`discoverBranches`): local
+  refs for the source, local plus remote-tracking refs for the target, with the
+  repository's default branch preselected.
+
+## The verify family
+
+`verify` is verification entered without a planning or implementation phase: it
+verifies the branch the checkout is already on against the configured base
+branch, then hands the round's findings to a developer review that selects what
+a worker fixes. It has no plan, plan approval, review gate, wiki, archive, or
+delivery step — completion offers `close` only.
+
+- The change set is the whole branch, not just the uncommitted work: `startup.ts`
+  fetches the configured remote once and sets `metadata.baseCommit` to
+  `git merge-base <workflow.base_branch> HEAD`. `changedFilesIn` (the
+  `git status` ∪ `baseCommit..HEAD` manifest) and every per-file diff
+  (`collectTriageClassifierState`, `loadLocalChanges`, `loadLocalDiff`) measure
+  against that one commit, so committed branch work and uncommitted work are
+  both in scope and a file the branch never touched is not. A base ref that does
+  not resolve, or shares no ancestor with HEAD, fails the start with the ref
+  named.
+- The manifest policy is `checkoutRequired: true`, which is exactly the contract
+  the family needs: the repository checkout, mode `checkout`, and
+  `metadata.branch` equal to the current branch (never a switch). That flag also
+  makes `start()` pass `proposal` to `validateStartEvidence`, so the clean-tree
+  rule is deliberately off — verifying a dirty checkout is the point. The
+  startup boundary mirrors both decisions (`validateStart`'s verify branch,
+  `validateVerifyBase`).
+- The graph is `core.triage-route → core.triage → core.verification →
+  core.findings-review`, and both verification verdicts land on the review: a
+  failing round has the critical findings that must be selected explicitly, and
+  a passing round still has advisory ones. `core.findings-review` declares the
+  same `approve-review` / `review-comments` actions and input schema as
+  `core.developer-review`, so the dashboard renders and dispatches it through the
+  same popup (`requiredUserActionFor` gives it the same `developer-review` key);
+  the difference is that `loadDeveloperReviewFindings` includes critical findings
+  while this step is current, and that `comments` enters the standard worker loop
+  (`core.implementation` in `review-fix` mode, whose completion re-enters the
+  round at `core.triage-route`). Both the verification `fix` edge and the
+  worker's `complete` edge carry the loop budget, so the fix cycle is bounded and
+  the `limit` verdict parks the workflow in `attention-required`.
+- `core.implementation`'s arrival mode reads the carried payload, not only the
+  edge outcome: the per-step routing pass hands a review's comments on as its own
+  transition output with outcome `complete`, so an outcome-only check ran every
+  review fix in `apply` mode. The `comments` payload now decides, which also
+  fixes the same path for the shared families on the routing tier.
 
 ## Remaining step-identity matches outside `src/workflow/steps/`
 

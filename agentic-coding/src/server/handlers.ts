@@ -139,6 +139,8 @@ export function startWorkflow(request: StartRequest): Promise<string> {
 		mode: request.mode,
 		workflowType: request.workflowType,
 		preset: request.preset,
+		sourceBranch: request.sourceBranch,
+		targetBranch: request.targetBranch,
 	});
 }
 

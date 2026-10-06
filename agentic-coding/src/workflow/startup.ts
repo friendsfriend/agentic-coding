@@ -62,6 +62,10 @@ export interface WorkflowStartRequest {
 	mode?: "worktree" | "checkout";
 	preset?: string;
 	context?: Record<string, unknown>;
+	/** The rebase family's selected branch: the branch that gets rebased. */
+	sourceBranch?: string;
+	/** The rebase family's selected target: the ref the branch is rebased onto. */
+	targetBranch?: string;
 }
 
 export interface PreparedWorkflowStart {
@@ -76,6 +80,11 @@ export function validateStart(
 	workflowId: string,
 	workflow: string,
 	task?: string,
+	branches: {
+		sourceBranch?: string;
+		targetBranch?: string;
+		baseBranch?: string;
+	} = {},
 ): void {
 	if (workflow === "research") {
 		if (!task?.trim())
@@ -92,6 +101,13 @@ export function validateStart(
 		if (!task?.trim()) throw new Error("wiki workflow requires non-empty task");
 		return;
 	}
+	// A verify-only run inspects the current state of the checkout, so it needs
+	// no task, no OpenSpec project, and no clean worktree — but the branch it
+	// verifies must have a base to compare against.
+	if (workflow === "verify") {
+		validateVerifyBase(repo, branches.baseBranch);
+		return;
+	}
 	const dirty = runGit(repo, "status", "--porcelain");
 	const proposal = ["openspec-propose", "openspec-fusion-propose"].includes(
 		workflow,
@@ -101,6 +117,13 @@ export function validateStart(
 	if (workflow === "no-openspec" || workflow === "solo") {
 		if (!task?.trim())
 			throw new Error(`${workflow} workflow requires non-empty task`);
+		return;
+	}
+	// A rebase replaces its branch in place, so both selected refs must already
+	// exist and must differ: a missing target would rebase onto nothing, and a
+	// branch rebased onto itself is a no-op the launch cannot have meant.
+	if (workflow === "rebase") {
+		validateRebaseBranches(repo, branches);
 		return;
 	}
 	if (!fs.existsSync(path.join(repo, "openspec", "config.yaml")))
@@ -128,6 +151,64 @@ export function validateStart(
 			throw new Error(
 				`OpenSpec validation failed: ${(result.stderr.toString() || result.stdout.toString()).trim()}`,
 			);
+	}
+}
+
+/** The verify-only family's start rules: the checkout must be on a named
+ * branch, and the configured base branch must resolve and share history with
+ * it — the merge base is what the branch's own change set is measured from, so
+ * a base with no common ancestor has nothing to verify against. */
+function validateVerifyBase(repo: string, baseBranch?: string): void {
+	const base = baseBranch?.trim();
+	if (!base)
+		throw new Error(
+			"verify workflow requires a base branch; set workflow.base_branch",
+		);
+	if (!runGit(repo, "branch", "--show-current"))
+		throw new Error("verify workflow requires a named current branch");
+	try {
+		runGit(repo, "rev-parse", "--verify", `${base}^{commit}`);
+	} catch {
+		throw new Error(
+			`verify base branch does not resolve: ${base} (fetch the remote or set workflow.base_branch)`,
+		);
+	}
+	try {
+		runGit(repo, "merge-base", base, "HEAD");
+	} catch {
+		throw new Error(
+			`verify base branch has no common ancestor with HEAD: ${base}`,
+		);
+	}
+}
+
+/** The start guard's rebase branch rules: the source branch must be a local
+ * branch, the target ref must resolve (a `git fetch` has already been
+ * attempted, so a remote-tracking ref is current when the network allowed it),
+ * and the two must not be the same ref. The engine's own `start-guard` evidence
+ * check enforces the same three rules directly, the way the two boundaries
+ * already duplicate the clean-tree rule. */
+function validateRebaseBranches(
+	repo: string,
+	branches: { sourceBranch?: string; targetBranch?: string },
+): void {
+	const source = branches.sourceBranch?.trim();
+	const target = branches.targetBranch?.trim();
+	if (!source || !target)
+		throw new Error(
+			"rebase workflow requires a source branch and a target branch",
+		);
+	if (source === target)
+		throw new Error(`rebase source and target are the same ref: ${source}`);
+	try {
+		runGit(repo, "rev-parse", "--verify", `refs/heads/${source}`);
+	} catch {
+		throw new Error(`rebase source branch does not exist: ${source}`);
+	}
+	try {
+		runGit(repo, "rev-parse", "--verify", `${target}^{commit}`);
+	} catch {
+		throw new Error(`rebase target branch does not resolve: ${target}`);
 	}
 }
 
@@ -347,35 +428,87 @@ function prepareFromContext(
 	const wikiOnly =
 		request.definitionId === "wiki-comments" ||
 		ctx.target === wikiWorkflowTarget();
+	const rebase = request.definitionId === "rebase";
+	const rebaseSource = rebase ? request.sourceBranch?.trim() : undefined;
+	const rebaseTarget = rebase ? request.targetBranch?.trim() : undefined;
+	// The verify-only family measures the current branch against the configured
+	// base branch. It runs in the checkout the branch is already on and never
+	// switches it, so it shares the checkout contract with `wiki`.
+	const verify = request.definitionId === "verify";
+	const verifyBase = verify ? config.workflow.base_branch : undefined;
+	if (rebase || verify) {
+		// Refresh the target remote once, before the branch rules are enforced, so
+		// a remote-tracking target resolves from the current remote state. A
+		// repository without the configured remote, or an offline machine whose
+		// refs are already local, still starts: the agent reports what the ref
+		// actually is if it is missing.
+		try {
+			runGit(ctx.repo, "fetch", "--prune", "--", config.workflow.remote);
+		} catch {
+			/* no remote, or unreachable: the local refs decide */
+		}
+	}
 	if (!wikiOnly)
-		validateStart(ctx.repo, ctx.workflowId, request.definitionId, request.task);
+		validateStart(
+			ctx.repo,
+			ctx.workflowId,
+			request.definitionId,
+			request.task,
+			{
+				sourceBranch: rebaseSource,
+				targetBranch: rebaseTarget,
+				baseBranch: verifyBase,
+			},
+		);
 	const sameCheckout = [
 		"openspec-propose",
 		"openspec-fusion-propose",
 		"wiki",
 	].includes(request.definitionId);
 	const research = request.definitionId === "research";
-	if (!research && !wikiOnly && sameCheckout && request.mode !== "checkout")
+	// A rebase owns the repository checkout exactly like the sameCheckout
+	// families, but it selects its own branch instead of inheriting the one that
+	// happens to be checked out — so it requires checkout mode and nothing else.
+	if (
+		!research &&
+		!wikiOnly &&
+		(sameCheckout || rebase || verify) &&
+		request.mode !== "checkout"
+	)
 		throw new Error("repository-backed workflows require checkout mode");
 	const baseCommit =
 		research || wikiOnly
 			? ""
 			: sameCheckout
 				? runGit(ctx.repo, "rev-parse", "HEAD")
-				: runGit(
-						ctx.repo,
-						"rev-parse",
-						`${config.workflow.base_branch}^{commit}`,
-					);
-	if (!research && !wikiOnly && !sameCheckout)
+				: verify
+					? // The branch's own change set: everything reachable from HEAD but
+						// not from the base branch. `baseCommit..HEAD` in the changed-file
+						// manifest and in every per-file diff is then exactly the branch,
+						// committed work included.
+						runGit(ctx.repo, "merge-base", verifyBase ?? "", "HEAD")
+					: rebase
+						? runGit(ctx.repo, "rev-parse", `${rebaseTarget}^{commit}`)
+						: runGit(
+								ctx.repo,
+								"rev-parse",
+								`${config.workflow.base_branch}^{commit}`,
+							);
+	// A verify-only run may legitimately have no remote at all when its base
+	// branch is local, so the remote is not required for it.
+	if (!research && !wikiOnly && !sameCheckout && !rebase && !verify)
 		runGit(ctx.repo, "remote", "get-url", config.workflow.remote);
 	const branch =
 		research || wikiOnly
 			? ""
-			: sameCheckout
+			: verify
 				? runGit(ctx.repo, "branch", "--show-current")
-				: `${config.workflow.branch_prefix}${ctx.workflowId}`;
-	if (!research && !wikiOnly && sameCheckout && !branch)
+				: rebase
+					? (rebaseSource ?? "")
+					: sameCheckout
+						? runGit(ctx.repo, "branch", "--show-current")
+						: `${config.workflow.branch_prefix}${ctx.workflowId}`;
+	if (!research && !wikiOnly && (sameCheckout || verify) && !branch)
 		throw new Error(
 			"repository-backed workflows require a named current branch",
 		);
@@ -396,7 +529,10 @@ function prepareFromContext(
 				: {}),
 			metadata: {
 				branch,
-				baseBranch: research || wikiOnly ? "" : config.workflow.base_branch,
+				baseBranch:
+					research || wikiOnly
+						? ""
+						: (rebaseTarget ?? config.workflow.base_branch),
 				baseCommit,
 				...(request.task?.trim() ? { task: request.task.trim() } : {}),
 				...(request.ticket ? { ticket: request.ticket } : {}),

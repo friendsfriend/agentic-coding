@@ -34,6 +34,10 @@ export const workflowStartRequestSchema = Schema.Struct({
 	mode: Schema.String,
 	workflowType: Schema.optional(Schema.String),
 	preset: Schema.optional(Schema.String),
+	/** Only the rebase type reads these: the branch that gets rebased and the
+	 * ref it is rebased onto, both chosen from a branch list rather than typed. */
+	sourceBranch: Schema.optional(Schema.String),
+	targetBranch: Schema.optional(Schema.String),
 });
 
 export const workflowRepairRequestSchema = Schema.Struct({
