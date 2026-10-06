@@ -8,6 +8,7 @@
 // explanation from the inventory instead of pretending to accept an edit.
 
 import type { ClassifierStatusResponse } from "../../contracts/gateway.ts";
+import { DEFAULT_ORCHESTRATOR_MONITOR } from "../../workflow/profiles.ts";
 import {
 	type Route,
 	type SettingsSection,
@@ -62,8 +63,9 @@ export interface AgentStatus {
 	profiles: Array<{ name: string; value: string }>;
 	presets: Array<{ name: string; value: string }>;
 	routing: AgentRoutingEntry[];
-	/** The Orchestrator session's configured model and thinking level. */
-	orchestrator?: { model?: string; thinking?: string };
+	/** The Orchestrator session's configured model, thinking level and workflow
+	 * monitor mode. */
+	orchestrator?: { model?: string; thinking?: string; monitor?: string };
 }
 
 export interface ProviderSnapshot {
@@ -266,8 +268,8 @@ function agentItems(context: SettingsContext): SettingsItem[] {
 	});
 	items.push({
 		id: "agents.orchestrator",
-		label: "Orchestrator model",
-		value: orchestratorModelLabel(agents.orchestrator),
+		label: "Orchestrator session",
+		value: orchestratorLabel(agents.orchestrator),
 		detail: `${detailFor("user", "[agents.orchestrator]", "next-session")} · edit in Agent Presets`,
 		editable: true,
 		action: { kind: "none" },
@@ -284,11 +286,14 @@ function agentItems(context: SettingsContext): SettingsItem[] {
 	return items;
 }
 
-/** The one-line orchestrator model: `model · thinking`, host defaults named. */
-export function orchestratorModelLabel(
-	orchestrator: { model?: string; thinking?: string } | undefined,
+/** The one-line orchestrator session setting: `model · thinking · monitor`,
+ * host defaults and the default `wake` mode named. */
+export function orchestratorLabel(
+	orchestrator:
+		| { model?: string; thinking?: string; monitor?: string }
+		| undefined,
 ): string {
-	return `${orchestrator?.model ?? "host default model"} · ${orchestrator?.thinking ?? "default thinking"}`;
+	return `${orchestrator?.model ?? "host default model"} · ${orchestrator?.thinking ?? "default thinking"} · monitor ${orchestrator?.monitor ?? DEFAULT_ORCHESTRATOR_MONITOR}`;
 }
 
 /** The one-line classifier selection: the label of the selected provider, or

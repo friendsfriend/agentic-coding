@@ -114,11 +114,11 @@ export const SETTINGS_INVENTORY: readonly SettingsInventoryEntry[] = [
 	{
 		id: "agents.orchestrator",
 		section: "agents",
-		label: "Orchestrator model",
+		label: "Orchestrator session",
 		owner: "src/server/config.ts",
 		scope: "user",
 		storage:
-			"[agents.orchestrator] model, thinking in the layered workflow config",
+			"[agents.orchestrator] model, thinking and monitor in the layered workflow config",
 		secret: false,
 		effect: "next-session",
 		editable: true,

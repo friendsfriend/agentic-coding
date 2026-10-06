@@ -91,6 +91,7 @@ import {
 } from "../../dash/theme-settings.ts";
 import { isKeyTraceSuppressed, traceTui } from "../../dash/tracing.ts";
 import { NewWorkflowModal } from "../../dash/ui/NewWorkflowModal.tsx";
+import { gatewayReady } from "../../data/index.ts";
 import type { WikiReviewComment } from "../../data/wiki.ts";
 import { deleteWorkflow, loadOverviews } from "../../data/workflow.ts";
 import {
@@ -98,6 +99,7 @@ import {
 	quitConfirmation,
 	resolveQuitConfirmation,
 } from "../../lifecycle.ts";
+import { startWorkflowMonitor } from "../../orchestrator/monitor.ts";
 import { OrchestratorView } from "../../orchestrator/OrchestratorView.tsx";
 import { AgentPresetsView } from "../../settings/AgentPresetsView.tsx";
 import {
@@ -603,6 +605,18 @@ export function App(props: {
 			disposed = true;
 			clearInterval(timer);
 		});
+	});
+	// The workflow monitor runs with the shell, not with a page: it observes the
+	// workflows the orchestrator started, notifies the developer about reviews
+	// and questions that are waiting on them, and (in the default `wake` mode)
+	// wakes the active orchestrator session with one coalesced note. It needs the
+	// gateway, so the effect re-runs when the composition root installs it after
+	// first paint; only the full application has an orchestrator.
+	createEffect(() => {
+		if (props.dashboard?.mode !== "home") return;
+		if (!gatewayReady()) return;
+		const monitor = startWorkflowMonitor();
+		onCleanup(() => monitor.stop());
 	});
 	// Panel focus drives two keymap fields: `app.view` parks the dashboard's own
 	// layers when the sidebar holds focus, and `shell.panel` activates the

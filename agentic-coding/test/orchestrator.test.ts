@@ -21,6 +21,8 @@ import {
 } from "../src/server/orchestrator-policy.ts";
 import { orchestratorHostEnv } from "../src/tui/orchestrator/session.ts";
 import {
+	DEFAULT_ORCHESTRATOR_MONITOR,
+	orchestratorMonitorMode,
 	parseAgentsConfig,
 	withHumanReviewGates,
 } from "../src/workflow/profiles.ts";
@@ -306,6 +308,28 @@ describe("orchestrator configuration", () => {
 		expect(() => parseAgentsConfig({ orchestrator: { model: "" } })).toThrow(
 			"non-empty string",
 		);
+	});
+
+	test("[agents.orchestrator] monitor parses the three modes and defaults to wake", () => {
+		expect(
+			parseAgentsConfig({ orchestrator: { monitor: "notify" } }).orchestrator,
+		).toEqual({ monitor: "notify" });
+		for (const mode of ["wake", "notify", "off"] as const)
+			expect(
+				parseAgentsConfig({ orchestrator: { monitor: mode } }).orchestrator
+					?.monitor,
+			).toBe(mode);
+		expect(() =>
+			parseAgentsConfig({ orchestrator: { monitor: "loud" } }),
+		).toThrow("must be one of wake, notify, off");
+		// Absent — the whole table or just the key — means the default `wake`.
+		expect(orchestratorMonitorMode(undefined)).toBe("wake");
+		expect(
+			orchestratorMonitorMode(parseAgentsConfig({ orchestrator: {} })),
+		).toBe("wake");
+		expect(
+			orchestratorMonitorMode(parseAgentsConfig({ orchestrator: {} })),
+		).toBe(DEFAULT_ORCHESTRATOR_MONITOR);
 	});
 
 	test("human review gates are forced to always", () => {

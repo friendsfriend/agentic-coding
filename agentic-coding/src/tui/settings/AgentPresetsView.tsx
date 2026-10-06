@@ -42,6 +42,10 @@ import {
 	LAYA_LOCAL_PROVIDER,
 } from "../../workflow/classifier-providers.ts";
 import {
+	DEFAULT_ORCHESTRATOR_MONITOR,
+	ORCHESTRATOR_MONITOR_MODES,
+} from "../../workflow/profiles.ts";
+import {
 	agentConfigEntry,
 	refreshAgentConfig,
 	reloadAgentConfigLocal,
@@ -84,7 +88,7 @@ import {
 	profileReferences,
 	validateDraft,
 } from "./agentPresets.ts";
-import { orchestratorModelLabel, type SettingsItem } from "./items.ts";
+import { orchestratorLabel, type SettingsItem } from "./items.ts";
 
 /** Keys the surface owns while it is mounted. */
 const SURFACE_KEYS = [
@@ -239,12 +243,15 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 	// still close it.
 	const [cancelFailed, setCancelFailed] = createSignal(false);
 	let installPoll: ReturnType<typeof setInterval> | undefined;
-	// Orchestrator model picker: choose a model, then a thinking level, then save.
+	// Orchestrator session picker: choose a model, a thinking level and the
+	// workflow monitor mode, then save all three.
 	const [orchestratorStage, setOrchestratorStage] = createSignal<
-		"model" | "thinking"
+		"model" | "thinking" | "monitor"
 	>("model");
 	const [orchestratorIndex, setOrchestratorIndex] = createSignal(0);
 	const [orchestratorModel, setOrchestratorModel] = createSignal<string>();
+	const [orchestratorThinking, setOrchestratorThinking] =
+		createSignal<string>();
 
 	const stopInstallPolling = () => {
 		if (installPoll === undefined) return;
@@ -452,7 +459,7 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 			options.push({
 				id: "agents.orchestrator",
 				label: orchestrator.label,
-				detail: `${orchestratorModelLabel(agents()?.orchestrator)} · ${orchestrator.detail}`,
+				detail: `${orchestratorLabel(agents()?.orchestrator)} · ${orchestrator.detail}`,
 				view: "orchestrator",
 			});
 		const info: MenuEntry[] = (props.items ?? [])
@@ -827,18 +834,22 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 		onDone();
 	};
 
-	// -- orchestrator model picker ---------------------------------------------
+	// -- orchestrator session picker -------------------------------------------
 
 	/** The rows of the current orchestrator picker stage. */
-	const orchestratorOptions = (): string[] =>
-		orchestratorStage() === "model"
-			? [HOST_DEFAULT, ...(durableModels() ?? [])]
-			: [HOST_DEFAULT, ...ORCHESTRATOR_THINKING_LEVELS];
+	const orchestratorOptions = (): string[] => {
+		if (orchestratorStage() === "model")
+			return [HOST_DEFAULT, ...(durableModels() ?? [])];
+		if (orchestratorStage() === "thinking")
+			return [HOST_DEFAULT, ...ORCHESTRATOR_THINKING_LEVELS];
+		return [...ORCHESTRATOR_MONITOR_MODES];
+	};
 	const openOrchestratorPicker = () => {
 		loadDurableModelsOnce();
 		const current = agents()?.orchestrator?.model;
 		setOrchestratorStage("model");
 		setOrchestratorModel(undefined);
+		setOrchestratorThinking(undefined);
 		setOrchestratorIndex(
 			Math.max(0, current ? orchestratorOptions().indexOf(current) : 0),
 		);
@@ -857,29 +868,35 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 			);
 			return;
 		}
-		if (refuseOnConflict()) return;
-		const model = orchestratorModel();
-		try {
-			commitAgents(
-				{
-					kind: "set-orchestrator",
-					orchestrator: {
-						...(model ? { model } : {}),
-						...(value ? { thinking: value } : {}),
-					},
-				},
-				() => {
-					reload();
-					notify(
-						`Orchestrator model set to ${orchestratorModelLabel({
-							...(model ? { model } : {}),
-							...(value ? { thinking: value } : {}),
-						})}`,
-						"success",
-					);
-					setView("menu");
-				},
+		if (orchestratorStage() === "thinking") {
+			setOrchestratorThinking(value);
+			setOrchestratorStage("monitor");
+			const monitor = agents()?.orchestrator?.monitor;
+			setOrchestratorIndex(
+				Math.max(0, monitor ? orchestratorOptions().indexOf(monitor) : 0),
 			);
+			return;
+		}
+		if (refuseOnConflict()) return;
+		// The default mode is `wake`, so selecting the default row leaves the key
+		// out of the configuration instead of pinning a value that says nothing.
+		const monitor = value === DEFAULT_ORCHESTRATOR_MONITOR ? undefined : value;
+		const model = orchestratorModel();
+		const thinking = orchestratorThinking();
+		const next = {
+			...(model ? { model } : {}),
+			...(thinking ? { thinking } : {}),
+			...(monitor ? { monitor } : {}),
+		};
+		try {
+			commitAgents({ kind: "set-orchestrator", orchestrator: next }, () => {
+				reload();
+				notify(
+					`Orchestrator session set to ${orchestratorLabel(next)}`,
+					"success",
+				);
+				setView("menu");
+			});
 		} catch (error) {
 			notify(error instanceof Error ? error.message : String(error), "error");
 		}
@@ -1669,7 +1686,9 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 								? durableModels() === undefined
 									? "Orchestrator model · reading configured providers…"
 									: "Orchestrator model"
-								: `Thinking level for ${orchestratorModel() ?? "the host default model"}`}
+								: orchestratorStage() === "thinking"
+									? `Thinking level for ${orchestratorModel() ?? "the host default model"}`
+									: "Workflow monitor: wake the session, notify only, or observe nothing"}
 						</text>
 					</box>
 					<ScrollableList
@@ -1679,12 +1698,20 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 						estimatedItemHeight={1}
 						showScrollIndicator={false}
 						renderItem={(option, selected) => {
-							const current = () =>
-								orchestratorStage() === "model"
-									? agents()?.orchestrator?.model
-									: agents()?.orchestrator?.thinking;
-							const active = () =>
-								(current() ?? HOST_DEFAULT) === option ? "(active) " : "";
+							const current = () => {
+								const configured = agents()?.orchestrator;
+								if (orchestratorStage() === "model") return configured?.model;
+								if (orchestratorStage() === "thinking")
+									return configured?.thinking;
+								return configured?.monitor;
+							};
+							const active = () => {
+								const fallback =
+									orchestratorStage() === "monitor"
+										? DEFAULT_ORCHESTRATOR_MONITOR
+										: HOST_DEFAULT;
+								return (current() ?? fallback) === option ? "(active) " : "";
+							};
 							return (
 								<box style={{ height: 1, paddingLeft: 1 }}>
 									<text
@@ -1926,12 +1953,12 @@ export function catalogFor(
 	if (view === "orchestrator")
 		return [
 			{
-				title: "Orchestrator model",
+				title: "Orchestrator session",
 				keybinds: [
 					{ key: "j/k or ↑/↓", action: "select", standard: true },
 					{
 						key: "Enter",
-						action: "choose model, then thinking level (saves)",
+						action: "choose model, thinking level and monitor mode (saves)",
 						short: "select",
 					},
 					{ key: "Esc", action: "back", short: "back", standard: true },

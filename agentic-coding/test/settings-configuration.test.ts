@@ -335,6 +335,53 @@ describe("subsequent starts versus a running workflow's resolved routing", () =>
 	});
 });
 
+describe("orchestrator monitor configuration", () => {
+	test("the picker's write stores the mode, refuses an unknown one, and drops the default", () => {
+		withConfig(BASE_CONFIG, () => {
+			applyAgentsMutation(
+				{
+					kind: "set-orchestrator",
+					orchestrator: {
+						model: "vendor/m",
+						thinking: "high",
+						monitor: "notify",
+					},
+				},
+				undefined,
+				loadAgentConfig().revision,
+			);
+			expect(loadAgentConfig().agents.orchestrator).toEqual({
+				model: "vendor/m",
+				thinking: "high",
+				monitor: "notify",
+			});
+			// A mode the parser would refuse never reaches the file.
+			expect(() =>
+				applyAgentsMutation(
+					{
+						kind: "set-orchestrator",
+						orchestrator: { monitor: "loud" },
+					},
+					undefined,
+					loadAgentConfig().revision,
+				),
+			).toThrow(/monitor must be one of wake, notify, off/);
+			expect(loadAgentConfig().agents.orchestrator?.monitor).toBe("notify");
+			// Selecting the default row removes the key: an absent mode is `wake`.
+			applyAgentsMutation(
+				{
+					kind: "set-orchestrator",
+					orchestrator: { model: "vendor/m", thinking: "high" },
+				},
+				undefined,
+				loadAgentConfig().revision,
+			);
+			expect(loadAgentConfig().agents.orchestrator?.monitor).toBeUndefined();
+			expect(loadAgentConfig().agents.orchestrator?.model).toBe("vendor/m");
+		});
+	});
+});
+
 describe("remote settings reads fail without a local fallback", () => {
 	test("an unavailable server is an error, not local configuration", async () => {
 		await expect(readProviderStatus("http://127.0.0.1:1")).rejects.toThrow();
@@ -390,6 +437,38 @@ describe("section items surface every inventoried setting", () => {
 				expect(matches.length).toBeGreaterThan(0);
 			}
 		}
+	});
+
+	test("the orchestrator row carries the monitor mode the config stores", () => {
+		const entry = inventoryBySection("agents").find(
+			(candidate) => candidate.id === "agents.orchestrator",
+		);
+		expect(entry?.storage).toContain("monitor");
+		const base = context("agents");
+		const items = settingsItems({
+			...base,
+			agents: {
+				...base.agents,
+				orchestrator: {
+					model: "vendor/m",
+					thinking: "high",
+					monitor: "notify",
+				},
+			},
+		});
+		const item = items.find(
+			(candidate) => candidate.id === "agents.orchestrator",
+		);
+		expect(item?.label).toBe("Orchestrator session");
+		expect(item?.value).toBe("vendor/m · high · monitor notify");
+		// An absent mode reads as the default, never as an empty value.
+		const unset = settingsItems({
+			...base,
+			agents: { ...base.agents, orchestrator: undefined },
+		});
+		expect(
+			unset.find((candidate) => candidate.id === "agents.orchestrator")?.value,
+		).toContain("monitor wake");
 	});
 
 	test("every rendered item belongs to an inventoried setting", () => {

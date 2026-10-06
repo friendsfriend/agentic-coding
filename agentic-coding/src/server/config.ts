@@ -17,6 +17,8 @@ import {
 } from "../workflow/effects.ts";
 import {
 	type AgentsConfig,
+	isOrchestratorMonitorMode,
+	ORCHESTRATOR_MONITOR_MODES,
 	type PresetConfig,
 	type ProfileConfig,
 	parseAgentsConfig,
@@ -48,10 +50,12 @@ export type AgentsMutation =
 	  }
 	| {
 			readonly kind: "set-orchestrator";
-			/** Absent fields are removed: the durable host default applies. */
+			/** Absent fields are removed: the durable host default applies, and an
+			 * absent `monitor` means the default `wake` mode. */
 			readonly orchestrator: {
 				readonly model?: string;
 				readonly thinking?: string;
+				readonly monitor?: string;
 			};
 	  };
 
@@ -180,6 +184,14 @@ export function applyAgentsMutation(
 					if (typeof value !== "string" || !value.trim())
 						throw new Error(`agents.orchestrator.${key} must be a string`);
 					next[key] = value.trim();
+				}
+				const monitor = mutation.orchestrator.monitor;
+				if (monitor !== undefined && monitor !== "") {
+					if (!isOrchestratorMonitorMode(monitor))
+						throw new Error(
+							`agents.orchestrator.monitor must be one of ${ORCHESTRATOR_MONITOR_MODES.join(", ")}`,
+						);
+					next.monitor = monitor;
 				}
 				if (Object.keys(next).length) section.orchestrator = next;
 				else delete section.orchestrator;

@@ -30,3 +30,53 @@ expressible in a request.
 - **WHEN** a start request includes a `startedBy` field
 - **THEN** the server SHALL reject the request as malformed
 
+### Requirement: Orchestrated workflow monitoring
+
+The shell SHALL observe the workflows the orchestrator started while it runs and
+`[agents.orchestrator] monitor` is not `off`, and SHALL detect transitions
+between successive observations. The first observation of a workflow SHALL only
+establish its baseline and SHALL NOT produce a transition. A transition SHALL be
+produced when a workflow enters a human review step, acquires a pending
+developer question, becomes `attention-required`, gains a failed effect, or
+completes.
+
+#### Scenario: First observation is silent
+
+- **WHEN** the monitor first observes a workflow already waiting at plan approval
+- **THEN** no transition SHALL be produced
+
+#### Scenario: Review step entered
+
+- **WHEN** an observed orchestrator-started workflow moves into developer review
+- **THEN** exactly one review-pending transition SHALL be produced
+
+### Requirement: Developer is told about waiting reviews
+
+For every review-pending or question-pending transition the shell SHALL raise one
+notification naming the workflow and its current step, in both `wake` and
+`notify` modes.
+
+#### Scenario: Plan waiting on the developer
+
+- **WHEN** an orchestrator-started workflow enters plan approval
+- **THEN** the shell SHALL raise one notification naming that workflow and step
+
+### Requirement: Orchestrator session wake-ups
+
+In `wake` mode the shell SHALL deliver transitions to the active orchestrator
+session as follow-up input. Transitions within one coalescing window SHALL be
+delivered as a single note, and the shell SHALL deliver at most one note per
+minute per session, merging any overflow into the next note. In `notify` and
+`off` modes no note SHALL be delivered.
+
+#### Scenario: Burst of transitions
+
+- **WHEN** three orchestrator-started workflows change state within the
+  coalescing window
+- **THEN** the session SHALL receive one note listing all three
+
+#### Scenario: Notify mode
+
+- **WHEN** `monitor` is `notify` and a workflow becomes attention-required
+- **THEN** the session SHALL receive no input
+

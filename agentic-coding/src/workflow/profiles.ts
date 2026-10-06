@@ -99,16 +99,36 @@ export interface AgentsConfig {
 	 * disabled, so a configuration that says nothing spends no classifier calls
 	 * and writes no artifact. */
 	file_judgment?: FileJudgmentConfig;
-	/** The Home Orchestrator session's model (`[agents.orchestrator]`). Absent
-	 * means the durable host's default model and thinking level. */
+	/** The Home Orchestrator session's model and workflow monitoring
+	 * (`[agents.orchestrator]`). Absent means the durable host's default model
+	 * and thinking level, and the default `monitor` mode. */
 	orchestrator?: OrchestratorConfig;
 }
 
-/** The Orchestrator chat session's model selection. Both fields are the
- * `provider/modelId` and thinking-level strings a durable run accepts. */
+/** What the shell's workflow monitor does with a detected transition:
+ * `wake` delivers a coalesced note to the active session and notifies,
+ * `notify` only raises the notification, `off` observes nothing at all. */
+export const ORCHESTRATOR_MONITOR_MODES = ["wake", "notify", "off"] as const;
+export type OrchestratorMonitorMode =
+	(typeof ORCHESTRATOR_MONITOR_MODES)[number];
+/** The mode an absent `monitor` key means: the orchestrator is woken. */
+export const DEFAULT_ORCHESTRATOR_MONITOR: OrchestratorMonitorMode = "wake";
+
+/** The Orchestrator chat session's configuration. `model` and `thinking` are
+ * the `provider/modelId` and thinking-level strings a durable run accepts;
+ * `monitor` is the shell workflow monitor's mode. */
 export interface OrchestratorConfig {
 	model?: string;
 	thinking?: string;
+	monitor?: OrchestratorMonitorMode;
+}
+
+/** The effective monitor mode, defaulting to `wake` so a configuration that
+ * says nothing wakes the orchestrator exactly like an explicit `monitor` key. */
+export function orchestratorMonitorMode(
+	agents: AgentsConfig | undefined,
+): OrchestratorMonitorMode {
+	return agents?.orchestrator?.monitor ?? DEFAULT_ORCHESTRATOR_MONITOR;
 }
 
 /** The per-file judgment sweep (`[agents.file_judgment]`). The provider and the
@@ -347,9 +367,8 @@ function validateGates(
 	return gates;
 }
 
-/** Validate `[agents.orchestrator]`: an optional model and thinking level,
- * both non-empty strings. Unknown keys are refused so a typo is not silently
- * ignored. */
+/** Validate `[agents.orchestrator]`: an optional model, thinking level and
+ * monitor mode. Unknown keys are refused so a typo is not silently ignored. */
 function validateOrchestrator(
 	value: unknown,
 	where: string,
@@ -357,10 +376,12 @@ function validateOrchestrator(
 ): OrchestratorConfig {
 	const location = source ? `${where} (${source})` : where;
 	if (!value || typeof value !== "object" || Array.isArray(value))
-		throw new Error(`${location} must be a table with model and thinking`);
+		throw new Error(
+			`${location} must be a table with model, thinking, monitor`,
+		);
 	const table = value as Record<string, unknown>;
 	for (const key of Object.keys(table))
-		if (key !== "model" && key !== "thinking")
+		if (key !== "model" && key !== "thinking" && key !== "monitor")
 			throw new Error(`${location}: unsupported key ${key}`);
 	for (const key of ["model", "thinking"] as const)
 		if (
@@ -368,12 +389,30 @@ function validateOrchestrator(
 			(typeof table[key] !== "string" || !(table[key] as string).trim())
 		)
 			throw new Error(`${location}.${key} must be a non-empty string`);
+	if (table.monitor !== undefined && !isOrchestratorMonitorMode(table.monitor))
+		throw new Error(
+			`${location}.monitor must be one of ${ORCHESTRATOR_MONITOR_MODES.join(", ")}`,
+		);
 	return {
 		...(table.model !== undefined ? { model: table.model as string } : {}),
 		...(table.thinking !== undefined
 			? { thinking: table.thinking as string }
 			: {}),
+		...(table.monitor !== undefined
+			? { monitor: table.monitor as OrchestratorMonitorMode }
+			: {}),
 	};
+}
+
+/** True when `value` is a configured monitor mode. Exported so the settings
+ * mutation refuses an unknown value with the same list the parser names. */
+export function isOrchestratorMonitorMode(
+	value: unknown,
+): value is OrchestratorMonitorMode {
+	return (
+		typeof value === "string" &&
+		(ORCHESTRATOR_MONITOR_MODES as readonly string[]).includes(value)
+	);
 }
 
 /** Validate `[agents.classifier]`. The provider id must name a registered

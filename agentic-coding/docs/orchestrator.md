@@ -14,7 +14,46 @@ with the developer; so do developer questions from workflow agents.
 | Tools + prompt | `src/agent-host/orchestrator.ts` | `list_projects`, `list_workflow_types`, `list_agent_config`, `list_branches`, `list_workflows`, `workflow_status`, `start_workflow`, `workflow_action`, `drain_workflow`, and the orchestrator system prompt. |
 | Capability | `src/server/auth.ts` `orchestratorTokenFor` | HMAC of the instance token. The server authenticates it as the `orchestrator` principal. |
 | Policy | `src/server/orchestrator-policy.ts` | Route allowlist, action allowlist, human-review step set. Enforced in `src/server/app.ts` before any operation runs. |
-| Model setting | `[agents.orchestrator] { model, thinking }` | Settings → Agent Presets → Orchestrator model (`set-orchestrator` mutation). Applied every time the page opens; `/model` and `/thinking` change only the live session. |
+| Model setting | `[agents.orchestrator] { model, thinking, monitor }` | Settings → Agent Presets → Orchestrator session (`set-orchestrator` mutation). `model`/`thinking` apply every time the page opens; `/model` and `/thinking` change only the live session. `monitor` (default `wake`) is read when the shell starts its workflow monitor. |
+| Workflow monitor | `src/tui/orchestrator/monitor.ts` + `transitions.ts` | The shell-owned observer of the workflows the orchestrator started: event → debounced re-read → pure projection diff → notification and, in `wake` mode, one coalesced session note. |
+
+## Monitoring
+
+The orchestrator only learned about a workflow when the developer asked. The
+shell now observes the workflows the orchestrator started for as long as the
+shell runs, independent of whether the page is open:
+
+- The server publishes `workflow.*` events; the monitor re-reads only the
+  workflow an event names (debounced per workflow, so a streaming run is one
+  read per window) and diffs the small projection `transitions.ts` owns. A
+  `resync` gap re-reads the authoritative list of every repository the monitor
+  has seen instead of trusting what it holds.
+- Only `startedBy: "orchestrator"` workflows are observed — the monitor is the
+  orchestrator's ears, not a second dashboard.
+- The **first** observation of a workflow only establishes its baseline: a
+  workflow already waiting at plan approval when the shell starts is the
+  developer's situation, not news.
+- A transition is a review step entered, a pending developer question, the
+  workflow becoming `attention-required`, a newly failed effect, or completion.
+
+What a transition does depends on `[agents.orchestrator] monitor`:
+
+| Mode | Shell notification | Note to the active session |
+| --- | --- | --- |
+| `wake` (default) | yes, for review/question transitions | yes |
+| `notify` | yes, for review/question transitions | no |
+| `off` | no — nothing is observed at all | no |
+
+Notes are submitted to the active session as `whenBusy: "followUp"` input:
+transitions inside a 10 s window become one `[workflow-monitor]` note with one
+line per transition, the session receives at most one note per minute, and
+everything beyond that bound is merged into the next note. The host is ensured
+on the first note, so a wake-up works without the page having been opened; a
+note that cannot be delivered is dropped rather than retried, because the
+workflow's state is still visible in the sidebar.
+
+Notifications never depend on the session: a review waiting on the developer is
+reported in both `wake` and `notify` mode.
 
 ## Boundary
 
