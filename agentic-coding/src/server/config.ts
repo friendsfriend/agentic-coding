@@ -19,6 +19,8 @@ import {
 	type AgentsConfig,
 	isOrchestratorMonitorMode,
 	ORCHESTRATOR_MONITOR_MODES,
+	type OrchestratorLimits,
+	orchestratorLaunchLimits,
 	type PresetConfig,
 	type ProfileConfig,
 	parseAgentsConfig,
@@ -177,7 +179,18 @@ export function applyAgentsMutation(
 				return;
 			}
 			case "set-orchestrator": {
-				const next: Record<string, string> = {};
+				// `limits` is file-only and has no editor here, so a session edit
+				// preserves whatever ceiling the developer wrote instead of dropping
+				// it with the rest of the table.
+				const existing = section.orchestrator;
+				const next: Record<string, unknown> = {};
+				if (
+					existing &&
+					typeof existing === "object" &&
+					!Array.isArray(existing) &&
+					Object.hasOwn(existing, "limits")
+				)
+					next.limits = (existing as Record<string, unknown>).limits;
 				for (const key of ["model", "thinking"] as const) {
 					const value = mutation.orchestrator[key];
 					if (value === undefined || value === "") continue;
@@ -203,14 +216,40 @@ export function applyAgentsMutation(
 
 /** The effective parsed agents config, provenance, the conflicting `[agents]`
  * definitions the writer must refuse over, and the revision of the effective
- * agents section. */
-export function loadAgentConfig(repository?: string): {
+ * agents section. `repositoryIndependent` skips the project overlay entirely, so
+ * a caller can read the user-level table that no repository can loosen. */
+/** The server-enforced orchestrator launch ceiling, resolved from the
+ * user-level configuration with no project overlay, and whether the developer
+ * actually set a bound. One resolver for the guard and for the Settings read, so
+ * the displayed value is the enforced one. */
+export function orchestratorLaunchCeiling(): {
+	limits: OrchestratorLimits;
+	configured: boolean;
+} {
+	const agents = loadAgentConfig(undefined, {
+		repositoryIndependent: true,
+	}).agents;
+	const raw = agents.orchestrator?.limits;
+	return {
+		limits: orchestratorLaunchLimits(agents),
+		configured:
+			raw?.max_active !== undefined || raw?.max_starts_per_day !== undefined,
+	};
+}
+
+export function loadAgentConfig(
+	repository?: string,
+	options: { repositoryIndependent?: boolean } = {},
+): {
 	agents: AgentsConfig;
 	provenance: ReturnType<typeof loadConfigWithProvenance>["provenance"];
 	conflicts: string[];
 	revision: string;
 } {
-	const resolved = loadConfigWithProvenance({ repository });
+	const resolved = loadConfigWithProvenance({
+		repository,
+		...(options.repositoryIndependent ? { repositoryIndependent: true } : {}),
+	});
 	return {
 		agents: parseAgentsConfig(
 			resolved.config.agents,
@@ -218,7 +257,11 @@ export function loadAgentConfig(repository?: string): {
 			resolved.provenance.files.join(", ") || undefined,
 		),
 		provenance: resolved.provenance,
-		conflicts: conflictingAgentsFiles(undefined, repository ?? process.cwd()),
-		revision: agentConfigRevision(repository),
+		conflicts: options.repositoryIndependent
+			? []
+			: conflictingAgentsFiles(undefined, repository ?? process.cwd()),
+		revision: options.repositoryIndependent
+			? ""
+			: agentConfigRevision(repository),
 	};
 }

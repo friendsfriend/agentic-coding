@@ -88,7 +88,11 @@ import {
 	profileReferences,
 	validateDraft,
 } from "./agentPresets.ts";
-import { orchestratorLabel, type SettingsItem } from "./items.ts";
+import {
+	agentMenuInformationalItems,
+	orchestratorLabel,
+	type SettingsItem,
+} from "./items.ts";
 
 /** Keys the surface owns while it is mounted. */
 const SURFACE_KEYS = [
@@ -462,27 +466,26 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 				detail: `${orchestratorLabel(agents()?.orchestrator)} · ${orchestrator.detail}`,
 				view: "orchestrator",
 			});
-		const info: MenuEntry[] = (props.items ?? [])
-			.filter(
-				(item) =>
-					item.editable &&
-					item.id !== "agents.profiles" &&
-					item.id !== "agents.presets" &&
-					item.id !== "agents.classifier" &&
-					item.id !== "agents.orchestrator",
-			)
-			.map((item) => ({
-				id: item.id,
-				label: item.label,
-				// The scope item's detail already opens with its value, so only
-				// prepend the value when the detail does not restate it.
-				detail: `${
-					item.value && !item.detail.startsWith(item.value)
-						? `${item.value} · `
-						: ""
-				}${item.detail}`,
-				item,
-			}));
+		// Every other inventoried row follows, read-only ones included: an
+		// inventoried setting that is never shown is a promise the section does not
+		// keep, and the read-only rows (scope, project checkout, routing, the launch
+		// ceiling, inactive legacy config, read errors, conflicts) are exactly the
+		// effective values the section exists to state. They carry no action, so
+		// Enter on them is inert; the title marks them read-only.
+		const info: MenuEntry[] = agentMenuInformationalItems(
+			props.items ?? [],
+		).map((item) => ({
+			id: item.id,
+			label: item.label,
+			// The scope item's detail already opens with its value, so only
+			// prepend the value when the detail does not restate it.
+			detail: `${
+				item.value && !item.detail.startsWith(item.value)
+					? `${item.value} · `
+					: ""
+			}${item.detail}`,
+			item,
+		}));
 		return [...options, ...info];
 	};
 
@@ -1769,7 +1772,7 @@ export function AgentPresetsView(props: AgentPresetsViewProps) {
 						<Card
 							height={3}
 							selected={selected()}
-							title={entry.label}
+							title={`${entry.label}${entry.item?.editable === false ? " · read-only" : ""}`}
 							cells={[<text fg={uiColors.textMuted}>{entry.detail}</text>]}
 						/>
 					)}

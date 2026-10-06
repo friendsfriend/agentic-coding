@@ -38,6 +38,11 @@ import {
 	drainEffects,
 	engine as workflowEngineFactory,
 } from "../workflow/operations.ts";
+import type { OrchestratorLimits } from "../workflow/profiles.ts";
+import {
+	countOrchestratorLaunches,
+	type OrchestratorLaunchCounts,
+} from "../workflow/runtime/orchestrator-launches.ts";
 import { QUESTION_WAIT_MS } from "../workflow/runtime.ts";
 import type { Principal } from "./auth.ts";
 import {
@@ -50,6 +55,7 @@ import {
 	type AgentsMutation,
 	applyAgentsMutation,
 	loadAgentConfig,
+	orchestratorLaunchCeiling,
 } from "./config.ts";
 import {
 	answerWorkflowQuestion,
@@ -111,6 +117,9 @@ export interface ServerOperations {
 	view(repo: string, workflowId: string): WorkflowView;
 	action(request: ActionRequest, options?: ActionOptions): WorkflowView;
 	start(request: StartRequest, options?: StartOptions): Promise<string>;
+	/** Orchestrator-started workflow counts across every target, for the launch
+	 * ceiling the transport enforces before `start`. */
+	orchestratorLaunches(): OrchestratorLaunchCounts;
 	repair(request: RepairRequest): WorkflowView;
 	question(request: QuestionRequest): WorkflowView;
 	saveReview(request: ReviewSaveRequest): Promise<void>;
@@ -118,7 +127,7 @@ export interface ServerOperations {
 	deleteWorkflow(request: DeleteRequest): Promise<WorkflowDeletion>;
 	handoff(request: AgentHandoffRequest): Promise<WorkflowView>;
 	saveAgents(request: AgentsMutationRequest): void;
-	loadAgents(repository?: string): ReturnType<typeof loadAgentConfig>;
+	loadAgents(repository?: string): AgentConfigRead;
 	classifierStatus(repository?: string): Promise<ClassifierStatusResponse>;
 	installClassifier(repository?: string): Promise<ClassifierStatusResponse>;
 	cancelClassifierInstall(
@@ -307,11 +316,31 @@ export function saveAgents(request: AgentsMutationRequest): void {
 		void startSelectedLocalClassifier(mutation.classifier.provider);
 }
 
+/** The agents read plus the server-enforced orchestrator launch ceiling. The
+ * ceiling is resolved from the user-level configuration with no project overlay,
+ * so a cloned repository cannot loosen the guard and Settings shows exactly what
+ * the server enforces. */
+export interface AgentConfigRead extends ReturnType<typeof loadAgentConfig> {
+	readonly orchestratorLimits: OrchestratorLimits;
+	/** True when the user-level configuration actually set a bound, so the
+	 * read-only row can mark a fully defaulted ceiling. */
+	readonly orchestratorLimitsConfigured: boolean;
+}
+
 /** Read the effective agents config server-side (no view reads the file). */
-export function loadAgents(
-	repository?: string,
-): ReturnType<typeof loadAgentConfig> {
-	return loadAgentConfig(repository);
+export function loadAgents(repository?: string): AgentConfigRead {
+	const ceiling = orchestratorLaunchCeiling();
+	return {
+		...loadAgentConfig(repository),
+		orchestratorLimits: ceiling.limits,
+		orchestratorLimitsConfigured: ceiling.configured,
+	};
+}
+
+/** Count orchestrator-started workflows across every target. Reads only, so a
+ * start decision never initializes or migrates a store. */
+export function orchestratorLaunches(): OrchestratorLaunchCounts {
+	return countOrchestratorLaunches();
 }
 /** Managed-agent developer question: resolve identity server-side, dispatch and
  * wait (bounded by the request signal) for the answer. */
@@ -371,6 +400,7 @@ export const serverOperations: ServerOperations = {
 	view: workflowView,
 	action: runAction,
 	start: startWorkflow,
+	orchestratorLaunches,
 	repair,
 	question,
 	saveReview,

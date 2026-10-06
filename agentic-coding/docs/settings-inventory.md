@@ -33,6 +33,7 @@ unavailable or unauthorized server is a section error with a retry.
 | Agent presets | Agent Presets | `src/server/config.ts` | user / project | `[agents.presets]` in the layered workflow config — `pools`, `roles`, `steps`, and the stage gate `gates` table (`planApproval`, `verification`, `developerReview`, `wiki`; `always` or `auto`) | no | next workflow start | yes (inline form) |
 | Classifier provider | Agent Presets | `src/server/config.ts` | user | `[agents.classifier]` in the layered workflow config — `provider` is `opencode-zen` (hosted, usage-based, requires `OPENCODE_API_KEY`) or `laya-local` (offline sidecar); the local model is installed only on explicit request | no | next workflow start | yes (Agent Presets picker) |
 | Orchestrator session | Agent Presets | `src/server/config.ts` | user | `[agents.orchestrator]` `model` (`provider/modelId`), `thinking` and `monitor` (`wake`/`notify`/`off`) in the layered workflow config; absent `model`/`thinking` use the durable host defaults and an absent `monitor` means `wake` | no | next time the Orchestrator page opens, and the next time the shell starts its workflow monitor | yes (Agent Presets picker) |
+| Orchestrator launch limits | Agent Presets | `src/workflow/profiles.ts` | user | `[agents.orchestrator]` `limits` (`max_active`, `max_starts_per_day`; positive integers, defaults 3/20) in the layered workflow config | no | next orchestrator start | no (file-only guard, shown read-only) |
 | Routing and definition defaults | Agent Presets | `src/workflow/profiles.ts` | user | `[agents]` `default_profile`, `routes`, `role_routes`, `definition_defaults`, `gates` (the global stage-gate fallback a preset with no entry resolves against), `file_judgment` (the per-file judgment sweep: `enabled`, and the optional `threshold`, `unsure`, `concurrency` bounds) | no | next workflow start | no (no bounded editor; edit the config file) |
 | Git providers | Providers/credentials | server integration families (`/api/providers`) | server | `$AGENTIC_CODING_CONFIG_DIR/providers` served by the connected server | yes | immediate | yes (edited in Environments) |
 | Provider credentials | Providers/credentials | `src/workflow/credentials.ts`, `src/server/credentials.ts` | server | protected credential store; single-owner ephemeral prompts | yes | immediate | no (status only) |
@@ -53,7 +54,9 @@ unavailable or unauthorized server is a section error with a retry.
   (`Authorization: Bearer <instance token>`) and opens the existing environment
   editors for changes; it never writes the client's own checkout.
 - **Application of changes**: persistent agent edits affect subsequent workflow
-  starts only. A running workflow keeps the routing resolved into its run input
+  starts only. The orchestrator launch ceiling (`[agents.orchestrator] limits`)
+  is read from the layered configuration at each orchestrator start; Settings
+  shows the effective value read-only, and a session edit preserves it. A running workflow keeps the routing resolved into its run input
   (its pins/revisions) until its existing explicit revision-bound adoption
   operation is used. Editing server configuration never restarts a server.
 - **The per-file judgment sweep** (`[agents]` `file_judgment`) is disabled unless

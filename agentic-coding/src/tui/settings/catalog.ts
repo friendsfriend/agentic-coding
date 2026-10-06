@@ -125,6 +125,20 @@ export const SETTINGS_INVENTORY: readonly SettingsInventoryEntry[] = [
 		items: ["agents.orchestrator"],
 	},
 	{
+		id: "agents.launch-limits",
+		section: "agents",
+		label: "Orchestrator launch limits",
+		owner: "src/workflow/profiles.ts",
+		scope: "user",
+		storage:
+			"[agents.orchestrator] limits (max_active, max_starts_per_day) in the layered workflow config",
+		secret: false,
+		effect: "next-start",
+		editable: false,
+		items: ["agents.launch-limits"],
+		note: "File-only guard: the server enforces the ceiling, so Settings shows the effective value read-only.",
+	},
+	{
 		id: "agents.routing",
 		section: "agents",
 		label: "Routing and definition defaults",

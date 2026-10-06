@@ -50,6 +50,14 @@ export interface AgentsListResponse {
 	readonly provenance: unknown;
 	readonly conflicts: string[];
 	readonly revision?: string;
+	/** The server-enforced orchestrator launch ceiling (user-level, no project
+	 * overlay), resolved with defaults. */
+	readonly orchestratorLimits?: {
+		readonly maxActive: number;
+		readonly maxStartsPerDay: number;
+	};
+	/** True when the user-level configuration set a bound. */
+	readonly orchestratorLimitsConfigured?: boolean;
 }
 
 /** One selectable classifier transport, for the Settings picker. */

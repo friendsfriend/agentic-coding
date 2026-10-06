@@ -84,6 +84,7 @@ function recordingOperations(calls: Calls): ServerOperations {
 			calls.start = request;
 			return `started ${request.workflowId}`;
 		},
+		orchestratorLaunches: () => ({ active: [], recent: [], skipped: [] }),
 		repair: (request) => {
 			calls.repair = request;
 			return view;
@@ -111,6 +112,8 @@ function recordingOperations(calls: Calls): ServerOperations {
 			provenance: { source: "default", files: [] },
 			conflicts: [],
 			revision: "stub-revision",
+			orchestratorLimits: { maxActive: 3, maxStartsPerDay: 20 },
+			orchestratorLimitsConfigured: false,
 		}),
 		agentQuestion: async () => "answer",
 		researchHandoff: async () => view,

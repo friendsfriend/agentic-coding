@@ -134,6 +134,16 @@ export const agentsListResponseSchema = Schema.Struct({
 	provenance: Schema.Unknown,
 	conflicts: Schema.Array(Schema.String),
 	revision: Schema.optional(Schema.String),
+	/** The server-enforced orchestrator launch ceiling, resolved from the
+	 * user-level configuration with no project overlay. */
+	orchestratorLimits: Schema.optional(
+		Schema.Struct({
+			maxActive: Schema.Number,
+			maxStartsPerDay: Schema.Number,
+		}),
+	),
+	/** True when the user-level configuration set a bound. */
+	orchestratorLimitsConfigured: Schema.optional(Schema.Boolean),
 });
 
 /** Classifier status read: provider selection plus local-model state. */

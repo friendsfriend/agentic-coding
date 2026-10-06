@@ -941,6 +941,16 @@ export function App(props: {
 					})),
 				routing: agents ? agentRoutingEntries(agents) : [],
 				...(agents?.orchestrator ? { orchestrator: agents.orchestrator } : {}),
+				// The enforced ceiling comes from the server read, not the section's own
+				// scope: the server resolves it from the user-level configuration, so the
+				// read-only row cannot contradict what a start is checked against.
+				...(entry.orchestratorLimits
+					? {
+							orchestratorLimits: entry.orchestratorLimits,
+							orchestratorLimitsConfigured:
+								entry.orchestratorLimitsConfigured ?? false,
+						}
+					: {}),
 			},
 			providers: settingsProviders(),
 			...(classifierSnapshot() ? { classifier: classifierSnapshot() } : {}),

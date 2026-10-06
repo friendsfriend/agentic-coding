@@ -8,7 +8,10 @@
 // explanation from the inventory instead of pretending to accept an edit.
 
 import type { ClassifierStatusResponse } from "../../contracts/gateway.ts";
-import { DEFAULT_ORCHESTRATOR_MONITOR } from "../../workflow/profiles.ts";
+import {
+	DEFAULT_ORCHESTRATOR_LIMITS,
+	DEFAULT_ORCHESTRATOR_MONITOR,
+} from "../../workflow/profiles.ts";
 import {
 	type Route,
 	type SettingsSection,
@@ -47,6 +50,25 @@ export interface AgentRoutingEntry {
 	value: string;
 }
 
+/** Item ids the Agent Presets menu renders as navigation options instead of
+ * informational rows. */
+export const AGENT_MENU_OPTION_IDS: readonly string[] = [
+	"agents.profiles",
+	"agents.presets",
+	"agents.classifier",
+	"agents.orchestrator",
+];
+
+/** The informational rows the Agent Presets menu shows: every inventoried item
+ * except the navigation options. Read-only rows are included, so an inventoried
+ * setting — the launch ceiling, the effective scope, routing defaults — is
+ * never silently unshown. */
+export function agentMenuInformationalItems(
+	items: readonly SettingsItem[],
+): SettingsItem[] {
+	return items.filter((item) => !AGENT_MENU_OPTION_IDS.includes(item.id));
+}
+
 export interface AgentStatus {
 	scope: SettingsScope;
 	/** Configured application/library id when the page is project-scoped. */
@@ -66,6 +88,11 @@ export interface AgentStatus {
 	/** The Orchestrator session's configured model, thinking level and workflow
 	 * monitor mode. */
 	orchestrator?: { model?: string; thinking?: string; monitor?: string };
+	/** The orchestrator launch ceiling the server enforces, defaults applied,
+	 * and whether the user-level configuration actually set a bound. File-only
+	 * configuration, so the section shows it read-only. */
+	orchestratorLimits?: { maxActive: number; maxStartsPerDay: number };
+	orchestratorLimitsConfigured?: boolean;
 }
 
 export interface ProviderSnapshot {
@@ -274,6 +301,19 @@ function agentItems(context: SettingsContext): SettingsItem[] {
 		editable: true,
 		action: { kind: "none" },
 	});
+	// The ceiling is a server-enforced guard with no bounded editor: the section
+	// names the effective value and says where the file-only key lives.
+	items.push({
+		id: "agents.launch-limits",
+		label: "Orchestrator launch limits",
+		value: orchestratorLimitsLabel(
+			agents.orchestratorLimits,
+			agents.orchestratorLimitsConfigured,
+		),
+		detail: `${inventoryDetail("agents.launch-limits")} · read-only: edit the config file`,
+		editable: false,
+		action: { kind: "none" },
+	});
 	for (const entry of agents.routing)
 		items.push({
 			id: `agents.routing.${entry.label}`,
@@ -284,6 +324,21 @@ function agentItems(context: SettingsContext): SettingsItem[] {
 			action: { kind: "none" },
 		});
 	return items;
+}
+
+/** The one-line launch ceiling: the resolved active and trailing-24 h bounds,
+ * with `(defaults)` named when the user-level configuration sets nothing and
+ * the start count pluralized. */
+export function orchestratorLimitsLabel(
+	limits: { maxActive: number; maxStartsPerDay: number } | undefined,
+	configured: boolean | undefined,
+): string {
+	const resolved = limits ?? DEFAULT_ORCHESTRATOR_LIMITS;
+	// An absent value means the server read has not resolved yet (or there is no
+	// server read), which is exactly the defaulted ceiling.
+	const defaulted = limits === undefined || configured === false;
+	const starts = `${resolved.maxStartsPerDay} ${resolved.maxStartsPerDay === 1 ? "start" : "starts"} per 24 h`;
+	return `${resolved.maxActive} active · ${starts}${defaulted ? " (defaults)" : ""}`;
 }
 
 /** The one-line orchestrator session setting: `model · thinking · monitor`,

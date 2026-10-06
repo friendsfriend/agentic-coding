@@ -3,8 +3,14 @@
 // falls back to the in-process reader only for a transport-less run
 // (demo/tests), so the view component performs no config-file I/O.
 import { backendClient } from "../../server/client.ts";
-import { loadAgentConfig } from "../../server/config.ts";
-import type { AgentsConfig } from "../../workflow/profiles.ts";
+import {
+	loadAgentConfig,
+	orchestratorLaunchCeiling,
+} from "../../server/config.ts";
+import type {
+	AgentsConfig,
+	OrchestratorLimits,
+} from "../../workflow/profiles.ts";
 
 export interface AgentConfigEntry {
 	agents?: AgentsConfig;
@@ -13,6 +19,12 @@ export interface AgentConfigEntry {
 	/** Revision of the effective agents section this entry was read from; the
 	 * editor sends it back so a write from another client is detected. */
 	revision?: string;
+	/** The server-enforced orchestrator launch ceiling the read carried. The
+	 * server resolves it from the user-level configuration, so it is the value
+	 * the guard actually uses rather than the section's own scope. */
+	orchestratorLimits?: OrchestratorLimits;
+	/** True when the user-level configuration set a bound. */
+	orchestratorLimitsConfigured?: boolean;
 	error?: string;
 }
 
@@ -21,7 +33,12 @@ const key = (repository?: string) => repository ?? "";
 
 function readLocal(repository?: string): AgentConfigEntry {
 	try {
-		return loadAgentConfig(repository);
+		const ceiling = orchestratorLaunchCeiling();
+		return {
+			...loadAgentConfig(repository),
+			orchestratorLimits: ceiling.limits,
+			orchestratorLimitsConfigured: ceiling.configured,
+		};
 	} catch (error) {
 		return { error: error instanceof Error ? error.message : String(error) };
 	}
@@ -70,6 +87,12 @@ export async function refreshAgentConfig(
 			provenance: value.provenance as AgentConfigEntry["provenance"],
 			conflicts: value.conflicts,
 			...(value.revision ? { revision: value.revision } : {}),
+			...(value.orchestratorLimits
+				? { orchestratorLimits: value.orchestratorLimits }
+				: {}),
+			...(value.orchestratorLimitsConfigured !== undefined
+				? { orchestratorLimitsConfigured: value.orchestratorLimitsConfigured }
+				: {}),
 		};
 		cache.set(key(repository), entry);
 		return entry;

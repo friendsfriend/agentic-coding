@@ -10,6 +10,9 @@
 // questions, configuration edits, repairs, deletions, and the environment and
 // credential surfaces.
 
+import type { OrchestratorLimits } from "../workflow/profiles.ts";
+import type { OrchestratorLaunch } from "../workflow/runtime/orchestrator-launches.ts";
+
 /** Exact `METHOD path` pairs the orchestrator may call. Anything else is 403. */
 const ALLOWED_ROUTES: ReadonlySet<string> = new Set([
 	"GET /api/v1/health",
@@ -63,4 +66,47 @@ export function orchestratorActionRefusal(
 		return `${currentStep} is a developer review; only the developer can decide it`;
 	if (LIFECYCLE_ACTIONS.has(actionId)) return undefined;
 	return `action ${actionId} is reserved for the developer`;
+}
+
+/** The counts and ceiling the launch decision reads. Gathered by the transport
+ * (`app.ts`) from `countOrchestratorLaunches` and the configured limits. */
+export interface OrchestratorLaunchRefusalInput {
+	readonly limits: OrchestratorLimits;
+	readonly active: readonly OrchestratorLaunch[];
+	readonly recent: readonly OrchestratorLaunch[];
+	/** Targets whose store could not be read, counted as zero. */
+	readonly skipped?: readonly string[];
+}
+
+/** How many workflow ids / skipped targets a refusal names before it elides
+ * the rest. The message length stays independent of the configured limits and
+ * of how many workflows a store holds. */
+const MAX_NAMED = 10;
+
+function boundedList(names: readonly string[]): string {
+	const named = names.slice(0, MAX_NAMED).join(", ");
+	const rest = names.length - MAX_NAMED;
+	return rest > 0 ? `${named}, … and ${rest} more` : named;
+}
+
+function launchNames(launches: readonly OrchestratorLaunch[]): string {
+	return boundedList(launches.map((launch) => launch.workflowId));
+}
+
+/** Whether the orchestrator has spent its launch budget. The refusal names the
+ * limit, the current count and the workflows that were counted, so the session
+ * can relay exactly why a start was refused. Returns undefined when a start is
+ * allowed. */
+export function orchestratorLaunchRefusal(
+	input: OrchestratorLaunchRefusalInput,
+): string | undefined {
+	const { limits, active, recent, skipped = [] } = input;
+	const note = skipped.length
+		? ` (unreadable stores skipped: ${boundedList(skipped)})`
+		: "";
+	if (active.length >= limits.maxActive)
+		return `orchestrator launch limit reached: ${active.length} of ${limits.maxActive} active workflows (${launchNames(active)})${note}`;
+	if (recent.length >= limits.maxStartsPerDay)
+		return `orchestrator launch limit reached: ${recent.length} of ${limits.maxStartsPerDay} starts in the last 24 hours (${launchNames(recent)})${note}`;
+	return undefined;
 }

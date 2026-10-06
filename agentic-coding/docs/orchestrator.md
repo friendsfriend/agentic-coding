@@ -14,7 +14,7 @@ with the developer; so do developer questions from workflow agents.
 | Tools + prompt | `src/agent-host/orchestrator.ts` | `list_projects`, `list_workflow_types`, `list_agent_config`, `list_branches`, `list_workflows`, `workflow_status`, `start_workflow`, `workflow_action`, `drain_workflow`, and the orchestrator system prompt. |
 | Capability | `src/server/auth.ts` `orchestratorTokenFor` | HMAC of the instance token. The server authenticates it as the `orchestrator` principal. |
 | Policy | `src/server/orchestrator-policy.ts` | Route allowlist, action allowlist, human-review step set. Enforced in `src/server/app.ts` before any operation runs. |
-| Model setting | `[agents.orchestrator] { model, thinking, monitor }` | Settings → Agent Presets → Orchestrator session (`set-orchestrator` mutation). `model`/`thinking` apply every time the page opens; `/model` and `/thinking` change only the live session. `monitor` (default `wake`) is read when the shell starts its workflow monitor. |
+| Model setting | `[agents.orchestrator] { model, thinking, monitor, limits }` | Settings → Agent Presets → Orchestrator session (`set-orchestrator` mutation) edits `model`/`thinking`/`monitor`; `limits` is file-only and shown read-only. `model`/`thinking` apply every time the page opens; `/model` and `/thinking` change only the live session. `monitor` (default `wake`) is read when the shell starts its workflow monitor. |
 | Workflow monitor | `src/tui/orchestrator/monitor.ts` + `transitions.ts` | The shell-owned observer of the workflows the orchestrator started: event → debounced re-read → pure projection diff → notification and, in `wake` mode, one coalesced session note. |
 
 ## Monitoring
@@ -54,6 +54,46 @@ workflow's state is still visible in the sidebar.
 
 Notifications never depend on the session: a review waiting on the developer is
 reported in both `wake` and `notify` mode.
+
+## Launch limits
+
+The orchestrator can start any number of workflows, and a misread request, a
+retry loop in the model, or a wake-up it answers with "start another one" would
+fan out without bound. `[agents.orchestrator] limits` is the ceiling the server
+enforces regardless of what the session decides:
+
+```toml
+[agents.orchestrator.limits]
+max_active = 3          # default 3
+max_starts_per_day = 20 # default 20
+```
+
+Immediately before an orchestrator start, the server counts the
+orchestrator-started workflows across every workflow target: those that are
+neither `completed` nor `closed` against `max_active`, and those created in the
+trailing 24 hours against `max_starts_per_day`. When a bound is reached the
+start is refused with `409 orchestrator-limit`, and the refusal names the limit,
+the current count and the workflows counted (`3 of 3 active workflows (a, b,
+c)`), so the session can relay exactly why it was refused. Operator starts are
+never limited or counted.
+
+The ceiling is **user-level**: the server resolves it with no project overlay
+(`loadConfigWithProvenance({ repositoryIndependent: true })`), so a checked-out
+repository's `.pi` overlay cannot loosen its own guard, and the read-only
+Settings row shows the value the server enforces rather than the selected
+project's. The count reads the target registry plus the wiki and research
+targets — the same set the sidebar reads — and is observational: an absent
+store contributes nothing, a store that needs migration or cannot be opened is
+counted as zero and named in the refusal as skipped, and the wiki and research
+targets are one store file counted once. There is no queueing: a refused start
+is simply not created.
+
+The count is read immediately before `operations.start`, and the start commits
+synchronously (the route never yields between counting and the instance row), so
+a second concurrent start already sees the first. No new lock is taken; an
+implementation that yielded between counting and committing could let two
+starts pass at `max_active - 1`, an overshoot bounded by the parallelism and
+accepted by design.
 
 ## Boundary
 

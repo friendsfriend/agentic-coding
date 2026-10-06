@@ -116,12 +116,34 @@ export const DEFAULT_ORCHESTRATOR_MONITOR: OrchestratorMonitorMode = "wake";
 
 /** The Orchestrator chat session's configuration. `model` and `thinking` are
  * the `provider/modelId` and thinking-level strings a durable run accepts;
- * `monitor` is the shell workflow monitor's mode. */
+ * `monitor` is the shell workflow monitor's mode; `limits` is the file-only
+ * launch ceiling the server enforces. */
 export interface OrchestratorConfig {
 	model?: string;
 	thinking?: string;
 	monitor?: OrchestratorMonitorMode;
+	limits?: OrchestratorLimitsConfig;
 }
+
+/** The `[agents.orchestrator] limits` table as it is written: both keys are
+ * optional, so an unset key resolves to its default at read time. */
+export interface OrchestratorLimitsConfig {
+	max_active?: number;
+	max_starts_per_day?: number;
+}
+
+/** The resolved launch ceiling the server enforces, defaults already applied. */
+export interface OrchestratorLimits {
+	readonly maxActive: number;
+	readonly maxStartsPerDay: number;
+}
+
+/** The ceiling an absent `limits` key means: at most three active workflows and
+ * twenty starts in the trailing 24 hours. */
+export const DEFAULT_ORCHESTRATOR_LIMITS: OrchestratorLimits = {
+	maxActive: 3,
+	maxStartsPerDay: 20,
+};
 
 /** The effective monitor mode, defaulting to `wake` so a configuration that
  * says nothing wakes the orchestrator exactly like an explicit `monitor` key. */
@@ -129,6 +151,20 @@ export function orchestratorMonitorMode(
 	agents: AgentsConfig | undefined,
 ): OrchestratorMonitorMode {
 	return agents?.orchestrator?.monitor ?? DEFAULT_ORCHESTRATOR_MONITOR;
+}
+
+/** The effective launch ceiling, defaulting each unset key to 3 active / 20
+ * starts per trailing 24 h so a configuration that says nothing still has a
+ * guard. */
+export function orchestratorLaunchLimits(
+	agents: AgentsConfig | undefined,
+): OrchestratorLimits {
+	const limits = agents?.orchestrator?.limits;
+	return {
+		maxActive: limits?.max_active ?? DEFAULT_ORCHESTRATOR_LIMITS.maxActive,
+		maxStartsPerDay:
+			limits?.max_starts_per_day ?? DEFAULT_ORCHESTRATOR_LIMITS.maxStartsPerDay,
+	};
 }
 
 /** The per-file judgment sweep (`[agents.file_judgment]`). The provider and the
@@ -367,8 +403,9 @@ function validateGates(
 	return gates;
 }
 
-/** Validate `[agents.orchestrator]`: an optional model, thinking level and
- * monitor mode. Unknown keys are refused so a typo is not silently ignored. */
+/** Validate `[agents.orchestrator]`: an optional model, thinking level, monitor
+ * mode and launch `limits` table. Unknown keys are refused so a typo is not
+ * silently ignored. */
 function validateOrchestrator(
 	value: unknown,
 	where: string,
@@ -377,11 +414,16 @@ function validateOrchestrator(
 	const location = source ? `${where} (${source})` : where;
 	if (!value || typeof value !== "object" || Array.isArray(value))
 		throw new Error(
-			`${location} must be a table with model, thinking, monitor`,
+			`${location} must be a table with model, thinking, monitor, limits`,
 		);
 	const table = value as Record<string, unknown>;
 	for (const key of Object.keys(table))
-		if (key !== "model" && key !== "thinking" && key !== "monitor")
+		if (
+			key !== "model" &&
+			key !== "thinking" &&
+			key !== "monitor" &&
+			key !== "limits"
+		)
 			throw new Error(`${location}: unsupported key ${key}`);
 	for (const key of ["model", "thinking"] as const)
 		if (
@@ -401,7 +443,41 @@ function validateOrchestrator(
 		...(table.monitor !== undefined
 			? { monitor: table.monitor as OrchestratorMonitorMode }
 			: {}),
+		...(table.limits !== undefined
+			? {
+					limits: validateOrchestratorLimits(
+						table.limits,
+						`${location}.limits`,
+					),
+				}
+			: {}),
 	};
+}
+
+/** Validate `[agents.orchestrator] limits`: an optional `max_active` and
+ * `max_starts_per_day`, each a positive integer. Unknown keys are refused so a
+ * typo is not silently ignored. */
+function validateOrchestratorLimits(
+	value: unknown,
+	location: string,
+): OrchestratorLimitsConfig {
+	if (!value || typeof value !== "object" || Array.isArray(value))
+		throw new Error(
+			`${location} must be a table with max_active and max_starts_per_day`,
+		);
+	const table = value as Record<string, unknown>;
+	for (const key of Object.keys(table))
+		if (key !== "max_active" && key !== "max_starts_per_day")
+			throw new Error(`${location}: unsupported key ${key}`);
+	const limits: OrchestratorLimitsConfig = {};
+	for (const key of ["max_active", "max_starts_per_day"] as const) {
+		const raw = table[key];
+		if (raw === undefined) continue;
+		if (typeof raw !== "number" || !Number.isInteger(raw) || raw <= 0)
+			throw new Error(`${location}.${key} must be a positive integer`);
+		limits[key] = raw;
+	}
+	return limits;
 }
 
 /** True when `value` is a configured monitor mode. Exported so the settings

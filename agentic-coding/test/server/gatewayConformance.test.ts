@@ -66,6 +66,7 @@ function stubOperations(scenario: Scenario): ServerOperations {
 			return { ...stubView, revision: request.revision + 1 };
 		},
 		start: async (request) => `started ${request.workflowId}`,
+		orchestratorLaunches: () => ({ active: [], recent: [], skipped: [] }),
 		repair: () => stubView,
 		question: () => stubView,
 		saveReview: async () => {},
@@ -81,6 +82,8 @@ function stubOperations(scenario: Scenario): ServerOperations {
 			provenance: { source: "default", files: [] },
 			conflicts: [],
 			revision: "rev-1",
+			orchestratorLimits: { maxActive: 3, maxStartsPerDay: 20 },
+			orchestratorLimitsConfigured: false,
 		}),
 		agentQuestion: async () => "answer",
 		researchHandoff: async () => stubView,
