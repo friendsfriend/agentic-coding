@@ -8,8 +8,8 @@
 	"dependencies": {
 		"@devenv/core": "workspace:*",
 		"@devenv/types": "workspace:*",
-		"@opentui/core": "0.5.12",
-		"@opentui/solid": "0.5.12",
+		"@opentui/core": "0.5.14",
+		"@opentui/solid": "0.5.14",
 		"commander": "^15.0.0",
 		"solid-js": "^1.9.15"
 	},
