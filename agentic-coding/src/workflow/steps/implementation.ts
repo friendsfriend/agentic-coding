@@ -1,21 +1,27 @@
+import { effectiveFamilyTraits } from "../definitions/manifest-policy.ts";
+import type { WorkflowFamilyTraits } from "../registry.ts";
 import type { StepBehavior } from "./types.ts";
 import {
 	type PreparedStepEvidence,
 	validateImplementationEvidence,
 } from "./validation.ts";
 
-/** Definitions whose implementation step runs without an OpenSpec change: the
- * task list the entry guard reads does not exist for them, so there is nothing
- * to require. `no-openspec` is the reduced OpenSpec-free loop; `solo` runs one
- * implementation agent with no planning step at all; `verify` has no planning
- * step either — its worker only fixes the findings the developer selected.
- * Exported so the manifest's `changeArtifacts` trait is checked against this
- * set rather than restated (add-definition-family-traits). */
-export const CHANGE_FREE_IMPLEMENTATION = new Set([
-	"no-openspec",
-	"solo",
-	"verify",
-]);
+/** Whether a definition's implementation step runs without an OpenSpec change:
+ * the task list the entry guard reads does not exist for it, so there is
+ * nothing to require. Read from the family traits (`changeArtifacts: none`)
+ * instead of a definition-id list (read-family-traits-instead-of-ids): the
+ * change-free loop, the single-agent `solo` family, and the verify-only family
+ * all declare it. A caller that passes no traits — a direct hook invocation, or
+ * a tier below the family-traits tier — falls back to the catalog table
+ * `effectiveFamilyTraits` reads, so every built-in family keeps its behavior. */
+function changeFree(
+	definition: { id: string },
+	traits?: WorkflowFamilyTraits,
+): boolean {
+	return (
+		(traits ?? effectiveFamilyTraits(definition))?.changeArtifacts === "none"
+	);
+}
 
 /** Whether an arriving transition output is a review's comment payload. The
  * only producer of `{comments}` into the implementation step is a review's
@@ -33,8 +39,8 @@ export const implementationBehavior: StepBehavior = {
 	classification: "single",
 	roles: () => ["worker"],
 	candidateRoles: () => ["worker"],
-	validateEvidence: ({ snapshot, evidence }) => {
-		if (CHANGE_FREE_IMPLEMENTATION.has(snapshot.definition.id)) return;
+	validateEvidence: ({ snapshot, evidence, traits }) => {
+		if (changeFree(snapshot.definition, traits)) return;
 		validateImplementationEvidence(evidence as PreparedStepEvidence);
 	},
 	onArrive: ({ outcome, output }) => ({

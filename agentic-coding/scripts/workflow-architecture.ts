@@ -15,6 +15,8 @@
 
 import path from "node:path";
 import {
+	isArrayExpression,
+	isBinaryExpression,
 	isCallExpression,
 	isClassDeclaration,
 	isExportDefaultDeclaration,
@@ -25,6 +27,8 @@ import {
 	isNewExpression,
 	isOptionalCallExpression,
 	isOptionalMemberExpression,
+	isStringLiteral,
+	isSwitchStatement,
 	isTSInterfaceDeclaration,
 	isTSTypeAliasDeclaration,
 	isVariableDeclaration,
@@ -906,6 +910,210 @@ export function checkExceptionUsage(
 			rule: "exception:unused",
 			message: `stale architecture exception ${edge} no longer matches any source edge (rationale: ${entry.rationale}); remove it once its removal condition holds: ${entry.removalCondition}`,
 		});
+	}
+	return issues;
+}
+
+// ---------------------------------------------------------------------------
+// Repository family id comparisons (read-family-traits-instead-of-ids)
+// ---------------------------------------------------------------------------
+
+/** The repository code-change families whose properties the engine reads from
+ * declared family traits: `openspec`, `openspec-apply`, `openspec-propose`,
+ * `openspec-fusion`, `openspec-fusion-propose`, `no-openspec`, `solo`,
+ * `rebase`, `verify`. The documentation families (`wiki`, `wiki-comments`,
+ * `research`) are deliberately absent: they keep their own target and step
+ * checks, so a `=== "wiki"` comparison is not what this guard forbids. */
+export const REPOSITORY_FAMILY_IDS: readonly string[] = Object.freeze([
+	"openspec",
+	"openspec-apply",
+	"openspec-propose",
+	"openspec-fusion",
+	"openspec-fusion-propose",
+	"no-openspec",
+	"solo",
+	"rebase",
+	"verify",
+]);
+
+const REPOSITORY_FAMILY_ID_SET = new Set(REPOSITORY_FAMILY_IDS);
+
+/** The definitions catalog owns the family tables — the declared traits and
+ * policy per family, the trait enums, and the selectable-family catalog— so it
+ * is the one place a repository family id may be named at all. */
+const FAMILY_ID_CATALOG_PREFIX = "workflow/definitions/";
+
+const FAMILY_ID_COMPARISONS = new Set(["==", "===", "!=", "!=="]);
+
+/** A string literal that is exactly a repository family id. Only quoted
+ * literals count: the trait *values* (`changeArtifacts: "openspec"`) are the
+ * same strings, so the guard flags a literal by where it appears (compared to,
+ * or looked up with, a definition id) rather than by its value alone. */
+function familyIdLiteral(node: Node | undefined | null): string | undefined {
+	if (!node || !isStringLiteral(node)) return undefined;
+	return REPOSITORY_FAMILY_ID_SET.has(node.value) ? node.value : undefined;
+}
+
+/** An expression that reads a workflow definition's identifier: `definition.id`,
+ * `snapshot.definition.id`, `input.definitionId`, `workflowType`, and the start
+ * guard's `workflow` parameter. The predicate is deliberately name-based: a
+ * definition id under another spelling is outside what a bounded syntactic
+ * guard can see (see this file's header), which is why the guard is paired with
+ * the reader-level suites rather than replacing them. */
+function definitionIdExpression(
+	source: ReturnType<typeof parseSourceFile>,
+	node: Node | undefined | null,
+): boolean {
+	if (!node) return false;
+	const text = textOf(source, node);
+	if (!text) return false;
+	return (
+		/(?:\.id|\?\.id)$/.test(text) ||
+		/(?:^|\.)(?:definitionId|workflowType|workflow)$/.test(text)
+	);
+}
+
+/** The family literals of a per-family roster — an array or `new Set([...])`
+ * literal, or an identifier bound to one in the same module. */
+function familyRosterLiterals(
+	node: Node | undefined | null,
+	rosters: ReadonlyMap<string, readonly Node[]>,
+): readonly Node[] {
+	if (!node) return [];
+	if (isArrayExpression(node)) {
+		const literals: Node[] = [];
+		for (const element of node.elements)
+			if (element && familyIdLiteral(element) !== undefined)
+				literals.push(element);
+		return literals;
+	}
+	if (
+		isNewExpression(node) &&
+		isIdentifier(node.callee, { name: "Set" }) &&
+		node.arguments.length === 1
+	)
+		return familyRosterLiterals(node.arguments[0], rosters);
+	if (isIdentifier(node)) return rosters.get(node.name) ?? [];
+	return [];
+}
+
+/** Roster identifiers declared in this module, so an out-of-line
+ * `const CLOSE_ONLY = new Set([...]); ... CLOSE_ONLY.has(definition.id)` is
+ * caught as well as the inline form. */
+function familyRosters(
+	source: ReturnType<typeof parseSourceFile>,
+): Map<string, readonly Node[]> {
+	const rosters = new Map<string, readonly Node[]>();
+	for (const statement of source.statements) {
+		// `const X = [...]` and the exported form `export const X = [...]`, which
+		// is how the former change-free/close-only lists were declared.
+		const declaration = isExportNamedDeclaration(statement)
+			? statement.declaration
+			: statement;
+		if (!declaration || !isVariableDeclaration(declaration)) continue;
+		for (const declarator of declaration.declarations) {
+			if (!isIdentifier(declarator.id) || !declarator.init) continue;
+			const literals = familyRosterLiterals(declarator.init, new Map());
+			if (literals.length) rosters.set(declarator.id.name, literals);
+		}
+	}
+	return rosters;
+}
+
+function memberName(node: Node | undefined | null): string | undefined {
+	if (!node) return undefined;
+	if (isIdentifier(node)) return node.name;
+	if (isStringLiteral(node)) return node.value;
+	return undefined;
+}
+
+/** The repository-family id reads this change removes: a definition id
+ * compared to a family name with `===`/`!==`, looked up in a per-family roster
+ * (`ROSTER.includes(definition.id)`, `ROSTER.has(definition.id)`), or matched
+ * with `definition.id.startsWith("openspec-fusion")`. Runs over every
+ * `.ts`/`.tsx` module under `root`'s `workflow/` and `server/` trees, skipping
+ * the definitions catalog; `root` is the package's `src` directory (or a
+ * fixture `src`). */
+export function checkRepositoryFamilyIdComparisons(
+	root: string,
+): ArchitectureIssue[] {
+	const issues: ArchitectureIssue[] = [];
+	for (const file of buildSourceAnalysis(root).keys()) {
+		const fileRel = toPosix(path.relative(root, file));
+		if (fileRel.startsWith(FAMILY_ID_CATALOG_PREFIX)) continue;
+		if (!fileRel.startsWith("workflow/") && !fileRel.startsWith("server/"))
+			continue;
+		const source = parseSourceFile(file);
+		const rosters = familyRosters(source);
+		const report = (node: Node, family: string): void => {
+			const position = positionOf(node);
+			issues.push({
+				file,
+				line: position.line,
+				column: position.column,
+				rule: "family:id-comparison",
+				message: `${fileRel} compares a workflow definition id to the repository code-change family name "${family}"; read the pinned definition's family traits (effectiveFamilyTraits) instead`,
+			});
+		};
+		for (const statement of source.statements)
+			traverseFast(statement, (node) => {
+				if (
+					isBinaryExpression(node) &&
+					FAMILY_ID_COMPARISONS.has(node.operator)
+				) {
+					for (const [literalSide, idSide] of [
+						[node.left, node.right],
+						[node.right, node.left],
+					] as const) {
+						const family = familyIdLiteral(literalSide);
+						if (family && definitionIdExpression(source, idSide))
+							report(literalSide, family);
+					}
+					return;
+				}
+				if (
+					(isCallExpression(node) || isOptionalCallExpression(node)) &&
+					(isMemberExpression(node.callee) ||
+						isOptionalMemberExpression(node.callee))
+				) {
+					const object = node.callee.object;
+					const property = memberName(node.callee.property);
+					const argument = node.arguments[0] as Node | undefined;
+					// `definition.id.startsWith("openspec-fusion")` and its
+					// membership twin `definitionId.includes("solo")`.
+					const family = familyIdLiteral(argument);
+					if (
+						family &&
+						(property === "startsWith" ||
+							property === "includes" ||
+							property === "indexOf") &&
+						definitionIdExpression(source, object)
+					)
+						report(argument ?? node, family);
+					// `["openspec-fusion", ...].includes(definition.id)`, the roster
+					// the family-id branch was usually written as.
+					if (
+						(property === "includes" ||
+							property === "has" ||
+							property === "indexOf") &&
+						definitionIdExpression(source, argument)
+					) {
+						const literals = familyRosterLiterals(object, rosters);
+						const first = literals[0];
+						if (first)
+							report(first, familyIdLiteral(first) ?? "repository family");
+					}
+					return;
+				}
+				if (
+					isSwitchStatement(node) &&
+					definitionIdExpression(source, node.discriminant)
+				)
+					for (const switchCase of node.cases) {
+						const family = familyIdLiteral(switchCase.test);
+						if (family && switchCase.test) report(switchCase.test, family);
+					}
+			});
 	}
 	return issues;
 }

@@ -1,5 +1,7 @@
 import type { WorkflowSnapshot } from "../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../contracts.ts";
+import { effectiveFamilyTraits } from "../definitions/manifest-policy.ts";
+import type { WorkflowFamilyTraits } from "../registry.ts";
 import type { ArriveResult, StepBehavior } from "./types.ts";
 
 // Single source of truth for the core.verification role catalog: the engine's
@@ -19,20 +21,47 @@ export const VERIFIER_ROLES = [
 ] as const;
 const TRIAGE_ROLES = VERIFIER_ROLES.filter((role) => role !== "test-verifier");
 
-/** The roles triage and the classifier may select for a definition: the
- * catalog minus the engine-owned full-suite role, minus the OpenSpec verifier
- * for a definition that declares no OpenSpec surface. Single source for the
- * engine's selection validation, triage validation, and the per-round
- * classifier questions (`classifiers.ts`). */
-export function triageRolesFor(definitionId: string): string[] {
-	return TRIAGE_ROLES.filter(
-		(role) => definitionId !== "no-openspec" || role !== "openspec-verifier",
+/** Whether the OpenSpec verifier role is eligible, read from the family's
+ * `openspecVerifier` trait instead of the definition id
+ * (read-family-traits-instead-of-ids). A caller that passes no traits — a
+ * classifier helper called with a bare id, or a tier below the family-traits
+ * tier — falls back to the catalog table `effectiveFamilyTraits` reads, and a
+ * definition that declares none (the documentation families) keeps today's
+ * default of eligible. */
+function openspecVerifierEligible(
+	definitionId: string,
+	traits?: WorkflowFamilyTraits,
+): boolean {
+	return (
+		(traits ?? effectiveFamilyTraits({ id: definitionId }))?.openspecVerifier ??
+		true
 	);
 }
 
-function candidateRoles(definitionId: string): string[] {
+/** The roles triage and the classifier may select for a definition: the
+ * catalog minus the engine-owned full-suite role, minus the OpenSpec verifier
+ * for a definition whose traits declare no OpenSpec surface. Single source for
+ * the engine's selection validation, triage validation, and the per-round
+ * classifier questions (`classifiers.ts`). */
+export function triageRolesFor(
+	definitionId: string,
+	traits?: WorkflowFamilyTraits,
+): string[] {
+	return TRIAGE_ROLES.filter(
+		(role) =>
+			openspecVerifierEligible(definitionId, traits) ||
+			role !== "openspec-verifier",
+	);
+}
+
+function candidateRoles(
+	definitionId: string,
+	traits?: WorkflowFamilyTraits,
+): string[] {
 	return VERIFIER_ROLES.filter(
-		(role) => definitionId !== "no-openspec" || role !== "openspec-verifier",
+		(role) =>
+			openspecVerifierEligible(definitionId, traits) ||
+			role !== "openspec-verifier",
 	);
 }
 
@@ -48,11 +77,12 @@ function candidateRoles(definitionId: string): string[] {
 function allowedTriageRoles(
 	definitionId: string,
 	selectedRoles: readonly string[],
+	traits?: WorkflowFamilyTraits,
 ): Set<string> {
-	if (selectedRoles.length === 0) return new Set(triageRolesFor(definitionId));
-	return new Set(
-		selectedRoles.filter((role) => triageRolesFor(definitionId).includes(role)),
-	);
+	if (selectedRoles.length === 0)
+		return new Set(triageRolesFor(definitionId, traits));
+	const eligible = triageRolesFor(definitionId, traits);
+	return new Set(selectedRoles.filter((role) => eligible.includes(role)));
 }
 
 function triageCompletion(ctx: {
@@ -61,6 +91,7 @@ function triageCompletion(ctx: {
 	output?: unknown;
 	changedFiles?: readonly string[];
 	snapshot: WorkflowSnapshot;
+	traits?: WorkflowFamilyTraits;
 }) {
 	if (ctx.outcome !== "complete") return undefined;
 	const output = ctx.output as {
@@ -72,6 +103,7 @@ function triageCompletion(ctx: {
 	const allowed = allowedTriageRoles(
 		ctx.definitionId,
 		ctx.snapshot.step.selectedRoles,
+		ctx.traits,
 	);
 	if (
 		!Array.isArray(output.roles) ||
@@ -215,7 +247,8 @@ export const verificationBehaviors: Readonly<Record<string, StepBehavior>> = {
 			snapshot.step.selectedRoles.length
 				? [...snapshot.step.selectedRoles]
 				: ["test-verifier"],
-		candidateRoles: ({ definitionId }) => candidateRoles(definitionId),
+		candidateRoles: ({ definitionId, traits }) =>
+			candidateRoles(definitionId, traits),
 		onArrive: ({ snapshot, output }) => {
 			const round = (snapshot.loopCounts["core.verification:round"] ?? 0) + 1;
 			snapshot.loopCounts["core.verification:round"] = round;

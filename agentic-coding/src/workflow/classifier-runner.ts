@@ -60,6 +60,7 @@ import {
 } from "./failures.ts";
 import { type LayaLocalClassifier, layaLocalClassifier } from "./laya-local.ts";
 import type { AgentsConfig } from "./profiles.ts";
+import type { WorkflowFamilyTraits } from "./registry.ts";
 import { changedFilesInAsync } from "./runtime/evidence.ts";
 
 /** Per-artifact and total caps so a large change cannot blow up the prompt or
@@ -873,9 +874,10 @@ export function triageRequest(
 	model: string,
 	state: string,
 	needsVerification = false,
+	traits?: WorkflowFamilyTraits,
 ): ClassifierRequest {
 	const questions: Record<string, ClassifierQuestion> = {};
-	for (const question of triageRoleQuestions(definitionId))
+	for (const question of triageRoleQuestions(definitionId, traits))
 		questions[question.questionId] = {
 			type: "noul",
 			instructions: question.instructions,
@@ -951,6 +953,7 @@ export function invokeTriageClassifier(
 	state: TriageClassifierState,
 	signal?: AbortSignal,
 	needsVerification = false,
+	traits?: WorkflowFamilyTraits,
 ): Effect.Effect<Record<string, ClassifierAnswer>, Error> {
 	const rendered = renderTriageState(state);
 	return Effect.gen(function* () {
@@ -964,6 +967,7 @@ export function invokeTriageClassifier(
 					binding.model,
 					rendered,
 					needsVerification,
+					traits,
 				),
 		);
 		/** The triage request carries no routing telemetry observer, so the

@@ -256,6 +256,18 @@ export function withFamilyTraits(manifest: WorkflowManifest): WorkflowManifest {
 	return { ...manifest, policy: { ...policy, traits } };
 }
 
+/** The catalog's declared policy for a built-in family id, or `undefined` for
+ * an id the catalog does not carry. The start launcher (`startArgs`) has no
+ * verification-round count to resolve a definition with, so it reads the
+ * family's declared `checkoutRequired` from here instead of an id list; an
+ * unknown id stays unstyled and fails at the start boundary with the
+ * registered-definitions diagnostic. */
+export function catalogManifestPolicy(
+	id: string,
+): WorkflowManifestPolicy | undefined {
+	return MANIFEST_POLICY[id];
+}
+
 /** A pre-policy definition version has no `policy` block (adding one would
  * change its digest and strand every in-flight workflow pinned to it — see
  * D1). `start()` still needs a policy value for every version, so it falls

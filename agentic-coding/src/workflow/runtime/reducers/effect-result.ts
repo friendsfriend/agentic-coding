@@ -37,6 +37,7 @@ import {
 	triageRoleQuestions,
 } from "../../classifiers.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
+import { effectiveFamilyTraits } from "../../definitions/manifest-policy.ts";
 import { loadConfigWithProvenance } from "../../effects.ts";
 import {
 	type AgentsConfig,
@@ -51,6 +52,7 @@ import {
 } from "../../profiles.ts";
 import type {
 	CompiledWorkflowDefinition,
+	WorkflowFamilyTraits,
 	WorkflowRegistry,
 } from "../../registry.ts";
 import {
@@ -109,7 +111,13 @@ export function applyClassifierRouting(
 			// belongs in the same history the dashboard reads: before this, an
 			// answered role classification left no record at all and only a
 			// fail-open ever surfaced as attention.
-			recordTriageClassification(snapshot, definition.id, payload, now);
+			recordTriageClassification(
+				snapshot,
+				definition.id,
+				effectiveFamilyTraits(definition),
+				payload,
+				now,
+			);
 			// The per-file judgment sweep answers one question per candidate file,
 			// so it is recorded as the one sweep it was rather than as one record
 			// per file, which a change-sized fan-out could never fit in the bounded
@@ -283,6 +291,7 @@ function classifierModel(value: unknown): string {
 function recordTriageClassification(
 	snapshot: WorkflowSnapshot,
 	definitionId: string,
+	traits: WorkflowFamilyTraits | undefined,
 	payload: {
 		model?: unknown;
 		state?: unknown;
@@ -293,7 +302,7 @@ function recordTriageClassification(
 	},
 	now: () => Date,
 ): void {
-	const questions = triageRoleQuestions(definitionId);
+	const questions = triageRoleQuestions(definitionId, traits);
 	if (!questions.length) return;
 	const answers =
 		payload.answers &&
@@ -883,6 +892,7 @@ export function effectResult(
 		const step = registry.stepForDefinition(definition, snapshot.currentStep);
 		const completion = step.behavior?.onEffectComplete?.({
 			snapshot: structuredClone(snapshot),
+			traits: effectiveFamilyTraits(definition),
 			effect: {
 				kind: row.kind,
 				payload: JSON.parse(row.payload_json),

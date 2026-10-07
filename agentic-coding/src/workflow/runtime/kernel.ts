@@ -21,6 +21,7 @@ import type {
 	WorkflowSnapshot,
 } from "../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../contracts.ts";
+import { effectiveFamilyTraits } from "../definitions/manifest-policy.ts";
 import type {
 	CompiledWorkflowDefinition,
 	StepDefinition,
@@ -179,6 +180,7 @@ export function applyCompletionResult(
 			const destinationStep = registry.stepForDefinition(definition, roleStep);
 			const candidates = destinationStep.behavior?.candidateRoles?.({
 				definitionId: definition.id,
+				traits: effectiveFamilyTraits(definition),
 				fusionPlannerCount: snapshot.routing.routes.filter(
 					(route) => route.stepId === "fusion.plan",
 				).length,
@@ -242,6 +244,7 @@ export function applyCompletionResult(
 	}
 	const candidateRoles = step.behavior?.candidateRoles?.({
 		definitionId: definition.id,
+		traits: effectiveFamilyTraits(definition),
 		fusionPlannerCount: snapshot.routing.routes.filter(
 			(route) => route.stepId === "fusion.plan",
 		).length,
@@ -472,6 +475,7 @@ export function transition(
 	const arrival: ArriveResult =
 		destination.behavior?.onArrive?.({
 			snapshot,
+			traits: effectiveFamilyTraits(definition),
 			edge,
 			outcome,
 			output,
@@ -549,13 +553,15 @@ export function enterStep(
 		key: string,
 		payload: JsonValueType,
 	) => enqueue(db, snapshot, kind, key, payload);
+	const traits = effectiveFamilyTraits(definition);
 	if (step.actor === "agent") {
 		if (!step.behavior) throw new Error(`missing step behavior: ${step.id}`);
 		if (!step.behavior.roles)
 			throw new Error(`missing role behavior for agent step ${step.id}`);
-		const roles = step.behavior.roles({ snapshot });
+		const roles = step.behavior.roles({ snapshot, traits });
 		const entry = step.behavior.onEnter?.({
 			snapshot,
+			traits,
 			enqueue: enqueueEffect,
 			hasLiveRun,
 		});
@@ -566,7 +572,12 @@ export function enterStep(
 		}
 		return;
 	}
-	step.behavior?.onEnter?.({ snapshot, enqueue: enqueueEffect, hasLiveRun });
+	step.behavior?.onEnter?.({
+		snapshot,
+		traits,
+		enqueue: enqueueEffect,
+		hasLiveRun,
+	});
 }
 
 export function validateFusionRouting(

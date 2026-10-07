@@ -7,6 +7,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { JsonValue, WorkflowSnapshot } from "../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../contracts.ts";
+import { effectiveFamilyTraits } from "../definitions/manifest-policy.ts";
+import type { WorkflowManifestPolicy } from "../registry.ts";
 import {
 	conceptPath,
 	listConcepts,
@@ -350,8 +352,18 @@ function resolves(repository: string, ref: string): boolean {
 export function validateStartEvidence(
 	repository: string,
 	input: StartWorkflowInput,
-	proposal = false,
+	definition: { id: string; policy?: WorkflowManifestPolicy },
 ): void {
+	// Every repository family property this guard enforces is read from the
+	// pinned definition's effective traits (`startRequirements`) instead of a
+	// definition-id branch (read-family-traits-instead-of-ids): which families
+	// need a task, a clean tree, an OpenSpec project or change, a verifiable
+	// base, or rebase refs. A definition that declares no traits has no
+	// requirements to meet — it never reaches here from `resolveStart`, which
+	// skips the wiki and research targets.
+	const requirements = new Set(
+		effectiveFamilyTraits(definition)?.startRequirements ?? [],
+	);
 	const status = Bun.spawnSync(
 		["git", "-C", repository, "status", "--porcelain"],
 		{ stdout: "pipe", stderr: "pipe" },
@@ -363,7 +375,7 @@ export function validateStartEvidence(
 		);
 	if (
 		status.stdout.toString().trim() &&
-		!proposal &&
+		requirements.has("clean-tree") &&
 		input.definitionId !== "wiki"
 	)
 		throw new WorkflowRuntimeError(
@@ -378,7 +390,7 @@ export function validateStartEvidence(
 			);
 		return;
 	}
-	if (input.definitionId === "no-openspec" || input.definitionId === "solo") {
+	if (requirements.has("task")) {
 		if (!input.metadata.task?.trim())
 			throw new WorkflowRuntimeError(
 				"start-guard",
@@ -388,12 +400,12 @@ export function validateStartEvidence(
 	}
 	// A verify-only run inspects the current checkout, so it needs no task and no
 	// OpenSpec project. Its registry policy requires the repository checkout and
-	// the current branch (checked above), and `proposal` is true for it, so the
-	// clean-tree rule above is deliberately skipped: verifying uncommitted work is
-	// the point. What it does need is a baseline — the branch's change set is
-	// `metadata.baseCommit..HEAD`, so both the base ref it came from and the
-	// commit itself must resolve.
-	if (input.definitionId === "verify") {
+	// the current branch (checked above), and it declares no `clean-tree`
+	// requirement, so the clean-tree rule above is deliberately skipped:
+	// verifying uncommitted work is the point. What it does need is a baseline —
+	// the branch's change set is `metadata.baseCommit..HEAD`, so both the base ref
+	// it came from and the commit itself must resolve.
+	if (requirements.has("base-commit")) {
 		const base = input.metadata.baseBranch;
 		if (!base)
 			throw new WorkflowRuntimeError(
@@ -419,7 +431,7 @@ export function validateStartEvidence(
 	// or target ref is not there. Each ref gets one direct git read, mirroring
 	// the clean-tree read above; the target is checked after the start boundary's
 	// best-effort fetch.
-	if (input.definitionId === "rebase") {
+	if (requirements.has("rebase-refs")) {
 		const source = input.metadata.branch;
 		const target = input.metadata.baseBranch;
 		if (!source || !target)
@@ -444,9 +456,12 @@ export function validateStartEvidence(
 			);
 		return;
 	}
-	if (!fs.existsSync(path.join(repository, "openspec", "config.yaml")))
+	if (
+		requirements.has("openspec-project") &&
+		!fs.existsSync(path.join(repository, "openspec", "config.yaml"))
+	)
 		throw new WorkflowRuntimeError("start-guard", "OpenSpec project required");
-	if (input.definitionId === "openspec-apply") {
+	if (requirements.has("openspec-change")) {
 		const root = path.join(repository, "openspec", "changes", input.workflowId);
 		for (const file of ["proposal.md", "design.md", "tasks.md"])
 			if (

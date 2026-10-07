@@ -1,3 +1,5 @@
+import { effectiveFamilyTraits } from "../definitions/manifest-policy.ts";
+import type { WorkflowFamilyTraits } from "../registry.ts";
 import type { StepBehavior } from "./types.ts";
 import {
 	type PreparedStepEvidence,
@@ -8,21 +10,30 @@ const REVIEW_COMMENTS_INPUT = {
 	schemaId: "core.review-comments",
 	schemaVersion: 1,
 } as const;
-/** Definitions whose `core.completed` never offers `create-pr`: proposal-only
- * workflows never reach delivery, the wiki/research workflows have nothing to
- * push as a repository pull request, and a solo workflow has no delivery step
- * to push from. Exported so the manifest's `delivery` trait is checked against
- * this list rather than restated (add-definition-family-traits). */
-export const CLOSE_ONLY_DEFINITIONS = [
-	"openspec-propose",
-	"openspec-fusion-propose",
-	"wiki",
-	"wiki-comments",
-	"research",
-	"solo",
-	"rebase",
-	"verify",
-];
+/** Documentation families declare no repository traits, and their
+ * `core.completed` never offers `create-pr` either: the wiki and research
+ * workflows have nothing to push as a repository pull request. They are the
+ * holdout list the trait read falls back to, not a repository code-change
+ * family (`read-family-traits-instead-of-ids` keeps the documentation
+ * families' own id checks by design). */
+const DOCUMENTATION_CLOSE_ONLY = new Set(["wiki", "wiki-comments", "research"]);
+
+/** Whether a definition's `core.completed` offers only `close`: every family
+ * that delivers no pull request — the proposal-only workflows, which never
+ * reach delivery, the single-agent and ref-shaped families, which have nothing
+ * to push, and the documentation families. Read from the `delivery` trait
+ * instead of a definition-id list; a caller that passes no traits falls back to
+ * the catalog table `effectiveFamilyTraits` reads, so every built-in family
+ * keeps its behavior. */
+function closeOnly(
+	definitionId: string,
+	traits?: WorkflowFamilyTraits,
+): boolean {
+	const effective = traits ?? effectiveFamilyTraits({ id: definitionId });
+	return effective
+		? effective.delivery === "none"
+		: DOCUMENTATION_CLOSE_ONLY.has(definitionId);
+}
 
 /** The review decision both review steps offer: approve the work, or send the
  * selected findings back to the worker. `core.developer-review` gates a change
@@ -123,8 +134,8 @@ export const lifecycleBehaviors: Readonly<Record<string, StepBehavior>> = {
 	},
 	"core.completed": {
 		onArrive: () => ({ status: "completed" }),
-		developerActions: ({ snapshot }) => [
-			...(CLOSE_ONLY_DEFINITIONS.includes(snapshot.definition.id)
+		developerActions: ({ snapshot, traits }) => [
+			...(closeOnly(snapshot.definition.id, traits)
 				? []
 				: [
 						{

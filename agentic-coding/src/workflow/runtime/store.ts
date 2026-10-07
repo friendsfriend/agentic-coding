@@ -20,6 +20,7 @@ import type {
 } from "../../contracts/workflow.ts";
 import { normalizeRuntimeId } from "../../contracts/workflow.ts";
 import { decodeSnapshot, WorkflowRuntimeError } from "../contracts.ts";
+import { effectiveFamilyTraits } from "../definitions/manifest-policy.ts";
 import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
@@ -1315,6 +1316,7 @@ export function actions(
 			.stepForDefinition(definition, snapshot.currentStep)
 			.behavior?.developerActions?.({
 				snapshot,
+				traits: effectiveFamilyTraits(definition),
 			}) ?? []
 	);
 }

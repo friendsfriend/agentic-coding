@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Assignment } from "../contracts/workflow.ts";
 import { AGENT_DEF_DIR } from "./paths.ts";
-import type { StepDefinition } from "./registry.ts";
+import type { StepDefinition, WorkflowFamilyTraits } from "./registry.ts";
 
 export const MAX_ASSIGNMENT_BYTES = 96 * 1024;
 export interface RenderedAssignment {
@@ -32,6 +32,7 @@ export function renderAssignment(
 	step: Readonly<StepDefinition>,
 	assignment: Assignment,
 	assetRoot = path.join(AGENT_DEF_DIR, "instructions"),
+	traits?: WorkflowFamilyTraits,
 ): RenderedAssignment {
 	if (
 		assignment.stepId !== step.id ||
@@ -59,6 +60,7 @@ export function renderAssignment(
 	// Any other pinned asset for the step is always included.
 	const wikiAsset = step.behavior?.instructionAssetForRole?.({
 		role: assignment.role,
+		traits,
 	});
 	const assets = step.instructionAssets.flatMap((name, index) => {
 		if (name === "workflow-agent-protocol.md") return [];

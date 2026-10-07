@@ -5,6 +5,8 @@
 // parsing, and the selections. The runtime I/O half lives in
 // `classifier-runner.ts`; the reducer applies the result in
 // `runtime/reducers/effect-result.ts`.
+
+import type { WorkflowFamilyTraits } from "./registry.ts";
 import { triageRolesFor } from "./steps/verification.ts";
 
 /** A labelled candidate profile in a per-step model pool. `criteria` is
@@ -598,12 +600,16 @@ export const TRIAGE_ROLE_QUESTIONS: readonly TriageRoleQuestion[] =
 		},
 	] as const);
 
-/** The questions a definition's round asks, in catalog order. */
+/** The questions a definition's round asks, in catalog order. `traits` is the
+ * pinned definition's effective family traits when the caller has them; without
+ * them the eligibility falls back to the catalog table (see
+ * `steps/verification.ts`). */
 export function triageRoleQuestions(
 	definitionId: string,
+	traits?: WorkflowFamilyTraits,
 ): TriageRoleQuestion[] {
 	return TRIAGE_ROLE_QUESTIONS.filter((question) =>
-		triageRolesFor(definitionId).includes(question.role),
+		triageRolesFor(definitionId, traits).includes(question.role),
 	);
 }
 
@@ -624,9 +630,10 @@ export interface TriageSelection {
 export function selectTriageRoles(
 	definitionId: string,
 	answers: Readonly<Record<string, ClassifierAnswer>>,
+	traits?: WorkflowFamilyTraits,
 	floor = TRIAGE_NOUL_FLOOR,
 ): TriageSelection {
-	const questions = triageRoleQuestions(definitionId);
+	const questions = triageRoleQuestions(definitionId, traits);
 	const roles: string[] = [];
 	let answered = 0;
 	for (const question of questions) {

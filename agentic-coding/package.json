@@ -21,7 +21,7 @@
 		"format": "biome format --write .",
 		"build": "bun run scripts/build.ts",
 		"dev:ui": "bun --preload ./node_modules/@opentui/solid/scripts/preload.js src/tui/index.tsx --home",
-		"lint:boundaries": "bun test test/workflow-source-layer-boundaries.test.ts test/contracts/boundaries.test.ts test/data/boundaries.test.ts test/dash/viewIsolation.test.ts test/ui/packageBoundaries.test.ts"
+		"lint:boundaries": "bun test test/workflow-source-layer-boundaries.test.ts test/workflow-repository-family-literals.test.ts test/contracts/boundaries.test.ts test/data/boundaries.test.ts test/dash/viewIsolation.test.ts test/ui/packageBoundaries.test.ts"
 	},
 	"dependencies": {
 		"@earendil-works/chord": "1.0.0",

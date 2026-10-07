@@ -69,6 +69,7 @@ import {
 	type CredentialPrompt,
 	runGitWithCredentialsEffect,
 } from "./credentials.ts";
+import { effectiveFamilyTraits } from "./definitions/manifest-policy.ts";
 import { loadConfig, loadConfigWithProvenance } from "./effects.ts";
 import { AGENT_DEFINITIONS } from "./embedded.generated.ts";
 import {
@@ -92,7 +93,11 @@ import {
 	resolveGatePolicies,
 	resolvePreset,
 } from "./profiles.ts";
-import type { StepDefinition, WorkflowRegistry } from "./registry.ts";
+import type {
+	StepDefinition,
+	WorkflowFamilyTraits,
+	WorkflowRegistry,
+} from "./registry.ts";
 import { writeAgentRunEnv } from "./run-env.ts";
 import {
 	type ClaimedEffect,
@@ -1033,7 +1038,14 @@ export function agentEffectHandlers(
 						throw new PermanentFailure(
 							"workspace setup requires a named branch",
 						);
-					if (snapshot.definition.id === "rebase")
+					// The rebase family declares `rebase-refs`: it selects its own branch
+					// instead of inheriting the checked-out one, so the checkout is
+					// prepared against that selection before anything runs in it.
+					if (
+						effectiveFamilyTraits(
+							snapshotDefinition(snapshot, options.registry),
+						)?.startRequirements.includes("rebase-refs")
+					)
 						yield* prepareRebaseCheckout(snapshot, branch, signal);
 					let worktree =
 						input.mode === "worktree" && !sameCheckout
@@ -1119,6 +1131,7 @@ export function agentEffectHandlers(
 							definition.id,
 							announceGateSkip(snapshot, effect),
 							signal,
+							effectiveFamilyTraits(definition),
 						);
 					// A stage gate also resolves no pool, and it must never block its
 					// own stage: every failure mode becomes a forced run.
@@ -2467,6 +2480,7 @@ function triageClassification(
 	definitionId: string,
 	announceGateSkip: (stage: GateStage, noul?: number) => void,
 	signal?: AbortSignal,
+	traits?: WorkflowFamilyTraits,
 ): Effect.Effect<TriageClassificationWithSignals, Error> {
 	return Effect.gen(function* () {
 		const classified = yield* classifyTriageRoles(
@@ -2474,6 +2488,7 @@ function triageClassification(
 			definitionId,
 			announceGateSkip,
 			signal,
+			traits,
 		);
 		const swept = yield* fileSignalSweep(snapshot, signal);
 		return swept
@@ -2499,6 +2514,7 @@ function classifyTriageRoles(
 	definitionId: string,
 	announceGateSkip: (stage: GateStage, noul?: number) => void,
 	signal?: AbortSignal,
+	traits?: WorkflowFamilyTraits,
 ): Effect.Effect<TriageClassification, Error> {
 	return Effect.gen(function* () {
 		const policy = resolveSnapshotGatePolicies(snapshot).verification;
@@ -2529,6 +2545,7 @@ function classifyTriageRoles(
 					state,
 					signal,
 					automatic,
+					traits,
 				);
 				// The pass's model, the exact state it was asked about, and its
 				// answers ride along with the selection: the decision history records
@@ -2567,11 +2584,12 @@ function classifyTriageRoles(
 					policy,
 					forced,
 					announceGateSkip,
+					traits,
 				)
 			: forced;
 		if (gate.decision === "skip")
 			return { integration: TRIAGE_INTEGRATION, gate, ...asked };
-		const selection = selectTriageRoles(definitionId, asked.answers);
+		const selection = selectTriageRoles(definitionId, asked.answers, traits);
 		return selection.failOpen
 			? {
 					integration: TRIAGE_INTEGRATION,
@@ -2602,9 +2620,12 @@ function verificationGateVerdict(
 	policy: GatePolicy,
 	forced: GateClassification,
 	announceGateSkip: (stage: GateStage, noul?: number) => void,
+	traits?: WorkflowFamilyTraits,
 ): GateClassification {
 	const asked = [
-		...triageRoleQuestions(definitionId).map((question) => question.questionId),
+		...triageRoleQuestions(definitionId, traits).map(
+			(question) => question.questionId,
+		),
 		GATE_QUESTION_IDS.verification,
 	];
 	const answered = asked.filter((questionId) => {
@@ -2860,6 +2881,7 @@ function renderedAssignment(
 					? wikiWorkflowDataRoot()
 					: undefined,
 			)}/instructions`,
+			effectiveFamilyTraits(snapshotDefinition(snapshot, registry)),
 		),
 	};
 }
@@ -2898,6 +2920,7 @@ async function renderedAssignmentAsync(
 					? wikiWorkflowDataRoot()
 					: undefined,
 			)}/instructions`,
+			effectiveFamilyTraits(snapshotDefinition(snapshot, registry)),
 		),
 	};
 }
@@ -3008,6 +3031,7 @@ function assignmentFor(
 		.stepForDefinition(snapshotDefinition(snapshot, registry), run.stepId)
 		.behavior?.assignmentInputs?.({
 			snapshot,
+			traits: effectiveFamilyTraits(snapshotDefinition(snapshot, registry)),
 			run: { stepId: run.stepId, role: run.role, profile: run.profile },
 		});
 	const inputs = [

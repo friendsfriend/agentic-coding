@@ -9,6 +9,7 @@ import type {
 	WorkflowSnapshot,
 } from "../../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
+import { effectiveFamilyTraits } from "../../definitions/manifest-policy.ts";
 import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
@@ -112,6 +113,7 @@ export function agentHandoff(
 	const completion = step.behavior?.onAgentComplete?.({
 		snapshot: structuredClone(snapshot),
 		definitionId: definition.id,
+		traits: effectiveFamilyTraits(definition),
 		run,
 		outcome: command.outcome,
 		output,

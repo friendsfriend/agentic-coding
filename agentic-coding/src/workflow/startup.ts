@@ -11,7 +11,11 @@ import { registry as defaultRegistry } from "./cli/registry.ts";
 import type { WorkflowRuntimeError } from "./contracts.ts";
 // Imported from `manifest-policy.ts` rather than the `definitions.ts` barrel so
 // the barrel's frozen export-surface fixture stays untouched by a new tier.
-import { definitionVersionForFamilyTraits } from "./definitions/manifest-policy.ts";
+import {
+	definitionVersionForFamilyTraits,
+	effectiveFamilyTraits,
+	effectiveManifestPolicy,
+} from "./definitions/manifest-policy.ts";
 import {
 	PUBLIC_WORKFLOW_CATALOG,
 	registerBuiltins,
@@ -41,7 +45,7 @@ import {
 	validatePresetCoverage,
 	withHumanReviewGates,
 } from "./profiles.ts";
-import type { WorkflowRegistry } from "./registry.ts";
+import type { WorkflowManifestPolicy, WorkflowRegistry } from "./registry.ts";
 import {
 	toRuntimeError,
 	WorkflowConfig as WorkflowConfigService,
@@ -94,6 +98,7 @@ export function validateStart(
 		targetBranch?: string;
 		baseBranch?: string;
 	} = {},
+	definition?: { id: string; policy?: WorkflowManifestPolicy },
 ): void {
 	if (workflow === "research") {
 		if (!task?.trim())
@@ -110,20 +115,29 @@ export function validateStart(
 		if (!task?.trim()) throw new Error("wiki workflow requires non-empty task");
 		return;
 	}
+	// Every repository family property this guard enforces is read from the
+	// definition's effective traits (`startRequirements`) instead of a
+	// definition-id branch (read-family-traits-instead-of-ids). `startup.ts`
+	// resolves the pinned definition before calling; an id-only caller (the
+	// exported guard, the CLI's start prompt) falls back to the catalog table
+	// `effectiveFamilyTraits` reads, so every built-in family keeps its rules.
+	const requirements = new Set(
+		effectiveFamilyTraits(definition ?? { id: workflow })?.startRequirements ??
+			[],
+	);
 	// A verify-only run inspects the current state of the checkout, so it needs
 	// no task, no OpenSpec project, and no clean worktree — but the branch it
 	// verifies must have a base to compare against.
-	if (workflow === "verify") {
+	if (requirements.has("base-commit")) {
 		validateVerifyBase(repo, branches.baseBranch);
 		return;
 	}
-	const dirty = runGit(repo, "status", "--porcelain");
-	const proposal = ["openspec-propose", "openspec-fusion-propose"].includes(
-		workflow,
-	);
-	if (dirty && !proposal)
-		throw new Error("working tree must be clean before workflow start");
-	if (workflow === "no-openspec" || workflow === "solo") {
+	if (requirements.has("clean-tree")) {
+		const dirty = runGit(repo, "status", "--porcelain");
+		if (dirty)
+			throw new Error("working tree must be clean before workflow start");
+	}
+	if (requirements.has("task")) {
 		if (!task?.trim())
 			throw new Error(`${workflow} workflow requires non-empty task`);
 		return;
@@ -131,13 +145,16 @@ export function validateStart(
 	// A rebase replaces its branch in place, so both selected refs must already
 	// exist and must differ: a missing target would rebase onto nothing, and a
 	// branch rebased onto itself is a no-op the launch cannot have meant.
-	if (workflow === "rebase") {
+	if (requirements.has("rebase-refs")) {
 		validateRebaseBranches(repo, branches);
 		return;
 	}
-	if (!fs.existsSync(path.join(repo, "openspec", "config.yaml")))
+	if (
+		requirements.has("openspec-project") &&
+		!fs.existsSync(path.join(repo, "openspec", "config.yaml"))
+	)
 		throw new Error("OpenSpec project required for this workflow");
-	if (workflow === "openspec-apply") {
+	if (requirements.has("openspec-change")) {
 		const root = path.join(repo, "openspec", "changes", workflowId);
 		for (const file of ["proposal.md", "design.md", "tasks.md"])
 			if (
@@ -233,13 +250,18 @@ export function rolesForDefinition(
 ): Record<string, string[]> {
 	const roles: Record<string, string[]> = {};
 	const pinned = definition ?? { id: definitionId, steps };
+	const traits = effectiveFamilyTraits(pinned);
 	for (const stepId of steps) {
 		const step = registry.stepForDefinition(pinned, stepId);
 		if (step.actor !== "agent") continue;
 		const candidateRoles = step.behavior?.candidateRoles;
 		if (!candidateRoles)
 			throw new Error(`missing candidate roles for agent step ${stepId}`);
-		const resolved = candidateRoles({ definitionId, fusionPlannerCount });
+		const resolved = candidateRoles({
+			definitionId,
+			fusionPlannerCount,
+			traits,
+		});
 		if (!Array.isArray(resolved))
 			throw new Error(`invalid candidate roles for ${stepId}`);
 		if (stepId !== "fusion.plan" && !resolved.length)
@@ -281,7 +303,7 @@ function resolveRoutingForStart(
 		throw new Error(
 			`classifier-routed workflow ${definitionId} requires a preset; create model pools in ${SETTINGS_PRESETS_HINT}`,
 		);
-	const fusion = definitionId.startsWith("openspec-fusion");
+	const fusion = effectiveFamilyTraits(definition)?.planning === "fusion";
 	const defaults = fusion ? fusionPlannerDefaults(preset) : [];
 	const roles = rolesForDefinition(
 		definitionId,
@@ -437,13 +459,15 @@ function prepareFromContext(
 	const wikiOnly =
 		request.definitionId === "wiki-comments" ||
 		ctx.target === wikiWorkflowTarget();
-	const rebase = request.definitionId === "rebase";
+	const traits = effectiveFamilyTraits(definition);
+	const requirements = new Set(traits?.startRequirements ?? []);
+	const rebase = requirements.has("rebase-refs");
 	const rebaseSource = rebase ? request.sourceBranch?.trim() : undefined;
 	const rebaseTarget = rebase ? request.targetBranch?.trim() : undefined;
 	// The verify-only family measures the current branch against the configured
 	// base branch. It runs in the checkout the branch is already on and never
 	// switches it, so it shares the checkout contract with `wiki`.
-	const verify = request.definitionId === "verify";
+	const verify = requirements.has("base-commit");
 	const verifyBase = verify ? config.workflow.base_branch : undefined;
 	if (rebase || verify) {
 		// Refresh the target remote once, before the branch rules are enforced, so
@@ -468,12 +492,15 @@ function prepareFromContext(
 				targetBranch: rebaseTarget,
 				baseBranch: verifyBase,
 			},
+			definition,
 		);
-	const sameCheckout = [
-		"openspec-propose",
-		"openspec-fusion-propose",
-		"wiki",
-	].includes(request.definitionId);
+	// The families that run against the repository checkout itself
+	// (`policy.checkoutRequired`) rather than a worktree — the proposal-only
+	// flows and the repository-backed `wiki`. The verify-only family requires the
+	// checkout too, but selects its own base instead of inheriting the checked-out
+	// branch, so it is handled by its own `base-commit` requirement below.
+	const sameCheckout =
+		effectiveManifestPolicy(definition).checkoutRequired && !verify;
 	const research = request.definitionId === "research";
 	// A rebase owns the repository checkout exactly like the sameCheckout
 	// families, but it selects its own branch instead of inheriting the one that

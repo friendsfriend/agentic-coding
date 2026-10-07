@@ -391,6 +391,17 @@ editing behavior never produces a pin mismatch), and receives no database
 handle; hooks that need to persist something declare it and the engine
 performs the write.
 
+Every hook context also carries `traits`: the pinned definition's effective
+family traits, resolved once per command by the caller through
+`effectiveFamilyTraits(definition)` (read-family-traits-instead-of-ids). A
+behavior that used to branch on a repository code-change family id reads the
+trait instead, so a graph composed at runtime — a definition with an id the
+engine has never seen — behaves by what its manifest declares. `traits` is
+`undefined` for the documentation families (`wiki`, `wiki-comments`,
+`research`), which declare none; a hook invoked without it (a direct call, or a
+tier registered before the family-traits tier) falls back to the same per-id
+table `effectiveFamilyTraits` reads, so no built-in family changes behavior.
+
 `StepBehavior` hooks:
 
 - `classification` — the classifier mode (`single` or `roster`) a classifiable
@@ -398,8 +409,8 @@ performs the write.
   route steps and the reducer read it from the registered step definition.
 - `roles` / `candidateRoles` — which agent roles are active now / could ever be
   routed for this definition (stage A).
-- `validateEvidence({ snapshot })` — entry-guard predicate run before a step's
-  `complete` outcome is accepted; throws `WorkflowRuntimeError("entry-guard",
+- `validateEvidence({ snapshot, traits })` — entry-guard predicate run before a
+  step's `complete` outcome is accepted; throws `WorkflowRuntimeError("entry-guard",
   ...)` to reject.
 - `onAgentComplete({ snapshot, definitionId, run, outcome, output,
   outputDigest, remainingActiveRunIds, evidence })` and
@@ -537,10 +548,17 @@ already set:
   `rounds + 800` — the same graphs as the step-routing tier, plus a declared
   `traits` block on every repository code-change family. This is the version
   `startWorkflowInProcess` / `cli.ts`'s `start` command actually use for new
-  workflows. Nothing reads the block yet; it is the source the next change
-  (`read-family-traits-instead-of-ids`) switches the engine's per-family id
-  comparisons onto, so a graph composed at runtime can declare which family it
-  behaves as instead of falling through every literal comparison. It also
+  workflows. Every reader now resolves its per-family decision through
+  `effectiveFamilyTraits`: the step behaviors (change-free implementation,
+  close-only completion, OpenSpec-verifier eligibility), the start guards and
+  start requirements (`validateStart`, `validateStartEvidence`), fusion
+  planning, the workflow-id change identity, the launcher's checkout mode, and
+  the rebase checkout preparation — so a graph composed at runtime declares
+  which family it behaves as instead of falling through every literal
+  comparison. `test/workflow-repository-family-literals.test.ts`'s architecture
+  guard (`checkRepositoryFamilyIdComparisons`) fails on any new repository
+  family id compared to a definition id outside `workflow/definitions/`, while
+  the `wiki`/`wiki-comments`/`research` checks stay by design. It also
   restores `research`'s full-tool policy, which the step-routing tier's second
   `withManifestPolicy` pass had reverted and thereby made unstartable (the
   start guard looks for a route named by `definition.initial`, which per-step

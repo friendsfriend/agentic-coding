@@ -10,6 +10,7 @@ import type {
 	WorkflowSnapshot,
 } from "../../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../../contracts.ts";
+import { effectiveFamilyTraits } from "../../definitions/manifest-policy.ts";
 import {
 	executionSettings,
 	loadConfigWithProvenance,
@@ -139,7 +140,11 @@ function reduceDeveloperAction(
 				Object.keys(rolesByStep),
 				agents,
 			);
-		const fusion = definition.id.startsWith("openspec-fusion");
+		// A fusion definition re-seeds its planner roster from the tagged
+		// defaults when the preset changes; a single-planner definition has no
+		// roster to re-seed.
+		const traits = effectiveFamilyTraits(definition);
+		const fusion = traits?.planning === "fusion";
 		if (fusion && preset)
 			rolesByStep["fusion.plan"] = fusionPlannerRoleNames(preset);
 		let routing = resolveRouting(definition, rolesByStep, agents, preset);
@@ -409,7 +414,10 @@ function reduceDeveloperAction(
 		};
 	}
 	if (command.actionId === "create-pr") {
-		if (["openspec-propose", "openspec-fusion-propose"].includes(definition.id))
+		// A definition that delivers no pull request refuses the action even when
+		// it is dispatched outside the dashboard's action list (the `delivery`
+		// trait replaces the proposal-only id list).
+		if (effectiveFamilyTraits(definition)?.delivery === "none")
 			throw new WorkflowRuntimeError(
 				"unavailable",
 				"proposal workflows do not support pull-request creation",

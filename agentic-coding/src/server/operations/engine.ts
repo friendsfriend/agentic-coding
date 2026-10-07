@@ -4,6 +4,10 @@ import type {
 	WorkflowPrincipal,
 	WorkflowView,
 } from "../../contracts/workflow.ts";
+import {
+	catalogManifestPolicy,
+	effectiveFamilyTraits,
+} from "../../workflow/definitions/manifest-policy.ts";
 import { loadConfigWithProvenance } from "../../workflow/effects.ts";
 import {
 	dashboardApplication,
@@ -205,20 +209,26 @@ export function startArgs(input: {
 		input.workflowType === "quick"
 			? "no-openspec"
 			: (input.workflowType ?? "openspec");
-	const sameCheckout = [
-		"openspec-propose",
-		"openspec-fusion-propose",
-		"wiki",
-	].includes(definitionId);
+	// The launcher picks the family id; every family property it derives from
+	// that id — the checkout contract and the ref-shaped start inputs — comes
+	// from the family's declared policy and traits, never from comparing the id
+	// (read-family-traits-instead-of-ids). The start boundary resolves the pinned
+	// definition and re-derives the same decisions from it.
+	const requirements = new Set(
+		effectiveFamilyTraits({ id: definitionId })?.startRequirements ?? [],
+	);
 	const research = definitionId === "research";
+	// The verify-only family verifies the branch the checkout is already on, so
+	// it forces checkout mode and carries no extra input: it declares
+	// `base-commit` instead of being a `sameCheckout` launch.
+	const verify = requirements.has("base-commit");
+	const sameCheckout =
+		catalogManifestPolicy(definitionId)?.checkoutRequired === true && !verify;
 	// The rebase family runs in the repository checkout, like the sameCheckout
 	// families, but on the branch the launch selected rather than on the one that
 	// happens to be checked out — so it forces checkout mode and carries its two
 	// selected refs to the start boundary instead of setting `sameCheckout`.
-	const rebase = definitionId === "rebase";
-	// The verify-only family verifies the branch the checkout is already on, so
-	// it forces checkout mode too and carries no extra input.
-	const verify = definitionId === "verify";
+	const rebase = requirements.has("rebase-refs");
 	return {
 		repo: research ? researchWorkflowTarget() : input.repo,
 		...(research && input.repo ? { repositoryContext: input.repo } : {}),

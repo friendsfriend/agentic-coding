@@ -5,20 +5,29 @@ import type {
 	WorkflowRun,
 	WorkflowSnapshot,
 } from "../../contracts/workflow.ts";
-import type { WorkflowEdge } from "../registry.ts";
+import type { WorkflowEdge, WorkflowFamilyTraits } from "../registry.ts";
 
+// Every behavior hook receives the pinned definition's effective family traits
+// (read-family-traits-instead-of-ids): the runtime resolves the compiled
+// definition once per command and passes `effectiveFamilyTraits(definition)
+// here, so a composed workflow with a new id behaves by what it declares
+// instead of falling through an id comparison. `undefined` is the documentation
+// families (`wiki`, `wiki-comments`, `research`), which declare none.
 export interface StepRolesContext {
 	snapshot: WorkflowSnapshot;
+	traits?: WorkflowFamilyTraits;
 }
 
 export interface CandidateRolesContext {
 	definitionId: string;
 	fusionPlannerCount: number;
+	traits?: WorkflowFamilyTraits;
 }
 
 export interface ValidateEvidenceContext {
 	snapshot: WorkflowSnapshot;
 	evidence?: unknown;
+	traits?: WorkflowFamilyTraits;
 }
 
 export interface CompletionEffect {
@@ -43,6 +52,7 @@ export interface CompletionResult {
 export interface AgentCompletionContext {
 	snapshot: WorkflowSnapshot;
 	definitionId: string;
+	traits?: WorkflowFamilyTraits;
 	run: Pick<WorkflowRun, "id" | "role" | "stepId">;
 	outcome: string;
 	output?: unknown;
@@ -55,6 +65,7 @@ export interface AgentCompletionContext {
 
 export interface EffectCompletionContext {
 	snapshot: WorkflowSnapshot;
+	traits?: WorkflowFamilyTraits;
 	effect: {
 		kind: EffectKind;
 		payload: JsonValue;
@@ -72,6 +83,7 @@ export interface ArriveContext {
 	/** The edge's destination step is already current and `step` already
 	 * reset to a fresh attempt; `prior` carries what preceded that reset. */
 	snapshot: WorkflowSnapshot;
+	traits?: WorkflowFamilyTraits;
 	edge: WorkflowEdge;
 	outcome: string;
 	output: unknown;
@@ -89,6 +101,7 @@ export interface ArriveResult {
 
 export interface EnterContext {
 	snapshot: WorkflowSnapshot;
+	traits?: WorkflowFamilyTraits;
 	enqueue: (
 		kind: EffectKind,
 		idempotencyKey: string,
@@ -106,10 +119,12 @@ export interface EnterResult {
 
 export interface DeveloperActionsContext {
 	snapshot: WorkflowSnapshot;
+	traits?: WorkflowFamilyTraits;
 }
 
 export interface AssignmentInputsContext {
 	snapshot: WorkflowSnapshot;
+	traits?: WorkflowFamilyTraits;
 	run: Pick<WorkflowRun, "stepId" | "role"> & {
 		profile: Pick<WorkflowRun["profile"], "readOnly">;
 	};
@@ -127,6 +142,7 @@ export interface AssignmentInputsResult {
 
 export interface InstructionAssetForRoleContext {
 	role: string;
+	traits?: WorkflowFamilyTraits;
 }
 
 export interface StepBehavior {

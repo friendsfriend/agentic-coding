@@ -7,6 +7,7 @@ import type {
 	WorkflowSnapshot,
 } from "../contracts/workflow.ts";
 import { removedWorkflowHint } from "./definitions/catalog.ts";
+import { effectiveFamilyTraits } from "./definitions/manifest-policy.ts";
 import type { StepBehavior } from "./steps/types.ts";
 
 export type { StepBehavior } from "./steps/types.ts";
@@ -466,6 +467,11 @@ export class WorkflowRegistry {
 				throw new Error(`missing candidate roles for agent step ${id}`);
 			const roles = candidateRoles({
 				definitionId: manifest.id,
+				// The manifest's declared traits when it has them (the family-traits
+				// tier and above); `effectiveFamilyTraits` falls back to the catalog
+				// table for a tier that registered before traits existed, so the
+				// registration-time role set matches the family's real one.
+				traits: effectiveFamilyTraits(manifest),
 				// Fusion planner count is supplied only once routing is selected;
 				// zero is a valid catalog-time candidate set for that fan-out step.
 				fusionPlannerCount: id === "fusion.plan" ? 0 : 1,

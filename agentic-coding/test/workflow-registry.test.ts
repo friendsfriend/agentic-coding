@@ -20,9 +20,6 @@ import {
 	type WorkflowFamilyTraits,
 	WorkflowRegistry,
 } from "../src/workflow/registry.ts";
-import { CHANGE_FREE_IMPLEMENTATION } from "../src/workflow/steps/implementation.ts";
-import { CLOSE_ONLY_DEFINITIONS } from "../src/workflow/steps/lifecycle.ts";
-import { triageRolesFor } from "../src/workflow/steps/verification.ts";
 
 const contract = { id: "test.empty", version: 1, parse: () => null };
 const reduction = (snapshot: WorkflowSnapshot) => ({ snapshot, effects: [] });
@@ -905,27 +902,18 @@ describe("family traits (add-definition-family-traits)", () => {
 			]).toEqual([id, EXPECTED[id]]);
 	});
 
-	test("every trait still mirrors the engine branch it replaces", () => {
+	test("every trait stays consistent with the graph and the start requirements", () => {
 		for (const id of FAMILY_IDS) {
 			const definition = registry.definition(id, traitsVersion);
 			const traits = effectiveFamilyTraits(definition);
 			if (!traits) throw new Error(`missing traits for ${id}`);
-			// `CHANGE_FREE_IMPLEMENTATION` (steps/implementation.ts) skips the
-			// change-evidence check, and only a family that start-validates an
-			// OpenSpec project can produce change artifacts at all.
-			if (CHANGE_FREE_IMPLEMENTATION.has(id))
-				expect(traits.changeArtifacts).toBe("none");
+			// A family declares OpenSpec change artifacts exactly when its start
+			// validates an OpenSpec project: the change-free families
+			// (steps/implementation.ts's former `CHANGE_FREE_IMPLEMENTATION`) have
+			// neither, and now read the trait instead of an id list
+			// (read-family-traits-instead-of-ids).
 			expect(traits.changeArtifacts === "none").toBe(
 				!traits.startRequirements.includes("openspec-project"),
-			);
-			// `CLOSE_ONLY_DEFINITIONS` (steps/lifecycle.ts) decides whether
-			// `core.completed` offers `create-pr`.
-			expect(traits.delivery === "none").toBe(
-				CLOSE_ONLY_DEFINITIONS.includes(id),
-			);
-			// The `openspec-verifier` role filter (steps/verification.ts).
-			expect(traits.openspecVerifier).toBe(
-				triageRolesFor(id).includes("openspec-verifier"),
 			);
 			// The graph is the source of the planning mode, exactly as
 			// `validateFamilyTraits` reads it.
@@ -936,8 +924,8 @@ describe("family traits (add-definition-family-traits)", () => {
 						? "single"
 						: "none",
 			);
-			// `definitionId === "openspec-apply"` fixes the change id to the
-			// workflow id (runtime/engine.ts); a change-free family has none.
+			// The workflow-id change identity is the apply family's; a change-free
+			// family has no change identity at all.
 			expect(traits.changeIdentity).toBe(
 				traits.changeArtifacts === "none"
 					? "none"

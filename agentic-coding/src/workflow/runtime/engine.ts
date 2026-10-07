@@ -29,6 +29,7 @@ import {
 import type { RoutingDecisionSummary } from "../classifiers.ts";
 import { decodeSnapshot, WorkflowRuntimeError } from "../contracts.ts";
 import { decodePlanResult } from "../definitions/contracts.ts";
+import { effectiveFamilyTraits } from "../definitions/manifest-policy.ts";
 import { effectiveManifestPolicy } from "../definitions.ts";
 import {
 	redactTelemetryText,
@@ -900,6 +901,7 @@ export class WorkflowEngine {
 			input.definitionVersion ?? 1,
 		);
 		const policy = effectiveManifestPolicy(definition);
+		const traits = effectiveFamilyTraits(definition);
 		const wikiTarget = isWikiWorkflowTarget(input.repo);
 		const researchTarget = isResearchWorkflowTarget(input.repo);
 		const validTarget =
@@ -980,17 +982,20 @@ export class WorkflowEngine {
 				);
 		}
 		if (!wikiOnlyTarget && !researchTarget)
-			validateStartEvidence(repository, input, sameCheckout);
-		if (["openspec-fusion", "openspec-fusion-propose"].includes(definition.id))
+			validateStartEvidence(repository, input, definition);
+		// A fusion definition seeds a planner roster, so its routing carries the
+		// planner fan-out the fusion validation requires.
+		if (traits?.planning === "fusion")
 			validateFusionRouting(definition.id, input.routing);
 		const at = nowIso(this.now);
 		const workflowId = input.workflowId;
 		// No change identifier exists at start: the planner chooses the change
 		// id(s) during the plan step, and the engine records the declared
-		// primary into metadata.changeId at plan handoff. `openspec-apply` has
-		// no planner step, so its pre-existing change is the workflow id itself.
+		// primary into metadata.changeId at plan handoff. A definition whose
+		// change identity is the workflow id has no planner step, so its
+		// pre-existing change is the workflow id itself.
 		const startChangeId =
-			input.definitionId === "openspec-apply" ? input.workflowId : "";
+			traits?.changeIdentity === "workflow-id" ? input.workflowId : "";
 		const snapshot: WorkflowSnapshot = {
 			schemaVersion: 1,
 			workflowId,
@@ -1171,12 +1176,13 @@ export class WorkflowEngine {
 			this.now,
 			handoffWorktree,
 		);
+		const evidenceDefinition = this.registry.definition(
+			observed.definition.id,
+			observed.definition.version,
+			observed.definition.digest,
+		);
 		const evidenceStep = this.registry.stepForDefinition(
-			this.registry.definition(
-				observed.definition.id,
-				observed.definition.version,
-				observed.definition.digest,
-			),
+			evidenceDefinition,
 			observed.currentStep,
 		);
 		let evidenceSnapshot = observed;
@@ -1206,6 +1212,7 @@ export class WorkflowEngine {
 			evidenceStep.behavior.validateEvidence({
 				snapshot: evidenceSnapshot,
 				evidence: preparedStepEvidence,
+				traits: effectiveFamilyTraits(evidenceDefinition),
 			});
 		const sourceBaselineFingerprint =
 			evidenceSnapshot.definition.id === "wiki" ||
