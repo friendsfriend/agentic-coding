@@ -5,6 +5,7 @@ import { flag } from "./args.ts";
 
 export const SUBCOMMANDS: readonly string[] = [
 	"start",
+	"define",
 	"status",
 	"drain",
 	"action",
@@ -24,6 +25,7 @@ export const SUBCOMMANDS: readonly string[] = [
 ] as const;
 export const REQUIRED_FLAGS: Record<string, string[]> = {
 	start: ["workflow-id"],
+	define: ["repo", "file"],
 	status: ["repo", "workflow-id"],
 	drain: ["repo"],
 	action: ["repo", "workflow-id", "revision"],
@@ -70,6 +72,8 @@ const FLAG_SCHEMA: Record<
 			"workflow-id",
 			"mode",
 			"workflow",
+			// Alias for `--workflow`, the definition id the workflow pins.
+			"type",
 			"task",
 			"ticket",
 			"preset",
@@ -78,6 +82,11 @@ const FLAG_SCHEMA: Record<
 			"branch",
 			"onto",
 		],
+		positionals: [0, 0],
+	},
+	define: {
+		values: ["repo", "file"],
+		booleans: ["operator"],
 		positionals: [0, 0],
 	},
 	status: { values: ["repo", "workflow-id"], positionals: [0, 0] },

@@ -208,6 +208,9 @@ test("supported baselines and current-schema adoption preserve durable identitie
 				db.exec(
 					"INSERT INTO workflow_outbox SELECT * FROM workflow_outbox_old; DROP TABLE workflow_outbox_old",
 				);
+			} else if (baseline === 4) {
+				// A real v4 store predates the definition table.
+				db.exec("DROP TABLE workflow_definitions");
 			}
 			db.exec(`PRAGMA user_version=${baseline}`);
 			db.close();
@@ -353,6 +356,184 @@ test("concurrent dashboard reads do not race SQLite sidecar files", async () => 
 		expect(
 			await Promise.all(processes.map((process) => process.exited)),
 		).toEqual([0, 0, 0, 0]);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("v4 to v5 adds the definition table while preserving workflow identity", () => {
+	const root = repo();
+	try {
+		initializeStore(root);
+		seedCanonicalRows(root);
+		const before = preservedIdentity(root);
+		const downgraded = new Database(canonicalStorePath(root));
+		downgraded.exec("DROP TABLE workflow_definitions; PRAGMA user_version=4");
+		downgraded.close();
+		initializeStore(root);
+		expect(preservedIdentity(root)).toEqual(before);
+		const check = new Database(canonicalStorePath(root));
+		expect(check.query("PRAGMA user_version").get()).toEqual({
+			user_version: STORE_SCHEMA_VERSION,
+		});
+		expect(
+			check
+				.query("SELECT 1 FROM sqlite_master WHERE name='workflow_definitions'")
+				.get(),
+		).not.toBeNull();
+		// A stored definition row survives a repeated initialize.
+		check
+			.query("INSERT INTO workflow_definitions VALUES (?,?,?,?,?,?)")
+			.run(
+				"digest-1",
+				"custom.aaaaaaaaaaaa",
+				1,
+				"{}",
+				"{}",
+				"2026-01-01T00:00:00.000Z",
+			);
+		check.close();
+		initializeStore(root);
+		const again = new Database(canonicalStorePath(root));
+		expect(
+			again.query("SELECT count(*) AS count FROM workflow_definitions").get(),
+		).toEqual({ count: 1 });
+		again.close();
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("an interrupted v4 to v5 migration preserves its version and recovers on restart", () => {
+	const root = repo();
+	try {
+		initializeStore(root);
+		const db = new Database(canonicalStorePath(root));
+		db.exec("PRAGMA foreign_keys=OFF");
+		db.query("INSERT INTO workflow_events VALUES (?,?,?,?,?,?)").run(
+			"missing",
+			1,
+			"test",
+			"{}",
+			"{}",
+			"now",
+		);
+		db.exec("DROP TABLE workflow_definitions; PRAGMA user_version=4");
+		db.close();
+		expect(() => initializeStore(root)).toThrow(/foreign-key check failed/);
+		const failed = new Database(canonicalStorePath(root));
+		expect(failed.query("PRAGMA user_version").get()).toEqual({
+			user_version: 4,
+		});
+		// The rolled-back transaction left the additive table undone.
+		expect(
+			failed
+				.query("SELECT 1 FROM sqlite_master WHERE name='workflow_definitions'")
+				.get(),
+		).toBeNull();
+		failed.exec("PRAGMA foreign_keys=OFF");
+		failed
+			.query("DELETE FROM workflow_events WHERE workflow_id=?")
+			.run("missing");
+		failed.close();
+		initializeStore(root);
+		const recovered = new Database(canonicalStorePath(root));
+		expect(recovered.query("PRAGMA user_version").get()).toEqual({
+			user_version: STORE_SCHEMA_VERSION,
+		});
+		expect(
+			recovered
+				.query("SELECT 1 FROM sqlite_master WHERE name='workflow_definitions'")
+				.get(),
+		).not.toBeNull();
+		recovered.close();
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("an unversioned store written before v5 is classified and adopted at v5", () => {
+	const root = repo();
+	try {
+		initializeStore(root);
+		seedCanonicalRows(root);
+		const before = preservedIdentity(root);
+		const db = new Database(canonicalStorePath(root));
+		db.exec("PRAGMA foreign_keys=OFF");
+		db.exec("DROP TABLE workflow_definitions");
+		// A store another build never versioned, written before v5 existed: the
+		// historical classification must accept the missing table and adopt the
+		// store at v5 without touching its rows.
+		db.exec("PRAGMA user_version=0");
+		db.close();
+		initializeStore(root);
+		expect(preservedIdentity(root)).toEqual(before);
+		const check = new Database(canonicalStorePath(root));
+		expect(check.query("PRAGMA user_version").get()).toEqual({
+			user_version: STORE_SCHEMA_VERSION,
+		});
+		expect(
+			check
+				.query("SELECT 1 FROM sqlite_master WHERE name='workflow_definitions'")
+				.get(),
+		).not.toBeNull();
+		expect(check.query("PRAGMA foreign_key_check").all()).toEqual([]);
+		check.close();
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a v4 store this build cannot accept is not version-bumped", () => {
+	const root = repo();
+	try {
+		initializeStore(root);
+		const db = new Database(canonicalStorePath(root));
+		// A v4 store whose canonical constraints drifted: the v4 -> v5 step must
+		// not commit the version bump for a shape this build then rejects.
+		db.exec("DROP TABLE workflow_definitions");
+		db.exec(
+			"ALTER TABLE workflow_instances RENAME TO workflow_instances_valid",
+		);
+		db.exec(
+			"CREATE TABLE workflow_instances(id TEXT PRIMARY KEY, change_id TEXT NULL, repository TEXT NOT NULL, worktree TEXT NOT NULL, definition_id TEXT NOT NULL, definition_version INTEGER NOT NULL CHECK(definition_version > 0), definition_digest TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision >= 0), status TEXT NOT NULL CHECK(status IN ('active')), current_step TEXT NOT NULL, snapshot_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+		);
+		db.exec("DROP TABLE workflow_instances_valid");
+		db.exec("PRAGMA user_version=4");
+		db.close();
+		expect(() => initializeStore(root)).toThrow(/unsupported/);
+		const unchanged = new Database(canonicalStorePath(root));
+		expect(unchanged.query("PRAGMA user_version").get()).toEqual({
+			user_version: 4,
+		});
+		// The rejected migration left no trace of the new table.
+		expect(
+			unchanged
+				.query("SELECT 1 FROM sqlite_master WHERE name='workflow_definitions'")
+				.get(),
+		).toBeNull();
+		unchanged.close();
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a workflow_definitions table that does not match the canonical DDL is rejected", () => {
+	const root = repo();
+	try {
+		initializeStore(root);
+		const db = new Database(canonicalStorePath(root));
+		// Same columns, same types, same primary key — but the version check the
+		// canonical DDL carries is gone, so a row of any version could be stored.
+		db.exec("DROP TABLE workflow_definitions");
+		db.exec(
+			"CREATE TABLE workflow_definitions(digest TEXT PRIMARY KEY, id TEXT NOT NULL UNIQUE, version INTEGER NOT NULL, manifest_json TEXT NOT NULL, origin_json TEXT NOT NULL, created_at TEXT NOT NULL)",
+		);
+		db.exec("PRAGMA user_version=0");
+		db.close();
+		expect(() => initializeStore(root)).toThrow(
+			/unsupported (constraints|table definition) in workflow_definitions/,
+		);
 	} finally {
 		fs.rmSync(root, { recursive: true, force: true });
 	}

@@ -26,7 +26,16 @@ export async function runStart(
 	workflowEngine: WorkflowEngine,
 	application?: App,
 ): Promise<void> {
-	const definitionId = flag(rest, "workflow") ?? "openspec";
+	// `--type` is the documented alias for `--workflow`: both name the
+	// definition the started workflow pins, and a disagreeing pair is refused
+	// rather than silently resolved in either direction.
+	const workflowFlag = flag(rest, "workflow");
+	const typeFlag = flag(rest, "type");
+	if (workflowFlag && typeFlag && workflowFlag !== typeFlag)
+		throw new Error(
+			"start: --workflow and --type must name the same definition",
+		);
+	const definitionId = workflowFlag ?? typeFlag ?? "openspec";
 	const research = definitionId === "research";
 	const repo = research ? flag(rest, "repo") : requireFlag(rest, "repo");
 	const mode = research ? undefined : parseMode(flag(rest, "mode"));

@@ -5,6 +5,7 @@ import type { Database } from "bun:sqlite";
 import type { WorkflowView } from "../../contracts/workflow.ts";
 import { decodeSnapshot, WorkflowRuntimeError } from "../contracts.ts";
 import type { WorkflowRegistry } from "../registry.ts";
+import { resolveDefinition } from "./definitions.ts";
 import type { MigrationPreview, RepairPreview } from "./engine-types.ts";
 import {
 	ACTIVE_RUN,
@@ -105,7 +106,9 @@ export function view(
 	try {
 		const row = instance(db, id);
 		const snapshot = decodeSnapshot(JSON.parse(row.snapshot_json));
-		const definition = registry.definition(
+		const definition = resolveDefinition(
+			registry,
+			db,
 			snapshot.definition.id,
 			snapshot.definition.version,
 			snapshot.definition.digest,
@@ -471,7 +474,9 @@ export function previewMigration(
 	try {
 		const row = instance(db, workflowId);
 		const snapshot = decodeSnapshot(JSON.parse(row.snapshot_json));
-		const current = registry.definition(
+		const current = resolveDefinition(
+			registry,
+			db,
 			snapshot.definition.id,
 			snapshot.definition.version,
 			snapshot.definition.digest,
@@ -479,7 +484,12 @@ export function previewMigration(
 		let target: ReturnType<WorkflowRegistry["definition"]> | undefined;
 		let diagnostic: string | undefined;
 		try {
-			target = registry.definition(snapshot.definition.id, targetVersion);
+			target = resolveDefinition(
+				registry,
+				db,
+				snapshot.definition.id,
+				targetVersion,
+			);
 		} catch (error) {
 			diagnostic = String((error as Error).message);
 		}
@@ -585,7 +595,9 @@ export function previewRepair(
 	try {
 		const row = instance(db, workflowId);
 		const snapshot = decodeSnapshot(JSON.parse(row.snapshot_json));
-		const definition = registry.definition(
+		const definition = resolveDefinition(
+			registry,
+			db,
 			snapshot.definition.id,
 			snapshot.definition.version,
 			snapshot.definition.digest,

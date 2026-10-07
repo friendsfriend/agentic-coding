@@ -99,6 +99,7 @@ import type {
 	WorkflowRegistry,
 } from "./registry.ts";
 import { writeAgentRunEnv } from "./run-env.ts";
+import { resolveDefinitionAt } from "./runtime/definitions.ts";
 import {
 	type ClaimedEffect,
 	changedFilesIn,
@@ -2836,11 +2837,16 @@ function pinnedGatePolicies(
 	return resolved;
 }
 
+/** The definition a snapshot is pinned to. The target store is the snapshot's
+ * own repository, which is where a `custom.` definition was stored
+ * (persist-custom-workflow-definitions); a built-in identity never reads it. */
 function snapshotDefinition(
 	snapshot: ReturnType<WorkflowEngine["getSnapshot"]>,
 	registry: WorkflowRegistry,
 ) {
-	return registry.definition(
+	return resolveDefinitionAt(
+		registry,
+		snapshot.metadata.repository,
 		snapshot.definition.id,
 		snapshot.definition.version,
 		snapshot.definition.digest,

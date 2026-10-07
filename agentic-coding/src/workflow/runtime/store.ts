@@ -82,7 +82,13 @@ export function tableExists(db: Database, name: string): boolean {
 	);
 }
 
-export const STORE_SCHEMA_VERSION = 4;
+export const STORE_SCHEMA_VERSION = 5;
+
+/** The content-addressed custom workflow definitions (store v5). The table is
+ * additive: it is created by the v4 -> v5 migration and never read by a
+ * read-only observation of an older store. */
+const DEFINITIONS_DDL =
+	"CREATE TABLE IF NOT EXISTS workflow_definitions(digest TEXT PRIMARY KEY, id TEXT NOT NULL UNIQUE, version INTEGER NOT NULL CHECK(version = 1), manifest_json TEXT NOT NULL, origin_json TEXT NOT NULL, created_at TEXT NOT NULL)";
 
 const SCHEMA_DDL = `
 CREATE TABLE IF NOT EXISTS workflow_instances(id TEXT PRIMARY KEY, change_id TEXT NULL, repository TEXT NOT NULL, worktree TEXT NOT NULL, definition_id TEXT NOT NULL, definition_version INTEGER NOT NULL CHECK(definition_version > 0), definition_digest TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision >= 0), status TEXT NOT NULL CHECK(status IN ('active','paused','attention-required','completed','closed')), current_step TEXT NOT NULL, snapshot_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -91,6 +97,7 @@ CREATE TABLE IF NOT EXISTS workflow_events(workflow_id TEXT NOT NULL REFERENCES 
 CREATE TABLE IF NOT EXISTS workflow_outbox(id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES workflow_instances(id), revision INTEGER NOT NULL, kind TEXT NOT NULL, idempotency_key TEXT NOT NULL UNIQUE, payload_json TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('pending','running','retry','completed','failed','expired')), attempts INTEGER NOT NULL DEFAULT 0, max_attempts INTEGER NOT NULL CHECK(max_attempts > 0), lease TEXT, lease_expires_at TEXT, next_attempt_at TEXT, last_error TEXT);
 CREATE TABLE IF NOT EXISTS workflow_security_audit(id TEXT PRIMARY KEY, workflow_id TEXT, kind TEXT NOT NULL, subject TEXT, diagnostic TEXT NOT NULL, at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS workflow_migration_diagnostics(change_id TEXT PRIMARY KEY, repository TEXT NOT NULL, diagnostic TEXT NOT NULL, source_json TEXT, created_at TEXT NOT NULL);
+${DEFINITIONS_DDL};
 CREATE INDEX IF NOT EXISTS workflow_runs_workflow_status ON workflow_runs(workflow_id,status);
 CREATE INDEX IF NOT EXISTS workflow_outbox_ready ON workflow_outbox(status,next_attempt_at,lease_expires_at);
 `;
@@ -103,6 +110,10 @@ const REQUIRED_TABLES = [
 	"workflow_security_audit",
 	"workflow_migration_diagnostics",
 ];
+/** The v5 definition table. It is optional for shape validation because a v4
+ * store predates it; its absence is exactly what the v4 -> v5 migration adds. */
+const DEFINITIONS_TABLE = "workflow_definitions";
+const KNOWN_TABLES = [...REQUIRED_TABLES, DEFINITIONS_TABLE];
 const CURRENT_COLUMNS: Record<string, string[]> = {
 	workflow_instances: [
 		"id",
@@ -177,6 +188,14 @@ const CURRENT_COLUMNS: Record<string, string[]> = {
 		"repository",
 		"diagnostic",
 		"source_json",
+		"created_at",
+	],
+	workflow_definitions: [
+		"digest",
+		"id",
+		"version",
+		"manifest_json",
+		"origin_json",
 		"created_at",
 	],
 };
@@ -326,7 +345,7 @@ function tableSql(db: Database, table: string): string {
  * file without it is not this build's store, whatever else it contains. */
 function ignorableTables(db: Database, names: Set<string>): Set<string> {
 	if (REQUIRED_TABLES.some((table) => !names.has(table))) return new Set();
-	const allowed = new Set([...REQUIRED_TABLES, "workflows"]);
+	const allowed = new Set([...KNOWN_TABLES, "workflows"]);
 	return new Set(
 		[...names].filter((name) => !allowed.has(name) && !tableHasRows(db, name)),
 	);
@@ -336,6 +355,10 @@ function validateCanonicalShape(db: Database, allowHistorical = false): void {
 	const legacyIdentity = /CHANGE_ID\s+TEXT\s+NOT\s+NULL\s+UNIQUE/.test(
 		instanceSql,
 	);
+	// A v4 store predates the definition table; its absence is the one object
+	// difference the historical classification may step over.
+	const legacyDefinitions =
+		allowHistorical && !tableExists(db, DEFINITIONS_TABLE);
 	const legacyChildren = [
 		"workflow_runs",
 		"workflow_events",
@@ -394,7 +417,16 @@ function validateCanonicalShape(db: Database, allowHistorical = false): void {
 		const objectKey = (object: ReturnType<typeof objects>[number]) =>
 			`${object.type}:${object.name}`;
 		const actualKeys = compared.map(objectKey);
-		const expectedKeys = expectedObjects.map(objectKey);
+		const expectedKeys = expectedObjects
+			.filter(
+				(object) =>
+					!(
+						legacyDefinitions &&
+						object.type === "table" &&
+						object.name === DEFINITIONS_TABLE
+					),
+			)
+			.map(objectKey);
 		if (legacyObject && !expectedKeys.includes("table:workflows"))
 			expectedKeys.push("table:workflows");
 		expectedKeys.sort();
@@ -403,7 +435,9 @@ function validateCanonicalShape(db: Database, allowHistorical = false): void {
 				"migration-required",
 				"unsupported unversioned schema objects",
 			);
-		for (const table of REQUIRED_TABLES) {
+		for (const table of [...REQUIRED_TABLES, DEFINITIONS_TABLE]) {
+			// A real v4 store predates the definition table.
+			if (legacyDefinitions && table === DEFINITIONS_TABLE) continue;
 			const expectedSql = tableSql(reference, table);
 			const actualSql = tableSql(db, table);
 			const normalizedMigratedRunSql = actualSql
@@ -534,8 +568,18 @@ function validateCanonicalShape(db: Database, allowHistorical = false): void {
 			source_json: "TEXT",
 			created_at: "TEXT",
 		},
+		workflow_definitions: {
+			digest: "TEXT",
+			id: "TEXT",
+			version: "INTEGER",
+			manifest_json: "TEXT",
+			origin_json: "TEXT",
+			created_at: "TEXT",
+		},
 	};
 	for (const [table, expected] of Object.entries(types)) {
+		// The v5 definition table is absent from a v4 store.
+		if (legacyDefinitions && table === DEFINITIONS_TABLE) continue;
 		const info = db.query(`PRAGMA table_info(${table})`).all() as Array<{
 			name: string;
 			type: string;
@@ -582,8 +626,10 @@ function validateCanonicalShape(db: Database, allowHistorical = false): void {
 		["workflow_outbox", "id"],
 		["workflow_security_audit", "id"],
 		["workflow_migration_diagnostics", "change_id"],
+		["workflow_definitions", "digest"],
 	];
 	for (const [table, ...names] of primaryKeys) {
+		if (legacyDefinitions && table === DEFINITIONS_TABLE) continue;
 		const actual = (
 			db.query(`PRAGMA table_info(${table})`).all() as Array<{
 				name: string;
@@ -616,13 +662,17 @@ function validateCanonicalShape(db: Database, allowHistorical = false): void {
 			/CHECK\s*\(MAX_ATTEMPTS\s*>\s*0\)/,
 			/CHECK\s*\(STATUS\s+IN\s*\('PENDING','RUNNING','RETRY','COMPLETED','FAILED','EXPIRED'\)\)/,
 		],
+		workflow_definitions: [/CHECK\s*\(VERSION\s*=\s*1\)/],
 	};
-	for (const [table, rules] of Object.entries(signatures))
+	for (const [table, rules] of Object.entries(signatures)) {
+		// A real v4 store predates the definition table.
+		if (legacyDefinitions && table === DEFINITIONS_TABLE) continue;
 		if (rules.some((rule) => !rule.test(tableSql(db, table))))
 			throw new WorkflowRuntimeError(
 				"migration-required",
 				`unsupported constraints in ${table}`,
 			);
+	}
 	for (const table of ["workflow_runs", "workflow_events", "workflow_outbox"]) {
 		const foreignKeys = db
 			.query(`PRAGMA foreign_key_list(${table})`)
@@ -679,7 +729,7 @@ function validateCanonicalShape(db: Database, allowHistorical = false): void {
 }
 function classifyUnversioned(db: Database): number {
 	const names = tableNames(db);
-	const allowed = new Set([...REQUIRED_TABLES, "workflows"]);
+	const allowed = new Set([...KNOWN_TABLES, "workflows"]);
 	const unknown = [...names].filter((name) => !allowed.has(name));
 	const ignorable = ignorableTables(db, names);
 	if (unknown.length) {
@@ -720,7 +770,9 @@ function classifyUnversioned(db: Database): number {
 			"unversioned store has an incomplete canonical schema",
 		);
 	validateCanonicalShape(db, true);
+	const hasDefinitions = names.has(DEFINITIONS_TABLE);
 	for (const [table, expected] of Object.entries(CURRENT_COLUMNS)) {
+		if (table === DEFINITIONS_TABLE && !hasDefinitions) continue;
 		const actual = columns(db, table);
 		const missing = expected.filter((column) => !actual.has(column));
 		const supportedMissing =
@@ -765,7 +817,9 @@ function classifyUnversioned(db: Database): number {
 	);
 	if (/change_id\s+TEXT\s+NULL/i.test(instanceSql) && !hasLegacyChild) {
 		foreignKeyCheck(db);
-		return 4;
+		// An unversioned store that already carries the definition table is
+		// adopted at v5 instead of being migrated through v4.
+		return hasDefinitions ? STORE_SCHEMA_VERSION : 4;
 	}
 	return 2;
 }
@@ -856,6 +910,9 @@ function migrateVersion(db: Database, from: number): void {
 		return;
 	}
 	if (from === 4) {
+		// Additive v5: every workflow keeps its snapshot and pin; only the
+		// definition table is new (persist-custom-workflow-definitions).
+		db.exec(DEFINITIONS_DDL);
 		foreignKeyCheck(db);
 		return;
 	}
@@ -921,6 +978,10 @@ export function initializeStore(repo: string): void {
 					continue;
 				}
 				migrateVersion(db, observed);
+				// The store must not be version-bumped into a shape this build then
+				// rejects: validate the final migration's result before committing it,
+				// so a rejected store stays byte-identical at its old version.
+				if (observed + 1 === STORE_SCHEMA_VERSION) validateCanonicalShape(db);
 				setPragmaVersion(db, observed + 1);
 				foreignKeyCheck(db);
 				db.exec("COMMIT");
@@ -1111,6 +1172,74 @@ export function effectFromRow(row: EffectRow): WorkflowEffect {
 		...(row.next_attempt_at ? { nextAttemptAt: row.next_attempt_at } : {}),
 		...(row.last_error ? { lastError: row.last_error } : {}),
 	};
+}
+
+export interface DefinitionRow {
+	digest: string;
+	id: string;
+	version: number;
+	manifest_json: string;
+	origin_json: string;
+	created_at: string;
+}
+/** The stored custom definition for an identity, or undefined. Identity is
+ * content-addressed, so at most one row can match. */
+export function storedDefinition(
+	db: Database,
+	id: string,
+	version: number,
+): DefinitionRow | undefined {
+	return (
+		(db
+			.query("SELECT * FROM workflow_definitions WHERE id=? AND version=?")
+			.get(id, version) as DefinitionRow | null) ?? undefined
+	);
+}
+/** Insert a definition, or return the identical row another definition already
+ * stored: identical manifests share one content-addressed identity, so storing
+ * the same manifest twice must not fail on the unique key. The check and the
+ * insert share one writer transaction, so two concurrent `define` runs
+ * converge on one row instead of racing the unique constraint. A row under the
+ * same identifier with a different digest, or under the same digest with a
+ * different identifier or version, is a collision and fails closed. */
+export function insertDefinition(db: Database, row: DefinitionRow): void {
+	db.exec("BEGIN IMMEDIATE");
+	try {
+		const existing = db
+			.query(
+				"SELECT id,digest,version FROM workflow_definitions WHERE id=? OR digest=?",
+			)
+			.get(row.id, row.digest) as {
+			id: string;
+			digest: string;
+			version: number;
+		} | null;
+		if (existing) {
+			if (
+				existing.id !== row.id ||
+				existing.digest !== row.digest ||
+				existing.version !== row.version
+			)
+				throw new WorkflowRuntimeError(
+					"pin-mismatch",
+					`workflow definition identity collision: ${row.id}`,
+				);
+			db.exec("COMMIT");
+			return;
+		}
+		db.query("INSERT INTO workflow_definitions VALUES (?,?,?,?,?,?)").run(
+			row.digest,
+			row.id,
+			row.version,
+			row.manifest_json,
+			row.origin_json,
+			row.created_at,
+		);
+		db.exec("COMMIT");
+	} catch (error) {
+		rollback(db);
+		throw error;
+	}
 }
 
 export function instance(db: Database, id: string): InstanceRow {
@@ -1494,6 +1623,16 @@ export function expireDueQuestions(
 	workflowId: string,
 	registry: WorkflowRegistry,
 	now: () => Date,
+	/** Resolve a pinned definition by identity. Injected rather than imported so
+	 * `store.ts` stays at the bottom of the runtime dependency graph (the
+	 * resolver itself reads this module), while a caller holding the store still
+	 * resolves through the one definition resolver
+	 * (persist-custom-workflow-definitions). */
+	resolve: (
+		id: string,
+		version: number,
+		expectedDigest?: string,
+	) => Readonly<CompiledWorkflowDefinition>,
 ): void {
 	db.exec("BEGIN IMMEDIATE");
 	try {
@@ -1524,7 +1663,7 @@ export function expireDueQuestions(
 				expiredIds.add(item.id);
 			}
 		}
-		const definition = registry.definition(
+		const definition = resolve(
 			snapshot.definition.id,
 			snapshot.definition.version,
 			snapshot.definition.digest,

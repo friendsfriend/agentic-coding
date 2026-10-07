@@ -9,6 +9,10 @@ import type {
 import { runGit } from "./cli/git.ts";
 import { registry as defaultRegistry } from "./cli/registry.ts";
 import type { WorkflowRuntimeError } from "./contracts.ts";
+import {
+	CUSTOM_DEFINITION_VERSION,
+	isCustomDefinitionId,
+} from "./definitions/custom.ts";
 // Imported from `manifest-policy.ts` rather than the `definitions.ts` barrel so
 // the barrel's frozen export-surface fixture stays untouched by a new tier.
 import {
@@ -46,6 +50,7 @@ import {
 	withHumanReviewGates,
 } from "./profiles.ts";
 import type { WorkflowManifestPolicy, WorkflowRegistry } from "./registry.ts";
+import { resolveDefinitionAt } from "./runtime/definitions.ts";
 import {
 	toRuntimeError,
 	WorkflowConfig as WorkflowConfigService,
@@ -383,7 +388,11 @@ export function removedDefinitionDiagnostic(id: string): string {
  * config options used for the provenance-resolved load. Pure/sync; the Effect
  * boundary loads the config through `WorkflowConfig`. */
 function startupContext(request: WorkflowStartRequest): PreparedStartContext {
+	// A `custom.` identity is stored in the target repository's definition
+	// table, not in the built-in catalog, so it is validated there (with a
+	// pinned diagnostic) instead of being reported as a removed built-in.
 	if (
+		!isCustomDefinitionId(request.definitionId) &&
 		request.definitionId !== "wiki-comments" &&
 		!registeredDefinition(request.definitionId)
 	)
@@ -435,9 +444,17 @@ function prepareFromContext(
 		undefined,
 		config.workflow.max_verification_rounds,
 	);
-	const definition = registry.definition(
+	// A stored custom definition resolves from its target store at version 1
+	// (persist-custom-workflow-definitions); every built-in family resolves the
+	// current family-traits tier. One call either way: the resolver answers a
+	// built-in identity from the registry without touching the store.
+	const definition = resolveDefinitionAt(
+		registry,
+		ctx.repo,
 		request.definitionId,
-		definitionVersion,
+		isCustomDefinitionId(request.definitionId)
+			? CUSTOM_DEFINITION_VERSION
+			: definitionVersion,
 	);
 	const agents = parseAgentsConfig(
 		config.agents,
@@ -559,7 +576,7 @@ function prepareFromContext(
 			sameCheckout,
 			workflowId: ctx.workflowId,
 			definitionId: request.definitionId,
-			definitionVersion,
+			definitionVersion: definition.version,
 			...(request.context
 				? { context: JSON.parse(JSON.stringify(request.context)) }
 				: {}),

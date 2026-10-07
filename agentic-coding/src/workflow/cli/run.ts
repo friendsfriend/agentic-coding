@@ -15,6 +15,7 @@ import { verificationPosition } from "../run-projections.ts";
 import { WorkflowEngine } from "../runtime.ts";
 import { flag, positional, positionals, requireFlag } from "./args.ts";
 import type { CallerEnvironment } from "./caller-environment.ts";
+import { runDefine } from "./commands/define.ts";
 import {
 	runAction,
 	runAgentAnswer,
@@ -70,6 +71,7 @@ type CommandHandler = (
 const COMMAND_HANDLERS: Record<string, CommandHandler> = {
 	start: (rest, workflowEngine, _repo, application) =>
 		runStart(rest, workflowEngine, application),
+	define: runDefine,
 	status: runStatus,
 	drain: async (rest, workflowEngine, repo, application) => {
 		const limit = rest.includes("--limit")

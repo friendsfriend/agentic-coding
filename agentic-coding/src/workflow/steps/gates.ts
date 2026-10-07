@@ -8,6 +8,18 @@
 import { GATE_INTEGRATION, type GateStage } from "../classifiers.ts";
 import type { ArriveResult, StepBehavior } from "./types.ts";
 
+/** The stage gate in front of every gated stage (add-jev-stage-gating): the
+ * newest tier enters each gated stage through its gate's `run` outcome, and the
+ * custom-definition invariants check exactly this placement
+ * (persist-custom-workflow-definitions). The archive is deliberately absent: it
+ * is mandatory for completion, so no gate ever stands in front of it. */
+export const GATE_GUARDED_STEP: Readonly<Record<string, string>> =
+	Object.freeze({
+		"core.plan-gate": "core.plan-approval",
+		"core.review-gate": "core.developer-review",
+		"core.wiki-gate": "core.wiki",
+	});
+
 /** One gate step: the shared `core.triage-route` shape, generalized from a
  * routing phase to a gate stage. */
 function gateBehavior(stage: GateStage): StepBehavior {

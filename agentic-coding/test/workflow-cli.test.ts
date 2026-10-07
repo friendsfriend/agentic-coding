@@ -72,6 +72,7 @@ describe("breaking workflow CLI surface", () => {
 	test("exports only typed lifecycle commands", () => {
 		expect(SUBCOMMANDS).toEqual([
 			"start",
+			"define",
 			"status",
 			"drain",
 			"action",
@@ -105,6 +106,7 @@ describe("breaking workflow CLI surface", () => {
 		])
 			expect(SUBCOMMANDS).not.toContain(removed as never);
 		expect(REQUIRED_FLAGS.action).toEqual(["repo", "workflow-id", "revision"]);
+		expect(REQUIRED_FLAGS.define).toEqual(["repo", "file"]);
 		expect(REQUIRED_FLAGS.status).toEqual(["repo", "workflow-id"]);
 		expect(REQUIRED_FLAGS.drain).toEqual(["repo"]);
 		expect(REQUIRED_FLAGS.repin).toEqual(["repo", "workflow-id"]);

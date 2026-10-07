@@ -49,6 +49,7 @@ import {
 	hashToken,
 	prepareHandoffArtifact,
 } from "./capability.ts";
+import { resolveDefinition, resolveDefinitionAt } from "./definitions.ts";
 import type {
 	ClaimedEffect,
 	DispatchResult,
@@ -895,8 +896,11 @@ export class WorkflowEngine {
 		validateWorkflowId(input.workflowId);
 		// Resolved before the target-kind guard so the guard reads the pinned
 		// definition's declared policy (design D1) instead of comparing
-		// `input.definitionId` against a literal id or id array.
-		const definition = this.registry.definition(
+		// `input.definitionId` against a literal id or id array. A `custom.`
+		// identity resolves from the target store (persist-custom-workflow-definitions).
+		const definition = resolveDefinitionAt(
+			this.registry,
+			input.repo,
 			input.definitionId,
 			input.definitionVersion ?? 1,
 		);
@@ -1102,7 +1106,9 @@ export class WorkflowEngine {
 			json(event.data),
 			at,
 		);
-		const definition = this.registry.definition(
+		const definition = resolveDefinition(
+			this.registry,
+			db,
 			snapshot.definition.id,
 			snapshot.definition.version,
 			snapshot.definition.digest,
@@ -1176,7 +1182,9 @@ export class WorkflowEngine {
 			this.now,
 			handoffWorktree,
 		);
-		const evidenceDefinition = this.registry.definition(
+		const evidenceDefinition = resolveDefinitionAt(
+			this.registry,
+			repo,
 			observed.definition.id,
 			observed.definition.version,
 			observed.definition.digest,
@@ -1270,17 +1278,26 @@ export class WorkflowEngine {
 			(command.type === "developer.action" && command.actionId === "re-pin");
 		const migration = command.type === "operator.migrate";
 		const definition = repin
-			? this.registry.definition(
+			? resolveDefinition(
+					this.registry,
+					db,
 					snapshot.definition.id,
 					snapshot.definition.version,
 				)
-			: this.registry.definition(
+			: resolveDefinition(
+					this.registry,
+					db,
 					snapshot.definition.id,
 					snapshot.definition.version,
 					snapshot.definition.digest,
 				);
 		const targetDefinition = migration
-			? this.registry.definition(snapshot.definition.id, command.targetVersion)
+			? resolveDefinition(
+					this.registry,
+					db,
+					snapshot.definition.id,
+					command.targetVersion,
+				)
 			: definition;
 		if (
 			repin &&
@@ -1616,7 +1633,9 @@ export class WorkflowEngine {
 			const snapshot = decodeSnapshot(JSON.parse(owner.snapshot_json));
 			let definition: CompiledWorkflowDefinition;
 			try {
-				definition = this.registry.definition(
+				definition = resolveDefinition(
+					this.registry,
+					db,
 					snapshot.definition.id,
 					snapshot.definition.version,
 					snapshot.definition.digest,
@@ -1828,7 +1847,12 @@ export class WorkflowEngine {
 				db,
 				snapshot,
 				definition,
-				this.registry.definition(snapshot.definition.id, command.targetVersion),
+				resolveDefinition(
+					this.registry,
+					db,
+					snapshot.definition.id,
+					command.targetVersion,
+				),
 				command,
 				this.registry,
 				this.now,

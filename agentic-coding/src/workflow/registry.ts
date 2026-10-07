@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { Contract } from "../contracts/decode.ts";
 import type {
 	ActorKind,
@@ -7,10 +6,16 @@ import type {
 	WorkflowSnapshot,
 } from "../contracts/workflow.ts";
 import { removedWorkflowHint } from "./definitions/catalog.ts";
+import {
+	assertNewestTierInvariants,
+	isCustomDefinitionId,
+} from "./definitions/custom.ts";
+import { digest, stableJson } from "./definitions/digest.ts";
 import { effectiveFamilyTraits } from "./definitions/manifest-policy.ts";
 import type { StepBehavior } from "./steps/types.ts";
 
 export type { StepBehavior } from "./steps/types.ts";
+export { digest, stableJson };
 
 export interface Reduction {
 	snapshot: WorkflowSnapshot;
@@ -267,22 +272,6 @@ const LEGACY_STEP_BASELINE = new Set([
 	"core.completed",
 	"core.closed",
 ]);
-function serializable(value: unknown): unknown {
-	if (Array.isArray(value)) return value.map(serializable);
-	if (value && typeof value === "object")
-		return Object.fromEntries(
-			Object.entries(value)
-				.sort(([a], [b]) => a.localeCompare(b))
-				.map(([key, entry]) => [key, serializable(entry)]),
-		);
-	return value;
-}
-export function stableJson(value: unknown): string {
-	return JSON.stringify(serializable(value));
-}
-export function digest(value: unknown): string {
-	return createHash("sha256").update(stableJson(value)).digest("hex");
-}
 function stepDigest(step: StepDefinition): string {
 	// Instruction assets are a rendering concern (the assignment pins each asset
 	// digest at render time); they must not change the state-machine contract,
@@ -390,7 +379,11 @@ export class WorkflowRegistry {
 		this.#steps.set(key, frozen);
 		return frozen;
 	}
-	registerWorkflow(
+	/** Pure compilation: every structural check plus the digest, without
+	 * inserting into the registry map. `registerWorkflow` wraps it for built-ins;
+	 * the definition resolver compiles a stored custom manifest through it
+	 * (persist-custom-workflow-definitions). */
+	compileWorkflow(
 		manifest: WorkflowManifest,
 	): Readonly<CompiledWorkflowDefinition> {
 		if (
@@ -572,6 +565,10 @@ export class WorkflowRegistry {
 			visited.add(id);
 		};
 		cycle(manifest.initial);
+		// A stored custom manifest must satisfy the newest built-in tier's
+		// invariants; a built-in one is authored in code and is exempt
+		// (persist-custom-workflow-definitions).
+		if (isCustomDefinitionId(manifest.id)) assertNewestTierInvariants(manifest);
 		const stepDigests = Object.fromEntries(
 			[...steps].map(([id, step]) => [id, stepDigest(step)]),
 		);
@@ -603,12 +600,25 @@ export class WorkflowRegistry {
 				? { policy: Object.freeze({ ...manifest.policy }) }
 				: {}),
 		};
+		return Object.freeze(compiled);
+	}
+	/** Register a built-in definition. A stored custom definition is never
+	 * registered: the registry map is the built-in catalog, and the `custom.`
+	 * namespace is reserved for definitions that live in a target store so a
+	 * built-in can never shadow one. */
+	registerWorkflow(
+		manifest: WorkflowManifest,
+	): Readonly<CompiledWorkflowDefinition> {
+		if (isCustomDefinitionId(manifest.id))
+			throw new Error(
+				`built-in definitions may not use the reserved custom namespace: ${manifest.id}`,
+			);
+		const compiled = this.compileWorkflow(manifest);
 		const key = `${compiled.id}@${compiled.version}`;
 		if (this.#definitions.has(key))
 			throw new Error(`workflow already registered: ${key}`);
-		const frozen = Object.freeze(compiled);
-		this.#definitions.set(key, frozen);
-		return frozen;
+		this.#definitions.set(key, compiled);
+		return compiled;
 	}
 	step(id: string, version = 1): Readonly<StepDefinition> {
 		const step = this.#steps.get(`${id}@${version}`);

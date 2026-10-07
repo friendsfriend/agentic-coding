@@ -92,15 +92,23 @@ for a repository outside the environment home.
 
 `initializeStore()` is the only schema-writing boundary. It takes SQLite's
 migration lock, rereads `PRAGMA user_version`, and applies ordered native
-migrations atomically. Store versions 1–4 are supported: version 1 adds run
+migrations atomically. Store versions 1–5 are supported: version 1 adds run
 ownership columns, version 2 adopts nullable workflow identity, version 3
-repairs rebuilt child foreign keys, and version 4 is the current validated
-schema. Unsupported future versions fail closed. An unversioned store is
+repairs rebuilt child foreign keys, version 4 is the pre-definition schema,
+and version 5 adds the content-addressed `workflow_definitions` table that
+stores custom workflow definitions beside the workflows that pin them
+(`custom-workflow-definitions`); the v4 → v5 step is purely additive. Version
+5 is the current validated schema, and the final migration step validates the
+resulting shape inside its own transaction, so a store this build cannot accept
+is rejected at its old version instead of being version-bumped. Unsupported
+future versions fail closed. An unversioned store is
 classified by shape: the canonical tables, columns, indexes, foreign keys and
 statement structure must match a known version, while a table this build does
 not know is stepped over when it is empty (another feature or build may share
 the file without versioning it) and fails closed when it holds rows — unknown
-data is never migrated over. Statement text is compared structurally, so a
+data is never migrated over. The absence of `workflow_definitions` is the one
+structural difference a historical store may carry; an unversioned store that
+already has it is adopted at v5. Statement text is compared structurally, so a
 legacy DDL written with different spacing is the same schema, not drift.
 Mutating engine entry points initialize before their command transaction and
 may then import legacy `workflows` rows. Status and list do not initialize or
@@ -113,6 +121,53 @@ independent, so a later command rejection does not undo a successful schema
 transition. There are no automatic down migrations; rollback to an older
 binary requires a verified pre-upgrade backup or explicit support in that
 binary.
+
+## Custom workflow definitions
+
+A workflow pins `definition: { id, version, digest }`. Built-in definitions
+resolve from the process-lifetime registry; a **custom** definition resolves
+from the target store's `workflow_definitions` table (store v5) through
+`runtime/definitions.ts`. That resolver is the one definition lookup every
+caller uses — `engine.ts`, `view.ts`, `store.ts`, `migration.ts`,
+`effect-runner.ts`, and `startup.ts`: it answers from the built-in registry
+first, and for the reserved `custom.` namespace it reads the stored row from the
+target store, recompiles its manifest against the current step catalog
+(including the newest-tier invariants), caches the compilation per process
+(keyed by content-addressed identity and re-validated against the requesting
+registry's step catalog), and verifies the pinned digest. The stored row is the
+source of truth on every resolution: it is read before any cache is consulted,
+so a target that never stored the identity fails closed instead of inheriting
+another target's definition. A stored definition the catalog no longer
+satisfies — a removed step version, a tampered row, an undecodable manifest —
+throws a pin mismatch naming the offending step, exactly like a removed built-in
+version, so the workflow blocks before any further mutation or effect execution
+and its outbox rows cannot stall other workflows in the store.
+
+`definitions/custom.ts` owns the namespace and the invariants a custom manifest
+must keep: the `custom.` prefix, version 1, exact `stepRefs`, a non-empty
+`label` (the view projection and the wire schema require one), a manifest policy
+with family traits for a repository code-change target, a routing step
+immediately before every classifiable step, and the stage gate in front of
+every gated stage the graph contains. A custom identity is content-addressed:
+`id = "custom." + digest[0..12]` over the manifest with the derived identity
+fields forced to their canonical values, so an identical manifest stored twice
+yields one row, and an identity collision (the id held by a different digest, or
+the digest under a different id) fails closed. Two identities travel with a
+stored definition, and `workflow define` prints both: `digest` is the content
+address the identifier is derived from, and `definitionDigest` is the compiled
+manifest digest the engine pins in the snapshot — the same value a built-in pin
+carries, and the one `status` echoes back. An operator defines one with
+`workflow define --repo PATH --file manifest.json` — which refuses a managed
+agent caller (a definition is a durable trust root, so only the interactive
+operator channel may write one; a non-interactive invocation must acknowledge
+it with `--operator`, because the channel test is an ancestry heuristic and the
+durable write must not rest on that heuristic alone) and compiles the manifest
+*before* it migrates or writes the store, so a rejected manifest leaves the
+repository untouched — and starts it with `workflow start --workflow-id ID
+--repo PATH --type custom.ID`; `--type` is an alias for `--workflow`. A custom
+definition is always
+classifier-routed (it carries a routing step before every classifiable step), so
+its start needs a preset whose pools cover those steps.
 
 ## Startup context and execution pins
 
@@ -716,6 +771,7 @@ row):
 | --- | --- |
 | `targets.ts` | Change-id validation, the wiki/research repository-independent target locators, canonical repository/store path resolution. |
 | `store.ts` | Schema DDL, row mapping, open/close, snapshot/run/effect read-write helpers, plus the registry-only structural invariants (`validateStructure`, `validateSnapshot`, `validateEffect`, `actions`, `requireRevision`) and the due-question-expiry read path (`expireDueQuestions`, `getSnapshot`) — grouped here because none of them touch anything beyond `registry` and an already-open `db`, so they sit at the foundation alongside row IO rather than needing a home in a higher tier. |
+| `definitions.ts` | The definition resolver: built-in registry first, then the target store's `workflow_definitions` rows for the `custom.` namespace, recompiled against the current step catalog and cached per process by identity (re-validated against the requesting registry on every hit), plus `validateDefinition`/`storeDefinition` for the operator `define` path. Imports `store.ts` (not the reverse: `store.ts` takes the resolver as an injected parameter for its due-question-expiry path). |
 | `evidence.ts` | Git inspection, source-content fingerprinting, changed-file discovery, current-branch lookup, wiki baseline/verification content reads — all external-I/O reads. |
 | `capability.ts` | **The security boundary** (design D2): token hashing/comparison, run capability issuance, agent and exact-run authorization, and the `MAX_ARTIFACT_BYTES`-bounded artifact checks. Extracted as one cohesive unit so it can be reviewed and tested as a whole. |
 | `dialogue.ts` | Developer-question dialogue: resolving the run a question command acts on (`questionRun`), answering a question or questionnaire (`answerQuestion`), and marking questions expired (`expireQuestions`). Needs only the clock. |
@@ -731,6 +787,8 @@ row):
 | Module | Owns |
 | --- | --- |
 | `catalog.ts` | `PUBLIC_WORKFLOW_CATALOG` — the human-facing workflow family list. |
+| `digest.ts` | Canonical JSON (`stableJson`) and the SHA-256 `digest` every workflow/step/projection identity is built on, shared by `registry.ts` (re-exported there) and the custom-definition identity. |
+| `custom.ts` | The `custom.` namespace, the derived content-addressed identity (`customDefinitionDigest`/`withCustomIdentity`), and `assertNewestTierInvariants` — the newest built-in tier's rules a custom manifest must satisfy at store time and on every load. |
 | `contracts.ts` | The step output contracts (`triage`, `findings`, `planDraft`, `passthrough`, `empty`) and the standalone `researchHandoffContract`. |
 | `steps.ts` | The `step()` factory, per-step instruction asset list, `commonImplementationSteps(triageRoute)`, and the full `WORKFLOW_STEPS` catalog. |
 | `edges.ts` | `workflowEdges()` (the shared implementation-loop edge builder, which threads the triage-routing edges) and `definitionVersionForPolicy`. |
@@ -751,7 +809,7 @@ row):
 | `registry.ts` | The process-lifetime builtin registry and `engine()`. |
 | `pane.ts` | Pane allocation for a launched run (`paneForRunFactory`, `verificationPosition`). |
 | `drain.ts` | `drainEffects`, `detachedDrainArgv`. |
-| `commands/*.ts` | One module per command (or small group): `start.ts`, `dispatch-actions.ts` (action/question/handoff), `wiki.ts`, `research-handoff.ts`, `misc.ts` (repair/repin/agent-extension/listProjects). |
+| `commands/*.ts` | One module per command (or small group): `start.ts`, `define.ts` (custom-definition store), `dispatch-actions.ts` (action/question/handoff), `wiki.ts`, `research-handoff.ts`, `misc.ts` (repair/repin/agent-extension/listProjects). |
 | `run.ts` | The command-name lookup table that replaces the former `run(argv)` branch chain, plus `main` and the test-only `cliTest` bundle. |
 
 ### Extending the split without touching unrelated modules

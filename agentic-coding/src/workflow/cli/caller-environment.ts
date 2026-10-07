@@ -60,17 +60,30 @@ function processCommand(pid: number): string {
 		throw new Error("managed caller ancestry is unavailable");
 	return result.stdout.toString().trim();
 }
+/** The command lines that identify a managed run in a caller's process
+ * ancestry. The retired pane runtimes (`pi`, `opencode`) are still matched — an
+ * older run's child can outlive the upgrade — and so is the current durable
+ * agent host (`agentic-coding agent host --workflow-dir …`, the shape
+ * `adapters.ts` launches). Matching the host is what keeps the managed boundary
+ * true for the runtime this build actually starts: without it, a child of a run
+ * that cleared its own `HERDR_*` environment was classified as the interactive
+ * operator and could pass every managed gate. */
+const MANAGED_ANCESTOR_COMMAND =
+	/(?:^|[\s/])(pi|opencode|opencode2|opencode-v2)(?:[\s]|$)|(?:^|\s)agent\s+host(?:\s|$)/i;
+
+/** Whether one process's command line identifies a managed runtime (or the
+ * durable host that launches one). Exported so the predicate is testable
+ * directly: process ancestry cannot be fabricated from inside a test. */
+export function isManagedAncestorCommand(command: string): boolean {
+	return MANAGED_ANCESTOR_COMMAND.test(command);
+}
+
 function managedProcessAncestor(): boolean {
 	const seen = new Set<number>();
 	let pid = process.ppid;
 	while (pid > 1 && !seen.has(pid)) {
 		seen.add(pid);
-		if (
-			/(?:^|[\\s/])(pi|opencode|opencode2|opencode-v2)(?:[\\s]|$)/i.test(
-				processCommand(pid),
-			)
-		)
-			return true;
+		if (isManagedAncestorCommand(processCommand(pid))) return true;
 		const parent = parentProcessId(pid);
 		if (parent === undefined) return false;
 		pid = parent;

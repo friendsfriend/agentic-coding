@@ -25,11 +25,12 @@ identity.
 ### Requirement: Custom definitions meet the newest-tier invariants
 
 A custom definition SHALL be accepted only when it passes the registry's
-structural validation, pins exact step references, declares a manifest policy
-with family traits for a repository code-change target, places a routing step
-immediately before every classifiable agent step, and places the stage gate in
-front of every gated stage. A rejected definition SHALL NOT be stored, and the
-rejection SHALL name the violated invariant.
+structural validation, pins exact step references, declares a non-empty label
+the view projection can render, declares a manifest policy with family traits
+for a repository code-change target, places a routing step immediately before
+every classifiable agent step, and places the stage gate in front of every
+gated stage. A rejected definition SHALL NOT be stored, and the rejection SHALL
+name the violated invariant.
 
 #### Scenario: Missing routing step
 

@@ -12,6 +12,7 @@ import type {
 	CompiledWorkflowDefinition,
 	WorkflowRegistry,
 } from "../registry.ts";
+import { resolveDefinition } from "./definitions.ts";
 import { enterStep, freshStep } from "./kernel.ts";
 import {
 	boundedError,
@@ -278,7 +279,7 @@ export function migrateLegacy(
 		phase === "paused" ? "core.implementation" : stepMap[phase];
 	let definition: CompiledWorkflowDefinition;
 	try {
-		definition = registry.definition(workflowType, 1);
+		definition = resolveDefinition(registry, db, workflowType, 1);
 		if (!currentStep || !definition.steps.includes(currentStep))
 			throw new Error(`phase ${phase} cannot map to ${workflowType}`);
 	} catch (error) {
