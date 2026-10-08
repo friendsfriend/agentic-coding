@@ -9,6 +9,7 @@ import {
 	cycleFilter,
 	DEFAULT_SIDEBAR_FILTER,
 	filterOverviews,
+	isCustomDefinition,
 	isOrchestratorStarted,
 	isReviewStep,
 	isRunningStatus,
@@ -32,6 +33,7 @@ function overview(options: {
 	valid?: boolean;
 	stepId?: string;
 	startedBy?: WorkflowOverview["startedBy"];
+	definitionOrigin?: WorkflowOverview["state"]["definitionOrigin"];
 }): WorkflowOverview {
 	return {
 		target: options.repository ?? "/repo",
@@ -41,6 +43,9 @@ function overview(options: {
 			changeId: "",
 			phase: options.phase ?? "apply",
 			...(options.stepId ? { stepId: options.stepId } : {}),
+			...(options.definitionOrigin
+				? { definitionOrigin: options.definitionOrigin }
+				: {}),
 			stepLabel: options.phase ?? "apply",
 			revision: 1,
 			status: options.status,
@@ -332,6 +337,65 @@ describe("workspace sidebar rows", () => {
 				12,
 			),
 		).toBe("⌂ a-very-lo…");
+	});
+
+	test("custom-definition rows carry a shape mark beside the Home marker", () => {
+		expect(
+			isCustomDefinition(
+				overview({
+					workflowId: "shaped",
+					status: "active",
+					definitionOrigin: { kind: "custom", origin: "blueprint" },
+				}),
+			),
+		).toBe(true);
+		// A built-in definition and a row from before the projection existed are
+		// both unmarked: nothing is drawn that was not recorded.
+		expect(
+			isCustomDefinition(
+				overview({
+					workflowId: "built-in",
+					status: "active",
+					definitionOrigin: { kind: "built-in" },
+				}),
+			),
+		).toBe(false);
+		expect(
+			isCustomDefinition(overview({ workflowId: "plain", status: "active" })),
+		).toBe(false);
+		expect(
+			workflowRowLabel(
+				overview({
+					workflowId: "shaped",
+					status: "active",
+					definitionOrigin: { kind: "custom", origin: "operator" },
+				}),
+			),
+		).toBe("◊ shaped");
+		// A custom shape the orchestrator started carries both glyphs, still a
+		// useable label inside the row's clip budget.
+		expect(
+			workflowRowLabel(
+				overview({
+					workflowId: "shaped",
+					status: "active",
+					startedBy: "orchestrator",
+					definitionOrigin: { kind: "custom", origin: "blueprint" },
+				}),
+			),
+		).toBe("⌂ ◊ shaped");
+		expect(
+			clip(
+				workflowRowLabel(
+					overview({
+						workflowId: "a-very-long-shaped-id",
+						status: "active",
+						definitionOrigin: { kind: "custom", origin: "blueprint" },
+					}),
+				),
+				12,
+			),
+		).toBe("◊ a-very-lo…");
 	});
 
 	test("clip never exceeds the budget and keeps short values whole", () => {

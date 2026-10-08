@@ -115,6 +115,12 @@ export function dashboardDetailKeybindCatalog(options: {
 					short: "approve",
 					context: CHANGE_PANEL_CONTEXT,
 				},
+				{
+					key: "g",
+					action: "Show workflow graph",
+					short: "graph",
+					context: CHANGE_PANEL_CONTEXT,
+				},
 			],
 		},
 	];

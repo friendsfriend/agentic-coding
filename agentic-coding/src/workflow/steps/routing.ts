@@ -5,6 +5,7 @@
 // that enqueues one `model.classify` effect on entry; the reducer applies the
 // answered result before the effect-complete transition advances the step.
 import { ROUTING_INTEGRATION, TRIAGE_INTEGRATION } from "../classifiers.ts";
+import { GATE_GUARDED_STEP } from "./gates.ts";
 import type { CompletionResult, StepBehavior } from "./types.ts";
 
 export type RoutingPhase = "plan" | "apply";
@@ -156,6 +157,20 @@ function triageRouteCompletion(data: unknown): CompletionResult | undefined {
 	return roles.length
 		? { transition: { outcome: "complete", output: { roles } } }
 		: { transition: { outcome: "empty", output: { roles: [] } } };
+}
+
+/** A step the engine inserts around a graph rather than one an author
+ * composed: a per-step routing step (`core.route-*`), the triage-routing step,
+ * or a stage gate. It is the one place the vocabulary lives, so the blueprint
+ * compiler (which refuses to let an author place one) and the read model
+ * (which marks them in the graph dialog) cannot disagree about what is
+ * machinery and what is a logical step. */
+export function isInsertedStep(id: string): boolean {
+	return (
+		id.startsWith("core.route-") ||
+		id === "core.triage-route" ||
+		GATE_GUARDED_STEP[id] !== undefined
+	);
 }
 
 export const routingBehaviors: Readonly<Record<string, StepBehavior>> =

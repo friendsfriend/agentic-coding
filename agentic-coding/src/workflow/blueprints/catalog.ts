@@ -11,6 +11,7 @@
 // Pure domain: it reads the registered step catalog only.
 import { WORKFLOW_STEPS } from "../definitions/steps.ts";
 import { GATE_GUARDED_STEP } from "../steps/gates.ts";
+import { isInsertedStep } from "../steps/routing.ts";
 
 export interface BlueprintStepCatalogEntry {
 	readonly id: string;
@@ -87,13 +88,11 @@ export function isBlueprintStepId(id: string): boolean {
 }
 
 /** A step the compiler inserts: a per-step routing step, the triage-routing
- * step, or a stage gate. A blueprint that names one is rejected. */
+ * step, or a stage gate. A blueprint that names one is rejected. The predicate
+ * is shared with the read model's graph projection (`steps/routing.ts`), so
+ * "internal" and "inserted" can never drift apart. */
 export function isInternalStepId(id: string): boolean {
-	return (
-		id.startsWith("core.route-") ||
-		id === "core.triage-route" ||
-		GATE_GUARDED_STEP[id] !== undefined
-	);
+	return isInsertedStep(id);
 }
 
 /** The gate that guards a stage, or `undefined` when the stage is not gated. */

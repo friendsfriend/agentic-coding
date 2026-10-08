@@ -31,7 +31,25 @@ const view = {
 	workflowId: "wf-1",
 	changeId: "",
 	revision: 7,
-	definition: { id: "core", version: 1, digest: "d", label: "Core" },
+	definition: {
+		id: "custom.abc123def456",
+		version: 1,
+		digest: "d",
+		label: "Core",
+	},
+	definitionOrigin: { kind: "custom", origin: "blueprint" },
+	blueprintRationale: "One implementation agent, start to finish.",
+	definitionGraph: {
+		steps: [
+			{
+				id: "core.implementation",
+				label: "Implementation",
+				actor: "agent",
+				inserted: false,
+			},
+		],
+		edges: [],
+	},
 	status: "active",
 	repository: "/repo",
 	worktree: "/repo",
@@ -175,6 +193,16 @@ describe("dashboard mutations cross the typed backend API", () => {
 			const seed = await loadDashboardSeed("/repo", "wf-1");
 			expect(seed?.request).toBe("instant task");
 			expect(seed?.state.stepLabel).toBe("Plan");
+			expect(seed?.state.definitionOrigin).toEqual({
+				kind: "custom",
+				origin: "blueprint",
+			});
+			expect(seed?.state.blueprintRationale).toBe(
+				"One implementation agent, start to finish.",
+			);
+			expect(seed?.state.definitionGraph?.steps[0]?.id).toBe(
+				"core.implementation",
+			);
 			await applyRepair("/repo", "wf-1", 3, "core.implementation", "why");
 			await answerQuestion("/repo", "wf-1", 4, "q-1", {
 				kind: "option",

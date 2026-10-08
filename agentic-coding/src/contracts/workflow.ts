@@ -587,6 +587,14 @@ export interface WorkflowView {
 	changeId: string;
 	revision: number;
 	definition: DefinitionPin & { label: string };
+	/** Where the pinned definition came from (custom-workflow-presentation);
+	 * absent when the definition could not be resolved. */
+	definitionOrigin?: WorkflowDefinitionOrigin;
+	/** The rationale pinned with a blueprint start, when the workflow was
+	 * started from one. */
+	blueprintRationale?: string;
+	/** The pinned definition's compiled graph, in walk order. */
+	definitionGraph?: WorkflowDefinitionGraph;
 	status: WorkflowStatus;
 	repository: string;
 	worktree: string;
@@ -1096,6 +1104,43 @@ export function decodeDeveloperQuestionAnswer(
 // and cost projections, and the finding records a review carries.
 // ---------------------------------------------------------------------------
 
+/** Where the pinned definition came from (custom-workflow-presentation):
+ * `built-in` is a definition from the code registry, `custom` is a `custom.`
+ * definition stored in the target store under the origin kind its row recorded
+ * (`blueprint` for a graph the Home Orchestrator shaped, `operator` for
+ * `workflow define`). */
+export type WorkflowDefinitionOrigin =
+	| { readonly kind: "built-in" }
+	| { readonly kind: "custom"; readonly origin: string };
+
+/** One step of a pinned definition's compiled graph, in walk order. */
+export interface WorkflowDefinitionStep {
+	readonly id: string;
+	readonly label: string;
+	readonly actor: ActorKind;
+	/** True for machinery the engine inserts around the logical graph — a
+	 * per-step routing step, the triage-routing step, or a stage gate — so the
+	 * dashboard can dim it and let the developer read the logical graph first. */
+	readonly inserted: boolean;
+}
+
+/** One outcome edge of a pinned definition's compiled graph, in declared
+ * order. `loop` carries the bound of a re-entering transition. */
+export interface WorkflowDefinitionEdge {
+	readonly from: string;
+	readonly outcome: string;
+	readonly to: string;
+	readonly loop?: { readonly maxAttempts: number };
+}
+
+/** The pinned definition's compiled graph (custom-workflow-presentation): the
+ * steps in walk order from the initial step, and every outcome edge the
+ * definition declares. Projected by the read model, never by the dashboard. */
+export interface WorkflowDefinitionGraph {
+	readonly steps: readonly WorkflowDefinitionStep[];
+	readonly edges: readonly WorkflowDefinitionEdge[];
+}
+
 export interface WorkflowState {
 	/** User-supplied workflow identifier; dashboards address workflows by it. */
 	workflowId: string;
@@ -1112,6 +1157,15 @@ export interface WorkflowState {
 	repository: string;
 	worktree: string;
 	branch: string;
+	/** The pinned definition's origin; absent only on a workflow whose definition
+	 * could not be resolved (a pin mismatch or a legacy diagnostic view). */
+	definitionOrigin?: WorkflowDefinitionOrigin;
+	/** The blueprint rationale pinned at start, when the workflow was started
+	 * from a blueprint; absent for built-in and operator-defined starts. */
+	blueprintRationale?: string;
+	/** The pinned definition's compiled graph; absent when the definition could
+	 * not be resolved. */
+	definitionGraph?: WorkflowDefinitionGraph;
 	task?: string;
 	verificationRound: number;
 	baseCommit?: string;
@@ -1347,6 +1401,58 @@ const definitionPinResponseSchema = Schema.Struct({
 	label: boundedString(4096),
 });
 
+const workflowDefinitionOriginResponseSchema = Schema.Union(
+	Schema.Struct({ kind: Schema.Literal("built-in") }),
+	Schema.Struct({
+		kind: Schema.Literal("custom"),
+		origin: boundedString(64),
+	}),
+);
+
+const workflowDefinitionGraphResponseSchema = Schema.Struct({
+	steps: Schema.Array(
+		Schema.Struct({
+			id: boundedString(256),
+			label: boundedString(256),
+			actor: Schema.Literal("agent", "developer", "system"),
+			inserted: Schema.Boolean,
+		}),
+	).pipe(
+		Schema.filter((steps) => steps.length <= 64, {
+			message: () => "expected at most 64 definition graph steps",
+		}),
+	),
+	edges: Schema.Array(
+		Schema.Struct({
+			from: boundedString(256),
+			outcome: boundedString(256),
+			to: boundedString(256),
+			loop: Schema.optional(Schema.Struct({ maxAttempts: nonNegativeInt })),
+		}),
+	).pipe(
+		Schema.filter((edges) => edges.length <= 256, {
+			message: () => "expected at most 256 definition graph edges",
+		}),
+	),
+});
+
+/** Decode the optional graph carried by the dashboard observation, whose
+ * aggregate response is intentionally Schema.Unknown. Invalid or oversized
+ * presentation data is omitted instead of reaching the TUI row renderer. */
+export function decodeWorkflowDefinitionGraph(
+	value: unknown,
+): WorkflowDefinitionGraph | undefined {
+	try {
+		return decodeContract<WorkflowDefinitionGraph>(
+			"workflow.definition-graph",
+			workflowDefinitionGraphResponseSchema,
+			value,
+		);
+	} catch {
+		return undefined;
+	}
+}
+
 const workflowRunResponseSchema = Schema.Struct({
 	id: boundedString(4096),
 	stepId: boundedString(4096),
@@ -1443,6 +1549,9 @@ export const workflowViewSchema = Schema.Struct({
 	changeId: Schema.String,
 	revision: nonNegativeInt,
 	definition: definitionPinResponseSchema,
+	definitionOrigin: Schema.optional(workflowDefinitionOriginResponseSchema),
+	blueprintRationale: Schema.optional(boundedString(4096)),
+	definitionGraph: Schema.optional(workflowDefinitionGraphResponseSchema),
 	status: Schema.String,
 	repository: Schema.String,
 	worktree: Schema.String,

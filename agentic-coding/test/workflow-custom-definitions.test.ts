@@ -12,6 +12,7 @@ import { Effect } from "effect";
 import type {
 	AgentHandle,
 	ResolvedProfile,
+	WorkflowDefinitionEdge,
 	WorkflowRouting,
 	WorkflowView,
 } from "../src/contracts/workflow.ts";
@@ -1144,6 +1145,10 @@ describe("custom workflow definitions", () => {
 			expect(view.definition.label).toBe("Pin mismatch");
 			expect(view.health.diagnostic).toContain("pin mismatch");
 			expect(view.health.diagnostic).toContain("core.implementation@2");
+			// An unresolvable pin has no origin and no graph to project: the
+			// dashboard shows its diagnostic instead of a graph it cannot read.
+			expect(view.definitionOrigin).toBeUndefined();
+			expect(view.definitionGraph).toBeUndefined();
 			// Blocked before further mutation: the dispatch refuses and the
 			// revision is untouched.
 			expect(() =>
@@ -1156,6 +1161,196 @@ describe("custom workflow definitions", () => {
 			expect(engine.status(root, started.workflowId).revision).toBe(
 				view.revision,
 			);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	/** The graph the read model projects: breadth-first from the initial step,
+	 * taking each step's own edges in declared order. Computed here from the
+	 * compiled definition so the assertion is the documented walk, not a copy of
+	 * the projection's own code. */
+	function walkOrder(definition: CompiledWorkflowDefinition): string[] {
+		const order: string[] = [];
+		const seen = new Set<string>();
+		const queue = [definition.initial];
+		while (queue.length) {
+			const id = requireDefined(queue.shift(), "step id");
+			if (seen.has(id)) continue;
+			seen.add(id);
+			order.push(id);
+			for (const edge of definition.edges)
+				if (edge.from === id && !seen.has(edge.to)) queue.push(edge.to);
+		}
+		return order;
+	}
+
+	function expectedEdges(
+		definition: CompiledWorkflowDefinition,
+	): WorkflowDefinitionEdge[] {
+		return definition.edges.map((edge) => ({
+			from: edge.from,
+			outcome: edge.outcome,
+			to: edge.to,
+			...(edge.loop ? { loop: { maxAttempts: edge.loop.maxAttempts } } : {}),
+		}));
+	}
+
+	test("a built-in definition reports a built-in origin and its graph in walk order", () => {
+		const root = repo("custom-graph-builtin-");
+		try {
+			const engine = new WorkflowEngine(registry);
+			const definition = registry.definition("no-openspec", TIER);
+			const started = engine.start({
+				repo: root,
+				workflowId: "builtin-graph",
+				definitionId: "no-openspec",
+				definitionVersion: TIER,
+				metadata: {
+					branch: "main",
+					baseBranch: "main",
+					baseCommit: "base",
+					task: "add a flag",
+				},
+				routing: routingFor("no-openspec", definition),
+			}).view;
+			expect(started.definitionOrigin).toEqual({ kind: "built-in" });
+			// Only a blueprint start pins a rationale; a built-in start has none.
+			expect(started.blueprintRationale).toBeUndefined();
+			const graph = requireDefined(started.definitionGraph, "definition graph");
+			const order = walkOrder(definition);
+			expect(graph.steps.map((step) => step.id)).toEqual(order);
+			// The walk covers every declared step (registration rejects an
+			// unreachable one), and lists the definition's own initial first.
+			expect(new Set(order)).toEqual(new Set(definition.steps));
+			expect(order[0]).toBe(definition.initial);
+			const step = (id: string) =>
+				requireDefined(
+					graph.steps.find((candidate) => candidate.id === id),
+					`graph step ${id}`,
+				);
+			// Inserted machinery is marked; the logical steps it sits around are not.
+			expect(step("core.route-implementation").inserted).toBe(true);
+			expect(step("core.triage-route").inserted).toBe(true);
+			expect(step("core.review-gate").inserted).toBe(true);
+			expect(step("core.wiki-gate").inserted).toBe(true);
+			expect(step("core.implementation").inserted).toBe(false);
+			expect(step("core.developer-review").inserted).toBe(false);
+			// Label and actor come from the registered step catalog the definition pins.
+			const implementation = registry.stepForDefinition(
+				definition,
+				"core.implementation",
+			);
+			expect(step("core.implementation").label).toBe(implementation.label);
+			expect(step("core.implementation").actor).toBe("agent");
+			expect(step("core.developer-review").actor).toBe("developer");
+			expect(graph.edges).toEqual(expectedEdges(definition));
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("a stored custom definition reports its stored origin and a blueprint's rationale", () => {
+		const root = repo("custom-graph-");
+		try {
+			// The operator path stores the `operator` origin, the blueprint start
+			// stores `blueprint`; both are custom definitions in one target store.
+			const operator = define(root, noOpenspec());
+			const operatorDefinition = resolveDefinitionAt(
+				registry,
+				root,
+				operator.id,
+				1,
+			);
+			const engine = new WorkflowEngine(registry);
+			const startedOperator = engine.start({
+				repo: root,
+				workflowId: "custom-operator-graph",
+				definitionId: operator.id,
+				definitionVersion: 1,
+				metadata: {
+					branch: "main",
+					baseBranch: "main",
+					baseCommit: "base",
+					task: "add a flag",
+				},
+				routing: routingFor(operator.id, operatorDefinition),
+			}).view;
+			expect(startedOperator.definitionOrigin).toEqual({
+				kind: "custom",
+				origin: "operator",
+			});
+			expect(startedOperator.blueprintRationale).toBeUndefined();
+			expect(
+				requireDefined(
+					startedOperator.definitionGraph,
+					"definition graph",
+				).steps.map((step) => step.id),
+			).toEqual(walkOrder(operatorDefinition));
+
+			// A second, differently labelled manifest is a different content address, so
+			// the orchestrator-shaped definition and its pinned rationale get their own
+			// row instead of colliding with the operator one.
+			initializeStore(root);
+			const db = openStore(root);
+			let shaped: ReturnType<typeof storeDefinition>;
+			try {
+				shaped = storeDefinition(
+					registry,
+					db,
+					authored("no-openspec", "Orchestrator shape"),
+					{
+						kind: "blueprint",
+						principal: "orchestrator",
+						digest: "blueprint-digest",
+						label: "Orchestrator shape",
+					},
+					AT,
+				);
+			} finally {
+				db.close();
+			}
+			const shapedDefinition = resolveDefinitionAt(
+				registry,
+				root,
+				shaped.id,
+				1,
+			);
+			const startedShaped = engine.start({
+				repo: root,
+				workflowId: "custom-shaped-graph",
+				definitionId: shaped.id,
+				definitionVersion: 1,
+				metadata: {
+					branch: "main",
+					baseBranch: "main",
+					baseCommit: "base",
+					task: "add a flag",
+					blueprint: {
+						label: "Orchestrator shape",
+						rationale:
+							"One implementation agent, start to finish.\nSecond line stays in the record.",
+						digest: shaped.definitionDigest,
+					},
+				},
+				routing: routingFor(shaped.id, shapedDefinition),
+			}).view;
+			expect(startedShaped.definitionOrigin).toEqual({
+				kind: "custom",
+				origin: "blueprint",
+			});
+			expect(startedShaped.blueprintRationale).toBe(
+				"One implementation agent, start to finish.\nSecond line stays in the record.",
+			);
+			expect(
+				requireDefined(
+					startedShaped.definitionGraph,
+					"definition graph",
+				).steps.map((step) => step.id),
+			).toEqual(walkOrder(shapedDefinition));
+			expect(
+				requireDefined(startedShaped.definitionGraph, "definition graph").edges,
+			).toEqual(expectedEdges(shapedDefinition));
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

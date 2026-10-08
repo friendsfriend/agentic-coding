@@ -2,10 +2,21 @@
 // run/effect projection into `WorkflowView`. Read path only. Moved verbatim
 // out of runtime.ts (split-workflow-god-modules).
 import type { Database } from "bun:sqlite";
-import type { WorkflowView } from "../../contracts/workflow.ts";
+import type {
+	WorkflowDefinitionGraph,
+	WorkflowView,
+} from "../../contracts/workflow.ts";
 import { decodeSnapshot, WorkflowRuntimeError } from "../contracts.ts";
-import type { WorkflowRegistry } from "../registry.ts";
-import { resolveDefinition } from "./definitions.ts";
+import type {
+	CompiledWorkflowDefinition,
+	WorkflowEdge,
+	WorkflowRegistry,
+} from "../registry.ts";
+import { isInsertedStep } from "../steps/routing.ts";
+import {
+	resolveDefinition,
+	resolveDefinitionWithOrigin,
+} from "./definitions.ts";
 import type { MigrationPreview, RepairPreview } from "./engine-types.ts";
 import {
 	ACTIVE_RUN,
@@ -19,6 +30,57 @@ import {
 	STORE_SCHEMA_VERSION,
 	validateSnapshot,
 } from "./store.ts";
+
+/** The compiled graph of a pinned definition, in walk order: a breadth-first
+ * walk from the definition's initial step, taking each step's own edges in
+ * declared order, so two reads of one definition always list the same steps in
+ * the same order. Every declared step is listed — registration already rejects
+ * an unreachable one, and a step the walk cannot reach is appended in declared
+ * order rather than hidden from the reader. The graph is projected here, never
+ * in the dashboard: the TUI is a presentation client and never reads the
+ * registry. */
+function projectDefinitionGraph(
+	registry: WorkflowRegistry,
+	definition: Readonly<CompiledWorkflowDefinition>,
+): WorkflowDefinitionGraph {
+	const outbound = new Map<string, WorkflowEdge[]>();
+	for (const edge of definition.edges) {
+		const edges = outbound.get(edge.from);
+		if (edges) edges.push(edge);
+		else outbound.set(edge.from, [edge]);
+	}
+	const order: string[] = [];
+	const seen = new Set<string>();
+	// One growing queue with a read cursor: a step is enqueued once per inbound
+	// edge, and each is visited at most once.
+	const queue: string[] = [definition.initial];
+	for (let index = 0; index < queue.length; index++) {
+		const id = queue[index];
+		if (id === undefined || seen.has(id)) continue;
+		seen.add(id);
+		order.push(id);
+		for (const edge of outbound.get(id) ?? [])
+			if (!seen.has(edge.to)) queue.push(edge.to);
+	}
+	for (const id of definition.steps) if (!seen.has(id)) order.push(id);
+	return {
+		steps: order.map((id) => {
+			const step = registry.stepForDefinition(definition, id);
+			return {
+				id,
+				label: step.label,
+				actor: step.actor,
+				inserted: isInsertedStep(id),
+			};
+		}),
+		edges: definition.edges.map((edge) => ({
+			from: edge.from,
+			outcome: edge.outcome,
+			to: edge.to,
+			...(edge.loop ? { loop: { maxAttempts: edge.loop.maxAttempts } } : {}),
+		})),
+	};
+}
 
 function publicDialogue(
 	snapshot: NonNullable<WorkflowView["developerDialogue"]>,
@@ -106,13 +168,14 @@ export function view(
 	try {
 		const row = instance(db, id);
 		const snapshot = decodeSnapshot(JSON.parse(row.snapshot_json));
-		const definition = resolveDefinition(
+		const resolved = resolveDefinitionWithOrigin(
 			registry,
 			db,
 			snapshot.definition.id,
 			snapshot.definition.version,
 			snapshot.definition.digest,
 		);
+		const definition = resolved.definition;
 		const runList = runs(db, id);
 		validateSnapshot(snapshot, definition, runList, registry);
 		const effectList = effects(db, id);
@@ -150,6 +213,11 @@ export function view(
 			changeId: snapshot.metadata.changeId,
 			revision: snapshot.revision,
 			definition: { ...snapshot.definition, label: definition.label },
+			definitionOrigin: resolved.origin,
+			...(snapshot.metadata.blueprint
+				? { blueprintRationale: snapshot.metadata.blueprint.rationale }
+				: {}),
+			definitionGraph: projectDefinitionGraph(registry, definition),
 			status: snapshot.status,
 			repository: snapshot.metadata.repository,
 			worktree: snapshot.metadata.worktree,

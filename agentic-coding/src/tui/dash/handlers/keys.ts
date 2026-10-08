@@ -15,6 +15,7 @@ import {
 	resolveQuitConfirmation,
 } from "../../lifecycle.ts";
 import {
+	CHANGE_PANEL,
 	CLASSIFIER_PANEL,
 	movePanel,
 	type PanelDirection,
@@ -138,6 +139,8 @@ export interface DashboardKeyContext {
 	readonly completedInputHint: () => string;
 	readonly planRejectionReasons: readonly string[];
 	readonly openCost: () => void;
+	/** Open the workflow graph dialog (`g` on the Change panel). */
+	readonly openWorkflowGraph: () => void;
 	readonly openReview: (kind: "developer" | "plan" | "wiki") => void;
 	readonly setThemePicker: (open: boolean) => void;
 	readonly setRepairTargets: (targets: unknown[]) => void;
@@ -404,6 +407,12 @@ export function createDashboardKeyHandler(
 		}
 		if (name === "r") {
 			refresh();
+			return;
+		}
+		if (name === "g" && activePanel() === CHANGE_PANEL) {
+			// The Change panel's own graph dialog. It is bound only while that panel
+			// is focused, so the key never shadows another panel's action.
+			context.openWorkflowGraph();
 			return;
 		}
 		if (

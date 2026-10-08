@@ -122,6 +122,13 @@ export async function loadDashboardSeed(
 		stepLabel: view.currentStep.label,
 		revision: view.revision,
 		definition: view.definition,
+		...(view.definitionOrigin
+			? { definitionOrigin: view.definitionOrigin }
+			: {}),
+		...(view.blueprintRationale
+			? { blueprintRationale: view.blueprintRationale }
+			: {}),
+		...(view.definitionGraph ? { definitionGraph: view.definitionGraph } : {}),
 		status: view.status,
 		health: view.health,
 		developerDialogue: view.developerDialogue ?? [],

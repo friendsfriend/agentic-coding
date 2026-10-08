@@ -9,9 +9,30 @@ import {
 	uiColors,
 } from "@ui";
 import { For, Show } from "solid-js";
-import type { DashboardData } from "../../../contracts/workflow.ts";
+import type {
+	DashboardData,
+	WorkflowState,
+} from "../../../contracts/workflow.ts";
 import { PhaseStatus } from "../ui/PhaseStatus.tsx";
 import { skippedGateStages } from "./gates.ts";
+
+/** The stored origin of a custom definition, or undefined for a built-in one:
+ * the panel shows the badge only when the graph was composed for this request
+ * (`custom · blueprint` / `custom · operator`). */
+function customOrigin(state: WorkflowState): string | undefined {
+	const origin = state.definitionOrigin;
+	return origin?.kind === "custom" && typeof origin.origin === "string"
+		? origin.origin
+		: undefined;
+}
+
+/** The rationale's first line: the Change panel is a summary surface, so it
+ * shows the line the developer reads first and leaves the rest to the record. */
+function rationaleLine(rationale: string | undefined): string | undefined {
+	if (typeof rationale !== "string") return undefined;
+	const line = rationale.split("\n")[0]?.trim();
+	return line ? line : undefined;
+}
 
 export interface ChangePanelProps {
 	readonly data: DashboardData;
@@ -78,13 +99,46 @@ export function ChangePanel(props: ChangePanelProps) {
 				</Show>
 				<Show when={state().definition}>
 					{(definition) => (
-						<box flexDirection="row">
-							<box width={7}>
-								<text fg={uiColors.textMuted}>FLOW</text>
+						<box flexDirection="column">
+							<box flexDirection="row">
+								<box width={7}>
+									<text fg={uiColors.textMuted}>FLOW</text>
+								</box>
+								<box flexGrow={1} minWidth={0} overflow="hidden">
+									<text
+										fg={uiColors.textSecondary}
+										flexGrow={1}
+										minWidth={0}
+										wrapMode="none"
+										truncate
+									>
+										{definition().label} · v{definition().version}
+									</text>
+								</box>
+								<Show when={customOrigin(state())}>
+									{(origin) => (
+										<>
+											<text> </text>
+											<Badge
+												text={`custom · ${origin()}`}
+												highlight="highlight2"
+											/>
+										</>
+									)}
+								</Show>
 							</box>
-							<text fg={uiColors.textSecondary}>
-								{definition().label} · v{definition().version}
-							</text>
+							<Show when={rationaleLine(state().blueprintRationale)}>
+								{(line) => (
+									<box flexDirection="row" overflow="hidden">
+										<box width={7}>
+											<text fg={uiColors.textMuted}>WHY</text>
+										</box>
+										<text fg={uiColors.textSecondary} wrapMode="none">
+											{line()}
+										</text>
+									</box>
+								)}
+							</Show>
 						</box>
 					)}
 				</Show>

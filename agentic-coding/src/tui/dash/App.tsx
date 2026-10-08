@@ -30,9 +30,10 @@ import {
 	untrack,
 } from "solid-js";
 import type { RequiredUserActionItem } from "../../contracts/actions.ts";
-import type { DashboardData } from "../../contracts/workflow";
 import {
+	type DashboardData,
 	type DeveloperDialogueRecord,
+	decodeWorkflowDefinitionGraph,
 	resolveDeveloperQuestionOption,
 } from "../../contracts/workflow.ts";
 
@@ -76,6 +77,7 @@ import {
 	switchWorkflowPreset,
 } from "./live.ts";
 import { Overlays } from "./modals/Overlays.tsx";
+import { workflowGraphRows } from "./modals/WorkflowGraphModal.tsx";
 import { notify } from "./notifications.ts";
 import { openFindingInEditor } from "./open-finding.ts";
 import { CLASSIFIER_PANEL } from "./panel-grid.ts";
@@ -324,6 +326,7 @@ export function App(props: {
 	const setUserActionSelection = overlays.setUserActionSelection;
 	const _helpOffset = overlays.helpOffset;
 	const setHelpOffset = overlays.setHelpOffset;
+	const setWorkflowGraphOffset = overlays.setWorkflowGraphOffset;
 	const themeIndex = overlays.themeIndex;
 	const setThemeIndex = overlays.setThemeIndex;
 	const themeQuery = overlays.themeQuery;
@@ -565,7 +568,8 @@ export function App(props: {
 		| "cost"
 		| "review"
 		| "credentials"
-		| "preset-switcher";
+		| "preset-switcher"
+		| "workflow-graph";
 	const modalHost = createModalHost<DashModal>();
 	const modalOpen = (kind: DashModal) =>
 		modalHost.stack().some((entry) => entry.kind === kind);
@@ -871,6 +875,19 @@ export function App(props: {
 	const costOpen = () => modalOpen("cost");
 	const setCostOpen = (open: boolean) =>
 		open ? openModal("cost", "dashboard") : closeModal("cost");
+	const workflowGraphOpen = () => modalOpen("workflow-graph");
+	const setWorkflowGraphOpen = (open: boolean) =>
+		open
+			? openModal("workflow-graph", "dashboard")
+			: closeModal("workflow-graph");
+	// `g` on the Change panel: one dialog for every definition, so the keybind is
+	// never a dead key. A workflow whose pin could not be resolved has no graph;
+	// the dialog says so instead of the key silently doing nothing.
+	const openWorkflowGraph = () => {
+		setWorkflowGraphOffset(0);
+		setWorkflowGraphOpen(true);
+		props.keymap.setData("modal.active", "workflow-graph");
+	};
 	const presetSwitcherOpen = () => modalOpen("preset-switcher");
 	const closePresetSwitcher = () => {
 		closeModal("preset-switcher");
@@ -1245,6 +1262,11 @@ export function App(props: {
 		setPlanRejectionOpen(false);
 		setReviewOpen(false);
 		setReviewCommentMode(false);
+		// A hidden dashboard clears the modal stack. Never restore a saved modal
+		// kind from a credential/question popup after the user returns: that kind
+		// no longer has a live dialog to own the keymap.
+		modalBeforeCredential = undefined;
+		modalBeforeQuestion = undefined;
 		props.keymap.setData("modal.active", "none");
 	});
 	let reviewModalOpen = false;
@@ -1299,6 +1321,25 @@ export function App(props: {
 	const verdictLines = createMemo(() =>
 		Math.max(4, Math.floor(dimensions().height * 0.75) - 5),
 	);
+	// The graph dialog scrolls like the verdict reader: one window of rows inside
+	// the modal, bounded here so the key handler can clamp without re-deriving
+	// the row list.
+	// The modal reserves one body row for its pinned definition label/version.
+	const workflowGraphLines = () => Math.max(3, verdictLines() - 1);
+	// Dashboard observations use Schema.Unknown; normalize this graph once and
+	// share it with both the dialog and its scroll bounds.
+	const workflowGraph = createMemo(() =>
+		decodeWorkflowDefinitionGraph(data().state.definitionGraph),
+	);
+	const workflowGraphMaxOffset = () => {
+		const graph = workflowGraph();
+		if (!graph) return 0;
+		const rows = workflowGraphRows(
+			graph,
+			data().state.stepId ?? data().state.phase,
+		);
+		return Math.max(0, rows.length - workflowGraphLines());
+	};
 	const closeVerdict = () => {
 		const restoreFindings = verdictReturnToFindings();
 		const restoreUserAction = verdictReturnToUserAction();
@@ -1380,6 +1421,7 @@ export function App(props: {
 			userActionOpen() ||
 			questionOpen() ||
 			costOpen() ||
+			workflowGraphOpen() ||
 			presetSwitcherOpen() ||
 			reviewOpen() ||
 			reviewCommentMode() ||
@@ -1536,6 +1578,7 @@ export function App(props: {
 		openPresetSwitcher,
 		openAgentSession,
 		openCost: () => setCostOpen(true),
+		openWorkflowGraph,
 		openReview: (kind) =>
 			kind === "plan" ? openPlanReview() : openDeveloperReview(),
 		openUserAction: () => setUserActionOpen(true),
@@ -2095,6 +2138,35 @@ export function App(props: {
 				(key) => ({ key, cmd: "cost.handle" }),
 			),
 		});
+		const disposeWorkflowGraph = props.keymap.registerLayer({
+			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
+			name: "workflow-graph",
+			priority: 1000,
+			activeModal: "workflow-graph",
+			commands: [
+				{
+					name: "workflow-graph.handle",
+					run: ({ event }) => {
+						const key = event.name.toLowerCase();
+						if (routeModalHelp(key)) return true;
+						if (key === "escape") {
+							setWorkflowGraphOpen(false);
+							props.keymap.setData("modal.active", "none");
+						} else if (key === "j" || key === "down")
+							setWorkflowGraphOffset((value) =>
+								Math.min(workflowGraphMaxOffset(), value + 1),
+							);
+						else if (key === "k" || key === "up")
+							setWorkflowGraphOffset((value) => Math.max(0, value - 1));
+						return true;
+					},
+				},
+			],
+			bindings: ["escape", "j", "k", "up", "down", "?"].map((key) => ({
+				key,
+				cmd: "workflow-graph.handle",
+			})),
+		});
 		const disposePresetSwitcher = props.keymap.registerLayer({
 			...(props.shellFeature ? { shellFeature: "workflows" } : {}),
 			name: "preset-switcher",
@@ -2541,6 +2613,7 @@ export function App(props: {
 				"K",
 				"H",
 				"L",
+				"g",
 				"up",
 				"down",
 				"enter",
@@ -2556,6 +2629,7 @@ export function App(props: {
 			disposeRepair();
 			disposeUserAction();
 			disposeCost();
+			disposeWorkflowGraph();
 			disposePresetSwitcher();
 			disposeHelp();
 			disposeReviewComment();
@@ -2934,6 +3008,22 @@ export function App(props: {
 								title: verdict()?.title ?? "",
 								content: verdict()?.content ?? "",
 								lines: verdictLines(),
+							}
+						: undefined
+				}
+				workflowGraph={
+					workflowGraphOpen()
+						? {
+								definition: {
+									label: data().state.definition?.label ?? "unknown",
+									version: data().state.definition?.version ?? 0,
+								},
+								...(data().state.definitionOrigin
+									? { origin: data().state.definitionOrigin }
+									: {}),
+								...(workflowGraph() ? { graph: workflowGraph() } : {}),
+								currentStep: data().state.stepId ?? data().state.phase,
+								lines: workflowGraphLines(),
 							}
 						: undefined
 				}

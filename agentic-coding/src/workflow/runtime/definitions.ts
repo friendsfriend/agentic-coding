@@ -10,6 +10,7 @@
 // unchanged definition is compiled once and a definition the catalog no longer
 // satisfies fails closed every time.
 import type { Database } from "bun:sqlite";
+import type { WorkflowDefinitionOrigin } from "../../contracts/workflow.ts";
 import { WorkflowRuntimeError } from "../contracts.ts";
 import {
 	CUSTOM_DEFINITION_VERSION,
@@ -164,6 +165,64 @@ function pinned(
 /** Resolve a pinned definition against an already-open store handle. Built-in
  * identities never read the store, so a built-in pin resolves identically to
  * `registry.definition`. */
+function resolveStoredDefinition(
+	registry: WorkflowRegistry,
+	row: DefinitionRow,
+	expectedDigest?: string,
+): Readonly<CompiledWorkflowDefinition> {
+	const key = cacheKey(row.id, row.version);
+	const cached = compiled.get(key);
+	if (cached && cached.digest === row.digest) {
+		// The row is the source of truth even on a hit: a row tampered with under
+		// an unchanged digest must fail exactly as it would cold.
+		rowManifest(row);
+		try {
+			assertResolvable(registry, cached.definition);
+		} catch (error) {
+			pinMismatch(row.id, row.version, (error as Error).message);
+		}
+		return pinned(cached.definition, row.id, row.version, expectedDigest);
+	}
+	const definition = compileStored(registry, row);
+	compiled.set(key, { digest: row.digest, definition });
+	return pinned(definition, row.id, row.version, expectedDigest);
+}
+
+/** Resolve a pin and, for the read model, return its origin from the same
+ * stored row whose identity and manifest were validated. Keeping the two
+ * values together avoids re-reading the content-addressed row on every custom
+ * workflow view. */
+export function resolveDefinitionWithOrigin(
+	registry: WorkflowRegistry,
+	db: Database,
+	id: string,
+	version: number,
+	expectedDigest?: string,
+): {
+	definition: Readonly<CompiledWorkflowDefinition>;
+	origin: WorkflowDefinitionOrigin;
+} {
+	if (!isCustomDefinitionId(id))
+		return {
+			definition: registry.definition(id, version, expectedDigest),
+			origin: { kind: "built-in" },
+		};
+	const row = storedDefinition(db, id, version);
+	if (!row)
+		pinMismatch(
+			id,
+			version,
+			"no stored custom definition in this target store",
+		);
+	return {
+		definition: resolveStoredDefinition(registry, row, expectedDigest),
+		origin: { kind: "custom", origin: storedOriginKind(row) },
+	};
+}
+
+/** Resolve a pinned definition against an already-open store handle. Built-in
+ * identities never read the store, so a built-in pin resolves identically to
+ * `registry.definition`. */
 export function resolveDefinition(
 	registry: WorkflowRegistry,
 	db: Database,
@@ -180,22 +239,24 @@ export function resolveDefinition(
 			version,
 			"no stored custom definition in this target store",
 		);
-	const key = cacheKey(id, version);
-	const cached = compiled.get(key);
-	if (cached && cached.digest === row.digest) {
-		// The row is the source of truth even on a hit: a row tampered with under
-		// an unchanged digest must fail exactly as it would cold.
-		rowManifest(row);
-		try {
-			assertResolvable(registry, cached.definition);
-		} catch (error) {
-			pinMismatch(id, version, (error as Error).message);
+	return resolveStoredDefinition(registry, row, expectedDigest);
+}
+
+/** The origin kind a stored row recorded, bounded for presentation. The origin
+ * is display data — it is not part of the manifest digest and nothing
+ * authorizes on it — so a row whose origin is unreadable reports `unknown`
+ * instead of failing a read that already validated the definition itself. */
+function storedOriginKind(row: DefinitionRow): string {
+	try {
+		const origin = JSON.parse(row.origin_json) as unknown;
+		if (origin && typeof origin === "object" && !Array.isArray(origin)) {
+			const kind = (origin as { kind?: unknown }).kind;
+			if (typeof kind === "string" && kind) return kind.slice(0, 64);
 		}
-		return pinned(cached.definition, id, version, expectedDigest);
+	} catch {
+		/* fall through: an unreadable origin is reported as unknown */
 	}
-	const definition = compileStored(registry, row);
-	compiled.set(key, { digest: row.digest, definition });
-	return pinned(definition, id, version, expectedDigest);
+	return "unknown";
 }
 
 /** Resolve a pinned definition for a caller that holds no store handle. Only a
@@ -223,8 +284,9 @@ export function resolveDefinitionAt(
 		// The operator's most likely mistake is an identity this repository never
 		// stored (a typo, or a definition from another checkout); name the
 		// repository and the command that fixes it.
-		if (!storedDefinition(db, id, version)) notStored(id, version, repo);
-		return resolveDefinition(registry, db, id, version, expectedDigest);
+		const row = storedDefinition(db, id, version);
+		if (!row) notStored(id, version, repo);
+		return resolveStoredDefinition(registry, row, expectedDigest);
 	} finally {
 		db.close();
 	}

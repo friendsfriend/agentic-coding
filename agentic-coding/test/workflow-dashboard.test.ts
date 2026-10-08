@@ -113,6 +113,35 @@ test("dashboard projection renders registry-provided future step and generated a
 	expect(state.verificationModels.audit).toBe("provider/model");
 	expect(state.phaseStartedAt).toBe("2026-01-01T12:00:00Z");
 });
+
+test("dashboard projection carries optional custom-definition presentation fields", () => {
+	const current = view();
+	current.definitionOrigin = { kind: "custom", origin: "blueprint" };
+	current.blueprintRationale = "One implementation agent.";
+	current.definitionGraph = {
+		steps: [
+			{
+				id: "core.implementation",
+				label: "Implementation",
+				actor: "agent",
+				inserted: false,
+			},
+		],
+		edges: [],
+	};
+	const projected = viewToDashboardState(current);
+	expect(projected.definitionOrigin).toEqual({
+		kind: "custom",
+		origin: "blueprint",
+	});
+	expect(projected.blueprintRationale).toBe("One implementation agent.");
+	expect(projected.definitionGraph).toEqual(current.definitionGraph);
+
+	const legacy = viewToDashboardState(view());
+	expect(legacy.definitionOrigin).toBeUndefined();
+	expect(legacy.blueprintRationale).toBeUndefined();
+	expect(legacy.definitionGraph).toBeUndefined();
+});
 test("dashboard projection carries classifier decisions and defaults to an empty list", () => {
 	const withoutDecisions = viewToDashboardState(view());
 	expect(withoutDecisions.classifierDecisions).toEqual([]);

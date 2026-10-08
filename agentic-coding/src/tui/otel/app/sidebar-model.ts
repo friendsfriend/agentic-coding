@@ -141,12 +141,25 @@ export function isOrchestratorStarted(overview: WorkflowOverview): boolean {
 	return overview.startedBy === "orchestrator";
 }
 
+/** True when the row's pinned definition is a stored custom one (composed for
+ * that request rather than shipped in the code registry). The view reports the
+ * origin; a row written before the projection existed reads as built-in. */
+export function isCustomDefinition(overview: WorkflowOverview): boolean {
+	return overview.state.definitionOrigin?.kind === "custom";
+}
+
 /** The row's name line: the workflow id, prefixed by the Home badge when the
- * orchestrator started it. The marker is data here; colours and separators stay
- * with the renderer. */
+ * orchestrator started it and by the custom-shape glyph when its definition is
+ * custom. Both marks are glyphs, so a marked row still fits the sidebar width
+ * (the renderer clips the line, and text would cost it characters). The marker
+ * is data here; colours and separators stay with the renderer. */
 export function workflowRowLabel(overview: WorkflowOverview): string {
+	const marks = [
+		isOrchestratorStarted(overview) ? "⌂" : "",
+		isCustomDefinition(overview) ? "◊" : "",
+	].filter(Boolean);
 	const name = workflowDisplayName(overview);
-	return isOrchestratorStarted(overview) ? `⌂ ${name}` : name;
+	return marks.length ? `${marks.join(" ")} ${name}` : name;
 }
 
 /** Index of the sidebar row for the workflow the page body is showing, or -1

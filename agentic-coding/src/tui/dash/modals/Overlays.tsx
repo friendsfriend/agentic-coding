@@ -21,6 +21,10 @@ import {
 } from "@ui";
 import { Show } from "solid-js";
 import type {
+	WorkflowDefinitionGraph,
+	WorkflowDefinitionOrigin,
+} from "../../../contracts/workflow.ts";
+import type {
 	AgentSessionBlock,
 	AgentSessionMetadata,
 } from "../agent-session.ts";
@@ -29,6 +33,7 @@ import { FindingsModal } from "../ui/FindingsModal.tsx";
 import { NotificationOverlay } from "../ui/Notification.tsx";
 import type { PresetChoice } from "../ui/PresetSwitcherModal.tsx";
 import { PresetSwitcherModal } from "../ui/PresetSwitcherModal.tsx";
+import { WorkflowGraphModal } from "./WorkflowGraphModal.tsx";
 
 export interface RepairOverlay {
 	readonly revision: number;
@@ -81,6 +86,17 @@ export interface VerdictOverlay {
 	readonly lines: number;
 }
 
+/** The workflow graph dialog (`g` on the Change panel). The definition is the
+ * pinned one the Change panel names, and the graph may be absent when the pin
+ * could not be resolved. */
+export interface WorkflowGraphOverlay {
+	readonly definition: { readonly label: string; readonly version: number };
+	readonly origin?: WorkflowDefinitionOrigin;
+	readonly graph?: WorkflowDefinitionGraph;
+	readonly currentStep: string;
+	readonly lines: number;
+}
+
 /** The overlay values and selections owned by `dash/state.ts`. */
 export interface OverlaysState {
 	readonly repairSelection: () => number;
@@ -88,6 +104,7 @@ export interface OverlaysState {
 	readonly actionReason: () => string;
 	readonly userActionSelection: () => number;
 	readonly helpOffset: () => number;
+	readonly workflowGraphOffset: () => number;
 	readonly themeIndex: () => number;
 	readonly themeQuery: () => string;
 	readonly themeFiltering: () => boolean;
@@ -121,6 +138,7 @@ export interface OverlaysProps {
 	readonly cost?: CostOverlay;
 	readonly presetSwitcher?: PresetSwitcherOverlay;
 	readonly verdict?: VerdictOverlay;
+	readonly workflowGraph?: WorkflowGraphOverlay;
 	/** Short hint shown beside the action picker title. */
 	readonly pickerHint?: string;
 	/** Keybind help: zero lines means closed. */
@@ -286,6 +304,18 @@ export function Overlays(props: OverlaysProps) {
 						offset={props.state.verdictOffset()}
 						lines={report().lines}
 						renderMarkdown={props.state.verdictRenderMarkdown()}
+					/>
+				)}
+			</Show>
+			<Show when={props.workflowGraph}>
+				{(graph) => (
+					<WorkflowGraphModal
+						definition={graph().definition}
+						origin={graph().origin}
+						graph={graph().graph}
+						currentStep={graph().currentStep}
+						offset={props.state.workflowGraphOffset()}
+						lines={graph().lines}
 					/>
 				)}
 			</Show>

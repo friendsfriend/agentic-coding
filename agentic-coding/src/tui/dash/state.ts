@@ -192,6 +192,9 @@ export interface OverlayState {
 	readonly setUserActionSelection: Setter<number>;
 	readonly helpOffset: () => number;
 	readonly setHelpOffset: Setter<number>;
+	/** Scroll position of the workflow graph dialog (`g` on the Change panel). */
+	readonly workflowGraphOffset: () => number;
+	readonly setWorkflowGraphOffset: Setter<number>;
 	readonly themeIndex: () => number;
 	readonly setThemeIndex: Setter<number>;
 	readonly themeQuery: () => string;
@@ -304,6 +307,8 @@ export function createOverlayState(options: {
 
 	const [helpOffset, setHelpOffset] = createSignal(0);
 
+	const [workflowGraphOffset, setWorkflowGraphOffset] = createSignal(0);
+
 	const [themeQuery, setThemeQuery] = createSignal("");
 
 	const [themeFiltering, setThemeFiltering] = createSignal(false);
@@ -359,6 +364,8 @@ export function createOverlayState(options: {
 		setUserActionSelection,
 		helpOffset,
 		setHelpOffset,
+		workflowGraphOffset,
+		setWorkflowGraphOffset,
 		themeIndex,
 		setThemeIndex,
 		themeQuery,
