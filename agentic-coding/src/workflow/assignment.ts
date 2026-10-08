@@ -28,6 +28,33 @@ function readPinnedAsset(
 	if (actual !== expected) throw new Error(`instruction pin mismatch: ${name}`);
 	return content.trim();
 }
+/** What a run is told when its conversation already carries the standing
+ * instructions, so the turn carries only what changed for the round. The
+ * protocol and the role asset are ~15k characters of invariants the agent
+ * already has — re-sending them every round is the largest avoidable part of a
+ * verifier's context, and it is re-read on every turn of the round.
+ *
+ * The pinned asset copy is named as the recovery path: a compacted or resumed
+ * session that no longer holds the protocol can re-read it there instead of
+ * running a whole round without it. */
+function followUpPreamble(assetRoot: string): string {
+	return [
+		"# Follow-up assignment",
+		"",
+		"The managed workflow protocol and your role instructions were delivered in the first message of this conversation and still apply unchanged; this message carries only what this round changes.",
+		`If this conversation no longer holds them — a compacted or resumed session — re-read them from \`${assetRoot}/workflow-agent-protocol.md\` and the role file beside it. Nothing else needs to be read from disk: the inputs, checks, output contract and handoff below are the current ones.`,
+	].join("\n");
+}
+
+/** Whether this assignment is delivered into a conversation that already got
+ * the standing instructions, or opens one. A run's generation is the step's
+ * attempt, and the conversation is named per (step, role): a generation above
+ * 1 means an earlier generation of the same step and role already ran here, so
+ * the protocol and role asset are already in the transcript. */
+function isFollowUp(assignment: Assignment): boolean {
+	return assignment.generation > 1;
+}
+
 export function renderAssignment(
 	step: Readonly<StepDefinition>,
 	assignment: Assignment,
@@ -187,7 +214,11 @@ export function renderAssignment(
 		'agentic-coding workflow handoff --outcome failed --message "diagnostic"',
 		"```",
 	].join("\n");
-	const prompt = [protocol, ...assets, dynamic].join("\n\n---\n\n");
+	const prompt = (
+		isFollowUp(assignment)
+			? [followUpPreamble(assetRoot), dynamic]
+			: [protocol, ...assets, dynamic]
+	).join("\n\n---\n\n");
 	const bytes = Buffer.byteLength(prompt);
 	if (bytes > MAX_ASSIGNMENT_BYTES)
 		throw new Error(`assignment exceeds ${MAX_ASSIGNMENT_BYTES} bytes`);

@@ -4,7 +4,7 @@
 Defines one agent-product-independent assignment and handoff protocol so every managed agent receives complete Markdown instructions as a message and can never mutate workflow lifecycle directly.
 ## Requirements
 ### Requirement: Skill-free instruction delivery
-Managed workflow agents SHALL NOT load, invoke, or discover workflow skills; engine SHALL render trusted Markdown protocol and step instruction assets into assignment message.
+Managed workflow agents SHALL NOT load, invoke, or discover workflow skills; engine SHALL render trusted Markdown protocol and step instruction assets into the conversation's first assignment message for a step and role, and later rounds of that step and role SHALL carry the complete dynamic envelope without repeating those assets.
 
 #### Scenario: Agent run starts
 - **WHEN** adapter launches managed run
@@ -15,6 +15,13 @@ Managed workflow agents SHALL NOT load, invoke, or discover workflow skills; eng
 - **WHEN** selected runtime can load skills automatically
 - **THEN** workflow instruction delivery SHALL remain message-based
 - **AND** workflow correctness SHALL NOT depend on runtime skill mechanism
+
+#### Scenario: Persistent agent receives a later round
+- **WHEN** an existing agent session is reused for a later generation of the same step and role
+- **THEN** the prompt SHALL carry the complete dynamic envelope: fresh run ID, generation, inputs, permissions, required checks, output path and schema, allowed outcomes and handoff syntax
+- **AND** SHALL NOT repeat the managed workflow protocol or the step instruction asset, which remain in the conversation from the first message
+- **AND** SHALL name the workflow's pinned instruction asset copy as the recovery path for a session that no longer holds them (compaction or resume)
+- **AND** the agent SHALL not need prior prompt context to determine its scope, checks or handoff
 
 ### Requirement: Complete assignment envelope
 Each agent prompt SHALL identify protocol version, run, stable step and role, objective, interaction mode, scoped inputs, permissions, required checks, exact output path and schema, allowed outcomes, and generic handoff syntax. A `core.research` assignment SHALL additionally identify the user task, optional repository evidence boundary, persistent-session expectation, and the rule that research remains active until the developer dispatches an explicit wiki-request action or closure. A research `core.wiki` assignment SHALL identify the carried research context, centralized draft boundary, and pending developer approval.

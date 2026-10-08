@@ -105,6 +105,61 @@ describe("watch streams the conversation view over the control socket", () => {
 		}
 	});
 
+	test("a read-only run is offered the search and judgment tools it is told to use", async () => {
+		// The verifier briefs tell the run to prefer `grep` over `bash` scans and to
+		// reach for `ask_jev` instead of reading file after file, and a read-only
+		// run names its tools explicitly: both have to be in that list or the
+		// prompt names a tool the session never got.
+		const dir = tempWorkflowDir();
+		const layout = hostLayout(dir);
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const host = await DurableHost.open({
+			layout,
+			settings: {},
+			globalAgentDir: dir,
+			storage: new MemoryStorage(),
+			models,
+		});
+		await host.listen();
+		try {
+			const runEnvPath = path.join(dir, "run.env");
+			fs.writeFileSync(runEnvPath, "");
+			const client = new HostClient(layout.socketPath, 10_000);
+			const offered = async (runId: string, toolPolicy: string) => {
+				await host.ensureRun({
+					runId,
+					name: runId,
+					cwd: dir,
+					runEnvPath,
+					// biome-ignore lint/suspicious/noExplicitAny: the request's policy union includes the read-only value this test varies.
+					toolPolicy: toolPolicy as any,
+				});
+				let frame: unknown;
+				const stop = await client.watch(runId, (value) => {
+					frame = value;
+				});
+				stop();
+				const docs = isRecord(frame) && isRecord(frame.docs) ? frame.docs : {};
+				const agent = isRecord(docs["pi.agent"]) ? docs["pi.agent"] : {};
+				return Array.isArray(agent.tools) ? [...agent.tools] : undefined;
+			};
+			const readOnly = await offered("read-only-run", "read-only");
+			expect(readOnly).toContain("read");
+			expect(readOnly).toContain("bash");
+			expect(readOnly).toContain("ask_jev");
+			expect(readOnly).toContain("grep");
+			expect(readOnly).not.toContain("write");
+			expect(readOnly).not.toContain("edit");
+			// A writable run keeps the full coding set and, with it, write and edit.
+			expect(await offered("writable-run", "default")).toBeUndefined();
+		} finally {
+			await host.shutdown();
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	test("a watch that names the conversation serves a run the host no longer tracks", async () => {
 		// The run id lives only in the host's in-memory run map: a host that
 		// restarted since the run was launched answers `unknown-run`. The

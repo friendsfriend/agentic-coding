@@ -8924,6 +8924,93 @@ describe("workflow step behaviors", () => {
 		}
 	});
 
+	test("every verifier role is given its own focused checks", () => {
+		// A verifier's brief says "use only the focused checks named for your
+		// role"; the assignment has to name them, or the role improvises (six of
+		// nine verifiers ran no gate at all on the round this replaced).
+		const verification = stepBehavior("core.verification");
+		const triage = stepBehavior("core.triage");
+		const contextFor = (stepId: string, role: string) =>
+			({
+				snapshot: {} as WorkflowSnapshot,
+				run: {
+					stepId,
+					role,
+					profile: { readOnly: true },
+				},
+			}) as Parameters<NonNullable<typeof verification.assignmentInputs>>[0];
+		for (const role of VERIFIER_ROLES) {
+			const checks = verification.assignmentInputs?.(
+				contextFor("core.verification", role),
+			)?.checks;
+			expect(checks?.length ?? 0).toBeGreaterThan(0);
+			for (const check of checks ?? []) {
+				expect(check).not.toContain("assigned checks");
+				expect(check.trim().length).toBeGreaterThan(20);
+			}
+		}
+		// The role that names gates is the one whose asset defers to them.
+		const quality = verification
+			.assignmentInputs?.(contextFor("core.verification", "quality-verifier"))
+			?.checks?.join("\n");
+		expect(quality).toContain("Formatting, lint and type gates");
+		expect(quality).toContain("type-check");
+		// The full suite belongs to the engine-owned test verifier alone.
+		const testVerifier = verification
+			.assignmentInputs?.(contextFor("core.verification", "test-verifier"))
+			?.checks?.join("\n");
+		expect(testVerifier).toContain("complete configured test suite");
+		expect(
+			triage.assignmentInputs?.(contextFor("core.triage", "triage"))?.checks,
+		).toHaveLength(1);
+	});
+
+	test("a follow-up round omits the standing instructions it already has", () => {
+		const step = registerBuiltins().step("core.verification");
+		const assignmentFor = (generation: number): Assignment => ({
+			protocolVersion: 1,
+			workflowId: "workflow",
+			runId: "run-quality",
+			generation,
+			stepId: "core.verification",
+			role: "quality-verifier",
+			objective: "Review assigned files.",
+			interaction: "silent",
+			inputs: [],
+			permissions: ["read"],
+			checks: ["Formatting, lint and type gates once."],
+			allowedOutcomes: ["complete", "blocked", "failed"],
+			environment: {} as Assignment["environment"],
+		});
+		const protocol = (
+			AGENT_DEFINITIONS["instructions/workflow-agent-protocol.md"] ?? ""
+		).trim();
+		const roleAsset = (
+			AGENT_DEFINITIONS["instructions/verification-quality.md"] ?? ""
+		).trim();
+		const first = renderAssignment(step, assignmentFor(1)).prompt;
+		expect(first).toContain(protocol);
+		expect(first).toContain(roleAsset);
+		const followUp = renderAssignment(step, assignmentFor(2)).prompt;
+		// The round's own sections travel; the invariants do not.
+		expect(followUp).not.toContain(protocol);
+		expect(followUp).not.toContain(roleAsset);
+		expect(followUp).toContain("# Follow-up assignment");
+		// The pinned asset copy is the recovery path when a session no longer
+		// holds the protocol (compaction, resume).
+		expect(followUp).toContain("workflow-agent-protocol.md");
+		expect(followUp).toContain("## Required checks");
+		expect(followUp).toContain("Formatting, lint and type gates once.");
+		expect(followUp).toContain("## Output contract");
+		expect(Buffer.byteLength(followUp)).toBeLessThan(
+			Buffer.byteLength(first) / 2,
+		);
+		// Two different rounds never share a digest.
+		expect(renderAssignment(step, assignmentFor(2)).digest).not.toBe(
+			renderAssignment(step, assignmentFor(3)).digest,
+		);
+	});
+
 	test("resolves active roles from representative snapshots", () => {
 		const selected = ["security-verifier", "test-verifier"];
 		// An empty selection means the round needs no domain verifier: the

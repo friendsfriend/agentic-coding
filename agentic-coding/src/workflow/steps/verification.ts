@@ -21,6 +21,63 @@ export const VERIFIER_ROLES = [
 ] as const;
 const TRIAGE_ROLES = VERIFIER_ROLES.filter((role) => role !== "test-verifier");
 
+/** The focused check each verifier role is asked to perform, rendered as the
+ * assignment's `## Required checks`. Every verifier's brief says "use only the
+ * focused checks named for your role", so a placeholder there leaves the role
+ * to improvise (six of nine verifiers ran no gate at all in the round this was
+ * measured on) or to re-run the worker's whole gate set. A check is therefore
+ * either the command to run — quoted by what it is, since the engines serve
+ * repositories in several languages — or the review the role performs, stated
+ * so the verifier knows no command is expected. */
+const VERIFIER_CHECKS: Readonly<Record<string, readonly string[]>> = {
+	"quality-verifier": [
+		"Formatting, lint and type gates once, in one command, over the assigned files (in a Bun/TypeScript package: `bunx biome check <assigned files>`, then that package's type-check script). Do not run tests or a build unless they are the named gates.",
+		"Any finding handed to you from an earlier round, rechecked against the current code: report only the ones that still reproduce.",
+	],
+	"security-verifier": [
+		"Static review of the assigned files' trust boundaries: authentication and authorization, secret handling, injection, and validation of untrusted input. No command to run.",
+	],
+	"performance-verifier": [
+		"Static review of the assigned files for work that grows without bound per request, per instance, or per item: unindexed scans, repeated process spawns, synchronous I/O on a hot path. No command to run.",
+	],
+	"openspec-verifier": [
+		"Comparison of the assigned scope against the approved proposal, design, tasks and spec deltas, plus `openspec validate <change> --strict` once when the change is an OpenSpec change.",
+	],
+	"usability-verifier": [
+		"Static review of the user-visible surface in the assigned files: error and empty-state text, failure handling a caller must live with, and naming that leaks into the API. No command to run.",
+	],
+	"test-quality-verifier": [
+		"The focused tests that cover the assigned files, once, in one command. Never the complete suite (the engine-owned test-verifier runs it) and never a build.",
+		"Tests that were skipped, disabled, or written so they cannot fail when their subject breaks.",
+	],
+	"concurrency-verifier": [
+		"Static review of shared mutable state in the assigned files: unguarded read-modify-write, duplicate or late completion, retry and replay ordering, and idempotency. No command to run.",
+	],
+	"migration-verifier": [
+		"Static review of persistence and upgrade paths in the assigned files: forward compatibility of existing state, defaults for rows or documents that predate the change, and no destructive rewrite without a guard. No command to run.",
+	],
+};
+
+/** The checks an arriving verification or triage run is given. `core.triage`
+ * scopes roles rather than reviewing code, so its single check states what the
+ * plan must hold; an unknown verifier role still gets a usable line instead of
+ * a dangling reference. */
+function assignmentChecks(role: string): readonly string[] {
+	if (role === "test-verifier")
+		return [
+			"The repository's complete configured test suite once, in a single command, then stop.",
+		];
+	if (role === "triage")
+		return [
+			"Every listed role has at least one file from the round's changed scope and no file outside it, and no role outside the locked selection is named. No command to run.",
+		];
+	return (
+		VERIFIER_CHECKS[role] ?? [
+			"The focused checks this role owns over the assigned files, run once. No further command is prescribed.",
+		]
+	);
+}
+
 /** Whether the OpenSpec verifier role is eligible, read from the family's
  * `openspecVerifier` trait instead of the definition id
  * (read-family-traits-instead-of-ids). A caller that passes no traits — a
@@ -221,6 +278,7 @@ export const verificationBehaviors: Readonly<Record<string, StepBehavior>> = {
 		classification: "single",
 		roles: () => ["triage"],
 		candidateRoles: () => ["triage"],
+		assignmentInputs: ({ run }) => ({ checks: assignmentChecks(run.role) }),
 		onAgentComplete: triageCompletion,
 		// Attempt is seeded from the verification round counter so a triage
 		// redo after a verification loop keeps the same round number. The
@@ -238,6 +296,7 @@ export const verificationBehaviors: Readonly<Record<string, StepBehavior>> = {
 	},
 	"core.verification": {
 		classification: "single",
+		assignmentInputs: ({ run }) => ({ checks: assignmentChecks(run.role) }),
 		onAgentComplete: verificationCompletion,
 		// Candidate roles configure routing before a run exists; active roles use
 		// the selected subset during fan-out. An empty selection means the round

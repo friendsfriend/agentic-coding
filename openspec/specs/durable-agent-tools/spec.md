@@ -4,15 +4,34 @@
 TBD - created by archiving change add-pi-durable-runtime. Update Purpose after archive.
 ## Requirements
 ### Requirement: Coding tools and read-only policy
-A durable run SHALL offer read, write, edit and bash tools. A run whose profile is read-only or requires the `read-only` capability SHALL NOT be offered write or edit tools; bash SHALL remain available for focused checks and the handoff command.
+A durable run SHALL offer read, write, edit, bash and grep tools. A run whose profile is read-only or requires the `read-only` capability SHALL NOT be offered write or edit tools; read, bash, grep and the in-session judgment tool SHALL remain available for focused checks, scoped search, bounded judgments and the handoff command.
 
 #### Scenario: Read-only verifier
 - **WHEN** a read-only verifier run starts on `pi-durable`
-- **THEN** the model's tool list SHALL contain read and bash and SHALL NOT contain write or edit
+- **THEN** the model's tool list SHALL contain read, bash, grep and `ask_jev` and SHALL NOT contain write or edit
 
 #### Scenario: Writable worker
 - **WHEN** a worker run with write capability starts
-- **THEN** the model's tool list SHALL contain read, write, edit and bash
+- **THEN** the model's tool list SHALL contain read, write, edit, bash and grep and the run SHALL NOT restrict its tools to an explicit subset
+
+### Requirement: Search tool
+Every durable run SHALL offer a `grep` tool that searches a regular expression over the run's working directory and returns matching lines with their repository-relative path and line number. The tool SHALL refuse an absolute path or a path that escapes the working directory, SHALL bound the lines it returns, and SHALL answer an absent or failing ripgrep by falling back to the platform grep. It SHALL NOT write.
+
+#### Scenario: Verifier searches the assigned scope
+- **WHEN** a run calls `grep` with a pattern and a repository-relative path
+- **THEN** the result SHALL list the matching lines as `path:line: text` within the tool's own bound
+
+#### Scenario: Pattern with quoting
+- **WHEN** the pattern contains a quote or a space
+- **THEN** the pattern SHALL reach the search tool as one argument
+
+#### Scenario: Path outside the repository
+- **WHEN** the run names an absolute path or a path containing `..`
+- **THEN** the tool SHALL refuse and SHALL run no search
+
+#### Scenario: No ripgrep available
+- **WHEN** ripgrep is absent from the run's environment
+- **THEN** the search SHALL fall back to the platform grep and still return the matching lines
 
 ### Requirement: Workflow dialogue tools
 Every durable run SHALL offer `developer_question` and `agent_ask` with the same parameters, descriptions and validation as the pi workflow extension, executing the workflow question and ask CLI commands with the run's environment. These tools SHALL NOT be replayed after an interruption.

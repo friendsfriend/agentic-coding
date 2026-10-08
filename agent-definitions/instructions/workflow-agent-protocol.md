@@ -71,15 +71,18 @@ lists them. Your tools stay available directly, so codemode is for composing cal
 not for replacing one.
 
 - Batch independent calls in one script (`Promise.allSettled`) instead of one call
-  per turn.
+  per turn. A script is not required for that: calls that need no filtering can
+  simply be emitted together as tool calls in one message, which costs one turn
+  and keeps each call visible to the transcript.
 - Chain a pipeline you can plan without seeing intermediate output — search, read
   the matches, filter, summarize — in one call.
 - Filter large output inside the script and return only what you need: the matching
   lines, a count, or a summary, so raw `grep`/`bash` output never reaches your
   context.
-- Keep a single call direct. Writing a script for one `read` or one `grep` costs
-  more than it saves, and a plan that depends on output you have not seen is better
-  served by a direct call than by a guessed script.
+- Keep a single call direct, and never wrap one call in a script: writing a script
+  for one `read` or one `grep` costs more than it saves, and a plan that depends on
+  output you have not seen is better served by a direct call than by a guessed
+  script.
 - Keep edits and writes direct: a script hides the change from the transcript, and
   the developer review and verification read that. Report the handoff directly too,
   never from inside a script.

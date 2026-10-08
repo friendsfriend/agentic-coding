@@ -122,6 +122,28 @@ The `test-quality-verifier` role SHALL review whether the changed behavior is as
 - **THEN** it SHALL run only the focused checks named for its assignment
 - **AND** it SHALL NOT run the repository's complete test suite
 
+### Requirement: Focused checks are named per verifier role
+
+Each verifier role's assignment SHALL name the focused check that role is expected to perform: the gate command to run once over the assigned files where the repository defines one, or the review the role performs where the check is a judgment. A role that is not expected to run a command SHALL say so explicitly, so no verifier infers its own scope or re-runs another role's gates. No verifier assignment SHALL carry a placeholder in place of its checks.
+
+#### Scenario: Quality verifier assignment
+- **WHEN** a `quality-verifier` run is launched
+- **THEN** its required checks SHALL name the formatting/lint and type gates to run once over the assigned files
+- **AND** SHALL NOT require the complete test suite or a build
+
+#### Scenario: Judgment-only verifier assignment
+- **WHEN** a `security-verifier`, `concurrency-verifier`, `migration-verifier`, `performance-verifier` or `usability-verifier` run is launched
+- **THEN** its required checks SHALL state the review that role performs and that no command is expected
+
+#### Scenario: Focused tests for the test-quality verifier
+- **WHEN** a `test-quality-verifier` run is launched
+- **THEN** its required checks SHALL name the focused tests covering the assigned files
+- **AND** SHALL NOT name the complete test suite
+
+#### Scenario: First finding of the round is rechecked
+- **WHEN** a verifier is handed a finding from an earlier round
+- **THEN** its required checks SHALL require that finding to be rechecked against the current code
+
 ### Requirement: Complete-suite ownership remains with the test verifier
 
 After every selected verifier run for a round reports, the workflow SHALL launch `test-verifier` exactly once if the complete test suite has not already run in that round, regardless of whether `test-quality-verifier` was selected.

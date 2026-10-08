@@ -356,6 +356,70 @@ function summarize(
 	return bits.join(", ");
 }
 
+/** Matching lines one `grep` call returns unless it asks for fewer. A search
+ * is a locator, not a reader: the interesting hits are at the top of a scoped
+ * path, and the caller can read the file it found. */
+const GREP_DEFAULT_MATCHES = 80;
+/** Hard cap for one call, whatever `maxMatches` asks for. */
+const GREP_MAX_MATCHES = 400;
+/** Longest matching line kept; a minified bundle must not fill the turn. */
+const GREP_MAX_LINE_CHARS = 300;
+/** Bytes of raw search output collected before the tool stops reading. A
+ * pattern that matches half the repository must not be buffered in the host
+ * only to be cut back to `maxMatches` lines. */
+const GREP_MAX_CAPTURE_BYTES = 256 * 1024;
+
+const GrepParameters = Type.Object({
+	pattern: Type.String({
+		minLength: 1,
+		maxLength: 512,
+		description: "Regular expression to search for.",
+	}),
+	path: Type.Optional(
+		Type.String({
+			description:
+				"Repository-relative file or directory to search. Defaults to the run's working directory. Absolute paths and `..` are refused.",
+		}),
+	),
+	glob: Type.Optional(
+		Type.String({
+			description: 'Optional file filter, e.g. "*.ts" or "src/**/*.test.ts".',
+		}),
+	),
+	ignoreCase: Type.Optional(Type.Boolean()),
+	maxMatches: Type.Optional(
+		Type.Number({
+			description: `Matching lines to return (default ${GREP_DEFAULT_MATCHES}, maximum ${GREP_MAX_MATCHES}).`,
+		}),
+	),
+});
+
+/** Quote one argument for the shell command the run's environment executes, so
+ * a pattern containing a quote or a space stays a pattern. */
+function shellQuote(value: string): string {
+	return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+/** Whether a search target stays inside the run's working directory. The
+ * read-only policy is "read the assigned repository", so a path that climbs
+ * out of it or names an absolute location is refused rather than searched. */
+function scopedSearchPath(
+	value: string | undefined,
+):
+	| { readonly ok: true; readonly path: string }
+	| { readonly ok: false; readonly why: string } {
+	const target = (value ?? ".").trim() || ".";
+	if (target.startsWith("/") || /^[A-Za-z]:/.test(target))
+		return {
+			ok: false,
+			why: `absolute path is outside the repository: ${target}`,
+		};
+	const parts = target.split(/[/\\]+/);
+	if (parts.includes(".."))
+		return { ok: false, why: `path escapes the repository: ${target}` };
+	return { ok: true, path: target };
+}
+
 const AskJevParameters = Type.Object({
 	state: Type.Optional(
 		Type.Unknown({
@@ -694,6 +758,139 @@ export function gatherContextFiles(
 		}
 	}
 	return parts.join("\n\n");
+}
+
+/** `grep` (durable-agent-tools: "Search tool"): a bounded, repository-scoped
+ * pattern search. A durable run's coding tools carry no search of their own, so
+ * every scan would otherwise be a `bash` `grep`/`sed` call — one model turn
+ * each, with an unbounded result. This returns `path:line: text` hits for a
+ * whole scoped path in one call, which is what turns a verifier's review from
+ * dozens of turns into a handful. */
+export function createSearchExtension(): Extension {
+	return defineExtension({
+		name: "agentic.search",
+		tools: [
+			defineTool({
+				name: "grep",
+				description: [
+					"Search the repository for a regular expression and return the matching lines as `path:line: text`. Read-only, bounded to the run's working directory.",
+					"Prefer this over `bash` grep/sed: one call covers a whole directory, quoting is not a hazard, and the result is capped instead of spilling.",
+					"One call per pattern and several per message: independent searches emitted together cost one turn.",
+				].join(" "),
+				replay: "safe",
+				parameters: GrepParameters,
+				async execute(args, api, context) {
+					const env = api.env;
+					const fail = (text: string) => ({
+						content: [{ type: "text" as const, text: `grep: ${text}` }],
+						isError: true,
+					});
+					if (!env) return fail("this run has no execution environment");
+					const scoped = scopedSearchPath(args.path);
+					if (!scoped.ok) return fail(scoped.why);
+					const asked = Number.isFinite(args.maxMatches)
+						? Math.floor(args.maxMatches as number)
+						: GREP_DEFAULT_MATCHES;
+					const limit = Math.min(GREP_MAX_MATCHES, Math.max(1, asked));
+					const flags = [
+						"--line-number",
+						"--no-heading",
+						"--color",
+						"never",
+						...(args.ignoreCase ? ["--ignore-case"] : []),
+						...(args.glob ? ["--glob", shellQuote(args.glob)] : []),
+					];
+					const collect = async (command: string) => {
+						let captured = "";
+						let truncated = false;
+						const result = await env.exec(
+							command,
+							{
+								cwd: env.cwd,
+								onOutput: (text: string) => {
+									if (truncated) return;
+									const room = GREP_MAX_CAPTURE_BYTES - captured.length;
+									if (text.length > room) {
+										captured += text.slice(0, Math.max(0, room));
+										truncated = true;
+										return;
+									}
+									captured += text;
+								},
+							},
+							context,
+						);
+						return { result, captured, truncated };
+					};
+					let search = await collect(
+						`rg ${flags.join(" ")} -- ${shellQuote(args.pattern)} ${shellQuote(scoped.path)}`,
+					);
+					// A missing ripgrep (or a run whose environment refuses it) falls
+					// back to the platform grep, so a machine without `rg` still
+					// searches; exit 1 is "nothing matched" in both tools.
+					if (!search.result.ok) {
+						const fallbackFlags = [
+							"-rnI",
+							...(args.ignoreCase ? ["-i"] : []),
+							...(args.glob ? [`--include=${shellQuote(args.glob)}`] : []),
+						];
+						search = await collect(
+							`grep ${fallbackFlags.join(" ")} -e ${shellQuote(args.pattern)} ${shellQuote(scoped.path)}`,
+						);
+						if (!search.result.ok)
+							return fail(
+								`the search could not run (${search.result.error.code})`,
+							);
+					}
+					// Above 1 both tools report a usage or pattern error rather than a
+					// result; their own message is more useful than "no match".
+					if (search.result.value.exitCode > 1 && search.captured.trim())
+						return fail(search.captured.trim().slice(0, 400));
+					const lines = search.captured
+						.split("\n")
+						.filter((line) => line.length > 0);
+					const shown = lines
+						.slice(0, limit)
+						.map((line) =>
+							line.length > GREP_MAX_LINE_CHARS
+								? `${line.slice(0, GREP_MAX_LINE_CHARS)}…`
+								: line,
+						);
+					if (shown.length === 0)
+						return {
+							content: [
+								{
+									type: "text",
+									text: `grep: no match for /${args.pattern}/ in ${scoped.path}`,
+								},
+							],
+						};
+					const more = [
+						lines.length > shown.length
+							? `${lines.length - shown.length} more matching line(s): narrow the path or the pattern, or raise maxMatches.`
+							: "",
+						search.truncated
+							? "the search stopped early after reading a large result: narrow the path or the pattern."
+							: "",
+					]
+						.filter((note) => note.length > 0)
+						.map((note) => `… ${note}`)
+						.join("\n");
+					return {
+						content: [
+							{
+								type: "text",
+								text:
+									more.length > 0
+										? `${shown.join("\n")}\n${more}`
+										: shown.join("\n"),
+							},
+						],
+					};
+				},
+			}),
+		],
+	});
 }
 
 /** The durable system prompt (durable-agent-tools: "System prompt context"):

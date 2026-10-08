@@ -42,6 +42,7 @@ import {
 	codingTools,
 	createAskJevExtension,
 	createPromptExtension,
+	createSearchExtension,
 	createWorkflowDialogueExtension,
 	type DurableRunContext,
 	type RunContextLookup,
@@ -196,20 +197,30 @@ export class DurableHost {
 		/** The durable `codemode` tool when the user's global pi settings enable
 		 * it, so a read-only run's explicit selection can still offer it. */
 		private readonly codemodeTool: ToolRegistration | undefined,
+		/** The read-only run's share of the workflow extensions: `ask_jev` (the
+		 * in-session judgment tool the protocol tells every verifier to reach for)
+		 * and `grep` (the bounded repository search a review needs). A read-only
+		 * run names its tools explicitly, so both have to be listed here or the
+		 * prompt would name a tool the session never got. */
+		private readonly readOnlyTools: readonly ToolRegistration[],
 		/** The orchestrator extension, present only in orchestrator mode. */
 		private readonly orchestratorExtension: Extension | undefined,
 	) {}
 
-	/** The workflow-run extensions: dialogue tools, `ask_jev`, and the
+	/** The workflow-run extensions: dialogue tools, `ask_jev`, `grep`, and the
 	 * workflow system prompt. Never installed in orchestrator mode. */
 	private static installWorkflowExtensions(
 		registry: ReturnType<typeof createRegistry>,
 		lookup: RunContextLookup,
 		options: DurableHostOptions,
-	): void {
+	): readonly ToolRegistration[] {
 		registry.install(createWorkflowDialogueExtension(lookup));
-		registry.install(createAskJevExtension(lookup));
+		const jev = createAskJevExtension(lookup);
+		registry.install(jev);
+		const search = createSearchExtension();
+		registry.install(search);
 		registry.install(createPromptExtension(options.globalAgentDir));
+		return [...(jev.tools ?? []), ...(search.tools ?? [])];
 	}
 
 	private log(line: string): void {
@@ -236,7 +247,9 @@ export class DurableHost {
 			? createOrchestratorExtension(lookup)
 			: undefined;
 		if (orchestrator) registry.install(orchestrator);
-		else DurableHost.installWorkflowExtensions(registry, lookup, options);
+		const readOnlyTools = orchestrator
+			? []
+			: DurableHost.installWorkflowExtensions(registry, lookup, options);
 		// A durable run gets codemode only when the user's own global pi settings
 		// enable it, matching what a managed pane session inherits. It is an
 		// additional tool: the run keeps its direct tools either way. The
@@ -296,6 +309,7 @@ export class DurableHost {
 			options,
 			models,
 			codemode?.tool,
+			readOnlyTools,
 			orchestrator,
 		);
 		host.instance = instance;
@@ -406,9 +420,12 @@ export class DurableHost {
 
 	private readOnlyToolSelection() {
 		// codemode stays offered to a read-only run (its script can only reach the
-		// tools this selection names, so `write`/`edit` remain unreachable).
+		// tools this selection names, so `write`/`edit` remain unreachable), and
+		// with it the search and in-session judgment tools a verifier's review
+		// leans on.
 		return [
 			...codingTools(true),
+			...this.readOnlyTools,
 			...(this.codemodeTool ? [this.codemodeTool] : []),
 		];
 	}
