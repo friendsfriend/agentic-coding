@@ -8924,6 +8924,73 @@ describe("workflow step behaviors", () => {
 		}
 	});
 
+	test("every agent role receives its own brief and nothing else", () => {
+		// One self-contained brief per role (no shared step asset): a single-role
+		// step its one file, the wiki step its role's approach out of the two, and
+		// the verification step the role's own variant (covered above).
+		const registry = registerBuiltins();
+		const single: Array<[string, string]> = [
+			["core.plan", "planner"],
+			["fusion.plan", "planner-2"],
+			["fusion.consolidate", "consolidator"],
+			["core.implementation", "worker"],
+			["core.rebase", "worker"],
+			["core.triage", "triage"],
+			["core.research", "researcher"],
+			["core.archive", "archive"],
+		];
+		const assignmentFor = (stepId: string, role: string): Assignment => ({
+			protocolVersion: 1,
+			workflowId: "workflow",
+			runId: `run-${role}`,
+			generation: 1,
+			stepId,
+			role,
+			objective: "Do the assigned work.",
+			interaction: "silent",
+			inputs: [],
+			permissions: ["read"],
+			checks: [],
+			allowedOutcomes: ["complete", "blocked", "failed"],
+			environment: {} as Assignment["environment"],
+		});
+		const protocol = (
+			AGENT_DEFINITIONS["instructions/workflow-agent-protocol.md"] ?? ""
+		).trim();
+		for (const [stepId, role] of single) {
+			const step = registry.step(stepId);
+			const briefs = step.instructionAssets.filter(
+				(name) => name !== "workflow-agent-protocol.md",
+			);
+			expect(briefs).toHaveLength(1);
+			const prompt = renderAssignment(step, assignmentFor(stepId, role)).prompt;
+			expect(prompt).toContain(protocol);
+			expect(prompt).toContain(
+				(AGENT_DEFINITIONS[`instructions/${briefs[0]}`] ?? "").trim(),
+			);
+		}
+		// The wiki step pins two role briefs that share one contract body, so the
+		// exclusion is asserted on each role's own approach section.
+		const wiki = registry.step("core.wiki");
+		expect(wiki.instructionAssets).toContain("wiki-openspec.md");
+		expect(wiki.instructionAssets).toContain("wiki-research.md");
+		const wikiPrompt = renderAssignment(
+			wiki,
+			assignmentFor("core.wiki", "wiki"),
+		).prompt;
+		expect(wikiPrompt).toContain("## Discover before writing");
+		expect(wikiPrompt).not.toContain("## Directive-first, not rediscovery");
+		const researchPrompt = renderAssignment(
+			wiki,
+			assignmentFor("core.wiki", "research-wiki"),
+		).prompt;
+		expect(researchPrompt).toContain("## Directive-first, not rediscovery");
+		expect(researchPrompt).not.toContain("## Discover before writing");
+		// Both carry the contract they must obey.
+		for (const prompt of [wikiPrompt, researchPrompt])
+			expect(prompt).toContain("Strict source-repository boundary");
+	});
+
 	test("every verifier role is given its own focused checks", () => {
 		// A verifier's brief says "use only the focused checks named for your
 		// role"; the assignment has to name them, or the role improvises (six of

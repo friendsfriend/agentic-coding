@@ -63,6 +63,20 @@ question block schema (`noul`, `choice`, `score`).
   say that is what you did. Do not look for another endpoint, and do not treat the
   limitation as a reason to skip the question.
 
+## Reading the repository
+
+Tool calls are the expensive unit, not bytes: every call is a model turn over the
+whole conversation, and its cost is the whole conversation again. Shape a review
+or an edit pass as a few turns with many calls rather than many turns with one.
+
+- Emit every independent read, search, or inspection for one step as tool calls in
+  a single message; they run together and cost one response.
+- Prefer the `read` and `grep` tools over `sed -n`/`cat`/`head` in `bash`: they
+  bound what comes back, keep quoting out of the way, and one search covers a whole
+  directory.
+- Read what you were assigned plus what you must read to judge it. Do not re-read
+  this protocol, your role brief, or a file you already read in this run.
+
 ## Batching tool calls (codemode)
 
 When the `codemode` tool is available it runs JavaScript in a sandbox whose only

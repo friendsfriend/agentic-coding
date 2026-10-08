@@ -25,9 +25,10 @@ const INSTRUCTION_BY_STEP: Record<string, string[]> = {
 	"core.implementation": ["workflow-agent-protocol.md", "implementation.md"],
 	"core.rebase": ["workflow-agent-protocol.md", "rebase.md"],
 	"core.triage": ["workflow-agent-protocol.md", "triage.md"],
+	// One self-contained brief per verifier role; the role's file is the only
+	// variant asset of the step it receives (assignment.ts).
 	"core.verification": [
 		"workflow-agent-protocol.md",
-		"verification.md",
 		"verification-security.md",
 		"verification-quality.md",
 		"verification-performance.md",
@@ -40,7 +41,6 @@ const INSTRUCTION_BY_STEP: Record<string, string[]> = {
 	],
 	"core.wiki": [
 		"workflow-agent-protocol.md",
-		"wiki.md",
 		"wiki-openspec.md",
 		"wiki-research.md",
 	],

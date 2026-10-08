@@ -48,7 +48,7 @@ classifier selected for the round.
 
 ### Requirement: Per-role verifier instruction asset
 
-Each catalog verifier role SHALL be pinned with exactly one role instruction asset named `verification-<role id without the verifier suffix>.md`, and an assignment SHALL inject only its own role's variant asset out of the assets pinned for the verification step.
+Each catalog verifier role SHALL be pinned with exactly one role instruction asset named `verification-<role id without the verifier suffix>.md`, and an assignment SHALL inject only its own role's variant asset out of the assets pinned for the verification step. That asset SHALL be the role's complete brief — its remit, evidence standard, and findings bar — with no shared verification asset pinned alongside it, so a verifier's prompt never carries another role's remit.
 
 #### Scenario: Role resolves its own asset
 - **WHEN** a verifier run is assigned for a catalog role
@@ -58,6 +58,11 @@ Each catalog verifier role SHALL be pinned with exactly one role instruction ass
 #### Scenario: Role has no pinned asset
 - **WHEN** a registered role has no matching pinned `verification-<role>.md` asset
 - **THEN** registration SHALL fail before any workflow starts
+
+#### Scenario: Role brief is complete on its own
+- **WHEN** a verifier assignment is rendered
+- **THEN** its prompt SHALL contain the protocol and that role's own brief, which states the role's remit, its evidence standard, and its findings bar
+- **AND** SHALL NOT contain a shared verification asset carrying every role's remit
 
 #### Scenario: Similar role ids do not collide
 - **WHEN** a role id is a prefix of another role id, such as `test` and `test-quality`

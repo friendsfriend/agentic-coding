@@ -12,25 +12,34 @@ const planningInstructionPaths = [
 	"agent-definitions/instructions/planning-fusion.md",
 	"agent-definitions/instructions/fusion-consolidation.md",
 ];
-const wikiInstructionPath = "agent-definitions/instructions/wiki.md";
+// One self-contained brief per wiki role: the shared `wiki.md` contract is
+// folded into each, so both files carry the contract and their own approach.
+const wikiRoleInstructionPaths = [
+	"agent-definitions/instructions/wiki-openspec.md",
+	"agent-definitions/instructions/wiki-research.md",
+];
 
 test("wiki guidance distinguishes project and shared knowledge", () => {
 	const guidance = planningInstructionPaths.map(readRepositoryFile);
-	const wiki = readRepositoryFile(wikiInstructionPath);
+	const wikis = wikiRoleInstructionPaths.map(readRepositoryFile);
 	const archive = readRepositoryFile(
 		"agent-definitions/instructions/archive.md",
 	);
-	expect(AGENT_DEFINITIONS["instructions/wiki.md"]).toBe(wiki);
+	for (const wikiPath of wikiRoleInstructionPaths) {
+		expect(AGENT_DEFINITIONS[wikiPath.replace("agent-definitions/", "")]).toBe(
+			readRepositoryFile(wikiPath),
+		);
+	}
 	expect(AGENT_DEFINITIONS["instructions/archive.md"]).toBe(archive);
 	const specs = [readRepositoryFile("openspec/specs/knowledge-wiki/spec.md")];
 	const readme = readRepositoryFile("README.md");
 
-	for (const source of [...guidance, wiki, ...specs, readme]) {
+	for (const source of [...guidance, ...wikis, ...specs, readme]) {
 		expect(source).toContain("projects/<project-id>/<concept>");
 		expect(source).toContain("shared/<concept>");
 		expect(source).toMatch(/repository-relative source path/i);
 	}
-	for (const source of [...guidance, wiki, ...specs]) {
+	for (const source of [...guidance, ...wikis, ...specs]) {
 		expect(source).toMatch(
 			/evidence from every covered project|evidence from each covered project|evidenced by every covered project|every project covered/i,
 		);
@@ -39,7 +48,7 @@ test("wiki guidance distinguishes project and shared knowledge", () => {
 		);
 		expect(source).toMatch(/active near-duplicates?|active duplicate/i);
 	}
-	for (const source of [...guidance, wiki, ...specs, readme]) {
+	for (const source of [...guidance, ...wikis, ...specs, readme]) {
 		expect(source).not.toMatch(
 			/(?:each|one) repository(?:-specific)? bundle is required|one repository per (?:wiki )?bundle is the default|bundle belongs to one repository/i,
 		);
@@ -56,40 +65,45 @@ test("wiki guidance distinguishes project and shared knowledge", () => {
 	);
 	for (const source of guidance)
 		expect(source).toContain("Do not write wiki concepts");
-	expect(wiki).toContain("OKF v0.2");
-	expect(wiki).toContain("review comments");
-	expect(wiki).toContain("agentic-coding workflow wiki write");
-	expect(wiki).toContain("no durable knowledge found");
-	expect(wiki).toContain("status: draft");
+	for (const wiki of wikis) {
+		expect(wiki).toContain("OKF v0.2");
+		expect(wiki).toContain("review comments");
+		expect(wiki).toContain("agentic-coding workflow wiki write");
+		expect(wiki).toContain("no durable knowledge found");
+		expect(wiki).toContain("status: draft");
+	}
 	expect(archive).not.toMatch(/wiki/i);
 });
 
 test("wiki guidance updates existing concepts before creating", () => {
-	const wiki = readRepositoryFile(wikiInstructionPath);
-	const embedded = AGENT_DEFINITIONS["instructions/wiki.md"];
+	for (const wikiPath of wikiRoleInstructionPaths) {
+		const wiki = readRepositoryFile(wikiPath);
+		const embedded =
+			AGENT_DEFINITIONS[wikiPath.replace("agent-definitions/", "")];
 
-	expect(embedded).toBe(wiki);
-	expect(wiki).toMatch(
-		/1\.\s+Search the centralized bundle with multiple related terms/i,
-	);
-	expect(wiki).toMatch(
-		/2\.\s+Inspect every plausible candidate with `agentic-coding workflow wiki show <concept-id>`/i,
-	);
-	expect(wiki).toMatch(
-		/3\.\s+When a candidate covers the intended subject, select its canonical existing concept identifier and update that concept in place/i,
-	);
-	expect(wiki).toMatch(
-		/4\.\s+Create a new project-scoped concept only when no candidate is the intended subject or when the requested knowledge is materially distinct from every candidate/i,
-	);
-	expect(wiki).toMatch(
-		/run-bound evidence must name the searches and candidates considered and explain why updating an existing candidate would be incorrect/i,
-	);
-	expect(wiki).toMatch(
-		/preserve the existing concept identifier, unrelated body content, unknown frontmatter fields, and applicable provenance and lifecycle metadata/i,
-	);
-	expect(wiki).toMatch(
-		/For every new concept, also report the evidence-backed reason that no existing concept could be updated or that the knowledge is materially distinct/i,
-	);
+		expect(embedded).toBe(wiki);
+		expect(wiki).toMatch(
+			/1\.\s+Search the centralized bundle with multiple related terms/i,
+		);
+		expect(wiki).toMatch(
+			/2\.\s+Inspect every plausible candidate with `agentic-coding workflow wiki show <concept-id>`/i,
+		);
+		expect(wiki).toMatch(
+			/3\.\s+When a candidate covers the intended subject, select its canonical existing concept identifier and update that concept in place/i,
+		);
+		expect(wiki).toMatch(
+			/4\.\s+Create a new project-scoped concept only when no candidate is the intended subject or when the requested knowledge is materially distinct from every candidate/i,
+		);
+		expect(wiki).toMatch(
+			/run-bound evidence must name the searches and candidates considered and explain why updating an existing candidate would be incorrect/i,
+		);
+		expect(wiki).toMatch(
+			/preserve the existing concept identifier, unrelated body content, unknown frontmatter fields, and applicable provenance and lifecycle metadata/i,
+		);
+		expect(wiki).toMatch(
+			/For every new concept, also report the evidence-backed reason that no existing concept could be updated or that the knowledge is materially distinct/i,
+		);
+	}
 });
 
 test("wiki scope requirements preserve the existing CLI and migration lifecycle", () => {
