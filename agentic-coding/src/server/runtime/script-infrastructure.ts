@@ -35,6 +35,14 @@ export type ScriptRunner = (typeof SCRIPT_RUNNER)[keyof typeof SCRIPT_RUNNER];
 /** The tmux window name prefix script infrastructure uses. */
 export const INFRA_WINDOW_PREFIX = "devenv - infra - ";
 
+/** Auth capabilities belong to the server process, never to an instance script. */
+export const INSTANCE_SCRIPT_ENV_DENYLIST = [
+	"AGENTIC_DEVENV_TOKEN",
+	"AGENTIC_WORKFLOW_TOKEN",
+	"AGENTIC_WORKFLOW_URL",
+	"AGENTIC_DEVENV_URL",
+] as const;
+
 export interface ScriptExecutionHandle {
 	mode: string;
 	paneId?: string;
@@ -115,11 +123,21 @@ export class ScriptInfrastructure {
 		readonly args: readonly string[];
 		readonly dir?: string;
 		readonly logPath?: string;
+		readonly env?: Readonly<Record<string, string>>;
+		/** Keep workflow-owned script code out of the server's tmux ambient environment. */
+		readonly forceLogged?: boolean;
 		readonly spawn: () => { pid?: number };
 	}): Promise<ScriptStatus> {
 		const logPath = input.logPath ?? "";
-		if (this.tmuxMode()) {
+		if (this.tmuxMode() && input.forceLogged !== true) {
 			const windowName = `${INFRA_WINDOW_PREFIX}${input.ident}`;
+			const tmuxEnvironment: Record<string, string> = { ...(input.env ?? {}) };
+			if (input.env !== undefined)
+				for (const name of INSTANCE_SCRIPT_ENV_DENYLIST)
+					tmuxEnvironment[name] = "";
+			const environmentArgs = Object.entries(
+				input.env === undefined ? {} : tmuxEnvironment,
+			).flatMap(([key, value]) => ["-e", `${key}=${value}`]);
 			const result = await this.runCommand("tmux", [
 				"new-window",
 				"-P",
@@ -128,6 +146,7 @@ export class ScriptInfrastructure {
 				"-n",
 				windowName,
 				...(input.dir ? ["-c", input.dir] : []),
+				...environmentArgs,
 				input.command,
 				...input.args,
 			]);
@@ -170,9 +189,14 @@ export class ScriptInfrastructure {
 	}
 
 	/** Records the terminal state a finished process reported. */
-	noteExit(ident: string, exitCode: number | undefined, logPath: string): void {
+	noteExit(
+		ident: string,
+		exitCode: number | undefined,
+		logPath: string,
+		expectedPid?: number,
+	): void {
 		const run = this.runs.get(ident);
-		if (!run) return;
+		if (!run || (expectedPid !== undefined && run.pid !== expectedPid)) return;
 		const failed = exitCode !== undefined && exitCode !== 0;
 		this.runs.delete(ident);
 		this.terminal.set(ident, {
@@ -246,6 +270,83 @@ export class ScriptInfrastructure {
 		};
 	}
 
+	/** Instance-facing observation that keeps observation failure distinct from
+	 * confirmed process absence. The legacy `status()` contract remains unchanged. */
+	async observe(ident: string): Promise<ScriptStatus> {
+		const run = this.runs.get(ident);
+		if (!run)
+			return this.terminal.get(ident) ?? { status: "unknown", logPath: "" };
+		if (run.mode === "tmux") {
+			let result: CommandResult;
+			try {
+				result = await this.runCommand("tmux", [
+					"display-message",
+					"-p",
+					"-t",
+					run.paneId ?? "",
+					"#{window_id}:#{pane_pid}",
+				]);
+			} catch {
+				return {
+					status: "unknown",
+					logPath: run.logPath,
+					executionHandle: executionHandle(run),
+				};
+			}
+			if (result.error)
+				return {
+					status: "unknown",
+					logPath: run.logPath,
+					executionHandle: executionHandle(run),
+				};
+			const { pid } = parseTmuxWindowAndPid(result.output);
+			if (pid > 0) run.pid = pid;
+			if (run.pid === undefined || run.pid <= 0)
+				return {
+					status: "unknown",
+					logPath: run.logPath,
+					executionHandle: executionHandle(run),
+				};
+			if (!processAlive(run.pid)) {
+				this.runs.delete(ident);
+				const terminal: ScriptStatus = {
+					status: INFRA_STATUS.stopped,
+					logPath: run.logPath,
+					executionHandle: executionHandle(run),
+				};
+				this.terminal.set(ident, terminal);
+				return terminal;
+			}
+			return {
+				status: INFRA_STATUS.running,
+				logPath: run.logPath,
+				executionHandle: executionHandle(run),
+			};
+		}
+		const handle = this.store?.get(ident);
+		const pid = handle?.pid ?? run.pid;
+		if (pid === undefined || pid <= 0)
+			return {
+				status: "unknown",
+				logPath: run.logPath,
+				executionHandle: executionHandle(run),
+			};
+		if (!processAlive(pid)) {
+			this.runs.delete(ident);
+			this.terminal.set(ident, {
+				status: INFRA_STATUS.stopped,
+				logPath: run.logPath,
+				executionHandle: executionHandle(run),
+			});
+			return this.terminal.get(ident) as ScriptStatus;
+		}
+		return {
+			status: INFRA_STATUS.running,
+			logPath: run.logPath,
+			executionHandle: executionHandle(run),
+		};
+	}
+
 	/** The handle a status read publishes, without running an observation. */
 	executionHandle(ident: string): ScriptExecutionHandle | undefined {
 		const run = this.runs.get(ident);
@@ -259,7 +360,25 @@ export class ScriptInfrastructure {
 		if (!run) return;
 		this.runs.delete(ident);
 		if (run.mode === "tmux") {
-			await this.runCommand("tmux", ["kill-window", "-t", run.paneId ?? ""]);
+			const result = await this.runCommand("tmux", [
+				"kill-window",
+				"-t",
+				run.paneId ?? "",
+			]);
+			if (result.error) {
+				if (tmuxTargetIsAbsent(result.error.message)) {
+					this.terminal.set(ident, {
+						status: INFRA_STATUS.stopped,
+						logPath: run.logPath,
+						executionHandle: executionHandle(run),
+					});
+					return;
+				}
+				this.runs.set(ident, run);
+				throw new Error(
+					`failed to stop tmux window ${run.paneId ?? ""}: ${result.error.message}`,
+				);
+			}
 			return;
 		}
 		this.store?.delete(ident);
@@ -365,6 +484,12 @@ export function parseTmuxWindowAndPid(output: string): {
 function parseLeadingInt(text: string): number {
 	const match = text.trim().match(/^-?\d+/);
 	return match ? Number.parseInt(match[0], 10) : 0;
+}
+
+function tmuxTargetIsAbsent(error: string): boolean {
+	return /can't find (?:window|session)|no such (?:window|session)|no server running/i.test(
+		error,
+	);
 }
 
 /** Whether a pid still exists; signal 0 only probes existence. */

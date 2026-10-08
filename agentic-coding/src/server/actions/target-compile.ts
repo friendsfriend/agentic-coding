@@ -445,7 +445,13 @@ function compileTargetWithRuntime(
 	}
 	if (target.runtime === "docker" && target.action === "run") {
 		leaf.kind = KIND.command;
-		const args = ["-f", target.sourcePath, "up", "-d"];
+		const args = [
+			...(target.instanceId ? ["-p", `${appIdent}-${target.instanceId}`] : []),
+			"-f",
+			target.sourcePath,
+			"up",
+			"-d",
+		];
 		if (
 			target.profile &&
 			!composeCommand.startsWith("podman-compose") &&
@@ -488,7 +494,13 @@ function compileTargetWithRuntime(
 				configuration: {
 					probe: "compose",
 					command: composeCommand,
-					args: ["-f", target.sourcePath],
+					args: [
+						...(target.instanceId
+							? ["-p", `${appIdent}-${target.instanceId}`]
+							: []),
+						"-f",
+						target.sourcePath,
+					],
 					stabilizationMs: 3000,
 				},
 			}),

@@ -14,6 +14,7 @@ import {
 	environmentOperationSchema,
 	executeEnvironmentOperation,
 } from "../src/server/environment/private-api.ts";
+import { SCHEMA_VERSION } from "../src/server/environment/state-store.ts";
 import { startWorkflowServer } from "../src/server/lifecycle.ts";
 import { routeOwner } from "../src/server/protocol.ts";
 
@@ -353,7 +354,7 @@ describe("rollback and ownership preconditions", () => {
 				configDir,
 			});
 			try {
-				expect(recovered.state.schemaVersion).toBe(7);
+				expect(recovered.state.schemaVersion).toBe(SCHEMA_VERSION);
 				expect(recovered.state.getAppState("half-migrated-app")).toMatchObject({
 					branch: "main",
 					mainWorktreeBranch: "main",

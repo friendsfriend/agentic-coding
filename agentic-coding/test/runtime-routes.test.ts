@@ -6,6 +6,10 @@
 // and `data: {...}` SSE frames. A container lifecycle call also records a
 // commandless run, because the Docker API did the work and no process ran.
 import { describe, expect, test } from "bun:test";
+import { createServerApp } from "../src/server/app.ts";
+import { createInstanceAuthority } from "../src/server/auth.ts";
+import { CredentialRegistry } from "../src/server/credentials.ts";
+import { EventBroker } from "../src/server/events.ts";
 import {
 	BUN_RUNTIME_OPERATIONS,
 	createBunRuntimeDispatch,
@@ -102,6 +106,92 @@ async function call(
 	if (!response) throw new Error(`unhandled ${method} ${path}`);
 	return response;
 }
+
+describe("environment instance routes", () => {
+	test("lists, reads, starts idempotently, and stops an instance", async () => {
+		const authority = createInstanceAuthority("instance-routes", "token");
+		let startCount = 0;
+		const instance = {
+			id: "run-a-shop",
+			owner: "workflow:run-a",
+			app: "shop",
+			targetId: "shop:docker:default",
+			runtime: "docker",
+			checkoutPath: "/worktrees/run-a/shop",
+			imageTag: "run-a-shop",
+			status: "running",
+			createdAt: "2026-01-01T00:00:00.000Z",
+			lastActivityAt: "2026-01-01T00:00:00.000Z",
+			endpoints: { HTTP: "http://127.0.0.1:25000" },
+		};
+		const instances = {
+			list: async () => [instance],
+			get: async () => instance,
+			start: async () => ({
+				outcome: ++startCount === 1 ? "started" : "already-running",
+				instance,
+			}),
+			stop: async () => ({ ...instance, status: "stopped" }),
+		};
+		const api = createServerApp({
+			authority,
+			events: new EventBroker(authority.instance),
+			credentials: new CredentialRegistry(),
+			integrations: { instances } as never,
+		});
+		const headers = { authorization: `Bearer ${authority.token}` };
+		const list = await api.fetch(
+			new Request("http://127.0.0.1/api/v1/environment/instances", { headers }),
+		);
+		expect(((await list.json()) as { value: unknown[] }).value).toHaveLength(1);
+		const start = (owner: string) =>
+			api.fetch(
+				new Request("http://127.0.0.1/api/v1/environment/instances/start", {
+					method: "POST",
+					headers,
+					body: JSON.stringify({ owner, app: "shop" }),
+				}),
+			);
+		expect(
+			(
+				(await (await start("workflow:run-a")).json()) as {
+					value: { outcome: string };
+				}
+			).value.outcome,
+		).toBe("started");
+		expect(
+			(
+				(await (await start("workflow:run-a")).json()) as {
+					value: { outcome: string };
+				}
+			).value.outcome,
+		).toBe("already-running");
+		const read = await api.fetch(
+			new Request(
+				"http://127.0.0.1/api/v1/environment/instances/run-a-shop?app=shop",
+				{ headers },
+			),
+		);
+		expect(
+			((await read.json()) as { value: { endpoints: Record<string, string> } })
+				.value.endpoints.HTTP,
+		).toBe("http://127.0.0.1:25000");
+		const stop = await api.fetch(
+			new Request(
+				"http://127.0.0.1/api/v1/environment/instances/run-a-shop/stop",
+				{
+					method: "POST",
+					headers,
+					body: JSON.stringify({ app: "shop" }),
+				},
+			),
+		);
+		expect(
+			((await stop.json()) as { value: { status: string } }).value.status,
+		).toBe("stopped");
+		api.events.closeAll();
+	});
+});
 
 describe("docker lifecycle routes", () => {
 	test("start records a commandless run, publishes the legacy event and answers", async () => {

@@ -632,6 +632,8 @@ export interface IntegrationServices {
 	readonly actions?: import("../actions/routes.ts").ActionRouteContext;
 	/** Container and Kubernetes capabilities (`docker`/`kubernetes` families). */
 	readonly runtime?: RuntimeRouteServices;
+	/** Owner-scoped app run-target instances. */
+	readonly instances?: import("../runtime/instances.ts").EnvironmentInstanceController;
 	/** The application/infrastructure family (`app` rows). */
 	readonly appFamily?: import("../runtime/app-routes.ts").AppFamilyServices;
 }

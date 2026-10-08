@@ -481,7 +481,7 @@ export async function main(): Promise<void> {
 	}
 
 	/** The most recent phase of the bootstrap that must be unwound on failure. */
-	let activeStep = "workflow-application";
+	let _activeStep = "workflow-application";
 
 	// The unified backend boundary: the TUI starts (and owns) the one Bun server
 	// and reaches observations/mutations through the typed client instead of
@@ -723,7 +723,7 @@ export async function main(): Promise<void> {
 	async function startServerStack(homeMode: boolean): Promise<void> {
 		await tick();
 		const mark = (id: string) => {
-			activeStep = id;
+			_activeStep = id;
 			setStepActive(id);
 		};
 		try {

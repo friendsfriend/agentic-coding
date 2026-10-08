@@ -40,6 +40,11 @@ export interface DiscoveryContext {
 	readonly localDir: string;
 	readonly action: AppAction;
 	readonly configDir: string;
+	/** Per-instance identity and variables added to every discovered target. */
+	readonly instance?: {
+		readonly id: string;
+		readonly env: Readonly<Record<string, string>>;
+	};
 	/** Platform, so the systemshell variant and interpreter names are pinned. */
 	readonly platform?: string;
 	/** PowerShell executable resolution. */
@@ -132,6 +137,13 @@ export function discoverActionTargets(
 			throw new Error(
 				`unsupported app action ${JSON.stringify(context.action)}`,
 			);
+	}
+	if (context.instance) {
+		targets = targets.map((target) => ({
+			...target,
+			instanceId: context.instance?.id,
+			env: { ...(target.env ?? {}), ...context.instance?.env },
+		}));
 	}
 	return targets.sort((a, b) => {
 		if (a.runtime !== b.runtime) return a.runtime < b.runtime ? -1 : 1;

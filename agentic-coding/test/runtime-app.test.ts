@@ -7,6 +7,8 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { discoverActionTargets } from "../src/server/actions/discovery.ts";
+import { compileTargetGraph } from "../src/server/actions/target-compile.ts";
 import type { App, InfraService } from "../src/server/environment/config.ts";
 import {
 	type AppFamilyServices,
@@ -155,6 +157,61 @@ async function call(
 	if (!response) throw new Error(`unhandled ${method} ${path}`);
 	return response;
 }
+
+describe("instance-aware run target compilation", () => {
+	test("discovery and compile preserve instance project and environment", () => {
+		const { services, root } = fixture();
+		const sourcePath = path.join(
+			services.configDir,
+			"apps",
+			"compose",
+			"shop-compose.yml",
+		);
+		fs.writeFileSync(
+			sourcePath,
+			`services:\n  web:\n    image: "shop:\${AC_IMAGE_TAG:-latest}"\n`,
+		);
+		const targets = discoverActionTargets({
+			appIdent: "shop",
+			localDir: "/worktrees/run-a/shop",
+			action: "run",
+			configDir: services.configDir,
+			instance: {
+				id: "run-a-shop",
+				env: {
+					AC_INSTANCE: "run-a-shop",
+					AC_OWNER: "workflow:run-a",
+					AC_APP_DIR: "/worktrees/run-a/shop",
+					AC_IMAGE_TAG: "run-a-shop",
+				},
+			},
+		});
+		const target = targets.find(
+			(candidate) => candidate.sourcePath === sourcePath,
+		);
+		if (!target) throw new Error("instance compose target was not discovered");
+		const definition = compileTargetGraph(
+			"shop",
+			target,
+			undefined,
+			"/worktrees/run-a/shop",
+		);
+		const execute = definition.root.children?.find((child) =>
+			child.id.endsWith("/execute"),
+		);
+		expect(execute?.configuration).toMatchObject({
+			command: "docker-compose",
+			args: ["-p", "shop-run-a-shop", "-f", sourcePath, "up", "-d"],
+			env: expect.arrayContaining([
+				"AC_INSTANCE=run-a-shop",
+				"AC_OWNER=workflow:run-a",
+				"AC_APP_DIR=/worktrees/run-a/shop",
+				"AC_IMAGE_TAG=run-a-shop",
+			]),
+		});
+		fs.rmSync(root, { recursive: true, force: true });
+	});
+});
 
 describe("app route matching", () => {
 	test("matches every implemented row and captures the ident", () => {

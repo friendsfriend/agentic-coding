@@ -47,6 +47,7 @@ export interface ContainerSummary {
 	Names: string[];
 	State: string;
 	Ports: { PrivatePort: number; PublicPort?: number; Type: string }[];
+	Labels?: Record<string, string>;
 }
 
 export interface ContainerEvent {
@@ -648,6 +649,23 @@ export class DockerClient {
 			throw new Error(
 				`failed to ${verb} container ${containerId}: ${message(error)}`,
 			);
+		}
+		this.invalidateCache();
+	}
+
+	/** Removes a project-owned container by id, treating a concurrent/already
+	 * completed removal as success. Force removal also stops a running container. */
+	async removeContainer(containerId: string): Promise<void> {
+		try {
+			await this.requestOk(`/containers/${encodeURIComponent(containerId)}`, {
+				method: "DELETE",
+				params: { force: "true" },
+			});
+		} catch (error) {
+			if (!(error instanceof DockerRequestError && error.status === 404))
+				throw new Error(
+					`failed to remove container ${containerId}: ${message(error)}`,
+				);
 		}
 		this.invalidateCache();
 	}
@@ -1279,12 +1297,14 @@ export function decodeContainerList(value: unknown): ContainerSummary[] {
 			Id?: string;
 			Names?: string[];
 			State?: string;
+			Labels?: Record<string, string>;
 			Ports?: { PrivatePort?: number; PublicPort?: number; Type?: string }[];
 		};
 		return {
 			Id: raw.Id ?? "",
 			Names: raw.Names ?? [],
 			State: raw.State ?? "",
+			...(raw.Labels === undefined ? {} : { Labels: raw.Labels }),
 			Ports: (raw.Ports ?? []).map((port) => ({
 				PrivatePort: port.PrivatePort ?? 0,
 				...(port.PublicPort === undefined

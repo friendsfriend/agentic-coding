@@ -80,6 +80,37 @@ export const observeRequestSchema = Schema.Struct({
 	observation: observationSchema,
 });
 
+function hasControlCharacters(value: string): boolean {
+	for (let index = 0; index < value.length; index++) {
+		const code = value.charCodeAt(index);
+		if (code < 0x20 || code === 0x7f) return true;
+	}
+	return false;
+}
+
+const safeInstanceText = Schema.String.pipe(
+	Schema.maxLength(512),
+	Schema.filter((value) => !hasControlCharacters(value), {
+		message: () => "control characters are not allowed",
+	}),
+);
+
+export const environmentInstanceStartRequestSchema = Schema.Struct({
+	owner: safeInstanceText.pipe(Schema.minLength(1)),
+	app: safeInstanceText.pipe(Schema.minLength(1)),
+	target: Schema.optional(safeInstanceText),
+	profile: Schema.optional(safeInstanceText),
+});
+
+export const environmentInstanceStopRequestSchema = Schema.Struct({
+	app: Schema.optional(safeInstanceText),
+});
+
+export type EnvironmentInstanceStartRequest =
+	typeof environmentInstanceStartRequestSchema.Type;
+export type EnvironmentInstanceStopRequest =
+	typeof environmentInstanceStopRequestSchema.Type;
+
 // ---------------------------------------------------------------------------
 // Dashboard session wire records: event envelopes, connection state, errors
 // ---------------------------------------------------------------------------

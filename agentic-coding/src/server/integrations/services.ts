@@ -5,6 +5,12 @@
 // Credentials are resolved here, on the Bun side, so a Git operation never
 // carries a token across the private adapter boundary.
 import path from "node:path";
+import type { WorkflowSnapshot } from "../../contracts/workflow.ts";
+import { engine as workflowEngine } from "../../workflow/operations.ts";
+import { workflowTargets } from "../../workflow/runtime/target-registry.ts";
+import { canonicalRepository } from "../../workflow/runtime/targets.ts";
+import { runWorktree } from "../../worktree/boundary.ts";
+import { WorktreeAdapter } from "../../worktree/index.ts";
 import {
 	type ActionRouteContext,
 	type ActionRouteServices,
@@ -19,6 +25,11 @@ import {
 	type AppFamilyServices,
 	createAppFamilyServices,
 } from "../runtime/app-services.ts";
+import { selectRuntime } from "../runtime/docker.ts";
+import {
+	EnvironmentInstanceController,
+	type EnvironmentInstanceState,
+} from "../runtime/instances.ts";
 import { DependencyLeases } from "../runtime/leases.ts";
 import type { RuntimeRouteServices } from "../runtime/routes.ts";
 import type { RunObservation } from "../runtime/run-observation.ts";
@@ -30,6 +41,81 @@ import {
 	ProviderStore,
 } from "./provider-store.ts";
 import type { IntegrationServices } from "./routes.ts";
+
+export interface WorkflowOwnerCheckoutResolverDependencies {
+	readonly targets?: () => readonly string[];
+	readonly snapshot?: (
+		target: string,
+		workflowId: string,
+	) => Pick<WorkflowSnapshot, "workflowId" | "metadata">;
+	readonly canonicalRepository?: (checkout: string) => string;
+	readonly findWorktree?: (
+		repository: string,
+		branch: string,
+	) => Promise<string | undefined>;
+}
+
+/** Resolve a workflow id only through its recorded store and checkout metadata.
+ * If the workflow repository is another configured app, reuse the worktree for
+ * the workflow's pinned branch in the requested app via WorktreePort. */
+export function createWorkflowOwnerCheckoutResolver(
+	dependencies: WorkflowOwnerCheckoutResolverDependencies = {},
+): (owner: `workflow:${string}`, app: App) => Promise<string | undefined> {
+	const targets = dependencies.targets ?? workflowTargets;
+	const engine = workflowEngine();
+	const snapshot =
+		dependencies.snapshot ?? ((target, id) => engine.getSnapshot(target, id));
+	const canonical = dependencies.canonicalRepository ?? canonicalRepository;
+	const worktrees = new WorktreeAdapter();
+	const findWorktree =
+		dependencies.findWorktree ??
+		(async (repository: string, branch: string) =>
+			(await runWorktree(worktrees.find(repository, branch)))?.path);
+	return async (owner, app) => {
+		const workflowId = owner.slice("workflow:".length);
+		let appRoot: string;
+		try {
+			appRoot = canonical(app.localDirectoryPath);
+		} catch {
+			return undefined;
+		}
+		for (const target of targets()) {
+			let state: Pick<WorkflowSnapshot, "workflowId" | "metadata">;
+			try {
+				state = snapshot(target, workflowId);
+			} catch {
+				continue;
+			}
+			if (state.workflowId !== workflowId || !state.metadata.repository)
+				continue;
+			let ownerRoot: string;
+			try {
+				ownerRoot = canonical(state.metadata.repository);
+			} catch {
+				continue;
+			}
+			if (ownerRoot === appRoot && state.metadata.worktree) {
+				try {
+					if (canonical(state.metadata.worktree) === appRoot)
+						return state.metadata.worktree;
+				} catch {
+					// A stale workflow checkout is not an owner checkout.
+				}
+			}
+			if (!state.metadata.branch) continue;
+			try {
+				const found = await findWorktree(
+					app.localDirectoryPath,
+					state.metadata.branch,
+				);
+				if (found && canonical(found) === appRoot) return found;
+			} catch {
+				// A missing registration or unavailable worktrunk never falls back to a request path.
+			}
+		}
+		return undefined;
+	};
+}
 
 export interface IntegrationServicesOptions {
 	readonly manager: EnvironmentManager;
@@ -59,6 +145,17 @@ export interface IntegrationServicesOptions {
 	};
 	/** Script infrastructure lifecycle, owned by the runtime composition. */
 	readonly scriptInfra?: ScriptInfrastructure;
+	/** Resolve workflow ownership to its managed app checkout (not request paths). */
+	readonly resolveOwnerCheckout?: (
+		owner: `workflow:${string}`,
+		app: App,
+	) => string | undefined | Promise<string | undefined>;
+	/** Configured `environment.instances.port_range`; defaults to 20000-29999. */
+	readonly instancePortRange?: () => string;
+	/** Container runtime selection for instance starts, when not preselected. */
+	readonly resolveDockerRuntime?: () => Promise<
+		import("../runtime/docker.ts").DockerRuntimeSelection | undefined
+	>;
 	/** Run-target/Kubernetes observer, owned by the runtime composition. */
 	readonly observation?: RunObservation;
 }
@@ -102,6 +199,48 @@ export function createIntegrationServices(
 			credentialsFor(providers, options.manager, repositoryUrl),
 		logger: options.logger,
 	});
+	const instanceState = options.state as unknown as Record<string, unknown>;
+	const hasInstanceStore = [
+		"getEnvironmentInstances",
+		"getEnvironmentInstance",
+		"findEnvironmentInstance",
+		"claimEnvironmentInstance",
+		"claimEnvironmentInstanceStop",
+		"compareAndSetEnvironmentInstanceStatus",
+		"transitionEnvironmentInstanceStatus",
+		"releasePortAllocationsIfStatus",
+		"deleteEnvironmentInstanceIfStatus",
+		"updateEnvironmentInstanceStatus",
+		"deleteEnvironmentInstance",
+		"getPortAllocations",
+		"setPortAllocation",
+		"deletePortAllocations",
+	].every((method) => typeof instanceState[method] === "function");
+	const instances = hasInstanceStore
+		? new EnvironmentInstanceController({
+				state: options.state as unknown as EnvironmentInstanceState,
+				apps: () => options.manager.getApps(),
+				configDir: options.configDir,
+				...(options.runtime?.docker ? { docker: options.runtime.docker } : {}),
+				...(!options.runtime?.docker
+					? {
+							resolveDocker:
+								options.resolveDockerRuntime ??
+								(() =>
+									selectRuntime(
+										process.env.DEVENV_CONTAINER_RUNTIME ?? "docker",
+									)),
+						}
+					: {}),
+				resolveOwnerCheckout:
+					options.resolveOwnerCheckout ?? createWorkflowOwnerCheckoutResolver(),
+				...(options.instancePortRange
+					? { portRange: options.instancePortRange }
+					: {}),
+				...(options.scriptInfra ? { scriptInfra: options.scriptInfra } : {}),
+				...(options.logger ? { logger: options.logger } : {}),
+			})
+		: undefined;
 	const actionContext = createActionRouteContext({
 		configDir: options.configDir,
 		homeDir: options.homeDir ?? path.dirname(options.configDir),
@@ -177,6 +316,7 @@ export function createIntegrationServices(
 			loadConfig: () => options.manager.loadConfig(),
 		},
 		...(options.runtime ? { runtime: options.runtime } : {}),
+		...(instances ? { instances } : {}),
 		...(options.fetch ? { fetch: options.fetch } : {}),
 		...(options.logger ? { logger: options.logger } : {}),
 	};

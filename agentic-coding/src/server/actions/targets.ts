@@ -116,6 +116,8 @@ export interface ActionTarget {
 	requires?: DependencyRef[];
 	exports?: EndpointExport[];
 	bindings?: EndpointBinding[];
+	/** Optional owner-scoped environment instance execution context. */
+	instanceId?: string;
 	kubernetes?: KubernetesTargetMetadata;
 }
 

@@ -17,6 +17,8 @@ import {
 import { credentialRespondSchema } from "../contracts/credential.ts";
 import { decodeContract } from "../contracts/decode.ts";
 import {
+	environmentInstanceStartRequestSchema,
+	environmentInstanceStopRequestSchema,
 	type ObservationRequest,
 	observeRequestSchema,
 } from "../contracts/environment.ts";
@@ -224,6 +226,30 @@ export const ROUTE_OWNERSHIP: readonly RouteOwnership[] = [
 		domain: "credentials",
 	},
 	{
+		method: "GET",
+		path: "/api/v1/environment/instances/*",
+		owner: "bun",
+		domain: "environment",
+	},
+	{
+		method: "GET",
+		path: "/api/v1/environment/instances",
+		owner: "bun",
+		domain: "environment",
+	},
+	{
+		method: "POST",
+		path: "/api/v1/environment/instances/start",
+		owner: "bun",
+		domain: "environment",
+	},
+	{
+		method: "POST",
+		path: "/api/v1/environment/instances/*",
+		owner: "bun",
+		domain: "environment",
+	},
+	{
 		method: "POST",
 		path: "/api/v1/environment/private/*",
 		owner: "bun",
@@ -267,6 +293,16 @@ export const ROUTE_REQUESTS: readonly RouteRequestSchema[] = [
 		path: "/api/v1/observe",
 		schemaId: "server.observe",
 		schema: observeRequestSchema,
+	},
+	{
+		path: "/api/v1/environment/instances/start",
+		schemaId: "server.environment.instances.start",
+		schema: environmentInstanceStartRequestSchema,
+	},
+	{
+		path: "/api/v1/environment/instances/{id}/stop",
+		schemaId: "server.environment.instances.stop",
+		schema: environmentInstanceStopRequestSchema,
 	},
 	{
 		path: "/api/v1/workflow/action",

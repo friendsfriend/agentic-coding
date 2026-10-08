@@ -16,6 +16,7 @@ import path from "node:path";
 import type { AppRunTargetInfo } from "../src/server/environment/state-store.ts";
 import {
 	backupPathFor,
+	EnvironmentStateError,
 	EnvironmentStateReadOnlyError,
 	EnvironmentStateStore,
 	EnvironmentStateVersionError,
@@ -49,6 +50,12 @@ function readExpectation(name: string): FixtureExpectation {
 	return JSON.parse(
 		fs.readFileSync(path.join(FIXTURES, name, "expected.json"), "utf8"),
 	) as FixtureExpectation;
+}
+
+function sourceSchemaVersion(name: string): number {
+	// The partial-v4 database has no committed schema_meta version, so the
+	// migration cannot attribute a versioned backup to it.
+	return name === "partial-v4" ? 0 : readExpectation(name).schemaVersion;
 }
 
 /** Copy a fixture so the migration under test never rewrites the checked-in
@@ -217,7 +224,7 @@ describe("environment state fixtures", () => {
 				}
 				// An upgrade from an older schema leaves a verified pre-upgrade
 				// backup behind, still at the old version.
-				const expectedVersion = readExpectation(name).schemaVersion;
+				const expectedVersion = sourceSchemaVersion(name);
 				if (expectedVersion > 0 && expectedVersion < SCHEMA_VERSION) {
 					const backup = backupPathFor(dbPath, expectedVersion);
 					expect(fs.existsSync(backup)).toBe(true);
@@ -240,12 +247,73 @@ describe("environment state fixtures", () => {
 	test("future schema fails closed without modification", () => {
 		const { dir, dbPath } = copyFixture("future");
 		try {
+			const configured = new Database(dbPath);
+			try {
+				configured.exec("PRAGMA journal_mode=DELETE");
+			} finally {
+				configured.close();
+			}
+			fs.rmSync(`${dbPath}-wal`, { force: true });
+			fs.rmSync(`${dbPath}-shm`, { force: true });
 			const before = fs.readFileSync(dbPath);
 			expect(() => EnvironmentStateStore.open(dir)).toThrow(
 				EnvironmentStateVersionError,
 			);
 			expect(fs.readFileSync(dbPath).equals(before)).toBe(true);
+			expect(fs.existsSync(`${dbPath}-wal`)).toBe(false);
+			expect(fs.existsSync(`${dbPath}-shm`)).toBe(false);
 			expect(fs.existsSync(backupPathFor(dbPath, 99))).toBe(false);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("a truncated pre-upgrade backup is replaced by a verified copy", () => {
+		const { dir, dbPath } = copyFixture("current");
+		const backup = backupPathFor(dbPath, 7);
+		try {
+			fs.writeFileSync(backup, fs.readFileSync(dbPath).subarray(0, 4096));
+			const store = EnvironmentStateStore.open(dir);
+			try {
+				expect(store.backupPath).toBe(backup);
+			} finally {
+				store.close();
+			}
+			const verified = new Database(backup, { readonly: true });
+			try {
+				expect(verified.query("PRAGMA integrity_check").get()).toEqual({
+					integrity_check: "ok",
+				});
+				const version = verified
+					.query("SELECT value FROM schema_meta WHERE key='version'")
+					.get() as { value: string };
+				expect(Number(version.value)).toBe(7);
+			} finally {
+				verified.close();
+			}
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("failed pre-upgrade backup is wrapped and leaves the source database openable", () => {
+		const { dir, dbPath } = copyFixture("current");
+		const backup = backupPathFor(dbPath, 7);
+		try {
+			fs.mkdirSync(backup);
+			fs.writeFileSync(path.join(backup, "keep"), "not a backup");
+			expect(() => EnvironmentStateStore.open(dir)).toThrow(
+				EnvironmentStateError,
+			);
+			const source = new Database(dbPath, { readonly: true });
+			try {
+				const row = source
+					.query("SELECT value FROM schema_meta WHERE key='version'")
+					.get() as { value: string };
+				expect(Number(row.value)).toBe(7);
+			} finally {
+				source.close();
+			}
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
@@ -256,7 +324,6 @@ describe("environment state fixtures", () => {
 		try {
 			const store = EnvironmentStateStore.open(dir);
 			try {
-				const expected = readExpectation("partial-v4");
 				expect(store.schemaVersion).toBe(SCHEMA_VERSION);
 				expect(store.getAppState("half-migrated-app")).toEqual({
 					ident: "half-migrated-app",
@@ -264,7 +331,9 @@ describe("environment state fixtures", () => {
 					activeWorktree: "",
 					mainWorktreeBranch: "main",
 				});
-				expect(expected.schemaVersion).toBe(SCHEMA_VERSION);
+				expect(postMigrationExpectation("partial-v4").schemaVersion).toBe(
+					SCHEMA_VERSION,
+				);
 			} finally {
 				store.close();
 			}
@@ -490,6 +559,105 @@ describe("environment state fixtures", () => {
 				store.close();
 			}
 		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("schema v7 migrates to v8, reopens idempotently, and persists instances and ports", () => {
+		const { dir } = copyFixture("current");
+		try {
+			const first = EnvironmentStateStore.open(dir);
+			expect(first.schemaVersion).toBe(8);
+			first.setEnvironmentInstance({
+				id: "workflow-a-app",
+				owner: "workflow:a",
+				app: "shop",
+				targetId: "shop:docker:default",
+				runtime: "docker",
+				checkoutPath: "/worktrees/a/shop",
+				imageTag: "workflow-a-app",
+				status: "running",
+				createdAt: "2026-01-01T00:00:00.000Z",
+				lastActivityAt: "2026-01-01T00:00:00.000Z",
+			});
+			expect(
+				first.setPortAllocation({
+					instanceId: "workflow-a-app",
+					name: "HTTP",
+					port: 21000,
+				}),
+			).toBe(true);
+			first.close();
+
+			const reopened = EnvironmentStateStore.open(dir);
+			try {
+				expect(reopened.schemaVersion).toBe(8);
+				expect(
+					reopened.findEnvironmentInstance("workflow:a", "shop"),
+				).toMatchObject({
+					id: "workflow-a-app",
+					checkoutPath: "/worktrees/a/shop",
+					status: "running",
+				});
+				expect(reopened.getPortAllocations("workflow-a-app")).toEqual([
+					{ instanceId: "workflow-a-app", name: "HTTP", port: 21000 },
+				]);
+			} finally {
+				reopened.close();
+			}
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("instance reads use durable identities and state conflicts stay typed", () => {
+		const dir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "instance-state-errors-"),
+		);
+		const store = EnvironmentStateStore.open(dir);
+		try {
+			const row = {
+				id: "id-one",
+				owner: "workflow:a",
+				app: "shop",
+				targetId: "target-one",
+				runtime: "docker",
+				checkoutPath: "/repo/a",
+				imageTag: "tag-one",
+				status: "stopped",
+				createdAt: "2026-01-01T00:00:00.000Z",
+				lastActivityAt: "2026-01-01T00:00:00.000Z",
+			};
+			store.setEnvironmentInstance(row);
+			store.setEnvironmentInstance({
+				...row,
+				id: "id-two",
+				targetId: "target-two",
+			});
+			expect(
+				store.claimEnvironmentInstance({
+					...row,
+					id: "derived-key",
+					status: "starting",
+				}),
+			).toBe("id-one");
+			expect(store.getEnvironmentInstance("id-one")?.status).toBe("starting");
+			expect(store.getEnvironmentInstance("id-one")?.targetId).toBe(
+				"target-one",
+			);
+			expect(store.getEnvironmentInstance("id-two")).toBeUndefined();
+			expect(store.findEnvironmentInstance("workflow:a", "shop")?.id).toBe(
+				"id-one",
+			);
+			expect(() =>
+				store.setPortAllocation({
+					instanceId: "missing",
+					name: "HTTP",
+					port: 26000,
+				}),
+			).toThrow(EnvironmentStateError);
+		} finally {
+			store.close();
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
 	});

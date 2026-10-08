@@ -20,7 +20,11 @@ import type {
 	WorkflowStartRequest,
 } from "../contracts/actions.ts";
 import type { CredentialRespondRequest } from "../contracts/credential.ts";
-import type { ObserveRequest } from "../contracts/environment.ts";
+import type {
+	EnvironmentInstanceStartRequest,
+	EnvironmentInstanceStopRequest,
+	ObserveRequest,
+} from "../contracts/environment.ts";
 import type {
 	TelemetryPruneRequest,
 	TelemetryScanRequest,
@@ -63,6 +67,7 @@ import {
 	MAX_REQUEST_BYTES,
 	SERVER_API_VERSION,
 } from "./protocol.ts";
+import { EnvironmentInstanceError } from "./runtime/instances.ts";
 import type { WorkflowEventHub } from "./subscriptions.ts";
 import type { TelemetryOperations } from "./telemetry.ts";
 
@@ -126,6 +131,12 @@ function errorResponse(
 	message: string,
 ): Response {
 	return json({ error: { code, message } }, status);
+}
+
+function instanceErrorResponse(error: unknown): Response {
+	if (error instanceof EnvironmentInstanceError)
+		return errorResponse(error.status, error.code, safeMessage(error));
+	return errorResponse(500, "instance-error", safeMessage(error));
 }
 
 /** Bounded diagnostic text: never echo a supplied token or raw body. */
@@ -234,6 +245,110 @@ export function createServerApp(options: ServerAppOptions): ServerApp {
 			);
 			const value = await operations.runObservation(decoded.observation);
 			return json({ ok: true, value });
+		}
+
+		if (method === "GET" && path === "/api/v1/environment/instances") {
+			const instances = options.integrations?.instances;
+			if (!instances)
+				return errorResponse(
+					503,
+					"instances-unavailable",
+					"environment instance capability is not attached",
+				);
+			try {
+				return json({ ok: true, value: await instances.list() });
+			} catch (error) {
+				return instanceErrorResponse(error);
+			}
+		}
+
+		if (method === "GET" && path.startsWith("/api/v1/environment/instances/")) {
+			const instances = options.integrations?.instances;
+			if (!instances)
+				return errorResponse(
+					503,
+					"instances-unavailable",
+					"environment instance capability is not attached",
+				);
+			const id = decodeURIComponent(
+				path.slice("/api/v1/environment/instances/".length),
+			);
+			if (!id || id.includes("/"))
+				return errorResponse(
+					404,
+					"instance-not-found",
+					"environment instance not found",
+				);
+			try {
+				return json({
+					ok: true,
+					value: await instances.get(
+						id,
+						url.searchParams.get("app") ?? undefined,
+					),
+				});
+			} catch (error) {
+				return instanceErrorResponse(error);
+			}
+		}
+
+		if (method === "POST" && path === "/api/v1/environment/instances/start") {
+			const instances = options.integrations?.instances;
+			if (!instances)
+				return errorResponse(
+					503,
+					"instances-unavailable",
+					"environment instance capability is not attached",
+				);
+			const decoded = decodeRouteRequest<EnvironmentInstanceStartRequest>(
+				path,
+				await readJsonBody(request),
+			);
+			try {
+				return json({ ok: true, value: await instances.start(decoded) });
+			} catch (error) {
+				return instanceErrorResponse(error);
+			}
+		}
+
+		if (
+			method === "POST" &&
+			path.startsWith("/api/v1/environment/instances/") &&
+			path.endsWith("/stop")
+		) {
+			const instances = options.integrations?.instances;
+			if (!instances)
+				return errorResponse(
+					503,
+					"instances-unavailable",
+					"environment instance capability is not attached",
+				);
+			const decoded = decodeRouteRequest<EnvironmentInstanceStopRequest>(
+				"/api/v1/environment/instances/{id}/stop",
+				await readJsonBody(request),
+			);
+			const encodedId = path.slice(
+				"/api/v1/environment/instances/".length,
+				-"/stop".length,
+			);
+			const id = decodeURIComponent(encodedId);
+			if (!id || id.includes("/"))
+				return errorResponse(
+					404,
+					"instance-not-found",
+					"environment instance not found",
+				);
+			try {
+				return json({
+					ok: true,
+					value: await instances.stop(
+						id,
+						decoded.app ?? url.searchParams.get("app") ?? undefined,
+					),
+				});
+			} catch (error) {
+				return instanceErrorResponse(error);
+			}
 		}
 
 		if (method === "GET" && path === "/api/v1/workflow/view") {

@@ -105,6 +105,29 @@ describe("launching a script service", () => {
 		});
 	});
 
+	test("an instance-tagged tmux handle receives its instance environment", async () => {
+		const { infra, calls } = harness({
+			tmux: true,
+			outputs: {
+				"tmux new-window -P -F #{window_id}:#{pane_pid} -n devenv - infra - environment-instance:agent-shop -e AC_INSTANCE=agent-shop -e AGENTIC_DEVENV_TOKEN= -e AGENTIC_WORKFLOW_TOKEN= -e AGENTIC_WORKFLOW_URL= -e AGENTIC_DEVENV_URL= /bin/sh /work/run.sh":
+					"@8:4242",
+			},
+		});
+		await infra.launch({
+			ident: "environment-instance:agent-shop",
+			runner: SCRIPT_RUNNER.shell,
+			command: "/bin/sh",
+			args: ["/work/run.sh"],
+			env: { AC_INSTANCE: "agent-shop" },
+			spawn: () => ({ pid: 1 }),
+		});
+		expect(calls[0]).toContain("-e AC_INSTANCE=agent-shop");
+		expect(calls[0]).toContain("-e AGENTIC_WORKFLOW_TOKEN=");
+		expect(
+			infra.executionHandle("environment-instance:agent-shop")?.paneId,
+		).toBe("@8");
+	});
+
 	test("a tmux window that cannot open falls back to a logged process", async () => {
 		const { infra } = harness({
 			tmux: true,
@@ -126,6 +149,94 @@ describe("launching a script service", () => {
 		});
 		expect(spawned).toBe(1);
 		expect(status.executionHandle?.mode).toBe("logged");
+	});
+});
+
+describe("instance-strict observations", () => {
+	test("tmux panes report running, confirmed absence, or unknown distinctly", async () => {
+		const live = harness({
+			tmux: true,
+			outputs: {
+				"tmux new-window -P -F #{window_id}:#{pane_pid} -n devenv - infra - clock /bin/sh": `@7:${process.pid}`,
+				"tmux display-message -p -t @7 #{window_id}:#{pane_pid}": `@7:${process.pid}`,
+			},
+		});
+		await live.infra.launch({
+			ident: "clock",
+			runner: SCRIPT_RUNNER.shell,
+			command: "/bin/sh",
+			args: [],
+			spawn: () => ({ pid: 1 }),
+		});
+		expect((await live.infra.observe("clock")).status).toBe("running");
+
+		const gone = harness({
+			tmux: true,
+			outputs: {
+				"tmux new-window -P -F #{window_id}:#{pane_pid} -n devenv - infra - clock /bin/sh":
+					"@7:999999",
+				"tmux display-message -p -t @7 #{window_id}:#{pane_pid}": "@7:999999",
+			},
+		});
+		await gone.infra.launch({
+			ident: "clock",
+			runner: SCRIPT_RUNNER.shell,
+			command: "/bin/sh",
+			args: [],
+			spawn: () => ({ pid: 1 }),
+		});
+		expect((await gone.infra.observe("clock")).status).toBe("stopped");
+
+		const unavailable = harness({
+			tmux: true,
+			outputs: {
+				"tmux new-window -P -F #{window_id}:#{pane_pid} -n devenv - infra - clock /bin/sh": `@7:${process.pid}`,
+			},
+			errors: {
+				"tmux display-message -p -t @7 #{window_id}:#{pane_pid}": new Error(
+					"tmux unavailable",
+				),
+			},
+		});
+		await unavailable.infra.launch({
+			ident: "clock",
+			runner: SCRIPT_RUNNER.shell,
+			command: "/bin/sh",
+			args: [],
+			spawn: () => ({ pid: 1 }),
+		});
+		expect((await unavailable.infra.observe("clock")).status).toBe("unknown");
+		expect(unavailable.infra.tracked()).toEqual(["clock"]);
+	});
+
+	test("logged process observation requires a trustworthy pid", async () => {
+		const live = harness({});
+		await live.infra.launch({
+			ident: "clock",
+			runner: SCRIPT_RUNNER.shell,
+			command: "/bin/sh",
+			args: [],
+			spawn: () => ({ pid: process.pid }),
+		});
+		expect((await live.infra.observe("clock")).status).toBe("running");
+		const absent = harness({});
+		await absent.infra.launch({
+			ident: "clock",
+			runner: SCRIPT_RUNNER.shell,
+			command: "/bin/sh",
+			args: [],
+			spawn: () => ({ pid: 999_999 }),
+		});
+		expect((await absent.infra.observe("clock")).status).toBe("stopped");
+		const noPid = harness({});
+		await noPid.infra.launch({
+			ident: "clock",
+			runner: SCRIPT_RUNNER.shell,
+			command: "/bin/sh",
+			args: [],
+			spawn: () => ({}),
+		});
+		expect((await noPid.infra.observe("clock")).status).toBe("unknown");
 	});
 });
 
@@ -221,6 +332,29 @@ describe("stopping and adoption", () => {
 		expect(processAlive(999_999)).toBe(false);
 	});
 
+	test("stopping one instance handle leaves other instance processes tracked", async () => {
+		const { infra } = harness({
+			tmux: true,
+			outputs: {
+				"tmux new-window -P -F #{window_id}:#{pane_pid} -n devenv - infra - environment-instance:shop-a /bin/sh": `@1:${process.pid}`,
+				"tmux new-window -P -F #{window_id}:#{pane_pid} -n devenv - infra - environment-instance:shop-b /bin/sh": `@2:${process.pid}`,
+			},
+		});
+		for (const ident of [
+			"environment-instance:shop-a",
+			"environment-instance:shop-b",
+		])
+			await infra.launch({
+				ident,
+				runner: SCRIPT_RUNNER.shell,
+				command: "/bin/sh",
+				args: [],
+				spawn: () => ({ pid: 1 }),
+			});
+		await infra.stop("environment-instance:shop-a");
+		expect(infra.tracked()).toEqual(["environment-instance:shop-b"]);
+	});
+
 	test("a tmux run is stopped by killing its own window", async () => {
 		const { infra, calls } = harness({
 			tmux: true,
@@ -238,6 +372,50 @@ describe("stopping and adoption", () => {
 		});
 		await infra.stop("clock");
 		expect(calls).toContain("tmux kill-window -t @7");
+	});
+
+	test("stopping an already-absent tmux window succeeds idempotently", async () => {
+		const { infra, calls } = harness({
+			tmux: true,
+			outputs: {
+				"tmux new-window -P -F #{window_id}:#{pane_pid} -n devenv - infra - clock /bin/sh": `@7:${process.pid}`,
+			},
+			errors: {
+				"tmux kill-window -t @7": new Error("can't find window: @7"),
+			},
+		});
+		await infra.launch({
+			ident: "clock",
+			runner: SCRIPT_RUNNER.shell,
+			command: "/bin/sh",
+			args: [],
+			spawn: () => ({ pid: 1 }),
+		});
+		await infra.stop("clock");
+		expect(infra.tracked()).toEqual([]);
+		expect((await infra.status("clock")).status).toBe(INFRA_STATUS.stopped);
+		expect(calls).toContain("tmux kill-window -t @7");
+	});
+
+	test("a genuine tmux kill error keeps the handle available for retry", async () => {
+		const { infra } = harness({
+			tmux: true,
+			outputs: {
+				"tmux new-window -P -F #{window_id}:#{pane_pid} -n devenv - infra - clock /bin/sh": `@7:${process.pid}`,
+			},
+			errors: {
+				"tmux kill-window -t @7": new Error("permission denied"),
+			},
+		});
+		await infra.launch({
+			ident: "clock",
+			runner: SCRIPT_RUNNER.shell,
+			command: "/bin/sh",
+			args: [],
+			spawn: () => ({ pid: 1 }),
+		});
+		await expect(infra.stop("clock")).rejects.toThrow(/permission denied/);
+		expect(infra.tracked()).toEqual(["clock"]);
 	});
 
 	test("an untracked service is already stopped", async () => {

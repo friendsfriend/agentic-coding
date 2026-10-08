@@ -5,11 +5,13 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { WorkflowSnapshot } from "../src/contracts/workflow.ts";
 import { EnvironmentManager } from "../src/server/environment/manager.ts";
 import { EnvironmentStateStore } from "../src/server/environment/state-store.ts";
 import { ProviderStore } from "../src/server/integrations/provider-store.ts";
 import {
 	createIntegrationServices,
+	createWorkflowOwnerCheckoutResolver,
 	credentialsFor,
 } from "../src/server/integrations/services.ts";
 
@@ -51,6 +53,64 @@ function writeProviders(configDir: string): void {
 		"GH_USER=octo\nGH=github-token\nGL_USER=octo\nGL=gitlab-token\n",
 	);
 }
+
+describe("workflow instance checkout resolution", () => {
+	test("uses persisted workflow checkout metadata for the same app repository", async () => {
+		const metadata: WorkflowSnapshot["metadata"] = {
+			repository: "/repo",
+			worktree: "/repo/worktrees/feature",
+			changeId: "",
+			branch: "feature",
+			baseBranch: "main",
+			baseCommit: "base",
+			createdAt: "now",
+			updatedAt: "now",
+			stepEnteredAt: "now",
+		};
+		const resolver = createWorkflowOwnerCheckoutResolver({
+			targets: () => ["/repo"],
+			snapshot: (_target, workflowId) => ({ workflowId, metadata }),
+			canonicalRepository: () => "/repo",
+			findWorktree: async () => {
+				throw new Error("same-repository metadata should be sufficient");
+			},
+		});
+		const result = await resolver("workflow:workflow-a", {
+			localDirectoryPath: "/repo/active",
+		} as never);
+		expect(result).toBe("/repo/worktrees/feature");
+	});
+
+	test("uses the app worktree port for the workflow branch when repos differ", async () => {
+		const metadata: WorkflowSnapshot["metadata"] = {
+			repository: "/source",
+			worktree: "/source/worktrees/feature",
+			changeId: "",
+			branch: "feature",
+			baseBranch: "main",
+			baseCommit: "base",
+			createdAt: "now",
+			updatedAt: "now",
+			stepEnteredAt: "now",
+		};
+		const seen: string[] = [];
+		const resolver = createWorkflowOwnerCheckoutResolver({
+			targets: () => ["/source"],
+			snapshot: (_target, workflowId) => ({ workflowId, metadata }),
+			canonicalRepository: (checkout) =>
+				checkout.startsWith("/app") ? "/app-root" : "/source-root",
+			findWorktree: async (repository, branch) => {
+				seen.push(`${repository}:${branch}`);
+				return "/app/worktrees/feature";
+			},
+		});
+		const result = await resolver("workflow:workflow-b", {
+			localDirectoryPath: "/app/active",
+		} as never);
+		expect(result).toBe("/app/worktrees/feature");
+		expect(seen).toEqual(["/app/active:feature"]);
+	});
+});
 
 describe("integration service credentials", () => {
 	test("an app that names a provider wins over host inference", () => {
@@ -159,6 +219,7 @@ describe("integration service credentials", () => {
 			configDir,
 		});
 		expect(services.apps.getApps()).toEqual([]);
+		expect(services.instances).toBeDefined();
 		expect(services.git.credentialConfig("https://github.com/x/y.git")).toEqual(
 			[
 				`http.extraheader=Authorization: Basic ${Buffer.from("octo:github-token").toString("base64")}`,

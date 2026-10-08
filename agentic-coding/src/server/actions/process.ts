@@ -143,6 +143,7 @@ export class ProcessHandler {
 				args,
 				...(dir ? { dir } : {}),
 				...(logPath ? { logPath } : {}),
+				...(envEntries.length > 0 ? { env: parseEnv(envEntries) } : {}),
 				spawn: () => {
 					proc = spawnProcess();
 					return { pid: proc.pid };

@@ -10,10 +10,11 @@
 // are never opened here.
 
 import { Database } from "bun:sqlite";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 export class EnvironmentStateError extends Error {
 	readonly code: string = "environment-state";
@@ -68,6 +69,64 @@ export interface DependencyLease {
 	ownerApp: string;
 	lifecycle: string;
 	updatedAt: string;
+}
+
+export interface EnvironmentInstanceRecord {
+	id: string;
+	owner: string;
+	app: string;
+	targetId: string;
+	runtime: string;
+	checkoutPath: string;
+	configOverlay?: string;
+	imageTag: string;
+	status: string;
+	createdAt: string;
+	lastActivityAt: string;
+}
+
+export interface PortAllocationRecord {
+	instanceId: string;
+	name: string;
+	port: number;
+}
+
+interface EnvironmentInstanceDbRow {
+	id: string;
+	owner: string;
+	app: string;
+	target_id: string;
+	runtime: string;
+	checkout_path: string;
+	config_overlay: string | null;
+	image_tag: string;
+	status: string;
+	created_at: string;
+	last_activity_at: string;
+}
+
+const ENVIRONMENT_INSTANCE_COLUMNS =
+	"id, owner, app, target_id, runtime, checkout_path, config_overlay, image_tag, status, created_at, last_activity_at";
+
+function mapEnvironmentInstanceRow(
+	row: EnvironmentInstanceDbRow | null,
+): EnvironmentInstanceRecord | undefined {
+	if (!row) return undefined;
+	return {
+		id: row.id,
+		owner: row.owner,
+		app: row.app,
+		targetId: row.target_id,
+		runtime: row.runtime,
+		checkoutPath: row.checkout_path,
+		...(row.config_overlay === null
+			? {}
+			: { configOverlay: row.config_overlay }),
+		imageTag: row.image_tag,
+		status: row.status,
+		createdAt: row.created_at,
+		lastActivityAt: row.last_activity_at,
+	};
 }
 
 export interface StoreOptions {
@@ -235,6 +294,35 @@ const MIGRATIONS: Migration[] = [
 			}
 		},
 	},
+	{
+		version: 8,
+		apply: (db) => {
+			db.exec(`
+				CREATE TABLE IF NOT EXISTS env_instances (
+					id TEXT PRIMARY KEY,
+					owner TEXT NOT NULL,
+					app TEXT NOT NULL,
+					target_id TEXT NOT NULL,
+					runtime TEXT NOT NULL,
+					checkout_path TEXT NOT NULL,
+					config_overlay TEXT,
+					image_tag TEXT NOT NULL,
+					status TEXT NOT NULL,
+					created_at TEXT NOT NULL,
+					last_activity_at TEXT NOT NULL,
+					UNIQUE(owner, app)
+				)
+			`);
+			db.exec(`
+				CREATE TABLE IF NOT EXISTS port_allocations (
+					instance_id TEXT NOT NULL REFERENCES env_instances(id) ON DELETE CASCADE,
+					name TEXT NOT NULL,
+					port INTEGER NOT NULL UNIQUE,
+					PRIMARY KEY(instance_id, name)
+				)
+			`);
+		},
+	},
 ];
 
 function readSchemaVersion(db: Database): number {
@@ -329,7 +417,8 @@ export class EnvironmentStateStore {
 			);
 		}
 		try {
-			db.exec("PRAGMA journal_mode=WAL");
+			// These pragmas are connection-local, so the newer-schema guard below
+			// remains byte-preserving for databases this binary cannot read.
 			db.exec("PRAGMA foreign_keys=ON");
 			db.exec("PRAGMA busy_timeout=5000");
 		} catch (error) {
@@ -349,6 +438,16 @@ export class EnvironmentStateStore {
 				`state: database schema ${initial} is newer than the supported ${SCHEMA_VERSION}; refusing to modify it`,
 			);
 		}
+		try {
+			db.exec("PRAGMA journal_mode=WAL");
+		} catch (error) {
+			db.close();
+			throw new EnvironmentStateError(
+				`state: failed to configure database journal: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			);
+		}
 
 		let backupPath: string | undefined;
 		if (
@@ -356,8 +455,22 @@ export class EnvironmentStateStore {
 			initial < SCHEMA_VERSION &&
 			options.backup !== false &&
 			existed
-		)
-			backupPath = takeBackup(db, dbPath, initial);
+		) {
+			try {
+				backupPath = takeBackup(db, dbPath, initial);
+			} catch (error) {
+				// Another opener may have completed this migration after `initial`
+				// was read but while VACUUM INTO was producing its backup. In that
+				// case there is no v7 migration left for this opener to protect.
+				if (readSchemaVersion(db) < SCHEMA_VERSION) {
+					db.close();
+					throw new EnvironmentStateError(
+						`state: failed to write pre-upgrade backup: ${error instanceof Error ? error.message : String(error)}`,
+						{ cause: error },
+					);
+				}
+			}
+		}
 
 		if (initial < SCHEMA_VERSION) {
 			try {
@@ -694,6 +807,256 @@ export class EnvironmentStateStore {
 		return rows.map((row) => row.event_json);
 	}
 
+	getEnvironmentInstances(): EnvironmentInstanceRecord[] {
+		const rows = this.db
+			.query(
+				`SELECT ${ENVIRONMENT_INSTANCE_COLUMNS} FROM env_instances ORDER BY created_at, id`,
+			)
+			.all() as EnvironmentInstanceDbRow[];
+		return rows.map(
+			(row) => mapEnvironmentInstanceRow(row) as EnvironmentInstanceRecord,
+		);
+	}
+
+	getEnvironmentInstance(id: string): EnvironmentInstanceRecord | undefined {
+		const row = this.db
+			.query(
+				`SELECT ${ENVIRONMENT_INSTANCE_COLUMNS} FROM env_instances WHERE id = ?`,
+			)
+			.get(id) as EnvironmentInstanceDbRow | null;
+		return mapEnvironmentInstanceRow(row);
+	}
+
+	findEnvironmentInstance(
+		owner: string,
+		app: string,
+	): EnvironmentInstanceRecord | undefined {
+		const row = this.db
+			.query(
+				`SELECT ${ENVIRONMENT_INSTANCE_COLUMNS} FROM env_instances WHERE owner = ? AND app = ?`,
+			)
+			.get(owner, app) as EnvironmentInstanceDbRow | null;
+		return mapEnvironmentInstanceRow(row);
+	}
+
+	claimEnvironmentInstance(
+		instance: EnvironmentInstanceRecord,
+	): string | undefined {
+		let claimedId: string | undefined;
+		this.transaction(() => {
+			const inserted = this.db
+				.prepare(
+					`INSERT OR IGNORE INTO env_instances (id, owner, app, target_id, runtime, checkout_path, config_overlay, image_tag, status, created_at, last_activity_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				)
+				.run(
+					instance.id,
+					instance.owner,
+					instance.app,
+					instance.targetId,
+					instance.runtime,
+					instance.checkoutPath,
+					instance.configOverlay ?? null,
+					instance.imageTag,
+					instance.status,
+					instance.createdAt,
+					instance.lastActivityAt,
+				);
+			if (inserted.changes > 0) {
+				claimedId = instance.id;
+				return;
+			}
+			const updated = this.db
+				.prepare(
+					`UPDATE env_instances SET target_id=?, runtime=?, checkout_path=?, config_overlay=?, image_tag=?, status=?, last_activity_at=?
+				 WHERE owner=? AND app=? AND status IN ('stopped', 'failed')`,
+				)
+				.run(
+					instance.targetId,
+					instance.runtime,
+					instance.checkoutPath,
+					instance.configOverlay ?? null,
+					instance.imageTag,
+					instance.status,
+					instance.lastActivityAt,
+					instance.owner,
+					instance.app,
+				);
+			if (updated.changes > 0) {
+				const row = this.db
+					.query(`SELECT id FROM env_instances WHERE owner = ? AND app = ?`)
+					.get(instance.owner, instance.app) as { id: string } | null;
+				claimedId = row?.id;
+			}
+		});
+		return claimedId;
+	}
+
+	setEnvironmentInstance(instance: EnvironmentInstanceRecord): void {
+		try {
+			this.db
+				.prepare(
+					`INSERT INTO env_instances (id, owner, app, target_id, runtime, checkout_path, config_overlay, image_tag, status, created_at, last_activity_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(owner, app) DO UPDATE SET target_id=excluded.target_id, runtime=excluded.runtime,
+			 checkout_path=excluded.checkout_path, config_overlay=excluded.config_overlay,
+			 image_tag=excluded.image_tag, status=excluded.status, last_activity_at=excluded.last_activity_at`,
+				)
+				.run(
+					instance.id,
+					instance.owner,
+					instance.app,
+					instance.targetId,
+					instance.runtime,
+					instance.checkoutPath,
+					instance.configOverlay ?? null,
+					instance.imageTag,
+					instance.status,
+					instance.createdAt,
+					instance.lastActivityAt,
+				);
+		} catch (error) {
+			throw new EnvironmentStateError(
+				`state: failed to upsert environment instance ${JSON.stringify(instance.owner)}/${JSON.stringify(instance.app)}: ${error instanceof Error ? error.message : String(error)}`,
+				{ cause: error },
+			);
+		}
+	}
+
+	claimEnvironmentInstanceStop(id: string, at: string): boolean {
+		const result = this.db
+			.query(
+				`UPDATE env_instances SET status = 'stopping', last_activity_at = ? WHERE id = ? AND status IN ('running', 'unknown', 'failed')`,
+			)
+			.run(at, id);
+		return result.changes > 0;
+	}
+
+	compareAndSetEnvironmentInstanceStatus(
+		id: string,
+		expectedStatus: string,
+		status: string,
+		at: string,
+	): boolean {
+		const result = this.db
+			.query(
+				`UPDATE env_instances SET status = ?, last_activity_at = ? WHERE id = ? AND status = ?`,
+			)
+			.run(status, at, id, expectedStatus);
+		return result.changes > 0;
+	}
+
+	transitionEnvironmentInstanceStatus(
+		id: string,
+		expectedStatus: string,
+		status: string,
+		at: string,
+		releasePorts: boolean,
+	): boolean {
+		let changed = false;
+		this.transaction(() => {
+			const result = this.db
+				.query(
+					`UPDATE env_instances SET status = ?, last_activity_at = ? WHERE id = ? AND status = ?`,
+				)
+				.run(status, at, id, expectedStatus);
+			changed = result.changes > 0;
+			if (changed && releasePorts)
+				this.db
+					.query(`DELETE FROM port_allocations WHERE instance_id = ?`)
+					.run(id);
+		});
+		return changed;
+	}
+
+	releasePortAllocationsIfStatus(instanceId: string, status: string): boolean {
+		const result = this.db
+			.query(
+				`DELETE FROM port_allocations WHERE instance_id = ? AND EXISTS (SELECT 1 FROM env_instances WHERE id = ? AND status = ?)`,
+			)
+			.run(instanceId, instanceId, status);
+		return result.changes > 0;
+	}
+
+	updateEnvironmentInstanceStatus(
+		id: string,
+		status: string,
+		at: string,
+	): void {
+		this.db
+			.query(
+				`UPDATE env_instances SET status = ?, last_activity_at = ? WHERE id = ?`,
+			)
+			.run(status, at, id);
+	}
+
+	deleteEnvironmentInstanceIfStatus(id: string, status: string): boolean {
+		const result = this.db
+			.query(`DELETE FROM env_instances WHERE id = ? AND status = ?`)
+			.run(id, status);
+		return result.changes > 0;
+	}
+
+	deleteEnvironmentInstance(id: string): void {
+		this.db.query(`DELETE FROM env_instances WHERE id = ?`).run(id);
+	}
+
+	getPortAllocations(instanceId?: string): PortAllocationRecord[] {
+		const rows =
+			instanceId === undefined
+				? (this.db
+						.query(
+							`SELECT instance_id, name, port FROM port_allocations ORDER BY port`,
+						)
+						.all() as Array<{
+						instance_id: string;
+						name: string;
+						port: number;
+					}>)
+				: (this.db
+						.query(
+							`SELECT instance_id, name, port FROM port_allocations WHERE instance_id = ? ORDER BY name`,
+						)
+						.all(instanceId) as Array<{
+						instance_id: string;
+						name: string;
+						port: number;
+					}>);
+		return rows.map((row) => ({
+			instanceId: row.instance_id,
+			name: row.name,
+			port: row.port,
+		}));
+	}
+
+	setPortAllocation(allocation: PortAllocationRecord): boolean {
+		try {
+			this.db
+				.prepare(
+					`INSERT INTO port_allocations (instance_id, name, port) VALUES (?, ?, ?)
+				 ON CONFLICT(instance_id, name) DO UPDATE SET port=excluded.port`,
+				)
+				.run(allocation.instanceId, allocation.name, allocation.port);
+			return true;
+		} catch (error) {
+			if (
+				error instanceof Error &&
+				/UNIQUE constraint failed: port_allocations.port/.test(error.message)
+			)
+				return false;
+			throw new EnvironmentStateError(
+				`state: failed to persist port allocation for ${JSON.stringify(allocation.instanceId)}: ${error instanceof Error ? error.message : String(error)}`,
+				{ cause: error },
+			);
+		}
+	}
+
+	deletePortAllocations(instanceId: string): void {
+		this.db
+			.query(`DELETE FROM port_allocations WHERE instance_id = ?`)
+			.run(instanceId);
+	}
+
 	getDependencyLeases(): DependencyLease[] {
 		const rows = this.db
 			.query(
@@ -801,15 +1164,63 @@ function clampLimit(limit: number, fallback: number, max: number): number {
 	return Math.min(Math.trunc(limit), max);
 }
 
+/** Validate the existing backup before advertising or reusing it. */
+function verifiedBackup(file: string, fromVersion: number): boolean {
+	let backup: Database | undefined;
+	try {
+		const stat = fs.lstatSync(file);
+		if (!stat.isFile() || stat.isSymbolicLink()) return false;
+		backup = new Database(file, { readonly: true });
+		if (readSchemaVersion(backup) !== fromVersion) return false;
+		integrityCheck(backup);
+		return true;
+	} catch {
+		return false;
+	} finally {
+		backup?.close();
+	}
+}
+
+function removeBlockingBackupDirectory(file: string): void {
+	try {
+		const stat = fs.lstatSync(file);
+		if (stat.isDirectory() && !stat.isSymbolicLink()) fs.rmdirSync(file);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+	}
+}
+
 /** Consistent pre-upgrade backup via `VACUUM INTO` (safe with WAL and other
- * connections, unlike a file copy). Only the first backup for a version is
- * kept, so a repeated interrupted upgrade cannot overwrite a good copy with a
- * half-migrated one. */
+ * connections, unlike a file copy). The final name is published only after
+ * integrity and schema-version verification, so a crash cannot leave a partial
+ * file that a later open mistakes for the rollback copy. */
 function takeBackup(db: Database, dbPath: string, fromVersion: number): string {
 	const target = backupPathFor(dbPath, fromVersion);
-	if (fs.existsSync(target)) return target;
-	db.prepare(`VACUUM INTO ?`).run(target);
-	return target;
+	if (verifiedBackup(target, fromVersion)) return target;
+	try {
+		const stat = fs.lstatSync(target);
+		if (stat.isDirectory() && !stat.isSymbolicLink())
+			removeBlockingBackupDirectory(target);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+	}
+	const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
+	try {
+		db.prepare(`VACUUM INTO ?`).run(temporary);
+		if (!verifiedBackup(temporary, fromVersion))
+			throw new EnvironmentStateError(
+				`state: pre-upgrade backup failed verification for schema ${fromVersion}`,
+			);
+		fs.renameSync(temporary, target);
+		if (!verifiedBackup(target, fromVersion))
+			throw new EnvironmentStateError(
+				`state: published pre-upgrade backup failed verification for schema ${fromVersion}`,
+			);
+		return target;
+	} catch (error) {
+		fs.rmSync(temporary, { force: true });
+		throw error;
+	}
 }
 
 function migrate(db: Database): void {
