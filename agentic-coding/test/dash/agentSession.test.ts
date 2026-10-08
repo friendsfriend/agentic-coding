@@ -341,6 +341,46 @@ describe("buildAgentSessionView", () => {
 		expect(committed[0]?.live).toBeUndefined();
 	});
 
+	test("streams the in-flight generation's thinking as its own live block", () => {
+		// The partial carries thinking and text in emission order; the view renders
+		// the reasoning fold first, then the answer, so the reader can watch both.
+		const blocks = buildAgentSessionView({
+			entries: [],
+			docs: {
+				"pi.live": {
+					generation: {
+						message: {
+							content: [
+								{ type: "thinking", thinking: "weighing options" },
+								{ type: "text", text: "here is the fix" },
+							],
+						},
+					},
+				},
+			},
+		});
+		expect(
+			blocks.map(({ kind, text, live }) => ({ kind, text, live })),
+		).toEqual([
+			{ kind: "reasoning", text: "weighing options", live: true },
+			{ kind: "assistant", text: "here is the fix", live: true },
+		]);
+
+		// A partial that has not started thinking yet carries no reasoning block.
+		expect(
+			buildAgentSessionView({
+				entries: [],
+				docs: {
+					"pi.live": {
+						generation: {
+							message: { content: [{ type: "text", text: "answer" }] },
+						},
+					},
+				},
+			}).map((block) => block.kind),
+		).toEqual(["assistant"]);
+	});
+
 	test("strips ANSI runs from tool output, with or without the ESC byte", () => {
 		const result = (text: string) =>
 			buildAgentSessionView({

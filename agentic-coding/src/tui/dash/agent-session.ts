@@ -165,6 +165,23 @@ function contentRaw(content: unknown): string {
 	);
 }
 
+/** Concatenate the thinking blocks of a serialized pi message content field,
+ * newest character last, the way the committed transcript's reasoning blocks
+ * read them. Bounded the same way (one committed reasoning block keeps 4000). */
+function contentThinking(content: unknown): string {
+	if (!Array.isArray(content)) return "";
+	const text = content
+		.flatMap((block) =>
+			isRecord(block) &&
+			block.type === "thinking" &&
+			typeof block.thinking === "string"
+				? [block.thinking]
+				: [],
+		)
+		.join("\n");
+	return rawText(text, 4000);
+}
+
 /** opencode v2's tool icon gutter, mapped onto pi's tool names. */
 const TOOL_ICONS: Record<string, string> = {
 	read: "→",
@@ -446,6 +463,18 @@ function liveBlocks(
 			? generation.message
 			: undefined;
 		if (message) {
+			// The partial carries the whole response so far, thinking included:
+			// the reasoning block streams as its own fold just like the answer, in
+			// the order the model emitted them.
+			const thinking = contentThinking(message.content);
+			if (thinking)
+				blocks.push({
+					id: "live:reasoning",
+					live: true,
+					kind: "reasoning",
+					text: thinking,
+					tone: "muted",
+				});
 			const text = contentRaw(message.content);
 			if (text)
 				blocks.push({

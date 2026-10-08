@@ -459,6 +459,10 @@ function Block(props: {
 			</box>
 		);
 	if (props.block.kind === "reasoning")
+		// A reasoning block that is still streaming is the same fold, dimmed:
+		// the text grows with each watch frame while the model thinks, so it
+		// reads as provisional until the committed entry replaces it at full
+		// strength.
 		return (
 			<box
 				paddingLeft={3}
@@ -467,14 +471,26 @@ function Block(props: {
 				flexShrink={0}
 				onMouseUp={() => props.onToggle(props.block.id)}
 			>
-				<text fg={uiColors.warning}>
+				<text
+					fg={props.block.live === true ? uiColors.textMuted : uiColors.warning}
+					attributes={
+						props.block.live === true ? TextAttributes.DIM : undefined
+					}
+				>
 					{props.expanded ? "▾" : "▸"}{" "}
 					{props.block.durationMs !== undefined
 						? `Thought: ${formatDuration(props.block.durationMs)}`
 						: "Thinking…"}
 				</text>
 				<Show when={props.expanded}>
-					<text fg={uiColors.textMuted} attributes={TextAttributes.ITALIC}>
+					<text
+						fg={uiColors.textMuted}
+						attributes={
+							props.block.live === true
+								? TextAttributes.ITALIC | TextAttributes.DIM
+								: TextAttributes.ITALIC
+						}
+					>
 						{props.block.text}
 					</text>
 				</Show>

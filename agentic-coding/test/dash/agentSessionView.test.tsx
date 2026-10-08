@@ -239,6 +239,64 @@ test("thinking blocks collapse to 'Thinking…' and Ctrl+T expands them", async 
 	t.renderer.destroy();
 });
 
+test("a live thinking block collapses, expands, and keeps streaming into it", async () => {
+	const [blocks, setBlocks] = createSignal<readonly AgentSessionBlock[]>([
+		{
+			id: "live:reasoning",
+			kind: "reasoning",
+			text: "weighing options",
+			tone: "muted",
+			live: true,
+		},
+	]);
+	const t = await testRender(
+		() => (
+			<AgentSessionView
+				role="worker"
+				history={[]}
+				onHistoryAppend={() => {}}
+				blocks={blocks()}
+				working={false}
+				models={[]}
+				thinkingLevels={[]}
+				draft=""
+				onDraftChange={() => {}}
+				onSubmit={() => {}}
+				onAbort={() => {}}
+				onBack={() => {}}
+				onConfigure={() => {}}
+			/>
+		),
+		{ width: 100, height: 30 },
+	);
+	try {
+		await t.renderOnce();
+		await t.renderOnce();
+		// Collapsed by default, exactly like a committed one.
+		const collapsed = t.captureCharFrame();
+		expect(collapsed).toContain("Thinking…");
+		expect(collapsed).not.toContain("weighing options");
+		t.mockInput.pressKey("t", { ctrl: true });
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("weighing options");
+		// The fold keeps its state as the partial grows: later watch frames carry
+		// more text into the same open block.
+		setBlocks(() => [
+			{
+				id: "live:reasoning",
+				kind: "reasoning",
+				text: "weighing options and the parser",
+				tone: "muted",
+				live: true,
+			},
+		]);
+		await t.renderOnce();
+		expect(t.captureCharFrame()).toContain("and the parser");
+	} finally {
+		t.renderer.destroy();
+	}
+});
+
 test("a thinking block with a measured duration renders 'Thought: 1.6s'", async () => {
 	const t = await testRender(
 		() => (
