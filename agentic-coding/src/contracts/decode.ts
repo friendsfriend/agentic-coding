@@ -29,7 +29,9 @@ export interface Contract<T> {
 /** Cap for a single parsed issue message so diagnostics stay bounded. */
 const MAX_ISSUE_MESSAGE_CHARS = 256;
 
-/** Render an Effect issue path (property + index parts) as a `$.a.b[0]` path. */
+/** Render an Effect issue path (property + index parts) as a `$.a.b[0]` path,
+ * bounded like the message so an unexpected property name cannot produce an
+ * oversized diagnostic (SEC-002). */
 function formatIssuePath(path: readonly PropertyKey[]): string {
 	let formatted = "$";
 	for (const part of path) {
@@ -38,7 +40,9 @@ function formatIssuePath(path: readonly PropertyKey[]): string {
 				? `[${String(part)}]`
 				: `.${String(part)}`;
 	}
-	return formatted;
+	return formatted.length > MAX_ISSUE_MESSAGE_CHARS
+		? `${formatted.slice(0, MAX_ISSUE_MESSAGE_CHARS)}\u2026`
+		: formatted;
 }
 
 /** Bound an Effect issue message and strip raw received values. Leaf type

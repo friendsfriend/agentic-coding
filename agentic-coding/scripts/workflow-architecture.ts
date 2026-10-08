@@ -156,7 +156,8 @@ export function classifySourcePath(relPath: string): SourceLayer | null {
 	if (relPath.startsWith("worktree/")) return "root";
 	if (
 		relPath.startsWith("workflow/steps/") ||
-		relPath.startsWith("workflow/definitions/")
+		relPath.startsWith("workflow/definitions/") ||
+		relPath.startsWith("workflow/blueprints/")
 	)
 		return "domain";
 	if (RUNTIME_FILES.includes(relPath)) return "runtime";

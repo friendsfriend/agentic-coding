@@ -388,6 +388,84 @@ export const PlanResultSchema = Schema.Struct({
 	openQuestions: Schema.optionalWith(stringArray(), { exact: true }),
 });
 
+// ---------------------------------------------------------------------------
+// Workflow blueprint (add-workflow-blueprint-compiler)
+// ---------------------------------------------------------------------------
+
+/** The family traits a blueprint declares; the compiled manifest's policy
+ * carries exactly this block. Mirrors `WorkflowFamilyTraits` in `registry.ts`
+ * (which cannot be imported as a value here without a cycle). */
+const blueprintFamilyTraitsSchema = Schema.Struct({
+	changeArtifacts: Schema.Literal("openspec", "none"),
+	planning: Schema.Literal("none", "single", "fusion"),
+	changeIdentity: Schema.Literal("planned", "workflow-id", "none"),
+	delivery: Schema.Literal("pull-request", "none"),
+	startRequirements: Schema.Array(
+		Schema.Literal(
+			"task",
+			"clean-tree",
+			"openspec-project",
+			"openspec-change",
+			"base-commit",
+			"rebase-refs",
+		),
+	).pipe(
+		Schema.filter((items) => items.length <= 6, {
+			message: () => "expected at most 6 start requirements",
+		}),
+	),
+	openspecVerifier: Schema.Boolean,
+});
+
+const blueprintLoopSchema = Schema.Struct({ maxAttempts: integer(1) });
+
+const blueprintEdgeSchema = Schema.Struct({
+	from: text(256),
+	outcome: text(256),
+	to: text(256),
+	loop: Schema.optionalWith(blueprintLoopSchema, { exact: true }),
+});
+
+/** Sanity caps on the two model-authored arrays. The compiler rejects more than
+ * `MAX_BLUEPRINT_STEPS` logical steps with its own diagnostic, so the cap only
+ * has to be high enough to let that diagnostic fire while keeping decode and
+ * the compiler's scans bounded. */
+const BLUEPRINT_MAX_DECLARED_STEPS = 64;
+const BLUEPRINT_MAX_DECLARED_EDGES = 256;
+
+/** A logical workflow description (add-workflow-blueprint-compiler): label,
+ * rationale, repository family traits, whether the checkout is required, the
+ * logical steps, the logical edges with optional loop bounds, and the
+ * verification round count. The compiler (`blueprints/compiler.ts`) turns one
+ * into a validated manifest; routing, triage-routing and gate steps are never
+ * declared here. Unknown properties are rejected (`decodeBlueprint` decodes
+ * with `onExcessProperty: "error"`), so a mistyped field is never silently
+ * dropped from the persisted manifest. */
+export const BlueprintSchema = Schema.Struct({
+	label: text(256),
+	rationale: boundedText(4096),
+	traits: blueprintFamilyTraitsSchema,
+	checkoutRequired: Schema.optionalWith(Schema.Boolean, {
+		exact: true,
+		default: () => false,
+	}),
+	verificationRounds: integer(1),
+	steps: Schema.Array(text(256)).pipe(
+		Schema.filter((items) => items.length <= BLUEPRINT_MAX_DECLARED_STEPS, {
+			message: () =>
+				`expected at most ${BLUEPRINT_MAX_DECLARED_STEPS} blueprint steps`,
+		}),
+	),
+	edges: Schema.Array(blueprintEdgeSchema).pipe(
+		Schema.filter((items) => items.length <= BLUEPRINT_MAX_DECLARED_EDGES, {
+			message: () =>
+				`expected at most ${BLUEPRINT_MAX_DECLARED_EDGES} blueprint edges`,
+		}),
+	),
+});
+
+export type BlueprintInput = Schema.Schema.Type<typeof BlueprintSchema>;
+
 export const WorkflowSnapshotSchema = Schema.Struct({
 	schemaVersion: Schema.Literal(1),
 	workflowId: text(4096),

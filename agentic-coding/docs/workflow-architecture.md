@@ -169,6 +169,109 @@ definition is always
 classifier-routed (it carries a routing step before every classifiable step), so
 its start needs a preset whose pools cover those steps.
 
+## Workflow blueprints
+
+A **blueprint** is a small logical description of a workflow a model can author
+reliably: a label, a rationale, repository family traits, whether the repository
+checkout is required, the logical steps, the logical edges with optional loop
+bounds, and a verification round count. It is the input to a pure compiler in
+`src/workflow/blueprints/` that turns it into a manifest indistinguishable in
+shape from a newest-tier built-in.
+
+`blueprints/catalog.ts` is the logical allowlist (`BLUEPRINT_STEP_CATALOG`):
+each entry is a registered step with its label, actor, outcomes and a one-line
+description. Routing steps (`core.route-*`), `core.triage-route` and the stage
+gates (`core.plan-gate`, `core.review-gate`, `core.wiki-gate`) are **internal**:
+the compiler inserts them, and a blueprint that names one is rejected with an
+`internal-step` diagnostic.
+
+`blueprints/review.ts` is the human-review invariant over the logical graph,
+checked **by removal**: it deletes the review node(s) and asks whether a
+forbidden node is still reachable, so loops need no path enumeration.
+
+- the **entry step** may reach `core.delivery`, `core.archive` and `core.wiki`
+  only through `core.developer-review` or `core.findings-review`. The rule runs
+  for **every** graph (not only one that declares `core.implementation`), and
+  anchoring it on the entry rejects an author-controlled entry that starts the
+  run after the review chain as well as an implementation-free graph that hands
+  straight off to a delivery step. The start node itself is never a forbidden
+  target, so the documentation-only shape whose entry is `core.wiki` stays legal
+  (rule 3 guards its approval);
+- a workflow that **pushes code** may reach `core.completed` only through a
+  review too. It pushes code when it contains delivery or archive, or when its
+  delivery trait is `pull-request` and its `core.completed` can `create-pr`
+  (the trait is what `steps/lifecycle.ts` reads before offering the action). A
+  workflow that pushes nothing is the solo shape, whose only exit is
+  completion. (This is the deliberate resolution of the conflict between the
+  invariant and the solo-equivalence requirement; recorded with the change's
+  developer decision.)
+- planning may reach `core.implementation`, `core.delivery`, `core.archive` or
+  `core.completed` only through `core.plan-approval`;
+- `core.wiki` may reach `core.archive`, `core.delivery` or `core.completed` only
+  through `core.wiki-approval`.
+
+`blueprints/compiler.ts` (`compileBlueprint`) is pure and deterministic. It
+rejects an internal or unknown step, a duplicate step, an unknown edge endpoint,
+an illegal outcome, a duplicate edge, and out-of-range bounds (the widest
+built-in logical graph, the built-in loop maximum, and the registry's
+verification-round range). The derived entry is constrained to a step a run may
+begin with (`core.plan`/`fusion.plan`/`fusion.consolidate`,
+`core.plan-approval`, `core.implementation`, `core.triage`, `core.verification`,
+`core.rebase`, `core.wiki`); a delivery, terminal or review-decision step as the
+entry is rejected with an `initial-step` diagnostic. The change identity must
+agree with the graph's planner (`planned` exactly when `core.plan`,
+`fusion.plan` or `fusion.consolidate` is present), or the blueprint is rejected
+with a `change-identity` diagnostic. A graph that contains `core.verification`
+must carry a `core.verification` `fix` edge whose loop bound equals the declared
+`verificationRounds` (the compiled definition's effective round cap), or the
+blueprint is rejected. The compiler then:
+
+1. inserts the triage-routing step between `core.implementation` and
+   `core.triage` (with the `empty` bypass to verification and a
+   `skip-verification` edge to the developer review gate, the findings review's
+   approval tail, or the verification pass target), exactly as the built-in tier
+   wires all three outcomes;
+2. inserts the plan, review and wiki gates, each in front of its stage, with its
+   `skip` mirroring the stage's own approval target. When the gated stage (or
+   `core.triage`) was the entry, the inserted gate (or routing step) becomes it,
+   so a gated or triage-entry graph is never left unreachable;
+3. applies `withPerStepRouting` (`definitions/edges.ts`) so every classifiable
+   step gains its routing step and every inbound edge enters it;
+4. pins exact step references (`exactStepReferences`; `core.triage-route` at
+   version 2), mirrors the built-in `wiki.verify` edge effect as a fresh
+   per-compile literal (so no two manifests share digest-covered content),
+   derives the policy (`targetKind: repository`, the blueprint's
+   `checkoutRequired`, and the blueprint's traits — with `clean-tree` added to
+   the start requirements whenever the graph delivers or archives, so a
+   delivering blueprint can never start on top of uncommitted work), and
+   restricts a non-terminal step's outcomes to the ones the graph provides (so
+   solo's `create-pr`-less completion is legal);
+5. dry-compiles through `WorkflowRegistry.compileWorkflow` under the derived
+   `custom.` identity — the custom-definition invariants included — without
+   registering anything. The result carries both digests: `digest` is the
+   compiled pin, `identityDigest` the content address the stored row is keyed
+   on.
+
+The schema bounds the authored arrays (`steps` to 64 ids of at most 256 bytes,
+`edges` to 256, `traits.startRequirements` to the six enum values) and
+`decodeBlueprint` rejects unknown properties
+(`onExcessProperty: "error"`), so a mistyped field is never silently dropped
+from the persisted manifest and decode cost is bounded before the compiler's
+scans run.
+
+A blueprint describing a repository code-change family's logical graph therefore
+compiles to that family's steps and edges; `test/workflow-blueprints.test.ts`
+proves it for `openspec`, `openspec-apply`, `openspec-propose`,
+`openspec-fusion`, `openspec-fusion-propose`, `no-openspec`, `solo`, `rebase`
+and `verify`, and that the same blueprint compiles to the same digest twice. A
+gated stage keeps its newest-tier gate even when it is also the graph's entry
+(the documentation-only `wiki` shape), because the custom-definition invariants
+require a gate in front of every gated stage present, so that shape is the one
+exception to the equivalence clause. Diagnostics name the rule and the
+step/edge so a model can fix its blueprint; the compiler never throws for a
+blueprint-shaped failure. Storage, server routes and orchestrator tools are
+separate changes (`add-orchestrator-blueprint-workflows`).
+
 ## Startup context and execution pins
 
 CLI, dashboard, research, and wiki-comment starts use `src/workflow/startup.ts`.
@@ -796,6 +899,15 @@ row):
 | `graphs/*.ts` | One file per workflow family — `openspec.ts`, `no-openspec.ts`, `fusion.ts`, `wiki.ts`, `research.ts` — each exporting a manifest-builder function for that family only. |
 | `registerBuiltins.ts` | Orchestrates step registration and every family's graphs across every verification-round count and wikiGate/manifest-policy tier. |
 
+### `src/workflow/blueprints/`
+
+| Module | Owns |
+| --- | --- |
+| `catalog.ts` | The blueprint step catalog (`BLUEPRINT_STEP_CATALOG`, `BLUEPRINT_STEP_IDS`) — the logical allowlist with label/actor/outcomes read from the registered step catalog and a description each — plus the internal-step predicates (`isInternalStepId`, `gateForStage`, `GATED_STAGES`). |
+| `review.ts` | `validateBlueprintReviews` — the human-review invariant over the logical graph, by node removal and reachability, returning violations with one offending path each. |
+| `compiler.ts` | `decodeBlueprint`, `compileBlueprint`, the diagnostic/summary types and the bounds constants — the pure blueprint → `custom.` manifest compiler (triage-routing/gate/per-step-routing insertion, exact step references, policy from traits, registry dry-compile). |
+| `index.ts` | The blueprint domain barrel consumers import. |
+
 ### `src/workflow/cli/`
 
 | Module | Owns |
@@ -883,7 +995,7 @@ runtime code depends on it.
 
 | Layer | Paths | Owns |
 | --- | --- | --- |
-| **domain** (pure) | `workflow/steps/`, `workflow/definitions/`, `workflow/contracts.ts`, `workflow/schema.ts`, `workflow/format.ts`, `workflow/registry.ts`, `workflow/embedded.generated.ts`, `workflow/definitions.ts` | Pure step behavior, definitions, contracts, Effect Schema-backed contract decoding (`schema.ts` — declarative; the `Contract<T>` facades delegate here), structural registry validation, and the generated instruction-asset data module. |
+| **domain** (pure) | `workflow/steps/`, `workflow/definitions/`, `workflow/blueprints/`, `workflow/contracts.ts`, `workflow/schema.ts`, `workflow/format.ts`, `workflow/registry.ts`, `workflow/embedded.generated.ts`, `workflow/definitions.ts` | Pure step behavior, definitions, blueprint compilation, contracts, Effect Schema-backed contract decoding (`schema.ts` — declarative; the `Contract<T>` facades delegate here), structural registry validation, and the generated instruction-asset data module. |
 | **runtime** | `workflow/runtime/`, `workflow/runtime.ts`, `workflow/effects.ts`, `workflow/effect-runner.ts`, `workflow/secure-fs.ts`, `workflow/paths.ts`, `workflow/assets.ts`, `workflow/assignment.ts`, `workflow/observability.ts`, `workflow/wiki.ts`, `workflow/adapters.ts`, `workflow/credentials.ts`, `workflow/profiles.ts`, `workflow/pi-tools.ts`, `workflow/run-env.ts`, `workflow/project-catalog.ts`, `agent-host/` | Persistence, engine internals, effect execution, and external I/O services (git inspection, wiki data, adapters, credentials, global-pi settings reads, the run environment file, configured-project catalog reads, the durable agent host). |
 | **application** | `workflow/startup.ts`, `workflow/operations.ts`, `workflow/application.ts` | Shared orchestration both the CLI and the dashboard compose: startup/validation routing, the in-process engine factory, effect draining, configured-project listing (`operations.ts`, backed by the runtime catalog client), and the named application composition root (`application.ts` — the single place the production `applicationLayer` is composed and Effect programs run, complete-workflow-effect-cutover task 1). |
 | **cli** | `workflow/cli/`, `workflow/cli.ts` | Command parsing, dispatch (`run.ts`), command modules, and git/registry/pane helpers. |
