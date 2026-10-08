@@ -396,6 +396,10 @@ export function App(props: {
 		role: string;
 		runId: string;
 		hostSocket: string;
+		/** The run's durable conversation. The run id lives only in the host's
+		 * in-memory map, so a host that restarted since the run was launched still
+		 * serves the transcript through this. */
+		conversationId?: string;
 	}) => {
 		agentSessionStopWatch?.();
 		agentSessionStopWatch = undefined;
@@ -429,11 +433,17 @@ export function App(props: {
 						setAgentSessionContextWindows(catalog.contextWindows ?? {});
 					})
 					.catch(() => undefined);
-				const stop = await client.watch(session.runId, (value) => {
-					if (agentSession()?.runId !== session.runId) return;
-					setAgentSessionBlocks(buildAgentSessionView(value));
-					setAgentSessionMetadata(readAgentSessionMetadata(value));
-				});
+				const stop = await client.watch(
+					session.runId,
+					(value) => {
+						if (agentSession()?.runId !== session.runId) return;
+						setAgentSessionBlocks(buildAgentSessionView(value));
+						setAgentSessionMetadata(readAgentSessionMetadata(value));
+					},
+					session.conversationId
+						? { conversationId: session.conversationId }
+						: {},
+				);
 				if (agentSession()?.runId !== session.runId) {
 					stop();
 					return;

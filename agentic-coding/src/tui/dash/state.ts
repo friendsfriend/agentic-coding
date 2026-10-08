@@ -252,6 +252,9 @@ export interface AgentSessionIdentity {
 	readonly role: string;
 	readonly runId: string;
 	readonly hostSocket: string;
+	/** The run's durable conversation, when the dashboard read one: the watch's
+	 * fallback identity for a host that no longer tracks the run id. */
+	readonly conversationId?: string;
 }
 
 export interface RepairTarget {

@@ -1569,6 +1569,9 @@ export function agentEffectHandlers(
 									...(typeof candidate.sessionId === "string"
 										? { sessionId: candidate.sessionId }
 										: {}),
+									...(typeof candidate.conversationId === "string"
+										? { conversationId: candidate.conversationId }
+										: {}),
 								}
 							: ownsClaim
 								? (run.handle ?? durableHandleFor(snapshot, run))

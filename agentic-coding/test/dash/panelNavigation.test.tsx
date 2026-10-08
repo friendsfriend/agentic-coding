@@ -626,6 +626,7 @@ test("the durable agent session opens as a page and Esc returns to the grid", as
 		frame.includes("Choose command or browse history"),
 	);
 	expect(help).toContain("Send message (steer if the run is busy)");
+	expect(help).toContain("New line in the prompt");
 
 	// Escape closes the help first and leaves the page second: the page keeps
 	// its keys while a dialog is on top of it.

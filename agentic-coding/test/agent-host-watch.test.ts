@@ -105,6 +105,69 @@ describe("watch streams the conversation view over the control socket", () => {
 		}
 	});
 
+	test("a watch that names the conversation serves a run the host no longer tracks", async () => {
+		// The run id lives only in the host's in-memory run map: a host that
+		// restarted since the run was launched answers `unknown-run`. The
+		// conversation is durable, so a watcher that still holds it reads the
+		// transcript the run wrote — without ever registering a run to mutate.
+		const dir = tempWorkflowDir();
+		const layout = hostLayout(dir);
+		const faux = fauxProvider();
+		const models = createModels();
+		models.setProvider(faux.provider);
+		const host = await DurableHost.open({
+			layout,
+			settings: {},
+			globalAgentDir: dir,
+			storage: new MemoryStorage(),
+			models,
+		});
+		await host.listen();
+		try {
+			const runEnvPath = path.join(dir, "run.env");
+			fs.writeFileSync(runEnvPath, "");
+			const ensured = await host.ensureRun({
+				runId: "recovered-run",
+				name: "recovered-worker",
+				cwd: dir,
+				runEnvPath,
+				toolPolicy: "default",
+			});
+			const client = new HostClient(layout.socketPath, 10_000);
+			const forgotten = "run-id-from-a-previous-host";
+			const frames: unknown[] = [];
+			const stop = await client.watch(
+				forgotten,
+				(value) => frames.push(value),
+				{
+					conversationId: ensured.conversationId,
+				},
+			);
+			try {
+				expect(frames.length).toBeGreaterThanOrEqual(1);
+				expect(entryCount(frames[frames.length - 1])).toBe(0);
+			} finally {
+				stop();
+			}
+			// Without the conversation there is nothing to serve: the client is told
+			// instead of waiting for a frame that never comes.
+			await expect(client.watch(forgotten, () => {})).rejects.toThrow(
+				/unknown-run/,
+			);
+			// A conversation that does not exist is refused too.
+			await expect(
+				client.watch(forgotten, () => {}, { conversationId: "999999" }),
+			).rejects.toThrow(/conversation gone/);
+			// The recovery is read-only: the run id still names no run to mutate.
+			await expect(
+				client.submit(forgotten, "hi", "req-recovered"),
+			).rejects.toThrow(/unknown-run/);
+		} finally {
+			await host.shutdown();
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	test("busy input queues FIFO and steers at tool boundaries before the run ends", async () => {
 		const dir = tempWorkflowDir();
 		const layout = hostLayout(dir);

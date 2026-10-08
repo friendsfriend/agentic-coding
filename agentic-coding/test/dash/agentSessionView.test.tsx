@@ -1814,9 +1814,7 @@ test("Shift+Enter starts a new prompt line and Enter sends the whole message", a
 
 test("the prompt grows with the message and scrolls once it is eight lines tall", async () => {
 	const t = await testRender(
-		() => (
-			<Harness onSubmit={() => {}} onAbort={() => {}} onBack={() => {}} />
-		),
+		() => <Harness onSubmit={() => {}} onAbort={() => {}} onBack={() => {}} />,
 		{ width: 100, height: 30, kittyKeyboard: true },
 	);
 	try {

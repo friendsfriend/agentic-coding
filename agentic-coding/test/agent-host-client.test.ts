@@ -110,6 +110,57 @@ describe("HostClient over the control socket", () => {
 		await expect(client.status("ghost")).rejects.toThrow(/unknown-run/);
 	});
 
+	test("a watch the host refuses rejects instead of waiting for a frame", async () => {
+		// A run the host no longer tracks (it restarted since) is answered with an
+		// error frame; the caller must fail rather than sit on a spinner.
+		const layout = hostLayout(dir);
+		fs.mkdirSync(layout.root, { recursive: true });
+		server = fakeServer(layout.socketPath, () => ({
+			type: "error",
+			code: "unknown-run",
+			message: "no such run",
+		}));
+		const client = new HostClient(layout.socketPath, 2_000);
+		await expect(client.watch("ghost", () => {})).rejects.toThrow(
+			/unknown-run/,
+		);
+	});
+
+	test("a watch the host never starts rejects on its bound", async () => {
+		const layout = hostLayout(dir);
+		fs.mkdirSync(layout.root, { recursive: true });
+		// A server that accepts the request and says nothing: the watch is never
+		// acknowledged, so the client's own bound is the only way out.
+		server = net.createServer((socket) => socket.setEncoding("utf8"));
+		await new Promise<void>((resolve) =>
+			server?.listen(layout.socketPath, resolve),
+		);
+		const client = new HostClient(layout.socketPath, 200);
+		await expect(client.watch("quiet", () => {})).rejects.toBeInstanceOf(
+			HostUnavailableError,
+		);
+	});
+
+	test("a watch sends the conversation id it was given", async () => {
+		const layout = hostLayout(dir);
+		fs.mkdirSync(layout.root, { recursive: true });
+		let seen: HostRequest | undefined;
+		server = fakeServer(layout.socketPath, (request) => {
+			seen = request;
+			return { type: "watchFrame", runId: "run-1", value: { entries: [] } };
+		});
+		const client = new HostClient(layout.socketPath, 2_000);
+		const stop = await client.watch("run-1", () => {}, {
+			conversationId: "42",
+		});
+		stop();
+		expect(seen).toEqual({
+			type: "watch",
+			runId: "run-1",
+			conversationId: "42",
+		});
+	});
+
 	test("ensureHostRunning spawns nothing once the host already answers hello", async () => {
 		const layout = hostLayout(dir);
 		fs.mkdirSync(layout.root, { recursive: true });

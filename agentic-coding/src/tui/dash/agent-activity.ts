@@ -35,12 +35,19 @@ export interface AgentActivityTarget {
 	readonly role: string;
 	readonly runId?: string;
 	readonly hostSocket?: string;
+	/** The run's durable conversation, so the watch survives a host that no longer
+	 * tracks the run id. */
+	readonly conversationId?: string;
 }
 
 /** Starts one run's live watch. Injectable so the store is testable without a
  * socket; the default dynamically imports the host client. */
 export type AgentActivityWatch = (
-	target: { readonly runId: string; readonly hostSocket: string },
+	target: {
+		readonly runId: string;
+		readonly hostSocket: string;
+		readonly conversationId?: string;
+	},
 	onValue: (value: unknown) => void,
 ) => Promise<() => void>;
 
@@ -163,7 +170,11 @@ export function agentActivityFromValue(
 /** The production watch: one HostClient connection streaming the run's view. */
 const hostWatch: AgentActivityWatch = async (target, onValue) => {
 	const { HostClient } = await import("../../agent-host/client.ts");
-	return await new HostClient(target.hostSocket).watch(target.runId, onValue);
+	return await new HostClient(target.hostSocket).watch(
+		target.runId,
+		onValue,
+		target.conversationId ? { conversationId: target.conversationId } : {},
+	);
 };
 
 /**
@@ -214,7 +225,13 @@ export function createAgentActivitySource(
 		void (async () => {
 			try {
 				const stop = await watch(
-					{ runId: agent.runId ?? "", hostSocket: agent.hostSocket ?? "" },
+					{
+						runId: agent.runId ?? "",
+						hostSocket: agent.hostSocket ?? "",
+						...(agent.conversationId
+							? { conversationId: agent.conversationId }
+							: {}),
+					},
 					(value) => {
 						if (disposed) return;
 						if (watches.get(agent.role) !== entry) return;
@@ -250,7 +267,7 @@ export function createAgentActivitySource(
 		for (const agent of agents) {
 			if (!agent.runId || !agent.hostSocket) continue;
 			desired.add(agent.role);
-			const key = `${agent.runId}\0${agent.hostSocket}`;
+			const key = `${agent.runId}\0${agent.hostSocket}\0${agent.conversationId ?? ""}`;
 			const existing = watches.get(agent.role);
 			if (existing && existing.key === key) continue;
 			if (existing) stopWatch(agent.role);

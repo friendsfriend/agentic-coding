@@ -174,6 +174,7 @@ export interface DashboardKeyContext {
 		role: string;
 		runId: string;
 		hostSocket: string;
+		conversationId?: string;
 	}) => void;
 	readonly setReviewOpen: (open: boolean) => void;
 	readonly reviewFeature: unknown;
@@ -521,6 +522,9 @@ export function createDashboardKeyHandler(
 					role: agent.role,
 					runId: agent.runId,
 					hostSocket: agent.hostSocket,
+					...(agent.conversationId
+						? { conversationId: agent.conversationId }
+						: {}),
 				});
 				return;
 			}

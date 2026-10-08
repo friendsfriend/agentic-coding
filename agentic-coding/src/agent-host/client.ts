@@ -239,35 +239,74 @@ export class HostClient {
 		if (response.type !== "ok") throw unexpected(response);
 	}
 	/** Streams watch frames until `stop` is awaited; resolves with the stop
-	 * function once the watch is acknowledged by the first frame. */
-	watch(runId: string, onFrame: (value: unknown) => void): Promise<() => void> {
+	 * function once the watch is acknowledged by the first frame.
+	 *
+	 * `conversationId` lets a watch survive a host that no longer tracks the run
+	 * id (see `WatchRequest`). A watch that never starts — the host refuses the
+	 * run, closes the socket, or says nothing — rejects instead of leaving the
+	 * caller on a spinner forever. */
+	watch(
+		runId: string,
+		onFrame: (value: unknown) => void,
+		options: { conversationId?: string } = {},
+	): Promise<() => void> {
 		return new Promise((resolve, reject) => {
 			const socket = net.createConnection(this.socketPath);
 			const reader = new FrameReader();
-			let resolved = false;
+			let settled = false;
+			const fail = (error: Error) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				socket.destroy();
+				reject(error);
+			};
+			const timer = setTimeout(
+				() =>
+					fail(
+						new HostUnavailableError(
+							`agent host did not start the watch: ${runId}`,
+						),
+					),
+				this.timeoutMs,
+			);
 			socket.once("connect", () =>
-				socket.write(encodeFrame({ type: "watch", runId })),
+				socket.write(
+					encodeFrame({
+						type: "watch",
+						runId,
+						...(options.conversationId
+							? { conversationId: options.conversationId }
+							: {}),
+					}),
+				),
 			);
 			socket.setEncoding("utf8");
 			socket.on("data", (chunk: string) => {
 				for (const line of reader.push(chunk)) {
 					const decoded = decodeFrame(line);
 					if (!decoded.ok) continue;
-					if (
-						decoded.value.type === "watchFrame" &&
-						decoded.value.runId === runId
-					) {
-						onFrame(decoded.value.value);
-						if (!resolved) {
-							resolved = true;
+					const value = decoded.value;
+					// The host answers a watch it cannot serve with an error frame: the
+					// run is gone, the conversation is gone, or the request was refused.
+					if (value.type === "error") {
+						fail(unexpected(value));
+						return;
+					}
+					if (value.type === "watchFrame" && value.runId === runId) {
+						onFrame(value.value);
+						if (!settled) {
+							settled = true;
+							clearTimeout(timer);
 							resolve(() => socket.end());
 						}
 					}
 				}
 			});
-			socket.on("error", (error) => {
-				if (!resolved) reject(error);
-			});
+			socket.on("error", (error) => fail(error));
+			socket.on("close", () =>
+				fail(new HostUnavailableError(`agent host closed the watch: ${runId}`)),
+			);
 		});
 	}
 }

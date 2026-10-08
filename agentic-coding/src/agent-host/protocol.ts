@@ -67,6 +67,12 @@ export interface ShutdownRequest {
 export interface WatchRequest {
 	readonly type: "watch";
 	readonly runId: string;
+	/** The run's durable conversation, for a client that still holds it while the
+	 * host no longer tracks the run: a host restart drops the in-memory run map,
+	 * and the run id lives only there. Read-only by construction — the watch
+	 * serves the transcript the conversation already holds and never registers a
+	 * run, so `submit`/`abort` keep refusing an unknown run id. */
+	readonly conversationId?: string;
 }
 export interface HelloRequest {
 	readonly type: "hello";

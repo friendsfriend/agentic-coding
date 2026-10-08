@@ -58,11 +58,16 @@ export function agentSessionKeybindCatalog(): KeybindSection[] {
 					action: "Send message (steer if the run is busy)",
 					short: "send",
 				},
+				{
+					key: "Shift+Enter",
+					action: "New line in the prompt",
+					standard: true,
+				},
 				{ key: "PgUp/PgDn", action: "Scroll transcript", short: "scroll" },
 				{ key: "Tab", action: "Complete command", standard: true },
 				{
 					key: "↑/↓",
-					action: "Choose command or browse history (empty prompt)",
+					action: "Choose command or browse history (prompt edges)",
 					standard: true,
 				},
 				{ key: "Ctrl+T", action: "Expand/collapse thinking", standard: true },

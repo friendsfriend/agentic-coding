@@ -593,11 +593,20 @@ export class DurableHost {
 	async watchRun(
 		runId: string,
 		onValue: (value: unknown) => void,
+		recoveredConversationId?: string,
 	): Promise<() => void> {
+		// A host that restarted no longer tracks the runs it served before, and the
+		// run id lives only in that in-memory map. The conversation is durable, so a
+		// watcher that still holds it keeps reading the transcript the run wrote;
+		// mutations keep refusing an unknown run id (they resolve runs, never
+		// conversations).
 		const record = this.runs.get(runId);
-		if (!record) throw new Error(`unknown run: ${runId}`);
+		const conversationId = record
+			? record.conversationId
+			: parseConversationId(recoveredConversationId);
+		if (conversationId === undefined) throw new Error(`unknown run: ${runId}`);
 		const conversation = await this.harness.conversation(
-			record.conversationId,
+			conversationId,
 			BACKGROUND_CONTEXT,
 		);
 		if (!conversation) throw new Error(`conversation gone for run: ${runId}`);
@@ -606,7 +615,7 @@ export class DurableHost {
 		// the dashboard can read them (pi-durable stores no timing itself).
 		const augment = (value: unknown) => ({
 			...(value as Record<string, unknown>),
-			timings: this.timings.get(record.conversationId) ?? {},
+			timings: this.timings.get(conversationId) ?? {},
 		});
 		onValue(augment(state.value));
 		const unsubscribe = state.subscribe((value) => onValue(augment(value)));
@@ -799,9 +808,13 @@ export class DurableHost {
 					void this.shutdown();
 					return;
 				case "watch": {
-					const stop = await this.watchRun(request.runId, (value) => {
-						send({ type: "watchFrame", runId: request.runId, value });
-					});
+					const stop = await this.watchRun(
+						request.runId,
+						(value) => {
+							send({ type: "watchFrame", runId: request.runId, value });
+						},
+						request.conversationId,
+					);
 					cleanups.add(stop);
 					return;
 				}
@@ -829,6 +842,14 @@ export class DurableHost {
 function parseModelRef(model: string): { provider: string; modelId: string } {
 	const [provider, ...rest] = model.split("/");
 	return { provider: provider ?? model, modelId: rest.join("/") || model };
+}
+
+/** A conversation id as a client sent it, or undefined when it is not one. */
+function parseConversationId(
+	value: string | undefined,
+): ConversationId | undefined {
+	if (value === undefined || !/^\d+$/.test(value)) return undefined;
+	return Number(value) as unknown as ConversationId;
 }
 
 /** Best-effort liveness check of a lock file's PID: a stale lock from an

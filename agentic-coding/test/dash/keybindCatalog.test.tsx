@@ -63,7 +63,10 @@ describe("keybind catalog contract", () => {
 			"scroll",
 		]);
 		expect(all.map((keybind) => keybind.action)).toContain(
-			"Choose command or browse history (empty prompt)",
+			"Choose command or browse history (prompt edges)",
+		);
+		expect(all.map((keybind) => keybind.action)).toContain(
+			"New line in the prompt",
 		);
 		// No panel context: the grid's keybindings are not advertised here.
 		expect(
